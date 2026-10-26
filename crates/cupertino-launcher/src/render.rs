@@ -1135,10 +1135,10 @@ mod tests {
     use crate::engine::tests_support::test_launcher;
     use crate::panel::{Key, Mods, Now};
 
-    /// Needs the asset directory (`CUPERTINO_ASSET_DIR`); fails with the build instructions when it is missing.
+    /// Uses the built-in assets only, so the result does not depend on the packs installed on the machine.
     fn renderer() -> PanelRenderer {
         let theme = Theme::load().unwrap();
-        let assets = Assets::discover();
+        let assets = Assets::builtin();
         PanelRenderer::new(
             PanelStyle::from_theme(&theme, Appearance::Light, false),
             &assets,

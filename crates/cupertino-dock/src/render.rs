@@ -1112,9 +1112,9 @@ pub fn paint_menu(
 mod tests {
     use super::*;
 
-    /// Needs the asset directory (`CUPERTINO_ASSET_DIR`); fails with the build instructions when it is missing.
+    /// Uses the built-in assets only, so the result does not depend on the packs installed on the machine.
     fn label_text() -> LabelText {
-        let assets = Assets::discover();
+        let assets = Assets::builtin();
         LabelText::new(&Typography::default(), &assets).unwrap_or_else(|e| panic!("{e}"))
     }
     use crate::app_grid::AppEntry;

@@ -52,7 +52,7 @@ impl Server {
             event_loop.get_signal(),
             cfg,
             true,
-            &cupertino_assets::Assets::discover(),
+            &cupertino_assets::Assets::builtin(),
         )
         .unwrap();
         if let Err(e) = headless::init(&mut state, OUTPUT, 1.0) {

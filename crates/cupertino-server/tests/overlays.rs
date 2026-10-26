@@ -48,7 +48,7 @@ impl Harness {
             event_loop.get_signal(),
             cfg,
             true,
-            &cupertino_assets::Assets::discover(),
+            &cupertino_assets::Assets::builtin(),
         )
         .ok()?;
         match headless::init(&mut state, OUTPUT, 1.0) {

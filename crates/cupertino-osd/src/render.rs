@@ -389,7 +389,7 @@ mod tests {
     /// Needs the asset directory (`CUPERTINO_ASSET_DIR`); fails with the build instructions when it is missing.
     fn renderer() -> Renderer {
         let theme = Theme::load().unwrap();
-        let assets = Assets::discover();
+        let assets = Assets::builtin();
         Renderer::new(PALETTE, theme.tokens.typography().clone(), &assets)
             .unwrap_or_else(|e| panic!("{e}"))
     }

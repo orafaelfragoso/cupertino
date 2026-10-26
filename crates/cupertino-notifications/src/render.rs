@@ -1205,7 +1205,7 @@ mod tests {
     /// Needs the asset directory (`CUPERTINO_ASSET_DIR`); fails with the build instructions when it is missing.
     fn renderer() -> BannerRenderer {
         let theme = Theme::load().unwrap();
-        let assets = Assets::discover();
+        let assets = Assets::builtin();
         BannerRenderer::new(
             BannerStyle::from_theme(&theme, Appearance::Light, false),
             &assets,

@@ -1,20 +1,16 @@
-//! Building a cursor theme: collect cursors (from vector PDFs with metadata and/or the procedural
-//! set), rasterise them at every requested nominal size, bake the shadow, scale the hotspot and
-//! write an XCursor theme (`index.theme`, `cursors/<name> files and alias symlinks), optionally
+//! Building a cursor theme: draw the procedural cursors at every requested nominal size, bake the shadow, scale
+//! the hotspot and write an XCursor theme (`index.theme`, `cursors/<name>` files and alias symlinks), optionally
 //! with a hyprcursor source theme.
 //!
 //! Scale: a nominal size `N` is `N / base_size` pixels per point (`base_size` 24 by default:
-//! approximate, so 24 → 1 px per point, 32 → 1.33, 48 → 2, 64 → 2.67). Hotspots are metadata
-//! points × scale, rounded, plus the padding the shadow added.
+//! approximate, so 24 → 1 px per point, 32 → 1.33, 48 → 2, 64 → 2.67). Hotspots are points × scale,
+//! rounded, plus the padding the shadow added.
 
-use crate::meta::{self, CursorMeta, HotspotSource, Shadow};
 use crate::names::{self, Mapping};
-use crate::plist;
 use crate::procedural::{self, Kind};
-use crate::raster::Poppler;
-use crate::shadow;
+use crate::shadow::{self, Shadow};
 use crate::xcursor::{self, XCursorImage};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use tiny_skia::Pixmap;
 
@@ -27,16 +23,9 @@ pub const MARKER_FILE: &str = ".generated-by-cupertino-cursor";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShadowMode {
-    /// Bake a shadow where the metadata has shadow parameters.
+    /// Bake the common shadow under every cursor.
     Auto,
     Never,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Source {
-    Procedural,
-    /// Directory with one sub-directory per cursor, each holding `cursor.pdf` and optionally `cursor.meta`.
-    Pdf(PathBuf),
 }
 
 #[derive(Clone, Debug)]
@@ -45,22 +34,9 @@ pub struct BuildOptions {
     pub name: String,
     pub sizes: Vec<u32>,
     pub base_size: u32,
-    pub source: Source,
-    /// Metadata JSON (shape); overrides the property lists.
-    pub metadata: Option<PathBuf>,
-    pub hotspot_source: HotspotSource,
     pub shadow: ShadowMode,
-    /// Cursors without shadow metadata get [`Shadow::COMMON`].
-    pub default_shadow: bool,
-    /// The source's shadow y offset points up (the default interpretation).
-    pub flip_shadow_y: bool,
     pub hyprcursor: bool,
     pub inherits: Option<String>,
-    pub poppler: Poppler,
-    /// Complete the theme with procedural cursors for names the source does not provide.
-    pub fill_missing: bool,
-    /// Frame delay in milliseconds for animations whose metadata has none (approximate).
-    pub default_delay_ms: u32,
 }
 
 impl BuildOptions {
@@ -70,17 +46,9 @@ impl BuildOptions {
             name: "Cupertino".into(),
             sizes: DEFAULT_SIZES.to_vec(),
             base_size: 24,
-            source: Source::Procedural,
-            metadata: None,
-            hotspot_source: HotspotSource::Unscaled,
             shadow: ShadowMode::Auto,
-            default_shadow: true,
-            flip_shadow_y: true,
             hyprcursor: false,
             inherits: None,
-            poppler: Poppler::default(),
-            fill_missing: true,
-            default_delay_ms: 100,
         }
     }
 
@@ -116,18 +84,11 @@ pub struct SizeVariant {
     pub frames: Vec<Frame>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Origin {
-    Reference,
-    Procedural,
-}
-
 #[derive(Clone)]
 pub struct Cursor {
     /// File name of the primary XCursor file.
     pub name: String,
     pub aliases: Vec<String>,
-    pub origin: Origin,
     pub sizes: Vec<SizeVariant>,
 }
 
@@ -162,10 +123,7 @@ impl Cursor {
 }
 
 fn find_mapping(primary: &str) -> Option<&'static Mapping> {
-    names::SOURCE_MAP
-        .iter()
-        .chain(names::PROCEDURAL_ONLY)
-        .find(|m| m.primary == primary)
+    names::NAMES.iter().find(|m| m.primary == primary)
 }
 
 fn finish_frame(
@@ -191,148 +149,6 @@ fn finish_frame(
         hotspot: (hx, hy),
         delay_ms,
     }
-}
-
-fn crop_frame(sheet: &Pixmap, index: u32, frame_h: u32) -> Pixmap {
-    let mut out = Pixmap::new(sheet.width(), frame_h).expect("non-empty frame");
-    out.draw_pixmap(
-        0,
-        -((index * frame_h) as i32),
-        sheet.as_ref(),
-        &tiny_skia::PixmapPaint::default(),
-        tiny_skia::Transform::identity(),
-        None,
-    );
-    out
-}
-
-fn choose_shadow(o: &BuildOptions, m: &CursorMeta, has_meta: bool) -> Option<Shadow> {
-    if o.shadow == ShadowMode::Never {
-        return None;
-    }
-    m.shadow.or(if o.default_shadow && !has_meta {
-        Some(Shadow::COMMON)
-    } else {
-        None
-    })
-}
-
-/// Load metadata: the JSON file when given, else per-cursor property lists (read lazily).
-fn load_metadata(o: &BuildOptions) -> Result<BTreeMap<String, CursorMeta>, String> {
-    match &o.metadata {
-        Some(p) => meta::from_json_file(p, o.flip_shadow_y),
-        None => Ok(BTreeMap::new()),
-    }
-}
-
-fn build_from_pdfs(
-    o: &BuildOptions,
-    dir: &Path,
-    warnings: &mut Vec<String>,
-) -> Result<Vec<Cursor>, String> {
-    if !o.poppler.available() {
-        return Err("poppler's pdftocairo and pdfinfo are required to rasterise PDF cursors (install poppler / poppler-utils), or use the procedural mode".into());
-    }
-    let json = load_metadata(o)?;
-    let mut entries: Vec<_> = std::fs::read_dir(dir)
-        .map_err(|e| format!("{}: {e}", dir.display()))?
-        .flatten()
-        .filter(|e| e.path().join("cursor.pdf").is_file())
-        .collect();
-    entries.sort_by_key(|e| e.file_name());
-    if entries.is_empty() {
-        return Err(format!("no <cursor>/cursor.pdf found in {}", dir.display()));
-    }
-    let mut out = Vec::new();
-    for e in entries {
-        let name = e.file_name().to_string_lossy().into_owned();
-        let pdf = e.path().join("cursor.pdf");
-        let (meta, has_meta) = match json.get(&name) {
-            Some(m) => (m.clone(), true),
-            None => match std::fs::read(e.path().join("cursor.meta"))
-                .ok()
-                .filter(|b| b.starts_with(b"bplist00"))
-            {
-                Some(bytes) => match plist::raw_meta_from_bytes(&bytes) {
-                    Ok(raw) => (CursorMeta::from_raw(&raw, o.flip_shadow_y), true),
-                    Err(err) => {
-                        warnings.push(format!(
-                            "{name}: unreadable cursor.meta ({err}); using defaults"
-                        ));
-                        (
-                            CursorMeta {
-                                frames: 1,
-                                ..Default::default()
-                            },
-                            false,
-                        )
-                    }
-                },
-                None => (
-                    CursorMeta {
-                        frames: 1,
-                        ..Default::default()
-                    },
-                    false,
-                ),
-            },
-        };
-        let (page_w, page_h) = o.poppler.page_size(&pdf)?;
-        let mut frames = meta.frames.max(1);
-        if !has_meta && page_h >= 2.0 * page_w && (page_h / page_w).fract() == 0.0 {
-            frames = (page_h / page_w) as u32;
-            warnings.push(format!("{name}: no metadata; guessed {frames} stacked square frames from the page size (approximate)"));
-        }
-        let delay_ms = if frames > 1 && meta.delay_ms == 0 {
-            o.default_delay_ms
-        } else {
-            meta.delay_ms
-        };
-        let (fw, fh) = (page_w, page_h / frames as f64);
-        let hot = meta.hotspot_for(o.hotspot_source).unwrap_or_else(|| {
-            warnings.push(format!(
-                "{name}: no hotspot in the metadata; using the frame centre"
-            ));
-            (fw / 2.0, fh / 2.0)
-        });
-        let shadow_params = choose_shadow(o, &meta, has_meta);
-        let mut sizes = Vec::new();
-        for &nominal in &o.sizes {
-            let scale = nominal as f64 / o.base_size as f64;
-            let w = (fw * scale).round().max(1.0) as u32;
-            let frame_h = (fh * scale).round().max(1.0) as u32;
-            let sheet = o.poppler.render(&pdf, w, frame_h * frames)?;
-            let list = (0..frames)
-                .map(|i| {
-                    finish_frame(
-                        crop_frame(&sheet, i, frame_h),
-                        shadow_params.as_ref(),
-                        hot,
-                        scale,
-                        delay_ms,
-                    )
-                })
-                .collect();
-            sizes.push(SizeVariant {
-                nominal,
-                frames: list,
-            });
-        }
-        let (primary, aliases) = match names::mapping_for_source(&name) {
-            Some(m) => (
-                m.primary.to_string(),
-                m.aliases.iter().map(|s| s.to_string()).collect(),
-            ),
-            None => (name.clone(), Vec::new()),
-        };
-        out.push(Cursor {
-            name: primary,
-            aliases,
-            origin: Origin::Reference,
-            sizes,
-        });
-    }
-    Ok(out)
 }
 
 /// One procedural cursor at all sizes.
@@ -365,43 +181,30 @@ pub fn procedural_cursor(kind: Kind, o: &BuildOptions, aliases: Vec<String>) -> 
     Cursor {
         name: kind.name().to_string(),
         aliases,
-        origin: Origin::Procedural,
         sizes,
     }
 }
 
-/// Collect all cursors for `o`. Returns the cursors and non-fatal warnings.
-pub fn build_cursors(o: &BuildOptions) -> Result<(Vec<Cursor>, Vec<String>), String> {
+/// Collect all cursors for `o`: every cursor of the procedural set with the aliases of [`names::NAMES`].
+pub fn build_cursors(o: &BuildOptions) -> Result<Vec<Cursor>, String> {
     o.validate()?;
-    let mut warnings = Vec::new();
-    let mut cursors = match &o.source {
-        Source::Procedural => Vec::new(),
-        Source::Pdf(dir) => build_from_pdfs(o, dir, &mut warnings)?,
-    };
-    if matches!(o.source, Source::Procedural) || o.fill_missing {
-        let mut taken: BTreeSet<String> = cursors
-            .iter()
-            .flat_map(|c| std::iter::once(c.name.clone()).chain(c.aliases.iter().cloned()))
-            .collect();
-        for kind in Kind::ALL {
-            if taken.contains(kind.name()) {
-                continue;
-            }
-            let aliases: Vec<String> = find_mapping(kind.name())
-                .map(|m| {
-                    m.aliases
-                        .iter()
-                        .filter(|a| !taken.contains(**a))
-                        .map(|s| s.to_string())
-                        .collect()
-                })
-                .unwrap_or_default();
-            taken.insert(kind.name().to_string());
-            taken.extend(aliases.iter().cloned());
-            cursors.push(procedural_cursor(kind, o, aliases));
-        }
+    let mut cursors = Vec::new();
+    let mut taken = BTreeSet::new();
+    for kind in Kind::ALL {
+        let aliases: Vec<String> = find_mapping(kind.name())
+            .map(|m| {
+                m.aliases
+                    .iter()
+                    .filter(|a| !taken.contains(**a))
+                    .map(|s| s.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        taken.insert(kind.name().to_string());
+        taken.extend(aliases.iter().cloned());
+        cursors.push(procedural_cursor(kind, o, aliases));
     }
-    Ok((cursors, warnings))
+    Ok(cursors)
 }
 
 #[derive(Debug, Default)]
@@ -409,7 +212,6 @@ pub struct Report {
     pub theme_dir: PathBuf,
     pub files: Vec<PathBuf>,
     pub symlinks: Vec<(PathBuf, String)>,
-    pub warnings: Vec<String>,
     pub hypr_dir: Option<PathBuf>,
 }
 
@@ -424,11 +226,8 @@ fn index_theme(o: &BuildOptions) -> String {
     s
 }
 
-fn notice(o: &BuildOptions) -> String {
-    match &o.source {
-        Source::Pdf(_) => "LOCAL USE ONLY.\n\nThis theme was rasterised from a local source cursor set. Those assets are\nthird-party: do not redistribute this directory, do not commit it and do not ship it. It is\nwritten to a git-ignored location for side-by-side evaluation on this machine.\n\nCursors without reference artwork (the plain arrow, the text cursor) come from the procedural\nset of cupertino-cursor.\n".to_string(),
-        Source::Procedural => "Generated by cupertino-cursor from its built-in procedural vector cursors; contains no third-party artwork.\n".to_string(),
-    }
+fn notice() -> &'static str {
+    "Generated by cupertino-cursor from its built-in procedural vector cursors; contains no third-party artwork.\n"
 }
 
 fn clean_previous(dir: &Path) -> Result<(), String> {
@@ -452,22 +251,17 @@ fn clean_previous(dir: &Path) -> Result<(), String> {
 
 /// Build and write the theme.
 pub fn build_theme(o: &BuildOptions) -> Result<Report, String> {
-    let (cursors, warnings) = build_cursors(o)?;
-    write_theme(o, &cursors, warnings)
+    let cursors = build_cursors(o)?;
+    write_theme(o, &cursors)
 }
 
-pub fn write_theme(
-    o: &BuildOptions,
-    cursors: &[Cursor],
-    warnings: Vec<String>,
-) -> Result<Report, String> {
+pub fn write_theme(o: &BuildOptions, cursors: &[Cursor]) -> Result<Report, String> {
     let theme_dir = o.output.join(&o.name);
     clean_previous(&theme_dir)?;
     let cur_dir = theme_dir.join("cursors");
     std::fs::create_dir_all(&cur_dir).map_err(|e| format!("{}: {e}", cur_dir.display()))?;
     let mut report = Report {
         theme_dir: theme_dir.clone(),
-        warnings,
         ..Default::default()
     };
     let write = |path: PathBuf, bytes: &[u8], report: &mut Report| -> Result<(), String> {
@@ -482,7 +276,7 @@ pub fn write_theme(
     )?;
     write(
         theme_dir.join("README.txt"),
-        notice(o).as_bytes(),
+        notice().as_bytes(),
         &mut report,
     )?;
     for c in cursors {
@@ -500,7 +294,7 @@ pub fn write_theme(
     }
     std::fs::write(theme_dir.join(MARKER_FILE), "").map_err(|e| e.to_string())?;
     if o.hyprcursor {
-        report.hypr_dir = Some(crate::hypr::write(o, cursors, &notice(o))?);
+        report.hypr_dir = Some(crate::hypr::write(o, cursors, notice())?);
     }
     Ok(report)
 }
@@ -593,10 +387,10 @@ mod tests {
     #[test]
     fn shadow_can_be_disabled() {
         let d = tempfile::tempdir().unwrap();
-        let (with, _) = build_cursors(&quick(d.path())).unwrap();
+        let with = build_cursors(&quick(d.path())).unwrap();
         let mut o = quick(d.path());
         o.shadow = ShadowMode::Never;
-        let (without, _) = build_cursors(&o).unwrap();
+        let without = build_cursors(&o).unwrap();
         let w = |cs: &[Cursor]| {
             cs.iter().find(|c| c.name == "default").unwrap().sizes[0].frames[0]
                 .image
@@ -635,25 +429,6 @@ mod tests {
         o.name = "Ok".into();
         o.base_size = 0;
         assert!(build_theme(&o).is_err());
-    }
-
-    #[test]
-    fn pdf_source_without_poppler_or_files_is_an_error() {
-        let d = tempfile::tempdir().unwrap();
-        let mut o = quick(d.path());
-        o.source = Source::Pdf(d.path().join("src"));
-        o.poppler = Poppler {
-            pdftocairo: "/nonexistent".into(),
-            pdfinfo: "/nonexistent".into(),
-        };
-        assert!(build_theme(&o).unwrap_err().contains("poppler"));
-        o.poppler = Poppler::default();
-        if o.poppler.available() {
-            std::fs::create_dir_all(d.path().join("src/empty")).unwrap();
-            assert!(build_theme(&o)
-                .unwrap_err()
-                .contains("no <cursor>/cursor.pdf"));
-        }
     }
 
     #[test]

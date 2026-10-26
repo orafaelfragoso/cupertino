@@ -338,6 +338,17 @@ fn search_path_from(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<Pat
         .collect()
 }
 
+/// The built-in default icon map: for every logical icon name the freedesktop names to look for in the user's icon
+/// theme. It is the last source of every icon, so a name no pack provides is drawn from the host theme, and a
+/// placeholder appears only when the host theme lacks the name too.
+fn builtin_icon_map() -> &'static BTreeMap<String, Vec<String>> {
+    static MAP: std::sync::OnceLock<BTreeMap<String, Vec<String>>> = std::sync::OnceLock::new();
+    MAP.get_or_init(|| {
+        toml::from_str(include_str!("../data/icon-map.toml"))
+            .expect("data/icon-map.toml is valid (checked by a test)")
+    })
+}
+
 /// The asset packs of a process, in lookup order, followed by the built-in fallback.
 #[derive(Debug, Clone)]
 pub struct Assets {
@@ -411,16 +422,28 @@ impl Assets {
     }
 
     /// Every source the packs give for icon `name` at `px` pixels, pack by pack in lookup order, each with the pack it
-    /// comes from. The caller takes the first one it can load; when none loads, it draws a placeholder.
+    /// comes from, then the built-in default map's host-theme names (with an empty pack path). The caller takes the first one
+    /// it can load; when none loads, it draws a placeholder.
     pub fn icon_sources(&self, name: &IconName, px: u32) -> Vec<(&Path, IconSource)> {
-        self.packs
+        let mut out: Vec<(&Path, IconSource)> = self
+            .packs
             .iter()
             .flat_map(|p| {
                 p.icon_sources(name, px)
                     .into_iter()
                     .map(move |s| (p.root.as_path(), s))
             })
-            .collect()
+            .collect();
+        if let Some(names) = builtin_icon_map().get(name.as_str()) {
+            out.push((
+                Path::new(""),
+                IconSource::Theme {
+                    names: names.clone(),
+                    theme: None,
+                },
+            ));
+        }
+        out
     }
 
     /// The cursor theme of the first pack whose theme is found; `None` means the built-in cursors.

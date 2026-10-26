@@ -153,11 +153,12 @@ mod tests {
         );
         assert!(
             r.contains("ui: built-in (Inter Variable)")
-                && r.contains("symbol.wifi: placeholder (built-in)")
+                && r.contains("symbol.wifi: host theme of the user (network-wireless-symbolic")
                 && r.contains("procedural (built-in)"),
             "{r}"
         );
-        let expected = 1 + RASTER_NAMES.len() + SYMBOL_NAMES.len() + 1 + 2;
+        // the font, the cursor theme and the two wallpapers; every icon name is served by the host theme map
+        let expected = 1 + 1 + 2;
         assert!(r.contains(&format!("falls back: {expected}")), "{r}");
     }
 }

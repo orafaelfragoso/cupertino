@@ -7,7 +7,7 @@ mod common;
 
 use std::process::{Command, Output};
 
-/// Run the binary on `bus` with no display, no user asset pack (`XDG_DATA_HOME` is `data`) and the asset pack `assets`
+/// Run the binary on `bus` with no display, no user asset pack and no host icon theme (`XDG_DATA_HOME`, `XDG_DATA_DIRS` and `HOME` are `data`) and the asset pack `assets`
 /// (`None`: `CUPERTINO_ASSET_DIR` unset).
 fn start(
     bus: &common::PrivateBus,
@@ -18,6 +18,8 @@ fn start(
     command
         .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
         .env("XDG_DATA_HOME", data)
+        .env("XDG_DATA_DIRS", data)
+        .env("HOME", data)
         .env_remove("WAYLAND_DISPLAY")
         .env_remove("CUPERTINO_ASSET_DIR");
     if let Some(dir) = assets {

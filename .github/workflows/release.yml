@@ -1,0 +1,109 @@
+# Release: on a v*.*.* tag, test, build and install-test the Arch, Debian and Fedora packages in pinned containers,
+# write the source archive and the stable PKGBUILD, and create a draft release with SHA256SUMS. Publishing the draft
+# is a manual step behind the `release` environment.
+name: Release
+on:
+  push:
+    tags: ['v*.*.*']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  source:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check the tag and write the source archive and PKGBUILDs
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 ci/gate.py .
+          python3 packaging/release.py verify-tag "$RELEASE_TAG"
+          python3 packaging/release.py check-metadata
+          archive=$(python3 packaging/release.py source --output dist)
+          python3 packaging/release.py pkgbuild "$archive" dist/PKGBUILD
+          cp packaging/arch/cupertino-git/PKGBUILD dist/PKGBUILD-git
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: source
+          path: dist/*
+          if-no-files-found: error
+
+  packages:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [arch, debian, fedora]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build, verify and install-test in pinned containers
+        env:
+          DISTRO: ${{ matrix.distro }}
+        run: bash packaging/ci/build-in-container.sh "$DISTRO" "out/$DISTRO"
+      - name: Separate the packages from the build logs
+        env:
+          DISTRO: ${{ matrix.distro }}
+        run: |
+          mkdir -p dist logs
+          find "out/$DISTRO" -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) -exec mv -t dist {} +
+          mv "out/$DISTRO"/* logs/
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packages-${{ matrix.distro }}
+          path: dist/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: logs-${{ matrix.distro }}
+          path: logs/*
+          if-no-files-found: error
+
+  publish:
+    needs: [source, packages]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    environment: release
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: source
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: packages-*
+          path: dist
+          merge-multiple: true
+      - name: Write SHA256SUMS and create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          test -n "$(find . -maxdepth 1 -type f -print -quit)"
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sha256sum --check --quiet SHA256SUMS
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --generate-notes ./*

@@ -93,7 +93,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libgbm-dev libpam0g-dev dbus libgl1-mesa-dri libegl1 xkb-data
+            build-essential pkg-config libgbm-dev libpam0g-dev dbus libgl1-mesa-dri libegl1 xkb-data zstd
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
         with:
           toolchain: stable
@@ -103,6 +103,17 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Layer rules
         run: cargo run -p cupertino-layers
+      # The keymap oracle's recordings are only valid for the xkeyboard-config release they were made with
+      # (crates/cupertino-xkbcommon/tests/fixtures/xkb-data.txt), and the runner's distribution ships another. This is
+      # that release's package (byte-identical data), verified against a pinned checksum.
+      - name: xkeyboard-config 2.48 data
+        run: |
+          curl -sSfL -o xkeyboard-config.pkg.tar.zst \
+            https://archive.archlinux.org/packages/x/xkeyboard-config/xkeyboard-config-2.48-1-any.pkg.tar.zst
+          echo '7f7f8656dbd0b37e36d3a97f6e188fc5c6cbccc4c1e5d34ff35f1d7a79b1cc73  xkeyboard-config.pkg.tar.zst' | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/xkb"
+          tar --zstd -xf xkeyboard-config.pkg.tar.zst -C "$RUNNER_TEMP/xkb" usr/share/xkeyboard-config-2
+          echo "XKB_CONFIG_ROOT=$RUNNER_TEMP/xkb/usr/share/xkeyboard-config-2" >> "$GITHUB_ENV"
       - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: nextest@0.9.149

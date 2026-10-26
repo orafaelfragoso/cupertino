@@ -282,6 +282,8 @@ def cmd_verify_tag(args):
         fail(f'tag {args.tag} does not match the cupertino-server version {v}')
     if version('cupertino-assets') != v:
         fail(f'cupertino-assets is {version("cupertino-assets")}, cupertino-server {v}')
+    if subprocess.run(['git', '-C', str(ROOT), 'rev-parse', '--verify', '--quiet', f'refs/tags/{args.tag}']).returncode:
+        fail(f'tag {args.tag} does not exist')
     if git('rev-list', '-n1', args.tag) != git('rev-parse', 'HEAD'):
         fail(f'{args.tag} does not point at HEAD')
     if subprocess.run(['git', '-C', str(ROOT), 'merge-base', '--is-ancestor', 'HEAD', 'origin/main']).returncode:

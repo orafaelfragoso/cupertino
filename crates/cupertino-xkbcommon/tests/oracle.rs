@@ -4,8 +4,15 @@
 //! levels 1 and 2 of every group, the modifier and LED state and the text of probe keys after Shift, Ctrl, Alt, AltGr,
 //! Caps Lock, Num Lock and Super sequences (`update_key`), and after `update_mask` calls; plus the keysym helpers.
 //! This file regenerates the same text with this crate and compares it with the recording line by line.
+//!
+//! The keymaps are compiled from the xkeyboard-config data on the machine, and what they contain (the order of the
+//! virtual modifiers, key tables) changes between its releases, in libxkbcommon as in this crate. The recordings are
+//! only comparable with the release they were made with, `tests/fixtures/xkb-data.txt`; any other data fails every
+//! test with a message naming both versions. `XKB_CONFIG_ROOT` points the tests at another copy of the data, which is
+//! how CI gets the recorded release on a distribution that ships another one.
 
 use std::fmt::Write;
+use std::path::{Path, PathBuf};
 use xkbcommon::xkb;
 
 const EVDEV: u32 = 8;
@@ -33,7 +40,83 @@ fn syms(s: &[xkb::Keysym]) -> String {
         .join(",")
 }
 
+/// The parts of the data a compile reads, relative to the data root.
+const DATA_PARTS: [&str; 5] = ["compat", "keycodes", "symbols", "types", "rules/evdev"];
+const DEFAULT_DATA_ROOT: &str = "/usr/share/X11/xkb";
+/// Line of `xkb-data.txt` for the release the recordings were made with.
+const RECORDED_MARK: &str = "recorded";
+
+fn data_files(path: &Path, out: &mut Vec<PathBuf>) {
+    if path.is_dir() {
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(path)
+            .expect("the data directory is readable")
+            .map(|e| e.expect("a directory entry").path())
+            .collect();
+        entries.sort();
+        for entry in entries {
+            data_files(&entry, out);
+        }
+    } else {
+        out.push(path.to_path_buf());
+    }
+}
+
+/// FNV-1a over the relative names and contents of [`DATA_PARTS`]: equal for equal releases, wherever they are installed.
+fn data_fingerprint(root: &Path) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut feed = |bytes: &[u8]| {
+        for b in bytes {
+            hash = (hash ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    for part in DATA_PARTS {
+        let mut files = Vec::new();
+        data_files(&root.join(part), &mut files);
+        for file in files {
+            feed(
+                file.strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .as_bytes(),
+            );
+            feed(&std::fs::read(&file).expect("a data file is readable"));
+        }
+    }
+    format!("{hash:016x}")
+}
+
+/// Fails unless the data the keymaps are compiled from is the release the recordings were made with.
+fn check_data_version() {
+    let root = std::env::var("XKB_CONFIG_ROOT").unwrap_or_else(|_| DEFAULT_DATA_ROOT.into());
+    let found = data_fingerprint(Path::new(&root));
+    let mut recorded = None;
+    let mut known = None;
+    for line in include_str!("fixtures/xkb-data.txt").lines() {
+        let mut fields = line.split_whitespace();
+        let (Some(fingerprint), Some(version)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        if fields.next() == Some(RECORDED_MARK) {
+            recorded = Some(version);
+        }
+        if fingerprint == found {
+            known = Some(version);
+        }
+    }
+    let recorded = recorded.expect("xkb-data.txt marks the recorded release");
+    assert_eq!(
+        known,
+        Some(recorded),
+        "the recordings were made with xkeyboard-config {recorded}, but the data in {root} is {} (fingerprint {found}); \
+         install xkeyboard-config {recorded} or point XKB_CONFIG_ROOT at a copy of it",
+        known.map_or("an unlisted release".to_string(), |v| format!(
+            "xkeyboard-config {v}"
+        )),
+    );
+}
+
 fn compile(layout: &str, variant: &str) -> xkb::Keymap {
+    check_data_version();
     let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
     xkb::Keymap::new_from_names(
         &context,

@@ -13,5 +13,5 @@ keeps its own MIT/X11-style licence (`third-party/xkbcommon-rs/LICENSE`).
 
 ## Tests
 
-`cargo test -p xkbcommon`. `tools/cupertino_xkb_keysyms.py` regenerates the keysym names from the installed
+`cargo test -p xkbcommon`. The oracle tests compare keymaps compiled from the machine's xkeyboard-config data with recordings of libxkbcommon 1.13 made on xkeyboard-config 2.48 (`tests/fixtures/xkb-data.txt`); the modifier order and key tables change between releases of that data, so on any other release the tests fail with a message naming both. Point `XKB_CONFIG_ROOT` at a copy of 2.48 to run them there; CI downloads one. `tools/cupertino_xkb_keysyms.py` regenerates the keysym names from the installed
 `xkbcommon-keysyms.h`.

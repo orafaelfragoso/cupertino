@@ -20,7 +20,7 @@ sha256sums=('SKIP')
 # Fails without a v* tag in the history: the version is the last release plus the commits since.
 pkgver() {
   cd cupertino
-  git describe --long --tags --match 'v[0-9]*' | sed -e 's/^v//' -e 's/-/.r/' -e 's/-/./g'
+  git describe --long --tags --match 'v[0-9]*' | sed -e 's/^v//' -e 's/-rc/rc/' -e 's/-/.r/' -e 's/-/./g'
 }
 
 prepare() {

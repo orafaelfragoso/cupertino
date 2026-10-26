@@ -7,6 +7,7 @@ Usage:
   release.py check-metadata
   release.py source --output DIR
   release.py verify-tag TAG
+  release.py pkgbuild ARCHIVE OUTPUT
 
 install         copies exactly the manifest's files into DIR with explicit modes (Arch package(), portable tarballs).
 verify          lists a built package (.pkg.tar.zst, .deb, .rpm) and fails unless its files and modes equal the manifest
@@ -16,6 +17,7 @@ check-metadata  compares the deb and rpm asset tables in the crates' Cargo.toml 
 source          writes cupertino-<version>-source.tar.xz from the committed HEAD (git archive: file times are the
                 commit time, no untracked files).
 verify-tag      fails unless TAG is v<version>, points at HEAD, and HEAD is reachable from origin/main.
+pkgbuild        writes the stable Arch PKGBUILD with ARCHIVE's sha256 (the release's source archive).
 
 The runtime version is cupertino-server's, the data version cupertino-assets'. Nothing here reads outside the checkout.
 """
@@ -212,6 +214,17 @@ def cmd_source(args):
     print(dest)
 
 
+def cmd_pkgbuild(args):
+    """Write the stable PKGBUILD with the release source archive's checksum in place of UNRELEASED."""
+    text = (ROOT / 'packaging/arch/cupertino/PKGBUILD').read_text()
+    if "sha256sums=('UNRELEASED')" not in text:
+        fail('packaging/arch/cupertino/PKGBUILD has no UNRELEASED checksum to fill')
+    digest = hashlib.sha256(Path(args.archive).read_bytes()).hexdigest()
+    out = Path(args.output)
+    out.write_text(text.replace("sha256sums=('UNRELEASED')", f"sha256sums=('{digest}')"))
+    print(out)
+
+
 def cmd_verify_tag(args):
     v = version('cupertino-server')
     if args.tag != f'v{v}':
@@ -238,9 +251,12 @@ def main():
     sub.add_parser('check-metadata')
     sub.add_parser('source').add_argument('--output', required=True)
     sub.add_parser('verify-tag').add_argument('tag')
+    k = sub.add_parser('pkgbuild')
+    k.add_argument('archive')
+    k.add_argument('output')
     args = p.parse_args()
     {'install': cmd_install, 'verify': cmd_verify, 'check-metadata': cmd_check_metadata, 'source': cmd_source,
-     'verify-tag': cmd_verify_tag}[args.command](args)
+     'verify-tag': cmd_verify_tag, 'pkgbuild': cmd_pkgbuild}[args.command](args)
 
 
 if __name__ == '__main__':

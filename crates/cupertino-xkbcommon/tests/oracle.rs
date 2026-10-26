@@ -99,7 +99,7 @@ fn overriding_data_dirs() -> Vec<String> {
         dirs.push(format!("{home}/.xkb"));
     }
     dirs.push(env("XKB_CONFIG_EXTRA_PATH").unwrap_or_else(|| "/etc/xkb".into()));
-    dirs.retain(|dir| Path::new(dir).is_dir());
+    dirs.retain(|dir| std::fs::read_dir(dir).is_ok_and(|mut d| d.next().is_some()));
     dirs
 }
 

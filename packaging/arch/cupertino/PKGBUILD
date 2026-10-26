@@ -33,6 +33,9 @@ build() {
 check() {
   cd "cupertino-$pkgver"
   export CARGO_INCREMENTAL=0 CUPERTINO_THEME_DIR=/usr/share/cupertino/theme CUPERTINO_SPEC_DIR="$PWD/data/theme"
+  # The compositor tests open a Wayland socket; the build environment has no runtime directory of its own.
+  export XDG_RUNTIME_DIR="$srcdir/runtime"
+  install -d -m 700 "$XDG_RUNTIME_DIR"
   dbus-run-session -- cargo test --frozen --release --workspace --all-features --no-fail-fast
 }
 

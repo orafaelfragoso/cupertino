@@ -1,0 +1,21 @@
+# Mouse with a hi-res wheel: motion, a 120-unit detent delivered as 40+40+40 (legacy REL_WHEEL fires with the last
+# step), a left click, a horizontal detent backwards.
+2000.001000 2 0 3        # REL_X
+2000.001000 2 1 -2       # REL_Y
+2000.001000 0 0 0
+2000.009000 2 11 40      # REL_WHEEL_HI_RES
+2000.009000 0 0 0
+2000.017000 2 11 40
+2000.017000 0 0 0
+2000.025000 2 11 40
+2000.025000 2 8 1        # REL_WHEEL (legacy, same detent)
+2000.025000 0 0 0
+2000.100000 4 4 90001    # MSC_SCAN
+2000.100000 1 272 1      # BTN_LEFT press
+2000.100000 0 0 0
+2000.150000 4 4 90001
+2000.150000 1 272 0      # BTN_LEFT release
+2000.150000 0 0 0
+2000.200000 2 12 -120    # REL_HWHEEL_HI_RES
+2000.200000 2 6 -1       # REL_HWHEEL (legacy)
+2000.200000 0 0 0

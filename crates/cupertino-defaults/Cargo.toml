@@ -1,0 +1,17 @@
+[package]
+name = "cupertino-defaults"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Settings store shared by the Cupertino processes: where each settings file lives (environment override, else the XDG configuration directory), typed read and atomic write of the files, change notification"
+
+[package.metadata.cupertino]
+layer = "foundation"
+
+[dependencies]
+notify = "8"
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
+

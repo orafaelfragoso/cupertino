@@ -1,0 +1,13 @@
+[package]
+name = "cupertino-stage"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Stage model: window groups, centre stage, strip of recent groups, swap animation, add-by-drag and strip peek"
+
+[package.metadata.cupertino]
+layer = "models"
+
+[dependencies]
+cupertino-animation = { path = "../cupertino-animation" }
+cupertino-wm = { path = "../cupertino-wm" }

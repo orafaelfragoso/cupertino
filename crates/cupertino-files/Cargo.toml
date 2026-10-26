@@ -1,0 +1,50 @@
+[package]
+name = "cupertino-files"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "File-manager core without a toolkit: directory model with batched enumeration and watching, natural sort, grouping, per-folder view settings, selection, rename and type-select logic, trash, thumbnails, tags, MIME, and view layout engines with the measured metrics"
+
+[package.metadata.cupertino]
+layer = "apps"
+
+[features]
+# the `cupertino-files` process: a browser window as a client of the server
+app = ["dep:cupertino-client", "dep:cupertino-geometry"]
+
+[dependencies]
+cupertino-assets = { path = "../cupertino-assets" }
+cupertino-apps = { path = "../cupertino-apps" }
+cupertino-icons = { path = "../cupertino-icons" }
+cupertino-theme = { path = "../cupertino-theme" }
+cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-geometry = { path = "../cupertino-geometry", optional = true }
+cupertino-decorations = { path = "../cupertino-decorations" }
+cupertino-client = { path = "../cupertino-client", optional = true }
+tiny-skia = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+notify = "8"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+png = "0.17"
+xattr = "1"
+tree_magic_mini = "3"
+mime_guess = "2"
+md5 = "0.7"
+percent-encoding = "2"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "cupertino-files"
+path = "src/main.rs"
+required-features = ["app"]
+
+[[bench]]
+name = "directory"
+harness = false
+
+[[example]]
+name = "files_samples"

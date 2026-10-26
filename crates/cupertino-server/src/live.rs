@@ -1,0 +1,270 @@
+//! Live settings: the server watches `compositor.json`, `keyboard.conf` and `power.conf` (`cupertino_defaults::watch`) and
+//! applies what changed while it runs. Each change re-reads only the changed file, with the last values read as the last
+//! good ones (a line or key that is wrong keeps its value and is logged), and applies only the keys whose value differs
+//! from the last read, so a setting changed at run time another way (the `toggle-appearance` key action, the
+//! accessibility shortcuts) stays until its own key changes in the file. A key removed from the file goes back to its
+//! default.
+//!
+//! | File | Applied at once | At the next start |
+//! |---|---|---|
+//! | `compositor.json` | appearance, tracking speeds, acceleration, scroll direction, cursor size, colours and shake, minimize effect, closing animation, hot corner size and dwell, corner radius, key bindings, terminals, screenshot command | `decorations` (new windows only), `menu_bar_height`, `show_menu_bar`, `shell` |
+//! | `keyboard.conf` | every key: repeat, caps lock, filters, rewrite, accent picker, input sources and layouts (the keymap is rebuilt) | — |
+//! | `power.conf` | every key (the countdown in progress continues with the new timers) | — |
+
+use std::path::PathBuf;
+
+use cupertino_defaults::compositor::CompositorSettings;
+use cupertino_defaults::keyboard::KeyboardSettings as KeyboardConf;
+use cupertino_defaults::power::PowerSettings;
+use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
+use smithay::reexports::calloop::channel;
+
+use crate::config::{Config, SettingsFiles};
+use crate::input::KeyBindings;
+use crate::state::Cupertino;
+
+/// Where the watched files are; `None` when neither `XDG_CONFIG_HOME` nor `HOME` names a settings directory.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SettingsPaths {
+    pub compositor: Option<PathBuf>,
+    pub keyboard: Option<PathBuf>,
+    pub power: Option<PathBuf>,
+}
+
+impl SettingsPaths {
+    /// The paths of the environment (`$CUPERTINO_SERVER_CONFIG`, `$CUPERTINO_KEYBOARD_CONFIG`, `$CUPERTINO_POWER_CONF`,
+    /// else the settings directory).
+    pub fn from_env() -> Self {
+        Self { compositor: CompositorSettings::path(), keyboard: KeyboardConf::path(), power: PowerSettings::path() }
+    }
+}
+
+/// The values last read from the files and the watch on them.
+#[derive(Default)]
+pub struct LiveSettings {
+    pub files: SettingsFiles,
+    pub paths: SettingsPaths,
+    /// How many file changes were applied (logged, and what tests wait for).
+    pub reloads: u64,
+    watcher: Option<ConfigWatcher>,
+}
+
+impl Cupertino {
+    /// Watch the settings files at `paths`, `files` being what was read from them at start. A watch that cannot be set
+    /// up is logged: the files then apply at the next start only.
+    pub fn start_settings_watch(&mut self, files: SettingsFiles, paths: SettingsPaths) {
+        self.live.files = files;
+        self.live.paths = paths.clone();
+        let watched: Vec<PathBuf> = [paths.compositor, paths.keyboard, paths.power].into_iter().flatten().collect();
+        if watched.is_empty() {
+            tracing::warn!("no settings directory (neither XDG_CONFIG_HOME nor HOME is set): settings apply at the next start only");
+            return;
+        }
+        let (events, rx) = channel::channel::<WatchEvent>();
+        if let Err(e) = self.loop_handle.insert_source(rx, |event, _, state| {
+            if let channel::Event::Msg(event) = event {
+                state.on_settings_event(event);
+            }
+        }) {
+            tracing::warn!(error = %e, "cannot watch the settings files: they apply at the next start only");
+            return;
+        }
+        let watcher = ConfigWatcher::new(watched, move |event| {
+            // the receiver is gone only while the event loop shuts down, when no change can be applied anyway
+            let _ = events.send(event);
+        });
+        match watcher {
+            Ok(w) => self.live.watcher = Some(w),
+            Err(e) => tracing::warn!(error = %e, "cannot watch the settings files: they apply at the next start only"),
+        }
+    }
+
+    fn on_settings_event(&mut self, event: WatchEvent) {
+        let paths = match event {
+            WatchEvent::Error(e) => {
+                tracing::warn!(error = %e, "watching the settings files failed: later changes may apply at the next start only");
+                return;
+            }
+            WatchEvent::Changed(paths) => paths,
+        };
+        for path in paths {
+            if self.live.paths.compositor.as_ref() == Some(&path) {
+                self.reload_compositor(&path);
+            } else if self.live.paths.keyboard.as_ref() == Some(&path) {
+                self.reload_keyboard(&path);
+            } else if self.live.paths.power.as_ref() == Some(&path) {
+                self.reload_power(&path);
+            }
+        }
+    }
+
+    fn reload_compositor(&mut self, path: &std::path::Path) {
+        let before = self.live.files.compositor.clone();
+        let (after, problems) = match CompositorSettings::load(path, Some(&before)) {
+            Ok(read) => read,
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "cannot read the changed configuration: the running settings stay");
+                return;
+            }
+        };
+        for p in problems {
+            tracing::warn!(path = %path.display(), key = p.key, error = %p.message, "invalid configuration: the key keeps its value");
+        }
+        self.live.files.compositor = after.clone();
+        self.apply_compositor_change(&before, &after);
+        self.live.reloads += 1;
+        tracing::info!(path = %path.display(), "configuration reloaded");
+    }
+
+    /// Apply the keys whose value differs between `before` and `after`, the values `compositor.json` held.
+    pub fn apply_compositor_change(&mut self, before: &CompositorSettings, after: &CompositorSettings) {
+        // what the file means on its own: the defaults (with the shortcut file's chords) and the file's keys
+        let mut target = Config { keybindings: KeyBindings::from_shortcuts(&crate::config::shortcut_map()), ..Config::default() };
+        for problem in target.apply_file(after) {
+            tracing::warn!(error = %problem, "invalid configuration: the key keeps its default");
+        }
+        macro_rules! changed {
+            ($($key:ident),+) => { false $(|| before.$key != after.$key)+ };
+        }
+        if changed!(appearance) {
+            self.set_appearance(target.appearance);
+        }
+        if changed!(terminals) {
+            self.config.terminals = target.terminals.clone();
+        }
+        if changed!(screenshot) {
+            self.config.screenshot_command = target.screenshot_command.clone();
+        }
+        if changed!(keybindings) {
+            self.config.keybindings = target.keybindings.clone();
+            self.key_router.bindings = target.keybindings.clone();
+        }
+        if changed!(corner_radius) {
+            self.config.window.corner_radius = target.window.corner_radius;
+        }
+        if changed!(minimize_effect, closing_animation) {
+            self.config.effects = target.effects;
+            self.fx.cfg = target.effects;
+            crate::state::set_minimize_timing(self.wm.config_mut(), target.effects);
+        }
+        if changed!(hot_corner_size, hot_corner_dwell) {
+            self.config.hot_corners = target.hot_corners.clone();
+            self.hot_corners = cupertino_input::HotCorners::new(target.hot_corners.clone());
+        }
+        if changed!(mouse_speed, trackpad_speed, mouse_acceleration, natural_scrolling, cursor_size, cursor_fill, cursor_outline, shake_to_locate) {
+            let tracking = changed!(mouse_speed, trackpad_speed, mouse_acceleration);
+            self.config.pointer = target.pointer.clone();
+            if tracking {
+                for device in self.pointer_devices.values_mut() {
+                    device.reconfigure(&self.config.pointer);
+                }
+            }
+            self.cursor_loader.set_colors(self.config.pointer.cursor_colors);
+        }
+        if changed!(decorations) {
+            self.config.window.decorations = target.window.decorations;
+            tracing::info!("`decorations` changed: windows that open from now on follow it, open windows keep theirs");
+        }
+        if changed!(menu_bar_height, show_menu_bar, shell) {
+            tracing::info!("`menu_bar_height`, `show_menu_bar` and `shell` apply at the next start");
+        }
+        self.request_redraw();
+    }
+
+    fn reload_keyboard(&mut self, path: &std::path::Path) {
+        let before = self.live.files.keyboard.clone();
+        let (after, problems) = match KeyboardConf::load(path, Some(&before)) {
+            Ok(read) => read,
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "cannot read the changed keyboard settings: the running settings stay");
+                return;
+            }
+        };
+        for p in problems {
+            tracing::warn!(path = %path.display(), line = p.line, error = %p.message, "invalid keyboard setting: the key keeps its value");
+        }
+        self.live.files.keyboard = after.clone();
+        self.apply_keyboard_change(&before, &after);
+        self.live.reloads += 1;
+        tracing::info!(path = %path.display(), "keyboard settings reloaded");
+    }
+
+    /// Apply the keys whose value differs between `before` and `after`, the values `keyboard.conf` held.
+    pub fn apply_keyboard_change(&mut self, before: &KeyboardConf, after: &KeyboardConf) {
+        let mut target = crate::kbd::KeyboardSettings::default();
+        target.apply_file(after);
+        let (kb, t) = (&mut self.config.keyboard, &target);
+        macro_rules! changed {
+            ($($key:ident),+) => { false $(|| before.$key != after.$key)+ };
+        }
+        macro_rules! take {
+            ($key:ident => $($field:tt)+) => {
+                if changed!($key) {
+                    kb.$($field)+ = t.$($field)+.clone();
+                }
+            };
+        }
+        take!(repeat_delay_ms => repeat.initial_delay_ms);
+        take!(repeat_interval_ms => repeat.interval_ms);
+        take!(modifier_profile => profile);
+        take!(input_sources => sources);
+        take!(caps_lock_delay_ms => caps.delay_ms);
+        take!(caps_lock_switch => caps_switch);
+        take!(caps_lock_hold_ms => caps_hold_ms);
+        take!(fn_key => fn_usage);
+        take!(layout_keyboard => layout_keyboard);
+        take!(layout_level3 => layout_level3);
+        take!(slow_keys => access.slow_keys);
+        take!(slow_keys_delay_ms => access.slow_keys_delay_ms);
+        take!(sticky_keys => access.sticky_keys);
+        take!(sticky_keys_shortcut => access.sticky_keys_shortcut);
+        take!(mouse_keys => access.mouse_keys);
+        take!(mouse_keys_shortcut => access.mouse_keys_shortcut);
+        take!(mouse_keys_delay_ms => access.mouse_keys_delay_ms);
+        take!(mouse_keys_max_speed => access.mouse_keys_max_speed);
+        take!(client_rewrite => client_rewrite);
+        take!(rewrite_terminals => rewrite_terminals);
+        take!(rewrite_off => rewrite_off);
+        take!(accent_picker => accent.enabled);
+        take!(accent_table => accent.table);
+        take!(accent_keyboards => accent.keyboards);
+        take!(accent_disabled_apps => accent.disabled_apps);
+        if changed!(caps_lock_delay_ms, caps_lock_switch, caps_lock_hold_ms, input_sources) {
+            self.caps = crate::kbd::CapsDebounce::new(self.config.keyboard.caps, self.config.keyboard.caps_switch_hold());
+        }
+        if changed!(slow_keys, slow_keys_delay_ms, sticky_keys, sticky_keys_shortcut, mouse_keys, mouse_keys_shortcut, mouse_keys_delay_ms, mouse_keys_max_speed) {
+            self.key_filters = crate::kbd_filters::KeyFilters::new(&self.config.keyboard);
+        }
+        if changed!(input_sources, layout_keyboard, layout_level3) {
+            self.overlays.inputs = crate::kbd::InputSources::new(self.config.keyboard.sources.clone());
+            // the repeat too, and the keymap of the new sources
+            self.apply_keyboard_settings();
+        } else if changed!(repeat_delay_ms, repeat_interval_ms, slow_keys) {
+            if let Some(keyboard) = self.seat.get_keyboard() {
+                let info = self.config.keyboard.repeat_info();
+                keyboard.change_repeat_info(info.rate, info.delay);
+            }
+        }
+    }
+
+    fn reload_power(&mut self, path: &std::path::Path) {
+        let before = self.live.files.power;
+        let (after, problems) = match PowerSettings::load(path, Some(&before)) {
+            Ok(read) => read,
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "cannot read the changed power settings: the running settings stay");
+                return;
+            }
+        };
+        for p in problems {
+            tracing::warn!(path = %path.display(), line = p.line, error = %p.message, "invalid power setting: the key keeps its value");
+        }
+        self.live.files.power = after;
+        if after != before {
+            self.config.power = after;
+            self.power.set_settings(after);
+        }
+        self.live.reloads += 1;
+        tracing::info!(path = %path.display(), "power settings reloaded");
+    }
+}

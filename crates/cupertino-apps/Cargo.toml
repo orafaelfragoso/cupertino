@@ -1,0 +1,14 @@
+[package]
+name = "cupertino-apps"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Application registry shared by the Cupertino processes: desktop entries and their Exec lines, the shared MIME database (globs, aliases, subclasses, icon names) and default applications from mimeapps.list"
+
+[package.metadata.cupertino]
+layer = "foundation"
+
+[dependencies]
+
+[dev-dependencies]
+tempfile = "3"

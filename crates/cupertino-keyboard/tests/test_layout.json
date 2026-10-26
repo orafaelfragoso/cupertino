@@ -1,0 +1,460 @@
+{
+ "schema": "cupertino-layout/1",
+ "name": "Test Layout",
+ "id": -999,
+ "language": "en",
+ "sets": [
+  {
+   "first": 0,
+   "last": 0,
+   "modmap": [
+    0,
+    0,
+    1,
+    0,
+    2,
+    0,
+    1,
+    0,
+    3,
+    3,
+    4,
+    4,
+    5,
+    5,
+    4,
+    4
+   ],
+   "default_table": 0,
+   "tables": [
+    [
+     {
+      "c": "a"
+     },
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     {
+      "c": "§"
+     },
+     null,
+     null,
+     null,
+     {
+      "dead": 1
+     },
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     {
+      "dead": 3
+     },
+     {
+      "c": "`"
+     }
+    ],
+    [
+     {
+      "c": "A"
+     },
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     {
+      "c": "±"
+     },
+     null,
+     null,
+     null,
+     {
+      "c": "E"
+     },
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     {
+      "dead": 3
+     },
+     {
+      "c": "~"
+     }
+    ],
+    [
+     {
+      "c": "A"
+     },
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     {
+      "c": "§"
+     },
+     null,
+     null,
+     null,
+     {
+      "c": "E"
+     },
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     {
+      "dead": 3
+     },
+     {
+      "c": "`"
+     }
+    ],
+    [
+     {
+      "c": "å"
+     },
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     {
+      "c": "§"
+     },
+     null,
+     null,
+     null,
+     {
+      "dead": 0
+     },
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     {
+      "dead": 3
+     },
+     {
+      "c": "`"
+     }
+    ],
+    [
+     {
+      "c": "Å"
+     },
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     {
+      "c": "§"
+     },
+     null,
+     null,
+     null,
+     {
+      "c": "´"
+     },
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     {
+      "dead": 3
+     },
+     {
+      "c": "`"
+     }
+    ],
+    [
+     {
+      "c": "Å"
+     },
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     {
+      "c": "§"
+     },
+     null,
+     null,
+     null,
+     {
+      "c": "´"
+     },
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     {
+      "dead": 3
+     },
+     {
+      "c": "`"
+     }
+    ]
+   ],
+   "records": [
+    {
+     "zero": null,
+     "next": 1,
+     "entries": []
+    },
+    {
+     "zero": {
+      "c": "e"
+     },
+     "next": 0,
+     "entries": [
+      {
+       "state": 1,
+       "out": {
+        "c": "é"
+       },
+       "next": 0
+      }
+     ]
+    },
+    {
+     "zero": {
+      "c": "a"
+     },
+     "next": 0,
+     "entries": []
+    },
+    {
+     "zero": {
+      "c": " "
+     },
+     "next": 0,
+     "entries": [
+      {
+       "state": 1,
+       "out": {
+        "c": "´"
+       },
+       "next": 0
+      }
+     ]
+    }
+   ],
+   "terminators": [
+    {
+     "c": "´"
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,794 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="cupertino_shell_v1">
+  <copyright>
+    SPDX-License-Identifier: MIT OR Apache-2.0
+  </copyright>
+
+  <description summary="private protocol between the Cupertino server and its shell processes">
+    Requests the shell processes (dock, menu bar, notifications, launcher, control panel, overlays)
+    need from the server that no standard protocol carries. The protocol is unstable until phase 1 of
+     ends: interfaces may change without a version bump until then.
+  </description>
+
+  <interface name="cupertino_shell_v1" version="4">
+    <description summary="shell services of the server">
+      Global singleton. A client that binds it is a shell process. Version 2 adds the display
+      options of the session object, version 3 the screen capture state of the menu bar object, version 4
+      the titlebar style of an application window.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="unbind the shell global">
+        Objects created through this global stay valid.
+      </description>
+    </request>
+
+    <request name="get_backdrop">
+      <description summary="create a material backdrop under a surface">
+        Creates a backdrop drawn by the server directly below the surface's content: the pixels
+        behind the region are blurred and coloured by a material recipe and composited through a
+        rounded mask. The client draws only its own content, usually with a transparent background.
+        A surface may have several backdrops; they are drawn in creation order, all below the
+        surface. A new backdrop has no material and draws nothing until the material and shape
+        are set and the surface is committed.
+      </description>
+      <arg name="id" type="new_id" interface="cupertino_backdrop_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+
+    <enum name="error">
+      <entry name="role" value="0" summary="the surface is not a layer surface or already has a shell role"/>
+      <entry name="window" value="1" summary="the surface is not an application window, or the window is already mapped"/>
+    </enum>
+
+    <enum name="titlebar_style">
+      <description summary="how the server decorates an application window">
+        Applies to windows the server decorates (xdg-decoration server-side mode).
+      </description>
+      <entry name="standard" value="0" summary="a title bar above the surface, drawn by the server with the window's title"/>
+      <entry name="unified" value="1" summary="the surface fills the whole window and the title bar lies over its top; the server draws only the window control buttons"/>
+    </enum>
+
+    <request name="get_menu_bar">
+      <description summary="make a layer surface the menu bar of an output">
+        Gives the menu-bar role to a layer surface anchored to the top edge of the output. The
+        server owns the bar's presentation as on the design: it reserves the bar's
+        height in the output's usable area (the client sets an exclusive zone of 0), dims the bar
+        of an inactive output, hides it in full screen or by policy and reveals it when the
+        pointer dwells at the top edge, by moving and fading the surface. The client draws the
+        bar content and opens its menus as popups of this surface.
+      </description>
+      <arg name="id" type="new_id" interface="cupertino_menu_bar_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+      <arg name="output" type="object" interface="wl_output"/>
+    </request>
+
+    <request name="get_dock">
+      <description summary="make a layer surface the dock of an output">
+        Gives the dock role to a layer surface on that output. Unlike the menu bar, the client
+        owns the dock's presentation: tile layout, magnification, bounces, auto-hide and its
+        reserved area (through the layer surface's exclusive zone). The server tells it which
+        windows exist and takes its activation requests. The area of the surface's committed
+        backdrops is the dock's rectangle for the server, for example the origin of windows
+        entering the overview, so the surface may be larger than the bar.
+        Posts the role error when the surface is not a layer surface of that output, already has
+        a role, or the output already has a dock.
+      </description>
+      <arg name="id" type="new_id" interface="cupertino_dock_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+      <arg name="output" type="object" interface="wl_output"/>
+    </request>
+
+    <request name="get_session">
+      <description summary="follow the appearance and lock state of the session">
+        Creates an observer of the session. It has no surface or role, so a client may create
+        any number of them. The server sends the current state right after the object is
+        created and again on every change.
+      </description>
+      <arg name="id" type="new_id" interface="cupertino_session_v1"/>
+    </request>
+
+    <request name="get_window_manager">
+      <description summary="arrange the windows of an output">
+        Makes the client the window manager of the output: the process that owns the stage
+        policy (which windows share the stage, the strip of recent groups). It needs no surface.
+        Posts the role error when the output is gone or already has a window manager.
+      </description>
+      <arg name="id" type="new_id" interface="cupertino_window_manager_v1"/>
+      <arg name="output" type="object" interface="wl_output"/>
+    </request>
+
+    <request name="set_titlebar_style" since="4">
+      <description summary="choose the title bar style of an application window">
+        Chooses how the server decorates the xdg toplevel of the surface. The default is standard.
+        With the unified style the surface starts at the top edge of the window: the client draws
+        its toolbar, the fill behind it and the window's title in the top strip, and keeps the area
+        of the window control buttons at the strip's leading edge free of controls, because the
+        buttons take the pointer there. The server does not move the window from the strip: the
+        client does, with xdg_toplevel.move, and a double click may call xdg_toplevel.set_maximized.
+        Resize zones and the window shape are the server's in both styles.
+        Posts the window error when the surface is not an xdg toplevel or has committed a buffer.
+      </description>
+      <arg name="surface" type="object" interface="wl_surface"/>
+      <arg name="style" type="uint" enum="titlebar_style"/>
+    </request>
+  </interface>
+
+  <interface name="cupertino_window_manager_v1" version="1">
+    <description summary="the window manager of one output">
+      Events describe the windows the client arranges and the input meant for it. They come in
+      groups ended by a done event; the client applies a group at once. The first group, sent
+      right after the object is created, has the usable area and every arranged window. Window
+      ids are the server's, the same as the dock's.
+
+      The arranged windows are the mapped, unminimized top-level windows without a parent on the
+      output's current workspace (or on every workspace), of applications that are not hidden.
+
+      The client decides where each arranged window rests; the server keeps the frame clock: it
+      animates every window from where it is drawn to its committed placement, draws strip
+      windows as live thumbnails scaled into their rectangle, keeps strip and hidden windows out
+      of pointer hit testing and reports presses on strip windows. A window starts on the stage
+      and returns to it when it leaves the arranged set. When the object is destroyed, also when
+      the client dies, every window is drawn and hit at its own frame again at once.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="stop arranging the output's windows">
+        Every window returns to the stage at once.
+      </description>
+    </request>
+
+    <event name="usable_area">
+      <description summary="the area windows may use">
+        The output minus the menu bar and the reserved layer zones, in global logical
+        coordinates. Sent in the first group and on every change.
+      </description>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </event>
+
+    <enum name="window_state" bitfield="true">
+      <entry name="active" value="1" summary="the key window of the session"/>
+    </enum>
+
+    <event name="window">
+      <description summary="an arranged window appeared or changed">
+        Application id (the desktop entry id when known), frame in global logical coordinates
+        and state of a window. Sent when the window joins the arranged set and again whenever
+        one of these changes.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="app_id" type="string"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+      <arg name="state" type="uint" enum="window_state"/>
+    </event>
+
+    <event name="window_closed">
+      <description summary="a window left the arranged set">
+        It closed, was minimized, moved to another output or workspace, or its application was
+        hidden. Its placement is dropped.
+      </description>
+      <arg name="id" type="uint"/>
+    </event>
+
+    <event name="toggle_stage">
+      <description summary="the stage shortcut was pressed">
+        Turn the stage on when it is off and off when it is on.
+      </description>
+    </event>
+
+    <event name="strip_pressed">
+      <description summary="the pointer pressed a strip window">
+        The left button went down on the thumbnail of this window, with nothing of the server's
+        or another client's above it. The press reaches no client.
+      </description>
+      <arg name="id" type="uint"/>
+    </event>
+
+    <event name="done">
+      <description summary="end of a group of events"/>
+    </event>
+
+    <enum name="placement">
+      <entry name="stage" value="0" summary="at the window's own frame"/>
+      <entry name="strip" value="1" summary="a thumbnail at the given rectangle"/>
+      <entry name="hidden" value="2" summary="not drawn"/>
+    </enum>
+
+    <request name="set_placement">
+      <description summary="where a window rests">
+        Pending until commit. The rectangle, in global logical coordinates, is read only for
+        the strip placement. An id that is not an arranged window is ignored at commit: the
+        window may have just closed.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="placement" type="uint" enum="placement"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </request>
+
+    <request name="commit">
+      <description summary="apply the pending placements together">
+        Every window whose placement changed starts its animation in the same frame, so a swap
+        of the stage and the strip moves as one.
+      </description>
+    </request>
+
+    <request name="activate_window">
+      <description summary="focus and raise a window">
+        As a click on it does. An id that is no longer a window is ignored.
+      </description>
+      <arg name="id" type="uint"/>
+    </request>
+
+    <enum name="error">
+      <entry name="invalid_placement" value="0" summary="not an entry of the placement enum, or a strip rectangle without area"/>
+    </enum>
+  </interface>
+
+  <interface name="cupertino_session_v1" version="2">
+    <description summary="appearance, display options and lock state of the session">
+      The state every shell process follows. Right after the object is created the server sends
+      appearance, then display_options (version 2), then locked or unlocked. Later events say
+      what changed; an event is complete by itself and is not part of a group. The server draws the lock screen's surfaces on its
+      own: a shell process needs to react to locked only by closing transient interface it owns
+      (menus, panels), and it keeps its surfaces.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="stop observing the session"/>
+    </request>
+
+    <event name="appearance">
+      <description summary="the session's appearance">
+        1 for the dark appearance, 0 for the light one. The client draws again with it, for
+        example from the colours of its materials and palettes. The materials of the client's
+        backdrops follow the appearance in the server and need no request.
+      </description>
+      <arg name="dark" type="uint"/>
+    </event>
+
+    <enum name="display_option" bitfield="true" since="2">
+      <entry name="reduce_motion" value="1" summary="replace spatial transitions with fades"/>
+      <entry name="reduce_transparency" value="2" summary="draw materials opaque"/>
+      <entry name="increase_contrast" value="4" summary="draw with the high-contrast colours"/>
+      <entry name="differentiate_without_color" value="8" summary="do not carry state by colour alone"/>
+    </enum>
+
+    <event name="display_options" since="2">
+      <description summary="the accessibility display options of the session">
+        The options that are on. The client draws again with them: with reduce_motion it fades
+        what it would slide, scale or magnify; with reduce_transparency and increase_contrast it
+        picks its opaque and high-contrast palettes. The materials of the client's backdrops
+        follow the options in the server and need no request. Bits the client does not know
+        are reserved and stay 0.
+      </description>
+      <arg name="options" type="uint" enum="display_option"/>
+    </event>
+
+    <event name="locked">
+      <description summary="the session is locked">
+        Sent as soon as the server hides the session for the lock, before the lock screen has
+        its first frame. The session stays locked until unlocked, also while the client that
+        took the lock is gone.
+      </description>
+    </event>
+
+    <event name="unlocked">
+      <description summary="the session is unlocked"/>
+    </event>
+  </interface>
+
+  <interface name="cupertino_menu_bar_v1" version="3">
+    <description summary="the menu bar of one output">
+      Events describe the active application and the menus its active window exports. They
+      come in groups ended by a done event; the client applies a group at once. The first group
+      is sent right after the object is created; from version 3 a group with screen_capture
+      follows it.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="give up the menu-bar role"/>
+    </request>
+
+    <event name="active_app">
+      <description summary="the active application changed">
+        Application id (the desktop entry id when known) and title of the active window; both
+        are empty when no window is active.
+      </description>
+      <arg name="app_id" type="string"/>
+      <arg name="title" type="string"/>
+    </event>
+
+    <event name="menu_none">
+      <description summary="the active window exports no menu"/>
+    </event>
+
+    <event name="menu_dbusmenu">
+      <description summary="the active window exports a DBusMenu tree">
+        Announced by the window through the application menu address protocol.
+      </description>
+      <arg name="service" type="string"/>
+      <arg name="path" type="string"/>
+    </event>
+
+    <event name="menu_gtk">
+      <description summary="the active window exports GMenuModel menus">
+        Announced by the window through the toolkit shell protocol. An empty string is an
+        absent path.
+      </description>
+      <arg name="bus_name" type="string"/>
+      <arg name="application_id" type="string"/>
+      <arg name="application_object_path" type="string"/>
+      <arg name="window_object_path" type="string"/>
+      <arg name="menubar_object_path" type="string"/>
+      <arg name="app_menu_object_path" type="string"/>
+    </event>
+
+    <event name="window_state">
+      <description summary="state of the active window for the window menu">
+        Whether the active window can zoom, its workspace (1-based, 0 for none) and the number
+        of workspaces of the output.
+      </description>
+      <arg name="can_zoom" type="uint"/>
+      <arg name="workspace" type="uint"/>
+      <arg name="workspaces" type="uint"/>
+    </event>
+
+    <event name="engage">
+      <description summary="the menu-bar shortcut was pressed">
+        Focus the first menu title of this bar for keyboard navigation. The bar takes the
+        keyboard by asking for exclusive keyboard interactivity and lets go when navigation ends.
+        Sent in a group of its own, ended by done.
+      </description>
+    </event>
+
+    <event name="screen_capture" since="3">
+      <description summary="whether the screen is being captured">
+        1 while a screen or window capture session runs (ext-image-copy-capture-v1), 0 otherwise.
+        The bar shows the screen capture indicator while it is 1. Sent in a group of its own,
+        ended by done, after the first group and whenever it changes.
+      </description>
+      <arg name="active" type="uint"/>
+    </event>
+
+    <event name="done">
+      <description summary="end of a group of events"/>
+    </event>
+
+    <request name="set_menu_open">
+      <description summary="a menu of this bar is open or closed">
+        While a menu is open the server keeps the bar revealed.
+      </description>
+      <arg name="open" type="uint"/>
+    </request>
+
+    <enum name="command">
+      <entry name="hide_app" value="0" summary="hide the active application"/>
+      <entry name="hide_others" value="1" summary="hide every other application"/>
+      <entry name="show_all" value="2" summary="show all hidden applications"/>
+      <entry name="quit_app" value="3" summary="close every window of the active application"/>
+      <entry name="minimize" value="4" summary="minimize the active window"/>
+      <entry name="zoom" value="5" summary="zoom the active window"/>
+      <entry name="close" value="6" summary="close the active window"/>
+    </enum>
+
+    <request name="window_command">
+      <description summary="run a window-management command of the fallback menus">
+        Acts on the active application or window at the time the server handles the request.
+      </description>
+      <arg name="command" type="uint" enum="command"/>
+    </request>
+
+    <enum name="error">
+      <entry name="invalid_command" value="0" summary="the window_command value is not an entry of the command enum"/>
+    </enum>
+
+    <request name="move_to_workspace">
+      <description summary="move the active window to a workspace of its output">
+        1-based workspace index.
+      </description>
+      <arg name="workspace" type="uint"/>
+    </request>
+  </interface>
+
+  <interface name="cupertino_backdrop_v1" version="1">
+    <description summary="a material region below a surface">
+      All state is double-buffered: it applies on the next wl_surface.commit of the surface the
+      backdrop was created for, together with that commit's buffer, so the backdrop and the content
+      always move together. When the surface is destroyed the backdrop becomes inert.
+    </description>
+
+    <enum name="error">
+      <entry name="unknown_material" value="0" summary="the material name is not a recipe of the server's design tokens"/>
+      <entry name="invalid_shape" value="1" summary="negative width or height, or a negative corner radius"/>
+      <entry name="invalid_alpha" value="2" summary="alpha outside 0 to 1"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="remove the backdrop">
+        The backdrop disappears with the next commit of its surface.
+      </description>
+    </request>
+
+    <request name="set_material">
+      <description summary="choose the material recipe">
+        Name of a material recipe of the design tokens, for example "Menu" or "Sidebar". The
+        server picks the light or dark variant from the current appearance.
+      </description>
+      <arg name="name" type="string"/>
+    </request>
+
+    <request name="set_shape">
+      <description summary="set the region and its corner radius">
+        Rectangle in surface-local logical coordinates and the radius of its continuous corners in
+        logical points. A zero width or height hides the backdrop.
+      </description>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+      <arg name="radius" type="fixed"/>
+    </request>
+
+    <request name="set_alpha">
+      <description summary="set the opacity of the whole backdrop">
+        Opacity from 0 to 1 applied to the composited backdrop, for fades. The initial value is 1.
+      </description>
+      <arg name="alpha" type="fixed"/>
+    </request>
+  </interface>
+
+  <interface name="cupertino_dock_v1" version="1">
+    <description summary="the dock of one output">
+      Events describe the windows of the session and the application switcher. They come in
+      groups ended by a done event; the client applies a group at once. The first group, sent
+      right after the object is created, lists every window; while a switch is under way, the
+      switcher as it stands follows in a group of its own. Window ids are the server's, stable for a window's lifetime
+      and never reused within a session.
+
+      The server owns the switcher's keys and its choice: it opens on the switch chord, steps
+      on its keys, commits the selected application when the modifier is released and cancels
+      on Escape, with or without a dock. One dock draws the panel (after its show delay and with
+      its fade), on the output switcher_output names, and reports what the pointer did on it: the
+      entry it picked, a release on an entry (switcher_activate) or elsewhere on the panel
+      (switcher_cancel). The panel is a layer surface of namespace cupertino-dock-switcher; a
+      press anywhere else cancels the switch when it is released.
+
+      The overview (all windows, or one application's) is shared the same way: the server owns
+      its transition, the windows' frames and their animation, and closes it on Escape, on a
+      workspace switch and when the dock goes away; the dock lays the windows out (overview_frame),
+      draws the workspaces bar, the highlight and the titles, and sends what the pointer and the
+      keys picked. Hot corners and touchpad gestures are detected by the server and mapped to
+      their action by the dock (hot_corner, gesture, run_action). Overview coordinates are the
+      output's logical coordinates (origin at the output's top-left corner).
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="give up the dock role"/>
+    </request>
+
+    <enum name="window_state" bitfield="true">
+      <entry name="minimized" value="1"/>
+      <entry name="active" value="2" summary="the key window of the session"/>
+    </enum>
+
+    <event name="window">
+      <description summary="a window appeared or changed">
+        Application id (the desktop entry id when known), title and state of a window. Sent
+        when the window is mapped and again whenever one of these changes.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="app_id" type="string"/>
+      <arg name="title" type="string"/>
+      <arg name="state" type="uint" enum="window_state"/>
+    </event>
+
+    <event name="window_closed">
+      <description summary="a window went away"/>
+      <arg name="id" type="uint"/>
+    </event>
+
+    <event name="launching">
+      <description summary="the server started an application">
+        Sent when the server itself starts a program (a shortcut or a spawned command), so the
+        dock can bounce its tile until a window of that application appears.
+      </description>
+      <arg name="app_id" type="string"/>
+    </event>
+
+    <event name="toggle_auto_hide">
+      <description summary="the auto-hide shortcut was pressed">
+        Turn the dock's auto-hide on when it is off and off when it is on. The dock updates its
+        exclusive zone to match.
+      </description>
+    </event>
+
+    <event name="toggle_app_grid">
+      <description summary="the application grid action was triggered">
+        The app-grid shortcut, hot corner or gesture fired. The dock opens its application grid
+        when it is closed and closes it when it is open; the server keeps no state of the grid,
+        it only forwards the action to every dock.
+      </description>
+    </event>
+
+    <event name="switcher_output">
+      <description summary="the output the switcher's panel goes on">
+        Starts every switcher group, before its switcher_entry events: the output the panel is
+        drawn on, the one under the pointer when the switch opened. Only one dock gets the
+        switcher groups: the dock of that output, else another one. When the client has not bound
+        that output, the server names the dock's own output.
+      </description>
+      <arg name="output" type="object" interface="wl_output"/>
+    </event>
+
+    <event name="switcher_entry">
+      <description summary="an entry of the application switcher">
+        One application of the switcher's list, most recently used first. The entries sent
+        since the last done, up to the switcher_changed that ends them, are the whole list; they
+        replace any earlier one.
+      </description>
+      <arg name="app_id" type="string"/>
+    </event>
+
+    <event name="switcher_changed">
+      <description summary="the application switcher opened or its selection moved">
+        Closes the list of switcher_entry events before it in the group and selects one of them
+        (0-based). The list is never empty and the index is inside it. Sent when the switcher
+        opens, on every step and on every switcher_select that moved the selection, each time with
+        the whole list again. A dock that binds while a switch is under way gets it right
+        after its first group, in a group of its own.
+      </description>
+      <arg name="selected" type="uint"/>
+    </event>
+
+    <event name="switcher_closed">
+      <description summary="the application switcher is gone">
+        The switch ended. When committed is 1 the selected application was activated and the
+        panel fades out; when 0 it was cancelled and the panel disappears at once. Sent after
+        the last switcher_changed of the switch.
+      </description>
+      <arg name="committed" type="uint"/>
+    </event>
+
+    <enum name="overview_mode">
+      <entry name="all" value="0" summary="every window of the current workspace, with the workspaces bar"/>
+      <entry name="app" value="1" summary="the windows of one application, minimized ones in a lower row"/>
+    </enum>
+
+    <event name="overview_window">
+      <description summary="a window of the open overview">
+        One window the overview shows, with its frame on the desktop (for a minimized window: its
+        frame before it minimized). The windows sent since the last done, up to the
+        overview_changed that ends them, are the whole set; they replace any earlier one. Their
+        ids are those of the window events.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </event>
+
+    <event name="overview_workspace">
+      <description summary="a workspace of the output">
+        One workspace of the dock's output, in order; current is 1 for the one on screen. Sent in
+        the same group as the overview_window events and closed by the same overview_changed.
+        Workspace ids are the server's, stable for a workspace's lifetime.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="current" type="uint"/>
+    </event>
+
+    <event name="overview_changed">
+      <description summary="the overview opened or its contents changed">
+        Closes the overview_window and overview_workspace lists before it in the group. Sent when
+        the overview opens on the dock's output, whenever its window set or the workspaces change
+        while it is open, and to a dock that binds while it is open. app_id is the application of
+        the app mode, empty in the all mode. The rectangle is the area the windows are laid out
+        in: the output minus the menu bar and the layer-shell exclusive zones. The dock answers
+        with one overview_frame per window; until it does, a window stays at its desktop frame.
+      </description>
+      <arg name="mode" type="uint" enum="overview_mode"/>
+      <arg name="app_id" type="string"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </event>
+
+    <event name="overview_closed">
+      <description summary="the overview is leaving">
+        The server started the close transition: the windows return to their desktop frames. The
+        dock removes its chrome. Sent after a selection, Escape, a workspace switch or an
+        overview_close, and when the overview ends for any other reason.
+      </description>
+    </event>
+
+    <enum name="corner">
+      <entry name="top_left" value="0"/>
+      <entry name="top_right" value="1"/>
+      <entry name="bottom_left" value="2"/>
+      <entry name="bottom_right" value="3"/>
+    </enum>
+
+    <event name="hot_corner">
+      <description summary="the pointer rested in a corner of the dock's output">
+        The pointer dwelt in the corner for the configured time. The dock maps the corner to
+        its action (its own settings) and carries it out, by run_action for the server's actions.
+      </description>
+      <arg name="corner" type="uint" enum="corner"/>
+    </event>
+
+    <enum name="gesture">
+      <entry name="swipe_up" value="0" summary="a three- or four-finger swipe up"/>
+      <entry name="swipe_down" value="1" summary="a three- or four-finger swipe down"/>
+      <entry name="pinch" value="2" summary="a four-finger pinch in"/>
+      <entry name="spread" value="3" summary="a four-finger spread"/>
+    </enum>
+
+    <event name="gesture">
+      <description summary="a touchpad gesture committed on the dock's output">
+        The server's recognizer committed a gesture that is not the workspace swipe (which the
+        server carries out itself). The dock maps it to its action as for hot_corner.
+      </description>
+      <arg name="kind" type="uint" enum="gesture"/>
+    </event>
+
+    <event name="attention">
+      <description summary="an application asks for attention">
+        The application asked to be activated and the server refused (its activation token was
+        older than the user's last input). The dock bounces its tile once. Sent to every dock;
+        not sent for the active application.
+      </description>
+      <arg name="app_id" type="string"/>
+    </event>
+
+    <event name="done">
+      <description summary="end of a group of events"/>
+    </event>
+
+    <request name="activate_app">
+      <description summary="bring an application forward">
+        Raises the application's windows on their workspaces and focuses the frontmost, as a
+        click on a running application's tile does. Unknown application ids are ignored: the
+        application may have just quit.
+      </description>
+      <arg name="app_id" type="string"/>
+    </request>
+
+    <request name="restore_window">
+      <description summary="restore a minimized window">
+        Unminimizes the window, animating it out of its tile's rectangle (surface-local). An id
+        that is no longer a minimized window is ignored: it may have just closed or been restored.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </request>
+
+    <request name="set_minimize_target">
+      <description summary="where a window minimizes to">
+        The rectangle, in surface-local coordinates, of the slot a newly minimized window's tile
+        takes; the server animates minimizing windows into it. Double-buffered, applied on the
+        next wl_surface.commit. Until one is set, windows minimize without a target.
+      </description>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </request>
+
+    <request name="switcher_select">
+      <description summary="the pointer picked an entry of the switcher">
+        Selects entry index of the open switcher, as the pointer hovering over or pressing the
+        entry's tile does; the commit stays with the server's keys. An index outside the list,
+        or a request while no switcher is open, is ignored: the list may have just changed.
+        The server answers with switcher_changed when the selection moved.
+      </description>
+      <arg name="index" type="uint"/>
+    </request>
+
+    <request name="overview_frame">
+      <description summary="where a window of the overview goes">
+        The frame the window takes in the open overview; the server animates it there (and back
+        to its desktop frame on close). A new frame for a window that has one moves it with the
+        reflow spring. An id that is not in the overview, or a request while none is open, is
+        ignored: the set may have just changed.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </request>
+
+    <request name="overview_select">
+      <description summary="a window was picked in the overview">
+        Leaves the overview and activates the window (a minimized one is restored). Ignored for an
+        id that is not in the overview.
+      </description>
+      <arg name="id" type="uint"/>
+    </request>
+
+    <request name="overview_close">
+      <description summary="leave the overview without a pick"/>
+    </request>
+
+    <request name="switch_workspace">
+      <description summary="go to a workspace of the dock's output">
+        Switches the output to the workspace, leaving an open overview first. An unknown id is
+        ignored: the workspace may have just been removed.
+      </description>
+      <arg name="id" type="uint"/>
+    </request>
+
+    <request name="add_workspace">
+      <description summary="append a workspace to the dock's output"/>
+    </request>
+
+    <request name="remove_workspace">
+      <description summary="remove a workspace of the dock's output">
+        Its windows move to the previous (else the next) workspace. The last regular workspace,
+        a full-screen one and an unknown id are ignored.
+      </description>
+      <arg name="id" type="uint"/>
+    </request>
+
+    <request name="move_workspace">
+      <description summary="reorder a workspace of the dock's output">
+        Moves the workspace to position index (0-based) among the output's workspaces; an index
+        past the end moves it last. A full-screen workspace and an unknown id are ignored.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="index" type="uint"/>
+    </request>
+
+    <request name="run_action">
+      <description summary="run a named compositor action">
+        Runs the action as the shortcut bound to it would (the names of the shortcut file:
+        overview, app-overview, show-desktop, launcher, control-panel, notification-center, lock,
+        ...), for the output under the pointer. An unknown name is logged and ignored.
+      </description>
+      <arg name="name" type="string"/>
+    </request>
+
+    <enum name="app_command">
+      <entry name="show_windows" value="0" summary="open the application overview of the application"/>
+      <entry name="hide" value="1" summary="hide the application's windows"/>
+      <entry name="quit" value="2" summary="ask every window of the application to close"/>
+    </enum>
+
+    <request name="app_command">
+      <description summary="a command of a tile's context menu">
+        Carries out the command for the application. Unknown application ids are ignored: the
+        application may have just quit.
+      </description>
+      <arg name="app_id" type="string"/>
+      <arg name="command" type="uint" enum="app_command"/>
+    </request>
+
+    <request name="switcher_activate">
+      <description summary="the pointer was released on an entry of the switcher">
+        Selects entry index of the open switcher and commits it, as releasing the modifier
+        would. An index outside the list, or a request while no switcher is open, is ignored.
+      </description>
+      <arg name="index" type="uint"/>
+    </request>
+
+    <request name="switcher_cancel">
+      <description summary="the pointer was released on the panel off the entries">
+        Ends the open switch without activating anything; ignored while no switcher is open.
+      </description>
+    </request>
+  </interface>
+</protocol>

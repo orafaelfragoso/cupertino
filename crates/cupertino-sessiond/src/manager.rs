@@ -1,0 +1,1367 @@
+//! The manager's main loop: one thread, one `poll` over the login screen's socket, its connection and the workers.
+//!
+//! The manager is root. It never decodes an image, links no rendering code and takes nothing from the login screen except the
+//! typed messages of `cupertino-login-ipc`. Logging follows one rule: a message never holds what the screen sent. Errors of
+//! decoding are logged by their class only (serde's text embeds the offending value), listed accounts are logged by uid.
+
+use std::collections::{HashSet, VecDeque};
+use std::fs::File;
+use std::io;
+use std::os::fd::OwnedFd;
+use std::sync::Arc;
+use std::os::unix::fs::{chown, PermissionsExt};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::Path;
+use std::process::{Child, Command, ExitCode, ExitStatus, Stdio};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::time::{Duration, Instant};
+
+use cupertino_defaults::login::LoginConfig;
+use cupertino_login_ipc::message::{MAX_EVENT_FRAME, MAX_REQUEST_FRAME};
+use cupertino_login_ipc::{encode, encode_secret, is_login_name, Account, Event, Outcome, PowerAction, PowerRefusal, ProtocolRefusal, Request, Secret, State, VERSION};
+use rustix::event::{eventfd, poll, EventfdFlags, PollFd, PollFlags, Timespec};
+use rustix::process::{pidfd_open, PidfdFlags};
+
+use crate::auto_login;
+use crate::caller::{may_end_other_sessions, Asker, CallerSession};
+use crate::channel::{Channel, ChannelError};
+use crate::worker_protocol::{FromWorker, Mode, SessionClass, ToWorker, MAX_FRAME};
+use crate::limits::{RateLimit, ATTEMPTS_PER_WINDOW, ATTEMPT_TIMEOUT, ATTEMPT_WINDOW};
+use crate::logind::{self, Logind, SeatSession, Signal};
+use crate::service::{self, Authorizer, Call, ReadyRefusal};
+use crate::{picture, roster, users, vt};
+
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+/// The login screen's socket (mode 0600, owned by the greeter account), in the unit's runtime directory.
+const SOCKET_PATH: &str = "/run/cupertino-login/greeter.sock";
+/// The environment variable that tells the login screen where the socket is.
+const SOCKET_VARIABLE: &str = "CUPERTINO_LOGIN_SOCK";
+/// PAM service of the login screen's own session: no authentication, a logind session of class `greeter`.
+const GREETER_SERVICE: &str = "cupertino-greeter";
+/// PAM service of a user's session (the package ships `/etc/pam.d/cupertino-session`).
+const AUTO_LOGIN_SERVICE: &str = "cupertino-autologin";
+const SESSION_SERVICE: &str = "cupertino-session";
+/// How long an attempt with an account that cannot exist waits before it is answered `Denied`: as long as `pam_unix` takes
+/// to refuse a wrong password (`pam_faildelay`, 2 s in the image), so the answer does not tell the two apart (approximate).
+const INVALID_ACCOUNT_DELAY: Duration = Duration::from_secs(2);
+/// A login screen's session that ends is started again after this long (throttle, for shell agents,
+/// here).
+const GREETER_RESTART_DELAY: Duration = Duration::from_secs(1);
+/// The login screen failing this many times within [`GREETER_FAILURE_WINDOW`] is not started again: a loop at 1 Hz on a broken
+/// GPU is worse than a black terminal (approximate, ours; other terminals still have a getty).
+const GREETER_FAILURES: usize = 5;
+const GREETER_FAILURE_WINDOW: Duration = Duration::from_secs(30);
+/// How long a write to the login screen may take before the screen is dropped (approximate, ours). The loop has one thread,
+/// so a screen that stops reading must not stall it.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
+/// How often the manager asks logind whether the session it switched to is in the foreground yet, and how long it waits for that
+/// before it stops treating the switch as under way (approximate, ours; a virtual terminal switch takes a few frames).
+const SWITCH_POLL: Duration = Duration::from_millis(100);
+const SWITCH_GIVE_UP: Duration = Duration::from_secs(5);
+/// How long a started session may take to announce that its agent is up before the login screen is shown again without it
+/// (the design's login waits for the session at most 15.0 s).
+const SESSION_READY_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Entry point of `cupertino-sessiond`: runs until a failure; systemd restarts the unit.
+pub fn run() -> ExitCode {
+    match Manager::start().and_then(|mut manager| manager.run()) {
+        Ok(never) => match never {},
+        Err(e) => {
+            eprintln!("cupertino-sessiond: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// What a worker is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Role {
+    Greeter,
+    Session,
+}
+
+struct Worker {
+    id: u64,
+    role: Role,
+    child: Child,
+    /// Readable once the worker has exited.
+    exited: OwnedFd,
+    /// `None` once a session's worker has reported `Started`: it supervises the session alone from then on.
+    channel: Option<Channel>,
+    /// The terminal of a session until it has started, then the session's.
+    terminal: Option<File>,
+}
+
+/// A session the manager started for a user.
+struct Session {
+    /// The logind session id.
+    id: String,
+    /// The user the session belongs to.
+    uid: u32,
+    /// The worker that supervises the session; `None` for one adopted after a restart of the manager (its worker is not a child
+    /// of this process, so the end of the session is told by [`Adopted`] and logind instead).
+    worker: Option<u64>,
+    /// The session's agent has called `SessionReady`.
+    ready: bool,
+    /// When the login screen stops waiting for `SessionReady`; `None` once the session is ready or the wait is over.
+    ready_deadline: Option<Instant>,
+    /// The unique bus name of the agent that announced the session, for what the manager sends it.
+    agent: Option<String>,
+    /// The terminal the session runs on, held until the session is gone.
+    _terminal: Option<File>,
+}
+
+/// A session of an earlier run of the manager that this run found in logind (`Service` names the PAM service that opened it, so
+/// a getty's session is not one). Its worker is not a child of this process: nothing here learns that the leader exited, so the
+/// leader is watched through a descriptor and what it leaves in the session is terminated like a worker's exit would.
+struct Adopted {
+    key: u64,
+    id: String,
+    /// Readable once the session's leader has exited.
+    leader: OwnedFd,
+}
+
+/// The attempt that is open: at most one.
+struct Attempt {
+    /// The worker that runs it; `None` for an account that cannot exist, answered when `denial_at` falls due.
+    worker: Option<u64>,
+    /// The user id of the account; `None` for a typed name that no account has.
+    uid: Option<u32>,
+    prompt_open: bool,
+    /// When the attempt is cancelled if nothing has happened: the screen has not answered a prompt, or the worker has not
+    /// answered the screen's answer or opened the session ([`ATTEMPT_TIMEOUT`]).
+    deadline: Option<Instant>,
+    /// How the worker decided: `Accepted` until the session runs, then the attempt ends.
+    decision: Option<Outcome>,
+    /// The id of the user's session when the account has one already: the attempt checks the password and switches to it.
+    existing: Option<String>,
+    /// The power action an administrator authenticates for: the attempt only checks the password and, once it is
+    /// accepted, the action is carried out.
+    power: Option<PowerAction>,
+}
+
+/// A switch of the console between sessions that logind has not finished: no second one starts meanwhile
+/// (the design ignores a switch request while one is under way).
+struct Switch {
+    /// The session being brought to the foreground.
+    target: String,
+    next_poll: Instant,
+    give_up_at: Instant,
+}
+
+/// The one connection of the login screen.
+struct Screen {
+    channel: Channel,
+    state: State,
+}
+
+/// What `poll` reported ready.
+#[derive(Clone, Copy, Debug)]
+enum Ready {
+    Listener,
+    Screen,
+    WorkerExited(u64),
+    WorkerMessage(u64),
+    /// The leader of an adopted session (its [`Adopted::key`]) exited.
+    AdoptedExited(u64),
+    /// logind sent a signal, or the bus service a command.
+    Incoming,
+    /// A deadline passed.
+    Timer,
+}
+
+/// What the threads that read the system bus tell the main loop.
+enum Incoming {
+    Logind(Signal),
+    Call(Call),
+}
+
+/// The way into the main loop for the threads that read the system bus: the message, then the eventfd that wakes `poll`.
+#[derive(Clone)]
+struct Mailbox {
+    sender: Sender<Incoming>,
+    wake: Arc<OwnedFd>,
+}
+
+impl Mailbox {
+    /// Queue `item` and wake the loop; `false` when the loop is gone.
+    fn post(&self, item: Incoming) -> bool {
+        if self.sender.send(item).is_err() {
+            return false;
+        }
+        if let Err(e) = rustix::io::write(&*self.wake, &1u64.to_ne_bytes()) {
+            eprintln!("cupertino-sessiond: waking the main loop: {e}");
+        }
+        true
+    }
+}
+
+/// Who asks for a power action.
+enum Requester<'a> {
+    /// The login screen, through its socket.
+    Screen,
+    /// A session's agent, through the bus, authorised as `caller`.
+    Agent(&'a CallerSession),
+    /// The login screen, after an administrator proved her password for this action.
+    Administrator,
+}
+
+/// [`Authorizer`] on logind, for the bus service's threads.
+struct LogindAuthorizer(Logind);
+
+impl Authorizer for LogindAuthorizer {
+    fn session_of(&self, pid: u32) -> std::result::Result<Option<CallerSession>, String> {
+        self.0.session_of_pid(pid).map_err(|e| e.to_string())
+    }
+}
+
+struct Manager {
+    config: LoginConfig,
+    greeter: users::Account,
+    session_path: String,
+    listener: UnixListener,
+    screen: Option<Screen>,
+    workers: Vec<Worker>,
+    next_worker: u64,
+    logind: Logind,
+    /// What the threads that read the system bus queued, and the descriptor that wakes `poll` for it.
+    incoming: Receiver<Incoming>,
+    wake: Arc<OwnedFd>,
+    /// The connection that serves `org.cupertino.LoginManager1`; the interface is served while it lives.
+    _bus: zbus::blocking::Connection,
+    /// The sessions started for users.
+    sessions: Vec<Session>,
+    /// When the login screen's worker failed, within the window that decides whether to start it again.
+    greeter_failures: VecDeque<Instant>,
+    /// When the login screen's session is started again.
+    greeter_restart_at: Option<Instant>,
+    /// The logind session of the login screen, once its leader runs.
+    greeter_session: Option<String>,
+    /// The login screen's session was found in logind when the manager started: no worker of this run supervises it.
+    greeter_adopted: bool,
+    /// Sessions of an earlier run that this run watches.
+    adopted: Vec<Adopted>,
+    /// The account to log in without a password once the login screen's session is up; `None` when the setting is off, refused
+    /// or already used.
+    auto_login: Option<String>,
+    /// The worker that runs the auto login, until it starts the session or ends.
+    auto_login_worker: Option<u64>,
+    /// The attempt that is open.
+    attempt: Option<Attempt>,
+    /// The switch of the console that is under way.
+    switch: Option<Switch>,
+    /// How many attempts the screen may start.
+    attempts: RateLimit,
+    /// The accounts of the last user list sent: (uid, login). `Listed` accounts must be among them.
+    listed: Vec<(u32, String)>,
+    /// When the open attempt, for an account that cannot exist, is answered `Denied`.
+    denial_at: Option<Instant>,
+    /// The terminal descriptors held open, see [`vt`].
+    _held_terminals: Vec<File>,
+    /// Users whose picture file was found unusable, so the journal says it once.
+    reported_pictures: HashSet<u32>,
+}
+
+impl Manager {
+    /// Read the configuration, bind the socket and start the login screen.
+    fn start() -> Result<Manager> {
+        harden()?;
+        let config = LoginConfig::load().map_err(|problems| {
+            let lines: Vec<String> = problems.iter().map(|(line, message)| if *line == 0 { message.clone() } else { format!("line {line}: {message}") }).collect();
+            format!("{}: {}", LoginConfig::path().display(), lines.join("; "))
+        })?;
+        let greeter = users::by_name(&config.greeter_user)?.ok_or_else(|| format!("greeter-user {:?} has no password database entry", config.greeter_user))?;
+        if greeter.uid == 0 {
+            return Err("greeter-user must not be root".into());
+        }
+        // auto login skips the password: only a settings file that root alone can change may turn it on
+        let auto_login = config.auto_login.clone().filter(|_| match auto_login::settings_are_trusted(&LoginConfig::path()) {
+            Ok(()) => true,
+            Err(reason) => {
+                eprintln!("cupertino-sessiond: auto login refused: {reason}");
+                false
+            }
+        });
+        let listener = bind(Path::new(SOCKET_PATH), greeter.uid, greeter.gid)?;
+        let (logind, incoming, mailbox) = watch_logind()?;
+        let bus = serve_bus(&mailbox)?;
+        let mut manager = Manager {
+            session_path: users::session_path()?,
+            _held_terminals: vec![vt::hold(config.vt).map_err(|e| format!("holding {}: {e}", vt::device(config.vt)))?],
+            config,
+            greeter,
+            listener,
+            screen: None,
+            workers: Vec::new(),
+            next_worker: 0,
+            logind,
+            incoming,
+            wake: mailbox.wake,
+            _bus: bus,
+            sessions: Vec::new(),
+            greeter_failures: VecDeque::new(),
+            greeter_restart_at: None,
+            greeter_session: None,
+            greeter_adopted: false,
+            adopted: Vec::new(),
+            auto_login,
+            auto_login_worker: None,
+            attempt: None,
+            switch: None,
+            attempts: RateLimit::new(ATTEMPTS_PER_WINDOW, ATTEMPT_WINDOW),
+            listed: Vec::new(),
+            denial_at: None,
+            reported_pictures: HashSet::new(),
+        };
+        manager.adopt_sessions()?;
+        if manager.greeter_session.is_none() {
+            manager.start_greeter()?;
+        } else {
+            manager.try_auto_login();
+        }
+        notify_ready()?;
+        Ok(manager)
+    }
+
+    fn run(&mut self) -> Result<std::convert::Infallible> {
+        loop {
+            for ready in self.wait()? {
+                match ready {
+                    Ready::Listener => self.accept()?,
+                    Ready::Screen => self.screen_readable(),
+                    Ready::WorkerMessage(id) => self.worker_message(id),
+                    Ready::WorkerExited(id) => self.worker_exited(id)?,
+                    Ready::AdoptedExited(key) => self.adopted_exited(key),
+                    Ready::Incoming => self.incoming_ready()?,
+                    Ready::Timer => self.timer()?,
+                }
+            }
+        }
+    }
+
+    /// Block until something is ready or a deadline passes.
+    fn wait(&self) -> Result<Vec<Ready>> {
+        let mut sources = vec![(Ready::Listener, PollFd::new(&self.listener, PollFlags::IN))];
+        if let Some(screen) = &self.screen {
+            sources.push((Ready::Screen, PollFd::new(screen.channel.stream(), PollFlags::IN)));
+        }
+        for worker in &self.workers {
+            sources.push((Ready::WorkerExited(worker.id), PollFd::new(&worker.exited, PollFlags::IN)));
+            if let Some(channel) = &worker.channel {
+                sources.push((Ready::WorkerMessage(worker.id), PollFd::new(channel.stream(), PollFlags::IN)));
+            }
+        }
+        for adopted in &self.adopted {
+            sources.push((Ready::AdoptedExited(adopted.key), PollFd::new(&adopted.leader, PollFlags::IN)));
+        }
+        sources.push((Ready::Incoming, PollFd::new(&*self.wake, PollFlags::IN)));
+        let (kinds, mut fds): (Vec<Ready>, Vec<PollFd<'_>>) = sources.into_iter().unzip();
+        let deadline = [self.denial_at, self.greeter_restart_at, self.attempt.as_ref().and_then(|attempt| attempt.deadline), self.switch.as_ref().map(|switch| switch.next_poll)].into_iter().chain(self.sessions.iter().map(|session| session.ready_deadline)).flatten().min();
+        let timeout = deadline.map(|at| {
+            let left = at.saturating_duration_since(Instant::now());
+            Timespec { tv_sec: left.as_secs() as i64, tv_nsec: i64::from(left.subsec_nanos()) }
+        });
+        loop {
+            match poll(&mut fds, timeout.as_ref()) {
+                Ok(_) => break,
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(e) => return Err(format!("poll: {e}").into()),
+            }
+        }
+        // a hang-up or an error is readable too: the read reports it
+        let mut ready: Vec<Ready> = kinds.into_iter().zip(&fds).filter(|(_, fd)| !fd.revents().is_empty()).map(|(kind, _)| kind).collect();
+        if deadline.is_some_and(|at| at <= Instant::now()) {
+            ready.push(Ready::Timer);
+        }
+        Ok(ready)
+    }
+
+    /// A connection on the screen's socket: only the greeter account, and only one at a time.
+    fn accept(&mut self) -> Result<()> {
+        let (stream, _) = match self.listener.accept() {
+            Ok(pair) => pair,
+            // the peer went away between `poll` and `accept`
+            Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::ConnectionAborted | io::ErrorKind::Interrupted) => return Ok(()),
+            Err(e) => return Err(format!("accept: {e}").into()),
+        };
+        let peer = rustix::net::sockopt::socket_peercred(&stream).map_err(|e| format!("SO_PEERCRED: {e}"))?;
+        if peer.uid.as_raw() != self.greeter.uid {
+            eprintln!("cupertino-sessiond: refused a connection from uid {}", peer.uid.as_raw());
+            return Ok(());
+        }
+        if self.screen.is_some() {
+            eprintln!("cupertino-sessiond: refused a second connection of the login screen");
+            return Ok(());
+        }
+        stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
+        self.screen = Some(Screen { channel: Channel::new(stream, MAX_REQUEST_FRAME), state: State::New });
+        eprintln!("cupertino-sessiond: the login screen connected");
+        Ok(())
+    }
+
+    /// The screen sent bytes, or hung up.
+    fn screen_readable(&mut self) {
+        let Some(screen) = &mut self.screen else { return };
+        let request = match screen.channel.read_message::<Request>() {
+            Ok(None) => return,
+            Ok(Some(request)) => request,
+            Err(ChannelError::Closed) => {
+                eprintln!("cupertino-sessiond: the login screen disconnected");
+                self.drop_screen();
+                return;
+            }
+            Err(e) => {
+                // `ChannelError` names the class of the problem, never the message
+                eprintln!("cupertino-sessiond: closed the login screen: {e}");
+                self.drop_screen();
+                return;
+            }
+        };
+        // an answer needs a prompt to answer; the state machine does not see the prompts
+        let unasked = matches!(request, Request::Answer { .. }) && !self.attempt.as_ref().is_some_and(|attempt| attempt.prompt_open);
+        let next = if unasked { Err(ProtocolRefusal::State) } else { screen.state.next(&request) };
+        match next {
+            Ok(state) => screen.state = state,
+            Err(refusal) => {
+                eprintln!("cupertino-sessiond: closed the login screen: refused ({refusal:?})");
+                self.refuse(refusal);
+                return;
+            }
+        }
+        match request {
+            Request::Hello { .. } => self.greet(),
+            Request::Authenticate { account } => self.authenticate(account),
+            Request::AuthenticatePower { name, action } => self.authenticate_power(&name, action),
+            Request::Answer { secret } => self.answer(secret),
+            Request::Cancel {} => self.cancel(),
+            Request::Power { action } => self.screen_power(action),
+        }
+    }
+
+    /// Tell the screen the version and everything it draws.
+    fn greet(&mut self) {
+        self.send(&Event::Hello { version: VERSION });
+        match self.welcome() {
+            Ok(event) => self.send(&event),
+            Err(e) => {
+                eprintln!("cupertino-sessiond: closed the login screen: {e}");
+                self.drop_screen();
+            }
+        }
+    }
+
+    /// The roster of the picker. Its accounts become the ones an attempt may name.
+    fn build_roster(&mut self) -> Result<roster::Roster> {
+        let accounts = users::login_accounts()?;
+        let admins = if self.config.hide_admin_users { users::admin_logins()? } else { Vec::new() };
+        let reported = &mut self.reported_pictures;
+        let logged_in: Vec<u32> = self.sessions.iter().map(|session| session.uid).collect();
+        let roster = roster::build(&self.config, accounts, &admins, &logged_in, |account| match picture::read(account.uid, Path::new(&account.home)) {
+            Ok(bytes) => bytes,
+            Err(problem) => {
+                if reported.insert(account.uid) {
+                    eprintln!("cupertino-sessiond: no picture for uid {}: {problem}", account.uid);
+                }
+                None
+            }
+        });
+        self.listed = roster.users.iter().map(|row| (row.uid, row.login.clone())).collect();
+        Ok(roster)
+    }
+
+    /// The `Welcome` event: the roster, the power items and the hint setting.
+    fn welcome(&mut self) -> Result<Event> {
+        let roster = self.build_roster()?;
+        let will_prompt = self.other_users_logged_in()?;
+        Ok(Event::Welcome { users: roster.users, show_other: roster.show_other, power: roster::power_menu(&self.config), will_prompt, retries_until_hint: self.config.retries_until_hint })
+    }
+
+    /// Send `event` to the screen and follow its state; a screen that cannot take it is dropped.
+    fn send(&mut self, event: &Event) {
+        let Some(screen) = &mut self.screen else { return };
+        let sent = encode(event, MAX_EVENT_FRAME).map_err(|e| e.to_string()).and_then(|frame| screen.channel.send_frame(&frame).map_err(|e| e.to_string()));
+        match sent {
+            Ok(()) => screen.state = screen.state.after(event),
+            Err(e) => {
+                eprintln!("cupertino-sessiond: closed the login screen: {e}");
+                self.drop_screen();
+            }
+        }
+    }
+
+    /// Tell the screen why it is refused, and close the connection.
+    fn refuse(&mut self, reason: ProtocolRefusal) {
+        self.send(&Event::Refused { reason });
+        self.drop_screen();
+    }
+
+    /// The screen is gone: its open attempt ends with it.
+    fn drop_screen(&mut self) {
+        self.screen = None;
+        self.cancel();
+    }
+
+    /// Whether an attempt may start now; when not, the screen has been answered `Busy`.
+    fn may_start_attempt(&mut self) -> bool {
+        if self.switch.is_some() {
+            eprintln!("cupertino-sessiond: a switch of the console is under way; refusing this attempt");
+            self.send(&Event::Result { outcome: Outcome::Busy });
+            return false;
+        }
+        if !self.attempts.allow(Instant::now()) {
+            eprintln!("cupertino-sessiond: more than {ATTEMPTS_PER_WINDOW} attempts within {} s; refusing this one", ATTEMPT_WINDOW.as_secs());
+            self.send(&Event::Result { outcome: Outcome::Busy });
+            return false;
+        }
+        true
+    }
+
+    /// `Authenticate`: check the account, then run the attempt in a worker.
+    fn authenticate(&mut self, account: Account) {
+        if !self.may_start_attempt() {
+            return;
+        }
+        // a listed account is named by uid in the journal, a typed one not at all: people type passwords there
+        let login = match account {
+            Account::Listed { uid } => {
+                eprintln!("cupertino-sessiond: attempt for uid {uid}");
+                self.listed.iter().find(|(listed, _)| *listed == uid).map(|(_, login)| login.clone())
+            }
+            Account::Typed { name } => {
+                eprintln!("cupertino-sessiond: attempt for a typed name");
+                is_login_name(&name).then_some(name)
+            }
+        };
+        let Some(login) = login else {
+            // not an account the screen could name: answered like a wrong password, after the same time
+            self.deny_unknown_account();
+            return;
+        };
+        if let Err(outcome) = self.start_attempt(login, None) {
+            self.send(&Event::Result { outcome });
+        }
+    }
+
+    /// `AuthenticatePower`: an administrator proves her password for a restart or shut down that other users' sessions would
+    /// otherwise forbid. Only the password is checked; the action runs when the attempt is accepted. A name that is
+    /// no administrator is answered like a wrong password after the same time, so the screen learns nothing about the accounts.
+    fn authenticate_power(&mut self, name: &str, action: PowerAction) {
+        if !self.may_start_attempt() {
+            return;
+        }
+        // a typed name is not logged: people type passwords there
+        eprintln!("cupertino-sessiond: attempt to authorise {action:?}");
+        if action == PowerAction::Sleep || !self.power_shown(action) {
+            eprintln!("cupertino-sessiond: {action:?} needs no authorisation or is disabled; refusing");
+            self.send(&Event::Result { outcome: Outcome::Refused });
+            return;
+        }
+        let administrator = match users::admin_logins() {
+            Ok(administrators) => is_login_name(name) && administrators.iter().any(|login| login == name),
+            Err(e) => {
+                eprintln!("cupertino-sessiond: {e}");
+                self.send(&Event::Result { outcome: Outcome::Internal });
+                return;
+            }
+        };
+        if !administrator {
+            self.deny_unknown_account();
+            return;
+        }
+        if let Err(outcome) = self.start_attempt(name.to_owned(), Some(action)) {
+            self.send(&Event::Result { outcome });
+        }
+    }
+
+    /// Answer the open request like a wrong password, after the time one takes.
+    fn deny_unknown_account(&mut self) {
+        self.attempt = Some(Attempt { worker: None, uid: None, prompt_open: false, deadline: None, decision: None, existing: None, power: None });
+        self.denial_at = Some(Instant::now() + INVALID_ACCOUNT_DELAY);
+    }
+
+    /// Start the worker; the outcome to report when that cannot be done. An account with a session already is only checked
+    /// (the worker opens nothing and the attempt ends in a switch to that session); any other gets a terminal of its own, held
+    /// until its session is gone.
+    fn start_attempt(&mut self, login: String, power: Option<PowerAction>) -> std::result::Result<(), Outcome> {
+        let uid = users::by_name(&login).map_err(|e| {
+            eprintln!("cupertino-sessiond: {e}");
+            Outcome::Internal
+        })?.map(|account| account.uid);
+        let existing = uid.filter(|_| power.is_none()).and_then(|uid| self.sessions.iter().find(|session| session.uid == uid)).map(|session| session.id.clone());
+        let (mode, vt, terminal) = if existing.is_some() || power.is_some() {
+            (Mode::Verify, self.config.vt, None)
+        } else {
+            match vt::allocate(self.config.vt) {
+                Ok(Some((vt, terminal))) => (Mode::Open, vt, Some(terminal)),
+                Ok(None) => {
+                    eprintln!("cupertino-sessiond: no virtual terminal is free for a session");
+                    return Err(Outcome::Busy);
+                }
+                Err(e) => {
+                    eprintln!("cupertino-sessiond: allocating a virtual terminal: {e}");
+                    return Err(Outcome::Internal);
+                }
+            }
+        };
+        let begin = ToWorker::Begin {
+            service: SESSION_SERVICE.to_owned(),
+            login: login.clone(),
+            tty: vt::device(vt),
+            vt,
+            class: SessionClass::User,
+            mode,
+            command: self.config.session_command.clone(),
+            environment: Vec::new(),
+            path: self.session_path.clone(),
+        };
+        let worker = self.spawn_worker(Role::Session, &begin, terminal).map_err(|e| {
+            eprintln!("cupertino-sessiond: {e}");
+            Outcome::Internal
+        })?;
+        self.attempt = Some(Attempt { worker: Some(worker), uid, prompt_open: false, deadline: Some(Instant::now() + ATTEMPT_TIMEOUT), decision: None, existing, power });
+        Ok(())
+    }
+
+    /// `Answer`: pass the screen's answer to the worker that asked.
+    fn answer(&mut self, secret: Secret) {
+        let Some(attempt) = &mut self.attempt else { return };
+        attempt.prompt_open = false;
+        attempt.deadline = Some(Instant::now() + ATTEMPT_TIMEOUT);
+        let Some(id) = attempt.worker else { return };
+        let sent = encode_secret(&ToWorker::Answer { secret }, MAX_FRAME);
+        self.send_to_worker(id, sent);
+    }
+
+    /// `Cancel` (or the screen's end): stop an attempt that has not been accepted. Once the session starts it runs on.
+    fn cancel(&mut self) {
+        if self.attempt.as_ref().is_some_and(|attempt| attempt.decision == Some(Outcome::Accepted)) {
+            return;
+        }
+        self.denial_at = None;
+        let Some(attempt) = self.attempt.take() else { return };
+        let Some(worker) = attempt.worker.and_then(|id| self.workers.iter_mut().find(|worker| worker.id == id)) else { return };
+        // before the session is accepted the worker holds nothing that needs a clean end
+        if let Err(e) = worker.child.kill() {
+            eprintln!("cupertino-sessiond: stopping worker {}: {e}", worker.id);
+        }
+    }
+
+    /// The attempt waited too long for the screen or its worker: end the worker, whatever the attempt had reached.
+    fn abort_attempt(&mut self) {
+        let Some(attempt) = &self.attempt else { return };
+        let (waited_for, worker) = (if attempt.prompt_open { "the screen's answer to a prompt" } else { "its worker" }, attempt.worker);
+        eprintln!("cupertino-sessiond: an attempt waited {} s for {waited_for}; cancelling it", ATTEMPT_TIMEOUT.as_secs());
+        if let Some(worker) = worker.and_then(|id| self.workers.iter_mut().find(|worker| worker.id == id)) {
+            if let Err(e) = worker.child.kill() {
+                eprintln!("cupertino-sessiond: stopping worker {}: {e}", worker.id);
+            }
+        }
+        self.attempt_failed();
+    }
+
+    /// Write a frame to worker `id`; a worker that cannot be written to is on its way out and the exit handles it.
+    fn send_to_worker(&mut self, id: u64, frame: std::result::Result<zeroize::Zeroizing<Vec<u8>>, cupertino_login_ipc::FrameError>) {
+        let Some(channel) = self.workers.iter_mut().find(|worker| worker.id == id).and_then(|worker| worker.channel.as_mut()) else { return };
+        if let Err(e) = frame.map_err(|e| e.to_string()).and_then(|frame| channel.send_frame(&frame).map_err(|e| e.to_string())) {
+            eprintln!("cupertino-sessiond: worker {id}: {e}");
+        }
+    }
+
+    /// Take over what an earlier run of the manager left running (`KillMode=process` keeps the workers and their sessions): the
+    /// login screen's session, so no second one is started, and the user sessions that the PAM services of the manager opened,
+    /// so the roster marks their users and the end of each is followed. A session of another origin (a getty's) is not ours.
+    fn adopt_sessions(&mut self) -> Result<()> {
+        for found in self.logind.seat_sessions()? {
+            let role = match (found.class.as_str(), found.service.as_str()) {
+                ("greeter", GREETER_SERVICE) => Role::Greeter,
+                ("user", SESSION_SERVICE | AUTO_LOGIN_SERVICE) => Role::Session,
+                _ => continue,
+            };
+            if found.state == "closing" {
+                continue;
+            }
+            if role == Role::Greeter && (found.uid != self.greeter.uid || self.greeter_session.is_some()) {
+                eprintln!("cupertino-sessiond: ignoring the login screen session {} (not the greeter account's, or a second one)", found.id);
+                continue;
+            }
+            self.adopt(role, found)?;
+        }
+        Ok(())
+    }
+
+    /// Adopt one session: watch its leader and, for a user, note it in the table and hold its terminal.
+    fn adopt(&mut self, role: Role, found: SeatSession) -> Result<()> {
+        let leader = i32::try_from(found.leader).ok().and_then(rustix::process::Pid::from_raw).ok_or_else(|| format!("session {} has no leader process", found.id))?;
+        let watch = match pidfd_open(leader, PidfdFlags::empty()) {
+            Ok(watch) => watch,
+            Err(rustix::io::Errno::SRCH) => {
+                // the leader is gone: the session is ending and nothing is left to supervise
+                eprintln!("cupertino-sessiond: session {} has no leader any more; terminating it", found.id);
+                if let Err(e) = self.logind.terminate_session(&found.id) {
+                    eprintln!("cupertino-sessiond: {e}");
+                }
+                return Ok(());
+            }
+            Err(e) => return Err(format!("pidfd_open for session {}: {e}", found.id).into()),
+        };
+        let key = self.next_worker;
+        self.next_worker += 1;
+        eprintln!("cupertino-sessiond: adopted the {role:?} session {} (process {}, VT {})", found.id, found.leader, found.vt);
+        match role {
+            Role::Greeter => {
+                self.greeter_session = Some(found.id.clone());
+                self.greeter_adopted = true;
+            }
+            Role::Session => {
+                let terminal = match vt::hold(found.vt) {
+                    Ok(terminal) => Some(terminal),
+                    Err(e) => {
+                        eprintln!("cupertino-sessiond: holding {} for session {}: {e}", vt::device(found.vt), found.id);
+                        None
+                    }
+                };
+                // an adopted session was running before this run: its agent announces itself again, so it counts as ready
+                self.sessions.push(Session { id: found.id.clone(), uid: found.uid, worker: None, ready: true, ready_deadline: None, agent: None, _terminal: terminal });
+            }
+        }
+        self.adopted.push(Adopted { key, id: found.id, leader: watch });
+        Ok(())
+    }
+
+    /// The leader of an adopted session exited: its worker closes the PAM session, and what the leader left in the session is
+    /// terminated so that logind can remove it (as for a session this run started, see `worker_exited`).
+    fn adopted_exited(&mut self, key: u64) {
+        let Some(index) = self.adopted.iter().position(|adopted| adopted.key == key) else { return };
+        let adopted = self.adopted.remove(index);
+        eprintln!("cupertino-sessiond: the leader of the adopted session {} exited", adopted.id);
+        if let Err(e) = self.logind.terminate_session(&adopted.id) {
+            eprintln!("cupertino-sessiond: {e}");
+        }
+    }
+
+    /// Log the configured account in once per boot, without a password, as the PAM service `cupertino-autologin`. It runs when
+    /// the login screen's session is up. The claim is taken first, so a crash of the manager or a restart cannot repeat it, and
+    /// it is skipped when the account has a session already (a person got there first).
+    fn try_auto_login(&mut self) {
+        let Some(login) = self.auto_login.take() else { return };
+        if let Err(reason) = self.auto_login_start(&login) {
+            eprintln!("cupertino-sessiond: auto login: {reason}");
+        }
+    }
+
+    fn auto_login_start(&mut self, login: &str) -> std::result::Result<(), String> {
+        let account = users::login_accounts().map_err(|e| e.to_string())?.into_iter().find(|account| account.login == login).ok_or_else(|| format!("{login:?} is not an ordinary account with a login shell"))?;
+        if !auto_login::claim(Path::new(auto_login::DONE_FLAG)).map_err(|e| format!("{}: {e}", auto_login::DONE_FLAG))? {
+            return Err("already done since boot".to_owned());
+        }
+        if self.logind.user_sessions().map_err(|e| e.to_string())?.iter().any(|session| session.uid == account.uid) {
+            return Err(format!("{login:?} has a session already"));
+        }
+        let (vt, terminal) = vt::allocate(self.config.vt).map_err(|e| format!("allocating a virtual terminal: {e}"))?.ok_or("no virtual terminal is free for a session")?;
+        let begin = ToWorker::Begin {
+            service: AUTO_LOGIN_SERVICE.to_owned(),
+            login: account.login,
+            tty: vt::device(vt),
+            vt,
+            class: SessionClass::User,
+            mode: Mode::Open,
+            command: self.config.session_command.clone(),
+            environment: Vec::new(),
+            path: self.session_path.clone(),
+        };
+        let worker = self.spawn_worker(Role::Session, &begin, Some(terminal)).map_err(|e| e.to_string())?;
+        self.auto_login_worker = Some(worker);
+        eprintln!("cupertino-sessiond: auto login for uid {}", account.uid);
+        Ok(())
+    }
+
+    /// Start the login screen's compositor as a session of class `greeter` on the login terminal.
+    fn start_greeter(&mut self) -> Result<()> {
+        let begin = ToWorker::Begin {
+            service: GREETER_SERVICE.to_owned(),
+            login: self.greeter.login.clone(),
+            tty: vt::device(self.config.vt),
+            vt: self.config.vt,
+            class: SessionClass::Greeter,
+            mode: Mode::Open,
+            command: self.config.greeter_command.clone(),
+            environment: vec![format!("{SOCKET_VARIABLE}={SOCKET_PATH}")],
+            path: self.session_path.clone(),
+        };
+        self.spawn_worker(Role::Greeter, &begin, None).map(drop)
+    }
+
+    /// Start `cupertino-sessiond worker` with one end of a socketpair as its standard input and send it `begin`.
+    fn spawn_worker(&mut self, role: Role, begin: &ToWorker, terminal: Option<File>) -> Result<u64> {
+        let (ours, theirs) = UnixStream::pair()?;
+        let child = Command::new(std::env::current_exe()?)
+            .arg("worker")
+            .env_clear()
+            .stdin(Stdio::from(OwnedFd::from(theirs)))
+            .spawn()
+            .map_err(|e| format!("starting a worker: {e}"))?;
+        let exited = pidfd_open(rustix::process::Pid::from_raw(child.id() as i32).ok_or("a worker has no process id")?, PidfdFlags::empty()).map_err(|e| format!("pidfd_open: {e}"))?;
+        let mut channel = Channel::new(ours, MAX_FRAME);
+        channel.send_frame(&encode(begin, MAX_FRAME)?)?;
+        let id = self.next_worker;
+        self.next_worker += 1;
+        eprintln!("cupertino-sessiond: worker {id} started for the {role:?}");
+        self.workers.push(Worker { id, role, child, exited, channel: Some(channel), terminal });
+        Ok(id)
+    }
+
+    /// A worker wrote.
+    fn worker_message(&mut self, id: u64) {
+        let Some(worker) = self.workers.iter_mut().find(|worker| worker.id == id) else { return };
+        let role = worker.role;
+        let Some(channel) = &mut worker.channel else { return };
+        let message = match channel.read_message::<FromWorker>() {
+            Ok(None) => return,
+            Ok(Some(message)) => message,
+            Err(e) => {
+                // closed, or broken: either way nothing more comes, and the exit is handled through the process descriptor
+                if !matches!(e, ChannelError::Closed) {
+                    eprintln!("cupertino-sessiond: worker {id}: {e}");
+                }
+                worker.channel = None;
+                return;
+            }
+        };
+        let current = self.attempt.as_ref().is_some_and(|attempt| attempt.worker == Some(id));
+        match message {
+            FromWorker::Prompt { echo, text } if role == Role::Session && current => {
+                if let Some(attempt) = &mut self.attempt {
+                    attempt.prompt_open = true;
+                    attempt.deadline = Some(Instant::now() + ATTEMPT_TIMEOUT);
+                }
+                self.send(&Event::Prompt { echo, text });
+            }
+            // the login screen's own session asks nothing, and an attempt that was dropped has no one to ask
+            FromWorker::Prompt { .. } => self.send_to_worker(id, encode(&ToWorker::Cancel {}, MAX_FRAME)),
+            FromWorker::Notice { error, text } if current => self.send(&Event::Notice { error, text }),
+            FromWorker::Notice { .. } => {}
+            FromWorker::Decided { outcome } if current => self.decided(outcome),
+            FromWorker::Decided { outcome } => {
+                if self.auto_login_worker == Some(id) && outcome != Outcome::Accepted {
+                    eprintln!("cupertino-sessiond: auto login was not accepted ({outcome:?})");
+                }
+            }
+            FromWorker::Started { session_id, leader, uid } => self.started(id, role, &session_id, leader, uid),
+            FromWorker::Failed { reason } => {
+                eprintln!("cupertino-sessiond: worker {id} failed: {reason}");
+                if current {
+                    self.attempt_failed();
+                }
+            }
+        }
+    }
+
+    /// The worker decided the open attempt.
+    fn decided(&mut self, outcome: Outcome) {
+        let Some(attempt) = &mut self.attempt else { return };
+        attempt.decision = Some(outcome);
+        if outcome != Outcome::Accepted {
+            self.attempt = None;
+            self.send(&Event::Result { outcome });
+            return;
+        }
+        if let Some(action) = attempt.power {
+            // the administrator proved her password: the worker ends, and the action is the manager's to carry out
+            self.attempt = None;
+            self.send(&Event::Result { outcome });
+            eprintln!("cupertino-sessiond: an administrator authorised {action:?}");
+            if let Err(reason) = self.power(action, &Requester::Administrator) {
+                eprintln!("cupertino-sessiond: power request {action:?} refused: {reason:?}");
+                self.send(&Event::PowerRefused { reason });
+                self.send(&Event::Reset);
+            }
+            return;
+        }
+        // the worker opens the session next, or, for a user who has one, ends
+        attempt.deadline = Some(Instant::now() + ATTEMPT_TIMEOUT);
+        let (uid, existing) = (attempt.uid, attempt.existing.clone());
+        self.send(&Event::Result { outcome });
+        let Some(uid) = uid else {
+            eprintln!("cupertino-sessiond: the accepted account has no password database entry");
+            return;
+        };
+        match existing {
+            Some(session) => {
+                eprintln!("cupertino-sessiond: returning to session {session} of uid {uid}");
+                self.send(&Event::SessionStarting { uid });
+                self.attempt = None;
+                self.switch_to_session(&session);
+            }
+            None => {
+                eprintln!("cupertino-sessiond: session starting for uid {uid}");
+                self.send(&Event::SessionStarting { uid });
+            }
+        }
+    }
+
+    /// Bring the existing session `id` to the foreground: its agent unlocks it without a second password (the attempt just
+    /// proved it; unlock result 4 of the design), then the console switches and the login screen is
+    /// shown again for the next time.
+    fn switch_to_session(&mut self, id: &str) {
+        let agent = self.sessions.iter().find(|session| session.id == id).and_then(|session| session.agent.clone());
+        match agent {
+            Some(agent) => {
+                if let Err(e) = service::unlock(&self._bus, &agent) {
+                    eprintln!("cupertino-sessiond: telling the agent of session {id} to unlock: {e}");
+                }
+            }
+            None => eprintln!("cupertino-sessiond: session {id} has no agent to unlock it"),
+        }
+        if let Err(e) = self.activate(id) {
+            eprintln!("cupertino-sessiond: {e}");
+        }
+        self.show_login_screen();
+    }
+
+    /// Activate the logind session `id` and note the switch as under way.
+    fn activate(&mut self, id: &str) -> std::result::Result<(), logind::Error> {
+        self.logind.activate_session(id)?;
+        let now = Instant::now();
+        self.switch = Some(Switch { target: id.to_owned(), next_poll: now + SWITCH_POLL, give_up_at: now + SWITCH_GIVE_UP });
+        Ok(())
+    }
+
+    /// `SwitchToLoginWindow` of a session's agent (which locked its screen first): the login screen takes the console.
+    fn switch_to_login_window(&mut self, caller: &CallerSession) -> std::result::Result<(), service::SwitchRefusal> {
+        if self.switch.is_some() {
+            eprintln!("cupertino-sessiond: session {} asked for the login window while a switch is under way; ignored", caller.id);
+            return Ok(());
+        }
+        let greeter = self.greeter_session.clone().ok_or(service::SwitchRefusal::NoLoginScreen)?;
+        eprintln!("cupertino-sessiond: session {} switches to the login window", caller.id);
+        self.activate(&greeter).map_err(|e| {
+            eprintln!("cupertino-sessiond: {e}");
+            service::SwitchRefusal::Failed
+        })?;
+        self.show_login_screen();
+        Ok(())
+    }
+
+    /// A worker opened its session and runs its leader.
+    fn started(&mut self, id: u64, role: Role, session_id: &str, leader: u32, uid: u32) {
+        eprintln!("cupertino-sessiond: worker {id}: the {role:?} session {session_id} runs as process {leader}");
+        if let Some(worker) = self.workers.iter_mut().find(|worker| worker.id == id) {
+            // a session's worker supervises it alone from here; the login screen's keeps its channel
+            if role == Role::Session {
+                worker.channel = None;
+            }
+        }
+        if role == Role::Greeter {
+            self.greeter_session = Some(session_id.to_owned());
+            self.try_auto_login();
+            return;
+        }
+        let terminal = self.workers.iter_mut().find(|worker| worker.id == id).and_then(|worker| worker.terminal.take());
+        self.sessions.push(Session { id: session_id.to_owned(), uid, worker: Some(id), ready: false, ready_deadline: None, agent: None, _terminal: terminal });
+        if self.attempt.as_ref().is_some_and(|attempt| attempt.worker == Some(id)) {
+            self.attempt = None;
+        }
+        match self.bring_to_console(session_id) {
+            // the login screen keeps its spinner until the session's agent says it is up, at most [`SESSION_READY_TIMEOUT`]
+            Ok(()) => {
+                if let Some(session) = self.sessions.iter_mut().find(|session| session.id == session_id) {
+                    session.ready_deadline = Some(Instant::now() + SESSION_READY_TIMEOUT);
+                }
+            }
+            Err(e) => {
+                eprintln!("cupertino-sessiond: {e}");
+                self.send(&Event::Reset);
+            }
+        }
+    }
+
+    /// The session is brought to the console as soon as its leader runs: the compositor of a session on a terminal that is not
+    /// in the foreground does not start its shell processes (it waits for the terminal), so its agent cannot announce the
+    /// session before the switch. A session on such a terminal stays inactive until then; if logind has activated it by itself,
+    /// the login screen's session takes the console back first.
+    fn bring_to_console(&mut self, session_id: &str) -> Result<()> {
+        if self.logind.is_active(session_id)? {
+            eprintln!("cupertino-sessiond: logind activated session {session_id} by itself; activating the login screen's session again");
+            let greeter = self.greeter_session.as_deref().ok_or("the login screen has no session to activate again")?;
+            self.logind.activate_session(greeter)?;
+        } else {
+            eprintln!("cupertino-sessiond: session {session_id} is not active; activating it");
+        }
+        self.activate(session_id)?;
+        Ok(())
+    }
+
+    /// The open attempt cannot go on (its worker failed or died): `Internal` before the decision, a `Reset` after it.
+    fn attempt_failed(&mut self) {
+        let Some(attempt) = self.attempt.take() else { return };
+        match attempt.decision {
+            None => self.send(&Event::Result { outcome: Outcome::Internal }),
+            Some(_) => self.send(&Event::Reset),
+        }
+    }
+
+    /// A deadline passed.
+    fn timer(&mut self) -> Result<()> {
+        let now = Instant::now();
+        if self.denial_at.is_some_and(|at| at <= now) {
+            self.denial_at = None;
+            if self.attempt.as_ref().is_some_and(|attempt| attempt.worker.is_none()) {
+                self.attempt = None;
+                self.send(&Event::Result { outcome: Outcome::Denied });
+            }
+        }
+        if self.attempt.as_ref().and_then(|attempt| attempt.deadline).is_some_and(|at| at <= now) {
+            self.abort_attempt();
+        }
+        if self.greeter_restart_at.is_some_and(|at| at <= now) {
+            self.greeter_restart_at = None;
+            self.start_greeter()?;
+        }
+        if self.switch.as_ref().is_some_and(|switch| switch.next_poll <= now) {
+            self.follow_switch(now);
+        }
+        let mut gave_up = false;
+        for session in self.sessions.iter_mut().filter(|session| session.ready_deadline.is_some_and(|at| at <= now)) {
+            session.ready_deadline = None;
+            gave_up = true;
+            eprintln!("cupertino-sessiond: session {} sent no ready signal within {} s; showing the login screen again", session.id, SESSION_READY_TIMEOUT.as_secs());
+        }
+        if gave_up {
+            self.show_login_screen();
+        }
+        Ok(())
+    }
+
+    /// Ask logind whether the session switched to is in the foreground; the switch is over when it is, or after
+    /// [`SWITCH_GIVE_UP`].
+    fn follow_switch(&mut self, now: Instant) {
+        let Some(switch) = &mut self.switch else { return };
+        match self.logind.is_active(&switch.target) {
+            Ok(true) => self.switch = None,
+            Ok(false) if now >= switch.give_up_at => {
+                eprintln!("cupertino-sessiond: session {} is not in the foreground {} s after the switch; the switch is over", switch.target, SWITCH_GIVE_UP.as_secs());
+                self.switch = None;
+            }
+            Ok(false) => switch.next_poll = now + SWITCH_POLL,
+            Err(e) => {
+                // the target is gone (its session ended) or logind failed: either way nothing is under way
+                eprintln!("cupertino-sessiond: {e}");
+                self.switch = None;
+            }
+        }
+    }
+
+    /// A worker exited: reap it.
+    fn worker_exited(&mut self, id: u64) -> Result<()> {
+        let Some(index) = self.workers.iter().position(|worker| worker.id == id) else { return Ok(()) };
+        let mut worker = self.workers.remove(index);
+        let status: ExitStatus = worker.child.wait()?;
+        eprintln!("cupertino-sessiond: worker {id} ({:?}) exited: {status}", worker.role);
+        if self.auto_login_worker == Some(id) {
+            self.auto_login_worker = None;
+        }
+        match worker.role {
+            Role::Greeter => self.greeter_ended(),
+            Role::Session => {
+                if self.attempt.as_ref().is_some_and(|attempt| attempt.worker == Some(id)) {
+                    self.attempt_failed();
+                }
+                // the leader is gone and its PAM session closed; whatever it left behind in the session is killed so that logind
+                // can remove the session (the design's final hooks end the session's processes the same way)
+                if let Some(session) = self.sessions.iter().find(|session| session.worker == Some(id)) {
+                    if let Err(e) = self.logind.terminate_session(&session.id) {
+                        eprintln!("cupertino-sessiond: {e}");
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// The login screen's worker ended: start it again after a second, unless it keeps failing.
+    fn greeter_ended(&mut self) -> Result<()> {
+        self.greeter_session = None;
+        let now = Instant::now();
+        self.greeter_failures.push_back(now);
+        while self.greeter_failures.front().is_some_and(|&at| now.duration_since(at) > GREETER_FAILURE_WINDOW) {
+            self.greeter_failures.pop_front();
+        }
+        if self.greeter_failures.len() >= GREETER_FAILURES {
+            eprintln!("cupertino-sessiond: the login screen's session ended {GREETER_FAILURES} times within {} s; not starting it again", GREETER_FAILURE_WINDOW.as_secs());
+            self.try_auto_login();
+        } else {
+            self.greeter_restart_at = Some(now + GREETER_RESTART_DELAY);
+        }
+        Ok(())
+    }
+
+    /// A thread that reads the system bus wrote.
+    fn incoming_ready(&mut self) -> Result<()> {
+        let mut counter = [0u8; 8];
+        // the counter only wakes `poll`; the messages are in the channel
+        match rustix::io::read(&*self.wake, &mut counter) {
+            Ok(_) | Err(rustix::io::Errno::AGAIN) => {}
+            Err(e) => return Err(format!("reading the wake-up: {e}").into()),
+        }
+        while let Ok(item) = self.incoming.try_recv() {
+            match item {
+                Incoming::Logind(Signal::SessionRemoved(id)) => self.session_removed(&id)?,
+                Incoming::Logind(Signal::Ended(reason)) => return Err(format!("logind's signals ended ({reason})").into()),
+                Incoming::Call(call) => self.call(call),
+            }
+        }
+        Ok(())
+    }
+
+    /// A method of `org.cupertino.LoginManager1` that needs the manager's state; the caller is authorised already.
+    fn call(&mut self, call: Call) {
+        match call {
+            Call::Power { session, action, reply } => {
+                eprintln!("cupertino-sessiond: power request {action:?} from session {}", session.id);
+                let result = self.power(action, &Requester::Agent(&session));
+                if reply.send(result).is_err() {
+                    eprintln!("cupertino-sessiond: the caller of RequestPower stopped waiting");
+                }
+            }
+            Call::SwitchToLoginWindow { session, reply } => {
+                let result = self.switch_to_login_window(&session);
+                if reply.send(result).is_err() {
+                    eprintln!("cupertino-sessiond: the caller of SwitchToLoginWindow stopped waiting");
+                }
+            }
+            Call::Ready { session, agent, reply } => {
+                let result = self.session_ready(&session, agent);
+                if reply.send(result).is_err() {
+                    eprintln!("cupertino-sessiond: the caller of SessionReady stopped waiting");
+                }
+            }
+        }
+    }
+
+    /// The agent of a session this manager started is up: it is registered, and the login screen, which kept its spinner
+    /// while the session started, is shown again.
+    fn session_ready(&mut self, caller: &CallerSession, agent: String) -> std::result::Result<(), ReadyRefusal> {
+        let id = caller.id.as_str();
+        // the caller is the user the session was started for, as well as in the session
+        let session = self.sessions.iter_mut().find(|session| session.id == id && session.uid == caller.uid).ok_or(ReadyRefusal::UnknownSession)?;
+        session.agent = Some(agent);
+        // an agent that restarts, or that finds the manager restarted, announces the session again
+        if session.ready {
+            eprintln!("cupertino-sessiond: the agent of session {id} announced itself again");
+            return Ok(());
+        }
+        session.ready = true;
+        session.ready_deadline = None;
+        eprintln!("cupertino-sessiond: session {id} is ready");
+        self.show_login_screen();
+        Ok(())
+    }
+
+    /// `Power` from the login screen: refused with `PowerRefused`, else carried out.
+    fn screen_power(&mut self, action: PowerAction) {
+        eprintln!("cupertino-sessiond: power request {action:?} from the login screen");
+        if let Err(reason) = self.power(action, &Requester::Screen) {
+            self.send(&Event::PowerRefused { reason });
+        }
+    }
+
+    /// Restart, shut down or sleep. A restart or shut down ends other users' sessions: the login screen may ask only when none
+    /// is open, and an agent only when none is open that belongs to another user or when it belongs to an administrator (the
+    /// reference asks for an administrator's authentication, the dialog is a later unit's). A block inhibitor refuses
+    /// the call although the manager is root.
+    fn power(&mut self, action: PowerAction, requester: &Requester<'_>) -> std::result::Result<(), PowerRefusal> {
+        if matches!(requester, Requester::Screen | Requester::Administrator) && !self.power_shown(action) {
+            return Err(PowerRefusal::Disabled);
+        }
+        if action != PowerAction::Sleep && !self.may_end_other_sessions(requester)? {
+            return Err(PowerRefusal::OtherUsersLoggedIn);
+        }
+        self.logind.power(action).map_err(|e| {
+            if e.blocked_by_inhibitor() {
+                return PowerRefusal::Inhibited;
+            }
+            eprintln!("cupertino-sessiond: {e}");
+            PowerRefusal::Failed
+        })
+    }
+
+    /// Whether the settings show the power menu item for `action`.
+    fn power_shown(&self, action: PowerAction) -> bool {
+        let menu = roster::power_menu(&self.config);
+        match action {
+            PowerAction::Restart => menu.restart,
+            PowerAction::ShutDown => menu.shut_down,
+            PowerAction::Sleep => menu.sleep,
+        }
+    }
+
+    /// Whether a user session is open: Restart and Shut Down then ask the login screen for an administrator
+    /// (the screen's rule of [`Manager::may_end_other_sessions`]).
+    fn other_users_logged_in(&self) -> std::result::Result<bool, logind::Error> {
+        Ok(!self.logind.user_sessions()?.is_empty())
+    }
+
+    /// Whether `requester` may end the sessions of users it is not.
+    fn may_end_other_sessions(&self, requester: &Requester<'_>) -> std::result::Result<bool, PowerRefusal> {
+        let failed = |e: &dyn std::fmt::Display| {
+            eprintln!("cupertino-sessiond: {e}");
+            PowerRefusal::Failed
+        };
+        let uids: Vec<u32> = self.logind.user_sessions().map_err(|e| failed(&e))?.iter().map(|session| session.uid).collect();
+        let asker = match requester {
+            Requester::Screen => Asker::Screen,
+            Requester::Administrator => Asker::Administrator,
+            Requester::Agent(caller) => Asker::Agent { uid: caller.uid },
+        };
+        may_end_other_sessions(asker, &uids, |uid| {
+            let administrators = users::admin_logins().map_err(|e| failed(&e))?;
+            let account = users::by_uid(uid).map_err(|e| failed(&e))?;
+            Ok(account.is_some_and(|account| administrators.contains(&account.login)))
+        })
+    }
+
+    /// A session of logind is gone. When it is one this manager started, its terminal is free again. The console goes back to
+    /// the login screen only when the seat is left with no session in the foreground, that is when it was the one in the
+    /// foreground: a session that ends in the background (its user is on the login screen or in another session) changes
+    /// nothing on screen, and the login screen only learns that the list changed.
+    fn session_removed(&mut self, id: &str) -> Result<()> {
+        self.adopted.retain(|adopted| adopted.id != id);
+        // the end of an adopted login screen is told by logind alone (a worker of this run reports the end of its own)
+        if self.greeter_adopted && self.greeter_session.as_deref() == Some(id) {
+            self.greeter_adopted = false;
+            return self.greeter_ended();
+        }
+        let Some(index) = self.sessions.iter().position(|session| session.id == id) else { return Ok(()) };
+        // dropping the record releases the terminal
+        self.sessions.remove(index);
+        let foreground = match self.logind.active_session() {
+            Ok(foreground) => foreground,
+            Err(e) => {
+                // the console is better on the login screen than on a terminal nothing draws on
+                eprintln!("cupertino-sessiond: {e}");
+                None
+            }
+        };
+        if foreground.is_some() {
+            eprintln!("cupertino-sessiond: session {id} ended in the background");
+            self.refresh_users();
+            return Ok(());
+        }
+        eprintln!("cupertino-sessiond: session {id} ended; returning to the login screen");
+        match self.greeter_session.clone() {
+            Some(greeter) => {
+                if let Err(e) = self.activate(&greeter) {
+                    eprintln!("cupertino-sessiond: {e}");
+                }
+            }
+            None => eprintln!("cupertino-sessiond: the login screen has no session to return to"),
+        }
+        self.show_login_screen();
+        Ok(())
+    }
+
+    /// Send the screen the list again: a session started or ended. What is typed on the screen stays.
+    fn refresh_users(&mut self) {
+        if self.screen.is_none() {
+            return;
+        }
+        match self.build_roster().and_then(|roster| Ok((roster, self.other_users_logged_in()?))) {
+            Ok((roster, will_prompt)) => self.send(&Event::Users { users: roster.users, will_prompt }),
+            Err(e) => {
+                eprintln!("cupertino-sessiond: {e}");
+                self.drop_screen();
+            }
+        }
+    }
+
+    /// Clear the login screen and refresh its list: a session started or ended. An attempt that is not accepted yet ends, since
+    /// the screen starts again from the picker.
+    fn show_login_screen(&mut self) {
+        if self.screen.is_none() {
+            return;
+        }
+        self.cancel();
+        self.send(&Event::Reset);
+        self.refresh_users();
+    }
+}
+
+/// Connect to logind and start its signal thread. The thread queues each signal and writes the eventfd that `poll` watches.
+fn watch_logind() -> Result<(Logind, Receiver<Incoming>, Mailbox)> {
+    let logind = Logind::connect()?;
+    let (sender, incoming) = channel();
+    let mailbox = Mailbox { sender, wake: Arc::new(eventfd(0, EventfdFlags::CLOEXEC | EventfdFlags::NONBLOCK)?) };
+    let signals = mailbox.clone();
+    // the receiver lives as long as the manager
+    logind.watch(move |signal| {
+        signals.post(Incoming::Logind(signal));
+    })?;
+    Ok((logind, incoming, mailbox))
+}
+
+/// Serve `org.cupertino.LoginManager1` on the system bus. Its methods run on the connection's thread, with a connection of
+/// their own to logind.
+fn serve_bus(mailbox: &Mailbox) -> Result<zbus::blocking::Connection> {
+    let authorizer = Arc::new(LogindAuthorizer(Logind::connect()?));
+    let commands = mailbox.clone();
+    let sink: service::Sink = Arc::new(move |call| commands.post(Incoming::Call(call)));
+    Ok(service::serve(zbus::blocking::connection::Builder::system()?, authorizer, sink).map_err(|e| format!("serving {}: {e}", service::BUS_NAME))?)
+}
+
+/// Tell systemd the manager is up (`Type=notify`): the socket listens, the login screen's session is starting and the bus name
+/// is taken, so a unit ordered after this one finds the name. Outside systemd there is no `NOTIFY_SOCKET` and nothing to tell.
+fn notify_ready() -> Result<()> {
+    use std::os::linux::net::SocketAddrExt;
+    let Some(path) = std::env::var_os("NOTIFY_SOCKET").filter(|path| !path.is_empty()) else { return Ok(()) };
+    let bytes = std::os::unix::ffi::OsStrExt::as_bytes(path.as_os_str());
+    // an abstract socket's name starts with `@`
+    let address = match bytes.strip_prefix(b"@") {
+        Some(name) => std::os::unix::net::SocketAddr::from_abstract_name(name)?,
+        None => std::os::unix::net::SocketAddr::from_pathname(&path)?,
+    };
+    std::os::unix::net::UnixDatagram::unbound()?.send_to_addr(b"READY=1", &address).map_err(|e| format!("telling systemd the manager is ready: {e}"))?;
+    Ok(())
+}
+
+/// No core file and no ptrace attach on the process that holds passwords and root.
+fn harden() -> Result<()> {
+    // Safety: `prctl(PR_SET_DUMPABLE)` takes integers only.
+    if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
+        return Err(format!("PR_SET_DUMPABLE: {}", io::Error::last_os_error()).into());
+    }
+    rustix::process::setrlimit(rustix::process::Resource::Core, rustix::process::Rlimit { current: Some(0), maximum: Some(0) })?;
+    Ok(())
+}
+
+/// Bind the socket at `path`, mode 0600, owned by `uid`. A socket of an earlier run is replaced.
+fn bind(path: &Path, uid: u32, gid: u32) -> Result<UnixListener> {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("removing {}: {e}", path.display()).into()),
+    }
+    let listener = UnixListener::bind(path).map_err(|e| format!("binding {}: {e}", path.display()))?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    chown(path, Some(uid), Some(gid))?;
+    listener.set_nonblocking(true)?;
+    Ok(listener)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_socket_is_private_to_its_owner() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("greeter.sock");
+        // Safety: `getuid` and `getgid` have no preconditions.
+        let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+        let _listener = bind(&path, uid, gid).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        // a stale socket of an earlier run does not stop the next bind
+        drop(_listener);
+        bind(&path, uid, gid).unwrap();
+    }
+}

@@ -1,0 +1,204 @@
+//! What the overlay changes: the output volume and the two backlights, behind traits so the controller and the
+//! tests run on in-memory stand-ins.
+
+use std::cmp::Ordering;
+use std::path::PathBuf;
+
+use cupertino_alsa::{Master, OpenMode};
+
+/// Why an effect failed; shown to the user as a log line, never as an overlay.
+pub type BackendError = Box<dyn std::error::Error + Send + Sync>;
+
+/// The output volume after a change.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VolumeState {
+    /// Level, 0 to 1.
+    pub level: f64,
+    /// Whether the output is muted.
+    pub muted: bool,
+}
+
+/// The output volume. The sender's step rules live in `sender` and `controller`; a backend only reads and writes.
+pub trait Volume: Send {
+    /// The level and mute state now.
+    fn state(&mut self) -> Result<VolumeState, BackendError>;
+
+    /// Set the level (0 to 1); returns the level reached, which the device may round.
+    fn set_level(&mut self, level: f64) -> Result<f64, BackendError>;
+
+    /// Mute or unmute without touching the level.
+    fn set_muted(&mut self, muted: bool) -> Result<(), BackendError>;
+}
+
+/// A backlight.
+pub trait Backlight: Send {
+    /// The level now, 0 to 1.
+    fn level(&mut self) -> Result<f64, BackendError>;
+
+    /// Set the level (0 to 1); returns the level reached, which the device may round or floor.
+    fn set_level(&mut self, level: f64) -> Result<f64, BackendError>;
+}
+
+/// The raw value for `level` (a fraction of `max`) within `floor..=max`. A change of level always moves at least one
+/// raw unit from `current`, in the direction of `level`, unless that end is reached.
+pub fn linear_raw(current: u32, max: u32, level: f64, floor: u32) -> u32 {
+    let exact = level * f64::from(max);
+    let wanted = exact.round().clamp(f64::from(floor), f64::from(max)) as u32;
+    if wanted != current {
+        return wanted;
+    }
+    if exact > f64::from(current) {
+        (current + 1).min(max)
+    } else if exact < f64::from(current) {
+        current.saturating_sub(1).max(floor)
+    } else {
+        current
+    }
+}
+
+/// The volume of an in-memory stand-in (for `--fake-backends` and tests).
+#[derive(Debug)]
+pub struct MemoryVolume {
+    state: VolumeState,
+}
+
+impl MemoryVolume {
+    /// A volume at `level` (0 to 1).
+    pub fn new(level: f64, muted: bool) -> Self {
+        Self { state: VolumeState { level, muted } }
+    }
+}
+
+impl Volume for MemoryVolume {
+    fn state(&mut self) -> Result<VolumeState, BackendError> {
+        Ok(self.state)
+    }
+
+    fn set_level(&mut self, level: f64) -> Result<f64, BackendError> {
+        self.state.level = level;
+        Ok(level)
+    }
+
+    fn set_muted(&mut self, muted: bool) -> Result<(), BackendError> {
+        self.state.muted = muted;
+        Ok(())
+    }
+}
+
+/// The level of an in-memory backlight.
+#[derive(Debug)]
+pub struct MemoryBacklight {
+    level: f64,
+}
+
+impl MemoryBacklight {
+    /// A backlight at `level` (0 to 1).
+    pub fn new(level: f64) -> Self {
+        Self { level }
+    }
+}
+
+impl Backlight for MemoryBacklight {
+    fn level(&mut self) -> Result<f64, BackendError> {
+        Ok(self.level)
+    }
+
+    fn set_level(&mut self, level: f64) -> Result<f64, BackendError> {
+        self.level = level;
+        Ok(level)
+    }
+}
+
+/// The playback master volume through the kernel's sound control interface. The device is opened on the first use and
+/// again after a failure, so a card that appears later (or went away) is picked up.
+pub struct AlsaVolume {
+    dir: PathBuf,
+    card: Option<u32>,
+    master: Option<Master>,
+}
+
+impl AlsaVolume {
+    /// The master of card `card`, or the best master of all cards (see `cupertino_alsa::master`), below `dir`.
+    pub fn new(dir: PathBuf, card: Option<u32>) -> Self {
+        Self { dir, card, master: None }
+    }
+
+    fn master(&mut self) -> Result<&Master, cupertino_alsa::Error> {
+        if self.master.is_none() {
+            self.master = Some(match self.card {
+                Some(card) => Master::open_card(&self.dir, card, OpenMode::ReadWrite)?,
+                None => Master::open_default(&self.dir, OpenMode::ReadWrite)?,
+            });
+        }
+        Ok(self.master.as_ref().expect("opened above"))
+    }
+
+    /// Run `action` on the master; a failure drops the open device so the next call opens it again.
+    fn with_master<T>(&mut self, action: impl FnOnce(&Master) -> Result<T, cupertino_alsa::Error>) -> Result<T, BackendError> {
+        let result = self.master().and_then(action);
+        if result.is_err() {
+            self.master = None;
+        }
+        Ok(result?)
+    }
+}
+
+impl Volume for AlsaVolume {
+    /// Without a mute switch the master is muted exactly when its level is 0.
+    fn state(&mut self) -> Result<VolumeState, BackendError> {
+        self.with_master(|master| {
+            let level = master.level()?;
+            Ok(VolumeState { level, muted: master.muted()?.unwrap_or(level <= 0.0) })
+        })
+    }
+
+    /// A change of level moves at least one raw step, so a coarse raw range cannot swallow a press.
+    fn set_level(&mut self, level: f64) -> Result<f64, BackendError> {
+        self.with_master(|master| {
+            let current = master.level()?;
+            match level.partial_cmp(&current) {
+                Some(Ordering::Greater) => master.step(1, level - current),
+                Some(Ordering::Less) => master.step(-1, current - level),
+                _ => Ok(current),
+            }
+        })
+    }
+
+    /// Without a mute switch only the state the level already implies can be set (the step to or from 0 that
+    /// mutes or unmutes); toggling mute at another level fails with the missing switch.
+    fn set_muted(&mut self, muted: bool) -> Result<(), BackendError> {
+        self.with_master(|master| match master.muted()? {
+            Some(_) => master.set_muted(muted),
+            None if muted == (master.level()? <= 0.0) => Ok(()),
+            None => Err(cupertino_alsa::Error::NoMuteSwitch),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_level_maps_linearly_onto_the_raw_range() {
+        assert_eq!(linear_raw(50, 100, 0.5625, 0), 56);
+        assert_eq!(linear_raw(50, 100, 0.4375, 0), 44);
+    }
+
+    #[test]
+    fn a_level_clamps_to_the_floor_and_the_maximum() {
+        assert_eq!(linear_raw(98, 100, 1.0, 0), 100);
+        assert_eq!(linear_raw(100, 100, 1.0, 0), 100);
+        assert_eq!(linear_raw(3, 100, 0.0, 1), 1);
+        assert_eq!(linear_raw(1, 100, 0.0, 1), 1);
+        assert_eq!(linear_raw(0, 100, 0.0, 0), 0);
+    }
+
+    #[test]
+    fn a_changed_level_moves_at_least_one_raw_unit() {
+        // 4 raw values: 1/16 above raw 1 rounds back to 1
+        assert_eq!(linear_raw(1, 3, 1.0 / 3.0 + 1.0 / 16.0, 0), 2);
+        assert_eq!(linear_raw(1, 3, 1.0 / 3.0 - 1.0 / 16.0, 0), 0);
+        assert_eq!(linear_raw(1, 3, 1.0 / 3.0, 0), 1);
+    }
+}

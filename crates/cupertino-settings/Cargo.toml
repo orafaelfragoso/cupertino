@@ -1,0 +1,39 @@
+[package]
+name = "cupertino-settings"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Settings application without a toolkit: pane table, sidebar, navigation history, search, window layout and painter, and the `cupertino-settings` process"
+
+[package.metadata.cupertino]
+layer = "apps"
+
+[features]
+# the `cupertino-settings` process: the settings window as a client of the server
+app = ["dep:cupertino-client", "dep:zbus", "dep:cupertino-alsa", "dep:async-channel"]
+
+[dependencies]
+cupertino-assets = { path = "../cupertino-assets" }
+cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-icons = { path = "../cupertino-icons" }
+cupertino-theme = { path = "../cupertino-theme" }
+cupertino-decorations = { path = "../cupertino-decorations" }
+cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-client = { path = "../cupertino-client", optional = true }
+cupertino-alsa = { path = "../cupertino-alsa", optional = true }
+tiny-skia = "0.11"
+zeroize = "1"
+async-channel = { version = "2", optional = true }
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"], optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = "1"
+
+[[bin]]
+name = "cupertino-settings"
+path = "src/main.rs"
+required-features = ["app"]
+
+[[example]]
+name = "settings_samples"

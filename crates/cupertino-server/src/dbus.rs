@@ -1,0 +1,211 @@
+//! Session bus worker: relays the shell toggles (notification centre, launcher, control panel), the media keys
+//! (overlay process), the lock request and the power key (login process) to the processes that own them.
+//!
+//! Everything runs on one background thread that drives `zbus` futures; the compositor talks to it
+//! through [`DbusHandle::send`]. Without a session bus the worker ends after logging and the
+//! requests fail with a warning.
+
+use crate::input::OsdKey;
+
+/// What the worker asks a shell process to toggle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Toggle {
+    /// The notification centre list of `cupertino-notifications`.
+    NotificationCentre,
+    /// The panel of `cupertino-launcher`.
+    Launcher,
+    /// The panel of `cupertino-controlcenter`.
+    ControlPanel,
+}
+
+/// One call the worker makes on a shell process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Request {
+    Toggle(Toggle),
+    /// A media key for `cupertino-osd`; `fine` is the Shift+Alt step.
+    Osd { key: OsdKey, fine: bool },
+    /// Lock the session through `cupertino-login`: the display slept for the password delay (lock request type 5 of the design).
+    Lock,
+    /// Lock the session on the person's request (the lock shortcut; lock request type 8, whose lock screen hides after 5 s).
+    LockNow,
+    /// The power key went down (`true`) or up; `cupertino-login` times the hold.
+    PowerKey { pressed: bool },
+}
+
+/// Arguments of a control method.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Body {
+    Empty,
+    /// Direction (+1 or -1) and the fine flag of the overlay's step methods.
+    Step(i32, bool),
+    /// Whether the power key went down (`PowerKey`).
+    Pressed(bool),
+}
+
+/// Bus name, object path and interface of the overlay process (`cupertino_osd::control`).
+const OSD: (&str, &str, &str) = ("org.cupertino.Osd1", "/org/cupertino/Osd1", "org.cupertino.Osd1");
+
+impl Request {
+    /// Bus name, object path, interface, method and arguments of the control interface of the process
+    /// (`cupertino_notifications::dbus`, `cupertino_launcher::control`, `cupertino_controlcenter::control`, `cupertino_osd::control`; the lock request goes to the login process).
+    fn call(self) -> (&'static str, &'static str, &'static str, &'static str, Body) {
+        let (name, path, interface) = OSD;
+        match self {
+            Request::Toggle(Toggle::NotificationCentre) => ("org.cupertino.NotificationCenter1", "/org/cupertino/NotificationCenter1", "org.cupertino.NotificationCenter1", "ToggleCentre", Body::Empty),
+            Request::Toggle(Toggle::Launcher) => ("org.cupertino.Launcher1", "/org/cupertino/Launcher1", "org.cupertino.Launcher1", "Toggle", Body::Empty),
+            Request::Toggle(Toggle::ControlPanel) => ("org.cupertino.ControlPanel1", "/org/cupertino/ControlPanel1", "org.cupertino.ControlPanel1", "Toggle", Body::Empty),
+            Request::Lock => ("org.cupertino.Login1", "/org/cupertino/Login1", "org.cupertino.Login1", "Lock", Body::Empty),
+            Request::LockNow => ("org.cupertino.Login1", "/org/cupertino/Login1", "org.cupertino.Login1", "LockNow", Body::Empty),
+            Request::PowerKey { pressed } => ("org.cupertino.Login1", "/org/cupertino/Login1", "org.cupertino.Login1", "PowerKey", Body::Pressed(pressed)),
+            Request::Osd { key, fine } => {
+                let (method, body) = match key {
+                    OsdKey::VolumeUp => ("VolumeStep", Body::Step(1, fine)),
+                    OsdKey::VolumeDown => ("VolumeStep", Body::Step(-1, fine)),
+                    OsdKey::Mute => ("ToggleMute", Body::Empty),
+                    OsdKey::BrightnessUp => ("BrightnessStep", Body::Step(1, fine)),
+                    OsdKey::BrightnessDown => ("BrightnessStep", Body::Step(-1, fine)),
+                    OsdKey::KeyboardBrightnessUp => ("KeyboardBrightnessStep", Body::Step(1, fine)),
+                    OsdKey::KeyboardBrightnessDown => ("KeyboardBrightnessStep", Body::Step(-1, fine)),
+                };
+                (name, path, interface, method, body)
+            }
+        }
+    }
+}
+
+/// Handle on the worker thread.
+pub struct DbusHandle {
+    tx: async_channel::Sender<Request>,
+}
+
+impl DbusHandle {
+    /// Start the worker.
+    pub fn start() -> Option<DbusHandle> {
+        let (tx, rx) = async_channel::unbounded::<Request>();
+        let spawned = std::thread::Builder::new().name("cupertino-dbus".into()).spawn(move || zbus::block_on(worker(rx)));
+        match spawned {
+            Ok(_) => Some(DbusHandle { tx }),
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot start the D-Bus worker");
+                None
+            }
+        }
+    }
+
+    /// Queue a call on a shell process.
+    pub fn send(&self, what: Request) {
+        if self.tx.try_send(what).is_err() {
+            tracing::warn!(?what, "no session bus: cannot reach the shell process");
+        }
+    }
+}
+
+async fn worker(rx: async_channel::Receiver<Request>) {
+    let conn = match zbus::Connection::session().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::info!(error = %e, "no session bus: the shell toggles and media keys are unavailable");
+            return;
+        }
+    };
+    while let Ok(what) = rx.recv().await {
+        let conn = conn.clone();
+        // a key's press and release must arrive in the order they happened, so those calls are awaited in turn
+        if matches!(what, Request::PowerKey { .. }) {
+            call(&conn, what).await;
+        } else {
+            conn.executor().clone().spawn(async move { call(&conn, what).await }, "cupertino-shell-call").detach();
+        }
+    }
+}
+
+/// Make the call of `what` and log a failure.
+async fn call(conn: &zbus::Connection, what: Request) {
+    let (name, path, interface, method, body) = what.call();
+    let sent = match body {
+        Body::Empty => conn.call_method(Some(name), path, Some(interface), method, &()).await,
+        Body::Step(direction, fine) => conn.call_method(Some(name), path, Some(interface), method, &(direction, fine)).await,
+        Body::Pressed(pressed) => conn.call_method(Some(name), path, Some(interface), method, &pressed).await,
+    };
+    if let Err(e) = sent {
+        tracing::warn!(?what, name, error = %e, "cannot reach the shell process");
+    }
+}
+
+impl crate::state::Cupertino {
+    /// Ask the notification process to open or close its centre list.
+    pub fn toggle_notification_center(&mut self) {
+        self.shell_call(Request::Toggle(Toggle::NotificationCentre));
+    }
+
+    /// Ask the launcher process to show or hide its panel.
+    pub fn toggle_launcher(&mut self) {
+        self.shell_call(Request::Toggle(Toggle::Launcher));
+    }
+
+    /// Ask the control panel process to show or hide its panel.
+    pub fn toggle_control_panel(&mut self) {
+        self.shell_call(Request::Toggle(Toggle::ControlPanel));
+    }
+
+    /// Ask the login process to lock the session.
+    pub fn lock_session(&mut self) {
+        self.shell_call(Request::Lock);
+    }
+
+    /// Ask the login process to lock the session because the person asked for it.
+    pub fn lock_session_now(&mut self) {
+        self.shell_call(Request::LockNow);
+    }
+
+    /// Tell the login process the power key went down or up.
+    pub fn power_key(&mut self, pressed: bool) {
+        self.shell_call(Request::PowerKey { pressed });
+    }
+
+    /// Forward a media key to the overlay process, which changes the level and shows it.
+    pub fn osd_key(&mut self, key: OsdKey, fine: bool) {
+        self.shell_call(Request::Osd { key, fine });
+    }
+
+    fn shell_call(&mut self, what: Request) {
+        match &self.dbus {
+            Some(dbus) => dbus.send(what),
+            None => tracing::warn!(?what, "no session bus: cannot reach the shell process"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_lock_request_calls_the_login_process() {
+        assert_eq!(Request::Lock.call(), ("org.cupertino.Login1", "/org/cupertino/Login1", "org.cupertino.Login1", "Lock", Body::Empty));
+    }
+
+    #[test]
+    fn the_explicit_lock_request_calls_lock_now() {
+        assert_eq!(Request::LockNow.call(), ("org.cupertino.Login1", "/org/cupertino/Login1", "org.cupertino.Login1", "LockNow", Body::Empty));
+    }
+
+    #[test]
+    fn the_power_key_request_calls_the_power_key_method_of_the_login_process_with_the_key_state() {
+        assert_eq!(Request::PowerKey { pressed: true }.call(), ("org.cupertino.Login1", "/org/cupertino/Login1", "org.cupertino.Login1", "PowerKey", Body::Pressed(true)));
+        assert_eq!(Request::PowerKey { pressed: false }.call().4, Body::Pressed(false));
+    }
+
+    #[test]
+    fn media_keys_map_to_the_overlay_methods() {
+        let call = |key, fine| {
+            let (name, _, _, method, body) = Request::Osd { key, fine }.call();
+            (name, method, body)
+        };
+        assert_eq!(call(OsdKey::VolumeUp, false), ("org.cupertino.Osd1", "VolumeStep", Body::Step(1, false)));
+        assert_eq!(call(OsdKey::VolumeDown, true), ("org.cupertino.Osd1", "VolumeStep", Body::Step(-1, true)));
+        assert_eq!(call(OsdKey::Mute, false), ("org.cupertino.Osd1", "ToggleMute", Body::Empty));
+        assert_eq!(call(OsdKey::BrightnessDown, false), ("org.cupertino.Osd1", "BrightnessStep", Body::Step(-1, false)));
+        assert_eq!(call(OsdKey::KeyboardBrightnessUp, true), ("org.cupertino.Osd1", "KeyboardBrightnessStep", Body::Step(1, true)));
+    }
+}

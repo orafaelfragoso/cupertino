@@ -1,0 +1,12 @@
+# Keyboard: press A, hold through two autorepeats, release. Format: <sec>.<usec> <type> <code> <value>
+# MSC_SCAN (4 4) precedes the key on press and release, as atkbd emits it.
+1000.000100 4 4 458756   # MSC_SCAN
+1000.000100 1 30 1       # KEY_A press
+1000.000100 0 0 0        # SYN_REPORT
+1000.500200 1 30 2       # KEY_A repeat
+1000.500200 0 0 0
+1000.583200 1 30 2       # KEY_A repeat (83 ms later)
+1000.583200 0 0 0
+1000.700300 4 4 458756
+1000.700300 1 30 0       # KEY_A release
+1000.700300 0 0 0

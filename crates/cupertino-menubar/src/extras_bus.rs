@@ -1,0 +1,293 @@
+//! The services behind the bar's own status items: `org.cupertino.Network1` (`cupertino-netd`), the UPower display
+//! device and manager (`cupertino-powerd`), `org.cupertino.Bluetooth1` (`cupertino-btd`) on the system bus, and the
+//! do-not-disturb state of `org.cupertino.NotificationCenter1` (`cupertino-notifications`) on the session bus.
+//!
+//! One task reads every service into an [`Extras`] and sends it to the process whenever it differs from the last one
+//! sent. It reads again after any signal on the services' objects (property changes, the network list, devices), when a
+//! service's bus name changes owner (a daemon that starts later is picked up), on [`ExtrasBus::refresh`], and after
+//! every action. Properties are read from the service every time, never from a cache. A service that cannot be read
+//! hides its item; why is reported on stderr once per new reason.
+
+use crate::extras::{BatteryState, BluetoothDevice, BluetoothState, ExtraAction, Extras, FocusLifetime, FocusState, WifiNetwork, WifiState};
+use futures_util::StreamExt;
+use std::collections::HashMap;
+use std::sync::mpsc;
+use std::sync::Arc;
+use zbus::message::Type;
+use zbus::proxy::{Builder, CacheProperties};
+use zbus::zvariant::OwnedValue;
+use zbus::{Connection, MatchRule, MessageStream, Proxy};
+
+use crate::worker::WorkerGone;
+
+const NETWORK_NAME: &str = "org.cupertino.Network1";
+const NETWORK_PATH: &str = "/org/cupertino/Network1";
+const BLUETOOTH_NAME: &str = "org.cupertino.Bluetooth1";
+const BLUETOOTH_PATH: &str = "/org/cupertino/Bluetooth1";
+const UPOWER_NAME: &str = "org.freedesktop.UPower";
+const UPOWER_PATH: &str = "/org/freedesktop/UPower";
+const UPOWER_DISPLAY_DEVICE_PATH: &str = "/org/freedesktop/UPower/devices/DisplayDevice";
+const UPOWER_DEVICE_INTERFACE: &str = "org.freedesktop.UPower.Device";
+const CENTRE_NAME: &str = "org.cupertino.NotificationCenter1";
+const CENTRE_PATH: &str = "/org/cupertino/NotificationCenter1";
+
+/// `org.freedesktop.UPower.Device.State` of a charging battery.
+const UPOWER_STATE_CHARGING: u32 = 1;
+
+/// A row of `Devices` of `org.cupertino.Network1`: index, name, kind, state, SSID, failure, address.
+type DeviceRecord = (u32, String, String, String, String, String, String);
+/// A row of `GetNetworks`: SSID, signal (dBm, `i32::MIN` when unknown), security, saved, connected.
+type NetworkRecord = (String, i32, String, bool, bool);
+
+enum Command {
+    Refresh,
+    Act(ExtraAction),
+}
+
+/// Handle on the extras task.
+pub struct ExtrasBus {
+    commands: async_channel::Sender<Command>,
+}
+
+impl ExtrasBus {
+    /// Start the task on the executor of `session`; `wake` is called after every new [`Extras`].
+    pub fn start(session: Connection, wake: impl Fn() + Send + Sync + 'static) -> (ExtrasBus, mpsc::Receiver<Extras>) {
+        let (commands, rx) = async_channel::unbounded();
+        let (out, events) = mpsc::channel();
+        let executor = session.executor().clone();
+        executor.spawn(run(session, commands.clone(), rx, out, Arc::new(wake)), "cupertino-extras").detach();
+        (ExtrasBus { commands }, events)
+    }
+
+    /// Read every service again (the duration rows change with the hour).
+    pub fn refresh(&self) -> Result<(), WorkerGone> {
+        self.commands.try_send(Command::Refresh).map_err(|_| WorkerGone)
+    }
+
+    pub fn act(&self, action: ExtraAction) -> Result<(), WorkerGone> {
+        self.commands.try_send(Command::Act(action)).map_err(|_| WorkerGone)
+    }
+}
+
+/// Reports a reason once, until a read succeeds or fails for another reason.
+#[derive(Default)]
+struct Reasons(HashMap<&'static str, String>);
+
+impl Reasons {
+    fn note<T>(&mut self, what: &'static str, result: zbus::Result<Option<T>>) -> Option<T> {
+        match result {
+            Ok(value) => {
+                self.0.remove(what);
+                value
+            }
+            Err(e) => {
+                let reason = e.to_string();
+                if self.0.get(what) != Some(&reason) {
+                    eprintln!("cupertino-menubar: the {what} item is hidden: {reason}");
+                    self.0.insert(what, reason);
+                }
+                None
+            }
+        }
+    }
+}
+
+async fn run(session: Connection, commands: async_channel::Sender<Command>, rx: async_channel::Receiver<Command>, out: mpsc::Sender<Extras>, wake: Arc<dyn Fn() + Send + Sync>) {
+    let system = match Connection::system().await {
+        Ok(system) => Some(system),
+        Err(e) => {
+            eprintln!("cupertino-menubar: no system bus, so no Wi-Fi, battery or Bluetooth items: {e}");
+            None
+        }
+    };
+    if let Some(system) = &system {
+        for (name, path) in [(NETWORK_NAME, NETWORK_PATH), (BLUETOOTH_NAME, BLUETOOTH_PATH), (UPOWER_NAME, UPOWER_PATH), (UPOWER_NAME, UPOWER_DISPLAY_DEVICE_PATH)] {
+            follow(system, name, path, &commands).await;
+        }
+    }
+    follow(&session, CENTRE_NAME, CENTRE_PATH, &commands).await;
+
+    let mut reasons = Reasons::default();
+    let mut last: Option<Extras> = None;
+    loop {
+        let extras = read_all(system.as_ref(), &session, &mut reasons).await;
+        if last.as_ref() != Some(&extras) {
+            // a closed channel means the process is shutting down
+            if out.send(extras.clone()).is_err() {
+                return;
+            }
+            wake();
+            last = Some(extras);
+        }
+        match rx.recv().await {
+            Ok(Command::Refresh) => {}
+            Ok(Command::Act(action)) => {
+                if let Err(e) = act(system.as_ref(), &session, &action).await {
+                    eprintln!("cupertino-menubar: {action:?} failed: {e}");
+                }
+            }
+            Err(_) => return,
+        }
+        // collapse a burst of signals into one read
+        while let Ok(command) = rx.try_recv() {
+            if let Command::Act(action) = command {
+                if let Err(e) = act(system.as_ref(), &session, &action).await {
+                    eprintln!("cupertino-menubar: {action:?} failed: {e}");
+                }
+            }
+        }
+    }
+}
+
+/// Queue a refresh for every signal on `path` and every owner change of `name`.
+async fn follow(conn: &Connection, name: &'static str, path: &'static str, commands: &async_channel::Sender<Command>) {
+    let rules = [
+        MatchRule::builder().msg_type(Type::Signal).path(path).map(|b| b.build()),
+        MatchRule::builder()
+            .msg_type(Type::Signal)
+            .sender("org.freedesktop.DBus")
+            .and_then(|b| b.interface("org.freedesktop.DBus"))
+            .and_then(|b| b.member("NameOwnerChanged"))
+            .and_then(|b| b.arg(0, name))
+            .map(|b| b.build()),
+    ];
+    for rule in rules {
+        let stream = match rule {
+            Ok(rule) => MessageStream::for_match_rule(rule, conn, None).await,
+            Err(e) => Err(e),
+        };
+        let mut stream = match stream {
+            Ok(stream) => stream,
+            Err(e) => {
+                eprintln!("cupertino-menubar: cannot follow {name}{path}: {e}");
+                continue;
+            }
+        };
+        let commands = commands.clone();
+        conn.executor()
+            .spawn(
+                async move {
+                    while stream.next().await.is_some() {
+                        if commands.send(Command::Refresh).await.is_err() {
+                            break;
+                        }
+                    }
+                },
+                "cupertino-extras-follow",
+            )
+            .detach();
+    }
+}
+
+async fn proxy(conn: &Connection, name: &'static str, path: &'static str, interface: &'static str) -> zbus::Result<Proxy<'static>> {
+    Builder::new(conn).destination(name)?.path(path)?.interface(interface)?.cache_properties(CacheProperties::No).build().await
+}
+
+/// Whether `error` says nobody owns the name: the service is not running, which hides its item without a report.
+fn not_running(error: &zbus::Error) -> bool {
+    matches!(error, zbus::Error::MethodError(name, _, _) if name.as_str() == "org.freedesktop.DBus.Error.ServiceUnknown" || name.as_str() == "org.freedesktop.DBus.Error.NameHasNoOwner")
+}
+
+/// `Ok(None)` for a service that is not running.
+fn absent_if_not_running<T>(result: zbus::Result<Option<T>>) -> zbus::Result<Option<T>> {
+    match result {
+        Err(e) if not_running(&e) => Ok(None),
+        other => other,
+    }
+}
+
+async fn read_all(system: Option<&Connection>, session: &Connection, reasons: &mut Reasons) -> Extras {
+    let mut extras = Extras::default();
+    if let Some(system) = system {
+        extras.wifi = reasons.note("Wi-Fi", absent_if_not_running(read_wifi(system).await));
+        extras.battery = reasons.note("battery", absent_if_not_running(read_battery(system).await));
+        extras.bluetooth = reasons.note("Bluetooth", absent_if_not_running(read_bluetooth(system).await));
+    }
+    extras.focus = reasons.note("Focus", absent_if_not_running(read_focus(session).await));
+    extras
+}
+
+/// `None` without a Wi-Fi device.
+async fn read_wifi(conn: &Connection) -> zbus::Result<Option<WifiState>> {
+    let network = proxy(conn, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME).await?;
+    let devices: Vec<DeviceRecord> = network.get_property("Devices").await?;
+    if !devices.iter().any(|device| device.2 == "wifi") {
+        return Ok(None);
+    }
+    let enabled: bool = network.get_property("WirelessEnabled").await?;
+    let records: Vec<NetworkRecord> = network.call("GetNetworks", &()).await?;
+    let networks = records
+        .into_iter()
+        .map(|(ssid, signal, security, known, connected)| WifiNetwork { ssid, signal_dbm: (signal != i32::MIN).then_some(signal), security, known, connected })
+        .collect();
+    Ok(Some(WifiState { enabled, networks }))
+}
+
+/// `None` without a battery.
+async fn read_battery(conn: &Connection) -> zbus::Result<Option<BatteryState>> {
+    let device = proxy(conn, UPOWER_NAME, UPOWER_DISPLAY_DEVICE_PATH, UPOWER_DEVICE_INTERFACE).await?;
+    if !device.get_property::<bool>("IsPresent").await? {
+        return Ok(None);
+    }
+    let percentage: f64 = device.get_property("Percentage").await?;
+    let state: u32 = device.get_property("State").await?;
+    let on_battery: bool = proxy(conn, UPOWER_NAME, UPOWER_PATH, UPOWER_NAME).await?.get_property("OnBattery").await?;
+    Ok(Some(BatteryState { percent: percentage.round().clamp(0.0, 100.0) as u8, charging: state == UPOWER_STATE_CHARGING, on_battery }))
+}
+
+fn field<T: TryFrom<OwnedValue>>(device: &HashMap<String, OwnedValue>, key: &str) -> zbus::Result<Option<T>>
+where
+    T::Error: std::fmt::Display,
+{
+    device
+        .get(key)
+        .map(|value| T::try_from(value.try_clone()?).map_err(|e| zbus::Error::Failure(format!("device field {key}: {e}"))))
+        .transpose()
+}
+
+fn required<T>(value: Option<T>, key: &str) -> zbus::Result<T> {
+    value.ok_or_else(|| zbus::Error::Failure(format!("a device has no {key}")))
+}
+
+/// `None` without an adapter.
+async fn read_bluetooth(conn: &Connection) -> zbus::Result<Option<BluetoothState>> {
+    let bluetooth = proxy(conn, BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME).await?;
+    if !bluetooth.get_property::<bool>("Available").await? {
+        return Ok(None);
+    }
+    let powered: bool = bluetooth.get_property("Powered").await?;
+    let views: Vec<HashMap<String, OwnedValue>> = bluetooth.get_property("Devices").await?;
+    let devices = views
+        .iter()
+        .map(|view| {
+            Ok(BluetoothDevice {
+                id: required(field(view, "Id")?, "Id")?,
+                address: required(field(view, "Address")?, "Address")?,
+                name: field(view, "Name")?,
+                paired: required(field(view, "Paired")?, "Paired")?,
+                connected: required(field(view, "Connected")?, "Connected")?,
+            })
+        })
+        .collect::<zbus::Result<_>>()?;
+    Ok(Some(BluetoothState { powered, devices }))
+}
+
+async fn read_focus(conn: &Connection) -> zbus::Result<Option<FocusState>> {
+    let centre = proxy(conn, CENTRE_NAME, CENTRE_PATH, CENTRE_NAME).await?;
+    let active: bool = centre.get_property("DoNotDisturb").await?;
+    let rows: Vec<(String, String)> = centre.get_property("FocusLifetimes").await?;
+    Ok(Some(FocusState { active, lifetimes: rows.into_iter().map(|(id, title)| FocusLifetime { id, title }).collect() }))
+}
+
+async fn act(system: Option<&Connection>, session: &Connection, action: &ExtraAction) -> zbus::Result<()> {
+    let system = || system.ok_or_else(|| zbus::Error::Failure("there is no system bus".to_owned()));
+    match action {
+        ExtraAction::SetDoNotDisturb(on) => proxy(session, CENTRE_NAME, CENTRE_PATH, CENTRE_NAME).await?.call("SetDoNotDisturb", &(*on,)).await,
+        ExtraAction::DoNotDisturbFor(id) => proxy(session, CENTRE_NAME, CENTRE_PATH, CENTRE_NAME).await?.call("SetDoNotDisturbFor", &(id,)).await,
+        ExtraAction::SetWifiEnabled(on) => Ok(proxy(system()?, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME).await?.set_property("WirelessEnabled", *on).await?),
+        ExtraAction::JoinNetwork(ssid) => proxy(system()?, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME).await?.call("Connect", &(ssid, "")).await,
+        ExtraAction::SetBluetoothPowered(on) => Ok(proxy(system()?, BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME).await?.set_property("Powered", *on).await?),
+        ExtraAction::ConnectDevice(id) => proxy(system()?, BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME).await?.call("Connect", &(id,)).await,
+        ExtraAction::DisconnectDevice(id) => proxy(system()?, BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME).await?.call("Disconnect", &(id,)).await,
+    }
+}

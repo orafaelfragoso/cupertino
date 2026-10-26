@@ -1,0 +1,21 @@
+# Clickpad: one finger down, then the client falls behind. The partial frame (x 1010) is discarded together with
+# everything up to the next SYN_REPORT; the test resyncs from a snapshot and the stream continues.
+4000.000000 3 57 200     # slot 0: tracking id 200
+4000.000000 3 53 1000
+4000.000000 3 54 1000
+4000.000000 3 58 30
+4000.000000 3 48 260
+4000.000000 3 49 240
+4000.000000 3 55 0
+4000.000000 3 0 1000
+4000.000000 3 1 1000
+4000.000000 1 330 1
+4000.000000 1 325 1
+4000.000000 0 0 0
+4000.010000 3 53 1010    # partial frame, then the overrun
+4000.010000 0 3 0        # SYN_DROPPED
+4000.020000 3 54 1020    # lost
+4000.020000 1 272 1      # lost
+4000.020000 0 0 0        # SYN_REPORT: ends the dropped span
+4000.100000 3 53 2610    # after the resync: current slot is 1 (from the snapshot)
+4000.100000 0 0 0

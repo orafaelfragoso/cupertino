@@ -1,0 +1,13 @@
+# QEMU virtio tablet: absolute pointer, a click, a wheel step (no hi-res axis, so the legacy step counts as 120).
+5000.000100 3 0 16384    # ABS_X
+5000.000100 3 1 8192     # ABS_Y
+5000.000100 0 0 0
+5000.020000 4 4 90001
+5000.020000 1 272 1      # BTN_LEFT press
+5000.020000 0 0 0
+5000.030000 2 8 -1       # REL_WHEEL
+5000.030000 0 0 0
+5000.040000 4 4 90001
+5000.040000 1 272 0
+5000.040000 3 0 16400
+5000.040000 0 0 0

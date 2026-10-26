@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Settings
+GenericName=System Settings
+Comment=Configure the desktop
+Exec=gnome-control-center
+Icon=preferences-system
+Categories=Settings;

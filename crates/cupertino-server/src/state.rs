@@ -1,0 +1,1276 @@
+//! Compositor state: Smithay protocol states, the window model, outputs, shell and input state,
+//! plus the glue that turns model effects into protocol requests.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use cupertino_wm::{AppId, Command, Effect, MapParams, OutputId, Point as MPoint, Rect, Size, WindowId, Wm, WmConfig};
+use smithay::backend::renderer::damage::OutputDamageTracker;
+use smithay::desktop::{layer_map_for_output, PopupManager, Window, WindowSurfaceType};
+use smithay::input::keyboard::XkbConfig;
+use smithay::input::pointer::{CursorImageStatus, PointerHandle};
+use smithay::input::{Seat, SeatState};
+use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Scale as OutputScale};
+use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::{Interest, LoopHandle, LoopSignal, Mode, PostAction};
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::{Display, DisplayHandle};
+use smithay::utils::{Clock, Logical, Monotonic, Point, Rectangle, Serial, Size as SmSize, Transform, SERIAL_COUNTER};
+use smithay::wayland::compositor::{with_states, CompositorClientState, CompositorState};
+use smithay::wayland::cursor_shape::CursorShapeManagerState;
+use smithay::wayland::dmabuf::{DmabufGlobal, DmabufState};
+use smithay::wayland::foreign_toplevel_list::{ForeignToplevelHandle, ForeignToplevelListState};
+use smithay::wayland::fractional_scale::FractionalScaleManagerState;
+use smithay::wayland::output::OutputManagerState;
+use smithay::wayland::pointer_gestures::PointerGesturesState;
+use smithay::wayland::presentation::PresentationState;
+use smithay::wayland::relative_pointer::RelativePointerManagerState;
+use smithay::wayland::selection::data_device::DataDeviceState;
+use smithay::wayland::selection::primary_selection::PrimarySelectionState;
+use smithay::wayland::shell::wlr_layer::{Layer, WlrLayerShellState};
+use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
+use smithay::wayland::shell::xdg::dialog::XdgDialogState;
+use smithay::wayland::shell::xdg::{ToplevelSurface, XdgShellState, XdgToplevelSurfaceData};
+use smithay::wayland::shm::ShmState;
+use smithay::wayland::socket::ListeningSocketSource;
+use smithay::wayland::viewporter::ViewporterState;
+use smithay::wayland::xdg_activation::XdgActivationState;
+
+use crate::backend::Backend;
+use crate::config::Config;
+use crate::cursor::CursorLoader;
+use cupertino_assets::Assets;
+use crate::decor::Decor;
+use crate::dbus::DbusHandle;
+use crate::dock::Docks;
+use crate::scroll_v1::ScrollObservers;
+use crate::session_v1::SessionObservers;
+use crate::window_manager::WindowManagers;
+use crate::desktop::DesktopIndex;
+use crate::fx::Effects;
+use crate::kbd::CapsDebounce;
+use crate::menu_bar::MenuBars;
+use crate::overlays::Overlays;
+use crate::protocols::MenuProtocols;
+use crate::shell_v1::ShellV1Global;
+use crate::supervisor::Supervisor;
+use crate::input::{ActionContext, ActionPlan, KeyRouter, ShellOp};
+use crate::policy;
+use crate::render::scene::RenderResources;
+use crate::render::ElementCache;
+use crate::shell::{self, Shell};
+
+#[derive(Debug, Default)]
+pub struct ClientState {
+    pub compositor_state: CompositorClientState,
+    /// The compositor's own connection (the accent picker's input method bridge).
+    pub internal: bool,
+    /// A shell process the server started on a connection of its own (`crate::capture::launch`): only such a client
+    /// sees the screen-capture globals.
+    pub privileged: bool,
+}
+
+impl ClientData for ClientState {
+    fn initialized(&self, _client_id: ClientId) {}
+    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
+}
+
+/// The window model's minimize and restore timing for the minimize effect of `effects`: the effect generators carry their
+/// own easing, so the model's progress is linear over the effect duration (durations); without
+/// an effect the model's own curves.
+pub fn set_minimize_timing(cfg: &mut WmConfig, effects: crate::fx::EffectsConfig) {
+    let defaults = WmConfig::default().animation;
+    let (minimizing, restoring) = match effects.minimize {
+        Some(kind) => {
+            let linear = cupertino_animation::Curve::Timed { duration: kind.duration_s(false), bezier: cupertino_animation::CubicBezier::LINEAR };
+            (linear, linear)
+        }
+        None => (defaults.minimizing, defaults.restoring),
+    };
+    cfg.animation.minimizing = minimizing;
+    cfg.animation.restoring = restoring;
+}
+
+/// `XDG_CURRENT_DESKTOP` of the clients and shell processes the server starts: the session's
+/// desktop-specific files (`cupertino-mimeapps.list`, `OnlyShowIn=Cupertino`) apply to them.
+pub const CURRENT_DESKTOP: &str = "Cupertino";
+
+/// One toplevel as the compositor sees it.
+pub struct WindowEntry {
+    pub id: WindowId,
+    pub window: Window,
+    pub toplevel: ToplevelSurface,
+    /// Known to the window model (has committed a buffer).
+    pub mapped: bool,
+    pub server_side: bool,
+    /// Title bar style the client chose (`cupertino_shell_v1.set_titlebar_style`); it applies while the
+    /// window is `server_side`.
+    pub titlebar: cupertino_decorations::TitlebarStyle,
+    pub foreign: Option<ForeignToplevelHandle>,
+    pub modal: bool,
+    /// Space around the surface reserved by server-side decorations (see `WindowStyle::ssd_insets`).
+    pub insets: crate::config::Insets,
+}
+
+impl WindowEntry {
+    /// The wl_surface of the window.
+    pub fn surface(&self) -> &WlSurface {
+        self.toplevel.wl_surface()
+    }
+
+    pub fn has_surface(&self, surface: &WlSurface) -> bool {
+        self.toplevel.wl_surface() == surface
+    }
+
+    /// Apply a model configure: client size (frame minus insets), model states, activation.
+    pub fn configure(&self, frame: Rect, states: &cupertino_wm::ToplevelStates, activated: bool) {
+        let ins = self.insets;
+        let size = (frame.w > ins.horizontal() && frame.h > ins.vertical())
+            .then(|| ((frame.w - ins.horizontal()).round() as i32, (frame.h - ins.vertical()).round() as i32));
+        let t = &self.toplevel;
+        t.with_pending_state(|st| {
+            if let Some(sz) = size {
+                st.size = Some(sz.into());
+            }
+            for s in policy::MODEL_STATES {
+                st.states.unset(s);
+            }
+            for s in policy::xdg_states(states, activated) {
+                st.states.set(s);
+            }
+        });
+        if t.is_initial_configure_sent() {
+            t.send_pending_configure();
+        }
+    }
+
+    pub fn close(&self) {
+        self.toplevel.send_close();
+    }
+
+    /// Update the activated state; true when it changed.
+    pub fn set_activated(&self, want: bool) -> bool {
+        let t = &self.toplevel;
+        let have = t.with_pending_state(|st| st.states.contains(xdg_toplevel::State::Activated));
+        if have == want {
+            return false;
+        }
+        t.with_pending_state(|st| {
+            if want {
+                st.states.set(xdg_toplevel::State::Activated);
+            } else {
+                st.states.unset(xdg_toplevel::State::Activated);
+            }
+        });
+        if t.is_initial_configure_sent() {
+            t.send_pending_configure();
+        }
+        true
+    }
+}
+
+/// One output with its render state.
+pub struct OutputEntry {
+    pub output: Output,
+    pub id: OutputId,
+    /// Rectangle in the global logical space.
+    pub rect: Rect,
+    pub scale: f64,
+    pub tracker: OutputDamageTracker,
+    pub cache: ElementCache,
+    pub redraw: bool,
+    pub global: Option<smithay::reexports::wayland_server::backend::GlobalId>,
+    pub lock: crate::session_lock::OutputLock,
+}
+
+/// What the pointer is over inside the window stack.
+#[derive(Clone, Debug)]
+pub enum WindowTarget {
+    Surface { id: WindowId, surface: WlSurface, origin: Point<f64, Logical> },
+    /// Compositor-drawn decorations: `local` is frame-local, `content` the surface size.
+    Decoration { id: WindowId, style: cupertino_decorations::TitlebarStyle, hit: cupertino_decorations::Hit, content: (f64, f64), local: (f64, f64) },
+}
+
+/// Pointer interaction owned by the window model (move / resize) or the shell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PointerMode {
+    Normal,
+    /// The model drives a move or resize; the pointer is not delivered to clients.
+    Model,
+}
+
+pub struct Cupertino {
+    pub display_handle: DisplayHandle,
+    pub loop_handle: LoopHandle<'static, Cupertino>,
+    pub loop_signal: LoopSignal,
+    pub clock: Clock<Monotonic>,
+    pub config: Config,
+    pub socket_name: Option<String>,
+    pub running: bool,
+
+    pub compositor_state: CompositorState,
+    pub xdg_shell_state: XdgShellState,
+    pub xdg_decoration_state: XdgDecorationState,
+    pub xdg_dialog_state: XdgDialogState,
+    pub layer_shell_state: WlrLayerShellState,
+    pub shm_state: ShmState,
+    pub output_manager_state: OutputManagerState,
+    pub seat_state: SeatState<Cupertino>,
+    pub data_device_state: DataDeviceState,
+    pub primary_selection_state: PrimarySelectionState,
+    /// `ext-data-control-v1` and `zwlr-data-control-v1` for clipboard managers (`clipboard`).
+    pub ext_data_control_state: smithay::wayland::selection::ext_data_control::DataControlState,
+    pub wlr_data_control_state: smithay::wayland::selection::wlr_data_control::DataControlState,
+    /// The server's copy of the clipboard, kept when its client exits (`clipboard`).
+    pub clipboard: crate::clipboard::Clipboard,
+    pub viewporter_state: ViewporterState,
+    pub fractional_scale_state: FractionalScaleManagerState,
+    pub presentation_state: PresentationState,
+    pub xdg_activation_state: XdgActivationState,
+    pub cursor_shape_state: CursorShapeManagerState,
+    pub foreign_toplevel_state: ForeignToplevelListState,
+    pub session_lock: crate::session_lock::SessionLock,
+    pub idle: crate::idle::Idle,
+    /// Dim, display sleep, the lock after it and system sleep (`power`, `display_power`).
+    pub power: crate::power::Power,
+    /// The application being quit before a log out (`quit`, `org.cupertino.Session1`).
+    pub quit: crate::quit::Quit,
+    /// The watched settings files and what they held (`live`).
+    pub live: crate::live::LiveSettings,
+    pub dmabuf_state: DmabufState,
+    pub dmabuf_global: Option<DmabufGlobal>,
+    pub popups: PopupManager,
+
+    pub seat: Seat<Cupertino>,
+    pub pointer: PointerHandle<Cupertino>,
+    pub pointer_mode: PointerMode,
+    /// Buttons whose press the server consumed and whose release it consumes too, so no client gets a release without its press.
+    pub consumed_buttons: Vec<u32>,
+    /// Model time of the last key press (not a modifier) or button press: the user event the
+    /// activation-token rule compares tokens with.
+    pub last_user_event: Option<f64>,
+    /// A server move or resize waiting for the pointer to leave the drag-start box.
+    pub pending_drag: Option<crate::events::PendingDrag>,
+    pub cursor_status: CursorImageStatus,
+    pub cursor_loader: CursorLoader,
+    /// Shake to locate (`cursor`).
+    pub cursor_shake: crate::cursor::CursorShake,
+    pub drag_icon: Option<(WlSurface, Point<i32, Logical>)>,
+    pub key_router: KeyRouter,
+    /// Input-source HUD and accent popup.
+    pub overlays: Overlays,
+    pub caps: CapsDebounce,
+    /// Slow keys, sticky keys, mouse keys, the globe key and the compositor's key repeat (`kbd_filters`).
+    pub key_filters: crate::kbd_filters::KeyFilters,
+    /// `zwp_text_input_v3` / `zwp_input_method_v2` globals (only with an accent table, see `input_method`).
+    pub text_input_state: Option<smithay::wayland::text_input::TextInputManagerState>,
+    pub input_method_state: Option<smithay::wayland::input_method::InputMethodManagerState>,
+    pub input_method: Option<crate::input_method::ImBridge>,
+    /// Text cursor rectangle of the focused application (surface-local), from its text input.
+    pub text_cursor: Option<Rectangle<i32, Logical>>,
+    /// Time (ms) of the held-back caps-lock press.
+    pub caps_press_time: u32,
+    pub gestures: cupertino_input::GestureRecognizer,
+    /// Acceleration state of the relative pointing devices, by device id.
+    pub pointer_devices: HashMap<String, crate::events::PointerDevice>,
+    /// Touchpad gesture events are being forwarded to the focused client (not claimed yet).
+    pub gesture_forwarded: bool,
+    pub gesture_source: crate::events::GestureSource,
+    pub gesture_output: Option<OutputId>,
+    pub hot_corners: cupertino_input::HotCorners,
+    pub bar_edge: cupertino_input::EdgeReveal,
+    pub desktop: DesktopIndex,
+    pub menu_bars: MenuBars,
+    pub docks: Docks,
+    pub sessions: SessionObservers,
+    /// `cupertino_scroll_v1`: the scroll objects of the clients.
+    pub scroll_counts: ScrollObservers,
+    /// Reduce Motion, Reduce Transparency, Increase Contrast, the colour filter (`accessibility.conf`).
+    pub accessibility: crate::accessibility::Accessibility,
+    /// The window manager process's objects and the stage placements they committed.
+    pub window_managers: WindowManagers,
+    /// Where new windows open: centring and the per-application cascade.
+    pub cascade: policy::Cascade,
+    /// The layer surface that asked for the keyboard exclusively (layer-shell) and still has it.
+    pub exclusive_layer: Option<WlSurface>,
+    pub dbus: Option<DbusHandle>,
+    pub menu_protocols: MenuProtocols,
+    /// The heads the backends found, their configuration and the output-management protocols.
+    pub displays: crate::displays::Displays,
+    pub shell_v1: ShellV1Global,
+    pub supervisor: Supervisor,
+    /// Screen capture for the screenshot process: its globals, sessions and pending frames.
+    pub capture: crate::capture::Capture,
+
+    pub wm: Wm,
+    pub decor: Decor,
+    pub fx: Effects,
+    pub windows: Vec<WindowEntry>,
+    pub outputs: Vec<OutputEntry>,
+    pub shell: Shell,
+    pub render: Option<RenderResources>,
+    pub backend: Option<Backend>,
+    pub next_window: u64,
+    pub next_output: u64,
+    pub screenshot_requests: Vec<std::path::PathBuf>,
+    pub exit_after_screenshot: bool,
+    /// Replaces the clock for the model and animations (deterministic tests, frame stepping).
+    pub fixed_time: Option<f64>,
+    /// Model time runs at this multiple of the wall clock (slow motion for inspection, 1.0 = real
+    /// time) starting from `time_origin`.
+    pub time_scale: f64,
+    pub(crate) time_origin: f64,
+}
+
+impl Cupertino {
+    pub fn new(
+        display: Display<Cupertino>,
+        loop_handle: LoopHandle<'static, Cupertino>,
+        loop_signal: LoopSignal,
+        config: Config,
+        listen_on_socket: bool,
+        assets: &Assets,
+    ) -> Result<Self> {
+        let dh = display.handle();
+        let clock = Clock::new();
+
+        let socket_name = if listen_on_socket {
+            let source = ListeningSocketSource::new_auto().context("creating the wayland socket")?;
+            let name = source.socket_name().to_string_lossy().into_owned();
+            loop_handle
+                .insert_source(source, |stream, _, state| {
+                    if let Err(e) = state.display_handle.insert_client(stream, Arc::new(ClientState::default())) {
+                        tracing::warn!(error = %e, "adding wayland client failed");
+                    }
+                })
+                .map_err(|e| anyhow::anyhow!("inserting socket source: {e}"))?;
+            tracing::info!(socket = %name, "listening");
+            Some(name)
+        } else {
+            None
+        };
+        loop_handle
+            .insert_source(Generic::new(display, Interest::READ, Mode::Level), |_, display, state| {
+                // Safety: the display is never dropped while the source is installed.
+                unsafe {
+                    display.get_mut().dispatch_clients(state).expect("dispatching wayland clients");
+                }
+                state.clipboard_check_owner();
+                Ok(PostAction::Continue)
+            })
+            .map_err(|e| anyhow::anyhow!("inserting display source: {e}"))?;
+
+        let compositor_state = CompositorState::new::<Self>(&dh);
+        let xdg_shell_state = XdgShellState::new::<Self>(&dh);
+        let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
+        let xdg_dialog_state = XdgDialogState::new::<Self>(&dh);
+        let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
+        let shm_state = ShmState::new::<Self>(&dh, vec![]);
+        let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
+        let data_device_state = DataDeviceState::new::<Self>(&dh);
+        let primary_selection_state = PrimarySelectionState::new::<Self>(&dh);
+        let (ext_data_control_state, wlr_data_control_state) = crate::clipboard::data_control_states(&dh, &primary_selection_state);
+        let viewporter_state = ViewporterState::new::<Self>(&dh);
+        let fractional_scale_state = FractionalScaleManagerState::new::<Self>(&dh);
+        let presentation_state = PresentationState::new::<Self>(&dh, clock.id() as u32);
+        let xdg_activation_state = XdgActivationState::new::<Self>(&dh);
+        let cursor_shape_state = CursorShapeManagerState::new::<Self>(&dh);
+        let foreign_toplevel_state = ForeignToplevelListState::new::<Self>(&dh);
+        let session_lock = crate::session_lock::SessionLock::new(&dh);
+        let idle = crate::idle::Idle::new(
+            smithay::wayland::idle_notify::IdleNotifierState::new(&dh, loop_handle.clone()),
+            smithay::wayland::idle_inhibit::IdleInhibitManagerState::new::<Self>(&dh),
+        );
+        let power = crate::power::Power::new(crate::display_power::IdlePolicy::new(config.power, policy::clock_seconds(std::time::Duration::from(clock.now()))));
+        let _ = PointerGesturesState::new::<Self>(&dh);
+        let _ = RelativePointerManagerState::new::<Self>(&dh);
+
+        let mut seat_state = SeatState::new();
+        let mut seat = seat_state.new_wl_seat(&dh, "seat0");
+        let pointer = seat.add_pointer();
+        let repeat = config.keyboard.repeat_info();
+        seat.add_keyboard(XkbConfig::default(), repeat.delay, repeat.rate)
+            .map_err(|e| anyhow::anyhow!("initialising the keyboard: {e:?}"))?;
+
+        let mut wm_config = WmConfig::default();
+        set_minimize_timing(&mut wm_config, config.effects);
+        let wm = Wm::new(wm_config);
+        let decor = Decor::new(config.appearance, assets)?;
+        let fx = Effects::new(config.effects);
+        let key_router = KeyRouter::new(config.keybindings.clone());
+        let hot_corner_config = config.hot_corners.clone();
+        let shell = Shell::default();
+        let menu_protocols = MenuProtocols::new(&dh);
+        let displays = crate::displays::Displays::new(&dh);
+        let shell_v1 = ShellV1Global::new(&dh);
+        let capture = crate::capture::Capture::new(&dh);
+        let scroll_counts = ScrollObservers::new(&dh);
+        let supervisor = Supervisor::new(&config.shell_processes, std::time::Instant::now());
+        let menu_bars = MenuBars::new(config.shell.menu_bar_height);
+
+        let overlays = Overlays::new(&config, &decor.decorations().config.typography, assets)?;
+        let caps = CapsDebounce::new(config.keyboard.caps, config.keyboard.caps_switch_hold());
+        let key_filters = crate::kbd_filters::KeyFilters::new(&config.keyboard);
+        let cursor_loader = CursorLoader::load(assets.cursor_theme(), config.pointer.cursor_colors);
+        let with_bridge = overlays.accent.has_table();
+        let text_input_state = with_bridge.then(|| smithay::wayland::text_input::TextInputManagerState::new::<Self>(&dh));
+        let input_method_state = with_bridge
+            .then(|| smithay::wayland::input_method::InputMethodManagerState::new::<Self, _>(&dh, |client| client.get_data::<ClientState>().is_some_and(|c| c.internal)));
+        let mut me = Self {
+            display_handle: dh,
+            loop_handle,
+            loop_signal,
+            clock,
+            config,
+            socket_name,
+            running: true,
+            compositor_state,
+            xdg_shell_state,
+            xdg_decoration_state,
+            xdg_dialog_state,
+            layer_shell_state,
+            shm_state,
+            output_manager_state,
+            seat_state,
+            data_device_state,
+            primary_selection_state,
+            ext_data_control_state,
+            wlr_data_control_state,
+            clipboard: crate::clipboard::Clipboard::default(),
+            viewporter_state,
+            fractional_scale_state,
+            presentation_state,
+            xdg_activation_state,
+            cursor_shape_state,
+            foreign_toplevel_state,
+            session_lock,
+            idle,
+            power,
+            quit: crate::quit::Quit::default(),
+            live: crate::live::LiveSettings::default(),
+            dmabuf_state: DmabufState::new(),
+            dmabuf_global: None,
+            popups: PopupManager::default(),
+            seat,
+            pointer,
+            pointer_mode: PointerMode::Normal,
+            consumed_buttons: Vec::new(),
+            last_user_event: None,
+            pending_drag: None,
+            cursor_status: CursorImageStatus::default_named(),
+            cursor_loader,
+            cursor_shake: crate::cursor::CursorShake::default(),
+            drag_icon: None,
+            key_router,
+            overlays,
+            caps,
+            key_filters,
+            text_input_state,
+            input_method_state,
+            input_method: None,
+            text_cursor: None,
+            caps_press_time: 0,
+            gestures: cupertino_input::GestureRecognizer::new(cupertino_input::GestureConfig::default()),
+            pointer_devices: HashMap::new(),
+            gesture_forwarded: false,
+            gesture_source: Default::default(),
+            gesture_output: None,
+            hot_corners: cupertino_input::HotCorners::new(hot_corner_config),
+            bar_edge: cupertino_input::EdgeReveal::new(cupertino_input::EdgeConfig::menu_bar()),
+            desktop: DesktopIndex::load(),
+            menu_bars,
+            docks: Docks::default(),
+            sessions: SessionObservers::default(),
+            scroll_counts,
+            accessibility: crate::accessibility::Accessibility::default(),
+            window_managers: WindowManagers::new(&cupertino_stage::StageConfig::default()),
+            cascade: policy::Cascade::default(),
+            exclusive_layer: None,
+            dbus: None,
+            menu_protocols,
+            displays,
+            shell_v1,
+            supervisor,
+            capture,
+            wm,
+            decor,
+            fx,
+            windows: Vec::new(),
+            outputs: Vec::new(),
+            shell,
+            render: None,
+            backend: None,
+            next_window: 1,
+            next_output: 1,
+            screenshot_requests: Vec::new(),
+            exit_after_screenshot: false,
+            fixed_time: None,
+            time_scale: 1.0,
+            time_origin: policy::clock_seconds(std::time::Duration::from(Clock::<Monotonic>::new().now())),
+        };
+        me.apply_keyboard_settings();
+        Ok(me)
+    }
+
+    // ---- time ----------------------------------------------------------------------------
+
+    /// Start of the scaled model clock (seconds on the monotonic clock).
+    pub fn time_origin(&self) -> f64 {
+        self.time_origin
+    }
+
+    /// Model time in seconds on the presentation clock (monotonic).
+    pub fn now(&self) -> f64 {
+        if let Some(t) = self.fixed_time {
+            return t;
+        }
+        let t = policy::clock_seconds(std::time::Duration::from(self.clock.now()));
+        if (self.time_scale - 1.0).abs() < 1e-12 {
+            t
+        } else {
+            self.time_origin + (t - self.time_origin) * self.time_scale
+        }
+    }
+
+    pub fn request_redraw(&mut self) {
+        for o in &mut self.outputs {
+            o.redraw = true;
+        }
+    }
+
+    // ---- outputs -------------------------------------------------------------------------
+
+    /// Register an output of `mode` at `scale` and `transform` with its top-left corner at
+    /// `position` in the global logical space. Returns its model id. Outputs are created for the
+    /// enabled heads of `crate::displays`.
+    pub fn add_output(&mut self, name: &str, physical: PhysicalProperties, mode: OutputMode, scale: f64, transform: Transform, position: (i32, i32)) -> OutputId {
+        let output = Output::new(name.to_string(), physical);
+        let global = output.create_global::<Self>(&self.display_handle);
+        output.change_current_state(Some(mode), Some(transform), Some(OutputScale::Fractional(scale)), Some(position.into()));
+        output.set_preferred(mode);
+        let id = OutputId(self.next_output);
+        self.next_output += 1;
+        let rect = output_rect(mode, scale, transform, position);
+        let tracker = OutputDamageTracker::from_output(&output);
+        self.outputs.push(OutputEntry { output: output.clone(), id, rect, scale, tracker, cache: ElementCache::default(), redraw: true, global: Some(global), lock: Default::default() });
+        let now = self.now();
+        self.menu_bars.set.add_output(id, rect, now);
+        let usable = self.usable_area(id);
+        let fx = self.wm.handle(Command::AddOutput { output: id, rect, usable }, now);
+        self.apply_effects(fx);
+        self.refresh_usable_area(id);
+        id
+    }
+
+    /// Remove an output (hot-unplug): its windows move to the first remaining output.
+    pub fn remove_output(&mut self, id: OutputId) {
+        let Some(idx) = self.outputs.iter().position(|o| o.id == id) else { return };
+        let entry = self.outputs.remove(idx);
+        let now = self.now();
+        self.menu_bars.remove_output(id, now);
+        self.docks.remove_output(id);
+        self.window_managers.remove_output(id);
+        if let Some(g) = entry.global {
+            self.display_handle.remove_global::<Self>(g);
+        }
+        let now = self.now();
+        let fx = self.wm.handle(Command::RemoveOutput { output: id }, now);
+        self.apply_effects(fx);
+        self.request_redraw();
+    }
+
+    /// Give an output a new mode, scale, transform or position (a nested window resized, an
+    /// output configuration applied): its layer surfaces, lock surface, menu bar and windows follow.
+    pub fn configure_output(&mut self, id: OutputId, mode: OutputMode, scale: f64, transform: Transform, position: (i32, i32)) {
+        let Some(idx) = self.outputs.iter().position(|o| o.id == id) else { return };
+        let entry = &mut self.outputs[idx];
+        entry.output.change_current_state(Some(mode), Some(transform), Some(OutputScale::Fractional(scale)), Some(position.into()));
+        entry.output.set_preferred(mode);
+        entry.scale = scale;
+        entry.rect = output_rect(mode, scale, transform, position);
+        entry.tracker = OutputDamageTracker::from_output(&entry.output);
+        entry.redraw = true;
+        let rect = entry.rect;
+        layer_map_for_output(&entry.output).arrange();
+        self.configure_lock_surface(idx);
+        self.menu_bars.set.set_output_rect(id, rect);
+        let usable = self.usable_area(id);
+        self.command(Command::SetOutputRect { output: id, rect, usable });
+        self.refresh_usable_area(id);
+        self.request_redraw();
+    }
+
+    pub fn output_entry(&self, id: OutputId) -> Option<&OutputEntry> {
+        self.outputs.iter().find(|o| o.id == id)
+    }
+
+    pub fn output_by_wl(&self, output: &Output) -> Option<&OutputEntry> {
+        self.outputs.iter().find(|o| &o.output == output)
+    }
+
+    /// Output containing `p` (global logical coordinates), else the nearest one.
+    pub fn output_at(&self, p: Point<f64, Logical>) -> Option<&OutputEntry> {
+        let pt = MPoint::new(p.x, p.y);
+        self.outputs
+            .iter()
+            .find(|o| o.rect.contains(pt))
+            .or_else(|| {
+                self.outputs.iter().min_by(|a, b| {
+                    let d = |o: &OutputEntry| {
+                        let dx = (pt.x - pt.x.clamp(o.rect.x, o.rect.right())).abs();
+                        let dy = (pt.y - pt.y.clamp(o.rect.y, o.rect.bottom())).abs();
+                        dx + dy
+                    };
+                    d(a).total_cmp(&d(b))
+                })
+            })
+    }
+
+    pub fn primary_output(&self) -> Option<&OutputEntry> {
+        self.outputs.first()
+    }
+
+    /// Area available to windows on `id` (menu bar and layer-shell zones removed; the dock's
+    /// exclusive zone is one of them).
+    pub fn usable_area(&self, id: OutputId) -> Rect {
+        let Some(o) = self.output_entry(id) else { return Rect::default() };
+        let menu = if self.config.shell.show_menu_bar { self.menu_bars.reserved_height(id) } else { 0.0 };
+        let zone = {
+            let map = layer_map_for_output(&o.output);
+            let z = map.non_exclusive_zone();
+            (z.size.w > 0 && z.size.h > 0).then(|| Rect::new(o.rect.x + z.loc.x as f64, o.rect.y + z.loc.y as f64, z.size.w as f64, z.size.h as f64))
+        };
+        shell::usable_area(o.rect, menu, zone)
+    }
+
+    pub fn refresh_usable_area(&mut self, id: OutputId) {
+        let usable = self.usable_area(id);
+        let now = self.now();
+        let fx = self.wm.handle(Command::SetUsableArea { output: id, usable }, now);
+        self.apply_effects(fx);
+        let fx = self.wm.handle(Command::SetDockZone { output: id, zone: self.dock_rect(id) }, now);
+        self.apply_effects(fx);
+        self.refresh_window_managers();
+    }
+
+    // ---- windows -------------------------------------------------------------------------
+
+    pub fn entry(&self, id: WindowId) -> Option<&WindowEntry> {
+        self.windows.iter().find(|w| w.id == id)
+    }
+
+    pub fn entry_for_surface(&self, surface: &WlSurface) -> Option<&WindowEntry> {
+        self.windows.iter().find(|w| w.has_surface(surface))
+    }
+
+    pub fn window_id_for_surface(&self, surface: &WlSurface) -> Option<WindowId> {
+        self.entry_for_surface(surface).map(|w| w.id)
+    }
+
+    /// Toplevel root of any surface in a window's tree (subsurface or popup child).
+    pub fn root_window_surface(&self, surface: &WlSurface) -> Option<WlSurface> {
+        let mut root = surface.clone();
+        while let Some(parent) = smithay::wayland::compositor::get_parent(&root) {
+            root = parent;
+        }
+        if self.entry_for_surface(&root).is_some() {
+            return Some(root);
+        }
+        self.popups.find_popup(surface).and_then(|p| smithay::desktop::find_popup_root_surface(&p).ok())
+    }
+
+    /// Called on a toplevel commit: sends the initial configure, maps the window once it has a
+    /// buffer and tracks unmapping.
+    pub fn toplevel_committed(&mut self, surface: &WlSurface) {
+        let Some(idx) = self.windows.iter().position(|w| w.has_surface(surface)) else { return };
+        let initial_sent = with_states(surface, |s| {
+            s.data_map.get::<XdgToplevelSurfaceData>().map(|d| d.lock().unwrap().initial_configure_sent).unwrap_or(false)
+        });
+        if !initial_sent {
+            use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+            let t = &self.windows[idx].toplevel;
+            if self.windows[idx].server_side {
+                t.with_pending_state(|st| st.decoration_mode = Some(Mode::ServerSide));
+            }
+            t.send_configure();
+            return;
+        }
+        let has_buffer = smithay::backend::renderer::utils::with_renderer_surface_state(surface, |s| s.buffer().is_some()).unwrap_or(false);
+        let (mapped, id) = (self.windows[idx].mapped, self.windows[idx].id);
+        match (mapped, has_buffer) {
+            (false, true) => self.map_window(idx),
+            (true, false) => {
+                self.windows[idx].mapped = false;
+                let now = self.now();
+                let fx = self.wm.handle(Command::Destroy { window: id }, now);
+                self.apply_effects(fx);
+            }
+            (true, true) => {
+                self.windows[idx].window.on_commit();
+                self.refresh_snapshot(id);
+                let (min, max) = frame_limits(self.windows[idx].insets, size_hints(surface));
+                let now = self.now();
+                let fx = self.wm.handle(Command::SetSizeHints { window: id, min, max, content: None }, now);
+                self.apply_effects(fx);
+            }
+            (false, false) => {}
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn map_window(&mut self, idx: usize) {
+        let surface = self.windows[idx].surface().clone();
+        let id = self.windows[idx].id;
+        let (app_id, title) = with_states(&surface, |s| {
+            let d = s.data_map.get::<XdgToplevelSurfaceData>().unwrap().lock().unwrap();
+            (d.app_id.clone(), d.title.clone())
+        });
+        let identity = policy::app_identity(app_id.as_deref(), title.as_deref());
+        self.windows[idx].window.on_commit();
+        let geo = self.windows[idx].window.geometry();
+        let (min, max) = frame_limits(self.windows[idx].insets, size_hints(&surface));
+        // the protocol facts the window kind is chosen from (`cupertino_wm::window_kind`): parent and
+        // modality; Wayland has no utility-window signal
+        let parent = self.windows[idx].toplevel.parent().and_then(|p| self.window_id_for_surface(&p));
+        let output = self
+            .output_at(self.pointer.current_location())
+            .map(|o| o.id)
+            .or_else(|| self.outputs.first().map(|o| o.id));
+        let Some(output) = output else { return };
+        let (screen, usable) = self.wm.output(output).map(|o| (o.rect, o.usable)).unwrap_or_default();
+        // the visible frame new windows are placed in: the stage frame while the stage is on
+        let visible = if self.window_managers.stage_active(output) { cupertino_stage::StageConfig::default().stage_frame(usable) } else { usable };
+        let ins = self.windows[idx].insets;
+        let size = (geo.size.w > 0 && geo.size.h > 0).then(|| Size::new(geo.size.w as f64 + ins.horizontal(), geo.size.h as f64 + ins.vertical()));
+        let size = policy::new_window_size(visible, size, &self.config);
+        let frame = if parent.is_some() {
+            // the model places child windows itself (sheets, dialogs)
+            policy::centred(visible, size)
+        } else {
+            self.cascade.retain(|w| self.wm.window(w).is_some());
+            self.cascade.place(&identity, id, size, visible, screen, self.config.cascade_step)
+        };
+        let mut params = MapParams::new(id, &identity, frame);
+        params.title = title.unwrap_or_default();
+        params.min_size = min;
+        params.max_size = max;
+        params.parent = parent;
+        params.modal = self.windows[idx].modal;
+        // the model turns a modal child into a sheet and places dialogs
+        params.kind = cupertino_wm::window_kind(params.modal, false);
+        params.output = Some(output);
+        self.windows[idx].mapped = true;
+        self.apply_pending_menu_addresses(id.0, &surface);
+        let handle = self.foreign_toplevel_state.new_toplevel::<Self>(&params.title, &identity);
+        self.windows[idx].foreign = Some(handle);
+        let now = self.now();
+        let fx = self.wm.handle(Command::Map(params), now);
+        self.apply_effects(fx);
+    }
+
+    /// Insets for a window decorated by the compositor with a title bar of `style`.
+    pub fn decoration_insets(&self, style: cupertino_decorations::TitlebarStyle) -> crate::config::Insets {
+        if self.config.window.decorations {
+            self.decor.insets(style)
+        } else {
+            self.config.window.ssd_insets
+        }
+    }
+
+    /// The cursor of the resize zone `edge` of window `id` at its size now, `None` where it cannot resize that way
+    /// (`decor::resize_cursor`).
+    pub fn resize_cursor(&self, id: WindowId, edge: cupertino_decorations::ResizeEdge) -> Option<smithay::input::pointer::CursorIcon> {
+        let w = self.wm.window(id)?;
+        let (min, max) = w.size_limits();
+        let f = w.geometry();
+        crate::decor::resize_cursor(edge, crate::decor::AxisFreedom::of(f.w, min.w, max.w), crate::decor::AxisFreedom::of(f.h, min.h, max.h))
+    }
+
+    /// What is under `pos` (global logical), from the top down: an override-redirect surface, then per window, in
+    /// this order: the window control buttons of a unified bar, the window's popups, the resize zones (3 pt
+    /// inside to 4 pt outside the frame, also for a client-decorated window, measured from its window geometry), the
+    /// client's surface inside the frame, the title bar and buttons of a server-decorated window. Outside the frame and
+    /// its resize band a window takes no input: a client-drawn shadow passes the pointer to what lies below.
+    pub fn window_target_under(&self, pos: Point<f64, Logical>) -> Option<WindowTarget> {
+        if self.session_lock.is_active() {
+            return None;
+        }
+        let out = self.output_at(pos)?;
+        let now = self.now();
+        let list = crate::render::scene::windows_on_output(&self.wm, out.id, out.rect.w, crate::render::motion::WorkspaceTransition::for_options(self.display_options()), now);
+        for (id, slide, _) in list.into_iter().rev() {
+            // strip thumbnails and hidden windows take no input of their clients (`window_manager_press`)
+            if self.window_managers.passes_input(id) {
+                continue;
+            }
+            let Some(entry) = self.entry(id) else { continue };
+            let Some((plan, _)) = crate::render::scene::plan_for(&self.wm, entry, slide, now, &self.fx, self.display_options()) else { continue };
+            let geo = entry.window.geometry();
+            let ins = entry.insets;
+            let origin = Point::<f64, Logical>::from((plan.visual.x + ins.left - geo.loc.x as f64, plan.visual.y + ins.top - geo.loc.y as f64));
+            let style = entry.titlebar;
+            let decorated = entry.server_side && self.config.window.decorations && plan.exact && (ins.top > 0.0 || style == cupertino_decorations::TitlebarStyle::Unified);
+            let decoration_hit = |resize: bool| {
+                let content = (f64::from(geo.size.w), f64::from(geo.size.h));
+                let local = (pos.x - plan.visual.x, pos.y - plan.visual.y);
+                (self.decor.hit_test(style, content, local, resize), content, local)
+            };
+            // the window control buttons of a unified bar lie over the client's surface and take the pointer first
+            if decorated && style == cupertino_decorations::TitlebarStyle::Unified {
+                let (hit, content, local) = decoration_hit(false);
+                if matches!(hit, cupertino_decorations::Hit::Button(_)) {
+                    return Some(WindowTarget::Decoration { id, style, hit, content, local });
+                }
+            }
+            // popups lie above the window and its resize band
+            if let Some((surface, loc)) = entry.window.surface_under(pos - origin, WindowSurfaceType::POPUP) {
+                return Some(WindowTarget::Surface { id, surface, origin: origin + loc.to_f64() });
+            }
+            // the resize zones, where the window can resize that way (the cursor follows; dropping the zone with the cursor is)
+            let edge = if decorated {
+                match decoration_hit(true).0 {
+                    cupertino_decorations::Hit::Resize(edge) => Some(edge),
+                    _ => None,
+                }
+            } else if plan.exact && (!entry.server_side || !self.config.window.decorations || ins.top == 0.0) {
+                // a client-decorated toplevel draws its own title bar: titled, the band reaches outside its window
+                // geometry; a window of ours without a title bar is untitled and has the inside band only
+                let local = (pos.x - plan.visual.x, pos.y - plan.visual.y);
+                self.decor.resize_hit((plan.visual.w, plan.visual.h), local, !entry.server_side)
+            } else {
+                None
+            };
+            if let Some(edge) = edge.filter(|e| self.resize_cursor(id, *e).is_some()) {
+                let content = (f64::from(geo.size.w), f64::from(geo.size.h));
+                let local = (pos.x - plan.visual.x, pos.y - plan.visual.y);
+                return Some(WindowTarget::Decoration { id, style, hit: cupertino_decorations::Hit::Resize(edge), content, local });
+            }
+            let v = plan.visual;
+            let in_frame = pos.x >= v.x && pos.x < v.x + v.w && pos.y >= v.y && pos.y < v.y + v.h;
+            if in_frame {
+                if let Some((surface, loc)) = entry.window.surface_under(pos - origin, WindowSurfaceType::TOPLEVEL | WindowSurfaceType::SUBSURFACE) {
+                    return Some(WindowTarget::Surface { id, surface, origin: origin + loc.to_f64() });
+                }
+            }
+            if decorated {
+                let (hit, content, local) = decoration_hit(false);
+                if matches!(hit, cupertino_decorations::Hit::Button(_) | cupertino_decorations::Hit::Titlebar) {
+                    return Some(WindowTarget::Decoration { id, style, hit, content, local });
+                }
+            }
+        }
+        None
+    }
+
+    /// Window id under `pos` (global logical), with the surface and its origin, from the topmost
+    /// window down. Popups of a window are part of it.
+    pub fn window_surface_under(&self, pos: Point<f64, Logical>) -> Option<(WindowId, WlSurface, Point<f64, Logical>)> {
+        match self.window_target_under(pos)? {
+            WindowTarget::Surface { id, surface, origin } => Some((id, surface, origin)),
+            WindowTarget::Decoration { .. } => None,
+        }
+    }
+
+    /// Pointer focus target under `pos`: overlay layer surfaces, override-redirect surfaces, top
+    /// layer surfaces, windows, layer surfaces below (the drawing order).
+    pub fn surface_under(&self, pos: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>)> {
+        if self.session_lock.is_active() {
+            return self.lock_surface_under(pos);
+        }
+        let out = self.output_at(pos)?;
+        let now = self.now();
+        let rel = pos - Point::from((out.rect.x, out.rect.y));
+        let origin = Point::<f64, Logical>::from((out.rect.x, out.rect.y));
+        let layer_hit = |layers: &[Layer]| {
+            let map = layer_map_for_output(&out.output);
+            // every surface of a layer, topmost first: one whose box holds the point but whose input region does not
+            // (an overlay strip with an empty region) must not hide the surfaces below it
+            for l in layers {
+                for surface in map.layers_on(*l).rev() {
+                    let geo = map.layer_geometry(surface)?;
+                    // a menu bar is offset while it hides or reveals
+                    let shift = Point::<f64, Logical>::from((0.0, self.menu_bars.look(surface.wl_surface(), out.rect.y, now).map_or(0.0, |l| l.dy)));
+                    if let Some((s, loc)) = surface.surface_under(rel - geo.loc.to_f64() - shift, WindowSurfaceType::ALL) {
+                        return Some((s, origin + (geo.loc + loc).to_f64() + shift));
+                    }
+                }
+            }
+            None
+        };
+        if let Some(hit) = layer_hit(&[Layer::Overlay]).or_else(|| layer_hit(&[Layer::Top])) {
+            return Some(hit);
+        }
+        if self.shell.overview_open() {
+            return None;
+        }
+        match self.window_target_under(pos) {
+            Some(WindowTarget::Surface { surface, origin, .. }) => return Some((surface, origin)),
+            Some(WindowTarget::Decoration { .. }) => return None,
+            None => {}
+        }
+        layer_hit(&[Layer::Bottom, Layer::Background])
+    }
+
+    // ---- model effects ---------------------------------------------------------------------
+
+    pub fn command(&mut self, cmd: Command) {
+        let now = self.now();
+        // a minimize without a target (key binding, action) flies into the dock's slot
+        let cmd = match cmd {
+            Command::Minimize { window, target: None } => Command::Minimize { window, target: self.minimize_target(window) },
+            other => other,
+        };
+        let fx = self.wm.handle(cmd, now);
+        self.apply_effects(fx);
+    }
+
+    pub fn commands(&mut self, cmds: Vec<Command>) {
+        for c in cmds {
+            self.command(c);
+        }
+    }
+
+    /// Advance the model to now and apply the resulting effects.
+    pub fn tick(&mut self) {
+        let now = self.now();
+        self.tick_session_lock();
+        self.idle.refresh_inhibition();
+        self.tick_display_power();
+        self.tick_quit();
+        let fx = self.wm.tick(now);
+        self.apply_effects(fx);
+        self.fx.tick(now);
+        self.tick_window_managers(now);
+        self.tick_menu_bars(now);
+        self.tick_input_timers(now);
+        self.tick_overlays(now);
+        // windows without a close transform are skipped by `refresh_snapshot`
+        let missing: Vec<WindowId> = self.windows.iter().filter(|e| e.mapped && self.fx.snapshot_age(e.id, now).is_infinite()).map(|e| e.id).collect();
+        for id in missing {
+            self.refresh_snapshot(id);
+        }
+        if self.shell.overview.as_ref().is_some_and(|o| o.closing && !o.is_animating(now)) {
+            self.shell.overview = None;
+            self.request_redraw();
+        }
+        if self.wm.wants_tick(now) || self.shell.wants_tick(now) || self.fx.wants_tick(now) || self.window_managers.wants_tick(now) || self.menu_bars_want_tick(now) || self.overlays.wants_tick() {
+            self.request_redraw();
+        }
+    }
+
+    pub fn wants_frames(&self) -> bool {
+        let now = self.now();
+        self.wm.wants_tick(now) || self.shell.wants_tick(now) || self.fx.wants_tick(now) || self.window_managers.wants_tick(now) || self.menu_bars_want_tick(now) || self.overlays.wants_tick() || self.power.policy().animating(now) || self.outputs.iter().any(|o| o.redraw)
+    }
+
+    pub fn apply_effects(&mut self, effects: Vec<Effect>) {
+        let mut redraw = false;
+        for fx in effects {
+            redraw = true;
+            match fx {
+                Effect::Configure { window, size, states } => {
+                    let activated = self.wm.key_window() == Some(window);
+                    if let Some(e) = self.entry(window) {
+                        let pos = self.wm.window(window).map(|w| w.geometry()).unwrap_or_default();
+                        e.configure(Rect::new(pos.x, pos.y, size.w, size.h), &states, activated);
+                    }
+                }
+                Effect::RequestClose { window } => {
+                    if let Some(e) = self.entry(window) {
+                        e.close();
+                    }
+                }
+                Effect::Focus { window } => {
+                    // an exclusive layer surface keeps the keyboard; the key window gets it when
+                    // the layer lets go (`layer_keyboard_exclusivity`)
+                    if self.exclusive_layer.is_none() {
+                        let surface = window.and_then(|w| self.entry(w)).map(|e| e.surface().clone());
+                        self.set_keyboard_focus(surface);
+                    }
+                    // focus moved elsewhere: the accent popup loses its reason to stay open
+                    self.accent_dismiss();
+                    self.refresh_activation();
+                }
+                Effect::WindowDestroyed { window } => {
+                    if let Some(h) = self.entry(window).and_then(|e| e.foreign.clone()) {
+                        h.send_closed();
+                    }
+                }
+                Effect::SwitcherChanged { apps, selected } => {
+                    let names = apps.iter().filter_map(|a| self.wm.app(*a)).map(|a| a.identity.clone()).collect();
+                    self.switcher_changed(names, selected);
+                }
+                Effect::AppAttention { app } => {
+                    if let Some(a) = self.wm.app(app) {
+                        self.docks.attention(&a.identity);
+                    }
+                }
+                Effect::SwitcherClosed { committed } => self.docks.switcher_closed(committed),
+                // the overview does not survive a workspace switch (the dock's, a shortcut's or a
+                // swipe's); workspace edits reach the dock's bar
+                Effect::WorkspaceSwitched { output, .. } => {
+                    if self.shell.overview_on(output).is_some() {
+                        self.close_overview();
+                    }
+                }
+                Effect::WorkspaceCreated { .. } | Effect::WorkspaceRemoved { .. } | Effect::WorkspacesReordered { .. } => self.send_overview_to_docks(),
+                Effect::Activate { .. }
+                | Effect::AppRegistered { .. }
+                | Effect::WindowStateChanged { .. }
+                | Effect::Attention { .. }
+                | Effect::Place { .. }
+                | Effect::Raise { .. }
+                | Effect::SetVisible { .. }
+                | Effect::StartAnimation { .. }
+                | Effect::SnapPreview { .. } => {}
+            }
+        }
+        if redraw {
+            self.request_redraw();
+            self.refresh_overview_windows();
+            self.refresh_menu_bars();
+            self.refresh_docks();
+            self.refresh_window_managers();
+        }
+    }
+
+    /// Keep the open overview in sync with windows that opened, closed or changed state: a changed
+    /// set goes to the dock for a new layout.
+    fn refresh_overview_windows(&mut self) {
+        let Some(out) = self.shell.overview.as_ref().filter(|s| !s.closing).map(|s| s.output) else { return };
+        let now = self.now();
+        let windows = shell::overview_windows(&self.wm, out, now, self.dock_rect(out));
+        let changed = self.shell.overview.as_mut().is_some_and(|s| s.set_windows(windows));
+        if changed {
+            self.send_overview_to_docks();
+        }
+    }
+
+    /// Make every toplevel's `activated` state match the model's key window.
+    pub fn refresh_activation(&mut self) {
+        let key = self.wm.key_window();
+        for e in &self.windows {
+            e.set_activated(Some(e.id) == key);
+        }
+    }
+
+    pub fn set_keyboard_focus(&mut self, surface: Option<WlSurface>) {
+        if self.session_lock.is_active() && !surface.as_ref().is_some_and(|s| self.is_lock_surface(s)) {
+            return;
+        }
+        let keyboard = self.seat.get_keyboard().unwrap();
+        keyboard.set_focus(self, surface, SERIAL_COUNTER.next_serial());
+    }
+
+    /// Give the keyboard back to the key window.
+    pub fn restore_keyboard_focus(&mut self) {
+        let surface = self.wm.key_window().and_then(|w| self.entry(w)).map(|e| e.surface().clone());
+        self.set_keyboard_focus(surface);
+    }
+
+    /// A layer surface above the windows that asks for exclusive keyboard interactivity takes the
+    /// keyboard; when it stops asking or goes away the key window gets it back.
+    pub fn layer_keyboard_exclusivity(&mut self, surface: &WlSurface, exclusive: bool) {
+        let holds = self.exclusive_layer.as_ref() == Some(surface);
+        if exclusive && !holds {
+            self.exclusive_layer = Some(surface.clone());
+            self.set_keyboard_focus(Some(surface.clone()));
+        } else if !exclusive && holds {
+            self.exclusive_layer = None;
+            // another surface may have taken the focus since: leave it there
+            if self.seat.get_keyboard().unwrap().current_focus().as_ref() == Some(surface) {
+                self.restore_keyboard_focus();
+            }
+        }
+    }
+
+    // ---- actions ---------------------------------------------------------------------------
+
+    pub fn action_context(&self) -> ActionContext {
+        let output = self.output_at(self.pointer.current_location()).map(|o| o.id).or_else(|| self.outputs.first().map(|o| o.id));
+        let (workspaces, current) = output
+            .map(|o| {
+                let list: Vec<_> = self.wm.workspaces(o).iter().map(|w| w.id).collect();
+                let cur = self.wm.current_workspace(o).and_then(|c| list.iter().position(|w| *w == c)).unwrap_or(0);
+                (list, cur)
+            })
+            .unwrap_or_default();
+        let front_app = self.wm.front_app();
+        let front_app_windows = front_app.and_then(|a| self.wm.app(a)).map(|a| a.windows_mru.clone()).unwrap_or_default();
+        ActionContext {
+            key_window: self.wm.key_window(),
+            front_app,
+            front_app_windows,
+            output,
+            switcher_open: self.wm.switcher().is_some(),
+            overview_open: self.shell.overview_open(),
+            workspaces,
+            current_workspace: current,
+            locked: self.session_lock.is_active(),
+        }
+    }
+
+    pub fn execute_plan(&mut self, plan: ActionPlan) {
+        self.commands(plan.commands);
+        for op in plan.ops {
+            match op {
+                ShellOp::ToggleOverview => self.toggle_overview(false),
+                ShellOp::ToggleAppOverview => self.toggle_overview(true),
+                ShellOp::CloseOverview => self.close_overview(),
+                ShellOp::SpawnTerminal => self.spawn_terminal(),
+                ShellOp::Screenshot(request) => self.start_screenshot(request),
+                ShellOp::Quit => {
+                    self.running = false;
+                    self.loop_signal.stop();
+                }
+                ShellOp::SwitchVt(n) => {
+                    if let Some(b) = self.backend.as_mut() {
+                        b.switch_vt(n);
+                    }
+                }
+                ShellOp::ToggleShowDesktop => {
+                    let now = self.now();
+                    self.fx.toggle_show_desktop(now);
+                    self.request_redraw();
+                }
+                ShellOp::ToggleAppGrid => self.docks.toggle_app_grid(),
+                ShellOp::ToggleLauncher => self.toggle_launcher(),
+                ShellOp::ToggleNotificationCenter => self.toggle_notification_center(),
+                ShellOp::ToggleControlPanel => self.toggle_control_panel(),
+                ShellOp::ToggleAppearance => self.toggle_appearance(),
+                ShellOp::ToggleDisplayOption(option) => self.toggle_display_option(option),
+                ShellOp::Osd { key, fine } => self.osd_key(key, fine),
+                ShellOp::InputSource { menu, step } => self.input_source_step(menu, step),
+                ShellOp::FocusMenuBar => self.focus_menu_bar(),
+                ShellOp::ToggleDockAutoHide => self.docks.toggle_auto_hide(),
+                ShellOp::ToggleStage => self.window_managers.toggle_stage(),
+                ShellOp::Exec(i) => {
+                    if let Some(cmd) = self.key_router.bindings.exec_command(i).map(str::to_string) {
+                        self.spawn_command_line(&cmd);
+                    }
+                }
+                ShellOp::Lock => self.lock_session_now(),
+                ShellOp::PowerKey { pressed } => self.power_key(pressed),
+            }
+        }
+    }
+
+    pub fn spawn_terminal(&mut self) {
+        let candidates = self.config.terminals.clone();
+        for t in &candidates {
+            if which(t).is_some() {
+                self.spawn(t, &[]);
+                return;
+            }
+        }
+        tracing::warn!(?candidates, "no terminal emulator found");
+    }
+
+    /// Start a client on this compositor's socket. The application receives an activation token
+    /// so its first window takes focus, and the docks learn which application is launching when
+    /// the program has a desktop entry.
+    pub fn spawn(&mut self, program: &str, args: &[&str]) {
+        let mut cmd = std::process::Command::new(program);
+        cmd.args(args);
+        let token = self.server_activation_token();
+        cmd.env("XDG_ACTIVATION_TOKEN", &token).env("DESKTOP_STARTUP_ID", &token);
+        self.spawn_prepared(cmd);
+    }
+
+    /// Start a prepared command on this compositor's socket.
+    pub fn spawn_prepared(&mut self, mut cmd: std::process::Command) {
+        if let Some(s) = &self.socket_name {
+            cmd.env("WAYLAND_DISPLAY", s);
+        }
+        cmd.env("XDG_SESSION_TYPE", "wayland").env("XDG_CURRENT_DESKTOP", CURRENT_DESKTOP);
+        // clients that draw their own cursors draw them in the asset theme (the only one on their path) at the user cursor
+        // size; without a theme they keep the cursor theme of their environment
+        cmd.env("XCURSOR_SIZE", self.cursor_loader.client_size(self.config.pointer.cursor_scale).to_string());
+        if let Some(theme) = self.cursor_loader.theme() {
+            cmd.env("XCURSOR_THEME", &theme.name).env("XCURSOR_PATH", &theme.search_dir);
+        }
+        // Wayland clients only: an X11 toolkit must not reach the X server of the session around us
+        cmd.env_remove("DISPLAY");
+        let program = cmd.get_program().to_string_lossy().into_owned();
+        // the docks key tiles by desktop entry id; a program without an entry (a script, a shell)
+        // is not an application launch
+        let app_id = std::path::Path::new(&program).file_name().and_then(|n| n.to_str()).and_then(|n| self.desktop.find(n)).map(|e| e.id.clone());
+        match cmd.spawn() {
+            Ok(mut child) => {
+                if let Some(app_id) = app_id {
+                    self.docks.launching(&app_id);
+                }
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
+            Err(e) => tracing::warn!(program, error = %e, "spawning failed"),
+        }
+    }
+
+    /// Run a command line (program and arguments split at whitespace).
+    pub fn spawn_command_line(&mut self, line: &str) {
+        let parts: Vec<String> = line.split_whitespace().map(String::from).collect();
+        if let Some((prog, args)) = parts.split_first() {
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            self.spawn(prog, &args);
+        }
+    }
+
+    pub fn app_identity_of(&self, app: AppId) -> Option<String> {
+        self.wm.app(app).map(|a| a.identity.clone())
+    }
+
+    /// Serial helper.
+    pub fn next_serial(&self) -> Serial {
+        SERIAL_COUNTER.next_serial()
+    }
+
+    pub fn rect_to_logical(r: Rect) -> Rectangle<i32, Logical> {
+        Rectangle::new((r.x.round() as i32, r.y.round() as i32).into(), (r.w.round() as i32, r.h.round() as i32).into())
+    }
+
+    /// Preferred fractional scale for surfaces (the primary output's scale).
+    pub fn preferred_scale(&self) -> f64 {
+        self.outputs.first().map_or(1.0, |o| o.scale)
+    }
+}
+
+/// The rectangle of an output in the global logical space: its mode turned by `transform`, divided
+/// by `scale`, at `position`.
+pub fn output_rect(mode: OutputMode, scale: f64, transform: Transform, position: (i32, i32)) -> Rect {
+    let size = transform.transform_size(mode.size);
+    Rect::new(f64::from(position.0), f64::from(position.1), (f64::from(size.w) / scale).round(), (f64::from(size.h) / scale).round())
+}
+
+/// Size constraints of a toplevel from its cached state (zero means unset).
+/// The client's size limits (`size_hints`) as limits of the frame the window model resizes: the `insets` around the
+/// surface added to every limit that is set (0, no limit, stays 0).
+pub fn frame_limits(insets: crate::config::Insets, (min, max): (Option<Size>, Option<Size>)) -> (Option<Size>, Option<Size>) {
+    let grow = |s: Size| Size::new(if s.w > 0.0 { s.w + insets.horizontal() } else { 0.0 }, if s.h > 0.0 { s.h + insets.vertical() } else { 0.0 });
+    (min.map(grow), max.map(grow))
+}
+
+pub fn size_hints(surface: &WlSurface) -> (Option<Size>, Option<Size>) {
+    use smithay::wayland::shell::xdg::SurfaceCachedState as XdgCached;
+    with_states(surface, |s| {
+        let mut cached = s.cached_state.get::<XdgCached>();
+        let cur = cached.current();
+        let conv = |sz: SmSize<i32, Logical>| (sz.w > 0 || sz.h > 0).then(|| Size::new(sz.w as f64, sz.h as f64));
+        (conv(cur.min_size), conv(cur.max_size))
+    })
+}
+
+pub(crate) fn which(program: &str) -> Option<std::path::PathBuf> {
+    if program.contains('/') {
+        return std::path::Path::new(program).is_file().then(|| program.into());
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).map(|d| d.join(program)).find(|p| p.is_file())
+}
+
+/// Map from output name to the model id used by tests.
+pub type OutputIds = HashMap<String, OutputId>;

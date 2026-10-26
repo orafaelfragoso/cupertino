@@ -1,0 +1,12 @@
+{
+  "default": {
+    "a": { "direction": "right", "strings": ["a", "à", "á", "â", "ä", "æ", "ã", "å", "ā"] },
+    "e": { "direction": "right", "strings": ["e", "è", "é", "ê", "ë", "ē", "ė", "ę"] },
+    "i": { "direction": "right", "strings": ["i", "î", "ï", "í", "ī", "į", "ì"] },
+    "o": { "direction": "right", "strings": ["o", "ô", "ö", "ò", "ó", "œ", "ø", "ō", "õ"] },
+    "u": { "direction": "right", "strings": ["u", "û", "ü", "ù", "ú", "ū"] },
+    "c": { "direction": "right", "strings": ["c", "ç", "ć", "č"] },
+    "n": { "direction": "right", "strings": ["n", "ñ", "ń"] },
+    "s": { "direction": "right", "strings": ["s", "ß", "ś", "š"] }
+  }
+}

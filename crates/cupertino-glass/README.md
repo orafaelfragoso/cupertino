@@ -1,0 +1,119 @@
+# cupertino-glass
+
+Material rendering for the Cupertino compositor: backdrop blur, colour filter chains, fill layers with compositing
+filters and vibrant blending, driven by the recipes of `cupertino-theme`.
+
+## Public API
+
+| Item | Role |
+|---|---|
+| `MaterialRenderer` | library API on an external wgpu `Device`/`Queue`; `render` records into the caller's encoder from a `FrameDesc` and a list of `MaterialRegion`s |
+| `glass-renderer` | headless binary (`--demo`, `--cpu-check`, `--bench N`) |
+| `cpu` | f32 CPU reference of the same pipeline (half-float intermediates emulated) |
+| `shaders/gles/ | GLSL ES 3.00 port of every shader for the compositor's GLES renderer |
+| `display_filter` | the display's colour filter, invert and contrast as a colour chain over a whole output (settings from `cupertino-defaults`) |
+
+## Usage
+
+```rust
+use cupertino_glass::{FrameDesc, MaterialRegion, MaterialRenderer, TargetInit};
+use cupertino_geometry::CornerStyle;
+
+let mut renderer = MaterialRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+let regions = [
+    MaterialRegion::new([60.0, 80.0, 220.0, 420.0], &sidebar_recipe)
+        .with_corner(12.0, CornerStyle::continuous()),
+];
+let mut enc = device.create_command_encoder(&Default::default());
+let stats = renderer.render(&mut enc, &FrameDesc {
+    source: &scene_view, source_size: (w, h),
+    target: &target_view, target_size: (w, h),
+    display_scale: 1.0,
+    damage_generation: generation,   // bump when the source content changes
+    tint_color: wallpaper_average,
+    init: TargetInit::Keep,
+}, &regions);
+queue.submit([enc.finish()]);
+```
+
+## How it works
+
+### Regions and caching
+
+- Each region has a rectangle (target pixels), a `Recipe`, a corner radius and style (circular or continuous, from
+  `cupertino-geometry`) and an opacity.
+- The processed backdrop (downsample pyramid, separable Gaussian, colour filter chain) depends only on the recipe's
+  backdrop settings, the display scale and the source size. Regions share it, and it is cached across frames keyed by
+  `damage_generation`. While the counter is unchanged, no blur pass is encoded (`RenderStats::backdrop_hits` /
+  `backdrop_misses` / `passes_encoded`). Entries unused for 120 frames are dropped, and `invalidate clears the cache.
+- The rounded mask is a signed distance field evaluated in the fragment shader, and anti-aliasing is a one-pixel linear
+  ramp. The shader uses the closed-form first-order distance of `RoundedRect::sdf_approx`.
+- `render` never submits. `source` and `target` must be different textures in non-sRGB formats (values are blended
+  gamma-encoded).
+- `draw_vibrant` draws premultiplied template glyphs with the vibrant blend functions (lighten-sover over
+  colour dodge;: darken-sover over colour burn, plus the reversed nesting). The
+  effect constants `c0`/`c1` are unknown and default to the identity multiplier. `backdrop` must hold a copy of the target
+  content.
+
+### Pipeline
+
+```
+source ─(2× box)→ capture @ backdrop scale ─(2× box pyramid while σ² > 64)→ separable Gaussian
+       ─→ colour chain (luminance curve, saturation, monochrome, display filter ops) ─→ cached backdrop (rgba16float)
+region quad ─ SDF mask ─ base = backdrop (or source) ─ fills with blend modes ─ alpha blend
+```
+
+All stages are full-screen fragment passes (no compute), so each has a direct GLSL ES 3.00 counterpart. The tint layer colour (wallpaper average) is
+approximate and supplied by the caller.
+
+### Display filters
+
+`display_filter::display_filter_ops(&AccessibilitySettings) gives the chain the compositor runs over a whole output
+(backdrop at scale 1 with no blur, then the chain), in the design's order:
+
+| Op | Slots | Effect |
+|---|---|---|
+| `LinearMatrix(m) | 2 (`[4, m00, m01, m02] [m10, m11, m12, m20]`, tail `[7, m21, m22, 0]) | sRGB decode, `m. rgb`, clamp, encode |
+| `Invert` | 1 (`[5, 0, 0, 0]) | `1 - rgb` on encoded values |
+| `Contrast(c) | 1 (`[6, c, 0, 0]) | encoded `[c/2, 1 - c/2]` stretched to `[0, 1]`; `c = 1` is a threshold at 0.5 |
+
+`filter_matrix` builds grayscale, the protanopia / deuteranopia / tritanopia corrections and the tint (HSV hue sector
+table) with the design's `Normalize`. Channel gains, fade, post offsets and reduce white point are not in the chain
+(the design drops the offsets on this path).
+
+### GLSL ES 3.00 port
+
+`shaders/gles/`: `fullscreen.vert`, `downsample.frag`, `blur.frag`, `color.frag`, `blit.frag`,
+`material.vert`, `material.frag`, `vibrant.vert`, `vibrant.frag`. Uniform blocks use std140 and are
+byte-identical to the Rust structs in `src/ops.rs`, so the same buffers work for both back ends.
+Material and vibrant quads are 4-vertex triangle strips (`gl_VertexID`). Samplers: `u_src`,
+`u_source`, `u_backdrop`, `u_glyphs`. When the source/backdrop textures were rendered by GL (row 0 at
+the bottom) set `Region.info.z = 1`.
+
+`tests/shaders.rs` validates the WGSL sources and the GLSL ports with `naga`. Its GLSL front end only accepts the Vulkan
+dialect, so the test first rewrites the ES sources (version line, `gl_VertexID`, location/binding qualifiers,
+texture/sampler split, `precision` statements).
+
+## Tests
+
+```
+cargo test -p cupertino-glass
+```
+
+Tests cover recipe → ops encoding, blur plan, uniform layout, display filter matrices against the
+reference builders, the CPU chain of matrix, invert and contrast, GPU vs CPU PSNR ≥ 60 dB (multi-region frames at scale 1
+and 2), the rounded mask against `cupertino-geometry` coverage, circle area, opacity, backdrop cache hit/miss accounting,
+vibrant blend GPU vs CPU, and WGSL and GLSL ES validation (`tests/shaders.rs`). GPU tests skip (pass) when no adapter is
+available.
+
+## Binary
+
+```
+cargo run --release -p cupertino-glass --bin glass-renderer -- --demo
+cargo run --release -p cupertino-glass --bin glass-renderer -- --material Sidebar --appearance dark \
+    --size 1920x1080 --continuous --radius 12 --cpu-check --bench 200
+```
+
+Images are written to `output/`. `--appearance` accepts `light`, `dark`, `light-high-contrast`,
+`dark-high-contrast`; `--reduce-transparency`, `--window inactive` and `--interaction rollover|pressed`
+select the other recipe variants.

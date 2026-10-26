@@ -1,0 +1,72 @@
+{
+ "timing_functions": {
+  "default": [
+   0.25,
+   0.1,
+   0.25,
+   1.0
+  ],
+  "linear": [
+   0.0,
+   0.0,
+   1.0,
+   1.0
+  ],
+  "easeIn": [
+   0.42,
+   0.0,
+   1.0,
+   1.0
+  ],
+  "easeOut": [
+   0.0,
+   0.0,
+   0.58,
+   1.0
+  ],
+  "easeInEaseOut": [
+   0.42,
+   0.0,
+   0.58,
+   1.0
+  ]
+ },
+ "cosine_ease": true,
+ "springs": {
+  "reference_default": {
+   "mass": 1.0,
+   "stiffness": 100.0,
+   "damping": 10.0,
+   "initial_velocity": 0.0
+  },
+  "window_move_resize_snap": {
+   "perceptual_duration": 0.35,
+   "bounce": 0.0
+  },
+  "overview_toggle": {
+   "perceptual_duration": 0.35,
+   "bounce": 0.0
+  }
+ },
+ "settling_epsilon": 0.001,
+ "scrolling": {
+  "momentum_deceleration_per_ms": 0.998,
+  "rubber_band_coefficient": 0.55
+ },
+ "dock": {
+  "fish_speed": 42.0,
+  "ramp_while_dragging_ms": 270.0,
+  "drop_speed": 350.0,
+  "autohide": {
+   "delay_s": 0.15,
+   "duration_s": 0.24,
+   "curve": "cosine_ease"
+  },
+  "magnification_span": 3.0
+ },
+ "minimize_effects": [
+  "warp",
+  "scale",
+  "suck"
+ ]
+}

@@ -1,0 +1,5 @@
+PRODUCT=0011/0/0/0
+NAME="AT Translated Set 2 keyboard"
+PROP=0
+EV=120013
+MODALIAS=input:b0011

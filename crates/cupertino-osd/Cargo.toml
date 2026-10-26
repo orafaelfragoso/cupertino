@@ -1,0 +1,34 @@
+[package]
+name = "cupertino-osd"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Volume, brightness and keyboard-backlight overlay for the Cupertino compositor: show/hold/fade model, segmented meter, ALSA and backlight effects, org.cupertino.Osd1 and CPU rendering"
+
+[package.metadata.cupertino]
+layer = "shell"
+
+[features]
+default = []
+dbus = ["dep:zbus"]
+# the `cupertino-osd` process: the overlay on a layer surface as a client of the server
+app = ["dbus", "dep:cupertino-client"]
+
+[dependencies]
+cupertino-assets = { path = "../cupertino-assets" }
+cupertino-alsa = { path = "../cupertino-alsa" }
+cupertino-icons = { path = "../cupertino-icons" }
+cupertino-theme = { path = "../cupertino-theme" }
+cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-decorations = { path = "../cupertino-decorations" }
+cupertino-client = { path = "../cupertino-client", optional = true }
+tiny-skia = "0.11"
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"], optional = true }
+
+[dev-dependencies]
+serde = "1"
+
+[[bin]]
+name = "cupertino-osd"
+path = "src/main.rs"
+required-features = ["app"]

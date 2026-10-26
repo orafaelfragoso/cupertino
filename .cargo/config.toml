@@ -1,0 +1,3 @@
+# Debug and test builds keep line tables only: backtraces still name file and line, at a fraction of the target size.
+[profile.dev]
+debug = "line-tables-only"

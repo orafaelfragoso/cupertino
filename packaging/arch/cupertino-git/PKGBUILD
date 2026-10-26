@@ -8,7 +8,7 @@ arch=('x86_64')
 url='https://github.com/orafaelfragoso/cupertino'
 license=('GPL-3.0-or-later')
 makedepends=('git' 'cargo' 'python' 'mesa' 'libglvnd' 'pam')
-checkdepends=('dbus')
+checkdepends=('dbus' 'xkeyboard-config')
 # makepkg's LTO flags would reach the C code of build dependencies only; the release profile decides for Rust.
 options=('!lto')
 provides=('cupertino')

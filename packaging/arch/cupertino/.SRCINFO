@@ -6,6 +6,7 @@ pkgbase = cupertino
 	arch = x86_64
 	license = GPL-3.0-or-later
 	checkdepends = dbus
+	checkdepends = xkeyboard-config
 	makedepends = cargo
 	makedepends = python
 	makedepends = mesa

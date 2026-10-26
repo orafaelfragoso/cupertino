@@ -8,7 +8,7 @@
 //! produces a complete theme when no reference input is available, not to imitate any particular
 //! set. Shadows use [`Shadow::COMMON`] (approximate).
 
-use crate::meta::Shadow;
+use crate::shadow::Shadow;
 use tiny_skia::{
     Color, FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform,
 };

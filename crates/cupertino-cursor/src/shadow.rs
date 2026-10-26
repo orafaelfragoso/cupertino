@@ -7,8 +7,30 @@
 //! clipped; the returned origin tells how far the original moved (the hotspot moves by the same
 //! amount).
 
-use crate::meta::Shadow;
 use tiny_skia::{Pixmap, PremultipliedColorU8};
+
+/// A drop shadow: colour, offset and blur.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shadow {
+    /// Straight RGBA, 0…1.
+    pub color: [f32; 4],
+    /// Offset in points, screen convention (x right, y down).
+    pub dx: f64,
+    pub dy: f64,
+    /// Gaussian standard deviation in points.
+    pub sigma: f64,
+}
+
+impl Shadow {
+    /// The shadow of every cursor of the procedural set (colour `0,0,0,0.65`, blur 1.8, one point down); an approximate
+    /// choice.
+    pub const COMMON: Shadow = Shadow {
+        color: [0.0, 0.0, 0.0, 0.65],
+        dx: 0.0,
+        dy: 1.0,
+        sigma: 1.8,
+    };
+}
 
 /// Normalised one-sided Gaussian kernel `w[0..=r]`, `w[0] + 2·Σ w[1..] = 1`, radius `ceil(3σ)`.
 pub fn kernel(sigma_px: f64) -> Vec<f64> {

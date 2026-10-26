@@ -4,8 +4,7 @@
 //! `cargo run -p cupertino-cursor --release --example contact_sheet -- [THEME_DIR] [OUT.png] [SIZE]`
 //!
 //! Without arguments a procedural theme is built in a temporary directory and the sheet is written to
-//! `output/procedural_cursors.png`. Sheets of themes derived from a reference cursor set must stay in
-//! git-ignored locations.
+//! `output/procedural_cursors.png`.
 
 use cupertino_cursor::theme::{build_theme, BuildOptions};
 use cupertino_cursor::xcursor;

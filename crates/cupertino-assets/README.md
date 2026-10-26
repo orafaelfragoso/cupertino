@@ -1,8 +1,8 @@
 # cupertino-assets
 
 The asset packs every Cupertino process draws its text, icons, cursors and wallpaper from, and the `cupertino-assets`
-tool that checks a pack. A pack is a directory with a `manifest.json`; this repository's own pack is produced by an
-extraction tool and kept out of git.
+tool that checks a pack. A pack is a directory with a `manifest.json`; packs live outside the repository. With no
+pack installed, the built-in fallback (the embedded Inter subset, procedural cursors and placeholder icons) is used.
 
 ## Manifest
 

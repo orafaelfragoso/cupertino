@@ -10,8 +10,9 @@
 # test log land in DIST_DIR. Needs docker and git; nothing is installed on the host.
 set -euo pipefail
 
-distro=${1:?usage: build-in-container.sh {debian|fedora} DIST_DIR}
-dist=${2:?usage: build-in-container.sh {debian|fedora} DIST_DIR}
+usage="usage: build-in-container.sh debian|fedora DIST_DIR"
+distro=${1:?$usage}
+dist=${2:?$usage}
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 
 # Images by digest; the Rust toolchain is fixed, as are the packaging tools.

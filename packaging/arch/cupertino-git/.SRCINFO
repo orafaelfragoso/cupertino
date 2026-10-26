@@ -17,6 +17,7 @@ pkgbase = cupertino-git
 	provides = cupertino
 	conflicts = cupertino
 	options = !lto
+	options = !debug
 	source = cupertino::git+https://github.com/orafaelfragoso/cupertino.git
 	sha256sums = SKIP
 

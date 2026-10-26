@@ -14,6 +14,7 @@ pkgbase = cupertino
 	makedepends = libglvnd
 	makedepends = pam
 	options = !lto
+	options = !debug
 	source = https://github.com/orafaelfragoso/cupertino/releases/download/v0.1.0/cupertino-0.1.0-source.tar.xz
 	sha256sums = UNRELEASED
 

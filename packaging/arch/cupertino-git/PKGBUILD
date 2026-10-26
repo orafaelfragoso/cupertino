@@ -8,7 +8,7 @@ arch=('x86_64')
 url='https://github.com/orafaelfragoso/cupertino'
 license=('GPL-3.0-or-later')
 makedepends=('git' 'cargo' 'python' 'mesa' 'libglvnd' 'pam')
-checkdepends=('dbus' 'xkeyboard-config')
+checkdepends=('dbus' 'xkeyboard-config' 'shared-mime-info')
 # makepkg's LTO flags would reach the C code of build dependencies only; the release profile decides for Rust.
 options=('!lto')
 provides=('cupertino')
@@ -39,11 +39,11 @@ build() {
 check() {
   cd cupertino
   export CARGO_INCREMENTAL=0 CUPERTINO_THEME_DIR=/usr/share/cupertino/theme CUPERTINO_SPEC_DIR="$PWD/data/theme"
-  dbus-run-session -- cargo test --frozen --release --workspace --all-features
+  dbus-run-session -- cargo test --frozen --release --workspace --all-features --no-fail-fast
 }
 
 package() {
-  depends=('glibc' 'gcc-libs' 'mesa' 'libglvnd' 'pam' 'systemd' 'dbus' 'xkeyboard-config' 'cupertino-data')
+  depends=('glibc' 'gcc-libs' 'mesa' 'libglvnd' 'pam' 'systemd' 'dbus' 'xkeyboard-config' 'shared-mime-info' 'cupertino-data')
   optdepends=('wayland: nested session inside another Wayland desktop'
               'libxkbcommon: nested session'
               'foot: terminal for the nested try-out'

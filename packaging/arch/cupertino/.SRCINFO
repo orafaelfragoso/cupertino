@@ -7,6 +7,7 @@ pkgbase = cupertino
 	license = GPL-3.0-or-later
 	checkdepends = dbus
 	checkdepends = xkeyboard-config
+	checkdepends = shared-mime-info
 	makedepends = cargo
 	makedepends = python
 	makedepends = mesa
@@ -25,6 +26,7 @@ pkgname = cupertino
 	depends = systemd
 	depends = dbus
 	depends = xkeyboard-config
+	depends = shared-mime-info
 	depends = cupertino-data>=0.1.0
 	optdepends = wayland: nested session inside another Wayland desktop
 	optdepends = libxkbcommon: nested session

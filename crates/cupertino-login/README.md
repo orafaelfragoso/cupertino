@@ -203,7 +203,7 @@ icon's bottom edge: without the checkbox the design chain would put the buttons 
 ### Quit sequence
 
 Before a confirmed log out, restart or shut down the agent calls the server's `org.cupertino.Session1.QuitNextApplication
-(`prototypes/core/cupertino-server/README.md`). The server brings the most recently used application with windows forward, asks
+(`crates/cupertino-server/README.md`). The server brings the most recently used application with windows forward, asks
 each of its windows to close, and emits `ApplicationQuit(app_id) when the last one is gone. The agent times it
 (`logout::LogOut`): 45 s per application, the next asked 0.1 s after one quits, the logind call once the answer is
 `("", 0).
@@ -242,7 +242,7 @@ thread.
 
 At start the process takes a logind `handle-power-key` **block** inhibitor and holds it, so logind does not power off on the key.
 The server binds the key (`XF86PowerOff`) to the `power-key` action, calls `PowerKey(true)` on its press and `PowerKey(false) on
-its release, in that order, and drops the repeats of a held key (`prototypes/core/cupertino-server/README.md`). The timing is
+its release, in that order, and drops the repeats of a held key (`crates/cupertino-server/README.md`). The timing is
 the pure state machine `power_button::PowerButton`, fed with the calls and the process's clock:
 
 | Key held | `--power-button-sleeps-system` off (default) | on |
@@ -259,7 +259,7 @@ greeter has no session agent and takes no inhibitor, so a hold there shows nothi
 
 ## Greeter
 
-`cupertino-login --greeter` is the login screen of the session manager, [`cupertino-sessiond`](../../services/cupertino-sessiond/README.md).
+`cupertino-login --greeter` is the login screen of the session manager, [`cupertino-sessiond`](../cupertino-sessiond/README.md).
 The manager starts `cupertino-server --udev` as the account `cupertino-greeter` (`greeter-command` in `/etc/cupertino/login.conf`),
 in a logind session of class `greeter` on the login VT. The server's configuration (`CUPERTINO_SERVER_CONFIG`, in the harness
 `/etc/cupertino/greeter.json`) starts this process as its only shell process:

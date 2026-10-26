@@ -31,7 +31,7 @@ Examples:
 
 ```
 cupertino-cursor --procedural --output /tmp/themes                       # procedural theme
-cupertino-cursor --source <source cursor set (local extraction)>      # PDF theme →
+cupertino-cursor --source <directory of PDF cursor images>            # PDF theme →
 XCURSOR_PATH=$PWD/cursor-theme XCURSOR_THEME=Cupertino <program>
 cargo run -p cupertino-cursor --release --example contact_sheet -- <theme dir> sheet.png 48
 ```

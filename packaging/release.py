@@ -268,8 +268,11 @@ def cmd_pkgbuild(args):
     digest = hashlib.sha256(Path(args.archive).read_bytes()).hexdigest()
     text = text.replace("sha256sums=('UNRELEASED')", f"sha256sums=('{digest}')")
     if args.tag:
-        text = text.replace(f'pkgver={version("cupertino-server")}\n', f'pkgver={release_version(args.tag)}\n', 1)
-        text = text.replace('_tag=v$pkgver\n', f'_tag={args.tag}\n', 1)
+        for old, new in ((f'pkgver={version("cupertino-server")}\n', f'pkgver={release_version(args.tag)}\n'),
+                         ('_tag=v$pkgver\n', f'_tag={args.tag}\n')):
+            if text.count(old) != 1:
+                fail(f'packaging/arch/cupertino/PKGBUILD must have exactly one line {old.strip()!r}')
+            text = text.replace(old, new)
     out = Path(args.output)
     out.write_text(text)
     print(out)

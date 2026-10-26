@@ -9,9 +9,11 @@
 //! run through `swash` with the coordinates of the request: advances change with `wght` and with `opsz`, so
 //! the coordinates must reach the shaper and not only the rasteriser.
 //!
-//! * Weight: the CSS-style weight (100..=900) is mapped through the font's own named instances
-//!   (Ultralight .. Black at default width, grade and optical size; `fvar` of the `ui` font:
-//!   Regular 400, Medium 510, Semibold 590, Bold 700), interpolated linearly between them.
+//! * Weight: the CSS-style weight (100..=900) is mapped through the font's own named instances at the default of
+//!   every other axis, interpolated linearly between them. An instance stands for the CSS weight of its `wght`
+//!   coordinate when the axis uses the standard 1..=1000 scale; otherwise its style name gives it (the CSS names Thin
+//!   100 .. Black 900 and their usual synonyms, case-insensitive). A family of static faces uses each face's
+//!   `usWeightClass`.
 //! * Optical size: the design selects `opsz` from the point size and clamps it to the axis range
 //!   (17..=96; section 1), so 13 pt text uses the 17 master. The
 //!   renderer takes device pixels; the point size is `px / scale`, so the optical size is applied once the
@@ -40,18 +42,35 @@ use tiny_skia::Pixmap;
 const WGHT: Tag = swash::tag_from_bytes(b"wght");
 const OPSZ: Tag = swash::tag_from_bytes(b"opsz");
 
-/// Style names of the named instances that define the weight scale, paired with the CSS weight they stand for.
-const WEIGHT_NAMES: [(&str, u16); 9] = [
-    ("Ultralight", 100),
-    ("Thin", 200),
-    ("Light", 300),
-    ("Regular", 400),
-    ("Medium", 500),
-    ("Semibold", 600),
-    ("Bold", 700),
-    ("Heavy", 800),
-    ("Black", 900),
+/// CSS weights of the standard style names and their usual synonyms, compared in lower case without spaces, hyphens
+/// or underscores. The fallback for instances of a `wght` axis that does not use the 1..=1000 scale.
+const WEIGHT_NAMES: [(&str, u16); 15] = [
+    ("thin", 100),
+    ("hairline", 100),
+    ("extralight", 200),
+    ("ultralight", 200),
+    ("light", 300),
+    ("regular", 400),
+    ("normal", 400),
+    ("medium", 500),
+    ("semibold", 600),
+    ("demibold", 600),
+    ("bold", 700),
+    ("extrabold", 800),
+    ("ultrabold", 800),
+    ("black", 900),
+    ("heavy", 900),
 ];
+
+/// CSS weight a named instance stands for: its `wght` coordinate when the axis spans only the standard 1..=1000 scale,
+/// else the weight of its style name; `None` for a name outside [`WEIGHT_NAMES`] on a non-standard axis.
+fn instance_weight(wght: f32, axis_range: (f32, f32), name: Option<&str>) -> Option<u16> {
+    if axis_range.0 >= 1.0 && axis_range.1 <= 1000.0 {
+        return Some(wght.round() as u16);
+    }
+    let key: String = name?.chars().filter(|c| !matches!(c, ' ' | '-' | '_')).flat_map(char::to_lowercase).collect();
+    WEIGHT_NAMES.iter().find(|(n, _)| *n == key).map(|(_, w)| *w)
+}
 
 /// One face of a loaded font file.
 struct Face {
@@ -115,20 +134,26 @@ fn load_faces(data: Arc<[u8]>, label: &str) -> Result<Vec<Face>, AssetError> {
         .collect())
 }
 
-/// Named instances at the default value of every axis but `wght`, keyed by their weight name.
+/// Named instances at the default value of every axis but `wght`, as `(css weight, wght value)` sorted by weight
+/// ([`instance_weight`]); the first instance of a weight wins.
 fn weight_stops(font: &FontRef<'_>) -> Vec<(u16, f32)> {
     let axes: Vec<_> = font.variations().collect();
     let Some(wght_axis) = axes.iter().position(|a| a.tag() == WGHT) else { return Vec::new() };
-    let mut stops: Vec<(u16, f32)> = font
-        .instances()
-        .filter_map(|inst| {
-            let values: Vec<f32> = inst.values().collect();
-            let on_default = axes.iter().zip(&values).enumerate().all(|(i, (axis, v))| i == wght_axis || (axis.default_value() - v).abs() < 1e-3);
-            let name = inst.name(None)?.to_string();
-            let css = WEIGHT_NAMES.iter().find(|(n, _)| *n == name)?.1;
-            on_default.then_some((css, values[wght_axis]))
-        })
-        .collect();
+    let range = (axes[wght_axis].min_value(), axes[wght_axis].max_value());
+    let mut stops: Vec<(u16, f32)> = Vec::new();
+    for inst in font.instances() {
+        let values: Vec<f32> = inst.values().collect();
+        let on_default = axes.iter().zip(&values).enumerate().all(|(i, (axis, v))| i == wght_axis || (axis.default_value() - v).abs() < 1e-3);
+        if !on_default {
+            continue;
+        }
+        let name = inst.name(None).map(|n| n.to_string());
+        if let Some(css) = instance_weight(values[wght_axis], range, name.as_deref()) {
+            if stops.iter().all(|s| s.0 != css) {
+                stops.push((css, values[wght_axis]));
+            }
+        }
+    }
     stops.sort_by_key(|s| s.0);
     stops
 }
@@ -505,10 +530,51 @@ mod tests {
 
     #[test]
     fn heavier_weights_ink_more_and_advance_further() {
+        // Ink and advance grow with the weight that is drawn: a variable family renders every requested weight, a family
+        // of static faces the nearest face, so two requests that resolve to the same face draw the same.
         let mut r = renderer();
-        let (regular, semibold, bold) = (ink(&mut r, "Document", 13.0, 400), ink(&mut r, "Document", 13.0, 600), ink(&mut r, "Document", 13.0, 700));
-        assert!(semibold as f64 > regular as f64 * 1.08 && bold > semibold, "ink {regular} {semibold} {bold}");
-        assert!(r.measure("Document", 13.0, 700, 0.0) > r.measure("Document", 13.0, 400, 0.0));
+        let drawn: Vec<(u16, u64, f32)> =
+            [400, 600, 700].iter().map(|&w| (r.effective_weight(w), ink(&mut r, "Document", 13.0, w), r.measure("Document", 13.0, w, 0.0))).collect();
+        for pair in drawn.windows(2) {
+            let ((w0, ink0, adv0), (w1, ink1, adv1)) = (pair[0], pair[1]);
+            if w1 > w0 {
+                assert!(ink1 > ink0 && adv1 > adv0, "weight {w0} → {w1}: ink {ink0} → {ink1}, advance {adv0} → {adv1}");
+            } else {
+                assert_eq!((w0, ink0, adv0), (w1, ink1, adv1), "the same face draws the same");
+            }
+        }
+        if r.faces[r.primary(400).unwrap()].is_variable() {
+            assert!(drawn[1].1 as f64 > drawn[0].1 as f64 * 1.08, "semibold inks clearly more than regular: {drawn:?}");
+        }
+    }
+
+    #[test]
+    fn instances_map_by_their_wght_coordinate_then_by_name() {
+        // a standard axis: the coordinate is the weight, whatever the name says
+        assert_eq!(instance_weight(590.0, (100.0, 1000.0), Some("Semibold")), Some(590));
+        assert_eq!(instance_weight(100.0, (100.0, 900.0), Some("Thin")), Some(100));
+        assert_eq!(instance_weight(200.0, (100.0, 900.0), None), Some(200));
+        // a non-standard axis: the style name, case-insensitive, with the usual spellings
+        let named = |n: &str| instance_weight(0.5, (0.0, 1.0), Some(n));
+        for (name, css) in [("Thin", 100), ("ExtraLight", 200), ("Extra Light", 200), ("UltraLight", 200), ("light", 300), ("Regular", 400)] {
+            assert_eq!(named(name), Some(css), "{name}");
+        }
+        for (name, css) in [("Medium", 500), ("SemiBold", 600), ("Semibold", 600), ("Demi-Bold", 600), ("BOLD", 700), ("ExtraBold", 800), ("Black", 900), ("Heavy", 900)] {
+            assert_eq!(named(name), Some(css), "{name}");
+        }
+        assert_eq!(named("Condensed"), None);
+        assert_eq!(instance_weight(0.5, (0.0, 1.0), None), None);
+    }
+
+    #[test]
+    fn the_built_in_font_maps_all_nine_named_instances() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = TextRenderer::new(&Assets::from_dirs(&[dir.path().to_path_buf()]), FontRole::Ui).unwrap();
+        assert_eq!(r.family(), Some(cupertino_assets::BUILTIN_UI_FAMILY));
+        let face = &r.faces[r.primary(400).unwrap()];
+        let expected: Vec<(u16, f32)> = (1..=9).map(|i| (i * 100, f32::from(i * 100))).collect();
+        assert_eq!(face.weight_stops, expected, "Thin 100 through Black 900, each on its own coordinate");
+        assert_eq!((face.wght(250), face.wght(650)), (250.0, 650.0));
     }
 
     #[test]

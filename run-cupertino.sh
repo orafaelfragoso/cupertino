@@ -14,9 +14,11 @@ if [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]; then
     exit 1
 fi
 
+config="${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set; log in on the console first}/cupertino-compositor.json"
+log="$HOME/cupertino-tty.log"
+
 cargo build --release --workspace --all-features --bins --manifest-path "$root/Cargo.toml"
 
-config="${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set; log in on the console first}/cupertino-compositor.json"
 cat >"$config" <<'EOF'
 {"shell": [
   {"name": "dock",          "command": ["cupertino-dock"]},
@@ -35,6 +37,12 @@ export XDG_DATA_DIRS="$root/crates/cupertino-files/data:$root/crates/cupertino-s
 export CUPERTINO_SERVER_CONFIG="$config"
 
 # A fresh session bus: the notification centre needs org.freedesktop.Notifications to itself.
-echo "Starting Cupertino; log: $HOME/cupertino-tty.log"
-exec dbus-run-session -- cupertino-server --udev \
-    --spawn cupertino-files --spawn cupertino-settings "$@" >"$HOME/cupertino-tty.log" 2>&1
+echo "Starting Cupertino; log: $log"
+status=0
+dbus-run-session -- cupertino-server --udev \
+    --spawn cupertino-files --spawn cupertino-settings "$@" >"$log" 2>&1 || status=$?
+if [ "$status" -ne 0 ]; then
+    echo "Cupertino exited with status $status; last lines of $log:" >&2
+    tail -n 20 "$log" >&2
+fi
+exit "$status"

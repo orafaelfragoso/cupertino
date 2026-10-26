@@ -1,0 +1,38 @@
+Wallpapers: photographs from Unsplash, used under the Unsplash License (https://unsplash.com/license).
+Attribution is not required by the licence; it is given here as a courtesy to the photographers.
+
+wallpapers/trees-covering-snow-W3V2tQAZxPA.jpg
+  "Trees covering snow" by Ryan Pohanic (https://unsplash.com/@elevatedtv)
+  Source: https://unsplash.com/photos/trees-covering-snow-W3V2tQAZxPA
+  Published: 2015-04-02
+  License: Unsplash License
+
+wallpapers/landscape-photography-of-mountain-under-cloudy-sky-between-body-of-water-at-daytime-2oFdVd00xOg.jpg
+  "Blue lake and white peaks" by Samuel Scrimshaw (https://unsplash.com/@samscrim)
+  Source: https://unsplash.com/photos/landscape-photography-of-mountain-under-cloudy-sky-between-body-of-water-at-daytime-2oFdVd00xOg
+  Published: 2016-07-26
+  License: Unsplash License
+
+wallpapers/aerial-photograph-of-river-and-mountain-2H7DvJAPq8Q.jpg
+  "Aerial photograph of river and mountain" by Robert Bye (https://unsplash.com/@robertbye)
+  Source: https://unsplash.com/photos/aerial-photograph-of-river-and-mountain-2H7DvJAPq8Q
+  Published: 2018-01-03; Fjaðrárgljúfur, Iceland
+  License: Unsplash License
+
+wallpapers/silhouette-of-mountain-peak-8NuHwPbO62k.jpg
+  "Silhouette of mountain peak" by Christoffer Engström (https://unsplash.com/@christoffere)
+  Source: https://unsplash.com/photos/silhouette-of-mountain-peak-8NuHwPbO62k
+  Published: 2018-01-06; Fuerteventura, Spain
+  License: Unsplash License
+
+wallpapers/silhouette-of-man-standing-on-rock-while-looking-in-sky-0LU4vO5iFpM.jpg
+  "Silhouette of man standing on rock while looking in sky" by Greg Rakozy (https://unsplash.com/@grakozy)
+  Source: https://unsplash.com/photos/silhouette-of-man-standing-on-rock-while-looking-in-sky-0LU4vO5iFpM
+  Published: 2015-12-23; Tony Grove Lake, United States
+  License: Unsplash License
+
+wallpapers/aerial-photography-of-seashore-OJ74pFtrYi0.jpg
+  "Aerial photography of seashore" by Iswanto Arif (https://unsplash.com/@iswanto)
+  Source: https://unsplash.com/photos/aerial-photography-of-seashore-OJ74pFtrYi0
+  Published: 2017-11-10; Bali (from the photographer's caption)
+  License: Unsplash License

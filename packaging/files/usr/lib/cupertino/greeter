@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+export CUPERTINO_SERVER_CONFIG=/etc/cupertino/greeter.json
+exec /usr/bin/cupertino-server --udev

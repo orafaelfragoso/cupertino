@@ -1,0 +1,7 @@
+[Unit]
+Description=Cupertino btd
+After=dbus.socket
+
+[Service]
+ExecStart=/usr/bin/cupertino-btd
+StateDirectory=cupertino/bluetooth

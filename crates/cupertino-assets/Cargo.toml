@@ -19,3 +19,60 @@ toml = "1"
 
 [dev-dependencies]
 tempfile = "3"
+
+# The default asset pack as its own distribution package, `cupertino-data`. The asset lists are the manifest of
+# packaging/release.py (checked by its check-metadata).
+[package.metadata.deb]
+name = "cupertino-data"
+maintainer = "Rafael Fragoso <rafaelfragosom@gmail.com>"
+copyright = "Cupertino contributors; Inter Project Authors; the photographers named in wallpapers/credits.txt"
+license-file = ["../../packaging/debian/cupertino-data.copyright", "0"]
+extended-description = """\
+The default asset pack of Cupertino: the Inter UI font (OFL-1.1), the logical-name map to the host icon theme \
+and six photographs from Unsplash (Unsplash License) as wallpapers. The cursor theme is a separate package."""
+section = "misc"
+priority = "optional"
+depends = ""
+recommends = "adwaita-icon-theme"
+conf-files = []
+assets = [
+  ["../../packaging/data/manifest.json", "usr/share/cupertino/assets/manifest.json", "644"],
+  ["../../packaging/data/icon-map.toml", "usr/share/cupertino/assets/icon-map.toml", "644"],
+  ["../../packaging/data/wallpapers/credits.txt", "usr/share/cupertino/assets/wallpapers/credits.txt", "644"],
+  ["../../crates/cupertino-assets/fonts/InterVariable-subset.ttf", "usr/share/cupertino/assets/fonts/InterVariable-subset.ttf", "644"],
+  ["../../crates/cupertino-assets/fonts/OFL.txt", "usr/share/cupertino/assets/fonts/OFL.txt", "644"],
+  ["../../packaging/data/wallpapers/aerial-photograph-of-river-and-mountain-2H7DvJAPq8Q.jpg", "usr/share/cupertino/assets/wallpapers/aerial-photograph-of-river-and-mountain-2H7DvJAPq8Q.jpg", "644"],
+  ["../../packaging/data/wallpapers/aerial-photography-of-seashore-OJ74pFtrYi0.jpg", "usr/share/cupertino/assets/wallpapers/aerial-photography-of-seashore-OJ74pFtrYi0.jpg", "644"],
+  ["../../packaging/data/wallpapers/landscape-photography-of-mountain-under-cloudy-sky-between-body-of-water-at-daytime-2oFdVd00xOg.jpg", "usr/share/cupertino/assets/wallpapers/landscape-photography-of-mountain-under-cloudy-sky-between-body-of-water-at-daytime-2oFdVd00xOg.jpg", "644"],
+  ["../../packaging/data/wallpapers/silhouette-of-man-standing-on-rock-while-looking-in-sky-0LU4vO5iFpM.jpg", "usr/share/cupertino/assets/wallpapers/silhouette-of-man-standing-on-rock-while-looking-in-sky-0LU4vO5iFpM.jpg", "644"],
+  ["../../packaging/data/wallpapers/silhouette-of-mountain-peak-8NuHwPbO62k.jpg", "usr/share/cupertino/assets/wallpapers/silhouette-of-mountain-peak-8NuHwPbO62k.jpg", "644"],
+  ["../../packaging/data/wallpapers/trees-covering-snow-W3V2tQAZxPA.jpg", "usr/share/cupertino/assets/wallpapers/trees-covering-snow-W3V2tQAZxPA.jpg", "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "cupertino-data"
+license = "GPL-3.0-or-later AND OFL-1.1 AND LicenseRef-Unsplash"
+summary = "Cupertino default asset pack"
+release = "1"
+url = "https://github.com/orafaelfragoso/cupertino"
+auto-req = "no"
+require-sh = false
+assets = [
+  { source = "packaging/data/manifest.json", dest = "/usr/share/cupertino/assets/manifest.json", mode = "644" },
+  { source = "packaging/data/icon-map.toml", dest = "/usr/share/cupertino/assets/icon-map.toml", mode = "644" },
+  { source = "packaging/data/wallpapers/credits.txt", dest = "/usr/share/cupertino/assets/wallpapers/credits.txt", mode = "644" },
+  { source = "crates/cupertino-assets/fonts/InterVariable-subset.ttf", dest = "/usr/share/cupertino/assets/fonts/InterVariable-subset.ttf", mode = "644" },
+  { source = "crates/cupertino-assets/fonts/OFL.txt", dest = "/usr/share/cupertino/assets/fonts/OFL.txt", mode = "644" },
+  { source = "packaging/data/wallpapers/aerial-photograph-of-river-and-mountain-2H7DvJAPq8Q.jpg", dest = "/usr/share/cupertino/assets/wallpapers/aerial-photograph-of-river-and-mountain-2H7DvJAPq8Q.jpg", mode = "644" },
+  { source = "packaging/data/wallpapers/aerial-photography-of-seashore-OJ74pFtrYi0.jpg", dest = "/usr/share/cupertino/assets/wallpapers/aerial-photography-of-seashore-OJ74pFtrYi0.jpg", mode = "644" },
+  { source = "packaging/data/wallpapers/landscape-photography-of-mountain-under-cloudy-sky-between-body-of-water-at-daytime-2oFdVd00xOg.jpg", dest = "/usr/share/cupertino/assets/wallpapers/landscape-photography-of-mountain-under-cloudy-sky-between-body-of-water-at-daytime-2oFdVd00xOg.jpg", mode = "644" },
+  { source = "packaging/data/wallpapers/silhouette-of-man-standing-on-rock-while-looking-in-sky-0LU4vO5iFpM.jpg", dest = "/usr/share/cupertino/assets/wallpapers/silhouette-of-man-standing-on-rock-while-looking-in-sky-0LU4vO5iFpM.jpg", mode = "644" },
+  { source = "packaging/data/wallpapers/silhouette-of-mountain-peak-8NuHwPbO62k.jpg", dest = "/usr/share/cupertino/assets/wallpapers/silhouette-of-mountain-peak-8NuHwPbO62k.jpg", mode = "644" },
+  { source = "packaging/data/wallpapers/trees-covering-snow-W3V2tQAZxPA.jpg", dest = "/usr/share/cupertino/assets/wallpapers/trees-covering-snow-W3V2tQAZxPA.jpg", mode = "644" },
+  { source = "packaging/licenses/DATA", dest = "/usr/share/licenses/cupertino-data/DATA", mode = "644" },
+  { source = "packaging/licenses/Unsplash.txt", dest = "/usr/share/licenses/cupertino-data/Unsplash.txt", mode = "644" },
+  { source = "crates/cupertino-assets/fonts/OFL.txt", dest = "/usr/share/licenses/cupertino-data/OFL.txt", mode = "644" },
+]
+
+[package.metadata.generate-rpm.recommends]
+adwaita-icon-theme = "*"

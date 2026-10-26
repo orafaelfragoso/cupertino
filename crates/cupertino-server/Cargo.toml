@@ -90,3 +90,127 @@ cupertino-client = { path = "../cupertino-client" }
 # the asset icons the switcher test compares the dock process's panel with
 cupertino-icons = { path = "../cupertino-icons" }
 rustix = { version = "1", features = ["fs", "shm", "mm"] }
+
+# Distribution packages. The asset lists are the manifest of packaging/release.py (checked by its check-metadata).
+[package.metadata.deb]
+name = "cupertino"
+maintainer = "Rafael Fragoso <rafaelfragosom@gmail.com>"
+copyright = "Cupertino contributors"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+A Wayland desktop shell and compositor: the server, the dock, menu bar, launcher, notifications, control centre, \
+on-screen display, screenshots, window manager, lock and login screens, a file manager and settings. The system \
+services (login manager, network, Bluetooth, power) are installed disabled."""
+section = "x11"
+priority = "optional"
+depends = "$auto, cupertino-data (>= 0.1.0), dbus, systemd, xkb-data, shared-mime-info, libegl1, libegl-mesa0"
+recommends = "libgl1-mesa-dri, libwayland-client0, libwayland-egl1, libxkbcommon0"
+suggests = "foot, iwd"
+maintainer-scripts = "../../packaging/debian/scripts"
+preserve-symlinks = true
+conf-files = ["/etc/cupertino/login.conf", "/etc/cupertino/greeter.json", "/etc/pam.d/cupertino-login", "/etc/pam.d/cupertino-session", "/etc/pam.d/cupertino-greeter", "/etc/pam.d/cupertino-autologin"]
+assets = [
+  ["target/release/cupertino-server", "usr/bin/cupertino-server", "755"],
+  ["target/release/cupertino-dock", "usr/bin/cupertino-dock", "755"],
+  ["target/release/cupertino-menubar", "usr/bin/cupertino-menubar", "755"],
+  ["target/release/cupertino-launcher", "usr/bin/cupertino-launcher", "755"],
+  ["target/release/cupertino-notifications", "usr/bin/cupertino-notifications", "755"],
+  ["target/release/cupertino-controlcenter", "usr/bin/cupertino-controlcenter", "755"],
+  ["target/release/cupertino-osd", "usr/bin/cupertino-osd", "755"],
+  ["target/release/cupertino-screenshot", "usr/bin/cupertino-screenshot", "755"],
+  ["target/release/cupertino-windowmanager", "usr/bin/cupertino-windowmanager", "755"],
+  ["target/release/cupertino-login", "usr/bin/cupertino-login", "755"],
+  ["target/release/cupertino-files", "usr/bin/cupertino-files", "755"],
+  ["target/release/cupertino-settings", "usr/bin/cupertino-settings", "755"],
+  ["target/release/cupertino-sessiond", "usr/bin/cupertino-sessiond", "755"],
+  ["target/release/cupertino-netd", "usr/bin/cupertino-netd", "755"],
+  ["target/release/cupertino-btd", "usr/bin/cupertino-btd", "755"],
+  ["target/release/cupertino-powerd", "usr/bin/cupertino-powerd", "755"],
+  ["../../packaging/files/usr/bin/cupertino-session", "usr/bin/cupertino-session", "755"],
+  ["../../packaging/files/usr/lib/cupertino/greeter", "usr/lib/cupertino/greeter", "755"],
+  ["../../packaging/files/usr/share/wayland-sessions/cupertino.desktop", "usr/share/wayland-sessions/cupertino.desktop", "644"],
+  ["../../packaging/files/usr/share/applications/cupertino-files.desktop", "usr/share/applications/cupertino-files.desktop", "644"],
+  ["../../packaging/files/usr/share/applications/cupertino-settings.desktop", "usr/share/applications/cupertino-settings.desktop", "644"],
+  ["../../packaging/files/usr/lib/sysusers.d/cupertino-greeter.conf", "usr/lib/sysusers.d/cupertino-greeter.conf", "644"],
+  ["../../packaging/files/usr/share/dbus-1/system.d/org.cupertino.conf", "usr/share/dbus-1/system.d/org.cupertino.conf", "644"],
+  ["../../packaging/files/etc/cupertino/login.conf", "etc/cupertino/login.conf", "644"],
+  ["../../packaging/files/etc/cupertino/greeter.json", "etc/cupertino/greeter.json", "644"],
+  ["../../packaging/files/usr/lib/systemd/system/cupertino-login.service", "usr/lib/systemd/system/cupertino-login.service", "644"],
+  ["../../packaging/files/usr/lib/systemd/system/cupertino-netd.service", "usr/lib/systemd/system/cupertino-netd.service", "644"],
+  ["../../packaging/files/usr/lib/systemd/system/cupertino-btd.service", "usr/lib/systemd/system/cupertino-btd.service", "644"],
+  ["../../packaging/files/usr/lib/systemd/system/cupertino-powerd.service", "usr/lib/systemd/system/cupertino-powerd.service", "644"],
+  ["../../data/theme/tokens.json", "usr/share/cupertino/theme/tokens.json", "644"],
+  ["../../data/theme/materials.json", "usr/share/cupertino/theme/materials.json", "644"],
+  ["../../data/theme/animations.json", "usr/share/cupertino/theme/animations.json", "644"],
+  ["../../packaging/pam/deb/cupertino-login", "etc/pam.d/cupertino-login", "644"],
+  ["../../packaging/pam/deb/cupertino-session", "etc/pam.d/cupertino-session", "644"],
+  ["../../packaging/pam/deb/cupertino-greeter", "etc/pam.d/cupertino-greeter", "644"],
+  ["../../packaging/pam/deb/cupertino-autologin", "etc/pam.d/cupertino-autologin", "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "cupertino"
+license = "GPL-3.0-or-later"
+summary = "Cupertino Wayland desktop"
+release = "1"
+url = "https://github.com/orafaelfragoso/cupertino"
+post_install_script = "packaging/rpm/post-install.sh"
+post_uninstall_script = "packaging/rpm/post-uninstall.sh"
+assets = [
+  { source = "target/release/cupertino-server", dest = "/usr/bin/cupertino-server", mode = "755" },
+  { source = "target/release/cupertino-dock", dest = "/usr/bin/cupertino-dock", mode = "755" },
+  { source = "target/release/cupertino-menubar", dest = "/usr/bin/cupertino-menubar", mode = "755" },
+  { source = "target/release/cupertino-launcher", dest = "/usr/bin/cupertino-launcher", mode = "755" },
+  { source = "target/release/cupertino-notifications", dest = "/usr/bin/cupertino-notifications", mode = "755" },
+  { source = "target/release/cupertino-controlcenter", dest = "/usr/bin/cupertino-controlcenter", mode = "755" },
+  { source = "target/release/cupertino-osd", dest = "/usr/bin/cupertino-osd", mode = "755" },
+  { source = "target/release/cupertino-screenshot", dest = "/usr/bin/cupertino-screenshot", mode = "755" },
+  { source = "target/release/cupertino-windowmanager", dest = "/usr/bin/cupertino-windowmanager", mode = "755" },
+  { source = "target/release/cupertino-login", dest = "/usr/bin/cupertino-login", mode = "755" },
+  { source = "target/release/cupertino-files", dest = "/usr/bin/cupertino-files", mode = "755" },
+  { source = "target/release/cupertino-settings", dest = "/usr/bin/cupertino-settings", mode = "755" },
+  { source = "target/release/cupertino-sessiond", dest = "/usr/bin/cupertino-sessiond", mode = "755" },
+  { source = "target/release/cupertino-netd", dest = "/usr/bin/cupertino-netd", mode = "755" },
+  { source = "target/release/cupertino-btd", dest = "/usr/bin/cupertino-btd", mode = "755" },
+  { source = "target/release/cupertino-powerd", dest = "/usr/bin/cupertino-powerd", mode = "755" },
+  { source = "packaging/files/usr/bin/cupertino-session", dest = "/usr/bin/cupertino-session", mode = "755" },
+  { source = "packaging/files/usr/lib/cupertino/greeter", dest = "/usr/lib/cupertino/greeter", mode = "755" },
+  { source = "packaging/files/usr/share/wayland-sessions/cupertino.desktop", dest = "/usr/share/wayland-sessions/cupertino.desktop", mode = "644" },
+  { source = "packaging/files/usr/share/applications/cupertino-files.desktop", dest = "/usr/share/applications/cupertino-files.desktop", mode = "644" },
+  { source = "packaging/files/usr/share/applications/cupertino-settings.desktop", dest = "/usr/share/applications/cupertino-settings.desktop", mode = "644" },
+  { source = "packaging/files/usr/lib/sysusers.d/cupertino-greeter.conf", dest = "/usr/lib/sysusers.d/cupertino-greeter.conf", mode = "644" },
+  { source = "packaging/files/usr/share/dbus-1/system.d/org.cupertino.conf", dest = "/usr/share/dbus-1/system.d/org.cupertino.conf", mode = "644" },
+  { source = "packaging/files/etc/cupertino/login.conf", dest = "/etc/cupertino/login.conf", mode = "644", config = "noreplace" },
+  { source = "packaging/files/etc/cupertino/greeter.json", dest = "/etc/cupertino/greeter.json", mode = "644", config = "noreplace" },
+  { source = "packaging/files/usr/lib/systemd/system/cupertino-login.service", dest = "/usr/lib/systemd/system/cupertino-login.service", mode = "644" },
+  { source = "packaging/files/usr/lib/systemd/system/cupertino-netd.service", dest = "/usr/lib/systemd/system/cupertino-netd.service", mode = "644" },
+  { source = "packaging/files/usr/lib/systemd/system/cupertino-btd.service", dest = "/usr/lib/systemd/system/cupertino-btd.service", mode = "644" },
+  { source = "packaging/files/usr/lib/systemd/system/cupertino-powerd.service", dest = "/usr/lib/systemd/system/cupertino-powerd.service", mode = "644" },
+  { source = "data/theme/tokens.json", dest = "/usr/share/cupertino/theme/tokens.json", mode = "644" },
+  { source = "data/theme/materials.json", dest = "/usr/share/cupertino/theme/materials.json", mode = "644" },
+  { source = "data/theme/animations.json", dest = "/usr/share/cupertino/theme/animations.json", mode = "644" },
+  { source = "packaging/pam/rpm/cupertino-login", dest = "/etc/pam.d/cupertino-login", mode = "644", config = "noreplace" },
+  { source = "packaging/pam/rpm/cupertino-session", dest = "/etc/pam.d/cupertino-session", mode = "644", config = "noreplace" },
+  { source = "packaging/pam/rpm/cupertino-greeter", dest = "/etc/pam.d/cupertino-greeter", mode = "644", config = "noreplace" },
+  { source = "packaging/pam/rpm/cupertino-autologin", dest = "/etc/pam.d/cupertino-autologin", mode = "644", config = "noreplace" },
+  { source = "LICENSE", dest = "/usr/share/licenses/cupertino/LICENSE", mode = "644" },
+]
+
+[package.metadata.generate-rpm.requires]
+cupertino-data = ">= 0.1.0"
+dbus = "*"
+systemd = "*"
+xkeyboard-config = "*"
+shared-mime-info = "*"
+libglvnd-egl = "*"
+mesa-libEGL = "*"
+
+[package.metadata.generate-rpm.recommends]
+mesa-dri-drivers = "*"
+libwayland-client = "*"
+libwayland-egl = "*"
+libxkbcommon = "*"
+
+[package.metadata.generate-rpm.suggests]
+foot = "*"
+iwd = "*"

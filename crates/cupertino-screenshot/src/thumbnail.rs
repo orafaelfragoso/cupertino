@@ -7,7 +7,10 @@
 use cupertino_animation::CubicBezier;
 use cupertino_geometry::Point;
 
-use crate::values::{DRAG_SLOP, SWIPE_DISMISS_FACTOR, SWIPE_DISMISS_MIN, SWIPE_THRESHOLD, THUMBNAIL_DISMISS, THUMBNAIL_EXPIRATION, THUMBNAIL_MIN_ASPECT, THUMBNAIL_SCALE};
+use crate::values::{
+    DRAG_SLOP, SWIPE_DISMISS_FACTOR, SWIPE_DISMISS_MIN, SWIPE_THRESHOLD, THUMBNAIL_DISMISS,
+    THUMBNAIL_EXPIRATION, THUMBNAIL_MIN_ASPECT, THUMBNAIL_SCALE,
+};
 
 /// Size of the thumbnail of an image of `image` points on a first screen of `screen` points:
 /// a tenth of the screen along the image's long axis, the other side following the image's aspect between a quarter
@@ -17,10 +20,16 @@ pub fn size(image: (f64, f64), screen: (f64, f64)) -> (f64, f64) {
     let (sw, sh) = screen;
     if h <= w {
         let width = THUMBNAIL_SCALE * sw;
-        (width, (h * width / w).clamp(THUMBNAIL_MIN_ASPECT * width, THUMBNAIL_SCALE * sh))
+        (
+            width,
+            (h * width / w).clamp(THUMBNAIL_MIN_ASPECT * width, THUMBNAIL_SCALE * sh),
+        )
     } else {
         let height = THUMBNAIL_SCALE * sh;
-        ((w * height / h).clamp(THUMBNAIL_MIN_ASPECT * height, THUMBNAIL_SCALE * sw), height)
+        (
+            (w * height / h).clamp(THUMBNAIL_MIN_ASPECT * height, THUMBNAIL_SCALE * sw),
+            height,
+        )
     }
 }
 
@@ -81,7 +90,12 @@ pub struct Thumbnail {
 
 impl Thumbnail {
     pub fn new(width: f64, shown: f64) -> Self {
-        Self { width, shown, drag: None, dismiss: None }
+        Self {
+            width,
+            shown,
+            drag: None,
+            dismiss: None,
+        }
     }
 
     /// Distance the dismiss animation travels: twice the width toward the placement side.
@@ -96,7 +110,14 @@ impl Thumbnail {
 
     fn start_dismiss(&mut self, commit: Commit, now: f64, duration: f64, from: f64) {
         if self.dismiss.is_none() {
-            self.dismiss = Some((commit, Dismiss { start: now, duration, from }));
+            self.dismiss = Some((
+                commit,
+                Dismiss {
+                    start: now,
+                    duration,
+                    from,
+                },
+            ));
         }
     }
 
@@ -122,22 +143,35 @@ impl Thumbnail {
                     return Phase::Gone;
                 }
                 let eased = CubicBezier::EASE_IN_EASE_OUT.eval(t);
-                Phase::Dismissing(Look { offset: d.from + (self.travel() - d.from) * eased, alpha: 1.0 - eased })
+                Phase::Dismissing(Look {
+                    offset: d.from + (self.travel() - d.from) * eased,
+                    alpha: 1.0 - eased,
+                })
             }
-            None => Phase::Shown(Look { offset: self.drag.map_or(0.0, |d| d.offset), alpha: 1.0 }),
+            None => Phase::Shown(Look {
+                offset: self.drag.map_or(0.0, |d| d.offset),
+                alpha: 1.0,
+            }),
         }
     }
 
     pub fn press(&mut self, p: Point, now: f64) {
         if self.dismiss.is_none() {
-            self.drag = Some(Drag { start: p, moved: false, offset: 0.0, samples: [(now, 0.0); 2] });
+            self.drag = Some(Drag {
+                start: p,
+                moved: false,
+                offset: 0.0,
+                samples: [(now, 0.0); 2],
+            });
         }
     }
 
     /// The pointer moved with the button held: past the slop square the thumbnail follows the pointer to
     /// the right; it does not move left of its place (approximate).
     pub fn motion(&mut self, p: Point, now: f64) {
-        let Some(drag) = self.drag.as_mut() else { return };
+        let Some(drag) = self.drag.as_mut() else {
+            return;
+        };
         let (dx, dy) = (p.x - drag.start.x, p.y - drag.start.y);
         if !drag.moved && dx.abs() < DRAG_SLOP && dy.abs() < DRAG_SLOP {
             return;
@@ -156,7 +190,13 @@ impl Thumbnail {
         } else if drag.offset > SWIPE_THRESHOLD {
             let [(t0, x0), (t1, x1)] = drag.samples;
             let velocity = if t1 > t0 { (x1 - x0) / (t1 - t0) } else { 0.0 };
-            let duration = if velocity > 0.0 { THUMBNAIL_DISMISS.min(SWIPE_DISMISS_MIN.max(SWIPE_DISMISS_FACTOR * (self.travel() / velocity).abs())) } else { THUMBNAIL_DISMISS };
+            let duration = if velocity > 0.0 {
+                THUMBNAIL_DISMISS.min(
+                    SWIPE_DISMISS_MIN.max(SWIPE_DISMISS_FACTOR * (self.travel() / velocity).abs()),
+                )
+            } else {
+                THUMBNAIL_DISMISS
+            };
             self.start_dismiss(Commit::Swiped, now, duration, drag.offset);
         } else {
             // an expiry that passed during the drag applies now
@@ -184,13 +224,24 @@ mod tests {
         let mut t = Thumbnail::new(144.0, 10.0);
         assert_eq!(t.deadline(), Some(15.0));
         t.tick(14.9);
-        assert_eq!(t.phase(14.9), Phase::Shown(Look { offset: 0.0, alpha: 1.0 }));
+        assert_eq!(
+            t.phase(14.9),
+            Phase::Shown(Look {
+                offset: 0.0,
+                alpha: 1.0
+            })
+        );
         t.tick(15.0);
         assert_eq!(t.committed(), Some(Commit::Expired));
         assert_eq!(t.deadline(), None);
-        let Phase::Dismissing(mid) = t.phase(15.25) else { panic!("dismissing at the midpoint") };
+        let Phase::Dismissing(mid) = t.phase(15.25) else {
+            panic!("dismissing at the midpoint")
+        };
         // ease-in-ease-out is symmetric: half the travel at half the time
-        assert!((mid.offset - 144.0).abs() < 1e-6 && (mid.alpha - 0.5).abs() < 1e-6, "{mid:?}");
+        assert!(
+            (mid.offset - 144.0).abs() < 1e-6 && (mid.alpha - 0.5).abs() < 1e-6,
+            "{mid:?}"
+        );
         assert_eq!(t.phase(15.5), Phase::Gone);
     }
 
@@ -199,16 +250,38 @@ mod tests {
         let mut t = Thumbnail::new(144.0, 0.0);
         t.press(Point::new(50.0, 40.0), 1.0);
         t.motion(Point::new(54.0, 44.0), 1.1);
-        assert_eq!(t.phase(1.1), Phase::Shown(Look { offset: 0.0, alpha: 1.0 }), "inside the 5 pt slop");
+        assert_eq!(
+            t.phase(1.1),
+            Phase::Shown(Look {
+                offset: 0.0,
+                alpha: 1.0
+            }),
+            "inside the 5 pt slop"
+        );
         t.release(1.2);
         assert_eq!(t.committed(), Some(Commit::Clicked));
 
         let mut t = Thumbnail::new(144.0, 0.0);
         t.press(Point::new(50.0, 40.0), 1.0);
         t.motion(Point::new(70.0, 40.0), 1.1);
-        assert_eq!(t.phase(1.1), Phase::Shown(Look { offset: 20.0, alpha: 1.0 }));
+        assert_eq!(
+            t.phase(1.1),
+            Phase::Shown(Look {
+                offset: 20.0,
+                alpha: 1.0
+            })
+        );
         t.release(1.2);
-        assert_eq!((t.committed(), t.phase(1.2)), (None, Phase::Shown(Look { offset: 0.0, alpha: 1.0 })));
+        assert_eq!(
+            (t.committed(), t.phase(1.2)),
+            (
+                None,
+                Phase::Shown(Look {
+                    offset: 0.0,
+                    alpha: 1.0
+                })
+            )
+        );
     }
 
     #[test]
@@ -221,8 +294,13 @@ mod tests {
         t.release(1.1);
         assert_eq!(t.committed(), Some(Commit::Swiped));
         assert_eq!(t.phase(1.1 + 0.08), Phase::Gone);
-        let Phase::Dismissing(start) = t.phase(1.1) else { panic!("dismissing") };
-        assert_eq!(start.offset, 60.0, "the slide continues from where the drag left it");
+        let Phase::Dismissing(start) = t.phase(1.1) else {
+            panic!("dismissing")
+        };
+        assert_eq!(
+            start.offset, 60.0,
+            "the slide continues from where the drag left it"
+        );
     }
 
     #[test]

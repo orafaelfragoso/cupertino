@@ -14,7 +14,10 @@ pub struct FunnelParams {
 
 impl Default for FunnelParams {
     fn default() -> Self {
-        Self { cell: 70.0, max_cells: 19 }
+        Self {
+            cell: 70.0,
+            max_cells: 19,
+        }
     }
 }
 
@@ -49,7 +52,10 @@ pub fn funnel_mesh(window: Rect, slot: Rect, p: f64, params: &FunnelParams) -> M
             } else {
                 a
             };
-            vertices.push(Vertex { position: [x as f32, y as f32], uv: [u as f32, v as f32] });
+            vertices.push(Vertex {
+                position: [x as f32, y as f32],
+                uv: [u as f32, v as f32],
+            });
         }
     }
     Mesh::new(cols + 1, rows + 1, vertices)
@@ -73,13 +79,24 @@ mod tests {
         assert_eq!(funnel_cells(Rect::new(0.0, 0.0, 69.0, 69.0), &p), (1, 1));
         assert_eq!(funnel_cells(Rect::new(0.0, 0.0, 140.0, 210.0), &p), (2, 3));
         assert_eq!(funnel_cells(Rect::new(0.0, 0.0, 900.0, 600.0), &p), (12, 8));
-        assert_eq!(funnel_cells(Rect::new(0.0, 0.0, 5000.0, 5000.0), &p), (19, 19));
-        assert_eq!(funnel_cells(Rect::new(0.0, 0.0, f64::NAN, 10.0), &p), (1, 1));
+        assert_eq!(
+            funnel_cells(Rect::new(0.0, 0.0, 5000.0, 5000.0), &p),
+            (19, 19)
+        );
+        assert_eq!(
+            funnel_cells(Rect::new(0.0, 0.0, f64::NAN, 10.0), &p),
+            (1, 1)
+        );
     }
 
     #[test]
     fn vertex_budget_is_20_by_20() {
-        let m = funnel_mesh(Rect::new(0.0, 0.0, 8000.0, 8000.0), slot(), 0.5, &FunnelParams::default());
+        let m = funnel_mesh(
+            Rect::new(0.0, 0.0, 8000.0, 8000.0),
+            slot(),
+            0.5,
+            &FunnelParams::default(),
+        );
         assert_eq!((m.cols, m.rows), (20, 20));
         assert_eq!(m.vertex_count(), 400);
     }
@@ -91,8 +108,12 @@ mod tests {
         assert_eq!(m0.bounds(), win());
         let m1 = funnel_mesh(win(), slot(), 1.0, &p);
         let b = m1.bounds();
-        assert!((b.min_x() - slot().min_x()).abs() < 1e-3 && (b.max_x() - slot().max_x()).abs() < 1e-3);
-        assert!((b.min_y() - slot().min_y()).abs() < 1e-3 && (b.max_y() - slot().max_y()).abs() < 1e-3);
+        assert!(
+            (b.min_x() - slot().min_x()).abs() < 1e-3 && (b.max_x() - slot().max_x()).abs() < 1e-3
+        );
+        assert!(
+            (b.min_y() - slot().min_y()).abs() < 1e-3 && (b.max_y() - slot().max_y()).abs() < 1e-3
+        );
     }
 
     #[test]
@@ -113,9 +134,20 @@ mod tests {
         let m0 = funnel_mesh(win(), slot(), 0.0, &p);
         let slot_c = slot();
         let m = funnel_mesh(win(), slot_c, 0.6, &p);
-        let target = |uv: [f32; 2]| (slot_c.min_x() + uv[0] as f64 * slot_c.width(), slot_c.min_y() + uv[1] as f64 * slot_c.height());
-        let remaining = |v: &Vertex| (v.position[0] as f64 - target(v.uv).0).hypot(v.position[1] as f64 - target(v.uv).1);
-        let start = |v: &Vertex| (m0.vertices.iter().find(|w| w.uv == v.uv).unwrap(), 0).0.position;
+        let target = |uv: [f32; 2]| {
+            (
+                slot_c.min_x() + uv[0] as f64 * slot_c.width(),
+                slot_c.min_y() + uv[1] as f64 * slot_c.height(),
+            )
+        };
+        let remaining = |v: &Vertex| {
+            (v.position[0] as f64 - target(v.uv).0).hypot(v.position[1] as f64 - target(v.uv).1)
+        };
+        let start = |v: &Vertex| {
+            (m0.vertices.iter().find(|w| w.uv == v.uv).unwrap(), 0)
+                .0
+                .position
+        };
         let mut near_done = 0;
         let mut far_done = 0;
         let mut dists: Vec<(f64, f64)> = m
@@ -123,7 +155,10 @@ mod tests {
             .iter()
             .map(|v| {
                 let s = start(v);
-                ((s[0] as f64 - target(v.uv).0).hypot(s[1] as f64 - target(v.uv).1), remaining(v))
+                (
+                    (s[0] as f64 - target(v.uv).0).hypot(s[1] as f64 - target(v.uv).1),
+                    remaining(v),
+                )
             })
             .collect();
         dists.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -150,7 +185,8 @@ mod tests {
             let m = funnel_mesh(win(), slot(), k as f64 / 100.0, &p);
             assert!(m.is_finite());
             for (i, (v, s)) in m.vertices.iter().zip(&m0.vertices).enumerate() {
-                let moved = ((v.position[0] - s.position[0]) as f64).hypot((v.position[1] - s.position[1]) as f64);
+                let moved = ((v.position[0] - s.position[0]) as f64)
+                    .hypot((v.position[1] - s.position[1]) as f64);
                 assert!(moved >= prev[i] - 1e-3, "vertex {i} step {k}");
                 prev[i] = moved;
             }

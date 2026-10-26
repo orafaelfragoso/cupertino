@@ -69,10 +69,13 @@ fn lex(s: &str) -> Option<Vec<Tok>> {
             }
             'a'..='z' | 'A'..='Z' | 'π' | 'τ' => {
                 let start = i;
-                while i < c.len() && (c[i].is_ascii_alphanumeric() || c[i] == 'π' || c[i] == 'τ') {
+                while i < c.len() && (c[i].is_ascii_alphanumeric() || c[i] == 'π' || c[i] == 'τ')
+                {
                     i += 1;
                 }
-                out.push(Tok::Ident(c[start..i].iter().collect::<String>().to_lowercase()));
+                out.push(Tok::Ident(
+                    c[start..i].iter().collect::<String>().to_lowercase(),
+                ));
             }
             '+' => {
                 out.push(Tok::Plus);
@@ -124,7 +127,10 @@ struct Parser {
 }
 
 fn starts_operand(t: Option<&Tok>) -> bool {
-    matches!(t, Some(Tok::Num(_) | Tok::Ident(_) | Tok::LParen | Tok::Minus | Tok::Plus))
+    matches!(
+        t,
+        Some(Tok::Num(_) | Tok::Ident(_) | Tok::LParen | Tok::Minus | Tok::Plus)
+    )
 }
 
 impl Parser {
@@ -295,7 +301,9 @@ fn function(name: &str, x: f64) -> Option<f64> {
 
 /// Whether `s` is worth evaluating: arithmetic, not a bare number or a word.
 fn looks_like_math(toks: &[Tok]) -> bool {
-    let has_value = toks.iter().any(|t| matches!(t, Tok::Num(_) | Tok::Ident(_)));
+    let has_value = toks
+        .iter()
+        .any(|t| matches!(t, Tok::Num(_) | Tok::Ident(_)));
     let structural = toks.iter().enumerate().any(|(i, t)| match t {
         Tok::Plus | Tok::Star | Tok::Slash | Tok::Caret | Tok::LParen => true,
         Tok::Minus | Tok::Percent => i > 0,
@@ -315,12 +323,20 @@ pub fn evaluate(input: &str) -> Option<Calculation> {
     if !looks_like_math(&toks) {
         return None;
     }
-    let mut p = Parser { t: toks, p: 0, depth: 0 };
+    let mut p = Parser {
+        t: toks,
+        p: 0,
+        depth: 0,
+    };
     let value = p.expr()?;
     if p.p != p.t.len() || !value.is_finite() {
         return None;
     }
-    Some(Calculation { expression: input.to_string(), value, text: format_number(value) })
+    Some(Calculation {
+        expression: input.to_string(),
+        value,
+        text: format_number(value),
+    })
 }
 
 /// Display format: up to 12 significant digits, no trailing zeros, scientific notation for very
@@ -333,12 +349,20 @@ pub fn format_number(v: f64) -> String {
     if !(1e-6..1e15).contains(&a) {
         let s = format!("{v:.11e}");
         let (mant, exp) = s.split_once('e').unwrap_or((&s, "0"));
-        let mant = if mant.contains('.') { mant.trim_end_matches('0').trim_end_matches('.') } else { mant };
+        let mant = if mant.contains('.') {
+            mant.trim_end_matches('0').trim_end_matches('.')
+        } else {
+            mant
+        };
         return format!("{mant}e{exp}");
     }
     let decimals = (11 - a.log10().floor() as i32).clamp(0, 20) as usize;
     let s = format!("{v:.decimals$}");
-    let s = if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s };
+    let s = if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        s
+    };
     if s == "-0" {
         "0".into()
     } else {
@@ -351,11 +375,15 @@ mod tests {
     use super::*;
 
     fn val(s: &str) -> f64 {
-        evaluate(s).unwrap_or_else(|| panic!("{s:?} should evaluate")).value
+        evaluate(s)
+            .unwrap_or_else(|| panic!("{s:?} should evaluate"))
+            .value
     }
 
     fn text(s: &str) -> String {
-        evaluate(s).unwrap_or_else(|| panic!("{s:?} should evaluate")).text
+        evaluate(s)
+            .unwrap_or_else(|| panic!("{s:?} should evaluate"))
+            .text
     }
 
     #[test]
@@ -407,7 +435,10 @@ mod tests {
         assert_eq!(val("1e3+1"), 1001.0);
         assert_eq!(val("1.5e-1*10"), 1.5);
         assert_eq!(val(".5+.5"), 1.0);
-        assert!(evaluate("2e").is_none(), "implicit multiplication is not supported");
+        assert!(
+            evaluate("2e").is_none(),
+            "implicit multiplication is not supported"
+        );
     }
 
     #[test]
@@ -426,7 +457,23 @@ mod tests {
 
     #[test]
     fn only_arithmetic_is_answered() {
-        for s in ["", "42", "-5", "3.14", "firefox", "hello world", "sqrt", "pi pi", "12 pears", "(", ")", "1 +", "+", "* 3", "()"] {
+        for s in [
+            "",
+            "42",
+            "-5",
+            "3.14",
+            "firefox",
+            "hello world",
+            "sqrt",
+            "pi pi",
+            "12 pears",
+            "(",
+            ")",
+            "1 +",
+            "+",
+            "* 3",
+            "()",
+        ] {
             assert!(evaluate(s).is_none(), "{s:?} must not produce a result");
         }
         assert!(evaluate("pi").is_some(), "a constant is arithmetic enough");
@@ -435,7 +482,21 @@ mod tests {
 
     #[test]
     fn invalid_arithmetic_is_rejected() {
-        for s in ["1/0", "5 % 0", "sqrt(-1)", "2^10000", "1+2)", "(1+2", "foo(3)", "ln(0)*0+0", "1 2", "1++", "3 * * 4", "log(-1)+0", "2(3)"] {
+        for s in [
+            "1/0",
+            "5 % 0",
+            "sqrt(-1)",
+            "2^10000",
+            "1+2)",
+            "(1+2",
+            "foo(3)",
+            "ln(0)*0+0",
+            "1 2",
+            "1++",
+            "3 * * 4",
+            "log(-1)+0",
+            "2(3)",
+        ] {
             assert!(evaluate(s).is_none(), "{s:?}");
         }
     }
@@ -480,7 +541,9 @@ mod tests {
 
     #[test]
     fn garbage_never_panics() {
-        for s in ["((((", "1e", "e1", "..", "1..2", "1.2.3+1", "😀+1", "1e+", "%%%", "^^", "1_", "__"] {
+        for s in [
+            "((((", "1e", "e1", "..", "1..2", "1.2.3+1", "😀+1", "1e+", "%%%", "^^", "1_", "__",
+        ] {
             let _ = evaluate(s);
         }
     }

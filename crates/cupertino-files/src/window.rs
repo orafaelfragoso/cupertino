@@ -17,19 +17,22 @@
 
 use crate::browser::Browser;
 use crate::context_menu::{tag_dots, view_segments, ItemKind, Menu};
+use crate::entry::Entry;
 use crate::geom::{Direction, Point, Rect, Size};
 use crate::layout::icon::{IconLayout, SectionSpec};
 use crate::layout::list::{ListLayout, RowSpec};
 use crate::metrics::{list_view, marquee, menu as menu_metrics, sidebar, window};
 use crate::name_edit::NameEdit;
-use crate::entry::Entry;
 use crate::places::{Place, PlaceGroup, PlaceKind};
-use crate::render::{available_size, fill_rect, fill_rounded, paint, stroke_rounded, truncate_middle, truncate_tail, Palette, Renderer};
-use std::path::{Path, PathBuf};
-use crate::tags::TagColor;
+use crate::render::{
+    available_size, fill_rect, fill_rounded, paint, stroke_rounded, truncate_middle, truncate_tail,
+    Palette, Renderer,
+};
 use crate::settings::{ColumnDesc, ColumnId, IconViewSettings, ListViewSettings};
-use std::time::SystemTime;
+use crate::tags::TagColor;
 use cupertino_decorations::palette::Rgba;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use tiny_skia::{PathBuilder, Pixmap, PixmapPaint, Stroke, Transform};
 
 /// Window chrome metrics.
@@ -76,7 +79,10 @@ pub mod metrics {
     /// Smallest browser area, its scroll-view content insets are taken as zero (approximate).
     pub const BROWSER_MIN: (f64, f64) = (316.0, 100.0);
     /// Smallest window content: the minimum sidebar, the divider, the minimum browser and the toolbar..
-    pub const WINDOW_MIN: (f64, f64) = (SIDEBAR_MIN + SEPARATOR + BROWSER_MIN.0, TOOLBAR_HEIGHT + SEPARATOR + BROWSER_MIN.1);
+    pub const WINDOW_MIN: (f64, f64) = (
+        SIDEBAR_MIN + SEPARATOR + BROWSER_MIN.0,
+        TOOLBAR_HEIGHT + SEPARATOR + BROWSER_MIN.1,
+    );
     /// Path bar and status bar heights, each with a 1 pt separator at its top edge. heights and status bar separator (nib); the path bar's separator is approximate (screenshot).
     pub const PATH_BAR_HEIGHT: f64 = window::PATH_BAR_HEIGHT;
     pub const STATUS_BAR_HEIGHT: f64 = window::STATUS_BAR_HEIGHT;
@@ -102,7 +108,10 @@ pub struct Bars {
 }
 
 impl Bars {
-    pub const HIDDEN: Bars = Bars { path: false, status: false };
+    pub const HIDDEN: Bars = Bars {
+        path: false,
+        status: false,
+    };
 }
 
 /// The toolbar's items after the title, left to right.
@@ -120,10 +129,21 @@ pub enum ToolbarItem {
 
 impl ToolbarItem {
     /// The order of a screenshot without Share. approximate.
-    pub const ORDER: [ToolbarItem; 5] = [ToolbarItem::View, ToolbarItem::GroupBy, ToolbarItem::Tags, ToolbarItem::Action, ToolbarItem::Search];
+    pub const ORDER: [ToolbarItem; 5] = [
+        ToolbarItem::View,
+        ToolbarItem::GroupBy,
+        ToolbarItem::Tags,
+        ToolbarItem::Action,
+        ToolbarItem::Search,
+    ];
     /// Dropped first when the toolbar is too narrow; the view popup stays. approximate: the design moves items into an
     /// overflow menu, which is not built.
-    const DROP_ORDER: [ToolbarItem; 4] = [ToolbarItem::GroupBy, ToolbarItem::Tags, ToolbarItem::Action, ToolbarItem::Search];
+    const DROP_ORDER: [ToolbarItem; 4] = [
+        ToolbarItem::GroupBy,
+        ToolbarItem::Tags,
+        ToolbarItem::Action,
+        ToolbarItem::Search,
+    ];
 
     /// `(width, height): Action and Search are as designed; the view popup and Group By take the arrange popup's
     /// size and Tags the share button's (approximate: their own items are not in the nibs).
@@ -211,7 +231,8 @@ pub struct WindowLayout {
 impl WindowLayout {
     pub fn new(size: Size, places: &[Place], bars: Bars) -> Self {
         // the sidebar gives way to the browser minimum down to its own minimum
-        let sidebar_w = (size.w - m::SEPARATOR - m::BROWSER_MIN.0).clamp(m::SIDEBAR_MIN, sidebar::DEFAULT_WIDTH);
+        let sidebar_w = (size.w - m::SEPARATOR - m::BROWSER_MIN.0)
+            .clamp(m::SIDEBAR_MIN, sidebar::DEFAULT_WIDTH);
         let right = sidebar_w + m::SEPARATOR;
         let toolbar = Rect::new(right, 0.0, (size.w - right).max(0.0), m::TOOLBAR_HEIGHT);
         let content_y = m::TOOLBAR_HEIGHT + m::SEPARATOR;
@@ -231,8 +252,12 @@ impl WindowLayout {
         let back = Rect::new(toolbar.x + m::TOOLBAR_INSET, control_y, bw / 2.0, bh);
         let forward = Rect::new(back.right(), control_y, bw / 2.0, bh);
         let title_x = forward.right() + m::TITLE_GAP;
-        let width = |shown: &[ToolbarItem]| shown.iter().map(|i| i.size().0).sum::<f64>() + shown.len().saturating_sub(1) as f64 * m::ITEM_GAP;
-        let room = toolbar.right() - m::TOOLBAR_INSET - (title_x + m::TITLE_MIN + m::TITLE_TRAILING_GAP);
+        let width = |shown: &[ToolbarItem]| {
+            shown.iter().map(|i| i.size().0).sum::<f64>()
+                + shown.len().saturating_sub(1) as f64 * m::ITEM_GAP
+        };
+        let room =
+            toolbar.right() - m::TOOLBAR_INSET - (title_x + m::TITLE_MIN + m::TITLE_TRAILING_GAP);
         let mut shown = ToolbarItem::ORDER.to_vec();
         for item in ToolbarItem::DROP_ORDER {
             if width(&shown) <= room {
@@ -254,8 +279,17 @@ impl WindowLayout {
             })
             .collect();
         items.reverse();
-        let title_end = items.first().map_or(toolbar.right() - m::TOOLBAR_INSET, |(_, r)| r.x - m::TITLE_TRAILING_GAP);
-        let title = Rect::new(title_x, 0.0, (title_end - title_x).max(0.0), m::TOOLBAR_HEIGHT);
+        let title_end = items
+            .first()
+            .map_or(toolbar.right() - m::TOOLBAR_INSET, |(_, r)| {
+                r.x - m::TITLE_TRAILING_GAP
+            });
+        let title = Rect::new(
+            title_x,
+            0.0,
+            (title_end - title_x).max(0.0),
+            m::TOOLBAR_HEIGHT,
+        );
 
         let row = sidebar::RowSize::DEFAULT.row_height();
         let (mut groups, mut rows) = (Vec::new(), Vec::with_capacity(places.len()));
@@ -266,14 +300,40 @@ impl WindowLayout {
                 if current.is_some() {
                     y += sidebar::INTERGROUP_SPACING;
                 }
-                groups.push((p.group, Rect::new(m::SIDEBAR_ROW_INSET, y, sidebar_w - 2.0 * m::SIDEBAR_ROW_INSET, sidebar::GROUP_ROW_HEIGHT)));
+                groups.push((
+                    p.group,
+                    Rect::new(
+                        m::SIDEBAR_ROW_INSET,
+                        y,
+                        sidebar_w - 2.0 * m::SIDEBAR_ROW_INSET,
+                        sidebar::GROUP_ROW_HEIGHT,
+                    ),
+                ));
                 y += sidebar::GROUP_ROW_HEIGHT;
                 current = Some(p.group);
             }
-            rows.push(Rect::new(m::SIDEBAR_ROW_INSET, y, sidebar_w - 2.0 * m::SIDEBAR_ROW_INSET, row));
+            rows.push(Rect::new(
+                m::SIDEBAR_ROW_INSET,
+                y,
+                sidebar_w - 2.0 * m::SIDEBAR_ROW_INSET,
+                row,
+            ));
             y += row;
         }
-        WindowLayout { size, sidebar: Rect::new(0.0, 0.0, sidebar_w, size.h), toolbar, content, path_bar, status_bar, back, forward, title, items, groups, places: rows }
+        WindowLayout {
+            size,
+            sidebar: Rect::new(0.0, 0.0, sidebar_w, size.h),
+            toolbar,
+            content,
+            path_bar,
+            status_bar,
+            back,
+            forward,
+            title,
+            items,
+            groups,
+            places: rows,
+        }
     }
 
     /// The control or region under `p` (window points), not looking into the content.
@@ -284,7 +344,11 @@ impl WindowLayout {
         }
         // a disabled item takes the press without moving the window
         if let Some((item, _)) = self.items.iter().find(|(_, r)| r.contains(p)) {
-            return Some(if item.enabled() { Hit::Toolbar(*item) } else { Hit::Chrome });
+            return Some(if item.enabled() {
+                Hit::Toolbar(*item)
+            } else {
+                Hit::Chrome
+            });
         }
         if let Some(i) = self.places.iter().position(|r| r.contains(p)) {
             return Some(Hit::Place(i));
@@ -302,13 +366,19 @@ impl WindowLayout {
 pub fn path_chain(dir: &Path, places: &[Place]) -> Vec<(PathBuf, String)> {
     let mut chain = Vec::new();
     for folder in dir.ancestors() {
-        if let Some(place) = places.iter().find(|p| p.path == folder && matches!(p.kind, PlaceKind::Trash | PlaceKind::Recents)) {
+        if let Some(place) = places
+            .iter()
+            .find(|p| p.path == folder && matches!(p.kind, PlaceKind::Trash | PlaceKind::Recents))
+        {
             chain.push((folder.to_path_buf(), place.name.clone()));
             break;
         }
         let name = match folder.file_name() {
             Some(name) => name.to_string_lossy().into_owned(),
-            None => places.iter().find(|p| p.kind == PlaceKind::Computer && p.path == folder).map_or_else(|| folder.display().to_string(), |p| p.name.clone()),
+            None => places
+                .iter()
+                .find(|p| p.kind == PlaceKind::Computer && p.path == folder)
+                .map_or_else(|| folder.display().to_string(), |p| p.name.clone()),
         };
         chain.push((folder.to_path_buf(), name));
     }
@@ -334,7 +404,19 @@ pub struct PathSegment {
 pub fn path_segments(bar: &Rect, chain: &[(PathBuf, String)], widths: &[f64]) -> Vec<PathSegment> {
     let n = chain.len();
     let room = bar.w - 2.0 * m::PATH_BAR_INSET;
-    let total = |named: &[bool]| -> f64 { (0..n).map(|i| m::PATH_ICON + if named[i] { m::PATH_ICON_GAP + widths[i] } else { 0.0 }).sum::<f64>() + n.saturating_sub(1) as f64 * m::PATH_SEPARATOR };
+    let total = |named: &[bool]| -> f64 {
+        (0..n)
+            .map(|i| {
+                m::PATH_ICON
+                    + if named[i] {
+                        m::PATH_ICON_GAP + widths[i]
+                    } else {
+                        0.0
+                    }
+            })
+            .sum::<f64>()
+            + n.saturating_sub(1) as f64 * m::PATH_SEPARATOR
+    };
     let mut named = vec![true; n];
     for i in 0..n.saturating_sub(1) {
         if total(&named) <= room {
@@ -346,12 +428,36 @@ pub fn path_segments(bar: &Rect, chain: &[(PathBuf, String)], widths: &[f64]) ->
     let end = bar.right() - m::PATH_BAR_INSET;
     let mut out = Vec::with_capacity(n);
     for (i, (path, name)) in chain.iter().enumerate() {
-        let icon = Rect::new(x, bar.y + (bar.h - m::PATH_ICON) / 2.0, m::PATH_ICON, m::PATH_ICON);
+        let icon = Rect::new(
+            x,
+            bar.y + (bar.h - m::PATH_ICON) / 2.0,
+            m::PATH_ICON,
+            m::PATH_ICON,
+        );
         let text_x = icon.right() + m::PATH_ICON_GAP;
-        let text_w = if named[i] { widths[i].min(end - text_x).max(0.0) } else { 0.0 };
+        let text_w = if named[i] {
+            widths[i].min(end - text_x).max(0.0)
+        } else {
+            0.0
+        };
         let text = Rect::new(text_x, bar.y, text_w, bar.h);
-        let frame = Rect::new(x, bar.y, if named[i] { text.right() - x } else { m::PATH_ICON }, bar.h);
-        out.push(PathSegment { path: path.clone(), name: name.clone(), icon, text, frame });
+        let frame = Rect::new(
+            x,
+            bar.y,
+            if named[i] {
+                text.right() - x
+            } else {
+                m::PATH_ICON
+            },
+            bar.h,
+        );
+        out.push(PathSegment {
+            path: path.clone(),
+            name: name.clone(),
+            icon,
+            text,
+            frame,
+        });
         x = frame.right() + m::PATH_SEPARATOR;
     }
     out
@@ -360,7 +466,11 @@ pub fn path_segments(bar: &Rect, chain: &[(PathBuf, String)], widths: &[f64]) ->
 /// The status bar's text: "1 item" or "N items", then the space left on the folder's file system when it has one,
 /// "207 items, 227.27 GB available" (approximate, a screenshot; the selection count variant is not built).
 pub fn status_text(items: usize, available: Option<u64>) -> String {
-    let count = if items == 1 { "1 item".to_string() } else { format!("{items} items") };
+    let count = if items == 1 {
+        "1 item".to_string()
+    } else {
+        format!("{items} items")
+    };
     match available {
         Some(bytes) => format!("{count}, {} available", available_size(bytes)),
         None => count,
@@ -450,10 +560,17 @@ const EDITOR_RADIUS: f64 = 3.0;
 /// The rubber band over the content: a quaternary label fill inside a 1 pt tertiary label border, square corners,
 /// clipped to the content area (the view under the band is the default collection view band).
 fn paint_marquee(pm: &mut Pixmap, scale: f32, band: &Rect, content: &Rect, pal: &Palette) {
-    let Some(r) = band.intersection(content) else { return };
+    let Some(r) = band.intersection(content) else {
+        return;
+    };
     fill_rect(pm, &r, scale, pal.quaternary_label);
     let w = marquee::BORDER_WIDTH;
-    for edge in [Rect::new(r.x, r.y, r.w, w), Rect::new(r.x, r.bottom() - w, r.w, w), Rect::new(r.x, r.y, w, r.h), Rect::new(r.right() - w, r.y, w, r.h)] {
+    for edge in [
+        Rect::new(r.x, r.y, r.w, w),
+        Rect::new(r.x, r.bottom() - w, r.w, w),
+        Rect::new(r.x, r.y, w, r.h),
+        Rect::new(r.right() - w, r.y, w, r.h),
+    ] {
         fill_rect(pm, &edge, scale, pal.tertiary_label);
     }
 }
@@ -492,7 +609,9 @@ impl Frame {
 
     /// Scroll as little as needed for item `index` to be in sight.
     pub fn reveal(&mut self, index: usize) {
-        let Some(r) = self.content.frame_of(index) else { return };
+        let Some(r) = self.content.frame_of(index) else {
+            return;
+        };
         let top = self.scroll + self.content.fixed_top();
         let bottom = self.scroll + self.window.content.h;
         if r.y < top {
@@ -515,7 +634,12 @@ impl Frame {
             ContentLayout::List(l, _) => {
                 let row = l.rows.get(index)?;
                 let column = l.columns.iter().find(|c| c.id == ColumnId::Name)?;
-                Rect::new(row.text_x, row.frame.y, (column.frame.right() - row.text_x).max(0.0), row.frame.h)
+                Rect::new(
+                    row.text_x,
+                    row.frame.y,
+                    (column.frame.right() - row.text_x).max(0.0),
+                    row.frame.h,
+                )
             }
         };
         Some(local.offset(self.window.content.x, self.window.content.y - self.scroll))
@@ -523,7 +647,10 @@ impl Frame {
 
     /// Content coordinates (points from the content area's top-left, scrolled with the content) of the window point `p`.
     pub fn to_content(&self, p: Point) -> Point {
-        Point { x: p.x - self.window.content.x, y: p.y - self.window.content.y + self.scroll }
+        Point {
+            x: p.x - self.window.content.x,
+            y: p.y - self.window.content.y + self.scroll,
+        }
     }
 
     /// Items a rubber band over `band` (content coordinates) touches: icons and labels that intersect it in the icon
@@ -549,13 +676,31 @@ impl Frame {
         if let Some(hit) = self.window.chrome_hit(p) {
             return hit;
         }
-        let local = Point { x: p.x - self.window.content.x, y: p.y - self.window.content.y };
+        let local = Point {
+            x: p.x - self.window.content.x,
+            y: p.y - self.window.content.y,
+        };
         match &self.content {
-            ContentLayout::Icons(l) => l.hit(Point { x: local.x, y: local.y + self.scroll }).map_or(Hit::Empty, Hit::Item),
-            ContentLayout::List(l, _) if local.y < list_view::HEADER_HEIGHT => l.columns.iter().find(|c| local.x >= c.frame.x && local.x < c.frame.right()).map_or(Hit::Chrome, |c| Hit::Column(c.id)),
+            ContentLayout::Icons(l) => l
+                .hit(Point {
+                    x: local.x,
+                    y: local.y + self.scroll,
+                })
+                .map_or(Hit::Empty, Hit::Item),
+            ContentLayout::List(l, _) if local.y < list_view::HEADER_HEIGHT => l
+                .columns
+                .iter()
+                .find(|c| local.x >= c.frame.x && local.x < c.frame.right())
+                .map_or(Hit::Chrome, |c| Hit::Column(c.id)),
             ContentLayout::List(l, _) => match l.row_at(local.y + self.scroll) {
                 // the triangle's column of the row, its full height
-                Some(i) if l.rows[i].disclosure.is_some_and(|d| local.x >= d.x && local.x < d.right()) => Hit::Disclosure(i),
+                Some(i)
+                    if l.rows[i]
+                        .disclosure
+                        .is_some_and(|d| local.x >= d.x && local.x < d.right()) =>
+                {
+                    Hit::Disclosure(i)
+                }
                 Some(i) => Hit::Item(i),
                 None => Hit::Empty,
             },
@@ -597,75 +742,194 @@ pub struct WindowPainter {
 impl WindowPainter {
     /// A painter with the measured default view settings.
     pub fn new(renderer: Renderer) -> Self {
-        WindowPainter { renderer, icons: IconViewSettings::default(), list: ListViewSettings::default() }
+        WindowPainter {
+            renderer,
+            icons: IconViewSettings::default(),
+            list: ListViewSettings::default(),
+        }
     }
 
     /// The frame of a window of `size` points on the folder `dir` with the `bars` shown, showing the items of `outline`
     /// (one row per displayed item, [`Browser::outline`]) in `mode` at `scale`, scrolled to `scroll` (clamped to the
     /// content).
     #[allow(clippy::too_many_arguments)]
-    pub fn frame(&mut self, size: Size, places: &[Place], bars: Bars, dir: &Path, mode: ViewMode, outline: &[RowSpec], scroll: f64, scale: f32) -> Frame {
+    pub fn frame(
+        &mut self,
+        size: Size,
+        places: &[Place],
+        bars: Bars,
+        dir: &Path,
+        mode: ViewMode,
+        outline: &[RowSpec],
+        scroll: f64,
+        scale: f32,
+    ) -> Frame {
         self.renderer.text.set_scale(scale);
         let window = WindowLayout::new(size, places, bars);
         let path = match &window.path_bar {
             Some(bar) => {
                 let chain = path_chain(dir, places);
                 let px = m::BAR_TEXT_SIZE as f32 * scale;
-                let widths: Vec<f64> = chain.iter().map(|(_, name)| f64::from(self.renderer.text.measure(name, px, 400, 0.0) / scale)).collect();
+                let widths: Vec<f64> = chain
+                    .iter()
+                    .map(|(_, name)| {
+                        f64::from(self.renderer.text.measure(name, px, 400, 0.0) / scale)
+                    })
+                    .collect();
                 path_segments(bar, &chain, &widths)
             }
             None => Vec::new(),
         };
         let content = match mode {
-            ViewMode::Icons => ContentLayout::Icons(self.renderer.icon_layout(&self.icons, &[SectionSpec { title: None, count: outline.len() }], window.content.w, scale).1),
-            ViewMode::List => ContentLayout::List(self.renderer.list_layout(outline, &self.list, window.content.w, scale), self.list.columns.clone()),
+            ViewMode::Icons => ContentLayout::Icons(
+                self.renderer
+                    .icon_layout(
+                        &self.icons,
+                        &[SectionSpec {
+                            title: None,
+                            count: outline.len(),
+                        }],
+                        window.content.w,
+                        scale,
+                    )
+                    .1,
+            ),
+            ViewMode::List => ContentLayout::List(
+                self.renderer
+                    .list_layout(outline, &self.list, window.content.w, scale),
+                self.list.columns.clone(),
+            ),
         };
-        let mut frame = Frame { window, content, scroll: 0.0, path };
+        let mut frame = Frame {
+            window,
+            content,
+            scroll: 0.0,
+            path,
+        };
         frame.scroll_by(scroll);
         frame
     }
 
     /// Draw `frame` of the window into `pm` (device pixels, `scale` per point).
-    pub fn paint(&mut self, pm: &mut Pixmap, scale: f32, frame: &Frame, state: &WindowState<'_>, pal: &Palette) {
+    pub fn paint(
+        &mut self,
+        pm: &mut Pixmap,
+        scale: f32,
+        frame: &Frame,
+        state: &WindowState<'_>,
+        pal: &Palette,
+    ) {
         self.renderer.text.set_scale(scale);
         let w = &frame.window;
         // the sidebar is left clear: the server draws its material below the surface. An active window's strip is the
         // content background (the header's resting fill is the content background and the header reads
         // as part of the strip)
-        let strip = if state.active { pal.background } else { pal.toolbar_inactive };
+        let strip = if state.active {
+            pal.background
+        } else {
+            pal.toolbar_inactive
+        };
         fill_rect(pm, &w.toolbar, scale, strip);
         self.paint_sidebar(pm, scale, w, state, pal);
-        fill_rect(pm, &Rect::new(w.sidebar.right(), 0.0, m::SEPARATOR, w.size.h), scale, pal.separator);
+        fill_rect(
+            pm,
+            &Rect::new(w.sidebar.right(), 0.0, m::SEPARATOR, w.size.h),
+            scale,
+            pal.separator,
+        );
         // a 1 pt line under the strip at all times: a screenshot shows one (a 222 grey line under the toolbar and
         // one under the list header, approximate), which is kept over 's reading of the automatic separator
         // (no line until content scrolls under the strip). The list header is part of the strip and takes its fill
         // (the resting colour)
-        fill_rect(pm, &Rect::new(w.toolbar.x, w.toolbar.bottom(), w.toolbar.w, m::SEPARATOR), scale, pal.separator);
+        fill_rect(
+            pm,
+            &Rect::new(w.toolbar.x, w.toolbar.bottom(), w.toolbar.w, m::SEPARATOR),
+            scale,
+            pal.separator,
+        );
         self.paint_toolbar(pm, scale, w, state, pal);
         self.paint_bars(pm, scale, frame, state, pal);
 
         let entries = state.browser.entries();
         let selected: Vec<usize> = state.browser.selection().indices().collect();
-        let size = Size { w: w.content.w, h: w.content.h };
+        let size = Size {
+            w: w.content.w,
+            h: w.content.h,
+        };
         if size.w < 1.0 || size.h < 1.0 {
             return;
         }
         let content = match state.mode {
-            ViewMode::Icons => self.renderer.icon_view(entries, None, &selected, state.active, &self.icons, size, frame.scroll, scale, pal),
-            ViewMode::List => self.renderer.list_view(entries, state.browser.outline(), &selected, state.active, &self.list, state.browser.sort(), size, frame.scroll, scale, &Palette { header: strip, ..*pal }, state.now),
+            ViewMode::Icons => self.renderer.icon_view(
+                entries,
+                None,
+                &selected,
+                state.active,
+                &self.icons,
+                size,
+                frame.scroll,
+                scale,
+                pal,
+            ),
+            ViewMode::List => self.renderer.list_view(
+                entries,
+                state.browser.outline(),
+                &selected,
+                state.active,
+                &self.list,
+                state.browser.sort(),
+                size,
+                frame.scroll,
+                scale,
+                &Palette {
+                    header: strip,
+                    ..*pal
+                },
+                state.now,
+            ),
         };
-        let (x, y) = ((w.content.x as f32 * scale).round() as i32, (w.content.y as f32 * scale).round() as i32);
-        pm.draw_pixmap(x, y, content.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
+        let (x, y) = (
+            (w.content.x as f32 * scale).round() as i32,
+            (w.content.y as f32 * scale).round() as i32,
+        );
+        pm.draw_pixmap(
+            x,
+            y,
+            content.as_ref(),
+            &PixmapPaint::default(),
+            Transform::identity(),
+            None,
+        );
         if let Some(target) = state.drop_target.and_then(|i| frame.item_frame(i)) {
-            let outline = [pal.accent[0], pal.accent[1], pal.accent[2], DROP_TARGET_ALPHA];
+            let outline = [
+                pal.accent[0],
+                pal.accent[1],
+                pal.accent[2],
+                DROP_TARGET_ALPHA,
+            ];
             fill_rounded(pm, &target, m::HIGHLIGHT_RADIUS, scale, outline);
         }
         if let Some((origin, at)) = state.marquee {
             let band = Rect::from_corners(origin, frame.to_content(at));
             // the list header covers the top of the content
-            let top = if state.mode == ViewMode::List { list_view::HEADER_HEIGHT } else { 0.0 };
-            let visible = Rect::new(w.content.x, w.content.y + top, w.content.w, (w.content.h - top).max(0.0));
-            paint_marquee(pm, scale, &band.offset(w.content.x, w.content.y - frame.scroll), &visible, pal);
+            let top = if state.mode == ViewMode::List {
+                list_view::HEADER_HEIGHT
+            } else {
+                0.0
+            };
+            let visible = Rect::new(
+                w.content.x,
+                w.content.y + top,
+                w.content.w,
+                (w.content.h - top).max(0.0),
+            );
+            paint_marquee(
+                pm,
+                scale,
+                &band.offset(w.content.x, w.content.y - frame.scroll),
+                &visible,
+                pal,
+            );
         }
         if let Some(edit) = state.edit {
             self.paint_editor(pm, scale, frame, edit, state.mode, pal);
@@ -674,74 +938,226 @@ impl WindowPainter {
 
     /// The path bar on the content background and the status bar on the toolbar's fill, each under a separator (the
     /// within-window and title bar materials of are drawn as these opaque fills, approximate).
-    fn paint_bars(&mut self, pm: &mut Pixmap, scale: f32, frame: &Frame, state: &WindowState<'_>, pal: &Palette) {
+    fn paint_bars(
+        &mut self,
+        pm: &mut Pixmap,
+        scale: f32,
+        frame: &Frame,
+        state: &WindowState<'_>,
+        pal: &Palette,
+    ) {
         let px = m::BAR_TEXT_SIZE as f32 * scale;
         if let Some(bar) = &frame.window.path_bar {
             fill_rect(pm, bar, scale, pal.background);
-            fill_rect(pm, &Rect::new(bar.x, bar.y, bar.w, m::SEPARATOR), scale, pal.separator);
+            fill_rect(
+                pm,
+                &Rect::new(bar.x, bar.y, bar.w, m::SEPARATOR),
+                scale,
+                pal.separator,
+            );
             for (i, segment) in frame.path.iter().enumerate() {
                 if i > 0 {
-                    let chevron = Rect::new(segment.icon.x - m::PATH_SEPARATOR, bar.y, m::PATH_SEPARATOR, bar.h);
-                    self.renderer.draw_symbol(pm, &chevron, "symbol.chevron.right", m::PATH_CHEVRON, scale, pal.secondary_text);
+                    let chevron = Rect::new(
+                        segment.icon.x - m::PATH_SEPARATOR,
+                        bar.y,
+                        m::PATH_SEPARATOR,
+                        bar.h,
+                    );
+                    self.renderer.draw_symbol(
+                        pm,
+                        &chevron,
+                        "symbol.chevron.right",
+                        m::PATH_CHEVRON,
+                        scale,
+                        pal.secondary_text,
+                    );
                 }
-                match state.places.iter().find(|p| p.path == segment.path && p.kind == PlaceKind::Recents) {
-                    Some(recents) => self.renderer.draw_symbol(pm, &segment.icon, recents.kind.symbol(), m::PATH_ICON, scale, pal.accent),
-                    None => self.renderer.draw_item_icon(pm, &segment.icon, &Entry { path: segment.path.clone(), ..Entry::synthetic(&segment.name, true, 0) }, scale),
+                match state
+                    .places
+                    .iter()
+                    .find(|p| p.path == segment.path && p.kind == PlaceKind::Recents)
+                {
+                    Some(recents) => self.renderer.draw_symbol(
+                        pm,
+                        &segment.icon,
+                        recents.kind.symbol(),
+                        m::PATH_ICON,
+                        scale,
+                        pal.accent,
+                    ),
+                    None => self.renderer.draw_item_icon(
+                        pm,
+                        &segment.icon,
+                        &Entry {
+                            path: segment.path.clone(),
+                            ..Entry::synthetic(&segment.name, true, 0)
+                        },
+                        scale,
+                    ),
                 }
                 if segment.text.w > 0.0 {
-                    let name = truncate_tail(&mut self.renderer.text, &segment.name, px, segment.text.w as f32 * scale);
-                    self.renderer.text.draw(pm, &name, segment.text.x as f32 * scale, segment.text.center().y as f32 * scale + px * 0.36, px, 400, 0.0, pal.secondary_text);
+                    let name = truncate_tail(
+                        &mut self.renderer.text,
+                        &segment.name,
+                        px,
+                        segment.text.w as f32 * scale,
+                    );
+                    self.renderer.text.draw(
+                        pm,
+                        &name,
+                        segment.text.x as f32 * scale,
+                        segment.text.center().y as f32 * scale + px * 0.36,
+                        px,
+                        400,
+                        0.0,
+                        pal.secondary_text,
+                    );
                 }
             }
         }
         if let Some(bar) = &frame.window.status_bar {
-            fill_rect(pm, bar, scale, if state.active { pal.toolbar } else { pal.toolbar_inactive });
-            fill_rect(pm, &Rect::new(bar.x, bar.y, bar.w, m::SEPARATOR), scale, pal.separator);
-            let text = truncate_tail(&mut self.renderer.text, state.status, px, (bar.w - 2.0 * window::STATUS_BAR_LEADING_INSET) as f32 * scale);
+            fill_rect(
+                pm,
+                bar,
+                scale,
+                if state.active {
+                    pal.toolbar
+                } else {
+                    pal.toolbar_inactive
+                },
+            );
+            fill_rect(
+                pm,
+                &Rect::new(bar.x, bar.y, bar.w, m::SEPARATOR),
+                scale,
+                pal.separator,
+            );
+            let text = truncate_tail(
+                &mut self.renderer.text,
+                state.status,
+                px,
+                (bar.w - 2.0 * window::STATUS_BAR_LEADING_INSET) as f32 * scale,
+            );
             let width = self.renderer.text.measure(&text, px, 400, 0.0);
             // centred, as in a screenshot (approximate)
-            self.renderer.text.draw(pm, &text, bar.center().x as f32 * scale - width / 2.0, bar.center().y as f32 * scale + px * 0.36, px, 400, 0.0, pal.secondary_text);
+            self.renderer.text.draw(
+                pm,
+                &text,
+                bar.center().x as f32 * scale - width / 2.0,
+                bar.center().y as f32 * scale + px * 0.36,
+                px,
+                400,
+                0.0,
+                pal.secondary_text,
+            );
         }
     }
 
     /// The name editor over the label of the item it edits: a field with the accent as its border, the selection
     /// and the caret. approximate shapes (the design's field editor is not measured).
-    fn paint_editor(&mut self, pm: &mut Pixmap, scale: f32, frame: &Frame, edit: &NameEdit, mode: ViewMode, pal: &Palette) {
-        let Some(label) = frame.name_frame(edit.index()) else { return };
+    fn paint_editor(
+        &mut self,
+        pm: &mut Pixmap,
+        scale: f32,
+        frame: &Frame,
+        edit: &NameEdit,
+        mode: ViewMode,
+        pal: &Palette,
+    ) {
+        let Some(label) = frame.name_frame(edit.index()) else {
+            return;
+        };
         let text_size = match mode {
             ViewMode::Icons => f64::from(self.icons.text_size),
             ViewMode::List => f64::from(self.list.text_size),
         };
         let px = text_size as f32 * scale;
         let text = edit.text();
-        let width_to = |renderer: &mut Renderer, end: usize| f64::from(renderer.text.measure(&text_prefix(&text, end), px, 400, 0.0)) / f64::from(scale);
+        let width_to = |renderer: &mut Renderer, end: usize| {
+            f64::from(
+                renderer
+                    .text
+                    .measure(&text_prefix(&text, end), px, 400, 0.0),
+            ) / f64::from(scale)
+        };
         let text_w = width_to(&mut self.renderer, text.chars().count());
-        let inner_w = text_w.max(label.w - 2.0 * EDITOR_PADDING).max(EDITOR_MIN_WIDTH);
-        let (w, h) = (inner_w + 2.0 * EDITOR_PADDING, label.h.min(text_size * 1.6 + 4.0).max(text_size + 4.0));
+        let inner_w = text_w
+            .max(label.w - 2.0 * EDITOR_PADDING)
+            .max(EDITOR_MIN_WIDTH);
+        let (w, h) = (
+            inner_w + 2.0 * EDITOR_PADDING,
+            label.h.min(text_size * 1.6 + 4.0).max(text_size + 4.0),
+        );
         let x = match mode {
             ViewMode::Icons => label.center().x - w / 2.0,
             ViewMode::List => label.x - EDITOR_PADDING,
         }
         .max(frame.window.content.x);
         let y = label.center().y - h / 2.0;
-        fill_rounded(pm, &Rect::new(x - EDITOR_BORDER, y - EDITOR_BORDER, w + 2.0 * EDITOR_BORDER, h + 2.0 * EDITOR_BORDER), EDITOR_RADIUS + EDITOR_BORDER, scale, pal.accent);
-        fill_rounded(pm, &Rect::new(x, y, w, h), EDITOR_RADIUS, scale, pal.background);
+        fill_rounded(
+            pm,
+            &Rect::new(
+                x - EDITOR_BORDER,
+                y - EDITOR_BORDER,
+                w + 2.0 * EDITOR_BORDER,
+                h + 2.0 * EDITOR_BORDER,
+            ),
+            EDITOR_RADIUS + EDITOR_BORDER,
+            scale,
+            pal.accent,
+        );
+        fill_rounded(
+            pm,
+            &Rect::new(x, y, w, h),
+            EDITOR_RADIUS,
+            scale,
+            pal.background,
+        );
         let (left, baseline) = (x + EDITOR_PADDING, (y + h / 2.0) as f32 * scale + px * 0.36);
         let selection = edit.selection();
         if !selection.is_empty() {
-            let (a, b) = (width_to(&mut self.renderer, selection.start), width_to(&mut self.renderer, selection.end));
-            fill_rect(pm, &Rect::new(left + a, y + 2.0, b - a, h - 4.0), scale, [pal.accent[0], pal.accent[1], pal.accent[2], SELECTION_ALPHA]);
+            let (a, b) = (
+                width_to(&mut self.renderer, selection.start),
+                width_to(&mut self.renderer, selection.end),
+            );
+            fill_rect(
+                pm,
+                &Rect::new(left + a, y + 2.0, b - a, h - 4.0),
+                scale,
+                [pal.accent[0], pal.accent[1], pal.accent[2], SELECTION_ALPHA],
+            );
         }
-        self.renderer.text.draw(pm, &text, left as f32 * scale, baseline, px, 400, 0.0, pal.text);
+        self.renderer.text.draw(
+            pm,
+            &text,
+            left as f32 * scale,
+            baseline,
+            px,
+            400,
+            0.0,
+            pal.text,
+        );
         if selection.is_empty() {
             let caret = on_pixel(left + width_to(&mut self.renderer, edit.caret()), scale);
-            fill_rect(pm, &Rect::new(caret, y + 2.0, 1.0, h - 4.0), scale, pal.text);
+            fill_rect(
+                pm,
+                &Rect::new(caret, y + 2.0, 1.0, h - 4.0),
+                scale,
+                pal.text,
+            );
         }
     }
 
     /// Draw level `level` of an open context menu into `pm` (device pixels, sized to the level's popup; the server draws the
     /// material behind it).
-    pub fn paint_menu(&mut self, pm: &mut Pixmap, scale: f32, menu: &Menu, level: usize, pal: &Palette) {
+    pub fn paint_menu(
+        &mut self,
+        pm: &mut Pixmap,
+        scale: f32,
+        menu: &Menu,
+        level: usize,
+        pal: &Palette,
+    ) {
         self.renderer.text.set_scale(scale);
         let layout = menu.layout(level);
         let px = menu_metrics::TEXT_SIZE as f32 * scale;
@@ -749,7 +1165,12 @@ impl WindowPainter {
             let r = row.offset(-layout.rect.x, -layout.rect.y);
             match &item.kind {
                 ItemKind::Separator => {
-                    let line = Rect::new(r.x + menu_metrics::SELECTION_INSET, r.y + (r.h - 1.0) / 2.0, r.w - 2.0 * menu_metrics::SELECTION_INSET, 1.0);
+                    let line = Rect::new(
+                        r.x + menu_metrics::SELECTION_INSET,
+                        r.y + (r.h - 1.0) / 2.0,
+                        r.w - 2.0 * menu_metrics::SELECTION_INSET,
+                        1.0,
+                    );
                     fill_rect(pm, &line, scale, pal.separator);
                     continue;
                 }
@@ -765,19 +1186,61 @@ impl WindowPainter {
             }
             let hot = menu.hovered(level) == Some(i) && item.is_selectable();
             if hot {
-                let selection = Rect::new(r.x + menu_metrics::SELECTION_INSET, r.y, r.w - 2.0 * menu_metrics::SELECTION_INSET, r.h);
-                fill_rounded(pm, &selection, menu_metrics::SELECTION_RADIUS, scale, pal.accent);
+                let selection = Rect::new(
+                    r.x + menu_metrics::SELECTION_INSET,
+                    r.y,
+                    r.w - 2.0 * menu_metrics::SELECTION_INSET,
+                    r.h,
+                );
+                fill_rounded(
+                    pm,
+                    &selection,
+                    menu_metrics::SELECTION_RADIUS,
+                    scale,
+                    pal.accent,
+                );
             }
             let base = if hot { pal.accent_text } else { pal.text };
-            let color = [base[0], base[1], base[2], base[3] * if item.enabled { 1.0 } else { DISABLED_ALPHA }];
+            let color = [
+                base[0],
+                base[1],
+                base[2],
+                base[3] * if item.enabled { 1.0 } else { DISABLED_ALPHA },
+            ];
             let baseline = (r.y + r.h / 2.0) as f32 * scale + px * 0.36;
             if item.checked {
-                self.paint_check(pm, scale, &Rect::new(r.x + menu_metrics::SELECTION_INSET + 4.0, r.y, 9.0, r.h), color);
+                self.paint_check(
+                    pm,
+                    scale,
+                    &Rect::new(r.x + menu_metrics::SELECTION_INSET + 4.0, r.y, 9.0, r.h),
+                    color,
+                );
             }
-            self.renderer.text.draw(pm, &item.label, (r.x + menu_metrics::TITLE_OFFSET) as f32 * scale, baseline, px, 400, 0.0, color);
+            self.renderer.text.draw(
+                pm,
+                &item.label,
+                (r.x + menu_metrics::TITLE_OFFSET) as f32 * scale,
+                baseline,
+                px,
+                400,
+                0.0,
+                color,
+            );
             if matches!(item.kind, ItemKind::Submenu(_)) {
-                let arrow = Rect::new(r.right() - menu_metrics::SUBMENU_ARROW - menu_metrics::SELECTION_INSET, r.y, menu_metrics::SUBMENU_ARROW, r.h);
-                self.renderer.draw_symbol(pm, &arrow, "symbol.chevron.right", TOOLBAR_GLYPH, scale, color);
+                let arrow = Rect::new(
+                    r.right() - menu_metrics::SUBMENU_ARROW - menu_metrics::SELECTION_INSET,
+                    r.y,
+                    menu_metrics::SUBMENU_ARROW,
+                    r.h,
+                );
+                self.renderer.draw_symbol(
+                    pm,
+                    &arrow,
+                    "symbol.chevron.right",
+                    TOOLBAR_GLYPH,
+                    scale,
+                    color,
+                );
             }
         }
     }
@@ -791,68 +1254,214 @@ impl WindowPainter {
         pb.line_to(cx - 1.0 * scale, cy + 3.5 * scale);
         pb.line_to(cx + 4.0 * scale, cy - 3.5 * scale);
         if let Some(p) = pb.finish() {
-            pm.stroke_path(&p, &paint(color), &Stroke { width: 1.5 * scale, ..Default::default() }, Transform::identity(), None);
+            pm.stroke_path(
+                &p,
+                &paint(color),
+                &Stroke {
+                    width: 1.5 * scale,
+                    ..Default::default()
+                },
+                Transform::identity(),
+                None,
+            );
         }
     }
 
     /// The tag row: seven colour dots with the tags of the whole selection marked, the title under them (size,
     /// the dot size, the marking and the caption's place are approximate).
-    fn paint_tag_row(&mut self, pm: &mut Pixmap, scale: f32, r: &Rect, title: &str, on: &[TagColor], pal: &Palette) {
+    fn paint_tag_row(
+        &mut self,
+        pm: &mut Pixmap,
+        scale: f32,
+        r: &Rect,
+        title: &str,
+        on: &[TagColor],
+        pal: &Palette,
+    ) {
         for (color, dot) in tag_dots(r) {
             let fill = pal.tag_color(color);
             fill_rounded(pm, &dot, dot.w / 2.0, scale, fill);
             if on.contains(&color) {
-                fill_rounded(pm, &dot.inset(dot.w * 0.3, dot.h * 0.3), dot.w * 0.2, scale, [1.0, 1.0, 1.0, 0.9]);
+                fill_rounded(
+                    pm,
+                    &dot.inset(dot.w * 0.3, dot.h * 0.3),
+                    dot.w * 0.2,
+                    scale,
+                    [1.0, 1.0, 1.0, 0.9],
+                );
             }
         }
         let px = menu_metrics::TEXT_SIZE as f32 * scale;
         let w = f64::from(self.renderer.text.measure(title, px, 400, 0.0)) / f64::from(scale);
         let y = r.y + menu_metrics::TAG_DOT_TOP + menu_metrics::TAG_DOT_DIAMETER + 6.0;
-        self.renderer.text.draw(pm, title, (r.center().x - w / 2.0) as f32 * scale, (y + 13.0) as f32 * scale, px, 400, 0.0, pal.secondary_text);
+        self.renderer.text.draw(
+            pm,
+            title,
+            (r.center().x - w / 2.0) as f32 * scale,
+            (y + 13.0) as f32 * scale,
+            px,
+            400,
+            0.0,
+            pal.secondary_text,
+        );
     }
 
     /// The view row: four segments, the current mode on a quaternary fill, those without a view dimmed. approximate shapes.
-    fn paint_view_row(&mut self, pm: &mut Pixmap, scale: f32, r: &Rect, current: ViewMode, pal: &Palette) {
+    fn paint_view_row(
+        &mut self,
+        pm: &mut Pixmap,
+        scale: f32,
+        r: &Rect,
+        current: ViewMode,
+        pal: &Palette,
+    ) {
         for (segment, rect) in view_segments(r) {
             let usable = segment.mode().is_some();
             if segment.mode() == Some(current) {
-                fill_rounded(pm, &rect, menu_metrics::SELECTION_RADIUS, scale, pal.tertiary_label);
+                fill_rounded(
+                    pm,
+                    &rect,
+                    menu_metrics::SELECTION_RADIUS,
+                    scale,
+                    pal.tertiary_label,
+                );
             }
             let c = pal.text;
-            self.renderer.draw_symbol(pm, &rect, segment.symbol(), TOOLBAR_GLYPH, scale, [c[0], c[1], c[2], c[3] * if usable { 1.0 } else { DISABLED_ALPHA }]);
+            self.renderer.draw_symbol(
+                pm,
+                &rect,
+                segment.symbol(),
+                TOOLBAR_GLYPH,
+                scale,
+                [
+                    c[0],
+                    c[1],
+                    c[2],
+                    c[3] * if usable { 1.0 } else { DISABLED_ALPHA },
+                ],
+            );
         }
     }
 
-    fn paint_sidebar(&mut self, pm: &mut Pixmap, scale: f32, w: &WindowLayout, state: &WindowState<'_>, pal: &Palette) {
+    fn paint_sidebar(
+        &mut self,
+        pm: &mut Pixmap,
+        scale: f32,
+        w: &WindowLayout,
+        state: &WindowState<'_>,
+        pal: &Palette,
+    ) {
         let rows = sidebar::RowSize::DEFAULT;
         for (group, r) in &w.groups {
             let px = sidebar::GROUP_FONT_SIZE as f32 * scale;
             let baseline = (r.y + r.h / 2.0) as f32 * scale + px * 0.36;
-            self.renderer.text.draw(pm, group.title(), (r.x + sidebar::GROUP_ROW_INDENT) as f32 * scale, baseline, px, 600, 0.0, pal.secondary_text);
+            self.renderer.text.draw(
+                pm,
+                group.title(),
+                (r.x + sidebar::GROUP_ROW_INDENT) as f32 * scale,
+                baseline,
+                px,
+                600,
+                0.0,
+                pal.secondary_text,
+            );
         }
         let here = state.browser.dir();
         for (place, r) in state.places.iter().zip(&w.places) {
             if place.path == here {
                 fill_rounded(pm, r, m::HIGHLIGHT_RADIUS, scale, pal.inactive_selection);
             }
-            let icon = Rect::new(r.x + sidebar::INDENT, r.y + (r.h - sidebar::CELL_ICON) / 2.0, sidebar::CELL_ICON, sidebar::CELL_ICON);
-            self.renderer.draw_symbol(pm, &icon, place.kind.symbol(), SIDEBAR_GLYPH, scale, pal.accent);
+            let icon = Rect::new(
+                r.x + sidebar::INDENT,
+                r.y + (r.h - sidebar::CELL_ICON) / 2.0,
+                sidebar::CELL_ICON,
+                sidebar::CELL_ICON,
+            );
+            self.renderer.draw_symbol(
+                pm,
+                &icon,
+                place.kind.symbol(),
+                SIDEBAR_GLYPH,
+                scale,
+                pal.accent,
+            );
             let px = rows.font_size() as f32 * scale;
             let x = icon.x + sidebar::CELL_TEXT_X;
-            let name = truncate_tail(&mut self.renderer.text, &place.name, px, ((r.right() - x) as f32 - 4.0) * scale);
-            self.renderer.text.draw(pm, &name, x as f32 * scale, (r.y + r.h / 2.0) as f32 * scale + px * 0.36, px, 400, 0.0, pal.text);
+            let name = truncate_tail(
+                &mut self.renderer.text,
+                &place.name,
+                px,
+                ((r.right() - x) as f32 - 4.0) * scale,
+            );
+            self.renderer.text.draw(
+                pm,
+                &name,
+                x as f32 * scale,
+                (r.y + r.h / 2.0) as f32 * scale + px * 0.36,
+                px,
+                400,
+                0.0,
+                pal.text,
+            );
         }
     }
 
-    fn paint_toolbar(&mut self, pm: &mut Pixmap, scale: f32, w: &WindowLayout, state: &WindowState<'_>, pal: &Palette) {
+    fn paint_toolbar(
+        &mut self,
+        pm: &mut Pixmap,
+        scale: f32,
+        w: &WindowLayout,
+        state: &WindowState<'_>,
+        pal: &Palette,
+    ) {
         let history = state.browser.history();
         let dimmed = [pal.text[0], pal.text[1], pal.text[2], pal.text[3] * 0.3];
-        self.renderer.draw_symbol(pm, &w.back, "symbol.chevron.left", TOOLBAR_GLYPH, scale, if history.back_target().is_some() { pal.text } else { dimmed });
-        self.renderer.draw_symbol(pm, &w.forward, "symbol.chevron.right", TOOLBAR_GLYPH, scale, if history.forward_target().is_some() { pal.text } else { dimmed });
+        self.renderer.draw_symbol(
+            pm,
+            &w.back,
+            "symbol.chevron.left",
+            TOOLBAR_GLYPH,
+            scale,
+            if history.back_target().is_some() {
+                pal.text
+            } else {
+                dimmed
+            },
+        );
+        self.renderer.draw_symbol(
+            pm,
+            &w.forward,
+            "symbol.chevron.right",
+            TOOLBAR_GLYPH,
+            scale,
+            if history.forward_target().is_some() {
+                pal.text
+            } else {
+                dimmed
+            },
+        );
         let px = m::TITLE_SIZE as f32 * scale;
-        let title = truncate_middle(&mut self.renderer.text, state.title, px, w.title.w as f32 * scale);
-        let color = if state.active { pal.text } else { pal.secondary_text };
-        self.renderer.text.draw(pm, &title, w.title.x as f32 * scale, w.title.center().y as f32 * scale + px * 0.36, px, m::TITLE_WEIGHT, 0.0, color);
+        let title = truncate_middle(
+            &mut self.renderer.text,
+            state.title,
+            px,
+            w.title.w as f32 * scale,
+        );
+        let color = if state.active {
+            pal.text
+        } else {
+            pal.secondary_text
+        };
+        self.renderer.text.draw(
+            pm,
+            &title,
+            w.title.x as f32 * scale,
+            w.title.center().y as f32 * scale + px * 0.36,
+            px,
+            m::TITLE_WEIGHT,
+            0.0,
+            color,
+        );
         for &(item, r) in &w.items {
             let color = if item.enabled() { pal.text } else { dimmed };
             // a popup's glyph, with its chevrons at the right
@@ -864,16 +1473,41 @@ impl WindowPainter {
                         ViewMode::Icons => "symbol.grid",
                         ViewMode::List => "symbol.list",
                     };
-                    self.renderer.draw_symbol(pm, &glyph, symbol, TOOLBAR_GLYPH, scale, color);
-                    self.renderer.draw_symbol(pm, &chevron, "symbol.chevron.up.down", POPUP_CHEVRON_GLYPH, scale, color);
+                    self.renderer
+                        .draw_symbol(pm, &glyph, symbol, TOOLBAR_GLYPH, scale, color);
+                    self.renderer.draw_symbol(
+                        pm,
+                        &chevron,
+                        "symbol.chevron.up.down",
+                        POPUP_CHEVRON_GLYPH,
+                        scale,
+                        color,
+                    );
                 }
                 ToolbarItem::GroupBy => {
-                    self.renderer.draw_symbol(pm, &glyph, "symbol.columns", TOOLBAR_GLYPH, scale, color);
+                    self.renderer.draw_symbol(
+                        pm,
+                        &glyph,
+                        "symbol.columns",
+                        TOOLBAR_GLYPH,
+                        scale,
+                        color,
+                    );
                     paint_chevron_down(pm, chevron.center(), scale, color);
                 }
-                ToolbarItem::Tags => self.renderer.draw_symbol(pm, &r, "symbol.tag", TOOLBAR_GLYPH, scale, color),
+                ToolbarItem::Tags => {
+                    self.renderer
+                        .draw_symbol(pm, &r, "symbol.tag", TOOLBAR_GLYPH, scale, color)
+                }
                 ToolbarItem::Action => {
-                    self.renderer.draw_symbol(pm, &glyph, "symbol.ellipsis.circle", TOOLBAR_GLYPH, scale, color);
+                    self.renderer.draw_symbol(
+                        pm,
+                        &glyph,
+                        "symbol.ellipsis.circle",
+                        TOOLBAR_GLYPH,
+                        scale,
+                        color,
+                    );
                     paint_chevron_down(pm, chevron.center(), scale, color);
                 }
                 ToolbarItem::Search => self.paint_search(pm, scale, &r, state, pal),
@@ -883,33 +1517,78 @@ impl WindowPainter {
 
     /// The search field: a rounded quaternary fill with the magnifying glass, the placeholder or the text with a caret,
     /// an accent ring while it has the keyboard. approximate shapes (the field's drawing is not measured).
-    fn paint_search(&mut self, pm: &mut Pixmap, scale: f32, r: &Rect, state: &WindowState<'_>, pal: &Palette) {
+    fn paint_search(
+        &mut self,
+        pm: &mut Pixmap,
+        scale: f32,
+        r: &Rect,
+        state: &WindowState<'_>,
+        pal: &Palette,
+    ) {
         fill_rounded(pm, r, m::SEARCH_RADIUS, scale, pal.quaternary_label);
         if state.search_focused {
             stroke_rounded(pm, r, m::SEARCH_RADIUS, SEARCH_RING, scale, pal.accent);
         }
         let glass = Rect::new(r.x + m::SEARCH_INSET, r.y, m::SEARCH_GLYPH, r.h);
-        self.renderer.draw_symbol(pm, &glass, "symbol.magnifyingglass", m::SEARCH_GLYPH, scale, pal.secondary_text);
+        self.renderer.draw_symbol(
+            pm,
+            &glass,
+            "symbol.magnifyingglass",
+            m::SEARCH_GLYPH,
+            scale,
+            pal.secondary_text,
+        );
         let px = SEARCH_TEXT_SIZE as f32 * scale;
         let x = glass.right() + m::SEARCH_INSET;
         let room = ((r.right() - m::SEARCH_INSET - x) as f32 * scale).max(0.0);
         let baseline = r.center().y as f32 * scale + px * 0.36;
         if state.search.is_empty() && !state.search_focused {
-            self.renderer.text.draw(pm, "Search", x as f32 * scale, baseline, px, 400, 0.0, pal.secondary_text);
+            self.renderer.text.draw(
+                pm,
+                "Search",
+                x as f32 * scale,
+                baseline,
+                px,
+                400,
+                0.0,
+                pal.secondary_text,
+            );
             return;
         }
         // the end of a long query stays in sight, as typed
         let text = truncate_head(&mut self.renderer.text, state.search, px, room);
-        self.renderer.text.draw(pm, &text, x as f32 * scale, baseline, px, 400, 0.0, pal.text);
+        self.renderer.text.draw(
+            pm,
+            &text,
+            x as f32 * scale,
+            baseline,
+            px,
+            400,
+            0.0,
+            pal.text,
+        );
         if state.search_focused {
-            let caret = on_pixel(x + f64::from(self.renderer.text.measure(&text, px, 400, 0.0) / scale), scale);
-            fill_rect(pm, &Rect::new(caret, r.y + 4.0, 1.0, r.h - 8.0), scale, pal.text);
+            let caret = on_pixel(
+                x + f64::from(self.renderer.text.measure(&text, px, 400, 0.0) / scale),
+                scale,
+            );
+            fill_rect(
+                pm,
+                &Rect::new(caret, r.y + 4.0, 1.0, r.h - 8.0),
+                scale,
+                pal.text,
+            );
         }
     }
 }
 
 /// The start of `text` cut so that its end fits `max_w` pixels, behind an ellipsis.
-fn truncate_head(tr: &mut cupertino_decorations::text::TextRenderer, text: &str, px: f32, max_w: f32) -> String {
+fn truncate_head(
+    tr: &mut cupertino_decorations::text::TextRenderer,
+    text: &str,
+    px: f32,
+    max_w: f32,
+) -> String {
     if tr.measure(text, px, 400, 0.0) <= max_w {
         return text.to_string();
     }
@@ -931,7 +1610,16 @@ fn paint_chevron_down(pm: &mut Pixmap, c: Point, scale: f32, color: Rgba) {
     pb.line_to(cx, cy + 1.75 * scale);
     pb.line_to(cx + 3.5 * scale, cy - 1.75 * scale);
     if let Some(p) = pb.finish() {
-        pm.stroke_path(&p, &paint(color), &Stroke { width: 1.4 * scale, ..Default::default() }, Transform::identity(), None);
+        pm.stroke_path(
+            &p,
+            &paint(color),
+            &Stroke {
+                width: 1.4 * scale,
+                ..Default::default()
+            },
+            Transform::identity(),
+            None,
+        );
     }
 }
 
@@ -944,33 +1632,79 @@ mod tests {
     use std::sync::Arc;
 
     fn places() -> Vec<Place> {
-        let p = |name: &str, path: &str, group, kind| Place { name: name.into(), path: PathBuf::from(path), group, kind };
-        vec![p("Home", "/home/ada", PlaceGroup::Favorites, PlaceKind::Home), p("Desktop", "/home/ada/Desktop", PlaceGroup::Favorites, PlaceKind::Desktop), p("Computer", "/", PlaceGroup::Locations, PlaceKind::Computer)]
+        let p = |name: &str, path: &str, group, kind| Place {
+            name: name.into(),
+            path: PathBuf::from(path),
+            group,
+            kind,
+        };
+        vec![
+            p("Home", "/home/ada", PlaceGroup::Favorites, PlaceKind::Home),
+            p(
+                "Desktop",
+                "/home/ada/Desktop",
+                PlaceGroup::Favorites,
+                PlaceKind::Desktop,
+            ),
+            p("Computer", "/", PlaceGroup::Locations, PlaceKind::Computer),
+        ]
     }
 
     /// One flat outline row per entry, folders expandable.
     fn rows(entries: &[Entry]) -> Vec<RowSpec> {
-        entries.iter().map(|e| RowSpec { level: 0, expandable: e.is_dir, expanded: false }).collect()
+        entries
+            .iter()
+            .map(|e| RowSpec {
+                level: 0,
+                expandable: e.is_dir,
+                expanded: false,
+            })
+            .collect()
     }
 
     fn entries(n: usize) -> Vec<Entry> {
-        (0..n).map(|i| Entry::synthetic(&format!("item {i:03}"), i % 3 == 0, 10)).collect()
+        (0..n)
+            .map(|i| Entry::synthetic(&format!("item {i:03}"), i % 3 == 0, 10))
+            .collect()
     }
 
     #[test]
     fn the_layout_uses_the_measured_chrome_and_gives_way_down_to_the_minimums() {
         let l = WindowLayout::new(Size { w: 920.0, h: 436.0 }, &places(), Bars::HIDDEN);
         assert_eq!(l.sidebar.w, 200.0);
-        assert_eq!(l.sidebar, Rect::new(0.0, 0.0, 200.0, 436.0), "the sidebar runs the full height under the window control buttons");
+        assert_eq!(
+            l.sidebar,
+            Rect::new(0.0, 0.0, 200.0, 436.0),
+            "the sidebar runs the full height under the window control buttons"
+        );
         assert_eq!(l.toolbar, Rect::new(201.0, 0.0, 719.0, 52.0));
         assert_eq!(l.content, Rect::new(201.0, 53.0, 719.0, 383.0));
         assert_eq!((l.back.w + l.forward.w, l.back.h), (53.0, 28.0));
         // Favorites title, two rows, 13 pt, Locations title, one row
-        assert_eq!(l.groups.iter().map(|(g, r)| (*g, r.y)).collect::<Vec<_>>(), [(PlaceGroup::Favorites, 62.0), (PlaceGroup::Locations, 62.0 + 19.0 + 56.0 + 13.0)]);
-        assert_eq!(l.places.iter().map(|r| (r.y, r.h)).collect::<Vec<_>>(), [(81.0, 28.0), (109.0, 28.0), (169.0, 28.0)]);
+        assert_eq!(
+            l.groups.iter().map(|(g, r)| (*g, r.y)).collect::<Vec<_>>(),
+            [
+                (PlaceGroup::Favorites, 62.0),
+                (PlaceGroup::Locations, 62.0 + 19.0 + 56.0 + 13.0)
+            ]
+        );
+        assert_eq!(
+            l.places.iter().map(|r| (r.y, r.h)).collect::<Vec<_>>(),
+            [(81.0, 28.0), (109.0, 28.0), (169.0, 28.0)]
+        );
 
-        let narrow = WindowLayout::new(Size { w: m::WINDOW_MIN.0, h: m::WINDOW_MIN.1 }, &places(), Bars::HIDDEN);
-        assert_eq!((narrow.sidebar.w, narrow.content.w, narrow.content.h), (128.0, 316.0, 100.0));
+        let narrow = WindowLayout::new(
+            Size {
+                w: m::WINDOW_MIN.0,
+                h: m::WINDOW_MIN.1,
+            },
+            &places(),
+            Bars::HIDDEN,
+        );
+        assert_eq!(
+            (narrow.sidebar.w, narrow.content.w, narrow.content.h),
+            (128.0, 316.0, 100.0)
+        );
     }
 
     #[test]
@@ -978,28 +1712,83 @@ mod tests {
         let mut painter = WindowPainter::new(crate::render::renderer());
         let size = Size { w: 920.0, h: 436.0 };
         let items = entries(40);
-        let frame = painter.frame(size, &places(), Bars::HIDDEN, Path::new("/home/ada"), ViewMode::Icons, &rows(&items), 0.0, 1.0);
+        let frame = painter.frame(
+            size,
+            &places(),
+            Bars::HIDDEN,
+            Path::new("/home/ada"),
+            ViewMode::Icons,
+            &rows(&items),
+            0.0,
+            1.0,
+        );
         let at = |r: &Rect| r.center();
         assert_eq!(frame.hit(at(&frame.window.back)), Hit::Back);
-        let item = |i: ToolbarItem| frame.window.items.iter().find(|(t, _)| *t == i).map(|(_, r)| *r).unwrap();
-        assert_eq!(frame.hit(at(&item(ToolbarItem::View))), Hit::Toolbar(ToolbarItem::View));
-        assert_eq!(frame.hit(at(&item(ToolbarItem::Search))), Hit::Toolbar(ToolbarItem::Search));
-        assert_eq!(frame.hit(at(&item(ToolbarItem::GroupBy))), Hit::Chrome, "Group By is disabled");
+        let item = |i: ToolbarItem| {
+            frame
+                .window
+                .items
+                .iter()
+                .find(|(t, _)| *t == i)
+                .map(|(_, r)| *r)
+                .unwrap()
+        };
+        assert_eq!(
+            frame.hit(at(&item(ToolbarItem::View))),
+            Hit::Toolbar(ToolbarItem::View)
+        );
+        assert_eq!(
+            frame.hit(at(&item(ToolbarItem::Search))),
+            Hit::Toolbar(ToolbarItem::Search)
+        );
+        assert_eq!(
+            frame.hit(at(&item(ToolbarItem::GroupBy))),
+            Hit::Chrome,
+            "Group By is disabled"
+        );
         assert_eq!(frame.hit(at(&frame.window.places[2])), Hit::Place(2));
         // the strip without a control moves the window, over the sidebar's top and the toolbar alike
         assert_eq!(frame.hit(Point { x: 100.0, y: 20.0 }), Hit::Titlebar);
         assert_eq!(frame.hit(at(&frame.window.title)), Hit::Titlebar);
         assert_eq!(frame.hit(Point { x: 100.0, y: 300.0 }), Hit::Chrome);
-        let ContentLayout::Icons(l) = &frame.content else { panic!("icon layout") };
+        let ContentLayout::Icons(l) = &frame.content else {
+            panic!("icon layout")
+        };
         let icon = l.cells[5].icon_frame;
         let c = frame.window.content;
-        assert_eq!(frame.hit(Point { x: c.x + icon.center().x, y: c.y + icon.center().y }), Hit::Item(5));
+        assert_eq!(
+            frame.hit(Point {
+                x: c.x + icon.center().x,
+                y: c.y + icon.center().y
+            }),
+            Hit::Item(5)
+        );
 
-        let mut list = painter.frame(size, &places(), Bars::HIDDEN, Path::new("/home/ada"), ViewMode::List, &rows(&items), 0.0, 1.0);
-        assert_eq!(list.hit(Point { x: c.x + 20.0, y: c.y + 10.0 }), Hit::Column(ColumnId::Name));
-        let ContentLayout::List(rows, _) = &list.content else { panic!("list layout") };
+        let mut list = painter.frame(
+            size,
+            &places(),
+            Bars::HIDDEN,
+            Path::new("/home/ada"),
+            ViewMode::List,
+            &rows(&items),
+            0.0,
+            1.0,
+        );
+        assert_eq!(
+            list.hit(Point {
+                x: c.x + 20.0,
+                y: c.y + 10.0
+            }),
+            Hit::Column(ColumnId::Name)
+        );
+        let ContentLayout::List(rows, _) = &list.content else {
+            panic!("list layout")
+        };
         let pitch = rows.row_height + list_view::INTERCELL.1;
-        let first_row = Point { x: c.x + 20.0, y: c.y + list_view::HEADER_HEIGHT + 1.0 };
+        let first_row = Point {
+            x: c.x + 20.0,
+            y: c.y + list_view::HEADER_HEIGHT + 1.0,
+        };
         assert_eq!(list.hit(first_row), Hit::Item(0));
         // scrolled by three rows the same point is over the fourth item
         list.scroll_by(3.0 * pitch);
@@ -1010,7 +1799,16 @@ mod tests {
     fn scrolling_stays_in_the_content_and_reveal_scrolls_as_little_as_needed() {
         let mut painter = WindowPainter::new(crate::render::renderer());
         let items = entries(200);
-        let mut f = painter.frame(Size { w: 920.0, h: 436.0 }, &places(), Bars::HIDDEN, Path::new("/home/ada"), ViewMode::List, &rows(&items), -50.0, 1.0);
+        let mut f = painter.frame(
+            Size { w: 920.0, h: 436.0 },
+            &places(),
+            Bars::HIDDEN,
+            Path::new("/home/ada"),
+            ViewMode::List,
+            &rows(&items),
+            -50.0,
+            1.0,
+        );
         assert_eq!(f.scroll, 0.0);
         f.scroll_by(1e9);
         assert_eq!(f.scroll, f.max_scroll());
@@ -1018,7 +1816,9 @@ mod tests {
 
         f.scroll = 0.0;
         f.reveal(199);
-        let ContentLayout::List(rows, _) = &f.content else { panic!("list layout") };
+        let ContentLayout::List(rows, _) = &f.content else {
+            panic!("list layout")
+        };
         let (first, last) = (rows.rows[0].frame, rows.rows[199].frame);
         assert_eq!(f.scroll + f.window.content.h, last.bottom());
         // the first row reveals below the fixed header
@@ -1034,7 +1834,18 @@ mod tests {
         let mut painter = WindowPainter::new(crate::render::renderer());
         let items = entries(30);
         let size = Size { w: 920.0, h: 436.0 };
-        let list = painter.frame(size, &places(), Bars::HIDDEN, Path::new("/home/ada"), ViewMode::List, &rows(&items), 0.0, 1.0).content;
+        let list = painter
+            .frame(
+                size,
+                &places(),
+                Bars::HIDDEN,
+                Path::new("/home/ada"),
+                ViewMode::List,
+                &rows(&items),
+                0.0,
+                1.0,
+            )
+            .content;
         assert_eq!(list.step(None, 30, Move::Down), Some(0));
         assert_eq!(list.step(None, 30, Move::Up), Some(29));
         assert_eq!(list.step(Some(4), 30, Move::Down), Some(5));
@@ -1044,8 +1855,21 @@ mod tests {
         assert_eq!(list.step(Some(4), 30, Move::Last), Some(29));
         assert_eq!(list.step(None, 0, Move::Down), None);
 
-        let icons = painter.frame(size, &places(), Bars::HIDDEN, Path::new("/home/ada"), ViewMode::Icons, &rows(&items), 0.0, 1.0).content;
-        let ContentLayout::Icons(l) = &icons else { panic!("icon layout") };
+        let icons = painter
+            .frame(
+                size,
+                &places(),
+                Bars::HIDDEN,
+                Path::new("/home/ada"),
+                ViewMode::Icons,
+                &rows(&items),
+                0.0,
+                1.0,
+            )
+            .content;
+        let ContentLayout::Icons(l) = &icons else {
+            panic!("icon layout")
+        };
         let columns = l.columns;
         assert!(columns > 1);
         assert_eq!(icons.step(Some(0), 30, Move::Right), Some(1));
@@ -1058,39 +1882,91 @@ mod tests {
     fn a_frame_paints_chrome_and_content() {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("a.txt"), b"x").unwrap();
-        let mut browser = Browser::open(d.path().to_path_buf(), SortSpec::default(), PathBuf::from("/nonexistent/recently-used.xbel"), None, Arc::new(|| {})).unwrap();
+        let mut browser = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            PathBuf::from("/nonexistent/recently-used.xbel"),
+            None,
+            Arc::new(|| {}),
+        )
+        .unwrap();
         let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while browser.entries().is_empty() {
-            assert!(std::time::Instant::now() < end, "timed out listing the folder");
+            assert!(
+                std::time::Instant::now() < end,
+                "timed out listing the folder"
+            );
             browser.poll();
         }
-        let places = vec![Place { name: "Here".into(), path: d.path().to_path_buf(), group: PlaceGroup::Favorites, kind: PlaceKind::Home }];
+        let places = vec![Place {
+            name: "Here".into(),
+            path: d.path().to_path_buf(),
+            group: PlaceGroup::Favorites,
+            kind: PlaceKind::Home,
+        }];
         let mut painter = WindowPainter::new(crate::render::renderer());
         let pal = Palette::builtin(false);
         let size = Size { w: 600.0, h: 300.0 };
-        let frame = painter.frame(size, &places, Bars::HIDDEN, Path::new("/home/ada"), ViewMode::Icons, browser.outline(), 0.0, 2.0);
+        let frame = painter.frame(
+            size,
+            &places,
+            Bars::HIDDEN,
+            Path::new("/home/ada"),
+            ViewMode::Icons,
+            browser.outline(),
+            0.0,
+            2.0,
+        );
         let mut pm = Pixmap::new(1200, 600).unwrap();
-        let state = WindowState { browser: &browser, places: &places, mode: ViewMode::Icons, active: true, search: "", search_focused: false, title: "Here", now: SystemTime::now(), edit: None, drop_target: None, marquee: None, status: "3 items" };
+        let state = WindowState {
+            browser: &browser,
+            places: &places,
+            mode: ViewMode::Icons,
+            active: true,
+            search: "",
+            search_focused: false,
+            title: "Here",
+            now: SystemTime::now(),
+            edit: None,
+            drop_target: None,
+            marquee: None,
+            status: "3 items",
+        };
         painter.paint(&mut pm, 2.0, &frame, &state, &pal);
         let px = |p: Point| pm.pixel((p.x * 2.0) as u32, (p.y * 2.0) as u32).unwrap();
         // the sidebar is left clear for the server's material, the toolbar of an active window and the content have the
         // view background, the current place its highlight
         assert_eq!(px(Point { x: 2.0, y: 290.0 }).alpha(), 0);
         let toolbar = px(Point { x: 400.0, y: 4.0 });
-        assert_eq!((toolbar.red(), toolbar.green(), toolbar.blue()), (0xFF, 0xFF, 0xFF));
+        assert_eq!(
+            (toolbar.red(), toolbar.green(), toolbar.blue()),
+            (0xFF, 0xFF, 0xFF)
+        );
         let content = px(Point { x: 590.0, y: 290.0 });
-        assert_eq!((content.red(), content.green(), content.blue()), (0xFF, 0xFF, 0xFF));
+        assert_eq!(
+            (content.red(), content.green(), content.blue()),
+            (0xFF, 0xFF, 0xFF)
+        );
         let row = frame.window.places[0];
-        let highlight = px(Point { x: row.right() - 3.0, y: row.center().y });
+        let highlight = px(Point {
+            x: row.right() - 3.0,
+            y: row.center().y,
+        });
         assert!(highlight.alpha() > 0, "the current place is highlighted");
         // the place's symbol is tinted with the accent inside the icon field
-        let field = (row.x + sidebar::INDENT, row.y + (row.h - sidebar::CELL_ICON) / 2.0);
+        let field = (
+            row.x + sidebar::INDENT,
+            row.y + (row.h - sidebar::CELL_ICON) / 2.0,
+        );
         let accent = pal.accent.map(|c| (c * 255.0).round() as u8);
         let tinted = (0..(sidebar::CELL_ICON * 2.0) as u32)
             .flat_map(|dy| (0..(sidebar::CELL_ICON * 2.0) as u32).map(move |dx| (dx, dy)))
             .any(|(dx, dy)| {
-                let c = pm.pixel((field.0 * 2.0) as u32 + dx, (field.1 * 2.0) as u32 + dy).unwrap();
-                c.alpha() == 255 && [c.red(), c.green(), c.blue()] == [accent[0], accent[1], accent[2]]
+                let c = pm
+                    .pixel((field.0 * 2.0) as u32 + dx, (field.1 * 2.0) as u32 + dy)
+                    .unwrap();
+                c.alpha() == 255
+                    && [c.red(), c.green(), c.blue()] == [accent[0], accent[1], accent[2]]
             });
         assert!(tinted, "the home symbol is drawn in the accent colour");
     }
@@ -1101,12 +1977,33 @@ mod tests {
         let size = Size { w: 920.0, h: 436.0 };
         let items = entries(200);
         for mode in [ViewMode::Icons, ViewMode::List] {
-            let top = painter.frame(size, &places(), Bars::HIDDEN, Path::new("/home/ada"), mode, &rows(&items), 0.0, 1.0);
-            let scrolled = painter.frame(size, &places(), Bars::HIDDEN, Path::new("/home/ada"), mode, &rows(&items), 100.0, 1.0);
+            let top = painter.frame(
+                size,
+                &places(),
+                Bars::HIDDEN,
+                Path::new("/home/ada"),
+                mode,
+                &rows(&items),
+                0.0,
+                1.0,
+            );
+            let scrolled = painter.frame(
+                size,
+                &places(),
+                Bars::HIDDEN,
+                Path::new("/home/ada"),
+                mode,
+                &rows(&items),
+                100.0,
+                1.0,
+            );
             let (a, b) = (top.name_frame(3).unwrap(), scrolled.name_frame(3).unwrap());
             assert_eq!((b.x, b.y), (a.x, a.y - 100.0), "{mode:?}");
             let (item, name) = (top.item_frame(3).unwrap(), top.name_frame(3).unwrap());
-            assert!(item.contains(name.center()), "{mode:?}: the name lies in its item");
+            assert!(
+                item.contains(name.center()),
+                "{mode:?}: the name lies in its item"
+            );
             assert!(top.window.content.contains(item.center()), "{mode:?}");
             assert_eq!(top.hit(name.center()), Hit::Item(3), "{mode:?}");
         }
@@ -1116,31 +2013,101 @@ mod tests {
     fn fixture_browser() -> (Browser, Vec<Place>, tempfile::TempDir) {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("a.txt"), b"x").unwrap();
-        let mut browser = Browser::open(d.path().to_path_buf(), SortSpec::default(), PathBuf::from("/nonexistent/recently-used.xbel"), None, Arc::new(|| {})).unwrap();
+        let mut browser = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            PathBuf::from("/nonexistent/recently-used.xbel"),
+            None,
+            Arc::new(|| {}),
+        )
+        .unwrap();
         let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while browser.entries().is_empty() {
-            assert!(std::time::Instant::now() < end, "timed out listing the folder");
+            assert!(
+                std::time::Instant::now() < end,
+                "timed out listing the folder"
+            );
             browser.poll();
         }
-        let places = vec![Place { name: "Here".into(), path: d.path().to_path_buf(), group: PlaceGroup::Favorites, kind: PlaceKind::Home }];
+        let places = vec![Place {
+            name: "Here".into(),
+            path: d.path().to_path_buf(),
+            group: PlaceGroup::Favorites,
+            kind: PlaceKind::Home,
+        }];
         (browser, places, d)
     }
 
     #[test]
     fn a_rubber_band_selects_the_icons_it_touches_and_the_rows_it_crosses() {
         let mut painter = WindowPainter::new(crate::render::renderer());
-        let entries: Vec<Entry> = (0..12).map(|i| Entry::synthetic(&format!("file{i:02}"), false, 1)).collect();
+        let entries: Vec<Entry> = (0..12)
+            .map(|i| Entry::synthetic(&format!("file{i:02}"), false, 1))
+            .collect();
         let places = Vec::new();
         let size = Size { w: 900.0, h: 500.0 };
-        let icons = painter.frame(size, &places, Bars::HIDDEN, Path::new("/home/ada"), ViewMode::Icons, &rows(&entries), 0.0, 1.0);
-        let (a, b) = (icons.content.frame_of(0).unwrap(), icons.content.frame_of(1).unwrap());
-        let band = Rect::from_corners(Point { x: a.center().x, y: a.center().y }, Point { x: b.center().x, y: b.center().y });
-        assert_eq!(icons.hits_in(&band), [0, 1], "a band from the first cell's centre to the second's");
-        assert_eq!(icons.hits_in(&Rect::new(size.w - 5.0, size.h - 5.0, 3.0, 3.0)), Vec::<usize>::new(), "empty space touches nothing");
-        let list = painter.frame(size, &places, Bars::HIDDEN, Path::new("/home/ada"), ViewMode::List, &rows(&entries), 0.0, 1.0);
-        let (r2, r4) = (list.content.frame_of(2).unwrap(), list.content.frame_of(4).unwrap());
-        assert_eq!(list.hits_in(&Rect::new(10.0, r2.center().y, 5.0, r4.center().y - r2.center().y)), [2, 3, 4]);
-        assert_eq!(list.hits_in(&Rect::new(10.0, 0.0, 5.0, list_view::HEADER_HEIGHT - 1.0)), Vec::<usize>::new(), "the header holds no rows");
+        let icons = painter.frame(
+            size,
+            &places,
+            Bars::HIDDEN,
+            Path::new("/home/ada"),
+            ViewMode::Icons,
+            &rows(&entries),
+            0.0,
+            1.0,
+        );
+        let (a, b) = (
+            icons.content.frame_of(0).unwrap(),
+            icons.content.frame_of(1).unwrap(),
+        );
+        let band = Rect::from_corners(
+            Point {
+                x: a.center().x,
+                y: a.center().y,
+            },
+            Point {
+                x: b.center().x,
+                y: b.center().y,
+            },
+        );
+        assert_eq!(
+            icons.hits_in(&band),
+            [0, 1],
+            "a band from the first cell's centre to the second's"
+        );
+        assert_eq!(
+            icons.hits_in(&Rect::new(size.w - 5.0, size.h - 5.0, 3.0, 3.0)),
+            Vec::<usize>::new(),
+            "empty space touches nothing"
+        );
+        let list = painter.frame(
+            size,
+            &places,
+            Bars::HIDDEN,
+            Path::new("/home/ada"),
+            ViewMode::List,
+            &rows(&entries),
+            0.0,
+            1.0,
+        );
+        let (r2, r4) = (
+            list.content.frame_of(2).unwrap(),
+            list.content.frame_of(4).unwrap(),
+        );
+        assert_eq!(
+            list.hits_in(&Rect::new(
+                10.0,
+                r2.center().y,
+                5.0,
+                r4.center().y - r2.center().y
+            )),
+            [2, 3, 4]
+        );
+        assert_eq!(
+            list.hits_in(&Rect::new(10.0, 0.0, 5.0, list_view::HEADER_HEIGHT - 1.0)),
+            Vec::<usize>::new(),
+            "the header holds no rows"
+        );
     }
 
     #[test]
@@ -1149,27 +2116,93 @@ mod tests {
         let mut painter = WindowPainter::new(crate::render::renderer());
         let pal = Palette::builtin(false);
         let size = Size { w: 600.0, h: 300.0 };
-        let frame = painter.frame(size, &places, Bars::HIDDEN, Path::new("/home/ada"), ViewMode::Icons, browser.outline(), 0.0, 1.0);
+        let frame = painter.frame(
+            size,
+            &places,
+            Bars::HIDDEN,
+            Path::new("/home/ada"),
+            ViewMode::Icons,
+            browser.outline(),
+            0.0,
+            1.0,
+        );
         let mut pm = Pixmap::new(600, 300).unwrap();
         let origin = Point { x: 200.0, y: 100.0 };
-        let at = Point { x: frame.window.content.x + 320.0, y: frame.window.content.y + 200.0 };
-        let state = WindowState { browser: &browser, places: &places, mode: ViewMode::Icons, active: true, search: "", search_focused: false, title: "Here", now: SystemTime::now(), edit: None, drop_target: None, marquee: Some((origin, at)), status: "3 items" };
+        let at = Point {
+            x: frame.window.content.x + 320.0,
+            y: frame.window.content.y + 200.0,
+        };
+        let state = WindowState {
+            browser: &browser,
+            places: &places,
+            mode: ViewMode::Icons,
+            active: true,
+            search: "",
+            search_focused: false,
+            title: "Here",
+            now: SystemTime::now(),
+            edit: None,
+            drop_target: None,
+            marquee: Some((origin, at)),
+            status: "3 items",
+        };
         painter.paint(&mut pm, 1.0, &frame, &state, &pal);
         // the list shows the band too, below its header
-        let list = painter.frame(size, &places, Bars::HIDDEN, Path::new("/home/ada"), ViewMode::List, browser.outline(), 0.0, 1.0);
+        let list = painter.frame(
+            size,
+            &places,
+            Bars::HIDDEN,
+            Path::new("/home/ada"),
+            ViewMode::List,
+            browser.outline(),
+            0.0,
+            1.0,
+        );
         let mut lpm = Pixmap::new(600, 300).unwrap();
-        let lstate = WindowState { browser: &browser, places: &places, mode: ViewMode::List, active: true, search: "", search_focused: false, title: "Here", now: SystemTime::now(), edit: None, drop_target: None, marquee: Some((origin, at)), status: "3 items" };
+        let lstate = WindowState {
+            browser: &browser,
+            places: &places,
+            mode: ViewMode::List,
+            active: true,
+            search: "",
+            search_focused: false,
+            title: "Here",
+            now: SystemTime::now(),
+            edit: None,
+            drop_target: None,
+            marquee: Some((origin, at)),
+            status: "3 items",
+        };
         painter.paint(&mut lpm, 1.0, &list, &lstate, &pal);
-        let (lx, ly) = ((list.window.content.x + origin.x) as u32 + 20, (list.window.content.y + origin.y) as u32 + 20);
-        assert_eq!(lpm.pixel(lx, ly).unwrap().red(), 230, "the band is over the list");
-        let (x0, y0) = ((frame.window.content.x + origin.x) as u32, (frame.window.content.y + origin.y) as u32);
+        let (lx, ly) = (
+            (list.window.content.x + origin.x) as u32 + 20,
+            (list.window.content.y + origin.y) as u32 + 20,
+        );
+        assert_eq!(
+            lpm.pixel(lx, ly).unwrap().red(),
+            230,
+            "the band is over the list"
+        );
+        let (x0, y0) = (
+            (frame.window.content.x + origin.x) as u32,
+            (frame.window.content.y + origin.y) as u32,
+        );
         let inside = pm.pixel(x0 + 20, y0 + 20).unwrap();
         let edge = pm.pixel(x0, y0 + 20).unwrap();
         let outside = pm.pixel(x0 - 3, y0 + 20).unwrap();
         // black at 0.098 over white: 230; black at 0.2588 over that fill: 170
         assert_eq!((inside.red(), outside.red()), (230, 255));
-        assert!(edge.red() < inside.red() - 40, "the 1 pt border is darker than the fill: {} vs {}", edge.red(), inside.red());
-        assert_eq!(pm.pixel(x0 + 1, y0 + 20).unwrap().red(), inside.red(), "the border is one point wide");
+        assert!(
+            edge.red() < inside.red() - 40,
+            "the 1 pt border is darker than the fill: {} vs {}",
+            edge.red(),
+            inside.red()
+        );
+        assert_eq!(
+            pm.pixel(x0 + 1, y0 + 20).unwrap().red(),
+            inside.red(),
+            "the border is one point wide"
+        );
     }
 
     #[test]
@@ -1180,10 +2213,26 @@ mod tests {
         let icon = Rect::new(60.0, 60.0, 64.0, 64.0);
         crate::render::paint_icon_bubble(&mut pm, &icon, 1.0, &pal);
         // padding and radius 4, border 2: the bubble spans 56 to 128
-        assert_eq!(pm.pixel(92, 57).unwrap().red(), 243, "the white 50 % border over the fill");
-        assert_eq!(pm.pixel(92, 70).unwrap().red(), 230, "the fill inside the icon's frame");
-        assert_eq!(pm.pixel(92, 54).unwrap().red(), 255, "nothing outside the bubble");
-        assert_eq!(pm.pixel(56, 56).unwrap().red(), 255, "the corner is rounded");
+        assert_eq!(
+            pm.pixel(92, 57).unwrap().red(),
+            243,
+            "the white 50 % border over the fill"
+        );
+        assert_eq!(
+            pm.pixel(92, 70).unwrap().red(),
+            230,
+            "the fill inside the icon's frame"
+        );
+        assert_eq!(
+            pm.pixel(92, 54).unwrap().red(),
+            255,
+            "nothing outside the bubble"
+        );
+        assert_eq!(
+            pm.pixel(56, 56).unwrap().red(),
+            255,
+            "the corner is rounded"
+        );
     }
 
     #[test]
@@ -1192,25 +2241,56 @@ mod tests {
         use crate::menu_spec::{item_menu, Subject};
         let mut painter = WindowPainter::new(crate::render::renderer());
         let pal = Palette::builtin(false);
-        let apps = [AppChoice { id: "a.desktop".into(), name: "Viewer".into(), is_default: false }];
-        let subject = Subject { count: 1, name: "a".into(), all_folders: false, single_link: false, in_trash: false, tags_on: Vec::new() };
-        let mut menu = Menu::open(item_menu(&subject, &apps), Point { x: 10.0, y: 10.0 }, Rect::new(0.0, 0.0, 600.0, 400.0), &|l| l.len() as f64 * 7.0);
+        let apps = [AppChoice {
+            id: "a.desktop".into(),
+            name: "Viewer".into(),
+            is_default: false,
+        }];
+        let subject = Subject {
+            count: 1,
+            name: "a".into(),
+            all_folders: false,
+            single_link: false,
+            in_trash: false,
+            tags_on: Vec::new(),
+        };
+        let mut menu = Menu::open(
+            item_menu(&subject, &apps),
+            Point { x: 10.0, y: 10.0 },
+            Rect::new(0.0, 0.0, 600.0, 400.0),
+            &|l| l.len() as f64 * 7.0,
+        );
         let layout = menu.layout(0).clone();
         let mut pm = Pixmap::new(layout.rect.w as u32, layout.rect.h as u32).unwrap();
         painter.paint_menu(&mut pm, 1.0, &menu, 0, &pal);
         let probe = |pm: &Pixmap, row: usize| {
             let r = layout.rows[row].offset(-layout.rect.x, -layout.rect.y);
-            let c = pm.pixel((r.x + r.w / 2.0) as u32, (r.y + 2.0) as u32).unwrap();
+            let c = pm
+                .pixel((r.x + r.w / 2.0) as u32, (r.y + 2.0) as u32)
+                .unwrap();
             (c.red(), c.green(), c.blue(), c.alpha())
         };
         // row 0 is New Folder with Selection, row 1 Open, row 2 Open With
-        assert_eq!(probe(&pm, 1).3, 0, "an idle row is left to the material behind it");
+        assert_eq!(
+            probe(&pm, 1).3,
+            0,
+            "an idle row is left to the material behind it"
+        );
         menu.hover(0, Some(1), 0.0);
         let mut hot = Pixmap::new(layout.rect.w as u32, layout.rect.h as u32).unwrap();
         painter.paint_menu(&mut hot, 1.0, &menu, 0, &pal);
-        assert_eq!(probe(&hot, 1).3, 0xFF, "the hovered row is filled with the accent");
+        assert_eq!(
+            probe(&hot, 1).3,
+            0xFF,
+            "the hovered row is filled with the accent"
+        );
         let arrow_row = layout.rows[2].offset(-layout.rect.x, -layout.rect.y);
-        let arrow = |pm: &Pixmap| (0..arrow_row.h as u32).any(|dy| (arrow_row.right() as u32 - 24..arrow_row.right() as u32 - 8).any(|x| pm.pixel(x, arrow_row.y as u32 + dy).unwrap().alpha() > 0));
+        let arrow = |pm: &Pixmap| {
+            (0..arrow_row.h as u32).any(|dy| {
+                (arrow_row.right() as u32 - 24..arrow_row.right() as u32 - 8)
+                    .any(|x| pm.pixel(x, arrow_row.y as u32 + dy).unwrap().alpha() > 0)
+            })
+        };
         assert!(arrow(&pm), "Open With shows an arrow at its trailing edge");
     }
 
@@ -1220,48 +2300,122 @@ mod tests {
         let hidden = WindowLayout::new(size, &places(), Bars::HIDDEN);
         assert_eq!((hidden.path_bar, hidden.status_bar), (None, None));
         assert_eq!(hidden.content.bottom(), 436.0);
-        let both = WindowLayout::new(size, &places(), Bars { path: true, status: true });
-        assert_eq!(both.status_bar, Some(Rect::new(201.0, 416.0, 719.0, 20.0)), "20 pt status bar at the bottom");
-        assert_eq!(both.path_bar, Some(Rect::new(201.0, 388.0, 719.0, 28.0)), "28 pt path bar above it");
+        let both = WindowLayout::new(
+            size,
+            &places(),
+            Bars {
+                path: true,
+                status: true,
+            },
+        );
+        assert_eq!(
+            both.status_bar,
+            Some(Rect::new(201.0, 416.0, 719.0, 20.0)),
+            "20 pt status bar at the bottom"
+        );
+        assert_eq!(
+            both.path_bar,
+            Some(Rect::new(201.0, 388.0, 719.0, 28.0)),
+            "28 pt path bar above it"
+        );
         assert_eq!(both.content, Rect::new(201.0, 53.0, 719.0, 335.0));
-        let status_only = WindowLayout::new(size, &places(), Bars { path: false, status: true });
+        let status_only = WindowLayout::new(
+            size,
+            &places(),
+            Bars {
+                path: false,
+                status: true,
+            },
+        );
         assert_eq!(status_only.content.bottom(), 416.0);
     }
 
     #[test]
     fn the_path_chain_starts_at_the_root_under_the_computer_name_or_at_the_trash_or_recents() {
         let mut ps = places();
-        ps.push(Place { name: "Trash".into(), path: PathBuf::from("/home/ada/.local/share/Trash/files"), group: PlaceGroup::Locations, kind: PlaceKind::Trash });
-        ps.push(Place { name: "Recents".into(), path: PathBuf::from("recent:///"), group: PlaceGroup::Favorites, kind: PlaceKind::Recents });
-        let chain = |dir: &str| path_chain(Path::new(dir), &ps).into_iter().map(|(p, n)| (p.display().to_string(), n)).collect::<Vec<_>>();
+        ps.push(Place {
+            name: "Trash".into(),
+            path: PathBuf::from("/home/ada/.local/share/Trash/files"),
+            group: PlaceGroup::Locations,
+            kind: PlaceKind::Trash,
+        });
+        ps.push(Place {
+            name: "Recents".into(),
+            path: PathBuf::from("recent:///"),
+            group: PlaceGroup::Favorites,
+            kind: PlaceKind::Recents,
+        });
+        let chain = |dir: &str| {
+            path_chain(Path::new(dir), &ps)
+                .into_iter()
+                .map(|(p, n)| (p.display().to_string(), n))
+                .collect::<Vec<_>>()
+        };
         let s = |p: &str, n: &str| (p.to_string(), n.to_string());
-        assert_eq!(chain("/home/ada/Desktop"), [s("/", "Computer"), s("/home", "home"), s("/home/ada", "ada"), s("/home/ada/Desktop", "Desktop")]);
+        assert_eq!(
+            chain("/home/ada/Desktop"),
+            [
+                s("/", "Computer"),
+                s("/home", "home"),
+                s("/home/ada", "ada"),
+                s("/home/ada/Desktop", "Desktop")
+            ]
+        );
         assert_eq!(chain("/"), [s("/", "Computer")]);
-        assert_eq!(chain("/home/ada/.local/share/Trash/files/old"), [s("/home/ada/.local/share/Trash/files", "Trash"), s("/home/ada/.local/share/Trash/files/old", "old")]);
+        assert_eq!(
+            chain("/home/ada/.local/share/Trash/files/old"),
+            [
+                s("/home/ada/.local/share/Trash/files", "Trash"),
+                s("/home/ada/.local/share/Trash/files/old", "old")
+            ]
+        );
         assert_eq!(chain("recent:///"), [s("recent:///", "Recents")]);
     }
 
     #[test]
     fn path_segments_flow_with_their_icons_and_drop_outer_names_when_narrow() {
-        let chain: Vec<(PathBuf, String)> = ["/", "/home", "/home/ada"].iter().map(|p| (PathBuf::from(p), p.to_string())).collect();
+        let chain: Vec<(PathBuf, String)> = ["/", "/home", "/home/ada"]
+            .iter()
+            .map(|p| (PathBuf::from(p), p.to_string()))
+            .collect();
         let bar = Rect::new(201.0, 388.0, 719.0, 28.0);
         let wide = path_segments(&bar, &chain, &[60.0, 40.0, 30.0]);
         assert_eq!(wide[0].icon, Rect::new(209.0, 394.0, 16.0, 16.0));
         assert_eq!(wide[0].text, Rect::new(229.0, 388.0, 60.0, 28.0));
         assert_eq!(wide[1].icon.x, 229.0 + 60.0 + 16.0);
-        assert_eq!(wide[2].frame.right(), 209.0 + 3.0 * 20.0 + 130.0 + 2.0 * 16.0);
+        assert_eq!(
+            wide[2].frame.right(),
+            209.0 + 3.0 * 20.0 + 130.0 + 2.0 * 16.0
+        );
         // 104 pt of room: the two outer names go, the folder's own name is cut at the bar's end (92 to 112)
-        let narrow = path_segments(&Rect::new(0.0, 0.0, 120.0, 28.0), &chain, &[60.0, 40.0, 30.0]);
-        assert_eq!(narrow.iter().map(|s| s.text.w).collect::<Vec<_>>(), [0.0, 0.0, 20.0]);
+        let narrow = path_segments(
+            &Rect::new(0.0, 0.0, 120.0, 28.0),
+            &chain,
+            &[60.0, 40.0, 30.0],
+        );
+        assert_eq!(
+            narrow.iter().map(|s| s.text.w).collect::<Vec<_>>(),
+            [0.0, 0.0, 20.0]
+        );
         assert_eq!(narrow[1].frame, Rect::new(40.0, 0.0, 16.0, 28.0));
-        let tiny = path_segments(&Rect::new(0.0, 0.0, 100.0, 28.0), &chain, &[60.0, 40.0, 30.0]);
+        let tiny = path_segments(
+            &Rect::new(0.0, 0.0, 100.0, 28.0),
+            &chain,
+            &[60.0, 40.0, 30.0],
+        );
         assert_eq!(tiny[2].text, Rect::new(92.0, 0.0, 0.0, 28.0));
     }
 
     #[test]
     fn the_status_text_counts_the_items_and_the_space_left() {
-        assert_eq!(status_text(207, Some(227_270_000_000)), "207 items, 227.27 GB available");
-        assert_eq!(status_text(1, Some(250_000_000)), "1 item, 250 MB available");
+        assert_eq!(
+            status_text(207, Some(227_270_000_000)),
+            "207 items, 227.27 GB available"
+        );
+        assert_eq!(
+            status_text(1, Some(250_000_000)),
+            "1 item, 250 MB available"
+        );
         assert_eq!(status_text(0, None), "0 items");
     }
 
@@ -1270,17 +2424,55 @@ mod tests {
         let mut painter = WindowPainter::new(crate::render::renderer());
         let size = Size { w: 920.0, h: 436.0 };
         let items = entries(5);
-        let frame = painter.frame(size, &places(), Bars { path: true, status: true }, Path::new("/home/ada/Desktop"), ViewMode::List, &rows(&items), 0.0, 1.0);
-        assert_eq!(frame.path.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Computer", "home", "ada", "Desktop"]);
+        let frame = painter.frame(
+            size,
+            &places(),
+            Bars {
+                path: true,
+                status: true,
+            },
+            Path::new("/home/ada/Desktop"),
+            ViewMode::List,
+            &rows(&items),
+            0.0,
+            1.0,
+        );
+        assert_eq!(
+            frame
+                .path
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Computer", "home", "ada", "Desktop"]
+        );
         assert_eq!(frame.hit(frame.path[2].icon.center()), Hit::PathSegment(2));
         let status = frame.window.status_bar.unwrap();
         assert_eq!(frame.hit(status.center()), Hit::Chrome);
         // item 0 is a folder: its triangle is the first 12 pt of the row at level 0, the rest of the row is the item
         let row = frame.item_frame(0).unwrap();
-        assert_eq!(frame.hit(Point { x: row.x + 6.0, y: row.center().y }), Hit::Disclosure(0));
-        assert_eq!(frame.hit(Point { x: row.x + 40.0, y: row.center().y }), Hit::Item(0));
+        assert_eq!(
+            frame.hit(Point {
+                x: row.x + 6.0,
+                y: row.center().y
+            }),
+            Hit::Disclosure(0)
+        );
+        assert_eq!(
+            frame.hit(Point {
+                x: row.x + 40.0,
+                y: row.center().y
+            }),
+            Hit::Item(0)
+        );
         let file = frame.item_frame(1).unwrap();
-        assert_eq!(frame.hit(Point { x: file.x + 6.0, y: file.center().y }), Hit::Item(1), "a file has no triangle");
+        assert_eq!(
+            frame.hit(Point {
+                x: file.x + 6.0,
+                y: file.center().y
+            }),
+            Hit::Item(1),
+            "a file has no triangle"
+        );
     }
 
     #[test]
@@ -1298,18 +2490,38 @@ mod tests {
         );
         assert_eq!(l.title, Rect::new(274.0, 0.0, 308.0, 52.0));
         // 163 pt for items at the minimum width: Group By, Tags, Action and Search give way, the view popup stays
-        let narrow = WindowLayout::new(Size { w: m::WINDOW_MIN.0, h: m::WINDOW_MIN.1 }, &places(), Bars::HIDDEN);
-        assert_eq!(narrow.items, [(ToolbarItem::View, Rect::new(393.0, 14.0, 44.0, 24.0))]);
+        let narrow = WindowLayout::new(
+            Size {
+                w: m::WINDOW_MIN.0,
+                h: m::WINDOW_MIN.1,
+            },
+            &places(),
+            Bars::HIDDEN,
+        );
+        assert_eq!(
+            narrow.items,
+            [(ToolbarItem::View, Rect::new(393.0, 14.0, 44.0, 24.0))]
+        );
         // 246 pt at 600 pt: Group By and Tags give way
         let middle = WindowLayout::new(Size { w: 600.0, h: 436.0 }, &places(), Bars::HIDDEN);
-        assert_eq!(middle.items.iter().map(|(i, _)| *i).collect::<Vec<_>>(), [ToolbarItem::View, ToolbarItem::Action, ToolbarItem::Search]);
+        assert_eq!(
+            middle.items.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+            [ToolbarItem::View, ToolbarItem::Action, ToolbarItem::Search]
+        );
     }
 
     #[test]
     fn the_focused_search_field_draws_its_ring_text_and_caret() {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("editor.txt"), b"x").unwrap();
-        let mut browser = Browser::open(d.path().to_path_buf(), SortSpec::default(), PathBuf::from("/nonexistent/recently-used.xbel"), None, Arc::new(|| {})).unwrap();
+        let mut browser = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            PathBuf::from("/nonexistent/recently-used.xbel"),
+            None,
+            Arc::new(|| {}),
+        )
+        .unwrap();
         while browser.entries().is_empty() {
             browser.poll();
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -1319,11 +2531,42 @@ mod tests {
         let mut painter = WindowPainter::new(crate::render::renderer());
         let pal = Palette::builtin(false);
         let size = Size { w: 920.0, h: 436.0 };
-        let frame = painter.frame(size, &places, Bars { path: true, status: true }, d.path(), ViewMode::List, browser.outline(), 0.0, 1.0);
+        let frame = painter.frame(
+            size,
+            &places,
+            Bars {
+                path: true,
+                status: true,
+            },
+            d.path(),
+            ViewMode::List,
+            browser.outline(),
+            0.0,
+            1.0,
+        );
         let mut pm = Pixmap::new(920, 436).unwrap();
-        let state = WindowState { browser: &browser, places: &places, mode: ViewMode::List, active: true, search: "ed", search_focused: true, title: "Here", now: SystemTime::now(), edit: None, drop_target: None, marquee: None, status: "1 item" };
+        let state = WindowState {
+            browser: &browser,
+            places: &places,
+            mode: ViewMode::List,
+            active: true,
+            search: "ed",
+            search_focused: true,
+            title: "Here",
+            now: SystemTime::now(),
+            edit: None,
+            drop_target: None,
+            marquee: None,
+            status: "1 item",
+        };
         painter.paint(&mut pm, 1.0, &frame, &state, &pal);
-        let field = frame.window.items.iter().find(|(i, _)| *i == ToolbarItem::Search).unwrap().1;
+        let field = frame
+            .window
+            .items
+            .iter()
+            .find(|(i, _)| *i == ToolbarItem::Search)
+            .unwrap()
+            .1;
         let ring = pm.pixel(field.center().x as u32, field.y as u32).unwrap();
         assert!(ring.blue() > ring.red(), "the accent ring");
     }
@@ -1334,7 +2577,14 @@ mod tests {
         for i in 0..60 {
             std::fs::write(d.path().join(format!("file {i:02}.txt")), b"x").unwrap();
         }
-        let mut browser = Browser::open(d.path().to_path_buf(), SortSpec::default(), PathBuf::from("/nonexistent/recently-used.xbel"), None, Arc::new(|| {})).unwrap();
+        let mut browser = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            PathBuf::from("/nonexistent/recently-used.xbel"),
+            None,
+            Arc::new(|| {}),
+        )
+        .unwrap();
         while browser.entries().len() < 60 {
             browser.poll();
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -1344,20 +2594,53 @@ mod tests {
         let pal = Palette::builtin(false);
         let size = Size { w: 920.0, h: 436.0 };
         let mut draw = |mode: ViewMode, scroll: f64, active: bool| {
-            let frame = painter.frame(size, &places, Bars::HIDDEN, d.path(), mode, browser.outline(), scroll, 1.0);
+            let frame = painter.frame(
+                size,
+                &places,
+                Bars::HIDDEN,
+                d.path(),
+                mode,
+                browser.outline(),
+                scroll,
+                1.0,
+            );
             let mut pm = Pixmap::new(920, 436).unwrap();
-            let state = WindowState { browser: &browser, places: &places, mode, active, search: "", search_focused: false, title: "Here", now: SystemTime::now(), edit: None, drop_target: None, marquee: None, status: "" };
+            let state = WindowState {
+                browser: &browser,
+                places: &places,
+                mode,
+                active,
+                search: "",
+                search_focused: false,
+                title: "Here",
+                now: SystemTime::now(),
+                edit: None,
+                drop_target: None,
+                marquee: None,
+                status: "",
+            };
             painter.paint(&mut pm, 1.0, &frame, &state, &pal);
-            let at = |y: u32| { let p = pm.pixel(600, y).unwrap(); (p.red(), p.green(), p.blue()) };
+            let at = |y: u32| {
+                let p = pm.pixel(600, y).unwrap();
+                (p.red(), p.green(), p.blue())
+            };
             // the 1 pt line under the 52 pt strip, and the header 10 pt into the content
             (at(52), at(63))
         };
         let (line, header) = draw(ViewMode::List, 0.0, true);
         assert_ne!(line, (0xFF, 0xFF, 0xFF), "the line under the strip at rest");
-        assert_eq!(line, draw(ViewMode::Icons, 100.0, true).0, "and the same line scrolled");
+        assert_eq!(
+            line,
+            draw(ViewMode::Icons, 100.0, true).0,
+            "and the same line scrolled"
+        );
         assert_eq!(header, (0xFF, 0xFF, 0xFF), "the header on the strip's fill");
         let (_, inactive_header) = draw(ViewMode::List, 0.0, false);
-        assert_ne!(inactive_header, (0xFF, 0xFF, 0xFF), "an inactive strip's fill reaches its header");
+        assert_ne!(
+            inactive_header,
+            (0xFF, 0xFF, 0xFF),
+            "an inactive strip's fill reaches its header"
+        );
     }
 
     #[test]
@@ -1366,7 +2649,14 @@ mod tests {
         for name in ["a report.txt", "Notes 2026.md"] {
             std::fs::write(d.path().join(name), b"x").unwrap();
         }
-        let mut browser = Browser::open(d.path().to_path_buf(), SortSpec::default(), PathBuf::from("/nonexistent/recently-used.xbel"), None, Arc::new(|| {})).unwrap();
+        let mut browser = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            PathBuf::from("/nonexistent/recently-used.xbel"),
+            None,
+            Arc::new(|| {}),
+        )
+        .unwrap();
         while browser.entries().len() < 2 {
             browser.poll();
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -1377,13 +2667,35 @@ mod tests {
         // every caret position of both names, at fractional scales too: each used to land on a fraction of a pixel
         for scale in [1.0_f32, 1.5] {
             for mode in [ViewMode::List, ViewMode::Icons] {
-                let frame = painter.frame(Size { w: 600.0, h: 300.0 }, &places, Bars::HIDDEN, d.path(), mode, browser.outline(), 0.0, scale);
+                let frame = painter.frame(
+                    Size { w: 600.0, h: 300.0 },
+                    &places,
+                    Bars::HIDDEN,
+                    d.path(),
+                    mode,
+                    browser.outline(),
+                    0.0,
+                    scale,
+                );
                 let mut pm = Pixmap::new((600.0 * scale) as u32, (300.0 * scale) as u32).unwrap();
                 for (index, e) in browser.entries().iter().enumerate() {
                     let mut edit = NameEdit::new(index, &e.name, false);
                     edit.end(false);
                     for _ in 0..=e.name.chars().count() {
-                        let state = WindowState { browser: &browser, places: &places, mode, active: true, search: "", search_focused: false, title: "Here", now: SystemTime::now(), edit: Some(&edit), drop_target: None, marquee: None, status: "" };
+                        let state = WindowState {
+                            browser: &browser,
+                            places: &places,
+                            mode,
+                            active: true,
+                            search: "",
+                            search_focused: false,
+                            title: "Here",
+                            now: SystemTime::now(),
+                            edit: Some(&edit),
+                            drop_target: None,
+                            marquee: None,
+                            status: "",
+                        };
                         painter.paint(&mut pm, scale, &frame, &state, &pal);
                         edit.left(false);
                     }

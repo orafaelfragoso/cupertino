@@ -80,7 +80,11 @@ pub fn raised_cosine(t: f64) -> f64 {
 /// the other colours, since the overlay scales encoded values).
 pub fn overlay_alpha(factor: f64) -> f64 {
     let f = factor.clamp(0.0, 1.0);
-    let encoded = if f <= 0.003_130_8 { 12.92 * f } else { 1.055 * f.powf(1.0 / 2.4) - 0.055 };
+    let encoded = if f <= 0.003_130_8 {
+        12.92 * f
+    } else {
+        1.055 * f.powf(1.0 / 2.4) - 0.055
+    };
     (1.0 - encoded).clamp(0.0, 1.0)
 }
 
@@ -105,14 +109,17 @@ impl ActivationFade {
 
     /// Alpha of the black overlay at `now`: 1 at the start, `1 - e` with `e = 0.5 (1 - cos(pi p))`, 0 from the end.
     pub fn alpha(&self, now: f64) -> f64 {
-        let Some(started) = self.started else { return 0.0 };
+        let Some(started) = self.started else {
+            return 0.0;
+        };
         let p = ((now - started) / ACTIVATION_FADE_S).clamp(0.0, 1.0);
         1.0 - 0.5 * (1.0 - (std::f64::consts::PI * p).cos())
     }
 
     /// The fade is running, so every frame differs.
     pub fn animating(&self, now: f64) -> bool {
-        self.started.is_some_and(|started| now - started < ACTIVATION_FADE_S)
+        self.started
+            .is_some_and(|started| now - started < ACTIVATION_FADE_S)
     }
 }
 
@@ -133,7 +140,16 @@ pub struct IdlePolicy {
 
 impl IdlePolicy {
     pub fn new(settings: PowerSettings, now: f64) -> Self {
-        Self { settings, last_input: now, state: DisplayState::On, since: now, lengthened: false, ramp: None, lock_sent: false, sleep_sent: false }
+        Self {
+            settings,
+            last_input: now,
+            state: DisplayState::On,
+            since: now,
+            lengthened: false,
+            ramp: None,
+            lock_sent: false,
+            sleep_sent: false,
+        }
     }
 
     /// Take new timers (`power.conf` changed): the countdown in progress continues with them.
@@ -166,7 +182,11 @@ impl IdlePolicy {
                 if user && now - self.since < DIM_ACTIVITY_WINDOW_S {
                     self.lengthened = true;
                 }
-                self.ramp = Some(Ramp { from: self.factor(now), to: 1.0, start: now });
+                self.ramp = Some(Ramp {
+                    from: self.factor(now),
+                    to: 1.0,
+                    start: now,
+                });
                 self.enter(DisplayState::On, now)
             }
             DisplayState::Asleep => {
@@ -187,12 +207,30 @@ impl IdlePolicy {
         }
         let mut effects = Vec::new();
         let timers = self.settings.timers(facts.on_battery);
-        let display_sleep = if facts.locked { Some(self.settings.lock_screen_display_sleep.as_secs_f64()) } else { timers.display_sleep.duration().map(|d| d.as_secs_f64()) };
-        if let Some(t) = display_sleep.map(|t| if self.lengthened { t.max((2.0 * t).min(LENGTHENED_CAP_S)) } else { t }) {
+        let display_sleep = if facts.locked {
+            Some(self.settings.lock_screen_display_sleep.as_secs_f64())
+        } else {
+            timers.display_sleep.duration().map(|d| d.as_secs_f64())
+        };
+        if let Some(t) = display_sleep.map(|t| {
+            if self.lengthened {
+                t.max((2.0 * t).min(LENGTHENED_CAP_S))
+            } else {
+                t
+            }
+        }) {
             let sleep_at = self.last_input + t;
             let dim_at = self.last_input + (t - DIM_WINDOW_S).max(0.0);
-            if self.state == DisplayState::On && self.settings.dim_before_display_sleep && now >= dim_at && now < sleep_at {
-                self.ramp = Some(Ramp { from: self.factor(now), to: DIM_FACTOR, start: now });
+            if self.state == DisplayState::On
+                && self.settings.dim_before_display_sleep
+                && now >= dim_at
+                && now < sleep_at
+            {
+                self.ramp = Some(Ramp {
+                    from: self.factor(now),
+                    to: DIM_FACTOR,
+                    start: now,
+                });
                 effects.extend(self.enter(DisplayState::Dimmed, now));
             }
             if self.state != DisplayState::Asleep && now >= sleep_at {
@@ -201,7 +239,12 @@ impl IdlePolicy {
                 effects.extend(self.enter(DisplayState::Asleep, now));
             }
         }
-        if let (DisplayState::Asleep, Timer::After(delay), false, false) = (self.state, self.settings.require_password_after, facts.locked, self.lock_sent) {
+        if let (DisplayState::Asleep, Timer::After(delay), false, false) = (
+            self.state,
+            self.settings.require_password_after,
+            facts.locked,
+            self.lock_sent,
+        ) {
             if now >= self.since + delay.as_secs_f64() {
                 self.lock_sent = true;
                 effects.push(Effect::Lock);
@@ -243,11 +286,21 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    const AC: Facts = Facts { on_battery: false, inhibited: false, locked: false };
-    const BATTERY: Facts = Facts { on_battery: true, ..AC };
+    const AC: Facts = Facts {
+        on_battery: false,
+        inhibited: false,
+        locked: false,
+    };
+    const BATTERY: Facts = Facts {
+        on_battery: true,
+        ..AC
+    };
 
     fn settings() -> PowerSettings {
-        PowerSettings { require_password_after: Timer::Never, ..PowerSettings::default() }
+        PowerSettings {
+            require_password_after: Timer::Never,
+            ..PowerSettings::default()
+        }
     }
 
     /// Tick every 0.1 s from `from` to `to` and collect the effects with their times.
@@ -264,11 +317,21 @@ mod tests {
     #[test]
     fn the_activation_fade_runs_from_black_to_clear_on_a_cosine_over_a_quarter_second() {
         let mut fade = ActivationFade::default();
-        assert_eq!((fade.alpha(5.0), fade.animating(5.0)), (0.0, false), "no fade before a resume");
+        assert_eq!(
+            (fade.alpha(5.0), fade.animating(5.0)),
+            (0.0, false),
+            "no fade before a resume"
+        );
         fade.begin(10.0);
         assert!((fade.alpha(10.0) - 1.0).abs() < 1e-12);
-        assert!((fade.alpha(10.125) - 0.5).abs() < 1e-12, "the middle of the curve");
-        assert!((fade.alpha(10.0625) - (1.0 - 0.5 * (1.0 - (std::f64::consts::PI / 4.0).cos()))).abs() < 1e-12);
+        assert!(
+            (fade.alpha(10.125) - 0.5).abs() < 1e-12,
+            "the middle of the curve"
+        );
+        assert!(
+            (fade.alpha(10.0625) - (1.0 - 0.5 * (1.0 - (std::f64::consts::PI / 4.0).cos()))).abs()
+                < 1e-12
+        );
         assert!(fade.animating(10.24));
         assert!((fade.alpha(10.25)).abs() < 1e-12 && !fade.animating(10.25));
         assert_eq!(fade.alpha(11.0), 0.0);
@@ -278,17 +341,31 @@ mod tests {
     }
 
     #[test]
-    fn on_mains_the_display_dims_15_s_before_it_sleeps_at_10_minutes_and_the_system_sleeps_with_it() {
+    fn on_mains_the_display_dims_15_s_before_it_sleeps_at_10_minutes_and_the_system_sleeps_with_it()
+    {
         let mut p = IdlePolicy::new(settings(), 0.0);
         let effects = run(&mut p, 0.0, 601.0, AC);
-        assert_eq!(effects, vec![(585.0, Effect::Display(DisplayState::Dimmed)), (600.0, Effect::Display(DisplayState::Asleep)), (600.0, Effect::SystemSleep)]);
+        assert_eq!(
+            effects,
+            vec![
+                (585.0, Effect::Display(DisplayState::Dimmed)),
+                (600.0, Effect::Display(DisplayState::Asleep)),
+                (600.0, Effect::SystemSleep)
+            ]
+        );
     }
 
     #[test]
     fn on_battery_the_display_sleeps_at_2_minutes() {
         let mut p = IdlePolicy::new(settings(), 0.0);
         let effects = run(&mut p, 0.0, 121.0, BATTERY);
-        assert_eq!(effects, vec![(105.0, Effect::Display(DisplayState::Dimmed)), (120.0, Effect::Display(DisplayState::Asleep))]);
+        assert_eq!(
+            effects,
+            vec![
+                (105.0, Effect::Display(DisplayState::Dimmed)),
+                (120.0, Effect::Display(DisplayState::Asleep))
+            ]
+        );
     }
 
     #[test]
@@ -298,19 +375,33 @@ mod tests {
         assert_eq!(p.state(), DisplayState::Dimmed);
         assert!((p.factor(105.0) - 1.0).abs() < 1e-9);
         let mid = p.factor(105.0 + RAMP_S / 2.0);
-        assert!((mid - (1.0 + DIM_FACTOR) / 2.0).abs() < 1e-9, "half way on the raised cosine: {mid}");
+        assert!(
+            (mid - (1.0 + DIM_FACTOR) / 2.0).abs() < 1e-9,
+            "half way on the raised cosine: {mid}"
+        );
         assert!((p.factor(105.0 + RAMP_S) - DIM_FACTOR).abs() < 1e-9);
         assert!(p.animating(105.1) && !p.animating(105.0 + RAMP_S));
 
         assert_eq!(p.input(110.0), vec![Effect::Display(DisplayState::On)]);
-        assert!((p.factor(110.0) - DIM_FACTOR).abs() < 1e-9, "the undim starts from where the display is");
+        assert!(
+            (p.factor(110.0) - DIM_FACTOR).abs() < 1e-9,
+            "the undim starts from where the display is"
+        );
         assert!((p.factor(110.0 + RAMP_S) - 1.0).abs() < 1e-9);
 
         let mut p = IdlePolicy::new(settings(), 0.0);
         run(&mut p, 0.0, 120.0, BATTERY);
-        assert_eq!(p.factor(120.0), 0.0, "sleep is instant (ON_TO_OFF and DIM_TO_OFF ramps are 0)");
+        assert_eq!(
+            p.factor(120.0),
+            0.0,
+            "sleep is instant (ON_TO_OFF and DIM_TO_OFF ramps are 0)"
+        );
         p.input(130.0);
-        assert_eq!(p.factor(130.0), 1.0, "wake is instant (OFF_TO_ON ramp is 0)");
+        assert_eq!(
+            p.factor(130.0),
+            1.0,
+            "wake is instant (OFF_TO_ON ramp is 0)"
+        );
     }
 
     #[test]
@@ -320,10 +411,20 @@ mod tests {
         p.input(106.0);
         // T = 120 s, T2 = max(min(240, 600), 120) = 240 s: dim at 106 + 225
         let effects = run(&mut p, 106.1, 347.0, BATTERY);
-        assert_eq!(effects, vec![(331.0, Effect::Display(DisplayState::Dimmed)), (346.0, Effect::Display(DisplayState::Asleep))]);
+        assert_eq!(
+            effects,
+            vec![
+                (331.0, Effect::Display(DisplayState::Dimmed)),
+                (346.0, Effect::Display(DisplayState::Asleep))
+            ]
+        );
         p.input(400.0);
         let effects = run(&mut p, 400.1, 521.0, BATTERY);
-        assert_eq!(effects[0], (505.0, Effect::Display(DisplayState::Dimmed)), "sleeping ends the lengthened countdown");
+        assert_eq!(
+            effects[0],
+            (505.0, Effect::Display(DisplayState::Dimmed)),
+            "sleeping ends the lengthened countdown"
+        );
     }
 
     #[test]
@@ -335,22 +436,38 @@ mod tests {
         run(&mut p, 0.0, 386.0, AC);
         p.input(386.0);
         let effects = run(&mut p, 386.1, 987.0, AC);
-        assert_eq!(effects[0], (386.0 + 600.0 - 15.0, Effect::Display(DisplayState::Dimmed)));
+        assert_eq!(
+            effects[0],
+            (386.0 + 600.0 - 15.0, Effect::Display(DisplayState::Dimmed))
+        );
     }
 
     #[test]
     fn without_dim_the_display_goes_straight_to_sleep() {
-        let s = PowerSettings { dim_before_display_sleep: false, ..settings() };
+        let s = PowerSettings {
+            dim_before_display_sleep: false,
+            ..settings()
+        };
         let mut p = IdlePolicy::new(s, 0.0);
-        assert_eq!(run(&mut p, 0.0, 121.0, BATTERY), vec![(120.0, Effect::Display(DisplayState::Asleep))]);
+        assert_eq!(
+            run(&mut p, 0.0, 121.0, BATTERY),
+            vec![(120.0, Effect::Display(DisplayState::Asleep))]
+        );
     }
 
     #[test]
     fn an_inhibitor_holds_the_countdowns_and_its_release_starts_them_again() {
         let mut p = IdlePolicy::new(settings(), 0.0);
         run(&mut p, 0.0, 106.0, BATTERY);
-        let held = Facts { inhibited: true, ..BATTERY };
-        assert_eq!(p.tick(107.0, held), vec![Effect::Display(DisplayState::On)], "an inhibitor undims the display");
+        let held = Facts {
+            inhibited: true,
+            ..BATTERY
+        };
+        assert_eq!(
+            p.tick(107.0, held),
+            vec![Effect::Display(DisplayState::On)],
+            "an inhibitor undims the display"
+        );
         assert!(run(&mut p, 107.0, 1000.0, held).is_empty());
         let effects = run(&mut p, 1000.1, 1121.0, BATTERY);
         assert_eq!(effects[0].1, Effect::Display(DisplayState::Dimmed));
@@ -359,18 +476,30 @@ mod tests {
 
     #[test]
     fn display_sleep_locks_after_the_password_delay_and_input_cancels_the_pending_lock() {
-        let s = PowerSettings { require_password_after: Timer::After(Duration::from_secs(5)), ..settings() };
+        let s = PowerSettings {
+            require_password_after: Timer::After(Duration::from_secs(5)),
+            ..settings()
+        };
         let mut p = IdlePolicy::new(s, 0.0);
         let effects = run(&mut p, 0.0, 126.0, BATTERY);
         assert_eq!(effects.last(), Some(&(125.0, Effect::Lock)));
-        assert_eq!(effects.iter().filter(|(_, e)| *e == Effect::Lock).count(), 1, "the lock is asked for once");
+        assert_eq!(
+            effects.iter().filter(|(_, e)| *e == Effect::Lock).count(),
+            1,
+            "the lock is asked for once"
+        );
 
         let mut p = IdlePolicy::new(s, 0.0);
         run(&mut p, 0.0, 122.0, BATTERY);
         p.input(122.0);
-        assert!(!run(&mut p, 122.1, 200.0, BATTERY).iter().any(|(_, e)| *e == Effect::Lock));
+        assert!(!run(&mut p, 122.1, 200.0, BATTERY)
+            .iter()
+            .any(|(_, e)| *e == Effect::Lock));
 
-        let immediate = PowerSettings { require_password_after: Timer::After(Duration::ZERO), ..settings() };
+        let immediate = PowerSettings {
+            require_password_after: Timer::After(Duration::ZERO),
+            ..settings()
+        };
         let mut p = IdlePolicy::new(immediate, 0.0);
         assert!(run(&mut p, 0.0, 120.0, BATTERY).contains(&(120.0, Effect::Lock)));
     }
@@ -379,14 +508,26 @@ mod tests {
     fn the_lock_screen_sleeps_the_display_after_its_own_30_s() {
         let mut p = IdlePolicy::new(settings(), 0.0);
         let locked = Facts { locked: true, ..AC };
-        assert_eq!(run(&mut p, 0.0, 31.0, locked), vec![(15.0, Effect::Display(DisplayState::Dimmed)), (30.0, Effect::Display(DisplayState::Asleep))]);
+        assert_eq!(
+            run(&mut p, 0.0, 31.0, locked),
+            vec![
+                (15.0, Effect::Display(DisplayState::Dimmed)),
+                (30.0, Effect::Display(DisplayState::Asleep))
+            ]
+        );
     }
 
     #[test]
     fn system_sleep_is_asked_for_once_until_input() {
         let mut p = IdlePolicy::new(settings(), 0.0);
         let effects = run(&mut p, 0.0, 700.0, BATTERY);
-        assert_eq!(effects.iter().filter(|(_, e)| *e == Effect::SystemSleep).count(), 1);
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|(_, e)| *e == Effect::SystemSleep)
+                .count(),
+            1
+        );
         assert!(effects.contains(&(600.0, Effect::SystemSleep)));
         p.input(700.0);
         assert!(run(&mut p, 700.1, 1301.0, BATTERY).contains(&(1300.0, Effect::SystemSleep)));

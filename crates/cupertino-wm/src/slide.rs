@@ -40,7 +40,8 @@ impl Slide {
     }
 
     fn is_at_rest(&self, now: f64) -> bool {
-        self.state_after(self.clock(now).0).is_at_rest(self.target, self.tolerance)
+        self.state_after(self.clock(now).0)
+            .is_at_rest(self.target, self.tolerance)
     }
 
     /// `x` at `now`, interpolated between solver steps so frames faster than 60 Hz stay smooth.
@@ -64,11 +65,15 @@ pub(crate) struct SlidePosition {
 
 impl SlidePosition {
     pub(crate) fn new(index: f64) -> Self {
-        Self { tracked: AnimatedValue::new(index), slide: None }
+        Self {
+            tracked: AnimatedValue::new(index),
+            slide: None,
+        }
     }
 
     pub(crate) fn value(&self, now: f64) -> f64 {
-        self.slide.map_or_else(|| self.tracked.value(now), |s| s.x(now) * s.span)
+        self.slide
+            .map_or_else(|| self.tracked.value(now), |s| s.x(now) * s.span)
     }
 
     /// Index units per second.
@@ -101,9 +106,25 @@ impl SlidePosition {
 
     /// Chase workspace `target` from the current position and velocity. `spaces` is the workspace
     /// count and `output_width` the output width in points (only the programmatic tolerance uses it).
-    pub(crate) fn slide_to(&mut self, target: usize, spaces: usize, output_width: f64, start: SlideStart, now: f64) {
+    pub(crate) fn slide_to(
+        &mut self,
+        target: usize,
+        spaces: usize,
+        output_width: f64,
+        start: SlideStart,
+        now: f64,
+    ) {
         let span = spaces.saturating_sub(1).max(1) as f64;
-        let from = SpaceSlideState { x: self.value(now) / span, v: self.velocity(now) / span };
-        self.slide = Some(Slide { from, start: now, target: target as f64 / span, tolerance: start.tolerance(spaces, output_width), span });
+        let from = SpaceSlideState {
+            x: self.value(now) / span,
+            v: self.velocity(now) / span,
+        };
+        self.slide = Some(Slide {
+            from,
+            start: now,
+            target: target as f64 / span,
+            tolerance: start.tolerance(spaces, output_width),
+            span,
+        });
     }
 }

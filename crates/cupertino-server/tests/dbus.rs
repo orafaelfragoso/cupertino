@@ -17,13 +17,21 @@ struct PrivateBus {
 
 impl PrivateBus {
     fn start() -> Option<PrivateBus> {
-        let out = Command::new("dbus-daemon").args(["--session", "--print-address=1", "--print-pid=1", "--fork"]).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+        let out = Command::new("dbus-daemon")
+            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
         if !out.status.success() {
             return None;
         }
         let text = String::from_utf8(out.stdout).ok()?;
         let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-        Some(PrivateBus { address: lines.next()?.to_string(), pid: lines.next()?.to_string() })
+        Some(PrivateBus {
+            address: lines.next()?.to_string(),
+            pid: lines.next()?.to_string(),
+        })
     }
 }
 
@@ -72,7 +80,10 @@ struct FakeOsd(Arc<Mutex<Vec<(String, i32, bool)>>>);
 #[zbus::interface(name = "org.cupertino.Osd1")]
 impl FakeOsd {
     fn volume_step(&self, direction: i32, fine: bool) {
-        self.0.lock().unwrap().push(("VolumeStep".into(), direction, fine));
+        self.0
+            .lock()
+            .unwrap()
+            .push(("VolumeStep".into(), direction, fine));
     }
 
     fn toggle_mute(&self) {
@@ -93,7 +104,10 @@ fn each_toggle_calls_its_own_process() {
             .expect("address")
             .name("org.cupertino.NotificationCenter1")
             .expect("name")
-            .serve_at("/org/cupertino/NotificationCenter1", FakeCentre(centre_toggles.clone()))
+            .serve_at(
+                "/org/cupertino/NotificationCenter1",
+                FakeCentre(centre_toggles.clone()),
+            )
             .expect("object")
             .build()
             .await
@@ -102,7 +116,10 @@ fn each_toggle_calls_its_own_process() {
             .expect("address")
             .name("org.cupertino.Launcher1")
             .expect("name")
-            .serve_at("/org/cupertino/Launcher1", FakeLauncher(launcher_toggles.clone()))
+            .serve_at(
+                "/org/cupertino/Launcher1",
+                FakeLauncher(launcher_toggles.clone()),
+            )
             .expect("object")
             .build()
             .await
@@ -115,7 +132,13 @@ fn each_toggle_calls_its_own_process() {
             }
             async_io::Timer::after(Duration::from_millis(20)).await;
         }
-        assert_eq!((*centre_toggles.lock().unwrap(), *launcher_toggles.lock().unwrap()), (0, 1));
+        assert_eq!(
+            (
+                *centre_toggles.lock().unwrap(),
+                *launcher_toggles.lock().unwrap()
+            ),
+            (0, 1)
+        );
         handle.send(Request::Toggle(Toggle::NotificationCentre));
         for _ in 0..200 {
             if *centre_toggles.lock().unwrap() > 0 {
@@ -123,7 +146,13 @@ fn each_toggle_calls_its_own_process() {
             }
             async_io::Timer::after(Duration::from_millis(20)).await;
         }
-        assert_eq!((*centre_toggles.lock().unwrap(), *launcher_toggles.lock().unwrap()), (1, 1));
+        assert_eq!(
+            (
+                *centre_toggles.lock().unwrap(),
+                *launcher_toggles.lock().unwrap()
+            ),
+            (1, 1)
+        );
 
         let osd_calls = Arc::new(Mutex::new(Vec::new()));
         let _osd = connection::Builder::address(bus.address.as_str())
@@ -135,8 +164,14 @@ fn each_toggle_calls_its_own_process() {
             .build()
             .await
             .expect("connect");
-        handle.send(Request::Osd { key: OsdKey::VolumeDown, fine: true });
-        handle.send(Request::Osd { key: OsdKey::Mute, fine: false });
+        handle.send(Request::Osd {
+            key: OsdKey::VolumeDown,
+            fine: true,
+        });
+        handle.send(Request::Osd {
+            key: OsdKey::Mute,
+            fine: false,
+        });
         for _ in 0..200 {
             if osd_calls.lock().unwrap().len() == 2 {
                 break;
@@ -145,7 +180,13 @@ fn each_toggle_calls_its_own_process() {
         }
         let mut calls = osd_calls.lock().unwrap().clone();
         calls.sort();
-        assert_eq!(calls, vec![("ToggleMute".to_string(), 0, false), ("VolumeStep".to_string(), -1, true)]);
+        assert_eq!(
+            calls,
+            vec![
+                ("ToggleMute".to_string(), 0, false),
+                ("VolumeStep".to_string(), -1, true)
+            ]
+        );
 
         let lock_calls = Arc::new(Mutex::new(0));
         let power_keys = Arc::new(Mutex::new(Vec::new()));
@@ -153,7 +194,10 @@ fn each_toggle_calls_its_own_process() {
             .expect("address")
             .name("org.cupertino.Login1")
             .expect("name")
-            .serve_at("/org/cupertino/Login1", FakeLogin(lock_calls.clone(), power_keys.clone()))
+            .serve_at(
+                "/org/cupertino/Login1",
+                FakeLogin(lock_calls.clone(), power_keys.clone()),
+            )
             .expect("object")
             .build()
             .await
@@ -175,6 +219,12 @@ fn each_toggle_calls_its_own_process() {
             }
             async_io::Timer::after(Duration::from_millis(20)).await;
         }
-        assert_eq!((*lock_calls.lock().unwrap(), power_keys.lock().unwrap().clone()), (1, vec![true, false]));
+        assert_eq!(
+            (
+                *lock_calls.lock().unwrap(),
+                power_keys.lock().unwrap().clone()
+            ),
+            (1, vec![true, false])
+        );
     });
 }

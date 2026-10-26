@@ -21,16 +21,20 @@
 use std::collections::BTreeMap;
 
 use cupertino_overview::OverviewMode;
-use cupertino_protocols::server::cupertino_dock_v1::{self, Corner, CupertinoDockV1, Gesture, WindowState};
+use cupertino_protocols::server::cupertino_dock_v1::{
+    self, Corner, CupertinoDockV1, Gesture, WindowState,
+};
 use cupertino_protocols::server::cupertino_shell_v1::{CupertinoShellV1, Error as ShellError};
 use cupertino_wm::{Command, LifecycleState, OutputId, Rect, WindowId};
-use smithay::reexports::wayland_server::WEnum;
 use smithay::desktop::{layer_map_for_output, WindowSurfaceType};
 use smithay::output::Output;
 use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::reexports::wayland_server::{Client, DataInit, Dispatch, DisplayHandle, New, Resource};
+use smithay::reexports::wayland_server::WEnum;
+use smithay::reexports::wayland_server::{
+    Client, DataInit, Dispatch, DisplayHandle, New, Resource,
+};
 use smithay::wayland::compositor::{with_states, Cacheable};
 
 use crate::shell_v1::surface_backdrops;
@@ -174,7 +178,9 @@ impl Docks {
 
     /// A gesture committed on `output`: its dock maps it to an action. False without a dock there.
     pub fn gesture(&self, output: OutputId, kind: Gesture) -> bool {
-        let Some(dock) = self.of_output(output) else { return false };
+        let Some(dock) = self.of_output(output) else {
+            return false;
+        };
         dock.resource.gesture(kind);
         dock.resource.done();
         true
@@ -193,13 +199,26 @@ struct OverviewGroup {
 /// One group: the overview's windows, workspaces and area.
 fn send_overview(resource: &CupertinoDockV1, g: &OverviewGroup) {
     for (id, r) in &g.windows {
-        resource.overview_window(*id, r.x.round() as i32, r.y.round() as i32, r.w.round() as i32, r.h.round() as i32);
+        resource.overview_window(
+            *id,
+            r.x.round() as i32,
+            r.y.round() as i32,
+            r.w.round() as i32,
+            r.h.round() as i32,
+        );
     }
     for (id, current) in &g.workspaces {
         resource.overview_workspace(*id, u32::from(*current));
     }
     let a = g.area;
-    resource.overview_changed(g.mode, g.app_id.clone(), a.x.round() as i32, a.y.round() as i32, a.w.round() as i32, a.h.round() as i32);
+    resource.overview_changed(
+        g.mode,
+        g.app_id.clone(),
+        a.x.round() as i32,
+        a.y.round() as i32,
+        a.w.round() as i32,
+        a.h.round() as i32,
+    );
     resource.done();
 }
 
@@ -221,13 +240,31 @@ pub struct DockData {
 
 impl Cupertino {
     /// `cupertino_shell_v1.get_dock`: validate the role, register the dock and send its first group.
-    pub fn create_dock(&mut self, shell: &CupertinoShellV1, id: New<CupertinoDockV1>, surface: WlSurface, output: &WlOutput, init: &mut DataInit<'_, Self>) {
-        let target = Output::from_resource(output).and_then(|o| self.output_by_wl(&o).map(|e| (e.id, e.output.clone())));
+    pub fn create_dock(
+        &mut self,
+        shell: &CupertinoShellV1,
+        id: New<CupertinoDockV1>,
+        surface: WlSurface,
+        output: &WlOutput,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        let target = Output::from_resource(output)
+            .and_then(|o| self.output_by_wl(&o).map(|e| (e.id, e.output.clone())));
         let rejection = match &target {
             None => Some("the output is gone".to_string()),
-            Some((_, o)) if layer_map_for_output(o).layer_for_surface(&surface, WindowSurfaceType::TOPLEVEL).is_none() => Some("the surface is not a layer surface of the output".to_string()),
-            Some(_) if self.docks.has_surface(&surface) || self.menu_bars.has_surface(&surface) => Some("the surface already has a shell role".to_string()),
-            Some((out, _)) if self.docks.of_output(*out).is_some() => Some("the output already has a dock".to_string()),
+            Some((_, o))
+                if layer_map_for_output(o)
+                    .layer_for_surface(&surface, WindowSurfaceType::TOPLEVEL)
+                    .is_none() =>
+            {
+                Some("the surface is not a layer surface of the output".to_string())
+            }
+            Some(_) if self.docks.has_surface(&surface) || self.menu_bars.has_surface(&surface) => {
+                Some("the surface already has a shell role".to_string())
+            }
+            Some((out, _)) if self.docks.of_output(*out).is_some() => {
+                Some("the output already has a dock".to_string())
+            }
             Some(_) => None,
         };
         if let Some(reason) = rejection {
@@ -237,7 +274,13 @@ impl Cupertino {
         }
         let (out, _) = target.expect("a rejected target returned above");
         let resource = init.init(id, DockData { output: Some(out) });
-        self.docks.docks.push(Dock { resource, surface, output: out, wl_output: output.clone(), sent: None });
+        self.docks.docks.push(Dock {
+            resource,
+            surface,
+            output: out,
+            wl_output: output.clone(),
+            sent: None,
+        });
         self.refresh_usable_area(out);
         self.refresh_docks();
         // a dock that restarts mid-switch on the panel's output draws the panel from where the switch stands
@@ -245,7 +288,10 @@ impl Cupertino {
             self.send_switcher_to_panel_dock(&state);
         }
         // and one that restarts mid-overview lays it out from where it stands
-        if let Some(group) = self.overview_group().filter(|_| self.shell.overview_on(out).is_some()) {
+        if let Some(group) = self
+            .overview_group()
+            .filter(|_| self.shell.overview_on(out).is_some())
+        {
             if let Some(dock) = self.docks.docks.last() {
                 send_overview(&dock.resource, &group);
             }
@@ -257,13 +303,20 @@ impl Cupertino {
     pub fn switcher_changed(&mut self, apps: Vec<String>, selected: usize) {
         let output = match self.docks.switcher_output() {
             Some(output) => output,
-            None => match self.output_at(self.pointer.current_location()).or_else(|| self.outputs.first()) {
+            None => match self
+                .output_at(self.pointer.current_location())
+                .or_else(|| self.outputs.first())
+            {
                 Some(o) => o.id,
                 // no output, no panel: the switch runs on the keys alone
                 None => return,
             },
         };
-        let state = SwitcherState { apps, selected, output };
+        let state = SwitcherState {
+            apps,
+            selected,
+            output,
+        };
         self.send_switcher_to_panel_dock(&state);
         self.docks.switcher = Some(state);
     }
@@ -271,25 +324,44 @@ impl Cupertino {
     /// Send the switcher group to the dock that draws the panel, naming the panel's output by the
     /// dock client's own object for it (its dock's output when the client has none).
     fn send_switcher_to_panel_dock(&self, state: &SwitcherState) {
-        let Some(dock) = self.docks.panel_dock(state.output) else { return };
+        let Some(dock) = self.docks.panel_dock(state.output) else {
+            return;
+        };
         let bound = (dock.output != state.output)
             .then(|| {
                 let client = dock.resource.client()?;
-                self.output_entry(state.output)?.output.client_outputs(&client).next()
+                self.output_entry(state.output)?
+                    .output
+                    .client_outputs(&client)
+                    .next()
             })
             .flatten();
-        send_switcher(&dock.resource, bound.as_ref().unwrap_or(&dock.wl_output), state);
+        send_switcher(
+            &dock.resource,
+            bound.as_ref().unwrap_or(&dock.wl_output),
+            state,
+        );
     }
 
     /// Whether `surface` belongs to the dock's switcher panel (a layer surface of
     /// [`SWITCHER_NAMESPACE`], its subsurfaces included).
     pub fn is_switcher_panel(&self, surface: &WlSurface) -> bool {
-        self.outputs.iter().any(|o| layer_map_for_output(&o.output).layer_for_surface(surface, WindowSurfaceType::ALL).is_some_and(|l| l.namespace() == SWITCHER_NAMESPACE))
+        self.outputs.iter().any(|o| {
+            layer_map_for_output(&o.output)
+                .layer_for_surface(surface, WindowSurfaceType::ALL)
+                .is_some_and(|l| l.namespace() == SWITCHER_NAMESPACE)
+        })
     }
 
     /// The layer surface of a dock went away: the role ends with it.
     pub fn dock_surface_gone(&mut self, surface: &WlSurface) {
-        let outputs: Vec<OutputId> = self.docks.docks.iter().filter(|d| &d.surface == surface).map(|d| d.output).collect();
+        let outputs: Vec<OutputId> = self
+            .docks
+            .docks
+            .iter()
+            .filter(|d| &d.surface == surface)
+            .map(|d| d.output)
+            .collect();
         self.docks.docks.retain(|d| &d.surface != surface);
         for output in outputs {
             self.dock_gone(output);
@@ -312,25 +384,52 @@ impl Cupertino {
         let local = |r: Rect| r.translate(-origin.x, -origin.y);
         let (mode, app_id) = match s.mode {
             OverviewMode::Overview => (cupertino_dock_v1::OverviewMode::All, String::new()),
-            OverviewMode::AppOverview(app) => (cupertino_dock_v1::OverviewMode::App, self.wm.app(app).map(|a| a.identity.clone()).unwrap_or_default()),
+            OverviewMode::AppOverview(app) => (
+                cupertino_dock_v1::OverviewMode::App,
+                self.wm
+                    .app(app)
+                    .map(|a| a.identity.clone())
+                    .unwrap_or_default(),
+            ),
         };
         let current = self.wm.current_workspace(s.output);
         Some(OverviewGroup {
             mode,
             app_id,
             area: local(s.area),
-            windows: s.windows.iter().map(|w| (w.id.0 as u32, local(w.frame))).collect(),
-            workspaces: self.wm.workspaces(s.output).iter().map(|w| (w.id.0 as u32, Some(w.id) == current)).collect(),
+            windows: s
+                .windows
+                .iter()
+                .map(|w| (w.id.0 as u32, local(w.frame)))
+                .collect(),
+            workspaces: self
+                .wm
+                .workspaces(s.output)
+                .iter()
+                .map(|w| (w.id.0 as u32, Some(w.id) == current))
+                .collect(),
         })
     }
 
     /// Send the open overview (its windows, workspaces and area) to the dock of its output. Call
     /// when it opens and whenever its window set or the workspaces change.
     pub fn send_overview_to_docks(&self) {
-        let Some(group) = self.overview_group() else { return };
-        let output = self.shell.overview.as_ref().map(|s| s.output).expect("a group exists only for an open overview");
+        let Some(group) = self.overview_group() else {
+            return;
+        };
+        let output = self
+            .shell
+            .overview
+            .as_ref()
+            .map(|s| s.output)
+            .expect("a group exists only for an open overview");
         if let Some(dock) = self.docks.of_output(output) {
-            tracing::info!(output = output.0, windows = group.windows.len(), workspaces = group.workspaces.len(), "overview sent");
+            tracing::info!(
+                output = output.0,
+                windows = group.windows.len(),
+                workspaces = group.workspaces.len(),
+                "overview sent"
+            );
             send_overview(&dock.resource, &group);
         }
     }
@@ -340,13 +439,32 @@ impl Cupertino {
         let key = self.wm.key_window();
         self.wm
             .windows()
-            .filter(|w| !matches!(w.state(), LifecycleState::Created | LifecycleState::Closing | LifecycleState::Destroyed))
+            .filter(|w| {
+                !matches!(
+                    w.state(),
+                    LifecycleState::Created | LifecycleState::Closing | LifecycleState::Destroyed
+                )
+            })
             .map(|w| {
                 let mut state = WindowState::empty();
-                state.set(WindowState::Minimized, w.state() == LifecycleState::Minimized);
+                state.set(
+                    WindowState::Minimized,
+                    w.state() == LifecycleState::Minimized,
+                );
                 state.set(WindowState::Active, key == Some(w.id));
-                let app_id = self.wm.app(w.app).map(|a| a.identity.clone()).unwrap_or_default();
-                (w.id.0 as u32, WindowInfo { app_id, title: w.title.clone(), state })
+                let app_id = self
+                    .wm
+                    .app(w.app)
+                    .map(|a| a.identity.clone())
+                    .unwrap_or_default();
+                (
+                    w.id.0 as u32,
+                    WindowInfo {
+                        app_id,
+                        title: w.title.clone(),
+                        state,
+                    },
+                )
             })
             .collect()
     }
@@ -363,7 +481,8 @@ impl Cupertino {
             let known = dock.sent.take().unwrap_or_default();
             for (id, info) in &feed {
                 if known.get(id) != Some(info) {
-                    dock.resource.window(*id, info.app_id.clone(), info.title.clone(), info.state);
+                    dock.resource
+                        .window(*id, info.app_id.clone(), info.title.clone(), info.state);
                     changed = true;
                 }
             }
@@ -382,8 +501,14 @@ impl Cupertino {
     fn dock_geometry(&self, dock: &Dock) -> Option<Rect> {
         let out = self.output_entry(dock.output)?;
         let map = layer_map_for_output(&out.output);
-        let geo = map.layer_geometry(map.layer_for_surface(&dock.surface, WindowSurfaceType::TOPLEVEL)?)?;
-        Some(Rect::new(out.rect.x + f64::from(geo.loc.x), out.rect.y + f64::from(geo.loc.y), f64::from(geo.size.w), f64::from(geo.size.h)))
+        let geo =
+            map.layer_geometry(map.layer_for_surface(&dock.surface, WindowSurfaceType::TOPLEVEL)?)?;
+        Some(Rect::new(
+            out.rect.x + f64::from(geo.loc.x),
+            out.rect.y + f64::from(geo.loc.y),
+            f64::from(geo.size.w),
+            f64::from(geo.size.h),
+        ))
     }
 
     /// The dock's rectangle on `output` in global logical coordinates: the area of its committed
@@ -403,19 +528,37 @@ impl Cupertino {
     pub fn minimize_target(&self, id: WindowId) -> Option<Rect> {
         let output = self.wm.window(id)?.output;
         let dock = self.docks.of_output(output)?;
-        let local = with_states(&dock.surface, |s| s.cached_state.get::<DockState>().current().minimize_target)?;
+        let local = with_states(&dock.surface, |s| {
+            s.cached_state.get::<DockState>().current().minimize_target
+        })?;
         let geo = self.dock_geometry(dock)?;
-        Some(Rect::new(geo.x + local.x, geo.y + local.y, local.w, local.h))
+        Some(Rect::new(
+            geo.x + local.x,
+            geo.y + local.y,
+            local.w,
+            local.h,
+        ))
     }
 
     /// `restore_window`: the window flies out of its tile `tile` (surface-local) back to its frame.
     fn dock_restore_window(&mut self, output: OutputId, id: u32, tile: Rect) {
         let window = WindowId(u64::from(id));
-        if !self.wm.window(window).is_some_and(|w| w.state().is_minimized()) {
+        if !self
+            .wm
+            .window(window)
+            .is_some_and(|w| w.state().is_minimized())
+        {
             return;
         }
-        if let Some(geo) = self.docks.of_output(output).and_then(|d| self.dock_geometry(d)) {
-            self.command(Command::SetMinimizeTarget { window, target: Rect::new(geo.x + tile.x, geo.y + tile.y, tile.w, tile.h) });
+        if let Some(geo) = self
+            .docks
+            .of_output(output)
+            .and_then(|d| self.dock_geometry(d))
+        {
+            self.command(Command::SetMinimizeTarget {
+                window,
+                target: Rect::new(geo.x + tile.x, geo.y + tile.y, tile.w, tile.h),
+            });
         }
         self.command(Command::Restore { window });
     }
@@ -429,33 +572,99 @@ impl Cupertino {
 }
 
 impl Dispatch<CupertinoDockV1, DockData> for Cupertino {
-    fn request(state: &mut Self, _: &Client, _: &CupertinoDockV1, request: cupertino_dock_v1::Request, data: &DockData, _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        _: &CupertinoDockV1,
+        request: cupertino_dock_v1::Request,
+        data: &DockData,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         let Some(output) = data.output else { return };
         match request {
             cupertino_dock_v1::Request::ActivateApp { app_id } => state.dock_activate_app(&app_id),
-            cupertino_dock_v1::Request::RestoreWindow { id, x, y, width, height } => {
-                state.dock_restore_window(output, id, Rect::new(f64::from(x), f64::from(y), f64::from(width), f64::from(height)));
+            cupertino_dock_v1::Request::RestoreWindow {
+                id,
+                x,
+                y,
+                width,
+                height,
+            } => {
+                state.dock_restore_window(
+                    output,
+                    id,
+                    Rect::new(
+                        f64::from(x),
+                        f64::from(y),
+                        f64::from(width),
+                        f64::from(height),
+                    ),
+                );
             }
-            cupertino_dock_v1::Request::SetMinimizeTarget { x, y, width, height } => {
-                let Some(dock) = state.docks.of_output(output) else { return };
+            cupertino_dock_v1::Request::SetMinimizeTarget {
+                x,
+                y,
+                width,
+                height,
+            } => {
+                let Some(dock) = state.docks.of_output(output) else {
+                    return;
+                };
                 // an empty slot is no target: the effect cannot fly into nothing
-                let target = (width > 0 && height > 0).then(|| Rect::new(f64::from(x), f64::from(y), f64::from(width), f64::from(height)));
-                with_states(&dock.surface, |s| s.cached_state.get::<DockState>().pending().minimize_target = target);
+                let target = (width > 0 && height > 0).then(|| {
+                    Rect::new(
+                        f64::from(x),
+                        f64::from(y),
+                        f64::from(width),
+                        f64::from(height),
+                    )
+                });
+                with_states(&dock.surface, |s| {
+                    s.cached_state.get::<DockState>().pending().minimize_target = target
+                });
             }
-            cupertino_dock_v1::Request::SwitcherSelect { index } => state.command(Command::SwitcherSelect { index: index as usize }),
+            cupertino_dock_v1::Request::SwitcherSelect { index } => {
+                state.command(Command::SwitcherSelect {
+                    index: index as usize,
+                })
+            }
             cupertino_dock_v1::Request::SwitcherActivate { index } => {
-                if state.wm.switcher().is_some_and(|s| (index as usize) < s.items.len()) {
-                    state.command(Command::SwitcherSelect { index: index as usize });
+                if state
+                    .wm
+                    .switcher()
+                    .is_some_and(|s| (index as usize) < s.items.len())
+                {
+                    state.command(Command::SwitcherSelect {
+                        index: index as usize,
+                    });
                     state.command(Command::SwitcherCommit);
                 }
             }
             cupertino_dock_v1::Request::SwitcherCancel => state.command(Command::SwitcherCancel),
-            cupertino_dock_v1::Request::OverviewFrame { id, x, y, width, height } => {
-                let Some(origin) = state.output_entry(output).map(|o| o.rect) else { return };
+            cupertino_dock_v1::Request::OverviewFrame {
+                id,
+                x,
+                y,
+                width,
+                height,
+            } => {
+                let Some(origin) = state.output_entry(output).map(|o| o.rect) else {
+                    return;
+                };
                 if width <= 0 || height <= 0 {
                     return;
                 }
-                state.dock_overview_frame(output, id, Rect::new(origin.x + f64::from(x), origin.y + f64::from(y), f64::from(width), f64::from(height)));
+                state.dock_overview_frame(
+                    output,
+                    id,
+                    Rect::new(
+                        origin.x + f64::from(x),
+                        origin.y + f64::from(y),
+                        f64::from(width),
+                        f64::from(height),
+                    ),
+                );
             }
             cupertino_dock_v1::Request::OverviewSelect { id } => {
                 state.overview_select(WindowId(u64::from(id)));
@@ -465,13 +674,32 @@ impl Dispatch<CupertinoDockV1, DockData> for Cupertino {
                     state.close_overview();
                 }
             }
-            cupertino_dock_v1::Request::SwitchWorkspace { id } => state.dock_switch_workspace(output, id),
-            cupertino_dock_v1::Request::AddWorkspace => state.command(Command::AddWorkspace { output }),
-            cupertino_dock_v1::Request::RemoveWorkspace { id } => state.command(Command::RemoveWorkspace { workspace: cupertino_wm::WorkspaceId(u64::from(id)) }),
-            cupertino_dock_v1::Request::MoveWorkspace { id, index } => state.command(Command::MoveWorkspace { workspace: cupertino_wm::WorkspaceId(u64::from(id)), index: index as usize }),
+            cupertino_dock_v1::Request::SwitchWorkspace { id } => {
+                state.dock_switch_workspace(output, id)
+            }
+            cupertino_dock_v1::Request::AddWorkspace => {
+                state.command(Command::AddWorkspace { output })
+            }
+            cupertino_dock_v1::Request::RemoveWorkspace { id } => {
+                state.command(Command::RemoveWorkspace {
+                    workspace: cupertino_wm::WorkspaceId(u64::from(id)),
+                })
+            }
+            cupertino_dock_v1::Request::MoveWorkspace { id, index } => {
+                state.command(Command::MoveWorkspace {
+                    workspace: cupertino_wm::WorkspaceId(u64::from(id)),
+                    index: index as usize,
+                })
+            }
             cupertino_dock_v1::Request::RunAction { name } => state.dock_run_action(&name),
-            cupertino_dock_v1::Request::AppCommand { app_id, command: WEnum::Value(command) } => state.dock_app_command(output, &app_id, command),
-            cupertino_dock_v1::Request::AppCommand { command: WEnum::Unknown(v), .. } => tracing::warn!(v, "dock sent an unknown app command"),
+            cupertino_dock_v1::Request::AppCommand {
+                app_id,
+                command: WEnum::Value(command),
+            } => state.dock_app_command(output, &app_id, command),
+            cupertino_dock_v1::Request::AppCommand {
+                command: WEnum::Unknown(v),
+                ..
+            } => tracing::warn!(v, "dock sent an unknown app command"),
             // `Destroy` is handled in `destroyed`
             _ => {}
         }

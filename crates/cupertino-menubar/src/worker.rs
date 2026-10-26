@@ -32,12 +32,26 @@ pub enum Request {
     /// Load the menu bar of a GMenuModel exporter.
     FetchGtk(GtkMenuProps),
     /// A menu is about to be shown: tell the exporter, then reload its tree.
-    AboutToShow { menu: KdeAppMenu, item: i32 },
+    AboutToShow {
+        menu: KdeAppMenu,
+        item: i32,
+    },
     /// Send `clicked` for an item of a DBusMenu.
-    ActivateDbusMenu { menu: KdeAppMenu, item: i32 },
-    ActivateGtk { props: GtkMenuProps, item: i32 },
+    ActivateDbusMenu {
+        menu: KdeAppMenu,
+        item: i32,
+    },
+    ActivateGtk {
+        props: GtkMenuProps,
+        item: i32,
+    },
     /// Primary action of a status item at a point of the compositor space.
-    ActivateStatus { service: String, path: String, x: i32, y: i32 },
+    ActivateStatus {
+        service: String,
+        path: String,
+        x: i32,
+        y: i32,
+    },
     /// Open or close the list of the notification process.
     ToggleCentre,
     /// Open or close the control panel process.
@@ -48,9 +62,17 @@ pub enum Request {
 #[derive(Debug)]
 pub enum Event {
     /// A menu tree arrived from an exporter.
-    Layout { source: MenuSource, root: MenuItem },
-    StatusUpdated { item: Box<StatusItem>, menu: Option<MenuItem> },
-    StatusRemoved { id: String },
+    Layout {
+        source: MenuSource,
+        root: MenuItem,
+    },
+    StatusUpdated {
+        item: Box<StatusItem>,
+        menu: Option<MenuItem>,
+    },
+    StatusRemoved {
+        id: String,
+    },
 }
 
 /// Why the worker did not start.
@@ -67,7 +89,9 @@ pub enum StartError {
 impl fmt::Display for StartError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Watcher(zbus::Error::NameTaken) => write!(f, "another process owns {}", sni::WATCHER_NAME),
+            Self::Watcher(zbus::Error::NameTaken) => {
+                write!(f, "another process owns {}", sni::WATCHER_NAME)
+            }
             Self::Watcher(e) => write!(f, "cannot serve {}: {e}", sni::WATCHER_NAME),
             Self::Thread(e) => write!(f, "cannot start the session bus worker: {e}"),
             Self::Died => write!(f, "the session bus worker ended while starting"),
@@ -123,24 +147,39 @@ pub struct Worker {
 impl Worker {
     /// Start the worker on `conn` and wait until it serves the watcher. `wake`
     /// is called after every event.
-    pub fn start(conn: Connection, wake: impl Fn() + Send + Sync + 'static) -> Result<(Worker, mpsc::Receiver<Event>), StartError> {
+    pub fn start(
+        conn: Connection,
+        wake: impl Fn() + Send + Sync + 'static,
+    ) -> Result<(Worker, mpsc::Receiver<Event>), StartError> {
         let (work_tx, work_rx) = async_channel::unbounded();
         let (events_tx, events_rx) = mpsc::channel();
         let (started_tx, started_rx) = mpsc::sync_channel(1);
-        let out = Out { events: events_tx, wake: Arc::new(wake) };
+        let out = Out {
+            events: events_tx,
+            wake: Arc::new(wake),
+        };
         let tx = work_tx.clone();
-        std::thread::Builder::new().name("cupertino-dbus".into()).spawn(move || zbus::block_on(run(conn, work_rx, tx, out, started_tx))).map_err(StartError::Thread)?;
+        std::thread::Builder::new()
+            .name("cupertino-dbus".into())
+            .spawn(move || zbus::block_on(run(conn, work_rx, tx, out, started_tx)))
+            .map_err(StartError::Thread)?;
         started_rx.recv().map_err(|_| StartError::Died)??;
         Ok((Worker { work: work_tx }, events_rx))
     }
 
     pub fn send(&self, request: Request) -> Result<(), WorkerGone> {
-        self.work.try_send(Work::Request(request)).map_err(|_| WorkerGone)
+        self.work
+            .try_send(Work::Request(request))
+            .map_err(|_| WorkerGone)
     }
 }
 
 /// Move the events of a blocking channel into the worker's queue.
-fn forward<T: Send + 'static>(rx: mpsc::Receiver<T>, tx: async_channel::Sender<Work>, wrap: fn(T) -> Work) {
+fn forward<T: Send + 'static>(
+    rx: mpsc::Receiver<T>,
+    tx: async_channel::Sender<Work>,
+    wrap: fn(T) -> Work,
+) {
     std::thread::spawn(move || {
         while let Ok(event) = rx.recv() {
             if tx.send_blocking(wrap(event)).is_err() {
@@ -150,11 +189,19 @@ fn forward<T: Send + 'static>(rx: mpsc::Receiver<T>, tx: async_channel::Sender<W
     });
 }
 
-async fn run(conn: Connection, rx: async_channel::Receiver<Work>, tx: async_channel::Sender<Work>, out: Out, started: mpsc::SyncSender<Result<(), StartError>>) {
+async fn run(
+    conn: Connection,
+    rx: async_channel::Receiver<Work>,
+    tx: async_channel::Sender<Work>,
+    out: Out,
+    started: mpsc::SyncSender<Result<(), StartError>>,
+) {
     let services = serve(&conn, &tx).await;
     let failed = services.is_err();
     // the caller holds the receiver until this is read
-    started.send(services).expect("the starting thread waits for the report");
+    started
+        .send(services)
+        .expect("the starting thread waits for the report");
     if failed {
         return;
     }
@@ -163,9 +210,17 @@ async fn run(conn: Connection, rx: async_channel::Receiver<Work>, tx: async_chan
         match work {
             Work::Watcher(WatcherEvent::ItemRegistered { service, path, .. }) => {
                 let (conn, out) = (conn.clone(), out.clone());
-                conn.executor().clone().spawn(follow_status_item(conn, out, service, path), "cupertino-status-item").detach();
+                conn.executor()
+                    .clone()
+                    .spawn(
+                        follow_status_item(conn, out, service, path),
+                        "cupertino-status-item",
+                    )
+                    .detach();
             }
-            Work::Watcher(WatcherEvent::ItemUnregistered { id }) => out.emit(Event::StatusRemoved { id }),
+            Work::Watcher(WatcherEvent::ItemUnregistered { id }) => {
+                out.emit(Event::StatusRemoved { id })
+            }
             // hosts need no action: this process is the host
             Work::Watcher(WatcherEvent::HostRegistered) => {}
             Work::GtkLoaded(props, client) => {
@@ -178,7 +233,9 @@ async fn run(conn: Connection, rx: async_channel::Receiver<Work>, tx: async_chan
 
 /// Claim the watcher and forward its events.
 async fn serve(conn: &Connection, tx: &async_channel::Sender<Work>) -> Result<(), StartError> {
-    let (_service, events) = WatcherService::start(conn).await.map_err(StartError::Watcher)?;
+    let (_service, events) = WatcherService::start(conn)
+        .await
+        .map_err(StartError::Watcher)?;
     forward(events, tx.clone(), Work::Watcher);
     Ok(())
 }
@@ -199,7 +256,10 @@ async fn publish_status(conn: &Connection, out: &Out, service: &str, path: &str)
     match sni::fetch_item(conn, service, path).await {
         Ok(item) => {
             let menu = sni::load_menu(conn, &item).await;
-            out.emit(Event::StatusUpdated { item: Box::new(item), menu });
+            out.emit(Event::StatusUpdated {
+                item: Box::new(item),
+                menu,
+            });
         }
         Err(e) => report(&format!("status item {service}{path} is not readable"), e),
     }
@@ -207,7 +267,11 @@ async fn publish_status(conn: &Connection, out: &Out, service: &str, path: &str)
 
 /// The whole tree of a DBusMenu exporter; `about_to_show` first tells it that an item is about
 /// to be shown.
-async fn fetch_dbusmenu(conn: &Connection, menu: &KdeAppMenu, about_to_show: Option<i32>) -> zbus::Result<MenuItem> {
+async fn fetch_dbusmenu(
+    conn: &Connection,
+    menu: &KdeAppMenu,
+    about_to_show: Option<i32>,
+) -> zbus::Result<MenuItem> {
     let client = DBusMenuClient::connect(conn, &menu.service, &menu.path).await?;
     if let Some(item) = about_to_show {
         // many exporters do not implement it and the tree is worth loading anyway
@@ -218,15 +282,27 @@ async fn fetch_dbusmenu(conn: &Connection, menu: &KdeAppMenu, about_to_show: Opt
     Ok(client.fetch(ItemId(0), -1).await?.1)
 }
 
-fn handle(conn: &Connection, out: &Out, tx: &async_channel::Sender<Work>, gtk: &mut HashMap<GtkMenuProps, GtkMenuClient>, request: Request) {
+fn handle(
+    conn: &Connection,
+    out: &Out,
+    tx: &async_channel::Sender<Work>,
+    gtk: &mut HashMap<GtkMenuProps, GtkMenuClient>,
+    request: Request,
+) {
     let (conn, out) = (conn.clone(), out.clone());
     let executor = conn.executor().clone();
     let task = match request {
         Request::FetchDbusMenu(menu) => executor.spawn(
             async move {
                 match fetch_dbusmenu(&conn, &menu, None).await {
-                    Ok(root) => out.emit(Event::Layout { source: MenuSource::Kde(menu), root }),
-                    Err(e) => report(&format!("cannot load the menu of {}{}", menu.service, menu.path), e),
+                    Ok(root) => out.emit(Event::Layout {
+                        source: MenuSource::Kde(menu),
+                        root,
+                    }),
+                    Err(e) => report(
+                        &format!("cannot load the menu of {}{}", menu.service, menu.path),
+                        e,
+                    ),
                 }
             },
             "cupertino-fetch-menu",
@@ -234,8 +310,14 @@ fn handle(conn: &Connection, out: &Out, tx: &async_channel::Sender<Work>, gtk: &
         Request::AboutToShow { menu, item } => executor.spawn(
             async move {
                 match fetch_dbusmenu(&conn, &menu, Some(item)).await {
-                    Ok(root) => out.emit(Event::Layout { source: MenuSource::Kde(menu), root }),
-                    Err(e) => report(&format!("cannot reload the menu of {}{}", menu.service, menu.path), e),
+                    Ok(root) => out.emit(Event::Layout {
+                        source: MenuSource::Kde(menu),
+                        root,
+                    }),
+                    Err(e) => report(
+                        &format!("cannot reload the menu of {}{}", menu.service, menu.path),
+                        e,
+                    ),
                 }
             },
             "cupertino-about-to-show",
@@ -246,10 +328,20 @@ fn handle(conn: &Connection, out: &Out, tx: &async_channel::Sender<Work>, gtk: &
                 async move {
                     match GtkMenuClient::load(&conn, &props).await {
                         Ok((client, items)) => {
-                            out.emit(Event::Layout { source: MenuSource::Gtk(props.clone()), root: MenuItem::submenu(0, "", items) });
+                            out.emit(Event::Layout {
+                                source: MenuSource::Gtk(props.clone()),
+                                root: MenuItem::submenu(0, "", items),
+                            });
                             // the process drops its end only when it exits
-                            if tx.send(Work::GtkLoaded(props, Box::new(client))).await.is_err() {
-                                report("cannot keep the menu exporter", "the worker is shutting down");
+                            if tx
+                                .send(Work::GtkLoaded(props, Box::new(client)))
+                                .await
+                                .is_err()
+                            {
+                                report(
+                                    "cannot keep the menu exporter",
+                                    "the worker is shutting down",
+                                );
                             }
                         }
                         Err(e) => report(&format!("cannot load the menu of {}", props.bus_name), e),
@@ -265,7 +357,13 @@ fn handle(conn: &Connection, out: &Out, tx: &async_channel::Sender<Work>, gtk: &
                     Err(e) => Err(e),
                 };
                 if let Err(e) = result {
-                    report(&format!("cannot activate item {item} of {}{}", menu.service, menu.path), e);
+                    report(
+                        &format!(
+                            "cannot activate item {item} of {}{}",
+                            menu.service, menu.path
+                        ),
+                        e,
+                    );
                 }
             },
             "cupertino-activate-menu",
@@ -273,33 +371,70 @@ fn handle(conn: &Connection, out: &Out, tx: &async_channel::Sender<Work>, gtk: &
         Request::ActivateGtk { props, item } => {
             // the client is lent to the task and comes back when it is done
             let Some(client) = gtk.remove(&props) else {
-                return report(&format!("cannot activate item {item} of {}", props.bus_name), "the menu is not loaded or another activation is running");
+                return report(
+                    &format!("cannot activate item {item} of {}", props.bus_name),
+                    "the menu is not loaded or another activation is running",
+                );
             };
             let tx = tx.clone();
             executor.spawn(
                 async move {
                     if let Err(e) = client.activate(ItemId(item)).await {
-                        report(&format!("cannot activate item {item} of {}", props.bus_name), e);
+                        report(
+                            &format!("cannot activate item {item} of {}", props.bus_name),
+                            e,
+                        );
                     }
-                    if tx.send(Work::GtkLoaded(props, Box::new(client))).await.is_err() {
-                        report("cannot keep the menu exporter", "the worker is shutting down");
+                    if tx
+                        .send(Work::GtkLoaded(props, Box::new(client)))
+                        .await
+                        .is_err()
+                    {
+                        report(
+                            "cannot keep the menu exporter",
+                            "the worker is shutting down",
+                        );
                     }
                 },
                 "cupertino-activate-gtk",
             )
         }
-        Request::ActivateStatus { service, path, x, y } => executor.spawn(
+        Request::ActivateStatus {
+            service,
+            path,
+            x,
+            y,
+        } => executor.spawn(
             async move {
-                let item = StatusItem { service, path, ..StatusItem::default() };
+                let item = StatusItem {
+                    service,
+                    path,
+                    ..StatusItem::default()
+                };
                 if let Err(e) = sni::activate_item(&conn, &item, x, y).await {
-                    report(&format!("cannot activate the status item {}{}", item.service, item.path), e);
+                    report(
+                        &format!(
+                            "cannot activate the status item {}{}",
+                            item.service, item.path
+                        ),
+                        e,
+                    );
                 }
             },
             "cupertino-status-activate",
         ),
         Request::ToggleCentre => executor.spawn(
             async move {
-                if let Err(e) = conn.call_method(Some(CENTRE_NAME), CENTRE_PATH, Some(CENTRE_NAME), "ToggleCentre", &()).await {
+                if let Err(e) = conn
+                    .call_method(
+                        Some(CENTRE_NAME),
+                        CENTRE_PATH,
+                        Some(CENTRE_NAME),
+                        "ToggleCentre",
+                        &(),
+                    )
+                    .await
+                {
                     report("cannot toggle the notification centre", e);
                 }
             },
@@ -307,7 +442,16 @@ fn handle(conn: &Connection, out: &Out, tx: &async_channel::Sender<Work>, gtk: &
         ),
         Request::TogglePanel => executor.spawn(
             async move {
-                if let Err(e) = conn.call_method(Some(PANEL_NAME), PANEL_PATH, Some(PANEL_NAME), "Toggle", &()).await {
+                if let Err(e) = conn
+                    .call_method(
+                        Some(PANEL_NAME),
+                        PANEL_PATH,
+                        Some(PANEL_NAME),
+                        "Toggle",
+                        &(),
+                    )
+                    .await
+                {
                     report("cannot toggle the control panel", e);
                 }
             },

@@ -70,11 +70,19 @@ fn read_into(fd: BorrowedFd<'_>, op: &'static str, nr: u8, buf: &mut [u8]) -> Re
 }
 
 fn ne_i32(bytes: &[u8], index: usize) -> i32 {
-    i32::from_ne_bytes(bytes[index * 4..index * 4 + 4].try_into().expect("4-byte slice"))
+    i32::from_ne_bytes(
+        bytes[index * 4..index * 4 + 4]
+            .try_into()
+            .expect("4-byte slice"),
+    )
 }
 
 fn ne_u16(bytes: &[u8], index: usize) -> u16 {
-    u16::from_ne_bytes(bytes[index * 2..index * 2 + 2].try_into().expect("2-byte slice"))
+    u16::from_ne_bytes(
+        bytes[index * 2..index * 2 + 2]
+            .try_into()
+            .expect("2-byte slice"),
+    )
 }
 
 /// `EVIOCGNAME`: the device name, without the trailing NUL.
@@ -98,7 +106,11 @@ pub(crate) fn id(fd: BorrowedFd<'_>) -> Result<DeviceId, Error> {
 }
 
 /// `EVIOCGBIT(ev_type, ..)`: the codes supported for `ev_type` (type 0 returns the supported event types).
-pub(crate) fn event_bits(fd: BorrowedFd<'_>, ev_type: u16, max_code: u16) -> Result<Vec<u8>, Error> {
+pub(crate) fn event_bits(
+    fd: BorrowedFd<'_>,
+    ev_type: u16,
+    max_code: u16,
+) -> Result<Vec<u8>, Error> {
     let nr = NR_GBIT + u8::try_from(ev_type).expect("event types are below 0x20");
     let mut buf = vec![0u8; bitmap_bytes(max_code)];
     read_into(fd, "EVIOCGBIT", nr, &mut buf)?;
@@ -156,7 +168,10 @@ pub(crate) fn grab(fd: BorrowedFd<'_>, grab: bool) -> Result<(), Error> {
     // SAFETY: EVIOCGRAB takes its argument by value, as an integer (non-zero grabs); `IntegerSetter` passes it that way.
     let request = unsafe { IntegerSetter::<EVIOCGRAB>::new_usize(usize::from(grab)) };
     // SAFETY: the request is the one `IntegerSetter` was declared for.
-    unsafe { ioctl::ioctl(fd, request) }.map_err(|errno| Error::Io { op: "EVIOCGRAB", errno })
+    unsafe { ioctl::ioctl(fd, request) }.map_err(|errno| Error::Io {
+        op: "EVIOCGRAB",
+        errno,
+    })
 }
 
 /// `EVIOCSCLOCKID`: makes event timestamps use `CLOCK_MONOTONIC`.
@@ -164,7 +179,10 @@ pub(crate) fn set_monotonic_clock(fd: BorrowedFd<'_>) -> Result<(), Error> {
     // SAFETY: EVIOCSCLOCKID reads one `int` through the pointer, which is what `Setter<_, c_int>` supplies.
     let request = unsafe { Setter::<EVIOCSCLOCKID, c_int>::new(CLOCK_MONOTONIC) };
     // SAFETY: the request is the one `Setter` was declared for.
-    unsafe { ioctl::ioctl(fd, request) }.map_err(|errno| Error::Io { op: "EVIOCSCLOCKID", errno })
+    unsafe { ioctl::ioctl(fd, request) }.map_err(|errno| Error::Io {
+        op: "EVIOCSCLOCKID",
+        errno,
+    })
 }
 
 #[cfg(test)]

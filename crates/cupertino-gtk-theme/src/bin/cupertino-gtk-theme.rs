@@ -76,7 +76,13 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
     if (a.install_opts.force || a.install_opts.dry_run || a.home.is_some()) && !a.install {
         return Err("--force, --dry-run and --home only make sense with --install".into());
     }
-    if a.opts.name.is_empty() || !a.opts.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+    if a.opts.name.is_empty()
+        || !a
+            .opts
+            .name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         return Err("--name may only contain letters, digits, '-' and '_'".into());
     }
     Ok(Some(a))
@@ -126,10 +132,29 @@ fn main() -> ExitCode {
             Ok(actions) => {
                 for a in actions {
                     match a {
-                        Action::Written(p) => println!("{} {}", if args.install_opts.dry_run { "would write" } else { "installed" }, p.display()),
+                        Action::Written(p) => println!(
+                            "{} {}",
+                            if args.install_opts.dry_run {
+                                "would write"
+                            } else {
+                                "installed"
+                            },
+                            p.display()
+                        ),
                         Action::Unchanged(p) => println!("unchanged {}", p.display()),
-                        Action::SkippedExisting(p) => println!("kept existing {} (use --force to replace)", p.display()),
-                        Action::BackedUpAndWritten { path, backup } => println!("{} {} (old file: {})", if args.install_opts.dry_run { "would replace" } else { "replaced" }, path.display(), backup.display()),
+                        Action::SkippedExisting(p) => {
+                            println!("kept existing {} (use --force to replace)", p.display())
+                        }
+                        Action::BackedUpAndWritten { path, backup } => println!(
+                            "{} {} (old file: {})",
+                            if args.install_opts.dry_run {
+                                "would replace"
+                            } else {
+                                "replaced"
+                            },
+                            path.display(),
+                            backup.display()
+                        ),
                     }
                 }
             }
@@ -160,7 +185,21 @@ mod tests {
 
     #[test]
     fn options_parse() {
-        let a = args(&["--output", "/tmp/x", "--accent", "green", "--size", "small", "--high-contrast", "--install", "--dry-run", "--home", "/h"]).unwrap().unwrap();
+        let a = args(&[
+            "--output",
+            "/tmp/x",
+            "--accent",
+            "green",
+            "--size",
+            "small",
+            "--high-contrast",
+            "--install",
+            "--dry-run",
+            "--home",
+            "/h",
+        ])
+        .unwrap()
+        .unwrap();
         assert_eq!(a.opts.accent, Accent::Green);
         assert_eq!(a.opts.size, ControlSizeName::Small);
         assert!(a.opts.high_contrast && a.install && a.install_opts.dry_run);

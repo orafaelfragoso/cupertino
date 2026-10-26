@@ -24,21 +24,46 @@ pub struct Mesh {
 
 impl Mesh {
     pub fn new(cols: usize, rows: usize, vertices: Vec<Vertex>) -> Self {
-        assert_eq!(vertices.len(), cols * rows, "vertex count must equal cols * rows");
-        Self { cols, rows, vertices }
+        assert_eq!(
+            vertices.len(),
+            cols * rows,
+            "vertex count must equal cols * rows"
+        );
+        Self {
+            cols,
+            rows,
+            vertices,
+        }
     }
 
     /// Two-by-two mesh showing the whole texture in `rect`.
     pub fn quad(rect: Rect) -> Self {
-        let (l, t, r, b) = (rect.min_x() as f32, rect.min_y() as f32, rect.max_x() as f32, rect.max_y() as f32);
+        let (l, t, r, b) = (
+            rect.min_x() as f32,
+            rect.min_y() as f32,
+            rect.max_x() as f32,
+            rect.max_y() as f32,
+        );
         Self::new(
             2,
             2,
             vec![
-                Vertex { position: [l, t], uv: [0.0, 0.0] },
-                Vertex { position: [r, t], uv: [1.0, 0.0] },
-                Vertex { position: [l, b], uv: [0.0, 1.0] },
-                Vertex { position: [r, b], uv: [1.0, 1.0] },
+                Vertex {
+                    position: [l, t],
+                    uv: [0.0, 0.0],
+                },
+                Vertex {
+                    position: [r, t],
+                    uv: [1.0, 0.0],
+                },
+                Vertex {
+                    position: [l, b],
+                    uv: [0.0, 1.0],
+                },
+                Vertex {
+                    position: [r, b],
+                    uv: [1.0, 1.0],
+                },
             ],
         )
     }
@@ -70,7 +95,12 @@ impl Mesh {
 
     /// Bounding box of the destination positions.
     pub fn bounds(&self) -> Rect {
-        let (mut l, mut t, mut r, mut b) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        let (mut l, mut t, mut r, mut b) = (
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        );
         for v in &self.vertices {
             l = l.min(v.position[0] as f64);
             r = r.max(v.position[0] as f64);
@@ -85,13 +115,26 @@ impl Mesh {
 
     /// Copy with every position multiplied by `s` (texture coordinates unchanged).
     pub fn scaled(&self, s: f32) -> Mesh {
-        let vertices = self.vertices.iter().map(|v| Vertex { position: [v.position[0] * s, v.position[1] * s], uv: v.uv }).collect();
-        Mesh { cols: self.cols, rows: self.rows, vertices }
+        let vertices = self
+            .vertices
+            .iter()
+            .map(|v| Vertex {
+                position: [v.position[0] * s, v.position[1] * s],
+                uv: v.uv,
+            })
+            .collect();
+        Mesh {
+            cols: self.cols,
+            rows: self.rows,
+            vertices,
+        }
     }
 
     /// All coordinates are finite numbers.
     pub fn is_finite(&self) -> bool {
-        self.vertices.iter().all(|v| v.position.iter().chain(&v.uv).all(|x| x.is_finite()))
+        self.vertices
+            .iter()
+            .all(|v| v.position.iter().chain(&v.uv).all(|x| x.is_finite()))
     }
 
     /// Largest distance between corresponding vertices of two meshes of the same shape.
@@ -100,7 +143,10 @@ impl Mesh {
         self.vertices
             .iter()
             .zip(&other.vertices)
-            .map(|(a, b)| ((a.position[0] - b.position[0]) as f64).hypot((a.position[1] - b.position[1]) as f64))
+            .map(|(a, b)| {
+                ((a.position[0] - b.position[0]) as f64)
+                    .hypot((a.position[1] - b.position[1]) as f64)
+            })
             .fold(0.0, f64::max)
     }
 }
@@ -127,7 +173,12 @@ mod tests {
 
     #[test]
     fn indices_cover_every_cell() {
-        let verts = (0..12).map(|i| Vertex { position: [i as f32, 0.0], uv: [0.0, 0.0] }).collect();
+        let verts = (0..12)
+            .map(|i| Vertex {
+                position: [i as f32, 0.0],
+                uv: [0.0, 0.0],
+            })
+            .collect();
         let m = Mesh::new(4, 3, verts);
         assert_eq!(m.cell_count(), 6);
         let idx = m.indices();

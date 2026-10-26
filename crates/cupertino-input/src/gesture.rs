@@ -18,15 +18,43 @@ use crate::velocity::VelocityTracker;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GestureEvent {
-    SwipeBegin { time: f64, fingers: u32 },
-    SwipeUpdate { time: f64, dx: f64, dy: f64 },
-    SwipeEnd { time: f64, cancelled: bool },
-    PinchBegin { time: f64, fingers: u32 },
+    SwipeBegin {
+        time: f64,
+        fingers: u32,
+    },
+    SwipeUpdate {
+        time: f64,
+        dx: f64,
+        dy: f64,
+    },
+    SwipeEnd {
+        time: f64,
+        cancelled: bool,
+    },
+    PinchBegin {
+        time: f64,
+        fingers: u32,
+    },
     /// `scale` is the absolute scale relative to the begin of the pinch (1.0 at the start).
-    PinchUpdate { time: f64, dx: f64, dy: f64, scale: f64, rotation: f64 },
-    PinchEnd { time: f64, cancelled: bool },
-    HoldBegin { time: f64, fingers: u32 },
-    HoldEnd { time: f64, cancelled: bool },
+    PinchUpdate {
+        time: f64,
+        dx: f64,
+        dy: f64,
+        scale: f64,
+        rotation: f64,
+    },
+    PinchEnd {
+        time: f64,
+        cancelled: bool,
+    },
+    HoldBegin {
+        time: f64,
+        fingers: u32,
+    },
+    HoldEnd {
+        time: f64,
+        cancelled: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -53,18 +81,38 @@ pub enum Direction {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GestureOutput {
-    Begin { kind: GestureKind, fingers: u32 },
+    Begin {
+        kind: GestureKind,
+        fingers: u32,
+    },
     /// `progress` is signed: 0 at the start, 1 for a full gesture; for workspace switches positive
     /// values move towards the next workspace. Values outside `[0, 1]` (or `[-1, 1]`) are for the
     /// consumer to rubber-band or clamp. `velocity` is in progress units per second.
-    Update { kind: GestureKind, progress: f64, velocity: f64 },
+    Update {
+        kind: GestureKind,
+        progress: f64,
+        velocity: f64,
+    },
     /// `target` is the progress value to settle to; `steps` is the number of workspaces for a
     /// committed workspace switch (0 otherwise).
-    End { kind: GestureKind, outcome: Outcome, progress: f64, velocity: f64, target: f64, direction: Option<Direction>, steps: u32 },
-    HoldBegin { fingers: u32 },
+    End {
+        kind: GestureKind,
+        outcome: Outcome,
+        progress: f64,
+        velocity: f64,
+        target: f64,
+        direction: Option<Direction>,
+        steps: u32,
+    },
+    HoldBegin {
+        fingers: u32,
+    },
     /// A hold that ended without being cancelled (a rest of the fingers, used to stop kinetic
     /// scrolling).
-    HoldEnd { fingers: u32, cancelled: bool },
+    HoldEnd {
+        fingers: u32,
+        cancelled: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,10 +187,24 @@ enum Source {
 #[derive(Clone, Copy, Debug)]
 enum State {
     Idle,
-    Pending { source: Source, fingers: u32, dx: f64, dy: f64 },
+    Pending {
+        source: Source,
+        fingers: u32,
+        dx: f64,
+        dy: f64,
+    },
     Ignored,
-    Claimed { source: Source, kind: GestureKind, fingers: u32, dx: f64, dy: f64, progress: f64 },
-    Holding { fingers: u32 },
+    Claimed {
+        source: Source,
+        kind: GestureKind,
+        fingers: u32,
+        dx: f64,
+        dy: f64,
+        progress: f64,
+    },
+    Holding {
+        fingers: u32,
+    },
 }
 
 pub struct GestureRecognizer {
@@ -154,7 +216,11 @@ pub struct GestureRecognizer {
 impl GestureRecognizer {
     pub fn new(cfg: GestureConfig) -> Self {
         let velocity = VelocityTracker::new(cfg.velocity_window);
-        Self { cfg, state: State::Idle, velocity }
+        Self {
+            cfg,
+            state: State::Idle,
+            velocity,
+        }
     }
 
     pub fn disposition(&self) -> Disposition {
@@ -179,10 +245,11 @@ impl GestureRecognizer {
             GestureEvent::SwipeBegin { fingers, .. } => self.begin(Source::Swipe, fingers),
             GestureEvent::PinchBegin { fingers, .. } => self.begin(Source::Pinch, fingers),
             GestureEvent::SwipeUpdate { time, dx, dy } => self.swipe_update(time, dx, dy, &mut out),
-            GestureEvent::PinchUpdate { time, scale, .. } => self.pinch_update(time, scale, &mut out),
-            GestureEvent::SwipeEnd { time, cancelled } | GestureEvent::PinchEnd { time, cancelled } => {
-                self.end(time, cancelled, &mut out)
+            GestureEvent::PinchUpdate { time, scale, .. } => {
+                self.pinch_update(time, scale, &mut out)
             }
+            GestureEvent::SwipeEnd { time, cancelled }
+            | GestureEvent::PinchEnd { time, cancelled } => self.end(time, cancelled, &mut out),
             GestureEvent::HoldBegin { fingers, .. } => {
                 self.state = State::Holding { fingers };
                 out.push(GestureOutput::HoldBegin { fingers });
@@ -207,41 +274,95 @@ impl GestureRecognizer {
             }
             Source::Pinch => self.cfg.pinch_fingers.contains(&fingers),
         };
-        self.state = if any { State::Pending { source, fingers, dx: 0.0, dy: 0.0 } } else { State::Ignored };
+        self.state = if any {
+            State::Pending {
+                source,
+                fingers,
+                dx: 0.0,
+                dy: 0.0,
+            }
+        } else {
+            State::Ignored
+        };
     }
 
     fn swipe_update(&mut self, time: f64, ddx: f64, ddy: f64, out: &mut Vec<GestureOutput>) {
         match self.state {
-            State::Pending { source: Source::Swipe, fingers, dx, dy } => {
+            State::Pending {
+                source: Source::Swipe,
+                fingers,
+                dx,
+                dy,
+            } => {
                 let (dx, dy) = (dx + ddx, dy + ddy);
                 if dx.hypot(dy) < self.cfg.lock_distance {
-                    self.state = State::Pending { source: Source::Swipe, fingers, dx, dy };
+                    self.state = State::Pending {
+                        source: Source::Swipe,
+                        fingers,
+                        dx,
+                        dy,
+                    };
                     return;
                 }
                 let r = self.cfg.axis_ratio.max(1.0);
                 let kind = if dx.abs() > dy.abs() * r {
-                    self.cfg.horizontal_fingers.contains(&fingers).then_some(GestureKind::WorkspaceSwitch)
+                    self.cfg
+                        .horizontal_fingers
+                        .contains(&fingers)
+                        .then_some(GestureKind::WorkspaceSwitch)
                 } else if dy.abs() > dx.abs() * r {
                     if dy < 0.0 {
-                        self.cfg.overview_fingers.contains(&fingers).then_some(GestureKind::Overview)
+                        self.cfg
+                            .overview_fingers
+                            .contains(&fingers)
+                            .then_some(GestureKind::Overview)
                     } else {
-                        self.cfg.app_overview_fingers.contains(&fingers).then_some(GestureKind::AppOverview)
+                        self.cfg
+                            .app_overview_fingers
+                            .contains(&fingers)
+                            .then_some(GestureKind::AppOverview)
                     }
                 } else {
-                    self.state = State::Pending { source: Source::Swipe, fingers, dx, dy };
+                    self.state = State::Pending {
+                        source: Source::Swipe,
+                        fingers,
+                        dx,
+                        dy,
+                    };
                     return;
                 };
                 match kind {
                     Some(kind) => {
-                        self.state = State::Claimed { source: Source::Swipe, kind, fingers, dx, dy, progress: 0.0 };
+                        self.state = State::Claimed {
+                            source: Source::Swipe,
+                            kind,
+                            fingers,
+                            dx,
+                            dy,
+                            progress: 0.0,
+                        };
                         out.push(GestureOutput::Begin { kind, fingers });
                         self.claimed_update(time, out);
                     }
                     None => self.state = State::Ignored,
                 }
             }
-            State::Claimed { source: Source::Swipe, kind, fingers, dx, dy, progress } => {
-                self.state = State::Claimed { source: Source::Swipe, kind, fingers, dx: dx + ddx, dy: dy + ddy, progress };
+            State::Claimed {
+                source: Source::Swipe,
+                kind,
+                fingers,
+                dx,
+                dy,
+                progress,
+            } => {
+                self.state = State::Claimed {
+                    source: Source::Swipe,
+                    kind,
+                    fingers,
+                    dx: dx + ddx,
+                    dy: dy + ddy,
+                    progress,
+                };
                 self.claimed_update(time, out);
             }
             _ => {}
@@ -250,18 +371,46 @@ impl GestureRecognizer {
 
     fn pinch_update(&mut self, time: f64, scale: f64, out: &mut Vec<GestureOutput>) {
         match self.state {
-            State::Pending { source: Source::Pinch, fingers, .. } => {
+            State::Pending {
+                source: Source::Pinch,
+                fingers,
+                ..
+            } => {
                 let d = scale - 1.0;
                 if d.abs() < self.cfg.pinch_lock {
                     return;
                 }
-                let kind = if d < 0.0 { GestureKind::AppGrid } else { GestureKind::ShowDesktop };
-                self.state = State::Claimed { source: Source::Pinch, kind, fingers, dx: scale, dy: 0.0, progress: 0.0 };
+                let kind = if d < 0.0 {
+                    GestureKind::AppGrid
+                } else {
+                    GestureKind::ShowDesktop
+                };
+                self.state = State::Claimed {
+                    source: Source::Pinch,
+                    kind,
+                    fingers,
+                    dx: scale,
+                    dy: 0.0,
+                    progress: 0.0,
+                };
                 out.push(GestureOutput::Begin { kind, fingers });
                 self.claimed_update(time, out);
             }
-            State::Claimed { source: Source::Pinch, kind, fingers, progress, .. } => {
-                self.state = State::Claimed { source: Source::Pinch, kind, fingers, dx: scale, dy: 0.0, progress };
+            State::Claimed {
+                source: Source::Pinch,
+                kind,
+                fingers,
+                progress,
+                ..
+            } => {
+                self.state = State::Claimed {
+                    source: Source::Pinch,
+                    kind,
+                    fingers,
+                    dx: scale,
+                    dy: 0.0,
+                    progress,
+                };
                 self.claimed_update(time, out);
             }
             _ => {}
@@ -283,16 +432,39 @@ impl GestureRecognizer {
     }
 
     fn claimed_update(&mut self, time: f64, out: &mut Vec<GestureOutput>) {
-        let State::Claimed { source, kind, fingers, dx, dy, .. } = self.state else { return };
+        let State::Claimed {
+            source,
+            kind,
+            fingers,
+            dx,
+            dy,
+            ..
+        } = self.state
+        else {
+            return;
+        };
         let progress = self.raw_progress(kind, dx, dy);
-        self.state = State::Claimed { source, kind, fingers, dx, dy, progress };
+        self.state = State::Claimed {
+            source,
+            kind,
+            fingers,
+            dx,
+            dy,
+            progress,
+        };
         self.velocity.push(time, progress);
-        out.push(GestureOutput::Update { kind, progress, velocity: self.velocity.velocity(time) });
+        out.push(GestureOutput::Update {
+            kind,
+            progress,
+            velocity: self.velocity.velocity(time),
+        });
     }
 
     fn end(&mut self, time: f64, cancelled: bool, out: &mut Vec<GestureOutput>) {
         let prev = std::mem::replace(&mut self.state, State::Idle);
-        let State::Claimed { kind, progress, .. } = prev else { return };
+        let State::Claimed { kind, progress, .. } = prev else {
+            return;
+        };
         let velocity = self.velocity.velocity(time);
         let projected = progress + velocity * self.cfg.projection_s;
         let commit_at = self.cfg.commit_progress;
@@ -301,8 +473,17 @@ impl GestureRecognizer {
         } else if kind == GestureKind::WorkspaceSwitch {
             if projected.abs() >= commit_at {
                 let steps = (projected.abs().round() as u32).clamp(1, self.cfg.max_steps.max(1));
-                let dir = if projected > 0.0 { Direction::Next } else { Direction::Previous };
-                (Outcome::Commit, steps as f64 * projected.signum(), Some(dir), steps)
+                let dir = if projected > 0.0 {
+                    Direction::Next
+                } else {
+                    Direction::Previous
+                };
+                (
+                    Outcome::Commit,
+                    steps as f64 * projected.signum(),
+                    Some(dir),
+                    steps,
+                )
             } else {
                 (Outcome::Cancel, 0.0, None, 0)
             }
@@ -311,7 +492,15 @@ impl GestureRecognizer {
         } else {
             (Outcome::Cancel, 0.0, None, 0)
         };
-        out.push(GestureOutput::End { kind, outcome, progress, velocity, target, direction, steps });
+        out.push(GestureOutput::End {
+            kind,
+            outcome,
+            progress,
+            velocity,
+            target,
+            direction,
+            steps,
+        });
     }
 }
 
@@ -333,7 +522,9 @@ pub const FLUID_COMMIT_PEAK_FRACTION: f64 = 0.8;
 /// 0.25 against the travel, fraction 0.6) are not modelled.
 pub fn fluid_swipe_commits(progress: f64, peak: f64, rate: f64, inertia_s: f64) -> bool {
     let q = inertia_s * rate + progress;
-    progress * q > 0.0 && q.abs() > FLUID_COMMIT_MIN_PROGRESS && q.abs() >= FLUID_COMMIT_PEAK_FRACTION * peak.abs()
+    progress * q > 0.0
+        && q.abs() > FLUID_COMMIT_MIN_PROGRESS
+        && q.abs() >= FLUID_COMMIT_PEAK_FRACTION * peak.abs()
 }
 
 #[cfg(test)]
@@ -344,28 +535,58 @@ mod tests {
         GestureRecognizer::new(GestureConfig::default())
     }
 
-    fn swipe(r: &mut GestureRecognizer, fingers: u32, steps: &[(f64, f64)], dt: f64, cancelled: bool) -> Vec<GestureOutput> {
+    fn swipe(
+        r: &mut GestureRecognizer,
+        fingers: u32,
+        steps: &[(f64, f64)],
+        dt: f64,
+        cancelled: bool,
+    ) -> Vec<GestureOutput> {
         let mut all = r.handle(GestureEvent::SwipeBegin { time: 0.0, fingers });
         let mut t = 0.0;
         for &(dx, dy) in steps {
             t += dt;
             all.extend(r.handle(GestureEvent::SwipeUpdate { time: t, dx, dy }));
         }
-        all.extend(r.handle(GestureEvent::SwipeEnd { time: t + dt, cancelled }));
+        all.extend(r.handle(GestureEvent::SwipeEnd {
+            time: t + dt,
+            cancelled,
+        }));
         all
     }
 
     fn last_end(v: &[GestureOutput]) -> GestureOutput {
-        *v.iter().rev().find(|o| matches!(o, GestureOutput::End { .. })).expect("end")
+        *v.iter()
+            .rev()
+            .find(|o| matches!(o, GestureOutput::End { .. }))
+            .expect("end")
     }
 
     #[test]
     fn horizontal_three_finger_swipe_switches_workspace() {
         let mut r = rec();
         let out = swipe(&mut r, 3, &[(-40.0, 1.0); 8], 0.016, false);
-        assert!(matches!(out[0], GestureOutput::Begin { kind: GestureKind::WorkspaceSwitch, fingers: 3 }));
-        let GestureOutput::End { outcome, direction, steps, target, .. } = last_end(&out) else { unreachable!() };
-        assert_eq!((outcome, direction, steps), (Outcome::Commit, Some(Direction::Next), 1));
+        assert!(matches!(
+            out[0],
+            GestureOutput::Begin {
+                kind: GestureKind::WorkspaceSwitch,
+                fingers: 3
+            }
+        ));
+        let GestureOutput::End {
+            outcome,
+            direction,
+            steps,
+            target,
+            ..
+        } = last_end(&out)
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            (outcome, direction, steps),
+            (Outcome::Commit, Some(Direction::Next), 1)
+        );
         assert_eq!(target, 1.0);
         assert_eq!(r.disposition(), Disposition::Idle);
     }
@@ -374,12 +595,22 @@ mod tests {
     fn swipe_right_goes_to_previous_and_natural_flag_flips_it() {
         let mut r = rec();
         let out = swipe(&mut r, 4, &[(60.0, 0.0); 6], 0.016, false);
-        let GestureOutput::End { direction, target, .. } = last_end(&out) else { unreachable!() };
+        let GestureOutput::End {
+            direction, target, ..
+        } = last_end(&out)
+        else {
+            unreachable!()
+        };
         assert_eq!(direction, Some(Direction::Previous));
         assert_eq!(target, -1.0);
-        let mut r = GestureRecognizer::new(GestureConfig { natural_direction: false, ..Default::default() });
+        let mut r = GestureRecognizer::new(GestureConfig {
+            natural_direction: false,
+            ..Default::default()
+        });
         let out = swipe(&mut r, 4, &[(60.0, 0.0); 6], 0.016, false);
-        let GestureOutput::End { direction, .. } = last_end(&out) else { unreachable!() };
+        let GestureOutput::End { direction, .. } = last_end(&out) else {
+            unreachable!()
+        };
         assert_eq!(direction, Some(Direction::Next));
     }
 
@@ -387,13 +618,38 @@ mod tests {
     fn vertical_up_opens_overview_and_down_app_overview() {
         let mut r = rec();
         let out = swipe(&mut r, 3, &[(0.0, -50.0); 6], 0.016, false);
-        assert!(matches!(out[0], GestureOutput::Begin { kind: GestureKind::Overview, .. }));
-        let GestureOutput::End { outcome, target, kind, .. } = last_end(&out) else { unreachable!() };
-        assert_eq!((kind, outcome, target), (GestureKind::Overview, Outcome::Commit, 1.0));
+        assert!(matches!(
+            out[0],
+            GestureOutput::Begin {
+                kind: GestureKind::Overview,
+                ..
+            }
+        ));
+        let GestureOutput::End {
+            outcome,
+            target,
+            kind,
+            ..
+        } = last_end(&out)
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            (kind, outcome, target),
+            (GestureKind::Overview, Outcome::Commit, 1.0)
+        );
 
         let out = swipe(&mut r, 3, &[(0.0, 50.0); 6], 0.016, false);
-        assert!(matches!(out[0], GestureOutput::Begin { kind: GestureKind::AppOverview, .. }));
-        let GestureOutput::End { outcome, .. } = last_end(&out) else { unreachable!() };
+        assert!(matches!(
+            out[0],
+            GestureOutput::Begin {
+                kind: GestureKind::AppOverview,
+                ..
+            }
+        ));
+        let GestureOutput::End { outcome, .. } = last_end(&out) else {
+            unreachable!()
+        };
         assert_eq!(outcome, Outcome::Commit);
     }
 
@@ -401,10 +657,20 @@ mod tests {
     fn progress_and_velocity_follow_the_fingers() {
         let mut r = rec();
         let mut last = None;
-        r.handle(GestureEvent::SwipeBegin { time: 0.0, fingers: 3 });
+        r.handle(GestureEvent::SwipeBegin {
+            time: 0.0,
+            fingers: 3,
+        });
         for i in 1..=10 {
-            for o in r.handle(GestureEvent::SwipeUpdate { time: i as f64 * 0.01, dx: 0.0, dy: -10.0 }) {
-                if let GestureOutput::Update { progress, velocity, .. } = o {
+            for o in r.handle(GestureEvent::SwipeUpdate {
+                time: i as f64 * 0.01,
+                dx: 0.0,
+                dy: -10.0,
+            }) {
+                if let GestureOutput::Update {
+                    progress, velocity, ..
+                } = o
+                {
                     last = Some((progress, velocity));
                 }
             }
@@ -418,12 +684,23 @@ mod tests {
     fn short_slow_swipe_cancels_but_a_flick_commits() {
         let mut r = rec();
         let out = swipe(&mut r, 3, &[(0.0, -3.0); 5], 0.1, false);
-        let GestureOutput::End { outcome, target, .. } = last_end(&out) else { unreachable!() };
+        let GestureOutput::End {
+            outcome, target, ..
+        } = last_end(&out)
+        else {
+            unreachable!()
+        };
         assert_eq!((outcome, target), (Outcome::Cancel, 0.0));
         let mut r = rec();
         let out = swipe(&mut r, 3, &[(0.0, -12.0); 4], 0.008, false);
-        let GestureOutput::End { outcome, .. } = last_end(&out) else { unreachable!() };
-        assert_eq!(outcome, Outcome::Commit, "fast flick projects past the threshold");
+        let GestureOutput::End { outcome, .. } = last_end(&out) else {
+            unreachable!()
+        };
+        assert_eq!(
+            outcome,
+            Outcome::Commit,
+            "fast flick projects past the threshold"
+        );
     }
 
     #[test]
@@ -432,7 +709,12 @@ mod tests {
         let mut steps = vec![(0.0, -40.0); 4];
         steps.extend(vec![(0.0, 40.0); 4]);
         let out = swipe(&mut r, 3, &steps, 0.05, false);
-        let GestureOutput::End { outcome, progress, .. } = last_end(&out) else { unreachable!() };
+        let GestureOutput::End {
+            outcome, progress, ..
+        } = last_end(&out)
+        else {
+            unreachable!()
+        };
         assert_eq!(outcome, Outcome::Cancel);
         assert!(progress.abs() < 0.05);
     }
@@ -441,7 +723,9 @@ mod tests {
     fn libinput_cancel_cancels() {
         let mut r = rec();
         let out = swipe(&mut r, 3, &[(-80.0, 0.0); 6], 0.016, true);
-        let GestureOutput::End { outcome, .. } = last_end(&out) else { unreachable!() };
+        let GestureOutput::End { outcome, .. } = last_end(&out) else {
+            unreachable!()
+        };
         assert_eq!(outcome, Outcome::Cancel);
     }
 
@@ -449,23 +733,59 @@ mod tests {
     fn unsupported_finger_counts_are_ignored() {
         let mut r = rec();
         assert!(swipe(&mut r, 2, &[(-80.0, 0.0); 6], 0.016, false).is_empty());
-        r.handle(GestureEvent::SwipeBegin { time: 0.0, fingers: 5 });
+        r.handle(GestureEvent::SwipeBegin {
+            time: 0.0,
+            fingers: 5,
+        });
         assert_eq!(r.disposition(), Disposition::Ignored);
-        let cfg = GestureConfig { horizontal_fingers: vec![4], ..Default::default() };
+        let cfg = GestureConfig {
+            horizontal_fingers: vec![4],
+            ..Default::default()
+        };
         let mut r = GestureRecognizer::new(cfg);
-        assert!(swipe(&mut r, 3, &[(-80.0, 0.0); 6], 0.016, false).is_empty(), "3 fingers no longer switch workspaces");
+        assert!(
+            swipe(&mut r, 3, &[(-80.0, 0.0); 6], 0.016, false).is_empty(),
+            "3 fingers no longer switch workspaces"
+        );
         assert!(!swipe(&mut r, 4, &[(-80.0, 0.0); 6], 0.016, false).is_empty());
     }
 
     #[test]
     fn pending_until_the_lock_distance_and_diagonals_wait() {
         let mut r = rec();
-        r.handle(GestureEvent::SwipeBegin { time: 0.0, fingers: 3 });
+        r.handle(GestureEvent::SwipeBegin {
+            time: 0.0,
+            fingers: 3,
+        });
         assert_eq!(r.disposition(), Disposition::Pending);
-        assert!(r.handle(GestureEvent::SwipeUpdate { time: 0.01, dx: 2.0, dy: 2.0 }).is_empty());
-        assert!(r.handle(GestureEvent::SwipeUpdate { time: 0.02, dx: 6.0, dy: 6.0 }).is_empty(), "perfect diagonal never locks");
-        let out = r.handle(GestureEvent::SwipeUpdate { time: 0.03, dx: 20.0, dy: 0.0 });
-        assert!(matches!(out[0], GestureOutput::Begin { kind: GestureKind::WorkspaceSwitch, .. }));
+        assert!(r
+            .handle(GestureEvent::SwipeUpdate {
+                time: 0.01,
+                dx: 2.0,
+                dy: 2.0
+            })
+            .is_empty());
+        assert!(
+            r.handle(GestureEvent::SwipeUpdate {
+                time: 0.02,
+                dx: 6.0,
+                dy: 6.0
+            })
+            .is_empty(),
+            "perfect diagonal never locks"
+        );
+        let out = r.handle(GestureEvent::SwipeUpdate {
+            time: 0.03,
+            dx: 20.0,
+            dy: 0.0,
+        });
+        assert!(matches!(
+            out[0],
+            GestureOutput::Begin {
+                kind: GestureKind::WorkspaceSwitch,
+                ..
+            }
+        ));
         assert_eq!(r.disposition(), Disposition::Claimed);
         assert_eq!(r.active_kind(), Some(GestureKind::WorkspaceSwitch));
     }
@@ -479,32 +799,67 @@ mod tests {
 
     #[test]
     fn axis_ratio_demands_a_clear_axis() {
-        let cfg = GestureConfig { axis_ratio: 2.0, ..Default::default() };
+        let cfg = GestureConfig {
+            axis_ratio: 2.0,
+            ..Default::default()
+        };
         let mut r = GestureRecognizer::new(cfg);
-        r.handle(GestureEvent::SwipeBegin { time: 0.0, fingers: 3 });
-        assert!(r.handle(GestureEvent::SwipeUpdate { time: 0.01, dx: 15.0, dy: 10.0 }).is_empty());
-        let out = r.handle(GestureEvent::SwipeUpdate { time: 0.02, dx: 30.0, dy: 0.0 });
+        r.handle(GestureEvent::SwipeBegin {
+            time: 0.0,
+            fingers: 3,
+        });
+        assert!(r
+            .handle(GestureEvent::SwipeUpdate {
+                time: 0.01,
+                dx: 15.0,
+                dy: 10.0
+            })
+            .is_empty());
+        let out = r.handle(GestureEvent::SwipeUpdate {
+            time: 0.02,
+            dx: 30.0,
+            dy: 0.0,
+        });
         assert!(!out.is_empty());
     }
 
     #[test]
     fn max_steps_allows_multi_workspace_swipes() {
-        let cfg = GestureConfig { max_steps: 3, ..Default::default() };
+        let cfg = GestureConfig {
+            max_steps: 3,
+            ..Default::default()
+        };
         let mut r = GestureRecognizer::new(cfg);
         let out = swipe(&mut r, 3, &[(-100.0, 0.0); 8], 0.016, false);
-        let GestureOutput::End { steps, target, .. } = last_end(&out) else { unreachable!() };
+        let GestureOutput::End { steps, target, .. } = last_end(&out) else {
+            unreachable!()
+        };
         assert!((2..=3).contains(&steps));
         assert_eq!(target, steps as f64);
     }
 
-    fn pinch(r: &mut GestureRecognizer, fingers: u32, scales: &[f64], cancelled: bool) -> Vec<GestureOutput> {
+    fn pinch(
+        r: &mut GestureRecognizer,
+        fingers: u32,
+        scales: &[f64],
+        cancelled: bool,
+    ) -> Vec<GestureOutput> {
         let mut all = r.handle(GestureEvent::PinchBegin { time: 0.0, fingers });
         let mut t = 0.0;
         for &s in scales {
             t += 0.016;
-            all.extend(r.handle(GestureEvent::PinchUpdate { time: t, dx: 0.0, dy: 0.0, scale: s, rotation: 0.0 }));
+            all.extend(r.handle(GestureEvent::PinchUpdate {
+                time: t,
+                dx: 0.0,
+                dy: 0.0,
+                scale: s,
+                rotation: 0.0,
+            }));
         }
-        all.extend(r.handle(GestureEvent::PinchEnd { time: t + 0.016, cancelled }));
+        all.extend(r.handle(GestureEvent::PinchEnd {
+            time: t + 0.016,
+            cancelled,
+        }));
         all
     }
 
@@ -512,11 +867,21 @@ mod tests {
     fn pinch_in_opens_app_grid_and_spread_shows_desktop() {
         let mut r = rec();
         let out = pinch(&mut r, 4, &[0.95, 0.9, 0.8, 0.7, 0.6, 0.55], false);
-        assert!(matches!(out[0], GestureOutput::Begin { kind: GestureKind::AppGrid, fingers: 4 }));
-        let GestureOutput::End { outcome, kind, .. } = last_end(&out) else { unreachable!() };
+        assert!(matches!(
+            out[0],
+            GestureOutput::Begin {
+                kind: GestureKind::AppGrid,
+                fingers: 4
+            }
+        ));
+        let GestureOutput::End { outcome, kind, .. } = last_end(&out) else {
+            unreachable!()
+        };
         assert_eq!((kind, outcome), (GestureKind::AppGrid, Outcome::Commit));
         let out = pinch(&mut r, 4, &[1.05, 1.1, 1.2, 1.3, 1.4, 1.5], false);
-        let GestureOutput::End { outcome, kind, .. } = last_end(&out) else { unreachable!() };
+        let GestureOutput::End { outcome, kind, .. } = last_end(&out) else {
+            unreachable!()
+        };
         assert_eq!((kind, outcome), (GestureKind::ShowDesktop, Outcome::Commit));
     }
 
@@ -531,27 +896,64 @@ mod tests {
     fn pinch_progress_is_normalised_by_the_configured_distance() {
         let mut r = rec();
         let out = pinch(&mut r, 4, &[0.9, 0.75], false);
-        let p = out.iter().rev().find_map(|o| if let GestureOutput::Update { progress, .. } = o { Some(*progress) } else { None }).unwrap();
+        let p = out
+            .iter()
+            .rev()
+            .find_map(|o| {
+                if let GestureOutput::Update { progress, .. } = o {
+                    Some(*progress)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
         assert!((p - 0.5).abs() < 1e-9);
     }
 
     #[test]
     fn hold_events_pass_through() {
         let mut r = rec();
-        let b = r.handle(GestureEvent::HoldBegin { time: 0.0, fingers: 2 });
+        let b = r.handle(GestureEvent::HoldBegin {
+            time: 0.0,
+            fingers: 2,
+        });
         assert_eq!(b, vec![GestureOutput::HoldBegin { fingers: 2 }]);
-        let e = r.handle(GestureEvent::HoldEnd { time: 0.2, cancelled: false });
-        assert_eq!(e, vec![GestureOutput::HoldEnd { fingers: 2, cancelled: false }]);
-        assert!(r.handle(GestureEvent::HoldEnd { time: 0.3, cancelled: false }).is_empty());
+        let e = r.handle(GestureEvent::HoldEnd {
+            time: 0.2,
+            cancelled: false,
+        });
+        assert_eq!(
+            e,
+            vec![GestureOutput::HoldEnd {
+                fingers: 2,
+                cancelled: false
+            }]
+        );
+        assert!(r
+            .handle(GestureEvent::HoldEnd {
+                time: 0.3,
+                cancelled: false
+            })
+            .is_empty());
     }
 
     #[test]
     fn new_begin_resets_a_stuck_gesture() {
         let mut r = rec();
-        r.handle(GestureEvent::SwipeBegin { time: 0.0, fingers: 3 });
-        r.handle(GestureEvent::SwipeUpdate { time: 0.01, dx: -30.0, dy: 0.0 });
+        r.handle(GestureEvent::SwipeBegin {
+            time: 0.0,
+            fingers: 3,
+        });
+        r.handle(GestureEvent::SwipeUpdate {
+            time: 0.01,
+            dx: -30.0,
+            dy: 0.0,
+        });
         assert_eq!(r.disposition(), Disposition::Claimed);
-        r.handle(GestureEvent::SwipeBegin { time: 1.0, fingers: 4 });
+        r.handle(GestureEvent::SwipeBegin {
+            time: 1.0,
+            fingers: 4,
+        });
         assert_eq!(r.disposition(), Disposition::Pending);
     }
 }

@@ -31,7 +31,12 @@ impl ClosingWindow {
     pub fn placement(&self, now: f64) -> (Rect, f64) {
         let s = self.kind.sample(self.progress(now));
         let (w, h) = (self.rect.w * s.scale, self.rect.h * s.scale);
-        let r = Rect::new(self.rect.x + (self.rect.w - w) / 2.0, self.rect.y + (self.rect.h - h) / 2.0 + s.dy, w, h);
+        let r = Rect::new(
+            self.rect.x + (self.rect.w - w) / 2.0,
+            self.rect.y + (self.rect.h - h) / 2.0 + s.dy,
+            w,
+            h,
+        );
         (r, s.alpha)
     }
 
@@ -61,7 +66,10 @@ pub struct EffectsConfig {
 
 impl Default for EffectsConfig {
     fn default() -> Self {
-        Self { minimize: Some(MinimizeKind::Warp), closing: false }
+        Self {
+            minimize: Some(MinimizeKind::Warp),
+            closing: false,
+        }
     }
 }
 
@@ -76,37 +84,84 @@ pub struct Effects {
 impl Effects {
     pub fn new(cfg: EffectsConfig) -> Self {
         let desktop = ShowDesktop::default();
-        Self { cfg, closing: Vec::new(), snapshots: Default::default(), show_desktop: desktop.animator(0.0), desktop }
+        Self {
+            cfg,
+            closing: Vec::new(),
+            snapshots: Default::default(),
+            show_desktop: desktop.animator(0.0),
+            desktop,
+        }
     }
 
     /// The close transform of a window of `kind`: its order-out transform, else a fade when
     /// [`EffectsConfig::closing`] is on; `None` = the window disappears at once.
     pub fn close_kind(&self, kind: WindowKind) -> Option<TransformKind> {
-        kind.order_out().or(self.cfg.closing.then_some(TransformKind::FadeOut))
+        kind.order_out()
+            .or(self.cfg.closing.then_some(TransformKind::FadeOut))
     }
 
     /// Start animating a snapshot of `id` out with `kind`.
-    pub fn start_close(&mut self, id: WindowId, output: OutputId, rect: Rect, texture: GlesTexture, kind: TransformKind, now: f64) {
+    pub fn start_close(
+        &mut self,
+        id: WindowId,
+        output: OutputId,
+        rect: Rect,
+        texture: GlesTexture,
+        kind: TransformKind,
+        now: f64,
+    ) {
         self.closing.retain(|c| c.id != id);
         let mut anim = kind.animator(false);
         anim.animate_to(1.0, now);
-        self.closing.push(ClosingWindow { id, output, rect, texture, elem_id: Id::new(), kind, anim });
+        self.closing.push(ClosingWindow {
+            id,
+            output,
+            rect,
+            texture,
+            elem_id: Id::new(),
+            kind,
+            anim,
+        });
     }
 
     /// Store the latest capture of a window.
-    pub fn store_snapshot(&mut self, id: WindowId, texture: GlesTexture, area: Rect, frame_origin: (f64, f64), now: f64) {
-        self.snapshots.insert(id, Snapshot { texture, area, frame_origin, taken: now });
+    pub fn store_snapshot(
+        &mut self,
+        id: WindowId,
+        texture: GlesTexture,
+        area: Rect,
+        frame_origin: (f64, f64),
+        now: f64,
+    ) {
+        self.snapshots.insert(
+            id,
+            Snapshot {
+                texture,
+                area,
+                frame_origin,
+                taken: now,
+            },
+        );
     }
 
     /// Seconds since the stored snapshot of `id` was taken (infinite when there is none).
     pub fn snapshot_age(&self, id: WindowId, now: f64) -> f64 {
-        self.snapshots.get(&id).map_or(f64::INFINITY, |s| now - s.taken)
+        self.snapshots
+            .get(&id)
+            .map_or(f64::INFINITY, |s| now - s.taken)
     }
 
     /// The stored snapshot of `id`, its area moved to the window's current frame origin.
-    pub fn stored_snapshot(&mut self, id: WindowId, frame_origin: (f64, f64)) -> Option<(GlesTexture, Rect, (f64, f64))> {
+    pub fn stored_snapshot(
+        &mut self,
+        id: WindowId,
+        frame_origin: (f64, f64),
+    ) -> Option<(GlesTexture, Rect, (f64, f64))> {
         let s = self.snapshots.remove(&id)?;
-        let (dx, dy) = (frame_origin.0 - s.frame_origin.0, frame_origin.1 - s.frame_origin.1);
+        let (dx, dy) = (
+            frame_origin.0 - s.frame_origin.0,
+            frame_origin.1 - s.frame_origin.1,
+        );
         Some((s.texture, s.area.translate(dx, dy), frame_origin))
     }
 
@@ -127,7 +182,8 @@ impl Effects {
     }
 
     pub fn set_show_desktop(&mut self, on: bool, now: f64) {
-        self.show_desktop.animate_to(if on { 1.0 } else { 0.0 }, now);
+        self.show_desktop
+            .animate_to(if on { 1.0 } else { 0.0 }, now);
     }
 
     pub fn toggle_show_desktop(&mut self, now: f64) {
@@ -137,7 +193,9 @@ impl Effects {
 
     /// Where a window rests when the desktop is shown, at `progress` of the slide.
     pub fn show_desktop_rect(&self, window: Rect, screen: Rect, progress: f64) -> Rect {
-        let p = self.desktop.placement(window.into_geom(), screen.into_geom(), progress);
+        let p = self
+            .desktop
+            .placement(window.into_geom(), screen.into_geom(), progress);
         Rect::new(p.rect.x(), p.rect.y(), p.rect.width(), p.rect.height())
     }
 
@@ -183,7 +241,10 @@ mod tests {
         let end = fx.show_desktop_progress(5.0);
         assert!((end - 1.0).abs() < 1e-6);
         let hidden = fx.show_desktop_rect(win, screen, 1.0);
-        assert!(hidden.right() <= screen.x + 1e-6 || hidden.x >= screen.right() - 1e-6, "{hidden:?}");
+        assert!(
+            hidden.right() <= screen.x + 1e-6 || hidden.x >= screen.right() - 1e-6,
+            "{hidden:?}"
+        );
         assert_eq!(fx.show_desktop_rect(win, screen, 0.0), win);
         fx.toggle_show_desktop(6.0);
         assert!(!fx.show_desktop_active());
@@ -193,9 +254,21 @@ mod tests {
     fn close_transform_follows_the_window_kind() {
         let fx = Effects::new(EffectsConfig::default());
         assert_eq!(fx.close_kind(WindowKind::Plain), None);
-        assert_eq!(fx.close_kind(WindowKind::Utility), Some(TransformKind::FadeOut));
-        assert_eq!(fx.close_kind(WindowKind::Sheet), Some(TransformKind::SheetOut));
-        let fade = Effects::new(EffectsConfig { closing: true, ..EffectsConfig::default() });
-        assert_eq!(fade.close_kind(WindowKind::Plain), Some(TransformKind::FadeOut));
+        assert_eq!(
+            fx.close_kind(WindowKind::Utility),
+            Some(TransformKind::FadeOut)
+        );
+        assert_eq!(
+            fx.close_kind(WindowKind::Sheet),
+            Some(TransformKind::SheetOut)
+        );
+        let fade = Effects::new(EffectsConfig {
+            closing: true,
+            ..EffectsConfig::default()
+        });
+        assert_eq!(
+            fade.close_kind(WindowKind::Plain),
+            Some(TransformKind::FadeOut)
+        );
     }
 }

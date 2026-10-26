@@ -184,22 +184,40 @@ pub struct ScanDump {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     /// A scan started.
-    ScanStarted { ifindex: u32 },
+    ScanStarted {
+        ifindex: u32,
+    },
     /// A scan finished: [`Nl80211::scan_results`] has the new list.
-    ScanResultsReady { ifindex: u32 },
-    ScanAborted { ifindex: u32 },
+    ScanResultsReady {
+        ifindex: u32,
+    },
+    ScanAborted {
+        ifindex: u32,
+    },
     /// An association finished. `status_code` is the 802.11 status (0 is success); `None` when
     /// the attempt timed out.
-    Connected { ifindex: u32, bssid: Option<MacAddr>, status_code: Option<u16> },
+    Connected {
+        ifindex: u32,
+        bssid: Option<MacAddr>,
+        status_code: Option<u16>,
+    },
     /// The association ended. `reason_code` is the 802.11 reason code.
-    Disconnected { ifindex: u32, reason_code: u16, by_access_point: bool },
+    Disconnected {
+        ifindex: u32,
+        reason_code: u16,
+        by_access_point: bool,
+    },
 }
 
 /// Splits a generic netlink payload into the command and its attributes.
 fn genl(payload: &[u8]) -> std::result::Result<(u8, &[u8]), ParseError> {
     match payload.split_first_chunk::<4>() {
         Some((header, rest)) => Ok((header[0], rest)),
-        None => Err(ParseError::Truncated { what: "genlmsghdr", needed: 4, have: payload.len() }),
+        None => Err(ParseError::Truncated {
+            what: "genlmsghdr",
+            needed: 4,
+            have: payload.len(),
+        }),
     }
 }
 
@@ -209,9 +227,19 @@ fn missing(message: &'static str, attribute: &'static str) -> ParseError {
 
 /// Decodes a `NEW_INTERFACE` message. `Ok(None)` for an interface that is not a network device
 /// (a P2P device has a wdev but no ifindex).
-pub fn parse_interface(payload: &[u8]) -> std::result::Result<Option<WirelessInterface>, ParseError> {
+pub fn parse_interface(
+    payload: &[u8],
+) -> std::result::Result<Option<WirelessInterface>, ParseError> {
     let (_, rest) = genl(payload)?;
-    let (mut ifindex, mut name, mut wiphy, mut interface_type, mut mac, mut ssid, mut frequency_mhz) = (None, None, None, None, None, None, None);
+    let (
+        mut ifindex,
+        mut name,
+        mut wiphy,
+        mut interface_type,
+        mut mac,
+        mut ssid,
+        mut frequency_mhz,
+    ) = (None, None, None, None, None, None, None);
     for attr in attrs(rest) {
         let attr = attr?;
         match attr.ty {
@@ -232,7 +260,8 @@ pub fn parse_interface(payload: &[u8]) -> std::result::Result<Option<WirelessInt
         ifindex,
         name: name.ok_or_else(|| missing("interface", "NL80211_ATTR_IFNAME"))?,
         wiphy: wiphy.ok_or_else(|| missing("interface", "NL80211_ATTR_WIPHY"))?,
-        interface_type: interface_type.ok_or_else(|| missing("interface", "NL80211_ATTR_IFTYPE"))?,
+        interface_type: interface_type
+            .ok_or_else(|| missing("interface", "NL80211_ATTR_IFTYPE"))?,
         mac,
         ssid,
         frequency_mhz,
@@ -271,7 +300,10 @@ pub fn parse_station(payload: &[u8]) -> std::result::Result<Station, ParseError>
         }
     }
     let (mut signal_dbm, mut signal_average_dbm, mut inactive_ms) = (None, None, None);
-    for child in info.ok_or_else(|| missing("station", "NL80211_ATTR_STA_INFO"))?.nested() {
+    for child in info
+        .ok_or_else(|| missing("station", "NL80211_ATTR_STA_INFO"))?
+        .nested()
+    {
         let child = child?;
         match child.ty {
             STA_INFO_SIGNAL => signal_dbm = Some(child.i8()?),
@@ -280,7 +312,12 @@ pub fn parse_station(payload: &[u8]) -> std::result::Result<Station, ParseError>
             _ => {}
         }
     }
-    Ok(Station { bssid: bssid.ok_or_else(|| missing("station", "NL80211_ATTR_MAC"))?, signal_dbm, signal_average_dbm, inactive_ms })
+    Ok(Station {
+        bssid: bssid.ok_or_else(|| missing("station", "NL80211_ATTR_MAC"))?,
+        signal_dbm,
+        signal_average_dbm,
+        inactive_ms,
+    })
 }
 
 /// Decodes a `NEW_SCAN_RESULTS` message of a `GET_SCAN` dump: one access point.
@@ -295,9 +332,13 @@ pub fn parse_scan_result(payload: &[u8]) -> std::result::Result<ScanResult, Pars
             _ => {}
         }
     }
-    let (mut bssid, mut frequency_mhz, mut capability, mut elements, mut beacon_elements) = (None, None, 0u16, None, None);
+    let (mut bssid, mut frequency_mhz, mut capability, mut elements, mut beacon_elements) =
+        (None, None, 0u16, None, None);
     let (mut signal_dbm, mut associated, mut seen_ms_ago) = (None, false, None);
-    for child in bss.ok_or_else(|| missing("scan result", "NL80211_ATTR_BSS"))?.nested() {
+    for child in bss
+        .ok_or_else(|| missing("scan result", "NL80211_ATTR_BSS"))?
+        .nested()
+    {
         let child = child?;
         match child.ty {
             BSS_BSSID => bssid = Some(MacAddr(child.mac()?)),
@@ -313,12 +354,18 @@ pub fn parse_scan_result(payload: &[u8]) -> std::result::Result<ScanResult, Pars
         }
     }
     // The elements of the last probe response, else those of the last beacon.
-    let (ssid, security) = ssid_and_security(elements.or(beacon_elements).ok_or_else(|| missing("scan result", "NL80211_BSS_INFORMATION_ELEMENTS"))?, capability)?;
+    let (ssid, security) = ssid_and_security(
+        elements
+            .or(beacon_elements)
+            .ok_or_else(|| missing("scan result", "NL80211_BSS_INFORMATION_ELEMENTS"))?,
+        capability,
+    )?;
     Ok(ScanResult {
         ifindex: ifindex.ok_or_else(|| missing("scan result", "NL80211_ATTR_IFINDEX"))?,
         bssid: bssid.ok_or_else(|| missing("scan result", "NL80211_BSS_BSSID"))?,
         ssid,
-        frequency_mhz: frequency_mhz.ok_or_else(|| missing("scan result", "NL80211_BSS_FREQUENCY"))?,
+        frequency_mhz: frequency_mhz
+            .ok_or_else(|| missing("scan result", "NL80211_BSS_FREQUENCY"))?,
         signal_dbm,
         security,
         associated,
@@ -329,10 +376,20 @@ pub fn parse_scan_result(payload: &[u8]) -> std::result::Result<ScanResult, Pars
 /// Decodes one multicast message of the family. `Ok(None)` for a command this crate does not report.
 pub fn parse_event(payload: &[u8]) -> std::result::Result<Option<Event>, ParseError> {
     let (command, rest) = genl(payload)?;
-    if !matches!(command, CMD_TRIGGER_SCAN | CMD_NEW_SCAN_RESULTS | CMD_SCAN_ABORTED | CMD_CONNECT | CMD_DISCONNECT) {
+    if !matches!(
+        command,
+        CMD_TRIGGER_SCAN | CMD_NEW_SCAN_RESULTS | CMD_SCAN_ABORTED | CMD_CONNECT | CMD_DISCONNECT
+    ) {
         return Ok(None);
     }
-    let (mut ifindex, mut bssid, mut status_code, mut reason_code, mut by_access_point, mut timed_out) = (None, None, None, None, false, false);
+    let (
+        mut ifindex,
+        mut bssid,
+        mut status_code,
+        mut reason_code,
+        mut by_access_point,
+        mut timed_out,
+    ) = (None, None, None, None, false, false);
     for attr in attrs(rest) {
         let attr = attr?;
         match attr.ty {
@@ -350,9 +407,24 @@ pub fn parse_event(payload: &[u8]) -> std::result::Result<Option<Event>, ParseEr
         CMD_TRIGGER_SCAN => Event::ScanStarted { ifindex },
         CMD_NEW_SCAN_RESULTS => Event::ScanResultsReady { ifindex },
         CMD_SCAN_ABORTED => Event::ScanAborted { ifindex },
-        CMD_CONNECT => Event::Connected { ifindex, bssid, status_code: if timed_out { None } else { Some(status_code.ok_or_else(|| missing("connect event", "NL80211_ATTR_STATUS_CODE"))?) } },
+        CMD_CONNECT => Event::Connected {
+            ifindex,
+            bssid,
+            status_code: if timed_out {
+                None
+            } else {
+                Some(
+                    status_code
+                        .ok_or_else(|| missing("connect event", "NL80211_ATTR_STATUS_CODE"))?,
+                )
+            },
+        },
         // The kernel leaves the reason out when it is 0 (unspecified).
-        _ => Event::Disconnected { ifindex, reason_code: reason_code.unwrap_or(0), by_access_point },
+        _ => Event::Disconnected {
+            ifindex,
+            reason_code: reason_code.unwrap_or(0),
+            by_access_point,
+        },
     }))
 }
 
@@ -384,13 +456,20 @@ pub fn parse_family(payload: &[u8]) -> std::result::Result<Family, ParseError> {
                             _ => {}
                         }
                     }
-                    groups.push((name.ok_or_else(|| missing("multicast group", "CTRL_ATTR_MCAST_GRP_NAME"))?, group_id.ok_or_else(|| missing("multicast group", "CTRL_ATTR_MCAST_GRP_ID"))?));
+                    groups.push((
+                        name.ok_or_else(|| missing("multicast group", "CTRL_ATTR_MCAST_GRP_NAME"))?,
+                        group_id
+                            .ok_or_else(|| missing("multicast group", "CTRL_ATTR_MCAST_GRP_ID"))?,
+                    ));
                 }
             }
             _ => {}
         }
     }
-    Ok(Family { id: id.ok_or_else(|| missing("family", "CTRL_ATTR_FAMILY_ID"))?, groups })
+    Ok(Family {
+        id: id.ok_or_else(|| missing("family", "CTRL_ATTR_FAMILY_ID"))?,
+        groups,
+    })
 }
 
 /// The body of a generic netlink request: the header (`cmd`, version 0) and nothing else yet.
@@ -409,7 +488,8 @@ pub fn resolve_family(socket: &mut Socket) -> Result<Family> {
 /// The raw reply of `CTRL_CMD_GETFAMILY` for `nl80211`.
 pub fn family_raw(socket: &mut Socket) -> Result<Vec<u8>> {
     let mut body = Body::new();
-    body.header(&[CTRL_CMD_GETFAMILY, 1, 0, 0]).attr_cstr(CTRL_ATTR_FAMILY_NAME, FAMILY_NAME);
+    body.header(&[CTRL_CMD_GETFAMILY, 1, 0, 0])
+        .attr_cstr(CTRL_ATTR_FAMILY_NAME, FAMILY_NAME);
     socket.call("CTRL_CMD_GETFAMILY", GENL_ID_CTRL, 0, body.as_bytes())
 }
 
@@ -421,11 +501,18 @@ pub fn parse_family_reply(raw: &[u8]) -> Result<Family> {
             return parse_family(message.payload).map_err(Error::parse("CTRL_CMD_GETFAMILY"));
         }
     }
-    Err(Error::Parse { origin: "CTRL_CMD_GETFAMILY", source: missing("reply", "the family message") })
+    Err(Error::Parse {
+        origin: "CTRL_CMD_GETFAMILY",
+        source: missing("reply", "the family message"),
+    })
 }
 
 /// The messages of `raw` that belong to `family`.
-fn family_messages<'a>(raw: &'a [u8], family: u16, origin: &'static str) -> Result<Vec<Message<'a>>> {
+fn family_messages<'a>(
+    raw: &'a [u8],
+    family: u16,
+    origin: &'static str,
+) -> Result<Vec<Message<'a>>> {
     let mut found = Vec::new();
     for message in messages(raw) {
         let message = message.map_err(Error::parse(origin))?;
@@ -464,7 +551,10 @@ pub fn parse_wiphys(raw: &[u8], family: u16) -> Result<Vec<Wiphy>> {
 /// Decodes a `GET_STATION` dump.
 pub fn parse_stations(raw: &[u8], family: u16) -> Result<Vec<Station>> {
     let origin = "NL80211_CMD_GET_STATION";
-    family_messages(raw, family, origin)?.iter().map(|message| parse_station(message.payload).map_err(Error::parse(origin))).collect()
+    family_messages(raw, family, origin)?
+        .iter()
+        .map(|message| parse_station(message.payload).map_err(Error::parse(origin)))
+        .collect()
 }
 
 /// Decodes a `GET_SCAN` dump. An access point that does not decode is listed in `errors`; the
@@ -500,12 +590,18 @@ impl Nl80211 {
         &self.family
     }
 
-    fn dump_raw(&mut self, request: &'static str, cmd: u8, ifindex: Option<u32>) -> Result<Vec<u8>> {
+    fn dump_raw(
+        &mut self,
+        request: &'static str,
+        cmd: u8,
+        ifindex: Option<u32>,
+    ) -> Result<Vec<u8>> {
         let mut body = command(cmd);
         if let Some(ifindex) = ifindex {
             body.attr_u32(ATTR_IFINDEX, ifindex);
         }
-        self.socket.call(request, self.family.id, NLM_F_DUMP, body.as_bytes())
+        self.socket
+            .call(request, self.family.id, NLM_F_DUMP, body.as_bytes())
     }
 
     /// The raw reply of `NL80211_CMD_GET_INTERFACE`.
@@ -517,7 +613,12 @@ impl Nl80211 {
     pub fn wiphys_raw(&mut self) -> Result<Vec<u8>> {
         let mut body = command(CMD_GET_WIPHY);
         body.attr(ATTR_SPLIT_WIPHY_DUMP, &[]);
-        self.socket.call("NL80211_CMD_GET_WIPHY", self.family.id, NLM_F_DUMP, body.as_bytes())
+        self.socket.call(
+            "NL80211_CMD_GET_WIPHY",
+            self.family.id,
+            NLM_F_DUMP,
+            body.as_bytes(),
+        )
     }
 
     /// The raw reply of `NL80211_CMD_GET_STATION` for one interface.
@@ -561,11 +662,19 @@ impl Nl80211 {
     /// without `CAP_NET_ADMIN`.
     pub fn trigger_scan(&mut self, ifindex: u32) -> Result<()> {
         let mut body = command(CMD_TRIGGER_SCAN);
-        body.attr_u32(ATTR_IFINDEX, ifindex).nested(ATTR_SCAN_SSIDS, |ssids| {
-            // one empty SSID: a wildcard probe request
-            ssids.attr(1, &[]);
-        });
-        self.socket.call("NL80211_CMD_TRIGGER_SCAN", self.family.id, 0, body.as_bytes()).map(drop)
+        body.attr_u32(ATTR_IFINDEX, ifindex)
+            .nested(ATTR_SCAN_SSIDS, |ssids| {
+                // one empty SSID: a wildcard probe request
+                ssids.attr(1, &[]);
+            });
+        self.socket
+            .call(
+                "NL80211_CMD_TRIGGER_SCAN",
+                self.family.id,
+                0,
+                body.as_bytes(),
+            )
+            .map(drop)
     }
 }
 
@@ -596,21 +705,46 @@ impl Nl80211Monitor {
         let family = resolve_family(&mut resolver)?;
         let mut mask = 0u32;
         for group in [GROUP_SCAN, GROUP_MLME] {
-            let (name, id) = family.groups.iter().find(|(name, _)| name == group).ok_or(Error::MissingGroup { family: FAMILY_NAME, group })?;
+            let (name, id) = family.groups.iter().find(|(name, _)| name == group).ok_or(
+                Error::MissingGroup {
+                    family: FAMILY_NAME,
+                    group,
+                },
+            )?;
             if !(1..=32).contains(id) {
-                return Err(Error::GroupOutOfRange { name: name.clone(), id: *id });
+                return Err(Error::GroupOutOfRange {
+                    name: name.clone(),
+                    id: *id,
+                });
             }
             mask |= 1 << (id - 1);
         }
-        Ok(Self { socket: Socket::open(Some(GENERIC), mask, Mode::NonBlocking)?, family: family.id })
+        Ok(Self {
+            socket: Socket::open(Some(GENERIC), mask, Mode::NonBlocking)?,
+            family: family.id,
+        })
     }
 
     pub fn drain(&self) -> Result<Events> {
-        let Drained { datagrams, overflowed, truncated } = self.socket.drain()?;
-        let mut events = Events { overflowed, truncated, ..Events::default() };
+        let Drained {
+            datagrams,
+            overflowed,
+            truncated,
+        } = self.socket.drain()?;
+        let mut events = Events {
+            overflowed,
+            truncated,
+            ..Events::default()
+        };
         for datagram in &datagrams {
             for message in messages(datagram) {
-                match message.and_then(|message| if message.header.ty == self.family { parse_event(message.payload) } else { Ok(None) }) {
+                match message.and_then(|message| {
+                    if message.header.ty == self.family {
+                        parse_event(message.payload)
+                    } else {
+                        Ok(None)
+                    }
+                }) {
                     Ok(Some(event)) => events.events.push(event),
                     Ok(None) => {}
                     Err(error) => events.errors.push(error),
@@ -646,16 +780,28 @@ mod tests {
     #[test]
     fn decodes_the_family_and_its_groups() {
         let payload = message(1, |body| {
-            body.attr_cstr(CTRL_ATTR_FAMILY_NAME, "nl80211").attr(CTRL_ATTR_FAMILY_ID, &27u16.to_ne_bytes()).nested(CTRL_ATTR_MCAST_GROUPS, |groups| {
-                groups.nested(1, |group| {
-                    group.attr_cstr(CTRL_ATTR_MCAST_GRP_NAME, "scan").attr_u32(CTRL_ATTR_MCAST_GRP_ID, 5);
+            body.attr_cstr(CTRL_ATTR_FAMILY_NAME, "nl80211")
+                .attr(CTRL_ATTR_FAMILY_ID, &27u16.to_ne_bytes())
+                .nested(CTRL_ATTR_MCAST_GROUPS, |groups| {
+                    groups.nested(1, |group| {
+                        group
+                            .attr_cstr(CTRL_ATTR_MCAST_GRP_NAME, "scan")
+                            .attr_u32(CTRL_ATTR_MCAST_GRP_ID, 5);
+                    });
+                    groups.nested(2, |group| {
+                        group
+                            .attr_cstr(CTRL_ATTR_MCAST_GRP_NAME, "mlme")
+                            .attr_u32(CTRL_ATTR_MCAST_GRP_ID, 7);
+                    });
                 });
-                groups.nested(2, |group| {
-                    group.attr_cstr(CTRL_ATTR_MCAST_GRP_NAME, "mlme").attr_u32(CTRL_ATTR_MCAST_GRP_ID, 7);
-                });
-            });
         });
-        assert_eq!(parse_family(&payload), Ok(Family { id: 27, groups: vec![("scan".to_owned(), 5), ("mlme".to_owned(), 7)] }));
+        assert_eq!(
+            parse_family(&payload),
+            Ok(Family {
+                id: 27,
+                groups: vec![("scan".to_owned(), 5), ("mlme".to_owned(), 7)]
+            })
+        );
     }
 
     #[test]
@@ -663,15 +809,36 @@ mod tests {
         let started = message(CMD_TRIGGER_SCAN, |body| {
             body.attr_u32(ATTR_IFINDEX, 3);
         });
-        assert_eq!(parse_event(&started), Ok(Some(Event::ScanStarted { ifindex: 3 })));
+        assert_eq!(
+            parse_event(&started),
+            Ok(Some(Event::ScanStarted { ifindex: 3 }))
+        );
         let connected = message(CMD_CONNECT, |body| {
-            body.attr_u32(ATTR_IFINDEX, 3).attr(ATTR_MAC, &[2, 0, 0, 0, 0, 9]).attr(ATTR_STATUS_CODE, &0u16.to_ne_bytes());
+            body.attr_u32(ATTR_IFINDEX, 3)
+                .attr(ATTR_MAC, &[2, 0, 0, 0, 0, 9])
+                .attr(ATTR_STATUS_CODE, &0u16.to_ne_bytes());
         });
-        assert_eq!(parse_event(&connected), Ok(Some(Event::Connected { ifindex: 3, bssid: Some(MacAddr([2, 0, 0, 0, 0, 9])), status_code: Some(0) })));
+        assert_eq!(
+            parse_event(&connected),
+            Ok(Some(Event::Connected {
+                ifindex: 3,
+                bssid: Some(MacAddr([2, 0, 0, 0, 0, 9])),
+                status_code: Some(0)
+            }))
+        );
         let disconnected = message(CMD_DISCONNECT, |body| {
-            body.attr_u32(ATTR_IFINDEX, 3).attr(ATTR_REASON_CODE, &3u16.to_ne_bytes()).attr(ATTR_DISCONNECTED_BY_AP, &[]);
+            body.attr_u32(ATTR_IFINDEX, 3)
+                .attr(ATTR_REASON_CODE, &3u16.to_ne_bytes())
+                .attr(ATTR_DISCONNECTED_BY_AP, &[]);
         });
-        assert_eq!(parse_event(&disconnected), Ok(Some(Event::Disconnected { ifindex: 3, reason_code: 3, by_access_point: true })));
+        assert_eq!(
+            parse_event(&disconnected),
+            Ok(Some(Event::Disconnected {
+                ifindex: 3,
+                reason_code: 3,
+                by_access_point: true
+            }))
+        );
     }
 
     #[test]
@@ -679,7 +846,14 @@ mod tests {
         let timed_out = message(CMD_CONNECT, |body| {
             body.attr_u32(ATTR_IFINDEX, 3).attr(ATTR_TIMED_OUT, &[]);
         });
-        assert_eq!(parse_event(&timed_out), Ok(Some(Event::Connected { ifindex: 3, bssid: None, status_code: None })));
+        assert_eq!(
+            parse_event(&timed_out),
+            Ok(Some(Event::Connected {
+                ifindex: 3,
+                bssid: None,
+                status_code: None
+            }))
+        );
     }
 
     #[test]
@@ -687,7 +861,13 @@ mod tests {
         let broken = message(CMD_CONNECT, |body| {
             body.attr_u32(ATTR_IFINDEX, 3);
         });
-        assert_eq!(parse_event(&broken), Err(ParseError::MissingAttribute { message: "connect event", attribute: "NL80211_ATTR_STATUS_CODE" }));
+        assert_eq!(
+            parse_event(&broken),
+            Err(ParseError::MissingAttribute {
+                message: "connect event",
+                attribute: "NL80211_ATTR_STATUS_CODE"
+            })
+        );
     }
 
     #[test]
@@ -700,7 +880,10 @@ mod tests {
         // information elements: SSID "lab", RSN with one AKM suite, 00-0F-AC:8 (SAE)
         let elements = [
             &[0u8, 3, b'l', b'a', b'b'][..],
-            &[48, 20, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f, 0xac, 8, 0, 0],
+            &[
+                48, 20, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f,
+                0xac, 8, 0, 0,
+            ],
         ]
         .concat();
         let payload = message(CMD_NEW_SCAN_RESULTS, |body| {
@@ -734,18 +917,25 @@ mod tests {
     fn beacon_elements_are_used_when_there_is_no_probe_response() {
         let payload = message(CMD_NEW_SCAN_RESULTS, |body| {
             body.attr_u32(ATTR_IFINDEX, 3).nested(ATTR_BSS, |bss| {
-                bss.attr(BSS_BSSID, &[2, 0, 0, 0, 0, 7]).attr_u32(BSS_FREQUENCY, 2412).attr(BSS_BEACON_IES, &[0, 2, b'h', b'i']);
+                bss.attr(BSS_BSSID, &[2, 0, 0, 0, 0, 7])
+                    .attr_u32(BSS_FREQUENCY, 2412)
+                    .attr(BSS_BEACON_IES, &[0, 2, b'h', b'i']);
             });
         });
         let result = parse_scan_result(&payload).unwrap();
-        assert_eq!((result.ssid, result.security, result.signal_dbm), (Ssid(b"hi".to_vec()), Security::Open, None));
+        assert_eq!(
+            (result.ssid, result.security, result.signal_dbm),
+            (Ssid(b"hi".to_vec()), Security::Open, None)
+        );
     }
 
     #[test]
     fn a_bad_access_point_does_not_cost_the_good_ones() {
         let good = message(CMD_NEW_SCAN_RESULTS, |body| {
             body.attr_u32(ATTR_IFINDEX, 3).nested(ATTR_BSS, |bss| {
-                bss.attr(BSS_BSSID, &[2, 0, 0, 0, 0, 7]).attr_u32(BSS_FREQUENCY, 2412).attr(BSS_INFORMATION_ELEMENTS, &[0, 2, b'h', b'i']);
+                bss.attr(BSS_BSSID, &[2, 0, 0, 0, 0, 7])
+                    .attr_u32(BSS_FREQUENCY, 2412)
+                    .attr(BSS_INFORMATION_ELEMENTS, &[0, 2, b'h', b'i']);
             });
         });
         let bad = message(CMD_NEW_SCAN_RESULTS, |body| {
@@ -755,10 +945,21 @@ mod tests {
         });
         let mut raw = crate::message::frame(27, 2, 1, &good);
         raw.extend(crate::message::frame(27, 2, 1, &bad));
-        raw.extend(crate::message::frame(crate::message::NLMSG_DONE, 2, 1, &0i32.to_ne_bytes()));
+        raw.extend(crate::message::frame(
+            crate::message::NLMSG_DONE,
+            2,
+            1,
+            &0i32.to_ne_bytes(),
+        ));
         let dump = parse_scan_dump(&raw, 27).unwrap();
         assert_eq!(dump.results.len(), 1);
-        assert_eq!(dump.errors, [ParseError::MissingAttribute { message: "scan result", attribute: "NL80211_BSS_INFORMATION_ELEMENTS" }]);
+        assert_eq!(
+            dump.errors,
+            [ParseError::MissingAttribute {
+                message: "scan result",
+                attribute: "NL80211_BSS_INFORMATION_ELEMENTS"
+            }]
+        );
     }
 
     #[test]
@@ -780,10 +981,21 @@ mod tests {
             ssid: Some(Ssid(b"lab".to_vec())),
             frequency_mhz: Some(5220),
         };
-        let station = Station { bssid: MacAddr([2, 0, 0, 0, 0, 7]), signal_dbm: Some(-48), signal_average_dbm: None, inactive_ms: None };
+        let station = Station {
+            bssid: MacAddr([2, 0, 0, 0, 0, 7]),
+            signal_dbm: Some(-48),
+            signal_average_dbm: None,
+            inactive_ms: None,
+        };
         assert_eq!(
             connection(&interface, &[station]),
-            Some(Connection { ifindex: 3, ssid: Some(Ssid(b"lab".to_vec())), bssid: MacAddr([2, 0, 0, 0, 0, 7]), frequency_mhz: Some(5220), signal_dbm: Some(-48) })
+            Some(Connection {
+                ifindex: 3,
+                ssid: Some(Ssid(b"lab".to_vec())),
+                bssid: MacAddr([2, 0, 0, 0, 0, 7]),
+                frequency_mhz: Some(5220),
+                signal_dbm: Some(-48)
+            })
         );
         assert_eq!(connection(&interface, &[]), None);
     }
@@ -791,12 +1003,19 @@ mod tests {
     #[test]
     fn a_split_wiphy_part_without_a_name_is_left_out() {
         let first = message(3, |body| {
-            body.attr_u32(ATTR_WIPHY, 0).attr_cstr(ATTR_WIPHY_NAME, "phy0");
+            body.attr_u32(ATTR_WIPHY, 0)
+                .attr_cstr(ATTR_WIPHY_NAME, "phy0");
         });
         let later = message(3, |body| {
             body.attr_u32(ATTR_WIPHY, 0);
         });
-        assert_eq!(parse_wiphy(&first), Ok(Some(Wiphy { index: 0, name: "phy0".to_owned() })));
+        assert_eq!(
+            parse_wiphy(&first),
+            Ok(Some(Wiphy {
+                index: 0,
+                name: "phy0".to_owned()
+            }))
+        );
         assert_eq!(parse_wiphy(&later), Ok(None));
     }
 }

@@ -14,7 +14,9 @@ pub fn spring(duration: f64, bounce: f64) -> Curve {
 
 /// The spring of a tiling driver as an animation curve; the tiling drivers are springs.
 fn spring_curve(driver: Driver) -> Curve {
-    let Driver::Spring(params) = driver else { panic!("tiling drivers are springs") };
+    let Driver::Spring(params) = driver else {
+        panic!("tiling drivers are springs")
+    };
     Curve::Spring(params)
 }
 
@@ -54,10 +56,19 @@ pub const FULLSCREEN_CURVE: CubicBezier = CubicBezier::new(0.25, 0.0, 0.0, 1.0);
 impl Default for AnimationConfig {
     fn default() -> Self {
         let tiling = spring_curve(TilingSprings::default().frame);
-        let fullscreen = Curve::Timed { duration: FULLSCREEN_DURATION, bezier: FULLSCREEN_CURVE };
+        let fullscreen = Curve::Timed {
+            duration: FULLSCREEN_DURATION,
+            bezier: FULLSCREEN_CURVE,
+        };
         Self {
-            minimizing: Curve::Timed { duration: 0.5, bezier: CubicBezier::EASE_IN_EASE_OUT },
-            restoring: Curve::Timed { duration: 0.5, bezier: CubicBezier::EASE_IN_EASE_OUT },
+            minimizing: Curve::Timed {
+                duration: 0.5,
+                bezier: CubicBezier::EASE_IN_EASE_OUT,
+            },
+            restoring: Curve::Timed {
+                duration: 0.5,
+                bezier: CubicBezier::EASE_IN_EASE_OUT,
+            },
             enter_fullscreen: fullscreen,
             exit_fullscreen: fullscreen,
             tiling,
@@ -231,7 +242,10 @@ impl Default for SnapConfig {
             keep_titlebar_visible: true,
             titlebar_height: 28.0,
             preview_frame_curve: spring_curve(springs.frame),
-            preview_opacity_curve: Curve::Spring(SpringParams::from_ratio(PREVIEW_FADE_RESPONSE, 1.0)),
+            preview_opacity_curve: Curve::Spring(SpringParams::from_ratio(
+                PREVIEW_FADE_RESPONSE,
+                1.0,
+            )),
             preview_outset: 15.0,
             dwell_stillness: 5.0,
             preview_opacity: 0.5,
@@ -287,7 +301,11 @@ pub struct FocusConfig {
 
 impl Default for FocusConfig {
     fn default() -> Self {
-        Self { bring_all_to_front: false, restore_minimized_on_activate: true, place_modal_children_as_sheets: true }
+        Self {
+            bring_all_to_front: false,
+            restore_minimized_on_activate: true,
+            place_modal_children_as_sheets: true,
+        }
     }
 }
 
@@ -303,7 +321,10 @@ pub struct ZoomConfig {
 
 impl Default for ZoomConfig {
     fn default() -> Self {
-        Self { margin: 0.0, default_fill: 1.0 }
+        Self {
+            margin: 0.0,
+            default_fill: 1.0,
+        }
     }
 }
 
@@ -317,7 +338,10 @@ pub struct DesktopPeekConfig {
 
 impl Default for DesktopPeekConfig {
     fn default() -> Self {
-        Self { damping_ratio: 1.0, response: 0.3 }
+        Self {
+            damping_ratio: 1.0,
+            response: 0.3,
+        }
     }
 }
 
@@ -354,7 +378,10 @@ mod tests {
         assert!((p.perceptual_duration() - 0.3).abs() < 1e-12);
         let ratio = p.damping / (2.0 * (p.stiffness * p.mass).sqrt());
         assert!((ratio - 1.0).abs() < 1e-12);
-        assert!(matches!(WmConfig::default().desktop_peek.curve(), Curve::Spring(_)));
+        assert!(matches!(
+            WmConfig::default().desktop_peek.curve(),
+            Curve::Spring(_)
+        ));
     }
 
     #[test]
@@ -364,14 +391,21 @@ mod tests {
 
     #[test]
     fn tiling_spring_is_critically_damped_with_380ms_response() {
-        let Curve::Spring(p) = AnimationConfig::default().tiling else { panic!("spring expected") };
+        let Curve::Spring(p) = AnimationConfig::default().tiling else {
+            panic!("spring expected")
+        };
         let w0 = std::f64::consts::TAU / 0.38;
         assert_eq!((p.mass, p.stiffness, p.damping), (1.0, w0 * w0, 2.0 * w0));
     }
 
     #[test]
     fn fullscreen_is_half_a_second_on_the_verified_curve() {
-        let Curve::Timed { duration, bezier } = AnimationConfig::default().enter_fullscreen else { panic!("timed expected") };
-        assert_eq!((duration, bezier), (0.5, CubicBezier::new(0.25, 0.0, 0.0, 1.0)));
+        let Curve::Timed { duration, bezier } = AnimationConfig::default().enter_fullscreen else {
+            panic!("timed expected")
+        };
+        assert_eq!(
+            (duration, bezier),
+            (0.5, CubicBezier::new(0.25, 0.0, 0.0, 1.0))
+        );
     }
 }

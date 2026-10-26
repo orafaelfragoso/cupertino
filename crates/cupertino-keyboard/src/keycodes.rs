@@ -131,21 +131,31 @@ pub const LAYOUT_KEY_TABLE: &[(u8, u32, &str)] = &[
 ];
 
 pub fn evdev_of(layout_key: u8) -> Option<u32> {
-    LAYOUT_KEY_TABLE.iter().find(|(k, _, _)| *k == layout_key).map(|(_, e, _)| *e)
+    LAYOUT_KEY_TABLE
+        .iter()
+        .find(|(k, _, _)| *k == layout_key)
+        .map(|(_, e, _)| *e)
 }
 
 pub fn layout_key_of(evdev: u32) -> Option<u8> {
-    LAYOUT_KEY_TABLE.iter().find(|(_, e, _)| *e == evdev).map(|(k, _, _)| *k)
+    LAYOUT_KEY_TABLE
+        .iter()
+        .find(|(_, e, _)| *e == evdev)
+        .map(|(k, _, _)| *k)
 }
 
 pub fn xkb_name_of(layout_key: u8) -> Option<&'static str> {
-    LAYOUT_KEY_TABLE.iter().find(|(k, _, _)| *k == layout_key).map(|(_, _, n)| *n)
+    LAYOUT_KEY_TABLE
+        .iter()
+        .find(|(k, _, _)| *k == layout_key)
+        .map(|(_, _, n)| *n)
 }
 
 /// Keys of the alphanumeric block that carry characters: everything up to 0x32 except Return and Tab, plus the
 /// three extra keys of Japanese keyboards (0x5D yen, 0x5E ro, 0x5F keypad comma).
 pub fn is_character_key(layout_key: u8) -> bool {
-    (layout_key <= 0x32 && layout_key != 0x24 && layout_key != 0x30) || (0x5D..=0x5F).contains(&layout_key)
+    (layout_key <= 0x32 && layout_key != 0x24 && layout_key != 0x30)
+        || (0x5D..=0x5F).contains(&layout_key)
 }
 
 #[cfg(test)]

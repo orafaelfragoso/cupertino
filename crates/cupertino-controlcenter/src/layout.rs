@@ -83,19 +83,46 @@ impl Layout {
         let top = y;
         let small = (column - SPACING) / 2.0;
         let mut frames = Vec::with_capacity(Module::ALL.len());
-        for (index, module) in [Module::WiFi, Module::Bluetooth, Module::FileSharing].into_iter().enumerate() {
-            frames.push((module, Rect::new(PADDING, top + index as f64 * (ROW_HEIGHT + ROW_SPACING), column, ROW_HEIGHT)));
+        for (index, module) in [Module::WiFi, Module::Bluetooth, Module::FileSharing]
+            .into_iter()
+            .enumerate()
+        {
+            frames.push((
+                module,
+                Rect::new(
+                    PADDING,
+                    top + index as f64 * (ROW_HEIGHT + ROW_SPACING),
+                    column,
+                    ROW_HEIGHT,
+                ),
+            ));
         }
-        frames.push((Module::FocusMode, Rect::new(right_x, top, column, COMPACT_HEIGHT)));
+        frames.push((
+            Module::FocusMode,
+            Rect::new(right_x, top, column, COMPACT_HEIGHT),
+        ));
         let second = top + COMPACT_HEIGHT + SPACING;
-        frames.push((Module::Stage, Rect::new(right_x, second, small, COMPACT_HEIGHT)));
-        frames.push((Module::ScreenMirroring, Rect::new(right_x + small + SPACING, second, small, COMPACT_HEIGHT)));
+        frames.push((
+            Module::Stage,
+            Rect::new(right_x, second, small, COMPACT_HEIGHT),
+        ));
+        frames.push((
+            Module::ScreenMirroring,
+            Rect::new(right_x + small + SPACING, second, small, COMPACT_HEIGHT),
+        ));
         let mut row_y = top + CONNECTIVITY_HEIGHT + SPACING;
         for module in [Module::Display, Module::Sound, Module::NowPlaying] {
-            frames.push((module, Rect::new(PADDING, row_y, PANEL_WIDTH - 2.0 * PADDING, COMPACT_HEIGHT)));
+            frames.push((
+                module,
+                Rect::new(PADDING, row_y, PANEL_WIDTH - 2.0 * PADDING, COMPACT_HEIGHT),
+            ));
             row_y += COMPACT_HEIGHT + SPACING;
         }
-        Layout { size: Size::new(PANEL_WIDTH, row_y - SPACING + PADDING), battery, frames }
+        Layout {
+            size: Size::new(PANEL_WIDTH, row_y - SPACING + PADDING),
+            battery,
+            frames,
+        }
     }
 
     /// Size of the card.
@@ -115,19 +142,32 @@ impl Layout {
 
     /// The frame of a module: a connectivity row, or the tile itself.
     pub fn frame(&self, module: Module) -> Rect {
-        self.frames.iter().find(|(m, _)| *m == module).map(|(_, frame)| *frame).expect("every module has a frame")
+        self.frames
+            .iter()
+            .find(|(m, _)| *m == module)
+            .map(|(_, frame)| *frame)
+            .expect("every module has a frame")
     }
 
     /// The compact tiles, which carry a background. The connectivity rows sit on the card itself: three rows of 40 and
     /// two gaps of 7 fill the 134 points exactly, leaving no room for a padded background.
     pub fn tiles(&self) -> Vec<Rect> {
-        self.frames.iter().filter(|(m, _)| !matches!(m, Module::WiFi | Module::Bluetooth | Module::FileSharing)).map(|(_, frame)| *frame).collect()
+        self.frames
+            .iter()
+            .filter(|(m, _)| !matches!(m, Module::WiFi | Module::Bluetooth | Module::FileSharing))
+            .map(|(_, frame)| *frame)
+            .collect()
     }
 
     /// The track of a slider, inside its tile.
     pub fn track(&self, slider: Slider) -> Rect {
         let tile = self.frame(slider.module());
-        Rect::new(tile.x() + SLIDER_SIDE_INSET, tile.max_y() - SLIDER_BOTTOM_INSET - TRACK_HEIGHT, tile.width() - 2.0 * SLIDER_SIDE_INSET, TRACK_HEIGHT)
+        Rect::new(
+            tile.x() + SLIDER_SIDE_INSET,
+            tile.max_y() - SLIDER_BOTTOM_INSET - TRACK_HEIGHT,
+            tile.width() - 2.0 * SLIDER_SIDE_INSET,
+            TRACK_HEIGHT,
+        )
     }
 
     /// What lies under `point` (card coordinates).
@@ -168,13 +208,22 @@ mod tests {
         let layout = Layout::new(false);
         assert_eq!(rect(&layout, Module::WiFi), (10.0, 10.0, 134.0, 40.0));
         assert_eq!(rect(&layout, Module::Bluetooth), (10.0, 57.0, 134.0, 40.0));
-        assert_eq!(rect(&layout, Module::FileSharing), (10.0, 104.0, 134.0, 40.0));
+        assert_eq!(
+            rect(&layout, Module::FileSharing),
+            (10.0, 104.0, 134.0, 40.0)
+        );
         assert_eq!(rect(&layout, Module::FocusMode), (154.0, 10.0, 134.0, 62.0));
         assert_eq!(rect(&layout, Module::Stage), (154.0, 82.0, 62.0, 62.0));
-        assert_eq!(rect(&layout, Module::ScreenMirroring), (226.0, 82.0, 62.0, 62.0));
+        assert_eq!(
+            rect(&layout, Module::ScreenMirroring),
+            (226.0, 82.0, 62.0, 62.0)
+        );
         assert_eq!(rect(&layout, Module::Display), (10.0, 154.0, 278.0, 62.0));
         assert_eq!(rect(&layout, Module::Sound), (10.0, 226.0, 278.0, 62.0));
-        assert_eq!(rect(&layout, Module::NowPlaying), (10.0, 298.0, 278.0, 62.0));
+        assert_eq!(
+            rect(&layout, Module::NowPlaying),
+            (10.0, 298.0, 278.0, 62.0)
+        );
         assert_eq!(layout.size(), Size::new(298.0, 370.0));
     }
 
@@ -182,7 +231,10 @@ mod tests {
     fn a_battery_adds_a_28_point_first_row() {
         let layout = Layout::new(true);
         let battery = layout.battery().expect("a battery row");
-        assert_eq!((battery.x(), battery.y(), battery.width(), battery.height()), (10.0, 10.0, 278.0, 28.0));
+        assert_eq!(
+            (battery.x(), battery.y(), battery.width(), battery.height()),
+            (10.0, 10.0, 278.0, 28.0)
+        );
         assert_eq!(rect(&layout, Module::WiFi), (10.0, 48.0, 134.0, 40.0));
         assert_eq!(layout.size(), Size::new(298.0, 408.0));
         assert_eq!(Layout::new(false).battery(), None);
@@ -192,7 +244,10 @@ mod tests {
     fn the_slider_track_is_22_high_at_the_bottom_of_its_tile() {
         let layout = Layout::new(false);
         let track = layout.track(Slider::Display);
-        assert_eq!((track.x(), track.y(), track.width(), track.height()), (22.0, 184.0, 254.0, 22.0));
+        assert_eq!(
+            (track.x(), track.y(), track.width(), track.height()),
+            (22.0, 184.0, 254.0, 22.0)
+        );
     }
 
     #[test]
@@ -208,15 +263,36 @@ mod tests {
     #[test]
     fn hit_testing_finds_rows_tiles_sliders_and_the_outside() {
         let layout = Layout::new(false);
-        assert_eq!(layout.hit(Point::new(50.0, 30.0)), Hit::Toggle(Module::WiFi));
-        assert_eq!(layout.hit(Point::new(50.0, 77.0)), Hit::Toggle(Module::Bluetooth));
-        assert_eq!(layout.hit(Point::new(200.0, 40.0)), Hit::Toggle(Module::FocusMode));
-        assert_eq!(layout.hit(Point::new(240.0, 100.0)), Hit::Toggle(Module::ScreenMirroring));
-        assert_eq!(layout.hit(Point::new(149.0, 193.0)), Hit::Slider(Slider::Display, 0.5));
-        assert_eq!(layout.hit(Point::new(149.0, 263.0)), Hit::Slider(Slider::Sound, 0.5));
+        assert_eq!(
+            layout.hit(Point::new(50.0, 30.0)),
+            Hit::Toggle(Module::WiFi)
+        );
+        assert_eq!(
+            layout.hit(Point::new(50.0, 77.0)),
+            Hit::Toggle(Module::Bluetooth)
+        );
+        assert_eq!(
+            layout.hit(Point::new(200.0, 40.0)),
+            Hit::Toggle(Module::FocusMode)
+        );
+        assert_eq!(
+            layout.hit(Point::new(240.0, 100.0)),
+            Hit::Toggle(Module::ScreenMirroring)
+        );
+        assert_eq!(
+            layout.hit(Point::new(149.0, 193.0)),
+            Hit::Slider(Slider::Display, 0.5)
+        );
+        assert_eq!(
+            layout.hit(Point::new(149.0, 263.0)),
+            Hit::Slider(Slider::Sound, 0.5)
+        );
         // the gap between the connectivity rows, and the title area of the display tile
         assert_eq!(layout.hit(Point::new(50.0, 53.0)), Hit::Panel);
-        assert_eq!(layout.hit(Point::new(50.0, 160.0)), Hit::Toggle(Module::Display));
+        assert_eq!(
+            layout.hit(Point::new(50.0, 160.0)),
+            Hit::Toggle(Module::Display)
+        );
         assert_eq!(layout.hit(Point::new(-1.0, 30.0)), Hit::Outside);
         assert_eq!(layout.hit(Point::new(150.0, 371.0)), Hit::Outside);
     }
@@ -225,8 +301,17 @@ mod tests {
     fn the_knob_hit_frame_reaches_nine_points_past_the_track() {
         let layout = Layout::new(false);
         // the track spans x = 22..276, y = 184..206, its hit frame x = 13..285, y = 175..215
-        assert_eq!(layout.hit(Point::new(14.0, 193.0)), Hit::Slider(Slider::Display, 0.0));
-        assert_eq!(layout.hit(Point::new(100.0, 176.0)), Hit::Slider(Slider::Display, (100.0 - 22.0 - 11.0) / 232.0));
-        assert_eq!(layout.hit(Point::new(100.0, 174.0)), Hit::Toggle(Module::Display));
+        assert_eq!(
+            layout.hit(Point::new(14.0, 193.0)),
+            Hit::Slider(Slider::Display, 0.0)
+        );
+        assert_eq!(
+            layout.hit(Point::new(100.0, 176.0)),
+            Hit::Slider(Slider::Display, (100.0 - 22.0 - 11.0) / 232.0)
+        );
+        assert_eq!(
+            layout.hit(Point::new(100.0, 174.0)),
+            Hit::Toggle(Module::Display)
+        );
     }
 }

@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use cupertino_assets::Assets;
-use cupertino_client::{Anchor, Button, Client, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig, Margin, PointerEvent};
+use cupertino_client::{
+    Anchor, Button, Client, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig, Margin,
+    PointerEvent,
+};
 use cupertino_geometry::{Point, Rect};
 use cupertino_screenshot::filename::{self, LocalTime};
 use cupertino_screenshot::image;
@@ -36,19 +39,30 @@ fn local_now() -> Result<LocalTime> {
     if unsafe { libc::localtime_r(&now, &mut tm) }.is_null() {
         return Err(std::io::Error::last_os_error().into());
     }
-    Ok(LocalTime { year: tm.tm_year + 1900, month: (tm.tm_mon + 1) as u32, day: tm.tm_mday as u32, hour: tm.tm_hour as u32, minute: tm.tm_min as u32, second: tm.tm_sec as u32 })
+    Ok(LocalTime {
+        year: tm.tm_year + 1900,
+        month: (tm.tm_mon + 1) as u32,
+        day: tm.tm_mday as u32,
+        hour: tm.tm_hour as u32,
+        minute: tm.tm_min as u32,
+        second: tm.tm_sec as u32,
+    })
 }
 
 /// The directory `settings` sends files to, created when missing.
 fn directory(settings: &Settings) -> Result<PathBuf> {
     let home = PathBuf::from(std::env::var_os("HOME").ok_or("HOME is not set")?);
-    let config = cupertino_defaults::config_home().ok_or("neither XDG_CONFIG_HOME nor HOME is set")?;
+    let config =
+        cupertino_defaults::config_home().ok_or("neither XDG_CONFIG_HOME nor HOME is set")?;
     let user_dirs = match std::fs::read_to_string(config.join("user-dirs.dirs")) {
         Ok(text) => parse_user_dirs(&text, &home),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(e.into()),
     };
-    let dir = settings.location.directory(&home, &user_dirs).expect("the clipboard is not a directory");
+    let dir = settings
+        .location
+        .directory(&home, &user_dirs)
+        .expect("the clipboard is not a directory");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }
@@ -60,23 +74,39 @@ fn write_files(dir: &Path, shots: &[Shot]) -> Result<()> {
         let path = filename::free_path(dir, &base, |p| p.exists());
         let png = image::png(&shot.image)?;
         // a file that appeared since the name was chosen is not overwritten
-        OpenOptions::new().write(true).create_new(true).open(&path)?.write_all(&png)?;
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?
+            .write_all(&png)?;
         println!("{}", path.display());
     }
     Ok(())
 }
 
 /// Save the shots: after the thumbnail commits when it is on, else at once.
-pub fn to_files(client: &mut Client, screens: &[Screen], shots: &[Shot], settings: &Settings, assets: &Assets) -> Result<()> {
+pub fn to_files(
+    client: &mut Client,
+    screens: &[Screen],
+    shots: &[Shot],
+    settings: &Settings,
+    assets: &Assets,
+) -> Result<()> {
     let dir = directory(settings)?;
     if !settings.show_thumbnail {
         return write_files(&dir, shots);
     }
     let first = &shots[0].image;
     let screen = (screens[0].rect.width(), screens[0].rect.height());
-    let size = thumbnail::size((f64::from(first.width()), f64::from(first.height())), screen);
+    let size = thumbnail::size(
+        (f64::from(first.width()), f64::from(first.height())),
+        screen,
+    );
     let outset = THUMBNAIL_SHADOW_OUTSET;
-    let surface_size = ((size.0 + 2.0 * outset).ceil() as u32, (size.1 + 2.0 * outset).ceil() as u32);
+    let surface_size = (
+        (size.0 + 2.0 * outset).ceil() as u32,
+        (size.1 + 2.0 * outset).ceil() as u32,
+    );
     // the thumbnail's rectangle sits 16 pt inside the bottom-right corner; its surface carries the shadow
     // outset around it, so the margins are negative by that much. Anchored with an exclusive zone of 0 it stays
     // clear of the dock, which stands in for the design's move above the dock.
@@ -87,13 +117,25 @@ pub fn to_files(client: &mut Client, screens: &[Screen], shots: &[Shot], setting
         layer: Layer::Overlay,
         anchor: Anchor::Bottom | Anchor::Right,
         size: surface_size,
-        margin: Margin { right: margin, bottom: margin, ..Margin::default() },
+        margin: Margin {
+            right: margin,
+            bottom: margin,
+            ..Margin::default()
+        },
         exclusive_zone: 0,
         keyboard: KeyboardInteractivity::None,
     })?;
     let theme = Theme::load()?;
-    let appearance = if client.is_dark() { Appearance::Dark } else { Appearance::Light };
-    let mut painter = Painter::new(Palette::from_theme(&theme, appearance)?, theme.tokens.typography().clone(), assets)?;
+    let appearance = if client.is_dark() {
+        Appearance::Dark
+    } else {
+        Appearance::Light
+    };
+    let mut painter = Painter::new(
+        Palette::from_theme(&theme, appearance)?,
+        theme.tokens.typography().clone(),
+        assets,
+    )?;
     let start = Instant::now();
     let now = || start.elapsed().as_secs_f64();
     let mut model = Thumbnail::new(size.0, now());
@@ -101,7 +143,9 @@ pub fn to_files(client: &mut Client, screens: &[Screen], shots: &[Shot], setting
     let mut written = false;
     let image_rect = Rect::new(outset, outset, size.0, size.1);
     loop {
-        let timeout = model.deadline().map(|at| Duration::from_secs_f64((at - now()).max(0.0)));
+        let timeout = model
+            .deadline()
+            .map(|at| Duration::from_secs_f64((at - now()).max(0.0)));
         for event in client.wait(timeout)? {
             match event {
                 Event::Draw(s) if s == surface => {
@@ -126,12 +170,25 @@ pub fn to_files(client: &mut Client, screens: &[Screen], shots: &[Shot], setting
                     }
                 }
                 Event::Pointer { surface: s, event } if s == surface => match event {
-                    PointerEvent::Button { button: Button::Left, pressed: true, position } => model.press(position, now()),
-                    PointerEvent::Button { button: Button::Left, pressed: false, .. } => model.release(now()),
+                    PointerEvent::Button {
+                        button: Button::Left,
+                        pressed: true,
+                        position,
+                    } => model.press(position, now()),
+                    PointerEvent::Button {
+                        button: Button::Left,
+                        pressed: false,
+                        ..
+                    } => model.release(now()),
                     PointerEvent::Motion(p) => model.motion(Point::new(p.x, p.y), now()),
-                    PointerEvent::Enter(_) | PointerEvent::Leave | PointerEvent::Button { .. } | PointerEvent::Scroll { .. } => {}
+                    PointerEvent::Enter(_)
+                    | PointerEvent::Leave
+                    | PointerEvent::Button { .. }
+                    | PointerEvent::Scroll { .. } => {}
                 },
-                Event::Closed(s) if s == surface => return Err("the server closed the thumbnail".into()),
+                Event::Closed(s) if s == surface => {
+                    return Err("the server closed the thumbnail".into())
+                }
                 // the thumbnail takes no keys and has no popups or roles; its look is fixed for its few seconds
                 _ => {}
             }
@@ -170,7 +227,9 @@ pub fn to_clipboard(client: &mut Client, capturer: &mut Capturer, shot: &Shot) -
     let deadline = Instant::now() + FOCUS_TIMEOUT;
     // the keyboard enter that follows the first commit brings a new serial
     while client.input_serial() == before || client.input_serial().is_none() {
-        let left = deadline.checked_duration_since(Instant::now()).ok_or("the server gave the clipboard surface no keyboard focus")?;
+        let left = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or("the server gave the clipboard surface no keyboard focus")?;
         for event in client.wait(Some(left))? {
             if event == Event::Draw(surface) {
                 client.set_input_region(surface, &[])?;

@@ -10,19 +10,13 @@
 /// two entries: acceleration 0 → `(1, 1)`; acceleration 1 → nine points up to `(40, 150).
 /// Laid out as header, then per entry its header followed by one row per point.
 pub const DEFAULT_TABLE: [u8; 102] = [
-    0x00, 0x00, 0x80, 0x00, 0x40, 0x32, 0x30, 0x30, 0x00, 0x02,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
-    0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
-    0x00, 0x01, 0x00, 0x00, 0x00, 0x09,
-    0x00, 0x00, 0x71, 0x3b, 0x00, 0x00, 0x60, 0x00,
-    0x00, 0x04, 0x4e, 0xc5, 0x00, 0x10, 0x80, 0x00,
-    0x00, 0x0c, 0x00, 0x00, 0x00, 0x5f, 0x00, 0x00,
-    0x00, 0x16, 0xec, 0x4f, 0x00, 0x8b, 0x00, 0x00,
-    0x00, 0x1d, 0x3b, 0x14, 0x00, 0x94, 0x80, 0x00,
-    0x00, 0x22, 0x76, 0x27, 0x00, 0x96, 0x00, 0x00,
-    0x00, 0x24, 0x62, 0x76, 0x00, 0x96, 0x00, 0x00,
-    0x00, 0x26, 0x00, 0x00, 0x00, 0x96, 0x00, 0x00,
-    0x00, 0x28, 0x00, 0x00, 0x00, 0x96, 0x00, 0x00,
+    0x00, 0x00, 0x80, 0x00, 0x40, 0x32, 0x30, 0x30, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00,
+    0x71, 0x3b, 0x00, 0x00, 0x60, 0x00, 0x00, 0x04, 0x4e, 0xc5, 0x00, 0x10, 0x80, 0x00, 0x00, 0x0c,
+    0x00, 0x00, 0x00, 0x5f, 0x00, 0x00, 0x00, 0x16, 0xec, 0x4f, 0x00, 0x8b, 0x00, 0x00, 0x00, 0x1d,
+    0x3b, 0x14, 0x00, 0x94, 0x80, 0x00, 0x00, 0x22, 0x76, 0x27, 0x00, 0x96, 0x00, 0x00, 0x00, 0x24,
+    0x62, 0x76, 0x00, 0x96, 0x00, 0x00, 0x00, 0x26, 0x00, 0x00, 0x00, 0x96, 0x00, 0x00, 0x00, 0x28,
+    0x00, 0x00, 0x00, 0x96, 0x00, 0x00,
 ];
 
 /// The two signatures a table may carry.
@@ -94,11 +88,16 @@ impl AccelTable {
         let entries = (0..r.count()?)
             .map(|_| {
                 let acceleration = r.fixed()?;
-                let points: Vec<(f64, f64)> = (0..r.count()?).map(|_| Ok((r.fixed()?, r.fixed()?))).collect::<Result<_, _>>()?;
+                let points: Vec<(f64, f64)> = (0..r.count()?)
+                    .map(|_| Ok((r.fixed()?, r.fixed()?)))
+                    .collect::<Result<_, _>>()?;
                 if points.is_empty() || points.iter().any(|p| p.0 <= 0.0) {
                     return Err(TableError::Degenerate);
                 }
-                Ok(TableEntry { acceleration, points })
+                Ok(TableEntry {
+                    acceleration,
+                    points,
+                })
             })
             .collect::<Result<_, _>>()?;
         Ok(Self { scale, entries })
@@ -189,8 +188,16 @@ impl TableCurve {
     /// (the first segment starts at the origin); past the last point the last segment is
     /// extended.
     pub fn speed(&self, v: f64) -> f64 {
-        let i = self.points.iter().position(|p| p.0 >= v).unwrap_or(self.points.len() - 1);
-        let (x0, y0) = if i == 0 { (0.0, 0.0) } else { self.points[i - 1] };
+        let i = self
+            .points
+            .iter()
+            .position(|p| p.0 >= v)
+            .unwrap_or(self.points.len() - 1);
+        let (x0, y0) = if i == 0 {
+            (0.0, 0.0)
+        } else {
+            self.points[i - 1]
+        };
         let (x1, y1) = self.points[i];
         y0 + (y1 - y0) / (x1 - x0) * (v - x0)
     }
@@ -205,7 +212,13 @@ mod tests {
         let t = AccelTable::default_table();
         assert_eq!(t.scale, 0.5);
         assert_eq!(t.entries.len(), 2);
-        assert_eq!(t.entries[0], TableEntry { acceleration: 0.0, points: vec![(1.0, 1.0)] });
+        assert_eq!(
+            t.entries[0],
+            TableEntry {
+                acceleration: 0.0,
+                points: vec![(1.0, 1.0)]
+            }
+        );
         assert_eq!(t.entries[1].acceleration, 1.0);
         assert_eq!(
             t.entries[1].points,
@@ -225,16 +238,26 @@ mod tests {
 
     #[test]
     fn rejects_short_buffers_and_unknown_signatures() {
-        assert_eq!(AccelTable::parse(&DEFAULT_TABLE[..101]), Err(TableError::Truncated));
+        assert_eq!(
+            AccelTable::parse(&DEFAULT_TABLE[..101]),
+            Err(TableError::Truncated)
+        );
         // header + one entry {acceleration 0, n = 0}
-        let empty = [0, 0, 0x80, 0, b'@', b'2', b'0', b'0', 0, 1, 0, 0, 0, 0, 0, 0];
+        let empty = [
+            0, 0, 0x80, 0, b'@', b'2', b'0', b'0', 0, 1, 0, 0, 0, 0, 0, 0,
+        ];
         assert_eq!(AccelTable::parse(&empty), Err(TableError::Degenerate));
         // one entry with the point (0, 1)
-        let origin = [0, 0, 0x80, 0, b'@', b'2', b'0', b'0', 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0];
+        let origin = [
+            0, 0, 0x80, 0, b'@', b'2', b'0', b'0', 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0,
+        ];
         assert_eq!(AccelTable::parse(&origin), Err(TableError::Degenerate));
         let mut bad = DEFAULT_TABLE;
         bad[4..8].copy_from_slice(b"ABCD");
-        assert_eq!(AccelTable::parse(&bad), Err(TableError::Signature(*b"ABCD")));
+        assert_eq!(
+            AccelTable::parse(&bad),
+            Err(TableError::Signature(*b"ABCD"))
+        );
     }
 
     #[test]

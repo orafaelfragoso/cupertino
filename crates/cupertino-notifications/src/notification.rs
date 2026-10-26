@@ -51,11 +51,29 @@ pub struct ImageData {
 impl ImageData {
     /// Convert the `(iiibiiay)` structure of the specification. Only 8 bits per sample with 3
     /// (RGB) or 4 (RGBA) channels are accepted; anything else, or an inconsistent buffer, is `None`.
-    pub fn from_dbus(width: i32, height: i32, rowstride: i32, has_alpha: bool, bits_per_sample: i32, channels: i32, data: &[u8]) -> Option<ImageData> {
-        if width <= 0 || height <= 0 || bits_per_sample != 8 || !(channels == 3 || channels == 4) || (channels == 4) != has_alpha {
+    pub fn from_dbus(
+        width: i32,
+        height: i32,
+        rowstride: i32,
+        has_alpha: bool,
+        bits_per_sample: i32,
+        channels: i32,
+        data: &[u8],
+    ) -> Option<ImageData> {
+        if width <= 0
+            || height <= 0
+            || bits_per_sample != 8
+            || !(channels == 3 || channels == 4)
+            || (channels == 4) != has_alpha
+        {
             return None;
         }
-        let (w, h, stride, ch) = (width as usize, height as usize, rowstride as usize, channels as usize);
+        let (w, h, stride, ch) = (
+            width as usize,
+            height as usize,
+            rowstride as usize,
+            channels as usize,
+        );
         if rowstride <= 0 || stride < w * ch || w > 4096 || h > 4096 {
             return None;
         }
@@ -70,7 +88,11 @@ impl ImageData {
                 rgba.push(if ch == 4 { px[3] } else { 255 });
             }
         }
-        Some(ImageData { width: width as u32, height: height as u32, rgba })
+        Some(ImageData {
+            width: width as u32,
+            height: height as u32,
+            rgba,
+        })
     }
 
     pub fn to_pixmap(&self) -> Option<Pixmap> {
@@ -181,7 +203,14 @@ pub struct Notification {
 
 impl Notification {
     pub fn from_input(id: u32, input: NotifyInput, now: f64) -> Notification {
-        let actions = input.actions.chunks_exact(2).map(|p| Action { key: p[0].clone(), label: p[1].clone() }).collect();
+        let actions = input
+            .actions
+            .chunks_exact(2)
+            .map(|p| Action {
+                key: p[0].clone(),
+                label: p[1].clone(),
+            })
+            .collect();
         Notification {
             id,
             spans: markup::parse(&input.body),
@@ -236,7 +265,10 @@ mod tests {
         // 2x2 RGB, rowstride 8 (2 bytes padding per row)
         let data = [1, 2, 3, 4, 5, 6, 0, 0, 7, 8, 9, 10, 11, 12, 0, 0];
         let img = ImageData::from_dbus(2, 2, 8, false, 8, 3, &data).unwrap();
-        assert_eq!(img.rgba, vec![1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255]);
+        assert_eq!(
+            img.rgba,
+            vec![1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255]
+        );
         let pm = img.to_pixmap().unwrap();
         assert_eq!((pm.width(), pm.height()), (2, 2));
     }
@@ -254,7 +286,11 @@ mod tests {
 
     #[test]
     fn premultiplication_of_alpha_pixels() {
-        let img = ImageData { width: 1, height: 1, rgba: vec![255, 0, 0, 128] };
+        let img = ImageData {
+            width: 1,
+            height: 1,
+            rgba: vec![255, 0, 0, 128],
+        };
         let pm = img.to_pixmap().unwrap();
         let p = pm.pixels()[0];
         assert_eq!(p.alpha(), 128);
@@ -274,7 +310,9 @@ mod tests {
 
     #[test]
     fn input_conversion() {
-        let mut inp = NotifyInput::new("App", "Hi", "<b>x</b>").with_action("default", "Open").with_action("reply", "Reply");
+        let mut inp = NotifyInput::new("App", "Hi", "<b>x</b>")
+            .with_action("default", "Open")
+            .with_action("reply", "Reply");
         inp.actions.push("dangling".into());
         inp.hints.desktop_entry = Some("org.example.App.desktop".into());
         let n = Notification::from_input(5, inp, 1.0);

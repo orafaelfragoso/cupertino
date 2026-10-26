@@ -61,13 +61,19 @@ pub struct RepeatConfig {
 
 impl Default for RepeatConfig {
     fn default() -> Self {
-        RepeatConfig { initial_delay_ms: FALLBACK_INITIAL_MS, interval_ms: FALLBACK_INTERVAL_MS }
+        RepeatConfig {
+            initial_delay_ms: FALLBACK_INITIAL_MS,
+            interval_ms: FALLBACK_INTERVAL_MS,
+        }
     }
 }
 
 impl RepeatConfig {
     pub fn from_hid_ns(initial_ns: u64, interval_ns: u64) -> RepeatConfig {
-        RepeatConfig { initial_delay_ms: clamp_hid_ns(initial_ns), interval_ms: clamp_hid_ns(interval_ns) }
+        RepeatConfig {
+            initial_delay_ms: clamp_hid_ns(initial_ns),
+            interval_ms: clamp_hid_ns(interval_ns),
+        }
     }
 
     /// Builds a config from preference units (1/60 s each).
@@ -78,7 +84,10 @@ impl RepeatConfig {
 
     /// The repeat used while slow keys are on, whatever is configured.
     pub fn slow_keys() -> RepeatConfig {
-        RepeatConfig { initial_delay_ms: SLOW_KEYS_REPEAT_MS, interval_ms: SLOW_KEYS_REPEAT_MS }
+        RepeatConfig {
+            initial_delay_ms: SLOW_KEYS_REPEAT_MS,
+            interval_ms: SLOW_KEYS_REPEAT_MS,
+        }
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -91,13 +100,23 @@ impl RepeatConfig {
         if !self.is_enabled() {
             return RepeatInfo { rate: 0, delay: 0 };
         }
-        let rate = if self.interval_ms == 0 { 1000 } else { (1000.0 / self.interval_ms as f64).round() as i32 };
-        RepeatInfo { rate: rate.max(1), delay: self.initial_delay_ms as i32 }
+        let rate = if self.interval_ms == 0 {
+            1000
+        } else {
+            (1000.0 / self.interval_ms as f64).round() as i32
+        };
+        RepeatInfo {
+            rate: rate.max(1),
+            delay: self.initial_delay_ms as i32,
+        }
     }
 
     /// Preference units (1/60 s) for the initial delay and the interval.
     pub fn to_pref_units(&self) -> (f64, f64) {
-        (self.initial_delay_ms as f64 / UNIT_MS, self.interval_ms as f64 / UNIT_MS)
+        (
+            self.initial_delay_ms as f64 / UNIT_MS,
+            self.interval_ms as f64 / UNIT_MS,
+        )
     }
 }
 
@@ -168,7 +187,23 @@ pub fn hid_usage_repeats(page: u32, usage: u32) -> bool {
 pub fn evdev_repeats(code: u32) -> bool {
     !matches!(
         code,
-        29 | 42 | 54 | 56 | 58 | 69 | 97 | 100 | 113 | 116 | 125 | 126 | 139 | 142 | 161 | 164 | 207 | 464
+        29 | 42
+            | 54
+            | 56
+            | 58
+            | 69
+            | 97
+            | 100
+            | 113
+            | 116
+            | 125
+            | 126
+            | 139
+            | 142
+            | 161
+            | 164
+            | 207
+            | 464
     )
 }
 
@@ -190,7 +225,11 @@ pub struct KeyRepeater {
 
 impl KeyRepeater {
     pub fn new(cfg: RepeatConfig) -> KeyRepeater {
-        KeyRepeater { cfg, held: None, repeating: false }
+        KeyRepeater {
+            cfg,
+            held: None,
+            repeating: false,
+        }
     }
 
     pub fn config(&self) -> RepeatConfig {
@@ -265,7 +304,10 @@ pub struct CapsLockDelay {
 
 impl Default for CapsLockDelay {
     fn default() -> Self {
-        CapsLockDelay { delay_ms: 75, override_ms: None }
+        CapsLockDelay {
+            delay_ms: 75,
+            override_ms: None,
+        }
     }
 }
 
@@ -333,8 +375,21 @@ mod tests {
 
     #[test]
     fn repeat_info_conversion() {
-        assert_eq!(RepeatConfig::default().repeat_info(), RepeatInfo { rate: 12, delay: 500 });
-        assert_eq!(RepeatConfig { initial_delay_ms: 0, interval_ms: 83 }.repeat_info(), RepeatInfo { rate: 0, delay: 0 });
+        assert_eq!(
+            RepeatConfig::default().repeat_info(),
+            RepeatInfo {
+                rate: 12,
+                delay: 500
+            }
+        );
+        assert_eq!(
+            RepeatConfig {
+                initial_delay_ms: 0,
+                interval_ms: 83
+            }
+            .repeat_info(),
+            RepeatInfo { rate: 0, delay: 0 }
+        );
         assert_eq!(RepeatConfig::slow_keys().repeat_info().delay, 420);
     }
 
@@ -352,10 +407,29 @@ mod tests {
 
     #[test]
     fn repeater_single_key_semantics() {
-        let mut r = KeyRepeater::new(RepeatConfig { initial_delay_ms: 400, interval_ms: 100 });
+        let mut r = KeyRepeater::new(RepeatConfig {
+            initial_delay_ms: 400,
+            interval_ms: 100,
+        });
         r.press(30, 0, false);
         assert_eq!(r.poll(399), vec![]);
-        assert_eq!(r.poll(650), vec![RepeatTick { key: 30, time_ms: 400 }, RepeatTick { key: 30, time_ms: 500 }, RepeatTick { key: 30, time_ms: 600 }]);
+        assert_eq!(
+            r.poll(650),
+            vec![
+                RepeatTick {
+                    key: 30,
+                    time_ms: 400
+                },
+                RepeatTick {
+                    key: 30,
+                    time_ms: 500
+                },
+                RepeatTick {
+                    key: 30,
+                    time_ms: 600
+                }
+            ]
+        );
         assert!(r.is_repeating());
         r.press(31, 700, false);
         assert!(!r.is_repeating());
@@ -372,7 +446,10 @@ mod tests {
         assert_eq!(r.next_deadline(), None);
         r.press(30, 0, true);
         assert_eq!(r.next_deadline(), None);
-        r.set_config(RepeatConfig { initial_delay_ms: 0, interval_ms: 0 });
+        r.set_config(RepeatConfig {
+            initial_delay_ms: 0,
+            interval_ms: 0,
+        });
         r.press(30, 0, false);
         assert_eq!(r.next_deadline(), None);
     }
@@ -392,7 +469,10 @@ mod tests {
         let d = CapsLockDelay::default();
         assert!(!d.press_counts(74));
         assert!(d.press_counts(75));
-        let o = CapsLockDelay { delay_ms: 75, override_ms: Some(250) };
+        let o = CapsLockDelay {
+            delay_ms: 75,
+            override_ms: Some(250),
+        };
         assert!(!o.press_counts(200));
         assert!(o.press_counts(250));
         assert_eq!(caps_hold_duration(Some(0)), 500);

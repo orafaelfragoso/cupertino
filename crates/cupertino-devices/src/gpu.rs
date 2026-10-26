@@ -52,7 +52,10 @@ fn boot_vga(syspath: &Path, devices_dir: &Path) -> Result<bool> {
             "0" => Ok(false),
             other => Err(Error::Parse {
                 origin: path.display().to_string(),
-                source: ParseError::InvalidNumber { key: "boot_vga", value: other.to_owned() },
+                source: ParseError::InvalidNumber {
+                    key: "boot_vga",
+                    value: other.to_owned(),
+                },
             }),
         };
     }

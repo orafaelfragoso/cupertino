@@ -31,7 +31,9 @@ pub struct Lifecycle {
 impl Lifecycle {
     /// A hidden panel.
     pub fn new() -> Self {
-        Self { state: State::Hidden }
+        Self {
+            state: State::Hidden,
+        }
     }
 
     /// The phase at `now`.
@@ -56,7 +58,9 @@ impl Lifecycle {
     /// Seconds from `now` until the fade-out ends, while hiding.
     pub fn until_hidden(&self, now: f64) -> Option<f64> {
         match self.state {
-            State::Hiding(since) if self.phase(now) == Phase::Hiding => Some(since + FADE_SECONDS - now),
+            State::Hiding(since) if self.phase(now) == Phase::Hiding => {
+                Some(since + FADE_SECONDS - now)
+            }
             _ => None,
         }
     }
@@ -90,10 +94,19 @@ mod tests {
     #[test]
     fn a_toggle_opens_the_panel_at_full_opacity() {
         let mut lifecycle = Lifecycle::new();
-        assert_eq!((lifecycle.phase(0.0), lifecycle.opacity(0.0)), (Phase::Hidden, 0.0));
+        assert_eq!(
+            (lifecycle.phase(0.0), lifecycle.opacity(0.0)),
+            (Phase::Hidden, 0.0)
+        );
         lifecycle.toggle(10.0);
-        assert_eq!((lifecycle.phase(10.0), lifecycle.opacity(10.0)), (Phase::Shown, 1.0));
-        assert_eq!((lifecycle.phase(500.0), lifecycle.opacity(500.0)), (Phase::Shown, 1.0));
+        assert_eq!(
+            (lifecycle.phase(10.0), lifecycle.opacity(10.0)),
+            (Phase::Shown, 1.0)
+        );
+        assert_eq!(
+            (lifecycle.phase(500.0), lifecycle.opacity(500.0)),
+            (Phase::Shown, 1.0)
+        );
     }
 
     #[test]
@@ -101,10 +114,16 @@ mod tests {
         let mut lifecycle = Lifecycle::new();
         lifecycle.toggle(0.0);
         lifecycle.dismiss(1.0);
-        assert_eq!((lifecycle.phase(1.0), lifecycle.opacity(1.0)), (Phase::Hiding, 1.0));
+        assert_eq!(
+            (lifecycle.phase(1.0), lifecycle.opacity(1.0)),
+            (Phase::Hiding, 1.0)
+        );
         assert_eq!(lifecycle.opacity(1.119), 0.5);
         assert_eq!(lifecycle.phase(1.2379), Phase::Hiding);
-        assert_eq!((lifecycle.phase(1.238), lifecycle.opacity(1.238)), (Phase::Hidden, 0.0));
+        assert_eq!(
+            (lifecycle.phase(1.238), lifecycle.opacity(1.238)),
+            (Phase::Hidden, 0.0)
+        );
     }
 
     #[test]
@@ -125,7 +144,10 @@ mod tests {
         lifecycle.toggle(1.0);
         assert_eq!(lifecycle.phase(1.1), Phase::Hiding);
         lifecycle.toggle(1.1);
-        assert_eq!((lifecycle.phase(1.1), lifecycle.opacity(1.1)), (Phase::Shown, 1.0));
+        assert_eq!(
+            (lifecycle.phase(1.1), lifecycle.opacity(1.1)),
+            (Phase::Shown, 1.0)
+        );
     }
 
     #[test]

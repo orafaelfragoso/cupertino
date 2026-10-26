@@ -53,7 +53,10 @@ mod tests {
     fn the_window_opens_on_the_named_pane_or_the_first_row() {
         assert_eq!(args(&[]), Ok(PaneId::Wifi));
         assert_eq!(args(&["--pane", "keyboard"]), Ok(PaneId::Keyboard));
-        assert_eq!(args(&["--pane", "general"]), Err("unknown pane general".to_string()));
+        assert_eq!(
+            args(&["--pane", "general"]),
+            Err("unknown pane general".to_string())
+        );
         assert_eq!(args(&["--pane"]), Err("--pane needs a pane id".to_string()));
         assert!(args(&["keyboard"]).is_err());
     }

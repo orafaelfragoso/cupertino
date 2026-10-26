@@ -86,8 +86,19 @@ pub mod row {
 
 /// The sidebar groups of the minimum set, top to bottom. The second is the design's sortable group.
 pub const GROUPS: [&[PaneId]; 5] = [
-    &[PaneId::Wifi, PaneId::Bluetooth, PaneId::Network, PaneId::Battery],
-    &[PaneId::Accessibility, PaneId::Appearance, PaneId::ControlPanel, PaneId::DesktopDock, PaneId::Displays],
+    &[
+        PaneId::Wifi,
+        PaneId::Bluetooth,
+        PaneId::Network,
+        PaneId::Battery,
+    ],
+    &[
+        PaneId::Accessibility,
+        PaneId::Appearance,
+        PaneId::ControlPanel,
+        PaneId::DesktopDock,
+        PaneId::Displays,
+    ],
     &[PaneId::Sound, PaneId::Focus],
     &[PaneId::LockScreen],
     &[PaneId::Keyboard, PaneId::Mouse, PaneId::Trackpad],
@@ -125,13 +136,18 @@ pub fn standard_compare(a: &str, b: &str) -> Ordering {
 pub fn fold_width(c: char) -> char {
     match c {
         '\u{3000}' => ' ',
-        '\u{FF01}'..='\u{FF5E}' => char::from_u32(u32::from(c) - 0xFEE0).expect("the fullwidth ASCII block maps into ASCII"),
+        '\u{FF01}'..='\u{FF5E}' => char::from_u32(u32::from(c) - 0xFEE0)
+            .expect("the fullwidth ASCII block maps into ASCII"),
         _ => c,
     }
 }
 
 /// The rows of `groups` in display order: each group in its order, the sortable one (`sorted`) by title.
-pub fn ordered<T: Copy>(groups: &[&[T]], sorted: usize, title: impl Fn(T) -> String) -> Vec<Vec<T>> {
+pub fn ordered<T: Copy>(
+    groups: &[&[T]],
+    sorted: usize,
+    title: impl Fn(T) -> String,
+) -> Vec<Vec<T>> {
     groups
         .iter()
         .enumerate()
@@ -161,12 +177,21 @@ mod tests {
 
     #[test]
     fn the_minimum_set_shows_in_the_reference_order() {
-        let titles: Vec<Vec<&str>> = groups().iter().map(|g| g.iter().map(|p| p.pane().title).collect()).collect();
+        let titles: Vec<Vec<&str>> = groups()
+            .iter()
+            .map(|g| g.iter().map(|p| p.pane().title).collect())
+            .collect();
         assert_eq!(
             titles,
             [
                 vec!["Wi-Fi", "Bluetooth", "Network", "Battery"],
-                vec!["Accessibility", "Appearance", "Control Panel", "Desktop & Dock", "Displays"],
+                vec![
+                    "Accessibility",
+                    "Appearance",
+                    "Control Panel",
+                    "Desktop & Dock",
+                    "Displays"
+                ],
                 vec!["Sound", "Focus"],
                 vec!["Lock Screen"],
                 vec!["Keyboard", "Mouse", "Trackpad"],
@@ -177,25 +202,74 @@ mod tests {
     #[test]
     fn only_the_sortable_group_sorts_and_control_panel_falls_between_appearance_and_desktop() {
         // a mock full set: the design's sortable group in plist order, and an unsorted group that must keep its order
-        let full: [&[&str]; 2] = [&["Wallpaper", "Displays", "Accessibility", "Desktop & Dock", "Control Panel", "Appearance", "General", "Screen Saver"], &["Zeta", "Alpha"]];
+        let full: [&[&str]; 2] = [
+            &[
+                "Wallpaper",
+                "Displays",
+                "Accessibility",
+                "Desktop & Dock",
+                "Control Panel",
+                "Appearance",
+                "General",
+                "Screen Saver",
+            ],
+            &["Zeta", "Alpha"],
+        ];
         let order = ordered(&full, 0, |t: &str| t.to_string());
-        assert_eq!(order[0], ["Accessibility", "Appearance", "Control Panel", "Desktop & Dock", "Displays", "General", "Screen Saver", "Wallpaper"]);
-        assert_eq!(order[1], ["Zeta", "Alpha"], "groups other than the sortable one keep their order");
+        assert_eq!(
+            order[0],
+            [
+                "Accessibility",
+                "Appearance",
+                "Control Panel",
+                "Desktop & Dock",
+                "Displays",
+                "General",
+                "Screen Saver",
+                "Wallpaper"
+            ]
+        );
+        assert_eq!(
+            order[1],
+            ["Zeta", "Alpha"],
+            "groups other than the sortable one keep their order"
+        );
     }
 
     #[test]
     fn the_standard_compare_ignores_case_and_width_and_reads_numbers_by_value() {
-        assert_eq!(standard_compare("display 10", "Display 9"), Ordering::Greater);
-        assert_eq!(standard_compare("ａｐｐｅａｒａｎｃｅ", "Appearance"), Ordering::Greater, "equal but for width and case, then the raw text decides");
-        assert_eq!(standard_compare("ａｐｐｅａｒａｎｃｅ", "Arrange"), Ordering::Less);
-        assert!(!standard_compare("Éclair", "Eclair").is_eq(), "diacritics count");
+        assert_eq!(
+            standard_compare("display 10", "Display 9"),
+            Ordering::Greater
+        );
+        assert_eq!(
+            standard_compare("ａｐｐｅａｒａｎｃｅ", "Appearance"),
+            Ordering::Greater,
+            "equal but for width and case, then the raw text decides"
+        );
+        assert_eq!(
+            standard_compare("ａｐｐｅａｒａｎｃｅ", "Arrange"),
+            Ordering::Less
+        );
+        assert!(
+            !standard_compare("Éclair", "Eclair").is_eq(),
+            "diacritics count"
+        );
     }
 
     #[test]
     fn rows_and_icons_follow_the_row_size() {
-        let sizes: Vec<(f64, f64, f64)> = RowSize::ALL.iter().map(|r| (r.icon(), r.row_height(), r.font_size())).collect();
-        assert_eq!(sizes, [(16.0, 24.0, 11.0), (20.0, 28.0, 13.0), (24.0, 32.0, 15.0)]);
+        let sizes: Vec<(f64, f64, f64)> = RowSize::ALL
+            .iter()
+            .map(|r| (r.icon(), r.row_height(), r.font_size()))
+            .collect();
+        assert_eq!(
+            sizes,
+            [(16.0, 24.0, 11.0), (20.0, 28.0, 13.0), (24.0, 32.0, 15.0)]
+        );
         assert_eq!(RowSize::default(), RowSize::Medium);
-        assert!(RowSize::ALL.iter().all(|r| r.row_height() >= MIN_ROW_HEIGHT));
+        assert!(RowSize::ALL
+            .iter()
+            .all(|r| r.row_height() >= MIN_ROW_HEIGHT));
     }
 }

@@ -9,9 +9,9 @@
 //! `show_hidden` is set (default off, preference default of the design).
 
 use crate::entry::Entry;
-use cupertino_apps::MimeDatabase;
 use crate::recents;
 use crate::sort::{compare, insertion_index, sort_entries, SortSpec};
+use cupertino_apps::MimeDatabase;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -41,7 +41,14 @@ pub struct ModelOptions {
 
 impl Default for ModelOptions {
     fn default() -> Self {
-        ModelOptions { batch_size: DEFAULT_BATCH, show_hidden: false, sort: SortSpec::default(), watch: true, read_tags: false, types: None }
+        ModelOptions {
+            batch_size: DEFAULT_BATCH,
+            show_hidden: false,
+            sort: SortSpec::default(),
+            watch: true,
+            read_tags: false,
+            types: None,
+        }
     }
 }
 
@@ -49,16 +56,29 @@ impl Default for ModelOptions {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ModelDelta {
     /// Enumeration delivered a batch; the whole list was re-merged (indexes of older items may shift).
-    Reloaded { count: usize },
+    Reloaded {
+        count: usize,
+    },
     /// Enumeration finished.
-    LoadComplete { count: usize },
-    Inserted { index: usize },
+    LoadComplete {
+        count: usize,
+    },
+    Inserted {
+        index: usize,
+    },
     /// `index` refers to the list before removal.
-    Removed { index: usize },
+    Removed {
+        index: usize,
+    },
     /// The entry at `index` changed in place.
-    Changed { index: usize },
+    Changed {
+        index: usize,
+    },
     /// The entry moved (its sort key changed or it was renamed).
-    Moved { from: usize, to: usize },
+    Moved {
+        from: usize,
+        to: usize,
+    },
     /// The directory itself disappeared.
     DirectoryGone,
     Error(String),
@@ -162,7 +182,11 @@ impl DirectoryModel {
     }
 
     /// Open `dir`; `notify` runs on the model's threads whenever there is something to [`DirectoryModel::poll`].
-    pub fn open_notifying(dir: impl Into<PathBuf>, opts: ModelOptions, notify: Notify) -> io::Result<Self> {
+    pub fn open_notifying(
+        dir: impl Into<PathBuf>,
+        opts: ModelOptions,
+        notify: Notify,
+    ) -> io::Result<Self> {
         Self::start(dir.into(), opts, Some(notify))
     }
 
@@ -170,33 +194,65 @@ impl DirectoryModel {
     /// whenever the file is rewritten when `opts.watch` is set. Its [`DirectoryModel::dir`] is [`recents::RECENTS`].
     pub fn open_recents(xbel: PathBuf, opts: ModelOptions, notify: Notify) -> io::Result<Self> {
         let (tx, rx) = channel();
-        let mut model = DirectoryModel { dir: recents::location().to_path_buf(), opts: opts.clone(), entries: Vec::new(), rx, tx: tx.clone(), worker: None, watcher: None, loading: true };
-        let sink = Sink { tx, on_message: Some(notify) };
+        let mut model = DirectoryModel {
+            dir: recents::location().to_path_buf(),
+            opts: opts.clone(),
+            entries: Vec::new(),
+            rx,
+            tx: tx.clone(),
+            worker: None,
+            watcher: None,
+            loading: true,
+        };
+        let sink = Sink {
+            tx,
+            on_message: Some(notify),
+        };
         if opts.watch {
-            let folder = xbel.parent().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "the bookmark file has no folder"))?.to_path_buf();
+            let folder = xbel
+                .parent()
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "the bookmark file has no folder",
+                    )
+                })?
+                .to_path_buf();
             let (wsink, file, types) = (sink.clone(), xbel.clone(), opts.types.clone());
             // the file is replaced by a rename, so its folder is watched
-            let mut w = notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
-                Ok(ev) if ev.paths.contains(&file) && !matches!(ev.kind, EventKind::Access(_)) => {
-                    wsink.send(match recents::recent_entries(&file) {
-                        Ok(entries) => Msg::Replace(entries.into_iter().map(|e| typed(e, types.as_deref())).collect()),
-                        Err(e) => Msg::Error(format!("{}: {e}", file.display())),
-                    });
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    wsink.send(Msg::FsError(e.to_string()));
-                }
-            })
-            .map_err(io::Error::other)?;
-            w.watch(&folder, RecursiveMode::NonRecursive).map_err(io::Error::other)?;
+            let mut w =
+                notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
+                    Ok(ev)
+                        if ev.paths.contains(&file) && !matches!(ev.kind, EventKind::Access(_)) =>
+                    {
+                        wsink.send(match recents::recent_entries(&file) {
+                            Ok(entries) => Msg::Replace(
+                                entries
+                                    .into_iter()
+                                    .map(|e| typed(e, types.as_deref()))
+                                    .collect(),
+                            ),
+                            Err(e) => Msg::Error(format!("{}: {e}", file.display())),
+                        });
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        wsink.send(Msg::FsError(e.to_string()));
+                    }
+                })
+                .map_err(io::Error::other)?;
+            w.watch(&folder, RecursiveMode::NonRecursive)
+                .map_err(io::Error::other)?;
             model.watcher = Some(w);
         }
         let (spec, types) = (opts.sort, opts.types.clone());
         model.worker = Some(std::thread::spawn(move || {
             match recents::recent_entries(&xbel) {
                 Ok(entries) => {
-                    let mut entries: Vec<Entry> = entries.into_iter().map(|e| typed(e, types.as_deref())).collect();
+                    let mut entries: Vec<Entry> = entries
+                        .into_iter()
+                        .map(|e| typed(e, types.as_deref()))
+                        .collect();
                     sort_entries(&mut entries, &spec);
                     sink.send(Msg::Batch(entries));
                 }
@@ -212,10 +268,22 @@ impl DirectoryModel {
     fn start(dir: PathBuf, opts: ModelOptions, on_message: Option<Notify>) -> io::Result<Self> {
         let md = std::fs::metadata(&dir)?;
         if !md.is_dir() {
-            return Err(io::Error::new(io::ErrorKind::NotADirectory, "not a directory"));
+            return Err(io::Error::new(
+                io::ErrorKind::NotADirectory,
+                "not a directory",
+            ));
         }
         let (tx, rx) = channel();
-        let mut model = DirectoryModel { dir: dir.clone(), opts: opts.clone(), entries: Vec::new(), rx, tx: tx.clone(), worker: None, watcher: None, loading: true };
+        let mut model = DirectoryModel {
+            dir: dir.clone(),
+            opts: opts.clone(),
+            entries: Vec::new(),
+            rx,
+            tx: tx.clone(),
+            worker: None,
+            watcher: None,
+            loading: true,
+        };
         let sink = Sink { tx, on_message };
         // watch first so that nothing created during enumeration is missed
         if opts.watch {
@@ -228,7 +296,8 @@ impl DirectoryModel {
                 });
             })
             .map_err(io::Error::other)?;
-            w.watch(&dir, RecursiveMode::NonRecursive).map_err(io::Error::other)?;
+            w.watch(&dir, RecursiveMode::NonRecursive)
+                .map_err(io::Error::other)?;
             model.watcher = Some(w);
         }
         let batch = opts.batch_size.max(1);
@@ -331,21 +400,32 @@ impl DirectoryModel {
             Msg::Batch(mut b) => {
                 // the watcher runs during the enumeration: an item it listed already is not listed twice
                 if !self.entries.is_empty() {
-                    let listed: std::collections::HashSet<&str> = self.entries.iter().map(|e| e.name.as_str()).collect();
+                    let listed: std::collections::HashSet<&str> =
+                        self.entries.iter().map(|e| e.name.as_str()).collect();
                     b.retain(|e| !listed.contains(e.name.as_str()));
                 }
                 let old = std::mem::take(&mut self.entries);
-                self.entries = if old.is_empty() { b } else { merge_sorted(old, b, &self.opts.sort) };
-                out.push(ModelDelta::Reloaded { count: self.entries.len() });
+                self.entries = if old.is_empty() {
+                    b
+                } else {
+                    merge_sorted(old, b, &self.opts.sort)
+                };
+                out.push(ModelDelta::Reloaded {
+                    count: self.entries.len(),
+                });
             }
             Msg::Replace(mut entries) => {
                 sort_entries(&mut entries, &self.opts.sort);
                 self.entries = entries;
-                out.push(ModelDelta::Reloaded { count: self.entries.len() });
+                out.push(ModelDelta::Reloaded {
+                    count: self.entries.len(),
+                });
             }
             Msg::Done => {
                 self.loading = false;
-                out.push(ModelDelta::LoadComplete { count: self.entries.len() });
+                out.push(ModelDelta::LoadComplete {
+                    count: self.entries.len(),
+                });
             }
             Msg::Error(e) | Msg::FsError(e) => out.push(ModelDelta::Error(e)),
             Msg::Fs(ev) => self.apply_fs(ev, out),
@@ -360,11 +440,17 @@ impl DirectoryModel {
         if path.parent() != Some(self.dir.as_path()) {
             return;
         }
-        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { return };
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            return;
+        };
         if !self.visible(&name) {
             return;
         }
-        let Ok(new) = stat_entry(path.to_path_buf(), self.opts.read_tags, self.opts.types.as_deref()) else {
+        let Ok(new) = stat_entry(
+            path.to_path_buf(),
+            self.opts.read_tags,
+            self.opts.types.as_deref(),
+        ) else {
             self.remove_name(&name, out);
             return;
         };
@@ -372,7 +458,10 @@ impl DirectoryModel {
             Some(i) => {
                 let old = self.entries.remove(i);
                 let j = insertion_index(&self.entries, &new, &self.opts.sort);
-                let changed = old.size != new.size || old.modified != new.modified || old.kind != new.kind || old.tags != new.tags;
+                let changed = old.size != new.size
+                    || old.modified != new.modified
+                    || old.kind != new.kind
+                    || old.tags != new.tags;
                 self.entries.insert(j, new);
                 if j != i {
                     out.push(ModelDelta::Moved { from: i, to: j });
@@ -469,7 +558,10 @@ mod tests {
         m.entries().iter().map(|e| e.name.clone()).collect()
     }
 
-    fn pump_until(m: &mut DirectoryModel, mut cond: impl FnMut(&DirectoryModel) -> bool) -> Vec<ModelDelta> {
+    fn pump_until(
+        m: &mut DirectoryModel,
+        mut cond: impl FnMut(&DirectoryModel) -> bool,
+    ) -> Vec<ModelDelta> {
         let t = Instant::now();
         let mut all = Vec::new();
         while !cond(m) && t.elapsed() < Duration::from_secs(5) {
@@ -485,8 +577,18 @@ mod tests {
             std::fs::write(d.path().join(n), b"x").unwrap();
         }
         let v = enumerate_blocking(d.path(), &ModelOptions::default()).unwrap();
-        assert_eq!(v.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["A", "b2", "b10"]);
-        let all = enumerate_blocking(d.path(), &ModelOptions { show_hidden: true, ..Default::default() }).unwrap();
+        assert_eq!(
+            v.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+            ["A", "b2", "b10"]
+        );
+        let all = enumerate_blocking(
+            d.path(),
+            &ModelOptions {
+                show_hidden: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(all.len(), 4);
     }
 
@@ -496,12 +598,30 @@ mod tests {
         for i in 0..1000 {
             std::fs::write(d.path().join(format!("f{i}")), b"").unwrap();
         }
-        let mut m = DirectoryModel::open(d.path(), ModelOptions { batch_size: 100, watch: false, ..Default::default() }).unwrap();
+        let mut m = DirectoryModel::open(
+            d.path(),
+            ModelOptions {
+                batch_size: 100,
+                watch: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let deltas = m.wait_loaded();
-        assert!(deltas.iter().filter(|d| matches!(d, ModelDelta::Reloaded { .. })).count() >= 2, "{deltas:?}");
+        assert!(
+            deltas
+                .iter()
+                .filter(|d| matches!(d, ModelDelta::Reloaded { .. }))
+                .count()
+                >= 2,
+            "{deltas:?}"
+        );
         assert_eq!(m.len(), 1000);
         assert_eq!(&names(&m)[..3], ["f0", "f1", "f2"]);
-        assert!(m.entries().windows(2).all(|w| w[0].name_key <= w[1].name_key));
+        assert!(m
+            .entries()
+            .windows(2)
+            .all(|w| w[0].name_key <= w[1].name_key));
         assert!(!m.is_loading());
     }
 
@@ -509,7 +629,11 @@ mod tests {
     fn the_shared_mime_database_types_the_entries_as_the_icons_are_chosen() {
         let data = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(data.path().join("mime")).unwrap();
-        std::fs::write(data.path().join("mime/globs2"), "50:application/x-desktop:*.desktop\n50:image/png:*.png\n").unwrap();
+        std::fs::write(
+            data.path().join("mime/globs2"),
+            "50:application/x-desktop:*.desktop\n50:image/png:*.png\n",
+        )
+        .unwrap();
         let types = Arc::new(MimeDatabase::load(&[data.path().to_path_buf()]).unwrap());
         let d = tempfile::tempdir().unwrap();
         for f in ["editor.desktop", "photo.png", "notes.unknown"] {
@@ -517,12 +641,36 @@ mod tests {
         }
         std::fs::create_dir(d.path().join("folder")).unwrap();
         let kinds = |types: Option<Arc<MimeDatabase>>| -> Vec<(String, String)> {
-            let mut m = DirectoryModel::open(d.path(), ModelOptions { watch: false, types, ..ModelOptions::default() }).unwrap();
+            let mut m = DirectoryModel::open(
+                d.path(),
+                ModelOptions {
+                    watch: false,
+                    types,
+                    ..ModelOptions::default()
+                },
+            )
+            .unwrap();
             m.wait_loaded();
-            m.entries().iter().map(|e| (e.name.clone(), crate::mime::kind_description(&crate::mime::entry_mime(e)))).collect()
+            m.entries()
+                .iter()
+                .map(|e| {
+                    (
+                        e.name.clone(),
+                        crate::mime::kind_description(&crate::mime::entry_mime(e)),
+                    )
+                })
+                .collect()
         };
         let s = |a: &str, b: &str| (a.to_string(), b.to_string());
-        assert_eq!(kinds(Some(types)), [s("editor.desktop", "Application"), s("folder", "Folder"), s("notes.unknown", "Document"), s("photo.png", "PNG image")]);
+        assert_eq!(
+            kinds(Some(types)),
+            [
+                s("editor.desktop", "Application"),
+                s("folder", "Folder"),
+                s("notes.unknown", "Document"),
+                s("photo.png", "PNG image")
+            ]
+        );
         // without the database the extension guess knows no desktop entry
         assert_eq!(kinds(None)[0], s("editor.desktop", "Document"));
     }
@@ -530,12 +678,28 @@ mod tests {
     #[test]
     fn an_item_the_watcher_listed_during_the_enumeration_is_not_listed_twice() {
         let d = tempfile::tempdir().unwrap();
-        let mut m = DirectoryModel::open(d.path(), ModelOptions { watch: false, ..ModelOptions::default() }).unwrap();
+        let mut m = DirectoryModel::open(
+            d.path(),
+            ModelOptions {
+                watch: false,
+                ..ModelOptions::default()
+            },
+        )
+        .unwrap();
         m.wait_loaded();
         std::fs::write(d.path().join("made"), b"x").unwrap();
         let mut out = Vec::new();
-        m.apply(Msg::Fs(notify::Event::new(EventKind::Create(notify::event::CreateKind::File)).add_path(d.path().join("made"))), &mut out);
-        m.apply(Msg::Batch(vec![Entry::from_path(d.path().join("made")).unwrap()]), &mut out);
+        m.apply(
+            Msg::Fs(
+                notify::Event::new(EventKind::Create(notify::event::CreateKind::File))
+                    .add_path(d.path().join("made")),
+            ),
+            &mut out,
+        );
+        m.apply(
+            Msg::Batch(vec![Entry::from_path(d.path().join("made")).unwrap()]),
+            &mut out,
+        );
         assert_eq!(names(&m), ["made"]);
     }
 
@@ -582,9 +746,20 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("a"), vec![0u8; 10]).unwrap();
         std::fs::write(d.path().join("b"), vec![0u8; 1]).unwrap();
-        let mut m = DirectoryModel::open(d.path(), ModelOptions { watch: false, ..Default::default() }).unwrap();
+        let mut m = DirectoryModel::open(
+            d.path(),
+            ModelOptions {
+                watch: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         m.wait_loaded();
-        m.set_sort(SortSpec { key: crate::sort::SortKey::Size, ascending: true, folders_first: false });
+        m.set_sort(SortSpec {
+            key: crate::sort::SortKey::Size,
+            ascending: true,
+            folders_first: false,
+        });
         assert_eq!(names(&m), ["b", "a"]);
     }
 

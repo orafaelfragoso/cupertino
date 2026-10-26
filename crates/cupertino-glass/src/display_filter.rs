@@ -20,7 +20,10 @@ const GRAY: [f64; 3] = [0.3, 0.59, 0.11];
 
 /// Scale all entries by 1 / the largest row sum when that sum is below 1 (`Normalize`).
 fn normalize(m: Matrix) -> Matrix {
-    let max = m.iter().map(|r| r.iter().sum::<f64>()).fold(f64::NEG_INFINITY, f64::max);
+    let max = m
+        .iter()
+        .map(|r| r.iter().sum::<f64>())
+        .fold(f64::NEG_INFINITY, f64::max);
     if max < 1.0 {
         m.map(|r| r.map(|v| v / max))
     } else {
@@ -33,16 +36,32 @@ pub fn filter_matrix(filter: ColorFilter, intensity: f64) -> Matrix {
     let t = intensity.clamp(0.0, 1.0);
     let m = match filter {
         ColorFilter::Protanopia => [
-            [1.0 + 0.1232846863 * t, -0.123283886 * t, 1.667437058e-07 * t],
-            [-0.120003647 * t, 1.0 + 0.120002868 * t, -1.623060692e-07 * t],
-            [0.7325098937 * t, -0.7325051386 * t, 1.0 + 9.90726569e-07 * t],
+            [
+                1.0 + 0.1232846863 * t,
+                -0.123283886 * t,
+                1.667437058e-07 * t,
+            ],
+            [
+                -0.120003647 * t,
+                1.0 + 0.120002868 * t,
+                -1.623060692e-07 * t,
+            ],
+            [
+                0.7325098937 * t,
+                -0.7325051386 * t,
+                1.0 + 9.90726569e-07 * t,
+            ],
         ],
         ColorFilter::Deuteranopia => [
             [1.0 - 0.2356889393 * t, 0.9881298247 * t, -0.7524408854 * t],
             [-0.0719766168 * t, 1.0 + 0.1307082029 * t, -0.0587315861 * t],
             [0.8301453055 * t, -0.8926484 * t, 1.0 + 0.0625030946 * t],
         ],
-        ColorFilter::Tritanopia => [[1.0 + 0.1332794002 * t, 0.0, -0.1332794002 * t], [0.0, 1.0 + 0.52448918 * t, -0.52448918 * t], [0.0, 0.0, 1.0]],
+        ColorFilter::Tritanopia => [
+            [1.0 + 0.1332794002 * t, 0.0, -0.1332794002 * t],
+            [0.0, 1.0 + 0.52448918 * t, -0.52448918 * t],
+            [0.0, 0.0, 1.0],
+        ],
         ColorFilter::Grayscale => {
             let mut m = IDENTITY;
             for row in &mut m {
@@ -76,7 +95,9 @@ pub fn filter_matrix(filter: ColorFilter, intensity: f64) -> Matrix {
 pub fn display_filter_ops(settings: &AccessibilitySettings) -> Vec<ColorOp> {
     let mut ops = Vec::new();
     if let Some((filter, intensity)) = settings.filter() {
-        ops.push(ColorOp::LinearMatrix(filter_matrix(filter, intensity).map(|r| r.map(|v| v as f32))));
+        ops.push(ColorOp::LinearMatrix(
+            filter_matrix(filter, intensity).map(|r| r.map(|v| v as f32)),
+        ));
     }
     if settings.invert_colors {
         ops.push(ColorOp::Invert);
@@ -102,21 +123,40 @@ mod tests {
     fn the_matrices_match_the_reference_builders() {
         close(
             filter_matrix(ColorFilter::Protanopia, 0.5),
-            [[1.061642343, -0.061641943, 0.000000083], [-0.060001824, 1.060001434, -0.000000081], [0.366254947, -0.366252569, 1.000000495]],
+            [
+                [1.061642343, -0.061641943, 0.000000083],
+                [-0.060001824, 1.060001434, -0.000000081],
+                [0.366254947, -0.366252569, 1.000000495],
+            ],
         );
         close(
             filter_matrix(ColorFilter::Deuteranopia, 0.5),
-            [[0.882155530, 0.494064912, -0.376220443], [-0.035988308, 1.065354101, -0.029365793], [0.415072653, -0.446324200, 1.031251547]],
+            [
+                [0.882155530, 0.494064912, -0.376220443],
+                [-0.035988308, 1.065354101, -0.029365793],
+                [0.415072653, -0.446324200, 1.031251547],
+            ],
         );
         close(filter_matrix(ColorFilter::Grayscale, 1.0), [GRAY; 3]);
-        close(filter_matrix(ColorFilter::Tint { hue: 0.3 }, 0.4), [[0.6802, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.6]]);
-        close(filter_matrix(ColorFilter::Tint { hue: 0.95 }, 1.0), [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.301583333333]]);
+        close(
+            filter_matrix(ColorFilter::Tint { hue: 0.3 }, 0.4),
+            [[0.6802, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.6]],
+        );
+        close(
+            filter_matrix(ColorFilter::Tint { hue: 0.95 }, 1.0),
+            [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.301583333333]],
+        );
     }
 
     #[test]
     fn the_chain_runs_matrix_then_invert_then_contrast_and_is_empty_by_default() {
         assert!(display_filter_ops(&AccessibilitySettings::default()).is_empty());
-        let s = AccessibilitySettings { invert_colors: true, display_contrast: 0.4, color_filter: Some(ColorFilter::Grayscale), ..AccessibilitySettings::default() };
+        let s = AccessibilitySettings {
+            invert_colors: true,
+            display_contrast: 0.4,
+            color_filter: Some(ColorFilter::Grayscale),
+            ..AccessibilitySettings::default()
+        };
         let ops = display_filter_ops(&s);
         assert!(matches!(ops[0], ColorOp::LinearMatrix(m) if m == [[0.3_f32, 0.59, 0.11]; 3]));
         assert_eq!(ops[1..], [ColorOp::Invert, ColorOp::Contrast(0.4)]);

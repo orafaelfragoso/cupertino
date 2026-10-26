@@ -2,10 +2,13 @@
 //! overlay over a server-rendered backdrop and paces the hold and the fade.
 
 use cupertino_alsa::DEVICE_DIR;
-use cupertino_client::{Anchor, Backdrop, Client, DisplayOptions, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig, Margin, OutputId, SurfaceId};
+use cupertino_assets::Assets;
+use cupertino_client::{
+    Anchor, Backdrop, Client, DisplayOptions, Event, KeyboardInteractivity, Layer,
+    LayerSurfaceConfig, Margin, OutputId, SurfaceId,
+};
 use cupertino_osd::backend::{AlsaVolume, Backlight, MemoryBacklight, MemoryVolume, Volume};
 use cupertino_osd::control;
-use cupertino_assets::Assets;
 use cupertino_osd::controller::{Command, Controller};
 use cupertino_osd::layout::{self, BOTTOM_MARGIN, CORNER_RADIUS, WINDOW_SIZE};
 use cupertino_osd::model::{Phase, View};
@@ -38,14 +41,20 @@ pub struct Options {
 impl Options {
     /// Parse the arguments; the problem is returned as the error.
     pub fn parse(args: impl Iterator<Item = String>) -> std::result::Result<Self, String> {
-        let mut options = Options { fake_backends: false, alsa_card: None };
+        let mut options = Options {
+            fake_backends: false,
+            alsa_card: None,
+        };
         let mut args = args;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--fake-backends" => options.fake_backends = true,
                 "--alsa-card" => {
                     let card = args.next().ok_or("--alsa-card needs a card number")?;
-                    options.alsa_card = Some(card.parse().map_err(|_| format!("{card:?} is not a card number"))?);
+                    options.alsa_card = Some(
+                        card.parse()
+                            .map_err(|_| format!("{card:?} is not a card number"))?,
+                    );
                 }
                 _ => return Err(format!("unknown argument {arg}")),
             }
@@ -72,22 +81,48 @@ struct App {
 
 /// The first output the server has described.
 fn first_output(client: &Client) -> Result<OutputId> {
-    Ok(client.outputs().into_iter().find(|o| o.geometry.is_some()).ok_or("the server has no output")?.id)
+    Ok(client
+        .outputs()
+        .into_iter()
+        .find(|o| o.geometry.is_some())
+        .ok_or("the server has no output")?
+        .id)
 }
 
 fn controller(options: &Options) -> Controller {
-    let (volume, display, keyboard): (Box<dyn Volume>, Box<dyn Backlight>, Box<dyn Backlight>) = if options.fake_backends {
-        (Box::new(MemoryVolume::new(FAKE_LEVEL, false)), Box::new(MemoryBacklight::new(FAKE_LEVEL)), Box::new(MemoryBacklight::new(FAKE_LEVEL)))
-    } else {
-        (Box::new(AlsaVolume::new(PathBuf::from(DEVICE_DIR), options.alsa_card)), Box::new(DisplayBacklight::new()), Box::new(KeyboardBacklight::new()))
-    };
+    let (volume, display, keyboard): (Box<dyn Volume>, Box<dyn Backlight>, Box<dyn Backlight>) =
+        if options.fake_backends {
+            (
+                Box::new(MemoryVolume::new(FAKE_LEVEL, false)),
+                Box::new(MemoryBacklight::new(FAKE_LEVEL)),
+                Box::new(MemoryBacklight::new(FAKE_LEVEL)),
+            )
+        } else {
+            (
+                Box::new(AlsaVolume::new(
+                    PathBuf::from(DEVICE_DIR),
+                    options.alsa_card,
+                )),
+                Box::new(DisplayBacklight::new()),
+                Box::new(KeyboardBacklight::new()),
+            )
+        };
     Controller::new(volume, display, keyboard)
 }
 
 /// The renderer for the session's appearance and display options.
-fn overlay_renderer(theme: &Theme, assets: &Assets, dark: bool, options: DisplayOptions) -> Result<Renderer> {
+fn overlay_renderer(
+    theme: &Theme,
+    assets: &Assets,
+    dark: bool,
+    options: DisplayOptions,
+) -> Result<Renderer> {
     let appearance = Appearance::of_session(dark, options.increase_contrast);
-    Ok(Renderer::new(Palette::from_theme(theme, appearance, options.reduce_transparency)?, theme.tokens.typography().clone(), assets)?)
+    Ok(Renderer::new(
+        Palette::from_theme(theme, appearance, options.reduce_transparency)?,
+        theme.tokens.typography().clone(),
+        assets,
+    )?)
 }
 
 /// Connect, claim the bus name and serve until the connection or the bus fails.
@@ -101,7 +136,11 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     // the bus thread only queues; the loop below carries the commands out, so the effects never block the bus
     let sender = Mutex::new(sender);
     let _control = control::serve(zbus::connection::Builder::session()?, move |command| {
-        sender.lock().expect("the sender lock is never poisoned").send(command).expect("the receiver lives as long as the process");
+        sender
+            .lock()
+            .expect("the sender lock is never poisoned")
+            .send(command)
+            .expect("the receiver lives as long as the process");
         waker.wake();
     })
     .map_err(|e| match e {
@@ -117,11 +156,26 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         // anchored to the bottom only: centred horizontally, BOTTOM_MARGIN above the edge
         anchor: Anchor::Bottom,
         size: (WINDOW_SIZE, WINDOW_SIZE),
-        margin: Margin { bottom: BOTTOM_MARGIN, ..Margin::default() },
+        margin: Margin {
+            bottom: BOTTOM_MARGIN,
+            ..Margin::default()
+        },
         exclusive_zone: -1,
         keyboard: KeyboardInteractivity::None,
     })?;
-    let mut app = App { client, theme, assets, surface, output, controller: controller(options), commands, renderer, start: Instant::now(), phase: Phase::Hidden, backdrop: None };
+    let mut app = App {
+        client,
+        theme,
+        assets,
+        surface,
+        output,
+        controller: controller(options),
+        commands,
+        renderer,
+        start: Instant::now(),
+        phase: Phase::Hidden,
+        backdrop: None,
+    };
     loop {
         let now = app.now();
         let timeout = app.controller.until_fade(now).map(Duration::from_secs_f64);
@@ -150,11 +204,23 @@ impl App {
                 }
             }
             Event::Appearance { .. } | Event::DisplayOptions(_) => {
-                self.renderer = overlay_renderer(&self.theme, &self.assets, self.client.is_dark(), self.client.display_options())?;
+                self.renderer = overlay_renderer(
+                    &self.theme,
+                    &self.assets,
+                    self.client.is_dark(),
+                    self.client.display_options(),
+                )?;
                 self.client.request_redraw(self.surface)?;
             }
             // the surface takes no input and has no popups or menu-bar role; a lock leaves the overlay alone, which the server hides
-            Event::SessionLock { .. } | Event::Pointer { .. } | Event::Key { .. } | Event::KeyboardLeave(_) | Event::ActivationToken { .. } | Event::PopupDone(_) | Event::MenuBar { .. } | Event::Dock { .. } => {}
+            Event::SessionLock { .. }
+            | Event::Pointer { .. }
+            | Event::Key { .. }
+            | Event::KeyboardLeave(_)
+            | Event::ActivationToken { .. }
+            | Event::PopupDone(_)
+            | Event::MenuBar { .. }
+            | Event::Dock { .. } => {}
         }
         Ok(())
     }
@@ -199,7 +265,10 @@ impl App {
         let renderer = &mut self.renderer;
         self.client.draw(self.surface, |pixmap, scale| {
             let rendered = renderer.render(&overlay, scale.factor());
-            let paint = PixmapPaint { opacity: alpha as f32, ..PixmapPaint::default() };
+            let paint = PixmapPaint {
+                opacity: alpha as f32,
+                ..PixmapPaint::default()
+            };
             pixmap.draw_pixmap(0, 0, rendered.as_ref(), &paint, Transform::identity(), None);
         })?;
         // frame callbacks pace the fade

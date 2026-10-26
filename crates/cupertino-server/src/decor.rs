@@ -9,7 +9,10 @@ use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::hash::{Hash, Hasher};
 
 use cupertino_assets::{AssetError, Assets};
-use cupertino_decorations::{ButtonKind, DecorationConfig, DecorationState, Decorations, DoubleClickAction, Hit, ResizeEdge, ShadowParams, TitlebarStyle};
+use cupertino_decorations::{
+    ButtonKind, DecorationConfig, DecorationState, Decorations, DoubleClickAction, Hit, ResizeEdge,
+    ShadowParams, TitlebarStyle,
+};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_theme::{Appearance, Theme};
 use cupertino_wm::WindowId;
@@ -102,7 +105,10 @@ pub struct AxisFreedom {
 
 impl AxisFreedom {
     pub fn of(size: f64, min: f64, max: f64) -> Self {
-        Self { grow: size < max, shrink: size > min }
+        Self {
+            grow: size < max,
+            shrink: size > min,
+        }
     }
 
     fn any(self) -> bool {
@@ -118,7 +124,9 @@ impl AxisFreedom {
 pub fn resize_cursor(edge: ResizeEdge, x: AxisFreedom, y: AxisFreedom) -> Option<CursorIcon> {
     use CursorIcon::*;
     // (two-way, outward, inward) for each side
-    let side = |f: AxisFreedom, two: CursorIcon, out: CursorIcon, inward: CursorIcon| match (f.grow, f.shrink) {
+    let side = |f: AxisFreedom, two: CursorIcon, out: CursorIcon, inward: CursorIcon| match (
+        f.grow, f.shrink,
+    ) {
         (true, true) => Some(two),
         (true, false) => Some(out),
         (false, true) => Some(inward),
@@ -128,14 +136,26 @@ pub fn resize_cursor(edge: ResizeEdge, x: AxisFreedom, y: AxisFreedom) -> Option
     let west = |f| side(f, EwResize, WResize, EResize);
     let south = |f| side(f, NsResize, SResize, NResize);
     let north = |f| side(f, NsResize, NResize, SResize);
-    let corner = |hx: Option<CursorIcon>, vy: Option<CursorIcon>, two: CursorIcon, out: CursorIcon, inward: CursorIcon| {
+    let corner = |hx: Option<CursorIcon>,
+                  vy: Option<CursorIcon>,
+                  two: CursorIcon,
+                  out: CursorIcon,
+                  inward: CursorIcon| {
         if !x.any() {
             return vy;
         }
         if !y.any() {
             return hx;
         }
-        side(AxisFreedom { grow: x.grow && y.grow, shrink: x.shrink && y.shrink }, two, out, inward)
+        side(
+            AxisFreedom {
+                grow: x.grow && y.grow,
+                shrink: x.shrink && y.shrink,
+            },
+            two,
+            out,
+            inward,
+        )
     };
     match edge {
         ResizeEdge::Right => east(x),
@@ -154,7 +174,8 @@ impl Decor {
         Ok(Self {
             deco: Decorations::new(config_for(appearance, TitlebarStyle::Standard), assets)?,
             unified: Decorations::new(config_for(appearance, TitlebarStyle::Unified), assets)?,
-            cache: HashMap::new(), hover_group: None,
+            cache: HashMap::new(),
+            hover_group: None,
             pressed: None,
             last_click: None,
             cursor: None,
@@ -164,8 +185,10 @@ impl Decor {
 
     pub fn set_appearance(&mut self, appearance: Appearance) {
         if self.deco.config.appearance != appearance {
-            self.deco.set_config(config_for(appearance, TitlebarStyle::Standard));
-            self.unified.set_config(config_for(appearance, TitlebarStyle::Unified));
+            self.deco
+                .set_config(config_for(appearance, TitlebarStyle::Standard));
+            self.unified
+                .set_config(config_for(appearance, TitlebarStyle::Unified));
             self.cache.clear();
         }
     }
@@ -184,7 +207,12 @@ impl Decor {
 
     /// Space the decorations of `style` reserve around the client surface.
     pub fn insets(&self, style: TitlebarStyle) -> Insets {
-        Insets { top: self.deco.config.metrics.titlebar_reserved(style), left: 0.0, right: 0.0, bottom: 0.0 }
+        Insets {
+            top: self.deco.config.metrics.titlebar_reserved(style),
+            left: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+        }
     }
 
     /// Distance the input region reaches outside the frame (resize zones).
@@ -193,18 +221,46 @@ impl Decor {
     }
 
     /// Hit test at `local` (frame-local points) for a client surface of `content` points.
-    pub fn hit_test(&self, style: TitlebarStyle, content: (f64, f64), local: (f64, f64), resizable: bool) -> Hit {
-        self.for_style(style).hit_test(Size::new(content.0, content.1), Point::new(local.0, local.1), resizable)
+    pub fn hit_test(
+        &self,
+        style: TitlebarStyle,
+        content: (f64, f64),
+        local: (f64, f64),
+        resizable: bool,
+    ) -> Hit {
+        self.for_style(style).hit_test(
+            Size::new(content.0, content.1),
+            Point::new(local.0, local.1),
+            resizable,
+        )
     }
 
     /// The resize zone under `local` (frame-local) of a frame of size `frame` (a client-decorated window's window
     /// geometry, an untitled window's frame); `exterior` for a titled window.
-    pub fn resize_hit(&self, frame: (f64, f64), local: (f64, f64), exterior: bool) -> Option<ResizeEdge> {
-        cupertino_decorations::resize_hit(Rect::new(0.0, 0.0, frame.0, frame.1), &self.deco.config.metrics, Point::new(local.0, local.1), exterior)
+    pub fn resize_hit(
+        &self,
+        frame: (f64, f64),
+        local: (f64, f64),
+        exterior: bool,
+    ) -> Option<ResizeEdge> {
+        cupertino_decorations::resize_hit(
+            Rect::new(0.0, 0.0, frame.0, frame.1),
+            &self.deco.config.metrics,
+            Point::new(local.0, local.1),
+            exterior,
+        )
     }
 
-    pub fn group_hovered(&self, style: TitlebarStyle, content: (f64, f64), local: (f64, f64)) -> bool {
-        self.for_style(style).button_group_hovered(Size::new(content.0, content.1), Point::new(local.0, local.1))
+    pub fn group_hovered(
+        &self,
+        style: TitlebarStyle,
+        content: (f64, f64),
+        local: (f64, f64),
+    ) -> bool {
+        self.for_style(style).button_group_hovered(
+            Size::new(content.0, content.1),
+            Point::new(local.0, local.1),
+        )
     }
 
     /// Window shadow parameters from the verified table.
@@ -216,7 +272,12 @@ impl Decor {
     /// panel, utility, popover, combo box, drawer and menu windows (the shadow option
     /// per class is `window-management.md` section 4).
     pub fn popup_shadow_params(&self) -> ShadowParams {
-        ShadowParams::lookup(cupertino_theme::window_shadow::ShadowOption::Panel, true, self.deco.config.appearance.is_dark(), self.deco.config.increased_contrast)
+        ShadowParams::lookup(
+            cupertino_theme::window_shadow::ShadowOption::Panel,
+            true,
+            self.deco.config.appearance.is_dark(),
+            self.deco.config.increased_contrast,
+        )
     }
 
     /// Colour of the 1 device pixel rim around a window or popup at a backing scale.
@@ -230,7 +291,8 @@ impl Decor {
 
     /// Register a title bar press; true when it completes a double click on the same window.
     pub fn register_click(&mut self, id: WindowId, now: f64) -> bool {
-        let double = matches!(self.last_click, Some((w, t)) if w == id && now - t <= DOUBLE_CLICK_INTERVAL);
+        let double =
+            matches!(self.last_click, Some((w, t)) if w == id && now - t <= DOUBLE_CLICK_INTERVAL);
         self.last_click = if double { None } else { Some((id, now)) };
         double
     }
@@ -254,10 +316,22 @@ impl Decor {
         let appearance = self.deco.config.appearance as u64;
         let pressed = state.pressed.map_or(9, |k| k.index() as u64);
         let tb_key = hash_of(
-            &[fw.to_bits(), scale.to_bits(), state.active as u64, state.group_hovered as u64, pressed, state.enabled[2] as u64, appearance, input.style as u64],
+            &[
+                fw.to_bits(),
+                scale.to_bits(),
+                state.active as u64,
+                state.group_hovered as u64,
+                pressed,
+                state.enabled[2] as u64,
+                appearance,
+                input.style as u64,
+            ],
             &state.title,
         );
-        let rim_key = hash_of(&[fw.to_bits(), fh.to_bits(), scale.to_bits(), appearance], "");
+        let rim_key = hash_of(
+            &[fw.to_bits(), fh.to_bits(), scale.to_bits(), appearance],
+            "",
+        );
         let entry = self.cache.entry(input.id).or_default();
         let mut render_tb = false;
         match &mut entry.titlebar {
@@ -276,23 +350,57 @@ impl Decor {
                 TitlebarStyle::Unified => self.unified.render_titlebar(fw, scale, &state),
             };
             let size = (pm.width() as i32, pm.height() as i32);
-            let buf = MemoryRenderBuffer::from_slice(pm.data(), Fourcc::Abgr8888, size, 1, Transform::Normal, None);
-            self.cache.get_mut(&input.id).unwrap().titlebar = Some(Cached { key: tb_key, buffer: buf, used: true });
+            let buf = MemoryRenderBuffer::from_slice(
+                pm.data(),
+                Fourcc::Abgr8888,
+                size,
+                1,
+                Transform::Normal,
+                None,
+            );
+            self.cache.get_mut(&input.id).unwrap().titlebar = Some(Cached {
+                key: tb_key,
+                buffer: buf,
+                used: true,
+            });
         }
         if render_rim {
             self.renders += 1;
             let pm = self.deco.render_rim(Size::new(fw, fh), scale);
             let size = (pm.width() as i32, pm.height() as i32);
-            let buf = MemoryRenderBuffer::from_slice(pm.data(), Fourcc::Abgr8888, size, 1, Transform::Normal, None);
-            self.cache.get_mut(&input.id).unwrap().rim = Some(Cached { key: rim_key, buffer: buf, used: true });
+            let buf = MemoryRenderBuffer::from_slice(
+                pm.data(),
+                Fourcc::Abgr8888,
+                size,
+                1,
+                Transform::Normal,
+                None,
+            );
+            self.cache.get_mut(&input.id).unwrap().rim = Some(Cached {
+                key: rim_key,
+                buffer: buf,
+                used: true,
+            });
         }
         let entry = &self.cache[&input.id];
         let tb = entry.titlebar.as_ref().unwrap();
         let rim = entry.rim.as_ref().unwrap();
         let tb_h = self.deco.config.metrics.titlebar_height(input.style);
-        let tb_px = ((fw * scale).round() as i32, (tb_h * scale).round().max(1.0) as i32);
-        let rim_px = ((fw * scale).round().max(1.0) as i32, (fh * scale).round().max(1.0) as i32);
-        DecorationBuffers { titlebar: tb.buffer.clone(), titlebar_px: tb_px, rim: rim.buffer.clone(), rim_px, titlebar_pt: tb_h }
+        let tb_px = (
+            (fw * scale).round() as i32,
+            (tb_h * scale).round().max(1.0) as i32,
+        );
+        let rim_px = (
+            (fw * scale).round().max(1.0) as i32,
+            (fh * scale).round().max(1.0) as i32,
+        );
+        DecorationBuffers {
+            titlebar: tb.buffer.clone(),
+            titlebar_px: tb_px,
+            rim: rim.buffer.clone(),
+            rim_px,
+            titlebar_pt: tb_h,
+        }
     }
 
     /// Forget buffers of windows that were not requested since the previous call.
@@ -328,22 +436,63 @@ mod tests {
     #[test]
     fn resize_cursors_follow_what_the_frame_can_do() {
         use cupertino_decorations::ResizeEdge::*;
-        let free = AxisFreedom { grow: true, shrink: true };
-        let grow = AxisFreedom { grow: true, shrink: false };
-        let shrink = AxisFreedom { grow: false, shrink: true };
-        let fixed = AxisFreedom { grow: false, shrink: false };
+        let free = AxisFreedom {
+            grow: true,
+            shrink: true,
+        };
+        let grow = AxisFreedom {
+            grow: true,
+            shrink: false,
+        };
+        let shrink = AxisFreedom {
+            grow: false,
+            shrink: true,
+        };
+        let fixed = AxisFreedom {
+            grow: false,
+            shrink: false,
+        };
         assert_eq!(resize_cursor(Right, free, free), Some(CursorIcon::EwResize));
-        assert_eq!(resize_cursor(Right, grow, free), Some(CursorIcon::EResize), "at the minimum width the edge moves out only");
+        assert_eq!(
+            resize_cursor(Right, grow, free),
+            Some(CursorIcon::EResize),
+            "at the minimum width the edge moves out only"
+        );
         assert_eq!(resize_cursor(Left, grow, free), Some(CursorIcon::WResize));
-        assert_eq!(resize_cursor(Right, shrink, free), Some(CursorIcon::WResize), "at the maximum it moves in only");
+        assert_eq!(
+            resize_cursor(Right, shrink, free),
+            Some(CursorIcon::WResize),
+            "at the maximum it moves in only"
+        );
         assert_eq!(resize_cursor(Top, free, grow), Some(CursorIcon::NResize));
         assert_eq!(resize_cursor(Right, fixed, free), None);
-        assert_eq!(resize_cursor(BottomRight, free, free), Some(CursorIcon::NwseResize));
-        assert_eq!(resize_cursor(TopRight, free, free), Some(CursorIcon::NeswResize));
-        assert_eq!(resize_cursor(BottomRight, grow, grow), Some(CursorIcon::SeResize));
-        assert_eq!(resize_cursor(TopLeft, shrink, shrink), Some(CursorIcon::SeResize), "inward from the top-left");
-        assert_eq!(resize_cursor(BottomRight, fixed, free), Some(CursorIcon::NsResize), "a fixed width leaves the bottom edge's cursor");
-        assert_eq!(resize_cursor(BottomRight, grow, shrink), None, "the axes disagree");
+        assert_eq!(
+            resize_cursor(BottomRight, free, free),
+            Some(CursorIcon::NwseResize)
+        );
+        assert_eq!(
+            resize_cursor(TopRight, free, free),
+            Some(CursorIcon::NeswResize)
+        );
+        assert_eq!(
+            resize_cursor(BottomRight, grow, grow),
+            Some(CursorIcon::SeResize)
+        );
+        assert_eq!(
+            resize_cursor(TopLeft, shrink, shrink),
+            Some(CursorIcon::SeResize),
+            "inward from the top-left"
+        );
+        assert_eq!(
+            resize_cursor(BottomRight, fixed, free),
+            Some(CursorIcon::NsResize),
+            "a fixed width leaves the bottom edge's cursor"
+        );
+        assert_eq!(
+            resize_cursor(BottomRight, grow, shrink),
+            None,
+            "the axes disagree"
+        );
         assert_eq!(resize_cursor(BottomLeft, fixed, fixed), None);
         assert_eq!(AxisFreedom::of(400.0, 400.0, f64::INFINITY), grow);
         assert_eq!(AxisFreedom::of(500.0, 400.0, 500.0), shrink);
@@ -351,12 +500,20 @@ mod tests {
 
     /// Needs the asset directory (`CUPERTINO_ASSET_DIR`); fails with the build instructions when it is missing.
     fn decor(appearance: Appearance) -> Decor {
-        let assets = Assets::discover();
+        let assets = Assets::builtin();
         Decor::new(appearance, &assets).unwrap_or_else(|e| panic!("{e}"))
     }
 
     fn input(id: u64, w: f64) -> DecorInput<'static> {
-        DecorInput { id: WindowId(id), style: TitlebarStyle::Standard, frame: (w, 328.0), scale: 1.0, active: true, title: "Title", resizable: true }
+        DecorInput {
+            id: WindowId(id),
+            style: TitlebarStyle::Standard,
+            frame: (w, 328.0),
+            scale: 1.0,
+            active: true,
+            title: "Title",
+            resizable: true,
+        }
     }
 
     #[test]
@@ -365,20 +522,40 @@ mod tests {
         assert_eq!(d.insets(TitlebarStyle::Standard).top, 28.0);
         assert_eq!(d.insets(TitlebarStyle::Standard).vertical(), 28.0);
         assert_eq!(d.insets(TitlebarStyle::Standard).horizontal(), 0.0);
-        assert_eq!(d.insets(TitlebarStyle::Unified).vertical(), 0.0, "a unified bar lies over the surface");
+        assert_eq!(
+            d.insets(TitlebarStyle::Unified).vertical(),
+            0.0,
+            "a unified bar lies over the surface"
+        );
     }
 
     #[test]
     fn a_unified_window_buffers_the_52_pt_strip_and_hits_only_its_buttons() {
         let mut d = decor(Appearance::Light);
-        let unified = DecorInput { style: TitlebarStyle::Unified, ..input(1, 400.0) };
+        let unified = DecorInput {
+            style: TitlebarStyle::Unified,
+            ..input(1, 400.0)
+        };
         assert_eq!(d.buffers(&unified).titlebar_px, (400, 52));
         let content = (400.0, 300.0);
-        let close = d.for_style(TitlebarStyle::Unified).layout(Size::new(content.0, content.1)).button(ButtonKind::Close).center;
+        let close = d
+            .for_style(TitlebarStyle::Unified)
+            .layout(Size::new(content.0, content.1))
+            .button(ButtonKind::Close)
+            .center;
         let strip = (200.0, 10.0);
-        assert_eq!(d.hit_test(TitlebarStyle::Unified, content, (close.x, 26.0), true), Hit::Button(ButtonKind::Close));
-        assert_eq!(d.hit_test(TitlebarStyle::Unified, content, strip, true), Hit::Content);
-        assert_eq!(d.hit_test(TitlebarStyle::Standard, content, strip, true), Hit::Titlebar);
+        assert_eq!(
+            d.hit_test(TitlebarStyle::Unified, content, (close.x, 26.0), true),
+            Hit::Button(ButtonKind::Close)
+        );
+        assert_eq!(
+            d.hit_test(TitlebarStyle::Unified, content, strip, true),
+            Hit::Content
+        );
+        assert_eq!(
+            d.hit_test(TitlebarStyle::Standard, content, strip, true),
+            Hit::Titlebar
+        );
     }
 
     #[test]
@@ -405,7 +582,10 @@ mod tests {
         let mut d = decor(Appearance::Light);
         assert!(!d.register_click(WindowId(1), 1.0));
         assert!(d.register_click(WindowId(1), 1.2));
-        assert!(!d.register_click(WindowId(1), 1.3), "a third press starts over");
+        assert!(
+            !d.register_click(WindowId(1), 1.3),
+            "a third press starts over"
+        );
         assert!(!d.register_click(WindowId(2), 1.4));
         assert!(!d.register_click(WindowId(2), 2.5));
     }
@@ -416,10 +596,22 @@ mod tests {
         let content = (400.0, 300.0);
         let layout = d.decorations().layout(Size::new(content.0, content.1));
         let close = layout.button(ButtonKind::Close).center;
-        assert_eq!(d.hit_test(TitlebarStyle::Standard, content, (close.x, close.y), true), Hit::Button(ButtonKind::Close));
-        assert_eq!(d.hit_test(TitlebarStyle::Standard, content, (200.0, 10.0), true), Hit::Titlebar);
-        assert_eq!(d.hit_test(TitlebarStyle::Standard, content, (200.0, 200.0), true), Hit::Content);
-        assert!(matches!(d.hit_test(TitlebarStyle::Standard, content, (-2.0, 150.0), true), Hit::Resize(ResizeEdge::Left)));
+        assert_eq!(
+            d.hit_test(TitlebarStyle::Standard, content, (close.x, close.y), true),
+            Hit::Button(ButtonKind::Close)
+        );
+        assert_eq!(
+            d.hit_test(TitlebarStyle::Standard, content, (200.0, 10.0), true),
+            Hit::Titlebar
+        );
+        assert_eq!(
+            d.hit_test(TitlebarStyle::Standard, content, (200.0, 200.0), true),
+            Hit::Content
+        );
+        assert!(matches!(
+            d.hit_test(TitlebarStyle::Standard, content, (-2.0, 150.0), true),
+            Hit::Resize(ResizeEdge::Left)
+        ));
         assert!(d.group_hovered(TitlebarStyle::Standard, content, (close.x, close.y)));
     }
 
@@ -428,9 +620,15 @@ mod tests {
         let mut d = decor(Appearance::Light);
         assert!(!d.shadow_params(true).entry.increased_contrast);
         d.set_appearance(Appearance::LightHighContrast);
-        assert!(d.shadow_params(true).entry.increased_contrast && d.shadow_params(false).entry.increased_contrast);
+        assert!(
+            d.shadow_params(true).entry.increased_contrast
+                && d.shadow_params(false).entry.increased_contrast
+        );
         assert!(d.popup_shadow_params().entry.increased_contrast);
-        assert_eq!(d.decorations().config.appearance, Appearance::LightHighContrast);
+        assert_eq!(
+            d.decorations().config.appearance,
+            Appearance::LightHighContrast
+        );
     }
 
     #[test]

@@ -21,10 +21,41 @@ macro_rules! widen {
 }
 
 widen!(
-    EV_KEY, EV_REL, EV_SW, REL_X, REL_Y, REL_HWHEEL, REL_WHEEL, ABS_X, ABS_Y, ABS_Z, ABS_RX, ABS_PRESSURE, ABS_MT_SLOT, ABS_MT_POSITION_X,
-    ABS_MT_POSITION_Y, BTN_MISC, BTN_0, BTN_1, BTN_MOUSE, BTN_JOYSTICK, BTN_DIGI, BTN_TOOL_PEN, BTN_TOOL_FINGER, BTN_TOUCH, BTN_STYLUS, KEY_OK,
-    BTN_DPAD_UP, BTN_DPAD_RIGHT, KEY_ALS_TOGGLE, BTN_TRIGGER_HAPPY1, BTN_TRIGGER_HAPPY40, INPUT_PROP_DIRECT, INPUT_PROP_BUTTONPAD,
-    INPUT_PROP_POINTING_STICK, INPUT_PROP_ACCELEROMETER,
+    EV_KEY,
+    EV_REL,
+    EV_SW,
+    REL_X,
+    REL_Y,
+    REL_HWHEEL,
+    REL_WHEEL,
+    ABS_X,
+    ABS_Y,
+    ABS_Z,
+    ABS_RX,
+    ABS_PRESSURE,
+    ABS_MT_SLOT,
+    ABS_MT_POSITION_X,
+    ABS_MT_POSITION_Y,
+    BTN_MISC,
+    BTN_0,
+    BTN_1,
+    BTN_MOUSE,
+    BTN_JOYSTICK,
+    BTN_DIGI,
+    BTN_TOOL_PEN,
+    BTN_TOOL_FINGER,
+    BTN_TOUCH,
+    BTN_STYLUS,
+    KEY_OK,
+    BTN_DPAD_UP,
+    BTN_DPAD_RIGHT,
+    KEY_ALS_TOGGLE,
+    BTN_TRIGGER_HAPPY1,
+    BTN_TRIGGER_HAPPY40,
+    INPUT_PROP_DIRECT,
+    INPUT_PROP_BUTTONPAD,
+    INPUT_PROP_POINTING_STICK,
+    INPUT_PROP_ACCELEROMETER,
 );
 
 /// `BUS_I2C`: a device on this bus that looks like a mouse is a pointing stick.
@@ -85,8 +116,10 @@ pub struct InputClass {
 fn read_capabilities(dir: &Path) -> Result<InputCapabilities> {
     let mask = |relative: &str| -> Result<CapabilityMask> {
         let path = dir.join(relative);
-        CapabilityMask::parse(&sysfs::read_attr(&path)?)
-            .map_err(|source| Error::Parse { origin: path.display().to_string(), source })
+        CapabilityMask::parse(&sysfs::read_attr(&path)?).map_err(|source| Error::Parse {
+            origin: path.display().to_string(),
+            source,
+        })
     };
     Ok(InputCapabilities {
         ev: mask("capabilities/ev")?,
@@ -119,8 +152,8 @@ pub fn classify(caps: &InputCapabilities) -> InputClass {
     let is_key = classify_key(caps, &mut class);
 
     // Some evdev nodes carry only a scroll wheel; they count as key devices.
-    let has_wheel_axis = caps.ev.test(EV_REL)
-        && (caps.rel.test(REL_WHEEL) || caps.rel.test(REL_HWHEEL));
+    let has_wheel_axis =
+        caps.ev.test(EV_REL) && (caps.rel.test(REL_WHEEL) || caps.rel.test(REL_HWHEEL));
     if !is_pointer && !is_key && has_wheel_axis {
         class.key = true;
     }
@@ -165,7 +198,9 @@ fn classify_pointer(caps: &InputCapabilities, class: &mut InputClass) -> bool {
         0
     } else {
         caps.key.count_in(BTN_JOYSTICK..BTN_DIGI)
-            + caps.key.count_in(BTN_TRIGGER_HAPPY1..BTN_TRIGGER_HAPPY40 + 1)
+            + caps
+                .key
+                .count_in(BTN_TRIGGER_HAPPY1..BTN_TRIGGER_HAPPY40 + 1)
             + caps.key.count_in(BTN_DPAD_UP..BTN_DPAD_RIGHT + 1)
     };
     let num_joystick_axes = caps.abs.count_in(ABS_RX..ABS_PRESSURE);
@@ -221,7 +256,10 @@ fn classify_pointer(caps: &InputCapabilities, class: &mut InputClass) -> bool {
     // well-known keyboard keys.
     if class.joystick {
         let well_known_keys = if has_keys {
-            WELL_KNOWN_KEYBOARD_KEYS.iter().filter(|&&code| key(code)).count()
+            WELL_KNOWN_KEYBOARD_KEYS
+                .iter()
+                .filter(|&&code| key(code))
+                .count()
         } else {
             0
         };
@@ -288,7 +326,13 @@ mod tests {
     fn full_keyboard() {
         let keys: Vec<u32> = (1..=31).collect();
         let class = classify(&caps(&[EV_KEY], &keys, &[], &[], &[]));
-        assert_eq!(class, only(|c| { c.key = true; c.keyboard = true; }));
+        assert_eq!(
+            class,
+            only(|c| {
+                c.key = true;
+                c.keyboard = true;
+            })
+        );
     }
 
     #[test]
@@ -312,7 +356,13 @@ mod tests {
             &[ABS_X, ABS_Y, ABS_MT_POSITION_X, ABS_MT_POSITION_Y],
             &[INPUT_PROP_BUTTONPAD],
         ));
-        assert_eq!(class, only(|c| { c.touchpad = true; c.clickpad = true; }));
+        assert_eq!(
+            class,
+            only(|c| {
+                c.touchpad = true;
+                c.clickpad = true;
+            })
+        );
     }
 
     #[test]
@@ -337,7 +387,13 @@ mod tests {
             &[ABS_X, ABS_Y, ABS_PRESSURE],
             &[],
         ));
-        assert_eq!(class, only(|c| { c.tablet = true; c.tablet_pad = true; }));
+        assert_eq!(
+            class,
+            only(|c| {
+                c.tablet = true;
+                c.tablet_pad = true;
+            })
+        );
     }
 
     #[test]
@@ -358,7 +414,13 @@ mod tests {
         let mut keys: Vec<u32> = (1..=31).collect();
         keys.extend([58, 69, 110, BTN_JOYSTICK, BTN_JOYSTICK + 1]);
         let class = classify(&caps(&[EV_KEY], &keys, &[], &[], &[]));
-        assert_eq!(class, only(|c| { c.key = true; c.keyboard = true; }));
+        assert_eq!(
+            class,
+            only(|c| {
+                c.key = true;
+                c.keyboard = true;
+            })
+        );
     }
 
     #[test]
@@ -383,7 +445,13 @@ mod tests {
     fn i2c_mouse_is_also_a_pointing_stick() {
         let mut stick = caps(&[EV_KEY, EV_REL], &[BTN_MOUSE], &[REL_X, REL_Y], &[], &[]);
         stick.bustype = BUS_I2C;
-        assert_eq!(classify(&stick), only(|c| { c.mouse = true; c.pointing_stick = true; }));
+        assert_eq!(
+            classify(&stick),
+            only(|c| {
+                c.mouse = true;
+                c.pointing_stick = true;
+            })
+        );
     }
 
     #[test]

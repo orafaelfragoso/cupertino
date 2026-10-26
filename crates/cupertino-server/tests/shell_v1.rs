@@ -22,7 +22,9 @@ use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use smithay::utils::Rectangle;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
-use wayland_client::protocol::{wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface};
+use wayland_client::protocol::{
+    wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
@@ -45,7 +47,14 @@ struct Layout {
 }
 
 /// A backdrop inside a smaller surface, with a rounded corner and half opacity.
-const CARD: Layout = Layout { size: SURFACE, margin_top: MARGIN_TOP, margin_left: MARGIN_LEFT, material: "Menu", shape: (10, 20, 300, 80, 16.0), alpha: 0.5 };
+const CARD: Layout = Layout {
+    size: SURFACE,
+    margin_top: MARGIN_TOP,
+    margin_left: MARGIN_LEFT,
+    material: "Menu",
+    shape: (10, 20, 300, 80, 16.0),
+    alpha: 0.5,
+};
 
 struct Harness {
     state: Cupertino,
@@ -62,7 +71,15 @@ impl Harness {
         let display: Display<Cupertino> = Display::new().ok()?;
         let mut cfg = Config::default();
         tweak(&mut cfg);
-        let mut state = Cupertino::new(display, event_loop.handle(), event_loop.get_signal(), cfg, true, &cupertino_assets::Assets::discover()).ok()?;
+        let mut state = Cupertino::new(
+            display,
+            event_loop.handle(),
+            event_loop.get_signal(),
+            cfg,
+            true,
+            &cupertino_assets::Assets::builtin(),
+        )
+        .ok()?;
         match headless::init(&mut state, OUTPUT, 1.0) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
@@ -73,7 +90,12 @@ impl Harness {
     }
 
     fn step(&mut self) {
-        headless::step(&mut self.state, &mut self.event_loop, Duration::from_millis(5)).unwrap();
+        headless::step(
+            &mut self.state,
+            &mut self.event_loop,
+            Duration::from_millis(5),
+        )
+        .unwrap();
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
@@ -96,7 +118,10 @@ impl Harness {
         // the tests run in parallel in one process and two of them shoot a "wall": every shot needs a file of its own
         static SHOTS: AtomicUsize = AtomicUsize::new(0);
         let shot = SHOTS.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("cupertino-test-{}-{shot}-{name}.png", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "cupertino-test-{}-{shot}-{name}.png",
+            std::process::id()
+        ));
         self.state.screenshot_requests.push(path.clone());
         self.state.request_redraw();
         let p = path.clone();
@@ -117,7 +142,13 @@ impl Harness {
 /// Requests the test sends to the backdrop from the client thread.
 enum Cmd {
     SetMaterial(&'static str),
-    SetShape { x: i32, y: i32, width: i32, height: i32, radius: f64 },
+    SetShape {
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        radius: f64,
+    },
     SetAlpha(f64),
     SetKeyboard(zwlr_layer_surface_v1::KeyboardInteractivity),
     Commit,
@@ -164,7 +195,15 @@ fn tempfile_like(len: usize) -> std::fs::File {
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for ClientState {
-    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 macro_rules! ignore_events {
     ($($t:ty),*) => {$(
@@ -185,7 +224,14 @@ ignore_events!(
 );
 
 impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for ClientState {
-    fn event(state: &mut Self, layer: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, event: zwlr_layer_surface_v1::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        layer: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
         if let zwlr_layer_surface_v1::Event::Configure { serial, .. } = event {
             layer.ack_configure(serial);
             if !state.attached {
@@ -220,37 +266,68 @@ impl TestClient {
             let qh = queue.handle();
             let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
             let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ()).unwrap();
-            let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 = globals.bind(&qh, 1..=4, ()).unwrap();
+            let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
+                globals.bind(&qh, 1..=4, ()).unwrap();
             let shell: CupertinoShellV1 = globals.bind(&qh, 1..=1, ()).unwrap();
             let surface = compositor.create_surface(&qh, ());
-            let layer = layer_shell.get_layer_surface(&surface, None, zwlr_layer_shell_v1::Layer::Top, "backdrop-test".into(), &qh, ());
+            let layer = layer_shell.get_layer_surface(
+                &surface,
+                None,
+                zwlr_layer_shell_v1::Layer::Top,
+                "backdrop-test".into(),
+                &qh,
+                (),
+            );
             layer.set_size(layout.size.0 as u32, layout.size.1 as u32);
-            layer.set_anchor(zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left);
+            layer.set_anchor(
+                zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left,
+            );
             layer.set_margin(layout.margin_top, 0, 0, layout.margin_left);
             layer.set_exclusive_zone(-1);
             let backdrop = shell.get_backdrop(&surface, &qh, ());
             surface.commit();
-            let mut client = ClientState { shm, surface, backdrop, layout, attached: false };
+            let mut client = ClientState {
+                shm,
+                surface,
+                backdrop,
+                layout,
+                attached: false,
+            };
             loop {
                 while let Ok(cmd) = inbox.try_recv() {
                     match cmd {
                         Cmd::SetMaterial(name) => client.backdrop.set_material(name.into()),
-                        Cmd::SetShape { x, y, width, height, radius } => client.backdrop.set_shape(x, y, width, height, radius),
+                        Cmd::SetShape {
+                            x,
+                            y,
+                            width,
+                            height,
+                            radius,
+                        } => client.backdrop.set_shape(x, y, width, height, radius),
                         Cmd::SetAlpha(a) => client.backdrop.set_alpha(a),
                         Cmd::SetKeyboard(mode) => layer.set_keyboard_interactivity(mode),
                         Cmd::Commit => client.surface.commit(),
                     }
                 }
                 if queue.roundtrip(&mut client).is_err() {
-                    let error = conn.protocol_error().expect("the roundtrip failed with a protocol error");
-                    assert_eq!(error.object_interface, cupertino_backdrop_v1::CupertinoBackdropV1::interface().name);
+                    let error = conn
+                        .protocol_error()
+                        .expect("the roundtrip failed with a protocol error");
+                    assert_eq!(
+                        error.object_interface,
+                        cupertino_backdrop_v1::CupertinoBackdropV1::interface().name
+                    );
                     st.lock().unwrap().backdrop_error = Some(error.code);
                     return;
                 }
                 std::thread::sleep(Duration::from_millis(5));
             }
         });
-        TestClient { commands, status, thread: Some(thread) }
+        TestClient {
+            commands,
+            status,
+            thread: Some(thread),
+        }
     }
 
     fn send(&self, cmd: Cmd) {
@@ -278,20 +355,30 @@ fn area(x: f64, y: f64, w: f64, h: f64) -> Rectangle<f64, smithay::utils::Logica
 
 /// The fields of a backdrop the protocol sets, without the cache identity.
 fn summary(b: &[BackdropArea]) -> Vec<(String, Rectangle<f64, smithay::utils::Logical>, f64, f64)> {
-    b.iter().map(|b| (b.material.clone(), b.area, b.radius, b.alpha)).collect()
+    b.iter()
+        .map(|b| (b.material.clone(), b.area, b.radius, b.alpha))
+        .collect()
 }
 
 #[test]
 fn backdrop_applies_with_the_commit_and_not_before() {
     let Some(mut h) = Harness::new() else { return };
     let client = TestClient::spawn(h.socket_path());
-    h.wait_until("the first backdrop commit", |s| !layer_backdrops(&s.outputs[0].output).is_empty());
+    h.wait_until("the first backdrop commit", |s| {
+        !layer_backdrops(&s.outputs[0].output).is_empty()
+    });
     // surface origin is the margins (60, 50); the shape is relative to it
     let first = vec![("Menu".to_string(), area(70.0, 70.0, 300.0, 80.0), 16.0, 0.5)];
     assert_eq!(summary(&h.backdrops()), first);
 
     // new state without a commit: the committed one stays in effect
-    client.send(Cmd::SetShape { x: 0, y: 0, width: 120, height: 40, radius: 4.0 });
+    client.send(Cmd::SetShape {
+        x: 0,
+        y: 0,
+        width: 120,
+        height: 40,
+        radius: 4.0,
+    });
     client.send(Cmd::SetAlpha(1.0));
     for _ in 0..40 {
         h.step();
@@ -300,12 +387,21 @@ fn backdrop_applies_with_the_commit_and_not_before() {
 
     // the commit applies it
     client.send(Cmd::Commit);
-    h.wait_until("the second backdrop commit", |s| layer_backdrops(&s.outputs[0].output).iter().any(|b| b.alpha == 1.0));
-    assert_eq!(summary(&h.backdrops()), vec![("Menu".to_string(), area(60.0, 50.0, 120.0, 40.0), 4.0, 1.0)]);
+    h.wait_until("the second backdrop commit", |s| {
+        layer_backdrops(&s.outputs[0].output)
+            .iter()
+            .any(|b| b.alpha == 1.0)
+    });
+    assert_eq!(
+        summary(&h.backdrops()),
+        vec![("Menu".to_string(), area(60.0, 50.0, 120.0, 40.0), 4.0, 1.0)]
+    );
 }
 
 /// The surface that holds the keyboard focus of the seat, if any.
-fn keyboard_focus(state: &Cupertino) -> Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface> {
+fn keyboard_focus(
+    state: &Cupertino,
+) -> Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface> {
     state.seat.get_keyboard().unwrap().current_focus()
 }
 
@@ -314,18 +410,26 @@ fn an_exclusive_layer_surface_takes_the_keyboard_and_gives_it_back() {
     use zwlr_layer_surface_v1::KeyboardInteractivity;
     let Some(mut h) = Harness::new() else { return };
     let client = TestClient::spawn(h.socket_path());
-    h.wait_until("the layer surface", |s| !layer_backdrops(&s.outputs[0].output).is_empty());
+    h.wait_until("the layer surface", |s| {
+        !layer_backdrops(&s.outputs[0].output).is_empty()
+    });
     assert_eq!(keyboard_focus(&h.state), None);
 
     client.send(Cmd::SetKeyboard(KeyboardInteractivity::Exclusive));
     client.send(Cmd::Commit);
     h.wait_until("the keyboard focus", |s| keyboard_focus(s).is_some());
-    let layer_surface = h.state.exclusive_layer.clone().expect("the compositor tracks the exclusive layer");
+    let layer_surface = h
+        .state
+        .exclusive_layer
+        .clone()
+        .expect("the compositor tracks the exclusive layer");
     assert_eq!(keyboard_focus(&h.state), Some(layer_surface));
 
     client.send(Cmd::SetKeyboard(KeyboardInteractivity::None));
     client.send(Cmd::Commit);
-    h.wait_until("the keyboard to be released", |s| keyboard_focus(s).is_none());
+    h.wait_until("the keyboard to be released", |s| {
+        keyboard_focus(s).is_none()
+    });
     assert_eq!(h.state.exclusive_layer, None);
 }
 
@@ -337,7 +441,9 @@ const INVALID_ALPHA: u32 = 2;
 fn assert_posts_error(cmd: Cmd, code: u32) {
     let Some(mut h) = Harness::new() else { return };
     let client = TestClient::spawn(h.socket_path());
-    h.wait_until("the first backdrop commit", |s| !layer_backdrops(&s.outputs[0].output).is_empty());
+    h.wait_until("the first backdrop commit", |s| {
+        !layer_backdrops(&s.outputs[0].output).is_empty()
+    });
     client.send(cmd);
     let end = Instant::now() + Duration::from_secs(10);
     while client.backdrop_error().is_none() && Instant::now() < end {
@@ -353,8 +459,26 @@ fn unknown_material_is_a_protocol_error() {
 
 #[test]
 fn negative_size_or_radius_is_a_protocol_error() {
-    assert_posts_error(Cmd::SetShape { x: 0, y: 0, width: -1, height: 10, radius: 0.0 }, INVALID_SHAPE);
-    assert_posts_error(Cmd::SetShape { x: 0, y: 0, width: 10, height: 10, radius: -2.0 }, INVALID_SHAPE);
+    assert_posts_error(
+        Cmd::SetShape {
+            x: 0,
+            y: 0,
+            width: -1,
+            height: 10,
+            radius: 0.0,
+        },
+        INVALID_SHAPE,
+    );
+    assert_posts_error(
+        Cmd::SetShape {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+            radius: -2.0,
+        },
+        INVALID_SHAPE,
+    );
 }
 
 #[test]
@@ -373,24 +497,47 @@ fn backdrop_material_pass_matches_the_cpu_reference() {
     use smithay::input::pointer::CursorImageStatus;
 
     const STRIP_HEIGHT: i32 = 24;
-    let strip = Layout { size: (OUTPUT.0, STRIP_HEIGHT), margin_top: 0, margin_left: 0, material: "MenuBar", shape: (0, 0, OUTPUT.0, STRIP_HEIGHT, 0.0), alpha: 1.0 };
+    let strip = Layout {
+        size: (OUTPUT.0, STRIP_HEIGHT),
+        margin_top: 0,
+        margin_left: 0,
+        material: "MenuBar",
+        shape: (0, 0, OUTPUT.0, STRIP_HEIGHT, 0.0),
+        alpha: 1.0,
+    };
     let theme = Theme::load().expect("specification files");
-    for (material, dark) in [("MenuBar", false), ("MenuBar", true), ("Sidebar", false), ("Menu", true)] {
-        let appearance = if dark { Appearance::Dark } else { Appearance::Light };
+    for (material, dark) in [
+        ("MenuBar", false),
+        ("MenuBar", true),
+        ("Sidebar", false),
+        ("Menu", true),
+    ] {
+        let appearance = if dark {
+            Appearance::Dark
+        } else {
+            Appearance::Light
+        };
         let shoot = |with_strip: bool| -> Option<image::RgbaImage> {
             let mut h = Harness::with_config(|c| c.appearance = appearance)?;
             h.state.cursor_status = CursorImageStatus::Hidden;
-            let client = with_strip.then(|| TestClient::spawn_with(h.socket_path(), Layout { material, ..strip }));
+            let client = with_strip
+                .then(|| TestClient::spawn_with(h.socket_path(), Layout { material, ..strip }));
             if client.is_some() {
-                h.wait_until("the strip backdrop", |s| !layer_backdrops(&s.outputs[0].output).is_empty());
+                h.wait_until("the strip backdrop", |s| {
+                    !layer_backdrops(&s.outputs[0].output).is_empty()
+                });
             }
             for _ in 0..3 {
                 h.step();
             }
             Some(h.screenshot(if with_strip { "gpu" } else { "wall" }))
         };
-        let (Some(wall), Some(gpu)) = (shoot(false), shoot(true)) else { return };
-        let recipe = theme.recipe(appearance, material, &MaterialOptions::default()).unwrap();
+        let (Some(wall), Some(gpu)) = (shoot(false), shoot(true)) else {
+            return;
+        };
+        let recipe = theme
+            .recipe(appearance, material, &MaterialOptions::default())
+            .unwrap();
         let region = MaterialRegion::new([0.0, 0.0, OUTPUT.0 as f32, STRIP_HEIGHT as f32], &recipe);
         let tint = cupertino_server::render::scene::wallpaper_tint(dark);
         let cpu = render_regions(&wall, &[region], 1.0, tint, false, false);
@@ -407,10 +554,18 @@ fn backdrop_material_pass_matches_the_cpu_reference() {
         }
         let mean = sum / n as f64;
         eprintln!("{material} dark={dark}: mean abs diff {mean:.3}, max {max}");
-        assert!(mean < 1.5 && max <= 16, "{material} dark={dark}: GLES vs CPU mean {mean:.3} max {max}");
+        assert!(
+            mean < 1.5 && max <= 16,
+            "{material} dark={dark}: GLES vs CPU mean {mean:.3} max {max}"
+        );
         // the strip must differ from the plain wallpaper (the pass really ran)
-        let changed = (0..OUTPUT.0 as u32).filter(|x| gpu.get_pixel(*x, 4) != wall.get_pixel(*x, 4)).count();
-        assert!(changed > OUTPUT.0 as usize / 2, "{material}: strip unchanged");
+        let changed = (0..OUTPUT.0 as u32)
+            .filter(|x| gpu.get_pixel(*x, 4) != wall.get_pixel(*x, 4))
+            .count();
+        assert!(
+            changed > OUTPUT.0 as usize / 2,
+            "{material}: strip unchanged"
+        );
     }
 }
 
@@ -426,37 +581,90 @@ fn reduce_transparency_and_increase_contrast_draw_the_material_opaque() {
     const STRIP_HEIGHT: i32 = 24;
     let Some(mut h) = Harness::new() else { return };
     h.state.cursor_status = CursorImageStatus::Hidden;
-    let strip = Layout { size: (OUTPUT.0, STRIP_HEIGHT), margin_top: 0, margin_left: 0, material: "MenuBar", shape: (0, 0, OUTPUT.0, STRIP_HEIGHT, 0.0), alpha: 1.0 };
+    let strip = Layout {
+        size: (OUTPUT.0, STRIP_HEIGHT),
+        margin_top: 0,
+        margin_left: 0,
+        material: "MenuBar",
+        shape: (0, 0, OUTPUT.0, STRIP_HEIGHT, 0.0),
+        alpha: 1.0,
+    };
     let _client = TestClient::spawn_with(h.socket_path(), strip);
-    h.wait_until("the strip backdrop", |s| !layer_backdrops(&s.outputs[0].output).is_empty());
-    let row = |img: &image::RgbaImage| -> Vec<[u8; 3]> { (0..OUTPUT.0 as u32).map(|x| { let p = img.get_pixel(x, STRIP_HEIGHT as u32 / 2); [p[0], p[1], p[2]] }).collect() };
+    h.wait_until("the strip backdrop", |s| {
+        !layer_backdrops(&s.outputs[0].output).is_empty()
+    });
+    let row = |img: &image::RgbaImage| -> Vec<[u8; 3]> {
+        (0..OUTPUT.0 as u32)
+            .map(|x| {
+                let p = img.get_pixel(x, STRIP_HEIGHT as u32 / 2);
+                [p[0], p[1], p[2]]
+            })
+            .collect()
+    };
     let theme = Theme::load().expect("specification files");
     let opaque_fill = |appearance: Appearance| -> [u8; 3] {
-        let recipe = theme.recipe(appearance, "MenuBar", &MaterialOptions { reduce_transparency: true, ..MaterialOptions::default() }).unwrap();
-        assert!(recipe.opaque && recipe.backdrop.is_none(), "{}", recipe.name);
+        let recipe = theme
+            .recipe(
+                appearance,
+                "MenuBar",
+                &MaterialOptions {
+                    reduce_transparency: true,
+                    ..MaterialOptions::default()
+                },
+            )
+            .unwrap();
+        assert!(
+            recipe.opaque && recipe.backdrop.is_none(),
+            "{}",
+            recipe.name
+        );
         let [r, g, b, a] = recipe.fills[0].rgba;
         assert_eq!(a, 1.0);
         [r, g, b].map(|c| (c * 255.0).round() as u8)
     };
-    let uniform = |pixels: &[[u8; 3]], want: [u8; 3]| pixels.iter().all(|p| p.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 1));
+    let uniform = |pixels: &[[u8; 3]], want: [u8; 3]| {
+        pixels
+            .iter()
+            .all(|p| p.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 1))
+    };
 
     let translucent = row(&h.screenshot("translucent"));
     let first = translucent[0];
-    assert!(translucent.iter().any(|p| p.iter().zip(first).any(|(a, b)| a.abs_diff(b) > 4)), "the translucent strip shows the wallpaper's gradient");
+    assert!(
+        translucent
+            .iter()
+            .any(|p| p.iter().zip(first).any(|(a, b)| a.abs_diff(b) > 4)),
+        "the translucent strip shows the wallpaper's gradient"
+    );
 
-    h.state.set_display_option(DisplayOption::ReduceTransparency, true);
+    h.state
+        .set_display_option(DisplayOption::ReduceTransparency, true);
     let reduced = row(&h.screenshot("reduce-transparency"));
     let want = opaque_fill(Appearance::Light);
-    assert!(uniform(&reduced, want), "every pixel of the strip is the opaque fill {want:?}: {:?}", &reduced[..4]);
+    assert!(
+        uniform(&reduced, want),
+        "every pixel of the strip is the opaque fill {want:?}: {:?}",
+        &reduced[..4]
+    );
 
-    h.state.set_display_option(DisplayOption::ReduceTransparency, false);
-    h.state.set_display_option(DisplayOption::IncreaseContrast, true);
+    h.state
+        .set_display_option(DisplayOption::ReduceTransparency, false);
+    h.state
+        .set_display_option(DisplayOption::IncreaseContrast, true);
     let contrast = row(&h.screenshot("increase-contrast"));
     let want_contrast = opaque_fill(Appearance::LightHighContrast);
-    assert_ne!(want_contrast, want, "the high-contrast catalog has its own opaque fill");
-    assert!(uniform(&contrast, want_contrast), "the strip is the high-contrast opaque fill {want_contrast:?}: {:?}", &contrast[..4]);
+    assert_ne!(
+        want_contrast, want,
+        "the high-contrast catalog has its own opaque fill"
+    );
+    assert!(
+        uniform(&contrast, want_contrast),
+        "the strip is the high-contrast opaque fill {want_contrast:?}: {:?}",
+        &contrast[..4]
+    );
 
-    h.state.set_display_option(DisplayOption::IncreaseContrast, false);
+    h.state
+        .set_display_option(DisplayOption::IncreaseContrast, false);
     assert_eq!(row(&h.screenshot("translucent-again")), translucent);
 }
 
@@ -496,19 +704,34 @@ impl PopupClient {
             let qh = queue.handle();
             let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
             let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ()).unwrap();
-            let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 = globals.bind(&qh, 1..=4, ()).unwrap();
+            let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
+                globals.bind(&qh, 1..=4, ()).unwrap();
             let wm_base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 3..=6, ()).unwrap();
             let shell: CupertinoShellV1 = globals.bind(&qh, 1..=1, ()).unwrap();
             let layer_surface = compositor.create_surface(&qh, ());
-            let layer = layer_shell.get_layer_surface(&layer_surface, None, zwlr_layer_shell_v1::Layer::Top, "popup-test".into(), &qh, ());
+            let layer = layer_shell.get_layer_surface(
+                &layer_surface,
+                None,
+                zwlr_layer_shell_v1::Layer::Top,
+                "popup-test".into(),
+                &qh,
+                (),
+            );
             layer.set_size(SURFACE.0 as u32, SURFACE.1 as u32);
-            layer.set_anchor(zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left);
+            layer.set_anchor(
+                zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left,
+            );
             layer.set_margin(MARGIN_TOP, 0, 0, MARGIN_LEFT);
             layer.set_exclusive_zone(-1);
             layer_surface.commit();
             let popup_surface = compositor.create_surface(&qh, ());
             let backdrop = shell.get_backdrop(&popup_surface, &qh, ());
-            let mut client = PopupClient { shm, layer_surface, popup_surface, backdrop };
+            let mut client = PopupClient {
+                shm,
+                layer_surface,
+                popup_surface,
+                backdrop,
+            };
             // the layer surface is mapped before its popup is created
             queue.roundtrip(&mut client).unwrap();
             let (x, y, w, h) = POPUP;
@@ -529,7 +752,15 @@ impl PopupClient {
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for PopupClient {
-    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 macro_rules! ignore_popup_events {
     ($($t:ty),*) => {$(
@@ -552,7 +783,14 @@ ignore_popup_events!(
 );
 
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for PopupClient {
-    fn event(_: &mut Self, wm_base: &xdg_wm_base::XdgWmBase, event: xdg_wm_base::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        _: &mut Self,
+        wm_base: &xdg_wm_base::XdgWmBase,
+        event: xdg_wm_base::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         if let xdg_wm_base::Event::Ping { serial } = event {
             wm_base.pong(serial);
         }
@@ -560,7 +798,14 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for PopupClient {
 }
 
 impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for PopupClient {
-    fn event(state: &mut Self, layer: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, event: zwlr_layer_surface_v1::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        layer: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
         if let zwlr_layer_surface_v1::Event::Configure { serial, .. } = event {
             layer.ack_configure(serial);
             state.attach(&state.layer_surface, SURFACE, qh);
@@ -570,7 +815,14 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for PopupClient {
 }
 
 impl Dispatch<xdg_surface::XdgSurface, ()> for PopupClient {
-    fn event(state: &mut Self, xdg: &xdg_surface::XdgSurface, event: xdg_surface::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        xdg: &xdg_surface::XdgSurface,
+        event: xdg_surface::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
         if let xdg_surface::Event::Configure { serial } = event {
             xdg.ack_configure(serial);
             let (_, _, w, h) = POPUP;
@@ -599,22 +851,36 @@ fn popup_backdrop_draws_under_the_popup() {
         }
         Some(h.screenshot(if with_popup { "popup" } else { "wall" }))
     };
-    let (Some(wall), Some(shot)) = (shoot(false), shoot(true)) else { return };
+    let (Some(wall), Some(shot)) = (shoot(false), shoot(true)) else {
+        return;
+    };
     let (px, py, pw, ph) = POPUP;
     let (ox, oy) = (MARGIN_LEFT + px, MARGIN_TOP + py);
     let changed = |x0: i32, y0: i32, w: i32, h: i32| -> f64 {
         let mut n = 0;
         for y in y0..y0 + h {
             for x in x0..x0 + w {
-                n += usize::from(wall.get_pixel(x as u32, y as u32) != shot.get_pixel(x as u32, y as u32));
+                n += usize::from(
+                    wall.get_pixel(x as u32, y as u32) != shot.get_pixel(x as u32, y as u32),
+                );
             }
         }
         n as f64 / (w * h) as f64
     };
     // inside the popup, inset past the blur's reach at the edges
-    assert!(changed(ox + 10, oy + 10, pw - 20, ph - 20) > 0.9, "popup area shows no material");
+    assert!(
+        changed(ox + 10, oy + 10, pw - 20, ph - 20) > 0.9,
+        "popup area shows no material"
+    );
     // the popup casts its shadow (the panel row of the table: σ 8, offset 4) just below its edge ...
-    assert!(changed(ox + 20, oy + ph + 1, pw - 40, 4) > 0.9, "no shadow below the popup");
+    assert!(
+        changed(ox + 20, oy + ph + 1, pw - 40, 4) > 0.9,
+        "no shadow below the popup"
+    );
     // ... and the parent's area beyond the shadow's reach (σ 8 reaches 23 px) is untouched
-    assert_eq!(changed(MARGIN_LEFT + 5, MARGIN_TOP + 5, px - 40, SURFACE.1 - 10), 0.0, "material outside the popup");
+    assert_eq!(
+        changed(MARGIN_LEFT + 5, MARGIN_TOP + 5, px - 40, SURFACE.1 - 10),
+        0.0,
+        "material outside the popup"
+    );
 }

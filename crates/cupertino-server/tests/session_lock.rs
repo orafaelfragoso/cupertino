@@ -16,9 +16,13 @@ use cupertino_server::Cupertino;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
-use wayland_client::protocol::{wl_buffer, wl_compositor, wl_output, wl_registry, wl_shm, wl_shm_pool, wl_surface};
+use wayland_client::protocol::{
+    wl_buffer, wl_compositor, wl_output, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
-use wayland_protocols::ext::session_lock::v1::client::{ext_session_lock_manager_v1, ext_session_lock_surface_v1, ext_session_lock_v1};
+use wayland_protocols::ext::session_lock::v1::client::{
+    ext_session_lock_manager_v1, ext_session_lock_surface_v1, ext_session_lock_v1,
+};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
 const OUTPUT: (i32, i32) = (1000, 700);
@@ -35,7 +39,15 @@ impl Harness {
     fn new() -> Option<Harness> {
         let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().ok()?;
         let display: Display<Cupertino> = Display::new().ok()?;
-        let mut state = Cupertino::new(display, event_loop.handle(), event_loop.get_signal(), Config::default(), true, &cupertino_assets::Assets::discover()).ok()?;
+        let mut state = Cupertino::new(
+            display,
+            event_loop.handle(),
+            event_loop.get_signal(),
+            Config::default(),
+            true,
+            &cupertino_assets::Assets::builtin(),
+        )
+        .ok()?;
         match headless::init(&mut state, OUTPUT, 1.0) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
@@ -48,7 +60,12 @@ impl Harness {
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
         let end = Instant::now() + Duration::from_secs(10);
         while Instant::now() < end {
-            headless::step(&mut self.state, &mut self.event_loop, Duration::from_millis(5)).unwrap();
+            headless::step(
+                &mut self.state,
+                &mut self.event_loop,
+                Duration::from_millis(5),
+            )
+            .unwrap();
             if cond(&self.state) {
                 return;
             }
@@ -62,7 +79,8 @@ impl Harness {
     }
 
     fn screenshot(&mut self, name: &str) -> image::RgbaImage {
-        let path = std::env::temp_dir().join(format!("cupertino-test-{}-{name}.png", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("cupertino-test-{}-{name}.png", std::process::id()));
         self.state.screenshot_requests.push(path.clone());
         self.state.request_redraw();
         let p = path.clone();
@@ -79,11 +97,16 @@ impl Harness {
         (g.x + g.w / 2.0, g.y + g.h / 2.0)
     }
 
-    fn surface_under(&self, p: (f64, f64)) -> Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface> {
+    fn surface_under(
+        &self,
+        p: (f64, f64),
+    ) -> Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface> {
         self.state.surface_under(p.into()).map(|(s, _)| s)
     }
 
-    fn keyboard_focus(&self) -> Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface> {
+    fn keyboard_focus(
+        &self,
+    ) -> Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface> {
         self.state.seat.get_keyboard().unwrap().current_focus()
     }
 
@@ -95,7 +118,12 @@ impl Harness {
 
 // ---- clients -------------------------------------------------------------------------------
 
-fn solid_buffer(shm: &wl_shm::WlShm, size: (i32, i32), color: [u8; 4], qh: &QueueHandle<ClientState>) -> wl_buffer::WlBuffer {
+fn solid_buffer(
+    shm: &wl_shm::WlShm,
+    size: (i32, i32),
+    color: [u8; 4],
+    qh: &QueueHandle<ClientState>,
+) -> wl_buffer::WlBuffer {
     let (w, h) = size;
     let fd = rustix::fs::memfd_create("cupertino-test", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
     let mut file = std::fs::File::from(fd);
@@ -122,7 +150,15 @@ struct ClientState {
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for ClientState {
-    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 macro_rules! ignore_events {
     ($($t:ty),*) => {$(
@@ -143,7 +179,14 @@ ignore_events!(
 );
 
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for ClientState {
-    fn event(_: &mut Self, base: &xdg_wm_base::XdgWmBase, event: xdg_wm_base::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        _: &mut Self,
+        base: &xdg_wm_base::XdgWmBase,
+        event: xdg_wm_base::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         if let xdg_wm_base::Event::Ping { serial } = event {
             base.pong(serial);
         }
@@ -152,11 +195,22 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for ClientState {
 
 /// The surface is the user data, so the configure can attach a buffer.
 impl Dispatch<xdg_surface::XdgSurface, wl_surface::WlSurface> for ClientState {
-    fn event(state: &mut Self, xdg: &xdg_surface::XdgSurface, event: xdg_surface::Event, surface: &wl_surface::WlSurface, _: &Connection, qh: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        xdg: &xdg_surface::XdgSurface,
+        event: xdg_surface::Event,
+        surface: &wl_surface::WlSurface,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
         if let xdg_surface::Event::Configure { serial } = event {
             xdg.ack_configure(serial);
             let size = state.toplevel_size;
-            surface.attach(Some(&solid_buffer(&state.shm, size, TOPLEVEL_BLUE, qh)), 0, 0);
+            surface.attach(
+                Some(&solid_buffer(&state.shm, size, TOPLEVEL_BLUE, qh)),
+                0,
+                0,
+            );
             surface.damage_buffer(0, 0, size.0, size.1);
             surface.commit();
         }
@@ -164,7 +218,14 @@ impl Dispatch<xdg_surface::XdgSurface, wl_surface::WlSurface> for ClientState {
 }
 
 impl Dispatch<ext_session_lock_v1::ExtSessionLockV1, ()> for ClientState {
-    fn event(state: &mut Self, _: &ext_session_lock_v1::ExtSessionLockV1, event: ext_session_lock_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        _: &ext_session_lock_v1::ExtSessionLockV1,
+        event: ext_session_lock_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         let mut status = state.lock_status.lock().unwrap();
         match event {
             ext_session_lock_v1::Event::Locked => status.locked = true,
@@ -175,9 +236,23 @@ impl Dispatch<ext_session_lock_v1::ExtSessionLockV1, ()> for ClientState {
 }
 
 /// The surface is the user data, so the configure can attach a buffer of the configured size.
-impl Dispatch<ext_session_lock_surface_v1::ExtSessionLockSurfaceV1, wl_surface::WlSurface> for ClientState {
-    fn event(state: &mut Self, lock_surface: &ext_session_lock_surface_v1::ExtSessionLockSurfaceV1, event: ext_session_lock_surface_v1::Event, surface: &wl_surface::WlSurface, _: &Connection, qh: &QueueHandle<Self>) {
-        if let ext_session_lock_surface_v1::Event::Configure { serial, width, height } = event {
+impl Dispatch<ext_session_lock_surface_v1::ExtSessionLockSurfaceV1, wl_surface::WlSurface>
+    for ClientState
+{
+    fn event(
+        state: &mut Self,
+        lock_surface: &ext_session_lock_surface_v1::ExtSessionLockSurfaceV1,
+        event: ext_session_lock_surface_v1::Event,
+        surface: &wl_surface::WlSurface,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let ext_session_lock_surface_v1::Event::Configure {
+            serial,
+            width,
+            height,
+        } = event
+        {
             lock_surface.ack_configure(serial);
             let size = (width as i32, height as i32);
             surface.attach(Some(&solid_buffer(&state.shm, size, LOCK_GREEN, qh)), 0, 0);
@@ -204,8 +279,20 @@ struct Client {
 }
 
 impl Client {
-    fn run(socket: PathBuf, setup: impl FnOnce(&mut wayland_client::EventQueue<ClientState>, &mut ClientState, &wayland_client::globals::GlobalList) -> Setup + Send + 'static) -> Client {
-        let (stop, unlock) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+    fn run(
+        socket: PathBuf,
+        setup: impl FnOnce(
+                &mut wayland_client::EventQueue<ClientState>,
+                &mut ClientState,
+                &wayland_client::globals::GlobalList,
+            ) -> Setup
+            + Send
+            + 'static,
+    ) -> Client {
+        let (stop, unlock) = (
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
         let lock_status = Arc::new(Mutex::new(LockStatus::default()));
         let (stop2, unlock2, status2) = (stop.clone(), unlock.clone(), lock_status.clone());
         let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
@@ -214,8 +301,15 @@ impl Client {
             let conn = Connection::from_socket(thread_stream).unwrap();
             let (globals, mut queue) = registry_queue_init::<ClientState>(&conn).unwrap();
             let qh = queue.handle();
-            let mut client = ClientState { shm: globals.bind(&qh, 1..=1, ()).unwrap(), lock_status: status2, toplevel_size: (400, 300) };
-            let Setup { objects: _objects, mut lock } = setup(&mut queue, &mut client, &globals);
+            let mut client = ClientState {
+                shm: globals.bind(&qh, 1..=1, ()).unwrap(),
+                lock_status: status2,
+                toplevel_size: (400, 300),
+            };
+            let Setup {
+                objects: _objects,
+                mut lock,
+            } = setup(&mut queue, &mut client, &globals);
             while !stop2.load(Ordering::SeqCst) {
                 if unlock2.swap(false, Ordering::SeqCst) {
                     if let Some(lock) = lock.take() {
@@ -228,7 +322,12 @@ impl Client {
                 std::thread::sleep(Duration::from_millis(5));
             }
         });
-        Client { stream, stop, unlock, lock_status }
+        Client {
+            stream,
+            stop,
+            unlock,
+            lock_status,
+        }
     }
 
     /// A client with one mapped toplevel.
@@ -243,7 +342,10 @@ impl Client {
             toplevel.set_app_id("org.example.locked-out".to_string());
             surface.commit();
             queue.roundtrip(client).unwrap();
-            Setup { objects: Box::new((wm_base, xdg, toplevel, surface)), lock: None }
+            Setup {
+                objects: Box::new((wm_base, xdg, toplevel, surface)),
+                lock: None,
+            }
         })
     }
 
@@ -252,13 +354,17 @@ impl Client {
         Self::run(socket, |queue, client, globals| {
             let qh = queue.handle();
             let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
-            let manager: ext_session_lock_manager_v1::ExtSessionLockManagerV1 = globals.bind(&qh, 1..=1, ()).unwrap();
+            let manager: ext_session_lock_manager_v1::ExtSessionLockManagerV1 =
+                globals.bind(&qh, 1..=1, ()).unwrap();
             let output: wl_output::WlOutput = globals.bind(&qh, 1..=4, ()).unwrap();
             let lock = manager.lock(&qh, ());
             let surface = compositor.create_surface(&qh, ());
             let lock_surface = lock.get_lock_surface(&surface, &output, &qh, surface.clone());
             queue.roundtrip(client).unwrap();
-            Setup { objects: Box::new((manager, output, surface, lock_surface)), lock: Some(lock) }
+            Setup {
+                objects: Box::new((manager, output, surface, lock_surface)),
+                lock: Some(lock),
+            }
         })
     }
 
@@ -289,13 +395,23 @@ impl Drop for Client {
 
 fn mapped_toplevel(h: &mut Harness) -> (Client, (f64, f64)) {
     let client = Client::toplevel(h.socket_path());
-    h.wait_until("the toplevel to be mapped", |s| s.wm.windows().count() == 1 && s.wm.key_window().is_some_and(|w| s.entry(w).is_some_and(|e| e.mapped)));
+    h.wait_until("the toplevel to be mapped", |s| {
+        s.wm.windows().count() == 1
+            && s.wm
+                .key_window()
+                .is_some_and(|w| s.entry(w).is_some_and(|e| e.mapped))
+    });
     // the opening animation settles
     h.state.fixed_time = Some(h.state.now() + 5.0);
     h.state.tick();
     let center = h.toplevel_center();
-    let under = h.surface_under(center).expect("the toplevel is under its center");
-    assert!(h.state.entry_for_surface(&under).is_some(), "a toplevel surface is hit before the lock");
+    let under = h
+        .surface_under(center)
+        .expect("the toplevel is under its center");
+    assert!(
+        h.state.entry_for_surface(&under).is_some(),
+        "a toplevel surface is hit before the lock"
+    );
     (client, center)
 }
 
@@ -303,15 +419,32 @@ fn mapped_toplevel(h: &mut Harness) -> (Client, (f64, f64)) {
 fn a_lock_covers_the_toplevel_and_gives_the_pointer_and_keyboard_to_the_lock_surface() {
     let Some(mut h) = Harness::new() else { return };
     let (_toplevel, center) = mapped_toplevel(&mut h);
-    assert_eq!(h.center_pixel("before")[..3], [0, 0, 255][..], "the toplevel shows before the lock");
+    assert_eq!(
+        h.center_pixel("before")[..3],
+        [0, 0, 255][..],
+        "the toplevel shows before the lock"
+    );
 
     let locker = Client::locker(h.socket_path());
     h.wait_until("the session to be locked", |_| locker.locked());
 
-    let under = h.surface_under(center).expect("the lock surface is under the pointer");
-    assert!(h.state.is_lock_surface(&under), "the surface under the former toplevel is the lock surface");
-    assert!(h.keyboard_focus().is_some_and(|s| h.state.is_lock_surface(&s)), "the keyboard is on the lock surface");
-    assert_eq!(h.center_pixel("locked")[..3], [0, 255, 0][..], "only the lock surface is drawn");
+    let under = h
+        .surface_under(center)
+        .expect("the lock surface is under the pointer");
+    assert!(
+        h.state.is_lock_surface(&under),
+        "the surface under the former toplevel is the lock surface"
+    );
+    assert!(
+        h.keyboard_focus()
+            .is_some_and(|s| h.state.is_lock_surface(&s)),
+        "the keyboard is on the lock surface"
+    );
+    assert_eq!(
+        h.center_pixel("locked")[..3],
+        [0, 255, 0][..],
+        "only the lock surface is drawn"
+    );
 }
 
 #[test]
@@ -322,14 +455,28 @@ fn a_lock_client_that_disconnects_leaves_the_session_locked_and_black() {
     h.wait_until("the session to be locked", |_| locker.locked());
     drop(locker);
 
-    h.wait_until("the lock surface to go away", |s| s.surface_under(center.into()).is_none());
-    assert!(h.state.session_lock.is_active(), "the session is still locked");
-    assert!(h.keyboard_focus().is_none(), "no keyboard focus while the lock has no client");
-    assert_eq!(h.center_pixel("orphaned")[..3], [0, 0, 0][..], "the output is black");
+    h.wait_until("the lock surface to go away", |s| {
+        s.surface_under(center.into()).is_none()
+    });
+    assert!(
+        h.state.session_lock.is_active(),
+        "the session is still locked"
+    );
+    assert!(
+        h.keyboard_focus().is_none(),
+        "no keyboard focus while the lock has no client"
+    );
+    assert_eq!(
+        h.center_pixel("orphaned")[..3],
+        [0, 0, 0][..],
+        "the output is black"
+    );
 
     let successor = Client::locker(h.socket_path());
     h.wait_until("a new client to take the lock", |_| successor.locked());
-    let under = h.surface_under(center).expect("the new lock surface is under the pointer");
+    let under = h
+        .surface_under(center)
+        .expect("the new lock surface is under the pointer");
     assert!(h.state.is_lock_surface(&under));
 }
 
@@ -357,9 +504,18 @@ fn an_unlock_from_a_refused_lock_does_not_open_a_session_whose_locker_crashed() 
     intruder.unlock();
     std::thread::sleep(Duration::from_millis(100));
     holder.kill();
-    h.wait_until("the holder's lock surface to go away", |s| s.surface_under(center.into()).is_none());
-    assert!(h.state.session_lock.is_active(), "the session is still locked");
-    assert_eq!(h.center_pixel("after the intruder's unlock")[..3], [0, 0, 0][..], "the output is black");
+    h.wait_until("the holder's lock surface to go away", |s| {
+        s.surface_under(center.into()).is_none()
+    });
+    assert!(
+        h.state.session_lock.is_active(),
+        "the session is still locked"
+    );
+    assert_eq!(
+        h.center_pixel("after the intruder's unlock")[..3],
+        [0, 0, 0][..],
+        "the output is black"
+    );
 }
 
 #[test]
@@ -371,8 +527,22 @@ fn unlocking_gives_the_toplevel_back_the_pointer_the_keyboard_and_the_screen() {
     h.wait_until("the session to be locked", |_| locker.locked());
 
     locker.unlock();
-    h.wait_until("the session to be unlocked", |s| !s.session_lock.is_active());
-    assert_eq!(h.surface_under(center), Some(toplevel_surface.clone()), "the toplevel is under the pointer again");
-    assert_eq!(h.keyboard_focus(), Some(toplevel_surface), "the toplevel has the keyboard again");
-    assert_eq!(h.center_pixel("unlocked")[..3], [0, 0, 255][..], "the toplevel is drawn again");
+    h.wait_until("the session to be unlocked", |s| {
+        !s.session_lock.is_active()
+    });
+    assert_eq!(
+        h.surface_under(center),
+        Some(toplevel_surface.clone()),
+        "the toplevel is under the pointer again"
+    );
+    assert_eq!(
+        h.keyboard_focus(),
+        Some(toplevel_surface),
+        "the toplevel has the keyboard again"
+    );
+    assert_eq!(
+        h.center_pixel("unlocked")[..3],
+        [0, 0, 255][..],
+        "the toplevel is drawn again"
+    );
 }

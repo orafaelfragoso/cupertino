@@ -3,14 +3,16 @@
 
 use cupertino_wm::{Command, Edges, Modifiers as WmModifiers, Point as MPoint};
 use smithay::backend::input::{
-    AbsolutePositionEvent, Axis, AxisSource, ButtonState, Device, DeviceCapability, Event, GestureBeginEvent, GestureEndEvent, GesturePinchUpdateEvent,
-    GestureSwipeUpdateEvent, InputBackend, InputEvent, KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
-    PointerMotionEvent, AxisRelativeDirection,
+    AbsolutePositionEvent, Axis, AxisRelativeDirection, AxisSource, ButtonState, Device,
+    DeviceCapability, Event, GestureBeginEvent, GestureEndEvent, GesturePinchUpdateEvent,
+    GestureSwipeUpdateEvent, InputBackend, InputEvent, KeyState, KeyboardKeyEvent,
+    PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
 };
 use smithay::input::keyboard::FilterResult;
 use smithay::input::pointer::{
-    AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent as PinchUpdate,
-    GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent as SwipeUpdate, MotionEvent, RelativeMotionEvent,
+    AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent,
+    GesturePinchEndEvent, GesturePinchUpdateEvent as PinchUpdate, GestureSwipeBeginEvent,
+    GestureSwipeEndEvent, GestureSwipeUpdateEvent as SwipeUpdate, MotionEvent, RelativeMotionEvent,
 };
 
 /// Which kind of gesture was forwarded to the client.
@@ -25,18 +27,21 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Point, SERIAL_COUNTER};
 
-use cupertino_input::{Disposition, GestureEvent, GestureKind, GestureOutput, Outcome as GestureOutcome, PointerAccel, ScrollAxisAccel, ScrollPhase};
+use cupertino_input::{
+    Disposition, GestureEvent, GestureKind, GestureOutput, Outcome as GestureOutcome, PointerAccel,
+    ScrollAxisAccel, ScrollPhase,
+};
 use cupertino_protocols::server::cupertino_dock_v1::Gesture as DockGesture;
 
 use crate::config::PointerSettings;
 
 use crate::input::{ActionPlan, KeyEvent, KeyOutcome, Mods};
 use crate::kbd_filters::RepeatTarget;
-use cupertino_keyboard::rewrite::Rewrite;
 use crate::kbd_ui::AccentRoute;
 use crate::overlays::OverlayKey;
-use smithay::input::keyboard::{keysyms, Keycode};
 use crate::state::{Cupertino, PointerMode, WindowTarget};
+use cupertino_keyboard::rewrite::Rewrite;
+use smithay::input::keyboard::{keysyms, Keycode};
 
 /// Who takes one key event inside the keyboard filter.
 #[derive(Clone, Debug)]
@@ -76,15 +81,38 @@ impl PointerDevice {
     /// Touchpad finger scrolling is accelerated with the trackpad scroll curves.
     pub fn new(touchpad: bool, cfg: &PointerSettings) -> Self {
         let (accel, scroll) = if touchpad {
-            let pad = cupertino_input::TouchpadSettings { tracking_speed: cfg.trackpad_speed, ..cupertino_input::TouchpadSettings::default() };
-            (pad.pointer_accel(), pad.scroll_accel().map(|axis| [axis.clone(), axis]))
+            let pad = cupertino_input::TouchpadSettings {
+                tracking_speed: cfg.trackpad_speed,
+                ..cupertino_input::TouchpadSettings::default()
+            };
+            (
+                pad.pointer_accel(),
+                pad.scroll_accel().map(|axis| [axis.clone(), axis]),
+            )
         } else if cfg.mouse_acceleration {
-            let curve = cupertino_input::TableCurve::new(&cupertino_input::AccelTable::default_table(), cfg.mouse_speed);
-            (PointerAccel::with_curve(curve.map(cupertino_input::AccelCurve::Table), cupertino_input::pointer::DEFAULT_RESOLUTION_DPI, 0), None)
+            let curve = cupertino_input::TableCurve::new(
+                &cupertino_input::AccelTable::default_table(),
+                cfg.mouse_speed,
+            );
+            (
+                PointerAccel::with_curve(
+                    curve.map(cupertino_input::AccelCurve::Table),
+                    cupertino_input::pointer::DEFAULT_RESOLUTION_DPI,
+                    0,
+                ),
+                None,
+            )
         } else {
             (PointerAccel::linear(cfg.mouse_speed), None)
         };
-        Self { touchpad, accel, last_usec: None, scroll, scroll_count: cupertino_input::ScrollCounter::default(), scrolling: false }
+        Self {
+            touchpad,
+            accel,
+            last_usec: None,
+            scroll,
+            scroll_count: cupertino_input::ScrollCounter::default(),
+            scrolling: false,
+        }
     }
 
     /// Take new tracking settings: the device starts over as [`PointerDevice::new`] made it.
@@ -94,7 +122,9 @@ impl PointerDevice {
 
     /// Accelerated delta for unaccelerated `delta` at `usec`.
     pub fn accelerate(&mut self, delta: Point<f64, Logical>, usec: u64) -> Point<f64, Logical> {
-        let dt_ms = self.last_usec.map_or(0.0, |last| usec.saturating_sub(last) as f64 / 1000.0);
+        let dt_ms = self
+            .last_usec
+            .map_or(0.0, |last| usec.saturating_sub(last) as f64 / 1000.0);
         self.last_usec = Some(usec);
         self.accel.accelerate(delta.x, delta.y, dt_ms).into()
     }
@@ -128,7 +158,11 @@ impl PointerDevice {
         if points == (0.0, 0.0) {
             return None;
         }
-        let phase = if std::mem::replace(&mut self.scrolling, true) { ScrollPhase::Changed } else { ScrollPhase::Began };
+        let phase = if std::mem::replace(&mut self.scrolling, true) {
+            ScrollPhase::Changed
+        } else {
+            ScrollPhase::Began
+        };
         Some(self.scroll_count.update(phase, points.0, points.1, ms))
     }
 }
@@ -171,17 +205,28 @@ pub const BTN_RIGHT: u32 = 0x111;
 impl Cupertino {
     /// Logical modifiers of the keyboard (the primary modifier of the profile is `logo`).
     pub fn current_mods(&self) -> Mods {
-        self.seat.get_keyboard().map(|k| self.config.keyboard.translate(&k.modifier_state())).unwrap_or_default()
+        self.seat
+            .get_keyboard()
+            .map(|k| self.config.keyboard.translate(&k.modifier_state()))
+            .unwrap_or_default()
     }
 
     pub fn process_input_event<B: InputBackend>(&mut self, event: InputEvent<B>) {
-        if !matches!(event, InputEvent::DeviceAdded { .. } | InputEvent::DeviceRemoved { .. }) {
+        if !matches!(
+            event,
+            InputEvent::DeviceAdded { .. } | InputEvent::DeviceRemoved { .. }
+        ) {
             self.input_activity();
         }
         match event {
-            InputEvent::DeviceAdded { device } if device.has_capability(DeviceCapability::Pointer) => {
+            InputEvent::DeviceAdded { device }
+                if device.has_capability(DeviceCapability::Pointer) =>
+            {
                 let touchpad = device.has_capability(DeviceCapability::Gesture);
-                self.pointer_devices.insert(device.id(), PointerDevice::new(touchpad, &self.config.pointer));
+                self.pointer_devices.insert(
+                    device.id(),
+                    PointerDevice::new(touchpad, &self.config.pointer),
+                );
             }
             InputEvent::DeviceRemoved { device } => {
                 self.pointer_devices.remove(&device.id());
@@ -189,8 +234,13 @@ impl Cupertino {
             InputEvent::Keyboard { event } => self.on_keyboard::<B>(event),
             InputEvent::PointerMotion { event } => self.on_pointer_motion::<B>(event),
             InputEvent::PointerMotionAbsolute { event } => {
-                let Some(out) = self.outputs.first() else { return };
-                let size = smithay::utils::Size::<i32, Logical>::from((out.rect.w as i32, out.rect.h as i32));
+                let Some(out) = self.outputs.first() else {
+                    return;
+                };
+                let size = smithay::utils::Size::<i32, Logical>::from((
+                    out.rect.w as i32,
+                    out.rect.h as i32,
+                ));
                 let pos = event.position_transformed(size) + Point::from((out.rect.x, out.rect.y));
                 self.pointer_moved_to(pos, event.time_msec(), None);
             }
@@ -205,14 +255,34 @@ impl Cupertino {
             InputEvent::GestureHoldBegin { event } => {
                 let pointer = self.pointer.clone();
                 let (time, fingers) = (event.time_msec(), event.fingers());
-                self.gestures.handle(GestureEvent::HoldBegin { time: f64::from(time) / 1000.0, fingers });
-                pointer.gesture_hold_begin(self, &GestureHoldBeginEvent { serial: SERIAL_COUNTER.next_serial(), time, fingers });
+                self.gestures.handle(GestureEvent::HoldBegin {
+                    time: f64::from(time) / 1000.0,
+                    fingers,
+                });
+                pointer.gesture_hold_begin(
+                    self,
+                    &GestureHoldBeginEvent {
+                        serial: SERIAL_COUNTER.next_serial(),
+                        time,
+                        fingers,
+                    },
+                );
             }
             InputEvent::GestureHoldEnd { event } => {
                 let pointer = self.pointer.clone();
                 let (time, cancelled) = (event.time_msec(), event.cancelled());
-                self.gestures.handle(GestureEvent::HoldEnd { time: f64::from(time) / 1000.0, cancelled });
-                pointer.gesture_hold_end(self, &GestureHoldEndEvent { serial: SERIAL_COUNTER.next_serial(), time, cancelled });
+                self.gestures.handle(GestureEvent::HoldEnd {
+                    time: f64::from(time) / 1000.0,
+                    cancelled,
+                });
+                pointer.gesture_hold_end(
+                    self,
+                    &GestureHoldEndEvent {
+                        serial: SERIAL_COUNTER.next_serial(),
+                        time,
+                        cancelled,
+                    },
+                );
             }
             _ => {}
         }
@@ -226,7 +296,12 @@ impl Cupertino {
     /// the key router; whatever none of them takes goes to the focused client. A second press of a
     /// key that is down, or a release of a key that is not, changes nothing and is dropped (sticky
     /// keys and mouse keys can produce both).
-    pub fn keyboard_event_now(&mut self, code: smithay::input::keyboard::Keycode, state: KeyState, time: u32) {
+    pub fn keyboard_event_now(
+        &mut self,
+        code: smithay::input::keyboard::Keycode,
+        state: KeyState,
+        time: u32,
+    ) {
         let serial = SERIAL_COUNTER.next_serial();
         let keyboard = self.seat.get_keyboard().unwrap();
         let pressed = state == KeyState::Pressed;
@@ -236,15 +311,28 @@ impl Cupertino {
         let ctx = self.action_context();
         let mut mod_plan = crate::input::ActionPlan::default();
         let mut route = KeyRoute::Forward;
-        let mut okey = OverlayKey { code: code.raw(), sym: 0, text: None, mods: Mods::NONE };
+        let mut okey = OverlayKey {
+            code: code.raw(),
+            sym: 0,
+            text: None,
+            mods: Mods::NONE,
+        };
         // a key that went to the client rewritten is released the same way, whatever the router says about the release
         let rewritten_release = !pressed && self.is_rewritten(code);
         let mut rewrite = Rewrite::Pass;
         keyboard.input::<(), _>(self, code, state, serial, time, |st, modifiers, handle| {
             let mods = st.config.keyboard.translate(modifiers);
             mod_plan = st.key_router.modifiers_changed(mods, &ctx);
-            let sym = handle.raw_latin_sym_or_raw_current_sym().unwrap_or_else(|| handle.modified_sym()).raw();
-            okey = OverlayKey { code: code.raw(), sym, text: handle.modified_sym().key_char(), mods };
+            let sym = handle
+                .raw_latin_sym_or_raw_current_sym()
+                .unwrap_or_else(|| handle.modified_sym())
+                .raw();
+            okey = OverlayKey {
+                code: code.raw(),
+                sym,
+                text: handle.modified_sym().key_char(),
+                mods,
+            };
             route = st.route_key(&okey, pressed, false, &ctx);
             match route {
                 _ if rewritten_release => FilterResult::Intercept(()),
@@ -291,11 +379,29 @@ impl Cupertino {
 
     /// The decision for one key event (shared by real keys and the compositor's repeats): the input-source HUD,
     /// the accent picker, then the shortcut router.
-    fn route_key(&mut self, key: &OverlayKey, pressed: bool, repeat: bool, ctx: &crate::input::ActionContext) -> KeyRoute {
+    fn route_key(
+        &mut self,
+        key: &OverlayKey,
+        pressed: bool,
+        repeat: bool,
+        ctx: &crate::input::ActionContext,
+    ) -> KeyRoute {
         let sym = key.sym;
         let modifier_key = crate::overlays::is_modifier_sym(sym);
         // 1. the input-source HUD takes Escape, Return and the arrows
-        if pressed && !modifier_key && !ctx.locked && self.overlays.inputs.hud_open() && matches!(sym, keysyms::KEY_Escape | keysyms::KEY_Return | keysyms::KEY_KP_Enter | keysyms::KEY_Up | keysyms::KEY_Down) {
+        if pressed
+            && !modifier_key
+            && !ctx.locked
+            && self.overlays.inputs.hud_open()
+            && matches!(
+                sym,
+                keysyms::KEY_Escape
+                    | keysyms::KEY_Return
+                    | keysyms::KEY_KP_Enter
+                    | keysyms::KEY_Up
+                    | keysyms::KEY_Down
+            )
+        {
             self.key_router.swallow(sym);
             return KeyRoute::Hud;
         }
@@ -312,7 +418,15 @@ impl Cupertino {
                 }
             }
         }
-        match self.key_router.key(KeyEvent { sym, pressed, mods: key.mods, repeat }, ctx) {
+        match self.key_router.key(
+            KeyEvent {
+                sym,
+                pressed,
+                mods: key.mods,
+                repeat,
+            },
+            ctx,
+        ) {
             KeyOutcome::Forward => KeyRoute::Forward,
             KeyOutcome::Consumed(plan) => KeyRoute::Plan(plan),
         }
@@ -327,7 +441,14 @@ impl Cupertino {
                 // the application gets the press and at once the release, so it never repeats the key; the
                 // compositor's first repeat opens the picker and the physical release is swallowed
                 if let Some(kb) = self.seat.get_keyboard() {
-                    kb.input_forward(self, Keycode::new(key.code), KeyState::Released, SERIAL_COUNTER.next_serial(), time, false);
+                    kb.input_forward(
+                        self,
+                        Keycode::new(key.code),
+                        KeyState::Released,
+                        SERIAL_COUNTER.next_serial(),
+                        time,
+                        false,
+                    );
                 }
                 self.overlays.accent.swallow_release.insert(key.code);
                 self.arm_key_repeat(key.code, RepeatTarget::AccentTrigger(c));
@@ -367,11 +488,19 @@ impl Cupertino {
     pub fn scripted_key(&mut self, chord: &str) -> Result<(), String> {
         let ch = crate::input::parse_chord(chord)?;
         let command = ch.mods.ctrl || ch.mods.alt || ch.mods.logo;
-        let mut text = char::from_u32(smithay::input::keyboard::xkb::keysym_to_utf32(smithay::input::keyboard::xkb::Keysym::new(ch.sym))).filter(|c| *c != '\0');
+        let mut text = char::from_u32(smithay::input::keyboard::xkb::keysym_to_utf32(
+            smithay::input::keyboard::xkb::Keysym::new(ch.sym),
+        ))
+        .filter(|c| *c != '\0');
         if ch.mods.shift {
             text = text.map(|c| c.to_ascii_uppercase());
         }
-        self.scripted_overlay_key(OverlayKey { code: 0, sym: ch.sym, text: text.filter(|_| !command), mods: ch.mods });
+        self.scripted_overlay_key(OverlayKey {
+            code: 0,
+            sym: ch.sym,
+            text: text.filter(|_| !command),
+            mods: ch.mods,
+        });
         Ok(())
     }
 
@@ -387,8 +516,19 @@ impl Cupertino {
         };
         let keyboard = self.seat.get_keyboard().unwrap();
         let time = (self.now() * 1000.0) as u32;
-        let state = if pressed { KeyState::Pressed } else { KeyState::Released };
-        keyboard.input::<(), _>(self, smithay::input::keyboard::Keycode::new(evdev + 8), state, SERIAL_COUNTER.next_serial(), time, |_, _, _| FilterResult::Forward);
+        let state = if pressed {
+            KeyState::Pressed
+        } else {
+            KeyState::Released
+        };
+        keyboard.input::<(), _>(
+            self,
+            smithay::input::keyboard::Keycode::new(evdev + 8),
+            state,
+            SERIAL_COUNTER.next_serial(),
+            time,
+            |_, _, _| FilterResult::Forward,
+        );
         Ok(())
     }
 
@@ -396,7 +536,12 @@ impl Cupertino {
     pub fn scripted_type(&mut self, text: &str) {
         for c in text.chars() {
             let sym = smithay::input::keyboard::xkb::utf32_to_keysym(c as u32).raw();
-            self.scripted_overlay_key(OverlayKey { code: 0, sym: crate::input::normalize_sym(sym), text: Some(c), mods: Mods::NONE });
+            self.scripted_overlay_key(OverlayKey {
+                code: 0,
+                sym: crate::input::normalize_sym(sym),
+                text: Some(c),
+                mods: Mods::NONE,
+            });
         }
     }
 
@@ -411,12 +556,28 @@ impl Cupertino {
             self.flush_text_ops();
             return;
         }
-        match self.key_router.key(KeyEvent { sym, pressed: true, mods: key.mods, repeat: false }, &ctx) {
+        match self.key_router.key(
+            KeyEvent {
+                sym,
+                pressed: true,
+                mods: key.mods,
+                repeat: false,
+            },
+            &ctx,
+        ) {
             KeyOutcome::Consumed(plan) => {
                 self.execute_plan(plan);
                 // a scripted key is a press and a release: the release ends a held binding (the power key's hold)
                 let ctx = self.action_context();
-                if let KeyOutcome::Consumed(plan) = self.key_router.key(KeyEvent { sym, pressed: false, mods: key.mods, repeat: false }, &ctx) {
+                if let KeyOutcome::Consumed(plan) = self.key_router.key(
+                    KeyEvent {
+                        sym,
+                        pressed: false,
+                        mods: key.mods,
+                        repeat: false,
+                    },
+                    &ctx,
+                ) {
                     self.execute_plan(plan);
                 }
             }
@@ -429,18 +590,43 @@ impl Cupertino {
     /// it in the seat keymap, with the chord's modifiers (and Shift for a shifted symbol) held around it.
     /// Scripted keys have no keycode of their own.
     fn forward_scripted_key(&mut self, key: &OverlayKey) {
-        let target = key.text.map_or(key.sym, |c| smithay::input::keyboard::xkb::utf32_to_keysym(c as u32).raw());
+        let target = key.text.map_or(key.sym, |c| {
+            smithay::input::keyboard::xkb::utf32_to_keysym(c as u32).raw()
+        });
         let Some((code, shifted)) = self.keycode_typing(target) else {
             tracing::warn!(sym = target, "scripted key has no key in the seat keymap");
             return;
         };
         // evdev codes of the modifier keys
-        let modifiers: Vec<u32> = [(key.mods.shift || shifted, 42), (key.mods.ctrl, 29), (key.mods.alt, 56), (key.mods.logo, 125)].into_iter().filter(|(held, _)| *held).map(|(_, evdev)| evdev + 8).collect();
+        let modifiers: Vec<u32> = [
+            (key.mods.shift || shifted, 42),
+            (key.mods.ctrl, 29),
+            (key.mods.alt, 56),
+            (key.mods.logo, 125),
+        ]
+        .into_iter()
+        .filter(|(held, _)| *held)
+        .map(|(_, evdev)| evdev + 8)
+        .collect();
         let keyboard = self.seat.get_keyboard().unwrap();
         let time = (self.now() * 1000.0) as u32;
-        let steps = modifiers.iter().map(|m| (*m, KeyState::Pressed)).chain([(code.raw(), KeyState::Pressed), (code.raw(), KeyState::Released)]).chain(modifiers.iter().rev().map(|m| (*m, KeyState::Released)));
+        let steps = modifiers
+            .iter()
+            .map(|m| (*m, KeyState::Pressed))
+            .chain([
+                (code.raw(), KeyState::Pressed),
+                (code.raw(), KeyState::Released),
+            ])
+            .chain(modifiers.iter().rev().map(|m| (*m, KeyState::Released)));
         for (raw, state) in steps {
-            keyboard.input::<(), _>(self, smithay::input::keyboard::Keycode::new(raw), state, SERIAL_COUNTER.next_serial(), time, |_, _, _| FilterResult::Forward);
+            keyboard.input::<(), _>(
+                self,
+                smithay::input::keyboard::Keycode::new(raw),
+                state,
+                SERIAL_COUNTER.next_serial(),
+                time,
+                |_, _, _| FilterResult::Forward,
+            );
         }
     }
 
@@ -454,7 +640,12 @@ impl Cupertino {
             let mut found = [None, None];
             keymap.key_for_each(|km, code| {
                 for (level, slot) in found.iter_mut().enumerate() {
-                    if slot.is_none() && km.key_get_syms_by_level(code, 0, level as u32).iter().any(|s| s.raw() == sym) {
+                    if slot.is_none()
+                        && km
+                            .key_get_syms_by_level(code, 0, level as u32)
+                            .iter()
+                            .any(|s| s.raw() == sym)
+                    {
                         *slot = Some(code);
                     }
                 }
@@ -471,7 +662,11 @@ impl Cupertino {
             None => evt.delta(),
         };
         let pos = self.pointer.current_location() + delta;
-        let rel = RelativeMotionEvent { delta, delta_unaccel: evt.delta_unaccel(), utime: evt.time() };
+        let rel = RelativeMotionEvent {
+            delta,
+            delta_unaccel: evt.delta_unaccel(),
+            utime: evt.time(),
+        };
         self.pointer_moved_to(pos, evt.time_msec(), Some(rel));
     }
 
@@ -480,12 +675,35 @@ impl Cupertino {
         if self.outputs.is_empty() {
             return pos;
         }
-        let (x0, y0) = (self.outputs.iter().map(|o| o.rect.x).fold(f64::MAX, f64::min), self.outputs.iter().map(|o| o.rect.y).fold(f64::MAX, f64::min));
-        let (x1, y1) = (self.outputs.iter().map(|o| o.rect.right()).fold(f64::MIN, f64::max), self.outputs.iter().map(|o| o.rect.bottom()).fold(f64::MIN, f64::max));
+        let (x0, y0) = (
+            self.outputs
+                .iter()
+                .map(|o| o.rect.x)
+                .fold(f64::MAX, f64::min),
+            self.outputs
+                .iter()
+                .map(|o| o.rect.y)
+                .fold(f64::MAX, f64::min),
+        );
+        let (x1, y1) = (
+            self.outputs
+                .iter()
+                .map(|o| o.rect.right())
+                .fold(f64::MIN, f64::max),
+            self.outputs
+                .iter()
+                .map(|o| o.rect.bottom())
+                .fold(f64::MIN, f64::max),
+        );
         Point::from((pos.x.clamp(x0, x1 - 1.0), pos.y.clamp(y0, y1 - 1.0)))
     }
 
-    pub fn pointer_moved_to(&mut self, pos: Point<f64, Logical>, time: u32, rel: Option<RelativeMotionEvent>) {
+    pub fn pointer_moved_to(
+        &mut self,
+        pos: Point<f64, Logical>,
+        time: u32,
+        rel: Option<RelativeMotionEvent>,
+    ) {
         let pos = self.clamp_to_outputs(pos);
         self.shake_motion(pos);
         let now = self.now();
@@ -502,35 +720,74 @@ impl Cupertino {
             self.track_active_menu_bar(pos, now);
         }
         self.update_input_pointer(pos, now);
-        if let Some(drag) = self.pending_drag.take_if(|d| cupertino_input::drag_started(cupertino_input::Point::new(d.press.x, d.press.y), cupertino_input::Point::new(mp.x, mp.y))) {
+        if let Some(drag) = self.pending_drag.take_if(|d| {
+            cupertino_input::drag_started(
+                cupertino_input::Point::new(d.press.x, d.press.y),
+                cupertino_input::Point::new(mp.x, mp.y),
+            )
+        }) {
             // anchored at the press, so the window catches up with the pointer at once
             self.begin_model_interaction(drag.command);
         }
 
         if self.pointer_mode == PointerMode::Model {
             let mods = self.current_mods();
-            let m = WmModifiers { primary: mods.logo, option: mods.alt, shift: mods.shift, ctrl: mods.ctrl };
-            self.command(Command::PointerMotion { pointer: mp, modifiers: m });
+            let m = WmModifiers {
+                primary: mods.logo,
+                option: mods.alt,
+                shift: mods.shift,
+                ctrl: mods.ctrl,
+            };
+            self.command(Command::PointerMotion {
+                pointer: mp,
+                modifiers: m,
+            });
             if !self.wm.is_interacting() {
                 self.pointer_mode = PointerMode::Normal;
             }
-            pointer.motion(self, None, &MotionEvent { location: pos, serial, time });
+            pointer.motion(
+                self,
+                None,
+                &MotionEvent {
+                    location: pos,
+                    serial,
+                    time,
+                },
+            );
             pointer.frame(self);
             self.request_redraw();
             return;
         }
 
         // in the overview the windows are the dock's to hit-test; `surface_under` skips them
-        let target = if self.shell.overview_open() { None } else { self.window_target_under(pos) };
+        let target = if self.shell.overview_open() {
+            None
+        } else {
+            self.window_target_under(pos)
+        };
         self.update_decor_hover(target.as_ref());
         let under = self.surface_under(pos);
         self.send_pointer_motion(under, pos, time, rel);
     }
 
     /// Move the pointer to `pos`, focused on `under`.
-    fn send_pointer_motion(&mut self, under: Option<(WlSurface, Point<f64, Logical>)>, pos: Point<f64, Logical>, time: u32, rel: Option<RelativeMotionEvent>) {
+    fn send_pointer_motion(
+        &mut self,
+        under: Option<(WlSurface, Point<f64, Logical>)>,
+        pos: Point<f64, Logical>,
+        time: u32,
+        rel: Option<RelativeMotionEvent>,
+    ) {
         let pointer = self.pointer.clone();
-        pointer.motion(self, under.clone(), &MotionEvent { location: pos, serial: SERIAL_COUNTER.next_serial(), time });
+        pointer.motion(
+            self,
+            under.clone(),
+            &MotionEvent {
+                location: pos,
+                serial: SERIAL_COUNTER.next_serial(),
+                time,
+            },
+        );
         if let Some(rel) = rel {
             pointer.relative_motion(self, under, &rel);
         }
@@ -555,11 +812,17 @@ impl Cupertino {
         if state == ButtonState::Pressed {
             self.last_user_event = Some(now);
         }
-        let release_consumed = state == ButtonState::Released && self.consumed_buttons.contains(&button);
+        let release_consumed =
+            state == ButtonState::Released && self.consumed_buttons.contains(&button);
         if release_consumed {
             self.consumed_buttons.retain(|b| *b != button);
         }
-        if state == ButtonState::Released && self.pending_drag.as_ref().is_some_and(|d| d.button == button) {
+        if state == ButtonState::Released
+            && self
+                .pending_drag
+                .as_ref()
+                .is_some_and(|d| d.button == button)
+        {
             // released inside the drag-start box: the press was a click
             self.pending_drag = None;
         }
@@ -571,7 +834,15 @@ impl Cupertino {
             if state == ButtonState::Pressed {
                 self.focus_lock_surface_at(pos);
             }
-            pointer.button(self, &ButtonEvent { button, state, serial, time });
+            pointer.button(
+                self,
+                &ButtonEvent {
+                    button,
+                    state,
+                    serial,
+                    time,
+                },
+            );
             pointer.frame(self);
             return;
         }
@@ -601,7 +872,12 @@ impl Cupertino {
 
         pointer.button(
             self,
-            &ButtonEvent { button, state, serial, time },
+            &ButtonEvent {
+                button,
+                state,
+                serial,
+                time,
+            },
         );
         pointer.frame(self);
     }
@@ -618,7 +894,9 @@ impl Cupertino {
         // the dock's panel takes the pointer while a switch is open; anything else is the server's
         // and cancels the switch on release
         if self.wm.switcher().is_some() {
-            return !self.surface_under(pos).is_some_and(|(surface, _)| self.is_switcher_panel(&surface));
+            return !self
+                .surface_under(pos)
+                .is_some_and(|(surface, _)| self.is_switcher_panel(&surface));
         }
         if self.shell.overview_open() {
             // a shell surface (the dock's overview layer) takes the press; anything else is the
@@ -633,28 +911,46 @@ impl Cupertino {
         }
         // the content of a window a modal sheet or dialog blocks takes no clicks: the press goes
         // to the model, which brings the blocking window forward (the title bar still moves it)
-        if let Some(id) = self.window_surface_under(pos).map(|(id, ..)| id).filter(|id| self.wm.is_blocked(*id) && !self.current_mods().logo) {
+        if let Some(id) = self
+            .window_surface_under(pos)
+            .map(|(id, ..)| id)
+            .filter(|id| self.wm.is_blocked(*id) && !self.current_mods().logo)
+        {
             self.command(Command::FocusWindow { window: id });
             return true;
         }
         self.focus_at(pos);
-        self.pending_drag.as_ref().is_some_and(|d| d.button == button)
+        self.pending_drag
+            .as_ref()
+            .is_some_and(|d| d.button == button)
     }
 
     /// Arm `command` (a move or resize anchored at `press`) to start when the pointer leaves the
     /// drag-start box.
     fn defer_drag(&mut self, button: u32, press: MPoint, command: Command) {
-        self.pending_drag = Some(PendingDrag { button, press, command });
+        self.pending_drag = Some(PendingDrag {
+            button,
+            press,
+            command,
+        });
     }
 
     /// Hover state of the decorations under the pointer: button group glyphs, resize cursors.
     fn update_decor_hover(&mut self, target: Option<&WindowTarget>) {
         use cupertino_decorations::Hit;
         let (group, cursor) = match target {
-            Some(WindowTarget::Decoration { id, style, hit, content, local }) => {
+            Some(WindowTarget::Decoration {
+                id,
+                style,
+                hit,
+                content,
+                local,
+            }) => {
                 // a client-decorated window has no button group of ours
                 let server_side = self.entry(*id).is_some_and(|e| e.server_side);
-                let group = server_side && (matches!(hit, Hit::Button(_)) || self.decor.group_hovered(*style, *content, *local));
+                let group = server_side
+                    && (matches!(hit, Hit::Button(_))
+                        || self.decor.group_hovered(*style, *content, *local));
                 let cursor = match hit {
                     Hit::Resize(edge) => self.resize_cursor(*id, *edge),
                     _ => None,
@@ -675,7 +971,9 @@ impl Cupertino {
     /// threshold ([`PendingDrag`]). True when the press was consumed.
     fn decoration_press(&mut self, pos: Point<f64, Logical>, button: u32, now: f64) -> bool {
         use cupertino_decorations::{DoubleClickAction, Hit};
-        let Some(WindowTarget::Decoration { id, hit, .. }) = self.window_target_under(pos) else { return false };
+        let Some(WindowTarget::Decoration { id, hit, .. }) = self.window_target_under(pos) else {
+            return false;
+        };
         if button != BTN_LEFT {
             return true;
         }
@@ -697,17 +995,41 @@ impl Cupertino {
                         DoubleClickAction::None => {}
                     }
                 } else {
-                    self.defer_drag(button, mp, Command::BeginMove { window: id, pointer: mp });
+                    self.defer_drag(
+                        button,
+                        mp,
+                        Command::BeginMove {
+                            window: id,
+                            pointer: mp,
+                        },
+                    );
                 }
             }
             Hit::Resize(edge) => {
                 let (left, right, top, bottom) = edge.sides();
-                let edges = Edges { left, right, top, bottom };
+                let edges = Edges {
+                    left,
+                    right,
+                    top,
+                    bottom,
+                };
                 if self.decor.register_click(id, now) {
                     // double click: the edges snap to the screen, Alt adds the opposite ones
-                    self.command(Command::SnapEdgesToScreen { window: id, edges, opposite: self.current_mods().alt });
+                    self.command(Command::SnapEdgesToScreen {
+                        window: id,
+                        edges,
+                        opposite: self.current_mods().alt,
+                    });
                 } else {
-                    self.defer_drag(button, mp, Command::BeginResize { window: id, edges, pointer: mp });
+                    self.defer_drag(
+                        button,
+                        mp,
+                        Command::BeginResize {
+                            window: id,
+                            edges,
+                            pointer: mp,
+                        },
+                    );
                 }
             }
             Hit::Content | Hit::None => {}
@@ -719,7 +1041,9 @@ impl Cupertino {
     /// is still over the same button.
     fn decor_button_release(&mut self, pos: Point<f64, Logical>) {
         use cupertino_decorations::{ButtonKind, Hit};
-        let Some((id, kind)) = self.decor.pressed.take() else { return };
+        let Some((id, kind)) = self.decor.pressed.take() else {
+            return;
+        };
         self.request_redraw();
         let still = matches!(self.window_target_under(pos), Some(WindowTarget::Decoration { id: w, hit: Hit::Button(k), .. }) if w == id && k == kind);
         if !still {
@@ -746,7 +1070,8 @@ impl Cupertino {
             // layer-shell surface that accepts keyboard input
             let wants = self.outputs.iter().any(|o| {
                 let map = smithay::desktop::layer_map_for_output(&o.output);
-                map.layer_for_surface(&surface, smithay::desktop::WindowSurfaceType::ALL).is_some_and(|l| l.can_receive_keyboard_focus())
+                map.layer_for_surface(&surface, smithay::desktop::WindowSurfaceType::ALL)
+                    .is_some_and(|l| l.can_receive_keyboard_focus())
             });
             if wants {
                 self.set_keyboard_focus(Some(surface));
@@ -755,14 +1080,18 @@ impl Cupertino {
     }
 
     fn on_pointer_axis<B: InputBackend>(&mut self, evt: B::PointerAxisEvent) {
-        let both = |read: &dyn Fn(Axis) -> Option<f64>| [read(Axis::Horizontal), read(Axis::Vertical)];
+        let both =
+            |read: &dyn Fn(Axis) -> Option<f64>| [read(Axis::Horizontal), read(Axis::Vertical)];
         let input = AxisInput {
             device: evt.device().id(),
             source: evt.source(),
             usec: evt.time(),
             amount: both(&|axis| evt.amount(axis)),
             v120: both(&|axis| evt.amount_v120(axis)),
-            relative_direction: [evt.relative_direction(Axis::Horizontal), evt.relative_direction(Axis::Vertical)],
+            relative_direction: [
+                evt.relative_direction(Axis::Horizontal),
+                evt.relative_direction(Axis::Vertical),
+            ],
         };
         self.pointer_axis(&input);
     }
@@ -776,16 +1105,24 @@ impl Cupertino {
         let line = cupertino_input::POINTS_PER_LINE / 120.0;
         let usec = input.usec;
         let mut device = self.pointer_devices.get_mut(&input.device);
-        let mut amount = |axis: Axis| match (input.source, input.v120[axis_index(axis)], input.amount[axis_index(axis)]) {
+        let mut amount = |axis: Axis| match (
+            input.source,
+            input.v120[axis_index(axis)],
+            input.amount[axis_index(axis)],
+        ) {
             (AxisSource::Wheel, Some(v120), _) => v120 * line,
-            (AxisSource::Finger, _, Some(counts)) => device.as_deref_mut().and_then(|d| d.scroll_points(axis, counts, usec)).unwrap_or(counts),
+            (AxisSource::Finger, _, Some(counts)) => device
+                .as_deref_mut()
+                .and_then(|d| d.scroll_points(axis, counts, usec))
+                .unwrap_or(counts),
             (_, v120, amount) => amount.unwrap_or_else(|| v120.unwrap_or(0.0) * line),
         };
         let (h, v) = (amount(Axis::Horizontal), amount(Axis::Vertical));
         // A touchpad gesture ends with a stop: no axis moves and one is exactly zero.
         let count = (input.source == AxisSource::Finger)
             .then(|| {
-                let stop = input.amount.contains(&Some(0.0)) && input.amount.iter().all(|a| a.is_none_or(|a| a == 0.0));
+                let stop = input.amount.contains(&Some(0.0))
+                    && input.amount.iter().all(|a| a.is_none_or(|a| a == 0.0));
                 device.and_then(|d| d.scroll_count((h, v), stop, usec))
             })
             .flatten();
@@ -795,7 +1132,9 @@ impl Cupertino {
             let i = axis_index(axis);
             if value != 0.0 {
                 carries_axis = true;
-                frame = frame.relative_direction(axis, input.relative_direction[i]).value(axis, value);
+                frame = frame
+                    .relative_direction(axis, input.relative_direction[i])
+                    .value(axis, value);
                 if let Some(d) = input.v120[i] {
                     frame = frame.v120(axis, d as i32);
                 }
@@ -812,8 +1151,13 @@ impl Cupertino {
         let pointer = self.pointer.clone();
         pointer.axis(self, frame);
         // The count goes to the `cupertino_scroll_v1` objects of the focused client, for each axis that moved.
-        if let (Some(count), Some(client)) = (count, pointer.current_focus().and_then(|s| s.client())) {
-            for (value, wl_axis) in [(h, wl_pointer::Axis::HorizontalScroll), (v, wl_pointer::Axis::VerticalScroll)] {
+        if let (Some(count), Some(client)) =
+            (count, pointer.current_focus().and_then(|s| s.client()))
+        {
+            for (value, wl_axis) in [
+                (h, wl_pointer::Axis::HorizontalScroll),
+                (v, wl_pointer::Axis::VerticalScroll),
+            ] {
                 if value != 0.0 {
                     self.scroll_counts.send(&client.id(), wl_axis, count);
                 }
@@ -825,7 +1169,8 @@ impl Cupertino {
     // ---- gestures ----------------------------------------------------------------------------
 
     fn pointer_output(&self) -> Option<cupertino_wm::OutputId> {
-        self.output_at(self.pointer.current_location()).map(|o| o.id)
+        self.output_at(self.pointer.current_location())
+            .map(|o| o.id)
     }
 
     /// Feed the recognizer and act on its outputs. Events stay with the focused client until the
@@ -850,11 +1195,18 @@ impl Cupertino {
                     }
                 }
             }
-            GestureOutput::Update { kind: GestureKind::WorkspaceSwitch, progress, .. } => {
+            GestureOutput::Update {
+                kind: GestureKind::WorkspaceSwitch,
+                progress,
+                ..
+            } => {
                 if let Some(output) = self.gesture_output {
                     // progress is positive towards the next workspace; the model's fraction is the
                     // displacement of the content (positive = to the right)
-                    self.command(Command::WorkspaceGestureUpdate { output, fraction: -progress });
+                    self.command(Command::WorkspaceGestureUpdate {
+                        output,
+                        fraction: -progress,
+                    });
                 }
             }
             GestureOutput::End { kind, outcome, .. } => {
@@ -867,14 +1219,21 @@ impl Cupertino {
                     }
                     // the dock of the output maps the gesture to its action; without a dock the
                     // server still leaves an open overview
-                    GestureKind::Overview | GestureKind::AppOverview | GestureKind::AppGrid | GestureKind::ShowDesktop if commit => {
+                    GestureKind::Overview
+                    | GestureKind::AppOverview
+                    | GestureKind::AppGrid
+                    | GestureKind::ShowDesktop
+                        if commit =>
+                    {
                         let gesture = match kind {
                             GestureKind::Overview => DockGesture::SwipeUp,
                             GestureKind::AppOverview => DockGesture::SwipeDown,
                             GestureKind::AppGrid => DockGesture::Pinch,
                             _ => DockGesture::Spread,
                         };
-                        let sent = self.pointer_output().is_some_and(|output| self.docks.gesture(output, gesture));
+                        let sent = self
+                            .pointer_output()
+                            .is_some_and(|output| self.docks.gesture(output, gesture));
                         if !sent && self.shell.overview_open() {
                             self.close_overview();
                         }
@@ -895,8 +1254,22 @@ impl Cupertino {
         let time = (self.now() * 1000.0) as u32;
         let serial = SERIAL_COUNTER.next_serial();
         match self.gesture_source {
-            GestureSource::Swipe => pointer.gesture_swipe_end(self, &GestureSwipeEndEvent { serial, time, cancelled: true }),
-            GestureSource::Pinch => pointer.gesture_pinch_end(self, &GesturePinchEndEvent { serial, time, cancelled: true }),
+            GestureSource::Swipe => pointer.gesture_swipe_end(
+                self,
+                &GestureSwipeEndEvent {
+                    serial,
+                    time,
+                    cancelled: true,
+                },
+            ),
+            GestureSource::Pinch => pointer.gesture_pinch_end(
+                self,
+                &GesturePinchEndEvent {
+                    serial,
+                    time,
+                    cancelled: true,
+                },
+            ),
         }
     }
 
@@ -906,18 +1279,32 @@ impl Cupertino {
 
     fn on_swipe_begin<B: InputBackend>(&mut self, evt: B::GestureSwipeBeginEvent) {
         let (time, fingers) = (evt.time_msec(), evt.fingers());
-        self.gesture(GestureEvent::SwipeBegin { time: f64::from(time) / 1000.0, fingers });
+        self.gesture(GestureEvent::SwipeBegin {
+            time: f64::from(time) / 1000.0,
+            fingers,
+        });
         if !self.claimed() {
             self.gesture_forwarded = true;
             self.gesture_source = GestureSource::Swipe;
             let pointer = self.pointer.clone();
-            pointer.gesture_swipe_begin(self, &GestureSwipeBeginEvent { serial: SERIAL_COUNTER.next_serial(), time, fingers });
+            pointer.gesture_swipe_begin(
+                self,
+                &GestureSwipeBeginEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time,
+                    fingers,
+                },
+            );
         }
     }
 
     fn on_swipe_update<B: InputBackend>(&mut self, evt: B::GestureSwipeUpdateEvent) {
         let (time, d) = (evt.time_msec(), evt.delta());
-        self.gesture(GestureEvent::SwipeUpdate { time: f64::from(time) / 1000.0, dx: d.x, dy: d.y });
+        self.gesture(GestureEvent::SwipeUpdate {
+            time: f64::from(time) / 1000.0,
+            dx: d.x,
+            dy: d.y,
+        });
         if self.gesture_forwarded && !self.claimed() {
             let pointer = self.pointer.clone();
             pointer.gesture_swipe_update(self, &SwipeUpdate { time, delta: d });
@@ -927,42 +1314,87 @@ impl Cupertino {
     fn on_swipe_end<B: InputBackend>(&mut self, evt: B::GestureSwipeEndEvent) {
         let (time, cancelled) = (evt.time_msec(), evt.cancelled());
         let forwarded = self.gesture_forwarded && !self.claimed();
-        self.gesture(GestureEvent::SwipeEnd { time: f64::from(time) / 1000.0, cancelled });
+        self.gesture(GestureEvent::SwipeEnd {
+            time: f64::from(time) / 1000.0,
+            cancelled,
+        });
         if forwarded {
             self.gesture_forwarded = false;
             let pointer = self.pointer.clone();
-            pointer.gesture_swipe_end(self, &GestureSwipeEndEvent { serial: SERIAL_COUNTER.next_serial(), time, cancelled });
+            pointer.gesture_swipe_end(
+                self,
+                &GestureSwipeEndEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time,
+                    cancelled,
+                },
+            );
         }
         self.gesture_forwarded = false;
     }
 
     fn on_pinch_begin<B: InputBackend>(&mut self, evt: B::GesturePinchBeginEvent) {
         let (time, fingers) = (evt.time_msec(), evt.fingers());
-        self.gesture(GestureEvent::PinchBegin { time: f64::from(time) / 1000.0, fingers });
+        self.gesture(GestureEvent::PinchBegin {
+            time: f64::from(time) / 1000.0,
+            fingers,
+        });
         if !self.claimed() {
             self.gesture_forwarded = true;
             self.gesture_source = GestureSource::Pinch;
             let pointer = self.pointer.clone();
-            pointer.gesture_pinch_begin(self, &GesturePinchBeginEvent { serial: SERIAL_COUNTER.next_serial(), time, fingers });
+            pointer.gesture_pinch_begin(
+                self,
+                &GesturePinchBeginEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time,
+                    fingers,
+                },
+            );
         }
     }
 
     fn on_pinch_update<B: InputBackend>(&mut self, evt: B::GesturePinchUpdateEvent) {
-        let (time, d, scale, rotation) = (evt.time_msec(), evt.delta(), evt.scale(), evt.rotation());
-        self.gesture(GestureEvent::PinchUpdate { time: f64::from(time) / 1000.0, dx: d.x, dy: d.y, scale, rotation });
+        let (time, d, scale, rotation) =
+            (evt.time_msec(), evt.delta(), evt.scale(), evt.rotation());
+        self.gesture(GestureEvent::PinchUpdate {
+            time: f64::from(time) / 1000.0,
+            dx: d.x,
+            dy: d.y,
+            scale,
+            rotation,
+        });
         if self.gesture_forwarded && !self.claimed() {
             let pointer = self.pointer.clone();
-            pointer.gesture_pinch_update(self, &PinchUpdate { time, delta: d, scale, rotation });
+            pointer.gesture_pinch_update(
+                self,
+                &PinchUpdate {
+                    time,
+                    delta: d,
+                    scale,
+                    rotation,
+                },
+            );
         }
     }
 
     fn on_pinch_end<B: InputBackend>(&mut self, evt: B::GesturePinchEndEvent) {
         let (time, cancelled) = (evt.time_msec(), evt.cancelled());
         let forwarded = self.gesture_forwarded && !self.claimed();
-        self.gesture(GestureEvent::PinchEnd { time: f64::from(time) / 1000.0, cancelled });
+        self.gesture(GestureEvent::PinchEnd {
+            time: f64::from(time) / 1000.0,
+            cancelled,
+        });
         if forwarded {
             let pointer = self.pointer.clone();
-            pointer.gesture_pinch_end(self, &GesturePinchEndEvent { serial: SERIAL_COUNTER.next_serial(), time, cancelled });
+            pointer.gesture_pinch_end(
+                self,
+                &GesturePinchEndEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time,
+                    cancelled,
+                },
+            );
         }
         self.gesture_forwarded = false;
     }
@@ -978,9 +1410,19 @@ mod tests {
         // 60 counts per event, default table at the default speed 0.6875: gain 1.30799… px per
         // count (reference tool).
         let mut mouse = PointerDevice::new(false, &cfg);
-        assert!((mouse.accelerate((60.0, 0.0).into(), 1_000).x - 60.0 * 1.3079891292521268).abs() < 1e-9);
-        let linear = PointerSettings { mouse_acceleration: false, mouse_speed: 2.0, ..cfg.clone() };
-        assert_eq!(PointerDevice::new(false, &linear).accelerate((5.0, -3.0).into(), 0), (10.0, -6.0).into());
+        assert!(
+            (mouse.accelerate((60.0, 0.0).into(), 1_000).x - 60.0 * 1.3079891292521268).abs()
+                < 1e-9
+        );
+        let linear = PointerSettings {
+            mouse_acceleration: false,
+            mouse_speed: 2.0,
+            ..cfg.clone()
+        };
+        assert_eq!(
+            PointerDevice::new(false, &linear).accelerate((5.0, -3.0).into(), 0),
+            (10.0, -6.0).into()
+        );
         // Touchpads time their events: four report periods late is a quarter of the speed.
         let mut pad = PointerDevice::new(true, &cfg);
         let first = pad.accelerate((40.0, 0.0).into(), 0).x;
@@ -994,16 +1436,35 @@ mod tests {
         // 30 counts every 8 ms on the trackpad scroll curves at the fresh 0.3125: lines from
         // `ScrollAxis` of the design tool; every event is above the consume unit (8 counts), so
         // each is emitted at once, truncated to whole points (0.1 line)
-        let lines: [f64; 5] = [0.6697329504898516, 1.7655862070282453, 2.270026594958617, 2.548338533127098, 2.7236750541732406];
+        let lines: [f64; 5] = [
+            0.6697329504898516,
+            1.7655862070282453,
+            2.270026594958617,
+            2.548338533127098,
+            2.7236750541732406,
+        ];
         let mut pad = PointerDevice::new(true, &cfg);
         for (i, want) in lines.iter().enumerate() {
-            let got = pad.scroll_points(Axis::Vertical, 30.0, i as u64 * 8_000).unwrap();
-            assert!((got - (want * 10.0).trunc()).abs() < 1e-9, "event {i}: {got}");
+            let got = pad
+                .scroll_points(Axis::Vertical, 30.0, i as u64 * 8_000)
+                .unwrap();
+            assert!(
+                (got - (want * 10.0).trunc()).abs() < 1e-9,
+                "event {i}: {got}"
+            );
         }
         // the axes keep separate histories
-        assert!((pad.scroll_points(Axis::Horizontal, 30.0, 40_000).unwrap() - (lines[0] * 10.0).trunc()).abs() < 1e-9);
+        assert!(
+            (pad.scroll_points(Axis::Horizontal, 30.0, 40_000).unwrap()
+                - (lines[0] * 10.0).trunc())
+            .abs()
+                < 1e-9
+        );
         // a mouse wheel, high-resolution or not, has no scroll resolution
-        assert_eq!(PointerDevice::new(false, &cfg).scroll_points(Axis::Vertical, 30.0, 0), None);
+        assert_eq!(
+            PointerDevice::new(false, &cfg).scroll_points(Axis::Vertical, 30.0, 0),
+            None
+        );
     }
 
     #[test]
@@ -1011,7 +1472,9 @@ mod tests {
         // 2 counts per event: nothing is emitted until the raw sum reaches 24 (3 · 8),
         // then one value carries the accumulated lines.
         let mut pad = PointerDevice::new(true, &PointerSettings::default());
-        let out: Vec<f64> = (0..12).map(|i| pad.scroll_points(Axis::Vertical, 2.0, i * 8_000).unwrap()).collect();
+        let out: Vec<f64> = (0..12)
+            .map(|i| pad.scroll_points(Axis::Vertical, 2.0, i * 8_000).unwrap())
+            .collect();
         assert_eq!(out[..11], [0.0; 11]);
         assert!(out[11] >= 1.0 && out[11].fract() == 0.0, "{}", out[11]);
     }

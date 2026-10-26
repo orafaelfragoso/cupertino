@@ -35,7 +35,11 @@ impl SettingsPaths {
     /// The paths of the environment (`$CUPERTINO_SERVER_CONFIG`, `$CUPERTINO_KEYBOARD_CONFIG`, `$CUPERTINO_POWER_CONF`,
     /// else the settings directory).
     pub fn from_env() -> Self {
-        Self { compositor: CompositorSettings::path(), keyboard: KeyboardConf::path(), power: PowerSettings::path() }
+        Self {
+            compositor: CompositorSettings::path(),
+            keyboard: KeyboardConf::path(),
+            power: PowerSettings::path(),
+        }
     }
 }
 
@@ -55,7 +59,10 @@ impl Cupertino {
     pub fn start_settings_watch(&mut self, files: SettingsFiles, paths: SettingsPaths) {
         self.live.files = files;
         self.live.paths = paths.clone();
-        let watched: Vec<PathBuf> = [paths.compositor, paths.keyboard, paths.power].into_iter().flatten().collect();
+        let watched: Vec<PathBuf> = [paths.compositor, paths.keyboard, paths.power]
+            .into_iter()
+            .flatten()
+            .collect();
         if watched.is_empty() {
             tracing::warn!("no settings directory (neither XDG_CONFIG_HOME nor HOME is set): settings apply at the next start only");
             return;
@@ -75,7 +82,9 @@ impl Cupertino {
         });
         match watcher {
             Ok(w) => self.live.watcher = Some(w),
-            Err(e) => tracing::warn!(error = %e, "cannot watch the settings files: they apply at the next start only"),
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot watch the settings files: they apply at the next start only")
+            }
         }
     }
 
@@ -117,9 +126,16 @@ impl Cupertino {
     }
 
     /// Apply the keys whose value differs between `before` and `after`, the values `compositor.json` held.
-    pub fn apply_compositor_change(&mut self, before: &CompositorSettings, after: &CompositorSettings) {
+    pub fn apply_compositor_change(
+        &mut self,
+        before: &CompositorSettings,
+        after: &CompositorSettings,
+    ) {
         // what the file means on its own: the defaults (with the shortcut file's chords) and the file's keys
-        let mut target = Config { keybindings: KeyBindings::from_shortcuts(&crate::config::shortcut_map()), ..Config::default() };
+        let mut target = Config {
+            keybindings: KeyBindings::from_shortcuts(&crate::config::shortcut_map()),
+            ..Config::default()
+        };
         for problem in target.apply_file(after) {
             tracing::warn!(error = %problem, "invalid configuration: the key keeps its default");
         }
@@ -151,7 +167,16 @@ impl Cupertino {
             self.config.hot_corners = target.hot_corners.clone();
             self.hot_corners = cupertino_input::HotCorners::new(target.hot_corners.clone());
         }
-        if changed!(mouse_speed, trackpad_speed, mouse_acceleration, natural_scrolling, cursor_size, cursor_fill, cursor_outline, shake_to_locate) {
+        if changed!(
+            mouse_speed,
+            trackpad_speed,
+            mouse_acceleration,
+            natural_scrolling,
+            cursor_size,
+            cursor_fill,
+            cursor_outline,
+            shake_to_locate
+        ) {
             let tracking = changed!(mouse_speed, trackpad_speed, mouse_acceleration);
             self.config.pointer = target.pointer.clone();
             if tracking {
@@ -159,14 +184,17 @@ impl Cupertino {
                     device.reconfigure(&self.config.pointer);
                 }
             }
-            self.cursor_loader.set_colors(self.config.pointer.cursor_colors);
+            self.cursor_loader
+                .set_colors(self.config.pointer.cursor_colors);
         }
         if changed!(decorations) {
             self.config.window.decorations = target.window.decorations;
             tracing::info!("`decorations` changed: windows that open from now on follow it, open windows keep theirs");
         }
         if changed!(menu_bar_height, show_menu_bar, shell) {
-            tracing::info!("`menu_bar_height`, `show_menu_bar` and `shell` apply at the next start");
+            tracing::info!(
+                "`menu_bar_height`, `show_menu_bar` and `shell` apply at the next start"
+            );
         }
         self.request_redraw();
     }
@@ -229,14 +257,32 @@ impl Cupertino {
         take!(accent_table => accent.table);
         take!(accent_keyboards => accent.keyboards);
         take!(accent_disabled_apps => accent.disabled_apps);
-        if changed!(caps_lock_delay_ms, caps_lock_switch, caps_lock_hold_ms, input_sources) {
-            self.caps = crate::kbd::CapsDebounce::new(self.config.keyboard.caps, self.config.keyboard.caps_switch_hold());
+        if changed!(
+            caps_lock_delay_ms,
+            caps_lock_switch,
+            caps_lock_hold_ms,
+            input_sources
+        ) {
+            self.caps = crate::kbd::CapsDebounce::new(
+                self.config.keyboard.caps,
+                self.config.keyboard.caps_switch_hold(),
+            );
         }
-        if changed!(slow_keys, slow_keys_delay_ms, sticky_keys, sticky_keys_shortcut, mouse_keys, mouse_keys_shortcut, mouse_keys_delay_ms, mouse_keys_max_speed) {
+        if changed!(
+            slow_keys,
+            slow_keys_delay_ms,
+            sticky_keys,
+            sticky_keys_shortcut,
+            mouse_keys,
+            mouse_keys_shortcut,
+            mouse_keys_delay_ms,
+            mouse_keys_max_speed
+        ) {
             self.key_filters = crate::kbd_filters::KeyFilters::new(&self.config.keyboard);
         }
         if changed!(input_sources, layout_keyboard, layout_level3) {
-            self.overlays.inputs = crate::kbd::InputSources::new(self.config.keyboard.sources.clone());
+            self.overlays.inputs =
+                crate::kbd::InputSources::new(self.config.keyboard.sources.clone());
             // the repeat too, and the keymap of the new sources
             self.apply_keyboard_settings();
         } else if changed!(repeat_delay_ms, repeat_interval_ms, slow_keys) {

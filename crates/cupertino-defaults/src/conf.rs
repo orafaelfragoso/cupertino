@@ -25,7 +25,10 @@ pub struct Problem {
 pub enum Line<'a> {
     /// Empty or a comment only.
     Blank,
-    Entry { key: &'a str, value: &'a str },
+    Entry {
+        key: &'a str,
+        value: &'a str,
+    },
     /// Text without `=`.
     Bare(&'a str),
 }
@@ -54,14 +57,19 @@ fn classify(raw: &str) -> Line<'_> {
         return Line::Blank;
     }
     match body.split_once('=') {
-        Some((key, value)) => Line::Entry { key: key.trim(), value: value.trim() },
+        Some((key, value)) => Line::Entry {
+            key: key.trim(),
+            value: value.trim(),
+        },
         None => Line::Bare(body),
     }
 }
 
 impl ConfText {
     pub fn parse(text: &str) -> Self {
-        Self { lines: text.lines().map(str::to_string).collect() }
+        Self {
+            lines: text.lines().map(str::to_string).collect(),
+        }
     }
 
     /// The text of `path`; a file that does not exist is empty.
@@ -75,13 +83,19 @@ impl ConfText {
 
     /// The lines with their 1-based numbers.
     pub fn lines(&self) -> impl Iterator<Item = (usize, Line<'_>)> {
-        self.lines.iter().enumerate().map(|(i, raw)| (i + 1, classify(raw)))
+        self.lines
+            .iter()
+            .enumerate()
+            .map(|(i, raw)| (i + 1, classify(raw)))
     }
 
     /// Give `key` the value `value`: the last line of the key is rewritten (its indentation and comment kept; the
     /// earlier ones are overridden by it when read), else a line is appended.
     pub fn set(&mut self, key: &str, value: &str) {
-        let last = self.lines.iter().rposition(|raw| matches!(classify(raw), Line::Entry { key: k, .. } if k == key));
+        let last = self
+            .lines
+            .iter()
+            .rposition(|raw| matches!(classify(raw), Line::Entry { key: k, .. } if k == key));
         match last {
             Some(i) => {
                 let raw = &self.lines[i];
@@ -95,7 +109,8 @@ impl ConfText {
 
     /// Remove every line of `key`.
     pub fn remove(&mut self, key: &str) {
-        self.lines.retain(|raw| !matches!(classify(raw), Line::Entry { key: k, .. } if k == key));
+        self.lines
+            .retain(|raw| !matches!(classify(raw), Line::Entry { key: k, .. } if k == key));
     }
 
     /// The file text: every line followed by a newline.
@@ -117,7 +132,13 @@ pub struct Key<S> {
 
 /// `unset` with the entries of `text` applied in order. Unknown keys and values that do not parse are problems; with
 /// `last_good`, such a key keeps its value from it. `bare` applies a line without `=` (`None`: a problem).
-pub fn read<S: Clone>(text: &ConfText, keys: &[Key<S>], unset: &S, last_good: Option<&S>, bare: Option<fn(&mut S, &str)>) -> (S, Vec<Problem>) {
+pub fn read<S: Clone>(
+    text: &ConfText,
+    keys: &[Key<S>],
+    unset: &S,
+    last_good: Option<&S>,
+    bare: Option<fn(&mut S, &str)>,
+) -> (S, Vec<Problem>) {
     let mut settings = unset.clone();
     let mut problems = Vec::new();
     for (line, kind) in text.lines() {
@@ -125,13 +146,22 @@ pub fn read<S: Clone>(text: &ConfText, keys: &[Key<S>], unset: &S, last_good: Op
             Line::Blank => {}
             Line::Bare(word) => match bare {
                 Some(apply) => apply(&mut settings, word),
-                None => problems.push(Problem { line, message: format!("expected `key = value`, got {word:?}") }),
+                None => problems.push(Problem {
+                    line,
+                    message: format!("expected `key = value`, got {word:?}"),
+                }),
             },
             Line::Entry { key, value } => match keys.iter().find(|k| k.name == key) {
-                None => problems.push(Problem { line, message: format!("unknown setting {key:?}") }),
+                None => problems.push(Problem {
+                    line,
+                    message: format!("unknown setting {key:?}"),
+                }),
                 Some(k) => {
                     if let Err(e) = (k.read)(&mut settings, value) {
-                        problems.push(Problem { line, message: format!("{key}: {e}") });
+                        problems.push(Problem {
+                            line,
+                            message: format!("{key}: {e}"),
+                        });
                         if let Some(good) = last_good {
                             (k.keep)(&mut settings, good);
                         }
@@ -159,14 +189,26 @@ pub fn write<S>(text: &mut ConfText, keys: &[Key<S>], before: &S, after: &S) {
 }
 
 /// The settings of the file at `path` (a missing file: `unset`) and the problems of its lines, as [`read`].
-pub fn load<S: Clone>(path: &Path, keys: &[Key<S>], unset: &S, last_good: Option<&S>, bare: Option<fn(&mut S, &str)>) -> io::Result<(S, Vec<Problem>)> {
+pub fn load<S: Clone>(
+    path: &Path,
+    keys: &[Key<S>],
+    unset: &S,
+    last_good: Option<&S>,
+    bare: Option<fn(&mut S, &str)>,
+) -> io::Result<(S, Vec<Problem>)> {
     Ok(read(&ConfText::load(path)?, keys, unset, last_good, bare))
 }
 
 /// Store `settings` in the file at `path` atomically: the file is read, the changed keys rewritten and the result
 /// written with [`crate::atomic::write_atomic`]. Returns the problems of the lines that were there before (kept as
 /// they are).
-pub fn store<S: Clone>(path: &Path, keys: &[Key<S>], unset: &S, bare: Option<fn(&mut S, &str)>, settings: &S) -> io::Result<Vec<Problem>> {
+pub fn store<S: Clone>(
+    path: &Path,
+    keys: &[Key<S>],
+    unset: &S,
+    bare: Option<fn(&mut S, &str)>,
+    settings: &S,
+) -> io::Result<Vec<Problem>> {
     let mut text = ConfText::load(path)?;
     let (before, problems) = read(&text, keys, unset, None, bare);
     write(&mut text, keys, &before, settings);
@@ -190,7 +232,11 @@ pub fn switch_text(on: bool) -> String {
 
 /// A comma-separated list; empty items are dropped.
 pub fn parse_list(value: &str) -> Vec<String> {
-    value.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    value
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 #[cfg(test)]
@@ -205,30 +251,79 @@ mod tests {
     }
 
     const KEYS: &[Key<Demo>] = &[
-        Key { name: "size", read: |s, v| v.parse().map(|n| s.size = Some(n)).map_err(|_| format!("expected a number, got {v:?}")), write: |s| s.size.map(|n| n.to_string()), keep: |s, g| s.size = g.size },
-        Key { name: "shown", read: |s, v| parse_switch(v).map(|b| s.shown = Some(b)), write: |s| s.shown.map(switch_text), keep: |s, g| s.shown = g.shown },
+        Key {
+            name: "size",
+            read: |s, v| {
+                v.parse()
+                    .map(|n| s.size = Some(n))
+                    .map_err(|_| format!("expected a number, got {v:?}"))
+            },
+            write: |s| s.size.map(|n| n.to_string()),
+            keep: |s, g| s.size = g.size,
+        },
+        Key {
+            name: "shown",
+            read: |s, v| parse_switch(v).map(|b| s.shown = Some(b)),
+            write: |s| s.shown.map(switch_text),
+            keep: |s, g| s.shown = g.shown,
+        },
     ];
 
     #[test]
     fn lines_are_classified_without_their_comments() {
         let text = ConfText::parse("# heading\n\n  size = 48 # pt\nfoot\nshown=on\n");
         let lines: Vec<(usize, Line)> = text.lines().collect();
-        assert_eq!(lines, vec![(1, Line::Blank), (2, Line::Blank), (3, Line::Entry { key: "size", value: "48" }), (4, Line::Bare("foot")), (5, Line::Entry { key: "shown", value: "on" })]);
+        assert_eq!(
+            lines,
+            vec![
+                (1, Line::Blank),
+                (2, Line::Blank),
+                (
+                    3,
+                    Line::Entry {
+                        key: "size",
+                        value: "48"
+                    }
+                ),
+                (4, Line::Bare("foot")),
+                (
+                    5,
+                    Line::Entry {
+                        key: "shown",
+                        value: "on"
+                    }
+                )
+            ]
+        );
     }
 
     #[test]
     fn a_later_line_wins_and_problems_carry_line_numbers() {
         let text = ConfText::parse("size = 10\nsize = 20\nzoom = 3\nshown = maybe\nstray\n");
         let (s, problems) = read(&text, KEYS, &Demo::default(), None, None);
-        assert_eq!(s, Demo { size: Some(20), shown: None, words: vec![] });
+        assert_eq!(
+            s,
+            Demo {
+                size: Some(20),
+                shown: None,
+                words: vec![]
+            }
+        );
         let lines: Vec<usize> = problems.iter().map(|p| p.line).collect();
         assert_eq!(lines, vec![3, 4, 5]);
-        assert_eq!(problems[1].message, "shown: expected on or off, got \"maybe\"");
+        assert_eq!(
+            problems[1].message,
+            "shown: expected on or off, got \"maybe\""
+        );
     }
 
     #[test]
     fn a_bad_value_keeps_the_last_good_value_of_its_key_only() {
-        let good = Demo { size: Some(48), shown: Some(true), words: vec![] };
+        let good = Demo {
+            size: Some(48),
+            shown: Some(true),
+            words: vec![],
+        };
         let text = ConfText::parse("size = big\n");
         let (s, problems) = read(&text, KEYS, &Demo::default(), Some(&good), None);
         assert_eq!(s.size, Some(48), "kept, not defaulted");
@@ -238,7 +333,13 @@ mod tests {
 
     #[test]
     fn bare_lines_go_to_their_handler() {
-        let (s, problems) = read(&ConfText::parse("foot\nsize = 3\nfirefox\n"), KEYS, &Demo::default(), None, Some(|s: &mut Demo, w: &str| s.words.push(w.to_string())));
+        let (s, problems) = read(
+            &ConfText::parse("foot\nsize = 3\nfirefox\n"),
+            KEYS,
+            &Demo::default(),
+            None,
+            Some(|s: &mut Demo, w: &str| s.words.push(w.to_string())),
+        );
         assert_eq!(s.words, ["foot", "firefox"]);
         assert!(problems.is_empty());
     }
@@ -247,16 +348,44 @@ mod tests {
     fn a_write_changes_only_the_lines_of_changed_keys() {
         let original = "# my dock\nfoot\n  size = 48   # small\nshown = yes\nunknown_key = kept\n";
         let mut text = ConfText::parse(original);
-        let (before, _) = read(&text, KEYS, &Demo::default(), None, Some(|_: &mut Demo, _: &str| {}));
+        let (before, _) = read(
+            &text,
+            KEYS,
+            &Demo::default(),
+            None,
+            Some(|_: &mut Demo, _: &str| {}),
+        );
         let mut after = before.clone();
         after.size = Some(64);
         write(&mut text, KEYS, &before, &after);
-        assert_eq!(text.to_text(), "# my dock\nfoot\n  size = 64   # small\nshown = yes\nunknown_key = kept\n", "`yes` stays: its value did not change");
-        let off = Demo { shown: Some(false), ..after.clone() };
+        assert_eq!(
+            text.to_text(),
+            "# my dock\nfoot\n  size = 64   # small\nshown = yes\nunknown_key = kept\n",
+            "`yes` stays: its value did not change"
+        );
+        let off = Demo {
+            shown: Some(false),
+            ..after.clone()
+        };
         write(&mut text, KEYS, &after, &off);
-        assert_eq!(text.to_text(), "# my dock\nfoot\n  size = 64   # small\nshown = off\nunknown_key = kept\n");
-        write(&mut text, KEYS, &off, &Demo { shown: None, ..off.clone() });
-        assert_eq!(text.to_text(), "# my dock\nfoot\n  size = 64   # small\nunknown_key = kept\n", "unset removes the key");
+        assert_eq!(
+            text.to_text(),
+            "# my dock\nfoot\n  size = 64   # small\nshown = off\nunknown_key = kept\n"
+        );
+        write(
+            &mut text,
+            KEYS,
+            &off,
+            &Demo {
+                shown: None,
+                ..off.clone()
+            },
+        );
+        assert_eq!(
+            text.to_text(),
+            "# my dock\nfoot\n  size = 64   # small\nunknown_key = kept\n",
+            "unset removes the key"
+        );
     }
 
     #[test]
@@ -272,8 +401,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("demo.conf");
         std::fs::write(&path, "# keep me\nsize = 1\nbogus = 2\n").unwrap();
-        let problems = store(&path, KEYS, &Demo::default(), None, &Demo { size: Some(5), shown: Some(true), words: vec![] }).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# keep me\nsize = 5\nbogus = 2\nshown = on\n");
-        assert_eq!(problems.iter().map(|p| p.line).collect::<Vec<_>>(), vec![3], "the unknown line is reported and kept");
+        let problems = store(
+            &path,
+            KEYS,
+            &Demo::default(),
+            None,
+            &Demo {
+                size: Some(5),
+                shown: Some(true),
+                words: vec![],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "# keep me\nsize = 5\nbogus = 2\nshown = on\n"
+        );
+        assert_eq!(
+            problems.iter().map(|p| p.line).collect::<Vec<_>>(),
+            vec![3],
+            "the unknown line is reported and kept"
+        );
     }
 }

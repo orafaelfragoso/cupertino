@@ -8,7 +8,9 @@ use smithay::reexports::wayland_protocols_wlr::output_power_management::v1::serv
     zwlr_output_power_v1::{self, Mode, ZwlrOutputPowerV1},
 };
 use smithay::reexports::wayland_server::backend::{ClientId, GlobalId};
-use smithay::reexports::wayland_server::{Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource, WEnum};
+use smithay::reexports::wayland_server::{
+    Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource, WEnum,
+};
 
 use crate::state::Cupertino;
 
@@ -51,16 +53,32 @@ pub(crate) fn mode_changed(state: &mut Cupertino, output: OutputId, on: bool) {
 }
 
 impl GlobalDispatch<ZwlrOutputPowerManagerV1, ()> for Cupertino {
-    fn bind(_: &mut Self, _: &DisplayHandle, _: &Client, resource: New<ZwlrOutputPowerManagerV1>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &Client,
+        resource: New<ZwlrOutputPowerManagerV1>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         init.init(resource, ());
     }
 }
 
 impl Dispatch<ZwlrOutputPowerManagerV1, ()> for Cupertino {
-    fn request(state: &mut Self, _: &Client, _: &ZwlrOutputPowerManagerV1, request: zwlr_output_power_manager_v1::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        _: &ZwlrOutputPowerManagerV1,
+        request: zwlr_output_power_manager_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         if let zwlr_output_power_manager_v1::Request::GetOutputPower { id, output } = request {
             let resource = init.init(id, ());
-            let found = Output::from_resource(&output).and_then(|o| state.output_by_wl(&o).map(|e| e.id));
+            let found =
+                Output::from_resource(&output).and_then(|o| state.output_by_wl(&o).map(|e| e.id));
             match found {
                 Some(output) => {
                     resource.mode(mode(state.displays.powered(output)));
@@ -74,14 +92,35 @@ impl Dispatch<ZwlrOutputPowerManagerV1, ()> for Cupertino {
 }
 
 impl Dispatch<ZwlrOutputPowerV1, ()> for Cupertino {
-    fn request(state: &mut Self, _: &Client, resource: &ZwlrOutputPowerV1, request: zwlr_output_power_v1::Request, _: &(), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
-        let zwlr_output_power_v1::Request::SetMode { mode: wanted } = request else { return };
-        let Some(output) = state.displays.powers.iter().find(|p| &p.resource == resource).map(|p| p.output) else { return };
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        resource: &ZwlrOutputPowerV1,
+        request: zwlr_output_power_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        let zwlr_output_power_v1::Request::SetMode { mode: wanted } = request else {
+            return;
+        };
+        let Some(output) = state
+            .displays
+            .powers
+            .iter()
+            .find(|p| &p.resource == resource)
+            .map(|p| p.output)
+        else {
+            return;
+        };
         let on = match wanted {
             WEnum::Value(Mode::On) => true,
             WEnum::Value(Mode::Off) => false,
             WEnum::Value(_) | WEnum::Unknown(_) => {
-                resource.post_error(zwlr_output_power_v1::Error::InvalidMode, "unknown power mode");
+                resource.post_error(
+                    zwlr_output_power_v1::Error::InvalidMode,
+                    "unknown power mode",
+                );
                 return;
             }
         };

@@ -6,7 +6,9 @@
 
 use std::collections::HashMap;
 
-use cupertino_protocols::server::cupertino_menu_bar_v1::{self, Command as BarCommand, CupertinoMenuBarV1, Error as BarError};
+use cupertino_protocols::server::cupertino_menu_bar_v1::{
+    self, Command as BarCommand, CupertinoMenuBarV1, Error as BarError,
+};
 use cupertino_protocols::server::cupertino_shell_v1::{CupertinoShellV1, Error as ShellError};
 use cupertino_wm::menu_bar::{BarSetConfig, MenuBarSet};
 use cupertino_wm::{Command, LifecycleState, OutputId};
@@ -15,7 +17,9 @@ use smithay::output::Output;
 use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::reexports::wayland_server::{Client, DataInit, Dispatch, DisplayHandle, New, Resource, WEnum};
+use smithay::reexports::wayland_server::{
+    Client, DataInit, Dispatch, DisplayHandle, New, Resource, WEnum,
+};
 
 use crate::state::Cupertino;
 
@@ -67,7 +71,9 @@ impl Feed {
         bar.active_app(self.app_id.clone(), self.title.clone());
         match &self.menu {
             None => bar.menu_none(),
-            Some(MenuAddress::DbusMenu { service, path }) => bar.menu_dbusmenu(service.clone(), path.clone()),
+            Some(MenuAddress::DbusMenu { service, path }) => {
+                bar.menu_dbusmenu(service.clone(), path.clone())
+            }
             Some(MenuAddress::Gtk(p)) => {
                 let path = |p: &Option<String>| p.clone().unwrap_or_default();
                 bar.menu_gtk(
@@ -116,7 +122,10 @@ pub struct MenuBars {
 impl MenuBars {
     pub fn new(bar_height: f64) -> Self {
         Self {
-            set: MenuBarSet::new(BarSetConfig { bar_height, ..BarSetConfig::default() }),
+            set: MenuBarSet::new(BarSetConfig {
+                bar_height,
+                ..BarSetConfig::default()
+            }),
             bars: Vec::new(),
             addresses: HashMap::new(),
             pending: Vec::new(),
@@ -144,7 +153,10 @@ impl MenuBars {
     pub fn look(&self, surface: &WlSurface, output_y: f64, now: f64) -> Option<BarLook> {
         let bar = self.bars.iter().find(|b| &b.surface == surface)?;
         let p = self.set.presentation(bar.output, now)?;
-        Some(BarLook { dy: p.rect.y - output_y, alpha: (p.visible * (1.0 - INACTIVE_DIM * p.inactive)) as f32 })
+        Some(BarLook {
+            dy: p.rect.y - output_y,
+            alpha: (p.visible * (1.0 - INACTIVE_DIM * p.inactive)) as f32,
+        })
     }
 
     pub fn remove_output(&mut self, output: OutputId, now: f64) {
@@ -170,7 +182,9 @@ impl MenuBars {
 
     /// Addresses announced for `root` before its window mapped, oldest first.
     pub fn take_pending(&mut self, root: &WlSurface) -> Vec<MenuAddress> {
-        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending).into_iter().partition(|(s, _)| s == root);
+        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending)
+            .into_iter()
+            .partition(|(s, _)| s == root);
         self.pending = rest;
         mine.into_iter().map(|(_, a)| a).collect()
     }
@@ -184,13 +198,31 @@ pub struct MenuBarData {
 
 impl Cupertino {
     /// `cupertino_shell_v1.get_menu_bar`: validate the role, register the bar and send its first group.
-    pub fn create_menu_bar(&mut self, shell: &CupertinoShellV1, id: New<CupertinoMenuBarV1>, surface: WlSurface, output: &WlOutput, init: &mut DataInit<'_, Self>) {
-        let target = Output::from_resource(output).and_then(|o| self.output_by_wl(&o).map(|e| (e.id, e.output.clone())));
+    pub fn create_menu_bar(
+        &mut self,
+        shell: &CupertinoShellV1,
+        id: New<CupertinoMenuBarV1>,
+        surface: WlSurface,
+        output: &WlOutput,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        let target = Output::from_resource(output)
+            .and_then(|o| self.output_by_wl(&o).map(|e| (e.id, e.output.clone())));
         let rejection = match &target {
             None => Some("the output is gone".to_string()),
-            Some((_, o)) if layer_map_for_output(o).layer_for_surface(&surface, WindowSurfaceType::TOPLEVEL).is_none() => Some("the surface is not a layer surface of the output".to_string()),
-            Some(_) if self.menu_bars.has_surface(&surface) || self.docks.has_surface(&surface) => Some("the surface already has a shell role".to_string()),
-            Some((out, _)) if self.menu_bars.has_bar(*out) => Some("the output already has a menu bar".to_string()),
+            Some((_, o))
+                if layer_map_for_output(o)
+                    .layer_for_surface(&surface, WindowSurfaceType::TOPLEVEL)
+                    .is_none() =>
+            {
+                Some("the surface is not a layer surface of the output".to_string())
+            }
+            Some(_) if self.menu_bars.has_surface(&surface) || self.docks.has_surface(&surface) => {
+                Some("the surface already has a shell role".to_string())
+            }
+            Some((out, _)) if self.menu_bars.has_bar(*out) => {
+                Some("the output already has a menu bar".to_string())
+            }
             Some(_) => None,
         };
         if let Some(reason) = rejection {
@@ -200,7 +232,13 @@ impl Cupertino {
         }
         let (out, _) = target.expect("a rejected target returned above");
         let resource = init.init(id, MenuBarData { output: Some(out) });
-        self.menu_bars.bars.push(Bar { resource, surface, output: out, sent: None, capture_sent: None });
+        self.menu_bars.bars.push(Bar {
+            resource,
+            surface,
+            output: out,
+            sent: None,
+            capture_sent: None,
+        });
         self.refresh_usable_area(out);
         self.refresh_menu_bars();
         self.refresh_capture_indicator();
@@ -208,7 +246,13 @@ impl Cupertino {
 
     /// The layer surface of a bar went away: the role ends with it.
     pub fn menu_bar_surface_gone(&mut self, surface: &WlSurface) {
-        let outputs: Vec<OutputId> = self.menu_bars.bars.iter().filter(|b| &b.surface == surface).map(|b| b.output).collect();
+        let outputs: Vec<OutputId> = self
+            .menu_bars
+            .bars
+            .iter()
+            .filter(|b| &b.surface == surface)
+            .map(|b| b.output)
+            .collect();
         self.menu_bars.bars.retain(|b| &b.surface != surface);
         for output in outputs {
             self.menu_bar_gone(output);
@@ -227,15 +271,32 @@ impl Cupertino {
     fn menu_feed(&self) -> Feed {
         let window = self.wm.key_window().and_then(|id| self.wm.window(id));
         let Some(window) = window else {
-            return Feed { app_id: String::new(), title: String::new(), menu: None, can_zoom: false, workspace: 0, workspaces: 0 };
+            return Feed {
+                app_id: String::new(),
+                title: String::new(),
+                menu: None,
+                can_zoom: false,
+                workspace: 0,
+                workspaces: 0,
+            };
         };
         let workspaces = self.wm.workspaces(window.output);
         Feed {
-            app_id: self.wm.app(window.app).map(|a| a.identity.clone()).unwrap_or_default(),
+            app_id: self
+                .wm
+                .app(window.app)
+                .map(|a| a.identity.clone())
+                .unwrap_or_default(),
             title: window.title.clone(),
             menu: self.menu_bars.addresses.get(&window.id.0).cloned(),
-            can_zoom: window.min_size.zip(window.max_size).is_none_or(|(a, b)| a != b),
-            workspace: workspaces.iter().position(|w| w.id == window.workspace).map_or(0, |i| i as u32 + 1),
+            can_zoom: window
+                .min_size
+                .zip(window.max_size)
+                .is_none_or(|(a, b)| a != b),
+            workspace: workspaces
+                .iter()
+                .position(|w| w.id == window.workspace)
+                .map_or(0, |i| i as u32 + 1),
             workspaces: workspaces.len() as u32,
         }
     }
@@ -247,7 +308,12 @@ impl Cupertino {
             return;
         }
         let feed = self.menu_feed();
-        for bar in self.menu_bars.bars.iter_mut().filter(|b| b.sent.as_ref() != Some(&feed)) {
+        for bar in self
+            .menu_bars
+            .bars
+            .iter_mut()
+            .filter(|b| b.sent.as_ref() != Some(&feed))
+        {
             feed.send(&bar.resource);
             bar.sent = Some(feed.clone());
         }
@@ -256,7 +322,12 @@ impl Cupertino {
     /// Tell the bars of version 3 or later whether a capture session runs, each one when that changed for it.
     pub fn refresh_capture_indicator(&mut self) {
         let active = self.capture_running();
-        for bar in self.menu_bars.bars.iter_mut().filter(|b| b.resource.version() >= 3 && b.capture_sent != Some(active)) {
+        for bar in self
+            .menu_bars
+            .bars
+            .iter_mut()
+            .filter(|b| b.resource.version() >= 3 && b.capture_sent != Some(active))
+        {
             bar.resource.screen_capture(u32::from(active));
             bar.resource.done();
             bar.capture_sent = Some(active);
@@ -265,7 +336,9 @@ impl Cupertino {
 
     /// The menu-bar shortcut: the bar of the active output opens its first menu.
     pub fn focus_menu_bar(&mut self) {
-        let Some(active) = self.menu_bars.set.active_output() else { return };
+        let Some(active) = self.menu_bars.set.active_output() else {
+            return;
+        };
         // the bar answers by asking for exclusive keyboard interactivity, which gives it the
         // keyboard on its next commit (`layer_keyboard_exclusivity`)
         for bar in self.menu_bars.bars.iter().filter(|b| b.output == active) {
@@ -275,8 +348,14 @@ impl Cupertino {
     }
 
     /// The output under the pointer is the active one; the other bars are dimmed.
-    pub fn track_active_menu_bar(&mut self, pos: smithay::utils::Point<f64, smithay::utils::Logical>, now: f64) {
-        let Some(active) = self.output_at(pos).map(|o| o.id) else { return };
+    pub fn track_active_menu_bar(
+        &mut self,
+        pos: smithay::utils::Point<f64, smithay::utils::Logical>,
+        now: f64,
+    ) {
+        let Some(active) = self.output_at(pos).map(|o| o.id) else {
+            return;
+        };
         if self.menu_bars.set.active_output() != Some(active) {
             self.menu_bars.set.set_active_output(Some(active), now);
             self.request_redraw();
@@ -287,8 +366,16 @@ impl Cupertino {
     pub fn tick_menu_bars(&mut self, now: f64) {
         let ids: Vec<OutputId> = self.outputs.iter().map(|o| o.id).collect();
         for id in ids {
-            let fullscreen = self.wm.windows().any(|w| w.output == id && w.state() == LifecycleState::FullScreen);
-            if !self.menu_bars.set.set_fullscreen(id, fullscreen, now).is_empty() {
+            let fullscreen = self
+                .wm
+                .windows()
+                .any(|w| w.output == id && w.state() == LifecycleState::FullScreen);
+            if !self
+                .menu_bars
+                .set
+                .set_fullscreen(id, fullscreen, now)
+                .is_empty()
+            {
                 self.refresh_usable_area(id);
             }
         }
@@ -311,7 +398,12 @@ impl Cupertino {
     }
 
     pub fn menu_bars_want_tick(&self, now: f64) -> bool {
-        self.outputs.iter().any(|o| self.menu_bars.set.presentation(o.id, now).is_some_and(|p| p.animating)) || self.bar_edge.next_deadline().is_some()
+        self.outputs.iter().any(|o| {
+            self.menu_bars
+                .set
+                .presentation(o.id, now)
+                .is_some_and(|p| p.animating)
+        }) || self.bar_edge.next_deadline().is_some()
     }
 
     /// Run a window-management command of the fallback menus on the active application or window.
@@ -359,9 +451,16 @@ impl Cupertino {
 
     /// Move the key window to workspace `n` (1-based) of its output and switch there.
     fn menu_bar_move_to_workspace(&mut self, n: u32) {
-        let Some(window) = self.wm.key_window() else { return };
-        let Some(output) = self.wm.window(window).map(|w| w.output) else { return };
-        let target = usize::try_from(n).ok().and_then(|n| n.checked_sub(1)).and_then(|i| self.wm.workspaces(output).get(i).map(|w| w.id));
+        let Some(window) = self.wm.key_window() else {
+            return;
+        };
+        let Some(output) = self.wm.window(window).map(|w| w.output) else {
+            return;
+        };
+        let target = usize::try_from(n)
+            .ok()
+            .and_then(|n| n.checked_sub(1))
+            .and_then(|i| self.wm.workspaces(output).get(i).map(|w| w.id));
         if let Some(workspace) = target {
             self.command(Command::MoveWindowToWorkspace { window, workspace });
             self.command(Command::SwitchWorkspace { output, workspace });
@@ -370,7 +469,15 @@ impl Cupertino {
 }
 
 impl Dispatch<CupertinoMenuBarV1, MenuBarData> for Cupertino {
-    fn request(state: &mut Self, _: &Client, resource: &CupertinoMenuBarV1, request: cupertino_menu_bar_v1::Request, data: &MenuBarData, _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        resource: &CupertinoMenuBarV1,
+        request: cupertino_menu_bar_v1::Request,
+        data: &MenuBarData,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         let Some(output) = data.output else { return };
         match request {
             cupertino_menu_bar_v1::Request::SetMenuOpen { open } => {
@@ -381,10 +488,15 @@ impl Dispatch<CupertinoMenuBarV1, MenuBarData> for Cupertino {
             cupertino_menu_bar_v1::Request::WindowCommand { command } => {
                 let known = matches!(command, WEnum::Value(c) if state.menu_bar_window_command(c));
                 if !known {
-                    resource.post_error(BarError::InvalidCommand, format!("{command:?} is not a window command"));
+                    resource.post_error(
+                        BarError::InvalidCommand,
+                        format!("{command:?} is not a window command"),
+                    );
                 }
             }
-            cupertino_menu_bar_v1::Request::MoveToWorkspace { workspace } => state.menu_bar_move_to_workspace(workspace),
+            cupertino_menu_bar_v1::Request::MoveToWorkspace { workspace } => {
+                state.menu_bar_move_to_workspace(workspace)
+            }
             // `Destroy` is handled in `destroyed`
             _ => {}
         }

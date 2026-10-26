@@ -11,7 +11,9 @@ use cupertino_icons::SystemIcons;
 use cupertino_theme::{Appearance, SemanticColor, Theme, Typography};
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, PixmapPaint, Transform};
 
-use crate::layout::{self, GLYPH_SIZE, GLYPH_TOP, LABEL_HEIGHT, LABEL_TOP, LABEL_WIDTH, WINDOW_SIZE};
+use crate::layout::{
+    self, GLYPH_SIZE, GLYPH_TOP, LABEL_HEIGHT, LABEL_TOP, LABEL_WIDTH, WINDOW_SIZE,
+};
 use crate::model::{segments, Fill, Overlay, ICON_NAMES};
 
 /// Material recipe the server draws behind the window: the design's bezel background material, number 26,
@@ -63,29 +65,75 @@ impl Palette {
     /// The palette of `appearance`; the design picks the light or dark pair by its menu bar's darkness, which `appearance` stands in for. Light: the secondary label colour as track, white segments. Dark:
     /// black at 0.25 as track, the secondary label colour as segments. A high-contrast appearance makes the light track
     /// opaque black and the dark segments white; Reduce Transparency makes the dark track opaque.
-    pub fn from_theme(theme: &Theme, appearance: Appearance, reduce_transparency: bool) -> Result<Self, MissingColor> {
-        let get = |color: SemanticColor, name: &'static str| theme.tokens.semantic(appearance, color).map(|c| c.to_array()).ok_or(MissingColor(name));
+    pub fn from_theme(
+        theme: &Theme,
+        appearance: Appearance,
+        reduce_transparency: bool,
+    ) -> Result<Self, MissingColor> {
+        let get = |color: SemanticColor, name: &'static str| {
+            theme
+                .tokens
+                .semantic(appearance, color)
+                .map(|c| c.to_array())
+                .ok_or(MissingColor(name))
+        };
         let secondary = get(SemanticColor::SecondaryLabel, "secondary-label")?;
         let contrast = appearance.is_high_contrast();
         let (track, segment) = if appearance.is_dark() {
-            let track = if reduce_transparency { [DARK_TRACK[0], DARK_TRACK[1], DARK_TRACK[2], 1.0] } else { DARK_TRACK };
-            (track, if contrast { CONTRAST_DARK_SEGMENT } else { secondary })
+            let track = if reduce_transparency {
+                [DARK_TRACK[0], DARK_TRACK[1], DARK_TRACK[2], 1.0]
+            } else {
+                DARK_TRACK
+            };
+            (
+                track,
+                if contrast {
+                    CONTRAST_DARK_SEGMENT
+                } else {
+                    secondary
+                },
+            )
         } else {
-            (if contrast { CONTRAST_LIGHT_TRACK } else { secondary }, LIGHT_SEGMENT)
+            (
+                if contrast {
+                    CONTRAST_LIGHT_TRACK
+                } else {
+                    secondary
+                },
+                LIGHT_SEGMENT,
+            )
         };
-        Ok(Self { track, segment, glyph: get(SemanticColor::Label, "label")?, label: get(SemanticColor::ControlText, "control-text")? })
+        Ok(Self {
+            track,
+            segment,
+            glyph: get(SemanticColor::Label, "label")?,
+            label: get(SemanticColor::ControlText, "control-text")?,
+        })
     }
 }
 
 fn skia(color: Rgba) -> Color {
-    Color::from_rgba(color[0], color[1], color[2], color[3]).expect("theme colours are within 0 to 1")
+    Color::from_rgba(color[0], color[1], color[2], color[3])
+        .expect("theme colours are within 0 to 1")
 }
 
 fn fill_rect(pixmap: &mut Pixmap, rect: &Rect, scale: f32, color: Rgba) {
-    let rect = tiny_skia::Rect::from_xywh(rect.x() as f32 * scale, rect.y() as f32 * scale, rect.width() as f32 * scale, rect.height() as f32 * scale).expect("segment rectangles have a size");
+    let rect = tiny_skia::Rect::from_xywh(
+        rect.x() as f32 * scale,
+        rect.y() as f32 * scale,
+        rect.width() as f32 * scale,
+        rect.height() as f32 * scale,
+    )
+    .expect("segment rectangles have a size");
     let mut paint = Paint::default();
     paint.set_color(skia(color));
-    pixmap.fill_path(&PathBuilder::from_rect(rect), &paint, FillRule::Winding, Transform::identity(), None);
+    pixmap.fill_path(
+        &PathBuilder::from_rect(rect),
+        &paint,
+        FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
 }
 
 /// Draw the meter filled to `level`: the track box, then the filled part of each segment.
@@ -98,13 +146,23 @@ pub fn draw_meter(pixmap: &mut Pixmap, level: f64, palette: &Palette, scale: f32
             Fill::Partial(width) => f64::from(width),
             Fill::Empty => continue,
         };
-        fill_rect(pixmap, &Rect::new(segment.x(), segment.y(), filled_width, segment.height()), scale, palette.segment);
+        fill_rect(
+            pixmap,
+            &Rect::new(segment.x(), segment.y(), filled_width, segment.height()),
+            scale,
+            palette.segment,
+        );
     }
 }
 
 /// The largest size from `start` down to `floor`, in whole steps of 1, at which `measure(size)` fits `max_width`
 /// (the label shrinks by 1 pt until it fits); `floor` when none fits.
-pub fn shrink_to_fit(start: f32, floor: f32, max_width: f32, mut measure: impl FnMut(f32) -> f32) -> f32 {
+pub fn shrink_to_fit(
+    start: f32,
+    floor: f32,
+    max_width: f32,
+    mut measure: impl FnMut(f32) -> f32,
+) -> f32 {
     let mut size = start;
     while size > floor && measure(size) > max_width {
         size -= 1.0;
@@ -123,10 +181,19 @@ pub struct Renderer {
 impl Renderer {
     /// A renderer with `palette`; the label uses the theme's typography in the `ui` font of the asset directory.
     /// Fails only when no usable font is left ([`TextRenderer::new`]); a symbol no asset pack provides is reported and drawn as a placeholder ([`ICON_NAMES`]).
-    pub fn new(palette: Palette, typography: Typography, assets: &Assets) -> Result<Self, AssetError> {
+    pub fn new(
+        palette: Palette,
+        typography: Typography,
+        assets: &Assets,
+    ) -> Result<Self, AssetError> {
         let text = TextRenderer::new(assets, FontRole::Ui)?;
         let icons = SystemIcons::required(assets, &[], &ICON_NAMES);
-        Ok(Self { palette, typography, text, icons })
+        Ok(Self {
+            palette,
+            typography,
+            text,
+            icons,
+        })
     }
 
     /// The overlay at `scale` device pixels per point, `WINDOW_SIZE * scale` pixels square, premultiplied.
@@ -149,19 +216,40 @@ impl Renderer {
         let box_left = (f64::from(WINDOW_SIZE) - GLYPH_SIZE) / 2.0 * f64::from(scale);
         let x = box_left + (f64::from(px) - f64::from(glyph.width())) / 2.0;
         let y = GLYPH_TOP * f64::from(scale) + (f64::from(px) - f64::from(glyph.height())) / 2.0;
-        pixmap.draw_pixmap(x.round() as i32, y.round() as i32, glyph.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
+        pixmap.draw_pixmap(
+            x.round() as i32,
+            y.round() as i32,
+            glyph.as_ref(),
+            &PixmapPaint::default(),
+            Transform::identity(),
+            None,
+        );
     }
 
     /// Draw `label` centred in its frame at the largest size that fits it.
     fn draw_label(&mut self, pixmap: &mut Pixmap, label: &str, scale: f32) {
         let s = scale;
-        let size = shrink_to_fit(LABEL_SIZE, LABEL_FLOOR, LABEL_WIDTH as f32, |px| self.text.measure(label, px * s, LABEL_WEIGHT, 0.0) / s);
+        let size = shrink_to_fit(LABEL_SIZE, LABEL_FLOOR, LABEL_WIDTH as f32, |px| {
+            self.text.measure(label, px * s, LABEL_WEIGHT, 0.0) / s
+        });
         let width = self.text.measure(label, size * s, LABEL_WEIGHT, 0.0);
         let metrics = &self.typography.metrics;
-        let (ascent, descent) = (metrics.ascender / metrics.units_per_em * f64::from(size), metrics.descender.abs() / metrics.units_per_em * f64::from(size));
+        let (ascent, descent) = (
+            metrics.ascender / metrics.units_per_em * f64::from(size),
+            metrics.descender.abs() / metrics.units_per_em * f64::from(size),
+        );
         let baseline = LABEL_TOP + (LABEL_HEIGHT - (ascent + descent)) / 2.0 + ascent;
         let x = (f64::from(WINDOW_SIZE) * f64::from(s) - f64::from(width)) / 2.0;
-        self.text.draw(pixmap, label, x as f32, (baseline * f64::from(s)) as f32, size * s, LABEL_WEIGHT, 0.0, self.palette.label);
+        self.text.draw(
+            pixmap,
+            label,
+            x as f32,
+            (baseline * f64::from(s)) as f32,
+            size * s,
+            LABEL_WEIGHT,
+            0.0,
+            self.palette.label,
+        );
     }
 }
 
@@ -170,7 +258,12 @@ mod tests {
     use super::*;
     use crate::model::Kind;
 
-    const PALETTE: Palette = Palette { segment: [1.0, 1.0, 1.0, 1.0], track: [0.0, 0.0, 0.0, 1.0], glyph: [1.0; 4], label: [1.0; 4] };
+    const PALETTE: Palette = Palette {
+        segment: [1.0, 1.0, 1.0, 1.0],
+        track: [0.0, 0.0, 0.0, 1.0],
+        glyph: [1.0; 4],
+        label: [1.0; 4],
+    };
 
     /// RGBA of the pixel at (x, y).
     fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> [u8; 4] {
@@ -204,14 +297,26 @@ mod tests {
         assert_eq!(pixel(&pixmap, 25, 179), [0, 0, 0, 255]);
         assert_eq!(pixel(&pixmap, 25, 173), [255, 255, 255, 255]);
         // the container is x = 20..181, y = 172..180
-        assert_eq!((pixel(&pixmap, 19, 176)[3], pixel(&pixmap, 181, 176)[3], pixel(&pixmap, 25, 171)[3], pixel(&pixmap, 25, 180)[3]), (0, 0, 0, 0));
+        assert_eq!(
+            (
+                pixel(&pixmap, 19, 176)[3],
+                pixel(&pixmap, 181, 176)[3],
+                pixel(&pixmap, 25, 171)[3],
+                pixel(&pixmap, 25, 180)[3]
+            ),
+            (0, 0, 0, 0)
+        );
     }
 
     #[test]
     fn the_light_palette_has_a_secondary_label_track_and_white_segments() {
         let theme = Theme::load().unwrap();
         let palette = Palette::from_theme(&theme, Appearance::Light, false).unwrap();
-        assert!((palette.track[3] - 0.498).abs() < 0.001 && palette.track[..3] == [0.0, 0.0, 0.0], "{:?}", palette.track);
+        assert!(
+            (palette.track[3] - 0.498).abs() < 0.001 && palette.track[..3] == [0.0, 0.0, 0.0],
+            "{:?}",
+            palette.track
+        );
         assert_eq!(palette.segment, [1.0, 1.0, 1.0, 1.0]);
     }
 
@@ -219,11 +324,26 @@ mod tests {
     fn increase_contrast_and_reduce_transparency_make_the_meter_opaque() {
         let theme = Theme::load().unwrap();
         let light = Palette::from_theme(&theme, Appearance::LightHighContrast, false).unwrap();
-        assert_eq!((light.track, light.segment), ([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]));
+        assert_eq!(
+            (light.track, light.segment),
+            ([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0])
+        );
         let dark = Palette::from_theme(&theme, Appearance::DarkHighContrast, false).unwrap();
-        assert_eq!((dark.track, dark.segment), ([0.0, 0.0, 0.0, 0.25], [1.0, 1.0, 1.0, 1.0]));
-        assert_eq!(Palette::from_theme(&theme, Appearance::Dark, true).unwrap().track, [0.0, 0.0, 0.0, 1.0]);
-        assert_eq!(Palette::from_theme(&theme, Appearance::Light, true).unwrap(), Palette::from_theme(&theme, Appearance::Light, false).unwrap(), "the light meter has no transparency rule");
+        assert_eq!(
+            (dark.track, dark.segment),
+            ([0.0, 0.0, 0.0, 0.25], [1.0, 1.0, 1.0, 1.0])
+        );
+        assert_eq!(
+            Palette::from_theme(&theme, Appearance::Dark, true)
+                .unwrap()
+                .track,
+            [0.0, 0.0, 0.0, 1.0]
+        );
+        assert_eq!(
+            Palette::from_theme(&theme, Appearance::Light, true).unwrap(),
+            Palette::from_theme(&theme, Appearance::Light, false).unwrap(),
+            "the light meter has no transparency rule"
+        );
     }
 
     #[test]
@@ -231,7 +351,11 @@ mod tests {
         let theme = Theme::load().unwrap();
         let palette = Palette::from_theme(&theme, Appearance::Dark, false).unwrap();
         assert_eq!(palette.track, [0.0, 0.0, 0.0, 0.25]);
-        assert!((palette.segment[3] - 0.549).abs() < 0.001 && palette.segment[..3] == [1.0, 1.0, 1.0], "{:?}", palette.segment);
+        assert!(
+            (palette.segment[3] - 0.549).abs() < 0.001 && palette.segment[..3] == [1.0, 1.0, 1.0],
+            "{:?}",
+            palette.segment
+        );
     }
 
     #[test]
@@ -247,7 +371,10 @@ mod tests {
     #[test]
     fn the_meter_scales_with_the_output() {
         let pixmap = meter_at(1.0, 2.0);
-        assert_eq!((pixmap.width(), pixel(&pixmap, 42, 352)), (400, [255, 255, 255, 255]));
+        assert_eq!(
+            (pixmap.width(), pixel(&pixmap, 42, 352)),
+            (400, [255, 255, 255, 255])
+        );
         assert_eq!(pixel(&pixmap, 38, 352)[3], 0);
     }
 
@@ -262,8 +389,9 @@ mod tests {
     /// Needs the asset directory (`CUPERTINO_ASSET_DIR`); fails with the build instructions when it is missing.
     fn renderer() -> Renderer {
         let theme = Theme::load().unwrap();
-        let assets = Assets::discover();
-        Renderer::new(PALETTE, theme.tokens.typography().clone(), &assets).unwrap_or_else(|e| panic!("{e}"))
+        let assets = Assets::builtin();
+        Renderer::new(PALETTE, theme.tokens.typography().clone(), &assets)
+            .unwrap_or_else(|e| panic!("{e}"))
     }
 
     #[test]
@@ -273,10 +401,24 @@ mod tests {
             let pixmap = renderer.render(&Overlay::new(Kind::Volume, 0.9).unwrap(), scale);
             // rows above the meter's container (y = 172) hold only the glyph
             let meter_top = (172.0 * scale) as u32;
-            let ink: Vec<u32> = (0..meter_top).filter(|&y| (0..pixmap.width()).any(|x| pixel(&pixmap, x, y)[3] > 0)).collect();
-            let (top, bottom) = ((GLYPH_TOP * f64::from(scale)) as u32, ((GLYPH_TOP + GLYPH_SIZE) * f64::from(scale)).ceil() as u32);
-            assert!(ink.first().is_some_and(|&y| y >= top) && ink.last().is_some_and(|&y| y <= bottom), "ink rows {:?}..{:?} outside {top}..{bottom}", ink.first(), ink.last());
-            assert!(ink.len() as f64 > 0.5 * GLYPH_SIZE * f64::from(scale), "the glyph is {} rows tall", ink.len());
+            let ink: Vec<u32> = (0..meter_top)
+                .filter(|&y| (0..pixmap.width()).any(|x| pixel(&pixmap, x, y)[3] > 0))
+                .collect();
+            let (top, bottom) = (
+                (GLYPH_TOP * f64::from(scale)) as u32,
+                ((GLYPH_TOP + GLYPH_SIZE) * f64::from(scale)).ceil() as u32,
+            );
+            assert!(
+                ink.first().is_some_and(|&y| y >= top) && ink.last().is_some_and(|&y| y <= bottom),
+                "ink rows {:?}..{:?} outside {top}..{bottom}",
+                ink.first(),
+                ink.last()
+            );
+            assert!(
+                ink.len() as f64 > 0.5 * GLYPH_SIZE * f64::from(scale),
+                "the glyph is {} rows tall",
+                ink.len()
+            );
         }
     }
 }

@@ -29,7 +29,9 @@ pub const CIRCLE_KAPPA: f64 = 0.552_284_749_830_793_4;
 pub enum CornerStyle {
     Circular,
     /// `expansion` = corner extent / nominal radius; values ≤ 1 degenerate to a circle.
-    Continuous { expansion: f64 },
+    Continuous {
+        expansion: f64,
+    },
 }
 
 impl CornerStyle {
@@ -37,7 +39,9 @@ impl CornerStyle {
     pub const DEFAULT_EXPANSION: f64 = 1.528;
 
     pub const fn continuous() -> Self {
-        CornerStyle::Continuous { expansion: Self::DEFAULT_EXPANSION }
+        CornerStyle::Continuous {
+            expansion: Self::DEFAULT_EXPANSION,
+        }
     }
 
     pub fn expansion(self) -> f64 {
@@ -72,7 +76,12 @@ pub struct Radii {
 
 impl Radii {
     pub const fn new(top_left: f64, top_right: f64, bottom_right: f64, bottom_left: f64) -> Self {
-        Self { top_left, top_right, bottom_right, bottom_left }
+        Self {
+            top_left,
+            top_right,
+            bottom_right,
+            bottom_left,
+        }
     }
 
     pub const fn uniform(r: f64) -> Self {
@@ -104,7 +113,9 @@ pub struct PathOptions {
 
 impl Default for PathOptions {
     fn default() -> Self {
-        Self { segments_per_corner: 4 }
+        Self {
+            segments_per_corner: 4,
+        }
     }
 }
 
@@ -143,7 +154,10 @@ impl Path {
     }
 
     pub fn cubic_count(&self) -> usize {
-        self.segments.iter().filter(|s| matches!(s, PathSeg::CubicTo(..))).count()
+        self.segments
+            .iter()
+            .filter(|s| matches!(s, PathSeg::CubicTo(..)))
+            .count()
     }
 
     /// Polyline approximation with maximum deviation `tolerance`.
@@ -157,8 +171,11 @@ impl Path {
                     cur = p;
                 }
                 PathSeg::CubicTo(c1, c2, p) => {
-                    let dd = (cur - c1 * 2.0 + c2).length().max((c1 - c2 * 2.0 + p).length());
-                    let n = ((0.75 * dd / tolerance.max(1e-9)).sqrt().ceil() as usize).clamp(1, 512);
+                    let dd = (cur - c1 * 2.0 + c2)
+                        .length()
+                        .max((c1 - c2 * 2.0 + p).length());
+                    let n =
+                        ((0.75 * dd / tolerance.max(1e-9)).sqrt().ceil() as usize).clamp(1, 512);
                     for i in 1..=n {
                         out.push(cubic_at(cur, c1, c2, p, i as f64 / n as f64));
                     }
@@ -172,7 +189,9 @@ impl Path {
 
     pub fn bounds(&self) -> Rect {
         let pts = self.flatten(0.01);
-        let Some(first) = pts.first() else { return Rect::ZERO };
+        let Some(first) = pts.first() else {
+            return Rect::ZERO;
+        };
         let (mut l, mut t, mut r, mut b) = (first.x, first.y, first.x, first.y);
         for p in &pts {
             l = l.min(p.x);
@@ -213,7 +232,10 @@ fn quadrant_tangent(p: Pt, n: f64) -> Pt {
 fn cubic_pt(c: &Cubic, t: f64) -> Pt {
     let m = 1.0 - t;
     let (a, b, cc, d) = (m * m * m, 3.0 * m * m * t, 3.0 * m * t * t, t * t * t);
-    (a * c[0].0 + b * c[1].0 + cc * c[2].0 + d * c[3].0, a * c[0].1 + b * c[1].1 + cc * c[2].1 + d * c[3].1)
+    (
+        a * c[0].0 + b * c[1].0 + cc * c[2].0 + d * c[3].0,
+        a * c[0].1 + b * c[1].1 + cc * c[2].1 + d * c[3].1,
+    )
 }
 
 /// First-order distance of a normalised point to the unit superellipse (positive outside).
@@ -222,16 +244,26 @@ fn norm_error(p: Pt, n: f64) -> f64 {
     if g < 1e-12 {
         return -1.0;
     }
-    let grad = (p.0.max(0.0).powf(2.0 * n - 2.0) + p.1.max(0.0).powf(2.0 * n - 2.0)).sqrt() / g.powf(n - 1.0);
+    let grad = (p.0.max(0.0).powf(2.0 * n - 2.0) + p.1.max(0.0).powf(2.0 * n - 2.0)).sqrt()
+        / g.powf(n - 1.0);
     (g - 1.0) / grad.max(1e-12)
 }
 
 fn fit_segment(p0: Pt, t0: Pt, p1: Pt, t1: Pt, n: f64) -> Cubic {
     let chord = (p1.0 - p0.0).hypot(p1.1 - p0.1);
     let build = |h0: f64, h1: f64| -> Cubic {
-        [p0, (p0.0 + t0.0 * h0, p0.1 + t0.1 * h0), (p1.0 - t1.0 * h1, p1.1 - t1.1 * h1), p1]
+        [
+            p0,
+            (p0.0 + t0.0 * h0, p0.1 + t0.1 * h0),
+            (p1.0 - t1.0 * h1, p1.1 - t1.1 * h1),
+            p1,
+        ]
     };
-    let err = |c: &Cubic| -> f64 { (1..=11).map(|i| norm_error(cubic_pt(c, i as f64 / 12.0), n).abs()).fold(0.0, f64::max) };
+    let err = |c: &Cubic| -> f64 {
+        (1..=11)
+            .map(|i| norm_error(cubic_pt(c, i as f64 / 12.0), n).abs())
+            .fold(0.0, f64::max)
+    };
     let mut best = (chord / 3.0, chord / 3.0);
     let mut best_err = err(&build(best.0, best.1));
     let mut span = chord * 0.5;
@@ -257,7 +289,12 @@ fn fit_segment(p0: Pt, t0: Pt, p1: Pt, t1: Pt, n: f64) -> Cubic {
 /// `(expansion, segments)` because it is far more expensive than emitting the path.
 fn quadrant_cubics(style: CornerStyle, segments: usize) -> Vec<Cubic> {
     if style.is_circular() {
-        return vec![[(0.0, 1.0), (CIRCLE_KAPPA, 1.0), (1.0, CIRCLE_KAPPA), (1.0, 0.0)]];
+        return vec![[
+            (0.0, 1.0),
+            (CIRCLE_KAPPA, 1.0),
+            (1.0, CIRCLE_KAPPA),
+            (1.0, 0.0),
+        ]];
     }
     type Cache = Mutex<HashMap<(u64, usize), Vec<Cubic>>>;
     static CACHE: OnceLock<Cache> = OnceLock::new();
@@ -274,16 +311,24 @@ fn quadrant_cubics(style: CornerStyle, segments: usize) -> Vec<Cubic> {
 fn fit_quadrant(style: CornerStyle, segments: usize) -> Vec<Cubic> {
     let n = style.exponent();
     let segs = segments.max(1);
-    let pts: Vec<Pt> = (0..=segs).map(|k| quadrant_point(FRAC_PI_2 * (1.0 - k as f64 / segs as f64), n)).collect();
+    let pts: Vec<Pt> = (0..=segs)
+        .map(|k| quadrant_point(FRAC_PI_2 * (1.0 - k as f64 / segs as f64), n))
+        .collect();
     let mut tans: Vec<Pt> = pts.iter().map(|&p| quadrant_tangent(p, n)).collect();
     tans[0] = (1.0, 0.0);
     tans[segs] = (0.0, -1.0);
-    (0..segs).map(|k| fit_segment(pts[k], tans[k], pts[k + 1], tans[k + 1], n)).collect()
+    (0..segs)
+        .map(|k| fit_segment(pts[k], tans[k], pts[k + 1], tans[k + 1], n))
+        .collect()
 }
 
 impl RoundedRect {
     pub fn new(rect: Rect, radius: f64, style: CornerStyle) -> Self {
-        Self { rect, radii: Radii::uniform(radius), style }
+        Self {
+            rect,
+            radii: Radii::uniform(radius),
+            style,
+        }
     }
 
     pub fn circular(rect: Rect, radius: f64) -> Self {
@@ -303,10 +348,20 @@ impl RoundedRect {
     pub fn extents(&self) -> [f64; 4] {
         let k = self.style.expansion();
         let r = &self.radii;
-        let mut e = [r.top_left.max(0.0) * k, r.top_right.max(0.0) * k, r.bottom_right.max(0.0) * k, r.bottom_left.max(0.0) * k];
+        let mut e = [
+            r.top_left.max(0.0) * k,
+            r.top_right.max(0.0) * k,
+            r.bottom_right.max(0.0) * k,
+            r.bottom_left.max(0.0) * k,
+        ];
         let (w, h) = (self.rect.width().max(0.0), self.rect.height().max(0.0));
         let mut f = 1.0f64;
-        for (len, a, b) in [(w, e[0], e[1]), (h, e[1], e[2]), (w, e[3], e[2]), (h, e[0], e[3])] {
+        for (len, a, b) in [
+            (w, e[0], e[1]),
+            (h, e[1], e[2]),
+            (w, e[3], e[2]),
+            (h, e[0], e[3]),
+        ] {
             if a + b > len && a + b > 0.0 {
                 f = f.min(len / (a + b));
             }
@@ -321,7 +376,12 @@ impl RoundedRect {
 
     pub fn path_with(&self, opts: &PathOptions) -> Path {
         let [e_tl, e_tr, e_br, e_bl] = self.extents();
-        let (l, t, r, b) = (self.rect.min_x(), self.rect.min_y(), self.rect.max_x(), self.rect.max_y());
+        let (l, t, r, b) = (
+            self.rect.min_x(),
+            self.rect.min_y(),
+            self.rect.max_x(),
+            self.rect.max_y(),
+        );
         let quad = quadrant_cubics(self.style, opts.segments_per_corner);
         let mut segs = Vec::with_capacity(5 + 4 * quad.len());
         let mut cur = Point::new(l + e_tl, t);
@@ -334,10 +394,42 @@ impl RoundedRect {
         };
         // (centre, extent, sign of u, sign of v, reversed traversal)
         let corners = [
-            (Point::new(r - e_tr, t + e_tr), e_tr, 1.0, -1.0, false, Point::new(r - e_tr, t), Point::new(r, t + e_tr)),
-            (Point::new(r - e_br, b - e_br), e_br, 1.0, 1.0, true, Point::new(r, b - e_br), Point::new(r - e_br, b)),
-            (Point::new(l + e_bl, b - e_bl), e_bl, -1.0, 1.0, false, Point::new(l + e_bl, b), Point::new(l, b - e_bl)),
-            (Point::new(l + e_tl, t + e_tl), e_tl, -1.0, -1.0, true, Point::new(l, t + e_tl), Point::new(l + e_tl, t)),
+            (
+                Point::new(r - e_tr, t + e_tr),
+                e_tr,
+                1.0,
+                -1.0,
+                false,
+                Point::new(r - e_tr, t),
+                Point::new(r, t + e_tr),
+            ),
+            (
+                Point::new(r - e_br, b - e_br),
+                e_br,
+                1.0,
+                1.0,
+                true,
+                Point::new(r, b - e_br),
+                Point::new(r - e_br, b),
+            ),
+            (
+                Point::new(l + e_bl, b - e_bl),
+                e_bl,
+                -1.0,
+                1.0,
+                false,
+                Point::new(l + e_bl, b),
+                Point::new(l, b - e_bl),
+            ),
+            (
+                Point::new(l + e_tl, t + e_tl),
+                e_tl,
+                -1.0,
+                -1.0,
+                true,
+                Point::new(l, t + e_tl),
+                Point::new(l + e_tl, t),
+            ),
         ];
         for (centre, e, su, sv, rev, enter, exit) in corners {
             line(&mut segs, &mut cur, enter);
@@ -347,7 +439,10 @@ impl RoundedRect {
             }
             let map = |p: Pt| Point::new(centre.x + e * su * p.0, centre.y + e * sv * p.1);
             let ordered: Vec<Cubic> = if rev {
-                quad.iter().rev().map(|c| [c[3], c[2], c[1], c[0]]).collect()
+                quad.iter()
+                    .rev()
+                    .map(|c| [c[3], c[2], c[1], c[0]])
+                    .collect()
             } else {
                 quad.clone()
             };
@@ -497,7 +592,11 @@ mod tests {
     }
 
     fn styles() -> [CornerStyle; 3] {
-        [CornerStyle::Circular, CornerStyle::continuous(), CornerStyle::Continuous { expansion: 1.2 }]
+        [
+            CornerStyle::Circular,
+            CornerStyle::continuous(),
+            CornerStyle::Continuous { expansion: 1.2 },
+        ]
     }
 
     #[test]
@@ -515,7 +614,10 @@ mod tests {
             let r = rr(s);
             assert!(r.sdf(r.rect.center()) < 0.0);
             assert!(r.sdf(Point::new(-50.0, 0.0)) > 0.0);
-            assert!(r.sdf(Point::new(10.0, 20.0)) > 0.0, "sharp corner point is outside a rounded rect");
+            assert!(
+                r.sdf(Point::new(10.0, 20.0)) > 0.0,
+                "sharp corner point is outside a rounded rect"
+            );
             assert!(r.sdf(Point::new(110.0, 20.0)).abs() < 1e-9);
             assert!((r.sdf(Point::new(110.0, 30.0)) + 10.0).abs() < 1e-9);
             assert!((r.sdf(Point::new(110.0, 10.0)) - 10.0).abs() < 1e-9);
@@ -534,7 +636,11 @@ mod tests {
     #[test]
     fn continuous_with_unit_expansion_equals_circular() {
         let a = RoundedRect::circular(Rect::new(0.0, 0.0, 80.0, 60.0), 12.0);
-        let b = RoundedRect::new(Rect::new(0.0, 0.0, 80.0, 60.0), 12.0, CornerStyle::Continuous { expansion: 1.0 });
+        let b = RoundedRect::new(
+            Rect::new(0.0, 0.0, 80.0, 60.0),
+            12.0,
+            CornerStyle::Continuous { expansion: 1.0 },
+        );
         for i in 0..40 {
             let p = Point::new(i as f64 * 2.1 - 3.0, i as f64 * 1.7 - 2.0);
             assert!((a.sdf(p) - b.sdf(p)).abs() < 1e-12);
@@ -572,10 +678,14 @@ mod tests {
                     worst_err = worst_err.max((a - x).abs());
                 }
                 let q = Point::new(p.x + 0.25, p.y + 0.25);
-                worst_lip = worst_lip.max((r.sdf_approx(p) - r.sdf_approx(q)).abs() / p.distance(q));
+                worst_lip =
+                    worst_lip.max((r.sdf_approx(p) - r.sdf_approx(q)).abs() / p.distance(q));
             }
         }
-        assert!(worst_err < 0.05, "approximation error {worst_err} px within 3 px of the edge");
+        assert!(
+            worst_err < 0.05,
+            "approximation error {worst_err} px within 3 px of the edge"
+        );
         assert!(worst_lip < 1.35, "approx lipschitz {worst_lip}");
     }
 
@@ -584,7 +694,11 @@ mod tests {
         for s in styles() {
             let r = rr(s);
             for p in r.path().flatten(0.001) {
-                assert!(r.sdf_approx(p).abs() < 0.01, "{s:?} {p:?} → {}", r.sdf_approx(p));
+                assert!(
+                    r.sdf_approx(p).abs() < 0.01,
+                    "{s:?} {p:?} → {}",
+                    r.sdf_approx(p)
+                );
             }
         }
     }
@@ -685,7 +799,10 @@ mod tests {
         assert!((r.coverage(Point::new(0.25, 50.0), 1.0) - 0.75).abs() < 1e-12);
         assert!((r.coverage(Point::new(50.0, 100.0 + 0.5), 1.0)).abs() < 1e-12);
         let c = RoundedRect::continuous(Rect::new(0.0, 0.0, 100.0, 100.0), 20.0);
-        assert!(c.coverage(Point::new(1.0, 1.0), 1.0) < 0.05, "pixel at the sharp corner is mostly uncovered");
+        assert!(
+            c.coverage(Point::new(1.0, 1.0), 1.0) < 0.05,
+            "pixel at the sharp corner is mostly uncovered"
+        );
     }
 
     #[test]
@@ -695,7 +812,10 @@ mod tests {
         let mut area = 0.0;
         for j in 0..n {
             for i in 0..n {
-                let p = Point::new((i as f64 + 0.5) * 64.0 / n as f64, (j as f64 + 0.5) * 64.0 / n as f64);
+                let p = Point::new(
+                    (i as f64 + 0.5) * 64.0 / n as f64,
+                    (j as f64 + 0.5) * 64.0 / n as f64,
+                );
                 area += r.coverage(p, 64.0 / n as f64);
             }
         }
@@ -706,7 +826,11 @@ mod tests {
             let (p, q) = (poly[i], poly[(i + 1) % poly.len()]);
             a2 += p.x * q.y - q.x * p.y;
         }
-        assert!((area - a2.abs() * 0.5).abs() < 0.5, "raster {area} vs polygon {}", a2.abs() * 0.5);
+        assert!(
+            (area - a2.abs() * 0.5).abs() < 0.5,
+            "raster {area} vs polygon {}",
+            a2.abs() * 0.5
+        );
     }
 
     #[test]
@@ -717,11 +841,22 @@ mod tests {
         let on_edge = Point::new(1.528 * 20.0, 0.0);
         assert!(cont.sdf(on_edge).abs() < 1e-9);
         assert!(circ.sdf(Point::new(1.528 * 20.0, 0.0)).abs() < 1e-9);
-        let first_inside = |r: &RoundedRect| (0..2000).map(|i| i as f64 * 0.01).find(|&t| r.sdf(Point::new(t, t)) <= 0.0).unwrap();
+        let first_inside = |r: &RoundedRect| {
+            (0..2000)
+                .map(|i| i as f64 * 0.01)
+                .find(|&t| r.sdf(Point::new(t, t)) <= 0.0)
+                .unwrap()
+        };
         let (dc, ds) = (first_inside(&circ), first_inside(&cont));
-        assert!((dc - ds).abs() < 0.02, "diagonal points agree by construction: {dc} vs {ds}");
+        assert!(
+            (dc - ds).abs() < 0.02,
+            "diagonal points agree by construction: {dc} vs {ds}"
+        );
         let near = Point::new(2.0, 24.0);
-        assert!(cont.sdf(near) > circ.sdf(near), "the continuous corner starts bending earlier than the circular one");
+        assert!(
+            cont.sdf(near) > circ.sdf(near),
+            "the continuous corner starts bending earlier than the circular one"
+        );
     }
 
     #[test]
@@ -731,9 +866,16 @@ mod tests {
         for v in e {
             assert!((v - 20.0).abs() < 1e-9);
         }
-        let r = RoundedRect::with_radii(Rect::new(0.0, 0.0, 100.0, 50.0), Radii::top(10.0), CornerStyle::Circular);
+        let r = RoundedRect::with_radii(
+            Rect::new(0.0, 0.0, 100.0, 50.0),
+            Radii::top(10.0),
+            CornerStyle::Circular,
+        );
         assert_eq!(r.extents(), [10.0, 10.0, 0.0, 0.0]);
-        assert!(r.sdf(Point::new(0.0, 50.0)).abs() < 1e-12, "square bottom-left corner is on the boundary");
+        assert!(
+            r.sdf(Point::new(0.0, 50.0)).abs() < 1e-12,
+            "square bottom-left corner is on the boundary"
+        );
         assert!(r.sdf(Point::new(0.0, 0.0)) > 0.0);
     }
 

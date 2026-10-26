@@ -11,7 +11,12 @@ use crate::error::Error;
 /// Carries DHCP messages for one interface. Tests replace it with a recording double.
 pub trait Transport {
     /// Sends `message` (an encoded DHCP message) from `source` to `destination`, port 68 to port 67.
-    fn send(&mut self, source: Ipv4Addr, destination: Ipv4Addr, message: &[u8]) -> Result<(), Error>;
+    fn send(
+        &mut self,
+        source: Ipv4Addr,
+        destination: Ipv4Addr,
+        message: &[u8],
+    ) -> Result<(), Error>;
 
     /// The next DHCP message a server sent (port 67 to port 68), or `None` when none is queued.
     fn receive(&mut self) -> Result<Option<Vec<u8>>, Error>;
@@ -27,13 +32,26 @@ pub struct PacketTransport {
 
 impl PacketTransport {
     pub fn open(interface_index: u32) -> Result<Self, Error> {
-        Ok(Self { socket: PacketSocket::open(interface_index).map_err(Error::Netlink)? })
+        Ok(Self {
+            socket: PacketSocket::open(interface_index).map_err(Error::Netlink)?,
+        })
     }
 }
 
 impl Transport for PacketTransport {
-    fn send(&mut self, source: Ipv4Addr, destination: Ipv4Addr, message: &[u8]) -> Result<(), Error> {
-        let packet = build_udp_packet(&UdpDatagram { source, source_port: CLIENT_PORT, destination, destination_port: SERVER_PORT, payload: message.to_vec() });
+    fn send(
+        &mut self,
+        source: Ipv4Addr,
+        destination: Ipv4Addr,
+        message: &[u8],
+    ) -> Result<(), Error> {
+        let packet = build_udp_packet(&UdpDatagram {
+            source,
+            source_port: CLIENT_PORT,
+            destination,
+            destination_port: SERVER_PORT,
+            payload: message.to_vec(),
+        });
         self.socket.send_broadcast(&packet).map_err(Error::Netlink)
     }
 

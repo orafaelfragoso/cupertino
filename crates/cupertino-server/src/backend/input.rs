@@ -20,15 +20,30 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use cupertino_devices::{classify_device, enumerate, Action, DevT, Device as SysDevice, DeviceEvent, InputClass, Subsystem};
-use cupertino_evdev::codes::{is_button, ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_PRESSURE, ABS_MT_SLOT, ABS_X, ABS_Y, BTN_LEFT, BTN_RIGHT, BTN_TASK};
-use cupertino_evdev::{AbsPoint, Contact, Device as EvdevDevice, DeviceInfo, Frame, KeyEvent as EvdevKey, KeyState as EvdevKeyState, Resolution, Switch as EvdevSwitch, SwitchEvent as EvdevSwitchEvent, Tool};
-use cupertino_input::{SwipeAxis, TouchContact, Touchpad, TouchpadButton, TouchpadEvent, TouchpadFrame, TouchpadGeometry, TouchpadSettings, SWIPE_COMPLETE_MM};
+use cupertino_devices::{
+    classify_device, enumerate, Action, DevT, Device as SysDevice, DeviceEvent, InputClass,
+    Subsystem,
+};
+use cupertino_evdev::codes::{
+    is_button, ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_PRESSURE, ABS_MT_SLOT, ABS_X, ABS_Y,
+    BTN_LEFT, BTN_RIGHT, BTN_TASK,
+};
+use cupertino_evdev::{
+    AbsPoint, Contact, Device as EvdevDevice, DeviceInfo, Frame, KeyEvent as EvdevKey,
+    KeyState as EvdevKeyState, Resolution, Switch as EvdevSwitch, SwitchEvent as EvdevSwitchEvent,
+    Tool,
+};
+use cupertino_input::{
+    SwipeAxis, TouchContact, Touchpad, TouchpadButton, TouchpadEvent, TouchpadFrame,
+    TouchpadGeometry, TouchpadSettings, SWIPE_COMPLETE_MM,
+};
 use cupertino_seat::LogindSession;
 use smithay::backend::input::{
-    AbsolutePositionEvent, Axis, AxisRelativeDirection, AxisSource, ButtonState, Device, DeviceCapability, Event, GestureBeginEvent, GestureEndEvent,
-    GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent,
-    InputBackend, InputEvent, KeyState, KeyboardKeyEvent, Keycode, PointerAxisEvent, PointerButtonEvent, PointerMotionAbsoluteEvent, PointerMotionEvent, Switch,
+    AbsolutePositionEvent, Axis, AxisRelativeDirection, AxisSource, ButtonState, Device,
+    DeviceCapability, Event, GestureBeginEvent, GestureEndEvent, GesturePinchBeginEvent,
+    GesturePinchEndEvent, GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent,
+    GestureSwipeUpdateEvent, InputBackend, InputEvent, KeyState, KeyboardKeyEvent, Keycode,
+    PointerAxisEvent, PointerButtonEvent, PointerMotionAbsoluteEvent, PointerMotionEvent, Switch,
     SwitchState, SwitchToggleEvent, UnusedEvent,
 };
 use smithay::backend::session::Session;
@@ -129,7 +144,9 @@ impl Device for InputDevice {
             DeviceCapability::Pointer => is_pointer(class),
             DeviceCapability::Gesture => class.touchpad,
             DeviceCapability::Switch => class.switch,
-            DeviceCapability::Touch | DeviceCapability::TabletTool | DeviceCapability::TabletPad => false,
+            DeviceCapability::Touch
+            | DeviceCapability::TabletTool
+            | DeviceCapability::TabletPad => false,
         }
     }
 
@@ -215,7 +232,10 @@ impl Axes {
     /// An axis that did not move is not part of the event.
     fn moved(horizontal: f64, vertical: f64) -> Self {
         let present = |value: f64| (value != 0.0).then_some(value);
-        Self { horizontal: present(horizontal), vertical: present(vertical) }
+        Self {
+            horizontal: present(horizontal),
+            vertical: present(vertical),
+        }
     }
 }
 
@@ -266,7 +286,18 @@ pub struct SwitchEvent {
     state: SwitchState,
 }
 
-impl_event!(KeyEvent, MotionEvent, AbsoluteMotionEvent, ButtonEvent, AxisEvent, GestureBegin, GestureEnd, SwipeUpdate, PinchUpdate, SwitchEvent);
+impl_event!(
+    KeyEvent,
+    MotionEvent,
+    AbsoluteMotionEvent,
+    ButtonEvent,
+    AxisEvent,
+    GestureBegin,
+    GestureEnd,
+    SwipeUpdate,
+    PinchUpdate,
+    SwitchEvent
+);
 
 impl KeyboardKeyEvent<EvdevBackend> for KeyEvent {
     fn key_code(&self) -> Keycode {
@@ -448,7 +479,8 @@ struct AbsRange {
 
 impl AbsRange {
     fn position(&self, point: AbsPoint) -> (f64, f64) {
-        let fraction = |value: i32, (min, max): (i32, i32)| f64::from(value - min) / f64::from(max - min + 1);
+        let fraction =
+            |value: i32, (min, max): (i32, i32)| f64::from(value - min) / f64::from(max - min + 1);
         (fraction(point.x, self.x), fraction(point.y, self.y))
     }
 }
@@ -463,16 +495,30 @@ impl PadAxis {
     /// The axis `code` and its length in millimetres. An axis without a resolution gets
     /// `fallback_mm` as its length, and the log says so.
     fn new(info: &DeviceInfo, code: u16, fallback_mm: f64) -> Result<(Self, f64)> {
-        let axis = info.abs(code).with_context(|| format!("{} has no absolute axis {code:#x}", info.name))?;
+        let axis = info
+            .abs(code)
+            .with_context(|| format!("{} has no absolute axis {code:#x}", info.name))?;
         let range = f64::from(axis.max - axis.min);
         match axis.resolution {
             Resolution::UnitsPerMm(per_mm) => {
                 let units_per_mm = f64::from(per_mm.get());
-                Ok((Self { min: axis.min, units_per_mm }, range / units_per_mm))
+                Ok((
+                    Self {
+                        min: axis.min,
+                        units_per_mm,
+                    },
+                    range / units_per_mm,
+                ))
             }
             Resolution::Unknown => {
                 tracing::warn!(device = %info.name, axis = code, size_mm = fallback_mm, "touchpad axis reports no resolution, assuming the libinput fallback size");
-                Ok((Self { min: axis.min, units_per_mm: range / fallback_mm }, fallback_mm))
+                Ok((
+                    Self {
+                        min: axis.min,
+                        units_per_mm: range / fallback_mm,
+                    },
+                    fallback_mm,
+                ))
             }
         }
     }
@@ -499,16 +545,40 @@ struct Pad {
 impl Pad {
     /// `Err` when the device has no position axes at all.
     fn new(info: &DeviceInfo, clickpad: bool, settings: TouchpadSettings) -> Result<Self> {
-        let multitouch = info.abs(ABS_MT_POSITION_X).is_some() && info.abs(ABS_MT_POSITION_Y).is_some();
-        let (x_code, y_code) = if multitouch { (ABS_MT_POSITION_X, ABS_MT_POSITION_Y) } else { (ABS_X, ABS_Y) };
+        let multitouch =
+            info.abs(ABS_MT_POSITION_X).is_some() && info.abs(ABS_MT_POSITION_Y).is_some();
+        let (x_code, y_code) = if multitouch {
+            (ABS_MT_POSITION_X, ABS_MT_POSITION_Y)
+        } else {
+            (ABS_X, ABS_Y)
+        };
         let (x, width_mm) = PadAxis::new(info, x_code, FALLBACK_PAD_SIZE_MM.0)?;
         let (y, height_mm) = PadAxis::new(info, y_code, FALLBACK_PAD_SIZE_MM.1)?;
-        let pressure = info.abs(ABS_MT_PRESSURE).filter(|axis| axis.max > axis.min).map(|axis| (axis.min, axis.max));
+        let pressure = info
+            .abs(ABS_MT_PRESSURE)
+            .filter(|axis| axis.max > axis.min)
+            .map(|axis| (axis.min, axis.max));
         let slots = match info.abs(ABS_MT_SLOT) {
-            Some(axis) if multitouch => usize::try_from(axis.max + 1).expect("the framer rejects an empty slot range"),
+            Some(axis) if multitouch => {
+                usize::try_from(axis.max + 1).expect("the framer rejects an empty slot range")
+            }
             _ => 1,
         };
-        Ok(Self { model: Touchpad::new(TouchpadGeometry { width_mm, height_mm, clickpad }, settings), x, y, pressure, multitouch, slots })
+        Ok(Self {
+            model: Touchpad::new(
+                TouchpadGeometry {
+                    width_mm,
+                    height_mm,
+                    clickpad,
+                },
+                settings,
+            ),
+            x,
+            y,
+            pressure,
+            multitouch,
+            slots,
+        })
     }
 
     /// The model's view of a contact; pens and unknown tools are not fingers.
@@ -518,8 +588,18 @@ impl Pad {
             Tool::Palm => true,
             Tool::Pen | Tool::Other(_) => return None,
         };
-        let pressure = contact.pressure.zip(self.pressure).map(|(value, (min, max))| (f64::from(value - min) / f64::from(max - min)).clamp(0.0, 1.0));
-        Some(TouchContact { id: contact.tracking_id, position_mm: (self.x.mm(contact.x), self.y.mm(contact.y)), pressure, palm })
+        let pressure = contact
+            .pressure
+            .zip(self.pressure)
+            .map(|(value, (min, max))| {
+                (f64::from(value - min) / f64::from(max - min)).clamp(0.0, 1.0)
+            });
+        Some(TouchContact {
+            id: contact.tracking_id,
+            position_mm: (self.x.mm(contact.x), self.y.mm(contact.y)),
+            pressure,
+            palm,
+        })
     }
 
     /// The fingers down. A single-touch pad reports one position and says how many fingers
@@ -529,16 +609,37 @@ impl Pad {
     fn contacts(&self, frame: &Frame) -> Vec<TouchContact> {
         let fingers = usize::from(frame.finger_count.unwrap_or(0));
         let mut contacts: Vec<TouchContact> = if self.multitouch {
-            frame.contacts.iter().filter_map(|c| self.contact(c)).collect()
+            frame
+                .contacts
+                .iter()
+                .filter_map(|c| self.contact(c))
+                .collect()
         } else {
-            let single = |point: AbsPoint| TouchContact { id: 0, position_mm: (self.x.mm(point.x), self.y.mm(point.y)), pressure: None, palm: false };
-            frame.abs_pointer.filter(|_| fingers > 0).map(single).into_iter().collect()
+            let single = |point: AbsPoint| TouchContact {
+                id: 0,
+                position_mm: (self.x.mm(point.x), self.y.mm(point.y)),
+                pressure: None,
+                palm: false,
+            };
+            frame
+                .abs_pointer
+                .filter(|_| fingers > 0)
+                .map(single)
+                .into_iter()
+                .collect()
         };
         if fingers > self.slots {
-            let top = contacts.iter().filter(|c| !c.palm).min_by(|a, b| a.position_mm.1.total_cmp(&b.position_mm.1)).copied();
+            let top = contacts
+                .iter()
+                .filter(|c| !c.palm)
+                .min_by(|a, b| a.position_mm.1.total_cmp(&b.position_mm.1))
+                .copied();
             if let Some(top) = top {
                 for index in contacts.len()..fingers {
-                    contacts.push(TouchContact { id: FAKE_CONTACT_ID_BASE + index as u32, ..top });
+                    contacts.push(TouchContact {
+                        id: FAKE_CONTACT_ID_BASE + index as u32,
+                        ..top
+                    });
                 }
             }
         }
@@ -592,14 +693,31 @@ impl Translator {
             pad.map_err(|e| tracing::warn!(device = %info.name, error = %format!("{e:#}"), "touchpad cannot be modelled, using its buttons only")).ok()
         });
         let abs = match (info.abs(ABS_X), info.abs(ABS_Y)) {
-            (Some(x), Some(y)) if class.mouse => Some(AbsRange { x: (x.min, x.max), y: (y.min, y.max) }),
+            (Some(x), Some(y)) if class.mouse => Some(AbsRange {
+                x: (x.min, x.max),
+                y: (y.min, y.max),
+            }),
             _ => None,
         };
-        Self { device, natural_scrolling, held: BTreeSet::new(), abs, last_abs: None, pad, swipe: None, scrolling: false, pinching: false, rotation_deg: 0.0 }
+        Self {
+            device,
+            natural_scrolling,
+            held: BTreeSet::new(),
+            abs,
+            last_abs: None,
+            pad,
+            swipe: None,
+            scrolling: false,
+            pinching: false,
+            rotation_deg: 0.0,
+        }
     }
 
     fn stamp(&self, time_us: u64) -> Stamp {
-        Stamp { device: self.device.clone(), time_us }
+        Stamp {
+            device: self.device.clone(),
+            time_us,
+        }
     }
 
     fn frame(&mut self, frame: &Frame, out: &mut Vec<Event_>) {
@@ -613,7 +731,10 @@ impl Translator {
         for switch in &frame.switches {
             self.switch(*switch, time_us, out);
         }
-        let events = self.pad.as_mut().map(|pad| pad.model.process_frame(&pad.frame(frame)));
+        let events = self
+            .pad
+            .as_mut()
+            .map(|pad| pad.model.process_frame(&pad.frame(frame)));
         for event in events.into_iter().flatten() {
             self.pad_event(event, time_us, out);
         }
@@ -636,10 +757,20 @@ impl Translator {
     fn release_all(&mut self, time_us: u64, out: &mut Vec<Event_>) {
         let stamp = self.stamp(time_us);
         if self.swipe.take().is_some() {
-            out.push(InputEvent::GestureSwipeEnd { event: GestureEnd { stamp: stamp.clone(), cancelled: true } });
+            out.push(InputEvent::GestureSwipeEnd {
+                event: GestureEnd {
+                    stamp: stamp.clone(),
+                    cancelled: true,
+                },
+            });
         }
         if std::mem::take(&mut self.pinching) {
-            out.push(InputEvent::GesturePinchEnd { event: GestureEnd { stamp: stamp.clone(), cancelled: true } });
+            out.push(InputEvent::GesturePinchEnd {
+                event: GestureEnd {
+                    stamp: stamp.clone(),
+                    cancelled: true,
+                },
+            });
         }
         if std::mem::take(&mut self.scrolling) {
             out.push(self.scroll_stop(stamp));
@@ -684,35 +815,83 @@ impl Translator {
         }
     }
 
-    fn push_key(&self, code: u16, pressed: bool, resynced: bool, time_us: u64, out: &mut Vec<Event_>) {
+    fn push_key(
+        &self,
+        code: u16,
+        pressed: bool,
+        resynced: bool,
+        time_us: u64,
+        out: &mut Vec<Event_>,
+    ) {
         let count = self.held.iter().filter(|c| is_key_code(**c)).count() as u32;
-        let state = if pressed { KeyState::Pressed } else { KeyState::Released };
-        out.push(InputEvent::Keyboard { event: KeyEvent { stamp: self.stamp(time_us), code: u32::from(code), state, count, resynced } });
+        let state = if pressed {
+            KeyState::Pressed
+        } else {
+            KeyState::Released
+        };
+        out.push(InputEvent::Keyboard {
+            event: KeyEvent {
+                stamp: self.stamp(time_us),
+                code: u32::from(code),
+                state,
+                count,
+                resynced,
+            },
+        });
     }
 
     fn push_button(&self, code: u16, pressed: bool, time_us: u64, out: &mut Vec<Event_>) {
-        let state = if pressed { ButtonState::Pressed } else { ButtonState::Released };
-        out.push(InputEvent::PointerButton { event: ButtonEvent { stamp: self.stamp(time_us), code: u32::from(code), state } });
+        let state = if pressed {
+            ButtonState::Pressed
+        } else {
+            ButtonState::Released
+        };
+        out.push(InputEvent::PointerButton {
+            event: ButtonEvent {
+                stamp: self.stamp(time_us),
+                code: u32::from(code),
+                state,
+            },
+        });
     }
 
     /// Relative motion, wheels and an absolute position of a mouse.
     fn pointer(&mut self, frame: &Frame, time_us: u64, out: &mut Vec<Event_>) {
         if frame.motion.dx != 0 || frame.motion.dy != 0 {
             let delta = (f64::from(frame.motion.dx), f64::from(frame.motion.dy));
-            out.push(InputEvent::PointerMotion { event: MotionEvent { stamp: self.stamp(time_us), delta } });
+            out.push(InputEvent::PointerMotion {
+                event: MotionEvent {
+                    stamp: self.stamp(time_us),
+                    delta,
+                },
+            });
         }
         // The kernel counts a wheel turned away from the user as positive; the axis points the
         // other way. Natural scrolling flips both wheels, as it flips the touchpad.
         let sign = if self.natural_scrolling { -1.0 } else { 1.0 };
-        let v120 = Axes::moved(f64::from(frame.wheel.horizontal) * sign, -f64::from(frame.wheel.vertical) * sign);
+        let v120 = Axes::moved(
+            f64::from(frame.wheel.horizontal) * sign,
+            -f64::from(frame.wheel.vertical) * sign,
+        );
         if v120 != Axes::default() {
-            let axis = AxisEvent { stamp: self.stamp(time_us), source: AxisSource::Wheel, amount: Axes::default(), v120, direction: self.direction() };
+            let axis = AxisEvent {
+                stamp: self.stamp(time_us),
+                source: AxisSource::Wheel,
+                amount: Axes::default(),
+                v120,
+                direction: self.direction(),
+            };
             out.push(InputEvent::PointerAxis { event: axis });
         }
         if let (Some(range), Some(point)) = (&self.abs, frame.abs_pointer) {
             // The first frame of a device only reports where it is.
             if !frame.resynced && self.last_abs != Some(point) {
-                out.push(InputEvent::PointerMotionAbsolute { event: AbsoluteMotionEvent { stamp: self.stamp(time_us), position: range.position(point) } });
+                out.push(InputEvent::PointerMotionAbsolute {
+                    event: AbsoluteMotionEvent {
+                        stamp: self.stamp(time_us),
+                        position: range.position(point),
+                    },
+                });
             }
             self.last_abs = Some(point);
         }
@@ -731,20 +910,46 @@ impl Translator {
             EvdevSwitch::Lid => Switch::Lid,
             EvdevSwitch::TabletMode => Switch::TabletMode,
         };
-        let state = if switch.on { SwitchState::On } else { SwitchState::Off };
-        out.push(InputEvent::SwitchToggle { event: SwitchEvent { stamp: self.stamp(time_us), switch: kind, state } });
+        let state = if switch.on {
+            SwitchState::On
+        } else {
+            SwitchState::Off
+        };
+        out.push(InputEvent::SwitchToggle {
+            event: SwitchEvent {
+                stamp: self.stamp(time_us),
+                switch: kind,
+                state,
+            },
+        });
     }
 
     /// Zero on both axes ends a finger scroll; clients run their own momentum.
     fn scroll_stop(&self, stamp: Stamp) -> Event_ {
-        let amount = Axes { horizontal: Some(0.0), vertical: Some(0.0) };
-        InputEvent::PointerAxis { event: AxisEvent { stamp, source: AxisSource::Finger, amount, v120: Axes::default(), direction: self.direction() } }
+        let amount = Axes {
+            horizontal: Some(0.0),
+            vertical: Some(0.0),
+        };
+        InputEvent::PointerAxis {
+            event: AxisEvent {
+                stamp,
+                source: AxisSource::Finger,
+                amount,
+                v120: Axes::default(),
+                direction: self.direction(),
+            },
+        }
     }
 
     fn pad_event(&mut self, event: TouchpadEvent, time_us: u64, out: &mut Vec<Event_>) {
         let stamp = self.stamp(time_us);
         match event {
-            TouchpadEvent::PointerMotion { dx, dy } => out.push(InputEvent::PointerMotion { event: MotionEvent { stamp, delta: (dx, dy) } }),
+            TouchpadEvent::PointerMotion { dx, dy } => out.push(InputEvent::PointerMotion {
+                event: MotionEvent {
+                    stamp,
+                    delta: (dx, dy),
+                },
+            }),
             TouchpadEvent::Button { button, pressed } => {
                 let code = match button {
                     TouchpadButton::Left => BTN_LEFT,
@@ -759,7 +964,15 @@ impl Translator {
                 self.scrolling = true;
                 // The model reports how the content moves; an axis value is the opposite.
                 let amount = Axes::moved(-dx, -dy);
-                out.push(InputEvent::PointerAxis { event: AxisEvent { stamp, source: AxisSource::Finger, amount, v120: Axes::default(), direction: self.direction() } });
+                out.push(InputEvent::PointerAxis {
+                    event: AxisEvent {
+                        stamp,
+                        source: AxisSource::Finger,
+                        amount,
+                        v120: Axes::default(),
+                        direction: self.direction(),
+                    },
+                });
             }
             TouchpadEvent::ScrollEnd { .. } => {
                 self.scrolling = false;
@@ -767,35 +980,65 @@ impl Translator {
             }
             TouchpadEvent::SwipeBegin { fingers, axis } => {
                 self.swipe = Some((axis, 0.0));
-                out.push(InputEvent::GestureSwipeBegin { event: GestureBegin { stamp, fingers } });
+                out.push(InputEvent::GestureSwipeBegin {
+                    event: GestureBegin { stamp, fingers },
+                });
             }
             TouchpadEvent::SwipeUpdate { progress, .. } => {
-                let (axis, last) = self.swipe.as_mut().expect("the touchpad model begins a swipe before updating it");
+                let (axis, last) = self
+                    .swipe
+                    .as_mut()
+                    .expect("the touchpad model begins a swipe before updating it");
                 let travel = (progress - *last) * SWIPE_COMPLETE_MM * GESTURE_UNITS_PER_MM;
                 *last = progress;
                 let delta = match axis {
                     SwipeAxis::Horizontal => (travel, 0.0),
                     SwipeAxis::Vertical => (0.0, travel),
                 };
-                out.push(InputEvent::GestureSwipeUpdate { event: SwipeUpdate { stamp, delta } });
+                out.push(InputEvent::GestureSwipeUpdate {
+                    event: SwipeUpdate { stamp, delta },
+                });
             }
             TouchpadEvent::SwipeEnd { committed, .. } => {
                 self.swipe = None;
-                out.push(InputEvent::GestureSwipeEnd { event: GestureEnd { stamp, cancelled: !committed } });
+                out.push(InputEvent::GestureSwipeEnd {
+                    event: GestureEnd {
+                        stamp,
+                        cancelled: !committed,
+                    },
+                });
             }
             TouchpadEvent::PinchBegin { fingers } => {
                 self.pinching = true;
                 self.rotation_deg = 0.0;
-                out.push(InputEvent::GesturePinchBegin { event: GestureBegin { stamp, fingers } });
+                out.push(InputEvent::GesturePinchBegin {
+                    event: GestureBegin { stamp, fingers },
+                });
             }
-            TouchpadEvent::PinchUpdate { scale, rotation_deg, .. } => {
+            TouchpadEvent::PinchUpdate {
+                scale,
+                rotation_deg,
+                ..
+            } => {
                 let rotation = rotation_deg - self.rotation_deg;
                 self.rotation_deg = rotation_deg;
-                out.push(InputEvent::GesturePinchUpdate { event: PinchUpdate { stamp, delta: (0.0, 0.0), scale, rotation } });
+                out.push(InputEvent::GesturePinchUpdate {
+                    event: PinchUpdate {
+                        stamp,
+                        delta: (0.0, 0.0),
+                        scale,
+                        rotation,
+                    },
+                });
             }
             TouchpadEvent::PinchEnd { committed, .. } => {
                 self.pinching = false;
-                out.push(InputEvent::GesturePinchEnd { event: GestureEnd { stamp, cancelled: !committed } });
+                out.push(InputEvent::GesturePinchEnd {
+                    event: GestureEnd {
+                        stamp,
+                        cancelled: !committed,
+                    },
+                });
             }
             // Nothing consumes the force click yet.
             TouchpadEvent::ForceClick { .. } => {}
@@ -837,7 +1080,12 @@ pub type SharedInputs = Rc<RefCell<Inputs>>;
 
 /// An empty device table; [`open_all`] fills it.
 pub fn new_inputs(handle: LoopHandle<'static, Cupertino>, session: LogindSession) -> SharedInputs {
-    Rc::new(RefCell::new(Inputs { handle, session, devices: HashMap::new(), timer: None }))
+    Rc::new(RefCell::new(Inputs {
+        handle,
+        session,
+        devices: HashMap::new(),
+        timer: None,
+    }))
 }
 
 fn now(state: &Cupertino) -> Duration {
@@ -864,7 +1112,11 @@ fn close_fd(session: &mut LogindSession, fd: OwnedFd) {
 }
 
 /// Reads what the device has queued and translates it.
-fn read(evdev: &mut EvdevDevice, translator: &mut Translator, out: &mut Vec<Event_>) -> Result<(), cupertino_evdev::Error> {
+fn read(
+    evdev: &mut EvdevDevice,
+    translator: &mut Translator,
+    out: &mut Vec<Event_>,
+) -> Result<(), cupertino_evdev::Error> {
     let mut frames = Vec::new();
     evdev.read_frames(&mut frames)?;
     for frame in &frames {
@@ -875,7 +1127,8 @@ fn read(evdev: &mut EvdevDevice, translator: &mut Translator, out: &mut Vec<Even
 
 /// Opens every input node and announces it.
 pub fn open_all(shared: &SharedInputs, state: &mut Cupertino) -> Result<()> {
-    let nodes = enumerate(Path::new(SYSFS), Subsystem::Input).map_err(|e| anyhow!("listing input devices: {e}"))?;
+    let nodes = enumerate(Path::new(SYSFS), Subsystem::Input)
+        .map_err(|e| anyhow!("listing input devices: {e}"))?;
     for node in &nodes {
         open_reporting(shared, node, state);
     }
@@ -909,7 +1162,8 @@ pub fn hotplug(shared: &SharedInputs, event: &DeviceEvent, state: &mut Cupertino
                     if !path.exists() {
                         return Ok(());
                     }
-                    let node = SysDevice::from_syspath(&path).map_err(|e| anyhow!("reading the new input device: {e}"))?;
+                    let node = SysDevice::from_syspath(&path)
+                        .map_err(|e| anyhow!("reading the new input device: {e}"))?;
                     open_device(&shared, &node, state)
                 },
                 move |e| tracing::error!(path = %syspath.display(), error = %format!("{e:#}"), "skipping input device"),
@@ -976,8 +1230,16 @@ struct NodeDiff {
 /// before opening what [`NodeDiff::open`] lists: a reused device number is in both.
 fn diff_nodes(open: &[NodeKey], present: &[NodeKey]) -> NodeDiff {
     NodeDiff {
-        close: open.iter().filter(|key| !present.contains(key)).cloned().collect(),
-        open: present.iter().filter(|key| !open.contains(key)).cloned().collect(),
+        close: open
+            .iter()
+            .filter(|key| !present.contains(key))
+            .cloned()
+            .collect(),
+        open: present
+            .iter()
+            .filter(|key| !open.contains(key))
+            .cloned()
+            .collect(),
     }
 }
 
@@ -991,10 +1253,34 @@ pub fn resync(shared: &SharedInputs, state: &mut Cupertino) {
             return;
         }
     };
-    let present: Vec<(NodeKey, &SysDevice)> =
-        nodes.iter().filter_map(|node| Some((NodeKey { devnum: node.devnum()?, devnode: node.devnode()?.to_owned() }, node))).collect();
-    let open: Vec<NodeKey> = shared.borrow().devices.iter().map(|(devnum, opened)| NodeKey { devnum: *devnum, devnode: opened.devnode.clone() }).collect();
-    let diff = diff_nodes(&open, &present.iter().map(|(key, _)| key.clone()).collect::<Vec<_>>());
+    let present: Vec<(NodeKey, &SysDevice)> = nodes
+        .iter()
+        .filter_map(|node| {
+            Some((
+                NodeKey {
+                    devnum: node.devnum()?,
+                    devnode: node.devnode()?.to_owned(),
+                },
+                node,
+            ))
+        })
+        .collect();
+    let open: Vec<NodeKey> = shared
+        .borrow()
+        .devices
+        .iter()
+        .map(|(devnum, opened)| NodeKey {
+            devnum: *devnum,
+            devnode: opened.devnode.clone(),
+        })
+        .collect();
+    let diff = diff_nodes(
+        &open,
+        &present
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>(),
+    );
     for key in &diff.close {
         close_device(shared, key.devnum, true, state);
     }
@@ -1006,7 +1292,11 @@ pub fn resync(shared: &SharedInputs, state: &mut Cupertino) {
 }
 
 fn is_event_node(devnode: &Path) -> bool {
-    devnode.file_name().and_then(|name| name.to_str()).and_then(|name| name.strip_prefix("event")).is_some_and(|number| number.parse::<u32>().is_ok())
+    devnode
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix("event"))
+        .is_some_and(|number| number.parse::<u32>().is_ok())
 }
 
 fn open_reporting(shared: &SharedInputs, node: &SysDevice, state: &mut Cupertino) {
@@ -1019,8 +1309,15 @@ fn open_reporting(shared: &SharedInputs, node: &SysDevice, state: &mut Cupertino
 /// nothing from, one that is already open, or any node while the session is paused, is skipped.
 fn open_device(shared: &SharedInputs, node: &SysDevice, state: &mut Cupertino) -> Result<()> {
     let devnum = node.devnum().context("the node has no device number")?;
-    let devnode = node.devnode().context("the node has no device file")?.to_owned();
-    let Some(class) = classify_device(node, Path::new(SYSFS)).map_err(|e| anyhow!("classifying the device: {e}"))? else { return Ok(()) };
+    let devnode = node
+        .devnode()
+        .context("the node has no device file")?
+        .to_owned();
+    let Some(class) = classify_device(node, Path::new(SYSFS))
+        .map_err(|e| anyhow!("classifying the device: {e}"))?
+    else {
+        return Ok(());
+    };
     if !is_routed(&class) || shared.borrow().devices.contains_key(&devnum) {
         return Ok(());
     }
@@ -1030,7 +1327,9 @@ fn open_device(shared: &SharedInputs, node: &SysDevice, state: &mut Cupertino) -
     if !session.is_active() {
         return Ok(());
     }
-    let fd = session.open(&devnode, OFlags::RDWR | OFlags::CLOEXEC | OFlags::NONBLOCK).map_err(|e| anyhow!("opening {}: {e}", devnode.display()))?;
+    let fd = session
+        .open(&devnode, OFlags::RDWR | OFlags::CLOEXEC | OFlags::NONBLOCK)
+        .map_err(|e| anyhow!("opening {}: {e}", devnode.display()))?;
     match register(node, class, &fd, state.config.pointer.natural_scrolling) {
         Ok((evdev, translator, mut events)) => {
             let device = translator.device.clone();
@@ -1042,7 +1341,15 @@ fn open_device(shared: &SharedInputs, node: &SysDevice, state: &mut Cupertino) -
                     return Err(e);
                 }
             };
-            shared.borrow_mut().devices.insert(devnum, Opened { translator, devnode, token, session_fd: fd });
+            shared.borrow_mut().devices.insert(
+                devnum,
+                Opened {
+                    translator,
+                    devnode,
+                    token,
+                    session_fd: fd,
+                },
+            );
             events.insert(0, InputEvent::DeviceAdded { device });
             deliver(state, events);
             arm_timer(shared, state);
@@ -1057,32 +1364,55 @@ fn open_device(shared: &SharedInputs, node: &SysDevice, state: &mut Cupertino) -
 
 /// Everything about a new device that can fail before it joins the loop: the evdev handle, its
 /// translator, and the events of its open-time state (held keys, the lid).
-fn register(node: &SysDevice, class: InputClass, fd: &OwnedFd, natural_scrolling: bool) -> Result<(EvdevDevice, Translator, Vec<Event_>)> {
-    let mut evdev = EvdevDevice::open(fd.try_clone().context("duplicating the descriptor")?).map_err(|e| anyhow!("reading the device capabilities: {e}"))?;
+fn register(
+    node: &SysDevice,
+    class: InputClass,
+    fd: &OwnedFd,
+    natural_scrolling: bool,
+) -> Result<(EvdevDevice, Translator, Vec<Event_>)> {
+    let mut evdev = EvdevDevice::open(fd.try_clone().context("duplicating the descriptor")?)
+        .map_err(|e| anyhow!("reading the device capabilities: {e}"))?;
     let device = InputDevice::new(node, class, evdev.info());
     let mut translator = Translator::new(device, evdev.info(), natural_scrolling);
     let mut events = Vec::new();
-    read(&mut evdev, &mut translator, &mut events).map_err(|e| anyhow!("reading the device state: {e}"))?;
+    read(&mut evdev, &mut translator, &mut events)
+        .map_err(|e| anyhow!("reading the device state: {e}"))?;
     Ok((evdev, translator, events))
 }
 
-fn insert_device(shared: &SharedInputs, devnum: DevT, evdev: EvdevDevice, handle: &LoopHandle<'static, Cupertino>) -> Result<RegistrationToken> {
+fn insert_device(
+    shared: &SharedInputs,
+    devnum: DevT,
+    evdev: EvdevDevice,
+    handle: &LoopHandle<'static, Cupertino>,
+) -> Result<RegistrationToken> {
     let shared = shared.clone();
     handle
-        .insert_source(Generic::new(evdev, Interest::READ, Mode::Level), move |_, evdev, state| {
-            // SAFETY: the descriptor is only read; the device is never replaced or dropped here.
-            let evdev = unsafe { evdev.get_mut() };
-            Ok(read_ready(&shared, devnum, evdev, state))
-        })
+        .insert_source(
+            Generic::new(evdev, Interest::READ, Mode::Level),
+            move |_, evdev, state| {
+                // SAFETY: the descriptor is only read; the device is never replaced or dropped here.
+                let evdev = unsafe { evdev.get_mut() };
+                Ok(read_ready(&shared, devnum, evdev, state))
+            },
+        )
         .map_err(|e| anyhow!("registering the device with the event loop: {e}"))
 }
 
 /// The device became readable.
-fn read_ready(shared: &SharedInputs, devnum: DevT, evdev: &mut EvdevDevice, state: &mut Cupertino) -> PostAction {
+fn read_ready(
+    shared: &SharedInputs,
+    devnum: DevT,
+    evdev: &mut EvdevDevice,
+    state: &mut Cupertino,
+) -> PostAction {
     let mut events = Vec::new();
     let result = {
         let mut inputs = shared.borrow_mut();
-        let opened = inputs.devices.get_mut(&devnum).expect("a registered device has an entry");
+        let opened = inputs
+            .devices
+            .get_mut(&devnum)
+            .expect("a registered device has an entry");
         read(evdev, &mut opened.translator, &mut events)
     };
     match result {
@@ -1093,8 +1423,13 @@ fn read_ready(shared: &SharedInputs, devnum: DevT, evdev: &mut EvdevDevice, stat
         }
         Err(e) => {
             match &e {
-                cupertino_evdev::Error::Io { errno: Errno::NODEV, .. } => tracing::info!(devnum = %devnum, "input device unplugged"),
-                _ => tracing::error!(devnum = %devnum, error = %e, "reading an input device failed, closing it"),
+                cupertino_evdev::Error::Io {
+                    errno: Errno::NODEV,
+                    ..
+                } => tracing::info!(devnum = %devnum, "input device unplugged"),
+                _ => {
+                    tracing::error!(devnum = %devnum, error = %e, "reading an input device failed, closing it")
+                }
             }
             // The loop drops this source when the callback returns.
             close_device(shared, devnum, false, state);
@@ -1108,7 +1443,9 @@ fn read_ready(shared: &SharedInputs, devnum: DevT, evdev: &mut EvdevDevice, stat
 fn close_device(shared: &SharedInputs, devnum: DevT, remove_source: bool, state: &mut Cupertino) {
     let (opened, mut session, handle) = {
         let mut inputs = shared.borrow_mut();
-        let Some(opened) = inputs.devices.remove(&devnum) else { return };
+        let Some(opened) = inputs.devices.remove(&devnum) else {
+            return;
+        };
         (opened, inputs.session.clone(), inputs.handle.clone())
     };
     if remove_source {
@@ -1118,16 +1455,29 @@ fn close_device(shared: &SharedInputs, devnum: DevT, remove_source: bool, state:
     let mut translator = opened.translator;
     let mut events = Vec::new();
     translator.release_all(micros_from_seconds(now(state).as_secs_f64()), &mut events);
-    events.push(InputEvent::DeviceRemoved { device: translator.device });
+    events.push(InputEvent::DeviceRemoved {
+        device: translator.device,
+    });
     deliver(state, events);
 }
 
 /// Makes sure a timer fires when the earliest touchpad deadline passes.
 fn arm_timer(shared: &SharedInputs, state: &Cupertino) {
     let mut inputs = shared.borrow_mut();
-    let Some(deadline) = inputs.devices.values().filter_map(|opened| opened.translator.next_deadline()).reduce(f64::min) else { return };
+    let Some(deadline) = inputs
+        .devices
+        .values()
+        .filter_map(|opened| opened.translator.next_deadline())
+        .reduce(f64::min)
+    else {
+        return;
+    };
     // A pending timer that fires first re-arms for this deadline.
-    if inputs.timer.as_ref().is_some_and(|timer| timer.deadline <= deadline) {
+    if inputs
+        .timer
+        .as_ref()
+        .is_some_and(|timer| timer.deadline <= deadline)
+    {
         return;
     }
     if let Some(timer) = inputs.timer.take() {
@@ -1135,20 +1485,22 @@ fn arm_timer(shared: &SharedInputs, state: &Cupertino) {
     }
     let delay = Duration::from_secs_f64((deadline - now(state).as_secs_f64()).max(0.0));
     let callback_shared = shared.clone();
-    let inserted = inputs.handle.insert_source(Timer::from_duration(delay), move |_, _, state| {
-        let now_s = now(state).as_secs_f64();
-        let mut events = Vec::new();
-        {
-            let mut inputs = callback_shared.borrow_mut();
-            inputs.timer = None;
-            for opened in inputs.devices.values_mut() {
-                opened.translator.tick(now_s, &mut events);
+    let inserted = inputs
+        .handle
+        .insert_source(Timer::from_duration(delay), move |_, _, state| {
+            let now_s = now(state).as_secs_f64();
+            let mut events = Vec::new();
+            {
+                let mut inputs = callback_shared.borrow_mut();
+                inputs.timer = None;
+                for opened in inputs.devices.values_mut() {
+                    opened.translator.tick(now_s, &mut events);
+                }
             }
-        }
-        deliver(state, events);
-        arm_timer(&callback_shared, state);
-        TimeoutAction::Drop
-    });
+            deliver(state, events);
+            arm_timer(&callback_shared, state);
+            TimeoutAction::Drop
+        });
     match inserted {
         Ok(token) => inputs.timer = Some(ArmedTimer { token, deadline }),
         Err(e) => tracing::error!(error = %e, "arming the touchpad timer failed"),
@@ -1162,13 +1514,24 @@ mod tests {
     use super::*;
 
     fn device(class: InputClass) -> InputDevice {
-        InputDevice(Rc::new(DeviceData { sysname: "event3".into(), name: "test".into(), syspath: PathBuf::from("/sys/test"), usb_id: (2, 1), class }))
+        InputDevice(Rc::new(DeviceData {
+            sysname: "event3".into(),
+            name: "test".into(),
+            syspath: PathBuf::from("/sys/test"),
+            usb_id: (2, 1),
+            class,
+        }))
     }
 
     fn info(abs_axes: Vec<AbsAxis>) -> DeviceInfo {
         DeviceInfo {
             name: "test".into(),
-            id: DeviceId { bustype: 3, vendor: 1, product: 2, version: 0 },
+            id: DeviceId {
+                bustype: 3,
+                vendor: 1,
+                product: 2,
+                version: 0,
+            },
             properties: BitSet::default(),
             event_types: BitSet::default(),
             keys: BitSet::default(),
@@ -1179,7 +1542,17 @@ mod tests {
     }
 
     fn axis(code: u16, max: i32, resolution: i32) -> AbsAxis {
-        AbsAxis { code, info: AbsInfo { value: 0, min: 0, max, fuzz: 0, flat: 0, resolution: Resolution::from_raw(resolution) } }
+        AbsAxis {
+            code,
+            info: AbsInfo {
+                value: 0,
+                min: 0,
+                max,
+                fuzz: 0,
+                flat: 0,
+                resolution: Resolution::from_raw(resolution),
+            },
+        }
     }
 
     fn frame(time_us: i64) -> Frame {
@@ -1204,26 +1577,64 @@ mod tests {
     }
 
     fn keyboard() -> Translator {
-        Translator::new(device(InputClass { key: true, keyboard: true, ..InputClass::default() }), &info(Vec::new()), false)
+        Translator::new(
+            device(InputClass {
+                key: true,
+                keyboard: true,
+                ..InputClass::default()
+            }),
+            &info(Vec::new()),
+            false,
+        )
     }
 
     fn mouse(natural_scrolling: bool) -> Translator {
-        Translator::new(device(InputClass { mouse: true, ..InputClass::default() }), &info(Vec::new()), natural_scrolling)
+        Translator::new(
+            device(InputClass {
+                mouse: true,
+                ..InputClass::default()
+            }),
+            &info(Vec::new()),
+            natural_scrolling,
+        )
     }
 
     #[test]
     fn a_key_press_becomes_a_keyboard_event_and_is_released_with_the_device() {
         let mut translator = keyboard();
         let mut press = frame(1_500_000);
-        press.keys.push(EvdevKey { code: 30, state: EvdevKeyState::Pressed });
+        press.keys.push(EvdevKey {
+            code: 30,
+            state: EvdevKeyState::Pressed,
+        });
         let events = translate(&mut translator, &press);
-        let [InputEvent::Keyboard { event }] = events.as_slice() else { panic!("{events:?}") };
-        assert_eq!((event.key_code(), KeyboardKeyEvent::state(event), event.count(), event.time()), (Keycode::new(38), KeyState::Pressed, 1, 1_500_000));
+        let [InputEvent::Keyboard { event }] = events.as_slice() else {
+            panic!("{events:?}")
+        };
+        assert_eq!(
+            (
+                event.key_code(),
+                KeyboardKeyEvent::state(event),
+                event.count(),
+                event.time()
+            ),
+            (Keycode::new(38), KeyState::Pressed, 1, 1_500_000)
+        );
 
         let mut out = Vec::new();
         translator.release_all(2_000_000, &mut out);
-        let [InputEvent::Keyboard { event }] = out.as_slice() else { panic!("{out:?}") };
-        assert_eq!((event.key_code(), KeyboardKeyEvent::state(event), event.count(), event.time()), (Keycode::new(38), KeyState::Released, 0, 2_000_000));
+        let [InputEvent::Keyboard { event }] = out.as_slice() else {
+            panic!("{out:?}")
+        };
+        assert_eq!(
+            (
+                event.key_code(),
+                KeyboardKeyEvent::state(event),
+                event.count(),
+                event.time()
+            ),
+            (Keycode::new(38), KeyState::Released, 0, 2_000_000)
+        );
         assert!(!event.resynced);
     }
 
@@ -1232,14 +1643,24 @@ mod tests {
         let mut translator = keyboard();
         let mut open = frame(10);
         open.resynced = true;
-        open.keys.push(EvdevKey { code: 29, state: EvdevKeyState::Pressed });
+        open.keys.push(EvdevKey {
+            code: 29,
+            state: EvdevKeyState::Pressed,
+        });
         let events = translate(&mut translator, &open);
-        let [InputEvent::Keyboard { event }] = events.as_slice() else { panic!("{events:?}") };
+        let [InputEvent::Keyboard { event }] = events.as_slice() else {
+            panic!("{events:?}")
+        };
         assert!(event.resynced && KeyboardKeyEvent::state(event) == KeyState::Pressed);
         let mut release = frame(20);
-        release.keys.push(EvdevKey { code: 29, state: EvdevKeyState::Released });
+        release.keys.push(EvdevKey {
+            code: 29,
+            state: EvdevKeyState::Released,
+        });
         let events = translate(&mut translator, &release);
-        let [InputEvent::Keyboard { event }] = events.as_slice() else { panic!("{events:?}") };
+        let [InputEvent::Keyboard { event }] = events.as_slice() else {
+            panic!("{events:?}")
+        };
         assert!(!event.resynced);
     }
 
@@ -1248,47 +1669,111 @@ mod tests {
         let mut motion = frame(10);
         motion.motion = Motion { dx: 3, dy: -2 };
         let events = translate(&mut mouse(false), &motion);
-        let [InputEvent::PointerMotion { event }] = events.as_slice() else { panic!("{events:?}") };
-        assert_eq!((event.delta_unaccel().x, event.delta_unaccel().y), (3.0, -2.0));
+        let [InputEvent::PointerMotion { event }] = events.as_slice() else {
+            panic!("{events:?}")
+        };
+        assert_eq!(
+            (event.delta_unaccel().x, event.delta_unaccel().y),
+            (3.0, -2.0)
+        );
     }
 
     #[test]
     fn a_hi_res_wheel_is_v120_from_a_wheel() {
         // Two detents away from the user, one to the right.
         let mut wheel = frame(10);
-        wheel.wheel = Wheel { vertical: 240, horizontal: 120 };
+        wheel.wheel = Wheel {
+            vertical: 240,
+            horizontal: 120,
+        };
         let events = translate(&mut mouse(false), &wheel);
-        let [InputEvent::PointerAxis { event }] = events.as_slice() else { panic!("{events:?}") };
+        let [InputEvent::PointerAxis { event }] = events.as_slice() else {
+            panic!("{events:?}")
+        };
         assert_eq!(event.source(), AxisSource::Wheel);
-        assert_eq!((event.amount_v120(Axis::Vertical), event.amount_v120(Axis::Horizontal)), (Some(-240.0), Some(120.0)));
+        assert_eq!(
+            (
+                event.amount_v120(Axis::Vertical),
+                event.amount_v120(Axis::Horizontal)
+            ),
+            (Some(-240.0), Some(120.0))
+        );
         assert_eq!(event.amount(Axis::Vertical), None);
-        assert_eq!(event.relative_direction(Axis::Vertical), AxisRelativeDirection::Identical);
+        assert_eq!(
+            event.relative_direction(Axis::Vertical),
+            AxisRelativeDirection::Identical
+        );
 
         // Natural scrolling flips the vertical axis and says so.
         let events = translate(&mut mouse(true), &wheel);
-        let [InputEvent::PointerAxis { event }] = events.as_slice() else { panic!("{events:?}") };
-        assert_eq!((event.amount_v120(Axis::Vertical), event.amount_v120(Axis::Horizontal)), (Some(240.0), Some(-120.0)));
-        assert_eq!(event.relative_direction(Axis::Vertical), AxisRelativeDirection::Inverted);
+        let [InputEvent::PointerAxis { event }] = events.as_slice() else {
+            panic!("{events:?}")
+        };
+        assert_eq!(
+            (
+                event.amount_v120(Axis::Vertical),
+                event.amount_v120(Axis::Horizontal)
+            ),
+            (Some(240.0), Some(-120.0))
+        );
+        assert_eq!(
+            event.relative_direction(Axis::Vertical),
+            AxisRelativeDirection::Inverted
+        );
     }
 
     #[test]
     fn the_lid_switch_is_a_switch_toggle() {
         let mut lid = frame(10);
-        lid.switches.push(EvdevSwitchEvent { switch: EvdevSwitch::Lid, on: true });
-        let class = InputClass { switch: true, ..InputClass::default() };
-        let events = translate(&mut Translator::new(device(class), &info(Vec::new()), false), &lid);
-        let [InputEvent::SwitchToggle { event }] = events.as_slice() else { panic!("{events:?}") };
-        assert_eq!((event.switch(), SwitchToggleEvent::state(event)), (Some(Switch::Lid), SwitchState::On));
+        lid.switches.push(EvdevSwitchEvent {
+            switch: EvdevSwitch::Lid,
+            on: true,
+        });
+        let class = InputClass {
+            switch: true,
+            ..InputClass::default()
+        };
+        let events = translate(
+            &mut Translator::new(device(class), &info(Vec::new()), false),
+            &lid,
+        );
+        let [InputEvent::SwitchToggle { event }] = events.as_slice() else {
+            panic!("{events:?}")
+        };
+        assert_eq!(
+            (event.switch(), SwitchToggleEvent::state(event)),
+            (Some(Switch::Lid), SwitchState::On)
+        );
     }
 
     fn touchpad() -> Translator {
         // 40 units per millimetre on both axes, 100 mm by 60 mm.
-        let axes = vec![axis(ABS_MT_POSITION_X, 4_000, 40), axis(ABS_MT_POSITION_Y, 2_400, 40)];
-        Translator::new(device(InputClass { touchpad: true, clickpad: true, ..InputClass::default() }), &info(axes), true)
+        let axes = vec![
+            axis(ABS_MT_POSITION_X, 4_000, 40),
+            axis(ABS_MT_POSITION_Y, 2_400, 40),
+        ];
+        Translator::new(
+            device(InputClass {
+                touchpad: true,
+                clickpad: true,
+                ..InputClass::default()
+            }),
+            &info(axes),
+            true,
+        )
     }
 
     fn two_fingers(time_us: i64, y: i32) -> Frame {
-        let finger = |slot: u32, x: i32| Contact { slot, tracking_id: slot, x, y, pressure: None, touch_major: None, touch_minor: None, tool: Tool::Finger };
+        let finger = |slot: u32, x: i32| Contact {
+            slot,
+            tracking_id: slot,
+            x,
+            y,
+            pressure: None,
+            touch_major: None,
+            touch_minor: None,
+            tool: Tool::Finger,
+        };
         let mut f = frame(time_us);
         f.contacts = vec![finger(0, 1_600), finger(1, 2_000)];
         f.finger_count = Some(2);
@@ -1301,7 +1786,10 @@ mod tests {
         let mut axis_events = Vec::new();
         // Fingers go down at y = 20 mm and move down 0.5 mm (20 units) every 10 ms.
         for step in 0..8 {
-            for event in translate(&mut translator, &two_fingers(10_000 * (step + 1), 800 + 20 * step as i32)) {
+            for event in translate(
+                &mut translator,
+                &two_fingers(10_000 * (step + 1), 800 + 20 * step as i32),
+            ) {
                 if let InputEvent::PointerAxis { event } = event {
                     axis_events.push(event);
                 }
@@ -1312,13 +1800,25 @@ mod tests {
                 axis_events.push(event);
             }
         }
-        assert!(axis_events.iter().all(|e| e.source() == AxisSource::Finger && e.relative_direction(Axis::Vertical) == AxisRelativeDirection::Inverted));
-        let scrolled: Vec<Option<f64>> = axis_events.iter().map(|e| e.amount(Axis::Vertical)).collect();
+        assert!(axis_events.iter().all(|e| e.source() == AxisSource::Finger
+            && e.relative_direction(Axis::Vertical) == AxisRelativeDirection::Inverted));
+        let scrolled: Vec<Option<f64>> = axis_events
+            .iter()
+            .map(|e| e.amount(Axis::Vertical))
+            .collect();
         // Natural scrolling: fingers down is content down, a negative axis value. Scrolling starts
         // after 1 mm of travel (1 / 0.0635 counts), then every 0.5 mm step is 7.874 counts.
         assert_eq!(
             scrolled,
-            [Some(-15.748031496062993), Some(-7.874015748031496), Some(-7.874015748031496), Some(-7.874015748031496), Some(-7.874015748031496), Some(-7.874015748031496), Some(0.0)]
+            [
+                Some(-15.748031496062993),
+                Some(-7.874015748031496),
+                Some(-7.874015748031496),
+                Some(-7.874015748031496),
+                Some(-7.874015748031496),
+                Some(-7.874015748031496),
+                Some(0.0)
+            ]
         );
     }
 
@@ -1326,7 +1826,14 @@ mod tests {
     fn a_single_touch_pad_without_a_resolution_scrolls_with_fake_fingers() {
         // ABS_X/ABS_Y only, no resolution: libinput's 69 mm by 50 mm fallback makes y 48 units per mm.
         let axes = vec![axis(ABS_X, 4_000, 0), axis(ABS_Y, 2_400, 0)];
-        let mut translator = Translator::new(device(InputClass { touchpad: true, ..InputClass::default() }), &info(axes), true);
+        let mut translator = Translator::new(
+            device(InputClass {
+                touchpad: true,
+                ..InputClass::default()
+            }),
+            &info(axes),
+            true,
+        );
         let two_fingers_at = |time_us: i64, y: i32| {
             let mut f = frame(time_us);
             f.abs_pointer = Some(AbsPoint { x: 2_000, y });
@@ -1336,7 +1843,10 @@ mod tests {
         let mut scrolled = Vec::new();
         // Both fingers report one position: it goes down 0.5 mm (24 units) every 10 ms from y = 20 mm.
         for step in 0..8 {
-            for event in translate(&mut translator, &two_fingers_at(10_000 * (step + 1), 960 + 24 * step as i32)) {
+            for event in translate(
+                &mut translator,
+                &two_fingers_at(10_000 * (step + 1), 960 + 24 * step as i32),
+            ) {
                 if let InputEvent::PointerAxis { event } = event {
                     scrolled.push(event.amount(Axis::Vertical));
                 }
@@ -1349,15 +1859,40 @@ mod tests {
         }
         assert_eq!(
             scrolled,
-            [Some(-15.748031496062993), Some(-7.874015748031496), Some(-7.874015748031496), Some(-7.874015748031496), Some(-7.874015748031496), Some(-7.874015748031496), Some(0.0)]
+            [
+                Some(-15.748031496062993),
+                Some(-7.874015748031496),
+                Some(-7.874015748031496),
+                Some(-7.874015748031496),
+                Some(-7.874015748031496),
+                Some(-7.874015748031496),
+                Some(0.0)
+            ]
         );
     }
 
     #[test]
     fn a_touchpad_that_cannot_be_modelled_keeps_its_buttons() {
-        let mut translator = Translator::new(device(InputClass { touchpad: true, clickpad: true, ..InputClass::default() }), &info(Vec::new()), true);
+        let mut translator = Translator::new(
+            device(InputClass {
+                touchpad: true,
+                clickpad: true,
+                ..InputClass::default()
+            }),
+            &info(Vec::new()),
+            true,
+        );
         let mut press = frame(10);
-        press.keys = vec![EvdevKey { code: BTN_LEFT, state: EvdevKeyState::Pressed }, EvdevKey { code: BTN_RIGHT, state: EvdevKeyState::Pressed }];
+        press.keys = vec![
+            EvdevKey {
+                code: BTN_LEFT,
+                state: EvdevKeyState::Pressed,
+            },
+            EvdevKey {
+                code: BTN_RIGHT,
+                state: EvdevKeyState::Pressed,
+            },
+        ];
         let events = translate(&mut translator, &press);
         let buttons: Vec<(u32, ButtonState)> = events
             .iter()
@@ -1366,29 +1901,63 @@ mod tests {
                 other => panic!("{other:?}"),
             })
             .collect();
-        assert_eq!(buttons, [(0x110, ButtonState::Pressed), (0x111, ButtonState::Pressed)]);
+        assert_eq!(
+            buttons,
+            [(0x110, ButtonState::Pressed), (0x111, ButtonState::Pressed)]
+        );
     }
 
     #[test]
     fn closing_a_device_cancels_the_running_gestures_before_releasing_it() {
         let mut translator = touchpad();
         let mut out = Vec::new();
-        translator.pad_event(TouchpadEvent::SwipeBegin { fingers: 3, axis: SwipeAxis::Horizontal }, 1_000, &mut out);
+        translator.pad_event(
+            TouchpadEvent::SwipeBegin {
+                fingers: 3,
+                axis: SwipeAxis::Horizontal,
+            },
+            1_000,
+            &mut out,
+        );
         translator.pad_event(TouchpadEvent::PinchBegin { fingers: 2 }, 1_000, &mut out);
-        translator.pad_event(TouchpadEvent::ScrollUpdate { dx: 0.0, dy: 2.0 }, 1_000, &mut out);
+        translator.pad_event(
+            TouchpadEvent::ScrollUpdate { dx: 0.0, dy: 2.0 },
+            1_000,
+            &mut out,
+        );
         out.clear();
 
         translator.release_all(2_000, &mut out);
         let shapes: Vec<String> = out
             .iter()
             .map(|event| match event {
-                InputEvent::GestureSwipeEnd { event } => format!("swipe end cancelled={} at {}", event.cancelled(), event.time()),
-                InputEvent::GesturePinchEnd { event } => format!("pinch end cancelled={} at {}", event.cancelled(), event.time()),
-                InputEvent::PointerAxis { event } => format!("axis {:?} {:?}/{:?}", event.source(), event.amount(Axis::Horizontal), event.amount(Axis::Vertical)),
+                InputEvent::GestureSwipeEnd { event } => format!(
+                    "swipe end cancelled={} at {}",
+                    event.cancelled(),
+                    event.time()
+                ),
+                InputEvent::GesturePinchEnd { event } => format!(
+                    "pinch end cancelled={} at {}",
+                    event.cancelled(),
+                    event.time()
+                ),
+                InputEvent::PointerAxis { event } => format!(
+                    "axis {:?} {:?}/{:?}",
+                    event.source(),
+                    event.amount(Axis::Horizontal),
+                    event.amount(Axis::Vertical)
+                ),
                 other => panic!("{other:?}"),
             })
             .collect();
-        assert_eq!(shapes, ["swipe end cancelled=true at 2000", "pinch end cancelled=true at 2000", "axis Finger Some(0.0)/Some(0.0)"]);
+        assert_eq!(
+            shapes,
+            [
+                "swipe end cancelled=true at 2000",
+                "pinch end cancelled=true at 2000",
+                "axis Finger Some(0.0)/Some(0.0)"
+            ]
+        );
 
         // Nothing is left to cancel.
         out.clear();
@@ -1397,30 +1966,56 @@ mod tests {
     }
 
     fn node(major: u32, minor: u32, devnode: &str) -> NodeKey {
-        NodeKey { devnum: DevT::new(major, minor), devnode: PathBuf::from(devnode) }
+        NodeKey {
+            devnum: DevT::new(major, minor),
+            devnode: PathBuf::from(devnode),
+        }
     }
 
     #[test]
     fn the_node_diff_opens_new_nodes_closes_gone_ones_and_replaces_a_reused_device_number() {
-        let open = [node(13, 64, "/dev/input/event0"), node(13, 65, "/dev/input/event1"), node(13, 66, "/dev/input/event2")];
+        let open = [
+            node(13, 64, "/dev/input/event0"),
+            node(13, 65, "/dev/input/event1"),
+            node(13, 66, "/dev/input/event2"),
+        ];
         // event1 is gone; event2 was unplugged and its number reused by event7; event9 is new.
-        let present = [node(13, 64, "/dev/input/event0"), node(13, 66, "/dev/input/event7"), node(13, 73, "/dev/input/event9")];
+        let present = [
+            node(13, 64, "/dev/input/event0"),
+            node(13, 66, "/dev/input/event7"),
+            node(13, 73, "/dev/input/event9"),
+        ];
         assert_eq!(
             diff_nodes(&open, &present),
             NodeDiff {
-                close: vec![node(13, 65, "/dev/input/event1"), node(13, 66, "/dev/input/event2")],
-                open: vec![node(13, 66, "/dev/input/event7"), node(13, 73, "/dev/input/event9")],
+                close: vec![
+                    node(13, 65, "/dev/input/event1"),
+                    node(13, 66, "/dev/input/event2")
+                ],
+                open: vec![
+                    node(13, 66, "/dev/input/event7"),
+                    node(13, 73, "/dev/input/event9")
+                ],
             }
         );
         assert_eq!(diff_nodes(&present, &present), NodeDiff::default());
     }
 
     /// Dispatches `event_loop` until `done` holds, failing the test after two seconds.
-    fn run_until<S>(event_loop: &mut smithay::reexports::calloop::EventLoop<'static, S>, state: &mut S, done: impl Fn(&S) -> bool) {
+    fn run_until<S>(
+        event_loop: &mut smithay::reexports::calloop::EventLoop<'static, S>,
+        state: &mut S,
+        done: impl Fn(&S) -> bool,
+    ) {
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         while !done(state) {
-            assert!(std::time::Instant::now() < deadline, "the loop did not finish in time");
-            event_loop.dispatch(Some(Duration::from_millis(5)), state).unwrap();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the loop did not finish in time"
+            );
+            event_loop
+                .dispatch(Some(Duration::from_millis(5)), state)
+                .unwrap();
         }
     }
 
@@ -1441,7 +2036,11 @@ mod tests {
             &mut state,
             |state| {
                 state.made += 1;
-                if state.made < 3 { Err(anyhow!("TakeDevice: ENODEV")) } else { Ok(()) }
+                if state.made < 3 {
+                    Err(anyhow!("TakeDevice: ENODEV"))
+                } else {
+                    Ok(())
+                }
             },
             |_| panic!("the third attempt succeeds"),
         );
@@ -1449,7 +2048,9 @@ mod tests {
         run_until(&mut event_loop, &mut state, |state| state.made == 3);
         // No fourth attempt follows a success.
         for _ in 0..10 {
-            event_loop.dispatch(Some(Duration::from_millis(2)), &mut state).unwrap();
+            event_loop
+                .dispatch(Some(Duration::from_millis(2)), &mut state)
+                .unwrap();
         }
         assert_eq!(state.made, 3);
     }

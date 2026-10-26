@@ -48,8 +48,16 @@ pub struct ShadowStyle {
 impl Default for ShadowStyle {
     fn default() -> Self {
         Self {
-            active: ShadowPreset { sigma: 20.0, offset_y: 18.0, density: 0.40 },
-            inactive: ShadowPreset { sigma: 12.0, offset_y: 8.0, density: 0.25 },
+            active: ShadowPreset {
+                sigma: 20.0,
+                offset_y: 18.0,
+                density: 0.40,
+            },
+            inactive: ShadowPreset {
+                sigma: 12.0,
+                offset_y: 8.0,
+                density: 0.25,
+            },
             dark_active_density: 0.70,
             dark_inactive_density: 0.70 * (0.25 / 0.40),
             cutout: true,
@@ -62,7 +70,11 @@ impl ShadowStyle {
     pub fn preset(&self, active: bool, dark: bool) -> ShadowPreset {
         let mut p = if active { self.active } else { self.inactive };
         if dark {
-            p.density = if active { self.dark_active_density } else { self.dark_inactive_density };
+            p.density = if active {
+                self.dark_active_density
+            } else {
+                self.dark_inactive_density
+            };
         }
         p
     }
@@ -106,7 +118,14 @@ pub struct WindowStyle {
 
 impl Default for WindowStyle {
     fn default() -> Self {
-        Self { corner_radius: 12.0, continuous_corners: true, shadow: ShadowStyle::default(), style_client_decorated: true, ssd_insets: Insets::default(), decorations: true }
+        Self {
+            corner_radius: 12.0,
+            continuous_corners: true,
+            shadow: ShadowStyle::default(),
+            style_client_decorated: true,
+            ssd_insets: Insets::default(),
+            decorations: true,
+        }
     }
 }
 
@@ -240,7 +259,9 @@ impl Default for Config {
             keybindings: KeyBindings::from_shortcuts(&crate::kbd::default_shortcut_map().0),
             effects: crate::fx::EffectsConfig::default(),
             hot_corners: default_hot_corners(),
-            terminals: ["foot", "alacritty", "kitty", "wezterm", "xterm"].map(String::from).to_vec(),
+            terminals: ["foot", "alacritty", "kitty", "wezterm", "xterm"]
+                .map(String::from)
+                .to_vec(),
             screenshot_command: vec!["cupertino-screenshot".to_string()],
             cascade_step: 29.0,
             default_window_fraction: 0.6,
@@ -262,7 +283,12 @@ pub fn shortcuts_path() -> Option<PathBuf> {
 pub fn shortcut_map() -> cupertino_input::ShortcutMap {
     let (mut map, report) = crate::kbd::default_shortcut_map();
     for (chord, table, kept) in &report.conflicts {
-        tracing::warn!(chord, table, kept, "reference shortcut table row dropped: chord already bound");
+        tracing::warn!(
+            chord,
+            table,
+            kept,
+            "reference shortcut table row dropped: chord already bound"
+        );
     }
     if let Some(path) = shortcuts_path() {
         if let Ok(text) = std::fs::read_to_string(&path) {
@@ -277,9 +303,17 @@ pub fn shortcut_map() -> cupertino_input::ShortcutMap {
 /// Every corner armed, so the recognizer reports each one; which action a corner runs is the
 /// dock's setting (`dock.conf`), so the binding's action is never read.
 fn default_hot_corners() -> cupertino_input::HotCornerConfig {
-    let mut cfg = cupertino_input::HotCornerConfig { dwell: 0.0, ..cupertino_input::HotCornerConfig::default() };
+    let mut cfg = cupertino_input::HotCornerConfig {
+        dwell: 0.0,
+        ..cupertino_input::HotCornerConfig::default()
+    };
     for corner in cupertino_input::Corner::ALL {
-        cfg.set(corner, Some(cupertino_input::CornerBinding::new(cupertino_input::CornerAction::Overview)));
+        cfg.set(
+            corner,
+            Some(cupertino_input::CornerBinding::new(
+                cupertino_input::CornerAction::Overview,
+            )),
+        );
     }
     cfg
 }
@@ -288,7 +322,9 @@ fn default_hot_corners() -> cupertino_input::HotCornerConfig {
 /// file leaves the defaults (reported).
 fn load_power() -> cupertino_defaults::power::PowerSettings {
     use cupertino_defaults::power::PowerSettings;
-    let Some(path) = PowerSettings::path() else { return PowerSettings::default() };
+    let Some(path) = PowerSettings::path() else {
+        return PowerSettings::default();
+    };
     match PowerSettings::load(&path, None) {
         Ok((settings, problems)) => {
             for p in problems {
@@ -326,7 +362,12 @@ impl Config {
     pub fn load_with_files() -> (Self, SettingsFiles) {
         let (keyboard, keyboard_file) = crate::kbd::KeyboardSettings::load();
         let power = load_power();
-        let mut cfg = Config { keybindings: KeyBindings::from_shortcuts(&shortcut_map()), keyboard, power, ..Config::default() };
+        let mut cfg = Config {
+            keybindings: KeyBindings::from_shortcuts(&shortcut_map()),
+            keyboard,
+            power,
+            ..Config::default()
+        };
         let mut compositor = CompositorSettings::default();
         if let Some(path) = Self::path() {
             match CompositorSettings::load(&path, None) {
@@ -339,10 +380,19 @@ impl Config {
                     }
                     compositor = file;
                 }
-                Err(e) => tracing::warn!(path = %path.display(), error = %e, "cannot read configuration"),
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "cannot read configuration")
+                }
             }
         }
-        (cfg, SettingsFiles { compositor, keyboard: keyboard_file, power })
+        (
+            cfg,
+            SettingsFiles {
+                compositor,
+                keyboard: keyboard_file,
+                power,
+            },
+        )
     }
 
     /// [`Config::load_with_files`] without the files.
@@ -396,7 +446,13 @@ impl Config {
         }
         self.pointer.apply_file(f);
         if let Some(procs) = &f.shell {
-            self.shell_processes = procs.iter().map(|p| ShellProcess { name: p.name.clone(), command: p.command.clone() }).collect();
+            self.shell_processes = procs
+                .iter()
+                .map(|p| ShellProcess {
+                    name: p.name.clone(),
+                    command: p.command.clone(),
+                })
+                .collect();
         }
         if let Some(command) = &f.screenshot {
             self.screenshot_command = command.clone();
@@ -426,7 +482,10 @@ mod tests {
     /// Apply `json` to `c`; the problems of the file and those the server finds, as text.
     fn apply(c: &mut Config, json: &str) -> Vec<String> {
         let (file, problems) = CompositorSettings::parse(json, None);
-        let mut out: Vec<String> = problems.into_iter().map(|p| format!("{}: {}", p.key, p.message)).collect();
+        let mut out: Vec<String> = problems
+            .into_iter()
+            .map(|p| format!("{}: {}", p.key, p.message))
+            .collect();
         out.extend(c.apply_file(&file));
         out
     }
@@ -434,8 +493,22 @@ mod tests {
     #[test]
     fn shadow_presets_follow_evidence() {
         let s = ShadowStyle::default();
-        assert_eq!(s.preset(true, false), ShadowPreset { sigma: 20.0, offset_y: 18.0, density: 0.40 });
-        assert_eq!(s.preset(false, false), ShadowPreset { sigma: 12.0, offset_y: 8.0, density: 0.25 });
+        assert_eq!(
+            s.preset(true, false),
+            ShadowPreset {
+                sigma: 20.0,
+                offset_y: 18.0,
+                density: 0.40
+            }
+        );
+        assert_eq!(
+            s.preset(false, false),
+            ShadowPreset {
+                sigma: 12.0,
+                offset_y: 8.0,
+                density: 0.25
+            }
+        );
         assert_eq!(s.preset(true, true).density, 0.70);
         assert_eq!(s.preset(true, true).sigma, 20.0);
         assert!(s.preset(false, true).density < 0.70);
@@ -449,36 +522,117 @@ mod tests {
     #[test]
     fn json_overrides_apply() {
         let mut c = Config::default();
-        assert_eq!(apply(&mut c, r#"{"appearance":"dark","corner_radius":10,"terminals":["kitty"],"keybindings":{"Super+t":"spawn-terminal"}}"#), Vec::<String>::new());
+        assert_eq!(
+            apply(
+                &mut c,
+                r#"{"appearance":"dark","corner_radius":10,"terminals":["kitty"],"keybindings":{"Super+t":"spawn-terminal"}}"#
+            ),
+            Vec::<String>::new()
+        );
         assert!(c.is_dark());
         assert_eq!(c.window.corner_radius, 10.0);
         assert_eq!(c.terminals, vec!["kitty".to_string()]);
         assert!(!apply(&mut c, r#"{"keybindings":{"Super+t":"nope"}}"#).is_empty());
-        assert_eq!(apply(&mut c, r#"{"minimize_effect":"funnel","decorations":false,"closing_animation":false}"#), Vec::<String>::new());
-        assert_eq!(c.effects.minimize, Some(cupertino_effects::MinimizeKind::Funnel));
+        assert_eq!(
+            apply(
+                &mut c,
+                r#"{"minimize_effect":"funnel","decorations":false,"closing_animation":false}"#
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            c.effects.minimize,
+            Some(cupertino_effects::MinimizeKind::Funnel)
+        );
         assert!(!c.window.decorations && !c.effects.closing);
         assert!(!apply(&mut c, r#"{"minimize_effect":"nope"}"#).is_empty());
         assert_eq!(c.hot_corners.dwell, 0.0, " default");
-        assert!(cupertino_input::Corner::ALL.iter().all(|c2| c.hot_corners.binding(*c2).is_some()), "every corner arms; the dock maps it");
-        assert_eq!(apply(&mut c, r#"{"hot_corner_dwell":0.2,"hot_corner_size":3}"#), Vec::<String>::new());
+        assert!(
+            cupertino_input::Corner::ALL
+                .iter()
+                .all(|c2| c.hot_corners.binding(*c2).is_some()),
+            "every corner arms; the dock maps it"
+        );
+        assert_eq!(
+            apply(&mut c, r#"{"hot_corner_dwell":0.2,"hot_corner_size":3}"#),
+            Vec::<String>::new()
+        );
         assert_eq!((c.hot_corners.dwell, c.hot_corners.size), (0.2, 3.0));
-        assert_eq!(apply(&mut c, r#"{"mouse_speed":0.6875,"trackpad_speed":3,"mouse_acceleration":false,"natural_scrolling":false}"#), Vec::<String>::new());
-        assert_eq!(c.pointer, PointerSettings { mouse_speed: 0.6875, trackpad_speed: 3.0, mouse_acceleration: false, natural_scrolling: false, ..PointerSettings::default() });
-        assert_eq!(apply(&mut c, r##"{"cursor_size":7,"cursor_fill":"#ff0000","cursor_outline":"#00ff0080","shake_to_locate":false}"##), Vec::<String>::new());
-        assert_eq!(c.pointer.cursor_scale, 4.0, "the size is clamped to the settings range");
-        assert_eq!(c.pointer.cursor_colors, crate::cursor::CursorColors { fill: [255, 0, 0, 255], outline: [0, 255, 0, 128] });
+        assert_eq!(
+            apply(
+                &mut c,
+                r#"{"mouse_speed":0.6875,"trackpad_speed":3,"mouse_acceleration":false,"natural_scrolling":false}"#
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            c.pointer,
+            PointerSettings {
+                mouse_speed: 0.6875,
+                trackpad_speed: 3.0,
+                mouse_acceleration: false,
+                natural_scrolling: false,
+                ..PointerSettings::default()
+            }
+        );
+        assert_eq!(
+            apply(
+                &mut c,
+                r##"{"cursor_size":7,"cursor_fill":"#ff0000","cursor_outline":"#00ff0080","shake_to_locate":false}"##
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            c.pointer.cursor_scale, 4.0,
+            "the size is clamped to the settings range"
+        );
+        assert_eq!(
+            c.pointer.cursor_colors,
+            crate::cursor::CursorColors {
+                fill: [255, 0, 0, 255],
+                outline: [0, 255, 0, 128]
+            }
+        );
         assert!(!c.pointer.shake_to_locate);
-        for bad in [r#"{"cursor_fill":"red"}"#, r##"{"cursor_fill":"#12345"}"##, r##"{"cursor_outline":"#gg0000"}"##] {
+        for bad in [
+            r#"{"cursor_fill":"red"}"#,
+            r##"{"cursor_fill":"#12345"}"##,
+            r##"{"cursor_outline":"#gg0000"}"##,
+        ] {
             assert!(!apply(&mut c, bad).is_empty(), "{bad}");
         }
         assert!(!apply(&mut c, "{").is_empty());
         assert!(c.shell_processes.is_empty());
-        assert_eq!(apply(&mut c, r#"{"shell":[{"name":"dock","command":["cupertino-dock","--bar"]}]}"#), Vec::<String>::new());
-        assert_eq!(c.shell_processes, vec![ShellProcess { name: "dock".into(), command: vec!["cupertino-dock".into(), "--bar".into()] }]);
+        assert_eq!(
+            apply(
+                &mut c,
+                r#"{"shell":[{"name":"dock","command":["cupertino-dock","--bar"]}]}"#
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            c.shell_processes,
+            vec![ShellProcess {
+                name: "dock".into(),
+                command: vec!["cupertino-dock".into(), "--bar".into()]
+            }]
+        );
         assert!(!apply(&mut c, r#"{"shell":[{"name":"dock","command":[]}]}"#).is_empty());
-        assert_eq!(c.screenshot_command, vec!["cupertino-screenshot".to_string()]);
-        assert_eq!(apply(&mut c, r#"{"screenshot":["/opt/cupertino/bin/cupertino-screenshot"]}"#), Vec::<String>::new());
-        assert_eq!(c.screenshot_command, vec!["/opt/cupertino/bin/cupertino-screenshot".to_string()]);
+        assert_eq!(
+            c.screenshot_command,
+            vec!["cupertino-screenshot".to_string()]
+        );
+        assert_eq!(
+            apply(
+                &mut c,
+                r#"{"screenshot":["/opt/cupertino/bin/cupertino-screenshot"]}"#
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            c.screenshot_command,
+            vec!["/opt/cupertino/bin/cupertino-screenshot".to_string()]
+        );
         assert!(!apply(&mut c, r#"{"screenshot":[]}"#).is_empty());
     }
 }

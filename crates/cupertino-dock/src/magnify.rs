@@ -42,7 +42,13 @@ pub trait MagnificationProfile {
 
     /// Complete layout (frames relative to the dock centre line) or `None` to fall back to the
     /// weight-based layout.
-    fn layout(&self, _cfg: &DockConfig, _items: &[LayoutItem], _cursor: Option<f64>, _fish: f64) -> Option<Vec<TileFrame>> {
+    fn layout(
+        &self,
+        _cfg: &DockConfig,
+        _items: &[LayoutItem],
+        _cursor: Option<f64>,
+        _fish: f64,
+    ) -> Option<Vec<TileFrame>> {
         None
     }
 }
@@ -71,7 +77,8 @@ pub fn fisheye_real_scale(cfg: &DockConfig, fish: f64) -> f64 {
     if !cfg.magnification || cfg.large_size <= t || fish_size <= 0.0 {
         return 0.0;
     }
-    (cfg.large_size - t) * 0.5 / (std::f64::consts::PI * t / (4.0 * fish_size)).sin() * fish.clamp(0.0, 1.0)
+    (cfg.large_size - t) * 0.5 / (std::f64::consts::PI * t / (4.0 * fish_size)).sin()
+        * fish.clamp(0.0, 1.0)
 }
 
 /// The half-sine fisheye. Default profile of the dock.
@@ -98,7 +105,13 @@ impl MagnificationProfile for FisheyeProfile {
         Self::width_weight(x)
     }
 
-    fn layout(&self, cfg: &DockConfig, items: &[LayoutItem], cursor: Option<f64>, fish: f64) -> Option<Vec<TileFrame>> {
+    fn layout(
+        &self,
+        cfg: &DockConfig,
+        items: &[LayoutItem],
+        cursor: Option<f64>,
+        fish: f64,
+    ) -> Option<Vec<TileFrame>> {
         let c = cursor?;
         let s = fisheye_real_scale(cfg, fish);
         if s <= 0.0 || items.is_empty() {
@@ -114,7 +127,10 @@ impl MagnificationProfile for FisheyeProfile {
             let (l, r) = (at, at + it.extent);
             let l2 = l + fisheye_edge_offset(l - c, fish_size, s);
             let r2 = r + fisheye_edge_offset(r - c, fish_size, s);
-            frames.push(TileFrame { pos: -total / 2.0 + l2, size: (r2 - l2).max(0.0) });
+            frames.push(TileFrame {
+                pos: -total / 2.0 + l2,
+                size: (r2 - l2).max(0.0),
+            });
             at = r + gap;
         }
         Some(frames)
@@ -158,7 +174,8 @@ pub struct LayoutItem {
 /// Unmagnified length of the flow.
 pub fn base_length(cfg: &DockConfig, items: &[LayoutItem]) -> f64 {
     let n = items.len();
-    items.iter().map(|i| i.extent).sum::<f64>() + n.saturating_sub(1) as f64 * cfg.tile_size * cfg.spacing
+    items.iter().map(|i| i.extent).sum::<f64>()
+        + n.saturating_sub(1) as f64 * cfg.tile_size * cfg.spacing
 }
 
 /// Lay out a flow of items. `cursor` is the pointer position along the axis in the *unmagnified*
@@ -181,7 +198,11 @@ pub fn layout_items(
     let t = cfg.tile_size;
     let gap = t * cfg.spacing;
     let base_len = base_length(cfg, items);
-    let amp = if cfg.magnification { (cfg.large_size - t).max(0.0) * fish.clamp(0.0, 1.0) } else { 0.0 };
+    let amp = if cfg.magnification {
+        (cfg.large_size - t).max(0.0) * fish.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     let mut pos = Vec::with_capacity(n);
     let mut p = 0.0;
     for it in items {
@@ -194,7 +215,8 @@ pub fn layout_items(
         .map(|(it, pos)| match cursor {
             Some(c) if amp > 0.0 && it.magnify => {
                 let centre = pos + it.extent * 0.5;
-                it.extent + amp * (it.extent / t) * profile.weight((centre - c) / (cfg.fish_span * t))
+                it.extent
+                    + amp * (it.extent / t) * profile.weight((centre - c) / (cfg.fish_span * t))
             }
             _ => it.extent,
         })
@@ -204,7 +226,11 @@ pub fn layout_items(
     if let (Some(c), true) = (cursor, amp > 0.0 && n > 0) {
         let cc = c.clamp(0.0, base_len);
         let idx = (0..n).rev().find(|&i| pos[i] <= cc).unwrap_or(0);
-        let frac = if items[idx].extent > 0.0 { ((cc - pos[idx]) / items[idx].extent).clamp(0.0, 1.0) } else { 0.0 };
+        let frac = if items[idx].extent > 0.0 {
+            ((cc - pos[idx]) / items[idx].extent).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         let before: f64 = sizes[..idx].iter().sum::<f64>() + idx as f64 * gap;
         let screen_c = cc - base_len / 2.0;
         let anchored = screen_c - before - frac * sizes[idx];
@@ -222,7 +248,13 @@ pub fn layout_items(
 
 /// Lay out `n` identical magnifying tiles with the default (fisheye) profile.
 pub fn layout(cfg: &DockConfig, n: usize, cursor: Option<f64>, fish: f64) -> Vec<TileFrame> {
-    let items = vec![LayoutItem { extent: cfg.tile_size, magnify: true }; n];
+    let items = vec![
+        LayoutItem {
+            extent: cfg.tile_size,
+            magnify: true
+        };
+        n
+    ];
     layout_items(cfg, &items, cursor, fish, &FisheyeProfile)
 }
 
@@ -231,11 +263,18 @@ mod tests {
     use super::*;
 
     fn cfg() -> DockConfig {
-        DockConfig { tile_size: 48.0, magnification: true, ..DockConfig::default() }
+        DockConfig {
+            tile_size: 48.0,
+            magnification: true,
+            ..DockConfig::default()
+        }
     }
 
     fn cfg64() -> DockConfig {
-        DockConfig { magnification: true, ..DockConfig::default() }
+        DockConfig {
+            magnification: true,
+            ..DockConfig::default()
+        }
     }
 
     #[test]
@@ -286,25 +325,47 @@ mod tests {
             let f = layout(&c, n, Some(cur), 1.0);
             let screen = cur - n as f64 * 48.0 / 2.0;
             let idx = (cur / 48.0) as usize;
-            assert!(screen >= f[idx].pos - 1e-6 && screen <= f[idx].pos + f[idx].size + 1e-6, "k={k}");
+            assert!(
+                screen >= f[idx].pos - 1e-6 && screen <= f[idx].pos + f[idx].size + 1e-6,
+                "k={k}"
+            );
         }
     }
 
     #[test]
     fn fish_zero_or_disabled_magnification_is_uniform() {
         let c = cfg();
-        assert!(layout(&c, 6, Some(100.0), 0.0).iter().all(|t| t.size == 48.0));
-        let off = DockConfig { magnification: false, ..cfg() };
-        assert!(layout(&off, 6, Some(100.0), 1.0).iter().all(|t| t.size == 48.0));
+        assert!(layout(&c, 6, Some(100.0), 0.0)
+            .iter()
+            .all(|t| t.size == 48.0));
+        let off = DockConfig {
+            magnification: false,
+            ..cfg()
+        };
+        assert!(layout(&off, 6, Some(100.0), 1.0)
+            .iter()
+            .all(|t| t.size == 48.0));
     }
 
     #[test]
     fn spacing_and_mixed_items() {
-        let c = DockConfig { spacing: 0.25, ..cfg() };
+        let c = DockConfig {
+            spacing: 0.25,
+            ..cfg()
+        };
         let items = [
-            LayoutItem { extent: 48.0, magnify: true },
-            LayoutItem { extent: 12.0, magnify: false },
-            LayoutItem { extent: 48.0, magnify: true },
+            LayoutItem {
+                extent: 48.0,
+                magnify: true,
+            },
+            LayoutItem {
+                extent: 12.0,
+                magnify: false,
+            },
+            LayoutItem {
+                extent: 48.0,
+                magnify: true,
+            },
         ];
         let f = layout_items(&c, &items, None, 0.0, &CosineProfile);
         assert_eq!(base_length(&c, &items), 48.0 + 12.0 + 48.0 + 24.0);
@@ -318,7 +379,10 @@ mod tests {
     fn mixed_items_keep_cursor_over_hovered_item() {
         let c = cfg();
         let items: Vec<LayoutItem> = (0..8)
-            .map(|i| LayoutItem { extent: if i == 3 { 12.0 } else { 48.0 }, magnify: i != 3 })
+            .map(|i| LayoutItem {
+                extent: if i == 3 { 12.0 } else { 48.0 },
+                magnify: i != 3,
+            })
             .collect();
         let base = base_length(&c, &items);
         let mut starts = vec![0.0];
@@ -330,7 +394,10 @@ mod tests {
             let f = layout_items(&c, &items, Some(cur), 1.0, &CosineProfile);
             let idx = (0..items.len()).rev().find(|&i| starts[i] <= cur).unwrap();
             let screen = cur - base / 2.0;
-            assert!(screen >= f[idx].pos - 1e-6 && screen <= f[idx].pos + f[idx].size + 1e-6, "k={k}");
+            assert!(
+                screen >= f[idx].pos - 1e-6 && screen <= f[idx].pos + f[idx].size + 1e-6,
+                "k={k}"
+            );
         }
     }
 
@@ -344,11 +411,23 @@ mod tests {
     #[test]
     fn profile_is_pluggable() {
         let c = cfg();
-        let items = vec![LayoutItem { extent: 48.0, magnify: true }; 7];
+        let items = vec![
+            LayoutItem {
+                extent: 48.0,
+                magnify: true
+            };
+            7
+        ];
         let a = layout_items(&c, &items, Some(3.5 * 48.0), 1.0, &CosineProfile);
         let b = layout_items(&c, &items, Some(3.5 * 48.0), 1.0, &Linear);
-        assert!((a[3].size - b[3].size).abs() < 1e-9, "both peak at the full size");
-        assert!(a[2].size > b[2].size, "cosine bump is fatter than a linear one");
+        assert!(
+            (a[3].size - b[3].size).abs() < 1e-9,
+            "both peak at the full size"
+        );
+        assert!(
+            a[2].size > b[2].size,
+            "cosine bump is fatter than a linear one"
+        );
     }
 
     #[test]
@@ -371,18 +450,40 @@ mod tests {
         assert!((s - 32.0 / (std::f64::consts::PI / 12.0).sin()).abs() < 1e-9);
         assert!((s - 123.64).abs() < 0.01);
         assert!((fisheye_real_scale(&c, 0.5) - s * 0.5).abs() < 1e-9);
-        assert_eq!(fisheye_real_scale(&DockConfig::default(), 1.0), 0.0, "magnification is off by default");
-        assert_eq!(fisheye_real_scale(&DockConfig { large_size: 64.0, ..cfg64() }, 1.0), 0.0);
+        assert_eq!(
+            fisheye_real_scale(&DockConfig::default(), 1.0),
+            0.0,
+            "magnification is off by default"
+        );
+        assert_eq!(
+            fisheye_real_scale(
+                &DockConfig {
+                    large_size: 64.0,
+                    ..cfg64()
+                },
+                1.0
+            ),
+            0.0
+        );
     }
 
     #[test]
     fn fisheye_hovered_tile_is_exactly_the_large_size() {
         for (tile, large) in [(64.0, 128.0), (48.0, 128.0), (52.0, 200.0), (32.0, 96.0)] {
-            let c = DockConfig { tile_size: tile, large_size: large, magnification: true, ..DockConfig::default() };
+            let c = DockConfig {
+                tile_size: tile,
+                large_size: large,
+                magnification: true,
+                ..DockConfig::default()
+            };
             for n in [1usize, 5, 11] {
                 for k in 0..n {
                     let f = centred_on_tile(&c, n, k);
-                    assert!((f[k].size - large).abs() < 1e-9, "tile {tile} large {large} n {n} k {k}: {}", f[k].size);
+                    assert!(
+                        (f[k].size - large).abs() < 1e-9,
+                        "tile {tile} large {large} n {n} k {k}: {}",
+                        f[k].size
+                    );
                 }
             }
         }
@@ -397,7 +498,10 @@ mod tests {
         assert!((r(8) - 1.866).abs() < 0.001 && (r(6) - r(8)).abs() < 1e-9);
         assert!((r(9) - 1.5).abs() < 0.001);
         assert!((r(10) - 1.066).abs() < 0.002);
-        assert!((r(11) - 1.0).abs() < 1e-9, "beyond three tile widths nothing grows");
+        assert!(
+            (r(11) - 1.0).abs() < 1e-9,
+            "beyond three tile widths nothing grows"
+        );
         assert!((r(3) - 1.0).abs() < 1e-9);
     }
 
@@ -409,7 +513,10 @@ mod tests {
         let len = |f: &[TileFrame]| f.last().unwrap().pos + f.last().unwrap().size - f[0].pos;
         let rest = layout(&c, n, None, 1.0);
         let grow = len(&f) - len(&rest);
-        assert!((grow - 2.0 * fisheye_real_scale(&c, 1.0)).abs() < 1e-6, "{grow}");
+        assert!(
+            (grow - 2.0 * fisheye_real_scale(&c, 1.0)).abs() < 1e-6,
+            "{grow}"
+        );
         assert!((f[0].pos - (rest[0].pos - fisheye_real_scale(&c, 1.0))).abs() < 1e-9);
     }
 
@@ -449,7 +556,10 @@ mod tests {
             let f = layout(&c, n, Some(cur), 1.0);
             let screen = cur - len / 2.0;
             let idx = ((cur / 64.0) as usize).min(n - 1);
-            assert!(screen >= f[idx].pos - 1e-9 && screen <= f[idx].pos + f[idx].size + 1e-9, "cursor {cur}");
+            assert!(
+                screen >= f[idx].pos - 1e-9 && screen <= f[idx].pos + f[idx].size + 1e-9,
+                "cursor {cur}"
+            );
         }
     }
 
@@ -461,10 +571,17 @@ mod tests {
         for k in 0..=(n * 64) {
             let cur = layout(&c, n, Some(k as f64), 1.0);
             for w in cur.windows(2) {
-                assert!((w[0].pos + w[0].size - w[1].pos).abs() < 1e-9, "no gaps with zero spacing");
+                assert!(
+                    (w[0].pos + w[0].size - w[1].pos).abs() < 1e-9,
+                    "no gaps with zero spacing"
+                );
             }
             for (a, b) in prev.iter().zip(&cur) {
-                assert!(a.pos.is_finite() && (a.pos - b.pos).abs() < 3.0 && (a.size - b.size).abs() < 3.0);
+                assert!(
+                    a.pos.is_finite()
+                        && (a.pos - b.pos).abs() < 3.0
+                        && (a.size - b.size).abs() < 3.0
+                );
             }
             prev = cur;
         }
@@ -488,7 +605,9 @@ mod tests {
         let c = cfg64();
         let f = layout(&c, 9, Some(4.5 * 64.0), 0.5);
         assert!((f[4].size - (64.0 + 32.0)).abs() < 1e-9);
-        assert!(layout(&c, 9, Some(4.5 * 64.0), 0.0).iter().all(|t| t.size == 64.0));
+        assert!(layout(&c, 9, Some(4.5 * 64.0), 0.0)
+            .iter()
+            .all(|t| t.size == 64.0));
     }
 
     #[test]

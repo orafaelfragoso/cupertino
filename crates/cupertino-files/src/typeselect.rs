@@ -35,7 +35,11 @@ pub enum Outcome {
 impl Default for TypeSelect {
     fn default() -> Self {
         // 35 ticks of 1/60 s is the shipped default repeat threshold
-        TypeSelect { buffer: String::new(), last: f64::NEG_INFINITY, key_repeat_delay: 35.0 / 60.0 }
+        TypeSelect {
+            buffer: String::new(),
+            last: f64::NEG_INFINITY,
+            key_repeat_delay: 35.0 / 60.0,
+        }
     }
 }
 
@@ -66,7 +70,10 @@ impl TypeSelect {
         if self.buffer.is_empty() && matches!(text, " " | "\u{3000}") {
             return Outcome::Ignored;
         }
-        let filtered: String = text.chars().filter(|c| (*c as u32) > 0x1F && *c as u32 != 0x7F).collect();
+        let filtered: String = text
+            .chars()
+            .filter(|c| (*c as u32) > 0x1F && *c as u32 != 0x7F)
+            .collect();
         if filtered.is_empty() {
             return Outcome::Ignored;
         }

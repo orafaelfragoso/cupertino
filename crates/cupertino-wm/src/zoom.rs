@@ -47,24 +47,50 @@ mod tests {
 
     #[test]
     fn unconstrained_fills_area() {
-        let r = best_fit(&ZoomConfig::default(), AREA, Rect::new(100.0, 100.0, 400.0, 300.0), &SizeHints::default());
+        let r = best_fit(
+            &ZoomConfig::default(),
+            AREA,
+            Rect::new(100.0, 100.0, 400.0, 300.0),
+            &SizeHints::default(),
+        );
         assert_eq!(r, AREA);
     }
 
     #[test]
     fn max_size_limits_and_centres_on_window() {
-        let hints = SizeHints { max: Some(Size::new(800.0, 600.0)), ..Default::default() };
-        let r = best_fit(&ZoomConfig::default(), AREA, Rect::new(500.0, 400.0, 400.0, 300.0), &hints);
+        let hints = SizeHints {
+            max: Some(Size::new(800.0, 600.0)),
+            ..Default::default()
+        };
+        let r = best_fit(
+            &ZoomConfig::default(),
+            AREA,
+            Rect::new(500.0, 400.0, 400.0, 300.0),
+            &hints,
+        );
         assert_eq!((r.w, r.h), (800.0, 600.0));
         assert_eq!((r.cx(), r.cy()), (700.0, 550.0));
-        let edge = best_fit(&ZoomConfig::default(), AREA, Rect::new(100.0, 100.0, 400.0, 300.0), &hints);
+        let edge = best_fit(
+            &ZoomConfig::default(),
+            AREA,
+            Rect::new(100.0, 100.0, 400.0, 300.0),
+            &hints,
+        );
         assert!(edge.x == AREA.x && edge.y == AREA.y, "pushed into the area");
     }
 
     #[test]
     fn content_hint_is_not_maximize() {
-        let hints = SizeHints { content: Some(Size::new(1000.0, 700.0)), ..Default::default() };
-        let r = best_fit(&ZoomConfig::default(), AREA, Rect::new(1500.0, 800.0, 400.0, 300.0), &hints);
+        let hints = SizeHints {
+            content: Some(Size::new(1000.0, 700.0)),
+            ..Default::default()
+        };
+        let r = best_fit(
+            &ZoomConfig::default(),
+            AREA,
+            Rect::new(1500.0, 800.0, 400.0, 300.0),
+            &hints,
+        );
         assert_eq!((r.w, r.h), (1000.0, 700.0));
         assert!(r.right() <= AREA.right() && r.bottom() <= AREA.bottom());
     }
@@ -72,18 +98,42 @@ mod tests {
     #[test]
     fn min_beats_area_and_hint_is_clamped() {
         let small = Rect::new(0.0, 0.0, 300.0, 200.0);
-        let hints = SizeHints { min: Some(Size::new(2000.0, 500.0)), ..Default::default() };
-        let r = best_fit(&ZoomConfig::default(), small, Rect::new(0.0, 0.0, 100.0, 100.0), &hints);
+        let hints = SizeHints {
+            min: Some(Size::new(2000.0, 500.0)),
+            ..Default::default()
+        };
+        let r = best_fit(
+            &ZoomConfig::default(),
+            small,
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            &hints,
+        );
         assert_eq!(r.w, 2000.0);
-        let hints = SizeHints { content: Some(Size::new(5000.0, 5000.0)), ..Default::default() };
-        let r = best_fit(&ZoomConfig::default(), AREA, Rect::new(0.0, 0.0, 100.0, 100.0), &hints);
+        let hints = SizeHints {
+            content: Some(Size::new(5000.0, 5000.0)),
+            ..Default::default()
+        };
+        let r = best_fit(
+            &ZoomConfig::default(),
+            AREA,
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            &hints,
+        );
         assert_eq!((r.w, r.h), (AREA.w, AREA.h));
     }
 
     #[test]
     fn margin_and_fill_fraction() {
-        let cfg = ZoomConfig { margin: 10.0, default_fill: 0.5 };
-        let r = best_fit(&cfg, AREA, Rect::new(0.0, 0.0, 100.0, 100.0), &SizeHints::default());
+        let cfg = ZoomConfig {
+            margin: 10.0,
+            default_fill: 0.5,
+        };
+        let r = best_fit(
+            &cfg,
+            AREA,
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            &SizeHints::default(),
+        );
         assert_eq!((r.w, r.h), (950.0, 518.0));
         assert!(r.x >= 10.0 && r.y >= 34.0);
     }

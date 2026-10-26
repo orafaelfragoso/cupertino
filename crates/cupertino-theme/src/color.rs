@@ -17,7 +17,12 @@ impl Color {
     }
 
     pub fn from_rgba8(c: [u8; 4]) -> Self {
-        Self::new(c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, c[3] as f32 / 255.0)
+        Self::new(
+            c[0] as f32 / 255.0,
+            c[1] as f32 / 255.0,
+            c[2] as f32 / 255.0,
+            c[3] as f32 / 255.0,
+        )
     }
 
     pub fn to_rgba8(self) -> [u8; 4] {
@@ -39,7 +44,12 @@ impl Color {
 
     pub fn lerp(self, o: Color, t: f32) -> Color {
         let l = |a: f32, b: f32| a + (b - a) * t;
-        Color::new(l(self.r, o.r), l(self.g, o.g), l(self.b, o.b), l(self.a, o.a))
+        Color::new(
+            l(self.r, o.r),
+            l(self.g, o.g),
+            l(self.b, o.b),
+            l(self.a, o.a),
+        )
     }
 
     pub fn hex(self) -> String {
@@ -123,7 +133,12 @@ mod tests {
 
     #[test]
     fn rgba8_roundtrip() {
-        for v in [[0, 0, 0, 0], [255, 255, 255, 255], [236, 236, 236, 255], [0, 122, 255, 216]] {
+        for v in [
+            [0, 0, 0, 0],
+            [255, 255, 255, 255],
+            [236, 236, 236, 255],
+            [0, 122, 255, 216],
+        ] {
             assert_eq!(Color::from_rgba8(v).to_rgba8(), v);
         }
         assert_eq!(Color::from_rgba8([236, 236, 236, 255]).hex(), "#ECECEC");

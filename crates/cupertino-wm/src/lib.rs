@@ -27,12 +27,13 @@ pub mod wm;
 pub mod workspace;
 pub mod zoom;
 
+pub use activation::{token_accepted, USER_EVENT_SLACK};
 pub use command::{AnimationKind, Command, Effect, MapParams, Modifiers};
 pub use config::{
-    AnimationConfig, DesktopPeekConfig, FocusConfig, MagnetConfig, SnapConfig, WmConfig, WorkspaceConfig, ZoomConfig,
+    AnimationConfig, DesktopPeekConfig, FocusConfig, MagnetConfig, SnapConfig, WmConfig,
+    WorkspaceConfig, ZoomConfig,
 };
 pub use cupertino_effects::{TransformKind, WindowKind};
-pub use activation::{token_accepted, USER_EVENT_SLACK};
 pub use focus::{hidden_index, Switcher, SwitcherStep, SWITCHER_SHOW_DELAY};
 pub use geometry::{Edges, Point, Rect, Size};
 pub use ids::{AppId, OutputId, WindowId, WorkspaceId};

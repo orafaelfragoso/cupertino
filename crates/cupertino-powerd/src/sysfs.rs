@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 
 use rustix::io::Errno;
 
-use crate::backlight::{self, Backlight, BacklightType, KeyboardBacklight, KEYBOARD_BACKLIGHT_SUFFIX};
+use crate::backlight::{
+    self, Backlight, BacklightType, KeyboardBacklight, KEYBOARD_BACKLIGHT_SUFFIX,
+};
 use crate::error::{Error, Result};
 use crate::supply::{Attributes, Supply, ATTRIBUTES};
 
@@ -49,7 +51,10 @@ impl Snapshot {
 }
 
 fn io_error(path: &Path) -> impl FnOnce(io::Error) -> Error + '_ {
-    move |source| Error::Io { path: path.to_owned(), source }
+    move |source| Error::Io {
+        path: path.to_owned(),
+        source,
+    }
 }
 
 /// The entries of `<root>/class/<class>` as `(name, directory)`, ordered by name. A missing class
@@ -84,7 +89,14 @@ fn read_attribute(dir: &Path, attribute: &str) -> Result<Option<String>> {
     match fs::read_to_string(&path) {
         Ok(text) => Ok(Some(text.trim().to_owned())),
         Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(source) if matches!(source.raw_os_error().map(Errno::from_raw_os_error), Some(Errno::NODATA | Errno::NODEV)) => Ok(None),
+        Err(source)
+            if matches!(
+                source.raw_os_error().map(Errno::from_raw_os_error),
+                Some(Errno::NODATA | Errno::NODEV)
+            ) =>
+        {
+            Ok(None)
+        }
         Err(source) => Err(io_error(&path)(source)),
     }
 }
@@ -92,7 +104,10 @@ fn read_attribute(dir: &Path, attribute: &str) -> Result<Option<String>> {
 fn require_attribute(dir: &Path, attribute: &str) -> Result<String> {
     read_attribute(dir, attribute)?.ok_or_else(|| {
         let path = dir.join(attribute);
-        io_error(&path)(io::Error::new(io::ErrorKind::NotFound, "required attribute is missing"))
+        io_error(&path)(io::Error::new(
+            io::ErrorKind::NotFound,
+            "required attribute is missing",
+        ))
     })
 }
 
@@ -117,15 +132,28 @@ pub fn read_backlights(sysfs_root: &Path) -> Result<Vec<Backlight>> {
     class_entries(sysfs_root, "backlight")?
         .into_iter()
         .map(|(name, dir)| {
-            let parse_error = |source| Error::Backlight { name: name.clone(), source };
-            let kind = BacklightType::parse(&require_attribute(&dir, "type")?).map_err(parse_error)?;
-            let max_brightness = backlight::brightness_value("max_brightness", &require_attribute(&dir, "max_brightness")?).map_err(parse_error)?;
+            let parse_error = |source| Error::Backlight {
+                name: name.clone(),
+                source,
+            };
+            let kind =
+                BacklightType::parse(&require_attribute(&dir, "type")?).map_err(parse_error)?;
+            let max_brightness = backlight::brightness_value(
+                "max_brightness",
+                &require_attribute(&dir, "max_brightness")?,
+            )
+            .map_err(parse_error)?;
             let (attribute, text) = match read_attribute(&dir, "actual_brightness")? {
                 Some(text) => ("actual_brightness", text),
                 None => ("brightness", require_attribute(&dir, "brightness")?),
             };
             let brightness = backlight::brightness_value(attribute, &text).map_err(parse_error)?;
-            Ok(Backlight { name: name.clone(), kind, brightness, max_brightness })
+            Ok(Backlight {
+                name: name.clone(),
+                kind,
+                brightness,
+                max_brightness,
+            })
         })
         .collect()
 }
@@ -136,10 +164,23 @@ pub fn read_keyboard_backlights(sysfs_root: &Path) -> Result<Vec<KeyboardBacklig
         .into_iter()
         .filter(|(name, _)| name.ends_with(KEYBOARD_BACKLIGHT_SUFFIX))
         .map(|(name, dir)| {
-            let parse_error = |source| Error::Backlight { name: name.clone(), source };
-            let brightness = backlight::brightness_value("brightness", &require_attribute(&dir, "brightness")?).map_err(parse_error)?;
-            let max_brightness = backlight::brightness_value("max_brightness", &require_attribute(&dir, "max_brightness")?).map_err(parse_error)?;
-            Ok(KeyboardBacklight { name: name.clone(), brightness, max_brightness })
+            let parse_error = |source| Error::Backlight {
+                name: name.clone(),
+                source,
+            };
+            let brightness =
+                backlight::brightness_value("brightness", &require_attribute(&dir, "brightness")?)
+                    .map_err(parse_error)?;
+            let max_brightness = backlight::brightness_value(
+                "max_brightness",
+                &require_attribute(&dir, "max_brightness")?,
+            )
+            .map_err(parse_error)?;
+            Ok(KeyboardBacklight {
+                name: name.clone(),
+                brightness,
+                max_brightness,
+            })
         })
         .collect()
 }

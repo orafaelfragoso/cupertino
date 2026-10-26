@@ -3,7 +3,10 @@ use std::path::PathBuf;
 
 #[derive(Debug)]
 pub enum Error {
-    Io { path: PathBuf, source: std::io::Error },
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     Json(serde_json::Error),
     NotFound(String),
     Invalid(String),

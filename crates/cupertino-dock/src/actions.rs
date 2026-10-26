@@ -4,4 +4,6 @@
 //! triggers, actions and their defaults are `dock.conf` vocabulary, defined with the file in
 //! `cupertino_defaults::dock`.
 
-pub use cupertino_defaults::dock::{action_text, parse_action, ActionMap, ActionTarget, Trigger, TRIGGER_KEYS};
+pub use cupertino_defaults::dock::{
+    action_text, parse_action, ActionMap, ActionTarget, Trigger, TRIGGER_KEYS,
+};

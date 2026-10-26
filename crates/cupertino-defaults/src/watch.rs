@@ -58,7 +58,10 @@ fn snapshot(path: &Path) -> io::Result<Option<Vec<u8>>> {
 
 /// The directory a file is watched through.
 fn dir_of(file: &Path) -> PathBuf {
-    file.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new(".")).to_path_buf()
+    file.parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+        .to_path_buf()
 }
 
 impl ConfigWatcher {
@@ -66,7 +69,10 @@ impl ConfigWatcher {
     /// directories of the files are created when missing (they are the settings directories). Their parents are
     /// watched too, so a settings directory that is removed and created again is watched again. A panic in `report`
     /// ends the watch; it is written to stderr.
-    pub fn new(files: Vec<PathBuf>, report: impl FnMut(WatchEvent) + Send + 'static) -> io::Result<Self> {
+    pub fn new(
+        files: Vec<PathBuf>,
+        report: impl FnMut(WatchEvent) + Send + 'static,
+    ) -> io::Result<Self> {
         let mut last: BTreeMap<PathBuf, Option<Vec<u8>>> = BTreeMap::new();
         for f in &files {
             last.insert(f.clone(), snapshot(f)?);
@@ -81,9 +87,13 @@ impl ConfigWatcher {
         .map_err(io::Error::other)?;
         for dir in &dirs {
             std::fs::create_dir_all(dir)?;
-            watcher.watch(dir, RecursiveMode::NonRecursive).map_err(|e| io::Error::other(format!("{}: {e}", dir.display())))?;
+            watcher
+                .watch(dir, RecursiveMode::NonRecursive)
+                .map_err(|e| io::Error::other(format!("{}: {e}", dir.display())))?;
             if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
-                watcher.watch(parent, RecursiveMode::NonRecursive).map_err(|e| io::Error::other(format!("{}: {e}", parent.display())))?;
+                watcher
+                    .watch(parent, RecursiveMode::NonRecursive)
+                    .map_err(|e| io::Error::other(format!("{}: {e}", parent.display())))?;
             }
         }
         let mut report = report;
@@ -120,7 +130,12 @@ fn watch_loop(
                         }
                     }
                 }
-                Some(event.paths.iter().any(|p| watched.contains(p) || dirs.contains(p)))
+                Some(
+                    event
+                        .paths
+                        .iter()
+                        .any(|p| watched.contains(p) || dirs.contains(p)),
+                )
             }
             // an overflowing queue loses events: compare every file
             Msg::Event(Err(e)) => {
@@ -132,7 +147,9 @@ fn watch_loop(
     loop {
         // wait for the first event of a burst, then until the burst is quiet
         let Ok(first) = rx.recv() else { return };
-        let Some(mut touched) = handle(first, report) else { return };
+        let Some(mut touched) = handle(first, report) else {
+            return;
+        };
         loop {
             match rx.recv_timeout(COALESCE) {
                 Ok(msg) => match handle(msg, report) {
@@ -193,11 +210,17 @@ mod tests {
     #[test]
     fn an_atomic_replacement_is_reported_once() {
         let dir = tempfile::tempdir().unwrap();
-        let (dock, menubar) = (dir.path().join("dock.conf"), dir.path().join("menubar.conf"));
+        let (dock, menubar) = (
+            dir.path().join("dock.conf"),
+            dir.path().join("menubar.conf"),
+        );
         std::fs::write(&dock, "tile_size = 48\n").unwrap();
         let (_w, rx) = watch(vec![dock.clone(), menubar.clone()]);
         crate::atomic::write_atomic(&dock, b"tile_size = 64\n").unwrap();
-        assert_eq!(reports(&rx, WINDOW), vec![WatchEvent::Changed(vec![dock.clone()])]);
+        assert_eq!(
+            reports(&rx, WINDOW),
+            vec![WatchEvent::Changed(vec![dock.clone()])]
+        );
         // a second change is a second report
         crate::atomic::write_atomic(&dock, b"tile_size = 32\n").unwrap();
         assert_eq!(reports(&rx, WINDOW), vec![WatchEvent::Changed(vec![dock])]);
@@ -211,7 +234,11 @@ mod tests {
         for delay in [1, 2, 3] {
             std::fs::write(&path, format!("repeat_delay = {delay}\n")).unwrap();
         }
-        assert_eq!(reports(&rx, WINDOW), vec![WatchEvent::Changed(vec![path])], "created and written three times");
+        assert_eq!(
+            reports(&rx, WINDOW),
+            vec![WatchEvent::Changed(vec![path])],
+            "created and written three times"
+        );
     }
 
     #[test]
@@ -232,9 +259,16 @@ mod tests {
         let elsewhere = dir.path().join("nested/redirected/dock.conf");
         let (_w, rx) = watch(vec![elsewhere.clone()]);
         std::fs::write(&elsewhere, "autohide = on\n").unwrap();
-        assert_eq!(reports(&rx, WINDOW), vec![WatchEvent::Changed(vec![elsewhere.clone()])], "the directory was created and the new file seen");
+        assert_eq!(
+            reports(&rx, WINDOW),
+            vec![WatchEvent::Changed(vec![elsewhere.clone()])],
+            "the directory was created and the new file seen"
+        );
         std::fs::remove_file(&elsewhere).unwrap();
-        assert_eq!(reports(&rx, WINDOW), vec![WatchEvent::Changed(vec![elsewhere])]);
+        assert_eq!(
+            reports(&rx, WINDOW),
+            vec![WatchEvent::Changed(vec![elsewhere])]
+        );
     }
 
     #[test]
@@ -244,13 +278,24 @@ mod tests {
         let path = dir.join("dock.conf");
         let (_w, rx) = watch(vec![path.clone()]);
         std::fs::write(&path, "tile_size = 48\n").unwrap();
-        assert_eq!(reports(&rx, WINDOW), vec![WatchEvent::Changed(vec![path.clone()])]);
+        assert_eq!(
+            reports(&rx, WINDOW),
+            vec![WatchEvent::Changed(vec![path.clone()])]
+        );
         std::fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(reports(&rx, WINDOW), vec![WatchEvent::Changed(vec![path.clone()])], "the file went with its directory");
+        assert_eq!(
+            reports(&rx, WINDOW),
+            vec![WatchEvent::Changed(vec![path.clone()])],
+            "the file went with its directory"
+        );
         std::fs::create_dir(&dir).unwrap();
         std::thread::sleep(WINDOW);
         std::fs::write(&path, "tile_size = 64\n").unwrap();
-        assert_eq!(reports(&rx, WINDOW), vec![WatchEvent::Changed(vec![path])], "the new directory is watched");
+        assert_eq!(
+            reports(&rx, WINDOW),
+            vec![WatchEvent::Changed(vec![path])],
+            "the new directory is watched"
+        );
     }
 
     #[test]

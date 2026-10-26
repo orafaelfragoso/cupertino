@@ -31,15 +31,27 @@ pub fn parse(edid: &[u8]) -> Option<EdidIdentity> {
     let product = u16::from_le_bytes([block[10], block[11]]);
     let number = u32::from_le_bytes([block[12], block[13], block[14], block[15]]);
     let text = |tag: u8| {
-        DESCRIPTORS.iter().map(|&at| &block[at..at + 18]).find(|d| d[..3] == [0, 0, 0] && d[3] == tag).map(|d| {
-            let raw = &d[5..18];
-            let end = raw.iter().position(|&b| b == b'\n').unwrap_or(raw.len());
-            String::from_utf8_lossy(&raw[..end]).trim().to_string()
-        })
+        DESCRIPTORS
+            .iter()
+            .map(|&at| &block[at..at + 18])
+            .find(|d| d[..3] == [0, 0, 0] && d[3] == tag)
+            .map(|d| {
+                let raw = &d[5..18];
+                let end = raw.iter().position(|&b| b == b'\n').unwrap_or(raw.len());
+                String::from_utf8_lossy(&raw[..end]).trim().to_string()
+            })
     };
-    let model = text(TAG_NAME).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("0x{product:04x}"));
-    let serial = text(TAG_SERIAL).filter(|s| !s.is_empty()).or_else(|| (number != 0).then(|| format!("0x{number:08x}")));
-    Some(EdidIdentity { make, model, serial })
+    let model = text(TAG_NAME)
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| format!("0x{product:04x}"));
+    let serial = text(TAG_SERIAL)
+        .filter(|s| !s.is_empty())
+        .or_else(|| (number != 0).then(|| format!("0x{number:08x}")));
+    Some(EdidIdentity {
+        make,
+        model,
+        serial,
+    })
 }
 
 #[cfg(test)]
@@ -79,13 +91,23 @@ mod tests {
     #[test]
     fn descriptors_name_the_display() {
         let id = parse(&block(Some("LG HDR 4K"), Some("905NTAB12345"))).unwrap();
-        assert_eq!(id, EdidIdentity { make: "GSM".into(), model: "LG HDR 4K".into(), serial: Some("905NTAB12345".into()) });
+        assert_eq!(
+            id,
+            EdidIdentity {
+                make: "GSM".into(),
+                model: "LG HDR 4K".into(),
+                serial: Some("905NTAB12345".into())
+            }
+        );
     }
 
     #[test]
     fn codes_stand_in_for_missing_descriptors() {
         let id = parse(&block(None, None)).unwrap();
-        assert_eq!((id.model.as_str(), id.serial.as_deref()), ("0x5b09", Some("0x0001a2b3")));
+        assert_eq!(
+            (id.model.as_str(), id.serial.as_deref()),
+            ("0x5b09", Some("0x0001a2b3"))
+        );
     }
 
     #[test]

@@ -3,7 +3,8 @@
 
 use cupertino_geometry::CornerStyle;
 use smithay::backend::renderer::gles::{
-    GlesError, GlesPixelProgram, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType, UniformValue,
+    GlesError, GlesPixelProgram, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType,
+    UniformValue,
 };
 
 const HEADER: &str = include_str!("../../shaders/compositor/header.glsl");
@@ -30,13 +31,24 @@ impl Programs {
     pub fn compile(renderer: &mut GlesRenderer) -> Result<Self, GlesError> {
         let f = |name: &'static str| UniformName::new(name, UniformType::_2f);
         let v4 = |name: &'static str| UniformName::new(name, UniformType::_4f);
-        let shadow = renderer.compile_custom_pixel_shader(assemble(SHADOW), &[f("area_pt"), v4("caster"), v4("params"), v4("flags")])?;
+        let shadow = renderer.compile_custom_pixel_shader(
+            assemble(SHADOW),
+            &[f("area_pt"), v4("caster"), v4("params"), v4("flags")],
+        )?;
         let rrect = renderer.compile_custom_pixel_shader(
             assemble(RRECT),
-            &[f("area_pt"), v4("rect"), v4("shape"), v4("fill"), v4("border")],
+            &[
+                f("area_pt"),
+                v4("rect"),
+                v4("shape"),
+                v4("fill"),
+                v4("border"),
+            ],
         )?;
-        let wallpaper =
-            renderer.compile_custom_pixel_shader(assemble(WALLPAPER), &[f("area_pt"), v4("c0"), v4("c1"), v4("c2"), v4("c3")])?;
+        let wallpaper = renderer.compile_custom_pixel_shader(
+            assemble(WALLPAPER),
+            &[f("area_pt"), v4("c0"), v4("c1"), v4("c2"), v4("c3")],
+        )?;
         let clip_src = format!("#version 100\n{}", CLIP.replace("//_SDF_", SDF));
         let clip = renderer.compile_custom_texture_shader(
             clip_src,
@@ -47,14 +59,26 @@ impl Programs {
                 v4("clip_shape"),
             ],
         )?;
-        Ok(Self { shadow, rrect, wallpaper, clip })
+        Ok(Self {
+            shadow,
+            rrect,
+            wallpaper,
+            clip,
+        })
     }
 }
 
 /// Corner uniforms: `(extent in px, superellipse exponent)` for a nominal radius.
 pub fn corner_uniforms(radius: f64, continuous: bool, px_per_pt: f64) -> (f32, f32) {
-    let style = if continuous { CornerStyle::continuous() } else { CornerStyle::Circular };
-    ((radius * style.expansion() * px_per_pt) as f32, style.exponent() as f32)
+    let style = if continuous {
+        CornerStyle::continuous()
+    } else {
+        CornerStyle::Circular
+    };
+    (
+        (radius * style.expansion() * px_per_pt) as f32,
+        style.exponent() as f32,
+    )
 }
 
 pub fn u2(name: &'static str, a: f32, b: f32) -> Uniform<'static> {
@@ -66,7 +90,13 @@ pub fn u4(name: &'static str, v: [f32; 4]) -> Uniform<'static> {
 }
 
 pub fn umat3(name: &'static str, m: [f32; 9]) -> Uniform<'static> {
-    Uniform::new(name, UniformValue::Matrix3x3 { matrices: vec![m], transpose: false })
+    Uniform::new(
+        name,
+        UniformValue::Matrix3x3 {
+            matrices: vec![m],
+            transpose: false,
+        },
+    )
 }
 
 /// Inverse of a column-major 3x3 matrix; `None` when singular.
@@ -80,11 +110,26 @@ pub fn invert3(m: &[f32; 9]) -> Option<[f32; 9]> {
     }
     let id = 1.0 / det;
     let inv = [
-        [(e * i - f * h) * id, (c * h - b * i) * id, (b * f - c * e) * id],
-        [(f * g - d * i) * id, (a * i - c * g) * id, (c * d - a * f) * id],
-        [(d * h - e * g) * id, (b * g - a * h) * id, (a * e - b * d) * id],
+        [
+            (e * i - f * h) * id,
+            (c * h - b * i) * id,
+            (b * f - c * e) * id,
+        ],
+        [
+            (f * g - d * i) * id,
+            (a * i - c * g) * id,
+            (c * d - a * f) * id,
+        ],
+        [
+            (d * h - e * g) * id,
+            (b * g - a * h) * id,
+            (a * e - b * d) * id,
+        ],
     ];
-    Some([inv[0][0], inv[1][0], inv[2][0], inv[0][1], inv[1][1], inv[2][1], inv[0][2], inv[1][2], inv[2][2]])
+    Some([
+        inv[0][0], inv[1][0], inv[2][0], inv[0][1], inv[1][1], inv[2][1], inv[0][2], inv[1][2],
+        inv[2][2],
+    ])
 }
 
 /// Apply a column-major 3x3 matrix to `(x, y, 1)`.
@@ -103,7 +148,10 @@ mod tests {
         let inv = invert3(&m).unwrap();
         let (cx, cy) = apply3(&m, 320.0, 140.0);
         let (x, y) = apply3(&inv, cx, cy);
-        assert!((x - 320.0).abs() < 1e-3 && (y - 140.0).abs() < 1e-3, "{x} {y}");
+        assert!(
+            (x - 320.0).abs() < 1e-3 && (y - 140.0).abs() < 1e-3,
+            "{x} {y}"
+        );
         assert!(invert3(&[0.0; 9]).is_none());
     }
 

@@ -40,7 +40,10 @@ pub struct CursorColors {
 
 impl CursorColors {
     /// Black fill, white outline.
-    pub const DEFAULT: CursorColors = CursorColors { fill: [0, 0, 0, 255], outline: [255, 255, 255, 255] };
+    pub const DEFAULT: CursorColors = CursorColors {
+        fill: [0, 0, 0, 255],
+        outline: [255, 255, 255, 255],
+    };
 }
 
 type BufferKey = (&'static str, u32);
@@ -64,7 +67,11 @@ pub fn fallback_arrow(size: u32) -> Image {
     let inside = |x: f32, y: f32, grow: f32| -> bool {
         let (x, y) = (x / h, y / h);
         let g = grow / h;
-        y >= -g && y <= 0.82 + g && x >= -g && x <= 0.58 * (y.max(0.0) + 0.0) + 0.18 + g * 2.0 && x <= 0.70 * y + g * 2.0 + 0.02
+        y >= -g
+            && y <= 0.82 + g
+            && x >= -g
+            && x <= 0.58 * (y.max(0.0) + 0.0) + 0.18 + g * 2.0
+            && x <= 0.70 * y + g * 2.0 + 0.02
     };
     for y in 0..s {
         for x in 0..s {
@@ -77,7 +84,16 @@ pub fn fallback_arrow(size: u32) -> Image {
             }
         }
     }
-    Image { size, width: s as u32, height: s as u32, xhot: 1, yhot: 1, delay: 0, pixels_rgba: px, pixels_argb: vec![] }
+    Image {
+        size,
+        width: s as u32,
+        height: s as u32,
+        xhot: 1,
+        yhot: 1,
+        delay: 0,
+        pixels_rgba: px,
+        pixels_argb: vec![],
+    }
 }
 
 /// Redraw a black-filled, white-outlined cursor image with `colors`.
@@ -94,8 +110,13 @@ pub fn recolor(pixels: &mut [u8], colors: CursorColors) {
         if a == 0.0 {
             continue;
         }
-        let light = ((f32::from(px[0]) + f32::from(px[1]) + f32::from(px[2])) / (3.0 * 255.0) / a).min(1.0);
-        let dark = if px[3] == 255 { colors.fill } else { [0, 0, 0, 255] };
+        let light =
+            ((f32::from(px[0]) + f32::from(px[1]) + f32::from(px[2])) / (3.0 * 255.0) / a).min(1.0);
+        let dark = if px[3] == 255 {
+            colors.fill
+        } else {
+            [0, 0, 0, 255]
+        };
         let mix = |i: usize| channel(colors.outline, i) * light + channel(dark, i) * (1.0 - light);
         let alpha = a * mix(3);
         let q = |v: f32| (v * alpha * 255.0).round().clamp(0.0, 255.0) as u8;
@@ -110,9 +131,22 @@ impl CursorLoader {
     /// or with one that has neither a `default` nor a `left_ptr` cursor (reported on stderr), the cursors are the
     /// built-in procedural set (`cupertino-cursor`), and the clients the server starts keep their own cursor theme.
     pub fn load(theme: Option<CursorTheme>, colors: CursorColors) -> Self {
-        let size = std::env::var("XCURSOR_SIZE").ok().and_then(|s| s.parse().ok()).unwrap_or(24);
-        let mut loader = Self { theme, size, colors, cache: HashMap::new(), buffers: HashMap::new() };
-        if let Some(t) = loader.theme.as_ref().filter(|_| ["default", "left_ptr"].iter().all(|n| loader.read(n).is_none())) {
+        let size = std::env::var("XCURSOR_SIZE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(24);
+        let mut loader = Self {
+            theme,
+            size,
+            colors,
+            cache: HashMap::new(),
+            buffers: HashMap::new(),
+        };
+        if let Some(t) = loader.theme.as_ref().filter(|_| {
+            ["default", "left_ptr"]
+                .iter()
+                .all(|n| loader.read(n).is_none())
+        }) {
             eprintln!("cupertino-server: the cursor theme {:?} in {} has no `default` or `left_ptr` cursor; drawing the built-in cursors", t.name, t.search_dir.display());
             loader.theme = None;
         }
@@ -139,8 +173,14 @@ impl CursorLoader {
     /// The images of the cursor `name`: the file of the theme (aliases are symlinks inside the theme), or without a
     /// theme the procedural cursor. `None` when the theme has no such file or the procedural set no such cursor.
     fn read(&self, name: &str) -> Option<Vec<Image>> {
-        let Some(theme) = self.theme.as_ref() else { return self.procedural(name) };
-        let path: PathBuf = theme.search_dir.join(&theme.name).join("cursors").join(name);
+        let Some(theme) = self.theme.as_ref() else {
+            return self.procedural(name);
+        };
+        let path: PathBuf = theme
+            .search_dir
+            .join(&theme.name)
+            .join("cursors")
+            .join(name);
         parse_xcursor(&std::fs::read(path).ok()?)
     }
 
@@ -150,7 +190,9 @@ impl CursorLoader {
         let kind = cupertino_cursor::procedural::Kind::from_name(name)?;
         let mut options = cupertino_cursor::theme::BuildOptions::new(PathBuf::new());
         options.sizes = vec![self.size, self.size * 2, self.size * 4];
-        let file = cupertino_cursor::theme::procedural_cursor(kind, &options, Vec::new()).to_xcursor().unwrap_or_else(|e| panic!("procedural cursor {name}: {e}"));
+        let file = cupertino_cursor::theme::procedural_cursor(kind, &options, Vec::new())
+            .to_xcursor()
+            .unwrap_or_else(|e| panic!("procedural cursor {name}: {e}"));
         parse_xcursor(&file)
     }
 
@@ -194,18 +236,39 @@ impl CursorLoader {
         };
         let key = (name, img.width ^ (img.delay << 16) ^ (img.xhot << 24));
         let entry = self.buffers.entry(key).or_insert_with(|| {
-            let buf = MemoryRenderBuffer::from_slice(&img.pixels_rgba, Fourcc::Argb8888, (img.width as i32, img.height as i32), 1, Transform::Normal, None);
+            let buf = MemoryRenderBuffer::from_slice(
+                &img.pixels_rgba,
+                Fourcc::Argb8888,
+                (img.width as i32, img.height as i32),
+                1,
+                Transform::Normal,
+                None,
+            );
             (Point::from((img.xhot as i32, img.yhot as i32)), buf)
         });
-        CursorFrame { buffer: entry.1.clone(), hotspot: entry.0, pixels: (img.width, img.height), nominal: img.size }
+        CursorFrame {
+            buffer: entry.1.clone(),
+            hotspot: entry.0,
+            pixels: (img.width, img.height),
+            nominal: img.size,
+        }
     }
 }
 
 /// The image for `size`: the smallest nominal size at least `size`, else the largest; then the
 /// animation frame of that size at `millis`.
 fn pick_frame(images: &[Image], size: u32, millis: u32) -> Image {
-    let largest = images.iter().map(|i| i.size).max().expect("at least one image");
-    let nominal = images.iter().map(|i| i.size).filter(|s| *s >= size).min().unwrap_or(largest);
+    let largest = images
+        .iter()
+        .map(|i| i.size)
+        .max()
+        .expect("at least one image");
+    let nominal = images
+        .iter()
+        .map(|i| i.size)
+        .filter(|s| *s >= size)
+        .min()
+        .unwrap_or(largest);
     let same: Vec<&Image> = images.iter().filter(|i| i.size == nominal).collect();
     let total: u32 = same.iter().map(|i| i.delay).sum();
     if total == 0 {
@@ -236,7 +299,11 @@ impl Cupertino {
             return;
         }
         let now = self.now();
-        if !self.cursor_shake.detector.motion(cupertino_input::Point::new(pos.x, pos.y), now) {
+        if !self
+            .cursor_shake
+            .detector
+            .motion(cupertino_input::Point::new(pos.x, pos.y), now)
+        {
             return;
         }
         self.request_redraw();
@@ -244,14 +311,16 @@ impl Cupertino {
             return;
         }
         let interval = Duration::from_secs_f64(cupertino_input::SHAKE_EVALUATION_INTERVAL_S);
-        let timer = self.loop_handle.insert_source(Timer::from_duration(interval), move |_, _, st| {
-            if st.evaluate_cursor_shake() {
-                TimeoutAction::ToDuration(interval)
-            } else {
-                st.cursor_shake.timer = None;
-                TimeoutAction::Drop
-            }
-        });
+        let timer =
+            self.loop_handle
+                .insert_source(Timer::from_duration(interval), move |_, _, st| {
+                    if st.evaluate_cursor_shake() {
+                        TimeoutAction::ToDuration(interval)
+                    } else {
+                        st.cursor_shake.timer = None;
+                        TimeoutAction::Drop
+                    }
+                });
         match timer {
             Ok(token) => self.cursor_shake.timer = Some(token),
             Err(e) => {
@@ -282,7 +351,8 @@ impl Cupertino {
     /// Scale of the cursors the server draws: the user cursor scale times the shake multiplier
     /// (product), kept below the display server's limit.
     pub fn cursor_scale(&self) -> f64 {
-        (self.config.pointer.cursor_scale * self.shake_multiplier()).min(cupertino_input::CURSOR_SCALE_LIMIT)
+        (self.config.pointer.cursor_scale * self.shake_multiplier())
+            .min(cupertino_input::CURSOR_SCALE_LIMIT)
     }
 }
 
@@ -299,7 +369,16 @@ mod tests {
     }
 
     fn image(size: u32, delay: u32, v: u8) -> Image {
-        Image { size, width: size, height: size, xhot: 0, yhot: 0, delay, pixels_rgba: vec![v; (size * size * 4) as usize], pixels_argb: vec![] }
+        Image {
+            size,
+            width: size,
+            height: size,
+            xhot: 0,
+            yhot: 0,
+            delay,
+            pixels_rgba: vec![v; (size * size * 4) as usize],
+            pixels_argb: vec![],
+        }
     }
 
     #[test]
@@ -314,30 +393,68 @@ mod tests {
     fn the_smallest_image_at_least_the_size_is_picked() {
         let imgs = vec![image(24, 0, 1), image(48, 0, 2), image(64, 0, 3)];
         assert_eq!(pick_frame(&imgs, 24, 0).size, 24);
-        assert_eq!(pick_frame(&imgs, 30, 0).size, 48, "scaled down from 48 rather than up from 24");
-        assert_eq!(pick_frame(&imgs, 120, 0).size, 64, "past the largest image the largest is scaled up");
+        assert_eq!(
+            pick_frame(&imgs, 30, 0).size,
+            48,
+            "scaled down from 48 rather than up from 24"
+        );
+        assert_eq!(
+            pick_frame(&imgs, 120, 0).size,
+            64,
+            "past the largest image the largest is scaled up"
+        );
     }
 
     #[test]
     fn recolouring_maps_fill_and_outline_and_keeps_the_shadow_black() {
-        let colors = CursorColors { fill: [255, 0, 0, 255], outline: [0, 0, 255, 255] };
+        let colors = CursorColors {
+            fill: [255, 0, 0, 255],
+            outline: [0, 0, 255, 255],
+        };
         // B, G, R, A premultiplied: opaque black (fill), opaque white (outline), half-transparent black
         // (shadow), half-transparent white (antialiased outline edge), transparent
-        let mut px = vec![0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 128, 128, 128, 128, 128, 0, 0, 0, 0];
+        let mut px = vec![
+            0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 128, 128, 128, 128, 128, 0, 0, 0, 0,
+        ];
         recolor(&mut px, colors);
         assert_eq!(&px[0..4], &[0, 0, 255, 255], "fill → red");
         assert_eq!(&px[4..8], &[255, 0, 0, 255], "outline → blue");
         assert_eq!(&px[8..12], &[0, 0, 0, 128], "shadow stays black");
-        assert_eq!(&px[12..16], &[128, 0, 0, 128], "outline edge → blue, same coverage");
+        assert_eq!(
+            &px[12..16],
+            &[128, 0, 0, 128],
+            "outline edge → blue, same coverage"
+        );
         assert_eq!(&px[16..20], &[0, 0, 0, 0]);
     }
 
     /// A one-image XCursor file: a `size` x `size` image filled with `argb`.
     fn xcursor_file(size: u32, argb: u32) -> Vec<u8> {
         let mut f = Vec::new();
-        let words = |f: &mut Vec<u8>, w: &[u32]| w.iter().for_each(|v| f.extend_from_slice(&v.to_le_bytes()));
+        let words = |f: &mut Vec<u8>, w: &[u32]| {
+            w.iter().for_each(|v| f.extend_from_slice(&v.to_le_bytes()))
+        };
         f.extend_from_slice(b"Xcur");
-        words(&mut f, &[16, 1, 1, 0xfffd_0002, size, 28, 36, 0xfffd_0002, size, 1, size, size, 0, 0, 0]);
+        words(
+            &mut f,
+            &[
+                16,
+                1,
+                1,
+                0xfffd_0002,
+                size,
+                28,
+                36,
+                0xfffd_0002,
+                size,
+                1,
+                size,
+                size,
+                0,
+                0,
+                0,
+            ],
+        );
         (0..size * size).for_each(|_| words(&mut f, &[argb]));
         f
     }
@@ -353,7 +470,10 @@ mod tests {
     }
 
     fn theme(dir: &tempfile::TempDir) -> CursorTheme {
-        CursorTheme { name: "fixture".into(), search_dir: dir.path().to_path_buf() }
+        CursorTheme {
+            name: "fixture".into(),
+            search_dir: dir.path().to_path_buf(),
+        }
     }
 
     #[test]
@@ -361,8 +481,17 @@ mod tests {
         let dir = theme_dir(&[("default", 24), ("text", 32)]);
         let mut loader = CursorLoader::load(Some(theme(&dir)), CursorColors::DEFAULT);
         assert_eq!(loader.theme(), Some(&theme(&dir)));
-        assert_eq!(loader.frame(CursorIcon::Text, 32, Duration::ZERO).nominal, 32);
-        assert_eq!(loader.frame(CursorIcon::Pointer, 24, Duration::ZERO).nominal, 24, "an unknown name draws `default`");
+        assert_eq!(
+            loader.frame(CursorIcon::Text, 32, Duration::ZERO).nominal,
+            32
+        );
+        assert_eq!(
+            loader
+                .frame(CursorIcon::Pointer, 24, Duration::ZERO)
+                .nominal,
+            24,
+            "an unknown name draws `default`"
+        );
     }
 
     #[test]
@@ -370,17 +499,38 @@ mod tests {
         let dir = theme_dir(&[("text", 32)]);
         for theme in [Some(theme(&dir)), None] {
             let mut loader = CursorLoader::load(theme, CursorColors::DEFAULT);
-            assert_eq!(loader.theme(), None, "a theme without `default` or `left_ptr` is dropped");
+            assert_eq!(
+                loader.theme(),
+                None,
+                "a theme without `default` or `left_ptr` is dropped"
+            );
             let text = loader.frame(CursorIcon::Text, 48, Duration::ZERO);
             assert_eq!(text.nominal, 48, "drawn at twice the nominal 24");
             let arrow = fallback_arrow(24);
-            assert_ne!(loader.frame(CursorIcon::Default, 24, Duration::ZERO).pixels, (arrow.width, arrow.height), "not the last-resort arrow");
+            assert_ne!(
+                loader.frame(CursorIcon::Default, 24, Duration::ZERO).pixels,
+                (arrow.width, arrow.height),
+                "not the last-resort arrow"
+            );
         }
     }
 
     #[test]
     fn clients_get_the_scaled_nominal_size() {
-        let loader = CursorLoader { theme: None, size: 24, colors: CursorColors::DEFAULT, cache: HashMap::new(), buffers: HashMap::new() };
-        assert_eq!([loader.client_size(1.0), loader.client_size(2.5), loader.client_size(4.0)], [24, 60, 96]);
+        let loader = CursorLoader {
+            theme: None,
+            size: 24,
+            colors: CursorColors::DEFAULT,
+            cache: HashMap::new(),
+            buffers: HashMap::new(),
+        };
+        assert_eq!(
+            [
+                loader.client_size(1.0),
+                loader.client_size(2.5),
+                loader.client_size(4.0)
+            ],
+            [24, 60, 96]
+        );
     }
 }

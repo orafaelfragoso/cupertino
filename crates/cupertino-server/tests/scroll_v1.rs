@@ -11,7 +11,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use cupertino_protocols::client::scroll::cupertino_pointer_scroll_v1::{self, CupertinoPointerScrollV1};
+use cupertino_protocols::client::scroll::cupertino_pointer_scroll_v1::{
+    self, CupertinoPointerScrollV1,
+};
 use cupertino_protocols::client::scroll::cupertino_scroll_v1::CupertinoScrollV1;
 use cupertino_server::backend::headless;
 use cupertino_server::config::{Config, PointerSettings};
@@ -22,9 +24,13 @@ use smithay::backend::input::{AxisRelativeDirection, AxisSource};
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
-use wayland_client::protocol::{wl_buffer, wl_compositor, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface};
+use wayland_client::protocol::{
+    wl_buffer, wl_compositor, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
+};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
-use wayland_protocols::xdg::decoration::zv1::client::{zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1};
+use wayland_protocols::xdg::decoration::zv1::client::{
+    zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1,
+};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
 const OUTPUT: (i32, i32) = (1000, 700);
@@ -57,12 +63,24 @@ impl Harness {
     fn new() -> Option<Harness> {
         let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().ok()?;
         let display: Display<Cupertino> = Display::new().ok()?;
-        let mut state = Cupertino::new(display, event_loop.handle(), event_loop.get_signal(), Config::default(), true, &cupertino_assets::Assets::discover()).ok()?;
+        let mut state = Cupertino::new(
+            display,
+            event_loop.handle(),
+            event_loop.get_signal(),
+            Config::default(),
+            true,
+            &cupertino_assets::Assets::builtin(),
+        )
+        .ok()?;
         match headless::init(&mut state, OUTPUT, 1.0) {
             Ok(()) => {
                 let settings = PointerSettings::default();
-                state.pointer_devices.insert(PAD.into(), PointerDevice::new(true, &settings));
-                state.pointer_devices.insert(WHEEL.into(), PointerDevice::new(false, &settings));
+                state
+                    .pointer_devices
+                    .insert(PAD.into(), PointerDevice::new(true, &settings));
+                state
+                    .pointer_devices
+                    .insert(WHEEL.into(), PointerDevice::new(false, &settings));
                 Some(Harness { state, event_loop })
             }
             Err(e) => {
@@ -73,7 +91,12 @@ impl Harness {
     }
 
     fn step(&mut self) {
-        headless::step(&mut self.state, &mut self.event_loop, Duration::from_millis(5)).unwrap();
+        headless::step(
+            &mut self.state,
+            &mut self.event_loop,
+            Duration::from_millis(5),
+        )
+        .unwrap();
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
@@ -114,7 +137,11 @@ impl Harness {
         for dy in (TITLE_BAR as i32 + 4..f.h as i32 - 4).step_by(8) {
             for dx in (4..f.w as i32 - 4).step_by(8) {
                 let p = (f.x + f64::from(dx), f.y + f64::from(dy));
-                if self.state.window_surface_under(p.into()).is_some_and(|(w, _, _)| w == id) {
+                if self
+                    .state
+                    .window_surface_under(p.into())
+                    .is_some_and(|(w, _, _)| w == id)
+                {
                     self.state.pointer_moved_to(p.into(), 0, None);
                     return;
                 }
@@ -126,7 +153,13 @@ impl Harness {
     /// One touchpad event of `counts` vertically at `usec`; `None` ends the gesture.
     fn pad(&mut self, counts: Option<f64>, usec: u64) {
         let amount = [None, Some(counts.unwrap_or(0.0))];
-        self.state.pointer_axis(&axis_input(PAD, AxisSource::Finger, amount, [None, None], usec));
+        self.state.pointer_axis(&axis_input(
+            PAD,
+            AxisSource::Finger,
+            amount,
+            [None, None],
+            usec,
+        ));
     }
 
     /// A flick of six fast events and the end of the gesture, from `start_usec`; returns the time of the end.
@@ -140,8 +173,21 @@ impl Harness {
     }
 }
 
-fn axis_input(device: &str, source: AxisSource, amount: [Option<f64>; 2], v120: [Option<f64>; 2], usec: u64) -> AxisInput {
-    AxisInput { device: device.into(), source, usec, amount, v120, relative_direction: [AxisRelativeDirection::Identical; 2] }
+fn axis_input(
+    device: &str,
+    source: AxisSource,
+    amount: [Option<f64>; 2],
+    v120: [Option<f64>; 2],
+    usec: u64,
+) -> AxisInput {
+    AxisInput {
+        device: device.into(),
+        source,
+        usec,
+        amount,
+        v120,
+        relative_direction: [AxisRelativeDirection::Identical; 2],
+    }
 }
 
 // ---- test client ---------------------------------------------------------------------------
@@ -155,7 +201,15 @@ struct ClientState {
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for ClientState {
-    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 macro_rules! ignore_events {
     ($($t:ty),*) => {$(
@@ -178,7 +232,14 @@ ignore_events!(
 );
 
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for ClientState {
-    fn event(_: &mut Self, base: &xdg_wm_base::XdgWmBase, event: xdg_wm_base::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        _: &mut Self,
+        base: &xdg_wm_base::XdgWmBase,
+        event: xdg_wm_base::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         if let xdg_wm_base::Event::Ping { serial } = event {
             base.pong(serial);
         }
@@ -186,13 +247,22 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for ClientState {
 }
 
 impl Dispatch<xdg_surface::XdgSurface, ()> for ClientState {
-    fn event(state: &mut Self, surface: &xdg_surface::XdgSurface, event: xdg_surface::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        surface: &xdg_surface::XdgSurface,
+        event: xdg_surface::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
         if let xdg_surface::Event::Configure { serial } = event {
             surface.ack_configure(serial);
             if !state.attached {
                 state.attached = true;
                 let (w, h) = state.size;
-                let fd = rustix::fs::memfd_create("cupertino-test", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
+                let fd =
+                    rustix::fs::memfd_create("cupertino-test", rustix::fs::MemfdFlags::CLOEXEC)
+                        .unwrap();
                 let mut file = std::fs::File::from(fd);
                 file.write_all(&vec![128u8; (w * h * 4) as usize]).unwrap();
                 let pool = state.shm.create_pool(file.as_fd(), w * h * 4, qh, ());
@@ -207,9 +277,19 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for ClientState {
 }
 
 impl Dispatch<wl_pointer::WlPointer, ()> for ClientState {
-    fn event(state: &mut Self, _: &wl_pointer::WlPointer, event: wl_pointer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        _: &wl_pointer::WlPointer,
+        event: wl_pointer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         match event {
-            wl_pointer::Event::Axis { axis: WEnum::Value(axis), .. } => state.log.lock().unwrap().push(Record::Axis(axis)),
+            wl_pointer::Event::Axis {
+                axis: WEnum::Value(axis),
+                ..
+            } => state.log.lock().unwrap().push(Record::Axis(axis)),
             wl_pointer::Event::Frame => state.log.lock().unwrap().push(Record::Frame),
             _ => {}
         }
@@ -217,8 +297,21 @@ impl Dispatch<wl_pointer::WlPointer, ()> for ClientState {
 }
 
 impl Dispatch<CupertinoPointerScrollV1, ()> for ClientState {
-    fn event(state: &mut Self, _: &CupertinoPointerScrollV1, event: cupertino_pointer_scroll_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
-        let cupertino_pointer_scroll_v1::Event::ScrollCount { axis: WEnum::Value(axis), count } = event else { panic!("unknown scroll_count axis") };
+    fn event(
+        state: &mut Self,
+        _: &CupertinoPointerScrollV1,
+        event: cupertino_pointer_scroll_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let cupertino_pointer_scroll_v1::Event::ScrollCount {
+            axis: WEnum::Value(axis),
+            count,
+        } = event
+        else {
+            panic!("unknown scroll_count axis")
+        };
         state.log.lock().unwrap().push(Record::Count(axis, count));
     }
 }
@@ -235,7 +328,10 @@ impl TestClient {
         let log: Log = Arc::default();
         let (stop2, log2) = (stop.clone(), log.clone());
         std::thread::spawn(move || {
-            let conn = Connection::from_socket(UnixStream::connect(&socket).expect("connecting to the compositor")).unwrap();
+            let conn = Connection::from_socket(
+                UnixStream::connect(&socket).expect("connecting to the compositor"),
+            )
+            .unwrap();
             let (globals, mut queue) = registry_queue_init::<ClientState>(&conn).unwrap();
             let qh = queue.handle();
             let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
@@ -249,11 +345,18 @@ impl TestClient {
             let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
             let toplevel = xdg.get_toplevel(&qh, ());
             toplevel.set_app_id("org.example.a".to_string());
-            let manager: zxdg_decoration_manager_v1::ZxdgDecorationManagerV1 = globals.bind(&qh, 1..=1, ()).unwrap();
+            let manager: zxdg_decoration_manager_v1::ZxdgDecorationManagerV1 =
+                globals.bind(&qh, 1..=1, ()).unwrap();
             let decoration = manager.get_toplevel_decoration(&toplevel, &qh, ());
             decoration.set_mode(zxdg_toplevel_decoration_v1::Mode::ServerSide);
             surface.commit();
-            let mut client = ClientState { shm, surface, size: (400, 300), attached: false, log: log2 };
+            let mut client = ClientState {
+                shm,
+                surface,
+                size: (400, 300),
+                attached: false,
+                log: log2,
+            };
             while !stop2.load(Ordering::SeqCst) {
                 if queue.roundtrip(&mut client).is_err() {
                     break;
@@ -279,10 +382,15 @@ impl Drop for TestClient {
 fn counts_in_frames(log: &[Record]) -> Vec<u32> {
     let mut counts = Vec::new();
     for frame in log.split(|r| *r == Record::Frame).filter(|f| !f.is_empty()) {
-        if let [Record::Axis(wl_pointer::Axis::VerticalScroll), Record::Count(wl_pointer::Axis::VerticalScroll, count)] = frame {
+        if let [Record::Axis(wl_pointer::Axis::VerticalScroll), Record::Count(wl_pointer::Axis::VerticalScroll, count)] =
+            frame
+        {
             counts.push(*count);
         } else {
-            assert!(frame.iter().all(|r| !matches!(r, Record::Count(..))), "a count outside axis, count, frame: {frame:?}");
+            assert!(
+                frame.iter().all(|r| !matches!(r, Record::Count(..))),
+                "a count outside axis, count, frame: {frame:?}"
+            );
         }
     }
     counts
@@ -307,7 +415,10 @@ fn touchpad_scrolls_send_the_count_between_the_axis_event_and_the_frame() {
     // the first flick starts the series, the second begins at 2; coalescing may hold back events of either
     assert!(counts.contains(&1), "{counts:?}");
     assert_eq!(counts.last(), Some(&2), "{counts:?}");
-    assert!(counts.windows(2).all(|w| w[0] <= w[1]) && counts.iter().all(|c| *c <= 2), "{counts:?}");
+    assert!(
+        counts.windows(2).all(|w| w[0] <= w[1]) && counts.iter().all(|c| *c <= 2),
+        "{counts:?}"
+    );
 }
 
 /// A wheel has no gesture phases and so no count: its frames carry axis events only.
@@ -321,7 +432,19 @@ fn wheel_scrolls_send_no_count() {
     h.settle();
     client.log.lock().unwrap().clear();
 
-    h.state.pointer_axis(&axis_input(WHEEL, AxisSource::Wheel, [None, Some(15.0)], [None, Some(120.0)], 1_000_000));
+    h.state.pointer_axis(&axis_input(
+        WHEEL,
+        AxisSource::Wheel,
+        [None, Some(15.0)],
+        [None, Some(120.0)],
+        1_000_000,
+    ));
     h.settle();
-    assert_eq!(client.log(), vec![Record::Axis(wl_pointer::Axis::VerticalScroll), Record::Frame]);
+    assert_eq!(
+        client.log(),
+        vec![
+            Record::Axis(wl_pointer::Axis::VerticalScroll),
+            Record::Frame
+        ]
+    );
 }

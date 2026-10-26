@@ -18,7 +18,9 @@ pub fn parse_uevent_file(text: &str) -> Result<Properties, ParseError> {
 }
 
 /// Collects entries into a map. An entry without `=` or an empty entry is an error.
-pub(crate) fn collect<'a>(entries: impl Iterator<Item = &'a str>) -> Result<Properties, ParseError> {
+pub(crate) fn collect<'a>(
+    entries: impl Iterator<Item = &'a str>,
+) -> Result<Properties, ParseError> {
     let mut properties = Properties::new();
     for entry in entries {
         if entry.is_empty() {
@@ -67,7 +69,10 @@ mod tests {
     fn parses_a_node_uevent() {
         let properties = parse_uevent_file("MAJOR=13\nMINOR=67\nDEVNAME=input/event3\n").unwrap();
         assert_eq!(devnum(&properties).unwrap(), Some(DevT::new(13, 67)));
-        assert_eq!(devnode(&properties), Some(PathBuf::from("/dev/input/event3")));
+        assert_eq!(
+            devnode(&properties),
+            Some(PathBuf::from("/dev/input/event3"))
+        );
     }
 
     #[test]
@@ -86,7 +91,10 @@ mod tests {
 
     #[test]
     fn blank_line_is_an_error() {
-        assert_eq!(parse_uevent_file("A=1\n\nB=2\n"), Err(ParseError::EmptyProperty));
+        assert_eq!(
+            parse_uevent_file("A=1\n\nB=2\n"),
+            Err(ParseError::EmptyProperty)
+        );
     }
 
     #[test]
@@ -100,7 +108,10 @@ mod tests {
         let properties = parse_uevent_file("MAJOR=13\nMINOR=x\n").unwrap();
         assert_eq!(
             devnum(&properties),
-            Err(ParseError::InvalidNumber { key: "MINOR", value: "x".to_owned() })
+            Err(ParseError::InvalidNumber {
+                key: "MINOR",
+                value: "x".to_owned()
+            })
         );
     }
 

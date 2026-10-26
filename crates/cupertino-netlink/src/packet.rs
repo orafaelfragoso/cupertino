@@ -12,7 +12,10 @@ use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use rustix::io::Errno;
 use rustix::net::addr::{SocketAddrArg, SocketAddrLen, SocketAddrOpaque};
 use rustix::net::eth;
-use rustix::net::{bind, recvfrom, sendto, socket_with, AddressFamily, RecvFlags, SendFlags, SocketFlags, SocketType};
+use rustix::net::{
+    bind, recvfrom, sendto, socket_with, AddressFamily, RecvFlags, SendFlags, SocketFlags,
+    SocketType,
+};
 
 use crate::error::{Error, ParseError, Result};
 
@@ -56,7 +59,8 @@ fn checksum(initial: u32, data: &[u8]) -> u16 {
 /// fragmented (`DF` set); the caller keeps the payload below the interface MTU.
 pub fn build_udp_packet(datagram: &UdpDatagram) -> Vec<u8> {
     let udp_length = UDP_HEADER_LEN + datagram.payload.len();
-    let total = u16::try_from(IPV4_HEADER_LEN + udp_length).expect("a DHCP message is far below 64 KiB");
+    let total =
+        u16::try_from(IPV4_HEADER_LEN + udp_length).expect("a DHCP message is far below 64 KiB");
     let mut packet = Vec::with_capacity(usize::from(total));
     // version 4, header length 5 words; DSCP 0
     packet.extend_from_slice(&[0x45, 0]);
@@ -79,7 +83,8 @@ pub fn build_udp_packet(datagram: &UdpDatagram) -> Vec<u8> {
     let mut pseudo = 0u32;
     for address in [datagram.source, datagram.destination] {
         let octets = address.octets();
-        pseudo += u32::from(u16::from_be_bytes([octets[0], octets[1]])) + u32::from(u16::from_be_bytes([octets[2], octets[3]]));
+        pseudo += u32::from(u16::from_be_bytes([octets[0], octets[1]]))
+            + u32::from(u16::from_be_bytes([octets[2], octets[3]]));
     }
     pseudo += u32::from(PROTOCOL_UDP) + u32::from(udp_length_field);
     // a computed 0 is sent as all ones (RFC 768)
@@ -97,14 +102,22 @@ pub fn build_udp_packet(datagram: &UdpDatagram) -> Vec<u8> {
 /// network cards over with the checksum not yet computed.
 pub fn parse_udp_packet(packet: &[u8]) -> std::result::Result<Option<UdpDatagram>, ParseError> {
     let Some(&first) = packet.first() else {
-        return Err(ParseError::Truncated { what: "IPv4 header", needed: IPV4_HEADER_LEN, have: 0 });
+        return Err(ParseError::Truncated {
+            what: "IPv4 header",
+            needed: IPV4_HEADER_LEN,
+            have: 0,
+        });
     };
     let header_len = usize::from(first & 0x0f) * 4;
     if first >> 4 != 4 || header_len < IPV4_HEADER_LEN {
         return Ok(None);
     }
     if packet.len() < header_len + UDP_HEADER_LEN {
-        return Err(ParseError::Truncated { what: "IPv4 and UDP headers", needed: header_len + UDP_HEADER_LEN, have: packet.len() });
+        return Err(ParseError::Truncated {
+            what: "IPv4 and UDP headers",
+            needed: header_len + UDP_HEADER_LEN,
+            have: packet.len(),
+        });
     }
     let total = usize::from(u16::from_be_bytes([packet[2], packet[3]]));
     let fragment = u16::from_be_bytes([packet[6], packet[7]]) & 0x3fff;
@@ -114,7 +127,11 @@ pub fn parse_udp_packet(packet: &[u8]) -> std::result::Result<Option<UdpDatagram
     let udp = &packet[header_len..];
     let udp_length = usize::from(u16::from_be_bytes([udp[4], udp[5]]));
     if total > packet.len() || udp_length < UDP_HEADER_LEN || header_len + udp_length > total {
-        return Err(ParseError::Truncated { what: "UDP datagram", needed: header_len + udp_length.max(UDP_HEADER_LEN), have: total.min(packet.len()) });
+        return Err(ParseError::Truncated {
+            what: "UDP datagram",
+            needed: header_len + udp_length.max(UDP_HEADER_LEN),
+            have: total.min(packet.len()),
+        });
     }
     Ok(Some(UdpDatagram {
         source: Ipv4Addr::new(packet[12], packet[13], packet[14], packet[15]),
@@ -146,7 +163,8 @@ impl LinkAddress {
         Self {
             family: AF_PACKET,
             protocol: 0x0800u16.to_be(),
-            interface_index: i32::try_from(interface_index).expect("interface indexes are positive 31-bit numbers"),
+            interface_index: i32::try_from(interface_index)
+                .expect("interface indexes are positive 31-bit numbers"),
             hardware_type: 0,
             packet_type: 0,
             address_length: 6,
@@ -158,8 +176,14 @@ impl LinkAddress {
 // SAFETY: `with_sockaddr` calls `f` with a pointer to a fully initialised `sockaddr_ll` that
 // outlives the call, and its size.
 unsafe impl SocketAddrArg for LinkAddress {
-    unsafe fn with_sockaddr<R>(&self, f: impl FnOnce(*const SocketAddrOpaque, SocketAddrLen) -> R) -> R {
-        f((self as *const Self).cast(), size_of::<Self>() as SocketAddrLen)
+    unsafe fn with_sockaddr<R>(
+        &self,
+        f: impl FnOnce(*const SocketAddrOpaque, SocketAddrLen) -> R,
+    ) -> R {
+        f(
+            (self as *const Self).cast(),
+            size_of::<Self>() as SocketAddrLen,
+        )
     }
 }
 
@@ -173,16 +197,33 @@ pub struct PacketSocket {
 impl PacketSocket {
     /// Opens the socket. Needs `CAP_NET_RAW`.
     pub fn open(interface_index: u32) -> Result<Self> {
-        let fd = socket_with(AddressFamily::PACKET, SocketType::DGRAM, SocketFlags::CLOEXEC | SocketFlags::NONBLOCK, Some(eth::IP)).map_err(Error::syscall("socket(AF_PACKET)"))?;
-        bind(&fd, &LinkAddress::ipv4(interface_index, [0; 6])).map_err(Error::syscall("bind(AF_PACKET)"))?;
-        Ok(Self { fd, interface_index })
+        let fd = socket_with(
+            AddressFamily::PACKET,
+            SocketType::DGRAM,
+            SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+            Some(eth::IP),
+        )
+        .map_err(Error::syscall("socket(AF_PACKET)"))?;
+        bind(&fd, &LinkAddress::ipv4(interface_index, [0; 6]))
+            .map_err(Error::syscall("bind(AF_PACKET)"))?;
+        Ok(Self {
+            fd,
+            interface_index,
+        })
     }
 
     /// Sends an IPv4 packet in an Ethernet broadcast frame. The frame is a broadcast even when
     /// the IP destination is a unicast address: a client that has no ARP entry for its server
     /// still reaches it.
     pub fn send_broadcast(&self, ip_packet: &[u8]) -> Result<()> {
-        sendto(&self.fd, ip_packet, SendFlags::empty(), &LinkAddress::ipv4(self.interface_index, [0xff; 6])).map(drop).map_err(Error::syscall("sendto(AF_PACKET)"))
+        sendto(
+            &self.fd,
+            ip_packet,
+            SendFlags::empty(),
+            &LinkAddress::ipv4(self.interface_index, [0xff; 6]),
+        )
+        .map(drop)
+        .map_err(Error::syscall("sendto(AF_PACKET)"))
     }
 
     /// The next IPv4 packet, without its Ethernet header; `None` when there is none queued.
@@ -199,7 +240,12 @@ impl PacketSocket {
                 Ok(_) => continue,
                 Err(Errno::AGAIN) => return Ok(None),
                 Err(Errno::INTR) => continue,
-                Err(source) => return Err(Error::Syscall { call: "recvfrom(AF_PACKET)", source }),
+                Err(source) => {
+                    return Err(Error::Syscall {
+                        call: "recvfrom(AF_PACKET)",
+                        source,
+                    })
+                }
             }
         }
     }
@@ -216,7 +262,13 @@ mod tests {
     use super::*;
 
     fn discover() -> UdpDatagram {
-        UdpDatagram { source: Ipv4Addr::UNSPECIFIED, source_port: 68, destination: Ipv4Addr::BROADCAST, destination_port: 67, payload: vec![1, 2, 3] }
+        UdpDatagram {
+            source: Ipv4Addr::UNSPECIFIED,
+            source_port: 68,
+            destination: Ipv4Addr::BROADCAST,
+            destination_port: 67,
+            payload: vec![1, 2, 3],
+        }
     }
 
     #[test]
@@ -239,7 +291,10 @@ mod tests {
     #[test]
     fn a_packet_that_was_built_parses_back() {
         let datagram = discover();
-        assert_eq!(parse_udp_packet(&build_udp_packet(&datagram)), Ok(Some(datagram)));
+        assert_eq!(
+            parse_udp_packet(&build_udp_packet(&datagram)),
+            Ok(Some(datagram))
+        );
     }
 
     #[test]
@@ -262,7 +317,13 @@ mod tests {
     fn a_length_past_the_packet_is_an_error() {
         let mut packet = build_udp_packet(&discover());
         packet[24..26].copy_from_slice(&200u16.to_be_bytes());
-        assert!(matches!(parse_udp_packet(&packet), Err(ParseError::Truncated { what: "UDP datagram", .. })));
+        assert!(matches!(
+            parse_udp_packet(&packet),
+            Err(ParseError::Truncated {
+                what: "UDP datagram",
+                ..
+            })
+        ));
     }
 
     #[test]

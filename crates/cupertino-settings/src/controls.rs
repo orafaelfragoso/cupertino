@@ -44,21 +44,42 @@ use metrics as m;
 /// What a control holds.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Control {
-    Switch { on: bool },
-    Segmented { segments: Vec<&'static str>, selected: usize },
-    Popup { choices: Vec<String>, selected: usize },
+    Switch {
+        on: bool,
+    },
+    Segmented {
+        segments: Vec<&'static str>,
+        selected: usize,
+    },
+    Popup {
+        choices: Vec<String>,
+        selected: usize,
+    },
     /// A slider over 0…1, committed on release (§7.2); with `stops` it rests only on `stops` evenly spaced positions
     /// (0 … stops − 1), each with a tick; `marks` are further ticks of a slider without stops (the Dock sliders'
     /// marks); `labels` name its two ends.
-    Slider { value: f64, stops: Option<usize>, marks: &'static [f64], labels: (&'static str, &'static str) },
+    Slider {
+        value: f64,
+        stops: Option<usize>,
+        marks: &'static [f64],
+        labels: (&'static str, &'static str),
+    },
     /// The control panel's level slider (volume, brightness): written while dragging, at most every 16.7 ms.
-    Level { value: f64 },
+    Level {
+        value: f64,
+    },
     /// A push button.
-    Button { title: String },
+    Button {
+        title: String,
+    },
     /// Push buttons side by side; a press commits the index of the one hit.
-    Buttons { titles: Vec<String> },
+    Buttons {
+        titles: Vec<String>,
+    },
     /// A value that is only shown.
-    Text { value: String },
+    Text {
+        value: String,
+    },
 }
 
 /// A value a control commits.
@@ -74,12 +95,18 @@ impl Control {
     pub fn size(&self) -> (f64, f64) {
         match self {
             Control::Switch { .. } => m::SWITCH,
-            Control::Segmented { segments, .. } => (m::SEGMENT_WIDTH * segments.len() as f64, m::SEGMENTED_HEIGHT),
+            Control::Segmented { segments, .. } => (
+                m::SEGMENT_WIDTH * segments.len() as f64,
+                m::SEGMENTED_HEIGHT,
+            ),
             Control::Popup { .. } => m::POPUP,
             Control::Slider { .. } => (m::SLIDER_WIDTH, m::SLIDER_KNOB + m::SLIDER_LABEL_HEIGHT),
             Control::Level { .. } => (m::LEVEL_WIDTH, m::LEVEL_TRACK),
             Control::Button { .. } => m::BUTTON,
-            Control::Buttons { titles } => (titles.len() as f64 * (m::BUTTON.0 + m::BUTTON_GAP) - m::BUTTON_GAP, m::BUTTON.1),
+            Control::Buttons { titles } => (
+                titles.len() as f64 * (m::BUTTON.0 + m::BUTTON_GAP) - m::BUTTON_GAP,
+                m::BUTTON.1,
+            ),
             Control::Text { .. } => m::TEXT,
         }
     }
@@ -102,7 +129,10 @@ impl Control {
 /// The span of the knob's centre along a slider in `frame`: from half a knob in from the left to half a knob in from
 /// the right.
 pub fn slider_span(frame: &Rect) -> (f64, f64) {
-    (frame.x + m::SLIDER_KNOB / 2.0, frame.right() - m::SLIDER_KNOB / 2.0)
+    (
+        frame.x + m::SLIDER_KNOB / 2.0,
+        frame.right() - m::SLIDER_KNOB / 2.0,
+    )
 }
 
 /// The slider value under pointer x.
@@ -115,7 +145,12 @@ pub fn slider_value(frame: &Rect, x: f64) -> f64 {
 pub fn slider_knob(frame: &Rect, value: f64) -> Rect {
     let (a, b) = slider_span(frame);
     let cx = a + (b - a) * value.clamp(0.0, 1.0);
-    Rect::new(cx - m::SLIDER_KNOB / 2.0, frame.y, m::SLIDER_KNOB, m::SLIDER_KNOB)
+    Rect::new(
+        cx - m::SLIDER_KNOB / 2.0,
+        frame.y,
+        m::SLIDER_KNOB,
+        m::SLIDER_KNOB,
+    )
 }
 
 /// The level under pointer x on a level slider in `frame`: `clamp((x − minX − 11) / (w − 22), 0, 1).
@@ -155,7 +190,8 @@ impl LevelWriter {
 
     /// When the waiting value is due, if one waits.
     pub fn due(&self) -> Option<f64> {
-        self.pending.and(self.last_write.map(|t| t + m::LEVEL_WRITE_INTERVAL))
+        self.pending
+            .and(self.last_write.map(|t| t + m::LEVEL_WRITE_INTERVAL))
     }
 
     /// The timer of [`LevelWriter::due`] fired at `now`: the waiting value to write.
@@ -194,21 +230,27 @@ pub enum Press {
 /// What a press at `p` on `control` in `frame` does.
 pub fn press(control: &Control, frame: &Rect, p: Point) -> Option<Press> {
     if let Control::Level { .. } = control {
-        return level_hit(frame).contains(p).then(|| Press::Level(level_value(frame, p.x)));
+        return level_hit(frame)
+            .contains(p)
+            .then(|| Press::Level(level_value(frame, p.x)));
     }
     if !frame.contains(p) {
         return None;
     }
     Some(match control {
         Control::Switch { on } => Press::Commit(Value::Bool(!on)),
-        Control::Segmented { segments, .. } => Press::Commit(Value::Index((((p.x - frame.x) / m::SEGMENT_WIDTH) as usize).min(segments.len() - 1))),
+        Control::Segmented { segments, .. } => Press::Commit(Value::Index(
+            (((p.x - frame.x) / m::SEGMENT_WIDTH) as usize).min(segments.len() - 1),
+        )),
         Control::Popup { .. } => Press::OpenMenu,
         Control::Slider { stops, .. } => Press::Drag(drag(*stops, frame, p.x)),
         Control::Button { .. } => Press::Commit(Value::Index(0)),
         Control::Buttons { titles } => {
             let i = ((p.x - frame.x) / (m::BUTTON.0 + m::BUTTON_GAP)) as usize;
             // the gap between two buttons hits neither
-            if i >= titles.len() || p.x - frame.x - i as f64 * (m::BUTTON.0 + m::BUTTON_GAP) > m::BUTTON.0 {
+            if i >= titles.len()
+                || p.x - frame.x - i as f64 * (m::BUTTON.0 + m::BUTTON_GAP) > m::BUTTON.0
+            {
                 return None;
             }
             Press::Commit(Value::Index(i))
@@ -243,19 +285,50 @@ mod tests {
 
     #[test]
     fn switches_and_segments_commit_on_the_press() {
-        assert_eq!(press(&Control::Switch { on: true }, &Rect::new(0.0, 0.0, 38.0, 22.0), Point { x: 5.0, y: 5.0 }), Some(Press::Commit(Value::Bool(false))));
-        let seg = Control::Segmented { segments: vec!["Bottom", "Left", "Right"], selected: 0 };
+        assert_eq!(
+            press(
+                &Control::Switch { on: true },
+                &Rect::new(0.0, 0.0, 38.0, 22.0),
+                Point { x: 5.0, y: 5.0 }
+            ),
+            Some(Press::Commit(Value::Bool(false)))
+        );
+        let seg = Control::Segmented {
+            segments: vec!["Bottom", "Left", "Right"],
+            selected: 0,
+        };
         let frame = Rect::new(0.0, 0.0, 216.0, 20.0);
-        assert_eq!(press(&seg, &frame, Point { x: 150.0, y: 10.0 }), Some(Press::Commit(Value::Index(2))));
-        assert_eq!(press(&seg, &frame, Point { x: 300.0, y: 10.0 }), None, "outside the control");
+        assert_eq!(
+            press(&seg, &frame, Point { x: 150.0, y: 10.0 }),
+            Some(Press::Commit(Value::Index(2)))
+        );
+        assert_eq!(
+            press(&seg, &frame, Point { x: 300.0, y: 10.0 }),
+            None,
+            "outside the control"
+        );
     }
 
     #[test]
     fn a_slider_with_stops_snaps_while_dragging_and_commits_the_stop_on_release() {
-        let control = Control::Slider { value: 0.0, stops: Some(10), marks: &[], labels: ("Slow", "Fast") };
+        let control = Control::Slider {
+            value: 0.0,
+            stops: Some(10),
+            marks: &[],
+            labels: ("Slow", "Fast"),
+        };
         let (a, b) = slider_span(&FRAME);
         assert_eq!((a, b), (110.0, 310.0));
-        let Some(Press::Drag(shown)) = press(&control, &FRAME, Point { x: a + (b - a) * 0.36, y: 20.0 }) else { panic!("a slider drags") };
+        let Some(Press::Drag(shown)) = press(
+            &control,
+            &FRAME,
+            Point {
+                x: a + (b - a) * 0.36,
+                y: 20.0,
+            },
+        ) else {
+            panic!("a slider drags")
+        };
         assert_eq!(shown, 3.0 / 9.0, "0.36 snaps to stop 3 of 0…9");
         assert_eq!(release(Some(10), shown), Value::Index(3));
         assert_eq!(drag(Some(10), &FRAME, 0.0), 0.0, "clamped at the left end");
@@ -271,7 +344,11 @@ mod tests {
         assert_eq!(level_value(&frame, 211.0), 0.5);
         assert_eq!(level_value(&frame, 50.0), 0.0, "clamped");
         let control = Control::Level { value: 0.2 };
-        assert_eq!(press(&control, &frame, Point { x: 95.0, y: 5.0 }), Some(Press::Level(0.0)), "the hit frame is 9 beyond the track");
+        assert_eq!(
+            press(&control, &frame, Point { x: 95.0, y: 5.0 }),
+            Some(Press::Level(0.0)),
+            "the hit frame is 9 beyond the track"
+        );
         assert_eq!(press(&control, &frame, Point { x: 90.0, y: 5.0 }), None);
     }
 
@@ -280,12 +357,20 @@ mod tests {
         let mut w = LevelWriter::default();
         assert_eq!(w.moved(0.10, 0.000), Some(0.10), "the press writes at once");
         assert_eq!(w.moved(0.20, 0.005), None);
-        assert_eq!(w.moved(0.30, 0.010), None, "inside the interval only the latest waits");
+        assert_eq!(
+            w.moved(0.30, 0.010),
+            None,
+            "inside the interval only the latest waits"
+        );
         assert_eq!(w.due(), Some(1.0 / 60.0));
         assert_eq!(w.tick(0.012), None, "not due yet");
         assert_eq!(w.tick(0.017), Some(0.30), "the latest value, once due");
         assert_eq!(w.due(), None);
-        assert_eq!(w.moved(0.40, 0.040), Some(0.40), "past the interval it writes at once");
+        assert_eq!(
+            w.moved(0.40, 0.040),
+            Some(0.40),
+            "past the interval it writes at once"
+        );
         assert_eq!(w.moved(0.45, 0.041), None);
         assert_eq!(w.released(0.50), 0.50, "the release writes the final value");
         assert_eq!(w.due(), None, "and nothing waits after it");

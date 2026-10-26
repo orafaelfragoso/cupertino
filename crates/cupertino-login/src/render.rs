@@ -4,17 +4,24 @@
 use std::collections::HashMap;
 use std::f64::consts::PI;
 
+use cupertino_assets::{AssetError, Assets, FontRole};
 use cupertino_decorations::palette::Rgba;
 use cupertino_decorations::shape::{rounded_path, to_skia_path};
-use cupertino_assets::{AssetError, Assets, FontRole};
 use cupertino_decorations::text::TextRenderer;
 use cupertino_geometry::{CornerStyle, PathSeg, Point as GeoPoint, Radii, Rect, RoundedRect};
 use cupertino_theme::Typography;
-use tiny_skia::{BlendMode, Color, FillRule, FilterQuality, GradientStop, LineCap, LineJoin, LinearGradient, Paint, PathBuilder, Pattern, Pixmap, PixmapPaint, Point, RadialGradient, SpreadMode, Stroke, Transform};
+use tiny_skia::{
+    BlendMode, Color, FillRule, FilterQuality, GradientStop, LineCap, LineJoin, LinearGradient,
+    Paint, PathBuilder, Pattern, Pixmap, PixmapPaint, Point, RadialGradient, SpreadMode, Stroke,
+    Transform,
+};
 
 use crate::interrupt;
+use crate::layout::{
+    Layout, AVATAR_DIAMETER, HELP_SIZE, NAME_BASELINE_GAP, NAME_MAX_WIDTH, NAME_SIZE, PILL_HEIGHT,
+    PILL_WIDTH, USER_VIEW_BORDER,
+};
 use crate::panel::{wrap_width, Decision, Frames, Kind, COUNTDOWN_SECONDS, INFO_LINE, TITLE_LINE};
-use crate::layout::{Layout, AVATAR_DIAMETER, HELP_SIZE, NAME_BASELINE_GAP, NAME_MAX_WIDTH, NAME_SIZE, PILL_HEIGHT, PILL_WIDTH, USER_VIEW_BORDER};
 use crate::picker::{Grid, Tile};
 use crate::power::Action;
 use crate::spinner;
@@ -31,7 +38,10 @@ const VIGNETTE: f32 = 0.2;
 /// (approximate: the design shows the user's picture, which this process has no way to ask for yet).
 const WALLPAPER_BASE: [[f32; 3]; 2] = [[0.07, 0.09, 0.20], [0.20, 0.09, 0.27]];
 /// Centre in the unit square, falloff `k` of `exp(-k r^2)` with `r` in heights, and colour of each blob.
-const WALLPAPER_BLOBS: [([f32; 2], f32, [f32; 3]); 2] = [([0.22, 0.30], 9.0, [0.10, 0.30, 0.58]), ([0.80, 0.68], 7.0, [0.50, 0.16, 0.42])];
+const WALLPAPER_BLOBS: [([f32; 2], f32, [f32; 3]); 2] = [
+    ([0.22, 0.30], 9.0, [0.10, 0.30, 0.58]),
+    ([0.80, 0.68], 7.0, [0.50, 0.16, 0.42]),
+];
 /// Strength of a blob at its centre.
 const BLOB_STRENGTH: f32 = 0.85;
 
@@ -89,7 +99,18 @@ const CAPS_STRETCH_REFERENCE: f64 = 17.0;
 const CAPS_STRETCH_MAX: f64 = 1.2;
 /// The up arrow over a bar that is cut out of the badge, in badge units (approximate: gives the glyph's path
 /// constants but not their order, so the shape is ours).
-const CAPS_GLYPH: [&[(f64, f64)]; 2] = [&[(8.0, 3.0), (12.5, 8.5), (10.0, 8.5), (10.0, 11.0), (6.0, 11.0), (6.0, 8.5), (3.5, 8.5)], &[(5.5, 12.5), (10.5, 12.5), (10.5, 14.0), (5.5, 14.0)]];
+const CAPS_GLYPH: [&[(f64, f64)]; 2] = [
+    &[
+        (8.0, 3.0),
+        (12.5, 8.5),
+        (10.0, 8.5),
+        (10.0, 11.0),
+        (6.0, 11.0),
+        (6.0, 8.5),
+        (3.5, 8.5),
+    ],
+    &[(5.5, 12.5), (10.5, 12.5), (10.5, 14.0), (5.5, 14.0)],
+];
 /// Edge of the spinner square in the field (approximate: the small control's intrinsic size is a toolkit metric not in
 /// the payload we read, the 18 pt slot minus a point on each side).
 const SPINNER_SIZE: f64 = 16.0;
@@ -199,7 +220,12 @@ pub struct Renderer {
 impl Renderer {
     pub fn new(typography: &Typography, assets: &Assets) -> Result<Self, AssetError> {
         let metrics = &typography.metrics;
-        Ok(Renderer { text: TextRenderer::new(assets, FontRole::Ui)?, descent_per_em: metrics.descender.abs() / metrics.units_per_em, cap_height_per_em: metrics.cap_height / metrics.units_per_em, wallpapers: HashMap::new() })
+        Ok(Renderer {
+            text: TextRenderer::new(assets, FontRole::Ui)?,
+            descent_per_em: metrics.descender.abs() / metrics.units_per_em,
+            cap_height_per_em: metrics.cap_height / metrics.units_per_em,
+            wallpapers: HashMap::new(),
+        })
     }
 
     /// The layout of an output of `width` x `height` points in this renderer's font.
@@ -209,14 +235,43 @@ impl Renderer {
 
     /// The wallpaper over the whole of `pixmap`, then what `draw` puts on a layer above it, which is blended with
     /// `opacity`.
-    fn compose(&mut self, pixmap: &mut Pixmap, scale: f32, opacity: f64, draw: impl FnOnce(&mut Self, &mut Canvas, &Layout)) {
+    fn compose(
+        &mut self,
+        pixmap: &mut Pixmap,
+        scale: f32,
+        opacity: f64,
+        draw: impl FnOnce(&mut Self, &mut Canvas, &Layout),
+    ) {
         let (width, height) = (pixmap.width(), pixmap.height());
-        let wallpaper = self.wallpapers.entry((width, height)).or_insert_with(|| wallpaper(width, height));
-        pixmap.draw_pixmap(0, 0, wallpaper.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
+        let wallpaper = self
+            .wallpapers
+            .entry((width, height))
+            .or_insert_with(|| wallpaper(width, height));
+        pixmap.draw_pixmap(
+            0,
+            0,
+            wallpaper.as_ref(),
+            &PixmapPaint::default(),
+            Transform::identity(),
+            None,
+        );
         let mut layer = Pixmap::new(width, height).expect("the surface has a size");
-        let layout = self.layout(f64::from(width) / f64::from(scale), f64::from(height) / f64::from(scale));
-        draw(self, &mut Canvas { pixmap: &mut layer, scale: f64::from(scale) }, &layout);
-        let paint = PixmapPaint { opacity: opacity as f32, ..PixmapPaint::default() };
+        let layout = self.layout(
+            f64::from(width) / f64::from(scale),
+            f64::from(height) / f64::from(scale),
+        );
+        draw(
+            self,
+            &mut Canvas {
+                pixmap: &mut layer,
+                scale: f64::from(scale),
+            },
+            &layout,
+        );
+        let paint = PixmapPaint {
+            opacity: opacity as f32,
+            ..PixmapPaint::default()
+        };
         pixmap.draw_pixmap(0, 0, layer.as_ref(), &paint, Transform::identity(), None);
     }
 
@@ -225,13 +280,25 @@ impl Renderer {
         self.compose(pixmap, scale, view.opacity, |this, canvas, layout| {
             this.draw_clock(canvas, view.date, view.time, layout);
             match view.user {
-                Some(user) => this.draw_user(canvas, user, layout.avatar.center(), layout.name_baseline),
+                Some(user) => {
+                    this.draw_user(canvas, user, layout.avatar.center(), layout.name_baseline)
+                }
                 None => this.draw_other(canvas, layout.avatar.center(), layout.name_baseline),
             }
             this.draw_field(canvas, view, layout);
             if view.help {
-                let max_width = NOTICE_MAX_WIDTH.min(f64::from(canvas.pixmap.width()) / canvas.scale - 40.0);
-                this.centered_text(canvas, PASSWORD_HELP, layout.center_x, layout.help_baseline, HELP_SIZE, WEIGHT_MEDIUM, max_width, with_alpha(WHITE, NOTICE_ALPHA));
+                let max_width =
+                    NOTICE_MAX_WIDTH.min(f64::from(canvas.pixmap.width()) / canvas.scale - 40.0);
+                this.centered_text(
+                    canvas,
+                    PASSWORD_HELP,
+                    layout.center_x,
+                    layout.help_baseline,
+                    HELP_SIZE,
+                    WEIGHT_MEDIUM,
+                    max_width,
+                    with_alpha(WHITE, NOTICE_ALPHA),
+                );
             }
             if let Some(power) = view.power {
                 this.draw_power(canvas, power, layout);
@@ -243,7 +310,12 @@ impl Renderer {
     pub fn render_picker(&mut self, view: &PickerView<'_>, pixmap: &mut Pixmap, scale: f32) {
         self.compose(pixmap, scale, 1.0, |this, canvas, layout| {
             this.draw_clock(canvas, view.date, view.time, layout);
-            for (i, (tile, frame)) in view.tiles.iter().zip(layout.tiles(view.grid, view.tiles.len())).enumerate() {
+            for (i, (tile, frame)) in view
+                .tiles
+                .iter()
+                .zip(layout.tiles(view.grid, view.tiles.len()))
+                .enumerate()
+            {
                 this.draw_tile(canvas, tile, frame, i == view.selected);
             }
             if let Some(power) = view.power {
@@ -257,8 +329,17 @@ impl Renderer {
     pub fn panel_frames(&mut self, kind: Kind) -> Frames {
         let text = kind.text();
         let wrap = wrap_width(kind);
-        let title_lines = self.wrap(text.title, PANEL_TITLE_SIZE, WEIGHT_SEMIBOLD, wrap).len();
-        let info_lines = (0..=COUNTDOWN_SECONDS as u32).filter_map(|seconds| kind.countdown_message(seconds)).map(|message| self.wrap(&message, PANEL_MESSAGE_SIZE, WEIGHT_MEDIUM, wrap).len()).max().unwrap_or(0);
+        let title_lines = self
+            .wrap(text.title, PANEL_TITLE_SIZE, WEIGHT_SEMIBOLD, wrap)
+            .len();
+        let info_lines = (0..=COUNTDOWN_SECONDS as u32)
+            .filter_map(|seconds| kind.countdown_message(seconds))
+            .map(|message| {
+                self.wrap(&message, PANEL_MESSAGE_SIZE, WEIGHT_MEDIUM, wrap)
+                    .len()
+            })
+            .max()
+            .unwrap_or(0);
         kind.frames(title_lines as u32, info_lines as u32)
     }
 
@@ -266,83 +347,237 @@ impl Renderer {
     pub fn render_panel(&mut self, view: &PanelView, pixmap: &mut Pixmap, scale: f32) {
         let frames = &view.frames;
         let text = view.kind.text();
-        let mut canvas = Canvas { pixmap, scale: f64::from(scale) };
+        let mut canvas = Canvas {
+            pixmap,
+            scale: f64::from(scale),
+        };
         let body = Rect::new(0.0, 0.0, frames.width, frames.height);
         canvas.rounded(body, PANEL_RADIUS, PANEL_FILL);
         canvas.rounded_edge(body, PANEL_RADIUS, [1.0, 1.0, 1.0, PANEL_EDGE_ALPHA]);
         let icon = frames.icon.center();
         canvas.circle(icon.x, icon.y, frames.icon.width() / 2.0, AVATAR_FILL);
-        self.wrapped_text(&mut canvas, text.title, frames.title, PANEL_TITLE_BASELINE, TITLE_LINE, PANEL_TITLE_SIZE, WEIGHT_SEMIBOLD, WHITE);
-        if let (Some(info), Some(message)) = (frames.info, view.seconds_left.and_then(|seconds| view.kind.countdown_message(seconds))) {
-            self.wrapped_text(&mut canvas, &message, info, PANEL_MESSAGE_BASELINE, INFO_LINE, PANEL_MESSAGE_SIZE, WEIGHT_MEDIUM, with_alpha(WHITE, PANEL_MESSAGE_ALPHA));
+        self.wrapped_text(
+            &mut canvas,
+            text.title,
+            frames.title,
+            PANEL_TITLE_BASELINE,
+            TITLE_LINE,
+            PANEL_TITLE_SIZE,
+            WEIGHT_SEMIBOLD,
+            WHITE,
+        );
+        if let (Some(info), Some(message)) = (
+            frames.info,
+            view.seconds_left
+                .and_then(|seconds| view.kind.countdown_message(seconds)),
+        ) {
+            self.wrapped_text(
+                &mut canvas,
+                &message,
+                info,
+                PANEL_MESSAGE_BASELINE,
+                INFO_LINE,
+                PANEL_MESSAGE_SIZE,
+                WEIGHT_MEDIUM,
+                with_alpha(WHITE, PANEL_MESSAGE_ALPHA),
+            );
         }
         for button in &frames.buttons {
-            let fill = if button.decision == Decision::Do(view.kind.default_action()) { DEFAULT_BUTTON_FILL } else { PILL_FILL };
+            let fill = if button.decision == Decision::Do(view.kind.default_action()) {
+                DEFAULT_BUTTON_FILL
+            } else {
+                PILL_FILL
+            };
             canvas.rounded(button.frame, BUTTON_RADIUS, fill);
             let center = button.frame.center();
             let baseline = center.y + self.cap_height_per_em * BUTTON_SIZE / 2.0;
-            self.centered_text(&mut canvas, button.label, center.x, baseline, BUTTON_SIZE, WEIGHT_MEDIUM, button.frame.width(), WHITE);
+            self.centered_text(
+                &mut canvas,
+                button.label,
+                center.x,
+                baseline,
+                BUTTON_SIZE,
+                WEIGHT_MEDIUM,
+                button.frame.width(),
+                WHITE,
+            );
         }
     }
 
     /// Draw the interrupt panel for the application `app` over the whole of `pixmap`, a surface of
     /// [`interrupt::WIDTH`] x [`interrupt::HEIGHT`] points at `scale` device pixels per point. No button is the default.
-    pub fn render_interrupt(&mut self, app: &str, frames: &interrupt::Frames, pixmap: &mut Pixmap, scale: f32) {
-        let mut canvas = Canvas { pixmap, scale: f64::from(scale) };
+    pub fn render_interrupt(
+        &mut self,
+        app: &str,
+        frames: &interrupt::Frames,
+        pixmap: &mut Pixmap,
+        scale: f32,
+    ) {
+        let mut canvas = Canvas {
+            pixmap,
+            scale: f64::from(scale),
+        };
         let body = Rect::new(0.0, 0.0, interrupt::WIDTH, interrupt::HEIGHT);
         canvas.rounded(body, PANEL_RADIUS, PANEL_FILL);
         canvas.rounded_edge(body, PANEL_RADIUS, [1.0, 1.0, 1.0, PANEL_EDGE_ALPHA]);
         let icon = frames.icon.center();
         canvas.circle(icon.x, icon.y, frames.icon.width() / 2.0, AVATAR_FILL);
-        self.wrapped_text(&mut canvas, &interrupt::title(app), frames.title, PANEL_TITLE_BASELINE, TITLE_LINE, interrupt::TITLE_SIZE, WEIGHT_SEMIBOLD, WHITE);
-        self.wrapped_text(&mut canvas, &interrupt::info(app), frames.info, interrupt::INFO_SIZE, INFO_LINE, interrupt::INFO_SIZE, WEIGHT_MEDIUM, with_alpha(WHITE, PANEL_MESSAGE_ALPHA));
+        self.wrapped_text(
+            &mut canvas,
+            &interrupt::title(app),
+            frames.title,
+            PANEL_TITLE_BASELINE,
+            TITLE_LINE,
+            interrupt::TITLE_SIZE,
+            WEIGHT_SEMIBOLD,
+            WHITE,
+        );
+        self.wrapped_text(
+            &mut canvas,
+            &interrupt::info(app),
+            frames.info,
+            interrupt::INFO_SIZE,
+            INFO_LINE,
+            interrupt::INFO_SIZE,
+            WEIGHT_MEDIUM,
+            with_alpha(WHITE, PANEL_MESSAGE_ALPHA),
+        );
         for button in &frames.buttons {
             canvas.rounded(button.frame, BUTTON_RADIUS, PILL_FILL);
             let center = button.frame.center();
             let baseline = center.y + self.cap_height_per_em * BUTTON_SIZE / 2.0;
-            self.centered_text(&mut canvas, button.label, center.x, baseline, BUTTON_SIZE, WEIGHT_MEDIUM, button.frame.width(), WHITE);
+            self.centered_text(
+                &mut canvas,
+                button.label,
+                center.x,
+                baseline,
+                BUTTON_SIZE,
+                WEIGHT_MEDIUM,
+                button.frame.width(),
+                WHITE,
+            );
         }
     }
 
     fn draw_clock(&mut self, canvas: &mut Canvas, date: &str, time: &str, layout: &Layout) {
-        self.centered_text(canvas, date, layout.center_x, layout.date_baseline, layout.date_size, WEIGHT_MEDIUM, f64::INFINITY, WHITE);
-        self.centered_text(canvas, time, layout.center_x, layout.time_baseline, layout.time_size, WEIGHT_SEMIBOLD, f64::INFINITY, WHITE);
+        self.centered_text(
+            canvas,
+            date,
+            layout.center_x,
+            layout.date_baseline,
+            layout.date_size,
+            WEIGHT_MEDIUM,
+            f64::INFINITY,
+            WHITE,
+        );
+        self.centered_text(
+            canvas,
+            time,
+            layout.center_x,
+            layout.time_baseline,
+            layout.time_size,
+            WEIGHT_SEMIBOLD,
+            f64::INFINITY,
+            WHITE,
+        );
     }
 
     /// The avatar centred on `center` with the user's name on `name_baseline` below it.
-    fn draw_user(&mut self, canvas: &mut Canvas, user: &User, center: GeoPoint, name_baseline: f64) {
-        self.draw_avatar(canvas, center, |this, canvas, center, radius| match &user.picture {
-            Some(picture) => canvas.picture(picture, center.x, center.y, radius),
-            None => {
-                canvas.circle(center.x, center.y, radius, AVATAR_FILL);
-                this.draw_initials(canvas, &crate::user::initials(&user.display), center, radius);
+    fn draw_user(
+        &mut self,
+        canvas: &mut Canvas,
+        user: &User,
+        center: GeoPoint,
+        name_baseline: f64,
+    ) {
+        self.draw_avatar(canvas, center, |this, canvas, center, radius| {
+            match &user.picture {
+                Some(picture) => canvas.picture(picture, center.x, center.y, radius),
+                None => {
+                    canvas.circle(center.x, center.y, radius, AVATAR_FILL);
+                    this.draw_initials(
+                        canvas,
+                        &crate::user::initials(&user.display),
+                        center,
+                        radius,
+                    );
+                }
             }
         });
-        self.centered_text(canvas, &user.display, center.x, name_baseline, NAME_SIZE, WEIGHT_MEDIUM, NAME_MAX_WIDTH, WHITE);
+        self.centered_text(
+            canvas,
+            &user.display,
+            center.x,
+            name_baseline,
+            NAME_SIZE,
+            WEIGHT_MEDIUM,
+            NAME_MAX_WIDTH,
+            WHITE,
+        );
     }
 
     /// The halo and ring of an avatar with `fill` drawn between them.
-    fn draw_avatar(&mut self, canvas: &mut Canvas, center: GeoPoint, fill: impl FnOnce(&mut Self, &mut Canvas, GeoPoint, f64)) {
+    fn draw_avatar(
+        &mut self,
+        canvas: &mut Canvas,
+        center: GeoPoint,
+        fill: impl FnOnce(&mut Self, &mut Canvas, GeoPoint, f64),
+    ) {
         let radius = AVATAR_DIAMETER / 2.0;
-        canvas.halo(center.x, center.y, radius, AVATAR_SHADOW_RADIUS, AVATAR_SHADOW_OPACITY);
+        canvas.halo(
+            center.x,
+            center.y,
+            radius,
+            AVATAR_SHADOW_RADIUS,
+            AVATAR_SHADOW_OPACITY,
+        );
         fill(self, canvas, center, radius);
-        canvas.ring(center.x, center.y, radius - RING_WIDTH / 2.0, RING_WIDTH, [1.0, 1.0, 1.0, RING_ALPHA]);
+        canvas.ring(
+            center.x,
+            center.y,
+            radius - RING_WIDTH / 2.0,
+            RING_WIDTH,
+            [1.0, 1.0, 1.0, RING_ALPHA],
+        );
     }
 
-    fn draw_initials(&mut self, canvas: &mut Canvas, initials: &str, center: GeoPoint, radius: f64) {
+    fn draw_initials(
+        &mut self,
+        canvas: &mut Canvas,
+        initials: &str,
+        center: GeoPoint,
+        radius: f64,
+    ) {
         let size = AVATAR_DIAMETER * INITIALS_SIZE;
         let baseline = center.y + self.cap_height_per_em * size / 2.0;
-        self.centered_text(canvas, initials, center.x, baseline, size, WEIGHT_MEDIUM, radius * 2.0, WHITE);
+        self.centered_text(
+            canvas,
+            initials,
+            center.x,
+            baseline,
+            size,
+            WEIGHT_MEDIUM,
+            radius * 2.0,
+            WHITE,
+        );
     }
 
     /// One tile of the picker in its `frame`: the avatar and name as on the password screen, and behind the avatar
     /// a rounded square when the tile is selected.
     fn draw_tile(&mut self, canvas: &mut Canvas, tile: &Tile, frame: Rect, selected: bool) {
-        let center = GeoPoint::new(frame.center().x, frame.y() + USER_VIEW_BORDER + AVATAR_DIAMETER / 2.0);
-        let name_baseline = frame.y() + 2.0 * USER_VIEW_BORDER + AVATAR_DIAMETER + NAME_BASELINE_GAP;
+        let center = GeoPoint::new(
+            frame.center().x,
+            frame.y() + USER_VIEW_BORDER + AVATAR_DIAMETER / 2.0,
+        );
+        let name_baseline =
+            frame.y() + 2.0 * USER_VIEW_BORDER + AVATAR_DIAMETER + NAME_BASELINE_GAP;
         if selected {
             let side = SELECTION_SIZE;
-            canvas.rounded(Rect::new(center.x - side / 2.0, center.y - side / 2.0, side, side), SELECTION_RADIUS, SELECTION_FILL);
+            canvas.rounded(
+                Rect::new(center.x - side / 2.0, center.y - side / 2.0, side, side),
+                SELECTION_RADIUS,
+                SELECTION_FILL,
+            );
         }
         match tile {
             Tile::Account(user) => {
@@ -369,7 +604,16 @@ impl Renderer {
                 canvas.rounded(row, BUTTON_RADIUS, DEFAULT_BUTTON_FILL);
             }
             let baseline = row.center().y + self.cap_height_per_em * BUTTON_SIZE / 2.0;
-            self.left_text(canvas, action.title(power.will_prompt), row.x() + MENU_TEXT_INSET, baseline, BUTTON_SIZE, WEIGHT_MEDIUM, row.width() - 2.0 * MENU_TEXT_INSET, WHITE);
+            self.left_text(
+                canvas,
+                action.title(power.will_prompt),
+                row.x() + MENU_TEXT_INSET,
+                baseline,
+                BUTTON_SIZE,
+                WEIGHT_MEDIUM,
+                row.width() - 2.0 * MENU_TEXT_INSET,
+                WHITE,
+            );
         }
     }
 
@@ -379,49 +623,137 @@ impl Renderer {
             canvas.circle(center.x, center.y, radius, AVATAR_FILL);
             this.draw_initials(canvas, OTHER_GLYPH, center, radius);
         });
-        self.centered_text(canvas, OTHER_LABEL, center.x, name_baseline, NAME_SIZE, WEIGHT_MEDIUM, NAME_MAX_WIDTH, WHITE);
+        self.centered_text(
+            canvas,
+            OTHER_LABEL,
+            center.x,
+            name_baseline,
+            NAME_SIZE,
+            WEIGHT_MEDIUM,
+            NAME_MAX_WIDTH,
+            WHITE,
+        );
     }
 
     fn draw_field(&mut self, canvas: &mut Canvas, view: &View<'_>, layout: &Layout) {
-        let pill = Rect::new(layout.pill.x() + view.shake, layout.pill.y(), PILL_WIDTH, PILL_HEIGHT);
+        let pill = Rect::new(
+            layout.pill.x() + view.shake,
+            layout.pill.y(),
+            PILL_WIDTH,
+            PILL_HEIGHT,
+        );
         canvas.pill(pill, PILL_FILL);
         let center = pill.center();
         let baseline = center.y + self.cap_height_per_em * FIELD_SIZE / 2.0;
         match view.field {
-            Field::Password(0) => self.centered_text(canvas, PLACEHOLDER, center.x, baseline, FIELD_SIZE, WEIGHT_MEDIUM, PILL_WIDTH - 2.0 * PILL_PADDING, with_alpha(WHITE, PLACEHOLDER_ALPHA)),
+            Field::Password(0) => self.centered_text(
+                canvas,
+                PLACEHOLDER,
+                center.x,
+                baseline,
+                FIELD_SIZE,
+                WEIGHT_MEDIUM,
+                PILL_WIDTH - 2.0 * PILL_PADDING,
+                with_alpha(WHITE, PLACEHOLDER_ALPHA),
+            ),
             Field::Password(len) => {
                 // the same room on both sides, so the dots stay centred and clear of the badge's slot
-                let capacity = ((PILL_WIDTH - 2.0 * PILL_PADDING.max(CAPS_SLOT_WIDTH)) / DOT_PITCH).floor() as usize;
+                let capacity = ((PILL_WIDTH - 2.0 * PILL_PADDING.max(CAPS_SLOT_WIDTH)) / DOT_PITCH)
+                    .floor() as usize;
                 let shown = len.min(capacity);
-                let left = center.x - (shown as f64 * DOT_PITCH - (DOT_PITCH - DOT_DIAMETER)) / 2.0 + DOT_DIAMETER / 2.0;
+                let left = center.x - (shown as f64 * DOT_PITCH - (DOT_PITCH - DOT_DIAMETER)) / 2.0
+                    + DOT_DIAMETER / 2.0;
                 for i in 0..shown {
-                    canvas.circle(left + i as f64 * DOT_PITCH, center.y, DOT_DIAMETER / 2.0, WHITE);
+                    canvas.circle(
+                        left + i as f64 * DOT_PITCH,
+                        center.y,
+                        DOT_DIAMETER / 2.0,
+                        WHITE,
+                    );
                 }
             }
-            Field::Name("") => self.centered_text(canvas, NAME_PLACEHOLDER, center.x, baseline, FIELD_SIZE, WEIGHT_MEDIUM, PILL_WIDTH - 2.0 * PILL_PADDING, with_alpha(WHITE, PLACEHOLDER_ALPHA)),
-            Field::Name(text) => self.centered_text(canvas, text, center.x, baseline, FIELD_SIZE, WEIGHT_MEDIUM, PILL_WIDTH - 2.0 * PILL_PADDING, WHITE),
+            Field::Name("") => self.centered_text(
+                canvas,
+                NAME_PLACEHOLDER,
+                center.x,
+                baseline,
+                FIELD_SIZE,
+                WEIGHT_MEDIUM,
+                PILL_WIDTH - 2.0 * PILL_PADDING,
+                with_alpha(WHITE, PLACEHOLDER_ALPHA),
+            ),
+            Field::Name(text) => self.centered_text(
+                canvas,
+                text,
+                center.x,
+                baseline,
+                FIELD_SIZE,
+                WEIGHT_MEDIUM,
+                PILL_WIDTH - 2.0 * PILL_PADDING,
+                WHITE,
+            ),
         }
         // one accessory at a time in the slot, as the design stacks them from the trailing edge
         if let Some(frame) = view.spinner {
-            canvas.spinner(pill.x() + PILL_WIDTH - CAPS_SLOT_WIDTH / 2.0, center.y, SPINNER_SIZE, frame);
+            canvas.spinner(
+                pill.x() + PILL_WIDTH - CAPS_SLOT_WIDTH / 2.0,
+                center.y,
+                SPINNER_SIZE,
+                frame,
+            );
         } else if view.caps_lock {
             canvas.caps_badge(pill.x() + PILL_WIDTH, center.y, caps_stretch(PILL_HEIGHT));
         }
         if let Some(notice) = view.notice {
-            let max_width = NOTICE_MAX_WIDTH.min(f64::from(canvas.pixmap.width()) / canvas.scale - 40.0);
-            self.centered_text(canvas, notice, layout.center_x, layout.notice_baseline, FIELD_SIZE, WEIGHT_MEDIUM, max_width, with_alpha(WHITE, NOTICE_ALPHA));
+            let max_width =
+                NOTICE_MAX_WIDTH.min(f64::from(canvas.pixmap.width()) / canvas.scale - 40.0);
+            self.centered_text(
+                canvas,
+                notice,
+                layout.center_x,
+                layout.notice_baseline,
+                FIELD_SIZE,
+                WEIGHT_MEDIUM,
+                max_width,
+                with_alpha(WHITE, NOTICE_ALPHA),
+            );
         }
     }
 
     /// `text` starting at `left` (points), shortened with an ellipsis to fit `max_width`.
     #[allow(clippy::too_many_arguments)]
-    fn left_text(&mut self, canvas: &mut Canvas, text: &str, left: f64, baseline: f64, size: f64, weight: u16, max_width: f64, color: Rgba) {
+    fn left_text(
+        &mut self,
+        canvas: &mut Canvas,
+        text: &str,
+        left: f64,
+        baseline: f64,
+        size: f64,
+        weight: u16,
+        max_width: f64,
+        color: Rgba,
+    ) {
         let scale = canvas.scale as f32;
         let weight = self.text.effective_weight(weight);
         let size_px = size as f32 * scale;
         self.text.set_scale(scale);
-        let (fitted, _) = self.text.fit(text, size_px, weight, 0.0, (max_width * canvas.scale) as f32);
-        self.text.draw(canvas.pixmap, &fitted, (left * canvas.scale) as f32, (baseline * canvas.scale) as f32, size_px, weight, 0.0, color);
+        let (fitted, _) = self.text.fit(
+            text,
+            size_px,
+            weight,
+            0.0,
+            (max_width * canvas.scale) as f32,
+        );
+        self.text.draw(
+            canvas.pixmap,
+            &fitted,
+            (left * canvas.scale) as f32,
+            (baseline * canvas.scale) as f32,
+            size_px,
+            weight,
+            0.0,
+            color,
+        );
     }
 
     /// `text` broken at spaces into lines of at most `max_width` points (a single longer word stays on a line of its own),
@@ -432,7 +764,12 @@ impl Renderer {
         let mut lines: Vec<String> = Vec::new();
         for word in text.split(' ') {
             match lines.last_mut() {
-                Some(line) if self.text.measure(&format!("{line} {word}"), size as f32, measured, 0.0) <= max_width as f32 => {
+                Some(line)
+                    if self
+                        .text
+                        .measure(&format!("{line} {word}"), size as f32, measured, 0.0)
+                        <= max_width as f32 =>
+                {
                     line.push(' ');
                     line.push_str(word);
                 }
@@ -445,22 +782,70 @@ impl Renderer {
     /// `text` wrapped to the width of `frame`, the first line's baseline `first_baseline` below the frame's top and each next
     /// `line_height` below (a line that still does not fit is shortened with an ellipsis).
     #[allow(clippy::too_many_arguments)]
-    fn wrapped_text(&mut self, canvas: &mut Canvas, text: &str, frame: Rect, first_baseline: f64, line_height: f64, size: f64, weight: u16, color: Rgba) {
-        for (i, line) in self.wrap(text, size, weight, frame.width()).iter().enumerate() {
-            self.left_text(canvas, line, frame.x(), frame.y() + first_baseline + i as f64 * line_height, size, weight, frame.width(), color);
+    fn wrapped_text(
+        &mut self,
+        canvas: &mut Canvas,
+        text: &str,
+        frame: Rect,
+        first_baseline: f64,
+        line_height: f64,
+        size: f64,
+        weight: u16,
+        color: Rgba,
+    ) {
+        for (i, line) in self
+            .wrap(text, size, weight, frame.width())
+            .iter()
+            .enumerate()
+        {
+            self.left_text(
+                canvas,
+                line,
+                frame.x(),
+                frame.y() + first_baseline + i as f64 * line_height,
+                size,
+                weight,
+                frame.width(),
+                color,
+            );
         }
     }
 
     /// `text` centred on `center_x` (points), shortened with an ellipsis to fit `max_width`.
     #[allow(clippy::too_many_arguments)]
-    fn centered_text(&mut self, canvas: &mut Canvas, text: &str, center_x: f64, baseline: f64, size: f64, weight: u16, max_width: f64, color: Rgba) {
+    fn centered_text(
+        &mut self,
+        canvas: &mut Canvas,
+        text: &str,
+        center_x: f64,
+        baseline: f64,
+        size: f64,
+        weight: u16,
+        max_width: f64,
+        color: Rgba,
+    ) {
         let scale = canvas.scale as f32;
         let weight = self.text.effective_weight(weight);
         let size_px = size as f32 * scale;
         self.text.set_scale(scale);
-        let (fitted, width_px) = self.text.fit(text, size_px, weight, 0.0, (max_width * canvas.scale) as f32);
+        let (fitted, width_px) = self.text.fit(
+            text,
+            size_px,
+            weight,
+            0.0,
+            (max_width * canvas.scale) as f32,
+        );
         let x = (center_x * canvas.scale) as f32 - width_px / 2.0;
-        self.text.draw(canvas.pixmap, &fitted, x, (baseline * canvas.scale) as f32, size_px, weight, 0.0, color);
+        self.text.draw(
+            canvas.pixmap,
+            &fitted,
+            x,
+            (baseline * canvas.scale) as f32,
+            size_px,
+            weight,
+            0.0,
+            color,
+        );
     }
 }
 
@@ -478,11 +863,19 @@ fn color(rgba: Rgba) -> Color {
 }
 
 fn paint(shader: tiny_skia::Shader<'_>, blend_mode: BlendMode) -> Paint<'_> {
-    Paint { shader, blend_mode, anti_alias: true, ..Paint::default() }
+    Paint {
+        shader,
+        blend_mode,
+        anti_alias: true,
+        ..Paint::default()
+    }
 }
 
 fn solid(rgba: Rgba) -> Paint<'static> {
-    paint(tiny_skia::Shader::SolidColor(color(rgba)), BlendMode::SourceOver)
+    paint(
+        tiny_skia::Shader::SolidColor(color(rgba)),
+        BlendMode::SourceOver,
+    )
 }
 
 /// The procedural wallpaper with the lock screen's treatment on top: a darkening, a lightening and a
@@ -491,14 +884,31 @@ fn wallpaper(width: u32, height: u32) -> Pixmap {
     let mut pixmap = Pixmap::new(width, height).expect("the surface has a size");
     let (w, h) = (width as f32, height as f32);
     let whole = tiny_skia::Rect::from_xywh(0.0, 0.0, w, h).expect("the surface has a size");
-    let rgb = |c: [f32; 3], alpha: f32| Color::from_rgba(c[0], c[1], c[2], alpha).expect("components are within 0 to 1");
+    let rgb = |c: [f32; 3], alpha: f32| {
+        Color::from_rgba(c[0], c[1], c[2], alpha).expect("components are within 0 to 1")
+    };
 
     // diagonal gradient: 0.45 u + 0.55 v in the unit square
     let (a, b) = (0.45f32, 0.55f32);
     let end = Point::from_xy(a / (a * a + b * b), b / (a * a + b * b));
-    let stops = vec![GradientStop::new(0.0, rgb(WALLPAPER_BASE[0], 1.0)), GradientStop::new(1.0, rgb(WALLPAPER_BASE[1], 1.0))];
-    let base = LinearGradient::new(Point::from_xy(0.0, 0.0), end, stops, SpreadMode::Pad, Transform::from_scale(w, h)).expect("the gradient has distinct ends");
-    pixmap.fill_rect(whole, &paint(base, BlendMode::Source), Transform::identity(), None);
+    let stops = vec![
+        GradientStop::new(0.0, rgb(WALLPAPER_BASE[0], 1.0)),
+        GradientStop::new(1.0, rgb(WALLPAPER_BASE[1], 1.0)),
+    ];
+    let base = LinearGradient::new(
+        Point::from_xy(0.0, 0.0),
+        end,
+        stops,
+        SpreadMode::Pad,
+        Transform::from_scale(w, h),
+    )
+    .expect("the gradient has distinct ends");
+    pixmap.fill_rect(
+        whole,
+        &paint(base, BlendMode::Source),
+        Transform::identity(),
+        None,
+    );
 
     for (center, k, blob_color) in WALLPAPER_BLOBS {
         // sample exp(-k r^2) until it is nearly gone; r is in heights
@@ -506,21 +916,58 @@ fn wallpaper(width: u32, height: u32) -> Pixmap {
         let stops = (0..=6)
             .map(|i| {
                 let t = i as f32 / 6.0;
-                GradientStop::new(t, rgb(blob_color, BLOB_STRENGTH * (-k * (t * reach).powi(2)).exp()))
+                GradientStop::new(
+                    t,
+                    rgb(blob_color, BLOB_STRENGTH * (-k * (t * reach).powi(2)).exp()),
+                )
             })
             .collect();
         let middle = Point::from_xy(center[0] * w, center[1] * h);
-        let shader = RadialGradient::new(middle, middle, reach * h, stops, SpreadMode::Pad, Transform::identity()).expect("the blob has a radius");
-        pixmap.fill_rect(whole, &paint(shader, BlendMode::SourceOver), Transform::identity(), None);
+        let shader = RadialGradient::new(
+            middle,
+            middle,
+            reach * h,
+            stops,
+            SpreadMode::Pad,
+            Transform::identity(),
+        )
+        .expect("the blob has a radius");
+        pixmap.fill_rect(
+            whole,
+            &paint(shader, BlendMode::SourceOver),
+            Transform::identity(),
+            None,
+        );
     }
 
     for alpha in [DARKEN, LIGHTEN] {
-        pixmap.fill_rect(whole, &solid([0.0, 0.0, 0.0, alpha]), Transform::identity(), None);
+        pixmap.fill_rect(
+            whole,
+            &solid([0.0, 0.0, 0.0, alpha]),
+            Transform::identity(),
+            None,
+        );
     }
     let middle = Point::from_xy(w / 2.0, h / 2.0);
-    let stops = vec![GradientStop::new(0.0, rgb([0.0; 3], VIGNETTE)), GradientStop::new(1.0, rgb([0.0; 3], 0.0))];
-    let vignette = RadialGradient::new(middle, middle, w.hypot(h) / 2.0, stops, SpreadMode::Pad, Transform::identity()).expect("the vignette has a radius");
-    pixmap.fill_rect(whole, &paint(vignette, BlendMode::Darken), Transform::identity(), None);
+    let stops = vec![
+        GradientStop::new(0.0, rgb([0.0; 3], VIGNETTE)),
+        GradientStop::new(1.0, rgb([0.0; 3], 0.0)),
+    ];
+    let vignette = RadialGradient::new(
+        middle,
+        middle,
+        w.hypot(h) / 2.0,
+        stops,
+        SpreadMode::Pad,
+        Transform::identity(),
+    )
+    .expect("the vignette has a radius");
+    pixmap.fill_rect(
+        whole,
+        &paint(vignette, BlendMode::Darken),
+        Transform::identity(),
+        None,
+    );
     pixmap
 }
 
@@ -536,24 +983,55 @@ impl Canvas<'_> {
     }
 
     fn circle(&mut self, x: f64, y: f64, radius: f64, rgba: Rgba) {
-        let path = PathBuilder::from_circle(self.px(x), self.px(y), self.px(radius)).expect("a circle has a radius");
-        self.pixmap.fill_path(&path, &solid(rgba), FillRule::Winding, Transform::identity(), None);
+        let path = PathBuilder::from_circle(self.px(x), self.px(y), self.px(radius))
+            .expect("a circle has a radius");
+        self.pixmap.fill_path(
+            &path,
+            &solid(rgba),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 
     fn ring(&mut self, x: f64, y: f64, radius: f64, width: f64, rgba: Rgba) {
-        let path = PathBuilder::from_circle(self.px(x), self.px(y), self.px(radius)).expect("a circle has a radius");
-        let stroke = Stroke { width: self.px(width), ..Stroke::default() };
-        self.pixmap.stroke_path(&path, &solid(rgba), &stroke, Transform::identity(), None);
+        let path = PathBuilder::from_circle(self.px(x), self.px(y), self.px(radius))
+            .expect("a circle has a radius");
+        let stroke = Stroke {
+            width: self.px(width),
+            ..Stroke::default()
+        };
+        self.pixmap
+            .stroke_path(&path, &solid(rgba), &stroke, Transform::identity(), None);
     }
 
     /// Black fading out over `extent` points beyond a circle of `radius`.
     fn halo(&mut self, x: f64, y: f64, radius: f64, extent: f64, opacity: f32) {
         let outer = radius + extent;
         let middle = Point::from_xy(self.px(x), self.px(y));
-        let stops = vec![GradientStop::new(0.0, color([0.0, 0.0, 0.0, opacity])), GradientStop::new((radius / outer) as f32, color([0.0, 0.0, 0.0, opacity])), GradientStop::new(1.0, color([0.0, 0.0, 0.0, 0.0]))];
-        let shader = RadialGradient::new(middle, middle, self.px(outer), stops, SpreadMode::Pad, Transform::identity()).expect("the halo has a radius");
-        let path = PathBuilder::from_circle(middle.x, middle.y, self.px(outer)).expect("a circle has a radius");
-        self.pixmap.fill_path(&path, &paint(shader, BlendMode::SourceOver), FillRule::Winding, Transform::identity(), None);
+        let stops = vec![
+            GradientStop::new(0.0, color([0.0, 0.0, 0.0, opacity])),
+            GradientStop::new((radius / outer) as f32, color([0.0, 0.0, 0.0, opacity])),
+            GradientStop::new(1.0, color([0.0, 0.0, 0.0, 0.0])),
+        ];
+        let shader = RadialGradient::new(
+            middle,
+            middle,
+            self.px(outer),
+            stops,
+            SpreadMode::Pad,
+            Transform::identity(),
+        )
+        .expect("the halo has a radius");
+        let path = PathBuilder::from_circle(middle.x, middle.y, self.px(outer))
+            .expect("a circle has a radius");
+        self.pixmap.fill_path(
+            &path,
+            &paint(shader, BlendMode::SourceOver),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 
     /// `picture` cropped to the middle square, scaled into the circle.
@@ -562,22 +1040,57 @@ impl Canvas<'_> {
         let k = self.px(radius * 2.0) / side;
         let left = self.px(x - radius) - (picture.width() as f32 - side) / 2.0 * k;
         let top = self.px(y - radius) - (picture.height() as f32 - side) / 2.0 * k;
-        let shader = Pattern::new(picture.as_ref(), SpreadMode::Pad, FilterQuality::Bilinear, 1.0, Transform::from_scale(k, k).post_translate(left, top));
-        let path = PathBuilder::from_circle(self.px(x), self.px(y), self.px(radius)).expect("a circle has a radius");
-        self.pixmap.fill_path(&path, &paint(shader, BlendMode::SourceOver), FillRule::Winding, Transform::identity(), None);
+        let shader = Pattern::new(
+            picture.as_ref(),
+            SpreadMode::Pad,
+            FilterQuality::Bilinear,
+            1.0,
+            Transform::from_scale(k, k).post_translate(left, top),
+        );
+        let path = PathBuilder::from_circle(self.px(x), self.px(y), self.px(radius))
+            .expect("a circle has a radius");
+        self.pixmap.fill_path(
+            &path,
+            &paint(shader, BlendMode::SourceOver),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 
     /// A rectangle with corners of `radius`.
     fn rounded(&mut self, rect: Rect, radius: f64, rgba: Rgba) {
-        let path = rounded_path(rect, Radii::uniform(radius), CornerStyle::Circular, self.scale).expect("the rectangle has a size");
-        self.pixmap.fill_path(&path, &solid(rgba), FillRule::Winding, Transform::identity(), None);
+        let path = rounded_path(
+            rect,
+            Radii::uniform(radius),
+            CornerStyle::Circular,
+            self.scale,
+        )
+        .expect("the rectangle has a size");
+        self.pixmap.fill_path(
+            &path,
+            &solid(rgba),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 
     /// A line of [`RING_WIDTH`] along the edge of a rectangle with corners of `radius`.
     fn rounded_edge(&mut self, rect: Rect, radius: f64, rgba: Rgba) {
-        let path = rounded_path(rect, Radii::uniform(radius), CornerStyle::Circular, self.scale).expect("the rectangle has a size");
-        let stroke = Stroke { width: self.px(RING_WIDTH), ..Stroke::default() };
-        self.pixmap.stroke_path(&path, &solid(rgba), &stroke, Transform::identity(), None);
+        let path = rounded_path(
+            rect,
+            Radii::uniform(radius),
+            CornerStyle::Circular,
+            self.scale,
+        )
+        .expect("the rectangle has a size");
+        let stroke = Stroke {
+            width: self.px(RING_WIDTH),
+            ..Stroke::default()
+        };
+        self.pixmap
+            .stroke_path(&path, &solid(rgba), &stroke, Transform::identity(), None);
     }
 
     /// The power glyph centred on (`x`, `y`): a ring open at the top with a bar through the gap, white, round caps.
@@ -585,20 +1098,40 @@ impl Canvas<'_> {
     fn logged_in_mark(&mut self, x: f64, y: f64) {
         self.circle(x, y, LOGGED_IN_RADIUS, LOGGED_IN_FILL);
         let mut check = PathBuilder::new();
-        check.move_to(self.px(x - LOGGED_IN_RADIUS * 0.45), self.px(y + LOGGED_IN_RADIUS * 0.02));
-        check.line_to(self.px(x - LOGGED_IN_RADIUS * 0.1), self.px(y + LOGGED_IN_RADIUS * 0.38));
-        check.line_to(self.px(x + LOGGED_IN_RADIUS * 0.5), self.px(y - LOGGED_IN_RADIUS * 0.35));
+        check.move_to(
+            self.px(x - LOGGED_IN_RADIUS * 0.45),
+            self.px(y + LOGGED_IN_RADIUS * 0.02),
+        );
+        check.line_to(
+            self.px(x - LOGGED_IN_RADIUS * 0.1),
+            self.px(y + LOGGED_IN_RADIUS * 0.38),
+        );
+        check.line_to(
+            self.px(x + LOGGED_IN_RADIUS * 0.5),
+            self.px(y - LOGGED_IN_RADIUS * 0.35),
+        );
         let path = check.finish().expect("the check has a length");
-        let stroke = Stroke { width: self.px(1.8), line_cap: LineCap::Round, line_join: LineJoin::Round, ..Stroke::default() };
-        self.pixmap.stroke_path(&path, &solid(WHITE), &stroke, Transform::identity(), None);
+        let stroke = Stroke {
+            width: self.px(1.8),
+            line_cap: LineCap::Round,
+            line_join: LineJoin::Round,
+            ..Stroke::default()
+        };
+        self.pixmap
+            .stroke_path(&path, &solid(WHITE), &stroke, Transform::identity(), None);
     }
 
     fn power_glyph(&mut self, x: f64, y: f64) {
         let mut ring = PathBuilder::new();
         // from just right of the top clockwise to just left of it, in steps of 10 degrees
         for step in 0..=POWER_RING_STEPS {
-            let angle = (POWER_GAP_DEGREES / 2.0 + step as f64 * (360.0 - POWER_GAP_DEGREES) / POWER_RING_STEPS as f64).to_radians();
-            let (px, py) = (self.px(x + POWER_RADIUS * angle.sin()), self.px(y - POWER_RADIUS * angle.cos()));
+            let angle = (POWER_GAP_DEGREES / 2.0
+                + step as f64 * (360.0 - POWER_GAP_DEGREES) / POWER_RING_STEPS as f64)
+                .to_radians();
+            let (px, py) = (
+                self.px(x + POWER_RADIUS * angle.sin()),
+                self.px(y - POWER_RADIUS * angle.cos()),
+            );
             if step == 0 {
                 ring.move_to(px, py);
             } else {
@@ -608,26 +1141,50 @@ impl Canvas<'_> {
         ring.move_to(self.px(x), self.px(y - POWER_RADIUS - 1.0));
         ring.line_to(self.px(x), self.px(y - 1.0));
         let path = ring.finish().expect("the glyph has a length");
-        let stroke = Stroke { width: self.px(POWER_STROKE), line_cap: LineCap::Round, line_join: LineJoin::Round, ..Stroke::default() };
-        self.pixmap.stroke_path(&path, &solid(WHITE), &stroke, Transform::identity(), None);
+        let stroke = Stroke {
+            width: self.px(POWER_STROKE),
+            line_cap: LineCap::Round,
+            line_join: LineJoin::Round,
+            ..Stroke::default()
+        };
+        self.pixmap
+            .stroke_path(&path, &solid(WHITE), &stroke, Transform::identity(), None);
     }
 
     /// The Caps Lock badge in white, centred in the slot that ends at `slot_right`, with the glyph cut out.
     /// `stretch` is the vertical scale; the corners and the glyph are drawn in badge units.
     fn caps_badge(&mut self, slot_right: f64, center_y: f64, stretch: f64) {
         let (width, height) = (CAPS_BADGE_UNITS, CAPS_BADGE_UNITS * stretch);
-        let (left, top) = (slot_right - CAPS_SLOT_WIDTH / 2.0 - width / 2.0, center_y - height / 2.0);
-        let mut path = RoundedRect::with_radii(Rect::new(left, top, width, height), Radii::uniform(CAPS_BADGE_RADIUS), CornerStyle::Circular).path();
+        let (left, top) = (
+            slot_right - CAPS_SLOT_WIDTH / 2.0 - width / 2.0,
+            center_y - height / 2.0,
+        );
+        let mut path = RoundedRect::with_radii(
+            Rect::new(left, top, width, height),
+            Radii::uniform(CAPS_BADGE_RADIUS),
+            CornerStyle::Circular,
+        )
+        .path();
         for polygon in CAPS_GLYPH {
             for (i, &(x, y)) in polygon.iter().enumerate() {
                 let point = GeoPoint::new(left + x, top + y * stretch);
-                path.segments.push(if i == 0 { PathSeg::MoveTo(point) } else { PathSeg::LineTo(point) });
+                path.segments.push(if i == 0 {
+                    PathSeg::MoveTo(point)
+                } else {
+                    PathSeg::LineTo(point)
+                });
             }
             path.segments.push(PathSeg::Close);
         }
         let path = to_skia_path(&path, self.scale).expect("the badge has a size");
         // even-odd: the glyph polygons lie inside the body, so they are holes
-        self.pixmap.fill_path(&path, &solid(WHITE), FillRule::EvenOdd, Transform::identity(), None);
+        self.pixmap.fill_path(
+            &path,
+            &solid(WHITE),
+            FillRule::EvenOdd,
+            Transform::identity(),
+            None,
+        );
     }
 
     /// The spinner's `frame` in a square of `size` points centred on (`x`, `y`): twelve white spokes, each with the
@@ -640,21 +1197,51 @@ impl Canvas<'_> {
             // clockwise from 12 o'clock
             let angle = spoke as f64 * 2.0 * PI / spinner::SPOKES as f64;
             let (sin, cos) = angle.sin_cos();
-            let at = |radius: f64| (self.px(x + sin * radius * unit), self.px(y - cos * radius * unit));
-            let (from, to) = (at(spinner::INNER_RADIUS + half_width), at(spinner::OUTER_RADIUS - half_width));
+            let at = |radius: f64| {
+                (
+                    self.px(x + sin * radius * unit),
+                    self.px(y - cos * radius * unit),
+                )
+            };
+            let (from, to) = (
+                at(spinner::INNER_RADIUS + half_width),
+                at(spinner::OUTER_RADIUS - half_width),
+            );
             let mut path = PathBuilder::new();
             path.move_to(from.0, from.1);
             path.line_to(to.0, to.1);
             let path = path.finish().expect("a spoke has a length");
-            let stroke = Stroke { width: self.px(spinner::SPOKE_WIDTH * unit), line_cap: LineCap::Round, ..Stroke::default() };
-            self.pixmap.stroke_path(&path, &solid(with_alpha(WHITE, spinner::opacity(frame, spoke))), &stroke, Transform::identity(), None);
+            let stroke = Stroke {
+                width: self.px(spinner::SPOKE_WIDTH * unit),
+                line_cap: LineCap::Round,
+                ..Stroke::default()
+            };
+            self.pixmap.stroke_path(
+                &path,
+                &solid(with_alpha(WHITE, spinner::opacity(frame, spoke))),
+                &stroke,
+                Transform::identity(),
+                None,
+            );
         }
     }
 
     /// A rectangle with fully rounded short ends.
     fn pill(&mut self, rect: Rect, rgba: Rgba) {
-        let path = rounded_path(rect, Radii::uniform(rect.height() / 2.0), CornerStyle::Circular, self.scale).expect("the pill has a size");
-        self.pixmap.fill_path(&path, &solid(rgba), FillRule::Winding, Transform::identity(), None);
+        let path = rounded_path(
+            rect,
+            Radii::uniform(rect.height() / 2.0),
+            CornerStyle::Circular,
+            self.scale,
+        )
+        .expect("the pill has a size");
+        self.pixmap.fill_path(
+            &path,
+            &solid(rgba),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 }
 
@@ -671,20 +1258,41 @@ mod tests {
         assert_eq!(caps_stretch(PILL_HEIGHT), 1.2);
         let mut pixmap = Pixmap::new(40, 40).unwrap();
         // the 16 x 19.2 pt badge of a 28 pt field centred in a slot that ends at x 30: x 13 to 29, y 10.4 to 29.6
-        Canvas { pixmap: &mut pixmap, scale: 1.0 }.caps_badge(30.0, 20.0, caps_stretch(PILL_HEIGHT));
+        Canvas {
+            pixmap: &mut pixmap,
+            scale: 1.0,
+        }
+        .caps_badge(30.0, 20.0, caps_stretch(PILL_HEIGHT));
         // the body, the middle of the arrow's head, a point left of the badge, and the rounded-off corner
-        assert_eq!((alpha(&pixmap, 14, 20), alpha(&pixmap, 21, 19), alpha(&pixmap, 5, 20), alpha(&pixmap, 13, 10)), (255, 0, 0, 0));
+        assert_eq!(
+            (
+                alpha(&pixmap, 14, 20),
+                alpha(&pixmap, 21, 19),
+                alpha(&pixmap, 5, 20),
+                alpha(&pixmap, 13, 10)
+            ),
+            (255, 0, 0, 0)
+        );
     }
 
     #[test]
     fn the_spinner_draws_the_head_spoke_opaque_and_the_tail_fainter() {
         let mut pixmap = Pixmap::new(41, 41).unwrap();
         // 32 pt square (half the 64 unit canvas) centred in the pixel (20, 20); frame 0 has its head on spoke 11
-        Canvas { pixmap: &mut pixmap, scale: 1.0 }.spinner(20.5, 20.5, 32.0, 0);
+        Canvas {
+            pixmap: &mut pixmap,
+            scale: 1.0,
+        }
+        .spinner(20.5, 20.5, 32.0, 0);
         // the head (330 degrees), the spoke at 12 o'clock (eleven steps behind: 0.161) and the one at 6 o'clock (0.600), and the hub
-        let near = |x: u32, y: u32, expected: i32| (i32::from(alpha(&pixmap, x, y)) - expected).abs() <= 3;
+        let near =
+            |x: u32, y: u32, expected: i32| (i32::from(alpha(&pixmap, x, y)) - expected).abs() <= 3;
         assert!(near(15, 12, 255), "head {}", alpha(&pixmap, 15, 12));
-        assert!(near(20, 10, 41), "twelve o'clock {}", alpha(&pixmap, 20, 10));
+        assert!(
+            near(20, 10, 41),
+            "twelve o'clock {}",
+            alpha(&pixmap, 20, 10)
+        );
         assert!(near(20, 30, 153), "six o'clock {}", alpha(&pixmap, 20, 30));
         assert_eq!(alpha(&pixmap, 20, 20), 0);
     }

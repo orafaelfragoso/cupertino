@@ -30,7 +30,12 @@ impl TileKind {
             TileKind::BottomRight => (false, true, false, true),
             TileKind::Fill => (true, true, true, true),
         };
-        Edges { left, right, top, bottom }
+        Edges {
+            left,
+            right,
+            top,
+            bottom,
+        }
     }
 }
 
@@ -81,7 +86,8 @@ pub fn hot_zone(
     option_held: bool,
     dock_zone: Option<Rect>,
 ) -> Option<(TileKind, bool)> {
-    hot_zone_hit(cfg, output, usable, pointer, option_held, dock_zone).map(|h| (h.kind, h.immediate))
+    hot_zone_hit(cfg, output, usable, pointer, option_held, dock_zone)
+        .map(|h| (h.kind, h.immediate))
 }
 
 /// Like [`hot_zone`] but also reports the dwell delay of the zone that was hit. The corner zones
@@ -106,16 +112,32 @@ pub fn hot_zone_hit(
         .find(|(kind, zone)| corner_enabled(cfg, *kind) && zone.contains(pointer))
         .map(|(kind, _)| kind);
     if let Some(kind) = corner {
-        return Some(HotZoneHit { kind, immediate, delay: if immediate { 0.0 } else { cfg.edge_dwell } });
+        return Some(HotZoneHit {
+            kind,
+            immediate,
+            delay: if immediate { 0.0 } else { cfg.edge_dwell },
+        });
     }
     if immediate {
-        return edge_kind(cfg, output, pointer, cfg.option_edge_extent).map(|kind| HotZoneHit { kind, immediate, delay: 0.0 });
+        return edge_kind(cfg, output, pointer, cfg.option_edge_extent).map(|kind| HotZoneHit {
+            kind,
+            immediate,
+            delay: 0.0,
+        });
     }
     if let Some(kind) = edge_kind(cfg, output, pointer, cfg.edge_threshold) {
-        return Some(HotZoneHit { kind, immediate, delay: cfg.hot_zone_delay });
+        return Some(HotZoneHit {
+            kind,
+            immediate,
+            delay: cfg.hot_zone_delay,
+        });
     }
     let soft = cfg.soft_hot_zone_size.max(cfg.edge_threshold);
-    edge_kind(cfg, output, pointer, soft).map(|kind| HotZoneHit { kind, immediate, delay: cfg.edge_dwell })
+    edge_kind(cfg, output, pointer, soft).map(|kind| HotZoneHit {
+        kind,
+        immediate,
+        delay: cfg.edge_dwell,
+    })
 }
 
 /// The four corner zones of `output`: `size` wide at each corner and
@@ -145,7 +167,11 @@ fn corner_enabled(cfg: &SnapConfig, kind: TileKind) -> bool {
 
 /// Half or top tile within `ext` of the left, right or top edge.
 fn edge_kind(cfg: &SnapConfig, output: Rect, pointer: Point, ext: f64) -> Option<TileKind> {
-    let (dl, dr, dt) = (pointer.x - output.x, output.right() - pointer.x, pointer.y - output.y);
+    let (dl, dr, dt) = (
+        pointer.x - output.x,
+        output.right() - pointer.x,
+        pointer.y - output.y,
+    );
     let side = cfg.edge_drag_tiling;
     if side && dl <= ext {
         Some(TileKind::Left)
@@ -165,7 +191,9 @@ fn edge_kind(cfg: &SnapConfig, output: Rect, pointer: Point, ext: f64) -> Option
 pub fn is_still(kind: TileKind, anchor: Point, pointer: Point, tolerance: f64) -> bool {
     let (dx, dy) = (pointer.x - anchor.x, pointer.y - anchor.y);
     let d = match kind {
-        TileKind::TopLeft | TileKind::TopRight | TileKind::BottomLeft | TileKind::BottomRight => dx.hypot(dy),
+        TileKind::TopLeft | TileKind::TopRight | TileKind::BottomLeft | TileKind::BottomRight => {
+            dx.hypot(dy)
+        }
         TileKind::Left | TileKind::Right => dy.abs(),
         TileKind::Top | TileKind::Bottom | TileKind::Fill => dx.abs(),
     };
@@ -193,11 +221,17 @@ mod tests {
     #[test]
     fn edges_corners_and_top() {
         assert_eq!(zone(Point::new(0.0, 500.0), false), Some(TileKind::Left));
-        assert_eq!(zone(Point::new(1919.5, 500.0), false), Some(TileKind::Right));
+        assert_eq!(
+            zone(Point::new(1919.5, 500.0), false),
+            Some(TileKind::Right)
+        );
         assert_eq!(zone(Point::new(960.0, 0.0), false), Some(TileKind::Fill));
         assert_eq!(zone(Point::new(0.0, 10.0), false), Some(TileKind::TopLeft));
         assert_eq!(zone(Point::new(10.0, 0.0), false), Some(TileKind::TopLeft));
-        assert_eq!(zone(Point::new(1919.0, 1075.0), false), Some(TileKind::BottomRight));
+        assert_eq!(
+            zone(Point::new(1919.0, 1075.0), false),
+            Some(TileKind::BottomRight)
+        );
         assert_eq!(zone(Point::new(960.0, 1079.0), false), None);
         assert_eq!(zone(Point::new(500.0, 500.0), false), None);
         assert_eq!(zone(Point::new(30.0, 500.0), false), None);
@@ -219,27 +253,66 @@ mod tests {
     #[test]
     fn verified_defaults() {
         let c = SnapConfig::default();
-        assert_eq!((c.tiled_margin, c.soft_hot_zone_size, c.edge_dwell, c.hot_zone_delay), (8.0, 20.0, 0.2, 0.0));
+        assert_eq!(
+            (
+                c.tiled_margin,
+                c.soft_hot_zone_size,
+                c.edge_dwell,
+                c.hot_zone_delay
+            ),
+            (8.0, 20.0, 0.2, 0.0)
+        );
         assert!(!c.avoid_dock_hot_zones && !c.show_tiled_border && c.order_preview_above_target);
     }
 
     #[test]
     fn option_accelerator_widens_zone_and_is_immediate() {
         assert_eq!(zone(Point::new(60.0, 500.0), true), Some(TileKind::Left));
-        let z = hot_zone(&SnapConfig::default(), OUT, USABLE, Point::new(60.0, 500.0), true, None).unwrap();
+        let z = hot_zone(
+            &SnapConfig::default(),
+            OUT,
+            USABLE,
+            Point::new(60.0, 500.0),
+            true,
+            None,
+        )
+        .unwrap();
         assert!(z.1);
-        let cfg = SnapConfig { option_accelerator: false, ..Default::default() };
+        let cfg = SnapConfig {
+            option_accelerator: false,
+            ..Default::default()
+        };
         assert!(hot_zone(&cfg, OUT, USABLE, Point::new(60.0, 500.0), true, None).is_none());
     }
 
     #[test]
     fn toggles_and_dock_zone() {
-        let cfg = SnapConfig { top_edge_tiling: false, ..Default::default() };
-        assert_eq!(hot_zone(&cfg, OUT, USABLE, Point::new(960.0, 0.0), false, None), None);
+        let cfg = SnapConfig {
+            top_edge_tiling: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            hot_zone(&cfg, OUT, USABLE, Point::new(960.0, 0.0), false, None),
+            None
+        );
         let dz = Rect::new(0.0, 900.0, 100.0, 180.0);
-        assert!(hot_zone(&SnapConfig::default(), OUT, USABLE, Point::new(0.0, 1000.0), false, Some(dz)).is_some());
-        let cfg = SnapConfig { avoid_dock_hot_zones: true, ..Default::default() };
-        assert_eq!(hot_zone(&cfg, OUT, USABLE, Point::new(0.0, 1000.0), false, Some(dz)), None);
+        assert!(hot_zone(
+            &SnapConfig::default(),
+            OUT,
+            USABLE,
+            Point::new(0.0, 1000.0),
+            false,
+            Some(dz)
+        )
+        .is_some());
+        let cfg = SnapConfig {
+            avoid_dock_hot_zones: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            hot_zone(&cfg, OUT, USABLE, Point::new(0.0, 1000.0), false, Some(dz)),
+            None
+        );
     }
 
     #[test]
@@ -258,42 +331,99 @@ mod tests {
     #[test]
     fn a_corner_waits_the_soft_delay_and_is_immediate_with_alt() {
         let cfg = SnapConfig::default();
-        let hit = |p: Point, alt: bool| hot_zone_hit(&cfg, OUT, USABLE, p, alt, None).map(|h| (h.kind, h.delay));
-        assert_eq!(hit(Point::new(0.0, 0.0), false), Some((TileKind::TopLeft, 0.2)), "even on the corner pixel");
-        assert_eq!(hit(Point::new(19.9, 43.9), false), Some((TileKind::TopLeft, 0.2)));
-        assert_eq!(hit(Point::new(20.0, 43.9), false), Some((TileKind::Left, 0.2)), "past the zone: the soft side zone");
-        assert_eq!(hit(Point::new(5.0, 44.0), false), Some((TileKind::Left, 0.2)));
-        assert_eq!(hit(Point::new(1910.0, 1070.0), false), Some((TileKind::BottomRight, 0.2)));
-        assert_eq!(hit(Point::new(10.0, 10.0), true), Some((TileKind::TopLeft, 0.0)));
-        assert_eq!(hit(Point::new(30.0, 30.0), true), Some((TileKind::Left, 0.0)), "the Alt corner is 20 pt too");
+        let hit = |p: Point, alt: bool| {
+            hot_zone_hit(&cfg, OUT, USABLE, p, alt, None).map(|h| (h.kind, h.delay))
+        };
+        assert_eq!(
+            hit(Point::new(0.0, 0.0), false),
+            Some((TileKind::TopLeft, 0.2)),
+            "even on the corner pixel"
+        );
+        assert_eq!(
+            hit(Point::new(19.9, 43.9), false),
+            Some((TileKind::TopLeft, 0.2))
+        );
+        assert_eq!(
+            hit(Point::new(20.0, 43.9), false),
+            Some((TileKind::Left, 0.2)),
+            "past the zone: the soft side zone"
+        );
+        assert_eq!(
+            hit(Point::new(5.0, 44.0), false),
+            Some((TileKind::Left, 0.2))
+        );
+        assert_eq!(
+            hit(Point::new(1910.0, 1070.0), false),
+            Some((TileKind::BottomRight, 0.2))
+        );
+        assert_eq!(
+            hit(Point::new(10.0, 10.0), true),
+            Some((TileKind::TopLeft, 0.0))
+        );
+        assert_eq!(
+            hit(Point::new(30.0, 30.0), true),
+            Some((TileKind::Left, 0.0)),
+            "the Alt corner is 20 pt too"
+        );
     }
 
     #[test]
     fn stillness_is_5_pt_inclusive_with_the_zone_s_metric() {
         let corner = Point::new(10.0, 10.0);
-        assert!(is_still(TileKind::TopLeft, corner, Point::new(13.0, 14.0), 5.0), "Euclidean 5.0");
-        assert!(!is_still(TileKind::TopLeft, corner, Point::new(10.0, 15.01), 5.0));
+        assert!(
+            is_still(TileKind::TopLeft, corner, Point::new(13.0, 14.0), 5.0),
+            "Euclidean 5.0"
+        );
+        assert!(!is_still(
+            TileKind::TopLeft,
+            corner,
+            Point::new(10.0, 15.01),
+            5.0
+        ));
         let side = Point::new(0.0, 500.0);
-        assert!(is_still(TileKind::Left, side, Point::new(15.0, 505.0), 5.0), "|dy| 5.0, dx ignored");
-        assert!(!is_still(TileKind::Right, side, Point::new(0.0, 494.99), 5.0));
+        assert!(
+            is_still(TileKind::Left, side, Point::new(15.0, 505.0), 5.0),
+            "|dy| 5.0, dx ignored"
+        );
+        assert!(!is_still(
+            TileKind::Right,
+            side,
+            Point::new(0.0, 494.99),
+            5.0
+        ));
         let top = Point::new(960.0, 0.0);
-        assert!(is_still(TileKind::Fill, top, Point::new(965.0, 15.0), 5.0), "|dx| 5.0, dy ignored");
+        assert!(
+            is_still(TileKind::Fill, top, Point::new(965.0, 15.0), 5.0),
+            "|dx| 5.0, dy ignored"
+        );
         assert!(!is_still(TileKind::Fill, top, Point::new(965.01, 0.0), 5.0));
-        assert!(!is_still(TileKind::Left, side, Point::new(0.0, f64::NAN), 5.0), "a NaN distance is not still");
+        assert!(
+            !is_still(TileKind::Left, side, Point::new(0.0, f64::NAN), 5.0),
+            "a NaN distance is not still"
+        );
     }
 
     #[test]
     fn the_preview_frame_is_the_tile_outset_by_15_pt() {
         let tile = tile_rect(TileKind::Left, USABLE, 8.0);
         assert_eq!(tile, Rect::new(8.0, 32.0, 948.0, 1040.0));
-        assert_eq!(preview_frame(tile, SnapConfig::default().preview_outset), Rect::new(-7.0, 17.0, 978.0, 1070.0));
+        assert_eq!(
+            preview_frame(tile, SnapConfig::default().preview_outset),
+            Rect::new(-7.0, 17.0, 978.0, 1070.0)
+        );
     }
 
     #[test]
     fn the_preview_fades_on_its_own_critically_damped_spring() {
-        let Curve::Spring(p) = SnapConfig::default().preview_opacity_curve else { panic!("the fade is a spring") };
+        let Curve::Spring(p) = SnapConfig::default().preview_opacity_curve else {
+            panic!("the fade is a spring")
+        };
         let round = |v: f64, places: i32| (v * 10f64.powi(places)).round() / 10f64.powi(places);
-        assert_eq!((p.mass, round(p.stiffness, 3), round(p.damping, 3)), (1.0, 767.492, 55.407), "(2 pi / 0.2268)^2 and 2 sqrt(k)");
+        assert_eq!(
+            (p.mass, round(p.stiffness, 3), round(p.damping, 3)),
+            (1.0, 767.492, 55.407),
+            "(2 pi / 0.2268)^2 and 2 sqrt(k)"
+        );
         let mut opacity = AnimatedValue::new(0.0);
         opacity.animate_to(0.5, Curve::Spring(p), 0.0);
         let at = |t: f64| round(opacity.value(t), 5);
@@ -306,10 +436,15 @@ mod tests {
         let r = tile_rect(TileKind::Right, USABLE, 0.0);
         assert_eq!(l.right(), r.x);
         assert_eq!(l.union(&r), USABLE);
-        let q: Vec<Rect> = [TileKind::TopLeft, TileKind::TopRight, TileKind::BottomLeft, TileKind::BottomRight]
-            .iter()
-            .map(|k| tile_rect(*k, USABLE, 0.0))
-            .collect();
+        let q: Vec<Rect> = [
+            TileKind::TopLeft,
+            TileKind::TopRight,
+            TileKind::BottomLeft,
+            TileKind::BottomRight,
+        ]
+        .iter()
+        .map(|k| tile_rect(*k, USABLE, 0.0))
+        .collect();
         let area: f64 = q.iter().map(|r| r.w * r.h).sum();
         assert!((area - USABLE.w * USABLE.h).abs() < 1e-9);
         assert_eq!(tile_rect(TileKind::Fill, USABLE, 0.0), USABLE);

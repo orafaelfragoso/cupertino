@@ -11,24 +11,41 @@ pub struct PrivateBus {
 
 impl PrivateBus {
     pub fn start() -> Option<PrivateBus> {
-        let out = Command::new("dbus-daemon").args(["--session", "--print-address=1", "--print-pid=1", "--fork"]).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
-        let text = String::from_utf8(out.stdout).ok().filter(|_| out.status.success())?;
+        let out = Command::new("dbus-daemon")
+            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        let text = String::from_utf8(out.stdout)
+            .ok()
+            .filter(|_| out.status.success())?;
         let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-        Some(PrivateBus { address: lines.next()?.to_string(), pid: lines.next()?.to_string() })
+        Some(PrivateBus {
+            address: lines.next()?.to_string(),
+            pid: lines.next()?.to_string(),
+        })
     }
 
     pub fn builder(&self) -> zbus::connection::Builder<'static> {
-        zbus::connection::Builder::address(self.address.as_str()).expect("the daemon's address parses")
+        zbus::connection::Builder::address(self.address.as_str())
+            .expect("the daemon's address parses")
     }
 
     pub fn connect(&self) -> zbus::blocking::Connection {
-        zbus::blocking::connection::Builder::address(self.address.as_str()).expect("the daemon's address parses").build().expect("connects to the private bus")
+        zbus::blocking::connection::Builder::address(self.address.as_str())
+            .expect("the daemon's address parses")
+            .build()
+            .expect("connects to the private bus")
     }
 }
 
 impl Drop for PrivateBus {
     fn drop(&mut self) {
-        Command::new("kill").arg(&self.pid).status().expect("kill the private bus");
+        Command::new("kill")
+            .arg(&self.pid)
+            .status()
+            .expect("kill the private bus");
     }
 }
 

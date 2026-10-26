@@ -26,10 +26,20 @@ impl Shape {
     /// non-finite value, which the server would reject as a protocol error.
     fn new(rect: &Rect, radius: f64) -> Result<Self, ClientError> {
         let values = [rect.x(), rect.y(), rect.width(), rect.height(), radius];
-        if !values.iter().all(|v| v.is_finite()) || rect.width().round() < 0.0 || rect.height().round() < 0.0 || radius < 0.0 {
+        if !values.iter().all(|v| v.is_finite())
+            || rect.width().round() < 0.0
+            || rect.height().round() < 0.0
+            || radius < 0.0
+        {
             return Err(ClientError::InvalidShape);
         }
-        Ok(Self { x: rect.x().round() as i32, y: rect.y().round() as i32, width: rect.width().round() as i32, height: rect.height().round() as i32, radius })
+        Ok(Self {
+            x: rect.x().round() as i32,
+            y: rect.y().round() as i32,
+            width: rect.width().round() as i32,
+            height: rect.height().round() as i32,
+            radius,
+        })
     }
 }
 
@@ -74,13 +84,25 @@ mod tests {
     #[test]
     fn shape_rounds_to_whole_points() {
         let s = Shape::new(&Rect::new(10.4, 20.5, 343.6, 71.49), 12.0).unwrap();
-        assert_eq!((s.x, s.y, s.width, s.height, s.radius), (10, 21, 344, 71, 12.0));
+        assert_eq!(
+            (s.x, s.y, s.width, s.height, s.radius),
+            (10, 21, 344, 71, 12.0)
+        );
     }
 
     #[test]
     fn shape_rejects_what_the_server_rejects() {
-        assert!(matches!(Shape::new(&Rect::new(0.0, 0.0, -1.0, 5.0), 1.0), Err(ClientError::InvalidShape)));
-        assert!(matches!(Shape::new(&Rect::new(0.0, 0.0, 5.0, 5.0), -0.5), Err(ClientError::InvalidShape)));
-        assert!(matches!(Shape::new(&Rect::new(f64::NAN, 0.0, 5.0, 5.0), 1.0), Err(ClientError::InvalidShape)));
+        assert!(matches!(
+            Shape::new(&Rect::new(0.0, 0.0, -1.0, 5.0), 1.0),
+            Err(ClientError::InvalidShape)
+        ));
+        assert!(matches!(
+            Shape::new(&Rect::new(0.0, 0.0, 5.0, 5.0), -0.5),
+            Err(ClientError::InvalidShape)
+        ));
+        assert!(matches!(
+            Shape::new(&Rect::new(f64::NAN, 0.0, 5.0, 5.0), 1.0),
+            Err(ClientError::InvalidShape)
+        ));
     }
 }

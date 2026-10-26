@@ -183,7 +183,14 @@ pub struct Live {
 
 impl Default for Live {
     fn default() -> Self {
-        Live { focus: Reading::Unknown, volume: Reading::Unknown, brightness: Reading::Unknown, battery: Reading::Unknown, wifi: Reading::Unknown, bluetooth: Reading::Unknown }
+        Live {
+            focus: Reading::Unknown,
+            volume: Reading::Unknown,
+            brightness: Reading::Unknown,
+            battery: Reading::Unknown,
+            wifi: Reading::Unknown,
+            bluetooth: Reading::Unknown,
+        }
     }
 }
 
@@ -210,17 +217,48 @@ mod tests {
     #[test]
     fn readings_states_and_durations() {
         assert_eq!(Reading::<bool>::Unknown.reason(), Some("Checking…"));
-        assert_eq!(Reading::<bool>::Unavailable("Wi-Fi is not available".into()).reason(), Some("Wi-Fi is not available"));
+        assert_eq!(
+            Reading::<bool>::Unavailable("Wi-Fi is not available".into()).reason(),
+            Some("Wi-Fi is not available")
+        );
         assert_eq!(Reading::Ready(true).reason(), None);
-        assert_eq!([1, 2, 3, 4, 5, 0].map(BatteryState::from_upower), [BatteryState::Charging, BatteryState::Discharging, BatteryState::Empty, BatteryState::Full, BatteryState::Charging, BatteryState::Unknown]);
-        assert_eq!((duration_text(2520), duration_text(7500)), ("42 min".to_string(), "2 h 05 min".to_string()));
+        assert_eq!(
+            [1, 2, 3, 4, 5, 0].map(BatteryState::from_upower),
+            [
+                BatteryState::Charging,
+                BatteryState::Discharging,
+                BatteryState::Empty,
+                BatteryState::Full,
+                BatteryState::Charging,
+                BatteryState::Unknown
+            ]
+        );
+        assert_eq!(
+            (duration_text(2520), duration_text(7500)),
+            ("42 min".to_string(), "2 h 05 min".to_string())
+        );
         let mut live = Live::default();
         assert_eq!(live.has_battery(), None);
         live.battery = Reading::Ready(None);
         assert_eq!(live.has_battery(), Some(false));
-        let open = Network { ssid: "cafe".into(), signal: -50, security: "open".into(), saved: false, connected: false };
+        let open = Network {
+            ssid: "cafe".into(),
+            signal: -50,
+            security: "open".into(),
+            saved: false,
+            connected: false,
+        };
         assert!(!open.needs_passphrase());
-        assert!(Network { security: "wpa2".into(), ..open.clone() }.needs_passphrase());
-        assert!(!Network { security: "wpa2".into(), saved: true, ..open }.needs_passphrase());
+        assert!(Network {
+            security: "wpa2".into(),
+            ..open.clone()
+        }
+        .needs_passphrase());
+        assert!(!Network {
+            security: "wpa2".into(),
+            saved: true,
+            ..open
+        }
+        .needs_passphrase());
     }
 }

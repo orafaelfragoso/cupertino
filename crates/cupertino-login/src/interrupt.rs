@@ -60,18 +60,28 @@ pub struct Frames {
 impl Frames {
     /// The panel's fixed layout.
     pub fn new() -> Frames {
-        let button = |(x, width): (f64, f64), label, choice| InterruptButton { frame: Rect::new(x, BUTTONS_TOP, width, BUTTON_HEIGHT), label, choice };
+        let button = |(x, width): (f64, f64), label, choice| InterruptButton {
+            frame: Rect::new(x, BUTTONS_TOP, width, BUTTON_HEIGHT),
+            label,
+            choice,
+        };
         Frames {
             icon: ICON,
             title: Rect::new(TEXT_LEFT, TITLE_TOP, WRAP_WIDTH, INFO_TOP - TITLE_TOP),
             info: Rect::new(TEXT_LEFT, INFO_TOP, WRAP_WIDTH, BUTTONS_TOP - INFO_TOP),
-            buttons: [button(CANCEL_COLUMN, CANCEL_LABEL, Choice::Cancel), button(FORCE_QUIT_COLUMN, FORCE_QUIT_LABEL, Choice::ForceQuit)],
+            buttons: [
+                button(CANCEL_COLUMN, CANCEL_LABEL, Choice::Cancel),
+                button(FORCE_QUIT_COLUMN, FORCE_QUIT_LABEL, Choice::ForceQuit),
+            ],
         }
     }
 
     /// The choice a click at `point` (panel-local points) makes, if it is on a button.
     pub fn button_at(&self, point: Point) -> Option<Choice> {
-        self.buttons.iter().find(|b| b.frame.contains(point)).map(|b| b.choice)
+        self.buttons
+            .iter()
+            .find(|b| b.frame.contains(point))
+            .map(|b| b.choice)
     }
 }
 
@@ -107,20 +117,36 @@ mod tests {
     fn the_frames_are_the_references_and_stay_inside_the_panel() {
         let f = Frames::new();
         assert_eq!((f.icon.x(), f.icon.y(), f.icon.width()), (20.0, 13.0, 64.0));
-        assert_eq!((f.title.x(), f.title.y(), f.title.width()), (102.0, 13.0, 293.0));
+        assert_eq!(
+            (f.title.x(), f.title.y(), f.title.width()),
+            (102.0, 13.0, 293.0)
+        );
         assert_eq!((f.info.x(), f.info.y()), (102.0, 55.0));
         let [cancel, force] = f.buttons;
         assert_eq!((cancel.frame.y(), force.frame.y()), (83.0, 83.0));
-        assert!(cancel.frame.max_x() <= force.frame.x() + 2.0 && cancel.frame.x() > f.icon.max_x(), "Cancel left of Force Quit, clear of the icon");
-        assert_eq!(force.frame.max_x(), f.title.max_x(), "the buttons end with the text column");
+        assert!(
+            cancel.frame.max_x() <= force.frame.x() + 2.0 && cancel.frame.x() > f.icon.max_x(),
+            "Cancel left of Force Quit, clear of the icon"
+        );
+        assert_eq!(
+            force.frame.max_x(),
+            f.title.max_x(),
+            "the buttons end with the text column"
+        );
         assert!(force.frame.max_x() <= WIDTH && force.frame.max_y() <= HEIGHT);
     }
 
     #[test]
     fn clicks_hit_a_button_and_escape_cancels() {
         let f = Frames::new();
-        assert_eq!(f.button_at(f.buttons[1].frame.center()), Some(Choice::ForceQuit));
-        assert_eq!(f.button_at(f.buttons[0].frame.center()), Some(Choice::Cancel));
+        assert_eq!(
+            f.button_at(f.buttons[1].frame.center()),
+            Some(Choice::ForceQuit)
+        );
+        assert_eq!(
+            f.button_at(f.buttons[0].frame.center()),
+            Some(Choice::Cancel)
+        );
         assert_eq!(f.button_at(f.icon.center()), None);
         assert_eq!(press(Key::Escape), Some(Choice::Cancel));
         assert_eq!(press(Key::Return), None, "Force Quit is not the default");

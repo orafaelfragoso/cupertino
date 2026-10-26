@@ -2,10 +2,14 @@
 
 use std::collections::HashMap;
 
-use cupertino_protocols::server::screenshot::cupertino_screenshot_v1::{self, CupertinoScreenshotV1};
+use cupertino_protocols::server::screenshot::cupertino_screenshot_v1::{
+    self, CupertinoScreenshotV1,
+};
 use cupertino_wm::{OutputId, WindowId};
 use smithay::reexports::wayland_server::backend::ClientId;
-use smithay::reexports::wayland_server::{Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New};
+use smithay::reexports::wayland_server::{
+    Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New,
+};
 
 use super::privileged;
 use crate::render::motion::WorkspaceTransition;
@@ -41,17 +45,51 @@ impl Cupertino {
         let now = self.now();
         let options = self.display_options();
         let transition = WorkspaceTransition::for_options(options);
-        let shown: HashMap<OutputId, Vec<(WindowId, f64, f64)>> = self.outputs.iter().map(|o| (o.id, windows_on_output(&self.wm, o.id, o.rect.w, transition, now))).collect();
+        let shown: HashMap<OutputId, Vec<(WindowId, f64, f64)>> = self
+            .outputs
+            .iter()
+            .map(|o| {
+                (
+                    o.id,
+                    windows_on_output(&self.wm, o.id, o.rect.w, transition, now),
+                )
+            })
+            .collect();
         let mut out = Vec::new();
         for id in self.wm.stacking_order().iter().rev() {
-            let Some(output) = self.wm.window(*id).map(|w| w.output) else { continue };
-            let Some(slide) = shown.get(&output).and_then(|list| list.iter().find(|(w, _, _)| w == id)).map(|(_, s, _)| *s) else { continue };
-            let Some(entry) = self.entry(*id) else { continue };
-            let Some(handle) = &entry.foreign else { continue };
-            let Some((plan, _)) = plan_for(&self.wm, entry, slide, now, &self.fx, options) else { continue };
+            let Some(output) = self.wm.window(*id).map(|w| w.output) else {
+                continue;
+            };
+            let Some(slide) = shown
+                .get(&output)
+                .and_then(|list| list.iter().find(|(w, _, _)| w == id))
+                .map(|(_, s, _)| *s)
+            else {
+                continue;
+            };
+            let Some(entry) = self.entry(*id) else {
+                continue;
+            };
+            let Some(handle) = &entry.foreign else {
+                continue;
+            };
+            let Some((plan, _)) = plan_for(&self.wm, entry, slide, now, &self.fx, options) else {
+                continue;
+            };
             let geo = entry.window.geometry();
-            let (w, h) = (f64::from(geo.size.w) + entry.insets.horizontal(), f64::from(geo.size.h) + entry.insets.vertical());
-            out.push(FeedWindow { identifier: handle.identifier(), frame: (plan.visual.x.round() as i32, plan.visual.y.round() as i32, w.round() as i32, h.round() as i32) });
+            let (w, h) = (
+                f64::from(geo.size.w) + entry.insets.horizontal(),
+                f64::from(geo.size.h) + entry.insets.vertical(),
+            );
+            out.push(FeedWindow {
+                identifier: handle.identifier(),
+                frame: (
+                    plan.visual.x.round() as i32,
+                    plan.visual.y.round() as i32,
+                    w.round() as i32,
+                    h.round() as i32,
+                ),
+            });
         }
         out
     }
@@ -73,7 +111,14 @@ impl Cupertino {
 }
 
 impl GlobalDispatch<CupertinoScreenshotV1, ()> for Cupertino {
-    fn bind(state: &mut Self, _: &DisplayHandle, _: &Client, resource: New<CupertinoScreenshotV1>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        state: &mut Self,
+        _: &DisplayHandle,
+        _: &Client,
+        resource: New<CupertinoScreenshotV1>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         let resource = init.init(resource, ());
         let windows = state.screen_windows();
         let feeds = &mut state.capture.feeds;
@@ -94,7 +139,15 @@ impl GlobalDispatch<CupertinoScreenshotV1, ()> for Cupertino {
 }
 
 impl Dispatch<CupertinoScreenshotV1, ()> for Cupertino {
-    fn request(_: &mut Self, _: &Client, _: &CupertinoScreenshotV1, request: cupertino_screenshot_v1::Request, _: &(), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        _: &mut Self,
+        _: &Client,
+        _: &CupertinoScreenshotV1,
+        request: cupertino_screenshot_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         match request {
             cupertino_screenshot_v1::Request::Destroy => {}
             _ => unreachable!("cupertino_screenshot_v1 version 1 has no other request"),

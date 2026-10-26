@@ -37,9 +37,20 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
 /// What the manager's main loop is asked, with where to answer.
 #[derive(Debug)]
 pub enum Call {
-    Power { session: CallerSession, action: PowerAction, reply: SyncSender<Result<(), PowerRefusal>> },
-    Ready { session: CallerSession, agent: String, reply: SyncSender<Result<(), ReadyRefusal>> },
-    SwitchToLoginWindow { session: CallerSession, reply: SyncSender<Result<(), SwitchRefusal>> },
+    Power {
+        session: CallerSession,
+        action: PowerAction,
+        reply: SyncSender<Result<(), PowerRefusal>>,
+    },
+    Ready {
+        session: CallerSession,
+        agent: String,
+        reply: SyncSender<Result<(), ReadyRefusal>>,
+    },
+    SwitchToLoginWindow {
+        session: CallerSession,
+        reply: SyncSender<Result<(), SwitchRefusal>>,
+    },
 }
 
 /// Why `SwitchToLoginWindow` is not carried out.
@@ -86,9 +97,15 @@ pub enum Error {
 impl From<PowerRefusal> for Error {
     fn from(refusal: PowerRefusal) -> Self {
         match refusal {
-            PowerRefusal::OtherUsersLoggedIn => Error::OtherUsersLoggedIn("another user's session is open".to_owned()),
-            PowerRefusal::Inhibited => Error::Inhibited("a program holds an inhibitor on the operation".to_owned()),
-            PowerRefusal::Disabled => Error::AccessDenied("the login settings disable the operation".to_owned()),
+            PowerRefusal::OtherUsersLoggedIn => {
+                Error::OtherUsersLoggedIn("another user's session is open".to_owned())
+            }
+            PowerRefusal::Inhibited => {
+                Error::Inhibited("a program holds an inhibitor on the operation".to_owned())
+            }
+            PowerRefusal::Disabled => {
+                Error::AccessDenied("the login settings disable the operation".to_owned())
+            }
             PowerRefusal::Failed => Error::Failed("the operation failed".to_owned()),
         }
     }
@@ -105,15 +122,35 @@ pub struct LoginManager {
 
 impl LoginManager {
     /// The session behind the caller of `header` and the caller's unique name, if the caller meets `need`.
-    async fn caller(&self, header: &Header<'_>, connection: &Connection, need: Need) -> Result<(CallerSession, String), Error> {
-        let sender = header.sender().ok_or_else(|| Error::Failed("the call has no sender".to_owned()))?;
-        let bus = fdo::DBusProxy::new(connection).await.map_err(|e| Error::Failed(format!("connecting to the bus daemon: {e}")))?;
+    async fn caller(
+        &self,
+        header: &Header<'_>,
+        connection: &Connection,
+        need: Need,
+    ) -> Result<(CallerSession, String), Error> {
+        let sender = header
+            .sender()
+            .ok_or_else(|| Error::Failed("the call has no sender".to_owned()))?;
+        let bus = fdo::DBusProxy::new(connection)
+            .await
+            .map_err(|e| Error::Failed(format!("connecting to the bus daemon: {e}")))?;
         // the bus daemon names the process behind the connection: the caller cannot choose it
-        let credentials = bus.get_connection_credentials(BusName::from(sender.clone())).await.map_err(|e| Error::Failed(format!("reading the caller's credentials: {e}")))?;
-        let pid = credentials.process_id().ok_or_else(|| Error::Failed("the bus did not report the caller's process".to_owned()))?;
-        let uid = credentials.unix_user_id().ok_or_else(|| Error::Failed("the bus did not report the caller's user".to_owned()))?;
-        let session = self.authorizer.session_of(pid).map_err(|e| Error::Failed(format!("finding the caller's session: {e}")))?;
-        let session = authorise(session, uid, need).map_err(|denial| Error::AccessDenied(denial.to_string()))?;
+        let credentials = bus
+            .get_connection_credentials(BusName::from(sender.clone()))
+            .await
+            .map_err(|e| Error::Failed(format!("reading the caller's credentials: {e}")))?;
+        let pid = credentials.process_id().ok_or_else(|| {
+            Error::Failed("the bus did not report the caller's process".to_owned())
+        })?;
+        let uid = credentials
+            .unix_user_id()
+            .ok_or_else(|| Error::Failed("the bus did not report the caller's user".to_owned()))?;
+        let session = self
+            .authorizer
+            .session_of(pid)
+            .map_err(|e| Error::Failed(format!("finding the caller's session: {e}")))?;
+        let session = authorise(session, uid, need)
+            .map_err(|denial| Error::AccessDenied(denial.to_string()))?;
         Ok((session, sender.to_string()))
     }
 
@@ -121,9 +158,13 @@ impl LoginManager {
     fn ask<T>(&self, command: impl FnOnce(SyncSender<T>) -> Call) -> Result<T, Error> {
         let (reply, receiver) = sync_channel(1);
         if !(self.sink)(command(reply)) {
-            return Err(Error::Failed("the session manager is shutting down".to_owned()));
+            return Err(Error::Failed(
+                "the session manager is shutting down".to_owned(),
+            ));
         }
-        receiver.recv_timeout(ANSWER_TIMEOUT).map_err(|_| Error::Failed("the session manager did not answer".to_owned()))
+        receiver
+            .recv_timeout(ANSWER_TIMEOUT)
+            .map_err(|_| Error::Failed("the session manager did not answer".to_owned()))
     }
 }
 
@@ -131,31 +172,67 @@ impl LoginManager {
 impl LoginManager {
     /// Restart (`restart`), shut down (`shut-down`) or sleep (`sleep`). Refused with `OtherUsersLoggedIn` while another user's
     /// session is open (unless the caller is an administrator), and with `Inhibited` while a program blocks the operation.
-    async fn request_power(&self, #[zbus(header)] header: Header<'_>, #[zbus(connection)] connection: &Connection, action: &str) -> Result<(), Error> {
+    async fn request_power(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        action: &str,
+    ) -> Result<(), Error> {
         let action = match action {
             "restart" => PowerAction::Restart,
             "shut-down" => PowerAction::ShutDown,
             "sleep" => PowerAction::Sleep,
-            _ => return Err(Error::InvalidArgs("the action is restart, shut-down or sleep".to_owned())),
+            _ => {
+                return Err(Error::InvalidArgs(
+                    "the action is restart, shut-down or sleep".to_owned(),
+                ))
+            }
         };
-        let (session, _) = self.caller(&header, connection, Need::ActiveUserSession).await?;
-        self.ask(|reply| Call::Power { session, action, reply })?.map_err(Error::from)
+        let (session, _) = self
+            .caller(&header, connection, Need::ActiveUserSession)
+            .await?;
+        self.ask(|reply| Call::Power {
+            session,
+            action,
+            reply,
+        })?
+        .map_err(Error::from)
     }
 
     /// The login screen takes the console. The caller is the foreground session and has locked its screen (the agent does both
     /// in that order); a request while another switch is under way is ignored.
-    async fn switch_to_login_window(&self, #[zbus(header)] header: Header<'_>, #[zbus(connection)] connection: &Connection) -> Result<(), Error> {
-        let (session, _) = self.caller(&header, connection, Need::ActiveUserSession).await?;
-        self.ask(|reply| Call::SwitchToLoginWindow { session, reply })?.map_err(|refusal| match refusal {
-            SwitchRefusal::NoLoginScreen => Error::Failed("the login screen is not running".to_owned()),
-            SwitchRefusal::Failed => Error::Failed("the switch failed".to_owned()),
-        })
+    async fn switch_to_login_window(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+    ) -> Result<(), Error> {
+        let (session, _) = self
+            .caller(&header, connection, Need::ActiveUserSession)
+            .await?;
+        self.ask(|reply| Call::SwitchToLoginWindow { session, reply })?
+            .map_err(|refusal| match refusal {
+                SwitchRefusal::NoLoginScreen => {
+                    Error::Failed("the login screen is not running".to_owned())
+                }
+                SwitchRefusal::Failed => Error::Failed("the switch failed".to_owned()),
+            })
     }
 
     /// The caller's session is up and the caller is its agent. Repeated calls (the agent restarted) register the new caller.
-    async fn session_ready(&self, #[zbus(header)] header: Header<'_>, #[zbus(connection)] connection: &Connection) -> Result<(), Error> {
+    async fn session_ready(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+    ) -> Result<(), Error> {
         let (session, agent) = self.caller(&header, connection, Need::UserSession).await?;
-        self.ask(|reply| Call::Ready { session, agent, reply })?.map_err(|ReadyRefusal::UnknownSession| Error::UnknownSession("the session manager did not start this session".to_owned()))
+        self.ask(|reply| Call::Ready {
+            session,
+            agent,
+            reply,
+        })?
+        .map_err(|ReadyRefusal::UnknownSession| {
+            Error::UnknownSession("the session manager did not start this session".to_owned())
+        })
     }
 }
 
@@ -166,8 +243,14 @@ pub fn unlock(connection: &zbus::blocking::Connection, agent: &str) -> zbus::Res
 
 /// Export the interface on the bus `builder` connects to and take [`BUS_NAME`], never queued behind another owner. The
 /// interface is served while the returned connection lives.
-pub fn serve(builder: zbus::blocking::connection::Builder<'_>, authorizer: Arc<dyn Authorizer>, sink: Sink) -> zbus::Result<zbus::blocking::Connection> {
-    let connection = builder.serve_at(OBJECT_PATH, LoginManager { authorizer, sink })?.build()?;
+pub fn serve(
+    builder: zbus::blocking::connection::Builder<'_>,
+    authorizer: Arc<dyn Authorizer>,
+    sink: Sink,
+) -> zbus::Result<zbus::blocking::Connection> {
+    let connection = builder
+        .serve_at(OBJECT_PATH, LoginManager { authorizer, sink })?
+        .build()?;
     match connection.request_name_with_flags(BUS_NAME, RequestNameFlags::DoNotQueue.into())? {
         RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => Ok(connection),
         RequestNameReply::Exists | RequestNameReply::InQueue => Err(zbus::Error::NameTaken),

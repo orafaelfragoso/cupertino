@@ -7,7 +7,9 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     if let Some(arg) = std::env::args().nth(1) {
-        eprintln!("cupertino-windowmanager: unexpected argument {arg:?}\nusage: cupertino-windowmanager");
+        eprintln!(
+            "cupertino-windowmanager: unexpected argument {arg:?}\nusage: cupertino-windowmanager"
+        );
         return ExitCode::FAILURE;
     }
     // `run` only returns on failure

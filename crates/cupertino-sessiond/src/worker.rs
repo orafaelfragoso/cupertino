@@ -42,7 +42,12 @@ pub fn run() -> ExitCode {
         Err(e) => {
             eprintln!("cupertino-sessiond: worker: {e}");
             // the manager may have gone: the journal line above is the record
-            if let Ok(frame) = cupertino_login_ipc::encode(&FromWorker::Failed { reason: e.to_string() }, MAX_FRAME) {
+            if let Ok(frame) = cupertino_login_ipc::encode(
+                &FromWorker::Failed {
+                    reason: e.to_string(),
+                },
+                MAX_FRAME,
+            ) {
                 let _ = channel.send_frame(&frame);
             }
             ExitCode::FAILURE
@@ -62,21 +67,38 @@ struct Relay {
 
 impl Relay {
     fn new(channel: Channel) -> Self {
-        Relay { channel, prompted: false, spoke_first: false }
+        Relay {
+            channel,
+            prompted: false,
+            spoke_first: false,
+        }
     }
 
     /// What the conversation has done so far, for [`outcome_of`].
     fn talk(&self) -> Talk {
-        Talk { said_before_asking: self.spoke_first }
+        Talk {
+            said_before_asking: self.spoke_first,
+        }
     }
 
     fn ask(&mut self, echo: bool, prompt: &CStr) -> std::result::Result<CString, ErrorCode> {
         self.prompted = true;
-        let frame = cupertino_login_ipc::encode(&FromWorker::Prompt { echo, text: prompt.to_string_lossy().into_owned() }, MAX_FRAME).map_err(|_| ErrorCode::CONV_ERR)?;
-        self.channel.send_frame(&frame).map_err(|_| ErrorCode::CONV_ERR)?;
+        let frame = cupertino_login_ipc::encode(
+            &FromWorker::Prompt {
+                echo,
+                text: prompt.to_string_lossy().into_owned(),
+            },
+            MAX_FRAME,
+        )
+        .map_err(|_| ErrorCode::CONV_ERR)?;
+        self.channel
+            .send_frame(&frame)
+            .map_err(|_| ErrorCode::CONV_ERR)?;
         match self.channel.receive::<ToWorker>() {
             // `CString::new` copies the text; PAM takes the copy and clears it, and the original is zeroed when dropped
-            Ok(ToWorker::Answer { secret }) => CString::new(secret.expose()).map_err(|_| ErrorCode::CONV_ERR),
+            Ok(ToWorker::Answer { secret }) => {
+                CString::new(secret.expose()).map_err(|_| ErrorCode::CONV_ERR)
+            }
             Ok(_) | Err(_) => Err(ErrorCode::CONV_ERR),
         }
     }
@@ -84,7 +106,9 @@ impl Relay {
     fn notice(&mut self, error: bool, message: &CStr) {
         self.spoke_first |= !self.prompted;
         let text = message.to_string_lossy().into_owned();
-        if let Ok(frame) = cupertino_login_ipc::encode(&FromWorker::Notice { error, text }, MAX_FRAME) {
+        if let Ok(frame) =
+            cupertino_login_ipc::encode(&FromWorker::Notice { error, text }, MAX_FRAME)
+        {
             // PAM's conversation returns at once; a manager that is gone fails the next prompt instead
             let _ = self.channel.send_frame(&frame);
         }
@@ -141,7 +165,13 @@ fn outcome_of(stage: Stage, code: ErrorCode, talk: Talk) -> Outcome {
     match (stage, code) {
         (_, ErrorCode::MAXTRIES) => Outcome::Locked,
         (Stage::Authenticate, ErrorCode::AUTH_ERR) if talk.said_before_asking => Outcome::Locked,
-        (Stage::Authenticate, ErrorCode::AUTH_ERR | ErrorCode::USER_UNKNOWN | ErrorCode::CRED_INSUFFICIENT | ErrorCode::CONV_ERR) => Outcome::Denied,
+        (
+            Stage::Authenticate,
+            ErrorCode::AUTH_ERR
+            | ErrorCode::USER_UNKNOWN
+            | ErrorCode::CRED_INSUFFICIENT
+            | ErrorCode::CONV_ERR,
+        ) => Outcome::Denied,
         (Stage::Account, ErrorCode::USER_UNKNOWN) => Outcome::Denied,
         (Stage::Account, ErrorCode::ACCT_EXPIRED | ErrorCode::NEW_AUTHTOK_REQD) => Outcome::Expired,
         (Stage::Account, ErrorCode::PERM_DENIED) => Outcome::Refused,
@@ -152,25 +182,52 @@ fn outcome_of(stage: Stage, code: ErrorCode, talk: Talk) -> Outcome {
 /// Steps 1 to 5; the exit status of the leader.
 fn session(channel: &mut Channel) -> Result<u8> {
     harden()?;
-    let ToWorker::Begin { service, login, tty, vt, class, mode, command, environment, path } = channel.receive()? else { return Err("the first message is not Begin".into()) };
+    let ToWorker::Begin {
+        service,
+        login,
+        tty,
+        vt,
+        class,
+        mode,
+        command,
+        environment,
+        path,
+    } = channel.receive()?
+    else {
+        return Err("the first message is not Begin".into());
+    };
 
     // the conversation reads the answers from the same socket; frames are read whole, so the two readers never split one
-    let mut context = Context::new(&service, Some(&login), Relay::new(Channel::new(channel.stream().try_clone()?, MAX_FRAME)))?;
+    let mut context = Context::new(
+        &service,
+        Some(&login),
+        Relay::new(Channel::new(channel.stream().try_clone()?, MAX_FRAME)),
+    )?;
     context.set_tty(Some(&tty))?;
     let decision = context
         .authenticate(Flag::NONE)
         .map_err(|e| (Stage::Authenticate, e))
-        .and_then(|()| context.acct_mgmt(Flag::NONE).map_err(|e| (Stage::Account, e)));
+        .and_then(|()| {
+            context
+                .acct_mgmt(Flag::NONE)
+                .map_err(|e| (Stage::Account, e))
+        });
     let outcome = match &decision {
         Ok(()) => Outcome::Accepted,
         Err((stage, e)) => {
             let outcome = outcome_of(*stage, e.code(), context.conversation().talk());
             // the PAM text for the journal (module messages, no secret); `Internal` is the only outcome that hides a cause
-            eprintln!("cupertino-sessiond: worker: {stage:?} refused ({}): {e}", outcome_name(outcome));
+            eprintln!(
+                "cupertino-sessiond: worker: {stage:?} refused ({}): {e}",
+                outcome_name(outcome)
+            );
             outcome
         }
     };
-    channel.send_frame(&cupertino_login_ipc::encode(&FromWorker::Decided { outcome }, MAX_FRAME)?)?;
+    channel.send_frame(&cupertino_login_ipc::encode(
+        &FromWorker::Decided { outcome },
+        MAX_FRAME,
+    )?)?;
     // a refused account opens nothing, and neither does a user who has a session already: the manager switches to it, and the
     // PAM transaction ends with this process (no credentials were established and no session opened)
     if outcome != Outcome::Accepted || mode == Mode::Verify {
@@ -186,22 +243,40 @@ fn session(channel: &mut Channel) -> Result<u8> {
     ] {
         context.putenv(entry)?;
     }
-    let session = context.open_session(Flag::NONE).map_err(|e| format!("opening the session: {e}"))?;
+    let session = context
+        .open_session(Flag::NONE)
+        .map_err(|e| format!("opening the session: {e}"))?;
 
-    let account = users::by_name(&authenticated)?.ok_or("the authenticated account has no password database entry")?;
-    let session_id = session.getenv("XDG_SESSION_ID").ok_or("the PAM stack did not register a login session (pam_systemd missing?)")?.to_owned();
+    let account = users::by_name(&authenticated)?
+        .ok_or("the authenticated account has no password database entry")?;
+    let session_id = session
+        .getenv("XDG_SESSION_ID")
+        .ok_or("the PAM stack did not register a login session (pam_systemd missing?)")?
+        .to_owned();
     let mut variables: BTreeMap<String, String> = BTreeMap::new();
     for (name, value) in session.envlist().iter_tuples() {
-        variables.insert(name.to_string_lossy().into_owned(), value.to_string_lossy().into_owned());
+        variables.insert(
+            name.to_string_lossy().into_owned(),
+            value.to_string_lossy().into_owned(),
+        );
     }
     let launch = Launch::new(&account, &command, variables, &environment, &path)?;
     let leader = spawn_leader(&launch)?;
 
     // the manager learns the session now; it needs nothing from this process afterwards
-    let started = cupertino_login_ipc::encode(&FromWorker::Started { session_id, leader: leader as u32, uid: account.uid }, MAX_FRAME)?;
+    let started = cupertino_login_ipc::encode(
+        &FromWorker::Started {
+            session_id,
+            leader: leader as u32,
+            uid: account.uid,
+        },
+        MAX_FRAME,
+    )?;
     let _ = channel.send_frame(&started);
     let status = wait_for(leader);
-    session.close(Flag::NONE).map_err(|e| format!("closing the session: {e}"))?;
+    session
+        .close(Flag::NONE)
+        .map_err(|e| format!("closing the session: {e}"))?;
     Ok(status)
 }
 
@@ -211,7 +286,13 @@ fn harden() -> Result<()> {
     if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
         return Err(format!("PR_SET_DUMPABLE: {}", io::Error::last_os_error()).into());
     }
-    rustix::process::setrlimit(rustix::process::Resource::Core, rustix::process::Rlimit { current: Some(0), maximum: Some(0) })?;
+    rustix::process::setrlimit(
+        rustix::process::Resource::Core,
+        rustix::process::Rlimit {
+            current: Some(0),
+            maximum: Some(0),
+        },
+    )?;
     Ok(())
 }
 
@@ -229,17 +310,38 @@ struct Launch {
 impl Launch {
     /// The environment is exactly the PAM environment (`XDG_*` and what `pam_systemd` and `pam_env` add), the login
     /// variables and the configured extras; nothing of the manager's own and nothing of the login screen's.
-    fn new(account: &users::Account, command: &[String], mut variables: BTreeMap<String, String>, extras: &[String], path: &str) -> Result<Self> {
-        for (name, value) in [("HOME", account.home.as_str()), ("USER", &account.login), ("LOGNAME", &account.login), ("SHELL", &account.shell), ("PATH", path)] {
+    fn new(
+        account: &users::Account,
+        command: &[String],
+        mut variables: BTreeMap<String, String>,
+        extras: &[String],
+        path: &str,
+    ) -> Result<Self> {
+        for (name, value) in [
+            ("HOME", account.home.as_str()),
+            ("USER", &account.login),
+            ("LOGNAME", &account.login),
+            ("SHELL", &account.shell),
+            ("PATH", path),
+        ] {
             variables.insert(name.to_owned(), value.to_owned());
         }
         for extra in extras {
-            let (name, value) = extra.split_once('=').ok_or("an extra environment entry has no `=`")?;
+            let (name, value) = extra
+                .split_once('=')
+                .ok_or("an extra environment entry has no `=`")?;
             variables.insert(name.to_owned(), value.to_owned());
         }
-        let cstring = |text: &str| CString::new(text).map_err(|_| "a launch string contains a nul byte");
-        let arguments = command.iter().map(|word| cstring(word)).collect::<std::result::Result<Vec<_>, _>>()?;
-        let program = arguments.first().ok_or("the session command is empty")?.clone();
+        let cstring =
+            |text: &str| CString::new(text).map_err(|_| "a launch string contains a nul byte");
+        let arguments = command
+            .iter()
+            .map(|word| cstring(word))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let program = arguments
+            .first()
+            .ok_or("the session command is empty")?
+            .clone();
         Ok(Launch {
             login: cstring(&account.login)?,
             uid: account.uid,
@@ -247,7 +349,10 @@ impl Launch {
             home: cstring(&account.home)?,
             program,
             arguments,
-            environment: variables.iter().map(|(name, value)| cstring(&format!("{name}={value}"))).collect::<std::result::Result<Vec<_>, _>>()?,
+            environment: variables
+                .iter()
+                .map(|(name, value)| cstring(&format!("{name}={value}")))
+                .collect::<std::result::Result<Vec<_>, _>>()?,
         })
     }
 }
@@ -272,7 +377,8 @@ fn spawn_leader(launch: &Launch) -> Result<libc::pid_t> {
         return Err(format!("pipe2: {}", io::Error::last_os_error()).into());
     }
     // Safety: both descriptors are fresh and owned here.
-    let (report_read, report_write) = unsafe { (OwnedFd::from_raw_fd(pipe[0]), OwnedFd::from_raw_fd(pipe[1])) };
+    let (report_read, report_write) =
+        unsafe { (OwnedFd::from_raw_fd(pipe[0]), OwnedFd::from_raw_fd(pipe[1])) };
     // Safety: the worker has no other thread, so the child of `fork` may allocate.
     match unsafe { libc::fork() } {
         -1 => Err(format!("fork: {}", io::Error::last_os_error()).into()),
@@ -295,14 +401,24 @@ fn spawn_leader(launch: &Launch) -> Result<libc::pid_t> {
             let mut message = [0u8; 512];
             let count = loop {
                 // Safety: the buffer is valid for its length.
-                let count = unsafe { libc::read(report_read.as_raw_fd(), message.as_mut_ptr().cast(), message.len()) };
+                let count = unsafe {
+                    libc::read(
+                        report_read.as_raw_fd(),
+                        message.as_mut_ptr().cast(),
+                        message.len(),
+                    )
+                };
                 if count >= 0 || io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
                     break count;
                 }
             };
             if count > 0 {
                 wait_for(leader);
-                return Err(format!("starting the session: {}", String::from_utf8_lossy(&message[..count as usize])).into());
+                return Err(format!(
+                    "starting the session: {}",
+                    String::from_utf8_lossy(&message[..count as usize])
+                )
+                .into());
             }
             Ok(leader)
         }
@@ -365,16 +481,28 @@ unsafe fn become_user_and_exec(launch: &Launch, report: libc::c_int) -> ! {
         fail(report, "opening /dev/null");
     }
     // every descriptor above 2 goes, except the report pipe (it closes by itself on `execve`)
-    let close_range = |first: libc::c_uint, last: libc::c_uint| libc::syscall(libc::SYS_close_range, first, last, 0);
+    let close_range = |first: libc::c_uint, last: libc::c_uint| {
+        libc::syscall(libc::SYS_close_range, first, last, 0)
+    };
     let kept = report as libc::c_uint;
-    if (kept > 3 && close_range(3, kept - 1) != 0) || close_range(kept + 1, libc::c_uint::MAX) != 0 {
+    if (kept > 3 && close_range(3, kept - 1) != 0) || close_range(kept + 1, libc::c_uint::MAX) != 0
+    {
         fail(report, "close_range");
     }
-    let mut arguments: Vec<*const libc::c_char> = launch.arguments.iter().map(|word| word.as_ptr()).collect();
+    let mut arguments: Vec<*const libc::c_char> =
+        launch.arguments.iter().map(|word| word.as_ptr()).collect();
     arguments.push(std::ptr::null());
-    let mut environment: Vec<*const libc::c_char> = launch.environment.iter().map(|entry| entry.as_ptr()).collect();
+    let mut environment: Vec<*const libc::c_char> = launch
+        .environment
+        .iter()
+        .map(|entry| entry.as_ptr())
+        .collect();
     environment.push(std::ptr::null());
-    libc::execve(launch.program.as_ptr(), arguments.as_ptr(), environment.as_ptr());
+    libc::execve(
+        launch.program.as_ptr(),
+        arguments.as_ptr(),
+        environment.as_ptr(),
+    );
     fail(report, "execve")
 }
 
@@ -414,24 +542,46 @@ mod tests {
     use super::*;
 
     /// A conversation that asked for a password, as a wrong one has.
-    const ASKED: Talk = Talk { said_before_asking: false };
+    const ASKED: Talk = Talk {
+        said_before_asking: false,
+    };
 
     #[test]
     fn a_wrong_password_and_an_unknown_account_are_the_same_outcome() {
-        assert_eq!(outcome_of(Stage::Authenticate, ErrorCode::AUTH_ERR, ASKED), Outcome::Denied);
-        assert_eq!(outcome_of(Stage::Authenticate, ErrorCode::USER_UNKNOWN, ASKED), Outcome::Denied);
-        assert_eq!(outcome_of(Stage::Account, ErrorCode::USER_UNKNOWN, ASKED), Outcome::Denied);
+        assert_eq!(
+            outcome_of(Stage::Authenticate, ErrorCode::AUTH_ERR, ASKED),
+            Outcome::Denied
+        );
+        assert_eq!(
+            outcome_of(Stage::Authenticate, ErrorCode::USER_UNKNOWN, ASKED),
+            Outcome::Denied
+        );
+        assert_eq!(
+            outcome_of(Stage::Account, ErrorCode::USER_UNKNOWN, ASKED),
+            Outcome::Denied
+        );
     }
 
     #[test]
     fn a_refusal_that_said_why_before_the_password_prompt_is_a_lock_out() {
         // pam_faillock's lock-out: two info messages, then the prompt, then AUTH_ERR
-        let locked = Talk { said_before_asking: true };
-        assert_eq!(outcome_of(Stage::Authenticate, ErrorCode::AUTH_ERR, locked), Outcome::Locked);
+        let locked = Talk {
+            said_before_asking: true,
+        };
+        assert_eq!(
+            outcome_of(Stage::Authenticate, ErrorCode::AUTH_ERR, locked),
+            Outcome::Locked
+        );
         // a wrong password: the prompt came first and nothing was said before it
-        assert_eq!(outcome_of(Stage::Authenticate, ErrorCode::AUTH_ERR, ASKED), Outcome::Denied);
+        assert_eq!(
+            outcome_of(Stage::Authenticate, ErrorCode::AUTH_ERR, ASKED),
+            Outcome::Denied
+        );
         // the account stage keeps its own mapping
-        assert_eq!(outcome_of(Stage::Account, ErrorCode::AUTH_ERR, locked), Outcome::Internal);
+        assert_eq!(
+            outcome_of(Stage::Account, ErrorCode::AUTH_ERR, locked),
+            Outcome::Internal
+        );
     }
 
     #[test]
@@ -443,7 +593,10 @@ mod tests {
         assert!(relay.talk().said_before_asking);
         // the manager is gone, so the prompt fails at once
         drop(ours);
-        assert_eq!(relay.prompt_echo_off(c"Password: ").unwrap_err(), ErrorCode::CONV_ERR);
+        assert_eq!(
+            relay.prompt_echo_off(c"Password: ").unwrap_err(),
+            ErrorCode::CONV_ERR
+        );
 
         // a message after the prompt is not a message before it
         let (ours, theirs) = std::os::unix::net::UnixStream::pair().unwrap();
@@ -456,14 +609,38 @@ mod tests {
 
     #[test]
     fn the_other_pam_codes_map_as_the_design_says() {
-        assert_eq!(outcome_of(Stage::Authenticate, ErrorCode::MAXTRIES, ASKED), Outcome::Locked);
-        assert_eq!(outcome_of(Stage::Account, ErrorCode::ACCT_EXPIRED, ASKED), Outcome::Expired);
-        assert_eq!(outcome_of(Stage::Account, ErrorCode::NEW_AUTHTOK_REQD, ASKED), Outcome::Expired);
-        assert_eq!(outcome_of(Stage::Account, ErrorCode::PERM_DENIED, ASKED), Outcome::Refused);
+        assert_eq!(
+            outcome_of(Stage::Authenticate, ErrorCode::MAXTRIES, ASKED),
+            Outcome::Locked
+        );
+        assert_eq!(
+            outcome_of(Stage::Account, ErrorCode::ACCT_EXPIRED, ASKED),
+            Outcome::Expired
+        );
+        assert_eq!(
+            outcome_of(Stage::Account, ErrorCode::NEW_AUTHTOK_REQD, ASKED),
+            Outcome::Expired
+        );
+        assert_eq!(
+            outcome_of(Stage::Account, ErrorCode::PERM_DENIED, ASKED),
+            Outcome::Refused
+        );
         // a cancelled conversation is no one's failure to report
-        assert_eq!(outcome_of(Stage::Authenticate, ErrorCode::CONV_ERR, ASKED), Outcome::Denied);
-        for code in [ErrorCode::ABORT, ErrorCode::SYSTEM_ERR, ErrorCode::AUTHINFO_UNAVAIL, ErrorCode::BUF_ERR] {
-            assert_eq!(outcome_of(Stage::Authenticate, code, ASKED), Outcome::Internal, "{code:?}");
+        assert_eq!(
+            outcome_of(Stage::Authenticate, ErrorCode::CONV_ERR, ASKED),
+            Outcome::Denied
+        );
+        for code in [
+            ErrorCode::ABORT,
+            ErrorCode::SYSTEM_ERR,
+            ErrorCode::AUTHINFO_UNAVAIL,
+            ErrorCode::BUF_ERR,
+        ] {
+            assert_eq!(
+                outcome_of(Stage::Authenticate, code, ASKED),
+                Outcome::Internal,
+                "{code:?}"
+            );
         }
     }
 
@@ -473,11 +650,21 @@ mod tests {
         let (ours, theirs) = std::os::unix::net::UnixStream::pair().unwrap();
         let mut manager = Channel::new(ours, MAX_FRAME);
         let mut relay = Relay::new(Channel::new(theirs, MAX_FRAME));
-        manager.send_frame(&encode(&ToWorker::Cancel {}, MAX_FRAME).unwrap()).unwrap();
-        assert_eq!(relay.prompt_echo_off(c"Password: ").unwrap_err(), ErrorCode::CONV_ERR);
-        assert!(matches!(manager.receive::<FromWorker>().unwrap(), FromWorker::Prompt { echo: false, text } if text == "Password: "));
+        manager
+            .send_frame(&encode(&ToWorker::Cancel {}, MAX_FRAME).unwrap())
+            .unwrap();
+        assert_eq!(
+            relay.prompt_echo_off(c"Password: ").unwrap_err(),
+            ErrorCode::CONV_ERR
+        );
+        assert!(
+            matches!(manager.receive::<FromWorker>().unwrap(), FromWorker::Prompt { echo: false, text } if text == "Password: ")
+        );
         drop(manager);
-        assert_eq!(relay.prompt_echo_on(c"Name: ").unwrap_err(), ErrorCode::CONV_ERR);
+        assert_eq!(
+            relay.prompt_echo_on(c"Name: ").unwrap_err(),
+            ErrorCode::CONV_ERR
+        );
     }
 
     #[test]
@@ -488,8 +675,17 @@ mod tests {
         let mut manager = Channel::new(ours, MAX_FRAME);
         let mut relay = Relay::new(Channel::new(theirs, MAX_FRAME));
         let secret = Secret::new(Zeroizing::new("hunter2".to_owned())).unwrap();
-        manager.send_frame(&encode_secret(&ToWorker::Answer { secret }, MAX_FRAME).unwrap()).unwrap();
-        assert_eq!(relay.prompt_echo_off(c"Password: ").unwrap().to_str().unwrap(), "hunter2");
+        manager
+            .send_frame(&encode_secret(&ToWorker::Answer { secret }, MAX_FRAME).unwrap())
+            .unwrap();
+        assert_eq!(
+            relay
+                .prompt_echo_off(c"Password: ")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "hunter2"
+        );
     }
 
     #[test]
@@ -499,7 +695,11 @@ mod tests {
         let mut relay = Relay::new(Channel::new(theirs, MAX_FRAME));
         relay.error_msg(c"The account is locked due to 3 failed logins.");
         relay.text_info(c"Your password will expire in 2 days.");
-        assert!(matches!(manager.receive::<FromWorker>().unwrap(), FromWorker::Notice { error: true, text } if text.starts_with("The account is locked")));
-        assert!(matches!(manager.receive::<FromWorker>().unwrap(), FromWorker::Notice { error: false, text } if text.starts_with("Your password")));
+        assert!(
+            matches!(manager.receive::<FromWorker>().unwrap(), FromWorker::Notice { error: true, text } if text.starts_with("The account is locked"))
+        );
+        assert!(
+            matches!(manager.receive::<FromWorker>().unwrap(), FromWorker::Notice { error: false, text } if text.starts_with("Your password"))
+        );
     }
 }

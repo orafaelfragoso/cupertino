@@ -28,7 +28,11 @@ struct Args(Vec<String>);
 
 impl Args {
     fn get(&self, k: &str) -> Option<String> {
-        self.0.iter().position(|a| a == k).and_then(|i| self.0.get(i + 1)).cloned()
+        self.0
+            .iter()
+            .position(|a| a == k)
+            .and_then(|i| self.0.get(i + 1))
+            .cloned()
     }
     fn flag(&self, k: &str) -> bool {
         self.0.iter().any(|a| a == k)
@@ -45,25 +49,66 @@ fn default_rect(material: &str, w: u32, h: u32, scale: f32) -> [f32; 4] {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_frame(gpu: &HeadlessGpu, renderer: &mut MaterialRenderer, src: &wgpu::TextureView, dst: &wgpu::TextureView, size: (u32, u32), scale: f32, generation: u64, tint: [f32; 3], regions: &[MaterialRegion]) -> cupertino_glass::RenderStats {
+fn render_frame(
+    gpu: &HeadlessGpu,
+    renderer: &mut MaterialRenderer,
+    src: &wgpu::TextureView,
+    dst: &wgpu::TextureView,
+    size: (u32, u32),
+    scale: f32,
+    generation: u64,
+    tint: [f32; 3],
+    regions: &[MaterialRegion],
+) -> cupertino_glass::RenderStats {
     let mut enc = gpu.device.create_command_encoder(&Default::default());
     let stats = renderer.render(
         &mut enc,
-        &FrameDesc { source: src, source_size: size, target: dst, target_size: size, display_scale: scale, damage_generation: generation, tint_color: tint, init: TargetInit::CopySource },
+        &FrameDesc {
+            source: src,
+            source_size: size,
+            target: dst,
+            target_size: size,
+            display_scale: scale,
+            damage_generation: generation,
+            tint_color: tint,
+            init: TargetInit::CopySource,
+        },
         regions,
     );
     gpu.queue.submit([enc.finish()]);
     stats
 }
 
-fn bench(gpu: &HeadlessGpu, wall: &image::RgbaImage, regions: &[MaterialRegion], scale: f32, tint: [f32; 3], n: usize, label: &str) {
+fn bench(
+    gpu: &HeadlessGpu,
+    wall: &image::RgbaImage,
+    regions: &[MaterialRegion],
+    scale: f32,
+    tint: [f32; 3],
+    n: usize,
+    label: &str,
+) {
     let (w, h) = wall.dimensions();
     let src = gpu.upload(wall);
     let dst = gpu.target(w, h);
-    let (sv, dv) = (src.create_view(&Default::default()), dst.create_view(&Default::default()));
-    let mut renderer = MaterialRenderer::new(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm);
+    let (sv, dv) = (
+        src.create_view(&Default::default()),
+        dst.create_view(&Default::default()),
+    );
+    let mut renderer =
+        MaterialRenderer::new(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm);
     for g in 0..10 {
-        render_frame(gpu, &mut renderer, &sv, &dv, (w, h), scale, g, tint, regions);
+        render_frame(
+            gpu,
+            &mut renderer,
+            &sv,
+            &dv,
+            (w, h),
+            scale,
+            g,
+            tint,
+            regions,
+        );
     }
     gpu.device.poll(wgpu::Maintain::Wait);
     let run = |renderer: &mut MaterialRenderer, bump: bool| {
@@ -90,8 +135,15 @@ fn bench(gpu: &HeadlessGpu, wall: &image::RgbaImage, regions: &[MaterialRegion],
     );
 }
 
-fn recipe(theme: &Theme, appearance: Appearance, material: &str, opts: &MaterialOptions) -> Result<Recipe> {
-    theme.recipe(appearance, material, opts).map_err(|e| anyhow!("{e}"))
+fn recipe(
+    theme: &Theme,
+    appearance: Appearance,
+    material: &str,
+    opts: &MaterialOptions,
+) -> Result<Recipe> {
+    theme
+        .recipe(appearance, material, opts)
+        .map_err(|e| anyhow!("{e}"))
 }
 
 fn reg(rect: [f32; 4], rc: &Recipe, radius: f32, st: CornerStyle) -> MaterialRegion<'_> {
@@ -132,22 +184,59 @@ fn demo(gpu: &HeadlessGpu, theme: &Theme) -> Result<()> {
         let side = recipe(theme, appearance, "Sidebar", &opts)?;
         let title = recipe(theme, appearance, "Titlebar", &opts)?;
         let sel = recipe(theme, appearance, "MenuBarSelection", &opts)?;
-        let opaque = recipe(theme, appearance, "Menu", &MaterialOptions { reduce_transparency: true, ..Default::default() })?;
+        let opaque = recipe(
+            theme,
+            appearance,
+            "Menu",
+            &MaterialOptions {
+                reduce_transparency: true,
+                ..Default::default()
+            },
+        )?;
         let regions = [
             reg([0.0, 0.0, w as f32, 24.0], &bar, 0.0, CornerStyle::Circular),
-            reg([60.0, 80.0, 220.0, 420.0], &side, 12.0, CornerStyle::continuous()),
-            reg([320.0, 80.0, 360.0, 40.0], &title, 10.0, CornerStyle::continuous()),
-            reg([320.0, 140.0, 300.0, 260.0], &menu, 10.0, CornerStyle::continuous()),
-            reg([700.0, 80.0, 300.0, 260.0], &opaque, 10.0, CornerStyle::continuous()),
+            reg(
+                [60.0, 80.0, 220.0, 420.0],
+                &side,
+                12.0,
+                CornerStyle::continuous(),
+            ),
+            reg(
+                [320.0, 80.0, 360.0, 40.0],
+                &title,
+                10.0,
+                CornerStyle::continuous(),
+            ),
+            reg(
+                [320.0, 140.0, 300.0, 260.0],
+                &menu,
+                10.0,
+                CornerStyle::continuous(),
+            ),
+            reg(
+                [700.0, 80.0, 300.0, 260.0],
+                &opaque,
+                10.0,
+                CornerStyle::continuous(),
+            ),
             MaterialRegion::from_recipe([14.0, 2.0, 70.0, 20.0], &sel, scale),
         ];
         let img = gpu.render_once(&wall, &regions, scale, tint);
         let path = out.join(format!("{name}_materials.png"));
         img.save(&path)?;
         println!("wrote {}", path.display());
-        for (rect, rc, tag) in [([0.0, 0.0, w as f32, 24.0], &bar, "menubar"), ([320.0, 140.0, 300.0, 260.0], &menu, "menu"), ([60.0, 80.0, 220.0, 420.0], &side, "sidebar")] {
+        for (rect, rc, tag) in [
+            ([0.0, 0.0, w as f32, 24.0], &bar, "menubar"),
+            ([320.0, 140.0, 300.0, 260.0], &menu, "menu"),
+            ([60.0, 80.0, 220.0, 420.0], &side, "sidebar"),
+        ] {
             let radius = if tag == "menubar" { 0.0 } else { 12.0 };
-            let img = gpu.render_once(&wall, &[reg(rect, rc, radius, CornerStyle::continuous())], scale, tint);
+            let img = gpu.render_once(
+                &wall,
+                &[reg(rect, rc, radius, CornerStyle::continuous())],
+                scale,
+                tint,
+            );
             let path = out.join(format!("{name}_{tag}.png"));
             img.save(&path)?;
             println!("wrote {}", path.display());
@@ -156,11 +245,22 @@ fn demo(gpu: &HeadlessGpu, theme: &Theme) -> Result<()> {
 
     // corner styles side by side on a flat colour
     let flat = image::RgbaImage::from_pixel(640, 240, image::Rgba([40, 40, 48, 255]));
-    let solid = Recipe { fills: vec![cupertino_theme::Fill { rgba: [0.95, 0.95, 0.97, 1.0], blend: cupertino_theme::Blend::Normal, tint_layer: false }], ..Default::default() };
+    let solid = Recipe {
+        fills: vec![cupertino_theme::Fill {
+            rgba: [0.95, 0.95, 0.97, 1.0],
+            blend: cupertino_theme::Blend::Normal,
+            tint_layer: false,
+        }],
+        ..Default::default()
+    };
     let regions = [
-        MaterialRegion::new([20.0, 20.0, 180.0, 180.0], &solid).with_corner(40.0, CornerStyle::Circular),
-        MaterialRegion::new([230.0, 20.0, 180.0, 180.0], &solid).with_corner(40.0, CornerStyle::continuous()),
-        MaterialRegion::new([440.0, 20.0, 180.0, 180.0], &solid).with_corner(90.0, CornerStyle::continuous()).with_opacity(0.8),
+        MaterialRegion::new([20.0, 20.0, 180.0, 180.0], &solid)
+            .with_corner(40.0, CornerStyle::Circular),
+        MaterialRegion::new([230.0, 20.0, 180.0, 180.0], &solid)
+            .with_corner(40.0, CornerStyle::continuous()),
+        MaterialRegion::new([440.0, 20.0, 180.0, 180.0], &solid)
+            .with_corner(90.0, CornerStyle::continuous())
+            .with_opacity(0.8),
     ];
     let img = gpu.render_once(&flat, &regions, 1.0, [0.5; 3]);
     let path = out.join("corner_styles.png");
@@ -168,27 +268,62 @@ fn demo(gpu: &HeadlessGpu, theme: &Theme) -> Result<()> {
     println!("wrote {}", path.display());
 
     // vibrant glyphs on a material
-    for (appearance, mode, name) in [(Appearance::Dark, VibrantMode::Dark, "vibrant_dark"), (Appearance::Light, VibrantMode::Light, "vibrant_light")] {
+    for (appearance, mode, name) in [
+        (Appearance::Dark, VibrantMode::Dark, "vibrant_dark"),
+        (Appearance::Light, VibrantMode::Light, "vibrant_light"),
+    ] {
         let side = recipe(theme, appearance, "Sidebar", &opts)?;
         let src = gpu.upload(&wall);
         let a = gpu.target(w, h);
         let b = gpu.target(w, h);
         let glyphs = gpu.upload(&glyph_template(256, 64));
-        let mut renderer = MaterialRenderer::new(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm);
-        let (sv, av, bv, gv) = (src.create_view(&Default::default()), a.create_view(&Default::default()), b.create_view(&Default::default()), glyphs.create_view(&Default::default()));
+        let mut renderer =
+            MaterialRenderer::new(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm);
+        let (sv, av, bv, gv) = (
+            src.create_view(&Default::default()),
+            a.create_view(&Default::default()),
+            b.create_view(&Default::default()),
+            glyphs.create_view(&Default::default()),
+        );
         let mut enc = gpu.device.create_command_encoder(&Default::default());
         renderer.render(
             &mut enc,
-            &FrameDesc { source: &sv, source_size: (w, h), target: &av, target_size: (w, h), display_scale: 1.0, damage_generation: 1, tint_color: tint, init: TargetInit::CopySource },
-            &[MaterialRegion::new([100.0, 100.0, 520.0, 300.0], &side).with_corner(14.0, CornerStyle::continuous())],
+            &FrameDesc {
+                source: &sv,
+                source_size: (w, h),
+                target: &av,
+                target_size: (w, h),
+                display_scale: 1.0,
+                damage_generation: 1,
+                tint_color: tint,
+                init: TargetInit::CopySource,
+            },
+            &[MaterialRegion::new([100.0, 100.0, 520.0, 300.0], &side)
+                .with_corner(14.0, CornerStyle::continuous())],
         );
         enc.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo { texture: &a, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            wgpu::TexelCopyTextureInfo { texture: &b, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::TexelCopyTextureInfo {
+                texture: &a,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &b,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
         let style = VibrantStyle::new(mode);
-        let draws: Vec<VibrantDraw> = (0..3).map(|i| VibrantDraw::new(&gv, [130.0, 130.0 + i as f32 * 80.0, 256.0, 64.0], style)).collect();
+        let draws: Vec<VibrantDraw> = (0..3)
+            .map(|i| VibrantDraw::new(&gv, [130.0, 130.0 + i as f32 * 80.0, 256.0, 64.0], style))
+            .collect();
         renderer.draw_vibrant(&mut enc, &bv, &av, (w, h), &draws);
         gpu.queue.submit([enc.finish()]);
         let img = gpu.read(&a);
@@ -213,10 +348,18 @@ fn main() -> Result<()> {
         return demo(&gpu, &theme);
     }
 
-    let appearance: Appearance = args.get("--appearance").unwrap_or_else(|| "light".into()).parse().map_err(|e: String| anyhow!(e))?;
+    let appearance: Appearance = args
+        .get("--appearance")
+        .unwrap_or_else(|| "light".into())
+        .parse()
+        .map_err(|e: String| anyhow!(e))?;
     let material = args.get("--material").unwrap_or_else(|| "MenuBar".into());
     let opts = MaterialOptions {
-        window: if args.get("--window").as_deref() == Some("inactive") { WindowState::Inactive } else { WindowState::Active },
+        window: if args.get("--window").as_deref() == Some("inactive") {
+            WindowState::Inactive
+        } else {
+            WindowState::Active
+        },
         interaction: match args.get("--interaction").as_deref() {
             Some("rollover") => Interaction::Rollover,
             Some("pressed") => Interaction::Pressed,
@@ -228,13 +371,21 @@ fn main() -> Result<()> {
     let r = recipe(&theme, appearance, &material, &opts)?;
     let (w, h) = args
         .get("--size")
-        .and_then(|s| s.split_once('x').map(|(a, b)| (a.parse().unwrap(), b.parse().unwrap())))
+        .and_then(|s| {
+            s.split_once('x')
+                .map(|(a, b)| (a.parse().unwrap(), b.parse().unwrap()))
+        })
         .unwrap_or((1920u32, 1080u32));
     let wall = match args.get("--wallpaper") {
-        Some(p) => image::open(p)?.resize_exact(w, h, image::imageops::FilterType::Triangle).to_rgba8(),
+        Some(p) => image::open(p)?
+            .resize_exact(w, h, image::imageops::FilterType::Triangle)
+            .to_rgba8(),
         None => procedural_wallpaper(w, h),
     };
-    let scale: f32 = args.get("--display-scale").map(|s| s.parse().unwrap()).unwrap_or(1.0);
+    let scale: f32 = args
+        .get("--display-scale")
+        .map(|s| s.parse().unwrap())
+        .unwrap_or(1.0);
     let rect: [f32; 4] = args
         .get("--rect")
         .map(|s| {
@@ -255,8 +406,15 @@ fn main() -> Result<()> {
     let tint = average_color(&wall);
     println!("recipe {}: {:#?}", r.name, r);
     let img = gpu.render_once(&wall, &[region], scale, tint);
-    let default_name = format!("{}_{}.png", appearance.as_str().replace('-', "_"), material.to_lowercase());
-    let out = args.get("--out").map(PathBuf::from).unwrap_or_else(|| output_dir().join(default_name));
+    let default_name = format!(
+        "{}_{}.png",
+        appearance.as_str().replace('-', "_"),
+        material.to_lowercase()
+    );
+    let out = args
+        .get("--out")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| output_dir().join(default_name));
     if let Some(p) = out.parent() {
         std::fs::create_dir_all(p)?;
     }
@@ -265,10 +423,18 @@ fn main() -> Result<()> {
     if args.flag("--cpu-check") {
         let t0 = Instant::now();
         let reference = cpu::render_regions(&wall, &[region], scale, tint, false, false);
-        println!("cpu reference (same plan) in {:?}: PSNR GPU vs CPU = {:.2} dB", t0.elapsed(), psnr(&img, &reference));
+        println!(
+            "cpu reference (same plan) in {:?}: PSNR GPU vs CPU = {:.2} dB",
+            t0.elapsed(),
+            psnr(&img, &reference)
+        );
         let t0 = Instant::now();
         let exact = cpu::render_regions(&wall, &[region], scale, tint, true, true);
-        println!("cpu exact (full Gaussian, reference SDF) in {:?}: PSNR GPU vs exact = {:.2} dB", t0.elapsed(), psnr(&img, &exact));
+        println!(
+            "cpu exact (full Gaussian, reference SDF) in {:?}: PSNR GPU vs exact = {:.2} dB",
+            t0.elapsed(),
+            psnr(&img, &exact)
+        );
         exact.save(out.with_extension("cpu_exact.png"))?;
     }
     if let Some(n) = args.get("--bench").map(|s| s.parse::<usize>().unwrap()) {
@@ -280,13 +446,26 @@ fn main() -> Result<()> {
         let (fw, fh) = (w as f32, h as f32);
         let regions = [
             MaterialRegion::new([0.0, 0.0, fw, 24.0 * scale], &bar),
-            MaterialRegion::new([fw * 0.05, fh * 0.1, fw * 0.2, fh * 0.6], &side).with_corner(12.0 * scale, CornerStyle::continuous()),
-            MaterialRegion::new([fw * 0.3, fh * 0.1, fw * 0.3, 40.0 * scale], &title).with_corner(10.0 * scale, CornerStyle::continuous()),
-            MaterialRegion::new([fw * 0.3, fh * 0.2, fw * 0.25, fh * 0.4], &menu).with_corner(10.0 * scale, CornerStyle::continuous()),
-            MaterialRegion::new([fw * 0.6, fh * 0.2, fw * 0.25, fh * 0.4], &menu).with_corner(10.0 * scale, CornerStyle::continuous()),
-            MaterialRegion::new([fw * 0.6, fh * 0.7, fw * 0.3, fh * 0.2], &side).with_corner(12.0 * scale, CornerStyle::continuous()),
+            MaterialRegion::new([fw * 0.05, fh * 0.1, fw * 0.2, fh * 0.6], &side)
+                .with_corner(12.0 * scale, CornerStyle::continuous()),
+            MaterialRegion::new([fw * 0.3, fh * 0.1, fw * 0.3, 40.0 * scale], &title)
+                .with_corner(10.0 * scale, CornerStyle::continuous()),
+            MaterialRegion::new([fw * 0.3, fh * 0.2, fw * 0.25, fh * 0.4], &menu)
+                .with_corner(10.0 * scale, CornerStyle::continuous()),
+            MaterialRegion::new([fw * 0.6, fh * 0.2, fw * 0.25, fh * 0.4], &menu)
+                .with_corner(10.0 * scale, CornerStyle::continuous()),
+            MaterialRegion::new([fw * 0.6, fh * 0.7, fw * 0.3, fh * 0.2], &side)
+                .with_corner(12.0 * scale, CornerStyle::continuous()),
         ];
-        bench(&gpu, &wall, &regions, scale, tint, n, "6 regions (menu bar, 2 sidebars, titlebar, 2 menus)");
+        bench(
+            &gpu,
+            &wall,
+            &regions,
+            scale,
+            tint,
+            n,
+            "6 regions (menu bar, 2 sidebars, titlebar, 2 menus)",
+        );
     }
     Ok(())
 }

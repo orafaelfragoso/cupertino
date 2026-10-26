@@ -19,14 +19,17 @@
 use crate::center::BannerMeasure;
 use crate::markup::Span;
 use crate::notification::Notification;
-use crate::surface::{ClearMenu, CentreHeader, CENTRE_TITLE, CENTRE_TITLE_SIZE, CLEAR_BUTTON_PADDING, CLEAR_LABEL, MENU_LABEL_PADDING, MENU_RADIUS};
 use crate::platter::{PlatterMaterial, PlatterShadow, OUTLINE_WIDTH};
+use crate::surface::{
+    CentreHeader, ClearMenu, CENTRE_TITLE, CENTRE_TITLE_SIZE, CLEAR_BUTTON_PADDING, CLEAR_LABEL,
+    MENU_LABEL_PADDING, MENU_RADIUS,
+};
+use cupertino_assets::{AssetError, Assets, FontRole};
 use cupertino_decorations::shadow::{ShadowParams, ShadowRasterizer};
 use cupertino_decorations::shape::rounded_path;
-use cupertino_assets::{AssetError, Assets, FontRole};
-use cupertino_icons::SystemIcons;
 use cupertino_decorations::text::TextRenderer;
 use cupertino_geometry::{CornerStyle, Point, Radii, Rect, Size};
+use cupertino_icons::SystemIcons;
 use cupertino_theme::recipe::{MaterialOptions, Recipe};
 use cupertino_theme::{Appearance, SemanticColor, Theme, Typography};
 use std::collections::HashMap;
@@ -61,13 +64,40 @@ pub struct BannerPalette {
 
 impl BannerPalette {
     pub fn from_theme(theme: &Theme, appearance: Appearance) -> Self {
-        let get = |c: SemanticColor, fallback: Rgba| theme.tokens.semantic(appearance, c).map(|c| c.to_array()).unwrap_or(fallback);
+        let get = |c: SemanticColor, fallback: Rgba| {
+            theme
+                .tokens
+                .semantic(appearance, c)
+                .map(|c| c.to_array())
+                .unwrap_or(fallback)
+        };
         let dark = appearance.is_dark();
-        let window = get(SemanticColor::WindowBackground, if dark { [0.2, 0.2, 0.2, 1.0] } else { [0.93, 0.93, 0.93, 1.0] });
+        let window = get(
+            SemanticColor::WindowBackground,
+            if dark {
+                [0.2, 0.2, 0.2, 1.0]
+            } else {
+                [0.93, 0.93, 0.93, 1.0]
+            },
+        );
         let sys = |c: SemanticColor| get(c, [0.5, 0.5, 0.5, 1.0]);
         Self {
-            label: get(SemanticColor::Label, if dark { [1.0; 4] } else { [0.0, 0.0, 0.0, 0.85] }),
-            secondary_label: get(SemanticColor::SecondaryLabel, if dark { [1.0, 1.0, 1.0, 0.55] } else { [0.0, 0.0, 0.0, 0.5] }),
+            label: get(
+                SemanticColor::Label,
+                if dark {
+                    [1.0; 4]
+                } else {
+                    [0.0, 0.0, 0.0, 0.85]
+                },
+            ),
+            secondary_label: get(
+                SemanticColor::SecondaryLabel,
+                if dark {
+                    [1.0, 1.0, 1.0, 0.55]
+                } else {
+                    [0.0, 0.0, 0.0, 0.5]
+                },
+            ),
             fill: get(SemanticColor::SystemFill, [0.5, 0.5, 0.5, 0.2]),
             fill_secondary: get(SemanticColor::SecondarySystemFill, [0.5, 0.5, 0.5, 0.16]),
             rim: get(SemanticColor::WindowRim, [1.0, 1.0, 1.0, 0.35]),
@@ -126,15 +156,21 @@ impl BannerStyle {
     /// Style for `appearance`. With `reduce_transparency` the opaque recipe variant is used and
     /// keeps its own (absent) backdrop.
     pub fn from_theme(theme: &Theme, appearance: Appearance, reduce_transparency: bool) -> Self {
-        let opts = MaterialOptions { reduce_transparency, ..Default::default() };
+        let opts = MaterialOptions {
+            reduce_transparency,
+            ..Default::default()
+        };
         let dark = appearance.is_dark();
         let platter_material = Self::DEFAULT_PLATTER_MATERIAL;
-        let material = theme.recipe(appearance, Self::DEFAULT_MATERIAL, &opts).ok().map(|mut r| {
-            if r.backdrop.is_some() {
-                r.backdrop = Some(platter_material.backdrop(dark));
-            }
-            r
-        });
+        let material = theme
+            .recipe(appearance, Self::DEFAULT_MATERIAL, &opts)
+            .ok()
+            .map(|mut r| {
+                if r.backdrop.is_some() {
+                    r.backdrop = Some(platter_material.backdrop(dark));
+                }
+                r
+            });
         Self {
             appearance,
             corner_radius: 16.0,
@@ -176,13 +212,18 @@ impl BannerStyle {
     }
 
     fn line_height(&self, size: f64) -> f64 {
-        self.typography.line_height(self.typography.substitute_size(size)) + self.line_gap
+        self.typography
+            .line_height(self.typography.substitute_size(size))
+            + self.line_gap
     }
 
     fn baseline_in_line(&self, size: f64) -> f64 {
         let m = &self.typography.metrics;
         let px = self.typography.substitute_size(size);
-        let (asc, desc) = (m.ascender / m.units_per_em * px, m.descender.abs() / m.units_per_em * px);
+        let (asc, desc) = (
+            m.ascender / m.units_per_em * px,
+            m.descender.abs() / m.units_per_em * px,
+        );
         let lh = self.line_height(size);
         (lh - (asc + desc)) / 2.0 + asc
     }
@@ -242,8 +283,16 @@ impl BannerLayout {
         if !Rect::new(0.0, 0.0, self.size.width, self.size.height).contains(p) {
             return BannerHit::None;
         }
-        if let Some((index, b)) = self.buttons.iter().enumerate().find(|(_, b)| b.rect.contains(p)) {
-            return BannerHit::Button { index, key: b.key.clone() };
+        if let Some((index, b)) = self
+            .buttons
+            .iter()
+            .enumerate()
+            .find(|(_, b)| b.rect.contains(p))
+        {
+            return BannerHit::Button {
+                index,
+                key: b.key.clone(),
+            };
         }
         for line in &self.body {
             let (top, bottom) = (line.baseline - 14.0, line.baseline + 5.0);
@@ -293,9 +342,17 @@ pub struct Layers {
 }
 
 impl Layers {
-    pub const ALL: Layers = Layers { shadow: true, background: true, content: true };
+    pub const ALL: Layers = Layers {
+        shadow: true,
+        background: true,
+        content: true,
+    };
     /// Icon, text, buttons and rim only, for a compositor that draws shadow and material itself.
-    pub const CONTENT_ONLY: Layers = Layers { shadow: false, background: false, content: true };
+    pub const CONTENT_ONLY: Layers = Layers {
+        shadow: false,
+        background: false,
+        content: true,
+    };
 }
 
 /// The wallpaper (or whatever is below) around a banner, in device pixels, for the CPU material.
@@ -314,7 +371,12 @@ pub struct RenderOptions<'a> {
 
 impl Default for RenderOptions<'_> {
     fn default() -> Self {
-        Self { scale: 1.0, hovered: false, backdrop: None, layers: Layers::ALL }
+        Self {
+            scale: 1.0,
+            hovered: false,
+            backdrop: None,
+            layers: Layers::ALL,
+        }
     }
 }
 
@@ -342,18 +404,40 @@ pub struct BannerRenderer {
 }
 
 fn skia_color(c: Rgba, opacity: f32) -> tiny_skia::Color {
-    tiny_skia::Color::from_rgba(c[0].clamp(0.0, 1.0), c[1].clamp(0.0, 1.0), c[2].clamp(0.0, 1.0), (c[3] * opacity).clamp(0.0, 1.0)).unwrap_or(tiny_skia::Color::TRANSPARENT)
+    tiny_skia::Color::from_rgba(
+        c[0].clamp(0.0, 1.0),
+        c[1].clamp(0.0, 1.0),
+        c[2].clamp(0.0, 1.0),
+        (c[3] * opacity).clamp(0.0, 1.0),
+    )
+    .unwrap_or(tiny_skia::Color::TRANSPARENT)
 }
 
 fn paint(c: Rgba) -> Paint<'static> {
-    let mut p = Paint { anti_alias: true, ..Paint::default() };
+    let mut p = Paint {
+        anti_alias: true,
+        ..Paint::default()
+    };
     p.set_color(skia_color(c, 1.0));
     p
 }
 
-fn fill_rounded(pm: &mut Pixmap, rect: Rect, radius: f64, style: CornerStyle, color: Rgba, scale: f64) {
+fn fill_rounded(
+    pm: &mut Pixmap,
+    rect: Rect,
+    radius: f64,
+    style: CornerStyle,
+    color: Rgba,
+    scale: f64,
+) {
     if let Some(path) = rounded_path(rect, Radii::uniform(radius), style, scale) {
-        pm.fill_path(&path, &paint(color), FillRule::Winding, Transform::identity(), None);
+        pm.fill_path(
+            &path,
+            &paint(color),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 }
 
@@ -362,7 +446,14 @@ impl BannerRenderer {
     /// banner of an application without an icon shows the placeholder.
     pub fn new(style: BannerStyle, assets: &Assets) -> Result<Self, AssetError> {
         let system = SystemIcons::required(assets, &["application.generic"], &[]);
-        Ok(Self { style, text: TextRenderer::new(assets, FontRole::Ui)?, shadows: ShadowRasterizer::new(), icons: Box::new(cupertino_icons::ThemeIcons::new(assets)), system, cache: HashMap::new() })
+        Ok(Self {
+            style,
+            text: TextRenderer::new(assets, FontRole::Ui)?,
+            shadows: ShadowRasterizer::new(),
+            icons: Box::new(cupertino_icons::ThemeIcons::new(assets)),
+            system,
+            cache: HashMap::new(),
+        })
     }
 
     /// Name of the resolved text family.
@@ -388,7 +479,16 @@ impl BannerRenderer {
     /// Greedy word wrap of styled spans into at most `max_lines` lines of `width`; the last line is
     /// ellipsised when text remains. Returns lines of `(runs, width)` with x relative to `x0`.
     #[allow(clippy::too_many_arguments)]
-    fn wrap(&mut self, spans: &[Span], size: f64, weight: u16, bold_weight: u16, x0: f64, width: f64, max_lines: usize) -> Vec<(Vec<Run>, f64)> {
+    fn wrap(
+        &mut self,
+        spans: &[Span],
+        size: f64,
+        weight: u16,
+        bold_weight: u16,
+        x0: f64,
+        width: f64,
+        max_lines: usize,
+    ) -> Vec<(Vec<Run>, f64)> {
         struct Word {
             text: String,
             bold: bool,
@@ -402,7 +502,8 @@ impl BannerRenderer {
         for s in spans {
             for (li, line) in s.text.split('\n').enumerate() {
                 let mut first = true;
-                let leading_space = line.starts_with(char::is_whitespace) || (li == 0 && carry_space);
+                let leading_space =
+                    line.starts_with(char::is_whitespace) || (li == 0 && carry_space);
                 for w in line.split_whitespace() {
                     words.push(Word {
                         text: w.to_string(),
@@ -415,7 +516,14 @@ impl BannerRenderer {
                     first = false;
                 }
                 if li > 0 && line.trim().is_empty() {
-                    words.push(Word { text: String::new(), bold: false, underline: false, link: None, space_before: false, break_before: true });
+                    words.push(Word {
+                        text: String::new(),
+                        bold: false,
+                        underline: false,
+                        link: None,
+                        space_before: false,
+                        break_before: true,
+                    });
                 }
             }
             carry_space = s.text.ends_with(char::is_whitespace);
@@ -436,19 +544,35 @@ impl BannerRenderer {
             let ww = self.measure(&w.text, size, wt);
             loop {
                 let (runs, used) = lines.last().expect("a line");
-                let gap = if !runs.is_empty() && w.space_before { space_w } else { 0.0 };
+                let gap = if !runs.is_empty() && w.space_before {
+                    space_w
+                } else {
+                    0.0
+                };
                 let force_break = w.break_before && !runs.is_empty();
                 if !force_break && used + gap + ww <= width + 0.01 {
                     let line = lines.last_mut().expect("a line");
                     let x = x0 + line.1 + gap;
-                    line.0.push(Run { x, text: w.text.clone(), bold: w.bold, underline: w.underline, link: w.link.clone() });
+                    line.0.push(Run {
+                        x,
+                        text: w.text.clone(),
+                        bold: w.bold,
+                        underline: w.underline,
+                        link: w.link.clone(),
+                    });
                     line.1 += gap + ww;
                     break;
                 }
                 if runs.is_empty() {
                     let (t, tw) = self.text_fit(&w.text, size, wt, width);
                     let line = lines.last_mut().expect("a line");
-                    line.0.push(Run { x: x0, text: t, bold: w.bold, underline: w.underline, link: w.link.clone() });
+                    line.0.push(Run {
+                        x: x0,
+                        text: t,
+                        bold: w.bold,
+                        underline: w.underline,
+                        link: w.link.clone(),
+                    });
                     line.1 = tw;
                     truncated = true;
                     continue 'outer;
@@ -491,20 +615,47 @@ impl BannerRenderer {
         let mut y = s.padding;
         let mut title = Vec::new();
         let mut body = Vec::new();
-        let title_spans = [Span { text: n.summary.replace('\n', " "), ..Default::default() }];
+        let title_spans = [Span {
+            text: n.summary.replace('\n', " "),
+            ..Default::default()
+        }];
         let title_lines = if n.summary.trim().is_empty() {
             Vec::new()
         } else {
-            self.wrap(&title_spans, s.title_size, s.title_weight, s.title_weight, text_x, text_w, s.title_max_lines)
+            self.wrap(
+                &title_spans,
+                s.title_size,
+                s.title_weight,
+                s.title_weight,
+                text_x,
+                text_w,
+                s.title_max_lines,
+            )
         };
         for (runs, w) in title_lines {
             let runs: Vec<Run> = runs.into_iter().map(|r| Run { bold: true, ..r }).collect();
-            title.push(Line { baseline: y + s.baseline_in_line(s.title_size), runs, width: w });
+            title.push(Line {
+                baseline: y + s.baseline_in_line(s.title_size),
+                runs,
+                width: w,
+            });
             y += s.line_height(s.title_size);
         }
-        let body_lines = self.wrap(&n.spans, s.body_size, s.body_weight, s.body_bold_weight, text_x, text_w, s.body_max_lines);
+        let body_lines = self.wrap(
+            &n.spans,
+            s.body_size,
+            s.body_weight,
+            s.body_bold_weight,
+            text_x,
+            text_w,
+            s.body_max_lines,
+        );
         for (runs, w) in body_lines {
-            body.push(Line { baseline: y + s.baseline_in_line(s.body_size), runs, width: w });
+            body.push(Line {
+                baseline: y + s.baseline_in_line(s.body_size),
+                runs,
+                width: w,
+            });
             y += s.line_height(s.body_size);
         }
         let text_h = y - s.padding;
@@ -516,8 +667,18 @@ impl BannerRenderer {
             let k = actions.len() as f64;
             let bw = (width - 2.0 * s.padding - (k - 1.0) * s.button_gap) / k;
             for (i, a) in actions.iter().enumerate() {
-                let (label, _) = self.text_fit(&a.label, s.body_size, 500, bw - 2.0 * s.button_padding);
-                buttons.push(ButtonLayout { rect: Rect::new(s.padding + i as f64 * (bw + s.button_gap), top, bw, s.button_height), key: a.key.clone(), label });
+                let (label, _) =
+                    self.text_fit(&a.label, s.body_size, 500, bw - 2.0 * s.button_padding);
+                buttons.push(ButtonLayout {
+                    rect: Rect::new(
+                        s.padding + i as f64 * (bw + s.button_gap),
+                        top,
+                        bw,
+                        s.button_height,
+                    ),
+                    key: a.key.clone(),
+                    label,
+                });
             }
             bottom = top + s.button_height;
         }
@@ -546,11 +707,30 @@ impl BannerRenderer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn draw_text(&mut self, pm: &mut Pixmap, text: &str, x: f64, baseline: f64, size: f64, weight: u16, color: Rgba, scale: f32) {
+    fn draw_text(
+        &mut self,
+        pm: &mut Pixmap,
+        text: &str,
+        x: f64,
+        baseline: f64,
+        size: f64,
+        weight: u16,
+        color: Rgba,
+        scale: f32,
+    ) {
         let px = self.style.px(size) * scale;
         let ls = self.style.tracking(size) * scale;
         self.text.set_scale(scale);
-        self.text.draw(pm, text, x as f32 * scale, baseline as f32 * scale, px, weight, ls, color);
+        self.text.draw(
+            pm,
+            text,
+            x as f32 * scale,
+            baseline as f32 * scale,
+            px,
+            weight,
+            ls,
+            color,
+        );
     }
 
     /// Baseline that centres a line of `size` points in a box `height` points tall (cap height
@@ -566,43 +746,127 @@ impl BannerRenderer {
 
     /// Width of the widest label of the Clear menu.
     pub fn widest_label(&mut self, labels: &[&str]) -> f64 {
-        labels.iter().map(|l| self.measure(l, MENU_LABEL_SIZE, MENU_LABEL_WEIGHT)).fold(0.0, f64::max)
+        labels
+            .iter()
+            .map(|l| self.measure(l, MENU_LABEL_SIZE, MENU_LABEL_WEIGHT))
+            .fold(0.0, f64::max)
     }
 
     /// Header row of the open list at `scale`: the title (bold 22) at the left edge and the
     /// Clear button at the right edge. The pixmap covers `header.row`.
-    pub fn render_header(&mut self, header: &CentreHeader, button_hovered: bool, scale: f32) -> Pixmap {
+    pub fn render_header(
+        &mut self,
+        header: &CentreHeader,
+        button_hovered: bool,
+        scale: f32,
+    ) -> Pixmap {
         let sc = scale as f64;
         let row = header.row;
-        let mut pm = Pixmap::new((row.width() * sc).ceil() as u32, (row.height() * sc).ceil() as u32).expect("non-empty header");
+        let mut pm = Pixmap::new(
+            (row.width() * sc).ceil() as u32,
+            (row.height() * sc).ceil() as u32,
+        )
+        .expect("non-empty header");
         let label = self.style.palette.label;
         let baseline = self.centred_baseline(CENTRE_TITLE_SIZE, row.height());
-        self.draw_text(&mut pm, CENTRE_TITLE, 0.0, baseline, CENTRE_TITLE_SIZE, CENTRE_TITLE_WEIGHT, label, scale);
-        let button = Rect::new(header.clear.x() - row.x(), header.clear.y() - row.y(), header.clear.width(), header.clear.height());
-        let fill = if button_hovered { self.style.palette.fill } else { self.style.palette.fill_secondary };
-        fill_rounded(&mut pm, button, button.height() / 2.0, CornerStyle::continuous(), fill, sc);
+        self.draw_text(
+            &mut pm,
+            CENTRE_TITLE,
+            0.0,
+            baseline,
+            CENTRE_TITLE_SIZE,
+            CENTRE_TITLE_WEIGHT,
+            label,
+            scale,
+        );
+        let button = Rect::new(
+            header.clear.x() - row.x(),
+            header.clear.y() - row.y(),
+            header.clear.width(),
+            header.clear.height(),
+        );
+        let fill = if button_hovered {
+            self.style.palette.fill
+        } else {
+            self.style.palette.fill_secondary
+        };
+        fill_rounded(
+            &mut pm,
+            button,
+            button.height() / 2.0,
+            CornerStyle::continuous(),
+            fill,
+            sc,
+        );
         let baseline = button.y() + self.centred_baseline(CLEAR_LABEL_SIZE, button.height());
-        self.draw_text(&mut pm, CLEAR_LABEL, button.x() + CLEAR_BUTTON_PADDING, baseline, CLEAR_LABEL_SIZE, CLEAR_LABEL_WEIGHT, label, scale);
+        self.draw_text(
+            &mut pm,
+            CLEAR_LABEL,
+            button.x() + CLEAR_BUTTON_PADDING,
+            baseline,
+            CLEAR_LABEL_SIZE,
+            CLEAR_LABEL_WEIGHT,
+            label,
+            scale,
+        );
         pm
     }
 
     /// The Clear menu at `scale`: one label per row, the row under the pointer highlighted with a
     /// 4 pt radius (section 1). The material comes from a backdrop
     /// the host places under `menu.panel`; the pixmap covers the panel.
-    pub fn render_clear_menu(&mut self, menu: &ClearMenu, labels: &[&str], hovered: Option<usize>, scale: f32) -> Pixmap {
+    pub fn render_clear_menu(
+        &mut self,
+        menu: &ClearMenu,
+        labels: &[&str],
+        hovered: Option<usize>,
+        scale: f32,
+    ) -> Pixmap {
         let sc = scale as f64;
         let panel = menu.panel;
-        let mut pm = Pixmap::new((panel.width() * sc).ceil() as u32, (panel.height() * sc).ceil() as u32).expect("non-empty menu");
+        let mut pm = Pixmap::new(
+            (panel.width() * sc).ceil() as u32,
+            (panel.height() * sc).ceil() as u32,
+        )
+        .expect("non-empty menu");
         let (fill, label) = (self.style.palette.fill, self.style.palette.label);
         // opaque enough that the cards under the panel do not show through the backdrop's blur
-        fill_rounded(&mut pm, Rect::new(0.0, 0.0, panel.width(), panel.height()), MENU_RADIUS, CornerStyle::continuous(), self.style.palette.fallback_background, sc);
+        fill_rounded(
+            &mut pm,
+            Rect::new(0.0, 0.0, panel.width(), panel.height()),
+            MENU_RADIUS,
+            CornerStyle::continuous(),
+            self.style.palette.fallback_background,
+            sc,
+        );
         for (i, (row, text)) in menu.rows.iter().zip(labels).enumerate() {
-            let local = Rect::new(row.x() - panel.x(), row.y() - panel.y(), row.width(), row.height());
+            let local = Rect::new(
+                row.x() - panel.x(),
+                row.y() - panel.y(),
+                row.width(),
+                row.height(),
+            );
             if hovered == Some(i) {
-                fill_rounded(&mut pm, local, MENU_SELECTION_RADIUS, CornerStyle::continuous(), fill, sc);
+                fill_rounded(
+                    &mut pm,
+                    local,
+                    MENU_SELECTION_RADIUS,
+                    CornerStyle::continuous(),
+                    fill,
+                    sc,
+                );
             }
             let baseline = local.y() + self.centred_baseline(MENU_LABEL_SIZE, local.height());
-            self.draw_text(&mut pm, text, local.x() + MENU_LABEL_PADDING, baseline, MENU_LABEL_SIZE, MENU_LABEL_WEIGHT, label, scale);
+            self.draw_text(
+                &mut pm,
+                text,
+                local.x() + MENU_LABEL_PADDING,
+                baseline,
+                MENU_LABEL_SIZE,
+                MENU_LABEL_WEIGHT,
+                label,
+                scale,
+            );
         }
         pm
     }
@@ -615,28 +879,64 @@ impl BannerRenderer {
             .image
             .as_ref()
             .and_then(|i| i.to_pixmap())
-            .or_else(|| n.image_path.as_deref().and_then(|p| self.icons.load(p, size_px)))
+            .or_else(|| {
+                n.image_path
+                    .as_deref()
+                    .and_then(|p| self.icons.load(p, size_px))
+            })
             .or_else(|| self.icons.load(&n.icon, size_px))
-            .or_else(|| n.desktop_entry.as_deref().and_then(|e| self.icons.load_for_entry(e, size_px)));
+            .or_else(|| {
+                n.desktop_entry
+                    .as_deref()
+                    .and_then(|e| self.icons.load_for_entry(e, size_px))
+            });
         let src = match own {
             Some(own) => own,
             None => self.system.raster("application.generic", size_px).clone(),
         };
         let r = rect.scale(scale as f64);
         let radius = r.width() * 0.225;
-        let Some(path) = rounded_path(r, Radii::uniform(radius), CornerStyle::continuous(), 1.0) else { return };
-        let Some(mut mask) = Mask::new(pm.width(), pm.height()) else { return };
+        let Some(path) = rounded_path(r, Radii::uniform(radius), CornerStyle::continuous(), 1.0)
+        else {
+            return;
+        };
+        let Some(mut mask) = Mask::new(pm.width(), pm.height()) else {
+            return;
+        };
         mask.fill_path(&path, FillRule::Winding, true, Transform::identity());
         let sx = r.width() as f32 / src.width() as f32;
         let sy = r.height() as f32 / src.height() as f32;
         let ts = Transform::from_row(sx, 0.0, 0.0, sy, r.x() as f32, r.y() as f32);
-        let pp = PixmapPaint { quality: tiny_skia::FilterQuality::Bicubic, ..PixmapPaint::default() };
+        let pp = PixmapPaint {
+            quality: tiny_skia::FilterQuality::Bicubic,
+            ..PixmapPaint::default()
+        };
         pm.draw_pixmap(0, 0, src.as_ref(), &pp, ts, Some(&mask));
     }
 
-    fn background(&self, pm: &mut Pixmap, origin: (u32, u32), size_px: (u32, u32), radius_px: f64, backdrop: Option<&Backdrop>, scale: f32) {
-        let rect = Rect::new(origin.0 as f64, origin.1 as f64, size_px.0 as f64, size_px.1 as f64);
-        let Some(shape) = rounded_path(rect, Radii::uniform(radius_px), self.style.corner_style, 1.0) else { return };
+    fn background(
+        &self,
+        pm: &mut Pixmap,
+        origin: (u32, u32),
+        size_px: (u32, u32),
+        radius_px: f64,
+        backdrop: Option<&Backdrop>,
+        scale: f32,
+    ) {
+        let rect = Rect::new(
+            origin.0 as f64,
+            origin.1 as f64,
+            size_px.0 as f64,
+            size_px.1 as f64,
+        );
+        let Some(shape) = rounded_path(
+            rect,
+            Radii::uniform(radius_px),
+            self.style.corner_style,
+            1.0,
+        ) else {
+            return;
+        };
         #[cfg(feature = "material")]
         if let (Some(b), Some(recipe)) = (backdrop, self.style.material.as_ref()) {
             use cupertino_glass::{cpu::render_regions, MaterialRegion};
@@ -646,11 +946,23 @@ impl BannerRenderer {
                 let c = src.demultiply();
                 *dst = image::Rgba([c.red(), c.green(), c.blue(), 255]);
             }
-            let region = MaterialRegion::new([b.banner_origin.0 as f32, b.banner_origin.1 as f32, size_px.0 as f32, size_px.1 as f32], recipe);
+            let region = MaterialRegion::new(
+                [
+                    b.banner_origin.0 as f32,
+                    b.banner_origin.1 as f32,
+                    size_px.0 as f32,
+                    size_px.1 as f32,
+                ],
+                recipe,
+            );
             let out = render_regions(&wall, &[region], scale, [0.5, 0.5, 0.5], false, false);
-            let Some(mut mask) = Mask::new(pm.width(), pm.height()) else { return };
+            let Some(mut mask) = Mask::new(pm.width(), pm.height()) else {
+                return;
+            };
             mask.fill_path(&shape, FillRule::Winding, true, Transform::identity());
-            let Some(mut layer) = Pixmap::new(pm.width(), pm.height()) else { return };
+            let Some(mut layer) = Pixmap::new(pm.width(), pm.height()) else {
+                return;
+            };
             let dx = origin.0 as i64 - b.banner_origin.0 as i64;
             let dy = origin.1 as i64 - b.banner_origin.1 as i64;
             for y in origin.1..origin.1 + size_px.1 {
@@ -660,18 +972,37 @@ impl BannerRenderer {
                         continue;
                     }
                     let p = out.get_pixel(sx, sy).0;
-                    layer.pixels_mut()[(y * pm.width() + x) as usize] = tiny_skia::ColorU8::from_rgba(p[0], p[1], p[2], 255).premultiply();
+                    layer.pixels_mut()[(y * pm.width() + x) as usize] =
+                        tiny_skia::ColorU8::from_rgba(p[0], p[1], p[2], 255).premultiply();
                 }
             }
-            pm.draw_pixmap(0, 0, layer.as_ref(), &PixmapPaint::default(), Transform::identity(), Some(&mask));
+            pm.draw_pixmap(
+                0,
+                0,
+                layer.as_ref(),
+                &PixmapPaint::default(),
+                Transform::identity(),
+                Some(&mask),
+            );
             return;
         }
         let _ = (backdrop, scale);
-        pm.fill_path(&shape, &paint(self.style.palette.fallback_background), FillRule::Winding, Transform::identity(), None);
+        pm.fill_path(
+            &shape,
+            &paint(self.style.palette.fallback_background),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 
     /// Rasterise a banner at `opts.scale` device pixels per point.
-    pub fn render(&mut self, n: &Notification, layout: &BannerLayout, opts: &RenderOptions) -> BannerImage {
+    pub fn render(
+        &mut self,
+        n: &Notification,
+        layout: &BannerLayout,
+        opts: &RenderOptions,
+    ) -> BannerImage {
         let s = self.style.clone();
         let scale = opts.scale;
         let sc = scale as f64;
@@ -686,24 +1017,46 @@ impl BannerRenderer {
         let radius_px = s.corner_radius * sc;
 
         if opts.layers.shadow {
-            let img = self.shadows.render(&params, layout.size, s.corner_radius, s.corner_style, sc);
+            let img =
+                self.shadows
+                    .render(&params, layout.size, s.corner_radius, s.corner_style, sc);
             for (dst, a) in pm.pixels_mut().iter_mut().zip(img.data.chunks_exact(4)) {
-                *dst = tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, a[3]).unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT);
+                *dst = tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, a[3])
+                    .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT);
             }
             // the shadow image has the same dimensions as the pixmap by construction
             debug_assert_eq!((img.width, img.height), (w, h));
-            if let Some(path) = rounded_path(Rect::new(origin.0 as f64, origin.1 as f64, bw as f64, bh as f64), Radii::uniform(radius_px), s.corner_style, 1.0) {
+            if let Some(path) = rounded_path(
+                Rect::new(origin.0 as f64, origin.1 as f64, bw as f64, bh as f64),
+                Radii::uniform(radius_px),
+                s.corner_style,
+                1.0,
+            ) {
                 // keep the shadow out from under translucent materials
-                let mut p = Paint { blend_mode: tiny_skia::BlendMode::Clear, anti_alias: true, ..Paint::default() };
+                let mut p = Paint {
+                    blend_mode: tiny_skia::BlendMode::Clear,
+                    anti_alias: true,
+                    ..Paint::default()
+                };
                 p.set_color(tiny_skia::Color::BLACK);
                 pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
             }
         }
         if opts.layers.background {
-            self.background(&mut pm, origin, (bw, bh), radius_px, opts.backdrop.as_ref(), scale);
+            self.background(
+                &mut pm,
+                origin,
+                (bw, bh),
+                radius_px,
+                opts.backdrop.as_ref(),
+                scale,
+            );
         }
         if !opts.layers.content {
-            return BannerImage { pixmap: pm, margins };
+            return BannerImage {
+                pixmap: pm,
+                margins,
+            };
         }
 
         let (ox, oy) = (origin.0 as f64 / sc, origin.1 as f64 / sc);
@@ -712,18 +1065,38 @@ impl BannerRenderer {
         self.draw_icon(&mut pm, n, icon, scale);
         for line in layout.title.iter() {
             for r in &line.runs {
-                self.draw_text(&mut pm, &r.text, at(r.x, ox), at(line.baseline, oy), s.title_size, s.title_weight, s.palette.label, scale);
+                self.draw_text(
+                    &mut pm,
+                    &r.text,
+                    at(r.x, ox),
+                    at(line.baseline, oy),
+                    s.title_size,
+                    s.title_weight,
+                    s.palette.label,
+                    scale,
+                );
             }
         }
         for line in &layout.body {
             for (i, r) in line.runs.iter().enumerate() {
-                let wt = if r.bold { s.body_bold_weight } else { s.body_weight };
-                let color = if r.link.is_some() { s.palette.link } else { s.palette.label };
+                let wt = if r.bold {
+                    s.body_bold_weight
+                } else {
+                    s.body_weight
+                };
+                let color = if r.link.is_some() {
+                    s.palette.link
+                } else {
+                    s.palette.label
+                };
                 let (x, base) = (at(r.x, ox), at(line.baseline, oy));
                 self.draw_text(&mut pm, &r.text, x, base, s.body_size, wt, color, scale);
                 if r.underline {
                     let end = line.runs.get(i + 1).map_or(line.x_end(), |n| n.x);
-                    let wpx = self.measure(&r.text, s.body_size, wt).min((end - r.x).max(1.0)).max(1.0);
+                    let wpx = self
+                        .measure(&r.text, s.body_size, wt)
+                        .min((end - r.x).max(1.0))
+                        .max(1.0);
                     let rect = Rect::new(x * sc, (base + 1.5) * sc, wpx * sc, sc.max(1.0));
                     fill_rounded(&mut pm, rect, 0.0, CornerStyle::Circular, color, 1.0);
                 }
@@ -731,23 +1104,64 @@ impl BannerRenderer {
         }
         for b in &layout.buttons {
             let rect = b.rect.translate(ox, oy);
-            fill_rounded(&mut pm, rect, s.button_radius, CornerStyle::continuous(), s.palette.fill, sc);
+            fill_rounded(
+                &mut pm,
+                rect,
+                s.button_radius,
+                CornerStyle::continuous(),
+                s.palette.fill,
+                sc,
+            );
             let label_w = self.measure(&b.label, s.body_size, 500);
             let x = rect.x() + (rect.width() - label_w) / 2.0;
-            let base = rect.y() + s.baseline_in_line(s.body_size) + (rect.height() - s.line_height(s.body_size)) / 2.0;
-            self.draw_text(&mut pm, &b.label, x, base, s.body_size, 500, s.palette.label, scale);
+            let base = rect.y()
+                + s.baseline_in_line(s.body_size)
+                + (rect.height() - s.line_height(s.body_size)) / 2.0;
+            self.draw_text(
+                &mut pm,
+                &b.label,
+                x,
+                base,
+                s.body_size,
+                500,
+                s.palette.label,
+                scale,
+            );
         }
         if s.rim_width > 0.0 {
             let half = 0.5;
-            let rect = Rect::new(origin.0 as f64 + half, origin.1 as f64 + half, bw as f64 - 2.0 * half, bh as f64 - 2.0 * half);
-            if let Some(path) = rounded_path(rect, Radii::uniform(radius_px - half), s.corner_style, 1.0) {
-                let stroke = Stroke { width: (s.rim_width as f32 * scale.max(1.0)).max(1.0), ..Stroke::default() };
-                pm.stroke_path(&path, &paint(s.palette.rim), &stroke, Transform::identity(), None);
+            let rect = Rect::new(
+                origin.0 as f64 + half,
+                origin.1 as f64 + half,
+                bw as f64 - 2.0 * half,
+                bh as f64 - 2.0 * half,
+            );
+            if let Some(path) =
+                rounded_path(rect, Radii::uniform(radius_px - half), s.corner_style, 1.0)
+            {
+                let stroke = Stroke {
+                    width: (s.rim_width as f32 * scale.max(1.0)).max(1.0),
+                    ..Stroke::default()
+                };
+                pm.stroke_path(
+                    &path,
+                    &paint(s.palette.rim),
+                    &stroke,
+                    Transform::identity(),
+                    None,
+                );
             }
         }
         if opts.hovered {
             let c = layout.close.translate(ox, oy);
-            fill_rounded(&mut pm, c, c.width() / 2.0, CornerStyle::Circular, [0.35, 0.35, 0.35, 0.92], sc);
+            fill_rounded(
+                &mut pm,
+                c,
+                c.width() / 2.0,
+                CornerStyle::Circular,
+                [0.35, 0.35, 0.35, 0.92],
+                sc,
+            );
             let mut pb = tiny_skia::PathBuilder::new();
             let (cx, cy, k) = (c.center().x * sc, c.center().y * sc, c.width() * sc * 0.18);
             pb.move_to((cx - k) as f32, (cy - k) as f32);
@@ -755,11 +1169,24 @@ impl BannerRenderer {
             pb.move_to((cx + k) as f32, (cy - k) as f32);
             pb.line_to((cx - k) as f32, (cy + k) as f32);
             if let Some(path) = pb.finish() {
-                let stroke = Stroke { width: (1.4 * scale).max(1.0), line_cap: tiny_skia::LineCap::Round, ..Stroke::default() };
-                pm.stroke_path(&path, &paint([1.0, 1.0, 1.0, 0.95]), &stroke, Transform::identity(), None);
+                let stroke = Stroke {
+                    width: (1.4 * scale).max(1.0),
+                    line_cap: tiny_skia::LineCap::Round,
+                    ..Stroke::default()
+                };
+                pm.stroke_path(
+                    &path,
+                    &paint([1.0, 1.0, 1.0, 0.95]),
+                    &stroke,
+                    Transform::identity(),
+                    None,
+                );
             }
         }
-        BannerImage { pixmap: pm, margins }
+        BannerImage {
+            pixmap: pm,
+            margins,
+        }
     }
 }
 
@@ -778,8 +1205,12 @@ mod tests {
     /// Needs the asset directory (`CUPERTINO_ASSET_DIR`); fails with the build instructions when it is missing.
     fn renderer() -> BannerRenderer {
         let theme = Theme::load().unwrap();
-        let assets = Assets::discover();
-        BannerRenderer::new(BannerStyle::from_theme(&theme, Appearance::Light, false), &assets).unwrap_or_else(|e| panic!("{e}"))
+        let assets = Assets::builtin();
+        BannerRenderer::new(
+            BannerStyle::from_theme(&theme, Appearance::Light, false),
+            &assets,
+        )
+        .unwrap_or_else(|e| panic!("{e}"))
     }
 
     fn note(summary: &str, body: &str) -> Notification {
@@ -787,27 +1218,46 @@ mod tests {
     }
 
     fn ink_columns(pm: &Pixmap, x0: u32, x1: u32) -> usize {
-        (x0..x1).filter(|&x| (0..pm.height()).any(|y| pm.pixels()[(y * pm.width() + x) as usize].alpha() > 0)).count()
+        (x0..x1)
+            .filter(|&x| {
+                (0..pm.height()).any(|y| pm.pixels()[(y * pm.width() + x) as usize].alpha() > 0)
+            })
+            .count()
     }
 
     #[test]
     fn header_draws_the_title_at_the_left_and_the_clear_button_at_the_right() {
         let mut r = renderer();
         let w = r.clear_button_width();
-        let header = crate::surface::centre_header(&crate::center::StackLayout::default(), Size::new(376.0, 800.0), w);
+        let header = crate::surface::centre_header(
+            &crate::center::StackLayout::default(),
+            Size::new(376.0, 800.0),
+            w,
+        );
         let pm = r.render_header(&header, false, 2.0);
         assert_eq!((pm.width(), pm.height()), (688, 72));
         // title ink in the left, nothing between the title and the button, button fill at the right edge
         assert!(ink_columns(&pm, 0, 300) > 100, "title");
         assert_eq!(ink_columns(&pm, 480, 688 - (w * 2.0) as u32 - 2), 0, "gap");
-        assert!(ink_columns(&pm, 688 - (w * 2.0) as u32, 688) as f64 > w * 2.0 * 0.9, "button");
+        assert!(
+            ink_columns(&pm, 688 - (w * 2.0) as u32, 688) as f64 > w * 2.0 * 0.9,
+            "button"
+        );
     }
 
     #[test]
     fn only_the_hovered_menu_row_is_highlighted() {
         let mut r = renderer();
-        let header = crate::surface::centre_header(&crate::center::StackLayout::default(), Size::new(376.0, 800.0), 60.0);
-        let menu = crate::surface::clear_menu(header.clear, 2, r.widest_label(&["Banners Only", "All Notifications"]));
+        let header = crate::surface::centre_header(
+            &crate::center::StackLayout::default(),
+            Size::new(376.0, 800.0),
+            60.0,
+        );
+        let menu = crate::surface::clear_menu(
+            header.clear,
+            2,
+            r.widest_label(&["Banners Only", "All Notifications"]),
+        );
         let labels = ["Banners Only", "All Notifications"];
         let pm = r.render_clear_menu(&menu, &labels, Some(1), 1.0);
         let at = |row: usize| {
@@ -823,10 +1273,20 @@ mod tests {
     fn palette_matches_tokens() {
         let theme = Theme::load().unwrap();
         let p = BannerPalette::from_theme(&theme, Appearance::Dark);
-        let label = theme.tokens.semantic(Appearance::Dark, SemanticColor::Label).unwrap();
+        let label = theme
+            .tokens
+            .semantic(Appearance::Dark, SemanticColor::Label)
+            .unwrap();
         assert_eq!(p.label, label.to_array());
         let p = BannerPalette::from_theme(&theme, Appearance::Light);
-        assert_eq!(p.link, theme.tokens.semantic(Appearance::Light, SemanticColor::Link).unwrap().to_array());
+        assert_eq!(
+            p.link,
+            theme
+                .tokens
+                .semantic(Appearance::Light, SemanticColor::Link)
+                .unwrap()
+                .to_array()
+        );
     }
 
     #[test]
@@ -835,10 +1295,18 @@ mod tests {
         let s = BannerStyle::from_theme(&theme, Appearance::Light, false);
         let r = s.material.expect("recipe for the Menu material");
         assert_eq!(r.backdrop, Some(PlatterMaterial::Medium.backdrop(false)));
-        assert!(!r.fills.is_empty(), "fill layers of the Menu recipe are kept");
-        assert_eq!((s.rim_width, s.shadow.density(), s.shadow.vertical_offset()), (0.5, 0.20, 0.0));
+        assert!(
+            !r.fills.is_empty(),
+            "fill layers of the Menu recipe are kept"
+        );
+        assert_eq!(
+            (s.rim_width, s.shadow.density(), s.shadow.vertical_offset()),
+            (0.5, 0.20, 0.0)
+        );
         assert_eq!(s.corner_radius, 16.0);
-        let opaque = BannerStyle::from_theme(&theme, Appearance::Light, true).material.unwrap();
+        let opaque = BannerStyle::from_theme(&theme, Appearance::Light, true)
+            .material
+            .unwrap();
         assert!(opaque.opaque);
     }
 
@@ -850,15 +1318,26 @@ mod tests {
         assert_eq!(l.body.len(), 3);
         assert_eq!(l.title.len(), 1);
         let last = l.body.last().unwrap();
-        assert!(last.runs.last().unwrap().text.ends_with('…'), "ellipsis on the last line: {:?}", last.runs.last());
+        assert!(
+            last.runs.last().unwrap().text.ends_with('…'),
+            "ellipsis on the last line: {:?}",
+            last.runs.last()
+        );
         let text_x = 12.0 + 36.0 + 10.0;
         for line in &l.body {
-            assert!(line.width <= 360.0 - text_x - 12.0 + 0.5, "line {} fits", line.width);
+            assert!(
+                line.width <= 360.0 - text_x - 12.0 + 0.5,
+                "line {} fits",
+                line.width
+            );
         }
         let short = r.layout(&note("Title", "one line"), 360.0);
         assert_eq!(short.body.len(), 1);
         assert!(short.size.height < l.size.height);
-        assert!(short.size.height >= 36.0 + 24.0, "at least icon plus padding");
+        assert!(
+            short.size.height >= 36.0 + 24.0,
+            "at least icon plus padding"
+        );
     }
 
     #[test]
@@ -872,15 +1351,31 @@ mod tests {
     #[test]
     fn buttons_are_laid_out_in_one_row_and_hit_testable() {
         let mut r = renderer();
-        let n = Notification::from_input(1, NotifyInput::new("Mail", "T", "b").with_action("default", "Open").with_action("reply", "Reply").with_action("later", "Later"), 0.0);
+        let n = Notification::from_input(
+            1,
+            NotifyInput::new("Mail", "T", "b")
+                .with_action("default", "Open")
+                .with_action("reply", "Reply")
+                .with_action("later", "Later"),
+            0.0,
+        );
         let l = r.layout(&n, 360.0);
         assert_eq!(l.buttons.len(), 2, "default action has no button");
         assert_eq!(l.buttons[0].rect.y(), l.buttons[1].rect.y());
         assert_eq!(l.buttons[0].rect.height(), 24.0);
         assert!(l.buttons[1].rect.x() > l.buttons[0].rect.max_x());
         assert!(l.buttons[1].rect.max_x() <= 360.0 - 12.0 + 0.01);
-        assert_eq!(l.hit(l.buttons[1].rect.center(), false), BannerHit::Button { index: 1, key: "later".into() });
-        assert_eq!(l.hit(Point::new(5.0, l.size.height / 2.0), false), BannerHit::Body);
+        assert_eq!(
+            l.hit(l.buttons[1].rect.center(), false),
+            BannerHit::Button {
+                index: 1,
+                key: "later".into()
+            }
+        );
+        assert_eq!(
+            l.hit(Point::new(5.0, l.size.height / 2.0), false),
+            BannerHit::Body
+        );
         assert_eq!(l.hit(Point::new(-50.0, -50.0), false), BannerHit::None);
         assert_eq!(l.hit(l.close.center(), true), BannerHit::Close);
         assert_ne!(l.hit(l.close.center(), false), BannerHit::Close);
@@ -889,10 +1384,15 @@ mod tests {
     #[test]
     fn space_between_styled_spans_is_kept() {
         let mut r = renderer();
-        let l = r.layout(&note("T", "see <b>bold</b> and <a href=\"x\">link</a>"), 360.0);
+        let l = r.layout(
+            &note("T", "see <b>bold</b> and <a href=\"x\">link</a>"),
+            360.0,
+        );
         let runs = &l.body[0].runs;
         assert_eq!(runs.len(), 4);
-        let w = |r: &mut BannerRenderer, t: &str, b: bool| r.measure(t, 13.0, if b { 700 } else { 400 });
+        let w = |r: &mut BannerRenderer, t: &str, b: bool| {
+            r.measure(t, 13.0, if b { 700 } else { 400 })
+        };
         let gap = runs[1].x - (runs[0].x + w(&mut r, "see", false));
         assert!(gap > 1.5, "gap {gap}");
         let gap2 = runs[3].x - (runs[2].x + w(&mut r, "and", false));
@@ -902,28 +1402,63 @@ mod tests {
     #[test]
     fn links_are_hit_testable() {
         let mut r = renderer();
-        let l = r.layout(&note("T", "go <a href=\"https://example.org\">there</a> now"), 360.0);
-        let run = l.body[0].runs.iter().find(|r| r.link.is_some()).expect("link run");
+        let l = r.layout(
+            &note("T", "go <a href=\"https://example.org\">there</a> now"),
+            360.0,
+        );
+        let run = l.body[0]
+            .runs
+            .iter()
+            .find(|r| r.link.is_some())
+            .expect("link run");
         let p = Point::new(run.x + 3.0, l.body[0].baseline - 4.0);
-        assert_eq!(l.hit(p, false), BannerHit::Link("https://example.org".into()));
-        assert_eq!(markup::strip("go <a href=\"https://example.org\">there</a> now"), "go there now");
+        assert_eq!(
+            l.hit(p, false),
+            BannerHit::Link("https://example.org".into())
+        );
+        assert_eq!(
+            markup::strip("go <a href=\"https://example.org\">there</a> now"),
+            "go there now"
+        );
     }
 
     #[test]
     fn render_draws_shadow_background_and_text() {
         let mut r = renderer();
-        let n = note("Quarterly report", "The numbers are in and they look better than expected.");
+        let n = note(
+            "Quarterly report",
+            "The numbers are in and they look better than expected.",
+        );
         let l = r.layout(&n, 360.0);
-        let img = r.render(&n, &l, &RenderOptions { scale: 2.0, ..Default::default() });
+        let img = r.render(
+            &n,
+            &l,
+            &RenderOptions {
+                scale: 2.0,
+                ..Default::default()
+            },
+        );
         let (ox, oy) = img.banner_origin();
-        assert_eq!(img.pixmap.width(), (360.0 * 2.0) as u32 + img.margins[0] + img.margins[2]);
+        assert_eq!(
+            img.pixmap.width(),
+            (360.0 * 2.0) as u32 + img.margins[0] + img.margins[2]
+        );
         let px = |x: u32, y: u32| img.pixmap.pixels()[(y * img.pixmap.width() + x) as usize];
         let inside = px(ox + 400, oy + 6);
-        assert!(inside.alpha() > 200, "background is nearly opaque: {}", inside.alpha());
+        assert!(
+            inside.alpha() > 200,
+            "background is nearly opaque: {}",
+            inside.alpha()
+        );
         assert_eq!(px(0, 0).alpha(), 0, "far corner has no shadow");
         let below = px(ox + 300, oy + (l.size.height * 2.0) as u32 + 4);
         assert!(below.alpha() > 0, "shadow below the banner");
-        let text_pixels = img.pixmap.pixels().iter().filter(|p| p.alpha() > 0 && p.red() < 90 && p.green() < 90).count();
+        let text_pixels = img
+            .pixmap
+            .pixels()
+            .iter()
+            .filter(|p| p.alpha() > 0 && p.red() < 90 && p.green() < 90)
+            .count();
         assert!(text_pixels > 200, "dark text pixels drawn: {text_pixels}");
     }
 
@@ -932,10 +1467,23 @@ mod tests {
         let mut r = renderer();
         let n = note("T", "b");
         let l = r.layout(&n, 360.0);
-        let img = r.render(&n, &l, &RenderOptions { layers: Layers::CONTENT_ONLY, ..Default::default() });
+        let img = r.render(
+            &n,
+            &l,
+            &RenderOptions {
+                layers: Layers::CONTENT_ONLY,
+                ..Default::default()
+            },
+        );
         let (ox, oy) = img.banner_origin();
-        assert_eq!(img.pixmap.pixels()[((oy + 40) * img.pixmap.width() + ox + 300) as usize].alpha(), 0);
-        assert!(img.pixmap.pixels().iter().any(|p| p.alpha() > 0), "icon and text exist");
+        assert_eq!(
+            img.pixmap.pixels()[((oy + 40) * img.pixmap.width() + ox + 300) as usize].alpha(),
+            0
+        );
+        assert!(
+            img.pixmap.pixels().iter().any(|p| p.alpha() > 0),
+            "icon and text exist"
+        );
     }
 
     #[test]
@@ -954,10 +1502,19 @@ mod tests {
         let (mut a, mut b) = (note("T", "b"), note("T", "b"));
         (a.app_name, b.app_name) = ("Mail".into(), "Terminal".into());
         let layout = r.layout(&a, 360.0);
-        let (first, second) = (r.render(&a, &layout, &RenderOptions::default()), r.render(&b, &layout, &RenderOptions::default()));
+        let (first, second) = (
+            r.render(&a, &layout, &RenderOptions::default()),
+            r.render(&b, &layout, &RenderOptions::default()),
+        );
         assert_eq!(first.pixmap.data(), second.pixmap.data());
         let icon = layout.icon;
-        let centre = first.pixmap.pixel((icon.x() + icon.width() / 2.0) as u32, (icon.y() + icon.height() / 2.0) as u32).unwrap();
+        let centre = first
+            .pixmap
+            .pixel(
+                (icon.x() + icon.width() / 2.0) as u32,
+                (icon.y() + icon.height() / 2.0) as u32,
+            )
+            .unwrap();
         assert!(centre.alpha() > 0, "the generic application icon is drawn");
     }
 }

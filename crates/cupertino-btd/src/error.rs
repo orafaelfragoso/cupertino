@@ -12,7 +12,10 @@ pub enum Error {
     Keys(KeyStoreError),
     /// A D-Bus call or the bus connection failed; `what` names the step.
     #[cfg(feature = "dbus")]
-    Bus { what: &'static str, source: Box<zbus::Error> },
+    Bus {
+        what: &'static str,
+        source: Box<zbus::Error>,
+    },
     /// Another process owns the bus name.
     #[cfg(feature = "dbus")]
     NameTaken(&'static str),
@@ -28,7 +31,10 @@ impl Error {
     /// The adapter for `map_err` on a D-Bus call: names the step that failed. The `zbus` error is
     /// boxed because it is large.
     pub(crate) fn bus(what: &'static str) -> impl Fn(zbus::Error) -> Self + Copy {
-        move |source| Self::Bus { what, source: Box::new(source) }
+        move |source| Self::Bus {
+            what,
+            source: Box::new(source),
+        }
     }
 }
 

@@ -41,7 +41,15 @@ pub struct Weights {
 
 impl Default for Weights {
     fn default() -> Self {
-        Self { exact: 1000.0, prefix: 900.0, word_prefix: 700.0, acronym: 600.0, substring: 450.0, fuzzy_floor: 100.0, fuzzy_span: 180.0 }
+        Self {
+            exact: 1000.0,
+            prefix: 900.0,
+            word_prefix: 700.0,
+            acronym: 600.0,
+            substring: 450.0,
+            fuzzy_floor: 100.0,
+            fuzzy_span: 180.0,
+        }
     }
 }
 
@@ -99,7 +107,11 @@ impl Field {
             let prev = if i == 0 { None } else { Some(orig[i - 1]) };
             let boundary = match prev {
                 None => true,
-                Some(p) => (!is_word_char(p) && is_word_char(c)) || (p.is_lowercase() && c.is_uppercase()) || (p.is_alphabetic() && c.is_numeric()),
+                Some(p) => {
+                    (!is_word_char(p) && is_word_char(c))
+                        || (p.is_lowercase() && c.is_uppercase())
+                        || (p.is_alphabetic() && c.is_numeric())
+                }
             };
             if boundary && is_word_char(c) {
                 word_starts.push(i);
@@ -112,7 +124,12 @@ impl Field {
                 _ => 0.0,
             });
         }
-        Field { text: text.to_string(), chars, bonus, word_starts }
+        Field {
+            text: text.to_string(),
+            chars,
+            bonus,
+            word_starts,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -134,9 +151,22 @@ pub struct Query {
 
 impl Query {
     pub fn new(s: &str) -> Query {
-        let tokens: Vec<Vec<char>> = s.split_whitespace().map(|t| t.chars().map(fold_char).collect()).collect();
-        let joined = s.split_whitespace().collect::<Vec<_>>().join(" ").chars().map(fold_char).collect();
-        Query { raw: s.to_string(), tokens, joined }
+        let tokens: Vec<Vec<char>> = s
+            .split_whitespace()
+            .map(|t| t.chars().map(fold_char).collect())
+            .collect();
+        let joined = s
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .map(fold_char)
+            .collect();
+        Query {
+            raw: s.to_string(),
+            tokens,
+            joined,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -178,7 +208,10 @@ fn fuzzy(needle: &[char], f: &Field) -> Option<(f64, Vec<usize>)> {
                 if i == 0 {
                     Some(j as f64 * GAP_LEADING + f.bonus[j])
                 } else if j > 0 {
-                    Some((best[(i - 1) * m + j - 1] + f.bonus[j]).max(d[(i - 1) * m + j - 1] + CONSECUTIVE))
+                    Some(
+                        (best[(i - 1) * m + j - 1] + f.bonus[j])
+                            .max(d[(i - 1) * m + j - 1] + CONSECUTIVE),
+                    )
                 } else {
                     None
                 }
@@ -223,23 +256,40 @@ fn fuzzy(needle: &[char], f: &Field) -> Option<(f64, Vec<usize>)> {
 
 /// Match one token against a field. `allow_fuzzy`: also accept scattered subsequences (tokens of
 /// a single character never match fuzzily).
-pub fn match_token(token: &[char], f: &Field, allow_fuzzy: bool, w: &Weights) -> Option<TokenMatch> {
+pub fn match_token(
+    token: &[char],
+    f: &Field,
+    allow_fuzzy: bool,
+    w: &Weights,
+) -> Option<TokenMatch> {
     let m = token.len();
     if m == 0 || f.chars.len() < m {
         return None;
     }
     let hay = &f.chars;
     if hay == token {
-        return Some(TokenMatch { score: w.exact, positions: (0..m).collect(), tier: Tier::Exact });
+        return Some(TokenMatch {
+            score: w.exact,
+            positions: (0..m).collect(),
+            tier: Tier::Exact,
+        });
     }
     if hay.starts_with(token) {
         let penalty = ((hay.len() - m) as f64).min(50.0);
-        return Some(TokenMatch { score: w.prefix - penalty, positions: (0..m).collect(), tier: Tier::Prefix });
+        return Some(TokenMatch {
+            score: w.prefix - penalty,
+            positions: (0..m).collect(),
+            tier: Tier::Prefix,
+        });
     }
     for (wi, &s) in f.word_starts.iter().enumerate().skip(1) {
         if hay[s..].starts_with(token) {
             let score = (w.word_prefix - 20.0 * wi as f64).max(w.acronym + 20.0);
-            return Some(TokenMatch { score, positions: (s..s + m).collect(), tier: Tier::WordPrefix });
+            return Some(TokenMatch {
+                score,
+                positions: (s..s + m).collect(),
+                tier: Tier::WordPrefix,
+            });
         }
     }
     if m >= 2 && f.word_starts.len() >= 2 {
@@ -256,17 +306,29 @@ pub fn match_token(token: &[char], f: &Field, allow_fuzzy: bool, w: &Weights) ->
         }
         if ti == m {
             let score = (w.acronym - 15.0 * skipped as f64).max(w.substring + 20.0);
-            return Some(TokenMatch { score, positions: pos, tier: Tier::Acronym });
+            return Some(TokenMatch {
+                score,
+                positions: pos,
+                tier: Tier::Acronym,
+            });
         }
     }
     if let Some(off) = (0..=hay.len() - m).find(|&i| &hay[i..i + m] == token) {
         let score = (w.substring - 3.0 * off as f64).max(w.substring - 90.0);
-        return Some(TokenMatch { score, positions: (off..off + m).collect(), tier: Tier::Substring });
+        return Some(TokenMatch {
+            score,
+            positions: (off..off + m).collect(),
+            tier: Tier::Substring,
+        });
     }
     if allow_fuzzy && m >= 2 {
         let (raw, positions) = fuzzy(token, f)?;
         let norm = (raw / (m as f64 * 1.1)).clamp(0.0, 1.0);
-        return Some(TokenMatch { score: w.fuzzy_floor + w.fuzzy_span * norm, positions, tier: Tier::Fuzzy });
+        return Some(TokenMatch {
+            score: w.fuzzy_floor + w.fuzzy_span * norm,
+            positions,
+            tier: Tier::Fuzzy,
+        });
     }
     None
 }
@@ -289,7 +351,11 @@ pub struct CandidateField {
 
 impl CandidateField {
     pub fn new(text: &str, weight: f64, allow_fuzzy: bool) -> CandidateField {
-        CandidateField { field: Field::new(text), weight, allow_fuzzy }
+        CandidateField {
+            field: Field::new(text),
+            weight,
+            allow_fuzzy,
+        }
     }
 }
 
@@ -313,7 +379,9 @@ pub fn score(q: &Query, c: &Candidate, w: &Weights) -> Option<Scored> {
     for tok in &q.tokens {
         let mut best: Option<(f64, usize, TokenMatch)> = None;
         for (i, cf) in c.fields.iter().enumerate() {
-            let Some(m) = match_token(tok, &cf.field, cf.allow_fuzzy, w) else { continue };
+            let Some(m) = match_token(tok, &cf.field, cf.allow_fuzzy, w) else {
+                continue;
+            };
             let s = m.score * cf.weight;
             if Some(i) == c.required_field && m.tier != Tier::Fuzzy {
                 required_hit = true;
@@ -345,7 +413,11 @@ pub fn score(q: &Query, c: &Candidate, w: &Weights) -> Option<Scored> {
     }
     positions.sort_unstable();
     positions.dedup();
-    Some(Scored { score, positions, tier: weakest })
+    Some(Scored {
+        score,
+        positions,
+        tier: weakest,
+    })
 }
 
 #[cfg(test)]
@@ -357,7 +429,10 @@ mod tests {
     }
 
     fn cand(name: &str) -> Candidate {
-        Candidate { fields: vec![CandidateField::new(name, 1.0, true)], required_field: None }
+        Candidate {
+            fields: vec![CandidateField::new(name, 1.0, true)],
+            required_field: None,
+        }
     }
 
     fn sc(q: &str, name: &str) -> Option<Scored> {
@@ -390,18 +465,27 @@ mod tests {
         let acro = s("vc", "Visual Code");
         let sub = s("ode", "Code");
         let fuzzy = s("cde", "Code");
-        assert!(exact > prefix && prefix > word && word > acro && acro > sub && sub > fuzzy, "{exact} {prefix} {word} {acro} {sub} {fuzzy}");
+        assert!(
+            exact > prefix && prefix > word && word > acro && acro > sub && sub > fuzzy,
+            "{exact} {prefix} {word} {acro} {sub} {fuzzy}"
+        );
         assert!(fuzzy >= 100.0);
     }
 
     #[test]
     fn shorter_prefix_matches_rank_higher() {
-        assert!(sc("ter", "Terminal").unwrap().score > sc("ter", "Terminal Emulator Pro").unwrap().score);
+        assert!(
+            sc("ter", "Terminal").unwrap().score
+                > sc("ter", "Terminal Emulator Pro").unwrap().score
+        );
     }
 
     #[test]
     fn earlier_words_rank_higher() {
-        assert!(sc("edit", "Text Editor").unwrap().score > sc("edit", "Advanced Text Photo Editor").unwrap().score);
+        assert!(
+            sc("edit", "Text Editor").unwrap().score
+                > sc("edit", "Advanced Text Photo Editor").unwrap().score
+        );
     }
 
     #[test]
@@ -441,13 +525,21 @@ mod tests {
         assert!(sc("wr libre", "LibreOffice Writer").is_some());
         assert!(sc("libre xyz", "LibreOffice Writer").is_none());
         let whole = sc("visual studio", "Visual Studio Code").unwrap();
-        assert!(whole.score >= 900.0, "whole query is a name prefix: {}", whole.score);
+        assert!(
+            whole.score >= 900.0,
+            "whole query is a name prefix: {}",
+            whole.score
+        );
         assert_eq!(whole.positions, (0..13).collect::<Vec<_>>());
     }
 
     #[test]
     fn fuzzy_matches_must_be_compact() {
-        assert_eq!(tier("fire", "LibreOffice Writer"), None, "letters scattered over two words");
+        assert_eq!(
+            tier("fire", "LibreOffice Writer"),
+            None,
+            "letters scattered over two words"
+        );
         assert_eq!(tier("fire", "Firefox"), Some(Tier::Prefix));
         assert_eq!(tier("frfx", "Firefox"), Some(Tier::Fuzzy));
         assert_eq!(tier("chrmm", "Chromium Browser"), Some(Tier::Fuzzy));
@@ -463,7 +555,10 @@ mod tests {
     #[test]
     fn other_fields_count_with_their_weight() {
         let c = Candidate {
-            fields: vec![CandidateField::new("Web Browser", 1.0, true), CandidateField::new("firefox", 0.6, false)],
+            fields: vec![
+                CandidateField::new("Web Browser", 1.0, true),
+                CandidateField::new("firefox", 0.6, false),
+            ],
             required_field: None,
         };
         let s = score(&Query::new("firefox"), &c, &w()).unwrap();
@@ -476,7 +571,10 @@ mod tests {
     #[test]
     fn required_field_filters_candidates() {
         let c = Candidate {
-            fields: vec![CandidateField::new("Web Browser: New Private Window", 0.8, true), CandidateField::new("New Private Window", 1.0, false)],
+            fields: vec![
+                CandidateField::new("Web Browser: New Private Window", 0.8, true),
+                CandidateField::new("New Private Window", 1.0, false),
+            ],
             required_field: Some(1),
         };
         assert!(score(&Query::new("web"), &c, &w()).is_none());
@@ -505,4 +603,3 @@ mod tests {
         assert_eq!(Query::new("  Libre   WR ").normalized(), "libre wr");
     }
 }
-

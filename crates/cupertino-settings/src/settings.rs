@@ -5,7 +5,9 @@
 use std::io;
 use std::path::PathBuf;
 
-use cupertino_defaults::accessibility::{AccessibilitySettings, ACCESSIBILITY_ENV, ACCESSIBILITY_FILE};
+use cupertino_defaults::accessibility::{
+    AccessibilitySettings, ACCESSIBILITY_ENV, ACCESSIBILITY_FILE,
+};
 use cupertino_defaults::compositor::{CompositorSettings, MinimizeEffectName};
 use cupertino_defaults::conf::Problem;
 use cupertino_defaults::dock::{sanitize_large_size, sanitize_tile_size, DockSettings, Position};
@@ -31,7 +33,13 @@ pub enum File {
 }
 
 impl File {
-    pub const ALL: [File; 5] = [File::Dock, File::Compositor, File::MenuBar, File::Keyboard, File::Power];
+    pub const ALL: [File; 5] = [
+        File::Dock,
+        File::Compositor,
+        File::MenuBar,
+        File::Keyboard,
+        File::Power,
+    ];
 
     /// The process that applies the file.
     pub fn owner(self) -> &'static str {
@@ -109,7 +117,9 @@ pub enum StoreError {
 impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StoreError::NoPath(_) => write!(f, "There is no settings folder to save the change in."),
+            StoreError::NoPath(_) => {
+                write!(f, "There is no settings folder to save the change in.")
+            }
             StoreError::Io(_, e) => write!(f, "The change could not be saved: {e}."),
         }
     }
@@ -133,38 +143,79 @@ impl Settings {
     }
 
     fn read(paths: &Paths, last_good: Option<&Settings>, display_height: f64) -> io::Result<Self> {
-        let lines = |file: &str, problems: Vec<Problem>| problems.iter().for_each(|p| eprintln!("cupertino-settings: {file} line {}: {}", p.line, p.message));
+        let lines = |file: &str, problems: Vec<Problem>| {
+            problems.iter().for_each(|p| {
+                eprintln!("cupertino-settings: {file} line {}: {}", p.line, p.message)
+            })
+        };
         let dock = match &paths.dock {
-            Some(p) => DockSettings::load(p, last_good.map(|l| &l.dock)).map(|(s, problems)| { lines("dock.conf", problems); s })?,
+            Some(p) => DockSettings::load(p, last_good.map(|l| &l.dock)).map(|(s, problems)| {
+                lines("dock.conf", problems);
+                s
+            })?,
             None => DockSettings::default(),
         };
         let compositor = match &paths.compositor {
-            Some(p) => CompositorSettings::load(p, last_good.map(|l| &l.compositor)).map(|(s, problems)| {
-                problems.iter().for_each(|p| eprintln!("cupertino-settings: compositor.json {}: {}", p.key, p.message));
-                s
-            })?,
+            Some(p) => CompositorSettings::load(p, last_good.map(|l| &l.compositor)).map(
+                |(s, problems)| {
+                    problems.iter().for_each(|p| {
+                        eprintln!(
+                            "cupertino-settings: compositor.json {}: {}",
+                            p.key, p.message
+                        )
+                    });
+                    s
+                },
+            )?,
             None => CompositorSettings::default(),
         };
         let menubar = match &paths.menubar {
-            Some(p) => MenuBarSettings::load(p, last_good.map(|l| &l.menubar)).map(|(s, problems)| { lines("menubar.conf", problems); s })?,
-            None => MenuBarSettings { clock: ClockSettings::UNSET },
+            Some(p) => {
+                MenuBarSettings::load(p, last_good.map(|l| &l.menubar)).map(|(s, problems)| {
+                    lines("menubar.conf", problems);
+                    s
+                })?
+            }
+            None => MenuBarSettings {
+                clock: ClockSettings::UNSET,
+            },
         };
         let keyboard = match &paths.keyboard {
-            Some(p) => KeyboardSettings::load(p, last_good.map(|l| &l.keyboard)).map(|(s, problems)| { lines("keyboard.conf", problems); s })?,
+            Some(p) => {
+                KeyboardSettings::load(p, last_good.map(|l| &l.keyboard)).map(|(s, problems)| {
+                    lines("keyboard.conf", problems);
+                    s
+                })?
+            }
             None => KeyboardSettings::default(),
         };
         let power = match &paths.power {
-            Some(p) => PowerSettings::load(p, last_good.map(|l| &l.power)).map(|(s, problems)| { lines("power.conf", problems); s })?,
+            Some(p) => {
+                PowerSettings::load(p, last_good.map(|l| &l.power)).map(|(s, problems)| {
+                    lines("power.conf", problems);
+                    s
+                })?
+            }
             None => PowerSettings::default(),
         };
         let accessibility = match &paths.accessibility {
             Some(p) => AccessibilitySettings::load(p).map(|(s, problems)| {
-                problems.iter().for_each(|(line, message)| eprintln!("cupertino-settings: accessibility.conf line {line}: {message}"));
+                problems.iter().for_each(|(line, message)| {
+                    eprintln!("cupertino-settings: accessibility.conf line {line}: {message}")
+                });
                 s
             })?,
             None => AccessibilitySettings::default(),
         };
-        Ok(Settings { dock, compositor, menubar, keyboard, power, accessibility, display_height })
+        Ok(Settings {
+            dock,
+            compositor,
+            menubar,
+            keyboard,
+            power,
+            accessibility,
+            display_height,
+        })
     }
 
     /// Write `file` to its path atomically.
@@ -210,16 +261,22 @@ impl Settings {
 
     /// Default: warp (the server's default effect).
     pub fn minimize_effect(&self) -> MinimizeEffectName {
-        self.compositor.minimize_effect.unwrap_or(MinimizeEffectName::Warp)
+        self.compositor
+            .minimize_effect
+            .unwrap_or(MinimizeEffectName::Warp)
     }
 
     /// Defaults: 0.6875 for both (settled), acceleration on, natural scrolling on.
     pub fn mouse_speed(&self) -> f64 {
-        self.compositor.mouse_speed.unwrap_or(mapping::TRACKING_DEFAULT)
+        self.compositor
+            .mouse_speed
+            .unwrap_or(mapping::TRACKING_DEFAULT)
     }
 
     pub fn trackpad_speed(&self) -> f64 {
-        self.compositor.trackpad_speed.unwrap_or(mapping::TRACKING_DEFAULT)
+        self.compositor
+            .trackpad_speed
+            .unwrap_or(mapping::TRACKING_DEFAULT)
     }
 
     pub fn mouse_acceleration(&self) -> bool {

@@ -14,16 +14,18 @@
 //! material recipe are approximate.
 
 pub mod backend;
-pub mod controller;
 #[cfg(feature = "dbus")]
 pub mod control;
+pub mod controller;
 pub mod layout;
 pub mod model;
 pub mod render;
+pub mod sender;
 #[cfg(feature = "dbus")]
 pub mod system;
-pub mod sender;
 
-pub use backend::{AlsaVolume, Backlight, BackendError, MemoryBacklight, MemoryVolume, Volume, VolumeState};
+pub use backend::{
+    AlsaVolume, BackendError, Backlight, MemoryBacklight, MemoryVolume, Volume, VolumeState,
+};
 pub use controller::{Command, Controller, EffectError};
 pub use model::{segments, Fill, Hud, Kind, Overlay, Phase, View};

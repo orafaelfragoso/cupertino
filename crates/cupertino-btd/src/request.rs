@@ -145,7 +145,10 @@ pub struct AdapterProps {
 /// A change clients should hear about.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Change {
-    Adapter { old: AdapterProps, new: AdapterProps },
+    Adapter {
+        old: AdapterProps,
+        new: AdapterProps,
+    },
     DeviceAdded(DeviceInfo),
     DeviceChanged(DeviceInfo),
     /// The key of the device that went away (`DeviceInfo::key`).
@@ -171,15 +174,35 @@ pub struct AgentAnswer {
 /// and answers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
-    Send { index: ControllerIndex, command: Command },
+    Send {
+        index: ControllerIndex,
+        command: Command,
+    },
     /// Start a baseband connection and hold it open. `ticket` is the request that waits for it.
-    OpenLink { index: ControllerIndex, adapter: Address, device: DeviceId, ticket: Ticket },
-    CloseLink { adapter: Address, device: DeviceId },
+    OpenLink {
+        index: ControllerIndex,
+        adapter: Address,
+        device: DeviceId,
+        ticket: Ticket,
+    },
+    CloseLink {
+        adapter: Address,
+        device: DeviceId,
+    },
     /// Read the stored keys of the adapter and pass them to `Model::keys_loaded`.
-    LoadKeys { index: ControllerIndex, address: Address },
-    SaveKeys { address: Address, keys: KeySet },
+    LoadKeys {
+        index: ControllerIndex,
+        address: Address,
+    },
+    SaveKeys {
+        address: Address,
+        keys: KeySet,
+    },
     /// A request is answered.
-    Complete { ticket: Ticket, result: Result<(), RequestError> },
+    Complete {
+        ticket: Ticket,
+        result: Result<(), RequestError>,
+    },
     Changed(Change),
     Agent(AgentCall),
     /// Something to print: a command that failed without a caller waiting for it.

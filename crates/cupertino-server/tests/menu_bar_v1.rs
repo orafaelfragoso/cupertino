@@ -11,7 +11,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use cupertino_protocols::client::cupertino_menu_bar_v1::{self, Command as BarCommand, CupertinoMenuBarV1};
+use cupertino_protocols::client::cupertino_menu_bar_v1::{
+    self, Command as BarCommand, CupertinoMenuBarV1,
+};
 use cupertino_protocols::client::cupertino_shell_v1::{self, CupertinoShellV1};
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
@@ -20,12 +22,20 @@ use cupertino_wm::{Command, LifecycleState, Rect};
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
-use wayland_client::protocol::{wl_buffer, wl_compositor, wl_output, wl_registry, wl_shm, wl_shm_pool, wl_surface};
+use wayland_client::protocol::{
+    wl_buffer, wl_compositor, wl_output, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
-use wayland_protocols::ext::image_capture_source::v1::client::{ext_image_capture_source_v1, ext_output_image_capture_source_manager_v1};
-use wayland_protocols::ext::image_copy_capture::v1::client::{ext_image_copy_capture_manager_v1, ext_image_copy_capture_session_v1};
+use wayland_protocols::ext::image_capture_source::v1::client::{
+    ext_image_capture_source_v1, ext_output_image_capture_source_manager_v1,
+};
+use wayland_protocols::ext::image_copy_capture::v1::client::{
+    ext_image_copy_capture_manager_v1, ext_image_copy_capture_session_v1,
+};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
-use wayland_protocols_plasma::appmenu::client::{org_kde_kwin_appmenu, org_kde_kwin_appmenu_manager};
+use wayland_protocols_plasma::appmenu::client::{
+    org_kde_kwin_appmenu, org_kde_kwin_appmenu_manager,
+};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 const OUTPUT: (i32, i32) = (1000, 700);
@@ -42,7 +52,15 @@ impl Harness {
         let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().ok()?;
         let display: Display<Cupertino> = Display::new().ok()?;
         let cfg = Config::default();
-        let mut state = Cupertino::new(display, event_loop.handle(), event_loop.get_signal(), cfg, true, &cupertino_assets::Assets::discover()).ok()?;
+        let mut state = Cupertino::new(
+            display,
+            event_loop.handle(),
+            event_loop.get_signal(),
+            cfg,
+            true,
+            &cupertino_assets::Assets::builtin(),
+        )
+        .ok()?;
         match headless::init(&mut state, OUTPUT, 1.0) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
@@ -53,7 +71,12 @@ impl Harness {
     }
 
     fn step(&mut self) {
-        headless::step(&mut self.state, &mut self.event_loop, Duration::from_millis(5)).unwrap();
+        headless::step(
+            &mut self.state,
+            &mut self.event_loop,
+            Duration::from_millis(5),
+        )
+        .unwrap();
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
@@ -76,7 +99,10 @@ impl Harness {
                 return;
             }
         }
-        panic!("timed out waiting for group {count}, have {:?}", bar.groups());
+        panic!(
+            "timed out waiting for group {count}, have {:?}",
+            bar.groups()
+        );
     }
 
     fn socket_path(&self) -> PathBuf {
@@ -95,7 +121,9 @@ impl Harness {
 
     /// Wait for `count` application windows and let the opening animations finish.
     fn mapped_window(&mut self, count: usize) -> cupertino_wm::WindowId {
-        self.wait_until("the window to be mapped", |s| s.wm.windows().count() == count);
+        self.wait_until("the window to be mapped", |s| {
+            s.wm.windows().count() == count
+        });
         self.advance(5.0);
         self.state.wm.key_window().expect("focused window")
     }
@@ -111,7 +139,12 @@ fn tempfile_like(len: usize) -> std::fs::File {
 }
 
 /// Attach an opaque grey buffer of `size` to `surface` and commit.
-fn attach_and_commit(shm: &wl_shm::WlShm, surface: &wl_surface::WlSurface, size: (i32, i32), qh: &QueueHandle<ClientState>) {
+fn attach_and_commit(
+    shm: &wl_shm::WlShm,
+    surface: &wl_surface::WlSurface,
+    size: (i32, i32),
+    qh: &QueueHandle<ClientState>,
+) {
     let (w, h) = size;
     let mut file = tempfile_like((w * h * 4) as usize);
     file.write_all(&vec![128u8; (w * h * 4) as usize]).unwrap();
@@ -126,10 +159,20 @@ fn attach_and_commit(shm: &wl_shm::WlShm, surface: &wl_surface::WlSurface, size:
 /// What the menu bar object sent, in order.
 #[derive(Clone, Debug, PartialEq)]
 enum BarEvent {
-    ActiveApp { app_id: String, title: String },
+    ActiveApp {
+        app_id: String,
+        title: String,
+    },
     MenuNone,
-    MenuDbusmenu { service: String, path: String },
-    WindowState { can_zoom: u32, workspace: u32, workspaces: u32 },
+    MenuDbusmenu {
+        service: String,
+        path: String,
+    },
+    WindowState {
+        can_zoom: u32,
+        workspace: u32,
+        workspaces: u32,
+    },
     Engage,
     ScreenCapture(u32),
     Done,
@@ -152,7 +195,15 @@ struct ClientState {
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for ClientState {
-    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 macro_rules! ignore_events {
     ($($t:ty),*) => {$(
@@ -179,7 +230,14 @@ ignore_events!(
 );
 
 impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for ClientState {
-    fn event(state: &mut Self, layer: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, event: zwlr_layer_surface_v1::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        layer: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
         if let zwlr_layer_surface_v1::Event::Configure { serial, width, .. } = event {
             layer.ack_configure(serial);
             if !state.attached {
@@ -191,13 +249,28 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for ClientState {
 }
 
 impl Dispatch<CupertinoMenuBarV1, ()> for ClientState {
-    fn event(state: &mut Self, _: &CupertinoMenuBarV1, event: cupertino_menu_bar_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        _: &CupertinoMenuBarV1,
+        event: cupertino_menu_bar_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         use cupertino_menu_bar_v1::Event as E;
         let event = match event {
             E::ActiveApp { app_id, title } => BarEvent::ActiveApp { app_id, title },
             E::MenuNone => BarEvent::MenuNone,
             E::MenuDbusmenu { service, path } => BarEvent::MenuDbusmenu { service, path },
-            E::WindowState { can_zoom, workspace, workspaces } => BarEvent::WindowState { can_zoom, workspace, workspaces },
+            E::WindowState {
+                can_zoom,
+                workspace,
+                workspaces,
+            } => BarEvent::WindowState {
+                can_zoom,
+                workspace,
+                workspaces,
+            },
             E::Engage => BarEvent::Engage,
             E::ScreenCapture { active } => BarEvent::ScreenCapture(active),
             E::Done => BarEvent::Done,
@@ -208,7 +281,14 @@ impl Dispatch<CupertinoMenuBarV1, ()> for ClientState {
 }
 
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for ClientState {
-    fn event(_: &mut Self, base: &xdg_wm_base::XdgWmBase, event: xdg_wm_base::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        _: &mut Self,
+        base: &xdg_wm_base::XdgWmBase,
+        event: xdg_wm_base::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         if let xdg_wm_base::Event::Ping { serial } = event {
             base.pong(serial);
         }
@@ -216,7 +296,14 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for ClientState {
 }
 
 impl Dispatch<xdg_surface::XdgSurface, ()> for ClientState {
-    fn event(state: &mut Self, surface: &xdg_surface::XdgSurface, event: xdg_surface::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        surface: &xdg_surface::XdgSurface,
+        event: xdg_surface::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
         if let xdg_surface::Event::Configure { serial } = event {
             surface.ack_configure(serial);
             if !state.attached {
@@ -228,7 +315,15 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for ClientState {
 }
 
 impl Dispatch<xdg_toplevel::XdgToplevel, ()> for ClientState {
-    fn event(_: &mut Self, _: &xdg_toplevel::XdgToplevel, _: xdg_toplevel::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &xdg_toplevel::XdgToplevel,
+        _: xdg_toplevel::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 /// Requests a test sends to a client thread.
@@ -265,10 +360,29 @@ impl TestClient {
     }
 }
 
-type Setup = Box<dyn FnOnce(&wayland_client::globals::GlobalList, &QueueHandle<ClientState>, &Arc<Mutex<Status>>) -> (ClientState, Box<dyn FnMut(Cmd)>) + Send>;
+type Setup = Box<
+    dyn FnOnce(
+            &wayland_client::globals::GlobalList,
+            &QueueHandle<ClientState>,
+            &Arc<Mutex<Status>>,
+        ) -> (ClientState, Box<dyn FnMut(Cmd)>)
+        + Send,
+>;
 
-fn run_client(socket: PathBuf, setup: impl FnOnce(&wayland_client::globals::GlobalList, &QueueHandle<ClientState>, &Arc<Mutex<Status>>) -> (ClientState, Box<dyn FnMut(Cmd)>) + Send + 'static) -> TestClient {
-    run_client_on(UnixStream::connect(&socket).expect("connecting to the compositor"), Box::new(setup))
+fn run_client(
+    socket: PathBuf,
+    setup: impl FnOnce(
+            &wayland_client::globals::GlobalList,
+            &QueueHandle<ClientState>,
+            &Arc<Mutex<Status>>,
+        ) -> (ClientState, Box<dyn FnMut(Cmd)>)
+        + Send
+        + 'static,
+) -> TestClient {
+    run_client_on(
+        UnixStream::connect(&socket).expect("connecting to the compositor"),
+        Box::new(setup),
+    )
 }
 
 /// A client thread on a connected stream (a privileged client's stream comes from the server itself).
@@ -286,14 +400,20 @@ fn run_client_on(stream: UnixStream, setup: Setup) -> TestClient {
                 apply(cmd);
             }
             if queue.roundtrip(&mut client).is_err() {
-                let error = conn.protocol_error().expect("the roundtrip failed with a protocol error");
+                let error = conn
+                    .protocol_error()
+                    .expect("the roundtrip failed with a protocol error");
                 st.lock().unwrap().error = Some((error.object_interface, error.code));
                 return;
             }
             std::thread::sleep(Duration::from_millis(5));
         }
     });
-    TestClient { commands, status, thread: Some(thread) }
+    TestClient {
+        commands,
+        status,
+        thread: Some(thread),
+    }
 }
 
 /// The menu bar process: a top-anchored layer surface with the menu-bar role on the first output.
@@ -314,35 +434,58 @@ impl BarClient {
             let output: wl_output::WlOutput = globals.bind(qh, 1..=4, ()).unwrap();
             let surface = compositor.create_surface(qh, ());
             let layer_surface = layer.then(|| {
-                let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 = globals.bind(qh, 1..=4, ()).unwrap();
-                let l = layer_shell.get_layer_surface(&surface, Some(&output), zwlr_layer_shell_v1::Layer::Top, "menu-bar-test".into(), qh, ());
+                let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
+                    globals.bind(qh, 1..=4, ()).unwrap();
+                let l = layer_shell.get_layer_surface(
+                    &surface,
+                    Some(&output),
+                    zwlr_layer_shell_v1::Layer::Top,
+                    "menu-bar-test".into(),
+                    qh,
+                    (),
+                );
                 l.set_size(0, BAR_HEIGHT as u32);
-                l.set_anchor(zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left | zwlr_layer_surface_v1::Anchor::Right);
+                l.set_anchor(
+                    zwlr_layer_surface_v1::Anchor::Top
+                        | zwlr_layer_surface_v1::Anchor::Left
+                        | zwlr_layer_surface_v1::Anchor::Right,
+                );
                 l.set_exclusive_zone(0);
                 l
             });
             let bar = shell.get_menu_bar(&surface, &output, qh, ());
             surface.commit();
             let bar_surface = surface.clone();
-            let state = ClientState { status: status.clone(), shm, surface, attached: false, toplevel_size: (0, 0) };
-            let apply = Box::new(move |cmd: Cmd| {
-                match cmd {
-                    Cmd::SetMenuOpen(open) => bar.set_menu_open(u32::from(open)),
-                    Cmd::WindowCommand(c) => bar.window_command(c),
-                    Cmd::MoveToWorkspace(n) => bar.move_to_workspace(n),
-                    Cmd::SetAddress(..) => panic!("a menu bar has no application menu address"),
-                    Cmd::SetKeyboard(exclusive) => {
-                        let mode = if exclusive { zwlr_layer_surface_v1::KeyboardInteractivity::Exclusive } else { zwlr_layer_surface_v1::KeyboardInteractivity::None };
-                        layer_surface.as_ref().expect("a layer surface").set_keyboard_interactivity(mode);
-                        bar_surface.commit();
+            let state = ClientState {
+                status: status.clone(),
+                shm,
+                surface,
+                attached: false,
+                toplevel_size: (0, 0),
+            };
+            let apply = Box::new(move |cmd: Cmd| match cmd {
+                Cmd::SetMenuOpen(open) => bar.set_menu_open(u32::from(open)),
+                Cmd::WindowCommand(c) => bar.window_command(c),
+                Cmd::MoveToWorkspace(n) => bar.move_to_workspace(n),
+                Cmd::SetAddress(..) => panic!("a menu bar has no application menu address"),
+                Cmd::SetKeyboard(exclusive) => {
+                    let mode = if exclusive {
+                        zwlr_layer_surface_v1::KeyboardInteractivity::Exclusive
+                    } else {
+                        zwlr_layer_surface_v1::KeyboardInteractivity::None
+                    };
+                    layer_surface
+                        .as_ref()
+                        .expect("a layer surface")
+                        .set_keyboard_interactivity(mode);
+                    bar_surface.commit();
+                }
+                Cmd::Destroy => {
+                    bar.destroy();
+                    if let Some(l) = &layer_surface {
+                        l.destroy();
                     }
-                    Cmd::Destroy => {
-                        bar.destroy();
-                        if let Some(l) = &layer_surface {
-                            l.destroy();
-                        }
-                        bar_surface.destroy();
-                    }
+                    bar_surface.destroy();
                 }
             });
             (state, apply)
@@ -363,7 +506,6 @@ impl BarClient {
         groups.pop();
         groups
     }
-
 
     fn send(&self, cmd: Cmd) {
         self.0.send(cmd);
@@ -387,10 +529,22 @@ impl CaptureClient {
                 let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
                 let output: wl_output::WlOutput = globals.bind(qh, 1..=4, ()).unwrap();
                 let sources: ext_output_image_capture_source_manager_v1::ExtOutputImageCaptureSourceManagerV1 = globals.bind(qh, 1..=1, ()).unwrap();
-                let manager: ext_image_copy_capture_manager_v1::ExtImageCopyCaptureManagerV1 = globals.bind(qh, 1..=1, ()).unwrap();
+                let manager: ext_image_copy_capture_manager_v1::ExtImageCopyCaptureManagerV1 =
+                    globals.bind(qh, 1..=1, ()).unwrap();
                 let source = sources.create_source(&output, qh, ());
-                let session = manager.create_session(&source, ext_image_copy_capture_manager_v1::Options::empty(), qh, ());
-                let state = ClientState { status: status.clone(), shm, surface: compositor.create_surface(qh, ()), attached: true, toplevel_size: (0, 0) };
+                let session = manager.create_session(
+                    &source,
+                    ext_image_copy_capture_manager_v1::Options::empty(),
+                    qh,
+                    (),
+                );
+                let state = ClientState {
+                    status: status.clone(),
+                    shm,
+                    surface: compositor.create_surface(qh, ()),
+                    attached: true,
+                    toplevel_size: (0, 0),
+                };
                 let apply = Box::new(move |cmd: Cmd| match cmd {
                     Cmd::Destroy => session.destroy(),
                     _ => panic!("a capture client takes no other command"),
@@ -414,7 +568,8 @@ impl AppClient {
             let compositor: wl_compositor::WlCompositor = globals.bind(qh, 4..=6, ()).unwrap();
             let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
             let wm_base: xdg_wm_base::XdgWmBase = globals.bind(qh, 1..=5, ()).unwrap();
-            let manager: org_kde_kwin_appmenu_manager::OrgKdeKwinAppmenuManager = globals.bind(qh, 1..=2, ()).unwrap();
+            let manager: org_kde_kwin_appmenu_manager::OrgKdeKwinAppmenuManager =
+                globals.bind(qh, 1..=2, ()).unwrap();
             let surface = compositor.create_surface(qh, ());
             let xdg = wm_base.get_xdg_surface(&surface, qh, ());
             let toplevel = xdg.get_toplevel(qh, ());
@@ -422,9 +577,17 @@ impl AppClient {
             toplevel.set_title(format!("{app_id} window"));
             let appmenu = manager.create(&surface, qh, ());
             surface.commit();
-            let state = ClientState { status: status.clone(), shm, surface, attached: false, toplevel_size: (300, 200) };
+            let state = ClientState {
+                status: status.clone(),
+                shm,
+                surface,
+                attached: false,
+                toplevel_size: (300, 200),
+            };
             let apply = Box::new(move |cmd: Cmd| match cmd {
-                Cmd::SetAddress(service, path) => appmenu.set_address(service.to_string(), path.to_string()),
+                Cmd::SetAddress(service, path) => {
+                    appmenu.set_address(service.to_string(), path.to_string())
+                }
                 _ => panic!("an application window takes no menu bar command"),
             });
             (state, apply)
@@ -441,9 +604,16 @@ impl AppClient {
 /// The group sent while no window is active.
 fn empty_group() -> Vec<BarEvent> {
     vec![
-        BarEvent::ActiveApp { app_id: String::new(), title: String::new() },
+        BarEvent::ActiveApp {
+            app_id: String::new(),
+            title: String::new(),
+        },
         BarEvent::MenuNone,
-        BarEvent::WindowState { can_zoom: 0, workspace: 0, workspaces: 0 },
+        BarEvent::WindowState {
+            can_zoom: 0,
+            workspace: 0,
+            workspaces: 0,
+        },
         BarEvent::Done,
     ]
 }
@@ -457,7 +627,10 @@ fn the_bar_gets_a_first_group_and_the_server_reserves_its_height() {
     h.wait_for_groups(&bar, 1);
     assert_eq!(bar.groups(), vec![empty_group()]);
     // the client's exclusive zone is 0: the reservation is the server's
-    assert_eq!(h.state.usable_area(out), Rect::new(0.0, 24.0, 1000.0, 676.0));
+    assert_eq!(
+        h.state.usable_area(out),
+        Rect::new(0.0, 24.0, 1000.0, 676.0)
+    );
     assert_eq!(bar.error(), None);
 }
 
@@ -466,16 +639,28 @@ fn a_version_3_bar_shows_whether_a_capture_session_runs() {
     let Some(mut h) = Harness::new() else { return };
     let bar = BarClient::spawn_at(h.socket_path(), true, 3);
     h.wait_for_groups(&bar, 2);
-    assert_eq!(bar.groups(), vec![empty_group(), vec![BarEvent::ScreenCapture(0), BarEvent::Done]]);
+    assert_eq!(
+        bar.groups(),
+        vec![
+            empty_group(),
+            vec![BarEvent::ScreenCapture(0), BarEvent::Done]
+        ]
+    );
 
     let capture = CaptureClient::spawn(&mut h);
     h.wait_for_groups(&bar, 3);
-    assert_eq!(bar.groups()[2], [BarEvent::ScreenCapture(1), BarEvent::Done]);
+    assert_eq!(
+        bar.groups()[2],
+        [BarEvent::ScreenCapture(1), BarEvent::Done]
+    );
     assert!(h.state.capture_running());
 
     capture.send(Cmd::Destroy);
     h.wait_for_groups(&bar, 4);
-    assert_eq!(bar.groups()[3], [BarEvent::ScreenCapture(0), BarEvent::Done]);
+    assert_eq!(
+        bar.groups()[3],
+        [BarEvent::ScreenCapture(0), BarEvent::Done]
+    );
     // a bar of version 1 is never told: the other tests see exactly their groups
     assert_eq!(bar.error(), None);
 }
@@ -489,8 +674,19 @@ fn a_surface_without_the_layer_role_is_a_role_error() {
         h.step();
     }
     // error 0 of cupertino_shell_v1.error is `role`
-    assert_eq!(bar.error(), Some((cupertino_shell_v1::CupertinoShellV1::interface().name.to_string(), 0)));
-    assert_eq!(h.state.usable_area(h.state.outputs[0].id), Rect::new(0.0, 0.0, 1000.0, 700.0));
+    assert_eq!(
+        bar.error(),
+        Some((
+            cupertino_shell_v1::CupertinoShellV1::interface()
+                .name
+                .to_string(),
+            0
+        ))
+    );
+    assert_eq!(
+        h.state.usable_area(h.state.outputs[0].id),
+        Rect::new(0.0, 0.0, 1000.0, 700.0)
+    );
 }
 
 #[test]
@@ -506,9 +702,16 @@ fn the_active_window_its_menu_and_commands_go_through_the_bar() {
     assert_eq!(
         bar.groups()[1],
         vec![
-            BarEvent::ActiveApp { app_id: "org.example.editor".into(), title: "org.example.editor window".into() },
+            BarEvent::ActiveApp {
+                app_id: "org.example.editor".into(),
+                title: "org.example.editor window".into()
+            },
             BarEvent::MenuNone,
-            BarEvent::WindowState { can_zoom: 1, workspace: 1, workspaces: 1 },
+            BarEvent::WindowState {
+                can_zoom: 1,
+                workspace: 1,
+                workspaces: 1
+            },
             BarEvent::Done,
         ]
     );
@@ -519,17 +722,32 @@ fn the_active_window_its_menu_and_commands_go_through_the_bar() {
     assert_eq!(
         bar.groups()[2],
         vec![
-            BarEvent::ActiveApp { app_id: "org.example.editor".into(), title: "org.example.editor window".into() },
-            BarEvent::MenuDbusmenu { service: ":1.99".into(), path: "/MenuBar/1".into() },
-            BarEvent::WindowState { can_zoom: 1, workspace: 1, workspaces: 1 },
+            BarEvent::ActiveApp {
+                app_id: "org.example.editor".into(),
+                title: "org.example.editor window".into()
+            },
+            BarEvent::MenuDbusmenu {
+                service: ":1.99".into(),
+                path: "/MenuBar/1".into()
+            },
+            BarEvent::WindowState {
+                can_zoom: 1,
+                workspace: 1,
+                workspaces: 1
+            },
             BarEvent::Done,
         ]
     );
 
     // the window command acts on the active window
     bar.send(Cmd::WindowCommand(BarCommand::Minimize));
-    h.wait_until("the window to minimize", |s| s.wm.window(id).is_some_and(|w| w.state().is_minimized()));
-    assert_eq!(h.state.wm.window(id).unwrap().state(), LifecycleState::Minimizing);
+    h.wait_until("the window to minimize", |s| {
+        s.wm.window(id).is_some_and(|w| w.state().is_minimized())
+    });
+    assert_eq!(
+        h.state.wm.window(id).unwrap().state(),
+        LifecycleState::Minimizing
+    );
 }
 
 #[test]
@@ -540,13 +758,24 @@ fn move_to_workspace_moves_the_active_window_and_updates_the_state() {
     let id = h.mapped_window(1);
     let out = h.state.outputs[0].id;
     h.state.command(Command::AddWorkspace { output: out });
-    h.wait_until("both workspaces to exist", |s| s.wm.workspaces(out).len() == 2);
+    h.wait_until("both workspaces to exist", |s| {
+        s.wm.workspaces(out).len() == 2
+    });
     let second = h.state.wm.workspaces(out)[1].id;
     bar.send(Cmd::MoveToWorkspace(2));
-    h.wait_until("the window to change workspace", |s| s.wm.window(id).is_some_and(|w| w.workspace == second));
+    h.wait_until("the window to change workspace", |s| {
+        s.wm.window(id).is_some_and(|w| w.workspace == second)
+    });
     h.advance(5.0);
     let last = bar.groups().pop().unwrap();
-    assert_eq!(last[2], BarEvent::WindowState { can_zoom: 1, workspace: 2, workspaces: 2 });
+    assert_eq!(
+        last[2],
+        BarEvent::WindowState {
+            can_zoom: 1,
+            workspace: 2,
+            workspaces: 2
+        }
+    );
 }
 
 #[test]
@@ -572,13 +801,20 @@ fn an_engaged_bar_holds_the_keyboard_over_window_focus_changes() {
     let second = h.mapped_window(2);
     let bar = BarClient::spawn(h.socket_path(), true);
     h.wait_for_groups(&bar, 1);
-    let surface = |h: &Harness, id| h.state.entry(id).map(|e| e.surface().clone()).expect("window surface");
+    let surface = |h: &Harness, id| {
+        h.state
+            .entry(id)
+            .map(|e| e.surface().clone())
+            .expect("window surface")
+    };
     let focus = |h: &Harness| h.state.seat.get_keyboard().unwrap().current_focus();
     assert_eq!(focus(&h), Some(surface(&h, second)));
 
     h.state.focus_menu_bar();
     bar.send(Cmd::SetKeyboard(true));
-    h.wait_until("the bar to take the keyboard", |s| s.exclusive_layer.is_some());
+    h.wait_until("the bar to take the keyboard", |s| {
+        s.exclusive_layer.is_some()
+    });
     let held = h.state.exclusive_layer.clone();
     assert_eq!(focus(&h), held);
 
@@ -586,11 +822,19 @@ fn an_engaged_bar_holds_the_keyboard_over_window_focus_changes() {
     h.state.command(Command::FocusWindow { window: first });
     h.advance(0.1);
     assert_eq!(h.state.wm.key_window(), Some(first));
-    assert_eq!(focus(&h), held, "a window focus change leaves an exclusive layer the keyboard");
+    assert_eq!(
+        focus(&h),
+        held,
+        "a window focus change leaves an exclusive layer the keyboard"
+    );
 
     bar.send(Cmd::SetKeyboard(false));
     h.wait_until("the bar to let go", |s| s.exclusive_layer.is_none());
-    assert_eq!(focus(&h), Some(surface(&h, first)), "the keyboard returns to the key window");
+    assert_eq!(
+        focus(&h),
+        Some(surface(&h, first)),
+        "the keyboard returns to the key window"
+    );
 }
 
 /// A bar process that exits with a menu open must not leave the output's next bar pinned
@@ -602,8 +846,18 @@ fn a_bar_gone_with_a_menu_open_does_not_keep_the_next_bar_revealed() {
     let _app = AppClient::spawn(h.socket_path(), "org.example.full");
     let id = h.mapped_window(1);
     let out = h.state.outputs[0].id;
-    let visible = |h: &Harness| h.state.menu_bars.set.presentation(out, h.state.now() + 5.0).unwrap().visible;
-    h.state.command(Command::Fullscreen { window: id, output: None });
+    let visible = |h: &Harness| {
+        h.state
+            .menu_bars
+            .set
+            .presentation(out, h.state.now() + 5.0)
+            .unwrap()
+            .visible
+    };
+    h.state.command(Command::Fullscreen {
+        window: id,
+        output: None,
+    });
     h.advance(6.0);
     bar.send(Cmd::SetMenuOpen(true));
     let end = Instant::now() + Duration::from_secs(10);
@@ -627,29 +881,65 @@ fn full_screen_hides_the_bar_and_an_open_menu_or_the_top_edge_reveals_it() {
     let _app = AppClient::spawn(h.socket_path(), "org.example.full");
     let id = h.mapped_window(1);
     let out = h.state.outputs[0].id;
-    let visible = |h: &Harness, at: f64| h.state.menu_bars.set.presentation(out, at).unwrap().visible;
+    let visible =
+        |h: &Harness, at: f64| h.state.menu_bars.set.presentation(out, at).unwrap().visible;
     assert_eq!(visible(&h, h.state.now()), 1.0);
     assert_eq!(h.state.usable_area(out).y, 24.0);
     let top = (500.0, 10.0).into();
-    assert!(h.state.surface_under(top).is_some(), "the shown bar takes the pointer at the top edge");
+    assert!(
+        h.state.surface_under(top).is_some(),
+        "the shown bar takes the pointer at the top edge"
+    );
 
-    h.state.command(Command::Fullscreen { window: id, output: None });
+    h.state.command(Command::Fullscreen {
+        window: id,
+        output: None,
+    });
     h.advance(5.0);
     h.advance(1.0);
     assert_eq!(visible(&h, h.state.now()), 0.0, "hidden in full screen");
-    assert_eq!(h.state.usable_area(out).y, 0.0, "a hidden bar reserves no space");
-    assert!(h.state.surface_under(top).is_none(), "a hidden bar does not take the pointer");
+    assert_eq!(
+        h.state.usable_area(out).y,
+        0.0,
+        "a hidden bar reserves no space"
+    );
+    assert!(
+        h.state.surface_under(top).is_none(),
+        "a hidden bar does not take the pointer"
+    );
 
     // an open menu keeps the bar shown, closing it hides the bar again
     bar.send(Cmd::SetMenuOpen(true));
     let end = Instant::now() + Duration::from_secs(10);
-    while !h.state.menu_bars.set.presentation(out, h.state.now() + 5.0).unwrap().visible.eq(&1.0) && Instant::now() < end {
+    while !h
+        .state
+        .menu_bars
+        .set
+        .presentation(out, h.state.now() + 5.0)
+        .unwrap()
+        .visible
+        .eq(&1.0)
+        && Instant::now() < end
+    {
         h.step();
     }
-    assert_eq!(visible(&h, h.state.now() + 5.0), 1.0, "revealed while a menu is open");
+    assert_eq!(
+        visible(&h, h.state.now() + 5.0),
+        1.0,
+        "revealed while a menu is open"
+    );
     bar.send(Cmd::SetMenuOpen(false));
     let end = Instant::now() + Duration::from_secs(10);
-    while h.state.menu_bars.set.presentation(out, h.state.now() + 5.0).unwrap().visible != 0.0 && Instant::now() < end {
+    while h
+        .state
+        .menu_bars
+        .set
+        .presentation(out, h.state.now() + 5.0)
+        .unwrap()
+        .visible
+        != 0.0
+        && Instant::now() < end
+    {
         h.step();
     }
     assert_eq!(visible(&h, h.state.now() + 5.0), 0.0);

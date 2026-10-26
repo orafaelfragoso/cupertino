@@ -9,7 +9,9 @@ use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
 
 use cupertino_login_ipc::message::{MAX_EVENT_FRAME, MAX_REQUEST_FRAME};
-use cupertino_login_ipc::{decode, encode_secret, DecodeError, Decoder, Event, FrameError, Request, VERSION};
+use cupertino_login_ipc::{
+    decode, encode_secret, DecodeError, Decoder, Event, FrameError, Request, VERSION,
+};
 
 /// Environment variable that holds the path of the manager's socket.
 pub const SOCKET_VARIABLE: &str = "CUPERTINO_LOGIN_SOCK";
@@ -52,17 +54,24 @@ pub struct Connection {
 
 impl Connection {
     /// Greet the manager on `stream` and start reading its events; `on_message` runs on the reader thread.
-    pub fn spawn(stream: UnixStream, on_message: impl Fn(Message) + Send + 'static) -> io::Result<Connection> {
+    pub fn spawn(
+        stream: UnixStream,
+        on_message: impl Fn(Message) + Send + 'static,
+    ) -> io::Result<Connection> {
         let mut reader = stream.try_clone()?;
         let mut connection = Connection { stream };
-        connection.send(&Request::Hello { version: VERSION }).map_err(|e| io::Error::other(e.to_string()))?;
-        std::thread::Builder::new().name("login-manager".into()).spawn(move || {
-            let outcome = read_events(&mut reader, &on_message);
-            // the thread ends with the connection
-            if let Err(e) = outcome {
-                on_message(Message::Broken(e));
-            }
-        })?;
+        connection
+            .send(&Request::Hello { version: VERSION })
+            .map_err(|e| io::Error::other(e.to_string()))?;
+        std::thread::Builder::new()
+            .name("login-manager".into())
+            .spawn(move || {
+                let outcome = read_events(&mut reader, &on_message);
+                // the thread ends with the connection
+                if let Err(e) = outcome {
+                    on_message(Message::Broken(e));
+                }
+            })?;
         Ok(connection)
     }
 

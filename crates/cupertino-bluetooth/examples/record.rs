@@ -42,7 +42,10 @@ fn hex(bytes: &[u8]) -> String {
 
 /// Waits until the socket is readable or `timeout` passes. Returns whether it is readable.
 fn readable(socket: &ControlSocket, timeout: Duration) -> Result<bool, String> {
-    let timeout = Timespec { tv_sec: timeout.as_secs() as i64, tv_nsec: i64::from(timeout.subsec_nanos()) };
+    let timeout = Timespec {
+        tv_sec: timeout.as_secs() as i64,
+        tv_nsec: i64::from(timeout.subsec_nanos()),
+    };
     loop {
         let mut fds = [PollFd::new(socket, PollFlags::IN)];
         match poll(&mut fds, Some(&timeout)) {
@@ -56,7 +59,10 @@ fn readable(socket: &ControlSocket, timeout: Duration) -> Result<bool, String> {
 /// Replaces the controller's address and names in a Read Controller Information reply.
 fn anonymise_info(packet: &mut [u8]) -> Result<(), String> {
     if packet.len() != INFO_END {
-        return Err(format!("a controller information reply has {} bytes, expected {INFO_END}", packet.len()));
+        return Err(format!(
+            "a controller information reply has {} bytes, expected {INFO_END}",
+            packet.len()
+        ));
     }
     packet[INFO_ADDRESS..INFO_ADDRESS + 6].copy_from_slice(&FAKE_ADDRESS);
     let name = &mut packet[INFO_NAME..INFO_NAME + 249];
@@ -70,8 +76,14 @@ fn anonymise_info(packet: &mut [u8]) -> Result<(), String> {
 fn sanitise(packet: &mut [u8]) -> Result<(), String> {
     let decoded = decode_packet(packet).map_err(|e| format!("a packet does not decode: {e}"))?;
     match decoded.event {
-        Event::CommandComplete { opcode: Opcode::READ_CONTROLLER_INFO, .. } => anonymise_info(packet),
-        Event::CommandComplete { opcode: Opcode::READ_VERSION | Opcode::READ_INDEX_LIST, .. }
+        Event::CommandComplete {
+            opcode: Opcode::READ_CONTROLLER_INFO,
+            ..
+        } => anonymise_info(packet),
+        Event::CommandComplete {
+            opcode: Opcode::READ_VERSION | Opcode::READ_INDEX_LIST,
+            ..
+        }
         | Event::CommandStatus { .. }
         | Event::IndexAdded
         | Event::IndexRemoved
@@ -83,7 +95,9 @@ fn sanitise(packet: &mut [u8]) -> Result<(), String> {
             packet[6..6 + FAKE_NAME.len()].copy_from_slice(FAKE_NAME);
             Ok(())
         }
-        other => Err(format!("refusing to record {other:?}: it may carry a device address or a key")),
+        other => Err(format!(
+            "refusing to record {other:?}: it may carry a device address or a key"
+        )),
     }
 }
 
@@ -93,20 +107,37 @@ fn run(listen: Duration) -> Result<(), String> {
     println!("# '>' command sent, '<' packet received, hex of the whole packet.");
 
     let mut indexes = Vec::new();
-    let mut queue = vec![(ControllerIndex::NONE, Command::ReadVersion), (ControllerIndex::NONE, Command::ReadIndexList)];
+    let mut queue = vec![
+        (ControllerIndex::NONE, Command::ReadVersion),
+        (ControllerIndex::NONE, Command::ReadIndexList),
+    ];
     while !queue.is_empty() {
         let (index, command) = queue.remove(0);
-        socket.send(index, &command).map_err(|e| format!("sending {command:?}: {e}"))?;
-        println!("> {}", hex(&command.encode(index).map_err(|e| e.to_string())?));
+        socket
+            .send(index, &command)
+            .map_err(|e| format!("sending {command:?}: {e}"))?;
+        println!(
+            "> {}",
+            hex(&command.encode(index).map_err(|e| e.to_string())?)
+        );
         if !readable(&socket, REPLY_WAIT)? {
             return Err(format!("no reply to {command:?} within {REPLY_WAIT:?}"));
         }
         for mut packet in socket.read_raw().map_err(|e| e.to_string())? {
             sanitise(&mut packet)?;
             println!("< {}", hex(&packet));
-            if let Event::CommandComplete { opcode: Opcode::READ_INDEX_LIST, data, .. } = decode_packet(&packet).map_err(|e| e.to_string())?.event {
+            if let Event::CommandComplete {
+                opcode: Opcode::READ_INDEX_LIST,
+                data,
+                ..
+            } = decode_packet(&packet).map_err(|e| e.to_string())?.event
+            {
                 indexes = parse_index_list(&data).map_err(|e| e.to_string())?;
-                queue.extend(indexes.iter().map(|&index| (index, Command::ReadControllerInfo)));
+                queue.extend(
+                    indexes
+                        .iter()
+                        .map(|&index| (index, Command::ReadControllerInfo)),
+                );
             }
         }
     }

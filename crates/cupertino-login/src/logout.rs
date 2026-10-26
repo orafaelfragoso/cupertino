@@ -25,10 +25,17 @@ pub enum Do {
 enum Step {
     /// `QuitNextApplication` is on its way.
     Asking,
-    Waiting { app: String, since: f64 },
-    Interrupted { app: String },
+    Waiting {
+        app: String,
+        since: f64,
+    },
+    Interrupted {
+        app: String,
+    },
     /// Ask the next application at this time.
-    Next { at: f64 },
+    Next {
+        at: f64,
+    },
     Done,
 }
 
@@ -53,7 +60,10 @@ impl LogOut {
             self.step = Step::Done;
             return Some(Do::Terminate);
         }
-        self.step = Step::Waiting { app: app.to_string(), since: now };
+        self.step = Step::Waiting {
+            app: app.to_string(),
+            since: now,
+        };
         None
     }
 
@@ -64,16 +74,23 @@ impl LogOut {
             Step::Interrupted { app: waiting } if waiting == app => Some(Do::CloseInterrupt),
             _ => return None,
         };
-        self.step = Step::Next { at: now + NEXT_APPLICATION_S };
+        self.step = Step::Next {
+            at: now + NEXT_APPLICATION_S,
+        };
         close
     }
 
     /// The user chose Force Quit on the interrupt panel: the caller kills the application, which gets another full
     /// timeout to go away. Returns the application to kill.
     pub fn force_quit(&mut self, now: f64) -> Option<String> {
-        let Step::Interrupted { app } = &self.step else { return None };
+        let Step::Interrupted { app } = &self.step else {
+            return None;
+        };
         let app = app.clone();
-        self.step = Step::Waiting { app: app.clone(), since: now };
+        self.step = Step::Waiting {
+            app: app.clone(),
+            since: now,
+        };
         Some(app)
     }
 
@@ -111,7 +128,11 @@ mod tests {
         let (mut l, first) = LogOut::start();
         assert_eq!(first, Do::AskNext);
         assert_eq!(l.answered(0.0, "org.example.a", 2), None);
-        assert_eq!(l.quit(3.0, "org.example.other"), None, "another application's report is not the one waited for");
+        assert_eq!(
+            l.quit(3.0, "org.example.other"),
+            None,
+            "another application's report is not the one waited for"
+        );
         assert_eq!(l.quit(3.0, "org.example.a"), None);
         assert_eq!(l.tick(3.05), None);
         assert!((l.next_wakeup(3.05).unwrap() - 0.05).abs() < 1e-9);
@@ -125,7 +146,10 @@ mod tests {
         let (mut l, _) = LogOut::start();
         l.answered(10.0, "org.example.editor", 1);
         assert_eq!(l.tick(54.9), None);
-        assert_eq!(l.tick(55.0), Some(Do::Interrupt("org.example.editor".into())));
+        assert_eq!(
+            l.tick(55.0),
+            Some(Do::Interrupt("org.example.editor".into()))
+        );
         assert_eq!(l.next_wakeup(56.0), None, "the panel waits for the user");
         assert_eq!(l.force_quit(60.0), Some("org.example.editor".into()));
         assert_eq!(l.force_quit(60.0), None, "only from the panel");

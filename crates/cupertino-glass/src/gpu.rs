@@ -14,10 +14,19 @@ impl HeadlessGpu {
     /// `None` when no adapter or device is available.
     pub fn new() -> Option<Self> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() }))?;
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        }))?;
         let adapter_name = adapter.get_info().name;
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None)).ok()?;
-        Some(Self { device, queue, adapter_name })
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
+                .ok()?;
+        Some(Self {
+            device,
+            queue,
+            adapter_name,
+        })
     }
 
     /// Upload an RGBA8 image as a sampled, non-sRGB texture.
@@ -27,7 +36,11 @@ impl HeadlessGpu {
             &self.queue,
             &wgpu::TextureDescriptor {
                 label: Some("image"),
-                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -44,12 +57,19 @@ impl HeadlessGpu {
     pub fn target(&self, w: u32, h: u32) -> wgpu::Texture {
         self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("target"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         })
     }
@@ -57,12 +77,33 @@ impl HeadlessGpu {
     pub fn read(&self, tex: &wgpu::Texture) -> image::RgbaImage {
         let (w, h) = (tex.width(), tex.height());
         let row = (w * 4).div_ceil(256) * 256;
-        let buf = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (row * h) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
         let mut enc = self.device.create_command_encoder(&Default::default());
         enc.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: None } },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::TexelCopyTextureInfo {
+                texture: tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buf,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
         self.queue.submit([enc.finish()]);
         buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
@@ -77,16 +118,35 @@ impl HeadlessGpu {
     }
 
     /// One-shot helper: render `regions` over `wall` and read the result back.
-    pub fn render_once(&self, wall: &image::RgbaImage, regions: &[MaterialRegion], display_scale: f32, tint: [f32; 3]) -> image::RgbaImage {
+    pub fn render_once(
+        &self,
+        wall: &image::RgbaImage,
+        regions: &[MaterialRegion],
+        display_scale: f32,
+        tint: [f32; 3],
+    ) -> image::RgbaImage {
         let (w, h) = wall.dimensions();
         let src = self.upload(wall);
         let dst = self.target(w, h);
-        let mut r = MaterialRenderer::new(&self.device, &self.queue, wgpu::TextureFormat::Rgba8Unorm);
-        let (sv, dv) = (src.create_view(&Default::default()), dst.create_view(&Default::default()));
+        let mut r =
+            MaterialRenderer::new(&self.device, &self.queue, wgpu::TextureFormat::Rgba8Unorm);
+        let (sv, dv) = (
+            src.create_view(&Default::default()),
+            dst.create_view(&Default::default()),
+        );
         let mut enc = self.device.create_command_encoder(&Default::default());
         r.render(
             &mut enc,
-            &FrameDesc { source: &sv, source_size: (w, h), target: &dv, target_size: (w, h), display_scale, damage_generation: 1, tint_color: tint, init: TargetInit::CopySource },
+            &FrameDesc {
+                source: &sv,
+                source_size: (w, h),
+                target: &dv,
+                target_size: (w, h),
+                display_scale,
+                damage_generation: 1,
+                tint_color: tint,
+                init: TargetInit::CopySource,
+            },
             regions,
         );
         self.queue.submit([enc.finish()]);
@@ -113,7 +173,12 @@ pub fn procedural_wallpaper(w: u32, h: u32) -> image::RgbaImage {
             g *= 0.3;
             b *= 0.3;
         }
-        image::Rgba([(r.clamp(0.0, 1.0) * 255.0) as u8, (g.clamp(0.0, 1.0) * 255.0) as u8, (b.clamp(0.0, 1.0) * 255.0) as u8, 255])
+        image::Rgba([
+            (r.clamp(0.0, 1.0) * 255.0) as u8,
+            (g.clamp(0.0, 1.0) * 255.0) as u8,
+            (b.clamp(0.0, 1.0) * 255.0) as u8,
+            255,
+        ])
     })
 }
 
@@ -131,7 +196,13 @@ pub fn average_color(img: &image::RgbaImage) -> [f32; 3] {
 
 /// PSNR in dB over all RGBA bytes (infinite for identical images).
 pub fn psnr(a: &image::RgbaImage, b: &image::RgbaImage) -> f64 {
-    let mse: f64 = a.as_raw().iter().zip(b.as_raw()).map(|(x, y)| (*x as f64 - *y as f64).powi(2)).sum::<f64>() / a.as_raw().len() as f64;
+    let mse: f64 = a
+        .as_raw()
+        .iter()
+        .zip(b.as_raw())
+        .map(|(x, y)| (*x as f64 - *y as f64).powi(2))
+        .sum::<f64>()
+        / a.as_raw().len() as f64;
     if mse == 0.0 {
         f64::INFINITY
     } else {

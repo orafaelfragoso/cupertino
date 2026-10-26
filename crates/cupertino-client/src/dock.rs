@@ -65,7 +65,11 @@ pub enum DockChange {
     /// The application switcher opened or its selection moved: the output the panel goes on, the
     /// whole list (application ids, most recently used first) and the selected index. The server
     /// guarantees the list is not empty and the index is inside it.
-    SwitcherChanged { output: OutputId, apps: Vec<String>, selected: usize },
+    SwitcherChanged {
+        output: OutputId,
+        apps: Vec<String>,
+        selected: usize,
+    },
     /// The application asked for attention while inactive: bounce its tile once.
     Attention(String),
     /// The switch ended: `committed` when the selected application was activated, else cancelled.
@@ -73,7 +77,12 @@ pub enum DockChange {
     /// The overview opened on the dock's output, or its windows or workspaces changed while open:
     /// the whole window set and workspace list, and the area (output coordinates) the windows are
     /// laid out in. The dock answers with [`Dock::overview_frame`] for every window.
-    OverviewChanged { mode: OverviewMode, area: Rect, windows: Vec<OverviewWindow>, workspaces: Vec<OverviewWorkspace> },
+    OverviewChanged {
+        mode: OverviewMode,
+        area: Rect,
+        windows: Vec<OverviewWindow>,
+        workspaces: Vec<OverviewWorkspace>,
+    },
     /// The overview is leaving: the server animates the windows back.
     OverviewClosed,
     /// The pointer dwelt in a corner of the dock's output: the dock maps it to its action.
@@ -199,7 +208,10 @@ impl Drop for Dock {
 
 /// The smallest whole-point rectangle that contains `rect`; an error for a non-finite one.
 fn whole_rect(rect: &Rect) -> Result<(i32, i32, i32, i32), ClientError> {
-    if ![rect.x(), rect.y(), rect.width(), rect.height()].iter().all(|v| v.is_finite()) {
+    if ![rect.x(), rect.y(), rect.width(), rect.height()]
+        .iter()
+        .all(|v| v.is_finite())
+    {
         return Err(ClientError::InvalidShape);
     }
     Ok(outward_rect(rect))
@@ -220,7 +232,12 @@ pub(crate) struct GroupBuilder {
 
 /// A rectangle the server sent in whole logical points.
 fn rect_of(x: i32, y: i32, width: i32, height: i32) -> Rect {
-    Rect::new(f64::from(x), f64::from(y), f64::from(width), f64::from(height))
+    Rect::new(
+        f64::from(x),
+        f64::from(y),
+        f64::from(width),
+        f64::from(height),
+    )
 }
 
 impl GroupBuilder {
@@ -231,17 +248,34 @@ impl GroupBuilder {
 
     /// Add an event; the finished group when it was a `done`. An empty group yields nothing. A
     /// `switcher_changed` without the `switcher_output` the protocol puts first is an error.
-    pub(crate) fn push(&mut self, event: cupertino_dock_v1::Event) -> Result<Option<DockUpdate>, ClientError> {
+    pub(crate) fn push(
+        &mut self,
+        event: cupertino_dock_v1::Event,
+    ) -> Result<Option<DockUpdate>, ClientError> {
         self.push_event(event).map_err(ClientError::Protocol)
     }
 
-    fn push_event(&mut self, event: cupertino_dock_v1::Event) -> Result<Option<DockUpdate>, &'static str> {
+    fn push_event(
+        &mut self,
+        event: cupertino_dock_v1::Event,
+    ) -> Result<Option<DockUpdate>, &'static str> {
         use cupertino_dock_v1::Event;
         match event {
-            Event::Window { id, app_id, title, state } => {
+            Event::Window {
+                id,
+                app_id,
+                title,
+                state,
+            } => {
                 // bits a newer server defines are not ours to act on
                 let state = WindowState::from_bits_truncate(u32::from(state));
-                self.changes.push(DockChange::Window(DockWindow { id, app_id, title, minimized: state.contains(WindowState::Minimized), active: state.contains(WindowState::Active) }));
+                self.changes.push(DockChange::Window(DockWindow {
+                    id,
+                    app_id,
+                    title,
+                    minimized: state.contains(WindowState::Minimized),
+                    active: state.contains(WindowState::Active),
+                }));
             }
             Event::WindowClosed { id } => self.changes.push(DockChange::WindowClosed(id)),
             Event::Launching { app_id } => self.changes.push(DockChange::Launching(app_id)),
@@ -250,25 +284,73 @@ impl GroupBuilder {
             Event::SwitcherEntry { app_id } => self.switcher_apps.push(app_id),
             Event::SwitcherChanged { selected } => {
                 let apps = std::mem::take(&mut self.switcher_apps);
-                let output = self.switcher_output.take().ok_or("switcher_changed without switcher_output")?;
-                self.changes.push(DockChange::SwitcherChanged { output, apps, selected: selected as usize });
+                let output = self
+                    .switcher_output
+                    .take()
+                    .ok_or("switcher_changed without switcher_output")?;
+                self.changes.push(DockChange::SwitcherChanged {
+                    output,
+                    apps,
+                    selected: selected as usize,
+                });
             }
             Event::Attention { app_id } => self.changes.push(DockChange::Attention(app_id)),
-            Event::SwitcherClosed { committed } => self.changes.push(DockChange::SwitcherClosed { committed: committed != 0 }),
-            Event::OverviewWindow { id, x, y, width, height } => self.overview_windows.push(OverviewWindow { id, frame: rect_of(x, y, width, height) }),
-            Event::OverviewWorkspace { id, current } => self.overview_workspaces.push(OverviewWorkspace { id, current: current != 0 }),
-            Event::OverviewChanged { mode, app_id, x, y, width, height } => {
+            Event::SwitcherClosed { committed } => self.changes.push(DockChange::SwitcherClosed {
+                committed: committed != 0,
+            }),
+            Event::OverviewWindow {
+                id,
+                x,
+                y,
+                width,
+                height,
+            } => self.overview_windows.push(OverviewWindow {
+                id,
+                frame: rect_of(x, y, width, height),
+            }),
+            Event::OverviewWorkspace { id, current } => {
+                self.overview_workspaces.push(OverviewWorkspace {
+                    id,
+                    current: current != 0,
+                })
+            }
+            Event::OverviewChanged {
+                mode,
+                app_id,
+                x,
+                y,
+                width,
+                height,
+            } => {
                 // a mode a newer server defines is shown as the plain overview
-                let mode = if mode == WEnum::Value(cupertino_dock_v1::OverviewMode::App) { OverviewMode::App(app_id) } else { OverviewMode::All };
+                let mode = if mode == WEnum::Value(cupertino_dock_v1::OverviewMode::App) {
+                    OverviewMode::App(app_id)
+                } else {
+                    OverviewMode::All
+                };
                 let windows = std::mem::take(&mut self.overview_windows);
                 let workspaces = std::mem::take(&mut self.overview_workspaces);
-                self.changes.push(DockChange::OverviewChanged { mode, area: rect_of(x, y, width, height), windows, workspaces });
+                self.changes.push(DockChange::OverviewChanged {
+                    mode,
+                    area: rect_of(x, y, width, height),
+                    windows,
+                    workspaces,
+                });
             }
             Event::OverviewClosed => self.changes.push(DockChange::OverviewClosed),
             // a corner or gesture a newer server defines has no action here
-            Event::HotCorner { corner: WEnum::Value(corner) } => self.changes.push(DockChange::HotCorner(corner)),
-            Event::Gesture { kind: WEnum::Value(kind) } => self.changes.push(DockChange::Gesture(kind)),
-            Event::HotCorner { corner: WEnum::Unknown(_) } | Event::Gesture { kind: WEnum::Unknown(_) } => {}
+            Event::HotCorner {
+                corner: WEnum::Value(corner),
+            } => self.changes.push(DockChange::HotCorner(corner)),
+            Event::Gesture {
+                kind: WEnum::Value(kind),
+            } => self.changes.push(DockChange::Gesture(kind)),
+            Event::HotCorner {
+                corner: WEnum::Unknown(_),
+            }
+            | Event::Gesture {
+                kind: WEnum::Unknown(_),
+            } => {}
             Event::Done => {
                 let changes = std::mem::take(&mut self.changes);
                 return Ok((!changes.is_empty()).then_some(changes));
@@ -291,28 +373,57 @@ mod tests {
     }
 
     fn window(id: u32, state: WindowState) -> Event {
-        Event::Window { id, app_id: "org.example.editor".into(), title: "notes".into(), state: WEnum::Value(state) }
+        Event::Window {
+            id,
+            app_id: "org.example.editor".into(),
+            title: "notes".into(),
+            state: WEnum::Value(state),
+        }
     }
 
     #[test]
     fn a_group_keeps_its_changes_in_order_until_done() {
         let mut group = GroupBuilder::default();
-        assert_eq!(push(&mut group, window(4, WindowState::Minimized | WindowState::Active)), None);
+        assert_eq!(
+            push(
+                &mut group,
+                window(4, WindowState::Minimized | WindowState::Active)
+            ),
+            None
+        );
         assert_eq!(push(&mut group, Event::WindowClosed { id: 2 }), None);
-        assert_eq!(push(&mut group, Event::Launching { app_id: "foot".into() }), None);
+        assert_eq!(
+            push(
+                &mut group,
+                Event::Launching {
+                    app_id: "foot".into()
+                }
+            ),
+            None
+        );
         assert_eq!(push(&mut group, Event::ToggleAutoHide), None);
         assert_eq!(push(&mut group, Event::ToggleAppGrid), None);
         assert_eq!(
             push(&mut group, Event::Done),
             Some(vec![
-                DockChange::Window(DockWindow { id: 4, app_id: "org.example.editor".into(), title: "notes".into(), minimized: true, active: true }),
+                DockChange::Window(DockWindow {
+                    id: 4,
+                    app_id: "org.example.editor".into(),
+                    title: "notes".into(),
+                    minimized: true,
+                    active: true
+                }),
                 DockChange::WindowClosed(2),
                 DockChange::Launching("foot".into()),
                 DockChange::ToggleAutoHide,
                 DockChange::ToggleAppGrid,
             ])
         );
-        assert_eq!(push(&mut group, Event::Done), None, "groups do not leak into each other");
+        assert_eq!(
+            push(&mut group, Event::Done),
+            None,
+            "groups do not leak into each other"
+        );
     }
 
     #[test]
@@ -324,15 +435,33 @@ mod tests {
         }
         push(&mut group, Event::SwitcherChanged { selected: 1 });
         group.switcher_output(OutputId(5));
-        push(&mut group, Event::SwitcherEntry { app_id: "org.example.c".into() });
+        push(
+            &mut group,
+            Event::SwitcherEntry {
+                app_id: "org.example.c".into(),
+            },
+        );
         push(&mut group, Event::SwitcherChanged { selected: 0 });
-        push(&mut group, Event::Attention { app_id: "org.example.d".into() });
+        push(
+            &mut group,
+            Event::Attention {
+                app_id: "org.example.d".into(),
+            },
+        );
         push(&mut group, Event::SwitcherClosed { committed: 1 });
         assert_eq!(
             push(&mut group, Event::Done),
             Some(vec![
-                DockChange::SwitcherChanged { output: OutputId(3), apps: vec!["org.example.b".into(), "org.example.a".into()], selected: 1 },
-                DockChange::SwitcherChanged { output: OutputId(5), apps: vec!["org.example.c".into()], selected: 0 },
+                DockChange::SwitcherChanged {
+                    output: OutputId(3),
+                    apps: vec!["org.example.b".into(), "org.example.a".into()],
+                    selected: 1
+                },
+                DockChange::SwitcherChanged {
+                    output: OutputId(5),
+                    apps: vec!["org.example.c".into()],
+                    selected: 0
+                },
                 DockChange::Attention("org.example.d".into()),
                 DockChange::SwitcherClosed { committed: true },
             ])
@@ -342,39 +471,121 @@ mod tests {
     #[test]
     fn a_switcher_list_without_its_output_is_a_protocol_error() {
         let mut group = GroupBuilder::default();
-        push(&mut group, Event::SwitcherEntry { app_id: "org.example.a".into() });
-        assert!(matches!(group.push(Event::SwitcherChanged { selected: 0 }), Err(ClientError::Protocol(_))));
+        push(
+            &mut group,
+            Event::SwitcherEntry {
+                app_id: "org.example.a".into(),
+            },
+        );
+        assert!(matches!(
+            group.push(Event::SwitcherChanged { selected: 0 }),
+            Err(ClientError::Protocol(_))
+        ));
     }
 
     #[test]
     fn the_overview_group_carries_its_windows_workspaces_and_area() {
         let mut group = GroupBuilder::default();
-        push(&mut group, Event::OverviewWindow { id: 4, x: 10, y: 20, width: 300, height: 200 });
-        push(&mut group, Event::OverviewWindow { id: 7, x: -5, y: 40, width: 100, height: 100 });
+        push(
+            &mut group,
+            Event::OverviewWindow {
+                id: 4,
+                x: 10,
+                y: 20,
+                width: 300,
+                height: 200,
+            },
+        );
+        push(
+            &mut group,
+            Event::OverviewWindow {
+                id: 7,
+                x: -5,
+                y: 40,
+                width: 100,
+                height: 100,
+            },
+        );
         push(&mut group, Event::OverviewWorkspace { id: 1, current: 1 });
         push(&mut group, Event::OverviewWorkspace { id: 2, current: 0 });
-        push(&mut group, Event::OverviewChanged { mode: WEnum::Value(cupertino_dock_v1::OverviewMode::App), app_id: "org.example.editor".into(), x: 0, y: 24, width: 1000, height: 600 });
+        push(
+            &mut group,
+            Event::OverviewChanged {
+                mode: WEnum::Value(cupertino_dock_v1::OverviewMode::App),
+                app_id: "org.example.editor".into(),
+                x: 0,
+                y: 24,
+                width: 1000,
+                height: 600,
+            },
+        );
         push(&mut group, Event::OverviewClosed);
-        push(&mut group, Event::HotCorner { corner: WEnum::Value(Corner::BottomRight) });
-        push(&mut group, Event::Gesture { kind: WEnum::Value(Gesture::SwipeUp) });
-        push(&mut group, Event::Gesture { kind: WEnum::Unknown(77) });
+        push(
+            &mut group,
+            Event::HotCorner {
+                corner: WEnum::Value(Corner::BottomRight),
+            },
+        );
+        push(
+            &mut group,
+            Event::Gesture {
+                kind: WEnum::Value(Gesture::SwipeUp),
+            },
+        );
+        push(
+            &mut group,
+            Event::Gesture {
+                kind: WEnum::Unknown(77),
+            },
+        );
         assert_eq!(
             push(&mut group, Event::Done),
             Some(vec![
                 DockChange::OverviewChanged {
                     mode: OverviewMode::App("org.example.editor".into()),
                     area: Rect::new(0.0, 24.0, 1000.0, 600.0),
-                    windows: vec![OverviewWindow { id: 4, frame: Rect::new(10.0, 20.0, 300.0, 200.0) }, OverviewWindow { id: 7, frame: Rect::new(-5.0, 40.0, 100.0, 100.0) }],
-                    workspaces: vec![OverviewWorkspace { id: 1, current: true }, OverviewWorkspace { id: 2, current: false }],
+                    windows: vec![
+                        OverviewWindow {
+                            id: 4,
+                            frame: Rect::new(10.0, 20.0, 300.0, 200.0)
+                        },
+                        OverviewWindow {
+                            id: 7,
+                            frame: Rect::new(-5.0, 40.0, 100.0, 100.0)
+                        }
+                    ],
+                    workspaces: vec![
+                        OverviewWorkspace {
+                            id: 1,
+                            current: true
+                        },
+                        OverviewWorkspace {
+                            id: 2,
+                            current: false
+                        }
+                    ],
                 },
                 DockChange::OverviewClosed,
                 DockChange::HotCorner(Corner::BottomRight),
                 DockChange::Gesture(Gesture::SwipeUp),
             ])
         );
-        push(&mut group, Event::OverviewChanged { mode: WEnum::Value(cupertino_dock_v1::OverviewMode::All), app_id: String::new(), x: 0, y: 0, width: 10, height: 10 });
+        push(
+            &mut group,
+            Event::OverviewChanged {
+                mode: WEnum::Value(cupertino_dock_v1::OverviewMode::All),
+                app_id: String::new(),
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+        );
         let changes = push(&mut group, Event::Done).unwrap();
-        assert!(matches!(&changes[0], DockChange::OverviewChanged { mode: OverviewMode::All, windows, workspaces, .. } if windows.is_empty() && workspaces.is_empty()), "lists do not leak into the next group: {changes:?}");
+        assert!(
+            matches!(&changes[0], DockChange::OverviewChanged { mode: OverviewMode::All, windows, workspaces, .. } if windows.is_empty() && workspaces.is_empty()),
+            "lists do not leak into the next group: {changes:?}"
+        );
     }
 
     #[test]
@@ -383,13 +594,28 @@ mod tests {
         push(&mut group, window(1, WindowState::empty()));
         push(&mut group, window(2, WindowState::Active));
         let changes = push(&mut group, Event::Done).unwrap();
-        let flags: Vec<(bool, bool)> = changes.iter().map(|c| if let DockChange::Window(w) = c { (w.minimized, w.active) } else { unreachable!() }).collect();
+        let flags: Vec<(bool, bool)> = changes
+            .iter()
+            .map(|c| {
+                if let DockChange::Window(w) = c {
+                    (w.minimized, w.active)
+                } else {
+                    unreachable!()
+                }
+            })
+            .collect();
         assert_eq!(flags, [(false, false), (false, true)]);
     }
 
     #[test]
     fn rectangles_round_outwards_and_must_be_finite() {
-        assert_eq!(whole_rect(&Rect::new(10.4, 20.5, 40.2, 8.0)).unwrap(), (10, 20, 41, 9));
-        assert!(matches!(whole_rect(&Rect::new(f64::NAN, 0.0, 1.0, 1.0)), Err(ClientError::InvalidShape)));
+        assert_eq!(
+            whole_rect(&Rect::new(10.4, 20.5, 40.2, 8.0)).unwrap(),
+            (10, 20, 41, 9)
+        );
+        assert!(matches!(
+            whole_rect(&Rect::new(f64::NAN, 0.0, 1.0, 1.0)),
+            Err(ClientError::InvalidShape)
+        ));
     }
 }

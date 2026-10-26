@@ -16,7 +16,10 @@ pub enum Error {
     /// A system call failed; `call` names it.
     Syscall { call: &'static str, errno: Errno },
     /// A packet on the DHCP socket of `interface` is not a valid DHCP message.
-    Dhcp { interface: String, source: DecodeError },
+    Dhcp {
+        interface: String,
+        source: DecodeError,
+    },
     /// The supplicant is not on the bus.
     SupplicantMissing,
     /// An effect names an interface index the model no longer knows.
@@ -27,7 +30,10 @@ pub enum Error {
     SupplicantNetwork(String),
     /// A D-Bus call or the bus connection failed; `what` names the step.
     #[cfg(feature = "dbus")]
-    Bus { what: &'static str, source: Box<zbus::Error> },
+    Bus {
+        what: &'static str,
+        source: Box<zbus::Error>,
+    },
     /// Another process owns the bus name.
     #[cfg(feature = "dbus")]
     NameTaken(&'static str),
@@ -56,7 +62,10 @@ impl Error {
     /// The adapter for `map_err` on a D-Bus call: names the step that failed. The `zbus` error is
     /// boxed because it is large.
     pub(crate) fn bus(what: &'static str) -> impl Fn(zbus::Error) -> Self + Copy {
-        move |source| Self::Bus { what, source: Box::new(source) }
+        move |source| Self::Bus {
+            what,
+            source: Box::new(source),
+        }
     }
 }
 
@@ -73,10 +82,16 @@ impl fmt::Display for Error {
             Self::Io { path, source } => write!(f, "{}: {source}", path.display()),
             Self::Syscall { call, errno } => write!(f, "{call}: {errno}"),
             Self::Dhcp { interface, source } => write!(f, "{interface}: {source}"),
-            Self::SupplicantMissing => write!(f, "the supplicant (net.connman.iwd) is not on the bus"),
+            Self::SupplicantMissing => {
+                write!(f, "the supplicant (net.connman.iwd) is not on the bus")
+            }
             Self::UnknownDevice(ifindex) => write!(f, "no device with interface index {ifindex}"),
-            Self::SupplicantDevice(interface) => write!(f, "the supplicant does not manage {interface}"),
-            Self::SupplicantNetwork(what) => write!(f, "the supplicant has no such network: {what}"),
+            Self::SupplicantDevice(interface) => {
+                write!(f, "the supplicant does not manage {interface}")
+            }
+            Self::SupplicantNetwork(what) => {
+                write!(f, "the supplicant has no such network: {what}")
+            }
             #[cfg(feature = "dbus")]
             Self::Bus { what, source } => write!(f, "{what}: {source}"),
             #[cfg(feature = "dbus")]
@@ -94,7 +109,10 @@ impl std::error::Error for Error {
             Self::Io { source, .. } => Some(source),
             Self::Syscall { errno, .. } => Some(errno),
             Self::Dhcp { source, .. } => Some(source),
-            Self::SupplicantMissing | Self::UnknownDevice(_) | Self::SupplicantDevice(_) | Self::SupplicantNetwork(_) => None,
+            Self::SupplicantMissing
+            | Self::UnknownDevice(_)
+            | Self::SupplicantDevice(_)
+            | Self::SupplicantNetwork(_) => None,
             #[cfg(feature = "dbus")]
             Self::Bus { source, .. } => Some(source.as_ref()),
             #[cfg(feature = "dbus")]

@@ -24,7 +24,11 @@ pub enum MinimizeKind {
 }
 
 impl MinimizeKind {
-    pub const ALL: [MinimizeKind; 3] = [MinimizeKind::Warp, MinimizeKind::Funnel, MinimizeKind::Scale];
+    pub const ALL: [MinimizeKind; 3] = [
+        MinimizeKind::Warp,
+        MinimizeKind::Funnel,
+        MinimizeKind::Scale,
+    ];
 
     pub fn duration_ms(self) -> f64 {
         match self {
@@ -58,7 +62,11 @@ pub struct MinimizeParams {
 
 impl Default for MinimizeParams {
     fn default() -> Self {
-        Self { warp: WarpParams::default(), funnel: FunnelParams::default(), scale_ease: Ease::Cosine }
+        Self {
+            warp: WarpParams::default(),
+            funnel: FunnelParams::default(),
+            scale_ease: Ease::Cosine,
+        }
     }
 }
 
@@ -77,10 +85,22 @@ impl MinimizeEffect {
         Self::with_params(kind, window, slot, edge, MinimizeParams::default())
     }
 
-    pub fn with_params(kind: MinimizeKind, window: Rect, slot: Rect, edge: DockEdge, params: MinimizeParams) -> Self {
+    pub fn with_params(
+        kind: MinimizeKind,
+        window: Rect,
+        slot: Rect,
+        edge: DockEdge,
+        params: MinimizeParams,
+    ) -> Self {
         let direction = WarpDirection::for_dock(edge, window, slot);
         let warp = WarpGeometry::new(window, slot, direction, &params.warp);
-        Self { kind, window, slot, params, warp }
+        Self {
+            kind,
+            window,
+            slot,
+            params,
+            warp,
+        }
     }
 
     pub fn direction(&self) -> WarpDirection {
@@ -121,8 +141,15 @@ pub struct MinimizeAnimation {
 impl MinimizeAnimation {
     /// Starts un-minimized (progress 0) and idle.
     pub fn new(effect: MinimizeEffect, slow_motion: bool) -> Self {
-        let driver = Driver::Timed { duration: effect.kind.duration_s(slow_motion), ease: Ease::Linear };
-        Self { effect, anim: ProgressAnimator::new(driver, 0.0), slow_motion }
+        let driver = Driver::Timed {
+            duration: effect.kind.duration_s(slow_motion),
+            ease: Ease::Linear,
+        };
+        Self {
+            effect,
+            anim: ProgressAnimator::new(driver, 0.0),
+            slow_motion,
+        }
     }
 
     pub fn slow_motion(&self) -> bool {
@@ -185,7 +212,12 @@ mod tests {
     use super::*;
 
     fn effect(kind: MinimizeKind) -> MinimizeEffect {
-        MinimizeEffect::new(kind, Rect::new(300.0, 100.0, 800.0, 500.0), Rect::new(1200.0, 1000.0, 64.0, 64.0), DockEdge::Bottom)
+        MinimizeEffect::new(
+            kind,
+            Rect::new(300.0, 100.0, 800.0, 500.0),
+            Rect::new(1200.0, 1000.0, 64.0, 64.0),
+            DockEdge::Bottom,
+        )
     }
 
     #[test]
@@ -201,9 +233,21 @@ mod tests {
         for kind in MinimizeKind::ALL {
             let e = effect(kind);
             let (b0, b1) = (e.mesh(0.0).bounds(), e.mesh(1.0).bounds());
-            assert!((b0.min_x() - e.window.min_x()).abs() < 1e-3 && (b0.max_y() - e.window.max_y()).abs() < 1e-3, "{kind:?}");
-            assert!((b1.min_x() - e.slot.min_x()).abs() < 1e-3 && (b1.max_x() - e.slot.max_x()).abs() < 1e-3, "{kind:?}");
-            assert!((b1.min_y() - e.slot.min_y()).abs() < 1e-3 && (b1.max_y() - e.slot.max_y()).abs() < 1e-3, "{kind:?}");
+            assert!(
+                (b0.min_x() - e.window.min_x()).abs() < 1e-3
+                    && (b0.max_y() - e.window.max_y()).abs() < 1e-3,
+                "{kind:?}"
+            );
+            assert!(
+                (b1.min_x() - e.slot.min_x()).abs() < 1e-3
+                    && (b1.max_x() - e.slot.max_x()).abs() < 1e-3,
+                "{kind:?}"
+            );
+            assert!(
+                (b1.min_y() - e.slot.min_y()).abs() < 1e-3
+                    && (b1.max_y() - e.slot.max_y()).abs() < 1e-3,
+                "{kind:?}"
+            );
         }
     }
 
@@ -214,7 +258,11 @@ mod tests {
             for k in -5..=105 {
                 let m = e.mesh(k as f64 / 100.0);
                 assert!(m.is_finite());
-                assert!(m.vertex_count() <= kind.max_vertices(), "{kind:?}: {}", m.vertex_count());
+                assert!(
+                    m.vertex_count() <= kind.max_vertices(),
+                    "{kind:?}: {}",
+                    m.vertex_count()
+                );
             }
         }
     }
@@ -223,20 +271,43 @@ mod tests {
     fn texture_corners_approach_their_slot_corners_monotonically() {
         for kind in MinimizeKind::ALL {
             for (win, slot, edge) in [
-                (Rect::new(300.0, 100.0, 800.0, 500.0), Rect::new(1200.0, 1000.0, 64.0, 64.0), DockEdge::Bottom),
-                (Rect::new(300.0, 900.0, 800.0, 400.0), Rect::new(200.0, 300.0, 64.0, 64.0), DockEdge::Bottom),
-                (Rect::new(300.0, 100.0, 800.0, 500.0), Rect::new(1800.0, 400.0, 64.0, 64.0), DockEdge::Right),
-                (Rect::new(300.0, 100.0, 800.0, 500.0), Rect::new(20.0, 300.0, 64.0, 64.0), DockEdge::Left),
+                (
+                    Rect::new(300.0, 100.0, 800.0, 500.0),
+                    Rect::new(1200.0, 1000.0, 64.0, 64.0),
+                    DockEdge::Bottom,
+                ),
+                (
+                    Rect::new(300.0, 900.0, 800.0, 400.0),
+                    Rect::new(200.0, 300.0, 64.0, 64.0),
+                    DockEdge::Bottom,
+                ),
+                (
+                    Rect::new(300.0, 100.0, 800.0, 500.0),
+                    Rect::new(1800.0, 400.0, 64.0, 64.0),
+                    DockEdge::Right,
+                ),
+                (
+                    Rect::new(300.0, 100.0, 800.0, 500.0),
+                    Rect::new(20.0, 300.0, 64.0, 64.0),
+                    DockEdge::Left,
+                ),
             ] {
                 let e = MinimizeEffect::new(kind, win, slot, edge);
-                let corners = [([0.0f32, 0.0f32], (slot.min_x(), slot.min_y())), ([1.0, 1.0], (slot.max_x(), slot.max_y()))];
+                let corners = [
+                    ([0.0f32, 0.0f32], (slot.min_x(), slot.min_y())),
+                    ([1.0, 1.0], (slot.max_x(), slot.max_y())),
+                ];
                 for (uv, target) in corners {
                     let mut prev = f64::INFINITY;
                     for k in 0..=200 {
                         let m = e.mesh(k as f64 / 200.0);
                         let v = m.vertices.iter().find(|v| v.uv == uv).unwrap();
-                        let d = (v.position[0] as f64 - target.0).hypot(v.position[1] as f64 - target.1);
-                        assert!(d <= prev + 1e-2, "{kind:?} {edge:?} uv {uv:?} k={k}: {d} > {prev}");
+                        let d = (v.position[0] as f64 - target.0)
+                            .hypot(v.position[1] as f64 - target.1);
+                        assert!(
+                            d <= prev + 1e-2,
+                            "{kind:?} {edge:?} uv {uv:?} k={k}: {d} > {prev}"
+                        );
                         prev = d;
                     }
                     assert!(prev < 1e-2);

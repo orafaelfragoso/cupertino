@@ -16,7 +16,10 @@ pub struct Version {
 impl Version {
     pub fn parse(data: &[u8]) -> Result<Self, ParseError> {
         let mut r = Reader::new(data, "Read Management Version Information reply");
-        let version = Self { version: r.u8()?, revision: r.u16()? };
+        let version = Self {
+            version: r.u8()?,
+            revision: r.u16()?,
+        };
         r.finish()?;
         Ok(version)
     }
@@ -26,7 +29,9 @@ impl Version {
 pub fn parse_index_list(data: &[u8]) -> Result<Vec<ControllerIndex>, ParseError> {
     let mut r = Reader::new(data, "Read Controller Index List reply");
     let count = r.u16()?;
-    let indexes = (0..count).map(|_| r.u16().map(ControllerIndex)).collect::<Result<Vec<_>, _>>()?;
+    let indexes = (0..count)
+        .map(|_| r.u16().map(ControllerIndex))
+        .collect::<Result<Vec<_>, _>>()?;
     r.finish()?;
     Ok(indexes)
 }
@@ -90,7 +95,9 @@ pub fn parse_address_types(data: &[u8]) -> Result<AddressTypes, ParseError> {
 pub fn parse_connections(data: &[u8]) -> Result<Vec<DeviceId>, ParseError> {
     let mut r = Reader::new(data, "Get Connections reply");
     let count = r.u16()?;
-    let devices = (0..count).map(|_| r.device()).collect::<Result<Vec<_>, _>>()?;
+    let devices = (0..count)
+        .map(|_| r.device())
+        .collect::<Result<Vec<_>, _>>()?;
     r.finish()?;
     Ok(devices)
 }

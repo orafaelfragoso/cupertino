@@ -22,13 +22,28 @@ use zbus::fdo;
 use zbus::message::Header;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value as Variant};
 
-const LIGHT: Session = Session { dark: false, display: DisplayOptions { reduce_motion: false, reduce_transparency: false, increase_contrast: false, differentiate_without_color: false } };
+const LIGHT: Session = Session {
+    dark: false,
+    display: DisplayOptions {
+        reduce_motion: false,
+        reduce_transparency: false,
+        increase_contrast: false,
+        differentiate_without_color: false,
+    },
+};
 
 /// The calls a fake received, in order.
 type Log = Arc<Mutex<Vec<String>>>;
 
 fn settings(dir: &std::path::Path) -> Settings {
-    let paths = Paths { dock: None, compositor: None, menubar: None, keyboard: None, power: None, accessibility: Some(dir.join("accessibility.conf")) };
+    let paths = Paths {
+        dock: None,
+        compositor: None,
+        menubar: None,
+        keyboard: None,
+        power: None,
+        accessibility: Some(dir.join("accessibility.conf")),
+    };
     Settings::load(&paths, 1080.0).expect("defaults load without files")
 }
 
@@ -74,16 +89,29 @@ impl FakeNetwork {
     #[zbus(property)]
     fn set_wireless_enabled(&mut self, on: bool) -> fdo::Result<()> {
         if self.refuse {
-            return Err(fdo::Error::AccessDenied("Not authorized to change Wi-Fi".into()));
+            return Err(fdo::Error::AccessDenied(
+                "Not authorized to change Wi-Fi".into(),
+            ));
         }
-        self.log.lock().unwrap().push(format!("WirelessEnabled={on}"));
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("WirelessEnabled={on}"));
         self.enabled = on;
         Ok(())
     }
 
     #[zbus(property)]
     fn devices(&self) -> Vec<(u32, String, String, String, String, String, String)> {
-        vec![(2, "wlan0".into(), "wifi".into(), "connected".into(), "home".into(), String::new(), "10.0.0.2".into())]
+        vec![(
+            2,
+            "wlan0".into(),
+            "wifi".into(),
+            "connected".into(),
+            "home".into(),
+            String::new(),
+            "10.0.0.2".into(),
+        )]
     }
 
     #[zbus(property)]
@@ -92,7 +120,11 @@ impl FakeNetwork {
     }
 
     fn get_networks(&self) -> Vec<(String, i32, String, bool, bool)> {
-        vec![("home".into(), -40, "wpa2".into(), true, true), ("office".into(), -60, "wpa2".into(), true, false), ("cafe".into(), -70, "open".into(), false, false)]
+        vec![
+            ("home".into(), -40, "wpa2".into(), true, true),
+            ("office".into(), -60, "wpa2".into(), true, false),
+            ("cafe".into(), -70, "open".into(), false, false),
+        ]
     }
 
     fn scan(&self) {
@@ -100,7 +132,10 @@ impl FakeNetwork {
     }
 
     fn connect(&self, ssid: &str, passphrase: &str) {
-        self.log.lock().unwrap().push(format!("Connect({ssid},{passphrase:?})"));
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("Connect({ssid},{passphrase:?})"));
     }
 
     fn disconnect(&self) {
@@ -110,8 +145,19 @@ impl FakeNetwork {
 
 fn serve_network(bus: &common::PrivateBus, refuse: bool) -> (zbus::blocking::Connection, Log) {
     let log = Log::default();
-    let fake = FakeNetwork { enabled: true, refuse, log: log.clone() };
-    let c = zbus::blocking::connection::Builder::address(bus.address.as_str()).unwrap().serve_at("/org/cupertino/Network1", fake).unwrap().name("org.cupertino.Network1").unwrap().build().unwrap();
+    let fake = FakeNetwork {
+        enabled: true,
+        refuse,
+        log: log.clone(),
+    };
+    let c = zbus::blocking::connection::Builder::address(bus.address.as_str())
+        .unwrap()
+        .serve_at("/org/cupertino/Network1", fake)
+        .unwrap()
+        .name("org.cupertino.Network1")
+        .unwrap()
+        .build()
+        .unwrap();
     (c, log)
 }
 
@@ -121,36 +167,92 @@ fn st10_wifi_switch_join_and_a_refused_write() {
     let dir = tempfile::tempdir().unwrap();
     let (daemon, log) = serve_network(&bus, false);
     let mut services = services(&bus);
-    let mut live = Live { wifi: services.wifi(None), ..Live::default() };
+    let mut live = Live {
+        wifi: services.wifi(None),
+        ..Live::default()
+    };
     let s = sections(PaneId::Wifi, &settings(dir.path()), LIGHT, &live);
     assert!(switch_on(&s[0]));
-    assert_eq!(s.iter().map(labels).collect::<Vec<_>>(), [vec!["Wi-Fi"], vec!["home (secured)", "office (secured)"], vec!["cafe"]], "GetNetworks order, known first");
+    assert_eq!(
+        s.iter().map(labels).collect::<Vec<_>>(),
+        [
+            vec!["Wi-Fi"],
+            vec!["home (secured)", "office (secured)"],
+            vec!["cafe"]
+        ],
+        "GetNetworks order, known first"
+    );
 
     // the switch writes WirelessEnabled; the shown value is the daemon's on the next read
-    services.call(&call_of(ControlId::WifiPower, Value::Bool(false), &live, dir.path())).unwrap();
+    services
+        .call(&call_of(
+            ControlId::WifiPower,
+            Value::Bool(false),
+            &live,
+            dir.path(),
+        ))
+        .unwrap();
     live.wifi = services.wifi(live.wifi.ready());
-    assert!(!switch_on(&sections(PaneId::Wifi, &settings(dir.path()), LIGHT, &live)[0]));
+    assert!(!switch_on(
+        &sections(PaneId::Wifi, &settings(dir.path()), LIGHT, &live)[0]
+    ));
     // a change made by another client shows too
-    daemon.object_server().interface::<_, FakeNetwork>("/org/cupertino/Network1").unwrap().get_mut().enabled = true;
+    daemon
+        .object_server()
+        .interface::<_, FakeNetwork>("/org/cupertino/Network1")
+        .unwrap()
+        .get_mut()
+        .enabled = true;
     live.wifi = services.wifi(live.wifi.ready());
-    assert!(switch_on(&sections(PaneId::Wifi, &settings(dir.path()), LIGHT, &live)[0]));
+    assert!(switch_on(
+        &sections(PaneId::Wifi, &settings(dir.path()), LIGHT, &live)[0]
+    ));
 
     // a saved network joins at once with an empty passphrase, once
-    let join = call_of(ControlId::WifiNetwork(1), Value::Index(0), &live, dir.path());
-    assert_eq!(join, Call::Join { ssid: "office".into(), passphrase: Some(cupertino_settings::sheet::Secret::new()) });
+    let join = call_of(
+        ControlId::WifiNetwork(1),
+        Value::Index(0),
+        &live,
+        dir.path(),
+    );
+    assert_eq!(
+        join,
+        Call::Join {
+            ssid: "office".into(),
+            passphrase: Some(cupertino_settings::sheet::Secret::new())
+        }
+    );
     services.call(&join).unwrap();
     services.scan().unwrap();
-    assert_eq!(*log.lock().unwrap(), ["WirelessEnabled=false", "Connect(office,\"\")", "Scan"]);
+    assert_eq!(
+        *log.lock().unwrap(),
+        ["WirelessEnabled=false", "Connect(office,\"\")", "Scan"]
+    );
     drop(daemon);
 
     // a refused write: the error for the row, and the switch stays at the daemon's value
     let (_daemon, log) = serve_network(&bus, true);
     let mut services = self::services(&bus);
-    let live = Live { wifi: services.wifi(None), ..Live::default() };
-    let error = services.call(&call_of(ControlId::WifiPower, Value::Bool(false), &live, dir.path())).unwrap_err();
+    let live = Live {
+        wifi: services.wifi(None),
+        ..Live::default()
+    };
+    let error = services
+        .call(&call_of(
+            ControlId::WifiPower,
+            Value::Bool(false),
+            &live,
+            dir.path(),
+        ))
+        .unwrap_err();
     assert_eq!(error, "Not authorized to change Wi-Fi");
-    let live = Live { wifi: services.wifi(live.wifi.ready()), ..Live::default() };
-    assert!(switch_on(&sections(PaneId::Wifi, &settings(dir.path()), LIGHT, &live)[0]));
+    let live = Live {
+        wifi: services.wifi(live.wifi.ready()),
+        ..Live::default()
+    };
+    assert!(switch_on(
+        &sections(PaneId::Wifi, &settings(dir.path()), LIGHT, &live)[0]
+    ));
     assert!(log.lock().unwrap().is_empty());
 }
 
@@ -204,7 +306,10 @@ impl FakeBluetooth {
 
     #[zbus(property)]
     fn devices(&self) -> Vec<HashMap<String, OwnedValue>> {
-        vec![device("hp", "Headphones", true), device("kb", "Keyboard", false)]
+        vec![
+            device("hp", "Headphones", true),
+            device("kb", "Keyboard", false),
+        ]
     }
 
     fn start_discovery(&self) {
@@ -215,11 +320,20 @@ impl FakeBluetooth {
         self.log.lock().unwrap().push("StopDiscovery".into());
     }
 
-    fn register_agent(&mut self, #[zbus(header)] header: Header<'_>, path: ObjectPath<'_>) -> Result<(), FakeBtError> {
+    fn register_agent(
+        &mut self,
+        #[zbus(header)] header: Header<'_>,
+        path: ObjectPath<'_>,
+    ) -> Result<(), FakeBtError> {
         if self.taken {
-            return Err(FakeBtError::AgentExists("another client's pairing agent is registered".into()));
+            return Err(FakeBtError::AgentExists(
+                "another client's pairing agent is registered".into(),
+            ));
         }
-        self.log.lock().unwrap().push(format!("RegisterAgent({path})"));
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("RegisterAgent({path})"));
         self.agent = Some((header.sender().unwrap().to_string(), path.into()));
         Ok(())
     }
@@ -234,13 +348,28 @@ impl FakeBluetooth {
     }
 
     /// Pair by asking the registered agent to compare 123456, as the daemon does.
-    async fn pair(&self, #[zbus(connection)] connection: &zbus::Connection, id: &str) -> Result<(), FakeBtError> {
+    async fn pair(
+        &self,
+        #[zbus(connection)] connection: &zbus::Connection,
+        id: &str,
+    ) -> Result<(), FakeBtError> {
         let (sender, path) = self.agent.clone().expect("an agent is registered");
-        let agent = zbus::Proxy::new(connection, sender, path, "org.cupertino.Bluetooth1.Agent").await?;
-        match agent.call::<_, _, bool>("ConfirmPasskey", &(7u64, device(id, "Keyboard", false), 123456u32, false)).await {
+        let agent =
+            zbus::Proxy::new(connection, sender, path, "org.cupertino.Bluetooth1.Agent").await?;
+        match agent
+            .call::<_, _, bool>(
+                "ConfirmPasskey",
+                &(7u64, device(id, "Keyboard", false), 123456u32, false),
+            )
+            .await
+        {
             Ok(true) => Ok(()),
             Ok(false) => Err(FakeBtError::Rejected("refused".into())),
-            Err(zbus::Error::MethodError(name, _, _)) if name.as_str() == "org.cupertino.Bluetooth1.Agent.Rejected" => Err(FakeBtError::Rejected("The pairing was refused.".into())),
+            Err(zbus::Error::MethodError(name, _, _))
+                if name.as_str() == "org.cupertino.Bluetooth1.Agent.Rejected" =>
+            {
+                Err(FakeBtError::Rejected("The pairing was refused.".into()))
+            }
             Err(e) => Err(e.into()),
         }
     }
@@ -248,15 +377,31 @@ impl FakeBluetooth {
 
 fn serve_bluetooth(bus: &common::PrivateBus, taken: bool) -> (zbus::blocking::Connection, Log) {
     let log = Log::default();
-    let fake = FakeBluetooth { taken, agent: None, log: log.clone() };
-    let c = zbus::blocking::connection::Builder::address(bus.address.as_str()).unwrap().serve_at("/org/cupertino/Bluetooth1", fake).unwrap().name("org.cupertino.Bluetooth1").unwrap().build().unwrap();
+    let fake = FakeBluetooth {
+        taken,
+        agent: None,
+        log: log.clone(),
+    };
+    let c = zbus::blocking::connection::Builder::address(bus.address.as_str())
+        .unwrap()
+        .serve_at("/org/cupertino/Bluetooth1", fake)
+        .unwrap()
+        .name("org.cupertino.Bluetooth1")
+        .unwrap()
+        .build()
+        .unwrap();
     (c, log)
 }
 
 /// An agent whose questions arrive on the returned channel.
 fn agent() -> (Agent, mpsc::Receiver<AgentEvent>) {
     let (tx, rx) = mpsc::channel();
-    (Agent { on_event: Box::new(move |e| tx.send(e).unwrap()) }, rx)
+    (
+        Agent {
+            on_event: Box::new(move |e| tx.send(e).unwrap()),
+        },
+        rx,
+    )
 }
 
 #[test]
@@ -268,32 +413,81 @@ fn st11_bluetooth_groups_registers_the_agent_pairs_and_forgets_only_after_confir
     let (agent, questions) = agent();
     assert_eq!(services.register_agent(agent), Ok(true));
     services.discovery(true).unwrap();
-    let live = Live { bluetooth: services.bluetooth(None), ..Live::default() };
+    let live = Live {
+        bluetooth: services.bluetooth(None),
+        ..Live::default()
+    };
     let s = sections(PaneId::Bluetooth, &settings(dir.path()), LIGHT, &live);
-    assert_eq!((labels(&s[1]), labels(&s[2])), (vec!["Headphones"], vec!["Keyboard"]), "My Devices, then Nearby Devices");
+    assert_eq!(
+        (labels(&s[1]), labels(&s[2])),
+        (vec!["Headphones"], vec!["Keyboard"]),
+        "My Devices, then Nearby Devices"
+    );
     assert_eq!(s[0].footer, None);
 
     // pairing asks the agent; the answer of its sheet ends the pairing
-    for (answer, outcome) in [(Answer::Confirm, Ok(())), (Answer::Reject, Err("The pairing was refused.".to_string()))] {
+    for (answer, outcome) in [
+        (Answer::Confirm, Ok(())),
+        (Answer::Reject, Err("The pairing was refused.".to_string())),
+    ] {
         let (done, result) = mpsc::channel();
         services.pair("kb", move |r| done.send(r).unwrap()).unwrap();
-        match questions.recv_timeout(Duration::from_secs(5)).expect("the daemon asks the agent") {
-            AgentEvent::Prompt { id: 7, device, prompt: Prompt::Confirm { passkey: Some(123456) }, answer: Some(reply) } => {
+        match questions
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the daemon asks the agent")
+        {
+            AgentEvent::Prompt {
+                id: 7,
+                device,
+                prompt:
+                    Prompt::Confirm {
+                        passkey: Some(123456),
+                    },
+                answer: Some(reply),
+            } => {
                 assert_eq!(device, "Keyboard");
                 reply.send_blocking(answer).unwrap();
             }
             other => panic!("a passkey to confirm, got {other:?}"),
         }
-        assert_eq!(result.recv_timeout(Duration::from_secs(5)).unwrap(), outcome);
+        assert_eq!(
+            result.recv_timeout(Duration::from_secs(5)).unwrap(),
+            outcome
+        );
     }
 
     // Forget asks first: no call until the sheet confirms it
-    let forget = call_of(ControlId::BluetoothDevice(0), Value::Index(1), &live, dir.path());
-    assert_eq!(forget, Call::Remove { id: "hp".into(), confirmed: false });
-    services.call(&Call::Remove { id: "hp".into(), confirmed: true }).unwrap();
+    let forget = call_of(
+        ControlId::BluetoothDevice(0),
+        Value::Index(1),
+        &live,
+        dir.path(),
+    );
+    assert_eq!(
+        forget,
+        Call::Remove {
+            id: "hp".into(),
+            confirmed: false
+        }
+    );
+    services
+        .call(&Call::Remove {
+            id: "hp".into(),
+            confirmed: true,
+        })
+        .unwrap();
     services.discovery(false).unwrap();
     services.unregister_agent().unwrap();
-    assert_eq!(*log.lock().unwrap(), ["RegisterAgent(/org/cupertino/Settings1/Agent)", "StartDiscovery", "Remove(hp)", "StopDiscovery", "UnregisterAgent"]);
+    assert_eq!(
+        *log.lock().unwrap(),
+        [
+            "RegisterAgent(/org/cupertino/Settings1/Agent)",
+            "StartDiscovery",
+            "Remove(hp)",
+            "StopDiscovery",
+            "UnregisterAgent"
+        ]
+    );
 }
 
 #[test]
@@ -303,15 +497,35 @@ fn the_agent_answers_only_the_bluetooth_daemon() {
     let mut services = services(&bus);
     let (agent, questions) = agent();
     assert_eq!(services.register_agent(agent), Ok(true));
-    let ours = services.system.connection().unwrap().unique_name().expect("connected").to_string();
+    let ours = services
+        .system
+        .connection()
+        .unwrap()
+        .unique_name()
+        .expect("connected")
+        .to_string();
     // another client of the bus forges a pairing question
     let intruder = bus.connect();
-    let forged = intruder.call_method(Some(ours.as_str()), "/org/cupertino/Settings1/Agent", Some("org.cupertino.Bluetooth1.Agent"), "ConfirmPasskey", &(7u64, device("kb", "Keyboard", false), 123456u32, false));
+    let forged = intruder.call_method(
+        Some(ours.as_str()),
+        "/org/cupertino/Settings1/Agent",
+        Some("org.cupertino.Bluetooth1.Agent"),
+        "ConfirmPasskey",
+        &(7u64, device("kb", "Keyboard", false), 123456u32, false),
+    );
     match forged {
-        Err(zbus::Error::MethodError(name, _, _)) => assert_eq!(name.as_str(), "org.cupertino.Bluetooth1.Agent.Rejected"),
+        Err(zbus::Error::MethodError(name, _, _)) => {
+            assert_eq!(name.as_str(), "org.cupertino.Bluetooth1.Agent.Rejected")
+        }
         other => panic!("a forged question is rejected, got {other:?}"),
     }
-    let cancel = intruder.call_method(Some(ours.as_str()), "/org/cupertino/Settings1/Agent", Some("org.cupertino.Bluetooth1.Agent"), "Cancel", &(7u64,));
+    let cancel = intruder.call_method(
+        Some(ours.as_str()),
+        "/org/cupertino/Settings1/Agent",
+        Some("org.cupertino.Bluetooth1.Agent"),
+        "Cancel",
+        &(7u64,),
+    );
     assert!(cancel.is_err(), "a forged Cancel is rejected too");
     assert!(questions.try_recv().is_err(), "no sheet for either");
 }
@@ -324,12 +538,18 @@ fn st11_another_clients_agent_means_no_dialog_here() {
     let mut services = services(&bus);
     let (agent, questions) = agent();
     assert_eq!(services.register_agent(agent), Ok(false));
-    let mut live = Live { bluetooth: services.bluetooth(None), ..Live::default() };
+    let mut live = Live {
+        bluetooth: services.bluetooth(None),
+        ..Live::default()
+    };
     if let Reading::Ready(b) = &mut live.bluetooth {
         b.agent_elsewhere = true;
     }
     let s = sections(PaneId::Bluetooth, &settings(dir.path()), LIGHT, &live);
-    assert_eq!(s[0].footer.as_deref(), Some("Pairing is handled by another application."));
+    assert_eq!(
+        s[0].footer.as_deref(),
+        Some("Pairing is handled by another application.")
+    );
     assert!(questions.try_recv().is_err());
     assert!(log.lock().unwrap().is_empty());
 }
@@ -349,15 +569,25 @@ impl FakeCentre {
 
     #[zbus(property)]
     fn focus_lifetimes(&self) -> Vec<(String, String)> {
-        vec![("hour".into(), "For 1 hour".into()), ("tonight".into(), "Until this evening".into()), ("tomorrow".into(), "Until tomorrow morning".into())]
+        vec![
+            ("hour".into(), "For 1 hour".into()),
+            ("tonight".into(), "Until this evening".into()),
+            ("tomorrow".into(), "Until tomorrow morning".into()),
+        ]
     }
 
     fn set_do_not_disturb(&self, on: bool) {
-        self.log.lock().unwrap().push(format!("SetDoNotDisturb({on})"));
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("SetDoNotDisturb({on})"));
     }
 
     fn set_do_not_disturb_for(&self, id: &str) {
-        self.log.lock().unwrap().push(format!("SetDoNotDisturbFor({id})"));
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("SetDoNotDisturbFor({id})"));
     }
 }
 
@@ -368,21 +598,53 @@ fn st13_focus_rows_are_the_lifetimes_and_call_the_centre() {
     let log = Log::default();
     let _centre = zbus::blocking::connection::Builder::address(bus.address.as_str())
         .unwrap()
-        .serve_at("/org/cupertino/NotificationCenter1", FakeCentre { log: log.clone() })
+        .serve_at(
+            "/org/cupertino/NotificationCenter1",
+            FakeCentre { log: log.clone() },
+        )
         .unwrap()
         .name("org.cupertino.NotificationCenter1")
         .unwrap()
         .build()
         .unwrap();
     let mut services = services(&bus);
-    let live = Live { focus: services.focus(), ..Live::default() };
+    let live = Live {
+        focus: services.focus(),
+        ..Live::default()
+    };
     let s = sections(PaneId::Focus, &settings(dir.path()), LIGHT, &live);
-    assert_eq!(labels(&s[1]), ["For 1 hour", "Until this evening", "Until tomorrow morning"], "exactly FocusLifetimes, in order");
-    services.call(&call_of(ControlId::DoNotDisturb, Value::Bool(true), &live, dir.path())).unwrap();
+    assert_eq!(
+        labels(&s[1]),
+        ["For 1 hour", "Until this evening", "Until tomorrow morning"],
+        "exactly FocusLifetimes, in order"
+    );
+    services
+        .call(&call_of(
+            ControlId::DoNotDisturb,
+            Value::Bool(true),
+            &live,
+            dir.path(),
+        ))
+        .unwrap();
     for i in 0..3 {
-        services.call(&call_of(ControlId::FocusFor(i), Value::Index(0), &live, dir.path())).unwrap();
+        services
+            .call(&call_of(
+                ControlId::FocusFor(i),
+                Value::Index(0),
+                &live,
+                dir.path(),
+            ))
+            .unwrap();
     }
-    assert_eq!(*log.lock().unwrap(), ["SetDoNotDisturb(true)", "SetDoNotDisturbFor(hour)", "SetDoNotDisturbFor(tonight)", "SetDoNotDisturbFor(tomorrow)"]);
+    assert_eq!(
+        *log.lock().unwrap(),
+        [
+            "SetDoNotDisturb(true)",
+            "SetDoNotDisturbFor(hour)",
+            "SetDoNotDisturbFor(tonight)",
+            "SetDoNotDisturbFor(tomorrow)"
+        ]
+    );
 }
 
 // ---- no daemon ---------------------------------------------------------------------------------------------------
@@ -392,7 +654,13 @@ fn st19_a_missing_daemon_disables_the_switch_with_the_reason() {
     let Some(bus) = common::bus() else { return };
     let dir = tempfile::tempdir().unwrap();
     let mut services = services(&bus);
-    let live = Live { wifi: services.wifi(None), bluetooth: services.bluetooth(None), focus: services.focus(), brightness: services.brightness(), ..Live::default() };
+    let live = Live {
+        wifi: services.wifi(None),
+        bluetooth: services.bluetooth(None),
+        focus: services.focus(),
+        brightness: services.brightness(),
+        ..Live::default()
+    };
     for (pane, reason) in [
         (PaneId::Wifi, "Wi-Fi is not available"),
         (PaneId::Bluetooth, "Bluetooth is not available"),
@@ -400,7 +668,11 @@ fn st19_a_missing_daemon_disables_the_switch_with_the_reason() {
         (PaneId::Network, "Wi-Fi is not available"),
     ] {
         let s = sections(pane, &settings(dir.path()), LIGHT, &live);
-        assert_eq!((s.len(), s[0].rows.len()), (1, 1), "{pane:?}: the switch row only, no empty list");
+        assert_eq!(
+            (s.len(), s[0].rows.len()),
+            (1, 1),
+            "{pane:?}: the switch row only, no empty list"
+        );
         assert_eq!(s[0].rows[0].disabled.as_deref(), Some(reason), "{pane:?}");
     }
     assert!(matches!(live.brightness, Reading::Unavailable(_)));

@@ -104,16 +104,30 @@ impl SourceSpec {
         }
         if let Some(path) = t.strip_prefix("decoded:") {
             let path = path.trim();
-            return (!path.is_empty()).then(|| SourceSpec { id: t.to_string(), layout: String::new(), variant: String::new(), decoded: Some(expand_home(path)) });
+            return (!path.is_empty()).then(|| SourceSpec {
+                id: t.to_string(),
+                layout: String::new(),
+                variant: String::new(),
+                decoded: Some(expand_home(path)),
+            });
         }
         let (layout, variant) = match t.split_once('(') {
             Some((l, v)) => (l.trim(), v.trim().strip_suffix(')')?.trim()),
             None => (t, ""),
         };
-        if layout.is_empty() || !layout.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        if layout.is_empty()
+            || !layout
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
             return None;
         }
-        Some(SourceSpec { id: t.to_string(), layout: layout.to_string(), variant: variant.to_string(), decoded: None })
+        Some(SourceSpec {
+            id: t.to_string(),
+            layout: layout.to_string(),
+            variant: variant.to_string(),
+            decoded: None,
+        })
     }
 }
 
@@ -135,7 +149,10 @@ pub fn split_sources(value: &str) -> Vec<String> {
         cur.push(c);
     }
     out.push(cur);
-    out.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    out.into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 /// Everything in `keyboard.conf`; `None` is a key the file does not set.
@@ -172,19 +189,31 @@ pub struct KeyboardSettings {
 }
 
 fn ms(value: &str) -> Result<u32, String> {
-    value.parse::<u32>().map_err(|_| format!("expected milliseconds, got {value:?}"))
+    value
+        .parse::<u32>()
+        .map_err(|_| format!("expected milliseconds, got {value:?}"))
 }
 
 fn at_least_one(value: &str, what: &str) -> Result<u32, String> {
-    value.parse::<u32>().ok().filter(|v| *v > 0).ok_or_else(|| format!("expected {what} of at least 1, got {value:?}"))
+    value
+        .parse::<u32>()
+        .ok()
+        .filter(|v| *v > 0)
+        .ok_or_else(|| format!("expected {what} of at least 1, got {value:?}"))
 }
 
 fn sources(value: &str) -> Result<Vec<SourceSpec>, String> {
-    split_sources(value).iter().map(|part| SourceSpec::parse(part).ok_or_else(|| format!("bad layout {part:?}"))).collect()
+    split_sources(value)
+        .iter()
+        .map(|part| SourceSpec::parse(part).ok_or_else(|| format!("bad layout {part:?}")))
+        .collect()
 }
 
 fn sources_text(list: &[SourceSpec]) -> String {
-    list.iter().map(|s| s.id.as_str()).collect::<Vec<_>>().join(", ")
+    list.iter()
+        .map(|s| s.id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn list_text(list: &[String]) -> String {
@@ -194,7 +223,12 @@ fn list_text(list: &[String]) -> String {
 /// A key whose value is the `Option` field `$field`: `$parse` reads the value, `$text` writes it.
 macro_rules! field_key {
     ($name:literal, $field:ident, $parse:expr, $text:expr) => {
-        Key { name: $name, read: |s, v| ($parse)(v).map(|x| s.$field = Some(x)), write: |s| s.$field.as_ref().map($text), keep: |s, g| s.$field = g.$field.clone() }
+        Key {
+            name: $name,
+            read: |s, v| ($parse)(v).map(|x| s.$field = Some(x)),
+            write: |s| s.$field.as_ref().map($text),
+            keep: |s, g| s.$field = g.$field.clone(),
+        }
     };
 }
 
@@ -210,34 +244,109 @@ const KEYS: &[Key<KeyboardSettings>] = &[
     field_key!("repeat_delay", repeat_delay_ms, ms, number_ref),
     field_key!("repeat_interval", repeat_interval_ms, ms, number_ref),
     field_key!("repeat_delay_saved", repeat_delay_saved_ms, ms, number_ref),
-    field_key!("modifier_profile", modifier_profile, ModifierProfile::from_name, |p: &ModifierProfile| p.name().to_string()),
-    field_key!("input_sources", input_sources, sources, |l: &Vec<SourceSpec>| sources_text(l)),
+    field_key!(
+        "modifier_profile",
+        modifier_profile,
+        ModifierProfile::from_name,
+        |p: &ModifierProfile| p.name().to_string()
+    ),
+    field_key!("input_sources", input_sources, sources, |l: &Vec<
+        SourceSpec,
+    >| sources_text(
+        l
+    )),
     field_key!("caps_lock_delay", caps_lock_delay_ms, ms, number_ref),
-    field_key!("caps_lock_switch", caps_lock_switch, parse_switch, switch_ref),
+    field_key!(
+        "caps_lock_switch",
+        caps_lock_switch,
+        parse_switch,
+        switch_ref
+    ),
     field_key!(
         "caps_lock_hold",
         caps_lock_hold_ms,
-        |v: &str| ms(v).and_then(|n| if (1..=CAPS_LOCK_HOLD_MAX_MS).contains(&n) { Ok(n) } else { Err(format!("expected 1 to {CAPS_LOCK_HOLD_MAX_MS} ms, got {n}")) }),
+        |v: &str| ms(v).and_then(|n| if (1..=CAPS_LOCK_HOLD_MAX_MS).contains(&n) {
+            Ok(n)
+        } else {
+            Err(format!("expected 1 to {CAPS_LOCK_HOLD_MAX_MS} ms, got {n}"))
+        }),
         number_ref
     ),
-    field_key!("fn_key", fn_key, FnKey::from_name, |k: &FnKey| k.name().to_string()),
-    field_key!("layout_keyboard", layout_keyboard, LayoutKeyboard::from_name, |k: &LayoutKeyboard| k.name().to_string()),
-    field_key!("layout_level3", layout_level3, Level3::from_name, |k: &Level3| k.name().to_string()),
+    field_key!("fn_key", fn_key, FnKey::from_name, |k: &FnKey| k
+        .name()
+        .to_string()),
+    field_key!(
+        "layout_keyboard",
+        layout_keyboard,
+        LayoutKeyboard::from_name,
+        |k: &LayoutKeyboard| k.name().to_string()
+    ),
+    field_key!(
+        "layout_level3",
+        layout_level3,
+        Level3::from_name,
+        |k: &Level3| k.name().to_string()
+    ),
     field_key!("slow_keys", slow_keys, parse_switch, switch_ref),
-    field_key!("slow_keys_delay", slow_keys_delay_ms, |v: &str| at_least_one(v, "a delay (switch the filter off with slow_keys = off)"), number_ref),
+    field_key!(
+        "slow_keys_delay",
+        slow_keys_delay_ms,
+        |v: &str| at_least_one(v, "a delay (switch the filter off with slow_keys = off)"),
+        number_ref
+    ),
     field_key!("sticky_keys", sticky_keys, parse_switch, switch_ref),
-    field_key!("sticky_keys_shortcut", sticky_keys_shortcut, parse_switch, switch_ref),
+    field_key!(
+        "sticky_keys_shortcut",
+        sticky_keys_shortcut,
+        parse_switch,
+        switch_ref
+    ),
     field_key!("mouse_keys", mouse_keys, parse_switch, switch_ref),
-    field_key!("mouse_keys_shortcut", mouse_keys_shortcut, parse_switch, switch_ref),
+    field_key!(
+        "mouse_keys_shortcut",
+        mouse_keys_shortcut,
+        parse_switch,
+        switch_ref
+    ),
     field_key!("mouse_keys_delay", mouse_keys_delay_ms, ms, number_ref),
-    field_key!("mouse_keys_max_speed", mouse_keys_max_speed, |v: &str| at_least_one(v, "a speed"), number_ref),
+    field_key!(
+        "mouse_keys_max_speed",
+        mouse_keys_max_speed,
+        |v: &str| at_least_one(v, "a speed"),
+        number_ref
+    ),
     field_key!("client_rewrite", client_rewrite, parse_switch, switch_ref),
-    field_key!("rewrite_terminals", rewrite_terminals, |v: &str| Ok::<_, String>(parse_list(v)), |l: &Vec<String>| list_text(l)),
-    field_key!("rewrite_off", rewrite_off, |v: &str| Ok::<_, String>(parse_list(v)), |l: &Vec<String>| list_text(l)),
+    field_key!(
+        "rewrite_terminals",
+        rewrite_terminals,
+        |v: &str| Ok::<_, String>(parse_list(v)),
+        |l: &Vec<String>| list_text(l)
+    ),
+    field_key!(
+        "rewrite_off",
+        rewrite_off,
+        |v: &str| Ok::<_, String>(parse_list(v)),
+        |l: &Vec<String>| list_text(l)
+    ),
     field_key!("accent_picker", accent_picker, parse_switch, switch_ref),
-    field_key!("accent_table", accent_table, |v: &str| Ok::<_, String>(v.to_string()), |t: &String| t.clone()),
-    field_key!("accent_keyboards", accent_keyboards, |v: &str| Ok::<_, String>(parse_list(v)), |l: &Vec<String>| list_text(l)),
-    field_key!("accent_disabled_apps", accent_disabled_apps, |v: &str| Ok::<_, String>(parse_list(v)), |l: &Vec<String>| list_text(l)),
+    field_key!(
+        "accent_table",
+        accent_table,
+        |v: &str| Ok::<_, String>(v.to_string()),
+        |t: &String| t.clone()
+    ),
+    field_key!(
+        "accent_keyboards",
+        accent_keyboards,
+        |v: &str| Ok::<_, String>(parse_list(v)),
+        |l: &Vec<String>| list_text(l)
+    ),
+    field_key!(
+        "accent_disabled_apps",
+        accent_disabled_apps,
+        |v: &str| Ok::<_, String>(parse_list(v)),
+        |l: &Vec<String>| list_text(l)
+    ),
 ];
 
 impl KeyboardSettings {
@@ -249,7 +358,13 @@ impl KeyboardSettings {
     /// The settings of `text` and the problems of its lines; with `last_good`, a key whose line is wrong keeps its
     /// last good value.
     pub fn parse(text: &str, last_good: Option<&Self>) -> (Self, Vec<Problem>) {
-        conf::read(&conf::ConfText::parse(text), KEYS, &Self::default(), last_good, None)
+        conf::read(
+            &conf::ConfText::parse(text),
+            KEYS,
+            &Self::default(),
+            last_good,
+            None,
+        )
     }
 
     /// [`Self::parse`] of the file at `path`; a missing file sets nothing.
@@ -274,14 +389,38 @@ mod tests {
              caps_lock_delay = 0\naccent_picker = off\naccent_table = ~/a.json\naccent_keyboards = default, en\nbogus = 1\nrepeat_delay = x\nnonsense\nmodifier_profile = nope\n",
             None,
         );
-        assert_eq!(problems.iter().map(|p| p.line).collect::<Vec<_>>(), vec![10, 11, 12, 13]);
-        assert_eq!(problems[3].message, "modifier_profile: expected cupertino, classic-pc, got \"nope\"");
-        assert_eq!((s.repeat_delay_ms, s.repeat_interval_ms), (Some(300), Some(40)), "the bad line later does not unset the earlier value");
-        assert_eq!(s.input_sources.as_ref().unwrap().iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), vec!["us", "de", "fr(nodeadkeys)"]);
+        assert_eq!(
+            problems.iter().map(|p| p.line).collect::<Vec<_>>(),
+            vec![10, 11, 12, 13]
+        );
+        assert_eq!(
+            problems[3].message,
+            "modifier_profile: expected cupertino, classic-pc, got \"nope\""
+        );
+        assert_eq!(
+            (s.repeat_delay_ms, s.repeat_interval_ms),
+            (Some(300), Some(40)),
+            "the bad line later does not unset the earlier value"
+        );
+        assert_eq!(
+            s.input_sources
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|x| x.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["us", "de", "fr(nodeadkeys)"]
+        );
         assert_eq!(s.modifier_profile, Some(ModifierProfile::ClassicPc));
-        assert_eq!((s.caps_lock_delay_ms, s.accent_picker), (Some(0), Some(false)));
+        assert_eq!(
+            (s.caps_lock_delay_ms, s.accent_picker),
+            (Some(0), Some(false))
+        );
         assert_eq!(s.accent_table.as_deref(), Some("~/a.json"));
-        assert_eq!(s.accent_keyboards, Some(vec!["default".to_string(), "en".to_string()]));
+        assert_eq!(
+            s.accent_keyboards,
+            Some(vec!["default".to_string(), "en".to_string()])
+        );
     }
 
     #[test]
@@ -291,29 +430,57 @@ mod tests {
              caps_lock_hold = 0\ncaps_lock_hold = 1501\nslow_keys_delay = 0\nfn_key = sing\nmouse_keys_max_speed = 0\nlayout_keyboard = x\n",
             None,
         );
-        assert_eq!(problems.iter().map(|p| p.line).collect::<Vec<_>>(), vec![5, 6, 7, 8, 9, 10]);
+        assert_eq!(
+            problems.iter().map(|p| p.line).collect::<Vec<_>>(),
+            vec![5, 6, 7, 8, 9, 10]
+        );
         assert_eq!(s.caps_lock_hold_ms, Some(800));
-        assert_eq!((s.layout_keyboard, s.layout_level3, s.fn_key), (Some(LayoutKeyboard::Iso), Some(Level3::BothAlt), Some(FnKey::DoNothing)));
+        assert_eq!(
+            (s.layout_keyboard, s.layout_level3, s.fn_key),
+            (
+                Some(LayoutKeyboard::Iso),
+                Some(Level3::BothAlt),
+                Some(FnKey::DoNothing)
+            )
+        );
     }
 
     #[test]
     fn sources_parse() {
-        assert_eq!(SourceSpec::parse("fr(nodeadkeys)"), Some(SourceSpec { id: "fr(nodeadkeys)".into(), layout: "fr".into(), variant: "nodeadkeys".into(), decoded: None }));
+        assert_eq!(
+            SourceSpec::parse("fr(nodeadkeys)"),
+            Some(SourceSpec {
+                id: "fr(nodeadkeys)".into(),
+                layout: "fr".into(),
+                variant: "nodeadkeys".into(),
+                decoded: None
+            })
+        );
         let d = SourceSpec::parse("decoded:/l/ABC.json").unwrap();
-        assert_eq!((d.layout.as_str(), d.decoded), ("", Some(PathBuf::from("/l/ABC.json"))));
+        assert_eq!(
+            (d.layout.as_str(), d.decoded),
+            ("", Some(PathBuf::from("/l/ABC.json")))
+        );
         assert!(SourceSpec::parse("decoded:").is_none());
         assert_eq!(SourceSpec::parse(" us ").unwrap().layout, "us");
         assert!(SourceSpec::parse("").is_none());
         assert!(SourceSpec::parse("fr(x").is_none());
         assert!(SourceSpec::parse("a b").is_none());
-        assert_eq!(split_sources("us, fr(a,b), de"), vec!["us", "fr(a,b)", "de"]);
+        assert_eq!(
+            split_sources("us, fr(a,b), de"),
+            vec!["us", "fr(a,b)", "de"]
+        );
     }
 
     #[test]
     fn a_store_round_trips_lists_sources_and_choices() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("keyboard.conf");
-        std::fs::write(&path, "# typing\nrepeat_delay = 300 # slow\ninput_sources = us, fr(nodeadkeys)\n").unwrap();
+        std::fs::write(
+            &path,
+            "# typing\nrepeat_delay = 300 # slow\ninput_sources = us, fr(nodeadkeys)\n",
+        )
+        .unwrap();
         let (mut s, _) = KeyboardSettings::load(&path, None).unwrap();
         s.repeat_interval_ms = Some(33);
         s.fn_key = Some(FnKey::Emoji);
@@ -325,14 +492,21 @@ mod tests {
 
     #[test]
     fn repeat_off_keeps_the_saved_delay() {
-        let (s, problems) = KeyboardSettings::parse("repeat_delay = 0\nrepeat_delay_saved = 300\n", None);
+        let (s, problems) =
+            KeyboardSettings::parse("repeat_delay = 0\nrepeat_delay_saved = 300\n", None);
         assert!(problems.is_empty(), "{problems:?}");
-        assert_eq!((s.repeat_delay_ms, s.repeat_delay_saved_ms), (Some(0), Some(300)));
+        assert_eq!(
+            (s.repeat_delay_ms, s.repeat_delay_saved_ms),
+            (Some(0), Some(300))
+        );
     }
 
     #[test]
     fn a_bad_value_keeps_the_last_good_one() {
-        let good = KeyboardSettings { repeat_delay_ms: Some(250), ..KeyboardSettings::default() };
+        let good = KeyboardSettings {
+            repeat_delay_ms: Some(250),
+            ..KeyboardSettings::default()
+        };
         let (s, problems) = KeyboardSettings::parse("repeat_delay = soon\n", Some(&good));
         assert_eq!(s.repeat_delay_ms, Some(250));
         assert_eq!(problems.len(), 1);

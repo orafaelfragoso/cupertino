@@ -100,7 +100,15 @@ pub struct Pairing {
 
 impl Pairing {
     pub fn new(id: PairingId, device: DeviceId, local: bool, now: Duration) -> Self {
-        Self { id, device, local, phase: Phase::Waiting, deadline: now + PAIRING_TIMEOUT, rejected: false, failure: None }
+        Self {
+            id,
+            device,
+            local,
+            phase: Phase::Waiting,
+            deadline: now + PAIRING_TIMEOUT,
+            rejected: false,
+            failure: None,
+        }
     }
 
     pub fn deadline(&self) -> Duration {
@@ -110,7 +118,10 @@ impl Pairing {
     /// User Confirmation Request.
     pub fn on_confirm_request(&mut self, just_works: bool, value: u32) -> Vec<Action> {
         self.phase = Phase::Confirming;
-        vec![Action::Prompt(Prompt::Confirm { passkey: value, just_works })]
+        vec![Action::Prompt(Prompt::Confirm {
+            passkey: value,
+            just_works,
+        })]
     }
 
     /// User Passkey Request.
@@ -142,7 +153,10 @@ impl Pairing {
             (Phase::Confirming, AgentReply::Confirm(accept)) => {
                 self.phase = Phase::Waiting;
                 self.rejected |= !accept;
-                vec![Action::Send(Command::UserConfirmationReply { device, accept })]
+                vec![Action::Send(Command::UserConfirmationReply {
+                    device,
+                    accept,
+                })]
             }
             (Phase::Passkey, AgentReply::Passkey(passkey)) => {
                 self.phase = Phase::Waiting;
@@ -152,12 +166,18 @@ impl Pairing {
             (Phase::Confirming, AgentReply::Failed(message)) => {
                 self.phase = Phase::Waiting;
                 self.failure.get_or_insert(PairError::Agent(message));
-                vec![Action::Send(Command::UserConfirmationReply { device, accept: false })]
+                vec![Action::Send(Command::UserConfirmationReply {
+                    device,
+                    accept: false,
+                })]
             }
             (Phase::Passkey, AgentReply::Failed(message)) => {
                 self.phase = Phase::Waiting;
                 self.failure.get_or_insert(PairError::Agent(message));
-                vec![Action::Send(Command::UserPasskeyReply { device, passkey: None })]
+                vec![Action::Send(Command::UserPasskeyReply {
+                    device,
+                    passkey: None,
+                })]
             }
             _ => Vec::new(),
         }

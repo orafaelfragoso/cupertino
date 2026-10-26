@@ -61,7 +61,10 @@ fn lex(css: &str) -> Result<Vec<(Token, usize, bool)>, CssError> {
     let mut pending_ws = false;
     let mut i = 0;
     let mut line = 1;
-    let err = |message: &str, line: usize| CssError { message: message.to_string(), line };
+    let err = |message: &str, line: usize| CssError {
+        message: message.to_string(),
+        line,
+    };
     while i < c.len() {
         let ch = c[i];
         let before = out.len();
@@ -163,13 +166,22 @@ fn lex(css: &str) -> Result<Vec<(Token, usize, bool)>, CssError> {
                 }
                 out.push((Token::AtKeyword(c[s..i].iter().collect()), line));
             }
-            d if d.is_ascii_digit() || (d == '.' && c.get(i + 1).is_some_and(|x| x.is_ascii_digit())) || ((d == '-' || d == '+') && c.get(i + 1).is_some_and(|x| x.is_ascii_digit() || *x == '.')) => {
+            d if d.is_ascii_digit()
+                || (d == '.' && c.get(i + 1).is_some_and(|x| x.is_ascii_digit()))
+                || ((d == '-' || d == '+')
+                    && c.get(i + 1)
+                        .is_some_and(|x| x.is_ascii_digit() || *x == '.')) =>
+            {
                 let s = i;
                 i += 1;
                 while i < c.len() && (c[i].is_ascii_digit() || c[i] == '.') {
                     i += 1;
                 }
-                let num: f64 = c[s..i].iter().collect::<String>().parse().map_err(|_| err("bad number", line))?;
+                let num: f64 = c[s..i]
+                    .iter()
+                    .collect::<String>()
+                    .parse()
+                    .map_err(|_| err("bad number", line))?;
                 if c.get(i) == Some(&'%') {
                     i += 1;
                     out.push((Token::Percentage(num), line));
@@ -206,7 +218,11 @@ fn lex(css: &str) -> Result<Vec<(Token, usize, bool)>, CssError> {
             pending_ws = true;
         }
     }
-    Ok(out.into_iter().zip(ws).map(|((t, l), w)| (t, l, w)).collect())
+    Ok(out
+        .into_iter()
+        .zip(ws)
+        .map(|((t, l), w)| (t, l, w))
+        .collect())
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -228,12 +244,19 @@ impl Stylesheet {
         self.rules
             .iter()
             .filter(|r| r.selector.split(',').any(|s| s.trim() == selector))
-            .flat_map(|r| r.declarations.iter().filter(|(p, _)| p == property).map(|(_, v)| v.as_str()))
+            .flat_map(|r| {
+                r.declarations
+                    .iter()
+                    .filter(|(p, _)| p == property)
+                    .map(|(_, v)| v.as_str())
+            })
             .collect()
     }
 
     pub fn has_selector(&self, selector: &str) -> bool {
-        self.rules.iter().any(|r| r.selector.split(',').any(|s| s.trim() == selector))
+        self.rules
+            .iter()
+            .any(|r| r.selector.split(',').any(|s| s.trim() == selector))
     }
 
     /// Names of every `@name` colour reference inside rule values.
@@ -309,19 +332,31 @@ pub fn parse(css: &str) -> Result<Stylesheet, CssError> {
         }
     }
     if depth_check != 0 {
-        return Err(err("unclosed block or parenthesis".into(), tokens.last().map_or(1, |t| t.1)));
+        return Err(err(
+            "unclosed block or parenthesis".into(),
+            tokens.last().map_or(1, |t| t.1),
+        ));
     }
     while i < tokens.len() {
         let (tok, line, _) = &tokens[i];
         if let Token::AtKeyword(name) = tok {
-            let end = tokens[i..].iter().position(|(t, _, _)| matches!(t, Token::Semicolon | Token::LBrace)).map(|p| p + i).ok_or_else(|| err(format!("@{name} is not terminated"), *line))?;
+            let end = tokens[i..]
+                .iter()
+                .position(|(t, _, _)| matches!(t, Token::Semicolon | Token::LBrace))
+                .map(|p| p + i)
+                .ok_or_else(|| err(format!("@{name} is not terminated"), *line))?;
             if matches!(tokens[end].0, Token::LBrace) {
-                return Err(err(format!("block at-rule @{name} is not supported"), *line));
+                return Err(err(
+                    format!("block at-rule @{name} is not supported"),
+                    *line,
+                ));
             }
             let body = &tokens[i + 1..end];
             match name.as_str() {
                 "define-color" => {
-                    let Some((Token::Ident(n), _, _)) = body.first() else { return Err(err("@define-color needs a name".into(), *line)) };
+                    let Some((Token::Ident(n), _, _)) = body.first() else {
+                        return Err(err("@define-color needs a name".into(), *line));
+                    };
                     if body.len() < 2 {
                         return Err(err(format!("@define-color {n} has no value"), *line));
                     }
@@ -340,8 +375,13 @@ pub fn parse(css: &str) -> Result<Stylesheet, CssError> {
             i = end + 1;
             continue;
         }
-        let open = tokens[i..].iter().position(|(t, _, _)| matches!(t, Token::LBrace | Token::Semicolon | Token::RBrace)).map(|p| p + i);
-        let Some(open) = open else { return Err(err("selector without a block".into(), *line)) };
+        let open = tokens[i..]
+            .iter()
+            .position(|(t, _, _)| matches!(t, Token::LBrace | Token::Semicolon | Token::RBrace))
+            .map(|p| p + i);
+        let Some(open) = open else {
+            return Err(err("selector without a block".into(), *line));
+        };
         if !matches!(tokens[open].0, Token::LBrace) {
             return Err(err("expected `{` after selector".into(), tokens[open].1));
         }
@@ -350,9 +390,14 @@ pub fn parse(css: &str) -> Result<Stylesheet, CssError> {
         }
         let selector = render(&tokens[i..open]);
         let mut j = open + 1;
-        let mut rule = Rule { selector, declarations: Vec::new() };
+        let mut rule = Rule {
+            selector,
+            declarations: Vec::new(),
+        };
         loop {
-            let Some((t, l, _)) = tokens.get(j) else { return Err(err("unclosed block".into(), *line)) };
+            let Some((t, l, _)) = tokens.get(j) else {
+                return Err(err("unclosed block".into(), *line));
+            };
             match t {
                 Token::RBrace => {
                     j += 1;
@@ -371,7 +416,9 @@ pub fn parse(css: &str) -> Result<Stylesheet, CssError> {
                             Token::RParen => depth -= 1,
                             Token::Semicolon if depth == 0 => break,
                             Token::RBrace if depth == 0 => break,
-                            Token::LBrace => return Err(err("nested blocks are not supported".into(), *l)),
+                            Token::LBrace => {
+                                return Err(err("nested blocks are not supported".into(), *l))
+                            }
                             _ => {}
                         }
                         k += 1;
@@ -379,10 +426,16 @@ pub fn parse(css: &str) -> Result<Stylesheet, CssError> {
                     if k == j + 2 {
                         return Err(err(format!("declaration `{prop}` has no value"), *l));
                     }
-                    rule.declarations.push((prop.clone(), render(&tokens[j + 2..k])));
+                    rule.declarations
+                        .push((prop.clone(), render(&tokens[j + 2..k])));
                     j = k;
                 }
-                other => return Err(err(format!("unexpected token {other:?} in a declaration block"), *l)),
+                other => {
+                    return Err(err(
+                        format!("unexpected token {other:?} in a declaration block"),
+                        *l,
+                    ))
+                }
             }
         }
         sheet.rules.push(rule);
@@ -395,21 +448,34 @@ pub fn parse(css: &str) -> Result<Stylesheet, CssError> {
 pub fn parse_color(value: &str) -> Option<[u8; 4]> {
     let v = value.trim();
     if let Some(h) = v.strip_prefix('#') {
-        let h: Vec<u8> = h.chars().map(|c| c.to_digit(16).map(|d| d as u8)).collect::<Option<_>>()?;
+        let h: Vec<u8> = h
+            .chars()
+            .map(|c| c.to_digit(16).map(|d| d as u8))
+            .collect::<Option<_>>()?;
         return match h.len() {
             3 => Some([h[0] * 17, h[1] * 17, h[2] * 17, 255]),
             6 => Some([h[0] * 16 + h[1], h[2] * 16 + h[3], h[4] * 16 + h[5], 255]),
             _ => None,
         };
     }
-    let inner = v.strip_prefix("rgba(").or_else(|| v.strip_prefix("rgb("))?.strip_suffix(')')?;
+    let inner = v
+        .strip_prefix("rgba(")
+        .or_else(|| v.strip_prefix("rgb("))?
+        .strip_suffix(')')?;
     let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
     if parts.len() < 3 || parts.len() > 4 {
         return None;
     }
-    let ch = |s: &str| s.parse::<f64>().ok().filter(|v| (0.0..=255.0).contains(v)).map(|v| v.round() as u8);
+    let ch = |s: &str| {
+        s.parse::<f64>()
+            .ok()
+            .filter(|v| (0.0..=255.0).contains(v))
+            .map(|v| v.round() as u8)
+    };
     let a = match parts.get(3) {
-        Some(a) => (a.parse::<f64>().ok().filter(|v| (0.0..=1.0).contains(v))? * 255.0).round() as u8,
+        Some(a) => {
+            (a.parse::<f64>().ok().filter(|v| (0.0..=1.0).contains(v))? * 255.0).round() as u8
+        }
         None => 255,
     };
     Some([ch(parts[0])?, ch(parts[1])?, ch(parts[2])?, a])
@@ -446,7 +512,9 @@ mod tests {
         assert_eq!(s.defines["accent_color"], "#007aff");
         assert_eq!(s.defines["shade"], "rgba(0, 0, 0, 0.07)");
         assert_eq!(s.rules.len(), 2);
-        assert!(s.has_selector("button") && s.has_selector(".flat") && s.has_selector("entry:focus"));
+        assert!(
+            s.has_selector("button") && s.has_selector(".flat") && s.has_selector("entry:focus")
+        );
         assert_eq!(s.values("button", "min-height"), vec!["18px"]);
         assert_eq!(s.values("button", "padding"), vec!["0 8px"]);
         assert_eq!(s.referenced_colors(), vec!["accent_color", "accent_color"]);

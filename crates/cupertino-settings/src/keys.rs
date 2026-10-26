@@ -83,7 +83,11 @@ pub fn route(focus: Focus, code: u32, mods: Mods, character: Option<char>) -> Ac
         };
     }
     if code == code::TAB {
-        return if mods.shift { Action::FocusPrevious } else { Action::FocusNext };
+        return if mods.shift {
+            Action::FocusPrevious
+        } else {
+            Action::FocusNext
+        };
     }
     match focus {
         Focus::Search => match code {
@@ -114,7 +118,10 @@ pub fn route(focus: Focus, code: u32, mods: Mods, character: Option<char>) -> Ac
 /// The focus after Tab (`forward`) or Shift+Tab from `focus`.
 pub fn cycle(focus: Focus, forward: bool) -> Focus {
     let order = [Focus::Search, Focus::Sidebar, Focus::Pane];
-    let i = order.iter().position(|f| *f == focus).expect("every focus is in the order");
+    let i = order
+        .iter()
+        .position(|f| *f == focus)
+        .expect("every focus is in the order");
     order[if forward { (i + 1) % 3 } else { (i + 2) % 3 }]
 }
 
@@ -122,7 +129,12 @@ pub fn cycle(focus: Focus, forward: bool) -> Focus {
 mod tests {
     use super::*;
 
-    const SUPER: Mods = Mods { logo: true, shift: false, ctrl: false, alt: false };
+    const SUPER: Mods = Mods {
+        logo: true,
+        shift: false,
+        ctrl: false,
+        alt: false,
+    };
 
     #[test]
     fn the_navigation_chords_work_from_every_part() {
@@ -132,25 +144,68 @@ mod tests {
             assert_eq!(route(focus, 33, SUPER, Some('f')), Action::FocusSearch);
             assert_eq!(route(focus, 38, SUPER, Some('l')), Action::ShowAll);
         }
-        assert_eq!(route(Focus::Sidebar, 33, Mods::default(), Some('f')), Action::None, "F alone is no chord");
+        assert_eq!(
+            route(Focus::Sidebar, 33, Mods::default(), Some('f')),
+            Action::None,
+            "F alone is no chord"
+        );
     }
 
     #[test]
     fn typing_searches_only_while_the_field_has_the_focus() {
-        assert_eq!(route(Focus::Search, 30, Mods::default(), Some('a')), Action::Search(SearchKey::Type('a')));
-        assert_eq!(route(Focus::Search, code::ESCAPE, Mods::default(), None), Action::Search(SearchKey::Clear));
-        assert_eq!(route(Focus::Search, code::DOWN, Mods::default(), None), Action::Search(SearchKey::Down));
-        assert_eq!(route(Focus::Search, code::ENTER, Mods::default(), Some('\r')), Action::Search(SearchKey::Choose));
-        assert_eq!(route(Focus::Pane, 30, Mods::default(), Some('a')), Action::None, "typing in a pane does not search");
-        assert_eq!(route(Focus::Sidebar, code::DOWN, Mods::default(), None), Action::Next);
-        assert_eq!(route(Focus::Sidebar, code::HOME, Mods::default(), None), Action::First);
-        assert_eq!(route(Focus::Pane, code::ESCAPE, Mods::default(), None), Action::FocusSidebar);
+        assert_eq!(
+            route(Focus::Search, 30, Mods::default(), Some('a')),
+            Action::Search(SearchKey::Type('a'))
+        );
+        assert_eq!(
+            route(Focus::Search, code::ESCAPE, Mods::default(), None),
+            Action::Search(SearchKey::Clear)
+        );
+        assert_eq!(
+            route(Focus::Search, code::DOWN, Mods::default(), None),
+            Action::Search(SearchKey::Down)
+        );
+        assert_eq!(
+            route(Focus::Search, code::ENTER, Mods::default(), Some('\r')),
+            Action::Search(SearchKey::Choose)
+        );
+        assert_eq!(
+            route(Focus::Pane, 30, Mods::default(), Some('a')),
+            Action::None,
+            "typing in a pane does not search"
+        );
+        assert_eq!(
+            route(Focus::Sidebar, code::DOWN, Mods::default(), None),
+            Action::Next
+        );
+        assert_eq!(
+            route(Focus::Sidebar, code::HOME, Mods::default(), None),
+            Action::First
+        );
+        assert_eq!(
+            route(Focus::Pane, code::ESCAPE, Mods::default(), None),
+            Action::FocusSidebar
+        );
     }
 
     #[test]
     fn tab_cycles_search_sidebar_and_pane() {
-        assert_eq!(route(Focus::Sidebar, code::TAB, Mods::default(), Some('\t')), Action::FocusNext);
-        assert_eq!(route(Focus::Sidebar, code::TAB, Mods { shift: true, ..Mods::default() }, None), Action::FocusPrevious);
+        assert_eq!(
+            route(Focus::Sidebar, code::TAB, Mods::default(), Some('\t')),
+            Action::FocusNext
+        );
+        assert_eq!(
+            route(
+                Focus::Sidebar,
+                code::TAB,
+                Mods {
+                    shift: true,
+                    ..Mods::default()
+                },
+                None
+            ),
+            Action::FocusPrevious
+        );
         assert_eq!(cycle(Focus::Search, true), Focus::Sidebar);
         assert_eq!(cycle(Focus::Pane, true), Focus::Search);
         assert_eq!(cycle(Focus::Search, false), Focus::Pane);

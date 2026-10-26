@@ -9,8 +9,14 @@ use cupertino_geometry::{Point, Rect, Size};
 
 pub fn lerp_rect(a: Rect, b: Rect, t: f64) -> Rect {
     Rect::from_origin_size(
-        Point::new(a.origin.x + (b.origin.x - a.origin.x) * t, a.origin.y + (b.origin.y - a.origin.y) * t),
-        Size::new(a.size.width + (b.size.width - a.size.width) * t, a.size.height + (b.size.height - a.size.height) * t),
+        Point::new(
+            a.origin.x + (b.origin.x - a.origin.x) * t,
+            a.origin.y + (b.origin.y - a.origin.y) * t,
+        ),
+        Size::new(
+            a.size.width + (b.size.width - a.size.width) * t,
+            a.size.height + (b.size.height - a.size.height) * t,
+        ),
     )
 }
 
@@ -29,7 +35,10 @@ mod tests {
 
     #[test]
     fn endpoints_and_monotonic_progress() {
-        let (w, s) = (Rect::new(100.0, 50.0, 800.0, 600.0), Rect::new(900.0, 700.0, 64.0, 64.0));
+        let (w, s) = (
+            Rect::new(100.0, 50.0, 800.0, 600.0),
+            Rect::new(900.0, 700.0, 64.0, 64.0),
+        );
         assert_eq!(scale_rect(w, s, 0.0, Ease::Cosine), w);
         assert_eq!(scale_rect(w, s, 1.0, Ease::Cosine), s);
         let mut prev = f64::INFINITY;

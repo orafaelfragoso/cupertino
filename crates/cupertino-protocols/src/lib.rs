@@ -5,7 +5,16 @@
 
 #[cfg(feature = "client")]
 pub mod client {
-    #![allow(dead_code, non_camel_case_types, unused_unsafe, unused_variables, non_upper_case_globals, non_snake_case, unused_imports, missing_docs)]
+    #![allow(
+        dead_code,
+        non_camel_case_types,
+        unused_unsafe,
+        unused_variables,
+        non_upper_case_globals,
+        non_snake_case,
+        unused_imports,
+        missing_docs
+    )]
     use wayland_client;
     use wayland_client::protocol::*;
 
@@ -49,7 +58,16 @@ pub mod client {
 
 #[cfg(feature = "server")]
 pub mod server {
-    #![allow(dead_code, non_camel_case_types, unused_unsafe, unused_variables, non_upper_case_globals, non_snake_case, unused_imports, missing_docs)]
+    #![allow(
+        dead_code,
+        non_camel_case_types,
+        unused_unsafe,
+        unused_variables,
+        non_upper_case_globals,
+        non_snake_case,
+        unused_imports,
+        missing_docs
+    )]
     use wayland_server;
     use wayland_server::protocol::*;
 

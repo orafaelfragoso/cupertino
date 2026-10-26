@@ -35,14 +35,40 @@ impl Link {
     pub fn open(adapter: Address, device: DeviceId) -> Result<Self> {
         let syscall = |call| move |source| Error::Syscall { call, source };
         // Protocol 0 is BTPROTO_L2CAP.
-        let fd = socket_with(AddressFamily::BLUETOOTH, SocketType::SEQPACKET, SocketFlags::CLOEXEC | SocketFlags::NONBLOCK, None).map_err(syscall("socket(BTPROTO_L2CAP)"))?;
+        let fd = socket_with(
+            AddressFamily::BLUETOOTH,
+            SocketType::SEQPACKET,
+            SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+            None,
+        )
+        .map_err(syscall("socket(BTPROTO_L2CAP)"))?;
         // Binding the source pins the link to this controller on a host with several.
-        let source = SocketAddrL2 { psm: 0, address: adapter, cid: 0, kind: device.kind };
+        let source = SocketAddrL2 {
+            psm: 0,
+            address: adapter,
+            cid: 0,
+            kind: device.kind,
+        };
         bind(&fd, &source).map_err(syscall("bind(l2cap)"))?;
-        let (psm, cid) = if device.kind.is_le() { (0, CID_ATT) } else { (PSM_SDP, 0) };
-        match connect(&fd, &SocketAddrL2 { psm, address: device.address, cid, kind: device.kind }) {
+        let (psm, cid) = if device.kind.is_le() {
+            (0, CID_ATT)
+        } else {
+            (PSM_SDP, 0)
+        };
+        match connect(
+            &fd,
+            &SocketAddrL2 {
+                psm,
+                address: device.address,
+                cid,
+                kind: device.kind,
+            },
+        ) {
             Ok(()) | Err(Errno::INPROGRESS) => Ok(Self { fd }),
-            Err(source) => Err(Error::Syscall { call: "connect(l2cap)", source }),
+            Err(source) => Err(Error::Syscall {
+                call: "connect(l2cap)",
+                source,
+            }),
         }
     }
 }

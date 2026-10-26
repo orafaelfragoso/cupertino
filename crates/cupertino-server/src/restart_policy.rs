@@ -51,28 +51,52 @@ mod tests {
     #[test]
     fn successful_exit_is_never_restarted() {
         let t0 = Instant::now();
-        assert_eq!(decide(ExitStatus::from_raw(SUCCESS), t0, at(5_000, t0)), Decision::Stop);
-        assert_eq!(decide(ExitStatus::from_raw(SUCCESS), t0, at(10, t0)), Decision::Stop);
+        assert_eq!(
+            decide(ExitStatus::from_raw(SUCCESS), t0, at(5_000, t0)),
+            Decision::Stop
+        );
+        assert_eq!(
+            decide(ExitStatus::from_raw(SUCCESS), t0, at(10, t0)),
+            Decision::Stop
+        );
     }
 
     #[test]
     fn failure_after_the_throttle_restarts_now() {
         let t0 = Instant::now();
-        assert_eq!(decide(ExitStatus::from_raw(EXIT_CODE_1), t0, at(1_000, t0)), Decision::RestartNow);
-        assert_eq!(decide(ExitStatus::from_raw(EXIT_CODE_1), t0, at(60_000, t0)), Decision::RestartNow);
+        assert_eq!(
+            decide(ExitStatus::from_raw(EXIT_CODE_1), t0, at(1_000, t0)),
+            Decision::RestartNow
+        );
+        assert_eq!(
+            decide(ExitStatus::from_raw(EXIT_CODE_1), t0, at(60_000, t0)),
+            Decision::RestartNow
+        );
     }
 
     #[test]
     fn failure_inside_the_throttle_waits_until_a_second_after_the_start() {
         let t0 = Instant::now();
-        assert_eq!(decide(ExitStatus::from_raw(EXIT_CODE_1), t0, at(0, t0)), Decision::RestartAt(at(1_000, t0)));
-        assert_eq!(decide(ExitStatus::from_raw(EXIT_CODE_1), t0, at(999, t0)), Decision::RestartAt(at(1_000, t0)));
+        assert_eq!(
+            decide(ExitStatus::from_raw(EXIT_CODE_1), t0, at(0, t0)),
+            Decision::RestartAt(at(1_000, t0))
+        );
+        assert_eq!(
+            decide(ExitStatus::from_raw(EXIT_CODE_1), t0, at(999, t0)),
+            Decision::RestartAt(at(1_000, t0))
+        );
     }
 
     #[test]
     fn death_by_signal_is_a_failure() {
         let t0 = Instant::now();
-        assert_eq!(decide(ExitStatus::from_raw(KILLED_BY_SIGSEGV), t0, at(2_000, t0)), Decision::RestartNow);
-        assert_eq!(decide(ExitStatus::from_raw(KILLED_BY_SIGSEGV), t0, at(100, t0)), Decision::RestartAt(at(1_000, t0)));
+        assert_eq!(
+            decide(ExitStatus::from_raw(KILLED_BY_SIGSEGV), t0, at(2_000, t0)),
+            Decision::RestartNow
+        );
+        assert_eq!(
+            decide(ExitStatus::from_raw(KILLED_BY_SIGSEGV), t0, at(100, t0)),
+            Decision::RestartAt(at(1_000, t0))
+        );
     }
 }

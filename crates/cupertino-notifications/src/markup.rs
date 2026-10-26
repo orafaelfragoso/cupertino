@@ -15,7 +15,10 @@ pub struct Span {
 
 impl Span {
     fn same_style(&self, o: &Span) -> bool {
-        self.bold == o.bold && self.italic == o.italic && self.underline == o.underline && self.link == o.link
+        self.bold == o.bold
+            && self.italic == o.italic
+            && self.underline == o.underline
+            && self.link == o.link
     }
 }
 
@@ -58,7 +61,9 @@ pub fn decode_entities(s: &str) -> String {
 }
 
 pub fn escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 struct Tag<'a> {
@@ -78,7 +83,11 @@ fn parse_tag(inner: &str) -> Option<Tag<'_>> {
     if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric()) {
         return None;
     }
-    Some(Tag { name: name.to_ascii_lowercase(), closing, attrs: &body[name_end..] })
+    Some(Tag {
+        name: name.to_ascii_lowercase(),
+        closing,
+        attrs: &body[name_end..],
+    })
 }
 
 fn attribute(attrs: &str, key: &str) -> Option<String> {
@@ -108,11 +117,22 @@ pub fn parse(body: &str) -> Vec<Span> {
     let mut spans: Vec<Span> = Vec::new();
     let (mut bold, mut italic, mut underline) = (0u32, 0u32, 0u32);
     let mut links: Vec<String> = Vec::new();
-    let push = |text: String, bold: u32, italic: u32, underline: u32, link: Option<&String>, spans: &mut Vec<Span>| {
+    let push = |text: String,
+                bold: u32,
+                italic: u32,
+                underline: u32,
+                link: Option<&String>,
+                spans: &mut Vec<Span>| {
         if text.is_empty() {
             return;
         }
-        let s = Span { text, bold: bold > 0, italic: italic > 0, underline: underline > 0 || link.is_some(), link: link.cloned() };
+        let s = Span {
+            text,
+            bold: bold > 0,
+            italic: italic > 0,
+            underline: underline > 0 || link.is_some(),
+            link: link.cloned(),
+        };
         match spans.last_mut() {
             Some(last) if last.same_style(&s) => last.text.push_str(&s.text),
             _ => spans.push(s),
@@ -121,14 +141,37 @@ pub fn parse(body: &str) -> Vec<Span> {
     let mut rest = body;
     while !rest.is_empty() {
         let Some(lt) = rest.find('<') else {
-            push(decode_entities(rest), bold, italic, underline, links.last(), &mut spans);
+            push(
+                decode_entities(rest),
+                bold,
+                italic,
+                underline,
+                links.last(),
+                &mut spans,
+            );
             break;
         };
-        push(decode_entities(&rest[..lt]), bold, italic, underline, links.last(), &mut spans);
+        push(
+            decode_entities(&rest[..lt]),
+            bold,
+            italic,
+            underline,
+            links.last(),
+            &mut spans,
+        );
         rest = &rest[lt..];
-        let tag = rest.find('>').and_then(|gt| parse_tag(&rest[1..gt]).map(|t| (t, gt)));
+        let tag = rest
+            .find('>')
+            .and_then(|gt| parse_tag(&rest[1..gt]).map(|t| (t, gt)));
         let Some((tag, gt)) = tag else {
-            push("<".into(), bold, italic, underline, links.last(), &mut spans);
+            push(
+                "<".into(),
+                bold,
+                italic,
+                underline,
+                links.last(),
+                &mut spans,
+            );
             rest = &rest[1..];
             continue;
         };
@@ -147,7 +190,14 @@ pub fn parse(body: &str) -> Vec<Span> {
                 let alt = attribute(tag.attrs, "alt").unwrap_or_default();
                 push(alt, bold, italic, underline, links.last(), &mut spans);
             }
-            ("br", false) => push("\n".into(), bold, italic, underline, links.last(), &mut spans),
+            ("br", false) => push(
+                "\n".into(),
+                bold,
+                italic,
+                underline,
+                links.last(),
+                &mut spans,
+            ),
             _ => {}
         }
         rest = &rest[gt + 1..];
@@ -164,7 +214,10 @@ mod tests {
     use super::*;
 
     fn plain(s: &str) -> Span {
-        Span { text: s.into(), ..Default::default() }
+        Span {
+            text: s.into(),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -193,13 +246,22 @@ mod tests {
     #[test]
     fn images_become_alt_text_and_unknown_tags_vanish() {
         assert_eq!(strip("x<img src=\"a.png\" alt=\"[pic]\"/>y"), "x[pic]y");
-        assert_eq!(strip("<span color=\"red\">hi</span> <blink>there</blink>"), "hi there");
+        assert_eq!(
+            strip("<span color=\"red\">hi</span> <blink>there</blink>"),
+            "hi there"
+        );
     }
 
     #[test]
     fn entities() {
-        assert_eq!(decode_entities("&lt;b&gt; &amp; &#65;&#x42; &quot;q&quot; &apos;"), "<b> & AB \"q\" '");
-        assert_eq!(decode_entities("fish & chips &unknown; &"), "fish & chips &unknown; &");
+        assert_eq!(
+            decode_entities("&lt;b&gt; &amp; &#65;&#x42; &quot;q&quot; &apos;"),
+            "<b> & AB \"q\" '"
+        );
+        assert_eq!(
+            decode_entities("fish & chips &unknown; &"),
+            "fish & chips &unknown; &"
+        );
         assert_eq!(strip("1 &lt; 2"), "1 < 2");
         assert_eq!(escape("<a & b>"), "&lt;a &amp; b&gt;");
     }

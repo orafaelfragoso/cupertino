@@ -75,7 +75,14 @@ impl CurveParams {
     }
 
     fn has_gain(&self) -> bool {
-        [self.gain_linear, self.gain_parabolic, self.gain_cubic, self.gain_quartic].iter().any(|g| *g != 0.0)
+        [
+            self.gain_linear,
+            self.gain_parabolic,
+            self.gain_cubic,
+            self.gain_quartic,
+        ]
+        .iter()
+        .any(|g| *g != 0.0)
     }
 
     fn lerp(&self, other: &Self, t: f64) -> Self {
@@ -92,7 +99,10 @@ impl CurveParams {
     }
 
     fn poly(&self, v: f64) -> f64 {
-        self.gain_linear * v + (self.gain_parabolic * v).powi(2) + (self.gain_cubic * v).powi(3) + (self.gain_quartic * v).powi(4)
+        self.gain_linear * v
+            + (self.gain_parabolic * v).powi(2)
+            + (self.gain_cubic * v).powi(3)
+            + (self.gain_quartic * v).powi(4)
     }
 
     fn slope(&self, v: f64) -> f64 {
@@ -157,7 +167,8 @@ pub fn double_click_space(interval_s: f64) -> f64 {
 }
 
 /// Tracking-speed slider stops; each selects one curve of a family.
-pub const TRACKING_SPEED_STOPS: [f64; 10] = [0.0, 0.125, 0.5, 0.6875, 0.875, 1.0, 1.5, 2.0, 2.5, 3.0];
+pub const TRACKING_SPEED_STOPS: [f64; 10] =
+    [0.0, 0.125, 0.5, 0.6875, 0.875, 1.0, 1.5, 2.0, 2.5, 3.0];
 /// Report rate the built-in trackpads declare, in Hz.
 pub const TRACKPAD_REPORT_RATE_HZ: u32 = 120;
 /// Gain used by linear scaling when the setting is 0.
@@ -169,7 +180,12 @@ enum Tail {
     /// Polynomial only.
     None,
     /// Linear tangent `m1·v + b1` from `t1`, optionally followed by `√(m2·v + b2)` from `t2`.
-    Tangent { t1: f64, m1: f64, b1: f64, root: Option<(f64, f64, f64)> },
+    Tangent {
+        t1: f64,
+        m1: f64,
+        b1: f64,
+        root: Option<(f64, f64, f64)>,
+    },
     /// No linear tangent: the square root starts directly at `t` (the design's handling when
     /// only the second tangent speed is set; slope `f'(t)`, not `2·f(t)·f'(t)).
     RootOnly { t: f64, m: f64, b: f64 },
@@ -193,7 +209,10 @@ impl ParametricCurve {
         let valid: Vec<&CurveParams> = curves.iter().filter(|c| c.has_gain()).collect();
         let lo = valid.iter().rposition(|c| c.index <= setting).unwrap_or(0);
         let params = match valid.get(lo + 1) {
-            Some(hi) if setting > valid[lo].index => valid[lo].lerp(hi, (setting - valid[lo].index) / (hi.index - valid[lo].index)),
+            Some(hi) if setting > valid[lo].index => valid[lo].lerp(
+                hi,
+                (setting - valid[lo].index) / (hi.index - valid[lo].index),
+            ),
             _ => **valid.get(lo)?,
         };
         let (t1, t2) = (params.tangent_linear, params.tangent_root);
@@ -208,7 +227,11 @@ impl ParametricCurve {
             Tail::Tangent { t1, m1, b1, root }
         } else if t2 != 0.0 {
             let m = params.slope(t2);
-            Tail::RootOnly { t: t2, m, b: params.poly(t2).powi(2) - m * t2 }
+            Tail::RootOnly {
+                t: t2,
+                m,
+                b: params.poly(t2).powi(2) - m * t2,
+            }
         } else {
             Tail::None
         };
@@ -279,14 +302,27 @@ impl PointerAccel {
     /// mapping for Linux: libinput's unaccelerated deltas are device counts normalised to
     /// 1000 dpi, which equal raw counts for a mouse without a hardware-database entry; feeding them
     /// with the 400 dpi fallback reproduces the design's treatment of a generic mouse.
-    pub fn new(curves: &[CurveParams], setting: f64, resolution_dpi: f64, report_rate_hz: u32) -> Self {
-        Self::with_curve(ParametricCurve::new(curves, setting).map(AccelCurve::Parametric), resolution_dpi, report_rate_hz)
+    pub fn new(
+        curves: &[CurveParams],
+        setting: f64,
+        resolution_dpi: f64,
+        report_rate_hz: u32,
+    ) -> Self {
+        Self::with_curve(
+            ParametricCurve::new(curves, setting).map(AccelCurve::Parametric),
+            resolution_dpi,
+            report_rate_hz,
+        )
     }
 
     /// Like [`new`](Self::new) with an already selected curve of either algorithm; `None`
     /// passes counts through unchanged. A generic mouse uses the default table: `TableCurve::new(&AccelTable::default_table, setting).map(AccelCurve::Table).
     pub fn with_curve(curve: Option<AccelCurve>, resolution_dpi: f64, report_rate_hz: u32) -> Self {
-        Self::with_mode(curve.map_or(Mode::Off, Mode::Curve), resolution_dpi, report_rate_hz)
+        Self::with_mode(
+            curve.map_or(Mode::Off, Mode::Curve),
+            resolution_dpi,
+            report_rate_hz,
+        )
     }
 
     /// Linear scaling by `setting` (the design's "pointer acceleration" off): no curve, no
@@ -303,7 +339,11 @@ impl PointerAccel {
     fn with_mode(mode: Mode, resolution_dpi: f64, report_rate_hz: u32) -> Self {
         Self {
             mode,
-            resolution_dpi: if resolution_dpi > 0.0 { resolution_dpi } else { DEFAULT_RESOLUTION_DPI },
+            resolution_dpi: if resolution_dpi > 0.0 {
+                resolution_dpi
+            } else {
+                DEFAULT_RESOLUTION_DPI
+            },
             report_period_ms: (report_rate_hz != 0).then(|| 1000.0 / f64::from(report_rate_hz)),
         }
     }
@@ -332,14 +372,20 @@ mod tests {
     use crate::table::AccelTable;
 
     fn gain(curves: &[CurveParams], setting: f64, counts: f64) -> f64 {
-        PointerAccel::new(curves, setting, 400.0, 0).accelerate(counts, 0.0, 0.0).0 / counts
+        PointerAccel::new(curves, setting, 400.0, 0)
+            .accelerate(counts, 0.0, 0.0)
+            .0
+            / counts
     }
 
     #[test]
     fn setting_zero_is_one_to_one_at_96_ppi() {
         // 400 counts = one inch → 96 px while the curve is linear (below 8 in/s = 47.8 counts).
         for counts in [1.0, 12.0, 30.0, 47.0] {
-            assert!((gain(&MOUSE_CURVES, 0.0, counts) - 0.24).abs() < 1e-12, "{counts}");
+            assert!(
+                (gain(&MOUSE_CURVES, 0.0, counts) - 0.24).abs() < 1e-12,
+                "{counts}"
+            );
         }
     }
 
@@ -347,13 +393,22 @@ mod tests {
     fn negative_setting_passes_counts_through() {
         let a = PointerAccel::new(&MOUSE_CURVES, -1.0, 400.0, 0);
         assert_eq!(a.accelerate(7.0, -3.0, 8.0), (7.0, -3.0));
-        assert_eq!(PointerAccel::linear(-1.0).accelerate(7.0, -3.0, 8.0), (7.0, -3.0));
+        assert_eq!(
+            PointerAccel::linear(-1.0).accelerate(7.0, -3.0, 8.0),
+            (7.0, -3.0)
+        );
     }
 
     #[test]
     fn linear_scaling_ignores_speed() {
-        assert_eq!(PointerAccel::linear(2.0).accelerate(3.0, 50.0, 1.0), (6.0, 100.0));
-        assert_eq!(PointerAccel::linear(0.0).accelerate(10.0, 0.0, 1.0), (1.0, 0.0));
+        assert_eq!(
+            PointerAccel::linear(2.0).accelerate(3.0, 50.0, 1.0),
+            (6.0, 100.0)
+        );
+        assert_eq!(
+            PointerAccel::linear(0.0).accelerate(10.0, 0.0, 1.0),
+            (1.0, 0.0)
+        );
     }
 
     #[test]
@@ -371,7 +426,10 @@ mod tests {
         ];
         for (curves, setting, counts, expected) in cases {
             let g = gain(curves, setting, counts);
-            assert!((g - expected).abs() < 1e-9, "setting {setting} counts {counts}: {g}");
+            assert!(
+                (g - expected).abs() < 1e-9,
+                "setting {setting} counts {counts}: {g}"
+            );
         }
     }
 
@@ -388,22 +446,39 @@ mod tests {
     #[test]
     fn stops_select_curves_and_settings_between_stops_interpolate() {
         for (stop, curve) in TRACKING_SPEED_STOPS.iter().zip(MOUSE_CURVES) {
-            assert_eq!(ParametricCurve::new(&MOUSE_CURVES, *stop).unwrap().params, curve);
+            assert_eq!(
+                ParametricCurve::new(&MOUSE_CURVES, *stop).unwrap().params,
+                curve
+            );
         }
         let c = ParametricCurve::new(&MOUSE_CURVES, 0.75).unwrap().params;
         let (a, b) = (MOUSE_CURVES[3], MOUSE_CURVES[4]);
         let t = (0.75 - 0.6875) / (0.875 - 0.6875);
-        assert!((c.gain_parabolic - (a.gain_parabolic + (b.gain_parabolic - a.gain_parabolic) * t)).abs() < 1e-12);
-        assert_eq!(ParametricCurve::new(&MOUSE_CURVES, 9.0).unwrap().params, MOUSE_CURVES[9]);
+        assert!(
+            (c.gain_parabolic - (a.gain_parabolic + (b.gain_parabolic - a.gain_parabolic) * t))
+                .abs()
+                < 1e-12
+        );
+        assert_eq!(
+            ParametricCurve::new(&MOUSE_CURVES, 9.0).unwrap().params,
+            MOUSE_CURVES[9]
+        );
     }
 
     #[test]
     fn report_rate_slows_late_events() {
         let a = PointerAccel::new(&MOUSE_CURVES, 1.0, 400.0, 125);
-        assert_eq!(a.accelerate(40.0, 0.0, 8.0).0, a.accelerate(40.0, 0.0, 0.0).0, "on time = no time factor");
+        assert_eq!(
+            a.accelerate(40.0, 0.0, 8.0).0,
+            a.accelerate(40.0, 0.0, 0.0).0,
+            "on time = no time factor"
+        );
         // Four periods late: the curve sees the speed of 10 counts, its ratio scales all 40.
         let late = a.accelerate(40.0, 0.0, 32.0).0;
-        assert!((late - 40.0 * gain(&MOUSE_CURVES, 1.0, 10.0)).abs() < 1e-12, "{late}");
+        assert!(
+            (late - 40.0 * gain(&MOUSE_CURVES, 1.0, 10.0)).abs() < 1e-12,
+            "{late}"
+        );
     }
 
     #[test]
@@ -421,8 +496,14 @@ mod tests {
         let table = AccelTable::default_table();
         for (setting, counts, expected) in cases {
             let curve = TableCurve::new(&table, setting).map(AccelCurve::Table);
-            let g = PointerAccel::with_curve(curve, 400.0, 0).accelerate(counts, 0.0, 0.0).0 / counts;
-            assert!((g - expected).abs() < 1e-9, "setting {setting} counts {counts}: {g}");
+            let g = PointerAccel::with_curve(curve, 400.0, 0)
+                .accelerate(counts, 0.0, 0.0)
+                .0
+                / counts;
+            assert!(
+                (g - expected).abs() < 1e-9,
+                "setting {setting} counts {counts}: {g}"
+            );
         }
     }
 
@@ -433,6 +514,13 @@ mod tests {
 
     #[test]
     fn scroll_point_delta_truncates_ten_per_line() {
-        assert_eq!([scroll_point_delta(1.0), scroll_point_delta(0.25), scroll_point_delta(-1.37)], [10, 2, -13]);
+        assert_eq!(
+            [
+                scroll_point_delta(1.0),
+                scroll_point_delta(0.25),
+                scroll_point_delta(-1.37)
+            ],
+            [10, 2, -13]
+        );
     }
 }

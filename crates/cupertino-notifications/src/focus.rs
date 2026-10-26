@@ -40,7 +40,9 @@ impl Lifetime {
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
-        [Self::OneHour, Self::ThisEvening, Self::TomorrowMorning].into_iter().find(|l| l.id() == id)
+        [Self::OneHour, Self::ThisEvening, Self::TomorrowMorning]
+            .into_iter()
+            .find(|l| l.id() == id)
     }
 }
 
@@ -55,7 +57,11 @@ pub trait LocalCalendar {
 /// The rows offered at local hour `hour`: "For 1 hour" always, then "Until this evening" from 04:00 to 17:59 and
 /// "Until tomorrow morning" otherwise.
 pub fn offered(hour: u8) -> [Lifetime; 2] {
-    let second = if (4..=17).contains(&hour) { Lifetime::ThisEvening } else { Lifetime::TomorrowMorning };
+    let second = if (4..=17).contains(&hour) {
+        Lifetime::ThisEvening
+    } else {
+        Lifetime::TomorrowMorning
+    };
     [Lifetime::OneHour, second]
 }
 
@@ -106,7 +112,10 @@ impl LocalCalendar for SystemCalendar {
         tm.tm_isdst = -1;
         // Safety: the pointer is valid for the duration of the call.
         let t = unsafe { libc::mktime(&mut tm) };
-        assert!(t != -1, "mktime cannot represent {hour}:00 {days_ahead} days after {unix}");
+        assert!(
+            t != -1,
+            "mktime cannot represent {hour}:00 {days_ahead} days after {unix}"
+        );
         t as i64
     }
 }
@@ -160,11 +169,24 @@ mod tests {
 
     #[test]
     fn evening_and_morning_end_at_seven_in_the_evening_or_the_next_morning() {
-        assert_eq!(end(Lifetime::ThisEvening, local(10, 15), &ZONE), local(19, 0));
-        assert_eq!(end(Lifetime::TomorrowMorning, local(2, 0), &ZONE), local(7, 0), "before four the morning is today's");
-        assert_eq!(end(Lifetime::TomorrowMorning, local(18, 0), &ZONE), local(24 + 7, 0));
+        assert_eq!(
+            end(Lifetime::ThisEvening, local(10, 15), &ZONE),
+            local(19, 0)
+        );
+        assert_eq!(
+            end(Lifetime::TomorrowMorning, local(2, 0), &ZONE),
+            local(7, 0),
+            "before four the morning is today's"
+        );
+        assert_eq!(
+            end(Lifetime::TomorrowMorning, local(18, 0), &ZONE),
+            local(24 + 7, 0)
+        );
         // the same rule serves both titles, so a stale evening row picked after 18:00 still ends in the future
-        assert_eq!(end(Lifetime::ThisEvening, local(20, 0), &ZONE), local(24 + 7, 0));
+        assert_eq!(
+            end(Lifetime::ThisEvening, local(20, 0), &ZONE),
+            local(24 + 7, 0)
+        );
     }
 
     #[test]

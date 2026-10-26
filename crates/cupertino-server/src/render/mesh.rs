@@ -96,8 +96,10 @@ impl MeshGl {
     pub fn new(renderer: &mut GlesRenderer) -> Result<SharedMesh, String> {
         let prog = renderer
             .with_context(|gl| unsafe {
-                let v = compile(gl, ffi::VERTEX_SHADER, VERT).map_err(|e| format!("mesh vertex: {e}"))?;
-                let f = compile(gl, ffi::FRAGMENT_SHADER, FRAG).map_err(|e| format!("mesh fragment: {e}"))?;
+                let v = compile(gl, ffi::VERTEX_SHADER, VERT)
+                    .map_err(|e| format!("mesh vertex: {e}"))?;
+                let f = compile(gl, ffi::FRAGMENT_SHADER, FRAG)
+                    .map_err(|e| format!("mesh fragment: {e}"))?;
                 let p = gl.CreateProgram();
                 gl.AttachShader(p, v);
                 gl.AttachShader(p, f);
@@ -145,14 +147,25 @@ pub struct MeshElement {
 
 impl std::fmt::Debug for MeshElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MeshElement").field("bounds", &self.bounds).field("triangles", &(self.triangles.len() / 3)).finish()
+        f.debug_struct("MeshElement")
+            .field("bounds", &self.bounds)
+            .field("triangles", &(self.triangles.len() / 3))
+            .finish()
     }
 }
 
 impl MeshElement {
     /// `texture_uv` maps mesh texture coordinates (0..1 over the captured area, top-left origin)
     /// to the texture; `scale` converts points to pixels.
-    pub fn new(id: Id, commit: CommitCounter, texture: GlesTexture, shared: SharedMesh, mesh: &Mesh, scale: f64, alpha: f32) -> Self {
+    pub fn new(
+        id: Id,
+        commit: CommitCounter,
+        texture: GlesTexture,
+        shared: SharedMesh,
+        mesh: &Mesh,
+        scale: f64,
+        alpha: f32,
+    ) -> Self {
         let s = scale as f32;
         let mut triangles = Vec::with_capacity(mesh.cell_count() * 6);
         let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
@@ -164,16 +177,35 @@ impl MeshElement {
         }
         for i in mesh.indices() {
             let v = mesh.vertices[i as usize];
-            let tv = if CAPTURE_V_FLIPPED { 1.0 - v.uv[1] } else { v.uv[1] };
+            let tv = if CAPTURE_V_FLIPPED {
+                1.0 - v.uv[1]
+            } else {
+                v.uv[1]
+            };
             triangles.push([v.position[0] * s, v.position[1] * s, v.uv[0], tv]);
         }
         let bounds = if mesh.vertices.is_empty() {
             Rectangle::default()
         } else {
             let (l, t) = (x0.floor() as i32 - 1, y0.floor() as i32 - 1);
-            Rectangle::new((l, t).into(), ((x1.ceil() as i32 + 1 - l).max(0), (y1.ceil() as i32 + 1 - t).max(0)).into())
+            Rectangle::new(
+                (l, t).into(),
+                (
+                    (x1.ceil() as i32 + 1 - l).max(0),
+                    (y1.ceil() as i32 + 1 - t).max(0),
+                )
+                    .into(),
+            )
         };
-        Self { id, commit, texture, shared, triangles, bounds, alpha }
+        Self {
+            id,
+            commit,
+            texture,
+            shared,
+            triangles,
+            bounds,
+            alpha,
+        }
     }
 
     pub fn triangle_count(&self) -> usize {
@@ -228,7 +260,10 @@ impl RenderElement<GlesRenderer> for MeshElement {
             return Ok(());
         }
         let proj = *frame.projection();
-        let abs: Vec<Rectangle<i32, Physical>> = damage.iter().map(|d| Rectangle::new(d.loc + dst.loc, d.size)).collect();
+        let abs: Vec<Rectangle<i32, Physical>> = damage
+            .iter()
+            .map(|d| Rectangle::new(d.loc + dst.loc, d.size))
+            .collect();
         let shared = self.shared.clone();
         let tex = self.texture.tex_id();
         let alpha = self.alpha;
@@ -256,10 +291,26 @@ impl RenderElement<GlesRenderer> for MeshElement {
             gl.Uniform1i(p.tex, 0);
             gl.Uniform1f(p.alpha, alpha);
             gl.BindTexture(ffi::TEXTURE_2D, tex);
-            gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MIN_FILTER, ffi::LINEAR as GLint);
-            gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MAG_FILTER, ffi::LINEAR as GLint);
-            gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_WRAP_S, ffi::CLAMP_TO_EDGE as GLint);
-            gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_WRAP_T, ffi::CLAMP_TO_EDGE as GLint);
+            gl.TexParameteri(
+                ffi::TEXTURE_2D,
+                ffi::TEXTURE_MIN_FILTER,
+                ffi::LINEAR as GLint,
+            );
+            gl.TexParameteri(
+                ffi::TEXTURE_2D,
+                ffi::TEXTURE_MAG_FILTER,
+                ffi::LINEAR as GLint,
+            );
+            gl.TexParameteri(
+                ffi::TEXTURE_2D,
+                ffi::TEXTURE_WRAP_S,
+                ffi::CLAMP_TO_EDGE as GLint,
+            );
+            gl.TexParameteri(
+                ffi::TEXTURE_2D,
+                ffi::TEXTURE_WRAP_T,
+                ffi::CLAMP_TO_EDGE as GLint,
+            );
             gl.BindBuffer(ffi::ARRAY_BUFFER, 0);
             let stride = (4 * std::mem::size_of::<f32>()) as i32;
             let divisor = |gl: &ffi::Gles2, index: GLuint| {
@@ -273,21 +324,47 @@ impl RenderElement<GlesRenderer> for MeshElement {
             gl.VertexAttribDivisor(p.uv, 0);
             gl.EnableVertexAttribArray(p.pos);
             gl.EnableVertexAttribArray(p.uv);
-            gl.VertexAttribPointer(p.pos, 2, ffi::FLOAT, ffi::FALSE, stride, tris.as_ptr() as *const _);
-            gl.VertexAttribPointer(p.uv, 2, ffi::FLOAT, ffi::FALSE, stride, (tris.as_ptr() as *const f32).add(2) as *const _);
+            gl.VertexAttribPointer(
+                p.pos,
+                2,
+                ffi::FLOAT,
+                ffi::FALSE,
+                stride,
+                tris.as_ptr() as *const _,
+            );
+            gl.VertexAttribPointer(
+                p.uv,
+                2,
+                ffi::FLOAT,
+                ffi::FALSE,
+                stride,
+                (tris.as_ptr() as *const f32).add(2) as *const _,
+            );
             gl.Enable(ffi::BLEND);
             gl.BlendFunc(ffi::ONE, ffi::ONE_MINUS_SRC_ALPHA);
             gl.Enable(ffi::SCISSOR_TEST);
             for d in &abs {
                 let corners = [
                     map_point(&proj, d.loc.x as f32, d.loc.y as f32),
-                    map_point(&proj, (d.loc.x + d.size.w) as f32, (d.loc.y + d.size.h) as f32),
+                    map_point(
+                        &proj,
+                        (d.loc.x + d.size.w) as f32,
+                        (d.loc.y + d.size.h) as f32,
+                    ),
                 ];
-                let to_win = |ndc: f32, origin: i32, size: i32| (ndc * 0.5 + 0.5) * size as f32 + origin as f32;
+                let to_win = |ndc: f32, origin: i32, size: i32| {
+                    (ndc * 0.5 + 0.5) * size as f32 + origin as f32
+                };
                 let xs = corners.map(|c| to_win(c.0, viewport[0], viewport[2]));
                 let ys = corners.map(|c| to_win(c.1, viewport[1], viewport[3]));
-                let (sx, sy) = (xs[0].min(xs[1]).floor() as i32, ys[0].min(ys[1]).floor() as i32);
-                let (sw, sh) = (xs[0].max(xs[1]).ceil() as i32 - sx, ys[0].max(ys[1]).ceil() as i32 - sy);
+                let (sx, sy) = (
+                    xs[0].min(xs[1]).floor() as i32,
+                    ys[0].min(ys[1]).floor() as i32,
+                );
+                let (sw, sh) = (
+                    xs[0].max(xs[1]).ceil() as i32 - sx,
+                    ys[0].max(ys[1]).ceil() as i32 - sy,
+                );
                 if sw <= 0 || sh <= 0 {
                     continue;
                 }
@@ -317,14 +394,29 @@ impl RenderElement<GlesRenderer> for MeshElement {
 
 /// Render `elements` (front to back, output-local coordinates) into a new texture of `size`
 /// pixels, transparent where nothing is drawn.
-pub fn capture(renderer: &mut GlesRenderer, elements: &[CupertinoElement], size: Size<i32, Physical>, scale: f64) -> Result<GlesTexture> {
+pub fn capture(
+    renderer: &mut GlesRenderer,
+    elements: &[CupertinoElement],
+    size: Size<i32, Physical>,
+    scale: f64,
+) -> Result<GlesTexture> {
     let buf_size: Size<i32, Buffer> = (size.w.max(1), size.h.max(1)).into();
-    let mut texture: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, buf_size).map_err(|e| anyhow!("create snapshot texture: {e}"))?;
+    let mut texture: GlesTexture = renderer
+        .create_buffer(Fourcc::Abgr8888, buf_size)
+        .map_err(|e| anyhow!("create snapshot texture: {e}"))?;
     let mut tracker = OutputDamageTracker::new((buf_size.w, buf_size.h), scale, Transform::Normal);
     {
-        let mut target = renderer.bind(&mut texture).map_err(|e| anyhow!("bind snapshot texture: {e}"))?;
+        let mut target = renderer
+            .bind(&mut texture)
+            .map_err(|e| anyhow!("bind snapshot texture: {e}"))?;
         tracker
-            .render_output(renderer, &mut target, 0, elements, Color32F::new(0.0, 0.0, 0.0, 0.0))
+            .render_output(
+                renderer,
+                &mut target,
+                0,
+                elements,
+                Color32F::new(0.0, 0.0, 0.0, 0.0),
+            )
             .map_err(|e| anyhow!("render snapshot: {e:?}"))?;
     }
     Ok(texture)

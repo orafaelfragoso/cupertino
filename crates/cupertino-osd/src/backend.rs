@@ -65,7 +65,9 @@ pub struct MemoryVolume {
 impl MemoryVolume {
     /// A volume at `level` (0 to 1).
     pub fn new(level: f64, muted: bool) -> Self {
-        Self { state: VolumeState { level, muted } }
+        Self {
+            state: VolumeState { level, muted },
+        }
     }
 }
 
@@ -120,7 +122,11 @@ pub struct AlsaVolume {
 impl AlsaVolume {
     /// The master of card `card`, or the best master of all cards (see `cupertino_alsa::master`), below `dir`.
     pub fn new(dir: PathBuf, card: Option<u32>) -> Self {
-        Self { dir, card, master: None }
+        Self {
+            dir,
+            card,
+            master: None,
+        }
     }
 
     fn master(&mut self) -> Result<&Master, cupertino_alsa::Error> {
@@ -134,7 +140,10 @@ impl AlsaVolume {
     }
 
     /// Run `action` on the master; a failure drops the open device so the next call opens it again.
-    fn with_master<T>(&mut self, action: impl FnOnce(&Master) -> Result<T, cupertino_alsa::Error>) -> Result<T, BackendError> {
+    fn with_master<T>(
+        &mut self,
+        action: impl FnOnce(&Master) -> Result<T, cupertino_alsa::Error>,
+    ) -> Result<T, BackendError> {
         let result = self.master().and_then(action);
         if result.is_err() {
             self.master = None;
@@ -148,7 +157,10 @@ impl Volume for AlsaVolume {
     fn state(&mut self) -> Result<VolumeState, BackendError> {
         self.with_master(|master| {
             let level = master.level()?;
-            Ok(VolumeState { level, muted: master.muted()?.unwrap_or(level <= 0.0) })
+            Ok(VolumeState {
+                level,
+                muted: master.muted()?.unwrap_or(level <= 0.0),
+            })
         })
     }
 

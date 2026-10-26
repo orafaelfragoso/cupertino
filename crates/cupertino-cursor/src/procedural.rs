@@ -8,8 +8,10 @@
 //! produces a complete theme when no reference input is available, not to imitate any particular
 //! set. Shadows use [`Shadow::COMMON`] (approximate).
 
-use crate::meta::Shadow;
-use tiny_skia::{Color, FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
+use crate::shadow::Shadow;
+use tiny_skia::{
+    Color, FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform,
+};
 
 pub const CANVAS: f64 = 32.0;
 const SPINNER_FRAMES: usize = 12;
@@ -129,7 +131,12 @@ impl Kind {
     /// Hotspot in points.
     pub fn hotspot(self) -> (f64, f64) {
         match self {
-            Kind::Default | Kind::Copy | Kind::Alias | Kind::ContextMenu | Kind::Help | Kind::Progress => (4.0, 3.0),
+            Kind::Default
+            | Kind::Copy
+            | Kind::Alias
+            | Kind::ContextMenu
+            | Kind::Help
+            | Kind::Progress => (4.0, 3.0),
             Kind::Pointer => (14.0, 4.0),
             Kind::ZoomIn | Kind::ZoomOut => (13.0, 13.0),
             _ => (16.0, 16.0),
@@ -161,7 +168,10 @@ const BLACK: Color = Color::BLACK;
 const WHITE: Color = Color::WHITE;
 
 fn paint(c: Color) -> Paint<'static> {
-    let mut p = Paint { anti_alias: true, ..Paint::default() };
+    let mut p = Paint {
+        anti_alias: true,
+        ..Paint::default()
+    };
     p.set_color(c);
     p
 }
@@ -205,11 +215,17 @@ struct Ctx<'a> {
 
 impl Ctx<'_> {
     fn fill(&mut self, p: &Path, c: Color) {
-        self.pm.fill_path(p, &paint(c), FillRule::Winding, self.ts, None);
+        self.pm
+            .fill_path(p, &paint(c), FillRule::Winding, self.ts, None);
     }
 
     fn stroke(&mut self, p: &Path, c: Color, w: f32, cap: LineCap) {
-        let s = Stroke { width: w, line_cap: cap, line_join: LineJoin::Round, ..Stroke::default() };
+        let s = Stroke {
+            width: w,
+            line_cap: cap,
+            line_join: LineJoin::Round,
+            ..Stroke::default()
+        };
         self.pm.stroke_path(p, &paint(c), &s, self.ts, None);
     }
 
@@ -235,19 +251,39 @@ impl Ctx<'_> {
 }
 
 fn arrow_path() -> Path {
-    poly(&[(4.0, 3.0), (4.0, 22.5), (8.8, 18.2), (12.4, 26.2), (15.9, 24.7), (12.4, 16.9), (19.0, 16.9)], true)
+    poly(
+        &[
+            (4.0, 3.0),
+            (4.0, 22.5),
+            (8.8, 18.2),
+            (12.4, 26.2),
+            (15.9, 24.7),
+            (12.4, 16.9),
+            (19.0, 16.9),
+        ],
+        true,
+    )
 }
 
 /// Double-headed (or single-headed) arrow along +x, centred at the origin, total length `len`.
 fn double_arrow(len: f32, both: bool) -> Path {
     let (h, head, shaft) = (len / 2.0, 5.5f32, 1.6f32);
-    let mut pts = vec![(h, 0.0), (h - head, -head), (h - head, -shaft), (-h + if both { head } else { 0.0 }, -shaft)];
+    let mut pts = vec![
+        (h, 0.0),
+        (h - head, -head),
+        (h - head, -shaft),
+        (-h + if both { head } else { 0.0 }, -shaft),
+    ];
     if both {
         pts.extend([(-h + head, -head), (-h, 0.0), (-h + head, head)]);
     } else {
         pts.extend([(-h, -shaft), (-h, shaft)]);
     }
-    pts.extend([(-h + if both { head } else { 0.0 }, shaft), (h - head, shaft), (h - head, head)]);
+    pts.extend([
+        (-h + if both { head } else { 0.0 }, shaft),
+        (h - head, shaft),
+        (h - head, head),
+    ]);
     poly(&pts, true)
 }
 
@@ -267,13 +303,28 @@ fn badge(c: &mut Ctx, kind: Kind, frame: usize) {
             pb.move_to(cx - 3.0, cy + 2.5);
             pb.quad_to(cx - 3.0, cy - 2.5, cx + 2.0, cy - 2.5);
             c.stroke(&pb.finish().expect("curve"), WHITE, 1.6, LineCap::Round);
-            c.fill(&poly(&[(cx + 1.0, cy - 5.0), (cx + 4.6, cy - 2.5), (cx + 1.0, cy)], true), WHITE);
+            c.fill(
+                &poly(
+                    &[(cx + 1.0, cy - 5.0), (cx + 4.6, cy - 2.5), (cx + 1.0, cy)],
+                    true,
+                ),
+                WHITE,
+            );
         }
         Kind::ContextMenu => {
             c.fill(&rrect(cx - 6.0, cy - 5.5, 12.0, 11.0, 2.0), WHITE);
-            c.fill(&rrect(cx - 5.0, cy - 4.5, 10.0, 9.0, 1.4), Color::from_rgba8(70, 70, 76, 255));
+            c.fill(
+                &rrect(cx - 5.0, cy - 4.5, 10.0, 9.0, 1.4),
+                Color::from_rgba8(70, 70, 76, 255),
+            );
             for dy in [-2.4f32, 0.0, 2.4] {
-                c.line((cx - 3.2, cy + dy), (cx + 3.2, cy + dy), 1.0, WHITE, LineCap::Butt);
+                c.line(
+                    (cx - 3.2, cy + dy),
+                    (cx + 3.2, cy + dy),
+                    1.0,
+                    WHITE,
+                    LineCap::Butt,
+                );
             }
         }
         Kind::Help => {
@@ -283,7 +334,12 @@ fn badge(c: &mut Ctx, kind: Kind, frame: usize) {
             pb.move_to(cx - 2.3, cy - 2.2);
             pb.cubic_to(cx - 2.3, cy - 5.4, cx + 2.6, cy - 5.4, cx + 2.6, cy - 2.0);
             pb.cubic_to(cx + 2.6, cy - 0.4, cx, cy - 0.3, cx, cy + 1.6);
-            c.stroke(&pb.finish().expect("question mark"), WHITE, 1.5, LineCap::Round);
+            c.stroke(
+                &pb.finish().expect("question mark"),
+                WHITE,
+                1.5,
+                LineCap::Round,
+            );
             c.fill(&circle(cx, cy + 3.7, 0.95), WHITE);
         }
         Kind::Progress => {
@@ -294,7 +350,10 @@ fn badge(c: &mut Ctx, kind: Kind, frame: usize) {
                 let age = (lead + 8 - i) % 8;
                 let a = 1.0 - age as f32 * 0.11;
                 let (px, py) = (cx + 4.0 * ang.cos(), cy + 4.0 * ang.sin());
-                c.fill(&circle(px, py, 1.05), Color::from_rgba(0.15, 0.15, 0.18, a.clamp(0.1, 1.0)).unwrap_or(BLACK));
+                c.fill(
+                    &circle(px, py, 1.05),
+                    Color::from_rgba(0.15, 0.15, 0.18, a.clamp(0.1, 1.0)).unwrap_or(BLACK),
+                );
             }
         }
         _ => {}
@@ -302,14 +361,33 @@ fn badge(c: &mut Ctx, kind: Kind, frame: usize) {
 }
 
 fn pointing_hand() -> Vec<Path> {
-    vec![rrect(9.0, 14.0, 15.0, 12.0, 4.5), rrect(13.0, 4.0, 3.4, 14.0, 1.7), rrect(16.4, 12.5, 3.2, 6.0, 1.6), rrect(19.6, 13.5, 3.2, 5.5, 1.6), rrect(5.5, 15.5, 3.2, 8.0, 1.6)]
+    vec![
+        rrect(9.0, 14.0, 15.0, 12.0, 4.5),
+        rrect(13.0, 4.0, 3.4, 14.0, 1.7),
+        rrect(16.4, 12.5, 3.2, 6.0, 1.6),
+        rrect(19.6, 13.5, 3.2, 5.5, 1.6),
+        rrect(5.5, 15.5, 3.2, 8.0, 1.6),
+    ]
 }
 
 fn hand_shapes(closed: bool) -> Vec<Path> {
     if closed {
-        vec![rrect(8.0, 13.0, 16.0, 11.0, 4.0), rrect(8.0, 11.0, 4.0, 6.0, 2.0), rrect(12.0, 10.0, 4.0, 6.0, 2.0), rrect(16.0, 10.0, 4.0, 6.0, 2.0), rrect(20.0, 11.0, 4.0, 6.0, 2.0)]
+        vec![
+            rrect(8.0, 13.0, 16.0, 11.0, 4.0),
+            rrect(8.0, 11.0, 4.0, 6.0, 2.0),
+            rrect(12.0, 10.0, 4.0, 6.0, 2.0),
+            rrect(16.0, 10.0, 4.0, 6.0, 2.0),
+            rrect(20.0, 11.0, 4.0, 6.0, 2.0),
+        ]
     } else {
-        vec![rrect(9.0, 14.0, 15.0, 12.0, 4.5), rrect(9.5, 6.0, 3.2, 12.0, 1.6), rrect(13.2, 4.0, 3.2, 14.0, 1.6), rrect(16.9, 4.5, 3.2, 13.5, 1.6), rrect(20.6, 7.0, 3.2, 11.0, 1.6), rrect(5.5, 15.5, 3.2, 8.0, 1.6)]
+        vec![
+            rrect(9.0, 14.0, 15.0, 12.0, 4.5),
+            rrect(9.5, 6.0, 3.2, 12.0, 1.6),
+            rrect(13.2, 4.0, 3.2, 14.0, 1.6),
+            rrect(16.9, 4.5, 3.2, 13.5, 1.6),
+            rrect(20.6, 7.0, 3.2, 11.0, 1.6),
+            rrect(5.5, 15.5, 3.2, 8.0, 1.6),
+        ]
     }
 }
 
@@ -318,7 +396,10 @@ fn magnifier(c: &mut Ctx, plus: bool) {
     c.line((18.5, 18.5), (26.0, 26.0), 5.6, WHITE, LineCap::Round);
     c.line((18.5, 18.5), (26.0, 26.0), 3.0, BLACK, LineCap::Round);
     c.fill(&circle(cx, cy, r + 1.8), WHITE);
-    c.fill(&circle(cx, cy, r - 1.2), Color::from_rgba8(235, 245, 255, 235));
+    c.fill(
+        &circle(cx, cy, r - 1.2),
+        Color::from_rgba8(235, 245, 255, 235),
+    );
     c.stroke(&circle(cx, cy, r), BLACK, 2.0, LineCap::Butt);
     c.line((cx - 3.2, cy), (cx + 3.2, cy), 1.6, BLACK, LineCap::Butt);
     if plus {
@@ -328,7 +409,9 @@ fn magnifier(c: &mut Ctx, plus: bool) {
 
 fn resize_shape(kind: Kind) -> (Path, f32, bool) {
     match kind {
-        Kind::ResizeEW | Kind::ResizeNS | Kind::ColResize | Kind::RowResize => (double_arrow(26.0, true), 0.0, false),
+        Kind::ResizeEW | Kind::ResizeNS | Kind::ColResize | Kind::RowResize => {
+            (double_arrow(26.0, true), 0.0, false)
+        }
         Kind::ResizeNESW => (double_arrow(26.0, true), -45.0, false),
         Kind::ResizeNWSE => (double_arrow(26.0, true), 45.0, false),
         Kind::ResizeE => (double_arrow(22.0, false), 0.0, true),
@@ -346,7 +429,10 @@ fn resize_shape(kind: Kind) -> (Path, f32, bool) {
 pub fn render(kind: Kind, scale: f32, frame: usize) -> Pixmap {
     let px = (CANVAS as f32 * scale).round().max(1.0) as u32;
     let mut pm = Pixmap::new(px, px).expect("non-empty canvas");
-    let mut c = Ctx { pm: &mut pm, ts: Transform::from_scale(scale, scale) };
+    let mut c = Ctx {
+        pm: &mut pm,
+        ts: Transform::from_scale(scale, scale),
+    };
     match kind {
         Kind::Default => c.outlined(&[arrow_path()], BLACK, WHITE, 1.1),
         Kind::Copy | Kind::Alias | Kind::ContextMenu | Kind::Help | Kind::Progress => {
@@ -373,7 +459,15 @@ pub fn render(kind: Kind, scale: f32, frame: usize) -> Pixmap {
             c.halo_line((19.0, 16.0), (28.0, 16.0), 1.4);
         }
         Kind::Cell => {
-            c.outlined(&[rrect(14.2, 6.0, 3.6, 20.0, 0.6), rrect(6.0, 14.2, 20.0, 3.6, 0.6)], WHITE, BLACK, 1.0);
+            c.outlined(
+                &[
+                    rrect(14.2, 6.0, 3.6, 20.0, 0.6),
+                    rrect(6.0, 14.2, 20.0, 3.6, 0.6),
+                ],
+                WHITE,
+                BLACK,
+                1.0,
+            );
         }
         Kind::NotAllowed => {
             let red = Color::from_rgba8(224, 52, 56, 255);
@@ -385,7 +479,9 @@ pub fn render(kind: Kind, scale: f32, frame: usize) -> Pixmap {
         Kind::Move => {
             let arm = |angle: f32| {
                 let ts = Transform::from_translate(16.0, 16.0).pre_rotate(angle);
-                let p = double_arrow(15.0, false).transform(Transform::from_translate(7.5, 0.0)).expect("transform");
+                let p = double_arrow(15.0, false)
+                    .transform(Transform::from_translate(7.5, 0.0))
+                    .expect("transform");
                 p.transform(ts).expect("transform")
             };
             let shapes: Vec<Path> = [0.0, 90.0, 180.0, 270.0].into_iter().map(arm).collect();
@@ -397,7 +493,9 @@ pub fn render(kind: Kind, scale: f32, frame: usize) -> Pixmap {
             let (shape, _, _) = resize_shape(kind);
             let angle = if kind == Kind::RowResize { 90.0 } else { 0.0 };
             let ts = Transform::from_translate(16.0, 16.0).pre_rotate(angle);
-            let bar = rrect(-1.0, -9.0, 2.0, 18.0, 0.6).transform(ts).expect("transform");
+            let bar = rrect(-1.0, -9.0, 2.0, 18.0, 0.6)
+                .transform(ts)
+                .expect("transform");
             let shape = shape.transform(ts).expect("transform");
             c.outlined(&[shape, bar], BLACK, WHITE, 1.1);
         }
@@ -406,7 +504,9 @@ pub fn render(kind: Kind, scale: f32, frame: usize) -> Pixmap {
             let ts = Transform::from_translate(16.0, 16.0).pre_rotate(angle);
             let mut shapes = vec![shape.transform(ts).expect("transform")];
             if single {
-                let bar = rrect(11.0, -7.0, 2.4, 14.0, 0.8).transform(ts).expect("transform");
+                let bar = rrect(11.0, -7.0, 2.4, 14.0, 0.8)
+                    .transform(ts)
+                    .expect("transform");
                 shapes.push(bar);
             }
             c.outlined(&shapes, BLACK, WHITE, 1.1);

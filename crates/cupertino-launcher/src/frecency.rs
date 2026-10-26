@@ -30,7 +30,15 @@ pub struct FrecencyConfig {
 
 impl Default for FrecencyConfig {
     fn default() -> Self {
-        Self { half_life_secs: 14.0 * 86400.0, max_bonus: 120.0, bonus_scale: 45.0, query_max_bonus: 80.0, query_bonus_scale: 30.0, max_items: 2000, max_queries: 500 }
+        Self {
+            half_life_secs: 14.0 * 86400.0,
+            max_bonus: 120.0,
+            bonus_scale: 45.0,
+            query_max_bonus: 80.0,
+            query_bonus_scale: 30.0,
+            max_items: 2000,
+            max_queries: 500,
+        }
     }
 }
 
@@ -69,7 +77,10 @@ pub fn default_path() -> Option<PathBuf> {
 
 /// Seconds since the Unix epoch.
 pub fn unix_now() -> f64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 impl Default for Frecency {
@@ -80,14 +91,34 @@ impl Default for Frecency {
 
 impl Frecency {
     pub fn in_memory() -> Self {
-        Self { config: FrecencyConfig::default(), data: Data { version: FILE_VERSION, ..Default::default() }, path: None, dirty: false }
+        Self {
+            config: FrecencyConfig::default(),
+            data: Data {
+                version: FILE_VERSION,
+                ..Default::default()
+            },
+            path: None,
+            dirty: false,
+        }
     }
 
     /// Load from `path`; the store remembers the path for [`Self::save`].
     pub fn load(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
-        let data = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Data>(&t).ok()).filter(|d| d.version == FILE_VERSION).unwrap_or(Data { version: FILE_VERSION, ..Default::default() });
-        Self { config: FrecencyConfig::default(), data, path: Some(path), dirty: false }
+        let data = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Data>(&t).ok())
+            .filter(|d| d.version == FILE_VERSION)
+            .unwrap_or(Data {
+                version: FILE_VERSION,
+                ..Default::default()
+            });
+        Self {
+            config: FrecencyConfig::default(),
+            data,
+            path: Some(path),
+            dirty: false,
+        }
     }
 
     pub fn load_default() -> Self {
@@ -132,7 +163,13 @@ impl Frecency {
         let c = &self.config;
         let mut b = (c.bonus_scale * self.score(key, now).ln_1p()).min(c.max_bonus);
         if !normalized_query.is_empty() {
-            let n: u32 = self.data.queries.iter().filter(|(q, _)| q.starts_with(normalized_query)).filter_map(|(_, m)| m.get(key)).sum();
+            let n: u32 = self
+                .data
+                .queries
+                .iter()
+                .filter(|(q, _)| q.starts_with(normalized_query))
+                .filter_map(|(_, m)| m.get(key))
+                .sum();
             if n > 0 {
                 b += (c.query_bonus_scale * (n as f64).ln_1p()).min(c.query_max_bonus);
             }
@@ -142,7 +179,12 @@ impl Frecency {
 
     /// Items with the highest decayed score, best first.
     pub fn top(&self, n: usize, now: f64) -> Vec<(String, f64)> {
-        let mut v: Vec<(String, f64)> = self.data.items.iter().map(|(k, r)| (k.clone(), self.decay(r, now))).collect();
+        let mut v: Vec<(String, f64)> = self
+            .data
+            .items
+            .iter()
+            .map(|(k, r)| (k.clone(), self.decay(r, now)))
+            .collect();
         v.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         v.truncate(n);
         v
@@ -157,7 +199,13 @@ impl Frecency {
         r.launches += 1;
         let q = normalized_query.trim();
         if !q.is_empty() && q.chars().count() <= 40 {
-            *self.data.queries.entry(q.to_string()).or_default().entry(key.to_string()).or_insert(0) += 1;
+            *self
+                .data
+                .queries
+                .entry(q.to_string())
+                .or_default()
+                .entry(key.to_string())
+                .or_insert(0) += 1;
         }
         self.prune(now);
         self.dirty = true;
@@ -174,7 +222,12 @@ impl Frecency {
 
     fn prune(&mut self, now: f64) {
         if self.data.items.len() > self.config.max_items {
-            let mut v: Vec<(String, f64)> = self.data.items.iter().map(|(k, r)| (k.clone(), self.decay(r, now))).collect();
+            let mut v: Vec<(String, f64)> = self
+                .data
+                .items
+                .iter()
+                .map(|(k, r)| (k.clone(), self.decay(r, now)))
+                .collect();
             v.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
             let excess = v.len() - self.config.max_items;
             for (k, _) in v.into_iter().take(excess) {
@@ -182,7 +235,12 @@ impl Frecency {
             }
         }
         if self.data.queries.len() > self.config.max_queries {
-            let mut v: Vec<(String, u32)> = self.data.queries.iter().map(|(k, m)| (k.clone(), m.values().sum())).collect();
+            let mut v: Vec<(String, u32)> = self
+                .data
+                .queries
+                .iter()
+                .map(|(k, m)| (k.clone(), m.values().sum()))
+                .collect();
             v.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
             let excess = v.len() - self.config.max_queries;
             for (k, _) in v.into_iter().take(excess) {
@@ -193,12 +251,17 @@ impl Frecency {
 
     /// Write to the remembered path (no-op for an in-memory store). Atomic.
     pub fn save(&mut self) -> std::io::Result<()> {
-        let Some(path) = self.path.clone() else { return Ok(()) };
+        let Some(path) = self.path.clone() else {
+            return Ok(());
+        };
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(&self.data).map_err(std::io::Error::other)?)?;
+        std::fs::write(
+            &tmp,
+            serde_json::to_vec_pretty(&self.data).map_err(std::io::Error::other)?,
+        )?;
         std::fs::rename(&tmp, &path)?;
         self.dirty = false;
         Ok(())
@@ -296,7 +359,10 @@ mod tests {
         std::fs::write(&path, "{ not json").unwrap();
         assert!(Frecency::load(&path).is_empty());
         std::fs::write(&path, "{\"version\": 99, \"items\": {\"a\": {\"score\": 1.0, \"last_used\": 0.0, \"launches\": 1}}}").unwrap();
-        assert!(Frecency::load(&path).is_empty(), "unknown version is ignored");
+        assert!(
+            Frecency::load(&path).is_empty(),
+            "unknown version is ignored"
+        );
         std::fs::write(&path, "").unwrap();
         assert!(Frecency::load(&path).is_empty());
     }

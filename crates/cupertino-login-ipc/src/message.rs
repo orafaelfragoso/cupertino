@@ -92,7 +92,9 @@ pub fn is_login_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= MAX_LOGIN_NAME_BYTES
         && !name.starts_with('-')
-        && !name.chars().any(|c| c.is_control() || c.is_whitespace() || matches!(c, ':' | '/' | '\\'))
+        && !name
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace() || matches!(c, ':' | '/' | '\\'))
 }
 
 /// Which account an attempt is for.
@@ -205,25 +207,50 @@ pub enum ProtocolRefusal {
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum Event {
     /// The first message: the version the manager speaks.
-    Hello { version: u32 },
+    Hello {
+        version: u32,
+    },
     /// Everything the screen needs; sent after `Hello`.
     ///
     /// `will_prompt` is true while a user session is open: Restart and Shut Down then ask for an administrator
     /// ([`Request::AuthenticatePower`]) and the menu shows them with an ellipsis.
-    Welcome { users: Vec<UserRow>, show_other: bool, power: PowerMenu, will_prompt: bool, retries_until_hint: u32 },
+    Welcome {
+        users: Vec<UserRow>,
+        show_other: bool,
+        power: PowerMenu,
+        will_prompt: bool,
+        retries_until_hint: u32,
+    },
     /// The user list, and `will_prompt` as in `Welcome`, changed (a session started or ended).
-    Users { users: Vec<UserRow>, will_prompt: bool },
+    Users {
+        users: Vec<UserRow>,
+        will_prompt: bool,
+    },
     /// PAM asks. `echo` false is a password field; true is a visible field whose text also shows as the notice.
-    Prompt { echo: bool, text: String },
+    Prompt {
+        echo: bool,
+        text: String,
+    },
     /// PAM info or error text. Not acknowledged: PAM's conversation returns at once.
-    Notice { error: bool, text: String },
+    Notice {
+        error: bool,
+        text: String,
+    },
     /// The end of an attempt.
-    Result { outcome: Outcome },
+    Result {
+        outcome: Outcome,
+    },
     /// The session of `uid` is being created; the spinner runs until `Reset`.
-    SessionStarting { uid: u32 },
+    SessionStarting {
+        uid: u32,
+    },
     /// The screen is shown again: clear every field and go back to the picker.
     Reset,
-    Refused { reason: ProtocolRefusal },
+    Refused {
+        reason: ProtocolRefusal,
+    },
     /// The manager did not carry out a `Power` request.
-    PowerRefused { reason: PowerRefusal },
+    PowerRefused {
+        reason: PowerRefusal,
+    },
 }

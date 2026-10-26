@@ -48,7 +48,11 @@ pub struct SlowKeys {
 
 impl SlowKeys {
     pub fn new(delay_ms: u32) -> SlowKeys {
-        SlowKeys { delay_ms, pending: None, delivered: BTreeSet::new() }
+        SlowKeys {
+            delay_ms,
+            pending: None,
+            delivered: BTreeSet::new(),
+        }
     }
 
     pub fn delay_ms(&self) -> u32 {
@@ -163,7 +167,11 @@ mod tests {
         s.press(A, 0);
         s.due(250);
         assert_eq!(s.press(B, 300), SlowStep::Pending);
-        assert_eq!(s.release(A), SlowStep::Deliver, "the accepted key's release still passes");
+        assert_eq!(
+            s.release(A),
+            SlowStep::Deliver,
+            "the accepted key's release still passes"
+        );
         assert_eq!(s.due(550), Some(B));
     }
 

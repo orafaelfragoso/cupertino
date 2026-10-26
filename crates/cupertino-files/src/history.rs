@@ -16,7 +16,11 @@ pub struct History {
 
 impl History {
     pub fn new(start: PathBuf) -> Self {
-        History { current: start, back: Vec::new(), forward: Vec::new() }
+        History {
+            current: start,
+            back: Vec::new(),
+            forward: Vec::new(),
+        }
     }
 
     pub fn current(&self) -> &Path {
@@ -87,7 +91,11 @@ mod tests {
         h.back();
         assert_eq!(h.forward_target(), Some(Path::new("/b")));
         h.visit(p("/a"));
-        assert_eq!(h.forward_target(), Some(Path::new("/b")), "visiting the current location is not a step");
+        assert_eq!(
+            h.forward_target(),
+            Some(Path::new("/b")),
+            "visiting the current location is not a step"
+        );
         h.visit(p("/c"));
         assert_eq!(h.forward_target(), None);
         assert_eq!(h.back(), Some(Path::new("/a")));
@@ -101,6 +109,9 @@ mod tests {
         assert_eq!(h.back_target(), Some(Path::new("/a")));
         assert_eq!(h.current(), Path::new("/b"));
         h.back();
-        assert_eq!((h.back_target(), h.forward_target()), (None, Some(Path::new("/b"))));
+        assert_eq!(
+            (h.back_target(), h.forward_target()),
+            (None, Some(Path::new("/b")))
+        );
     }
 }

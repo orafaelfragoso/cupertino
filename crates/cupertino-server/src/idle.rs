@@ -19,7 +19,11 @@ pub struct Idle {
 
 impl Idle {
     pub fn new(notifier: IdleNotifierState<Cupertino>, inhibit: IdleInhibitManagerState) -> Self {
-        Self { notifier, _inhibit: inhibit, inhibitors: Vec::new() }
+        Self {
+            notifier,
+            _inhibit: inhibit,
+            inhibitors: Vec::new(),
+        }
     }
 
     /// Hold the notifications back while a live surface has an inhibitor. A client that disconnects never

@@ -98,7 +98,10 @@ mod tests {
     fn bad_hex_word_is_an_error() {
         assert_eq!(
             CapabilityMask::parse("12 zz"),
-            Err(ParseError::InvalidNumber { key: "capability word", value: "zz".to_owned() })
+            Err(ParseError::InvalidNumber {
+                key: "capability word",
+                value: "zz".to_owned()
+            })
         );
     }
 

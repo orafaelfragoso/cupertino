@@ -52,7 +52,10 @@ impl Filters {
         let users: Vec<Account> = users
             .into_iter()
             .filter(|user| {
-                let removed = named(&self.hidden, user) || named(&self.deny, user) || (self.hide_admin && named(admins, user)) || self.allow.as_ref().is_some_and(|allow| !named(allow, user));
+                let removed = named(&self.hidden, user)
+                    || named(&self.deny, user)
+                    || (self.hide_admin && named(admins, user))
+                    || self.allow.as_ref().is_some_and(|allow| !named(allow, user));
                 !removed
             })
             .collect();
@@ -67,7 +70,17 @@ mod tests {
     use super::*;
 
     fn users(logins: &[&str]) -> Vec<Account> {
-        logins.iter().map(|login| Account { uid: 1000, gid: 1000, login: (*login).to_owned(), gecos: String::new(), home: String::new(), shell: String::new() }).collect()
+        logins
+            .iter()
+            .map(|login| Account {
+                uid: 1000,
+                gid: 1000,
+                login: (*login).to_owned(),
+                gecos: String::new(),
+                home: String::new(),
+                shell: String::new(),
+            })
+            .collect()
     }
 
     fn names(list: &[&str]) -> Vec<String> {
@@ -77,53 +90,118 @@ mod tests {
     /// The logins offered and whether "Other…" follows, for `filters` over alice, bob, carol and dave with carol and
     /// dave as administrators.
     fn offered(filters: &Filters) -> (Vec<String>, bool) {
-        let offer = filters.apply(users(&["alice", "bob", "carol", "dave"]), &names(&["carol", "dave"]));
-        (offer.users.into_iter().map(|user| user.login).collect(), offer.other)
+        let offer = filters.apply(
+            users(&["alice", "bob", "carol", "dave"]),
+            &names(&["carol", "dave"]),
+        );
+        (
+            offer.users.into_iter().map(|user| user.login).collect(),
+            offer.other,
+        )
     }
 
     #[test]
     fn no_filter_lists_everybody_and_has_no_other_tile() {
-        assert_eq!(offered(&Filters::default()), (names(&["alice", "bob", "carol", "dave"]), false));
+        assert_eq!(
+            offered(&Filters::default()),
+            (names(&["alice", "bob", "carol", "dave"]), false)
+        );
     }
 
     #[test]
     fn a_hidden_user_is_removed_and_other_appears() {
-        assert_eq!(offered(&Filters { hidden: names(&["bob"]), ..Filters::default() }), (names(&["alice", "carol", "dave"]), true));
+        assert_eq!(
+            offered(&Filters {
+                hidden: names(&["bob"]),
+                ..Filters::default()
+            }),
+            (names(&["alice", "carol", "dave"]), true)
+        );
     }
 
     #[test]
     fn hiding_admins_removes_the_wheel_members_and_ignores_the_list_without_the_flag() {
-        assert_eq!(offered(&Filters { hide_admin: true, ..Filters::default() }), (names(&["alice", "bob"]), true));
+        assert_eq!(
+            offered(&Filters {
+                hide_admin: true,
+                ..Filters::default()
+            }),
+            (names(&["alice", "bob"]), true)
+        );
         let offer = Filters::default().apply(users(&["alice", "carol"]), &names(&["carol"]));
         assert_eq!(offer.users.len(), 2);
     }
 
     #[test]
     fn an_allow_list_keeps_only_its_names() {
-        assert_eq!(offered(&Filters { allow: Some(names(&["bob", "dave", "nobody"])), ..Filters::default() }), (names(&["bob", "dave"]), true));
-        assert_eq!(offered(&Filters { allow: Some(names(&["alice", "bob", "carol", "dave"])), ..Filters::default() }), (names(&["alice", "bob", "carol", "dave"]), false));
+        assert_eq!(
+            offered(&Filters {
+                allow: Some(names(&["bob", "dave", "nobody"])),
+                ..Filters::default()
+            }),
+            (names(&["bob", "dave"]), true)
+        );
+        assert_eq!(
+            offered(&Filters {
+                allow: Some(names(&["alice", "bob", "carol", "dave"])),
+                ..Filters::default()
+            }),
+            (names(&["alice", "bob", "carol", "dave"]), false)
+        );
     }
 
     #[test]
     fn a_deny_list_removes_its_names_also_from_the_allow_list() {
-        assert_eq!(offered(&Filters { deny: names(&["alice"]), ..Filters::default() }), (names(&["bob", "carol", "dave"]), true));
-        assert_eq!(offered(&Filters { allow: Some(names(&["alice", "bob"])), deny: names(&["alice"]), ..Filters::default() }), (names(&["bob"]), true));
+        assert_eq!(
+            offered(&Filters {
+                deny: names(&["alice"]),
+                ..Filters::default()
+            }),
+            (names(&["bob", "carol", "dave"]), true)
+        );
+        assert_eq!(
+            offered(&Filters {
+                allow: Some(names(&["alice", "bob"])),
+                deny: names(&["alice"]),
+                ..Filters::default()
+            }),
+            (names(&["bob"]), true)
+        );
     }
 
     #[test]
     fn the_filters_combine() {
-        let filters = Filters { hidden: names(&["alice"]), hide_admin: true, allow: Some(names(&["alice", "bob", "carol"])), deny: names(&["zed"]), show_other: None };
+        let filters = Filters {
+            hidden: names(&["alice"]),
+            hide_admin: true,
+            allow: Some(names(&["alice", "bob", "carol"])),
+            deny: names(&["zed"]),
+            show_other: None,
+        };
         assert_eq!(offered(&filters), (names(&["bob"]), true));
     }
 
     #[test]
     fn an_empty_allow_list_lists_nobody_and_other_stands_alone() {
-        assert_eq!(offered(&Filters { allow: Some(Vec::new()), ..Filters::default() }), (Vec::new(), true));
+        assert_eq!(
+            offered(&Filters {
+                allow: Some(Vec::new()),
+                ..Filters::default()
+            }),
+            (Vec::new(), true)
+        );
     }
 
     #[test]
     fn a_filter_that_removes_nobody_adds_no_other_tile() {
-        assert_eq!(offered(&Filters { hidden: names(&["nobody"]), deny: names(&["nobody"]), ..Filters::default() }), (names(&["alice", "bob", "carol", "dave"]), false));
+        assert_eq!(
+            offered(&Filters {
+                hidden: names(&["nobody"]),
+                deny: names(&["nobody"]),
+                ..Filters::default()
+            }),
+            (names(&["alice", "bob", "carol", "dave"]), false)
+        );
     }
 
     #[test]
@@ -133,9 +211,29 @@ mod tests {
 
     #[test]
     fn the_override_wins_over_the_rule_both_ways() {
-        let hide_bob = Filters { hidden: names(&["bob"]), show_other: Some(false), ..Filters::default() };
-        assert_eq!(offered(&hide_bob), (names(&["alice", "carol", "dave"]), false));
-        assert_eq!(offered(&Filters { show_other: Some(true), ..Filters::default() }), (names(&["alice", "bob", "carol", "dave"]), true));
-        assert!(!Filters { show_other: Some(false), ..Filters::default() }.apply(Vec::new(), &[]).other);
+        let hide_bob = Filters {
+            hidden: names(&["bob"]),
+            show_other: Some(false),
+            ..Filters::default()
+        };
+        assert_eq!(
+            offered(&hide_bob),
+            (names(&["alice", "carol", "dave"]), false)
+        );
+        assert_eq!(
+            offered(&Filters {
+                show_other: Some(true),
+                ..Filters::default()
+            }),
+            (names(&["alice", "bob", "carol", "dave"]), true)
+        );
+        assert!(
+            !Filters {
+                show_other: Some(false),
+                ..Filters::default()
+            }
+            .apply(Vec::new(), &[])
+            .other
+        );
     }
 }

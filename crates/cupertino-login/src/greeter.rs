@@ -6,7 +6,10 @@
 
 use crate::screen::{self, FrameKey, Notifier, PickerKey, Result, Scene};
 use cupertino_assets::Assets;
-use cupertino_client::{key, Anchor, Button, Client, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig, Margin, Modifiers, OutputId, PointerEvent, SurfaceId};
+use cupertino_client::{
+    key, Anchor, Button, Client, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig, Margin,
+    Modifiers, OutputId, PointerEvent, SurfaceId,
+};
 use cupertino_geometry::Point;
 use cupertino_login::hint::FailedAttempts;
 use cupertino_login::layout::Layout;
@@ -16,7 +19,10 @@ use cupertino_login::picker::{self, Direction, Grid, NameEntry, NameKey, Picker,
 use cupertino_login::power::{Action, Menu, MenuKey};
 use cupertino_login::render::Renderer;
 use cupertino_login::user::User;
-use cupertino_login_ipc::{Account, Event as ManagerEvent, Outcome, PowerAction, PowerMenu, PowerRefusal, Request, Secret, UserRow, VERSION};
+use cupertino_login_ipc::{
+    Account, Event as ManagerEvent, Outcome, PowerAction, PowerMenu, PowerRefusal, Request, Secret,
+    UserRow, VERSION,
+};
 use cupertino_theme::Theme;
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc::{self, Receiver};
@@ -92,12 +98,42 @@ struct Welcome {
 fn await_welcome(messages: &Receiver<Message>) -> Result<Welcome> {
     let mut greeted = false;
     loop {
-        match messages.recv_timeout(WELCOME_TIMEOUT).map_err(|_| "the session manager did not answer in time")? {
-            Message::Event(ManagerEvent::Hello { version }) if version == VERSION && !greeted => greeted = true,
-            Message::Event(ManagerEvent::Hello { version }) => return Err(format!("the session manager speaks version {version}, this screen {VERSION}").into()),
-            Message::Event(ManagerEvent::Welcome { users, show_other, power, will_prompt, retries_until_hint }) if greeted => return Ok(Welcome { users, show_other, power, will_prompt, retries_until_hint }),
-            Message::Event(ManagerEvent::Refused { reason }) => return Err(format!("the session manager refused the connection: {reason:?}").into()),
-            Message::Event(_) => return Err("the session manager sent a message out of order".into()),
+        match messages
+            .recv_timeout(WELCOME_TIMEOUT)
+            .map_err(|_| "the session manager did not answer in time")?
+        {
+            Message::Event(ManagerEvent::Hello { version }) if version == VERSION && !greeted => {
+                greeted = true
+            }
+            Message::Event(ManagerEvent::Hello { version }) => {
+                return Err(format!(
+                    "the session manager speaks version {version}, this screen {VERSION}"
+                )
+                .into())
+            }
+            Message::Event(ManagerEvent::Welcome {
+                users,
+                show_other,
+                power,
+                will_prompt,
+                retries_until_hint,
+            }) if greeted => {
+                return Ok(Welcome {
+                    users,
+                    show_other,
+                    power,
+                    will_prompt,
+                    retries_until_hint,
+                })
+            }
+            Message::Event(ManagerEvent::Refused { reason }) => {
+                return Err(
+                    format!("the session manager refused the connection: {reason:?}").into(),
+                )
+            }
+            Message::Event(_) => {
+                return Err("the session manager sent a message out of order".into())
+            }
             Message::Broken(e) => return Err(e.into()),
         }
     }
@@ -109,7 +145,12 @@ fn connect(socket: &str) -> Result<UnixStream> {
     loop {
         match UnixStream::connect(socket) {
             Ok(stream) => return Ok(stream),
-            Err(e) if attempt >= CONNECT_ATTEMPTS => return Err(format!("connecting to the session manager at {socket} failed {attempt} times: {e}").into()),
+            Err(e) if attempt >= CONNECT_ATTEMPTS => {
+                return Err(format!(
+                    "connecting to the session manager at {socket} failed {attempt} times: {e}"
+                )
+                .into())
+            }
             Err(_) => {
                 attempt += 1;
                 std::thread::sleep(CONNECT_INTERVAL);
@@ -122,26 +163,50 @@ fn connect(socket: &str) -> Result<UnixStream> {
 fn user_of(row: &UserRow) -> User {
     User::from_row(row).unwrap_or_else(|e| {
         eprintln!("cupertino-login: {e}");
-        User { login: row.login.clone(), display: row.display_name.clone(), picture: None, uid: Some(row.uid), logged_in: row.logged_in }
+        User {
+            login: row.login.clone(),
+            display: row.display_name.clone(),
+            picture: None,
+            uid: Some(row.uid),
+            logged_in: row.logged_in,
+        }
     })
 }
 
 /// The power items the manager says to show, in menu order.
 fn power_actions(menu: &PowerMenu) -> Vec<Action> {
-    [(Action::Restart, menu.restart), (Action::ShutDown, menu.shut_down), (Action::Sleep, menu.sleep)].into_iter().filter(|&(_, shown)| shown).map(|(action, _)| action).collect()
+    [
+        (Action::Restart, menu.restart),
+        (Action::ShutDown, menu.shut_down),
+        (Action::Sleep, menu.sleep),
+    ]
+    .into_iter()
+    .filter(|&(_, shown)| shown)
+    .map(|(action, _)| action)
+    .collect()
 }
 
 /// The journal line that says which titles the power menu shows (the ellipsis marks an item that asks for an administrator).
 fn log_power_items(menu: Option<&Menu>) {
-    let items = menu.map_or_else(String::new, |menu| menu.items().iter().map(|action| action.title(menu.will_prompt())).collect::<Vec<_>>().join(", "));
+    let items = menu.map_or_else(String::new, |menu| {
+        menu.items()
+            .iter()
+            .map(|action| action.title(menu.will_prompt()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    });
     eprintln!("cupertino-login: power items: {items}");
 }
 
 /// What the name and password screens say while an administrator is asked to authorise `action`. approximate, ours.
 fn authorisation_notice(action: PowerAction) -> &'static str {
     match action {
-        PowerAction::Restart => "Other users are logged in. To restart, enter an administrator's name and password.",
-        PowerAction::ShutDown => "Other users are logged in. To shut down, enter an administrator's name and password.",
+        PowerAction::Restart => {
+            "Other users are logged in. To restart, enter an administrator's name and password."
+        }
+        PowerAction::ShutDown => {
+            "Other users are logged in. To shut down, enter an administrator's name and password."
+        }
         PowerAction::Sleep => unreachable!("sleep asks for no administrator"),
     }
 }
@@ -169,7 +234,9 @@ fn refusal_text(outcome: Outcome, pam_notice: Option<&str>) -> String {
         Outcome::Accepted | Outcome::Denied => unreachable!("the callers handle these"),
     };
     match outcome {
-        Outcome::Locked | Outcome::Expired | Outcome::Refused => pam_notice.unwrap_or(ours).to_owned(),
+        Outcome::Locked | Outcome::Expired | Outcome::Refused => {
+            pam_notice.unwrap_or(ours).to_owned()
+        }
         _ => ours.to_owned(),
     }
 }
@@ -188,8 +255,16 @@ pub fn run() -> Result<std::convert::Infallible> {
     let connection = Connection::spawn(stream, move |message| notifier.send(message))?;
     let welcome = await_welcome(&messages)?;
 
-    let picker = Picker::new(welcome.users.iter().map(user_of).collect(), welcome.show_other)?;
-    eprintln!("cupertino-login: picker: {} users, other tile: {}, {} logged in", welcome.users.len(), if welcome.show_other { "yes" } else { "no" }, welcome.users.iter().filter(|row| row.logged_in).count());
+    let picker = Picker::new(
+        welcome.users.iter().map(user_of).collect(),
+        welcome.show_other,
+    )?;
+    eprintln!(
+        "cupertino-login: picker: {} users, other tile: {}, {} logged in",
+        welcome.users.len(),
+        if welcome.show_other { "yes" } else { "no" },
+        welcome.users.iter().filter(|row| row.logged_in).count()
+    );
     let mut power = Menu::new(power_actions(&welcome.power));
     if let Some(menu) = &mut power {
         menu.set_will_prompt(welcome.will_prompt);
@@ -197,7 +272,24 @@ pub fn run() -> Result<std::convert::Infallible> {
     log_power_items(power.as_ref());
 
     let start = Instant::now();
-    let mut app = App { client, renderer, connection, pending: None, messages, start, picker, show_other: welcome.show_other, stage: Stage::Picking, power, authorising: None, surfaces: Vec::new(), drawn: None, announced: false, failed: FailedAttempts::default(), retries_until_hint: welcome.retries_until_hint };
+    let mut app = App {
+        client,
+        renderer,
+        connection,
+        pending: None,
+        messages,
+        start,
+        picker,
+        show_other: welcome.show_other,
+        stage: Stage::Picking,
+        power,
+        authorising: None,
+        surfaces: Vec::new(),
+        drawn: None,
+        announced: false,
+        failed: FailedAttempts::default(),
+        retries_until_hint: welcome.retries_until_hint,
+    };
     app.arrange_surfaces()?;
     loop {
         let timeout = app.timeout()?;
@@ -220,22 +312,46 @@ impl App {
             Stage::Password { screen, .. } => screen.next_wakeup(self.now()),
             Stage::Picking | Stage::Naming(_) => None,
         };
-        Ok(Some(by_screen.map_or(minute, |s| Duration::from_secs_f64(s).min(minute))))
+        Ok(Some(by_screen.map_or(minute, |s| {
+            Duration::from_secs_f64(s).min(minute)
+        })))
     }
 
     /// The tiles per page, from the first output the server has described.
     fn max_per_page(&self) -> Result<usize> {
-        let geometry = self.client.outputs().into_iter().find_map(|o| o.geometry).ok_or("the server has no output")?;
-        Ok(picker::max_per_page(f64::from(geometry.width), f64::from(geometry.height)))
+        let geometry = self
+            .client
+            .outputs()
+            .into_iter()
+            .find_map(|o| o.geometry)
+            .ok_or("the server has no output")?;
+        Ok(picker::max_per_page(
+            f64::from(geometry.width),
+            f64::from(geometry.height),
+        ))
     }
 
     /// The frame the current stage shows now.
     fn current(&self, now: f64) -> Result<Drawn> {
         let menu = self.menu();
         Ok(match &self.stage {
-            Stage::Picking => Drawn::Picker(PickerKey::new(&self.picker, self.max_per_page()?, menu)?),
-            Stage::Naming(entry) => Drawn::Field(FrameKey::name(entry, self.authorising.map(authorisation_notice), menu)?),
-            Stage::Password { user, screen } => Drawn::Field(FrameKey::new(&Scene { screen, caps_lock: self.client.caps_lock(), help: self.failed.help_shown(&user.login, self.retries_until_hint), power: menu }, now)?),
+            Stage::Picking => {
+                Drawn::Picker(PickerKey::new(&self.picker, self.max_per_page()?, menu)?)
+            }
+            Stage::Naming(entry) => Drawn::Field(FrameKey::name(
+                entry,
+                self.authorising.map(authorisation_notice),
+                menu,
+            )?),
+            Stage::Password { user, screen } => Drawn::Field(FrameKey::new(
+                &Scene {
+                    screen,
+                    caps_lock: self.client.caps_lock(),
+                    help: self.failed.help_shown(&user.login, self.retries_until_hint),
+                    power: menu,
+                },
+                now,
+            )?),
         })
     }
 
@@ -247,7 +363,13 @@ impl App {
         let now = self.now();
         match event {
             Event::Draw(surface) => self.draw(surface)?,
-            Event::Key { pressed: true, key, mods, character, .. } => self.press(now, key, mods, character)?,
+            Event::Key {
+                pressed: true,
+                key,
+                mods,
+                character,
+                ..
+            } => self.press(now, key, mods, character)?,
             Event::Pointer { surface, event } => self.pointer(now, surface, event)?,
             Event::OutputsChanged => self.arrange_surfaces()?,
             Event::Closed(_) => return Err("the server closed a surface of the greeter".into()),
@@ -256,13 +378,22 @@ impl App {
             Event::Key { .. } | Event::KeyboardLeave(_) => {}
             // the screens have one fixed look, and this process is the one that holds the lock
             Event::Appearance { .. } | Event::DisplayOptions(_) | Event::SessionLock { .. } => {}
-            Event::PopupDone(_) | Event::ActivationToken { .. } | Event::MenuBar { .. } | Event::Dock { .. } => {}
+            Event::PopupDone(_)
+            | Event::ActivationToken { .. }
+            | Event::MenuBar { .. }
+            | Event::Dock { .. } => {}
         }
         Ok(())
     }
 
     /// A key went down on the screen of the current stage.
-    fn press(&mut self, now: f64, code: u32, mods: Modifiers, character: Option<char>) -> Result<()> {
+    fn press(
+        &mut self,
+        now: f64,
+        code: u32,
+        mods: Modifiers,
+        character: Option<char>,
+    ) -> Result<()> {
         if self.power_key(code)? {
             return Ok(());
         }
@@ -289,7 +420,10 @@ impl App {
                         if let Some(action) = self.authorising {
                             screen.notify(authorisation_notice(action).to_owned());
                         }
-                        self.stage = Stage::Password { user: User::typed(name), screen };
+                        self.stage = Stage::Password {
+                            user: User::typed(name),
+                            screen,
+                        };
                     }
                     NameKey::Cancel => {
                         self.authorising = None;
@@ -299,7 +433,10 @@ impl App {
             }
             Stage::Password { user, screen } => {
                 // Escape goes back to the tiles unless an attempt is on its way to a decision
-                let deciding = matches!(screen.phase(), Phase::Authenticating { .. } | Phase::Unlocking | Phase::Unlocked);
+                let deciding = matches!(
+                    screen.phase(),
+                    Phase::Authenticating { .. } | Phase::Unlocking | Phase::Unlocked
+                );
                 if code == key::ESCAPE && !deciding {
                     self.authorising = None;
                     self.stage = Stage::Picking;
@@ -309,11 +446,16 @@ impl App {
                     Some(typed) => {
                         if let Some(password) = screen.press(now, typed) {
                             let request = match self.authorising {
-                                Some(action) => Request::AuthenticatePower { name: user.login.clone(), action },
+                                Some(action) => Request::AuthenticatePower {
+                                    name: user.login.clone(),
+                                    action,
+                                },
                                 None => Request::Authenticate {
                                     account: match user.uid {
                                         Some(uid) => Account::Listed { uid },
-                                        None => Account::Typed { name: user.login.clone() },
+                                        None => Account::Typed {
+                                            name: user.login.clone(),
+                                        },
                                     },
                                 },
                             };
@@ -336,13 +478,23 @@ impl App {
             return Ok(());
         }
         match (&mut self.stage, event) {
-            (Stage::Password { screen, .. }, PointerEvent::Motion(_) | PointerEvent::Button { .. }) => screen.activity(now),
+            (
+                Stage::Password { screen, .. },
+                PointerEvent::Motion(_) | PointerEvent::Button { .. },
+            ) => screen.activity(now),
             (Stage::Picking, PointerEvent::Motion(position)) => {
                 if let Some(index) = self.tile_at(surface, position)? {
                     self.picker.select(index);
                 }
             }
-            (Stage::Picking, PointerEvent::Button { button: Button::Left, pressed: true, position }) => {
+            (
+                Stage::Picking,
+                PointerEvent::Button {
+                    button: Button::Left,
+                    pressed: true,
+                    position,
+                },
+            ) => {
                 if let Some(index) = self.tile_at(surface, position)? {
                     self.picker.select(index);
                     self.choose(now)?;
@@ -355,15 +507,30 @@ impl App {
 
     /// The layout of the output `surface` covers.
     fn layout_of(&self, surface: SurfaceId) -> Result<Layout> {
-        let output = self.surfaces.iter().find(|&&(s, _)| s == surface).map(|&(_, o)| o).ok_or("a pointer event on an unknown surface")?;
-        let geometry = self.client.outputs().into_iter().find(|o| o.id == output).and_then(|o| o.geometry).ok_or("the output of a surface has no geometry")?;
-        Ok(self.renderer.layout(f64::from(geometry.width), f64::from(geometry.height)))
+        let output = self
+            .surfaces
+            .iter()
+            .find(|&&(s, _)| s == surface)
+            .map(|&(_, o)| o)
+            .ok_or("a pointer event on an unknown surface")?;
+        let geometry = self
+            .client
+            .outputs()
+            .into_iter()
+            .find(|o| o.id == output)
+            .and_then(|o| o.geometry)
+            .ok_or("the output of a surface has no geometry")?;
+        Ok(self
+            .renderer
+            .layout(f64::from(geometry.width), f64::from(geometry.height)))
     }
 
     /// Pointer input for the power item: a click on the glyph opens or closes the menu, a click on a row does its item,
     /// a click elsewhere closes the menu, and the pointer over a row selects it. Returns whether the event was taken.
     fn power_pointer(&mut self, surface: SurfaceId, event: PointerEvent) -> Result<bool> {
-        let Some(menu) = &self.power else { return Ok(false) };
+        let Some(menu) = &self.power else {
+            return Ok(false);
+        };
         let layout = self.layout_of(surface)?;
         let rows = layout.power_menu(menu.items().len()).1;
         let row_at = |position: Point| rows.iter().position(|row| row.contains(position));
@@ -376,7 +543,11 @@ impl App {
                 }
                 Ok(true)
             }
-            PointerEvent::Button { button: Button::Left, pressed: true, position } if open => {
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: true,
+                position,
+            } if open => {
                 match row_at(position) {
                     Some(row) => {
                         let action = menu.activate(row);
@@ -386,7 +557,11 @@ impl App {
                 }
                 Ok(true)
             }
-            PointerEvent::Button { button: Button::Left, pressed: true, position } if layout.power_item.contains(position) => {
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: true,
+                position,
+            } if layout.power_item.contains(position) => {
                 menu.toggle();
                 Ok(true)
             }
@@ -397,7 +572,9 @@ impl App {
     /// A key while the power item exists: Tab opens or closes the menu, and an open menu takes the arrows, Return and
     /// Escape. Returns whether the key was taken.
     fn power_key(&mut self, code: u32) -> Result<bool> {
-        let Some(menu) = &mut self.power else { return Ok(false) };
+        let Some(menu) = &mut self.power else {
+            return Ok(false);
+        };
         if code == key::TAB {
             menu.toggle();
             return Ok(true);
@@ -448,14 +625,23 @@ impl App {
         let max_per_page = self.max_per_page()?;
         let page = picker.page(max_per_page);
         let layout = self.layout_of(surface)?;
-        let frames = layout.tiles(Grid::for_count(max_per_page.min(picker.tiles().len())), page.len());
-        Ok(frames.iter().position(|frame| frame.contains(position)).map(|i| page.start + i))
+        let frames = layout.tiles(
+            Grid::for_count(max_per_page.min(picker.tiles().len())),
+            page.len(),
+        );
+        Ok(frames
+            .iter()
+            .position(|frame| frame.contains(position))
+            .map(|i| page.start + i))
     }
 
     /// Act on the selected tile: the password screen of its account, or the name screen of "Other…".
     fn choose(&mut self, now: f64) -> Result<()> {
         self.stage = match &self.picker.selected() {
-            Tile::Account(user) => Stage::Password { user: user.clone(), screen: LockScreen::new(now, HIDE_AFTER) },
+            Tile::Account(user) => Stage::Password {
+                user: user.clone(),
+                screen: LockScreen::new(now, HIDE_AFTER),
+            },
             Tile::Other => Stage::Naming(NameEntry::default()),
         };
         Ok(())
@@ -497,7 +683,12 @@ impl App {
                 menu.set_will_prompt(will_prompt);
             }
             log_power_items(self.power.as_ref());
-            eprintln!("cupertino-login: picker: {} users, other tile: {}, {} logged in", users.len(), if self.show_other { "yes" } else { "no" }, users.iter().filter(|row| row.logged_in).count());
+            eprintln!(
+                "cupertino-login: picker: {} users, other tile: {}, {} logged in",
+                users.len(),
+                if self.show_other { "yes" } else { "no" },
+                users.iter().filter(|row| row.logged_in).count()
+            );
             return Ok(());
         }
         if let ManagerEvent::Refused { reason } = event {
@@ -511,31 +702,44 @@ impl App {
             }
             return Ok(());
         }
-        let Stage::Password { user, screen } = &mut self.stage else { return Err("the session manager answered while no password was asked".into()) };
+        let Stage::Password { user, screen } = &mut self.stage else {
+            return Err("the session manager answered while no password was asked".into());
+        };
         match event {
             ManagerEvent::Prompt { echo, text } => {
                 if echo {
                     screen.notify(text);
                 }
                 match self.pending.take() {
-                    Some(password) => self.connection.send(&Request::Answer { secret: Secret::new(password).map_err(|e| e.to_string())? })?,
+                    Some(password) => self.connection.send(&Request::Answer {
+                        secret: Secret::new(password).map_err(|e| e.to_string())?,
+                    })?,
                     // the password is spent: a second question is more than this screen can answer
                     None => {
                         self.connection.send(&Request::Cancel {})?;
-                        screen.finish_auth(now, AuthOutcome::Error("authentication needs more than a password".into()))?;
+                        screen.finish_auth(
+                            now,
+                            AuthOutcome::Error("authentication needs more than a password".into()),
+                        )?;
                     }
                 }
             }
             ManagerEvent::Notice { text, .. } => screen.notify(text),
-            ManagerEvent::Result { outcome: Outcome::Accepted } if self.authorising.is_some() => {
+            ManagerEvent::Result {
+                outcome: Outcome::Accepted,
+            } if self.authorising.is_some() => {
                 // the machine goes down, or the manager refuses and shows the screen again (`PowerRefused`, `Reset`)
                 eprintln!("cupertino-login: power action authorised");
             }
-            ManagerEvent::Result { outcome: Outcome::Accepted } => {
+            ManagerEvent::Result {
+                outcome: Outcome::Accepted,
+            } => {
                 // the spinner goes on until the manager shows the screen again (`Reset`)
                 eprintln!("cupertino-login: session starting");
             }
-            ManagerEvent::Result { outcome: Outcome::Denied } => {
+            ManagerEvent::Result {
+                outcome: Outcome::Denied,
+            } => {
                 self.failed.record(&user.login);
                 eprintln!("cupertino-login: authentication failed");
                 screen.finish_auth(now, AuthOutcome::Denied)?;
@@ -546,8 +750,13 @@ impl App {
                 screen.finish_auth(now, AuthOutcome::Error(reason))?;
             }
             ManagerEvent::SessionStarting { .. } => {}
-            ManagerEvent::Hello { .. } | ManagerEvent::Welcome { .. } => return Err("the session manager sent a message out of order".into()),
-            ManagerEvent::Reset | ManagerEvent::Users { .. } | ManagerEvent::Refused { .. } | ManagerEvent::PowerRefused { .. } => unreachable!("handled above"),
+            ManagerEvent::Hello { .. } | ManagerEvent::Welcome { .. } => {
+                return Err("the session manager sent a message out of order".into())
+            }
+            ManagerEvent::Reset
+            | ManagerEvent::Users { .. }
+            | ManagerEvent::Refused { .. }
+            | ManagerEvent::PowerRefused { .. } => unreachable!("handled above"),
         }
         Ok(())
     }
@@ -576,9 +785,30 @@ impl App {
         let drawn = self.current(self.now())?;
         let menu = self.power.as_ref();
         match (&drawn, &self.stage) {
-            (Drawn::Picker(key), _) => screen::draw_picker(&mut self.client, &mut self.renderer, key, &self.picker, menu, surface)?,
-            (Drawn::Field(key), Stage::Password { user, .. }) => screen::draw(&mut self.client, &mut self.renderer, key, Some(user), menu, surface)?,
-            (Drawn::Field(key), _) => screen::draw(&mut self.client, &mut self.renderer, key, None, menu, surface)?,
+            (Drawn::Picker(key), _) => screen::draw_picker(
+                &mut self.client,
+                &mut self.renderer,
+                key,
+                &self.picker,
+                menu,
+                surface,
+            )?,
+            (Drawn::Field(key), Stage::Password { user, .. }) => screen::draw(
+                &mut self.client,
+                &mut self.renderer,
+                key,
+                Some(user),
+                menu,
+                surface,
+            )?,
+            (Drawn::Field(key), _) => screen::draw(
+                &mut self.client,
+                &mut self.renderer,
+                key,
+                None,
+                menu,
+                surface,
+            )?,
         }
         self.drawn = Some(drawn);
         if !self.announced {

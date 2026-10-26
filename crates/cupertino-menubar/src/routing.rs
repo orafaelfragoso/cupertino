@@ -64,34 +64,79 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
         Effect::Redraw => Some(Action::Redraw),
         Effect::Opened { .. } => Some(Action::SetMenuOpen(true)),
         Effect::Closed => Some(Action::SetMenuOpen(false)),
-        Effect::AboutToShow { slot: SlotKey::Menu(_), item } => match cx.feed.source(cx.shared) {
-            MenuSource::Kde(menu) => Some(Action::Request(Request::AboutToShow { menu, item: item.0 })),
+        Effect::AboutToShow {
+            slot: SlotKey::Menu(_),
+            item,
+        } => match cx.feed.source(cx.shared) {
+            MenuSource::Kde(menu) => {
+                Some(Action::Request(Request::AboutToShow { menu, item: item.0 }))
+            }
             _ => None,
         },
         Effect::AboutToShow { .. } => None,
-        Effect::Activate { slot: SlotKey::Status(id), item } if ExtraKind::from_slot_id(&id).is_some() => {
+        Effect::Activate {
+            slot: SlotKey::Status(id),
+            item,
+        } if ExtraKind::from_slot_id(&id).is_some() => {
             let kind = ExtraKind::from_slot_id(&id)?;
-            cx.shared.extras.menu(kind).action(item).cloned().map(Action::Extra)
+            cx.shared
+                .extras
+                .menu(kind)
+                .action(item)
+                .cloned()
+                .map(Action::Extra)
         }
-        Effect::Activate { slot: SlotKey::Status(id), item } => {
+        Effect::Activate {
+            slot: SlotKey::Status(id),
+            item,
+        } => {
             let status = cx.shared.status.iter().find(|s| s.item.id == id)?;
             let path = status.item.menu_path.clone()?;
-            Some(Action::Request(Request::ActivateDbusMenu { menu: KdeAppMenu { service: status.item.service.clone(), path }, item: item.0 }))
+            Some(Action::Request(Request::ActivateDbusMenu {
+                menu: KdeAppMenu {
+                    service: status.item.service.clone(),
+                    path,
+                },
+                item: item.0,
+            }))
         }
-        Effect::Activate { slot: SlotKey::Menu(_), item } => match cx.feed.source(cx.shared) {
-            MenuSource::Kde(menu) => Some(Action::Request(Request::ActivateDbusMenu { menu, item: item.0 })),
-            MenuSource::Gtk(props) => Some(Action::Request(Request::ActivateGtk { props, item: item.0 })),
+        Effect::Activate {
+            slot: SlotKey::Menu(_),
+            item,
+        } => match cx.feed.source(cx.shared) {
+            MenuSource::Kde(menu) => Some(Action::Request(Request::ActivateDbusMenu {
+                menu,
+                item: item.0,
+            })),
+            MenuSource::Gtk(props) => Some(Action::Request(Request::ActivateGtk {
+                props,
+                item: item.0,
+            })),
             MenuSource::Synthetic => fallback_action(item),
         },
-        Effect::Activate { slot: SlotKey::AppMenu, item } => fallback_action(item),
-        Effect::Activate { slot: SlotKey::ControlPanel | SlotKey::Clock, .. } => None,
+        Effect::Activate {
+            slot: SlotKey::AppMenu,
+            item,
+        } => fallback_action(item),
+        Effect::Activate {
+            slot: SlotKey::ControlPanel | SlotKey::Clock,
+            ..
+        } => None,
         Effect::SlotActivated { slot } => match slot {
             SlotKey::Status(id) => {
                 let status = cx.shared.status.iter().find(|s| s.item.id == id)?;
                 let rect = cx.layout.slot(&SlotKey::Status(id))?.rect;
                 // the item anchors what it shows at the middle of its slot
-                let (x, y) = ((rect.x + rect.w / 2.0).round() as i32 + cx.origin.0, (rect.y + rect.h / 2.0).round() as i32 + cx.origin.1);
-                Some(Action::Request(Request::ActivateStatus { service: status.item.service.clone(), path: status.item.path.clone(), x, y }))
+                let (x, y) = (
+                    (rect.x + rect.w / 2.0).round() as i32 + cx.origin.0,
+                    (rect.y + rect.h / 2.0).round() as i32 + cx.origin.1,
+                );
+                Some(Action::Request(Request::ActivateStatus {
+                    service: status.item.service.clone(),
+                    path: status.item.path.clone(),
+                    x,
+                    y,
+                }))
             }
             SlotKey::ControlPanel => Some(Action::Request(Request::TogglePanel)),
             SlotKey::Clock => Some(Action::Request(Request::ToggleCentre)),
@@ -138,31 +183,79 @@ mod tests {
         fn new(menu: WindowMenu) -> Self {
             let mut feed = BarFeed::new(1);
             let mut shared = Shared::default();
-            let update = MenuBarUpdate { active_app: Some(ActiveApp { app_id: "org.example.editor".into(), title: String::new() }), menu: Some(menu), window_state: None, engage: false, screen_capture: None };
-            feed.apply(&update, &mut shared, |_| AppName { name: "Editor".into(), has_entry: true });
-            let item = StatusItem { id: ":1.9/StatusNotifierItem".into(), service: ":1.9".into(), path: "/StatusNotifierItem".into(), menu_path: Some("/MenuBar".into()), status: ItemStatus::Active, ..StatusItem::default() };
-            shared.set_status(StatusState { item, icon: None, menu: None });
+            let update = MenuBarUpdate {
+                active_app: Some(ActiveApp {
+                    app_id: "org.example.editor".into(),
+                    title: String::new(),
+                }),
+                menu: Some(menu),
+                window_state: None,
+                engage: false,
+                screen_capture: None,
+            };
+            feed.apply(&update, &mut shared, |_| AppName {
+                name: "Editor".into(),
+                has_entry: true,
+            });
+            let item = StatusItem {
+                id: ":1.9/StatusNotifierItem".into(),
+                service: ":1.9".into(),
+                path: "/StatusNotifierItem".into(),
+                menu_path: Some("/MenuBar".into()),
+                status: ItemStatus::Active,
+                ..StatusItem::default()
+            };
+            shared.set_status(StatusState {
+                item,
+                icon: None,
+                menu: None,
+            });
             shared.clock = "10:42".into();
-            let layout = layout_bar(Rect::new(0.0, 0.0, 1000.0, 800.0), &feed.content(&shared), &BarMetrics::default(), &MonoMeasure::default());
-            Fixture { feed, shared, layout }
+            let layout = layout_bar(
+                Rect::new(0.0, 0.0, 1000.0, 800.0),
+                &feed.content(&shared),
+                &BarMetrics::default(),
+                &MonoMeasure::default(),
+            );
+            Fixture {
+                feed,
+                shared,
+                layout,
+            }
         }
 
         fn resolve(&self, effect: Effect) -> Option<Action> {
-            resolve(effect, &Context { feed: &self.feed, shared: &self.shared, layout: &self.layout, origin: (1920, 0) })
+            resolve(
+                effect,
+                &Context {
+                    feed: &self.feed,
+                    shared: &self.shared,
+                    layout: &self.layout,
+                    origin: (1920, 0),
+                },
+            )
         }
-
     }
 
     fn kde_menu() -> WindowMenu {
-        WindowMenu::DbusMenu { service: ":1.5".into(), path: "/MenuBar".into() }
+        WindowMenu::DbusMenu {
+            service: ":1.5".into(),
+            path: "/MenuBar".into(),
+        }
     }
 
     fn kde() -> KdeAppMenu {
-        KdeAppMenu { service: ":1.5".into(), path: "/MenuBar".into() }
+        KdeAppMenu {
+            service: ":1.5".into(),
+            path: "/MenuBar".into(),
+        }
     }
 
     fn activate(slot: SlotKey, item: i32) -> Effect {
-        Effect::Activate { slot, item: ItemId(item) }
+        Effect::Activate {
+            slot,
+            item: ItemId(item),
+        }
     }
 
     #[test]
@@ -178,7 +271,12 @@ mod tests {
     #[test]
     fn opening_and_closing_tell_the_server() {
         let f = Fixture::new(WindowMenu::None);
-        assert_eq!(f.resolve(Effect::Opened { slot: SlotKey::AppMenu }), Some(Action::SetMenuOpen(true)));
+        assert_eq!(
+            f.resolve(Effect::Opened {
+                slot: SlotKey::AppMenu
+            }),
+            Some(Action::SetMenuOpen(true))
+        );
         assert_eq!(f.resolve(Effect::Closed), Some(Action::SetMenuOpen(false)));
         assert_eq!(f.resolve(Effect::Redraw), Some(Action::Redraw));
     }
@@ -187,63 +285,178 @@ mod tests {
     fn exporter_menus_are_refreshed_before_they_show_but_the_app_menu_is_not() {
         let f = Fixture::new(kde_menu());
         let file = SlotKey::Menu(ItemId(1));
-        assert_eq!(f.resolve(Effect::AboutToShow { slot: file, item: ItemId(1) }), Some(Action::Request(Request::AboutToShow { menu: kde(), item: 1 })));
-        assert_eq!(f.resolve(Effect::AboutToShow { slot: SlotKey::AppMenu, item: ItemId(i32::MIN) }), None);
-        assert_eq!(f.resolve(Effect::AboutToShow { slot: SlotKey::Status(":1.9/StatusNotifierItem".into()), item: ItemId(0) }), None);
+        assert_eq!(
+            f.resolve(Effect::AboutToShow {
+                slot: file,
+                item: ItemId(1)
+            }),
+            Some(Action::Request(Request::AboutToShow {
+                menu: kde(),
+                item: 1
+            }))
+        );
+        assert_eq!(
+            f.resolve(Effect::AboutToShow {
+                slot: SlotKey::AppMenu,
+                item: ItemId(i32::MIN)
+            }),
+            None
+        );
+        assert_eq!(
+            f.resolve(Effect::AboutToShow {
+                slot: SlotKey::Status(":1.9/StatusNotifierItem".into()),
+                item: ItemId(0)
+            }),
+            None
+        );
     }
 
     #[test]
     fn items_of_an_exporter_go_to_the_exporter() {
         let f = Fixture::new(kde_menu());
-        assert_eq!(f.resolve(activate(SlotKey::Menu(ItemId(1)), 2)), Some(Action::Request(Request::ActivateDbusMenu { menu: kde(), item: 2 })));
-        let props = GtkMenuProps { bus_name: ":1.7".into(), menubar_object_path: Some("/menubar".into()), ..GtkMenuProps::default() };
-        let gtk = WindowMenu::Gtk(GtkMenu { bus_name: ":1.7".into(), application_id: None, application_object_path: None, window_object_path: None, menubar_object_path: Some("/menubar".into()), app_menu_object_path: None });
+        assert_eq!(
+            f.resolve(activate(SlotKey::Menu(ItemId(1)), 2)),
+            Some(Action::Request(Request::ActivateDbusMenu {
+                menu: kde(),
+                item: 2
+            }))
+        );
+        let props = GtkMenuProps {
+            bus_name: ":1.7".into(),
+            menubar_object_path: Some("/menubar".into()),
+            ..GtkMenuProps::default()
+        };
+        let gtk = WindowMenu::Gtk(GtkMenu {
+            bus_name: ":1.7".into(),
+            application_id: None,
+            application_object_path: None,
+            window_object_path: None,
+            menubar_object_path: Some("/menubar".into()),
+            app_menu_object_path: None,
+        });
         let f = Fixture::new(gtk);
-        assert_eq!(f.resolve(activate(SlotKey::Menu(ItemId(1)), 5)), Some(Action::Request(Request::ActivateGtk { props, item: 5 })));
+        assert_eq!(
+            f.resolve(activate(SlotKey::Menu(ItemId(1)), 5)),
+            Some(Action::Request(Request::ActivateGtk { props, item: 5 }))
+        );
     }
 
     #[test]
     fn the_app_menu_and_the_window_menu_act_through_the_server() {
         // the app menu is synthetic even when the window exports its own menus
         let f = Fixture::new(kde_menu());
-        assert_eq!(f.resolve(activate(SlotKey::AppMenu, FallbackAction::Hide.item_id().0)), Some(Action::WindowCommand(WindowCommand::HideApp)));
-        assert_eq!(f.resolve(activate(SlotKey::AppMenu, FallbackAction::Quit.item_id().0)), Some(Action::WindowCommand(WindowCommand::QuitApp)));
-        assert_eq!(f.resolve(activate(SlotKey::AppMenu, FallbackAction::About.item_id().0)), Some(Action::ShowAbout));
+        assert_eq!(
+            f.resolve(activate(SlotKey::AppMenu, FallbackAction::Hide.item_id().0)),
+            Some(Action::WindowCommand(WindowCommand::HideApp))
+        );
+        assert_eq!(
+            f.resolve(activate(SlotKey::AppMenu, FallbackAction::Quit.item_id().0)),
+            Some(Action::WindowCommand(WindowCommand::QuitApp))
+        );
+        assert_eq!(
+            f.resolve(activate(
+                SlotKey::AppMenu,
+                FallbackAction::About.item_id().0
+            )),
+            Some(Action::ShowAbout)
+        );
         let f = Fixture::new(WindowMenu::None);
         let window = SlotKey::Menu(fallback::WINDOW_MENU);
-        assert_eq!(f.resolve(activate(window.clone(), FallbackAction::Minimize.item_id().0)), Some(Action::WindowCommand(WindowCommand::Minimize)));
-        assert_eq!(f.resolve(activate(window.clone(), FallbackAction::Zoom.item_id().0)), Some(Action::WindowCommand(WindowCommand::Zoom)));
-        assert_eq!(f.resolve(activate(window.clone(), FallbackAction::CloseWindow.item_id().0)), Some(Action::WindowCommand(WindowCommand::Close)));
-        assert_eq!(f.resolve(activate(window, FallbackAction::MoveToWorkspace(3).item_id().0)), Some(Action::MoveToWorkspace(3)));
+        assert_eq!(
+            f.resolve(activate(
+                window.clone(),
+                FallbackAction::Minimize.item_id().0
+            )),
+            Some(Action::WindowCommand(WindowCommand::Minimize))
+        );
+        assert_eq!(
+            f.resolve(activate(window.clone(), FallbackAction::Zoom.item_id().0)),
+            Some(Action::WindowCommand(WindowCommand::Zoom))
+        );
+        assert_eq!(
+            f.resolve(activate(
+                window.clone(),
+                FallbackAction::CloseWindow.item_id().0
+            )),
+            Some(Action::WindowCommand(WindowCommand::Close))
+        );
+        assert_eq!(
+            f.resolve(activate(
+                window,
+                FallbackAction::MoveToWorkspace(3).item_id().0
+            )),
+            Some(Action::MoveToWorkspace(3))
+        );
     }
 
     #[test]
     fn a_status_menu_item_goes_to_the_items_menu() {
         let f = Fixture::new(WindowMenu::None);
         let slot = SlotKey::Status(":1.9/StatusNotifierItem".into());
-        assert_eq!(f.resolve(activate(slot, 4)), Some(Action::Request(Request::ActivateDbusMenu { menu: KdeAppMenu { service: ":1.9".into(), path: "/MenuBar".into() }, item: 4 })));
+        assert_eq!(
+            f.resolve(activate(slot, 4)),
+            Some(Action::Request(Request::ActivateDbusMenu {
+                menu: KdeAppMenu {
+                    service: ":1.9".into(),
+                    path: "/MenuBar".into()
+                },
+                item: 4
+            }))
+        );
     }
 
     #[test]
     fn clicking_slots_without_a_menu() {
         let f = Fixture::new(WindowMenu::None);
-        assert_eq!(f.resolve(Effect::SlotActivated { slot: SlotKey::Clock }), Some(Action::Request(Request::ToggleCentre)));
-        assert_eq!(f.resolve(Effect::SlotActivated { slot: SlotKey::ControlPanel }), Some(Action::Request(Request::TogglePanel)));
+        assert_eq!(
+            f.resolve(Effect::SlotActivated {
+                slot: SlotKey::Clock
+            }),
+            Some(Action::Request(Request::ToggleCentre))
+        );
+        assert_eq!(
+            f.resolve(Effect::SlotActivated {
+                slot: SlotKey::ControlPanel
+            }),
+            Some(Action::Request(Request::TogglePanel))
+        );
         // 1000 wide bar: clock 51 and control panel 28 from the right inset of 6, then the 26 wide
         // status slot at 889 with its middle at 902, on the output at x = 1920
         assert_eq!(
-            f.resolve(Effect::SlotActivated { slot: SlotKey::Status(":1.9/StatusNotifierItem".into()) }),
-            Some(Action::Request(Request::ActivateStatus { service: ":1.9".into(), path: "/StatusNotifierItem".into(), x: 2822, y: 12 }))
+            f.resolve(Effect::SlotActivated {
+                slot: SlotKey::Status(":1.9/StatusNotifierItem".into())
+            }),
+            Some(Action::Request(Request::ActivateStatus {
+                service: ":1.9".into(),
+                path: "/StatusNotifierItem".into(),
+                x: 2822,
+                y: 12
+            }))
         );
     }
 
     #[test]
     fn rows_of_the_bars_own_items_become_their_actions() {
         let mut f = Fixture::new(WindowMenu::None);
-        f.shared.extras.bluetooth = Some(BluetoothState { powered: true, devices: Vec::new() });
+        f.shared.extras.bluetooth = Some(BluetoothState {
+            powered: true,
+            devices: Vec::new(),
+        });
         let slot = SlotKey::Status(ExtraKind::Bluetooth.slot_id().into());
         let toggle = f.shared.extras.menu(ExtraKind::Bluetooth).rows[0].id;
-        assert_eq!(f.resolve(Effect::Activate { slot: slot.clone(), item: toggle }), Some(Action::Extra(ExtraAction::SetBluetoothPowered(false))));
-        assert_eq!(f.resolve(Effect::Activate { slot, item: ItemId(99) }), None);
+        assert_eq!(
+            f.resolve(Effect::Activate {
+                slot: slot.clone(),
+                item: toggle
+            }),
+            Some(Action::Extra(ExtraAction::SetBluetoothPowered(false)))
+        );
+        assert_eq!(
+            f.resolve(Effect::Activate {
+                slot,
+                item: ItemId(99)
+            }),
+            None
+        );
     }
 }

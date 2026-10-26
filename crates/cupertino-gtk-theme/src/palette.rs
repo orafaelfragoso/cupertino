@@ -22,7 +22,16 @@ pub enum Accent {
 }
 
 impl Accent {
-    pub const ALL: [Accent; 8] = [Accent::Blue, Accent::Purple, Accent::Pink, Accent::Red, Accent::Orange, Accent::Yellow, Accent::Green, Accent::Graphite];
+    pub const ALL: [Accent; 8] = [
+        Accent::Blue,
+        Accent::Purple,
+        Accent::Pink,
+        Accent::Red,
+        Accent::Orange,
+        Accent::Yellow,
+        Accent::Green,
+        Accent::Graphite,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -55,14 +64,28 @@ impl Accent {
 impl std::str::FromStr for Accent {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, String> {
-        Accent::ALL.iter().copied().find(|a| a.name() == s.to_ascii_lowercase()).ok_or_else(|| format!("unknown accent {s:?} (expected one of: {})", Accent::ALL.map(|a| a.name()).join(", ")))
+        Accent::ALL
+            .iter()
+            .copied()
+            .find(|a| a.name() == s.to_ascii_lowercase())
+            .ok_or_else(|| {
+                format!(
+                    "unknown accent {s:?} (expected one of: {})",
+                    Accent::ALL.map(|a| a.name()).join(", ")
+                )
+            })
     }
 }
 
 /// Source-over of `top` on an opaque `bottom` (result is opaque).
 pub fn over(top: Color, bottom: Color) -> Color {
     let a = top.a;
-    Color::new(top.r * a + bottom.r * (1.0 - a), top.g * a + bottom.g * (1.0 - a), top.b * a + bottom.b * (1.0 - a), 1.0)
+    Color::new(
+        top.r * a + bottom.r * (1.0 - a),
+        top.g * a + bottom.g * (1.0 - a),
+        top.b * a + bottom.b * (1.0 - a),
+        1.0,
+    )
 }
 
 /// `#rrggbb` for opaque colours, `rgba(r, g, b, a)` otherwise (CSS and the generated files).
@@ -148,20 +171,50 @@ pub struct Palette {
 
 impl Palette {
     pub fn from_theme(theme: &Theme, dark: bool, high_contrast: bool, accent: Accent) -> Palette {
-        let appearance = if dark { Appearance::Dark } else { Appearance::Light }.with_high_contrast(high_contrast);
+        let appearance = if dark {
+            Appearance::Dark
+        } else {
+            Appearance::Light
+        }
+        .with_high_contrast(high_contrast);
         let t = &theme.tokens;
         let sem = |c: SemanticColor| t.semantic(appearance, c);
         let named = |n: &str| t.color(appearance, n);
-        let fallback_text = if dark { Color::new(1.0, 1.0, 1.0, 0.85) } else { Color::new(0.0, 0.0, 0.0, 0.85) };
-        let window_bg = sem(SemanticColor::WindowBackground).unwrap_or(if dark { Color::new(0.196, 0.196, 0.196, 1.0) } else { Color::new(0.925, 0.925, 0.925, 1.0) });
-        let view_bg = sem(SemanticColor::ControlBackground).unwrap_or(if dark { Color::new(0.118, 0.118, 0.118, 1.0) } else { Color::new(1.0, 1.0, 1.0, 1.0) });
+        let fallback_text = if dark {
+            Color::new(1.0, 1.0, 1.0, 0.85)
+        } else {
+            Color::new(0.0, 0.0, 0.0, 0.85)
+        };
+        let window_bg = sem(SemanticColor::WindowBackground).unwrap_or(if dark {
+            Color::new(0.196, 0.196, 0.196, 1.0)
+        } else {
+            Color::new(0.925, 0.925, 0.925, 1.0)
+        });
+        let view_bg = sem(SemanticColor::ControlBackground).unwrap_or(if dark {
+            Color::new(0.118, 0.118, 0.118, 1.0)
+        } else {
+            Color::new(1.0, 1.0, 1.0, 1.0)
+        });
         let fill_of = |material: &str, window: WindowState| {
-            let opts = MaterialOptions { window, reduce_transparency: true, ..Default::default() };
-            theme.recipe(appearance, material, &opts).ok().and_then(|r| r.fills.last().map(|f| Color::new(f.rgba[0], f.rgba[1], f.rgba[2], 1.0)))
+            let opts = MaterialOptions {
+                window,
+                reduce_transparency: true,
+                ..Default::default()
+            };
+            theme
+                .recipe(appearance, material, &opts)
+                .ok()
+                .and_then(|r| {
+                    r.fills
+                        .last()
+                        .map(|f| Color::new(f.rgba[0], f.rgba[1], f.rgba[2], 1.0))
+                })
         };
         let white = Color::new(1.0, 1.0, 1.0, 1.0);
         let text = sem(SemanticColor::Label).unwrap_or(fallback_text);
-        let accent_color = named(accent.token()).or_else(|| sem(SemanticColor::SystemBlue)).unwrap_or(Color::new(0.0, 0.48, 1.0, 1.0));
+        let accent_color = named(accent.token())
+            .or_else(|| sem(SemanticColor::SystemBlue))
+            .unwrap_or(Color::new(0.0, 0.48, 1.0, 1.0));
         let purple = sem(SemanticColor::SystemPurple).unwrap_or(Color::new(0.69, 0.32, 0.87, 1.0));
         let red = sem(SemanticColor::SystemRed).unwrap_or(Color::new(1.0, 0.23, 0.19, 1.0));
         Palette {
@@ -171,7 +224,11 @@ impl Palette {
             window_bg,
             window_fg: text,
             view_bg,
-            view_fg: named("text").unwrap_or(if dark { white } else { Color::new(0.0, 0.0, 0.0, 1.0) }),
+            view_fg: named("text").unwrap_or(if dark {
+                white
+            } else {
+                Color::new(0.0, 0.0, 0.0, 1.0)
+            }),
             headerbar_bg: fill_of("Titlebar", WindowState::Active).unwrap_or(window_bg),
             headerbar_backdrop: fill_of("Titlebar", WindowState::Inactive).unwrap_or(window_bg),
             headerbar_fg: sem(SemanticColor::WindowFrameText).unwrap_or(text),
@@ -179,13 +236,16 @@ impl Palette {
             border: sem(SemanticColor::ContainerBorder).unwrap_or(Color::new(0.5, 0.5, 0.5, 0.25)),
             sidebar_bg: fill_of("Sidebar", WindowState::Active).unwrap_or(window_bg),
             popover_bg: fill_of("Menu", WindowState::Active).unwrap_or(view_bg),
-            tooltip_bg: named("tool-tip").map(|c| over(c, window_bg)).unwrap_or(view_bg),
+            tooltip_bg: named("tool-tip")
+                .map(|c| over(c, window_bg))
+                .unwrap_or(view_bg),
             tooltip_fg: named("tool-tip-text").unwrap_or(text),
             accent: accent_color,
             accent_fg: named("alternate-selected-control-text").unwrap_or(white),
             selection_bg: accent_color,
             selection_fg: named("alternate-selected-control-text").unwrap_or(white),
-            selection_inactive_bg: named("secondary-selected-control").unwrap_or(Color::new(0.86, 0.86, 0.86, 1.0)),
+            selection_inactive_bg: named("secondary-selected-control")
+                .unwrap_or(Color::new(0.86, 0.86, 0.86, 1.0)),
             selection_inactive_fg: text,
             destructive: red,
             success: sem(SemanticColor::SystemGreen).unwrap_or(Color::new(0.16, 0.8, 0.25, 1.0)),
@@ -198,13 +258,16 @@ impl Palette {
             disabled_fg: sem(SemanticColor::DisabledControlText).unwrap_or(fallback_text),
             placeholder: sem(SemanticColor::PlaceholderText).unwrap_or(fallback_text),
             fill: sem(SemanticColor::SystemFill).unwrap_or(Color::new(0.5, 0.5, 0.5, 0.2)),
-            fill_secondary: sem(SemanticColor::SecondarySystemFill).unwrap_or(Color::new(0.5, 0.5, 0.5, 0.16)),
-            fill_tertiary: sem(SemanticColor::TertiarySystemFill).unwrap_or(Color::new(0.5, 0.5, 0.5, 0.12)),
+            fill_secondary: sem(SemanticColor::SecondarySystemFill)
+                .unwrap_or(Color::new(0.5, 0.5, 0.5, 0.16)),
+            fill_tertiary: sem(SemanticColor::TertiarySystemFill)
+                .unwrap_or(Color::new(0.5, 0.5, 0.5, 0.12)),
             focus_ring: sem(SemanticColor::KeyboardFocusIndicator).unwrap_or(accent_color),
             shadow: named("control-shadow").unwrap_or(Color::new(0.0, 0.0, 0.0, 0.27)),
             control: named("control").unwrap_or(white),
             under_page: sem(SemanticColor::UnderPageBackground).unwrap_or(window_bg),
-            zebra: sem(SemanticColor::QuaternarySystemFill).unwrap_or(Color::new(0.5, 0.5, 0.5, 0.03)),
+            zebra: sem(SemanticColor::QuaternarySystemFill)
+                .unwrap_or(Color::new(0.5, 0.5, 0.5, 0.03)),
         }
     }
 
@@ -246,8 +309,14 @@ mod tests {
     #[test]
     fn high_contrast_selects_the_high_contrast_catalog() {
         let t = theme();
-        assert_eq!(Palette::from_theme(&t, false, true, Accent::Blue).appearance, Appearance::LightHighContrast);
-        assert_eq!(Palette::from_theme(&t, true, true, Accent::Blue).appearance, Appearance::DarkHighContrast);
+        assert_eq!(
+            Palette::from_theme(&t, false, true, Accent::Blue).appearance,
+            Appearance::LightHighContrast
+        );
+        assert_eq!(
+            Palette::from_theme(&t, true, true, Accent::Blue).appearance,
+            Appearance::DarkHighContrast
+        );
     }
 
     #[test]
@@ -255,12 +324,25 @@ mod tests {
         let t = theme();
         for a in Accent::ALL {
             let p = Palette::from_theme(&t, false, false, a);
-            assert_eq!(Some(p.accent), t.tokens.color(Appearance::Light, a.token()), "{}", a.name());
+            assert_eq!(
+                Some(p.accent),
+                t.tokens.color(Appearance::Light, a.token()),
+                "{}",
+                a.name()
+            );
             assert_eq!(p.selection_bg, p.accent);
         }
-        assert_eq!(Palette::from_theme(&t, false, false, Accent::Blue).accent.hex(), "#007AFF");
+        assert_eq!(
+            Palette::from_theme(&t, false, false, Accent::Blue)
+                .accent
+                .hex(),
+            "#007AFF"
+        );
         assert_eq!("Purple".parse::<Accent>().unwrap(), Accent::Purple);
-        assert!("teal".parse::<Accent>().unwrap_err().contains("expected one of"));
+        assert!("teal"
+            .parse::<Accent>()
+            .unwrap_err()
+            .contains("expected one of"));
     }
 
     #[test]
@@ -269,7 +351,13 @@ mod tests {
         let p = Palette::from_theme(&t, true, false, Accent::Blue);
         assert_eq!(p.destructive.hex(), "#FF453A");
         assert_eq!(p.success.hex(), "#32D74B");
-        assert_eq!(p.focus_ring.to_rgba8(), t.tokens.semantic(Appearance::Dark, SemanticColor::KeyboardFocusIndicator).unwrap().to_rgba8());
+        assert_eq!(
+            p.focus_ring.to_rgba8(),
+            t.tokens
+                .semantic(Appearance::Dark, SemanticColor::KeyboardFocusIndicator)
+                .unwrap()
+                .to_rgba8()
+        );
         assert!((p.window_fg.a - 0.847).abs() < 0.002);
         assert_eq!(p.selection_inactive_bg.hex(), "#464646");
     }
@@ -279,21 +367,34 @@ mod tests {
         let t = theme();
         let l = Palette::from_theme(&t, false, false, Accent::Blue);
         assert_eq!(l.headerbar_bg.to_rgba8()[3], 255);
-        assert_ne!(l.headerbar_bg.to_rgba8(), l.headerbar_backdrop.to_rgba8(), "active and inactive differ");
+        assert_ne!(
+            l.headerbar_bg.to_rgba8(),
+            l.headerbar_backdrop.to_rgba8(),
+            "active and inactive differ"
+        );
     }
 
     #[test]
     fn css_formatting() {
         assert_eq!(css(Color::new(1.0, 0.0, 0.5, 1.0)), "#ff0080");
-        assert_eq!(css(Color::from_rgba8([0, 0, 0, 216])), "rgba(0, 0, 0, 0.847)");
-        assert_eq!(css(Color::from_rgba8([255, 255, 255, 0])), "rgba(255, 255, 255, 0)");
+        assert_eq!(
+            css(Color::from_rgba8([0, 0, 0, 216])),
+            "rgba(0, 0, 0, 0.847)"
+        );
+        assert_eq!(
+            css(Color::from_rgba8([255, 255, 255, 0])),
+            "rgba(255, 255, 255, 0)"
+        );
         assert_eq!(trim_float(1.5, 3), "1.5");
         assert_eq!(trim_float(2.0, 3), "2");
     }
 
     #[test]
     fn compositing() {
-        let c = over(Color::new(0.0, 0.0, 0.0, 0.5), Color::new(1.0, 1.0, 1.0, 1.0));
+        let c = over(
+            Color::new(0.0, 0.0, 0.0, 0.5),
+            Color::new(1.0, 1.0, 1.0, 1.0),
+        );
         assert!((c.r - 0.5).abs() < 1e-6 && c.a == 1.0);
         let p = Palette::from_theme(&theme(), false, false, Accent::Blue);
         assert_eq!(p.solid(p.fill).to_rgba8()[3], 255);

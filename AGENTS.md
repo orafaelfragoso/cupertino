@@ -24,7 +24,7 @@ cargo run -p cupertino-layers
 
 - If a full workspace test hangs on a D-Bus test, test crate by crate (`cargo test -p <crate>`) and stop any stray test `dbus-daemon`; never touch the real session bus.
 - Run the compositor nested: `cargo run -p cupertino-server -- --winit --spawn foot`. Headless screenshots: `--headless --screenshot out.png --exit-after-screenshot`.
-- Crates that draw text need an asset pack with real fonts for their tests: set `CUPERTINO_ASSET_DIR`, or the built-in font is used and pixel expectations fail.
+- Tests run with the built-in font and never depend on a pack installed in your home directory; set `CUPERTINO_ASSET_DIR` only to try another pack.
 
 ## Worktrees and disk
 

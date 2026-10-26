@@ -14,7 +14,7 @@ The binary runs `cargo metadata --no-deps`, collects every dependency between wo
 and dev), and prints one line per forbidden edge to stderr. The last line is a summary:
 
 ```
-24 crates, 63 internal dependencies, 0 pending, 0 problems
+46 crates, 144 internal dependencies, 0 pending, 0 problems
 ```
 
 It exits with failure on any problem; lists it among the pre-finish checks.

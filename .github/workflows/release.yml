@@ -1,7 +1,8 @@
 # Release: on a v*.*.* or v*.*.*-rc* tag, test, build and install-test the packages in pinned containers (a release
 # candidate: Arch only; a final release: Arch, Debian and Fedora), write the source archive and the stable PKGBUILD,
-# and create a draft release with SHA256SUMS (a release candidate is marked as a prerelease). Publishing the draft is
-# a manual step behind the `release` environment.
+# and create a draft release with SHA256SUMS (a release candidate is marked as a prerelease). The `release` environment
+# only admits v* tags; it has no required reviewers (not available for a private repository on this plan). The gate is
+# that this workflow creates a draft: publishing it is a manual step in the GitHub UI.
 name: Release
 on:
   push:

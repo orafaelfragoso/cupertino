@@ -48,6 +48,7 @@ BINARIES = (
 PAM_SERVICES = ('cupertino-login', 'cupertino-session', 'cupertino-greeter', 'cupertino-autologin')
 UNITS = ('cupertino-login', 'cupertino-netd', 'cupertino-btd', 'cupertino-powerd')
 THEME_FILES = ('tokens.json', 'materials.json', 'animations.json')
+APPLICATIONS = sorted(ROOT.glob('crates/*/data/applications/*'))
 WALLPAPERS = json.loads((ROOT / 'packaging/data/wallpapers.json').read_text())['files']
 NAMES = {'runtime': 'cupertino', 'data': 'cupertino-data'}
 
@@ -60,13 +61,14 @@ def runtime(fmt):
         ('usr/bin/cupertino-session', 0o755, False),
         ('usr/lib/cupertino/greeter', 0o755, False),
         ('usr/share/wayland-sessions/cupertino.desktop', 0o644, False),
-        ('usr/share/applications/cupertino-files.desktop', 0o644, False),
-        ('usr/share/applications/cupertino-settings.desktop', 0o644, False),
         ('usr/lib/sysusers.d/cupertino-greeter.conf', 0o644, False),
         ('usr/share/dbus-1/system.d/org.cupertino.conf', 0o644, False),
         ('etc/cupertino/login.conf', 0o644, True),
         ('etc/cupertino/greeter.json', 0o644, True),
     )]
+    # Every application file the crates ship (desktop entries, cupertino-mimeapps.list): the menu bar and the dock find
+    # an app's name and icon through its entry, so none may be left out.
+    files += [(f'usr/share/applications/{a.name}', a.relative_to(ROOT).as_posix(), 0o644, False) for a in APPLICATIONS]
     files += [(f'usr/lib/systemd/system/{u}.service', f'{f}/usr/lib/systemd/system/{u}.service', 0o644, False)
               for u in UNITS]
     files += [(f'usr/share/cupertino/theme/{n}', f'data/theme/{n}', 0o644, False) for n in THEME_FILES]

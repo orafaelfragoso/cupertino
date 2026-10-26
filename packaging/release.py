@@ -25,6 +25,7 @@ import argparse
 import hashlib
 import io
 import lzma
+import re
 import shutil
 import stat
 import subprocess
@@ -152,7 +153,8 @@ def cmd_verify(args):
     problems = [f'unexpected file /{r}' for r in sorted(set(found) - set(expected) - extra)]
     problems += [f'missing file /{r}' for r in sorted(set(expected) - set(found))]
     hashes = {f'usr/share/cupertino/assets/wallpapers/{w["file"]}': w['sha256'] for w in WALLPAPERS}
-    leaks = (str(Path.home()).encode(), str(ROOT).encode(), b'/build/', b'/.cargo/registry/')
+    # A build-tree or home path at the start of a path string; remapped paths (/usr/src/..., /cargo/...) pass.
+    leak = re.compile(rb'(?<![\w./-])(' + re.escape(str(ROOT).encode()) + rb'|/home|/root)/')
     for rel, (mode, body) in sorted(found.items()):
         if mode & (stat.S_ISUID | stat.S_ISGID):
             problems.append(f'setuid/setgid bit on /{rel}')
@@ -161,7 +163,9 @@ def cmd_verify(args):
         if rel in hashes and hashlib.sha256(body).hexdigest() != hashes[rel]:
             problems.append(f'/{rel}: sha256 differs from wallpapers.json')
         if body.startswith(b'\x7fELF'):
-            problems += [f'/{rel}: holds the path {leak.decode()}' for leak in leaks if leak in body]
+            hit = leak.search(body)
+            if hit:
+                problems.append(f'/{rel}: holds the build or home path {body[hit.start():hit.start() + 60]!r}')
     if problems:
         fail(f'{args.artifact}:\n  ' + '\n  '.join(problems))
     size = sum(len(b) for _m, b in found.values())

@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 # Build, inspect and install-test the native packages of one distribution in pinned containers.
 #
-#   packaging/ci/build-in-container.sh {arch|debian|fedora} DIST_DIR
+#   packaging/ci/build-in-container.sh {arch|debian|fedora} DIST_DIR [--test-only]
 #
 # The source is the committed HEAD (git archive), so untracked or modified files never reach a package. A build
 # container compiles the workspace and makes the runtime and data packages (Arch: makepkg with check() on the release
 # source archive and the stable PKGBUILD, then namcap); release.py verifies each against the manifest. A second, fresh container of the same base installs them, checks the login-screen account, the unit
 # state, the payload and conffile preservation across a reinstall, then removes them. Packages, file lists and the
-# test log land in DIST_DIR. Needs docker and git; nothing is installed on the host.
+# test log land in DIST_DIR. --test-only skips the build and install-tests the packages already in DIST_DIR. Needs docker and git; nothing is installed on the host.
 set -euo pipefail
 
-usage="usage: build-in-container.sh arch|debian|fedora DIST_DIR"
+usage="usage: build-in-container.sh arch|debian|fedora DIST_DIR [--test-only]"
 distro=${1:?$usage}
 dist=${2:?$usage}
+mode=${3:-build}
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 
 # Images by digest; the Rust toolchain is fixed (Arch: the rolling distribution's rust), as are the packaging tools.
@@ -149,6 +150,8 @@ EOF
 )
 
 # The source copy is private to this run; the target volume keeps the build between local runs.
-docker run --rm -v "$work/src:/src" -v "$dist:/dist" \
-    --mount "type=volume,src=cupertino-$distro-target,dst=/src/target" "$build_image" bash -c "$build_script"
+if [ "$mode" != --test-only ]; then
+    docker run --rm -v "$work/src:/src" -v "$dist:/dist" \
+        --mount "type=volume,src=cupertino-$distro-target,dst=/src/target" "$build_image" bash -c "$build_script"
+fi
 docker run --rm -v "$dist:/dist:ro" "$test_image" bash -c "$test_script" bash "$distro" | tee "$dist/install-test-$distro.log"

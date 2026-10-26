@@ -19,6 +19,16 @@ cd cupertino
 cargo run --release -p cupertino-server -- --winit --spawn foot
 ```
 
+From a checkout, the apps' desktop entries (`crates/*/data/applications`) are not installed, so the menu bar and the dock show
+"Cupertino-files" and a generic icon instead of "Files" and its icon. Add the crates' data directories to the search path
+(keep the host's directories after them):
+
+```bash
+export XDG_DATA_DIRS="$PWD/crates/cupertino-files/data:$PWD/crates/cupertino-settings/data:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+```
+
+Installed packages put the entries in `/usr/share/applications`; nothing to set there.
+
 The compositor prints `WAYLAND_DISPLAY=<socket>` once it listens; start more clients with that variable set. `Super+Return` starts a terminal (the first existing of `foot`, `alacritty`, `kitty`, `wezterm`, `xterm`; configurable with `terminals`). `Ctrl+Alt+Backspace` quits.
 
 Without a pack of your own, text, icons and cursors come from the built-in fallbacks (see [Asset packs](asset-packs.md)); a missing asset never stops a start.

@@ -1,7 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Settings
-Comment=Change how the desktop looks and works
-Exec=cupertino-settings
-Icon=application.settings
-Categories=Settings;

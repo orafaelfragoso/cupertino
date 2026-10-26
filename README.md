@@ -56,7 +56,7 @@ The crates are layered (`foundation`, `models`, `platform`, `render`, `core`, `s
 
 Fonts, icons, cursors and wallpapers are not hard-coded. The shell loads them from an **asset pack**: a directory (`CUPERTINO_ASSET_DIR`) with a manifest, and falls back to the default pack for anything the pack does not provide. You can swap the whole look, or one part of it, without rebuilding.
 
-The default pack uses the Inter font, a separately licensed cursor theme (a GPL-3.0 package that the packages depend on or fetch at build time), the icon theme of the host system through the freedesktop icon specification, and wallpapers picked for this project. The pack format and the steps to build your own are in [Asset packs](docs/src/asset-packs.md). Packs are data: they are never part of the source tree.
+The default pack uses the Inter font, a separately licensed cursor theme (a GPL-3.0 package, to be packaged separately), the icon theme of the host system through the freedesktop icon specification, and wallpapers picked for this project. The pack format and the steps to build your own are in [Asset packs](docs/src/asset-packs.md). Packs are data: they are never part of the source tree.
 
 ## Licence
 

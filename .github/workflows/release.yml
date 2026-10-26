@@ -1,6 +1,8 @@
-# Release: on a v*.*.* tag, test, build and install-test the Arch, Debian and Fedora packages in pinned containers,
-# write the source archive and the stable PKGBUILD, and create a draft release with SHA256SUMS. Publishing the draft
-# is a manual step behind the `release` environment.
+# Release: on a v*.*.* or v*.*.*-rc* tag, test, build and install-test the packages in pinned containers (a release
+# candidate: Arch only; a final release: Arch, Debian and Fedora), write the source archive and the stable PKGBUILD,
+# and create a draft release with SHA256SUMS (a release candidate is marked as a prerelease). The `release` environment
+# only admits v* tags; it has no required reviewers (not available for a private repository on this plan). The gate is
+# that this workflow creates a draft: publishing it is a manual step in the GitHub UI.
 name: Release
 on:
   push:
@@ -34,8 +36,8 @@ jobs:
           python3 ci/gate.py .
           python3 packaging/release.py verify-tag "$RELEASE_TAG"
           python3 packaging/release.py check-metadata
-          archive=$(python3 packaging/release.py source --output dist)
-          python3 packaging/release.py pkgbuild "$archive" dist/PKGBUILD
+          archive=$(python3 packaging/release.py source --output dist --tag "$RELEASE_TAG")
+          python3 packaging/release.py pkgbuild --tag "$RELEASE_TAG" "$archive" dist/PKGBUILD
           cp packaging/arch/cupertino-git/PKGBUILD dist/PKGBUILD-git
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -50,7 +52,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        distro: [arch, debian, fedora]
+        distro: ${{ fromJSON(contains(github.ref_name, '-rc') && '["arch"]' || '["arch","debian","fedora"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -58,6 +60,7 @@ jobs:
       - name: Build, verify and install-test in pinned containers
         env:
           DISTRO: ${{ matrix.distro }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: bash packaging/ci/build-in-container.sh "$DISTRO" "out/$DISTRO"
       - name: Separate the packages from the build logs
         env:
@@ -106,4 +109,6 @@ jobs:
           test -n "$(find . -maxdepth 1 -type f -print -quit)"
           find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' | sort -z | xargs -0 sha256sum > SHA256SUMS
           sha256sum --check --quiet SHA256SUMS
-          gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --generate-notes ./*
+          prerelease=()
+          if [[ "$RELEASE_TAG" == *-rc* ]]; then prerelease=(--prerelease); fi
+          gh release create "$RELEASE_TAG" --verify-tag --draft "${prerelease[@]}" --title "$RELEASE_TAG" --generate-notes ./*

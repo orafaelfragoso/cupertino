@@ -6,8 +6,8 @@
 #   capture.sh files.png --spawn cupertino-files
 #   AFTER=6 capture.sh switcher.png --spawn cupertino-files --spawn cupertino-settings --hold-modifiers --key 5:Super+Tab
 # The fixture home, XDG directories and session bus are temporary; the environment is cleared, so nothing from the
-# caller's HOME or XDG directories is read. The asset pack is kept: $CUPERTINO_ASSET_DIR, else the user pack under
-# $XDG_DATA_HOME (or ~/.local/share), else the built-in assets.
+# caller's HOME or XDG directories is read. One asset pack is used: $CUPERTINO_ASSET_DIR, else the user pack under
+# $XDG_DATA_HOME (or ~/.local/share), else none (built-in assets only; the system pack is not searched).
 # Environment: AFTER (seconds before the shot, default 5), SIZE (default 1280x800), BIN_DIR (default
 # target/release, else target/debug; build with: cargo build --release --workspace --all-features --bins).
 # Needs: dbus-run-session.
@@ -62,6 +62,8 @@ cat >"$SCRATCH/server.json" <<EOF
 EOF
 
 mkdir -p "$(dirname "$OUT")"
+rm -f "$OUT"
+cd "$FHOME"
 env -i \
     HOME="$FHOME" \
     PATH="$BIN_DIR:/usr/local/bin:/usr/bin:/bin" \
@@ -74,7 +76,7 @@ env -i \
     XDG_RUNTIME_DIR="$RUNTIME" \
     XDG_CURRENT_DESKTOP=Cupertino \
     XDG_DATA_DIRS="$ROOT/crates/cupertino-files/data:$ROOT/crates/cupertino-settings/data:/usr/local/share:/usr/share" \
-    ${PACK:+CUPERTINO_ASSET_DIR="$PACK"} \
+    CUPERTINO_ASSET_SEARCH_PATH="$PACK" \
     CUPERTINO_SERVER_CONFIG="$SCRATCH/server.json" \
     dbus-run-session -- "$BIN_DIR/cupertino-server" --headless --dbus --size "${SIZE:-1280x800}" \
     --screenshot "$OUT" --screenshot-after "${AFTER:-5}" --exit-after-screenshot "$@"

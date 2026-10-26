@@ -1,0 +1,16 @@
+Unsplash License
+https://unsplash.com/license (summary) and https://unsplash.com/terms (section 5, full text)
+
+Applies to the six JPEG photographs in /usr/share/cupertino/assets/wallpapers/, listed with their
+photographers and source pages in wallpapers/credits.txt. They were downscaled and cropped to
+3840 x 2400; they are not covered by the GPL of the Cupertino code.
+
+The licence, as summarised by Unsplash:
+- "All images can be downloaded and used for free"
+- "Commercial and non-commercial purposes"
+- "No permission needed (though attribution is appreciated!)"
+What is not permitted:
+- "Images cannot be sold without significant modification."
+- "Compiling images from Unsplash to replicate a similar or competing service."
+The licence does not include the right to use trademarks, logos or brands, recognisable people,
+or works of art or authorship that appear in the images.

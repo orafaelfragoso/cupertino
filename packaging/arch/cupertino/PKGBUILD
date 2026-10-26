@@ -1,0 +1,61 @@
+# Maintainer: Rafael Fragoso <rafaelfragosom@gmail.com>
+# Stable recipe: the runtime and the default asset pack from one release source archive.
+pkgbase=cupertino
+pkgname=('cupertino' 'cupertino-data')
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Wayland desktop shell and compositor'
+arch=('x86_64')
+url='https://github.com/orafaelfragoso/cupertino'
+license=('GPL-3.0-or-later')
+makedepends=('cargo' 'python' 'mesa' 'libglvnd' 'pam')
+checkdepends=('dbus')
+# makepkg's LTO flags would reach the C code of build dependencies only; the release profile decides for Rust.
+options=('!lto')
+source=("$url/releases/download/v$pkgver/cupertino-$pkgver-source.tar.xz")
+# Written by the release; an unreleased version has no checksum and must not build from a download.
+sha256sums=('UNRELEASED')
+
+prepare() {
+  cd "cupertino-$pkgver"
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')"
+}
+
+build() {
+  cd "cupertino-$pkgver"
+  export CARGO_INCREMENTAL=0
+  # The installed theme directory is compiled in; no build or home path may end up in the binaries.
+  export CUPERTINO_THEME_DIR=/usr/share/cupertino/theme
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/usr/src/debug/$pkgbase --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
+  cargo build --frozen --release --workspace --all-features --bins
+}
+
+check() {
+  cd "cupertino-$pkgver"
+  export CARGO_INCREMENTAL=0 CUPERTINO_THEME_DIR=/usr/share/cupertino/theme CUPERTINO_SPEC_DIR="$PWD/data/theme"
+  dbus-run-session -- cargo test --frozen --release --workspace --all-features
+}
+
+package_cupertino() {
+  depends=('glibc' 'gcc-libs' 'mesa' 'libglvnd' 'pam' 'systemd' 'dbus' 'xkeyboard-config' "cupertino-data>=$pkgver")
+  optdepends=('wayland: nested session inside another Wayland desktop'
+              'libxkbcommon: nested session'
+              'foot: terminal for the nested try-out'
+              'iwd: wireless backend when cupertino-netd is enabled')
+  backup=('etc/cupertino/login.conf' 'etc/cupertino/greeter.json'
+          'etc/pam.d/cupertino-login' 'etc/pam.d/cupertino-session'
+          'etc/pam.d/cupertino-greeter' 'etc/pam.d/cupertino-autologin')
+  cd "cupertino-$pkgver"
+  python3 packaging/release.py install --format arch --package runtime --destdir "$pkgdir" --bindir target/release
+}
+
+package_cupertino-data() {
+  pkgdesc='Default asset pack of Cupertino: Inter, the icon map and six Unsplash wallpapers'
+  arch=('any')
+  license=('GPL-3.0-or-later' 'OFL-1.1' 'LicenseRef-Unsplash')
+  depends=()
+  optdepends=('adwaita-icon-theme: the host icons the icon map names'
+              'apple_cursor: the cursor theme the pack selects (built-in cursors otherwise)')
+  cd "cupertino-$pkgver"
+  python3 packaging/release.py install --format arch --package data --destdir "$pkgdir"
+}

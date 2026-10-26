@@ -59,12 +59,13 @@ The TTY backend has run in a virtual machine, not yet on real hardware. Treat it
 ## Tests
 
 ```bash
-cargo test --workspace
+cargo nextest run --workspace --all-features
+cargo test --workspace --all-features --doc
 cargo clippy --workspace --all-targets
 cargo run -p cupertino-layers
 ```
 
-Shell and app crates need `--features app` to test their process code (`cargo test -p cupertino-dock --features app`). If a full workspace test hangs on a D-Bus test, test crate by crate and stop any stray test `dbus-daemon` (never your real session bus). Crates that draw text need a pack with real fonts for their tests: set `CUPERTINO_ASSET_DIR`.
+Install [cargo-nextest](https://nexte.st) (`cargo install cargo-nextest --locked`; CI uses 0.9.150). It runs every test in its own process and kills a test that runs longer than 2 minutes (`.config/nextest.toml`), so a hang fails with the test's name; doctests run separately. Shell and app crates need `--features app` to test their process code (`cargo nextest run -p cupertino-dock --features app`). A killed run can leave a test `dbus-daemon` behind: stop it, never your real session bus. Crates that draw text need a pack with real fonts for their tests: set `CUPERTINO_ASSET_DIR`.
 
 ## Configuration
 

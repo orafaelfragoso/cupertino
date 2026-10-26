@@ -1,0 +1,43 @@
+name: Feature request
+description: Something Cupertino should do that it does not do yet.
+labels: ["enhancement", "status: triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to do and what stops you today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: What should happen, from the user's side.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Compositor (windows, popups, outputs)
+        - Input (pointer, scroll, keyboard)
+        - Text (fonts, selection, editing)
+        - Shell (dock, menu bar, launcher, control panel, notifications)
+        - Apps (Files, Settings)
+        - Packaging and install
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: Checks that show the feature is complete.
+      placeholder: |
+        - [ ] ...
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

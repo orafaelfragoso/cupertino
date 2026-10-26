@@ -1,0 +1,78 @@
+name: Bug report
+description: Something in Cupertino does not work or looks wrong.
+labels: ["bug", "status: triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. One problem per issue, please. Security problems go through `SECURITY.md`, not here.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened
+      description: One or two sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Settings > Accessibility
+        2. Click the Colour filter menu
+        3. Click outside it
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Compositor (windows, popups, outputs)
+        - Input (pointer, scroll, keyboard)
+        - Text (fonts, selection, editing)
+        - Shell (dock, menu bar, launcher, control panel, notifications)
+        - Apps (Files, Settings)
+        - Packaging and install
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: session
+    attributes:
+      label: How Cupertino was running
+      options:
+        - TTY (--udev)
+        - Nested (--winit)
+        - Headless (--headless)
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Commit, distribution, GPU and driver, display resolution and scale.
+      placeholder: |
+        Commit: e3e7322
+        Distribution: Arch Linux, kernel 7.2
+        GPU: RTX 3060, NVIDIA open kernel module 615.78
+        Display: 3840x2160 at 60 Hz, scale 1
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log
+      description: The relevant lines of the server log (for TTY runs, `~/cupertino-tty.log`).
+      render: text
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: Drag images here. Do not attach images that show icons or fonts from a local asset pack.

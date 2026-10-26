@@ -26,7 +26,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - run: python3 ci/gate.py .
+      - run: python3 -I ci/test_gate.py
+      - run: python3 -I ci/gate.py .
 
   # Licences, advisories, bans and sources, as set in deny.toml.
   deny:

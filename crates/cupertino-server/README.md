@@ -68,7 +68,7 @@ Without a backend flag the server runs nested when `WAYLAND_DISPLAY` or `DISPLAY
 | `accent-picker.png` | the accent popup over a terminal, anchored at the text cursor reported by its text input, focus on the second candidate |
 | `nested-winit.png`, `nested-winit-overview.png` | the nested backend inside the host session (tiled to 1900x1034 by the host, exercising `SetOutputRect`) |
 
-The overlay screenshots are produced by `scripts/capture-overlays.sh` (deterministic: neutral fixture applications from `tests/fixtures/applications`, a private session bus, the `cupertino-notifications` process and `gdbus`, the sample accent table `tests/fixtures/accents.json`).
+Full-desktop screenshots with a fixture home folder come from `scripts/capture.sh OUT.png [flags]`. The overlay screenshots are produced by `scripts/capture-overlays.sh` (deterministic: neutral fixture applications from `tests/fixtures/applications`, a private session bus, the `cupertino-notifications` process and `gdbus`, the sample accent table `tests/fixtures/accents.json`).
 
 ## Architecture
 

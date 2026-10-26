@@ -79,6 +79,21 @@ class IgnoredOutputTest(unittest.TestCase):
         self.assertEqual(len(problems), 1, problems)
         self.assertIn("docs/visible.js", problems[0])
 
+    def test_a_force_added_file_under_an_ignored_path_is_still_scanned(self):
+        word = "recover" + "ed"  # built from parts so that this file passes the gate itself
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "docs" / "book").mkdir(parents=True)
+            (root / ".gitignore").write_text("docs/book/\n")
+            (root / "docs" / "book" / "forced.js").write_text(f"// {word}\n")
+            subprocess.run(["git", "init", "--quiet"], cwd=root, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "add", "--force", "docs/book/forced.js"], cwd=root, check=True, capture_output=True
+            )
+            problems = gate.gate(root.resolve())[1]
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("docs/book/forced.js", problems[0])
+
 
 if __name__ == "__main__":
     unittest.main()

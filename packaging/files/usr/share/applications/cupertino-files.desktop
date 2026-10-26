@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Files
-Comment=Browse files and folders
-Exec=cupertino-files %U
-Icon=application.file-manager
-Categories=System;FileManager;
-MimeType=inode/directory;x-scheme-handler/trash;

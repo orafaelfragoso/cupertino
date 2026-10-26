@@ -193,11 +193,12 @@ impl FakeDBusMenu {
 fn dbusmenu_client_fetches_activates_and_follows_updates() {
     let bus = bus_or_skip!();
     block_on(async {
-        let server = bus.connect().await;
         let rec = Arc::new(Mutex::new(Recorded::default()));
-        server
-            .object_server()
-            .at("/MenuBar/1", FakeDBusMenu { rec: rec.clone() })
+        let server = connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .serve_at("/MenuBar/1", FakeDBusMenu { rec: rec.clone() })
+            .unwrap()
+            .build()
             .await
             .unwrap();
         let service = server.unique_name().unwrap().to_string();
@@ -273,11 +274,12 @@ fn dbusmenu_client_fetches_activates_and_follows_updates() {
 fn controller_drives_a_dbusmenu_session_end_to_end() {
     let bus = bus_or_skip!();
     block_on(async {
-        let server = bus.connect().await;
         let rec = Arc::new(Mutex::new(Recorded::default()));
-        server
-            .object_server()
-            .at("/MenuBar/1", FakeDBusMenu { rec: rec.clone() })
+        let server = connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .serve_at("/MenuBar/1", FakeDBusMenu { rec: rec.clone() })
+            .unwrap()
+            .build()
             .await
             .unwrap();
         let client_conn = bus.connect().await;

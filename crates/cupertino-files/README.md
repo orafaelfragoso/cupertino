@@ -144,7 +144,7 @@ Values live in `metrics.rs`.
   attribute), Sort By (the choice in use is checked) and the two usable view modes. Disabled, with their reference titles:
   Delete Immediately…, Get Info, Show Inspector, Compress, Quick Preview, Slideshow, Copy, Copy as Pathname, Paste Item and its
   alternates, Share, Quick Actions, Empty Trash, Other…, Duplicate Exactly, Use Groups, the Group By choices, Snap to Grid,
-  Date Added, Clean Up By, Show View Options and the Columns and Gallery segments (BACKLOG ). The menu is kept inside the window, has no item blink and no safe-triangle
+  Date Added, Clean Up By, Show View Options and the Columns and Gallery segments. The menu is kept inside the window, has no item blink and no safe-triangle
   tracking; the menu width has a 150 pt minimum that the design applies only to type-select menus, and the
   arrow column is 16 pt wide (approximate). The dot size of the tag row, the view row's size and the check mark are
   approximate.

@@ -1,6 +1,6 @@
 # cupertino-server
 
-The Smithay 0.7 Wayland compositor of the Cupertino prototypes, as a library (`cupertino_server`) and a binary (`cupertino-server`). This is its design, for people changing the compositor or the shell processes that talk to it: command line, architecture, configuration files, protocols, tests and open issues.
+The Smithay 0.7 Wayland compositor of Cupertino, as a library (`cupertino_server`) and a binary (`cupertino-server`). This is its design, for people changing the compositor or the shell processes that talk to it: command line, architecture, configuration files, protocols, tests and open issues.
 
 Window policy comes from `cupertino-wm`. Server-side decorations, window effects and input handling come from `cupertino-decorations`, `cupertino-effects`, `cupertino-input` and `cupertino-keyboard`. Shadows, rounded corners and material passes run as GLES shaders. The overview is driven by `cupertino-overview`. The notifications, menu bar, launcher and dock run as separate Wayland clients that the server starts and restarts (*Shell processes*).
 
@@ -14,7 +14,7 @@ cargo run -p cupertino-server -- --udev                        # TTY: logind + D
 cargo run -p cupertino-server -- --headless --screenshot out.png --exit-after-screenshot
 ```
 
-The server and every process that draws text or icons read the asset packs of `cupertino-assets`: `CUPERTINO_ASSET_DIR` first (this repository's pack is built by .venv/bin/python.), then the user and system packs, then the built-in fallback; a missing pack or file never stops a start. The server's text (title bars, HUD, accent popup) and cursors come from them, and the processes it starts inherit the variable.
+The server and every process that draws text or icons read the asset packs of `cupertino-assets`: `CUPERTINO_ASSET_DIR` first, then the user and system packs, then the built-in fallback; a missing pack or file never stops a start. The server's text (title bars, HUD, accent popup) and cursors come from them, and the processes it starts inherit the variable.
 
 The server's text (title bars through `Decorations`, the input-source HUD and the accent popup through `OverlayText`) is drawn with the optical size of the output's scale: both set it from the scale they draw at.
 

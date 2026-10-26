@@ -1,20 +1,20 @@
 # cupertino-layers
 
 Checks that dependencies between workspace crates follow the layer rules below. A crate's layer is
-declared in its manifest, `[package.metadata.cupertino] layer = "<layer>"`; in this tree it matches the directory,
-`prototypes/<layer>/<crate>`. Layer: `tools`; the only dependency is `serde_json`.
+declared in its manifest, `[package.metadata.cupertino] layer = "<layer>"`; in this tree crates live in
+`crates/<crate>`. Layer: `tools`; the only dependency is `serde_json`.
 
 ## Usage
 
 ```sh
-cargo run -p cupertino-layers        # from anywhere inside prototypes/
+cargo run -p cupertino-layers        # from anywhere inside the repository
 ```
 
 The binary runs `cargo metadata --no-deps`, collects every dependency between workspace crates (normal, optional
 and dev), and prints one line per forbidden edge to stderr. The last line is a summary:
 
 ```
-24 crates, 63 internal dependencies, 0 pending, 0 problems
+46 crates, 144 internal dependencies, 0 pending, 0 problems
 ```
 
 It exits with failure on any problem; lists it among the pre-finish checks.

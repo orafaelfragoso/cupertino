@@ -1,8 +1,8 @@
 # cupertino-assets
 
 The asset packs every Cupertino process draws its text, icons, cursors and wallpaper from, and the `cupertino-assets`
-tool that checks a pack. A pack is a directory with a `manifest.json`; this repository's own pack is produced by an
-extraction tool and kept out of git (contract ).
+tool that checks a pack. A pack is a directory with a `manifest.json`; packs live outside the repository. With no
+pack installed, the built-in fallback (the embedded Inter subset, procedural cursors and placeholder icons) is used.
 
 ## Manifest
 
@@ -89,5 +89,4 @@ list is not checked against the contract's list, only its shape.
 ## Tests
 
 `cargo test -p cupertino-assets`. The tests build a fixture directory (manifest and placeholder files) in a temporary directory.
-Crates that draw text need a pack with the real fonts for their tests: set `CUPERTINO_ASSET_DIR` (without it they draw with the
-built-in font and their pixel expectations fail).
+Tests run with the built-in font; set `CUPERTINO_ASSET_DIR` only to try another pack.

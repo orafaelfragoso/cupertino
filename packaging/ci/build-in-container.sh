@@ -40,7 +40,9 @@ esac
 
 mkdir -p "$dist"
 dist=$(cd "$dist" && pwd)
-work=$(mktemp -d)
+# The source copy and the Arch build tree are large; they live under the gitignored target/, not in /tmp.
+mkdir -p "$root/target"
+work=$(mktemp -d "$root/target/container-build.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 git -C "$root" archive --format=tar --prefix=src/ HEAD | tar -x -C "$work"
 if [ "$distro" = arch ]; then

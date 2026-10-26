@@ -20,7 +20,10 @@ pub struct MonoMeasure {
 
 impl Default for MonoMeasure {
     fn default() -> Self {
-        Self { advance: 7.0, bold_extra: 0.5 }
+        Self {
+            advance: 7.0,
+            bold_extra: 0.5,
+        }
     }
 }
 
@@ -125,21 +128,39 @@ impl BarLayout {
     }
 
     pub fn hit(&self, p: Point) -> Option<&Slot> {
-        self.bar.contains(p).then(|| self.slots.iter().find(|s| s.rect.contains(p))).flatten()
+        self.bar
+            .contains(p)
+            .then(|| self.slots.iter().find(|s| s.rect.contains(p)))
+            .flatten()
     }
 }
 
 /// Lay out the bar for an output `rect` (the bar occupies its top `metrics.height` points).
-pub fn layout_bar(rect: Rect, content: &BarContent, metrics: &BarMetrics, measure: &dyn TextMeasure) -> BarLayout {
+pub fn layout_bar(
+    rect: Rect,
+    content: &BarContent,
+    metrics: &BarMetrics,
+    measure: &dyn TextMeasure,
+) -> BarLayout {
     let bar = Rect::new(rect.x, rect.y, rect.w, metrics.height);
     let mut slots = Vec::new();
     let mut x = bar.x + metrics.edge_inset;
     let push_left = |slots: &mut Vec<Slot>, key: SlotKey, text: &str, bold: bool, x: &mut f64| {
         let w = measure.width(text, bold) + 2.0 * metrics.title_padding;
-        slots.push(Slot { key, rect: Rect::new(*x, bar.y, w, bar.h), bold });
+        slots.push(Slot {
+            key,
+            rect: Rect::new(*x, bar.y, w, bar.h),
+            bold,
+        });
         *x += w;
     };
-    push_left(&mut slots, SlotKey::AppMenu, &content.app_name, true, &mut x);
+    push_left(
+        &mut slots,
+        SlotKey::AppMenu,
+        &content.app_name,
+        true,
+        &mut x,
+    );
     let left_menu_start = slots.len();
     let mut menu_ends = Vec::new();
     for m in &content.menus {
@@ -152,28 +173,54 @@ pub fn layout_bar(rect: Rect, content: &BarContent, metrics: &BarMetrics, measur
     let clock_w = measure.width(&content.clock, false) + 2.0 * metrics.clock_padding;
     if !content.clock.is_empty() {
         right -= clock_w;
-        right_slots.push(Slot { key: SlotKey::Clock, rect: Rect::new(right, bar.y, clock_w, bar.h), bold: false });
+        right_slots.push(Slot {
+            key: SlotKey::Clock,
+            rect: Rect::new(right, bar.y, clock_w, bar.h),
+            bold: false,
+        });
     }
     if content.control_panel {
         right -= metrics.control_panel_width;
-        right_slots.push(Slot { key: SlotKey::ControlPanel, rect: Rect::new(right, bar.y, metrics.control_panel_width, bar.h), bold: false });
+        right_slots.push(Slot {
+            key: SlotKey::ControlPanel,
+            rect: Rect::new(right, bar.y, metrics.control_panel_width, bar.h),
+            bold: false,
+        });
     }
     let fixed_right = right;
     let mut status_slots: Vec<Slot> = Vec::new();
     for s in &content.status {
         let w = s.width + 2.0 * metrics.status_padding;
         right -= w;
-        status_slots.push(Slot { key: SlotKey::Status(s.id.clone()), rect: Rect::new(right, bar.y, w, bar.h), bold: false });
+        status_slots.push(Slot {
+            key: SlotKey::Status(s.id.clone()),
+            rect: Rect::new(right, bar.y, w, bar.h),
+            bold: false,
+        });
     }
 
     let mut hidden_menus = Vec::new();
     let mut hidden_status = Vec::new();
-    let menus_end = |count: usize, app_end: f64, ends: &[f64]| if count == 0 { app_end } else { ends[count - 1] };
+    let menus_end = |count: usize, app_end: f64, ends: &[f64]| {
+        if count == 0 {
+            app_end
+        } else {
+            ends[count - 1]
+        }
+    };
     let app_end = slots[0].rect.right();
     let mut menu_count = content.menus.len();
     let mut status_count = status_slots.len();
-    let status_start = |n: usize, status: &[Slot]| if n == 0 { fixed_right } else { status[n - 1].rect.x };
-    while menus_end(menu_count, app_end, &menu_ends) + metrics.min_gap > status_start(status_count, &status_slots) {
+    let status_start = |n: usize, status: &[Slot]| {
+        if n == 0 {
+            fixed_right
+        } else {
+            status[n - 1].rect.x
+        }
+    };
+    while menus_end(menu_count, app_end, &menu_ends) + metrics.min_gap
+        > status_start(status_count, &status_slots)
+    {
         if status_count > 0 {
             status_count -= 1;
             hidden_status.push(content.status[status_count].id.clone());
@@ -190,7 +237,12 @@ pub fn layout_bar(rect: Rect, content: &BarContent, metrics: &BarMetrics, measur
     hidden_status.reverse();
     slots.extend(status_slots.into_iter().rev());
     slots.extend(right_slots.into_iter().rev());
-    BarLayout { bar, slots, hidden_menus, hidden_status }
+    BarLayout {
+        bar,
+        slots,
+        hidden_menus,
+        hidden_status,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -258,7 +310,9 @@ impl PopupLayout {
         if !self.rect.contains(p) {
             return None;
         }
-        self.rows.iter().position(|r| r.rect.contains(p) && self.rect.contains(Point::new(p.x, p.y)))
+        self.rows
+            .iter()
+            .position(|r| r.rect.contains(p) && self.rect.contains(Point::new(p.x, p.y)))
     }
 
     pub fn index_of(&self, id: ItemId) -> Option<usize> {
@@ -275,11 +329,24 @@ pub enum Anchor {
 }
 
 /// Lay out the popup for the visible children of `menu`.
-pub fn layout_popup(menu: &MenuItem, anchor: Anchor, screen: Rect, scroll: f64, m: &MenuMetrics, measure: &dyn TextMeasure) -> PopupLayout {
+pub fn layout_popup(
+    menu: &MenuItem,
+    anchor: Anchor,
+    screen: Rect,
+    scroll: f64,
+    m: &MenuMetrics,
+    measure: &dyn TextMeasure,
+) -> PopupLayout {
     let children = menu.visible_children();
-    let any_icon = children.iter().any(|c| c.icon_name.is_some() || c.icon_data.is_some());
-    let any_mark = children.iter().any(|c| c.toggle != crate::item::Toggle::None);
-    let lead = m.padding_x + if any_mark { m.mark_column } else { 0.0 } + if any_icon { m.icon_column } else { 0.0 };
+    let any_icon = children
+        .iter()
+        .any(|c| c.icon_name.is_some() || c.icon_data.is_some());
+    let any_mark = children
+        .iter()
+        .any(|c| c.toggle != crate::item::Toggle::None);
+    let lead = m.padding_x
+        + if any_mark { m.mark_column } else { 0.0 }
+        + if any_icon { m.icon_column } else { 0.0 };
     let mut label_w: f64 = 0.0;
     let mut shortcut_w: f64 = 0.0;
     let mut any_arrow = false;
@@ -293,9 +360,25 @@ pub fn layout_popup(menu: &MenuItem, anchor: Anchor, screen: Rect, scroll: f64, 
         }
         any_arrow |= c.has_submenu;
     }
-    let trailing = m.padding_x + if shortcut_w > 0.0 { m.shortcut_gap + shortcut_w } else { 0.0 } + if any_arrow { m.arrow_width } else { 0.0 };
+    let trailing = m.padding_x
+        + if shortcut_w > 0.0 {
+            m.shortcut_gap + shortcut_w
+        } else {
+            0.0
+        }
+        + if any_arrow { m.arrow_width } else { 0.0 };
     let w = (lead + label_w + trailing).max(m.min_width);
-    let content_h: f64 = 2.0 * m.padding_y + children.iter().map(|c| if c.separator { m.separator_height } else { m.row_height }).sum::<f64>();
+    let content_h: f64 = 2.0 * m.padding_y
+        + children
+            .iter()
+            .map(|c| {
+                if c.separator {
+                    m.separator_height
+                } else {
+                    m.row_height
+                }
+            })
+            .sum::<f64>();
 
     let (mut x, anchor_y, placed_left) = match anchor {
         Anchor::BelowSlot(slot) => (slot.x, slot.bottom(), false),
@@ -329,15 +412,30 @@ pub fn layout_popup(menu: &MenuItem, anchor: Anchor, screen: Rect, scroll: f64, 
     let rows = children
         .iter()
         .map(|c| {
-            let rh = if c.separator { m.separator_height } else { m.row_height };
+            let rh = if c.separator {
+                m.separator_height
+            } else {
+                m.row_height
+            };
             let r = Rect::new(x, ry, w, rh);
             ry += rh;
             let mut item = (*c).clone();
             item.children = Vec::new();
-            PopupRow { shortcut_text: c.shortcut.as_ref().map(|s| s.display()), item, rect: r }
+            PopupRow {
+                shortcut_text: c.shortcut.as_ref().map(|s| s.display()),
+                item,
+                rect: r,
+            }
         })
         .collect();
-    PopupLayout { rect, rows, clipped, content_height: content_h, scroll, placed_left }
+    PopupLayout {
+        rect,
+        rows,
+        clipped,
+        content_height: content_h,
+        scroll,
+        placed_left,
+    }
 }
 
 #[cfg(test)]
@@ -350,10 +448,22 @@ mod tests {
         BarContent {
             app_name: "Files".into(),
             app_menu: vec![],
-            menus: vec![MenuItem::submenu(1, "File", vec![]), MenuItem::submenu(2, "Edit", vec![]), MenuItem::submenu(3, "View", vec![])],
+            menus: vec![
+                MenuItem::submenu(1, "File", vec![]),
+                MenuItem::submenu(2, "Edit", vec![]),
+                MenuItem::submenu(3, "View", vec![]),
+            ],
             status: vec![
-                StatusEntry { id: "net".into(), width: 16.0, menu: None },
-                StatusEntry { id: "vol".into(), width: 16.0, menu: None },
+                StatusEntry {
+                    id: "net".into(),
+                    width: 16.0,
+                    menu: None,
+                },
+                StatusEntry {
+                    id: "vol".into(),
+                    width: 16.0,
+                    menu: None,
+                },
             ],
             clock: "Tue 10:42".into(),
             control_panel: true,
@@ -362,7 +472,12 @@ mod tests {
 
     #[test]
     fn slots_flow_left_and_right_without_overlap() {
-        let l = layout_bar(OUT, &content(), &BarMetrics::default(), &MonoMeasure::default());
+        let l = layout_bar(
+            OUT,
+            &content(),
+            &BarMetrics::default(),
+            &MonoMeasure::default(),
+        );
         assert_eq!(l.bar, Rect::new(0.0, 0.0, 1920.0, 24.0));
         let keys: Vec<&SlotKey> = l.slots.iter().map(|s| &s.key).collect();
         assert_eq!(
@@ -379,7 +494,12 @@ mod tests {
             ]
         );
         for w in l.slots.windows(2) {
-            assert!(w[0].rect.right() <= w[1].rect.x + 1e-9, "{:?} overlaps {:?}", w[0], w[1]);
+            assert!(
+                w[0].rect.right() <= w[1].rect.x + 1e-9,
+                "{:?} overlaps {:?}",
+                w[0],
+                w[1]
+            );
         }
         let app = l.slot(&SlotKey::AppMenu).unwrap();
         assert!(app.bold);
@@ -392,7 +512,12 @@ mod tests {
 
     #[test]
     fn status_items_are_ordered_from_the_control_panel_outwards() {
-        let l = layout_bar(OUT, &content(), &BarMetrics::default(), &MonoMeasure::default());
+        let l = layout_bar(
+            OUT,
+            &content(),
+            &BarMetrics::default(),
+            &MonoMeasure::default(),
+        );
         let cp = l.slot(&SlotKey::ControlPanel).unwrap().rect;
         let net = l.slot(&SlotKey::Status("net".into())).unwrap().rect;
         let vol = l.slot(&SlotKey::Status("vol".into())).unwrap().rect;
@@ -403,14 +528,27 @@ mod tests {
     #[test]
     fn narrow_bars_drop_status_items_then_menus() {
         let narrow = Rect::new(0.0, 0.0, 300.0, 400.0);
-        let l = layout_bar(narrow, &content(), &BarMetrics::default(), &MonoMeasure::default());
+        let l = layout_bar(
+            narrow,
+            &content(),
+            &BarMetrics::default(),
+            &MonoMeasure::default(),
+        );
         assert!(!l.hidden_status.is_empty() || !l.hidden_menus.is_empty());
         for w in l.slots.windows(2) {
             assert!(w[0].rect.right() <= w[1].rect.x + 1e-9);
         }
-        assert!(l.slot(&SlotKey::AppMenu).is_some(), "the app menu always stays");
+        assert!(
+            l.slot(&SlotKey::AppMenu).is_some(),
+            "the app menu always stays"
+        );
         let tiny = Rect::new(0.0, 0.0, 120.0, 400.0);
-        let l = layout_bar(tiny, &content(), &BarMetrics::default(), &MonoMeasure::default());
+        let l = layout_bar(
+            tiny,
+            &content(),
+            &BarMetrics::default(),
+            &MonoMeasure::default(),
+        );
         assert_eq!(l.hidden_status.len(), 2);
         assert_eq!(l.hidden_menus, vec![ItemId(1), ItemId(2), ItemId(3)]);
         assert!(l.slot(&SlotKey::AppMenu).is_some());
@@ -418,10 +556,21 @@ mod tests {
 
     #[test]
     fn hit_testing() {
-        let l = layout_bar(OUT, &content(), &BarMetrics::default(), &MonoMeasure::default());
+        let l = layout_bar(
+            OUT,
+            &content(),
+            &BarMetrics::default(),
+            &MonoMeasure::default(),
+        );
         let file = l.slot(&SlotKey::Menu(ItemId(1))).unwrap().rect;
-        assert_eq!(l.hit(Point::new(file.x + 1.0, 10.0)).unwrap().key, SlotKey::Menu(ItemId(1)));
-        assert!(l.hit(Point::new(file.x + 1.0, 30.0)).is_none(), "below the bar");
+        assert_eq!(
+            l.hit(Point::new(file.x + 1.0, 10.0)).unwrap().key,
+            SlotKey::Menu(ItemId(1))
+        );
+        assert!(
+            l.hit(Point::new(file.x + 1.0, 30.0)).is_none(),
+            "below the bar"
+        );
         assert!(l.hit(Point::new(900.0, 10.0)).is_none(), "gap");
     }
 
@@ -431,7 +580,8 @@ mod tests {
             1,
             "File",
             vec![
-                MenuItem::new(10, "New Window").with_shortcut(Shortcut::from_tokens(&["Control", "N"]).unwrap()),
+                MenuItem::new(10, "New Window")
+                    .with_shortcut(Shortcut::from_tokens(&["Control", "N"]).unwrap()),
                 MenuItem::separator(11),
                 MenuItem::new(12, "Show Hidden").with_toggle(Toggle::Check(true)),
                 MenuItem::submenu(13, "Open Recent", vec![MenuItem::new(14, "a.txt")]),
@@ -443,16 +593,31 @@ mod tests {
     #[test]
     fn popup_rows_have_the_right_sizes_and_positions() {
         let slot = Rect::new(60.0, 0.0, 40.0, 24.0);
-        let p = layout_popup(&file_menu(), Anchor::BelowSlot(slot), OUT, 0.0, &MenuMetrics::default(), &MonoMeasure::default());
+        let p = layout_popup(
+            &file_menu(),
+            Anchor::BelowSlot(slot),
+            OUT,
+            0.0,
+            &MenuMetrics::default(),
+            &MonoMeasure::default(),
+        );
         assert_eq!(p.rows.len(), 5);
         assert_eq!(p.rect.x, 60.0);
         assert_eq!(p.rect.y, 24.0);
         let m = MenuMetrics::default();
-        assert!((p.rect.h - (2.0 * m.padding_y + 4.0 * m.row_height + m.separator_height)).abs() < 1e-9);
+        assert!(
+            (p.rect.h - (2.0 * m.padding_y + 4.0 * m.row_height + m.separator_height)).abs() < 1e-9
+        );
         assert_eq!(p.rows[0].rect.y, 24.0 + m.padding_y);
         assert_eq!(p.rows[1].rect.h, m.separator_height);
         assert_eq!(p.rows[0].shortcut_text.as_deref(), Some("Ctrl+N"));
-        let min_w = m.padding_x + m.mark_column + 11.0 * 7.0 + m.padding_x + m.shortcut_gap + 6.0 * 7.0 + m.arrow_width;
+        let min_w = m.padding_x
+            + m.mark_column
+            + 11.0 * 7.0
+            + m.padding_x
+            + m.shortcut_gap
+            + 6.0 * 7.0
+            + m.arrow_width;
         assert!((p.rect.w - min_w.max(m.min_width)).abs() < 1e-9);
         assert!(p.rows.iter().all(|r| r.item.children.is_empty()));
         assert!(!p.clipped);
@@ -464,7 +629,14 @@ mod tests {
     #[test]
     fn popup_is_clamped_to_the_output() {
         let slot = Rect::new(1900.0, 0.0, 20.0, 24.0);
-        let p = layout_popup(&file_menu(), Anchor::BelowSlot(slot), OUT, 0.0, &MenuMetrics::default(), &MonoMeasure::default());
+        let p = layout_popup(
+            &file_menu(),
+            Anchor::BelowSlot(slot),
+            OUT,
+            0.0,
+            &MenuMetrics::default(),
+            &MonoMeasure::default(),
+        );
         assert!(p.rect.right() <= 1920.0 - 4.0 + 1e-9);
     }
 
@@ -474,29 +646,69 @@ mod tests {
         let parent = Rect::new(1700.0, 24.0, 200.0, 120.0);
         let row = Rect::new(1700.0, 60.0, 200.0, 22.0);
         let sub = file_menu();
-        let p = layout_popup(&sub, Anchor::BesideRow { row, parent }, OUT, 0.0, &m, &MonoMeasure::default());
+        let p = layout_popup(
+            &sub,
+            Anchor::BesideRow { row, parent },
+            OUT,
+            0.0,
+            &m,
+            &MonoMeasure::default(),
+        );
         assert!(p.placed_left);
         assert!(p.rect.right() <= parent.right());
         assert_eq!(p.rect.y, 60.0 - m.padding_y);
         let parent = Rect::new(100.0, 24.0, 200.0, 120.0);
-        let p = layout_popup(&sub, Anchor::BesideRow { row: Rect::new(100.0, 60.0, 200.0, 22.0), parent }, OUT, 0.0, &m, &MonoMeasure::default());
+        let p = layout_popup(
+            &sub,
+            Anchor::BesideRow {
+                row: Rect::new(100.0, 60.0, 200.0, 22.0),
+                parent,
+            },
+            OUT,
+            0.0,
+            &m,
+            &MonoMeasure::default(),
+        );
         assert!(!p.placed_left);
         assert_eq!(p.rect.x, parent.right() - m.submenu_overlap);
     }
 
     #[test]
     fn tall_menus_are_clipped_and_scroll() {
-        let items: Vec<MenuItem> = (0..100).map(|i| MenuItem::new(i + 1, &format!("item {i}"))).collect();
+        let items: Vec<MenuItem> = (0..100)
+            .map(|i| MenuItem::new(i + 1, &format!("item {i}")))
+            .collect();
         let menu = MenuItem::submenu(0, "Long", items);
         let screen = Rect::new(0.0, 0.0, 800.0, 400.0);
         let m = MenuMetrics::default();
-        let p = layout_popup(&menu, Anchor::BelowSlot(Rect::new(10.0, 0.0, 40.0, 24.0)), screen, 0.0, &m, &MonoMeasure::default());
+        let p = layout_popup(
+            &menu,
+            Anchor::BelowSlot(Rect::new(10.0, 0.0, 40.0, 24.0)),
+            screen,
+            0.0,
+            &m,
+            &MonoMeasure::default(),
+        );
         assert!(p.clipped);
         assert!(p.rect.bottom() <= 400.0 - m.screen_margin + 1e-9);
-        let q = layout_popup(&menu, Anchor::BelowSlot(Rect::new(10.0, 0.0, 40.0, 24.0)), screen, 100.0, &m, &MonoMeasure::default());
+        let q = layout_popup(
+            &menu,
+            Anchor::BelowSlot(Rect::new(10.0, 0.0, 40.0, 24.0)),
+            screen,
+            100.0,
+            &m,
+            &MonoMeasure::default(),
+        );
         assert_eq!(q.scroll, 100.0);
         assert!((q.rows[0].rect.y - (p.rows[0].rect.y - 100.0)).abs() < 1e-9);
-        let r = layout_popup(&menu, Anchor::BelowSlot(Rect::new(10.0, 0.0, 40.0, 24.0)), screen, 1e9, &m, &MonoMeasure::default());
+        let r = layout_popup(
+            &menu,
+            Anchor::BelowSlot(Rect::new(10.0, 0.0, 40.0, 24.0)),
+            screen,
+            1e9,
+            &m,
+            &MonoMeasure::default(),
+        );
         assert!((r.scroll - (r.content_height - r.rect.h)).abs() < 1e-9);
     }
 
@@ -505,9 +717,24 @@ mod tests {
         let menu = MenuItem::submenu(
             0,
             "m",
-            vec![MenuItem::separator(1), MenuItem::new(2, "only"), MenuItem { visible: false, ..MenuItem::new(3, "hidden") }, MenuItem::separator(4)],
+            vec![
+                MenuItem::separator(1),
+                MenuItem::new(2, "only"),
+                MenuItem {
+                    visible: false,
+                    ..MenuItem::new(3, "hidden")
+                },
+                MenuItem::separator(4),
+            ],
         );
-        let p = layout_popup(&menu, Anchor::BelowSlot(Rect::new(0.0, 0.0, 10.0, 24.0)), OUT, 0.0, &MenuMetrics::default(), &MonoMeasure::default());
+        let p = layout_popup(
+            &menu,
+            Anchor::BelowSlot(Rect::new(0.0, 0.0, 10.0, 24.0)),
+            OUT,
+            0.0,
+            &MenuMetrics::default(),
+            &MonoMeasure::default(),
+        );
         assert_eq!(p.rows.len(), 1);
     }
 }

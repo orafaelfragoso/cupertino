@@ -48,9 +48,15 @@ const MAX_ESTIMATE_SECONDS: f64 = 20.0 * 3600.0;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
     /// A numeric attribute is not an integer.
-    NotANumber { attribute: &'static str, value: String },
+    NotANumber {
+        attribute: &'static str,
+        value: String,
+    },
     /// A boolean attribute (`present`, `online`) is neither 0 nor 1.
-    NotABoolean { attribute: &'static str, value: String },
+    NotABoolean {
+        attribute: &'static str,
+        value: String,
+    },
     /// `type` is not one of the values the ABI document lists.
     UnknownType(String),
     /// `scope` is neither `System` nor `Device`.
@@ -62,8 +68,12 @@ pub enum ParseError {
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotANumber { attribute, value } => write!(f, "{attribute} is not an integer: {value:?}"),
-            Self::NotABoolean { attribute, value } => write!(f, "{attribute} is not 0 or 1: {value:?}"),
+            Self::NotANumber { attribute, value } => {
+                write!(f, "{attribute} is not an integer: {value:?}")
+            }
+            Self::NotABoolean { attribute, value } => {
+                write!(f, "{attribute} is not 0 or 1: {value:?}")
+            }
             Self::UnknownType(value) => write!(f, "unknown supply type {value:?}"),
             Self::UnknownScope(value) => write!(f, "unknown supply scope {value:?}"),
             Self::UnknownStatus(value) => write!(f, "unknown battery status {value:?}"),
@@ -168,7 +178,12 @@ pub struct Supply {
 fn integer(attributes: &Attributes, attribute: &'static str) -> Result<Option<i64>, ParseError> {
     attributes
         .get(attribute)
-        .map(|value| value.parse().map_err(|_| ParseError::NotANumber { attribute, value: value.clone() }))
+        .map(|value| {
+            value.parse().map_err(|_| ParseError::NotANumber {
+                attribute,
+                value: value.clone(),
+            })
+        })
         .transpose()
 }
 
@@ -182,12 +197,18 @@ fn boolean(attributes: &Attributes, attribute: &'static str) -> Result<Option<bo
         None => Ok(None),
         Some("0") => Ok(Some(false)),
         Some("1") => Ok(Some(true)),
-        Some(value) => Err(ParseError::NotABoolean { attribute, value: value.to_owned() }),
+        Some(value) => Err(ParseError::NotABoolean {
+            attribute,
+            value: value.to_owned(),
+        }),
     }
 }
 
 fn text(attributes: &Attributes, attribute: &str) -> Option<String> {
-    attributes.get(attribute).filter(|value| !value.is_empty()).cloned()
+    attributes
+        .get(attribute)
+        .filter(|value| !value.is_empty())
+        .cloned()
 }
 
 impl Kind {
@@ -196,7 +217,8 @@ impl Kind {
             "Unknown" => Ok(Self::Unknown),
             "Battery" => Ok(Self::Battery),
             "UPS" => Ok(Self::Ups),
-            "Mains" | "Wireless" | "BrickID" | "USB" | "USB_DCP" | "USB_CDP" | "USB_ACA" | "USB_C" | "USB_PD" | "USB_PD_DRP" => Ok(Self::LinePower),
+            "Mains" | "Wireless" | "BrickID" | "USB" | "USB_DCP" | "USB_CDP" | "USB_ACA"
+            | "USB_C" | "USB_PD" | "USB_PD_DRP" => Ok(Self::LinePower),
             other => Err(ParseError::UnknownType(other.to_owned())),
         }
     }
@@ -230,7 +252,9 @@ impl Amounts {
             full: micro(attributes, "charge_full")?,
             full_design: micro(attributes, "charge_full_design")?,
         };
-        let has_any = |amounts: &Self| amounts.now.is_some() || amounts.full.is_some() || amounts.full_design.is_some();
+        let has_any = |amounts: &Self| {
+            amounts.now.is_some() || amounts.full.is_some() || amounts.full_design.is_some()
+        };
         Ok(if has_any(&energy) {
             Some(energy)
         } else if has_any(&charge) {
@@ -245,7 +269,11 @@ impl Battery {
     fn parse(attributes: &Attributes) -> Result<Self, ParseError> {
         Ok(Self {
             present: boolean(attributes, "present")?.unwrap_or(true),
-            status: attributes.get("status").map(|value| Status::parse(value)).transpose()?.unwrap_or(Status::Unknown),
+            status: attributes
+                .get("status")
+                .map(|value| Status::parse(value))
+                .transpose()?
+                .unwrap_or(Status::Unknown),
             capacity: integer(attributes, "capacity")?.map(|value| value as f64),
             amounts: Amounts::parse(attributes)?,
             voltage: micro(attributes, "voltage_now")?,
@@ -338,7 +366,10 @@ impl Battery {
             return None;
         }
         let amounts = self.amounts?;
-        estimate(amounts.full? - amounts.now?, self.rate_in_unit(amounts.unit)?)
+        estimate(
+            amounts.full? - amounts.now?,
+            self.rate_in_unit(amounts.unit)?,
+        )
     }
 
     /// Full capacity as a percentage of the design capacity (UPower's `Capacity`, the battery's
@@ -364,7 +395,11 @@ impl Supply {
     /// [`Kind::Unknown`]: the attribute is mandatory in the ABI document, but this model must not
     /// refuse a driver that omits it.
     pub fn parse(name: &str, attributes: &Attributes) -> Result<Self, ParseError> {
-        let kind = attributes.get("type").map(|value| Kind::parse(value)).transpose()?.unwrap_or(Kind::Unknown);
+        let kind = attributes
+            .get("type")
+            .map(|value| Kind::parse(value))
+            .transpose()?
+            .unwrap_or(Kind::Unknown);
         let power_supply = match attributes.get("scope").map(String::as_str) {
             None | Some("System") => true,
             Some("Device") => false,
@@ -392,18 +427,29 @@ mod tests {
     use super::*;
 
     fn attributes(pairs: &[(&str, &str)]) -> Attributes {
-        pairs.iter().map(|(key, value)| ((*key).to_owned(), (*value).to_owned())).collect()
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect()
     }
 
     fn battery(pairs: &[(&str, &str)]) -> Battery {
         let mut all = vec![("type", "Battery")];
         all.extend_from_slice(pairs);
-        Supply::parse("BAT0", &attributes(&all)).unwrap().battery.unwrap()
+        Supply::parse("BAT0", &attributes(&all))
+            .unwrap()
+            .battery
+            .unwrap()
     }
 
     #[test]
     fn charge_without_voltage_still_gives_percentage_and_time() {
-        let battery = battery(&[("status", "Discharging"), ("charge_now", "1500000"), ("charge_full", "3000000"), ("current_now", "500000")]);
+        let battery = battery(&[
+            ("status", "Discharging"),
+            ("charge_now", "1500000"),
+            ("charge_full", "3000000"),
+            ("current_now", "500000"),
+        ]);
         assert_eq!(battery.percentage(), Some(50.0));
         assert_eq!(battery.time_to_empty(), Some(10_800));
         assert_eq!(battery.energy(), None);
@@ -418,24 +464,58 @@ mod tests {
 
     #[test]
     fn discharging_at_zero_is_empty_and_not_charging_is_pending() {
-        assert_eq!(battery(&[("status", "Discharging"), ("capacity", "0")]).state(), State::Empty);
-        assert_eq!(battery(&[("status", "Not charging"), ("capacity", "80")]).state(), State::PendingCharge);
+        assert_eq!(
+            battery(&[("status", "Discharging"), ("capacity", "0")]).state(),
+            State::Empty
+        );
+        assert_eq!(
+            battery(&[("status", "Not charging"), ("capacity", "80")]).state(),
+            State::PendingCharge
+        );
     }
 
     #[test]
     fn estimates_ignore_a_negligible_rate_and_implausible_spans() {
-        let idle = battery(&[("status", "Discharging"), ("energy_now", "25000000"), ("energy_full", "50000000"), ("power_now", "5000")]);
+        let idle = battery(&[
+            ("status", "Discharging"),
+            ("energy_now", "25000000"),
+            ("energy_full", "50000000"),
+            ("power_now", "5000"),
+        ]);
         assert_eq!(idle.time_to_empty(), None);
-        let slow = battery(&[("status", "Discharging"), ("energy_now", "25000000"), ("energy_full", "50000000"), ("power_now", "1000000")]);
+        let slow = battery(&[
+            ("status", "Discharging"),
+            ("energy_now", "25000000"),
+            ("energy_full", "50000000"),
+            ("power_now", "1000000"),
+        ]);
         assert_eq!(slow.time_to_empty(), None);
     }
 
     #[test]
     fn unknown_values_are_errors() {
         let parse = |pairs: &[(&str, &str)]| Supply::parse("X", &attributes(pairs)).unwrap_err();
-        assert_eq!(parse(&[("type", "Fusion")]), ParseError::UnknownType("Fusion".to_owned()));
-        assert_eq!(parse(&[("type", "Battery"), ("status", "Exploding")]), ParseError::UnknownStatus("Exploding".to_owned()));
-        assert_eq!(parse(&[("type", "Mains"), ("online", "2")]), ParseError::NotABoolean { attribute: "online", value: "2".to_owned() });
-        assert_eq!(parse(&[("type", "Battery"), ("capacity", "n/a")]), ParseError::NotANumber { attribute: "capacity", value: "n/a".to_owned() });
+        assert_eq!(
+            parse(&[("type", "Fusion")]),
+            ParseError::UnknownType("Fusion".to_owned())
+        );
+        assert_eq!(
+            parse(&[("type", "Battery"), ("status", "Exploding")]),
+            ParseError::UnknownStatus("Exploding".to_owned())
+        );
+        assert_eq!(
+            parse(&[("type", "Mains"), ("online", "2")]),
+            ParseError::NotABoolean {
+                attribute: "online",
+                value: "2".to_owned()
+            }
+        );
+        assert_eq!(
+            parse(&[("type", "Battery"), ("capacity", "n/a")]),
+            ParseError::NotANumber {
+                attribute: "capacity",
+                value: "n/a".to_owned()
+            }
+        );
     }
 }

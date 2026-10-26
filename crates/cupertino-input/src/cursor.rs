@@ -81,10 +81,17 @@ impl VelocityFilter {
             return;
         }
         let blend = |v: f64, prev: Option<f64>| match prev {
-            Some(prev) if dt <= BLEND_WINDOW_S && v.is_sign_negative() == prev.is_sign_negative() => BLEND * v + (1.0 - BLEND) * prev,
+            Some(prev)
+                if dt <= BLEND_WINDOW_S && v.is_sign_negative() == prev.is_sign_negative() =>
+            {
+                BLEND * v + (1.0 - BLEND) * prev
+            }
             _ => v,
         };
-        self.velocity = (Some(blend((p.x - last_p.x) / dt, self.velocity.0)), Some(blend((p.y - last_p.y) / dt, self.velocity.1)));
+        self.velocity = (
+            Some(blend((p.x - last_p.x) / dt, self.velocity.0)),
+            Some(blend((p.y - last_p.y) / dt, self.velocity.1)),
+        );
         self.last = Some((t, p));
     }
 }
@@ -114,11 +121,17 @@ fn quadrant(dx: f64, dy: f64) -> u32 {
 /// radius and more than three quadrant steps in one direction) or a line shake (low variance of
 /// the nine consecutive slopes and more than four points outside the radius).,.
 fn is_shake(points: &[Point; POINTS]) -> bool {
-    let slopes: Vec<f64> = points.windows(2).map(|w| (w[1].y - w[0].y) / (w[1].x - w[0].x)).collect();
+    let slopes: Vec<f64> = points
+        .windows(2)
+        .map(|w| (w[1].y - w[0].y) / (w[1].x - w[0].x))
+        .collect();
     let mean = slopes.iter().sum::<f64>() / slopes.len() as f64;
     let variance: f64 = slopes.iter().map(|s| (s - mean).powi(2)).sum();
     let n = POINTS as f64;
-    let centroid = Point::new(points.iter().map(|p| p.x).sum::<f64>() / n, points.iter().map(|p| p.y).sum::<f64>() / n);
+    let centroid = Point::new(
+        points.iter().map(|p| p.x).sum::<f64>() / n,
+        points.iter().map(|p| p.y).sum::<f64>() / n,
+    );
     let (mut outside, mut down, mut up, mut previous) = (0, 1, 1, None);
     for p in points {
         let (dx, dy) = (p.x - centroid.x, p.y - centroid.y);
@@ -136,7 +149,8 @@ fn is_shake(points: &[Point; POINTS]) -> bool {
         previous = Some(q);
     }
     let circle = outside == POINTS as u32 && (down > MIN_ROTATION_STEPS || up > MIN_ROTATION_STEPS);
-    let line = variance * SLOPE_VARIANCE_SCALE <= MAX_SLOPE_VARIANCE && outside > MIN_LINE_POINTS_OUTSIDE;
+    let line =
+        variance * SLOPE_VARIANCE_SCALE <= MAX_SLOPE_VARIANCE && outside > MIN_LINE_POINTS_OUTSIDE;
     circle || line
 }
 
@@ -158,7 +172,14 @@ pub struct ShakeDetector {
 
 impl Default for ShakeDetector {
     fn default() -> Self {
-        Self { filter: VelocityFilter::default(), points: [Point::default(); POINTS], reversals: 0, last_reversal: None, triggered: false, multiplier: 1.0 }
+        Self {
+            filter: VelocityFilter::default(),
+            points: [Point::default(); POINTS],
+            reversals: 0,
+            last_reversal: None,
+            triggered: false,
+            multiplier: 1.0,
+        }
     }
 }
 
@@ -173,7 +194,10 @@ impl ShakeDetector {
         let before = self.filter.velocity;
         self.filter.add(p, t);
         let after = self.filter.velocity;
-        if self.last_reversal.is_some_and(|last| t > last + REVERSAL_GAP_S) {
+        if self
+            .last_reversal
+            .is_some_and(|last| t > last + REVERSAL_GAP_S)
+        {
             self.reset();
         } else if reversed(before.0, after.0) || reversed(before.1, after.1) {
             if let Some(slot) = self.points.get_mut(self.reversals as usize) {
@@ -198,10 +222,14 @@ impl ShakeDetector {
     /// Recompute the multiplier at time `now`: the count decays when the last reversal is more
     /// than 0.1 s old, and the multiplier is `clamp(0.5·n, 1, 5).
     pub fn evaluate(&mut self, now: f64) -> f64 {
-        if self.last_reversal.is_some_and(|last| now > last + DECAY_AFTER_S) {
+        if self
+            .last_reversal
+            .is_some_and(|last| now > last + DECAY_AFTER_S)
+        {
             self.reversals = (f64::from(self.reversals) * DECAY) as u32;
         }
-        self.multiplier = (f64::from(self.reversals) * SCALE_PER_REVERSAL).clamp(1.0, SHAKE_SCALE_MAX);
+        self.multiplier =
+            (f64::from(self.reversals) * SCALE_PER_REVERSAL).clamp(1.0, SHAKE_SCALE_MAX);
         self.multiplier
     }
 
@@ -234,7 +262,15 @@ mod tests {
     /// Shake horizontally between `x0` and `x1` at height `y` in `step` pt steps every 10 ms,
     /// starting at `t0`, for `strokes` one-way strokes. Returns the time after the last motion and
     /// whether any motion reported a shake.
-    fn shake_line(d: &mut ShakeDetector, x0: f64, x1: f64, y: f64, step: f64, strokes: u32, t0: f64) -> (f64, bool) {
+    fn shake_line(
+        d: &mut ShakeDetector,
+        x0: f64,
+        x1: f64,
+        y: f64,
+        step: f64,
+        strokes: u32,
+        t0: f64,
+    ) -> (f64, bool) {
         let (mut t, mut x, mut dir, mut any) = (t0, x0, 1.0, false);
         for _ in 0..strokes {
             let target = if dir > 0.0 { x1 } else { x0 };
@@ -284,7 +320,10 @@ mod tests {
         assert!(shake_line(&mut d, 100.0, 400.0, 300.0, 50.0, 11, 1.0).1);
         d.release();
         assert_eq!(d.multiplier(), 1.0);
-        assert!(shake_line(&mut d, 100.0, 400.0, 300.0, 50.0, 11, 2.0).1, "the next shake is recognised");
+        assert!(
+            shake_line(&mut d, 100.0, 400.0, 300.0, 50.0, 11, 2.0).1,
+            "the next shake is recognised"
+        );
     }
 
     #[test]
@@ -326,7 +365,15 @@ mod tests {
 
     #[test]
     fn quadrants_follow_the_truncated_sign() {
-        assert_eq!([quadrant(5.0, 5.0), quadrant(-5.0, 5.0), quadrant(-5.0, -5.0), quadrant(5.0, -5.0)], [1, 2, 3, 4]);
+        assert_eq!(
+            [
+                quadrant(5.0, 5.0),
+                quadrant(-5.0, 5.0),
+                quadrant(-5.0, -5.0),
+                quadrant(5.0, -5.0)
+            ],
+            [1, 2, 3, 4]
+        );
         assert_eq!(quadrant(-0.5, -0.9), 1, "values above -1 truncate to 0");
     }
 
@@ -339,16 +386,33 @@ mod tests {
         let v = f.velocity.0.unwrap();
         assert!((v - 1000.0).abs() < 1e-9, "{v}");
         f.add(Point::new(20.0, 0.0), 1.0105);
-        assert!((f.velocity.0.unwrap() - 1000.0).abs() < 1e-9, "a sample 0.5 ms later is dropped");
+        assert!(
+            (f.velocity.0.unwrap() - 1000.0).abs() < 1e-9,
+            "a sample 0.5 ms later is dropped"
+        );
         f.add(Point::new(20.0, 0.0), 1.03);
         // 10 pt over the 20 ms since the accepted sample: 0.2 · 500 + 0.8 · 1000
-        assert!((f.velocity.0.unwrap() - 900.0).abs() < 1e-9, "{:?}", f.velocity);
+        assert!(
+            (f.velocity.0.unwrap() - 900.0).abs() < 1e-9,
+            "{:?}",
+            f.velocity
+        );
         f.add(Point::new(10.0, 0.0), 1.04);
-        assert!((f.velocity.0.unwrap() + 1000.0).abs() < 1e-9, "a sign change takes the new velocity");
+        assert!(
+            (f.velocity.0.unwrap() + 1000.0).abs() < 1e-9,
+            "a sign change takes the new velocity"
+        );
     }
 
     #[test]
     fn the_user_scale_is_clamped_to_the_settings_range() {
-        assert_eq!([clamp_cursor_scale(0.5), clamp_cursor_scale(2.5), clamp_cursor_scale(9.0)], [1.0, 2.5, 4.0]);
+        assert_eq!(
+            [
+                clamp_cursor_scale(0.5),
+                clamp_cursor_scale(2.5),
+                clamp_cursor_scale(9.0)
+            ],
+            [1.0, 2.5, 4.0]
+        );
     }
 }

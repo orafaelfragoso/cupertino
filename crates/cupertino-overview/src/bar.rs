@@ -99,7 +99,10 @@ impl WorkspaceBar {
     pub fn set_workspaces(&mut self, ids: &[WorkspaceId], current: Option<WorkspaceId>) {
         self.workspaces = ids.to_vec();
         self.current = current;
-        if self.hovered.is_some_and(|h| matches!(h, BarHit::Workspace(w) if !ids.contains(&w))) {
+        if self
+            .hovered
+            .is_some_and(|h| matches!(h, BarHit::Workspace(w) if !ids.contains(&w)))
+        {
             self.hovered = None;
         }
     }
@@ -124,14 +127,16 @@ impl WorkspaceBar {
     pub fn set_expanded(&mut self, expanded: bool, now: f64) {
         if expanded != self.target_expanded {
             self.target_expanded = expanded;
-            self.expanded.animate_to(if expanded { 1.0 } else { 0.0 }, self.cfg.expand_curve, now);
+            self.expanded
+                .animate_to(if expanded { 1.0 } else { 0.0 }, self.cfg.expand_curve, now);
         }
     }
 
     pub fn layout(&self, now: f64) -> BarLayout {
         let e = self.expansion(now);
         let c = &self.cfg;
-        let th = c.collapsed_thumb_height + (c.expanded_thumb_height - c.collapsed_thumb_height) * e;
+        let th =
+            c.collapsed_thumb_height + (c.expanded_thumb_height - c.collapsed_thumb_height) * e;
         let tw = th * self.aspect;
         let n = self.workspaces.len();
         let add_w = tw * e;
@@ -139,7 +144,12 @@ impl WorkspaceBar {
         let content_w = slots_w + if add_w > 0.0 { c.gap * e + add_w } else { 0.0 };
         let bar_w = content_w + 2.0 * c.padding;
         let bar_h = th + 2.0 * c.padding;
-        let rect = Rect::new(self.area.cx() - bar_w / 2.0, self.area.y + c.top_margin, bar_w, bar_h);
+        let rect = Rect::new(
+            self.area.cx() - bar_w / 2.0,
+            self.area.y + c.top_margin,
+            bar_w,
+            bar_h,
+        );
         let mut x = rect.x + c.padding;
         let y = rect.y + c.padding;
         let slots = self
@@ -148,18 +158,33 @@ impl WorkspaceBar {
             .map(|id| {
                 let r = Rect::new(x, y, tw, th);
                 x += tw + c.gap;
-                BarSlot { id: *id, rect: r, current: self.current == Some(*id), hovered: self.hovered == Some(BarHit::Workspace(*id)) }
+                BarSlot {
+                    id: *id,
+                    rect: r,
+                    current: self.current == Some(*id),
+                    hovered: self.hovered == Some(BarHit::Workspace(*id)),
+                }
             })
             .collect();
         let add = (add_w > 0.0).then(|| Rect::new(x - c.gap + c.gap * e, y, add_w, th));
-        BarLayout { rect, slots, add, expansion: e }
+        BarLayout {
+            rect,
+            slots,
+            add,
+            expansion: e,
+        }
     }
 
     /// Pointer region that keeps the bar expanded.
     fn hover_region(&self, now: f64) -> Rect {
         let r = self.layout(now).rect;
         let m = self.cfg.hover_margin;
-        Rect::new(r.x - m, r.y - m - self.cfg.top_margin, r.w + 2.0 * m, r.h + 2.0 * m + self.cfg.top_margin)
+        Rect::new(
+            r.x - m,
+            r.y - m - self.cfg.top_margin,
+            r.w + 2.0 * m,
+            r.h + 2.0 * m + self.cfg.top_margin,
+        )
     }
 
     pub fn hit_test(&self, p: Point, now: f64) -> Option<BarHit> {
@@ -204,8 +229,14 @@ mod tests {
         assert!(l.slots[0].current && !l.slots[1].current);
         let th = b.cfg.collapsed_thumb_height;
         assert!((l.slots[0].rect.h - th).abs() < 1e-9);
-        assert!((l.slots[0].rect.w / l.slots[0].rect.h - 1920.0 / 1080.0).abs() < 1e-9, "output aspect");
-        assert!(l.slots.windows(2).all(|p| (p[1].rect.x - p[0].rect.right() - b.cfg.gap).abs() < 1e-9));
+        assert!(
+            (l.slots[0].rect.w / l.slots[0].rect.h - 1920.0 / 1080.0).abs() < 1e-9,
+            "output aspect"
+        );
+        assert!(l
+            .slots
+            .windows(2)
+            .all(|p| (p[1].rect.x - p[0].rect.right() - b.cfg.gap).abs() < 1e-9));
         assert_eq!(b.cfg.reserved_height(), l.rect.bottom());
     }
 
@@ -227,7 +258,10 @@ mod tests {
         let before = b.expansion(3.05);
         assert!(before < 1.0 && before > 0.0);
         b.pointer_moved(Some(c), 3.05);
-        assert!((before - b.expansion(3.05)).abs() < 1e-9, "re-expanding keeps the current value");
+        assert!(
+            (before - b.expansion(3.05)).abs() < 1e-9,
+            "re-expanding keeps the current value"
+        );
         assert!(b.is_expanded_target() && b.is_animating(3.05));
     }
 
@@ -235,9 +269,15 @@ mod tests {
     fn hover_keeps_expanded_within_margin_and_can_be_disabled() {
         let mut b = bar(2);
         let r = b.layout(0.0).rect;
-        b.pointer_moved(Some(Point::new(r.cx(), r.bottom() + b.cfg.hover_margin - 1.0)), 0.0);
+        b.pointer_moved(
+            Some(Point::new(r.cx(), r.bottom() + b.cfg.hover_margin - 1.0)),
+            0.0,
+        );
         assert!(b.is_expanded_target());
-        let cfg = BarConfig { expand_on_hover: false, ..Default::default() };
+        let cfg = BarConfig {
+            expand_on_hover: false,
+            ..Default::default()
+        };
         let mut b = WorkspaceBar::new(cfg, AREA, AREA);
         b.set_workspaces(&[WorkspaceId(1)], Some(WorkspaceId(1)));
         b.pointer_moved(Some(Point::new(960.0, 40.0)), 0.0);
@@ -250,7 +290,10 @@ mod tests {
         b.set_expanded(true, 0.0);
         let l = b.layout(5.0);
         for s in &l.slots {
-            assert_eq!(b.hit_test(s.rect.center(), 5.0), Some(BarHit::Workspace(s.id)));
+            assert_eq!(
+                b.hit_test(s.rect.center(), 5.0),
+                Some(BarHit::Workspace(s.id))
+            );
         }
         let add = l.add.unwrap();
         assert_eq!(b.hit_test(add.center(), 5.0), Some(BarHit::Add));

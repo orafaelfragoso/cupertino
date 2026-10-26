@@ -36,17 +36,30 @@ pub struct AutoHide {
 
 impl AutoHide {
     pub fn new(delay: f64, duration: f64) -> Self {
-        Self { state: HideState::Hidden, delay, duration, offset: AnimatedValue::new(1.0) }
+        Self {
+            state: HideState::Hidden,
+            delay,
+            duration,
+            offset: AnimatedValue::new(1.0),
+        }
     }
 
     /// Start in the shown state (e.g. auto-hide disabled).
     pub fn shown(delay: f64, duration: f64) -> Self {
-        Self { state: HideState::Shown, delay, duration, offset: AnimatedValue::new(0.0) }
+        Self {
+            state: HideState::Shown,
+            delay,
+            duration,
+            offset: AnimatedValue::new(0.0),
+        }
     }
 
     /// `hot`: the pointer is in the reveal zone (screen edge) or over the visible dock.
     pub fn update(&mut self, hot: bool, now: f64) {
-        let curve = Curve::Timed { duration: self.duration, bezier: COSINE_EASE_BEZIER };
+        let curve = Curve::Timed {
+            duration: self.duration,
+            bezier: COSINE_EASE_BEZIER,
+        };
         self.state = match (self.state, hot) {
             (HideState::Hidden, true) => HideState::WaitingToShow { since: now },
             (HideState::WaitingToShow { since }, true) if now - since >= self.delay => {
@@ -55,7 +68,9 @@ impl AutoHide {
             }
             (HideState::WaitingToShow { .. }, false) => HideState::Hidden,
             (HideState::Showing, _) if !self.offset.is_animating(now) => HideState::Shown,
-            (HideState::Showing, false) | (HideState::Shown, false) => HideState::WaitingToHide { since: now },
+            (HideState::Showing, false) | (HideState::Shown, false) => {
+                HideState::WaitingToHide { since: now }
+            }
             (HideState::WaitingToHide { .. }, true) => HideState::Shown,
             (HideState::WaitingToHide { since }, false) if now - since >= self.delay.min(0.25) => {
                 self.offset.animate_to(1.0, curve, now);
@@ -90,10 +105,19 @@ pub fn autohide_hide_ms(cfg: &DockConfig, hidden_fraction: f64, current_fish: f6
 /// Duration in milliseconds of the show animation: same form with
 /// `dist = |X − (bar + fish − offset)|`, `X` the large size when the magnification is active under
 /// the pointer, else the tile size.
-pub fn autohide_show_ms(cfg: &DockConfig, hidden_fraction: f64, current_fish: f64, magnified_under_pointer: bool) -> f64 {
+pub fn autohide_show_ms(
+    cfg: &DockConfig,
+    hidden_fraction: f64,
+    current_fish: f64,
+    magnified_under_pointer: bool,
+) -> f64 {
     let bar = cfg.bar_extent();
     let offset = (bar + 10.0) * hidden_fraction.clamp(0.0, 1.0);
-    let x = if cfg.magnification && magnified_under_pointer { cfg.large_size } else { cfg.tile_size };
+    let x = if cfg.magnification && magnified_under_pointer {
+        cfg.large_size
+    } else {
+        cfg.tile_size
+    };
     let dist = (x - (bar + current_fish - offset)).abs();
     ((dist * 0.5 + 1.0).ln() + 1.0).floor() * cfg.autohide_speed_ms()
 }
@@ -101,7 +125,9 @@ pub fn autohide_show_ms(cfg: &DockConfig, hidden_fraction: f64, current_fish: f6
 /// Strip at the dock edge of `screen` in which the pointer reveals a hidden dock.
 pub fn reveal_zone(orientation: Orientation, screen: Rect, thickness: f64) -> Rect {
     match orientation {
-        Orientation::Bottom => Rect::new(screen.x, screen.bottom() - thickness, screen.w, thickness),
+        Orientation::Bottom => {
+            Rect::new(screen.x, screen.bottom() - thickness, screen.w, thickness)
+        }
         Orientation::Left => Rect::new(screen.x, screen.y, thickness, screen.h),
         Orientation::Right => Rect::new(screen.right() - thickness, screen.y, thickness, screen.h),
     }
@@ -136,15 +162,27 @@ mod tests {
         assert_eq!(a.state, HideState::Hidden);
         a.update(true, 0.3);
         a.update(true, 0.6);
-        assert!(matches!(a.state, HideState::WaitingToShow { .. }), "delay restarts");
+        assert!(
+            matches!(a.state, HideState::WaitingToShow { .. }),
+            "delay restarts"
+        );
     }
 
     #[test]
     fn reveal_zone_per_edge() {
         let s = Rect::new(0.0, 0.0, 1920.0, 1080.0);
-        assert_eq!(reveal_zone(Orientation::Bottom, s, 2.0), Rect::new(0.0, 1078.0, 1920.0, 2.0));
-        assert_eq!(reveal_zone(Orientation::Left, s, 2.0), Rect::new(0.0, 0.0, 2.0, 1080.0));
-        assert_eq!(reveal_zone(Orientation::Right, s, 2.0), Rect::new(1918.0, 0.0, 2.0, 1080.0));
+        assert_eq!(
+            reveal_zone(Orientation::Bottom, s, 2.0),
+            Rect::new(0.0, 1078.0, 1920.0, 2.0)
+        );
+        assert_eq!(
+            reveal_zone(Orientation::Left, s, 2.0),
+            Rect::new(0.0, 0.0, 2.0, 1080.0)
+        );
+        assert_eq!(
+            reveal_zone(Orientation::Right, s, 2.0),
+            Rect::new(1918.0, 0.0, 2.0, 1080.0)
+        );
     }
 
     #[test]
@@ -153,9 +191,15 @@ mod tests {
         assert_eq!(autohide_hide_ms(&c, 0.0, 0.0), 240.0);
         assert_eq!(autohide_hide_ms(&c, 0.0, 64.0), 300.0);
         assert_eq!(autohide_show_ms(&c, 1.0, 0.0, false), 240.0);
-        let slow = DockConfig { autohide_time_modifier: 2.0, ..DockConfig::default() };
+        let slow = DockConfig {
+            autohide_time_modifier: 2.0,
+            ..DockConfig::default()
+        };
         assert_eq!(autohide_hide_ms(&slow, 0.0, 0.0), 480.0);
-        let zero = DockConfig { autohide_time_modifier: 0.0, ..DockConfig::default() };
+        let zero = DockConfig {
+            autohide_time_modifier: 0.0,
+            ..DockConfig::default()
+        };
         assert_eq!(autohide_hide_ms(&zero, 0.0, 0.0), 0.0);
     }
 

@@ -287,15 +287,24 @@ mod tests {
     fn plus_key_and_function_keys() {
         let c = Chord::parse("Ctrl++").unwrap();
         assert_eq!(c.key, Key::Char('+'));
-        assert_eq!(Chord::parse("F12").unwrap().key, Key::Named(NamedKey::F(12)));
+        assert_eq!(
+            Chord::parse("F12").unwrap().key,
+            Key::Named(NamedKey::F(12))
+        );
         assert!(Chord::parse("F99").is_err());
     }
 
     #[test]
     fn errors() {
         assert_eq!(Chord::parse(""), Err(ChordError::Empty));
-        assert!(matches!(Chord::parse("Hyper+A"), Err(ChordError::UnknownModifier(_))));
-        assert!(matches!(Chord::parse("Ctrl+Nonsense"), Err(ChordError::UnknownKey(_))));
+        assert!(matches!(
+            Chord::parse("Hyper+A"),
+            Err(ChordError::UnknownModifier(_))
+        ));
+        assert!(matches!(
+            Chord::parse("Ctrl+Nonsense"),
+            Err(ChordError::UnknownKey(_))
+        ));
     }
 
     #[test]

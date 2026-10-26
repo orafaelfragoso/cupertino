@@ -39,7 +39,13 @@ pub fn hidden_index(count: i64, n: usize, forward: bool) -> usize {
     let n = n as i64;
     let index = match count {
         c if c > 0 => c.min(n - 1),
-        c if c < 0 => if -c <= n { n + c } else { 0 },
+        c if c < 0 => {
+            if -c <= n {
+                n + c
+            } else {
+                0
+            }
+        }
         _ if forward => i64::from(n > 1),
         _ => n - 1,
     };
@@ -87,9 +93,9 @@ impl Wm {
         let mut found = None;
         for _ in 0..=self.windows.len() {
             let child = self.stack.iter().rev().copied().find(|id| {
-                self.windows
-                    .get(id)
-                    .is_some_and(|w| w.parent == Some(cur) && w.modal && !w.lifecycle.state().is_dead())
+                self.windows.get(id).is_some_and(|w| {
+                    w.parent == Some(cur) && w.modal && !w.lifecycle.state().is_dead()
+                })
             });
             match child {
                 Some(c) => {
@@ -109,8 +115,19 @@ impl Wm {
     /// Whether an activation token created at `token` (seconds, the model's clock) may bring
     /// `window` forward, given the last key or button press `last_user_event` ([`token_accepted`]
     /// against the last time the window's application became active). False for an unknown window.
-    pub fn activation_allowed(&self, window: WindowId, token: f64, last_user_event: Option<f64>) -> bool {
-        let Some(app) = self.windows.get(&window).and_then(|w| self.apps.get(&w.app)) else { return false };
+    pub fn activation_allowed(
+        &self,
+        window: WindowId,
+        token: f64,
+        last_user_event: Option<f64>,
+    ) -> bool {
+        let Some(app) = self
+            .windows
+            .get(&window)
+            .and_then(|w| self.apps.get(&w.app))
+        else {
+            return false;
+        };
         token_accepted(token, app.activated_at, last_user_event)
     }
 
@@ -118,7 +135,14 @@ impl Wm {
     /// application's dock tile bounces, unless it is the active application (a request
     /// for attention does nothing while the application is active).
     pub(crate) fn demand_attention(&mut self, window: WindowId, out: &mut Vec<Effect>) {
-        let Some(app) = self.windows.get(&window).filter(|w| !w.lifecycle.state().is_dead()).map(|w| w.app) else { return };
+        let Some(app) = self
+            .windows
+            .get(&window)
+            .filter(|w| !w.lifecycle.state().is_dead())
+            .map(|w| w.app)
+        else {
+            return;
+        };
         if self.focus.front_app != Some(app) {
             out.push(Effect::AppAttention { app });
         }
@@ -130,7 +154,9 @@ impl Wm {
     }
 
     fn promote_window(&mut self, window: WindowId) {
-        let Some(app) = self.windows.get(&window).map(|w| w.app) else { return };
+        let Some(app) = self.windows.get(&window).map(|w| w.app) else {
+            return;
+        };
         if let Some(a) = self.apps.get_mut(&app) {
             a.windows_mru.retain(|w| *w != window);
             a.windows_mru.insert(0, window);
@@ -182,7 +208,9 @@ impl Wm {
     ///   moved here when `switch_on_activate` is off);
     /// * if the owner is not the front app, the app is activated first (menu bar switches).
     pub(crate) fn focus_window(&mut self, id: WindowId, now: f64, out: &mut Vec<Effect>) {
-        let Some(w) = self.windows.get(&id) else { return };
+        let Some(w) = self.windows.get(&id) else {
+            return;
+        };
         if w.lifecycle.state().is_dead() {
             return;
         }
@@ -210,16 +238,26 @@ impl Wm {
         let mut key = self.pick_key_window(app);
         if key.is_none() {
             let mru = self.apps[&app].windows_mru.clone();
-            let live = |wm: &Wm, w: &WindowId| wm.windows.get(w).is_some_and(|x| !x.lifecycle.state().is_dead());
+            let live = |wm: &Wm, w: &WindowId| {
+                wm.windows
+                    .get(w)
+                    .is_some_and(|x| !x.lifecycle.state().is_dead())
+            };
             let off_screen = mru.iter().copied().find(|w| {
-                live(self, w) && !self.windows[w].lifecycle.state().is_minimized() && !self.window_on_screen(*w)
+                live(self, w)
+                    && !self.windows[w].lifecycle.state().is_minimized()
+                    && !self.window_on_screen(*w)
             });
             if let (Some(w), true) = (off_screen, self.cfg.workspaces.switch_on_activate) {
                 self.ensure_on_screen(w, now, out);
                 key = self.pick_key_window(app);
             }
             if key.is_none() && self.cfg.focus.restore_minimized_on_activate {
-                if let Some(w) = mru.iter().copied().find(|w| live(self, w) && self.windows[w].lifecycle.state().is_minimized()) {
+                if let Some(w) = mru
+                    .iter()
+                    .copied()
+                    .find(|w| live(self, w) && self.windows[w].lifecycle.state().is_minimized())
+                {
                     self.restore_window(w, now, out);
                     self.ensure_on_screen(w, now, out);
                     key = Some(w);
@@ -286,7 +324,10 @@ impl Wm {
                 .iter()
                 .copied()
                 .filter(|a| *a != app)
-                .find(|a| self.apps.get(a).is_some_and(|x| !x.hidden) && self.pick_key_window(*a).is_some());
+                .find(|a| {
+                    self.apps.get(a).is_some_and(|x| !x.hidden)
+                        && self.pick_key_window(*a).is_some()
+                });
             match next {
                 Some(n) => self.activate_app(n, now, out),
                 None => {
@@ -299,25 +340,42 @@ impl Wm {
     }
 
     fn hide_app_only(&mut self, app: AppId, out: &mut Vec<Effect>) {
-        let Some(a) = self.apps.get_mut(&app) else { return };
+        let Some(a) = self.apps.get_mut(&app) else {
+            return;
+        };
         if a.hidden {
             return;
         }
         a.hidden = true;
-        let mut ids: Vec<WindowId> = self.windows.values().filter(|w| w.app == app).map(|w| w.id).collect();
+        let mut ids: Vec<WindowId> = self
+            .windows
+            .values()
+            .filter(|w| w.app == app)
+            .map(|w| w.id)
+            .collect();
         ids.sort();
         for window in ids {
-            out.push(Effect::SetVisible { window, visible: false });
+            out.push(Effect::SetVisible {
+                window,
+                visible: false,
+            });
         }
     }
 
     pub(crate) fn unhide_app(&mut self, app: AppId, out: &mut Vec<Effect>) {
-        let Some(a) = self.apps.get_mut(&app) else { return };
+        let Some(a) = self.apps.get_mut(&app) else {
+            return;
+        };
         if !a.hidden {
             return;
         }
         a.hidden = false;
-        let mut ids: Vec<WindowId> = self.windows.values().filter(|w| w.app == app).map(|w| w.id).collect();
+        let mut ids: Vec<WindowId> = self
+            .windows
+            .values()
+            .filter(|w| w.app == app)
+            .map(|w| w.id)
+            .collect();
         ids.sort();
         for window in ids {
             let visible = self.windows[&window].lifecycle.state().is_visible();
@@ -326,7 +384,13 @@ impl Wm {
     }
 
     pub(crate) fn hide_others(&mut self, app: AppId, now: f64, out: &mut Vec<Effect>) {
-        let others: Vec<AppId> = self.focus.app_mru.iter().copied().filter(|a| *a != app).collect();
+        let others: Vec<AppId> = self
+            .focus
+            .app_mru
+            .iter()
+            .copied()
+            .filter(|a| *a != app)
+            .collect();
         for a in others {
             self.hide_app_only(a, out);
         }
@@ -334,7 +398,13 @@ impl Wm {
     }
 
     pub(crate) fn show_all(&mut self, out: &mut Vec<Effect>) {
-        let hidden: Vec<AppId> = self.focus.app_mru.iter().copied().filter(|a| self.apps.get(a).is_some_and(|x| x.hidden)).collect();
+        let hidden: Vec<AppId> = self
+            .focus
+            .app_mru
+            .iter()
+            .copied()
+            .filter(|a| self.apps.get(a).is_some_and(|x| x.hidden))
+            .collect();
         for a in hidden {
             self.unhide_app(a, out);
         }
@@ -345,25 +415,51 @@ impl Wm {
     /// previous application and backward the least recent one.
     pub(crate) fn switcher_open(&mut self, backward: bool, now: f64, out: &mut Vec<Effect>) {
         if self.focus.switcher.is_some() {
-            let step = if backward { SwitcherStep::Previous } else { SwitcherStep::Next };
+            let step = if backward {
+                SwitcherStep::Previous
+            } else {
+                SwitcherStep::Next
+            };
             self.switcher_step(step, false, now, out);
             return;
         }
-        let items: Vec<AppId> = self.focus.app_mru.iter().copied().filter(|a| self.apps.get(a).is_some_and(|x| !x.windows_mru.is_empty())).collect();
+        let items: Vec<AppId> = self
+            .focus
+            .app_mru
+            .iter()
+            .copied()
+            .filter(|a| self.apps.get(a).is_some_and(|x| !x.windows_mru.is_empty()))
+            .collect();
         if items.is_empty() {
             return;
         }
         let count = if backward { -1 } else { 1 };
         let selected = hidden_index(count, items.len(), !backward);
-        out.push(Effect::SwitcherChanged { apps: items.clone(), selected });
-        self.focus.switcher = Some(Switcher { items, selected, opened_at: now, hidden_count: Some(count) });
+        out.push(Effect::SwitcherChanged {
+            apps: items.clone(),
+            selected,
+        });
+        self.focus.switcher = Some(Switcher {
+            items,
+            selected,
+            opened_at: now,
+            hidden_count: Some(count),
+        });
     }
 
     /// Move the selection. Before the panel is up ([`SWITCHER_SHOW_DELAY`]) Tab steps move the
     /// hidden counter, which clamps instead of wrapping; once it is up a fresh press wraps and a key
     /// repeat stops at the ends. Any other step, or a pick, ends the hidden counter.
-    pub(crate) fn switcher_step(&mut self, step: SwitcherStep, repeat: bool, now: f64, out: &mut Vec<Effect>) {
-        let Some(s) = self.focus.switcher.as_mut() else { return };
+    pub(crate) fn switcher_step(
+        &mut self,
+        step: SwitcherStep,
+        repeat: bool,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
+        let Some(s) = self.focus.switcher.as_mut() else {
+            return;
+        };
         let n = s.items.len();
         let before = s.selected;
         let hidden = now - s.opened_at < SWITCHER_SHOW_DELAY;
@@ -380,19 +476,34 @@ impl Wm {
             }
         }
         if s.selected != before {
-            out.push(Effect::SwitcherChanged { apps: s.items.clone(), selected: s.selected });
+            out.push(Effect::SwitcherChanged {
+                apps: s.items.clone(),
+                selected: s.selected,
+            });
         }
     }
 
     pub(crate) fn switcher_select(&mut self, index: usize, out: &mut Vec<Effect>) {
-        let Some(s) = self.focus.switcher.as_mut().filter(|s| index < s.items.len() && index != s.selected) else { return };
+        let Some(s) = self
+            .focus
+            .switcher
+            .as_mut()
+            .filter(|s| index < s.items.len() && index != s.selected)
+        else {
+            return;
+        };
         s.selected = index;
         s.hidden_count = None;
-        out.push(Effect::SwitcherChanged { apps: s.items.clone(), selected: index });
+        out.push(Effect::SwitcherChanged {
+            apps: s.items.clone(),
+            selected: index,
+        });
     }
 
     pub(crate) fn switcher_commit(&mut self, now: f64, out: &mut Vec<Effect>) {
-        let Some(s) = self.focus.switcher.take() else { return };
+        let Some(s) = self.focus.switcher.take() else {
+            return;
+        };
         out.push(Effect::SwitcherClosed { committed: true });
         if let Some(app) = s.items.get(s.selected).copied() {
             self.activate_app(app, now, out);
@@ -409,17 +520,29 @@ impl Wm {
     /// list when its last window is gone ([`Wm::switcher_forget`]). With a single entry nothing
     /// happens (the design refuses with the alert sound, which the model has no channel for).
     pub(crate) fn switcher_quit(&mut self, out: &mut Vec<Effect>) {
-        let Some(s) = self.focus.switcher.as_ref().filter(|s| s.items.len() > 1) else { return };
+        let Some(s) = self.focus.switcher.as_ref().filter(|s| s.items.len() > 1) else {
+            return;
+        };
         let app = s.items[s.selected];
-        let mut ids: Vec<WindowId> = self.windows.values().filter(|w| w.app == app && !w.lifecycle.state().is_dead()).map(|w| w.id).collect();
+        let mut ids: Vec<WindowId> = self
+            .windows
+            .values()
+            .filter(|w| w.app == app && !w.lifecycle.state().is_dead())
+            .map(|w| w.id)
+            .collect();
         ids.sort();
-        out.extend(ids.into_iter().map(|window| Effect::RequestClose { window }));
+        out.extend(
+            ids.into_iter()
+                .map(|window| Effect::RequestClose { window }),
+        );
     }
 
     /// H: hide the selected application, or show it again when it is hidden; the switcher stays
     /// open.
     pub(crate) fn switcher_toggle_hide(&mut self, now: f64, out: &mut Vec<Effect>) {
-        let Some(app) = self.focus.switcher.as_ref().map(|s| s.items[s.selected]) else { return };
+        let Some(app) = self.focus.switcher.as_ref().map(|s| s.items[s.selected]) else {
+            return;
+        };
         if self.apps.get(&app).is_some_and(|a| a.hidden) {
             self.unhide_app(app, out);
         } else {
@@ -430,11 +553,19 @@ impl Wm {
     /// `app` may have lost its last window: an open switcher drops its entry (the selection stays
     /// on the same place, or the new last entry) and ends when nothing is left.
     pub(crate) fn switcher_forget(&mut self, app: AppId, out: &mut Vec<Effect>) {
-        if self.apps.get(&app).is_some_and(|a| !a.windows_mru.is_empty()) {
+        if self
+            .apps
+            .get(&app)
+            .is_some_and(|a| !a.windows_mru.is_empty())
+        {
             return;
         }
-        let Some(s) = self.focus.switcher.as_mut() else { return };
-        let Some(i) = s.items.iter().position(|a| *a == app) else { return };
+        let Some(s) = self.focus.switcher.as_mut() else {
+            return;
+        };
+        let Some(i) = s.items.iter().position(|a| *a == app) else {
+            return;
+        };
         s.items.remove(i);
         if s.items.is_empty() {
             self.switcher_cancel(out);
@@ -443,13 +574,18 @@ impl Wm {
         if i < s.selected || s.selected == s.items.len() {
             s.selected -= 1;
         }
-        out.push(Effect::SwitcherChanged { apps: s.items.clone(), selected: s.selected });
+        out.push(Effect::SwitcherChanged {
+            apps: s.items.clone(),
+            selected: s.selected,
+        });
     }
 
     /// Window cycling inside the front app. The list is a snapshot taken at the first press; the
     /// MRU order is only updated when the session ends (any other command or `EndCycleWindows`).
     pub(crate) fn cycle_windows(&mut self, backward: bool, out: &mut Vec<Effect>) {
-        let Some(app) = self.focus.front_app else { return };
+        let Some(app) = self.focus.front_app else {
+            return;
+        };
         if self.focus.cycle.is_none() {
             let list: Vec<WindowId> = self.apps[&app]
                 .windows_mru
@@ -457,7 +593,11 @@ impl Wm {
                 .copied()
                 .filter(|w| self.focusable(*w) && !self.is_blocked(*w))
                 .collect();
-            let index = self.focus.key_window.and_then(|k| list.iter().position(|w| *w == k)).unwrap_or(0);
+            let index = self
+                .focus
+                .key_window
+                .and_then(|k| list.iter().position(|w| *w == k))
+                .unwrap_or(0);
             self.focus.cycle = Some(CycleSession { list, index });
         }
         let c = self.focus.cycle.as_mut().unwrap();
@@ -465,7 +605,11 @@ impl Wm {
             return;
         }
         let n = c.list.len();
-        c.index = if backward { (c.index + n - 1) % n } else { (c.index + 1) % n };
+        c.index = if backward {
+            (c.index + n - 1) % n
+        } else {
+            (c.index + 1) % n
+        };
         let target = c.list[c.index];
         self.raise(target, out);
         self.set_key(Some(target), out);

@@ -6,10 +6,15 @@ use std::time::Duration;
 use rustix::io::Errno;
 use rustix::net::netlink::SocketAddrNetlink;
 use rustix::net::sockopt::{set_socket_timeout, Timeout};
-use rustix::net::{bind, recvfrom, sendto, socket_with, AddressFamily, Protocol, RecvFlags, SendFlags, SocketFlags, SocketType};
+use rustix::net::{
+    bind, recvfrom, sendto, socket_with, AddressFamily, Protocol, RecvFlags, SendFlags,
+    SocketFlags, SocketType,
+};
 
 use crate::error::{Error, ParseError, Result};
-use crate::message::{frame, messages, NLMSG_DONE, NLMSG_ERROR, NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST};
+use crate::message::{
+    frame, messages, NLMSG_DONE, NLMSG_ERROR, NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST,
+};
 
 /// Receive buffer size. A dump message is limited to a page by the kernel; a generic netlink
 /// reply can be larger (a wiphy description), so this is generous. approximate.
@@ -55,11 +60,13 @@ impl Socket {
             Mode::Blocking => SocketFlags::CLOEXEC,
             Mode::NonBlocking => SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
         };
-        let fd = socket_with(AddressFamily::NETLINK, SocketType::RAW, flags, protocol).map_err(Error::syscall("socket(AF_NETLINK)"))?;
+        let fd = socket_with(AddressFamily::NETLINK, SocketType::RAW, flags, protocol)
+            .map_err(Error::syscall("socket(AF_NETLINK)"))?;
         // port id 0: the kernel assigns one.
         bind(&fd, &SocketAddrNetlink::new(0, groups)).map_err(Error::syscall("bind"))?;
         if mode == Mode::Blocking {
-            set_socket_timeout(&fd, Timeout::Recv, Some(REQUEST_TIMEOUT)).map_err(Error::syscall("setsockopt(SO_RCVTIMEO)"))?;
+            set_socket_timeout(&fd, Timeout::Recv, Some(REQUEST_TIMEOUT))
+                .map_err(Error::syscall("setsockopt(SO_RCVTIMEO)"))?;
         }
         Ok(Self { fd, sequence: 0 })
     }
@@ -69,14 +76,26 @@ impl Socket {
     /// kernel is an [`Error::Kernel`] named `request`.
     ///
     /// The socket must be [`Mode::Blocking`].
-    pub fn call(&mut self, request: &'static str, ty: u16, flags: u16, body: &[u8]) -> Result<Vec<u8>> {
+    pub fn call(
+        &mut self,
+        request: &'static str,
+        ty: u16,
+        flags: u16,
+        body: &[u8],
+    ) -> Result<Vec<u8>> {
         self.sequence = self.sequence.wrapping_add(1);
         let sequence = self.sequence;
         let is_dump = flags & NLM_F_DUMP == NLM_F_DUMP;
         // A dump ends with DONE; anything else asks for an acknowledgement so the end is known.
         let flags = flags | NLM_F_REQUEST | if is_dump { 0 } else { NLM_F_ACK };
         let message = frame(ty, flags, sequence, body);
-        sendto(&self.fd, &message, SendFlags::empty(), &SocketAddrNetlink::new(0, 0)).map_err(Error::syscall("sendto"))?;
+        sendto(
+            &self.fd,
+            &message,
+            SendFlags::empty(),
+            &SocketAddrNetlink::new(0, 0),
+        )
+        .map_err(Error::syscall("sendto"))?;
 
         let mut reply = Vec::new();
         let mut buffer = vec![0u8; RECV_BUFFER_SIZE];
@@ -86,7 +105,12 @@ impl Socket {
                     Ok(Some(length)) => break length,
                     Ok(None) => continue,
                     Err(Errno::INTR) => continue,
-                    Err(source) => return Err(Error::Syscall { call: "recvfrom", source }),
+                    Err(source) => {
+                        return Err(Error::Syscall {
+                            call: "recvfrom",
+                            source,
+                        })
+                    }
                 }
             };
             let datagram = &buffer[..length];
@@ -94,21 +118,34 @@ impl Socket {
             for message in messages(datagram) {
                 let message = message.map_err(Error::parse(request))?;
                 if message.header.sequence != sequence {
-                    return Err(Error::UnexpectedSequence { expected: sequence, actual: message.header.sequence });
+                    return Err(Error::UnexpectedSequence {
+                        expected: sequence,
+                        actual: message.header.sequence,
+                    });
                 }
                 match message.header.ty {
                     NLMSG_ERROR => {
                         let errno = error_code(message.payload).map_err(Error::parse(request))?;
                         match errno {
                             0 => finished = true,
-                            code => return Err(Error::Kernel { request, errno: Errno::from_raw_os_error(-code) }),
+                            code => {
+                                return Err(Error::Kernel {
+                                    request,
+                                    errno: Errno::from_raw_os_error(-code),
+                                })
+                            }
                         }
                     }
                     NLMSG_DONE => {
                         // A dump that failed half way says so in the DONE payload.
                         match error_code(message.payload).map_err(Error::parse(request))? {
                             0 => finished = true,
-                            code => return Err(Error::Kernel { request, errno: Errno::from_raw_os_error(-code) }),
+                            code => {
+                                return Err(Error::Kernel {
+                                    request,
+                                    errno: Errno::from_raw_os_error(-code),
+                                })
+                            }
                         }
                     }
                     _ => {}
@@ -131,7 +168,9 @@ impl Socket {
         loop {
             match recvfrom(&self.fd, &mut buffer[..], RecvFlags::TRUNC) {
                 Ok((received, length, sender)) => {
-                    let from_kernel = sender.and_then(|address| SocketAddrNetlink::try_from(address).ok()).is_some_and(|address| address.pid() == 0);
+                    let from_kernel = sender
+                        .and_then(|address| SocketAddrNetlink::try_from(address).ok())
+                        .is_some_and(|address| address.pid() == 0);
                     if !from_kernel {
                         continue;
                     }
@@ -145,7 +184,12 @@ impl Socket {
                 Err(Errno::INTR) => continue,
                 // The receive queue overflowed; the kernel reports it once and keeps delivering.
                 Err(Errno::NOBUFS) => drained.overflowed = true,
-                Err(source) => return Err(Error::Syscall { call: "recvfrom", source }),
+                Err(source) => {
+                    return Err(Error::Syscall {
+                        call: "recvfrom",
+                        source,
+                    })
+                }
             }
         }
     }
@@ -164,12 +208,18 @@ fn recv_datagram(fd: &OwnedFd, buffer: &mut [u8]) -> std::result::Result<Option<
     if length > buffer.len() {
         return Err(Errno::MSGSIZE);
     }
-    let from_kernel = sender.and_then(|address| SocketAddrNetlink::try_from(address).ok()).is_some_and(|address| address.pid() == 0);
+    let from_kernel = sender
+        .and_then(|address| SocketAddrNetlink::try_from(address).ok())
+        .is_some_and(|address| address.pid() == 0);
     Ok(from_kernel.then_some(received))
 }
 
 /// The status code of an `NLMSG_ERROR` or `NLMSG_DONE` payload: 0, or a negative errno.
 fn error_code(payload: &[u8]) -> std::result::Result<i32, ParseError> {
-    let code = payload.get(..4).ok_or(ParseError::Truncated { what: "error code", needed: 4, have: payload.len() })?;
+    let code = payload.get(..4).ok_or(ParseError::Truncated {
+        what: "error code",
+        needed: 4,
+        have: payload.len(),
+    })?;
     Ok(i32::from_ne_bytes([code[0], code[1], code[2], code[3]]))
 }

@@ -19,7 +19,10 @@ impl Default for VelocityTracker {
 
 impl VelocityTracker {
     pub fn new(window: f64) -> Self {
-        Self { window, samples: VecDeque::new() }
+        Self {
+            window,
+            samples: VecDeque::new(),
+        }
     }
 
     pub fn reset(&mut self) {

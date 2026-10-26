@@ -36,7 +36,8 @@ impl Accessibility {
     /// Read the settings in `path` and store every later change there. Lines that are not
     /// understood are logged and skipped; a file that cannot be read is an error.
     pub fn use_store(&mut self, path: PathBuf) -> Result<()> {
-        let (settings, problems) = AccessibilitySettings::load(&path).map_err(|e| anyhow!("reading {}: {e}", path.display()))?;
+        let (settings, problems) = AccessibilitySettings::load(&path)
+            .map_err(|e| anyhow!("reading {}: {e}", path.display()))?;
         for (line, problem) in problems {
             tracing::warn!(path = %path.display(), line, problem, "ignoring accessibility setting");
         }
@@ -52,7 +53,15 @@ impl Accessibility {
         if ops.is_empty() {
             return None;
         }
-        let recipe = Recipe { name: "DisplayFilter".into(), backdrop: Some(Backdrop { scale: 1.0, sigma_pt: 0.0, ops }), ..Recipe::default() };
+        let recipe = Recipe {
+            name: "DisplayFilter".into(),
+            backdrop: Some(Backdrop {
+                scale: 1.0,
+                sigma_pt: 0.0,
+                ops,
+            }),
+            ..Recipe::default()
+        };
         Some(Rc::new(GpuRecipe::new(&recipe)))
     }
 
@@ -73,13 +82,19 @@ impl Cupertino {
     /// The appearance the server draws with: the session's light or dark appearance, in its
     /// high-contrast catalog while Increase Contrast is on (catalog selection).
     pub fn appearance(&self) -> Appearance {
-        self.config.appearance.with_high_contrast(self.display_options().increase_contrast)
+        self.config
+            .appearance
+            .with_high_contrast(self.display_options().increase_contrast)
     }
 
     /// The transform a closing window of `kind` fades out with, None when it disappears at once
     /// (`render::motion::close_transform`).
     pub fn close_transform(&self, kind: WindowKind) -> Option<TransformKind> {
-        crate::render::motion::close_transform(kind, self.fx.close_kind(kind), self.display_options())
+        crate::render::motion::close_transform(
+            kind,
+            self.fx.close_kind(kind),
+            self.display_options(),
+        )
     }
 
     /// Read `accessibility.conf` from `path`, apply it and store later changes there.

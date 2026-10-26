@@ -174,27 +174,41 @@ impl TextAction {
             TextAction::CycleToNextInputScript => "CycleToNextInputScript",
             TextAction::Delete => "Delete",
             TextAction::DeleteBackward => "DeleteBackward",
-            TextAction::DeleteBackwardByDecomposingPreviousCharacter => "DeleteBackwardByDecomposingPreviousCharacter",
+            TextAction::DeleteBackwardByDecomposingPreviousCharacter => {
+                "DeleteBackwardByDecomposingPreviousCharacter"
+            }
             TextAction::DeleteForward => "DeleteForward",
             TextAction::DeleteToBeginningOfLine => "DeleteToBeginningOfLine",
             TextAction::DeleteToEndOfParagraph => "DeleteToEndOfParagraph",
             TextAction::DeleteWordBackward => "DeleteWordBackward",
             TextAction::DeleteWordForward => "DeleteWordForward",
             TextAction::InsertBacktab => "InsertBacktab",
-            TextAction::InsertDoubleQuoteIgnoringSubstitution => "InsertDoubleQuoteIgnoringSubstitution",
+            TextAction::InsertDoubleQuoteIgnoringSubstitution => {
+                "InsertDoubleQuoteIgnoringSubstitution"
+            }
             TextAction::InsertLineBreak => "InsertLineBreak",
             TextAction::InsertNewline => "InsertNewline",
             TextAction::InsertNewlineIgnoringFieldEditor => "InsertNewlineIgnoringFieldEditor",
             TextAction::InsertRightToLeftSlash => "InsertRightToLeftSlash",
-            TextAction::InsertSingleQuoteIgnoringSubstitution => "InsertSingleQuoteIgnoringSubstitution",
+            TextAction::InsertSingleQuoteIgnoringSubstitution => {
+                "InsertSingleQuoteIgnoringSubstitution"
+            }
             TextAction::InsertTab => "InsertTab",
             TextAction::InsertTabIgnoringFieldEditor => "InsertTabIgnoringFieldEditor",
-            TextAction::MakeBaseWritingDirectionLeftToRight => "MakeBaseWritingDirectionLeftToRight",
+            TextAction::MakeBaseWritingDirectionLeftToRight => {
+                "MakeBaseWritingDirectionLeftToRight"
+            }
             TextAction::MakeBaseWritingDirectionNatural => "MakeBaseWritingDirectionNatural",
-            TextAction::MakeBaseWritingDirectionRightToLeft => "MakeBaseWritingDirectionRightToLeft",
-            TextAction::MakeTextWritingDirectionLeftToRight => "MakeTextWritingDirectionLeftToRight",
+            TextAction::MakeBaseWritingDirectionRightToLeft => {
+                "MakeBaseWritingDirectionRightToLeft"
+            }
+            TextAction::MakeTextWritingDirectionLeftToRight => {
+                "MakeTextWritingDirectionLeftToRight"
+            }
             TextAction::MakeTextWritingDirectionNatural => "MakeTextWritingDirectionNatural",
-            TextAction::MakeTextWritingDirectionRightToLeft => "MakeTextWritingDirectionRightToLeft",
+            TextAction::MakeTextWritingDirectionRightToLeft => {
+                "MakeTextWritingDirectionRightToLeft"
+            }
             TextAction::MoveBackward => "MoveBackward",
             TextAction::MoveBackwardAndModifySelection => "MoveBackwardAndModifySelection",
             TextAction::MoveDown => "MoveDown",
@@ -203,22 +217,38 @@ impl TextAction {
             TextAction::MoveForwardAndModifySelection => "MoveForwardAndModifySelection",
             TextAction::MoveLeft => "MoveLeft",
             TextAction::MoveLeftAndModifySelection => "MoveLeftAndModifySelection",
-            TextAction::MoveParagraphBackwardAndModifySelection => "MoveParagraphBackwardAndModifySelection",
-            TextAction::MoveParagraphForwardAndModifySelection => "MoveParagraphForwardAndModifySelection",
+            TextAction::MoveParagraphBackwardAndModifySelection => {
+                "MoveParagraphBackwardAndModifySelection"
+            }
+            TextAction::MoveParagraphForwardAndModifySelection => {
+                "MoveParagraphForwardAndModifySelection"
+            }
             TextAction::MoveRight => "MoveRight",
             TextAction::MoveRightAndModifySelection => "MoveRightAndModifySelection",
             TextAction::MoveToBeginningOfDocument => "MoveToBeginningOfDocument",
-            TextAction::MoveToBeginningOfDocumentAndModifySelection => "MoveToBeginningOfDocumentAndModifySelection",
+            TextAction::MoveToBeginningOfDocumentAndModifySelection => {
+                "MoveToBeginningOfDocumentAndModifySelection"
+            }
             TextAction::MoveToBeginningOfParagraph => "MoveToBeginningOfParagraph",
-            TextAction::MoveToBeginningOfParagraphAndModifySelection => "MoveToBeginningOfParagraphAndModifySelection",
+            TextAction::MoveToBeginningOfParagraphAndModifySelection => {
+                "MoveToBeginningOfParagraphAndModifySelection"
+            }
             TextAction::MoveToEndOfDocument => "MoveToEndOfDocument",
-            TextAction::MoveToEndOfDocumentAndModifySelection => "MoveToEndOfDocumentAndModifySelection",
+            TextAction::MoveToEndOfDocumentAndModifySelection => {
+                "MoveToEndOfDocumentAndModifySelection"
+            }
             TextAction::MoveToEndOfParagraph => "MoveToEndOfParagraph",
-            TextAction::MoveToEndOfParagraphAndModifySelection => "MoveToEndOfParagraphAndModifySelection",
+            TextAction::MoveToEndOfParagraphAndModifySelection => {
+                "MoveToEndOfParagraphAndModifySelection"
+            }
             TextAction::MoveToLeftEndOfLine => "MoveToLeftEndOfLine",
-            TextAction::MoveToLeftEndOfLineAndModifySelection => "MoveToLeftEndOfLineAndModifySelection",
+            TextAction::MoveToLeftEndOfLineAndModifySelection => {
+                "MoveToLeftEndOfLineAndModifySelection"
+            }
             TextAction::MoveToRightEndOfLine => "MoveToRightEndOfLine",
-            TextAction::MoveToRightEndOfLineAndModifySelection => "MoveToRightEndOfLineAndModifySelection",
+            TextAction::MoveToRightEndOfLineAndModifySelection => {
+                "MoveToRightEndOfLineAndModifySelection"
+            }
             TextAction::MoveUp => "MoveUp",
             TextAction::MoveUpAndModifySelection => "MoveUpAndModifySelection",
             TextAction::MoveWordBackward => "MoveWordBackward",
@@ -248,104 +278,470 @@ impl TextAction {
 
 /// (modifiers, key, actions) rows; actions are tried in order until one applies.
 pub const STANDARD: &[(Mods, Key, &[TextAction])] = &[
-    (Mods::CTRL, Key::Char('"'), &[TextAction::InsertDoubleQuoteIgnoringSubstitution]),
-    (Mods::PRIMARY, Key::Char('.'), &[TextAction::CancelOperation]),
-    (Mods::CTRL, Key::Char('/'), &[TextAction::InsertRightToLeftSlash]),
-    (Mods::CTRL, Key::Char('\''), &[TextAction::InsertSingleQuoteIgnoringSubstitution]),
-    (Mods::CTRL, Key::Char('a'), &[TextAction::MoveToBeginningOfParagraph]),
-    (Mods::CTRL.union(Mods::SHIFT), Key::Char('a'), &[TextAction::MoveToBeginningOfParagraphAndModifySelection]),
-    (Mods::ALT.union(Mods::CTRL), Key::Char('b'), &[TextAction::MoveWordBackward]),
-    (Mods::ALT.union(Mods::CTRL).union(Mods::SHIFT), Key::Char('b'), &[TextAction::MoveWordBackwardAndModifySelection]),
+    (
+        Mods::CTRL,
+        Key::Char('"'),
+        &[TextAction::InsertDoubleQuoteIgnoringSubstitution],
+    ),
+    (
+        Mods::PRIMARY,
+        Key::Char('.'),
+        &[TextAction::CancelOperation],
+    ),
+    (
+        Mods::CTRL,
+        Key::Char('/'),
+        &[TextAction::InsertRightToLeftSlash],
+    ),
+    (
+        Mods::CTRL,
+        Key::Char('\''),
+        &[TextAction::InsertSingleQuoteIgnoringSubstitution],
+    ),
+    (
+        Mods::CTRL,
+        Key::Char('a'),
+        &[TextAction::MoveToBeginningOfParagraph],
+    ),
+    (
+        Mods::CTRL.union(Mods::SHIFT),
+        Key::Char('a'),
+        &[TextAction::MoveToBeginningOfParagraphAndModifySelection],
+    ),
+    (
+        Mods::ALT.union(Mods::CTRL),
+        Key::Char('b'),
+        &[TextAction::MoveWordBackward],
+    ),
+    (
+        Mods::ALT.union(Mods::CTRL).union(Mods::SHIFT),
+        Key::Char('b'),
+        &[TextAction::MoveWordBackwardAndModifySelection],
+    ),
     (Mods::CTRL, Key::Char('b'), &[TextAction::MoveBackward]),
-    (Mods::CTRL.union(Mods::SHIFT), Key::Char('b'), &[TextAction::MoveBackwardAndModifySelection]),
+    (
+        Mods::CTRL.union(Mods::SHIFT),
+        Key::Char('b'),
+        &[TextAction::MoveBackwardAndModifySelection],
+    ),
     (Mods::CTRL, Key::Char('d'), &[TextAction::DeleteForward]),
-    (Mods::CTRL, Key::Char('e'), &[TextAction::MoveToEndOfParagraph]),
-    (Mods::CTRL.union(Mods::SHIFT), Key::Char('e'), &[TextAction::MoveToEndOfParagraphAndModifySelection]),
-    (Mods::ALT.union(Mods::CTRL), Key::Char('f'), &[TextAction::MoveWordForward]),
-    (Mods::ALT.union(Mods::CTRL).union(Mods::SHIFT), Key::Char('f'), &[TextAction::MoveWordForwardAndModifySelection]),
+    (
+        Mods::CTRL,
+        Key::Char('e'),
+        &[TextAction::MoveToEndOfParagraph],
+    ),
+    (
+        Mods::CTRL.union(Mods::SHIFT),
+        Key::Char('e'),
+        &[TextAction::MoveToEndOfParagraphAndModifySelection],
+    ),
+    (
+        Mods::ALT.union(Mods::CTRL),
+        Key::Char('f'),
+        &[TextAction::MoveWordForward],
+    ),
+    (
+        Mods::ALT.union(Mods::CTRL).union(Mods::SHIFT),
+        Key::Char('f'),
+        &[TextAction::MoveWordForwardAndModifySelection],
+    ),
     (Mods::CTRL, Key::Char('f'), &[TextAction::MoveForward]),
-    (Mods::CTRL.union(Mods::SHIFT), Key::Char('f'), &[TextAction::MoveForwardAndModifySelection]),
+    (
+        Mods::CTRL.union(Mods::SHIFT),
+        Key::Char('f'),
+        &[TextAction::MoveForwardAndModifySelection],
+    ),
     (Mods::CTRL, Key::Char('h'), &[TextAction::DeleteBackward]),
-    (Mods::CTRL, Key::Char('k'), &[TextAction::DeleteToEndOfParagraph]),
-    (Mods::CTRL, Key::Char('l'), &[TextAction::CenterSelectionInVisibleArea]),
+    (
+        Mods::CTRL,
+        Key::Char('k'),
+        &[TextAction::DeleteToEndOfParagraph],
+    ),
+    (
+        Mods::CTRL,
+        Key::Char('l'),
+        &[TextAction::CenterSelectionInVisibleArea],
+    ),
     (Mods::CTRL, Key::Char('n'), &[TextAction::MoveDown]),
-    (Mods::CTRL.union(Mods::SHIFT), Key::Char('n'), &[TextAction::MoveDownAndModifySelection]),
-    (Mods::CTRL, Key::Char('o'), &[TextAction::InsertNewlineIgnoringFieldEditor, TextAction::MoveBackward]),
+    (
+        Mods::CTRL.union(Mods::SHIFT),
+        Key::Char('n'),
+        &[TextAction::MoveDownAndModifySelection],
+    ),
+    (
+        Mods::CTRL,
+        Key::Char('o'),
+        &[
+            TextAction::InsertNewlineIgnoringFieldEditor,
+            TextAction::MoveBackward,
+        ],
+    ),
     (Mods::CTRL, Key::Char('p'), &[TextAction::MoveUp]),
-    (Mods::CTRL.union(Mods::SHIFT), Key::Char('p'), &[TextAction::MoveUpAndModifySelection]),
+    (
+        Mods::CTRL.union(Mods::SHIFT),
+        Key::Char('p'),
+        &[TextAction::MoveUpAndModifySelection],
+    ),
     (Mods::CTRL, Key::Char('t'), &[TextAction::Transpose]),
     (Mods::CTRL, Key::Char('v'), &[TextAction::PageDown]),
-    (Mods::CTRL.union(Mods::SHIFT), Key::Char('v'), &[TextAction::PageDownAndModifySelection]),
+    (
+        Mods::CTRL.union(Mods::SHIFT),
+        Key::Char('v'),
+        &[TextAction::PageDownAndModifySelection],
+    ),
     (Mods::CTRL, Key::Char('y'), &[TextAction::Yank]),
-    (Mods::NONE, Key::Named(NamedKey::Backspace), &[TextAction::DeleteBackward]),
-    (Mods::ALT, Key::Named(NamedKey::Backspace), &[TextAction::DeleteWordBackward]),
-    (Mods::ALT.union(Mods::CTRL), Key::Named(NamedKey::Backspace), &[TextAction::DeleteWordBackward]),
-    (Mods::CTRL, Key::Named(NamedKey::Backspace), &[TextAction::DeleteBackwardByDecomposingPreviousCharacter]),
-    (Mods::PRIMARY, Key::Named(NamedKey::Backspace), &[TextAction::DeleteToBeginningOfLine]),
-    (Mods::NONE, Key::Named(NamedKey::Clear), &[TextAction::Delete]),
-    (Mods::NONE, Key::Named(NamedKey::Delete), &[TextAction::DeleteForward]),
-    (Mods::ALT, Key::Named(NamedKey::Delete), &[TextAction::DeleteWordForward]),
-    (Mods::NONE, Key::Named(NamedKey::Down), &[TextAction::MoveDown]),
-    (Mods::ALT, Key::Named(NamedKey::Down), &[TextAction::MoveForward, TextAction::MoveToEndOfParagraph]),
-    (Mods::ALT.union(Mods::CTRL).union(Mods::PRIMARY), Key::Named(NamedKey::Down), &[TextAction::MakeTextWritingDirectionNatural]),
-    (Mods::ALT.union(Mods::SHIFT), Key::Named(NamedKey::Down), &[TextAction::MoveParagraphForwardAndModifySelection]),
-    (Mods::CTRL, Key::Named(NamedKey::Down), &[TextAction::ScrollPageDown]),
-    (Mods::CTRL.union(Mods::PRIMARY), Key::Named(NamedKey::Down), &[TextAction::MakeBaseWritingDirectionNatural]),
-    (Mods::PRIMARY, Key::Named(NamedKey::Down), &[TextAction::MoveToEndOfDocument]),
-    (Mods::PRIMARY.union(Mods::SHIFT), Key::Named(NamedKey::Down), &[TextAction::MoveToEndOfDocumentAndModifySelection]),
-    (Mods::SHIFT, Key::Named(NamedKey::Down), &[TextAction::MoveDownAndModifySelection]),
-    (Mods::NONE, Key::Named(NamedKey::End), &[TextAction::ScrollToEndOfDocument]),
-    (Mods::SHIFT, Key::Named(NamedKey::End), &[TextAction::MoveToEndOfDocumentAndModifySelection]),
-    (Mods::NONE, Key::Named(NamedKey::Escape), &[TextAction::CancelOperation]),
-    (Mods::ALT, Key::Named(NamedKey::Escape), &[TextAction::Complete]),
-    (Mods::NONE, Key::Named(NamedKey::F(5)), &[TextAction::Complete]),
-    (Mods::NONE, Key::Named(NamedKey::Home), &[TextAction::ScrollToBeginningOfDocument]),
-    (Mods::SHIFT, Key::Named(NamedKey::Home), &[TextAction::MoveToBeginningOfDocumentAndModifySelection]),
-    (Mods::NONE, Key::Named(NamedKey::KpEnter), &[TextAction::InsertNewline]),
-    (Mods::ALT, Key::Named(NamedKey::KpEnter), &[TextAction::InsertNewlineIgnoringFieldEditor]),
-    (Mods::CTRL, Key::Named(NamedKey::KpEnter), &[TextAction::InsertLineBreak]),
-    (Mods::NONE, Key::Named(NamedKey::Left), &[TextAction::MoveLeft]),
-    (Mods::ALT, Key::Named(NamedKey::Left), &[TextAction::MoveWordLeft]),
-    (Mods::ALT.union(Mods::CTRL).union(Mods::PRIMARY), Key::Named(NamedKey::Left), &[TextAction::MakeTextWritingDirectionRightToLeft]),
-    (Mods::ALT.union(Mods::SHIFT), Key::Named(NamedKey::Left), &[TextAction::MoveWordLeftAndModifySelection]),
-    (Mods::CTRL, Key::Named(NamedKey::Left), &[TextAction::MoveToLeftEndOfLine]),
-    (Mods::CTRL.union(Mods::PRIMARY), Key::Named(NamedKey::Left), &[TextAction::MakeBaseWritingDirectionRightToLeft]),
-    (Mods::CTRL.union(Mods::SHIFT), Key::Named(NamedKey::Left), &[TextAction::MoveToLeftEndOfLineAndModifySelection]),
-    (Mods::PRIMARY, Key::Named(NamedKey::Left), &[TextAction::MoveToLeftEndOfLine]),
-    (Mods::PRIMARY.union(Mods::SHIFT), Key::Named(NamedKey::Left), &[TextAction::MoveToLeftEndOfLineAndModifySelection]),
-    (Mods::SHIFT, Key::Named(NamedKey::Left), &[TextAction::MoveLeftAndModifySelection]),
-    (Mods::NONE, Key::Named(NamedKey::PageDown), &[TextAction::ScrollPageDown]),
-    (Mods::ALT, Key::Named(NamedKey::PageDown), &[TextAction::PageDown]),
-    (Mods::SHIFT, Key::Named(NamedKey::PageDown), &[TextAction::PageDownAndModifySelection]),
-    (Mods::NONE, Key::Named(NamedKey::PageUp), &[TextAction::ScrollPageUp]),
-    (Mods::ALT, Key::Named(NamedKey::PageUp), &[TextAction::PageUp]),
-    (Mods::SHIFT, Key::Named(NamedKey::PageUp), &[TextAction::PageUpAndModifySelection]),
-    (Mods::NONE, Key::Named(NamedKey::Return), &[TextAction::InsertNewline]),
-    (Mods::ALT, Key::Named(NamedKey::Return), &[TextAction::InsertNewlineIgnoringFieldEditor]),
-    (Mods::CTRL, Key::Named(NamedKey::Return), &[TextAction::InsertLineBreak]),
-    (Mods::NONE, Key::Named(NamedKey::Right), &[TextAction::MoveRight]),
-    (Mods::ALT, Key::Named(NamedKey::Right), &[TextAction::MoveWordRight]),
-    (Mods::ALT.union(Mods::CTRL).union(Mods::PRIMARY), Key::Named(NamedKey::Right), &[TextAction::MakeTextWritingDirectionLeftToRight]),
-    (Mods::ALT.union(Mods::SHIFT), Key::Named(NamedKey::Right), &[TextAction::MoveWordRightAndModifySelection]),
-    (Mods::CTRL, Key::Named(NamedKey::Right), &[TextAction::MoveToRightEndOfLine]),
-    (Mods::CTRL.union(Mods::PRIMARY), Key::Named(NamedKey::Right), &[TextAction::MakeBaseWritingDirectionLeftToRight]),
-    (Mods::CTRL.union(Mods::SHIFT), Key::Named(NamedKey::Right), &[TextAction::MoveToRightEndOfLineAndModifySelection]),
-    (Mods::PRIMARY, Key::Named(NamedKey::Right), &[TextAction::MoveToRightEndOfLine]),
-    (Mods::PRIMARY.union(Mods::SHIFT), Key::Named(NamedKey::Right), &[TextAction::MoveToRightEndOfLineAndModifySelection]),
-    (Mods::SHIFT, Key::Named(NamedKey::Right), &[TextAction::MoveRightAndModifySelection]),
-    (Mods::ALT.union(Mods::PRIMARY), Key::Named(NamedKey::Space), &[TextAction::CycleToNextInputKeyboardLayout]),
-    (Mods::CTRL.union(Mods::PRIMARY), Key::Named(NamedKey::Space), &[TextAction::TogglePlatformInputSystem]),
-    (Mods::PRIMARY, Key::Named(NamedKey::Space), &[TextAction::CycleToNextInputScript]),
-    (Mods::NONE, Key::Named(NamedKey::Tab), &[TextAction::InsertTab]),
-    (Mods::ALT, Key::Named(NamedKey::Tab), &[TextAction::InsertTabIgnoringFieldEditor]),
-    (Mods::CTRL, Key::Named(NamedKey::Tab), &[TextAction::SelectNextKeyView]),
-    (Mods::CTRL.union(Mods::SHIFT), Key::Named(NamedKey::Tab), &[TextAction::SelectPreviousKeyView]),
-    (Mods::SHIFT, Key::Named(NamedKey::Tab), &[TextAction::InsertBacktab]),
+    (
+        Mods::NONE,
+        Key::Named(NamedKey::Backspace),
+        &[TextAction::DeleteBackward],
+    ),
+    (
+        Mods::ALT,
+        Key::Named(NamedKey::Backspace),
+        &[TextAction::DeleteWordBackward],
+    ),
+    (
+        Mods::ALT.union(Mods::CTRL),
+        Key::Named(NamedKey::Backspace),
+        &[TextAction::DeleteWordBackward],
+    ),
+    (
+        Mods::CTRL,
+        Key::Named(NamedKey::Backspace),
+        &[TextAction::DeleteBackwardByDecomposingPreviousCharacter],
+    ),
+    (
+        Mods::PRIMARY,
+        Key::Named(NamedKey::Backspace),
+        &[TextAction::DeleteToBeginningOfLine],
+    ),
+    (
+        Mods::NONE,
+        Key::Named(NamedKey::Clear),
+        &[TextAction::Delete],
+    ),
+    (
+        Mods::NONE,
+        Key::Named(NamedKey::Delete),
+        &[TextAction::DeleteForward],
+    ),
+    (
+        Mods::ALT,
+        Key::Named(NamedKey::Delete),
+        &[TextAction::DeleteWordForward],
+    ),
+    (
+        Mods::NONE,
+        Key::Named(NamedKey::Down),
+        &[TextAction::MoveDown],
+    ),
+    (
+        Mods::ALT,
+        Key::Named(NamedKey::Down),
+        &[TextAction::MoveForward, TextAction::MoveToEndOfParagraph],
+    ),
+    (
+        Mods::ALT.union(Mods::CTRL).union(Mods::PRIMARY),
+        Key::Named(NamedKey::Down),
+        &[TextAction::MakeTextWritingDirectionNatural],
+    ),
+    (
+        Mods::ALT.union(Mods::SHIFT),
+        Key::Named(NamedKey::Down),
+        &[TextAction::MoveParagraphForwardAndModifySelection],
+    ),
+    (
+        Mods::CTRL,
+        Key::Named(NamedKey::Down),
+        &[TextAction::ScrollPageDown],
+    ),
+    (
+        Mods::CTRL.union(Mods::PRIMARY),
+        Key::Named(NamedKey::Down),
+        &[TextAction::MakeBaseWritingDirectionNatural],
+    ),
+    (
+        Mods::PRIMARY,
+        Key::Named(NamedKey::Down),
+        &[TextAction::MoveToEndOfDocument],
+    ),
+    (
+        Mods::PRIMARY.union(Mods::SHIFT),
+        Key::Named(NamedKey::Down),
+        &[TextAction::MoveToEndOfDocumentAndModifySelection],
+    ),
+    (
+        Mods::SHIFT,
+        Key::Named(NamedKey::Down),
+        &[TextAction::MoveDownAndModifySelection],
+    ),
+    (
+        Mods::NONE,
+        Key::Named(NamedKey::End),
+        &[TextAction::ScrollToEndOfDocument],
+    ),
+    (
+        Mods::SHIFT,
+        Key::Named(NamedKey::End),
+        &[TextAction::MoveToEndOfDocumentAndModifySelection],
+    ),
+    (
+        Mods::NONE,
+        Key::Named(NamedKey::Escape),
+        &[TextAction::CancelOperation],
+    ),
+    (
+        Mods::ALT,
+        Key::Named(NamedKey::Escape),
+        &[TextAction::Complete],
+    ),
+    (
+        Mods::NONE,
+        Key::Named(NamedKey::F(5)),
+        &[TextAction::Complete],
+    ),
+    (
+        Mods::NONE,
+        Key::Named(NamedKey::Home),
+        &[TextAction::ScrollToBeginningOfDocument],
+    ),
+    (
+        Mods::SHIFT,
+        Key::Named(NamedKey::Home),
+        &[TextAction::MoveToBeginningOfDocumentAndModifySelection],
+    ),
+    (
+        Mods::NONE,
+        Key::Named(NamedKey::KpEnter),
+        &[TextAction::InsertNewline],
+    ),
+    (
+        Mods::ALT,
+        Key::Named(NamedKey::KpEnter),
+        &[TextAction::InsertNewlineIgnoringFieldEditor],
+    ),
+    (
+        Mods::CTRL,
+        Key::Named(NamedKey::KpEnter),
+        &[TextAction::InsertLineBreak],
+    ),
+    (
+        Mods::NONE,
+        Key::Named(NamedKey::Left),
+        &[TextAction::MoveLeft],
+    ),
+    (
+        Mods::ALT,
+        Key::Named(NamedKey::Left),
+        &[TextAction::MoveWordLeft],
+    ),
+    (
+        Mods::ALT.union(Mods::CTRL).union(Mods::PRIMARY),
+        Key::Named(NamedKey::Left),
+        &[TextAction::MakeTextWritingDirectionRightToLeft],
+    ),
+    (
+        Mods::ALT.union(Mods::SHIFT),
+        Key::Named(NamedKey::Left),
+        &[TextAction::MoveWordLeftAndModifySelection],
+    ),
+    (
+        Mods::CTRL,
+        Key::Named(NamedKey::Left),
+        &[TextAction::MoveToLeftEndOfLine],
+    ),
+    (
+        Mods::CTRL.union(Mods::PRIMARY),
+        Key::Named(NamedKey::Left),
+        &[TextAction::MakeBaseWritingDirectionRightToLeft],
+    ),
+    (
+        Mods::CTRL.union(Mods::SHIFT),
+        Key::Named(NamedKey::Left),
+        &[TextAction::MoveToLeftEndOfLineAndModifySelection],
+    ),
+    (
+        Mods::PRIMARY,
+        Key::Named(NamedKey::Left),
+        &[TextAction::MoveToLeftEndOfLine],
+    ),
+    (
+        Mods::PRIMARY.union(Mods::SHIFT),
+        Key::Named(NamedKey::Left),
+        &[TextAction::MoveToLeftEndOfLineAndModifySelection],
+    ),
+    (
+        Mods::SHIFT,
+        Key::Named(NamedKey::Left),
+        &[TextAction::MoveLeftAndModifySelection],
+    ),
+    (
+        Mods::NONE,
+        Key::Named(NamedKey::PageDown),
+        &[TextAction::ScrollPageDown],
+    ),
+    (
+        Mods::ALT,
+        Key::Named(NamedKey::PageDown),
+        &[TextAction::PageDown],
+    ),
+    (
+        Mods::SHIFT,
+        Key::Named(NamedKey::PageDown),
+        &[TextAction::PageDownAndModifySelection],
+    ),
+    (
+        Mods::NONE,
+        Key::Named(NamedKey::PageUp),
+        &[TextAction::ScrollPageUp],
+    ),
+    (
+        Mods::ALT,
+        Key::Named(NamedKey::PageUp),
+        &[TextAction::PageUp],
+    ),
+    (
+        Mods::SHIFT,
+        Key::Named(NamedKey::PageUp),
+        &[TextAction::PageUpAndModifySelection],
+    ),
+    (
+        Mods::NONE,
+        Key::Named(NamedKey::Return),
+        &[TextAction::InsertNewline],
+    ),
+    (
+        Mods::ALT,
+        Key::Named(NamedKey::Return),
+        &[TextAction::InsertNewlineIgnoringFieldEditor],
+    ),
+    (
+        Mods::CTRL,
+        Key::Named(NamedKey::Return),
+        &[TextAction::InsertLineBreak],
+    ),
+    (
+        Mods::NONE,
+        Key::Named(NamedKey::Right),
+        &[TextAction::MoveRight],
+    ),
+    (
+        Mods::ALT,
+        Key::Named(NamedKey::Right),
+        &[TextAction::MoveWordRight],
+    ),
+    (
+        Mods::ALT.union(Mods::CTRL).union(Mods::PRIMARY),
+        Key::Named(NamedKey::Right),
+        &[TextAction::MakeTextWritingDirectionLeftToRight],
+    ),
+    (
+        Mods::ALT.union(Mods::SHIFT),
+        Key::Named(NamedKey::Right),
+        &[TextAction::MoveWordRightAndModifySelection],
+    ),
+    (
+        Mods::CTRL,
+        Key::Named(NamedKey::Right),
+        &[TextAction::MoveToRightEndOfLine],
+    ),
+    (
+        Mods::CTRL.union(Mods::PRIMARY),
+        Key::Named(NamedKey::Right),
+        &[TextAction::MakeBaseWritingDirectionLeftToRight],
+    ),
+    (
+        Mods::CTRL.union(Mods::SHIFT),
+        Key::Named(NamedKey::Right),
+        &[TextAction::MoveToRightEndOfLineAndModifySelection],
+    ),
+    (
+        Mods::PRIMARY,
+        Key::Named(NamedKey::Right),
+        &[TextAction::MoveToRightEndOfLine],
+    ),
+    (
+        Mods::PRIMARY.union(Mods::SHIFT),
+        Key::Named(NamedKey::Right),
+        &[TextAction::MoveToRightEndOfLineAndModifySelection],
+    ),
+    (
+        Mods::SHIFT,
+        Key::Named(NamedKey::Right),
+        &[TextAction::MoveRightAndModifySelection],
+    ),
+    (
+        Mods::ALT.union(Mods::PRIMARY),
+        Key::Named(NamedKey::Space),
+        &[TextAction::CycleToNextInputKeyboardLayout],
+    ),
+    (
+        Mods::CTRL.union(Mods::PRIMARY),
+        Key::Named(NamedKey::Space),
+        &[TextAction::TogglePlatformInputSystem],
+    ),
+    (
+        Mods::PRIMARY,
+        Key::Named(NamedKey::Space),
+        &[TextAction::CycleToNextInputScript],
+    ),
+    (
+        Mods::NONE,
+        Key::Named(NamedKey::Tab),
+        &[TextAction::InsertTab],
+    ),
+    (
+        Mods::ALT,
+        Key::Named(NamedKey::Tab),
+        &[TextAction::InsertTabIgnoringFieldEditor],
+    ),
+    (
+        Mods::CTRL,
+        Key::Named(NamedKey::Tab),
+        &[TextAction::SelectNextKeyView],
+    ),
+    (
+        Mods::CTRL.union(Mods::SHIFT),
+        Key::Named(NamedKey::Tab),
+        &[TextAction::SelectPreviousKeyView],
+    ),
+    (
+        Mods::SHIFT,
+        Key::Named(NamedKey::Tab),
+        &[TextAction::InsertBacktab],
+    ),
     (Mods::NONE, Key::Named(NamedKey::Up), &[TextAction::MoveUp]),
-    (Mods::ALT, Key::Named(NamedKey::Up), &[TextAction::MoveBackward, TextAction::MoveToBeginningOfParagraph]),
-    (Mods::ALT.union(Mods::SHIFT), Key::Named(NamedKey::Up), &[TextAction::MoveParagraphBackwardAndModifySelection]),
-    (Mods::CTRL, Key::Named(NamedKey::Up), &[TextAction::ScrollPageUp]),
-    (Mods::PRIMARY, Key::Named(NamedKey::Up), &[TextAction::MoveToBeginningOfDocument]),
-    (Mods::PRIMARY.union(Mods::SHIFT), Key::Named(NamedKey::Up), &[TextAction::MoveToBeginningOfDocumentAndModifySelection]),
-    (Mods::SHIFT, Key::Named(NamedKey::Up), &[TextAction::MoveUpAndModifySelection]),
+    (
+        Mods::ALT,
+        Key::Named(NamedKey::Up),
+        &[
+            TextAction::MoveBackward,
+            TextAction::MoveToBeginningOfParagraph,
+        ],
+    ),
+    (
+        Mods::ALT.union(Mods::SHIFT),
+        Key::Named(NamedKey::Up),
+        &[TextAction::MoveParagraphBackwardAndModifySelection],
+    ),
+    (
+        Mods::CTRL,
+        Key::Named(NamedKey::Up),
+        &[TextAction::ScrollPageUp],
+    ),
+    (
+        Mods::PRIMARY,
+        Key::Named(NamedKey::Up),
+        &[TextAction::MoveToBeginningOfDocument],
+    ),
+    (
+        Mods::PRIMARY.union(Mods::SHIFT),
+        Key::Named(NamedKey::Up),
+        &[TextAction::MoveToBeginningOfDocumentAndModifySelection],
+    ),
+    (
+        Mods::SHIFT,
+        Key::Named(NamedKey::Up),
+        &[TextAction::MoveUpAndModifySelection],
+    ),
 ];

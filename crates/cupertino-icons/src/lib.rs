@@ -45,9 +45,9 @@ impl ThemeDir {
         let want = size * scale;
         match self.kind {
             DirType::Fixed => (self.size * self.scale).abs_diff(want),
-            DirType::Scalable => {
-                (self.min * self.scale).saturating_sub(want).max(want.saturating_sub(self.max * self.scale))
-            }
+            DirType::Scalable => (self.min * self.scale)
+                .saturating_sub(want)
+                .max(want.saturating_sub(self.max * self.scale)),
             DirType::Threshold => {
                 let lo = self.size.saturating_sub(self.threshold) * self.scale;
                 let hi = (self.size + self.threshold) * self.scale;
@@ -77,11 +77,23 @@ fn parse_index(text: &str) -> (Vec<String>, IniGroups) {
             groups.entry(current.clone()).or_default();
         } else if let Some((k, v)) = line.split_once('=') {
             if !current.is_empty() {
-                groups.entry(current.clone()).or_default().insert(k.trim().to_string(), v.trim().to_string());
+                groups
+                    .entry(current.clone())
+                    .or_default()
+                    .insert(k.trim().to_string(), v.trim().to_string());
             }
         }
     }
-    let dirs = groups.get("Icon Theme").and_then(|g| g.get("Directories")).map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()).unwrap_or_default();
+    let dirs = groups
+        .get("Icon Theme")
+        .and_then(|g| g.get("Directories"))
+        .map(|v| {
+            v.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
     (dirs, groups)
 }
 
@@ -90,11 +102,20 @@ fn load_theme(name: &str, bases: &[PathBuf]) -> Option<Theme> {
     let mut found = false;
     for base in bases {
         let root = base.join(name);
-        let Ok(text) = std::fs::read_to_string(root.join("index.theme")) else { continue };
+        let Ok(text) = std::fs::read_to_string(root.join("index.theme")) else {
+            continue;
+        };
         let (dirs, groups) = parse_index(&text);
         if !found {
             let inherits = groups.get("Icon Theme").and_then(|g| g.get("Inherits"));
-            theme.inherits = inherits.map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()).unwrap_or_default();
+            theme.inherits = inherits
+                .map(|v| {
+                    v.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
             for d in dirs {
                 let Some(g) = groups.get(&d) else { continue };
                 let num = |k: &str| g.get(k).and_then(|v| v.parse::<u32>().ok());
@@ -149,7 +170,12 @@ impl IconLookup {
     /// Lookup of `assets` and explicit icon directories (tests).
     pub fn with_roots(assets: &Assets, bases: Vec<PathBuf>) -> Self {
         let theme = load_theme(APPLICATION_THEME, &bases);
-        Self { assets: assets.clone(), bases, theme, cache: HashMap::new() }
+        Self {
+            assets: assets.clone(),
+            bases,
+            theme,
+            cache: HashMap::new(),
+        }
     }
 
     fn search_theme(&self, name: &str, size: u32, scale: u32) -> Option<PathBuf> {
@@ -165,11 +191,14 @@ impl IconLookup {
         }
         if name.starts_with(APPLICATION_NAMESPACE) {
             let own = IconName::new(name).ok().and_then(|n| {
-                self.assets.icon_sources(&n, size * scale).into_iter().find_map(|(_, s)| match s {
-                    IconSource::Raster(r) => Some(r.path),
-                    IconSource::Svg(p) => Some(p),
-                    IconSource::Symbol(_) | IconSource::Theme { .. } => None,
-                })
+                self.assets
+                    .icon_sources(&n, size * scale)
+                    .into_iter()
+                    .find_map(|(_, s)| match s {
+                        IconSource::Raster(r) => Some(r.path),
+                        IconSource::Svg(p) => Some(p),
+                        IconSource::Symbol(_) | IconSource::Theme { .. } => None,
+                    })
             });
             if own.is_some() {
                 return own;
@@ -183,13 +212,17 @@ impl IconLookup {
             return hit.clone();
         }
         let found = self.search_theme(name, size, scale).or_else(|| {
-            self.bases.iter().find_map(|base| EXTENSIONS.iter().map(|ext| base.join(format!("{name}.{ext}"))).find(|p| p.is_file()))
+            self.bases.iter().find_map(|base| {
+                EXTENSIONS
+                    .iter()
+                    .map(|ext| base.join(format!("{name}.{ext}")))
+                    .find(|p| p.is_file())
+            })
         });
         self.cache.insert(key, found.clone());
         found
     }
 }
-
 
 /// The file of `name` in `t` closest to `size` at `scale` (icon theme specification), PNG or SVG.
 fn search(t: &Theme, name: &str, size: u32, scale: u32) -> Option<PathBuf> {
@@ -227,23 +260,37 @@ struct HostThemes {
 
 impl HostThemes {
     fn new(bases: Vec<PathBuf>, user: Option<String>) -> Self {
-        Self { bases, loaded: HashMap::new(), user }
+        Self {
+            bases,
+            loaded: HashMap::new(),
+            user,
+        }
     }
 
     fn theme(&mut self, name: &str) -> Option<&Theme> {
         let bases = &self.bases;
-        self.loaded.entry(name.to_string()).or_insert_with(|| load_theme(name, bases)).as_ref()
+        self.loaded
+            .entry(name.to_string())
+            .or_insert_with(|| load_theme(name, bases))
+            .as_ref()
     }
 
     /// `theme` (the user's theme when `None`), its `Inherits` chain (each theme once), then `hicolor`.
     fn chain(&mut self, theme: Option<&str>) -> Vec<String> {
         let mut chain: Vec<String> = Vec::new();
-        let mut todo: Vec<String> = theme.map(str::to_string).or_else(|| self.user.clone()).into_iter().collect();
+        let mut todo: Vec<String> = theme
+            .map(str::to_string)
+            .or_else(|| self.user.clone())
+            .into_iter()
+            .collect();
         while let Some(name) = todo.pop() {
             if chain.contains(&name) {
                 continue;
             }
-            let inherits = self.theme(&name).map(|t| t.inherits.clone()).unwrap_or_default();
+            let inherits = self
+                .theme(&name)
+                .map(|t| t.inherits.clone())
+                .unwrap_or_default();
             chain.push(name);
             todo.extend(inherits.into_iter().rev());
         }
@@ -256,18 +303,29 @@ impl HostThemes {
     /// The first of `names` that a theme of the chain of `theme` has, for `size` pixels.
     fn find(&mut self, theme: Option<&str>, names: &[String], size: u32) -> Option<PathBuf> {
         let chain = self.chain(theme);
-        names.iter().find_map(|name| chain.iter().find_map(|t| self.theme(t).and_then(|t| search(t, name, size, 1))))
+        names.iter().find_map(|name| {
+            chain
+                .iter()
+                .find_map(|t| self.theme(t).and_then(|t| search(t, name, size, 1)))
+        })
     }
 }
 
 /// The user's icon theme as GTK records it (`gtk-icon-theme-name` of `gtk-4.0/settings.ini`, else of `gtk-3.0/`,
 /// under `$XDG_CONFIG_HOME`); `None` when neither names one.
 fn user_icon_theme() -> Option<String> {
-    let config = std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()).map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
     ["gtk-4.0", "gtk-3.0"].iter().find_map(|v| {
         let text = std::fs::read_to_string(config.join(v).join("settings.ini")).ok()?;
         let (_, groups) = parse_index(&text);
-        groups.get("Settings").and_then(|g| g.get("gtk-icon-theme-name")).filter(|n| !n.is_empty()).cloned()
+        groups
+            .get("Settings")
+            .and_then(|g| g.get("gtk-icon-theme-name"))
+            .filter(|n| !n.is_empty())
+            .cloned()
     })
 }
 
@@ -277,7 +335,11 @@ fn host_icon_bases() -> Vec<PathBuf> {
     if let Some(h) = std::env::var_os("HOME") {
         bases.push(PathBuf::from(&h).join(".icons"));
     }
-    bases.extend(cupertino_defaults::data_dirs().into_iter().map(|d| d.join("icons")));
+    bases.extend(
+        cupertino_defaults::data_dirs()
+            .into_iter()
+            .map(|d| d.join("icons")),
+    );
     bases.push(PathBuf::from("/usr/share/pixmaps"));
     bases
 }
@@ -308,17 +370,32 @@ pub fn load_icon(path: &Path, px: u32) -> Option<IconImage> {
     let (width, height) = (img.width(), img.height());
     let mut rgba = img.into_raw();
     premultiply(&mut rgba);
-    Some(IconImage { width, height, rgba })
+    Some(IconImage {
+        width,
+        height,
+        rgba,
+    })
 }
 
 fn render_svg(data: &[u8], px: u32) -> Option<IconImage> {
     let tree = resvg::usvg::Tree::from_data(data, &resvg::usvg::Options::default()).ok()?;
     let size = tree.size();
     let s = (px as f32 / size.width()).min(px as f32 / size.height());
-    let (w, h) = (((size.width() * s).round() as u32).max(1), ((size.height() * s).round() as u32).max(1));
+    let (w, h) = (
+        ((size.width() * s).round() as u32).max(1),
+        ((size.height() * s).round() as u32).max(1),
+    );
     let mut pm = resvg::tiny_skia::Pixmap::new(w, h)?;
-    resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(s, s), &mut pm.as_mut());
-    Some(IconImage { width: w, height: h, rgba: pm.take() })
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(s, s),
+        &mut pm.as_mut(),
+    );
+    Some(IconImage {
+        width: w,
+        height: h,
+        rgba: pm.take(),
+    })
 }
 
 /// Pixmap bytes of an ARGB32 (network byte order) icon, as delivered by status items, converted to
@@ -332,7 +409,11 @@ pub fn from_argb(width: i32, height: i32, argb: &[u8]) -> Option<IconImage> {
         rgba.extend_from_slice(&[px[1], px[2], px[3], px[0]]);
     }
     premultiply(&mut rgba);
-    Some(IconImage { width: width as u32, height: height as u32, rgba })
+    Some(IconImage {
+        width: width as u32,
+        height: height as u32,
+        rgba,
+    })
 }
 
 /// Application icon pixmaps by the name or path of a desktop entry's `Icon=` (or a `file://` URI), for the renderers of
@@ -347,12 +428,24 @@ pub struct ThemeIcons {
 
 impl ThemeIcons {
     pub fn new(assets: &Assets) -> Self {
-        Self { lookup: IconLookup::new(assets), application_dirs: cupertino_apps::entry::xdg_application_dirs(), entry_icons: HashMap::new() }
+        Self {
+            lookup: IconLookup::new(assets),
+            application_dirs: cupertino_apps::entry::xdg_application_dirs(),
+            entry_icons: HashMap::new(),
+        }
     }
 
     /// Icons of `assets` and under the explicit `icon_roots`, desktop entries under `application_dirs` (tests).
-    pub fn with_roots(assets: &Assets, icon_roots: Vec<PathBuf>, application_dirs: Vec<PathBuf>) -> Self {
-        Self { lookup: IconLookup::with_roots(assets, icon_roots), application_dirs, entry_icons: HashMap::new() }
+    pub fn with_roots(
+        assets: &Assets,
+        icon_roots: Vec<PathBuf>,
+        application_dirs: Vec<PathBuf>,
+    ) -> Self {
+        Self {
+            lookup: IconLookup::with_roots(assets, icon_roots),
+            application_dirs,
+            entry_icons: HashMap::new(),
+        }
     }
 
     /// The icon of the installed application whose desktop entry has the id `entry` (`org.example.Mail`, a trailing
@@ -361,7 +454,11 @@ impl ThemeIcons {
     pub fn load_for_entry(&mut self, entry: &str, px: u32) -> Option<tiny_skia::Pixmap> {
         let id = entry.strip_suffix(".desktop").unwrap_or(entry);
         let dirs = &self.application_dirs;
-        let icon = self.entry_icons.entry(id.to_string()).or_insert_with(|| entry_icon(dirs, id)).clone()?;
+        let icon = self
+            .entry_icons
+            .entry(id.to_string())
+            .or_insert_with(|| entry_icon(dirs, id))
+            .clone()?;
         self.load(&icon, px)
     }
 
@@ -377,11 +474,18 @@ impl ThemeIcons {
 
 /// `Icon=` of the first installed desktop file `<dir>/<id>.desktop`; hidden entries and non-applications give `None`.
 fn entry_icon(dirs: &[PathBuf], id: &str) -> Option<String> {
-    let text = dirs.iter().find_map(|dir| std::fs::read_to_string(dir.join(format!("{id}.desktop"))).ok())?;
-    let (locale, visibility) = (cupertino_apps::entry::Locale::from_env(), cupertino_apps::entry::Visibility::from_env());
-    cupertino_apps::entry::parse_handler(id, &text, &locale, &visibility).ok()?.entry.icon
+    let text = dirs
+        .iter()
+        .find_map(|dir| std::fs::read_to_string(dir.join(format!("{id}.desktop"))).ok())?;
+    let (locale, visibility) = (
+        cupertino_apps::entry::Locale::from_env(),
+        cupertino_apps::entry::Visibility::from_env(),
+    );
+    cupertino_apps::entry::parse_handler(id, &text, &locale, &visibility)
+        .ok()?
+        .entry
+        .icon
 }
-
 
 /// Straight (not premultiplied) RGBA colour, components 0 to 1.
 pub type Rgba = [f32; 4];
@@ -403,7 +507,12 @@ fn semantic(name: &str) -> IconName {
 }
 
 fn to_pixmap(path: &Path, img: Option<IconImage>) -> Option<tiny_skia::Pixmap> {
-    let pixmap = img.and_then(|img| tiny_skia::Pixmap::from_vec(img.rgba, tiny_skia::IntSize::from_wh(img.width, img.height)?));
+    let pixmap = img.and_then(|img| {
+        tiny_skia::Pixmap::from_vec(
+            img.rgba,
+            tiny_skia::IntSize::from_wh(img.width, img.height)?,
+        )
+    });
     if pixmap.is_none() {
         eprintln!("cupertino-icons: cannot decode {}", path.display());
     }
@@ -446,16 +555,34 @@ fn placeholder(px: u32, color: Option<[u8; 4]>) -> tiny_skia::Pixmap {
     pb.quad_to(x0, y0, x0 + r, y0);
     pb.close();
     let path = pb.finish().expect("a closed rounded square");
-    let mut paint = tiny_skia::Paint { anti_alias: true, ..tiny_skia::Paint::default() };
+    let mut paint = tiny_skia::Paint {
+        anti_alias: true,
+        ..tiny_skia::Paint::default()
+    };
     match color {
         None => {
             paint.set_color_rgba8(140, 140, 140, 255);
-            pm.fill_path(&path, &paint, tiny_skia::FillRule::Winding, tiny_skia::Transform::identity(), None);
+            pm.fill_path(
+                &path,
+                &paint,
+                tiny_skia::FillRule::Winding,
+                tiny_skia::Transform::identity(),
+                None,
+            );
         }
         Some(c) => {
             paint.set_color_rgba8(c[0], c[1], c[2], c[3]);
-            let stroke = tiny_skia::Stroke { width: (side / 12.0).max(1.0), ..tiny_skia::Stroke::default() };
-            pm.stroke_path(&path, &paint, &stroke, tiny_skia::Transform::identity(), None);
+            let stroke = tiny_skia::Stroke {
+                width: (side / 12.0).max(1.0),
+                ..tiny_skia::Stroke::default()
+            };
+            pm.stroke_path(
+                &path,
+                &paint,
+                &stroke,
+                tiny_skia::Transform::identity(),
+                None,
+            );
         }
     }
     pm
@@ -469,7 +596,13 @@ impl SystemIcons {
     /// Icons of `assets` whose `theme` sources resolve under the icon directories `bases`, with `user` as the user's
     /// theme (tests).
     fn with_host(assets: &Assets, bases: Vec<PathBuf>, user: Option<String>) -> Self {
-        Self { assets: assets.clone(), host: HostThemes::new(bases, user), rasters: HashMap::new(), symbols: HashMap::new(), placeholders: HashMap::new() }
+        Self {
+            assets: assets.clone(),
+            host: HostThemes::new(bases, user),
+            rasters: HashMap::new(),
+            symbols: HashMap::new(),
+            placeholders: HashMap::new(),
+        }
     }
 
     /// Like [`SystemIcons::new`], for a process that draws exactly the raster icons `rasters` and the template symbols
@@ -478,7 +611,14 @@ impl SystemIcons {
         let mut icons = Self::new(assets);
         let missing = icons.unprovided(rasters, symbols);
         if !missing.is_empty() {
-            eprintln!("cupertino-icons: no asset pack provides the icon {}; it is drawn as a placeholder", missing.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", "));
+            eprintln!(
+                "cupertino-icons: no asset pack provides the icon {}; it is drawn as a placeholder",
+                missing
+                    .iter()
+                    .map(|n| format!("`{n}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
         }
         icons
     }
@@ -487,11 +627,17 @@ impl SystemIcons {
         let mut out = Vec::new();
         for (names, symbol) in [(rasters, false), (symbols, true)] {
             for &name in names {
-                let found = self.assets.icon_sources(&semantic(name), 32).into_iter().any(|(_, s)| match s {
-                    IconSource::Raster(_) | IconSource::Svg(_) => !symbol,
-                    IconSource::Symbol(_) => symbol,
-                    IconSource::Theme { names, theme } => self.host.find(theme.as_deref(), &names, 32).is_some(),
-                });
+                let found = self
+                    .assets
+                    .icon_sources(&semantic(name), 32)
+                    .into_iter()
+                    .any(|(_, s)| match s {
+                        IconSource::Raster(_) | IconSource::Svg(_) => !symbol,
+                        IconSource::Symbol(_) => symbol,
+                        IconSource::Theme { names, theme } => {
+                            self.host.find(theme.as_deref(), &names, 32).is_some()
+                        }
+                    });
                 if !found {
                     out.push(name);
                 }
@@ -508,10 +654,12 @@ impl SystemIcons {
                 IconSource::Raster(r) => r.path,
                 IconSource::Svg(p) => p,
                 IconSource::Symbol(_) => continue,
-                IconSource::Theme { names, theme } => match self.host.find(theme.as_deref(), &names, px) {
-                    Some(p) => p,
-                    None => continue,
-                },
+                IconSource::Theme { names, theme } => {
+                    match self.host.find(theme.as_deref(), &names, px) {
+                        Some(p) => p,
+                        None => continue,
+                    }
+                }
             };
             if let Some(pm) = to_pixmap(&path, load_icon(&path, px)) {
                 return Some(pm);
@@ -525,10 +673,12 @@ impl SystemIcons {
         for (_, source) in self.assets.icon_sources(name, px) {
             let path = match source {
                 IconSource::Symbol(p) => p,
-                IconSource::Theme { names, theme } => match self.host.find(theme.as_deref(), &names, px) {
-                    Some(p) => p,
-                    None => continue,
-                },
+                IconSource::Theme { names, theme } => {
+                    match self.host.find(theme.as_deref(), &names, px) {
+                        Some(p) => p,
+                        None => continue,
+                    }
+                }
                 IconSource::Raster(_) | IconSource::Svg(_) => continue,
             };
             if let Some(mut pm) = to_pixmap(&path, load_icon(&path, px)) {
@@ -553,9 +703,13 @@ impl SystemIcons {
     /// programming error).
     pub fn raster(&mut self, name: &str, px: u32) -> &tiny_skia::Pixmap {
         if self.has_raster(name, px) {
-            return self.rasters[&(semantic(name), px)].as_ref().expect("checked by has_raster");
+            return self.rasters[&(semantic(name), px)]
+                .as_ref()
+                .expect("checked by has_raster");
         }
-        self.placeholders.entry((px, None)).or_insert_with(|| placeholder(px, None))
+        self.placeholders
+            .entry((px, None))
+            .or_insert_with(|| placeholder(px, None))
     }
 
     /// The template symbol `name` drawn to fit `px` × `px` pixels (aspect kept) in `color`, or its placeholder.
@@ -568,7 +722,10 @@ impl SystemIcons {
         }
         match self.symbols[&key] {
             Some(_) => self.symbols[&key].as_ref().expect("matched as loaded"),
-            None => self.placeholders.entry((px, Some(quantise(color)))).or_insert_with(|| placeholder(px, Some(quantise(color)))),
+            None => self
+                .placeholders
+                .entry((px, Some(quantise(color))))
+                .or_insert_with(|| placeholder(px, Some(quantise(color)))),
         }
     }
 }
@@ -590,7 +747,8 @@ mod tests {
         let png = |w: u32| {
             let img = image::RgbaImage::from_pixel(w, w, image::Rgba([255, 0, 0, 128]));
             let mut v = Vec::new();
-            img.write_to(&mut std::io::Cursor::new(&mut v), image::ImageFormat::Png).unwrap();
+            img.write_to(&mut std::io::Cursor::new(&mut v), image::ImageFormat::Png)
+                .unwrap();
             v
         };
         std::fs::write(dir.join("16x16/apps/small.png"), png(16)).unwrap();
@@ -602,13 +760,21 @@ mod tests {
         .unwrap();
         let parent = root.join("parent");
         std::fs::create_dir_all(parent.join("32x32/apps")).unwrap();
-        std::fs::write(parent.join("index.theme"), "[Icon Theme]\nDirectories=32x32/apps\n\n[32x32/apps]\nSize=32\nType=Fixed\n").unwrap();
+        std::fs::write(
+            parent.join("index.theme"),
+            "[Icon Theme]\nDirectories=32x32/apps\n\n[32x32/apps]\nSize=32\nType=Fixed\n",
+        )
+        .unwrap();
         std::fs::write(parent.join("32x32/apps/inherited.png"), png(32)).unwrap();
     }
 
     /// An asset directory without application icons.
     fn no_assets() -> Assets {
-        fixture::assets(&tmp(&format!("no-assets-{:?}", std::thread::current().id())), &[], &[])
+        fixture::assets(
+            &tmp(&format!("no-assets-{:?}", std::thread::current().id())),
+            &[],
+            &[],
+        )
     }
 
     #[test]
@@ -619,20 +785,43 @@ mod tests {
         // `folder` is in the asset directory too, but it is no application icon: hicolor decides for it
         let assets = fixture::assets(&asset_dir, &["application.file-manager", "folder"], &[]);
         let mut l = IconLookup::with_roots(&assets, vec![root.clone()]);
-        assert_eq!(l.find("application.file-manager", 32, 1), Some(asset_dir.join("icons/application.file-manager/16.png")));
-        assert!(l.find("application.settings", 32, 1).is_none(), "not in this asset directory, and nowhere else");
-        assert!(l.find("folder", 16, 1).is_none(), "the system's folder icon is not an application icon");
-        assert!(l.find("small", 16, 1).unwrap().ends_with("16x16/apps/small.png"), "hicolor as before");
+        assert_eq!(
+            l.find("application.file-manager", 32, 1),
+            Some(asset_dir.join("icons/application.file-manager/16.png"))
+        );
+        assert!(
+            l.find("application.settings", 32, 1).is_none(),
+            "not in this asset directory, and nowhere else"
+        );
+        assert!(
+            l.find("folder", 16, 1).is_none(),
+            "the system's folder icon is not an application icon"
+        );
+        assert!(
+            l.find("small", 16, 1)
+                .unwrap()
+                .ends_with("16x16/apps/small.png"),
+            "hicolor as before"
+        );
         let path = root.join("hicolor/48x48/apps/small.png");
-        assert_eq!(l.find(path.to_str().unwrap(), 16, 1), Some(path), "absolute paths as before");
+        assert_eq!(
+            l.find(path.to_str().unwrap(), 16, 1),
+            Some(path),
+            "absolute paths as before"
+        );
 
         // a desktop entry naming it gets the asset's pixels
         let apps = root.join("applications");
         std::fs::create_dir_all(&apps).unwrap();
         std::fs::write(apps.join("cupertino-files.desktop"), "[Desktop Entry]\nType=Application\nName=Files\nExec=cupertino-files %U\nIcon=application.file-manager\n").unwrap();
         let mut icons = ThemeIcons::with_roots(&assets, vec![root.clone()], vec![apps]);
-        let pixmap = icons.load_for_entry("cupertino-files", 16).expect("the entry's icon is the asset");
-        assert_eq!(pixmap.pixel(8, 8).unwrap().red(), fixture::red("application.file-manager"));
+        let pixmap = icons
+            .load_for_entry("cupertino-files", 16)
+            .expect("the entry's icon is the asset");
+        assert_eq!(
+            pixmap.pixel(8, 8).unwrap().red(),
+            fixture::red("application.file-manager")
+        );
         let _ = std::fs::remove_dir_all(root);
         let _ = std::fs::remove_dir_all(asset_dir);
     }
@@ -654,8 +843,14 @@ mod tests {
         let p = l.find("small", 40, 1).unwrap();
         assert!(p.ends_with("48x48/apps/small.png"), "{p:?}");
         let p = l.find("small", 8, 2).unwrap();
-        assert!(p.ends_with("16x16/apps/small.png"), "scale multiplies the wanted size: {p:?}");
-        assert!(l.find("vector", 128, 1).unwrap().ends_with("scalable/apps/vector.svg"));
+        assert!(
+            p.ends_with("16x16/apps/small.png"),
+            "scale multiplies the wanted size: {p:?}"
+        );
+        assert!(l
+            .find("vector", 128, 1)
+            .unwrap()
+            .ends_with("scalable/apps/vector.svg"));
         assert!(l.find("absent", 32, 1).is_none());
         assert!(l.find("", 32, 1).is_none());
         let _ = std::fs::remove_dir_all(root);
@@ -668,10 +863,20 @@ mod tests {
         let other = root.join("Adwaita");
         std::fs::create_dir_all(other.join("scalable/apps")).unwrap();
         std::fs::write(other.join("index.theme"), "[Icon Theme]\nDirectories=scalable/apps\n\n[scalable/apps]\nSize=16\nMinSize=8\nMaxSize=512\nType=Scalable\n").unwrap();
-        std::fs::write(other.join("scalable/apps/stock.svg"), "<svg xmlns='http://www.w3.org/2000/svg'/>").unwrap();
+        std::fs::write(
+            other.join("scalable/apps/stock.svg"),
+            "<svg xmlns='http://www.w3.org/2000/svg'/>",
+        )
+        .unwrap();
         let mut l = IconLookup::with_roots(&no_assets(), vec![root.clone()]);
-        assert!(l.find("stock", 16, 1).is_none(), "a stock icon of another theme");
-        assert!(l.find("inherited", 32, 1).is_none(), "an icon of the theme hicolor lists in Inherits");
+        assert!(
+            l.find("stock", 16, 1).is_none(),
+            "a stock icon of another theme"
+        );
+        assert!(
+            l.find("inherited", 32, 1).is_none(),
+            "an icon of the theme hicolor lists in Inherits"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -694,11 +899,30 @@ mod tests {
         let folder = icons.raster("folder", 16);
         assert_eq!((folder.width(), folder.height()), (16, 16));
         assert_eq!(folder.pixel(8, 8).unwrap().red(), fixture::red("folder"));
-        assert!(icons.has_raster("folder", 16) && !icons.has_raster("volume.internal", 16) && !icons.has_raster("symbol.house", 16));
+        assert!(
+            icons.has_raster("folder", 16)
+                && !icons.has_raster("volume.internal", 16)
+                && !icons.has_raster("symbol.house", 16)
+        );
         let grey = icons.raster("volume.internal", 32);
-        assert_eq!((grey.width(), grey.pixel(16, 16).unwrap().alpha(), grey.pixel(0, 0).unwrap().alpha()), (32, 255, 0), "an opaque rounded square");
+        assert_eq!(
+            (
+                grey.width(),
+                grey.pixel(16, 16).unwrap().alpha(),
+                grey.pixel(0, 0).unwrap().alpha()
+            ),
+            (32, 255, 0),
+            "an opaque rounded square"
+        );
         let outline = icons.symbol("folder", 32, [0.0, 0.0, 1.0, 1.0]);
-        assert_eq!((outline.pixel(16, 16).unwrap().alpha(), outline.pixel(16, 3).unwrap().blue()), (0, 255), "a raster has no symbol: the outline placeholder");
+        assert_eq!(
+            (
+                outline.pixel(16, 16).unwrap().alpha(),
+                outline.pixel(16, 3).unwrap().blue()
+            ),
+            (0, 255),
+            "a raster has no symbol: the outline placeholder"
+        );
     }
 
     #[test]
@@ -709,10 +933,20 @@ mod tests {
         let blue = icons.symbol("symbol.house", 32, [0.0, 0.0, 1.0, 1.0]);
         // the template fills the middle half of its width
         let inside = blue.pixel(16, 16).unwrap();
-        assert_eq!((inside.red(), inside.green(), inside.blue(), inside.alpha()), (0, 0, 255, 255));
+        assert_eq!(
+            (inside.red(), inside.green(), inside.blue(), inside.alpha()),
+            (0, 0, 255, 255)
+        );
         assert_eq!(blue.pixel(2, 16).unwrap().alpha(), 0);
-        let faint = icons.symbol("symbol.house", 32, [1.0, 0.0, 0.0, 0.5]).pixel(16, 16).unwrap();
-        assert_eq!((faint.red(), faint.alpha()), (128, 128), "premultiplied by the colour's alpha");
+        let faint = icons
+            .symbol("symbol.house", 32, [1.0, 0.0, 0.0, 0.5])
+            .pixel(16, 16)
+            .unwrap();
+        assert_eq!(
+            (faint.red(), faint.alpha()),
+            (128, 128),
+            "premultiplied by the colour's alpha"
+        );
     }
 
     /// A host icon directory with the theme `Fixture` (inheriting `Base`) and `hicolor`, each with one 16 px icon.
@@ -721,7 +955,9 @@ mod tests {
             let dir = base.join(name);
             std::fs::create_dir_all(dir.join("16x16/places")).unwrap();
             std::fs::write(dir.join("index.theme"), format!("[Icon Theme]\nName={name}\nInherits={inherits}\nDirectories=16x16/places\n\n[16x16/places]\nSize=16\nType=Fixed\n")).unwrap();
-            image::RgbaImage::from_pixel(16, 16, image::Rgba([red, 0, 0, 255])).save(dir.join("16x16/places").join(format!("{icon}.png"))).unwrap();
+            image::RgbaImage::from_pixel(16, 16, image::Rgba([red, 0, 0, 255]))
+                .save(dir.join("16x16/places").join(format!("{icon}.png")))
+                .unwrap();
         };
         theme("Fixture", "Base", "folder-documents", 10);
         theme("Base", "", "folder-music", 20);
@@ -738,14 +974,33 @@ mod tests {
             r#"{"version": 2, "icons": {"folder.documents": {"theme": ["no-such-icon", "folder-documents"]}, "folder.music": {"theme": ["folder-music"]}}, "icon_theme": {"name": "Fixture", "map": "map.toml"}}"#,
         )
         .unwrap();
-        std::fs::write(pack.path().join("map.toml"), "\"computer\" = [\"computer\"]\n").unwrap();
+        std::fs::write(
+            pack.path().join("map.toml"),
+            "\"computer\" = [\"computer\"]\n",
+        )
+        .unwrap();
         let assets = Assets::open(pack.path()).unwrap();
         let mut icons = SystemIcons::with_host(&assets, vec![host.path().to_path_buf()], None);
         let red = |icons: &mut SystemIcons, n: &str| icons.raster(n, 16).pixel(8, 8).unwrap().red();
-        assert_eq!(red(&mut icons, "folder.documents"), 10, "the second name, in the pack's theme");
-        assert_eq!(red(&mut icons, "folder.music"), 20, "in the inherited theme");
-        assert_eq!(red(&mut icons, "computer"), 30, "from the default map, in hicolor");
-        assert_eq!(icons.unprovided(&["folder.documents", "folder.movies"], &[]), ["folder.movies"]);
+        assert_eq!(
+            red(&mut icons, "folder.documents"),
+            10,
+            "the second name, in the pack's theme"
+        );
+        assert_eq!(
+            red(&mut icons, "folder.music"),
+            20,
+            "in the inherited theme"
+        );
+        assert_eq!(
+            red(&mut icons, "computer"),
+            30,
+            "from the default map, in hicolor"
+        );
+        assert_eq!(
+            icons.unprovided(&["folder.documents", "folder.movies"], &[]),
+            ["folder.movies"]
+        );
     }
 
     #[test]
@@ -755,7 +1010,11 @@ mod tests {
         let png = load_icon(&root.join("test/48x48/apps/small.png"), 48).unwrap();
         assert_eq!((png.width, png.height), (48, 48));
         assert_eq!(png.rgba[3], 128);
-        assert!((i32::from(png.rgba[0]) - 128).abs() <= 1, "premultiplied red: {}", png.rgba[0]);
+        assert!(
+            (i32::from(png.rgba[0]) - 128).abs() <= 1,
+            "premultiplied red: {}",
+            png.rgba[0]
+        );
         let svg = load_icon(&root.join("test/scalable/apps/vector.svg"), 64).unwrap();
         assert_eq!((svg.width, svg.height), (64, 64));
         assert_eq!(&svg.rgba[0..4], &[0, 255, 0, 255]);
@@ -772,12 +1031,28 @@ mod tests {
 
     #[test]
     fn directory_distance_follows_the_specification() {
-        let d = ThemeDir { path: "x".into(), size: 32, scale: 1, kind: DirType::Threshold, min: 32, max: 32, threshold: 2 };
+        let d = ThemeDir {
+            path: "x".into(),
+            size: 32,
+            scale: 1,
+            kind: DirType::Threshold,
+            min: 32,
+            max: 32,
+            threshold: 2,
+        };
         assert_eq!(d.distance(32, 1), 0);
         assert_eq!(d.distance(34, 1), 0);
         assert_eq!(d.distance(40, 1), 6);
         assert_eq!(d.distance(16, 1), 14);
-        let s = ThemeDir { path: "x".into(), size: 64, scale: 1, kind: DirType::Scalable, min: 8, max: 256, threshold: 0 };
+        let s = ThemeDir {
+            path: "x".into(),
+            size: 64,
+            scale: 1,
+            kind: DirType::Scalable,
+            min: 8,
+            max: 256,
+            threshold: 0,
+        };
         assert_eq!(s.distance(4, 1), 4);
         assert_eq!(s.distance(300, 1), 44);
         assert_eq!(s.distance(100, 1), 0);
@@ -789,16 +1064,26 @@ mod tests {
         write_theme(&root, "hicolor");
         let apps = root.join("applications");
         std::fs::create_dir_all(&apps).unwrap();
-        let entry = |icon: &str, extra: &str| format!("[Desktop Entry]\nType=Application\nName=App\nExec=app\nIcon={icon}\n{extra}");
+        let entry = |icon: &str, extra: &str| {
+            format!("[Desktop Entry]\nType=Application\nName=App\nExec=app\nIcon={icon}\n{extra}")
+        };
         std::fs::write(apps.join("org.example.App.desktop"), entry("small", "")).unwrap();
         std::fs::write(apps.join("hidden.desktop"), entry("small", "Hidden=true\n")).unwrap();
         std::fs::write(apps.join("stock.desktop"), entry("folder", "")).unwrap();
         let mut icons = ThemeIcons::with_roots(&no_assets(), vec![root.clone()], vec![apps]);
-        let pixmap = icons.load_for_entry("org.example.App.desktop", 16).expect("the entry's icon is in hicolor");
+        let pixmap = icons
+            .load_for_entry("org.example.App.desktop", 16)
+            .expect("the entry's icon is in hicolor");
         assert_eq!((pixmap.width(), pixmap.height()), (16, 16));
-        assert!(icons.load_for_entry("org.example.App", 16).is_some(), "the suffix is optional");
+        assert!(
+            icons.load_for_entry("org.example.App", 16).is_some(),
+            "the suffix is optional"
+        );
         assert!(icons.load_for_entry("hidden", 16).is_none());
-        assert!(icons.load_for_entry("stock", 16).is_none(), "a stock name is not an application icon");
+        assert!(
+            icons.load_for_entry("stock", 16).is_none(),
+            "a stock name is not an application icon"
+        );
         assert!(icons.load_for_entry("absent", 16).is_none());
         let _ = std::fs::remove_dir_all(root);
     }
@@ -808,7 +1093,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let assets = fixture::assets(dir.path(), &["application.generic"], &["symbol.house"]);
         let mut icons = SystemIcons::with_host(&assets, Vec::new(), None);
-        assert!(icons.unprovided(&["application.generic"], &["symbol.house"]).is_empty());
-        assert_eq!(icons.unprovided(&["folder", "application.generic"], &["symbol.house", "symbol.sun"]), ["folder", "symbol.sun"]);
+        assert!(icons
+            .unprovided(&["application.generic"], &["symbol.house"])
+            .is_empty());
+        assert_eq!(
+            icons.unprovided(
+                &["folder", "application.generic"],
+                &["symbol.house", "symbol.sun"]
+            ),
+            ["folder", "symbol.sun"]
+        );
     }
 }

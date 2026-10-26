@@ -6,10 +6,15 @@ pub mod controller;
 
 use std::time::Duration;
 
-use cupertino_bluetooth::{Address, AddressType, Command, ControllerIndex, DeviceId, Eir, Event, FoundFlags, Opcode, Packet, Status};
+use cupertino_bluetooth::{
+    Address, AddressType, Command, ControllerIndex, DeviceId, Eir, Event, FoundFlags, Opcode,
+    Packet, Status,
+};
 use cupertino_btd::keys::KeySet;
 use cupertino_btd::model::Model;
-use cupertino_btd::request::{AgentAnswer, AgentCall, Change, Effect, Request, RequestError, Ticket};
+use cupertino_btd::request::{
+    AgentAnswer, AgentCall, Change, Effect, Request, RequestError, Ticket,
+};
 
 pub const C0: ControllerIndex = ControllerIndex(0);
 
@@ -22,7 +27,10 @@ pub const OFF: u32 = 0x0280;
 
 /// 11:22:33:44:55:<last>, as a device of the given type.
 pub fn device(last: u8, kind: AddressType) -> DeviceId {
-    DeviceId { address: Address::from_wire([last, 0x55, 0x44, 0x33, 0x22, 0x11]), kind }
+    DeviceId {
+        address: Address::from_wire([last, 0x55, 0x44, 0x33, 0x22, 0x11]),
+        kind,
+    }
 }
 
 /// A BR/EDR device 11:22:33:44:55:01.
@@ -58,7 +66,11 @@ pub fn device_reply(device: DeviceId) -> Vec<u8> {
 }
 
 pub fn complete(opcode: Opcode, status: Status, data: Vec<u8>) -> Event {
-    Event::CommandComplete { opcode, status, data }
+    Event::CommandComplete {
+        opcode,
+        status,
+        data,
+    }
 }
 
 /// A model, the clock it is driven by, and shorthands that feed it.
@@ -71,12 +83,44 @@ pub struct Harness {
 impl Harness {
     /// A model whose adapter has the given settings and no stored keys, set up and ready.
     pub fn with(settings: u32, keys: KeySet) -> (Self, Vec<Effect>) {
-        let mut harness = Self { model: Model::new(false), now: Duration::from_secs(1000), next_ticket: 0 };
-        assert_eq!(harness.model.start(), [Effect::Send { index: ControllerIndex::NONE, command: Command::ReadIndexList }]);
-        let list = harness.model.on_packet(harness.now, Packet { index: ControllerIndex::NONE, event: complete(Opcode::READ_INDEX_LIST, Status::Success, vec![1, 0, 0, 0]) });
-        assert_eq!(list, [Effect::Send { index: C0, command: Command::ReadControllerInfo }]);
-        let info = harness.packet(complete(Opcode::READ_CONTROLLER_INFO, Status::Success, info_reply(settings)));
-        assert_eq!(info, [Effect::LoadKeys { index: C0, address: ADAPTER }]);
+        let mut harness = Self {
+            model: Model::new(false),
+            now: Duration::from_secs(1000),
+            next_ticket: 0,
+        };
+        assert_eq!(
+            harness.model.start(),
+            [Effect::Send {
+                index: ControllerIndex::NONE,
+                command: Command::ReadIndexList
+            }]
+        );
+        let list = harness.model.on_packet(
+            harness.now,
+            Packet {
+                index: ControllerIndex::NONE,
+                event: complete(Opcode::READ_INDEX_LIST, Status::Success, vec![1, 0, 0, 0]),
+            },
+        );
+        assert_eq!(
+            list,
+            [Effect::Send {
+                index: C0,
+                command: Command::ReadControllerInfo
+            }]
+        );
+        let info = harness.packet(complete(
+            Opcode::READ_CONTROLLER_INFO,
+            Status::Success,
+            info_reply(settings),
+        ));
+        assert_eq!(
+            info,
+            [Effect::LoadKeys {
+                index: C0,
+                address: ADAPTER
+            }]
+        );
         let effects = harness.model.keys_loaded(harness.now, C0, keys);
         (harness, effects)
     }
@@ -107,8 +151,19 @@ impl Harness {
     }
 
     /// A Device Found for `device` with only the given data.
-    pub fn found(&mut self, device: DeviceId, rssi: Option<i8>, flags: u32, eir: Eir) -> Vec<Effect> {
-        self.packet(Event::DeviceFound { device, rssi, flags: FoundFlags(flags), eir })
+    pub fn found(
+        &mut self,
+        device: DeviceId,
+        rssi: Option<i8>,
+        flags: u32,
+        eir: Eir,
+    ) -> Vec<Effect> {
+        self.packet(Event::DeviceFound {
+            device,
+            rssi,
+            flags: FoundFlags(flags),
+            eir,
+        })
     }
 
     pub fn answer(&mut self, answer: AgentAnswer) -> Vec<Effect> {

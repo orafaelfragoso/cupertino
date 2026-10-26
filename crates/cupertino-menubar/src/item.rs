@@ -19,7 +19,10 @@ pub enum Toggle {
 
 impl Toggle {
     pub fn is_marked(self) -> bool {
-        matches!(self, Toggle::Check(true) | Toggle::Radio(true) | Toggle::Indeterminate)
+        matches!(
+            self,
+            Toggle::Check(true) | Toggle::Radio(true) | Toggle::Indeterminate
+        )
     }
 }
 
@@ -59,7 +62,10 @@ impl Shortcut {
         }
         modifiers.sort();
         let key = key.as_ref();
-        (!key.is_empty()).then(|| Shortcut { modifiers, key: key.to_string() })
+        (!key.is_empty()).then(|| Shortcut {
+            modifiers,
+            key: key.to_string(),
+        })
     }
 
     /// Display text such as `Ctrl+Shift+Q`.
@@ -102,15 +108,32 @@ pub struct MenuItem {
 impl MenuItem {
     pub fn new(id: i32, label: &str) -> Self {
         let (label, mnemonic) = split_mnemonic(label);
-        Self { id: ItemId(id), label, mnemonic, enabled: true, visible: true, ..Default::default() }
+        Self {
+            id: ItemId(id),
+            label,
+            mnemonic,
+            enabled: true,
+            visible: true,
+            ..Default::default()
+        }
     }
 
     pub fn separator(id: i32) -> Self {
-        Self { id: ItemId(id), separator: true, enabled: false, visible: true, ..Default::default() }
+        Self {
+            id: ItemId(id),
+            separator: true,
+            enabled: false,
+            visible: true,
+            ..Default::default()
+        }
     }
 
     pub fn submenu(id: i32, label: &str, children: Vec<MenuItem>) -> Self {
-        Self { has_submenu: true, children, ..Self::new(id, label) }
+        Self {
+            has_submenu: true,
+            children,
+            ..Self::new(id, label)
+        }
     }
 
     pub fn with_shortcut(mut self, s: Shortcut) -> Self {
@@ -200,9 +223,15 @@ mod tests {
     #[test]
     fn mnemonics_are_stripped() {
         assert_eq!(split_mnemonic("_File"), ("File".to_string(), Some('F')));
-        assert_eq!(split_mnemonic("Save &As"), ("Save As".to_string(), Some('A')));
+        assert_eq!(
+            split_mnemonic("Save &As"),
+            ("Save As".to_string(), Some('A'))
+        );
         assert_eq!(split_mnemonic("a__b"), ("a_b".to_string(), None));
-        assert_eq!(split_mnemonic("Tom && Jerry"), ("Tom & Jerry".to_string(), None));
+        assert_eq!(
+            split_mnemonic("Tom && Jerry"),
+            ("Tom & Jerry".to_string(), None)
+        );
         assert_eq!(split_mnemonic("plain"), ("plain".to_string(), None));
         assert_eq!(split_mnemonic("trailing_"), ("trailing".to_string(), None));
     }
@@ -210,9 +239,17 @@ mod tests {
     #[test]
     fn shortcut_tokens() {
         let s = Shortcut::from_tokens(&["Control", "Shift", "Q"]).unwrap();
-        assert_eq!(s.modifiers, vec![ShortcutModifier::Ctrl, ShortcutModifier::Shift]);
+        assert_eq!(
+            s.modifiers,
+            vec![ShortcutModifier::Ctrl, ShortcutModifier::Shift]
+        );
         assert_eq!(s.display(), "Ctrl+Shift+Q");
-        assert_eq!(Shortcut::from_tokens(&["Super", "space"]).unwrap().display(), "Super+space");
+        assert_eq!(
+            Shortcut::from_tokens(&["Super", "space"])
+                .unwrap()
+                .display(),
+            "Super+space"
+        );
         assert!(Shortcut::from_tokens(&["Hyper", "x"]).is_none());
         assert!(Shortcut::from_tokens::<&str>(&[]).is_none());
         assert_eq!(Shortcut::from_tokens(&["F5"]).unwrap().modifiers, vec![]);
@@ -230,7 +267,11 @@ mod tests {
         let sub = MenuItem::submenu(4, "More", vec![]);
         assert!(sub.needs_load());
         assert!(!MenuItem::submenu(5, "More", vec![MenuItem::new(6, "a")]).needs_load());
-        assert!(Toggle::Check(true).is_marked() && !Toggle::Check(false).is_marked() && Toggle::Indeterminate.is_marked());
+        assert!(
+            Toggle::Check(true).is_marked()
+                && !Toggle::Check(false).is_marked()
+                && Toggle::Indeterminate.is_marked()
+        );
     }
 
     #[test]
@@ -243,7 +284,10 @@ mod tests {
                 MenuItem::new(2, "a"),
                 MenuItem::separator(3),
                 MenuItem::separator(4),
-                MenuItem { visible: false, ..MenuItem::new(5, "hidden") },
+                MenuItem {
+                    visible: false,
+                    ..MenuItem::new(5, "hidden")
+                },
                 MenuItem::new(6, "b"),
                 MenuItem::separator(7),
             ],
@@ -254,7 +298,11 @@ mod tests {
 
     #[test]
     fn find_walks_the_tree() {
-        let mut root = MenuItem::submenu(0, "r", vec![MenuItem::submenu(1, "a", vec![MenuItem::new(2, "deep")])]);
+        let mut root = MenuItem::submenu(
+            0,
+            "r",
+            vec![MenuItem::submenu(1, "a", vec![MenuItem::new(2, "deep")])],
+        );
         assert_eq!(root.find(ItemId(2)).unwrap().label, "deep");
         assert!(root.find(ItemId(9)).is_none());
         root.find_mut(ItemId(2)).unwrap().enabled = false;

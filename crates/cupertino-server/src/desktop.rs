@@ -46,7 +46,10 @@ pub fn parse_entry(id: &str, path: &Path, text: &str) -> Option<DesktopEntry> {
         name,
         exec,
         icon: map.get("Icon").map(|s| s.to_string()).unwrap_or_default(),
-        startup_wm_class: map.get("StartupWMClass").map(|s| s.to_string()).unwrap_or_default(),
+        startup_wm_class: map
+            .get("StartupWMClass")
+            .map(|s| s.to_string())
+            .unwrap_or_default(),
         terminal: map.get("Terminal") == Some(&"true"),
         no_display: map.get("NoDisplay") == Some(&"true"),
         path: path.to_path_buf(),
@@ -113,7 +116,9 @@ impl DesktopIndex {
             let apps = base.join("applications");
             let mut stack = vec![apps.clone()];
             while let Some(dir) = stack.pop() {
-                let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+                let Ok(rd) = std::fs::read_dir(&dir) else {
+                    continue;
+                };
                 for e in rd.flatten() {
                     let path = e.path();
                     if path.is_dir() {
@@ -128,7 +133,10 @@ impl DesktopIndex {
                     if entries.iter().any(|x| x.id == id) {
                         continue;
                     }
-                    if let Some(entry) = std::fs::read_to_string(&path).ok().and_then(|t| parse_entry(&id, &path, &t)) {
+                    if let Some(entry) = std::fs::read_to_string(&path)
+                        .ok()
+                        .and_then(|t| parse_entry(&id, &path, &t))
+                    {
                         entries.push(entry);
                     }
                 }
@@ -147,10 +155,17 @@ impl DesktopIndex {
         }
         let by = |f: &dyn Fn(&DesktopEntry) -> bool| self.entries.iter().find(|e| f(e));
         by(&|e| e.id.to_lowercase() == id)
-            .or_else(|| by(&|e| !e.startup_wm_class.is_empty() && e.startup_wm_class.to_lowercase() == id))
+            .or_else(|| {
+                by(&|e| !e.startup_wm_class.is_empty() && e.startup_wm_class.to_lowercase() == id)
+            })
             .or_else(|| {
                 by(&|e| {
-                    exec_command(&e.exec).first().is_some_and(|p| Path::new(p).file_name().and_then(|n| n.to_str()).is_some_and(|n| n.to_lowercase() == id))
+                    exec_command(&e.exec).first().is_some_and(|p| {
+                        Path::new(p)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|n| n.to_lowercase() == id)
+                    })
                 })
             })
             .or_else(|| by(&|e| e.id.to_lowercase().rsplit('.').next() == Some(id.as_str())))
@@ -163,7 +178,11 @@ pub fn display_name(index: &DesktopIndex, identity: &str) -> String {
     if let Some(e) = index.find(identity) {
         return e.name.clone();
     }
-    let last = identity.rsplit(['.', '/']).next().filter(|s| !s.is_empty()).unwrap_or(identity);
+    let last = identity
+        .rsplit(['.', '/'])
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(identity);
     let mut chars = last.chars();
     match chars.next() {
         Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
@@ -180,17 +199,36 @@ mod tests {
     #[test]
     fn parses_the_main_group_only() {
         let e = parse_entry("foot", Path::new("/x/foot.desktop"), FOOT).unwrap();
-        assert_eq!((e.name.as_str(), e.exec.as_str(), e.icon.as_str()), ("Foot", "foot %U", "foot"));
-        assert!(parse_entry("x", Path::new("x"), "[Desktop Entry]\nType=Application\nName=X\nExec=x\nHidden=true\n").is_none());
-        assert!(parse_entry("x", Path::new("x"), "[Desktop Entry]\nType=Link\nName=X\nExec=x\n").is_none());
+        assert_eq!(
+            (e.name.as_str(), e.exec.as_str(), e.icon.as_str()),
+            ("Foot", "foot %U", "foot")
+        );
+        assert!(parse_entry(
+            "x",
+            Path::new("x"),
+            "[Desktop Entry]\nType=Application\nName=X\nExec=x\nHidden=true\n"
+        )
+        .is_none());
+        assert!(parse_entry(
+            "x",
+            Path::new("x"),
+            "[Desktop Entry]\nType=Link\nName=X\nExec=x\n"
+        )
+        .is_none());
         assert!(parse_entry("x", Path::new("x"), "[Desktop Entry]\nName=X\n").is_none());
     }
 
     #[test]
     fn exec_lines_drop_field_codes_and_keep_quotes() {
         assert_eq!(exec_command("foot %U"), ["foot"]);
-        assert_eq!(exec_command("env A=1 \"/opt/my app/run\" --flag %f"), ["env", "A=1", "/opt/my app/run", "--flag"]);
-        assert_eq!(exec_command("sh -c \"echo 100%%\""), ["sh", "-c", "echo 100%"]);
+        assert_eq!(
+            exec_command("env A=1 \"/opt/my app/run\" --flag %f"),
+            ["env", "A=1", "/opt/my app/run", "--flag"]
+        );
+        assert_eq!(
+            exec_command("sh -c \"echo 100%%\""),
+            ["sh", "-c", "echo 100%"]
+        );
         assert!(exec_command("  ").is_empty());
     }
 
@@ -219,7 +257,11 @@ mod tests {
         let apps = dir.join("applications");
         std::fs::create_dir_all(apps.join("sub")).unwrap();
         std::fs::write(apps.join("a.desktop"), FOOT).unwrap();
-        std::fs::write(apps.join("sub/b.desktop"), "[Desktop Entry]\nName=B\nExec=b\n").unwrap();
+        std::fs::write(
+            apps.join("sub/b.desktop"),
+            "[Desktop Entry]\nName=B\nExec=b\n",
+        )
+        .unwrap();
         let idx = DesktopIndex::load_from(std::slice::from_ref(&dir));
         let ids: Vec<&str> = idx.entries.iter().map(|e| e.id.as_str()).collect();
         assert_eq!(ids, ["a", "sub-b"]);

@@ -2,8 +2,8 @@
 //! the volume, brightness and keyboard-backlight keys; the control panel calls `Show` after it changed a level itself.
 
 use zbus::fdo;
-use zbus::{connection, Connection};
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
+use zbus::{connection, Connection};
 
 use crate::controller::Command;
 use crate::model::{Kind, Overlay};
@@ -32,7 +32,10 @@ fn check_direction(direction: i32) -> fdo::Result<i32> {
 impl Control {
     /// Raise (`direction` > 0) or lower the volume one press; `fine` is a Shift+Alt press.
     fn volume_step(&self, direction: i32, fine: bool) -> fdo::Result<()> {
-        (self.on_command)(Command::VolumeStep { direction: check_direction(direction)?, fine });
+        (self.on_command)(Command::VolumeStep {
+            direction: check_direction(direction)?,
+            fine,
+        });
         Ok(())
     }
 
@@ -43,20 +46,27 @@ impl Control {
 
     /// Raise or lower the display brightness one press.
     fn brightness_step(&self, direction: i32, fine: bool) -> fdo::Result<()> {
-        (self.on_command)(Command::BrightnessStep { direction: check_direction(direction)?, fine });
+        (self.on_command)(Command::BrightnessStep {
+            direction: check_direction(direction)?,
+            fine,
+        });
         Ok(())
     }
 
     /// Raise or lower the keyboard backlight one press.
     fn keyboard_brightness_step(&self, direction: i32, fine: bool) -> fdo::Result<()> {
-        (self.on_command)(Command::KeyboardBrightnessStep { direction: check_direction(direction)?, fine });
+        (self.on_command)(Command::KeyboardBrightnessStep {
+            direction: check_direction(direction)?,
+            fine,
+        });
         Ok(())
     }
 
     /// Show `kind` (`volume`, `mute`, `brightness` or `keyboard-brightness`) at `level` (0 to 1) without changing
     /// anything; for a sender that changed the level itself.
     fn show(&self, kind: &str, level: f64) -> fdo::Result<()> {
-        let kind = Kind::from_name(kind).ok_or_else(|| invalid(format!("unknown overlay {kind:?}")))?;
+        let kind =
+            Kind::from_name(kind).ok_or_else(|| invalid(format!("unknown overlay {kind:?}")))?;
         let overlay = Overlay::new(kind, level).map_err(|e| invalid(e.to_string()))?;
         (self.on_command)(Command::Show(overlay));
         Ok(())
@@ -66,11 +76,25 @@ impl Control {
 /// Export the interface at [`OBJECT_PATH`] and claim [`BUS_NAME`] on the bus `builder` connects to. `on_command` runs
 /// on the bus thread for every accepted call. The interface is served while the returned connection lives. Fails with
 /// `zbus::Error::NameTaken` when another overlay owns the name.
-pub fn serve(builder: connection::Builder<'static>, on_command: impl Fn(Command) + Send + Sync + 'static) -> zbus::Result<Connection> {
+pub fn serve(
+    builder: connection::Builder<'static>,
+    on_command: impl Fn(Command) + Send + Sync + 'static,
+) -> zbus::Result<Connection> {
     zbus::block_on(async {
-        let connection = builder.serve_at(OBJECT_PATH, Control { on_command: Box::new(on_command) })?.build().await?;
+        let connection = builder
+            .serve_at(
+                OBJECT_PATH,
+                Control {
+                    on_command: Box::new(on_command),
+                },
+            )?
+            .build()
+            .await?;
         // after the object exists, so no call finds the name without it; never queue behind the owner
-        match connection.request_name_with_flags(BUS_NAME, RequestNameFlags::DoNotQueue.into()).await? {
+        match connection
+            .request_name_with_flags(BUS_NAME, RequestNameFlags::DoNotQueue.into())
+            .await?
+        {
             RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => Ok(connection),
             RequestNameReply::Exists | RequestNameReply::InQueue => Err(zbus::Error::NameTaken),
         }

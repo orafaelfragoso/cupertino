@@ -134,12 +134,19 @@ pub fn name_of(keysym: u32) -> Option<String> {
     if (0xffb0..=0xffb9).contains(&keysym) {
         return Some(format!("KP_{}", keysym - 0xffb0));
     }
-    NAMED.iter().find(|(_, v)| *v == keysym).map(|(n, _)| (*n).to_string())
+    NAMED
+        .iter()
+        .find(|(_, v)| *v == keysym)
+        .map(|(n, _)| (*n).to_string())
 }
 
 /// Fold a keysym to the form shortcuts are matched on: ASCII letters lower-cased.
 pub fn fold_case(keysym: u32) -> u32 {
-    if (0x41..=0x5a).contains(&keysym) { keysym + 0x20 } else { keysym }
+    if (0x41..=0x5a).contains(&keysym) {
+        keysym + 0x20
+    } else {
+        keysym
+    }
 }
 
 #[cfg(test)]

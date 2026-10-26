@@ -40,13 +40,23 @@ impl Cupertino {
     /// server starts (`WAYLAND_SOCKET`) or, in tests, for a client in the same process.
     pub fn privileged_client(&mut self) -> std::io::Result<UnixStream> {
         let (server, client) = UnixStream::pair()?;
-        self.display_handle.insert_client(server, Arc::new(ClientState { privileged: true, ..ClientState::default() }))?;
+        self.display_handle.insert_client(
+            server,
+            Arc::new(ClientState {
+                privileged: true,
+                ..ClientState::default()
+            }),
+        )?;
         Ok(client)
     }
 
     /// Whether a screenshot overlay or toolbar is on an output.
     pub fn screenshot_overlay_shown(&self) -> bool {
-        self.outputs.iter().any(|o| layer_map_for_output(&o.output).layers().any(|l| l.namespace() == OVERLAY_NAMESPACE))
+        self.outputs.iter().any(|o| {
+            layer_map_for_output(&o.output)
+                .layers()
+                .any(|l| l.namespace() == OVERLAY_NAMESPACE)
+        })
     }
 
     /// Start the screenshot process for a shortcut (see the module documentation).
@@ -56,7 +66,9 @@ impl Cupertino {
             return;
         }
         let command_line = self.config.screenshot_command.clone();
-        let (program, args) = command_line.split_first().expect("the screenshot command is validated non-empty at load");
+        let (program, args) = command_line
+            .split_first()
+            .expect("the screenshot command is validated non-empty at load");
         let mut command = Command::new(program);
         command.args(args).args(mode_args(request));
         let stream = match self.privileged_client() {
@@ -68,7 +80,9 @@ impl Cupertino {
         };
         let fd = stream.as_raw_fd();
         // the process reaches the server only through its own connection, never through the public socket
-        command.env("WAYLAND_SOCKET", fd.to_string()).env_remove("WAYLAND_DISPLAY");
+        command
+            .env("WAYLAND_SOCKET", fd.to_string())
+            .env_remove("WAYLAND_DISPLAY");
         // Safety: the closure runs in the child between fork and exec and calls only fcntl, which is async-signal-safe.
         unsafe {
             command.pre_exec(move || {
@@ -85,7 +99,9 @@ impl Cupertino {
                 tracing::info!(pid, ?request, "screenshot process started");
                 std::thread::spawn(move || match child.wait() {
                     Ok(status) => tracing::info!(pid, %status, "screenshot process exited"),
-                    Err(e) => tracing::warn!(pid, error = %e, "waiting for the screenshot process failed"),
+                    Err(e) => {
+                        tracing::warn!(pid, error = %e, "waiting for the screenshot process failed")
+                    }
                 });
             }
             // the server's end of the pair sees the hang-up and the client is dropped
@@ -102,9 +118,18 @@ mod tests {
     #[test]
     fn each_shortcut_selects_its_mode_and_destination() {
         assert_eq!(mode_args(ScreenshotRequest::Screen), ["--mode", "screen"]);
-        assert_eq!(mode_args(ScreenshotRequest::ScreenToClipboard), ["--mode", "screen", "--clipboard"]);
-        assert_eq!(mode_args(ScreenshotRequest::Selection), ["--mode", "selection"]);
-        assert_eq!(mode_args(ScreenshotRequest::SelectionToClipboard), ["--mode", "selection", "--clipboard"]);
+        assert_eq!(
+            mode_args(ScreenshotRequest::ScreenToClipboard),
+            ["--mode", "screen", "--clipboard"]
+        );
+        assert_eq!(
+            mode_args(ScreenshotRequest::Selection),
+            ["--mode", "selection"]
+        );
+        assert_eq!(
+            mode_args(ScreenshotRequest::SelectionToClipboard),
+            ["--mode", "selection", "--clipboard"]
+        );
         assert_eq!(mode_args(ScreenshotRequest::Toolbar), ["--mode", "toolbar"]);
     }
 }

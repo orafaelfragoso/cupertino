@@ -87,7 +87,9 @@ impl Mode {
     }
 
     pub fn from_name(name: &str) -> Option<Self> {
-        [Mode::Screen, Mode::Window, Mode::Selection].into_iter().find(|m| m.name() == name)
+        [Mode::Screen, Mode::Window, Mode::Selection]
+            .into_iter()
+            .find(|m| m.name() == name)
     }
 }
 
@@ -109,7 +111,15 @@ impl Default for Settings {
     /// Desktop (the design's default location), no timer, the thumbnail on, the pointer left out, the selection
     /// remembered, selection mode.
     fn default() -> Self {
-        Self { location: Location::Desktop, timer: 0, show_thumbnail: true, show_pointer: false, remember_selection: true, mode: Mode::Selection, selection: None }
+        Self {
+            location: Location::Desktop,
+            timer: 0,
+            show_thumbnail: true,
+            show_pointer: false,
+            remember_selection: true,
+            mode: Mode::Selection,
+            selection: None,
+        }
     }
 }
 
@@ -135,10 +145,16 @@ fn parse_bool(value: &str) -> Result<bool, String> {
 }
 
 fn parse_rect(value: &str) -> Result<Rect, String> {
-    let parts: Vec<f64> = value.split(',').map(|p| p.trim().parse::<f64>()).collect::<Result<_, _>>().map_err(|_| format!("{value:?} is not x,y,width,height"))?;
+    let parts: Vec<f64> = value
+        .split(',')
+        .map(|p| p.trim().parse::<f64>())
+        .collect::<Result<_, _>>()
+        .map_err(|_| format!("{value:?} is not x,y,width,height"))?;
     match parts[..] {
         [x, y, w, h] if w >= 1.0 && h >= 1.0 => Ok(Rect::new(x, y, w, h)),
-        _ => Err(format!("{value:?} is not x,y,width,height with a size of at least one point")),
+        _ => Err(format!(
+            "{value:?} is not x,y,width,height with a size of at least one point"
+        )),
     }
 }
 
@@ -165,12 +181,17 @@ impl Settings {
                 Some(("show-thumbnail", v)) => parse_bool(v).map(|b| s.show_thumbnail = b),
                 Some(("show-pointer", v)) => parse_bool(v).map(|b| s.show_pointer = b),
                 Some(("remember-selection", v)) => parse_bool(v).map(|b| s.remember_selection = b),
-                Some(("mode", v)) => Mode::from_name(v).map(|m| s.mode = m).ok_or_else(|| format!("mode {v:?} is not screen, window or selection")),
+                Some(("mode", v)) => Mode::from_name(v)
+                    .map(|m| s.mode = m)
+                    .ok_or_else(|| format!("mode {v:?} is not screen, window or selection")),
                 Some(("selection", v)) => parse_rect(v).map(|r| s.selection = Some(r)),
                 Some((key, _)) => Err(format!("unknown setting {key:?}")),
             };
             if let Err(problem) = applied {
-                problems.push(Problem { line: i + 1, problem });
+                problems.push(Problem {
+                    line: i + 1,
+                    problem,
+                });
             }
         }
         (s, problems)
@@ -188,7 +209,13 @@ impl Settings {
             self.mode.name()
         );
         if let Some(r) = self.selection {
-            out.push_str(&format!("selection = {},{},{},{}\n", r.x(), r.y(), r.width(), r.height()));
+            out.push_str(&format!(
+                "selection = {},{},{},{}\n",
+                r.x(),
+                r.y(),
+                r.width(),
+                r.height()
+            ));
         }
         out
     }
@@ -269,19 +296,41 @@ mod tests {
             selection: Some(Rect::new(10.0, 20.0, 300.0, 200.0)),
         };
         assert_eq!(Settings::parse(&s.to_text()), (s, Vec::new()));
-        let (parsed, problems) = Settings::parse("timer = 3\nmode = window\nlocation = shots\nselection = 1,2,0,4\n");
-        assert_eq!(parsed, Settings { mode: Mode::Window, ..Settings::default() });
-        assert_eq!(problems.iter().map(|p| p.line).collect::<Vec<_>>(), [1, 3, 4]);
+        let (parsed, problems) =
+            Settings::parse("timer = 3\nmode = window\nlocation = shots\nselection = 1,2,0,4\n");
+        assert_eq!(
+            parsed,
+            Settings {
+                mode: Mode::Window,
+                ..Settings::default()
+            }
+        );
+        assert_eq!(
+            problems.iter().map(|p| p.line).collect::<Vec<_>>(),
+            [1, 3, 4]
+        );
     }
 
     #[test]
     fn locations_resolve_through_the_user_dirs_with_the_xdg_defaults() {
         let home = Path::new("/home/u");
         let dirs = parse_user_dirs("# comment\nXDG_DESKTOP_DIR=\"$HOME/Schreibtisch\"\nXDG_PICTURES_DIR=\"/data/pictures\"\nXDG_MUSIC_DIR=\"relative\"\n", home);
-        assert_eq!(Location::Desktop.directory(home, &dirs), Some(PathBuf::from("/home/u/Schreibtisch")));
-        assert_eq!(Location::Pictures.directory(home, &dirs), Some(PathBuf::from("/data/pictures")));
-        assert_eq!(Location::Documents.directory(home, &dirs), Some(PathBuf::from("/home/u/Documents")));
+        assert_eq!(
+            Location::Desktop.directory(home, &dirs),
+            Some(PathBuf::from("/home/u/Schreibtisch"))
+        );
+        assert_eq!(
+            Location::Pictures.directory(home, &dirs),
+            Some(PathBuf::from("/data/pictures"))
+        );
+        assert_eq!(
+            Location::Documents.directory(home, &dirs),
+            Some(PathBuf::from("/home/u/Documents"))
+        );
         assert_eq!(Location::Clipboard.directory(home, &dirs), None);
-        assert_eq!(Location::Desktop.directory(home, &[]), Some(PathBuf::from("/home/u/Desktop")));
+        assert_eq!(
+            Location::Desktop.directory(home, &[]),
+            Some(PathBuf::from("/home/u/Desktop"))
+        );
     }
 }

@@ -46,7 +46,12 @@ unsafe impl Ioctl for Transfer<'_> {
 /// # Safety
 /// `buf` must be at least as large as the kernel reads or writes for `opcode` (the caller passes the arrays and sizes
 /// of `abi`, and for `TLV_READ` a buffer of the length stored in its header).
-unsafe fn control_ioctl(fd: BorrowedFd<'_>, op: &'static str, opcode: Opcode, buf: &mut [u8]) -> Result<()> {
+unsafe fn control_ioctl(
+    fd: BorrowedFd<'_>,
+    op: &'static str,
+    opcode: Opcode,
+    buf: &mut [u8],
+) -> Result<()> {
     // SAFETY: forwarded from this function's contract.
     unsafe { ioctl::ioctl(fd, Transfer { opcode, buf }) }.map_err(|errno| Error::Io { op, errno })
 }
@@ -74,11 +79,17 @@ pub fn device_path(dir: &Path, index: u32) -> PathBuf {
 
 /// The numbers of the cards that have a control device in `dir`, ascending.
 pub fn card_indexes(dir: &Path) -> Result<Vec<u32>> {
-    let entries = std::fs::read_dir(dir).map_err(|source| Error::ReadDir { dir: dir.to_path_buf(), source })?;
+    let entries = std::fs::read_dir(dir).map_err(|source| Error::ReadDir {
+        dir: dir.to_path_buf(),
+        source,
+    })?;
     let mut indexes: Vec<u32> = entries
         .map(|entry| entry.map(|e| e.file_name()))
         .collect::<std::io::Result<Vec<_>>>()
-        .map_err(|source| Error::ReadDir { dir: dir.to_path_buf(), source })?
+        .map_err(|source| Error::ReadDir {
+            dir: dir.to_path_buf(),
+            source,
+        })?
         .iter()
         .filter_map(|name| name.to_str()?.strip_prefix("controlC")?.parse().ok())
         .collect();
@@ -93,9 +104,17 @@ impl Card {
             OpenMode::ReadOnly => OFlags::RDONLY,
             OpenMode::ReadWrite => OFlags::RDWR,
         };
-        let fd = fs::open(device_path(dir, index), access | OFlags::NONBLOCK | OFlags::CLOEXEC, FileMode::empty()).map_err(|errno| match errno {
+        let fd = fs::open(
+            device_path(dir, index),
+            access | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            FileMode::empty(),
+        )
+        .map_err(|errno| match errno {
             Errno::NOENT => Error::NoSuchCard { card: index },
-            errno => Error::Io { op: "open control device", errno },
+            errno => Error::Io {
+                op: "open control device",
+                errno,
+            },
         })?;
         Ok(Self { fd, index })
     }
@@ -109,7 +128,14 @@ impl Card {
     pub fn info(&self) -> Result<CardInfo> {
         let mut buf = [0u8; abi::CARD_INFO_SIZE];
         // SAFETY: `buf` is a `snd_ctl_card_info`.
-        unsafe { control_ioctl(self.fd.as_fd(), "SNDRV_CTL_IOCTL_CARD_INFO", abi::CARD_INFO, &mut buf)? };
+        unsafe {
+            control_ioctl(
+                self.fd.as_fd(),
+                "SNDRV_CTL_IOCTL_CARD_INFO",
+                abi::CARD_INFO,
+                &mut buf,
+            )?
+        };
         CardInfo::parse(&buf)
     }
 
@@ -117,36 +143,71 @@ impl Card {
     pub fn element_ids(&self) -> Result<Vec<ElementId>> {
         let mut list = abi::list_request(0, 0, 0);
         // SAFETY: `list` is a `snd_ctl_elem_list` with no space asked for, so the kernel writes no ids.
-        unsafe { control_ioctl(self.fd.as_fd(), "SNDRV_CTL_IOCTL_ELEM_LIST", abi::ELEM_LIST, &mut list)? };
+        unsafe {
+            control_ioctl(
+                self.fd.as_fd(),
+                "SNDRV_CTL_IOCTL_ELEM_LIST",
+                abi::ELEM_LIST,
+                &mut list,
+            )?
+        };
         let (_, count) = abi::list_reply(&list);
         // controls added between the two calls are missed; the next listing sees them
         let mut ids = vec![0u8; count as usize * abi::ELEM_ID_SIZE];
         let mut list = abi::list_request(0, count, ids.as_mut_ptr() as u64);
         // SAFETY: `list` asks for `count` ids and `ids` holds `count` 64-byte records at the address stored in it.
-        unsafe { control_ioctl(self.fd.as_fd(), "SNDRV_CTL_IOCTL_ELEM_LIST", abi::ELEM_LIST, &mut list)? };
+        unsafe {
+            control_ioctl(
+                self.fd.as_fd(),
+                "SNDRV_CTL_IOCTL_ELEM_LIST",
+                abi::ELEM_LIST,
+                &mut list,
+            )?
+        };
         let (used, _) = abi::list_reply(&list);
         let (records, _) = ids.as_chunks::<{ abi::ELEM_ID_SIZE }>();
-        records.iter().take(used as usize).map(|record| ElementId::parse(record)).collect()
+        records
+            .iter()
+            .take(used as usize)
+            .map(|record| ElementId::parse(record))
+            .collect()
     }
 
     /// What control `id` is.
     pub fn element_info(&self, id: &ElementId) -> Result<ElementInfo> {
         let mut buf = abi::info_request(id)?;
         // SAFETY: `buf` is a `snd_ctl_elem_info`.
-        unsafe { control_ioctl(self.fd.as_fd(), "SNDRV_CTL_IOCTL_ELEM_INFO", abi::ELEM_INFO, &mut buf)? };
+        unsafe {
+            control_ioctl(
+                self.fd.as_fd(),
+                "SNDRV_CTL_IOCTL_ELEM_INFO",
+                abi::ELEM_INFO,
+                &mut buf,
+            )?
+        };
         ElementInfo::parse(&buf)
     }
 
     /// The info of every control of the card.
     pub fn elements(&self) -> Result<Vec<ElementInfo>> {
-        self.element_ids()?.iter().map(|id| self.element_info(id)).collect()
+        self.element_ids()?
+            .iter()
+            .map(|id| self.element_info(id))
+            .collect()
     }
 
     /// The values of an integer or boolean control, one per channel.
     pub fn read_values(&self, info: &ElementInfo) -> Result<Vec<i64>> {
         let mut buf = abi::value_request(&info.id, &[])?;
         // SAFETY: `buf` is a `snd_ctl_elem_value`.
-        unsafe { control_ioctl(self.fd.as_fd(), "SNDRV_CTL_IOCTL_ELEM_READ", abi::ELEM_READ, &mut buf)? };
+        unsafe {
+            control_ioctl(
+                self.fd.as_fd(),
+                "SNDRV_CTL_IOCTL_ELEM_READ",
+                abi::ELEM_READ,
+                &mut buf,
+            )?
+        };
         abi::value_reply(&buf, info.count)
     }
 
@@ -157,7 +218,14 @@ impl Card {
         }
         let mut buf = abi::value_request(&info.id, values)?;
         // SAFETY: `buf` is a `snd_ctl_elem_value`.
-        unsafe { control_ioctl(self.fd.as_fd(), "SNDRV_CTL_IOCTL_ELEM_WRITE", abi::ELEM_WRITE, &mut buf) }
+        unsafe {
+            control_ioctl(
+                self.fd.as_fd(),
+                "SNDRV_CTL_IOCTL_ELEM_WRITE",
+                abi::ELEM_WRITE,
+                &mut buf,
+            )
+        }
     }
 
     /// The gain curve of a control; `None` when it has no TLV data or the data holds no gain curve.
@@ -171,10 +239,19 @@ impl Card {
         buf[0..4].copy_from_slice(&info.id.numid.to_ne_bytes());
         buf[4..8].copy_from_slice(&(CAPACITY as u32).to_ne_bytes());
         // SAFETY: the header states `CAPACITY` bytes and `buf` has that much room after it.
-        unsafe { control_ioctl(self.fd.as_fd(), "SNDRV_CTL_IOCTL_TLV_READ", abi::TLV_READ, &mut buf)? };
+        unsafe {
+            control_ioctl(
+                self.fd.as_fd(),
+                "SNDRV_CTL_IOCTL_TLV_READ",
+                abi::TLV_READ,
+                &mut buf,
+            )?
+        };
         // the kernel copies the block as stored and leaves the header alone: the block's own second word is its length
         let length = u32::from_ne_bytes(buf[12..16].try_into().expect("4-byte slice")) as usize;
-        let block = buf.get(TLV_HEADER_SIZE..TLV_HEADER_SIZE + 8 + length).ok_or(Error::MalformedTlv("block longer than the buffer"))?;
+        let block = buf
+            .get(TLV_HEADER_SIZE..TLV_HEADER_SIZE + 8 + length)
+            .ok_or(Error::MalformedTlv("block longer than the buffer"))?;
         DbCurve::parse(block)
     }
 
@@ -182,7 +259,14 @@ impl Card {
     pub fn subscribe(&self) -> Result<()> {
         let mut on = 1i32.to_ne_bytes();
         // SAFETY: the argument is one `int`.
-        unsafe { control_ioctl(self.fd.as_fd(), "SNDRV_CTL_IOCTL_SUBSCRIBE_EVENTS", abi::SUBSCRIBE_EVENTS, &mut on) }
+        unsafe {
+            control_ioctl(
+                self.fd.as_fd(),
+                "SNDRV_CTL_IOCTL_SUBSCRIBE_EVENTS",
+                abi::SUBSCRIBE_EVENTS,
+                &mut on,
+            )
+        }
     }
 
     /// The events queued since the last read; empty when there are none. Needs [`Card::subscribe`] first.
@@ -191,7 +275,10 @@ impl Card {
         match rustix::io::read(&self.fd, &mut buf) {
             Ok(len) => Event::parse_all(&buf[..len]),
             Err(Errno::AGAIN) => Ok(Vec::new()),
-            Err(errno) => Err(Error::Io { op: "read control events", errno }),
+            Err(errno) => Err(Error::Io {
+                op: "read control events",
+                errno,
+            }),
         }
     }
 }

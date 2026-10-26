@@ -8,7 +8,10 @@ use zbus::blocking::proxy::Builder;
 use zbus::blocking::{Connection, Proxy};
 use zbus::proxy::CacheProperties;
 
-use crate::backend::{BackendError, BatteryReader, Bluetooth, Brightness, FocusMode, OverlayKind, OverlayNotifier, Wifi};
+use crate::backend::{
+    BackendError, BatteryReader, Bluetooth, Brightness, FocusMode, OverlayKind, OverlayNotifier,
+    Wifi,
+};
 use crate::model::{Battery, WifiStatus};
 
 const NETWORK_NAME: &str = "org.cupertino.Network1";
@@ -40,23 +43,46 @@ struct Bus {
 
 impl Bus {
     fn system() -> Self {
-        Self { session: false, connection: None }
+        Self {
+            session: false,
+            connection: None,
+        }
     }
 
     fn session() -> Self {
-        Self { session: true, connection: None }
+        Self {
+            session: true,
+            connection: None,
+        }
     }
 
-    fn proxy(&mut self, name: &'static str, path: &'static str, interface: &'static str) -> zbus::Result<Proxy<'static>> {
+    fn proxy(
+        &mut self,
+        name: &'static str,
+        path: &'static str,
+        interface: &'static str,
+    ) -> zbus::Result<Proxy<'static>> {
         if self.connection.is_none() {
-            self.connection = Some(if self.session { Connection::session()? } else { Connection::system()? });
+            self.connection = Some(if self.session {
+                Connection::session()?
+            } else {
+                Connection::system()?
+            });
         }
         let connection = self.connection.as_ref().expect("connected above");
-        Builder::new(connection).destination(name)?.path(path)?.interface(interface)?.cache_properties(CacheProperties::No).build()
+        Builder::new(connection)
+            .destination(name)?
+            .path(path)?
+            .interface(interface)?
+            .cache_properties(CacheProperties::No)
+            .build()
     }
 
     /// Forget the connection after a failure so the next call connects again.
-    fn failed<T, E: Into<BackendError>>(&mut self, result: Result<T, E>) -> Result<T, BackendError> {
+    fn failed<T, E: Into<BackendError>>(
+        &mut self,
+        result: Result<T, E>,
+    ) -> Result<T, BackendError> {
         result.map_err(|e| {
             self.connection = None;
             e.into()
@@ -87,17 +113,27 @@ type DeviceRecord = (u32, String, String, String, String, String, String);
 
 impl Wifi for NetdWifi {
     fn read(&mut self) -> Result<WifiStatus, BackendError> {
-        let result = self.bus.proxy(NETWORK_NAME, NETWORK_PATH, NETWORK_NAME).and_then(|proxy| {
-            let enabled: bool = proxy.get_property("WirelessEnabled")?;
-            let devices: Vec<DeviceRecord> = proxy.get_property("Devices")?;
-            let network = devices.into_iter().find(|device| device.2 == "wifi" && device.3 == "connected").map(|device| device.4).filter(|ssid| !ssid.is_empty());
-            Ok(WifiStatus { enabled, network })
-        });
+        let result = self
+            .bus
+            .proxy(NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
+            .and_then(|proxy| {
+                let enabled: bool = proxy.get_property("WirelessEnabled")?;
+                let devices: Vec<DeviceRecord> = proxy.get_property("Devices")?;
+                let network = devices
+                    .into_iter()
+                    .find(|device| device.2 == "wifi" && device.3 == "connected")
+                    .map(|device| device.4)
+                    .filter(|ssid| !ssid.is_empty());
+                Ok(WifiStatus { enabled, network })
+            });
         self.bus.failed(result)
     }
 
     fn set_enabled(&mut self, enabled: bool) -> Result<(), BackendError> {
-        let result = self.bus.proxy(NETWORK_NAME, NETWORK_PATH, NETWORK_NAME).map(|proxy| proxy.set_property("WirelessEnabled", enabled));
+        let result = self
+            .bus
+            .proxy(NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
+            .map(|proxy| proxy.set_property("WirelessEnabled", enabled));
         // a refused write is the service's answer, not a bus failure, but reconnecting is harmless
         match self.bus.failed(result) {
             Ok(written) => Ok(written?),
@@ -126,18 +162,24 @@ impl Default for BtdBluetooth {
 
 impl Bluetooth for BtdBluetooth {
     fn read(&mut self) -> Result<bool, BackendError> {
-        let result = self.bus.proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME).and_then(|proxy| {
-            let available: bool = proxy.get_property("Available")?;
-            if !available {
-                return Ok(Err("the Bluetooth daemon has no adapter".into()));
-            }
-            Ok(Ok(proxy.get_property::<bool>("Powered")?))
-        });
+        let result = self
+            .bus
+            .proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
+            .and_then(|proxy| {
+                let available: bool = proxy.get_property("Available")?;
+                if !available {
+                    return Ok(Err("the Bluetooth daemon has no adapter".into()));
+                }
+                Ok(Ok(proxy.get_property::<bool>("Powered")?))
+            });
         self.bus.failed(result)?
     }
 
     fn set_powered(&mut self, powered: bool) -> Result<(), BackendError> {
-        let result = self.bus.proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME).map(|proxy| proxy.set_property("Powered", powered));
+        let result = self
+            .bus
+            .proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
+            .map(|proxy| proxy.set_property("Powered", powered));
         match self.bus.failed(result) {
             Ok(written) => Ok(written?),
             Err(e) => Err(e),
@@ -153,7 +195,9 @@ pub struct NotificationFocusMode {
 impl NotificationFocusMode {
     /// A focus mode backend; nothing is contacted until the first use.
     pub fn new() -> Self {
-        Self { bus: Bus::session() }
+        Self {
+            bus: Bus::session(),
+        }
     }
 }
 
@@ -165,12 +209,18 @@ impl Default for NotificationFocusMode {
 
 impl FocusMode for NotificationFocusMode {
     fn read(&mut self) -> Result<bool, BackendError> {
-        let result = self.bus.proxy(CENTRE_NAME, CENTRE_PATH, CENTRE_NAME).and_then(|proxy| proxy.get_property::<bool>("DoNotDisturb"));
+        let result = self
+            .bus
+            .proxy(CENTRE_NAME, CENTRE_PATH, CENTRE_NAME)
+            .and_then(|proxy| proxy.get_property::<bool>("DoNotDisturb"));
         self.bus.failed(result)
     }
 
     fn set(&mut self, on: bool) -> Result<(), BackendError> {
-        let result = self.bus.proxy(CENTRE_NAME, CENTRE_PATH, CENTRE_NAME).and_then(|proxy| proxy.call::<_, _, ()>("SetDoNotDisturb", &(on,)));
+        let result = self
+            .bus
+            .proxy(CENTRE_NAME, CENTRE_PATH, CENTRE_NAME)
+            .and_then(|proxy| proxy.call::<_, _, ()>("SetDoNotDisturb", &(on,)));
         self.bus.failed(result)
     }
 }
@@ -195,24 +245,37 @@ impl Default for PowerdBrightness {
 
 impl Brightness for PowerdBrightness {
     fn read(&mut self) -> Result<f64, BackendError> {
-        let result = self.bus.proxy(POWER_NAME, POWER_PATH, POWER_NAME).and_then(|proxy| {
-            let current: u32 = proxy.call("GetBrightness", &())?;
-            let max: u32 = proxy.call("GetMaxBrightness", &())?;
-            Ok(if max == 0 { Err("the display backlight reports a maximum of 0".into()) } else { Ok(f64::from(current) / f64::from(max)) })
-        });
+        let result = self
+            .bus
+            .proxy(POWER_NAME, POWER_PATH, POWER_NAME)
+            .and_then(|proxy| {
+                let current: u32 = proxy.call("GetBrightness", &())?;
+                let max: u32 = proxy.call("GetMaxBrightness", &())?;
+                Ok(if max == 0 {
+                    Err("the display backlight reports a maximum of 0".into())
+                } else {
+                    Ok(f64::from(current) / f64::from(max))
+                })
+            });
         self.bus.failed(result)?
     }
 
     fn set(&mut self, level: f64) -> Result<(), BackendError> {
-        let result = self.bus.proxy(POWER_NAME, POWER_PATH, POWER_NAME).and_then(|proxy| {
-            let max: u32 = proxy.call("GetMaxBrightness", &())?;
-            if max == 0 {
-                return Ok(Err("the display backlight reports a maximum of 0".into()));
-            }
-            let raw = (level.clamp(0.0, 1.0) * f64::from(max)).round() as u32;
-            proxy.call::<_, _, ()>("SetBrightness", &(raw.clamp(DISPLAY_FLOOR.min(max), max),))?;
-            Ok(Ok(()))
-        });
+        let result = self
+            .bus
+            .proxy(POWER_NAME, POWER_PATH, POWER_NAME)
+            .and_then(|proxy| {
+                let max: u32 = proxy.call("GetMaxBrightness", &())?;
+                if max == 0 {
+                    return Ok(Err("the display backlight reports a maximum of 0".into()));
+                }
+                let raw = (level.clamp(0.0, 1.0) * f64::from(max)).round() as u32;
+                proxy.call::<_, _, ()>(
+                    "SetBrightness",
+                    &(raw.clamp(DISPLAY_FLOOR.min(max), max),),
+                )?;
+                Ok(Ok(()))
+            });
         self.bus.failed(result)?
     }
 }
@@ -237,14 +300,24 @@ impl Default for PowerdBattery {
 
 impl BatteryReader for PowerdBattery {
     fn read(&mut self) -> Result<Option<Battery>, BackendError> {
-        let result = self.bus.proxy(UPOWER_NAME, UPOWER_DISPLAY_DEVICE_PATH, UPOWER_DEVICE_INTERFACE).and_then(|proxy| {
-            if !proxy.get_property::<bool>("IsPresent")? {
-                return Ok(None);
-            }
-            let percentage: f64 = proxy.get_property("Percentage")?;
-            let state: u32 = proxy.get_property("State")?;
-            Ok(Some(Battery { percent: percentage.round().clamp(0.0, 100.0) as u8, charging: state == UPOWER_STATE_CHARGING }))
-        });
+        let result = self
+            .bus
+            .proxy(
+                UPOWER_NAME,
+                UPOWER_DISPLAY_DEVICE_PATH,
+                UPOWER_DEVICE_INTERFACE,
+            )
+            .and_then(|proxy| {
+                if !proxy.get_property::<bool>("IsPresent")? {
+                    return Ok(None);
+                }
+                let percentage: f64 = proxy.get_property("Percentage")?;
+                let state: u32 = proxy.get_property("State")?;
+                Ok(Some(Battery {
+                    percent: percentage.round().clamp(0.0, 100.0) as u8,
+                    charging: state == UPOWER_STATE_CHARGING,
+                }))
+            });
         self.bus.failed(result)
     }
 }
@@ -257,7 +330,9 @@ pub struct SessionOverlay {
 impl SessionOverlay {
     /// An overlay notifier; nothing is contacted until the first use.
     pub fn new() -> Self {
-        Self { bus: Bus::session() }
+        Self {
+            bus: Bus::session(),
+        }
     }
 }
 
@@ -269,7 +344,10 @@ impl Default for SessionOverlay {
 
 impl OverlayNotifier for SessionOverlay {
     fn show(&mut self, kind: OverlayKind, level: f64) -> Result<(), BackendError> {
-        let result = self.bus.proxy(OSD_NAME, OSD_PATH, OSD_NAME).and_then(|proxy| proxy.call::<_, _, ()>("Show", &(kind.name(), level)));
+        let result = self
+            .bus
+            .proxy(OSD_NAME, OSD_PATH, OSD_NAME)
+            .and_then(|proxy| proxy.call::<_, _, ()>("Show", &(kind.name(), level)));
         self.bus.failed(result)
     }
 }

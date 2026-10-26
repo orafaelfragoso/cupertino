@@ -154,7 +154,12 @@ impl Group {
     }
 
     fn localized_raw(&self, key: &str, locale: &Locale) -> Option<&str> {
-        locale.candidates.iter().find_map(|l| self.values.get(&format!("{key}[{l}]"))).or_else(|| self.values.get(key)).map(String::as_str)
+        locale
+            .candidates
+            .iter()
+            .find_map(|l| self.values.get(&format!("{key}[{l}]")))
+            .or_else(|| self.values.get(key))
+            .map(String::as_str)
     }
 
     fn localized(&self, key: &str, locale: &Locale) -> Option<String> {
@@ -176,7 +181,9 @@ fn parse_groups(text: &str) -> Vec<(String, Group)> {
         if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
             groups.push((name.to_string(), Group::default()));
         } else if let (Some((k, v)), Some((_, g))) = (line.split_once('='), groups.last_mut()) {
-            g.values.entry(k.trim().to_string()).or_insert_with(|| v.trim_start().to_string());
+            g.values
+                .entry(k.trim().to_string())
+                .or_insert_with(|| v.trim_start().to_string());
         }
     }
     groups
@@ -206,9 +213,22 @@ pub struct Visibility {
 
 impl Visibility {
     pub fn from_env() -> Visibility {
-        let current_desktops = std::env::var("XDG_CURRENT_DESKTOP").map(|v| v.split(':').filter(|s| !s.is_empty()).map(String::from).collect()).unwrap_or_default();
-        let path_dirs = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
-        Visibility { current_desktops, path_dirs, skip_try_exec: false }
+        let current_desktops = std::env::var("XDG_CURRENT_DESKTOP")
+            .map(|v| {
+                v.split(':')
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let path_dirs = std::env::var_os("PATH")
+            .map(|p| std::env::split_paths(&p).collect())
+            .unwrap_or_default();
+        Visibility {
+            current_desktops,
+            path_dirs,
+            skip_try_exec: false,
+        }
     }
 
     fn executable_exists(&self, name: &str) -> bool {
@@ -241,21 +261,41 @@ pub struct Handler {
 
 /// Parse one desktop file. `Err` carries the reason the entry is hidden; unparsable files are
 /// reported as [`Hidden::NotApplication`].
-pub fn parse_desktop_entry(id: &str, text: &str, locale: &Locale, vis: &Visibility) -> Result<DesktopEntry, Hidden> {
+pub fn parse_desktop_entry(
+    id: &str,
+    text: &str,
+    locale: &Locale,
+    vis: &Visibility,
+) -> Result<DesktopEntry, Hidden> {
     parse(id, text, locale, vis, Purpose::Listing).map(|h| h.entry)
 }
 
 /// Parse one desktop file as a MIME handler: `NoDisplay`, `OnlyShowIn` and `NotShowIn` do not apply
 /// (mime-apps specification: such entries still handle their types); `Hidden`, a failing `TryExec`
 /// and a missing `Name` or `Exec` give `Err` as in [`parse_desktop_entry`].
-pub fn parse_handler(id: &str, text: &str, locale: &Locale, vis: &Visibility) -> Result<Handler, Hidden> {
+pub fn parse_handler(
+    id: &str,
+    text: &str,
+    locale: &Locale,
+    vis: &Visibility,
+) -> Result<Handler, Hidden> {
     parse(id, text, locale, vis, Purpose::Handler)
 }
 
-fn parse(id: &str, text: &str, locale: &Locale, vis: &Visibility, purpose: Purpose) -> Result<Handler, Hidden> {
+fn parse(
+    id: &str,
+    text: &str,
+    locale: &Locale,
+    vis: &Visibility,
+    purpose: Purpose,
+) -> Result<Handler, Hidden> {
     let listing = purpose == Purpose::Listing;
     let groups = parse_groups(text);
-    let main = groups.iter().find(|(n, _)| n == "Desktop Entry").map(|(_, g)| g).ok_or(Hidden::NotApplication)?;
+    let main = groups
+        .iter()
+        .find(|(n, _)| n == "Desktop Entry")
+        .map(|(_, g)| g)
+        .ok_or(Hidden::NotApplication)?;
     if main.plain("Type").map(str::trim) != Some("Application") {
         return Err(Hidden::NotApplication);
     }
@@ -273,21 +313,47 @@ fn parse(id: &str, text: &str, locale: &Locale, vis: &Visibility, purpose: Purpo
     if listing && not.iter().any(|o| vis.current_desktops.contains(o)) {
         return Err(Hidden::NotShowIn);
     }
-    let try_exec = main.plain("TryExec").map(|s| unescape(s.trim())).filter(|s| !s.is_empty());
+    let try_exec = main
+        .plain("TryExec")
+        .map(|s| unescape(s.trim()))
+        .filter(|s| !s.is_empty());
     if let (Some(t), false) = (&try_exec, vis.skip_try_exec) {
         if !vis.executable_exists(t) {
             return Err(Hidden::TryExec);
         }
     }
-    let name = main.localized("Name", locale).filter(|n| !n.trim().is_empty()).ok_or(Hidden::NotApplication)?;
-    let exec = main.plain("Exec").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    let Some(exec) = exec else { return Err(Hidden::NotApplication) };
-    let keywords = main.localized_raw("Keywords", locale).map(split_list).unwrap_or_default();
+    let name = main
+        .localized("Name", locale)
+        .filter(|n| !n.trim().is_empty())
+        .ok_or(Hidden::NotApplication)?;
+    let exec = main
+        .plain("Exec")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let Some(exec) = exec else {
+        return Err(Hidden::NotApplication);
+    };
+    let keywords = main
+        .localized_raw("Keywords", locale)
+        .map(split_list)
+        .unwrap_or_default();
     let mut actions = Vec::new();
     for aid in list("Actions") {
-        let Some((_, g)) = groups.iter().find(|(n, _)| *n == format!("Desktop Action {aid}")) else { continue };
-        let (Some(aname), Some(aexec)) = (g.localized("Name", locale), g.plain("Exec")) else { continue };
-        actions.push(DesktopAction { id: aid, name: aname, exec: aexec.trim().to_string(), icon: g.plain("Icon").map(|s| s.trim().to_string()) });
+        let Some((_, g)) = groups
+            .iter()
+            .find(|(n, _)| *n == format!("Desktop Action {aid}"))
+        else {
+            continue;
+        };
+        let (Some(aname), Some(aexec)) = (g.localized("Name", locale), g.plain("Exec")) else {
+            continue;
+        };
+        actions.push(DesktopAction {
+            id: aid,
+            name: aname,
+            exec: aexec.trim().to_string(),
+            icon: g.plain("Icon").map(|s| s.trim().to_string()),
+        });
     }
     let entry = DesktopEntry {
         id: id.to_string(),
@@ -296,16 +362,25 @@ fn parse(id: &str, text: &str, locale: &Locale, vis: &Visibility, purpose: Purpo
         comment: main.localized("Comment", locale).unwrap_or_default(),
         keywords,
         categories: list("Categories"),
-        icon: main.plain("Icon").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+        icon: main
+            .plain("Icon")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
         exec,
         try_exec,
         terminal: main.boolean("Terminal"),
-        path: main.plain("Path").map(|s| PathBuf::from(unescape(s.trim()))).filter(|p| !p.as_os_str().is_empty()),
+        path: main
+            .plain("Path")
+            .map(|s| PathBuf::from(unescape(s.trim())))
+            .filter(|p| !p.as_os_str().is_empty()),
         startup_wm_class: main.plain("StartupWMClass").map(|s| s.trim().to_string()),
         actions,
         source: None,
     };
-    Ok(Handler { entry, mime_types: list("MimeType") })
+    Ok(Handler {
+        entry,
+        mime_types: list("MimeType"),
+    })
 }
 
 /// `$XDG_DATA_HOME/applications` followed by `<dir>/applications` for each `XDG_DATA_DIRS` entry.
@@ -315,12 +390,21 @@ pub fn xdg_application_dirs() -> Vec<PathBuf> {
         Some(d) if !d.is_empty() => Some(PathBuf::from(d)),
         _ => home.map(|h| h.join(".local/share")),
     };
-    let dirs = std::env::var("XDG_DATA_DIRS").ok().filter(|d| !d.is_empty()).unwrap_or_else(|| "/usr/local/share:/usr/share".into());
-    data_home.into_iter().chain(dirs.split(':').filter(|d| !d.is_empty()).map(PathBuf::from)).map(|d| d.join("applications")).collect()
+    let dirs = std::env::var("XDG_DATA_DIRS")
+        .ok()
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+    data_home
+        .into_iter()
+        .chain(dirs.split(':').filter(|d| !d.is_empty()).map(PathBuf::from))
+        .map(|d| d.join("applications"))
+        .collect()
 }
 
 fn collect_files(dir: &Path, prefix: &str, out: &mut Vec<(String, PathBuf)>, depth: usize) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut items: Vec<_> = rd.flatten().collect();
     items.sort_by_key(|e| e.file_name());
     for e in items {
@@ -348,7 +432,9 @@ pub fn index_dirs(dirs: &[PathBuf], locale: &Locale, vis: &Visibility) -> Vec<De
                 continue;
             }
             seen.insert(id.clone(), ());
-            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
             if let Ok(mut e) = parse_desktop_entry(&id, &text, locale, vis) {
                 e.source = Some(path);
                 out.push(e);
@@ -363,14 +449,19 @@ mod tests {
     use super::*;
 
     fn vis() -> Visibility {
-        Visibility { current_desktops: vec!["Cupertino".into()], path_dirs: vec![], skip_try_exec: true }
+        Visibility {
+            current_desktops: vec!["Cupertino".into()],
+            path_dirs: vec![],
+            skip_try_exec: true,
+        }
     }
 
     const FIREFOX: &str = "[Desktop Entry]\nVersion=1.0\nType=Application\nName=Web Browser\nName[de]=Webbrowser\nName[de_AT]=Webbrowser AT\nGenericName=Browser\nComment=Browse the web\nKeywords=internet;www;web\\;site;\nExec=browser %u\nIcon=browser\nTerminal=false\nCategories=Network;WebBrowser;\nActions=new-window;private;\n\n[Desktop Action new-window]\nName=New Window\nExec=browser --new-window\n\n[Desktop Action private]\nName=New Private Window\nExec=browser --private\nIcon=private\n";
 
     #[test]
     fn parses_core_keys_and_actions() {
-        let e = parse_desktop_entry("browser.desktop", FIREFOX, &Locale::default(), &vis()).unwrap();
+        let e =
+            parse_desktop_entry("browser.desktop", FIREFOX, &Locale::default(), &vis()).unwrap();
         assert_eq!(e.name, "Web Browser");
         assert_eq!(e.generic_name, "Browser");
         assert_eq!(e.keywords, vec!["internet", "www", "web;site"]);
@@ -386,19 +477,37 @@ mod tests {
     fn localised_names_follow_fallback_order() {
         let l = Locale::parse("de_AT.UTF-8");
         assert_eq!(l.candidates, vec!["de_AT", "de"]);
-        assert_eq!(parse_desktop_entry("a.desktop", FIREFOX, &l, &vis()).unwrap().name, "Webbrowser AT");
+        assert_eq!(
+            parse_desktop_entry("a.desktop", FIREFOX, &l, &vis())
+                .unwrap()
+                .name,
+            "Webbrowser AT"
+        );
         let l = Locale::parse("de_CH");
-        assert_eq!(parse_desktop_entry("a.desktop", FIREFOX, &l, &vis()).unwrap().name, "Webbrowser");
+        assert_eq!(
+            parse_desktop_entry("a.desktop", FIREFOX, &l, &vis())
+                .unwrap()
+                .name,
+            "Webbrowser"
+        );
         let l = Locale::parse("fr_FR@euro");
         assert_eq!(l.candidates, vec!["fr_FR@euro", "fr_FR", "fr@euro", "fr"]);
-        assert_eq!(parse_desktop_entry("a.desktop", FIREFOX, &l, &vis()).unwrap().name, "Web Browser");
+        assert_eq!(
+            parse_desktop_entry("a.desktop", FIREFOX, &l, &vis())
+                .unwrap()
+                .name,
+            "Web Browser"
+        );
         assert!(Locale::parse("C").candidates.is_empty());
     }
 
     #[test]
     fn hidden_conditions() {
-        let base = |extra: &str| format!("[Desktop Entry]\nType=Application\nName=X\nExec=x\n{extra}");
-        let p = |extra: &str| parse_desktop_entry("x.desktop", &base(extra), &Locale::default(), &vis());
+        let base =
+            |extra: &str| format!("[Desktop Entry]\nType=Application\nName=X\nExec=x\n{extra}");
+        let p = |extra: &str| {
+            parse_desktop_entry("x.desktop", &base(extra), &Locale::default(), &vis())
+        };
         assert!(p("").is_ok());
         assert_eq!(p("NoDisplay=true"), Err(Hidden::NoDisplay));
         assert_eq!(p("Hidden=true"), Err(Hidden::HiddenKey));
@@ -407,9 +516,24 @@ mod tests {
         assert_eq!(p("NotShowIn=Cupertino;"), Err(Hidden::NotShowIn));
         assert!(p("NotShowIn=GNOME;").is_ok());
         let not_app = "[Desktop Entry]\nType=Directory\nName=X\nExec=x\n";
-        assert_eq!(parse_desktop_entry("x", not_app, &Locale::default(), &vis()), Err(Hidden::NotApplication));
-        assert_eq!(parse_desktop_entry("x", "[Desktop Entry]\nType=Application\nName=X\n", &Locale::default(), &vis()), Err(Hidden::NotApplication), "no Exec");
-        assert_eq!(parse_desktop_entry("x", "garbage", &Locale::default(), &vis()), Err(Hidden::NotApplication));
+        assert_eq!(
+            parse_desktop_entry("x", not_app, &Locale::default(), &vis()),
+            Err(Hidden::NotApplication)
+        );
+        assert_eq!(
+            parse_desktop_entry(
+                "x",
+                "[Desktop Entry]\nType=Application\nName=X\n",
+                &Locale::default(),
+                &vis()
+            ),
+            Err(Hidden::NotApplication),
+            "no Exec"
+        );
+        assert_eq!(
+            parse_desktop_entry("x", "garbage", &Locale::default(), &vis()),
+            Err(Hidden::NotApplication)
+        );
     }
 
     #[test]
@@ -419,11 +543,21 @@ mod tests {
         std::fs::write(&tool, "#!/bin/sh\n").unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let v = Visibility { current_desktops: vec![], path_dirs: vec![dir.path().to_path_buf()], skip_try_exec: false };
-        let text = |t: &str| format!("[Desktop Entry]\nType=Application\nName=X\nExec=x\nTryExec={t}\n");
+        let v = Visibility {
+            current_desktops: vec![],
+            path_dirs: vec![dir.path().to_path_buf()],
+            skip_try_exec: false,
+        };
+        let text =
+            |t: &str| format!("[Desktop Entry]\nType=Application\nName=X\nExec=x\nTryExec={t}\n");
         assert!(parse_desktop_entry("x", &text("tool"), &Locale::default(), &v).is_ok());
-        assert_eq!(parse_desktop_entry("x", &text("missing"), &Locale::default(), &v), Err(Hidden::TryExec));
-        assert!(parse_desktop_entry("x", &text(tool.to_str().unwrap()), &Locale::default(), &v).is_ok());
+        assert_eq!(
+            parse_desktop_entry("x", &text("missing"), &Locale::default(), &v),
+            Err(Hidden::TryExec)
+        );
+        assert!(
+            parse_desktop_entry("x", &text(tool.to_str().unwrap()), &Locale::default(), &v).is_ok()
+        );
     }
 
     #[test]
@@ -431,20 +565,31 @@ mod tests {
         assert_eq!(split_list("a;b\\;c;;d"), vec!["a", "b;c", "d"]);
         assert_eq!(unescape("a\\sb\\nc\\\\d"), "a b\nc\\d");
         let t = "[Desktop Entry]\nType=Application\nName=My\\sApp\nExec=x\n";
-        assert_eq!(parse_desktop_entry("x", t, &Locale::default(), &vis()).unwrap().name, "My App");
+        assert_eq!(
+            parse_desktop_entry("x", t, &Locale::default(), &vis())
+                .unwrap()
+                .name,
+            "My App"
+        );
     }
 
     #[test]
     fn first_group_value_wins_and_bom_is_ignored() {
         let t = "\u{feff}[Desktop Entry]\nType=Application\nName=First\nName=Second\nExec=x\n";
-        assert_eq!(parse_desktop_entry("x", t, &Locale::default(), &vis()).unwrap().name, "First");
+        assert_eq!(
+            parse_desktop_entry("x", t, &Locale::default(), &vis())
+                .unwrap()
+                .name,
+            "First"
+        );
     }
 
     #[test]
     fn indexing_shadows_by_id_and_joins_subdirectories() {
         let user = tempfile::tempdir().unwrap();
         let sys = tempfile::tempdir().unwrap();
-        let entry = |name: &str| format!("[Desktop Entry]\nType=Application\nName={name}\nExec=x\n");
+        let entry =
+            |name: &str| format!("[Desktop Entry]\nType=Application\nName={name}\nExec=x\n");
         std::fs::write(user.path().join("a.desktop"), entry("User A")).unwrap();
         std::fs::write(sys.path().join("a.desktop"), entry("System A")).unwrap();
         std::fs::write(sys.path().join("b.desktop"), entry("System B")).unwrap();
@@ -454,10 +599,21 @@ mod tests {
         let mut hidden_user = entry("Hidden shadow");
         hidden_user.push_str("NoDisplay=true\n");
         std::fs::write(user.path().join("b.desktop"), hidden_user).unwrap();
-        let entries = index_dirs(&[user.path().to_path_buf(), sys.path().to_path_buf()], &Locale::default(), &vis());
-        let mut names: Vec<_> = entries.iter().map(|e| (e.id.as_str(), e.name.as_str())).collect();
+        let entries = index_dirs(
+            &[user.path().to_path_buf(), sys.path().to_path_buf()],
+            &Locale::default(),
+            &vis(),
+        );
+        let mut names: Vec<_> = entries
+            .iter()
+            .map(|e| (e.id.as_str(), e.name.as_str()))
+            .collect();
         names.sort();
-        assert_eq!(names, vec![("a.desktop", "User A"), ("vendor-c.desktop", "Vendor C")], "b.desktop is hidden by the user's override");
+        assert_eq!(
+            names,
+            vec![("a.desktop", "User A"), ("vendor-c.desktop", "Vendor C")],
+            "b.desktop is hidden by the user's override"
+        );
         assert!(entries[0].source.is_some());
     }
 

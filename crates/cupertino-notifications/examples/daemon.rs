@@ -19,9 +19,19 @@ fn main() -> zbus::Result<()> {
             if c.revision() != last_revision {
                 last_revision = c.revision();
                 for n in c.history() {
-                    eprintln!("[{}] {}: {} — {}", n.id, n.app_name, n.summary, n.body_text());
+                    eprintln!(
+                        "[{}] {}: {} — {}",
+                        n.id,
+                        n.app_name,
+                        n.summary,
+                        n.body_text()
+                    );
                 }
-                eprintln!("{} banner(s) visible, {} queued", c.visible_count(), c.queued_count());
+                eprintln!(
+                    "{} banner(s) visible, {} queued",
+                    c.visible_count(),
+                    c.queued_count()
+                );
             }
         }
         server.flush_events()?;

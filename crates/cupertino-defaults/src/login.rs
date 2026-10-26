@@ -65,13 +65,16 @@ pub type Problem = (usize, String);
 impl LoginConfig {
     /// The settings file: [`LOGIN_CONF_ENV`] when set and not empty, else [`LOGIN_CONF_PATH`].
     pub fn path() -> PathBuf {
-        std::env::var_os(LOGIN_CONF_ENV).filter(|p| !p.is_empty()).map_or_else(|| PathBuf::from(LOGIN_CONF_PATH), PathBuf::from)
+        std::env::var_os(LOGIN_CONF_ENV)
+            .filter(|p| !p.is_empty())
+            .map_or_else(|| PathBuf::from(LOGIN_CONF_PATH), PathBuf::from)
     }
 
     /// Read and parse the settings file; every problem comes back, in the order of the file.
     pub fn load() -> Result<Self, Vec<Problem>> {
         let path = Self::path();
-        let text = std::fs::read_to_string(&path).map_err(|e| vec![(0, format!("{}: {e}", path.display()))])?;
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| vec![(0, format!("{}: {e}", path.display()))])?;
         Self::parse(&text)
     }
 
@@ -108,7 +111,10 @@ impl LoginConfig {
                 problems.push((i + 1, message));
             }
         }
-        for (key, command) in [("greeter-command", &config.greeter_command), ("session-command", &config.session_command)] {
+        for (key, command) in [
+            ("greeter-command", &config.greeter_command),
+            ("session-command", &config.session_command),
+        ] {
             if command.is_empty() {
                 problems.push((0, format!("{key} is required")));
             }
@@ -123,7 +129,9 @@ impl LoginConfig {
     fn apply(&mut self, key: &str, value: &str) -> Result<(), String> {
         match key {
             "vt" => {
-                let vt: u32 = value.parse().map_err(|_| format!("{key}: expected a number, got {value:?}"))?;
+                let vt: u32 = value
+                    .parse()
+                    .map_err(|_| format!("{key}: expected a number, got {value:?}"))?;
                 if !(1..=MAX_VT).contains(&vt) {
                     return Err(format!("{key}: expected 1 to {MAX_VT}, got {vt}"));
                 }
@@ -142,7 +150,11 @@ impl LoginConfig {
             "shut-down-disabled" => self.shut_down_disabled = Some(flag(key, value)?),
             "sleep-disabled" => self.sleep_disabled = Some(flag(key, value)?),
             "power-off-disabled" => self.power_off_disabled = Some(flag(key, value)?),
-            "retries-until-hint" => self.retries_until_hint = value.parse().map_err(|_| format!("{key}: expected a number of failed attempts, got {value:?}"))?,
+            "retries-until-hint" => {
+                self.retries_until_hint = value.parse().map_err(|_| {
+                    format!("{key}: expected a number of failed attempts, got {value:?}")
+                })?
+            }
             other => return Err(format!("unknown setting {other:?}")),
         }
         Ok(())
@@ -171,8 +183,13 @@ fn names(key: &str, value: &str) -> Result<Vec<String>, String> {
         return Ok(Vec::new());
     }
     let names: Vec<String> = value.split(',').map(str::to_owned).collect();
-    if names.iter().any(|name| name.is_empty() || name.contains(char::is_whitespace)) {
-        return Err(format!("{key}: expected account names separated by commas, got {value:?}"));
+    if names
+        .iter()
+        .any(|name| name.is_empty() || name.contains(char::is_whitespace))
+    {
+        return Err(format!(
+            "{key}: expected account names separated by commas, got {value:?}"
+        ));
     }
     Ok(names)
 }
@@ -182,7 +199,9 @@ fn command(key: &str, value: &str) -> Result<Vec<String>, String> {
     let words: Vec<String> = value.split_whitespace().map(str::to_owned).collect();
     match words.first() {
         Some(program) if program.starts_with('/') => Ok(words),
-        _ => Err(format!("{key}: expected an absolute program path and arguments, got {value:?}")),
+        _ => Err(format!(
+            "{key}: expected an absolute program path and arguments, got {value:?}"
+        )),
     }
 }
 
@@ -190,14 +209,25 @@ fn command(key: &str, value: &str) -> Result<Vec<String>, String> {
 mod tests {
     use super::*;
 
-    const REQUIRED: &str = "greeter-command = /usr/local/bin/greeter --a\nsession-command = /usr/local/bin/session\n";
+    const REQUIRED: &str =
+        "greeter-command = /usr/local/bin/greeter --a\nsession-command = /usr/local/bin/session\n";
 
     #[test]
     fn the_required_commands_alone_give_the_defaults() {
         let config = LoginConfig::parse(REQUIRED).unwrap();
-        assert_eq!((config.vt, config.greeter_user.as_str()), (1, "cupertino-greeter"));
+        assert_eq!(
+            (config.vt, config.greeter_user.as_str()),
+            (1, "cupertino-greeter")
+        );
         assert_eq!(config.greeter_command, ["/usr/local/bin/greeter", "--a"]);
-        assert_eq!((config.allow_list, config.show_other_users, config.hide_admin_users), (None, None, false));
+        assert_eq!(
+            (
+                config.allow_list,
+                config.show_other_users,
+                config.hide_admin_users
+            ),
+            (None, None, false)
+        );
     }
 
     #[test]
@@ -208,22 +238,42 @@ mod tests {
         assert_eq!(config.hidden_users, ["mallory", "eve"]);
         assert_eq!(config.allow_list, Some(Vec::new()));
         assert!(config.hide_admin_users);
-        assert_eq!((config.sleep_disabled, config.restart_disabled, config.retries_until_hint), (Some(false), None, 3));
+        assert_eq!(
+            (
+                config.sleep_disabled,
+                config.restart_disabled,
+                config.retries_until_hint
+            ),
+            (Some(false), None, 3)
+        );
     }
 
     #[test]
     fn auto_login_is_off_unless_the_file_names_one_account() {
         assert_eq!(LoginConfig::parse(REQUIRED).unwrap().auto_login, None);
-        assert_eq!(LoginConfig::parse(&format!("{REQUIRED}auto-login = alice\n")).unwrap().auto_login.as_deref(), Some("alice"));
-        let problems = LoginConfig::parse(&format!("{REQUIRED}auto-login =\nauto-login = a b\n")).unwrap_err();
-        assert_eq!(problems.iter().map(|(line, _)| *line).collect::<Vec<_>>(), [3, 4]);
+        assert_eq!(
+            LoginConfig::parse(&format!("{REQUIRED}auto-login = alice\n"))
+                .unwrap()
+                .auto_login
+                .as_deref(),
+            Some("alice")
+        );
+        let problems =
+            LoginConfig::parse(&format!("{REQUIRED}auto-login =\nauto-login = a b\n")).unwrap_err();
+        assert_eq!(
+            problems.iter().map(|(line, _)| *line).collect::<Vec<_>>(),
+            [3, 4]
+        );
     }
 
     #[test]
     fn every_bad_line_is_reported_by_number_and_a_missing_command_is_line_zero() {
         let text = "vt = 0\nvt = 64\nbogus = 1\nhide-admin-users = yes\nhidden-users = a,,b\nsession-command = relative/path\nno equals sign\n";
         let problems = LoginConfig::parse(text).unwrap_err();
-        assert_eq!(problems.iter().map(|(line, _)| *line).collect::<Vec<_>>(), [1, 2, 3, 4, 5, 6, 7, 0, 0]);
+        assert_eq!(
+            problems.iter().map(|(line, _)| *line).collect::<Vec<_>>(),
+            [1, 2, 3, 4, 5, 6, 7, 0, 0]
+        );
         assert_eq!(problems[7].1, "greeter-command is required");
     }
 }

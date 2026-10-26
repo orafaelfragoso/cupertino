@@ -89,7 +89,9 @@ impl ScrollCounter {
             ScrollPhase::Changed => {
                 if self.count != 0 {
                     if self.count > 2 {
-                        self.count = ((speed_squared.sqrt() / SPEED_DIVISOR + f64::from(self.count)) as u32).min(MAX_COUNT);
+                        self.count =
+                            ((speed_squared.sqrt() / SPEED_DIVISOR + f64::from(self.count)) as u32)
+                                .min(MAX_COUNT);
                     }
                     if speed_squared > SUSTAIN_SPEED_SQUARED {
                         self.active_ms = ms;
@@ -122,7 +124,12 @@ mod tests {
 
     /// A gesture of `events` fast vertical events of `y` points, 8 ms apart, from `start_ms`; returns
     /// the counts after its begin, its last change and its end, and the time of the end.
-    fn flick(counter: &mut ScrollCounter, start_ms: f64, y: f64, events: usize) -> (u32, u32, u32, f64) {
+    fn flick(
+        counter: &mut ScrollCounter,
+        start_ms: f64,
+        y: f64,
+        events: usize,
+    ) -> (u32, u32, u32, f64) {
         let began = counter.update(ScrollPhase::Began, 0.0, y, start_ms);
         let mut changed = began;
         let mut ms = start_ms;
@@ -160,7 +167,10 @@ mod tests {
     fn a_flick_after_the_gesture_gap_ends_the_series() {
         let mut counter = ScrollCounter::default();
         let (_, _, _, end) = flick(&mut counter, 0.0, 30.0, 3);
-        assert_eq!(counter.update(ScrollPhase::Began, 0.0, 30.0, end + 600.0), 0);
+        assert_eq!(
+            counter.update(ScrollPhase::Began, 0.0, 30.0, end + 600.0),
+            0
+        );
     }
 
     #[test]
@@ -169,9 +179,18 @@ mod tests {
         let (_, _, _, end) = flick(&mut counter, 0.0, 30.0, 3);
         let (_, _, _, end) = flick(&mut counter, end + 100.0, 30.0, 3);
         // the third flick begins at 3, then adds 50 / 2.5 = 20 per event
-        assert_eq!(counter.update(ScrollPhase::Began, 0.0, 50.0, end + 100.0), 3);
-        assert_eq!(counter.update(ScrollPhase::Changed, 0.0, 50.0, end + 108.0), 23);
-        assert_eq!(counter.update(ScrollPhase::Changed, 0.0, 50.0, end + 116.0), 43);
+        assert_eq!(
+            counter.update(ScrollPhase::Began, 0.0, 50.0, end + 100.0),
+            3
+        );
+        assert_eq!(
+            counter.update(ScrollPhase::Changed, 0.0, 50.0, end + 108.0),
+            23
+        );
+        assert_eq!(
+            counter.update(ScrollPhase::Changed, 0.0, 50.0, end + 116.0),
+            43
+        );
     }
 
     #[test]
@@ -180,21 +199,30 @@ mod tests {
         let (_, _, _, end) = flick(&mut counter, 0.0, 30.0, 3);
         let (_, _, _, end) = flick(&mut counter, end + 100.0, 30.0, 3);
         counter.update(ScrollPhase::Began, 0.0, 10000.0, end + 100.0);
-        assert_eq!(counter.update(ScrollPhase::Changed, 0.0, 10000.0, end + 108.0), MAX_COUNT);
+        assert_eq!(
+            counter.update(ScrollPhase::Changed, 0.0, 10000.0, end + 108.0),
+            MAX_COUNT
+        );
     }
 
     #[test]
     fn a_direction_flip_ends_the_series() {
         let mut counter = ScrollCounter::default();
         let (_, _, _, end) = flick(&mut counter, 0.0, 30.0, 3);
-        assert_eq!(counter.update(ScrollPhase::Began, 0.0, -30.0, end + 100.0), 0);
+        assert_eq!(
+            counter.update(ScrollPhase::Began, 0.0, -30.0, end + 100.0),
+            0
+        );
     }
 
     #[test]
     fn a_horizontal_scroll_does_not_flip_the_direction() {
         let mut counter = ScrollCounter::default();
         let (_, _, _, end) = flick(&mut counter, 0.0, 30.0, 3);
-        assert_eq!(counter.update(ScrollPhase::Began, -40.0, 0.0, end + 100.0), 2);
+        assert_eq!(
+            counter.update(ScrollPhase::Began, -40.0, 0.0, end + 100.0),
+            2
+        );
     }
 
     #[test]

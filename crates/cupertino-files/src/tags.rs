@@ -25,7 +25,15 @@ pub enum TagColor {
 }
 
 impl TagColor {
-    pub const ALL: [TagColor; 7] = [TagColor::Gray, TagColor::Green, TagColor::Purple, TagColor::Blue, TagColor::Yellow, TagColor::Red, TagColor::Orange];
+    pub const ALL: [TagColor; 7] = [
+        TagColor::Gray,
+        TagColor::Green,
+        TagColor::Purple,
+        TagColor::Blue,
+        TagColor::Yellow,
+        TagColor::Red,
+        TagColor::Orange,
+    ];
 
     pub fn from_index(i: u32) -> Option<Self> {
         Self::ALL.iter().copied().find(|c| *c as u32 == i)
@@ -58,7 +66,10 @@ impl TagColor {
     }
 
     pub fn from_title(name: &str) -> Option<Self> {
-        Self::ALL.iter().copied().find(|c| c.title().eq_ignore_ascii_case(name))
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|c| c.title().eq_ignore_ascii_case(name))
     }
 }
 
@@ -76,19 +87,36 @@ pub struct TagRegistry {
 
 impl TagRegistry {
     pub fn color_of(&self, name: &str) -> Option<TagColor> {
-        self.colors.get(name).copied().or_else(|| TagColor::from_title(name))
+        self.colors
+            .get(name)
+            .copied()
+            .or_else(|| TagColor::from_title(name))
     }
     pub fn resolve(&self, names: &[String]) -> Vec<Tag> {
-        names.iter().map(|n| Tag { name: n.clone(), color: self.color_of(n) }).collect()
+        names
+            .iter()
+            .map(|n| Tag {
+                name: n.clone(),
+                color: self.color_of(n),
+            })
+            .collect()
     }
 }
 
 pub fn parse_tag_list(value: &[u8]) -> Vec<String> {
-    String::from_utf8_lossy(value).split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect()
+    String::from_utf8_lossy(value)
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 pub fn format_tag_list(tags: &[String]) -> String {
-    tags.iter().map(|t| t.replace(',', " ")).collect::<Vec<_>>().join(",")
+    tags.iter()
+        .map(|t| t.replace(',', " "))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Read the tags of `path`; an absent attribute gives an empty list.
@@ -173,13 +201,20 @@ pub fn parse_reference_tags(data: &[u8]) -> Option<Vec<Tag>> {
             }
             0x6 => {
                 let (n, s) = read_len(pos, mk & 0xF)?;
-                let units: Vec<u16> = data.get(s..s + 2 * n)?.chunks(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+                let units: Vec<u16> = data
+                    .get(s..s + 2 * n)?
+                    .chunks(2)
+                    .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                    .collect();
                 String::from_utf16_lossy(&units)
             }
             _ => return None,
         };
         let (name, color) = match text.rsplit_once('\n') {
-            Some((n, c)) => (n.to_string(), c.parse::<u32>().ok().and_then(TagColor::from_index)),
+            Some((n, c)) => (
+                n.to_string(),
+                c.parse::<u32>().ok().and_then(TagColor::from_index),
+            ),
             None => (text, None),
         };
         out.push(Tag { name, color });
@@ -220,7 +255,13 @@ mod tests {
 
     #[test]
     fn xattr_roundtrip_when_supported() {
-        let dir = tempfile::Builder::new().prefix("tags").tempdir_in(std::env::var("CARGO_TARGET_TMPDIR").unwrap_or_else(|_| env!("CARGO_MANIFEST_DIR").to_string())).unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix("tags")
+            .tempdir_in(
+                std::env::var("CARGO_TARGET_TMPDIR")
+                    .unwrap_or_else(|_| env!("CARGO_MANIFEST_DIR").to_string()),
+            )
+            .unwrap();
         let p = dir.path().join("f");
         std::fs::write(&p, b"x").unwrap();
         match write_tags(&p, &["Red".into(), "Home".into()]) {
@@ -258,6 +299,18 @@ mod tests {
         trailer[31] = table as u8;
         d.extend(trailer);
         let tags = parse_reference_tags(&d).unwrap();
-        assert_eq!(tags, vec![Tag { name: "Red".into(), color: Some(TagColor::Red) }, Tag { name: "Home".into(), color: None }]);
+        assert_eq!(
+            tags,
+            vec![
+                Tag {
+                    name: "Red".into(),
+                    color: Some(TagColor::Red)
+                },
+                Tag {
+                    name: "Home".into(),
+                    color: None
+                }
+            ]
+        );
     }
 }

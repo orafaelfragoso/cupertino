@@ -4,15 +4,25 @@
 
 use cupertino_alsa::DEVICE_DIR;
 use cupertino_assets::Assets;
-use cupertino_client::{key, Anchor, Backdrop, Button, Client, DisplayOptions, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig, Margin, OutputId, PointerEvent, SurfaceId};
-use cupertino_controlcenter::backend::{AlsaVolume, MemoryBattery, MemoryBluetooth, MemoryBrightness, MemoryFocusMode, MemoryVolume, MemoryWifi, RecordingOverlay};
+use cupertino_client::{
+    key, Anchor, Backdrop, Button, Client, DisplayOptions, Event, KeyboardInteractivity, Layer,
+    LayerSurfaceConfig, Margin, OutputId, PointerEvent, SurfaceId,
+};
+use cupertino_controlcenter::backend::{
+    AlsaVolume, MemoryBattery, MemoryBluetooth, MemoryBrightness, MemoryFocusMode, MemoryVolume,
+    MemoryWifi, RecordingOverlay,
+};
 use cupertino_controlcenter::control;
 use cupertino_controlcenter::controller::{Backends, Controller};
-use cupertino_controlcenter::layout::{fraction_at, Hit, Layout, CARD_RADIUS, EDGE_MARGIN, SHADOW_INSETS};
+use cupertino_controlcenter::layout::{
+    fraction_at, Hit, Layout, CARD_RADIUS, EDGE_MARGIN, SHADOW_INSETS,
+};
 use cupertino_controlcenter::lifecycle::Phase;
 use cupertino_controlcenter::model::{Battery, Controls, Slider, VolumeState, WifiStatus};
 use cupertino_controlcenter::render::{card_origin, surface_size, Palette, Renderer, MATERIAL};
-use cupertino_controlcenter::system::{BtdBluetooth, NetdWifi, NotificationFocusMode, PowerdBattery, PowerdBrightness, SessionOverlay};
+use cupertino_controlcenter::system::{
+    BtdBluetooth, NetdWifi, NotificationFocusMode, PowerdBattery, PowerdBrightness, SessionOverlay,
+};
 use cupertino_geometry::{Point, Rect};
 use cupertino_theme::{Appearance, Theme};
 use std::error::Error;
@@ -26,7 +36,6 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 /// Role of the surfaces for the server (`wlr-layer-shell` namespace).
 const NAMESPACE: &str = "cupertino-controlcenter";
-
 
 /// Readings of the in-memory backends of `--fake-backends` (arbitrary, for trying the panel).
 const FAKE_NETWORK: &str = "Home Network";
@@ -45,14 +54,20 @@ pub struct Options {
 impl Options {
     /// Parse the arguments; the problem is returned as the error.
     pub fn parse(args: impl Iterator<Item = String>) -> std::result::Result<Self, String> {
-        let mut options = Options { fake_backends: false, alsa_card: None };
+        let mut options = Options {
+            fake_backends: false,
+            alsa_card: None,
+        };
         let mut args = args;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--fake-backends" => options.fake_backends = true,
                 "--alsa-card" => {
                     let card = args.next().ok_or("--alsa-card needs a card number")?;
-                    options.alsa_card = Some(card.parse().map_err(|_| format!("{card:?} is not a card number"))?);
+                    options.alsa_card = Some(
+                        card.parse()
+                            .map_err(|_| format!("{card:?} is not a card number"))?,
+                    );
                 }
                 _ => return Err(format!("unknown argument {arg}")),
             }
@@ -87,18 +102,32 @@ struct App {
 
 /// The first output the server has described.
 fn first_output(client: &Client) -> Result<OutputId> {
-    Ok(client.outputs().into_iter().find(|o| o.geometry.is_some()).ok_or("the server has no output")?.id)
+    Ok(client
+        .outputs()
+        .into_iter()
+        .find(|o| o.geometry.is_some())
+        .ok_or("the server has no output")?
+        .id)
 }
 
 fn backends(options: &Options) -> Backends {
     if options.fake_backends {
         return Backends {
-            wifi: Box::new(MemoryWifi(WifiStatus { enabled: true, network: Some(FAKE_NETWORK.to_string()) })),
+            wifi: Box::new(MemoryWifi(WifiStatus {
+                enabled: true,
+                network: Some(FAKE_NETWORK.to_string()),
+            })),
             bluetooth: Box::new(MemoryBluetooth(false)),
             focus_mode: Box::new(MemoryFocusMode(false)),
             brightness: Box::new(MemoryBrightness(FAKE_BRIGHTNESS)),
-            volume: Box::new(MemoryVolume(VolumeState { level: FAKE_VOLUME, muted: false })),
-            battery: Box::new(MemoryBattery(Some(Battery { percent: FAKE_BATTERY_PERCENT, charging: false }))),
+            volume: Box::new(MemoryVolume(VolumeState {
+                level: FAKE_VOLUME,
+                muted: false,
+            })),
+            battery: Box::new(MemoryBattery(Some(Battery {
+                percent: FAKE_BATTERY_PERCENT,
+                charging: false,
+            }))),
             overlay: Box::new(RecordingOverlay::default()),
         };
     }
@@ -107,16 +136,28 @@ fn backends(options: &Options) -> Backends {
         bluetooth: Box::new(BtdBluetooth::new()),
         focus_mode: Box::new(NotificationFocusMode::new()),
         brightness: Box::new(PowerdBrightness::new()),
-        volume: Box::new(AlsaVolume::new(PathBuf::from(DEVICE_DIR), options.alsa_card)),
+        volume: Box::new(AlsaVolume::new(
+            PathBuf::from(DEVICE_DIR),
+            options.alsa_card,
+        )),
         battery: Box::new(PowerdBattery::new()),
         overlay: Box::new(SessionOverlay::new()),
     }
 }
 
 /// The renderer for the session's appearance, in its high-contrast catalog under Increase Contrast.
-fn panel_renderer(theme: &Theme, assets: &Assets, dark: bool, options: DisplayOptions) -> Result<Renderer> {
+fn panel_renderer(
+    theme: &Theme,
+    assets: &Assets,
+    dark: bool,
+    options: DisplayOptions,
+) -> Result<Renderer> {
     let appearance = Appearance::of_session(dark, options.increase_contrast);
-    Ok(Renderer::new(Palette::from_theme(theme, appearance)?, theme.tokens.typography().clone(), assets)?)
+    Ok(Renderer::new(
+        Palette::from_theme(theme, appearance)?,
+        theme.tokens.typography().clone(),
+        assets,
+    )?)
 }
 
 /// Connect, claim the bus name and serve until the connection or the bus fails.
@@ -130,7 +171,11 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     // the bus thread only queues; the loop below carries the toggles out, so the effects never block the bus
     let sender = Mutex::new(sender);
     let _control = control::serve(zbus::connection::Builder::session()?, move || {
-        sender.lock().expect("the sender lock is never poisoned").send(()).expect("the receiver lives as long as the process");
+        sender
+            .lock()
+            .expect("the sender lock is never poisoned")
+            .send(())
+            .expect("the receiver lives as long as the process");
         waker.wake();
     })
     .map_err(|e| match e {
@@ -149,7 +194,8 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         anchor: Anchor::Top | Anchor::Right,
         size: (width, height),
         margin: Margin {
-            top: theme.shapes.menu_bar_height.ceil() as i32 + EDGE_MARGIN - SHADOW_INSETS.top as i32,
+            top: theme.shapes.menu_bar_height.ceil() as i32 + EDGE_MARGIN
+                - SHADOW_INSETS.top as i32,
             right: EDGE_MARGIN - SHADOW_INSETS.right as i32,
             ..Margin::default()
         },
@@ -174,7 +220,10 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         backdrop: None,
     };
     loop {
-        let timeout = app.controller.next_wakeup(app.now()).map(Duration::from_secs_f64);
+        let timeout = app
+            .controller
+            .next_wakeup(app.now())
+            .map(Duration::from_secs_f64);
         for event in app.client.wait(timeout)? {
             app.handle(event)?;
         }
@@ -198,10 +247,22 @@ impl App {
             Event::Closed(_) => return Err("the server closed a control panel surface".into()),
             Event::Pointer { surface, event } if surface == self.surface => self.pointer(event)?,
             // a left or right press outside the card dismisses it (global mouse monitor mask 0xa)
-            Event::Pointer { surface, event: PointerEvent::Button { pressed: true, button: Button::Left | Button::Right, .. } } if Some(surface) == self.catcher => self.controller.dismiss(self.now()),
+            Event::Pointer {
+                surface,
+                event:
+                    PointerEvent::Button {
+                        pressed: true,
+                        button: Button::Left | Button::Right,
+                        ..
+                    },
+            } if Some(surface) == self.catcher => self.controller.dismiss(self.now()),
             Event::Pointer { .. } => {}
             // Escape is not in the design; it is added (approximate)
-            Event::Key { key: key::ESCAPE, pressed: true, .. } => self.controller.dismiss(self.now()),
+            Event::Key {
+                key: key::ESCAPE,
+                pressed: true,
+                ..
+            } => self.controller.dismiss(self.now()),
             Event::Key { .. } => {}
             // the design dismisses when the panel resigns the key window (observer)
             Event::KeyboardLeave(_) => self.controller.dismiss(self.now()),
@@ -211,14 +272,22 @@ impl App {
                 }
             }
             Event::Appearance { .. } | Event::DisplayOptions(_) => {
-                self.renderer = panel_renderer(&self.theme, &self.assets, self.client.is_dark(), self.client.display_options())?;
+                self.renderer = panel_renderer(
+                    &self.theme,
+                    &self.assets,
+                    self.client.is_dark(),
+                    self.client.display_options(),
+                )?;
                 self.client.request_redraw(self.surface)?;
             }
             // the server draws the lock screen: only the shown panel has to go
             Event::SessionLock { locked: true } => self.controller.dismiss(self.now()),
             Event::SessionLock { locked: false } => {}
             // the surfaces have no activation, popups or menu-bar role
-            Event::ActivationToken { .. } | Event::PopupDone(_) | Event::MenuBar { .. } | Event::Dock { .. } => {}
+            Event::ActivationToken { .. }
+            | Event::PopupDone(_)
+            | Event::MenuBar { .. }
+            | Event::Dock { .. } => {}
         }
         Ok(())
     }
@@ -232,7 +301,11 @@ impl App {
         let origin = card_origin();
         let card = |p: Point| Point::new(p.x - origin.x, p.y - origin.y);
         match event {
-            PointerEvent::Button { button: Button::Left, pressed: true, position } => match self.layout.hit(card(position)) {
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: true,
+                position,
+            } => match self.layout.hit(card(position)) {
                 Hit::Toggle(module) => {
                     if self.controller.press(module) {
                         self.client.request_redraw(self.surface)?;
@@ -252,13 +325,20 @@ impl App {
                     self.client.request_redraw(self.surface)?;
                 }
             }
-            PointerEvent::Button { button: Button::Left, pressed: false, .. } => {
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: false,
+                ..
+            } => {
                 if self.drag.take().is_some() {
                     self.controller.release(now);
                     self.client.request_redraw(self.surface)?;
                 }
             }
-            PointerEvent::Enter(_) | PointerEvent::Leave | PointerEvent::Button { .. } | PointerEvent::Scroll { .. } => {}
+            PointerEvent::Enter(_)
+            | PointerEvent::Leave
+            | PointerEvent::Button { .. }
+            | PointerEvent::Scroll { .. } => {}
         }
         Ok(())
     }
@@ -299,12 +379,14 @@ impl App {
                 exclusive_zone: -1,
                 keyboard: KeyboardInteractivity::None,
             })?);
-            self.client.set_keyboard_interactivity(self.surface, KeyboardInteractivity::Exclusive)?;
+            self.client
+                .set_keyboard_interactivity(self.surface, KeyboardInteractivity::Exclusive)?;
         } else {
             if let Some(catcher) = self.catcher.take() {
                 self.client.destroy_surface(catcher)?;
             }
-            self.client.set_keyboard_interactivity(self.surface, KeyboardInteractivity::None)?;
+            self.client
+                .set_keyboard_interactivity(self.surface, KeyboardInteractivity::None)?;
         }
         self.client.request_redraw(self.surface)?;
         Ok(())
@@ -335,12 +417,19 @@ impl App {
         backdrop.set_shape(&card, CARD_RADIUS)?;
         backdrop.set_alpha(opacity)?;
         // the card takes input while shown; a press outside it reaches the catcher
-        let region = if phase == Phase::Shown { vec![card] } else { Vec::new() };
+        let region = if phase == Phase::Shown {
+            vec![card]
+        } else {
+            Vec::new()
+        };
         self.client.set_input_region(self.surface, &region)?;
         let renderer = &mut self.renderer;
         self.client.draw(self.surface, |pixmap, scale| {
             let rendered = renderer.render(&controls, scale.factor());
-            let paint = PixmapPaint { opacity: opacity as f32, ..PixmapPaint::default() };
+            let paint = PixmapPaint {
+                opacity: opacity as f32,
+                ..PixmapPaint::default()
+            };
             pixmap.draw_pixmap(0, 0, rendered.as_ref(), &paint, Transform::identity(), None);
         })?;
         self.drawn = Some(controls);

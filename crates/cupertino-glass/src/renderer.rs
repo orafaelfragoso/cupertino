@@ -46,7 +46,13 @@ pub struct MaterialRegion<'a> {
 impl<'a> MaterialRegion<'a> {
     /// Region without rounded corners and full opacity.
     pub fn new(rect: [f32; 4], recipe: &'a Recipe) -> Self {
-        Self { rect, recipe, corner_radius: 0.0, corner_style: CornerStyle::Circular, opacity: 1.0 }
+        Self {
+            rect,
+            recipe,
+            corner_radius: 0.0,
+            corner_style: CornerStyle::Circular,
+            opacity: 1.0,
+        }
     }
 
     /// Region that takes its corner radius (points → pixels with `display_scale`) and curve from the
@@ -82,7 +88,12 @@ impl<'a> MaterialRegion<'a> {
 
     pub fn rounded_rect(&self) -> RoundedRect {
         RoundedRect::new(
-            Rect::new(self.rect[0] as f64, self.rect[1] as f64, self.rect[2] as f64, self.rect[3] as f64),
+            Rect::new(
+                self.rect[0] as f64,
+                self.rect[1] as f64,
+                self.rect[2] as f64,
+                self.rect[3] as f64,
+            ),
             self.corner_radius.max(0.0) as f64,
             self.corner_style,
         )
@@ -196,7 +207,12 @@ fn bgl_sampler(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-fn bgl_uniform(binding: u32, vis: wgpu::ShaderStages, dynamic: bool, size: usize) -> wgpu::BindGroupLayoutEntry {
+fn bgl_uniform(
+    binding: u32,
+    vis: wgpu::ShaderStages,
+    dynamic: bool,
+    size: usize,
+) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: vis,
@@ -217,25 +233,63 @@ impl MaterialRenderer {
     /// Create pipelines on an external device. `target_format` is the colour format of the
     /// textures later passed as [`FrameDesc::target`] (use a non-sRGB format: blending operates on
     /// gamma-encoded values).
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
-        let passes = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("glass-passes"), source: wgpu::ShaderSource::Wgsl(PASS_SHADER.into()) });
-        let material = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("glass-material"), source: wgpu::ShaderSource::Wgsl(MATERIAL_SHADER.into()) });
-        let vibrant = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("glass-vibrant"), source: wgpu::ShaderSource::Wgsl(VIBRANT_SHADER.into()) });
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target_format: wgpu::TextureFormat,
+    ) -> Self {
+        let passes = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("glass-passes"),
+            source: wgpu::ShaderSource::Wgsl(PASS_SHADER.into()),
+        });
+        let material = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("glass-material"),
+            source: wgpu::ShaderSource::Wgsl(MATERIAL_SHADER.into()),
+        });
+        let vibrant = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("glass-vibrant"),
+            source: wgpu::ShaderSource::Wgsl(VIBRANT_SHADER.into()),
+        });
 
         let both = wgpu::ShaderStages::VERTEX_FRAGMENT;
         let layout_pass = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("glass-pass-layout"),
-            entries: &[bgl_uniform(0, wgpu::ShaderStages::FRAGMENT, false, std::mem::size_of::<PassParams>()), bgl_texture(1), bgl_sampler(2)],
+            entries: &[
+                bgl_uniform(
+                    0,
+                    wgpu::ShaderStages::FRAGMENT,
+                    false,
+                    std::mem::size_of::<PassParams>(),
+                ),
+                bgl_texture(1),
+                bgl_sampler(2),
+            ],
         });
         let layout_region = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("glass-region-layout"),
-            entries: &[bgl_uniform(0, both, true, std::mem::size_of::<RegionParams>()), bgl_texture(1), bgl_texture(2), bgl_sampler(3)],
+            entries: &[
+                bgl_uniform(0, both, true, std::mem::size_of::<RegionParams>()),
+                bgl_texture(1),
+                bgl_texture(2),
+                bgl_sampler(3),
+            ],
         });
         let layout_vibrant = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("glass-vibrant-layout"),
-            entries: &[bgl_uniform(0, both, true, std::mem::size_of::<VibrantUniform>()), bgl_texture(1), bgl_texture(2), bgl_sampler(3)],
+            entries: &[
+                bgl_uniform(0, both, true, std::mem::size_of::<VibrantUniform>()),
+                bgl_texture(1),
+                bgl_texture(2),
+                bgl_sampler(3),
+            ],
         });
-        let pl = |label: &str, l: &wgpu::BindGroupLayout| device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some(label), bind_group_layouts: &[l], push_constant_ranges: &[] });
+        let pl = |label: &str, l: &wgpu::BindGroupLayout| {
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some(label),
+                bind_group_layouts: &[l],
+                push_constant_ranges: &[],
+            })
+        };
         let pl_pass = pl("glass-pass-pl", &layout_pass);
         let pl_region = pl("glass-region-pl", &layout_region);
         let pl_vibrant = pl("glass-vibrant-pl", &layout_vibrant);
@@ -251,15 +305,28 @@ impl MaterialRenderer {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(layout),
-                vertex: wgpu::VertexState { module, entry_point: Some(vs), compilation_options: Default::default(), buffers: &[] },
+                vertex: wgpu::VertexState {
+                    module,
+                    entry_point: Some(vs),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
                 fragment: Some(wgpu::FragmentState {
                     module,
                     entry_point: Some(fs),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
                 }),
                 primitive: wgpu::PrimitiveState {
-                    topology: if strip { wgpu::PrimitiveTopology::TriangleStrip } else { wgpu::PrimitiveTopology::TriangleList },
+                    topology: if strip {
+                        wgpu::PrimitiveTopology::TriangleStrip
+                    } else {
+                        wgpu::PrimitiveTopology::TriangleList
+                    },
                     ..Default::default()
                 },
                 depth_stencil: None,
@@ -269,15 +336,77 @@ impl MaterialRenderer {
             })
         };
         let over = wgpu::BlendState {
-            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
-            alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
         };
-        let pipe_downsample = make("glass-downsample", &pl_pass, &passes, "vs_fullscreen", "fs_downsample", BACKDROP_FORMAT, None, false);
-        let pipe_blur = make("glass-blur", &pl_pass, &passes, "vs_fullscreen", "fs_blur", BACKDROP_FORMAT, None, false);
-        let pipe_color = make("glass-color", &pl_pass, &passes, "vs_fullscreen", "fs_color", BACKDROP_FORMAT, None, false);
-        let pipe_blit = make("glass-blit", &pl_pass, &passes, "vs_fullscreen", "fs_blit", target_format, None, false);
-        let pipe_material = make("glass-material", &pl_region, &material, "vs_region", "fs_material", target_format, Some(over), true);
-        let pipe_vibrant = make("glass-vibrant", &pl_vibrant, &vibrant, "vs_vibrant", "fs_vibrant", target_format, None, true);
+        let pipe_downsample = make(
+            "glass-downsample",
+            &pl_pass,
+            &passes,
+            "vs_fullscreen",
+            "fs_downsample",
+            BACKDROP_FORMAT,
+            None,
+            false,
+        );
+        let pipe_blur = make(
+            "glass-blur",
+            &pl_pass,
+            &passes,
+            "vs_fullscreen",
+            "fs_blur",
+            BACKDROP_FORMAT,
+            None,
+            false,
+        );
+        let pipe_color = make(
+            "glass-color",
+            &pl_pass,
+            &passes,
+            "vs_fullscreen",
+            "fs_color",
+            BACKDROP_FORMAT,
+            None,
+            false,
+        );
+        let pipe_blit = make(
+            "glass-blit",
+            &pl_pass,
+            &passes,
+            "vs_fullscreen",
+            "fs_blit",
+            target_format,
+            None,
+            false,
+        );
+        let pipe_material = make(
+            "glass-material",
+            &pl_region,
+            &material,
+            "vs_region",
+            "fs_material",
+            target_format,
+            Some(over),
+            true,
+        );
+        let pipe_vibrant = make(
+            "glass-vibrant",
+            &pl_vibrant,
+            &vibrant,
+            "vs_vibrant",
+            "fs_vibrant",
+            target_format,
+            None,
+            true,
+        );
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("glass-sampler"),
@@ -287,7 +416,11 @@ impl MaterialRenderer {
         });
         let dummy = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("glass-dummy"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -296,10 +429,23 @@ impl MaterialRenderer {
             view_formats: &[],
         });
         queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &dummy, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: &dummy,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
             &[0u8; 8],
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(8), rows_per_image: None },
-            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(8),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
         );
         let dummy_backdrop = dummy.create_view(&Default::default());
 
@@ -342,13 +488,23 @@ impl MaterialRenderer {
         for o in color_ops(&b.ops) {
             ops.extend(o.a.iter().chain(o.b.iter()).map(|f| f.to_bits()));
         }
-        BackdropKey { src_size: frame.source_size, scale: b.scale.to_bits(), sigma: b.sigma_pt.to_bits(), display_scale: frame.display_scale.to_bits(), ops }
+        BackdropKey {
+            src_size: frame.source_size,
+            scale: b.scale.to_bits(),
+            sigma: b.sigma_pt.to_bits(),
+            display_scale: frame.display_scale.to_bits(),
+            ops,
+        }
     }
 
     fn texture(&self, w: u32, h: u32) -> wgpu::Texture {
         self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("glass-backdrop"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -358,15 +514,34 @@ impl MaterialRenderer {
         })
     }
 
-    fn pass_bind_group(&self, params: &PassParams, src: &wgpu::TextureView) -> (wgpu::BindGroup, wgpu::Buffer) {
-        let ub = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("glass-pass-params"), contents: bytemuck::bytes_of(params), usage: wgpu::BufferUsages::UNIFORM });
+    fn pass_bind_group(
+        &self,
+        params: &PassParams,
+        src: &wgpu::TextureView,
+    ) -> (wgpu::BindGroup, wgpu::Buffer) {
+        let ub = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("glass-pass-params"),
+                contents: bytemuck::bytes_of(params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
         let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("glass-pass-bg"),
             layout: &self.layout_pass,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: ub.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(src) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: ub.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(src),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
             ],
         });
         (bg, ub)
@@ -380,18 +555,38 @@ impl MaterialRenderer {
         let mut textures = Vec::new();
         let mut cur_view: Option<wgpu::TextureView> = None;
         let mut cur_size = (w, h);
-        let push = |this: &Self, kind: PassKind, params: PassParams, src: &wgpu::TextureView, size: (u32, u32), passes: &mut Vec<PassDesc>, textures: &mut Vec<wgpu::Texture>| -> wgpu::TextureView {
+        let push = |this: &Self,
+                    kind: PassKind,
+                    params: PassParams,
+                    src: &wgpu::TextureView,
+                    size: (u32, u32),
+                    passes: &mut Vec<PassDesc>,
+                    textures: &mut Vec<wgpu::Texture>|
+         -> wgpu::TextureView {
             let tex = this.texture(size.0, size.1);
             let view = tex.create_view(&Default::default());
             let (bind_group, uniform) = this.pass_bind_group(&params, src);
-            passes.push(PassDesc { pipeline: kind, bind_group, target: view.clone(), _uniform: uniform });
+            passes.push(PassDesc {
+                pipeline: kind,
+                bind_group,
+                target: view.clone(),
+                _uniform: uniform,
+            });
             textures.push(tex);
             view
         };
         for &(lw, lh) in &plan.levels {
             let params = PassParams::new(cur_size, (lw, lh));
             let src = cur_view.as_ref().unwrap_or(frame.source);
-            let v = push(self, PassKind::Downsample, params, src, (lw, lh), &mut passes, &mut textures);
+            let v = push(
+                self,
+                PassKind::Downsample,
+                params,
+                src,
+                (lw, lh),
+                &mut passes,
+                &mut textures,
+            );
             cur_view = Some(v);
             cur_size = (lw, lh);
         }
@@ -401,7 +596,15 @@ impl MaterialRenderer {
                 params.dir_radius = [dir[0], dir[1], (plan.weights.len() - 1) as i32, 0];
                 params.set_weights(&plan.weights);
                 let src = cur_view.as_ref().unwrap_or(frame.source);
-                let v = push(self, PassKind::Blur, params, src, cur_size, &mut passes, &mut textures);
+                let v = push(
+                    self,
+                    PassKind::Blur,
+                    params,
+                    src,
+                    cur_size,
+                    &mut passes,
+                    &mut textures,
+                );
                 cur_view = Some(v);
             }
         }
@@ -410,10 +613,24 @@ impl MaterialRenderer {
             let mut params = PassParams::new(cur_size, cur_size);
             params.set_ops(&cops);
             let src = cur_view.as_ref().unwrap_or(frame.source);
-            let v = push(self, PassKind::Color, params, src, cur_size, &mut passes, &mut textures);
+            let v = push(
+                self,
+                PassKind::Color,
+                params,
+                src,
+                cur_size,
+                &mut passes,
+                &mut textures,
+            );
             cur_view = Some(v);
         }
-        BackdropEntry { generation: frame.damage_generation, last_used: self.frame, passes, final_view: cur_view, _textures: textures }
+        BackdropEntry {
+            generation: frame.damage_generation,
+            last_used: self.frame,
+            passes,
+            final_view: cur_view,
+            _textures: textures,
+        }
     }
 
     fn encode_entry(&self, enc: &mut wgpu::CommandEncoder, entry: &BackdropEntry) {
@@ -423,7 +640,10 @@ impl MaterialRenderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &p.target,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
@@ -441,7 +661,12 @@ impl MaterialRenderer {
 
     /// Encode the work for one frame into `enc` (the caller submits). Backdrop passes are only
     /// encoded for cache misses.
-    pub fn render(&mut self, enc: &mut wgpu::CommandEncoder, frame: &FrameDesc, regions: &[MaterialRegion]) -> RenderStats {
+    pub fn render(
+        &mut self,
+        enc: &mut wgpu::CommandEncoder,
+        frame: &FrameDesc,
+        regions: &[MaterialRegion],
+    ) -> RenderStats {
         self.frame += 1;
         let mut stats = RenderStats::default();
 
@@ -452,7 +677,10 @@ impl MaterialRenderer {
                 continue;
             };
             let key = Self::key_for(frame, b);
-            let stale = self.cache.get(&key).is_none_or(|e| e.generation != frame.damage_generation);
+            let stale = self
+                .cache
+                .get(&key)
+                .is_none_or(|e| e.generation != frame.damage_generation);
             if stale {
                 let entry = self.build_entry(frame, b);
                 self.encode_entry(enc, &entry);
@@ -464,7 +692,9 @@ impl MaterialRenderer {
             }
             let e = self.cache.get_mut(&key).expect("entry exists");
             e.last_used = self.frame;
-            backdrop_views.push(Some(e.final_view.clone().unwrap_or_else(|| frame.source.clone())));
+            backdrop_views.push(Some(
+                e.final_view.clone().unwrap_or_else(|| frame.source.clone()),
+            ));
         }
         let frame_no = self.frame;
         self.cache.retain(|_, e| frame_no - e.last_used <= 120);
@@ -481,16 +711,42 @@ impl MaterialRenderer {
             let mut p: RegionParams = bytemuck::Zeroable::zeroed();
             p.rect = r.rect;
             p.shape = [extent, exponent, r.opacity.clamp(0.0, 1.0), 1.0];
-            p.info = [0.0, if r.recipe.backdrop.is_some() { 1.0 } else { 0.0 }, 0.0, 0.0];
-            p.sizes = [frame.target_size.0 as f32, frame.target_size.1 as f32, frame.source_size.0 as f32, frame.source_size.1 as f32];
-            p.tint = [frame.tint_color[0], frame.tint_color[1], frame.tint_color[2], 1.0];
+            p.info = [
+                0.0,
+                if r.recipe.backdrop.is_some() {
+                    1.0
+                } else {
+                    0.0
+                },
+                0.0,
+                0.0,
+            ];
+            p.sizes = [
+                frame.target_size.0 as f32,
+                frame.target_size.1 as f32,
+                frame.source_size.0 as f32,
+                frame.source_size.1 as f32,
+            ];
+            p.tint = [
+                frame.tint_color[0],
+                frame.tint_color[1],
+                frame.tint_color[2],
+                1.0,
+            ];
             let fills: Vec<Op> = fill_ops(r.recipe);
             debug_assert!(fills.len() <= MAX_FILLS);
             p.set_fills(&fills);
             let off = i * stride as usize;
-            data[off..off + std::mem::size_of::<RegionParams>()].copy_from_slice(bytemuck::bytes_of(&p));
+            data[off..off + std::mem::size_of::<RegionParams>()]
+                .copy_from_slice(bytemuck::bytes_of(&p));
         }
-        let region_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("glass-regions"), contents: &data, usage: wgpu::BufferUsages::UNIFORM });
+        let region_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("glass-regions"),
+                contents: &data,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
         let bind_groups: Vec<wgpu::BindGroup> = backdrop_views
             .iter()
             .map(|bv| {
@@ -500,11 +756,28 @@ impl MaterialRenderer {
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &region_buf, offset: 0, size: wgpu::BufferSize::new(std::mem::size_of::<RegionParams>() as u64) }),
+                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: &region_buf,
+                                offset: 0,
+                                size: wgpu::BufferSize::new(
+                                    std::mem::size_of::<RegionParams>() as u64
+                                ),
+                            }),
                         },
-                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(frame.source) },
-                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(bv.as_ref().unwrap_or(&self.dummy_backdrop)) },
-                        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(frame.source),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(
+                                bv.as_ref().unwrap_or(&self.dummy_backdrop),
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
                     ],
                 })
             })
@@ -512,7 +785,12 @@ impl MaterialRenderer {
 
         let blit = if frame.init == TargetInit::CopySource {
             let mut params = PassParams::new(frame.source_size, frame.target_size);
-            params.sizes = [frame.source_size.0 as i32, frame.source_size.1 as i32, frame.target_size.0 as i32, frame.target_size.1 as i32];
+            params.sizes = [
+                frame.source_size.0 as i32,
+                frame.source_size.1 as i32,
+                frame.target_size.0 as i32,
+                frame.target_size.1 as i32,
+            ];
             let (bg, ub) = self.pass_bind_group(&params, frame.source);
             Some((bg, ub))
         } else {
@@ -526,7 +804,11 @@ impl MaterialRenderer {
                     view: frame.target,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: if blit.is_some() { wgpu::LoadOp::Clear(wgpu::Color::BLACK) } else { wgpu::LoadOp::Load },
+                        load: if blit.is_some() {
+                            wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -553,7 +835,14 @@ impl MaterialRenderer {
     ///
     /// `backdrop` must hold a copy of the current target content (the shader reads the destination
     /// colour from it and overwrites the covered pixels of `target`).
-    pub fn draw_vibrant(&mut self, enc: &mut wgpu::CommandEncoder, backdrop: &wgpu::TextureView, target: &wgpu::TextureView, target_size: (u32, u32), draws: &[VibrantDraw]) {
+    pub fn draw_vibrant(
+        &mut self,
+        enc: &mut wgpu::CommandEncoder,
+        backdrop: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        target_size: (u32, u32),
+        draws: &[VibrantDraw],
+    ) {
         if draws.is_empty() {
             return;
         }
@@ -563,9 +852,16 @@ impl MaterialRenderer {
         for (i, d) in draws.iter().enumerate() {
             let u = d.uniform(target_size);
             let off = i * stride as usize;
-            data[off..off + std::mem::size_of::<VibrantUniform>()].copy_from_slice(bytemuck::bytes_of(&u));
+            data[off..off + std::mem::size_of::<VibrantUniform>()]
+                .copy_from_slice(bytemuck::bytes_of(&u));
         }
-        let buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("glass-vibrant-uniforms"), contents: &data, usage: wgpu::BufferUsages::UNIFORM });
+        let buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("glass-vibrant-uniforms"),
+                contents: &data,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
         let bgs: Vec<wgpu::BindGroup> = draws
             .iter()
             .map(|d| {
@@ -575,18 +871,40 @@ impl MaterialRenderer {
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &buf, offset: 0, size: wgpu::BufferSize::new(std::mem::size_of::<VibrantUniform>() as u64) }),
+                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: &buf,
+                                offset: 0,
+                                size: wgpu::BufferSize::new(
+                                    std::mem::size_of::<VibrantUniform>() as u64
+                                ),
+                            }),
                         },
-                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(d.glyphs) },
-                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(backdrop) },
-                        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(d.glyphs),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(backdrop),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
                     ],
                 })
             })
             .collect();
         let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("glass-vibrant-pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: target, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,

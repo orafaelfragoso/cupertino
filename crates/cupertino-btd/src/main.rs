@@ -11,7 +11,8 @@ use cupertino_btd::daemon::{Bus, Config, Daemon};
 use cupertino_btd::error::Error;
 use cupertino_btd::transport::KernelTransport;
 
-const USAGE: &str = "usage: cupertino-btd [--session-bus [--no-auth]] [--keys-dir PATH] [--read-only]";
+const USAGE: &str =
+    "usage: cupertino-btd [--session-bus [--no-auth]] [--keys-dir PATH] [--read-only]";
 
 /// Where the pairing keys live unless `--keys-dir` says otherwise.
 const DEFAULT_KEYS_DIR: &str = "/var/lib/cupertino/bluetooth";
@@ -26,14 +27,24 @@ struct Options {
 impl Options {
     /// The first argument that is unknown, or a combination that is refused.
     fn parse(args: impl Iterator<Item = String>) -> Result<Self, String> {
-        let mut options = Self { session_bus: false, no_auth: false, read_only: false, keys_dir: PathBuf::from(DEFAULT_KEYS_DIR) };
+        let mut options = Self {
+            session_bus: false,
+            no_auth: false,
+            read_only: false,
+            keys_dir: PathBuf::from(DEFAULT_KEYS_DIR),
+        };
         let mut args = args;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--session-bus" => options.session_bus = true,
                 "--no-auth" => options.no_auth = true,
                 "--read-only" => options.read_only = true,
-                "--keys-dir" => options.keys_dir = args.next().map(PathBuf::from).ok_or_else(|| "--keys-dir needs a path".to_owned())?,
+                "--keys-dir" => {
+                    options.keys_dir = args
+                        .next()
+                        .map(PathBuf::from)
+                        .ok_or_else(|| "--keys-dir needs a path".to_owned())?
+                }
                 other => return Err(format!("unknown argument {other}")),
             }
         }
@@ -63,10 +74,22 @@ fn run(options: Options) -> Result<Infallible, Error> {
     let authorizer: Box<dyn Authorizer> = if options.no_auth {
         Box::new(AllowAll)
     } else {
-        Box::new(LogindAuthorizer::new(cupertino_seat::connect().map_err(Error::Seat)?))
+        Box::new(LogindAuthorizer::new(
+            cupertino_seat::connect().map_err(Error::Seat)?,
+        ))
     };
     let transport = Arc::new(KernelTransport::open()?);
-    let bus = if options.session_bus { Bus::Session } else { Bus::System };
-    let daemon = Daemon::start(Config { bus, keys_dir: options.keys_dir, read_only: options.read_only, authorizer, transport })?;
+    let bus = if options.session_bus {
+        Bus::Session
+    } else {
+        Bus::System
+    };
+    let daemon = Daemon::start(Config {
+        bus,
+        keys_dir: options.keys_dir,
+        read_only: options.read_only,
+        authorizer,
+        transport,
+    })?;
     daemon.run()
 }

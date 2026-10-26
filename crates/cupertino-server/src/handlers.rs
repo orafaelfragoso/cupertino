@@ -68,29 +68,46 @@ impl CompositorHandler for Cupertino {
     }
 
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
-        &client.get_data::<ClientState>().expect("client data of an unknown type").compositor_state
+        &client
+            .get_data::<ClientState>()
+            .expect("client data of an unknown type")
+            .compositor_state
     }
 
     fn new_surface(&mut self, surface: &WlSurface) {
         add_pre_commit_hook::<Self, _>(surface, |state, _dh, surface| {
             let dmabuf = with_states(surface, |data| {
-                data.cached_state.get::<SurfaceAttributes>().pending().buffer.as_ref().and_then(|b| match b {
-                    BufferAssignment::NewBuffer(buffer) => get_dmabuf(buffer).cloned().ok(),
-                    _ => None,
-                })
+                data.cached_state
+                    .get::<SurfaceAttributes>()
+                    .pending()
+                    .buffer
+                    .as_ref()
+                    .and_then(|b| match b {
+                        BufferAssignment::NewBuffer(buffer) => get_dmabuf(buffer).cloned().ok(),
+                        _ => None,
+                    })
             });
             let unmapping = with_states(surface, |data| {
-                matches!(data.cached_state.get::<SurfaceAttributes>().pending().buffer, Some(BufferAssignment::Removed))
+                matches!(
+                    data.cached_state
+                        .get::<SurfaceAttributes>()
+                        .pending()
+                        .buffer,
+                    Some(BufferAssignment::Removed)
+                )
             });
             if unmapping {
                 state.snapshot_closing_surface(surface);
             }
             if let Some(dmabuf) = dmabuf {
-                if let Ok((blocker, source)) = dmabuf.generate_blocker(smithay::reexports::calloop::Interest::READ) {
+                if let Ok((blocker, source)) =
+                    dmabuf.generate_blocker(smithay::reexports::calloop::Interest::READ)
+                {
                     if let Some(client) = surface.client() {
                         let res = state.loop_handle.insert_source(source, move |_, _, data| {
                             let dh = data.display_handle.clone();
-                            data.client_compositor_state(&client).blocker_cleared(data, &dh);
+                            data.client_compositor_state(&client)
+                                .blocker_cleared(data, &dh);
                             Ok(())
                         });
                         if res.is_ok() {
@@ -123,7 +140,12 @@ impl CompositorHandler for Cupertino {
         if matches!(&self.cursor_status, CursorImageStatus::Surface(s) if s == surface) {
             with_states(surface, |states| {
                 if let Some(attrs) = states.data_map.get::<CursorImageSurfaceData>() {
-                    let delta = states.cached_state.get::<SurfaceAttributes>().current().buffer_delta.take();
+                    let delta = states
+                        .cached_state
+                        .get::<SurfaceAttributes>()
+                        .current()
+                        .buffer_delta
+                        .take();
                     if let Some(delta) = delta {
                         attrs.lock().unwrap().hotspot -= delta;
                     }
@@ -132,7 +154,14 @@ impl CompositorHandler for Cupertino {
         }
         if let Some((s, offset)) = self.drag_icon.as_mut() {
             if s == surface {
-                let delta = with_states(s, |states| states.cached_state.get::<SurfaceAttributes>().current().buffer_delta.take());
+                let delta = with_states(s, |states| {
+                    states
+                        .cached_state
+                        .get::<SurfaceAttributes>()
+                        .current()
+                        .buffer_delta
+                        .take()
+                });
                 if let Some(d) = delta {
                     *offset += d;
                 }
@@ -159,8 +188,17 @@ impl DmabufHandler for Cupertino {
         &mut self.dmabuf_state
     }
 
-    fn dmabuf_imported(&mut self, _global: &DmabufGlobal, dmabuf: Dmabuf, notifier: ImportNotifier) {
-        let ok = self.backend.as_mut().map(|b| b.renderer().import_dmabuf(&dmabuf, None).is_ok()).unwrap_or(false);
+    fn dmabuf_imported(
+        &mut self,
+        _global: &DmabufGlobal,
+        dmabuf: Dmabuf,
+        notifier: ImportNotifier,
+    ) {
+        let ok = self
+            .backend
+            .as_mut()
+            .map(|b| b.renderer().import_dmabuf(&dmabuf, None).is_ok())
+            .unwrap_or(false);
         if ok {
             let _ = notifier.successful::<Cupertino>();
         } else {
@@ -219,11 +257,23 @@ impl SelectionHandler for Cupertino {
     /// The server's copy of a clipboard whose client has gone (`clipboard.rs`).
     type SelectionUserData = std::sync::Arc<Snapshot>;
 
-    fn new_selection(&mut self, ty: smithay::wayland::selection::SelectionTarget, source: Option<smithay::wayland::selection::SelectionSource>, seat: Seat<Self>) {
+    fn new_selection(
+        &mut self,
+        ty: smithay::wayland::selection::SelectionTarget,
+        source: Option<smithay::wayland::selection::SelectionSource>,
+        seat: Seat<Self>,
+    ) {
         self.clipboard_selection_changed(ty, source.as_ref(), &seat);
     }
 
-    fn send_selection(&mut self, _ty: smithay::wayland::selection::SelectionTarget, mime_type: String, fd: OwnedFd, _seat: Seat<Self>, snapshot: &std::sync::Arc<Snapshot>) {
+    fn send_selection(
+        &mut self,
+        _ty: smithay::wayland::selection::SelectionTarget,
+        mime_type: String,
+        fd: OwnedFd,
+        _seat: Seat<Self>,
+        snapshot: &std::sync::Arc<Snapshot>,
+    ) {
         let snapshot = snapshot.clone();
         self.clipboard_serve_snapshot(&snapshot, &mime_type, fd);
     }
@@ -236,10 +286,21 @@ impl DataDeviceHandler for Cupertino {
 }
 
 impl ClientDndGrabHandler for Cupertino {
-    fn started(&mut self, _source: Option<WlDataSource>, icon: Option<WlSurface>, _seat: Seat<Self>) {
+    fn started(
+        &mut self,
+        _source: Option<WlDataSource>,
+        icon: Option<WlSurface>,
+        _seat: Seat<Self>,
+    ) {
         let offset = if let CursorImageStatus::Surface(ref surface) = self.cursor_status {
             with_states(surface, |states| {
-                let hotspot = states.data_map.get::<CursorImageSurfaceData>().unwrap().lock().unwrap().hotspot;
+                let hotspot = states
+                    .data_map
+                    .get::<CursorImageSurfaceData>()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .hotspot;
                 Point::from((-hotspot.x, -hotspot.y))
             })
         } else {
@@ -296,8 +357,15 @@ impl Cupertino {
     /// A token for a program the server starts: valid, made now.
     pub fn server_activation_token(&mut self) -> String {
         let data = XdgActivationTokenData::default();
-        data.user_data.insert_if_missing(|| TokenGrant { created: self.now(), valid: true });
-        self.xdg_activation_state.create_external_token(data).0.as_str().to_string()
+        data.user_data.insert_if_missing(|| TokenGrant {
+            created: self.now(),
+            valid: true,
+        });
+        self.xdg_activation_state
+            .create_external_token(data)
+            .0
+            .as_str()
+            .to_string()
     }
 }
 
@@ -314,11 +382,17 @@ impl XdgActivationHandler for Cupertino {
             Some((serial, seat)) => {
                 let keyboard = self.seat.get_keyboard().unwrap();
                 Seat::from_resource(seat) == Some(self.seat.clone())
-                    && keyboard.last_enter().map(|enter| serial.is_no_older_than(&enter)).unwrap_or(false)
+                    && keyboard
+                        .last_enter()
+                        .map(|enter| serial.is_no_older_than(&enter))
+                        .unwrap_or(false)
             }
             None => false,
         };
-        data.user_data.insert_if_missing(|| TokenGrant { created: self.now(), valid });
+        data.user_data.insert_if_missing(|| TokenGrant {
+            created: self.now(),
+            valid,
+        });
         // a token that names an application is a launch (launchers, file managers and GTK's
         // launch context set the id): the docks bounce its tile before its first window maps
         if let Some(app_id) = data.app_id.as_deref().filter(|id| !id.is_empty()) {
@@ -330,11 +404,25 @@ impl XdgActivationHandler for Cupertino {
     /// A token has no expiry; it is judged once, at use: a valid token newer
     /// than the application's last activation, or not followed by a user event within 100 ms,
     /// brings the window forward; any other request asks for attention. Either way the token is used up.
-    fn request_activation(&mut self, token: XdgActivationToken, data: XdgActivationTokenData, surface: WlSurface) {
-        let Some(id) = self.window_id_for_surface(&surface) else { return };
+    fn request_activation(
+        &mut self,
+        token: XdgActivationToken,
+        data: XdgActivationTokenData,
+        surface: WlSurface,
+    ) {
+        let Some(id) = self.window_id_for_surface(&surface) else {
+            return;
+        };
         self.xdg_activation_state.remove_token(&token);
-        let grant = *data.user_data.get::<TokenGrant>().expect("every token gets its grant when it is made");
-        if grant.valid && self.wm.activation_allowed(id, grant.created, self.last_user_event) {
+        let grant = *data
+            .user_data
+            .get::<TokenGrant>()
+            .expect("every token gets its grant when it is made");
+        if grant.valid
+            && self
+                .wm
+                .activation_allowed(id, grant.created, self.last_user_event)
+        {
             self.command(Command::FocusWindow { window: id });
         } else {
             tracing::info!(window = id.0, valid = grant.valid, "activation refused");
@@ -361,11 +449,16 @@ delegate_xdg_decoration!(Cupertino);
 
 impl XdgDialogHandler for Cupertino {
     fn modal_changed(&mut self, toplevel: ToplevelSurface, is_modal: bool) {
-        let Some(e) = self.windows.iter_mut().find(|w| w.toplevel == toplevel) else { return };
+        let Some(e) = self.windows.iter_mut().find(|w| w.toplevel == toplevel) else {
+            return;
+        };
         e.modal = is_modal;
         let id = e.id;
         if e.mapped {
-            self.command(Command::SetModal { window: id, modal: is_modal });
+            self.command(Command::SetModal {
+                window: id,
+                modal: is_modal,
+            });
         }
     }
 }
@@ -390,7 +483,11 @@ impl XdgShellHandler for Cupertino {
             titlebar: cupertino_decorations::TitlebarStyle::Standard,
             foreign: None,
             modal: false,
-            insets: if legacy { self.config.window.ssd_insets } else { Default::default() },
+            insets: if legacy {
+                self.config.window.ssd_insets
+            } else {
+                Default::default()
+            },
         });
     }
 
@@ -401,7 +498,12 @@ impl XdgShellHandler for Cupertino {
         }
     }
 
-    fn reposition_request(&mut self, surface: PopupSurface, positioner: PositionerState, token: u32) {
+    fn reposition_request(
+        &mut self,
+        surface: PopupSurface,
+        positioner: PositionerState,
+        token: u32,
+    ) {
         surface.with_pending_state(|state| {
             state.geometry = positioner.get_geometry();
             state.positioner = positioner;
@@ -411,15 +513,22 @@ impl XdgShellHandler for Cupertino {
     }
 
     fn grab(&mut self, surface: PopupSurface, seat: WlSeat, serial: Serial) {
-        let Some(seat) = Seat::from_resource(&seat) else { return };
+        let Some(seat) = Seat::from_resource(&seat) else {
+            return;
+        };
         if self.session_lock.is_active() {
             return;
         }
         let kind = PopupKind::Xdg(surface);
-        let Some(root) = find_popup_root_surface(&kind).ok() else { return };
+        let Some(root) = find_popup_root_surface(&kind).ok() else {
+            return;
+        };
         if let Ok(mut grab) = self.popups.grab_popup(root, kind, &seat, serial) {
             if let Some(keyboard) = seat.get_keyboard() {
-                if keyboard.is_grabbed() && !(keyboard.has_grab(serial) || keyboard.has_grab(grab.previous_serial().unwrap_or(serial))) {
+                if keyboard.is_grabbed()
+                    && !(keyboard.has_grab(serial)
+                        || keyboard.has_grab(grab.previous_serial().unwrap_or(serial)))
+                {
                     grab.ungrab(PopupUngrabStrategy::All);
                     return;
                 }
@@ -427,7 +536,11 @@ impl XdgShellHandler for Cupertino {
                 keyboard.set_grab(self, PopupKeyboardGrab::new(&grab), serial);
             }
             if let Some(pointer) = seat.get_pointer() {
-                if pointer.is_grabbed() && !(pointer.has_grab(serial) || pointer.has_grab(grab.previous_serial().unwrap_or_else(|| grab.serial()))) {
+                if pointer.is_grabbed()
+                    && !(pointer.has_grab(serial)
+                        || pointer
+                            .has_grab(grab.previous_serial().unwrap_or_else(|| grab.serial())))
+                {
                     grab.ungrab(PopupUngrabStrategy::All);
                     return;
                 }
@@ -437,20 +550,40 @@ impl XdgShellHandler for Cupertino {
     }
 
     fn move_request(&mut self, surface: ToplevelSurface, _seat: WlSeat, _serial: Serial) {
-        let Some(id) = self.window_id_for_surface(surface.wl_surface()) else { return };
+        let Some(id) = self.window_id_for_surface(surface.wl_surface()) else {
+            return;
+        };
         let p = self.pointer.current_location();
-        self.begin_model_interaction(Command::BeginMove { window: id, pointer: MPoint::new(p.x, p.y) });
+        self.begin_model_interaction(Command::BeginMove {
+            window: id,
+            pointer: MPoint::new(p.x, p.y),
+        });
     }
 
-    fn resize_request(&mut self, surface: ToplevelSurface, _seat: WlSeat, _serial: Serial, edges: xdg_toplevel::ResizeEdge) {
-        let Some(id) = self.window_id_for_surface(surface.wl_surface()) else { return };
+    fn resize_request(
+        &mut self,
+        surface: ToplevelSurface,
+        _seat: WlSeat,
+        _serial: Serial,
+        edges: xdg_toplevel::ResizeEdge,
+    ) {
+        let Some(id) = self.window_id_for_surface(surface.wl_surface()) else {
+            return;
+        };
         let p = self.pointer.current_location();
-        self.begin_model_interaction(Command::BeginResize { window: id, edges: policy::resize_edges(edges), pointer: MPoint::new(p.x, p.y) });
+        self.begin_model_interaction(Command::BeginResize {
+            window: id,
+            edges: policy::resize_edges(edges),
+            pointer: MPoint::new(p.x, p.y),
+        });
     }
 
     fn maximize_request(&mut self, surface: ToplevelSurface) {
         if let Some(id) = self.window_id_for_surface(surface.wl_surface()) {
-            let zoomed = self.wm.window(id).is_some_and(|w| w.state() == cupertino_wm::LifecycleState::Zoomed);
+            let zoomed = self
+                .wm
+                .window(id)
+                .is_some_and(|w| w.state() == cupertino_wm::LifecycleState::Zoomed);
             if !zoomed {
                 self.command(Command::ToggleZoom { window: id });
             }
@@ -459,7 +592,10 @@ impl XdgShellHandler for Cupertino {
 
     fn unmaximize_request(&mut self, surface: ToplevelSurface) {
         if let Some(id) = self.window_id_for_surface(surface.wl_surface()) {
-            let zoomed = self.wm.window(id).is_some_and(|w| w.state() == cupertino_wm::LifecycleState::Zoomed);
+            let zoomed = self
+                .wm
+                .window(id)
+                .is_some_and(|w| w.state() == cupertino_wm::LifecycleState::Zoomed);
             if zoomed {
                 self.command(Command::ToggleZoom { window: id });
             }
@@ -467,9 +603,15 @@ impl XdgShellHandler for Cupertino {
     }
 
     fn fullscreen_request(&mut self, surface: ToplevelSurface, output: Option<WlOutput>) {
-        let target = output.as_ref().and_then(Output::from_resource).and_then(|o| self.output_by_wl(&o).map(|e| e.id));
+        let target = output
+            .as_ref()
+            .and_then(Output::from_resource)
+            .and_then(|o| self.output_by_wl(&o).map(|e| e.id));
         if let Some(id) = self.window_id_for_surface(surface.wl_surface()) {
-            self.command(Command::Fullscreen { window: id, output: target });
+            self.command(Command::Fullscreen {
+                window: id,
+                output: target,
+            });
         } else if surface.is_initial_configure_sent() {
             surface.send_pending_configure();
         }
@@ -482,7 +624,9 @@ impl XdgShellHandler for Cupertino {
     }
 
     fn minimize_request(&mut self, surface: ToplevelSurface) {
-        let Some(id) = self.window_id_for_surface(surface.wl_surface()) else { return };
+        let Some(id) = self.window_id_for_surface(surface.wl_surface()) else {
+            return;
+        };
         let target = self.minimize_target(id);
         self.command(Command::Minimize { window: id, target });
     }
@@ -490,7 +634,15 @@ impl XdgShellHandler for Cupertino {
     fn ack_configure(&mut self, _surface: WlSurface, _configure: Configure) {}
 
     fn title_changed(&mut self, surface: ToplevelSurface) {
-        let title = with_states(surface.wl_surface(), |s| s.data_map.get::<XdgToplevelSurfaceData>().unwrap().lock().unwrap().title.clone());
+        let title = with_states(surface.wl_surface(), |s| {
+            s.data_map
+                .get::<XdgToplevelSurfaceData>()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .title
+                .clone()
+        });
         if let Some(e) = self.windows.iter().find(|w| w.toplevel == surface) {
             if let (Some(h), Some(t)) = (&e.foreign, &title) {
                 h.send_title(t);
@@ -498,7 +650,10 @@ impl XdgShellHandler for Cupertino {
             }
             if e.mapped {
                 let id = e.id;
-                self.command(Command::SetTitle { window: id, title: title.unwrap_or_default() });
+                self.command(Command::SetTitle {
+                    window: id,
+                    title: title.unwrap_or_default(),
+                });
                 self.refresh_menu_bars();
                 self.refresh_docks();
             }
@@ -506,7 +661,15 @@ impl XdgShellHandler for Cupertino {
     }
 
     fn app_id_changed(&mut self, surface: ToplevelSurface) {
-        let app_id = with_states(surface.wl_surface(), |s| s.data_map.get::<XdgToplevelSurfaceData>().unwrap().lock().unwrap().app_id.clone());
+        let app_id = with_states(surface.wl_surface(), |s| {
+            s.data_map
+                .get::<XdgToplevelSurfaceData>()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .app_id
+                .clone()
+        });
         if let (Some(e), Some(a)) = (self.windows.iter().find(|w| w.toplevel == surface), app_id) {
             if let Some(h) = &e.foreign {
                 h.send_app_id(&a);
@@ -518,13 +681,24 @@ impl XdgShellHandler for Cupertino {
     /// `set_parent` after the window mapped (before that, the parent is read when it maps); the
     /// model rejects cycles.
     fn parent_changed(&mut self, surface: ToplevelSurface) {
-        let Some(id) = self.windows.iter().find(|w| w.mapped && w.toplevel == surface).map(|w| w.id) else { return };
-        let parent = surface.parent().and_then(|p| self.window_id_for_surface(&p));
+        let Some(id) = self
+            .windows
+            .iter()
+            .find(|w| w.mapped && w.toplevel == surface)
+            .map(|w| w.id)
+        else {
+            return;
+        };
+        let parent = surface
+            .parent()
+            .and_then(|p| self.window_id_for_surface(&p));
         self.command(Command::SetParent { window: id, parent });
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
-        let Some(idx) = self.windows.iter().position(|w| w.toplevel == surface) else { return };
+        let Some(idx) = self.windows.iter().position(|w| w.toplevel == surface) else {
+            return;
+        };
         if self.windows[idx].mapped {
             let id = self.windows[idx].id;
             self.snapshot_closing(id);
@@ -553,11 +727,19 @@ impl WlrLayerShellHandler for Cupertino {
         &mut self.layer_shell_state
     }
 
-    fn new_layer_surface(&mut self, surface: WlrLayerSurface, output: Option<WlOutput>, _layer: Layer, namespace: String) {
+    fn new_layer_surface(
+        &mut self,
+        surface: WlrLayerSurface,
+        output: Option<WlOutput>,
+        _layer: Layer,
+        namespace: String,
+    ) {
         // a surface without an output goes to the one under the pointer (the active output)
         let output = match output {
             Some(wl) => Output::from_resource(&wl),
-            None => self.output_at(self.pointer.current_location()).map(|o| o.output.clone()),
+            None => self
+                .output_at(self.pointer.current_location())
+                .map(|o| o.output.clone()),
         };
         let Some(output) = output else {
             surface.send_close();
@@ -573,7 +755,10 @@ impl WlrLayerShellHandler for Cupertino {
     fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
         let found = self.outputs.iter().map(|o| o.output.clone()).find_map(|o| {
             let map = layer_map_for_output(&o);
-            let layer = map.layers().find(|l| l.layer_surface() == &surface).cloned();
+            let layer = map
+                .layers()
+                .find(|l| l.layer_surface() == &surface)
+                .cloned();
             layer.map(|l| (o.clone(), l))
         });
         if let Some((output, layer)) = found {
@@ -594,9 +779,19 @@ impl Cupertino {
     /// keep drawing their own; everything else is decorated by the compositor.
     fn set_decoration_mode(&mut self, toplevel: &ToplevelSurface, mode: DecorationMode) {
         let server = mode != DecorationMode::ClientSide;
-        toplevel.with_pending_state(|st| st.decoration_mode = Some(if server { DecorationMode::ServerSide } else { DecorationMode::ClientSide }));
+        toplevel.with_pending_state(|st| {
+            st.decoration_mode = Some(if server {
+                DecorationMode::ServerSide
+            } else {
+                DecorationMode::ClientSide
+            })
+        });
         if let Some(i) = self.windows.iter().position(|w| &w.toplevel == toplevel) {
-            let insets = if server { self.decoration_insets(self.windows[i].titlebar) } else { Default::default() };
+            let insets = if server {
+                self.decoration_insets(self.windows[i].titlebar)
+            } else {
+                Default::default()
+            };
             let e = &mut self.windows[i];
             e.server_side = server;
             if !e.mapped {
@@ -611,12 +806,17 @@ impl Cupertino {
     /// Arrange layer surfaces after a commit and send their initial configure.
     pub fn layer_committed(&mut self, surface: &WlSurface) {
         let Some(output) = self.outputs.iter().map(|o| o.output.clone()).find(|o| {
-            layer_map_for_output(o).layer_for_surface(surface, WindowSurfaceType::TOPLEVEL).is_some()
+            layer_map_for_output(o)
+                .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
+                .is_some()
         }) else {
             return;
         };
         let initial_sent = with_states(surface, |s| {
-            s.data_map.get::<LayerSurfaceData>().map(|d| d.lock().unwrap().initial_configure_sent).unwrap_or(true)
+            s.data_map
+                .get::<LayerSurfaceData>()
+                .map(|d| d.lock().unwrap().initial_configure_sent)
+                .unwrap_or(true)
         });
         {
             let mut map = layer_map_for_output(&output);
@@ -629,7 +829,10 @@ impl Cupertino {
         }
         let exclusive = layer_map_for_output(&output)
             .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
-            .is_some_and(|l| l.cached_state().keyboard_interactivity == KeyboardInteractivity::Exclusive && matches!(l.layer(), Layer::Top | Layer::Overlay));
+            .is_some_and(|l| {
+                l.cached_state().keyboard_interactivity == KeyboardInteractivity::Exclusive
+                    && matches!(l.layer(), Layer::Top | Layer::Overlay)
+            });
         self.layer_keyboard_exclusivity(surface, exclusive);
         if let Some(id) = self.output_by_wl(&output).map(|o| o.id) {
             self.refresh_usable_area(id);
@@ -646,7 +849,11 @@ impl Cupertino {
             pointer.motion(
                 self,
                 None,
-                &smithay::input::pointer::MotionEvent { location: pointer.current_location(), serial, time: 0 },
+                &smithay::input::pointer::MotionEvent {
+                    location: pointer.current_location(),
+                    serial,
+                    time: 0,
+                },
             );
             pointer.frame(self);
         }
@@ -654,15 +861,24 @@ impl Cupertino {
 
     fn unconstrain_popup(&self, popup: &PopupSurface) {
         let kind = PopupKind::Xdg(popup.clone());
-        let Ok(root) = find_popup_root_surface(&kind) else { return };
+        let Ok(root) = find_popup_root_surface(&kind) else {
+            return;
+        };
         let Some(id) = self.window_id_for_surface(&root) else {
             // layer-shell popups are constrained to the output
             return;
         };
         let Some(entry) = self.entry(id) else { return };
         let now = self.now();
-        let Some(pres) = self.wm.presentation(id, now) else { return };
-        let out = self.wm.window(id).and_then(|w| self.wm.output(w.output)).map(|o| o.rect).unwrap_or(pres.frame);
+        let Some(pres) = self.wm.presentation(id, now) else {
+            return;
+        };
+        let out = self
+            .wm
+            .window(id)
+            .and_then(|w| self.wm.output(w.output))
+            .map(|o| o.rect)
+            .unwrap_or(pres.frame);
         let geo = entry.window.geometry();
         let mut target: Rectangle<i32, Logical> = Self::rect_to_logical(out);
         target.loc -= get_popup_toplevel_coords(&kind);

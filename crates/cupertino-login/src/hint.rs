@@ -23,8 +23,16 @@ impl FailedAttempts {
     /// Whether the password help shows for `login`. `retries_until_hint` is the setting `RetriesUntilHint` (absent = 0):
     /// 0 shows the help after three failures, a larger value after that many.
     pub fn help_shown(&self, login: &str, retries_until_hint: u32) -> bool {
-        let count = self.last.as_ref().filter(|(last, _)| last == login).map_or(0, |&(_, count)| count);
-        let needed = if retries_until_hint == 0 { HELP_AFTER_WITHOUT_HINTS } else { retries_until_hint };
+        let count = self
+            .last
+            .as_ref()
+            .filter(|(last, _)| last == login)
+            .map_or(0, |&(_, count)| count);
+        let needed = if retries_until_hint == 0 {
+            HELP_AFTER_WITHOUT_HINTS
+        } else {
+            retries_until_hint
+        };
         count >= needed
     }
 }
@@ -43,15 +51,24 @@ mod tests {
 
     #[test]
     fn without_a_hint_threshold_the_help_shows_at_the_third_failure() {
-        let shown: Vec<bool> = (0..5).map(|n| failures("alice", n).help_shown("alice", 0)).collect();
+        let shown: Vec<bool> = (0..5)
+            .map(|n| failures("alice", n).help_shown("alice", 0))
+            .collect();
         assert_eq!(shown, [false, false, false, true, true]);
     }
 
     #[test]
     fn with_a_hint_threshold_the_help_shows_at_that_many_failures() {
-        let at_one: Vec<bool> = (0..3).map(|n| failures("alice", n).help_shown("alice", 1)).collect();
-        let at_five: Vec<bool> = (3..7).map(|n| failures("alice", n).help_shown("alice", 5)).collect();
-        assert_eq!((at_one, at_five), (vec![false, true, true], vec![false, false, true, true]));
+        let at_one: Vec<bool> = (0..3)
+            .map(|n| failures("alice", n).help_shown("alice", 1))
+            .collect();
+        let at_five: Vec<bool> = (3..7)
+            .map(|n| failures("alice", n).help_shown("alice", 5))
+            .collect();
+        assert_eq!(
+            (at_one, at_five),
+            (vec![false, true, true], vec![false, false, true, true])
+        );
     }
 
     #[test]

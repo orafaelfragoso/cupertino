@@ -73,7 +73,11 @@ pub enum Rewrite {
     /// Forward the key with `remove` taken out of and `add` put into the modifiers.
     Mods { remove: RawMods, add: RawMods },
     /// Forward `evdev` instead of the key, with the modifiers changed the same way.
-    Key { evdev: u32, remove: RawMods, add: RawMods },
+    Key {
+        evdev: u32,
+        remove: RawMods,
+        add: RawMods,
+    },
 }
 
 /// Whether a key's character counts as printable for the Super rewrite: a visible character. Space is not (Super+Space
@@ -85,19 +89,29 @@ pub fn is_printable(ch: Option<char>) -> bool {
 /// The rewrite for `k` going to `t`, first matching row of the table §10.4.
 pub fn decide(profile: &ModifierProfile, t: &ClientTarget, k: &KeyPress) -> Rewrite {
     // 1 and 2: only the design profile (Super is the primary modifier) and only third-party clients
-    if profile.primary_physical() != Some(RawMods::SUPER) || t.opted_out || t.class == ClientClass::FirstParty {
+    if profile.primary_physical() != Some(RawMods::SUPER)
+        || t.opted_out
+        || t.class == ClientClass::FirstParty
+    {
         return Rewrite::Pass;
     }
     // 3 and 4: modifier keys, and every chord with Ctrl down (third-party Ctrl shortcuts, Ctrl+Super combinations)
     if k.is_modifier || k.raw.contains(RawMods::CTRL) {
         return Rewrite::Pass;
     }
-    let (sup, alt, shift) = (k.raw.contains(RawMods::SUPER), k.raw.contains(RawMods::ALT), k.raw.contains(RawMods::SHIFT));
+    let (sup, alt, shift) = (
+        k.raw.contains(RawMods::SUPER),
+        k.raw.contains(RawMods::ALT),
+        k.raw.contains(RawMods::SHIFT),
+    );
     // 5 and 6: terminals get copy and paste as Ctrl+Shift and nothing else
     if t.class == ClientClass::Terminal {
         let copy_or_paste = matches!(k.sym, SYM_C | SYM_V | SYM_UPPER_C | SYM_UPPER_V);
         return if sup && !alt && !shift && copy_or_paste {
-            Rewrite::Mods { remove: RawMods::SUPER, add: RawMods::CTRL | RawMods::SHIFT }
+            Rewrite::Mods {
+                remove: RawMods::SUPER,
+                add: RawMods::CTRL | RawMods::SHIFT,
+            }
         } else {
             Rewrite::Pass
         };
@@ -113,7 +127,11 @@ pub fn decide(profile: &ModifierProfile, t: &ClientTarget, k: &KeyPress) -> Rewr
                 KEY_UP => (KEY_HOME, RawMods::CTRL),
                 _ => (KEY_END, RawMods::CTRL),
             };
-            return Rewrite::Key { evdev, remove: RawMods::SUPER, add };
+            return Rewrite::Key {
+                evdev,
+                remove: RawMods::SUPER,
+                add,
+            };
         }
         // 8: the arrows and Backspace stay as they are without a text input
         if arrow || k.evdev == KEY_BACKSPACE {
@@ -121,14 +139,20 @@ pub fn decide(profile: &ModifierProfile, t: &ClientTarget, k: &KeyPress) -> Rewr
         }
         // 9: Super+letter, digit, punctuation or Return is the Ctrl chord of the same key; Shift and Alt are kept
         if k.printable || matches!(k.sym, SYM_RETURN | SYM_KP_ENTER) {
-            return Rewrite::Mods { remove: RawMods::SUPER, add: RawMods::CTRL };
+            return Rewrite::Mods {
+                remove: RawMods::SUPER,
+                add: RawMods::CTRL,
+            };
         }
         // 10: function keys, Tab, Escape, Space
         return Rewrite::Pass;
     }
     // 11: Alt word chords, with Alt and the level-3 bit it sets turned into Ctrl
     if alt && text_input && matches!(k.evdev, KEY_LEFT | KEY_RIGHT | KEY_BACKSPACE | KEY_DELETE) {
-        return Rewrite::Mods { remove: RawMods::ALT, add: RawMods::CTRL };
+        return Rewrite::Mods {
+            remove: RawMods::ALT,
+            add: RawMods::CTRL,
+        };
     }
     // 12
     Rewrite::Pass
@@ -152,15 +176,31 @@ mod tests {
     const SHIFT: RawMods = RawMods::SHIFT;
 
     fn target(class: ClientClass) -> ClientTarget {
-        ClientTarget { class, text_input_active: false, opted_out: false }
+        ClientTarget {
+            class,
+            text_input_active: false,
+            opted_out: false,
+        }
     }
 
     fn letter(evdev: u32, sym: u32, raw: RawMods) -> KeyPress {
-        KeyPress { evdev, sym, printable: true, is_modifier: false, raw }
+        KeyPress {
+            evdev,
+            sym,
+            printable: true,
+            is_modifier: false,
+            raw,
+        }
     }
 
     fn named(evdev: u32, sym: u32, raw: RawMods) -> KeyPress {
-        KeyPress { evdev, sym, printable: false, is_modifier: false, raw }
+        KeyPress {
+            evdev,
+            sym,
+            printable: false,
+            is_modifier: false,
+            raw,
+        }
     }
 
     fn reference(t: &ClientTarget, k: &KeyPress) -> Rewrite {
@@ -175,72 +215,192 @@ mod tests {
     fn super_chords_become_ctrl_chords_and_ctrl_is_never_touched() {
         let other = target(ClientClass::Other);
         assert_eq!(reference(&other, &letter(KEY_C, SYM_C, SUP)), to_ctrl(SUP));
-        assert_eq!(reference(&other, &letter(KEY_C, SYM_C, CTRL)), Rewrite::Pass);
-        assert_eq!(reference(&other, &letter(KEY_C, SYM_C, CTRL | SUP)), Rewrite::Pass);
+        assert_eq!(
+            reference(&other, &letter(KEY_C, SYM_C, CTRL)),
+            Rewrite::Pass
+        );
+        assert_eq!(
+            reference(&other, &letter(KEY_C, SYM_C, CTRL | SUP)),
+            Rewrite::Pass
+        );
         // Shift and Alt stay with the chord
-        assert_eq!(reference(&other, &letter(KEY_C, SYM_C, SUP | SHIFT)), to_ctrl(SUP));
-        assert_eq!(reference(&other, &letter(KEY_C, SYM_C, SUP | ALT)), to_ctrl(SUP));
+        assert_eq!(
+            reference(&other, &letter(KEY_C, SYM_C, SUP | SHIFT)),
+            to_ctrl(SUP)
+        );
+        assert_eq!(
+            reference(&other, &letter(KEY_C, SYM_C, SUP | ALT)),
+            to_ctrl(SUP)
+        );
         assert_eq!(reference(&other, &named(28, SYM_RETURN, SUP)), to_ctrl(SUP));
     }
 
     #[test]
     fn keys_that_are_not_text_chords_pass() {
         let other = target(ClientClass::Other);
-        assert_eq!(reference(&other, &named(KEY_F5, SYM_F5, SUP)), Rewrite::Pass);
-        assert_eq!(reference(&other, &named(KEY_TAB, SYM_TAB, SUP)), Rewrite::Pass);
-        assert_eq!(reference(&other, &KeyPress { printable: is_printable(Some(' ')), ..named(KEY_SPACE, 0x20, SUP) }), Rewrite::Pass);
-        assert_eq!(reference(&other, &KeyPress { is_modifier: true, ..named(125, 0xffeb, SUP) }), Rewrite::Pass);
-        assert_eq!(reference(&other, &named(KEY_BACKSPACE, 0xff08, SUP)), Rewrite::Pass);
+        assert_eq!(
+            reference(&other, &named(KEY_F5, SYM_F5, SUP)),
+            Rewrite::Pass
+        );
+        assert_eq!(
+            reference(&other, &named(KEY_TAB, SYM_TAB, SUP)),
+            Rewrite::Pass
+        );
+        assert_eq!(
+            reference(
+                &other,
+                &KeyPress {
+                    printable: is_printable(Some(' ')),
+                    ..named(KEY_SPACE, 0x20, SUP)
+                }
+            ),
+            Rewrite::Pass
+        );
+        assert_eq!(
+            reference(
+                &other,
+                &KeyPress {
+                    is_modifier: true,
+                    ..named(125, 0xffeb, SUP)
+                }
+            ),
+            Rewrite::Pass
+        );
+        assert_eq!(
+            reference(&other, &named(KEY_BACKSPACE, 0xff08, SUP)),
+            Rewrite::Pass
+        );
     }
 
     #[test]
     fn terminals_get_copy_and_paste_as_ctrl_shift_only() {
         let term = target(ClientClass::Terminal);
-        let copy = Rewrite::Mods { remove: SUP, add: CTRL | SHIFT };
+        let copy = Rewrite::Mods {
+            remove: SUP,
+            add: CTRL | SHIFT,
+        };
         assert_eq!(reference(&term, &letter(KEY_C, SYM_C, SUP)), copy);
         assert_eq!(reference(&term, &letter(47, SYM_V, SUP)), copy);
-        assert_eq!(reference(&term, &letter(KEY_C, SYM_C, SUP | SHIFT)), Rewrite::Pass);
+        assert_eq!(
+            reference(&term, &letter(KEY_C, SYM_C, SUP | SHIFT)),
+            Rewrite::Pass
+        );
         assert_eq!(reference(&term, &letter(37, 0x6b, SUP)), Rewrite::Pass);
         assert_eq!(reference(&term, &letter(KEY_C, SYM_C, CTRL)), Rewrite::Pass);
-        assert_eq!(reference(&ClientTarget { text_input_active: true, ..term }, &named(KEY_LEFT, SYM_ARROW, SUP)), Rewrite::Pass);
+        assert_eq!(
+            reference(
+                &ClientTarget {
+                    text_input_active: true,
+                    ..term
+                },
+                &named(KEY_LEFT, SYM_ARROW, SUP)
+            ),
+            Rewrite::Pass
+        );
     }
 
     #[test]
     fn super_arrows_move_the_text_cursor_only_in_a_wayland_text_input() {
         let plain = target(ClientClass::Other);
-        let text = ClientTarget { text_input_active: true, ..plain };
+        let text = ClientTarget {
+            text_input_active: true,
+            ..plain
+        };
         let left = named(KEY_LEFT, SYM_ARROW, SUP);
         assert_eq!(reference(&plain, &left), Rewrite::Pass);
-        assert_eq!(reference(&text, &left), Rewrite::Key { evdev: KEY_HOME, remove: SUP, add: RawMods::default() });
-        assert_eq!(reference(&text, &named(KEY_RIGHT, SYM_ARROW, SUP | SHIFT)), Rewrite::Key { evdev: KEY_END, remove: SUP, add: RawMods::default() });
-        assert_eq!(reference(&text, &named(KEY_UP, SYM_ARROW, SUP)), Rewrite::Key { evdev: KEY_HOME, remove: SUP, add: CTRL });
-        assert_eq!(reference(&text, &named(KEY_DOWN, SYM_ARROW, SUP)), Rewrite::Key { evdev: KEY_END, remove: SUP, add: CTRL });
-        assert_eq!(reference(&text, &named(KEY_LEFT, SYM_ARROW, SUP | ALT)), Rewrite::Pass);
+        assert_eq!(
+            reference(&text, &left),
+            Rewrite::Key {
+                evdev: KEY_HOME,
+                remove: SUP,
+                add: RawMods::default()
+            }
+        );
+        assert_eq!(
+            reference(&text, &named(KEY_RIGHT, SYM_ARROW, SUP | SHIFT)),
+            Rewrite::Key {
+                evdev: KEY_END,
+                remove: SUP,
+                add: RawMods::default()
+            }
+        );
+        assert_eq!(
+            reference(&text, &named(KEY_UP, SYM_ARROW, SUP)),
+            Rewrite::Key {
+                evdev: KEY_HOME,
+                remove: SUP,
+                add: CTRL
+            }
+        );
+        assert_eq!(
+            reference(&text, &named(KEY_DOWN, SYM_ARROW, SUP)),
+            Rewrite::Key {
+                evdev: KEY_END,
+                remove: SUP,
+                add: CTRL
+            }
+        );
+        assert_eq!(
+            reference(&text, &named(KEY_LEFT, SYM_ARROW, SUP | ALT)),
+            Rewrite::Pass
+        );
     }
 
     #[test]
     fn alt_word_chords_become_ctrl_chords_in_a_wayland_text_input() {
         let plain = target(ClientClass::Other);
-        let text = ClientTarget { text_input_active: true, ..plain };
+        let text = ClientTarget {
+            text_input_active: true,
+            ..plain
+        };
         let alt_left = named(KEY_LEFT, SYM_ARROW, ALT);
         assert_eq!(reference(&plain, &alt_left), Rewrite::Pass);
         assert_eq!(reference(&text, &alt_left), to_ctrl(ALT));
-        assert_eq!(reference(&text, &named(KEY_DELETE, 0xffff, ALT | SHIFT)), to_ctrl(ALT));
-        assert_eq!(reference(&text, &named(KEY_UP, SYM_ARROW, ALT)), Rewrite::Pass);
+        assert_eq!(
+            reference(&text, &named(KEY_DELETE, 0xffff, ALT | SHIFT)),
+            to_ctrl(ALT)
+        );
+        assert_eq!(
+            reference(&text, &named(KEY_UP, SYM_ARROW, ALT)),
+            Rewrite::Pass
+        );
         assert_eq!(reference(&text, &letter(KEY_C, SYM_C, ALT)), Rewrite::Pass);
     }
 
     #[test]
     fn first_party_clients_opt_outs_and_the_classic_profile_pass() {
         let copy = letter(KEY_C, SYM_C, SUP);
-        assert_eq!(reference(&target(ClientClass::FirstParty), &copy), Rewrite::Pass);
-        assert_eq!(reference(&ClientTarget { opted_out: true, ..target(ClientClass::Other) }, &copy), Rewrite::Pass);
-        assert_eq!(decide(&ModifierProfile::classic_pc(), &target(ClientClass::Other), &copy), Rewrite::Pass);
+        assert_eq!(
+            reference(&target(ClientClass::FirstParty), &copy),
+            Rewrite::Pass
+        );
+        assert_eq!(
+            reference(
+                &ClientTarget {
+                    opted_out: true,
+                    ..target(ClientClass::Other)
+                },
+                &copy
+            ),
+            Rewrite::Pass
+        );
+        assert_eq!(
+            decide(
+                &ModifierProfile::classic_pc(),
+                &target(ClientClass::Other),
+                &copy
+            ),
+            Rewrite::Pass
+        );
     }
 
     #[test]
     fn a_printable_character_is_visible() {
-        assert!([Some('c'), Some('1'), Some('ç'), Some(',')].into_iter().all(is_printable));
-        assert!(![None, Some(' '), Some('\r'), Some('\u{1b}')].into_iter().any(is_printable));
+        assert!([Some('c'), Some('1'), Some('ç'), Some(',')]
+            .into_iter()
+            .all(is_printable));
+        assert!(![None, Some(' '), Some('\r'), Some('\u{1b}')]
+            .into_iter()
+            .any(is_printable));
     }
 }

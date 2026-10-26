@@ -25,7 +25,13 @@ impl BlurPlan {
     }
 }
 
-pub fn plan_blur(w: u32, h: u32, backdrop_scale: f32, sigma_pt: f32, display_scale: f32) -> BlurPlan {
+pub fn plan_blur(
+    w: u32,
+    h: u32,
+    backdrop_scale: f32,
+    sigma_pt: f32,
+    display_scale: f32,
+) -> BlurPlan {
     let mut levels = vec![];
     let (mut cw, mut ch) = (w, h);
     // capture at the backdrop scale via repeated 2× box (the scale is 0.5 in every archive)
@@ -36,7 +42,8 @@ pub fn plan_blur(w: u32, h: u32, backdrop_scale: f32, sigma_pt: f32, display_sca
         levels.push((cw, ch));
         s *= 0.5;
     }
-    let mut var = (sigma_pt * display_scale * backdrop_scale).powi(2) - 0.0625 * (levels.len() as f32);
+    let mut var =
+        (sigma_pt * display_scale * backdrop_scale).powi(2) - 0.0625 * (levels.len() as f32);
     while var > 64.0 && cw.min(ch) > 16 {
         cw /= 2;
         ch /= 2;
@@ -45,7 +52,11 @@ pub fn plan_blur(w: u32, h: u32, backdrop_scale: f32, sigma_pt: f32, display_sca
     }
     let sigma = var.max(0.0).sqrt();
     let weights = gaussian_weights(sigma);
-    BlurPlan { levels, sigma, weights }
+    BlurPlan {
+        levels,
+        sigma,
+        weights,
+    }
 }
 
 /// One-sided Gaussian weights normalised so that `w[0] + 2·Σw[1..] = 1`; radius `ceil(3σ)` clamped
@@ -55,7 +66,9 @@ pub fn gaussian_weights(sigma: f32) -> Vec<f32> {
         return vec![1.0];
     }
     let r = ((3.0 * sigma).ceil() as usize).min(MAX_BLUR_RADIUS);
-    let mut w: Vec<f32> = (0..=r).map(|i| (-((i * i) as f32) / (2.0 * sigma * sigma)).exp()).collect();
+    let mut w: Vec<f32> = (0..=r)
+        .map(|i| (-((i * i) as f32) / (2.0 * sigma * sigma)).exp())
+        .collect();
     let sum = w[0] + 2.0 * w[1..].iter().sum::<f32>();
     w.iter_mut().for_each(|x| *x /= sum);
     w

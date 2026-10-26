@@ -105,18 +105,33 @@ fn lines(guides: &[Guide], side: Side, gap: f64) -> Vec<Line> {
     for g in guides {
         match g {
             Guide::Window(r) => {
-                out.push(Line { pos: side.opposite().pos(r) + side.inward() * gap, span: side.span(r) });
-                out.push(Line { pos: side.pos(r), span: side.span(r) });
+                out.push(Line {
+                    pos: side.opposite().pos(r) + side.inward() * gap,
+                    span: side.span(r),
+                });
+                out.push(Line {
+                    pos: side.pos(r),
+                    span: side.span(r),
+                });
             }
             Guide::Piece { rect: r, edges } => {
                 if side.opposite().active(*edges) {
-                    out.push(Line { pos: side.opposite().pos(r) + side.inward() * gap, span: side.span(r) });
+                    out.push(Line {
+                        pos: side.opposite().pos(r) + side.inward() * gap,
+                        span: side.span(r),
+                    });
                 }
                 if side.active(*edges) {
-                    out.push(Line { pos: side.pos(r), span: side.span(r) });
+                    out.push(Line {
+                        pos: side.pos(r),
+                        span: side.span(r),
+                    });
                 }
             }
-            Guide::Screen(r) => out.push(Line { pos: side.pos(r), span: side.span(r) }),
+            Guide::Screen(r) => out.push(Line {
+                pos: side.pos(r),
+                span: side.span(r),
+            }),
         }
     }
     out
@@ -129,7 +144,9 @@ fn overlaps(window: (f64, f64), line: (f64, f64), margin: f64) -> bool {
 /// Pull needed to unsnap at heading angle `theta` (degrees from the edge normal).
 pub fn unsnap_distance(cfg: &MagnetConfig, theta: f64) -> f64 {
     if theta < cfg.unsnap_max_angle {
-        cfg.unsnap_distance_min + (cfg.unsnap_distance_max - cfg.unsnap_distance_min) * (theta / cfg.unsnap_max_angle).powi(2)
+        cfg.unsnap_distance_min
+            + (cfg.unsnap_distance_max - cfg.unsnap_distance_min)
+                * (theta / cfg.unsnap_max_angle).powi(2)
     } else {
         cfg.unsnap_distance_max
     }
@@ -179,7 +196,13 @@ pub struct Magnet {
 impl Magnet {
     /// Start tracking at `pointer` with the window at `raw` (no edge snapped).
     pub fn new(pointer: Point, raw: Rect, now: f64) -> Self {
-        Self { pointer, raw, time: now, x: Axis::default(), y: Axis::default() }
+        Self {
+            pointer,
+            raw,
+            time: now,
+            x: Axis::default(),
+            y: Axis::default(),
+        }
     }
 
     /// Sides currently held by a guide.
@@ -222,10 +245,21 @@ impl Magnet {
         if !enabled {
             self.x = Axis::default();
             self.y = Axis::default();
-            return MagnetStep { frame: raw, jumped: was.any() };
+            return MagnetStep {
+                frame: raw,
+                jumped: was.any(),
+            };
         }
         let (dx, dy) = (pointer.x - prev_pointer.x, pointer.y - prev_pointer.y);
-        let velocity = |d: f64| if dt > 0.0 { d / dt } else if d == 0.0 { 0.0 } else { d.signum() * f64::INFINITY };
+        let velocity = |d: f64| {
+            if dt > 0.0 {
+                d / dt
+            } else if d == 0.0 {
+                0.0
+            } else {
+                d.signum() * f64::INFINITY
+            }
+        };
         let (vx, vy) = (velocity(dx), velocity(dy));
 
         let mut frame = raw;
@@ -234,23 +268,35 @@ impl Magnet {
             (&mut self.y, [Side::Top, Side::Bottom], dy, dx, vy),
         ] {
             if let Some(s) = axis.snap {
-                let present = lines(guides, s.side, cfg.window_gap).iter().any(|l| l.pos == s.line);
+                let present = lines(guides, s.side, cfg.window_gap)
+                    .iter()
+                    .any(|l| l.pos == s.line);
                 let moved = d_axis != 0.0 || d_perp != 0.0;
                 let theta = d_perp.abs().atan2(d_axis.abs()).to_degrees();
-                let pull = ((pointer.x - s.pointer.x).powi(2) + (pointer.y - s.pointer.y).powi(2)).sqrt();
+                let pull =
+                    ((pointer.x - s.pointer.x).powi(2) + (pointer.y - s.pointer.y).powi(2)).sqrt();
                 let release = v.abs() > cfg.unsnap_velocity
                     || (moved && pull > unsnap_distance(cfg, theta))
-                    || (cfg.instant_unsnap && moved && theta <= cfg.instant_unsnap_angle && d_axis * s.side.inward() > 0.0);
+                    || (cfg.instant_unsnap
+                        && moved
+                        && theta <= cfg.instant_unsnap_angle
+                        && d_axis * s.side.inward() > 0.0);
                 if !present {
                     axis.snap = None;
                 } else if release {
                     axis.snap = None;
-                    axis.guard = Some(Guard { side: s.side, line: s.line, velocity: v });
+                    axis.guard = Some(Guard {
+                        side: s.side,
+                        line: s.line,
+                        velocity: v,
+                    });
                 }
             } else if may_snap {
                 if let Some(g) = axis.guard {
                     let travelled = (g.side.pos(&raw) - g.line).abs();
-                    if travelled >= cfg.resnap_distance || (v != 0.0 && v.signum() != g.velocity.signum()) {
+                    if travelled >= cfg.resnap_distance
+                        || (v != 0.0 && v.signum() != g.velocity.signum())
+                    {
                         axis.guard = None;
                     }
                 }
@@ -266,7 +312,14 @@ impl Magnet {
                                 && overlaps(side.span(&frame), l.span, cfg.overlap_margin)
                                 && best.is_none_or(|(d, _)| d0.abs() < d)
                             {
-                                best = Some((d0.abs(), Snap { side, line: l.pos, pointer }));
+                                best = Some((
+                                    d0.abs(),
+                                    Snap {
+                                        side,
+                                        line: l.pos,
+                                        pointer,
+                                    },
+                                ));
                             }
                         }
                     }
@@ -274,10 +327,18 @@ impl Magnet {
                 }
             }
             if let Some(s) = axis.snap {
-                frame = place(frame, s.side, s.line, sides_of_axis.iter().all(|x| x.active(sides)));
+                frame = place(
+                    frame,
+                    s.side,
+                    s.line,
+                    sides_of_axis.iter().all(|x| x.active(sides)),
+                );
             }
         }
-        MagnetStep { frame, jumped: self.snapped() != was }
+        MagnetStep {
+            frame,
+            jumped: self.snapped() != was,
+        }
     }
 }
 

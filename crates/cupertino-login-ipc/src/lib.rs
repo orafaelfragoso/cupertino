@@ -10,13 +10,17 @@
 //!
 //! Decoding errors keep only their class: serde's text embeds the offending value, which may be a password.
 
-mod hex;
 pub mod frame;
+mod hex;
 pub mod message;
 pub mod secret;
 pub mod state;
 
 pub use frame::{decode, encode, encode_secret, DecodeError, Decoder, FrameError, HEADER_BYTES};
-pub use message::{is_login_name, Account, Event, Outcome, Picture, PowerAction, PowerMenu, PowerRefusal, ProtocolRefusal, Request, UserRow, MAX_EVENT_FRAME, MAX_LOGIN_NAME_BYTES, MAX_REQUEST_FRAME, VERSION};
+pub use message::{
+    is_login_name, Account, Event, Outcome, Picture, PowerAction, PowerMenu, PowerRefusal,
+    ProtocolRefusal, Request, UserRow, MAX_EVENT_FRAME, MAX_LOGIN_NAME_BYTES, MAX_REQUEST_FRAME,
+    VERSION,
+};
 pub use secret::{Secret, MAX_SECRET_BYTES};
 pub use state::State;

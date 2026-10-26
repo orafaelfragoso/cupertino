@@ -49,7 +49,10 @@ pub enum Error {
     /// A sysfs file or directory could not be read.
     Io { path: PathBuf, source: io::Error },
     /// A socket system call failed.
-    Syscall { call: &'static str, source: rustix::io::Errno },
+    Syscall {
+        call: &'static str,
+        source: rustix::io::Errno,
+    },
     /// Data was read but is malformed; `origin` names the file or datagram.
     Parse { origin: String, source: ParseError },
 }

@@ -23,13 +23,18 @@ pub enum Toggle {
 pub enum Request {
     Toggle(Toggle),
     /// A media key for `cupertino-osd`; `fine` is the Shift+Alt step.
-    Osd { key: OsdKey, fine: bool },
+    Osd {
+        key: OsdKey,
+        fine: bool,
+    },
     /// Lock the session through `cupertino-login`: the display slept for the password delay (lock request type 5 of the design).
     Lock,
     /// Lock the session on the person's request (the lock shortcut; lock request type 8, whose lock screen hides after 5 s).
     LockNow,
     /// The power key went down (`true`) or up; `cupertino-login` times the hold.
-    PowerKey { pressed: bool },
+    PowerKey {
+        pressed: bool,
+    },
 }
 
 /// Arguments of a control method.
@@ -43,7 +48,11 @@ enum Body {
 }
 
 /// Bus name, object path and interface of the overlay process (`cupertino_osd::control`).
-const OSD: (&str, &str, &str) = ("org.cupertino.Osd1", "/org/cupertino/Osd1", "org.cupertino.Osd1");
+const OSD: (&str, &str, &str) = (
+    "org.cupertino.Osd1",
+    "/org/cupertino/Osd1",
+    "org.cupertino.Osd1",
+);
 
 impl Request {
     /// Bus name, object path, interface, method and arguments of the control interface of the process
@@ -51,12 +60,48 @@ impl Request {
     fn call(self) -> (&'static str, &'static str, &'static str, &'static str, Body) {
         let (name, path, interface) = OSD;
         match self {
-            Request::Toggle(Toggle::NotificationCentre) => ("org.cupertino.NotificationCenter1", "/org/cupertino/NotificationCenter1", "org.cupertino.NotificationCenter1", "ToggleCentre", Body::Empty),
-            Request::Toggle(Toggle::Launcher) => ("org.cupertino.Launcher1", "/org/cupertino/Launcher1", "org.cupertino.Launcher1", "Toggle", Body::Empty),
-            Request::Toggle(Toggle::ControlPanel) => ("org.cupertino.ControlPanel1", "/org/cupertino/ControlPanel1", "org.cupertino.ControlPanel1", "Toggle", Body::Empty),
-            Request::Lock => ("org.cupertino.Login1", "/org/cupertino/Login1", "org.cupertino.Login1", "Lock", Body::Empty),
-            Request::LockNow => ("org.cupertino.Login1", "/org/cupertino/Login1", "org.cupertino.Login1", "LockNow", Body::Empty),
-            Request::PowerKey { pressed } => ("org.cupertino.Login1", "/org/cupertino/Login1", "org.cupertino.Login1", "PowerKey", Body::Pressed(pressed)),
+            Request::Toggle(Toggle::NotificationCentre) => (
+                "org.cupertino.NotificationCenter1",
+                "/org/cupertino/NotificationCenter1",
+                "org.cupertino.NotificationCenter1",
+                "ToggleCentre",
+                Body::Empty,
+            ),
+            Request::Toggle(Toggle::Launcher) => (
+                "org.cupertino.Launcher1",
+                "/org/cupertino/Launcher1",
+                "org.cupertino.Launcher1",
+                "Toggle",
+                Body::Empty,
+            ),
+            Request::Toggle(Toggle::ControlPanel) => (
+                "org.cupertino.ControlPanel1",
+                "/org/cupertino/ControlPanel1",
+                "org.cupertino.ControlPanel1",
+                "Toggle",
+                Body::Empty,
+            ),
+            Request::Lock => (
+                "org.cupertino.Login1",
+                "/org/cupertino/Login1",
+                "org.cupertino.Login1",
+                "Lock",
+                Body::Empty,
+            ),
+            Request::LockNow => (
+                "org.cupertino.Login1",
+                "/org/cupertino/Login1",
+                "org.cupertino.Login1",
+                "LockNow",
+                Body::Empty,
+            ),
+            Request::PowerKey { pressed } => (
+                "org.cupertino.Login1",
+                "/org/cupertino/Login1",
+                "org.cupertino.Login1",
+                "PowerKey",
+                Body::Pressed(pressed),
+            ),
             Request::Osd { key, fine } => {
                 let (method, body) = match key {
                     OsdKey::VolumeUp => ("VolumeStep", Body::Step(1, fine)),
@@ -65,7 +110,9 @@ impl Request {
                     OsdKey::BrightnessUp => ("BrightnessStep", Body::Step(1, fine)),
                     OsdKey::BrightnessDown => ("BrightnessStep", Body::Step(-1, fine)),
                     OsdKey::KeyboardBrightnessUp => ("KeyboardBrightnessStep", Body::Step(1, fine)),
-                    OsdKey::KeyboardBrightnessDown => ("KeyboardBrightnessStep", Body::Step(-1, fine)),
+                    OsdKey::KeyboardBrightnessDown => {
+                        ("KeyboardBrightnessStep", Body::Step(-1, fine))
+                    }
                 };
                 (name, path, interface, method, body)
             }
@@ -82,7 +129,9 @@ impl DbusHandle {
     /// Start the worker.
     pub fn start() -> Option<DbusHandle> {
         let (tx, rx) = async_channel::unbounded::<Request>();
-        let spawned = std::thread::Builder::new().name("cupertino-dbus".into()).spawn(move || zbus::block_on(worker(rx)));
+        let spawned = std::thread::Builder::new()
+            .name("cupertino-dbus".into())
+            .spawn(move || zbus::block_on(worker(rx)));
         match spawned {
             Ok(_) => Some(DbusHandle { tx }),
             Err(e) => {
@@ -114,7 +163,13 @@ async fn worker(rx: async_channel::Receiver<Request>) {
         if matches!(what, Request::PowerKey { .. }) {
             call(&conn, what).await;
         } else {
-            conn.executor().clone().spawn(async move { call(&conn, what).await }, "cupertino-shell-call").detach();
+            conn.executor()
+                .clone()
+                .spawn(
+                    async move { call(&conn, what).await },
+                    "cupertino-shell-call",
+                )
+                .detach();
         }
     }
 }
@@ -123,9 +178,24 @@ async fn worker(rx: async_channel::Receiver<Request>) {
 async fn call(conn: &zbus::Connection, what: Request) {
     let (name, path, interface, method, body) = what.call();
     let sent = match body {
-        Body::Empty => conn.call_method(Some(name), path, Some(interface), method, &()).await,
-        Body::Step(direction, fine) => conn.call_method(Some(name), path, Some(interface), method, &(direction, fine)).await,
-        Body::Pressed(pressed) => conn.call_method(Some(name), path, Some(interface), method, &pressed).await,
+        Body::Empty => {
+            conn.call_method(Some(name), path, Some(interface), method, &())
+                .await
+        }
+        Body::Step(direction, fine) => {
+            conn.call_method(
+                Some(name),
+                path,
+                Some(interface),
+                method,
+                &(direction, fine),
+            )
+            .await
+        }
+        Body::Pressed(pressed) => {
+            conn.call_method(Some(name), path, Some(interface), method, &pressed)
+                .await
+        }
     };
     if let Err(e) = sent {
         tracing::warn!(?what, name, error = %e, "cannot reach the shell process");
@@ -182,18 +252,48 @@ mod tests {
 
     #[test]
     fn the_lock_request_calls_the_login_process() {
-        assert_eq!(Request::Lock.call(), ("org.cupertino.Login1", "/org/cupertino/Login1", "org.cupertino.Login1", "Lock", Body::Empty));
+        assert_eq!(
+            Request::Lock.call(),
+            (
+                "org.cupertino.Login1",
+                "/org/cupertino/Login1",
+                "org.cupertino.Login1",
+                "Lock",
+                Body::Empty
+            )
+        );
     }
 
     #[test]
     fn the_explicit_lock_request_calls_lock_now() {
-        assert_eq!(Request::LockNow.call(), ("org.cupertino.Login1", "/org/cupertino/Login1", "org.cupertino.Login1", "LockNow", Body::Empty));
+        assert_eq!(
+            Request::LockNow.call(),
+            (
+                "org.cupertino.Login1",
+                "/org/cupertino/Login1",
+                "org.cupertino.Login1",
+                "LockNow",
+                Body::Empty
+            )
+        );
     }
 
     #[test]
     fn the_power_key_request_calls_the_power_key_method_of_the_login_process_with_the_key_state() {
-        assert_eq!(Request::PowerKey { pressed: true }.call(), ("org.cupertino.Login1", "/org/cupertino/Login1", "org.cupertino.Login1", "PowerKey", Body::Pressed(true)));
-        assert_eq!(Request::PowerKey { pressed: false }.call().4, Body::Pressed(false));
+        assert_eq!(
+            Request::PowerKey { pressed: true }.call(),
+            (
+                "org.cupertino.Login1",
+                "/org/cupertino/Login1",
+                "org.cupertino.Login1",
+                "PowerKey",
+                Body::Pressed(true)
+            )
+        );
+        assert_eq!(
+            Request::PowerKey { pressed: false }.call().4,
+            Body::Pressed(false)
+        );
     }
 
     #[test]
@@ -202,10 +302,33 @@ mod tests {
             let (name, _, _, method, body) = Request::Osd { key, fine }.call();
             (name, method, body)
         };
-        assert_eq!(call(OsdKey::VolumeUp, false), ("org.cupertino.Osd1", "VolumeStep", Body::Step(1, false)));
-        assert_eq!(call(OsdKey::VolumeDown, true), ("org.cupertino.Osd1", "VolumeStep", Body::Step(-1, true)));
-        assert_eq!(call(OsdKey::Mute, false), ("org.cupertino.Osd1", "ToggleMute", Body::Empty));
-        assert_eq!(call(OsdKey::BrightnessDown, false), ("org.cupertino.Osd1", "BrightnessStep", Body::Step(-1, false)));
-        assert_eq!(call(OsdKey::KeyboardBrightnessUp, true), ("org.cupertino.Osd1", "KeyboardBrightnessStep", Body::Step(1, true)));
+        assert_eq!(
+            call(OsdKey::VolumeUp, false),
+            ("org.cupertino.Osd1", "VolumeStep", Body::Step(1, false))
+        );
+        assert_eq!(
+            call(OsdKey::VolumeDown, true),
+            ("org.cupertino.Osd1", "VolumeStep", Body::Step(-1, true))
+        );
+        assert_eq!(
+            call(OsdKey::Mute, false),
+            ("org.cupertino.Osd1", "ToggleMute", Body::Empty)
+        );
+        assert_eq!(
+            call(OsdKey::BrightnessDown, false),
+            (
+                "org.cupertino.Osd1",
+                "BrightnessStep",
+                Body::Step(-1, false)
+            )
+        );
+        assert_eq!(
+            call(OsdKey::KeyboardBrightnessUp, true),
+            (
+                "org.cupertino.Osd1",
+                "KeyboardBrightnessStep",
+                Body::Step(1, true)
+            )
+        );
     }
 }

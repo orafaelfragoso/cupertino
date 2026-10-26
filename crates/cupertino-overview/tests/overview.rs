@@ -25,16 +25,30 @@ fn open(o: &mut Overview) -> f64 {
 }
 
 fn rect_eq(a: Rect, b: Rect) -> bool {
-    a.to_array().iter().zip(b.to_array()).all(|(x, y)| (x - y).abs() < 1e-6)
+    a.to_array()
+        .iter()
+        .zip(b.to_array())
+        .all(|(x, y)| (x - y).abs() < 1e-6)
 }
 
 fn mini(id: u64, app: AppId, size: Rect) -> OverviewWindow {
-    OverviewWindow::minimized(WindowId(id), app, &format!("m{id}"), size, Rect::new(900.0 + id as f64 * 10.0, 1030.0, 48.0, 48.0))
+    OverviewWindow::minimized(
+        WindowId(id),
+        app,
+        &format!("m{id}"),
+        size,
+        Rect::new(900.0 + id as f64 * 10.0, 1030.0, 48.0, 48.0),
+    )
 }
 
 #[test]
 fn flick_opens_even_when_short() {
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, grid4());
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::Overview,
+        grid4(),
+    );
     for i in 0..6 {
         o.gesture_update(i as f64 * 15.0, 0.0, i as f64 * 0.008);
     }
@@ -45,7 +59,12 @@ fn flick_opens_even_when_short() {
 
 #[test]
 fn slow_short_drag_cancels() {
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, grid4());
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::Overview,
+        grid4(),
+    );
     for i in 0..30 {
         o.gesture_update(i as f64 * 2.0, 0.0, i as f64 * 0.016);
     }
@@ -55,7 +74,12 @@ fn slow_short_drag_cancels() {
 
 #[test]
 fn gesture_rubber_bands_beyond_the_ends() {
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, grid4());
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::Overview,
+        grid4(),
+    );
     o.gesture_update(600.0, 0.0, 0.0);
     assert!((o.progress_at(0.0) - (1.0 + 1.0 * 0.15)).abs() < 1e-9);
     o.gesture_update(-300.0, 0.0, 0.1);
@@ -64,7 +88,12 @@ fn gesture_rubber_bands_beyond_the_ends() {
 
 #[test]
 fn reverse_gesture_from_open() {
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, grid4());
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::Overview,
+        grid4(),
+    );
     o.toggle(true, 0.0);
     let t = 5.0;
     for i in 0..6 {
@@ -75,22 +104,45 @@ fn reverse_gesture_from_open() {
 
 #[test]
 fn frames_interpolate_between_desktop_and_layout() {
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, grid4());
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::Overview,
+        grid4(),
+    );
     let from: Vec<Rect> = o.shown_windows().iter().map(|w| w.from).collect();
-    assert!(o.frames(0.0).iter().zip(&from).all(|(a, b)| rect_eq(*a, *b)));
+    assert!(o
+        .frames(0.0)
+        .iter()
+        .zip(&from)
+        .all(|(a, b)| rect_eq(*a, *b)));
     let t = open(&mut o);
-    assert!(o.frames(t).iter().zip(o.layout_rects()).all(|(a, b)| rect_eq(*a, *b)));
+    assert!(o
+        .frames(t)
+        .iter()
+        .zip(o.layout_rects())
+        .all(|(a, b)| rect_eq(*a, *b)));
     let mid = o.frames(0.1);
     assert!(mid[0].w < from[0].w && mid[0].w > o.layout_rects()[0].w - 1e-9);
 }
 
 #[test]
 fn overview_layout_avoids_the_bar_and_has_no_overlap() {
-    let o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, grid4());
+    let o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::Overview,
+        grid4(),
+    );
     let area = o.layout_area();
     assert_eq!(area.y, o.cfg.bar.reserved_height());
     for (i, r) in o.layout_rects().iter().enumerate() {
-        assert!(r.y >= area.y - 1e-9 && r.bottom() <= area.bottom() + 1e-9 && r.x >= -1e-9 && r.right() <= 1920.0 + 1e-9);
+        assert!(
+            r.y >= area.y - 1e-9
+                && r.bottom() <= area.bottom() + 1e-9
+                && r.x >= -1e-9
+                && r.right() <= 1920.0 + 1e-9
+        );
         for q in &o.layout_rects()[i + 1..] {
             assert!(!r.intersects(q));
         }
@@ -112,9 +164,17 @@ fn app_overview_shows_only_the_app_with_minimized_row() {
     w.push(mini(9, A, Rect::new(0.0, 0.0, 800.0, 600.0)));
     w.push(mini(10, A, Rect::new(0.0, 0.0, 600.0, 600.0)));
     w.push(mini(11, B, Rect::new(0.0, 0.0, 600.0, 600.0)));
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::AppOverview(A), w);
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::AppOverview(A),
+        w,
+    );
     let shown: Vec<WindowId> = o.shown_windows().iter().map(|w| w.id).collect();
-    assert_eq!(shown, vec![WindowId(1), WindowId(2), WindowId(9), WindowId(10)]);
+    assert_eq!(
+        shown,
+        vec![WindowId(1), WindowId(2), WindowId(9), WindowId(10)]
+    );
     open(&mut o);
     let rects = o.layout_rects().to_vec();
     let cfg = &o.cfg.app_overview;
@@ -122,11 +182,17 @@ fn app_overview_shows_only_the_app_with_minimized_row() {
     assert!(rects[0].bottom() <= row_top - cfg.row_margin + 1e-6 || rects[0].bottom() <= row_top);
     assert!(rects[1].bottom() <= row_top);
     for r in &rects[2..] {
-        assert!(r.y >= row_top - 1e-9 && r.bottom() <= AREA.bottom() + 1e-9, "minimized row at the bottom: {r:?}");
+        assert!(
+            r.y >= row_top - 1e-9 && r.bottom() <= AREA.bottom() + 1e-9,
+            "minimized row at the bottom: {r:?}"
+        );
         assert!(r.h <= AREA.h * cfg.row_height_fraction + 1e-9);
     }
     assert!(rects[2].right() <= rects[3].x, "row keeps order");
-    assert!((rects[2].w / 800.0 - rects[3].w / 600.0).abs() < 1e-9, "common scale");
+    assert!(
+        (rects[2].w / 800.0 - rects[3].w / 600.0).abs() < 1e-9,
+        "common scale"
+    );
     assert!(rects[2].w / 800.0 <= cfg.row_max_scale + 1e-12);
     for (i, r) in rects.iter().enumerate() {
         for q in &rects[i + 1..] {
@@ -142,7 +208,12 @@ fn app_overview_minimized_windows_fly_in_from_their_dock_tiles() {
     let dock = m.from;
     let mut w = grid4();
     w.push(m);
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::AppOverview(A), w);
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::AppOverview(A),
+        w,
+    );
     assert!(rect_eq(o.frames(0.0)[2], dock));
     let t = open(&mut o);
     assert!(rect_eq(o.frames(t)[2], o.layout_rects()[2]));
@@ -150,7 +221,12 @@ fn app_overview_minimized_windows_fly_in_from_their_dock_tiles() {
 
 #[test]
 fn app_overview_without_minimized_windows_uses_the_full_area() {
-    let o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::AppOverview(A), grid4());
+    let o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::AppOverview(A),
+        grid4(),
+    );
     assert_eq!(o.shown_windows().len(), 2);
     let r = o.layout_rects();
     assert!(r.iter().all(|r| r.bottom() <= AREA.bottom() && r.y >= 0.0));
@@ -161,20 +237,33 @@ fn app_overview_without_minimized_windows_uses_the_full_area() {
 #[test]
 fn app_overview_with_only_minimized_windows() {
     let w = vec![mini(1, A, Rect::new(0.0, 0.0, 800.0, 600.0))];
-    let o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::AppOverview(A), w);
+    let o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::AppOverview(A),
+        w,
+    );
     assert_eq!(o.layout_rects().len(), 1);
     assert!(o.layout_rects()[0].y > AREA.h * 0.5);
 }
 
 #[test]
 fn switching_mode_reflows_without_a_jump() {
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, grid4());
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::Overview,
+        grid4(),
+    );
     let t = open(&mut o);
     let before = o.frames(t);
     o.set_mode(OverviewMode::AppOverview(A), t);
     assert_eq!(o.shown_windows().len(), 2);
     let after = o.frames(t);
-    assert!(rect_eq(after[0], before[0]) && rect_eq(after[1], before[1]), "windows start from where they were");
+    assert!(
+        rect_eq(after[0], before[0]) && rect_eq(after[1], before[1]),
+        "windows start from where they were"
+    );
     assert!(o.is_animating(t));
     let end = o.frames(t + 5.0);
     assert!(rect_eq(end[0], o.layout_rects()[0]));
@@ -185,7 +274,12 @@ fn switching_mode_reflows_without_a_jump() {
 
 #[test]
 fn closing_a_window_reflows_the_rest() {
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, grid4());
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::Overview,
+        grid4(),
+    );
     let t = open(&mut o);
     let before = o.frames(t);
     let mut w = grid4();
@@ -193,19 +287,41 @@ fn closing_a_window_reflows_the_rest() {
     o.set_windows(w, t);
     assert_eq!(o.shown_windows().len(), 3);
     let after = o.frames(t);
-    assert!(rect_eq(after[0], before[1]) && rect_eq(after[1], before[2]) && rect_eq(after[2], before[3]));
+    assert!(
+        rect_eq(after[0], before[1])
+            && rect_eq(after[1], before[2])
+            && rect_eq(after[2], before[3])
+    );
     let settled = o.frames(t + 5.0);
-    assert!(settled.iter().zip(o.layout_rects()).all(|(a, b)| rect_eq(*a, *b)));
+    assert!(settled
+        .iter()
+        .zip(o.layout_rects())
+        .all(|(a, b)| rect_eq(*a, *b)));
     // the windows that overlapped the closed one spread into its room, gliding there
-    let moved: Vec<usize> = (0..3).filter(|i| !rect_eq(settled[*i], before[i + 1])).collect();
-    assert!(!moved.is_empty(), "the packing changed without window 1: {settled:?}");
+    let moved: Vec<usize> = (0..3)
+        .filter(|i| !rect_eq(settled[*i], before[i + 1]))
+        .collect();
+    assert!(
+        !moved.is_empty(),
+        "the packing changed without window 1: {settled:?}"
+    );
     let mid = o.frames(t + 0.1);
-    assert!(moved.iter().all(|i| !rect_eq(mid[*i], before[i + 1]) && !rect_eq(mid[*i], settled[*i])), "windows glide to their new places");
+    assert!(
+        moved
+            .iter()
+            .all(|i| !rect_eq(mid[*i], before[i + 1]) && !rect_eq(mid[*i], settled[*i])),
+        "windows glide to their new places"
+    );
 }
 
 #[test]
 fn hover_selects_and_highlights_with_fade_and_glide() {
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, grid4());
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::Overview,
+        grid4(),
+    );
     let t = open(&mut o);
     let r0 = o.layout_rects()[0];
     let r1 = o.layout_rects()[1];
@@ -221,8 +337,14 @@ fn hover_selects_and_highlights_with_fade_and_glide() {
     o.pointer_moved(Some(r1.center()), t + 1.0);
     assert_eq!(o.selection(), Some(WindowId(2)));
     let g = o.highlight(t + 1.05).unwrap();
-    assert!(g.rect.x > h.rect.x && g.rect.x < r1.x, "outline glides to the new window");
-    assert!(rect_eq(o.highlight(t + 6.0).unwrap().rect, r1.inset(-o.cfg.highlight.inset)));
+    assert!(
+        g.rect.x > h.rect.x && g.rect.x < r1.x,
+        "outline glides to the new window"
+    );
+    assert!(rect_eq(
+        o.highlight(t + 6.0).unwrap().rect,
+        r1.inset(-o.cfg.highlight.inset)
+    ));
 
     o.pointer_moved(Some(Point::new(1.0, 1070.0)), t + 6.0);
     assert_eq!(o.selection(), None);
@@ -233,14 +355,22 @@ fn hover_selects_and_highlights_with_fade_and_glide() {
 
 #[test]
 fn click_actions() {
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, grid4());
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::Overview,
+        grid4(),
+    );
     o.set_workspaces(&[WorkspaceId(1), WorkspaceId(2)], Some(WorkspaceId(1)));
     let t = open(&mut o);
     let r = o.layout_rects()[2];
     assert_eq!(o.click(r.center(), t), OverviewAction::Select(WindowId(3)));
     assert_eq!(o.click(Point::new(5.0, 1075.0), t), OverviewAction::Close);
     let slot = o.bar.layout(t).slots[1].rect.center();
-    assert_eq!(o.click(slot, t), OverviewAction::SwitchWorkspace(WorkspaceId(2)));
+    assert_eq!(
+        o.click(slot, t),
+        OverviewAction::SwitchWorkspace(WorkspaceId(2))
+    );
     o.pointer_moved(Some(slot), t);
     let add = o.bar.layout(t + 3.0).add.unwrap().center();
     assert_eq!(o.click(add, t + 3.0), OverviewAction::AddWorkspace);
@@ -248,7 +378,12 @@ fn click_actions() {
 
 #[test]
 fn hovering_the_bar_expands_it() {
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, grid4());
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::Overview,
+        grid4(),
+    );
     o.set_workspaces(&[WorkspaceId(1), WorkspaceId(2)], Some(WorkspaceId(1)));
     let t = open(&mut o);
     let c = o.bar.layout(t).rect.center();
@@ -258,7 +393,12 @@ fn hovering_the_bar_expands_it() {
     o.pointer_moved(Some(Point::new(960.0, 700.0)), t + 3.0);
     assert!(!o.bar.is_expanded_target());
 
-    let mut app = Overview::new(OverviewConfig::default(), AREA, OverviewMode::AppOverview(A), grid4());
+    let mut app = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::AppOverview(A),
+        grid4(),
+    );
     app.set_workspaces(&[WorkspaceId(1)], Some(WorkspaceId(1)));
     let c = app.bar.layout(0.0).rect.center();
     app.pointer_moved(Some(c), 0.0);
@@ -268,14 +408,27 @@ fn hovering_the_bar_expands_it() {
 
 #[test]
 fn keyboard_directional_navigation_on_a_grid() {
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, grid4());
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::Overview,
+        grid4(),
+    );
     let t = open(&mut o);
     assert_eq!(o.key(Key::Right, t), OverviewAction::None);
-    assert_eq!(o.selection(), Some(WindowId(1)), "first key selects the first window");
+    assert_eq!(
+        o.selection(),
+        Some(WindowId(1)),
+        "first key selects the first window"
+    );
     o.key(Key::Right, t);
     assert_eq!(o.selection(), Some(WindowId(2)));
     o.key(Key::Right, t);
-    assert_eq!(o.selection(), Some(WindowId(2)), "no wrap on directional keys");
+    assert_eq!(
+        o.selection(),
+        Some(WindowId(2)),
+        "no wrap on directional keys"
+    );
     o.key(Key::Down, t);
     assert_eq!(o.selection(), Some(WindowId(4)));
     o.key(Key::Left, t);
@@ -291,7 +444,12 @@ fn keyboard_directional_navigation_on_a_grid() {
 
 #[test]
 fn keyboard_next_previous_cycle_in_reading_order() {
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, grid4());
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::Overview,
+        grid4(),
+    );
     let t = open(&mut o);
     let mut seen = vec![];
     for _ in 0..5 {
@@ -302,14 +460,24 @@ fn keyboard_next_previous_cycle_in_reading_order() {
     o.key(Key::Previous, t);
     assert_eq!(o.selection(), Some(WindowId(4)));
 
-    let mut p = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, grid4());
+    let mut p = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::Overview,
+        grid4(),
+    );
     p.key(Key::Previous, 0.0);
     assert_eq!(p.selection(), Some(WindowId(4)));
 }
 
 #[test]
 fn keyboard_selection_wins_over_stationary_pointer_until_it_moves() {
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, grid4());
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::Overview,
+        grid4(),
+    );
     let t = open(&mut o);
     let r0 = o.layout_rects()[0].center();
     o.pointer_moved(Some(r0), t);
@@ -326,13 +494,21 @@ fn keyboard_selection_wins_over_stationary_pointer_until_it_moves() {
 fn keyboard_navigation_in_app_overview_reaches_minimized_row() {
     let mut w = grid4();
     w.push(mini(9, A, Rect::new(0.0, 0.0, 800.0, 600.0)));
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::AppOverview(A), w);
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::AppOverview(A),
+        w,
+    );
     o.key(Key::Next, 0.0);
     assert_eq!(o.selection(), Some(WindowId(1)));
     o.key(Key::Down, 0.0);
     assert_eq!(o.selection(), Some(WindowId(9)));
     o.key(Key::Up, 0.0);
-    assert!(matches!(o.selection(), Some(WindowId(1)) | Some(WindowId(2))));
+    assert!(matches!(
+        o.selection(),
+        Some(WindowId(1)) | Some(WindowId(2))
+    ));
     // the minimized row ends the reading order: Next reaches it from either open window
     let presses = (1..=3).find(|_| {
         o.key(Key::Next, 0.0);
@@ -343,7 +519,12 @@ fn keyboard_navigation_in_app_overview_reaches_minimized_row() {
 
 #[test]
 fn keyboard_on_empty_overview_is_inert() {
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, vec![]);
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::Overview,
+        vec![],
+    );
     assert_eq!(o.key(Key::Next, 0.0), OverviewAction::None);
     assert_eq!(o.key(Key::Activate, 0.0), OverviewAction::None);
     assert_eq!(o.key(Key::Cancel, 0.0), OverviewAction::Close);
@@ -352,7 +533,12 @@ fn keyboard_on_empty_overview_is_inert() {
 
 #[test]
 fn removed_window_drops_selection() {
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, grid4());
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::Overview,
+        grid4(),
+    );
     o.key(Key::Next, 0.0);
     assert_eq!(o.selection(), Some(WindowId(1)));
     let mut w = grid4();
@@ -376,28 +562,44 @@ fn title_fade_schedule() {
         assert!(v >= prev);
         prev = v;
     }
-    let custom = TitleFade { start: 0.5, end: 0.5 };
+    let custom = TitleFade {
+        start: 0.5,
+        end: 0.5,
+    };
     assert_eq!(custom.opacity(0.4), 0.0);
     assert_eq!(custom.opacity(0.5), 1.0);
 }
 
 #[test]
 fn titles_follow_transition_progress() {
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, grid4());
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::Overview,
+        grid4(),
+    );
     assert_eq!(o.title_opacity(0.0), 0.0);
     o.toggle(true, 0.0);
     assert_eq!(o.title_opacity(0.05), 0.0, "still early in the transition");
     assert_eq!(o.title_opacity(5.0), 1.0);
     assert!(o.placed(5.0).iter().all(|p| p.title_opacity == 1.0));
     o.toggle(false, 5.0);
-    assert!(o.title_opacity(5.0 + 0.2) < 1.0, "titles fade out again while closing");
+    assert!(
+        o.title_opacity(5.0 + 0.2) < 1.0,
+        "titles fade out again while closing"
+    );
 }
 
 #[test]
 fn placed_windows_report_selection_and_minimized() {
     let mut w = grid4();
     w.push(mini(9, A, Rect::new(0.0, 0.0, 800.0, 600.0)));
-    let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::AppOverview(A), w);
+    let mut o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::AppOverview(A),
+        w,
+    );
     o.key(Key::Next, 0.0);
     let p = o.placed(0.0);
     assert_eq!(p.len(), 3);
@@ -408,7 +610,12 @@ fn placed_windows_report_selection_and_minimized() {
 #[test]
 fn transition_uses_the_verified_duration_and_slow_motion_is_longer() {
     let settle = |slow: bool| {
-        let mut o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, grid4());
+        let mut o = Overview::new(
+            OverviewConfig::default(),
+            AREA,
+            OverviewMode::Overview,
+            grid4(),
+        );
         o.set_slow_motion(slow);
         assert_eq!(o.slow_motion(), slow);
         o.toggle(true, 0.0);
@@ -420,12 +627,20 @@ fn transition_uses_the_verified_duration_and_slow_motion_is_longer() {
     };
     let (fast, slow) = (settle(false), settle(true));
     assert!(fast < 1.0, "normal transition settles quickly: {fast}");
-    assert!(slow > 4.0 * fast, "slow motion is much longer: {slow} vs {fast}");
+    assert!(
+        slow > 4.0 * fast,
+        "slow motion is much longer: {slow} vs {fast}"
+    );
 }
 
 #[test]
 fn bar_band_height_is_the_verified_90pt() {
-    let o = Overview::new(OverviewConfig::default(), AREA, OverviewMode::Overview, grid4());
+    let o = Overview::new(
+        OverviewConfig::default(),
+        AREA,
+        OverviewMode::Overview,
+        grid4(),
+    );
     assert_eq!(o.cfg.bar.reserved_height(), 90.0);
     assert_eq!(o.bar.layout(0.0).rect.h, 90.0);
 }

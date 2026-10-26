@@ -25,7 +25,13 @@ fn pdf(width: f64, height: f64, content: &str) -> Vec<u8> {
     for o in offsets {
         out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objs.len() + 1
+        )
+        .as_bytes(),
+    );
     out
 }
 
@@ -35,9 +41,23 @@ fn write_source(dir: &Path) {
         std::fs::write(dir.join(name).join("cursor.pdf"), bytes).unwrap();
     };
     put("hand-pointer", pdf(20.0, 20.0, "1 0 0 rg 5 5 10 10 re f"));
-    put("busy-clickable", pdf(10.0, 30.0, "1 0 0 rg 0 20 10 10 re f 0 1 0 rg 0 10 10 10 re f 0 0 1 rg 0 0 10 10 re f"));
+    put(
+        "busy-clickable",
+        pdf(
+            10.0,
+            30.0,
+            "1 0 0 rg 0 20 10 10 re f 0 1 0 rg 0 10 10 10 re f 0 0 1 rg 0 0 10 10 re f",
+        ),
+    );
     put("cross", pdf(16.0, 16.0, "0 0 0 rg 7 0 2 16 re f"));
-    put("count-up", pdf(8.0, 24.0, "1 0 0 rg 0 16 8 8 re f 0 1 0 rg 0 8 8 8 re f 0 0 1 rg 0 0 8 8 re f"));
+    put(
+        "count-up",
+        pdf(
+            8.0,
+            24.0,
+            "1 0 0 rg 0 16 8 8 re f 0 1 0 rg 0 8 8 8 re f 0 0 1 rg 0 0 8 8 re f",
+        ),
+    );
 }
 
 const META: &str = r#"{"cursors": {
@@ -72,7 +92,9 @@ fn px(img: &xcursor::XCursorImage, x: u32, y: u32) -> u32 {
 fn pdf_cursor_is_rasterised_shadowed_and_hotspot_scaled() {
     let d = tempfile::tempdir().unwrap();
     write_source(&d.path().join("cursors").parent().unwrap().join("cursors"));
-    let Some(o) = options(&d.path().join("out"), d.path()) else { return };
+    let Some(o) = options(&d.path().join("out"), d.path()) else {
+        return;
+    };
     let r = build_theme(&o).unwrap();
     let imgs = read(&r.theme_dir, "pointer");
     assert_eq!(imgs.len(), 2);
@@ -86,21 +108,29 @@ fn pdf_cursor_is_rasterised_shadowed_and_hotspot_scaled() {
     // the red square (5..15 pt) is opaque red inside, the corner of the canvas is transparent
     assert_eq!(px(a, 7 + 10, 7 + 10), 0xffff0000, "centre of the square");
     assert_eq!(px(a, 0, 0) >> 24, 0, "transparent background");
-    assert!(px(a, 7 + 3, 7 + 3) >> 24 <= 8, "page corner is clear or only faintly shadowed");
+    assert!(
+        px(a, 7 + 3, 7 + 3) >> 24 <= 8,
+        "page corner is clear or only faintly shadowed"
+    );
 }
 
 #[test]
 fn shadow_is_black_offset_downwards_and_translucent() {
     let d = tempfile::tempdir().unwrap();
     write_source(&d.path().join("cursors"));
-    let Some(o) = options(&d.path().join("out"), d.path()) else { return };
+    let Some(o) = options(&d.path().join("out"), d.path()) else {
+        return;
+    };
     let r = build_theme(&o).unwrap();
     let a = &read(&r.theme_dir, "pointer")[0];
     let pad = 7u32;
     let above = px(a, pad + 10, pad + 4); // just above the square (square spans y 5..15)
     let below = px(a, pad + 10, pad + 16); // just below
     let (aa, ab) = (above >> 24, below >> 24);
-    assert!(ab > aa, "shadow is heavier below ({ab}) than above ({aa}): offset down");
+    assert!(
+        ab > aa,
+        "shadow is heavier below ({ab}) than above ({aa}): offset down"
+    );
     assert!(ab > 40 && ab <= 166, "translucent: {ab}");
     assert_eq!(below & 0x00ff_ffff, 0, "the shadow is black");
 }
@@ -109,7 +139,9 @@ fn shadow_is_black_offset_downwards_and_translucent() {
 fn shadow_can_be_turned_off_and_hotspot_source_chosen() {
     let d = tempfile::tempdir().unwrap();
     write_source(&d.path().join("cursors"));
-    let Some(mut o) = options(&d.path().join("out"), d.path()) else { return };
+    let Some(mut o) = options(&d.path().join("out"), d.path()) else {
+        return;
+    };
     o.shadow = ShadowMode::Never;
     o.hotspot_source = HotspotSource::Scaled;
     let r = build_theme(&o).unwrap();
@@ -122,30 +154,52 @@ fn shadow_can_be_turned_off_and_hotspot_source_chosen() {
 fn stacked_frames_become_an_animation_with_aliases() {
     let d = tempfile::tempdir().unwrap();
     write_source(&d.path().join("cursors"));
-    let Some(mut o) = options(&d.path().join("out"), d.path()) else { return };
+    let Some(mut o) = options(&d.path().join("out"), d.path()) else {
+        return;
+    };
     o.shadow = ShadowMode::Never;
     let r = build_theme(&o).unwrap();
     let frames = read(&r.theme_dir, "progress");
     assert_eq!(frames.len(), 3 * 2, "three frames at two sizes");
     let first_size: Vec<_> = frames.iter().filter(|f| f.nominal_size == 24).collect();
     assert_eq!(first_size.len(), 3);
-    assert!(first_size.iter().all(|f| f.delay_ms == 100 && (f.width, f.height) == (10, 10)));
-    assert_eq!(px(first_size[0], 5, 5), 0xffff0000, "top frame is the first");
+    assert!(first_size
+        .iter()
+        .all(|f| f.delay_ms == 100 && (f.width, f.height) == (10, 10)));
+    assert_eq!(
+        px(first_size[0], 5, 5),
+        0xffff0000,
+        "top frame is the first"
+    );
     assert_eq!(px(first_size[1], 5, 5), 0xff00ff00);
     assert_eq!(px(first_size[2], 5, 5), 0xff0000ff);
     let cur = r.theme_dir.join("cursors");
-    assert_eq!(std::fs::read_link(cur.join("wait")).unwrap(), Path::new("progress"));
-    assert_eq!(std::fs::read_link(cur.join("left_ptr_watch")).unwrap(), Path::new("progress"));
+    assert_eq!(
+        std::fs::read_link(cur.join("wait")).unwrap(),
+        Path::new("progress")
+    );
+    assert_eq!(
+        std::fs::read_link(cur.join("left_ptr_watch")).unwrap(),
+        Path::new("progress")
+    );
 }
 
 #[test]
 fn cursors_without_metadata_get_a_centre_hotspot_and_a_warning() {
     let d = tempfile::tempdir().unwrap();
     write_source(&d.path().join("cursors"));
-    let Some(mut o) = options(&d.path().join("out"), d.path()) else { return };
+    let Some(mut o) = options(&d.path().join("out"), d.path()) else {
+        return;
+    };
     o.shadow = ShadowMode::Never;
     let r = build_theme(&o).unwrap();
-    assert!(r.warnings.iter().any(|w| w.starts_with("cross:") && w.contains("hotspot")), "{:?}", r.warnings);
+    assert!(
+        r.warnings
+            .iter()
+            .any(|w| w.starts_with("cross:") && w.contains("hotspot")),
+        "{:?}",
+        r.warnings
+    );
     let imgs = read(&r.theme_dir, "cross");
     assert_eq!((imgs[0].xhot, imgs[0].yhot), (8, 8));
     assert_eq!((imgs[1].xhot, imgs[1].yhot), (16, 16));
@@ -155,11 +209,19 @@ fn cursors_without_metadata_get_a_centre_hotspot_and_a_warning() {
 fn stacked_square_frames_without_metadata_are_guessed() {
     let d = tempfile::tempdir().unwrap();
     write_source(&d.path().join("cursors"));
-    let Some(mut o) = options(&d.path().join("out"), d.path()) else { return };
+    let Some(mut o) = options(&d.path().join("out"), d.path()) else {
+        return;
+    };
     o.shadow = ShadowMode::Never;
     o.default_delay_ms = 250;
     let r = build_theme(&o).unwrap();
-    assert!(r.warnings.iter().any(|w| w.starts_with("count-up:") && w.contains("guessed 3")), "{:?}", r.warnings);
+    assert!(
+        r.warnings
+            .iter()
+            .any(|w| w.starts_with("count-up:") && w.contains("guessed 3")),
+        "{:?}",
+        r.warnings
+    );
     let frames = read(&r.theme_dir, "count-up");
     assert_eq!(frames.len(), 3 * 2);
     assert!(frames.iter().all(|f| f.delay_ms == 250));
@@ -173,7 +235,9 @@ fn stacked_square_frames_without_metadata_are_guessed() {
 fn missing_names_are_completed_with_the_procedural_set() {
     let d = tempfile::tempdir().unwrap();
     write_source(&d.path().join("cursors"));
-    let Some(o) = options(&d.path().join("out"), d.path()) else { return };
+    let Some(o) = options(&d.path().join("out"), d.path()) else {
+        return;
+    };
     let r = build_theme(&o).unwrap();
     let cur = r.theme_dir.join("cursors");
     for n in cupertino_cursor::names::REQUIRED_NAMES {
@@ -193,29 +257,60 @@ fn missing_names_are_completed_with_the_procedural_set() {
 fn hyprcursor_source_theme_is_written_with_square_images() {
     let d = tempfile::tempdir().unwrap();
     write_source(&d.path().join("cursors"));
-    let Some(mut o) = options(&d.path().join("out"), d.path()) else { return };
+    let Some(mut o) = options(&d.path().join("out"), d.path()) else {
+        return;
+    };
     o.hyprcursor = true;
     let r = build_theme(&o).unwrap();
     let h = r.hypr_dir.expect("hyprcursor directory");
     let manifest = std::fs::read_to_string(h.join("manifest.hl")).unwrap();
-    assert!(manifest.contains("name = Cupertino") && manifest.contains("cursors_directory = hyprcursors"));
+    assert!(
+        manifest.contains("name = Cupertino")
+            && manifest.contains("cursors_directory = hyprcursors")
+    );
     let meta = std::fs::read_to_string(h.join("hyprcursors/pointer/meta.hl")).unwrap();
-    assert!(meta.contains("resize_algorithm = bilinear") && meta.contains("define_override = pointer") && meta.contains("define_override = hand2"));
-    let sizes: Vec<&str> = meta.lines().filter(|l| l.starts_with("define_size")).collect();
+    assert!(
+        meta.contains("resize_algorithm = bilinear")
+            && meta.contains("define_override = pointer")
+            && meta.contains("define_override = hand2")
+    );
+    let sizes: Vec<&str> = meta
+        .lines()
+        .filter(|l| l.starts_with("define_size"))
+        .collect();
     assert_eq!(sizes.len(), 2);
-    assert!(sizes[0].starts_with("define_size = 34, image34.png"), "{}", sizes[0]);
+    assert!(
+        sizes[0].starts_with("define_size = 34, image34.png"),
+        "{}",
+        sizes[0]
+    );
     let img = tiny_skia::Pixmap::load_png(h.join("hyprcursors/pointer/image34.png")).unwrap();
     assert_eq!((img.width(), img.height()), (34, 34));
-    let hot: Vec<f64> = meta.lines().filter_map(|l| l.strip_prefix("hotspot_x = ").or_else(|| l.strip_prefix("hotspot_y = "))).map(|v| v.parse().unwrap()).collect();
+    let hot: Vec<f64> = meta
+        .lines()
+        .filter_map(|l| {
+            l.strip_prefix("hotspot_x = ")
+                .or_else(|| l.strip_prefix("hotspot_y = "))
+        })
+        .map(|v| v.parse().unwrap())
+        .collect();
     assert!(hot.iter().all(|v| (0.0..=1.0).contains(v)));
     assert!((hot[0] - 17.5 / 34.0).abs() < 1e-3);
     let anim = std::fs::read_to_string(h.join("hyprcursors/progress/meta.hl")).unwrap();
-    assert!(anim.lines().filter(|l| l.contains("anim") && l.ends_with(", 100")).count() >= 3, "{anim}");
+    assert!(
+        anim.lines()
+            .filter(|l| l.contains("anim") && l.ends_with(", 100"))
+            .count()
+            >= 3,
+        "{anim}"
+    );
 }
 
 #[test]
 fn the_reference_set_builds_when_provided() {
-    let Some(dir) = std::env::var_os("CUPERTINO_CURSOR_SOURCE") else { return };
+    let Some(dir) = std::env::var_os("CUPERTINO_CURSOR_SOURCE") else {
+        return;
+    };
     let d = tempfile::tempdir().unwrap();
     let mut o = BuildOptions::new(d.path());
     if !o.poppler.available() {
@@ -230,8 +325,15 @@ fn the_reference_set_builds_when_provided() {
         assert!(cur.join(n).exists(), "{n}");
     }
     for f in std::fs::read_dir(&cur).unwrap().flatten() {
-        let imgs = xcursor::parse(&std::fs::read(f.path()).unwrap()).unwrap_or_else(|e| panic!("{}: {e}", f.path().display()));
-        assert!(imgs.iter().all(|i| i.pixels.iter().any(|p| p >> 24 != 0)), "{} is blank", f.path().display());
+        let imgs = xcursor::parse(&std::fs::read(f.path()).unwrap())
+            .unwrap_or_else(|e| panic!("{}: {e}", f.path().display()));
+        assert!(
+            imgs.iter().all(|i| i.pixels.iter().any(|p| p >> 24 != 0)),
+            "{} is blank",
+            f.path().display()
+        );
     }
-    assert!(std::fs::read_to_string(r.theme_dir.join("README.txt")).unwrap().contains("LOCAL USE ONLY"));
+    assert!(std::fs::read_to_string(r.theme_dir.join("README.txt"))
+        .unwrap()
+        .contains("LOCAL USE ONLY"));
 }

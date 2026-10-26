@@ -4,18 +4,23 @@
 //! on them (labels, marks, highlights) into transparent pixmaps. Colours and metrics not given
 //! by the material recipes are approximate.
 
+use crate::feed::{Shared, SCREEN_CAPTURE_SLOT};
 use crate::geom::Rect;
 use crate::item::Toggle;
-use crate::layout::{BarContent, BarLayout, BarMetrics, MenuMetrics, PopupLayout, SlotKey, TextMeasure};
-use crate::feed::{Shared, SCREEN_CAPTURE_SLOT};
-use cupertino_decorations::palette::Rgba;
+use crate::layout::{
+    BarContent, BarLayout, BarMetrics, MenuMetrics, PopupLayout, SlotKey, TextMeasure,
+};
 use cupertino_assets::{AssetError, Assets, FontRole};
+use cupertino_decorations::palette::Rgba;
 use cupertino_decorations::text::TextRenderer;
 use cupertino_geometry::{CornerStyle, Radii, Rect as GRect};
 use cupertino_theme::Typography;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use tiny_skia::{FillRule, FilterQuality, LineCap, LineJoin, Paint, PathBuilder, Pixmap, PixmapPaint, Stroke, Transform};
+use tiny_skia::{
+    FillRule, FilterQuality, LineCap, LineJoin, Paint, PathBuilder, Pixmap, PixmapPaint, Stroke,
+    Transform,
+};
 
 /// Corner radius of a popup menu in points. approximate.
 pub const POPUP_RADIUS: f64 = 8.0;
@@ -98,7 +103,10 @@ impl BarText {
 
     /// The same text with a scale of its own.
     pub fn for_output(&self) -> Self {
-        Self { scale: Rc::new(Cell::new(1.0)), ..self.clone() }
+        Self {
+            scale: Rc::new(Cell::new(1.0)),
+            ..self.clone()
+        }
     }
 
     /// Device pixels per point that [`TextMeasure::width`] measures at.
@@ -107,18 +115,41 @@ impl BarText {
     }
 
     fn weight(&self, bold: bool) -> u16 {
-        if bold { self.bold_weight } else { self.regular_weight }
+        if bold {
+            self.bold_weight
+        } else {
+            self.regular_weight
+        }
     }
 
     /// Draw `text` with its left edge at `x_pt`, centred on the cap height in the band that starts
     /// at `band_top` and is `band_h` tall (points), into a pixmap at `scale` device pixels per point.
     #[allow(clippy::too_many_arguments)]
-    fn draw(&self, pm: &mut Pixmap, text: &str, x_pt: f64, band_top: f64, band_h: f64, scale: f64, bold: bool, color: Rgba) {
+    fn draw(
+        &self,
+        pm: &mut Pixmap,
+        text: &str,
+        x_pt: f64,
+        band_top: f64,
+        band_h: f64,
+        scale: f64,
+        bold: bool,
+        color: Rgba,
+    ) {
         let px = self.font_pt * scale as f32;
         let baseline = (((band_top + band_h / 2.0) * scale) as f32) + self.cap_height * px / 2.0;
         let mut renderer = self.renderer.borrow_mut();
         renderer.set_scale(scale as f32);
-        renderer.draw(pm, text, (x_pt * scale) as f32, baseline, px, self.weight(bold), 0.0, color);
+        renderer.draw(
+            pm,
+            text,
+            (x_pt * scale) as f32,
+            baseline,
+            px,
+            self.weight(bold),
+            0.0,
+            color,
+        );
     }
 }
 
@@ -127,7 +158,8 @@ impl TextMeasure for BarText {
         let scale = self.scale.get().max(0.5);
         let mut renderer = self.renderer.borrow_mut();
         renderer.set_scale(scale as f32);
-        f64::from(renderer.measure(text, self.font_pt * scale as f32, self.weight(bold), 0.0)) / scale
+        f64::from(renderer.measure(text, self.font_pt * scale as f32, self.weight(bold), 0.0))
+            / scale
     }
 }
 
@@ -148,25 +180,73 @@ impl Style {
     /// of the open or keyboard-focused title, the labels, the status icons, the control panel
     /// glyph and the clock.
     #[allow(clippy::too_many_arguments)]
-    pub fn paint_bar(&self, text: &BarText, pm: &mut Pixmap, layout: &BarLayout, content: &BarContent, highlight: Option<&SlotKey>, shared: &Shared, scale: f64) {
+    pub fn paint_bar(
+        &self,
+        text: &BarText,
+        pm: &mut Pixmap,
+        layout: &BarLayout,
+        content: &BarContent,
+        highlight: Option<&SlotKey>,
+        shared: &Shared,
+        scale: f64,
+    ) {
         for slot in &layout.slots {
             let r = GRect::new(slot.rect.x, slot.rect.y, slot.rect.w, slot.rect.h);
             if highlight == Some(&slot.key) {
                 let m = &self.bar;
-                let hl = GRect::new(r.x(), r.y() + m.selection_inset_y, r.width(), r.height() - 2.0 * m.selection_inset_y);
-                fill_rounded(pm, hl, m.selection_corner_radius, scale, self.palette.bar_highlight);
+                let hl = GRect::new(
+                    r.x(),
+                    r.y() + m.selection_inset_y,
+                    r.width(),
+                    r.height() - 2.0 * m.selection_inset_y,
+                );
+                fill_rounded(
+                    pm,
+                    hl,
+                    m.selection_corner_radius,
+                    scale,
+                    self.palette.bar_highlight,
+                );
             }
             match &slot.key {
-                SlotKey::AppMenu => text.draw(pm, &content.app_name, r.x() + self.bar.title_padding, r.y(), r.height(), scale, true, self.color(1.0)),
+                SlotKey::AppMenu => text.draw(
+                    pm,
+                    &content.app_name,
+                    r.x() + self.bar.title_padding,
+                    r.y(),
+                    r.height(),
+                    scale,
+                    true,
+                    self.color(1.0),
+                ),
                 SlotKey::Menu(id) => {
                     if let Some(m) = content.menus.iter().find(|m| m.id == *id) {
-                        text.draw(pm, &m.label, r.x() + self.bar.title_padding, r.y(), r.height(), scale, false, self.color(1.0));
+                        text.draw(
+                            pm,
+                            &m.label,
+                            r.x() + self.bar.title_padding,
+                            r.y(),
+                            r.height(),
+                            scale,
+                            false,
+                            self.color(1.0),
+                        );
                     }
                 }
                 SlotKey::Status(id) if id == SCREEN_CAPTURE_SLOT => {
                     let (cx, cy) = (r.x() + r.width() / 2.0, r.y() + r.height() / 2.0);
-                    if let Some(path) = PathBuilder::from_circle((cx * scale) as f32, (cy * scale) as f32, (PRIVACY_DOT_PT / 2.0 * scale) as f32) {
-                        pm.fill_path(&path, &paint(self.palette.screen_capture), FillRule::Winding, Transform::identity(), None);
+                    if let Some(path) = PathBuilder::from_circle(
+                        (cx * scale) as f32,
+                        (cy * scale) as f32,
+                        (PRIVACY_DOT_PT / 2.0 * scale) as f32,
+                    ) {
+                        pm.fill_path(
+                            &path,
+                            &paint(self.palette.screen_capture),
+                            FillRule::Winding,
+                            Transform::identity(),
+                            None,
+                        );
                     }
                 }
                 SlotKey::Status(id) => {
@@ -175,7 +255,16 @@ impl Style {
                     }
                 }
                 SlotKey::ControlPanel => draw_control_panel(pm, r, scale, self.color(1.0)),
-                SlotKey::Clock => text.draw(pm, &content.clock, r.x() + self.bar.clock_padding, r.y(), r.height(), scale, false, self.color(1.0)),
+                SlotKey::Clock => text.draw(
+                    pm,
+                    &content.clock,
+                    r.x() + self.bar.clock_padding,
+                    r.y(),
+                    r.height(),
+                    scale,
+                    false,
+                    self.color(1.0),
+                ),
             }
         }
     }
@@ -186,16 +275,38 @@ impl Style {
         let (cx, cy) = (r.x() + r.width() / 2.0, r.y() + r.height() / 2.0);
         match icon {
             Some(icon) => {
-                let k = ((side * scale) as f32 / icon.width().max(icon.height()) as f32).min(1.0 + 1e-3);
+                let k = ((side * scale) as f32 / icon.width().max(icon.height()) as f32)
+                    .min(1.0 + 1e-3);
                 let (dw, dh) = (icon.width() as f32 * k, icon.height() as f32 * k);
-                let (dx, dy) = ((cx * scale) as f32 - dw / 2.0, (cy * scale) as f32 - dh / 2.0);
-                let paint = PixmapPaint { quality: FilterQuality::Bilinear, ..PixmapPaint::default() };
-                pm.draw_pixmap(0, 0, icon.as_ref(), &paint, Transform::from_row(k, 0.0, 0.0, k, dx, dy), None);
+                let (dx, dy) = (
+                    (cx * scale) as f32 - dw / 2.0,
+                    (cy * scale) as f32 - dh / 2.0,
+                );
+                let paint = PixmapPaint {
+                    quality: FilterQuality::Bilinear,
+                    ..PixmapPaint::default()
+                };
+                pm.draw_pixmap(
+                    0,
+                    0,
+                    icon.as_ref(),
+                    &paint,
+                    Transform::from_row(k, 0.0, 0.0, k, dx, dy),
+                    None,
+                );
             }
             None => {
                 let radius = (side * 0.3) as f32 * scale as f32;
-                if let Some(path) = PathBuilder::from_circle((cx * scale) as f32, (cy * scale) as f32, radius) {
-                    pm.fill_path(&path, &paint(self.color(0.7)), FillRule::Winding, Transform::identity(), None);
+                if let Some(path) =
+                    PathBuilder::from_circle((cx * scale) as f32, (cy * scale) as f32, radius)
+                {
+                    pm.fill_path(
+                        &path,
+                        &paint(self.color(0.7)),
+                        FillRule::Winding,
+                        Transform::identity(),
+                        None,
+                    );
                 }
             }
         }
@@ -203,16 +314,37 @@ impl Style {
 
     /// Draw one popup level into `pm`, which covers the popup surface whose top-left corner is
     /// `origin` in the coordinates of `layout`.
-    pub fn paint_popup(&self, text: &BarText, pm: &mut Pixmap, layout: &PopupLayout, selected: Option<usize>, origin: (f64, f64), scale: f64) {
+    pub fn paint_popup(
+        &self,
+        text: &BarText,
+        pm: &mut Pixmap,
+        layout: &PopupLayout,
+        selected: Option<usize>,
+        origin: (f64, f64),
+        scale: f64,
+    ) {
         let m = &self.menu;
         let any_mark = layout.rows.iter().any(|r| r.item.toggle != Toggle::None);
-        let any_icon = layout.rows.iter().any(|r| r.item.icon_name.is_some() || r.item.icon_data.is_some());
+        let any_icon = layout
+            .rows
+            .iter()
+            .any(|r| r.item.icon_name.is_some() || r.item.icon_data.is_some());
         for (i, row) in layout.rows.iter().enumerate() {
-            let rr = GRect::new(row.rect.x - origin.0, row.rect.y - origin.1, row.rect.w, row.rect.h);
+            let rr = GRect::new(
+                row.rect.x - origin.0,
+                row.rect.y - origin.1,
+                row.rect.w,
+                row.rect.h,
+            );
             let item = &row.item;
             if item.separator {
                 let y = rr.y() + rr.height() / 2.0;
-                let sep = GRect::new(rr.x() + m.padding_x, y - 0.5, rr.width() - 2.0 * m.padding_x, 1.0 / scale.max(1.0));
+                let sep = GRect::new(
+                    rr.x() + m.padding_x,
+                    y - 0.5,
+                    rr.width() - 2.0 * m.padding_x,
+                    1.0 / scale.max(1.0),
+                );
                 fill_rounded(pm, sep, 0.0, scale, self.palette.separator);
                 continue;
             }
@@ -221,52 +353,132 @@ impl Style {
                 let hl = GRect::new(rr.x() + 4.0, rr.y(), rr.width() - 8.0, rr.height());
                 fill_rounded(pm, hl, 4.0, scale, self.palette.row_highlight);
             }
-            let base = if hot { self.palette.row_highlight_text } else { self.palette.text };
-            let alpha = if item.enabled { 1.0 } else { self.palette.disabled_alpha };
+            let base = if hot {
+                self.palette.row_highlight_text
+            } else {
+                self.palette.text
+            };
+            let alpha = if item.enabled {
+                1.0
+            } else {
+                self.palette.disabled_alpha
+            };
             let color = [base[0], base[1], base[2], base[3] * alpha];
             let mark_x = rr.x() + m.padding_x;
             if item.toggle.is_marked() {
                 match item.toggle {
-                    Toggle::Radio(_) => draw_dot(pm, mark_x + m.mark_column * 0.35, rr.y() + rr.height() / 2.0, scale, color),
-                    _ => draw_check(pm, mark_x + m.mark_column * 0.3, rr.y() + rr.height() / 2.0, scale, color),
+                    Toggle::Radio(_) => draw_dot(
+                        pm,
+                        mark_x + m.mark_column * 0.35,
+                        rr.y() + rr.height() / 2.0,
+                        scale,
+                        color,
+                    ),
+                    _ => draw_check(
+                        pm,
+                        mark_x + m.mark_column * 0.3,
+                        rr.y() + rr.height() / 2.0,
+                        scale,
+                        color,
+                    ),
                 }
             }
-            let text_x = mark_x + if any_mark { m.mark_column } else { 0.0 } + if any_icon { m.icon_column } else { 0.0 };
-            text.draw(pm, &item.label, text_x, rr.y(), rr.height(), scale, false, color);
+            let text_x = mark_x
+                + if any_mark { m.mark_column } else { 0.0 }
+                + if any_icon { m.icon_column } else { 0.0 };
+            text.draw(
+                pm,
+                &item.label,
+                text_x,
+                rr.y(),
+                rr.height(),
+                scale,
+                false,
+                color,
+            );
             if let Some(sc) = &row.shortcut_text {
                 let w = text.width(sc, false);
-                let right = rr.x() + rr.width() - m.padding_x - if item.has_submenu { m.arrow_width } else { 0.0 };
-                text.draw(pm, sc, right - w, rr.y(), rr.height(), scale, false, [color[0], color[1], color[2], color[3] * 0.65]);
+                let right = rr.x() + rr.width()
+                    - m.padding_x
+                    - if item.has_submenu { m.arrow_width } else { 0.0 };
+                text.draw(
+                    pm,
+                    sc,
+                    right - w,
+                    rr.y(),
+                    rr.height(),
+                    scale,
+                    false,
+                    [color[0], color[1], color[2], color[3] * 0.65],
+                );
             }
             if item.has_submenu {
-                draw_chevron(pm, rr.x() + rr.width() - m.padding_x - m.arrow_width * 0.35, rr.y() + rr.height() / 2.0, scale, color);
+                draw_chevron(
+                    pm,
+                    rr.x() + rr.width() - m.padding_x - m.arrow_width * 0.35,
+                    rr.y() + rr.height() / 2.0,
+                    scale,
+                    color,
+                );
             }
         }
     }
 }
 
 fn paint(c: Rgba) -> Paint<'static> {
-    let mut p = Paint { anti_alias: true, ..Paint::default() };
-    p.set_color(tiny_skia::Color::from_rgba(c[0].clamp(0.0, 1.0), c[1].clamp(0.0, 1.0), c[2].clamp(0.0, 1.0), c[3].clamp(0.0, 1.0)).expect("components clamped to 0..=1"));
+    let mut p = Paint {
+        anti_alias: true,
+        ..Paint::default()
+    };
+    p.set_color(
+        tiny_skia::Color::from_rgba(
+            c[0].clamp(0.0, 1.0),
+            c[1].clamp(0.0, 1.0),
+            c[2].clamp(0.0, 1.0),
+            c[3].clamp(0.0, 1.0),
+        )
+        .expect("components clamped to 0..=1"),
+    );
     p
 }
 
 fn fill_rounded(pm: &mut Pixmap, r: GRect, radius: f64, scale: f64, color: Rgba) {
     let path = if radius > 0.0 {
-        cupertino_decorations::shape::rounded_path(r, Radii::uniform(radius), CornerStyle::continuous(), scale)
+        cupertino_decorations::shape::rounded_path(
+            r,
+            Radii::uniform(radius),
+            CornerStyle::continuous(),
+            scale,
+        )
     } else {
         let mut pb = PathBuilder::new();
-        let rect = tiny_skia::Rect::from_xywh((r.x() * scale) as f32, (r.y() * scale) as f32, (r.width() * scale).max(1.0) as f32, (r.height() * scale).max(1.0) as f32);
+        let rect = tiny_skia::Rect::from_xywh(
+            (r.x() * scale) as f32,
+            (r.y() * scale) as f32,
+            (r.width() * scale).max(1.0) as f32,
+            (r.height() * scale).max(1.0) as f32,
+        );
         pb.push_rect(rect.expect("finite rectangle with a positive size"));
         pb.finish()
     };
     if let Some(path) = path {
-        pm.fill_path(&path, &paint(color), FillRule::Winding, Transform::identity(), None);
+        pm.fill_path(
+            &path,
+            &paint(color),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 }
 
 fn stroke(pm: &mut Pixmap, path: &tiny_skia::Path, scale: f64, width_pt: f64, color: Rgba) {
-    let s = Stroke { width: (width_pt * scale) as f32, line_cap: LineCap::Round, line_join: LineJoin::Round, ..Stroke::default() };
+    let s = Stroke {
+        width: (width_pt * scale) as f32,
+        line_cap: LineCap::Round,
+        line_join: LineJoin::Round,
+        ..Stroke::default()
+    };
     pm.stroke_path(path, &paint(color), &s, Transform::identity(), None);
 }
 
@@ -282,8 +494,16 @@ fn draw_check(pm: &mut Pixmap, x: f64, y: f64, scale: f64, color: Rgba) {
 }
 
 fn draw_dot(pm: &mut Pixmap, x: f64, y: f64, scale: f64, color: Rgba) {
-    if let Some(p) = PathBuilder::from_circle((x * scale) as f32, (y * scale) as f32, 2.4 * scale as f32) {
-        pm.fill_path(&p, &paint(color), FillRule::Winding, Transform::identity(), None);
+    if let Some(p) =
+        PathBuilder::from_circle((x * scale) as f32, (y * scale) as f32, 2.4 * scale as f32)
+    {
+        pm.fill_path(
+            &p,
+            &paint(color),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 }
 
@@ -303,9 +523,25 @@ fn draw_control_panel(pm: &mut Pixmap, r: GRect, scale: f64, color: Rgba) {
     let (cx, cy) = (r.x() + r.width() / 2.0, r.y() + r.height() / 2.0);
     for (dy, knob) in [(-3.2, 1.8), (3.2, -1.8)] {
         let track = GRect::new(cx - 6.0, cy + dy - 2.2, 12.0, 4.4);
-        fill_rounded(pm, track, 2.2, scale, [color[0], color[1], color[2], color[3] * 0.45]);
-        if let Some(p) = PathBuilder::from_circle(((cx + knob * 2.0) * scale) as f32, ((cy + dy) * scale) as f32, 2.6 * scale as f32) {
-            pm.fill_path(&p, &paint(color), FillRule::Winding, Transform::identity(), None);
+        fill_rounded(
+            pm,
+            track,
+            2.2,
+            scale,
+            [color[0], color[1], color[2], color[3] * 0.45],
+        );
+        if let Some(p) = PathBuilder::from_circle(
+            ((cx + knob * 2.0) * scale) as f32,
+            ((cy + dy) * scale) as f32,
+            2.6 * scale as f32,
+        ) {
+            pm.fill_path(
+                &p,
+                &paint(color),
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
         }
     }
 }

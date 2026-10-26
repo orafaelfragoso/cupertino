@@ -26,7 +26,12 @@ pub struct EasedValue {
 
 impl EasedValue {
     pub fn new(value: f64) -> Self {
-        Self { from: value, to: value, start: 0.0, duration: 0.0 }
+        Self {
+            from: value,
+            to: value,
+            start: 0.0,
+            duration: 0.0,
+        }
     }
 
     pub fn value(&self, now: f64) -> f64 {
@@ -67,7 +72,9 @@ mod tests {
         assert_eq!(cosine_ease(0.0), 0.0);
         assert_eq!(cosine_ease(1.0), 1.0);
         assert!((cosine_ease(0.5) - 0.5).abs() < 1e-15);
-        assert!((cosine_ease(0.25) - (0.5 - 0.5 * (std::f64::consts::FRAC_PI_4).cos())).abs() < 1e-15);
+        assert!(
+            (cosine_ease(0.25) - (0.5 - 0.5 * (std::f64::consts::FRAC_PI_4).cos())).abs() < 1e-15
+        );
         let mut prev = 0.0;
         for k in 1..=100 {
             let v = cosine_ease(k as f64 / 100.0);

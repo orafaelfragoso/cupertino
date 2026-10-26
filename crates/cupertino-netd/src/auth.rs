@@ -40,8 +40,11 @@ impl Authorizer for LogindAuthorizer {
     fn authorize(&self, pid: u32) -> Result<Decision> {
         let session = match locate(&self.system_bus, &SessionLookup::ByPid(pid)) {
             Ok(session) => session,
-            Err(cupertino_seat::Error::Bus { source, .. }) if matches!(source.as_ref(), zbus::Error::MethodError(name, _, _) if name.as_str() == NO_SESSION_FOR_PID) => {
-                return Ok(Decision::Denied("the caller is not in a login session".to_owned()));
+            Err(cupertino_seat::Error::Bus { source, .. }) if matches!(source.as_ref(), zbus::Error::MethodError(name, _, _) if name.as_str() == NO_SESSION_FOR_PID) =>
+            {
+                return Ok(Decision::Denied(
+                    "the caller is not in a login session".to_owned(),
+                ));
             }
             Err(source) => return Err(Error::Seat(source)),
         };
@@ -49,7 +52,10 @@ impl Authorizer for LogindAuthorizer {
         Ok(if info.seat.is_empty() {
             Decision::Denied(format!("session {} has no seat", info.id))
         } else if !info.active {
-            Decision::Denied(format!("session {} is not the active session of {}", info.id, info.seat))
+            Decision::Denied(format!(
+                "session {} is not the active session of {}",
+                info.id, info.seat
+            ))
         } else {
             Decision::Allowed
         })

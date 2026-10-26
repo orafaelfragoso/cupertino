@@ -18,7 +18,9 @@ use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use crate::auth::Authorizer;
 use crate::engine::{Command, CommandError};
 use crate::error::{Error, Result};
-use crate::interfaces::{Manager, NetworkObject, MANAGER_NAME, MANAGER_PATH, NETWORK_NAME, NETWORK_PATH};
+use crate::interfaces::{
+    Manager, NetworkObject, MANAGER_NAME, MANAGER_PATH, NETWORK_NAME, NETWORK_PATH,
+};
 use crate::model::Failure;
 use crate::nm;
 use crate::snapshot::Snapshot;
@@ -72,7 +74,12 @@ impl Requests {
         match read(&*self.waker, &mut counter) {
             // the counter was zero: another call took the wake already
             Ok(_) | Err(Errno::AGAIN) => {}
-            Err(errno) => return Err(Error::Syscall { call: "read of the request eventfd", errno }),
+            Err(errno) => {
+                return Err(Error::Syscall {
+                    call: "read of the request eventfd",
+                    errno,
+                })
+            }
         }
         Ok(self.receiver.try_iter().collect())
     }
@@ -89,7 +96,9 @@ pub struct Shared {
 impl Shared {
     /// The current snapshot, locked. Keep the guard short: bus calls wait on it.
     pub fn snapshot(&self) -> MutexGuard<'_, Snapshot> {
-        self.snapshot.lock().expect("no thread panics while holding the snapshot")
+        self.snapshot
+            .lock()
+            .expect("no thread panics while holding the snapshot")
     }
 
     pub fn authorizer(&self) -> &dyn Authorizer {
@@ -99,9 +108,15 @@ impl Shared {
     /// Hands `command` to the engine and waits for its answer.
     pub async fn submit(&self, command: Command) -> std::result::Result<(), CommandError> {
         let (reply, answer) = async_channel::bounded(1);
-        self.requests.send(Request { command, reply }).map_err(|_| CommandError::Failed("the daemon is shutting down".to_owned()))?;
-        write(&*self.waker, &1u64.to_ne_bytes()).expect("the counter of an eventfd that is read does not overflow");
-        answer.recv().await.map_err(|_| CommandError::Failed("the daemon is shutting down".to_owned()))?
+        self.requests
+            .send(Request { command, reply })
+            .map_err(|_| CommandError::Failed("the daemon is shutting down".to_owned()))?;
+        write(&*self.waker, &1u64.to_ne_bytes())
+            .expect("the counter of an eventfd that is read does not overflow");
+        answer
+            .recv()
+            .await
+            .map_err(|_| CommandError::Failed("the daemon is shutting down".to_owned()))?
     }
 }
 
@@ -116,8 +131,16 @@ impl Daemon {
     /// publish its first snapshot before anyone asks.
     pub fn connect(config: Config) -> Result<(Self, Requests)> {
         let (sender, receiver) = channel();
-        let waker = Arc::new(eventfd(0, EventfdFlags::NONBLOCK | EventfdFlags::CLOEXEC).map_err(Error::syscall("eventfd"))?);
-        let shared = Arc::new(Shared { snapshot: Mutex::new(Snapshot::default()), authorizer: config.authorizer, requests: sender, waker: waker.clone() });
+        let waker = Arc::new(
+            eventfd(0, EventfdFlags::NONBLOCK | EventfdFlags::CLOEXEC)
+                .map_err(Error::syscall("eventfd"))?,
+        );
+        let shared = Arc::new(Shared {
+            snapshot: Mutex::new(Snapshot::default()),
+            authorizer: config.authorizer,
+            requests: sender,
+            waker: waker.clone(),
+        });
         let builder = match &config.bus {
             Bus::System => Builder::system(),
             Bus::Session => Builder::session(),
@@ -138,7 +161,10 @@ impl Daemon {
     /// for instance) owns one of them.
     pub fn claim_names(&self) -> Result<()> {
         for name in [MANAGER_NAME, NETWORK_NAME] {
-            let reply = match self.connection.request_name_with_flags(name, RequestNameFlags::DoNotQueue.into()) {
+            let reply = match self
+                .connection
+                .request_name_with_flags(name, RequestNameFlags::DoNotQueue.into())
+            {
                 Ok(reply) => reply,
                 // with DoNotQueue the bus refuses a name that has an owner
                 Err(zbus::Error::NameTaken) => return Err(Error::NameTaken(name)),
@@ -146,7 +172,9 @@ impl Daemon {
             };
             match reply {
                 RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => {}
-                RequestNameReply::Exists | RequestNameReply::InQueue => return Err(Error::NameTaken(name)),
+                RequestNameReply::Exists | RequestNameReply::InQueue => {
+                    return Err(Error::NameTaken(name))
+                }
             }
         }
         Ok(())
@@ -170,7 +198,11 @@ fn new_failures<'a>(old: &Snapshot, new: &'a Snapshot) -> Vec<(&'a str, Failure)
         .iter()
         .filter_map(|device| {
             let failure = device.failure?;
-            let before = old.devices.iter().find(|before| before.ifindex == device.ifindex).and_then(|before| before.failure);
+            let before = old
+                .devices
+                .iter()
+                .find(|before| before.ifindex == device.ifindex)
+                .and_then(|before| before.failure);
             (before != Some(failure)).then_some((device.name.as_str(), failure))
         })
         .collect()
@@ -180,11 +212,17 @@ async fn announce(connection: &zbus::Connection, old: &Snapshot, new: &Snapshot)
     let signal = Error::bus("emitting a signal");
     let objects = connection.object_server();
 
-    let network = objects.interface::<_, NetworkObject>(NETWORK_PATH).await.map_err(signal)?;
+    let network = objects
+        .interface::<_, NetworkObject>(NETWORK_PATH)
+        .await
+        .map_err(signal)?;
     let emitter = network.signal_emitter();
     let object = network.get().await;
     if old.wireless_enabled != new.wireless_enabled {
-        object.wireless_enabled_changed(emitter).await.map_err(signal)?;
+        object
+            .wireless_enabled_changed(emitter)
+            .await
+            .map_err(signal)?;
     }
     if old.devices != new.devices {
         object.devices_changed(emitter).await.map_err(signal)?;
@@ -193,28 +231,43 @@ async fn announce(connection: &zbus::Connection, old: &Snapshot, new: &Snapshot)
         object.state_changed(emitter).await.map_err(signal)?;
     }
     if old.networks != new.networks {
-        NetworkObject::networks_changed(emitter).await.map_err(signal)?;
+        NetworkObject::networks_changed(emitter)
+            .await
+            .map_err(signal)?;
     }
     for (device, failure) in new_failures(old, new) {
-        NetworkObject::connection_failed(emitter, device, failure.name()).await.map_err(signal)?;
+        NetworkObject::connection_failed(emitter, device, failure.name())
+            .await
+            .map_err(signal)?;
     }
 
-    let manager = objects.interface::<_, Manager>(MANAGER_PATH).await.map_err(signal)?;
+    let manager = objects
+        .interface::<_, Manager>(MANAGER_PATH)
+        .await
+        .map_err(signal)?;
     let emitter = manager.signal_emitter();
     let object = manager.get().await;
     let (before, now) = (nm::state(old), nm::state(new));
     if before != now {
         object.state_changed(emitter).await.map_err(signal)?;
-        Manager::state_signal(emitter, now as u32).await.map_err(signal)?;
+        Manager::state_signal(emitter, now as u32)
+            .await
+            .map_err(signal)?;
     }
     if nm::connectivity(old) != nm::connectivity(new) {
         object.connectivity_changed(emitter).await.map_err(signal)?;
     }
     if old.wireless_enabled != new.wireless_enabled {
-        object.wireless_enabled_changed(emitter).await.map_err(signal)?;
+        object
+            .wireless_enabled_changed(emitter)
+            .await
+            .map_err(signal)?;
     }
     if nm::primary_connection_type(old) != nm::primary_connection_type(new) {
-        object.primary_connection_type_changed(emitter).await.map_err(signal)?;
+        object
+            .primary_connection_type_changed(emitter)
+            .await
+            .map_err(signal)?;
     }
     Ok(())
 }

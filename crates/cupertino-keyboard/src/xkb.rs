@@ -109,14 +109,22 @@ pub struct Translation {
 
 impl KeySet {
     fn table_for(&self, mods: u32) -> u32 {
-        self.modmap.get(mods as usize).copied().unwrap_or(self.default_table)
+        self.modmap
+            .get(mods as usize)
+            .copied()
+            .unwrap_or(self.default_table)
     }
 
     /// Reference implementation of the layout's translation: `mods` are the modifier bits (shift 2, caps 4, alt 8,
     /// control 0x10, command 1).
     pub fn translate(&self, key: usize, mods: u32, state: u32) -> Translation {
         let t = self.table_for(mods) as usize;
-        let cell = self.tables.get(t).and_then(|row| row.get(key)).cloned().flatten();
+        let cell = self
+            .tables
+            .get(t)
+            .and_then(|row| row.get(key))
+            .cloned()
+            .flatten();
         let term = |st: u32| -> String {
             if st > 0 {
                 text_of(&self.terminators.get(st as usize - 1).cloned().flatten())
@@ -125,13 +133,22 @@ impl KeySet {
             }
         };
         match cell {
-            None => Translation { text: String::new(), next_state: state },
+            None => Translation {
+                text: String::new(),
+                next_state: state,
+            },
             Some(Output::Dead { dead }) => {
                 let Some(rec) = self.records.get(dead as usize) else {
-                    return Translation { text: String::new(), next_state: state };
+                    return Translation {
+                        text: String::new(),
+                        next_state: state,
+                    };
                 };
                 if state == 0 {
-                    return Translation { text: text_of(&rec.zero), next_state: rec.next };
+                    return Translation {
+                        text: text_of(&rec.zero),
+                        next_state: rec.next,
+                    };
                 }
                 for e in &rec.entries {
                     if state >= e.state && state <= e.state + e.range {
@@ -142,17 +159,29 @@ impl KeySet {
                                 text = ch.to_string();
                             }
                         }
-                        return Translation { text, next_state: e.next };
+                        return Translation {
+                            text,
+                            next_state: e.next,
+                        };
                     }
                 }
-                Translation { text: term(state) + &text_of(&rec.zero), next_state: rec.next }
+                Translation {
+                    text: term(state) + &text_of(&rec.zero),
+                    next_state: rec.next,
+                }
             }
             Some(o @ (Output::Char { .. } | Output::Seq { .. })) => {
                 let txt = text_of(&Some(o));
                 let text = if state != 0 { term(state) + &txt } else { txt };
-                Translation { text, next_state: 0 }
+                Translation {
+                    text,
+                    next_state: 0,
+                }
             }
-            Some(_) => Translation { text: String::new(), next_state: state },
+            Some(_) => Translation {
+                text: String::new(),
+                next_state: state,
+            },
         }
     }
 }
@@ -182,7 +211,11 @@ pub struct GenOptions {
 
 impl Default for GenOptions {
     fn default() -> Self {
-        GenOptions { keyboard: Keyboard::Ansi, set_index: 0, level3: Level3Keys::BothAlt }
+        GenOptions {
+            keyboard: Keyboard::Ansi,
+            set_index: 0,
+            level3: Level3Keys::BothAlt,
+        }
     }
 }
 
@@ -275,7 +308,9 @@ const DEAD: &[(&str, &str)] = &[
 ];
 
 fn printable(t: &str) -> bool {
-    !t.is_empty() && t.chars().all(|c| (c as u32) >= 0x20 && c as u32 != 0x7F && !(0x80..0xA0).contains(&(c as u32)))
+    !t.is_empty()
+        && t.chars()
+            .all(|c| (c as u32) >= 0x20 && c as u32 != 0x7F && !(0x80..0xA0).contains(&(c as u32)))
 }
 
 /// Keysym name accepted by xkb for a character: ASCII letters and digits by themselves, everything else `Uxxxx`.
@@ -306,16 +341,27 @@ impl Ctx<'_> {
         if let Some(n) = self.state_key.get(&st) {
             return n.clone();
         }
-        let glyph = if st > 0 { text_of(&self.set.terminators.get(st as usize - 1).cloned().flatten()) } else { String::new() };
-        let mut nm = DEAD.iter().find(|(g, _)| *g == glyph).map(|(_, n)| (*n).to_string());
-        let clash = |nm: &String, used: &HashMap<String, u32>| used.get(nm).is_some_and(|u| *u != st);
+        let glyph = if st > 0 {
+            text_of(&self.set.terminators.get(st as usize - 1).cloned().flatten())
+        } else {
+            String::new()
+        };
+        let mut nm = DEAD
+            .iter()
+            .find(|(g, _)| *g == glyph)
+            .map(|(_, n)| (*n).to_string());
+        let clash =
+            |nm: &String, used: &HashMap<String, u32>| used.get(nm).is_some_and(|u| *u != st);
         if nm.as_ref().is_none_or(|n| clash(n, &self.used)) {
             let mut it = glyph.chars();
             nm = match (it.next(), it.next()) {
                 (Some(c), None) => Some(keysym_name(c)),
                 _ => None,
             };
-            if nm.as_ref().is_none_or(|n| self.plain.contains(n) || clash(n, &self.used)) {
+            if nm
+                .as_ref()
+                .is_none_or(|n| self.plain.contains(n) || clash(n, &self.used))
+            {
                 nm = Some(format!("U{:04X}", 0xE000 + st));
             }
         }
@@ -328,8 +374,16 @@ impl Ctx<'_> {
 
 /// Generates the XKB files for `layout`.
 pub fn generate(layout: &Layout, opts: &GenOptions) -> Result<XkbOutput, GenError> {
-    let set = layout.sets.get(opts.set_index).ok_or(GenError::NoSuchSet(opts.set_index))?;
-    let mut ctx = Ctx { set, state_key: HashMap::new(), used: HashMap::new(), plain: HashSet::new() };
+    let set = layout
+        .sets
+        .get(opts.set_index)
+        .ok_or(GenError::NoSuchSet(opts.set_index))?;
+    let mut ctx = Ctx {
+        set,
+        state_key: HashMap::new(),
+        used: HashMap::new(),
+        plain: HashSet::new(),
+    };
     let mut warnings = Vec::new();
 
     let mut pos: BTreeMap<u8, &'static str> = BTreeMap::new();
@@ -414,7 +468,10 @@ pub fn generate(layout: &Layout, opts: &GenOptions) -> Result<XkbOutput, GenErro
             };
             pat.push(idx);
         }
-        let tname = format!("CUP_{}", pat.iter().map(|p| p.to_string()).collect::<String>());
+        let tname = format!(
+            "CUP_{}",
+            pat.iter().map(|p| p.to_string()).collect::<String>()
+        );
         types.insert(tname.clone(), pat.clone());
         let syms: Vec<String> = seen
             .iter()
@@ -427,10 +484,21 @@ pub fn generate(layout: &Layout, opts: &GenOptions) -> Result<XkbOutput, GenErro
             .collect();
         let sym_text = syms.join(", ");
         let name = pos[k];
-        key_lines.push(format!("    key <{name}> {{ type[Group1] = \"{tname}\", symbols[Group1] = [ {sym_text} ] }};"));
+        key_lines.push(format!(
+            "    key <{name}> {{ type[Group1] = \"{tname}\", symbols[Group1] = [ {sym_text} ] }};"
+        ));
     }
 
-    let mods = ["", "Shift", "Lock", "Shift+Lock", "LevelThree", "Shift+LevelThree", "Lock+LevelThree", "Shift+Lock+LevelThree"];
+    let mods = [
+        "",
+        "Shift",
+        "Lock",
+        "Shift+Lock",
+        "LevelThree",
+        "Shift+LevelThree",
+        "Lock+LevelThree",
+        "Shift+Lock+LevelThree",
+    ];
     let mut type_defs = Vec::new();
     for (name, pat) in &types {
         let mut s = format!("    type \"{name}\" {{\n        modifiers = Shift+Lock+LevelThree;\n");
@@ -440,7 +508,11 @@ pub fn generate(layout: &Layout, opts: &GenOptions) -> Result<XkbOutput, GenErro
             }
         }
         for i in 0..=pat.iter().copied().max().unwrap_or(0) {
-            s.push_str(&format!("        level_name[Level{}] = \"L{}\";\n", i + 1, i + 1));
+            s.push_str(&format!(
+                "        level_name[Level{}] = \"L{}\";\n",
+                i + 1,
+                i + 1
+            ));
         }
         s.push_str("    };");
         type_defs.push(s);
@@ -453,7 +525,10 @@ pub fn generate(layout: &Layout, opts: &GenOptions) -> Result<XkbOutput, GenErro
     };
     let safe_name = layout.name.replace('"', "");
     let mut symbols = vec![
-        format!("// generated from layout \"{}\" (id {}), key set {}", layout.name, layout.id, opts.set_index),
+        format!(
+            "// generated from layout \"{}\" (id {}), key set {}",
+            layout.name, layout.id, opts.set_index
+        ),
         "default partial alphanumeric_keys".to_string(),
         "xkb_symbols \"basic\" {".to_string(),
         format!("    name[Group1] = \"{safe_name}\";"),
@@ -482,7 +557,8 @@ pub fn generate(layout: &Layout, opts: &GenOptions) -> Result<XkbOutput, GenErro
     keymap.push("};".to_string());
 
     let (compose, conflicts) = compose_table(layout, &mut ctx, &keys, &mut warnings);
-    let mut dead_keysyms: Vec<(u32, String)> = ctx.state_key.iter().map(|(a, b)| (*a, b.clone())).collect();
+    let mut dead_keysyms: Vec<(u32, String)> =
+        ctx.state_key.iter().map(|(a, b)| (*a, b.clone())).collect();
     dead_keysyms.sort();
     Ok(XkbOutput {
         symbols: symbols.join("\n") + "\n",
@@ -494,7 +570,12 @@ pub fn generate(layout: &Layout, opts: &GenOptions) -> Result<XkbOutput, GenErro
     })
 }
 
-fn compose_table(layout: &Layout, ctx: &mut Ctx<'_>, keys: &BTreeMap<u8, Vec<Cell>>, warnings: &mut Vec<String>) -> (String, usize) {
+fn compose_table(
+    layout: &Layout,
+    ctx: &mut Ctx<'_>,
+    keys: &BTreeMap<u8, Vec<Cell>>,
+    warnings: &mut Vec<String>,
+) -> (String, usize) {
     let set = ctx.set;
     let mut cells: Vec<(u8, u32, String)> = Vec::new();
     for (k, cs) in keys {
@@ -517,7 +598,10 @@ fn compose_table(layout: &Layout, ctx: &mut Ctx<'_>, keys: &BTreeMap<u8, Vec<Cel
         .collect();
     start.sort_unstable();
     start.dedup();
-    let mut todo: Vec<(u32, Vec<String>)> = start.into_iter().map(|s| (s, vec![ctx.dead_name(s)])).collect();
+    let mut todo: Vec<(u32, Vec<String>)> = start
+        .into_iter()
+        .map(|s| (s, vec![ctx.dead_name(s)]))
+        .collect();
     let mut seen: HashSet<u32> = HashSet::new();
     let mut head = 0;
     while head < todo.len() {
@@ -553,20 +637,29 @@ fn compose_table(layout: &Layout, ctx: &mut Ctx<'_>, keys: &BTreeMap<u8, Vec<Cel
             } else if printable(&t.text) {
                 add(t.text, &mut seqs);
             } else if !t.text.is_empty() {
-                warnings.push(format!("state {st} key {k:#04x}/{m}: non-printable output {:?}", t.text));
+                warnings.push(format!(
+                    "state {st} key {k:#04x}/{m}: non-printable output {:?}",
+                    t.text
+                ));
             }
         }
     }
-    let mut out = format!("# generated: dead-key state machine of layout \"{}\" (id {})\n", layout.name, layout.id);
+    let mut out = format!(
+        "# generated: dead-key state machine of layout \"{}\" (id {})\n",
+        layout.name, layout.id
+    );
     for (key, text) in &seqs {
         if text.is_empty() {
             continue;
         }
-        let lit: String = text.chars().flat_map(|c| match c {
-            '"' => vec!['\\', '"'],
-            '\\' => vec!['\\', '\\'],
-            o => vec![o],
-        }).collect();
+        let lit: String = text
+            .chars()
+            .flat_map(|c| match c {
+                '"' => vec!['\\', '"'],
+                '\\' => vec!['\\', '\\'],
+                o => vec![o],
+            })
+            .collect();
         let lhs: Vec<String> = key.iter().map(|k| format!("<{k}>")).collect();
         out.push_str(&format!("{} : \"{}\"\n", lhs.join(" "), lit));
     }
@@ -598,7 +691,13 @@ mod tests {
         let l = layout();
         let s = &l.sets[0];
         let d = s.translate(14, 8, 0);
-        assert_eq!(d, Translation { text: String::new(), next_state: 1 });
+        assert_eq!(
+            d,
+            Translation {
+                text: String::new(),
+                next_state: 1
+            }
+        );
         assert_eq!(s.translate(14, 0, 1).text, "é");
         assert_eq!(s.translate(0, 0, 1).text, "´a");
         assert_eq!(s.translate(49, 0, 1).text, "´");
@@ -623,21 +722,49 @@ mod tests {
     fn iso_swaps_position_keys() {
         let ansi = generate(&layout(), &GenOptions::default()).unwrap();
         assert!(ansi.symbols.contains("<TLDE>") && !ansi.symbols.contains("<LSGT>"));
-        let iso = generate(&layout(), &GenOptions { keyboard: Keyboard::Iso, ..GenOptions::default() }).unwrap();
+        let iso = generate(
+            &layout(),
+            &GenOptions {
+                keyboard: Keyboard::Iso,
+                ..GenOptions::default()
+            },
+        )
+        .unwrap();
         assert!(iso.symbols.contains("<LSGT>"));
     }
 
     #[test]
     fn level3_options() {
-        let none = generate(&layout(), &GenOptions { level3: Level3Keys::None, ..GenOptions::default() }).unwrap();
+        let none = generate(
+            &layout(),
+            &GenOptions {
+                level3: Level3Keys::None,
+                ..GenOptions::default()
+            },
+        )
+        .unwrap();
         assert!(!none.symbols.contains("level3("));
-        let r = generate(&layout(), &GenOptions { level3: Level3Keys::RightAlt, ..GenOptions::default() }).unwrap();
+        let r = generate(
+            &layout(),
+            &GenOptions {
+                level3: Level3Keys::RightAlt,
+                ..GenOptions::default()
+            },
+        )
+        .unwrap();
         assert!(r.keymap.contains("level3(ralt_switch)"));
     }
 
     #[test]
     fn missing_set_is_an_error() {
-        assert!(generate(&layout(), &GenOptions { set_index: 7, ..GenOptions::default() }).is_err());
+        assert!(generate(
+            &layout(),
+            &GenOptions {
+                set_index: 7,
+                ..GenOptions::default()
+            }
+        )
+        .is_err());
     }
 
     #[test]
@@ -653,11 +780,27 @@ mod tests {
         use std::io::Write;
         use std::process::{Command, Stdio};
         let out = generate(&layout(), &GenOptions::default()).unwrap();
-        let Ok(mut child) = Command::new("xkbcli").arg("compile-keymap").arg("--keymap").stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn() else {
+        let Ok(mut child) = Command::new("xkbcli")
+            .arg("compile-keymap")
+            .arg("--keymap")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+        else {
             return;
         };
-        child.stdin.take().unwrap().write_all(out.keymap.as_bytes()).unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(out.keymap.as_bytes())
+            .unwrap();
         let res = child.wait_with_output().unwrap();
-        assert!(res.status.success(), "{}", String::from_utf8_lossy(&res.stderr));
+        assert!(
+            res.status.success(),
+            "{}",
+            String::from_utf8_lossy(&res.stderr)
+        );
     }
 }

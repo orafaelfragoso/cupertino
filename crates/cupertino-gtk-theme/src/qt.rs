@@ -63,22 +63,70 @@ fn colors_section(out: &mut String, name: &str, p: &Palette, g: &Group) {
 
 /// KDE colour scheme file contents. `complementary` supplies the opposite-brightness palette for
 /// `[Colors:Complementary]`.
-pub fn kde_colors(p: &Palette, complementary: &Palette, display_name: &str, file_stem: &str) -> String {
+pub fn kde_colors(
+    p: &Palette,
+    complementary: &Palette,
+    display_name: &str,
+    file_stem: &str,
+) -> String {
     let mut out = String::new();
     let win = p.window_bg;
     let view = p.view_bg;
-    let window = Group { bg: win, bg_alt: over(p.fill_tertiary, win), fg: over(p.window_fg, win), fg_inactive: over(p.secondary_fg, win) };
-    let viewg = Group { bg: view, bg_alt: over(p.zebra, view), fg: over(p.view_fg, view), fg_inactive: over(p.secondary_fg, view) };
-    let button = Group { bg: over(p.control, win), bg_alt: over(p.fill_secondary, over(p.control, win)), fg: over(p.window_fg, win), fg_inactive: over(p.secondary_fg, win) };
-    let selection = Group { bg: p.selection_bg, bg_alt: p.selection_bg, fg: p.selection_fg, fg_inactive: over(p.selection_fg.with_alpha(0.75), p.selection_bg) };
-    let tooltip = Group { bg: p.tooltip_bg, bg_alt: p.tooltip_bg, fg: over(p.tooltip_fg, p.tooltip_bg), fg_inactive: over(p.secondary_fg, p.tooltip_bg) };
-    let header = Group { bg: p.headerbar_bg, bg_alt: p.headerbar_backdrop, fg: over(p.headerbar_fg, p.headerbar_bg), fg_inactive: over(p.secondary_fg, p.headerbar_bg) };
-    let comp = Group { bg: complementary.window_bg, bg_alt: over(complementary.fill_tertiary, complementary.window_bg), fg: over(complementary.window_fg, complementary.window_bg), fg_inactive: over(complementary.secondary_fg, complementary.window_bg) };
+    let window = Group {
+        bg: win,
+        bg_alt: over(p.fill_tertiary, win),
+        fg: over(p.window_fg, win),
+        fg_inactive: over(p.secondary_fg, win),
+    };
+    let viewg = Group {
+        bg: view,
+        bg_alt: over(p.zebra, view),
+        fg: over(p.view_fg, view),
+        fg_inactive: over(p.secondary_fg, view),
+    };
+    let button = Group {
+        bg: over(p.control, win),
+        bg_alt: over(p.fill_secondary, over(p.control, win)),
+        fg: over(p.window_fg, win),
+        fg_inactive: over(p.secondary_fg, win),
+    };
+    let selection = Group {
+        bg: p.selection_bg,
+        bg_alt: p.selection_bg,
+        fg: p.selection_fg,
+        fg_inactive: over(p.selection_fg.with_alpha(0.75), p.selection_bg),
+    };
+    let tooltip = Group {
+        bg: p.tooltip_bg,
+        bg_alt: p.tooltip_bg,
+        fg: over(p.tooltip_fg, p.tooltip_bg),
+        fg_inactive: over(p.secondary_fg, p.tooltip_bg),
+    };
+    let header = Group {
+        bg: p.headerbar_bg,
+        bg_alt: p.headerbar_backdrop,
+        fg: over(p.headerbar_fg, p.headerbar_bg),
+        fg_inactive: over(p.secondary_fg, p.headerbar_bg),
+    };
+    let comp = Group {
+        bg: complementary.window_bg,
+        bg_alt: over(complementary.fill_tertiary, complementary.window_bg),
+        fg: over(complementary.window_fg, complementary.window_bg),
+        fg_inactive: over(complementary.secondary_fg, complementary.window_bg),
+    };
 
     section(
         &mut out,
         "ColorEffects:Disabled",
-        &[("Color", "56,56,56".into()), ("ColorAmount", "0".into()), ("ColorEffect", "0".into()), ("ContrastAmount", "0.65".into()), ("ContrastEffect", "1".into()), ("IntensityAmount", "0.1".into()), ("IntensityEffect", "2".into())],
+        &[
+            ("Color", "56,56,56".into()),
+            ("ColorAmount", "0".into()),
+            ("ColorEffect", "0".into()),
+            ("ContrastAmount", "0.65".into()),
+            ("ContrastEffect", "1".into()),
+            ("IntensityAmount", "0.1".into()),
+            ("IntensityEffect", "2".into()),
+        ],
     );
     section(
         &mut out,
@@ -102,7 +150,15 @@ pub fn kde_colors(p: &Palette, complementary: &Palette, display_name: &str, file
     colors_section(&mut out, "Tooltip", p, &tooltip);
     colors_section(&mut out, "View", p, &viewg);
     colors_section(&mut out, "Window", p, &window);
-    section(&mut out, "General", &[("ColorScheme", file_stem.to_string()), ("Name", display_name.to_string()), ("shadeSortColumn", "true".into())]);
+    section(
+        &mut out,
+        "General",
+        &[
+            ("ColorScheme", file_stem.to_string()),
+            ("Name", display_name.to_string()),
+            ("shadeSortColumn", "true".into()),
+        ],
+    );
     section(&mut out, "KDE", &[("contrast", "4".into())]);
     section(
         &mut out,
@@ -110,10 +166,19 @@ pub fn kde_colors(p: &Palette, complementary: &Palette, display_name: &str, file
         &[
             ("activeBackground", rgb(p.headerbar_bg)),
             ("activeBlend", rgb(p.headerbar_fg.with_alpha(1.0))),
-            ("activeForeground", rgb(over(p.headerbar_fg, p.headerbar_bg))),
+            (
+                "activeForeground",
+                rgb(over(p.headerbar_fg, p.headerbar_bg)),
+            ),
             ("inactiveBackground", rgb(p.headerbar_backdrop)),
-            ("inactiveBlend", rgb(over(p.secondary_fg, p.headerbar_backdrop))),
-            ("inactiveForeground", rgb(over(p.secondary_fg, p.headerbar_backdrop))),
+            (
+                "inactiveBlend",
+                rgb(over(p.secondary_fg, p.headerbar_backdrop)),
+            ),
+            (
+                "inactiveForeground",
+                rgb(over(p.secondary_fg, p.headerbar_backdrop)),
+            ),
         ],
     );
     out.trim_end().to_string() + "\n"
@@ -163,7 +228,10 @@ pub fn qt_palette_group(p: &Palette, group: PaletteGroup) -> [Color; 21] {
     let disabled_text = over(p.disabled_fg, window);
     let (highlight, highlighted_text) = match group {
         PaletteGroup::Inactive => (p.selection_inactive_bg, p.selection_inactive_fg),
-        PaletteGroup::Disabled => (over(p.selection_bg.with_alpha(0.4), window), over(p.selection_fg.with_alpha(0.6), p.selection_bg)),
+        PaletteGroup::Disabled => (
+            over(p.selection_bg.with_alpha(0.4), window),
+            over(p.selection_fg.with_alpha(0.6), p.selection_bg),
+        ),
         PaletteGroup::Active => (p.selection_bg, p.selection_fg),
     };
     let (fg, vt, bt) = match group {
@@ -171,9 +239,19 @@ pub fn qt_palette_group(p: &Palette, group: PaletteGroup) -> [Color; 21] {
         _ => (text, view_text, text),
     };
     let (light, midlight, dark, mid) = if p.dark {
-        (button.lerp(white, 0.30), button.lerp(white, 0.15), button.lerp(black, 0.45), button.lerp(black, 0.25))
+        (
+            button.lerp(white, 0.30),
+            button.lerp(white, 0.15),
+            button.lerp(black, 0.45),
+            button.lerp(black, 0.25),
+        )
     } else {
-        (button.lerp(white, 0.80), button.lerp(white, 0.45), button.lerp(black, 0.30), button.lerp(black, 0.15))
+        (
+            button.lerp(white, 0.80),
+            button.lerp(white, 0.45),
+            button.lerp(black, 0.30),
+            button.lerp(black, 0.15),
+        )
     };
     [
         fg,
@@ -202,8 +280,19 @@ pub fn qt_palette_group(p: &Palette, group: PaletteGroup) -> [Color; 21] {
 
 /// `qt5ct`/`qt6ct` colour scheme file (`[ColorScheme]` with three palette lines).
 pub fn qtct_scheme(p: &Palette) -> String {
-    let line = |g: PaletteGroup| qt_palette_group(p, g).iter().map(|c| argb(*c)).collect::<Vec<_>>().join(", ");
-    format!("[ColorScheme]\nactive_colors={}\ndisabled_colors={}\ninactive_colors={}\n", line(PaletteGroup::Active), line(PaletteGroup::Disabled), line(PaletteGroup::Inactive))
+    let line = |g: PaletteGroup| {
+        qt_palette_group(p, g)
+            .iter()
+            .map(|c| argb(*c))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "[ColorScheme]\nactive_colors={}\ndisabled_colors={}\ninactive_colors={}\n",
+        line(PaletteGroup::Active),
+        line(PaletteGroup::Disabled),
+        line(PaletteGroup::Inactive)
+    )
 }
 
 /// Settings fragment to merge into `qt5ct.conf` / `qt6ct.conf` (not installed automatically).

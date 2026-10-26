@@ -28,7 +28,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use cupertino_keyboard::modifiers::{FnUsage, GlobeOutcome, GlobeTap, RawMods, GLOBE_DEFAULT_REPEAT_MS};
+use cupertino_keyboard::modifiers::{
+    FnUsage, GlobeOutcome, GlobeTap, RawMods, GLOBE_DEFAULT_REPEAT_MS,
+};
 use cupertino_keyboard::mouse_keys::{MouseKeys, PointerAction};
 use cupertino_keyboard::repeat::KeyRepeater;
 use cupertino_keyboard::rewrite::{decide, is_printable, ClientTarget, KeyPress, Rewrite};
@@ -36,7 +38,7 @@ use cupertino_keyboard::slow_keys::{SlowKeys, SlowStep};
 use cupertino_keyboard::sticky_keys::StickyKeys;
 use cupertino_keyboard::switcher::Step;
 use smithay::backend::input::{ButtonState, KeyState};
-use smithay::input::keyboard::{xkb, Keycode, KeyboardTarget, ModifiersState, SerializedMods};
+use smithay::input::keyboard::{xkb, KeyboardTarget, Keycode, ModifiersState, SerializedMods};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Point, SERIAL_COUNTER};
 
@@ -107,7 +109,13 @@ impl ModIndices {
             assert_ne!(index, xkb::MOD_INVALID, "the keymap has no {name} modifier");
             index
         };
-        Self { shift: index(xkb::MOD_NAME_SHIFT), control: index(xkb::MOD_NAME_CTRL), mod1: index(xkb::MOD_NAME_ALT), mod4: index(xkb::MOD_NAME_LOGO), mod5: index(xkb::MOD_NAME_ISO_LEVEL3_SHIFT) }
+        Self {
+            shift: index(xkb::MOD_NAME_SHIFT),
+            control: index(xkb::MOD_NAME_CTRL),
+            mod1: index(xkb::MOD_NAME_ALT),
+            mod4: index(xkb::MOD_NAME_LOGO),
+            mod5: index(xkb::MOD_NAME_ISO_LEVEL3_SHIFT),
+        }
     }
 
     /// Mask of the modifier bits that go away with `mods`: Alt takes the third-symbol-level bit with it, which the
@@ -115,7 +123,12 @@ impl ModIndices {
     fn removed(&self, mods: RawMods) -> u32 {
         let bit = |index: u32| 1u32 << index;
         let mut mask = 0;
-        for (raw, bits) in [(RawMods::SHIFT, bit(self.shift)), (RawMods::CTRL, bit(self.control)), (RawMods::ALT, bit(self.mod1) | bit(self.mod5)), (RawMods::SUPER, bit(self.mod4))] {
+        for (raw, bits) in [
+            (RawMods::SHIFT, bit(self.shift)),
+            (RawMods::CTRL, bit(self.control)),
+            (RawMods::ALT, bit(self.mod1) | bit(self.mod5)),
+            (RawMods::SUPER, bit(self.mod4)),
+        ] {
             if mods.contains(raw) {
                 mask |= bits;
             }
@@ -127,7 +140,12 @@ impl ModIndices {
     fn added(&self, mods: RawMods) -> u32 {
         let bit = |index: u32| 1u32 << index;
         let mut mask = 0;
-        for (raw, bits) in [(RawMods::SHIFT, bit(self.shift)), (RawMods::CTRL, bit(self.control)), (RawMods::ALT, bit(self.mod1)), (RawMods::SUPER, bit(self.mod4))] {
+        for (raw, bits) in [
+            (RawMods::SHIFT, bit(self.shift)),
+            (RawMods::CTRL, bit(self.control)),
+            (RawMods::ALT, bit(self.mod1)),
+            (RawMods::SUPER, bit(self.mod4)),
+        ] {
             if mods.contains(raw) {
                 mask |= bits;
             }
@@ -138,9 +156,18 @@ impl ModIndices {
 
 /// The modifiers to tell a client for a rewritten key: `real` without `remove` and with `add` held down. Locked
 /// modifiers (caps and num lock) and the layout stay as they are.
-fn rewrite_masks(real: SerializedMods, idx: &ModIndices, remove: RawMods, add: RawMods) -> SerializedMods {
+fn rewrite_masks(
+    real: SerializedMods,
+    idx: &ModIndices,
+    remove: RawMods,
+    add: RawMods,
+) -> SerializedMods {
     let gone = idx.removed(remove);
-    SerializedMods { depressed: (real.depressed & !gone) | idx.added(add), latched: real.latched & !gone, ..real }
+    SerializedMods {
+        depressed: (real.depressed & !gone) | idx.added(add),
+        latched: real.latched & !gone,
+        ..real
+    }
 }
 
 impl KeyFilters {
@@ -148,11 +175,20 @@ impl KeyFilters {
         let a = &settings.access;
         let repeat = settings.effective_repeat();
         // the translator's tap limit follows the configured initial repeat delay, 250 ms when repeat is off
-        let globe_ms = if repeat.is_enabled() { f64::from(repeat.initial_delay_ms) } else { GLOBE_DEFAULT_REPEAT_MS };
+        let globe_ms = if repeat.is_enabled() {
+            f64::from(repeat.initial_delay_ms)
+        } else {
+            GLOBE_DEFAULT_REPEAT_MS
+        };
         Self {
             slow: a.slow_keys.then(|| SlowKeys::new(a.slow_keys_delay_ms)),
             sticky: StickyKeys::new(a.sticky_keys, a.sticky_keys_shortcut),
-            mouse: MouseKeys::new(a.mouse_keys, a.mouse_keys_shortcut, a.mouse_keys_delay_ms, a.mouse_keys_max_speed),
+            mouse: MouseKeys::new(
+                a.mouse_keys,
+                a.mouse_keys_shortcut,
+                a.mouse_keys_delay_ms,
+                a.mouse_keys_max_speed,
+            ),
             globe: GlobeTap::new(globe_ms),
             fn_usage: settings.fn_action(),
             repeat: KeyRepeater::new(repeat),
@@ -174,9 +210,22 @@ impl Cupertino {
     /// The rewrite for a key press nothing in the compositor claimed (§10): the
     /// decision of `cupertino-keyboard` for the client that has the keyboard. `Pass` when that client is not the key
     /// window (a layer surface, the lock screen) or nothing has the keyboard.
-    pub(crate) fn key_rewrite(&self, code: Keycode, sym: u32, ch: Option<char>, mods: &ModifiersState) -> Rewrite {
-        let Some(focus) = self.seat.get_keyboard().and_then(|k| k.current_focus()) else { return Rewrite::Pass };
-        if !self.wm.key_window().and_then(|w| self.entry(w)).is_some_and(|e| e.has_surface(&focus)) {
+    pub(crate) fn key_rewrite(
+        &self,
+        code: Keycode,
+        sym: u32,
+        ch: Option<char>,
+        mods: &ModifiersState,
+    ) -> Rewrite {
+        let Some(focus) = self.seat.get_keyboard().and_then(|k| k.current_focus()) else {
+            return Rewrite::Pass;
+        };
+        if !self
+            .wm
+            .key_window()
+            .and_then(|w| self.entry(w))
+            .is_some_and(|e| e.has_surface(&focus))
+        {
             return Rewrite::Pass;
         }
         let kb = &self.config.keyboard;
@@ -189,12 +238,23 @@ impl Cupertino {
         // The key that selects the third symbol level counts as Alt: with `level3(alt_switch)` the Alt keys set that
         // modifier instead of Mod1, which the profile translation does not see.
         let mut raw = RawMods::default();
-        for (on, bit) in [(mods.shift, RawMods::SHIFT), (mods.ctrl, RawMods::CTRL), (mods.alt || mods.iso_level3_shift, RawMods::ALT), (mods.logo, RawMods::SUPER)] {
+        for (on, bit) in [
+            (mods.shift, RawMods::SHIFT),
+            (mods.ctrl, RawMods::CTRL),
+            (mods.alt || mods.iso_level3_shift, RawMods::ALT),
+            (mods.logo, RawMods::SUPER),
+        ] {
             if on {
                 raw = raw | bit;
             }
         }
-        let key = KeyPress { evdev: evdev(code), sym, printable: is_printable(ch), is_modifier: crate::overlays::is_modifier_sym(sym), raw };
+        let key = KeyPress {
+            evdev: evdev(code),
+            sym,
+            printable: is_printable(ch),
+            is_modifier: crate::overlays::is_modifier_sym(sym),
+            raw,
+        };
         decide(&kb.modifier_profile(), &target, &key)
     }
 
@@ -202,10 +262,19 @@ impl Cupertino {
     /// event in). A press tells the client the rewritten modifiers, then the key; the release sends the same key up and
     /// puts the real modifiers back. Smithay sends a key before its modifiers, hence the manual modifiers event and
     /// `mods_changed = false`. Key repeat stays with the client.
-    pub(crate) fn forward_rewritten(&mut self, code: Keycode, state: KeyState, rewrite: Rewrite, serial: smithay::utils::Serial, time: u32) {
+    pub(crate) fn forward_rewritten(
+        &mut self,
+        code: Keycode,
+        state: KeyState,
+        rewrite: Rewrite,
+        serial: smithay::utils::Serial,
+        time: u32,
+    ) {
         let keyboard = self.seat.get_keyboard().unwrap();
         if state == KeyState::Released {
-            let Some(sent) = self.key_filters.rewritten.remove(&code.raw()) else { return };
+            let Some(sent) = self.key_filters.rewritten.remove(&code.raw()) else {
+                return;
+            };
             keyboard.input_forward(self, sent.code, KeyState::Released, serial, time, false);
             // another rewritten key may still be held; the focus may have moved to a client that never saw the override
             if self.key_filters.rewritten.is_empty() {
@@ -217,19 +286,29 @@ impl Cupertino {
             }
             return;
         }
-        let Some(focus) = keyboard.current_focus() else { return };
+        let Some(focus) = keyboard.current_focus() else {
+            return;
+        };
         let (sent_code, remove, add) = match rewrite {
             Rewrite::Pass => return,
             Rewrite::Mods { remove, add } => (code, remove, add),
             Rewrite::Key { evdev, remove, add } => (Keycode::new(evdev + XKB_OFFSET), remove, add),
         };
         // SAFETY: the keymap reference only lives for this lookup of modifier indices, inside the lock
-        let idx = keyboard.with_xkb_state(self, |ctx| ModIndices::of(unsafe { ctx.xkb().lock().unwrap().keymap() }));
+        let idx = keyboard.with_xkb_state(self, |ctx| {
+            ModIndices::of(unsafe { ctx.xkb().lock().unwrap().keymap() })
+        });
         let mut told = keyboard.modifier_state();
         told.serialized = rewrite_masks(told.serialized, &idx, remove, add);
         KeyboardTarget::modifiers(&focus, &self.seat.clone(), self, told, serial);
         keyboard.input_forward(self, sent_code, KeyState::Pressed, serial, time, false);
-        self.key_filters.rewritten.insert(code.raw(), Sent { code: sent_code, focus });
+        self.key_filters.rewritten.insert(
+            code.raw(),
+            Sent {
+                code: sent_code,
+                focus,
+            },
+        );
         self.key_filters.override_active = true;
     }
 
@@ -241,7 +320,13 @@ impl Cupertino {
         self.key_filters.override_active = false;
         let keyboard = self.seat.get_keyboard().unwrap();
         if let Some(focus) = keyboard.current_focus() {
-            KeyboardTarget::modifiers(&focus, &self.seat.clone(), self, keyboard.modifier_state(), SERIAL_COUNTER.next_serial());
+            KeyboardTarget::modifiers(
+                &focus,
+                &self.seat.clone(),
+                self,
+                keyboard.modifier_state(),
+                SERIAL_COUNTER.next_serial(),
+            );
         }
     }
 
@@ -297,9 +382,15 @@ impl Cupertino {
         let pressed = state == KeyState::Pressed;
         // a release of a key the keyboard has seen pressed always reaches it (mouse keys may have been turned on
         // while the key was down)
-        let down = self.seat.get_keyboard().is_some_and(|k| k.pressed_keys().contains(&code));
+        let down = self
+            .seat
+            .get_keyboard()
+            .is_some_and(|k| k.pressed_keys().contains(&code));
         if pressed || !down {
-            let out = self.key_filters.mouse.key(evdev(code), pressed, self.now_ms());
+            let out = self
+                .key_filters
+                .mouse
+                .key(evdev(code), pressed, self.now_ms());
             if let Some(on) = out.toggled {
                 tracing::info!(on, "mouse keys toggled by the Alt key");
             }
@@ -333,28 +424,41 @@ impl Cupertino {
             // the globe key moves the HUD selection to the next item (log string); without held modifiers
             // the switch is immediate
             FnUsage::ChangeInputSource => self.input_source_step(true, Step::Next),
-            FnUsage::ShowEmojiPicker => tracing::info!("globe key: the emoji picker is not available in this compositor"),
-            FnUsage::StartDictation => tracing::info!("globe key: dictation is not available in this compositor"),
+            FnUsage::ShowEmojiPicker => {
+                tracing::info!("globe key: the emoji picker is not available in this compositor")
+            }
+            FnUsage::StartDictation => {
+                tracing::info!("globe key: dictation is not available in this compositor")
+            }
         }
     }
 
     fn mouse_keys_action(&mut self, action: PointerAction, time: u32) {
         match action {
             PointerAction::Move { dx, dy } => {
-                let pos = self.pointer.current_location() + Point::from((f64::from(dx), f64::from(dy)));
+                let pos =
+                    self.pointer.current_location() + Point::from((f64::from(dx), f64::from(dy)));
                 self.pointer_moved_to(pos, time, None);
             }
-            PointerAction::Press => self.pointer_button(crate::events::BTN_LEFT, ButtonState::Pressed, time),
-            PointerAction::Release => self.pointer_button(crate::events::BTN_LEFT, ButtonState::Released, time),
+            PointerAction::Press => {
+                self.pointer_button(crate::events::BTN_LEFT, ButtonState::Pressed, time)
+            }
+            PointerAction::Release => {
+                self.pointer_button(crate::events::BTN_LEFT, ButtonState::Released, time)
+            }
         }
     }
 
     /// Start the compositor repeat of `code` (xkb keycode); it replaces any repeating key.
     pub fn arm_key_repeat(&mut self, code: u32, target: RepeatTarget) {
         let now = self.now_ms();
-        self.key_filters.repeat.set_config(self.config.keyboard.effective_repeat());
+        self.key_filters
+            .repeat
+            .set_config(self.config.keyboard.effective_repeat());
         // the repeat generator skips modifiers and the non-repeating keys
-        self.key_filters.repeat.press(code.saturating_sub(XKB_OFFSET), now, false);
+        self.key_filters
+            .repeat
+            .press(code.saturating_sub(XKB_OFFSET), now, false);
         self.key_filters.repeat_target = self.key_filters.repeat.key().map(|_| target);
     }
 
@@ -383,7 +487,9 @@ impl Cupertino {
         }
         let ticks = self.key_filters.repeat.poll(now);
         for _ in ticks {
-            let Some(target) = self.key_filters.repeat_target else { break };
+            let Some(target) = self.key_filters.repeat_target else {
+                break;
+            };
             match target {
                 RepeatTarget::AccentTrigger(ch) => {
                     self.stop_key_repeat();
@@ -393,8 +499,17 @@ impl Cupertino {
                     let mods = self.current_mods();
                     // Shift pressed or released while Tab repeats in the switcher turns the repeat
                     // round; any other modifier change ends the repeat
-                    let flipped = self.wm.switcher().is_some() && mods.shift != key.mods.shift && crate::input::Mods { shift: key.mods.shift, ..mods } == key.mods;
-                    let key = if flipped { crate::overlays::OverlayKey { mods, ..key } } else { key };
+                    let flipped = self.wm.switcher().is_some()
+                        && mods.shift != key.mods.shift
+                        && crate::input::Mods {
+                            shift: key.mods.shift,
+                            ..mods
+                        } == key.mods;
+                    let key = if flipped {
+                        crate::overlays::OverlayKey { mods, ..key }
+                    } else {
+                        key
+                    };
                     if mods != key.mods || !self.replay_key(&key) {
                         self.stop_key_repeat();
                     }
@@ -410,23 +525,79 @@ mod tests {
 
     /// The keymap of a generated layout with both Alt keys as the third-level shift, as the decoded input sources use.
     fn keymap() -> xkb::Keymap {
-        let layout = cupertino_keyboard::Layout::from_json(include_str!("../../cupertino-keyboard/tests/test_layout.json")).unwrap();
-        let out = cupertino_keyboard::generate(&layout, &cupertino_keyboard::GenOptions::default()).unwrap();
-        xkb::Keymap::new_from_string(&xkb::Context::new(xkb::CONTEXT_NO_FLAGS), out.keymap, xkb::KEYMAP_FORMAT_TEXT_V1, xkb::KEYMAP_COMPILE_NO_FLAGS).expect("the generated keymap compiles")
+        let layout = cupertino_keyboard::Layout::from_json(include_str!(
+            "../../cupertino-keyboard/tests/test_layout.json"
+        ))
+        .unwrap();
+        let out = cupertino_keyboard::generate(&layout, &cupertino_keyboard::GenOptions::default())
+            .unwrap();
+        xkb::Keymap::new_from_string(
+            &xkb::Context::new(xkb::CONTEXT_NO_FLAGS),
+            out.keymap,
+            xkb::KEYMAP_FORMAT_TEXT_V1,
+            xkb::KEYMAP_COMPILE_NO_FLAGS,
+        )
+        .expect("the generated keymap compiles")
     }
 
     #[test]
     fn rewritten_masks_swap_the_modifiers_and_keep_the_locks() {
         let idx = ModIndices::of(&keymap());
         // the real modifiers sit at their fixed positions: Shift 0, Control 2, Mod1 3, Mod4 6, Mod5 7
-        assert_eq!(idx, ModIndices { shift: 0, control: 2, mod1: 3, mod4: 6, mod5: 7 });
+        assert_eq!(
+            idx,
+            ModIndices {
+                shift: 0,
+                control: 2,
+                mod1: 3,
+                mod4: 6,
+                mod5: 7
+            }
+        );
         let (shift, ctrl, mod4, mod5, lock, num) = (1, 1 << 2, 1 << 6, 1 << 7, 1 << 1, 1 << 4);
-        let real = SerializedMods { depressed: shift | mod4, latched: 0, locked: lock | num, layout_effective: 1 };
+        let real = SerializedMods {
+            depressed: shift | mod4,
+            latched: 0,
+            locked: lock | num,
+            layout_effective: 1,
+        };
         let told = rewrite_masks(real, &idx, RawMods::SUPER, RawMods::CTRL);
-        assert_eq!(told, SerializedMods { depressed: shift | ctrl, latched: 0, locked: lock | num, layout_effective: 1 });
+        assert_eq!(
+            told,
+            SerializedMods {
+                depressed: shift | ctrl,
+                latched: 0,
+                locked: lock | num,
+                layout_effective: 1
+            }
+        );
         // Super becomes Ctrl and Shift: the terminal copy chord
-        assert_eq!(rewrite_masks(SerializedMods { depressed: mod4, ..real }, &idx, RawMods::SUPER, RawMods::CTRL | RawMods::SHIFT).depressed, ctrl | shift);
+        assert_eq!(
+            rewrite_masks(
+                SerializedMods {
+                    depressed: mod4,
+                    ..real
+                },
+                &idx,
+                RawMods::SUPER,
+                RawMods::CTRL | RawMods::SHIFT
+            )
+            .depressed,
+            ctrl | shift
+        );
         // Alt under `level3(alt_switch)` is Mod5: it goes with Alt
-        assert_eq!(rewrite_masks(SerializedMods { depressed: mod5 | shift, ..real }, &idx, RawMods::ALT, RawMods::CTRL).depressed, shift | ctrl);
+        assert_eq!(
+            rewrite_masks(
+                SerializedMods {
+                    depressed: mod5 | shift,
+                    ..real
+                },
+                &idx,
+                RawMods::ALT,
+                RawMods::CTRL
+            )
+            .depressed,
+            shift | ctrl
+        );
     }
 }

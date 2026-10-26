@@ -7,7 +7,10 @@
 use crate::options::SessionOptions;
 use crate::screen::{self, FrameKey, Notifier, Result, Scene};
 use cupertino_assets::Assets;
-use cupertino_client::{Anchor, Button, Client, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig, LockState, Margin, OutputId, PointerEvent, SurfaceId};
+use cupertino_client::{
+    Anchor, Button, Client, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig, LockState,
+    Margin, OutputId, PointerEvent, SurfaceId,
+};
 use cupertino_login::auth::{self, Authenticator};
 use cupertino_login::autostart;
 use cupertino_login::control::{self, Request};
@@ -17,12 +20,14 @@ use cupertino_login::login_manager::{LoginManager, Power};
 use cupertino_login::logind::{Inhibitor, Logind, Signal};
 use cupertino_login::logout::{self, LogOut};
 use cupertino_login::low_battery::{self, LowBattery};
-use cupertino_login::{session, upower};
-use cupertino_login::model::{AuthOutcome, LockScreen, Phase, HIDE_AFTER, HIDE_AFTER_EXPLICIT_LOCK};
+use cupertino_login::model::{
+    AuthOutcome, LockScreen, Phase, HIDE_AFTER, HIDE_AFTER_EXPLICIT_LOCK,
+};
 use cupertino_login::panel::{Action, Decision, Frames, Kind, Panel};
 use cupertino_login::power_button::{Effect, PowerButton};
 use cupertino_login::render::{PanelView, Renderer};
 use cupertino_login::user::User;
+use cupertino_login::{session, upower};
 use cupertino_theme::Theme;
 use std::error::Error;
 use std::process::{Command, Stdio};
@@ -162,7 +167,9 @@ pub fn run(options: &SessionOptions) -> Result<std::convert::Infallible> {
         })
     })?;
     let battery_notifier = notifier.clone();
-    upower::watch(logind.connection(), move |report| battery_notifier.send(Message::Battery(report.map_err(|e| e.to_string()))))?;
+    upower::watch(logind.connection(), move |report| {
+        battery_notifier.send(Message::Battery(report.map_err(|e| e.to_string())))
+    })?;
     let manager = LoginManager::connect()?;
     let unlock_notifier = notifier.clone();
     manager.watch_unlock(move |signal| {
@@ -182,7 +189,9 @@ pub fn run(options: &SessionOptions) -> Result<std::convert::Infallible> {
     let power_key = logind.block_power_key()?;
 
     let auth_notifier = notifier.clone();
-    let authenticator = Authenticator::spawn(user.login.clone(), move |event| auth_notifier.send(Message::Auth(event)))?;
+    let authenticator = Authenticator::spawn(user.login.clone(), move |event| {
+        auth_notifier.send(Message::Auth(event))
+    })?;
 
     if let Some(timeout) = options.idle_timeout {
         client.watch_idle(timeout)?;
@@ -201,7 +210,29 @@ pub fn run(options: &SessionOptions) -> Result<std::convert::Infallible> {
         Ok(()) => eprintln!("cupertino-login: session announced to the session manager"),
         Err(e) => eprintln!("cupertino-login: {e}"),
     }
-    let mut app = App { client, user, renderer, authenticator, logind, manager, control, inhibitor, _power_key: power_key, power_button: PowerButton::new(options.power_button_sleeps_system), messages, start: Instant::now(), lock: None, switch_pending: false, panel: None, logging_out: false, quitting: None, failed: FailedAttempts::default(), retries_until_hint: options.retries_until_hint, low_battery: LowBattery::new(), session_bus };
+    let mut app = App {
+        client,
+        user,
+        renderer,
+        authenticator,
+        logind,
+        manager,
+        control,
+        inhibitor,
+        _power_key: power_key,
+        power_button: PowerButton::new(options.power_button_sleeps_system),
+        messages,
+        start: Instant::now(),
+        lock: None,
+        switch_pending: false,
+        panel: None,
+        logging_out: false,
+        quitting: None,
+        failed: FailedAttempts::default(),
+        retries_until_hint: options.retries_until_hint,
+        low_battery: LowBattery::new(),
+        session_bus,
+    };
     loop {
         let timeout = app.timeout()?;
         for event in app.client.wait(timeout)? {
@@ -223,7 +254,10 @@ fn start_login_items(logind: &Logind) {
         Ok(false) => return eprintln!("cupertino-login: login items ran already in this session"),
         Err(e) => return eprintln!("cupertino-login: login items not started: {e}"),
     }
-    let config_home = std::env::var_os("XDG_CONFIG_HOME").filter(|d| !d.is_empty()).map(std::path::PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")));
+    let config_home = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|d| !d.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")));
     let dirs = autostart::directories(config_home, std::env::var("XDG_CONFIG_DIRS").ok());
     let found = match autostart::list(&dirs) {
         Ok(found) => found,
@@ -233,7 +267,10 @@ fn start_login_items(logind: &Logind) {
     for entry in found {
         match autostart::parse(&entry.id, &entry.path, &entry.text, &env) {
             Ok(item) => start_login_item(&item),
-            Err(skip) => eprintln!("cupertino-login: login item skipped: {}: {skip:?}", entry.id),
+            Err(skip) => eprintln!(
+                "cupertino-login: login item skipped: {}: {skip:?}",
+                entry.id
+            ),
         }
     }
 }
@@ -272,45 +309,109 @@ impl App {
             Some(lock) => {
                 let to_next_minute = 60 - screen::unix_seconds()?.rem_euclid(60) as u64;
                 let by_screen = lock.screen.next_wakeup(now);
-                Some(by_screen.map_or(Duration::from_secs(to_next_minute), |s| Duration::from_secs_f64(s).min(Duration::from_secs(to_next_minute))))
+                Some(by_screen.map_or(Duration::from_secs(to_next_minute), |s| {
+                    Duration::from_secs_f64(s).min(Duration::from_secs(to_next_minute))
+                }))
             }
             None => None,
         };
-        let panel = self.panel.as_ref().and_then(|p| p.panel.next_wakeup(now)).map(Duration::from_secs_f64);
-        let power_key = self.power_button.next_wakeup(now).map(Duration::from_secs_f64);
-        let quitting = self.quitting.as_ref().and_then(|q| q.sequence.next_wakeup(now)).map(Duration::from_secs_f64);
-        Ok(screen.into_iter().chain(panel).chain(power_key).chain(quitting).min())
+        let panel = self
+            .panel
+            .as_ref()
+            .and_then(|p| p.panel.next_wakeup(now))
+            .map(Duration::from_secs_f64);
+        let power_key = self
+            .power_button
+            .next_wakeup(now)
+            .map(Duration::from_secs_f64);
+        let quitting = self
+            .quitting
+            .as_ref()
+            .and_then(|q| q.sequence.next_wakeup(now))
+            .map(Duration::from_secs_f64);
+        Ok(screen
+            .into_iter()
+            .chain(panel)
+            .chain(power_key)
+            .chain(quitting)
+            .min())
     }
 
     fn handle(&mut self, event: Event) -> Result<()> {
         let now = self.now();
         match event {
             Event::Draw(surface) => self.draw(surface)?,
-            Event::Key { surface, pressed: true, key, mods, character } if self.panel.as_ref().is_some_and(|p| p.surface == surface) => {
-                let decision = screen::typed_key(key, mods, character).and_then(|typed| self.panel.as_ref().and_then(|p| p.panel.press(typed)));
+            Event::Key {
+                surface,
+                pressed: true,
+                key,
+                mods,
+                character,
+            } if self.panel.as_ref().is_some_and(|p| p.surface == surface) => {
+                let decision = screen::typed_key(key, mods, character)
+                    .and_then(|typed| self.panel.as_ref().and_then(|p| p.panel.press(typed)));
                 if let Some(decision) = decision {
                     self.decide(decision)?;
                 }
             }
-            Event::Pointer { surface, event: PointerEvent::Button { button: Button::Left, pressed: true, position } } if self.panel.as_ref().is_some_and(|p| p.surface == surface) => {
-                let decision = self.panel.as_ref().and_then(|p| p.frames.button_at(position));
+            Event::Pointer {
+                surface,
+                event:
+                    PointerEvent::Button {
+                        button: Button::Left,
+                        pressed: true,
+                        position,
+                    },
+            } if self.panel.as_ref().is_some_and(|p| p.surface == surface) => {
+                let decision = self
+                    .panel
+                    .as_ref()
+                    .and_then(|p| p.frames.button_at(position));
                 if let Some(decision) = decision {
                     self.decide(decision)?;
                 }
             }
-            Event::Key { surface, pressed: true, key, mods, character } if self.interrupt_surface() == Some(surface) => {
-                if let Some(choice) = screen::typed_key(key, mods, character).and_then(interrupt::press) {
+            Event::Key {
+                surface,
+                pressed: true,
+                key,
+                mods,
+                character,
+            } if self.interrupt_surface() == Some(surface) => {
+                if let Some(choice) =
+                    screen::typed_key(key, mods, character).and_then(interrupt::press)
+                {
                     self.choose(now, choice)?;
                 }
             }
-            Event::Pointer { surface, event: PointerEvent::Button { button: Button::Left, pressed: true, position } } if self.interrupt_surface() == Some(surface) => {
-                let choice = self.quitting.as_ref().and_then(|q| q.interrupt.as_ref()).and_then(|i| i.frames.button_at(position));
+            Event::Pointer {
+                surface,
+                event:
+                    PointerEvent::Button {
+                        button: Button::Left,
+                        pressed: true,
+                        position,
+                    },
+            } if self.interrupt_surface() == Some(surface) => {
+                let choice = self
+                    .quitting
+                    .as_ref()
+                    .and_then(|q| q.interrupt.as_ref())
+                    .and_then(|i| i.frames.button_at(position));
                 if let Some(choice) = choice {
                     self.choose(now, choice)?;
                 }
             }
-            Event::Key { pressed: true, key, mods, character, .. } => {
-                let Some(lock) = &mut self.lock else { return Ok(()) };
+            Event::Key {
+                pressed: true,
+                key,
+                mods,
+                character,
+                ..
+            } => {
+                let Some(lock) = &mut self.lock else {
+                    return Ok(());
+                };
                 match screen::typed_key(key, mods, character) {
                     Some(typed) => {
                         if let Some(password) = lock.screen.press(now, typed) {
@@ -320,7 +421,10 @@ impl App {
                     None => lock.screen.activity(now),
                 }
             }
-            Event::Pointer { event: PointerEvent::Motion(_) | PointerEvent::Button { .. }, .. } => {
+            Event::Pointer {
+                event: PointerEvent::Motion(_) | PointerEvent::Button { .. },
+                ..
+            } => {
                 if let Some(lock) = &mut self.lock {
                     lock.screen.activity(now);
                 }
@@ -331,7 +435,10 @@ impl App {
                 eprintln!("cupertino-login: panel cancelled");
             }
             Event::Closed(surface) if self.interrupt_surface() == Some(surface) => {
-                self.quitting.as_mut().expect("the interrupt panel belongs to a quit sequence").interrupt = None;
+                self.quitting
+                    .as_mut()
+                    .expect("the interrupt panel belongs to a quit sequence")
+                    .interrupt = None;
                 self.choose(now, Choice::Cancel)?;
             }
             Event::Closed(_) => return Err("the server closed a surface of the lock screen".into()),
@@ -340,7 +447,10 @@ impl App {
             Event::Key { .. } | Event::KeyboardLeave(_) | Event::Pointer { .. } => {}
             // the screens have one fixed look, and this process is the one that holds the lock
             Event::Appearance { .. } | Event::DisplayOptions(_) | Event::SessionLock { .. } => {}
-            Event::PopupDone(_) | Event::ActivationToken { .. } | Event::MenuBar { .. } | Event::Dock { .. } => {}
+            Event::PopupDone(_)
+            | Event::ActivationToken { .. }
+            | Event::MenuBar { .. }
+            | Event::Dock { .. } => {}
         }
         Ok(())
     }
@@ -365,14 +475,18 @@ impl App {
                     None => eprintln!("cupertino-login: unlock ignored: the session is not locked"),
                 },
                 Message::ManagerRestarted => match self.manager.session_ready() {
-                    Ok(()) => eprintln!("cupertino-login: session announced again to the restarted session manager"),
+                    Ok(()) => eprintln!(
+                        "cupertino-login: session announced again to the restarted session manager"
+                    ),
                     Err(e) => eprintln!("cupertino-login: {e}"),
                 },
                 Message::Auth(event) => self.handle_auth(now, event)?,
                 Message::Failed(reason) => return Err(reason.into()),
                 Message::Battery(report) => self.battery(report),
                 Message::ApplicationQuit(app) => {
-                    let Some(quitting) = &mut self.quitting else { continue };
+                    let Some(quitting) = &mut self.quitting else {
+                        continue;
+                    };
                     eprintln!("cupertino-login: application quit: {app}");
                     let step = quitting.sequence.quit(now, &app);
                     self.follow(now, step)?;
@@ -395,9 +509,13 @@ impl App {
                 self.client.request_redraw(panel.surface)?;
             }
         }
-        let Some(lock) = &mut self.lock else { return Ok(()) };
+        let Some(lock) = &mut self.lock else {
+            return Ok(());
+        };
         match self.client.lock_state() {
-            Some(LockState::Finished) => return Err("the server refused or ended the session lock".into()),
+            Some(LockState::Finished) => {
+                return Err("the server refused or ended the session lock".into())
+            }
             Some(LockState::Locked) if !lock.confirmed => {
                 lock.confirmed = true;
                 // the lock is up: sleep may go on
@@ -418,7 +536,14 @@ impl App {
         if lock.screen.phase() == Phase::Unlocked {
             return self.unlock();
         }
-        let scene = Scene { screen: &lock.screen, caps_lock: self.client.caps_lock(), help: self.failed.help_shown(&self.user.login, self.retries_until_hint), power: None };
+        let scene = Scene {
+            screen: &lock.screen,
+            caps_lock: self.client.caps_lock(),
+            help: self
+                .failed
+                .help_shown(&self.user.login, self.retries_until_hint),
+            power: None,
+        };
         let key = FrameKey::new(&scene, now)?;
         if lock.drawn.as_ref() != Some(&key) {
             for (surface, _) in &lock.surfaces {
@@ -443,15 +568,22 @@ impl App {
             }
         };
         match self.low_battery.report(battery.level, battery.percentage) {
-            Some(low_battery::Action::Post { replaces, notice }) => match upower::post(&self.session_bus, replaces, &notice) {
-                Ok(id) => {
-                    self.low_battery.posted(id);
-                    eprintln!("cupertino-login: low battery: {:?} at {:.0} %, notification {id}", battery.level, battery.percentage);
+            Some(low_battery::Action::Post { replaces, notice }) => {
+                match upower::post(&self.session_bus, replaces, &notice) {
+                    Ok(id) => {
+                        self.low_battery.posted(id);
+                        eprintln!(
+                            "cupertino-login: low battery: {:?} at {:.0} %, notification {id}",
+                            battery.level, battery.percentage
+                        );
+                    }
+                    Err(e) => eprintln!("cupertino-login: {e}"),
                 }
-                Err(e) => eprintln!("cupertino-login: {e}"),
-            },
+            }
             Some(low_battery::Action::Close(id)) => match upower::close(&self.session_bus, id) {
-                Ok(()) => eprintln!("cupertino-login: low battery cleared, notification {id} withdrawn"),
+                Ok(()) => {
+                    eprintln!("cupertino-login: low battery cleared, notification {id} withdrawn")
+                }
                 Err(e) => eprintln!("cupertino-login: {e}"),
             },
             None => {}
@@ -474,13 +606,28 @@ impl App {
         // the lock screen swallows a key that is down
         self.power_button.reset();
         self.client.lock_session()?;
-        self.lock = Some(Lock { screen: LockScreen::new(now, if explicit { HIDE_AFTER_EXPLICIT_LOCK } else { HIDE_AFTER }), surfaces: Vec::new(), confirmed: false, drawn: None });
+        self.lock = Some(Lock {
+            screen: LockScreen::new(
+                now,
+                if explicit {
+                    HIDE_AFTER_EXPLICIT_LOCK
+                } else {
+                    HIDE_AFTER
+                },
+            ),
+            surfaces: Vec::new(),
+            confirmed: false,
+            drawn: None,
+        });
         self.control.set_locked(true)?;
         self.arrange_surfaces()
     }
 
     fn handle_auth(&mut self, now: f64, event: auth::Event) -> Result<()> {
-        let lock = self.lock.as_mut().ok_or("an authentication result arrived while the session is not locked")?;
+        let lock = self
+            .lock
+            .as_mut()
+            .ok_or("an authentication result arrived while the session is not locked")?;
         match event {
             auth::Event::Notice(text) => lock.screen.notify(text),
             auth::Event::Outcome(outcome) => {
@@ -489,7 +636,9 @@ impl App {
                         self.failed.record(&self.user.login);
                         eprintln!("cupertino-login: authentication failed");
                     }
-                    AuthOutcome::Error(reason) => eprintln!("cupertino-login: authentication error: {reason}"),
+                    AuthOutcome::Error(reason) => {
+                        eprintln!("cupertino-login: authentication error: {reason}")
+                    }
                     AuthOutcome::Success => {}
                 }
                 lock.screen.finish_auth(now, outcome)?;
@@ -500,28 +649,65 @@ impl App {
 
     /// Keep exactly one lock surface per output the server has described.
     fn arrange_surfaces(&mut self) -> Result<()> {
-        let Some(lock) = &mut self.lock else { return Ok(()) };
-        screen::arrange_surfaces(&mut self.client, &mut lock.surfaces, |client, output| Ok(client.lock_surface(output)?))
+        let Some(lock) = &mut self.lock else {
+            return Ok(());
+        };
+        screen::arrange_surfaces(&mut self.client, &mut lock.surfaces, |client, output| {
+            Ok(client.lock_surface(output)?)
+        })
     }
 
     fn draw(&mut self, surface: SurfaceId) -> Result<()> {
         let now = self.now();
         if let Some(panel) = self.panel.as_mut().filter(|p| p.surface == surface) {
-            let view = PanelView { kind: panel.panel.kind(), seconds_left: panel.panel.seconds_left(now), frames: panel.frames.clone() };
+            let view = PanelView {
+                kind: panel.panel.kind(),
+                seconds_left: panel.panel.seconds_left(now),
+                frames: panel.frames.clone(),
+            };
             let renderer = &mut self.renderer;
-            self.client.draw(surface, |pixmap, scale| renderer.render_panel(&view, pixmap, scale.factor()))?;
+            self.client.draw(surface, |pixmap, scale| {
+                renderer.render_panel(&view, pixmap, scale.factor())
+            })?;
             panel.drawn = Some(view.seconds_left);
             return Ok(());
         }
-        if let Some(shown) = self.quitting.as_ref().and_then(|q| q.interrupt.as_ref()).filter(|i| i.surface == surface) {
+        if let Some(shown) = self
+            .quitting
+            .as_ref()
+            .and_then(|q| q.interrupt.as_ref())
+            .filter(|i| i.surface == surface)
+        {
             let renderer = &mut self.renderer;
-            return Ok(self.client.draw(surface, |pixmap, scale| renderer.render_interrupt(&shown.app, &shown.frames, pixmap, scale.factor()))?);
+            return Ok(self.client.draw(surface, |pixmap, scale| {
+                renderer.render_interrupt(&shown.app, &shown.frames, pixmap, scale.factor())
+            })?);
         }
         // of a surface destroyed since
-        let Some(lock) = self.lock.as_mut().filter(|lock| lock.surfaces.iter().any(|&(s, _)| s == surface)) else { return Ok(()) };
-        let scene = Scene { screen: &lock.screen, caps_lock: self.client.caps_lock(), help: self.failed.help_shown(&self.user.login, self.retries_until_hint), power: None };
+        let Some(lock) = self
+            .lock
+            .as_mut()
+            .filter(|lock| lock.surfaces.iter().any(|&(s, _)| s == surface))
+        else {
+            return Ok(());
+        };
+        let scene = Scene {
+            screen: &lock.screen,
+            caps_lock: self.client.caps_lock(),
+            help: self
+                .failed
+                .help_shown(&self.user.login, self.retries_until_hint),
+            power: None,
+        };
         let key = FrameKey::new(&scene, now)?;
-        screen::draw(&mut self.client, &mut self.renderer, &key, Some(&self.user), None, surface)?;
+        screen::draw(
+            &mut self.client,
+            &mut self.renderer,
+            &key,
+            Some(&self.user),
+            None,
+            surface,
+        )?;
         lock.drawn = Some(key);
         Ok(())
     }
@@ -546,7 +732,13 @@ impl App {
         if self.panel.is_some() {
             self.decide(Decision::Cancel)?;
         }
-        let output = self.client.outputs().into_iter().find(|o| o.geometry.is_some()).ok_or("the server has no output")?.id;
+        let output = self
+            .client
+            .outputs()
+            .into_iter()
+            .find(|o| o.geometry.is_some())
+            .ok_or("the server has no output")?
+            .id;
         let frames = self.renderer.panel_frames(kind);
         let surface = self.client.layer_surface(&LayerSurfaceConfig {
             namespace: PANEL_NAMESPACE.to_string(),
@@ -559,14 +751,22 @@ impl App {
             exclusive_zone: -1,
             keyboard: KeyboardInteractivity::Exclusive,
         })?;
-        self.panel = Some(PanelState { panel: Panel::new(kind, now), frames, surface, drawn: None });
+        self.panel = Some(PanelState {
+            panel: Panel::new(kind, now),
+            frames,
+            surface,
+            drawn: None,
+        });
         eprintln!("cupertino-login: panel shown: {}", kind.log_name());
         Ok(())
     }
 
     /// Close the panel with `decision`; an action is carried out through logind.
     fn decide(&mut self, decision: Decision) -> Result<()> {
-        let PanelState { surface, .. } = self.panel.take().expect("a decision is only made on an open panel");
+        let PanelState { surface, .. } = self
+            .panel
+            .take()
+            .expect("a decision is only made on an open panel");
         self.client.destroy_surface(surface)?;
         match decision {
             Decision::Cancel => eprintln!("cupertino-login: panel cancelled"),
@@ -599,29 +799,43 @@ impl App {
         }
         self.logging_out = true;
         let (sequence, step) = LogOut::start();
-        self.quitting = Some(Quitting { sequence, then: action, interrupt: None });
+        self.quitting = Some(Quitting {
+            sequence,
+            then: action,
+            interrupt: None,
+        });
         self.follow(now, Some(step))
     }
 
     /// Do what the quit sequence asks for, and what that leads to.
     fn follow(&mut self, now: f64, mut step: Option<logout::Do>) -> Result<()> {
         while let Some(next) = step.take() {
-            let quitting = self.quitting.as_mut().expect("the quit sequence only asks while it runs");
+            let quitting = self
+                .quitting
+                .as_mut()
+                .expect("the quit sequence only asks while it runs");
             match next {
-                logout::Do::AskNext => match session::quit_next_application(&self.session_bus) {
-                    Ok((app, windows)) => {
-                        if !app.is_empty() {
-                            eprintln!("cupertino-login: quitting application: {app} ({windows} windows)");
+                logout::Do::AskNext => {
+                    match session::quit_next_application(&self.session_bus) {
+                        Ok((app, windows)) => {
+                            if !app.is_empty() {
+                                eprintln!("cupertino-login: quitting application: {app} ({windows} windows)");
+                            }
+                            step = quitting.sequence.answered(now, &app, windows);
                         }
-                        step = quitting.sequence.answered(now, &app, windows);
+                        Err(e) => {
+                            eprintln!(
+                                "cupertino-login: applications not quit before the {}: {e}",
+                                quitting.then.log_name()
+                            );
+                            step = Some(logout::Do::Terminate);
+                        }
                     }
-                    Err(e) => {
-                        eprintln!("cupertino-login: applications not quit before the {}: {e}", quitting.then.log_name());
-                        step = Some(logout::Do::Terminate);
-                    }
-                },
+                }
                 logout::Do::Terminate => {
-                    let Quitting { then, interrupt, .. } = self.quitting.take().expect("checked above");
+                    let Quitting {
+                        then, interrupt, ..
+                    } = self.quitting.take().expect("checked above");
                     if let Some(shown) = interrupt {
                         self.client.destroy_surface(shown.surface)?;
                     }
@@ -645,7 +859,10 @@ impl App {
     }
 
     fn interrupt_surface(&self) -> Option<SurfaceId> {
-        self.quitting.as_ref().and_then(|q| q.interrupt.as_ref()).map(|i| i.surface)
+        self.quitting
+            .as_ref()
+            .and_then(|q| q.interrupt.as_ref())
+            .map(|i| i.surface)
     }
 
     /// Show the interrupt panel for `app` on the first output. On a locked session there is nobody to answer it: the
@@ -655,7 +872,13 @@ impl App {
         if self.lock.is_some() {
             return self.choose(now, Choice::Cancel);
         }
-        let output = self.client.outputs().into_iter().find(|o| o.geometry.is_some()).ok_or("the server has no output")?.id;
+        let output = self
+            .client
+            .outputs()
+            .into_iter()
+            .find(|o| o.geometry.is_some())
+            .ok_or("the server has no output")?
+            .id;
         let surface = self.client.layer_surface(&LayerSurfaceConfig {
             namespace: PANEL_NAMESPACE.to_string(),
             output: Some(output),
@@ -667,15 +890,25 @@ impl App {
             exclusive_zone: -1,
             keyboard: KeyboardInteractivity::Exclusive,
         })?;
-        let quitting = self.quitting.as_mut().expect("the interrupt panel belongs to a quit sequence");
-        quitting.interrupt = Some(InterruptState { app, frames: interrupt::Frames::new(), surface });
+        let quitting = self
+            .quitting
+            .as_mut()
+            .expect("the interrupt panel belongs to a quit sequence");
+        quitting.interrupt = Some(InterruptState {
+            app,
+            frames: interrupt::Frames::new(),
+            surface,
+        });
         Ok(())
     }
 
     /// The answer on the interrupt panel: Cancel ends the sequence and the session goes on; Force Quit kills the
     /// application, which then has another full timeout to go away.
     fn choose(&mut self, now: f64, choice: Choice) -> Result<()> {
-        let quitting = self.quitting.as_mut().expect("a choice is only made while the applications are quit");
+        let quitting = self
+            .quitting
+            .as_mut()
+            .expect("a choice is only made while the applications are quit");
         if let Some(shown) = quitting.interrupt.take() {
             self.client.destroy_surface(shown.surface)?;
         }
@@ -683,13 +916,21 @@ impl App {
             Choice::Cancel => {
                 let quitting = self.quitting.take().expect("checked above");
                 self.logging_out = false;
-                eprintln!("cupertino-login: {} cancelled while quitting the applications", quitting.then.log_name());
+                eprintln!(
+                    "cupertino-login: {} cancelled while quitting the applications",
+                    quitting.then.log_name()
+                );
             }
             Choice::ForceQuit => {
-                let app = quitting.sequence.force_quit(now).expect("Force Quit is only offered on the interrupt panel");
+                let app = quitting
+                    .sequence
+                    .force_quit(now)
+                    .expect("Force Quit is only offered on the interrupt panel");
                 // a failure leaves the sequence waiting: the panel comes back when the timeout runs out again
                 match session::force_quit_application(&self.session_bus, &app) {
-                    Ok(processes) => eprintln!("cupertino-login: force quit: {app} ({processes} processes)"),
+                    Ok(processes) => {
+                        eprintln!("cupertino-login: force quit: {app} ({processes} processes)")
+                    }
                     Err(e) => eprintln!("cupertino-login: force quit of {app} failed: {e}"),
                 }
             }
@@ -703,7 +944,10 @@ impl App {
             self.power_button.reset();
             return Ok(());
         }
-        eprintln!("cupertino-login: power key {}", if pressed { "down" } else { "up" });
+        eprintln!(
+            "cupertino-login: power key {}",
+            if pressed { "down" } else { "up" }
+        );
         if pressed {
             self.power_button.press(now);
             return Ok(());
@@ -721,7 +965,9 @@ impl App {
                 eprintln!("cupertino-login: power button: sleep");
                 self.request_power(Power::Sleep)?;
             }
-            Effect::ShowPanel if self.panel.is_some() || self.logging_out => eprintln!("cupertino-login: power button hold ignored: a panel or a log-out is running"),
+            Effect::ShowPanel if self.panel.is_some() || self.logging_out => eprintln!(
+                "cupertino-login: power button hold ignored: a panel or a log-out is running"
+            ),
             Effect::ShowPanel => self.show_panel(now, Kind::PowerButton)?,
         }
         Ok(())

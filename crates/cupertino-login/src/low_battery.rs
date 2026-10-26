@@ -69,7 +69,10 @@ impl LowBattery {
         let before = self.level.replace(level).unwrap_or(Level::None);
         match level {
             Level::None => self.shown.take().map(Action::Close),
-            _ if level > before => Some(Action::Post { replaces: self.shown.unwrap_or(0), notice: notice(level, percent) }),
+            _ if level > before => Some(Action::Post {
+                replaces: self.shown.unwrap_or(0),
+                notice: notice(level, percent),
+            }),
             _ => None,
         }
     }
@@ -81,10 +84,23 @@ impl LowBattery {
 }
 
 fn notice(level: Level, percent: f64) -> Notice {
-    let remains = format!("{}% of the battery remains.", percent.round().clamp(0.0, 100.0) as u32);
+    let remains = format!(
+        "{}% of the battery remains.",
+        percent.round().clamp(0.0, 100.0) as u32
+    );
     match level {
-        Level::Critical => Notice { summary: "Battery Almost Empty".into(), body: format!("{remains} Connect the computer to power now."), icon: "battery-empty-symbolic", urgency: 2 },
-        Level::Low | Level::None => Notice { summary: "Low Battery".into(), body: format!("{remains} Connect the computer to power soon."), icon: "battery-caution-symbolic", urgency: 1 },
+        Level::Critical => Notice {
+            summary: "Battery Almost Empty".into(),
+            body: format!("{remains} Connect the computer to power now."),
+            icon: "battery-empty-symbolic",
+            urgency: 2,
+        },
+        Level::Low | Level::None => Notice {
+            summary: "Low Battery".into(),
+            body: format!("{remains} Connect the computer to power soon."),
+            icon: "battery-caution-symbolic",
+            urgency: 1,
+        },
     }
 }
 
@@ -94,19 +110,49 @@ mod tests {
 
     #[test]
     fn upower_levels_3_to_5_warn() {
-        assert_eq!([0, 1, 2, 3, 4, 5, 6].map(Level::from_upower), [Level::None, Level::None, Level::None, Level::Low, Level::Critical, Level::Critical, Level::None]);
+        assert_eq!(
+            [0, 1, 2, 3, 4, 5, 6].map(Level::from_upower),
+            [
+                Level::None,
+                Level::None,
+                Level::None,
+                Level::Low,
+                Level::Critical,
+                Level::Critical,
+                Level::None
+            ]
+        );
     }
 
     #[test]
     fn the_early_warning_posts_the_final_one_replaces_it_and_power_withdraws_it() {
         let mut b = LowBattery::new();
         assert_eq!(b.report(Level::None, 50.0), None);
-        let Some(Action::Post { replaces: 0, notice }) = b.report(Level::Low, 9.4) else { panic!("the early warning posts") };
-        assert_eq!((notice.summary.as_str(), notice.urgency), ("Low Battery", 1));
+        let Some(Action::Post {
+            replaces: 0,
+            notice,
+        }) = b.report(Level::Low, 9.4)
+        else {
+            panic!("the early warning posts")
+        };
+        assert_eq!(
+            (notice.summary.as_str(), notice.urgency),
+            ("Low Battery", 1)
+        );
         assert!(notice.body.starts_with("9% "), "{}", notice.body);
         b.posted(7);
-        assert_eq!(b.report(Level::Low, 8.0), None, "the same level again changes nothing");
-        let Some(Action::Post { replaces: 7, notice }) = b.report(Level::Critical, 2.0) else { panic!("the final warning replaces the early one") };
+        assert_eq!(
+            b.report(Level::Low, 8.0),
+            None,
+            "the same level again changes nothing"
+        );
+        let Some(Action::Post {
+            replaces: 7,
+            notice,
+        }) = b.report(Level::Critical, 2.0)
+        else {
+            panic!("the final warning replaces the early one")
+        };
         assert_eq!(notice.urgency, 2);
         b.posted(7);
         assert_eq!(b.report(Level::None, 2.0), Some(Action::Close(7)));
@@ -116,8 +162,15 @@ mod tests {
     #[test]
     fn a_session_that_starts_at_the_final_level_posts_it_once() {
         let mut b = LowBattery::new();
-        assert!(matches!(b.report(Level::Critical, 1.0), Some(Action::Post { replaces: 0, .. })));
+        assert!(matches!(
+            b.report(Level::Critical, 1.0),
+            Some(Action::Post { replaces: 0, .. })
+        ));
         b.posted(3);
-        assert_eq!(b.report(Level::Low, 1.0), None, "a lower level does not post");
+        assert_eq!(
+            b.report(Level::Low, 1.0),
+            None,
+            "a lower level does not post"
+        );
     }
 }

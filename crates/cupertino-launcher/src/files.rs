@@ -46,7 +46,21 @@ impl FileSearchConfig {
             include_hidden: false,
             include_dirs: true,
             respect_ignore_files: true,
-            ignored_dir_names: ["node_modules", "target", "__pycache__", "venv", "site-packages", "vendor", "build", "dist", "Trash", "snap", "Library"].map(String::from).to_vec(),
+            ignored_dir_names: [
+                "node_modules",
+                "target",
+                "__pycache__",
+                "venv",
+                "site-packages",
+                "vendor",
+                "build",
+                "dist",
+                "Trash",
+                "snap",
+                "Library",
+            ]
+            .map(String::from)
+            .to_vec(),
             extra_patterns: Vec::new(),
             min_score: 300.0,
         }
@@ -83,7 +97,10 @@ pub fn glob_match(pattern: &[char], text: &[char]) -> bool {
                 }
                 if rest[0] == '/' {
                     let r = &rest[1..];
-                    go(r, t) || t.iter().enumerate().any(|(k, &c)| c == '/' && go(r, &t[k + 1..]))
+                    go(r, t)
+                        || t.iter()
+                            .enumerate()
+                            .any(|(k, &c)| c == '/' && go(r, &t[k + 1..]))
                 } else {
                     (0..=t.len()).any(|i| go(rest, &t[i..]))
                 }
@@ -102,7 +119,9 @@ pub fn glob_match(pattern: &[char], text: &[char]) -> bool {
             }
             Some('?') => t.first().is_some_and(|&c| c != '/') && go(&p[1..], &t[1..]),
             Some('[') => {
-                let Some(end) = p.iter().skip(2).position(|&c| c == ']').map(|e| e + 2) else { return t.first() == Some(&'[') && go(&p[1..], &t[1..]) };
+                let Some(end) = p.iter().skip(2).position(|&c| c == ']').map(|e| e + 2) else {
+                    return t.first() == Some(&'[') && go(&p[1..], &t[1..]);
+                };
                 let Some(&c) = t.first() else { return false };
                 let (neg, set) = match p.get(1) {
                     Some('!' | '^') => (true, &p[2..end]),
@@ -149,9 +168,17 @@ impl IgnoreRules {
             }
             let anchored = line.contains('/');
             let line = line.trim_start_matches('/');
-            patterns.push(Pattern { glob: line.chars().collect(), negated, dir_only, anchored });
+            patterns.push(Pattern {
+                glob: line.chars().collect(),
+                negated,
+                dir_only,
+                anchored,
+            });
         }
-        IgnoreRules { base: base.to_path_buf(), patterns }
+        IgnoreRules {
+            base: base.to_path_buf(),
+            patterns,
+        }
     }
 
     /// `Some(true)` ignored, `Some(false)` explicitly re-included, `None` no pattern applies.
@@ -164,7 +191,11 @@ impl IgnoreRules {
             if p.dir_only && !is_dir {
                 continue;
             }
-            let hit = if p.anchored { glob_match(&p.glob, &rel_s) } else { glob_match(&p.glob, &name) };
+            let hit = if p.anchored {
+                glob_match(&p.glob, &rel_s)
+            } else {
+                glob_match(&p.glob, &name)
+            };
             if hit {
                 result = Some(!p.negated);
             }
@@ -206,12 +237,20 @@ fn fold_lower(s: &str) -> String {
 }
 
 fn mtime(meta: &std::fs::Metadata) -> f64 {
-    meta.modified().ok().and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok()).map_or(0.0, |d| d.as_secs_f64())
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map_or(0.0, |d| d.as_secs_f64())
 }
 
 impl FileIndex {
     pub fn empty(config: FileSearchConfig) -> FileIndex {
-        FileIndex { config, entries: Vec::new(), truncated: false, dirs_read: 0 }
+        FileIndex {
+            config,
+            entries: Vec::new(),
+            truncated: false,
+            dirs_read: 0,
+        }
     }
 
     pub fn build(config: FileSearchConfig) -> FileIndex {
@@ -222,11 +261,16 @@ impl FileIndex {
         let mut queue: VecDeque<(PathBuf, usize, Vec<Arc<IgnoreRules>>)> = VecDeque::new();
         let mut root_rules = Vec::new();
         if !config.extra_patterns.is_empty() {
-            root_rules.push(Arc::new(IgnoreRules::parse(&config.root, &config.extra_patterns.join("\n"))));
+            root_rules.push(Arc::new(IgnoreRules::parse(
+                &config.root,
+                &config.extra_patterns.join("\n"),
+            )));
         }
         queue.push_back((config.root.clone(), 0, root_rules));
         'walk: while let Some((dir, depth, mut rules)) = queue.pop_front() {
-            if dirs_read >= config.max_dirs || config.time_budget.is_some_and(|b| started.elapsed() > b) {
+            if dirs_read >= config.max_dirs
+                || config.time_budget.is_some_and(|b| started.elapsed() > b)
+            {
                 truncated = true;
                 break;
             }
@@ -238,7 +282,9 @@ impl FileIndex {
                     }
                 }
             }
-            let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+            let Ok(rd) = std::fs::read_dir(&dir) else {
+                continue;
+            };
             let mut children: Vec<_> = rd.flatten().collect();
             children.sort_by_key(|e| e.file_name());
             for e in children {
@@ -252,7 +298,10 @@ impl FileIndex {
                     continue;
                 }
                 let path = e.path();
-                let ignored = rules.iter().fold(None, |acc, r| r.decision(&path, is_dir).or(acc)).unwrap_or(false);
+                let ignored = rules
+                    .iter()
+                    .fold(None, |acc, r| r.decision(&path, is_dir).or(acc))
+                    .unwrap_or(false);
                 if ignored {
                     continue;
                 }
@@ -266,8 +315,20 @@ impl FileIndex {
                     continue;
                 }
                 let modified = e.metadata().map(|m| mtime(&m)).unwrap_or(0.0);
-                let parent_lower = fold_lower(&dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
-                entries.push(FileEntry { lower: fold_lower(&name), parent_lower, name, path, is_dir, depth: depth.min(255) as u8, modified });
+                let parent_lower = fold_lower(
+                    &dir.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                );
+                entries.push(FileEntry {
+                    lower: fold_lower(&name),
+                    parent_lower,
+                    name,
+                    path,
+                    is_dir,
+                    depth: depth.min(255) as u8,
+                    modified,
+                });
                 if entries.len() >= config.max_entries {
                     truncated = true;
                     break 'walk;
@@ -277,7 +338,12 @@ impl FileIndex {
         if !queue.is_empty() {
             truncated = true;
         }
-        FileIndex { config, entries, truncated, dirs_read }
+        FileIndex {
+            config,
+            entries,
+            truncated,
+            dirs_read,
+        }
     }
 
     pub fn spawn_build(config: FileSearchConfig) -> std::thread::JoinHandle<FileIndex> {
@@ -311,21 +377,55 @@ impl FileIndex {
                 let mut it = hay.chars();
                 t.iter().all(|c| it.any(|h| h == *c))
             };
-            if !q.tokens.iter().all(|t| subsequence(&e.lower, t) || subsequence(&e.parent_lower, t)) {
+            if !q
+                .tokens
+                .iter()
+                .all(|t| subsequence(&e.lower, t) || subsequence(&e.parent_lower, t))
+            {
                 continue;
             }
-            let parent = e.path.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let cand = Candidate { fields: vec![CandidateField::new(&e.name, 1.0, true), CandidateField::new(&parent, 0.4, false)], required_field: None };
-            let Some(s) = matcher::score(q, &cand, w) else { continue };
+            let parent = e
+                .path
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let cand = Candidate {
+                fields: vec![
+                    CandidateField::new(&e.name, 1.0, true),
+                    CandidateField::new(&parent, 0.4, false),
+                ],
+                required_field: None,
+            };
+            let Some(s) = matcher::score(q, &cand, w) else {
+                continue;
+            };
             if s.score < self.config.min_score {
                 continue;
             }
             let age_days = ((now - e.modified) / 86400.0).max(0.0);
-            let recency = if e.modified > 0.0 { 15.0 * 0.5f64.powf(age_days / 14.0) } else { 0.0 };
+            let recency = if e.modified > 0.0 {
+                15.0 * 0.5f64.powf(age_days / 14.0)
+            } else {
+                0.0
+            };
             let score = s.score - 4.0 * (e.depth as f64).min(6.0) + recency;
-            out.push(FileMatch { index: i, score, positions: s.positions });
+            out.push(FileMatch {
+                index: i,
+                score,
+                positions: s.positions,
+            });
         }
-        out.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| self.entries[a.index].depth.cmp(&self.entries[b.index].depth)).then_with(|| self.entries[a.index].name.cmp(&self.entries[b.index].name)));
+        out.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| {
+                    self.entries[a.index]
+                        .depth
+                        .cmp(&self.entries[b.index].depth)
+                })
+                .then_with(|| self.entries[a.index].name.cmp(&self.entries[b.index].name))
+        });
         out.truncate(limit);
         out
     }
@@ -344,13 +444,26 @@ mod tests {
 
     fn names(idx: &FileIndex) -> Vec<String> {
         let root = &idx.config.root;
-        let mut v: Vec<String> = idx.entries().iter().map(|e| e.path.strip_prefix(root).unwrap().to_string_lossy().into_owned()).collect();
+        let mut v: Vec<String> = idx
+            .entries()
+            .iter()
+            .map(|e| {
+                e.path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
         v.sort();
         v
     }
 
     fn g(p: &str, t: &str) -> bool {
-        glob_match(&p.chars().collect::<Vec<_>>(), &t.chars().collect::<Vec<_>>())
+        glob_match(
+            &p.chars().collect::<Vec<_>>(),
+            &t.chars().collect::<Vec<_>>(),
+        )
     }
 
     #[test]
@@ -384,7 +497,11 @@ mod tests {
         touch(r, "proj/src/main.rs");
         touch(r, "proj/target/debug/out");
         touch(r, "proj/.gitignore");
-        fs::write(r.join("proj/.gitignore"), "*.log\n/generated/\nsecrets.txt\n!keep.log\n").unwrap();
+        fs::write(
+            r.join("proj/.gitignore"),
+            "*.log\n/generated/\nsecrets.txt\n!keep.log\n",
+        )
+        .unwrap();
         touch(r, "proj/debug.log");
         touch(r, "proj/keep.log");
         touch(r, "proj/generated/code.rs");
@@ -394,13 +511,28 @@ mod tests {
         let n = names(&idx);
         assert!(n.contains(&"Documents/report.txt".to_string()));
         assert!(n.contains(&"proj/src/main.rs".to_string()));
-        assert!(n.contains(&"proj/keep.log".to_string()), "negation re-includes: {n:?}");
-        assert!(n.contains(&"proj/src/generated/ok.rs".to_string()), "anchored pattern only matches at the base");
+        assert!(
+            n.contains(&"proj/keep.log".to_string()),
+            "negation re-includes: {n:?}"
+        );
+        assert!(
+            n.contains(&"proj/src/generated/ok.rs".to_string()),
+            "anchored pattern only matches at the base"
+        );
         for hidden in [".config", "Documents/.secret"] {
             assert!(!n.iter().any(|x| x.starts_with(hidden)), "{hidden}");
         }
-        for ignored in ["proj/node_modules", "proj/target", "proj/debug.log", "proj/generated", "proj/src/secrets.txt"] {
-            assert!(!n.iter().any(|x| x.starts_with(ignored)), "{ignored} in {n:?}");
+        for ignored in [
+            "proj/node_modules",
+            "proj/target",
+            "proj/debug.log",
+            "proj/generated",
+            "proj/src/secrets.txt",
+        ] {
+            assert!(
+                !n.iter().any(|x| x.starts_with(ignored)),
+                "{ignored} in {n:?}"
+            );
         }
         assert!(!idx.truncated);
     }
@@ -448,7 +580,10 @@ mod tests {
         c.max_depth = 2;
         let n = names(&FileIndex::build(c));
         assert!(n.contains(&"a/b".to_string()), "dirs at depth 2 are listed");
-        assert!(!n.iter().any(|x| x.contains("deep.txt")), "depth bound: {n:?}");
+        assert!(
+            !n.iter().any(|x| x.contains("deep.txt")),
+            "depth bound: {n:?}"
+        );
 
         let mut c = FileSearchConfig::new(d.path());
         c.max_dirs = 1;
@@ -495,7 +630,17 @@ mod tests {
         let idx = FileIndex::build(FileSearchConfig::new(d.path()));
         let w = Weights::default();
         let r = idx.search(&Query::new("budget"), 10, crate::frecency::unix_now(), &w);
-        let found: Vec<String> = r.iter().map(|m| idx.entry(m.index).path.strip_prefix(d.path()).unwrap().to_string_lossy().into_owned()).collect();
+        let found: Vec<String> = r
+            .iter()
+            .map(|m| {
+                idx.entry(m.index)
+                    .path
+                    .strip_prefix(d.path())
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
         assert_eq!(found.len(), 3, "{found:?}");
         assert_eq!(found[0], "budget.txt", "exact-prefix shallow first");
         assert!(found.contains(&"Documents/budget-2024.xlsx".to_string()));
@@ -517,7 +662,11 @@ mod tests {
         let idx = FileIndex::build(FileSearchConfig::new(d.path()));
         let w = Weights::default();
         assert!(idx.search(&Query::new("qly"), 10, 0.0, &w).is_empty());
-        assert_eq!(idx.search(&Query::new("qrt"), 10, 0.0, &w).len(), 1, "initials are a better tier than fuzzy");
+        assert_eq!(
+            idx.search(&Query::new("qrt"), 10, 0.0, &w).len(),
+            1,
+            "initials are a better tier than fuzzy"
+        );
         assert_eq!(idx.search(&Query::new("rep"), 10, 0.0, &w).len(), 1);
     }
 

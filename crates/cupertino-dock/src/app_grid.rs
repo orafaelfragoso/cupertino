@@ -111,32 +111,75 @@ impl GridLayout {
         let bottom = (spare * 0.25).floor().max(35.0);
         let zoom = zoom_factor(width);
         let adjusted_side = (width * 0.2 * zoom + side).floor();
-        let page = Rect::new(adjusted_side, 30.0 + top, width - 2.0 * adjusted_side, (height - 30.0) - (top + bottom));
+        let page = Rect::new(
+            adjusted_side,
+            30.0 + top,
+            width - 2.0 * adjusted_side,
+            (height - 30.0) - (top + bottom),
+        );
         let cell = ((page.w / cols).trunc(), (page.h / rows).trunc());
         let icon = icon_size(cell.0.min(cell.1) - 46.0);
         let label_y = (cell.1 * 0.125).ceil().min(20.0);
         // bottom-up (W/2 − 125, layerH − (top + 15), 250, 25): the field's bottom is 15 pt above the page
-        let search = Rect::new(width / 2.0 - Self::SEARCH_SIZE.0 / 2.0, top + 15.0 - Self::SEARCH_SIZE.1, Self::SEARCH_SIZE.0, Self::SEARCH_SIZE.1);
+        let search = Rect::new(
+            width / 2.0 - Self::SEARCH_SIZE.0 / 2.0,
+            top + 15.0 - Self::SEARCH_SIZE.1,
+            Self::SEARCH_SIZE.0,
+            Self::SEARCH_SIZE.1,
+        );
         let dots_from_bottom = (bottom * 0.5 - 7.5).floor().max(0.0);
-        let dots = Rect::new(0.0, height - Self::DOT_HIT - dots_from_bottom, width, Self::DOT_HIT);
-        Self { width, height, left: adjusted_side, right: adjusted_side, top, bottom, page, cell, icon, label_y, search, dots }
+        let dots = Rect::new(
+            0.0,
+            height - Self::DOT_HIT - dots_from_bottom,
+            width,
+            Self::DOT_HIT,
+        );
+        Self {
+            width,
+            height,
+            left: adjusted_side,
+            right: adjusted_side,
+            top,
+            bottom,
+            page,
+            cell,
+            icon,
+            label_y,
+            search,
+            dots,
+        }
     }
 
     /// Frame of page `i` when the pages stand at `position` (page 0 at 0, fractional while flipping).
     pub fn page_frame(&self, i: usize, position: f64) -> Rect {
-        Rect::new(self.page.x + (i as f64 - position) * self.width, self.page.y, self.page.w, self.page.h)
+        Rect::new(
+            self.page.x + (i as f64 - position) * self.width,
+            self.page.y,
+            self.page.w,
+            self.page.h,
+        )
     }
 
     /// Cell of `slot` (0-based, row-major) in a page frame.
     pub fn cell_rect(&self, frame: &Rect, slot: usize) -> Rect {
         let (c, r) = ((slot % COLUMNS) as f64, (slot / COLUMNS) as f64);
-        Rect::new(frame.x + c * self.cell.0, frame.y + r * self.cell.1, self.cell.0, self.cell.1)
+        Rect::new(
+            frame.x + c * self.cell.0,
+            frame.y + r * self.cell.1,
+            self.cell.0,
+            self.cell.1,
+        )
     }
 
     /// Image frame inside `cell`: `(trunc(cellW/2 − icon/2), labelY + Lh, icon, icon)` bottom-up.
     pub fn image_rect(&self, cell: &Rect) -> Rect {
         let bottom = cell.bottom() - self.label_y - Self::LABEL_HEIGHT;
-        Rect::new(cell.x + (self.cell.0 / 2.0 - self.icon / 2.0).trunc(), bottom - self.icon, self.icon, self.icon)
+        Rect::new(
+            cell.x + (self.cell.0 / 2.0 - self.icon / 2.0).trunc(),
+            bottom - self.icon,
+            self.icon,
+            self.icon,
+        )
     }
 
     /// Label rectangle inside `cell` for a text `text_width` wide: `min(text + 4, cellW − 12)`
@@ -144,8 +187,17 @@ impl GridLayout {
     pub fn label_rect(&self, cell: &Rect, text_width: f64) -> Rect {
         let w = (text_width + Self::LABEL_PAD).min(self.cell.0 - Self::LABEL_CELL_INSET);
         let centre = self.cell.0 / 2.0 - w / 2.0;
-        let x = if (w as i64) % 2 == 0 { centre.trunc() } else { centre.round() };
-        Rect::new(cell.x + x, cell.bottom() - self.label_y - Self::LABEL_HEIGHT, w, Self::LABEL_HEIGHT)
+        let x = if (w as i64) % 2 == 0 {
+            centre.trunc()
+        } else {
+            centre.round()
+        };
+        Rect::new(
+            cell.x + x,
+            cell.bottom() - self.label_y - Self::LABEL_HEIGHT,
+            w,
+            Self::LABEL_HEIGHT,
+        )
     }
 
     /// What a click or the selection highlight covers: the image and the widest label, 5 pt taller
@@ -154,7 +206,12 @@ impl GridLayout {
         let image = self.image_rect(cell);
         let label = self.label_rect(cell, self.cell.0);
         let union = image.union(&label);
-        Rect::new(union.x, union.y - Self::SELECTION_OUTSET_Y, union.w, union.h + 2.0 * Self::SELECTION_OUTSET_Y)
+        Rect::new(
+            union.x,
+            union.y - Self::SELECTION_OUTSET_Y,
+            union.w,
+            union.h + 2.0 * Self::SELECTION_OUTSET_Y,
+        )
     }
 
     /// The slot whose item `p` is over on a page at `frame`.
@@ -165,20 +222,35 @@ impl GridLayout {
         let c = ((p.x - frame.x) / self.cell.0) as usize;
         let r = ((p.y - frame.y) / self.cell.1) as usize;
         let slot = r * COLUMNS + c;
-        (c < COLUMNS && r < ROWS && slot < filled && self.item_rect(&self.cell_rect(frame, slot)).contains(p)).then_some(slot)
+        (c < COLUMNS
+            && r < ROWS
+            && slot < filled
+            && self.item_rect(&self.cell_rect(frame, slot)).contains(p))
+        .then_some(slot)
     }
 
     /// Hit frame of dot `i` of `count`: row width `N·15 + (N − 1)·5`, first x `trunc(W/2 − rowW/2)`.
     pub fn dot_rect(&self, i: usize, count: usize) -> Rect {
-        let row = count as f64 * Self::DOT_HIT + (count.saturating_sub(1)) as f64 * (Self::DOT_PITCH - Self::DOT_HIT);
+        let row = count as f64 * Self::DOT_HIT
+            + (count.saturating_sub(1)) as f64 * (Self::DOT_PITCH - Self::DOT_HIT);
         let x = (self.width / 2.0 - row / 2.0).trunc() + i as f64 * Self::DOT_PITCH;
-        Rect::new(x, self.dots.y + (Self::DOT_HIT / 2.0 - 7.5).trunc(), Self::DOT_HIT, Self::DOT_HIT)
+        Rect::new(
+            x,
+            self.dots.y + (Self::DOT_HIT / 2.0 - 7.5).trunc(),
+            Self::DOT_HIT,
+            Self::DOT_HIT,
+        )
     }
 
     /// The 8 × 8 dot inside its hit frame.
     pub fn dot_shape(&self, i: usize, count: usize) -> Rect {
         let hit = self.dot_rect(i, count);
-        Rect::new(hit.x + Self::DOT_INSET, hit.y + Self::DOT_INSET, Self::DOT_SIZE, Self::DOT_SIZE)
+        Rect::new(
+            hit.x + Self::DOT_INSET,
+            hit.y + Self::DOT_INSET,
+            Self::DOT_SIZE,
+            Self::DOT_SIZE,
+        )
     }
 
     pub fn dot_at(&self, p: Point, count: usize) -> Option<usize> {
@@ -205,7 +277,11 @@ fn zoom_factor(width: f64) -> f64 {
 /// is 1; then at least 20.
 pub fn icon_size(n: f64) -> f64 {
     let n = n.floor();
-    let icon = if n < 8.0 { 1.0 } else { (n - n % 8.0).min(128.0) };
+    let icon = if n < 8.0 {
+        1.0
+    } else {
+        (n - n % 8.0).min(128.0)
+    };
     icon.max(20.0)
 }
 
@@ -216,7 +292,10 @@ pub fn icon_size(n: f64) -> f64 {
 pub fn matches(name: &str, query: &str) -> bool {
     let lower = name.to_lowercase();
     let words: Vec<String> = lower.split_whitespace().map(str::to_string).collect();
-    let segments: Vec<String> = camel_segments(name).into_iter().map(|s| s.to_lowercase()).collect();
+    let segments: Vec<String> = camel_segments(name)
+        .into_iter()
+        .map(|s| s.to_lowercase())
+        .collect();
     let initials: String = words.iter().filter_map(|w| w.chars().next()).collect();
     let stripped: String = lower.split_whitespace().collect();
     query.split_whitespace().map(str::to_lowercase).all(|term| {
@@ -330,7 +409,17 @@ impl AppGrid {
     pub fn new(mut apps: Vec<AppEntry>, now: f64) -> Self {
         apps.sort_by_cached_key(|a| (a.name.to_lowercase(), a.key.clone()));
         let results = (0..apps.len()).collect();
-        Self { apps, query: String::new(), results, page: 0, flip: None, selected: None, phase: Phase::Entering(now), wheel: None, reduce_motion: false }
+        Self {
+            apps,
+            query: String::new(),
+            results,
+            page: 0,
+            flip: None,
+            selected: None,
+            phase: Phase::Entering(now),
+            wheel: None,
+            reduce_motion: false,
+        }
     }
 
     /// Follow the session's Reduce Motion option from the next frame on.
@@ -344,7 +433,15 @@ impl AppGrid {
             .entries
             .iter()
             .filter(|e| !e.no_display)
-            .map(|e| AppEntry { key: e.id.clone(), name: e.name.clone(), icon: if e.icon.is_empty() { e.id.clone() } else { e.icon.clone() } })
+            .map(|e| AppEntry {
+                key: e.id.clone(),
+                name: e.name.clone(),
+                icon: if e.icon.is_empty() {
+                    e.id.clone()
+                } else {
+                    e.icon.clone()
+                },
+            })
             .collect();
         Self::new(apps, now)
     }
@@ -383,7 +480,11 @@ impl AppGrid {
     /// Fractional page position: the flip's curve between its start and the current page.
     pub fn page_position(&self, now: f64) -> f64 {
         match self.flip {
-            Some(flip) => flip.from + (self.page as f64 - flip.from) * PAGE_CURVE.eval(((now - flip.at) / PAGE_DURATION).clamp(0.0, 1.0)),
+            Some(flip) => {
+                flip.from
+                    + (self.page as f64 - flip.from)
+                        * PAGE_CURVE.eval(((now - flip.at) / PAGE_DURATION).clamp(0.0, 1.0))
+            }
             None => self.page as f64,
         }
     }
@@ -394,7 +495,10 @@ impl AppGrid {
         if target == self.page {
             return;
         }
-        self.flip = Some(Flip { from: self.page_position(now), at: now });
+        self.flip = Some(Flip {
+            from: self.page_position(now),
+            at: now,
+        });
         self.page = target;
     }
 
@@ -412,7 +516,8 @@ impl AppGrid {
     fn flip_to(&mut self, target: usize, now: f64) {
         if let Some(selected) = self.selected {
             let slot = selected % PER_PAGE;
-            self.selected = Some((target * PER_PAGE + slot).min(self.results.len().saturating_sub(1)));
+            self.selected =
+                Some((target * PER_PAGE + slot).min(self.results.len().saturating_sub(1)));
         }
         self.go_to_page(target, now);
     }
@@ -425,7 +530,9 @@ impl AppGrid {
         match key {
             Key::Escape => return Some(Outcome::Close),
             Key::Return => {
-                let index = self.selected.or_else(|| (!self.query.is_empty() && !self.results.is_empty()).then_some(0))?;
+                let index = self.selected.or_else(|| {
+                    (!self.query.is_empty() && !self.results.is_empty()).then_some(0)
+                })?;
                 return self.result(index).map(|a| Outcome::Launch(a.key.clone()));
             }
             Key::Char(c) => {
@@ -475,7 +582,11 @@ impl AppGrid {
     /// is tried by its desktop file ID, read as words (the design tries the bundle file name).
     fn refilter(&mut self) {
         let query = self.query.clone();
-        self.results = (0..self.apps.len()).filter(|&i| matches(&self.apps[i].name, &query) || matches(&id_words(&self.apps[i].key), &query)).collect();
+        self.results = (0..self.apps.len())
+            .filter(|&i| {
+                matches(&self.apps[i].name, &query) || matches(&id_words(&self.apps[i].key), &query)
+            })
+            .collect();
         self.selected = None;
         self.page = 0;
         self.flip = None;
@@ -484,7 +595,9 @@ impl AppGrid {
     /// A left press at `p`: on a dot it flips there, on the search field nothing, on an item it
     /// launches, anywhere else it closes. Presses during a flip or the exit are ignored.
     pub fn click(&mut self, p: Point, layout: &GridLayout, now: f64) -> Option<Outcome> {
-        if matches!(self.phase, Phase::Leaving(_)) || self.flip.is_some_and(|f| now - f.at < PAGE_DURATION) {
+        if matches!(self.phase, Phase::Leaving(_))
+            || self.flip.is_some_and(|f| now - f.at < PAGE_DURATION)
+        {
             return None;
         }
         if let Some(dot) = layout.dot_at(p, self.page_count()) {
@@ -497,7 +610,9 @@ impl AppGrid {
         let first = self.page * PER_PAGE;
         let filled = self.results.len().saturating_sub(first).min(PER_PAGE);
         match layout.slot_at(&layout.page_frame(self.page, self.page as f64), p, filled) {
-            Some(slot) => self.result(first + slot).map(|a| Outcome::Launch(a.key.clone())),
+            Some(slot) => self
+                .result(first + slot)
+                .map(|a| Outcome::Launch(a.key.clone())),
             None => Some(Outcome::Close),
         }
     }
@@ -505,7 +620,10 @@ impl AppGrid {
     /// A wheel or scroll-gesture step; the flip comes from [`Self::settle`] after the burst.
     pub fn scroll(&mut self, dx: f64, dy: f64, now: f64) {
         let dominant = if dx.abs() > dy.abs() { dx } else { dy };
-        let wheel = self.wheel.get_or_insert(Wheel { total: 0.0, last: now });
+        let wheel = self.wheel.get_or_insert(Wheel {
+            total: 0.0,
+            last: now,
+        });
         wheel.total += WHEEL_GAIN * dominant;
         wheel.last = now;
     }
@@ -518,7 +636,9 @@ impl AppGrid {
     /// Flip one page in the direction of a wheel burst whose last event is 75 ms old. True when
     /// something changed.
     pub fn settle(&mut self, now: f64) -> bool {
-        let Some(wheel) = self.wheel.filter(|w| now - w.last >= WHEEL_SETTLE) else { return false };
+        let Some(wheel) = self.wheel.filter(|w| now - w.last >= WHEEL_SETTLE) else {
+            return false;
+        };
         self.wheel = None;
         if wheel.total == 0.0 {
             return false;
@@ -569,7 +689,10 @@ impl AppGrid {
     pub fn visual(&self, now: f64) -> Visual {
         let full = self.full_visual(now);
         if self.reduce_motion {
-            return Visual { alpha: full.alpha, scale: 1.0 };
+            return Visual {
+                alpha: full.alpha,
+                scale: 1.0,
+            };
         }
         full
     }
@@ -595,7 +718,13 @@ mod tests {
     use super::*;
 
     fn apps(n: usize) -> Vec<AppEntry> {
-        (0..n).map(|i| AppEntry { key: format!("app-{i:02}"), name: format!("App {i:02}"), icon: String::new() }).collect()
+        (0..n)
+            .map(|i| AppEntry {
+                key: format!("app-{i:02}"),
+                name: format!("App {i:02}"),
+                icon: String::new(),
+            })
+            .collect()
     }
 
     /// Layers of the computed table (`cupertino_lp_metrics.py table`, bottom dock, tile 64): the
@@ -611,13 +740,22 @@ mod tests {
         assert_eq!(l.page, Rect::new(90.0, 65.0, 1260.0, 690.0));
         assert_eq!((l.cell, l.icon, l.label_y), ((180.0, 138.0), 88.0, 18.0));
         let l = layer(1024.0, 768.0);
-        assert_eq!((l.page.w, l.page.h, l.cell, l.icon, l.label_y), (844.0, 558.0, (120.0, 111.0), 64.0, 14.0));
+        assert_eq!(
+            (l.page.w, l.page.h, l.cell, l.icon, l.label_y),
+            (844.0, 558.0, (120.0, 111.0), 64.0, 14.0)
+        );
         // zoom 0.3 widens the sides: floor(1920 × 0.06 + 90)
         let l = layer(1920.0, 1080.0);
         assert_eq!((l.left, l.top, l.bottom), (205.0, 35.0, 35.0));
-        assert_eq!((l.page.w, l.page.h, l.cell, l.icon, l.label_y), (1510.0, 870.0, (215.0, 174.0), 128.0, 20.0));
+        assert_eq!(
+            (l.page.w, l.page.h, l.cell, l.icon, l.label_y),
+            (1510.0, 870.0, (215.0, 174.0), 128.0, 20.0)
+        );
         let l = layer(2560.0, 1440.0);
-        assert_eq!((l.left, l.top, l.bottom, l.cell, l.icon), (397.0, 42.0, 70.0, (252.0, 237.0), 128.0));
+        assert_eq!(
+            (l.left, l.top, l.bottom, l.cell, l.icon),
+            (397.0, 42.0, 70.0, (252.0, 237.0), 128.0)
+        );
     }
 
     #[test]
@@ -626,7 +764,11 @@ mod tests {
         assert_eq!(icon_size(128.0), 128.0);
         assert_eq!(icon_size(300.0), 128.0);
         assert_eq!(icon_size(23.0), 20.0, "16 is raised to 20");
-        assert_eq!(icon_size(5.0), 20.0, "below 8 the icon is 1, then at least 20");
+        assert_eq!(
+            icon_size(5.0),
+            20.0,
+            "below 8 the icon is 1, then at least 20"
+        );
     }
 
     #[test]
@@ -634,15 +776,41 @@ mod tests {
         let l = layer(1440.0, 900.0);
         let frame = l.page_frame(0, 0.0);
         let cell = l.cell_rect(&frame, COLUMNS + 2);
-        assert_eq!(cell, Rect::new(90.0 + 2.0 * 180.0, 65.0 + 138.0, 180.0, 138.0));
+        assert_eq!(
+            cell,
+            Rect::new(90.0 + 2.0 * 180.0, 65.0 + 138.0, 180.0, 138.0)
+        );
         let image = l.image_rect(&cell);
-        assert_eq!(image, Rect::new(cell.x + 46.0, cell.bottom() - 18.0 - 22.0 - 88.0, 88.0, 88.0));
+        assert_eq!(
+            image,
+            Rect::new(
+                cell.x + 46.0,
+                cell.bottom() - 18.0 - 22.0 - 88.0,
+                88.0,
+                88.0
+            )
+        );
         let label = l.label_rect(&cell, 60.0);
-        assert_eq!((label.w, label.h, label.bottom()), (64.0, 22.0, cell.bottom() - 18.0));
+        assert_eq!(
+            (label.w, label.h, label.bottom()),
+            (64.0, 22.0, cell.bottom() - 18.0)
+        );
         assert_eq!(label.x, cell.x + 58.0, "even width: truncated centre");
-        assert_eq!(l.label_rect(&cell, 61.0).x, cell.x + (90.0 - 32.5f64).round(), "odd width: rounded centre");
-        assert_eq!(l.label_rect(&cell, 400.0).w, 168.0, "never wider than the cell minus 12");
-        assert_eq!(l.page_frame(1, 0.0).x, frame.x + 1440.0, "pages are one layer width apart");
+        assert_eq!(
+            l.label_rect(&cell, 61.0).x,
+            cell.x + (90.0 - 32.5f64).round(),
+            "odd width: rounded centre"
+        );
+        assert_eq!(
+            l.label_rect(&cell, 400.0).w,
+            168.0,
+            "never wider than the cell minus 12"
+        );
+        assert_eq!(
+            l.page_frame(1, 0.0).x,
+            frame.x + 1440.0,
+            "pages are one layer width apart"
+        );
         assert_eq!(l.page_frame(1, 0.5).x, frame.x + 720.0);
     }
 
@@ -652,9 +820,21 @@ mod tests {
         let frame = l.page_frame(0, 0.0);
         let cell = l.cell_rect(&frame, 3);
         assert_eq!(l.slot_at(&frame, l.image_rect(&cell).center(), 7), Some(3));
-        assert_eq!(l.slot_at(&frame, Point::new(cell.x + 2.0, cell.y + 2.0), 7), None, "the cell's corner is empty space");
-        assert_eq!(l.slot_at(&frame, l.image_rect(&cell).center(), 3), None, "an empty slot is empty space");
-        assert_eq!(l.slot_at(&frame, Point::new(frame.x - 1.0, frame.cy()), 35), None, "outside the page");
+        assert_eq!(
+            l.slot_at(&frame, Point::new(cell.x + 2.0, cell.y + 2.0), 7),
+            None,
+            "the cell's corner is empty space"
+        );
+        assert_eq!(
+            l.slot_at(&frame, l.image_rect(&cell).center(), 3),
+            None,
+            "an empty slot is empty space"
+        );
+        assert_eq!(
+            l.slot_at(&frame, Point::new(frame.x - 1.0, frame.cy()), 35),
+            None,
+            "outside the page"
+        );
     }
 
     #[test]
@@ -663,8 +843,15 @@ mod tests {
         // row width 3 × 15 + 2 × 5 = 55: first x trunc(720 − 27.5)
         assert_eq!(l.dot_rect(0, 3), Rect::new(692.0, l.dots.y, 15.0, 15.0));
         assert_eq!(l.dot_rect(2, 3).x, 732.0);
-        assert_eq!(l.dot_shape(1, 3), Rect::new(715.0, l.dots.y + 3.0, 8.0, 8.0));
-        assert_eq!(l.dots.y, 790.0 - 15.0 - 10.0, "strip 10 pt up: floor(35 × 0.5 − 7.5)");
+        assert_eq!(
+            l.dot_shape(1, 3),
+            Rect::new(715.0, l.dots.y + 3.0, 8.0, 8.0)
+        );
+        assert_eq!(
+            l.dots.y,
+            790.0 - 15.0 - 10.0,
+            "strip 10 pt up: floor(35 × 0.5 − 7.5)"
+        );
         assert_eq!(l.dot_at(Point::new(720.0, l.dots.y + 7.0), 3), Some(1));
         assert_eq!(l.search, Rect::new(595.0, 25.0, 250.0, 25.0));
         assert_eq!(l.page.y - l.search.bottom(), 15.0);
@@ -677,9 +864,18 @@ mod tests {
         assert!(matches("QuickTime", "time"), "a camel-case segment");
         assert!(matches("Quick Time Player", "qtp"), "initials");
         assert!(matches("Quick Time Player", "qt"), "two initials");
-        assert!(!matches("Quick Time Player", "tp"), "initials match from the first word only");
-        assert!(matches("Quick Time Player", "quicktime"), "the space-stripped name");
-        assert!(matches("Quick Time Player", "time player"), "every term has to match");
+        assert!(
+            !matches("Quick Time Player", "tp"),
+            "initials match from the first word only"
+        );
+        assert!(
+            matches("Quick Time Player", "quicktime"),
+            "the space-stripped name"
+        );
+        assert!(
+            matches("Quick Time Player", "time player"),
+            "every term has to match"
+        );
         assert!(!matches("Quick Time Player", "time nope"));
         assert!(!matches("Quick Time Player", "ick"), "no substring matches");
         assert!(matches("anything", ""), "an empty query matches all");
@@ -687,22 +883,59 @@ mod tests {
 
     #[test]
     fn typing_filters_by_name_then_by_key_and_backspace_widens_again() {
-        let mut g = AppGrid::new(vec![AppEntry { key: "org.gnome.Nautilus".into(), name: "Files".into(), icon: String::new() }, AppEntry { key: "foot".into(), name: "Foot".into(), icon: String::new() }], 0.0);
-        assert_eq!(g.results().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Files", "Foot"], "sorted by name");
+        let mut g = AppGrid::new(
+            vec![
+                AppEntry {
+                    key: "org.gnome.Nautilus".into(),
+                    name: "Files".into(),
+                    icon: String::new(),
+                },
+                AppEntry {
+                    key: "foot".into(),
+                    name: "Foot".into(),
+                    icon: String::new(),
+                },
+            ],
+            0.0,
+        );
+        assert_eq!(
+            g.results().map(|a| a.name.as_str()).collect::<Vec<_>>(),
+            ["Files", "Foot"],
+            "sorted by name"
+        );
         g.key(Key::Char('f'), 0.0);
         g.key(Key::Char('o'), 0.0);
-        assert_eq!(g.results().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Foot"]);
-        assert_eq!(g.key(Key::Return, 0.0), Some(Outcome::Launch("foot".into())), "Return with a query launches the first result");
+        assert_eq!(
+            g.results().map(|a| a.name.as_str()).collect::<Vec<_>>(),
+            ["Foot"]
+        );
+        assert_eq!(
+            g.key(Key::Return, 0.0),
+            Some(Outcome::Launch("foot".into())),
+            "Return with a query launches the first result"
+        );
         g.key(Key::Backspace, 0.0);
         g.key(Key::Backspace, 0.0);
         assert_eq!(g.result_count(), 2);
-        assert_eq!(g.key(Key::Return, 0.0), None, "nothing selected and no query");
+        assert_eq!(
+            g.key(Key::Return, 0.0),
+            None,
+            "nothing selected and no query"
+        );
         for c in "nautilus".chars() {
             g.key(Key::Char(c), 0.0);
         }
-        assert_eq!(g.results().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Files"], "the desktop file ID is tried when the name fails");
+        assert_eq!(
+            g.results().map(|a| a.name.as_str()).collect::<Vec<_>>(),
+            ["Files"],
+            "the desktop file ID is tried when the name fails"
+        );
         g.key(Key::Char('x'), 0.0);
-        assert_eq!((g.result_count(), g.page_count()), (0, 1), "no results is one empty page");
+        assert_eq!(
+            (g.result_count(), g.page_count()),
+            (0, 1),
+            "no results is one empty page"
+        );
     }
 
     #[test]
@@ -710,7 +943,11 @@ mod tests {
         let mut g = AppGrid::new(apps(40), 0.0);
         assert_eq!(g.page_count(), 2);
         assert_eq!(g.key(Key::Right, 0.0), None);
-        assert_eq!(g.selected(), Some(0), "the first arrow selects the page's first item");
+        assert_eq!(
+            g.selected(),
+            Some(0),
+            "the first arrow selects the page's first item"
+        );
         g.key(Key::Down, 0.0);
         assert_eq!(g.selected(), Some(COLUMNS));
         g.key(Key::Up, 0.0);
@@ -719,15 +956,26 @@ mod tests {
         for _ in 0..PER_PAGE {
             g.key(Key::Right, 1.0);
         }
-        assert_eq!((g.selected(), g.page()), (Some(PER_PAGE), 1), "Right past the page's last item flips to the next page");
+        assert_eq!(
+            (g.selected(), g.page()),
+            (Some(PER_PAGE), 1),
+            "Right past the page's last item flips to the next page"
+        );
         assert!(g.animating(1.1));
         g.key(Key::Down, 1.0);
-        assert_eq!(g.selected(), Some(PER_PAGE), "Down with no item below stays");
+        assert_eq!(
+            g.selected(),
+            Some(PER_PAGE),
+            "Down with no item below stays"
+        );
         for _ in 0..10 {
             g.key(Key::Right, 1.0);
         }
         assert_eq!(g.selected(), Some(39), "the last result is the end");
-        assert_eq!(g.key(Key::Return, 1.0), Some(Outcome::Launch("app-39".into())));
+        assert_eq!(
+            g.key(Key::Return, 1.0),
+            Some(Outcome::Launch("app-39".into()))
+        );
         assert_eq!(g.key(Key::Escape, 1.0), Some(Outcome::Close));
     }
 
@@ -764,12 +1012,19 @@ mod tests {
         g.go_to_page(2, 10.0);
         assert_eq!(g.page_position(10.0), 0.0);
         let mid = g.page_position(10.25);
-        assert!(mid > 1.5 && mid < 2.0, "at half the time the flip is past three quarters: {mid}");
+        assert!(
+            mid > 1.5 && mid < 2.0,
+            "at half the time the flip is past three quarters: {mid}"
+        );
         assert!((g.page_position(10.5) - 2.0).abs() < 1e-9);
         g.tick(10.5);
         assert!(!g.animating(10.5));
         g.go_to_page(5, 10.5);
-        assert_eq!(g.page(), 2, "pages beyond the last are clamped and nothing moves");
+        assert_eq!(
+            g.page(),
+            2,
+            "pages beyond the last are clamped and nothing moves"
+        );
     }
 
     #[test]
@@ -780,7 +1035,11 @@ mod tests {
         assert!((g.until_settled(1.1).unwrap() - 0.025).abs() < 1e-9);
         assert!(!g.settle(1.1), "not settled yet");
         assert!(g.settle(1.13));
-        assert_eq!(g.page(), 1, "a positive total flips forward once, however many events");
+        assert_eq!(
+            g.page(),
+            1,
+            "a positive total flips forward once, however many events"
+        );
         assert_eq!(g.until_settled(1.2), None);
         g.scroll(-20.0, 1.0, 2.0);
         assert!(g.settle(2.1));
@@ -797,29 +1056,71 @@ mod tests {
         g.tick(1.0);
         let frame = l.page_frame(0, 0.0);
         let image = l.image_rect(&l.cell_rect(&frame, 5));
-        assert_eq!(g.click(image.center(), &l, 1.0), Some(Outcome::Launch("app-05".into())));
-        assert_eq!(g.click(Point::new(frame.x + 1.0, frame.y + 1.0), &l, 1.0), Some(Outcome::Close), "a cell corner is empty space");
-        assert_eq!(g.click(l.search.center(), &l, 1.0), None, "the search field takes the click");
+        assert_eq!(
+            g.click(image.center(), &l, 1.0),
+            Some(Outcome::Launch("app-05".into()))
+        );
+        assert_eq!(
+            g.click(Point::new(frame.x + 1.0, frame.y + 1.0), &l, 1.0),
+            Some(Outcome::Close),
+            "a cell corner is empty space"
+        );
+        assert_eq!(
+            g.click(l.search.center(), &l, 1.0),
+            None,
+            "the search field takes the click"
+        );
         assert_eq!(g.click(l.dot_rect(1, 2).center(), &l, 1.0), None);
         assert_eq!(g.page(), 1);
-        assert_eq!(g.click(image.center(), &l, 1.1), None, "no clicks during the flip");
+        assert_eq!(
+            g.click(image.center(), &l, 1.1),
+            None,
+            "no clicks during the flip"
+        );
         g.tick(1.6);
-        assert_eq!(g.click(image.center(), &l, 1.6), Some(Outcome::Launch("app-40".into())), "page 1's slot 5");
+        assert_eq!(
+            g.click(image.center(), &l, 1.6),
+            Some(Outcome::Launch("app-40".into())),
+            "page 1's slot 5"
+        );
         g.close(2.0);
-        assert_eq!(g.click(image.center(), &l, 2.1), None, "a leaving grid takes nothing");
+        assert_eq!(
+            g.click(image.center(), &l, 2.1),
+            None,
+            "a leaving grid takes nothing"
+        );
         assert_eq!(g.key(Key::Return, 2.1), None);
     }
 
     #[test]
     fn the_grid_fades_and_scales_in_then_out() {
         let mut g = AppGrid::new(apps(3), 10.0);
-        assert_eq!(g.visual(10.0), Visual { alpha: 0.0, scale: 1.05 });
+        assert_eq!(
+            g.visual(10.0),
+            Visual {
+                alpha: 0.0,
+                scale: 1.05
+            }
+        );
         let mid = g.visual(10.125);
-        assert!(mid.alpha < 0.5 && mid.alpha > 0.0, "ease-in starts slowly: {}", mid.alpha);
-        assert!((mid.scale - (1.05 - 0.05 * mid.alpha)).abs() < 1e-9, "scale and opacity share the curve");
+        assert!(
+            mid.alpha < 0.5 && mid.alpha > 0.0,
+            "ease-in starts slowly: {}",
+            mid.alpha
+        );
+        assert!(
+            (mid.scale - (1.05 - 0.05 * mid.alpha)).abs() < 1e-9,
+            "scale and opacity share the curve"
+        );
         assert!(g.animating(10.2));
         g.tick(10.25);
-        assert_eq!(g.visual(10.25), Visual { alpha: 1.0, scale: 1.0 });
+        assert_eq!(
+            g.visual(10.25),
+            Visual {
+                alpha: 1.0,
+                scale: 1.0
+            }
+        );
         assert!(!g.animating(10.3));
         g.close(11.0);
         g.close(11.1);
@@ -828,7 +1129,13 @@ mod tests {
         assert!(mid.alpha < 0.5, "ease-out leaves quickly: {}", mid.alpha);
         assert!(!g.is_gone(11.249));
         assert!(g.is_gone(11.25));
-        assert_eq!(g.visual(11.25), Visual { alpha: 0.0, scale: 1.05 });
+        assert_eq!(
+            g.visual(11.25),
+            Visual {
+                alpha: 0.0,
+                scale: 1.05
+            }
+        );
     }
 
     #[test]
@@ -836,8 +1143,21 @@ mod tests {
         let mut g = AppGrid::new(apps(3), 10.0);
         let full = g.visual(10.125);
         g.set_reduce_motion(true);
-        assert_eq!(g.visual(10.0), Visual { alpha: 0.0, scale: 1.0 });
-        assert_eq!(g.visual(10.125), Visual { alpha: full.alpha, scale: 1.0 }, "the same fade, no scale step");
+        assert_eq!(
+            g.visual(10.0),
+            Visual {
+                alpha: 0.0,
+                scale: 1.0
+            }
+        );
+        assert_eq!(
+            g.visual(10.125),
+            Visual {
+                alpha: full.alpha,
+                scale: 1.0
+            },
+            "the same fade, no scale step"
+        );
         g.close(11.0);
         assert_eq!(g.visual(11.125).scale, 1.0);
         assert!(g.is_gone(11.25), "the hide keeps its duration");

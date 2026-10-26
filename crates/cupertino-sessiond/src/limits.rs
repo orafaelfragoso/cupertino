@@ -22,12 +22,20 @@ pub struct RateLimit {
 
 impl RateLimit {
     pub fn new(max: usize, window: Duration) -> Self {
-        RateLimit { max, window, events: VecDeque::new() }
+        RateLimit {
+            max,
+            window,
+            events: VecDeque::new(),
+        }
     }
 
     /// Count an event at `now`; false (and not counted) when `max` events already fall within the window before `now`.
     pub fn allow(&mut self, now: Instant) -> bool {
-        while self.events.front().is_some_and(|&at| now.duration_since(at) >= self.window) {
+        while self
+            .events
+            .front()
+            .is_some_and(|&at| now.duration_since(at) >= self.window)
+        {
             self.events.pop_front();
         }
         if self.events.len() >= self.max {
@@ -47,7 +55,10 @@ mod tests {
         let start = Instant::now();
         let mut limit = RateLimit::new(ATTEMPTS_PER_WINDOW, ATTEMPT_WINDOW);
         for second in 0..10 {
-            assert!(limit.allow(start + Duration::from_secs(second)), "attempt {second}");
+            assert!(
+                limit.allow(start + Duration::from_secs(second)),
+                "attempt {second}"
+            );
         }
         assert!(!limit.allow(start + Duration::from_secs(10)), "the 11th");
         // a refused attempt is not counted: when the first falls out of the window one more fits, and only one

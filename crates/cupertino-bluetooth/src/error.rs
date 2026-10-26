@@ -4,7 +4,11 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
     /// Fewer bytes than the field needs.
-    Truncated { what: &'static str, needed: usize, found: usize },
+    Truncated {
+        what: &'static str,
+        needed: usize,
+        found: usize,
+    },
     /// More bytes than the layout has.
     TrailingBytes { what: &'static str, extra: usize },
     /// The packet header's parameter length disagrees with the bytes received.
@@ -28,16 +32,30 @@ pub enum ParseError {
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Truncated { what, needed, found } => write!(f, "{what}: needs {needed} bytes, got {found}"),
+            Self::Truncated {
+                what,
+                needed,
+                found,
+            } => write!(f, "{what}: needs {needed} bytes, got {found}"),
             Self::TrailingBytes { what, extra } => write!(f, "{what}: {extra} bytes too many"),
-            Self::LengthMismatch { header, actual } => write!(f, "header says {header} parameter bytes, packet has {actual}"),
+            Self::LengthMismatch { header, actual } => write!(
+                f,
+                "header says {header} parameter bytes, packet has {actual}"
+            ),
             Self::UnknownAddressType(value) => write!(f, "unknown address type {value}"),
             Self::InvalidBool { what, value } => write!(f, "{what}: {value} is not 0 or 1"),
             Self::InvalidAddress(text) => write!(f, "not a device address: {text:?}"),
             Self::InvalidAddressTypeName(text) => write!(f, "not an address type: {text:?}"),
-            Self::EirOverrun { offset } => write!(f, "EIR structure at offset {offset} runs past the data"),
-            Self::EirUuidLength { size, length } => write!(f, "EIR UUID list of {length} bytes is not a multiple of {size}"),
-            Self::EirFieldLength { kind, length } => write!(f, "EIR field {kind:#04x} has {length} bytes"),
+            Self::EirOverrun { offset } => {
+                write!(f, "EIR structure at offset {offset} runs past the data")
+            }
+            Self::EirUuidLength { size, length } => write!(
+                f,
+                "EIR UUID list of {length} bytes is not a multiple of {size}"
+            ),
+            Self::EirFieldLength { kind, length } => {
+                write!(f, "EIR field {kind:#04x} has {length} bytes")
+            }
         }
     }
 }
@@ -48,7 +66,10 @@ impl std::error::Error for ParseError {}
 #[derive(Debug)]
 pub enum Error {
     /// A system call failed.
-    Syscall { call: &'static str, source: rustix::io::Errno },
+    Syscall {
+        call: &'static str,
+        source: rustix::io::Errno,
+    },
     /// The kernel sent a packet that does not decode.
     Parse(ParseError),
     /// A command does not fit the 16-bit parameter length of the packet header.
@@ -60,7 +81,10 @@ impl fmt::Display for Error {
         match self {
             Self::Syscall { call, source } => write!(f, "{call}: {source}"),
             Self::Parse(source) => write!(f, "malformed management packet: {source}"),
-            Self::CommandTooLong { opcode, length } => write!(f, "command {opcode:#06x} has {length} parameter bytes, more than a packet holds"),
+            Self::CommandTooLong { opcode, length } => write!(
+                f,
+                "command {opcode:#06x} has {length} parameter bytes, more than a packet holds"
+            ),
         }
     }
 }

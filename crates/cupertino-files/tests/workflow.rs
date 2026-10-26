@@ -33,7 +33,13 @@ fn open_group_layout_select_and_survive_changes() {
     let groups = group_entries(m.entries(), GroupBy::Kind, SystemTime::now());
     let titles: Vec<&str> = groups.iter().map(|g| g.title.as_str()).collect();
     assert_eq!(titles, ["Folders", "Images", "PDF Documents", "Text"]);
-    let sections: Vec<SectionSpec> = groups.iter().map(|g| SectionSpec { title: Some(g.title.clone()), count: g.items.len() }).collect();
+    let sections: Vec<SectionSpec> = groups
+        .iter()
+        .map(|g| SectionSpec {
+            title: Some(g.title.clone()),
+            count: g.items.len(),
+        })
+        .collect();
     let p = IconParams::new(64, 54, 12, true, false, FontMetrics::estimate(12.0));
     let l = icon::layout(&p, 600.0, &sections, icon::Flow::Leading);
     assert_eq!(l.cells.len(), 5);
@@ -54,7 +60,12 @@ fn open_group_layout_select_and_survive_changes() {
         }
     }
     let now_b = m.index_of_name("b.png").unwrap();
-    assert!(sel.contains(now_b), "selection follows the item: {:?} vs {}", sel.indices().collect::<Vec<_>>(), now_b);
+    assert!(
+        sel.contains(now_b),
+        "selection follows the item: {:?} vs {}",
+        sel.indices().collect::<Vec<_>>(),
+        now_b
+    );
     assert_eq!(sel.len(), 1);
 }
 
@@ -67,7 +78,10 @@ fn settings_and_trash_roundtrip() {
 
     let key = FolderKey::of(&folder).unwrap();
     let mut store = SettingsStore::open(d.path().join("s/folders.json")).unwrap();
-    let mut s = ViewSettings { style: ViewStyle::Gallery, ..Default::default() };
+    let mut s = ViewSettings {
+        style: ViewStyle::Gallery,
+        ..Default::default()
+    };
     s.icon.grid_spacing = 80;
     store.set(&key, s);
     store.save().unwrap();

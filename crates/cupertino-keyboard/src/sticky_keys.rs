@@ -41,7 +41,13 @@ pub enum Modifier {
 }
 
 impl Modifier {
-    const ALL: [Modifier; 5] = [Modifier::Shift, Modifier::Control, Modifier::Alt, Modifier::Super, Modifier::Fn];
+    const ALL: [Modifier; 5] = [
+        Modifier::Shift,
+        Modifier::Control,
+        Modifier::Alt,
+        Modifier::Super,
+        Modifier::Fn,
+    ];
 
     /// The slot of a modifier key (evdev code); caps lock is not one.
     pub fn of_key(code: u32) -> Option<Modifier> {
@@ -56,7 +62,10 @@ impl Modifier {
     }
 
     fn index(self) -> usize {
-        Self::ALL.iter().position(|m| *m == self).unwrap_or_else(|| unreachable!("every modifier is in ALL"))
+        Self::ALL
+            .iter()
+            .position(|m| *m == self)
+            .unwrap_or_else(|| unreachable!("every modifier is in ALL"))
     }
 }
 
@@ -107,7 +116,17 @@ pub struct StickyKeys {
 
 impl StickyKeys {
     pub fn new(enabled: bool, shortcut: bool) -> StickyKeys {
-        StickyKeys { enabled, shortcut, slots: [Slot { state: StickyState::Idle, code: 0 }; 5], shift_releases: 0, window_start_ms: 0, held: BTreeSet::new() }
+        StickyKeys {
+            enabled,
+            shortcut,
+            slots: [Slot {
+                state: StickyState::Idle,
+                code: 0,
+            }; 5],
+            shift_releases: 0,
+            window_start_ms: 0,
+            held: BTreeSet::new(),
+        }
     }
 
     pub fn enabled(&self) -> bool {
@@ -125,12 +144,18 @@ impl StickyKeys {
         }
         self.enabled = on;
         if on {
-            self.slots = [Slot { state: StickyState::Idle, code: 0 }; 5];
+            self.slots = [Slot {
+                state: StickyState::Idle,
+                code: 0,
+            }; 5];
             return self.held.iter().copied().collect();
         }
         let mut out = Vec::new();
         for slot in &mut self.slots {
-            if matches!(slot.state, StickyState::Latched | StickyState::Locked | StickyState::Pressed) {
+            if matches!(
+                slot.state,
+                StickyState::Latched | StickyState::Locked | StickyState::Pressed
+            ) {
                 out.push(slot.code);
             }
             slot.state = StickyState::Idle;
@@ -148,7 +173,10 @@ impl StickyKeys {
                 self.held.remove(&code);
             }
         }
-        let mut out = StickyOutcome { deliver: true, ..StickyOutcome::default() };
+        let mut out = StickyOutcome {
+            deliver: true,
+            ..StickyOutcome::default()
+        };
         let was_on = self.enabled;
         if modifier == Some(Modifier::Shift) {
             if !pressed {
@@ -176,7 +204,8 @@ impl StickyKeys {
                     (StickyState::Chorded, false) => (StickyState::Idle, true),
                     (StickyState::Locked, false) => (StickyState::Locked, false),
                     // states the design logs as "bad state": the event is dropped
-                    (state @ (StickyState::Pressed | StickyState::Chorded), true) | (state @ StickyState::Latched, false) => (state, false),
+                    (state @ (StickyState::Pressed | StickyState::Chorded), true)
+                    | (state @ StickyState::Latched, false) => (state, false),
                 };
                 if pressed && slot.state == StickyState::Idle {
                     slot.code = code;
@@ -208,7 +237,9 @@ impl StickyKeys {
         if !self.shortcut {
             return None;
         }
-        if self.shift_releases == 0 || now_ms.saturating_sub(self.window_start_ms) >= TOGGLE_WINDOW_MS {
+        if self.shift_releases == 0
+            || now_ms.saturating_sub(self.window_start_ms) >= TOGGLE_WINDOW_MS
+        {
             self.shift_releases = 0;
             self.window_start_ms = now_ms;
         }
@@ -237,21 +268,38 @@ mod tests {
     }
 
     fn deliver() -> StickyOutcome {
-        StickyOutcome { deliver: true, ..Default::default() }
+        StickyOutcome {
+            deliver: true,
+            ..Default::default()
+        }
     }
 
     fn swallow() -> StickyOutcome {
-        StickyOutcome { deliver: false, ..Default::default() }
+        StickyOutcome {
+            deliver: false,
+            ..Default::default()
+        }
     }
 
     #[test]
     fn a_tapped_modifier_latches_for_exactly_one_key() {
         let mut s = on();
         assert_eq!(s.key(SHIFT, true, 0), deliver());
-        assert_eq!(s.key(SHIFT, false, 50), swallow(), "the release is held back: Shift stays down");
+        assert_eq!(
+            s.key(SHIFT, false, 50),
+            swallow(),
+            "the release is held back: Shift stays down"
+        );
         assert_eq!(s.state(Modifier::Shift), StickyState::Latched);
         assert_eq!(s.key(A, true, 100), deliver());
-        assert_eq!(s.key(A, false, 150), StickyOutcome { deliver: true, release: vec![SHIFT], toggled: None });
+        assert_eq!(
+            s.key(A, false, 150),
+            StickyOutcome {
+                deliver: true,
+                release: vec![SHIFT],
+                toggled: None
+            }
+        );
         assert_eq!(s.state(Modifier::Shift), StickyState::Idle);
         // the next key is not shifted any more
         assert_eq!(s.key(A, false, 250), deliver());
@@ -282,7 +330,11 @@ mod tests {
         assert_eq!(s.key(A, true, 10), deliver());
         assert_eq!(s.state(Modifier::Control), StickyState::Chorded);
         assert_eq!(s.key(A, false, 20), deliver());
-        assert_eq!(s.key(CTRL, false, 30), deliver(), "released like a normal modifier");
+        assert_eq!(
+            s.key(CTRL, false, 30),
+            deliver(),
+            "released like a normal modifier"
+        );
         assert_eq!(s.state(Modifier::Control), StickyState::Idle);
     }
 
@@ -314,7 +366,14 @@ mod tests {
             assert_eq!(s.key(SHIFT, false, t * 1000 + 100).toggled, None);
         }
         s.key(SHIFT, true, 4000);
-        assert_eq!(s.key(SHIFT, false, 4100), StickyOutcome { deliver: true, release: vec![], toggled: Some(true) });
+        assert_eq!(
+            s.key(SHIFT, false, 4100),
+            StickyOutcome {
+                deliver: true,
+                release: vec![],
+                toggled: Some(true)
+            }
+        );
         assert!(s.enabled());
         // the toggle event passed plainly; taps now walk latched, locked, idle, latched (and still count)
         fn tap(s: &mut StickyKeys, t: u64) -> (StickyOutcome, StickyState) {
@@ -328,7 +387,14 @@ mod tests {
         assert_eq!(tap(&mut s, 5300).1, StickyState::Latched);
         // the fifth turns it off and releases the Shift that the press locked
         let (out, state) = tap(&mut s, 5400);
-        assert_eq!(out, StickyOutcome { deliver: true, release: vec![SHIFT], toggled: Some(false) });
+        assert_eq!(
+            out,
+            StickyOutcome {
+                deliver: true,
+                release: vec![SHIFT],
+                toggled: Some(false)
+            }
+        );
         assert_eq!(state, StickyState::Idle);
         assert!(!s.enabled());
     }
@@ -342,7 +408,11 @@ mod tests {
         }
         s.key(A, true, 10);
         s.key(SHIFT, true, 20);
-        assert_eq!(s.key(SHIFT, false, 20).toggled, None, "a typed key reset the count");
+        assert_eq!(
+            s.key(SHIFT, false, 20).toggled,
+            None,
+            "a typed key reset the count"
+        );
         // four more, but the window started 30 s before the last one
         for t in [21, 22, 23] {
             s.key(SHIFT, true, t);

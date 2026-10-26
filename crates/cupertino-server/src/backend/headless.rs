@@ -53,9 +53,14 @@ fn renderer_from_display(display: &EGLDisplay) -> Result<GlesRenderer> {
 }
 
 fn from_gbm(path: &str) -> Result<GlesRenderer> {
-    let file = std::fs::OpenOptions::new().read(true).write(true).open(path).with_context(|| format!("opening {path}"))?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .with_context(|| format!("opening {path}"))?;
     let gbm = GbmDevice::new(file).map_err(|e| anyhow!("gbm device on {path}: {e}"))?;
-    let display = unsafe { EGLDisplay::new(gbm) }.map_err(|e| anyhow!("EGL display on {path}: {e}"))?;
+    let display =
+        unsafe { EGLDisplay::new(gbm) }.map_err(|e| anyhow!("EGL display on {path}: {e}"))?;
     renderer_from_display(&display)
 }
 
@@ -73,13 +78,19 @@ pub fn create_renderer() -> Result<GlesRenderer> {
             if dev.try_get_render_node().ok().flatten().is_none() {
                 continue;
             }
-            match unsafe { EGLDisplay::new(dev) }.map_err(|e| anyhow!("{e}")).and_then(|d| renderer_from_display(&d)) {
+            match unsafe { EGLDisplay::new(dev) }
+                .map_err(|e| anyhow!("{e}"))
+                .and_then(|d| renderer_from_display(&d))
+            {
                 Ok(r) => return Ok(r),
                 Err(e) => errors.push(format!("EGL device: {e:#}")),
             }
         }
     }
-    match unsafe { EGLDisplay::new(EGLSurfacelessDisplay) }.map_err(|e| anyhow!("{e}")).and_then(|d| renderer_from_display(&d)) {
+    match unsafe { EGLDisplay::new(EGLSurfacelessDisplay) }
+        .map_err(|e| anyhow!("{e}"))
+        .and_then(|d| renderer_from_display(&d))
+    {
         Ok(r) => return Ok(r),
         Err(e) => errors.push(format!("surfaceless: {e:#}")),
     }
@@ -94,15 +105,30 @@ pub fn create_renderer() -> Result<GlesRenderer> {
 
 /// Create the offscreen renderer and one display of `size` pixels at `scale`.
 pub fn init(state: &mut Cupertino, size: (i32, i32), scale: f64) -> Result<()> {
-    init_displays(state, &[HeadlessDisplay { name: "headless-1".into(), size, physical_mm: (0, 0) }], Some(scale))
+    init_displays(
+        state,
+        &[HeadlessDisplay {
+            name: "headless-1".into(),
+            size,
+            physical_mm: (0, 0),
+        }],
+        Some(scale),
+    )
 }
 
 /// Create the offscreen renderer and plug in `displays`; `scale` beats their stored and default scales.
-pub fn init_displays(state: &mut Cupertino, displays: &[HeadlessDisplay], scale: Option<f64>) -> Result<()> {
+pub fn init_displays(
+    state: &mut Cupertino,
+    displays: &[HeadlessDisplay],
+    scale: Option<f64>,
+) -> Result<()> {
     let mut renderer = create_renderer()?;
     state.render = Some(RenderResources::new(&mut renderer)?);
     super::init_buffers(state, &renderer);
-    state.backend = Some(Backend::Headless(Box::new(HeadlessBackend { renderer, targets: Vec::new() })));
+    state.backend = Some(Backend::Headless(Box::new(HeadlessBackend {
+        renderer,
+        targets: Vec::new(),
+    })));
     for display in displays {
         add_display(state, display, scale)?;
     }
@@ -111,15 +137,27 @@ pub fn init_displays(state: &mut Cupertino, displays: &[HeadlessDisplay], scale:
 
 /// Plug in an offscreen display (hot-plug): its head is announced and, unless its stored state is
 /// off, its output created.
-pub fn add_display(state: &mut Cupertino, display: &HeadlessDisplay, scale: Option<f64>) -> Result<HeadId> {
+pub fn add_display(
+    state: &mut Cupertino,
+    display: &HeadlessDisplay,
+    scale: Option<f64>,
+) -> Result<HeadId> {
     let info = HeadInfo {
         connector: display.name.clone(),
         make: "Cupertino".into(),
         model: display.name.clone(),
         serial: None,
         physical_mm: display.physical_mm,
-        modes: vec![HeadMode { width: display.size.0, height: display.size.1, refresh_mhz: 60_000 }],
-        caps: HeadCaps { can_disable: true, custom_modes: true, transforms: true },
+        modes: vec![HeadMode {
+            width: display.size.0,
+            height: display.size.1,
+            refresh_mhz: 60_000,
+        }],
+        caps: HeadCaps {
+            can_disable: true,
+            custom_modes: true,
+            transforms: true,
+        },
         base_transform: Transform::Normal,
     };
     let (head, initial) = state.connect_head(info, scale);
@@ -132,7 +170,11 @@ pub fn add_display(state: &mut Cupertino, display: &HeadlessDisplay, scale: Opti
 
 /// Unplug an offscreen display.
 pub fn remove_display(state: &mut Cupertino, head: HeadId) -> Result<()> {
-    if state.displays.head(head).is_some_and(|h| h.output.is_some()) {
+    if state
+        .displays
+        .head(head)
+        .is_some_and(|h| h.output.is_some())
+    {
         state.head_op(head, HeadOp::Disable)?;
     }
     state.disconnect_head(head);
@@ -141,18 +183,34 @@ pub fn remove_display(state: &mut Cupertino, head: HeadId) -> Result<()> {
 
 fn target_texture(renderer: &mut GlesRenderer, mode: HeadMode) -> Result<GlesTexture> {
     let size: Size<i32, Buffer> = (mode.width, mode.height).into();
-    renderer.create_buffer(Fourcc::Abgr8888, size).map_err(|e| anyhow!("creating the output texture: {e}"))
+    renderer
+        .create_buffer(Fourcc::Abgr8888, size)
+        .map_err(|e| anyhow!("creating the output texture: {e}"))
 }
 
 /// Carry out `op` on an offscreen head. Power changes need nothing: an output that is off is
 /// skipped when rendering.
-pub(crate) fn head_op(state: &mut Cupertino, h: &mut HeadlessBackend, head: HeadId, op: HeadOp) -> Result<()> {
+pub(crate) fn head_op(
+    state: &mut Cupertino,
+    h: &mut HeadlessBackend,
+    head: HeadId,
+    op: HeadOp,
+) -> Result<()> {
     match op {
         HeadOp::Enable => {
-            let mode = state.displays.head(head).context("the head being enabled")?.state.mode;
+            let mode = state
+                .displays
+                .head(head)
+                .context("the head being enabled")?
+                .state
+                .mode;
             let texture = target_texture(&mut h.renderer, mode)?;
             let output = state.create_head_output(head);
-            h.targets.push(HeadlessTarget { head, output, texture });
+            h.targets.push(HeadlessTarget {
+                head,
+                output,
+                texture,
+            });
         }
         HeadOp::Disable => {
             h.targets.retain(|t| t.head != head);
@@ -160,7 +218,11 @@ pub(crate) fn head_op(state: &mut Cupertino, h: &mut HeadlessBackend, head: Head
         }
         HeadOp::SetMode(mode) => {
             let texture = target_texture(&mut h.renderer, mode)?;
-            h.targets.iter_mut().find(|t| t.head == head).context("the head is not enabled")?.texture = texture;
+            h.targets
+                .iter_mut()
+                .find(|t| t.head == head)
+                .context("the head is not enabled")?
+                .texture = texture;
         }
         HeadOp::Power(_) => {}
     }
@@ -170,18 +232,29 @@ pub(crate) fn head_op(state: &mut Cupertino, h: &mut HeadlessBackend, head: Head
 /// Render one frame of every powered output into its texture and send frame callbacks.
 #[allow(irrefutable_let_patterns)]
 pub fn render(state: &mut Cupertino) {
-    let Some(mut backend) = state.backend.take() else { return };
+    let Some(mut backend) = state.backend.take() else {
+        return;
+    };
     if let Backend::Headless(h) = &mut backend {
         for target in &mut h.targets {
-            let Some(idx) = state.outputs.iter().position(|o| o.id == target.output) else { continue };
+            let Some(idx) = state.outputs.iter().position(|o| o.id == target.output) else {
+                continue;
+            };
             if !state.displays.powered(target.output) {
                 continue;
             }
             let elements = state.build_output_elements(&mut h.renderer, idx);
             let tracker = &mut state.outputs[idx].tracker;
-            let res = h.renderer.bind(&mut target.texture).map_err(|e| anyhow!("{e}")).and_then(|mut fb| {
-                tracker.render_output(&mut h.renderer, &mut fb, 0, &elements, CLEAR).map(|_| ()).map_err(|e| anyhow!("{e:?}"))
-            });
+            let res = h
+                .renderer
+                .bind(&mut target.texture)
+                .map_err(|e| anyhow!("{e}"))
+                .and_then(|mut fb| {
+                    tracker
+                        .render_output(&mut h.renderer, &mut fb, 0, &elements, CLEAR)
+                        .map(|_| ())
+                        .map_err(|e| anyhow!("{e:?}"))
+                });
             if let Err(e) = res {
                 tracing::warn!(error = %e, "headless render failed");
             }
@@ -194,8 +267,14 @@ pub fn render(state: &mut Cupertino) {
 }
 
 /// One loop iteration: dispatch events, advance the model, render when needed.
-pub fn step(state: &mut Cupertino, event_loop: &mut EventLoop<'static, Cupertino>, timeout: Duration) -> Result<()> {
-    event_loop.dispatch(Some(timeout), state).map_err(|e| anyhow!("event loop: {e}"))?;
+pub fn step(
+    state: &mut Cupertino,
+    event_loop: &mut EventLoop<'static, Cupertino>,
+    timeout: Duration,
+) -> Result<()> {
+    event_loop
+        .dispatch(Some(timeout), state)
+        .map_err(|e| anyhow!("event loop: {e}"))?;
     state.tick();
     if state.wants_frames() {
         render(state);
@@ -206,7 +285,11 @@ pub fn step(state: &mut Cupertino, event_loop: &mut EventLoop<'static, Cupertino
 
 /// Run until `deadline` or until the compositor stops.
 #[allow(irrefutable_let_patterns)]
-pub fn run(state: &mut Cupertino, event_loop: &mut EventLoop<'static, Cupertino>, deadline: Option<Instant>) -> Result<()> {
+pub fn run(
+    state: &mut Cupertino,
+    event_loop: &mut EventLoop<'static, Cupertino>,
+    deadline: Option<Instant>,
+) -> Result<()> {
     while state.running {
         step(state, event_loop, Duration::from_millis(8))?;
         if deadline.is_some_and(|d| Instant::now() >= d) {

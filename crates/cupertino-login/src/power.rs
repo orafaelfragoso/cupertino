@@ -56,7 +56,11 @@ pub struct Menu {
 impl Menu {
     /// The menu of `items`; `None` when there are none, so there is no item.
     pub fn new(items: Vec<Action>) -> Option<Menu> {
-        (!items.is_empty()).then_some(Menu { items, will_prompt: false, open: None })
+        (!items.is_empty()).then_some(Menu {
+            items,
+            will_prompt: false,
+            open: None,
+        })
     }
 
     pub fn items(&self) -> &[Action] {
@@ -146,8 +150,14 @@ mod tests {
 
     #[test]
     fn restart_and_shut_down_get_an_ellipsis_when_they_will_ask_for_an_administrator() {
-        assert_eq!([Action::Restart, Action::ShutDown, Action::Sleep].map(|action| action.title(false)), ["Restart", "Shut Down", "Sleep"]);
-        assert_eq!([Action::Restart, Action::ShutDown, Action::Sleep].map(|action| action.title(true)), ["Restart…", "Shut Down…", "Sleep"]);
+        assert_eq!(
+            [Action::Restart, Action::ShutDown, Action::Sleep].map(|action| action.title(false)),
+            ["Restart", "Shut Down", "Sleep"]
+        );
+        assert_eq!(
+            [Action::Restart, Action::ShutDown, Action::Sleep].map(|action| action.title(true)),
+            ["Restart…", "Shut Down…", "Sleep"]
+        );
         let mut menu = Menu::new(vec![Action::Restart]).unwrap();
         assert!(!menu.will_prompt());
         menu.set_will_prompt(true);

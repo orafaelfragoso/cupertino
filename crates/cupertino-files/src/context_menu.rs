@@ -28,9 +28,21 @@ pub struct Mods {
 }
 
 impl Mods {
-    pub const ALT: Mods = Mods { shift: false, ctrl: false, alt: true };
-    pub const CTRL: Mods = Mods { shift: false, ctrl: true, alt: false };
-    pub const SHIFT_ALT: Mods = Mods { shift: true, ctrl: false, alt: true };
+    pub const ALT: Mods = Mods {
+        shift: false,
+        ctrl: false,
+        alt: true,
+    };
+    pub const CTRL: Mods = Mods {
+        shift: false,
+        ctrl: true,
+        alt: false,
+    };
+    pub const SHIFT_ALT: Mods = Mods {
+        shift: true,
+        ctrl: false,
+        alt: true,
+    };
 }
 
 /// What a picked row asks the window to do.
@@ -72,9 +84,13 @@ pub enum ItemKind {
     /// A row the window cannot do anything for yet: drawn disabled, never picked.
     Unavailable,
     /// The row of colour dots; `on` are the colours every selected item has.
-    TagRow { on: Vec<TagColor> },
+    TagRow {
+        on: Vec<TagColor>,
+    },
     /// The row of the four view modes, the current one marked.
-    ViewRow { current: ViewMode },
+    ViewRow {
+        current: ViewMode,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,20 +106,44 @@ pub struct MenuItem {
 
 impl MenuItem {
     pub fn command(label: &str, command: Command, enabled: bool) -> Self {
-        MenuItem { label: label.to_string(), kind: ItemKind::Command(command), enabled, checked: false, alternates: Vec::new() }
+        MenuItem {
+            label: label.to_string(),
+            kind: ItemKind::Command(command),
+            enabled,
+            checked: false,
+            alternates: Vec::new(),
+        }
     }
 
     /// A row without a backend: disabled.
     pub fn unavailable(label: &str) -> Self {
-        MenuItem { label: label.to_string(), kind: ItemKind::Unavailable, enabled: false, checked: false, alternates: Vec::new() }
+        MenuItem {
+            label: label.to_string(),
+            kind: ItemKind::Unavailable,
+            enabled: false,
+            checked: false,
+            alternates: Vec::new(),
+        }
     }
 
     pub fn submenu(label: &str, items: Vec<MenuItem>, enabled: bool) -> Self {
-        MenuItem { label: label.to_string(), kind: ItemKind::Submenu(items), enabled, checked: false, alternates: Vec::new() }
+        MenuItem {
+            label: label.to_string(),
+            kind: ItemKind::Submenu(items),
+            enabled,
+            checked: false,
+            alternates: Vec::new(),
+        }
     }
 
     pub fn separator() -> Self {
-        MenuItem { label: String::new(), kind: ItemKind::Separator, enabled: false, checked: false, alternates: Vec::new() }
+        MenuItem {
+            label: String::new(),
+            kind: ItemKind::Separator,
+            enabled: false,
+            checked: false,
+            alternates: Vec::new(),
+        }
     }
 
     pub fn checked(mut self, checked: bool) -> Self {
@@ -124,7 +164,11 @@ impl MenuItem {
 
     /// The pointer can act on the row: a selectable row, or one of the two view rows.
     fn is_hit(&self) -> bool {
-        self.is_selectable() || matches!(self.kind, ItemKind::TagRow { .. } | ItemKind::ViewRow { .. })
+        self.is_selectable()
+            || matches!(
+                self.kind,
+                ItemKind::TagRow { .. } | ItemKind::ViewRow { .. }
+            )
     }
 
     fn height(&self) -> f64 {
@@ -138,7 +182,11 @@ impl MenuItem {
 
     /// This row as it shows while `mods` are held: the alternate that names exactly them, else the row itself.
     fn resolved(&self, mods: Mods) -> MenuItem {
-        let mut item = self.alternates.iter().find(|(m, _)| *m == mods).map_or_else(|| self.clone(), |(_, alt)| alt.clone());
+        let mut item = self
+            .alternates
+            .iter()
+            .find(|(m, _)| *m == mods)
+            .map_or_else(|| self.clone(), |(_, alt)| alt.clone());
         item.alternates.clear();
         if let ItemKind::Submenu(sub) = &mut item.kind {
             *sub = sub.iter().map(|i| i.resolved(mods)).collect();
@@ -149,10 +197,23 @@ impl MenuItem {
 
 /// The colours of the tag row, in the order of the dots: red, orange, yellow, green, blue, purple, gray (the order of
 /// the design's default favourite tags).
-pub const TAG_ROW_ORDER: [TagColor; 7] = [TagColor::Red, TagColor::Orange, TagColor::Yellow, TagColor::Green, TagColor::Blue, TagColor::Purple, TagColor::Gray];
+pub const TAG_ROW_ORDER: [TagColor; 7] = [
+    TagColor::Red,
+    TagColor::Orange,
+    TagColor::Yellow,
+    TagColor::Green,
+    TagColor::Blue,
+    TagColor::Purple,
+    TagColor::Gray,
+];
 
 /// The view modes in the order of the row's segments.
-pub const VIEW_ROW_ORDER: [ViewSegment; 4] = [ViewSegment::Icons, ViewSegment::List, ViewSegment::Columns, ViewSegment::Gallery];
+pub const VIEW_ROW_ORDER: [ViewSegment; 4] = [
+    ViewSegment::Icons,
+    ViewSegment::List,
+    ViewSegment::Columns,
+    ViewSegment::Gallery,
+];
 
 /// A segment of the view row; only the first two have a view behind them in this window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -188,8 +249,19 @@ pub fn tag_dots(row: &Rect) -> [(TagColor, Rect); 7] {
     let slot = width / 7.0;
     let left = row.x + (row.w - width) / 2.0;
     TAG_ROW_ORDER.map(|color| {
-        let i = TAG_ROW_ORDER.iter().position(|c| *c == color).expect("the colour is in its own order") as f64;
-        (color, Rect::new(left + slot * i + (slot - m::TAG_DOT_DIAMETER) / 2.0, row.y + m::TAG_DOT_TOP, m::TAG_DOT_DIAMETER, m::TAG_DOT_DIAMETER))
+        let i = TAG_ROW_ORDER
+            .iter()
+            .position(|c| *c == color)
+            .expect("the colour is in its own order") as f64;
+        (
+            color,
+            Rect::new(
+                left + slot * i + (slot - m::TAG_DOT_DIAMETER) / 2.0,
+                row.y + m::TAG_DOT_TOP,
+                m::TAG_DOT_DIAMETER,
+                m::TAG_DOT_DIAMETER,
+            ),
+        )
     })
 }
 
@@ -198,8 +270,19 @@ pub fn view_segments(row: &Rect) -> [(ViewSegment, Rect); 4] {
     let inner = row.inset(m::VIEW_ROW_INSET, 3.0);
     let width = (inner.w - 3.0 * m::VIEW_SEGMENT_GAP) / 4.0;
     VIEW_ROW_ORDER.map(|segment| {
-        let i = VIEW_ROW_ORDER.iter().position(|s| *s == segment).expect("the segment is in its own order") as f64;
-        (segment, Rect::new(inner.x + i * (width + m::VIEW_SEGMENT_GAP), inner.y, width, inner.h))
+        let i = VIEW_ROW_ORDER
+            .iter()
+            .position(|s| *s == segment)
+            .expect("the segment is in its own order") as f64;
+        (
+            segment,
+            Rect::new(
+                inner.x + i * (width + m::VIEW_SEGMENT_GAP),
+                inner.y,
+                width,
+                inner.h,
+            ),
+        )
     })
 }
 
@@ -215,8 +298,14 @@ pub struct AppChoice {
 /// The applications every list offers, in the order of the first list (the design intersects the binding lists of a
 /// multi-item selection). An empty slice of lists offers none.
 pub fn common_apps(lists: &[Vec<AppChoice>]) -> Vec<AppChoice> {
-    let Some((first, rest)) = lists.split_first() else { return Vec::new() };
-    first.iter().filter(|a| rest.iter().all(|l| l.iter().any(|b| b.id == a.id))).cloned().collect()
+    let Some((first, rest)) = lists.split_first() else {
+        return Vec::new();
+    };
+    first
+        .iter()
+        .filter(|a| rest.iter().all(|l| l.iter().any(|b| b.id == a.id)))
+        .cloned()
+        .collect()
 }
 
 /// One laid-out level: its rectangle and one rectangle per row, in the window's coordinates.
@@ -227,12 +316,37 @@ pub struct Layout {
 }
 
 /// Size of a level whose rows are `items`, wide enough for the labels (and alternates' labels) of `widest_of`.
-fn level_size(items: &[MenuItem], widest_of: &[MenuItem], measure: &dyn Fn(&str) -> f64) -> (f64, f64) {
-    let labels = |i: &MenuItem| std::iter::once(i.label.clone()).chain(i.alternates.iter().map(|(_, a)| a.label.clone())).collect::<Vec<_>>();
-    let widest = widest_of.iter().filter(|i| i.kind != ItemKind::Separator).flat_map(labels).map(|l| measure(&l)).fold(0.0, f64::max);
-    let arrow = if widest_of.iter().chain(items).any(|i| matches!(i.kind, ItemKind::Submenu(_)) || i.alternates.iter().any(|(_, a)| matches!(a.kind, ItemKind::Submenu(_)))) { m::SUBMENU_ARROW } else { 0.0 };
+fn level_size(
+    items: &[MenuItem],
+    widest_of: &[MenuItem],
+    measure: &dyn Fn(&str) -> f64,
+) -> (f64, f64) {
+    let labels = |i: &MenuItem| {
+        std::iter::once(i.label.clone())
+            .chain(i.alternates.iter().map(|(_, a)| a.label.clone()))
+            .collect::<Vec<_>>()
+    };
+    let widest = widest_of
+        .iter()
+        .filter(|i| i.kind != ItemKind::Separator)
+        .flat_map(labels)
+        .map(|l| measure(&l))
+        .fold(0.0, f64::max);
+    let arrow = if widest_of.iter().chain(items).any(|i| {
+        matches!(i.kind, ItemKind::Submenu(_))
+            || i.alternates
+                .iter()
+                .any(|(_, a)| matches!(a.kind, ItemKind::Submenu(_)))
+    }) {
+        m::SUBMENU_ARROW
+    } else {
+        0.0
+    };
     let mut w = (m::TITLE_OFFSET + widest + arrow + m::TRAILING_PADDING).max(m::MIN_WIDTH);
-    if items.iter().any(|i| matches!(i.kind, ItemKind::TagRow { .. })) {
+    if items
+        .iter()
+        .any(|i| matches!(i.kind, ItemKind::TagRow { .. }))
+    {
         w = w.max(m::TAG_ROW_WIDTH);
     }
     let h = items.iter().map(MenuItem::height).sum::<f64>() + 2.0 * m::EDGE_PADDING;
@@ -260,21 +374,43 @@ fn keep_inside(rect: Rect, bounds: &Rect) -> Rect {
 }
 
 /// A root level whose top-left corner is at `at`.
-fn layout_root(items: &[MenuItem], widest_of: &[MenuItem], at: Point, bounds: &Rect, measure: &dyn Fn(&str) -> f64) -> Layout {
+fn layout_root(
+    items: &[MenuItem],
+    widest_of: &[MenuItem],
+    at: Point,
+    bounds: &Rect,
+    measure: &dyn Fn(&str) -> f64,
+) -> Layout {
     let (w, h) = level_size(items, widest_of, measure);
     let rect = keep_inside(Rect::new(at.x, at.y, w, h), bounds);
-    Layout { rows: rows_of(items, &rect), rect }
+    Layout {
+        rows: rows_of(items, &rect),
+        rect,
+    }
 }
 
 /// A submenu of the row `row` of the level `parent`: to the right with a 5 pt overlap, else to the left, with its first
 /// row level with the parent row.
-fn layout_submenu(items: &[MenuItem], parent: &Rect, row: &Rect, bounds: &Rect, measure: &dyn Fn(&str) -> f64) -> Layout {
+fn layout_submenu(
+    items: &[MenuItem],
+    parent: &Rect,
+    row: &Rect,
+    bounds: &Rect,
+    measure: &dyn Fn(&str) -> f64,
+) -> Layout {
     let (w, h) = level_size(items, items, measure);
     let inner = bounds.inset(m::SCREEN_MARGIN, m::SCREEN_MARGIN);
     let right = parent.right() - m::SUBMENU_OVERLAP;
-    let x = if right + w <= inner.right() { right } else { parent.x + m::SUBMENU_OVERLAP - w };
+    let x = if right + w <= inner.right() {
+        right
+    } else {
+        parent.x + m::SUBMENU_OVERLAP - w
+    };
     let rect = keep_inside(Rect::new(x, row.y - m::SUBMENU_TOP_OFFSET, w, h), bounds);
-    Layout { rows: rows_of(items, &rect), rect }
+    Layout {
+        rows: rows_of(items, &rect),
+        rect,
+    }
 }
 
 /// A key that moves through an open menu.
@@ -334,13 +470,28 @@ fn measure_all(items: &[MenuItem], measure: &dyn Fn(&str) -> f64, into: &mut Has
 
 impl Menu {
     /// Open `items` with the top-left corner at `at` inside `bounds`; `measure` gives a label's width in points.
-    pub fn open(items: Vec<MenuItem>, at: Point, bounds: Rect, measure: &dyn Fn(&str) -> f64) -> Menu {
+    pub fn open(
+        items: Vec<MenuItem>,
+        at: Point,
+        bounds: Rect,
+        measure: &dyn Fn(&str) -> f64,
+    ) -> Menu {
         let mut widths = HashMap::new();
         measure_all(&items, measure, &mut widths);
         let mods = Mods::default();
         let shown: Vec<MenuItem> = items.iter().map(|i| i.resolved(mods)).collect();
         let layouts = vec![layout_root(&shown, &items, at, &bounds, &|l| widths[l])];
-        Menu { root: items, shown, mods, bounds, widths, path: Vec::new(), layouts, hovered: vec![None], pending: None }
+        Menu {
+            root: items,
+            shown,
+            mods,
+            bounds,
+            widths,
+            path: Vec::new(),
+            layouts,
+            hovered: vec![None],
+            pending: None,
+        }
     }
 
     /// The modifiers held changed: rows with an alternate for them swap (the layout does not change). The submenus close,
@@ -379,7 +530,9 @@ impl Menu {
     pub fn items(&self, level: usize) -> &[MenuItem] {
         let mut items = self.shown.as_slice();
         for row in &self.path[..level] {
-            let ItemKind::Submenu(sub) = &items[*row].kind else { unreachable!("the path leads through submenu rows") };
+            let ItemKind::Submenu(sub) = &items[*row].kind else {
+                unreachable!("the path leads through submenu rows")
+            };
             items = sub;
         }
         items
@@ -392,7 +545,11 @@ impl Menu {
     /// The selectable row of `level` under `p` (window coordinates).
     pub fn hit(&self, level: usize, p: Point) -> Option<usize> {
         let items = self.items(level);
-        self.layouts[level].rows.iter().position(|r| r.contains(p)).filter(|i| items[*i].is_hit())
+        self.layouts[level]
+            .rows
+            .iter()
+            .position(|r| r.contains(p))
+            .filter(|i| items[*i].is_hit())
     }
 
     /// The time at which [`Menu::poll`] has something to do.
@@ -415,14 +572,17 @@ impl Menu {
             let opens = matches!(self.items(level)[row].kind, ItemKind::Submenu(_));
             let is_open = self.path.get(level) == Some(&row);
             let closes = self.layouts.len() > level + 1;
-            self.pending = (!is_open && (opens || closes)).then_some((level, row, now + m::SUBMENU_DELAY));
+            self.pending =
+                (!is_open && (opens || closes)).then_some((level, row, now + m::SUBMENU_DELAY));
         }
         true
     }
 
     /// Apply the delayed open or close that is due at `now`; `true` when the levels changed.
     pub fn poll(&mut self, now: f64) -> bool {
-        let Some((level, row, at)) = self.pending else { return false };
+        let Some((level, row, at)) = self.pending else {
+            return false;
+        };
         if now < at {
             return false;
         }
@@ -440,7 +600,13 @@ impl Menu {
         let item = &self.items(level)[row];
         if let (ItemKind::Submenu(sub), true) = (&item.kind, item.enabled) {
             if !sub.is_empty() {
-                let layout = layout_submenu(sub, &self.layouts[level].rect, &self.layouts[level].rows[row], &self.bounds, &|l| self.widths[l]);
+                let layout = layout_submenu(
+                    sub,
+                    &self.layouts[level].rect,
+                    &self.layouts[level].rows[row],
+                    &self.bounds,
+                    &|l| self.widths[l],
+                );
                 self.path.push(row);
                 self.layouts.push(layout);
                 self.hovered.push(None);
@@ -466,7 +632,10 @@ impl Menu {
                     Outcome::Nothing
                 }
             }
-            ItemKind::Separator | ItemKind::Unavailable | ItemKind::TagRow { .. } | ItemKind::ViewRow { .. } => Outcome::Nothing,
+            ItemKind::Separator
+            | ItemKind::Unavailable
+            | ItemKind::TagRow { .. }
+            | ItemKind::ViewRow { .. } => Outcome::Nothing,
         }
     }
 
@@ -475,8 +644,19 @@ impl Menu {
     pub fn press_at(&mut self, level: usize, row: usize, p: Point) -> Outcome {
         let rect = self.layouts[level].rows[row];
         match &self.items(level)[row].kind {
-            ItemKind::TagRow { .. } => tag_dots(&rect).into_iter().find(|(_, r)| r.contains(p)).map_or(Outcome::Nothing, |(color, _)| Outcome::Run(Command::ToggleTag(color))),
-            ItemKind::ViewRow { .. } => view_segments(&rect).into_iter().find(|(_, r)| r.contains(p)).and_then(|(segment, _)| segment.mode()).map_or(Outcome::Nothing, |mode| Outcome::Run(Command::SetView(mode))),
+            ItemKind::TagRow { .. } => tag_dots(&rect)
+                .into_iter()
+                .find(|(_, r)| r.contains(p))
+                .map_or(Outcome::Nothing, |(color, _)| {
+                    Outcome::Run(Command::ToggleTag(color))
+                }),
+            ItemKind::ViewRow { .. } => view_segments(&rect)
+                .into_iter()
+                .find(|(_, r)| r.contains(p))
+                .and_then(|(segment, _)| segment.mode())
+                .map_or(Outcome::Nothing, |mode| {
+                    Outcome::Run(Command::SetView(mode))
+                }),
             _ => self.press(level, row),
         }
     }
@@ -506,7 +686,9 @@ impl Menu {
                 }
             }
             Nav::Right => match current {
-                Some(row) if matches!(items[row].kind, ItemKind::Submenu(_)) => self.enter(level, row),
+                Some(row) if matches!(items[row].kind, ItemKind::Submenu(_)) => {
+                    self.enter(level, row)
+                }
                 _ => Outcome::Nothing,
             },
             Nav::Left if level > 0 => {
@@ -533,11 +715,13 @@ impl Menu {
         if !self.show_submenu_of(level, row) {
             return Outcome::Nothing;
         }
-        self.hovered[level + 1] = self.items(level + 1).iter().position(MenuItem::is_selectable);
+        self.hovered[level + 1] = self
+            .items(level + 1)
+            .iter()
+            .position(MenuItem::is_selectable);
         Outcome::Changed
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -545,24 +729,55 @@ mod tests {
     use crate::menu_spec::{item_menu, Subject};
 
     fn subject() -> Subject {
-        Subject { count: 1, name: "a.txt".into(), all_folders: true, single_link: false, in_trash: false, tags_on: vec![TagColor::Red] }
+        Subject {
+            count: 1,
+            name: "a.txt".into(),
+            all_folders: true,
+            single_link: false,
+            in_trash: false,
+            tags_on: vec![TagColor::Red],
+        }
     }
 
     fn apps() -> Vec<AppChoice> {
-        vec![AppChoice { id: "viewer.desktop".into(), name: "Viewer".into(), is_default: true }, AppChoice { id: "editor.desktop".into(), name: "Editor".into(), is_default: false }]
+        vec![
+            AppChoice {
+                id: "viewer.desktop".into(),
+                name: "Viewer".into(),
+                is_default: true,
+            },
+            AppChoice {
+                id: "editor.desktop".into(),
+                name: "Editor".into(),
+                is_default: false,
+            },
+        ]
     }
 
     fn open(items: Vec<MenuItem>) -> Menu {
-        Menu::open(items, Point { x: 100.0, y: 80.0 }, Rect::new(0.0, 0.0, 600.0, 600.0), &|l| l.len() as f64 * 7.0)
+        Menu::open(
+            items,
+            Point { x: 100.0, y: 80.0 },
+            Rect::new(0.0, 0.0, 600.0, 600.0),
+            &|l| l.len() as f64 * 7.0,
+        )
     }
 
     fn row_of(menu: &Menu, label: &str) -> usize {
-        menu.items(0).iter().position(|i| i.label == label).unwrap_or_else(|| panic!("no row {label}"))
+        menu.items(0)
+            .iter()
+            .position(|i| i.label == label)
+            .unwrap_or_else(|| panic!("no row {label}"))
     }
 
     #[test]
     fn rows_stack_at_the_measured_heights_and_the_menu_stays_in_bounds() {
-        let menu = Menu::open(item_menu(&subject(), &apps()), Point { x: 590.0, y: 595.0 }, Rect::new(0.0, 0.0, 600.0, 600.0), &|l| l.len() as f64 * 7.0);
+        let menu = Menu::open(
+            item_menu(&subject(), &apps()),
+            Point { x: 590.0, y: 595.0 },
+            Rect::new(0.0, 0.0, 600.0, 600.0),
+            &|l| l.len() as f64 * 7.0,
+        );
         let layout = menu.layout(0);
         let tag = row_of(&menu, "Tags…");
         assert_eq!(layout.rows[tag].h, 49.0);
@@ -571,7 +786,11 @@ mod tests {
         let total: f64 = layout.rows.iter().map(|r| r.h).sum::<f64>() + 10.0;
         assert_eq!(layout.rect.h, total);
         assert!(layout.rect.w >= 216.0, "the tag row's view is 216 wide");
-        assert!(layout.rect.right() <= 596.0 && layout.rect.bottom() <= 596.0, "{:?}", layout.rect);
+        assert!(
+            layout.rect.right() <= 596.0 && layout.rect.bottom() <= 596.0,
+            "{:?}",
+            layout.rect
+        );
     }
 
     #[test]
@@ -586,7 +805,10 @@ mod tests {
         assert!(menu.set_mods(Mods::ALT));
         assert_eq!(menu.levels(), 1);
         assert_eq!(menu.items(0)[with].label, "Always Open With");
-        assert_eq!(menu.items(0)[row_of(&menu, "Open in New Window")].kind, ItemKind::Command(Command::OpenInNewWindow));
+        assert_eq!(
+            menu.items(0)[row_of(&menu, "Open in New Window")].kind,
+            ItemKind::Command(Command::OpenInNewWindow)
+        );
         assert_eq!(menu.layout(0), &before, "the menu keeps its size and rows");
         assert!(menu.set_mods(Mods::default()));
         assert_eq!(menu.items(0)[with].label, "Open With");
@@ -595,9 +817,19 @@ mod tests {
     #[test]
     fn only_the_exact_modifiers_of_an_alternate_swap_it_in() {
         let mut menu = open(item_menu(&subject(), &apps()));
-        menu.set_mods(Mods { shift: true, ctrl: false, alt: true });
+        menu.set_mods(Mods {
+            shift: true,
+            ctrl: false,
+            alt: true,
+        });
         assert!(menu.items(0).iter().any(|i| i.label == "Duplicate Exactly"));
-        assert!(!menu.items(0).iter().any(|i| i.label == "Open in New Window"), "Shift + Alt is not Alt");
+        assert!(
+            !menu
+                .items(0)
+                .iter()
+                .any(|i| i.label == "Open in New Window"),
+            "Shift + Alt is not Alt"
+        );
         menu.set_mods(Mods::CTRL);
         assert!(menu.items(0).iter().any(|i| i.label == "Get Summary Info"));
     }
@@ -612,20 +844,47 @@ mod tests {
         let (blue, rect) = dots[4];
         assert_eq!(blue, TagColor::Blue);
         assert_eq!(menu.hit(0, rect.center()), Some(tag));
-        assert_eq!(menu.press_at(0, tag, rect.center()), Outcome::Run(Command::ToggleTag(TagColor::Blue)));
-        assert_eq!(menu.press_at(0, tag, Point { x: row.x + 1.0, y: row.bottom() - 1.0 }), Outcome::Nothing);
-        assert_eq!(menu.press(0, tag), Outcome::Nothing, "the keyboard cannot pick a dot");
+        assert_eq!(
+            menu.press_at(0, tag, rect.center()),
+            Outcome::Run(Command::ToggleTag(TagColor::Blue))
+        );
+        assert_eq!(
+            menu.press_at(
+                0,
+                tag,
+                Point {
+                    x: row.x + 1.0,
+                    y: row.bottom() - 1.0
+                }
+            ),
+            Outcome::Nothing
+        );
+        assert_eq!(
+            menu.press(0, tag),
+            Outcome::Nothing,
+            "the keyboard cannot pick a dot"
+        );
     }
 
     #[test]
     fn view_segments_without_a_view_do_nothing() {
         use crate::menu_spec::{background_menu, Background};
         use crate::sort::SortSpec;
-        let mut menu = open(background_menu(&Background { view: ViewMode::Icons, sort: SortSpec::default(), in_trash: false }));
+        let mut menu = open(background_menu(&Background {
+            view: ViewMode::Icons,
+            sort: SortSpec::default(),
+            in_trash: false,
+        }));
         let view = row_of(&menu, "As Icons");
         let segments = view_segments(&menu.layout(0).rows[view]);
-        assert_eq!(menu.press_at(0, view, segments[1].1.center()), Outcome::Run(Command::SetView(ViewMode::List)));
-        assert_eq!(menu.press_at(0, view, segments[3].1.center()), Outcome::Nothing);
+        assert_eq!(
+            menu.press_at(0, view, segments[1].1.center()),
+            Outcome::Run(Command::SetView(ViewMode::List))
+        );
+        assert_eq!(
+            menu.press_at(0, view, segments[3].1.center()),
+            Outcome::Nothing
+        );
     }
 
     #[test]
@@ -639,13 +898,21 @@ mod tests {
         let (parent, row, sub) = (menu.layout(0), menu.layout(0).rows[with], menu.layout(1));
         assert_eq!(sub.rect.x, parent.rect.right() - 5.0);
         assert_eq!(sub.rect.y, row.y - 5.0);
-        assert_eq!(sub.rows[0].y, row.y, "the first row is level with the parent's");
+        assert_eq!(
+            sub.rows[0].y, row.y,
+            "the first row is level with the parent's"
+        );
         assert_eq!(menu.rect_in_parent(1).x, parent.rect.w - 5.0);
     }
 
     #[test]
     fn a_submenu_that_does_not_fit_on_the_right_opens_on_the_left() {
-        let mut menu = Menu::open(item_menu(&subject(), &apps()), Point { x: 420.0, y: 80.0 }, Rect::new(0.0, 0.0, 600.0, 600.0), &|l| l.len() as f64 * 7.0);
+        let mut menu = Menu::open(
+            item_menu(&subject(), &apps()),
+            Point { x: 420.0, y: 80.0 },
+            Rect::new(0.0, 0.0, 600.0, 600.0),
+            &|l| l.len() as f64 * 7.0,
+        );
         let with = row_of(&menu, "Open With");
         menu.hover(0, Some(with), 0.0);
         menu.poll(0.2);
@@ -673,9 +940,15 @@ mod tests {
     fn arrow_keys_stop_at_the_ends_skip_separators_and_disabled_rows_and_enter_submenus() {
         let mut menu = open(item_menu(&subject(), &apps()));
         let rows = menu.items(0).len();
-        let selectable: Vec<usize> = (0..rows).filter(|i| menu.items(0)[*i].is_selectable()).collect();
+        let selectable: Vec<usize> = (0..rows)
+            .filter(|i| menu.items(0)[*i].is_selectable())
+            .collect();
         assert_eq!(menu.navigate(Nav::Up), Outcome::Changed);
-        assert_eq!(menu.hovered(0), selectable.last().copied(), "from nothing, Up starts at the last selectable row");
+        assert_eq!(
+            menu.hovered(0),
+            selectable.last().copied(),
+            "from nothing, Up starts at the last selectable row"
+        );
         assert_eq!(menu.navigate(Nav::Down), Outcome::Nothing, "no wrap");
         menu.navigate(Nav::Up);
         assert_eq!(menu.hovered(0), Some(selectable[selectable.len() - 2]));
@@ -683,7 +956,10 @@ mod tests {
         menu.hover(0, Some(with), 0.0);
         assert_eq!(menu.navigate(Nav::Right), Outcome::Changed);
         assert_eq!((menu.levels(), menu.hovered(1)), (2, Some(0)));
-        assert_eq!(menu.navigate(Nav::Enter), Outcome::Run(Command::OpenWith("viewer.desktop".into())));
+        assert_eq!(
+            menu.navigate(Nav::Enter),
+            Outcome::Run(Command::OpenWith("viewer.desktop".into()))
+        );
         assert_eq!(menu.navigate(Nav::Left), Outcome::Changed);
         assert_eq!((menu.levels(), menu.hovered(0)), (1, Some(with)));
     }

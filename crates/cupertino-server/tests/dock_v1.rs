@@ -12,7 +12,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use cupertino_protocols::client::cupertino_backdrop_v1::CupertinoBackdropV1;
-use cupertino_protocols::client::cupertino_dock_v1::{self, AppCommand, CupertinoDockV1, WindowState};
+use cupertino_protocols::client::cupertino_dock_v1::{
+    self, AppCommand, CupertinoDockV1, WindowState,
+};
 use cupertino_protocols::client::cupertino_shell_v1::{self, CupertinoShellV1};
 use cupertino_server::backend::headless::{self, HeadlessDisplay};
 use cupertino_server::config::Config;
@@ -22,13 +24,17 @@ use cupertino_server::render::scene::plan_for;
 use cupertino_server::Cupertino;
 use cupertino_wm::{Command, LifecycleState, Rect, WindowId};
 use smithay::backend::input::{ButtonState, KeyState};
-use wayland_client::WEnum;
 use smithay::input::keyboard::Keycode;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
-use smithay::wayland::xdg_activation::{XdgActivationHandler, XdgActivationToken, XdgActivationTokenData};
+use smithay::wayland::xdg_activation::{
+    XdgActivationHandler, XdgActivationToken, XdgActivationTokenData,
+};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
-use wayland_client::protocol::{wl_buffer, wl_compositor, wl_output, wl_registry, wl_shm, wl_shm_pool, wl_surface};
+use wayland_client::protocol::{
+    wl_buffer, wl_compositor, wl_output, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+};
+use wayland_client::WEnum;
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1;
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
@@ -40,7 +46,12 @@ const DOCK_HEIGHT: i32 = 100;
 /// Slot the dock reports for the next minimized window, surface-local.
 const SLOT: (i32, i32, i32, i32) = (100, 20, 48, 48);
 /// The same slot in global coordinates: the surface sits at the bottom of the output.
-const SLOT_GLOBAL: Rect = Rect { x: 100.0, y: 620.0, w: 48.0, h: 48.0 };
+const SLOT_GLOBAL: Rect = Rect {
+    x: 100.0,
+    y: 620.0,
+    w: 48.0,
+    h: 48.0,
+};
 /// The bar's backdrop inside the dock surface (x, y, width, height): narrower than the surface.
 const BAR: (i32, i32, i32, i32) = (300, 30, 400, 64);
 
@@ -54,7 +65,15 @@ impl Harness {
         let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().ok()?;
         let display: Display<Cupertino> = Display::new().ok()?;
         let cfg = Config::default();
-        let mut state = Cupertino::new(display, event_loop.handle(), event_loop.get_signal(), cfg, true, &cupertino_assets::Assets::discover()).ok()?;
+        let mut state = Cupertino::new(
+            display,
+            event_loop.handle(),
+            event_loop.get_signal(),
+            cfg,
+            true,
+            &cupertino_assets::Assets::discover(),
+        )
+        .ok()?;
         match headless::init(&mut state, OUTPUT, 1.0) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
@@ -65,7 +84,12 @@ impl Harness {
     }
 
     fn step(&mut self) {
-        headless::step(&mut self.state, &mut self.event_loop, Duration::from_millis(5)).unwrap();
+        headless::step(
+            &mut self.state,
+            &mut self.event_loop,
+            Duration::from_millis(5),
+        )
+        .unwrap();
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
@@ -88,7 +112,10 @@ impl Harness {
                 return;
             }
         }
-        panic!("timed out waiting for group {count}, have {:?}", dock.groups());
+        panic!(
+            "timed out waiting for group {count}, have {:?}",
+            dock.groups()
+        );
     }
 
     fn socket_path(&self) -> PathBuf {
@@ -107,7 +134,9 @@ impl Harness {
 
     /// Wait for `count` application windows and let the opening animations finish.
     fn mapped_window(&mut self, count: usize) -> WindowId {
-        self.wait_until("the window to be mapped", |s| s.wm.windows().count() == count);
+        self.wait_until("the window to be mapped", |s| {
+            s.wm.windows().count() == count
+        });
         self.advance(5.0);
         self.state.wm.key_window().expect("focused window")
     }
@@ -123,7 +152,12 @@ fn tempfile_like(len: usize) -> std::fs::File {
 }
 
 /// Attach an opaque grey buffer of `size` to `surface` and commit.
-fn attach_and_commit(shm: &wl_shm::WlShm, surface: &wl_surface::WlSurface, size: (i32, i32), qh: &QueueHandle<ClientState>) {
+fn attach_and_commit(
+    shm: &wl_shm::WlShm,
+    surface: &wl_surface::WlSurface,
+    size: (i32, i32),
+    qh: &QueueHandle<ClientState>,
+) {
     let (w, h) = size;
     let mut file = tempfile_like((w * h * 4) as usize);
     file.write_all(&vec![128u8; (w * h * 4) as usize]).unwrap();
@@ -138,21 +172,39 @@ fn attach_and_commit(shm: &wl_shm::WlShm, surface: &wl_surface::WlSurface, size:
 /// What the dock object sent, in order.
 #[derive(Clone, Debug, PartialEq)]
 enum DockEvent {
-    Window { id: u32, app_id: String, title: String, minimized: bool, active: bool },
+    Window {
+        id: u32,
+        app_id: String,
+        title: String,
+        minimized: bool,
+        active: bool,
+    },
     Closed(u32),
     Launching(String),
     ToggleAutoHide,
     ToggleAppGrid,
     /// `own`: the output named is the one the dock is on.
-    SwitcherOutput { own: bool },
+    SwitcherOutput {
+        own: bool,
+    },
     SwitcherEntry(String),
     SwitcherChanged(u32),
     SwitcherClosed(u32),
     Attention(String),
-    OverviewWindow { id: u32, frame: (i32, i32, i32, i32) },
-    OverviewWorkspace { id: u32, current: bool },
+    OverviewWindow {
+        id: u32,
+        frame: (i32, i32, i32, i32),
+    },
+    OverviewWorkspace {
+        id: u32,
+        current: bool,
+    },
     /// `app` is true for the application overview.
-    OverviewChanged { app: bool, app_id: String, area: (i32, i32, i32, i32) },
+    OverviewChanged {
+        app: bool,
+        app_id: String,
+        area: (i32, i32, i32, i32),
+    },
     OverviewClosed,
     HotCorner(u32),
     Gesture(u32),
@@ -178,7 +230,15 @@ struct ClientState {
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for ClientState {
-    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 macro_rules! ignore_events {
     ($($t:ty),*) => {$(
@@ -201,7 +261,14 @@ ignore_events!(
 );
 
 impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for ClientState {
-    fn event(state: &mut Self, layer: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, event: zwlr_layer_surface_v1::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        layer: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
         if let zwlr_layer_surface_v1::Event::Configure { serial, width, .. } = event {
             layer.ack_configure(serial);
             if !state.attached {
@@ -213,28 +280,75 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for ClientState {
 }
 
 impl Dispatch<CupertinoDockV1, ()> for ClientState {
-    fn event(state: &mut Self, _: &CupertinoDockV1, event: cupertino_dock_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        _: &CupertinoDockV1,
+        event: cupertino_dock_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         use cupertino_dock_v1::Event as E;
         let event = match event {
-            E::Window { id, app_id, title, state } => {
+            E::Window {
+                id,
+                app_id,
+                title,
+                state,
+            } => {
                 let bits = WindowState::from_bits_truncate(u32::from(state));
-                DockEvent::Window { id, app_id, title, minimized: bits.contains(WindowState::Minimized), active: bits.contains(WindowState::Active) }
+                DockEvent::Window {
+                    id,
+                    app_id,
+                    title,
+                    minimized: bits.contains(WindowState::Minimized),
+                    active: bits.contains(WindowState::Active),
+                }
             }
             E::WindowClosed { id } => DockEvent::Closed(id),
             E::Launching { app_id } => DockEvent::Launching(app_id),
             E::ToggleAutoHide => DockEvent::ToggleAutoHide,
             E::ToggleAppGrid => DockEvent::ToggleAppGrid,
-            E::SwitcherOutput { output } => DockEvent::SwitcherOutput { own: state.status.lock().unwrap().own_output.as_ref() == Some(&output) },
+            E::SwitcherOutput { output } => DockEvent::SwitcherOutput {
+                own: state.status.lock().unwrap().own_output.as_ref() == Some(&output),
+            },
             E::SwitcherEntry { app_id } => DockEvent::SwitcherEntry(app_id),
             E::SwitcherChanged { selected } => DockEvent::SwitcherChanged(selected),
             E::SwitcherClosed { committed } => DockEvent::SwitcherClosed(committed),
             E::Attention { app_id } => DockEvent::Attention(app_id),
-            E::OverviewWindow { id, x, y, width, height } => DockEvent::OverviewWindow { id, frame: (x, y, width, height) },
-            E::OverviewWorkspace { id, current } => DockEvent::OverviewWorkspace { id, current: current != 0 },
-            E::OverviewChanged { mode, app_id, x, y, width, height } => DockEvent::OverviewChanged { app: mode == WEnum::Value(cupertino_dock_v1::OverviewMode::App), app_id, area: (x, y, width, height) },
+            E::OverviewWindow {
+                id,
+                x,
+                y,
+                width,
+                height,
+            } => DockEvent::OverviewWindow {
+                id,
+                frame: (x, y, width, height),
+            },
+            E::OverviewWorkspace { id, current } => DockEvent::OverviewWorkspace {
+                id,
+                current: current != 0,
+            },
+            E::OverviewChanged {
+                mode,
+                app_id,
+                x,
+                y,
+                width,
+                height,
+            } => DockEvent::OverviewChanged {
+                app: mode == WEnum::Value(cupertino_dock_v1::OverviewMode::App),
+                app_id,
+                area: (x, y, width, height),
+            },
             E::OverviewClosed => DockEvent::OverviewClosed,
-            E::HotCorner { corner: WEnum::Value(c) } => DockEvent::HotCorner(c as u32),
-            E::Gesture { kind: WEnum::Value(k) } => DockEvent::Gesture(k as u32),
+            E::HotCorner {
+                corner: WEnum::Value(c),
+            } => DockEvent::HotCorner(c as u32),
+            E::Gesture {
+                kind: WEnum::Value(k),
+            } => DockEvent::Gesture(k as u32),
             E::Done => DockEvent::Done,
             other => panic!("unexpected event {other:?}"),
         };
@@ -243,7 +357,14 @@ impl Dispatch<CupertinoDockV1, ()> for ClientState {
 }
 
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for ClientState {
-    fn event(_: &mut Self, base: &xdg_wm_base::XdgWmBase, event: xdg_wm_base::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        _: &mut Self,
+        base: &xdg_wm_base::XdgWmBase,
+        event: xdg_wm_base::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         if let xdg_wm_base::Event::Ping { serial } = event {
             base.pong(serial);
         }
@@ -251,7 +372,14 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for ClientState {
 }
 
 impl Dispatch<xdg_surface::XdgSurface, ()> for ClientState {
-    fn event(state: &mut Self, surface: &xdg_surface::XdgSurface, event: xdg_surface::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        surface: &xdg_surface::XdgSurface,
+        event: xdg_surface::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
         if let xdg_surface::Event::Configure { serial } = event {
             surface.ack_configure(serial);
             if !state.attached {
@@ -263,7 +391,15 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for ClientState {
 }
 
 impl Dispatch<xdg_toplevel::XdgToplevel, ()> for ClientState {
-    fn event(_: &mut Self, _: &xdg_toplevel::XdgToplevel, _: xdg_toplevel::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &xdg_toplevel::XdgToplevel,
+        _: xdg_toplevel::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 /// Requests a test sends to the dock client thread.
@@ -305,7 +441,16 @@ impl Drop for TestClient {
     }
 }
 
-fn run_client(socket: PathBuf, setup: impl FnOnce(&wayland_client::globals::GlobalList, &QueueHandle<ClientState>, &Arc<Mutex<Status>>) -> (ClientState, Box<dyn FnMut(Cmd)>) + Send + 'static) -> TestClient {
+fn run_client(
+    socket: PathBuf,
+    setup: impl FnOnce(
+            &wayland_client::globals::GlobalList,
+            &QueueHandle<ClientState>,
+            &Arc<Mutex<Status>>,
+        ) -> (ClientState, Box<dyn FnMut(Cmd)>)
+        + Send
+        + 'static,
+) -> TestClient {
     let (commands, inbox): (Sender<Cmd>, Receiver<Cmd>) = channel();
     let status = Arc::new(Mutex::new(Status::default()));
     let st = status.clone();
@@ -323,14 +468,20 @@ fn run_client(socket: PathBuf, setup: impl FnOnce(&wayland_client::globals::Glob
                 apply(cmd);
             }
             if queue.roundtrip(&mut client).is_err() {
-                let error = conn.protocol_error().expect("the roundtrip failed with a protocol error");
+                let error = conn
+                    .protocol_error()
+                    .expect("the roundtrip failed with a protocol error");
                 st.lock().unwrap().error = Some((error.object_interface, error.code));
                 return;
             }
             std::thread::sleep(Duration::from_millis(5));
         }
     });
-    TestClient { commands, status, thread: Some(thread) }
+    TestClient {
+        commands,
+        status,
+        thread: Some(thread),
+    }
 }
 
 /// The dock process: a bottom-anchored layer surface with the dock role on the first output.
@@ -348,15 +499,36 @@ impl DockClient {
             let compositor: wl_compositor::WlCompositor = globals.bind(qh, 4..=6, ()).unwrap();
             let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
             let shell: CupertinoShellV1 = globals.bind(qh, 1..=1, ()).unwrap();
-            let global = globals.contents().clone_list().into_iter().filter(|g| g.interface == "wl_output").nth(index).expect("the output");
-            let output: wl_output::WlOutput = globals.registry().bind(global.name, global.version.min(4), qh, ());
+            let global = globals
+                .contents()
+                .clone_list()
+                .into_iter()
+                .filter(|g| g.interface == "wl_output")
+                .nth(index)
+                .expect("the output");
+            let output: wl_output::WlOutput =
+                globals
+                    .registry()
+                    .bind(global.name, global.version.min(4), qh, ());
             status.lock().unwrap().own_output = Some(output.clone());
             let surface = compositor.create_surface(qh, ());
             if layer {
-                let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 = globals.bind(qh, 1..=4, ()).unwrap();
-                let l = layer_shell.get_layer_surface(&surface, Some(&output), zwlr_layer_shell_v1::Layer::Top, "dock-test".into(), qh, ());
+                let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
+                    globals.bind(qh, 1..=4, ()).unwrap();
+                let l = layer_shell.get_layer_surface(
+                    &surface,
+                    Some(&output),
+                    zwlr_layer_shell_v1::Layer::Top,
+                    "dock-test".into(),
+                    qh,
+                    (),
+                );
                 l.set_size(0, DOCK_HEIGHT as u32);
-                l.set_anchor(zwlr_layer_surface_v1::Anchor::Bottom | zwlr_layer_surface_v1::Anchor::Left | zwlr_layer_surface_v1::Anchor::Right);
+                l.set_anchor(
+                    zwlr_layer_surface_v1::Anchor::Bottom
+                        | zwlr_layer_surface_v1::Anchor::Left
+                        | zwlr_layer_surface_v1::Anchor::Right,
+                );
                 l.set_exclusive_zone(DOCK_HEIGHT);
             }
             let dock = shell.get_dock(&surface, &output, qh, ());
@@ -367,7 +539,13 @@ impl DockClient {
             }
             surface.commit();
             let commit_surface = surface.clone();
-            let state = ClientState { status: status.clone(), shm, surface, attached: false, toplevel_size: (0, 0) };
+            let state = ClientState {
+                status: status.clone(),
+                shm,
+                surface,
+                attached: false,
+                toplevel_size: (0, 0),
+            };
             let apply = Box::new(move |cmd: Cmd| match cmd {
                 Cmd::ActivateApp(app_id) => dock.activate_app(app_id.to_string()),
                 Cmd::RestoreWindow(id) => dock.restore_window(id, SLOT.0, SLOT.1, SLOT.2, SLOT.3),
@@ -432,7 +610,13 @@ fn spawn_app(socket: PathBuf, app_id: &'static str) -> TestClient {
         surface.commit();
         let activation: xdg_activation_v1::XdgActivationV1 = globals.bind(qh, 1..=1, ()).unwrap();
         let window = surface.clone();
-        let state = ClientState { status: status.clone(), shm, surface, attached: false, toplevel_size: (300, 200) };
+        let state = ClientState {
+            status: status.clone(),
+            shm,
+            surface,
+            attached: false,
+            toplevel_size: (300, 200),
+        };
         let apply = Box::new(move |cmd: Cmd| match cmd {
             Cmd::Activate(token) => activation.activate(token, &window),
             _ => panic!("an application window takes no dock request"),
@@ -452,7 +636,15 @@ fn a_surface_without_the_layer_role_is_a_role_error() {
         h.step();
     }
     // error 0 of cupertino_shell_v1.error is `role`
-    assert_eq!(dock.error(), Some((cupertino_shell_v1::CupertinoShellV1::interface().name.to_string(), 0)));
+    assert_eq!(
+        dock.error(),
+        Some((
+            cupertino_shell_v1::CupertinoShellV1::interface()
+                .name
+                .to_string(),
+            0
+        ))
+    );
 }
 
 #[test]
@@ -464,12 +656,26 @@ fn the_first_group_lists_the_windows_and_the_bar_backdrop_is_the_docks_rectangle
     h.wait_for_groups(&dock, 1);
     assert_eq!(
         dock.groups(),
-        vec![vec![DockEvent::Window { id: id.0 as u32, app_id: "org.example.editor".into(), title: "org.example.editor window".into(), minimized: false, active: true }, DockEvent::Done]]
+        vec![vec![
+            DockEvent::Window {
+                id: id.0 as u32,
+                app_id: "org.example.editor".into(),
+                title: "org.example.editor window".into(),
+                minimized: false,
+                active: true
+            },
+            DockEvent::Done
+        ]]
     );
     let out = h.state.outputs[0].id;
-    h.wait_until("the dock surface to be placed", |s| s.dock_rect(out).is_some_and(|r| r.w > 0.0));
+    h.wait_until("the dock surface to be placed", |s| {
+        s.dock_rect(out).is_some_and(|r| r.w > 0.0)
+    });
     // the dock's rectangle is its backdrop (the surface sits at y 600); its exclusive zone is what windows lose
-    assert_eq!(h.state.dock_rect(out), Some(Rect::new(300.0, 630.0, 400.0, 64.0)));
+    assert_eq!(
+        h.state.dock_rect(out),
+        Some(Rect::new(300.0, 630.0, 400.0, 64.0))
+    );
     assert_eq!(h.state.usable_area(out), Rect::new(0.0, 0.0, 1000.0, 600.0));
     assert_eq!(dock.error(), None);
 }
@@ -481,22 +687,49 @@ fn minimizing_sends_the_state_and_animates_toward_the_committed_target() {
     h.wait_for_groups(&dock, 1);
     let _app = spawn_app(h.socket_path(), "org.example.editor");
     let id = h.mapped_window(1);
-    assert_eq!(h.state.minimize_target(id), None, "no target before the dock sets one");
+    assert_eq!(
+        h.state.minimize_target(id),
+        None,
+        "no target before the dock sets one"
+    );
 
     dock.send(Cmd::SetMinimizeTarget);
-    h.wait_until("the target to be committed", |s| s.minimize_target(id).is_some());
+    h.wait_until("the target to be committed", |s| {
+        s.minimize_target(id).is_some()
+    });
     assert_eq!(h.state.minimize_target(id), Some(SLOT_GLOBAL));
 
     let target = h.state.minimize_target(id);
     h.state.command(Command::Minimize { window: id, target });
     h.advance(0.1);
-    let (_, pres) = plan_for(&h.state.wm, h.state.entry(id).unwrap(), 0.0, h.state.now(), &h.state.fx, h.state.display_options()).expect("drawn while minimizing");
+    let (_, pres) = plan_for(
+        &h.state.wm,
+        h.state.entry(id).unwrap(),
+        0.0,
+        h.state.now(),
+        &h.state.fx,
+        h.state.display_options(),
+    )
+    .expect("drawn while minimizing");
     assert_eq!(pres.minimize_target, SLOT_GLOBAL);
 
     h.advance(5.0);
-    assert_eq!(h.state.wm.window(id).unwrap().state(), LifecycleState::Minimized);
+    assert_eq!(
+        h.state.wm.window(id).unwrap().state(),
+        LifecycleState::Minimized
+    );
     h.wait_until("the dock to hear the window is minimized", |_| {
-        dock.groups().last().is_some_and(|g| g.iter().any(|e| matches!(e, DockEvent::Window { minimized: true, .. })))
+        dock.groups().last().is_some_and(|g| {
+            g.iter().any(|e| {
+                matches!(
+                    e,
+                    DockEvent::Window {
+                        minimized: true,
+                        ..
+                    }
+                )
+            })
+        })
     });
 }
 
@@ -508,11 +741,24 @@ fn minimizing_without_a_target_animates_toward_the_dock_slot() {
     let _app = spawn_app(h.socket_path(), "org.example.editor");
     let id = h.mapped_window(1);
     dock.send(Cmd::SetMinimizeTarget);
-    h.wait_until("the target to be committed", |s| s.minimize_target(id).is_some());
+    h.wait_until("the target to be committed", |s| {
+        s.minimize_target(id).is_some()
+    });
 
-    h.state.command(Command::Minimize { window: id, target: None });
+    h.state.command(Command::Minimize {
+        window: id,
+        target: None,
+    });
     h.advance(0.1);
-    let (_, pres) = plan_for(&h.state.wm, h.state.entry(id).unwrap(), 0.0, h.state.now(), &h.state.fx, h.state.display_options()).expect("drawn while minimizing");
+    let (_, pres) = plan_for(
+        &h.state.wm,
+        h.state.entry(id).unwrap(),
+        0.0,
+        h.state.now(),
+        &h.state.fx,
+        h.state.display_options(),
+    )
+    .expect("drawn while minimizing");
     assert_eq!(pres.minimize_target, SLOT_GLOBAL);
 }
 
@@ -527,7 +773,9 @@ fn activate_app_raises_the_application() {
     assert_eq!(h.state.wm.key_window(), Some(second));
 
     dock.send(Cmd::ActivateApp("org.example.a"));
-    h.wait_until("the first application to take focus", |s| s.wm.key_window() == Some(first));
+    h.wait_until("the first application to take focus", |s| {
+        s.wm.key_window() == Some(first)
+    });
 }
 
 #[test]
@@ -536,15 +784,34 @@ fn restore_window_unminimizes_out_of_the_given_tile() {
     let dock = DockClient::spawn(h.socket_path(), true);
     let _app = spawn_app(h.socket_path(), "org.example.editor");
     let id = h.mapped_window(1);
-    h.state.command(Command::Minimize { window: id, target: None });
+    h.state.command(Command::Minimize {
+        window: id,
+        target: None,
+    });
     h.advance(5.0);
-    assert_eq!(h.state.wm.window(id).unwrap().state(), LifecycleState::Minimized);
+    assert_eq!(
+        h.state.wm.window(id).unwrap().state(),
+        LifecycleState::Minimized
+    );
 
     dock.send(Cmd::RestoreWindow(id.0 as u32));
-    h.wait_until("the window to restore", |s| !s.wm.window(id).unwrap().state().is_minimized());
+    h.wait_until("the window to restore", |s| {
+        !s.wm.window(id).unwrap().state().is_minimized()
+    });
     h.advance(0.1);
-    let (_, pres) = plan_for(&h.state.wm, h.state.entry(id).unwrap(), 0.0, h.state.now(), &h.state.fx, h.state.display_options()).expect("drawn while restoring");
-    assert_eq!(pres.minimize_target, SLOT_GLOBAL, "the window flies out of the tile the dock named");
+    let (_, pres) = plan_for(
+        &h.state.wm,
+        h.state.entry(id).unwrap(),
+        0.0,
+        h.state.now(),
+        &h.state.fx,
+        h.state.display_options(),
+    )
+    .expect("drawn while restoring");
+    assert_eq!(
+        pres.minimize_target, SLOT_GLOBAL,
+        "the window flies out of the tile the dock named"
+    );
 }
 
 #[test]
@@ -557,7 +824,10 @@ fn restoring_a_window_that_is_not_minimized_is_ignored() {
     for _ in 0..20 {
         h.step();
     }
-    assert_eq!(h.state.wm.window(id).unwrap().state(), LifecycleState::Normal);
+    assert_eq!(
+        h.state.wm.window(id).unwrap().state(),
+        LifecycleState::Normal
+    );
     assert_eq!(dock.error(), None);
 }
 
@@ -567,14 +837,27 @@ fn a_program_the_server_starts_is_announced_as_launching() {
     let dock = DockClient::spawn(h.socket_path(), true);
     h.wait_for_groups(&dock, 1);
     // the announcement carries the desktop entry id of the program
-    let data = std::env::temp_dir().join(format!("cupertino-dock-v1-launching-{}", std::process::id()));
+    let data = std::env::temp_dir().join(format!(
+        "cupertino-dock-v1-launching-{}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(data.join("applications")).unwrap();
-    std::fs::write(data.join("applications/org.example.Truth.desktop"), "[Desktop Entry]\nType=Application\nName=Truth\nExec=true\n").unwrap();
+    std::fs::write(
+        data.join("applications/org.example.Truth.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Truth\nExec=true\n",
+    )
+    .unwrap();
     h.state.desktop = DesktopIndex::load_from(std::slice::from_ref(&data));
     std::fs::remove_dir_all(&data).unwrap();
     h.state.spawn("true", &[]);
     h.wait_for_groups(&dock, 2);
-    assert_eq!(dock.groups()[1], vec![DockEvent::Launching("org.example.Truth".into()), DockEvent::Done]);
+    assert_eq!(
+        dock.groups()[1],
+        vec![
+            DockEvent::Launching("org.example.Truth".into()),
+            DockEvent::Done
+        ]
+    );
 }
 
 #[test]
@@ -583,15 +866,33 @@ fn a_token_that_names_an_application_announces_it_as_launching() {
     let dock = DockClient::spawn(h.socket_path(), true);
     h.wait_for_groups(&dock, 1);
     // a launcher or file manager asks for a token for the application it is about to start
-    let named = XdgActivationTokenData { app_id: Some("org.example.Notes".into()), ..XdgActivationTokenData::default() };
-    assert!(h.state.token_created(XdgActivationToken::from("named".to_string()), named));
+    let named = XdgActivationTokenData {
+        app_id: Some("org.example.Notes".into()),
+        ..XdgActivationTokenData::default()
+    };
+    assert!(h
+        .state
+        .token_created(XdgActivationToken::from("named".to_string()), named));
     h.wait_for_groups(&dock, 2);
-    assert_eq!(dock.groups()[1], vec![DockEvent::Launching("org.example.Notes".into()), DockEvent::Done]);
+    assert_eq!(
+        dock.groups()[1],
+        vec![
+            DockEvent::Launching("org.example.Notes".into()),
+            DockEvent::Done
+        ]
+    );
     // a token for no particular application (a banner's click, an empty id) launches nothing
     let anonymous = XdgActivationTokenData::default();
-    assert!(h.state.token_created(XdgActivationToken::from("anonymous".to_string()), anonymous));
-    let empty = XdgActivationTokenData { app_id: Some(String::new()), ..XdgActivationTokenData::default() };
-    assert!(h.state.token_created(XdgActivationToken::from("empty".to_string()), empty));
+    assert!(h
+        .state
+        .token_created(XdgActivationToken::from("anonymous".to_string()), anonymous));
+    let empty = XdgActivationTokenData {
+        app_id: Some(String::new()),
+        ..XdgActivationTokenData::default()
+    };
+    assert!(h
+        .state
+        .token_created(XdgActivationToken::from("empty".to_string()), empty));
     for _ in 0..20 {
         h.step();
     }
@@ -605,7 +906,10 @@ fn the_auto_hide_shortcut_reaches_the_dock() {
     h.wait_for_groups(&dock, 1);
     h.state.docks.toggle_auto_hide();
     h.wait_for_groups(&dock, 2);
-    assert_eq!(dock.groups()[1], vec![DockEvent::ToggleAutoHide, DockEvent::Done]);
+    assert_eq!(
+        dock.groups()[1],
+        vec![DockEvent::ToggleAutoHide, DockEvent::Done]
+    );
 }
 
 /// The app-grid action (shortcut, hot corner or gesture) is a `ShellOp` the server only forwards:
@@ -613,15 +917,28 @@ fn the_auto_hide_shortcut_reaches_the_dock() {
 #[test]
 fn the_app_grid_action_reaches_the_dock_as_a_toggle() {
     let Some(mut h) = Harness::new() else { return };
-    h.state.execute_plan(ActionPlan { commands: Vec::new(), ops: vec![ShellOp::ToggleAppGrid] });
+    h.state.execute_plan(ActionPlan {
+        commands: Vec::new(),
+        ops: vec![ShellOp::ToggleAppGrid],
+    });
     let dock = DockClient::spawn(h.socket_path(), true);
     h.wait_for_groups(&dock, 1);
     for _ in 0..2 {
-        h.state.execute_plan(ActionPlan { commands: Vec::new(), ops: vec![ShellOp::ToggleAppGrid] });
+        h.state.execute_plan(ActionPlan {
+            commands: Vec::new(),
+            ops: vec![ShellOp::ToggleAppGrid],
+        });
     }
     h.wait_for_groups(&dock, 3);
-    assert_eq!(dock.groups()[1], vec![DockEvent::ToggleAppGrid, DockEvent::Done]);
-    assert_eq!(dock.groups()[2], vec![DockEvent::ToggleAppGrid, DockEvent::Done], "a second action is forwarded too: the dock decides whether it opens or closes");
+    assert_eq!(
+        dock.groups()[1],
+        vec![DockEvent::ToggleAppGrid, DockEvent::Done]
+    );
+    assert_eq!(
+        dock.groups()[2],
+        vec![DockEvent::ToggleAppGrid, DockEvent::Done],
+        "a second action is forwarded too: the dock decides whether it opens or closes"
+    );
     assert_eq!(dock.error(), None);
 }
 
@@ -639,7 +956,11 @@ const KEY_END: u32 = 107 + 8;
 impl Harness {
     /// One key through the compositor's keyboard path, as a device would deliver it.
     fn key(&mut self, code: u32, pressed: bool) {
-        let state = if pressed { KeyState::Pressed } else { KeyState::Released };
+        let state = if pressed {
+            KeyState::Pressed
+        } else {
+            KeyState::Released
+        };
         self.state.keyboard_event_now(Keycode::new(code), state, 0);
         self.step();
     }
@@ -655,7 +976,10 @@ impl Harness {
     fn three_apps(&mut self) -> ([TestClient; 3], [WindowId; 3]) {
         let mut clients = Vec::new();
         let mut ids = Vec::new();
-        for (i, app) in ["org.example.one", "org.example.two", "org.example.three"].into_iter().enumerate() {
+        for (i, app) in ["org.example.one", "org.example.two", "org.example.three"]
+            .into_iter()
+            .enumerate()
+        {
             clients.push(spawn_app(self.socket_path(), app));
             ids.push(self.mapped_window(i + 1));
         }
@@ -669,7 +993,11 @@ impl Harness {
 /// whole list, then the selection.
 fn switcher_group(selected: u32) -> Vec<DockEvent> {
     let mut group = vec![DockEvent::SwitcherOutput { own: true }];
-    group.extend(["org.example.three", "org.example.two", "org.example.one"].iter().map(|a| DockEvent::SwitcherEntry(a.to_string())));
+    group.extend(
+        ["org.example.three", "org.example.two", "org.example.one"]
+            .iter()
+            .map(|a| DockEvent::SwitcherEntry(a.to_string())),
+    );
     group.extend([DockEvent::SwitcherChanged(selected), DockEvent::Done]);
     group
 }
@@ -681,10 +1009,18 @@ fn the_switcher_opens_steps_and_commits_without_a_dock() {
     assert_eq!(h.state.wm.key_window(), Some(three));
     h.key(KEY_SUPER, true);
     h.tap(KEY_TAB);
-    assert_eq!(h.state.wm.switcher().map(|s| s.selected), Some(1), "the first Tab selects the previous application");
+    assert_eq!(
+        h.state.wm.switcher().map(|s| s.selected),
+        Some(1),
+        "the first Tab selects the previous application"
+    );
     h.tap(KEY_TAB);
     assert_eq!(h.state.wm.switcher().map(|s| s.selected), Some(2));
-    assert_eq!(h.state.wm.key_window(), Some(three), "nothing changes until the release");
+    assert_eq!(
+        h.state.wm.key_window(),
+        Some(three),
+        "nothing changes until the release"
+    );
     h.key(KEY_SUPER, false);
     assert!(h.state.wm.switcher().is_none());
     assert_eq!(h.state.wm.key_window(), Some(one));
@@ -708,11 +1044,22 @@ fn a_dock_is_told_the_switcher_in_order_and_picks_an_entry() {
     for _ in 0..10 {
         h.step();
     }
-    assert_eq!(dock.groups().len(), 3, "an index outside the list and the selected entry change nothing");
+    assert_eq!(
+        dock.groups().len(),
+        3,
+        "an index outside the list and the selected entry change nothing"
+    );
     h.key(KEY_SUPER, false);
     h.wait_for_groups(&dock, 4);
-    assert_eq!(dock.groups()[3], [DockEvent::SwitcherClosed(1), DockEvent::Done]);
-    assert_eq!(h.state.wm.key_window(), Some(one), "the pointer's pick is what the release commits");
+    assert_eq!(
+        dock.groups()[3],
+        [DockEvent::SwitcherClosed(1), DockEvent::Done]
+    );
+    assert_eq!(
+        h.state.wm.key_window(),
+        Some(one),
+        "the pointer's pick is what the release commits"
+    );
     assert_eq!(dock.error(), None);
 }
 
@@ -727,9 +1074,16 @@ fn a_dock_that_binds_mid_switch_gets_the_switcher_and_a_cancel_reaches_it() {
     assert_eq!(dock.groups()[1], switcher_group(1));
     h.tap(KEY_ESCAPE);
     h.wait_for_groups(&dock, 3);
-    assert_eq!(dock.groups()[2], [DockEvent::SwitcherClosed(0), DockEvent::Done]);
+    assert_eq!(
+        dock.groups()[2],
+        [DockEvent::SwitcherClosed(0), DockEvent::Done]
+    );
     h.key(KEY_SUPER, false);
-    assert_eq!(h.state.wm.key_window(), Some(three), "a cancel keeps the focus");
+    assert_eq!(
+        h.state.wm.key_window(),
+        Some(three),
+        "a cancel keeps the focus"
+    );
 }
 
 /// The QEMU switcher check failed now and then with "the commit did not move the focus": a Tab
@@ -744,9 +1098,17 @@ fn holding_tab_stops_at_the_last_entry_instead_of_wrapping_to_the_current_applic
     assert_eq!(h.state.wm.switcher().map(|s| s.selected), Some(1));
     for _ in 0..30 {
         h.advance(0.1);
-        assert_ne!(h.state.wm.switcher().map(|s| s.selected), Some(0), "the repeat wrapped");
+        assert_ne!(
+            h.state.wm.switcher().map(|s| s.selected),
+            Some(0),
+            "the repeat wrapped"
+        );
     }
-    assert_eq!(h.state.wm.switcher().map(|s| s.selected), Some(2), "the repeat ran to the last entry");
+    assert_eq!(
+        h.state.wm.switcher().map(|s| s.selected),
+        Some(2),
+        "the repeat ran to the last entry"
+    );
     h.key(KEY_TAB, false);
     h.key(KEY_SUPER, false);
     assert_eq!(h.state.wm.key_window(), Some(one));
@@ -767,7 +1129,10 @@ fn the_open_switcher_takes_its_key_table_and_h_hides_the_selected_application() 
     assert_eq!(selected(&h), Some(1), "Right steps forward");
     h.tap(KEY_H);
     let app = h.state.wm.window(two).unwrap().app;
-    assert!(h.state.wm.app(app).unwrap().hidden, "H hides the selected application");
+    assert!(
+        h.state.wm.app(app).unwrap().hidden,
+        "H hides the selected application"
+    );
     assert!(h.state.wm.switcher().is_some(), "and the switch stays open");
     h.tap(KEY_ESCAPE);
     assert!(h.state.wm.switcher().is_none());
@@ -782,13 +1147,23 @@ fn a_click_off_the_panel_cancels_the_switch_and_reaches_no_window() {
     h.key(KEY_SUPER, true);
     h.tap(KEY_TAB);
     let f = h.state.wm.window(two).unwrap().geometry();
-    h.state.pointer_moved_to((f.x + 20.0, f.y + 100.0).into(), 0, None);
-    h.state.pointer_button(cupertino_server::events::BTN_LEFT, ButtonState::Pressed, 0);
-    assert!(h.state.wm.switcher().is_some(), "the press alone keeps the switch");
-    h.state.pointer_button(cupertino_server::events::BTN_LEFT, ButtonState::Released, 0);
+    h.state
+        .pointer_moved_to((f.x + 20.0, f.y + 100.0).into(), 0, None);
+    h.state
+        .pointer_button(cupertino_server::events::BTN_LEFT, ButtonState::Pressed, 0);
+    assert!(
+        h.state.wm.switcher().is_some(),
+        "the press alone keeps the switch"
+    );
+    h.state
+        .pointer_button(cupertino_server::events::BTN_LEFT, ButtonState::Released, 0);
     assert!(h.state.wm.switcher().is_none(), "the release cancels it");
     h.key(KEY_SUPER, false);
-    assert_eq!(h.state.wm.key_window(), Some(three), "the window under the click is not focused");
+    assert_eq!(
+        h.state.wm.key_window(),
+        Some(three),
+        "the window under the click is not focused"
+    );
 }
 
 #[test]
@@ -801,40 +1176,91 @@ fn a_release_on_a_panel_entry_switches_at_once_and_one_off_the_entries_cancels()
     h.tap(KEY_TAB);
     h.wait_for_groups(&dock, 2);
     dock.send(Cmd::SwitcherActivate(2));
-    h.wait_until("the switch to be committed", |_| dock.groups().iter().any(|g| g.contains(&DockEvent::SwitcherClosed(1))));
-    assert_eq!(dock.groups()[2], switcher_group(2), "the entry is selected, then committed");
-    assert_eq!(h.state.wm.key_window(), Some(one), "the entry is committed while Super is still held");
+    h.wait_until("the switch to be committed", |_| {
+        dock.groups()
+            .iter()
+            .any(|g| g.contains(&DockEvent::SwitcherClosed(1)))
+    });
+    assert_eq!(
+        dock.groups()[2],
+        switcher_group(2),
+        "the entry is selected, then committed"
+    );
+    assert_eq!(
+        h.state.wm.key_window(),
+        Some(one),
+        "the entry is committed while Super is still held"
+    );
     h.key(KEY_SUPER, false);
 
     h.key(KEY_SUPER, true);
     h.tap(KEY_TAB);
     assert!(h.state.wm.switcher().is_some());
     dock.send(Cmd::SwitcherCancel);
-    h.wait_until("the switch to be cancelled", |_| dock.groups().iter().any(|g| g.contains(&DockEvent::SwitcherClosed(0))));
+    h.wait_until("the switch to be cancelled", |_| {
+        dock.groups()
+            .iter()
+            .any(|g| g.contains(&DockEvent::SwitcherClosed(0)))
+    });
     h.key(KEY_SUPER, false);
-    assert_eq!(h.state.wm.key_window(), Some(one), "a cancel keeps the focus");
+    assert_eq!(
+        h.state.wm.key_window(),
+        Some(one),
+        "a cancel keeps the focus"
+    );
     assert_eq!(dock.error(), None);
 }
 
 #[test]
 fn the_panel_goes_to_the_dock_of_the_output_under_the_pointer() {
     let Some(mut h) = Harness::new() else { return };
-    headless::add_display(&mut h.state, &HeadlessDisplay { name: "headless-2".into(), size: OUTPUT, physical_mm: (0, 0) }, Some(1.0)).unwrap();
+    headless::add_display(
+        &mut h.state,
+        &HeadlessDisplay {
+            name: "headless-2".into(),
+            size: OUTPUT,
+            physical_mm: (0, 0),
+        },
+        Some(1.0),
+    )
+    .unwrap();
     h.step();
     let (_apps, _) = h.three_apps();
     let first = DockClient::spawn_on(h.socket_path(), true, 0);
     let second = DockClient::spawn_on(h.socket_path(), true, 1);
     h.wait_for_groups(&first, 1);
     h.wait_for_groups(&second, 1);
-    let other = h.state.outputs.iter().find(|o| o.rect.x > 0.0 || o.rect.y > 0.0).expect("the second output").rect;
-    h.state.pointer_moved_to((other.x + 50.0, other.y + 50.0).into(), 0, None);
+    let other = h
+        .state
+        .outputs
+        .iter()
+        .find(|o| o.rect.x > 0.0 || o.rect.y > 0.0)
+        .expect("the second output")
+        .rect;
+    h.state
+        .pointer_moved_to((other.x + 50.0, other.y + 50.0).into(), 0, None);
     h.key(KEY_SUPER, true);
     h.tap(KEY_TAB);
     h.wait_for_groups(&second, 2);
-    assert_eq!(second.groups()[1], switcher_group(1), "the dock of the pointer's output draws the panel");
+    assert_eq!(
+        second.groups()[1],
+        switcher_group(1),
+        "the dock of the pointer's output draws the panel"
+    );
     h.key(KEY_SUPER, false);
-    h.wait_until("the end of the switch", |_| first.groups().iter().any(|g| g.contains(&DockEvent::SwitcherClosed(1))));
-    assert!(!first.groups().iter().flatten().any(|e| matches!(e, DockEvent::SwitcherOutput { .. } | DockEvent::SwitcherEntry(_))), "the other dock only hears the end");
+    h.wait_until("the end of the switch", |_| {
+        first
+            .groups()
+            .iter()
+            .any(|g| g.contains(&DockEvent::SwitcherClosed(1)))
+    });
+    assert!(
+        !first.groups().iter().flatten().any(|e| matches!(
+            e,
+            DockEvent::SwitcherOutput { .. } | DockEvent::SwitcherEntry(_)
+        )),
+        "the other dock only hears the end"
+    );
 }
 
 #[test]
@@ -852,14 +1278,22 @@ fn an_activation_token_older_than_the_applications_last_activation_only_bounces_
 
     // `two` was activated after the token was made: refused, its tile bounces
     two_client.commands.send(Cmd::Activate(old)).unwrap();
-    h.wait_until("the attention request", |_| dock.groups().iter().flatten().any(|e| *e == DockEvent::Attention("org.example.two".into())));
+    h.wait_until("the attention request", |_| {
+        dock.groups()
+            .iter()
+            .flatten()
+            .any(|e| *e == DockEvent::Attention("org.example.two".into()))
+    });
     assert_eq!(h.state.wm.key_window(), Some(one));
 
     // a token newer than the application's last activation, no user event since: accepted, and
     // no matter how old it is (no expiry)
     let fresh = h.state.server_activation_token();
     h.advance(30.0);
-    three_client.commands.send(Cmd::Activate(fresh.clone())).unwrap();
+    three_client
+        .commands
+        .send(Cmd::Activate(fresh.clone()))
+        .unwrap();
     h.wait_until("the activation", |s| s.wm.key_window() == Some(three));
 
     // a token is used once
@@ -868,7 +1302,11 @@ fn an_activation_token_older_than_the_applications_last_activation_only_bounces_
     for _ in 0..20 {
         h.step();
     }
-    assert_eq!(h.state.wm.key_window(), Some(one), "a used token does nothing");
+    assert_eq!(
+        h.state.wm.key_window(),
+        Some(one),
+        "a used token does nothing"
+    );
 }
 
 #[test]
@@ -879,13 +1317,27 @@ fn a_refused_activation_bounces_the_tile_of_an_inactive_application_only() {
     h.wait_for_groups(&dock, 1);
     h.state.command(Command::DemandAttention { window: two });
     h.wait_for_groups(&dock, 2);
-    assert_eq!(dock.groups()[1], [DockEvent::Attention("org.example.two".into()), DockEvent::Done]);
+    assert_eq!(
+        dock.groups()[1],
+        [
+            DockEvent::Attention("org.example.two".into()),
+            DockEvent::Done
+        ]
+    );
     h.state.command(Command::DemandAttention { window: three });
     for _ in 0..10 {
         h.step();
     }
-    assert_eq!(dock.groups().len(), 2, "the active application is not bounced");
-    assert_eq!(h.state.wm.key_window(), Some(three), "attention takes no focus");
+    assert_eq!(
+        dock.groups().len(),
+        2,
+        "the active application is not bounced"
+    );
+    assert_eq!(
+        h.state.wm.key_window(),
+        Some(three),
+        "attention takes no focus"
+    );
 }
 
 // ---- overview, workspaces, hot corners and gestures ------------------------------------------------
@@ -893,22 +1345,44 @@ fn a_refused_activation_bounces_the_tile_of_an_inactive_application_only() {
 /// A 300×200 window maps at the model's default place: its frame as the dock is told it.
 fn frame_of(h: &Harness, id: WindowId) -> (i32, i32, i32, i32) {
     let r = h.state.wm.window(id).unwrap().geometry();
-    (r.x.round() as i32, r.y.round() as i32, r.w.round() as i32, r.h.round() as i32)
+    (
+        r.x.round() as i32,
+        r.y.round() as i32,
+        r.w.round() as i32,
+        r.h.round() as i32,
+    )
 }
 
 /// The group that opened the overview, if the dock has one.
 fn overview_group(dock: &DockClient) -> Option<Vec<DockEvent>> {
-    dock.groups().into_iter().find(|g| g.iter().any(|e| matches!(e, DockEvent::OverviewChanged { .. })))
+    dock.groups().into_iter().find(|g| {
+        g.iter()
+            .any(|e| matches!(e, DockEvent::OverviewChanged { .. }))
+    })
 }
 
 impl Harness {
     fn toggle_overview(&mut self, app: bool) {
-        self.state.execute_plan(ActionPlan { commands: Vec::new(), ops: vec![if app { ShellOp::ToggleAppOverview } else { ShellOp::ToggleOverview }] });
+        self.state.execute_plan(ActionPlan {
+            commands: Vec::new(),
+            ops: vec![if app {
+                ShellOp::ToggleAppOverview
+            } else {
+                ShellOp::ToggleOverview
+            }],
+        });
         self.step();
     }
 
     fn overview_target(&self, id: WindowId) -> Option<Rect> {
-        self.state.shell.overview.as_ref()?.targets().into_iter().find(|f| f.id == id).map(|f| f.frame)
+        self.state
+            .shell
+            .overview
+            .as_ref()?
+            .targets()
+            .into_iter()
+            .find(|f| f.id == id)
+            .map(|f| f.frame)
     }
 }
 
@@ -921,7 +1395,9 @@ fn opening_the_overview_sends_the_windows_and_workspaces_and_the_docks_frames_pl
     let _b = spawn_app(h.socket_path(), "org.example.b");
     let b = h.mapped_window(2);
     let out = h.state.outputs[0].id;
-    h.wait_until("the dock to reserve its zone", |s| s.usable_area(out).h < f64::from(OUTPUT.1));
+    h.wait_until("the dock to reserve its zone", |s| {
+        s.usable_area(out).h < f64::from(OUTPUT.1)
+    });
     let ws = h.state.wm.current_workspace(out).unwrap().0 as u32;
 
     h.toggle_overview(false);
@@ -930,32 +1406,74 @@ fn opening_the_overview_sends_the_windows_and_workspaces_and_the_docks_frames_pl
     assert_eq!(
         overview_group(&dock).unwrap(),
         vec![
-            DockEvent::OverviewWindow { id: a.0 as u32, frame: frame_of(&h, a) },
-            DockEvent::OverviewWindow { id: b.0 as u32, frame: frame_of(&h, b) },
-            DockEvent::OverviewWorkspace { id: ws, current: true },
-            DockEvent::OverviewChanged { app: false, app_id: String::new(), area: (0, 0, OUTPUT.0, OUTPUT.1 - DOCK_HEIGHT) },
+            DockEvent::OverviewWindow {
+                id: a.0 as u32,
+                frame: frame_of(&h, a)
+            },
+            DockEvent::OverviewWindow {
+                id: b.0 as u32,
+                frame: frame_of(&h, b)
+            },
+            DockEvent::OverviewWorkspace {
+                id: ws,
+                current: true
+            },
+            DockEvent::OverviewChanged {
+                app: false,
+                app_id: String::new(),
+                area: (0, 0, OUTPUT.0, OUTPUT.1 - DOCK_HEIGHT)
+            },
             DockEvent::Done,
         ],
         "stacking order, then the workspaces, then the usable area"
     );
-    assert_eq!(h.overview_target(a), Some(h.state.wm.window(a).unwrap().geometry()), "a window stays at its desktop frame until the dock lays it out");
+    assert_eq!(
+        h.overview_target(a),
+        Some(h.state.wm.window(a).unwrap().geometry()),
+        "a window stays at its desktop frame until the dock lays it out"
+    );
 
     let target = Rect::new(20.0, 20.0, 200.0, 150.0);
     dock.send(Cmd::OverviewFrame(a.0 as u32, (20, 20, 200, 150)));
     dock.send(Cmd::OverviewFrame(9999, (0, 0, 10, 10)));
-    h.wait_until("the frame to arrive", |s| s.shell.overview.as_ref().is_some_and(|o| o.targets().iter().any(|f| f.id == a && f.frame == target)));
+    h.wait_until("the frame to arrive", |s| {
+        s.shell
+            .overview
+            .as_ref()
+            .is_some_and(|o| o.targets().iter().any(|f| f.id == a && f.frame == target))
+    });
     h.advance(5.0);
-    let frames = h.state.shell.overview.as_ref().unwrap().frames(h.state.now());
-    assert_eq!(frames.iter().find(|f| f.id == a).map(|f| f.frame), Some(target), "the window glided to the dock's frame");
-    assert!(h.state.shell.overview.as_ref().unwrap().windows.len() == 2, "an unknown id changed nothing");
+    let frames = h
+        .state
+        .shell
+        .overview
+        .as_ref()
+        .unwrap()
+        .frames(h.state.now());
+    assert_eq!(
+        frames.iter().find(|f| f.id == a).map(|f| f.frame),
+        Some(target),
+        "the window glided to the dock's frame"
+    );
+    assert!(
+        h.state.shell.overview.as_ref().unwrap().windows.len() == 2,
+        "an unknown id changed nothing"
+    );
 
     dock.send(Cmd::OverviewSelect(a.0 as u32));
     h.wait_until("the overview to close", |s| !s.shell.overview_open());
     // the focus change that follows sends a window group too, so the closed group need not be the last
-    h.wait_until("the dock to hear it closed", |_| dock.groups().iter().any(|g| g == &[DockEvent::OverviewClosed, DockEvent::Done]));
+    h.wait_until("the dock to hear it closed", |_| {
+        dock.groups()
+            .iter()
+            .any(|g| g == &[DockEvent::OverviewClosed, DockEvent::Done])
+    });
     h.advance(5.0);
     assert_eq!(h.state.wm.key_window(), Some(a), "the pick is focused");
-    assert!(h.state.shell.overview.is_none(), "the closing session is dropped once at rest");
+    assert!(
+        h.state.shell.overview.is_none(),
+        "the closing session is dropped once at rest"
+    );
     assert_eq!(dock.error(), None);
 }
 
@@ -970,16 +1488,39 @@ fn a_dock_that_dies_mid_overview_closes_it_and_the_windows_come_back() {
     h.toggle_overview(false);
     h.wait_until("the overview group", |_| overview_group(&dock).is_some());
     dock.send(Cmd::OverviewFrame(a.0 as u32, (20, 20, 200, 150)));
-    h.wait_until("the frame to arrive", |s| s.shell.overview.as_ref().is_some_and(|o| o.targets().iter().any(|f| f.id == a && f.frame == Rect::new(20.0, 20.0, 200.0, 150.0))));
+    h.wait_until("the frame to arrive", |s| {
+        s.shell.overview.as_ref().is_some_and(|o| {
+            o.targets()
+                .iter()
+                .any(|f| f.id == a && f.frame == Rect::new(20.0, 20.0, 200.0, 150.0))
+        })
+    });
     h.advance(5.0);
     dock.send(Cmd::Quit);
-    h.wait_until("the dock's death to close the overview", |s| !s.shell.overview_open());
+    h.wait_until("the dock's death to close the overview", |s| {
+        !s.shell.overview_open()
+    });
     h.advance(5.0);
     assert!(h.state.shell.overview.is_none());
-    let (plan, _) = plan_for(&h.state.wm, h.state.entry(a).unwrap(), 0.0, h.state.now(), &h.state.fx, h.state.display_options()).expect("drawn on the desktop");
-    assert_eq!(plan.visual, desktop, "the window is back at its desktop frame");
+    let (plan, _) = plan_for(
+        &h.state.wm,
+        h.state.entry(a).unwrap(),
+        0.0,
+        h.state.now(),
+        &h.state.fx,
+        h.state.display_options(),
+    )
+    .expect("drawn on the desktop");
+    assert_eq!(
+        plan.visual, desktop,
+        "the window is back at its desktop frame"
+    );
     let out = h.state.outputs[0].id;
-    assert_eq!(h.state.usable_area(out).h, f64::from(OUTPUT.1), "the dead dock's zone is released");
+    assert_eq!(
+        h.state.usable_area(out).h,
+        f64::from(OUTPUT.1),
+        "the dead dock's zone is released"
+    );
 }
 
 #[test]
@@ -997,19 +1538,52 @@ fn workspace_requests_edit_the_list_and_a_switch_leaves_the_overview() {
     h.wait_until("a second workspace", |s| s.wm.workspaces(out).len() == 2);
     let second = h.state.wm.workspaces(out)[1].id;
     h.wait_for_groups(&dock, groups_before + 1);
-    let bar: Vec<DockEvent> = dock.groups()[groups_before].iter().filter(|e| matches!(e, DockEvent::OverviewWorkspace { .. })).cloned().collect();
-    assert_eq!(bar, vec![DockEvent::OverviewWorkspace { id: first.0 as u32, current: true }, DockEvent::OverviewWorkspace { id: second.0 as u32, current: false }], "the bar is resent with the new workspace");
+    let bar: Vec<DockEvent> = dock.groups()[groups_before]
+        .iter()
+        .filter(|e| matches!(e, DockEvent::OverviewWorkspace { .. }))
+        .cloned()
+        .collect();
+    assert_eq!(
+        bar,
+        vec![
+            DockEvent::OverviewWorkspace {
+                id: first.0 as u32,
+                current: true
+            },
+            DockEvent::OverviewWorkspace {
+                id: second.0 as u32,
+                current: false
+            }
+        ],
+        "the bar is resent with the new workspace"
+    );
 
     dock.send(Cmd::MoveWorkspace(second.0 as u32, 0));
     h.wait_until("the reorder", |s| s.wm.workspaces(out)[0].id == second);
-    assert_eq!(h.state.wm.current_workspace(out), Some(first), "reordering keeps the screen");
+    assert_eq!(
+        h.state.wm.current_workspace(out),
+        Some(first),
+        "reordering keeps the screen"
+    );
     h.wait_for_groups(&dock, groups_before + 2);
-    assert!(h.state.shell.overview_open(), "workspace edits keep the overview open");
+    assert!(
+        h.state.shell.overview_open(),
+        "workspace edits keep the overview open"
+    );
 
     dock.send(Cmd::SwitchWorkspace(second.0 as u32));
-    h.wait_until("the switch", |s| s.wm.current_workspace(out) == Some(second));
-    assert!(!h.state.shell.overview_open(), "a switch leaves the overview");
-    h.wait_until("the dock to hear it closed", |_| dock.groups().iter().any(|g| g == &[DockEvent::OverviewClosed, DockEvent::Done]));
+    h.wait_until("the switch", |s| {
+        s.wm.current_workspace(out) == Some(second)
+    });
+    assert!(
+        !h.state.shell.overview_open(),
+        "a switch leaves the overview"
+    );
+    h.wait_until("the dock to hear it closed", |_| {
+        dock.groups()
+            .iter()
+            .any(|g| g == &[DockEvent::OverviewClosed, DockEvent::Done])
+    });
     h.advance(5.0);
 
     dock.send(Cmd::RemoveWorkspace(second.0 as u32));
@@ -1019,8 +1593,16 @@ fn workspace_requests_edit_the_list_and_a_switch_leaves_the_overview() {
     for _ in 0..10 {
         h.step();
     }
-    assert_eq!(h.state.wm.workspaces(out).len(), 1, "the last workspace stays");
-    assert_eq!(h.state.wm.current_workspace(out), Some(first), "an unknown id switches nothing");
+    assert_eq!(
+        h.state.wm.workspaces(out).len(),
+        1,
+        "the last workspace stays"
+    );
+    assert_eq!(
+        h.state.wm.current_workspace(out),
+        Some(first),
+        "an unknown id switches nothing"
+    );
     assert_eq!(dock.error(), None);
 }
 
@@ -1039,19 +1621,34 @@ fn named_actions_and_tile_commands_from_the_dock_act_as_their_shortcuts() {
     dock.send(Cmd::RunAction("no-such-action"));
 
     dock.send(Cmd::AppCommand("org.example.a", AppCommand::ShowWindows));
-    h.wait_until("the application overview", |s| s.shell.overview.as_ref().is_some_and(|o| !o.closing && o.mode == cupertino_overview::OverviewMode::AppOverview(s.wm.window(a).unwrap().app)));
+    h.wait_until("the application overview", |s| {
+        s.shell.overview.as_ref().is_some_and(|o| {
+            !o.closing
+                && o.mode
+                    == cupertino_overview::OverviewMode::AppOverview(s.wm.window(a).unwrap().app)
+        })
+    });
     h.wait_until("its group", |_| overview_group(&dock).is_some());
-    assert!(matches!(overview_group(&dock).unwrap()[..], [DockEvent::OverviewWindow { .. }, DockEvent::OverviewWorkspace { .. }, DockEvent::OverviewChanged { app: true, ref app_id, .. }, DockEvent::Done] if app_id == "org.example.a"));
+    assert!(
+        matches!(overview_group(&dock).unwrap()[..], [DockEvent::OverviewWindow { .. }, DockEvent::OverviewWorkspace { .. }, DockEvent::OverviewChanged { app: true, ref app_id, .. }, DockEvent::Done] if app_id == "org.example.a")
+    );
     dock.send(Cmd::OverviewClose);
     h.wait_until("the overview to close", |s| !s.shell.overview_open());
 
     dock.send(Cmd::AppCommand("org.example.a", AppCommand::Hide));
-    h.wait_until("the application to hide", |s| s.wm.window(a).is_some_and(|w| s.wm.app(w.app).unwrap().hidden));
+    h.wait_until("the application to hide", |s| {
+        s.wm.window(a)
+            .is_some_and(|w| s.wm.app(w.app).unwrap().hidden)
+    });
     dock.send(Cmd::AppCommand("org.example.gone", AppCommand::Quit));
     for _ in 0..10 {
         h.step();
     }
-    assert_eq!(h.state.wm.windows().count(), 1, "an unknown application is ignored");
+    assert_eq!(
+        h.state.wm.windows().count(),
+        1,
+        "an unknown application is ignored"
+    );
     assert_eq!(dock.error(), None);
 }
 
@@ -1064,20 +1661,51 @@ fn a_hot_corner_and_a_gesture_reach_the_dock_of_the_output() {
     h.wait_for_groups(&dock, 1);
     let groups = dock.groups().len();
     // the default dwell is 0.0 s: the corner fires on arrival
-    h.state.pointer_moved_to((f64::from(OUTPUT.0) - 1.0, f64::from(OUTPUT.1) - 1.0).into(), 0, None);
+    h.state.pointer_moved_to(
+        (f64::from(OUTPUT.0) - 1.0, f64::from(OUTPUT.1) - 1.0).into(),
+        0,
+        None,
+    );
     h.state.tick();
     h.wait_for_groups(&dock, groups + 1);
-    assert_eq!(dock.groups()[groups], vec![DockEvent::HotCorner(cupertino_dock_v1::Corner::BottomRight as u32), DockEvent::Done]);
+    assert_eq!(
+        dock.groups()[groups],
+        vec![
+            DockEvent::HotCorner(cupertino_dock_v1::Corner::BottomRight as u32),
+            DockEvent::Done
+        ]
+    );
     h.state.pointer_moved_to((500.0, 300.0).into(), 0, None);
 
     let t = h.state.now();
-    h.state.gesture(GestureEvent::PinchBegin { time: t, fingers: 4 });
+    h.state.gesture(GestureEvent::PinchBegin {
+        time: t,
+        fingers: 4,
+    });
     for i in 1..=10 {
-        h.state.gesture(GestureEvent::PinchUpdate { time: t + 0.016 * i as f64, dx: 0.0, dy: 0.0, scale: 1.0 + 0.1 * i as f64, rotation: 0.0 });
+        h.state.gesture(GestureEvent::PinchUpdate {
+            time: t + 0.016 * i as f64,
+            dx: 0.0,
+            dy: 0.0,
+            scale: 1.0 + 0.1 * i as f64,
+            rotation: 0.0,
+        });
     }
-    h.state.gesture(GestureEvent::PinchEnd { time: t + 0.3, cancelled: false });
+    h.state.gesture(GestureEvent::PinchEnd {
+        time: t + 0.3,
+        cancelled: false,
+    });
     h.wait_for_groups(&dock, groups + 2);
-    assert_eq!(dock.groups()[groups + 1], vec![DockEvent::Gesture(cupertino_dock_v1::Gesture::Spread as u32), DockEvent::Done]);
-    assert!(!h.state.fx.show_desktop_active(), "the server runs nothing itself: the dock maps the gesture");
+    assert_eq!(
+        dock.groups()[groups + 1],
+        vec![
+            DockEvent::Gesture(cupertino_dock_v1::Gesture::Spread as u32),
+            DockEvent::Done
+        ]
+    );
+    assert!(
+        !h.state.fx.show_desktop_active(),
+        "the server runs nothing itself: the dock maps the gesture"
+    );
     assert_eq!(dock.error(), None);
 }

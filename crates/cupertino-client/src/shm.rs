@@ -89,20 +89,52 @@ pub(crate) struct BufferPool {
 }
 
 impl BufferPool {
-    pub(crate) fn new(shm: &WlShm, qh: &QueueHandle<State>, surface: SurfaceId, generation: u64, layout: BufferLayout) -> Result<Self, ClientError> {
-        let fd = memfd_create("cupertino-client", MemfdFlags::CLOEXEC).map_err(|e| ClientError::Shm(e.into()))?;
+    pub(crate) fn new(
+        shm: &WlShm,
+        qh: &QueueHandle<State>,
+        surface: SurfaceId,
+        generation: u64,
+        layout: BufferLayout,
+    ) -> Result<Self, ClientError> {
+        let fd = memfd_create("cupertino-client", MemfdFlags::CLOEXEC)
+            .map_err(|e| ClientError::Shm(e.into()))?;
         let file = File::from(fd);
-        file.set_len(layout.pool_len() as u64).map_err(ClientError::Shm)?;
+        file.set_len(layout.pool_len() as u64)
+            .map_err(ClientError::Shm)?;
         // SAFETY: the memfd is private to this process and the server; neither truncates it.
         let map = unsafe { MmapMut::map_mut(&file) }.map_err(ClientError::Shm)?;
-        let pool = shm.create_pool(std::os::fd::AsFd::as_fd(&file), layout.pool_len() as i32, qh, ());
+        let pool = shm.create_pool(
+            std::os::fd::AsFd::as_fd(&file),
+            layout.pool_len() as i32,
+            qh,
+            (),
+        );
         let buffers = (0..SLOTS)
             .map(|slot| {
-                let tag = BufferTag { surface, generation, slot };
-                pool.create_buffer(layout.slot_offset(slot) as i32, layout.width() as i32, layout.height() as i32, layout.stride() as i32, Format::Argb8888, qh, tag)
+                let tag = BufferTag {
+                    surface,
+                    generation,
+                    slot,
+                };
+                pool.create_buffer(
+                    layout.slot_offset(slot) as i32,
+                    layout.width() as i32,
+                    layout.height() as i32,
+                    layout.stride() as i32,
+                    Format::Argb8888,
+                    qh,
+                    tag,
+                )
             })
             .collect();
-        Ok(Self { layout, generation, pool, map, buffers, busy: [false; SLOTS] })
+        Ok(Self {
+            layout,
+            generation,
+            pool,
+            map,
+            buffers,
+            busy: [false; SLOTS],
+        })
     }
 
     pub(crate) fn layout(&self) -> BufferLayout {
@@ -148,7 +180,10 @@ mod tests {
     #[test]
     fn layout_is_four_bytes_per_pixel_with_two_slots() {
         let l = BufferLayout::new(360, 100).unwrap();
-        assert_eq!((l.stride(), l.buffer_len(), l.pool_len()), (1440, 144_000, 288_000));
+        assert_eq!(
+            (l.stride(), l.buffer_len(), l.pool_len()),
+            (1440, 144_000, 288_000)
+        );
         assert_eq!((l.slot_offset(0), l.slot_offset(1)), (0, 144_000));
     }
 

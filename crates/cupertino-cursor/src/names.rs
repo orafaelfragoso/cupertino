@@ -17,23 +17,51 @@ pub struct Mapping {
     pub aliases: &'static [&'static str],
 }
 
-const fn m(reference: &'static str, primary: &'static str, aliases: &'static [&'static str]) -> Mapping {
-    Mapping { reference, primary, aliases }
+const fn m(
+    reference: &'static str,
+    primary: &'static str,
+    aliases: &'static [&'static str],
+) -> Mapping {
+    Mapping {
+        reference,
+        primary,
+        aliases,
+    }
 }
 
 /// Source cursors that have a freedesktop meaning.
 pub const SOURCE_MAP: &[Mapping] = &[
-    m("hand-pointer", "pointer", &["hand1", "hand2", "pointing_hand"]),
+    m(
+        "hand-pointer",
+        "pointer",
+        &["hand1", "hand2", "pointing_hand"],
+    ),
     m("openhand", "grab", &["openhand"]),
     m("closedhand", "grabbing", &["closedhand"]),
     m("text-vertical-src", "vertical-text", &[]),
-    m("cross", "crosshair", &["cross", "tcross", "diamond_cross", "cross_reverse"]),
-    m("notallowed", "not-allowed", &["crossed_circle", "forbidden", "no-drop", "dnd-no-drop"]),
+    m(
+        "cross",
+        "crosshair",
+        &["cross", "tcross", "diamond_cross", "cross_reverse"],
+    ),
+    m(
+        "notallowed",
+        "not-allowed",
+        &["crossed_circle", "forbidden", "no-drop", "dnd-no-drop"],
+    ),
     m("copy", "copy", &["dnd-copy"]),
     m("make-link", "alias", &["link", "dnd-link"]),
     m("context-menu-src", "context-menu", &[]),
-    m("help", "help", &["question_arrow", "whats_this", "left_ptr_help"]),
-    m("busy-clickable", "progress", &["left_ptr_watch", "half-busy", "wait", "watch"]),
+    m(
+        "help",
+        "help",
+        &["question_arrow", "whats_this", "left_ptr_help"],
+    ),
+    m(
+        "busy-clickable",
+        "progress",
+        &["left_ptr_watch", "half-busy", "wait", "watch"],
+    ),
     m("cell", "cell", &["plus"]),
     m("move", "move", &["all-scroll", "fleur", "size_all"]),
     m("zoom-plus", "zoom-in", &[]),
@@ -46,8 +74,16 @@ pub const SOURCE_MAP: &[Mapping] = &[
     m("resize-north-west", "nw-resize", &["top_left_corner"]),
     m("resize-south-east", "se-resize", &["bottom_right_corner"]),
     m("resize-south-west", "sw-resize", &["bottom_left_corner"]),
-    m("resize-east-west", "ew-resize", &["sb_h_double_arrow", "size_hor", "h_double_arrow"]),
-    m("resize-north-south", "ns-resize", &["sb_v_double_arrow", "size_ver", "v_double_arrow"]),
+    m(
+        "resize-east-west",
+        "ew-resize",
+        &["sb_h_double_arrow", "size_hor", "h_double_arrow"],
+    ),
+    m(
+        "resize-north-south",
+        "ns-resize",
+        &["sb_v_double_arrow", "size_ver", "v_double_arrow"],
+    ),
     m("resize-north-east-south-west", "nesw-resize", &["size_bdiag"]),
     m("resize-north-west-south-east", "nwse-resize", &["size_fdiag"]),
     m("resize-left-right", "col-resize", &["split_h"]),
@@ -55,7 +91,14 @@ pub const SOURCE_MAP: &[Mapping] = &[
 ];
 
 /// Freedesktop names provided by the procedural set only (no source cursor).
-pub const PROCEDURAL_ONLY: &[Mapping] = &[m("default", "default", &["left_ptr", "arrow", "top_left_arrow"]), m("text", "text", &["xterm", "ibeam"])];
+pub const PROCEDURAL_ONLY: &[Mapping] = &[
+    m(
+        "default",
+        "default",
+        &["left_ptr", "arrow", "top_left_arrow"],
+    ),
+    m("text", "text", &["xterm", "ibeam"]),
+];
 
 /// Names every complete theme must contain (the CSS cursor set plus the common legacy ones).
 pub const REQUIRED_NAMES: &[&str] = &[
@@ -101,8 +144,18 @@ pub const REQUIRED_NAMES: &[&str] = &[
 ];
 
 /// Cursors of the design set that are installed under their own name only.
-pub const UNMAPPED_SOURCE: &[&str] =
-    &["count-down", "count-up-down", "count-up", "vanish", "resize-down", "resize-left", "resize-right", "resize-up", "capture-region", "capture-window"];
+pub const UNMAPPED_SOURCE: &[&str] = &[
+    "count-down",
+    "count-up-down",
+    "count-up",
+    "vanish",
+    "resize-down",
+    "resize-left",
+    "resize-right",
+    "resize-up",
+    "capture-region",
+    "capture-window",
+];
 
 pub fn mapping_for_source(name: &str) -> Option<&'static Mapping> {
     SOURCE_MAP.iter().find(|m| m.reference == name)
@@ -130,18 +183,30 @@ mod tests {
 
     #[test]
     fn required_names_are_covered() {
-        let covered: HashSet<&str> = SOURCE_MAP.iter().chain(PROCEDURAL_ONLY).flat_map(all_names).collect();
+        let covered: HashSet<&str> = SOURCE_MAP
+            .iter()
+            .chain(PROCEDURAL_ONLY)
+            .flat_map(all_names)
+            .collect();
         for n in REQUIRED_NAMES {
             assert!(covered.contains(n), "{n} has no mapping");
         }
     }
 
-
     #[test]
     fn primary_names_are_unique_and_lookup_works() {
-        assert_eq!(mapping_for_source("hand-pointer").unwrap().primary, "pointer");
-        assert_eq!(mapping_for_source("busy-clickable").unwrap().primary, "progress");
+        assert_eq!(
+            mapping_for_source("hand-pointer").unwrap().primary,
+            "pointer"
+        );
+        assert_eq!(
+            mapping_for_source("busy-clickable").unwrap().primary,
+            "progress"
+        );
         assert!(mapping_for_source("nonsense").is_none());
-        assert!(mapping_for_source("busy-clickable").unwrap().aliases.contains(&"wait"));
+        assert!(mapping_for_source("busy-clickable")
+            .unwrap()
+            .aliases
+            .contains(&"wait"));
     }
 }

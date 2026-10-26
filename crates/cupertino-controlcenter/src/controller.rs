@@ -7,7 +7,10 @@
 
 use std::collections::HashMap;
 
-use crate::backend::{BackendError, BatteryReader, Bluetooth, Brightness, FocusMode, OverlayKind, OverlayNotifier, Volume, Wifi};
+use crate::backend::{
+    BackendError, BatteryReader, Bluetooth, Brightness, FocusMode, OverlayKind, OverlayNotifier,
+    Volume, Wifi,
+};
 use crate::lifecycle::{Lifecycle, Phase};
 use crate::model::{Controls, Module, Reading, Slider, TileState, MUTE_BELOW};
 
@@ -61,7 +64,10 @@ impl FailureLog {
     /// changed failure, or a recovery after one.
     fn record(&mut self, what: &'static str, outcome: Result<(), &BackendError>) -> Option<String> {
         match outcome {
-            Ok(()) => self.reasons.remove(what).map(|_| format!("cupertino-controlcenter: {what}: available again")),
+            Ok(()) => self
+                .reasons
+                .remove(what)
+                .map(|_| format!("cupertino-controlcenter: {what}: available again")),
             Err(error) => {
                 let reason = error.to_string();
                 if self.reasons.get(what) == Some(&reason) {
@@ -99,7 +105,16 @@ impl FailureLog {
 impl Controller {
     /// A hidden panel; nothing is read until it opens.
     pub fn new(backends: Backends) -> Self {
-        Self { lifecycle: Lifecycle::new(), controls: Controls::unread(), backends, failures: FailureLog::default(), dragging: None, pending: None, last_write: None, last_refresh: None }
+        Self {
+            lifecycle: Lifecycle::new(),
+            controls: Controls::unread(),
+            backends,
+            failures: FailureLog::default(),
+            dragging: None,
+            pending: None,
+            last_write: None,
+            last_refresh: None,
+        }
     }
 
     pub fn controls(&self) -> &Controls {
@@ -144,7 +159,8 @@ impl Controller {
         self.controls.bluetooth = failures.reading("bluetooth", backends.bluetooth.read());
         self.controls.focus_mode = failures.reading("focus mode", backends.focus_mode.read());
         if self.dragging.is_none() {
-            self.controls.brightness = failures.reading("display brightness", backends.brightness.read());
+            self.controls.brightness =
+                failures.reading("display brightness", backends.brightness.read());
             self.controls.volume = failures.reading("volume", backends.volume.read());
         }
         self.controls.battery = match backends.battery.read() {
@@ -168,7 +184,9 @@ impl Controller {
         let backends = &mut self.backends;
         match module {
             Module::WiFi => {
-                let Reading::Ready(status) = &self.controls.wifi else { return false };
+                let Reading::Ready(status) = &self.controls.wifi else {
+                    return false;
+                };
                 let enabled = !status.enabled;
                 match backends.wifi.set_enabled(enabled) {
                     // the radio follows the switch later; the next reading shows the network again
@@ -178,24 +196,37 @@ impl Controller {
                             status.network = status.network.take().filter(|_| enabled);
                         }
                     }
-                    Err(error) => self.controls.wifi = self.failures.reading::<crate::model::WifiStatus>("wi-fi", Err(error)),
+                    Err(error) => {
+                        self.controls.wifi = self
+                            .failures
+                            .reading::<crate::model::WifiStatus>("wi-fi", Err(error))
+                    }
                 }
             }
             Module::Bluetooth => {
-                let Reading::Ready(on) = self.controls.bluetooth else { return false };
+                let Reading::Ready(on) = self.controls.bluetooth else {
+                    return false;
+                };
                 self.controls.bluetooth = match backends.bluetooth.set_powered(!on) {
                     Ok(()) => Reading::Ready(!on),
                     Err(error) => self.failures.reading("bluetooth", Err(error)),
                 };
             }
             Module::FocusMode => {
-                let Reading::Ready(on) = self.controls.focus_mode else { return false };
+                let Reading::Ready(on) = self.controls.focus_mode else {
+                    return false;
+                };
                 self.controls.focus_mode = match backends.focus_mode.set(!on) {
                     Ok(()) => Reading::Ready(!on),
                     Err(error) => self.failures.reading("focus mode", Err(error)),
                 };
             }
-            Module::Display | Module::Sound | Module::FileSharing | Module::Stage | Module::ScreenMirroring | Module::NowPlaying => return false,
+            Module::Display
+            | Module::Sound
+            | Module::FileSharing
+            | Module::Stage
+            | Module::ScreenMirroring
+            | Module::NowPlaying => return false,
         }
         true
     }
@@ -214,7 +245,11 @@ impl Controller {
 
     /// Write the waiting slider value when the throttle allows it.
     pub fn flush(&mut self, now: f64) {
-        if self.pending.is_some() && self.last_write.is_none_or(|last| now - last >= WRITE_INTERVAL) {
+        if self.pending.is_some()
+            && self
+                .last_write
+                .is_none_or(|last| now - last >= WRITE_INTERVAL)
+        {
             self.write_pending(now);
         }
     }
@@ -222,7 +257,9 @@ impl Controller {
     /// The pointer let go of the slider: write the last value and tell the overlay what the level is.
     pub fn release(&mut self, now: f64) {
         self.write_pending(now);
-        let Some(slider) = self.dragging.take() else { return };
+        let Some(slider) = self.dragging.take() else {
+            return;
+        };
         let (kind, level) = match (slider, &self.controls.volume, &self.controls.brightness) {
             (Slider::Display, _, Reading::Ready(level)) => (OverlayKind::Brightness, *level),
             (Slider::Sound, Reading::Ready(volume), _) if volume.muted => (OverlayKind::Mute, 0.0),
@@ -235,16 +272,23 @@ impl Controller {
     }
 
     fn write_pending(&mut self, now: f64) {
-        let Some(PendingWrite { slider, fraction }) = self.pending.take() else { return };
+        let Some(PendingWrite { slider, fraction }) = self.pending.take() else {
+            return;
+        };
         self.last_write = Some(now);
         match slider {
             Slider::Display => {
                 if let Err(error) = self.backends.brightness.set(fraction) {
-                    self.controls.brightness = self.failures.reading::<f64>("display brightness", Err(error));
+                    self.controls.brightness = self
+                        .failures
+                        .reading::<f64>("display brightness", Err(error));
                 }
             }
             Slider::Sound => {
-                self.controls.volume = self.failures.reading("volume", self.backends.volume.set(fraction, fraction < MUTE_BELOW));
+                self.controls.volume = self.failures.reading(
+                    "volume",
+                    self.backends.volume.set(fraction, fraction < MUTE_BELOW),
+                );
             }
         }
     }
@@ -252,16 +296,31 @@ impl Controller {
     /// Read the backends again when the panel has been open for [`REFRESH_INTERVAL`] since the last reading.
     pub fn tick(&mut self, now: f64) {
         self.flush(now);
-        if self.lifecycle.phase(now) == Phase::Shown && self.dragging.is_none() && self.last_refresh.is_none_or(|last| now - last >= REFRESH_INTERVAL) {
+        if self.lifecycle.phase(now) == Phase::Shown
+            && self.dragging.is_none()
+            && self
+                .last_refresh
+                .is_none_or(|last| now - last >= REFRESH_INTERVAL)
+        {
             self.refresh(now);
         }
     }
 
     /// Seconds from `now` until [`tick`](Self::tick) or the end of the fade-out has something to do.
     pub fn next_wakeup(&self, now: f64) -> Option<f64> {
-        let write = self.pending.map(|_| self.last_write.map_or(0.0, |last| (last + WRITE_INTERVAL - now).max(0.0)));
-        let refresh = (self.lifecycle.phase(now) == Phase::Shown && self.dragging.is_none()).then(|| self.last_refresh.map_or(0.0, |last| (last + REFRESH_INTERVAL - now).max(0.0)));
-        [write, refresh, self.lifecycle.until_hidden(now)].into_iter().flatten().min_by(f64::total_cmp)
+        let write = self.pending.map(|_| {
+            self.last_write
+                .map_or(0.0, |last| (last + WRITE_INTERVAL - now).max(0.0))
+        });
+        let refresh =
+            (self.lifecycle.phase(now) == Phase::Shown && self.dragging.is_none()).then(|| {
+                self.last_refresh
+                    .map_or(0.0, |last| (last + REFRESH_INTERVAL - now).max(0.0))
+            });
+        [write, refresh, self.lifecycle.until_hidden(now)]
+            .into_iter()
+            .flatten()
+            .min_by(f64::total_cmp)
     }
 }
 
@@ -273,12 +332,21 @@ mod tests {
 
     fn backends(overlay: RecordingOverlay) -> Backends {
         Backends {
-            wifi: Box::new(MemoryWifi(WifiStatus { enabled: true, network: Some("Home".into()) })),
+            wifi: Box::new(MemoryWifi(WifiStatus {
+                enabled: true,
+                network: Some("Home".into()),
+            })),
             bluetooth: Box::new(MemoryBluetooth(false)),
             focus_mode: Box::new(MemoryFocusMode(false)),
             brightness: Box::new(MemoryBrightness(0.5)),
-            volume: Box::new(MemoryVolume(VolumeState { level: 0.5, muted: false })),
-            battery: Box::new(MemoryBattery(Some(Battery { percent: 80, charging: false }))),
+            volume: Box::new(MemoryVolume(VolumeState {
+                level: 0.5,
+                muted: false,
+            })),
+            battery: Box::new(MemoryBattery(Some(Battery {
+                percent: 80,
+                charging: false,
+            }))),
             overlay: Box::new(overlay),
         }
     }
@@ -296,8 +364,20 @@ mod tests {
         let controls = controller.controls();
         assert_eq!(controls.tile(Module::WiFi), TileState::On);
         assert_eq!(controls.tile(Module::Bluetooth), TileState::Off);
-        assert_eq!((controls.fraction(Slider::Display), controls.fraction(Slider::Sound)), (Some(0.5), Some(0.5)));
-        assert_eq!(controls.battery, Some(Battery { percent: 80, charging: false }));
+        assert_eq!(
+            (
+                controls.fraction(Slider::Display),
+                controls.fraction(Slider::Sound)
+            ),
+            (Some(0.5), Some(0.5))
+        );
+        assert_eq!(
+            controls.battery,
+            Some(Battery {
+                percent: 80,
+                charging: false
+            })
+        );
         assert_eq!(controller.phase(0.0), Phase::Shown);
     }
 
@@ -310,7 +390,13 @@ mod tests {
         assert_eq!(controller.controls().tile(Module::WiFi), TileState::Off);
         // the next reading comes from the backend and agrees
         controller.refresh(1.0);
-        assert_eq!((controller.controls().tile(Module::Bluetooth), controller.controls().tile(Module::WiFi)), (TileState::On, TileState::Off));
+        assert_eq!(
+            (
+                controller.controls().tile(Module::Bluetooth),
+                controller.controls().tile(Module::WiFi)
+            ),
+            (TileState::On, TileState::Off)
+        );
     }
 
     #[test]
@@ -319,7 +405,10 @@ mod tests {
         backends.bluetooth = Box::new(Unavailable::new("no adapter"));
         let mut controller = Controller::new(backends);
         controller.toggle(0.0);
-        assert_eq!(controller.controls().tile(Module::Bluetooth), TileState::Disabled("no adapter".into()));
+        assert_eq!(
+            controller.controls().tile(Module::Bluetooth),
+            TileState::Disabled("no adapter".into())
+        );
         assert_eq!(controller.controls().tile(Module::WiFi), TileState::On);
         assert!(!controller.press(Module::Bluetooth));
     }
@@ -340,7 +429,10 @@ mod tests {
         let mut controller = Controller::new(backends);
         controller.toggle(0.0);
         assert!(controller.press(Module::Bluetooth));
-        assert_eq!(controller.controls().tile(Module::Bluetooth), TileState::Disabled("not authorized".into()));
+        assert_eq!(
+            controller.controls().tile(Module::Bluetooth),
+            TileState::Disabled("not authorized".into())
+        );
     }
 
     #[test]
@@ -348,14 +440,29 @@ mod tests {
         let mut log = FailureLog::default();
         let unknown: BackendError = "the name is not activatable".into();
         let refused: BackendError = "access denied".into();
-        assert_eq!(log.record("wi-fi", Err(&unknown)).as_deref(), Some("cupertino-controlcenter: wi-fi: the name is not activatable"));
+        assert_eq!(
+            log.record("wi-fi", Err(&unknown)).as_deref(),
+            Some("cupertino-controlcenter: wi-fi: the name is not activatable")
+        );
         assert_eq!(log.record("wi-fi", Err(&unknown)), None);
         // another backend has its own state
-        assert_eq!(log.record("bluetooth", Err(&unknown)).as_deref(), Some("cupertino-controlcenter: bluetooth: the name is not activatable"));
-        assert_eq!(log.record("wi-fi", Err(&refused)).as_deref(), Some("cupertino-controlcenter: wi-fi: access denied"));
-        assert_eq!(log.record("wi-fi", Ok(())).as_deref(), Some("cupertino-controlcenter: wi-fi: available again"));
+        assert_eq!(
+            log.record("bluetooth", Err(&unknown)).as_deref(),
+            Some("cupertino-controlcenter: bluetooth: the name is not activatable")
+        );
+        assert_eq!(
+            log.record("wi-fi", Err(&refused)).as_deref(),
+            Some("cupertino-controlcenter: wi-fi: access denied")
+        );
+        assert_eq!(
+            log.record("wi-fi", Ok(())).as_deref(),
+            Some("cupertino-controlcenter: wi-fi: available again")
+        );
         assert_eq!(log.record("wi-fi", Ok(())), None);
-        assert_eq!(log.record("wi-fi", Err(&refused)).as_deref(), Some("cupertino-controlcenter: wi-fi: access denied"));
+        assert_eq!(
+            log.record("wi-fi", Err(&refused)).as_deref(),
+            Some("cupertino-controlcenter: wi-fi: access denied")
+        );
     }
 
     #[test]
@@ -383,7 +490,11 @@ mod tests {
         // the model follows at once, the backend only got the first value
         assert_eq!(controller.controls().fraction(Slider::Display), Some(0.6));
         controller.refresh(1.011);
-        assert_eq!(controller.controls().fraction(Slider::Display), Some(0.6), "no refresh during a drag");
+        assert_eq!(
+            controller.controls().fraction(Slider::Display),
+            Some(0.6),
+            "no refresh during a drag"
+        );
         assert!((controller.next_wakeup(1.010).unwrap() - 0.0067).abs() < 1e-9);
         controller.tick(1.02);
         controller.release(1.021);
@@ -400,7 +511,14 @@ mod tests {
         controller.release(2.5);
         controller.slide(3.0, Slider::Sound, 0.0);
         controller.release(3.5);
-        assert_eq!(overlay.shown(), [(OverlayKind::Brightness, 0.75), (OverlayKind::Volume, 0.25), (OverlayKind::Mute, 0.0)]);
+        assert_eq!(
+            overlay.shown(),
+            [
+                (OverlayKind::Brightness, 0.75),
+                (OverlayKind::Volume, 0.25),
+                (OverlayKind::Mute, 0.0)
+            ]
+        );
     }
 
     #[test]
@@ -409,11 +527,23 @@ mod tests {
         controller.slide(1.0, Slider::Sound, 0.0);
         controller.release(1.1);
         controller.refresh(1.2);
-        assert_eq!(controller.controls().volume, Reading::Ready(VolumeState { level: 0.0, muted: true }));
+        assert_eq!(
+            controller.controls().volume,
+            Reading::Ready(VolumeState {
+                level: 0.0,
+                muted: true
+            })
+        );
         controller.slide(2.0, Slider::Sound, 0.5);
         controller.release(2.1);
         controller.refresh(2.2);
-        assert_eq!(controller.controls().volume, Reading::Ready(VolumeState { level: 0.5, muted: false }));
+        assert_eq!(
+            controller.controls().volume,
+            Reading::Ready(VolumeState {
+                level: 0.5,
+                muted: false
+            })
+        );
     }
 
     #[test]
@@ -432,7 +562,10 @@ mod tests {
         let mut controller = Controller::new(backends);
         controller.toggle(0.0);
         controller.slide(1.0, Slider::Display, 0.8);
-        assert_eq!(controller.controls().tile(Module::Display), TileState::Disabled("no backlight".into()));
+        assert_eq!(
+            controller.controls().tile(Module::Display),
+            TileState::Disabled("no backlight".into())
+        );
     }
 
     #[test]

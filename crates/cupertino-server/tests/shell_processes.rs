@@ -11,25 +11,27 @@ use std::sync::mpsc::{channel, Receiver};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use cupertino_input::ScreenshotRequest;
 use cupertino_server::backend::headless;
 use cupertino_server::cli::start_shell_supervision;
 use cupertino_server::config::{Config, ShellProcess};
 use cupertino_server::input::{ActionPlan, ShellOp};
 use cupertino_server::Cupertino;
 use cupertino_theme::Appearance;
-use cupertino_input::ScreenshotRequest;
+use cupertino_wm::Rect;
 use smithay::backend::input::{ButtonState, KeyState};
 use smithay::backend::renderer::utils::with_renderer_surface_state;
-use smithay::utils::{Logical, Rectangle};
-use smithay::input::keyboard::Keycode;
 use smithay::desktop::layer_map_for_output;
-use smithay::wayland::selection::data_device::request_data_device_client_selection;
-use smithay::wayland::shm::{with_buffer_contents, BufferData};
-use cupertino_wm::Rect;
+use smithay::input::keyboard::Keycode;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
+use smithay::utils::{Logical, Rectangle};
+use smithay::wayland::selection::data_device::request_data_device_client_selection;
+use smithay::wayland::shm::{with_buffer_contents, BufferData};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
-use wayland_client::protocol::{wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface};
+use wayland_client::protocol::{
+    wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
@@ -51,8 +53,19 @@ impl Server {
     fn start(procs: Vec<ShellProcess>, offscreen: bool) -> Option<Server> {
         let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().unwrap();
         let display: Display<Cupertino> = Display::new().unwrap();
-        let cfg = Config { shell_processes: procs, ..Config::default() };
-        let mut state = Cupertino::new(display, event_loop.handle(), event_loop.get_signal(), cfg, true, &cupertino_assets::Assets::discover()).unwrap();
+        let cfg = Config {
+            shell_processes: procs,
+            ..Config::default()
+        };
+        let mut state = Cupertino::new(
+            display,
+            event_loop.handle(),
+            event_loop.get_signal(),
+            cfg,
+            true,
+            &cupertino_assets::Assets::discover(),
+        )
+        .unwrap();
         if offscreen {
             if let Err(e) = headless::init(&mut state, OUTPUT, 1.0) {
                 eprintln!("skipping: no EGL device ({e:#})");
@@ -65,7 +78,12 @@ impl Server {
 
     fn step(&mut self) {
         // without the offscreen output this only dispatches the event loop
-        headless::step(&mut self.state, &mut self.event_loop, Duration::from_millis(5)).unwrap();
+        headless::step(
+            &mut self.state,
+            &mut self.event_loop,
+            Duration::from_millis(5),
+        )
+        .unwrap();
     }
 
     /// Step the server until `cond` holds; panics after [`TIMEOUT`].
@@ -108,7 +126,10 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn new(name: &str) -> TempDir {
-        let dir = std::env::temp_dir().join(format!("cupertino-shell-processes-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "cupertino-shell-processes-{name}-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         TempDir(dir)
     }
@@ -126,7 +147,16 @@ impl Drop for TempDir {
 
 /// A stand-in process: `script` runs under `sh` with the log file as `$1`.
 fn stand_in(name: &str, script: &str, log: &Path) -> ShellProcess {
-    ShellProcess { name: name.into(), command: vec!["sh".into(), "-c".into(), script.into(), "sh".into(), log.display().to_string()] }
+    ShellProcess {
+        name: name.into(),
+        command: vec![
+            "sh".into(),
+            "-c".into(),
+            script.into(),
+            "sh".into(),
+            log.display().to_string(),
+        ],
+    }
 }
 
 // ---- supervision -----------------------------------------------------------------------------
@@ -137,7 +167,11 @@ fn every_configured_process_runs_with_the_servers_socket() {
     let dir = TempDir::new("runs");
     let (a, b) = (dir.file("a"), dir.file("b"));
     let script = r#"echo "$WAYLAND_DISPLAY" >> "$1"; exec sleep 60"#;
-    let mut server = Server::start(vec![stand_in("a", script, &a), stand_in("b", script, &b)], false).unwrap();
+    let mut server = Server::start(
+        vec![stand_in("a", script, &a), stand_in("b", script, &b)],
+        false,
+    )
+    .unwrap();
     let socket = server.state.socket_name.clone().unwrap();
     assert_eq!(server.wait_for_lines(&a, 1), vec![socket.clone()]);
     assert_eq!(server.wait_for_lines(&b, 1), vec![socket]);
@@ -153,12 +187,19 @@ fn a_killed_process_is_restarted_after_the_throttle() {
     let before_first_start = Instant::now();
     let mut server = Server::start(vec![stand_in("victim", script, &log)], false).unwrap();
     let first: libc::pid_t = server.wait_for_lines(&log, 1)[0].parse().unwrap();
-    assert_eq!(unsafe { libc::kill(first, libc::SIGKILL) }, 0, "killing the process");
+    assert_eq!(
+        unsafe { libc::kill(first, libc::SIGKILL) },
+        0,
+        "killing the process"
+    );
     let lines = server.wait_for_lines(&log, 2);
     let restarted = before_first_start.elapsed();
     let second: libc::pid_t = lines[1].parse().unwrap();
     assert_ne!(first, second);
-    assert!(restarted >= THROTTLE, "restarted {restarted:?} after the first start, before the throttle of {THROTTLE:?}");
+    assert!(
+        restarted >= THROTTLE,
+        "restarted {restarted:?} after the first start, before the throttle of {THROTTLE:?}"
+    );
 }
 
 /// A process that exits with status 0 stays stopped, while a failing one keeps coming back.
@@ -167,7 +208,10 @@ fn a_process_that_exits_successfully_is_not_restarted() {
     let dir = TempDir::new("success");
     let (done, failing) = (dir.file("done"), dir.file("failing"));
     let mut server = Server::start(
-        vec![stand_in("done", r#"echo run >> "$1""#, &done), stand_in("failing", r#"echo run >> "$1"; exit 1"#, &failing)],
+        vec![
+            stand_in("done", r#"echo run >> "$1""#, &done),
+            stand_in("failing", r#"echo run >> "$1"; exit 1"#, &failing),
+        ],
         false,
     )
     .unwrap();
@@ -211,17 +255,32 @@ struct PrivateBus {
 impl PrivateBus {
     /// `None` when `dbus-daemon` is not installed.
     fn start() -> Option<PrivateBus> {
-        let out = Command::new("dbus-daemon").args(["--session", "--print-address=1", "--print-pid=1", "--fork"]).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+        let out = Command::new("dbus-daemon")
+            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
         assert!(out.status.success(), "dbus-daemon failed: {}", out.status);
         let text = String::from_utf8(out.stdout).unwrap();
         let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-        Some(PrivateBus { address: lines.next().unwrap().to_string(), pid: lines.next().unwrap().to_string() })
+        Some(PrivateBus {
+            address: lines.next().unwrap().to_string(),
+            pid: lines.next().unwrap().to_string(),
+        })
     }
 }
 
 impl Drop for PrivateBus {
     fn drop(&mut self) {
-        assert!(Command::new("kill").arg(&self.pid).status().unwrap().success(), "killing the private bus");
+        assert!(
+            Command::new("kill")
+                .arg(&self.pid)
+                .status()
+                .unwrap()
+                .success(),
+            "killing the private bus"
+        );
     }
 }
 
@@ -229,14 +288,25 @@ impl Drop for PrivateBus {
 /// the supervisor then passes on with `WAYLAND_DISPLAY`.
 fn real_process(binary: &str, bus: &PrivateBus) -> ShellProcess {
     let path = shell_bin_dir().join(binary);
-    ShellProcess { name: binary.into(), command: vec!["env".into(), format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address), path.display().to_string()] }
+    ShellProcess {
+        name: binary.into(),
+        command: vec![
+            "env".into(),
+            format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
+            path.display().to_string(),
+        ],
+    }
 }
 
 /// [`real_process`] that sees no host application data: `XDG_DATA_DIRS`, `XDG_DATA_HOME` and `HOME` point at `empty`, so
 /// it finds no desktop entry and no application icon whatever the host has installed.
 fn real_process_without_host_data(binary: &str, bus: &PrivateBus, empty: &Path) -> ShellProcess {
     let mut process = real_process(binary, bus);
-    let env = [format!("XDG_DATA_DIRS={}", empty.display()), format!("XDG_DATA_HOME={}", empty.display()), format!("HOME={}", empty.display())];
+    let env = [
+        format!("XDG_DATA_DIRS={}", empty.display()),
+        format!("XDG_DATA_HOME={}", empty.display()),
+        format!("HOME={}", empty.display()),
+    ];
     process.command.splice(1..1, env);
     process
 }
@@ -249,7 +319,9 @@ fn spawn_toplevel(socket: PathBuf) {
 /// [`spawn_toplevel`] of the application `app_id`.
 fn spawn_toplevel_of(socket: PathBuf, app_id: &'static str) {
     std::thread::spawn(move || {
-        let conn = Connection::from_socket(std::os::unix::net::UnixStream::connect(socket).unwrap()).unwrap();
+        let conn =
+            Connection::from_socket(std::os::unix::net::UnixStream::connect(socket).unwrap())
+                .unwrap();
         let (globals, mut queue) = registry_queue_init::<Toplevel>(&conn).unwrap();
         let qh = queue.handle();
         let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
@@ -261,7 +333,11 @@ fn spawn_toplevel_of(socket: PathBuf, app_id: &'static str) {
         toplevel.set_app_id(app_id.into());
         toplevel.set_title(app_id.into());
         surface.commit();
-        let mut client = Toplevel { shm, surface, attached: false };
+        let mut client = Toplevel {
+            shm,
+            surface,
+            attached: false,
+        };
         // dispatching ends with an error once the server drops the socket at the end of the test
         while queue.blocking_dispatch(&mut client).is_ok() {}
     });
@@ -274,7 +350,15 @@ struct Toplevel {
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Toplevel {
-    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 macro_rules! ignore_events {
     ($($t:ty),*) => {$(
@@ -283,10 +367,24 @@ macro_rules! ignore_events {
         }
     )*};
 }
-ignore_events!(wl_compositor::WlCompositor, wl_shm::WlShm, wl_shm_pool::WlShmPool, wl_buffer::WlBuffer, wl_surface::WlSurface, xdg_toplevel::XdgToplevel);
+ignore_events!(
+    wl_compositor::WlCompositor,
+    wl_shm::WlShm,
+    wl_shm_pool::WlShmPool,
+    wl_buffer::WlBuffer,
+    wl_surface::WlSurface,
+    xdg_toplevel::XdgToplevel
+);
 
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for Toplevel {
-    fn event(_: &mut Self, base: &xdg_wm_base::XdgWmBase, event: xdg_wm_base::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        _: &mut Self,
+        base: &xdg_wm_base::XdgWmBase,
+        event: xdg_wm_base::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         if let xdg_wm_base::Event::Ping { serial } = event {
             base.pong(serial);
         }
@@ -294,15 +392,26 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for Toplevel {
 }
 
 impl Dispatch<xdg_surface::XdgSurface, ()> for Toplevel {
-    fn event(state: &mut Self, xdg: &xdg_surface::XdgSurface, event: xdg_surface::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        xdg: &xdg_surface::XdgSurface,
+        event: xdg_surface::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
         if let xdg_surface::Event::Configure { serial } = event {
             xdg.ack_configure(serial);
             if !state.attached {
                 state.attached = true;
                 let (w, h) = (300, 200);
-                let fd = rustix::fs::memfd_create("cupertino-test", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
+                let fd =
+                    rustix::fs::memfd_create("cupertino-test", rustix::fs::MemfdFlags::CLOEXEC)
+                        .unwrap();
                 rustix::fs::ftruncate(&fd, (w * h * 4) as u64).unwrap();
-                let pool = state.shm.create_pool(std::os::fd::AsFd::as_fd(&fd), w * h * 4, qh, ());
+                let pool = state
+                    .shm
+                    .create_pool(std::os::fd::AsFd::as_fd(&fd), w * h * 4, qh, ());
                 let buffer = pool.create_buffer(0, w, h, w * 4, wl_shm::Format::Argb8888, qh, ());
                 pool.destroy();
                 state.surface.attach(Some(&buffer), 0, 0);
@@ -320,7 +429,12 @@ fn ask_notification_server(bus: &PrivateBus) -> Receiver<(String, String, String
     let (tx, rx) = channel();
     std::thread::spawn(move || {
         let end = Instant::now() + TIMEOUT;
-        let conn = zbus::block_on(zbus::connection::Builder::address(address.as_str()).unwrap().build()).unwrap();
+        let conn = zbus::block_on(
+            zbus::connection::Builder::address(address.as_str())
+                .unwrap()
+                .build(),
+        )
+        .unwrap();
         loop {
             let reply = zbus::block_on(conn.call_method(
                 Some("org.freedesktop.Notifications"),
@@ -347,28 +461,61 @@ fn the_real_shell_processes_work_with_the_server() {
         eprintln!("skipping: dbus-daemon is not available");
         return;
     };
-    let procs = ["cupertino-dock", "cupertino-menubar", "cupertino-notifications"].map(|b| real_process(b, &bus)).to_vec();
-    let Some(mut server) = Server::start(procs, true) else { return };
-    let output = server.state.outputs.first().expect("the headless output").id;
+    let procs = [
+        "cupertino-dock",
+        "cupertino-menubar",
+        "cupertino-notifications",
+    ]
+    .map(|b| real_process(b, &bus))
+    .to_vec();
+    let Some(mut server) = Server::start(procs, true) else {
+        return;
+    };
+    let output = server
+        .state
+        .outputs
+        .first()
+        .expect("the headless output")
+        .id;
     let answer = ask_notification_server(&bus);
 
     // the dock and the menu bar register on the output, and the usable area makes room for both
-        server.wait_until("the dock and the menu bar to register", |s| s.dock_rect(output).is_some() && s.menu_bars.has_bar(output));
+    server.wait_until("the dock and the menu bar to register", |s| {
+        s.dock_rect(output).is_some() && s.menu_bars.has_bar(output)
+    });
     let bar = server.state.config.shell.menu_bar_height;
-    server.wait_until("the usable area to lose the dock zone", |s| s.usable_area(output).h < f64::from(OUTPUT.1) - bar);
+    server.wait_until("the usable area to lose the dock zone", |s| {
+        s.usable_area(output).h < f64::from(OUTPUT.1) - bar
+    });
     let usable = server.state.usable_area(output);
-    assert_eq!((usable.x, usable.y, usable.w), (0.0, bar, f64::from(OUTPUT.0)));
-    assert!(usable.h > 0.0 && usable.y + usable.h < f64::from(OUTPUT.1), "the dock zone is reserved at the bottom: {usable:?}");
+    assert_eq!(
+        (usable.x, usable.y, usable.w),
+        (0.0, bar, f64::from(OUTPUT.0))
+    );
+    assert!(
+        usable.h > 0.0 && usable.y + usable.h < f64::from(OUTPUT.1),
+        "the dock zone is reserved at the bottom: {usable:?}"
+    );
 
     // the dock process hears about the window: its bar grows by the tile of the new application
     let bar_before = server.state.dock_rect(output).unwrap();
-    spawn_toplevel(PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR")).join(server.state.socket_name.as_ref().unwrap()));
+    spawn_toplevel(
+        PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
+            .join(server.state.socket_name.as_ref().unwrap()),
+    );
     server.wait_until("the window to map", |s| s.wm.windows().count() == 1);
     let window = server.state.wm.windows().next().unwrap().id;
-    server.wait_until("the dock bar to grow", |s| s.dock_rect(output).is_some_and(|r| r.w > bar_before.w));
-    server.wait_until("the dock to set its minimize target", |s| s.minimize_target(window).is_some());
+    server.wait_until("the dock bar to grow", |s| {
+        s.dock_rect(output).is_some_and(|r| r.w > bar_before.w)
+    });
+    server.wait_until("the dock to set its minimize target", |s| {
+        s.minimize_target(window).is_some()
+    });
     let slot: Rect = server.state.minimize_target(window).unwrap();
-    assert!(slot.w > 0.0 && slot.h > 0.0 && slot.y >= usable.y + usable.h, "the slot lies in the dock zone below the usable area: {slot:?}");
+    assert!(
+        slot.w > 0.0 && slot.h > 0.0 && slot.y >= usable.y + usable.h,
+        "the slot lies in the dock zone below the usable area: {slot:?}"
+    );
 
     // the notifications process owns its bus name
     let mut info = None;
@@ -377,7 +524,10 @@ fn the_real_shell_processes_work_with_the_server() {
         info.is_some()
     });
     let (name, vendor, _version, _spec) = info.unwrap();
-    assert_eq!((name.as_str(), vendor.as_str()), ("cupertino-notifications", "Cupertino"));
+    assert_eq!(
+        (name.as_str(), vendor.as_str()),
+        ("cupertino-notifications", "Cupertino")
+    );
 }
 
 #[test]
@@ -390,9 +540,25 @@ fn the_dock_process_applies_a_changed_dock_conf_at_once() {
     let conf = dir.path().join("dock.conf");
     std::fs::write(&conf, "tile_size = 64\n").unwrap();
     let mut dock = real_process("cupertino-dock", &bus);
-    dock.command.splice(1..1, [format!("CUPERTINO_DOCK_CONFIG={}", conf.display()), format!("CUPERTINO_DOCK_PINS={}", dir.path().join("dock-pins").display())]);
-    let Some(mut server) = Server::start(vec![dock], true) else { return };
-    let output = server.state.outputs.first().expect("the headless output").id;
+    dock.command.splice(
+        1..1,
+        [
+            format!("CUPERTINO_DOCK_CONFIG={}", conf.display()),
+            format!(
+                "CUPERTINO_DOCK_PINS={}",
+                dir.path().join("dock-pins").display()
+            ),
+        ],
+    );
+    let Some(mut server) = Server::start(vec![dock], true) else {
+        return;
+    };
+    let output = server
+        .state
+        .outputs
+        .first()
+        .expect("the headless output")
+        .id;
     // the distance from the bottom edge that windows keep clear for the dock
     let zone = move |s: &Cupertino| {
         let u = s.usable_area(output);
@@ -400,21 +566,44 @@ fn the_dock_process_applies_a_changed_dock_conf_at_once() {
     };
     server.wait_until("the dock zone to be reserved", move |s| zone(s) > 0.0);
     let before = zone(&server.state);
-    let height_before = layer_geometry(&server.state, "cupertino-dock").expect("the dock surface").size.h;
+    let height_before = layer_geometry(&server.state, "cupertino-dock")
+        .expect("the dock surface")
+        .size
+        .h;
 
     // the settings application writes atomically; the zone is the tile plus the padding and margin
-    cupertino_defaults::atomic::write_atomic(&conf, b"tile_size = 36\nmagnification = on\n").unwrap();
-    server.wait_until("the dock zone to shrink with the tile size", move |s| zone(s) < before);
-    assert_eq!(before - zone(&server.state), 28.0, "64 pt tiles became 36 pt tiles");
-    server.wait_until("the dock surface to be resized", |s| layer_geometry(s, "cupertino-dock").is_some_and(|g| g.size.h != height_before));
+    cupertino_defaults::atomic::write_atomic(&conf, b"tile_size = 36\nmagnification = on\n")
+        .unwrap();
+    server.wait_until("the dock zone to shrink with the tile size", move |s| {
+        zone(s) < before
+    });
+    assert_eq!(
+        before - zone(&server.state),
+        28.0,
+        "64 pt tiles became 36 pt tiles"
+    );
+    server.wait_until("the dock surface to be resized", |s| {
+        layer_geometry(s, "cupertino-dock").is_some_and(|g| g.size.h != height_before)
+    });
 
     // magnification alone (the path the separator menu's Turn Magnification On takes too) deepens the surface for the
     // 128 pt magnified tiles
     cupertino_defaults::atomic::write_atomic(&conf, b"tile_size = 36\n").unwrap();
-    server.wait_until("magnification to be off", |s| layer_geometry(s, "cupertino-dock").is_some_and(|g| g.size.h < 128));
-    let plain = layer_geometry(&server.state, "cupertino-dock").unwrap().size.h;
-    cupertino_defaults::atomic::write_atomic(&conf, b"tile_size = 36\nmagnification = on\n").unwrap();
-    server.wait_until("the surface to make room for the magnified tiles", move |s| layer_geometry(s, "cupertino-dock").is_some_and(|g| g.size.h > plain && g.size.h >= 128));
+    server.wait_until("magnification to be off", |s| {
+        layer_geometry(s, "cupertino-dock").is_some_and(|g| g.size.h < 128)
+    });
+    let plain = layer_geometry(&server.state, "cupertino-dock")
+        .unwrap()
+        .size
+        .h;
+    cupertino_defaults::atomic::write_atomic(&conf, b"tile_size = 36\nmagnification = on\n")
+        .unwrap();
+    server.wait_until(
+        "the surface to make room for the magnified tiles",
+        move |s| {
+            layer_geometry(s, "cupertino-dock").is_some_and(|g| g.size.h > plain && g.size.h >= 128)
+        },
+    );
 }
 
 /// Brightness (0 to 255) of the strongly opaque pixels, in memory order of an Argb8888 buffer
@@ -424,7 +613,8 @@ fn opaque_brightness(bytes: &[u8], data: &BufferData) -> Vec<u8> {
     for y in 0..data.height as usize {
         for x in 0..data.width as usize {
             let at = data.offset as usize + y * data.stride as usize + x * 4;
-            let [b, g, r, a] = [bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]].map(u64::from);
+            let [b, g, r, a] =
+                [bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]].map(u64::from);
             if a >= 200 {
                 out.push(((b + g + r) * 255 / (3 * a)) as u8);
             }
@@ -464,7 +654,8 @@ fn layer_geometry(state: &Cupertino, namespace: &str) -> Option<Rectangle<i32, L
 fn label_brightness(state: &Cupertino) -> Option<u8> {
     let (bytes, data) = committed_buffer(state, "cupertino-menubar")?;
     let pixels = opaque_brightness(&bytes, &data);
-    (!pixels.is_empty()).then(|| (pixels.iter().map(|&b| u64::from(b)).sum::<u64>() / pixels.len() as u64) as u8)
+    (!pixels.is_empty())
+        .then(|| (pixels.iter().map(|&b| u64::from(b)).sum::<u64>() / pixels.len() as u64) as u8)
 }
 
 /// The menu bar process follows the appearance the server announces: its labels are dark on the light bar and
@@ -475,10 +666,17 @@ fn the_menu_bar_process_draws_its_labels_again_when_the_appearance_changes() {
         eprintln!("skipping: dbus-daemon is not available");
         return;
     };
-    let Some(mut server) = Server::start(vec![real_process("cupertino-menubar", &bus)], true) else { return };
-    server.wait_until("dark labels on the light bar", |s| label_brightness(s).is_some_and(|b| b < 100));
+    let Some(mut server) = Server::start(vec![real_process("cupertino-menubar", &bus)], true)
+    else {
+        return;
+    };
+    server.wait_until("dark labels on the light bar", |s| {
+        label_brightness(s).is_some_and(|b| b < 100)
+    });
     server.state.set_appearance(Appearance::Dark);
-    server.wait_until("light labels on the dark bar", |s| label_brightness(s).is_some_and(|b| b > 155));
+    server.wait_until("light labels on the dark bar", |s| {
+        label_brightness(s).is_some_and(|b| b > 155)
+    });
 }
 
 /// The switcher's panel is the dock process's: after the show delay it commits a panel-sized
@@ -494,18 +692,48 @@ fn the_dock_process_draws_the_switcher_panel_while_the_switch_is_open() {
         return;
     };
     let empty = TempDir::new("switcher-no-host-data");
-    let Some(mut server) = Server::start(vec![real_process_without_host_data("cupertino-dock", &bus, &empty.0), real_process("cupertino-menubar", &bus)], true) else { return };
-    let output = server.state.outputs.first().expect("the headless output").id;
-    server.wait_until("the dock and the menu bar to register", |s| s.dock_rect(output).is_some() && s.menu_bars.has_bar(output));
+    let Some(mut server) = Server::start(
+        vec![
+            real_process_without_host_data("cupertino-dock", &bus, &empty.0),
+            real_process("cupertino-menubar", &bus),
+        ],
+        true,
+    ) else {
+        return;
+    };
+    let output = server
+        .state
+        .outputs
+        .first()
+        .expect("the headless output")
+        .id;
+    server.wait_until("the dock and the menu bar to register", |s| {
+        s.dock_rect(output).is_some() && s.menu_bars.has_bar(output)
+    });
     let bar = server.state.config.shell.menu_bar_height;
-    server.wait_until("the usable area to lose the dock zone", |s| s.usable_area(output).h < f64::from(OUTPUT.1) - bar);
+    server.wait_until("the usable area to lose the dock zone", |s| {
+        s.usable_area(output).h < f64::from(OUTPUT.1) - bar
+    });
     let bar_before = server.state.dock_rect(output).unwrap();
-    spawn_toplevel(PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR")).join(server.state.socket_name.as_ref().unwrap()));
+    spawn_toplevel(
+        PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
+            .join(server.state.socket_name.as_ref().unwrap()),
+    );
     server.wait_until("the window to map", |s| s.wm.windows().count() == 1);
-    server.wait_until("the dock bar to grow", |s| s.dock_rect(output).is_some_and(|r| r.w > bar_before.w));
+    server.wait_until("the dock bar to grow", |s| {
+        s.dock_rect(output).is_some_and(|r| r.w > bar_before.w)
+    });
 
     let key = |server: &mut Server, code: u32, pressed: bool| {
-        server.state.keyboard_event_now(Keycode::new(code), if pressed { KeyState::Pressed } else { KeyState::Released }, 0);
+        server.state.keyboard_event_now(
+            Keycode::new(code),
+            if pressed {
+                KeyState::Pressed
+            } else {
+                KeyState::Released
+            },
+            0,
+        );
         server.step();
     };
     key(&mut server, SUPER, true);
@@ -513,15 +741,22 @@ fn the_dock_process_draws_the_switcher_panel_while_the_switch_is_open() {
     key(&mut server, TAB, false);
     assert!(server.state.wm.switcher().is_some());
     // one application: a 128 pt tile in a 174 × 186 pt panel
-    server.wait_until("the panel to be drawn", |s| committed_buffer(s, "cupertino-dock-switcher").is_some());
+    server.wait_until("the panel to be drawn", |s| {
+        committed_buffer(s, "cupertino-dock-switcher").is_some()
+    });
     let (bytes, data) = committed_buffer(&server.state, "cupertino-dock-switcher").unwrap();
     assert_eq!((data.width, data.height), (174, 186));
     // the output is 1000 × 700 pt: (1000 − 174) / 2 and (700 − 186) / 2
-    assert_eq!(layer_geometry(&server.state, "cupertino-dock-switcher"), Some(Rectangle::new((413, 257).into(), (174, 186).into())));
+    assert_eq!(
+        layer_geometry(&server.state, "cupertino-dock-switcher"),
+        Some(Rectangle::new((413, 257).into(), (174, 186).into()))
+    );
     // the 128 pt tile sits at (23, 29) in the panel; wherever the generic icon (the packs' one, else the opaque
     // placeholder of the built-in fallback) is fully opaque the panel shows it
     let assets = cupertino_assets::Assets::discover();
-    let icon = cupertino_icons::SystemIcons::new(&assets).raster("application.generic", 128).clone();
+    let icon = cupertino_icons::SystemIcons::new(&assets)
+        .raster("application.generic", 128)
+        .clone();
     let (mut opaque, mut same) = (0, 0);
     for (i, p) in icon.pixels().iter().enumerate() {
         if p.alpha() != 255 {
@@ -531,13 +766,27 @@ fn the_dock_process_draws_the_switcher_panel_while_the_switch_is_open() {
         let at = data.offset as usize + y * data.stride as usize + x * 4;
         let drawn = [bytes[at + 2], bytes[at + 1], bytes[at], bytes[at + 3]];
         opaque += 1;
-        same += usize::from(drawn[3] == 255 && drawn.iter().zip([p.red(), p.green(), p.blue(), 255]).all(|(a, b)| a.abs_diff(b) <= 2));
+        same += usize::from(
+            drawn[3] == 255
+                && drawn
+                    .iter()
+                    .zip([p.red(), p.green(), p.blue(), 255])
+                    .all(|(a, b)| a.abs_diff(b) <= 2),
+        );
     }
-    assert!(opaque > 128 * 128 / 4, "the generic icon is mostly opaque, got {opaque} pixels");
-    assert!(same * 100 >= opaque * 98, "the tile shows the generic application icon: {same} of {opaque} opaque pixels match");
+    assert!(
+        opaque > 128 * 128 / 4,
+        "the generic icon is mostly opaque, got {opaque} pixels"
+    );
+    assert!(
+        same * 100 >= opaque * 98,
+        "the tile shows the generic application icon: {same} of {opaque} opaque pixels match"
+    );
 
     key(&mut server, SUPER, false);
-    server.wait_until("the panel to fade out and go", |s| committed_buffer(s, "cupertino-dock-switcher").is_none());
+    server.wait_until("the panel to fade out and go", |s| {
+        committed_buffer(s, "cupertino-dock-switcher").is_none()
+    });
 }
 
 /// The application grid is the dock process's alone: the forwarded action makes it map a keyboard-exclusive overlay
@@ -551,22 +800,58 @@ fn the_dock_process_opens_the_app_grid_on_the_action_and_escape_closes_it() {
         eprintln!("skipping: dbus-daemon is not available");
         return;
     };
-    let Some(mut server) = Server::start(vec![real_process("cupertino-dock", &bus), real_process("cupertino-menubar", &bus)], true) else { return };
-    let output = server.state.outputs.first().expect("the headless output").id;
-    server.wait_until("the dock and the menu bar to register", |s| s.dock_rect(output).is_some() && s.menu_bars.has_bar(output));
+    let Some(mut server) = Server::start(
+        vec![
+            real_process("cupertino-dock", &bus),
+            real_process("cupertino-menubar", &bus),
+        ],
+        true,
+    ) else {
+        return;
+    };
+    let output = server
+        .state
+        .outputs
+        .first()
+        .expect("the headless output")
+        .id;
+    server.wait_until("the dock and the menu bar to register", |s| {
+        s.dock_rect(output).is_some() && s.menu_bars.has_bar(output)
+    });
     let bar = server.state.config.shell.menu_bar_height;
-    server.wait_until("the usable area to lose the dock zone", |s| s.usable_area(output).h < f64::from(OUTPUT.1) - bar);
-    server.state.execute_plan(ActionPlan { commands: Vec::new(), ops: vec![ShellOp::ToggleAppGrid] });
+    server.wait_until("the usable area to lose the dock zone", |s| {
+        s.usable_area(output).h < f64::from(OUTPUT.1) - bar
+    });
+    server.state.execute_plan(ActionPlan {
+        commands: Vec::new(),
+        ops: vec![ShellOp::ToggleAppGrid],
+    });
     // the dots and the search field are drawn whatever the host's desktop entries; the entry fades them in over 0.25 s
-    server.wait_until("the grid to be drawn", |s| committed_buffer(s, GRID).is_some_and(|(bytes, data)| opaque_brightness(&bytes, &data).len() >= 40));
+    server.wait_until("the grid to be drawn", |s| {
+        committed_buffer(s, GRID)
+            .is_some_and(|(bytes, data)| opaque_brightness(&bytes, &data).len() >= 40)
+    });
     let geometry = layer_geometry(&server.state, GRID).expect("the grid is mapped");
-    assert_eq!((geometry.loc.x, geometry.loc.y, geometry.size.w), (0, 30, OUTPUT.0), "the grid starts below the 30 pt top band, full width");
-    assert!(geometry.size.h < OUTPUT.1 - 30, "and stops above the dock bar: {geometry:?}");
-    server.state.keyboard_event_now(Keycode::new(ESCAPE), KeyState::Pressed, 0);
+    assert_eq!(
+        (geometry.loc.x, geometry.loc.y, geometry.size.w),
+        (0, 30, OUTPUT.0),
+        "the grid starts below the 30 pt top band, full width"
+    );
+    assert!(
+        geometry.size.h < OUTPUT.1 - 30,
+        "and stops above the dock bar: {geometry:?}"
+    );
+    server
+        .state
+        .keyboard_event_now(Keycode::new(ESCAPE), KeyState::Pressed, 0);
     server.step();
-    server.state.keyboard_event_now(Keycode::new(ESCAPE), KeyState::Released, 0);
+    server
+        .state
+        .keyboard_event_now(Keycode::new(ESCAPE), KeyState::Released, 0);
     server.step();
-    server.wait_until("the grid to leave and go", |s| committed_buffer(s, GRID).is_none());
+    server.wait_until("the grid to leave and go", |s| {
+        committed_buffer(s, GRID).is_none()
+    });
 }
 
 /// The window manager process with the stage on puts the older of two applications in the strip;
@@ -577,9 +862,17 @@ fn killing_the_window_manager_process_puts_the_windows_back() {
     let (conf, log) = (dir.file("windowmanager.conf"), dir.file("pid"));
     std::fs::write(&conf, "stage = on\n").unwrap();
     let binary = shell_bin_dir().join("cupertino-windowmanager");
-    let script = format!(r#"echo $$ >> "$1"; CUPERTINO_WINDOWMANAGER_CONFIG={} exec {}"#, conf.display(), binary.display());
-    let Some(mut server) = Server::start(vec![stand_in("windowmanager", &script, &log)], true) else { return };
-    let socket = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR")).join(server.state.socket_name.as_ref().unwrap());
+    let script = format!(
+        r#"echo $$ >> "$1"; CUPERTINO_WINDOWMANAGER_CONFIG={} exec {}"#,
+        conf.display(),
+        binary.display()
+    );
+    let Some(mut server) = Server::start(vec![stand_in("windowmanager", &script, &log)], true)
+    else {
+        return;
+    };
+    let socket = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
+        .join(server.state.socket_name.as_ref().unwrap());
     spawn_toplevel_of(socket.clone(), "org.example.editor");
     server.wait_until("the first window to map", |s| s.wm.windows().count() == 1);
     spawn_toplevel_of(socket, "org.example.viewer");
@@ -587,15 +880,28 @@ fn killing_the_window_manager_process_puts_the_windows_back() {
     let mut ids: Vec<_> = server.state.wm.windows().map(|w| w.id).collect();
     ids.sort();
     let (older, newer) = (ids[0], ids[1]);
-    server.wait_until("the older window to go to the strip", |s| s.window_managers.passes_input(older));
-    assert!(!server.state.window_managers.passes_input(newer), "the newest window is on the stage");
+    server.wait_until("the older window to go to the strip", |s| {
+        s.window_managers.passes_input(older)
+    });
+    assert!(
+        !server.state.window_managers.passes_input(newer),
+        "the newest window is on the stage"
+    );
 
     let first: libc::pid_t = server.wait_for_lines(&log, 1)[0].parse().unwrap();
-    assert_eq!(unsafe { libc::kill(first, libc::SIGKILL) }, 0, "killing the window manager");
-    server.wait_until("the windows to be released", |s| !s.window_managers.passes_input(older));
+    assert_eq!(
+        unsafe { libc::kill(first, libc::SIGKILL) },
+        0,
+        "killing the window manager"
+    );
+    server.wait_until("the windows to be released", |s| {
+        !s.window_managers.passes_input(older)
+    });
     let restarted: libc::pid_t = server.wait_for_lines(&log, 2)[1].parse().unwrap();
     assert_ne!(first, restarted);
-    server.wait_until("the restarted process to place the window again", |s| s.window_managers.passes_input(older));
+    server.wait_until("the restarted process to place the window again", |s| {
+        s.window_managers.passes_input(older)
+    });
 }
 
 /// The overview's layout is the dock process's: on the action it maps a keyboard-exclusive overlay surface over the
@@ -608,37 +914,101 @@ fn the_dock_process_lays_out_the_overview_and_its_death_puts_the_windows_back() 
         eprintln!("skipping: dbus-daemon is not available");
         return;
     };
-    let Some(mut server) = Server::start(vec![real_process("cupertino-dock", &bus), real_process("cupertino-menubar", &bus)], true) else { return };
-    let output = server.state.outputs.first().expect("the headless output").id;
-    server.wait_until("the dock and the menu bar to register", |s| s.dock_rect(output).is_some() && s.menu_bars.has_bar(output));
-    let socket = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR")).join(server.state.socket_name.as_ref().unwrap());
+    let Some(mut server) = Server::start(
+        vec![
+            real_process("cupertino-dock", &bus),
+            real_process("cupertino-menubar", &bus),
+        ],
+        true,
+    ) else {
+        return;
+    };
+    let output = server
+        .state
+        .outputs
+        .first()
+        .expect("the headless output")
+        .id;
+    server.wait_until("the dock and the menu bar to register", |s| {
+        s.dock_rect(output).is_some() && s.menu_bars.has_bar(output)
+    });
+    let socket = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
+        .join(server.state.socket_name.as_ref().unwrap());
     spawn_toplevel(socket.clone());
     server.wait_until("the first window to map", |s| s.wm.windows().count() == 1);
     spawn_toplevel(socket);
     server.wait_until("the second window to map", |s| s.wm.windows().count() == 2);
-    let desktop: Vec<(cupertino_wm::WindowId, Rect)> = server.state.wm.windows().map(|w| (w.id, w.geometry())).collect();
+    let desktop: Vec<(cupertino_wm::WindowId, Rect)> = server
+        .state
+        .wm
+        .windows()
+        .map(|w| (w.id, w.geometry()))
+        .collect();
 
-    server.state.execute_plan(ActionPlan { commands: Vec::new(), ops: vec![ShellOp::ToggleOverview] });
+    server.state.execute_plan(ActionPlan {
+        commands: Vec::new(),
+        ops: vec![ShellOp::ToggleOverview],
+    });
     assert!(server.state.shell.overview_open());
-    server.wait_until("the dock to draw the overview chrome", |s| committed_buffer(s, OVERVIEW).is_some());
+    server.wait_until("the dock to draw the overview chrome", |s| {
+        committed_buffer(s, OVERVIEW).is_some()
+    });
     let geometry = layer_geometry(&server.state, OVERVIEW).expect("the overview layer is mapped");
-    assert_eq!((geometry.loc.x, geometry.loc.y, geometry.size.w, geometry.size.h), (0, 0, OUTPUT.0, OUTPUT.1), "the chrome covers the output");
+    assert_eq!(
+        (
+            geometry.loc.x,
+            geometry.loc.y,
+            geometry.size.w,
+            geometry.size.h
+        ),
+        (0, 0, OUTPUT.0, OUTPUT.1),
+        "the chrome covers the output"
+    );
     server.wait_until("every window to get a frame off its desktop one", |s| {
         s.shell.overview.as_ref().is_some_and(|o| {
             let targets = o.targets();
-            targets.len() == 2 && targets.iter().all(|t| desktop.iter().any(|(id, frame)| *id == t.id && *frame != t.frame))
+            targets.len() == 2
+                && targets.iter().all(|t| {
+                    desktop
+                        .iter()
+                        .any(|(id, frame)| *id == t.id && *frame != t.frame)
+                })
         })
     });
     let targets = server.state.shell.overview.as_ref().unwrap().targets();
-    assert!(!targets[0].frame.intersects(&targets[1].frame), "the dock's layout keeps the windows apart: {targets:?}");
+    assert!(
+        !targets[0].frame.intersects(&targets[1].frame),
+        "the dock's layout keeps the windows apart: {targets:?}"
+    );
 
-    let pid = server.state.supervisor.pid_of("cupertino-dock").expect("the dock runs");
-    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) }, 0, "killing the dock");
-    server.wait_until("the dock's death to close the overview", |s| !s.shell.overview_open());
+    let pid = server
+        .state
+        .supervisor
+        .pid_of("cupertino-dock")
+        .expect("the dock runs");
+    assert_eq!(
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) },
+        0,
+        "killing the dock"
+    );
+    server.wait_until("the dock's death to close the overview", |s| {
+        !s.shell.overview_open()
+    });
     server.wait_until("the windows to settle back", |s| s.shell.overview.is_none());
     for (id, frame) in &desktop {
-        let (plan, _) = cupertino_server::render::scene::plan_for(&server.state.wm, server.state.entry(*id).unwrap(), 0.0, server.state.now(), &server.state.fx, server.state.display_options()).expect("drawn on the desktop");
-        assert_eq!(plan.visual, *frame, "window {id:?} is back at its desktop frame");
+        let (plan, _) = cupertino_server::render::scene::plan_for(
+            &server.state.wm,
+            server.state.entry(*id).unwrap(),
+            0.0,
+            server.state.now(),
+            &server.state.fx,
+            server.state.display_options(),
+        )
+        .expect("drawn on the desktop");
+        assert_eq!(
+            plan.visual, *frame,
+            "window {id:?} is back at its desktop frame"
+        );
     }
 }
 
@@ -650,13 +1020,32 @@ fn the_screenshot_action_maps_the_overlay_and_a_drag_writes_a_png_of_the_selecti
     let dir = TempDir::new("screenshot");
     let (conf, shots) = (dir.file("screenshot.conf"), dir.file("shots"));
     // without the thumbnail the file is written on release instead of five seconds later
-    std::fs::write(&conf, format!("location = {}\nshow-thumbnail = false\n", shots.display())).unwrap();
-    let Some(mut server) = Server::start(Vec::new(), true) else { return };
+    std::fs::write(
+        &conf,
+        format!("location = {}\nshow-thumbnail = false\n", shots.display()),
+    )
+    .unwrap();
+    let Some(mut server) = Server::start(Vec::new(), true) else {
+        return;
+    };
     let binary = shell_bin_dir().join("cupertino-screenshot");
-    server.state.config.screenshot_command = vec!["env".into(), format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()), binary.display().to_string()];
-    server.state.execute_plan(ActionPlan { commands: Vec::new(), ops: vec![ShellOp::Screenshot(ScreenshotRequest::Selection)] });
-    server.wait_until("the overlay to be drawn", |s| committed_buffer(s, "cupertino-screenshot").is_some());
-    assert_eq!(layer_geometry(&server.state, "cupertino-screenshot"), Some(Rectangle::new((0, 0).into(), OUTPUT.into())), "the overlay covers the output");
+    server.state.config.screenshot_command = vec![
+        "env".into(),
+        format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
+        binary.display().to_string(),
+    ];
+    server.state.execute_plan(ActionPlan {
+        commands: Vec::new(),
+        ops: vec![ShellOp::Screenshot(ScreenshotRequest::Selection)],
+    });
+    server.wait_until("the overlay to be drawn", |s| {
+        committed_buffer(s, "cupertino-screenshot").is_some()
+    });
+    assert_eq!(
+        layer_geometry(&server.state, "cupertino-screenshot"),
+        Some(Rectangle::new((0, 0).into(), OUTPUT.into())),
+        "the overlay covers the output"
+    );
 
     let mut time = 0;
     let mut move_to = |server: &mut Server, x: f64, y: f64| {
@@ -665,18 +1054,32 @@ fn the_screenshot_action_maps_the_overlay_and_a_drag_writes_a_png_of_the_selecti
         server.step();
     };
     move_to(&mut server, 100.0, 100.0);
-    server.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 20);
+    server
+        .state
+        .pointer_button(BTN_LEFT, ButtonState::Pressed, 20);
     server.step();
     move_to(&mut server, 200.0, 180.0);
     move_to(&mut server, 300.0, 250.0);
-    server.state.pointer_button(BTN_LEFT, ButtonState::Released, 50);
-    server.wait_until("the overlay to go", |s| committed_buffer(s, "cupertino-screenshot").is_none());
+    server
+        .state
+        .pointer_button(BTN_LEFT, ButtonState::Released, 50);
+    server.wait_until("the overlay to go", |s| {
+        committed_buffer(s, "cupertino-screenshot").is_none()
+    });
 
-    let png = |dir: &Path| -> Option<PathBuf> { std::fs::read_dir(dir).ok()?.map(|e| e.unwrap().path()).find(|p| p.extension().is_some_and(|e| e == "png")) };
+    let png = |dir: &Path| -> Option<PathBuf> {
+        std::fs::read_dir(dir)
+            .ok()?
+            .map(|e| e.unwrap().path())
+            .find(|p| p.extension().is_some_and(|e| e == "png"))
+    };
     server.wait_until("the PNG to be written", |_| png(&shots).is_some());
     let file = png(&shots).unwrap();
     let name = file.file_name().unwrap().to_str().unwrap().to_string();
-    assert!(name.starts_with("Screenshot ") && name.contains(" at "), "named after the date and time: {name}");
+    assert!(
+        name.starts_with("Screenshot ") && name.contains(" at "),
+        "named after the date and time: {name}"
+    );
     // the PNG header: width and height are the big-endian words at bytes 16 and 20; the output's scale is 1
     let bytes = std::fs::read(&file).unwrap();
     let word = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
@@ -690,24 +1093,60 @@ fn the_screenshot_toolbar_sits_at_the_bottom_and_return_captures_the_screen() {
     const ENTER: u32 = 28 + 8;
     let dir = TempDir::new("screenshot-toolbar");
     let (conf, shots) = (dir.file("screenshot.conf"), dir.file("shots"));
-    std::fs::write(&conf, format!("location = {}\nshow-thumbnail = false\nmode = screen\n", shots.display())).unwrap();
-    let Some(mut server) = Server::start(Vec::new(), true) else { return };
+    std::fs::write(
+        &conf,
+        format!(
+            "location = {}\nshow-thumbnail = false\nmode = screen\n",
+            shots.display()
+        ),
+    )
+    .unwrap();
+    let Some(mut server) = Server::start(Vec::new(), true) else {
+        return;
+    };
     let binary = shell_bin_dir().join("cupertino-screenshot");
-    server.state.config.screenshot_command = vec!["env".into(), format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()), binary.display().to_string()];
-    server.state.execute_plan(ActionPlan { commands: Vec::new(), ops: vec![ShellOp::Screenshot(ScreenshotRequest::Toolbar)] });
+    server.state.config.screenshot_command = vec![
+        "env".into(),
+        format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
+        binary.display().to_string(),
+    ];
+    server.state.execute_plan(ActionPlan {
+        commands: Vec::new(),
+        ops: vec![ShellOp::Screenshot(ScreenshotRequest::Toolbar)],
+    });
     let toolbar = |s: &Cupertino| {
         let map = layer_map_for_output(&s.outputs.first()?.output);
-        let geometries: Vec<_> = map.layers().filter(|l| l.namespace() == "cupertino-screenshot").filter_map(|l| map.layer_geometry(l)).collect();
-        geometries.into_iter().find(|g| g.size.w > 0 && g.size.w != OUTPUT.0)
+        let geometries: Vec<_> = map
+            .layers()
+            .filter(|l| l.namespace() == "cupertino-screenshot")
+            .filter_map(|l| map.layer_geometry(l))
+            .collect();
+        geometries
+            .into_iter()
+            .find(|g| g.size.w > 0 && g.size.w != OUTPUT.0)
     };
     server.wait_until("the toolbar to map", |s| toolbar(s).is_some());
     // (1000 − 628) / 2 and 700 − 12 − 104
-    assert_eq!(toolbar(&server.state), Some(Rectangle::new((186, 584).into(), (628, 104).into())));
-    server.wait_until("the overlay to take the keyboard", |s| s.seat.get_keyboard().unwrap().current_focus().is_some());
-    server.state.keyboard_event_now(Keycode::new(ENTER), KeyState::Pressed, 0);
+    assert_eq!(
+        toolbar(&server.state),
+        Some(Rectangle::new((186, 584).into(), (628, 104).into()))
+    );
+    server.wait_until("the overlay to take the keyboard", |s| {
+        s.seat.get_keyboard().unwrap().current_focus().is_some()
+    });
+    server
+        .state
+        .keyboard_event_now(Keycode::new(ENTER), KeyState::Pressed, 0);
     server.step();
-    server.state.keyboard_event_now(Keycode::new(ENTER), KeyState::Released, 0);
-    let png = |dir: &Path| -> Option<PathBuf> { std::fs::read_dir(dir).ok()?.map(|e| e.unwrap().path()).find(|p| p.extension().is_some_and(|e| e == "png")) };
+    server
+        .state
+        .keyboard_event_now(Keycode::new(ENTER), KeyState::Released, 0);
+    let png = |dir: &Path| -> Option<PathBuf> {
+        std::fs::read_dir(dir)
+            .ok()?
+            .map(|e| e.unwrap().path())
+            .find(|p| p.extension().is_some_and(|e| e == "png"))
+    };
     server.wait_until("the PNG to be written", |_| png(&shots).is_some());
     let bytes = std::fs::read(png(&shots).unwrap()).unwrap();
     let word = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
@@ -721,15 +1160,25 @@ fn the_clipboard_screenshot_offers_a_png_of_the_output() {
     let dir = TempDir::new("screenshot-clipboard");
     let conf = dir.file("screenshot.conf");
     std::fs::write(&conf, "show-thumbnail = false\n").unwrap();
-    let Some(mut server) = Server::start(Vec::new(), true) else { return };
+    let Some(mut server) = Server::start(Vec::new(), true) else {
+        return;
+    };
     let binary = shell_bin_dir().join("cupertino-screenshot");
-    server.state.config.screenshot_command = vec!["env".into(), format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()), binary.display().to_string()];
-    server.state.execute_plan(ActionPlan { commands: Vec::new(), ops: vec![ShellOp::Screenshot(ScreenshotRequest::ScreenToClipboard)] });
+    server.state.config.screenshot_command = vec![
+        "env".into(),
+        format!("CUPERTINO_SCREENSHOT_CONFIG={}", conf.display()),
+        binary.display().to_string(),
+    ];
+    server.state.execute_plan(ActionPlan {
+        commands: Vec::new(),
+        ops: vec![ShellOp::Screenshot(ScreenshotRequest::ScreenToClipboard)],
+    });
     // the paste is read on a thread while the server forwards it from the process
     let (tx, rx) = channel();
     server.wait_until("the selection to be offered", |s| {
         let (mut reader, writer) = std::io::pipe().unwrap();
-        if request_data_device_client_selection(&s.seat, "image/png".into(), writer.into()).is_err() {
+        if request_data_device_client_selection(&s.seat, "image/png".into(), writer.into()).is_err()
+        {
             return false;
         }
         let tx = tx.clone();

@@ -6,23 +6,26 @@
 use std::error::Error;
 
 use cupertino_assets::Assets;
-use cupertino_client::{Backdrop, Button, Client, Event, Modifiers as KeyModifiers, PointerEvent, SurfaceId, TitlebarStyle, ToplevelConfig};
+use cupertino_client::{
+    Backdrop, Button, Client, Event, Modifiers as KeyModifiers, PointerEvent, SurfaceId,
+    TitlebarStyle, ToplevelConfig,
+};
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_geometry::Rect as PopupRect;
+use cupertino_settings::agent::{Agent, AgentEvent};
 use cupertino_settings::controls::{self, Control, Press, Value};
 use cupertino_settings::form::{self, RowSpec, SectionLayout, SectionSpec};
 use cupertino_settings::history::History;
 use cupertino_settings::instance;
-use cupertino_settings::live::Live;
-use cupertino_settings::panes::{self, Call, ControlId, Effect, Section, Session};
-use cupertino_settings::services::Services;
-use cupertino_settings::agent::{Agent, AgentEvent};
-use cupertino_settings::sheet::{Answer, Outcome, Sheet, SheetKey};
-use cupertino_settings::settings::{Paths, Settings};
 use cupertino_settings::keys::{self, Action, Focus, Mods, SearchKey};
-use cupertino_settings::paint::{menu_rows, popup_hit, PaneView, Painter, Palette, WindowState};
+use cupertino_settings::live::Live;
+use cupertino_settings::paint::{menu_rows, popup_hit, Painter, Palette, PaneView, WindowState};
+use cupertino_settings::panes::{self, Call, ControlId, Effect, Section, Session};
 use cupertino_settings::search::{popup, SearchField};
+use cupertino_settings::services::Services;
+use cupertino_settings::settings::{Paths, Settings};
+use cupertino_settings::sheet::{Answer, Outcome, Sheet, SheetKey};
 use cupertino_settings::sidebar::{self, RowSize};
 use cupertino_settings::window::{self, metrics, Hit, WindowLayout};
 use cupertino_settings::{PaneId, Point, Size};
@@ -174,9 +177,16 @@ pub fn run(pane: PaneId) -> Result<()> {
         }
     });
     let to_loop = notify.clone();
-    let instance = match instance::serve(zbus::connection::Builder::session()?, move |pane| to_loop(Background::ShowPane(pane))) {
+    let instance = match instance::serve(zbus::connection::Builder::session()?, move |pane| {
+        to_loop(Background::ShowPane(pane))
+    }) {
         Ok(connection) => connection,
-        Err(zbus::Error::NameTaken) => return Ok(instance::show(zbus::connection::Builder::session()?, pane.key())?),
+        Err(zbus::Error::NameTaken) => {
+            return Ok(instance::show(
+                zbus::connection::Builder::session()?,
+                pane.key(),
+            )?)
+        }
         Err(e) => return Err(format!("cannot claim {}: {e}", instance::BUS_NAME).into()),
     };
     let assets = Assets::discover();
@@ -196,11 +206,26 @@ pub fn run(pane: PaneId) -> Result<()> {
     let sidebar = client.backdrop(window)?;
     sidebar.set_material(SIDEBAR_MATERIAL);
     // the dock's default tile size depends on the height of the display it sits on
-    let display_height = client.outputs().into_iter().find_map(|o| o.geometry.map(|g| f64::from(g.height))).ok_or("the server has no output")?;
+    let display_height = client
+        .outputs()
+        .into_iter()
+        .find_map(|o| o.geometry.map(|g| f64::from(g.height)))
+        .ok_or("the server has no output")?;
     let paths = Paths::from_env();
     let settings = Settings::load(&paths, display_height)?;
     // another writer's change shows at once (the dock's menu, the server, an editor); a commit re-reads the files anyway
-    let files: Vec<std::path::PathBuf> = [&paths.dock, &paths.compositor, &paths.menubar, &paths.keyboard, &paths.power, &paths.accessibility].into_iter().flatten().cloned().collect();
+    let files: Vec<std::path::PathBuf> = [
+        &paths.dock,
+        &paths.compositor,
+        &paths.menubar,
+        &paths.keyboard,
+        &paths.power,
+        &paths.accessibility,
+    ]
+    .into_iter()
+    .flatten()
+    .cloned()
+    .collect();
     let to_loop = notify.clone();
     let files = match ConfigWatcher::new(files, move |event| to_loop(Background::Files(event))) {
         Ok(w) => Some(w),
@@ -273,14 +298,32 @@ impl App {
         match event {
             // a draw follows every configure and scale change
             Event::Configured { .. } | Event::ScaleChanged { .. } => {}
-            Event::Draw(surface) if Some(surface) == self.results.as_ref().map(|r| r.surface) => self.draw_results()?,
-            Event::Draw(surface) if Some(surface) == self.menu.as_ref().map(|m| m.surface) => self.draw_menu()?,
+            Event::Draw(surface) if Some(surface) == self.results.as_ref().map(|r| r.surface) => {
+                self.draw_results()?
+            }
+            Event::Draw(surface) if Some(surface) == self.menu.as_ref().map(|m| m.surface) => {
+                self.draw_menu()?
+            }
             Event::Draw(_) => self.draw()?,
             Event::Closed(_) => return Ok(false),
-            Event::Pointer { surface, event } if Some(surface) == self.results.as_ref().map(|r| r.surface) => self.results_pointer(event)?,
-            Event::Pointer { surface, event } if Some(surface) == self.menu.as_ref().map(|m| m.surface) => self.menu_pointer(event)?,
+            Event::Pointer { surface, event }
+                if Some(surface) == self.results.as_ref().map(|r| r.surface) =>
+            {
+                self.results_pointer(event)?
+            }
+            Event::Pointer { surface, event }
+                if Some(surface) == self.menu.as_ref().map(|m| m.surface) =>
+            {
+                self.menu_pointer(event)?
+            }
             Event::Pointer { event, .. } => self.pointer(event)?,
-            Event::Key { key, pressed: true, mods, character, .. } => self.key(key, mods, character)?,
+            Event::Key {
+                key,
+                pressed: true,
+                mods,
+                character,
+                ..
+            } => self.key(key, mods, character)?,
             Event::Key { .. } | Event::KeyboardLeave(_) => {}
             Event::Appearance { dark } => {
                 self.dark = dark;
@@ -306,7 +349,11 @@ impl App {
                 }
             }
             Event::OutputsChanged | Event::SessionLock { .. } | Event::ActivationToken { .. } => {}
-            Event::MenuBar { .. } | Event::Dock { .. } => return Err("an event for a menu bar or dock arrived, and this process has none".into()),
+            Event::MenuBar { .. } | Event::Dock { .. } => {
+                return Err(
+                    "an event for a menu bar or dock arrived, and this process has none".into(),
+                )
+            }
         }
         Ok(true)
     }
@@ -324,7 +371,8 @@ impl App {
                 due = due.min(t);
             }
         }
-        std::time::Duration::from_secs_f64((due - now).clamp(0.0, REFRESH)) + std::time::Duration::from_millis(1)
+        std::time::Duration::from_secs_f64((due - now).clamp(0.0, REFRESH))
+            + std::time::Duration::from_millis(1)
     }
 
     /// Run what is due: the level slider's waiting write, the refresh of the live readings, the Wi-Fi scan.
@@ -352,7 +400,9 @@ impl App {
     fn refresh(&mut self, now: f64) -> Result<()> {
         self.refreshed = now;
         let before = self.live.clone();
-        if self.content_pane == PaneId::Battery || self.live.battery == cupertino_settings::live::Reading::Unknown {
+        if self.content_pane == PaneId::Battery
+            || self.live.battery == cupertino_settings::live::Reading::Unknown
+        {
             self.live.battery = self.services.battery();
         }
         match self.content_pane {
@@ -370,7 +420,11 @@ impl App {
             PaneId::Wifi | PaneId::Network => {
                 let keep = self.live.wifi.ready().cloned();
                 self.live.wifi = self.services.wifi(keep.as_ref());
-                let radio_on = self.live.wifi.ready().is_some_and(|w| w.enabled && w.has_wifi_device());
+                let radio_on = self
+                    .live
+                    .wifi
+                    .ready()
+                    .is_some_and(|w| w.enabled && w.has_wifi_device());
                 if self.content_pane == PaneId::Wifi && radio_on && now - self.scanned >= SCAN {
                     self.scanned = now;
                     if let Err(e) = self.services.scan() {
@@ -402,7 +456,9 @@ impl App {
         self.refresh(self.now())?;
         if to == PaneId::Bluetooth && self.live.bluetooth.ready().is_some_and(|b| b.available) {
             let notify = self.notify.clone();
-            match self.services.register_agent(Agent { on_event: Box::new(move |event| notify(Background::Agent(event))) }) {
+            match self.services.register_agent(Agent {
+                on_event: Box::new(move |event| notify(Background::Agent(event))),
+            }) {
                 Ok(ours) => {
                     self.agent_registered = ours;
                     if let cupertino_settings::live::Reading::Ready(b) = &mut self.live.bluetooth {
@@ -447,12 +503,22 @@ impl App {
     fn draw(&mut self) -> Result<()> {
         let (width, height) = self.client.size(self.window)?;
         let active = self.client.toplevel_activated(self.window)?;
-        let layout = WindowLayout::new(Size { w: f64::from(width), h: f64::from(height) }, WIDTH_FACTOR, RowSize::default(), &self.groups, self.history.can_go_back() || self.history.can_go_forward());
+        let layout = WindowLayout::new(
+            Size {
+                w: f64::from(width),
+                h: f64::from(height),
+            },
+            WIDTH_FACTOR,
+            RowSize::default(),
+            &self.groups,
+            self.history.can_go_back() || self.history.can_go_forward(),
+        );
         // the material covers the sidebar column at the window's full height; a shape has one radius, the window's, so
         // the outer corners match the window and the inner ones lie under the opaque content
         let radius = WindowCornerSize::Regular.radius_pt();
         let s = layout.sidebar;
-        self.sidebar.set_shape(&PopupRect::new(s.x, s.y, s.w + radius, s.h), radius)?;
+        self.sidebar
+            .set_shape(&PopupRect::new(s.x, s.y, s.w + radius, s.h), radius)?;
         // another pane starts at its top
         if self.content_pane != self.history.current() {
             let from = self.content_pane;
@@ -468,20 +534,68 @@ impl App {
         let sections = self.sections();
         let specs: Vec<SectionSpec<'_>> = sections
             .iter()
-            .map(|sec| SectionSpec { header: sec.header.is_some(), rows: sec.rows.iter().map(|r| RowSpec { control: &r.control, error: r.error.is_some() || r.disabled.is_some() }).collect(), footer: sec.footer.is_some() })
+            .map(|sec| SectionSpec {
+                header: sec.header.is_some(),
+                rows: sec
+                    .rows
+                    .iter()
+                    .map(|r| RowSpec {
+                        control: &r.control,
+                        error: r.error.is_some() || r.disabled.is_some(),
+                    })
+                    .collect(),
+                footer: sec.footer.is_some(),
+            })
             .collect();
-        let (form, form_height) = form::layout(&specs, layout.content.x, layout.content.w, layout.content.y);
-        self.scroll = self.scroll.clamp(0.0, (form_height - layout.content.h).max(0.0));
-        let dragging = self.drag.map(|d| (d.section, d.row, d.shown)).or(self.level.as_ref().map(|l| (l.0, l.1, l.2)));
+        let (form, form_height) =
+            form::layout(&specs, layout.content.x, layout.content.w, layout.content.y);
+        self.scroll = self
+            .scroll
+            .clamp(0.0, (form_height - layout.content.h).max(0.0));
+        let dragging = self
+            .drag
+            .map(|d| (d.section, d.row, d.shown))
+            .or(self.level.as_ref().map(|l| (l.0, l.1, l.2)));
         let has_battery = self.live.has_battery();
-        let App { client, window, painter, palette, history, search, focus, showing, scroll, sheet, .. } = self;
-        let state = WindowState { selected: *showing, has_battery, active, history, search, search_focused: *focus == Focus::Search };
-        let view = PaneView { sections: &sections, layout: &form, scroll: *scroll, dragging };
+        let App {
+            client,
+            window,
+            painter,
+            palette,
+            history,
+            search,
+            focus,
+            showing,
+            scroll,
+            sheet,
+            ..
+        } = self;
+        let state = WindowState {
+            selected: *showing,
+            has_battery,
+            active,
+            history,
+            search,
+            search_focused: *focus == Focus::Search,
+        };
+        let view = PaneView {
+            sections: &sections,
+            layout: &form,
+            scroll: *scroll,
+            dragging,
+        };
         let content = layout.content;
         client.draw(*window, |pm, scale| {
             painter.paint_window(pm, scale.factor(), &layout, &state, &view, palette);
             if let Some(sheet) = sheet.as_ref() {
-                painter.paint_sheet(pm, scale.factor(), sheet, &sheet.layout(&content), &content, palette);
+                painter.paint_sheet(
+                    pm,
+                    scale.factor(),
+                    sheet,
+                    &sheet.layout(&content),
+                    &content,
+                    palette,
+                );
             }
         })?;
         self.layout = Some(layout);
@@ -491,11 +605,22 @@ impl App {
     }
 
     fn draw_results(&mut self) -> Result<()> {
-        let Some(r) = &self.results else { return Ok(()) };
+        let Some(r) = &self.results else {
+            return Ok(());
+        };
         let rows = popup::rows(self.search.results().len(), r.size.0, RowSize::default());
-        let App { client, painter, palette, search, results, .. } = self;
+        let App {
+            client,
+            painter,
+            palette,
+            search,
+            results,
+            ..
+        } = self;
         let r = results.as_ref().expect("checked above");
-        client.draw(r.surface, |pm, scale| painter.paint_popup(pm, scale.factor(), search, &rows, r.hovered, palette))?;
+        client.draw(r.surface, |pm, scale| {
+            painter.paint_popup(pm, scale.factor(), search, &rows, r.hovered, palette)
+        })?;
         Ok(())
     }
 
@@ -508,22 +633,42 @@ impl App {
     fn show_current(&mut self) -> Result<()> {
         let pane = self.history.current();
         self.showing = pane;
-        self.client.set_title(self.window, pane.title(self.live.has_battery()))?;
+        self.client
+            .set_title(self.window, pane.title(self.live.has_battery()))?;
         self.client.request_redraw(self.window)?;
         Ok(())
     }
 
     fn pointer(&mut self, event: PointerEvent) -> Result<()> {
-        let Some(layout) = &self.layout else { return Ok(()) };
+        let Some(layout) = &self.layout else {
+            return Ok(());
+        };
         match event {
-            PointerEvent::Button { button: Button::Left, pressed: true, position } if self.sheet.is_some() => {
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: true,
+                position,
+            } if self.sheet.is_some() => {
                 let sheet = self.sheet.as_mut().expect("checked by the guard");
                 let l = sheet.layout(&layout.content);
-                let outcome = sheet.press(&l, Point { x: position.x, y: position.y });
+                let outcome = sheet.press(
+                    &l,
+                    Point {
+                        x: position.x,
+                        y: position.y,
+                    },
+                );
                 self.sheet_outcome(outcome)?;
             }
-            PointerEvent::Button { button: Button::Left, pressed: true, position } => {
-                let p = Point { x: position.x, y: position.y };
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: true,
+                position,
+            } => {
+                let p = Point {
+                    x: position.x,
+                    y: position.y,
+                };
                 match layout.hit(p) {
                     Hit::Back => {
                         if self.history.back().is_some() {
@@ -551,8 +696,11 @@ impl App {
                 }
             }
             PointerEvent::Motion(position) if self.level.is_some() => {
-                let (section, row, _, mut writer) = self.level.take().expect("checked by the guard");
-                let frame = self.form[section].rows[row].control.offset(0.0, -self.scroll);
+                let (section, row, _, mut writer) =
+                    self.level.take().expect("checked by the guard");
+                let frame = self.form[section].rows[row]
+                    .control
+                    .offset(0.0, -self.scroll);
                 let v = controls::level_value(&frame, position.x);
                 let write = writer.moved(v, self.now());
                 self.level = Some((section, row, v, writer));
@@ -561,32 +709,59 @@ impl App {
                 }
                 self.client.request_redraw(self.window)?;
             }
-            PointerEvent::Button { button: Button::Left, pressed: false, .. } if self.level.is_some() => {
-                let (section, row, shown, mut writer) = self.level.take().expect("checked by the guard");
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: false,
+                ..
+            } if self.level.is_some() => {
+                let (section, row, shown, mut writer) =
+                    self.level.take().expect("checked by the guard");
                 let v = writer.released(shown);
                 self.level_write(section, row, v)?;
             }
             PointerEvent::Motion(position) => {
                 if let Some(mut d) = self.drag {
-                    let (Control::Slider { stops, .. }, frame) = self.control_at(d.section, d.row) else { unreachable!("a drag is on a slider") };
+                    let (Control::Slider { stops, .. }, frame) = self.control_at(d.section, d.row)
+                    else {
+                        unreachable!("a drag is on a slider")
+                    };
                     d.shown = controls::drag(stops, &frame, position.x);
                     self.drag = Some(d);
                     self.client.request_redraw(self.window)?;
                 }
             }
-            PointerEvent::Scroll { dy, position, .. } if layout.content.contains(Point { x: position.x, y: position.y }) => {
-                self.scroll = (self.scroll + dy).clamp(0.0, (self.form_height - layout.content.h).max(0.0));
+            PointerEvent::Scroll { dy, position, .. }
+                if layout.content.contains(Point {
+                    x: position.x,
+                    y: position.y,
+                }) =>
+            {
+                self.scroll =
+                    (self.scroll + dy).clamp(0.0, (self.form_height - layout.content.h).max(0.0));
                 self.client.request_redraw(self.window)?;
             }
-            PointerEvent::Button { button: Button::Left, pressed: false, .. } if self.drag.is_some() => {
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: false,
+                ..
+            } if self.drag.is_some() => {
                 let d = self.drag.take().expect("checked by the guard");
-                let (Control::Slider { stops, .. }, _) = self.control_at(d.section, d.row) else { unreachable!("a drag is on a slider") };
+                let (Control::Slider { stops, .. }, _) = self.control_at(d.section, d.row) else {
+                    unreachable!("a drag is on a slider")
+                };
                 let id = self.sections()[d.section].rows[d.row].id;
                 self.commit(id, controls::release(stops, d.shown))?;
             }
-            PointerEvent::Button { button: Button::Left, pressed: false, position } => {
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: false,
+                position,
+            } => {
                 if let Some(pane) = self.pressed_row.take() {
-                    match layout.hit(Point { x: position.x, y: position.y }) {
+                    match layout.hit(Point {
+                        x: position.x,
+                        y: position.y,
+                    }) {
                         Hit::Row(over) if over == pane => self.go(pane)?,
                         // released elsewhere: the selection goes back to the current pane
                         _ => self.show_current()?,
@@ -602,7 +777,9 @@ impl App {
     fn press_titlebar(&mut self) -> Result<()> {
         let now = std::time::Instant::now();
         // the double-click interval (default 0.5 s, the pointer settings of)
-        let double = self.last_titlebar_press.is_some_and(|last| now.duration_since(last).as_secs_f64() <= 0.5);
+        let double = self
+            .last_titlebar_press
+            .is_some_and(|last| now.duration_since(last).as_secs_f64() <= 0.5);
         self.last_titlebar_press = (!double).then_some(now);
         if double {
             self.client.toplevel_toggle_maximized(self.window)?;
@@ -634,7 +811,12 @@ impl App {
             let outcome = sheet.key(key);
             return self.sheet_outcome(outcome);
         }
-        let mods = Mods { logo: mods.logo, shift: mods.shift, ctrl: mods.ctrl, alt: mods.alt };
+        let mods = Mods {
+            logo: mods.logo,
+            shift: mods.shift,
+            ctrl: mods.ctrl,
+            alt: mods.alt,
+        };
         match keys::route(self.focus, code, mods, character) {
             Action::Back => {
                 if self.history.back().is_some() {
@@ -664,7 +846,10 @@ impl App {
     /// The row `step` rows from the current one, within the sidebar.
     fn step_row(&mut self, step: isize) -> Result<()> {
         let rows = sidebar::rows();
-        let i = rows.iter().position(|p| *p == self.history.current()).expect("the current pane is a row");
+        let i = rows
+            .iter()
+            .position(|p| *p == self.history.current())
+            .expect("the current pane is a row");
         let to = i.saturating_add_signed(step).min(rows.len() - 1);
         self.go(rows[to])
     }
@@ -692,8 +877,14 @@ impl App {
         if !self.search.is_open() {
             return self.close_results();
         }
-        let Some(layout) = &self.layout else { return Ok(()) };
-        let size = popup::size(WIDTH_FACTOR, self.search.results().len(), RowSize::default());
+        let Some(layout) = &self.layout else {
+            return Ok(());
+        };
+        let size = popup::size(
+            WIDTH_FACTOR,
+            self.search.results().len(),
+            RowSize::default(),
+        );
         // pinned under the search field, left edges aligned (approximate, §5)
         let rect = PopupRect::new(layout.search.x, layout.search.bottom(), size.0, size.1);
         match &mut self.results {
@@ -701,14 +892,20 @@ impl App {
             Some(r) => {
                 r.size = size;
                 self.client.reposition_popup(r.surface, &rect)?;
-                r.backdrop.set_shape(&PopupRect::new(0.0, 0.0, size.0, size.1), popup::RADIUS)?;
+                r.backdrop
+                    .set_shape(&PopupRect::new(0.0, 0.0, size.0, size.1), popup::RADIUS)?;
             }
             None => {
                 let surface = self.client.popup(self.window, &rect)?;
                 let backdrop = self.client.backdrop(surface)?;
                 backdrop.set_material(POPUP_MATERIAL);
                 backdrop.set_shape(&PopupRect::new(0.0, 0.0, size.0, size.1), popup::RADIUS)?;
-                self.results = Some(Results { surface, backdrop, size, hovered: None });
+                self.results = Some(Results {
+                    surface,
+                    backdrop,
+                    size,
+                    hovered: None,
+                });
             }
         }
         Ok(())
@@ -723,7 +920,9 @@ impl App {
     }
 
     fn results_pointer(&mut self, event: PointerEvent) -> Result<()> {
-        let Some(r) = &mut self.results else { return Ok(()) };
+        let Some(r) = &mut self.results else {
+            return Ok(());
+        };
         let rows = popup::rows(self.search.results().len(), r.size.0, RowSize::default());
         match event {
             PointerEvent::Motion(p) | PointerEvent::Enter(p) => {
@@ -737,7 +936,11 @@ impl App {
                 r.hovered = None;
                 self.client.request_redraw(r.surface)?;
             }
-            PointerEvent::Button { button: Button::Left, pressed: true, position } => {
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: true,
+                position,
+            } => {
                 if let Some(i) = popup_hit(&rows, self.search.results(), position.x, position.y) {
                     self.search.highlight(i);
                     if let Some(hit) = self.search.choose() {
@@ -755,7 +958,15 @@ impl App {
 
     /// The current pane's sections with the values in effect and the errors of refused changes.
     fn sections(&self) -> Vec<Section> {
-        let mut sections = panes::sections(self.history.current(), &self.settings, Session { dark: self.dark, display: self.client.display_options() }, &self.live);
+        let mut sections = panes::sections(
+            self.history.current(),
+            &self.settings,
+            Session {
+                dark: self.dark,
+                display: self.client.display_options(),
+            },
+            &self.live,
+        );
         for row in sections.iter_mut().flat_map(|s| &mut s.rows) {
             if let Some((_, e)) = self.errors.iter().find(|(id, _)| *id == row.id) {
                 row.error = Some(e.clone());
@@ -767,7 +978,12 @@ impl App {
     /// The control of row `row` of section `section` and its frame on the window as last drawn.
     fn control_at(&self, section: usize, row: usize) -> (Control, cupertino_settings::Rect) {
         let control = self.sections()[section].rows[row].control.clone();
-        (control, self.form[section].rows[row].control.offset(0.0, -self.scroll))
+        (
+            control,
+            self.form[section].rows[row]
+                .control
+                .offset(0.0, -self.scroll),
+        )
     }
 
     /// A press in the content column at `p`: on a control, what it does (§7.2).
@@ -794,12 +1010,18 @@ impl App {
                     }
                     Some(Press::Commit(value)) => return self.commit(row.id, value),
                     Some(Press::Drag(shown)) => {
-                        self.drag = Some(SliderDrag { section: si, row: ri, shown });
+                        self.drag = Some(SliderDrag {
+                            section: si,
+                            row: ri,
+                            shown,
+                        });
                         self.client.request_redraw(self.window)?;
                         return Ok(());
                     }
                     Some(Press::OpenMenu) => {
-                        let Control::Popup { choices, selected } = &row.control else { unreachable!("only a pop-up button opens a menu") };
+                        let Control::Popup { choices, selected } = &row.control else {
+                            unreachable!("only a pop-up button opens a menu")
+                        };
                         return self.open_menu(row.id, choices.clone(), *selected, &frame);
                     }
                 }
@@ -827,17 +1049,31 @@ impl App {
         assert!(effects.len() <= 1, "{id:?} made {} effects", effects.len());
         for effect in effects {
             let outcome = match effect {
-                Effect::Service(Call::Join { ssid, passphrase: None }) => {
+                Effect::Service(Call::Join {
+                    ssid,
+                    passphrase: None,
+                }) => {
                     self.sheet = Some(Sheet::passphrase(&ssid));
                     Ok(())
                 }
-                Effect::Service(Call::Remove { id, confirmed: false }) => {
-                    let name = self.live.bluetooth.ready().and_then(|b| b.devices.iter().find(|d| d.id == id)).map_or(id.clone(), |d| d.title().to_string());
+                Effect::Service(Call::Remove {
+                    id,
+                    confirmed: false,
+                }) => {
+                    let name = self
+                        .live
+                        .bluetooth
+                        .ready()
+                        .and_then(|b| b.devices.iter().find(|d| d.id == id))
+                        .map_or(id.clone(), |d| d.title().to_string());
                     self.sheet = Some(Sheet::forget(&id, &name));
                     Ok(())
                 }
                 Effect::Service(call) => self.service_call(&call),
-                Effect::Store(file) => self.settings.store(&self.paths, file).map_err(|e| e.to_string()),
+                Effect::Store(file) => self
+                    .settings
+                    .store(&self.paths, file)
+                    .map_err(|e| e.to_string()),
                 Effect::SetAppearance { dark } => self.set_appearance(dark),
                 Effect::SetAccessibility { key, value } => self.set_accessibility(key, &value),
             };
@@ -857,7 +1093,9 @@ impl App {
     fn service_call(&mut self, call: &Call) -> std::result::Result<(), String> {
         if let Call::Pair(id) = call {
             let notify = self.notify.clone();
-            return self.services.pair(id, move |result| notify(Background::Paired(result)));
+            return self
+                .services
+                .pair(id, move |result| notify(Background::Paired(result)));
         }
         let result = self.services.call(call);
         if let (Ok(()), Call::Join { ssid, .. }) = (&result, call) {
@@ -894,7 +1132,9 @@ impl App {
                     _ => {
                         self.sheet = None;
                         eprintln!("cupertino-settings: {e}");
-                        if let cupertino_settings::live::Reading::Ready(b) = &mut self.live.bluetooth {
+                        if let cupertino_settings::live::Reading::Ready(b) =
+                            &mut self.live.bluetooth
+                        {
                             b.failure = Some(e);
                         }
                     }
@@ -909,7 +1149,12 @@ impl App {
     fn background_event(&mut self, event: Background) -> Result<()> {
         match event {
             Background::ShowPane(pane) => self.go(pane)?,
-            Background::Agent(AgentEvent::Prompt { id, device, prompt, answer }) => {
+            Background::Agent(AgentEvent::Prompt {
+                id,
+                device,
+                prompt,
+                answer,
+            }) => {
                 // a new question replaces an open one: its pairing is over (the daemon pairs one device at a time)
                 self.sheet = Some(Sheet::pairing(id, &device, prompt));
                 self.agent_answer = answer.map(|a| (id, a));
@@ -928,9 +1173,13 @@ impl App {
                 }
                 self.client.request_redraw(self.window)?;
             }
-            Background::Files(WatchEvent::Error(e)) => eprintln!("cupertino-settings: watching the settings files: {e}"),
+            Background::Files(WatchEvent::Error(e)) => {
+                eprintln!("cupertino-settings: watching the settings files: {e}")
+            }
             Background::Paired(result) => {
-                if let (Err(e), cupertino_settings::live::Reading::Ready(b)) = (result, &mut self.live.bluetooth) {
+                if let (Err(e), cupertino_settings::live::Reading::Ready(b)) =
+                    (result, &mut self.live.bluetooth)
+                {
                     b.failure = Some(e);
                 }
                 let now = self.now();
@@ -961,7 +1210,14 @@ impl App {
     fn set_appearance(&mut self, dark: bool) -> std::result::Result<(), String> {
         let name = if dark { "dark" } else { "light" };
         let bus = self.bus()?;
-        bus.call_method(Some(SESSION_NAME), SESSION_PATH, Some(SESSION_NAME), "SetAppearance", &(name,)).map_err(|e| format!("The appearance could not be changed: {e}."))?;
+        bus.call_method(
+            Some(SESSION_NAME),
+            SESSION_PATH,
+            Some(SESSION_NAME),
+            "SetAppearance",
+            &(name,),
+        )
+        .map_err(|e| format!("The appearance could not be changed: {e}."))?;
         self.dark = dark;
         Ok(())
     }
@@ -969,7 +1225,10 @@ impl App {
     /// The session bus, connected on first use.
     fn bus(&mut self) -> std::result::Result<&zbus::blocking::Connection, String> {
         if self.bus.is_none() {
-            self.bus = Some(zbus::blocking::Connection::session().map_err(|e| format!("The session bus is not available: {e}."))?);
+            self.bus = Some(
+                zbus::blocking::Connection::session()
+                    .map_err(|e| format!("The session bus is not available: {e}."))?,
+            );
         }
         Ok(self.bus.as_ref().expect("connected above"))
     }
@@ -978,16 +1237,30 @@ impl App {
     /// file it stored again; the display options themselves arrive from the session.
     fn set_accessibility(&mut self, key: &str, value: &str) -> std::result::Result<(), String> {
         let bus = self.bus()?;
-        bus.call_method(Some(SESSION_NAME), SESSION_PATH, Some(SESSION_NAME), "SetAccessibility", &(key, value)).map_err(|e| format!("The setting could not be changed: {e}."))?;
+        bus.call_method(
+            Some(SESSION_NAME),
+            SESSION_PATH,
+            Some(SESSION_NAME),
+            "SetAccessibility",
+            &(key, value),
+        )
+        .map_err(|e| format!("The setting could not be changed: {e}."))?;
         if let Some(path) = &self.paths.accessibility {
-            let (stored, _) = cupertino_defaults::accessibility::AccessibilitySettings::load(path).map_err(|e| format!("The changed setting could not be read back: {e}."))?;
+            let (stored, _) = cupertino_defaults::accessibility::AccessibilitySettings::load(path)
+                .map_err(|e| format!("The changed setting could not be read back: {e}."))?;
             self.settings.accessibility = stored;
         }
         Ok(())
     }
 
     /// Open the menu of a pop-up button in `frame` under it.
-    fn open_menu(&mut self, id: ControlId, choices: Vec<String>, selected: usize, frame: &cupertino_settings::Rect) -> Result<()> {
+    fn open_menu(
+        &mut self,
+        id: ControlId,
+        choices: Vec<String>,
+        selected: usize,
+        frame: &cupertino_settings::Rect,
+    ) -> Result<()> {
         self.close_menu()?;
         let (_, size) = menu_rows(choices.len());
         let rect = PopupRect::new(frame.x, frame.bottom() + 2.0, size.0, size.1);
@@ -995,7 +1268,14 @@ impl App {
         let backdrop = self.client.backdrop(surface)?;
         backdrop.set_material(POPUP_MATERIAL);
         backdrop.set_shape(&PopupRect::new(0.0, 0.0, size.0, size.1), 6.0)?;
-        self.menu = Some(ChoiceMenu { surface, backdrop, id, choices, selected, hovered: None });
+        self.menu = Some(ChoiceMenu {
+            surface,
+            backdrop,
+            id,
+            choices,
+            selected,
+            hovered: None,
+        });
         Ok(())
     }
 
@@ -1008,14 +1288,33 @@ impl App {
     }
 
     fn draw_menu(&mut self) -> Result<()> {
-        let App { client, painter, palette, menu, .. } = self;
-        let Some(m) = menu.as_ref() else { return Ok(()) };
-        client.draw(m.surface, |pm, scale| painter.paint_menu(pm, scale.factor(), &m.choices, m.selected, m.hovered, palette))?;
+        let App {
+            client,
+            painter,
+            palette,
+            menu,
+            ..
+        } = self;
+        let Some(m) = menu.as_ref() else {
+            return Ok(());
+        };
+        client.draw(m.surface, |pm, scale| {
+            painter.paint_menu(
+                pm,
+                scale.factor(),
+                &m.choices,
+                m.selected,
+                m.hovered,
+                palette,
+            )
+        })?;
         Ok(())
     }
 
     fn menu_pointer(&mut self, event: PointerEvent) -> Result<()> {
-        let Some(m) = &mut self.menu else { return Ok(()) };
+        let Some(m) = &mut self.menu else {
+            return Ok(());
+        };
         let (rows, _) = menu_rows(m.choices.len());
         let at = |x: f64, y: f64| rows.iter().position(|r| r.contains(Point { x, y }));
         match event {
@@ -1030,7 +1329,11 @@ impl App {
                 m.hovered = None;
                 self.client.request_redraw(m.surface)?;
             }
-            PointerEvent::Button { button: Button::Left, pressed: true, position } => {
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: true,
+                position,
+            } => {
                 if let Some(i) = at(position.x, position.y) {
                     let id = m.id;
                     self.close_menu()?;

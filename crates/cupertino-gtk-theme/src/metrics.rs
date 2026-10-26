@@ -65,7 +65,9 @@ impl std::str::FromStr for ControlSizeName {
             "regular" => Ok(Self::Regular),
             "small" => Ok(Self::Small),
             "large" => Ok(Self::Large),
-            _ => Err(format!("unknown control size {s:?} (regular, small or large)")),
+            _ => Err(format!(
+                "unknown control size {s:?} (regular, small or large)"
+            )),
         }
     }
 }
@@ -73,7 +75,11 @@ impl std::str::FromStr for ControlSizeName {
 impl Metrics {
     pub fn from_theme(theme: &Theme, size: ControlSizeName) -> Metrics {
         let s = size.size();
-        let h = |c: Control, fallback: f64| alignment_height(c, s).or_else(|| alignment_height(c, ControlSize::Regular)).unwrap_or(fallback);
+        let h = |c: Control, fallback: f64| {
+            alignment_height(c, s)
+                .or_else(|| alignment_height(c, ControlSize::Regular))
+                .unwrap_or(fallback)
+        };
         let typ = theme.tokens.typography();
         let font_px = typ.substitute_size(typ.sizes.regular);
         Metrics {
@@ -82,7 +88,9 @@ impl Metrics {
             entry_height: h(Control::TextField, 20.0),
             check_size: h(Control::CheckBoxRadio, 14.0),
             switch_height: h(Control::Switch, 22.0),
-            switch_width: cupertino_theme::metrics::control_metric(Control::Switch).fixed_width(s).unwrap_or(38.0),
+            switch_width: cupertino_theme::metrics::control_metric(Control::Switch)
+                .fixed_width(s)
+                .unwrap_or(38.0),
             slider_knob: h(Control::SliderKnob, 20.0),
             slider_track: h(Control::SliderTrack, 4.0),
             scrollbar_thickness: h(Control::OverlayScrollerThumb, 12.0),
@@ -133,7 +141,10 @@ mod tests {
         let l = Metrics::from_theme(&theme, ControlSizeName::Large);
         assert_eq!(s.button_height, 16.0);
         assert_eq!(l.button_height, 28.0);
-        assert_eq!(l.switch_height, 22.0, "controls without a large size fall back to regular");
+        assert_eq!(
+            l.switch_height, 22.0,
+            "controls without a large size fall back to regular"
+        );
         assert!("regular".parse::<ControlSizeName>().is_ok());
         assert!("huge".parse::<ControlSizeName>().is_err());
     }

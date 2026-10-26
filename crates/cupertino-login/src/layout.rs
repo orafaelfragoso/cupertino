@@ -93,19 +93,48 @@ impl Layout {
             date_size,
             time_baseline,
             time_size,
-            avatar: Rect::new(center_x - AVATAR_DIAMETER / 2.0, avatar_top, AVATAR_DIAMETER, AVATAR_DIAMETER),
+            avatar: Rect::new(
+                center_x - AVATAR_DIAMETER / 2.0,
+                avatar_top,
+                AVATAR_DIAMETER,
+                AVATAR_DIAMETER,
+            ),
             name_baseline,
-            pill: Rect::new(center_x - PILL_WIDTH / 2.0, pill_top, PILL_WIDTH, PILL_HEIGHT),
+            pill: Rect::new(
+                center_x - PILL_WIDTH / 2.0,
+                pill_top,
+                PILL_WIDTH,
+                PILL_HEIGHT,
+            ),
             notice_baseline: pill_top + PILL_HEIGHT + NOTICE_GAP,
             help_baseline: height - HELP_BOTTOM_INSET - descent_per_em * HELP_SIZE,
-            power_item: Rect::new(width - STATUS_TRAILING - STATUS_HEIGHT, STATUS_TOP, STATUS_HEIGHT, STATUS_HEIGHT),
+            power_item: Rect::new(
+                width - STATUS_TRAILING - STATUS_HEIGHT,
+                STATUS_TOP,
+                STATUS_HEIGHT,
+                STATUS_HEIGHT,
+            ),
         }
     }
 
     /// The open power menu of `rows` items: its body, right-aligned under the item, and the frame of each row.
     pub fn power_menu(&self, rows: usize) -> (Rect, Vec<Rect>) {
-        let body = Rect::new(self.power_item.x() + self.power_item.width() - MENU_WIDTH, self.power_item.y() + self.power_item.height() + MENU_GAP, MENU_WIDTH, rows as f64 * MENU_ROW_HEIGHT + 2.0 * MENU_PADDING);
-        let frames = (0..rows).map(|i| Rect::new(body.x(), body.y() + MENU_PADDING + i as f64 * MENU_ROW_HEIGHT, MENU_WIDTH, MENU_ROW_HEIGHT)).collect();
+        let body = Rect::new(
+            self.power_item.x() + self.power_item.width() - MENU_WIDTH,
+            self.power_item.y() + self.power_item.height() + MENU_GAP,
+            MENU_WIDTH,
+            rows as f64 * MENU_ROW_HEIGHT + 2.0 * MENU_PADDING,
+        );
+        let frames = (0..rows)
+            .map(|i| {
+                Rect::new(
+                    body.x(),
+                    body.y() + MENU_PADDING + i as f64 * MENU_ROW_HEIGHT,
+                    MENU_WIDTH,
+                    MENU_ROW_HEIGHT,
+                )
+            })
+            .collect();
         (body, frames)
     }
 
@@ -114,7 +143,16 @@ impl Layout {
     pub fn tiles(&self, grid: Grid, count: usize) -> Vec<Rect> {
         let top = self.avatar.y() - USER_VIEW_BORDER;
         let left = self.center_x - grid.columns as f64 * TILE_WIDTH / 2.0;
-        (0..count).map(|i| Rect::new(left + (i % grid.columns) as f64 * TILE_WIDTH, top + (i / grid.columns) as f64 * TILE_HEIGHT, TILE_WIDTH, TILE_HEIGHT)).collect()
+        (0..count)
+            .map(|i| {
+                Rect::new(
+                    left + (i % grid.columns) as f64 * TILE_WIDTH,
+                    top + (i / grid.columns) as f64 * TILE_HEIGHT,
+                    TILE_WIDTH,
+                    TILE_HEIGHT,
+                )
+            })
+            .collect()
     }
 }
 
@@ -151,11 +189,24 @@ mod tests {
     #[test]
     fn the_power_item_ends_twenty_points_from_the_trailing_edge_and_its_menu_hangs_under_it() {
         let layout = Layout::new(1920.0, 1080.0, 0.25);
-        assert_eq!((layout.power_item.x(), layout.power_item.width(), layout.power_item.height()), (1878.0, 22.0, 22.0));
+        assert_eq!(
+            (
+                layout.power_item.x(),
+                layout.power_item.width(),
+                layout.power_item.height()
+            ),
+            (1878.0, 22.0, 22.0)
+        );
         let (body, rows) = layout.power_menu(3);
         // right edges line up; 4 pt gap below the item; 4 pt padding and 3 rows of 24
-        assert_eq!((body.x() + body.width(), body.y(), body.height()), (1900.0, 32.0, 80.0));
-        assert_eq!((rows[0].y(), rows[2].y(), rows[1].x(), rows[1].width()), (36.0, 84.0, 1750.0, 150.0));
+        assert_eq!(
+            (body.x() + body.width(), body.y(), body.height()),
+            (1900.0, 32.0, 80.0)
+        );
+        assert_eq!(
+            (rows[0].y(), rows[2].y(), rows[1].x(), rows[1].width()),
+            (36.0, 84.0, 1750.0, 150.0)
+        );
     }
 
     #[test]

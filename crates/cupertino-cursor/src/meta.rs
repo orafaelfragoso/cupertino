@@ -50,7 +50,12 @@ pub struct Shadow {
 impl Shadow {
     /// The shadow shared by most entries of the design set (colour `0,0,0,0.65`, blur 1.8, one point
     /// down). Used for cursors without metadata when requested; approximate choice.
-    pub const COMMON: Shadow = Shadow { color: [0.0, 0.0, 0.0, 0.65], dx: 0.0, dy: 1.0, sigma: 1.8 };
+    pub const COMMON: Shadow = Shadow {
+        color: [0.0, 0.0, 0.0, 0.65],
+        dx: 0.0,
+        dy: 1.0,
+        sigma: 1.8,
+    };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -82,15 +87,26 @@ impl CursorMeta {
     /// `flip_y`: the source's shadow y offset points up (the default interpretation).
     pub fn from_raw(r: &RawMeta, flip_y: bool) -> CursorMeta {
         let pair = |x: Option<f64>, y: Option<f64>| x.zip(y);
-        let shadow = r.shadowcolor.as_ref().filter(|c| c.len() >= 3).zip(r.blur).filter(|(_, b)| *b > 0.0).map(|(c, blur)| {
-            let dy = r.shadowoffsety.unwrap_or(0.0);
-            Shadow {
-                color: [c[0] as f32, c[1] as f32, c[2] as f32, c.get(3).copied().unwrap_or(1.0) as f32],
-                dx: r.shadowoffsetx.unwrap_or(0.0),
-                dy: if flip_y { -dy } else { dy },
-                sigma: blur,
-            }
-        });
+        let shadow = r
+            .shadowcolor
+            .as_ref()
+            .filter(|c| c.len() >= 3)
+            .zip(r.blur)
+            .filter(|(_, b)| *b > 0.0)
+            .map(|(c, blur)| {
+                let dy = r.shadowoffsety.unwrap_or(0.0);
+                Shadow {
+                    color: [
+                        c[0] as f32,
+                        c[1] as f32,
+                        c[2] as f32,
+                        c.get(3).copied().unwrap_or(1.0) as f32,
+                    ],
+                    dx: r.shadowoffsetx.unwrap_or(0.0),
+                    dy: if flip_y { -dy } else { dy },
+                    sigma: blur,
+                }
+            });
         CursorMeta {
             hotspot: pair(r.hotx, r.hoty),
             hotspot_scaled: pair(r.hotx_scaled, r.hoty_scaled),
@@ -110,12 +126,19 @@ struct File {
 
 /// Parse a metadata JSON document.
 pub fn from_json(text: &str, flip_y: bool) -> Result<BTreeMap<String, CursorMeta>, String> {
-    let f: File = serde_json::from_str(text).map_err(|e| format!("invalid cursor metadata: {e}"))?;
-    Ok(f.cursors.iter().map(|(k, v)| (k.clone(), CursorMeta::from_raw(v, flip_y))).collect())
+    let f: File =
+        serde_json::from_str(text).map_err(|e| format!("invalid cursor metadata: {e}"))?;
+    Ok(f.cursors
+        .iter()
+        .map(|(k, v)| (k.clone(), CursorMeta::from_raw(v, flip_y)))
+        .collect())
 }
 
 pub fn from_json_file(path: &Path, flip_y: bool) -> Result<BTreeMap<String, CursorMeta>, String> {
-    from_json(&std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?, flip_y)
+    from_json(
+        &std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?,
+        flip_y,
+    )
 }
 
 #[cfg(test)]
@@ -137,7 +160,11 @@ mod tests {
         assert_eq!(a.hotspot_scaled, Some((7.5, 8.0)));
         let s = a.shadow.unwrap();
         assert_eq!(s.color, [0.0, 0.0, 0.0, 0.65]);
-        assert_eq!((s.dx, s.dy, s.sigma), (0.0, 1.0, 1.8), "source y offset −1 points up-axis → one point down");
+        assert_eq!(
+            (s.dx, s.dy, s.sigma),
+            (0.0, 1.0, 1.8),
+            "source y offset −1 points up-axis → one point down"
+        );
         assert!(a.vector_only && !a.render_shadow);
         assert_eq!(a.frames, 1);
         assert_eq!(m["anim"].frames, 6);
@@ -154,11 +181,20 @@ mod tests {
     #[test]
     fn hotspot_source_selection_with_fallbacks() {
         let m = from_json(JSON, true).unwrap();
-        assert_eq!(m["a"].hotspot_for(HotspotSource::Unscaled), Some((5.0, 6.0)));
+        assert_eq!(
+            m["a"].hotspot_for(HotspotSource::Unscaled),
+            Some((5.0, 6.0))
+        );
         assert_eq!(m["a"].hotspot_for(HotspotSource::Scaled), Some((7.5, 8.0)));
         assert_eq!(m["b"].hotspot_for(HotspotSource::Scaled), Some((1.0, 2.0)));
-        assert_eq!(m["scaled_only"].hotspot_for(HotspotSource::Unscaled), Some((3.0, 4.0)));
-        assert_eq!(CursorMeta::default().hotspot_for(HotspotSource::Unscaled), None);
+        assert_eq!(
+            m["scaled_only"].hotspot_for(HotspotSource::Unscaled),
+            Some((3.0, 4.0))
+        );
+        assert_eq!(
+            CursorMeta::default().hotspot_for(HotspotSource::Unscaled),
+            None
+        );
     }
 
     #[test]
@@ -170,8 +206,11 @@ mod tests {
 
     #[test]
     fn zero_blur_means_no_shadow() {
-        let m = from_json(r#"{"cursors": {"z": {"shadowcolor": [0,0,0,1], "blur": 0}}}"#, true).unwrap();
+        let m = from_json(
+            r#"{"cursors": {"z": {"shadowcolor": [0,0,0,1], "blur": 0}}}"#,
+            true,
+        )
+        .unwrap();
         assert!(m["z"].shadow.is_none());
     }
-
 }

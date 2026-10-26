@@ -52,10 +52,21 @@ pub mod actions_iface {
     pub trait GtkActions {
         fn describe_all(&self) -> zbus::Result<HashMap<String, RawAction>>;
 
-        fn activate(&self, action_name: &str, parameter: &[Value<'_>], platform_data: HashMap<&str, Value<'_>>) -> zbus::Result<()>;
+        fn activate(
+            &self,
+            action_name: &str,
+            parameter: &[Value<'_>],
+            platform_data: HashMap<&str, Value<'_>>,
+        ) -> zbus::Result<()>;
 
         #[zbus(signal)]
-        fn changed(&self, removed: Vec<String>, enabled_changed: HashMap<String, bool>, state_changed: HashMap<String, OwnedValue>, added: HashMap<String, RawAction>) -> zbus::Result<()>;
+        fn changed(
+            &self,
+            removed: Vec<String>,
+            enabled_changed: HashMap<String, bool>,
+            state_changed: HashMap<String, OwnedValue>,
+            added: HashMap<String, RawAction>,
+        ) -> zbus::Result<()>;
     }
 }
 
@@ -142,7 +153,10 @@ pub struct GtkActionState {
 
 impl GtkActionState {
     pub fn from_raw(raw: &RawAction) -> Self {
-        Self { enabled: raw.0, state: raw.2.first().and_then(|v| v.try_clone().ok()) }
+        Self {
+            enabled: raw.0,
+            state: raw.2.first().and_then(|v| v.try_clone().ok()),
+        }
     }
 }
 
@@ -178,7 +192,10 @@ pub fn parse_accel(accel: &str) -> Option<Shortcut> {
         rest = &r[end + 1..];
     }
     modifiers.sort();
-    (!rest.is_empty()).then(|| Shortcut { modifiers, key: rest.to_string() })
+    (!rest.is_empty()).then(|| Shortcut {
+        modifiers,
+        key: rest.to_string(),
+    })
 }
 
 struct Builder<'a> {
@@ -235,7 +252,13 @@ impl Builder<'_> {
             if label.is_empty() && action.is_none() {
                 continue;
             }
-            let full = action.as_ref().map(|a| if a.contains('.') && ns.is_empty() { a.clone() } else { format!("{ns}{a}") });
+            let full = action.as_ref().map(|a| {
+                if a.contains('.') && ns.is_empty() {
+                    a.clone()
+                } else {
+                    format!("{ns}{a}")
+                }
+            });
             let state = full.as_ref().and_then(|a| self.actions.get(a));
             match (super::prop_str(it, "hidden-when").as_deref(), &full, state) {
                 (Some("action-disabled"), _, Some(s)) if !s.enabled => continue,
@@ -254,7 +277,10 @@ impl Builder<'_> {
             };
             let target = it.get("target").and_then(|v| v.try_clone().ok());
             if let Some(s) = state.and_then(|s| s.state.as_ref()) {
-                item.toggle = match (super::unwrap_variant(s), target.as_ref().map(|t| super::unwrap_variant(t))) {
+                item.toggle = match (
+                    super::unwrap_variant(s),
+                    target.as_ref().map(|t| super::unwrap_variant(t)),
+                ) {
                     (Value::Bool(b), None) => Toggle::Check(*b),
                     (Value::Str(a), Some(Value::Str(b))) => Toggle::Radio(a.as_str() == b.as_str()),
                     (Value::I32(a), Some(Value::I32(b))) => Toggle::Radio(a == b),
@@ -265,7 +291,8 @@ impl Builder<'_> {
                 item.shortcut = parse_accel(&a);
             }
             if let Some(a) = full {
-                self.refs.insert(ItemId(id), GtkActionRef { action: a, target });
+                self.refs
+                    .insert(ItemId(id), GtkActionRef { action: a, target });
             }
             out.push(item);
         }
@@ -279,10 +306,23 @@ impl Builder<'_> {
 
 /// Build the item tree below `root` (the menu bar is `(0, 0)`). `actions` is keyed by full action
 /// name (`app.quit`, `win.close`).
-pub fn build_menu(menus: &GtkMenus, root: (u32, u32), actions: &HashMap<String, GtkActionState>) -> GtkBuild {
-    let mut b = Builder { menus, actions, next_id: 0, refs: HashMap::new(), depth: 0 };
+pub fn build_menu(
+    menus: &GtkMenus,
+    root: (u32, u32),
+    actions: &HashMap<String, GtkActionState>,
+) -> GtkBuild {
+    let mut b = Builder {
+        menus,
+        actions,
+        next_id: 0,
+        refs: HashMap::new(),
+        depth: 0,
+    };
     let items = b.build(root, "");
-    GtkBuild { items, actions: b.refs }
+    GtkBuild {
+        items,
+        actions: b.refs,
+    }
 }
 
 /// A connected exporter.
@@ -296,19 +336,40 @@ pub struct GtkMenuClient {
 
 impl GtkMenuClient {
     /// Load the menu bar and the action states of the window and application objects.
-    pub async fn load(conn: &Connection, props: &GtkMenuProps) -> zbus::Result<(Self, Vec<MenuItem>)> {
-        let mut c = Self { conn: conn.clone(), props: props.clone(), menus: GtkMenus::default(), action_states: HashMap::new(), refs: HashMap::new() };
+    pub async fn load(
+        conn: &Connection,
+        props: &GtkMenuProps,
+    ) -> zbus::Result<(Self, Vec<MenuItem>)> {
+        let mut c = Self {
+            conn: conn.clone(),
+            props: props.clone(),
+            menus: GtkMenus::default(),
+            action_states: HashMap::new(),
+            refs: HashMap::new(),
+        };
         let items = c.reload().await?;
         Ok((c, items))
     }
 
     async fn menus_proxy(&self) -> zbus::Result<GtkMenusProxy<'static>> {
-        let path = self.props.menubar_object_path.clone().ok_or_else(|| zbus::Error::Failure("no menu bar path".into()))?;
-        GtkMenusProxy::builder(&self.conn).destination(self.props.bus_name.clone())?.path(path)?.build().await
+        let path = self
+            .props
+            .menubar_object_path
+            .clone()
+            .ok_or_else(|| zbus::Error::Failure("no menu bar path".into()))?;
+        GtkMenusProxy::builder(&self.conn)
+            .destination(self.props.bus_name.clone())?
+            .path(path)?
+            .build()
+            .await
     }
 
     async fn actions_proxy(&self, path: &str) -> zbus::Result<GtkActionsProxy<'static>> {
-        GtkActionsProxy::builder(&self.conn).destination(self.props.bus_name.clone())?.path(path.to_string())?.build().await
+        GtkActionsProxy::builder(&self.conn)
+            .destination(self.props.bus_name.clone())?
+            .path(path.to_string())?
+            .build()
+            .await
     }
 
     /// Fetch everything again and rebuild the tree.
@@ -317,7 +378,11 @@ impl GtkMenuClient {
         let mut cache = GtkMenus::from_reply(menus.start(&[0]).await?);
         let mut subscribed: HashSet<u32> = HashSet::from([0]);
         for _ in 0..8 {
-            let missing: Vec<u32> = cache.missing_groups((0, 0)).into_iter().filter(|g| !subscribed.contains(g)).collect();
+            let missing: Vec<u32> = cache
+                .missing_groups((0, 0))
+                .into_iter()
+                .filter(|g| !subscribed.contains(g))
+                .collect();
             if missing.is_empty() {
                 break;
             }
@@ -326,12 +391,16 @@ impl GtkMenuClient {
         }
         self.menus = cache;
         self.action_states.clear();
-        for (scope, path) in [("app", self.props.application_object_path.clone()), ("win", self.props.window_object_path.clone())] {
+        for (scope, path) in [
+            ("app", self.props.application_object_path.clone()),
+            ("win", self.props.window_object_path.clone()),
+        ] {
             let Some(path) = path else { continue };
             if let Ok(proxy) = self.actions_proxy(&path).await {
                 if let Ok(all) = proxy.describe_all().await {
                     for (name, raw) in all {
-                        self.action_states.insert(format!("{scope}.{name}"), GtkActionState::from_raw(&raw));
+                        self.action_states
+                            .insert(format!("{scope}.{name}"), GtkActionState::from_raw(&raw));
                     }
                 }
             }
@@ -343,7 +412,9 @@ impl GtkMenuClient {
 
     /// Activate the action behind `item`. Returns `false` for items without an action.
     pub async fn activate(&self, item: ItemId) -> zbus::Result<bool> {
-        let Some(r) = self.refs.get(&item) else { return Ok(false) };
+        let Some(r) = self.refs.get(&item) else {
+            return Ok(false);
+        };
         let (scope, name) = r.action.split_once('.').unwrap_or(("app", &r.action));
         let path = match scope {
             "win" => self.props.window_object_path.clone(),
@@ -395,7 +466,14 @@ mod tests {
 
     fn sample() -> GtkMenus {
         GtkMenus::from_reply(vec![
-            (0, 0, vec![item(vec![("label", v("_File")), (":submenu", pair(0, 1))]), item(vec![("label", v("View")), (":submenu", pair(0, 2))])]),
+            (
+                0,
+                0,
+                vec![
+                    item(vec![("label", v("_File")), (":submenu", pair(0, 1))]),
+                    item(vec![("label", v("View")), (":submenu", pair(0, 2))]),
+                ],
+            ),
             (
                 0,
                 1,
@@ -405,20 +483,99 @@ mod tests {
                     item(vec![(":section", pair(0, 5))]),
                 ],
             ),
-            (0, 2, vec![item(vec![("label", v("Show Hidden")), ("action", v("win.hidden"))]), item(vec![("label", v("Sort by name")), ("action", v("win.sort")), ("target", v("name"))]), item(vec![("label", v("Sort by size")), ("action", v("win.sort")), ("target", v("size"))])]),
-            (0, 3, vec![item(vec![("label", v("_New Window")), ("action", v("app.new")), ("accel", v("<Primary>n"))]), item(vec![("label", v("Close")), ("action", v("win.close")), ("accel", v("<Primary><Shift>w"))])]),
+            (
+                0,
+                2,
+                vec![
+                    item(vec![
+                        ("label", v("Show Hidden")),
+                        ("action", v("win.hidden")),
+                    ]),
+                    item(vec![
+                        ("label", v("Sort by name")),
+                        ("action", v("win.sort")),
+                        ("target", v("name")),
+                    ]),
+                    item(vec![
+                        ("label", v("Sort by size")),
+                        ("action", v("win.sort")),
+                        ("target", v("size")),
+                    ]),
+                ],
+            ),
+            (
+                0,
+                3,
+                vec![
+                    item(vec![
+                        ("label", v("_New Window")),
+                        ("action", v("app.new")),
+                        ("accel", v("<Primary>n")),
+                    ]),
+                    item(vec![
+                        ("label", v("Close")),
+                        ("action", v("win.close")),
+                        ("accel", v("<Primary><Shift>w")),
+                    ]),
+                ],
+            ),
             (0, 4, vec![]),
-            (0, 5, vec![item(vec![("label", v("Quit")), ("action", v("app.quit")), ("accel", v("<Primary>q"))]), item(vec![("label", v("Only in debug")), ("action", v("app.debug")), ("hidden-when", v("action-missing"))])]),
+            (
+                0,
+                5,
+                vec![
+                    item(vec![
+                        ("label", v("Quit")),
+                        ("action", v("app.quit")),
+                        ("accel", v("<Primary>q")),
+                    ]),
+                    item(vec![
+                        ("label", v("Only in debug")),
+                        ("action", v("app.debug")),
+                        ("hidden-when", v("action-missing")),
+                    ]),
+                ],
+            ),
         ])
     }
 
     fn actions() -> HashMap<String, GtkActionState> {
         let mut m = HashMap::new();
-        m.insert("app.new".to_string(), GtkActionState { enabled: true, state: None });
-        m.insert("app.quit".to_string(), GtkActionState { enabled: true, state: None });
-        m.insert("win.close".to_string(), GtkActionState { enabled: false, state: None });
-        m.insert("win.hidden".to_string(), GtkActionState { enabled: true, state: Some(v(true)) });
-        m.insert("win.sort".to_string(), GtkActionState { enabled: true, state: Some(v("size")) });
+        m.insert(
+            "app.new".to_string(),
+            GtkActionState {
+                enabled: true,
+                state: None,
+            },
+        );
+        m.insert(
+            "app.quit".to_string(),
+            GtkActionState {
+                enabled: true,
+                state: None,
+            },
+        );
+        m.insert(
+            "win.close".to_string(),
+            GtkActionState {
+                enabled: false,
+                state: None,
+            },
+        );
+        m.insert(
+            "win.hidden".to_string(),
+            GtkActionState {
+                enabled: true,
+                state: Some(v(true)),
+            },
+        );
+        m.insert(
+            "win.sort".to_string(),
+            GtkActionState {
+                enabled: true,
+                state: Some(v("size")),
+            },
+        );
         m
     }
 
@@ -427,13 +584,29 @@ mod tests {
         let b = build_menu(&sample(), (0, 0), &actions());
         assert_eq!(b.items.len(), 2);
         let file = &b.items[0];
-        assert_eq!((file.label.as_str(), file.mnemonic, file.has_submenu), ("File", Some('F'), true));
+        assert_eq!(
+            (file.label.as_str(), file.mnemonic, file.has_submenu),
+            ("File", Some('F'), true)
+        );
         let labels: Vec<&str> = file.children.iter().map(|c| c.label.as_str()).collect();
-        assert_eq!(labels, vec!["New Window", "Close", "", "Quit"], "empty sections vanish, others are separated, the action-missing item is hidden");
+        assert_eq!(
+            labels,
+            vec!["New Window", "Close", "", "Quit"],
+            "empty sections vanish, others are separated, the action-missing item is hidden"
+        );
         assert!(file.children[2].separator);
-        assert_eq!(file.children[0].shortcut.as_ref().unwrap().display(), "Ctrl+n");
-        assert_eq!(file.children[1].shortcut.as_ref().unwrap().display(), "Ctrl+Shift+w");
-        assert!(file.children[0].enabled && !file.children[1].enabled, "enabled flags come from the actions");
+        assert_eq!(
+            file.children[0].shortcut.as_ref().unwrap().display(),
+            "Ctrl+n"
+        );
+        assert_eq!(
+            file.children[1].shortcut.as_ref().unwrap().display(),
+            "Ctrl+Shift+w"
+        );
+        assert!(
+            file.children[0].enabled && !file.children[1].enabled,
+            "enabled flags come from the actions"
+        );
     }
 
     #[test]
@@ -456,22 +629,47 @@ mod tests {
         let r = &b.actions[&sort.id];
         assert_eq!(r.action, "win.sort");
         assert!(r.target.is_some());
-        assert!(!b.actions.contains_key(&b.items[0].id), "submenu items have no action");
+        assert!(
+            !b.actions.contains_key(&b.items[0].id),
+            "submenu items have no action"
+        );
     }
 
     #[test]
     fn unknown_actions_are_disabled() {
         let b = build_menu(&sample(), (0, 0), &HashMap::new());
         let file = &b.items[0];
-        assert!(file.children.iter().filter(|c| !c.separator).all(|c| !c.enabled));
-        assert_eq!(file.children.iter().filter(|c| !c.separator).count(), 3, "only the action-missing item vanishes");
+        assert!(file
+            .children
+            .iter()
+            .filter(|c| !c.separator)
+            .all(|c| !c.enabled));
+        assert_eq!(
+            file.children.iter().filter(|c| !c.separator).count(),
+            3,
+            "only the action-missing item vanishes"
+        );
     }
 
     #[test]
     fn missing_groups_are_discovered() {
-        let mut m = GtkMenus::from_reply(vec![(0, 0, vec![item(vec![("label", v("A")), (":submenu", pair(1, 0))]), item(vec![("label", v("B")), (":section", pair(2, 3))])])]);
+        let mut m = GtkMenus::from_reply(vec![(
+            0,
+            0,
+            vec![
+                item(vec![("label", v("A")), (":submenu", pair(1, 0))]),
+                item(vec![("label", v("B")), (":section", pair(2, 3))]),
+            ],
+        )]);
         assert_eq!(m.missing_groups((0, 0)), vec![1, 2]);
-        m.merge_reply(vec![(1, 0, vec![]), (2, 3, vec![item(vec![("label", v("x")), (":submenu", pair(0, 0))])])]);
+        m.merge_reply(vec![
+            (1, 0, vec![]),
+            (
+                2,
+                3,
+                vec![item(vec![("label", v("x")), (":submenu", pair(0, 0))])],
+            ),
+        ]);
         assert!(m.missing_groups((0, 0)).is_empty(), "cycles terminate");
     }
 
@@ -479,11 +677,31 @@ mod tests {
     fn changed_records_splice_items() {
         let mut m = sample();
         let before = m.get(0, 2).unwrap().len();
-        m.apply_change((0, 2, 1, 1, vec![item(vec![("label", v("Sort by date")), ("action", v("win.sort")), ("target", v("date"))]), item(vec![("label", v("Extra")), ("action", v("win.x"))])]));
+        m.apply_change((
+            0,
+            2,
+            1,
+            1,
+            vec![
+                item(vec![
+                    ("label", v("Sort by date")),
+                    ("action", v("win.sort")),
+                    ("target", v("date")),
+                ]),
+                item(vec![("label", v("Extra")), ("action", v("win.x"))]),
+            ],
+        ));
         assert_eq!(m.get(0, 2).unwrap().len(), before + 1);
         let b = build_menu(&m, (0, 0), &actions());
-        let labels: Vec<&str> = b.items[1].children.iter().map(|c| c.label.as_str()).collect();
-        assert_eq!(labels, vec!["Show Hidden", "Sort by date", "Extra", "Sort by size"]);
+        let labels: Vec<&str> = b.items[1]
+            .children
+            .iter()
+            .map(|c| c.label.as_str())
+            .collect();
+        assert_eq!(
+            labels,
+            vec!["Show Hidden", "Sort by date", "Extra", "Sort by size"]
+        );
         m.apply_change((0, 9, 5, 3, vec![item(vec![("label", v("late"))])]));
         assert_eq!(m.get(0, 9).unwrap().len(), 1, "positions are clamped");
     }
@@ -491,11 +709,29 @@ mod tests {
     #[test]
     fn namespaces_prefix_relative_actions() {
         let m = GtkMenus::from_reply(vec![
-            (0, 0, vec![item(vec![("label", v("Tools")), (":submenu", pair(0, 1)), ("action-namespace", v("win"))])]),
-            (0, 1, vec![item(vec![("label", v("Run")), ("action", v("run"))])]),
+            (
+                0,
+                0,
+                vec![item(vec![
+                    ("label", v("Tools")),
+                    (":submenu", pair(0, 1)),
+                    ("action-namespace", v("win")),
+                ])],
+            ),
+            (
+                0,
+                1,
+                vec![item(vec![("label", v("Run")), ("action", v("run"))])],
+            ),
         ]);
         let mut a = HashMap::new();
-        a.insert("win.run".to_string(), GtkActionState { enabled: true, state: None });
+        a.insert(
+            "win.run".to_string(),
+            GtkActionState {
+                enabled: true,
+                state: None,
+            },
+        );
         let b = build_menu(&m, (0, 0), &a);
         let run = &b.items[0].children[0];
         assert!(run.enabled);
@@ -505,8 +741,14 @@ mod tests {
     #[test]
     fn accelerators_parse() {
         assert_eq!(parse_accel("<Primary>q").unwrap().display(), "Ctrl+q");
-        assert_eq!(parse_accel("<Shift><Alt>F4").unwrap().display(), "Alt+Shift+F4");
-        assert_eq!(parse_accel("<Super>space").unwrap().display(), "Super+space");
+        assert_eq!(
+            parse_accel("<Shift><Alt>F4").unwrap().display(),
+            "Alt+Shift+F4"
+        );
+        assert_eq!(
+            parse_accel("<Super>space").unwrap().display(),
+            "Super+space"
+        );
         assert!(parse_accel("<Hyper>x").is_none());
         assert!(parse_accel("<Primary>").is_none());
         assert!(parse_accel("<Primary").is_none());

@@ -16,7 +16,10 @@ fn input_devices() -> Vec<Device> {
 }
 
 fn class_of(sysname: &str) -> InputClass {
-    let device = input_devices().into_iter().find(|d| d.sysname() == sysname).unwrap();
+    let device = input_devices()
+        .into_iter()
+        .find(|d| d.sysname() == sysname)
+        .unwrap();
     classify_device(&device, &sysfs()).unwrap().unwrap()
 }
 
@@ -38,29 +41,58 @@ fn parent_chain_skips_container_directories() {
     let names: Vec<&str> = parents.iter().map(|d| d.sysname()).collect();
     // `input/` has no uevent and is skipped; the chain ends below `/devices`.
     assert_eq!(names, ["input8", "0018:06CB:CD8B.0002"]);
-    assert_eq!(parents[0].property("NAME"), Some("\"SYNA8004:00 06CB:CD8B Touchpad\""));
+    assert_eq!(
+        parents[0].property("NAME"),
+        Some("\"SYNA8004:00 06CB:CD8B Touchpad\"")
+    );
 }
 
 #[test]
 fn keyboard() {
     let class = class_of("event3");
-    assert_eq!(class, InputClass { key: true, keyboard: true, ..InputClass::default() });
+    assert_eq!(
+        class,
+        InputClass {
+            key: true,
+            keyboard: true,
+            ..InputClass::default()
+        }
+    );
 }
 
 #[test]
 fn mouse() {
-    assert_eq!(class_of("event5"), InputClass { mouse: true, ..InputClass::default() });
+    assert_eq!(
+        class_of("event5"),
+        InputClass {
+            mouse: true,
+            ..InputClass::default()
+        }
+    );
 }
 
 #[test]
 fn clickpad_touchpad() {
     let class = class_of("event6");
-    assert_eq!(class, InputClass { touchpad: true, clickpad: true, ..InputClass::default() });
+    assert_eq!(
+        class,
+        InputClass {
+            touchpad: true,
+            clickpad: true,
+            ..InputClass::default()
+        }
+    );
 }
 
 #[test]
 fn touchscreen() {
-    assert_eq!(class_of("event7"), InputClass { touchscreen: true, ..InputClass::default() });
+    assert_eq!(
+        class_of("event7"),
+        InputClass {
+            touchscreen: true,
+            ..InputClass::default()
+        }
+    );
 }
 
 #[test]

@@ -14,7 +14,9 @@ use std::path::PathBuf;
 
 use cupertino_netlink::nl80211::{Event as WirelessEvent, ScanDump};
 use cupertino_netlink::rfkill::{Event as RfkillEvent, WlanSwitches};
-use cupertino_netlink::rtnetlink::{AddressChange, Family, Link, RouteChange, RouteEvent, PROTOCOL_DHCP};
+use cupertino_netlink::rtnetlink::{
+    AddressChange, Family, Link, RouteChange, RouteEvent, PROTOCOL_DHCP,
+};
 use cupertino_netlink::{Security, Ssid};
 
 use crate::dhcp::client::{Action, Client, ClientConfig, Timestamp};
@@ -54,7 +56,10 @@ pub enum Command {
     Scan,
     /// Connect to the network named `ssid`. `passphrase` is for a network that has no saved
     /// credentials.
-    Connect { ssid: String, passphrase: Option<String> },
+    Connect {
+        ssid: String,
+        passphrase: Option<String>,
+    },
     Disconnect,
 }
 
@@ -80,9 +85,14 @@ impl fmt::Display for CommandError {
         match self {
             Self::NoWifiDevice => write!(f, "this machine has no Wi-Fi device"),
             Self::WifiUnavailable => write!(f, "Wi-Fi is switched off or blocked"),
-            Self::UnknownNetwork(ssid) => write!(f, "the last scan did not list a network named {ssid:?}"),
+            Self::UnknownNetwork(ssid) => {
+                write!(f, "the last scan did not list a network named {ssid:?}")
+            }
             Self::PassphraseRequired(ssid) => write!(f, "{ssid:?} needs a passphrase"),
-            Self::UnsupportedSecurity(security) => write!(f, "connecting to a network with {security:?} security is not supported"),
+            Self::UnsupportedSecurity(security) => write!(
+                f,
+                "connecting to a network with {security:?} security is not supported"
+            ),
             Self::Failed(message) => write!(f, "{message}"),
         }
     }
@@ -110,7 +120,17 @@ pub struct Engine<H: Host, S: Supplicant> {
 
 impl<H: Host, S: Supplicant> Engine<H, S> {
     pub fn new(host: H, supplicant: S, resolv_path: PathBuf) -> Self {
-        Self { host, supplicant, model: Model::new(), runners: BTreeMap::new(), wireless: Vec::new(), switches: WlanSwitches::new(), resolv_path, passphrase: None, errors: Vec::new() }
+        Self {
+            host,
+            supplicant,
+            model: Model::new(),
+            runners: BTreeMap::new(),
+            wireless: Vec::new(),
+            switches: WlanSwitches::new(),
+            resolv_path,
+            passphrase: None,
+            errors: Vec::new(),
+        }
     }
 
     pub fn host(&self) -> &H {
@@ -136,12 +156,18 @@ impl<H: Host, S: Supplicant> Engine<H, S> {
 
     /// The descriptors of the DHCP sockets, by interface index.
     pub fn dhcp_fds(&self) -> Vec<(u32, BorrowedFd<'_>)> {
-        self.runners.iter().filter_map(|(ifindex, runner)| runner.transport.as_fd().map(|fd| (*ifindex, fd))).collect()
+        self.runners
+            .iter()
+            .filter_map(|(ifindex, runner)| runner.transport.as_fd().map(|fd| (*ifindex, fd)))
+            .collect()
     }
 
     /// When [`Engine::on_timer`] next has something to do.
     pub fn next_deadline(&self) -> Option<Timestamp> {
-        self.runners.values().filter_map(|runner| runner.client.next_deadline()).min()
+        self.runners
+            .values()
+            .filter_map(|runner| runner.client.next_deadline())
+            .min()
     }
 
     /// Reads the links, and the Wi-Fi radio state is given by [`Engine::on_rfkill`]. Call at
@@ -152,7 +178,13 @@ impl<H: Host, S: Supplicant> Engine<H, S> {
         match result {
             Ok(links) => {
                 let present: Vec<u32> = links.iter().map(|link| link.index).collect();
-                for gone in self.model.devices().map(|device| device.ifindex).filter(|ifindex| !present.contains(ifindex)).collect::<Vec<_>>() {
+                for gone in self
+                    .model
+                    .devices()
+                    .map(|device| device.ifindex)
+                    .filter(|ifindex| !present.contains(ifindex))
+                    .collect::<Vec<_>>()
+                {
                     inputs.push_back(Input::LinkRemoved { ifindex: gone });
                 }
                 for link in links {
@@ -176,7 +208,9 @@ impl<H: Host, S: Supplicant> Engine<H, S> {
             match event {
                 RouteEvent::LinkNew(link) => {
                     // a Wi-Fi interface that has just appeared is not in the list yet
-                    if !self.wireless.contains(&link.index) && self.model.device(link.index).is_none() {
+                    if !self.wireless.contains(&link.index)
+                        && self.model.device(link.index).is_none()
+                    {
                         match self.host.wireless_indexes() {
                             Ok(indexes) => self.wireless = indexes,
                             Err(error) => self.errors.push(error),
@@ -185,10 +219,15 @@ impl<H: Host, S: Supplicant> Engine<H, S> {
                     let class = link.class(&self.wireless);
                     inputs.push_back(Input::LinkUpdated { link, class });
                 }
-                RouteEvent::LinkDeleted(link) => inputs.push_back(Input::LinkRemoved { ifindex: link.index }),
+                RouteEvent::LinkDeleted(link) => inputs.push_back(Input::LinkRemoved {
+                    ifindex: link.index,
+                }),
                 // The kernel's addresses and routes are not the model's: the model knows what the
                 // DHCP client configured.
-                RouteEvent::AddressNew(_) | RouteEvent::AddressDeleted(_) | RouteEvent::RouteNew(_) | RouteEvent::RouteDeleted(_) => {}
+                RouteEvent::AddressNew(_)
+                | RouteEvent::AddressDeleted(_)
+                | RouteEvent::RouteNew(_)
+                | RouteEvent::RouteDeleted(_) => {}
             }
         }
         self.run(now, inputs);
@@ -213,7 +252,10 @@ impl<H: Host, S: Supplicant> Engine<H, S> {
         for event in events {
             self.switches.apply(event);
         }
-        self.run(now, VecDeque::from([Input::Switches(self.switches.clone())]));
+        self.run(
+            now,
+            VecDeque::from([Input::Switches(self.switches.clone())]),
+        );
     }
 
     pub fn on_supplicant(&mut self, now: Timestamp) {
@@ -231,7 +273,10 @@ impl<H: Host, S: Supplicant> Engine<H, S> {
     pub fn on_dhcp_readable(&mut self, now: Timestamp, ifindex: u32) {
         let mut inputs = VecDeque::new();
         // A runner outlives its device only until the removal stops it; name the index then.
-        let name = self.model.device(ifindex).map_or_else(|| format!("interface {ifindex}"), |device| device.name.clone());
+        let name = self.model.device(ifindex).map_or_else(
+            || format!("interface {ifindex}"),
+            |device| device.name.clone(),
+        );
         while let Some(runner) = self.runners.get_mut(&ifindex) {
             let bytes = match runner.transport.receive() {
                 Ok(Some(bytes)) => bytes,
@@ -246,7 +291,10 @@ impl<H: Host, S: Supplicant> Engine<H, S> {
                     let actions = runner.client.receive(now, &message);
                     self.act(ifindex, actions, &mut inputs);
                 }
-                Err(source) => self.errors.push(Error::Dhcp { interface: name.clone(), source }),
+                Err(source) => self.errors.push(Error::Dhcp {
+                    interface: name.clone(),
+                    source,
+                }),
             }
         }
         self.run(now, inputs);
@@ -267,28 +315,53 @@ impl<H: Host, S: Supplicant> Engine<H, S> {
 
     /// Carries out a request from the bus. The command is refused before it changes anything when
     /// it cannot work; a failure while carrying it out comes back as [`CommandError::Failed`].
-    pub fn command(&mut self, now: Timestamp, command: Command) -> std::result::Result<(), CommandError> {
+    pub fn command(
+        &mut self,
+        now: Timestamp,
+        command: Command,
+    ) -> std::result::Result<(), CommandError> {
         let input = match command {
             Command::SetWirelessEnabled(enabled) => Input::SetWirelessEnabled(enabled),
             Command::Scan => {
                 let interface = self.usable_wifi()?;
-                return self.supplicant.scan(Interface { index: interface.0, name: &interface.1 }).map_err(|error| CommandError::Failed(error.to_string()));
+                return self
+                    .supplicant
+                    .scan(Interface {
+                        index: interface.0,
+                        name: &interface.1,
+                    })
+                    .map_err(|error| CommandError::Failed(error.to_string()));
             }
-            Command::Disconnect => Input::Disconnect { ifindex: self.usable_wifi()?.0 },
+            Command::Disconnect => Input::Disconnect {
+                ifindex: self.usable_wifi()?.0,
+            },
             Command::Connect { ssid, passphrase } => {
                 let (ifindex, _) = self.usable_wifi()?;
                 let wanted = Ssid(ssid.clone().into_bytes());
-                let network = self.model.networks(ifindex).into_iter().find(|network| network.ssid == wanted).ok_or_else(|| CommandError::UnknownNetwork(ssid.clone()))?;
+                let network = self
+                    .model
+                    .networks(ifindex)
+                    .into_iter()
+                    .find(|network| network.ssid == wanted)
+                    .ok_or_else(|| CommandError::UnknownNetwork(ssid.clone()))?;
                 let passphrase = passphrase.filter(|passphrase| !passphrase.is_empty());
                 match NetworkClass::from(network.security) {
                     NetworkClass::Open => self.passphrase = None,
-                    NetworkClass::Psk if network.known || passphrase.is_some() => self.passphrase = passphrase,
+                    NetworkClass::Psk if network.known || passphrase.is_some() => {
+                        self.passphrase = passphrase
+                    }
                     NetworkClass::Psk => return Err(CommandError::PassphraseRequired(ssid)),
                     // a saved enterprise profile connects without anything from us
                     NetworkClass::Enterprise if network.known => self.passphrase = None,
-                    NetworkClass::Wep | NetworkClass::Enterprise | NetworkClass::Unsupported => return Err(CommandError::UnsupportedSecurity(network.security)),
+                    NetworkClass::Wep | NetworkClass::Enterprise | NetworkClass::Unsupported => {
+                        return Err(CommandError::UnsupportedSecurity(network.security))
+                    }
                 }
-                Input::Connect { ifindex, ssid: network.ssid, security: network.security }
+                Input::Connect {
+                    ifindex,
+                    ssid: network.ssid,
+                    security: network.security,
+                }
             }
         };
         let errors_before = self.errors.len();
@@ -321,10 +394,18 @@ impl<H: Host, S: Supplicant> Engine<H, S> {
     }
 
     fn name_of(&self, ifindex: u32) -> Result<String> {
-        self.model.device(ifindex).map(|device| device.name.clone()).ok_or_else(|| Error::SupplicantDevice(format!("interface {ifindex}")))
+        self.model
+            .device(ifindex)
+            .map(|device| device.name.clone())
+            .ok_or_else(|| Error::SupplicantDevice(format!("interface {ifindex}")))
     }
 
-    fn execute(&mut self, now: Timestamp, effect: Effect, queue: &mut VecDeque<Input>) -> Result<()> {
+    fn execute(
+        &mut self,
+        now: Timestamp,
+        effect: Effect,
+        queue: &mut VecDeque<Input>,
+    ) -> Result<()> {
         match effect {
             Effect::SetLinkUp { ifindex, up } => self.host.set_link_up(ifindex, up),
             Effect::StartDhcp { ifindex } => {
@@ -340,8 +421,16 @@ impl<H: Host, S: Supplicant> Engine<H, S> {
                 Ok(())
             }
             Effect::Configure { ifindex, lease } => {
-                let change = AddressChange { index: ifindex, address: IpAddr::V4(lease.address), prefix_len: lease.prefix_len };
-                let kind = self.model.device(ifindex).ok_or(Error::UnknownDevice(ifindex))?.kind;
+                let change = AddressChange {
+                    index: ifindex,
+                    address: IpAddr::V4(lease.address),
+                    prefix_len: lease.prefix_len,
+                };
+                let kind = self
+                    .model
+                    .device(ifindex)
+                    .ok_or(Error::UnknownDevice(ifindex))?
+                    .kind;
                 self.host.add_address(&change)?;
                 // Only the first router: a second default route on the same device and metric
                 // would never be used.
@@ -351,38 +440,74 @@ impl<H: Host, S: Supplicant> Engine<H, S> {
                 }
             }
             Effect::Deconfigure { ifindex, lease } => {
-                let kind = self.model.device(ifindex).ok_or(Error::UnknownDevice(ifindex))?.kind;
+                let kind = self
+                    .model
+                    .device(ifindex)
+                    .ok_or(Error::UnknownDevice(ifindex))?
+                    .kind;
                 let route = match lease.routers.first() {
-                    Some(router) => self.host.remove_route(&default_route(ifindex, *router, kind)),
+                    Some(router) => self
+                        .host
+                        .remove_route(&default_route(ifindex, *router, kind)),
                     None => Ok(()),
                 };
-                let address = self.host.remove_address(&AddressChange { index: ifindex, address: IpAddr::V4(lease.address), prefix_len: lease.prefix_len });
+                let address = self.host.remove_address(&AddressChange {
+                    index: ifindex,
+                    address: IpAddr::V4(lease.address),
+                    prefix_len: lease.prefix_len,
+                });
                 route.and(address)
             }
-            Effect::WriteDns { servers, domain } => dns::write(&self.resolv_path, &servers, domain.as_deref()),
-            Effect::ConnectNetwork { ifindex, ssid, security } => {
+            Effect::WriteDns { servers, domain } => {
+                dns::write(&self.resolv_path, &servers, domain.as_deref())
+            }
+            Effect::ConnectNetwork {
+                ifindex,
+                ssid,
+                security,
+            } => {
                 let name = self.name_of(ifindex)?;
                 let passphrase = self.passphrase.take();
-                let result = self.supplicant.connect(Interface { index: ifindex, name: &name }, &ssid, security.into(), passphrase.as_deref());
+                let result = self.supplicant.connect(
+                    Interface {
+                        index: ifindex,
+                        name: &name,
+                    },
+                    &ssid,
+                    security.into(),
+                    passphrase.as_deref(),
+                );
                 if result.is_err() {
                     // the attempt never began: the device must not wait for it
-                    queue.push_back(Input::Supplicant(SupplicantEvent::Failed { ifindex, reason: ConnectFailure::Failed }));
+                    queue.push_back(Input::Supplicant(SupplicantEvent::Failed {
+                        ifindex,
+                        reason: ConnectFailure::Failed,
+                    }));
                 }
                 result
             }
             Effect::DisconnectNetwork { ifindex } => {
                 let name = self.name_of(ifindex)?;
-                self.supplicant.disconnect(Interface { index: ifindex, name: &name })
+                self.supplicant.disconnect(Interface {
+                    index: ifindex,
+                    name: &name,
+                })
             }
             Effect::PowerWifi { ifindex } => {
                 let name = self.name_of(ifindex)?;
-                self.supplicant.power_on(Interface { index: ifindex, name: &name })
+                self.supplicant.power_on(Interface {
+                    index: ifindex,
+                    name: &name,
+                })
             }
             Effect::RefreshNetworks { ifindex } => {
                 // the two reads are independent: one failing does not hide the other
                 let name = self.name_of(ifindex)?;
                 self.refresh_scan(ifindex, queue);
-                match self.supplicant.known_networks(Interface { index: ifindex, name: &name }) {
+                match self.supplicant.known_networks(Interface {
+                    index: ifindex,
+                    name: &name,
+                }) {
                     Ok(known) => queue.push_back(Input::KnownNetworks { ifindex, known }),
                     Err(error) => self.errors.push(error),
                 }
@@ -396,19 +521,37 @@ impl<H: Host, S: Supplicant> Engine<H, S> {
         match self.host.scan_results(ifindex) {
             Ok(dump) => {
                 // the access points that did decode still count
-                self.errors.extend(dump.errors.into_iter().map(|source| Error::Netlink(cupertino_netlink::Error::Parse { origin: "scan results", source })));
-                queue.push_back(Input::ScanResults { ifindex, results: dump.results });
+                self.errors.extend(dump.errors.into_iter().map(|source| {
+                    Error::Netlink(cupertino_netlink::Error::Parse {
+                        origin: "scan results",
+                        source,
+                    })
+                }));
+                queue.push_back(Input::ScanResults {
+                    ifindex,
+                    results: dump.results,
+                });
             }
             Err(error) => self.errors.push(error),
         }
     }
 
-    fn start_dhcp(&mut self, now: Timestamp, ifindex: u32, queue: &mut VecDeque<Input>) -> Result<()> {
+    fn start_dhcp(
+        &mut self,
+        now: Timestamp,
+        ifindex: u32,
+        queue: &mut VecDeque<Input>,
+    ) -> Result<()> {
         if self.runners.contains_key(&ifindex) {
             return Ok(());
         }
-        let device: &Device = self.model.device(ifindex).ok_or_else(|| Error::SupplicantDevice(format!("interface {ifindex}")))?;
-        let hardware = device.mac.ok_or_else(|| Error::SupplicantDevice(format!("{} has no hardware address", device.name)))?;
+        let device: &Device = self
+            .model
+            .device(ifindex)
+            .ok_or_else(|| Error::SupplicantDevice(format!("interface {ifindex}")))?;
+        let hardware = device.mac.ok_or_else(|| {
+            Error::SupplicantDevice(format!("{} has no hardware address", device.name))
+        })?;
         let transport = self.host.open_transport(ifindex)?;
         let xid_seed = self.host.random_u32()?;
         let mut client = Client::new(ClientConfig { hardware, xid_seed });
@@ -422,11 +565,18 @@ impl<H: Host, S: Supplicant> Engine<H, S> {
     fn act(&mut self, ifindex: u32, actions: Vec<Action>, queue: &mut VecDeque<Input>) {
         for action in actions {
             match action {
-                Action::Send { message, destination } => {
+                Action::Send {
+                    message,
+                    destination,
+                } => {
                     let Some(runner) = self.runners.get_mut(&ifindex) else {
                         continue;
                     };
-                    if let Err(error) = runner.transport.send(message.client_address, destination, &message.encode()) {
+                    if let Err(error) = runner.transport.send(
+                        message.client_address,
+                        destination,
+                        &message.encode(),
+                    ) {
                         self.errors.push(error);
                     }
                 }
@@ -440,7 +590,14 @@ impl<H: Host, S: Supplicant> Engine<H, S> {
 
 /// The default route a lease installs. The metric orders devices so Ethernet is preferred.
 fn default_route(ifindex: u32, router: Ipv4Addr, kind: DeviceKind) -> RouteChange {
-    RouteChange { family: Family::V4, destination: None, gateway: Some(IpAddr::V4(router)), index: ifindex, metric: Some(route_metric(kind)), protocol: PROTOCOL_DHCP }
+    RouteChange {
+        family: Family::V4,
+        destination: None,
+        gateway: Some(IpAddr::V4(router)),
+        index: ifindex,
+        metric: Some(route_metric(kind)),
+        protocol: PROTOCOL_DHCP,
+    }
 }
 
 #[cfg(test)]
@@ -486,7 +643,10 @@ mod tests {
 
     impl Transport for FakeTransport {
         fn send(&mut self, source: Ipv4Addr, destination: Ipv4Addr, message: &[u8]) -> Result<()> {
-            self.0.borrow_mut().sent.push((source, destination, Message::decode(message).unwrap()));
+            self.0
+                .borrow_mut()
+                .sent
+                .push((source, destination, Message::decode(message).unwrap()));
             Ok(())
         }
 
@@ -509,7 +669,10 @@ mod tests {
         }
 
         fn scan_results(&mut self, _ifindex: u32) -> Result<ScanDump> {
-            Ok(ScanDump { results: self.0.borrow().scan.clone(), errors: Vec::new() })
+            Ok(ScanDump {
+                results: self.0.borrow().scan.clone(),
+                errors: Vec::new(),
+            })
         }
 
         fn set_link_up(&mut self, _ifindex: u32, _up: bool) -> Result<()> {
@@ -539,7 +702,10 @@ mod tests {
         fn set_wireless_blocked(&mut self, blocked: bool) -> Result<()> {
             let mut world = self.0.borrow_mut();
             if world.fail_block {
-                return Err(Error::Syscall { call: "write", errno: rustix::io::Errno::ACCESS });
+                return Err(Error::Syscall {
+                    call: "write",
+                    errno: rustix::io::Errno::ACCESS,
+                });
             }
             world.blocked.push(blocked);
             Ok(())
@@ -555,15 +721,32 @@ mod tests {
     }
 
     fn link(index: u32, name: &str, flags: u32, mac: MacAddr) -> Link {
-        Link { index, name: name.to_owned(), hardware_type: 1, flags: LinkFlags(flags), oper_state: OperState::Up, mac: Some(mac), mtu: Some(1500), info_kind: None, master: None }
+        Link {
+            index,
+            name: name.to_owned(),
+            hardware_type: 1,
+            flags: LinkFlags(flags),
+            oper_state: OperState::Up,
+            mac: Some(mac),
+            mtu: Some(1500),
+            info_kind: None,
+            master: None,
+        }
     }
 
     fn at(seconds: u64) -> Timestamp {
         Duration::from_secs(seconds)
     }
 
-    fn engine(world: &Rc<RefCell<World>>, dir: &std::path::Path) -> Engine<FakeHost, FakeSupplicant> {
-        Engine::new(FakeHost(world.clone()), FakeSupplicant::default(), dir.join("resolv.conf"))
+    fn engine(
+        world: &Rc<RefCell<World>>,
+        dir: &std::path::Path,
+    ) -> Engine<FakeHost, FakeSupplicant> {
+        Engine::new(
+            FakeHost(world.clone()),
+            FakeSupplicant::default(),
+            dir.join("resolv.conf"),
+        )
     }
 
     /// The server's answer to the last message the client sent.
@@ -586,35 +769,86 @@ mod tests {
     #[test]
     fn a_cable_gets_an_address_a_default_route_and_the_resolver_from_dhcp() {
         let dir = tempfile::tempdir().unwrap();
-        let world = Rc::new(RefCell::new(World { links: vec![link(2, "eth0", IFF_UP | IFF_LOWER_UP, ETH_MAC)], ..World::default() }));
+        let world = Rc::new(RefCell::new(World {
+            links: vec![link(2, "eth0", IFF_UP | IFF_LOWER_UP, ETH_MAC)],
+            ..World::default()
+        }));
         let mut engine = engine(&world, dir.path());
         engine.resync(at(0));
-        assert_eq!(engine.model().device(2).unwrap().state, DeviceState::Configuring(crate::model::Stage::Addressing));
-        assert_eq!(world.borrow().sent.last().map(|(source, destination, message)| (*source, *destination, message.message_type)), Some((Ipv4Addr::UNSPECIFIED, Ipv4Addr::BROADCAST, MessageType::Discover)));
+        assert_eq!(
+            engine.model().device(2).unwrap().state,
+            DeviceState::Configuring(crate::model::Stage::Addressing)
+        );
+        assert_eq!(
+            world
+                .borrow()
+                .sent
+                .last()
+                .map(|(source, destination, message)| (
+                    *source,
+                    *destination,
+                    message.message_type
+                )),
+            Some((
+                Ipv4Addr::UNSPECIFIED,
+                Ipv4Addr::BROADCAST,
+                MessageType::Discover
+            ))
+        );
 
         let offer = server_reply(&world, MessageType::Offer);
         world.borrow_mut().inbox.push_back(offer);
         engine.on_dhcp_readable(at(1), 2);
-        assert_eq!(world.borrow().sent.last().map(|(_, _, message)| message.message_type), Some(MessageType::Request));
+        assert_eq!(
+            world
+                .borrow()
+                .sent
+                .last()
+                .map(|(_, _, message)| message.message_type),
+            Some(MessageType::Request)
+        );
         let ack = server_reply(&world, MessageType::Ack);
         world.borrow_mut().inbox.push_back(ack);
         engine.on_dhcp_readable(at(1), 2);
 
         let world = world.borrow();
-        assert_eq!(world.added_addresses, [AddressChange { index: 2, address: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 9)), prefix_len: 24 }]);
+        assert_eq!(
+            world.added_addresses,
+            [AddressChange {
+                index: 2,
+                address: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 9)),
+                prefix_len: 24
+            }]
+        );
         assert_eq!(
             world.added_routes,
-            [RouteChange { family: Family::V4, destination: None, gateway: Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))), index: 2, metric: Some(100), protocol: PROTOCOL_DHCP }]
+            [RouteChange {
+                family: Family::V4,
+                destination: None,
+                gateway: Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))),
+                index: 2,
+                metric: Some(100),
+                protocol: PROTOCOL_DHCP
+            }]
         );
-        assert_eq!(std::fs::read_to_string(dir.path().join("resolv.conf")).unwrap(), "# written by cupertino-netd\nnameserver 10.0.0.53\n");
-        assert_eq!(engine.model().device(2).unwrap().state, DeviceState::Connected);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("resolv.conf")).unwrap(),
+            "# written by cupertino-netd\nnameserver 10.0.0.53\n"
+        );
+        assert_eq!(
+            engine.model().device(2).unwrap().state,
+            DeviceState::Connected
+        );
         assert!(engine.take_errors().is_empty());
     }
 
     #[test]
     fn unplugging_the_cable_takes_the_address_and_the_route_away() {
         let dir = tempfile::tempdir().unwrap();
-        let world = Rc::new(RefCell::new(World { links: vec![link(2, "eth0", IFF_UP | IFF_LOWER_UP, ETH_MAC)], ..World::default() }));
+        let world = Rc::new(RefCell::new(World {
+            links: vec![link(2, "eth0", IFF_UP | IFF_LOWER_UP, ETH_MAC)],
+            ..World::default()
+        }));
         let mut engine = engine(&world, dir.path());
         engine.resync(at(0));
         let offer = server_reply(&world, MessageType::Offer);
@@ -624,18 +858,27 @@ mod tests {
         world.borrow_mut().inbox.push_back(ack);
         engine.on_dhcp_readable(at(1), 2);
 
-        engine.on_route_events(at(5), vec![RouteEvent::LinkNew(link(2, "eth0", IFF_UP, ETH_MAC))]);
+        engine.on_route_events(
+            at(5),
+            vec![RouteEvent::LinkNew(link(2, "eth0", IFF_UP, ETH_MAC))],
+        );
         let world = world.borrow();
         assert_eq!(world.removed_addresses.len(), 1);
         assert_eq!(world.removed_routes.len(), 1);
-        assert_eq!(engine.model().device(2).unwrap().state, DeviceState::Unavailable);
+        assert_eq!(
+            engine.model().device(2).unwrap().state,
+            DeviceState::Unavailable
+        );
         assert_eq!(engine.next_deadline(), None);
     }
 
     #[test]
     fn a_silent_server_is_retried_by_the_timer_and_reported_after_the_schedule() {
         let dir = tempfile::tempdir().unwrap();
-        let world = Rc::new(RefCell::new(World { links: vec![link(2, "eth0", IFF_UP | IFF_LOWER_UP, ETH_MAC)], ..World::default() }));
+        let world = Rc::new(RefCell::new(World {
+            links: vec![link(2, "eth0", IFF_UP | IFF_LOWER_UP, ETH_MAC)],
+            ..World::default()
+        }));
         let mut engine = engine(&world, dir.path());
         engine.resync(at(0));
         assert_eq!(engine.next_deadline(), Some(at(4)));
@@ -645,7 +888,10 @@ mod tests {
             engine.on_timer(at(when));
         }
         assert_eq!(world.borrow().sent.len(), 6);
-        assert_eq!(engine.model().device(2).unwrap().failure, Some(crate::model::Failure::NoAddress));
+        assert_eq!(
+            engine.model().device(2).unwrap().failure,
+            Some(crate::model::Failure::NoAddress)
+        );
     }
 
     fn wifi_world() -> Rc<RefCell<World>> {
@@ -660,17 +906,37 @@ mod tests {
             seen_ms_ago: None,
         };
         Rc::new(RefCell::new(World {
-            links: vec![link(3, "wlan0", IFF_UP | IFF_LOWER_UP, MacAddr([2, 0, 0, 0, 0, 3]))],
+            links: vec![link(
+                3,
+                "wlan0",
+                IFF_UP | IFF_LOWER_UP,
+                MacAddr([2, 0, 0, 0, 0, 3]),
+            )],
             wireless: vec![3],
-            scan: vec![result("home", Security::Wpa2, -50), result("cafe", Security::Open, -60), result("old", Security::Wep, -70)],
+            scan: vec![
+                result("home", Security::Wpa2, -50),
+                result("cafe", Security::Open, -60),
+                result("old", Security::Wep, -70),
+            ],
             ..World::default()
         }))
     }
 
-    fn started_wifi(dir: &std::path::Path) -> (Rc<RefCell<World>>, Engine<FakeHost, FakeSupplicant>) {
+    fn started_wifi(
+        dir: &std::path::Path,
+    ) -> (Rc<RefCell<World>>, Engine<FakeHost, FakeSupplicant>) {
         let world = wifi_world();
         let mut engine = engine(&world, dir);
-        engine.on_rfkill(at(0), &[RfkillEvent { index: 0, kind: cupertino_netlink::rfkill::Kind::Wlan, operation: cupertino_netlink::rfkill::Operation::Added, soft_blocked: false, hard_blocked: false }]);
+        engine.on_rfkill(
+            at(0),
+            &[RfkillEvent {
+                index: 0,
+                kind: cupertino_netlink::rfkill::Kind::Wlan,
+                operation: cupertino_netlink::rfkill::Operation::Added,
+                soft_blocked: false,
+                hard_blocked: false,
+            }],
+        );
         engine.resync(at(0));
         (world, engine)
     }
@@ -680,7 +946,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (_, engine) = started_wifi(dir.path());
         assert_eq!(engine.supplicant().calls, [Call::PowerOn(3)]);
-        let names: Vec<_> = engine.model().networks(3).into_iter().map(|network| network.ssid.to_text()).collect();
+        let names: Vec<_> = engine
+            .model()
+            .networks(3)
+            .into_iter()
+            .map(|network| network.ssid.to_text())
+            .collect();
         assert_eq!(names, ["home", "cafe", "old"]);
     }
 
@@ -688,31 +959,90 @@ mod tests {
     fn connecting_hands_the_passphrase_to_the_supplicant_once_and_dhcp_starts_when_it_joins() {
         let dir = tempfile::tempdir().unwrap();
         let (world, mut engine) = started_wifi(dir.path());
-        engine.command(at(1), Command::Connect { ssid: "home".to_owned(), passphrase: Some("correct horse".to_owned()) }).unwrap();
+        engine
+            .command(
+                at(1),
+                Command::Connect {
+                    ssid: "home".to_owned(),
+                    passphrase: Some("correct horse".to_owned()),
+                },
+            )
+            .unwrap();
         assert_eq!(
             engine.supplicant().calls.last(),
-            Some(&Call::Connect { ifindex: 3, ssid: Ssid(b"home".to_vec()), class: NetworkClass::Psk, passphrase: Some("correct horse".to_owned()) })
+            Some(&Call::Connect {
+                ifindex: 3,
+                ssid: Ssid(b"home".to_vec()),
+                class: NetworkClass::Psk,
+                passphrase: Some("correct horse".to_owned())
+            })
         );
-        assert_eq!(engine.model().device(3).unwrap().state, DeviceState::Configuring(crate::model::Stage::Authenticating));
+        assert_eq!(
+            engine.model().device(3).unwrap().state,
+            DeviceState::Configuring(crate::model::Stage::Authenticating)
+        );
 
-        engine.supplicant.queued.push(SupplicantEvent::Connected { ifindex: 3, ssid: Ssid(b"home".to_vec()) });
+        engine.supplicant.queued.push(SupplicantEvent::Connected {
+            ifindex: 3,
+            ssid: Ssid(b"home".to_vec()),
+        });
         engine.on_supplicant(at(2));
-        assert_eq!(world.borrow().sent.last().map(|(_, _, message)| message.message_type), Some(MessageType::Discover));
+        assert_eq!(
+            world
+                .borrow()
+                .sent
+                .last()
+                .map(|(_, _, message)| message.message_type),
+            Some(MessageType::Discover)
+        );
 
         // the next connection does not reuse the passphrase
-        engine.command(at(3), Command::Connect { ssid: "cafe".to_owned(), passphrase: Some("ignored".to_owned()) }).unwrap();
-        assert_eq!(engine.supplicant().calls.last(), Some(&Call::Connect { ifindex: 3, ssid: Ssid(b"cafe".to_vec()), class: NetworkClass::Open, passphrase: None }));
+        engine
+            .command(
+                at(3),
+                Command::Connect {
+                    ssid: "cafe".to_owned(),
+                    passphrase: Some("ignored".to_owned()),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            engine.supplicant().calls.last(),
+            Some(&Call::Connect {
+                ifindex: 3,
+                ssid: Ssid(b"cafe".to_vec()),
+                class: NetworkClass::Open,
+                passphrase: None
+            })
+        );
     }
 
     #[test]
     fn a_wrong_passphrase_ends_with_the_reason_and_no_dhcp() {
         let dir = tempfile::tempdir().unwrap();
         let (world, mut engine) = started_wifi(dir.path());
-        engine.command(at(1), Command::Connect { ssid: "home".to_owned(), passphrase: Some("nope".to_owned()) }).unwrap();
-        engine.supplicant.queued.push(SupplicantEvent::Failed { ifindex: 3, reason: ConnectFailure::WrongPassphrase });
+        engine
+            .command(
+                at(1),
+                Command::Connect {
+                    ssid: "home".to_owned(),
+                    passphrase: Some("nope".to_owned()),
+                },
+            )
+            .unwrap();
+        engine.supplicant.queued.push(SupplicantEvent::Failed {
+            ifindex: 3,
+            reason: ConnectFailure::WrongPassphrase,
+        });
         engine.on_supplicant(at(2));
         let device = engine.model().device(3).unwrap();
-        assert_eq!((device.state, device.failure), (DeviceState::Disconnected, Some(crate::model::Failure::WrongPassphrase)));
+        assert_eq!(
+            (device.state, device.failure),
+            (
+                DeviceState::Disconnected,
+                Some(crate::model::Failure::WrongPassphrase)
+            )
+        );
         assert!(world.borrow().sent.is_empty());
     }
 
@@ -720,31 +1050,59 @@ mod tests {
     fn commands_that_cannot_work_are_refused_before_anything_changes() {
         let dir = tempfile::tempdir().unwrap();
         let (_, mut engine) = started_wifi(dir.path());
-        let connect = |ssid: &str, passphrase: Option<&str>| Command::Connect { ssid: ssid.to_owned(), passphrase: passphrase.map(str::to_owned) };
-        assert_eq!(engine.command(at(1), connect("home", None)), Err(CommandError::PassphraseRequired("home".to_owned())));
-        assert_eq!(engine.command(at(1), connect("home", Some(""))), Err(CommandError::PassphraseRequired("home".to_owned())));
-        assert_eq!(engine.command(at(1), connect("nowhere", None)), Err(CommandError::UnknownNetwork("nowhere".to_owned())));
-        assert_eq!(engine.command(at(1), connect("old", Some("x"))), Err(CommandError::UnsupportedSecurity(Security::Wep)));
+        let connect = |ssid: &str, passphrase: Option<&str>| Command::Connect {
+            ssid: ssid.to_owned(),
+            passphrase: passphrase.map(str::to_owned),
+        };
+        assert_eq!(
+            engine.command(at(1), connect("home", None)),
+            Err(CommandError::PassphraseRequired("home".to_owned()))
+        );
+        assert_eq!(
+            engine.command(at(1), connect("home", Some(""))),
+            Err(CommandError::PassphraseRequired("home".to_owned()))
+        );
+        assert_eq!(
+            engine.command(at(1), connect("nowhere", None)),
+            Err(CommandError::UnknownNetwork("nowhere".to_owned()))
+        );
+        assert_eq!(
+            engine.command(at(1), connect("old", Some("x"))),
+            Err(CommandError::UnsupportedSecurity(Security::Wep))
+        );
         assert_eq!(engine.supplicant().calls, [Call::PowerOn(3)]);
     }
 
     #[test]
     fn a_machine_without_wifi_refuses_wifi_commands() {
         let dir = tempfile::tempdir().unwrap();
-        let world = Rc::new(RefCell::new(World { links: vec![link(2, "eth0", IFF_UP, ETH_MAC)], ..World::default() }));
+        let world = Rc::new(RefCell::new(World {
+            links: vec![link(2, "eth0", IFF_UP, ETH_MAC)],
+            ..World::default()
+        }));
         let mut engine = engine(&world, dir.path());
         engine.resync(at(0));
-        assert_eq!(engine.command(at(1), Command::Scan), Err(CommandError::NoWifiDevice));
+        assert_eq!(
+            engine.command(at(1), Command::Scan),
+            Err(CommandError::NoWifiDevice)
+        );
     }
 
     #[test]
     fn switching_wifi_off_writes_the_kernel_switch_and_a_failed_write_reaches_the_caller() {
         let dir = tempfile::tempdir().unwrap();
         let (world, mut engine) = started_wifi(dir.path());
-        engine.command(at(1), Command::SetWirelessEnabled(false)).unwrap();
+        engine
+            .command(at(1), Command::SetWirelessEnabled(false))
+            .unwrap();
         assert_eq!(world.borrow().blocked, [true]);
         world.borrow_mut().fail_block = true;
         let result = engine.command(at(2), Command::SetWirelessEnabled(true));
-        assert_eq!(result, Err(CommandError::Failed("write: Permission denied (os error 13)".to_owned())));
+        assert_eq!(
+            result,
+            Err(CommandError::Failed(
+                "write: Permission denied (os error 13)".to_owned()
+            ))
+        );
     }
 }

@@ -18,7 +18,10 @@ pub struct TitleFade {
 
 impl Default for TitleFade {
     fn default() -> Self {
-        Self { start: 0.8, end: 1.0 }
+        Self {
+            start: 0.8,
+            end: 1.0,
+        }
     }
 }
 
@@ -43,7 +46,11 @@ pub struct HighlightConfig {
 
 impl Default for HighlightConfig {
     fn default() -> Self {
-        Self { inset: 6.0, fade_s: 0.12, move_curve: Curve::Spring(SpringParams::from_perceptual(0.2, 0.0)) }
+        Self {
+            inset: 6.0,
+            fade_s: 0.12,
+            move_curve: Curve::Spring(SpringParams::from_perceptual(0.2, 0.0)),
+        }
     }
 }
 
@@ -61,7 +68,12 @@ pub struct AppOverviewConfig {
 
 impl Default for AppOverviewConfig {
     fn default() -> Self {
-        Self { row_height_fraction: 0.2, row_gap: 16.0, row_max_scale: 0.5, row_margin: 24.0 }
+        Self {
+            row_height_fraction: 0.2,
+            row_gap: 16.0,
+            row_max_scale: 0.5,
+            row_margin: 24.0,
+        }
     }
 }
 

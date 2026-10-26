@@ -63,7 +63,16 @@ pub enum Position {
 }
 
 /// The names of the eight triggers, as the keys of `dock.conf`.
-pub const TRIGGER_KEYS: [&str; 8] = ["corner_top_left", "corner_top_right", "corner_bottom_left", "corner_bottom_right", "swipe_up", "swipe_down", "pinch", "spread"];
+pub const TRIGGER_KEYS: [&str; 8] = [
+    "corner_top_left",
+    "corner_top_right",
+    "corner_bottom_left",
+    "corner_bottom_right",
+    "swipe_up",
+    "swipe_down",
+    "pinch",
+    "spread",
+];
 
 /// A corner or gesture the server reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,15 +88,30 @@ pub enum Trigger {
 }
 
 impl Trigger {
-    pub const ALL: [Trigger; 8] = [Trigger::CornerTopLeft, Trigger::CornerTopRight, Trigger::CornerBottomLeft, Trigger::CornerBottomRight, Trigger::SwipeUp, Trigger::SwipeDown, Trigger::Pinch, Trigger::Spread];
+    pub const ALL: [Trigger; 8] = [
+        Trigger::CornerTopLeft,
+        Trigger::CornerTopRight,
+        Trigger::CornerBottomLeft,
+        Trigger::CornerBottomRight,
+        Trigger::SwipeUp,
+        Trigger::SwipeDown,
+        Trigger::Pinch,
+        Trigger::Spread,
+    ];
 
     fn index(self) -> usize {
-        Self::ALL.iter().position(|t| *t == self).expect("every trigger is in ALL")
+        Self::ALL
+            .iter()
+            .position(|t| *t == self)
+            .expect("every trigger is in ALL")
     }
 
     /// The trigger a `dock.conf` key names.
     pub fn from_key(key: &str) -> Option<Trigger> {
-        TRIGGER_KEYS.iter().position(|k| *k == key).map(|i| Self::ALL[i])
+        TRIGGER_KEYS
+            .iter()
+            .position(|k| *k == key)
+            .map(|i| Self::ALL[i])
     }
 }
 
@@ -183,7 +207,11 @@ pub struct DockSettings {
 }
 
 fn parse_size(value: &str) -> Result<f64, String> {
-    value.parse::<f64>().ok().filter(|v| v.is_finite()).ok_or_else(|| format!("expected points, got {value:?}"))
+    value
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite())
+        .ok_or_else(|| format!("expected points, got {value:?}"))
 }
 
 fn pin(s: &mut DockSettings, value: &str) -> Result<(), String> {
@@ -196,22 +224,68 @@ macro_rules! trigger_key {
     ($i:expr) => {
         Key {
             name: TRIGGER_KEYS[$i],
-            read: |s, v| parse_action(v).map(|a| s.actions.set(Trigger::ALL[$i], a)).ok_or_else(|| format!("expected none, app-grid, exec:<command> or an action name, got {v:?}")),
+            read: |s, v| {
+                parse_action(v)
+                    .map(|a| s.actions.set(Trigger::ALL[$i], a))
+                    .ok_or_else(|| {
+                        format!(
+                            "expected none, app-grid, exec:<command> or an action name, got {v:?}"
+                        )
+                    })
+            },
             write: |s| Some(action_text(s.actions.get(Trigger::ALL[$i]))),
-            keep: |s, g| s.actions.set(Trigger::ALL[$i], g.actions.get(Trigger::ALL[$i]).clone()),
+            keep: |s, g| {
+                s.actions
+                    .set(Trigger::ALL[$i], g.actions.get(Trigger::ALL[$i]).clone())
+            },
         }
     };
 }
 
 const KEYS: &[Key<DockSettings>] = &[
     // pins are read here and written by the dock to `dock-pins`, so they are never rewritten
-    Key { name: "pin", read: pin, write: |_| None, keep: |_, _| {} },
-    Key { name: "pinned", read: pin, write: |_| None, keep: |_, _| {} },
-    Key { name: "tile_size", read: |s, v| parse_size(v).map(|n| s.tile_size = Some(n)), write: |s| s.tile_size.map(|n| n.to_string()), keep: |s, g| s.tile_size = g.tile_size },
-    Key { name: "large_size", read: |s, v| parse_size(v).map(|n| s.large_size = Some(n)), write: |s| s.large_size.map(|n| n.to_string()), keep: |s, g| s.large_size = g.large_size },
-    Key { name: "magnification", read: |s, v| parse_switch(v).map(|b| s.magnification = Some(b)), write: |s| s.magnification.map(switch_text), keep: |s, g| s.magnification = g.magnification },
-    Key { name: "autohide", read: |s, v| parse_switch(v).map(|b| s.autohide = Some(b)), write: |s| s.autohide.map(switch_text), keep: |s, g| s.autohide = g.autohide },
-    Key { name: "recents", read: |s, v| parse_switch(v).map(|b| s.recents = Some(b)), write: |s| s.recents.map(switch_text), keep: |s, g| s.recents = g.recents },
+    Key {
+        name: "pin",
+        read: pin,
+        write: |_| None,
+        keep: |_, _| {},
+    },
+    Key {
+        name: "pinned",
+        read: pin,
+        write: |_| None,
+        keep: |_, _| {},
+    },
+    Key {
+        name: "tile_size",
+        read: |s, v| parse_size(v).map(|n| s.tile_size = Some(n)),
+        write: |s| s.tile_size.map(|n| n.to_string()),
+        keep: |s, g| s.tile_size = g.tile_size,
+    },
+    Key {
+        name: "large_size",
+        read: |s, v| parse_size(v).map(|n| s.large_size = Some(n)),
+        write: |s| s.large_size.map(|n| n.to_string()),
+        keep: |s, g| s.large_size = g.large_size,
+    },
+    Key {
+        name: "magnification",
+        read: |s, v| parse_switch(v).map(|b| s.magnification = Some(b)),
+        write: |s| s.magnification.map(switch_text),
+        keep: |s, g| s.magnification = g.magnification,
+    },
+    Key {
+        name: "autohide",
+        read: |s, v| parse_switch(v).map(|b| s.autohide = Some(b)),
+        write: |s| s.autohide.map(switch_text),
+        keep: |s, g| s.autohide = g.autohide,
+    },
+    Key {
+        name: "recents",
+        read: |s, v| parse_switch(v).map(|b| s.recents = Some(b)),
+        write: |s| s.recents.map(switch_text),
+        keep: |s, g| s.recents = g.recents,
+    },
     Key {
         name: "position",
         read: |s, v| {
@@ -223,11 +297,13 @@ const KEYS: &[Key<DockSettings>] = &[
             });
             Ok(())
         },
-        write: |s| s.position.map(|p| match p {
-            Position::Bottom => "bottom".to_string(),
-            Position::Left => "left".to_string(),
-            Position::Right => "right".to_string(),
-        }),
+        write: |s| {
+            s.position.map(|p| match p {
+                Position::Bottom => "bottom".to_string(),
+                Position::Left => "left".to_string(),
+                Position::Right => "right".to_string(),
+            })
+        },
         keep: |s, g| s.position = g.position,
     },
     trigger_key!(0),
@@ -253,7 +329,13 @@ impl DockSettings {
     /// The settings of `text` and the problems of its lines; with `last_good`, a key whose line is wrong keeps its
     /// last good value.
     pub fn parse(text: &str, last_good: Option<&Self>) -> (Self, Vec<Problem>) {
-        conf::read(&conf::ConfText::parse(text), KEYS, &Self::default(), last_good, Some(bare_pin))
+        conf::read(
+            &conf::ConfText::parse(text),
+            KEYS,
+            &Self::default(),
+            last_good,
+            Some(bare_pin),
+        )
     }
 
     /// [`Self::parse`] of the file at `path`; a missing file sets nothing.
@@ -277,7 +359,10 @@ mod tests {
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(f.pinned, ["foot", "firefox"]);
         assert_eq!((f.tile_size, f.large_size), (Some(48.0), Some(96.0)));
-        assert_eq!((f.magnification, f.autohide, f.recents), (Some(true), Some(false), Some(false)));
+        assert_eq!(
+            (f.magnification, f.autohide, f.recents),
+            (Some(true), Some(false), Some(false))
+        );
         assert_eq!(f.position, Some(Position::Left));
         assert_eq!(f.actions, ActionMap::default());
         assert_eq!(DockSettings::parse("", None).0, DockSettings::default());
@@ -286,12 +371,25 @@ mod tests {
     #[test]
     fn trigger_keys_set_the_actions_and_bad_values_are_problems() {
         let (f, problems) = DockSettings::parse("corner_bottom_right = show-desktop\nswipe_up = none\npinch = exec:foot\nspread = exec:\nautohide = maybe\nposition = top\nunknown = 1\n", None);
-        assert_eq!(f.actions.get(Trigger::CornerBottomRight), &ActionTarget::Server("show-desktop".into()));
+        assert_eq!(
+            f.actions.get(Trigger::CornerBottomRight),
+            &ActionTarget::Server("show-desktop".into())
+        );
         assert_eq!(f.actions.get(Trigger::SwipeUp), &ActionTarget::None);
-        assert_eq!(f.actions.get(Trigger::Pinch), &ActionTarget::Exec("foot".into()));
-        assert_eq!(f.actions.get(Trigger::Spread), ActionMap::default().get(Trigger::Spread), "an empty program is invalid");
+        assert_eq!(
+            f.actions.get(Trigger::Pinch),
+            &ActionTarget::Exec("foot".into())
+        );
+        assert_eq!(
+            f.actions.get(Trigger::Spread),
+            ActionMap::default().get(Trigger::Spread),
+            "an empty program is invalid"
+        );
         assert_eq!((f.autohide, f.position), (None, None));
-        assert_eq!(problems.iter().map(|p| p.line).collect::<Vec<_>>(), vec![4, 5, 6, 7]);
+        assert_eq!(
+            problems.iter().map(|p| p.line).collect::<Vec<_>>(),
+            vec![4, 5, 6, 7]
+        );
         assert!(f.pinned.is_empty(), "trigger lines are settings, not pins");
     }
 
@@ -299,11 +397,22 @@ mod tests {
     fn values_parse_to_their_targets() {
         assert_eq!(parse_action("none"), Some(ActionTarget::None));
         assert_eq!(parse_action(" app-grid "), Some(ActionTarget::AppGrid));
-        assert_eq!(parse_action("exec:foot -e htop"), Some(ActionTarget::Exec("foot -e htop".into())));
-        assert_eq!(parse_action("show-desktop"), Some(ActionTarget::Server("show-desktop".into())));
+        assert_eq!(
+            parse_action("exec:foot -e htop"),
+            Some(ActionTarget::Exec("foot -e htop".into()))
+        );
+        assert_eq!(
+            parse_action("show-desktop"),
+            Some(ActionTarget::Server("show-desktop".into()))
+        );
         assert_eq!(parse_action("exec:"), None, "a program is needed");
         assert_eq!(parse_action(""), None);
-        for a in [ActionTarget::None, ActionTarget::AppGrid, ActionTarget::Exec("foot -e htop".into()), ActionTarget::Server("lock".into())] {
+        for a in [
+            ActionTarget::None,
+            ActionTarget::AppGrid,
+            ActionTarget::Exec("foot -e htop".into()),
+            ActionTarget::Server("lock".into()),
+        ] {
             assert_eq!(parse_action(&action_text(&a)), Some(a));
         }
     }
@@ -314,11 +423,23 @@ mod tests {
         for t in &Trigger::ALL[..4] {
             assert_eq!(m.get(*t), &ActionTarget::None, "{t:?}");
         }
-        assert_eq!(m.get(Trigger::SwipeUp), &ActionTarget::Server("overview".into()));
-        assert_eq!(m.get(Trigger::SwipeDown), &ActionTarget::Server("app-overview".into()));
+        assert_eq!(
+            m.get(Trigger::SwipeUp),
+            &ActionTarget::Server("overview".into())
+        );
+        assert_eq!(
+            m.get(Trigger::SwipeDown),
+            &ActionTarget::Server("app-overview".into())
+        );
         assert_eq!(m.get(Trigger::Pinch), &ActionTarget::AppGrid);
-        assert_eq!(m.get(Trigger::Spread), &ActionTarget::Server("show-desktop".into()));
-        assert_eq!(Trigger::from_key("corner_bottom_right"), Some(Trigger::CornerBottomRight));
+        assert_eq!(
+            m.get(Trigger::Spread),
+            &ActionTarget::Server("show-desktop".into())
+        );
+        assert_eq!(
+            Trigger::from_key("corner_bottom_right"),
+            Some(Trigger::CornerBottomRight)
+        );
         assert_eq!(Trigger::from_key("corner"), None);
     }
 
@@ -326,7 +447,11 @@ mod tests {
     fn sizes_follow_the_reference_validation() {
         assert_eq!(sanitize_tile_size(Some(47.2), 1080.0), 48.0);
         assert_eq!(sanitize_tile_size(Some(4000.0), 1080.0), 64.0);
-        assert_eq!(sanitize_tile_size(None, 768.0), 52.0, "small displays get the small default");
+        assert_eq!(
+            sanitize_tile_size(None, 768.0),
+            52.0,
+            "small displays get the small default"
+        );
         assert_eq!(sanitize_large_size(Some(512.5)), 513.0);
         assert_eq!(sanitize_large_size(Some(513.0)), 128.0);
         assert_eq!(sanitize_large_size(Some(96.0)), 96.0);
@@ -348,8 +473,13 @@ mod tests {
 
     #[test]
     fn a_bad_value_keeps_the_last_good_one() {
-        let good = DockSettings { autohide: Some(true), tile_size: Some(40.0), ..DockSettings::default() };
-        let (s, problems) = DockSettings::parse("autohide = sometimes\ntile_size = huge\n", Some(&good));
+        let good = DockSettings {
+            autohide: Some(true),
+            tile_size: Some(40.0),
+            ..DockSettings::default()
+        };
+        let (s, problems) =
+            DockSettings::parse("autohide = sometimes\ntile_size = huge\n", Some(&good));
         assert_eq!((s.autohide, s.tile_size), (Some(true), Some(40.0)));
         assert_eq!(problems.len(), 2);
     }

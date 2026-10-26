@@ -3,7 +3,9 @@
 
 use std::path::Path;
 
-use cupertino_devices::{classify_device, enumerate, gpus, primary_gpu, InputClass, Monitor, Subsystem};
+use cupertino_devices::{
+    classify_device, enumerate, gpus, primary_gpu, InputClass, Monitor, Subsystem,
+};
 
 const SYSFS: &str = "/sys";
 
@@ -23,8 +25,16 @@ fn flags(class: &InputClass) -> String {
         ("switch", class.switch),
         ("clickpad", class.clickpad),
     ];
-    let names: Vec<&str> = all.iter().filter(|(_, set)| *set).map(|(name, _)| *name).collect();
-    if names.is_empty() { "-".to_owned() } else { names.join(",") }
+    let names: Vec<&str> = all
+        .iter()
+        .filter(|(_, set)| *set)
+        .map(|(name, _)| *name)
+        .collect();
+    if names.is_empty() {
+        "-".to_owned()
+    } else {
+        names.join(",")
+    }
 }
 
 fn main() {
@@ -38,7 +48,10 @@ fn main() {
             .expect("parent")
             .and_then(|parent| parent.property("NAME").map(str::to_owned))
             .unwrap_or_default();
-        let devnode = device.devnode().map(|p| p.display().to_string()).unwrap_or_default();
+        let devnode = device
+            .devnode()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
         let devnum = device.devnum().map(|n| n.to_string()).unwrap_or_default();
         println!(
             "  {devnode} ({devnum}) {name} -> {}",
@@ -48,8 +61,16 @@ fn main() {
 
     println!("gpus:");
     for gpu in gpus(root).expect("gpus") {
-        let devnode = gpu.device.devnode().map(|p| p.display().to_string()).unwrap_or_default();
-        println!("  {devnode} boot_vga={} seat={}", gpu.boot_vga, gpu.device.seat());
+        let devnode = gpu
+            .device
+            .devnode()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        println!(
+            "  {devnode} boot_vga={} seat={}",
+            gpu.boot_vga,
+            gpu.device.seat()
+        );
     }
     let primary = primary_gpu(root).expect("primary gpu");
     println!(

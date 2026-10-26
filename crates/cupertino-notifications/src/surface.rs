@@ -52,7 +52,12 @@ pub struct CentreHeader {
 pub fn centre_header(layout: &StackLayout, surface: Size, clear_width: f64) -> CentreHeader {
     let x = surface.width - layout.right_margin - layout.width;
     let row = Rect::new(x, layout.top_inset, layout.width, CENTRE_HEADER_HEIGHT);
-    let clear = Rect::new(row.max_x() - clear_width, row.y() + (CENTRE_HEADER_HEIGHT - CLEAR_BUTTON_HEIGHT) / 2.0, clear_width, CLEAR_BUTTON_HEIGHT);
+    let clear = Rect::new(
+        row.max_x() - clear_width,
+        row.y() + (CENTRE_HEADER_HEIGHT - CLEAR_BUTTON_HEIGHT) / 2.0,
+        clear_width,
+        CLEAR_BUTTON_HEIGHT,
+    );
     CentreHeader { row, clear }
 }
 
@@ -68,7 +73,16 @@ pub fn clear_menu(clear: Rect, entries: usize, widest: f64) -> ClearMenu {
     let width = (widest + 2.0 * MENU_LABEL_PADDING + 2.0 * MENU_EDGE_PADDING).max(MENU_MIN_WIDTH);
     let height = entries as f64 * MENU_ITEM_HEIGHT + 2.0 * MENU_EDGE_PADDING;
     let panel = Rect::new(clear.max_x() - width, clear.max_y() + 4.0, width, height);
-    let rows = (0..entries).map(|i| Rect::new(panel.x() + MENU_EDGE_PADDING, panel.y() + MENU_EDGE_PADDING + i as f64 * MENU_ITEM_HEIGHT, width - 2.0 * MENU_EDGE_PADDING, MENU_ITEM_HEIGHT)).collect();
+    let rows = (0..entries)
+        .map(|i| {
+            Rect::new(
+                panel.x() + MENU_EDGE_PADDING,
+                panel.y() + MENU_EDGE_PADDING + i as f64 * MENU_ITEM_HEIGHT,
+                width - 2.0 * MENU_EDGE_PADDING,
+                MENU_ITEM_HEIGHT,
+            )
+        })
+        .collect();
     ClearMenu { panel, rows }
 }
 
@@ -91,7 +105,11 @@ pub fn header_press(header: &CentreHeader, menu: Option<&ClearMenu>, p: Point) -
         if let Some(i) = m.rows.iter().position(|r| r.contains(p)) {
             return HeaderPress::Choose(i);
         }
-        return if header.clear.contains(p) { HeaderPress::ToggleMenu } else { HeaderPress::CloseMenu };
+        return if header.clear.contains(p) {
+            HeaderPress::ToggleMenu
+        } else {
+            HeaderPress::CloseMenu
+        };
     }
     if header.clear.contains(p) {
         HeaderPress::ToggleMenu
@@ -106,7 +124,12 @@ pub fn header_press(header: &CentreHeader, menu: Option<&ClearMenu>, p: Point) -
 /// each other with no spacing, each [`GroupStack::height`] tall: the card,
 /// 8 pt per stacked row and the 6 pt bottom padding of its last visible card (the 6 pt gap between cards and groups). Rows are placed below the
 /// header row until the next one's visible cards would pass the bottom margin.
-pub fn centre_cards(rows: impl IntoIterator<Item = (u32, f64, usize)>, stack: &GroupStack, layout: &StackLayout, surface: Size) -> Vec<(u32, Rect)> {
+pub fn centre_cards(
+    rows: impl IntoIterator<Item = (u32, f64, usize)>,
+    stack: &GroupStack,
+    layout: &StackLayout,
+    surface: Size,
+) -> Vec<(u32, Rect)> {
     let x = surface.width - layout.right_margin - layout.width;
     let mut y = layout.top_inset + CENTRE_HEADER_HEIGHT;
     let mut cards = Vec::new();
@@ -194,27 +217,66 @@ mod tests {
     #[test]
     fn cards_stack_from_the_top_inset_until_the_bottom_margin() {
         let (layout, stack) = (StackLayout::default(), GroupStack::default());
-        let cards = centre_cards([(7, 100.0, 1), (6, 100.0, 1), (5, 100.0, 1)], &stack, &layout, Size::new(376.0, 330.0));
+        let cards = centre_cards(
+            [(7, 100.0, 1), (6, 100.0, 1), (5, 100.0, 1)],
+            &stack,
+            &layout,
+            Size::new(376.0, 330.0),
+        );
         // 76 + 100 = 176; next 182 + 100 = 282 <= 318; third 288 + 100 = 388 > 318
-        assert_eq!(cards, vec![(7, Rect::new(16.0, 76.0, 344.0, 100.0)), (6, Rect::new(16.0, 182.0, 344.0, 100.0))]);
+        assert_eq!(
+            cards,
+            vec![
+                (7, Rect::new(16.0, 76.0, 344.0, 100.0)),
+                (6, Rect::new(16.0, 182.0, 344.0, 100.0))
+            ]
+        );
     }
 
     #[test]
     fn expanded_cards_are_6_pt_apart() {
         let (layout, stack) = (StackLayout::default(), GroupStack::default());
-        let cards = centre_cards([(2, 60.0, 1), (1, 80.0, 1)], &stack, &layout, Size::new(376.0, 800.0));
-        assert_eq!(cards, vec![(2, Rect::new(16.0, 76.0, 344.0, 60.0)), (1, Rect::new(16.0, 142.0, 344.0, 80.0))]);
+        let cards = centre_cards(
+            [(2, 60.0, 1), (1, 80.0, 1)],
+            &stack,
+            &layout,
+            Size::new(376.0, 800.0),
+        );
+        assert_eq!(
+            cards,
+            vec![
+                (2, Rect::new(16.0, 76.0, 344.0, 60.0)),
+                (1, Rect::new(16.0, 142.0, 344.0, 80.0))
+            ]
+        );
     }
 
     #[test]
     fn a_collapsed_group_takes_8_pt_per_stacked_row_plus_the_6_pt_padding() {
         let (layout, stack) = (StackLayout::default(), GroupStack::default());
-        let cards = centre_cards([(3, 86.0, 3), (1, 60.0, 1)], &stack, &layout, Size::new(376.0, 800.0));
+        let cards = centre_cards(
+            [(3, 86.0, 3), (1, 60.0, 1)],
+            &stack,
+            &layout,
+            Size::new(376.0, 800.0),
+        );
         // the group: 86 + 2 · 8 + 6 = 108 tall
-        assert_eq!(cards, vec![(3, Rect::new(16.0, 76.0, 344.0, 86.0)), (1, Rect::new(16.0, 184.0, 344.0, 60.0))]);
+        assert_eq!(
+            cards,
+            vec![
+                (3, Rect::new(16.0, 76.0, 344.0, 86.0)),
+                (1, Rect::new(16.0, 184.0, 344.0, 60.0))
+            ]
+        );
         // its stacked rows end 76 + 86 + 16 = 178, inside the 800 − 12 limit; at a 189 pt surface they do not fit
-        assert_eq!(centre_cards([(3, 86.0, 3)], &stack, &layout, Size::new(376.0, 189.0)), Vec::new());
-        assert_eq!(centre_cards([(3, 86.0, 3)], &stack, &layout, Size::new(376.0, 190.0)).len(), 1);
+        assert_eq!(
+            centre_cards([(3, 86.0, 3)], &stack, &layout, Size::new(376.0, 189.0)),
+            Vec::new()
+        );
+        assert_eq!(
+            centre_cards([(3, 86.0, 3)], &stack, &layout, Size::new(376.0, 190.0)).len(),
+            1
+        );
     }
 
     #[test]
@@ -235,23 +297,47 @@ mod tests {
         let surface = Size::new(372.0, 800.0);
         assert_eq!(input_region(&banners, false, surface), banners.to_vec());
         assert_eq!(input_region(&[], false, surface), Vec::<Rect>::new());
-        assert_eq!(input_region(&banners, true, surface), vec![Rect::new(0.0, 0.0, 372.0, 800.0)]);
+        assert_eq!(
+            input_region(&banners, true, surface),
+            vec![Rect::new(0.0, 0.0, 372.0, 800.0)]
+        );
     }
 
     #[test]
     fn card_lookup_uses_half_open_rectangles() {
-        let cards = [(1, Rect::new(16.0, 32.0, 344.0, 100.0)), (2, Rect::new(16.0, 140.0, 344.0, 100.0))];
-        assert_eq!(card_at(&cards, Point::new(16.0, 32.0)).map(|c| c.0), Some(1));
+        let cards = [
+            (1, Rect::new(16.0, 32.0, 344.0, 100.0)),
+            (2, Rect::new(16.0, 140.0, 344.0, 100.0)),
+        ];
+        assert_eq!(
+            card_at(&cards, Point::new(16.0, 32.0)).map(|c| c.0),
+            Some(1)
+        );
         assert_eq!(card_at(&cards, Point::new(100.0, 132.0)), None);
-        assert_eq!(card_at(&cards, Point::new(100.0, 150.0)).map(|c| c.0), Some(2));
-        assert_eq!(local_to(cards[1].1, Point::new(26.0, 150.0)), Point::new(10.0, 10.0));
+        assert_eq!(
+            card_at(&cards, Point::new(100.0, 150.0)).map(|c| c.0),
+            Some(2)
+        );
+        assert_eq!(
+            local_to(cards[1].1, Point::new(26.0, 150.0)),
+            Point::new(10.0, 10.0)
+        );
     }
 
     #[test]
     fn banner_presses_act_on_buttons_and_start_swipes_on_the_body() {
         assert_eq!(banner_press(BannerHit::Close), BannerPress::Dismiss);
-        assert_eq!(banner_press(BannerHit::Button { index: 1, key: "reply".into() }), BannerPress::Invoke("reply".into()));
-        assert_eq!(banner_press(BannerHit::Link("https://example.org".into())), BannerPress::OpenLink("https://example.org".into()));
+        assert_eq!(
+            banner_press(BannerHit::Button {
+                index: 1,
+                key: "reply".into()
+            }),
+            BannerPress::Invoke("reply".into())
+        );
+        assert_eq!(
+            banner_press(BannerHit::Link("https://example.org".into())),
+            BannerPress::OpenLink("https://example.org".into())
+        );
         assert_eq!(banner_press(BannerHit::Body), BannerPress::BeginSwipe);
         assert_eq!(banner_press(BannerHit::None), BannerPress::BeginSwipe);
     }
@@ -259,7 +345,13 @@ mod tests {
     #[test]
     fn card_presses_clear_invoke_or_activate() {
         assert_eq!(card_press(BannerHit::Close), CardPress::Clear);
-        assert_eq!(card_press(BannerHit::Button { index: 0, key: "open".into() }), CardPress::Invoke("open".into()));
+        assert_eq!(
+            card_press(BannerHit::Button {
+                index: 0,
+                key: "open".into()
+            }),
+            CardPress::Invoke("open".into())
+        );
         assert_eq!(card_press(BannerHit::Body), CardPress::Activate);
     }
 
@@ -271,7 +363,13 @@ mod tests {
         let menu = clear_menu(header.clear, 2, 120.0);
         // 120 + 24 + 10 = 154 wide, 2 * 22 + 10 = 54 high, right edges aligned
         assert_eq!(menu.panel, Rect::new(206.0, 74.0, 154.0, 54.0));
-        assert_eq!(menu.rows, vec![Rect::new(211.0, 79.0, 144.0, 22.0), Rect::new(211.0, 101.0, 144.0, 22.0)]);
+        assert_eq!(
+            menu.rows,
+            vec![
+                Rect::new(211.0, 79.0, 144.0, 22.0),
+                Rect::new(211.0, 101.0, 144.0, 22.0)
+            ]
+        );
     }
 
     #[test]
@@ -279,10 +377,25 @@ mod tests {
         let header = centre_header(&StackLayout::default(), Size::new(376.0, 800.0), 60.0);
         let menu = clear_menu(header.clear, 2, 120.0);
         let on_button = Point::new(330.0, 58.0);
-        assert_eq!(header_press(&header, None, on_button), HeaderPress::ToggleMenu);
-        assert_eq!(header_press(&header, None, Point::new(100.0, 200.0)), HeaderPress::Elsewhere);
-        assert_eq!(header_press(&header, Some(&menu), on_button), HeaderPress::ToggleMenu);
-        assert_eq!(header_press(&header, Some(&menu), Point::new(250.0, 110.0)), HeaderPress::Choose(1));
-        assert_eq!(header_press(&header, Some(&menu), Point::new(100.0, 200.0)), HeaderPress::CloseMenu);
+        assert_eq!(
+            header_press(&header, None, on_button),
+            HeaderPress::ToggleMenu
+        );
+        assert_eq!(
+            header_press(&header, None, Point::new(100.0, 200.0)),
+            HeaderPress::Elsewhere
+        );
+        assert_eq!(
+            header_press(&header, Some(&menu), on_button),
+            HeaderPress::ToggleMenu
+        );
+        assert_eq!(
+            header_press(&header, Some(&menu), Point::new(250.0, 110.0)),
+            HeaderPress::Choose(1)
+        );
+        assert_eq!(
+            header_press(&header, Some(&menu), Point::new(100.0, 200.0)),
+            HeaderPress::CloseMenu
+        );
     }
 }

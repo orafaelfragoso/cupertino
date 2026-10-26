@@ -34,13 +34,22 @@ struct Options {
 impl Options {
     /// The first argument that is unknown, or a combination that is refused.
     fn parse(args: impl Iterator<Item = String>) -> Result<Self, String> {
-        let mut options = Self { session_bus: false, no_auth: false, sysfs_root: PathBuf::from("/sys") };
+        let mut options = Self {
+            session_bus: false,
+            no_auth: false,
+            sysfs_root: PathBuf::from("/sys"),
+        };
         let mut args = args;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--session-bus" => options.session_bus = true,
                 "--no-auth" => options.no_auth = true,
-                "--sysfs-root" => options.sysfs_root = args.next().map(PathBuf::from).ok_or_else(|| "--sysfs-root needs a path".to_owned())?,
+                "--sysfs-root" => {
+                    options.sysfs_root = args
+                        .next()
+                        .map(PathBuf::from)
+                        .ok_or_else(|| "--sysfs-root needs a path".to_owned())?
+                }
                 other => return Err(format!("unknown argument {other}")),
             }
         }
@@ -69,18 +78,35 @@ fn main() -> ExitCode {
 fn run(options: &Options) -> Result<Infallible, Error> {
     let mut lid_switch = LidSwitch::find(&options.sysfs_root)?;
     let lid = match &lid_switch {
-        Some(switch) => Lid { present: true, closed: switch.closed()? },
-        None => Lid { present: false, closed: false },
+        Some(switch) => Lid {
+            present: true,
+            closed: switch.closed()?,
+        },
+        None => Lid {
+            present: false,
+            closed: false,
+        },
     };
     let authorizer: Box<dyn Authorizer> = if options.no_auth {
         Box::new(AllowAll)
     } else {
-        Box::new(LogindAuthorizer::new(cupertino_seat::connect().map_err(Error::Seat)?))
+        Box::new(LogindAuthorizer::new(
+            cupertino_seat::connect().map_err(Error::Seat)?,
+        ))
     };
     // Listening before the first read, so no change between the two is missed.
     let monitor = Monitor::new().map_err(Error::Devices)?;
-    let bus = if options.session_bus { Bus::Session } else { Bus::System };
-    let daemon = Daemon::start(Config { bus, sysfs_root: options.sysfs_root.clone(), lid, authorizer })?;
+    let bus = if options.session_bus {
+        Bus::Session
+    } else {
+        Bus::System
+    };
+    let daemon = Daemon::start(Config {
+        bus,
+        sysfs_root: options.sysfs_root.clone(),
+        lid,
+        authorizer,
+    })?;
 
     // the interval runs from the last read, so uevents that do not concern power do not put the read off
     let mut next_read = Instant::now() + Duration::from_secs(POLL_INTERVAL_SECONDS);
@@ -89,7 +115,10 @@ fn run(options: &Options) -> Result<Infallible, Error> {
         let to_read = next_read.saturating_duration_since(Instant::now());
         let wait = daemon.next_deadline().map_or(to_read, |d| d.min(to_read));
         let wake_at = Instant::now() + wait;
-        let timeout = Timespec { tv_sec: wait.as_secs() as i64, tv_nsec: i64::from(wait.subsec_nanos()) };
+        let timeout = Timespec {
+            tv_sec: wait.as_secs() as i64,
+            tv_nsec: i64::from(wait.subsec_nanos()),
+        };
         let mut fds = vec![PollFd::new(&monitor, PollFlags::IN)];
         if let Some(switch) = &lid_switch {
             fds.push(PollFd::new(switch, PollFlags::IN));
@@ -100,7 +129,9 @@ fn run(options: &Options) -> Result<Infallible, Error> {
             Err(errno) => return Err(Error::Poll(errno)),
         }
         let uevents_ready = fds[0].revents().contains(PollFlags::IN);
-        let lid_ready = fds.get(1).is_some_and(|fd| fd.revents().contains(PollFlags::IN));
+        let lid_ready = fds
+            .get(1)
+            .is_some_and(|fd| fd.revents().contains(PollFlags::IN));
         let mut refresh = Instant::now() >= wake_at;
         if uevents_ready {
             let drained = monitor.drain().map_err(Error::Devices)?;
@@ -111,7 +142,10 @@ fn run(options: &Options) -> Result<Infallible, Error> {
         }
         if let (true, Some(switch)) = (lid_ready, lid_switch.as_mut()) {
             switch.drain()?;
-            report(daemon.set_lid(Lid { present: true, closed: switch.closed()? }));
+            report(daemon.set_lid(Lid {
+                present: true,
+                closed: switch.closed()?,
+            }));
         }
         if refresh {
             report(daemon.refresh());

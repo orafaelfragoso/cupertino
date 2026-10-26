@@ -101,7 +101,11 @@ impl Service {
     /// Set `Locked`, and emit `PropertiesChanged` when the value changes.
     pub fn set_locked(&self, locked: bool) -> zbus::Result<()> {
         zbus::block_on(async {
-            let interface = self.connection.object_server().interface::<_, Control>(OBJECT_PATH).await?;
+            let interface = self
+                .connection
+                .object_server()
+                .interface::<_, Control>(OBJECT_PATH)
+                .await?;
             let mut control = interface.get_mut().await;
             if control.locked != locked {
                 control.locked = locked;
@@ -115,12 +119,29 @@ impl Service {
 /// Export the interface at [`OBJECT_PATH`] and claim [`BUS_NAME`] on the bus `builder` connects to. `on_request` runs on
 /// the bus thread for every call. The interface is served while the returned [`Service`] lives. Fails with
 /// `zbus::Error::NameTaken` when another lock screen owns the name.
-pub fn serve(builder: connection::Builder<'static>, on_request: impl Fn(Request) + Send + Sync + 'static) -> zbus::Result<Service> {
+pub fn serve(
+    builder: connection::Builder<'static>,
+    on_request: impl Fn(Request) + Send + Sync + 'static,
+) -> zbus::Result<Service> {
     zbus::block_on(async {
-        let connection = builder.serve_at(OBJECT_PATH, Control { on_request: Box::new(on_request), locked: false })?.build().await?;
+        let connection = builder
+            .serve_at(
+                OBJECT_PATH,
+                Control {
+                    on_request: Box::new(on_request),
+                    locked: false,
+                },
+            )?
+            .build()
+            .await?;
         // after the object exists, so no call finds the name without it; never queue behind the owner
-        match connection.request_name_with_flags(BUS_NAME, RequestNameFlags::DoNotQueue.into()).await? {
-            RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => Ok(Service { connection }),
+        match connection
+            .request_name_with_flags(BUS_NAME, RequestNameFlags::DoNotQueue.into())
+            .await?
+        {
+            RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => {
+                Ok(Service { connection })
+            }
             RequestNameReply::Exists | RequestNameReply::InQueue => Err(zbus::Error::NameTaken),
         }
     })

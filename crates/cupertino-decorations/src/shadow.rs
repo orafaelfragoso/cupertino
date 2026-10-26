@@ -13,7 +13,9 @@
 
 use cupertino_geometry::shadow::box_blur_sizes;
 use cupertino_geometry::{CornerStyle, Radii, Rect, RoundedRect, Size};
-use cupertino_theme::window_shadow::{sigma_to_radius_px, window_shadow, ShadowOption, WindowShadowEntry};
+use cupertino_theme::window_shadow::{
+    sigma_to_radius_px, window_shadow, ShadowOption, WindowShadowEntry,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tiny_skia::{FillRule, Paint, Pixmap, Transform};
@@ -38,7 +40,12 @@ impl ShadowParams {
     }
 
     /// Row of the verified table.
-    pub fn lookup(option: ShadowOption, active: bool, dark: bool, increased_contrast: bool) -> Self {
+    pub fn lookup(
+        option: ShadowOption,
+        active: bool,
+        dark: bool,
+        increased_contrast: bool,
+    ) -> Self {
         Self::new(*window_shadow(option, active, dark, increased_contrast))
     }
 
@@ -71,7 +78,12 @@ impl ShadowParams {
 
     pub fn margins_px(&self, scale: f64) -> Margins {
         let (r, o) = (self.radius_px(scale), self.offset_px(scale));
-        Margins { left: r, top: r.saturating_sub(o), right: r, bottom: r + o }
+        Margins {
+            left: r,
+            top: r.saturating_sub(o),
+            right: r,
+            bottom: r + o,
+        }
     }
 
     /// Parameters for a shader-based path (everything in device pixels).
@@ -84,7 +96,10 @@ impl ShadowParams {
             clip_top: self.entry.clip_top as f32,
             offset_px: [0.0, self.offset_px(scale) as f32],
             corner_radius_px: (corner_radius_pt * scale) as f32,
-            rect_size_px: [(frame_size_pt.width * scale).round() as f32, (frame_size_pt.height * scale).round() as f32],
+            rect_size_px: [
+                (frame_size_pt.width * scale).round() as f32,
+                (frame_size_pt.height * scale).round() as f32,
+            ],
             margins_px: [m.left as f32, m.top as f32, m.right as f32, m.bottom as f32],
         }
     }
@@ -149,12 +164,24 @@ impl ShadowImage {
 
     /// Remove the shadow beneath the window shape so translucent windows do not show it.
     pub fn knock_out(&mut self, frame_px: (u32, u32), corner_radius_px: f64, style: CornerStyle) {
-        let shape = RoundedRect::new(Rect::new(self.margins.left as f64, self.margins.top as f64, frame_px.0 as f64, frame_px.1 as f64), corner_radius_px, style);
+        let shape = RoundedRect::new(
+            Rect::new(
+                self.margins.left as f64,
+                self.margins.top as f64,
+                frame_px.0 as f64,
+                frame_px.1 as f64,
+            ),
+            corner_radius_px,
+            style,
+        );
         let x1 = (self.margins.left + frame_px.0).min(self.width);
         let y1 = (self.margins.top + frame_px.1).min(self.height);
         for y in self.margins.top..y1 {
             for x in self.margins.left..x1 {
-                let cov = shape.coverage_approx(cupertino_geometry::Point::new(x as f64 + 0.5, y as f64 + 0.5), 1.0);
+                let cov = shape.coverage_approx(
+                    cupertino_geometry::Point::new(x as f64 + 0.5, y as f64 + 0.5),
+                    1.0,
+                );
                 if cov > 0.0 {
                     let i = ((y * self.width + x) * 4) as usize;
                     for c in &mut self.data[i..i + 4] {
@@ -170,7 +197,13 @@ fn box_blur_axis(src: &[f32], dst: &mut [f32], w: usize, h: usize, size: usize, 
     let r = (size / 2) as i64;
     let inv = 1.0 / size as f32;
     let (len, lines) = if horizontal { (w, h) } else { (h, w) };
-    let idx = |line: usize, i: usize| if horizontal { line * w + i } else { i * w + line };
+    let idx = |line: usize, i: usize| {
+        if horizontal {
+            line * w + i
+        } else {
+            i * w + line
+        }
+    };
     for line in 0..lines {
         let mut acc = 0.0f32;
         for i in 0..=(r.min(len as i64 - 1) as usize) {
@@ -202,11 +235,20 @@ fn gaussian_blur(mask: &mut [f32], w: usize, h: usize, sigma: f64) {
 }
 
 fn frame_px(size: Size, scale: f64) -> (u32, u32) {
-    ((size.width * scale).round().max(1.0) as u32, (size.height * scale).round().max(1.0) as u32)
+    (
+        (size.width * scale).round().max(1.0) as u32,
+        (size.height * scale).round().max(1.0) as u32,
+    )
 }
 
 /// Render the shadow of a frame of `frame_size_pt` directly (no caching, no nine-slice).
-pub fn render_direct(params: &ShadowParams, frame_size_pt: Size, corner_radius_pt: f64, style: CornerStyle, scale: f64) -> ShadowImage {
+pub fn render_direct(
+    params: &ShadowParams,
+    frame_size_pt: Size,
+    corner_radius_pt: f64,
+    style: CornerStyle,
+    scale: f64,
+) -> ShadowImage {
     let m = params.margins_px(scale);
     let (fw, fh) = frame_px(frame_size_pt, scale);
     let (w, h) = (fw + m.left + m.right, fh + m.top + m.bottom);
@@ -215,18 +257,36 @@ pub fn render_direct(params: &ShadowParams, frame_size_pt: Size, corner_radius_p
     let r = corner_radius_pt * scale;
     let rect = Rect::new(m.left as f64, (m.top + off) as f64, fw as f64, fh as f64);
     if let Some(path) = crate::shape::rounded_path(rect, Radii::uniform(r), style, 1.0) {
-        let mut paint = Paint { anti_alias: true, ..Paint::default() };
+        let mut paint = Paint {
+            anti_alias: true,
+            ..Paint::default()
+        };
         paint.set_color(tiny_skia::Color::BLACK);
-        pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+        pm.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
-    let mut mask: Vec<f32> = pm.pixels().iter().map(|p| p.alpha() as f32 / 255.0).collect();
+    let mut mask: Vec<f32> = pm
+        .pixels()
+        .iter()
+        .map(|p| p.alpha() as f32 / 255.0)
+        .collect();
     gaussian_blur(&mut mask, w as usize, h as usize, params.sigma_px(scale));
     let density = params.density() as f32;
     let mut data = vec![0u8; (w * h * 4) as usize];
     for (i, a) in mask.iter().enumerate() {
         data[i * 4 + 3] = (a * density * 255.0).round().clamp(0.0, 255.0) as u8;
     }
-    ShadowImage { width: w, height: h, margins: m, data }
+    ShadowImage {
+        width: w,
+        height: h,
+        margins: m,
+        data,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -260,7 +320,13 @@ impl ShadowRasterizer {
         self.cache.len()
     }
 
-    fn mini(&mut self, params: &ShadowParams, corner_radius_pt: f64, style: CornerStyle, scale: f64) -> Arc<Mini> {
+    fn mini(
+        &mut self,
+        params: &ShadowParams,
+        corner_radius_pt: f64,
+        style: CornerStyle,
+        scale: f64,
+    ) -> Arc<Mini> {
         let key = Key {
             sigma: params.sigma().to_bits(),
             offset: params.vertical_offset().to_bits(),
@@ -291,7 +357,14 @@ impl ShadowRasterizer {
 
     /// Shadow image for a frame of `frame_size_pt`, built by nine-slice stretching of a cached
     /// source (falls back to a direct render for frames smaller than the source).
-    pub fn render(&mut self, params: &ShadowParams, frame_size_pt: Size, corner_radius_pt: f64, style: CornerStyle, scale: f64) -> ShadowImage {
+    pub fn render(
+        &mut self,
+        params: &ShadowParams,
+        frame_size_pt: Size,
+        corner_radius_pt: f64,
+        style: CornerStyle,
+        scale: f64,
+    ) -> ShadowImage {
         let m = params.margins_px(scale);
         let (fw, fh) = frame_px(frame_size_pt, scale);
         let (w, h) = (fw + m.left + m.right, fh + m.top + m.bottom);
@@ -320,7 +393,12 @@ impl ShadowRasterizer {
                 data[o..o + 4].copy_from_slice(&row[sx as usize * 4..][..4]);
             }
         }
-        ShadowImage { width: w, height: h, margins: m, data }
+        ShadowImage {
+            width: w,
+            height: h,
+            margins: m,
+            data,
+        }
     }
 }
 
@@ -335,9 +413,15 @@ mod tests {
     #[test]
     fn parameters_come_from_the_verified_table() {
         let a = active_light();
-        assert_eq!((a.sigma(), a.vertical_offset(), a.density()), (20.0, 18.0, 0.40));
+        assert_eq!(
+            (a.sigma(), a.vertical_offset(), a.density()),
+            (20.0, 18.0, 0.40)
+        );
         let i = ShadowParams::lookup(ShadowOption::Standard, false, false, false);
-        assert_eq!((i.sigma(), i.vertical_offset(), i.density()), (12.0, 8.0, 0.25));
+        assert_eq!(
+            (i.sigma(), i.vertical_offset(), i.density()),
+            (12.0, 8.0, 0.25)
+        );
         let d = ShadowParams::lookup(ShadowOption::Standard, true, true, false);
         assert_eq!(d.density(), 0.70);
     }
@@ -347,10 +431,34 @@ mod tests {
         let a = active_light();
         assert_eq!(a.radius_px(1.0), 56);
         assert_eq!(a.radius_px(2.0), 112);
-        assert_eq!(a.margins_px(1.0), Margins { left: 56, top: 38, right: 56, bottom: 74 });
-        assert_eq!(a.margins_px(2.0), Margins { left: 112, top: 76, right: 112, bottom: 148 });
+        assert_eq!(
+            a.margins_px(1.0),
+            Margins {
+                left: 56,
+                top: 38,
+                right: 56,
+                bottom: 74
+            }
+        );
+        assert_eq!(
+            a.margins_px(2.0),
+            Margins {
+                left: 112,
+                top: 76,
+                right: 112,
+                bottom: 148
+            }
+        );
         let t = ShadowParams::lookup(ShadowOption::Tooltip, true, false, false);
-        assert_eq!(t.margins_px(1.0), Margins { left: 12, top: 10, right: 12, bottom: 14 });
+        assert_eq!(
+            t.margins_px(1.0),
+            Margins {
+                left: 12,
+                top: 10,
+                right: 12,
+                bottom: 14
+            }
+        );
     }
 
     #[test]
@@ -385,11 +493,22 @@ mod tests {
         let cx = ox + 200;
         let bottom = oy + 300;
         let column: Vec<u8> = (oy + 150..img.height).map(|y| img.alpha(cx, y)).collect();
-        assert!(column.windows(2).all(|w| w[0] >= w[1]), "downwards from the centre: {column:?}");
-        let row: Vec<u8> = (ox + 200..img.width).map(|x| img.alpha(x, oy + 150)).collect();
-        assert!(row.windows(2).all(|w| w[0] >= w[1]), "sideways from the centre");
+        assert!(
+            column.windows(2).all(|w| w[0] >= w[1]),
+            "downwards from the centre: {column:?}"
+        );
+        let row: Vec<u8> = (ox + 200..img.width)
+            .map(|x| img.alpha(x, oy + 150))
+            .collect();
+        assert!(
+            row.windows(2).all(|w| w[0] >= w[1]),
+            "sideways from the centre"
+        );
         let top: Vec<u8> = (0..oy + 150).map(|y| img.alpha(cx, y)).collect();
-        assert!(top.windows(2).all(|w| w[0] <= w[1]), "upwards from the centre");
+        assert!(
+            top.windows(2).all(|w| w[0] <= w[1]),
+            "upwards from the centre"
+        );
         assert!(img.alpha(cx, bottom + 54) < 12);
         assert!(img.alpha(cx, img.height - 1) <= 1);
     }
@@ -419,7 +538,10 @@ mod tests {
         let weak = direct(&inactive, 400.0, 300.0, 1.0);
         let (wx, wy) = weak.frame_origin();
         assert!(weak.alpha(wx + 200, wy + 300 + 20) < below);
-        assert!(weak.width < img.width, "smaller sigma gives smaller margins");
+        assert!(
+            weak.width < img.width,
+            "smaller sigma gives smaller margins"
+        );
     }
 
     #[test]
@@ -431,8 +553,17 @@ mod tests {
                 let a = r.render(&p, Size::new(w, h), 12.0, CornerStyle::continuous(), scale);
                 let b = render_direct(&p, Size::new(w, h), 12.0, CornerStyle::continuous(), scale);
                 assert_eq!((a.width, a.height), (b.width, b.height));
-                let worst = a.data.iter().zip(&b.data).map(|(x, y)| (*x as i32 - *y as i32).abs()).max().unwrap();
-                assert!(worst <= 1, "scale {scale} size {w}x{h}: worst difference {worst}");
+                let worst = a
+                    .data
+                    .iter()
+                    .zip(&b.data)
+                    .map(|(x, y)| (*x as i32 - *y as i32).abs())
+                    .max()
+                    .unwrap();
+                assert!(
+                    worst <= 1,
+                    "scale {scale} size {w}x{h}: worst difference {worst}"
+                );
             }
         }
         assert_eq!(r.cached_sources(), 2, "one cached source per scale");
@@ -450,10 +581,28 @@ mod tests {
     #[test]
     fn cache_distinguishes_parameter_sets() {
         let mut r = ShadowRasterizer::new();
-        r.render(&active_light(), Size::new(400.0, 300.0), 12.0, CornerStyle::continuous(), 1.0);
-        r.render(&active_light(), Size::new(500.0, 350.0), 12.0, CornerStyle::continuous(), 1.0);
+        r.render(
+            &active_light(),
+            Size::new(400.0, 300.0),
+            12.0,
+            CornerStyle::continuous(),
+            1.0,
+        );
+        r.render(
+            &active_light(),
+            Size::new(500.0, 350.0),
+            12.0,
+            CornerStyle::continuous(),
+            1.0,
+        );
         assert_eq!(r.cached_sources(), 1);
-        r.render(&ShadowParams::lookup(ShadowOption::Standard, false, false, false), Size::new(400.0, 300.0), 12.0, CornerStyle::continuous(), 1.0);
+        r.render(
+            &ShadowParams::lookup(ShadowOption::Standard, false, false, false),
+            Size::new(400.0, 300.0),
+            12.0,
+            CornerStyle::continuous(),
+            1.0,
+        );
         assert_eq!(r.cached_sources(), 2);
     }
 
@@ -465,7 +614,10 @@ mod tests {
         assert!(img.alpha(ox + 150, oy + 100) > 50);
         img.knock_out((300, 200), 12.0, CornerStyle::continuous());
         assert_eq!(img.alpha(ox + 150, oy + 100), 0);
-        assert!(img.alpha(ox + 150, oy + 200 + 10) > 20, "outside the window the shadow stays");
+        assert!(
+            img.alpha(ox + 150, oy + 200 + 10) > 20,
+            "outside the window the shadow stays"
+        );
     }
 
     #[test]

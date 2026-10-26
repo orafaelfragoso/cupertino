@@ -41,7 +41,11 @@ pub struct ServerInfo {
 
 impl Default for ServerInfo {
     fn default() -> Self {
-        Self { name: "cupertino-notifications".into(), vendor: "Cupertino".into(), version: env!("CARGO_PKG_VERSION").into() }
+        Self {
+            name: "cupertino-notifications".into(),
+            vendor: "Cupertino".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+        }
     }
 }
 
@@ -110,9 +114,22 @@ fn image_of(v: &Value<'_>) -> Option<ImageData> {
     if f.len() != 7 {
         return None;
     }
-    let Value::Array(bytes) = &f[6] else { return None };
-    let data: Vec<u8> = bytes.iter().filter_map(|b| if let Value::U8(b) = b { Some(*b) } else { None }).collect();
-    ImageData::from_dbus(int_of(&f[0])? as i32, int_of(&f[1])? as i32, int_of(&f[2])? as i32, bool_of(&f[3])?, int_of(&f[4])? as i32, int_of(&f[5])? as i32, &data)
+    let Value::Array(bytes) = &f[6] else {
+        return None;
+    };
+    let data: Vec<u8> = bytes
+        .iter()
+        .filter_map(|b| if let Value::U8(b) = b { Some(*b) } else { None })
+        .collect();
+    ImageData::from_dbus(
+        int_of(&f[0])? as i32,
+        int_of(&f[1])? as i32,
+        int_of(&f[2])? as i32,
+        bool_of(&f[3])?,
+        int_of(&f[4])? as i32,
+        int_of(&f[5])? as i32,
+        &data,
+    )
 }
 
 /// Decode the `hints` dictionary of `Notify`. Unknown hints are ignored; `image-data` takes
@@ -120,14 +137,20 @@ fn image_of(v: &Value<'_>) -> Option<ImageData> {
 pub fn parse_hints(map: &HashMap<String, OwnedValue>) -> Hints {
     let get = |k: &str| map.get(k).map(|v| &**v);
     Hints {
-        urgency: get("urgency").and_then(int_of).map(|u| Urgency::from_byte(u.clamp(0, 255) as u8)),
+        urgency: get("urgency")
+            .and_then(int_of)
+            .map(|u| Urgency::from_byte(u.clamp(0, 255) as u8)),
         category: get("category").and_then(str_of),
         transient: get("transient").and_then(bool_of).unwrap_or(false),
         resident: get("resident").and_then(bool_of).unwrap_or(false),
         suppress_sound: get("suppress-sound").and_then(bool_of).unwrap_or(false),
         desktop_entry: get("desktop-entry").and_then(str_of),
-        image_path: get("image-path").or_else(|| get("image_path")).and_then(str_of),
-        image: ["image-data", "image_data", "icon_data"].iter().find_map(|k| get(k).and_then(image_of)),
+        image_path: get("image-path")
+            .or_else(|| get("image_path"))
+            .and_then(str_of),
+        image: ["image-data", "image_data", "icon_data"]
+            .iter()
+            .find_map(|k| get(k).and_then(image_of)),
     }
 }
 
@@ -136,8 +159,14 @@ struct Interface(Arc<Shared>);
 async fn emit_events(emitter: &SignalEmitter<'_>, events: Vec<Event>) -> zbus::Result<()> {
     for e in events {
         match e {
-            Event::Closed { id, reason } => Interface::notification_closed(emitter, id, reason as u32).await?,
-            Event::ActionInvoked { id, key, activation_token } => {
+            Event::Closed { id, reason } => {
+                Interface::notification_closed(emitter, id, reason as u32).await?
+            }
+            Event::ActionInvoked {
+                id,
+                key,
+                activation_token,
+            } => {
                 if let Some(t) = activation_token {
                     Interface::activation_token(emitter, id, t).await?;
                 }
@@ -167,7 +196,16 @@ impl Interface {
         hints: HashMap<String, OwnedValue>,
         expire_timeout: i32,
     ) -> u32 {
-        let input = NotifyInput { app_name, replaces_id, icon: app_icon, summary, body, actions, expire: Expire::from_dbus(expire_timeout), hints: parse_hints(&hints) };
+        let input = NotifyInput {
+            app_name,
+            replaces_id,
+            icon: app_icon,
+            summary,
+            body,
+            actions,
+            expire: Expire::from_dbus(expire_timeout),
+            hints: parse_hints(&hints),
+        };
         let now = (self.0.clock)();
         let (id, events) = {
             let mut c = self.0.lock();
@@ -179,7 +217,11 @@ impl Interface {
         id
     }
 
-    async fn close_notification(&self, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>, id: u32) {
+    async fn close_notification(
+        &self,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        id: u32,
+    ) {
         let now = (self.0.clock)();
         let events = {
             let mut c = self.0.lock();
@@ -192,17 +234,34 @@ impl Interface {
 
     fn get_server_information(&self) -> (String, String, String, String) {
         let i = &self.0.info;
-        (i.name.clone(), i.vendor.clone(), i.version.clone(), SPEC_VERSION.to_string())
+        (
+            i.name.clone(),
+            i.vendor.clone(),
+            i.version.clone(),
+            SPEC_VERSION.to_string(),
+        )
     }
 
     #[zbus(signal)]
-    async fn notification_closed(emitter: &SignalEmitter<'_>, id: u32, reason: u32) -> zbus::Result<()>;
+    async fn notification_closed(
+        emitter: &SignalEmitter<'_>,
+        id: u32,
+        reason: u32,
+    ) -> zbus::Result<()>;
 
     #[zbus(signal)]
-    async fn action_invoked(emitter: &SignalEmitter<'_>, id: u32, action_key: String) -> zbus::Result<()>;
+    async fn action_invoked(
+        emitter: &SignalEmitter<'_>,
+        id: u32,
+        action_key: String,
+    ) -> zbus::Result<()>;
 
     #[zbus(signal)]
-    async fn activation_token(emitter: &SignalEmitter<'_>, id: u32, activation_token: String) -> zbus::Result<()>;
+    async fn activation_token(
+        emitter: &SignalEmitter<'_>,
+        id: u32,
+        activation_token: String,
+    ) -> zbus::Result<()>;
 }
 
 /// `org.cupertino.NotificationCenter1`: lets the menu bar open and close the centre list and the control
@@ -220,19 +279,33 @@ impl CentreControl {
     }
 
     /// Turn do not disturb on (until turned off) or off; banners of suppressed notifications are not shown.
-    async fn set_do_not_disturb(&self, on: bool, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>) -> zbus::fdo::Result<()> {
+    async fn set_do_not_disturb(
+        &self,
+        on: bool,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<()> {
         let now = (self.shared.clock)();
-        self.shared.lock().set_dnd(if on { DndMode::On } else { DndMode::Off }, now);
+        self.shared
+            .lock()
+            .set_dnd(if on { DndMode::On } else { DndMode::Off }, now);
         self.announce(&emitter, on).await
     }
 
     /// Turn do not disturb on for one of the [`Self::focus_lifetimes`] rows, by its identifier; it ends by itself.
-    async fn set_do_not_disturb_for(&self, lifetime: &str, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>) -> zbus::fdo::Result<()> {
-        let lifetime = Lifetime::from_id(lifetime).ok_or_else(|| zbus::fdo::Error::InvalidArgs(format!("{lifetime:?} is not an offered duration")))?;
+    async fn set_do_not_disturb_for(
+        &self,
+        lifetime: &str,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<()> {
+        let lifetime = Lifetime::from_id(lifetime).ok_or_else(|| {
+            zbus::fdo::Error::InvalidArgs(format!("{lifetime:?} is not an offered duration"))
+        })?;
         let unix = unix_now()?;
         let ends = focus::end(lifetime, unix, &SystemCalendar);
         let now = (self.shared.clock)();
-        self.shared.lock().set_dnd(DndMode::Until(now + (ends - unix) as f64), now);
+        self.shared
+            .lock()
+            .set_dnd(DndMode::Until(now + (ends - unix) as f64), now);
         self.announce(&emitter, true).await
     }
 
@@ -240,7 +313,10 @@ impl CentreControl {
     #[zbus(property)]
     fn focus_lifetimes(&self) -> zbus::fdo::Result<Vec<(String, String)>> {
         let hour = SystemCalendar.hour(unix_now()?);
-        Ok(focus::offered(hour).iter().map(|l| (l.id().to_owned(), l.title().to_owned())).collect())
+        Ok(focus::offered(hour)
+            .iter()
+            .map(|l| (l.id().to_owned(), l.title().to_owned()))
+            .collect())
     }
 
     /// Whether do not disturb is in effect now.
@@ -262,7 +338,9 @@ impl CentreControl {
 
 /// Seconds since the Unix epoch on the wall clock.
 fn unix_now() -> zbus::fdo::Result<i64> {
-    let since = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| zbus::fdo::Error::Failed(format!("the clock is before 1970: {e}")))?;
+    let since = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| zbus::fdo::Error::Failed(format!("the clock is before 1970: {e}")))?;
     Ok(since.as_secs() as i64)
 }
 
@@ -280,7 +358,9 @@ impl Server {
         let started = Instant::now();
         let shared = Arc::new(Shared {
             center: Mutex::new(NotificationCenter::new(opts.config)),
-            clock: opts.clock.unwrap_or_else(|| Box::new(move || started.elapsed().as_secs_f64())),
+            clock: opts
+                .clock
+                .unwrap_or_else(|| Box::new(move || started.elapsed().as_secs_f64())),
             wake: opts.wake.unwrap_or_else(|| Box::new(|| {})),
             info: opts.info,
             dnd_announced: AtomicBool::new(false),
@@ -294,19 +374,36 @@ impl Server {
         if opts.replace_existing {
             flags |= RequestNameFlags::ReplaceExisting;
         }
-        let conn = builder.serve_at(OBJECT_PATH, Interface(shared.clone()))?.build()?;
+        let conn = builder
+            .serve_at(OBJECT_PATH, Interface(shared.clone()))?
+            .build()?;
         match conn.request_name_with_flags(BUS_NAME, flags)? {
             RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => {}
-            RequestNameReply::Exists | RequestNameReply::InQueue => return Err(zbus::Error::NameTaken),
+            RequestNameReply::Exists | RequestNameReply::InQueue => {
+                return Err(zbus::Error::NameTaken)
+            }
         }
-        Ok(Server { conn, shared, centre_served: AtomicBool::new(false) })
+        Ok(Server {
+            conn,
+            shared,
+            centre_served: AtomicBool::new(false),
+        })
     }
 
     /// Export `org.cupertino.NotificationCenter1` at [`CENTRE_OBJECT_PATH`] and request
     /// [`CENTRE_BUS_NAME`]. `on_toggle` runs on the zbus thread for every `ToggleCentre` call.
     /// Fails with `zbus::Error::NameTaken` when another process owns the name.
-    pub fn serve_centre_control(&self, on_toggle: impl Fn() + Send + Sync + 'static) -> zbus::Result<()> {
-        self.conn.object_server().at(CENTRE_OBJECT_PATH, CentreControl { on_toggle: Box::new(on_toggle), shared: self.shared.clone() })?;
+    pub fn serve_centre_control(
+        &self,
+        on_toggle: impl Fn() + Send + Sync + 'static,
+    ) -> zbus::Result<()> {
+        self.conn.object_server().at(
+            CENTRE_OBJECT_PATH,
+            CentreControl {
+                on_toggle: Box::new(on_toggle),
+                shared: self.shared.clone(),
+            },
+        )?;
         self.centre_served.store(true, Ordering::SeqCst);
         self.conn.request_name(CENTRE_BUS_NAME)
     }
@@ -330,17 +427,28 @@ impl Server {
     pub fn flush_events(&self) -> zbus::Result<usize> {
         let (events, dnd) = {
             let mut center = self.shared.lock();
-            (center.take_events(), center.dnd_active((self.shared.clock)()))
+            (
+                center.take_events(),
+                center.dnd_active((self.shared.clock)()),
+            )
         };
-        if self.centre_served.load(Ordering::SeqCst) && self.shared.dnd_announced.swap(dnd, Ordering::SeqCst) != dnd {
-            let iface = self.conn.object_server().interface::<_, CentreControl>(CENTRE_OBJECT_PATH)?;
+        if self.centre_served.load(Ordering::SeqCst)
+            && self.shared.dnd_announced.swap(dnd, Ordering::SeqCst) != dnd
+        {
+            let iface = self
+                .conn
+                .object_server()
+                .interface::<_, CentreControl>(CENTRE_OBJECT_PATH)?;
             zbus::block_on(iface.get().do_not_disturb_changed(iface.signal_emitter()))?;
         }
         let n = events.len();
         if n == 0 {
             return Ok(0);
         }
-        let iface = self.conn.object_server().interface::<_, Interface>(OBJECT_PATH)?;
+        let iface = self
+            .conn
+            .object_server()
+            .interface::<_, Interface>(OBJECT_PATH)?;
         zbus::block_on(emit_events(iface.signal_emitter(), events))?;
         Ok(n)
     }
@@ -362,7 +470,10 @@ mod tests {
         m.insert("category".to_string(), ov(Value::from("email.arrived")));
         m.insert("transient".to_string(), ov(Value::Bool(true)));
         m.insert("resident".to_string(), ov(Value::I32(1)));
-        m.insert("desktop-entry".to_string(), ov(Value::from("org.example.Mail")));
+        m.insert(
+            "desktop-entry".to_string(),
+            ov(Value::from("org.example.Mail")),
+        );
         m.insert("image-path".to_string(), ov(Value::from("/tmp/x.png")));
         m.insert("unknown-hint".to_string(), ov(Value::U8(9)));
         let h = parse_hints(&m);
@@ -379,7 +490,16 @@ mod tests {
     fn hints_decode_image_data() {
         let pixels: Vec<u8> = vec![255, 0, 0, 255, 0, 255, 0, 255];
         let arr = Array::from(pixels.as_slice());
-        let s = StructureBuilder::new().add_field(2i32).add_field(1i32).add_field(8i32).add_field(true).add_field(8i32).add_field(4i32).append_field(Value::Array(arr)).build().unwrap();
+        let s = StructureBuilder::new()
+            .add_field(2i32)
+            .add_field(1i32)
+            .add_field(8i32)
+            .add_field(true)
+            .add_field(8i32)
+            .add_field(4i32)
+            .append_field(Value::Array(arr))
+            .build()
+            .unwrap();
         let mut m = HashMap::new();
         m.insert("image-data".to_string(), ov(Value::Structure(s)));
         let img = parse_hints(&m).image.expect("image decoded");
@@ -389,7 +509,11 @@ mod tests {
 
     #[test]
     fn malformed_image_data_is_ignored() {
-        let s = StructureBuilder::new().add_field(2i32).add_field(1i32).build().unwrap();
+        let s = StructureBuilder::new()
+            .add_field(2i32)
+            .add_field(1i32)
+            .build()
+            .unwrap();
         let mut m = HashMap::new();
         m.insert("image-data".to_string(), ov(Value::Structure(s)));
         assert!(parse_hints(&m).image.is_none());

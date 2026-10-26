@@ -17,46 +17,85 @@ pub struct Poppler {
 
 impl Default for Poppler {
     fn default() -> Self {
-        Self { pdftocairo: "pdftocairo".into(), pdfinfo: "pdfinfo".into() }
+        Self {
+            pdftocairo: "pdftocairo".into(),
+            pdfinfo: "pdfinfo".into(),
+        }
     }
 }
 
 impl Poppler {
     /// `true` when both tools can be run.
     pub fn available(&self) -> bool {
-        [&self.pdftocairo, &self.pdfinfo].iter().all(|t| Command::new(t).arg("-v").output().is_ok())
+        [&self.pdftocairo, &self.pdfinfo]
+            .iter()
+            .all(|t| Command::new(t).arg("-v").output().is_ok())
     }
 
     /// Page size in points.
     pub fn page_size(&self, pdf: &Path) -> Result<(f64, f64), String> {
-        let out = Command::new(&self.pdfinfo).arg(pdf).output().map_err(|e| format!("cannot run {}: {e}", self.pdfinfo.display()))?;
+        let out = Command::new(&self.pdfinfo)
+            .arg(pdf)
+            .output()
+            .map_err(|e| format!("cannot run {}: {e}", self.pdfinfo.display()))?;
         if !out.status.success() {
-            return Err(format!("pdfinfo failed for {}: {}", pdf.display(), String::from_utf8_lossy(&out.stderr).trim()));
+            return Err(format!(
+                "pdfinfo failed for {}: {}",
+                pdf.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
         }
-        parse_page_size(&String::from_utf8_lossy(&out.stdout)).ok_or_else(|| format!("no page size in the pdfinfo output for {}", pdf.display()))
+        parse_page_size(&String::from_utf8_lossy(&out.stdout))
+            .ok_or_else(|| format!("no page size in the pdfinfo output for {}", pdf.display()))
     }
 
     /// Render page 1 at exactly `w × h` pixels with a transparent background.
     pub fn render(&self, pdf: &Path, w: u32, h: u32) -> Result<Pixmap, String> {
-        let dir = std::env::temp_dir().join(format!("cupertino-cursor-{}-{}", std::process::id(), unique()));
+        let dir = std::env::temp_dir().join(format!(
+            "cupertino-cursor-{}-{}",
+            std::process::id(),
+            unique()
+        ));
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let base = dir.join("page");
         let out = Command::new(&self.pdftocairo)
-            .args(["-png", "-transp", "-singlefile", "-f", "1", "-l", "1", "-scale-to-x", &w.to_string(), "-scale-to-y", &h.to_string()])
+            .args([
+                "-png",
+                "-transp",
+                "-singlefile",
+                "-f",
+                "1",
+                "-l",
+                "1",
+                "-scale-to-x",
+                &w.to_string(),
+                "-scale-to-y",
+                &h.to_string(),
+            ])
             .arg(pdf)
             .arg(&base)
             .output()
             .map_err(|e| format!("cannot run {}: {e}", self.pdftocairo.display()));
         let result = out.and_then(|o| {
             if !o.status.success() {
-                return Err(format!("pdftocairo failed for {}: {}", pdf.display(), String::from_utf8_lossy(&o.stderr).trim()));
+                return Err(format!(
+                    "pdftocairo failed for {}: {}",
+                    pdf.display(),
+                    String::from_utf8_lossy(&o.stderr).trim()
+                ));
             }
-            Pixmap::load_png(dir.join("page.png")).map_err(|e| format!("cannot read the rendered page: {e}"))
+            Pixmap::load_png(dir.join("page.png"))
+                .map_err(|e| format!("cannot read the rendered page: {e}"))
         });
         let _ = std::fs::remove_dir_all(&dir);
         let pm = result?;
         if (pm.width(), pm.height()) != (w, h) {
-            return Err(format!("expected {w}x{h} pixels from {}, got {}x{}", pdf.display(), pm.width(), pm.height()));
+            return Err(format!(
+                "expected {w}x{h} pixels from {}, got {}x{}",
+                pdf.display(),
+                pm.width(),
+                pm.height()
+            ));
         }
         Ok(pm)
     }
@@ -87,8 +126,14 @@ mod tests {
 
     #[test]
     fn page_size_parsing() {
-        assert_eq!(parse_page_size("Title: x\nPages:           1\nPage size:       28 x 600 pts\n"), Some((28.0, 600.0)));
-        assert_eq!(parse_page_size("Page size:   612.5 x 792 pts (letter)"), Some((612.5, 792.0)));
+        assert_eq!(
+            parse_page_size("Title: x\nPages:           1\nPage size:       28 x 600 pts\n"),
+            Some((28.0, 600.0))
+        );
+        assert_eq!(
+            parse_page_size("Page size:   612.5 x 792 pts (letter)"),
+            Some((612.5, 792.0))
+        );
         assert_eq!(parse_page_size("Pages: 1"), None);
         assert_eq!(parse_page_size("Page size: a x b"), None);
         assert_eq!(parse_page_size("Page size: 0 x 10 pts"), None);
@@ -96,9 +141,18 @@ mod tests {
 
     #[test]
     fn missing_tools_are_reported() {
-        let p = Poppler { pdftocairo: "/nonexistent/pdftocairo".into(), pdfinfo: "/nonexistent/pdfinfo".into() };
+        let p = Poppler {
+            pdftocairo: "/nonexistent/pdftocairo".into(),
+            pdfinfo: "/nonexistent/pdfinfo".into(),
+        };
         assert!(!p.available());
-        assert!(p.page_size(Path::new("x.pdf")).unwrap_err().contains("cannot run"));
-        assert!(p.render(Path::new("x.pdf"), 4, 4).unwrap_err().contains("cannot run"));
+        assert!(p
+            .page_size(Path::new("x.pdf"))
+            .unwrap_err()
+            .contains("cannot run"));
+        assert!(p
+            .render(Path::new("x.pdf"), 4, 4)
+            .unwrap_err()
+            .contains("cannot run"));
     }
 }

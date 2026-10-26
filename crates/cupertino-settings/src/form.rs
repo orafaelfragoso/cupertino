@@ -86,7 +86,12 @@ pub struct SectionSpec<'a> {
 
 /// The layout of `sections` in the column at x = `x`, `column` wide, starting at `top` (the toolbar's bottom); also the
 /// height of the whole form including the root's bottom inset.
-pub fn layout(sections: &[SectionSpec<'_>], x: f64, column: f64, top: f64) -> (Vec<SectionLayout>, f64) {
+pub fn layout(
+    sections: &[SectionSpec<'_>],
+    x: f64,
+    column: f64,
+    top: f64,
+) -> (Vec<SectionLayout>, f64) {
     let (cx, w) = content_frame(x, column);
     let mut y = top + m::ROOT_INSETS.0;
     let mut out = Vec::new();
@@ -106,12 +111,24 @@ pub fn layout(sections: &[SectionSpec<'_>], x: f64, column: f64, top: f64) -> (V
             let text = m::LABEL_HEIGHT + if spec.error { m::ERROR_HEIGHT } else { 0.0 };
             let h = (ch.max(text) + 2.0 * m::ROW_PADDING_V).max(m::ROW_MIN_HEIGHT);
             let row = Rect::new(cx, y, w, h);
-            let control = Rect::new(row.right() - m::ROW_PADDING_H - cw, y + (h - ch) / 2.0, cw, ch);
+            let control = Rect::new(
+                row.right() - m::ROW_PADDING_H - cw,
+                y + (h - ch) / 2.0,
+                cw,
+                ch,
+            );
             let label_w = (control.x - cx - 2.0 * m::ROW_PADDING_H).max(0.0);
             let label_y = y + (h - text) / 2.0;
             let label = Rect::new(cx + m::ROW_PADDING_H, label_y, label_w, m::LABEL_HEIGHT);
-            let error = spec.error.then(|| Rect::new(label.x, label.bottom(), label_w, m::ERROR_HEIGHT));
-            rows.push(RowLayout { row, label, control, error });
+            let error = spec
+                .error
+                .then(|| Rect::new(label.x, label.bottom(), label_w, m::ERROR_HEIGHT));
+            rows.push(RowLayout {
+                row,
+                label,
+                control,
+                error,
+            });
             y += h;
         }
         let frame = Rect::new(cx, box_top, w, y - box_top);
@@ -120,7 +137,12 @@ pub fn layout(sections: &[SectionSpec<'_>], x: f64, column: f64, top: f64) -> (V
             y += m::FOOTER_GAP + m::FOOTER_HEIGHT;
             r
         });
-        out.push(SectionLayout { header, frame, rows, footer });
+        out.push(SectionLayout {
+            header,
+            frame,
+            rows,
+            footer,
+        });
     }
     (out, y + m::ROOT_INSETS.2 - top)
 }
@@ -131,29 +153,80 @@ mod tests {
 
     #[test]
     fn the_form_sits_inside_the_root_insets_and_is_capped_at_600_centred() {
-        assert_eq!(content_frame(216.0, 499.0), (236.0, 459.0), "W = 499: inset 20 on both sides, not capped");
-        assert_eq!(content_frame(0.0, 800.0), (100.0, 600.0), "W = 800: 600 wide and centred");
+        assert_eq!(
+            content_frame(216.0, 499.0),
+            (236.0, 459.0),
+            "W = 499: inset 20 on both sides, not capped"
+        );
+        assert_eq!(
+            content_frame(0.0, 800.0),
+            (100.0, 600.0),
+            "W = 800: 600 wide and centred"
+        );
     }
 
     #[test]
     fn rows_take_their_control_with_padding_and_sections_are_spaced() {
         let switch = Control::Switch { on: true };
-        let slider = Control::Slider { value: 0.0, stops: Some(10), marks: &[], labels: ("Slow", "Fast") };
+        let slider = Control::Slider {
+            value: 0.0,
+            stops: Some(10),
+            marks: &[],
+            labels: ("Slow", "Fast"),
+        };
         let sections = [
-            SectionSpec { header: true, rows: vec![RowSpec { control: &switch, error: false }, RowSpec { control: &slider, error: false }], footer: false },
-            SectionSpec { header: false, rows: vec![RowSpec { control: &switch, error: true }], footer: true },
+            SectionSpec {
+                header: true,
+                rows: vec![
+                    RowSpec {
+                        control: &switch,
+                        error: false,
+                    },
+                    RowSpec {
+                        control: &slider,
+                        error: false,
+                    },
+                ],
+                footer: false,
+            },
+            SectionSpec {
+                header: false,
+                rows: vec![RowSpec {
+                    control: &switch,
+                    error: true,
+                }],
+                footer: true,
+            },
         ];
         let (l, height) = layout(&sections, 216.0, 499.0, 52.0);
         assert_eq!(l[0].header, Some(Rect::new(236.0, 72.0, 459.0, 14.0)));
-        assert_eq!(l[0].frame.y, 92.0, "header 14 + gap 6 under the 20 pt top inset");
-        assert_eq!(l[0].rows[0].row, Rect::new(236.0, 92.0, 459.0, 38.0), "a switch row: 22 + 2 × 8");
-        assert_eq!(l[0].rows[0].control, Rect::new(236.0 + 459.0 - 10.0 - 38.0, 100.0, 38.0, 22.0), "right-aligned inside the padding");
-        assert_eq!(l[0].rows[1].row.h, 49.0, "a slider row: knob 20 + labels 13 + 2 × 8");
+        assert_eq!(
+            l[0].frame.y, 92.0,
+            "header 14 + gap 6 under the 20 pt top inset"
+        );
+        assert_eq!(
+            l[0].rows[0].row,
+            Rect::new(236.0, 92.0, 459.0, 38.0),
+            "a switch row: 22 + 2 × 8"
+        );
+        assert_eq!(
+            l[0].rows[0].control,
+            Rect::new(236.0 + 459.0 - 10.0 - 38.0, 100.0, 38.0, 22.0),
+            "right-aligned inside the padding"
+        );
+        assert_eq!(
+            l[0].rows[1].row.h, 49.0,
+            "a slider row: knob 20 + labels 13 + 2 × 8"
+        );
         assert_eq!(l[1].frame.y, l[0].frame.bottom() + 11.0);
         assert_eq!(l[1].rows[0].row.h, 46.0, "label and error line 30 + 2 × 8");
         assert!(l[1].rows[0].error.is_some());
         let footer = l[1].footer.unwrap();
         assert_eq!(footer.y, l[1].frame.bottom() + 6.0);
-        assert_eq!(height, footer.bottom() + 20.0 - 52.0, "the root's bottom inset ends the form");
+        assert_eq!(
+            height,
+            footer.bottom() + 20.0 - 52.0,
+            "the root's bottom inset ends the form"
+        );
     }
 }

@@ -11,7 +11,12 @@ pub fn tracking_stop(speed: f64) -> usize {
 }
 
 fn nearest(stops: &[f64], v: f64) -> usize {
-    stops.iter().enumerate().min_by(|a, b| (a.1 - v).abs().total_cmp(&(b.1 - v).abs())).map(|(i, _)| i).expect("the stop table is not empty")
+    stops
+        .iter()
+        .enumerate()
+        .min_by(|a, b| (a.1 - v).abs().total_cmp(&(b.1 - v).abs()))
+        .map(|(i, _)| i)
+        .expect("the stop table is not empty")
 }
 
 /// Dock size and magnification: the slider value v in 0…1 is `(px − 16) / 112`.
@@ -123,13 +128,23 @@ mod tests {
             assert_eq!(tracking_stop(*v), i);
         }
         assert_eq!(tracking_stop(TRACKING_DEFAULT), 3);
-        assert_eq!(tracking_stop(0.7), 3, "a stored value between stops shows the nearest");
+        assert_eq!(
+            tracking_stop(0.7),
+            3,
+            "a stored value between stops shows the nearest"
+        );
     }
 
     #[test]
     fn the_dock_sliders_map_pixels_and_marks() {
-        assert_eq!((dock_px(0.0), dock_px(1.0), dock_px(0.5)), (16.0, 128.0, 72.0));
-        assert_eq!((dock_value(16.0), dock_value(128.0), dock_value(48.0)), (0.0, 1.0, 32.0 / 112.0));
+        assert_eq!(
+            (dock_px(0.0), dock_px(1.0), dock_px(0.5)),
+            (16.0, 128.0, 72.0)
+        );
+        assert_eq!(
+            (dock_value(16.0), dock_value(128.0), dock_value(48.0)),
+            (0.0, 1.0, 32.0 / 112.0)
+        );
         for px in [16.0, 48.0, 64.0, 128.0] {
             assert_eq!(dock_px(dock_value(px)), px);
         }
@@ -156,15 +171,31 @@ mod tests {
 
     #[test]
     fn reading_walks_to_the_first_level_at_or_below_the_value() {
-        assert_eq!((rate_position(500, 83), delay_position(500)), (RATE_DEFAULT, DELAY_DEFAULT), "the defaults");
+        assert_eq!(
+            (rate_position(500, 83), delay_position(500)),
+            (RATE_DEFAULT, DELAY_DEFAULT),
+            "the defaults"
+        );
         assert_eq!(rate_position(500, 90), 6, "90 ms = 5.4 units");
         assert_eq!(rate_position(500, 40), 7, "40 ms = 2.4 units");
         assert_eq!(rate_position(0, 83), 0, "a delay of 0 is repeat off");
         assert_eq!(delay_position(600), 4, "600 ms = 36 units");
-        assert_eq!(delay_position(100), DELAY_FIRST, "no level qualifies: the walk's 0 clamps to 1");
-        assert_eq!(delay_position(5_000_000), DELAY_FIRST, "level 0 is not on the slider");
+        assert_eq!(
+            delay_position(100),
+            DELAY_FIRST,
+            "no level qualifies: the walk's 0 clamps to 1"
+        );
+        assert_eq!(
+            delay_position(5_000_000),
+            DELAY_FIRST,
+            "level 0 is not on the slider"
+        );
         for p in 1..RATE_POSITIONS {
-            assert_eq!(rate_position(500, rate_interval_ms(p)), p, "every written interval reads back as its position");
+            assert_eq!(
+                rate_position(500, rate_interval_ms(p)),
+                p,
+                "every written interval reads back as its position"
+            );
         }
         for p in DELAY_FIRST..=DELAY_LAST {
             assert_eq!(delay_position(delay_ms(p)), p);
@@ -195,7 +226,10 @@ fn duration_label(seconds: u64) -> String {
 /// an extra selected item (§6.3, ST-18), and `never` shows only when listed or stored.
 pub fn timer_choices(listed: &[Option<u64>], stored: Option<u64>) -> TimerChoices {
     let mut values: Vec<Option<u64>> = listed.to_vec();
-    let mut labels: Vec<String> = values.iter().map(|v| v.map_or_else(|| "Never".to_string(), duration_label)).collect();
+    let mut labels: Vec<String> = values
+        .iter()
+        .map(|v| v.map_or_else(|| "Never".to_string(), duration_label))
+        .collect();
     let selected = match values.iter().position(|v| *v == stored) {
         Some(i) => i,
         None => {
@@ -204,14 +238,41 @@ pub fn timer_choices(listed: &[Option<u64>], stored: Option<u64>) -> TimerChoice
             values.len() - 1
         }
     };
-    TimerChoices { labels, values, selected }
+    TimerChoices {
+        labels,
+        values,
+        selected,
+    }
 }
 
 /// Display and system sleep: 1, 2, 3, 5, 10, 20, 30, 60, 90, 120, 150, 180 minutes and Never.
-pub const SLEEP_CHOICES: [Option<u64>; 13] = [Some(60), Some(120), Some(180), Some(300), Some(600), Some(1200), Some(1800), Some(3600), Some(5400), Some(7200), Some(9000), Some(10800), None];
+pub const SLEEP_CHOICES: [Option<u64>; 13] = [
+    Some(60),
+    Some(120),
+    Some(180),
+    Some(300),
+    Some(600),
+    Some(1200),
+    Some(1800),
+    Some(3600),
+    Some(5400),
+    Some(7200),
+    Some(9000),
+    Some(10800),
+    None,
+];
 
 /// Require the password after display sleep: Immediately, 5 seconds, 1, 5, 15 minutes, 1, 4, 8 hours; `never` is not offered.
-pub const PASSWORD_CHOICES: [Option<u64>; 8] = [Some(0), Some(5), Some(60), Some(300), Some(900), Some(3600), Some(14400), Some(28800)];
+pub const PASSWORD_CHOICES: [Option<u64>; 8] = [
+    Some(0),
+    Some(5),
+    Some(60),
+    Some(300),
+    Some(900),
+    Some(3600),
+    Some(14400),
+    Some(28800),
+];
 
 #[cfg(test)]
 mod timer_tests {
@@ -220,18 +281,32 @@ mod timer_tests {
     #[test]
     fn sleep_minutes_and_seconds_round_trip_and_an_unlisted_value_is_an_extra_item() {
         let c = timer_choices(&SLEEP_CHOICES, Some(600));
-        assert_eq!((c.labels[c.selected].as_str(), c.labels.len()), ("10 minutes", 13));
+        assert_eq!(
+            (c.labels[c.selected].as_str(), c.labels.len()),
+            ("10 minutes", 13)
+        );
         assert_eq!(c.labels[0], "1 minute");
         assert_eq!(c.labels[7], "1 hour");
         assert_eq!(c.labels[8], "90 minutes");
         assert_eq!(c.labels[11], "3 hours");
         assert_eq!(c.labels[12], "Never");
         let seven = timer_choices(&SLEEP_CHOICES, Some(420));
-        assert_eq!((seven.selected, seven.labels[13].as_str(), seven.values[13]), (13, "7 minutes", Some(420)), "7 minutes is kept as an extra item");
+        assert_eq!(
+            (seven.selected, seven.labels[13].as_str(), seven.values[13]),
+            (13, "7 minutes", Some(420)),
+            "7 minutes is kept as an extra item"
+        );
         let never = timer_choices(&PASSWORD_CHOICES, None);
-        assert_eq!((never.labels.len(), never.labels[8].as_str()), (9, "Never"), "never shows only when stored");
+        assert_eq!(
+            (never.labels.len(), never.labels[8].as_str()),
+            (9, "Never"),
+            "never shows only when stored"
+        );
         let five = timer_choices(&PASSWORD_CHOICES, Some(300));
         assert_eq!(five.labels[five.selected], "5 minutes", "the default 300 s");
-        assert_eq!(timer_choices(&PASSWORD_CHOICES, Some(0)).labels[0], "Immediately");
+        assert_eq!(
+            timer_choices(&PASSWORD_CHOICES, Some(0)).labels[0],
+            "Immediately"
+        );
     }
 }

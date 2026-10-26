@@ -9,7 +9,9 @@ pub const UNKNOWN: &str = "application/octet-stream";
 
 /// MIME type from the name only.
 pub fn mime_from_name(name: &str) -> Option<String> {
-    mime_guess::from_path(name).first().map(|m| m.essence_str().to_string())
+    mime_guess::from_path(name)
+        .first()
+        .map(|m| m.essence_str().to_string())
 }
 
 /// MIME type of `path`: directories, then extension, then content sniffing of a regular file.
@@ -89,14 +91,40 @@ pub fn kind_group(mime: &str) -> KindGroup {
     match mime {
         DIRECTORY => KindGroup::Folders,
         "application/pdf" => KindGroup::Pdf,
-        "application/x-executable" | "application/x-sharedlib" | "application/vnd.appimage" | "application/x-desktop" => KindGroup::Applications,
-        "application/vnd.ms-excel" | "text/csv" | "application/vnd.oasis.opendocument.spreadsheet" => KindGroup::Spreadsheets,
-        "application/vnd.ms-powerpoint" | "application/vnd.oasis.opendocument.presentation" => KindGroup::Presentations,
+        "application/x-executable"
+        | "application/x-sharedlib"
+        | "application/vnd.appimage"
+        | "application/x-desktop" => KindGroup::Applications,
+        "application/vnd.ms-excel"
+        | "text/csv"
+        | "application/vnd.oasis.opendocument.spreadsheet" => KindGroup::Spreadsheets,
+        "application/vnd.ms-powerpoint" | "application/vnd.oasis.opendocument.presentation" => {
+            KindGroup::Presentations
+        }
         "message/rfc822" | "application/mbox" => KindGroup::Email,
         "text/vcard" | "text/x-vcard" => KindGroup::Contacts,
-        "text/html" | "text/x-csrc" | "text/x-c++src" | "text/x-rust" | "text/x-python" | "application/javascript" | "text/javascript" | "application/json" | "application/xml" | "text/x-java" | "text/x-shellscript" => KindGroup::Source,
-        "application/rtf" | "text/rtf" | "text/plain" | "application/msword" | "application/vnd.oasis.opendocument.text" => KindGroup::Text,
-        m if m.starts_with("font/") || m.starts_with("application/font") || m == "application/x-font-ttf" => KindGroup::Fonts,
+        "text/html"
+        | "text/x-csrc"
+        | "text/x-c++src"
+        | "text/x-rust"
+        | "text/x-python"
+        | "application/javascript"
+        | "text/javascript"
+        | "application/json"
+        | "application/xml"
+        | "text/x-java"
+        | "text/x-shellscript" => KindGroup::Source,
+        "application/rtf"
+        | "text/rtf"
+        | "text/plain"
+        | "application/msword"
+        | "application/vnd.oasis.opendocument.text" => KindGroup::Text,
+        m if m.starts_with("font/")
+            || m.starts_with("application/font")
+            || m == "application/x-font-ttf" =>
+        {
+            KindGroup::Fonts
+        }
         m if m.starts_with("image/") => KindGroup::Images,
         m if m.starts_with("video/") => KindGroup::Movies,
         m if m.starts_with("audio/") => KindGroup::Music,
@@ -147,7 +175,9 @@ pub fn kind_description(mime: &str) -> String {
         Some((_, kind)) => (*kind).to_string(),
         None => match mime {
             m if m.contains("spreadsheet") || m == "text/csv" => "spreadsheet".into(),
-            m if m.contains("wordprocessing") || m == "application/msword" => "word processing document".into(),
+            m if m.contains("wordprocessing") || m == "application/msword" => {
+                "word processing document".into()
+            }
             m if m.contains("presentation") => "presentation".into(),
             "text/x-rust" => "Rust source code".into(),
             // a file of no known type: a generic document (approximate, the earlier behaviour; the design's description of
@@ -155,7 +185,10 @@ pub fn kind_description(mime: &str) -> String {
             UNKNOWN => "document".into(),
             m => {
                 let (major, minor) = m.split_once('/').unwrap_or((m, ""));
-                let minor = minor.trim_start_matches("x-").trim_start_matches("vnd.").to_uppercase();
+                let minor = minor
+                    .trim_start_matches("x-")
+                    .trim_start_matches("vnd.")
+                    .to_uppercase();
                 match major {
                     "image" => format!("{minor} image"),
                     "video" => format!("{minor} movie"),
@@ -203,10 +236,17 @@ mod tests {
         assert_eq!(kind_description("application/x-desktop"), "Application");
         assert_eq!(kind_description("image/png"), "PNG image");
         assert_eq!(kind_description("application/x-tar"), "Tar archive");
-        assert_eq!(kind_description("application/x-shellscript"), "Shell script");
+        assert_eq!(
+            kind_description("application/x-shellscript"),
+            "Shell script"
+        );
         assert_eq!(kind_description("application/rtf"), "Rich text (RTF)");
         assert_eq!(kind_description("text/plain"), "Text");
         assert_eq!(kind_description(UNKNOWN), "Document");
-        assert_eq!(kind_description("image/webp"), "WEBP image", "an unlisted type in the same style");
+        assert_eq!(
+            kind_description("image/webp"),
+            "WEBP image",
+            "an unlisted type in the same style"
+        );
     }
 }

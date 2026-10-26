@@ -39,7 +39,13 @@ fn covered_bounds(pm: &Pixmap) -> Option<(u32, u32, u32, u32)> {
 fn rendering_at_progress_zero_covers_exactly_the_window() {
     for kind in MinimizeKind::ALL {
         let (l, t, r, b) = covered_bounds(&render(kind, 0.0)).unwrap();
-        assert!(l.abs_diff(80) <= 1 && t.abs_diff(30) <= 1 && r.abs_diff(359) <= 1 && b.abs_diff(219) <= 1, "{kind:?}: {l} {t} {r} {b}");
+        assert!(
+            l.abs_diff(80) <= 1
+                && t.abs_diff(30) <= 1
+                && r.abs_diff(359) <= 1
+                && b.abs_diff(219) <= 1,
+            "{kind:?}: {l} {t} {r} {b}"
+        );
     }
 }
 
@@ -47,7 +53,13 @@ fn rendering_at_progress_zero_covers_exactly_the_window() {
 fn rendering_at_progress_one_covers_exactly_the_slot() {
     for kind in MinimizeKind::ALL {
         let (l, t, r, b) = covered_bounds(&render(kind, 1.0)).unwrap();
-        assert!(l.abs_diff(420) <= 1 && t.abs_diff(330) <= 1 && r.abs_diff(459) <= 1 && b.abs_diff(369) <= 1, "{kind:?}: {l} {t} {r} {b}");
+        assert!(
+            l.abs_diff(420) <= 1
+                && t.abs_diff(330) <= 1
+                && r.abs_diff(459) <= 1
+                && b.abs_diff(369) <= 1,
+            "{kind:?}: {l} {t} {r} {b}"
+        );
     }
 }
 
@@ -59,7 +71,13 @@ fn rendered_warp_never_leaves_the_hull_of_window_and_slot_by_much() {
         for y in 0..H {
             for x in 0..W {
                 if alpha(&pm, x, y) > 0 {
-                    assert!(hull.contains(cupertino_geometry::Point::new(x as f64 + 0.5, y as f64 + 0.5)), "step {k}: pixel ({x},{y})");
+                    assert!(
+                        hull.contains(cupertino_geometry::Point::new(
+                            x as f64 + 0.5,
+                            y as f64 + 0.5
+                        )),
+                        "step {k}: pixel ({x},{y})"
+                    );
                 }
             }
         }
@@ -74,7 +92,10 @@ fn warp_sequence_has_no_holes_in_the_window_body() {
     for r in 0..m.rows - 1 {
         let (a, b) = (m.vertex(0, r).position, m.vertex(1, r + 1).position);
         let (cx, cy) = (((a[0] + b[0]) / 2.0) as u32, ((a[1] + b[1]) / 2.0) as u32);
-        assert!(alpha(&pm, cx.min(W - 1), cy.min(H - 1)) > 200, "row {r} at ({cx},{cy})");
+        assert!(
+            alpha(&pm, cx.min(W - 1), cy.min(H - 1)) > 200,
+            "row {r} at ({cx},{cy})"
+        );
     }
 }
 
@@ -89,12 +110,18 @@ fn texture_orientation_survives_the_warp() {
     let e = MinimizeEffect::new(MinimizeKind::Warp, WINDOW, SLOT, DockEdge::Bottom);
     draw_mesh(&mut pm, &tex, &e.mesh(0.0), (0.0, 0.0), 1.0);
     let bar = title(&pm, 200, 36);
-    assert!(bar[0] < 100 && bar[1] < 100, "dark title bar at the top: {bar:?}");
+    assert!(
+        bar[0] < 100 && bar[1] < 100,
+        "dark title bar at the top: {bar:?}"
+    );
 }
 
 #[test]
 fn minimize_animation_renders_every_frame_without_panics() {
-    let mut a = MinimizeAnimation::new(MinimizeEffect::new(MinimizeKind::Funnel, WINDOW, SLOT, DockEdge::Bottom), false);
+    let mut a = MinimizeAnimation::new(
+        MinimizeEffect::new(MinimizeKind::Funnel, WINDOW, SLOT, DockEdge::Bottom),
+        false,
+    );
     a.minimize(0.0);
     let tex = window_test_pattern(280, 190);
     let mut pm = Pixmap::new(W, H).unwrap();

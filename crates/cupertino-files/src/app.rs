@@ -16,27 +16,36 @@
 //! item and moving more than 5 pt drags the selection: onto a folder of the window or a place of the sidebar it
 //! moves there (Alt copies, Super moves, copy across volumes); onto the trash place it goes to the trash.
 
-use cupertino_assets::Assets;
 use cupertino_apps::{Locale, MimeApps, MimeDatabase, Visibility, XdgDirs};
-use cupertino_client::{key, ActivationRequest, Backdrop, Button, Client, Event, Modifiers as KeyModifiers, PointerEvent, SurfaceId, TitlebarStyle, ToplevelConfig};
+use cupertino_assets::Assets;
+use cupertino_client::{
+    key, ActivationRequest, Backdrop, Button, Client, Event, Modifiers as KeyModifiers,
+    PointerEvent, SurfaceId, TitlebarStyle, ToplevelConfig,
+};
 use cupertino_files::browser::{Activation, Browser};
-use cupertino_files::context_menu::{common_apps, AppChoice, Command as MenuCommand, Menu, MenuItem, Mods as MenuMods, Nav, Outcome};
+use cupertino_files::context_menu::{
+    common_apps, AppChoice, Command as MenuCommand, Menu, MenuItem, Mods as MenuMods, Nav, Outcome,
+};
 use cupertino_files::menu_spec::{self, Background, Subject};
-use cupertino_files::tags::{self, TagColor};
-use cupertino_files::metrics::{drag, marquee as marquee_metrics, menu as menu_metrics, timing, window as window_metrics};
+use cupertino_files::metrics::{
+    drag, marquee as marquee_metrics, menu as menu_metrics, timing, window as window_metrics,
+};
 use cupertino_files::name_edit::NameEdit;
 use cupertino_files::open::{command_with, default_app_id, open_command, open_with};
 use cupertino_files::operations;
 use cupertino_files::places::{session_places, Place, PlaceKind, SessionPlaces};
+use cupertino_files::recents;
 use cupertino_files::rename::{RenameEvent, RenameTrigger};
 use cupertino_files::render::{Palette, Renderer};
 use cupertino_files::selection::Modifiers;
+use cupertino_files::tags::{self, TagColor};
 use cupertino_files::trash::Trash;
-use cupertino_files::recents;
-use cupertino_files::window::{metrics, status_text, Bars, Frame, Hit, Move, ToolbarItem, ViewMode, WindowPainter, WindowState};
+use cupertino_files::window::{
+    metrics, status_text, Bars, Frame, Hit, Move, ToolbarItem, ViewMode, WindowPainter, WindowState,
+};
 use cupertino_files::{Entry, Kind, Point, Size, SortSpec};
-use cupertino_icons::document::FileIcons;
 use cupertino_geometry::Rect as PopupRect;
+use cupertino_icons::document::FileIcons;
 use cupertino_theme::{Appearance, Theme, WindowCornerSize};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -59,7 +68,8 @@ const MENU_MATERIAL: &str = "Menu";
 const SIDEBAR_MATERIAL: &str = "Sidebar";
 
 /// Two presses on the same item within this interval open it (default).
-const DOUBLE_CLICK: Duration = Duration::from_millis((timing::DOUBLE_CLICK_INTERVAL * 1000.0) as u64);
+const DOUBLE_CLICK: Duration =
+    Duration::from_millis((timing::DOUBLE_CLICK_INTERVAL * 1000.0) as u64);
 
 struct App {
     client: Client,
@@ -158,16 +168,29 @@ fn popup_rect(r: &cupertino_files::Rect) -> PopupRect {
 
 /// The palette of the session's appearance.
 fn palette(theme: &Theme, dark: bool) -> Palette {
-    Palette::from_theme(theme, if dark { Appearance::Dark } else { Appearance::Light })
+    Palette::from_theme(
+        theme,
+        if dark {
+            Appearance::Dark
+        } else {
+            Appearance::Light
+        },
+    )
 }
 
 /// The window title for a folder: the place name of the trash folder (`<trash>/files`) and of Recents, else
 /// the folder's name, the path for the root.
 fn title(dir: &Path, places: &[Place]) -> String {
-    if let Some(place) = places.iter().find(|p| matches!(p.kind, PlaceKind::Trash | PlaceKind::Recents) && p.path == dir) {
+    if let Some(place) = places
+        .iter()
+        .find(|p| matches!(p.kind, PlaceKind::Trash | PlaceKind::Recents) && p.path == dir)
+    {
         return place.name.clone();
     }
-    dir.file_name().map_or_else(|| dir.display().to_string(), |n| n.to_string_lossy().into_owned())
+    dir.file_name().map_or_else(
+        || dir.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
 }
 
 /// Connect, open the window on `folder` and serve it until it is closed; `terminal` runs the applications
@@ -178,19 +201,32 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
     let dirs = XdgDirs::from_env()?;
     let mut client = Client::connect()?;
     let home = PathBuf::from(std::env::var_os("HOME").ok_or("HOME is not set")?);
-    let SessionPlaces { places, folder_icons } = session_places(&home, &dirs.data_dirs)?;
+    let SessionPlaces {
+        places,
+        folder_icons,
+    } = session_places(&home, &dirs.data_dirs)?;
     let folders = folder_icons.into_iter().collect();
     // one database for the icons and for the Kind column, so both name the same type
     let types = Arc::new(MimeDatabase::load(&dirs.all_data_dirs())?);
     let icons = FileIcons::new(&assets, (*types).clone(), folders);
     let waker = client.waker();
-    let browser = Browser::open(folder.clone(), SortSpec::default(), dirs.data_home.join(recents::XBEL_NAME), Some(types), Arc::new(move || waker.wake())).map_err(|e| format!("cannot open {}: {e}", folder.display()))?;
+    let browser = Browser::open(
+        folder.clone(),
+        SortSpec::default(),
+        dirs.data_home.join(recents::XBEL_NAME),
+        Some(types),
+        Arc::new(move || waker.wake()),
+    )
+    .map_err(|e| format!("cannot open {}: {e}", folder.display()))?;
     let (width, height) = window_metrics::DEFAULT_SIZE;
     let window = client.toplevel(&ToplevelConfig {
         app_id: APP_ID.into(),
         title: title(&folder, &places),
         size: (width as u32, height as u32),
-        min_size: (metrics::WINDOW_MIN.0.ceil() as u32, metrics::WINDOW_MIN.1.ceil() as u32),
+        min_size: (
+            metrics::WINDOW_MIN.0.ceil() as u32,
+            metrics::WINDOW_MIN.1.ceil() as u32,
+        ),
         titlebar: TitlebarStyle::Unified,
     })?;
     let sidebar = client.backdrop(window)?;
@@ -241,7 +277,12 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
 fn applications() -> Result<MimeApps> {
     let dirs = XdgDirs::from_env()?;
     let db = MimeDatabase::load(&dirs.all_data_dirs())?;
-    Ok(MimeApps::load(&dirs, db, &Locale::from_env(), &Visibility::from_env())?)
+    Ok(MimeApps::load(
+        &dirs,
+        db,
+        &Locale::from_env(),
+        &Visibility::from_env(),
+    )?)
 }
 
 /// Run a command detached from the loop; its exit is reaped on a thread.
@@ -250,7 +291,9 @@ fn spawn(mut command: Command) {
     match command.spawn() {
         Ok(mut child) => {
             std::thread::spawn(move || match child.wait() {
-                Ok(status) if !status.success() => eprintln!("cupertino-files: {program} exited with {status}"),
+                Ok(status) if !status.success() => {
+                    eprintln!("cupertino-files: {program} exited with {status}")
+                }
                 Ok(_) => {}
                 Err(e) => eprintln!("cupertino-files: {program}: {e}"),
             });
@@ -274,7 +317,13 @@ impl App {
                 Some(level) => self.menu_pointer(level, event)?,
                 None => self.pointer(event)?,
             },
-            Event::Key { key, pressed: true, mods, character, .. } => self.key(key, mods, character)?,
+            Event::Key {
+                key,
+                pressed: true,
+                mods,
+                character,
+                ..
+            } => self.key(key, mods, character)?,
             Event::Key { .. } | Event::KeyboardLeave(_) => {}
             Event::ActivationToken { request, token } => self.launch(request, &token)?,
             Event::Appearance { dark } => {
@@ -290,7 +339,11 @@ impl App {
                     self.close_menu()?;
                 }
             }
-            Event::MenuBar { .. } | Event::Dock { .. } => return Err("an event for a menu bar or dock arrived, and this process has none".into()),
+            Event::MenuBar { .. } | Event::Dock { .. } => {
+                return Err(
+                    "an event for a menu bar or dock arrived, and this process has none".into(),
+                )
+            }
         }
         Ok(true)
     }
@@ -322,7 +375,11 @@ impl App {
                 None => self.edit = None,
             }
         }
-        if let Some(index) = self.edit_when_listed.as_ref().and_then(|path| entries.iter().position(|e| &e.path == path)) {
+        if let Some(index) = self
+            .edit_when_listed
+            .as_ref()
+            .and_then(|path| entries.iter().position(|e| &e.path == path))
+        {
             self.edit_when_listed = None;
             self.begin_edit(index);
         }
@@ -334,7 +391,14 @@ impl App {
 
     /// How long the loop may sleep: until the next timer of the menu or of the click-and-wait rename.
     fn timeout(&self) -> Option<Duration> {
-        let due = [self.menu.as_ref().and_then(|open| open.menu.deadline()), self.rename.deadline(), self.marquee.as_ref().map(|m| m.next_scroll)].into_iter().flatten().reduce(f64::min)?;
+        let due = [
+            self.menu.as_ref().and_then(|open| open.menu.deadline()),
+            self.rename.deadline(),
+            self.marquee.as_ref().map(|m| m.next_scroll),
+        ]
+        .into_iter()
+        .flatten()
+        .reduce(f64::min)?;
         Some(Duration::from_secs_f64((due - self.now()).max(0.0)) + Duration::from_millis(1))
     }
 
@@ -356,17 +420,67 @@ impl App {
         let dy = std::mem::take(&mut self.pending_scroll);
         let (width, height) = self.client.size(self.window)?;
         let active = self.client.toplevel_activated(self.window)?;
-        let reveal = self.browser.take_focus_moved().then(|| self.browser.selection().focus()).flatten();
-        let size = Size { w: f64::from(width), h: f64::from(height) };
-        let App { client, window, sidebar, painter, browser, places, mode, bars, available, search, search_focused, palette, scroll, edit, drag, marquee, .. } = self;
-        let drop_target = drag.as_ref().and_then(|d| d.target.as_ref()).and_then(|t| t.item);
+        let reveal = self
+            .browser
+            .take_focus_moved()
+            .then(|| self.browser.selection().focus())
+            .flatten();
+        let size = Size {
+            w: f64::from(width),
+            h: f64::from(height),
+        };
+        let App {
+            client,
+            window,
+            sidebar,
+            painter,
+            browser,
+            places,
+            mode,
+            bars,
+            available,
+            search,
+            search_focused,
+            palette,
+            scroll,
+            edit,
+            drag,
+            marquee,
+            ..
+        } = self;
+        let drop_target = drag
+            .as_ref()
+            .and_then(|d| d.target.as_ref())
+            .and_then(|t| t.item);
         let title = title(browser.dir(), places);
         let status = status_text(browser.item_count(), *available);
-        let state = WindowState { browser, places, mode: *mode, active, search: search.as_str(), search_focused: *search_focused, title: &title, now: SystemTime::now(), edit: edit.as_ref().map(|(e, _)| e), drop_target, marquee: marquee.as_ref().map(|m| (m.origin, m.at)), status: &status };
+        let state = WindowState {
+            browser,
+            places,
+            mode: *mode,
+            active,
+            search: search.as_str(),
+            search_focused: *search_focused,
+            title: &title,
+            now: SystemTime::now(),
+            edit: edit.as_ref().map(|(e, _)| e),
+            drop_target,
+            marquee: marquee.as_ref().map(|m| (m.origin, m.at)),
+            status: &status,
+        };
         let mut drawn = None;
         let mut shaped = Ok(());
         client.draw(*window, |pm, scale| {
-            let mut frame = painter.frame(size, state.places, *bars, state.browser.dir(), state.mode, state.browser.outline(), *scroll + dy, scale.factor());
+            let mut frame = painter.frame(
+                size,
+                state.places,
+                *bars,
+                state.browser.dir(),
+                state.mode,
+                state.browser.outline(),
+                *scroll + dy,
+                scale.factor(),
+            );
             if let Some(index) = reveal {
                 frame.reveal(index);
             }
@@ -374,7 +488,15 @@ impl App {
             // window's, so the outer corners match the window; the inner ones lie under the opaque content
             let radius = WindowCornerSize::Regular.radius_pt();
             let area = frame.window.sidebar;
-            shaped = sidebar.set_shape(&popup_rect(&cupertino_files::Rect::new(area.x, area.y, area.w + radius, area.h)), radius);
+            shaped = sidebar.set_shape(
+                &popup_rect(&cupertino_files::Rect::new(
+                    area.x,
+                    area.y,
+                    area.w + radius,
+                    area.h,
+                )),
+                radius,
+            );
             painter.paint(pm, scale.factor(), &frame, &state, palette);
             drawn = Some(frame);
         })?;
@@ -392,11 +514,39 @@ impl App {
     fn pointer(&mut self, event: PointerEvent) -> Result<()> {
         match event {
             // a Control-click is the secondary click, as on the design
-            PointerEvent::Button { button: Button::Left, pressed: true, position } if self.client.modifiers().ctrl => self.context(Point { x: position.x, y: position.y }),
-            PointerEvent::Button { button: Button::Left, pressed: true, position } => self.press(Point { x: position.x, y: position.y }),
-            PointerEvent::Button { button: Button::Left, pressed: false, .. } => self.release(),
-            PointerEvent::Button { button: Button::Right, pressed: true, position } => self.context(Point { x: position.x, y: position.y }),
-            PointerEvent::Motion(position) => self.drag_motion(Point { x: position.x, y: position.y }),
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: true,
+                position,
+            } if self.client.modifiers().ctrl => self.context(Point {
+                x: position.x,
+                y: position.y,
+            }),
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: true,
+                position,
+            } => self.press(Point {
+                x: position.x,
+                y: position.y,
+            }),
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: false,
+                ..
+            } => self.release(),
+            PointerEvent::Button {
+                button: Button::Right,
+                pressed: true,
+                position,
+            } => self.context(Point {
+                x: position.x,
+                y: position.y,
+            }),
+            PointerEvent::Motion(position) => self.drag_motion(Point {
+                x: position.x,
+                y: position.y,
+            }),
             // one value per frame however many wheel or touchpad events arrive before it
             PointerEvent::Scroll { dy, .. } => {
                 self.rename.cancel();
@@ -415,9 +565,14 @@ impl App {
         }
         self.drag = None;
         // nothing to hit before the first frame
-        let Some(frame) = &self.frame else { return Ok(()) };
+        let Some(frame) = &self.frame else {
+            return Ok(());
+        };
         let held = self.client.modifiers();
-        let mods = Modifiers { shift: held.shift, primary: held.logo };
+        let mods = Modifiers {
+            shift: held.shift,
+            primary: held.logo,
+        };
         let hit = frame.hit(at);
         if !matches!(hit, Hit::Item(_)) {
             self.last_press = None;
@@ -436,7 +591,16 @@ impl App {
                 let outcome = self.browser.forward();
                 self.navigated(outcome, "the next folder")
             }
-            Hit::Toolbar(item) => self.press_toolbar(item, frame.window.items.iter().find(|(i, _)| *i == item).map(|(_, r)| *r).expect("a hit item is laid out")),
+            Hit::Toolbar(item) => self.press_toolbar(
+                item,
+                frame
+                    .window
+                    .items
+                    .iter()
+                    .find(|(i, _)| *i == item)
+                    .map(|(_, r)| *r)
+                    .expect("a hit item is laid out"),
+            ),
             Hit::Place(i) => {
                 let path = self.places[i].path.clone();
                 self.go(path)
@@ -446,7 +610,13 @@ impl App {
                 self.go(path)
             }
             Hit::Column(id) => {
-                let column = self.painter.list.columns.iter().find(|c| c.id == id).ok_or("a header of a column that is not shown")?;
+                let column = self
+                    .painter
+                    .list
+                    .columns
+                    .iter()
+                    .find(|c| c.id == id)
+                    .ok_or("a header of a column that is not shown")?;
                 self.browser.sort_by(id.sort_key(), column.ascending);
                 Ok(self.client.request_redraw(self.window)?)
             }
@@ -458,23 +628,37 @@ impl App {
                 Ok(self.client.request_redraw(self.window)?)
             }
             Hit::Item(index) => {
-                let sole = self.browser.selection().len() == 1 && self.browser.selection().contains(index);
+                let sole =
+                    self.browser.selection().len() == 1 && self.browser.selection().contains(index);
                 let on_name = frame.name_frame(index).is_some_and(|r| r.contains(at));
-                self.rename.click(index, on_name, sole, self.start.elapsed().as_secs_f64());
+                self.rename
+                    .click(index, on_name, sole, self.start.elapsed().as_secs_f64());
                 let now = Instant::now();
-                let double = self.last_press.is_some_and(|(last, at)| last == index && now.duration_since(at) <= DOUBLE_CLICK);
+                let double = self.last_press.is_some_and(|(last, at)| {
+                    last == index && now.duration_since(at) <= DOUBLE_CLICK
+                });
                 self.last_press = (!double).then_some((index, now));
                 if double {
                     return self.open_selection();
                 }
-                self.drag = Some(Drag { press: at, sources: Vec::new(), started: false, target: None });
+                self.drag = Some(Drag {
+                    press: at,
+                    sources: Vec::new(),
+                    started: false,
+                    target: None,
+                });
                 if self.browser.press(index, mods) {
                     self.client.request_redraw(self.window)?;
                 }
                 Ok(())
             }
             Hit::Empty => {
-                self.marquee = Some(Marquee { origin: frame.to_content(at), at, next_scroll: self.start.elapsed().as_secs_f64() + marquee_metrics::AUTOSCROLL_INTERVAL });
+                self.marquee = Some(Marquee {
+                    origin: frame.to_content(at),
+                    at,
+                    next_scroll: self.start.elapsed().as_secs_f64()
+                        + marquee_metrics::AUTOSCROLL_INTERVAL,
+                });
                 self.browser.rubber_band_begin(mods);
                 Ok(self.client.request_redraw(self.window)?)
             }
@@ -486,7 +670,9 @@ impl App {
     /// A press on the toolbar strip: a double click zooms the window (or restores it), a single press moves it.
     fn press_titlebar(&mut self) -> Result<()> {
         let now = Instant::now();
-        let double = self.last_titlebar_press.is_some_and(|last| now.duration_since(last) <= DOUBLE_CLICK);
+        let double = self
+            .last_titlebar_press
+            .is_some_and(|last| now.duration_since(last) <= DOUBLE_CLICK);
         self.last_titlebar_press = (!double).then_some(now);
         if double {
             self.client.toplevel_toggle_maximized(self.window)?;
@@ -547,20 +733,25 @@ impl App {
                 key::ENTER | key::KEYPAD_ENTER => return self.open_selection(),
                 key::UP => self.step(Move::Up, mods.shift),
                 key::DOWN => self.step(Move::Down, mods.shift),
-                key::LEFT | key::RIGHT if self.mode == ViewMode::List => match self.browser.disclose_focus(code == key::RIGHT) {
-                    Ok(changed) => changed,
-                    Err(e) => {
-                        eprintln!("cupertino-files: cannot list the folder: {e}");
-                        false
+                key::LEFT | key::RIGHT if self.mode == ViewMode::List => {
+                    match self.browser.disclose_focus(code == key::RIGHT) {
+                        Ok(changed) => changed,
+                        Err(e) => {
+                            eprintln!("cupertino-files: cannot list the folder: {e}");
+                            false
+                        }
                     }
-                },
+                }
                 key::LEFT => self.step(Move::Left, mods.shift),
                 key::RIGHT => self.step(Move::Right, mods.shift),
                 key::HOME => self.step(Move::First, mods.shift),
                 key::END => self.step(Move::Last, mods.shift),
                 key::TAB => self.browser.tab(mods.shift),
                 _ => match character {
-                    Some(c) => self.browser.type_text(c.encode_utf8(&mut [0; 4]), self.start.elapsed().as_secs_f64()),
+                    Some(c) => self.browser.type_text(
+                        c.encode_utf8(&mut [0; 4]),
+                        self.start.elapsed().as_secs_f64(),
+                    ),
                     None => false,
                 },
             }
@@ -573,8 +764,14 @@ impl App {
 
     /// Move the focus by a key in the frame drawn last; `true` when it moved.
     fn step(&mut self, key: Move, extend: bool) -> bool {
-        let Some(frame) = &self.frame else { return false };
-        match frame.content.step(self.browser.selection().focus(), self.browser.entries().len(), key) {
+        let Some(frame) = &self.frame else {
+            return false;
+        };
+        match frame.content.step(
+            self.browser.selection().focus(),
+            self.browser.entries().len(),
+            key,
+        ) {
             Some(index) => {
                 self.browser.move_focus(index, extend);
                 true
@@ -623,7 +820,8 @@ impl App {
         self.drag = None;
         self.marquee = None;
         self.close_menu()?;
-        self.client.set_title(self.window, &title(self.browser.dir(), &self.places))?;
+        self.client
+            .set_title(self.window, &title(self.browser.dir(), &self.places))?;
         // another folder ends the search (the browser shows it whole)
         self.search.clear();
         self.search_focused = false;
@@ -636,7 +834,10 @@ impl App {
         self.available = match self.browser.available_space() {
             Ok(bytes) => bytes,
             Err(e) => {
-                eprintln!("cupertino-files: cannot read the free space of {}: {e}", self.browser.dir().display());
+                eprintln!(
+                    "cupertino-files: cannot read the free space of {}: {e}",
+                    self.browser.dir().display()
+                );
                 None
             }
         };
@@ -657,13 +858,27 @@ impl App {
     fn open_selection(&mut self) -> Result<()> {
         let Activation { folder, files } = self.browser.activation();
         // the token names the default application, so the dock bounces its tile
-        let apps = if files.is_empty() { None } else { Some(applications()?) };
+        let apps = if files.is_empty() {
+            None
+        } else {
+            Some(applications()?)
+        };
         for path in files {
-            let request = match apps.as_ref().and_then(|apps| default_app_id(apps, &path, false)) {
+            let request = match apps
+                .as_ref()
+                .and_then(|apps| default_app_id(apps, &path, false))
+            {
                 Some(id) => self.client.request_launch_token(self.window, &id)?,
                 None => self.client.request_activation_token(self.window)?,
             };
-            self.pending.insert(request, Launch { path, is_dir: false, with: None });
+            self.pending.insert(
+                request,
+                Launch {
+                    path,
+                    is_dir: false,
+                    with: None,
+                },
+            );
         }
         match folder {
             Some(folder) => self.go(folder),
@@ -673,23 +888,39 @@ impl App {
 
     /// Open every selected item with the application of desktop entry `id`, each once its activation token arrives.
     fn open_selection_with(&mut self, id: &str) -> Result<()> {
-        let items: Vec<(PathBuf, bool)> = self.selected_entries().map(|e| (e.path.clone(), e.is_dir)).collect();
+        let items: Vec<(PathBuf, bool)> = self
+            .selected_entries()
+            .map(|e| (e.path.clone(), e.is_dir))
+            .collect();
         for (path, is_dir) in items {
             let request = self.client.request_launch_token(self.window, id)?;
-            self.pending.insert(request, Launch { path, is_dir, with: Some(id.to_string()) });
+            self.pending.insert(
+                request,
+                Launch {
+                    path,
+                    is_dir,
+                    with: Some(id.to_string()),
+                },
+            );
         }
         Ok(())
     }
 
     fn launch(&mut self, request: ActivationRequest, token: &str) -> Result<()> {
-        let Launch { path, is_dir, with } = self.pending.remove(&request).ok_or("an activation token arrived for no request of this process")?;
+        let Launch { path, is_dir, with } = self
+            .pending
+            .remove(&request)
+            .ok_or("an activation token arrived for no request of this process")?;
         let terminal = self.terminal.as_deref();
         // the associations are read at each open, so changed defaults and new applications apply at once
         let spec = applications().and_then(|apps| match &with {
             None => Ok(open_command(&apps, &path, is_dir, terminal)?),
             Some(id) => {
-                let item = open_with(&apps, &path, is_dir).into_iter().find(|item| &item.entry.id == id);
-                let item = item.ok_or_else(|| format!("{id} no longer opens {}", path.display()))?;
+                let item = open_with(&apps, &path, is_dir)
+                    .into_iter()
+                    .find(|item| &item.entry.id == id);
+                let item =
+                    item.ok_or_else(|| format!("{id} no longer opens {}", path.display()))?;
                 Ok(command_with(item.entry, &path, terminal)?)
             }
         });
@@ -702,7 +933,10 @@ impl App {
 
     fn selected_entries(&self) -> impl Iterator<Item = &Entry> {
         let entries = self.browser.entries();
-        self.browser.selection().indices().filter_map(|i| entries.get(i))
+        self.browser
+            .selection()
+            .indices()
+            .filter_map(|i| entries.get(i))
     }
 
     /// The applications that open every selected item (Open With).
@@ -716,7 +950,16 @@ impl App {
         };
         let lists: Vec<Vec<AppChoice>> = self
             .selected_entries()
-            .map(|e| open_with(&apps, &e.path, e.is_dir).into_iter().map(|item| AppChoice { id: item.entry.id.clone(), name: item.entry.name.clone(), is_default: item.is_default }).collect())
+            .map(|e| {
+                open_with(&apps, &e.path, e.is_dir)
+                    .into_iter()
+                    .map(|item| AppChoice {
+                        id: item.entry.id.clone(),
+                        name: item.entry.name.clone(),
+                        is_default: item.is_default,
+                    })
+                    .collect()
+            })
             .collect();
         common_apps(&lists)
     }
@@ -728,7 +971,9 @@ impl App {
         }
         self.drag = None;
         self.marquee = None;
-        let Some(frame) = &self.frame else { return Ok(()) };
+        let Some(frame) = &self.frame else {
+            return Ok(());
+        };
         let in_trash = self.browser.dir() == Trash::new().home_trash().join("files");
         let items = match frame.hit(at) {
             Hit::Item(index) | Hit::Disclosure(index) => {
@@ -741,7 +986,11 @@ impl App {
             }
             Hit::Empty => {
                 self.browser.press_empty(Modifiers::NONE);
-                menu_spec::background_menu(&Background { view: self.mode, sort: self.browser.sort(), in_trash })
+                menu_spec::background_menu(&Background {
+                    view: self.mode,
+                    sort: self.browser.sort(),
+                    in_trash,
+                })
             }
             _ => return Ok(()),
         };
@@ -751,18 +1000,29 @@ impl App {
 
     /// A press on toolbar item `item` at `r`: a popup opens its menu under it, the search field takes the keyboard.
     fn press_toolbar(&mut self, item: ToolbarItem, r: cupertino_files::Rect) -> Result<()> {
-        let below = Point { x: r.x, y: r.bottom() + metrics::POPUP_GAP };
+        let below = Point {
+            x: r.x,
+            y: r.bottom() + metrics::POPUP_GAP,
+        };
         match item {
             ToolbarItem::View => self.open_menu(menu_spec::view_menu(self.mode), below),
             ToolbarItem::Tags => {
                 let has_selection = !self.browser.selection().is_empty();
-                let on = if has_selection { self.subject(false).tags_on } else { Vec::new() };
+                let on = if has_selection {
+                    self.subject(false).tags_on
+                } else {
+                    Vec::new()
+                };
                 self.open_menu(menu_spec::tags_menu(&on, has_selection), below)
             }
             ToolbarItem::Action => {
                 let in_trash = self.browser.dir() == Trash::new().home_trash().join("files");
                 let items = if self.browser.selection().is_empty() {
-                    menu_spec::background_menu(&Background { view: self.mode, sort: self.browser.sort(), in_trash })
+                    menu_spec::background_menu(&Background {
+                        view: self.mode,
+                        sort: self.browser.sort(),
+                        in_trash,
+                    })
                 } else {
                     menu_spec::item_menu(&self.subject(in_trash), &self.selection_apps())
                 };
@@ -803,7 +1063,14 @@ impl App {
     /// What the menu of the selection depends on.
     fn subject(&self, in_trash: bool) -> Subject {
         let selected: Vec<&Entry> = self.selected_entries().collect();
-        let tags_on = TagColor::ALL.into_iter().filter(|c| selected.iter().all(|e| e.tags.iter().any(|t| t.eq_ignore_ascii_case(c.title())))).collect();
+        let tags_on = TagColor::ALL
+            .into_iter()
+            .filter(|c| {
+                selected
+                    .iter()
+                    .all(|e| e.tags.iter().any(|t| t.eq_ignore_ascii_case(c.title())))
+            })
+            .collect();
         Subject {
             count: selected.len(),
             name: selected.first().map(|e| e.name.clone()).unwrap_or_default(),
@@ -817,8 +1084,16 @@ impl App {
     /// The modifiers held decide which alternate rows of an open menu show.
     fn sync_menu_mods(&mut self) -> Result<()> {
         let held = self.client.modifiers();
-        let mods = MenuMods { shift: held.shift, ctrl: held.ctrl, alt: held.alt };
-        if self.menu.as_mut().is_some_and(|open| open.menu.set_mods(mods)) {
+        let mods = MenuMods {
+            shift: held.shift,
+            ctrl: held.ctrl,
+            alt: held.alt,
+        };
+        if self
+            .menu
+            .as_mut()
+            .is_some_and(|open| open.menu.set_mods(mods))
+        {
             self.sync_menu()?;
         }
         Ok(())
@@ -831,29 +1106,49 @@ impl App {
         // the menu is laid out in points; the popups draw it at the output scale with the same optical size
         self.painter.renderer.text.set_scale(1.0);
         let text = RefCell::new(&mut self.painter.renderer.text);
-        let menu = Menu::open(items, at, bounds, &|label| f64::from(text.borrow_mut().measure(label, menu_metrics::TEXT_SIZE as f32, 400, 0.0)));
-        self.menu = Some(OpenMenu { menu, levels: Vec::new() });
+        let menu = Menu::open(items, at, bounds, &|label| {
+            f64::from(
+                text.borrow_mut()
+                    .measure(label, menu_metrics::TEXT_SIZE as f32, 400, 0.0),
+            )
+        });
+        self.menu = Some(OpenMenu {
+            menu,
+            levels: Vec::new(),
+        });
         self.sync_menu()?;
         self.sync_menu_mods()
     }
 
     /// Give the menu one popup per open level, destroying those of closed levels deepest first, and draw them.
     fn sync_menu(&mut self) -> Result<()> {
-        let Some(open) = self.menu.as_mut() else { return Ok(()) };
+        let Some(open) = self.menu.as_mut() else {
+            return Ok(());
+        };
         let wanted = open.menu.levels();
         while open.levels.len() > wanted {
-            let (surface, backdrop) = open.levels.pop().expect("the loop runs while a level is open");
+            let (surface, backdrop) = open
+                .levels
+                .pop()
+                .expect("the loop runs while a level is open");
             drop(backdrop);
             self.client.destroy_surface(surface)?;
         }
         while open.levels.len() < wanted {
             let level = open.levels.len();
-            let parent = level.checked_sub(1).map_or(self.window, |below| open.levels[below].0);
-            let surface = self.client.popup(parent, &popup_rect(&open.menu.rect_in_parent(level)))?;
+            let parent = level
+                .checked_sub(1)
+                .map_or(self.window, |below| open.levels[below].0);
+            let surface = self
+                .client
+                .popup(parent, &popup_rect(&open.menu.rect_in_parent(level)))?;
             let backdrop = self.client.backdrop(surface)?;
             backdrop.set_material(MENU_MATERIAL);
             let own = open.menu.layout(level).rect;
-            backdrop.set_shape(&PopupRect::new(0.0, 0.0, own.w, own.h), menu_metrics::RADIUS)?;
+            backdrop.set_shape(
+                &PopupRect::new(0.0, 0.0, own.w, own.h),
+                menu_metrics::RADIUS,
+            )?;
             open.levels.push((surface, backdrop));
         }
         for (surface, _) in &open.levels {
@@ -874,22 +1169,41 @@ impl App {
 
     /// The level of the open menu that `surface` is the popup of.
     fn menu_level(&self, surface: SurfaceId) -> Option<usize> {
-        self.menu.as_ref()?.levels.iter().position(|(s, _)| *s == surface)
+        self.menu
+            .as_ref()?
+            .levels
+            .iter()
+            .position(|(s, _)| *s == surface)
     }
 
     fn draw_menu(&mut self, level: usize) -> Result<()> {
-        let App { client, painter, palette, menu, .. } = self;
-        let Some(open) = menu.as_ref() else { return Ok(()) };
-        client.draw(open.levels[level].0, |pm, scale| painter.paint_menu(pm, scale.factor(), &open.menu, level, palette))?;
+        let App {
+            client,
+            painter,
+            palette,
+            menu,
+            ..
+        } = self;
+        let Some(open) = menu.as_ref() else {
+            return Ok(());
+        };
+        client.draw(open.levels[level].0, |pm, scale| {
+            painter.paint_menu(pm, scale.factor(), &open.menu, level, palette)
+        })?;
         Ok(())
     }
 
     /// Pointer input on the popup of `level`: hovering highlights, a left press picks.
     fn menu_pointer(&mut self, level: usize, event: PointerEvent) -> Result<()> {
         let now = self.now();
-        let Some(open) = self.menu.as_mut() else { return Ok(()) };
+        let Some(open) = self.menu.as_mut() else {
+            return Ok(());
+        };
         let origin = open.menu.layout(level).rect;
-        let at = |x: f64, y: f64| Point { x: x + origin.x, y: y + origin.y };
+        let at = |x: f64, y: f64| Point {
+            x: x + origin.x,
+            y: y + origin.y,
+        };
         let (mut changed, mut outcome) = (false, Outcome::Nothing);
         match event {
             PointerEvent::Enter(p) | PointerEvent::Motion(p) => {
@@ -897,8 +1211,14 @@ impl App {
                 changed = open.menu.hover(level, row, now);
             }
             // the row that holds an open submenu stays highlighted while the pointer is in it
-            PointerEvent::Leave if level + 1 == open.menu.levels() => changed = open.menu.hover(level, None, now),
-            PointerEvent::Button { button: Button::Left, pressed: true, position } => {
+            PointerEvent::Leave if level + 1 == open.menu.levels() => {
+                changed = open.menu.hover(level, None, now)
+            }
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: true,
+                position,
+            } => {
                 let p = at(position.x, position.y);
                 if let Some(row) = open.menu.hit(level, p) {
                     outcome = open.menu.press_at(level, row, p);
@@ -920,7 +1240,10 @@ impl App {
             key::ESCAPE => return self.close_menu(),
             _ => return Ok(()),
         };
-        let outcome = self.menu.as_mut().map_or(Outcome::Nothing, |open| open.menu.navigate(nav));
+        let outcome = self
+            .menu
+            .as_mut()
+            .map_or(Outcome::Nothing, |open| open.menu.navigate(nav));
         self.menu_outcome(outcome, false)
     }
 
@@ -951,7 +1274,12 @@ impl App {
             }
             MenuCommand::MoveToTrash => self.trash_selection(),
             MenuCommand::Rename => {
-                let only = self.browser.selection().indices().next().filter(|_| self.browser.selection().len() == 1);
+                let only = self
+                    .browser
+                    .selection()
+                    .indices()
+                    .next()
+                    .filter(|_| self.browser.selection().len() == 1);
                 if let Some(index) = only {
                     self.begin_edit(index);
                     self.client.request_redraw(self.window)?;
@@ -961,7 +1289,10 @@ impl App {
             MenuCommand::NewFolder => {
                 match operations::new_folder(self.browser.dir()) {
                     Ok(path) => self.edit_new_folder(path),
-                    Err(e) => eprintln!("cupertino-files: cannot create a folder in {}: {e}", self.browser.dir().display()),
+                    Err(e) => eprintln!(
+                        "cupertino-files: cannot create a folder in {}: {e}",
+                        self.browser.dir().display()
+                    ),
                 }
                 Ok(())
             }
@@ -969,7 +1300,9 @@ impl App {
                 let paths: Vec<PathBuf> = self.selected_entries().map(|e| e.path.clone()).collect();
                 match operations::new_folder_with(self.browser.dir(), &paths) {
                     Ok(path) => self.edit_new_folder(path),
-                    Err(e) => eprintln!("cupertino-files: cannot move the selection into a new folder: {e}"),
+                    Err(e) => eprintln!(
+                        "cupertino-files: cannot move the selection into a new folder: {e}"
+                    ),
                 }
                 Ok(())
             }
@@ -986,7 +1319,10 @@ impl App {
                 let paths: Vec<PathBuf> = self.selected_entries().map(|e| e.path.clone()).collect();
                 for path in paths {
                     if let Err(e) = operations::make_alias(&path) {
-                        eprintln!("cupertino-files: cannot make an alias of {}: {e}", path.display());
+                        eprintln!(
+                            "cupertino-files: cannot make an alias of {}: {e}",
+                            path.display()
+                        );
                     }
                 }
                 Ok(())
@@ -1011,11 +1347,19 @@ impl App {
 
     /// Start a window of this program on each selected folder.
     fn open_in_new_windows(&self) {
-        let folders: Vec<PathBuf> = self.selected_entries().filter(|e| e.is_dir).map(|e| e.path.clone()).collect();
+        let folders: Vec<PathBuf> = self
+            .selected_entries()
+            .filter(|e| e.is_dir)
+            .map(|e| e.path.clone())
+            .collect();
         for folder in folders {
             let mut command = match std::env::current_exe() {
                 Ok(exe) => Command::new(exe),
-                Err(e) => return eprintln!("cupertino-files: cannot find this program to start a window: {e}"),
+                Err(e) => {
+                    return eprintln!(
+                        "cupertino-files: cannot find this program to start a window: {e}"
+                    )
+                }
             };
             if let Some(program) = self.terminal.as_ref().and_then(|terminal| terminal.first()) {
                 command.arg("--terminal").arg(program);
@@ -1027,15 +1371,22 @@ impl App {
 
     /// Go to the folder of the selected link's target and select the target.
     fn show_original(&mut self) -> Result<()> {
-        let Some(link) = self.selected_entries().next().map(|e| e.path.clone()) else { return Ok(()) };
+        let Some(link) = self.selected_entries().next().map(|e| e.path.clone()) else {
+            return Ok(());
+        };
         let target = match std::fs::canonicalize(&link) {
             Ok(target) => target,
             Err(e) => {
-                eprintln!("cupertino-files: the original of {} is not there: {e}", link.display());
+                eprintln!(
+                    "cupertino-files: the original of {} is not there: {e}",
+                    link.display()
+                );
                 return Ok(());
             }
         };
-        let Some(parent) = target.parent() else { return Ok(()) };
+        let Some(parent) = target.parent() else {
+            return Ok(());
+        };
         // after the step: going to another folder ends a wait
         self.go(parent.to_path_buf())?;
         self.browser.select_when_appears(target);
@@ -1065,11 +1416,20 @@ impl App {
     /// Add the tag of `color` to every selected item, or take it off when they all have it.
     fn toggle_tag(&mut self, color: TagColor) {
         let paths: Vec<PathBuf> = self.selected_entries().map(|e| e.path.clone()).collect();
-        let all_have = self.selected_entries().all(|e| e.tags.iter().any(|t| t.eq_ignore_ascii_case(color.title())));
+        let all_have = self
+            .selected_entries()
+            .all(|e| e.tags.iter().any(|t| t.eq_ignore_ascii_case(color.title())));
         for path in paths {
-            let result = if all_have { tags::remove_tag(&path, color.title()) } else { tags::add_tag(&path, color.title()) };
+            let result = if all_have {
+                tags::remove_tag(&path, color.title())
+            } else {
+                tags::add_tag(&path, color.title())
+            };
             if let Err(e) = result {
-                eprintln!("cupertino-files: cannot change the tags of {}: {e}", path.display());
+                eprintln!(
+                    "cupertino-files: cannot change the tags of {}: {e}",
+                    path.display()
+                );
             }
         }
     }
@@ -1087,26 +1447,38 @@ impl App {
             return;
         }
         if let Some(entry) = self.browser.entries().get(index) {
-            self.edit = Some((NameEdit::new(index, &entry.name, entry.is_dir), entry.path.clone()));
+            self.edit = Some((
+                NameEdit::new(index, &entry.name, entry.is_dir),
+                entry.path.clone(),
+            ));
         }
     }
 
     /// Whether `at` is on the name editor.
     fn in_editor(&self, at: Point) -> bool {
-        let (Some((edit, _)), Some(frame)) = (&self.edit, &self.frame) else { return false };
-        frame.name_frame(edit.index()).is_some_and(|r| cupertino_files::Rect::new(r.x - 6.0, r.y - 4.0, r.w + 12.0, r.h + 8.0).contains(at))
+        let (Some((edit, _)), Some(frame)) = (&self.edit, &self.frame) else {
+            return false;
+        };
+        frame.name_frame(edit.index()).is_some_and(|r| {
+            cupertino_files::Rect::new(r.x - 6.0, r.y - 4.0, r.w + 12.0, r.h + 8.0).contains(at)
+        })
     }
 
     /// Commit the edited name. `false` when the name is not valid: it is reported and the editor stays open. A rename
     /// that changes the extension is not confirmed (there is no dialog to ask in).
     fn end_edit(&mut self) -> Result<bool> {
-        let Some((edit, path)) = self.edit.take() else { return Ok(true) };
+        let Some((edit, path)) = self.edit.take() else {
+            return Ok(true);
+        };
         self.client.request_redraw(self.window)?;
         match edit.commit() {
             Ok(None) => {}
             Ok(Some(name)) => match operations::rename_item(&path, &name) {
                 Ok(_) => self.browser.select_when_appears(path.with_file_name(&name)),
-                Err(e) => eprintln!("cupertino-files: cannot rename {} to {name}: {e}", path.display()),
+                Err(e) => eprintln!(
+                    "cupertino-files: cannot rename {} to {name}: {e}",
+                    path.display()
+                ),
             },
             Err(e) => {
                 eprintln!("cupertino-files: {:?} is not a name: {e:?}", edit.text());
@@ -1119,7 +1491,9 @@ impl App {
 
     /// Keys while a name is edited.
     fn edit_key(&mut self, code: u32, mods: KeyModifiers, character: Option<char>) -> Result<()> {
-        let Some((edit, _)) = self.edit.as_mut() else { return Ok(()) };
+        let Some((edit, _)) = self.edit.as_mut() else {
+            return Ok(());
+        };
         match code {
             key::ESCAPE => self.edit = None,
             key::ENTER | key::KEYPAD_ENTER => {
@@ -1150,11 +1524,18 @@ impl App {
             self.marquee_apply();
             return Ok(self.client.request_redraw(self.window)?);
         }
-        let Some(drag) = &self.drag else { return Ok(()) };
-        if !drag.started && (at.x - drag.press.x).hypot(at.y - drag.press.y) < drag::START_DISTANCE {
+        let Some(drag) = &self.drag else {
+            return Ok(());
+        };
+        if !drag.started && (at.x - drag.press.x).hypot(at.y - drag.press.y) < drag::START_DISTANCE
+        {
             return Ok(());
         }
-        let sources = if drag.started { drag.sources.clone() } else { self.selected_entries().map(|e| e.path.clone()).collect() };
+        let sources = if drag.started {
+            drag.sources.clone()
+        } else {
+            self.selected_entries().map(|e| e.path.clone()).collect()
+        };
         let target = self.drop_target(at, &sources);
         if let Some(drag) = self.drag.as_mut() {
             if !drag.started {
@@ -1171,24 +1552,38 @@ impl App {
 
     /// Select what the band touches in the frame drawn last; `true` when the selection changed.
     fn marquee_apply(&mut self) -> bool {
-        let (Some(marquee), Some(frame)) = (&self.marquee, &self.frame) else { return false };
+        let (Some(marquee), Some(frame)) = (&self.marquee, &self.frame) else {
+            return false;
+        };
         let held = self.client.modifiers();
-        let band = cupertino_files::Rect::from_corners(marquee.origin, frame.to_content(marquee.at));
+        let band =
+            cupertino_files::Rect::from_corners(marquee.origin, frame.to_content(marquee.at));
         let hits = frame.hits_in(&band);
-        self.browser.rubber_band_update(&hits, Modifiers { shift: held.shift, primary: held.logo })
+        self.browser.rubber_band_update(
+            &hits,
+            Modifiers {
+                shift: held.shift,
+                primary: held.logo,
+            },
+        )
     }
 
     /// While the pointer is held within the edge zone of the content, scroll toward it a step that grows with the depth
     /// into the zone, once per interval.
     fn marquee_autoscroll(&mut self, now: f64) -> Result<()> {
-        let (Some(marquee), Some(frame)) = (self.marquee.as_mut(), &self.frame) else { return Ok(()) };
+        let (Some(marquee), Some(frame)) = (self.marquee.as_mut(), &self.frame) else {
+            return Ok(());
+        };
         if now < marquee.next_scroll {
             return Ok(());
         }
         marquee.next_scroll = now + marquee_metrics::AUTOSCROLL_INTERVAL;
         let content = frame.window.content;
         let top = content.y + frame.content.fixed_top();
-        let ramp = |depth: f64| marquee_metrics::MAX_STEP * depth.clamp(0.0, marquee_metrics::EDGE_ZONE) / marquee_metrics::EDGE_ZONE;
+        let ramp = |depth: f64| {
+            marquee_metrics::MAX_STEP * depth.clamp(0.0, marquee_metrics::EDGE_ZONE)
+                / marquee_metrics::EDGE_ZONE
+        };
         let step = if marquee.at.y < top + marquee_metrics::EDGE_ZONE {
             -ramp(top + marquee_metrics::EDGE_ZONE - marquee.at.y)
         } else if marquee.at.y > content.bottom() - marquee_metrics::EDGE_ZONE {
@@ -1196,7 +1591,10 @@ impl App {
         } else {
             0.0
         };
-        if step != 0.0 && ((step < 0.0 && frame.scroll > 0.0) || (step > 0.0 && frame.scroll < frame.max_scroll())) {
+        if step != 0.0
+            && ((step < 0.0 && frame.scroll > 0.0)
+                || (step > 0.0 && frame.scroll < frame.max_scroll()))
+        {
             self.pending_scroll += step;
             self.client.request_redraw(self.window)?;
         }
@@ -1243,24 +1641,41 @@ impl App {
     /// Drop the dragged items on the target: into the trash for the trash place, else moved or copied (Alt copies,
     /// Super moves, otherwise by volume).
     fn drop_items(&mut self, drag: Drag) -> Result<()> {
-        let Some(target) = drag.target else { return Ok(()) };
+        let Some(target) = drag.target else {
+            return Ok(());
+        };
         if target.trash {
             trash_all(&drag.sources);
             return Ok(());
         }
-        let same_volume = drag.sources.iter().map(|source| operations::same_volume(source, &target.path)).collect::<io::Result<Vec<_>>>();
+        let same_volume = drag
+            .sources
+            .iter()
+            .map(|source| operations::same_volume(source, &target.path))
+            .collect::<io::Result<Vec<_>>>();
         let same_volume = match same_volume {
             Ok(each) => each.into_iter().all(|same| same),
             Err(e) => {
-                eprintln!("cupertino-files: cannot drop on {}: {e}", target.path.display());
+                eprintln!(
+                    "cupertino-files: cannot drop on {}: {e}",
+                    target.path.display()
+                );
                 return Ok(());
             }
         };
         let held = self.client.modifiers();
         let action = operations::drop_action(same_volume, held.alt, held.logo);
-        for (source, result) in drag.sources.iter().zip(operations::drop_into(&drag.sources, &target.path, action)) {
+        for (source, result) in
+            drag.sources
+                .iter()
+                .zip(operations::drop_into(&drag.sources, &target.path, action))
+        {
             if let Err(e) = result {
-                eprintln!("cupertino-files: cannot drop {} on {}: {e}", source.display(), target.path.display());
+                eprintln!(
+                    "cupertino-files: cannot drop {} on {}: {e}",
+                    source.display(),
+                    target.path.display()
+                );
             }
         }
         Ok(())
@@ -1272,7 +1687,10 @@ fn trash_all(paths: &[PathBuf]) {
     let trash = Trash::new();
     for path in paths {
         if let Err(e) = trash.trash(path) {
-            eprintln!("cupertino-files: cannot move {} to the trash: {e}", path.display());
+            eprintln!(
+                "cupertino-files: cannot move {} to the trash: {e}",
+                path.display()
+            );
         }
     }
 }

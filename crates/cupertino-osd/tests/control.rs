@@ -18,10 +18,20 @@ struct PrivateBus {
 
 impl PrivateBus {
     fn start() -> Option<PrivateBus> {
-        let out = Process::new("dbus-daemon").args(["--session", "--print-address=1", "--print-pid=1", "--fork"]).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
-        let text = String::from_utf8(out.stdout).ok().filter(|_| out.status.success())?;
+        let out = Process::new("dbus-daemon")
+            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        let text = String::from_utf8(out.stdout)
+            .ok()
+            .filter(|_| out.status.success())?;
         let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-        Some(PrivateBus { address: lines.next()?.to_string(), pid: lines.next()?.to_string() })
+        Some(PrivateBus {
+            address: lines.next()?.to_string(),
+            pid: lines.next()?.to_string(),
+        })
     }
 
     fn builder(&self) -> connection::Builder<'static> {
@@ -31,7 +41,10 @@ impl PrivateBus {
 
 impl Drop for PrivateBus {
     fn drop(&mut self) {
-        Process::new("kill").arg(&self.pid).status().expect("kill the private bus");
+        Process::new("kill")
+            .arg(&self.pid)
+            .status()
+            .expect("kill the private bus");
     }
 }
 
@@ -44,24 +57,46 @@ fn serve_fakes(bus: &PrivateBus) -> (Connection, mpsc::Receiver<Shown>) {
     let (commands_tx, commands) = mpsc::channel::<Command>();
     let (shown_tx, shown) = mpsc::channel();
     let commands_tx = std::sync::Mutex::new(commands_tx);
-    let connection = serve(bus.builder(), move |command| commands_tx.lock().unwrap().send(command).unwrap()).expect("claims the name");
+    let connection = serve(bus.builder(), move |command| {
+        commands_tx.lock().unwrap().send(command).unwrap()
+    })
+    .expect("claims the name");
     std::thread::spawn(move || {
-        let mut controller = Controller::new(Box::new(MemoryVolume::new(0.5, false)), Box::new(MemoryBacklight::new(0.5)), Box::new(MemoryBacklight::new(0.5)));
+        let mut controller = Controller::new(
+            Box::new(MemoryVolume::new(0.5, false)),
+            Box::new(MemoryBacklight::new(0.5)),
+            Box::new(MemoryBacklight::new(0.5)),
+        );
         for (now, command) in commands.into_iter().enumerate() {
-            controller.apply(now as f64 * 0.1, command).expect("the fake backends do not fail");
-            shown_tx.send(controller.view(now as f64 * 0.1).map(|view| (view.overlay.kind(), view.overlay.level()))).unwrap();
+            controller
+                .apply(now as f64 * 0.1, command)
+                .expect("the fake backends do not fail");
+            shown_tx
+                .send(
+                    controller
+                        .view(now as f64 * 0.1)
+                        .map(|view| (view.overlay.kind(), view.overlay.level())),
+                )
+                .unwrap();
         }
     });
     (connection, shown)
 }
 
 /// Call `method` of the interface with `body`.
-fn call(caller: &Connection, method: &str, body: &(impl serde::Serialize + zbus::zvariant::DynamicType)) -> zbus::Result<()> {
-    block_on(caller.call_method(Some(BUS_NAME), OBJECT_PATH, Some(INTERFACE), method, body)).map(|_| ())
+fn call(
+    caller: &Connection,
+    method: &str,
+    body: &(impl serde::Serialize + zbus::zvariant::DynamicType),
+) -> zbus::Result<()> {
+    block_on(caller.call_method(Some(BUS_NAME), OBJECT_PATH, Some(INTERFACE), method, body))
+        .map(|_| ())
 }
 
 fn next(shown: &mpsc::Receiver<Shown>) -> Shown {
-    shown.recv_timeout(Duration::from_secs(5)).expect("the command was applied")
+    shown
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the command was applied")
 }
 
 #[test]
@@ -110,9 +145,18 @@ fn invalid_arguments_are_rejected_before_any_effect() {
     let (_osd, shown) = serve_fakes(&bus);
     let caller: Connection = block_on(bus.builder().build()).expect("connect");
 
-    assert!(matches!(call(&caller, "VolumeStep", &(0, false)), Err(zbus::Error::MethodError(..))));
-    assert!(matches!(call(&caller, "Show", &("volume", 1.5)), Err(zbus::Error::MethodError(..))));
-    assert!(matches!(call(&caller, "Show", &("eject", 0.5)), Err(zbus::Error::MethodError(..))));
+    assert!(matches!(
+        call(&caller, "VolumeStep", &(0, false)),
+        Err(zbus::Error::MethodError(..))
+    ));
+    assert!(matches!(
+        call(&caller, "Show", &("volume", 1.5)),
+        Err(zbus::Error::MethodError(..))
+    ));
+    assert!(matches!(
+        call(&caller, "Show", &("eject", 0.5)),
+        Err(zbus::Error::MethodError(..))
+    ));
     assert_eq!(shown.try_recv(), Err(mpsc::TryRecvError::Empty));
 }
 
@@ -124,5 +168,9 @@ fn a_second_overlay_cannot_take_the_name() {
     };
     let (_osd, _shown) = serve_fakes(&bus);
     let second = serve(bus.builder(), |_| {});
-    assert!(matches!(second, Err(zbus::Error::NameTaken)), "{:?}", second.err());
+    assert!(
+        matches!(second, Err(zbus::Error::NameTaken)),
+        "{:?}",
+        second.err()
+    );
 }

@@ -58,10 +58,18 @@ impl Backend {
 /// shm formats of `renderer`.
 pub fn init_buffers(state: &mut Cupertino, renderer: &GlesRenderer) {
     let formats = renderer.dmabuf_formats();
-    let node = EGLDevice::device_for_display(renderer.egl_context().display()).ok().and_then(|d| d.try_get_render_node().ok().flatten());
+    let node = EGLDevice::device_for_display(renderer.egl_context().display())
+        .ok()
+        .and_then(|d| d.try_get_render_node().ok().flatten());
     let dh = state.display_handle.clone();
-    let global = match node.and_then(|n| DmabufFeedbackBuilder::new(n.dev_id(), formats.clone()).build().ok()) {
-        Some(feedback) => state.dmabuf_state.create_global_with_default_feedback::<Cupertino>(&dh, &feedback),
+    let global = match node.and_then(|n| {
+        DmabufFeedbackBuilder::new(n.dev_id(), formats.clone())
+            .build()
+            .ok()
+    }) {
+        Some(feedback) => state
+            .dmabuf_state
+            .create_global_with_default_feedback::<Cupertino>(&dh, &feedback),
         None => state.dmabuf_state.create_global::<Cupertino>(&dh, formats),
     };
     state.dmabuf_global = Some(global);

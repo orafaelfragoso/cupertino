@@ -165,8 +165,14 @@ impl std::str::FromStr for DeviceRef {
     /// `AA:BB:CC:DD:EE:FF` or `AA:BB:CC:DD:EE:FF/bredr` (`le-public`, `le-random`).
     fn from_str(text: &str) -> Result<Self, Self::Err> {
         match text.split_once('/') {
-            None => Ok(Self { address: text.parse()?, kind: None }),
-            Some((address, kind)) => Ok(Self { address: address.parse()?, kind: Some(kind.parse()?) }),
+            None => Ok(Self {
+                address: text.parse()?,
+                kind: None,
+            }),
+            Some((address, kind)) => Ok(Self {
+                address: address.parse()?,
+                kind: Some(kind.parse()?),
+            }),
         }
     }
 }
@@ -190,7 +196,19 @@ pub struct Device {
 
 impl Device {
     pub fn new(id: DeviceId, now: Duration) -> Self {
-        Self { id, name: None, name_complete: false, class: None, appearance: None, uuids: Vec::new(), rssi: None, paired: false, bonded: false, connected: false, last_seen: now }
+        Self {
+            id,
+            name: None,
+            name_complete: false,
+            class: None,
+            appearance: None,
+            uuids: Vec::new(),
+            rssi: None,
+            paired: false,
+            bonded: false,
+            connected: false,
+            last_seen: now,
+        }
     }
 
     pub fn name(&self) -> Option<&str> {

@@ -71,7 +71,10 @@ pub struct Size {
 }
 
 impl Size {
-    pub const ZERO: Size = Size { width: 0.0, height: 0.0 };
+    pub const ZERO: Size = Size {
+        width: 0.0,
+        height: 0.0,
+    };
 
     pub const fn new(width: f64, height: f64) -> Self {
         Self { width, height }
@@ -96,10 +99,20 @@ pub struct Insets {
 }
 
 impl Insets {
-    pub const ZERO: Insets = Insets { top: 0.0, left: 0.0, bottom: 0.0, right: 0.0 };
+    pub const ZERO: Insets = Insets {
+        top: 0.0,
+        left: 0.0,
+        bottom: 0.0,
+        right: 0.0,
+    };
 
     pub const fn new(top: f64, left: f64, bottom: f64, right: f64) -> Self {
-        Self { top, left, bottom, right }
+        Self {
+            top,
+            left,
+            bottom,
+            right,
+        }
     }
 
     pub const fn uniform(v: f64) -> Self {
@@ -130,10 +143,16 @@ pub struct Rect {
 }
 
 impl Rect {
-    pub const ZERO: Rect = Rect { origin: Point::ZERO, size: Size::ZERO };
+    pub const ZERO: Rect = Rect {
+        origin: Point::ZERO,
+        size: Size::ZERO,
+    };
 
     pub const fn new(x: f64, y: f64, width: f64, height: f64) -> Self {
-        Self { origin: Point::new(x, y), size: Size::new(width, height) }
+        Self {
+            origin: Point::new(x, y),
+            size: Size::new(width, height),
+        }
     }
 
     pub fn from_ltrb(left: f64, top: f64, right: f64, bottom: f64) -> Self {
@@ -170,7 +189,10 @@ impl Rect {
     }
 
     pub fn center(&self) -> Point {
-        Point::new(self.origin.x + self.size.width * 0.5, self.origin.y + self.size.height * 0.5)
+        Point::new(
+            self.origin.x + self.size.width * 0.5,
+            self.origin.y + self.size.height * 0.5,
+        )
     }
 
     pub fn is_empty(&self) -> bool {
@@ -187,7 +209,10 @@ impl Rect {
     }
 
     pub fn intersects(&self, o: &Rect) -> bool {
-        self.min_x() < o.max_x() && o.min_x() < self.max_x() && self.min_y() < o.max_y() && o.min_y() < self.max_y()
+        self.min_x() < o.max_x()
+            && o.min_x() < self.max_x()
+            && self.min_y() < o.max_y()
+            && o.min_y() < self.max_y()
     }
 
     pub fn intersection(&self, o: &Rect) -> Option<Rect> {
@@ -205,11 +230,21 @@ impl Rect {
         if o.is_empty() {
             return *self;
         }
-        Rect::from_ltrb(self.min_x().min(o.min_x()), self.min_y().min(o.min_y()), self.max_x().max(o.max_x()), self.max_y().max(o.max_y()))
+        Rect::from_ltrb(
+            self.min_x().min(o.min_x()),
+            self.min_y().min(o.min_y()),
+            self.max_x().max(o.max_x()),
+            self.max_y().max(o.max_y()),
+        )
     }
 
     pub fn translate(&self, dx: f64, dy: f64) -> Rect {
-        Rect::new(self.origin.x + dx, self.origin.y + dy, self.size.width, self.size.height)
+        Rect::new(
+            self.origin.x + dx,
+            self.origin.y + dy,
+            self.size.width,
+            self.size.height,
+        )
     }
 
     /// Shrink by the insets (negative insets grow the rect). Size is clamped at zero.
@@ -220,21 +255,41 @@ impl Rect {
     }
 
     pub fn outset(&self, d: f64) -> Rect {
-        Rect::new(self.origin.x - d, self.origin.y - d, self.size.width + 2.0 * d, self.size.height + 2.0 * d)
+        Rect::new(
+            self.origin.x - d,
+            self.origin.y - d,
+            self.size.width + 2.0 * d,
+            self.size.height + 2.0 * d,
+        )
     }
 
     /// Scale about the origin of the coordinate system.
     pub fn scale(&self, s: f64) -> Rect {
-        Rect::new(self.origin.x * s, self.origin.y * s, self.size.width * s, self.size.height * s)
+        Rect::new(
+            self.origin.x * s,
+            self.origin.y * s,
+            self.size.width * s,
+            self.size.height * s,
+        )
     }
 
     /// Smallest integer-aligned rect containing this one.
     pub fn round_out(&self) -> Rect {
-        Rect::from_ltrb(self.min_x().floor(), self.min_y().floor(), self.max_x().ceil(), self.max_y().ceil())
+        Rect::from_ltrb(
+            self.min_x().floor(),
+            self.min_y().floor(),
+            self.max_x().ceil(),
+            self.max_y().ceil(),
+        )
     }
 
     pub fn to_f32(&self) -> [f32; 4] {
-        [self.origin.x as f32, self.origin.y as f32, self.size.width as f32, self.size.height as f32]
+        [
+            self.origin.x as f32,
+            self.origin.y as f32,
+            self.size.width as f32,
+            self.size.height as f32,
+        ]
     }
 }
 
@@ -265,7 +320,10 @@ mod tests {
     #[test]
     fn inset_and_outset() {
         let r = Rect::new(0.0, 0.0, 100.0, 50.0);
-        assert_eq!(r.inset(Insets::new(1.0, 2.0, 3.0, 4.0)), Rect::new(2.0, 1.0, 94.0, 46.0));
+        assert_eq!(
+            r.inset(Insets::new(1.0, 2.0, 3.0, 4.0)),
+            Rect::new(2.0, 1.0, 94.0, 46.0)
+        );
         assert_eq!(r.inset(Insets::uniform(60.0)).size, Size::ZERO);
         assert_eq!(r.outset(5.0), Rect::new(-5.0, -5.0, 110.0, 60.0));
     }
@@ -274,7 +332,12 @@ mod tests {
     fn round_out_contains_original() {
         let r = Rect::new(0.3, 0.7, 10.2, 5.5);
         let o = r.round_out();
-        assert!(o.min_x() <= r.min_x() && o.max_x() >= r.max_x() && o.min_y() <= r.min_y() && o.max_y() >= r.max_y());
+        assert!(
+            o.min_x() <= r.min_x()
+                && o.max_x() >= r.max_x()
+                && o.min_y() <= r.min_y()
+                && o.max_y() >= r.max_y()
+        );
         assert_eq!(o, Rect::new(0.0, 0.0, 11.0, 7.0));
     }
 

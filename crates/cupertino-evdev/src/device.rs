@@ -22,8 +22,16 @@ pub fn read_events(fd: BorrowedFd<'_>, out: &mut Vec<InputEvent>) -> Result<(), 
     let mut buf = [0u8; EVENT_SIZE * BATCH_EVENTS];
     loop {
         match rustix::io::read(fd, &mut buf[..]) {
-            Ok(len) if len == 0 || len % EVENT_SIZE != 0 => return Err(Error::TruncatedRecord { len }),
-            Ok(len) => out.extend(buf[..len].as_chunks::<EVENT_SIZE>().0.iter().map(InputEvent::from_bytes)),
+            Ok(len) if len == 0 || len % EVENT_SIZE != 0 => {
+                return Err(Error::TruncatedRecord { len })
+            }
+            Ok(len) => out.extend(
+                buf[..len]
+                    .as_chunks::<EVENT_SIZE>()
+                    .0
+                    .iter()
+                    .map(InputEvent::from_bytes),
+            ),
             Err(Errno::AGAIN) => return Ok(()),
             Err(Errno::INTR) => {}
             Err(errno) => return Err(Error::Io { op: "read", errno }),
@@ -47,8 +55,14 @@ impl Device {
     /// capabilities, and reads the current state (held keys, switches, contacts) into a first `resynced` frame that
     /// the first [`Device::read_frames`] returns.
     pub fn open(fd: OwnedFd) -> Result<Self, Error> {
-        let flags = fcntl_getfl(&fd).map_err(|errno| Error::Io { op: "F_GETFL", errno })?;
-        fcntl_setfl(&fd, flags | OFlags::NONBLOCK).map_err(|errno| Error::Io { op: "F_SETFL", errno })?;
+        let flags = fcntl_getfl(&fd).map_err(|errno| Error::Io {
+            op: "F_GETFL",
+            errno,
+        })?;
+        fcntl_setfl(&fd, flags | OFlags::NONBLOCK).map_err(|errno| Error::Io {
+            op: "F_SETFL",
+            errno,
+        })?;
         ioctl::set_monotonic_clock(fd.as_fd())?;
         // Changing the clock flushes the kernel queue, so every event queued from here on is stamped at or after
         // this instant. Stamping the snapshot now, before the query and snapshot ioctls, keeps it from outliving
@@ -57,9 +71,16 @@ impl Device {
         let time_us = now.tv_sec * 1_000_000 + now.tv_nsec / 1000;
         let info = DeviceInfo::query(fd.as_fd())?;
         let framer = Framer::new(Layout::from_info(&info)?);
-        let mut device = Self { fd, info, framer, queued: Vec::new() };
+        let mut device = Self {
+            fd,
+            info,
+            framer,
+            queued: Vec::new(),
+        };
         let snapshot = device.snapshot()?;
-        device.queued.push(device.framer.apply_snapshot(&snapshot, time_us)?);
+        device
+            .queued
+            .push(device.framer.apply_snapshot(&snapshot, time_us)?);
         Ok(device)
     }
 
@@ -108,7 +129,12 @@ impl Device {
         let mt = layout
             .snapshot_mt_codes()
             .into_iter()
-            .map(|code| Ok(MtSlotValues { code, values: ioctl::mt_slots(fd, code, layout.slot_count)? }))
+            .map(|code| {
+                Ok(MtSlotValues {
+                    code,
+                    values: ioctl::mt_slots(fd, code, layout.slot_count)?,
+                })
+            })
             .collect::<Result<Vec<_>, Error>>()?;
         Ok(Snapshot {
             keys: BitSet::from_bytes(ioctl::key_state(fd)?),
@@ -135,8 +161,20 @@ mod tests {
     fn reads_whole_batches_until_would_block() {
         let (reader, writer) = pipe_with(PipeFlags::NONBLOCK).unwrap();
         let events = [
-            InputEvent { sec: 5, usec: 1, kind: 1, code: 30, value: 1 },
-            InputEvent { sec: 5, usec: 1, kind: 0, code: 0, value: 0 },
+            InputEvent {
+                sec: 5,
+                usec: 1,
+                kind: 1,
+                code: 30,
+                value: 1,
+            },
+            InputEvent {
+                sec: 5,
+                usec: 1,
+                kind: 0,
+                code: 0,
+                value: 0,
+            },
         ];
         for event in &events {
             write(&writer, &event.to_bytes()).unwrap();
@@ -151,6 +189,9 @@ mod tests {
         let (reader, writer) = pipe_with(PipeFlags::NONBLOCK).unwrap();
         write(&writer, &[0u8; 10]).unwrap();
         let error = read_events(reader.as_fd(), &mut Vec::new()).unwrap_err();
-        assert!(matches!(error, Error::TruncatedRecord { len: 10 }), "{error}");
+        assert!(
+            matches!(error, Error::TruncatedRecord { len: 10 }),
+            "{error}"
+        );
     }
 }

@@ -1,0 +1,241 @@
+//! The settings files the panes read and write, through the typed modules of `cupertino-defaults` (one parser for the
+//! owning process and this application; atomic writes that keep comments, pins and unknown keys, gap G2), and the
+//! values a key has when its file does not set it.
+
+use std::io;
+use std::path::PathBuf;
+
+use cupertino_defaults::accessibility::{AccessibilitySettings, ACCESSIBILITY_ENV, ACCESSIBILITY_FILE};
+use cupertino_defaults::compositor::{CompositorSettings, MinimizeEffectName};
+use cupertino_defaults::conf::Problem;
+use cupertino_defaults::dock::{sanitize_large_size, sanitize_tile_size, DockSettings, Position};
+use cupertino_defaults::keyboard::KeyboardSettings;
+use cupertino_defaults::menubar::{ClockSettings, MenuBarSettings};
+use cupertino_defaults::power::PowerSettings;
+
+use crate::mapping;
+
+/// A settings file the panes write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum File {
+    /// `dock.conf`, read by the dock process.
+    Dock,
+    /// `compositor.json`, read by the server.
+    Compositor,
+    /// `menubar.conf`, read by the menu bar process.
+    MenuBar,
+    /// `keyboard.conf`, read by the server.
+    Keyboard,
+    /// `power.conf`, read by the server.
+    Power,
+}
+
+impl File {
+    pub const ALL: [File; 5] = [File::Dock, File::Compositor, File::MenuBar, File::Keyboard, File::Power];
+
+    /// The process that applies the file.
+    pub fn owner(self) -> &'static str {
+        match self {
+            File::Dock => "the dock",
+            File::Compositor | File::Keyboard | File::Power => "the window server",
+            File::MenuBar => "the menu bar",
+        }
+    }
+
+    /// Whether the owning process applies a change of the file while it runs. All of them do (the live settings of
+    /// the server's `live` module, the dock's and the menu bar's watchers).
+    pub fn reloads(self) -> bool {
+        true
+    }
+}
+
+/// Where the files are, from the environment (each file's override variable, else the settings directory); `None`
+/// when neither names a directory.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Paths {
+    pub dock: Option<PathBuf>,
+    pub compositor: Option<PathBuf>,
+    pub menubar: Option<PathBuf>,
+    pub keyboard: Option<PathBuf>,
+    pub power: Option<PathBuf>,
+    /// `accessibility.conf`: read only; the server is its only writer (`Session1.SetAccessibility`).
+    pub accessibility: Option<PathBuf>,
+}
+
+impl Paths {
+    pub fn from_env() -> Self {
+        Paths {
+            dock: DockSettings::path(),
+            compositor: CompositorSettings::path(),
+            menubar: MenuBarSettings::path(),
+            keyboard: KeyboardSettings::path(),
+            power: PowerSettings::path(),
+            accessibility: cupertino_defaults::config_file(ACCESSIBILITY_ENV, ACCESSIBILITY_FILE),
+        }
+    }
+
+    pub fn of(&self, file: File) -> Option<&PathBuf> {
+        match file {
+            File::Dock => self.dock.as_ref(),
+            File::Compositor => self.compositor.as_ref(),
+            File::MenuBar => self.menubar.as_ref(),
+            File::Keyboard => self.keyboard.as_ref(),
+            File::Power => self.power.as_ref(),
+        }
+    }
+}
+
+/// What the files hold.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Settings {
+    pub dock: DockSettings,
+    pub compositor: CompositorSettings,
+    pub menubar: MenuBarSettings,
+    pub keyboard: KeyboardSettings,
+    pub power: PowerSettings,
+    pub accessibility: AccessibilitySettings,
+    /// The height of the output the dock sits on: its default tile size depends on it (`default_tile_size`).
+    pub display_height: f64,
+}
+
+/// What a write did not manage.
+#[derive(Debug)]
+pub enum StoreError {
+    /// No settings directory (neither the file's variable, `XDG_CONFIG_HOME` nor `HOME` is set).
+    NoPath(File),
+    Io(File, io::Error),
+}
+
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StoreError::NoPath(_) => write!(f, "There is no settings folder to save the change in."),
+            StoreError::Io(_, e) => write!(f, "The change could not be saved: {e}."),
+        }
+    }
+}
+
+impl std::error::Error for StoreError {}
+
+impl Settings {
+    /// Read every file at `paths`; a missing file sets nothing. A line the file's parser rejects is reported on stderr
+    /// and keeps its key unset.
+    pub fn load(paths: &Paths, display_height: f64) -> io::Result<Self> {
+        Self::read(paths, None, display_height)
+    }
+
+    /// Read every file again, as it is now: another writer (the dock's menu, the server, an editor) may have changed it
+    /// since. A commit reloads before it changes its key, so a store writes the user's key over the file's current
+    /// values and never puts back a value read earlier. A line the parser rejects keeps the value of `self`.
+    pub fn reload(&mut self, paths: &Paths) -> io::Result<()> {
+        *self = Self::read(paths, Some(self), self.display_height)?;
+        Ok(())
+    }
+
+    fn read(paths: &Paths, last_good: Option<&Settings>, display_height: f64) -> io::Result<Self> {
+        let lines = |file: &str, problems: Vec<Problem>| problems.iter().for_each(|p| eprintln!("cupertino-settings: {file} line {}: {}", p.line, p.message));
+        let dock = match &paths.dock {
+            Some(p) => DockSettings::load(p, last_good.map(|l| &l.dock)).map(|(s, problems)| { lines("dock.conf", problems); s })?,
+            None => DockSettings::default(),
+        };
+        let compositor = match &paths.compositor {
+            Some(p) => CompositorSettings::load(p, last_good.map(|l| &l.compositor)).map(|(s, problems)| {
+                problems.iter().for_each(|p| eprintln!("cupertino-settings: compositor.json {}: {}", p.key, p.message));
+                s
+            })?,
+            None => CompositorSettings::default(),
+        };
+        let menubar = match &paths.menubar {
+            Some(p) => MenuBarSettings::load(p, last_good.map(|l| &l.menubar)).map(|(s, problems)| { lines("menubar.conf", problems); s })?,
+            None => MenuBarSettings { clock: ClockSettings::UNSET },
+        };
+        let keyboard = match &paths.keyboard {
+            Some(p) => KeyboardSettings::load(p, last_good.map(|l| &l.keyboard)).map(|(s, problems)| { lines("keyboard.conf", problems); s })?,
+            None => KeyboardSettings::default(),
+        };
+        let power = match &paths.power {
+            Some(p) => PowerSettings::load(p, last_good.map(|l| &l.power)).map(|(s, problems)| { lines("power.conf", problems); s })?,
+            None => PowerSettings::default(),
+        };
+        let accessibility = match &paths.accessibility {
+            Some(p) => AccessibilitySettings::load(p).map(|(s, problems)| {
+                problems.iter().for_each(|(line, message)| eprintln!("cupertino-settings: accessibility.conf line {line}: {message}"));
+                s
+            })?,
+            None => AccessibilitySettings::default(),
+        };
+        Ok(Settings { dock, compositor, menubar, keyboard, power, accessibility, display_height })
+    }
+
+    /// Write `file` to its path atomically.
+    pub fn store(&self, paths: &Paths, file: File) -> Result<(), StoreError> {
+        let path = paths.of(file).ok_or(StoreError::NoPath(file))?;
+        let stored = match file {
+            File::Dock => self.dock.store(path).map(drop),
+            File::Compositor => self.compositor.store(path).map(drop),
+            File::MenuBar => self.menubar.store(path).map(drop),
+            File::Keyboard => self.keyboard.store(path).map(drop),
+            File::Power => self.power.store(path).map(drop),
+        };
+        stored.map_err(|e| StoreError::Io(file, e))
+    }
+
+    // ---- the values in effect: the file's, else the key's default ------------------------------------------------
+
+    /// The dock's tile size in points (the dock's own sanitizing rule and display-height default).
+    pub fn tile_size(&self) -> f64 {
+        sanitize_tile_size(self.dock.tile_size, self.display_height)
+    }
+
+    pub fn large_size(&self) -> f64 {
+        sanitize_large_size(self.dock.large_size)
+    }
+
+    /// Defaults: magnification off, auto-hide off, recents shown, at the bottom.
+    pub fn magnification(&self) -> bool {
+        self.dock.magnification.unwrap_or(false)
+    }
+
+    pub fn autohide(&self) -> bool {
+        self.dock.autohide.unwrap_or(false)
+    }
+
+    pub fn recents(&self) -> bool {
+        self.dock.recents.unwrap_or(true)
+    }
+
+    pub fn position(&self) -> Position {
+        self.dock.position.unwrap_or(Position::Bottom)
+    }
+
+    /// Default: warp (the server's default effect).
+    pub fn minimize_effect(&self) -> MinimizeEffectName {
+        self.compositor.minimize_effect.unwrap_or(MinimizeEffectName::Warp)
+    }
+
+    /// Defaults: 0.6875 for both (settled), acceleration on, natural scrolling on.
+    pub fn mouse_speed(&self) -> f64 {
+        self.compositor.mouse_speed.unwrap_or(mapping::TRACKING_DEFAULT)
+    }
+
+    pub fn trackpad_speed(&self) -> f64 {
+        self.compositor.trackpad_speed.unwrap_or(mapping::TRACKING_DEFAULT)
+    }
+
+    pub fn mouse_acceleration(&self) -> bool {
+        self.compositor.mouse_acceleration.unwrap_or(true)
+    }
+
+    pub fn natural_scrolling(&self) -> bool {
+        self.compositor.natural_scrolling.unwrap_or(true)
+    }
+
+    /// Defaults: 500 ms delay, 83 ms interval (settled).
+    pub fn repeat_delay_ms(&self) -> u32 {
+        self.keyboard.repeat_delay_ms.unwrap_or(500)
+    }
+
+    pub fn repeat_interval_ms(&self) -> u32 {
+        self.keyboard.repeat_interval_ms.unwrap_or(83)
+    }
+}

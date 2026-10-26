@@ -1,0 +1,39 @@
+[package]
+name = "cupertino-menubar"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Menu bar for the Cupertino desktop: menu model and layout, interaction state machine, an optional D-Bus layer (DBusMenu, status notifier items, GMenuModel) and the `cupertino-menubar` process"
+
+[package.metadata.cupertino]
+layer = "shell"
+
+[features]
+default = ["dbus"]
+dbus = ["dep:zbus", "dep:futures-util"]
+# the `cupertino-menubar` process: one bar per output as a client of the server
+app = ["dbus", "dep:async-channel", "dep:cupertino-assets", "dep:cupertino-client", "dep:cupertino-decorations", "dep:cupertino-geometry", "dep:cupertino-icons", "dep:cupertino-theme", "dep:libc", "dep:tiny-skia"]
+
+[dependencies]
+cupertino-assets = { path = "../cupertino-assets", optional = true }
+cupertino-client = { path = "../cupertino-client", optional = true }
+cupertino-decorations = { path = "../cupertino-decorations", optional = true }
+cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-geometry = { path = "../cupertino-geometry", optional = true }
+cupertino-icons = { path = "../cupertino-icons", optional = true }
+cupertino-theme = { path = "../cupertino-theme", optional = true }
+async-channel = { version = "2", optional = true }
+libc = { version = "0.2", optional = true }
+tiny-skia = { version = "0.11", optional = true }
+zbus = { version = "5", default-features = false, features = ["async-io"], optional = true }
+futures-util = { version = "0.3", default-features = false, features = ["std"], optional = true }
+
+[dev-dependencies]
+async-io = "2"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+tempfile = "3"
+
+[[bin]]
+name = "cupertino-menubar"
+path = "src/main.rs"
+required-features = ["app"]

@@ -1,0 +1,486 @@
+//! Server side of the dock (`cupertino_shell_v1.get_dock`, `cupertino_dock_v1`): the dock is a
+//! layer surface of the dock process, which owns its presentation (tiles, magnification, bounces,
+//! auto-hide) and its reserved area (the layer's exclusive zone). The server tells every dock which
+//! windows exist, takes its activation and restore requests, and reads the slot a minimizing window
+//! flies to from the committed `set_minimize_target`. The surface's geometry is the dock's rectangle.
+//! The application switcher's panel is the dock's too: the server keeps the keys and the choice
+//! (`input.rs`, `cupertino-wm`) and tells one dock the panel's output (the one under the pointer
+//! when the switch opened), the list and the selection ([`Cupertino::switcher_changed`]), then
+//! every dock that it ended ([`Docks::switcher_closed`]); a dock that binds mid-switch on the
+//! panel's output gets the state at once. `switcher_select` is the pointer's pick and
+//! `switcher_activate` / `switcher_cancel` its release on the panel; a press anywhere else is the
+//! server's ([`SWITCHER_NAMESPACE`]). Refused activations reach every dock as `attention`. The
+//! application grid is the dock's alone: the server forwards the app-grid action
+//! ([`Docks::toggle_app_grid`]) and keeps no state of it. The overview is shared: the server owns
+//! the session (`shell.rs`: transition, frames, Escape, click and workspace-switch fallbacks) and
+//! tells the dock of its output the window set, the workspaces and the layout area
+//! ([`Cupertino::send_overview_to_docks`]); the dock lays the windows out (`overview_frame`), draws
+//! the workspaces bar and sends picks and workspace edits. Hot corners and gestures the server
+//! detects go to the dock to be mapped ([`Docks::hot_corner`], [`Docks::gesture`]).
+
+use std::collections::BTreeMap;
+
+use cupertino_overview::OverviewMode;
+use cupertino_protocols::server::cupertino_dock_v1::{self, Corner, CupertinoDockV1, Gesture, WindowState};
+use cupertino_protocols::server::cupertino_shell_v1::{CupertinoShellV1, Error as ShellError};
+use cupertino_wm::{Command, LifecycleState, OutputId, Rect, WindowId};
+use smithay::reexports::wayland_server::WEnum;
+use smithay::desktop::{layer_map_for_output, WindowSurfaceType};
+use smithay::output::Output;
+use smithay::reexports::wayland_server::backend::ClientId;
+use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::{Client, DataInit, Dispatch, DisplayHandle, New, Resource};
+use smithay::wayland::compositor::{with_states, Cacheable};
+
+use crate::shell_v1::surface_backdrops;
+use crate::state::Cupertino;
+
+/// Where a minimizing window lands: the dock's `set_minimize_target`, in surface-local logical
+/// coordinates, double-buffered with the dock surface.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DockState {
+    minimize_target: Option<Rect>,
+}
+
+impl Cacheable for DockState {
+    fn commit(&mut self, _: &DisplayHandle) -> Self {
+        *self
+    }
+
+    fn merge_into(self, into: &mut Self, _: &DisplayHandle) {
+        *into = self;
+    }
+}
+
+/// What a dock was told about one window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WindowInfo {
+    app_id: String,
+    title: String,
+    state: WindowState,
+}
+
+/// Layer-shell namespace of the dock's switcher panel: a press there is the dock's, a press
+/// anywhere else cancels the switch.
+pub const SWITCHER_NAMESPACE: &str = "cupertino-dock-switcher";
+
+/// The open application switcher: what the panel's dock is shown, and the output it is drawn on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SwitcherState {
+    apps: Vec<String>,
+    selected: usize,
+    output: OutputId,
+}
+
+struct Dock {
+    resource: CupertinoDockV1,
+    surface: WlSurface,
+    output: OutputId,
+    /// The client's object of the dock's output.
+    wl_output: WlOutput,
+    /// Windows the dock knows by id; `None` until the first group.
+    sent: Option<BTreeMap<u32, WindowInfo>>,
+}
+
+/// The docks of the dock process, at most one per output.
+#[derive(Default)]
+pub struct Docks {
+    docks: Vec<Dock>,
+    /// `None` while no switch is under way, also without any dock.
+    switcher: Option<SwitcherState>,
+}
+
+impl Docks {
+    pub fn has_surface(&self, surface: &WlSurface) -> bool {
+        self.docks.iter().any(|d| &d.surface == surface)
+    }
+
+    pub fn remove_output(&mut self, output: OutputId) {
+        self.docks.retain(|d| d.output != output);
+    }
+
+    fn of_output(&self, output: OutputId) -> Option<&Dock> {
+        self.docks.iter().find(|d| d.output == output)
+    }
+
+    /// Tell every dock the server started a program.
+    pub fn launching(&self, app_id: &str) {
+        for dock in &self.docks {
+            dock.resource.launching(app_id.to_string());
+            dock.resource.done();
+        }
+    }
+
+    /// The output the open switch's panel is drawn on.
+    pub fn switcher_output(&self) -> Option<OutputId> {
+        self.switcher.as_ref().map(|s| s.output)
+    }
+
+    /// The dock that draws the panel on `output`: that output's own, else the first.
+    fn panel_dock(&self, output: OutputId) -> Option<&Dock> {
+        self.of_output(output).or(self.docks.first())
+    }
+
+    /// Tell every dock that `app_id` asked for attention.
+    pub fn attention(&self, app_id: &str) {
+        for dock in &self.docks {
+            dock.resource.attention(app_id.to_string());
+            dock.resource.done();
+        }
+    }
+
+    /// The switch ended: tell every dock, whether the selection was committed or cancelled.
+    pub fn switcher_closed(&mut self, committed: bool) {
+        self.switcher = None;
+        for dock in &self.docks {
+            dock.resource.switcher_closed(u32::from(committed));
+            dock.resource.done();
+        }
+    }
+
+    /// Tell every dock the app-grid action fired (shortcut, hot corner or gesture): the dock opens
+    /// its application grid, or closes it when it is open.
+    pub fn toggle_app_grid(&self) {
+        for dock in &self.docks {
+            dock.resource.toggle_app_grid();
+            dock.resource.done();
+        }
+    }
+
+    /// Tell every dock the auto-hide shortcut was pressed.
+    pub fn toggle_auto_hide(&self) {
+        for dock in &self.docks {
+            dock.resource.toggle_auto_hide();
+            dock.resource.done();
+        }
+    }
+
+    /// The overview of `output` is leaving: its dock drops the chrome.
+    pub fn overview_closed(&self, output: OutputId) {
+        if let Some(dock) = self.of_output(output) {
+            dock.resource.overview_closed();
+            dock.resource.done();
+        }
+    }
+
+    /// A corner of `output` fired: its dock maps the corner to an action.
+    pub fn hot_corner(&self, output: OutputId, corner: Corner) {
+        if let Some(dock) = self.of_output(output) {
+            dock.resource.hot_corner(corner);
+            dock.resource.done();
+        }
+    }
+
+    /// A gesture committed on `output`: its dock maps it to an action. False without a dock there.
+    pub fn gesture(&self, output: OutputId, kind: Gesture) -> bool {
+        let Some(dock) = self.of_output(output) else { return false };
+        dock.resource.gesture(kind);
+        dock.resource.done();
+        true
+    }
+}
+
+/// The open overview as one dock sees it, in its output's coordinates.
+struct OverviewGroup {
+    mode: cupertino_dock_v1::OverviewMode,
+    app_id: String,
+    area: Rect,
+    windows: Vec<(u32, Rect)>,
+    workspaces: Vec<(u32, bool)>,
+}
+
+/// One group: the overview's windows, workspaces and area.
+fn send_overview(resource: &CupertinoDockV1, g: &OverviewGroup) {
+    for (id, r) in &g.windows {
+        resource.overview_window(*id, r.x.round() as i32, r.y.round() as i32, r.w.round() as i32, r.h.round() as i32);
+    }
+    for (id, current) in &g.workspaces {
+        resource.overview_workspace(*id, u32::from(*current));
+    }
+    let a = g.area;
+    resource.overview_changed(g.mode, g.app_id.clone(), a.x.round() as i32, a.y.round() as i32, a.w.round() as i32, a.h.round() as i32);
+    resource.done();
+}
+
+/// One group: the panel's output, the switcher's list and its selection.
+fn send_switcher(resource: &CupertinoDockV1, output: &WlOutput, state: &SwitcherState) {
+    resource.switcher_output(output);
+    for app in &state.apps {
+        resource.switcher_entry(app.clone());
+    }
+    resource.switcher_changed(state.selected as u32);
+    resource.done();
+}
+
+/// Per-object data of a dock. `output` is `None` for an object the server rejected with a protocol
+/// error: it stays inert until the client is disconnected.
+pub struct DockData {
+    output: Option<OutputId>,
+}
+
+impl Cupertino {
+    /// `cupertino_shell_v1.get_dock`: validate the role, register the dock and send its first group.
+    pub fn create_dock(&mut self, shell: &CupertinoShellV1, id: New<CupertinoDockV1>, surface: WlSurface, output: &WlOutput, init: &mut DataInit<'_, Self>) {
+        let target = Output::from_resource(output).and_then(|o| self.output_by_wl(&o).map(|e| (e.id, e.output.clone())));
+        let rejection = match &target {
+            None => Some("the output is gone".to_string()),
+            Some((_, o)) if layer_map_for_output(o).layer_for_surface(&surface, WindowSurfaceType::TOPLEVEL).is_none() => Some("the surface is not a layer surface of the output".to_string()),
+            Some(_) if self.docks.has_surface(&surface) || self.menu_bars.has_surface(&surface) => Some("the surface already has a shell role".to_string()),
+            Some((out, _)) if self.docks.of_output(*out).is_some() => Some("the output already has a dock".to_string()),
+            Some(_) => None,
+        };
+        if let Some(reason) = rejection {
+            init.init(id, DockData { output: None });
+            shell.post_error(ShellError::Role, reason);
+            return;
+        }
+        let (out, _) = target.expect("a rejected target returned above");
+        let resource = init.init(id, DockData { output: Some(out) });
+        self.docks.docks.push(Dock { resource, surface, output: out, wl_output: output.clone(), sent: None });
+        self.refresh_usable_area(out);
+        self.refresh_docks();
+        // a dock that restarts mid-switch on the panel's output draws the panel from where the switch stands
+        if let Some(state) = self.docks.switcher.clone().filter(|s| s.output == out) {
+            self.send_switcher_to_panel_dock(&state);
+        }
+        // and one that restarts mid-overview lays it out from where it stands
+        if let Some(group) = self.overview_group().filter(|_| self.shell.overview_on(out).is_some()) {
+            if let Some(dock) = self.docks.docks.last() {
+                send_overview(&dock.resource, &group);
+            }
+        }
+    }
+
+    /// The switcher opened or its selection moved: the panel's dock gets the whole list again. The
+    /// panel stays on the output under the pointer when the switch opened.
+    pub fn switcher_changed(&mut self, apps: Vec<String>, selected: usize) {
+        let output = match self.docks.switcher_output() {
+            Some(output) => output,
+            None => match self.output_at(self.pointer.current_location()).or_else(|| self.outputs.first()) {
+                Some(o) => o.id,
+                // no output, no panel: the switch runs on the keys alone
+                None => return,
+            },
+        };
+        let state = SwitcherState { apps, selected, output };
+        self.send_switcher_to_panel_dock(&state);
+        self.docks.switcher = Some(state);
+    }
+
+    /// Send the switcher group to the dock that draws the panel, naming the panel's output by the
+    /// dock client's own object for it (its dock's output when the client has none).
+    fn send_switcher_to_panel_dock(&self, state: &SwitcherState) {
+        let Some(dock) = self.docks.panel_dock(state.output) else { return };
+        let bound = (dock.output != state.output)
+            .then(|| {
+                let client = dock.resource.client()?;
+                self.output_entry(state.output)?.output.client_outputs(&client).next()
+            })
+            .flatten();
+        send_switcher(&dock.resource, bound.as_ref().unwrap_or(&dock.wl_output), state);
+    }
+
+    /// Whether `surface` belongs to the dock's switcher panel (a layer surface of
+    /// [`SWITCHER_NAMESPACE`], its subsurfaces included).
+    pub fn is_switcher_panel(&self, surface: &WlSurface) -> bool {
+        self.outputs.iter().any(|o| layer_map_for_output(&o.output).layer_for_surface(surface, WindowSurfaceType::ALL).is_some_and(|l| l.namespace() == SWITCHER_NAMESPACE))
+    }
+
+    /// The layer surface of a dock went away: the role ends with it.
+    pub fn dock_surface_gone(&mut self, surface: &WlSurface) {
+        let outputs: Vec<OutputId> = self.docks.docks.iter().filter(|d| &d.surface == surface).map(|d| d.output).collect();
+        self.docks.docks.retain(|d| &d.surface != surface);
+        for output in outputs {
+            self.dock_gone(output);
+        }
+    }
+
+    /// The dock of `output` is gone: its reservation goes, and an overview it was laying out
+    /// closes so the windows come back.
+    fn dock_gone(&mut self, output: OutputId) {
+        self.refresh_usable_area(output);
+        if self.shell.overview_on(output).is_some() {
+            self.close_overview();
+        }
+    }
+
+    /// The open overview for the dock of its output, in the output's coordinates.
+    fn overview_group(&self) -> Option<OverviewGroup> {
+        let s = self.shell.overview.as_ref().filter(|s| !s.closing)?;
+        let origin = self.output_entry(s.output)?.rect;
+        let local = |r: Rect| r.translate(-origin.x, -origin.y);
+        let (mode, app_id) = match s.mode {
+            OverviewMode::Overview => (cupertino_dock_v1::OverviewMode::All, String::new()),
+            OverviewMode::AppOverview(app) => (cupertino_dock_v1::OverviewMode::App, self.wm.app(app).map(|a| a.identity.clone()).unwrap_or_default()),
+        };
+        let current = self.wm.current_workspace(s.output);
+        Some(OverviewGroup {
+            mode,
+            app_id,
+            area: local(s.area),
+            windows: s.windows.iter().map(|w| (w.id.0 as u32, local(w.frame))).collect(),
+            workspaces: self.wm.workspaces(s.output).iter().map(|w| (w.id.0 as u32, Some(w.id) == current)).collect(),
+        })
+    }
+
+    /// Send the open overview (its windows, workspaces and area) to the dock of its output. Call
+    /// when it opens and whenever its window set or the workspaces change.
+    pub fn send_overview_to_docks(&self) {
+        let Some(group) = self.overview_group() else { return };
+        let output = self.shell.overview.as_ref().map(|s| s.output).expect("a group exists only for an open overview");
+        if let Some(dock) = self.docks.of_output(output) {
+            tracing::info!(output = output.0, windows = group.windows.len(), workspaces = group.workspaces.len(), "overview sent");
+            send_overview(&dock.resource, &group);
+        }
+    }
+
+    /// Windows a dock lists: every mapped one, by id.
+    fn dock_feed(&self) -> BTreeMap<u32, WindowInfo> {
+        let key = self.wm.key_window();
+        self.wm
+            .windows()
+            .filter(|w| !matches!(w.state(), LifecycleState::Created | LifecycleState::Closing | LifecycleState::Destroyed))
+            .map(|w| {
+                let mut state = WindowState::empty();
+                state.set(WindowState::Minimized, w.state() == LifecycleState::Minimized);
+                state.set(WindowState::Active, key == Some(w.id));
+                let app_id = self.wm.app(w.app).map(|a| a.identity.clone()).unwrap_or_default();
+                (w.id.0 as u32, WindowInfo { app_id, title: w.title.clone(), state })
+            })
+            .collect()
+    }
+
+    /// Send every dock what changed in the window list since its last group. Call after anything
+    /// the list derives from may have changed: mapping, closing, titles, minimizing, focus.
+    pub fn refresh_docks(&mut self) {
+        if self.docks.docks.is_empty() {
+            return;
+        }
+        let feed = self.dock_feed();
+        for dock in &mut self.docks.docks {
+            let mut changed = dock.sent.is_none();
+            let known = dock.sent.take().unwrap_or_default();
+            for (id, info) in &feed {
+                if known.get(id) != Some(info) {
+                    dock.resource.window(*id, info.app_id.clone(), info.title.clone(), info.state);
+                    changed = true;
+                }
+            }
+            for id in known.keys().filter(|id| !feed.contains_key(id)) {
+                dock.resource.window_closed(*id);
+                changed = true;
+            }
+            if changed {
+                dock.resource.done();
+            }
+            dock.sent = Some(feed.clone());
+        }
+    }
+
+    /// A dock surface's rectangle in global logical coordinates, once the layer map placed it.
+    fn dock_geometry(&self, dock: &Dock) -> Option<Rect> {
+        let out = self.output_entry(dock.output)?;
+        let map = layer_map_for_output(&out.output);
+        let geo = map.layer_geometry(map.layer_for_surface(&dock.surface, WindowSurfaceType::TOPLEVEL)?)?;
+        Some(Rect::new(out.rect.x + f64::from(geo.loc.x), out.rect.y + f64::from(geo.loc.y), f64::from(geo.size.w), f64::from(geo.size.h)))
+    }
+
+    /// The dock's rectangle on `output` in global logical coordinates: the area of its committed
+    /// backdrops (the bar), not the whole layer surface, which also covers magnification room.
+    /// `None` without a dock or before it committed a backdrop.
+    pub fn dock_rect(&self, output: OutputId) -> Option<Rect> {
+        let dock = self.docks.of_output(output)?;
+        let geo = self.dock_geometry(dock)?;
+        surface_backdrops(&dock.surface, (geo.x, geo.y).into())
+            .iter()
+            .map(|b| Rect::new(b.area.loc.x, b.area.loc.y, b.area.size.w, b.area.size.h))
+            .reduce(|a, b| a.union(&b))
+    }
+
+    /// Slot the dock of the window's output reserved for a window minimizing now, in global
+    /// logical coordinates; `None` without a dock or before it set a target.
+    pub fn minimize_target(&self, id: WindowId) -> Option<Rect> {
+        let output = self.wm.window(id)?.output;
+        let dock = self.docks.of_output(output)?;
+        let local = with_states(&dock.surface, |s| s.cached_state.get::<DockState>().current().minimize_target)?;
+        let geo = self.dock_geometry(dock)?;
+        Some(Rect::new(geo.x + local.x, geo.y + local.y, local.w, local.h))
+    }
+
+    /// `restore_window`: the window flies out of its tile `tile` (surface-local) back to its frame.
+    fn dock_restore_window(&mut self, output: OutputId, id: u32, tile: Rect) {
+        let window = WindowId(u64::from(id));
+        if !self.wm.window(window).is_some_and(|w| w.state().is_minimized()) {
+            return;
+        }
+        if let Some(geo) = self.docks.of_output(output).and_then(|d| self.dock_geometry(d)) {
+            self.command(Command::SetMinimizeTarget { window, target: Rect::new(geo.x + tile.x, geo.y + tile.y, tile.w, tile.h) });
+        }
+        self.command(Command::Restore { window });
+    }
+
+    /// `activate_app`: raise the application's windows and focus the frontmost.
+    fn dock_activate_app(&mut self, app_id: &str) {
+        if let Some(app) = self.wm.app_for_identity(app_id) {
+            self.command(Command::ActivateApp { app });
+        }
+    }
+}
+
+impl Dispatch<CupertinoDockV1, DockData> for Cupertino {
+    fn request(state: &mut Self, _: &Client, _: &CupertinoDockV1, request: cupertino_dock_v1::Request, data: &DockData, _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+        let Some(output) = data.output else { return };
+        match request {
+            cupertino_dock_v1::Request::ActivateApp { app_id } => state.dock_activate_app(&app_id),
+            cupertino_dock_v1::Request::RestoreWindow { id, x, y, width, height } => {
+                state.dock_restore_window(output, id, Rect::new(f64::from(x), f64::from(y), f64::from(width), f64::from(height)));
+            }
+            cupertino_dock_v1::Request::SetMinimizeTarget { x, y, width, height } => {
+                let Some(dock) = state.docks.of_output(output) else { return };
+                // an empty slot is no target: the effect cannot fly into nothing
+                let target = (width > 0 && height > 0).then(|| Rect::new(f64::from(x), f64::from(y), f64::from(width), f64::from(height)));
+                with_states(&dock.surface, |s| s.cached_state.get::<DockState>().pending().minimize_target = target);
+            }
+            cupertino_dock_v1::Request::SwitcherSelect { index } => state.command(Command::SwitcherSelect { index: index as usize }),
+            cupertino_dock_v1::Request::SwitcherActivate { index } => {
+                if state.wm.switcher().is_some_and(|s| (index as usize) < s.items.len()) {
+                    state.command(Command::SwitcherSelect { index: index as usize });
+                    state.command(Command::SwitcherCommit);
+                }
+            }
+            cupertino_dock_v1::Request::SwitcherCancel => state.command(Command::SwitcherCancel),
+            cupertino_dock_v1::Request::OverviewFrame { id, x, y, width, height } => {
+                let Some(origin) = state.output_entry(output).map(|o| o.rect) else { return };
+                if width <= 0 || height <= 0 {
+                    return;
+                }
+                state.dock_overview_frame(output, id, Rect::new(origin.x + f64::from(x), origin.y + f64::from(y), f64::from(width), f64::from(height)));
+            }
+            cupertino_dock_v1::Request::OverviewSelect { id } => {
+                state.overview_select(WindowId(u64::from(id)));
+            }
+            cupertino_dock_v1::Request::OverviewClose => {
+                if state.shell.overview_on(output).is_some() {
+                    state.close_overview();
+                }
+            }
+            cupertino_dock_v1::Request::SwitchWorkspace { id } => state.dock_switch_workspace(output, id),
+            cupertino_dock_v1::Request::AddWorkspace => state.command(Command::AddWorkspace { output }),
+            cupertino_dock_v1::Request::RemoveWorkspace { id } => state.command(Command::RemoveWorkspace { workspace: cupertino_wm::WorkspaceId(u64::from(id)) }),
+            cupertino_dock_v1::Request::MoveWorkspace { id, index } => state.command(Command::MoveWorkspace { workspace: cupertino_wm::WorkspaceId(u64::from(id)), index: index as usize }),
+            cupertino_dock_v1::Request::RunAction { name } => state.dock_run_action(&name),
+            cupertino_dock_v1::Request::AppCommand { app_id, command: WEnum::Value(command) } => state.dock_app_command(output, &app_id, command),
+            cupertino_dock_v1::Request::AppCommand { command: WEnum::Unknown(v), .. } => tracing::warn!(v, "dock sent an unknown app command"),
+            // `Destroy` is handled in `destroyed`
+            _ => {}
+        }
+    }
+
+    /// The role ends with the object; the dock's reservation goes with it.
+    fn destroyed(state: &mut Self, _: ClientId, resource: &CupertinoDockV1, data: &DockData) {
+        let Some(output) = data.output else { return };
+        state.docks.docks.retain(|d| &d.resource != resource);
+        state.dock_gone(output);
+    }
+}

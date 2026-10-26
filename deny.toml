@@ -1,0 +1,33 @@
+# cargo-deny policy of the public tree: the code is GPL-3.0-or-later, so every dependency must carry a licence that
+# GPL-3.0 can absorb. Run `cargo deny check licenses`.
+[graph]
+all-features = true
+
+[licenses]
+confidence-threshold = 0.93
+allow = [
+    "GPL-3.0-or-later",
+    "OFL-1.1",
+    "LGPL-2.1-or-later",
+    "MPL-2.0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "HPND-sell-variant",
+    "MIT-open-group",
+]
+
+[[licenses.clarify]]
+# The vendored xkbcommon-rs port declares `license-file`; its LICENSE reproduces libxkbcommon's MIT/X11-derived
+# statements: MIT, the Open Group variant and the "distribute, and sell" permission notice.
+crate = "xkbcommon-rs"
+expression = "MIT AND MIT-open-group AND HPND-sell-variant"
+license-files = [{ path = "LICENSE", hash = 0xacb18c30 }]

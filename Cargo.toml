@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+# A path dependency inside the workspace directory would become a member; the vendored port is a plain dependency.
+exclude = ["third-party/xkbcommon-rs"]
+
+[workspace.package]
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[profile.release]
+debug = 1
+
+[patch.crates-io]
+# Pure-Rust replacement for the C-binding crate of the same name (no libxkbcommon)
+xkbcommon = { path = "crates/cupertino-xkbcommon" }

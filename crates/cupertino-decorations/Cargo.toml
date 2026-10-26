@@ -1,0 +1,23 @@
+[package]
+name = "cupertino-decorations"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Server-side window decorations for the Cupertino compositor: titlebar layout, window control buttons, hit-testing, shadow parameters and CPU rasterization to premultiplied RGBA buffers"
+
+[package.metadata.cupertino]
+layer = "render"
+
+[dependencies]
+cupertino-assets = { path = "../cupertino-assets" }
+cupertino-theme = { path = "../cupertino-theme" }
+cupertino-geometry = { path = "../cupertino-geometry" }
+tiny-skia = "0.11"
+swash = "0.2.10"
+
+[[bench]]
+name = "decorations"
+harness = false
+
+[dev-dependencies]
+tempfile = "3"

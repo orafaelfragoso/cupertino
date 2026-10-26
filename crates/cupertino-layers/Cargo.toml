@@ -1,0 +1,19 @@
+[package]
+name = "cupertino-layers"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Checks that workspace dependencies follow the layer rules of the prototype tree (foundation, models, platform, render, core, shippables)"
+
+[package.metadata.cupertino]
+layer = "tools"
+
+[lib]
+name = "cupertino_layers"
+
+[[bin]]
+name = "cupertino-layers"
+path = "src/bin/cupertino-layers.rs"
+
+[dependencies]
+serde_json = "1"

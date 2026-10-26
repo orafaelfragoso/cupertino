@@ -1,0 +1,25 @@
+[package]
+name = "cupertino-windowmanager"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Window manager of the Cupertino desktop: the stage policy on cupertino-stage (stage on or off, groups, the strip of recent groups), `windowmanager.conf`, and the `cupertino-windowmanager` process"
+
+[package.metadata.cupertino]
+layer = "shell"
+
+[features]
+# the `cupertino-windowmanager` process: a client of the server's `cupertino_window_manager_v1`, no surface of its own
+app = ["dep:cupertino-defaults", "dep:cupertino-protocols", "dep:wayland-client"]
+
+[dependencies]
+cupertino-stage = { path = "../cupertino-stage" }
+cupertino-wm = { path = "../cupertino-wm" }
+cupertino-defaults = { path = "../cupertino-defaults", optional = true }
+cupertino-protocols = { path = "../cupertino-protocols", features = ["client"], optional = true }
+wayland-client = { version = "0.31", optional = true }
+
+[[bin]]
+name = "cupertino-windowmanager"
+path = "src/main.rs"
+required-features = ["app"]

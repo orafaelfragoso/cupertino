@@ -1,0 +1,4 @@
+# Defaults of the Cupertino session (XDG_CURRENT_DESKTOP=Cupertino); other desktops and the user's own lists are not affected.
+[Default Applications]
+inode/directory=cupertino-files.desktop
+x-scheme-handler/trash=cupertino-files.desktop

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="cupertino_screenshot_v1">
+  <copyright>
+    SPDX-License-Identifier: MIT OR Apache-2.0
+  </copyright>
+  <description summary="the windows the screenshot process can pick">
+    The capture itself goes through the standard ext-image-capture-source-v1 and
+    ext-image-copy-capture-v1 protocols. What no standard protocol carries is where the windows are
+    drawn, which the screenshot process needs to highlight the window under the pointer and to
+    capture it through its foreign toplevel handle. The protocol is unstable until phase 1 of
+     ends: interfaces may change without a version bump until then.
+  </description>
+  <interface name="cupertino_screenshot_v1" version="1">
+    <description summary="the windows on screen">
+      Global singleton, offered only to the shell processes the server started on a connection of
+      their own. Right after binding, and again whenever the set of windows on screen, their order or
+      a frame changes, the server sends one window event per top-level window drawn on an output,
+      front to back, followed by done. Each group replaces the previous one.
+    </description>
+    <request name="destroy" type="destructor">
+      <description summary="stop following the windows"/>
+    </request>
+    <event name="window">
+      <description summary="a window drawn on screen">
+        The identifier is the window's ext_foreign_toplevel_handle_v1 identifier. The rectangle is
+        the window frame with its server-side decorations and without its shadow, in global logical
+        coordinates: the area a capture of the toplevel covers.
+      </description>
+      <arg name="identifier" type="string"/>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+    </event>
+    <event name="done">
+      <description summary="end of a group of window events"/>
+    </event>
+  </interface>
+</protocol>

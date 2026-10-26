@@ -1,0 +1,30 @@
+[package]
+name = "cupertino-powerd"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Power and backlight daemon for the system bus: power_supply and backlight sysfs, the lid switch over evdev, the org.freedesktop.UPower interface subset apps call, and display brightness at org.cupertino.Power1"
+
+[package.metadata.cupertino]
+layer = "services"
+
+[features]
+default = ["dbus"]
+dbus = ["dep:zbus", "dep:cupertino-seat"]
+# the `cupertino-powerd` process
+app = ["dbus"]
+
+[dependencies]
+cupertino-devices = { path = "../cupertino-devices" }
+cupertino-evdev = { path = "../cupertino-evdev" }
+cupertino-seat = { path = "../cupertino-seat", optional = true }
+rustix = { version = "1", features = ["event", "fs"] }
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"], optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "cupertino-powerd"
+path = "src/main.rs"
+required-features = ["app"]

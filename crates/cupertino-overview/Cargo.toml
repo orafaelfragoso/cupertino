@@ -1,0 +1,13 @@
+[package]
+name = "cupertino-overview"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Window overview model: layout, app overview, workspaces bar, selection, keyboard navigation and gesture-driven transition"
+
+[package.metadata.cupertino]
+layer = "models"
+
+[dependencies]
+cupertino-animation = { path = "../cupertino-animation" }
+cupertino-wm = { path = "../cupertino-wm" }

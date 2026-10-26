@@ -1,0 +1,24 @@
+[package]
+# The package name is `xkbcommon` on purpose: `[patch.crates-io]` replaces the C-binding crate of that name, so
+# Smithay and the client toolkit compile unmodified. This is the documented fork exception to the `cupertino-*` rule.
+name = "xkbcommon"
+version = "0.8.1"
+edition.workspace = true
+license = "MIT"
+description = "Pure-Rust drop-in for the xkbcommon 0.8 crate (the API Smithay and the client toolkit use), on top of a vendored copy of the xkbcommon-rs port with the keysym names of libxkbcommon 1.13; no libxkbcommon"
+
+[package.metadata.cupertino]
+layer = "foundation"
+
+[dependencies]
+memmap2 = "0.9"
+xkbcommon-rs = { path = "../../third-party/xkbcommon-rs", features = ["client", "server"] }
+xkeysym = "0.2.1"
+
+# Smithay requests this feature of the C-binding crate; the Wayland keymap file loader is always built here
+[features]
+default = ["wayland"]
+wayland = []
+
+[dev-dependencies]
+log = "0.4"

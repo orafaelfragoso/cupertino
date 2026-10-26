@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="cupertino_scroll_v1">
+  <copyright>
+    SPDX-License-Identifier: MIT OR Apache-2.0
+  </copyright>
+  <description summary="the scroll count of a pointer">
+    wl_pointer carries the distance of a scroll but not its scroll count: the number of
+    consecutive flicks of one scrolling gesture series, which first-party applications use to
+    scroll further for repeated flicks. This protocol delivers it next to the pointer's axis
+    events. The protocol is unstable until phase 1 of ends: interfaces may change
+    without a version bump until then.
+  </description>
+  <interface name="cupertino_scroll_v1" version="1">
+    <description summary="scroll count services of the server">
+      Global singleton. Any client may bind it.
+    </description>
+    <request name="destroy" type="destructor">
+      <description summary="unbind the scroll global">
+        Objects created through this global stay valid.
+      </description>
+    </request>
+    <request name="get_scroll">
+      <description summary="follow the scroll count of a pointer">
+        Creates an object that tells the client the scroll count of the scrolls the server sends
+        to that wl_pointer. A pointer may have several of them.
+      </description>
+      <arg name="id" type="new_id" interface="cupertino_pointer_scroll_v1"/>
+      <arg name="pointer" type="object" interface="wl_pointer"/>
+    </request>
+  </interface>
+  <interface name="cupertino_pointer_scroll_v1" version="1">
+    <description summary="the scroll count of a wl_pointer">
+      The server counts per scroll gesture series of a touchpad and sends the count of the
+      current series for every axis that the next wl_pointer.frame carries a non-stop
+      wl_pointer.axis for. Scrolls of a wheel have no count and no event: a client reads the
+      absence as a count of 0.
+    </description>
+    <request name="destroy" type="destructor">
+      <description summary="stop following the scroll count"/>
+    </request>
+    <event name="scroll_count">
+      <description summary="the scroll count of the scroll in this frame">
+        Sent after the wl_pointer.axis event of the axis and before the wl_pointer.frame that
+        ends the group. The count is 0 while no series has started (a scroll too slow to start
+        one), 1 for the first flick, 2 for a second flick that follows within the time between
+        gestures, and from the third on it grows with the speed of the scroll, up to 2000.
+      </description>
+      <arg name="axis" type="uint" enum="wl_pointer.axis"/>
+      <arg name="count" type="uint"/>
+    </event>
+  </interface>
+</protocol>

@@ -1,0 +1,92 @@
+[package]
+name = "cupertino-server"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Smithay-based Wayland compositor: window policy from cupertino-wm, GLES shadows, rounded corners and material passes, dock and overview placeholders"
+
+[package.metadata.cupertino]
+layer = "core"
+
+[lib]
+name = "cupertino_server"
+
+[[bin]]
+name = "cupertino-server"
+path = "src/main.rs"
+
+[features]
+default = ["winit", "udev", "dbus"]
+winit = ["smithay/backend_winit"]
+udev = [
+    "smithay/backend_drm",
+    "smithay/backend_gbm",
+    "smithay/backend_session",
+    "dep:smithay-drm-extras",
+    "dep:cupertino-devices",
+    "dep:cupertino-evdev",
+    "dep:cupertino-seat",
+]
+# session bus worker: notification centre toggle
+dbus = []
+
+[dependencies]
+cupertino-assets = { path = "../cupertino-assets" }
+cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-displays = { path = "../cupertino-displays" }
+cupertino-protocols = { path = "../cupertino-protocols", features = ["server"] }
+cupertino-wm = { path = "../cupertino-wm" }
+cupertino-animation = { path = "../cupertino-animation" }
+cupertino-theme = { path = "../cupertino-theme" }
+cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-glass = { path = "../cupertino-glass" }
+cupertino-overview = { path = "../cupertino-overview" }
+cupertino-stage = { path = "../cupertino-stage" }
+cupertino-decorations = { path = "../cupertino-decorations" }
+cupertino-cursor = { path = "../cupertino-cursor" }
+cupertino-effects = { path = "../cupertino-effects" }
+cupertino-input = { path = "../cupertino-input" }
+cupertino-keyboard = { path = "../cupertino-keyboard" }
+cupertino-devices = { path = "../cupertino-devices", optional = true }
+cupertino-evdev = { path = "../cupertino-evdev", optional = true }
+cupertino-seat = { path = "../cupertino-seat", optional = true }
+async-channel = "2"
+libc = "0.2"
+resvg = { version = "0.45", default-features = false }
+tiny-skia = "0.11"
+wayland-backend = "0.3"
+wayland-client = "0.31"
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+wayland-protocols-plasma = { version = "0.3", features = ["server"] }
+wayland-scanner = "0.31"
+wayland-server = "0.31"
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+anyhow = "1"
+bytemuck = { version = "1", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+xcursor = "0.3"
+smithay-drm-extras = { version = "0.1", default-features = false, optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dependencies.smithay]
+version = "0.7"
+default-features = false
+features = ["desktop", "wayland_frontend", "backend_egl", "backend_drm", "backend_gbm", "renderer_gl"]
+
+[dev-dependencies]
+tempfile = "3"
+async-io = "2"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+wayland-protocols-plasma = { version = "0.3", features = ["client"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+cupertino-protocols = { path = "../cupertino-protocols", features = ["client"] }
+# the toolkit the shell processes are written in, for tests that act as one of them
+cupertino-client = { path = "../cupertino-client" }
+# the asset icons the switcher test compares the dock process's panel with
+cupertino-icons = { path = "../cupertino-icons" }
+rustix = { version = "1", features = ["fs", "shm", "mm"] }

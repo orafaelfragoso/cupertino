@@ -1,0 +1,258 @@
+use super::*;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+const MANIFEST: &str = r#"{
+  "version": 1,
+  "fonts": {"ui": "Fixture Sans", "mono": "Fixture Mono"},
+  "icons": {
+    "folder": {"raster": [16, 32, 128]},
+    "symbol.house": {"symbol": true},
+    "document.generic": {"raster": [64], "symbol": false}
+  },
+  "cursors": "fixture",
+  "wallpaper": "wallpapers/default.png"
+}"#;
+
+/// The files of `MANIFEST` other than the fonts.
+const FILES: [&str; 7] = [
+    "cursors/fixture/index.theme",
+    "wallpapers/default.png",
+    "icons/folder/16.png",
+    "icons/folder/32.png",
+    "icons/folder/128.png",
+    "icons/symbol.house/symbol.svg",
+    "icons/document.generic/64.png",
+];
+
+fn touch(root: &Path, rel: &str) {
+    let p = root.join(rel);
+    fs::create_dir_all(p.parent().unwrap()).unwrap();
+    fs::write(p, b"x").unwrap();
+}
+
+/// A pack directory with `manifest` and the pack-relative `files`.
+fn pack(manifest: &str, files: &[&str]) -> tempfile::TempDir {
+    let d = tempfile::tempdir().unwrap();
+    fs::write(d.path().join("manifest.json"), manifest).unwrap();
+    for rel in files {
+        touch(d.path(), rel);
+    }
+    d
+}
+
+/// The version-1 fixture with every file it names.
+fn fixture() -> tempfile::TempDir {
+    let d = pack(MANIFEST, &FILES);
+    for rel in ["fonts/a.ttf", "fonts/b.otf", "fonts/notes.txt"] {
+        touch(d.path(), rel);
+    }
+    d
+}
+
+fn name(s: &str) -> IconName {
+    IconName::new(s).unwrap()
+}
+
+fn sources(a: &Assets, n: &str, px: u32) -> Vec<IconSource> {
+    a.icon_sources(&name(n), px).into_iter().map(|(_, s)| s).collect()
+}
+
+fn raster(a: &Assets, n: &str, px: u32) -> Option<(PathBuf, u32)> {
+    sources(a, n, px).into_iter().find_map(|s| match s {
+        IconSource::Raster(r) => Some((r.path, r.px)),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_version_1_raster_resolves_to_the_smallest_size_at_least_requested_else_the_largest() {
+    let d = fixture();
+    let a = Assets::open(d.path()).unwrap();
+    let pick = |px| raster(&a, "folder", px).map(|(_, s)| s);
+    assert_eq!([pick(1), pick(16), pick(17), pick(128), pick(512)], [Some(16), Some(16), Some(32), Some(128), Some(128)]);
+    assert_eq!(raster(&a, "folder", 20).unwrap().0, d.path().join("icons/folder/32.png"));
+}
+
+#[test]
+fn version_1_symbols_cursors_wallpaper_and_fonts_resolve() {
+    let d = fixture();
+    let a = Assets::open(d.path()).unwrap();
+    assert_eq!(sources(&a, "symbol.house", 16), [IconSource::Symbol(d.path().join("icons/symbol.house/symbol.svg"))]);
+    assert!(sources(&a, "computer", 16).is_empty());
+    assert_eq!(a.cursor_theme(), Some(CursorTheme { name: "fixture".into(), search_dir: d.path().join("cursors") }));
+    assert_eq!(a.wallpaper_path(false), Some(d.path().join("wallpapers/default.png")));
+    assert_eq!(a.wallpaper_path(true), Some(d.path().join("wallpapers/default.png")), "no dark picture: the light one");
+    assert_eq!(a.font_family(FontRole::Ui), Some("Fixture Sans"));
+    assert_eq!(a.font_family(FontRole::Serif), None);
+    let f = |rel: &str| FontSource::File(d.path().join(rel));
+    assert_eq!(a.fonts(), [f("fonts/a.ttf"), f("fonts/b.otf"), FontSource::Builtin]);
+}
+
+const MANIFEST_2: &str = r#"{
+  "version": 2,
+  "name": "fixture-pack",
+  "credits": "CREDITS.md",
+  "fonts": {"ui": {"family": "Fixture Sans", "files": ["fonts/sans.ttf"]}, "mono": {"family": "Fixture Mono", "files": ["fonts/mono.ttf"]}},
+  "fallback_fonts": ["fonts/arabic.ttf", "fonts/sans.ttf"],
+  "icons": {
+    "folder.documents": {"raster": {"32": "icons/documents-32.png", "64": "icons/documents-64.png"}, "theme": ["folder-documents"]},
+    "document.pdf": {"svg": "icons/pdf.svg"},
+    "symbol.wifi": {"symbol": "symbols/wifi.svg"},
+    "symbol.battery": {"theme": ["battery-symbolic", "battery-full-symbolic"]}
+  },
+  "icon_theme": {"name": "Fixture", "map": "icon-map.toml"},
+  "cursors": {"theme": "pointers", "path": ["cursors", "/nonexistent/icons"]},
+  "wallpapers": {"default": {"light": "wallpapers/day.jpg", "dark": "wallpapers/night.jpg"}}
+}"#;
+
+fn fixture_2() -> tempfile::TempDir {
+    let d = pack(
+        MANIFEST_2,
+        &[
+            "CREDITS.md",
+            "fonts/sans.ttf",
+            "fonts/mono.ttf",
+            "fonts/arabic.ttf",
+            "icons/documents-32.png",
+            "icons/documents-64.png",
+            "icons/pdf.svg",
+            "symbols/wifi.svg",
+            "cursors/pointers/index.theme",
+            "wallpapers/day.jpg",
+            "wallpapers/night.jpg",
+        ],
+    );
+    fs::write(d.path().join("icon-map.toml"), "\"folder\" = [\"folder\", \"inode-directory\"]\n").unwrap();
+    d
+}
+
+#[test]
+fn a_version_2_pack_resolves_every_kind_of_source() {
+    let d = fixture_2();
+    let a = Assets::open(d.path()).unwrap();
+    let theme = |names: &[&str]| IconSource::Theme { names: names.iter().map(|n| n.to_string()).collect(), theme: Some("Fixture".into()) };
+    assert_eq!(
+        sources(&a, "folder.documents", 40),
+        [IconSource::Raster(RasterIcon { path: d.path().join("icons/documents-64.png"), px: 64 }), theme(&["folder-documents"])]
+    );
+    assert_eq!(sources(&a, "document.pdf", 16), [IconSource::Svg(d.path().join("icons/pdf.svg"))]);
+    assert_eq!(sources(&a, "symbol.wifi", 16), [IconSource::Symbol(d.path().join("symbols/wifi.svg"))]);
+    assert_eq!(sources(&a, "symbol.battery", 16), [theme(&["battery-symbolic", "battery-full-symbolic"])]);
+    assert_eq!(sources(&a, "folder", 16), [theme(&["folder", "inode-directory"])], "an unlisted name takes the default map");
+    assert!(sources(&a, "computer", 16).is_empty());
+    assert_eq!(a.cursor_theme(), Some(CursorTheme { name: "pointers".into(), search_dir: d.path().join("cursors") }));
+    assert_eq!(a.wallpaper_path(true), Some(d.path().join("wallpapers/night.jpg")));
+    assert_eq!(a.font_family(FontRole::Mono), Some("Fixture Mono"));
+    let f = |rel: &str| FontSource::File(d.path().join(rel));
+    assert_eq!(a.fonts(), [f("fonts/sans.ttf"), f("fonts/mono.ttf"), f("fonts/arabic.ttf"), FontSource::Builtin], "roles, then fallbacks, once each");
+    assert_eq!(a.credits().next(), Some((d.path(), Some("fixture-pack"), Some(d.path().join("CREDITS.md")))));
+}
+
+#[test]
+fn the_search_path_is_the_variable_then_the_user_then_the_system_pack() {
+    let env = |vars: &'static [(&'static str, &'static str)]| move |name: &str| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| v.into());
+    assert_eq!(
+        search_path_from(env(&[("CUPERTINO_ASSET_DIR", "/packs/dev"), ("XDG_DATA_HOME", "/data"), ("HOME", "/home/u")])),
+        [PathBuf::from("/packs/dev"), "/data/cupertino/assets".into(), SYSTEM_PACK.into()]
+    );
+    assert_eq!(
+        search_path_from(env(&[("CUPERTINO_ASSET_DIR", ""), ("HOME", "/home/u")])),
+        [PathBuf::from("/home/u/.local/share/cupertino/assets"), SYSTEM_PACK.into()]
+    );
+    assert_eq!(search_path_from(env(&[])), [PathBuf::from(SYSTEM_PACK)]);
+}
+
+#[test]
+fn a_name_one_pack_lacks_comes_from_the_next_pack() {
+    let first = fixture();
+    let second = fixture();
+    fs::remove_file(first.path().join("icons/folder/32.png")).unwrap();
+    fs::remove_dir_all(first.path().join("cursors/fixture")).unwrap();
+    fs::remove_file(first.path().join("icons/symbol.house/symbol.svg")).unwrap();
+    let a = Assets::from_dirs(&[first.path().to_path_buf(), second.path().to_path_buf()]);
+    assert_eq!(raster(&a, "folder", 20).unwrap().0, second.path().join("icons/folder/32.png"));
+    assert_eq!(raster(&a, "folder", 16).unwrap().0, first.path().join("icons/folder/16.png"));
+    assert_eq!(sources(&a, "symbol.house", 16), [IconSource::Symbol(second.path().join("icons/symbol.house/symbol.svg"))]);
+    assert_eq!(a.cursor_theme().unwrap().search_dir, second.path().join("cursors"));
+    assert_eq!(a.roots().collect::<Vec<_>>(), [first.path(), second.path()]);
+}
+
+#[test]
+fn absent_and_unusable_packs_are_skipped_and_bad_entries_dropped() {
+    let good = fixture();
+    let invalid = pack("{", &[]);
+    let future = pack(r#"{"version": 3}"#, &[]);
+    let partial = pack(r#"{"version": 2, "icons": {"Folder": {"svg": "x.svg"}, "computer": {"svg": "../x.svg"}}, "future_key": 1}"#, &[]);
+    let absent = good.path().join("no-such-pack");
+    let dirs = [absent, invalid.path().to_path_buf(), future.path().to_path_buf(), partial.path().to_path_buf(), good.path().to_path_buf()];
+    let a = Assets::from_dirs(&dirs);
+    assert_eq!(a.roots().collect::<Vec<_>>(), [partial.path(), good.path()]);
+    assert_eq!(a.font_family(FontRole::Ui), Some("Fixture Sans"));
+    assert!(sources(&a, "computer", 16).is_empty());
+}
+
+#[test]
+fn a_fonts_directory_that_cannot_be_read_gives_no_fonts_and_is_reported() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = fixture();
+    fs::set_permissions(d.path().join("fonts"), fs::Permissions::from_mode(0o000)).unwrap();
+    let unreadable = fs::read_dir(d.path().join("fonts")).is_err();
+    let read = Assets::read_pack(d.path());
+    fs::set_permissions(d.path().join("fonts"), fs::Permissions::from_mode(0o755)).unwrap();
+    if !unreadable {
+        return; // running as root: every directory is readable
+    }
+    let (a, notes) = read.unwrap();
+    assert_eq!(a.fonts(), [FontSource::Builtin]);
+    assert!(notes.iter().any(|n| n.contains("the pack's fonts are not used")), "{notes:?}");
+}
+
+#[test]
+fn the_built_in_fallback_is_the_embedded_font_and_nothing_else() {
+    let a = Assets::builtin();
+    assert!(sources(&a, "folder", 16).is_empty() && sources(&a, "symbol.house", 16).is_empty());
+    assert_eq!((a.cursor_theme(), a.wallpaper_path(false), a.font_family(FontRole::Ui)), (None, None, None));
+    assert_eq!(a.fonts(), [FontSource::Builtin]);
+    assert_eq!(&BUILTIN_FONT[..4], &[0, 1, 0, 0], "a TrueType font");
+}
+
+#[test]
+fn the_strict_check_rejects_with_a_reason() {
+    let cases = [
+        (MANIFEST.replace("\"version\": 1", "\"version\": 3"), "contract version 3"),
+        (MANIFEST.replace("\"ui\"", "\"display\""), "display"),
+        (MANIFEST.replace("\"folder\"", "\"Folder\""), "invalid semantic icon name"),
+        (MANIFEST.replace("\"wallpapers/default.png\"", "\"../x.png\""), "wallpaper"),
+        (MANIFEST.replace("\"fixture\"", "\"a/b\""), "theme name"),
+        (MANIFEST.replace("[16, 32, 128]", "[]"), "icons.folder"),
+        (MANIFEST.replace("\"version\": 1,", "\"version\": 1, \"colour\": 1,"), "unknown key \"colour\""),
+        ("{".to_string(), "EOF"),
+    ];
+    for (text, needle) in cases {
+        let d = pack(&text, &FILES);
+        touch(d.path(), "fonts/a.ttf");
+        let msg = Assets::open(d.path()).unwrap_err().to_string();
+        assert!(msg.contains(needle), "{needle}: {msg}");
+    }
+    let empty = tempfile::tempdir().unwrap();
+    assert!(Assets::open(empty.path()).unwrap_err().to_string().contains("manifest.json"));
+}
+
+#[test]
+fn the_strict_check_names_a_file_the_manifest_names_but_lacks() {
+    for rel in ["icons/folder/32.png", "icons/symbol.house/symbol.svg", "wallpapers/default.png", "cursors/fixture", "fonts/a.ttf"] {
+        let d = fixture();
+        let p = d.path().join(rel);
+        if p.is_dir() {
+            fs::remove_dir_all(&p).unwrap()
+        } else {
+            fs::remove_file(&p).unwrap()
+        }
+        if rel == "fonts/a.ttf" {
+            fs::remove_file(d.path().join("fonts/b.otf")).unwrap();
+        }
+        let msg = Assets::open(d.path()).unwrap_err().to_string();
+        assert!(msg.contains("missing"), "{rel}: {msg}");
+    }
+}

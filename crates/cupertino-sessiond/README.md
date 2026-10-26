@@ -1,0 +1,207 @@
+# cupertino-sessiond
+
+The session manager: the root-owned half of the login. It stands in for the console role of the design's login window and
+replaces greetd. The design is; this file says
+what is built.
+
+The manager owns `/run/cupertino-login/greeter.sock`, where the login screen (`cupertino-login --greeter`, an unprivileged
+compositor client) draws the picker and sends passwords. It starts the login screen's compositor, and later one worker per
+authentication attempt and per session. It links no rendering, font, image or Wayland code, and decodes nothing the screen sends
+beyond the typed messages of [`cupertino-login-ipc`](../../models/cupertino-login-ipc/README.md).
+
+## Service
+
+| | |
+|---|---|
+| Runs as | root (the main process and the workers until they drop privileges) |
+| Binary | `cupertino-sessiond` (feature `app`): the manager, or with the argument `worker` one worker, started with `exec` from `/proc/self/exe` |
+| Configuration | [`/etc/cupertino/login.conf`](../../foundation/cupertino-defaults/src/login.rs) (`CUPERTINO_LOGIN_CONF` overrides the path); a bad or missing file ends the manager |
+| Socket | `/run/cupertino-login/greeter.sock`, mode 0600, owned by `greeter-user`; one connection at a time; `SO_PEERCRED` uid must be the greeter's |
+| Bus | `org.cupertino.LoginManager1` on the system bus, root-owned (policy: `org.cupertino.conf`); see "The bus interface" |
+| Unit file (QEMU image) | [`cupertino-login.service`] |
+| Image files | [`login.conf`], PAM services `cupertino-greeter`, `cupertino-session` and `cupertino-autologin`, [sysusers] |
+
+**The package's unit** (`cupertino-login.service`, `Alias=display-manager.service`) differs from the harness's in two lines only:
+`Conflicts=getty@tty1.service` and the alias (`Type=notify`: the manager sends `READY=1` once its socket listens, the login screen's
+session is starting and the bus name is taken), because the harness keeps its getty session on VT 1.
+
+```
+[Unit]
+After=systemd-user-sessions.service systemd-logind.service dbus.socket getty@tty1.service
+Conflicts=getty@tty1.service
+[Service]
+Type=notify
+ExecStart=/usr/lib/cupertino/cupertino-sessiond
+Restart=always
+RestartSec=1
+KillMode=process
+LimitCORE=0
+RuntimeDirectory=cupertino-login
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=restart
+[Install]
+Alias=display-manager.service
+```
+
+`KillMode=process`: workers and the sessions they supervise survive a crash of the manager (losing every user's session
+because the small daemon crashed is the worst outcome available); the new process adopts them (see "What the manager does"). `RuntimeDirectoryPreserve=restart` keeps `/run/cupertino-login` (the once-per-boot auto login flag) over a restart or a crash and removes it on a stop. There are no sandboxing options: the workers' children inherit
+the unit's restrictions and a session must be able to run `sudo`.
+
+**PAM services.** `cupertino-greeter`: `auth` and `account` `pam_permit.so`, `session` `pam_loginuid.so` and `pam_systemd.so`.
+`cupertino-session`: `auth`, `account` and `session` include `system-local-login` (`pam_faillock`, `pam_unix`, `pam_loginuid`,
+`pam_systemd`, `pam_limits`, `pam_env`). `cupertino-autologin`: `auth` `pam_permit.so`, `account` and `session` include `system-local-login`. `cupertino-login` (the lock screen's) is unchanged. **Accounts.** `u cupertino-greeter -
+"Cupertino login screen" / /usr/bin/nologin` (sysusers; home `/` because the worker's `chdir($HOME)` must not fail and the
+account has no private directory), no group.
+
+## `login.conf`
+
+One `key = value` per line, `#` starts a comment. Keys (`cupertino-defaults::login`): `vt` (1), `greeter-user`
+(`cupertino-greeter`), `greeter-command` and `session-command` (required, absolute program path, split at spaces),
+`hidden-users`, `deny-list`, `allow-list`, `hide-admin-users`, `show-other-users`, `restart-disabled`, `shut-down-disabled`,
+`sleep-disabled`, `power-off-disabled`, `retries-until-hint`, `auto-login` (an account name; off when absent: see "Auto login"). The filter and power keys are the login window preferences of the
+reference; they were options of `cupertino-login --greeter`.
+
+## What the manager does
+
+| Step | Detail |
+|---|---|
+| Start | `PR_SET_DUMPABLE` 0 and `RLIMIT_CORE` 0; read `login.conf`; resolve the greeter account (not root); bind the socket; hold `/dev/ttyN` of the login VT open (`VT_OPENQRY` skips a terminal something has open); start the greeter worker |
+| Greeter | the worker authenticates `cupertino-greeter` through PAM, opens a session of class `greeter` on the login VT, and runs `greeter-command` as that account with `CUPERTINO_LOGIN_SOCK` set |
+| Hello | the screen's first message must be `Hello` with this protocol version; the manager answers `Hello` and `Welcome` (roster, power items, `will_prompt`, hint setting). Anything else is refused and the connection closed |
+| Roster | (`logged_in` marks the accounts that have a session the manager started: see "Fast user switching") `/etc/passwd` rows with a uid in `UID_MIN..=UID_MAX` of `login.defs` (1000 and 60000 when unset) and a shell other than `nologin` or `false`; the filters of (`filter.rs`); at most 1024 rows and 1 MiB of pictures. Directory-service accounts are not listed; "Other…" reaches them |
+| Pictures | `~/.face` is read on a short-lived thread with `setfsuid(uid)`, `O_NOFOLLOW` and `O_NONBLOCK`, and `fstat` insisting on a regular file of that user of at most 256 KiB. Not decoded. A bad file means no picture, logged once per user per start |
+| Attempt | (an account that has a session already is only checked, see "Fast user switching") `Authenticate` names a listed account (it must be a row of the last list) or a typed name (validated again by `is_login_name`); anything else is answered `Denied` after 2 s, the time `pam_unix` takes for a wrong password (`pam_faildelay`; approximate). Otherwise the manager holds the first free terminal above the login VT (`VT_OPENQRY`; none free is `Busy`) and starts a worker with the PAM service `cupertino-session` and `session-command` from `login.conf`. The screen's choices never reach the worker's command, environment or terminal |
+| Conversation | the worker's prompts become `Prompt` events, its info and error text `Notice` events; the screen's `Answer` goes back to the worker. A prompt of any other style, or a prompt when no attempt is open, is answered with a cancel |
+| Outcome | `pam_authenticate` and `pam_acct_mgmt` map to `Denied` (`AUTH_ERR`, `USER_UNKNOWN`), `Locked` (`MAXTRIES`, and `AUTH_ERR` when a module printed a message before the first password prompt: `pam_faillock`'s `preauth` says "The account is locked due to 3 failed logins." and the stack goes on to ask and fail with `AUTH_ERR`, so the worker tells the lock-out from a wrong password by the conversation, not by the code; the text is not matched), `Expired` (`ACCT_EXPIRED`, `NEW_AUTHTOK_REQD`), `Refused` (`PERM_DENIED`), else `Internal` with the cause in the journal only |
+| Limits | at most 10 `Authenticate` per rolling 60 s (the 11th gets `Busy` and starts nothing; `limits::RateLimit`); an attempt that waits 60 s for the screen to answer a prompt, or for its worker to answer an answer or to open the session, is cancelled: the worker is killed and the screen gets `Internal` (or `Reset` once the attempt was accepted). The design has no back-off or lock-out on this class of machine, so these bound what a compromised screen costs and are not parity; the account lock-out is `pam_faillock`'s |
+| Cancel | before the attempt is accepted the worker is killed; once it is accepted the session starts regardless |
+| Session start | after `Accepted` the screen gets `SessionStarting { uid }`; the worker opens the session and reports `Started { session_id, leader, uid }`; the manager then closes its end of the channel (the worker supervises the session alone), reads whether logind left the new session inactive (a session on a terminal that is not in the foreground stays inactive) and calls `ActivateSession` |
+| Ready gate | the screen keeps its spinner until the session's agent calls `SessionReady` on the bus, at most 15 s; then the manager sends `Reset` and `Users`. **After the switch, not before** (deviation from the design, which gates the activation): the compositor of a session on a background terminal waits for the terminal and starts none of its shell processes (`backend/udev.rs`), so the agent can announce nothing until the session is active. A session that was not announced in 15 s is logged (`sent no ready signal within 15 s`) and the screen is reset all the same |
+| Power | `Request::Power` from the screen and `RequestPower` on the bus end in one function: an item the settings hide is `Disabled` (the screen only), a restart or shut down while another user's session is open is `OtherUsersLoggedIn` (the screen: any user session, unless an administrator authenticated, see "Administrator's authentication"; an agent: a session of another user, unless the caller is a member of `wheel`), else logind's `RebootWithFlags`, `PowerOffWithFlags` or `SuspendWithFlags` with `ROOT_CHECK_INHIBITORS`, so a block inhibitor of another user stops it (`Inhibited`; logind ignores the requester's own inhibitors, root's included) |
+| Session ends | the leader exits, so its worker closes the PAM session and exits; the manager then calls `TerminateSession` for what the leader left in the session (logind removes a session only when its scope is empty) and watches logind's `SessionRemoved`. On the removal of a session it started it releases the terminal and reads the seat's `ActiveSession`: with none (the session that ended was the one in the foreground) it activates the login screen's logind session and sends the screen `Reset` and `Users` (an attempt that is not accepted yet ends first); otherwise the session ended in the background and the screen only gets `Users` (what is typed on it stays). A session that dies with its server is therefore an ended session; the user's server is not restarted (the design's session ends too) |
+| Fast user switching | `UserRow.logged_in` is true for an account with a session in the manager's table (deviation from the design, which reads logind's `ListSessions`: a getty's session of the same user is no session of the manager's and has no agent to unlock). `Authenticate` for such an account runs the worker in `Mode::Verify`: `pam_authenticate` and `pam_acct_mgmt`, then the transaction ends with the worker (no credentials, no session). On `Accepted` the manager sends the agent registered by `SessionReady` the unicast signal `Unlock` (the person has just proved the password: unlock result 4,), activates the session and shows the login screen again for the next time. `SwitchToLoginWindow` (bus, from the foreground session's agent after it locked its screen) activates the login screen's session and resets the screen. While logind has not made the target the foreground (polled every 100 ms, 5 s at most) a second `SwitchToLoginWindow` is ignored and an `Authenticate` is `Busy` |
+| Adoption | at start the manager lists the sessions of `seat0` in logind and adopts those a PAM service of its own opened (`Service` is `cupertino-greeter` for a `greeter` session of the greeter account, `cupertino-session` or `cupertino-autologin` for a `user` session; a getty's session is not ours, and a `closing` one is skipped; deviation from the design, which adopts every `user` session, so that the roster and the bus interface treat the harness's getty session as before). The login screen's session is not started again; a user's goes into the session table (ready, its terminal held again, `VTNr`) and its agent registers by calling `SessionReady` again, which the agent does when the manager's bus name gets a new owner. An adopted worker is not a child of this process, so nothing reports that the session's command exited: logind's `Leader` is the worker that opened the session, and its process descriptor (`pidfd_open`) tells the manager the worker ended, which happens when the command exited and the PAM session is closed. Then the manager calls `TerminateSession` for what is left, as it does after a worker it started, and logind's `SessionRemoved` does the rest (return to the login screen, or a new login screen session after 1 s for an adopted one, within the five-in-30-s rule). A leader that is gone at adoption has its session terminated |
+| Auto login | see "Auto login" |
+| Administrator's authentication | `will_prompt` in `Welcome` and `Users` is true while logind has a user session (the same rule as the refusal above): the screen titles Restart and Shut Down with an ellipsis and, instead of sending `Power`, sends `AuthenticatePower { name, action }`. The manager answers a name that is no member of `wheel`, an invalid name, an `action` of `Sleep` or a hidden item like a wrong password (`Denied` after 2 s; `Refused` for the last two); otherwise it runs a `Mode::Verify` worker for the typed account (PAM service `cupertino-session`, so `pam_faillock` counts the failures). On `Accepted` it answers `Result`, then carries the action out as `Requester::Administrator` (the open sessions no longer refuse it; the settings and block inhibitors still do) and, when logind refuses, sends `PowerRefused` and `Reset`. The in-session agent has no such dialog (the manager takes no secret on the bus): a non-administrator's agent is still refused with `OtherUsersLoggedIn`, and the person can switch to the login window and use the dialog there. The password and the name are never logged |
+| Greeter ends | its worker exits and the login screen's session is started again after 1 s; five exits within 30 s stop that (logged, the manager stays up, the other terminals keep their getty) |
+| logind | the manager ends with failure when logind's signal stream ends (logind restarted); systemd restarts the unit. The design's single in-process reconnect is not built |
+
+## Auto login
+
+`auto-login = <account>` in `login.conf` logs that account in once per boot without a password (the semantics are unknown in the
+reference and the design is 2.10; off by default, user decision 2026-10-25). It
+skips authentication, so:
+
+1. **The settings file must be trusted** (`auto_login::settings_are_trusted`): a regular file (a link is refused) that root owns and
+   that group and others cannot write, in a directory with the same properties. Otherwise the manager logs `auto login refused: <reason>`
+   and starts as if the key were absent (the login screen is the safe state; the manager does not stop).
+2. **Once per boot.** When the login screen's session is up (started, or adopted after a restart) the manager takes the claim
+   `/run/cupertino-login/auto-login-done` (`O_CREAT|O_EXCL`, so a crash racing a restart cannot log in twice). The file lives on a
+   tmpfs and survives a restart or a crash of the manager (`RuntimeDirectoryPreserve=restart`), so those, and a log out, do not log in
+   again. The claim is taken before the login, so a failed auto login is not repeated either.
+3. **The account** must be an ordinary account with a login shell (the roster's rule: `UID_MIN..=UID_MAX`, not `nologin`), and must have no
+   session already. **Deviation from the design:** the design skips auto login when any user session exists; the check here is the
+   account's own sessions, because the QEMU harness keeps a getty session of its own account on VT 1 for the other checks. A
+   session of another account does not prevent it.
+4. The worker runs as `Mode::Open` with the PAM service `cupertino-autologin` and the same session command, terminal allocation,
+   privilege drop and ready gate as a typed login; the login screen is told nothing (no attempt is open).
+
+If the login screen's session cannot be started (five failures in 30 s) the auto login runs at that point instead, so a broken
+login screen does not keep the computer from its user.
+
+## The bus interface
+
+`org.cupertino.LoginManager1` at `/org/cupertino/LoginManager1` (`service.rs`). Every method authorises the caller's process, and
+none takes a session argument: it acts for the caller's own session. The bus daemon names the process (`GetConnectionCredentials`),
+logind names its session (`GetSessionByPID`) and `caller::authorise` decides, the rule of `cupertino-powerd` (no polkit,
+ARCHITECTURE rule 5). A caller passes when its session is of class `user` on `seat0`, the process runs as the session's user (root
+inside a user's session is refused: it has no use for the manager), and for `RequestPower` the session is in the foreground.
+
+| Method | Needs | Does |
+|---|---|---|
+| `RequestPower(s) | the active user session | `restart`, `shut-down` or `sleep`; errors `AccessDenied`, `InvalidArgs`, `OtherUsersLoggedIn`, `Inhibited`, `Failed` (all `org.cupertino.LoginManager1.Error.*) |
+| `SwitchToLoginWindow | the active user session | the login screen takes the console; the agent has locked its screen first. Ignored while a switch is under way. Errors: `Failed` (no login screen, logind refused) |
+| `SessionReady | a user session, active or not | the session's agent is up: the manager registers the caller's unique name as the session's agent and ends the ready gate. A session the manager did not start (a getty's) gets `UnknownSession`; a repeated call (the agent restarted) registers the new caller |
+
+**Signal `Unlock()`**, sent by the manager to one agent only: the unique name that called `SessionReady` for the session (a `dbus-daemon` delivers a message with a destination to that destination alone). The agent subscribes with the manager's name as the sender, and only root may own that name, so no other process can send it. A session without a registered agent is only activated (`session N has no agent to unlock it`).
+
+The methods run on the connection's thread and wait at most 10 s for the main loop's answer (the loop never blocks longer than a
+logind call). The main loop is fed by a channel and an eventfd, the way logind's signals are.
+
+**polkit stays in the QEMU image (deviation).** The design removes it in this unit. With polkit masked logind answers `access denied`
+for what the compositor and the agent still ask of it as an unprivileged user: `Seat.SwitchTo` (Ctrl+Alt+Fn; measured: `switching the
+virtual terminal failed ... AccessDenied`), the server's system sleep and `Inhibit` (measured: `Failed to inhibit: Access denied`).
+The first two belong to `cupertino-seat` and `cupertino-server`, which this unit does not own. The agent's restart, shut down and
+sleep no longer call logind; removing polkit needs a `SwitchVt` method here (greeter and user sessions), the server's sleep through
+`RequestPower`, and a brokered inhibitor (a fixed set of two locks, returned as a descriptor), in that order.
+
+## The worker
+
+`cupertino-sessiond worker` runs the privileged path in this order and no other:
+
+1. `PR_SET_DUMPABLE` 0, `RLIMIT_CORE` 0.
+2. (`Mode::Verify` ends after step 3: the account has a session, and only the password is checked.) `pam_start` with the service and login of the manager's `Begin`, `PAM_TTY`, `pam_authenticate`, `pam_acct_mgmt`.
+3. `XDG_SESSION_TYPE=wayland`, `XDG_SESSION_CLASS`, `XDG_SEAT=seat0`, `XDG_VTNR` into the PAM environment with `pam_putenv`;
+   `pam_setcred(ESTABLISH_CRED)`, `pam_open_session` (`pam_systemd` registers the logind session and exports `XDG_SESSION_ID`,
+   `XDG_RUNTIME_DIR`).
+4. `fork`. The child: `setsid`, `initgroups`, `setgid`, `setuid`, then it checks that `setuid(0)` fails (and that the real and
+   effective ids are the user's), `chdir($HOME)` (a failure is an error, no fallback to `/`), `umask(022)`, default signal
+   dispositions and an empty mask (this resets the ignored `SIGPIPE`), standard input from `/dev/null`, `close_range` above
+   descriptor 2, `execve` with exactly the PAM environment, `HOME`, `USER`, `LOGNAME`, `SHELL`, `PATH` (`ENV_PATH` of
+   `login.defs`) and the configured extras. A failure in the child comes back through a close-on-exec pipe.
+5. The worker reports `Started { session_id, leader, uid }`, waits for the leader (it forwards `SIGTERM`, `SIGHUP` and `SIGINT` to
+   it), closes the PAM session and exits with the leader's status.
+
+The worker runs no threads (so `fork` is safe) and makes no D-Bus calls. It starts with an empty environment and its only
+channel is one socketpair end as standard input.
+
+## Logging rule
+
+A log line never holds what the screen sent. Decoding errors are logged by class (`DecodeError::class`), listed accounts by uid,
+a typed name not at all (`attempt for a typed name`: people type passwords there), and `ChannelError` / `FrameError` /
+`DecodeError` carry no message content. PAM modules log account names themselves.
+
+## Security
+
+| Measure | Where | Proved by |
+|---|---|---|
+| No core file, no ptrace attach while root: `PR_SET_DUMPABLE` 0 and `RLIMIT_CORE` 0 (and `LimitCORE=0` in the unit) | manager start, worker step 1 | by reading; the unit |
+| Only the greeter account connects, one connection at a time: mode 0600 on the socket, `SO_PEERCRED` uid check | `manager::bind`, `accept` | unit test `the_socket_is_private_to_its_owner`; QEMU `29-auth-failure` (the guest account cannot connect, root is refused by the peer check, a second connection is refused) |
+| Frame caps: 2 KiB from the screen, checked on the length prefix before any body is read; 4 MiB to it; the decoder asks for exact amounts | `cupertino-login-ipc::Decoder`, `Channel` | `cupertino-login-ipc` `tests/protocol.rs` (any chunking, over the cap, zero length, overrun, encode over the cap); `channel` tests; QEMU `29` (a 3 KiB frame closes the connection) |
+| A strict state machine and `deny_unknown_fields`: any unknown type or field, any message the state does not allow, closes the connection; an `Answer` needs an open prompt | `State::next`, `screen_readable` | `tests/protocol.rs` (every refused pair); QEMU `29` |
+| No secret in a log, panic or `Debug` output: `Secret` prints `<secret>`, decode errors keep only their class, the wire form is hex so the JSON parser never copies it into its unzeroed scratch buffer, buffers are `Zeroizing` (decoder bodies, encoders, the 4 KiB read buffer after each read) | `cupertino-login-ipc`, `Channel` | `tests/protocol.rs` (`a_secret_round_trips_and_its_text_never_shows_in_debug_output`, `a_malformed_secret_is_a_decode_error_that_does_not_echo_it`, `a_decode_error_names_the_class_and_never_the_value`); `channel` test `an_error_never_holds_the_text_that_caused_it`; QEMU `29` (five typed or sent strings are not in the journal) |
+| No `unwrap`, `expect` or `panic! on anything from the socket or a worker: every failure closes the connection or fails the attempt | `manager`, `channel` | by reading; the tests above |
+| Account input: a listed uid must be a row of the last list; a typed name passes `is_login_name`; anything else is `Denied` after the time a wrong password takes (no account enumeration) | `authenticate` | `tests/protocol.rs` (`typed_account_names_follow_the_limit_of_the_name_entry`); QEMU `29` (a typed unknown account: same line, 2.3 s against 1.8 s) |
+| Attempt limit and timeout | `limits`, `abort_attempt` | `limits` test; QEMU `29` (the 11th attempt is `Busy`; a prompt left alone is cancelled after 60 s) |
+| The worker starts with an empty environment (`env_clear`), one socketpair end as standard input, no other descriptor (all are close-on-exec) | `spawn_worker` | by reading |
+| The session leader gets exactly the PAM environment, the login variables and the configured extras; its descriptors above 2 are closed, standard input is `/dev/null`, signal dispositions and mask are reset | `worker::spawn_leader` | QEMU `11-login-session` reads `/proc/<leader>/environ` (the PAM and login variables are there, the manager's `INVOCATION_ID` and the rest are not) |
+| The privilege drop is `initgroups`, `setgid`, `setuid`, then `setuid(0)` must fail (and the real and effective ids must be the user's); `chdir($HOME) failing is an error | `worker::become_user_and_exec` | QEMU `11-login-session` reads `/proc/<leader>/status` (all four ids are the account's, no capability left) |
+| The screen never chooses a command, an environment, a terminal, a class or an uid it was not shown | `ToWorker::Begin` is built from `login.conf` and the manager's own allocation | by the protocol: there is no message for any of them |
+| Every bus method is authorised by the caller's process: a process in no session, in a session of another class or seat, in a background session (for `RequestPower`) or running as another user than its session is refused with `AccessDenied` before anything reaches the main loop; `SessionReady` also needs the session to be one the manager started for that uid | `caller::authorise`, `service::LoginManager::caller` | `caller` tests (every refusal and the one pass); `tests/service.rs` on a private bus (denials reach no `Call`, refusals come back by error name); QEMU `29` (a service outside every session and root inside the session are refused, the harness's getty session is `UnknownSession`) |
+| `Unlock` goes to the one agent that announced the session, and the agent unlocks only on a signal from the owner of the manager's name | `service::unlock`, `login_manager::watch_unlock` | `tests/service.rs` (a signal sent to one connection does not reach another); QEMU `30` (the wrong password leaves the session locked, the right one unlocks it) |
+| A power action is checked by the manager, not trusted from the caller: the settings, other users' sessions (from logind, not from the manager's own table), the administrator rule and block inhibitors with root honouring them | `Manager::power` | QEMU `29` (`Disabled`, `OtherUsersLoggedIn` on the socket, `Inhibited` on the bus), `28` (an agent of a non-administrator is refused while another user's session is open) |
+| A restart or shut down that ends other users' sessions needs the person at the login screen to be an administrator who proves her password: the account must be in `wheel`, the password goes through PAM like a login's, and the action is the manager's own call to logind (honouring block inhibitors) | `Manager::authenticate_power`, `caller::may_end_other_sessions` | `caller` tests (every asker); QEMU `30` (a non-administrator with her right password, an administrator with a wrong one, and an administrator with hers while a program blocks shutdown: only the last is authorised, and logind refuses it) |
+| Auto login needs a settings file only root can change, and happens once: the file and its directory are root-owned and not group- or world-writable, the file is not a link, the claim is exclusive and kept over restarts | `auto_login` | `auto_login` tests (every refusal, the exclusive claim); `cupertino-defaults` test (the key); QEMU `32-auto-login` (a 0664 file is refused and logs nobody in; a restart and a log out log nobody in again) |
+| Only sessions a PAM service of the manager opened are adopted, and the login screen's only when it is the greeter account's | `Manager::adopt_sessions` | QEMU `31-login-crash` (adopted), `29` (the getty's session stays `UnknownSession`) |
+| A picture file is read as the user (`setfsuid`), without following links, from a regular file of that user of at most 256 KiB | `picture` | `picture` tests (symlink, directory, foreign owner, size cap) |
+
+## Modules
+
+| Module | Contents |
+|---|---|
+| `users` | `Account`, `login_accounts`, `admin_logins`, `by_name`, `by_uid`, `session_path` |
+| `filter` | `Filters::apply`: the hidden, admin, allow and deny lists and the "Other…" rule |
+| `roster` | `build` (rows, pictures within the budget, the row cap), `power_menu` ('s rule), `filters` |
+| `picture` | `read(uid, home)`: the `setfsuid` read |
+| `auto_login` | `settings_are_trusted` (the mode and owner rule), `claim` (the once-per-boot flag) |
+| `caller` | `CallerSession`, `Need`, `Denial`, `authorise`: who may call the bus interface; `Asker`, `may_end_other_sessions`: who may restart or shut down while other sessions are open (pure) |
+| `channel` | `Channel`: one read per call over a socket, frames of `cupertino-login-ipc` |
+| `worker_protocol` | `ToWorker::Begin` (with `Mode::{Open, Verify}`), `FromWorker::{Started, Failed}`, `SessionClass` |
+| `manager`, `worker`, `vt`, `logind` (`SeatSession`: the sessions adoption reads), `service` (feature `app`) | the main loop, the PAM transaction and privilege drop, the terminals, the logind calls, the bus interface |
+
+## Tests
+
+`cargo test -p cupertino-sessiond --features app`: the roster (filters, picture budget, row cap, the `logged_in` mark, power rule), the account
+database parsers, the picture read (missing file, symlink, directory, foreign owner, size cap), auto login's mode rule and exclusive claim, the socket's mode, the authoriser and the rule for ending other users' sessions
+(`caller`) and the bus interface on a private `dbus-daemon` (skipped when the binary is missing; `SwitchToLoginWindow` and the unicast `Unlock` included). The manager and
+the worker run as root in the QEMU harness (`11-login-session`, `12-greeter-picker`, `14-greeter-filters`, `28`, `30-two-sessions`, `31-login-crash`, `32-auto-login`).

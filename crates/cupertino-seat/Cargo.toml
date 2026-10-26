@@ -1,0 +1,16 @@
+[package]
+name = "cupertino-seat"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Seat session over systemd-logind's D-Bus protocol without libseat or libsystemd: TakeControl, TakeDevice with pause/resume fd handoff, VT switching, and a Smithay Session plus calloop notifier"
+
+[package.metadata.cupertino]
+layer = "platform"
+
+[dependencies]
+cupertino-devices = { path = "../cupertino-devices" }
+rustix = { version = "1", features = ["fs"] }
+smithay = { version = "0.7", default-features = false, features = ["backend_session"] }
+tracing = "0.1"
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }

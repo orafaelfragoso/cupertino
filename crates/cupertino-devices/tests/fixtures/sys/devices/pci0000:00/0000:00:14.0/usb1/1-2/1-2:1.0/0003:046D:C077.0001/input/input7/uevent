@@ -1,0 +1,5 @@
+PRODUCT=0003/0/0/0
+NAME="USB Optical Mouse"
+PROP=0
+EV=17
+MODALIAS=input:b0003

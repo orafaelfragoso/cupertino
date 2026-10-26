@@ -1,0 +1,136 @@
+//! Shader validation with naga: the WGSL sources, and the GLSL ES 3.00 ports.
+//!
+//! naga's GLSL front end only accepts the Vulkan dialect (`#version 450`, explicit locations,
+//! bindings and separate texture/sampler objects), so the ES 3.00 sources are mechanically rewritten before parsing (`to_naga_dialect`).
+//! The rewrite changes nothing but the version line, `gl_VertexID`, the `precision` statements
+//! (naga does not implement them), and adds location/binding qualifiers and splits each into a texture and a sampler; it proves that the ported sources parse, type-check and validate.
+
+use naga::front::glsl::{Frontend, Options};
+use naga::valid::{Capabilities, ValidationFlags, Validator};
+use naga::ShaderStage;
+
+fn validate_wgsl(name: &str, src: &str, entries: &[&str]) {
+    let module = naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
+    Validator::new(ValidationFlags::all(), Capabilities::empty()).validate(&module).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    for want in entries {
+        assert!(module.entry_points.iter().any(|e| e.name == *want), "{name}: missing entry point {want}");
+    }
+}
+
+#[test]
+fn wgsl_shaders_validate() {
+    validate_wgsl("passes.wgsl", cupertino_glass::renderer::PASSES_WGSL, &["vs_fullscreen", "fs_downsample", "fs_blur", "fs_color", "fs_blit"]);
+    validate_wgsl("material.wgsl", cupertino_glass::renderer::MATERIAL_WGSL, &["vs_region", "fs_material"]);
+    validate_wgsl("vibrant.wgsl", cupertino_glass::renderer::VIBRANT_WGSL, &["vs_vibrant", "fs_vibrant"]);
+}
+
+fn to_naga_dialect(src: &str, fragment: bool) -> String {
+    let (mut next_in, mut next_out, mut next_binding) = (0, 0, 0);
+    let mut samplers: Vec<String> = Vec::new();
+    let mut out = String::new();
+    for line in src.lines() {
+        let t = line.trim_start();
+        if t.starts_with("#version") {
+            out.push_str("#version 450 core\n");
+            continue;
+        }
+        if t.starts_with("precision ") {
+            continue;
+        }
+        let mut l = line.replace("gl_VertexID", "gl_VertexIndex");
+        if t.starts_with("layout(std140) uniform") {
+            l = l.replacen("layout(std140)", &format!("layout(std140, set = 0, binding = {next_binding})"), 1);
+            next_binding += 1;
+        } else if let Some(rest) = t.strip_prefix("uniform sampler2D ") {
+            let name = rest.trim_end_matches(';').trim();
+            samplers.push(name.to_string());
+            l = format!("layout(set = 0, binding = {next_binding}) uniform texture2D {name}_tex;\nlayout(set = 0, binding = {}) uniform sampler {name}_smp;", next_binding + 1);
+            next_binding += 2;
+        } else if t.starts_with("in ") && fragment {
+            l = format!("layout(location = {next_in}) {t}");
+            next_in += 1;
+        } else if t.starts_with("out ") && !fragment {
+            l = format!("layout(location = {next_out}) {t}");
+            next_out += 1;
+        }
+        if !t.starts_with("uniform sampler2D ") {
+            for name in &samplers {
+                l = replace_word(&l, name, &format!("sampler2D({name}_tex, {name}_smp)"));
+            }
+        }
+        out.push_str(&l);
+        out.push('\n');
+    }
+    out
+}
+
+fn replace_word(line: &str, word: &str, with: &str) -> String {
+    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut out = String::new();
+    let mut rest = line;
+    while let Some(i) = rest.find(word) {
+        let before = rest[..i].chars().next_back();
+        let after = rest[i + word.len()..].chars().next();
+        out.push_str(&rest[..i]);
+        if before.is_none_or(|c| !is_ident(c)) && after.is_none_or(|c| !is_ident(c)) {
+            out.push_str(with);
+        } else {
+            out.push_str(word);
+        }
+        rest = &rest[i + word.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn validate_glsl(name: &str, src: &str, fragment: bool) {
+    assert!(src.starts_with("#version 300 es"), "{name}: not GLSL ES 3.00");
+    assert!(!src.contains("layout(binding"), "{name}: ES 3.00 has no binding qualifiers");
+    let shim = to_naga_dialect(src, fragment);
+    let stage = if fragment { ShaderStage::Fragment } else { ShaderStage::Vertex };
+    let module = Frontend::default().parse(&Options::from(stage), &shim).unwrap_or_else(|e| panic!("{name}: {e:?}\n{shim}"));
+    Validator::new(ValidationFlags::all(), Capabilities::empty()).validate(&module).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    assert!(module.entry_points.iter().any(|e| e.name == "main" && e.stage == stage), "{name}: no main entry point");
+}
+
+#[test]
+fn gles_shaders_parse_and_validate() {
+    for (name, fragment, src) in cupertino_glass::gles::ALL {
+        validate_glsl(name, src, fragment);
+    }
+}
+
+#[test]
+fn gles_files_on_disk_match_embedded_sources() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shaders/gles");
+    for (name, _, src) in cupertino_glass::gles::ALL {
+        let disk = std::fs::read_to_string(dir.join(name)).unwrap();
+        assert_eq!(disk, src, "{name}");
+    }
+    let count = std::fs::read_dir(&dir).unwrap().count();
+    assert_eq!(count, cupertino_glass::gles::ALL.len(), "every file in shaders/gles is registered");
+}
+
+#[test]
+fn gles_sources_use_only_es300_features() {
+    for (name, _, src) in cupertino_glass::gles::ALL {
+        for banned in ["imageLoad", "std430", "#version 4", "gl_VertexIndex", "texture2D(", "textureSample"] {
+            assert!(!src.contains(banned), "{name} contains {banned}");
+        }
+        assert!(!src.lines().any(|l| l.trim_start().starts_with("buffer ") || l.contains("layout(local_size")), "{name} uses compute-only features");
+    }
+}
+
+#[test]
+fn gles_and_wgsl_agree_on_uniform_layout() {
+    // The same Rust structs are uploaded for both targets: the member counts must match.
+    for (wgsl, glsl, names) in [
+        (cupertino_glass::renderer::MATERIAL_WGSL, cupertino_glass::gles::MATERIAL_FRAG, ["rect", "shape", "info", "sizes", "tint", "fills"]),
+        (cupertino_glass::renderer::VIBRANT_WGSL, cupertino_glass::gles::VIBRANT_FRAG, ["rect", "uv", "sizes", "mode", "c0", "c1"]),
+    ] {
+        let wb: Vec<&str> = wgsl.lines().filter(|l| names.iter().any(|n| l.trim_start().starts_with(&format!("{n}:")))).collect();
+        let gb: Vec<&str> = glsl.lines().filter(|l| names.iter().any(|n| l.trim_start().starts_with(&format!("vec4 {n}")))).collect();
+        assert_eq!(wb.len(), names.len());
+        assert_eq!(gb.len(), names.len());
+    }
+}

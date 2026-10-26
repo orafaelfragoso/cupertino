@@ -1,0 +1,8 @@
+[Unit]
+Description=Cupertino netd
+Wants=iwd.service
+After=dbus.socket iwd.service
+
+[Service]
+ExecStart=/usr/bin/cupertino-netd --resolv-conf /run/cupertino/resolv.conf
+RuntimeDirectory=cupertino

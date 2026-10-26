@@ -1,0 +1,47 @@
+{
+  "size": [
+    3840,
+    2400
+  ],
+  "quality": 90,
+  "crop": "center-cover",
+  "encoder": "Version: ImageMagick 7.1.2-34 Q16-HDRI x86_64 c5d4ca8a0:20261014 https://imagemagick.org",
+  "files": [
+    {
+      "file": "aerial-photograph-of-river-and-mountain-2H7DvJAPq8Q.jpg",
+      "original_sha256": "6c20237492983d30f4eebff08ebf7209fe1dc8278c9e5d67a3832cf0d1fa23e7",
+      "sha256": "d6569c5c52f4fa4cd463f4a2b10c2836fc2bbe6c73fe66dca7b59d8180b12f68",
+      "size": 4748177
+    },
+    {
+      "file": "aerial-photography-of-seashore-OJ74pFtrYi0.jpg",
+      "original_sha256": "db26c61040fee02cf4f7e3277970925d1ce9fa9ded2c1d9a8b519d075f21be7d",
+      "sha256": "6b7583eb32da4eb827dfd75999f872bb1b0396912044a5a560e2a02ad5ae780e",
+      "size": 2258607
+    },
+    {
+      "file": "landscape-photography-of-mountain-under-cloudy-sky-between-body-of-water-at-daytime-2oFdVd00xOg.jpg",
+      "original_sha256": "02ab4f5871037edcb3406611d90a9ddcced8cc9485ca47b29199ff653dcc3c13",
+      "sha256": "5509b31386931fbd3dc74404451cafcb6a5d374529a0bff405f7b5698fa007fa",
+      "size": 2552318
+    },
+    {
+      "file": "silhouette-of-man-standing-on-rock-while-looking-in-sky-0LU4vO5iFpM.jpg",
+      "original_sha256": "164788a3c1932fd8a47165cbca2c068f7ffaf187a4077af4710367b4fd00507b",
+      "sha256": "839b3b0e7eac83bb97ff0e20fb6ea8a16bc7e28bb90fdeaf46fb3eea78accf59",
+      "size": 3507339
+    },
+    {
+      "file": "silhouette-of-mountain-peak-8NuHwPbO62k.jpg",
+      "original_sha256": "b1b9aaad022b10709c283d524d5e2b49d4e43680ff89e85f06506f4462a638ed",
+      "sha256": "d296ee18d7e05a01e0a3be824bd587d9e747b266ee7e0ec597b6446e13fc1b50",
+      "size": 732406
+    },
+    {
+      "file": "trees-covering-snow-W3V2tQAZxPA.jpg",
+      "original_sha256": "20a46b8ea80ad40b90f8e87938d0309947bb16833b71be9b32c02481d3c009e6",
+      "sha256": "b94a3b8612929351875c291901e3e53998db6758736dd2e67c85352caa4357d2",
+      "size": 2788619
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "version": 2,
+  "name": "Cupertino default",
+  "credits": "wallpapers/credits.txt",
+  "fonts": {
+    "ui": {
+      "family": "Inter Variable",
+      "files": [
+        "fonts/InterVariable-subset.ttf"
+      ]
+    }
+  },
+  "icon_theme": {
+    "name": "Adwaita",
+    "map": "icon-map.toml"
+  },
+  "cursors": {
+    "theme": "macOS",
+    "path": [
+      "$XCURSOR_PATH",
+      "~/.local/share/icons",
+      "/usr/share/icons"
+    ]
+  },
+  "wallpapers": {
+    "default": {
+      "light": "wallpapers/trees-covering-snow-W3V2tQAZxPA.jpg",
+      "dark": "wallpapers/silhouette-of-mountain-peak-8NuHwPbO62k.jpg"
+    }
+  }
+}

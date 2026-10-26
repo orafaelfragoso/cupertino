@@ -7,7 +7,7 @@ what is built.
 The manager owns `/run/cupertino-login/greeter.sock`, where the login screen (`cupertino-login --greeter`, an unprivileged
 compositor client) draws the picker and sends passwords. It starts the login screen's compositor, and later one worker per
 authentication attempt and per session. It links no rendering, font, image or Wayland code, and decodes nothing the screen sends
-beyond the typed messages of [`cupertino-login-ipc`](../../models/cupertino-login-ipc/README.md).
+beyond the typed messages of [`cupertino-login-ipc`](../cupertino-login-ipc/README.md).
 
 ## Service
 
@@ -15,7 +15,7 @@ beyond the typed messages of [`cupertino-login-ipc`](../../models/cupertino-logi
 |---|---|
 | Runs as | root (the main process and the workers until they drop privileges) |
 | Binary | `cupertino-sessiond` (feature `app`): the manager, or with the argument `worker` one worker, started with `exec` from `/proc/self/exe` |
-| Configuration | [`/etc/cupertino/login.conf`](../../foundation/cupertino-defaults/src/login.rs) (`CUPERTINO_LOGIN_CONF` overrides the path); a bad or missing file ends the manager |
+| Configuration | [`/etc/cupertino/login.conf`](../cupertino-defaults/src/login.rs) (`CUPERTINO_LOGIN_CONF` overrides the path); a bad or missing file ends the manager |
 | Socket | `/run/cupertino-login/greeter.sock`, mode 0600, owned by `greeter-user`; one connection at a time; `SO_PEERCRED` uid must be the greeter's |
 | Bus | `org.cupertino.LoginManager1` on the system bus, root-owned (policy: `org.cupertino.conf`); see "The bus interface" |
 | Unit file (QEMU image) | [`cupertino-login.service`] |
@@ -114,7 +114,7 @@ login screen does not keep the computer from its user.
 `org.cupertino.LoginManager1` at `/org/cupertino/LoginManager1` (`service.rs`). Every method authorises the caller's process, and
 none takes a session argument: it acts for the caller's own session. The bus daemon names the process (`GetConnectionCredentials`),
 logind names its session (`GetSessionByPID`) and `caller::authorise` decides, the rule of `cupertino-powerd` (no polkit,
-ARCHITECTURE rule 5). A caller passes when its session is of class `user` on `seat0`, the process runs as the session's user (root
+the architecture notes in `docs/architecture.md`). A caller passes when its session is of class `user` on `seat0`, the process runs as the session's user (root
 inside a user's session is refused: it has no use for the manager), and for `RequestPower` the session is in the foreground.
 
 | Method | Needs | Does |

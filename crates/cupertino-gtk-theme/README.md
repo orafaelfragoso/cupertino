@@ -18,7 +18,7 @@ Generator (library and binary) that turns the `cupertino-theme` design tokens in
 ```
 cargo run -p cupertino-gtk-theme -- [options]
 
-  --output DIR        output directory (default: prototypes/tools/cupertino-gtk-theme/output/)
+  --output DIR        output directory (default: crates/cupertino-gtk-theme/output/)
   --accent NAME       blue (default) purple pink red orange yellow green graphite
   --size SIZE         control size: regular (default), small, large
   --high-contrast     use the high-contrast catalogs

@@ -1,0 +1,11 @@
+# Introduction
+
+Cupertino is a Wayland compositor and desktop shell for Linux, written in Rust on Smithay. It is made of small processes around one compositor: a dock, a menu bar, a launcher, notifications, a control panel, a file manager, a settings app, a lock screen and a session manager.
+
+Cupertino serves Wayland clients only. The project is early (0.x): the compositor runs nested in another Wayland session and on a TTY, and the TTY backend has run in a virtual machine but not yet on real hardware.
+
+- [Building and running](building.md): get a nested session up in a minute, then the TTY session.
+- [Architecture](architecture.md): processes, layers and the rules between them.
+- [Asset packs](asset-packs.md): swap fonts, icons, cursors and wallpapers, or build your own pack.
+
+Each crate has a README with its API, files and tests. The repository root has the contribution rules (`CONTRIBUTING.md`), the security policy (`SECURITY.md`) and the licence (`LICENSE`, `GPL-3.0-or-later`).

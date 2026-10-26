@@ -2,7 +2,7 @@
 
 The asset packs every Cupertino process draws its text, icons, cursors and wallpaper from, and the `cupertino-assets`
 tool that checks a pack. A pack is a directory with a `manifest.json`; this repository's own pack is produced by an
-extraction tool and kept out of git (contract ).
+extraction tool and kept out of git.
 
 ## Manifest
 

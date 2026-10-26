@@ -1,8 +1,10 @@
-"""Tests of the application files the runtime package installs: `python3 -I packaging/test_release.py`."""
+"""Tests of the application files and the release tags of the runtime package: `python3 -I packaging/test_release.py`."""
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # isolated mode (-I) does not add the script's directory
 import release  # noqa: E402
@@ -43,6 +45,18 @@ class ApplicationsTest(unittest.TestCase):
     def test_one_file_name_from_two_crates_fails(self):
         with self.assertRaisesRegex(ValueError, 'cupertino-mimeapps.list also comes from crates/cupertino-files'):
             check(SHIPPED + ['crates/cupertino-settings/data/applications/cupertino-mimeapps.list'])
+
+
+class TagTest(unittest.TestCase):
+    def test_a_release_and_a_release_candidate_give_the_arch_pkgver(self):
+        self.assertEqual(release.release_version('v0.1.0'), '0.1.0')
+        self.assertEqual(release.release_version('v0.1.0-rc1'), '0.1.0rc1')
+
+    def test_a_tag_for_another_version_or_kind_is_rejected(self):
+        with mock.patch.object(release, 'version', return_value='0.1.0'):
+            for tag in ['v0.1.1-rc1', 'v0.1.0-beta1']:
+                with self.subTest(tag), self.assertRaisesRegex(SystemExit, f'tag {tag} does not match'):
+                    release.cmd_verify_tag(Namespace(tag=tag))
 
 
 if __name__ == '__main__':

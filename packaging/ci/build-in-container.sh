@@ -48,8 +48,8 @@ trap 'rm -rf "$work"' EXIT
 git -C "$root" archive --format=tar --prefix=src/ HEAD | tar -x -C "$work"
 if [ "$distro" = arch ]; then
     mkdir "$work/src/arch-build"
-    archive=$(python3 "$root/packaging/release.py" source --output "$work/src/arch-build")
-    python3 "$root/packaging/release.py" pkgbuild "$archive" "$work/src/arch-build/PKGBUILD" >/dev/null
+    archive=$(python3 "$root/packaging/release.py" source --output "$work/src/arch-build" ${RELEASE_TAG:+--tag "$RELEASE_TAG"})
+    python3 "$root/packaging/release.py" pkgbuild ${RELEASE_TAG:+--tag "$RELEASE_TAG"} "$archive" "$work/src/arch-build/PKGBUILD" >/dev/null
 fi
 
 build_script=$(cat <<EOF

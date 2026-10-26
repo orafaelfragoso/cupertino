@@ -597,6 +597,13 @@ impl SystemIcons {
         Self::with_host(assets, host_icon_bases(), user_icon_theme())
     }
 
+    /// Icons of `assets` alone: no host icon theme is searched, so a name that only a `theme` source or the default
+    /// icon map could provide is drawn as a placeholder. For a process that is started without host data (tests), so that
+    /// an expected image can be computed with the same view.
+    pub fn without_host(assets: &Assets) -> Self {
+        Self::with_host(assets, Vec::new(), None)
+    }
+
     /// Icons of `assets` whose `theme` sources resolve under the icon directories `bases`, with `user` as the user's
     /// theme (tests).
     fn with_host(assets: &Assets, bases: Vec<PathBuf>, user: Option<String>) -> Self {
@@ -1117,6 +1124,36 @@ mod tests {
         );
         assert!(icons.load_for_entry("absent", 16).is_none());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn without_host_no_theme_source_resolves() {
+        let host = tempfile::tempdir().unwrap();
+        host_themes(host.path());
+        let pack = tempfile::tempdir().unwrap();
+        std::fs::write(
+            pack.path().join("manifest.json"),
+            r#"{"version": 2, "icons": {"folder.documents": {"theme": ["folder-documents"]}}, "icon_theme": {"name": "Fixture"}}"#,
+        )
+        .unwrap();
+        let assets = Assets::open(pack.path()).unwrap();
+        let with = SystemIcons::with_host(&assets, vec![host.path().to_path_buf()], None)
+            .raster("folder.documents", 16)
+            .clone();
+        let without = SystemIcons::without_host(&assets)
+            .raster("folder.documents", 16)
+            .clone();
+        assert_eq!(
+            with.pixel(8, 8).unwrap().red(),
+            10,
+            "the host theme provides it"
+        );
+        assert_eq!(
+            without.pixel(8, 8).unwrap().alpha(),
+            255,
+            "no host theme: the opaque grey placeholder"
+        );
+        assert_eq!(without.pixel(8, 8).unwrap().red(), 140);
     }
 
     #[test]

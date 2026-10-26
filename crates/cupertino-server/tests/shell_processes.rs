@@ -753,10 +753,11 @@ fn the_dock_process_draws_the_switcher_panel_while_the_switch_is_open() {
         layer_geometry(&server.state, "cupertino-dock-switcher"),
         Some(Rectangle::new((413, 257).into(), (174, 186).into()))
     );
-    // the 128 pt tile sits at (23, 29) in the panel; wherever the generic icon (here the opaque placeholder of the
-    // built-in assets, which both this test and the dock process use) is fully opaque the panel shows it
+    // the 128 pt tile sits at (23, 29) in the panel; wherever the generic icon is fully opaque the panel shows it. The
+    // dock process was started without host data and with the built-in assets only, so its icon is the opaque
+    // placeholder; the expected one is computed with the same view (the machine's icon themes must not matter)
     let assets = cupertino_assets::Assets::builtin();
-    let icon = cupertino_icons::SystemIcons::new(&assets)
+    let icon = cupertino_icons::SystemIcons::without_host(&assets)
         .raster("application.generic", 128)
         .clone();
     assert_eq!((icon.width(), icon.height()), (128, 128));

@@ -1014,10 +1014,24 @@ mod tests {
         std::fs::create_dir_all(dir.join("16x16/places")).unwrap();
         std::fs::write(dir.join("index.theme"), "[Icon Theme]\nName=Adwaita\nDirectories=16x16/places\n\n[16x16/places]\nSize=16\nType=Fixed\n").unwrap();
         // `folder-download` is the first name of the built-in map for `folder.downloads`
-        image::RgbaImage::from_pixel(16, 16, image::Rgba([40, 0, 0, 255])).save(dir.join("16x16/places/folder-download.png")).unwrap();
-        let mut icons = SystemIcons::with_host(&Assets::builtin(), vec![host.path().to_path_buf()], None);
-        assert_eq!(icons.raster("folder.downloads", 16).pixel(8, 8).unwrap().red(), 40);
-        assert_eq!(icons.unprovided(&["folder.downloads", "folder.movies"], &[]), ["folder.movies"], "only a name the host theme lacks is a placeholder");
+        image::RgbaImage::from_pixel(16, 16, image::Rgba([40, 0, 0, 255]))
+            .save(dir.join("16x16/places/folder-download.png"))
+            .unwrap();
+        let mut icons =
+            SystemIcons::with_host(&Assets::builtin(), vec![host.path().to_path_buf()], None);
+        assert_eq!(
+            icons
+                .raster("folder.downloads", 16)
+                .pixel(8, 8)
+                .unwrap()
+                .red(),
+            40
+        );
+        assert_eq!(
+            icons.unprovided(&["folder.downloads", "folder.movies"], &[]),
+            ["folder.movies"],
+            "only a name the host theme lacks is a placeholder"
+        );
     }
 
     #[test]

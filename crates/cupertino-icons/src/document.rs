@@ -159,8 +159,16 @@ impl FileIcons {
 
     /// File icons drawn by `system`, so a test controls the host themes (the packs and nothing else, when `system` has none).
     #[cfg(test)]
-    fn with_system(system: SystemIcons, db: MimeDatabase, folders: HashMap<PathBuf, &'static str>) -> FileIcons {
-        FileIcons { system, db, folders }
+    fn with_system(
+        system: SystemIcons,
+        db: MimeDatabase,
+        folders: HashMap<PathBuf, &'static str>,
+    ) -> FileIcons {
+        FileIcons {
+            system,
+            db,
+            folders,
+        }
     }
 
     /// The MIME database the icons are resolved with.
@@ -314,11 +322,8 @@ mod tests {
         );
         let other = tempfile::tempdir().unwrap();
         let empty = fixture::assets(other.path(), &[], &[]);
-        let mut none = FileIcons::with_system(
-            isolated(&empty),
-            database(other.path()),
-            HashMap::new(),
-        );
+        let mut none =
+            FileIcons::with_system(isolated(&empty), database(other.path()), HashMap::new());
         let placeholder = none
             .document(Path::new("/x/y.png"), "image/png", 16)
             .clone();

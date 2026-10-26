@@ -343,7 +343,10 @@ fn search_path_from(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<Pat
 /// placeholder appears only when the host theme lacks the name too.
 fn builtin_icon_map() -> &'static BTreeMap<String, Vec<String>> {
     static MAP: std::sync::OnceLock<BTreeMap<String, Vec<String>>> = std::sync::OnceLock::new();
-    MAP.get_or_init(|| toml::from_str(include_str!("../data/icon-map.toml")).expect("data/icon-map.toml is valid (checked by a test)"))
+    MAP.get_or_init(|| {
+        toml::from_str(include_str!("../data/icon-map.toml"))
+            .expect("data/icon-map.toml is valid (checked by a test)")
+    })
 }
 
 /// The asset packs of a process, in lookup order, followed by the built-in fallback.
@@ -432,7 +435,13 @@ impl Assets {
             })
             .collect();
         if let Some(names) = builtin_icon_map().get(name.as_str()) {
-            out.push((Path::new(""), IconSource::Theme { names: names.clone(), theme: None }));
+            out.push((
+                Path::new(""),
+                IconSource::Theme {
+                    names: names.clone(),
+                    theme: None,
+                },
+            ));
         }
         out
     }

@@ -434,9 +434,15 @@ fn the_strict_check_names_a_file_the_manifest_names_but_lacks() {
 fn the_builtin_icon_map_covers_every_logical_name_and_parses() {
     let map = builtin_icon_map();
     for name in RASTER_NAMES.iter().chain(&SYMBOL_NAMES) {
-        assert!(map.get(*name).is_some_and(|n| !n.is_empty()), "no host-theme names for {name}");
+        assert!(
+            map.get(*name).is_some_and(|n| !n.is_empty()),
+            "no host-theme names for {name}"
+        );
     }
-    assert_eq!(map["folder.downloads"], ["folder-download", "folder-downloads"]);
+    assert_eq!(
+        map["folder.downloads"],
+        ["folder-download", "folder-downloads"]
+    );
     assert!(map.keys().all(|k| IconName::new(k).is_ok()));
 }
 
@@ -446,7 +452,9 @@ fn with_no_pack_every_icon_resolves_to_the_host_theme() {
     let name = IconName::new("symbol.wifi").unwrap();
     let sources = none.icon_sources(&name, 16);
     assert_eq!(sources.len(), 1);
-    assert!(matches!(&sources[0].1, IconSource::Theme { names, theme: None } if names[0] == "network-wireless-symbolic"));
+    assert!(
+        matches!(&sources[0].1, IconSource::Theme { names, theme: None } if names[0] == "network-wireless-symbolic")
+    );
 }
 
 #[test]
@@ -455,5 +463,8 @@ fn a_pack_source_comes_before_the_builtin_host_names() {
     let a = Assets::from_dirs(&[d.path().to_path_buf()]);
     let sources = a.icon_sources(&IconName::new("folder").unwrap(), 32);
     assert!(matches!(sources.first(), Some((_, IconSource::Raster(_)))));
-    assert!(matches!(sources.last(), Some((_, IconSource::Theme { theme: None, .. }))));
+    assert!(matches!(
+        sources.last(),
+        Some((_, IconSource::Theme { theme: None, .. }))
+    ));
 }

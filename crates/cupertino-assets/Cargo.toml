@@ -32,7 +32,6 @@ The default asset pack of Cupertino: the Inter UI font (OFL-1.1), the logical-na
 and six photographs from Unsplash (Unsplash License) as wallpapers. The cursor theme is a separate package."""
 section = "misc"
 priority = "optional"
-architecture = "all"
 depends = ""
 recommends = "adwaita-icon-theme"
 conf-files = []

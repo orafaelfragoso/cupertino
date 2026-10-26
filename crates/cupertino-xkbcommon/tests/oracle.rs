@@ -85,8 +85,33 @@ fn data_fingerprint(root: &Path) -> String {
     format!("{hash:016x}")
 }
 
+/// The directories the engine searches before the system data, as it builds them: the user's and the extra path.
+fn overriding_data_dirs() -> Vec<String> {
+    let env = |name: &str| std::env::var(name).ok();
+    let home = env("HOME");
+    let mut dirs = Vec::new();
+    if let Some(xdg) = env("XDG_CONFIG_HOME") {
+        dirs.push(format!("{xdg}/xkb"));
+    } else if let Some(home) = &home {
+        dirs.push(format!("{home}/.config/xkb"));
+    }
+    if let Some(home) = &home {
+        dirs.push(format!("{home}/.xkb"));
+    }
+    dirs.push(env("XKB_CONFIG_EXTRA_PATH").unwrap_or_else(|| "/etc/xkb".into()));
+    dirs.retain(|dir| std::fs::read_dir(dir).is_ok_and(|mut d| d.next().is_some()));
+    dirs
+}
+
 /// Fails unless the data the keymaps are compiled from is the release the recordings were made with.
 fn check_data_version() {
+    let overriding = overriding_data_dirs();
+    assert!(
+        overriding.is_empty(),
+        "{} would override the xkeyboard-config data the recordings were made with: move it away for this test, or \
+         point XDG_CONFIG_HOME, HOME and XKB_CONFIG_EXTRA_PATH at empty directories",
+        overriding.join(", ")
+    );
     let root = std::env::var("XKB_CONFIG_ROOT").unwrap_or_else(|_| DEFAULT_DATA_ROOT.into());
     let found = data_fingerprint(Path::new(&root));
     let mut recorded = None;
@@ -117,7 +142,7 @@ fn check_data_version() {
 
 fn compile(layout: &str, variant: &str) -> xkb::Keymap {
     check_data_version();
-    let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+    let context = xkb::Context::new(xkb::CONTEXT_NO_ENVIRONMENT_NAMES);
     xkb::Keymap::new_from_names(
         &context,
         "evdev",
@@ -358,7 +383,7 @@ fn check_layout(layout: &str, variant: &str, recorded: &str) {
 
     // the text we serialise parses back into a keymap that answers the same
     let text = keymap.get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1);
-    let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+    let context = xkb::Context::new(xkb::CONTEXT_NO_ENVIRONMENT_NAMES);
     let reparsed = xkb::Keymap::new_from_string(
         &context,
         text,

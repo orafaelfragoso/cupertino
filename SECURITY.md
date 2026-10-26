@@ -8,7 +8,7 @@ Cupertino is pre-1.0. Only the latest release receives security fixes.
 
 Do not open a public issue for a security problem.
 
-Report it privately through the repository's **private vulnerability reporting** (Security tab, "Report a vulnerability"), or by email to `<PLACEHOLDER: security contact address, to be set by the maintainer before publication>`.
+Report it privately through the repository's **private vulnerability reporting** (Security tab, "Report a vulnerability"), or by email to rafael@workbits.io.
 
 Include what you found, the version or commit, how to reproduce it and what an attacker gains. We aim to acknowledge a report within 7 days and to tell you the plan within 30 days. We credit reporters who want credit when the fix ships.
 

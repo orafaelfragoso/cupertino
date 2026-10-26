@@ -9,12 +9,24 @@ use std::path::{Path, PathBuf};
 /// Environment variable that overrides the theme data directory at run time.
 pub const SPEC_DIR_ENV: &str = "CUPERTINO_SPEC_DIR";
 
-/// Theme data directory: `$CUPERTINO_SPEC_DIR` if set, otherwise `../../data/theme` relative to this crate's manifest
-/// directory.
+/// Default theme data directory, fixed at compile time: `$CUPERTINO_THEME_DIR` of the build (packages set the installed
+/// path, `/usr/share/cupertino/theme`), otherwise `../../data/theme` relative to this crate's manifest directory. Only
+/// the chosen path is compiled in, so a packaged binary holds no build-tree path.
+const DEFAULT_SPEC_DIR: &str = match option_env!("CUPERTINO_THEME_DIR") {
+    Some(dir) => dir,
+    None => concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/theme"),
+};
+
+/// Theme data directory: `$CUPERTINO_SPEC_DIR` if set, otherwise [`DEFAULT_SPEC_DIR`].
 pub fn spec_dir() -> PathBuf {
-    match std::env::var_os(SPEC_DIR_ENV) {
+    spec_dir_from(std::env::var_os(SPEC_DIR_ENV))
+}
+
+/// [`spec_dir`] for a given value of `$CUPERTINO_SPEC_DIR`; an empty value counts as unset.
+fn spec_dir_from(env: Option<std::ffi::OsString>) -> PathBuf {
+    match env {
         Some(p) if !p.is_empty() => PathBuf::from(p),
-        _ => Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/theme"),
+        _ => Path::new(DEFAULT_SPEC_DIR).to_path_buf(),
     }
 }
 
@@ -88,6 +100,15 @@ mod tests {
         let b = Theme::load().unwrap();
         assert_eq!(a.tokens.table(Appearance::Dark).len(), b.tokens.table(Appearance::Dark).len());
         assert_eq!(a.animation.timing("default"), b.animation.timing("default"));
+    }
+
+    #[test]
+    fn default_dir_is_the_compile_time_path_and_the_variable_overrides_it() {
+        let compiled = option_env!("CUPERTINO_THEME_DIR").map(PathBuf::from);
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/theme");
+        assert_eq!(spec_dir_from(None), compiled.unwrap_or(repository));
+        assert_eq!(spec_dir_from(Some("".into())), spec_dir_from(None), "empty counts as unset");
+        assert_eq!(spec_dir_from(Some("/opt/theme".into())), PathBuf::from("/opt/theme"));
     }
 
     #[test]

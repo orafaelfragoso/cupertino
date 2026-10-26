@@ -38,19 +38,44 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 FORMATS = ('arch', 'deb', 'rpm')
+# The applications among the shipped binaries: each has a desktop entry crates/<app>/data/applications/<app>.desktop.
+APPS = ('cupertino-files', 'cupertino-settings')
 BINARIES = (
     'cupertino-server',
     'cupertino-dock', 'cupertino-menubar', 'cupertino-launcher', 'cupertino-notifications', 'cupertino-controlcenter',
     'cupertino-osd', 'cupertino-screenshot', 'cupertino-windowmanager', 'cupertino-login',
-    'cupertino-files', 'cupertino-settings',
+    *APPS,
     'cupertino-sessiond', 'cupertino-netd', 'cupertino-btd', 'cupertino-powerd',
 )
+# Besides an app's own entry, the only file an app crate may ship there: the session's default applications.
+MIMEAPPS = 'cupertino-mimeapps.list'
 PAM_SERVICES = ('cupertino-login', 'cupertino-session', 'cupertino-greeter', 'cupertino-autologin')
 UNITS = ('cupertino-login', 'cupertino-netd', 'cupertino-btd', 'cupertino-powerd')
 THEME_FILES = ('tokens.json', 'materials.json', 'animations.json')
-APPLICATIONS = sorted(ROOT.glob('crates/*/data/applications/*'))
 WALLPAPERS = json.loads((ROOT / 'packaging/data/wallpapers.json').read_text())['files']
 NAMES = {'runtime': 'cupertino', 'data': 'cupertino-data'}
+
+
+def applications(root, apps):
+    """The files of crates/*/data/applications to install, or ValueError listing every problem: a shipped app without
+    its <app>.desktop, any other file there (only an app crate's <app>.desktop and cupertino-mimeapps.list belong),
+    or one file name from two crates."""
+    problems, owner = [], {}
+    found = sorted(root.glob('crates/*/data/applications/*'))
+    for f in found:
+        crate = f.parent.parent.parent.name
+        rel = f.relative_to(root).as_posix()
+        if f.name in owner:
+            problems.append(f'{rel}: {f.name} also comes from crates/{owner[f.name]}')
+        owner.setdefault(f.name, crate)
+        if not (f.is_file() and crate in apps and f.name in (f'{crate}.desktop', MIMEAPPS)):
+            problems.append(f'{rel}: not a desktop entry of a shipped app ({", ".join(apps)}) or {MIMEAPPS}')
+    for app in apps:
+        if not (root / 'crates' / app / 'data/applications' / f'{app}.desktop').is_file():
+            problems.append(f'crates/{app}/data/applications/{app}.desktop: missing for the shipped app {app}')
+    if problems:
+        raise ValueError('\n  '.join(problems))
+    return found
 
 
 def runtime(fmt):
@@ -66,9 +91,13 @@ def runtime(fmt):
         ('etc/cupertino/login.conf', 0o644, True),
         ('etc/cupertino/greeter.json', 0o644, True),
     )]
-    # Every application file the crates ship (desktop entries, cupertino-mimeapps.list): the menu bar and the dock find
-    # an app's name and icon through its entry, so none may be left out.
-    files += [(f'usr/share/applications/{a.name}', a.relative_to(ROOT).as_posix(), 0o644, False) for a in APPLICATIONS]
+    # The shipped apps' desktop entries (the menu bar and the dock take an app's name and icon from it) and
+    # cupertino-mimeapps.list; applications() refuses anything else.
+    try:
+        apps = applications(ROOT, APPS)
+    except ValueError as e:
+        fail(f'crates/*/data/applications:\n  {e}')
+    files += [(f'usr/share/applications/{a.name}', a.relative_to(ROOT).as_posix(), 0o644, False) for a in apps]
     files += [(f'usr/lib/systemd/system/{u}.service', f'{f}/usr/lib/systemd/system/{u}.service', 0o644, False)
               for u in UNITS]
     files += [(f'usr/share/cupertino/theme/{n}', f'data/theme/{n}', 0o644, False) for n in THEME_FILES]

@@ -53,7 +53,7 @@ fi
 
 build_script=$(cat <<EOF
 set -euo pipefail
-trap 'chown -R $(id -u):$(id -g) /dist' EXIT
+trap 'chown -R $(id -u):$(id -g) /dist /src' EXIT
 cd /src
 export CARGO_INCREMENTAL=0 CUPERTINO_THEME_DIR=/usr/share/cupertino/theme
 case $distro in

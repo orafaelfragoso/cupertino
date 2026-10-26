@@ -275,10 +275,18 @@ impl TestClient {
         self.shared.lock().unwrap()
     }
 
-    /// Stop serving and close the connection, as an exiting client does.
-    fn exit(mut self) {
+    /// Stop serving and close the connection, as an exiting client does. The compositor runs on the calling thread,
+    /// so it must keep dispatching until the client thread is done: that thread may be inside a round trip, or writing
+    /// a type to the compositor's pipe, and only the compositor can end either. Joining without dispatching deadlocks.
+    fn exit(mut self, h: &mut Harness) {
         self.stop.store(true, Ordering::SeqCst);
-        self.thread.take().unwrap().join().unwrap();
+        let thread = self.thread.take().unwrap();
+        let end = Instant::now() + Duration::from_secs(20);
+        while !thread.is_finished() {
+            assert!(Instant::now() < end, "timed out waiting for the client thread to end");
+            h.step();
+        }
+        thread.join().unwrap();
     }
 }
 
@@ -306,7 +314,7 @@ fn the_clipboard_outlives_the_client_that_copied() {
     let a = TestClient::spawn(h.socket_path(), "org.example.copy", role);
     h.wait_until("the copy to be read", |s| s.clipboard.is_complete() && s.clipboard.captured_types() == ["text/plain;charset=utf-8", "image/png"]);
     assert_eq!(h.kept(), None, "the copying client still owns its selection");
-    a.exit();
+    a.exit(&mut h);
     h.wait_until("the server to keep the clipboard", |s| current_data_device_selection_userdata(&s.seat).is_some());
     assert_eq!(h.kept().unwrap(), ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "TEXT", "image/png"]);
 
@@ -326,7 +334,7 @@ fn a_cleared_clipboard_is_not_kept() {
     h.wait_until("the copy to be read", |s| s.clipboard.captured_types() == ["text/plain;charset=utf-8"]);
     clear.store(true, Ordering::SeqCst);
     h.wait_until("the clear", |s| s.clipboard.captured_types().is_empty());
-    a.exit();
+    a.exit(&mut h);
     let b = TestClient::spawn(h.socket_path(), "org.example.paste", paster(&["text/plain"]));
     h.wait_until("the second client's selection", |_| b.shared().offered.is_some());
     for _ in 0..40 {
@@ -345,7 +353,7 @@ fn content_over_the_limit_is_dropped() {
     let a = TestClient::spawn(h.socket_path(), "org.example.copy", role);
     h.wait_until("the copy to be read", |s| s.clipboard.is_complete() && !s.clipboard.captured_types().is_empty());
     assert_eq!(h.state.clipboard.captured_types(), ["text/plain;charset=utf-8"]);
-    a.exit();
+    a.exit(&mut h);
     h.wait_until("the server to keep the clipboard", |s| current_data_device_selection_userdata(&s.seat).is_some());
     assert!(!h.kept().unwrap().iter().any(|m| m == "image/png"));
 }

@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 from collections import Counter
 
@@ -97,9 +98,26 @@ def policy_text(text: str) -> str:
     return "".join(lines)
 
 
+def git_visible_paths(root: Path) -> set[str] | None:
+    """The paths git would track under `root`: tracked plus untracked-not-ignored. None outside a repository."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return {path for path in result.stdout.split("\0") if path}
+
+
 def gate(root: Path) -> tuple[Counter, list[str]]:
     hits: Counter = Counter()
     problems: list[str] = []
+    # Build output is gitignored: scanning it would flag strings in generated assets. Outside a repository
+    # (the tests, an unpacked archive) every file is visible.
+    visible = git_visible_paths(root)
     for directory, dirs, files in os.walk(root, followlinks=False):
         parent = Path(directory)
         if parent == root:
@@ -111,6 +129,8 @@ def gate(root: Path) -> tuple[Counter, list[str]]:
                 target = path.resolve(strict=True)
                 if Path(os.readlink(path)).is_absolute() or not target.is_relative_to(root):
                     problems.append(f"source symlink escapes tree: {rel}")
+                continue
+            if visible is not None and rel not in visible:
                 continue
             if path.suffix.lower() in FORBIDDEN_SUFFIXES and rel not in ALLOWED_BINARIES:
                 problems.append(f"forbidden file type: {rel}")

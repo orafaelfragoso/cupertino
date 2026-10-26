@@ -39,7 +39,10 @@ pub struct PowerButton {
 
 impl PowerButton {
     pub fn new(sleeps_system: bool) -> Self {
-        PowerButton { sleeps_system, state: State::Up }
+        PowerButton {
+            sleeps_system,
+            state: State::Up,
+        }
     }
 
     /// The key went down: a hold starts, whatever came before.
@@ -50,7 +53,9 @@ impl PowerButton {
     /// The key went up. A release without a press (the press happened while the lock screen was up) does nothing.
     pub fn release(&mut self, now: f64) -> Option<Effect> {
         let state = std::mem::replace(&mut self.state, State::Up);
-        let State::Down(since) = state else { return None };
+        let State::Down(since) = state else {
+            return None;
+        };
         let held = now - since;
         if held >= SHUT_DOWN_UI_SECONDS {
             Some(Effect::ShowPanel)
@@ -94,7 +99,9 @@ mod tests {
     fn tap(sleeps_system: bool, held: f64) -> Option<Effect> {
         let mut button = PowerButton::new(sleeps_system);
         button.press(10.0);
-        button.tick(10.0 + held).or_else(|| button.release(10.0 + held))
+        button
+            .tick(10.0 + held)
+            .or_else(|| button.release(10.0 + held))
     }
 
     #[test]
@@ -104,8 +111,14 @@ mod tests {
 
     #[test]
     fn a_release_between_the_debounce_and_the_hold_sleeps_only_when_the_setting_is_on() {
-        assert_eq!((tap(false, 0.5), tap(true, 0.5)), (None, Some(Effect::Sleep)));
-        assert_eq!((tap(false, 1.49), tap(true, 1.49)), (None, Some(Effect::Sleep)));
+        assert_eq!(
+            (tap(false, 0.5), tap(true, 0.5)),
+            (None, Some(Effect::Sleep))
+        );
+        assert_eq!(
+            (tap(false, 1.49), tap(true, 1.49)),
+            (None, Some(Effect::Sleep))
+        );
     }
 
     #[test]
@@ -143,7 +156,14 @@ mod tests {
         let mut button = PowerButton::new(false);
         assert_eq!(button.next_wakeup(10.0), None);
         button.press(10.0);
-        assert_eq!((button.next_wakeup(10.0), button.next_wakeup(10.5), button.next_wakeup(13.0)), (Some(1.5), Some(1.0), Some(0.0)));
+        assert_eq!(
+            (
+                button.next_wakeup(10.0),
+                button.next_wakeup(10.5),
+                button.next_wakeup(13.0)
+            ),
+            (Some(1.5), Some(1.0), Some(0.0))
+        );
     }
 
     #[test]
@@ -152,6 +172,13 @@ mod tests {
         assert_eq!(button.release(5.0), None);
         button.press(10.0);
         button.reset();
-        assert_eq!((button.tick(12.0), button.release(12.0), button.next_wakeup(12.0)), (None, None, None));
+        assert_eq!(
+            (
+                button.tick(12.0),
+                button.release(12.0),
+                button.next_wakeup(12.0)
+            ),
+            (None, None, None)
+        );
     }
 }

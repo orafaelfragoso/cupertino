@@ -46,7 +46,8 @@ const LOW: usize = (1 << HALF) - 1;
 
 /// The value of `c` (a commit's distance from the first commit).
 fn count(c: CommitCounter) -> usize {
-    c.distance(Some(CommitCounter::default())).expect("every commit is at or after the first")
+    c.distance(Some(CommitCounter::default()))
+        .expect("every commit is at or after the first")
 }
 
 /// Commit of a masked element whose shape is at `generation` (already within the high half's
@@ -77,8 +78,18 @@ pub struct ClipElement<E> {
 impl<E> ClipElement<E> {
     /// `generation` advances whenever `shape` changes (an [`super::ElementCache`] slot keyed by
     /// the inner element, with the shape as its signature).
-    pub fn new(inner: E, program: GlesTexProgram, shape: ClipShape, generation: CommitCounter) -> Self {
-        Self { inner, program, shape, generation: count(generation) & LOW }
+    pub fn new(
+        inner: E,
+        program: GlesTexProgram,
+        shape: ClipShape,
+        generation: CommitCounter,
+    ) -> Self {
+        Self {
+            inner,
+            program,
+            shape,
+            generation: count(generation) & LOW,
+        }
     }
 
     pub fn shape(&self) -> &ClipShape {
@@ -114,7 +125,11 @@ impl<E: Element> Element for ClipElement<E> {
     /// Everything after a shape change; otherwise the inner element's damage. An inner commit past
     /// the low half's width compares as a large distance, which the inner element reports as full
     /// damage.
-    fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+    fn damage_since(
+        &self,
+        scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> DamageSet<i32, Physical> {
         match inner_since(self.generation, commit) {
             Some(inner) => self.inner.damage_since(scale, inner),
             None => DamageSet::from_slice(&[Rectangle::from_size(self.geometry(scale).size)]),
@@ -165,9 +180,24 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for ClipElement
             self.program.clone(),
             vec![
                 umat3("inv_proj", inv),
-                u2("viewport", self.shape.viewport.0 as f32, self.shape.viewport.1 as f32),
-                u4("clip_rect", [r.loc.x as f32, r.loc.y as f32, r.size.w as f32, r.size.h as f32]),
-                u4("clip_shape", [self.shape.extent, self.shape.exponent, 0.0, 0.0]),
+                u2(
+                    "viewport",
+                    self.shape.viewport.0 as f32,
+                    self.shape.viewport.1 as f32,
+                ),
+                u4(
+                    "clip_rect",
+                    [
+                        r.loc.x as f32,
+                        r.loc.y as f32,
+                        r.size.w as f32,
+                        r.size.h as f32,
+                    ],
+                ),
+                u4(
+                    "clip_shape",
+                    [self.shape.extent, self.shape.exponent, 0.0, 0.0],
+                ),
             ],
         );
         let res = self.inner.draw(frame, src, dst, damage, opaque_regions);
@@ -185,7 +215,13 @@ mod tests {
     use super::*;
 
     fn shape(w: i32, h: i32, extent: f32) -> ClipShape {
-        ClipShape { rect: Rectangle::new((100, 50).into(), (w, h).into()), extent, exponent: 2.0, viewport: (1920, 1080), exact: true }
+        ClipShape {
+            rect: Rectangle::new((100, 50).into(), (w, h).into()),
+            extent,
+            exponent: 2.0,
+            viewport: (1920, 1080),
+            exact: true,
+        }
     }
 
     #[test]
@@ -206,10 +242,25 @@ mod tests {
         let inner = CommitCounter::from(7);
         let (at_one, at_two) = (masked_commit(1, inner), masked_commit(2, inner));
         assert_ne!(at_one, at_two, "same content, new corner radius");
-        assert_eq!(inner_since(2, Some(at_one)), None, "the whole element is damaged");
-        assert_eq!(inner_since(1, Some(at_one)), Some(Some(inner)), "same shape: the inner damage since its own commit");
-        assert_eq!(inner_since(1, Some(masked_commit(1, CommitCounter::from(5)))), Some(Some(CommitCounter::from(5))));
-        assert_eq!(inner_since(1, None), Some(None), "a first draw asks the inner element for everything");
+        assert_eq!(
+            inner_since(2, Some(at_one)),
+            None,
+            "the whole element is damaged"
+        );
+        assert_eq!(
+            inner_since(1, Some(at_one)),
+            Some(Some(inner)),
+            "same shape: the inner damage since its own commit"
+        );
+        assert_eq!(
+            inner_since(1, Some(masked_commit(1, CommitCounter::from(5)))),
+            Some(Some(CommitCounter::from(5)))
+        );
+        assert_eq!(
+            inner_since(1, None),
+            Some(None),
+            "a first draw asks the inner element for everything"
+        );
     }
 
     #[test]

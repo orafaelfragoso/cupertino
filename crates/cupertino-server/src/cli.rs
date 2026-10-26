@@ -15,7 +15,11 @@ use crate::input::{translate_action, Action};
 use crate::state::Cupertino;
 
 #[derive(Parser, Debug, Clone, Default)]
-#[command(name = "cupertino-server", about = "Smithay-based compositor of the Cupertino prototypes", version)]
+#[command(
+    name = "cupertino-server",
+    about = "Smithay-based compositor of the Cupertino prototypes",
+    version
+)]
 #[command(group(ArgGroup::new("backend").args(["winit", "udev", "headless"])))]
 pub struct Cli {
     /// Run nested inside a window of the current session (development).
@@ -106,7 +110,10 @@ pub struct Cli {
 
 pub fn parse_size(s: &str) -> Result<(u32, u32), String> {
     let (w, h) = s.split_once('x').ok_or("expected WIDTHxHEIGHT")?;
-    let (w, h) = (w.parse::<u32>().map_err(|e| e.to_string())?, h.parse::<u32>().map_err(|e| e.to_string())?);
+    let (w, h) = (
+        w.parse::<u32>().map_err(|e| e.to_string())?,
+        h.parse::<u32>().map_err(|e| e.to_string())?,
+    );
     if w == 0 || h == 0 {
         return Err("size must be positive".into());
     }
@@ -115,7 +122,10 @@ pub fn parse_size(s: &str) -> Result<(u32, u32), String> {
 
 pub fn parse_timed_shot(s: &str) -> Result<(f64, PathBuf), String> {
     let (t, p) = s.split_once(':').ok_or("expected SECONDS:PATH")?;
-    Ok((t.parse::<f64>().map_err(|e| e.to_string())?, PathBuf::from(p)))
+    Ok((
+        t.parse::<f64>().map_err(|e| e.to_string())?,
+        PathBuf::from(p),
+    ))
 }
 
 pub fn parse_timed_point(s: &str) -> Result<(f64, (f64, f64)), String> {
@@ -127,7 +137,10 @@ pub fn parse_timed_point(s: &str) -> Result<(f64, (f64, f64)), String> {
 
 pub fn parse_timed_text(s: &str) -> Result<(f64, String), String> {
     let (t, rest) = s.split_once(':').ok_or("expected SECONDS:TEXT")?;
-    Ok((t.parse::<f64>().map_err(|e| e.to_string())?, rest.to_string()))
+    Ok((
+        t.parse::<f64>().map_err(|e| e.to_string())?,
+        rest.to_string(),
+    ))
 }
 
 pub fn parse_timed_action(s: &str) -> Result<(f64, Action), String> {
@@ -152,7 +165,9 @@ impl Cli {
             (false, true, false) => Ok(Mode::Udev),
             (false, false, true) => Ok(Mode::Headless),
             (false, false, false) => {
-                if std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some() {
+                if std::env::var_os("WAYLAND_DISPLAY").is_some()
+                    || std::env::var_os("DISPLAY").is_some()
+                {
                     Ok(Mode::Winit)
                 } else {
                     Ok(Mode::Udev)
@@ -175,7 +190,11 @@ impl Cli {
     }
 }
 
-fn schedule(event_loop: &EventLoop<'static, Cupertino>, after: f64, f: impl FnOnce(&mut Cupertino) + 'static) -> Result<()> {
+fn schedule(
+    event_loop: &EventLoop<'static, Cupertino>,
+    after: f64,
+    f: impl FnOnce(&mut Cupertino) + 'static,
+) -> Result<()> {
     let mut f = Some(f);
     let timer = Timer::from_duration(Duration::from_secs_f64(after.max(0.0)));
     event_loop
@@ -265,13 +284,21 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
     for (t, (x, y)) in cli.presses.iter().copied() {
         schedule(event_loop, t, move |state| {
             state.pointer_moved_to((x, y).into(), 0, None);
-            state.pointer_button(crate::events::BTN_LEFT, smithay::backend::input::ButtonState::Pressed, 0);
+            state.pointer_button(
+                crate::events::BTN_LEFT,
+                smithay::backend::input::ButtonState::Pressed,
+                0,
+            );
         })?;
     }
     for (t, (x, y)) in cli.releases.iter().copied() {
         schedule(event_loop, t, move |state| {
             state.pointer_moved_to((x, y).into(), 0, None);
-            state.pointer_button(crate::events::BTN_LEFT, smithay::backend::input::ButtonState::Released, 0);
+            state.pointer_button(
+                crate::events::BTN_LEFT,
+                smithay::backend::input::ButtonState::Released,
+                0,
+            );
         })?;
     }
     for (t, path) in cli.shots.iter().cloned() {
@@ -296,7 +323,10 @@ fn schedule_script(cli: &Cli, event_loop: &EventLoop<'static, Cupertino>) -> Res
 const SUPERVISION_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Poll the shell processes of the configuration from the event loop (starting them on the first tick).
-pub fn start_shell_supervision(state: &Cupertino, event_loop: &EventLoop<'static, Cupertino>) -> Result<()> {
+pub fn start_shell_supervision(
+    state: &Cupertino,
+    event_loop: &EventLoop<'static, Cupertino>,
+) -> Result<()> {
     if state.config.shell_processes.is_empty() {
         return Ok(());
     }
@@ -304,7 +334,10 @@ pub fn start_shell_supervision(state: &Cupertino, event_loop: &EventLoop<'static
     event_loop
         .handle()
         .insert_source(timer, |_, _, state| {
-            let socket = state.socket_name.clone().expect("the server listens on a socket when it supervises shell processes");
+            let socket = state
+                .socket_name
+                .clone()
+                .expect("the server listens on a socket when it supervises shell processes");
             state.supervisor.poll(Instant::now(), &socket);
             TimeoutAction::ToDuration(SUPERVISION_INTERVAL)
         })
@@ -317,19 +350,31 @@ pub fn run(cli: Cli) -> Result<()> {
     let assets = Assets::discover();
     let mode = cli.mode()?;
     let (cfg, files) = cli.config()?;
-    let mut event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().context("creating the event loop")?;
+    let mut event_loop: EventLoop<'static, Cupertino> =
+        EventLoop::try_new().context("creating the event loop")?;
     let display: Display<Cupertino> = Display::new().context("creating the wayland display")?;
-    let mut state = Cupertino::new(display, event_loop.handle(), event_loop.get_signal(), cfg, true, &assets)?;
+    let mut state = Cupertino::new(
+        display,
+        event_loop.handle(),
+        event_loop.get_signal(),
+        cfg,
+        true,
+        &assets,
+    )?;
     if let Some(f) = cli.time_scale.filter(|f| *f > 0.0) {
         state.time_scale = f;
     }
-    let deadline = cli.run_for.map(|s| Instant::now() + Duration::from_secs_f64(s));
+    let deadline = cli
+        .run_for
+        .map(|s| Instant::now() + Duration::from_secs_f64(s));
     // the user's session keeps its accessibility settings; offscreen runs keep them in memory
     if mode != Mode::Headless {
         use cupertino_defaults::accessibility::{ACCESSIBILITY_ENV, ACCESSIBILITY_FILE};
         match cupertino_defaults::config_file(ACCESSIBILITY_ENV, ACCESSIBILITY_FILE) {
             Some(path) => state.use_accessibility_store(path)?,
-            None => tracing::warn!("neither XDG_CONFIG_HOME nor HOME is set: accessibility settings are not stored"),
+            None => tracing::warn!(
+                "neither XDG_CONFIG_HOME nor HOME is set: accessibility settings are not stored"
+            ),
         }
     }
     state.start_settings_watch(files, crate::live::SettingsPaths::from_env());
@@ -351,7 +396,11 @@ pub fn run(cli: Cli) -> Result<()> {
         #[cfg(not(feature = "winit"))]
         Mode::Winit => return Err(anyhow!("built without the winit feature")),
         Mode::Headless => {
-            crate::backend::headless::init(&mut state, (cli.size.0 as i32, cli.size.1 as i32), cli.scale.unwrap_or(1.0))?;
+            crate::backend::headless::init(
+                &mut state,
+                (cli.size.0 as i32, cli.size.1 as i32),
+                cli.scale.unwrap_or(1.0),
+            )?;
             export_socket(&state);
             crate::backend::headless::run(&mut state, &mut event_loop, deadline)?;
         }
@@ -361,7 +410,9 @@ pub fn run(cli: Cli) -> Result<()> {
             use cupertino_defaults::displays::{DISPLAYS_ENV, DISPLAYS_FILE};
             match cupertino_defaults::config_file(DISPLAYS_ENV, DISPLAYS_FILE) {
                 Some(path) => state.displays.use_store(path)?,
-                None => tracing::warn!("neither XDG_CONFIG_HOME nor HOME is set: display arrangements are not stored"),
+                None => tracing::warn!(
+                    "neither XDG_CONFIG_HOME nor HOME is set: display arrangements are not stored"
+                ),
             }
             crate::backend::udev::run(&mut state, &mut event_loop, deadline, cli.scale)?;
         }
@@ -407,7 +458,10 @@ mod tests {
 
     #[test]
     fn timed_points_parse() {
-        assert_eq!(parse_timed_point("2.5:100,40.5").unwrap(), (2.5, (100.0, 40.5)));
+        assert_eq!(
+            parse_timed_point("2.5:100,40.5").unwrap(),
+            (2.5, (100.0, 40.5))
+        );
         assert!(parse_timed_point("2:100").is_err());
         assert!(parse_timed_point("x:1,2").is_err());
     }
@@ -423,7 +477,10 @@ mod tests {
 
     #[test]
     fn timed_text_keeps_colons_in_the_text() {
-        assert_eq!(parse_timed_text("1.5:Super+space").unwrap(), (1.5, "Super+space".to_string()));
+        assert_eq!(
+            parse_timed_text("1.5:Super+space").unwrap(),
+            (1.5, "Super+space".to_string())
+        );
         assert_eq!(parse_timed_text("2:a:b").unwrap(), (2.0, "a:b".to_string()));
         assert!(parse_timed_text("x:y").is_err());
         assert!(parse_timed_text("nocolon").is_err());
@@ -431,9 +488,16 @@ mod tests {
 
     #[test]
     fn mode_requires_one_backend() {
-        let cli = Cli { winit: true, udev: true, ..Default::default() };
+        let cli = Cli {
+            winit: true,
+            udev: true,
+            ..Default::default()
+        };
         assert!(cli.mode().is_err());
-        let cli = Cli { headless: true, ..Default::default() };
+        let cli = Cli {
+            headless: true,
+            ..Default::default()
+        };
         assert_eq!(cli.mode().unwrap(), Mode::Headless);
     }
 }

@@ -40,8 +40,19 @@ impl Translator {
     pub(crate) fn from_fd(fd: OwnedFd, size: usize) -> Result<Self, ClientError> {
         let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
         // SAFETY: the descriptor is the server's keymap file, mapped privately and read only
-        let keymap = unsafe { xkb::Keymap::new_from_fd(&context, fd, size, xkb::KEYMAP_FORMAT_TEXT_V1, xkb::KEYMAP_COMPILE_NO_FLAGS) }.map_err(ClientError::Keymap)?;
-        keymap.map(Self::new).ok_or(ClientError::Protocol("the keymap does not compile"))
+        let keymap = unsafe {
+            xkb::Keymap::new_from_fd(
+                &context,
+                fd,
+                size,
+                xkb::KEYMAP_FORMAT_TEXT_V1,
+                xkb::KEYMAP_COMPILE_NO_FLAGS,
+            )
+        }
+        .map_err(ClientError::Keymap)?;
+        keymap
+            .map(Self::new)
+            .ok_or(ClientError::Protocol("the keymap does not compile"))
     }
 
     fn new(keymap: xkb::Keymap) -> Self {
@@ -50,31 +61,51 @@ impl Translator {
     }
 
     /// Apply a `wl_keyboard.modifiers` event.
-    pub(crate) fn update_modifiers(&mut self, depressed: u32, latched: u32, locked: u32, group: u32) {
-        self.state.update_mask(depressed, latched, locked, 0, 0, group);
+    pub(crate) fn update_modifiers(
+        &mut self,
+        depressed: u32,
+        latched: u32,
+        locked: u32,
+        group: u32,
+    ) {
+        self.state
+            .update_mask(depressed, latched, locked, 0, 0, group);
     }
 
     /// Whether Caps Lock is on (the xkb `Lock` modifier is effective).
     pub(crate) fn caps_lock(&self) -> bool {
-        self.state.mod_name_is_active(xkb::MOD_NAME_CAPS, xkb::STATE_MODS_EFFECTIVE)
+        self.state
+            .mod_name_is_active(xkb::MOD_NAME_CAPS, xkb::STATE_MODS_EFFECTIVE)
     }
 
     /// Whether holding the evdev key `code` repeats it.
     pub(crate) fn repeats(&self, code: u32) -> bool {
-        self.keymap.key_repeats(xkb::Keycode::new(code + EVDEV_OFFSET))
+        self.keymap
+            .key_repeats(xkb::Keycode::new(code + EVDEV_OFFSET))
     }
 
     /// The modifiers in effect now.
     pub(crate) fn modifiers(&self) -> Modifiers {
-        let active = |name: &str| self.state.mod_name_is_active(name, xkb::STATE_MODS_EFFECTIVE);
-        Modifiers { ctrl: active(xkb::MOD_NAME_CTRL), alt: active(xkb::MOD_NAME_ALT), shift: active(xkb::MOD_NAME_SHIFT), logo: active(xkb::MOD_NAME_LOGO) }
+        let active = |name: &str| {
+            self.state
+                .mod_name_is_active(name, xkb::STATE_MODS_EFFECTIVE)
+        };
+        Modifiers {
+            ctrl: active(xkb::MOD_NAME_CTRL),
+            alt: active(xkb::MOD_NAME_ALT),
+            shift: active(xkb::MOD_NAME_SHIFT),
+            logo: active(xkb::MOD_NAME_LOGO),
+        }
     }
 
     /// The characters and modifiers of the evdev key `code` now.
     pub(crate) fn translate(&self, code: u32) -> Translation {
         let mods = self.modifiers();
-        let symbol = self.state.key_get_one_sym(xkb::Keycode::new(code + EVDEV_OFFSET));
-        let character = char::from_u32(xkb::keysym_to_utf32(symbol)).filter(|c| *c != '\0' && !c.is_control());
+        let symbol = self
+            .state
+            .key_get_one_sym(xkb::Keycode::new(code + EVDEV_OFFSET));
+        let character =
+            char::from_u32(xkb::keysym_to_utf32(symbol)).filter(|c| *c != '\0' && !c.is_control());
         Translation { mods, character }
     }
 }
@@ -92,7 +123,12 @@ pub(crate) struct Repeat {
 impl Repeat {
     /// Apply `repeat_info`: `rate` keys per second (0 turns repeat off), `delay` in milliseconds.
     pub(crate) fn set_info(&mut self, rate: i32, delay: i32) {
-        self.timing = u64::try_from(rate).ok().filter(|r| *r > 0).map(|r| (Duration::from_millis(delay.max(0) as u64), Duration::from_micros(1_000_000 / r)));
+        self.timing = u64::try_from(rate).ok().filter(|r| *r > 0).map(|r| {
+            (
+                Duration::from_millis(delay.max(0) as u64),
+                Duration::from_micros(1_000_000 / r),
+            )
+        });
         if self.timing.is_none() {
             self.held = None;
         }
@@ -121,7 +157,9 @@ impl Repeat {
 
     /// The key to repeat once per repeat that came due by `now`.
     pub(crate) fn due(&mut self, now: Instant) -> Vec<u32> {
-        let (Some((_, interval)), Some((code, at))) = (self.timing, self.held.as_mut()) else { return Vec::new() };
+        let (Some((_, interval)), Some((code, at))) = (self.timing, self.held.as_mut()) else {
+            return Vec::new();
+        };
         let mut due = Vec::new();
         while *at <= now {
             due.push(*code);
@@ -143,16 +181,40 @@ mod tests {
 
     fn us_layout() -> Translator {
         let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
-        let keymap = xkb::Keymap::new_from_names(&context, "", "", "us", "", None, xkb::KEYMAP_COMPILE_NO_FLAGS).expect("the us layout compiles");
+        let keymap = xkb::Keymap::new_from_names(
+            &context,
+            "",
+            "",
+            "us",
+            "",
+            None,
+            xkb::KEYMAP_COMPILE_NO_FLAGS,
+        )
+        .expect("the us layout compiles");
         Translator::new(keymap)
     }
 
     #[test]
     fn letters_follow_shift_and_control_keys_have_no_character() {
         let mut t = us_layout();
-        assert_eq!(t.translate(KEY_A), Translation { mods: Modifiers::default(), character: Some('a') });
+        assert_eq!(
+            t.translate(KEY_A),
+            Translation {
+                mods: Modifiers::default(),
+                character: Some('a')
+            }
+        );
         t.update_modifiers(LEVEL_SHIFT, 0, 0, 0);
-        assert_eq!(t.translate(KEY_A), Translation { mods: Modifiers { shift: true, ..Modifiers::default() }, character: Some('A') });
+        assert_eq!(
+            t.translate(KEY_A),
+            Translation {
+                mods: Modifiers {
+                    shift: true,
+                    ..Modifiers::default()
+                },
+                character: Some('A')
+            }
+        );
         assert_eq!(t.translate(KEY_ENTER).character, None);
     }
 
@@ -160,7 +222,16 @@ mod tests {
     fn control_is_reported_but_leaves_the_character() {
         let mut t = us_layout();
         t.update_modifiers(KEY_LEFT_CTRL_MASK, 0, 0, 0);
-        assert_eq!(t.translate(KEY_A), Translation { mods: Modifiers { ctrl: true, ..Modifiers::default() }, character: Some('a') });
+        assert_eq!(
+            t.translate(KEY_A),
+            Translation {
+                mods: Modifiers {
+                    ctrl: true,
+                    ..Modifiers::default()
+                },
+                character: Some('a')
+            }
+        );
     }
 
     #[test]

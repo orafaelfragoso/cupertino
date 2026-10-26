@@ -53,8 +53,18 @@ impl Glob {
             Some(rest) if !has_wildcard(rest) => GlobKind::Suffix,
             _ => GlobKind::Pattern,
         };
-        let pattern = if case_sensitive { pattern.to_string() } else { pattern.to_lowercase() };
-        Glob { weight, mime: mime.to_string(), pattern, case_sensitive, kind }
+        let pattern = if case_sensitive {
+            pattern.to_string()
+        } else {
+            pattern.to_lowercase()
+        };
+        Glob {
+            weight,
+            mime: mime.to_string(),
+            pattern,
+            case_sensitive,
+            kind,
+        }
     }
 
     /// Whether `name` (and its lower-cased form `lower`) matches.
@@ -193,17 +203,30 @@ fn read_optional(path: &Path) -> Result<Option<String>, LoadError> {
 
 /// The non-comment lines of a database file with their 1-based numbers.
 fn lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
-    text.lines().enumerate().map(|(i, l)| (i + 1, l.trim_end())).filter(|(_, l)| !l.is_empty() && !l.starts_with('#'))
+    text.lines()
+        .enumerate()
+        .map(|(i, l)| (i + 1, l.trim_end()))
+        .filter(|(_, l)| !l.is_empty() && !l.starts_with('#'))
 }
 
 /// `a b` lines (`aliases`, `subclasses`) or `a:b` lines (`icons`, `generic-icons`).
-fn pairs<'t>(text: &'t str, path: &Path, separator: char) -> Result<Vec<(&'t str, &'t str)>, LoadError> {
+fn pairs<'t>(
+    text: &'t str,
+    path: &Path,
+    separator: char,
+) -> Result<Vec<(&'t str, &'t str)>, LoadError> {
     lines(text)
         .map(|(n, l)| {
             l.split_once(separator)
                 .map(|(a, b)| (a.trim(), b.trim()))
                 .filter(|(a, b)| !a.is_empty() && !b.is_empty())
-                .ok_or_else(|| LoadError::Parse(ParseError { path: path.to_path_buf(), line: n, message: format!("expected two fields separated by {separator:?}") }))
+                .ok_or_else(|| {
+                    LoadError::Parse(ParseError {
+                        path: path.to_path_buf(),
+                        line: n,
+                        message: format!("expected two fields separated by {separator:?}"),
+                    })
+                })
         })
         .collect()
 }
@@ -231,10 +254,22 @@ impl MimeDatabase {
             if let Some(text) = read_optional(&globs_path)? {
                 for (n, line) in lines(&text) {
                     let mut fields = line.splitn(4, ':');
-                    let (Some(weight), Some(mime), Some(pattern)) = (fields.next(), fields.next(), fields.next()) else {
-                        return Err(LoadError::Parse(ParseError { path: globs_path, line: n, message: "expected weight:type:pattern".into() }));
+                    let (Some(weight), Some(mime), Some(pattern)) =
+                        (fields.next(), fields.next(), fields.next())
+                    else {
+                        return Err(LoadError::Parse(ParseError {
+                            path: globs_path,
+                            line: n,
+                            message: "expected weight:type:pattern".into(),
+                        }));
                     };
-                    let weight: u32 = weight.parse().map_err(|_| LoadError::Parse(ParseError { path: globs_path.clone(), line: n, message: format!("weight {weight:?} is not a number") }))?;
+                    let weight: u32 = weight.parse().map_err(|_| {
+                        LoadError::Parse(ParseError {
+                            path: globs_path.clone(),
+                            line: n,
+                            message: format!("weight {weight:?} is not a number"),
+                        })
+                    })?;
                     if no_globs.contains(mime) {
                         continue;
                     }
@@ -243,15 +278,20 @@ impl MimeDatabase {
                         cleared_here.push(mime.to_string());
                         continue;
                     }
-                    let case_sensitive = fields.next().is_some_and(|flags| flags.split(',').any(|f| f == "cs"));
-                    db.globs.push(Glob::new(weight, mime, pattern, case_sensitive));
+                    let case_sensitive = fields
+                        .next()
+                        .is_some_and(|flags| flags.split(',').any(|f| f == "cs"));
+                    db.globs
+                        .push(Glob::new(weight, mime, pattern, case_sensitive));
                 }
             }
             no_globs.extend(cleared_here);
             let path = dir.join("aliases");
             if let Some(text) = read_optional(&path)? {
                 for (alias, canonical) in pairs(&text, &path, ' ')? {
-                    db.aliases.entry(alias.to_string()).or_insert_with(|| canonical.to_string());
+                    db.aliases
+                        .entry(alias.to_string())
+                        .or_insert_with(|| canonical.to_string());
                 }
             }
             let path = dir.join("subclasses");
@@ -263,11 +303,15 @@ impl MimeDatabase {
                     }
                 }
             }
-            for (name, map) in [("icons", &mut db.icons), ("generic-icons", &mut db.generic_icons)] {
+            for (name, map) in [
+                ("icons", &mut db.icons),
+                ("generic-icons", &mut db.generic_icons),
+            ] {
                 let path = dir.join(name);
                 if let Some(text) = read_optional(&path)? {
                     for (mime, icon) in pairs(&text, &path, ':')? {
-                        map.entry(mime.to_string()).or_insert_with(|| icon.to_string());
+                        map.entry(mime.to_string())
+                            .or_insert_with(|| icon.to_string());
                     }
                 }
             }
@@ -292,11 +336,15 @@ impl MimeDatabase {
                 .iter()
                 .filter(|g| (g.kind == GlobKind::Literal) == literal && g.matches(name, &lower))
                 .fold(None::<&Glob>, |best, g| match best {
-                    Some(b) if (b.weight, b.pattern.len()) >= (g.weight, g.pattern.len()) => Some(b),
+                    Some(b) if (b.weight, b.pattern.len()) >= (g.weight, g.pattern.len()) => {
+                        Some(b)
+                    }
                     _ => Some(g),
                 })
         };
-        best(true).or_else(|| best(false)).map(|g| self.canonical(&g.mime))
+        best(true)
+            .or_else(|| best(false))
+            .map(|g| self.canonical(&g.mime))
     }
 
     /// Direct parents of `mime` (canonical): the `subclasses` entries in file order, then the implicit ones,
@@ -304,7 +352,11 @@ impl MimeDatabase {
     /// `inode/*` and the `x-content/* volume types; shared-mime-info "Subclassing").
     pub fn parents(&self, mime: &str) -> Vec<String> {
         let mime = self.canonical(mime);
-        let mut out: Vec<String> = self.parents.get(mime).map(|ps| ps.iter().map(|p| self.canonical(p).to_string()).collect()).unwrap_or_default();
+        let mut out: Vec<String> = self
+            .parents
+            .get(mime)
+            .map(|ps| ps.iter().map(|p| self.canonical(p).to_string()).collect())
+            .unwrap_or_default();
         let mut implicit = |p: &str| {
             if mime != p && !out.iter().any(|o| o == p) {
                 out.push(p.to_string());
@@ -348,12 +400,17 @@ impl MimeDatabase {
     /// (shared-mime-info "Icons").
     pub fn icon_name(&self, mime: &str) -> String {
         let mime = self.canonical(mime);
-        self.icons.get(mime).cloned().unwrap_or_else(|| mime.replace('/', "-"))
+        self.icons
+            .get(mime)
+            .cloned()
+            .unwrap_or_else(|| mime.replace('/', "-"))
     }
 
     /// The `generic-icons` entry of a type, if it has one.
     pub fn generic_icon(&self, mime: &str) -> Option<&str> {
-        self.generic_icons.get(self.canonical(mime)).map(String::as_str)
+        self.generic_icons
+            .get(self.canonical(mime))
+            .map(String::as_str)
     }
 
     /// Generic icon name of a type: its `generic-icons` entry, else `<media>-x-generic` (same
@@ -368,7 +425,10 @@ impl MimeDatabase {
 
 /// `<media>-x-generic`, the generic icon of a type without a `generic-icons` entry.
 pub fn media_generic_icon(mime: &str) -> String {
-    format!("{}-x-generic", mime.split_once('/').map_or(mime, |(media, _)| media))
+    format!(
+        "{}-x-generic",
+        mime.split_once('/').map_or(mime, |(media, _)| media)
+    )
 }
 
 /// Every type but the non-regular `inode/*` types and the `x-content/*` volume types has a byte stream.
@@ -405,10 +465,21 @@ mod tests {
     fn literal_names_win_then_the_longest_suffix() {
         let (_d, db) = db(&[("globs2", GLOBS)]);
         assert_eq!(db.type_for_name("Makefile"), Some("text/x-makefile"));
-        assert_eq!(db.type_for_name("makefile"), None, "a case-sensitive literal");
-        assert_eq!(db.type_for_name("a.tar.gz"), Some("application/x-compressed-tar"));
+        assert_eq!(
+            db.type_for_name("makefile"),
+            None,
+            "a case-sensitive literal"
+        );
+        assert_eq!(
+            db.type_for_name("a.tar.gz"),
+            Some("application/x-compressed-tar")
+        );
         assert_eq!(db.type_for_name("a.gz"), Some("application/gzip"));
-        assert_eq!(db.type_for_name("PHOTO.PNG"), Some("image/png"), "globs without cs ignore case");
+        assert_eq!(
+            db.type_for_name("PHOTO.PNG"),
+            Some("image/png"),
+            "globs without cs ignore case"
+        );
         assert_eq!(db.type_for_name("x.c"), Some("text/x-csrc"));
         assert_eq!(db.type_for_name("x.C"), Some("text/x-c++src"));
         assert_eq!(db.type_for_name("README.md"), Some("text/x-readme"));
@@ -418,13 +489,19 @@ mod tests {
 
     #[test]
     fn a_higher_weight_beats_a_longer_pattern() {
-        let (_d, db) = db(&[("globs2", "60:application/x-a:*.b\n50:application/x-ab:*.a.b\n")]);
+        let (_d, db) = db(&[(
+            "globs2",
+            "60:application/x-a:*.b\n50:application/x-ab:*.a.b\n",
+        )]);
         assert_eq!(db.type_for_name("x.a.b"), Some("application/x-a"));
     }
 
     #[test]
     fn aliases_resolve_to_the_canonical_type() {
-        let (_d, db) = db(&[("globs2", GLOBS), ("aliases", "application/x-legacy application/x-modern\n")]);
+        let (_d, db) = db(&[
+            ("globs2", GLOBS),
+            ("aliases", "application/x-legacy application/x-modern\n"),
+        ]);
         assert_eq!(db.type_for_name("f.leg"), Some("application/x-modern"));
         assert_eq!(db.canonical("application/x-legacy"), "application/x-modern");
         assert_eq!(db.canonical("image/png"), "image/png");
@@ -433,10 +510,34 @@ mod tests {
     #[test]
     fn ancestry_is_explicit_then_implicit_with_octet_stream_last() {
         let (_d, db) = db(&[("subclasses", "application/x-shellscript application/x-executable\napplication/x-shellscript text/plain\ntext/x-csrc text/plain\napplication/xml text/plain\nimage/svg+xml application/xml\n")]);
-        assert_eq!(db.ancestors("application/x-shellscript"), ["application/x-shellscript", "application/x-executable", "text/plain", "application/octet-stream"]);
-        assert_eq!(db.ancestors("text/x-rust"), ["text/x-rust", "text/plain", "application/octet-stream"], "text/* is implicitly text/plain");
-        assert_eq!(db.ancestors("image/svg+xml"), ["image/svg+xml", "application/xml", "text/plain", "application/octet-stream"]);
-        assert_eq!(db.ancestors(DIRECTORY), [DIRECTORY], "a directory is not a byte stream");
+        assert_eq!(
+            db.ancestors("application/x-shellscript"),
+            [
+                "application/x-shellscript",
+                "application/x-executable",
+                "text/plain",
+                "application/octet-stream"
+            ]
+        );
+        assert_eq!(
+            db.ancestors("text/x-rust"),
+            ["text/x-rust", "text/plain", "application/octet-stream"],
+            "text/* is implicitly text/plain"
+        );
+        assert_eq!(
+            db.ancestors("image/svg+xml"),
+            [
+                "image/svg+xml",
+                "application/xml",
+                "text/plain",
+                "application/octet-stream"
+            ]
+        );
+        assert_eq!(
+            db.ancestors(DIRECTORY),
+            [DIRECTORY],
+            "a directory is not a byte stream"
+        );
         assert_eq!(db.ancestors(OCTET_STREAM), [OCTET_STREAM]);
         assert!(db.is_a("text/x-csrc", "text/plain"));
         assert!(!db.is_a("image/png", "text/plain"));
@@ -444,7 +545,13 @@ mod tests {
 
     #[test]
     fn icon_names_follow_the_icons_files_then_the_type_name() {
-        let (_d, db) = db(&[("icons", "application/x-special:special-icon\n"), ("generic-icons", "application/zip:package-x-generic\ninode/directory:folder\n")]);
+        let (_d, db) = db(&[
+            ("icons", "application/x-special:special-icon\n"),
+            (
+                "generic-icons",
+                "application/zip:package-x-generic\ninode/directory:folder\n",
+            ),
+        ]);
         assert_eq!(db.icon_name("application/x-special"), "special-icon");
         assert_eq!(db.icon_name("image/png"), "image-png");
         assert_eq!(db.generic_icon_name("application/zip"), "package-x-generic");
@@ -460,9 +567,18 @@ mod tests {
         for d in [&user, &system] {
             std::fs::create_dir_all(d.path().join("mime")).unwrap();
         }
-        std::fs::write(user.path().join("mime/globs2"), "50:text/x-a:__NOGLOBS__\n50:text/x-a:*.aa\n").unwrap();
-        std::fs::write(system.path().join("mime/globs2"), "50:text/x-a:*.a\n50:text/x-b:*.b\n").unwrap();
-        let db = MimeDatabase::load(&[user.path().to_path_buf(), system.path().to_path_buf()]).unwrap();
+        std::fs::write(
+            user.path().join("mime/globs2"),
+            "50:text/x-a:__NOGLOBS__\n50:text/x-a:*.aa\n",
+        )
+        .unwrap();
+        std::fs::write(
+            system.path().join("mime/globs2"),
+            "50:text/x-a:*.a\n50:text/x-b:*.b\n",
+        )
+        .unwrap();
+        let db =
+            MimeDatabase::load(&[user.path().to_path_buf(), system.path().to_path_buf()]).unwrap();
         assert_eq!(db.type_for_name("x.a"), None);
         assert_eq!(db.type_for_name("x.aa"), Some("text/x-a"));
         assert_eq!(db.type_for_name("x.b"), Some("text/x-b"));
@@ -472,7 +588,11 @@ mod tests {
     fn malformed_lines_are_errors_with_their_position() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("mime")).unwrap();
-        std::fs::write(dir.path().join("mime/globs2"), "50:text/plain:*.txt\nnonsense\n").unwrap();
+        std::fs::write(
+            dir.path().join("mime/globs2"),
+            "50:text/plain:*.txt\nnonsense\n",
+        )
+        .unwrap();
         match MimeDatabase::load(&[dir.path().to_path_buf()]) {
             Err(LoadError::Parse(e)) => assert_eq!(e.line, 2),
             other => panic!("expected a parse error, got {other:?}"),

@@ -51,12 +51,22 @@ pub struct Panel {
 impl Panel {
     /// A panel of `pixels` whose image is `millimetres` large (unrotated). `None` when the physical
     /// height is unknown (zero), as for virtual outputs and displays without a size in their EDID.
-    pub fn from_physical(pixels: (u32, u32), millimetres: (u32, u32), rotated: bool) -> Option<Panel> {
+    pub fn from_physical(
+        pixels: (u32, u32),
+        millimetres: (u32, u32),
+        rotated: bool,
+    ) -> Option<Panel> {
         if millimetres.1 == 0 || pixels.1 == 0 {
             return None;
         }
         let vertical_dpi = pixels.1 as f32 / (millimetres.1 as f32 / 25.4);
-        Some(Panel { pixels_wide: pixels.0, pixels_high: pixels.1, vertical_dpi, rotated, precise_rate: false })
+        Some(Panel {
+            pixels_wide: pixels.0,
+            pixels_high: pixels.1,
+            vertical_dpi,
+            rotated,
+            precise_rate: false,
+        })
     }
 
     fn aspect_ratio(&self) -> f32 {
@@ -159,7 +169,12 @@ impl Bucket {
                     exact_seen = true;
                     true
                 } else {
-                    Self::beats(m, distance, best.map(|b| (&modes[b], best_distance)), precise)
+                    Self::beats(
+                        m,
+                        distance,
+                        best.map(|b| (&modes[b], best_distance)),
+                        precise,
+                    )
                 }
             } else if !exact {
                 false
@@ -181,7 +196,9 @@ impl Bucket {
 
     /// Whether `m` at `distance` replaces the current choice.
     fn beats(m: &Mode, distance: f32, current: Option<(&Mode, f32)>, precise: bool) -> bool {
-        let Some((b, best_distance)) = current else { return true };
+        let Some((b, best_distance)) = current else {
+            return true;
+        };
         if m.scale != b.scale {
             return m.scale > b.scale;
         }
@@ -195,8 +212,15 @@ impl Bucket {
 
 /// The "looks like" list of `panel` among `modes`.
 pub fn looks_like(panel: &Panel, modes: &[Mode]) -> LooksLike {
-    let empty = LooksLike { choices: Vec::new(), anchor: None };
-    let floor = if panel.rotated { MIN_HEIGHT_POINTS * panel.aspect_ratio() } else { MIN_HEIGHT_POINTS };
+    let empty = LooksLike {
+        choices: Vec::new(),
+        anchor: None,
+    };
+    let floor = if panel.rotated {
+        MIN_HEIGHT_POINTS * panel.aspect_ratio()
+    } else {
+        MIN_HEIGHT_POINTS
+    };
     let native = panel.pixels_high as f32;
     if floor >= native {
         return empty;
@@ -236,7 +260,9 @@ pub fn looks_like(panel: &Panel, modes: &[Mode]) -> LooksLike {
             }
         }
     }
-    let Some((anchor_bucket, anchor_mode)) = anchor else { return empty };
+    let Some((anchor_bucket, anchor_mode)) = anchor else {
+        return empty;
+    };
     let anchor_height = modes[anchor_mode].height as f32;
 
     let mut step = anchor_height / COARSE_DIVISOR;
@@ -311,7 +337,10 @@ pub fn looks_like(panel: &Panel, modes: &[Mode]) -> LooksLike {
     if choices.len() < HIDPI_CHOICES_WANTED {
         pick(false, &mut choices);
     }
-    LooksLike { choices, anchor: Some(anchor_mode) }
+    LooksLike {
+        choices,
+        anchor: Some(anchor_mode),
+    }
 }
 
 /// Output scales the compositor offers, in eighths: 1 to 3 (approximate: the design picks among
@@ -337,7 +366,14 @@ pub fn candidates(pixels: (u32, u32), refresh_mhz: u32) -> Vec<Candidate> {
             let width = (f64::from(pixels.0) / scale).round() as u32;
             let height = (f64::from(pixels.1) / scale).round() as u32;
             let backing = eighths.div_ceil(8);
-            let mode = Mode { width, height, scale: backing as f32, pixels_high: height * backing, refresh_mhz, native: eighths == 8 };
+            let mode = Mode {
+                width,
+                height,
+                scale: backing as f32,
+                pixels_high: height * backing,
+                refresh_mhz,
+                native: eighths == 8,
+            };
             Candidate { mode, scale }
         })
         .collect()
@@ -358,7 +394,11 @@ pub fn default_choice(panel: &Panel, refresh_mhz: u32) -> Option<Candidate> {
 pub fn scaled_choices(panel: &Panel, refresh_mhz: u32) -> Vec<Candidate> {
     let all = candidates((panel.pixels_wide, panel.pixels_high), refresh_mhz);
     let modes: Vec<Mode> = all.iter().map(|c| c.mode).collect();
-    looks_like(panel, &modes).by_height(&modes).into_iter().map(|i| all[i]).collect()
+    looks_like(panel, &modes)
+        .by_height(&modes)
+        .into_iter()
+        .map(|i| all[i])
+        .collect()
 }
 
 #[cfg(test)]
@@ -366,7 +406,13 @@ mod tests {
     use super::*;
 
     fn panel(pixels: (u32, u32), dpi: f32) -> Panel {
-        Panel { pixels_wide: pixels.0, pixels_high: pixels.1, vertical_dpi: dpi, rotated: false, precise_rate: false }
+        Panel {
+            pixels_wide: pixels.0,
+            pixels_high: pixels.1,
+            vertical_dpi: dpi,
+            rotated: false,
+            precise_rate: false,
+        }
     }
 
     fn heights(choices: &[Candidate]) -> Vec<u32> {
@@ -379,8 +425,14 @@ mod tests {
         // panel's 1600 pixels exactly from a 2x buffer and wins its bucket.
         let p = panel((2560, 1600), 227.0);
         let choice = default_choice(&p, 60_000).unwrap();
-        assert_eq!((choice.mode.width, choice.mode.height, choice.scale), (1280, 800, 2.0));
-        assert_eq!(heights(&scaled_choices(&p, 60_000)), vec![674, 800, 914, 1067, 1164]);
+        assert_eq!(
+            (choice.mode.width, choice.mode.height, choice.scale),
+            (1280, 800, 2.0)
+        );
+        assert_eq!(
+            heights(&scaled_choices(&p, 60_000)),
+            vec![674, 800, 914, 1067, 1164]
+        );
     }
 
     #[test]
@@ -388,11 +440,22 @@ mod tests {
         // 3840x2160 on a 27-inch panel (336 mm high, 163 ppi): the 110 ppi height is 1457 points.
         let p = Panel::from_physical((3840, 2160), (597, 336), false).unwrap();
         let choice = default_choice(&p, 60_000).unwrap();
-        assert_eq!((choice.mode.width, choice.mode.height, choice.scale), (2560, 1440, 1.5));
+        assert_eq!(
+            (choice.mode.width, choice.mode.height, choice.scale),
+            (2560, 1440, 1.5)
+        );
         let choices = scaled_choices(&p, 60_000);
         assert_eq!(choices.len(), MAX_CHOICES);
-        assert!(choices.windows(2).all(|w| w[0].mode.height < w[1].mode.height), "ordered from larger text to more space");
-        assert!(choices.iter().all(|c| c.scale > 1.0), "five HiDPI choices leave no room for 1x modes");
+        assert!(
+            choices
+                .windows(2)
+                .all(|w| w[0].mode.height < w[1].mode.height),
+            "ordered from larger text to more space"
+        );
+        assert!(
+            choices.iter().all(|c| c.scale > 1.0),
+            "five HiDPI choices leave no room for 1x modes"
+        );
     }
 
     #[test]
@@ -402,12 +465,19 @@ mod tests {
         // native mode joins the list.
         let p = Panel::from_physical((1920, 1080), (527, 296), false).unwrap();
         let choice = default_choice(&p, 60_000).unwrap();
-        assert_eq!((choice.mode.height, choice.scale, choice.mode.native), (1080, 1.0, true));
+        assert_eq!(
+            (choice.mode.height, choice.scale, choice.mode.native),
+            (1080, 1.0, true)
+        );
         let all = candidates((1920, 1080), 60_000);
         let modes: Vec<Mode> = all.iter().map(|c| c.mode).collect();
         let list = looks_like(&p, &modes);
         let picked: Vec<u32> = list.choices.iter().map(|&i| modes[i].height).collect();
-        assert_eq!(picked, vec![864, 665, 1080], "HiDPI choices first, then the 1x one");
+        assert_eq!(
+            picked,
+            vec![864, 665, 1080],
+            "HiDPI choices first, then the 1x one"
+        );
     }
 
     #[test]
@@ -425,32 +495,90 @@ mod tests {
         assert!(scaled_choices(&p, 60_000).is_empty());
         p.rotated = true;
         let choices = scaled_choices(&p, 60_000);
-        assert!(choices.iter().any(|c| c.mode.height < 640), "{:?}", heights(&choices));
-        assert!(choices.iter().all(|c| c.mode.height >= 360), "{:?}", heights(&choices));
+        assert!(
+            choices.iter().any(|c| c.mode.height < 640),
+            "{:?}",
+            heights(&choices)
+        );
+        assert!(
+            choices.iter().all(|c| c.mode.height >= 360),
+            "{:?}",
+            heights(&choices)
+        );
     }
 
     #[test]
     fn a_mode_filling_the_native_buffer_wins_over_a_nearer_one() {
-        let near = Mode { width: 1100, height: 550, scale: 2.0, pixels_high: 1100, refresh_mhz: 60_000, native: false };
-        let exact = Mode { width: 1000, height: 500, scale: 2.0, pixels_high: 1000, refresh_mhz: 60_000, native: false };
-        let bucket = Bucket { target: 550.0, members: vec![0, 1] };
+        let near = Mode {
+            width: 1100,
+            height: 550,
+            scale: 2.0,
+            pixels_high: 1100,
+            refresh_mhz: 60_000,
+            native: false,
+        };
+        let exact = Mode {
+            width: 1000,
+            height: 500,
+            scale: 2.0,
+            pixels_high: 1000,
+            refresh_mhz: 60_000,
+            native: false,
+        };
+        let bucket = Bucket {
+            target: 550.0,
+            members: vec![0, 1],
+        };
         assert_eq!(bucket.best(&[near, exact], 1000, false), Some(1));
     }
 
     #[test]
     fn ties_go_to_the_higher_scale_then_rate_then_the_nearer_height() {
-        let m = |height: u32, scale: f32, refresh_mhz: u32| Mode { width: height * 2, height, scale, pixels_high: 1, refresh_mhz, native: false };
-        let bucket = |n: usize| Bucket { target: 500.0, members: (0..n).collect() };
-        assert_eq!(bucket(2).best(&[m(500, 1.0, 60_000), m(450, 2.0, 60_000)], 1000, false), Some(1), "scale");
-        assert_eq!(bucket(2).best(&[m(500, 2.0, 59_940), m(450, 2.0, 60_000)], 1000, true), Some(1), "precise rate");
-        assert_eq!(bucket(2).best(&[m(450, 2.0, 59_940), m(500, 2.0, 60_000)], 1000, false), Some(1), "60 Hz either way, nearer wins");
-        assert_eq!(bucket(2).best(&[m(500, 2.0, 60_000), m(450, 2.0, 60_000)], 1000, false), Some(0), "nearer wins");
+        let m = |height: u32, scale: f32, refresh_mhz: u32| Mode {
+            width: height * 2,
+            height,
+            scale,
+            pixels_high: 1,
+            refresh_mhz,
+            native: false,
+        };
+        let bucket = |n: usize| Bucket {
+            target: 500.0,
+            members: (0..n).collect(),
+        };
+        assert_eq!(
+            bucket(2).best(&[m(500, 1.0, 60_000), m(450, 2.0, 60_000)], 1000, false),
+            Some(1),
+            "scale"
+        );
+        assert_eq!(
+            bucket(2).best(&[m(500, 2.0, 59_940), m(450, 2.0, 60_000)], 1000, true),
+            Some(1),
+            "precise rate"
+        );
+        assert_eq!(
+            bucket(2).best(&[m(450, 2.0, 59_940), m(500, 2.0, 60_000)], 1000, false),
+            Some(1),
+            "60 Hz either way, nearer wins"
+        );
+        assert_eq!(
+            bucket(2).best(&[m(500, 2.0, 60_000), m(450, 2.0, 60_000)], 1000, false),
+            Some(0),
+            "nearer wins"
+        );
     }
 
     #[test]
     fn modes_of_another_aspect_ratio_are_not_bucketed() {
         let p = panel((1920, 1200), 220.0);
-        let wide = Mode { width: 1280, height: 720, scale: 2.0, pixels_high: 1440, refresh_mhz: 60_000, native: false };
+        let wide = Mode {
+            width: 1280,
+            height: 720,
+            scale: 2.0,
+            pixels_high: 1440,
+            refresh_mhz: 60_000,
+            native: false,
+        };
         let bucket = Bucket::fill(&p, &[wide], 0.0, 2000.0, 720.0);
         assert!(bucket.members.is_empty());
     }
@@ -459,9 +587,20 @@ mod tests {
     fn candidates_cover_one_to_three_in_eighths() {
         let all = candidates((3840, 2160), 60_000);
         assert_eq!(all.len(), 17);
-        assert_eq!((all[0].mode.height, all[0].mode.scale, all[0].mode.native), (2160, 1.0, true));
+        assert_eq!(
+            (all[0].mode.height, all[0].mode.scale, all[0].mode.native),
+            (2160, 1.0, true)
+        );
         let one_and_a_half = all.iter().find(|c| c.scale == 1.5).unwrap();
-        assert_eq!((one_and_a_half.mode.width, one_and_a_half.mode.height, one_and_a_half.mode.scale, one_and_a_half.mode.pixels_high), (2560, 1440, 2.0, 2880));
+        assert_eq!(
+            (
+                one_and_a_half.mode.width,
+                one_and_a_half.mode.height,
+                one_and_a_half.mode.scale,
+                one_and_a_half.mode.pixels_high
+            ),
+            (2560, 1440, 2.0, 2880)
+        );
         assert_eq!(all.last().unwrap().mode.scale, 3.0);
     }
 }

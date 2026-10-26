@@ -17,7 +17,10 @@ use crate::wm::Wm;
 pub enum WorkspaceKind {
     Regular,
     /// Dedicated workspace of a full-screen window; `origin` is where the window returns to.
-    FullScreen { window: WindowId, origin: WorkspaceId },
+    FullScreen {
+        window: WindowId,
+        origin: WorkspaceId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,7 +44,10 @@ impl OutputWorkspaces {
         self.list.iter().position(|w| w.id == id)
     }
     pub(crate) fn is_animating(&self, now: f64) -> bool {
-        self.position.is_animating(now) || self.gesture_start.is_some() || !self.pending_removal.is_empty() || self.pending_reorder
+        self.position.is_animating(now)
+            || self.gesture_start.is_some()
+            || !self.pending_removal.is_empty()
+            || self.pending_reorder
     }
 }
 
@@ -58,17 +64,27 @@ impl Wm {
     }
     /// Slide position in workspace-index units (0.0 = first workspace fully shown).
     pub fn workspace_position(&self, output: OutputId, now: f64) -> f64 {
-        self.workspaces.get(&output).map_or(0.0, |w| w.position.value(now))
+        self.workspaces
+            .get(&output)
+            .map_or(0.0, |w| w.position.value(now))
     }
     pub fn windows_in_workspace(&self, ws: WorkspaceId) -> Vec<WindowId> {
-        let mut v: Vec<WindowId> = self.stack.iter().copied().filter(|id| self.windows[id].workspace == ws).collect();
+        let mut v: Vec<WindowId> = self
+            .stack
+            .iter()
+            .copied()
+            .filter(|id| self.windows[id].workspace == ws)
+            .collect();
         v.retain(|id| !self.windows[id].lifecycle.state().is_dead());
         v
     }
 
     /// Width of `output` in points; workspaces exist only for registered outputs.
     fn output_width(&self, output: OutputId) -> f64 {
-        self.output(output).expect("workspaces exist only for registered outputs").rect.w
+        self.output(output)
+            .expect("workspaces exist only for registered outputs")
+            .rect
+            .w
     }
 
     fn alloc_workspace(&mut self) -> WorkspaceId {
@@ -82,7 +98,10 @@ impl Wm {
         self.workspaces.insert(
             output,
             OutputWorkspaces {
-                list: vec![Workspace { id, kind: WorkspaceKind::Regular }],
+                list: vec![Workspace {
+                    id,
+                    kind: WorkspaceKind::Regular,
+                }],
                 current: id,
                 position: SlidePosition::new(0.0),
                 gesture_start: None,
@@ -90,37 +109,65 @@ impl Wm {
                 pending_reorder: false,
             },
         );
-        out.push(Effect::WorkspaceCreated { output, workspace: id, index: 0 });
+        out.push(Effect::WorkspaceCreated {
+            output,
+            workspace: id,
+            index: 0,
+        });
     }
 
-    pub(crate) fn add_workspace(&mut self, output: OutputId, out: &mut Vec<Effect>) -> Option<WorkspaceId> {
+    pub(crate) fn add_workspace(
+        &mut self,
+        output: OutputId,
+        out: &mut Vec<Effect>,
+    ) -> Option<WorkspaceId> {
         if !self.workspaces.contains_key(&output) {
             return None;
         }
         let id = self.alloc_workspace();
         let ws = self.workspaces.get_mut(&output).unwrap();
-        ws.list.push(Workspace { id, kind: WorkspaceKind::Regular });
-        out.push(Effect::WorkspaceCreated { output, workspace: id, index: ws.list.len() - 1 });
+        ws.list.push(Workspace {
+            id,
+            kind: WorkspaceKind::Regular,
+        });
+        out.push(Effect::WorkspaceCreated {
+            output,
+            workspace: id,
+            index: ws.list.len() - 1,
+        });
         Some(id)
     }
 
     pub(crate) fn output_of_workspace(&self, id: WorkspaceId) -> Option<OutputId> {
-        self.workspaces.iter().find(|(_, w)| w.list.iter().any(|x| x.id == id)).map(|(o, _)| *o)
+        self.workspaces
+            .iter()
+            .find(|(_, w)| w.list.iter().any(|x| x.id == id))
+            .map(|(o, _)| *o)
     }
 
     /// Remove a regular workspace; its windows move to the previous (else next) regular one.
     pub(crate) fn remove_workspace(&mut self, id: WorkspaceId, now: f64, out: &mut Vec<Effect>) {
-        let Some(output) = self.output_of_workspace(id) else { return };
+        let Some(output) = self.output_of_workspace(id) else {
+            return;
+        };
         let ws = &self.workspaces[&output];
         let idx = ws.index_of(id).unwrap();
         if ws.list[idx].kind != WorkspaceKind::Regular {
             return;
         }
-        let regulars: Vec<usize> = (0..ws.list.len()).filter(|i| ws.list[*i].kind == WorkspaceKind::Regular).collect();
+        let regulars: Vec<usize> = (0..ws.list.len())
+            .filter(|i| ws.list[*i].kind == WorkspaceKind::Regular)
+            .collect();
         if regulars.len() < 2 {
             return;
         }
-        let dest = regulars.iter().rev().find(|i| **i < idx).or_else(|| regulars.iter().find(|i| **i > idx)).copied().unwrap();
+        let dest = regulars
+            .iter()
+            .rev()
+            .find(|i| **i < idx)
+            .or_else(|| regulars.iter().find(|i| **i > idx))
+            .copied()
+            .unwrap();
         let dest_id = ws.list[dest].id;
         for w in self.windows.values_mut() {
             if w.workspace == id {
@@ -143,15 +190,27 @@ impl Wm {
         if cur_idx != cur_idx_before && !ws.position.is_animating(now) {
             ws.position.set_immediately(cur_idx as f64);
         } else if cur_idx != cur_idx_before {
-            ws.position.slide_to(cur_idx, ws.list.len(), width, SlideStart::Programmatic, now);
+            ws.position
+                .slide_to(cur_idx, ws.list.len(), width, SlideStart::Programmatic, now);
         }
-        out.push(Effect::WorkspaceRemoved { output, workspace: was.id });
+        out.push(Effect::WorkspaceRemoved {
+            output,
+            workspace: was.id,
+        });
     }
 
     /// Move a regular workspace to `index` among its output's list (clamped to the end); the slide
     /// position follows the current workspace so nothing moves on screen.
-    pub(crate) fn move_workspace(&mut self, id: WorkspaceId, index: usize, now: f64, out: &mut Vec<Effect>) {
-        let Some(output) = self.output_of_workspace(id) else { return };
+    pub(crate) fn move_workspace(
+        &mut self,
+        id: WorkspaceId,
+        index: usize,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
+        let Some(output) = self.output_of_workspace(id) else {
+            return;
+        };
         let ws = self.workspaces.get_mut(&output).unwrap();
         let from = ws.index_of(id).unwrap();
         if ws.list[from].kind != WorkspaceKind::Regular {
@@ -170,8 +229,16 @@ impl Wm {
         out.push(Effect::WorkspacesReordered { output });
     }
 
-    pub(crate) fn switch_workspace_relative(&mut self, output: OutputId, delta: i32, now: f64, out: &mut Vec<Effect>) {
-        let Some(ws) = self.workspaces.get(&output) else { return };
+    pub(crate) fn switch_workspace_relative(
+        &mut self,
+        output: OutputId,
+        delta: i32,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
+        let Some(ws) = self.workspaces.get(&output) else {
+            return;
+        };
         let idx = ws.index_of(ws.current).unwrap() as i64;
         let n = ws.list.len() as i64;
         let target = (idx + delta as i64).clamp(0, n - 1) as usize;
@@ -180,15 +247,25 @@ impl Wm {
     }
 
     /// Make `to` the current workspace of `output` with the slide animation.
-    pub(crate) fn switch_workspace(&mut self, output: OutputId, to: WorkspaceId, refocus: bool, now: f64, out: &mut Vec<Effect>) {
+    pub(crate) fn switch_workspace(
+        &mut self,
+        output: OutputId,
+        to: WorkspaceId,
+        refocus: bool,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
         let mru = self.cfg.workspaces.mru_reorder;
         let width = self.output_width(output);
-        let Some(ws) = self.workspaces.get_mut(&output) else { return };
+        let Some(ws) = self.workspaces.get_mut(&output) else {
+            return;
+        };
         let Some(idx) = ws.index_of(to) else { return };
         let from = ws.current;
         ws.gesture_start = None;
         ws.current = to;
-        ws.position.slide_to(idx, ws.list.len(), width, SlideStart::Programmatic, now);
+        ws.position
+            .slide_to(idx, ws.list.len(), width, SlideStart::Programmatic, now);
         if mru {
             ws.pending_reorder = true;
         }
@@ -209,7 +286,10 @@ impl Wm {
         let mru = self.focus.app_mru.clone();
         for app in mru {
             if let Some(w) = self.apps.get(&app).and_then(|a| {
-                a.windows_mru.iter().copied().find(|w| self.focusable(*w) && self.windows[w].output == output)
+                a.windows_mru
+                    .iter()
+                    .copied()
+                    .find(|w| self.focusable(*w) && self.windows[w].output == output)
             }) {
                 let w = self.blocking_modal(w).unwrap_or(w);
                 self.activate_front(app, now, out);
@@ -224,9 +304,13 @@ impl Wm {
     /// Bring the window onto the screen of its output: switch to its workspace
     /// (`switch_on_activate`) or move it to the current workspace.
     pub(crate) fn ensure_on_screen(&mut self, window: WindowId, now: f64, out: &mut Vec<Effect>) {
-        let Some(w) = self.windows.get(&window) else { return };
+        let Some(w) = self.windows.get(&window) else {
+            return;
+        };
         let (output, ws, sticky) = (w.output, w.workspace, w.sticky);
-        let Some(cur) = self.workspaces.get(&output).map(|o| o.current) else { return };
+        let Some(cur) = self.workspaces.get(&output).map(|o| o.current) else {
+            return;
+        };
         if sticky || cur == ws {
             return;
         }
@@ -237,9 +321,19 @@ impl Wm {
         }
     }
 
-    pub(crate) fn move_window_to_workspace(&mut self, window: WindowId, ws: WorkspaceId, now: f64, out: &mut Vec<Effect>) {
-        let Some(output) = self.output_of_workspace(ws) else { return };
-        let Some(w) = self.windows.get_mut(&window) else { return };
+    pub(crate) fn move_window_to_workspace(
+        &mut self,
+        window: WindowId,
+        ws: WorkspaceId,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
+        let Some(output) = self.output_of_workspace(ws) else {
+            return;
+        };
+        let Some(w) = self.windows.get_mut(&window) else {
+            return;
+        };
         if w.lifecycle.state().is_fullscreen() {
             return;
         }
@@ -263,10 +357,17 @@ impl Wm {
     }
 
     pub(crate) fn assign_app(&mut self, app: AppId, assignment: Assignment) {
-        let Some(a) = self.apps.get_mut(&app) else { return };
+        let Some(a) = self.apps.get_mut(&app) else {
+            return;
+        };
         let previous = a.assignment;
         a.assignment = assignment;
-        let ids: Vec<WindowId> = self.windows.values().filter(|w| w.app == app).map(|w| w.id).collect();
+        let ids: Vec<WindowId> = self
+            .windows
+            .values()
+            .filter(|w| w.app == app)
+            .map(|w| w.id)
+            .collect();
         for id in ids {
             match assignment {
                 Assignment::AllWorkspaces => self.set_sticky(id, true, true),
@@ -279,17 +380,29 @@ impl Wm {
         }
     }
 
-    pub(crate) fn fullscreen_workspace_of(&self, window: WindowId) -> Option<(OutputId, WorkspaceId)> {
+    pub(crate) fn fullscreen_workspace_of(
+        &self,
+        window: WindowId,
+    ) -> Option<(OutputId, WorkspaceId)> {
         self.workspaces.iter().find_map(|(o, ws)| {
             ws.list
                 .iter()
-                .find(|w| matches!(w.kind, WorkspaceKind::FullScreen { window: x, .. } if x == window) && !ws.pending_removal.contains(&w.id))
+                .find(|w| {
+                    matches!(w.kind, WorkspaceKind::FullScreen { window: x, .. } if x == window)
+                        && !ws.pending_removal.contains(&w.id)
+                })
                 .map(|w| (*o, w.id))
         })
     }
 
     /// Full-screen windows get their own workspace inserted after the current one.
-    pub(crate) fn enter_fullscreen_workspace(&mut self, window: WindowId, output: OutputId, now: f64, out: &mut Vec<Effect>) {
+    pub(crate) fn enter_fullscreen_workspace(
+        &mut self,
+        window: WindowId,
+        output: OutputId,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
         let reuse = self.workspaces.get(&output).and_then(|ws| {
             ws.list
                 .iter()
@@ -298,7 +411,11 @@ impl Wm {
         });
         let id = match reuse {
             Some(id) => {
-                self.workspaces.get_mut(&output).unwrap().pending_removal.retain(|w| *w != id);
+                self.workspaces
+                    .get_mut(&output)
+                    .unwrap()
+                    .pending_removal
+                    .retain(|w| *w != id);
                 id
             }
             None => {
@@ -306,8 +423,18 @@ impl Wm {
                 let ws = self.workspaces.get_mut(&output).unwrap();
                 let origin = ws.current;
                 let idx = ws.index_of(origin).unwrap() + 1;
-                ws.list.insert(idx, Workspace { id, kind: WorkspaceKind::FullScreen { window, origin } });
-                out.push(Effect::WorkspaceCreated { output, workspace: id, index: idx });
+                ws.list.insert(
+                    idx,
+                    Workspace {
+                        id,
+                        kind: WorkspaceKind::FullScreen { window, origin },
+                    },
+                );
+                out.push(Effect::WorkspaceCreated {
+                    output,
+                    workspace: id,
+                    index: idx,
+                });
                 // `position` is expressed in index units: keep the current workspace where it is.
                 let cur = ws.index_of(ws.current).unwrap();
                 let at = ws.position.value(now);
@@ -323,14 +450,33 @@ impl Wm {
 
     /// Return the window to its origin workspace; the full-screen workspace is removed once the
     /// slide has settled.
-    pub(crate) fn leave_fullscreen_workspace(&mut self, window: WindowId, now: f64, out: &mut Vec<Effect>) {
-        let Some((output, fs)) = self.fullscreen_workspace_of(window) else { return };
+    pub(crate) fn leave_fullscreen_workspace(
+        &mut self,
+        window: WindowId,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
+        let Some((output, fs)) = self.fullscreen_workspace_of(window) else {
+            return;
+        };
         let ws = &self.workspaces[&output];
         let origin = match ws.list.iter().find(|w| w.id == fs).map(|w| w.kind) {
-            Some(WorkspaceKind::FullScreen { origin, .. }) if ws.index_of(origin).is_some() => origin,
-            _ => ws.list.iter().find(|w| w.kind == WorkspaceKind::Regular).map(|w| w.id).unwrap(),
+            Some(WorkspaceKind::FullScreen { origin, .. }) if ws.index_of(origin).is_some() => {
+                origin
+            }
+            _ => ws
+                .list
+                .iter()
+                .find(|w| w.kind == WorkspaceKind::Regular)
+                .map(|w| w.id)
+                .unwrap(),
         };
-        let mut others: Vec<WindowId> = self.windows.values().filter(|w| w.workspace == fs).map(|w| w.id).collect();
+        let mut others: Vec<WindowId> = self
+            .windows
+            .values()
+            .filter(|w| w.workspace == fs)
+            .map(|w| w.id)
+            .collect();
         others.sort();
         for w in others {
             self.windows.get_mut(&w).unwrap().workspace = origin;
@@ -359,7 +505,10 @@ impl Wm {
                 }
                 if let Some(i) = ws.index_of(id) {
                     ws.list.remove(i);
-                    out.push(Effect::WorkspaceRemoved { output, workspace: id });
+                    out.push(Effect::WorkspaceRemoved {
+                        output,
+                        workspace: id,
+                    });
                 }
             }
             if ws.pending_reorder {
@@ -367,7 +516,9 @@ impl Wm {
                 let cur = ws.index_of(ws.current).unwrap();
                 if ws.list[cur].kind == WorkspaceKind::Regular && cur != 0 {
                     let mut end = cur + 1;
-                    while end < ws.list.len() && matches!(ws.list[end].kind, WorkspaceKind::FullScreen { .. }) {
+                    while end < ws.list.len()
+                        && matches!(ws.list[end].kind, WorkspaceKind::FullScreen { .. })
+                    {
                         end += 1;
                     }
                     let group: Vec<Workspace> = ws.list.drain(cur..end).collect();
@@ -385,7 +536,9 @@ impl Wm {
     }
 
     pub(crate) fn workspace_gesture_begin(&mut self, output: OutputId, now: f64) {
-        let Some(ws) = self.workspaces.get_mut(&output) else { return };
+        let Some(ws) = self.workspaces.get_mut(&output) else {
+            return;
+        };
         let p = ws.position.value(now);
         let start = ws.index_of(ws.current).unwrap();
         ws.gesture_start = Some(start);
@@ -394,8 +547,12 @@ impl Wm {
 
     pub(crate) fn workspace_gesture_update(&mut self, output: OutputId, fraction: f64, now: f64) {
         let c = self.cfg.workspaces.rubber_band;
-        let Some(ws) = self.workspaces.get_mut(&output) else { return };
-        let Some(start) = ws.gesture_start else { return };
+        let Some(ws) = self.workspaces.get_mut(&output) else {
+            return;
+        };
+        let Some(start) = ws.gesture_start else {
+            return;
+        };
         let max = (ws.list.len() - 1) as f64;
         let raw = start as f64 - fraction;
         let p = if raw < 0.0 {
@@ -408,11 +565,20 @@ impl Wm {
         ws.position.track(p, now);
     }
 
-    pub(crate) fn workspace_gesture_end(&mut self, output: OutputId, now: f64, out: &mut Vec<Effect>) {
+    pub(crate) fn workspace_gesture_end(
+        &mut self,
+        output: OutputId,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
         let cfg = self.cfg.workspaces.clone();
         let width = self.output_width(output);
-        let Some(ws) = self.workspaces.get_mut(&output) else { return };
-        let Some(start) = ws.gesture_start.take() else { return };
+        let Some(ws) = self.workspaces.get_mut(&output) else {
+            return;
+        };
+        let Some(start) = ws.gesture_start.take() else {
+            return;
+        };
         let p = ws.position.value(now);
         let v = ws.position.velocity(now);
         let max = ws.list.len() - 1;
@@ -423,12 +589,17 @@ impl Wm {
         let id = ws.list[target].id;
         let from = ws.current;
         ws.current = id;
-        ws.position.slide_to(target, ws.list.len(), width, SlideStart::Release, now);
+        ws.position
+            .slide_to(target, ws.list.len(), width, SlideStart::Release, now);
         if cfg.mru_reorder {
             ws.pending_reorder = true;
         }
         if from != id {
-            out.push(Effect::WorkspaceSwitched { output, from, to: id });
+            out.push(Effect::WorkspaceSwitched {
+                output,
+                from,
+                to: id,
+            });
             self.focus_after_switch(output, now, out);
         }
     }

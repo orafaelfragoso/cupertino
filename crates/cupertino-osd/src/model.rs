@@ -46,7 +46,14 @@ impl Kind {
 
     /// The kind of a bus name.
     pub fn from_name(name: &str) -> Option<Kind> {
-        [Kind::Volume, Kind::Mute, Kind::Brightness, Kind::KeyboardBrightness].into_iter().find(|kind| kind.name() == name)
+        [
+            Kind::Volume,
+            Kind::Mute,
+            Kind::Brightness,
+            Kind::KeyboardBrightness,
+        ]
+        .into_iter()
+        .find(|kind| kind.name() == name)
     }
 }
 
@@ -113,7 +120,15 @@ impl Overlay {
 }
 
 /// Every symbol [`Overlay::icon_name`] can return, which the renderer requires of the asset directory at startup.
-pub const ICON_NAMES: [&str; 7] = ["symbol.speaker.slash", "symbol.speaker.low", "symbol.speaker", "symbol.speaker.high", "symbol.sun", "symbol.keyboard-brightness", "symbol.keyboard-brightness.off"];
+pub const ICON_NAMES: [&str; 7] = [
+    "symbol.speaker.slash",
+    "symbol.speaker.low",
+    "symbol.speaker",
+    "symbol.speaker.high",
+    "symbol.sun",
+    "symbol.keyboard-brightness",
+    "symbol.keyboard-brightness.off",
+];
 
 /// How one segment of the meter is filled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -191,7 +206,11 @@ impl Hud {
 
     /// Show `overlay` at `now` and hold it `hold` seconds before the fade.
     pub fn show(&mut self, now: f64, overlay: Overlay, hold: f64) {
-        self.shown = Some(Shown { overlay, at: now, hold });
+        self.shown = Some(Shown {
+            overlay,
+            at: now,
+            hold,
+        });
     }
 
     /// The phase at `now`.
@@ -210,8 +229,14 @@ impl Hud {
         let faded = now - (shown.at + shown.hold);
         match self.phase(now) {
             Phase::Hidden => None,
-            Phase::Holding => Some(View { overlay: shown.overlay, alpha: 1.0 }),
-            Phase::Fading => Some(View { overlay: shown.overlay, alpha: 1.0 - faded / FADE_SECONDS }),
+            Phase::Holding => Some(View {
+                overlay: shown.overlay,
+                alpha: 1.0,
+            }),
+            Phase::Fading => Some(View {
+                overlay: shown.overlay,
+                alpha: 1.0 - faded / FADE_SECONDS,
+            }),
         }
     }
 
@@ -248,7 +273,10 @@ mod tests {
         // 8.5 segments: (int)(0.5 * 9 + 0.5) = 5 points
         assert_eq!(segments(0.53125)[8], Fill::Partial(5));
         // a quarter step has 4 distinct widths: 0.25 -> 2.25 + 0.5 = 2, 0.5 -> 5, 0.75 -> 7, 1.0 -> full
-        assert_eq!([0.25, 0.5, 0.75].map(|frac| segments((3.0 + frac) / 16.0)[3]), [Fill::Partial(2), Fill::Partial(5), Fill::Partial(7)]);
+        assert_eq!(
+            [0.25, 0.5, 0.75].map(|frac| segments((3.0 + frac) / 16.0)[3]),
+            [Fill::Partial(2), Fill::Partial(5), Fill::Partial(7)]
+        );
     }
 
     #[test]
@@ -260,7 +288,12 @@ mod tests {
 
     #[test]
     fn every_glyph_is_in_the_required_list() {
-        let kinds = [Kind::Volume, Kind::Mute, Kind::Brightness, Kind::KeyboardBrightness];
+        let kinds = [
+            Kind::Volume,
+            Kind::Mute,
+            Kind::Brightness,
+            Kind::KeyboardBrightness,
+        ];
         for kind in kinds {
             for level in [0.0, 0.0005, 0.2, 0.5, 0.9, 1.0] {
                 let name = Overlay::new(kind, level).unwrap().icon_name();
@@ -276,10 +309,26 @@ mod tests {
         assert_eq!(volume(0.2).icon_name(), "symbol.speaker.low");
         assert_eq!(volume(0.5).icon_name(), "symbol.speaker");
         assert_eq!(volume(0.9).icon_name(), "symbol.speaker.high");
-        assert_eq!(Overlay::new(Kind::Mute, 0.0).unwrap().icon_name(), "symbol.speaker.slash");
-        assert_eq!(Overlay::new(Kind::Brightness, 0.5).unwrap().icon_name(), "symbol.sun");
-        assert_eq!(Overlay::new(Kind::KeyboardBrightness, 0.5).unwrap().icon_name(), "symbol.keyboard-brightness");
-        assert_eq!(Overlay::new(Kind::KeyboardBrightness, 0.0).unwrap().icon_name(), "symbol.keyboard-brightness.off");
+        assert_eq!(
+            Overlay::new(Kind::Mute, 0.0).unwrap().icon_name(),
+            "symbol.speaker.slash"
+        );
+        assert_eq!(
+            Overlay::new(Kind::Brightness, 0.5).unwrap().icon_name(),
+            "symbol.sun"
+        );
+        assert_eq!(
+            Overlay::new(Kind::KeyboardBrightness, 0.5)
+                .unwrap()
+                .icon_name(),
+            "symbol.keyboard-brightness"
+        );
+        assert_eq!(
+            Overlay::new(Kind::KeyboardBrightness, 0.0)
+                .unwrap()
+                .icon_name(),
+            "symbol.keyboard-brightness.off"
+        );
     }
 
     #[test]
@@ -291,7 +340,10 @@ mod tests {
 
     #[test]
     fn kinds_round_trip_through_their_bus_names() {
-        assert_eq!(Kind::from_name("keyboard-brightness"), Some(Kind::KeyboardBrightness));
+        assert_eq!(
+            Kind::from_name("keyboard-brightness"),
+            Some(Kind::KeyboardBrightness)
+        );
         assert_eq!(Kind::from_name("Volume"), None);
     }
 
@@ -300,7 +352,13 @@ mod tests {
         let mut hud = Hud::new();
         assert_eq!(hud.view(0.0), None);
         hud.show(10.0, volume(0.5), 1.0);
-        assert_eq!(hud.view(10.0), Some(View { overlay: volume(0.5), alpha: 1.0 }));
+        assert_eq!(
+            hud.view(10.0),
+            Some(View {
+                overlay: volume(0.5),
+                alpha: 1.0
+            })
+        );
         assert_eq!(hud.phase(10.999), Phase::Holding);
         assert_eq!(hud.until_fade(10.25), Some(0.75));
         // the fade starts at 11.0; half way through it (0.35 s) alpha is 0.5
@@ -319,7 +377,13 @@ mod tests {
         hud.show(10.0, volume(0.5), 1.0);
         assert!(hud.view(11.35).unwrap().alpha < 0.6);
         hud.show(11.35, volume(0.5625), 1.0);
-        assert_eq!(hud.view(11.35), Some(View { overlay: volume(0.5625), alpha: 1.0 }));
+        assert_eq!(
+            hud.view(11.35),
+            Some(View {
+                overlay: volume(0.5625),
+                alpha: 1.0
+            })
+        );
         assert_eq!(hud.phase(12.34), Phase::Holding);
         assert_eq!(hud.phase(12.35), Phase::Fading);
     }

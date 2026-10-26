@@ -26,7 +26,10 @@ pub enum Item {
 impl Item {
     /// Whether the control does something here; the recording controls do not.
     pub fn enabled(self) -> bool {
-        !matches!(self, Item::RecordScreen | Item::RecordWindow | Item::StopRecording | Item::RecordSelection)
+        !matches!(
+            self,
+            Item::RecordScreen | Item::RecordWindow | Item::StopRecording | Item::RecordSelection
+        )
     }
 }
 
@@ -61,12 +64,19 @@ pub fn items() -> [(Item, Rect); 10] {
 
 /// The three separators (5 x 36 at y 6 at 179 and 386, 5 x 48 at 472).
 pub fn separators() -> [Rect; 3] {
-    [in_background(179.0, 6.0, 5.0, 36.0), in_background(386.0, 6.0, 5.0, 36.0), in_background(472.0, 0.0, 5.0, 48.0)]
+    [
+        in_background(179.0, 6.0, 5.0, 36.0),
+        in_background(386.0, 6.0, 5.0, 36.0),
+        in_background(472.0, 0.0, 5.0, 48.0),
+    ]
 }
 
 /// The enabled control under `p`.
 pub fn item_at(p: Point) -> Option<Item> {
-    items().into_iter().find(|(item, rect)| item.enabled() && rect.contains(p)).map(|(item, _)| item)
+    items()
+        .into_iter()
+        .find(|(item, rect)| item.enabled() && rect.contains(p))
+        .map(|(item, _)| item)
 }
 
 /// What a row of the Options menu changes.
@@ -84,7 +94,11 @@ pub enum MenuAction {
 pub enum MenuRow {
     /// A section title, not selectable.
     Header(&'static str),
-    Choice { label: String, action: MenuAction, checked: bool },
+    Choice {
+        label: String,
+        action: MenuAction,
+        checked: bool,
+    },
     Separator,
 }
 
@@ -93,9 +107,18 @@ pub enum MenuRow {
 /// a directory set in the file is listed by its path. The mail, messaging, preview and microphone entries have no
 /// counterpart here and are left out, as is Show Mouse Clicks (it applies to recordings).
 pub fn menu(settings: &Settings) -> Vec<MenuRow> {
-    let choice = |label: String, action: MenuAction, checked: bool| MenuRow::Choice { label, action, checked };
+    let choice = |label: String, action: MenuAction, checked: bool| MenuRow::Choice {
+        label,
+        action,
+        checked,
+    };
     let mut rows = vec![MenuRow::Header("Save to")];
-    let mut locations = vec![("Desktop".to_string(), Location::Desktop), ("Documents".into(), Location::Documents), ("Pictures".into(), Location::Pictures), ("Clipboard".into(), Location::Clipboard)];
+    let mut locations = vec![
+        ("Desktop".to_string(), Location::Desktop),
+        ("Documents".into(), Location::Documents),
+        ("Pictures".into(), Location::Pictures),
+        ("Clipboard".into(), Location::Clipboard),
+    ];
     if let Location::Directory(path) = &settings.location {
         locations.push((path.display().to_string(), settings.location.clone()));
     }
@@ -106,14 +129,34 @@ pub fn menu(settings: &Settings) -> Vec<MenuRow> {
     rows.push(MenuRow::Separator);
     rows.push(MenuRow::Header("Timer"));
     for seconds in TIMER_CHOICES {
-        let label = if seconds == 0 { "None".to_string() } else { format!("{seconds} Seconds") };
-        rows.push(choice(label, MenuAction::Timer(seconds), settings.timer == seconds));
+        let label = if seconds == 0 {
+            "None".to_string()
+        } else {
+            format!("{seconds} Seconds")
+        };
+        rows.push(choice(
+            label,
+            MenuAction::Timer(seconds),
+            settings.timer == seconds,
+        ));
     }
     rows.push(MenuRow::Separator);
     rows.push(MenuRow::Header("Options"));
-    rows.push(choice("Show Floating Thumbnail".into(), MenuAction::ShowThumbnail, settings.show_thumbnail));
-    rows.push(choice("Remember Last Selection".into(), MenuAction::RememberSelection, settings.remember_selection));
-    rows.push(choice("Show Mouse Pointer".into(), MenuAction::ShowPointer, settings.show_pointer));
+    rows.push(choice(
+        "Show Floating Thumbnail".into(),
+        MenuAction::ShowThumbnail,
+        settings.show_thumbnail,
+    ));
+    rows.push(choice(
+        "Remember Last Selection".into(),
+        MenuAction::RememberSelection,
+        settings.remember_selection,
+    ));
+    rows.push(choice(
+        "Show Mouse Pointer".into(),
+        MenuAction::ShowPointer,
+        settings.show_pointer,
+    ));
     rows
 }
 
@@ -142,7 +185,11 @@ pub fn menu_layout(rows: &[MenuRow]) -> (Vec<Rect>, f64) {
     let rects = rows
         .iter()
         .map(|row| {
-            let h = if *row == MenuRow::Separator { MENU_SEPARATOR } else { MENU_ROW };
+            let h = if *row == MenuRow::Separator {
+                MENU_SEPARATOR
+            } else {
+                MENU_ROW
+            };
             let r = Rect::new(0.0, y, MENU_WIDTH, h);
             y += h;
             r
@@ -154,7 +201,10 @@ pub fn menu_layout(rows: &[MenuRow]) -> (Vec<Rect>, f64) {
 /// The selectable row under `p`, as an index into `rows`.
 pub fn menu_row_at(rows: &[MenuRow], p: Point) -> Option<usize> {
     let (rects, _) = menu_layout(rows);
-    rects.iter().zip(rows).position(|(r, row)| matches!(row, MenuRow::Choice { .. }) && r.contains(p))
+    rects
+        .iter()
+        .zip(rows)
+        .position(|(r, row)| matches!(row, MenuRow::Choice { .. }) && r.contains(p))
 }
 
 #[cfg(test)]
@@ -165,34 +215,86 @@ mod tests {
     fn the_controls_sit_where_the_nib_puts_them_inside_the_background() {
         let b = background();
         assert_eq!(b, Rect::new(34.0, 28.0, 560.0, 48.0));
-        let capture = items().into_iter().find(|(i, _)| *i == Item::Capture).map(|(_, r)| r).expect("a capture button");
-        assert_eq!(capture.max_x(), b.max_x(), "the Capture button ends at the background's edge");
-        assert_eq!(item_at(Point::new(34.0 + 31.0 + 1.0, 50.0)), Some(Item::Mode(Mode::Screen)));
-        assert_eq!(item_at(Point::new(34.0 + 130.0, 50.0)), Some(Item::Mode(Mode::Selection)));
-        assert_eq!(item_at(Point::new(34.0 + 200.0, 50.0)), None, "recording is disabled");
+        let capture = items()
+            .into_iter()
+            .find(|(i, _)| *i == Item::Capture)
+            .map(|(_, r)| r)
+            .expect("a capture button");
+        assert_eq!(
+            capture.max_x(),
+            b.max_x(),
+            "the Capture button ends at the background's edge"
+        );
+        assert_eq!(
+            item_at(Point::new(34.0 + 31.0 + 1.0, 50.0)),
+            Some(Item::Mode(Mode::Screen))
+        );
+        assert_eq!(
+            item_at(Point::new(34.0 + 130.0, 50.0)),
+            Some(Item::Mode(Mode::Selection))
+        );
+        assert_eq!(
+            item_at(Point::new(34.0 + 200.0, 50.0)),
+            None,
+            "recording is disabled"
+        );
         assert_eq!(item_at(Point::new(34.0 + 400.0, 50.0)), Some(Item::Options));
-        assert_eq!(item_at(Point::new(10.0, 10.0)), None, "the shadow gutter is not a control");
+        assert_eq!(
+            item_at(Point::new(10.0, 10.0)),
+            None,
+            "the shadow gutter is not a control"
+        );
     }
 
     #[test]
     fn the_menu_checks_the_current_choices_and_applying_a_row_changes_the_settings() {
         let mut s = Settings::default();
         let rows = menu(&s);
-        let checked: Vec<&str> = rows.iter().filter_map(|r| match r { MenuRow::Choice { label, checked: true, .. } => Some(label.as_str()), _ => None }).collect();
-        assert_eq!(checked, ["Desktop", "None", "Show Floating Thumbnail", "Remember Last Selection"]);
+        let checked: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| match r {
+                MenuRow::Choice {
+                    label,
+                    checked: true,
+                    ..
+                } => Some(label.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            checked,
+            [
+                "Desktop",
+                "None",
+                "Show Floating Thumbnail",
+                "Remember Last Selection"
+            ]
+        );
         apply(&mut s, &MenuAction::Timer(10));
         apply(&mut s, &MenuAction::ShowPointer);
         apply(&mut s, &MenuAction::Location(Location::Clipboard));
-        assert_eq!((s.timer, s.show_pointer, s.location), (10, true, Location::Clipboard));
+        assert_eq!(
+            (s.timer, s.show_pointer, s.location),
+            (10, true, Location::Clipboard)
+        );
     }
 
     #[test]
     fn only_choice_rows_are_hit() {
         let rows = menu(&Settings::default());
         // the first row is the "Save to" header, the second Desktop
-        assert_eq!(menu_row_at(&rows, Point::new(20.0, MENU_PADDING + 1.0)), None);
-        assert_eq!(menu_row_at(&rows, Point::new(20.0, MENU_PADDING + MENU_ROW + 1.0)), Some(1));
+        assert_eq!(
+            menu_row_at(&rows, Point::new(20.0, MENU_PADDING + 1.0)),
+            None
+        );
+        assert_eq!(
+            menu_row_at(&rows, Point::new(20.0, MENU_PADDING + MENU_ROW + 1.0)),
+            Some(1)
+        );
         let (_, height) = menu_layout(&rows);
-        assert_eq!(height, 2.0 * MENU_PADDING + 13.0 * MENU_ROW + 2.0 * MENU_SEPARATOR);
+        assert_eq!(
+            height,
+            2.0 * MENU_PADDING + 13.0 * MENU_ROW + 2.0 * MENU_SEPARATOR
+        );
     }
 }

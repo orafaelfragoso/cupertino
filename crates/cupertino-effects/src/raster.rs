@@ -5,7 +5,9 @@
 //! Textures are sampled bilinearly with clamped coordinates. All pixmaps hold premultiplied RGBA.
 
 use crate::mesh::Mesh;
-use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, PixmapPaint, Rect as SkRect, Stroke, Transform};
+use tiny_skia::{
+    Color, FillRule, Paint, PathBuilder, Pixmap, PixmapPaint, Rect as SkRect, Stroke, Transform,
+};
 
 const SS: usize = 2;
 
@@ -22,20 +24,38 @@ fn sample(tex: &Pixmap, u: f32, v: f32) -> [f32; 4] {
     let (x0, y0) = (x.floor(), y.floor());
     let (fx, fy) = (x - x0, y - y0);
     let (x0, y0) = (x0 as i64, y0 as i64);
-    let (a, b, c, d) = (texel(tex, x0, y0), texel(tex, x0 + 1, y0), texel(tex, x0, y0 + 1), texel(tex, x0 + 1, y0 + 1));
-    std::array::from_fn(|i| (a[i] * (1.0 - fx) + b[i] * fx) * (1.0 - fy) + (c[i] * (1.0 - fx) + d[i] * fx) * fy)
+    let (a, b, c, d) = (
+        texel(tex, x0, y0),
+        texel(tex, x0 + 1, y0),
+        texel(tex, x0, y0 + 1),
+        texel(tex, x0 + 1, y0 + 1),
+    );
+    std::array::from_fn(|i| {
+        (a[i] * (1.0 - fx) + b[i] * fx) * (1.0 - fy) + (c[i] * (1.0 - fx) + d[i] * fx) * fy
+    })
 }
 
 /// Draw `mesh` (positions in output coordinates, shifted by `offset`) textured with `texture` onto
 /// `dst`, scaled by `opacity`.
-pub fn draw_mesh(dst: &mut Pixmap, texture: &Pixmap, mesh: &Mesh, offset: (f32, f32), opacity: f32) {
+pub fn draw_mesh(
+    dst: &mut Pixmap,
+    texture: &Pixmap,
+    mesh: &Mesh,
+    offset: (f32, f32),
+    opacity: f32,
+) {
     let (w, h) = (dst.width() as usize, dst.height() as usize);
     let (sw, sh) = (w * SS, h * SS);
     let mut buf = vec![[0.0f32; 4]; sw * sh];
     let idx = mesh.indices();
     let vert = |i: u32| {
         let v = mesh.vertices[i as usize];
-        ((v.position[0] + offset.0) * SS as f32, (v.position[1] + offset.1) * SS as f32, v.uv[0], v.uv[1])
+        (
+            (v.position[0] + offset.0) * SS as f32,
+            (v.position[1] + offset.1) * SS as f32,
+            v.uv[0],
+            v.uv[1],
+        )
     };
     for &[i0, i1, i2] in idx.as_chunks::<3>().0 {
         let (a, b, c) = (vert(i0), vert(i1), vert(i2));
@@ -114,7 +134,16 @@ pub fn draw_wireframe(dst: &mut Pixmap, mesh: &Mesh, offset: (f32, f32), color: 
         let mut paint = Paint::default();
         paint.set_color(color);
         paint.anti_alias = true;
-        dst.stroke_path(&path, &paint, &Stroke { width: 1.0, ..Stroke::default() }, Transform::identity(), None);
+        dst.stroke_path(
+            &path,
+            &paint,
+            &Stroke {
+                width: 1.0,
+                ..Stroke::default()
+            },
+            Transform::identity(),
+            None,
+        );
     }
 }
 
@@ -130,7 +159,14 @@ pub fn window_test_pattern(w: u32, h: u32) -> Pixmap {
             pm.fill_rect(r, &paint, Transform::identity(), None);
         }
     };
-    fill(&mut pm, 0.0, 0.0, wf, hf, Color::from_rgba8(238, 238, 240, 255));
+    fill(
+        &mut pm,
+        0.0,
+        0.0,
+        wf,
+        hf,
+        Color::from_rgba8(238, 238, 240, 255),
+    );
     let cell = (wf / 16.0).max(8.0);
     let top = (hf * 0.08).max(24.0);
     let mut y = top;
@@ -140,7 +176,14 @@ pub fn window_test_pattern(w: u32, h: u32) -> Pixmap {
         let mut col = 0;
         while x < wf {
             if (row + col) % 2 == 0 {
-                fill(&mut pm, x, y, cell.min(wf - x), cell.min(hf - y), Color::from_rgba8(214, 218, 226, 255));
+                fill(
+                    &mut pm,
+                    x,
+                    y,
+                    cell.min(wf - x),
+                    cell.min(hf - y),
+                    Color::from_rgba8(214, 218, 226, 255),
+                );
             }
             x += cell;
             col += 1;
@@ -148,8 +191,18 @@ pub fn window_test_pattern(w: u32, h: u32) -> Pixmap {
         y += cell;
         row += 1;
     }
-    fill(&mut pm, 0.0, 0.0, wf, top, Color::from_rgba8(60, 64, 74, 255));
-    for (i, c) in [(255, 95, 86), (255, 189, 46), (39, 201, 63)].iter().enumerate() {
+    fill(
+        &mut pm,
+        0.0,
+        0.0,
+        wf,
+        top,
+        Color::from_rgba8(60, 64, 74, 255),
+    );
+    for (i, c) in [(255, 95, 86), (255, 189, 46), (39, 201, 63)]
+        .iter()
+        .enumerate()
+    {
         let cx = top * 0.5 + i as f32 * top * 0.6;
         let mut pb = PathBuilder::new();
         pb.push_circle(cx, top * 0.5, top * 0.2);
@@ -157,17 +210,40 @@ pub fn window_test_pattern(w: u32, h: u32) -> Pixmap {
             let mut paint = Paint::default();
             paint.set_color(Color::from_rgba8(c.0, c.1, c.2, 255));
             paint.anti_alias = true;
-            pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+            pm.fill_path(
+                &path,
+                &paint,
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
         }
     }
     let stripe_y = top + (hf - top) * 0.45;
     let stripe_h = (hf - top) * 0.12;
     for i in 0..(w as usize) {
         let t = i as f32 / wf;
-        fill(&mut pm, i as f32, stripe_y, 1.0, stripe_h, Color::from_rgba8((40.0 + 200.0 * t) as u8, (110.0 + 60.0 * (1.0 - t)) as u8, (230.0 - 150.0 * t) as u8, 255));
+        fill(
+            &mut pm,
+            i as f32,
+            stripe_y,
+            1.0,
+            stripe_h,
+            Color::from_rgba8(
+                (40.0 + 200.0 * t) as u8,
+                (110.0 + 60.0 * (1.0 - t)) as u8,
+                (230.0 - 150.0 * t) as u8,
+                255,
+            ),
+        );
     }
     let b = (wf.min(hf) * 0.012).max(2.0);
-    for (x, y, ww, hh) in [(0.0, 0.0, wf, b), (0.0, hf - b, wf, b), (0.0, 0.0, b, hf), (wf - b, 0.0, b, hf)] {
+    for (x, y, ww, hh) in [
+        (0.0, 0.0, wf, b),
+        (0.0, hf - b, wf, b),
+        (0.0, 0.0, b, hf),
+        (wf - b, 0.0, b, hf),
+    ] {
         fill(&mut pm, x, y, ww, hh, Color::from_rgba8(230, 60, 60, 255));
     }
     pm
@@ -177,13 +253,25 @@ pub fn window_test_pattern(w: u32, h: u32) -> Pixmap {
 pub fn contact_sheet(frames: &[Pixmap], cols: usize, pad: u32, background: Color) -> Pixmap {
     let cols = cols.max(1);
     let rows = frames.len().div_ceil(cols).max(1);
-    let (cw, ch) = frames.iter().fold((1, 1), |a, f| (a.0.max(f.width()), a.1.max(f.height())));
-    let (w, h) = (cols as u32 * (cw + pad) + pad, rows as u32 * (ch + pad) + pad);
+    let (cw, ch) = frames
+        .iter()
+        .fold((1, 1), |a, f| (a.0.max(f.width()), a.1.max(f.height())));
+    let (w, h) = (
+        cols as u32 * (cw + pad) + pad,
+        rows as u32 * (ch + pad) + pad,
+    );
     let mut sheet = Pixmap::new(w, h).expect("non-zero size");
     sheet.fill(background);
     for (i, f) in frames.iter().enumerate() {
         let (c, r) = ((i % cols) as u32, (i / cols) as u32);
-        sheet.draw_pixmap((pad + c * (cw + pad)) as i32, (pad + r * (ch + pad)) as i32, f.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
+        sheet.draw_pixmap(
+            (pad + c * (cw + pad)) as i32,
+            (pad + r * (ch + pad)) as i32,
+            f.as_ref(),
+            &PixmapPaint::default(),
+            Transform::identity(),
+            None,
+        );
     }
     sheet
 }
@@ -202,7 +290,13 @@ mod tests {
     fn identity_mesh_reproduces_the_texture() {
         let tex = window_test_pattern(64, 48);
         let mut dst = Pixmap::new(64, 48).unwrap();
-        draw_mesh(&mut dst, &tex, &Mesh::quad(Rect::new(0.0, 0.0, 64.0, 48.0)), (0.0, 0.0), 1.0);
+        draw_mesh(
+            &mut dst,
+            &tex,
+            &Mesh::quad(Rect::new(0.0, 0.0, 64.0, 48.0)),
+            (0.0, 0.0),
+            1.0,
+        );
         let mut sum = 0i64;
         for y in 1..47 {
             for x in 1..63 {
@@ -221,7 +315,13 @@ mod tests {
     fn mesh_outside_the_destination_is_clipped() {
         let tex = window_test_pattern(32, 32);
         let mut dst = Pixmap::new(16, 16).unwrap();
-        draw_mesh(&mut dst, &tex, &Mesh::quad(Rect::new(-100.0, -100.0, 50.0, 50.0)), (0.0, 0.0), 1.0);
+        draw_mesh(
+            &mut dst,
+            &tex,
+            &Mesh::quad(Rect::new(-100.0, -100.0, 50.0, 50.0)),
+            (0.0, 0.0),
+            1.0,
+        );
         assert!(dst.data().iter().all(|&b| b == 0));
     }
 
@@ -229,7 +329,13 @@ mod tests {
     fn opacity_scales_alpha() {
         let tex = window_test_pattern(32, 32);
         let mut dst = Pixmap::new(32, 32).unwrap();
-        draw_mesh(&mut dst, &tex, &Mesh::quad(Rect::new(0.0, 0.0, 32.0, 32.0)), (0.0, 0.0), 0.5);
+        draw_mesh(
+            &mut dst,
+            &tex,
+            &Mesh::quad(Rect::new(0.0, 0.0, 32.0, 32.0)),
+            (0.0, 0.0),
+            0.5,
+        );
         let a = px(&dst, 16, 16)[3];
         assert!((a as i32 - 128).abs() <= 2, "{a}");
     }

@@ -33,7 +33,12 @@ pub fn window_kind(modal: bool, utility: bool) -> WindowKind {
 /// its top at the bottom of the parent's title bar of `titlebar` points
 /// (for a window without a toolbar).
 pub fn sheet_frame(parent: Rect, size: Size, titlebar: f64) -> Rect {
-    Rect::new(parent.x + (0.5 * (parent.w - size.w)).round(), parent.y + titlebar, size.w, size.h)
+    Rect::new(
+        parent.x + (0.5 * (parent.w - size.w)).round(),
+        parent.y + titlebar,
+        size.w,
+        size.h,
+    )
 }
 
 /// Frame of a modal panel of `size` without a parent, the design's window centring on the usable area:
@@ -41,7 +46,12 @@ pub fn sheet_frame(parent: Rect, size: Size, titlebar: f64) -> Rect {
 /// points. With `previous` (the top-left corner of the application's modal panel
 /// that is already up) it opens [`MODAL_CASCADE`] right of and below it instead, kept inside
 /// `screen`.
-pub fn modal_panel_frame(usable: Rect, screen: Rect, size: Size, previous: Option<(f64, f64)>) -> Rect {
+pub fn modal_panel_frame(
+    usable: Rect,
+    screen: Rect,
+    size: Size,
+    previous: Option<(f64, f64)>,
+) -> Rect {
     match previous {
         Some((x, y)) => {
             let x = (x + MODAL_CASCADE.0).min(screen.right() - size.w);
@@ -50,7 +60,12 @@ pub fn modal_panel_frame(usable: Rect, screen: Rect, size: Size, previous: Optio
         }
         None => {
             let (dx, dy) = (usable.w - size.w, usable.h - size.h);
-            Rect::new((usable.x + 0.5 * dx).round(), (usable.y + 0.25 * dy).round(), size.w, size.h)
+            Rect::new(
+                (usable.x + 0.5 * dx).round(),
+                (usable.y + 0.25 * dy).round(),
+                size.w,
+                size.h,
+            )
         }
     }
 }
@@ -60,8 +75,14 @@ pub fn modal_panel_frame(usable: Rect, screen: Rect, size: Size, previous: Optio
 /// is not known (a panel centres on the screen, but a child window there is placed by
 /// its application).
 pub fn child_frame(parent: Rect, size: Size, usable: Rect) -> Rect {
-    let x = (parent.cx() - size.w / 2.0).round().min(usable.right() - size.w).max(usable.x);
-    let y = (parent.cy() - size.h / 2.0).round().min(usable.bottom() - size.h).max(usable.y);
+    let x = (parent.cx() - size.w / 2.0)
+        .round()
+        .min(usable.right() - size.w)
+        .max(usable.x);
+    let y = (parent.cy() - size.h / 2.0)
+        .round()
+        .min(usable.bottom() - size.h)
+        .max(usable.y);
     Rect::new(x, y, size.w, size.h)
 }
 
@@ -83,7 +104,10 @@ mod tests {
     #[test]
     fn a_sheet_hangs_centred_from_the_parent_title_bar() {
         let parent = Rect::new(100.0, 50.0, 801.0, 600.0);
-        assert_eq!(sheet_frame(parent, Size::new(400.0, 200.0), 28.0), Rect::new(301.0, 78.0, 400.0, 200.0));
+        assert_eq!(
+            sheet_frame(parent, Size::new(400.0, 200.0), 28.0),
+            Rect::new(301.0, 78.0, 400.0, 200.0)
+        );
     }
 
     #[test]
@@ -96,15 +120,27 @@ mod tests {
     #[test]
     fn a_second_modal_panel_cascades_and_stays_on_screen() {
         let size = Size::new(260.0, 155.0);
-        assert_eq!(modal_panel_frame(USABLE, SCREEN, size, Some((830.0, 249.0))), Rect::new(896.0, 315.0, 260.0, 155.0));
-        assert_eq!(modal_panel_frame(USABLE, SCREEN, size, Some((1700.0, 900.0))), Rect::new(1660.0, 925.0, 260.0, 155.0));
+        assert_eq!(
+            modal_panel_frame(USABLE, SCREEN, size, Some((830.0, 249.0))),
+            Rect::new(896.0, 315.0, 260.0, 155.0)
+        );
+        assert_eq!(
+            modal_panel_frame(USABLE, SCREEN, size, Some((1700.0, 900.0))),
+            Rect::new(1660.0, 925.0, 260.0, 155.0)
+        );
     }
 
     #[test]
     fn a_child_window_centres_on_its_parent_inside_the_usable_area() {
         let parent = Rect::new(200.0, 100.0, 800.0, 600.0);
-        assert_eq!(child_frame(parent, Size::new(300.0, 200.0), USABLE), Rect::new(450.0, 300.0, 300.0, 200.0));
+        assert_eq!(
+            child_frame(parent, Size::new(300.0, 200.0), USABLE),
+            Rect::new(450.0, 300.0, 300.0, 200.0)
+        );
         let high = Rect::new(-300.0, 0.0, 400.0, 100.0);
-        assert_eq!(child_frame(high, Size::new(300.0, 200.0), USABLE), Rect::new(0.0, 24.0, 300.0, 200.0));
+        assert_eq!(
+            child_frame(high, Size::new(300.0, 200.0), USABLE),
+            Rect::new(0.0, 24.0, 300.0, 200.0)
+        );
     }
 }

@@ -32,8 +32,14 @@ pub struct OverlayText {
 }
 
 impl OverlayText {
-    pub fn new(typography: &cupertino_theme::Typography, assets: &Assets) -> Result<Self, AssetError> {
-        Ok(Self { text: TextRenderer::new(assets, FontRole::Ui)?, cap_height: (typography.metrics.cap_height / typography.metrics.units_per_em) as f32 })
+    pub fn new(
+        typography: &cupertino_theme::Typography,
+        assets: &Assets,
+    ) -> Result<Self, AssetError> {
+        Ok(Self {
+            text: TextRenderer::new(assets, FontRole::Ui)?,
+            cap_height: (typography.metrics.cap_height / typography.metrics.units_per_em) as f32,
+        })
     }
 
     /// Output scale of the surface the next calls draw for (selects the font's optical size from the point size).
@@ -49,7 +55,16 @@ impl OverlayText {
 
     /// Draw with the text vertically centred on `mid_y` (device pixels) using the cap height.
     #[allow(clippy::too_many_arguments)]
-    pub fn draw_centered(&mut self, pm: &mut Pixmap, text: &str, x: f32, mid_y: f32, px: f32, weight: u16, color: [f32; 4]) {
+    pub fn draw_centered(
+        &mut self,
+        pm: &mut Pixmap,
+        text: &str,
+        x: f32,
+        mid_y: f32,
+        px: f32,
+        weight: u16,
+        color: [f32; 4],
+    ) {
         let w = self.text.effective_weight(weight);
         let baseline = mid_y + self.cap_height * px / 2.0;
         self.text.draw(pm, text, x, baseline, px, w, 0.0, color);
@@ -72,7 +87,11 @@ pub struct Overlays {
 }
 
 impl Overlays {
-    pub fn new(config: &Config, typography: &cupertino_theme::Typography, assets: &Assets) -> Result<Self, AssetError> {
+    pub fn new(
+        config: &Config,
+        typography: &cupertino_theme::Typography,
+        assets: &Assets,
+    ) -> Result<Self, AssetError> {
         Ok(Self {
             inputs: InputSources::new(config.keyboard.sources.clone()),
             accent: AccentUi::new(&config.keyboard.accent),

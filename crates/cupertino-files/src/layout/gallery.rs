@@ -17,15 +17,28 @@ pub struct StripMetrics {
     pub bottom_inset: f64,
 }
 
-pub fn strip_metrics(icon_size: u32, text_size: u16, show_titles: bool, font: FontMetrics) -> StripMetrics {
+pub fn strip_metrics(
+    icon_size: u32,
+    text_size: u16,
+    show_titles: bool,
+    font: FontMetrics,
+) -> StripMetrics {
     let mut spacing = m::SPACING_STEP;
     loop {
         let mut p = IconParams::new(icon_size, spacing as u32, text_size, true, false, font);
         p.title_enabled = show_titles;
         let cell = ideal_cell_size(&p);
         // the loop condition of the design compares the ideal width with 90 pt
-        if !show_titles || cell.w >= m::MIN_TITLE_WIDTH || spacing + m::SPACING_STEP > m::SPACING_MAX {
-            return StripMetrics { cell, grid_spacing: spacing, inter_item: m::MIN_INTER_ITEM_SPACING, bottom_inset: if show_titles { 2.0 } else { 5.0 } };
+        if !show_titles
+            || cell.w >= m::MIN_TITLE_WIDTH
+            || spacing + m::SPACING_STEP > m::SPACING_MAX
+        {
+            return StripMetrics {
+                cell,
+                grid_spacing: spacing,
+                inter_item: m::MIN_INTER_ITEM_SPACING,
+                bottom_inset: if show_titles { 2.0 } else { 5.0 },
+            };
         }
         spacing += m::SPACING_STEP;
     }
@@ -41,23 +54,42 @@ pub struct GalleryLayout {
 }
 
 /// `viewport` is the content area; the preview takes `PREVIEW_SIZE` at most and keeps the 32 pt side insets.
-pub fn layout(viewport: Size, count: usize, selected: Option<usize>, strip: &StripMetrics) -> GalleryLayout {
+pub fn layout(
+    viewport: Size,
+    count: usize,
+    selected: Option<usize>,
+    strip: &StripMetrics,
+) -> GalleryLayout {
     let strip_h = strip.cell.h + strip.bottom_inset + m::MIN_INTER_ITEM_SPACING;
     let preview_h = (viewport.h - strip_h).max(0.0);
     let side = ((m::PREVIEW_CONTAINER.0 - m::PREVIEW_SIZE) / 2.0).min(viewport.w / 4.0);
-    let ps = m::PREVIEW_SIZE.min(preview_h).min(viewport.w - 2.0 * side).max(0.0);
+    let ps = m::PREVIEW_SIZE
+        .min(preview_h)
+        .min(viewport.w - 2.0 * side)
+        .max(0.0);
     let preview = Rect::new((viewport.w - ps) / 2.0, (preview_h - ps) / 2.0, ps, ps);
     let strip_rect = Rect::new(0.0, preview_h, viewport.w, strip_h);
     let mut thumbs = Vec::with_capacity(count);
     for i in 0..count {
-        thumbs.push(Rect::new(m::MIN_INTER_ITEM_SPACING + i as f64 * (strip.cell.w + strip.inter_item), preview_h + m::MIN_INTER_ITEM_SPACING / 2.0, strip.cell.w, strip.cell.h));
+        thumbs.push(Rect::new(
+            m::MIN_INTER_ITEM_SPACING + i as f64 * (strip.cell.w + strip.inter_item),
+            preview_h + m::MIN_INTER_ITEM_SPACING / 2.0,
+            strip.cell.w,
+            strip.cell.h,
+        ));
     }
-    let total = m::MIN_INTER_ITEM_SPACING * 2.0 + count as f64 * (strip.cell.w + strip.inter_item) - strip.inter_item;
+    let total = m::MIN_INTER_ITEM_SPACING * 2.0 + count as f64 * (strip.cell.w + strip.inter_item)
+        - strip.inter_item;
     let strip_scroll = match selected.and_then(|i| thumbs.get(i)) {
         Some(t) => (t.center().x - viewport.w / 2.0).clamp(0.0, (total - viewport.w).max(0.0)),
         None => 0.0,
     };
-    GalleryLayout { preview, strip: strip_rect, thumbs, strip_scroll }
+    GalleryLayout {
+        preview,
+        strip: strip_rect,
+        thumbs,
+        strip_scroll,
+    }
 }
 
 #[cfg(test)]
@@ -65,7 +97,11 @@ mod tests {
     use super::*;
 
     fn font() -> FontMetrics {
-        FontMetrics { char_width: 8.0, line_height: 15.0, subtitle_line_height: 13.0 }
+        FontMetrics {
+            char_width: 8.0,
+            line_height: 15.0,
+            subtitle_line_height: 13.0,
+        }
     }
 
     #[test]

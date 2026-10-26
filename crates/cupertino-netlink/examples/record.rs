@@ -72,7 +72,16 @@ fn contains(buffer: &[u8], needle: &[u8]) -> bool {
 
 /// The 8-byte IPv6 interface identifier derived from a MAC (modified EUI-64).
 fn eui64(mac: [u8; 6]) -> [u8; 8] {
-    [mac[0] ^ 2, mac[1], mac[2], 0xff, 0xfe, mac[3], mac[4], mac[5]]
+    [
+        mac[0] ^ 2,
+        mac[1],
+        mac[2],
+        0xff,
+        0xfe,
+        mac[3],
+        mac[4],
+        mac[5],
+    ]
 }
 
 /// The 12 lower-case hex digits of a MAC, without separators.
@@ -81,7 +90,12 @@ fn hex(mac: &[u8; 6]) -> String {
 }
 
 fn is_private(address: Ipv4Addr) -> bool {
-    address.is_private() || address.is_loopback() || address.is_link_local() || address.is_unspecified() || address.is_multicast() || address.is_broadcast()
+    address.is_private()
+        || address.is_loopback()
+        || address.is_link_local()
+        || address.is_unspecified()
+        || address.is_multicast()
+        || address.is_broadcast()
 }
 
 #[derive(Default)]
@@ -123,7 +137,9 @@ impl Scrub {
             // all zero: the fe80::/64 route, which names no host
             if !derived_from_mac && identifier != [0; 8] {
                 let number = self.identifiers.len() as u8 + 1;
-                self.identifiers.entry(identifier).or_insert([0, 0, 0, 0, 0, 0, 0, number]);
+                self.identifiers
+                    .entry(identifier)
+                    .or_insert([0, 0, 0, 0, 0, 0, 0, number]);
             }
             return;
         }
@@ -131,12 +147,19 @@ impl Scrub {
             return;
         }
         let number = self.prefixes.len() as u8 + 1;
-        self.prefixes.entry(octets[..6].try_into().unwrap()).or_insert([0x20, 0x01, 0x0d, 0xb8, 0, number]);
+        self.prefixes
+            .entry(octets[..6].try_into().unwrap())
+            .or_insert([0x20, 0x01, 0x0d, 0xb8, 0, number]);
     }
 }
 
 /// Offsets and fake contents of the SSID bytes in the file, and of vendor elements to blank.
-fn element_patches(scrub: &Scrub, raw: &[u8], elements: &[u8], patches: &mut Vec<(usize, Vec<u8>)>) {
+fn element_patches(
+    scrub: &Scrub,
+    raw: &[u8],
+    elements: &[u8],
+    patches: &mut Vec<(usize, Vec<u8>)>,
+) {
     let mut at = 0;
     while at + 2 <= elements.len() {
         let (id, length) = (elements[at], usize::from(elements[at + 1]));
@@ -200,23 +223,39 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     for address in parse_addresses(&addresses_raw)? {
         match address.address {
-            IpAddr::V4(v4) if !is_private(v4) => return Err(format!("public IPv4 address {v4} in the address dump").into()),
+            IpAddr::V4(v4) if !is_private(v4) => {
+                return Err(format!("public IPv4 address {v4} in the address dump").into())
+            }
             IpAddr::V4(_) => {}
             IpAddr::V6(v6) => scrub.prefix(v6.octets()),
         }
     }
     for route in parse_routes(&routes_raw)? {
-        for address in [route.destination, route.gateway, route.preferred_source].into_iter().flatten() {
+        for address in [route.destination, route.gateway, route.preferred_source]
+            .into_iter()
+            .flatten()
+        {
             match address {
-                IpAddr::V4(v4) if !is_private(v4) => return Err(format!("public IPv4 address {v4} in the route dump").into()),
+                IpAddr::V4(v4) if !is_private(v4) => {
+                    return Err(format!("public IPv4 address {v4} in the route dump").into())
+                }
                 IpAddr::V4(_) => {}
                 IpAddr::V6(v6) => scrub.prefix(v6.octets()),
             }
         }
     }
-    files.push(Capture { name: "rtm-getlink", bytes: links_raw });
-    files.push(Capture { name: "rtm-getaddr", bytes: addresses_raw });
-    files.push(Capture { name: "rtm-getroute", bytes: routes_raw });
+    files.push(Capture {
+        name: "rtm-getlink",
+        bytes: links_raw,
+    });
+    files.push(Capture {
+        name: "rtm-getaddr",
+        bytes: addresses_raw,
+    });
+    files.push(Capture {
+        name: "rtm-getroute",
+        bytes: routes_raw,
+    });
 
     let mut family_id = None;
     match Nl80211::open() {
@@ -224,15 +263,24 @@ fn main() -> Result<(), Box<dyn Error>> {
             let family = nl.family().id;
             family_id = Some(family);
             let mut resolver = Socket::open(Some(GENERIC), 0, Mode::Blocking)?;
-            files.push(Capture { name: "genl-getfamily-nl80211", bytes: nl80211::family_raw(&mut resolver)? });
+            files.push(Capture {
+                name: "genl-getfamily-nl80211",
+                bytes: nl80211::family_raw(&mut resolver)?,
+            });
 
             let interfaces_raw = nl.interfaces_raw()?;
             let interfaces = nl80211::parse_interfaces(&interfaces_raw, family)?;
             for interface in &interfaces {
                 interface.mac.into_iter().for_each(|mac| scrub.mac(mac.0));
-                interface.ssid.iter().for_each(|ssid| scrub.ssid(ssid.as_bytes()));
+                interface
+                    .ssid
+                    .iter()
+                    .for_each(|ssid| scrub.ssid(ssid.as_bytes()));
             }
-            files.push(Capture { name: "nl80211-get-interface", bytes: interfaces_raw });
+            files.push(Capture {
+                name: "nl80211-get-interface",
+                bytes: interfaces_raw,
+            });
 
             // A split dump repeats the PHY's name in every part; the first part of each PHY is enough.
             let wiphys_raw = nl.wiphys_raw()?;
@@ -250,36 +298,64 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
-            files.push(Capture { name: "nl80211-get-wiphy", bytes: kept });
+            files.push(Capture {
+                name: "nl80211-get-wiphy",
+                bytes: kept,
+            });
 
-            if let Some(station) = interfaces.iter().find(|interface| interface.interface_type == InterfaceType::Station) {
+            if let Some(station) = interfaces
+                .iter()
+                .find(|interface| interface.interface_type == InterfaceType::Station)
+            {
                 let stations_raw = nl.stations_raw(station.ifindex)?;
                 for found in nl80211::parse_stations(&stations_raw, family)? {
                     scrub.mac(found.bssid.0);
                 }
-                files.push(Capture { name: "nl80211-get-station", bytes: stations_raw });
+                files.push(Capture {
+                    name: "nl80211-get-station",
+                    bytes: stations_raw,
+                });
 
                 let scan_raw = nl.scan_results_raw(station.ifindex)?;
                 let dump = nl80211::parse_scan_dump(&scan_raw, family)?;
                 if !dump.errors.is_empty() {
-                    return Err(format!("{} access points in the scan dump do not decode: {:?}", dump.errors.len(), dump.errors).into());
+                    return Err(format!(
+                        "{} access points in the scan dump do not decode: {:?}",
+                        dump.errors.len(),
+                        dump.errors
+                    )
+                    .into());
                 }
                 for result in &dump.results {
                     scrub.mac(result.bssid.0);
                     scrub.ssid(result.ssid.as_bytes());
                 }
-                files.push(Capture { name: "nl80211-get-scan", bytes: scan_raw });
+                files.push(Capture {
+                    name: "nl80211-get-scan",
+                    bytes: scan_raw,
+                });
             } else {
                 eprintln!("no station interface: station and scan dumps are not recorded");
             }
         }
-        Err(error) if nl80211::is_unsupported(&error) => eprintln!("no nl80211 in this kernel: wireless dumps are not recorded"),
+        Err(error) if nl80211::is_unsupported(&error) => {
+            eprintln!("no nl80211 in this kernel: wireless dumps are not recorded")
+        }
         Err(error) => return Err(error.into()),
     }
 
     // Distinct real values must stay distinct.
-    let distinct = |values: Vec<&Vec<u8>>| values.iter().collect::<std::collections::BTreeSet<_>>().len() == values.len();
-    assert!(distinct(scrub.ssids.values().collect()), "two SSIDs got the same fake name");
+    let distinct = |values: Vec<&Vec<u8>>| {
+        values
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == values.len()
+    };
+    assert!(
+        distinct(scrub.ssids.values().collect()),
+        "two SSIDs got the same fake name"
+    );
 
     for file in &mut files {
         if let Some(family) = family_id {
@@ -306,17 +382,37 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     for file in &files {
         for real in scrub.macs.keys() {
-            assert!(!contains(&file.bytes, real), "{} still holds a real hardware address", file.name);
-            assert!(!contains(&file.bytes, hex(real).as_bytes()), "{} still holds a real hardware address as text", file.name);
+            assert!(
+                !contains(&file.bytes, real),
+                "{} still holds a real hardware address",
+                file.name
+            );
+            assert!(
+                !contains(&file.bytes, hex(real).as_bytes()),
+                "{} still holds a real hardware address as text",
+                file.name
+            );
         }
         for real in scrub.ssids.keys().filter(|ssid| ssid.len() >= 3) {
-            assert!(!contains(&file.bytes, real), "{} still holds a real SSID", file.name);
+            assert!(
+                !contains(&file.bytes, real),
+                "{} still holds a real SSID",
+                file.name
+            );
         }
         for real in scrub.prefixes.keys() {
-            assert!(!contains(&file.bytes, real), "{} still holds a real IPv6 prefix", file.name);
+            assert!(
+                !contains(&file.bytes, real),
+                "{} still holds a real IPv6 prefix",
+                file.name
+            );
         }
         for real in scrub.identifiers.keys() {
-            assert!(!contains(&file.bytes, real), "{} still holds a real IPv6 interface identifier {real:02x?}", file.name);
+            assert!(
+                !contains(&file.bytes, real),
+                "{} still holds a real IPv6 interface identifier {real:02x?}",
+                file.name
+            );
         }
     }
 
@@ -325,6 +421,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         fs::write(out.join(format!("{}.bin", file.name)), &file.bytes)?;
         println!("{}.bin: {} bytes", file.name, file.bytes.len());
     }
-    println!("replaced {} hardware addresses, {} SSIDs, {} IPv6 prefixes, {} IPv6 interface identifiers", scrub.macs.len(), scrub.ssids.len(), scrub.prefixes.len(), scrub.identifiers.len());
+    println!(
+        "replaced {} hardware addresses, {} SSIDs, {} IPv6 prefixes, {} IPv6 interface identifiers",
+        scrub.macs.len(),
+        scrub.ssids.len(),
+        scrub.prefixes.len(),
+        scrub.identifiers.len()
+    );
     Ok(())
 }

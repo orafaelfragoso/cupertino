@@ -28,7 +28,10 @@ pub struct Error {
 
 impl Error {
     fn bus(what: &'static str) -> impl Fn(zbus::Error) -> Self {
-        move |source| Error { what, source: Box::new(source) }
+        move |source| Error {
+            what,
+            source: Box::new(source),
+        }
     }
 }
 
@@ -68,12 +71,21 @@ impl Logind {
     /// Connect to the system bus and find the session of this process (`XDG_SESSION_ID`, else the process id).
     pub fn connect() -> Result<Self, Error> {
         let what = "finding the login session";
-        let wrap = |e: cupertino_seat::Error| Error { what, source: Box::new(e) };
+        let wrap = |e: cupertino_seat::Error| Error {
+            what,
+            source: Box::new(e),
+        };
         let connection = cupertino_seat::connect().map_err(wrap)?;
         let lookup = SessionLookup::from_environment().map_err(wrap)?;
         let session = cupertino_seat::locate(&connection, &lookup).map_err(wrap)?;
-        let session_id = cupertino_seat::inspect(&connection, &session).map_err(wrap)?.id;
-        Ok(Logind { connection, session, session_id })
+        let session_id = cupertino_seat::inspect(&connection, &session)
+            .map_err(wrap)?
+            .id;
+        Ok(Logind {
+            connection,
+            session,
+            session_id,
+        })
     }
 
     /// The session's `Id`.
@@ -88,31 +100,74 @@ impl Logind {
 
     /// Hold sleep back until the returned [`Inhibitor`] is dropped.
     pub fn inhibit_sleep(&self) -> Result<Inhibitor, Error> {
-        self.inhibit("taking the sleep inhibitor", "sleep", "Lock the screen before the system sleeps", "delay")
+        self.inhibit(
+            "taking the sleep inhibitor",
+            "sleep",
+            "Lock the screen before the system sleeps",
+            "delay",
+        )
     }
 
     /// Keep logind from powering off on the power key until the returned [`Inhibitor`] is dropped; the key then reaches the
     /// compositor, whose shortcut shows the power panel.
     pub fn block_power_key(&self) -> Result<Inhibitor, Error> {
-        self.inhibit("taking the power key inhibitor", "handle-power-key", "Ask before shutting down", "block")
+        self.inhibit(
+            "taking the power key inhibitor",
+            "handle-power-key",
+            "Ask before shutting down",
+            "block",
+        )
     }
 
-    fn inhibit(&self, what: &'static str, lock: &str, why: &str, mode: &str) -> Result<Inhibitor, Error> {
-        let reply = self.connection.call_method(Some(LOGIND), MANAGER_PATH, Some(MANAGER_INTERFACE), "Inhibit", &(lock, "cupertino-login", why, mode)).map_err(Error::bus(what))?;
-        Ok(Inhibitor(reply.body().deserialize().map_err(Error::bus(what))?))
+    fn inhibit(
+        &self,
+        what: &'static str,
+        lock: &str,
+        why: &str,
+        mode: &str,
+    ) -> Result<Inhibitor, Error> {
+        let reply = self
+            .connection
+            .call_method(
+                Some(LOGIND),
+                MANAGER_PATH,
+                Some(MANAGER_INTERFACE),
+                "Inhibit",
+                &(lock, "cupertino-login", why, mode),
+            )
+            .map_err(Error::bus(what))?;
+        Ok(Inhibitor(
+            reply.body().deserialize().map_err(Error::bus(what))?,
+        ))
     }
 
     /// End this process's session (`TerminateSession`).
     pub fn terminate_session(&self) -> Result<(), Error> {
-        self.connection.call_method(Some(LOGIND), MANAGER_PATH, Some(MANAGER_INTERFACE), "TerminateSession", &self.session_id.as_str()).map(drop).map_err(Error::bus("terminating the session"))
+        self.connection
+            .call_method(
+                Some(LOGIND),
+                MANAGER_PATH,
+                Some(MANAGER_INTERFACE),
+                "TerminateSession",
+                &self.session_id.as_str(),
+            )
+            .map(drop)
+            .map_err(Error::bus("terminating the session"))
     }
 
     /// Start the reader threads. `notify` runs on them for every [`Signal`], and once with the error when a stream
     /// breaks or ends: after that no signal arrives any more.
-    pub fn listen(&self, notify: impl Fn(Result<Signal, Error>) + Send + Sync + 'static) -> Result<(), Error> {
+    pub fn listen(
+        &self,
+        notify: impl Fn(Result<Signal, Error>) + Send + Sync + 'static,
+    ) -> Result<(), Error> {
         let what = "subscribing to the login manager's signals";
         let notify = Arc::new(notify);
-        let session_signals = cupertino_seat::logind::subscribe(&self.connection, &self.session).map_err(|e| Error { what, source: Box::new(e) })?;
+        let session_signals = cupertino_seat::logind::subscribe(&self.connection, &self.session)
+            .map_err(|e| Error {
+                what,
+                source: Box::new(e),
+            })?;
         let sleep_rule = MatchRule::builder()
             .msg_type(Type::Signal)
             .sender(LOGIND)
@@ -121,13 +176,18 @@ impl Logind {
             .and_then(|b| b.member("PrepareForSleep"))
             .map_err(Error::bus(what))?
             .build();
-        let sleep_signals = MessageIterator::for_match_rule(sleep_rule, &self.connection, None).map_err(Error::bus(what))?;
+        let sleep_signals = MessageIterator::for_match_rule(sleep_rule, &self.connection, None)
+            .map_err(Error::bus(what))?;
         spawn(session_signals, Arc::clone(&notify), decode_lock)?;
         spawn(sleep_signals, notify, decode_sleep)
     }
 }
 
-fn spawn(signals: MessageIterator, notify: Arc<impl Fn(Result<Signal, Error>) + Send + Sync + 'static>, decode: fn(&Message) -> Result<Option<Signal>, zbus::Error>) -> Result<(), Error> {
+fn spawn(
+    signals: MessageIterator,
+    notify: Arc<impl Fn(Result<Signal, Error>) + Send + Sync + 'static>,
+    decode: fn(&Message) -> Result<Option<Signal>, zbus::Error>,
+) -> Result<(), Error> {
     std::thread::Builder::new()
         .name("login-signals".into())
         .spawn(move || {
@@ -138,15 +198,24 @@ fn spawn(signals: MessageIterator, notify: Arc<impl Fn(Result<Signal, Error>) + 
                     Err(e) => return notify(Err(Error::bus("reading a login manager signal")(e))),
                 }
             }
-            notify(Err(Error { what: "reading login manager signals", source: "the signal stream ended".into() }));
+            notify(Err(Error {
+                what: "reading login manager signals",
+                source: "the signal stream ended".into(),
+            }));
         })
         .map(drop)
-        .map_err(|e| Error { what: "starting the signal reader", source: Box::new(e) })
+        .map_err(|e| Error {
+            what: "starting the signal reader",
+            source: Box::new(e),
+        })
 }
 
 fn decode_lock(message: &Message) -> Result<Option<Signal>, zbus::Error> {
     let header = message.header();
-    let is_lock = header.interface().is_some_and(|i| i.as_str() == SESSION_INTERFACE) && header.member().is_some_and(|m| m.as_str() == "Lock");
+    let is_lock = header
+        .interface()
+        .is_some_and(|i| i.as_str() == SESSION_INTERFACE)
+        && header.member().is_some_and(|m| m.as_str() == "Lock");
     Ok(is_lock.then_some(Signal::Lock))
 }
 

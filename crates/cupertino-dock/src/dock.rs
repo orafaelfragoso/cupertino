@@ -6,16 +6,21 @@
 
 use std::collections::HashMap;
 
-use cupertino_animation::{AnimatedValue, CubicBezier, Curve};
 use crate::ease::{cosine_ease, EasedValue};
+use cupertino_animation::{AnimatedValue, CubicBezier, Curve};
 use cupertino_wm::geometry::{Point, Rect};
 use cupertino_wm::ids::WindowId;
 
 use crate::autohide::{reveal_zone, AutoHide, HideState};
 use crate::bounce::{Bounce, BounceKind};
 use crate::config::{BounceConfig, DockConfig, Orientation};
-use crate::magnify::{base_length, fish_ramp_ms, fish_ramp_out_ms, layout_items, FisheyeProfile, LayoutItem, MagnificationProfile};
-use crate::tile_drag::{LOOK_S, REMOVE_DELAY_S, REMOVE_FADE_CURVE, REMOVE_FADE_S, REMOVING_OPACITY, SETTLE_S, SLIDE_S};
+use crate::magnify::{
+    base_length, fish_ramp_ms, fish_ramp_out_ms, layout_items, FisheyeProfile, LayoutItem,
+    MagnificationProfile,
+};
+use crate::tile_drag::{
+    LOOK_S, REMOVE_DELAY_S, REMOVE_FADE_CURVE, REMOVE_FADE_S, REMOVING_OPACITY, SETTLE_S, SLIDE_S,
+};
 use crate::tiles::{Tile, TileId, TileKind, TileLifecycle};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -151,9 +156,16 @@ struct Departing {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DragOutcome {
     Cancelled,
-    Reordered { key: String, from: usize, to: usize },
+    Reordered {
+        key: String,
+        from: usize,
+        to: usize,
+    },
     /// Dragged out of the dock or dropped on the trash (the "poof" removal).
-    Removed { key: String, kind: TileKind },
+    Removed {
+        key: String,
+        kind: TileKind,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -195,7 +207,13 @@ pub struct Dock {
     departing: Option<Departing>,
 }
 
-fn push_section<'a>(out: &mut Vec<Slot<'a>>, list: &'a [Tile], section: Section, drag: Option<&DragState>, tile: f64) {
+fn push_section<'a>(
+    out: &mut Vec<Slot<'a>>,
+    list: &'a [Tile],
+    section: Section,
+    drag: Option<&DragState>,
+    tile: f64,
+) {
     let dragged = drag.filter(|d| d.section == section);
     let mut live = 0usize;
     let mut placed = false;
@@ -221,7 +239,10 @@ fn push_section<'a>(out: &mut Vec<Slot<'a>>, list: &'a [Tile], section: Section,
 }
 
 fn presence_curve(cfg: &DockConfig) -> Curve {
-    Curve::Timed { duration: cfg.tile_presence_s, bezier: CubicBezier::EASE_IN_EASE_OUT }
+    Curve::Timed {
+        duration: cfg.tile_presence_s,
+        bezier: CubicBezier::EASE_IN_EASE_OUT,
+    }
 }
 
 impl Dock {
@@ -314,7 +335,9 @@ impl Dock {
     // ---- model mutation -------------------------------------------------------------------
 
     fn app_index(&self, identity: &str) -> Option<usize> {
-        self.apps.iter().position(|t| t.key == identity && !t.leaving)
+        self.apps
+            .iter()
+            .position(|t| t.key == identity && !t.leaving)
     }
 
     fn ensure_app(&mut self, identity: &str, now: f64) -> usize {
@@ -376,7 +399,11 @@ impl Dock {
 
     /// Keys of the pinned applications in display order, for storing the pins ([`crate::conf::store_pins`]).
     pub fn pinned_keys(&self) -> Vec<String> {
-        self.apps.iter().filter(|t| t.pinned && !t.built_in && !t.leaving).map(|t| t.key.clone()).collect()
+        self.apps
+            .iter()
+            .filter(|t| t.pinned && !t.built_in && !t.leaving)
+            .map(|t| t.key.clone())
+            .collect()
     }
 
     pub fn unpin(&mut self, identity: &str, now: f64) {
@@ -394,7 +421,9 @@ impl Dock {
     pub fn app_launching(&mut self, identity: &str, now: f64) {
         let i = self.ensure_app(identity, now);
         self.apps[i].launch_deadline = Some(now + self.bounce.launch_timeout);
-        let running_bounce = self.apps[i].launch.is_some_and(|b| !b.is_stopping() && b.is_active(&self.bounce, now));
+        let running_bounce = self.apps[i]
+            .launch
+            .is_some_and(|b| !b.is_stopping() && b.is_active(&self.bounce, now));
         if self.cfg.launch_animation && !running_bounce {
             self.apps[i].launch = Some(Bounce::new(BounceKind::Launch, now));
         }
@@ -405,7 +434,11 @@ impl Dock {
     /// its tile bounces for the one cycle the stop rule of [`Dock::app_started`] allows. The
     /// reference registers every process that starts, whoever started it.
     pub fn app_appeared(&mut self, identity: &str, now: f64) {
-        let announced = self.app_index(identity).is_some_and(|i| self.apps[i].launch.is_some_and(|b| b.is_active(&self.bounce, now)));
+        let announced = self.app_index(identity).is_some_and(|i| {
+            self.apps[i]
+                .launch
+                .is_some_and(|b| b.is_active(&self.bounce, now))
+        });
         if !announced {
             self.app_launching(identity, now);
         }
@@ -427,8 +460,12 @@ impl Dock {
     }
 
     pub fn app_quit(&mut self, identity: &str, now: f64) {
-        let windows: Vec<WindowId> =
-            self.minimized_windows.iter().filter(|(_, a)| a.as_str() == identity).map(|(w, _)| *w).collect();
+        let windows: Vec<WindowId> = self
+            .minimized_windows
+            .iter()
+            .filter(|(_, a)| a.as_str() == identity)
+            .map(|(w, _)| *w)
+            .collect();
         for w in windows {
             self.window_restored(w, now);
         }
@@ -447,7 +484,11 @@ impl Dock {
     /// Request attention (critical bounces until cleared; informational bounces a few arcs).
     pub fn attention(&mut self, identity: &str, critical: bool, now: f64) {
         if let Some(i) = self.app_index(identity) {
-            let kind = if critical { BounceKind::Critical } else { BounceKind::Informational };
+            let kind = if critical {
+                BounceKind::Critical
+            } else {
+                BounceKind::Informational
+            };
             self.apps[i].attention = Some(Bounce::new(kind, now));
         }
     }
@@ -464,7 +505,11 @@ impl Dock {
     /// A window was minimized: adds a tile for it, or counts it on the app tile when windows
     /// minimize into the app.
     pub fn window_minimized(&mut self, window: WindowId, app: &str, title: &str, now: f64) {
-        if self.minimized_windows.insert(window, app.to_string()).is_some() {
+        if self
+            .minimized_windows
+            .insert(window, app.to_string())
+            .is_some()
+        {
             return;
         }
         if self.cfg.minimize_to_app {
@@ -486,7 +531,10 @@ impl Dock {
     }
 
     pub fn minimized_count(&self, app: &str) -> usize {
-        self.minimized_windows.values().filter(|a| a.as_str() == app).count()
+        self.minimized_windows
+            .values()
+            .filter(|a| a.as_str() == app)
+            .count()
     }
 
     /// Replace the recents list (most recent first), truncated to `recents_max`.
@@ -522,7 +570,11 @@ impl Dock {
     /// Drop tiles whose disappear animation has finished.
     pub fn tick(&mut self, now: f64) {
         // a launch that never produced a running app: an unpinned tile has nothing left to show
-        for t in self.apps.iter_mut().filter(|t| t.launch_deadline.is_some_and(|d| now >= d)) {
+        for t in self
+            .apps
+            .iter_mut()
+            .filter(|t| t.launch_deadline.is_some_and(|d| now >= d))
+        {
             t.launch_deadline = None;
             t.launch = None;
             if !t.pinned {
@@ -537,7 +589,11 @@ impl Dock {
         if self.settle.is_some_and(|s| now >= s.start + SETTLE_S) {
             self.settle = None;
         }
-        if self.departing.as_ref().is_some_and(|d| now >= d.start + REMOVE_FADE_S) {
+        if self
+            .departing
+            .as_ref()
+            .is_some_and(|d| now >= d.start + REMOVE_FADE_S)
+        {
             self.departing = None;
         }
         if self.drag.is_none() && self.slides.is_empty() {
@@ -547,19 +603,36 @@ impl Dock {
 
     pub fn wants_tick(&self, now: f64) -> bool {
         let tiles = self.apps.iter().chain(&self.recents).chain(&self.minimized);
-        let animating = tiles.clone().any(|t| t.presence.is_animating(now) || t.bounce_lift(&self.bounce, now) > 0.0)
-            || tiles.clone().any(|t| t.launch.is_some_and(|b| b.is_active(&self.bounce, now)))
-            || tiles.clone().any(|t| t.attention.is_some_and(|b| b.is_active(&self.bounce, now)))
+        let animating = tiles
+            .clone()
+            .any(|t| t.presence.is_animating(now) || t.bounce_lift(&self.bounce, now) > 0.0)
+            || tiles
+                .clone()
+                .any(|t| t.launch.is_some_and(|b| b.is_active(&self.bounce, now)))
+            || tiles
+                .clone()
+                .any(|t| t.attention.is_some_and(|b| b.is_active(&self.bounce, now)))
             || self.apps.iter().any(|t| t.launch_deadline.is_some());
         // the auto-hide state machine only advances when it is updated, so a pending step or a
         // delay being waited out needs frames too
-        let autohide_pending = self.cfg.autohide && !matches!(self.autohide.state, HideState::Shown | HideState::Hidden);
+        let autohide_pending = self.cfg.autohide
+            && !matches!(self.autohide.state, HideState::Shown | HideState::Hidden);
         // a drag also waits for the delay before a drop can remove its tile
-        let dragging = self.drag.as_ref().is_some_and(|d| d.look.is_animating(now) || (d.zone && now - d.start < REMOVE_DELAY_S));
+        let dragging = self.drag.as_ref().is_some_and(|d| {
+            d.look.is_animating(now) || (d.zone && now - d.start < REMOVE_DELAY_S)
+        });
         let moving = self.slides.values().any(|s| s.is_active(now))
             || self.settle.is_some_and(|s| now < s.start + SETTLE_S)
-            || self.departing.as_ref().is_some_and(|d| now < d.start + REMOVE_FADE_S);
-        animating || dragging || moving || autohide_pending || self.fish.is_animating(now) || self.autohide.offset.is_animating(now)
+            || self
+                .departing
+                .as_ref()
+                .is_some_and(|d| now < d.start + REMOVE_FADE_S);
+        animating
+            || dragging
+            || moving
+            || autohide_pending
+            || self.fish.is_animating(now)
+            || self.autohide.offset.is_animating(now)
     }
 
     // ---- queries ---------------------------------------------------------------------------
@@ -586,7 +659,10 @@ impl Dock {
     }
 
     fn flow_tiles(&self) -> Vec<&Tile> {
-        self.slots(None, false).into_iter().filter_map(|s| if let Slot::Tile(t) = s { Some(t) } else { None }).collect()
+        self.slots(None, false)
+            .into_iter()
+            .filter_map(|s| if let Slot::Tile(t) = s { Some(t) } else { None })
+            .collect()
     }
 
     fn live_recents(&self) -> bool {
@@ -617,7 +693,10 @@ impl Dock {
 
     fn slot_item(&self, s: &Slot<'_>, now: Option<f64>) -> LayoutItem {
         match s {
-            Slot::Placeholder(e) => LayoutItem { extent: *e, magnify: false },
+            Slot::Placeholder(e) => LayoutItem {
+                extent: *e,
+                magnify: false,
+            },
             Slot::Tile(t) => {
                 let base = match t.kind {
                     TileKind::Separator => self.cfg.separator_extent,
@@ -628,7 +707,10 @@ impl Dock {
                     None if t.leaving => 0.0,
                     None => 1.0,
                 };
-                LayoutItem { extent: base * scale, magnify: t.kind != TileKind::Separator }
+                LayoutItem {
+                    extent: base * scale,
+                    magnify: t.kind != TileKind::Separator,
+                }
             }
         }
     }
@@ -662,8 +744,18 @@ impl Dock {
     /// a tile at the magnified size, plus the highest bounce.
     pub fn surface_extent(&self) -> f64 {
         let tile = self.cfg.tile_size;
-        let size = if self.cfg.magnification { self.cfg.large_size.max(tile) } else { tile };
-        let lift = [self.bounce.launch_lift.pt(tile), self.bounce.attention_lift.pt(tile), self.bounce.height * tile].into_iter().fold(0.0, f64::max);
+        let size = if self.cfg.magnification {
+            self.cfg.large_size.max(tile)
+        } else {
+            tile
+        };
+        let lift = [
+            self.bounce.launch_lift.pt(tile),
+            self.bounce.attention_lift.pt(tile),
+            self.bounce.height * tile,
+        ]
+        .into_iter()
+        .fold(0.0, f64::max);
         (self.cfg.edge_margin + self.cfg.bar_padding + size + lift).ceil()
     }
 
@@ -671,10 +763,18 @@ impl Dock {
     /// reveal strip while the dock is hidden.
     pub fn input_rects(&self, screen: Rect, now: f64) -> Vec<Rect> {
         if self.is_hidden(now) {
-            return vec![reveal_zone(self.cfg.orientation, screen, self.cfg.reveal_thickness)];
+            return vec![reveal_zone(
+                self.cfg.orientation,
+                screen,
+                self.cfg.reveal_thickness,
+            )];
         }
         let layout = self.layout(screen, now);
-        let tiles = layout.tiles.iter().filter(|t| t.kind != TileKind::Separator && t.presence > 0.0).map(|t| t.visible_rect(self.cfg.orientation));
+        let tiles = layout
+            .tiles
+            .iter()
+            .filter(|t| t.kind != TileKind::Separator && t.presence > 0.0)
+            .map(|t| t.visible_rect(self.cfg.orientation));
         std::iter::once(layout.bar).chain(tiles).collect()
     }
 
@@ -685,7 +785,11 @@ impl Dock {
 
     /// Unmagnified length of the dock flow at `now`.
     pub fn unmagnified_length(&self, now: f64) -> f64 {
-        let items: Vec<LayoutItem> = self.slots(self.drag.as_ref(), false).iter().map(|s| self.slot_item(s, Some(now))).collect();
+        let items: Vec<LayoutItem> = self
+            .slots(self.drag.as_ref(), false)
+            .iter()
+            .map(|s| self.slot_item(s, Some(now)))
+            .collect();
         base_length(&self.cfg, &items)
     }
 
@@ -701,9 +805,21 @@ impl Dock {
 
     /// Current layout in screen coordinates.
     pub fn layout(&self, screen: Rect, now: f64) -> DockLayout {
-        let hide = if self.cfg.autohide { self.autohide.hidden_fraction(now) } else { 0.0 };
+        let hide = if self.cfg.autohide {
+            self.autohide.hidden_fraction(now)
+        } else {
+            0.0
+        };
         let drag = self.drag.clone();
-        self.build(screen, self.effective_hover(now), self.fish.value(now), hide, Some(now), drag.as_ref(), false)
+        self.build(
+            screen,
+            self.effective_hover(now),
+            self.fish.value(now),
+            hide,
+            Some(now),
+            drag.as_ref(),
+            false,
+        )
     }
 
     /// Layout at rest (no magnification, shown, appear/disappear animations completed) with an
@@ -739,18 +855,37 @@ impl Dock {
         let thickness = cfg.tile_size + 2.0 * cfg.bar_padding;
         let first = frames.first().map_or(0.0, |f| f.pos);
         let last = frames.last().map_or(0.0, |f| f.pos + f.size);
-        let (a0, a1) = (centre + first - cfg.bar_padding, centre + last + cfg.bar_padding);
+        let (a0, a1) = (
+            centre + first - cfg.bar_padding,
+            centre + last + cfg.bar_padding,
+        );
         let slide = hide * (thickness + cfg.edge_margin);
         let bar = match cfg.orientation {
-            Orientation::Bottom => Rect::new(a0, screen.bottom() - cfg.edge_margin - thickness + slide, a1 - a0, thickness),
-            Orientation::Left => Rect::new(screen.x + cfg.edge_margin - slide, a0, thickness, a1 - a0),
-            Orientation::Right => Rect::new(screen.right() - cfg.edge_margin - thickness + slide, a0, thickness, a1 - a0),
+            Orientation::Bottom => Rect::new(
+                a0,
+                screen.bottom() - cfg.edge_margin - thickness + slide,
+                a1 - a0,
+                thickness,
+            ),
+            Orientation::Left => {
+                Rect::new(screen.x + cfg.edge_margin - slide, a0, thickness, a1 - a0)
+            }
+            Orientation::Right => Rect::new(
+                screen.right() - cfg.edge_margin - thickness + slide,
+                a0,
+                thickness,
+                a1 - a0,
+            ),
         };
         let place = |axis: f64, size: f64, cross: f64| -> Rect {
             match cfg.orientation {
-                Orientation::Bottom => Rect::new(axis, bar.bottom() - cfg.bar_padding - cross, size, cross),
+                Orientation::Bottom => {
+                    Rect::new(axis, bar.bottom() - cfg.bar_padding - cross, size, cross)
+                }
                 Orientation::Left => Rect::new(bar.x + cfg.bar_padding, axis, cross, size),
-                Orientation::Right => Rect::new(bar.right() - cfg.bar_padding - cross, axis, cross, size),
+                Orientation::Right => {
+                    Rect::new(bar.right() - cfg.bar_padding - cross, axis, cross, size)
+                }
             }
         };
         let at = now.unwrap_or(0.0);
@@ -761,23 +896,44 @@ impl Dock {
             match slot {
                 Slot::Placeholder(_) => placeholder = Some(place(axis, f.size, cfg.tile_size)),
                 Slot::Tile(t) => {
-                    let cross = if t.kind == TileKind::Separator { cfg.tile_size } else { f.size };
+                    let cross = if t.kind == TileKind::Separator {
+                        cfg.tile_size
+                    } else {
+                        f.size
+                    };
                     tiles.push(self.placed(t, place(axis, f.size, cross), now.map(|_| at)));
                 }
             }
         }
         let mut dragging = drag.and_then(|d| {
-            let t = self.apps.iter().chain(&self.recents).find(|t| t.id == d.id)?;
+            let t = self
+                .apps
+                .iter()
+                .chain(&self.recents)
+                .find(|t| t.id == d.id)?;
             let rect = self.dragged_rect(d);
             let look = d.look.value(at);
-            Some(DraggedTile { tile: self.placed(t, rect, now), key: t.key.clone(), opacity: 1.0 - look * (1.0 - REMOVING_OPACITY), label: look, indicator: 0.0 })
+            Some(DraggedTile {
+                tile: self.placed(t, rect, now),
+                key: t.key.clone(),
+                opacity: 1.0 - look * (1.0 - REMOVING_OPACITY),
+                label: look,
+                indicator: 0.0,
+            })
         });
         if dragging.is_none() {
             if let Some(n) = now {
-                dragging = self.settling_tile(&mut tiles, n).or_else(|| self.departing_tile(n));
+                dragging = self
+                    .settling_tile(&mut tiles, n)
+                    .or_else(|| self.departing_tile(n));
             }
         }
-        DockLayout { bar, tiles, dragging, placeholder }
+        DockLayout {
+            bar,
+            tiles,
+            dragging,
+            placeholder,
+        }
     }
 
     fn placed(&self, t: &Tile, rect: Rect, now: Option<f64>) -> PlacedTile {
@@ -786,7 +942,11 @@ impl Dock {
             id: t.id,
             kind: t.kind,
             rect,
-            lift: if now.is_some() { t.bounce_lift_pt(&self.bounce, self.cfg.tile_size, n) } else { 0.0 },
+            lift: if now.is_some() {
+                t.bounce_lift_pt(&self.bounce, self.cfg.tile_size, n)
+            } else {
+                0.0
+            },
             lifecycle: t.lifecycle(&self.bounce, n),
             indicator: self.cfg.show_running_indicators && t.running && t.kind == TileKind::App,
             presence: now.map_or(1.0, |n| t.presence(n)),
@@ -808,7 +968,11 @@ impl Dock {
                 continue;
             }
             if t.rect.contains(p) {
-                return Some(TileHit { id: t.id, kind: t.kind, index });
+                return Some(TileHit {
+                    id: t.id,
+                    kind: t.kind,
+                    index,
+                });
             }
             let (lo, hi) = self.cross_range(&layout.bar, &t.rect);
             let (axis, cross, a0, a1) = if horizontal {
@@ -817,7 +981,11 @@ impl Dock {
                 (p.y, p.x, t.rect.y, t.rect.bottom())
             };
             if axis >= a0 && axis < a1 && cross >= lo && cross < hi {
-                return Some(TileHit { id: t.id, kind: t.kind, index });
+                return Some(TileHit {
+                    id: t.id,
+                    kind: t.kind,
+                    index,
+                });
             }
         }
         None
@@ -829,7 +997,11 @@ impl Dock {
     }
 
     fn over_dock(&self, layout: &DockLayout, p: Point) -> bool {
-        layout.bar.contains(p) || layout.tiles.iter().any(|t| t.kind != TileKind::Separator && t.rect.contains(p))
+        layout.bar.contains(p)
+            || layout
+                .tiles
+                .iter()
+                .any(|t| t.kind != TileKind::Separator && t.rect.contains(p))
     }
 
     /// Feed the pointer position (`None` when it left the output). Drives the magnification ramp,
@@ -852,10 +1024,18 @@ impl Dock {
         if over != self.hot {
             self.hot = over;
             let amount = self.fish.value(now) * (self.cfg.large_size - self.cfg.tile_size).max(0.0);
-            let ms = if over { fish_ramp_ms(&self.cfg, amount, false) } else { fish_ramp_out_ms(&self.cfg, amount, false) };
-            self.fish.animate_to(if over { 1.0 } else { 0.0 }, ms / 1000.0, now);
+            let ms = if over {
+                fish_ramp_ms(&self.cfg, amount, false)
+            } else {
+                fish_ramp_out_ms(&self.cfg, amount, false)
+            };
+            self.fish
+                .animate_to(if over { 1.0 } else { 0.0 }, ms / 1000.0, now);
         }
-        self.hovered = pointer.filter(|_| over).and_then(|p| self.hit_in(&self.layout(screen, now), p)).map(|h| h.id);
+        self.hovered = pointer
+            .filter(|_| over)
+            .and_then(|p| self.hit_in(&self.layout(screen, now), p))
+            .map(|h| h.id);
     }
 
     // ---- minimize target ---------------------------------------------------------------------
@@ -867,40 +1047,80 @@ impl Dock {
     pub fn minimize_target(&self, window: WindowId, app: &str, screen: Rect) -> Option<Rect> {
         if self.cfg.minimize_to_app {
             let t = self.app_tile(app)?;
-            return self.rest_layout(screen, false).tiles.iter().find(|p| p.id == t.id).map(|p| p.rect);
+            return self
+                .rest_layout(screen, false)
+                .tiles
+                .iter()
+                .find(|p| p.id == t.id)
+                .map(|p| p.rect);
         }
-        if let Some(t) = self.minimized.iter().find(|t| t.window == Some(window) && !t.leaving) {
-            return self.rest_layout(screen, false).tiles.iter().find(|p| p.id == t.id).map(|p| p.rect);
+        if let Some(t) = self
+            .minimized
+            .iter()
+            .find(|t| t.window == Some(window) && !t.leaving)
+        {
+            return self
+                .rest_layout(screen, false)
+                .tiles
+                .iter()
+                .find(|p| p.id == t.id)
+                .map(|p| p.rect);
         }
         self.rest_layout(screen, true).placeholder
     }
 
     /// Rectangle (dock at rest, shown) of the slot the tile of the next minimized window takes.
     pub fn next_minimized_slot(&self, screen: Rect) -> Rect {
-        self.rest_layout(screen, true).placeholder.expect("a layout with a ghost slot has a placeholder")
+        self.rest_layout(screen, true)
+            .placeholder
+            .expect("a layout with a ghost slot has a placeholder")
     }
 
     // ---- drag and reorder --------------------------------------------------------------------
 
     fn section_of(&self, id: TileId) -> Option<(Section, usize)> {
         let live = |list: &[Tile]| list.iter().filter(|t| !t.leaving).position(|t| t.id == id);
-        live(&self.apps).map(|i| (Section::Apps, i)).or_else(|| live(&self.recents).map(|i| (Section::Recents, i)))
+        live(&self.apps)
+            .map(|i| (Section::Apps, i))
+            .or_else(|| live(&self.recents).map(|i| (Section::Recents, i)))
     }
 
     /// Where the dragged icon is drawn: where it was grabbed, relative to the pointer.
     fn dragged_rect(&self, d: &DragState) -> Rect {
-        Rect::new(d.pointer.x + d.grab.x, d.pointer.y + d.grab.y, d.size.x, d.size.y)
+        Rect::new(
+            d.pointer.x + d.grab.x,
+            d.pointer.y + d.grab.y,
+            d.size.x,
+            d.size.y,
+        )
     }
 
     /// Start dragging an app or recent tile pressed at `press`, the pointer now at `pointer`
     /// (more than the drag threshold away). The icon keeps the place it was grabbed at, at the
     /// size it had; its slot becomes the gap. Magnification is released.
-    pub fn begin_drag(&mut self, id: TileId, press: Point, pointer: Point, screen: Rect, now: f64) -> bool {
-        let Some((section, from)) = self.section_of(id) else { return false };
+    pub fn begin_drag(
+        &mut self,
+        id: TileId,
+        press: Point,
+        pointer: Point,
+        screen: Rect,
+        now: f64,
+    ) -> bool {
+        let Some((section, from)) = self.section_of(id) else {
+            return false;
+        };
         if self.tile(id).is_some_and(|t| t.built_in) {
             return false;
         }
-        let Some(rect) = self.layout(screen, now).tiles.iter().find(|t| t.id == id).map(|t| t.rect) else { return false };
+        let Some(rect) = self
+            .layout(screen, now)
+            .tiles
+            .iter()
+            .find(|t| t.id == id)
+            .map(|t| t.rect)
+        else {
+            return false;
+        };
         let look = AnimatedValue::new(0.0);
         self.drag = Some(DragState {
             id,
@@ -946,17 +1166,28 @@ impl Dock {
         let horizontal = self.cfg.orientation.is_horizontal();
         let drag = self.drag.clone();
         let rest = self.build(screen, None, 0.0, 0.0, None, drag.as_ref(), false);
-        rest.tiles.iter().map(|t| (t.id, if horizontal { t.rect.x } else { t.rect.y })).collect()
+        rest.tiles
+            .iter()
+            .map(|t| (t.id, if horizontal { t.rect.x } else { t.rect.y }))
+            .collect()
     }
 
     /// The gap moved: every tile whose place changed slides from where it is drawn to the new one.
     fn retarget_slides(&mut self, screen: Rect, now: f64) {
         let next = self.rest_positions(screen);
         for (id, to) in &next {
-            let Some(old) = self.rest.get(id) else { continue };
+            let Some(old) = self.rest.get(id) else {
+                continue;
+            };
             if (old - to).abs() > 1e-6 {
                 let lag = self.slides.get(id).map_or(0.0, |s| s.remaining(now));
-                self.slides.insert(*id, Slide { offset: lag + old - to, start: now });
+                self.slides.insert(
+                    *id,
+                    Slide {
+                        offset: lag + old - to,
+                        start: now,
+                    },
+                );
             }
         }
         self.rest = next;
@@ -965,21 +1196,44 @@ impl Dock {
     /// The pointer moved with a tile held: where the gap goes, whether it is open, whether a drop
     /// would remove the tile.
     pub fn drag_move(&mut self, pointer: Point, screen: Rect, now: f64) {
-        let Some(mut d) = self.drag.clone() else { return };
+        let Some(mut d) = self.drag.clone() else {
+            return;
+        };
         d.pointer = pointer;
         let axis = self.pointer_axis(pointer);
         let horizontal = self.cfg.orientation.is_horizontal();
-        let span = |r: &Rect| if horizontal { (r.x, r.right()) } else { (r.y, r.bottom()) };
+        let span = |r: &Rect| {
+            if horizontal {
+                (r.x, r.right())
+            } else {
+                (r.y, r.bottom())
+            }
+        };
         let current = self.layout(screen, now);
         let rest = self.build(screen, None, 0.0, 0.0, None, None, false);
 
         // the tile the pointer is over decides the index: before its middle the gap goes before
         // it, after its middle after it, on the tiles as they are drawn now
-        let list = if d.section == Section::Apps { &self.apps } else { &self.recents };
-        let ids: Vec<TileId> = list.iter().filter(|t| !t.leaving && t.id != d.id).map(|t| t.id).collect();
+        let list = if d.section == Section::Apps {
+            &self.apps
+        } else {
+            &self.recents
+        };
+        let ids: Vec<TileId> = list
+            .iter()
+            .filter(|t| !t.leaving && t.id != d.id)
+            .map(|t| t.id)
+            .collect();
         let mut insertion = ids.len();
         for (k, id) in ids.iter().enumerate() {
-            let Some(r) = current.tiles.iter().find(|p| p.id == *id).map(|p| span(&p.rect)) else { continue };
+            let Some(r) = current
+                .tiles
+                .iter()
+                .find(|p| p.id == *id)
+                .map(|p| span(&p.rect))
+            else {
+                continue;
+            };
             if axis < r.0 {
                 insertion = k;
                 break;
@@ -990,7 +1244,11 @@ impl Dock {
             }
         }
         // nothing goes ahead of the built-in tile
-        d.insertion = if d.section == Section::Apps { insertion.max(self.first_movable()) } else { insertion };
+        d.insertion = if d.section == Section::Apps {
+            insertion.max(self.first_movable())
+        } else {
+            insertion
+        };
 
         // the gap is open while the pointer is within a tile of the screen edge and over the flow
         // of the section the tile came from
@@ -1000,12 +1258,28 @@ impl Dock {
             Orientation::Left => pointer.x <= screen.x + tile,
             Orientation::Right => pointer.x >= screen.right() - tile,
         };
-        let start_of = |kind: TileKind| rest.tiles.iter().find(|p| p.kind == kind).map(|p| span(&p.rect));
-        let separators: Vec<(f64, f64)> = rest.tiles.iter().filter(|p| p.kind == TileKind::Separator).map(|p| span(&p.rect)).collect();
+        let start_of = |kind: TileKind| {
+            rest.tiles
+                .iter()
+                .find(|p| p.kind == kind)
+                .map(|p| span(&p.rect))
+        };
+        let separators: Vec<(f64, f64)> = rest
+            .tiles
+            .iter()
+            .filter(|p| p.kind == TileKind::Separator)
+            .map(|p| span(&p.rect))
+            .collect();
         let trash_start = start_of(TileKind::Trash).map_or(f64::INFINITY, |r| r.0);
         let (lower, upper) = match d.section {
-            Section::Apps => (f64::NEG_INFINITY, separators.first().map_or(trash_start, |s| s.0)),
-            Section::Recents => (separators.first().map_or(f64::NEG_INFINITY, |s| s.1), separators.get(1).map_or(trash_start, |s| s.0)),
+            Section::Apps => (
+                f64::NEG_INFINITY,
+                separators.first().map_or(trash_start, |s| s.0),
+            ),
+            Section::Recents => (
+                separators.first().map_or(f64::NEG_INFINITY, |s| s.1),
+                separators.get(1).map_or(trash_start, |s| s.0),
+            ),
         };
         d.inserting = near_edge && axis >= lower && axis <= upper;
 
@@ -1016,7 +1290,10 @@ impl Dock {
             Orientation::Left => pointer.x > rest.bar.right() + thickness,
             Orientation::Right => pointer.x < rest.bar.x - thickness,
         };
-        d.over_trash = rest.tiles.iter().any(|p| p.kind == TileKind::Trash && p.rect.contains(pointer));
+        d.over_trash = rest
+            .tiles
+            .iter()
+            .any(|p| p.kind == TileKind::Trash && p.rect.contains(pointer));
         self.drag = Some(d);
         self.sync_look(now);
         self.retarget_slides(screen, now);
@@ -1026,9 +1303,20 @@ impl Dock {
     /// alone, and go back when it no longer would.
     fn sync_look(&mut self, now: f64) {
         let Some(d) = self.drag.as_mut() else { return };
-        let target = if d.zone && now - d.start >= REMOVE_DELAY_S { 1.0 } else { 0.0 };
+        let target = if d.zone && now - d.start >= REMOVE_DELAY_S {
+            1.0
+        } else {
+            0.0
+        };
         if d.look.target() != target {
-            d.look.animate_to(target, Curve::Timed { duration: LOOK_S, bezier: CubicBezier::EASE_IN_EASE_OUT }, now);
+            d.look.animate_to(
+                target,
+                Curve::Timed {
+                    duration: LOOK_S,
+                    bezier: CubicBezier::EASE_IN_EASE_OUT,
+                },
+                now,
+            );
         }
     }
 
@@ -1041,10 +1329,18 @@ impl Dock {
     /// Finish the drag and apply the reorder or removal. A removal fades the icon out where it was
     /// released; anything else settles the icon into its slot.
     pub fn end_drag(&mut self, screen: Rect, now: f64) -> DragOutcome {
-        let Some(d) = self.drag.take() else { return DragOutcome::Cancelled };
+        let Some(d) = self.drag.take() else {
+            return DragOutcome::Cancelled;
+        };
         let from_rect = self.dragged_rect(&d);
-        let list = if d.section == Section::Apps { &mut self.apps } else { &mut self.recents };
-        let Some(pos) = list.iter().position(|t| t.id == d.id) else { return DragOutcome::Cancelled };
+        let list = if d.section == Section::Apps {
+            &mut self.apps
+        } else {
+            &mut self.recents
+        };
+        let Some(pos) = list.iter().position(|t| t.id == d.id) else {
+            return DragOutcome::Cancelled;
+        };
         let key = list[pos].key.clone();
         let kind = list[pos].kind;
         if d.removes(now) {
@@ -1057,21 +1353,48 @@ impl Dock {
                 t.presence = AnimatedValue::new(0.0);
                 t.leaving = true;
             }
-            let tile = PlacedTile { id: d.id, kind, rect: from_rect, lift: 0.0, lifecycle: TileLifecycle::Idle, indicator: false, presence: 1.0 };
-            self.departing = Some(Departing { tile, key: key.clone(), start: now });
+            let tile = PlacedTile {
+                id: d.id,
+                kind,
+                rect: from_rect,
+                lift: 0.0,
+                lifecycle: TileLifecycle::Idle,
+                indicator: false,
+                presence: 1.0,
+            };
+            self.departing = Some(Departing {
+                tile,
+                key: key.clone(),
+                start: now,
+            });
             self.retarget_slides(screen, now);
             return DragOutcome::Removed { key, kind };
         }
         let look = d.look.value(now);
-        self.settle = Some(Settle { id: d.id, from: from_rect, opacity: 1.0 - look * (1.0 - REMOVING_OPACITY), label: look, start: now });
+        self.settle = Some(Settle {
+            id: d.id,
+            from: from_rect,
+            opacity: 1.0 - look * (1.0 - REMOVING_OPACITY),
+            label: look,
+            start: now,
+        });
         let outcome = if !d.inserting || d.insertion == d.from {
             DragOutcome::Cancelled
         } else {
             let t = list.remove(pos);
-            let live_before: Vec<usize> = list.iter().enumerate().filter(|(_, t)| !t.leaving).map(|(i, _)| i).collect();
+            let live_before: Vec<usize> = list
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| !t.leaving)
+                .map(|(i, _)| i)
+                .collect();
             let at = live_before.get(d.insertion).copied().unwrap_or(list.len());
             list.insert(at, t);
-            DragOutcome::Reordered { key, from: d.from, to: d.insertion }
+            DragOutcome::Reordered {
+                key,
+                from: d.from,
+                to: d.insertion,
+            }
         };
         self.retarget_slides(screen, now);
         outcome
@@ -1083,19 +1406,47 @@ impl Dock {
 
     /// The tile that settles into its slot after a drop, taken out of `tiles`, while it does.
     fn settling_tile(&self, tiles: &mut Vec<PlacedTile>, now: f64) -> Option<DraggedTile> {
-        let s = self.settle.filter(|s| (s.start..s.start + SETTLE_S).contains(&now))?;
+        let s = self
+            .settle
+            .filter(|s| (s.start..s.start + SETTLE_S).contains(&now))?;
         let slot = tiles.remove(tiles.iter().position(|t| t.id == s.id)?);
         let e = cosine_ease((now - s.start) / SETTLE_S);
         let lerp = |a: f64, b: f64| a + (b - a) * e;
-        let rect = Rect::new(lerp(s.from.x, slot.rect.x), lerp(s.from.y, slot.rect.y), lerp(s.from.w, slot.rect.w), lerp(s.from.h, slot.rect.h));
-        let key = self.apps.iter().chain(&self.recents).find(|t| t.id == s.id)?.key.clone();
-        Some(DraggedTile { indicator: if slot.indicator { e } else { 0.0 }, tile: PlacedTile { rect, ..slot }, key, opacity: lerp(s.opacity, 1.0), label: s.label * (1.0 - e) })
+        let rect = Rect::new(
+            lerp(s.from.x, slot.rect.x),
+            lerp(s.from.y, slot.rect.y),
+            lerp(s.from.w, slot.rect.w),
+            lerp(s.from.h, slot.rect.h),
+        );
+        let key = self
+            .apps
+            .iter()
+            .chain(&self.recents)
+            .find(|t| t.id == s.id)?
+            .key
+            .clone();
+        Some(DraggedTile {
+            indicator: if slot.indicator { e } else { 0.0 },
+            tile: PlacedTile { rect, ..slot },
+            key,
+            opacity: lerp(s.opacity, 1.0),
+            label: s.label * (1.0 - e),
+        })
     }
 
     /// The tile that fades out after a removal, while it does.
     fn departing_tile(&self, now: f64) -> Option<DraggedTile> {
-        let d = self.departing.as_ref().filter(|d| (d.start..d.start + REMOVE_FADE_S).contains(&now))?;
+        let d = self
+            .departing
+            .as_ref()
+            .filter(|d| (d.start..d.start + REMOVE_FADE_S).contains(&now))?;
         let fade = 1.0 - REMOVE_FADE_CURVE.eval((now - d.start) / REMOVE_FADE_S);
-        Some(DraggedTile { tile: d.tile.clone(), key: d.key.clone(), opacity: fade, label: fade, indicator: 0.0 })
+        Some(DraggedTile {
+            tile: d.tile.clone(),
+            key: d.key.clone(),
+            opacity: fade,
+            label: fade,
+            indicator: 0.0,
+        })
     }
 }

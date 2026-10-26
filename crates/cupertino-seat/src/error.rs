@@ -11,7 +11,10 @@ use smithay::backend::session::AsErrno;
 #[derive(Debug)]
 pub enum Error {
     /// A D-Bus call or the bus connection failed; `what` names the step.
-    Bus { what: &'static str, source: Box<zbus::Error> },
+    Bus {
+        what: &'static str,
+        source: Box<zbus::Error>,
+    },
     /// `XDG_SESSION_ID` is set but is not valid Unicode.
     SessionIdNotUnicode,
     /// The signal reader thread could not be started.
@@ -41,7 +44,10 @@ impl Error {
     /// The adapter for `map_err` on a D-Bus call: names the step that failed. The `zbus` error is
     /// boxed because it is large and would bloat every `Result` of this crate.
     pub(crate) fn bus(what: &'static str) -> impl Fn(zbus::Error) -> Self + Copy {
-        move |source| Self::Bus { what, source: Box::new(source) }
+        move |source| Self::Bus {
+            what,
+            source: Box::new(source),
+        }
     }
 }
 
@@ -53,7 +59,9 @@ impl fmt::Display for Error {
             Self::Thread(source) => write!(f, "starting the signal reader: {source}"),
             Self::SignalsEnded => write!(f, "the logind signal stream ended"),
             Self::UnknownPauseType(kind) => write!(f, "unknown PauseDevice type {kind:?}"),
-            Self::ActiveInvalidated => write!(f, "logind invalidated Active instead of sending its value"),
+            Self::ActiveInvalidated => {
+                write!(f, "logind invalidated Active instead of sending its value")
+            }
             Self::Stat { path, errno } => write!(f, "stat {}: {errno}", path.display()),
             Self::NotCharDevice(path) => write!(f, "{} is not a character device", path.display()),
             Self::AlreadyTaken(dev) => write!(f, "device {dev} is already taken"),

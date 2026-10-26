@@ -11,7 +11,8 @@ use std::process::ExitCode;
 use cupertino_files::trash::Trash;
 use percent_encoding::percent_decode_str;
 
-const USAGE: &str = "usage: cupertino-files [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]";
+const USAGE: &str =
+    "usage: cupertino-files [--terminal PROGRAM] [FOLDER | file:///FOLDER | trash:///]";
 
 /// What the command line asks for.
 struct Options {
@@ -26,7 +27,9 @@ fn folder_of(arg: &str, home_trash: &Path) -> Result<PathBuf, String> {
     if let Some(rest) = arg.strip_prefix("trash:") {
         return match rest.trim_start_matches('/') {
             "" => Ok(home_trash.join("files")),
-            _ => Err(format!("{arg}: only the trash itself (trash:///) can be opened")),
+            _ => Err(format!(
+                "{arg}: only the trash itself (trash:///) can be opened"
+            )),
         };
     }
     if let Some(rest) = arg.strip_prefix("file://") {
@@ -49,23 +52,33 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut terminal = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--terminal" => terminal = Some(vec![args.next().ok_or("--terminal needs a program")?, "-e".to_string()]),
+            "--terminal" => {
+                terminal = Some(vec![
+                    args.next().ok_or("--terminal needs a program")?,
+                    "-e".to_string(),
+                ])
+            }
             a if a.starts_with('-') => return Err(format!("unexpected argument {a}")),
             _ if folder.is_some() => return Err(format!("unexpected argument {arg}")),
             _ => folder = Some(arg),
         }
     }
     let trash = Trash::new();
-    let folder = folder.map(|arg| folder_of(&arg, trash.home_trash())).transpose()?;
+    let folder = folder
+        .map(|arg| folder_of(&arg, trash.home_trash()))
+        .transpose()?;
     if folder.as_ref() == Some(&trash.home_trash().join("files")) {
         for sub in ["files", "info"] {
             let dir = trash.home_trash().join(sub);
-            std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
         }
     }
     let folder = match folder {
         Some(folder) => folder,
-        None => PathBuf::from(std::env::var_os("HOME").ok_or("HOME is not set; name the folder to open")?),
+        None => PathBuf::from(
+            std::env::var_os("HOME").ok_or("HOME is not set; name the folder to open")?,
+        ),
     };
     let folder = std::path::absolute(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
     Ok(Options { folder, terminal })
@@ -96,13 +109,37 @@ mod tests {
     #[test]
     fn arguments_name_a_path_a_file_uri_or_the_trash() {
         let trash = Path::new("/home/u/.local/share/Trash");
-        assert_eq!(folder_of("trash:///", trash), Ok(PathBuf::from("/home/u/.local/share/Trash/files")));
-        assert_eq!(folder_of("trash:", trash), Ok(PathBuf::from("/home/u/.local/share/Trash/files")));
-        assert!(folder_of("trash:///old/report.txt", trash).is_err(), "only the trash folder itself");
-        assert_eq!(folder_of("file:///home/u/My%20Files", trash), Ok(PathBuf::from("/home/u/My Files")));
-        assert_eq!(folder_of("file://localhost/tmp", trash), Ok(PathBuf::from("/tmp")));
-        assert_eq!(folder_of("file:///tmp/a%3Fb?x=1#top", trash), Ok(PathBuf::from("/tmp/a?b")));
-        assert!(folder_of("file://server/share", trash).is_err(), "a remote host");
-        assert_eq!(folder_of("Documents", trash), Ok(PathBuf::from("Documents")));
+        assert_eq!(
+            folder_of("trash:///", trash),
+            Ok(PathBuf::from("/home/u/.local/share/Trash/files"))
+        );
+        assert_eq!(
+            folder_of("trash:", trash),
+            Ok(PathBuf::from("/home/u/.local/share/Trash/files"))
+        );
+        assert!(
+            folder_of("trash:///old/report.txt", trash).is_err(),
+            "only the trash folder itself"
+        );
+        assert_eq!(
+            folder_of("file:///home/u/My%20Files", trash),
+            Ok(PathBuf::from("/home/u/My Files"))
+        );
+        assert_eq!(
+            folder_of("file://localhost/tmp", trash),
+            Ok(PathBuf::from("/tmp"))
+        );
+        assert_eq!(
+            folder_of("file:///tmp/a%3Fb?x=1#top", trash),
+            Ok(PathBuf::from("/tmp/a?b"))
+        );
+        assert!(
+            folder_of("file://server/share", trash).is_err(),
+            "a remote host"
+        );
+        assert_eq!(
+            folder_of("Documents", trash),
+            Ok(PathBuf::from("Documents"))
+        );
     }
 }

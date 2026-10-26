@@ -42,7 +42,10 @@ impl WindowLevel {
     /// Level of a new window of `kind`: utility panels float, application-modal windows without a
     /// parent are modal panels; a child window takes its parent's level (a sheet and a
     /// dialog are ordered with their parent).
-    pub fn for_kind(kind: cupertino_effects::WindowKind, parent: Option<WindowLevel>) -> WindowLevel {
+    pub fn for_kind(
+        kind: cupertino_effects::WindowKind,
+        parent: Option<WindowLevel>,
+    ) -> WindowLevel {
         use cupertino_effects::WindowKind;
         match (parent, kind) {
             (Some(p), _) => p,
@@ -97,13 +100,30 @@ impl Window {
     /// The smallest and the largest frame size a resize may reach: the client's minimum (at least 1) and maximum
     /// (unbounded where unset or 0).
     pub fn size_limits(&self) -> (Size, Size) {
-        let (min_w, min_h) = self.min_size.map_or((1.0, 1.0), |m| (m.w.max(1.0), m.h.max(1.0)));
-        let max_w = self.max_size.map(|m| m.w).filter(|v| *v > 0.0).unwrap_or(f64::INFINITY);
-        let max_h = self.max_size.map(|m| m.h).filter(|v| *v > 0.0).unwrap_or(f64::INFINITY);
-        (Size::new(min_w, min_h), Size::new(max_w.max(min_w), max_h.max(min_h)))
+        let (min_w, min_h) = self
+            .min_size
+            .map_or((1.0, 1.0), |m| (m.w.max(1.0), m.h.max(1.0)));
+        let max_w = self
+            .max_size
+            .map(|m| m.w)
+            .filter(|v| *v > 0.0)
+            .unwrap_or(f64::INFINITY);
+        let max_h = self
+            .max_size
+            .map(|m| m.h)
+            .filter(|v| *v > 0.0)
+            .unwrap_or(f64::INFINITY);
+        (
+            Size::new(min_w, min_h),
+            Size::new(max_w.max(min_w), max_h.max(min_h)),
+        )
     }
 
     pub fn hints(&self) -> SizeHints {
-        SizeHints { min: self.min_size, max: self.max_size, content: self.content_hint }
+        SizeHints {
+            min: self.min_size,
+            max: self.max_size,
+            content: self.content_hint,
+        }
     }
 }

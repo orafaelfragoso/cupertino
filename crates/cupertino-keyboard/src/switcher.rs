@@ -40,11 +40,18 @@ pub enum Step {
 pub enum SwitchEvent {
     None,
     /// Show the HUD with this order and selection.
-    ShowHud { order: Vec<String>, selection: usize },
+    ShowHud {
+        order: Vec<String>,
+        selection: usize,
+    },
     /// The selection moved.
-    MoveSelection { selection: usize },
+    MoveSelection {
+        selection: usize,
+    },
     /// Select this source now (and close the HUD if it is open).
-    Commit { id: String },
+    Commit {
+        id: String,
+    },
     /// Close the HUD without switching.
     Cancel,
 }
@@ -97,7 +104,12 @@ impl Switcher {
 
     /// Display order: history first, remaining sources in menu order.
     pub fn historical_order(&self) -> Vec<String> {
-        let mut v: Vec<String> = self.mru.iter().filter(|m| self.menu_order.contains(m)).cloned().collect();
+        let mut v: Vec<String> = self
+            .mru
+            .iter()
+            .filter(|m| self.menu_order.contains(m))
+            .cloned()
+            .collect();
         for s in &self.menu_order {
             if !v.contains(s) {
                 v.push(s.clone());
@@ -123,18 +135,31 @@ impl Switcher {
         }
         if let Some(h) = self.hud.as_mut() {
             h.selection = advance(h.selection, n, step);
-            return SwitchEvent::MoveSelection { selection: h.selection };
+            return SwitchEvent::MoveSelection {
+                selection: h.selection,
+            };
         }
         let order = self.historical_order();
-        let cur = self.current.as_ref().and_then(|c| order.iter().position(|o| o == c)).unwrap_or(0);
+        let cur = self
+            .current
+            .as_ref()
+            .and_then(|c| order.iter().position(|o| o == c))
+            .unwrap_or(0);
         let sel = advance(cur, n, step);
         if !modifiers_held {
             let id = order[sel].clone();
             self.set_current(&id);
             return SwitchEvent::Commit { id };
         }
-        self.hud = Some(Hud { order: order.clone(), selection: sel, hold: true });
-        SwitchEvent::ShowHud { order, selection: sel }
+        self.hud = Some(Hud {
+            order: order.clone(),
+            selection: sel,
+            hold: true,
+        });
+        SwitchEvent::ShowHud {
+            order,
+            selection: sel,
+        }
     }
 
     /// The "next source in the menu" shortcut: like [`Switcher::press`], but the first press selects the source that
@@ -150,7 +175,11 @@ impl Switcher {
         }
         let order = self.historical_order();
         let cur_id = self.current.clone().unwrap_or_else(|| order[0].clone());
-        let menu_pos = self.menu_order.iter().position(|s| *s == cur_id).unwrap_or(0);
+        let menu_pos = self
+            .menu_order
+            .iter()
+            .position(|s| *s == cur_id)
+            .unwrap_or(0);
         let target = &self.menu_order[advance(menu_pos, n, step)];
         let sel = order.iter().position(|o| o == target).unwrap_or(0);
         if !modifiers_held {
@@ -158,8 +187,15 @@ impl Switcher {
             self.set_current(&id);
             return SwitchEvent::Commit { id };
         }
-        self.hud = Some(Hud { order: order.clone(), selection: sel, hold: true });
-        SwitchEvent::ShowHud { order, selection: sel }
+        self.hud = Some(Hud {
+            order: order.clone(),
+            selection: sel,
+            hold: true,
+        });
+        SwitchEvent::ShowHud {
+            order,
+            selection: sel,
+        }
     }
 
     /// Mouse hover / click on a row.
@@ -246,10 +282,25 @@ mod tests {
         s.set_current("fr");
         s.set_current("abc");
         let e = s.press(Step::Next, true);
-        assert_eq!(e, SwitchEvent::ShowHud { order: vec!["abc".into(), "fr".into(), "de".into(), "ja".into()], selection: 1 });
-        assert_eq!(s.press(Step::Next, true), SwitchEvent::MoveSelection { selection: 2 });
-        assert_eq!(s.press(Step::Previous, true), SwitchEvent::MoveSelection { selection: 1 });
-        assert_eq!(s.modifiers_released(), SwitchEvent::Commit { id: "fr".into() });
+        assert_eq!(
+            e,
+            SwitchEvent::ShowHud {
+                order: vec!["abc".into(), "fr".into(), "de".into(), "ja".into()],
+                selection: 1
+            }
+        );
+        assert_eq!(
+            s.press(Step::Next, true),
+            SwitchEvent::MoveSelection { selection: 2 }
+        );
+        assert_eq!(
+            s.press(Step::Previous, true),
+            SwitchEvent::MoveSelection { selection: 1 }
+        );
+        assert_eq!(
+            s.modifiers_released(),
+            SwitchEvent::Commit { id: "fr".into() }
+        );
         assert_eq!(s.current(), Some("fr"));
         assert!(!s.is_hud_open());
         assert_eq!(s.historical_order()[0], "fr");
@@ -258,13 +309,22 @@ mod tests {
     #[test]
     fn previous_wraps() {
         let mut s = sw();
-        assert_eq!(s.press(Step::Previous, true), SwitchEvent::ShowHud { order: s.historical_order(), selection: 3 });
+        assert_eq!(
+            s.press(Step::Previous, true),
+            SwitchEvent::ShowHud {
+                order: s.historical_order(),
+                selection: 3
+            }
+        );
     }
 
     #[test]
     fn immediate_switch_without_modifiers() {
         let mut s = sw();
-        assert_eq!(s.press(Step::Next, false), SwitchEvent::Commit { id: "fr".into() });
+        assert_eq!(
+            s.press(Step::Next, false),
+            SwitchEvent::Commit { id: "fr".into() }
+        );
         assert!(!s.is_hud_open());
         assert_eq!(s.current(), Some("fr"));
     }
@@ -301,11 +361,26 @@ mod tests {
         s.set_current("fr");
         // history: fr, de, abc, ja; the menu order after "fr" is "de" (menu: abc fr de ja)
         let e = s.press_menu(Step::Next, true);
-        assert_eq!(e, SwitchEvent::ShowHud { order: vec!["fr".into(), "de".into(), "abc".into(), "ja".into()], selection: 1 });
-        assert_eq!(s.modifiers_released(), SwitchEvent::Commit { id: "de".into() });
+        assert_eq!(
+            e,
+            SwitchEvent::ShowHud {
+                order: vec!["fr".into(), "de".into(), "abc".into(), "ja".into()],
+                selection: 1
+            }
+        );
+        assert_eq!(
+            s.modifiers_released(),
+            SwitchEvent::Commit { id: "de".into() }
+        );
         // the menu order after "de" is "ja"
-        assert_eq!(s.press_menu(Step::Next, false), SwitchEvent::Commit { id: "ja".into() });
-        assert_eq!(s.press_menu(Step::Previous, false), SwitchEvent::Commit { id: "de".into() });
+        assert_eq!(
+            s.press_menu(Step::Next, false),
+            SwitchEvent::Commit { id: "ja".into() }
+        );
+        assert_eq!(
+            s.press_menu(Step::Previous, false),
+            SwitchEvent::Commit { id: "de".into() }
+        );
         let mut one = Switcher::new();
         one.set_sources(vec!["abc".into()]);
         assert_eq!(one.press_menu(Step::Next, true), SwitchEvent::None);

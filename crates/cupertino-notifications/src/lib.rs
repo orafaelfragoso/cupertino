@@ -15,9 +15,9 @@
 #![allow(clippy::chunks_exact_to_as_chunks)]
 
 pub mod center;
-pub mod focus;
 #[cfg(feature = "dbus")]
 pub mod dbus;
+pub mod focus;
 pub mod markup;
 pub mod notification;
 pub mod platter;
@@ -26,7 +26,12 @@ pub mod stack;
 pub mod surface;
 
 pub use center::{
-    ActivateOutcome, BannerMeasure, CenterConfig, ClearScope, DndMode, Event, FixedHeight, Group, Motion, NotificationCenter, Placement, StackLayout, SwipeConfig, SwipeOutcome, TimeoutPolicy, Wakeup,
+    ActivateOutcome, BannerMeasure, CenterConfig, ClearScope, DndMode, Event, FixedHeight, Group,
+    Motion, NotificationCenter, Placement, StackLayout, SwipeConfig, SwipeOutcome, TimeoutPolicy,
+    Wakeup,
+};
+pub use notification::{
+    Action, CloseReason, Expire, Hints, ImageData, Notification, NotifyInput, Urgency,
+    DEFAULT_ACTION_KEY,
 };
 pub use stack::{GroupStack, StackCard};
-pub use notification::{Action, CloseReason, Expire, Hints, ImageData, Notification, NotifyInput, Urgency, DEFAULT_ACTION_KEY};

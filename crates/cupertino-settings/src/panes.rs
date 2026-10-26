@@ -4,10 +4,10 @@
 
 use cupertino_defaults::accessibility::{ColorFilter, DisplayOptions};
 use cupertino_defaults::compositor::MinimizeEffectName;
-use cupertino_defaults::keyboard::{FnKey, ModifierProfile};
-use cupertino_defaults::power::Timer;
 use cupertino_defaults::dock::{ActionTarget, Position, Trigger};
+use cupertino_defaults::keyboard::{FnKey, ModifierProfile};
 use cupertino_defaults::menubar::{HourCycle, ShowDate};
+use cupertino_defaults::power::Timer;
 
 use crate::controls::{Control, Value, MUTE_BELOW};
 use crate::live::{duration_text, BatteryState, Bluetooth, Live, Reading, Wifi};
@@ -131,18 +131,27 @@ pub enum Effect {
 pub enum Call {
     SetDoNotDisturb(bool),
     SetDoNotDisturbFor(String),
-    SetVolume { level: f64, muted: bool },
+    SetVolume {
+        level: f64,
+        muted: bool,
+    },
     SetBrightness(f64),
     SetWirelessEnabled(bool),
     /// Join a network; `None`: ask for the passphrase first (a secured network that is not saved).
-    Join { ssid: String, passphrase: Option<crate::sheet::Secret> },
+    Join {
+        ssid: String,
+        passphrase: Option<crate::sheet::Secret>,
+    },
     Disconnect,
     SetBluetoothPowered(bool),
     Pair(String),
     Connect(String),
     DisconnectDevice(String),
     /// Forget a device; `confirmed` once the confirmation sheet said so (§6.4).
-    Remove { id: String, confirmed: bool },
+    Remove {
+        id: String,
+        confirmed: bool,
+    },
 }
 
 /// The session state the panes show besides the files.
@@ -170,22 +179,55 @@ pub const CORNER_ACTIONS: [(&str, &str); 9] = [
 const CORNERS: [(Trigger, &str, &str); 4] = [
     (Trigger::CornerTopLeft, "Top Left", "corner_top_left"),
     (Trigger::CornerTopRight, "Top Right", "corner_top_right"),
-    (Trigger::CornerBottomLeft, "Bottom Left", "corner_bottom_left"),
-    (Trigger::CornerBottomRight, "Bottom Right", "corner_bottom_right"),
+    (
+        Trigger::CornerBottomLeft,
+        "Bottom Left",
+        "corner_bottom_left",
+    ),
+    (
+        Trigger::CornerBottomRight,
+        "Bottom Right",
+        "corner_bottom_right",
+    ),
 ];
 
 /// The minimize effects offered: Warp, Scale, Funnel (enum, `plain` is not offered).
-const EFFECTS: [(&str, MinimizeEffectName); 3] = [("Warp", MinimizeEffectName::Warp), ("Scale", MinimizeEffectName::Scale), ("Funnel", MinimizeEffectName::Funnel)];
-const POSITIONS: [(&str, Position); 3] = [("Bottom", Position::Bottom), ("Left", Position::Left), ("Right", Position::Right)];
-const DATES: [(&str, ShowDate); 3] = [("When Space Allows", ShowDate::WhenSpaceAllows), ("Always", ShowDate::Always), ("Never", ShowDate::Never)];
+const EFFECTS: [(&str, MinimizeEffectName); 3] = [
+    ("Warp", MinimizeEffectName::Warp),
+    ("Scale", MinimizeEffectName::Scale),
+    ("Funnel", MinimizeEffectName::Funnel),
+];
+const POSITIONS: [(&str, Position); 3] = [
+    ("Bottom", Position::Bottom),
+    ("Left", Position::Left),
+    ("Right", Position::Right),
+];
+const DATES: [(&str, ShowDate); 3] = [
+    ("When Space Allows", ShowDate::WhenSpaceAllows),
+    ("Always", ShowDate::Always),
+    ("Never", ShowDate::Never),
+];
 /// The modifier profiles (labels approximate).
-const PROFILES: [(&str, ModifierProfile); 2] = [("Super is the command key", ModifierProfile::Cupertino), ("Ctrl is the command key", ModifierProfile::ClassicPc)];
+const PROFILES: [(&str, ModifierProfile); 2] = [
+    ("Super is the command key", ModifierProfile::Cupertino),
+    ("Ctrl is the command key", ModifierProfile::ClassicPc),
+];
 /// The fn key's tap actions offered: emoji and dictation have nothing to open yet, so they are not offered; a stored one
 /// shows as an extra item (the spec's disabled rows are approximate this way).
-const FN_ACTIONS: [(&str, FnKey); 2] = [("Do Nothing", FnKey::DoNothing), ("Change Input Source", FnKey::ChangeInputSource)];
+const FN_ACTIONS: [(&str, FnKey); 2] = [
+    ("Do Nothing", FnKey::DoNothing),
+    ("Change Input Source", FnKey::ChangeInputSource),
+];
 /// The colour filters (types; labels from the design pane's popup, §6.3). The tint keeps its hue
 /// when one is stored, else 0 (approximate: no colour well yet).
-const FILTERS: [&str; 6] = ["None", "Grayscale", "Red/Green (Protanopia)", "Green/Red (Deuteranopia)", "Blue/Yellow (Tritanopia)", "Colour Tint"];
+const FILTERS: [&str; 6] = [
+    "None",
+    "Grayscale",
+    "Red/Green (Protanopia)",
+    "Green/Red (Deuteranopia)",
+    "Blue/Yellow (Tritanopia)",
+    "Colour Tint",
+];
 /// The colour filter intensity slider's range (range).
 const INTENSITY_MIN: f64 = 0.25;
 /// The cursor size slider's range (the server's clamp).
@@ -195,7 +237,14 @@ const CURSOR_MAX: f64 = 4.0;
 const CAPS_LOCK_DELAY_MS: u32 = 75;
 
 fn row(id: ControlId, label: impl Into<String>, control: Control, backend: Backend) -> Row {
-    Row { id, label: label.into(), control, backend, error: None, disabled: None }
+    Row {
+        id,
+        label: label.into(),
+        control,
+        backend,
+        error: None,
+        disabled: None,
+    }
 }
 
 fn header(text: &str) -> Option<String> {
@@ -207,12 +256,18 @@ fn switch(on: bool) -> Control {
 }
 
 fn popup(choices: impl IntoIterator<Item = &'static str>, selected: usize) -> Control {
-    Control::Popup { choices: choices.into_iter().map(str::to_string).collect(), selected }
+    Control::Popup {
+        choices: choices.into_iter().map(str::to_string).collect(),
+        selected,
+    }
 }
 
 /// The index of `value` among the second items of `table`.
 fn index_of<T: PartialEq + Copy>(table: &[(&str, T)], value: T) -> usize {
-    table.iter().position(|(_, v)| *v == value).expect("every value the files hold is in its control's table")
+    table
+        .iter()
+        .position(|(_, v)| *v == value)
+        .expect("every value the files hold is in its control's table")
 }
 
 /// The corner's action as a choice: its index, or `None` for an action the list does not offer (a command, a server
@@ -239,7 +294,15 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
     match pane {
         PaneId::Appearance => vec![Section {
             header: None,
-            rows: vec![row(ControlId::Appearance, "Appearance", Control::Segmented { segments: vec!["Light", "Dark"], selected: usize::from(session.dark) }, Backend::SetAppearance)],
+            rows: vec![row(
+                ControlId::Appearance,
+                "Appearance",
+                Control::Segmented {
+                    segments: vec!["Light", "Dark"],
+                    selected: usize::from(session.dark),
+                },
+                Backend::SetAppearance,
+            )],
             footer: None,
         }],
         PaneId::DesktopDock => {
@@ -247,7 +310,8 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
             let mut corners: Vec<Row> = Vec::new();
             for (trigger, label, key) in CORNERS {
                 let action = settings.dock.actions.get(trigger);
-                let mut choices: Vec<String> = CORNER_ACTIONS.iter().map(|(l, _)| l.to_string()).collect();
+                let mut choices: Vec<String> =
+                    CORNER_ACTIONS.iter().map(|(l, _)| l.to_string()).collect();
                 let selected = match corner_choice(action) {
                     Some(i) => i,
                     // a value outside the list shows as an extra selected item (as §6.3 does for the sleep timers)
@@ -256,27 +320,80 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                         choices.len() - 1
                     }
                 };
-                corners.push(row(ControlId::HotCorner(trigger), label, Control::Popup { choices, selected }, dock(File::Dock, key)));
+                corners.push(row(
+                    ControlId::HotCorner(trigger),
+                    label,
+                    Control::Popup { choices, selected },
+                    dock(File::Dock, key),
+                ));
             }
             vec![
                 Section {
                     header: header("Dock"),
                     rows: vec![
-                        row(ControlId::DockSize, "Size", Control::Slider { value: mapping::dock_value(settings.tile_size()), stops: None, marks: &mapping::DOCK_SIZE_MARKS, labels: ("Small", "Large") }, dock(File::Dock, "tile_size")),
+                        row(
+                            ControlId::DockSize,
+                            "Size",
+                            Control::Slider {
+                                value: mapping::dock_value(settings.tile_size()),
+                                stops: None,
+                                marks: &mapping::DOCK_SIZE_MARKS,
+                                labels: ("Small", "Large"),
+                            },
+                            dock(File::Dock, "tile_size"),
+                        ),
                         row(
                             ControlId::Magnification,
                             "Magnification",
-                            Control::Slider { value: mapping::magnification_value(settings.magnification(), settings.large_size()), stops: None, marks: &mapping::MAGNIFICATION_MARKS, labels: ("Off", "Large") },
+                            Control::Slider {
+                                value: mapping::magnification_value(
+                                    settings.magnification(),
+                                    settings.large_size(),
+                                ),
+                                stops: None,
+                                marks: &mapping::MAGNIFICATION_MARKS,
+                                labels: ("Off", "Large"),
+                            },
                             dock(File::Dock, "large_size"),
                         ),
-                        row(ControlId::DockPosition, "Position on screen", Control::Segmented { segments: POSITIONS.iter().map(|(l, _)| *l).collect(), selected: index_of(&POSITIONS, settings.position()) }, dock(File::Dock, "position")),
-                        row(ControlId::MinimizeEffect, "Minimize windows using", popup(EFFECTS.iter().map(|(l, _)| *l), index_of(&EFFECTS, settings.minimize_effect())), dock(File::Compositor, "minimize_effect")),
-                        row(ControlId::AutoHide, "Automatically hide and show the Dock", switch(settings.autohide()), dock(File::Dock, "autohide")),
-                        row(ControlId::Recents, "Show suggested and recent apps in Dock", switch(settings.recents()), dock(File::Dock, "recents")),
+                        row(
+                            ControlId::DockPosition,
+                            "Position on screen",
+                            Control::Segmented {
+                                segments: POSITIONS.iter().map(|(l, _)| *l).collect(),
+                                selected: index_of(&POSITIONS, settings.position()),
+                            },
+                            dock(File::Dock, "position"),
+                        ),
+                        row(
+                            ControlId::MinimizeEffect,
+                            "Minimize windows using",
+                            popup(
+                                EFFECTS.iter().map(|(l, _)| *l),
+                                index_of(&EFFECTS, settings.minimize_effect()),
+                            ),
+                            dock(File::Compositor, "minimize_effect"),
+                        ),
+                        row(
+                            ControlId::AutoHide,
+                            "Automatically hide and show the Dock",
+                            switch(settings.autohide()),
+                            dock(File::Dock, "autohide"),
+                        ),
+                        row(
+                            ControlId::Recents,
+                            "Show suggested and recent apps in Dock",
+                            switch(settings.recents()),
+                            dock(File::Dock, "recents"),
+                        ),
                     ],
                     footer: file_footer(File::Dock),
                 },
-                Section { header: header("Hot Corners"), rows: corners, footer: file_footer(File::Dock) },
+                Section {
+                    header: header("Hot Corners"),
+                    rows: corners,
+                    footer: file_footer(File::Dock),
+                },
             ]
         }
         PaneId::ControlPanel => {
@@ -285,52 +402,160 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
             vec![Section {
                 header: header("Clock Options"),
                 rows: vec![
-                    row(ControlId::ClockDate, "Show date", popup(DATES.iter().map(|(l, _)| *l), index_of(&DATES, c.show_date)), key("clock.show_date")),
-                    row(ControlId::ClockDayOfWeek, "Show the day of the week", switch(c.show_day_of_week), key("clock.show_day_of_week")),
-                    row(ControlId::Clock24, "Use a 24-hour clock", switch(c.hour_cycle == HourCycle::H24), key("clock.hour_cycle")),
-                    row(ControlId::ClockAmPm, "Show AM/PM", switch(c.show_am_pm), key("clock.show_am_pm")),
-                    row(ControlId::ClockFlash, "Flash the time separators", switch(c.flash_separators), key("clock.flash_separators")),
-                    row(ControlId::ClockSeconds, "Display the time with seconds", switch(c.show_seconds), key("clock.show_seconds")),
+                    row(
+                        ControlId::ClockDate,
+                        "Show date",
+                        popup(DATES.iter().map(|(l, _)| *l), index_of(&DATES, c.show_date)),
+                        key("clock.show_date"),
+                    ),
+                    row(
+                        ControlId::ClockDayOfWeek,
+                        "Show the day of the week",
+                        switch(c.show_day_of_week),
+                        key("clock.show_day_of_week"),
+                    ),
+                    row(
+                        ControlId::Clock24,
+                        "Use a 24-hour clock",
+                        switch(c.hour_cycle == HourCycle::H24),
+                        key("clock.hour_cycle"),
+                    ),
+                    row(
+                        ControlId::ClockAmPm,
+                        "Show AM/PM",
+                        switch(c.show_am_pm),
+                        key("clock.show_am_pm"),
+                    ),
+                    row(
+                        ControlId::ClockFlash,
+                        "Flash the time separators",
+                        switch(c.flash_separators),
+                        key("clock.flash_separators"),
+                    ),
+                    row(
+                        ControlId::ClockSeconds,
+                        "Display the time with seconds",
+                        switch(c.show_seconds),
+                        key("clock.show_seconds"),
+                    ),
                 ],
                 footer: file_footer(File::MenuBar),
             }]
         }
         PaneId::Keyboard => {
-            let rate = mapping::rate_position(settings.repeat_delay_ms(), settings.repeat_interval_ms());
+            let rate =
+                mapping::rate_position(settings.repeat_delay_ms(), settings.repeat_interval_ms());
             let delay = delay_position(settings);
-            vec![Section {
-                header: header("Key Repeat"),
-                rows: vec![
-                    row(ControlId::RepeatRate, "Key repeat rate", Control::Slider { value: Control::stop_value(rate, mapping::RATE_POSITIONS), stops: Some(mapping::RATE_POSITIONS), marks: &[], labels: ("Off", "Fast") }, Backend::Key(File::Keyboard, "repeat_interval")),
-                    row(
-                        ControlId::RepeatDelay,
-                        "Delay until repeat",
-                        Control::Slider { value: Control::stop_value(delay - mapping::DELAY_FIRST, mapping::DELAY_LAST), stops: Some(mapping::DELAY_LAST), marks: &[], labels: ("Long", "Short") },
-                        Backend::Key(File::Keyboard, "repeat_delay"),
-                    ),
-                ],
-                footer: file_footer(File::Keyboard),
-            },
-            Section {
-                header: header("Modifier Keys"),
-                rows: vec![
-                    row(ControlId::ModifierProfile, "Command key", choice_popup(&PROFILES, settings.keyboard.modifier_profile.unwrap_or(ModifierProfile::Cupertino), |p| p.name().to_string()), Backend::Key(File::Keyboard, "modifier_profile")),
-                    row(ControlId::CapsLockDelay, "Delay caps lock", switch(settings.keyboard.caps_lock_delay_ms.unwrap_or(CAPS_LOCK_DELAY_MS) > 0), Backend::Key(File::Keyboard, "caps_lock_delay")),
-                    row(ControlId::CapsLockSwitch, "Caps lock switches input sources", switch(settings.keyboard.caps_lock_switch.unwrap_or(false)), Backend::Key(File::Keyboard, "caps_lock_switch")),
-                    row(ControlId::FnKey, "Press fn key to", choice_popup(&FN_ACTIONS, settings.keyboard.fn_key.unwrap_or(FnKey::ChangeInputSource), |k| k.name().to_string()), Backend::Key(File::Keyboard, "fn_key")),
-                    row(ControlId::AccentPicker, "Show accents for held keys", switch(settings.keyboard.accent_picker.unwrap_or(true)), Backend::Key(File::Keyboard, "accent_picker")),
-                ],
-                footer: file_footer(File::Keyboard),
-            }]
+            vec![
+                Section {
+                    header: header("Key Repeat"),
+                    rows: vec![
+                        row(
+                            ControlId::RepeatRate,
+                            "Key repeat rate",
+                            Control::Slider {
+                                value: Control::stop_value(rate, mapping::RATE_POSITIONS),
+                                stops: Some(mapping::RATE_POSITIONS),
+                                marks: &[],
+                                labels: ("Off", "Fast"),
+                            },
+                            Backend::Key(File::Keyboard, "repeat_interval"),
+                        ),
+                        row(
+                            ControlId::RepeatDelay,
+                            "Delay until repeat",
+                            Control::Slider {
+                                value: Control::stop_value(
+                                    delay - mapping::DELAY_FIRST,
+                                    mapping::DELAY_LAST,
+                                ),
+                                stops: Some(mapping::DELAY_LAST),
+                                marks: &[],
+                                labels: ("Long", "Short"),
+                            },
+                            Backend::Key(File::Keyboard, "repeat_delay"),
+                        ),
+                    ],
+                    footer: file_footer(File::Keyboard),
+                },
+                Section {
+                    header: header("Modifier Keys"),
+                    rows: vec![
+                        row(
+                            ControlId::ModifierProfile,
+                            "Command key",
+                            choice_popup(
+                                &PROFILES,
+                                settings
+                                    .keyboard
+                                    .modifier_profile
+                                    .unwrap_or(ModifierProfile::Cupertino),
+                                |p| p.name().to_string(),
+                            ),
+                            Backend::Key(File::Keyboard, "modifier_profile"),
+                        ),
+                        row(
+                            ControlId::CapsLockDelay,
+                            "Delay caps lock",
+                            switch(
+                                settings
+                                    .keyboard
+                                    .caps_lock_delay_ms
+                                    .unwrap_or(CAPS_LOCK_DELAY_MS)
+                                    > 0,
+                            ),
+                            Backend::Key(File::Keyboard, "caps_lock_delay"),
+                        ),
+                        row(
+                            ControlId::CapsLockSwitch,
+                            "Caps lock switches input sources",
+                            switch(settings.keyboard.caps_lock_switch.unwrap_or(false)),
+                            Backend::Key(File::Keyboard, "caps_lock_switch"),
+                        ),
+                        row(
+                            ControlId::FnKey,
+                            "Press fn key to",
+                            choice_popup(
+                                &FN_ACTIONS,
+                                settings.keyboard.fn_key.unwrap_or(FnKey::ChangeInputSource),
+                                |k| k.name().to_string(),
+                            ),
+                            Backend::Key(File::Keyboard, "fn_key"),
+                        ),
+                        row(
+                            ControlId::AccentPicker,
+                            "Show accents for held keys",
+                            switch(settings.keyboard.accent_picker.unwrap_or(true)),
+                            Backend::Key(File::Keyboard, "accent_picker"),
+                        ),
+                    ],
+                    footer: file_footer(File::Keyboard),
+                },
+            ]
         }
         PaneId::Mouse => {
             let key = |k| Backend::Key(File::Compositor, k);
             vec![Section {
                 header: None,
                 rows: vec![
-                    row(ControlId::MouseSpeed, "Tracking speed", tracking(settings.mouse_speed()), key("mouse_speed")),
-                    row(ControlId::MouseAcceleration, "Pointer acceleration", switch(settings.mouse_acceleration()), key("mouse_acceleration")),
-                    row(ControlId::MouseNatural, "Natural scrolling", switch(settings.natural_scrolling()), key("natural_scrolling")),
+                    row(
+                        ControlId::MouseSpeed,
+                        "Tracking speed",
+                        tracking(settings.mouse_speed()),
+                        key("mouse_speed"),
+                    ),
+                    row(
+                        ControlId::MouseAcceleration,
+                        "Pointer acceleration",
+                        switch(settings.mouse_acceleration()),
+                        key("mouse_acceleration"),
+                    ),
+                    row(
+                        ControlId::MouseNatural,
+                        "Natural scrolling",
+                        switch(settings.natural_scrolling()),
+                        key("natural_scrolling"),
+                    ),
                 ],
                 footer: file_footer(File::Compositor),
             }]
@@ -340,8 +565,18 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
             vec![Section {
                 header: None,
                 rows: vec![
-                    row(ControlId::TrackpadSpeed, "Tracking speed", tracking(settings.trackpad_speed()), key("trackpad_speed")),
-                    row(ControlId::TrackpadNatural, "Natural scrolling", switch(settings.natural_scrolling()), key("natural_scrolling")),
+                    row(
+                        ControlId::TrackpadSpeed,
+                        "Tracking speed",
+                        tracking(settings.trackpad_speed()),
+                        key("trackpad_speed"),
+                    ),
+                    row(
+                        ControlId::TrackpadNatural,
+                        "Natural scrolling",
+                        switch(settings.natural_scrolling()),
+                        key("natural_scrolling"),
+                    ),
                 ],
                 footer: file_footer(File::Compositor),
             }]
@@ -351,40 +586,136 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
             let d = session.display;
             let set = Backend::SetAccessibility;
             let mut display = vec![
-                row(ControlId::ReduceMotion, "Reduce motion", switch(d.reduce_motion), set("reduce_motion")),
-                row(ControlId::ReduceTransparency, "Reduce transparency", switch(d.reduce_transparency), set("reduce_transparency")),
-                row(ControlId::IncreaseContrast, "Increase contrast", switch(d.increase_contrast), set("increase_contrast")),
-                row(ControlId::DifferentiateWithoutColor, "Differentiate without colour", switch(d.differentiate_without_color), set("differentiate_without_color")),
-                row(ControlId::InvertColors, "Invert colours", switch(a.invert_colors), set("invert_colors")),
-                row(ControlId::DisplayContrast, "Display contrast", Control::Slider { value: a.display_contrast.clamp(0.0, 1.0), stops: None, marks: &[], labels: ("Normal", "Maximum") }, set("display_contrast")),
-                row(ControlId::ColorFilter, "Colour filter", popup(FILTERS, filter_index(a.color_filter)), set("color_filter")),
+                row(
+                    ControlId::ReduceMotion,
+                    "Reduce motion",
+                    switch(d.reduce_motion),
+                    set("reduce_motion"),
+                ),
+                row(
+                    ControlId::ReduceTransparency,
+                    "Reduce transparency",
+                    switch(d.reduce_transparency),
+                    set("reduce_transparency"),
+                ),
+                row(
+                    ControlId::IncreaseContrast,
+                    "Increase contrast",
+                    switch(d.increase_contrast),
+                    set("increase_contrast"),
+                ),
+                row(
+                    ControlId::DifferentiateWithoutColor,
+                    "Differentiate without colour",
+                    switch(d.differentiate_without_color),
+                    set("differentiate_without_color"),
+                ),
+                row(
+                    ControlId::InvertColors,
+                    "Invert colours",
+                    switch(a.invert_colors),
+                    set("invert_colors"),
+                ),
+                row(
+                    ControlId::DisplayContrast,
+                    "Display contrast",
+                    Control::Slider {
+                        value: a.display_contrast.clamp(0.0, 1.0),
+                        stops: None,
+                        marks: &[],
+                        labels: ("Normal", "Maximum"),
+                    },
+                    set("display_contrast"),
+                ),
+                row(
+                    ControlId::ColorFilter,
+                    "Colour filter",
+                    popup(FILTERS, filter_index(a.color_filter)),
+                    set("color_filter"),
+                ),
             ];
             if let Some((_, intensity)) = a.filter() {
                 let v = ((intensity - INTENSITY_MIN) / (1.0 - INTENSITY_MIN)).clamp(0.0, 1.0);
-                display.push(row(ControlId::ColorFilterIntensity, "Intensity", Control::Slider { value: v, stops: None, marks: &[], labels: ("Low", "High") }, set("color_filter_intensity")));
+                display.push(row(
+                    ControlId::ColorFilterIntensity,
+                    "Intensity",
+                    Control::Slider {
+                        value: v,
+                        stops: None,
+                        marks: &[],
+                        labels: ("Low", "High"),
+                    },
+                    set("color_filter_intensity"),
+                ));
             }
             let pointer = |k| Backend::Key(File::Compositor, k);
-            let cursor = ((settings.compositor.cursor_size.unwrap_or(CURSOR_MIN) - CURSOR_MIN) / (CURSOR_MAX - CURSOR_MIN)).clamp(0.0, 1.0);
+            let cursor = ((settings.compositor.cursor_size.unwrap_or(CURSOR_MIN) - CURSOR_MIN)
+                / (CURSOR_MAX - CURSOR_MIN))
+                .clamp(0.0, 1.0);
             let keys = |k| Backend::Key(File::Keyboard, k);
             let k = &settings.keyboard;
             vec![
-                Section { header: header("Display"), rows: display, footer: None },
+                Section {
+                    header: header("Display"),
+                    rows: display,
+                    footer: None,
+                },
                 Section {
                     header: header("Pointer"),
                     rows: vec![
-                        row(ControlId::CursorSize, "Pointer size", Control::Slider { value: cursor, stops: None, marks: &[], labels: ("Normal", "Large") }, pointer("cursor_size")),
-                        row(ControlId::ShakeToLocate, "Shake mouse pointer to locate", switch(settings.compositor.shake_to_locate.unwrap_or(true)), pointer("shake_to_locate")),
+                        row(
+                            ControlId::CursorSize,
+                            "Pointer size",
+                            Control::Slider {
+                                value: cursor,
+                                stops: None,
+                                marks: &[],
+                                labels: ("Normal", "Large"),
+                            },
+                            pointer("cursor_size"),
+                        ),
+                        row(
+                            ControlId::ShakeToLocate,
+                            "Shake mouse pointer to locate",
+                            switch(settings.compositor.shake_to_locate.unwrap_or(true)),
+                            pointer("shake_to_locate"),
+                        ),
                     ],
                     footer: file_footer(File::Compositor),
                 },
                 Section {
                     header: header("Keyboard"),
                     rows: vec![
-                        row(ControlId::StickyKeys, "Sticky keys", switch(k.sticky_keys.unwrap_or(false)), keys("sticky_keys")),
-                        row(ControlId::StickyKeysShortcut, "Press Shift five times to toggle sticky keys", switch(k.sticky_keys_shortcut.unwrap_or(false)), keys("sticky_keys_shortcut")),
-                        row(ControlId::SlowKeys, "Slow keys", switch(k.slow_keys.unwrap_or(false)), keys("slow_keys")),
-                        row(ControlId::MouseKeys, "Mouse keys", switch(k.mouse_keys.unwrap_or(false)), keys("mouse_keys")),
-                        row(ControlId::MouseKeysShortcut, "Press Alt five times to toggle mouse keys", switch(k.mouse_keys_shortcut.unwrap_or(false)), keys("mouse_keys_shortcut")),
+                        row(
+                            ControlId::StickyKeys,
+                            "Sticky keys",
+                            switch(k.sticky_keys.unwrap_or(false)),
+                            keys("sticky_keys"),
+                        ),
+                        row(
+                            ControlId::StickyKeysShortcut,
+                            "Press Shift five times to toggle sticky keys",
+                            switch(k.sticky_keys_shortcut.unwrap_or(false)),
+                            keys("sticky_keys_shortcut"),
+                        ),
+                        row(
+                            ControlId::SlowKeys,
+                            "Slow keys",
+                            switch(k.slow_keys.unwrap_or(false)),
+                            keys("slow_keys"),
+                        ),
+                        row(
+                            ControlId::MouseKeys,
+                            "Mouse keys",
+                            switch(k.mouse_keys.unwrap_or(false)),
+                            keys("mouse_keys"),
+                        ),
+                        row(
+                            ControlId::MouseKeysShortcut,
+                            "Press Alt five times to toggle mouse keys",
+                            switch(k.mouse_keys_shortcut.unwrap_or(false)),
+                            keys("mouse_keys_shortcut"),
+                        ),
                     ],
                     footer: file_footer(File::Keyboard),
                 },
@@ -396,44 +727,130 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
             let ac = timer_popup(&mapping::SLEEP_CHOICES, p.ac.display_sleep);
             // without a battery only the power-adapter timer applies (§3)
             let mut rows = match live.has_battery() {
-                Some(false) => vec![row(ControlId::DisplaySleepAc, "Turn display off when inactive", ac, key("display_sleep_ac"))],
+                Some(false) => vec![row(
+                    ControlId::DisplaySleepAc,
+                    "Turn display off when inactive",
+                    ac,
+                    key("display_sleep_ac"),
+                )],
                 Some(true) | None => vec![
-                    row(ControlId::DisplaySleepBattery, "Turn display off on battery when inactive", timer_popup(&mapping::SLEEP_CHOICES, p.battery.display_sleep), key("display_sleep_battery")),
-                    row(ControlId::DisplaySleepAc, "Turn display off on power adapter when inactive", ac, key("display_sleep_ac")),
+                    row(
+                        ControlId::DisplaySleepBattery,
+                        "Turn display off on battery when inactive",
+                        timer_popup(&mapping::SLEEP_CHOICES, p.battery.display_sleep),
+                        key("display_sleep_battery"),
+                    ),
+                    row(
+                        ControlId::DisplaySleepAc,
+                        "Turn display off on power adapter when inactive",
+                        ac,
+                        key("display_sleep_ac"),
+                    ),
                 ],
             };
-            rows.push(row(ControlId::RequirePassword, "Require password after the display is turned off", timer_popup(&mapping::PASSWORD_CHOICES, p.require_password_after), key("require_password_after")));
-            vec![Section { header: None, rows, footer: file_footer(File::Power) }]
+            rows.push(row(
+                ControlId::RequirePassword,
+                "Require password after the display is turned off",
+                timer_popup(&mapping::PASSWORD_CHOICES, p.require_password_after),
+                key("require_password_after"),
+            ));
+            vec![Section {
+                header: None,
+                rows,
+                footer: file_footer(File::Power),
+            }]
         }
         PaneId::Battery => {
             let p = &settings.power;
             let key = |k| Backend::Key(File::Power, k);
             let level = match &live.battery {
                 Reading::Ready(Some(b)) => {
-                    let mut rows = vec![row(ControlId::Reading, "Charge", Control::Text { value: format!("{:.0} %", b.percent) }, Backend::Service("Percentage")), row(ControlId::Reading, "State", Control::Text { value: b.state.text().to_string() }, Backend::Service("State"))];
+                    let mut rows = vec![
+                        row(
+                            ControlId::Reading,
+                            "Charge",
+                            Control::Text {
+                                value: format!("{:.0} %", b.percent),
+                            },
+                            Backend::Service("Percentage"),
+                        ),
+                        row(
+                            ControlId::Reading,
+                            "State",
+                            Control::Text {
+                                value: b.state.text().to_string(),
+                            },
+                            Backend::Service("State"),
+                        ),
+                    ];
                     let time = match b.state {
-                        BatteryState::Charging if b.time_to_full > 0 => Some(("Time until full", b.time_to_full)),
-                        BatteryState::Discharging if b.time_to_empty > 0 => Some(("Time remaining", b.time_to_empty)),
+                        BatteryState::Charging if b.time_to_full > 0 => {
+                            Some(("Time until full", b.time_to_full))
+                        }
+                        BatteryState::Discharging if b.time_to_empty > 0 => {
+                            Some(("Time remaining", b.time_to_empty))
+                        }
                         _ => None,
                     };
                     if let Some((label, t)) = time {
-                        rows.push(row(ControlId::Reading, label, Control::Text { value: duration_text(t) }, Backend::Service(if label == "Time remaining" { "TimeToEmpty" } else { "TimeToFull" })));
+                        rows.push(row(
+                            ControlId::Reading,
+                            label,
+                            Control::Text {
+                                value: duration_text(t),
+                            },
+                            Backend::Service(if label == "Time remaining" {
+                                "TimeToEmpty"
+                            } else {
+                                "TimeToFull"
+                            }),
+                        ));
                     }
-                    vec![Section { header: header("Battery Level"), rows, footer: None }]
+                    vec![Section {
+                        header: header("Battery Level"),
+                        rows,
+                        footer: None,
+                    }]
                 }
                 // no battery: the pane is Energy Saver, the timers only
                 Reading::Ready(None) => Vec::new(),
-                other => vec![Section { header: header("Battery Level"), rows: vec![row(ControlId::Reading, "Charge", Control::Text { value: other.reason().unwrap_or_default().to_string() }, Backend::Service("Percentage"))], footer: None }],
+                other => vec![Section {
+                    header: header("Battery Level"),
+                    rows: vec![row(
+                        ControlId::Reading,
+                        "Charge",
+                        Control::Text {
+                            value: other.reason().unwrap_or_default().to_string(),
+                        },
+                        Backend::Service("Percentage"),
+                    )],
+                    footer: None,
+                }],
             };
             let mut out = level;
             out.push(Section {
                 header: header("System Sleep"),
                 // without a battery only the power-adapter timer applies (§3)
                 rows: match live.has_battery() {
-                    Some(false) => vec![row(ControlId::SystemSleepAc, "Put the computer to sleep after", timer_popup(&mapping::SLEEP_CHOICES, p.ac.system_sleep), key("system_sleep_ac"))],
+                    Some(false) => vec![row(
+                        ControlId::SystemSleepAc,
+                        "Put the computer to sleep after",
+                        timer_popup(&mapping::SLEEP_CHOICES, p.ac.system_sleep),
+                        key("system_sleep_ac"),
+                    )],
                     Some(true) | None => vec![
-                        row(ControlId::SystemSleepBattery, "Put the computer to sleep on battery after", timer_popup(&mapping::SLEEP_CHOICES, p.battery.system_sleep), key("system_sleep_battery")),
-                        row(ControlId::SystemSleepAc, "Put the computer to sleep on power adapter after", timer_popup(&mapping::SLEEP_CHOICES, p.ac.system_sleep), key("system_sleep_ac")),
+                        row(
+                            ControlId::SystemSleepBattery,
+                            "Put the computer to sleep on battery after",
+                            timer_popup(&mapping::SLEEP_CHOICES, p.battery.system_sleep),
+                            key("system_sleep_battery"),
+                        ),
+                        row(
+                            ControlId::SystemSleepAc,
+                            "Put the computer to sleep on power adapter after",
+                            timer_popup(&mapping::SLEEP_CHOICES, p.ac.system_sleep),
+                            key("system_sleep_ac"),
+                        ),
                     ],
                 },
                 footer: file_footer(File::Power),
@@ -448,17 +865,44 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                 other => (0.0, false, other.reason().map(str::to_string)),
             };
             let rows = vec![
-                Row { disabled: reason.clone(), ..row(ControlId::Volume, "Output volume", Control::Level { value: level }, svc) },
-                Row { disabled: reason, ..row(ControlId::Mute, "Mute", switch(muted), svc) },
+                Row {
+                    disabled: reason.clone(),
+                    ..row(
+                        ControlId::Volume,
+                        "Output volume",
+                        Control::Level { value: level },
+                        svc,
+                    )
+                },
+                Row {
+                    disabled: reason,
+                    ..row(ControlId::Mute, "Mute", switch(muted), svc)
+                },
             ];
-            vec![Section { header: header("Output"), rows, footer: None }]
+            vec![Section {
+                header: header("Output"),
+                rows,
+                footer: None,
+            }]
         }
         PaneId::Displays => {
             let (value, reason) = match &live.brightness {
                 Reading::Ready(b) => (*b, None),
                 other => (0.0, other.reason().map(str::to_string)),
             };
-            vec![Section { header: header("Brightness"), rows: vec![Row { disabled: reason, ..row(ControlId::Brightness, "Brightness", Control::Level { value }, Backend::Service("SetBrightness")) }], footer: None }]
+            vec![Section {
+                header: header("Brightness"),
+                rows: vec![Row {
+                    disabled: reason,
+                    ..row(
+                        ControlId::Brightness,
+                        "Brightness",
+                        Control::Level { value },
+                        Backend::Service("SetBrightness"),
+                    )
+                }],
+                footer: None,
+            }]
         }
         PaneId::Wifi => wifi_sections(&live.wifi),
         PaneId::Network => network_sections(&live.wifi),
@@ -471,13 +915,18 @@ fn seconds(t: Timer) -> Option<u64> {
 }
 
 fn timer_of(seconds: Option<u64>) -> Timer {
-    seconds.map_or(Timer::Never, |s| Timer::After(std::time::Duration::from_secs(s)))
+    seconds.map_or(Timer::Never, |s| {
+        Timer::After(std::time::Duration::from_secs(s))
+    })
 }
 
 /// A timer pop-up over `listed` with `stored` selected.
 fn timer_popup(listed: &[Option<u64>], stored: Timer) -> Control {
     let c = mapping::timer_choices(listed, seconds(stored));
-    Control::Popup { choices: c.labels, selected: c.selected }
+    Control::Popup {
+        choices: c.labels,
+        selected: c.selected,
+    }
 }
 
 /// The colour filter's choice index.
@@ -506,7 +955,11 @@ fn filter_text(i: usize, hue: f64) -> String {
 
 /// A pop-up over the labels of `table` with `value` selected, a stored value outside it shown as an extra item named by
 /// `extra`.
-fn choice_popup<T: PartialEq + Copy>(table: &[(&'static str, T)], value: T, extra: impl Fn(T) -> String) -> Control {
+fn choice_popup<T: PartialEq + Copy>(
+    table: &[(&'static str, T)],
+    value: T,
+    extra: impl Fn(T) -> String,
+) -> Control {
     let mut choices: Vec<String> = table.iter().map(|(l, _)| l.to_string()).collect();
     let selected = match table.iter().position(|(_, v)| *v == value) {
         Some(i) => i,
@@ -523,14 +976,53 @@ fn focus_sections(focus: &Reading<crate::live::Focus>) -> Vec<Section> {
     let svc = Backend::Service;
     match focus {
         Reading::Ready(f) => {
-            let mut out = vec![Section { header: None, rows: vec![row(ControlId::DoNotDisturb, "Do Not Disturb", switch(f.on), svc("SetDoNotDisturb"))], footer: None }];
+            let mut out = vec![Section {
+                header: None,
+                rows: vec![row(
+                    ControlId::DoNotDisturb,
+                    "Do Not Disturb",
+                    switch(f.on),
+                    svc("SetDoNotDisturb"),
+                )],
+                footer: None,
+            }];
             if !f.lifetimes.is_empty() {
-                let rows = f.lifetimes.iter().enumerate().map(|(i, (_, title))| row(ControlId::FocusFor(i), title.clone(), Control::Button { title: "Turn On".into() }, svc("SetDoNotDisturbFor"))).collect();
-                out.push(Section { header: header("Turn On For"), rows, footer: None });
+                let rows = f
+                    .lifetimes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (_, title))| {
+                        row(
+                            ControlId::FocusFor(i),
+                            title.clone(),
+                            Control::Button {
+                                title: "Turn On".into(),
+                            },
+                            svc("SetDoNotDisturbFor"),
+                        )
+                    })
+                    .collect();
+                out.push(Section {
+                    header: header("Turn On For"),
+                    rows,
+                    footer: None,
+                });
             }
             out
         }
-        other => vec![Section { header: None, rows: vec![Row { disabled: other.reason().map(str::to_string), ..row(ControlId::DoNotDisturb, "Do Not Disturb", switch(false), svc("SetDoNotDisturb")) }], footer: None }],
+        other => vec![Section {
+            header: None,
+            rows: vec![Row {
+                disabled: other.reason().map(str::to_string),
+                ..row(
+                    ControlId::DoNotDisturb,
+                    "Do Not Disturb",
+                    switch(false),
+                    svc("SetDoNotDisturb"),
+                )
+            }],
+            footer: None,
+        }],
     }
 }
 
@@ -538,35 +1030,91 @@ fn focus_sections(focus: &Reading<crate::live::Focus>) -> Vec<Section> {
 fn wifi_sections(wifi: &Reading<Wifi>) -> Vec<Section> {
     let svc = Backend::Service;
     let Reading::Ready(w) = wifi else {
-        return vec![Section { header: None, rows: vec![Row { disabled: wifi.reason().map(str::to_string), ..row(ControlId::WifiPower, "Wi-Fi", switch(false), svc("WirelessEnabled")) }], footer: None }];
+        return vec![Section {
+            header: None,
+            rows: vec![Row {
+                disabled: wifi.reason().map(str::to_string),
+                ..row(
+                    ControlId::WifiPower,
+                    "Wi-Fi",
+                    switch(false),
+                    svc("WirelessEnabled"),
+                )
+            }],
+            footer: None,
+        }];
     };
-    let mut power = row(ControlId::WifiPower, "Wi-Fi", switch(w.enabled), svc("WirelessEnabled"));
+    let mut power = row(
+        ControlId::WifiPower,
+        "Wi-Fi",
+        switch(w.enabled),
+        svc("WirelessEnabled"),
+    );
     if !w.has_wifi_device() {
         power.disabled = Some("Wi-Fi is not available".into());
     }
     power.error = w.failure.clone();
-    let mut out = vec![Section { header: None, rows: vec![power], footer: None }];
+    let mut out = vec![Section {
+        header: None,
+        rows: vec![power],
+        footer: None,
+    }];
     if !w.enabled || !w.has_wifi_device() {
         return out;
     }
     let network_row = |(i, n): (usize, &crate::live::Network)| {
         let control = if w.joining.as_deref() == Some(n.ssid.as_str()) {
-            Control::Text { value: "Connecting…".into() }
+            Control::Text {
+                value: "Connecting…".into(),
+            }
         } else if n.connected {
-            Control::Button { title: "Disconnect".into() }
+            Control::Button {
+                title: "Disconnect".into(),
+            }
         } else {
-            Control::Button { title: "Join".into() }
+            Control::Button {
+                title: "Join".into(),
+            }
         };
-        let label = if n.security == "open" { n.ssid.clone() } else { format!("{} (secured)", n.ssid) };
-        row(ControlId::WifiNetwork(i), label, control, svc(if n.connected { "Disconnect" } else { "Connect" }))
+        let label = if n.security == "open" {
+            n.ssid.clone()
+        } else {
+            format!("{} (secured)", n.ssid)
+        };
+        row(
+            ControlId::WifiNetwork(i),
+            label,
+            control,
+            svc(if n.connected { "Disconnect" } else { "Connect" }),
+        )
     };
-    let known: Vec<Row> = w.networks.iter().enumerate().filter(|(_, n)| n.saved).map(network_row).collect();
-    let other: Vec<Row> = w.networks.iter().enumerate().filter(|(_, n)| !n.saved).map(network_row).collect();
+    let known: Vec<Row> = w
+        .networks
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.saved)
+        .map(network_row)
+        .collect();
+    let other: Vec<Row> = w
+        .networks
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| !n.saved)
+        .map(network_row)
+        .collect();
     if !known.is_empty() {
-        out.push(Section { header: header("Known Networks"), rows: known, footer: None });
+        out.push(Section {
+            header: header("Known Networks"),
+            rows: known,
+            footer: None,
+        });
     }
     if !other.is_empty() {
-        out.push(Section { header: header("Other Networks"), rows: other, footer: None });
+        out.push(Section {
+            header: header("Other Networks"),
+            rows: other,
+            footer: None,
+        });
     }
     out
 }
@@ -574,7 +1122,21 @@ fn wifi_sections(wifi: &Reading<Wifi>) -> Vec<Section> {
 /// The devices of `Network1`, read only, under the daemon's state (§6.4).
 fn network_sections(wifi: &Reading<Wifi>) -> Vec<Section> {
     let Reading::Ready(w) = wifi else {
-        return vec![Section { header: None, rows: vec![Row { disabled: wifi.reason().map(str::to_string), ..row(ControlId::WifiPower, "Network", Control::Text { value: String::new() }, Backend::Service("Devices")) }], footer: None }];
+        return vec![Section {
+            header: None,
+            rows: vec![Row {
+                disabled: wifi.reason().map(str::to_string),
+                ..row(
+                    ControlId::WifiPower,
+                    "Network",
+                    Control::Text {
+                        value: String::new(),
+                    },
+                    Backend::Service("Devices"),
+                )
+            }],
+            footer: None,
+        }];
     };
     let rows = w
         .devices
@@ -586,55 +1148,133 @@ fn network_sections(wifi: &Reading<Wifi>) -> Vec<Section> {
                     value = format!("{value} · {part}");
                 }
             }
-            row(ControlId::Reading, format!("{} ({})", d.name, d.kind), Control::Text { value }, Backend::Service("Devices"))
+            row(
+                ControlId::Reading,
+                format!("{} ({})", d.name, d.kind),
+                Control::Text { value },
+                Backend::Service("Devices"),
+            )
         })
         .collect();
-    vec![Section { header: Some(format!("Status: {}", w.state)), rows, footer: None }]
+    vec![Section {
+        header: Some(format!("Status: {}", w.state)),
+        rows,
+        footer: None,
+    }]
 }
 
 /// The power switch, the paired devices under My Devices and the others under Nearby Devices (§6.4).
 fn bluetooth_sections(bt: &Reading<Bluetooth>) -> Vec<Section> {
     let svc = Backend::Service;
     let Reading::Ready(b) = bt else {
-        return vec![Section { header: None, rows: vec![Row { disabled: bt.reason().map(str::to_string), ..row(ControlId::BluetoothPower, "Bluetooth", switch(false), svc("Powered")) }], footer: None }];
+        return vec![Section {
+            header: None,
+            rows: vec![Row {
+                disabled: bt.reason().map(str::to_string),
+                ..row(
+                    ControlId::BluetoothPower,
+                    "Bluetooth",
+                    switch(false),
+                    svc("Powered"),
+                )
+            }],
+            footer: None,
+        }];
     };
-    let mut power = row(ControlId::BluetoothPower, "Bluetooth", switch(b.powered), svc("Powered"));
+    let mut power = row(
+        ControlId::BluetoothPower,
+        "Bluetooth",
+        switch(b.powered),
+        svc("Powered"),
+    );
     if !b.available {
         power.disabled = Some("Bluetooth is not available".into());
     }
     power.error = b.failure.clone();
-    let footer = b.agent_elsewhere.then(|| "Pairing is handled by another application.".to_string());
-    let mut out = vec![Section { header: None, rows: vec![power], footer }];
+    let footer = b
+        .agent_elsewhere
+        .then(|| "Pairing is handled by another application.".to_string());
+    let mut out = vec![Section {
+        header: None,
+        rows: vec![power],
+        footer,
+    }];
     if !b.available || !b.powered {
         return out;
     }
     let device_row = |(i, d): (usize, &crate::live::BtDevice)| {
         let control = if d.pairing {
-            Control::Text { value: "Pairing…".into() }
+            Control::Text {
+                value: "Pairing…".into(),
+            }
         } else if d.paired {
-            Control::Buttons { titles: vec![if d.connected { "Disconnect".into() } else { "Connect".into() }, "Forget…".into()] }
+            Control::Buttons {
+                titles: vec![
+                    if d.connected {
+                        "Disconnect".into()
+                    } else {
+                        "Connect".into()
+                    },
+                    "Forget…".into(),
+                ],
+            }
         } else {
-            Control::Button { title: "Pair".into() }
+            Control::Button {
+                title: "Pair".into(),
+            }
         };
-        row(ControlId::BluetoothDevice(i), d.title().to_string(), control, svc(if d.paired { "Connect" } else { "Pair" }))
+        row(
+            ControlId::BluetoothDevice(i),
+            d.title().to_string(),
+            control,
+            svc(if d.paired { "Connect" } else { "Pair" }),
+        )
     };
-    let mine: Vec<Row> = b.devices.iter().enumerate().filter(|(_, d)| d.paired).map(device_row).collect();
-    let nearby: Vec<Row> = b.devices.iter().enumerate().filter(|(_, d)| !d.paired).map(device_row).collect();
-    out.push(Section { header: header("My Devices"), rows: mine, footer: None });
-    out.push(Section { header: header("Nearby Devices"), rows: nearby, footer: None });
+    let mine: Vec<Row> = b
+        .devices
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| d.paired)
+        .map(device_row)
+        .collect();
+    let nearby: Vec<Row> = b
+        .devices
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| !d.paired)
+        .map(device_row)
+        .collect();
+    out.push(Section {
+        header: header("My Devices"),
+        rows: mine,
+        footer: None,
+    });
+    out.push(Section {
+        header: header("Nearby Devices"),
+        rows: nearby,
+        footer: None,
+    });
     out.retain(|s| !s.rows.is_empty());
     out
 }
 
 /// The tracking-speed slider: ten stops.
 fn tracking(speed: f64) -> Control {
-    Control::Slider { value: Control::stop_value(mapping::tracking_stop(speed), mapping::TRACKING_STOPS.len()), stops: Some(mapping::TRACKING_STOPS.len()), marks: &[], labels: ("Slow", "Fast") }
+    Control::Slider {
+        value: Control::stop_value(mapping::tracking_stop(speed), mapping::TRACKING_STOPS.len()),
+        stops: Some(mapping::TRACKING_STOPS.len()),
+        marks: &[],
+        labels: ("Slow", "Fast"),
+    }
 }
 
 /// The delay slider's position: from the delay in effect, or from the saved one while repeat is off (the slider keeps
 /// its position, `repeat_delay_saved`), else the default.
 fn delay_position(settings: &Settings) -> usize {
-    match (settings.repeat_delay_ms(), settings.keyboard.repeat_delay_saved_ms) {
+    match (
+        settings.repeat_delay_ms(),
+        settings.keyboard.repeat_delay_saved_ms,
+    ) {
         (0, Some(saved)) => mapping::delay_position(saved),
         (0, None) => mapping::DELAY_DEFAULT,
         (d, _) => mapping::delay_position(d),
@@ -658,7 +1298,9 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
         other => panic!("{id:?} is a slider, not {other:?}"),
     };
     match id {
-        ControlId::Appearance => vec![Effect::SetAppearance { dark: index_of(value) == 1 }],
+        ControlId::Appearance => vec![Effect::SetAppearance {
+            dark: index_of(value) == 1,
+        }],
         ControlId::DockSize => {
             settings.dock.tile_size = Some(mapping::dock_px(fraction_of(value)));
             store(File::Dock)
@@ -689,7 +1331,8 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
         }
         ControlId::HotCorner(trigger) => match CORNER_ACTIONS.get(index_of(value)) {
             Some((_, action)) => {
-                let target = cupertino_defaults::dock::parse_action(action).expect("the corner table holds valid actions");
+                let target = cupertino_defaults::dock::parse_action(action)
+                    .expect("the corner table holds valid actions");
                 settings.dock.actions.set(trigger, target);
                 store(File::Dock)
             }
@@ -717,7 +1360,11 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
             store(File::MenuBar)
         }
         ControlId::Clock24 => {
-            settings.menubar.clock.hour_cycle = if bool_of(value) { HourCycle::H24 } else { HourCycle::H12 };
+            settings.menubar.clock.hour_cycle = if bool_of(value) {
+                HourCycle::H24
+            } else {
+                HourCycle::H12
+            };
             store(File::MenuBar)
         }
         ControlId::RepeatRate => {
@@ -769,7 +1416,11 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
             None => Vec::new(),
         },
         ControlId::CapsLockDelay => {
-            settings.keyboard.caps_lock_delay_ms = Some(if bool_of(value) { CAPS_LOCK_DELAY_MS } else { 0 });
+            settings.keyboard.caps_lock_delay_ms = Some(if bool_of(value) {
+                CAPS_LOCK_DELAY_MS
+            } else {
+                0
+            });
             store(File::Keyboard)
         }
         ControlId::CapsLockSwitch => {
@@ -800,7 +1451,11 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
             settings.keyboard.mouse_keys_shortcut = Some(bool_of(value));
             store(File::Keyboard)
         }
-        ControlId::ReduceMotion | ControlId::ReduceTransparency | ControlId::IncreaseContrast | ControlId::DifferentiateWithoutColor | ControlId::InvertColors => {
+        ControlId::ReduceMotion
+        | ControlId::ReduceTransparency
+        | ControlId::IncreaseContrast
+        | ControlId::DifferentiateWithoutColor
+        | ControlId::InvertColors => {
             let key = match id {
                 ControlId::ReduceMotion => "reduce_motion",
                 ControlId::ReduceTransparency => "reduce_transparency",
@@ -808,31 +1463,57 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
                 ControlId::DifferentiateWithoutColor => "differentiate_without_color",
                 _ => "invert_colors",
             };
-            vec![Effect::SetAccessibility { key, value: if bool_of(value) { "on" } else { "off" }.to_string() }]
+            vec![Effect::SetAccessibility {
+                key,
+                value: if bool_of(value) { "on" } else { "off" }.to_string(),
+            }]
         }
-        ControlId::DisplayContrast => vec![Effect::SetAccessibility { key: "display_contrast", value: format!("{:.3}", fraction_of(value)) }],
+        ControlId::DisplayContrast => vec![Effect::SetAccessibility {
+            key: "display_contrast",
+            value: format!("{:.3}", fraction_of(value)),
+        }],
         ControlId::ColorFilter => {
             let hue = match settings.accessibility.color_filter {
                 Some(ColorFilter::Tint { hue }) => hue,
                 _ => 0.0,
             };
-            vec![Effect::SetAccessibility { key: "color_filter", value: filter_text(index_of(value), hue) }]
+            vec![Effect::SetAccessibility {
+                key: "color_filter",
+                value: filter_text(index_of(value), hue),
+            }]
         }
-        ControlId::ColorFilterIntensity => vec![Effect::SetAccessibility { key: "color_filter_intensity", value: format!("{:.3}", INTENSITY_MIN + (1.0 - INTENSITY_MIN) * fraction_of(value)) }],
+        ControlId::ColorFilterIntensity => vec![Effect::SetAccessibility {
+            key: "color_filter_intensity",
+            value: format!(
+                "{:.3}",
+                INTENSITY_MIN + (1.0 - INTENSITY_MIN) * fraction_of(value)
+            ),
+        }],
         ControlId::CursorSize => {
-            settings.compositor.cursor_size = Some(((CURSOR_MIN + (CURSOR_MAX - CURSOR_MIN) * fraction_of(value)) * 100.0).round() / 100.0);
+            settings.compositor.cursor_size = Some(
+                ((CURSOR_MIN + (CURSOR_MAX - CURSOR_MIN) * fraction_of(value)) * 100.0).round()
+                    / 100.0,
+            );
             store(File::Compositor)
         }
         ControlId::ShakeToLocate => {
             settings.compositor.shake_to_locate = Some(bool_of(value));
             store(File::Compositor)
         }
-        ControlId::DisplaySleepBattery | ControlId::DisplaySleepAc | ControlId::RequirePassword | ControlId::SystemSleepBattery | ControlId::SystemSleepAc => {
+        ControlId::DisplaySleepBattery
+        | ControlId::DisplaySleepAc
+        | ControlId::RequirePassword
+        | ControlId::SystemSleepBattery
+        | ControlId::SystemSleepAc => {
             let p = &mut settings.power;
             let (listed, slot): (&[Option<u64>], &mut Timer) = match id {
-                ControlId::DisplaySleepBattery => (&mapping::SLEEP_CHOICES, &mut p.battery.display_sleep),
+                ControlId::DisplaySleepBattery => {
+                    (&mapping::SLEEP_CHOICES, &mut p.battery.display_sleep)
+                }
                 ControlId::DisplaySleepAc => (&mapping::SLEEP_CHOICES, &mut p.ac.display_sleep),
-                ControlId::SystemSleepBattery => (&mapping::SLEEP_CHOICES, &mut p.battery.system_sleep),
+                ControlId::SystemSleepBattery => {
+                    (&mapping::SLEEP_CHOICES, &mut p.battery.system_sleep)
+                }
                 ControlId::SystemSleepAc => (&mapping::SLEEP_CHOICES, &mut p.ac.system_sleep),
                 _ => (&mapping::PASSWORD_CHOICES, &mut p.require_password_after),
             };
@@ -853,30 +1534,46 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
         ControlId::Volume => {
             let level = fraction_of(value);
             // a level below the mute threshold mutes; any other level unmutes
-            vec![Effect::Service(Call::SetVolume { level, muted: level < MUTE_BELOW })]
+            vec![Effect::Service(Call::SetVolume {
+                level,
+                muted: level < MUTE_BELOW,
+            })]
         }
         ControlId::Mute => {
             let level = live.volume.ready().map_or(0.0, |v| v.level);
-            vec![Effect::Service(Call::SetVolume { level, muted: bool_of(value) })]
+            vec![Effect::Service(Call::SetVolume {
+                level,
+                muted: bool_of(value),
+            })]
         }
         ControlId::Brightness => vec![Effect::Service(Call::SetBrightness(fraction_of(value)))],
         ControlId::WifiPower => vec![Effect::Service(Call::SetWirelessEnabled(bool_of(value)))],
         ControlId::WifiNetwork(i) => match live.wifi.ready().and_then(|w| w.networks.get(i)) {
             Some(n) if n.connected => vec![Effect::Service(Call::Disconnect)],
-            Some(n) => vec![Effect::Service(Call::Join { ssid: n.ssid.clone(), passphrase: (!n.needs_passphrase()).then(crate::sheet::Secret::new) })],
+            Some(n) => vec![Effect::Service(Call::Join {
+                ssid: n.ssid.clone(),
+                passphrase: (!n.needs_passphrase()).then(crate::sheet::Secret::new),
+            })],
             None => Vec::new(),
         },
-        ControlId::BluetoothPower => vec![Effect::Service(Call::SetBluetoothPowered(bool_of(value)))],
+        ControlId::BluetoothPower => {
+            vec![Effect::Service(Call::SetBluetoothPowered(bool_of(value)))]
+        }
         ControlId::Reading => Vec::new(),
-        ControlId::BluetoothDevice(i) => match live.bluetooth.ready().and_then(|b| b.devices.get(i)) {
-            Some(d) if !d.paired => vec![Effect::Service(Call::Pair(d.id.clone()))],
-            Some(d) => match index_of(value) {
-                0 if d.connected => vec![Effect::Service(Call::DisconnectDevice(d.id.clone()))],
-                0 => vec![Effect::Service(Call::Connect(d.id.clone()))],
-                _ => vec![Effect::Service(Call::Remove { id: d.id.clone(), confirmed: false })],
-            },
-            None => Vec::new(),
-        },
+        ControlId::BluetoothDevice(i) => {
+            match live.bluetooth.ready().and_then(|b| b.devices.get(i)) {
+                Some(d) if !d.paired => vec![Effect::Service(Call::Pair(d.id.clone()))],
+                Some(d) => match index_of(value) {
+                    0 if d.connected => vec![Effect::Service(Call::DisconnectDevice(d.id.clone()))],
+                    0 => vec![Effect::Service(Call::Connect(d.id.clone()))],
+                    _ => vec![Effect::Service(Call::Remove {
+                        id: d.id.clone(),
+                        confirmed: false,
+                    })],
+                },
+                None => Vec::new(),
+            }
+        }
         ControlId::MouseNatural | ControlId::TrackpadNatural => {
             // one value for the mouse and the trackpad, as in the design
             settings.compositor.natural_scrolling = Some(bool_of(value));
@@ -898,7 +1595,9 @@ mod tests {
         Settings {
             dock: DockSettings::default(),
             compositor: CompositorSettings::default(),
-            menubar: MenuBarSettings { clock: ClockSettings::UNSET },
+            menubar: MenuBarSettings {
+                clock: ClockSettings::UNSET,
+            },
             keyboard: KeyboardSettings::default(),
             power: cupertino_defaults::power::PowerSettings::default(),
             accessibility: cupertino_defaults::accessibility::AccessibilitySettings::default(),
@@ -906,20 +1605,38 @@ mod tests {
         }
     }
 
-    const LIGHT: Session = Session { dark: false, display: DisplayOptions { reduce_motion: false, reduce_transparency: false, increase_contrast: false, differentiate_without_color: false } };
+    const LIGHT: Session = Session {
+        dark: false,
+        display: DisplayOptions {
+            reduce_motion: false,
+            reduce_transparency: false,
+            increase_contrast: false,
+            differentiate_without_color: false,
+        },
+    };
 
     fn control(pane: PaneId, id: ControlId, s: &Settings) -> Control {
-        sections(pane, s, LIGHT, &Live::default()).into_iter().flat_map(|sec| sec.rows).find(|r| r.id == id).expect("the control is in the pane").control
+        sections(pane, s, LIGHT, &Live::default())
+            .into_iter()
+            .flat_map(|sec| sec.rows)
+            .find(|r| r.id == id)
+            .expect("the control is in the pane")
+            .control
     }
 
     #[test]
     fn every_control_names_the_key_or_call_behind_it() {
         let s = unset();
         for pane in crate::pane::PANES.iter().map(|p| p.id) {
-            for r in sections(pane, &s, LIGHT, &Live::default()).iter().flat_map(|sec| &sec.rows) {
+            for r in sections(pane, &s, LIGHT, &Live::default())
+                .iter()
+                .flat_map(|sec| &sec.rows)
+            {
                 match r.backend {
                     Backend::SetAppearance => assert_eq!(r.id, ControlId::Appearance),
-                    Backend::SetAccessibility(key) | Backend::Key(_, key) | Backend::Service(key) => assert!(!key.is_empty(), "{:?}", r.id),
+                    Backend::SetAccessibility(key)
+                    | Backend::Key(_, key)
+                    | Backend::Service(key) => assert!(!key.is_empty(), "{:?}", r.id),
                 }
             }
         }
@@ -928,40 +1645,107 @@ mod tests {
     #[test]
     fn without_a_battery_only_the_power_adapter_timers_show() {
         let ids = |pane, battery| {
-            let live = Live { battery: crate::live::Reading::Ready(battery), ..Live::default() };
-            sections(pane, &unset(), LIGHT, &live).iter().flat_map(|s| &s.rows).map(|r| r.id).collect::<Vec<_>>()
+            let live = Live {
+                battery: crate::live::Reading::Ready(battery),
+                ..Live::default()
+            };
+            sections(pane, &unset(), LIGHT, &live)
+                .iter()
+                .flat_map(|s| &s.rows)
+                .map(|r| r.id)
+                .collect::<Vec<_>>()
         };
-        assert_eq!(ids(PaneId::LockScreen, None), [ControlId::DisplaySleepAc, ControlId::RequirePassword]);
+        assert_eq!(
+            ids(PaneId::LockScreen, None),
+            [ControlId::DisplaySleepAc, ControlId::RequirePassword]
+        );
         assert_eq!(ids(PaneId::Battery, None), [ControlId::SystemSleepAc]);
-        let battery = crate::live::Battery { percent: 80.0, state: crate::live::BatteryState::Discharging, time_to_empty: 0, time_to_full: 0 };
-        assert_eq!(ids(PaneId::LockScreen, Some(battery)), [ControlId::DisplaySleepBattery, ControlId::DisplaySleepAc, ControlId::RequirePassword]);
-        assert!(ids(PaneId::Battery, Some(battery)).ends_with(&[ControlId::SystemSleepBattery, ControlId::SystemSleepAc]));
+        let battery = crate::live::Battery {
+            percent: 80.0,
+            state: crate::live::BatteryState::Discharging,
+            time_to_empty: 0,
+            time_to_full: 0,
+        };
+        assert_eq!(
+            ids(PaneId::LockScreen, Some(battery)),
+            [
+                ControlId::DisplaySleepBattery,
+                ControlId::DisplaySleepAc,
+                ControlId::RequirePassword
+            ]
+        );
+        assert!(ids(PaneId::Battery, Some(battery))
+            .ends_with(&[ControlId::SystemSleepBattery, ControlId::SystemSleepAc]));
     }
 
     #[test]
     fn every_commit_has_at_most_one_effect() {
-        use crate::live::{BtDevice, Bluetooth, Focus, Network, Reading, Volume, Wifi};
-        let network = |ssid: &str, security: &str, saved, connected| Network { ssid: ssid.into(), signal: -50, security: security.into(), saved, connected };
-        let device = |id: &str, paired| BtDevice { id: id.into(), address: id.into(), name: None, icon: "phone".into(), paired, connected: paired, pairing: false };
+        use crate::live::{Bluetooth, BtDevice, Focus, Network, Reading, Volume, Wifi};
+        let network = |ssid: &str, security: &str, saved, connected| Network {
+            ssid: ssid.into(),
+            signal: -50,
+            security: security.into(),
+            saved,
+            connected,
+        };
+        let device = |id: &str, paired| BtDevice {
+            id: id.into(),
+            address: id.into(),
+            name: None,
+            icon: "phone".into(),
+            paired,
+            connected: paired,
+            pairing: false,
+        };
         let live = Live {
-            focus: Reading::Ready(Focus { on: false, lifetimes: vec![("hour".into(), "For 1 hour".into())] }),
-            volume: Reading::Ready(Volume { level: 0.5, muted: false }),
+            focus: Reading::Ready(Focus {
+                on: false,
+                lifetimes: vec![("hour".into(), "For 1 hour".into())],
+            }),
+            volume: Reading::Ready(Volume {
+                level: 0.5,
+                muted: false,
+            }),
             brightness: Reading::Ready(0.5),
             battery: Reading::Ready(None),
-            wifi: Reading::Ready(Wifi { enabled: true, networks: vec![network("a", "wpa2", true, true), network("b", "open", false, false), network("c", "wpa2", false, false)], ..Wifi::default() }),
-            bluetooth: Reading::Ready(Bluetooth { available: true, powered: true, devices: vec![device("p", true), device("n", false)], ..Bluetooth::default() }),
+            wifi: Reading::Ready(Wifi {
+                enabled: true,
+                networks: vec![
+                    network("a", "wpa2", true, true),
+                    network("b", "open", false, false),
+                    network("c", "wpa2", false, false),
+                ],
+                ..Wifi::default()
+            }),
+            bluetooth: Reading::Ready(Bluetooth {
+                available: true,
+                powered: true,
+                devices: vec![device("p", true), device("n", false)],
+                ..Bluetooth::default()
+            }),
         };
         for pane in crate::pane::PANES.iter().map(|p| p.id) {
-            for r in sections(pane, &unset(), LIGHT, &live).iter().flat_map(|sec| &sec.rows) {
+            for r in sections(pane, &unset(), LIGHT, &live)
+                .iter()
+                .flat_map(|sec| &sec.rows)
+            {
                 // every value the control can commit
                 let values: Vec<Value> = match &r.control {
                     Control::Switch { .. } => vec![Value::Bool(false), Value::Bool(true)],
-                    Control::Segmented { segments, .. } => (0..segments.len()).map(Value::Index).collect(),
-                    Control::Popup { choices, .. } => (0..choices.len()).map(Value::Index).collect(),
+                    Control::Segmented { segments, .. } => {
+                        (0..segments.len()).map(Value::Index).collect()
+                    }
+                    Control::Popup { choices, .. } => {
+                        (0..choices.len()).map(Value::Index).collect()
+                    }
                     Control::Buttons { titles } => (0..titles.len()).map(Value::Index).collect(),
                     Control::Button { .. } => vec![Value::Index(0)],
                     Control::Slider { stops: Some(n), .. } => (0..*n).map(Value::Index).collect(),
-                    Control::Slider { stops: None, .. } | Control::Level { .. } => vec![Value::Fraction(0.0), Value::Fraction(0.5), Value::Fraction(1.0)],
+                    Control::Slider { stops: None, .. } | Control::Level { .. } => vec![
+                        Value::Fraction(0.0),
+                        Value::Fraction(0.5),
+                        Value::Fraction(1.0),
+                    ],
                     Control::Text { .. } => Vec::new(),
                 };
                 for value in values {
@@ -975,179 +1759,639 @@ mod tests {
     #[test]
     fn unset_files_show_the_reference_defaults() {
         let s = unset();
-        assert_eq!(control(PaneId::Mouse, ControlId::MouseSpeed, &s), tracking(0.6875), "stop 3");
-        assert_eq!(control(PaneId::Mouse, ControlId::MouseAcceleration, &s), Control::Switch { on: true });
-        assert_eq!(control(PaneId::DesktopDock, ControlId::AutoHide, &s), Control::Switch { on: false });
-        assert_eq!(control(PaneId::DesktopDock, ControlId::DockPosition, &s), Control::Segmented { segments: vec!["Bottom", "Left", "Right"], selected: 0 });
-        let Control::Slider { value, .. } = control(PaneId::Keyboard, ControlId::RepeatRate, &s) else { panic!("a slider") };
+        assert_eq!(
+            control(PaneId::Mouse, ControlId::MouseSpeed, &s),
+            tracking(0.6875),
+            "stop 3"
+        );
+        assert_eq!(
+            control(PaneId::Mouse, ControlId::MouseAcceleration, &s),
+            Control::Switch { on: true }
+        );
+        assert_eq!(
+            control(PaneId::DesktopDock, ControlId::AutoHide, &s),
+            Control::Switch { on: false }
+        );
+        assert_eq!(
+            control(PaneId::DesktopDock, ControlId::DockPosition, &s),
+            Control::Segmented {
+                segments: vec!["Bottom", "Left", "Right"],
+                selected: 0
+            }
+        );
+        let Control::Slider { value, .. } = control(PaneId::Keyboard, ControlId::RepeatRate, &s)
+        else {
+            panic!("a slider")
+        };
         assert_eq!(value, 6.0 / 7.0, "83 ms: position 6 of 0…7");
-        let Control::Slider { value, .. } = control(PaneId::Keyboard, ControlId::RepeatDelay, &s) else { panic!("a slider") };
+        let Control::Slider { value, .. } = control(PaneId::Keyboard, ControlId::RepeatDelay, &s)
+        else {
+            panic!("a slider")
+        };
         assert_eq!(value, 3.0 / 5.0, "500 ms: position 4 of 1…6");
-        let Control::Popup { selected, .. } = control(PaneId::DesktopDock, ControlId::HotCorner(Trigger::CornerTopLeft), &s) else { panic!("a popup") };
+        let Control::Popup { selected, .. } = control(
+            PaneId::DesktopDock,
+            ControlId::HotCorner(Trigger::CornerTopLeft),
+            &s,
+        ) else {
+            panic!("a popup")
+        };
         assert_eq!(selected, 0, "no corner does anything");
     }
 
     #[test]
     fn changes_write_the_mapped_values_to_their_file() {
         let mut s = unset();
-        assert_eq!(change(ControlId::MouseSpeed, Value::Index(9), &mut s, &Live::default()), [Effect::Store(File::Compositor)]);
+        assert_eq!(
+            change(
+                ControlId::MouseSpeed,
+                Value::Index(9),
+                &mut s,
+                &Live::default()
+            ),
+            [Effect::Store(File::Compositor)]
+        );
         assert_eq!(s.compositor.mouse_speed, Some(3.0));
-        change(ControlId::DockSize, Value::Fraction(0.5), &mut s, &Live::default());
+        change(
+            ControlId::DockSize,
+            Value::Fraction(0.5),
+            &mut s,
+            &Live::default(),
+        );
         assert_eq!(s.dock.tile_size, Some(72.0));
-        change(ControlId::Magnification, Value::Fraction(0.0), &mut s, &Live::default());
-        assert_eq!((s.dock.magnification, s.dock.large_size), (Some(false), None), "Off keeps the magnified size");
-        change(ControlId::Magnification, Value::Fraction(0.125), &mut s, &Live::default());
-        assert_eq!((s.dock.magnification, s.dock.large_size), (Some(true), Some(30.0)));
-        change(ControlId::HotCorner(Trigger::CornerBottomRight), Value::Index(3), &mut s, &Live::default());
-        assert_eq!(s.dock.actions.get(Trigger::CornerBottomRight), &ActionTarget::Server("show-desktop".into()));
-        change(ControlId::Clock24, Value::Bool(true), &mut s, &Live::default());
+        change(
+            ControlId::Magnification,
+            Value::Fraction(0.0),
+            &mut s,
+            &Live::default(),
+        );
+        assert_eq!(
+            (s.dock.magnification, s.dock.large_size),
+            (Some(false), None),
+            "Off keeps the magnified size"
+        );
+        change(
+            ControlId::Magnification,
+            Value::Fraction(0.125),
+            &mut s,
+            &Live::default(),
+        );
+        assert_eq!(
+            (s.dock.magnification, s.dock.large_size),
+            (Some(true), Some(30.0))
+        );
+        change(
+            ControlId::HotCorner(Trigger::CornerBottomRight),
+            Value::Index(3),
+            &mut s,
+            &Live::default(),
+        );
+        assert_eq!(
+            s.dock.actions.get(Trigger::CornerBottomRight),
+            &ActionTarget::Server("show-desktop".into())
+        );
+        change(
+            ControlId::Clock24,
+            Value::Bool(true),
+            &mut s,
+            &Live::default(),
+        );
         assert_eq!(s.menubar.clock.hour_cycle, HourCycle::H24);
-        assert_eq!(change(ControlId::Appearance, Value::Index(1), &mut s, &Live::default()), [Effect::SetAppearance { dark: true }]);
-        change(ControlId::TrackpadNatural, Value::Bool(false), &mut s, &Live::default());
-        assert_eq!(control(PaneId::Mouse, ControlId::MouseNatural, &s), Control::Switch { on: false }, "one value for both");
+        assert_eq!(
+            change(
+                ControlId::Appearance,
+                Value::Index(1),
+                &mut s,
+                &Live::default()
+            ),
+            [Effect::SetAppearance { dark: true }]
+        );
+        change(
+            ControlId::TrackpadNatural,
+            Value::Bool(false),
+            &mut s,
+            &Live::default(),
+        );
+        assert_eq!(
+            control(PaneId::Mouse, ControlId::MouseNatural, &s),
+            Control::Switch { on: false },
+            "one value for both"
+        );
     }
 
     #[test]
     fn repeat_off_keeps_the_delay_slider_and_turning_it_on_restores_it() {
         let mut s = unset();
-        change(ControlId::RepeatDelay, Value::Index(1), &mut s, &Live::default());
+        change(
+            ControlId::RepeatDelay,
+            Value::Index(1),
+            &mut s,
+            &Live::default(),
+        );
         assert_eq!(s.keyboard.repeat_delay_ms, Some(1567), "position 2 of 1…6");
-        change(ControlId::RepeatRate, Value::Index(0), &mut s, &Live::default());
-        assert_eq!((s.keyboard.repeat_delay_ms, s.keyboard.repeat_delay_saved_ms), (Some(0), Some(1567)), "off saves the delay");
-        let Control::Slider { value, .. } = control(PaneId::Keyboard, ControlId::RepeatDelay, &s) else { panic!("a slider") };
-        assert_eq!(value, 1.0 / 5.0, "the delay slider keeps its place while repeat is off");
-        change(ControlId::RepeatDelay, Value::Index(4), &mut s, &Live::default());
-        assert_eq!((s.keyboard.repeat_delay_ms, s.keyboard.repeat_delay_saved_ms), (Some(0), Some(417)), "moving it while off moves the saved delay");
-        change(ControlId::RepeatRate, Value::Index(7), &mut s, &Live::default());
-        assert_eq!((s.keyboard.repeat_delay_ms, s.keyboard.repeat_interval_ms), (Some(417), Some(33)), "on again with the saved delay");
+        change(
+            ControlId::RepeatRate,
+            Value::Index(0),
+            &mut s,
+            &Live::default(),
+        );
+        assert_eq!(
+            (s.keyboard.repeat_delay_ms, s.keyboard.repeat_delay_saved_ms),
+            (Some(0), Some(1567)),
+            "off saves the delay"
+        );
+        let Control::Slider { value, .. } = control(PaneId::Keyboard, ControlId::RepeatDelay, &s)
+        else {
+            panic!("a slider")
+        };
+        assert_eq!(
+            value,
+            1.0 / 5.0,
+            "the delay slider keeps its place while repeat is off"
+        );
+        change(
+            ControlId::RepeatDelay,
+            Value::Index(4),
+            &mut s,
+            &Live::default(),
+        );
+        assert_eq!(
+            (s.keyboard.repeat_delay_ms, s.keyboard.repeat_delay_saved_ms),
+            (Some(0), Some(417)),
+            "moving it while off moves the saved delay"
+        );
+        change(
+            ControlId::RepeatRate,
+            Value::Index(7),
+            &mut s,
+            &Live::default(),
+        );
+        assert_eq!(
+            (s.keyboard.repeat_delay_ms, s.keyboard.repeat_interval_ms),
+            (Some(417), Some(33)),
+            "on again with the saved delay"
+        );
     }
 
     #[test]
     fn a_corner_action_outside_the_list_shows_as_an_extra_item_and_is_kept() {
         let mut s = unset();
-        s.dock.actions.set(Trigger::CornerTopRight, ActionTarget::Exec("foot".into()));
-        let Control::Popup { choices, selected } = control(PaneId::DesktopDock, ControlId::HotCorner(Trigger::CornerTopRight), &s) else { panic!("a popup") };
-        assert_eq!((choices.len(), selected, choices[selected].as_str()), (10, 9, "exec:foot"));
-        assert!(change(ControlId::HotCorner(Trigger::CornerTopRight), Value::Index(9), &mut s, &Live::default()).is_empty());
-        assert_eq!(s.dock.actions.get(Trigger::CornerTopRight), &ActionTarget::Exec("foot".into()));
+        s.dock
+            .actions
+            .set(Trigger::CornerTopRight, ActionTarget::Exec("foot".into()));
+        let Control::Popup { choices, selected } = control(
+            PaneId::DesktopDock,
+            ControlId::HotCorner(Trigger::CornerTopRight),
+            &s,
+        ) else {
+            panic!("a popup")
+        };
+        assert_eq!(
+            (choices.len(), selected, choices[selected].as_str()),
+            (10, 9, "exec:foot")
+        );
+        assert!(change(
+            ControlId::HotCorner(Trigger::CornerTopRight),
+            Value::Index(9),
+            &mut s,
+            &Live::default()
+        )
+        .is_empty());
+        assert_eq!(
+            s.dock.actions.get(Trigger::CornerTopRight),
+            &ActionTarget::Exec("foot".into())
+        );
     }
 
     #[test]
     fn a_sleep_timer_outside_the_list_is_an_extra_item_kept_until_another_is_chosen() {
         let mut s = unset();
         s.power.ac.display_sleep = Timer::After(std::time::Duration::from_secs(420));
-        let Control::Popup { choices, selected } = control(PaneId::LockScreen, ControlId::DisplaySleepAc, &s) else { panic!("a popup") };
+        let Control::Popup { choices, selected } =
+            control(PaneId::LockScreen, ControlId::DisplaySleepAc, &s)
+        else {
+            panic!("a popup")
+        };
         assert_eq!((choices[selected].as_str(), selected), ("7 minutes", 13));
-        assert!(change(ControlId::DisplaySleepAc, Value::Index(13), &mut s, &Live::default()).is_empty(), "choosing it again keeps it");
-        assert_eq!(change(ControlId::DisplaySleepBattery, Value::Index(12), &mut s, &Live::default()), [Effect::Store(File::Power)]);
-        assert_eq!((s.power.battery.display_sleep, s.power.ac.display_sleep), (Timer::Never, Timer::After(std::time::Duration::from_secs(420))), "another control's write keeps it");
-        change(ControlId::DisplaySleepAc, Value::Index(4), &mut s, &Live::default());
-        assert_eq!(s.power.ac.display_sleep, Timer::After(std::time::Duration::from_secs(600)), "replaced only by the user's choice");
-        let Control::Popup { choices, selected } = control(PaneId::LockScreen, ControlId::RequirePassword, &s) else { panic!("a popup") };
+        assert!(
+            change(
+                ControlId::DisplaySleepAc,
+                Value::Index(13),
+                &mut s,
+                &Live::default()
+            )
+            .is_empty(),
+            "choosing it again keeps it"
+        );
+        assert_eq!(
+            change(
+                ControlId::DisplaySleepBattery,
+                Value::Index(12),
+                &mut s,
+                &Live::default()
+            ),
+            [Effect::Store(File::Power)]
+        );
+        assert_eq!(
+            (s.power.battery.display_sleep, s.power.ac.display_sleep),
+            (
+                Timer::Never,
+                Timer::After(std::time::Duration::from_secs(420))
+            ),
+            "another control's write keeps it"
+        );
+        change(
+            ControlId::DisplaySleepAc,
+            Value::Index(4),
+            &mut s,
+            &Live::default(),
+        );
+        assert_eq!(
+            s.power.ac.display_sleep,
+            Timer::After(std::time::Duration::from_secs(600)),
+            "replaced only by the user's choice"
+        );
+        let Control::Popup { choices, selected } =
+            control(PaneId::LockScreen, ControlId::RequirePassword, &s)
+        else {
+            panic!("a popup")
+        };
         assert_eq!(choices[selected], "5 minutes", "the 300 s default");
     }
 
     #[test]
     fn accessibility_display_options_go_to_the_server_and_the_rest_to_their_files() {
         let mut s = unset();
-        assert_eq!(change(ControlId::ReduceMotion, Value::Bool(true), &mut s, &Live::default()), [Effect::SetAccessibility { key: "reduce_motion", value: "on".into() }]);
-        assert_eq!(change(ControlId::ColorFilter, Value::Index(1), &mut s, &Live::default()), [Effect::SetAccessibility { key: "color_filter", value: "grayscale".into() }]);
-        assert_eq!(change(ControlId::ColorFilterIntensity, Value::Fraction(1.0), &mut s, &Live::default()), [Effect::SetAccessibility { key: "color_filter_intensity", value: "1.000".into() }]);
-        assert_eq!(change(ControlId::CursorSize, Value::Fraction(1.0), &mut s, &Live::default()), [Effect::Store(File::Compositor)]);
+        assert_eq!(
+            change(
+                ControlId::ReduceMotion,
+                Value::Bool(true),
+                &mut s,
+                &Live::default()
+            ),
+            [Effect::SetAccessibility {
+                key: "reduce_motion",
+                value: "on".into()
+            }]
+        );
+        assert_eq!(
+            change(
+                ControlId::ColorFilter,
+                Value::Index(1),
+                &mut s,
+                &Live::default()
+            ),
+            [Effect::SetAccessibility {
+                key: "color_filter",
+                value: "grayscale".into()
+            }]
+        );
+        assert_eq!(
+            change(
+                ControlId::ColorFilterIntensity,
+                Value::Fraction(1.0),
+                &mut s,
+                &Live::default()
+            ),
+            [Effect::SetAccessibility {
+                key: "color_filter_intensity",
+                value: "1.000".into()
+            }]
+        );
+        assert_eq!(
+            change(
+                ControlId::CursorSize,
+                Value::Fraction(1.0),
+                &mut s,
+                &Live::default()
+            ),
+            [Effect::Store(File::Compositor)]
+        );
         assert_eq!(s.compositor.cursor_size, Some(4.0));
-        change(ControlId::StickyKeys, Value::Bool(true), &mut s, &Live::default());
+        change(
+            ControlId::StickyKeys,
+            Value::Bool(true),
+            &mut s,
+            &Live::default(),
+        );
         assert_eq!(s.keyboard.sticky_keys, Some(true));
-        assert!(!sections(PaneId::Accessibility, &s, LIGHT, &Live::default()).iter().flat_map(|sec| &sec.rows).any(|r| r.id == ControlId::ColorFilterIntensity), "no intensity without a filter");
+        assert!(
+            !sections(PaneId::Accessibility, &s, LIGHT, &Live::default())
+                .iter()
+                .flat_map(|sec| &sec.rows)
+                .any(|r| r.id == ControlId::ColorFilterIntensity),
+            "no intensity without a filter"
+        );
         s.accessibility.color_filter = Some(ColorFilter::Grayscale);
-        let Control::Slider { value, .. } = control(PaneId::Accessibility, ControlId::ColorFilterIntensity, &s) else { panic!("a slider") };
+        let Control::Slider { value, .. } =
+            control(PaneId::Accessibility, ControlId::ColorFilterIntensity, &s)
+        else {
+            panic!("a slider")
+        };
         assert_eq!(value, 1.0, "grayscale's default intensity 1.0");
     }
 
     #[test]
     fn the_keyboard_modifier_rows_show_the_defaults_and_keep_an_action_they_do_not_offer() {
         let mut s = unset();
-        assert_eq!(control(PaneId::Keyboard, ControlId::CapsLockDelay, &s), Control::Switch { on: true }, "75 ms by default");
-        let Control::Popup { choices, selected } = control(PaneId::Keyboard, ControlId::FnKey, &s) else { panic!("a popup") };
+        assert_eq!(
+            control(PaneId::Keyboard, ControlId::CapsLockDelay, &s),
+            Control::Switch { on: true },
+            "75 ms by default"
+        );
+        let Control::Popup { choices, selected } = control(PaneId::Keyboard, ControlId::FnKey, &s)
+        else {
+            panic!("a popup")
+        };
         assert_eq!(choices[selected], "Change Input Source", "");
         s.keyboard.fn_key = Some(FnKey::Emoji);
-        let Control::Popup { choices, selected } = control(PaneId::Keyboard, ControlId::FnKey, &s) else { panic!("a popup") };
+        let Control::Popup { choices, selected } = control(PaneId::Keyboard, ControlId::FnKey, &s)
+        else {
+            panic!("a popup")
+        };
         assert_eq!((choices.len(), choices[selected].as_str()), (3, "emoji"));
-        change(ControlId::CapsLockDelay, Value::Bool(false), &mut s, &Live::default());
+        change(
+            ControlId::CapsLockDelay,
+            Value::Bool(false),
+            &mut s,
+            &Live::default(),
+        );
         assert_eq!(s.keyboard.caps_lock_delay_ms, Some(0));
     }
 
     fn rows(pane: PaneId, live: &Live) -> Vec<Row> {
-        sections(pane, &unset(), LIGHT, live).into_iter().flat_map(|sec| sec.rows).collect()
+        sections(pane, &unset(), LIGHT, live)
+            .into_iter()
+            .flat_map(|sec| sec.rows)
+            .collect()
     }
 
     #[test]
     fn a_missing_daemon_disables_the_switch_with_the_reason_and_keeps_the_pane() {
-        let live = Live { wifi: Reading::Unavailable("Wi-Fi is not available".into()), bluetooth: Reading::Unavailable("Bluetooth is not available".into()), ..Live::default() };
+        let live = Live {
+            wifi: Reading::Unavailable("Wi-Fi is not available".into()),
+            bluetooth: Reading::Unavailable("Bluetooth is not available".into()),
+            ..Live::default()
+        };
         let wifi = rows(PaneId::Wifi, &live);
-        assert_eq!((wifi.len(), wifi[0].label.as_str(), wifi[0].disabled.as_deref()), (1, "Wi-Fi", Some("Wi-Fi is not available")));
-        assert_eq!(rows(PaneId::Bluetooth, &live)[0].disabled.as_deref(), Some("Bluetooth is not available"));
-        assert_eq!(rows(PaneId::Sound, &Live::default())[0].disabled.as_deref(), Some("Checking…"), "before the first read");
+        assert_eq!(
+            (
+                wifi.len(),
+                wifi[0].label.as_str(),
+                wifi[0].disabled.as_deref()
+            ),
+            (1, "Wi-Fi", Some("Wi-Fi is not available"))
+        );
+        assert_eq!(
+            rows(PaneId::Bluetooth, &live)[0].disabled.as_deref(),
+            Some("Bluetooth is not available")
+        );
+        assert_eq!(
+            rows(PaneId::Sound, &Live::default())[0].disabled.as_deref(),
+            Some("Checking…"),
+            "before the first read"
+        );
         // a daemon without a Wi-Fi device
-        let no_device = Live { wifi: Reading::Ready(Wifi { enabled: true, ..Wifi::default() }), ..Live::default() };
-        assert_eq!(rows(PaneId::Wifi, &no_device)[0].disabled.as_deref(), Some("Wi-Fi is not available"));
+        let no_device = Live {
+            wifi: Reading::Ready(Wifi {
+                enabled: true,
+                ..Wifi::default()
+            }),
+            ..Live::default()
+        };
+        assert_eq!(
+            rows(PaneId::Wifi, &no_device)[0].disabled.as_deref(),
+            Some("Wi-Fi is not available")
+        );
     }
 
     #[test]
     fn focus_rows_are_the_lifetimes_in_order_and_call_the_centre() {
-        let focus = crate::live::Focus { on: false, lifetimes: vec![("hour".into(), "For 1 hour".into()), ("tonight".into(), "Until this evening".into())] };
-        let live = Live { focus: Reading::Ready(focus), ..Live::default() };
+        let focus = crate::live::Focus {
+            on: false,
+            lifetimes: vec![
+                ("hour".into(), "For 1 hour".into()),
+                ("tonight".into(), "Until this evening".into()),
+            ],
+        };
+        let live = Live {
+            focus: Reading::Ready(focus),
+            ..Live::default()
+        };
         let r = rows(PaneId::Focus, &live);
-        assert_eq!(r.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(), ["Do Not Disturb", "For 1 hour", "Until this evening"]);
+        assert_eq!(
+            r.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(),
+            ["Do Not Disturb", "For 1 hour", "Until this evening"]
+        );
         let mut s = unset();
-        assert_eq!(change(ControlId::DoNotDisturb, Value::Bool(true), &mut s, &live), [Effect::Service(Call::SetDoNotDisturb(true))]);
-        assert_eq!(change(ControlId::FocusFor(1), Value::Index(0), &mut s, &live), [Effect::Service(Call::SetDoNotDisturbFor("tonight".into()))]);
+        assert_eq!(
+            change(ControlId::DoNotDisturb, Value::Bool(true), &mut s, &live),
+            [Effect::Service(Call::SetDoNotDisturb(true))]
+        );
+        assert_eq!(
+            change(ControlId::FocusFor(1), Value::Index(0), &mut s, &live),
+            [Effect::Service(Call::SetDoNotDisturbFor("tonight".into()))]
+        );
     }
 
     #[test]
     fn wifi_lists_known_and_other_networks_and_joins_a_saved_one_without_a_passphrase() {
-        let net = |ssid: &str, security: &str, saved: bool, connected: bool| crate::live::Network { ssid: ssid.into(), signal: -40, security: security.into(), saved, connected };
-        let device = crate::live::Device { index: 3, name: "wlan0".into(), kind: "wifi".into(), state: "connected".into(), ssid: "home".into(), failure: String::new(), address: "10.0.0.2".into() };
-        let wifi = Wifi { enabled: true, devices: vec![device], state: "connected".into(), networks: vec![net("home", "wpa2", true, true), net("cafe", "open", false, false), net("office", "wpa2", false, false)], joining: None, failure: None };
-        let live = Live { wifi: Reading::Ready(wifi), ..Live::default() };
+        let net = |ssid: &str, security: &str, saved: bool, connected: bool| crate::live::Network {
+            ssid: ssid.into(),
+            signal: -40,
+            security: security.into(),
+            saved,
+            connected,
+        };
+        let device = crate::live::Device {
+            index: 3,
+            name: "wlan0".into(),
+            kind: "wifi".into(),
+            state: "connected".into(),
+            ssid: "home".into(),
+            failure: String::new(),
+            address: "10.0.0.2".into(),
+        };
+        let wifi = Wifi {
+            enabled: true,
+            devices: vec![device],
+            state: "connected".into(),
+            networks: vec![
+                net("home", "wpa2", true, true),
+                net("cafe", "open", false, false),
+                net("office", "wpa2", false, false),
+            ],
+            joining: None,
+            failure: None,
+        };
+        let live = Live {
+            wifi: Reading::Ready(wifi),
+            ..Live::default()
+        };
         let secs = sections(PaneId::Wifi, &unset(), LIGHT, &live);
-        assert_eq!(secs.iter().map(|s| s.header.clone()).collect::<Vec<_>>(), [None, Some("Known Networks".into()), Some("Other Networks".into())]);
-        assert_eq!(secs[2].rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(), ["cafe", "office (secured)"], "GetNetworks order");
+        assert_eq!(
+            secs.iter().map(|s| s.header.clone()).collect::<Vec<_>>(),
+            [
+                None,
+                Some("Known Networks".into()),
+                Some("Other Networks".into())
+            ]
+        );
+        assert_eq!(
+            secs[2]
+                .rows
+                .iter()
+                .map(|r| r.label.as_str())
+                .collect::<Vec<_>>(),
+            ["cafe", "office (secured)"],
+            "GetNetworks order"
+        );
         let mut s = unset();
-        assert_eq!(change(ControlId::WifiNetwork(0), Value::Index(0), &mut s, &live), [Effect::Service(Call::Disconnect)]);
-        assert_eq!(change(ControlId::WifiNetwork(1), Value::Index(0), &mut s, &live), [Effect::Service(Call::Join { ssid: "cafe".into(), passphrase: Some(crate::sheet::Secret::new()) })], "open: an empty passphrase");
-        assert_eq!(change(ControlId::WifiNetwork(2), Value::Index(0), &mut s, &live), [Effect::Service(Call::Join { ssid: "office".into(), passphrase: None })], "secured and unsaved: the sheet asks");
-        assert_eq!(rows(PaneId::Network, &live)[0].control, Control::Text { value: "connected · home · 10.0.0.2".into() });
+        assert_eq!(
+            change(ControlId::WifiNetwork(0), Value::Index(0), &mut s, &live),
+            [Effect::Service(Call::Disconnect)]
+        );
+        assert_eq!(
+            change(ControlId::WifiNetwork(1), Value::Index(0), &mut s, &live),
+            [Effect::Service(Call::Join {
+                ssid: "cafe".into(),
+                passphrase: Some(crate::sheet::Secret::new())
+            })],
+            "open: an empty passphrase"
+        );
+        assert_eq!(
+            change(ControlId::WifiNetwork(2), Value::Index(0), &mut s, &live),
+            [Effect::Service(Call::Join {
+                ssid: "office".into(),
+                passphrase: None
+            })],
+            "secured and unsaved: the sheet asks"
+        );
+        assert_eq!(
+            rows(PaneId::Network, &live)[0].control,
+            Control::Text {
+                value: "connected · home · 10.0.0.2".into()
+            }
+        );
     }
 
     #[test]
     fn bluetooth_groups_paired_and_nearby_devices_and_forgets_only_after_confirmation() {
-        let dev = |id: &str, paired: bool, connected: bool| crate::live::BtDevice { id: id.into(), address: id.into(), name: Some(format!("dev {id}")), icon: "headphones".into(), paired, connected, pairing: false };
-        let bt = Bluetooth { available: true, powered: true, discovering: true, devices: vec![dev("a", true, true), dev("b", false, false)], agent_elsewhere: false, failure: None };
-        let live = Live { bluetooth: Reading::Ready(bt), ..Live::default() };
+        let dev = |id: &str, paired: bool, connected: bool| crate::live::BtDevice {
+            id: id.into(),
+            address: id.into(),
+            name: Some(format!("dev {id}")),
+            icon: "headphones".into(),
+            paired,
+            connected,
+            pairing: false,
+        };
+        let bt = Bluetooth {
+            available: true,
+            powered: true,
+            discovering: true,
+            devices: vec![dev("a", true, true), dev("b", false, false)],
+            agent_elsewhere: false,
+            failure: None,
+        };
+        let live = Live {
+            bluetooth: Reading::Ready(bt),
+            ..Live::default()
+        };
         let secs = sections(PaneId::Bluetooth, &unset(), LIGHT, &live);
-        assert_eq!(secs.iter().map(|s| s.header.clone()).collect::<Vec<_>>(), [None, Some("My Devices".into()), Some("Nearby Devices".into())]);
+        assert_eq!(
+            secs.iter().map(|s| s.header.clone()).collect::<Vec<_>>(),
+            [
+                None,
+                Some("My Devices".into()),
+                Some("Nearby Devices".into())
+            ]
+        );
         let mut s = unset();
-        assert_eq!(change(ControlId::BluetoothDevice(0), Value::Index(0), &mut s, &live), [Effect::Service(Call::DisconnectDevice("a".into()))]);
-        assert_eq!(change(ControlId::BluetoothDevice(0), Value::Index(1), &mut s, &live), [Effect::Service(Call::Remove { id: "a".into(), confirmed: false })], "Forget asks first");
-        assert_eq!(change(ControlId::BluetoothDevice(1), Value::Index(0), &mut s, &live), [Effect::Service(Call::Pair("b".into()))]);
+        assert_eq!(
+            change(
+                ControlId::BluetoothDevice(0),
+                Value::Index(0),
+                &mut s,
+                &live
+            ),
+            [Effect::Service(Call::DisconnectDevice("a".into()))]
+        );
+        assert_eq!(
+            change(
+                ControlId::BluetoothDevice(0),
+                Value::Index(1),
+                &mut s,
+                &live
+            ),
+            [Effect::Service(Call::Remove {
+                id: "a".into(),
+                confirmed: false
+            })],
+            "Forget asks first"
+        );
+        assert_eq!(
+            change(
+                ControlId::BluetoothDevice(1),
+                Value::Index(0),
+                &mut s,
+                &live
+            ),
+            [Effect::Service(Call::Pair("b".into()))]
+        );
     }
 
     #[test]
     fn a_volume_below_the_threshold_mutes_and_the_mute_switch_keeps_the_level() {
-        let live = Live { volume: Reading::Ready(crate::live::Volume { level: 0.6, muted: false }), ..Live::default() };
+        let live = Live {
+            volume: Reading::Ready(crate::live::Volume {
+                level: 0.6,
+                muted: false,
+            }),
+            ..Live::default()
+        };
         let mut s = unset();
-        assert_eq!(change(ControlId::Volume, Value::Fraction(0.0005), &mut s, &live), [Effect::Service(Call::SetVolume { level: 0.0005, muted: true })]);
-        assert_eq!(change(ControlId::Volume, Value::Fraction(0.3), &mut s, &live), [Effect::Service(Call::SetVolume { level: 0.3, muted: false })]);
-        assert_eq!(change(ControlId::Mute, Value::Bool(true), &mut s, &live), [Effect::Service(Call::SetVolume { level: 0.6, muted: true })]);
+        assert_eq!(
+            change(ControlId::Volume, Value::Fraction(0.0005), &mut s, &live),
+            [Effect::Service(Call::SetVolume {
+                level: 0.0005,
+                muted: true
+            })]
+        );
+        assert_eq!(
+            change(ControlId::Volume, Value::Fraction(0.3), &mut s, &live),
+            [Effect::Service(Call::SetVolume {
+                level: 0.3,
+                muted: false
+            })]
+        );
+        assert_eq!(
+            change(ControlId::Mute, Value::Bool(true), &mut s, &live),
+            [Effect::Service(Call::SetVolume {
+                level: 0.6,
+                muted: true
+            })]
+        );
     }
 
     #[test]
     fn a_pane_shows_the_restart_footer_only_for_a_file_its_process_does_not_reload() {
         let s = unset();
-        assert!(sections(PaneId::DesktopDock, &s, LIGHT, &Live::default()).iter().all(|sec| sec.footer.is_none()), "every owner reloads its file");
+        assert!(
+            sections(PaneId::DesktopDock, &s, LIGHT, &Live::default())
+                .iter()
+                .all(|sec| sec.footer.is_none()),
+            "every owner reloads its file"
+        );
         assert!(File::ALL.iter().all(|f| f.reloads()));
-        assert_eq!(restart_footer(File::Dock, false).as_deref(), Some("Takes effect when the dock restarts."));
-        assert_eq!(restart_footer(File::Keyboard, false).as_deref(), Some("Takes effect when the window server restarts."));
+        assert_eq!(
+            restart_footer(File::Dock, false).as_deref(),
+            Some("Takes effect when the dock restarts.")
+        );
+        assert_eq!(
+            restart_footer(File::Keyboard, false).as_deref(),
+            Some("Takes effect when the window server restarts.")
+        );
         assert_eq!(restart_footer(File::Dock, true), None);
     }
 }

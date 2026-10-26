@@ -32,7 +32,9 @@ use cupertino_devices::DevT;
 use rustix::fs::{stat, FileType, OFlags};
 use smithay::backend::session::{Event, Session};
 use smithay::reexports::calloop::channel::{channel, Channel, Event as ChannelEvent, Sender};
-use smithay::reexports::calloop::{self, EventSource, Poll, PostAction, Readiness, Token, TokenFactory};
+use smithay::reexports::calloop::{
+    self, EventSource, Poll, PostAction, Readiness, Token, TokenFactory,
+};
 use zbus::blocking::MessageIterator;
 
 use crate::error::Error;
@@ -78,12 +80,25 @@ impl LogindSession {
 
         let (sender, channel) = channel();
         let reader_sender = sender.clone();
-        std::thread::Builder::new().name("cupertino-seat-signals".to_owned()).spawn(move || read_signals(signals, reader_sender)).map_err(Error::Thread)?;
+        std::thread::Builder::new()
+            .name("cupertino-seat-signals".to_owned())
+            .spawn(move || read_signals(signals, reader_sender))
+            .map_err(Error::Thread)?;
         let owner_sender = sender.clone();
-        std::thread::Builder::new().name("cupertino-seat-owner".to_owned()).spawn(move || watch_owner(owner_changes, owner_sender)).map_err(Error::Thread)?;
+        std::thread::Builder::new()
+            .name("cupertino-seat-owner".to_owned())
+            .spawn(move || watch_owner(owner_changes, owner_sender))
+            .map_err(Error::Thread)?;
 
-        let shared = Rc::new(RefCell::new(Shared { logind, machine: Machine::new(active), sender }));
-        let session = LogindSession { shared: Rc::downgrade(&shared), seat };
+        let shared = Rc::new(RefCell::new(Shared {
+            logind,
+            machine: Machine::new(active),
+            sender,
+        }));
+        let session = LogindSession {
+            shared: Rc::downgrade(&shared),
+            seat,
+        };
         Ok((session, LogindNotifier { shared, channel }))
     }
 
@@ -133,7 +148,10 @@ fn watch_owner(owner_changes: MessageIterator, sender: Sender<Delivery>) {
 
 /// `dev_t` of a character device node.
 fn device_number(path: &Path) -> Result<DevT, Error> {
-    let status = stat(path).map_err(|errno| Error::Stat { path: path.to_owned(), errno })?;
+    let status = stat(path).map_err(|errno| Error::Stat {
+        path: path.to_owned(),
+        errno,
+    })?;
     if FileType::from_raw_mode(status.st_mode) != FileType::CharacterDevice {
         return Err(Error::NotCharDevice(path.to_owned()));
     }
@@ -179,7 +197,10 @@ impl Session for LogindSession {
         }
         // The released device may have been the last one the paused session waited for.
         if shared.machine.is_waiting_to_activate() {
-            shared.sender.send(Ok(Input::Recheck)).map_err(|_| Error::SessionLost)?;
+            shared
+                .sender
+                .send(Ok(Input::Recheck))
+                .map_err(|_| Error::SessionLost)?;
         }
         Ok(())
     }
@@ -193,7 +214,9 @@ impl Session for LogindSession {
     /// Whether the session is running. False once the notifier is gone, because the trait has
     /// no way to report the lost session here.
     fn is_active(&self) -> bool {
-        self.shared.upgrade().is_some_and(|shared| shared.borrow().machine.is_running())
+        self.shared
+            .upgrade()
+            .is_some_and(|shared| shared.borrow().machine.is_running())
     }
 
     fn seat(&self) -> String {
@@ -228,7 +251,12 @@ impl EventSource for LogindNotifier {
     type Ret = ();
     type Error = Error;
 
-    fn process_events<F>(&mut self, readiness: Readiness, token: Token, mut callback: F) -> Result<PostAction, Error>
+    fn process_events<F>(
+        &mut self,
+        readiness: Readiness,
+        token: Token,
+        mut callback: F,
+    ) -> Result<PostAction, Error>
     where
         F: FnMut(Event, &mut ()),
     {
@@ -268,11 +296,17 @@ mod tests {
     #[test]
     fn character_device_has_its_device_number() {
         // /dev/null is 1:3 on Linux.
-        assert_eq!(device_number(Path::new("/dev/null")).unwrap(), DevT::new(1, 3));
+        assert_eq!(
+            device_number(Path::new("/dev/null")).unwrap(),
+            DevT::new(1, 3)
+        );
     }
 
     #[test]
     fn regular_file_is_not_a_device() {
-        assert!(matches!(device_number(Path::new("/etc/hostname")), Err(Error::NotCharDevice(_))));
+        assert!(matches!(
+            device_number(Path::new("/etc/hostname")),
+            Err(Error::NotCharDevice(_))
+        ));
     }
 }

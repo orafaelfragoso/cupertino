@@ -125,17 +125,28 @@ impl MenuSourceMap {
         if let Some(s) = self.explicit.get(&id.window) {
             return s.clone();
         }
-        self.by_app.get(&id.app_id).cloned().unwrap_or(MenuSource::Synthetic)
+        self.by_app
+            .get(&id.app_id)
+            .cloned()
+            .unwrap_or(MenuSource::Synthetic)
     }
 
     /// The source for an app: the key window's, else the first of its other windows that has an
     /// exported menu, else the synthetic fallback.
-    pub fn resolve_app(&self, key_window: &WindowIdentity, others: &[WindowIdentity]) -> MenuSource {
+    pub fn resolve_app(
+        &self,
+        key_window: &WindowIdentity,
+        others: &[WindowIdentity],
+    ) -> MenuSource {
         let first = self.resolve(key_window);
         if first.is_exported() {
             return first;
         }
-        others.iter().map(|o| self.resolve(o)).find(MenuSource::is_exported).unwrap_or(first)
+        others
+            .iter()
+            .map(|o| self.resolve(o))
+            .find(MenuSource::is_exported)
+            .unwrap_or(first)
     }
 }
 
@@ -144,11 +155,18 @@ mod tests {
     use super::*;
 
     fn kde(service: &str) -> KdeAppMenu {
-        KdeAppMenu { service: service.into(), path: "/MenuBar/1".into() }
+        KdeAppMenu {
+            service: service.into(),
+            path: "/MenuBar/1".into(),
+        }
     }
 
     fn win(w: u64) -> WindowIdentity {
-        WindowIdentity { window: w, app_id: "org.example.app".into(), pid: Some(42) }
+        WindowIdentity {
+            window: w,
+            app_id: "org.example.app".into(),
+            pid: Some(42),
+        }
     }
 
     #[test]
@@ -162,7 +180,11 @@ mod tests {
     fn explicit_kde_and_gtk_sources() {
         let mut m = MenuSourceMap::new();
         m.set_window_source(1, MenuSource::Kde(kde(":1.55")));
-        let gtk = GtkMenuProps { bus_name: ":1.60".into(), menubar_object_path: Some("/org/example/menus/menubar".into()), ..Default::default() };
+        let gtk = GtkMenuProps {
+            bus_name: ":1.60".into(),
+            menubar_object_path: Some("/org/example/menus/menubar".into()),
+            ..Default::default()
+        };
         m.set_window_source(2, MenuSource::Gtk(gtk.clone()));
         assert_eq!(m.resolve(&win(1)), MenuSource::Kde(kde(":1.55")));
         assert_eq!(m.resolve(&win(2)), MenuSource::Gtk(gtk.clone()));
@@ -170,7 +192,11 @@ mod tests {
         m.clear_window(1);
         assert_eq!(m.resolve(&win(1)), MenuSource::Synthetic);
         m.set_window_source(2, MenuSource::Synthetic);
-        assert_eq!(m.resolve(&win(2)), MenuSource::Synthetic, "setting the fallback removes the entry");
+        assert_eq!(
+            m.resolve(&win(2)),
+            MenuSource::Synthetic,
+            "setting the fallback removes the entry"
+        );
     }
 
     #[test]
@@ -182,7 +208,11 @@ mod tests {
         m.set_window_source(3, MenuSource::Kde(kde(":1.4")));
         m.service_vanished(":1.3");
         assert_eq!(m.resolve(&win(9)), MenuSource::Synthetic);
-        assert_eq!(m.resolve(&win(3)), MenuSource::Kde(kde(":1.4")), "another service's menu stays");
+        assert_eq!(
+            m.resolve(&win(3)),
+            MenuSource::Kde(kde(":1.4")),
+            "another service's menu stays"
+        );
         assert_eq!(m.resolve(&win(2)), MenuSource::Synthetic);
         m.set_app_source("org.example.app", Some(MenuSource::Synthetic));
         assert_eq!(m.resolve(&win(9)), MenuSource::Synthetic);
@@ -192,9 +222,15 @@ mod tests {
     fn app_resolution_prefers_the_key_window_then_other_windows() {
         let mut m = MenuSourceMap::new();
         m.set_window_source(2, MenuSource::Kde(kde(":1.2")));
-        assert_eq!(m.resolve_app(&win(1), &[win(2)]), MenuSource::Kde(kde(":1.2")));
+        assert_eq!(
+            m.resolve_app(&win(1), &[win(2)]),
+            MenuSource::Kde(kde(":1.2"))
+        );
         m.set_window_source(1, MenuSource::Kde(kde(":1.1")));
-        assert_eq!(m.resolve_app(&win(1), &[win(2)]), MenuSource::Kde(kde(":1.1")));
+        assert_eq!(
+            m.resolve_app(&win(1), &[win(2)]),
+            MenuSource::Kde(kde(":1.1"))
+        );
         let m = MenuSourceMap::new();
         assert_eq!(m.resolve_app(&win(1), &[]), MenuSource::Synthetic);
     }

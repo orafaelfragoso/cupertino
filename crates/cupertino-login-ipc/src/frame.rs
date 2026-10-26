@@ -73,7 +73,13 @@ pub struct Decoder {
 impl Decoder {
     /// A decoder that refuses frames whose body is longer than `limit` bytes.
     pub fn new(limit: usize) -> Self {
-        Decoder { limit, header: [0; HEADER_BYTES], header_filled: 0, body: None, body_length: 0 }
+        Decoder {
+            limit,
+            header: [0; HEADER_BYTES],
+            header_filled: 0,
+            body: None,
+            body_length: 0,
+        }
     }
 
     /// The most bytes the next [`Decoder::push`] may take: the rest of the header, or the rest of the body.
@@ -91,7 +97,8 @@ impl Decoder {
             return Err(FrameError::Overrun);
         }
         let Some(body) = &mut self.body else {
-            self.header[self.header_filled..self.header_filled + bytes.len()].copy_from_slice(bytes);
+            self.header[self.header_filled..self.header_filled + bytes.len()]
+                .copy_from_slice(bytes);
             self.header_filled += bytes.len();
             if self.header_filled < HEADER_BYTES {
                 return Ok(None);
@@ -131,7 +138,10 @@ struct Capped {
 impl Write for Capped {
     fn write(&mut self, data: &[u8]) -> io::Result<usize> {
         if self.bytes.len() + data.len() > self.cap {
-            return Err(io::Error::new(io::ErrorKind::OutOfMemory, "frame larger than the cap"));
+            return Err(io::Error::new(
+                io::ErrorKind::OutOfMemory,
+                "frame larger than the cap",
+            ));
         }
         self.bytes.extend_from_slice(data);
         Ok(data.len())
@@ -142,9 +152,16 @@ impl Write for Capped {
     }
 }
 
-fn encode_into<T: Serialize>(message: &T, limit: usize, mut bytes: Zeroizing<Vec<u8>>) -> Result<Zeroizing<Vec<u8>>, FrameError> {
+fn encode_into<T: Serialize>(
+    message: &T,
+    limit: usize,
+    mut bytes: Zeroizing<Vec<u8>>,
+) -> Result<Zeroizing<Vec<u8>>, FrameError> {
     bytes.extend_from_slice(&[0; HEADER_BYTES]);
-    let mut out = Capped { bytes, cap: HEADER_BYTES + limit };
+    let mut out = Capped {
+        bytes,
+        cap: HEADER_BYTES + limit,
+    };
     serde_json::to_writer(&mut out, message).map_err(|_| FrameError::TooLarge)?;
     let length = u32::try_from(out.bytes.len() - HEADER_BYTES).map_err(|_| FrameError::TooLarge)?;
     out.bytes[..HEADER_BYTES].copy_from_slice(&length.to_le_bytes());
@@ -158,6 +175,13 @@ pub fn encode<T: Serialize>(message: &T, limit: usize) -> Result<Zeroizing<Vec<u
 
 /// As [`encode`], for a message that may carry a secret: the buffer is allocated at its full size, so it never moves (and
 /// leaves an unzeroed copy behind) while it is written.
-pub fn encode_secret<T: Serialize>(message: &T, limit: usize) -> Result<Zeroizing<Vec<u8>>, FrameError> {
-    encode_into(message, limit, Zeroizing::new(Vec::with_capacity(HEADER_BYTES + limit)))
+pub fn encode_secret<T: Serialize>(
+    message: &T,
+    limit: usize,
+) -> Result<Zeroizing<Vec<u8>>, FrameError> {
+    encode_into(
+        message,
+        limit,
+        Zeroizing::new(Vec::with_capacity(HEADER_BYTES + limit)),
+    )
 }

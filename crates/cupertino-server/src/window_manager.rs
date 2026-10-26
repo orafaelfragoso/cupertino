@@ -11,15 +11,19 @@
 use std::collections::{BTreeMap, HashMap};
 
 use cupertino_animation::{AnimatedValue, Curve};
-use cupertino_stage::StageConfig;
 use cupertino_protocols::server::cupertino_shell_v1::{CupertinoShellV1, Error as ShellError};
-use cupertino_protocols::server::cupertino_window_manager_v1::{self, CupertinoWindowManagerV1, Error, Placement as WirePlacement, WindowState};
+use cupertino_protocols::server::cupertino_window_manager_v1::{
+    self, CupertinoWindowManagerV1, Error, Placement as WirePlacement, WindowState,
+};
+use cupertino_stage::StageConfig;
 use cupertino_wm::{OutputId, Rect, WindowId};
 use smithay::desktop::layer_map_for_output;
 use smithay::output::Output;
 use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
-use smithay::reexports::wayland_server::{Client, DataInit, Dispatch, DisplayHandle, New, Resource, WEnum};
+use smithay::reexports::wayland_server::{
+    Client, DataInit, Dispatch, DisplayHandle, New, Resource, WEnum,
+};
 use smithay::utils::{Logical, Point};
 use smithay::wayland::shell::wlr_layer::Layer;
 
@@ -49,7 +53,9 @@ struct Placed {
 
 impl Placed {
     fn is_animating(&self, now: f64) -> bool {
-        self.frame.is_animating(now) || self.alpha.is_animating(now) || self.rounding.is_animating(now)
+        self.frame.is_animating(now)
+            || self.alpha.is_animating(now)
+            || self.rounding.is_animating(now)
     }
 }
 
@@ -62,7 +68,12 @@ pub enum Look {
     /// Scaled into `rect` at `alpha` (times its own opacity), its corners `rounding` of the way from
     /// the window's radius to the strip's ([`WindowManagers::corner_radius`]); `strip` while it is,
     /// becomes or fades out of a strip thumbnail (drawn below the stage windows and not hit).
-    Placed { rect: Rect, strip: bool, alpha: f64, rounding: f64 },
+    Placed {
+        rect: Rect,
+        strip: bool,
+        alpha: f64,
+        rounding: f64,
+    },
 }
 
 /// Springs and strip radius of the placement tracks.
@@ -108,21 +119,37 @@ impl WindowManagers {
     /// `stage.alpha_curve` and the corner radius towards `stage.strip_corner_radius` with
     /// `stage.corner_curve`.
     pub fn new(stage: &StageConfig) -> Self {
-        let motion = Motion { frame: stage.swap_curve, alpha: stage.alpha_curve, corner: stage.corner_curve, strip_corner_radius: stage.strip_corner_radius };
-        Self { managers: Vec::new(), placed: HashMap::new(), motion }
+        let motion = Motion {
+            frame: stage.swap_curve,
+            alpha: stage.alpha_curve,
+            corner: stage.corner_curve,
+            strip_corner_radius: stage.strip_corner_radius,
+        };
+        Self {
+            managers: Vec::new(),
+            placed: HashMap::new(),
+            motion,
+        }
     }
 
     /// How window `id` is drawn at `now`. A hidden window fades out where it was drawn and is not
     /// drawn once the fade ends.
     pub fn look(&self, id: WindowId, now: f64) -> Look {
-        let Some(p) = self.placed.get(&id) else { return Look::Natural };
+        let Some(p) = self.placed.get(&id) else {
+            return Look::Natural;
+        };
         match p.target {
             Target::Hidden if !p.alpha.is_animating(now) => return Look::Hidden,
             Target::Stage if !p.is_animating(now) => return Look::Natural,
             Target::Hidden | Target::Strip(_) | Target::Stage => {}
         }
         let rect = Rect::from_array(p.frame.value(now));
-        Look::Placed { rect, strip: p.strip_layer, alpha: p.alpha.value(now), rounding: p.rounding.value(now) }
+        Look::Placed {
+            rect,
+            strip: p.strip_layer,
+            alpha: p.alpha.value(now),
+            rounding: p.rounding.value(now),
+        }
     }
 
     /// Visual corner radius, in points, of a placed window whose own radius is `window` at
@@ -133,20 +160,26 @@ impl WindowManagers {
 
     /// Whether window `id` is headed for the strip (a press on it is a strip press).
     fn in_strip(&self, id: WindowId) -> bool {
-        self.placed.get(&id).is_some_and(|p| matches!(p.target, Target::Strip(_)))
+        self.placed
+            .get(&id)
+            .is_some_and(|p| matches!(p.target, Target::Strip(_)))
     }
 
     /// Whether the pointer passes through window `id`: strip thumbnails and hidden windows take no
     /// input of their clients.
     pub fn passes_input(&self, id: WindowId) -> bool {
-        self.placed.get(&id).is_some_and(|p| p.target != Target::Stage)
+        self.placed
+            .get(&id)
+            .is_some_and(|p| p.target != Target::Stage)
     }
 
     /// Whether the stage of `output` is on as far as the server can tell: a window there is placed
     /// in the strip or hidden. A stage holding only its centre group places nothing off the stage
     /// and is not seen (the protocol carries no stage state).
     pub fn stage_active(&self, output: OutputId) -> bool {
-        self.placed.values().any(|p| p.output == output && p.target != Target::Stage)
+        self.placed
+            .values()
+            .any(|p| p.output == output && p.target != Target::Stage)
     }
 
     pub fn wants_tick(&self, now: f64) -> bool {
@@ -158,15 +191,21 @@ impl WindowManagers {
     /// turns towards the new one, keeping its value and velocity.
     fn follow_natural(&mut self, id: WindowId, natural: Rect, now: f64) {
         let frame = self.motion.frame;
-        let Some(p) = self.placed.get_mut(&id) else { return };
-        if p.target == Target::Stage && p.is_animating(now) && p.frame.target() != natural.to_array() {
+        let Some(p) = self.placed.get_mut(&id) else {
+            return;
+        };
+        if p.target == Target::Stage
+            && p.is_animating(now)
+            && p.frame.target() != natural.to_array()
+        {
             p.frame.animate_to(natural.to_array(), frame, now);
         }
     }
 
     /// Drop the entries of windows that arrived back on the stage.
     pub fn tick(&mut self, now: f64) {
-        self.placed.retain(|_, p| p.target != Target::Stage || p.is_animating(now));
+        self.placed
+            .retain(|_, p| p.target != Target::Stage || p.is_animating(now));
     }
 
     pub fn remove_output(&mut self, output: OutputId) {
@@ -191,7 +230,14 @@ impl WindowManagers {
     /// heads for the window's own rectangle `natural`, which [`Cupertino::tick_window_managers`]
     /// keeps following. A hidden window stops where it is and fades out; it comes back in its new
     /// place, fading in with the corners of that place. False when it was already headed there.
-    fn retarget(&mut self, id: WindowId, output: OutputId, target: Target, natural: Rect, now: f64) -> bool {
+    fn retarget(
+        &mut self,
+        id: WindowId,
+        output: OutputId,
+        target: Target,
+        natural: Rect,
+        now: f64,
+    ) -> bool {
         let current = self.look(id, now);
         let motion = self.motion;
         let entry = self.placed.entry(id).or_insert_with(|| Placed {
@@ -213,12 +259,21 @@ impl WindowManagers {
         match current {
             Look::Natural => entry.frame.set_immediately(natural.to_array()),
             // a hidden window appears in its slot instead of flying in from where it was hidden
-            Look::Hidden => entry.frame.set_immediately(if let Target::Strip(rect) = target { rect } else { natural }.to_array()),
+            Look::Hidden => entry.frame.set_immediately(
+                if let Target::Strip(rect) = target {
+                    rect
+                } else {
+                    natural
+                }
+                .to_array(),
+            ),
             Look::Placed { .. } => {}
         }
         match target {
             Target::Strip(rect) => entry.frame.animate_to(rect.to_array(), motion.frame, now),
-            Target::Stage => entry.frame.animate_to(natural.to_array(), motion.frame, now),
+            Target::Stage => entry
+                .frame
+                .animate_to(natural.to_array(), motion.frame, now),
             Target::Hidden => entry.frame.cancel(now),
         }
         if current == Look::Hidden {
@@ -231,7 +286,11 @@ impl WindowManagers {
             Target::Stage => false,
             Target::Hidden => matches!(current, Look::Placed { strip: true, .. }),
         };
-        entry.alpha.animate_to(if target == Target::Hidden { 0.0 } else { 1.0 }, motion.alpha, now);
+        entry.alpha.animate_to(
+            if target == Target::Hidden { 0.0 } else { 1.0 },
+            motion.alpha,
+            now,
+        );
         entry.target = target;
         entry.output = output;
         true
@@ -244,7 +303,12 @@ pub struct WindowManagerData {
 }
 
 fn whole(r: Rect) -> (i32, i32, i32, i32) {
-    (r.x.round() as i32, r.y.round() as i32, r.w.round() as i32, r.h.round() as i32)
+    (
+        r.x.round() as i32,
+        r.y.round() as i32,
+        r.w.round() as i32,
+        r.h.round() as i32,
+    )
 }
 
 /// Send `resource` one group with what differs between `known` (its last group; `None` before
@@ -259,7 +323,11 @@ fn send_feed(resource: &CupertinoWindowManagerV1, known: Option<&Feed>, feed: &F
     for (id, info) in &feed.windows {
         if known.and_then(|k| k.windows.get(id)) != Some(info) {
             let (x, y, w, h) = info.frame;
-            let state = if info.active { WindowState::Active } else { WindowState::empty() };
+            let state = if info.active {
+                WindowState::Active
+            } else {
+                WindowState::empty()
+            };
             resource.window(*id, info.app_id.clone(), x, y, w, h, state);
             changed = true;
         }
@@ -277,11 +345,20 @@ fn send_feed(resource: &CupertinoWindowManagerV1, known: Option<&Feed>, feed: &F
 
 impl Cupertino {
     /// `cupertino_shell_v1.get_window_manager`: one per output; send the first group.
-    pub fn create_window_manager(&mut self, shell: &CupertinoShellV1, id: New<CupertinoWindowManagerV1>, output: &WlOutput, init: &mut DataInit<'_, Self>) {
-        let target = Output::from_resource(output).and_then(|o| self.output_by_wl(&o).map(|e| e.id));
+    pub fn create_window_manager(
+        &mut self,
+        shell: &CupertinoShellV1,
+        id: New<CupertinoWindowManagerV1>,
+        output: &WlOutput,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        let target =
+            Output::from_resource(output).and_then(|o| self.output_by_wl(&o).map(|e| e.id));
         let rejection = match target {
             None => Some("the output is gone"),
-            Some(out) if self.window_managers.of_output(out).is_some() => Some("the output already has a window manager"),
+            Some(out) if self.window_managers.of_output(out).is_some() => {
+                Some("the output already has a window manager")
+            }
             Some(_) => None,
         };
         if let Some(reason) = rejection {
@@ -291,7 +368,12 @@ impl Cupertino {
         }
         let out = target.expect("a rejected output returned above");
         let resource = init.init(id, WindowManagerData { output: Some(out) });
-        self.window_managers.managers.push(Manager { resource, output: out, sent: None, pending: BTreeMap::new() });
+        self.window_managers.managers.push(Manager {
+            resource,
+            output: out,
+            sent: None,
+            pending: BTreeMap::new(),
+        });
         self.refresh_window_managers();
     }
 
@@ -313,11 +395,25 @@ impl Cupertino {
                     && !self.wm.app(w.app).is_some_and(|a| a.hidden)
             })
             .map(|w| {
-                let app_id = self.wm.app(w.app).map(|a| a.identity.clone()).unwrap_or_default();
-                (w.id.0 as u32, FeedWindow { app_id, frame: whole(w.geometry()), active: key == Some(w.id) })
+                let app_id = self
+                    .wm
+                    .app(w.app)
+                    .map(|a| a.identity.clone())
+                    .unwrap_or_default();
+                (
+                    w.id.0 as u32,
+                    FeedWindow {
+                        app_id,
+                        frame: whole(w.geometry()),
+                        active: key == Some(w.id),
+                    },
+                )
             })
             .collect();
-        Feed { usable: whole(self.usable_area(output)), windows }
+        Feed {
+            usable: whole(self.usable_area(output)),
+            windows,
+        }
     }
 
     /// Send every window manager what changed since its last group, and drop the placements of
@@ -326,25 +422,38 @@ impl Cupertino {
         if self.window_managers.managers.is_empty() {
             return;
         }
-        let feeds: Vec<Feed> = self.window_managers.managers.iter().map(|m| self.window_manager_feed(m.output)).collect();
+        let feeds: Vec<Feed> = self
+            .window_managers
+            .managers
+            .iter()
+            .map(|m| self.window_manager_feed(m.output))
+            .collect();
         let wms = &mut self.window_managers;
         for (m, feed) in wms.managers.iter_mut().zip(feeds) {
             send_feed(&m.resource, m.sent.as_ref(), &feed);
             let output = m.output;
-            wms.placed.retain(|id, p| p.output != output || feed.windows.contains_key(&(id.0 as u32)));
+            wms.placed
+                .retain(|id, p| p.output != output || feed.windows.contains_key(&(id.0 as u32)));
             m.sent = Some(feed);
         }
     }
 
     /// The rectangle window `id` is drawn at without a placement.
     fn natural_rect(&self, entry: &WindowEntry, now: f64) -> Option<Rect> {
-        crate::render::scene::plan_for(&self.wm, entry, 0.0, now, &self.fx, self.display_options()).map(|(plan, _)| plan.visual)
+        crate::render::scene::plan_for(&self.wm, entry, 0.0, now, &self.fx, self.display_options())
+            .map(|(plan, _)| plan.visual)
     }
 
     /// Advance the placements at `now`: windows heading back to the stage follow their own frame,
     /// and the entries of those that arrived are dropped.
     pub fn tick_window_managers(&mut self, now: f64) {
-        let heading: Vec<WindowId> = self.window_managers.placed.iter().filter(|(_, p)| p.target == Target::Stage).map(|(id, _)| *id).collect();
+        let heading: Vec<WindowId> = self
+            .window_managers
+            .placed
+            .iter()
+            .filter(|(_, p)| p.target == Target::Stage)
+            .map(|(id, _)| *id)
+            .collect();
         for id in heading {
             if let Some(natural) = self.entry(id).and_then(|e| self.natural_rect(e, now)) {
                 self.window_managers.follow_natural(id, natural, now);
@@ -356,18 +465,39 @@ impl Cupertino {
     /// `commit`: retarget every window whose pending placement differs from its current one.
     fn commit_placements(&mut self, output: OutputId) {
         let now = self.now();
-        let Some(m) = self.window_managers.managers.iter_mut().find(|m| m.output == output) else { return };
+        let Some(m) = self
+            .window_managers
+            .managers
+            .iter_mut()
+            .find(|m| m.output == output)
+        else {
+            return;
+        };
         let pending = std::mem::take(&mut m.pending);
-        let arranged = m.sent.as_ref().map(|f| f.windows.keys().copied().collect::<Vec<u32>>()).unwrap_or_default();
+        let arranged = m
+            .sent
+            .as_ref()
+            .map(|f| f.windows.keys().copied().collect::<Vec<u32>>())
+            .unwrap_or_default();
         for (id, target) in pending {
             // a window that left the set since the client decided: it may have just closed
             if !arranged.contains(&id) {
                 continue;
             }
             let window = WindowId(u64::from(id));
-            let Some(natural) = self.entry(window).and_then(|e| self.natural_rect(e, now)) else { continue };
-            if self.window_managers.retarget(window, output, target, natural, now) {
-                let app = self.wm.window(window).and_then(|w| self.wm.app(w.app)).map(|a| a.identity.as_str()).unwrap_or_default();
+            let Some(natural) = self.entry(window).and_then(|e| self.natural_rect(e, now)) else {
+                continue;
+            };
+            if self
+                .window_managers
+                .retarget(window, output, target, natural, now)
+            {
+                let app = self
+                    .wm
+                    .window(window)
+                    .and_then(|w| self.wm.app(w.app))
+                    .map(|a| a.identity.as_str())
+                    .unwrap_or_default();
                 tracing::info!(window = id, app, placement = ?target, "stage placement");
             }
         }
@@ -380,25 +510,40 @@ impl Cupertino {
         if self.window_managers.placed.is_empty() || self.window_target_under(pos).is_some() {
             return false;
         }
-        let Some(out) = self.output_at(pos) else { return false };
+        let Some(out) = self.output_at(pos) else {
+            return false;
+        };
         let (output, rect) = (out.id, out.rect);
         let rel = pos - Point::from((rect.x, rect.y));
         {
             let map = layer_map_for_output(&out.output);
-            if map.layer_under(Layer::Overlay, rel).is_some() || map.layer_under(Layer::Top, rel).is_some() {
+            if map.layer_under(Layer::Overlay, rel).is_some()
+                || map.layer_under(Layer::Top, rel).is_some()
+            {
                 return false;
             }
         }
         let now = self.now();
         let p = cupertino_wm::Point::new(pos.x, pos.y);
-        let hit = crate::render::scene::windows_on_output(&self.wm, output, rect.w, crate::render::motion::WorkspaceTransition::for_options(self.display_options()), now).into_iter().rev().find_map(|(id, _, _)| {
-            match self.window_managers.look(id, now) {
-                Look::Placed { rect, .. } if self.window_managers.in_strip(id) && rect.contains(p) => Some(id),
-                _ => None,
+        let hit = crate::render::scene::windows_on_output(
+            &self.wm,
+            output,
+            rect.w,
+            crate::render::motion::WorkspaceTransition::for_options(self.display_options()),
+            now,
+        )
+        .into_iter()
+        .rev()
+        .find_map(|(id, _, _)| match self.window_managers.look(id, now) {
+            Look::Placed { rect, .. } if self.window_managers.in_strip(id) && rect.contains(p) => {
+                Some(id)
             }
+            _ => None,
         });
         let Some(id) = hit else { return false };
-        let Some(m) = self.window_managers.of_output(output) else { return false };
+        let Some(m) = self.window_managers.of_output(output) else {
+            return false;
+        };
         m.resource.strip_pressed(id.0 as u32);
         m.resource.done();
         true
@@ -406,29 +551,63 @@ impl Cupertino {
 }
 
 impl Dispatch<CupertinoWindowManagerV1, WindowManagerData> for Cupertino {
-    fn request(state: &mut Self, _: &Client, resource: &CupertinoWindowManagerV1, request: cupertino_window_manager_v1::Request, data: &WindowManagerData, _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        resource: &CupertinoWindowManagerV1,
+        request: cupertino_window_manager_v1::Request,
+        data: &WindowManagerData,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         let Some(output) = data.output else { return };
         match request {
-            cupertino_window_manager_v1::Request::SetPlacement { id, placement, x, y, width, height } => {
+            cupertino_window_manager_v1::Request::SetPlacement {
+                id,
+                placement,
+                x,
+                y,
+                width,
+                height,
+            } => {
                 let target = match placement {
                     WEnum::Value(WirePlacement::Stage) => Target::Stage,
                     WEnum::Value(WirePlacement::Hidden) => Target::Hidden,
-                    WEnum::Value(WirePlacement::Strip) if width > 0 && height > 0 => Target::Strip(Rect::new(f64::from(x), f64::from(y), f64::from(width), f64::from(height))),
+                    WEnum::Value(WirePlacement::Strip) if width > 0 && height > 0 => {
+                        Target::Strip(Rect::new(
+                            f64::from(x),
+                            f64::from(y),
+                            f64::from(width),
+                            f64::from(height),
+                        ))
+                    }
                     WEnum::Value(WirePlacement::Strip) => {
-                        resource.post_error(Error::InvalidPlacement, format!("strip rectangle {width}x{height} has no area"));
+                        resource.post_error(
+                            Error::InvalidPlacement,
+                            format!("strip rectangle {width}x{height} has no area"),
+                        );
                         return;
                     }
                     // the generated enum is non-exhaustive; a value it gains later is not handled here yet
                     WEnum::Value(other) => {
-                        resource.post_error(Error::InvalidPlacement, format!("{other:?} is not a placement this server handles"));
+                        resource.post_error(
+                            Error::InvalidPlacement,
+                            format!("{other:?} is not a placement this server handles"),
+                        );
                         return;
                     }
                     WEnum::Unknown(v) => {
-                        resource.post_error(Error::InvalidPlacement, format!("{v} is not a placement"));
+                        resource
+                            .post_error(Error::InvalidPlacement, format!("{v} is not a placement"));
                         return;
                     }
                 };
-                if let Some(m) = state.window_managers.managers.iter_mut().find(|m| m.output == output) {
+                if let Some(m) = state
+                    .window_managers
+                    .managers
+                    .iter_mut()
+                    .find(|m| m.output == output)
+                {
                     m.pending.insert(id, target);
                 }
             }
@@ -446,10 +625,21 @@ impl Dispatch<CupertinoWindowManagerV1, WindowManagerData> for Cupertino {
 
     /// The role ends with the object, also when its client dies: every window is back at its own
     /// frame at once.
-    fn destroyed(state: &mut Self, _: ClientId, resource: &CupertinoWindowManagerV1, data: &WindowManagerData) {
+    fn destroyed(
+        state: &mut Self,
+        _: ClientId,
+        resource: &CupertinoWindowManagerV1,
+        data: &WindowManagerData,
+    ) {
         let Some(output) = data.output else { return };
-        state.window_managers.managers.retain(|m| &m.resource != resource);
-        state.window_managers.placed.retain(|_, p| p.output != output);
+        state
+            .window_managers
+            .managers
+            .retain(|m| &m.resource != resource);
+        state
+            .window_managers
+            .placed
+            .retain(|_, p| p.output != output);
         state.request_redraw();
     }
 }
@@ -460,8 +650,18 @@ mod tests {
 
     const OUT: OutputId = OutputId(0);
     const WIN: WindowId = WindowId(1);
-    const NATURAL: Rect = Rect { x: 300.0, y: 100.0, w: 800.0, h: 600.0 };
-    const SLOT: Rect = Rect { x: 22.0, y: 230.0, w: 158.0, h: 118.5 };
+    const NATURAL: Rect = Rect {
+        x: 300.0,
+        y: 100.0,
+        w: 800.0,
+        h: 600.0,
+    };
+    const SLOT: Rect = Rect {
+        x: 22.0,
+        y: 230.0,
+        w: 158.0,
+        h: 118.5,
+    };
 
     // critically damped progress 1 - (1 + wt) e^(-wt), w = 2 pi / response, at 0.1 s and 0.2 s
     const FRAME: [f64; 2] = [0.49217, 0.84224];
@@ -476,7 +676,12 @@ mod tests {
     /// panics unless it is placed.
     fn placed(wms: &WindowManagers, now: f64) -> (Rect, bool, f64, f64) {
         match wms.look(WIN, now) {
-            Look::Placed { rect, strip, alpha, rounding } => (rect, strip, alpha, wms.corner_radius(12.0, rounding)),
+            Look::Placed {
+                rect,
+                strip,
+                alpha,
+                rounding,
+            } => (rect, strip, alpha, wms.corner_radius(12.0, rounding)),
             other => panic!("not placed at {now}: {other:?}"),
         }
     }
@@ -487,7 +692,9 @@ mod tests {
     }
 
     fn rests_at(r: Rect, at: Rect) -> bool {
-        [r.x - at.x, r.y - at.y, r.w - at.w, r.h - at.h].iter().all(|d| d.abs() < 1e-6)
+        [r.x - at.x, r.y - at.y, r.w - at.w, r.h - at.h]
+            .iter()
+            .all(|d| d.abs() < 1e-6)
     }
 
     #[test]
@@ -497,14 +704,25 @@ mod tests {
         for (i, now) in [0.1, 0.2].into_iter().enumerate() {
             let (rect, strip, alpha, corner) = placed(&wms, now);
             assert!(strip);
-            assert_eq!(progress(rect.w, 800.0, 158.0), FRAME[i], "0.38 s frame spring at {now} s");
+            assert_eq!(
+                progress(rect.w, 800.0, 158.0),
+                FRAME[i],
+                "0.38 s frame spring at {now} s"
+            );
             assert_eq!(progress(rect.x, 300.0, 22.0), FRAME[i]);
-            assert_eq!(progress(corner, 12.0, 8.0), CORNER[i], "0.20 s corner spring at {now} s");
+            assert_eq!(
+                progress(corner, 12.0, 8.0),
+                CORNER[i],
+                "0.20 s corner spring at {now} s"
+            );
             assert_eq!(alpha, 1.0, "stage and strip are both opaque");
         }
         let (rect, _, _, corner) = placed(&wms, 2.0);
         assert!(rests_at(rect, SLOT), "{rect:?}");
-        assert!((corner - 8.0).abs() < 1e-9, "at rest the strip's 8 pt corners: {corner}");
+        assert!(
+            (corner - 8.0).abs() < 1e-9,
+            "at rest the strip's 8 pt corners: {corner}"
+        );
     }
 
     #[test]
@@ -518,7 +736,10 @@ mod tests {
         assert_eq!(progress(corner, 8.0, 12.0), CORNER[0]);
         wms.tick(4.0);
         assert_eq!(wms.look(WIN, 4.0), Look::Natural);
-        assert!(wms.placed.is_empty(), "the entry is dropped once every track rests");
+        assert!(
+            wms.placed.is_empty(),
+            "the entry is dropped once every track rests"
+        );
     }
 
     #[test]
@@ -528,9 +749,16 @@ mod tests {
         wms.retarget(WIN, OUT, Target::Hidden, NATURAL, 2.0);
         for (i, now) in [2.1, 2.2].into_iter().enumerate() {
             let (rect, strip, alpha, corner) = placed(&wms, now);
-            assert!(rests_at(rect, SLOT) && strip, "it fades in its slot, below the stage windows: {rect:?}");
+            assert!(
+                rests_at(rect, SLOT) && strip,
+                "it fades in its slot, below the stage windows: {rect:?}"
+            );
             assert!((corner - 8.0).abs() < 1e-9);
-            assert_eq!(progress(alpha, 1.0, 0.0), ALPHA[i], "0.30 s alpha spring at {now} s");
+            assert_eq!(
+                progress(alpha, 1.0, 0.0),
+                ALPHA[i],
+                "0.30 s alpha spring at {now} s"
+            );
         }
         assert_eq!(wms.look(WIN, 3.0), Look::Hidden);
         assert!(!wms.in_strip(WIN), "a fading window takes no strip press");
@@ -543,7 +771,11 @@ mod tests {
         assert_eq!(wms.look(WIN, 2.0), Look::Hidden);
         wms.retarget(WIN, OUT, Target::Strip(SLOT), NATURAL, 2.0);
         let (rect, _, alpha, corner) = placed(&wms, 2.1);
-        assert_eq!((rect, corner), (SLOT, 8.0), "no flight from where it was hidden, no corner morph");
+        assert_eq!(
+            (rect, corner),
+            (SLOT, 8.0),
+            "no flight from where it was hidden, no corner morph"
+        );
         assert_eq!(progress(alpha, 0.0, 1.0), ALPHA[0]);
         wms.retarget(WIN, OUT, Target::Hidden, NATURAL, 4.0);
         wms.retarget(WIN, OUT, Target::Stage, NATURAL, 6.0);
@@ -557,15 +789,24 @@ mod tests {
         let mut wms = managers();
         wms.retarget(WIN, OUT, Target::Strip(SLOT), NATURAL, 0.0);
         let (before, velocity) = (placed(&wms, 0.1).0, wms.placed[&WIN].frame.velocity(0.1));
-        assert!(velocity[2] < -1000.0, "mid-swap the width shrinks fast: {velocity:?}");
+        assert!(
+            velocity[2] < -1000.0,
+            "mid-swap the width shrinks fast: {velocity:?}"
+        );
         assert!(wms.retarget(WIN, OUT, Target::Stage, NATURAL, 0.1));
         let after = wms.placed[&WIN].frame.velocity(0.1);
         assert_eq!(placed(&wms, 0.1).0, before, "no jump");
         for (a, b) in velocity.iter().zip(after) {
             assert!((a - b).abs() < 1e-4 * a.abs(), "velocity is continuous (to the spring's float precision) across the retarget: {velocity:?} then {after:?}");
         }
-        assert!(placed(&wms, 0.11).0.w < before.w, "the window keeps shrinking for a moment before it turns back");
-        assert!(rests_at(Rect::from_array(wms.placed[&WIN].frame.value(2.0)), NATURAL));
+        assert!(
+            placed(&wms, 0.11).0.w < before.w,
+            "the window keeps shrinking for a moment before it turns back"
+        );
+        assert!(rests_at(
+            Rect::from_array(wms.placed[&WIN].frame.value(2.0)),
+            NATURAL
+        ));
         assert_eq!(wms.look(WIN, 2.0), Look::Natural);
     }
 
@@ -576,17 +817,31 @@ mod tests {
         wms.retarget(WIN, OUT, Target::Stage, NATURAL, 2.0);
         let (before, velocity) = (placed(&wms, 2.1).0, wms.placed[&WIN].frame.velocity(2.1));
         // the client commits a larger size 0.1 s into the swap
-        let resized = Rect { w: 900.0, h: 650.0, ..NATURAL };
+        let resized = Rect {
+            w: 900.0,
+            h: 650.0,
+            ..NATURAL
+        };
         wms.follow_natural(WIN, resized, 2.1);
         assert_eq!(placed(&wms, 2.1).0, before, "no jump");
         let after = wms.placed[&WIN].frame.velocity(2.1);
         for (a, b) in velocity.iter().zip(after) {
-            assert!((a - b).abs() < 1e-4 * a.abs().max(1.0), "velocity is continuous: {velocity:?} then {after:?}");
+            assert!(
+                (a - b).abs() < 1e-4 * a.abs().max(1.0),
+                "velocity is continuous: {velocity:?} then {after:?}"
+            );
         }
-        assert!(rests_at(Rect::from_array(wms.placed[&WIN].frame.value(4.0)), resized), "the swap ends on the new frame");
+        assert!(
+            rests_at(Rect::from_array(wms.placed[&WIN].frame.value(4.0)), resized),
+            "the swap ends on the new frame"
+        );
         let later = placed(&wms, 2.3).0;
         wms.follow_natural(WIN, resized, 2.2);
-        assert_eq!(placed(&wms, 2.3).0, later, "an unchanged frame does not restart the spring");
+        assert_eq!(
+            placed(&wms, 2.3).0,
+            later,
+            "an unchanged frame does not restart the spring"
+        );
     }
 
     #[test]
@@ -597,8 +852,14 @@ mod tests {
         let reached = placed(&wms, 2.1).2;
         assert!(wms.retarget(WIN, OUT, Target::Strip(SLOT), NATURAL, 2.1));
         assert_eq!(placed(&wms, 2.1).2, reached);
-        assert!(placed(&wms, 2.105).2 < reached, "the fade-out's velocity carries on for a moment");
+        assert!(
+            placed(&wms, 2.105).2 < reached,
+            "the fade-out's velocity carries on for a moment"
+        );
         assert!((placed(&wms, 4.0).2 - 1.0).abs() < 1e-6);
-        assert!(!wms.retarget(WIN, OUT, Target::Strip(SLOT), NATURAL, 4.0), "already headed there");
+        assert!(
+            !wms.retarget(WIN, OUT, Target::Strip(SLOT), NATURAL, 4.0),
+            "already headed there"
+        );
     }
 }

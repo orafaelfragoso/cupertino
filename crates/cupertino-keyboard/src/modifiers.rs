@@ -71,8 +71,24 @@ impl ModifierProfile {
     }
 
     /// Custom mapping, one logical modifier set per physical modifier.
-    pub fn custom(name: &'static str, shift: Mods, ctrl: Mods, alt: Mods, sup: Mods, fnk: Mods, alt_selects_symbols: bool) -> ModifierProfile {
-        ModifierProfile { name, shift, ctrl, alt, sup, fnk, alt_selects_symbols }
+    pub fn custom(
+        name: &'static str,
+        shift: Mods,
+        ctrl: Mods,
+        alt: Mods,
+        sup: Mods,
+        fnk: Mods,
+        alt_selects_symbols: bool,
+    ) -> ModifierProfile {
+        ModifierProfile {
+            name,
+            shift,
+            ctrl,
+            alt,
+            sup,
+            fnk,
+            alt_selects_symbols,
+        }
     }
 
     pub fn by_name(name: &str) -> Option<ModifierProfile> {
@@ -106,10 +122,15 @@ impl ModifierProfile {
 
     /// Physical modifier that produces the logical primary modifier.
     pub fn primary_physical(&self) -> Option<RawMods> {
-        [(RawMods::SHIFT, self.shift), (RawMods::CTRL, self.ctrl), (RawMods::ALT, self.alt), (RawMods::SUPER, self.sup)]
-            .into_iter()
-            .find(|(_, l)| l.contains(Mods::PRIMARY))
-            .map(|(p, _)| p)
+        [
+            (RawMods::SHIFT, self.shift),
+            (RawMods::CTRL, self.ctrl),
+            (RawMods::ALT, self.alt),
+            (RawMods::SUPER, self.sup),
+        ]
+        .into_iter()
+        .find(|(_, l)| l.contains(Mods::PRIMARY))
+        .map(|(p, _)| p)
     }
 }
 
@@ -192,13 +213,19 @@ pub struct GlobeTap {
 
 impl Default for GlobeTap {
     fn default() -> Self {
-        GlobeTap { initial_repeat_ms: GLOBE_DEFAULT_REPEAT_MS, down_at_ms: None }
+        GlobeTap {
+            initial_repeat_ms: GLOBE_DEFAULT_REPEAT_MS,
+            down_at_ms: None,
+        }
     }
 }
 
 impl GlobeTap {
     pub fn new(initial_repeat_ms: f64) -> GlobeTap {
-        GlobeTap { initial_repeat_ms, down_at_ms: None }
+        GlobeTap {
+            initial_repeat_ms,
+            down_at_ms: None,
+        }
     }
 
     pub fn threshold_ms(&self) -> f64 {
@@ -247,9 +274,15 @@ mod tests {
 
     #[test]
     fn symbol_selection_with_primary() {
-        assert_eq!(symbol_selectors(Mods::PRIMARY | Mods::SHIFT), (false, false));
+        assert_eq!(
+            symbol_selectors(Mods::PRIMARY | Mods::SHIFT),
+            (false, false)
+        );
         assert_eq!(symbol_selectors(Mods::PRIMARY | Mods::ALT), (false, true));
-        assert_eq!(symbol_selectors(Mods::PRIMARY | Mods::ALT | Mods::SHIFT), (true, true));
+        assert_eq!(
+            symbol_selectors(Mods::PRIMARY | Mods::ALT | Mods::SHIFT),
+            (true, true)
+        );
         assert_eq!(symbol_selectors(Mods::SHIFT), (true, false));
     }
 
@@ -273,7 +306,11 @@ mod tests {
         assert_eq!(g.up(1500.0), GlobeOutcome::Ignored);
         g.down(1000.0);
         g.other_key();
-        assert_eq!(g.up(1100.0), GlobeOutcome::Ignored, "a chord with another key is no tap");
+        assert_eq!(
+            g.up(1100.0),
+            GlobeOutcome::Ignored,
+            "a chord with another key is no tap"
+        );
         let mut slow = GlobeTap::new(5000.0);
         assert_eq!(slow.threshold_ms(), 2000.0);
         slow.down(0.0);

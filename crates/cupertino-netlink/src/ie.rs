@@ -171,14 +171,28 @@ pub fn ssid_and_security(elements: &[u8], capability: u16) -> Result<(Ssid, Secu
     let mut rest = elements;
     while !rest.is_empty() {
         if rest.len() < 2 {
-            return Err(ParseError::Truncated { what: "information element header", needed: 2, have: rest.len() });
+            return Err(ParseError::Truncated {
+                what: "information element header",
+                needed: 2,
+                have: rest.len(),
+            });
         }
         let (id, length) = (rest[0], usize::from(rest[1]));
-        let data = rest[2..].get(..length).ok_or(ParseError::InformationElement { id, length, available: rest.len() - 2 })?;
+        let data = rest[2..]
+            .get(..length)
+            .ok_or(ParseError::InformationElement {
+                id,
+                length,
+                available: rest.len() - 2,
+            })?;
         match id {
             ELEMENT_SSID => ssid = Ssid(data.to_vec()),
             ELEMENT_RSN => rsn = Some(read_akms(data, IEEE_OUI, Akms::add_ieee)?.rsn_security()),
-            ELEMENT_VENDOR if data.starts_with(&WPA_PREFIX) => wpa = Some(read_akms(&data[WPA_PREFIX.len()..], WPA_OUI, Akms::add_wpa)?.wpa_security()),
+            ELEMENT_VENDOR if data.starts_with(&WPA_PREFIX) => {
+                wpa = Some(
+                    read_akms(&data[WPA_PREFIX.len()..], WPA_OUI, Akms::add_wpa)?.wpa_security(),
+                )
+            }
             _ => {}
         }
         rest = &rest[2 + length..];
@@ -218,7 +232,9 @@ mod tests {
     /// The WPA vendor element: OUI 00:50:F2 type 1, version 1, group TKIP (00-50-F2:2), one
     /// pairwise TKIP, then the AKM suites given as 00-50-F2 types.
     fn wpa(akm_types: &[u8]) -> Vec<u8> {
-        let mut body = vec![0x00, 0x50, 0xf2, 0x01, 1, 0, 0x00, 0x50, 0xf2, 2, 1, 0, 0x00, 0x50, 0xf2, 2];
+        let mut body = vec![
+            0x00, 0x50, 0xf2, 0x01, 1, 0, 0x00, 0x50, 0xf2, 2, 1, 0, 0x00, 0x50, 0xf2, 2,
+        ];
         body.extend_from_slice(&u16::try_from(akm_types.len()).unwrap().to_le_bytes());
         for suite_type in akm_types {
             body.extend_from_slice(&[0x00, 0x50, 0xf2, *suite_type]);
@@ -238,7 +254,10 @@ mod tests {
 
     #[test]
     fn an_open_network_has_no_security_element_and_no_privacy_bit() {
-        assert_eq!(network(b"cafe", &[], 0x0401), (Ssid(b"cafe".to_vec()), Security::Open));
+        assert_eq!(
+            network(b"cafe", &[], 0x0401),
+            (Ssid(b"cafe".to_vec()), Security::Open)
+        );
     }
 
     #[test]
@@ -265,13 +284,22 @@ mod tests {
 
     #[test]
     fn rsn_offering_psk_and_sae_is_the_transition_mode() {
-        assert_eq!(network(b"both", &[rsn(&[2, 8])], 0x0411).1, Security::Wpa2Wpa3);
+        assert_eq!(
+            network(b"both", &[rsn(&[2, 8])], 0x0411).1,
+            Security::Wpa2Wpa3
+        );
     }
 
     #[test]
     fn rsn_with_802_1x_is_enterprise() {
-        assert_eq!(network(b"corp", &[rsn(&[1])], 0x0411).1, Security::Enterprise);
-        assert_eq!(network(b"corp", &[wpa(&[1])], 0x0411).1, Security::Enterprise);
+        assert_eq!(
+            network(b"corp", &[rsn(&[1])], 0x0411).1,
+            Security::Enterprise
+        );
+        assert_eq!(
+            network(b"corp", &[wpa(&[1])], 0x0411).1,
+            Security::Enterprise
+        );
     }
 
     #[test]
@@ -281,19 +309,28 @@ mod tests {
 
     #[test]
     fn rsn_wins_over_the_wpa_element() {
-        assert_eq!(network(b"mixed", &[wpa(&[2]), rsn(&[2])], 0x0411).1, Security::Wpa2);
+        assert_eq!(
+            network(b"mixed", &[wpa(&[2]), rsn(&[2])], 0x0411).1,
+            Security::Wpa2
+        );
     }
 
     #[test]
     fn an_unknown_suite_is_unsupported() {
-        assert_eq!(network(b"odd", &[rsn(&[7])], 0x0411).1, Security::Unsupported);
+        assert_eq!(
+            network(b"odd", &[rsn(&[7])], 0x0411).1,
+            Security::Unsupported
+        );
     }
 
     #[test]
     fn a_suite_of_another_oui_is_ignored() {
         let mut body = vec![1, 0, 0x00, 0x0f, 0xac, 4, 1, 0, 0x00, 0x0f, 0xac, 4, 1, 0];
         body.extend_from_slice(&[0x00, 0x50, 0xf2, 2, 0, 0]);
-        assert_eq!(network(b"x", &[element(ELEMENT_RSN, &body)], 0x0411).1, Security::Unsupported);
+        assert_eq!(
+            network(b"x", &[element(ELEMENT_RSN, &body)], 0x0411).1,
+            Security::Unsupported
+        );
     }
 
     #[test]
@@ -311,7 +348,14 @@ mod tests {
 
     #[test]
     fn an_element_longer_than_the_list_is_an_error() {
-        assert_eq!(ssid_and_security(&[0, 9, b'a'], 0), Err(ParseError::InformationElement { id: 0, length: 9, available: 1 }));
+        assert_eq!(
+            ssid_and_security(&[0, 9, b'a'], 0),
+            Err(ParseError::InformationElement {
+                id: 0,
+                length: 9,
+                available: 1
+            })
+        );
     }
 
     #[test]
@@ -320,6 +364,9 @@ mod tests {
         // keep the element framing consistent: drop the last 6 bytes (the AKM suite and capabilities)
         body.truncate(body.len() - 6);
         body[1] -= 6;
-        assert_eq!(ssid_and_security(&body, 0), Err(ParseError::SecurityElement { what: "AKM suites" }));
+        assert_eq!(
+            ssid_and_security(&body, 0),
+            Err(ParseError::SecurityElement { what: "AKM suites" })
+        );
     }
 }

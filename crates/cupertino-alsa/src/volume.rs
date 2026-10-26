@@ -25,9 +25,16 @@ impl VolumeRange {
     /// A control spanning `raw_min..=raw_max`; fails when the range holds a single value.
     pub fn new(raw_min: i64, raw_max: i64, db: Option<DbCurve>) -> Result<Self> {
         if raw_min >= raw_max {
-            return Err(Error::EmptyRange { min: raw_min, max: raw_max });
+            return Err(Error::EmptyRange {
+                min: raw_min,
+                max: raw_max,
+            });
         }
-        Ok(Self { raw_min, raw_max, db })
+        Ok(Self {
+            raw_min,
+            raw_max,
+            db,
+        })
     }
 
     /// The lowest raw value.
@@ -42,7 +49,9 @@ impl VolumeRange {
 
     /// Gain of `raw` in 1/100 dB; `None` without dB information.
     fn db_at(&self, raw: i64) -> Option<i32> {
-        self.db.as_ref().map(|curve| curve.db(self.raw_min, self.raw_max, raw))
+        self.db
+            .as_ref()
+            .map(|curve| curve.db(self.raw_min, self.raw_max, raw))
     }
 
     /// Gains of the lowest and highest raw value; `None` without dB information or when the curve is flat.
@@ -64,7 +73,9 @@ impl VolumeRange {
     pub fn level(&self, raw: i64) -> f64 {
         let raw = raw.clamp(self.raw_min, self.raw_max);
         let level = match (self.db_span(), self.db_at(raw)) {
-            (Some((min, max)), Some(db)) if max - min <= LINEAR_DB_LIMIT => f64::from(db - min) / f64::from(max - min),
+            (Some((min, max)), Some(db)) if max - min <= LINEAR_DB_LIMIT => {
+                f64::from(db - min) / f64::from(max - min)
+            }
             (Some((min, max)), Some(db)) => {
                 let min_norm = Self::min_norm(min, max);
                 (10f64.powf(f64::from(db - max) / DB_PER_DECADE) - min_norm) / (1.0 - min_norm)
@@ -121,8 +132,14 @@ impl VolumeRange {
     pub fn step(&self, raw: i64, direction: i32, step: f64) -> i64 {
         let current = raw.clamp(self.raw_min, self.raw_max);
         match direction.signum() {
-            1 => self.raw(self.level(current) + step).max(current + 1).min(self.raw_max),
-            -1 => self.raw(self.level(current) - step).min(current - 1).max(self.raw_min),
+            1 => self
+                .raw(self.level(current) + step)
+                .max(current + 1)
+                .min(self.raw_max),
+            -1 => self
+                .raw(self.level(current) - step)
+                .min(current - 1)
+                .max(self.raw_min),
             _ => current,
         }
     }
@@ -134,14 +151,27 @@ mod tests {
 
     /// An HDA codec amplifier: raw 0 to 87, -97.50 dB at 0 and 0.75 dB per step (65.25 dB wide: logarithmic mapping).
     fn hda() -> VolumeRange {
-        VolumeRange::new(0, 87, Some(DbCurve::Scale { min: -9750, step: 75, mute: false })).unwrap()
+        VolumeRange::new(
+            0,
+            87,
+            Some(DbCurve::Scale {
+                min: -9750,
+                step: 75,
+                mute: false,
+            }),
+        )
+        .unwrap()
     }
 
     #[test]
     fn wide_db_range_maps_on_the_loudness_curve() {
         let range = hda();
         assert_eq!(range.level(0), 0.0);
-        assert!((range.level(60) - 0.411_626).abs() < 1e-5, "{}", range.level(60));
+        assert!(
+            (range.level(60) - 0.411_626).abs() < 1e-5,
+            "{}",
+            range.level(60)
+        );
         assert_eq!(range.level(87), 1.0);
     }
 
@@ -157,7 +187,16 @@ mod tests {
     #[test]
     fn narrow_db_range_is_linear_in_db() {
         // -20 dB to 0 dB in 0.5 dB steps: 20 dB wide
-        let range = VolumeRange::new(0, 40, Some(DbCurve::Scale { min: -2000, step: 50, mute: false })).unwrap();
+        let range = VolumeRange::new(
+            0,
+            40,
+            Some(DbCurve::Scale {
+                min: -2000,
+                step: 50,
+                mute: false,
+            }),
+        )
+        .unwrap();
         assert_eq!(range.level(10), 0.25);
         assert_eq!(range.raw(0.25), 10);
     }
@@ -165,10 +204,23 @@ mod tests {
     #[test]
     fn muted_lowest_step_is_level_zero_without_a_min_norm() {
         // raw 0 is mute, raw 51 is 0 dB with 1 dB per step above it: 50 dB wide plus mute
-        let range = VolumeRange::new(0, 51, Some(DbCurve::Scale { min: -5100, step: 100, mute: true })).unwrap();
+        let range = VolumeRange::new(
+            0,
+            51,
+            Some(DbCurve::Scale {
+                min: -5100,
+                step: 100,
+                mute: true,
+            }),
+        )
+        .unwrap();
         assert_eq!(range.level(0), 0.0);
         // raw 1 is -50 dB: 10^(-50/60) = 0.1468
-        assert!((range.level(1) - 0.146_780).abs() < 1e-5, "{}", range.level(1));
+        assert!(
+            (range.level(1) - 0.146_780).abs() < 1e-5,
+            "{}",
+            range.level(1)
+        );
         assert_eq!(range.raw(0.0), 0);
     }
 
@@ -202,6 +254,9 @@ mod tests {
 
     #[test]
     fn a_range_of_one_value_is_refused() {
-        assert!(matches!(VolumeRange::new(5, 5, None), Err(Error::EmptyRange { min: 5, max: 5 })));
+        assert!(matches!(
+            VolumeRange::new(5, 5, None),
+            Err(Error::EmptyRange { min: 5, max: 5 })
+        ));
     }
 }

@@ -42,8 +42,19 @@ impl Server {
     fn start(procs: Vec<ShellProcess>) -> Option<Server> {
         let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().unwrap();
         let display: Display<Cupertino> = Display::new().unwrap();
-        let cfg = Config { shell_processes: procs, ..Config::default() };
-        let mut state = Cupertino::new(display, event_loop.handle(), event_loop.get_signal(), cfg, true, &cupertino_assets::Assets::discover()).unwrap();
+        let cfg = Config {
+            shell_processes: procs,
+            ..Config::default()
+        };
+        let mut state = Cupertino::new(
+            display,
+            event_loop.handle(),
+            event_loop.get_signal(),
+            cfg,
+            true,
+            &cupertino_assets::Assets::builtin(),
+        )
+        .unwrap();
         if let Err(e) = headless::init(&mut state, OUTPUT, 1.0) {
             eprintln!("skipping: no EGL device ({e:#})");
             return None;
@@ -53,7 +64,12 @@ impl Server {
     }
 
     fn step(&mut self) {
-        headless::step(&mut self.state, &mut self.event_loop, Duration::from_millis(5)).unwrap();
+        headless::step(
+            &mut self.state,
+            &mut self.event_loop,
+            Duration::from_millis(5),
+        )
+        .unwrap();
     }
 
     /// Step the server until `cond` holds; panics after [`TIMEOUT`].
@@ -77,7 +93,15 @@ impl Server {
     }
 
     fn key(&mut self, code: u32, pressed: bool) {
-        self.state.keyboard_event_now(Keycode::new(code), if pressed { KeyState::Pressed } else { KeyState::Released }, 0);
+        self.state.keyboard_event_now(
+            Keycode::new(code),
+            if pressed {
+                KeyState::Pressed
+            } else {
+                KeyState::Released
+            },
+            0,
+        );
         self.step();
     }
 }
@@ -87,7 +111,10 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn new(name: &str) -> TempDir {
-        let dir = std::env::temp_dir().join(format!("cupertino-files-window-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "cupertino-files-window-{name}-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         TempDir(dir)
     }
@@ -103,9 +130,23 @@ impl Drop for TempDir {
 /// `[[bin]]` of another crate behind a feature, so cargo gives this test no `CARGO_BIN_EXE_*` for it.
 fn files_binary() -> PathBuf {
     // <target>/<profile>/deps/<this test> -> <target>/<profile>
-    let profile_dir = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().to_path_buf();
+    let profile_dir = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
     let mut cargo = Command::new(std::env::var_os("CARGO").expect("CARGO is set by `cargo test`"));
-    cargo.args(["build", "-p", "cupertino-files", "--features", "cupertino-files/app", "--target-dir", profile_dir.parent().unwrap().to_str().unwrap()]);
+    cargo.args([
+        "build",
+        "-p",
+        "cupertino-files",
+        "--features",
+        "cupertino-files/app",
+        "--target-dir",
+        profile_dir.parent().unwrap().to_str().unwrap(),
+    ]);
     if profile_dir.file_name().unwrap() == "release" {
         cargo.arg("--release");
     }
@@ -128,7 +169,10 @@ fn files_process(home: &Path, data_dirs: &Path) -> ShellProcess {
         env("XDG_DATA_DIRS", data_dirs),
         files_binary().display().to_string(),
     ];
-    ShellProcess { name: "cupertino-files".into(), command }
+    ShellProcess {
+        name: "cupertino-files".into(),
+        command,
+    }
 }
 
 /// The file manager's sidebar metrics in points: the toolbar strip over the sidebar, the space above the first
@@ -142,7 +186,14 @@ const INTERGROUP: f64 = 13.0;
 /// The vertical centre, in window points, of row `row` of the second sidebar group when the first group has
 /// `favourites` rows: the sidebar stacks its groups the same way for any number of places.
 fn second_group_row_centre(favourites: usize, row: usize) -> f64 {
-    STRIP + SIDEBAR_TOP + GROUP_ROW + favourites as f64 * ROW + INTERGROUP + GROUP_ROW + row as f64 * ROW + ROW / 2.0
+    STRIP
+        + SIDEBAR_TOP
+        + GROUP_ROW
+        + favourites as f64 * ROW
+        + INTERGROUP
+        + GROUP_ROW
+        + row as f64 * ROW
+        + ROW / 2.0
 }
 
 /// What the server holds of the file manager's window.
@@ -160,7 +211,16 @@ struct Shown {
 fn window(state: &Cupertino) -> Option<Shown> {
     let entry = state.windows.iter().find(|w| w.mapped)?;
     let surface = entry.surface();
-    let title = with_states(surface, |s| s.data_map.get::<XdgToplevelSurfaceData>().unwrap().lock().unwrap().title.clone()).unwrap_or_default();
+    let title = with_states(surface, |s| {
+        s.data_map
+            .get::<XdgToplevelSurfaceData>()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .title
+            .clone()
+    })
+    .unwrap_or_default();
     let buffer = with_renderer_surface_state(surface, |s| s.buffer().cloned())??;
     let (pixels, size) = with_buffer_contents(&buffer, |ptr, len, data| {
         // the pool holds both buffers of the window: copy this one's rows only
@@ -173,7 +233,12 @@ fn window(state: &Cupertino) -> Option<Shown> {
         (copy, (data.width, data.height))
     })
     .expect("the file manager commits shm buffers");
-    Some(Shown { server_side: entry.server_side, title, pixels, size })
+    Some(Shown {
+        server_side: entry.server_side,
+        title,
+        pixels,
+        size,
+    })
 }
 
 #[test]
@@ -186,12 +251,17 @@ fn the_file_manager_window_maps_lists_refreshes_navigates_and_closes() {
     // default Favorites that exist here,: no Desktop folder, Documents not assigned in user-dirs.dirs)
     let data_dirs = scratch.0.join("share");
     std::fs::create_dir_all(data_dirs.join("applications")).unwrap();
-    let Some(mut server) = Server::start(vec![files_process(&home, &data_dirs)]) else { return };
+    let Some(mut server) = Server::start(vec![files_process(&home, &data_dirs)]) else {
+        return;
+    };
 
     // a decorated window at the default content size of 920 x 436 pt, titled with the folder's name
     server.wait_until("the window to map", |s| window(s).is_some());
     let shown = window(&server.state).unwrap();
-    assert!(shown.server_side, "the server draws the title bar and the window control buttons");
+    assert!(
+        shown.server_side,
+        "the server draws the title bar and the window control buttons"
+    );
     assert_eq!(shown.title, "home");
     assert_eq!(shown.size, (920, 436));
 
@@ -199,25 +269,47 @@ fn the_file_manager_window_maps_lists_refreshes_navigates_and_closes() {
     server.run_for(Duration::from_secs(1));
     let before = window(&server.state).unwrap().pixels;
     std::fs::write(home.join("added.txt"), b"x").unwrap();
-    server.wait_until("the window to draw the new file", |s| window(s).is_some_and(|w| w.pixels != before));
+    server.wait_until("the window to draw the new file", |s| {
+        window(s).is_some_and(|w| w.pixels != before)
+    });
 
     // Super+Up goes to the enclosing folder, which the title bar names
     server.key(SUPER, true);
     server.key(UP, true);
     server.key(UP, false);
     server.key(SUPER, false);
-    let parent = scratch.0.file_name().unwrap().to_string_lossy().into_owned();
-    server.wait_until("the title of the enclosing folder", |s| window(s).is_some_and(|w| w.title == parent));
+    let parent = scratch
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    server.wait_until("the title of the enclosing folder", |s| {
+        window(s).is_some_and(|w| w.title == parent)
+    });
 
     // a click on the sidebar's computer row, the first of Locations under the two Favorites, shows the root
     let id = server.state.windows[0].id;
     let f = server.state.wm.window(id).unwrap().geometry();
-    let (_, _, origin) = server.state.window_surface_under((f.x + f.w / 2.0, f.y + f.h / 2.0).into()).expect("the window's content is under its centre");
-    server.state.pointer_moved_to((origin.x + 100.0, origin.y + second_group_row_centre(2, 0)).into(), 0, None);
-    server.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 0);
+    let (_, _, origin) = server
+        .state
+        .window_surface_under((f.x + f.w / 2.0, f.y + f.h / 2.0).into())
+        .expect("the window's content is under its centre");
+    server.state.pointer_moved_to(
+        (origin.x + 100.0, origin.y + second_group_row_centre(2, 0)).into(),
+        0,
+        None,
+    );
+    server
+        .state
+        .pointer_button(BTN_LEFT, ButtonState::Pressed, 0);
     server.step();
-    server.state.pointer_button(BTN_LEFT, ButtonState::Released, 0);
-    server.wait_until("the title of the root", |s| window(s).is_some_and(|w| w.title == "/"));
+    server
+        .state
+        .pointer_button(BTN_LEFT, ButtonState::Released, 0);
+    server.wait_until("the title of the root", |s| {
+        window(s).is_some_and(|w| w.title == "/")
+    });
 
     // the close shortcut asks the window to close; the process exits with success, so the supervisor does not
     // start it again after its throttle (a failure would bring the window back)
@@ -227,5 +319,8 @@ fn the_file_manager_window_maps_lists_refreshes_navigates_and_closes() {
     server.key(SUPER, false);
     server.wait_until("the window to go away", |s| s.windows.is_empty());
     server.run_for(THROTTLE * 2);
-    assert!(server.state.windows.is_empty(), "the file manager was started again: it did not exit with success");
+    assert!(
+        server.state.windows.is_empty(),
+        "the file manager was started again: it did not exit with success"
+    );
 }

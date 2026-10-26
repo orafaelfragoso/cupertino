@@ -30,11 +30,23 @@ impl LidSwitch {
             if !class.switch {
                 continue;
             }
-            let fd = open(path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty()).map_err(|errno| Error::Open { path: path.to_owned(), errno })?;
-            let evdev_error = |source| Error::Evdev { path: path.to_owned(), source };
+            let fd =
+                open(path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty()).map_err(|errno| {
+                    Error::Open {
+                        path: path.to_owned(),
+                        errno,
+                    }
+                })?;
+            let evdev_error = |source| Error::Evdev {
+                path: path.to_owned(),
+                source,
+            };
             let device = Device::open(fd).map_err(evdev_error)?;
             if device.info().switches.contains(SW_LID) {
-                return Ok(Some(Self { device, path: path.to_owned() }));
+                return Ok(Some(Self {
+                    device,
+                    path: path.to_owned(),
+                }));
             }
         }
         Ok(None)
@@ -42,14 +54,22 @@ impl LidSwitch {
 
     /// Whether the lid is closed now (`EVIOCGSW`).
     pub fn closed(&self) -> Result<bool> {
-        let snapshot = self.device.snapshot().map_err(|source| Error::Evdev { path: self.path.clone(), source })?;
+        let snapshot = self.device.snapshot().map_err(|source| Error::Evdev {
+            path: self.path.clone(),
+            source,
+        })?;
         Ok(snapshot.switches.contains(SW_LID))
     }
 
     /// Reads and drops the queued events so the descriptor stops being readable; the state
     /// comes from [`LidSwitch::closed`].
     pub fn drain(&mut self) -> Result<()> {
-        self.device.read_frames(&mut Vec::new()).map_err(|source| Error::Evdev { path: self.path.clone(), source })
+        self.device
+            .read_frames(&mut Vec::new())
+            .map_err(|source| Error::Evdev {
+                path: self.path.clone(),
+                source,
+            })
     }
 }
 

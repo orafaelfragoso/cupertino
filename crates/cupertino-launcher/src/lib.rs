@@ -31,6 +31,9 @@ pub mod render;
 pub mod surface;
 
 pub use desktop::{DesktopAction, DesktopEntry};
-pub use engine::{Action, Activation, ItemKind, LaunchRequest, Launcher, LauncherConfig, ResultItem, Results, Section, SectionKind};
+pub use engine::{
+    Action, Activation, ItemKind, LaunchRequest, Launcher, LauncherConfig, ResultItem, Results,
+    Section, SectionKind,
+};
 pub use exec::CommandSpec;
 pub use frecency::Frecency;

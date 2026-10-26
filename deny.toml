@@ -1,7 +1,18 @@
-# cargo-deny policy of the public tree: the code is GPL-3.0-or-later, so every dependency must carry a licence that
-# GPL-3.0 can absorb. Run `cargo deny check licenses`.
+# cargo-deny policy: the code is GPL-3.0-or-later, so every dependency must carry a licence that GPL-3.0 can absorb, and
+# no dependency may carry a known vulnerability. Run `cargo deny check`.
 [graph]
 all-features = true
+
+[advisories]
+# Only "unmaintained" notices are accepted, each one for a crate that a dependency of ours pulls in and that we cannot
+# replace from here. Revisit them when smithay, zbus and wgpu publish releases that stop depending on these crates.
+ignore = [
+    { id = "RUSTSEC-2026-0196", reason = "cgmath: matrix maths of smithay 0.7 (the Wayland compositor library); no maintained drop-in, nothing of ours uses it" },
+    { id = "RUSTSEC-2024-0436", reason = "paste: proc-macro of metal, which wgpu-hal builds only for its Metal backend (not compiled on Linux)" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: dependency of zbus 5, our D-Bus library; the advisory says it is no longer maintained as a standalone crate" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: dependency of zbus 5, our D-Bus library; the advisory says it is no longer maintained as a standalone crate" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: derive macros of zvariant, same advisory as zvariant" },
+]
 
 [licenses]
 confidence-threshold = 0.93

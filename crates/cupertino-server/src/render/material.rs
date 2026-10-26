@@ -53,7 +53,10 @@ pub struct GpuRecipe {
 impl GpuRecipe {
     pub fn new(recipe: &Recipe) -> Self {
         use std::hash::{Hash, Hasher};
-        let backdrop = recipe.backdrop.as_ref().map(|b| (b.scale, b.sigma_pt, color_ops(&b.ops)));
+        let backdrop = recipe
+            .backdrop
+            .as_ref()
+            .map(|b| (b.scale, b.sigma_pt, color_ops(&b.ops)));
         let mut h = std::collections::hash_map::DefaultHasher::new();
         if let Some((s, sigma, ops)) = &backdrop {
             s.to_bits().hash(&mut h);
@@ -66,7 +69,11 @@ impl GpuRecipe {
         } else {
             0u8.hash(&mut h);
         }
-        Self { key: h.finish(), backdrop, fills: fill_ops(recipe) }
+        Self {
+            key: h.finish(),
+            backdrop,
+            fills: fill_ops(recipe),
+        }
     }
 }
 
@@ -177,7 +184,12 @@ unsafe fn uniform_loc(gl: &ffi::Gles2, p: GLuint, name: &str) -> GLint {
     gl.GetUniformLocation(p, c.as_ptr())
 }
 
-unsafe fn bind_block(gl: &ffi::Gles2, p: GLuint, block: &str, binding: GLuint) -> Result<(), String> {
+unsafe fn bind_block(
+    gl: &ffi::Gles2,
+    p: GLuint,
+    block: &str,
+    binding: GLuint,
+) -> Result<(), String> {
     let c = CString::new(block).unwrap();
     let idx = gl.GetUniformBlockIndex(p, c.as_ptr());
     if idx == ffi::INVALID_INDEX {
@@ -239,7 +251,12 @@ impl SavedState {
     unsafe fn restore(&self, gl: &ffi::Gles2) {
         gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, self.draw_fbo as GLuint);
         gl.BindFramebuffer(ffi::READ_FRAMEBUFFER, self.read_fbo as GLuint);
-        gl.Viewport(self.viewport[0], self.viewport[1], self.viewport[2], self.viewport[3]);
+        gl.Viewport(
+            self.viewport[0],
+            self.viewport[1],
+            self.viewport[2],
+            self.viewport[3],
+        );
         let set = |cap: GLenum, on: bool| if on { gl.Enable(cap) } else { gl.Disable(cap) };
         set(ffi::SCISSOR_TEST, self.scissor);
         set(ffi::BLEND, self.blend);
@@ -327,18 +344,23 @@ impl MaterialGl {
             if p.is_null() {
                 String::new()
             } else {
-                std::ffi::CStr::from_ptr(p as *const _).to_string_lossy().into_owned()
+                std::ffi::CStr::from_ptr(p as *const _)
+                    .to_string_lossy()
+                    .into_owned()
             }
         };
         let es3 = version.contains("OpenGL ES 3") || version.contains("OpenGL ES 4");
         if !es3 {
-            return Err(format!("material pass needs OpenGL ES 3.0, context reports {version:?}"));
+            return Err(format!(
+                "material pass needs OpenGL ES 3.0, context reports {version:?}"
+            ));
         }
         let pass = |frag: &str| link(gl, FULLSCREEN_VERT, frag);
         let downsample = pass(DOWNSAMPLE_FRAG).map_err(|e| format!("downsample: {e}"))?;
         let blur = pass(BLUR_FRAG).map_err(|e| format!("blur: {e}"))?;
         let color = pass(COLOR_FRAG).map_err(|e| format!("color: {e}"))?;
-        let material = link(gl, MATERIAL_VERT, MATERIAL_FRAG).map_err(|e| format!("material: {e}"))?;
+        let material =
+            link(gl, MATERIAL_VERT, MATERIAL_FRAG).map_err(|e| format!("material: {e}"))?;
         for p in [downsample, blur, color] {
             bind_block(gl, p, "PassParams", BIND_PASS)?;
         }
@@ -349,7 +371,14 @@ impl MaterialGl {
             quad: uniform_loc(gl, material, "u_quad"),
             backdrop: uniform_loc(gl, material, "u_backdrop"),
         };
-        self.progs = Some(Programs { downsample, blur, color, material, material_loc, src_loc });
+        self.progs = Some(Programs {
+            downsample,
+            blur,
+            color,
+            material,
+            material_loc,
+            src_loc,
+        });
         let mut bufs = [0; 2];
         gl.GenBuffers(2, bufs.as_mut_ptr());
         self.ubo_pass = bufs[0];
@@ -397,14 +426,39 @@ impl MaterialGl {
         self.progs.is_some() && self.failure.is_none()
     }
 
-    unsafe fn alloc_target(&mut self, gl: &ffi::Gles2, size: (i32, i32), float: bool) -> Option<Target> {
+    unsafe fn alloc_target(
+        &mut self,
+        gl: &ffi::Gles2,
+        size: (i32, i32),
+        float: bool,
+    ) -> Option<Target> {
         let mut tex = 0;
         gl.GenTextures(1, &mut tex);
         gl.BindTexture(ffi::TEXTURE_2D, tex);
         if float {
-            gl.TexImage2D(ffi::TEXTURE_2D, 0, ffi::RGBA16F as GLint, size.0, size.1, 0, ffi::RGBA, ffi::HALF_FLOAT, std::ptr::null());
+            gl.TexImage2D(
+                ffi::TEXTURE_2D,
+                0,
+                ffi::RGBA16F as GLint,
+                size.0,
+                size.1,
+                0,
+                ffi::RGBA,
+                ffi::HALF_FLOAT,
+                std::ptr::null(),
+            );
         } else {
-            gl.TexImage2D(ffi::TEXTURE_2D, 0, ffi::RGBA8 as GLint, size.0, size.1, 0, ffi::RGBA, ffi::UNSIGNED_BYTE, std::ptr::null());
+            gl.TexImage2D(
+                ffi::TEXTURE_2D,
+                0,
+                ffi::RGBA8 as GLint,
+                size.0,
+                size.1,
+                0,
+                ffi::RGBA,
+                ffi::UNSIGNED_BYTE,
+                std::ptr::null(),
+            );
         }
         for (p, v) in [
             (ffi::TEXTURE_MIN_FILTER, ffi::LINEAR),
@@ -417,7 +471,13 @@ impl MaterialGl {
         let mut fbo = 0;
         gl.GenFramebuffers(1, &mut fbo);
         gl.BindFramebuffer(ffi::FRAMEBUFFER, fbo);
-        gl.FramebufferTexture2D(ffi::FRAMEBUFFER, ffi::COLOR_ATTACHMENT0, ffi::TEXTURE_2D, tex, 0);
+        gl.FramebufferTexture2D(
+            ffi::FRAMEBUFFER,
+            ffi::COLOR_ATTACHMENT0,
+            ffi::TEXTURE_2D,
+            tex,
+            0,
+        );
         if gl.CheckFramebufferStatus(ffi::FRAMEBUFFER) != ffi::FRAMEBUFFER_COMPLETE {
             gl.DeleteFramebuffers(1, &fbo);
             gl.DeleteTextures(1, &tex);
@@ -445,12 +505,25 @@ impl MaterialGl {
 
     unsafe fn upload_ubo(gl: &ffi::Gles2, buf: GLuint, binding: GLuint, data: &[u8]) {
         gl.BindBuffer(ffi::UNIFORM_BUFFER, buf);
-        gl.BufferData(ffi::UNIFORM_BUFFER, data.len() as isize, data.as_ptr() as *const _, ffi::DYNAMIC_DRAW);
+        gl.BufferData(
+            ffi::UNIFORM_BUFFER,
+            data.len() as isize,
+            data.as_ptr() as *const _,
+            ffi::DYNAMIC_DRAW,
+        );
         gl.BindBufferBase(ffi::UNIFORM_BUFFER, binding, buf);
     }
 
     /// One full-screen pass: `src` texture → `dst` target using `program` and `params`.
-    unsafe fn pass(&mut self, gl: &ffi::Gles2, program: GLuint, src_loc: GLint, src: GLuint, dst: &Target, params: &PassParams) {
+    unsafe fn pass(
+        &mut self,
+        gl: &ffi::Gles2,
+        program: GLuint,
+        src_loc: GLint,
+        src: GLuint,
+        dst: &Target,
+        params: &PassParams,
+    ) {
         gl.BindFramebuffer(ffi::FRAMEBUFFER, dst.fbo);
         gl.Viewport(0, 0, dst.size.0, dst.size.1);
         gl.UseProgram(program);
@@ -463,7 +536,12 @@ impl MaterialGl {
     }
 
     /// Process the backdrop for `recipe`: capture the bound framebuffer and filter it.
-    unsafe fn process_backdrop(&mut self, gl: &ffi::Gles2, p: &DrawParams<'_>, src_fbo: GLuint) -> Option<Target> {
+    unsafe fn process_backdrop(
+        &mut self,
+        gl: &ffi::Gles2,
+        p: &DrawParams<'_>,
+        src_fbo: GLuint,
+    ) -> Option<Target> {
         let (w, h) = p.output_px;
         let (scale, sigma, ops) = match &p.recipe.backdrop {
             Some((s, sg, ops)) => (*s, *sg, ops.as_slice()),
@@ -473,28 +551,59 @@ impl MaterialGl {
         gl.Disable(ffi::SCISSOR_TEST);
         gl.Disable(ffi::BLEND);
         // capture: the first level is a linear blit (a 2x2 box average at half size)
-        let first = plan.levels.first().map(|l| (l.0 as i32, l.1 as i32)).unwrap_or((w, h));
+        let first = plan
+            .levels
+            .first()
+            .map(|l| (l.0 as i32, l.1 as i32))
+            .unwrap_or((w, h));
         let mut cur = self.take_target(gl, first)?;
         gl.BindFramebuffer(ffi::READ_FRAMEBUFFER, src_fbo);
         gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, cur.fbo);
-        let filter = if plan.levels.is_empty() { ffi::NEAREST } else { ffi::LINEAR };
-        gl.BlitFramebuffer(0, 0, w, h, 0, 0, first.0, first.1, ffi::COLOR_BUFFER_BIT, filter);
+        let filter = if plan.levels.is_empty() {
+            ffi::NEAREST
+        } else {
+            ffi::LINEAR
+        };
+        gl.BlitFramebuffer(
+            0,
+            0,
+            w,
+            h,
+            0,
+            0,
+            first.0,
+            first.1,
+            ffi::COLOR_BUFFER_BIT,
+            filter,
+        );
         self.stats.passes += 1;
         let progs = self.progs.as_ref()?;
-        let (ds, ds_loc, bl, bl_loc, co, co_loc) =
-            (progs.downsample, progs.src_loc[0], progs.blur, progs.src_loc[1], progs.color, progs.src_loc[2]);
+        let (ds, ds_loc, bl, bl_loc, co, co_loc) = (
+            progs.downsample,
+            progs.src_loc[0],
+            progs.blur,
+            progs.src_loc[1],
+            progs.color,
+            progs.src_loc[2],
+        );
         // pyramid
         for lvl in plan.levels.iter().skip(1) {
             let size = (lvl.0 as i32, lvl.1 as i32);
             let next = self.take_target(gl, size)?;
-            let params = PassParams::new((cur.size.0 as u32, cur.size.1 as u32), (size.0 as u32, size.1 as u32));
+            let params = PassParams::new(
+                (cur.size.0 as u32, cur.size.1 as u32),
+                (size.0 as u32, size.1 as u32),
+            );
             self.pass(gl, ds, ds_loc, cur.tex, &next, &params);
             self.free.push(cur);
             cur = next;
         }
         // separable Gaussian
         if plan.weights.len() > 1 {
-            let mut params = PassParams::new((cur.size.0 as u32, cur.size.1 as u32), (cur.size.0 as u32, cur.size.1 as u32));
+            let mut params = PassParams::new(
+                (cur.size.0 as u32, cur.size.1 as u32),
+                (cur.size.0 as u32, cur.size.1 as u32),
+            );
             params.set_weights(&plan.weights);
             let radius = (plan.weights.len() - 1) as i32;
             let tmp = self.take_target(gl, cur.size)?;
@@ -506,7 +615,10 @@ impl MaterialGl {
         }
         // colour operations
         if !ops.is_empty() {
-            let mut params = PassParams::new((cur.size.0 as u32, cur.size.1 as u32), (cur.size.0 as u32, cur.size.1 as u32));
+            let mut params = PassParams::new(
+                (cur.size.0 as u32, cur.size.1 as u32),
+                (cur.size.0 as u32, cur.size.1 as u32),
+            );
             params.set_ops(ops);
             let out = self.take_target(gl, cur.size)?;
             self.pass(gl, co, co_loc, cur.tex, &out, &params);
@@ -522,13 +634,25 @@ impl MaterialGl {
     /// Must be called with the renderer's context current (inside `GlesFrame::with_context`).
     pub unsafe fn draw(&mut self, gl: &ffi::Gles2, p: &DrawParams<'_>) -> Result<(), String> {
         if self.progs.is_none() {
-            return Err(self.failure.clone().unwrap_or_else(|| "material pipeline not initialised".into()));
+            return Err(self
+                .failure
+                .clone()
+                .unwrap_or_else(|| "material pipeline not initialised".into()));
         }
         self.tick += 1;
         let saved = SavedState::capture(gl);
         let src_fbo = saved.draw_fbo as GLuint;
-        let key: BackdropKey = (p.recipe.key, p.output_px.0, p.output_px.1, p.scale.to_bits(), p.stage.owner());
-        let hit = self.cache.iter().position(|c| c.key == key && c.generation == p.generation);
+        let key: BackdropKey = (
+            p.recipe.key,
+            p.output_px.0,
+            p.output_px.1,
+            p.scale.to_bits(),
+            p.stage.owner(),
+        );
+        let hit = self
+            .cache
+            .iter()
+            .position(|c| c.key == key && c.generation == p.generation);
         let idx = match hit {
             Some(i) => {
                 self.stats.backdrop_hits += 1;
@@ -555,11 +679,18 @@ impl MaterialGl {
                 if self.cache.len() >= 8 {
                     // a capture is only redrawn with its scene below, so evicting it would leave its
                     // composite without a backdrop: evict the other backdrops first
-                    let oldest = (0..self.cache.len()).min_by_key(|i| (self.cache[*i].key.4.is_some(), self.cache[*i].last_used)).unwrap();
+                    let oldest = (0..self.cache.len())
+                        .min_by_key(|i| (self.cache[*i].key.4.is_some(), self.cache[*i].last_used))
+                        .unwrap();
                     let old = self.cache.swap_remove(oldest);
                     self.free.push(old.target);
                 }
-                self.cache.push(CachedBackdrop { key, generation: p.generation, target, last_used: self.tick });
+                self.cache.push(CachedBackdrop {
+                    key,
+                    generation: p.generation,
+                    target,
+                    last_used: self.tick,
+                });
                 self.cache.len() - 1
             }
         };
@@ -572,24 +703,54 @@ impl MaterialGl {
 
         let progs = self.progs.as_ref().unwrap();
         let mut region: RegionParams = bytemuck::Zeroable::zeroed();
-        region.rect = [p.rect.loc.x as f32, p.rect.loc.y as f32, p.rect.size.w as f32, p.rect.size.h as f32];
+        region.rect = [
+            p.rect.loc.x as f32,
+            p.rect.loc.y as f32,
+            p.rect.size.w as f32,
+            p.rect.size.h as f32,
+        ];
         region.shape = [p.corner.0, p.corner.1, p.opacity, 1.0];
         region.info = [0.0, 1.0, 0.0, 0.0];
-        region.sizes = [p.output_px.0 as f32, p.output_px.1 as f32, p.output_px.0 as f32, p.output_px.1 as f32];
+        region.sizes = [
+            p.output_px.0 as f32,
+            p.output_px.1 as f32,
+            p.output_px.0 as f32,
+            p.output_px.1 as f32,
+        ];
         region.tint = [p.tint[0], p.tint[1], p.tint[2], 1.0];
         region.set_fills(&p.recipe.fills);
 
         gl.BindFramebuffer(ffi::DRAW_FRAMEBUFFER, saved.draw_fbo as GLuint);
         gl.BindFramebuffer(ffi::READ_FRAMEBUFFER, saved.read_fbo as GLuint);
-        gl.Viewport(saved.viewport[0], saved.viewport[1], saved.viewport[2], saved.viewport[3]);
+        gl.Viewport(
+            saved.viewport[0],
+            saved.viewport[1],
+            saved.viewport[2],
+            saved.viewport[3],
+        );
         if saved.scissor {
             gl.Enable(ffi::SCISSOR_TEST);
         }
         gl.Enable(ffi::BLEND);
-        gl.BlendFuncSeparate(ffi::SRC_ALPHA, ffi::ONE_MINUS_SRC_ALPHA, ffi::ZERO, ffi::ONE);
+        gl.BlendFuncSeparate(
+            ffi::SRC_ALPHA,
+            ffi::ONE_MINUS_SRC_ALPHA,
+            ffi::ZERO,
+            ffi::ONE,
+        );
         gl.UseProgram(progs.material);
-        Self::upload_ubo(gl, self.ubo_region, BIND_REGION, bytemuck::bytes_of(&region));
-        gl.UniformMatrix3fv(progs.material_loc.proj, 1, ffi::FALSE, p.projection.as_ptr());
+        Self::upload_ubo(
+            gl,
+            self.ubo_region,
+            BIND_REGION,
+            bytemuck::bytes_of(&region),
+        );
+        gl.UniformMatrix3fv(
+            progs.material_loc.proj,
+            1,
+            ffi::FALSE,
+            p.projection.as_ptr(),
+        );
         gl.ActiveTexture(ffi::TEXTURE0);
         gl.BindTexture(ffi::TEXTURE_2D, backdrop_tex);
         gl.Uniform1i(progs.material_loc.backdrop, 0);
@@ -598,8 +759,16 @@ impl MaterialGl {
             (p.rect.size.w + 2, p.rect.size.h + 2).into(),
         );
         for d in p.damage {
-            let Some(q) = d.intersection(bounds) else { continue };
-            gl.Uniform4f(progs.material_loc.quad, q.loc.x as f32, q.loc.y as f32, q.size.w as f32, q.size.h as f32);
+            let Some(q) = d.intersection(bounds) else {
+                continue;
+            };
+            gl.Uniform4f(
+                progs.material_loc.quad,
+                q.loc.x as f32,
+                q.loc.y as f32,
+                q.size.w as f32,
+                q.size.h as f32,
+            );
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
             self.stats.composites += 1;
         }
@@ -651,7 +820,10 @@ pub struct MaterialElement {
 
 impl std::fmt::Debug for MaterialElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MaterialElement").field("area", &self.area).field("generation", &self.generation).finish()
+        f.debug_struct("MaterialElement")
+            .field("area", &self.area)
+            .field("generation", &self.generation)
+            .finish()
     }
 }
 
@@ -761,10 +933,20 @@ impl RenderElement<GlesRenderer> for MaterialElement {
         }
         let projection = *frame.projection();
         let (extent, exponent) = {
-            let style = if self.continuous { CornerStyle::continuous() } else { CornerStyle::Circular };
-            ((self.radius_pt * style.expansion() * self.scale) as f32, style.exponent() as f32)
+            let style = if self.continuous {
+                CornerStyle::continuous()
+            } else {
+                CornerStyle::Circular
+            };
+            (
+                (self.radius_pt * style.expansion() * self.scale) as f32,
+                style.exponent() as f32,
+            )
         };
-        let abs: Vec<Rectangle<i32, Physical>> = damage.iter().map(|d| Rectangle::new(d.loc + dst.loc, d.size)).collect();
+        let abs: Vec<Rectangle<i32, Physical>> = damage
+            .iter()
+            .map(|d| Rectangle::new(d.loc + dst.loc, d.size))
+            .collect();
         let params = DrawParams {
             stage: self.stage,
             projection,
@@ -801,7 +983,10 @@ mod tests {
     use cupertino_theme::{Appearance, MaterialOptions, Theme};
 
     fn recipe(a: Appearance, m: &str) -> Recipe {
-        Theme::load().unwrap().recipe(a, m, &MaterialOptions::default()).unwrap()
+        Theme::load()
+            .unwrap()
+            .recipe(a, m, &MaterialOptions::default())
+            .unwrap()
     }
 
     #[test]
@@ -813,7 +998,10 @@ mod tests {
         assert_eq!(ops.len(), 2);
         let dark = GpuRecipe::new(&recipe(Appearance::Dark, "MenuBar"));
         assert_ne!(g.key, dark.key, "light and dark recipes hash differently");
-        assert_eq!(g.key, GpuRecipe::new(&recipe(Appearance::Light, "MenuBar")).key);
+        assert_eq!(
+            g.key,
+            GpuRecipe::new(&recipe(Appearance::Light, "MenuBar")).key
+        );
     }
 
     #[test]
@@ -825,7 +1013,10 @@ mod tests {
     #[test]
     fn shaders_declare_the_expected_blocks() {
         assert!(MATERIAL_VERT.contains("uniform mat3 u_proj") && MATERIAL_VERT.contains("u_quad"));
-        assert!(MATERIAL_FRAG.contains("in vec2 v_uv") && !MATERIAL_FRAG.contains("texelFetch(u_source"));
+        assert!(
+            MATERIAL_FRAG.contains("in vec2 v_uv")
+                && !MATERIAL_FRAG.contains("texelFetch(u_source")
+        );
         for s in [DOWNSAMPLE_FRAG, BLUR_FRAG, COLOR_FRAG] {
             assert!(s.contains("PassParams") && s.contains("u_src"));
         }

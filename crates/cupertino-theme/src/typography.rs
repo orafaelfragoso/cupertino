@@ -51,16 +51,25 @@ pub struct TrackingTable {
 
 impl TrackingTable {
     pub fn builtin() -> Self {
-        Self { units_per_em: 2048.0, tracks: vec![(0.0, BUILTIN_TRACK_0.to_vec())] }
+        Self {
+            units_per_em: 2048.0,
+            tracks: vec![(0.0, BUILTIN_TRACK_0.to_vec())],
+        }
     }
 
-    pub fn from_tracks(units_per_em: f64, tracks: impl IntoIterator<Item = (f64, Vec<(f64, f64)>)>) -> Self {
+    pub fn from_tracks(
+        units_per_em: f64,
+        tracks: impl IntoIterator<Item = (f64, Vec<(f64, f64)>)>,
+    ) -> Self {
         let mut tracks: Vec<_> = tracks.into_iter().collect();
         for (_, row) in tracks.iter_mut() {
             row.sort_by(|a, b| a.0.total_cmp(&b.0));
         }
         tracks.sort_by(|a, b| a.0.total_cmp(&b.0));
-        Self { units_per_em, tracks }
+        Self {
+            units_per_em,
+            tracks,
+        }
     }
 
     pub fn track_values(&self) -> Vec<f64> {
@@ -68,11 +77,16 @@ impl TrackingTable {
     }
 
     pub fn row(&self, track: f64) -> Option<&[(f64, f64)]> {
-        self.tracks.iter().find(|t| t.0 == track).map(|t| t.1.as_slice())
+        self.tracks
+            .iter()
+            .find(|t| t.0 == track)
+            .map(|t| t.1.as_slice())
     }
 
     fn interp_row(row: &[(f64, f64)], size: f64) -> f64 {
-        let (Some(first), Some(last)) = (row.first(), row.last()) else { return 0.0 };
+        let (Some(first), Some(last)) = (row.first(), row.last()) else {
+            return 0.0;
+        };
         if size <= first.0 {
             return first.1;
         }
@@ -87,7 +101,9 @@ impl TrackingTable {
     /// Tracking in font units for `size` points, linearly interpolated between table sizes (clamped
     /// outside the table) and, for fractional `track` values, between tracks.
     pub fn units(&self, size: f64, track: f64) -> f64 {
-        let Some(first) = self.tracks.first() else { return 0.0 };
+        let Some(first) = self.tracks.first() else {
+            return 0.0;
+        };
         let last = self.tracks.last().expect("non-empty");
         if track <= first.0 || self.tracks.len() == 1 {
             return Self::interp_row(&first.1, size);
@@ -119,8 +135,14 @@ pub struct FontMetrics {
 
 impl FontMetrics {
     /// System UI font metrics: UPM 2048, ascender 1980, descender −432.
-    pub const BUILTIN: FontMetrics =
-        FontMetrics { units_per_em: 2048.0, ascender: 1980.0, descender: -432.0, line_gap: 0.0, cap_height: 1443.0, x_height: 1040.0 };
+    pub const BUILTIN: FontMetrics = FontMetrics {
+        units_per_em: 2048.0,
+        ascender: 1980.0,
+        descender: -432.0,
+        line_gap: 0.0,
+        cap_height: 1443.0,
+        x_height: 1040.0,
+    };
 
     /// Default line height in em: `(ascender − descender + line_gap) / units_per_em`.
     pub fn line_height_em(&self) -> f64 {
@@ -150,7 +172,12 @@ pub struct SizePresets {
 
 impl Default for SizePresets {
     fn default() -> Self {
-        Self { regular: 13.0, small: 11.0, mini: 9.0, label: 10.0 }
+        Self {
+            regular: 13.0,
+            small: 11.0,
+            mini: 9.0,
+            label: 10.0,
+        }
     }
 }
 
@@ -196,7 +223,10 @@ impl Typography {
         t.metrics = FontMetrics::from_font(font);
         let tracks = font.tracking.iter().filter_map(|(track, row)| {
             let track: f64 = track.parse().ok()?;
-            let row: Vec<(f64, f64)> = row.iter().filter_map(|(s, v)| Some((s.parse().ok()?, *v))).collect();
+            let row: Vec<(f64, f64)> = row
+                .iter()
+                .filter_map(|(s, v)| Some((s.parse().ok()?, *v)))
+                .collect();
             Some((track, row))
         });
         let table = TrackingTable::from_tracks(font.units_per_em, tracks);
@@ -224,21 +254,35 @@ impl Typography {
     /// Window title: 13 pt semibold. approximate (size, weight needs runtime
     /// verification).
     pub fn window_title(&self) -> TextStyle {
-        TextStyle { size: self.sizes.regular, weight: 600 }
+        TextStyle {
+            size: self.sizes.regular,
+            weight: 600,
+        }
     }
 
     /// Menu bar item: 13 pt regular, the application name bold. approximate.
     pub fn menu_bar_item(&self) -> TextStyle {
-        TextStyle { size: self.sizes.regular, weight: 400 }
+        TextStyle {
+            size: self.sizes.regular,
+            weight: 400,
+        }
     }
 
     pub fn menu_bar_app_name(&self) -> TextStyle {
-        TextStyle { size: self.sizes.regular, weight: 700 }
+        TextStyle {
+            size: self.sizes.regular,
+            weight: 700,
+        }
     }
 
     /// Table of the loaded track-0 row as an ordered map, for inspection.
     pub fn track_zero(&self) -> BTreeMap<u32, f64> {
-        self.tracking.row(0.0).into_iter().flatten().map(|&(s, u)| (s as u32, u)).collect()
+        self.tracking
+            .row(0.0)
+            .into_iter()
+            .flatten()
+            .map(|&(s, u)| (s as u32, u))
+            .collect()
     }
 }
 

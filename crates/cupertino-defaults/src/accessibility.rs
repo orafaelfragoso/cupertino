@@ -52,7 +52,12 @@ pub enum DisplayOption {
 }
 
 impl DisplayOption {
-    pub const ALL: [DisplayOption; 4] = [DisplayOption::ReduceMotion, DisplayOption::ReduceTransparency, DisplayOption::IncreaseContrast, DisplayOption::DifferentiateWithoutColor];
+    pub const ALL: [DisplayOption; 4] = [
+        DisplayOption::ReduceMotion,
+        DisplayOption::ReduceTransparency,
+        DisplayOption::IncreaseContrast,
+        DisplayOption::DifferentiateWithoutColor,
+    ];
 
     /// The settings key of the option.
     pub fn key(self) -> &'static str {
@@ -96,7 +101,9 @@ pub enum ColorFilter {
     /// Blue/yellow, the tritanopia correction.
     Tritanopia,
     /// Colour tint at `hue` (0 to 1 around the colour wheel).
-    Tint { hue: f64 },
+    Tint {
+        hue: f64,
+    },
 }
 
 impl ColorFilter {
@@ -138,7 +145,12 @@ pub struct AccessibilitySettings {
 impl AccessibilitySettings {
     /// The selected filter and the intensity it applies with.
     pub fn filter(&self) -> Option<(ColorFilter, f64)> {
-        self.color_filter.map(|f| (f, self.color_filter_intensity.unwrap_or(f.default_intensity())))
+        self.color_filter.map(|f| {
+            (
+                f,
+                self.color_filter_intensity.unwrap_or(f.default_intensity()),
+            )
+        })
     }
 
     /// The settings in `path` and every line that was not understood as `(line, message)`. A file that does not exist
@@ -163,17 +175,31 @@ impl AccessibilitySettings {
     /// Every key with its value as the file writes it, in the order of the table above.
     pub fn entries(&self) -> Vec<(&'static str, String)> {
         let on = |b: bool| if b { "on" } else { "off" }.to_string();
-        let mut entries: Vec<(&'static str, String)> = DisplayOption::ALL.into_iter().map(|o| (o.key(), on(self.display.get(o)))).collect();
+        let mut entries: Vec<(&'static str, String)> = DisplayOption::ALL
+            .into_iter()
+            .map(|o| (o.key(), on(self.display.get(o))))
+            .collect();
         entries.push(("invert_colors", on(self.invert_colors)));
         entries.push(("display_contrast", self.display_contrast.to_string()));
-        entries.push(("color_filter", self.color_filter.map_or_else(|| "off".to_string(), |f| f.to_string())));
-        entries.push(("color_filter_intensity", self.color_filter_intensity.map_or_else(|| "default".to_string(), |i| i.to_string())));
+        entries.push((
+            "color_filter",
+            self.color_filter
+                .map_or_else(|| "off".to_string(), |f| f.to_string()),
+        ));
+        entries.push((
+            "color_filter_intensity",
+            self.color_filter_intensity
+                .map_or_else(|| "default".to_string(), |i| i.to_string()),
+        ));
         entries
     }
 
     /// Every key with its value, in the order of the table above; [`Self::apply_text`] reads it back unchanged.
     pub fn to_text(&self) -> String {
-        self.entries().into_iter().map(|(k, v)| format!("{k} = {v}\n")).collect()
+        self.entries()
+            .into_iter()
+            .map(|(k, v)| format!("{k} = {v}\n"))
+            .collect()
     }
 
     /// Apply `key = value` lines; returns `(line, message)` for every line that was not understood.
@@ -204,7 +230,9 @@ impl AccessibilitySettings {
         };
         let fraction = |v: &str, min: f64| match v.parse::<f64>() {
             Ok(x) if (min..=1.0).contains(&x) => Ok(x),
-            _ => Err(format!("{key}: expected a number from {min} to 1, got {v:?}")),
+            _ => Err(format!(
+                "{key}: expected a number from {min} to 1, got {v:?}"
+            )),
         };
         if let Some(option) = DisplayOption::ALL.into_iter().find(|o| o.key() == key) {
             self.display.set(option, on(value)?);
@@ -214,7 +242,13 @@ impl AccessibilitySettings {
             "invert_colors" => self.invert_colors = on(value)?,
             "display_contrast" => self.display_contrast = fraction(value, 0.0)?,
             "color_filter" => self.color_filter = parse_filter(value)?,
-            "color_filter_intensity" => self.color_filter_intensity = if value == "default" { None } else { Some(fraction(value, MIN_FILTER_INTENSITY)?) },
+            "color_filter_intensity" => {
+                self.color_filter_intensity = if value == "default" {
+                    None
+                } else {
+                    Some(fraction(value, MIN_FILTER_INTENSITY)?)
+                }
+            }
             other => return Err(format!("unknown setting {other:?}")),
         }
         Ok(())
@@ -259,16 +293,32 @@ mod tests {
         let errors = s.apply_text(
             "reduce_motion = on\nreduce_transparency = yes # opaque menus\n\ncolor_filter = tint 0.6\ncolor_filter_intensity = 0.1\nincrease_contrast = maybe\ncolor_filter = sepia\ndisplay_contrast = 0.25\nbogus = on\n",
         );
-        assert_eq!(errors.iter().map(|(line, _)| *line).collect::<Vec<_>>(), vec![5, 6, 7, 9]);
-        assert!(s.display.reduce_motion && s.display.reduce_transparency && !s.display.increase_contrast);
-        assert_eq!(s.filter(), Some((ColorFilter::Tint { hue: 0.6 }, 0.4)), "a rejected intensity leaves the filter's own");
+        assert_eq!(
+            errors.iter().map(|(line, _)| *line).collect::<Vec<_>>(),
+            vec![5, 6, 7, 9]
+        );
+        assert!(
+            s.display.reduce_motion
+                && s.display.reduce_transparency
+                && !s.display.increase_contrast
+        );
+        assert_eq!(
+            s.filter(),
+            Some((ColorFilter::Tint { hue: 0.6 }, 0.4)),
+            "a rejected intensity leaves the filter's own"
+        );
         assert_eq!(s.display_contrast, 0.25);
     }
 
     #[test]
     fn the_text_reads_back_unchanged() {
         let s = AccessibilitySettings {
-            display: DisplayOptions { reduce_motion: true, reduce_transparency: false, increase_contrast: true, differentiate_without_color: true },
+            display: DisplayOptions {
+                reduce_motion: true,
+                reduce_transparency: false,
+                increase_contrast: true,
+                differentiate_without_color: true,
+            },
             invert_colors: true,
             display_contrast: 0.35,
             color_filter: Some(ColorFilter::Tint { hue: 0.125 }),
@@ -278,13 +328,16 @@ mod tests {
         assert!(back.apply_text(&s.to_text()).is_empty());
         assert_eq!(back, s);
         let mut plain = s;
-        assert!(plain.apply_text(&AccessibilitySettings::default().to_text()).is_empty());
+        assert!(plain
+            .apply_text(&AccessibilitySettings::default().to_text())
+            .is_empty());
         assert_eq!(plain, AccessibilitySettings::default());
     }
 
     #[test]
     fn store_writes_a_file_that_load_reads() {
-        let dir = std::env::temp_dir().join(format!("cupertino-accessibility-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("cupertino-accessibility-{}", std::process::id()));
         let path = dir.join("nested").join(ACCESSIBILITY_FILE);
         let mut s = AccessibilitySettings::default();
         s.display.set(DisplayOption::ReduceTransparency, true);
@@ -294,7 +347,11 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(errors.is_empty());
         assert_eq!(back, s);
-        assert_eq!(AccessibilitySettings::load(&path).unwrap().0, AccessibilitySettings::default(), "a missing file is the defaults");
+        assert_eq!(
+            AccessibilitySettings::load(&path).unwrap().0,
+            AccessibilitySettings::default(),
+            "a missing file is the defaults"
+        );
     }
 
     #[test]
@@ -307,6 +364,9 @@ mod tests {
         let entries = s.entries();
         assert_eq!(entries[0], ("reduce_motion", "on".to_string()));
         assert!(entries.contains(&("color_filter", "tint 0.5".to_string())));
-        assert!(entries.contains(&("display_contrast", "0".to_string())), "the refused value changed nothing");
+        assert!(
+            entries.contains(&("display_contrast", "0".to_string())),
+            "the refused value changed nothing"
+        );
     }
 }

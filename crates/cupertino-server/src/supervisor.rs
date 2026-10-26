@@ -12,7 +12,10 @@ use crate::restart_policy::{decide, Decision, RESTART_THROTTLE};
 enum Phase {
     /// Not running; start at this time.
     Waiting(Instant),
-    Running { child: Child, started: Instant },
+    Running {
+        child: Child,
+        started: Instant,
+    },
     /// Exited successfully: never restarted.
     Stopped,
 }
@@ -30,7 +33,15 @@ pub struct Supervisor {
 impl Supervisor {
     /// Processes start at the first [`Supervisor::poll`] at or after `now`.
     pub fn new(specs: &[ShellProcess], now: Instant) -> Self {
-        Self { procs: specs.iter().map(|spec| Supervised { spec: spec.clone(), phase: Phase::Waiting(now) }).collect() }
+        Self {
+            procs: specs
+                .iter()
+                .map(|spec| Supervised {
+                    spec: spec.clone(),
+                    phase: Phase::Waiting(now),
+                })
+                .collect(),
+        }
     }
 
     /// Start due processes and restart exited ones as the policy says. Children get `WAYLAND_DISPLAY=socket`.
@@ -38,7 +49,10 @@ impl Supervisor {
         for p in &mut self.procs {
             p.phase = match std::mem::replace(&mut p.phase, Phase::Stopped) {
                 Phase::Waiting(at) if at <= now => start(&p.spec, socket, now),
-                Phase::Running { mut child, started } => match child.try_wait().expect("waiting on a child the supervisor started") {
+                Phase::Running { mut child, started } => match child
+                    .try_wait()
+                    .expect("waiting on a child the supervisor started")
+                {
                     None => Phase::Running { child, started },
                     Some(status) => {
                         tracing::info!(name = p.spec.name, %status, "shell process exited");
@@ -56,20 +70,34 @@ impl Supervisor {
 
     /// The pid of the running process named `name`; `None` while it is not running.
     pub fn pid_of(&self, name: &str) -> Option<u32> {
-        self.procs.iter().find(|p| p.spec.name == name).and_then(|p| match &p.phase {
-            Phase::Running { child, .. } => Some(child.id()),
-            Phase::Waiting(_) | Phase::Stopped => None,
-        })
+        self.procs
+            .iter()
+            .find(|p| p.spec.name == name)
+            .and_then(|p| match &p.phase {
+                Phase::Running { child, .. } => Some(child.id()),
+                Phase::Waiting(_) | Phase::Stopped => None,
+            })
     }
 }
 
 /// Spawn the process; a failed spawn counts as an exit with failure, so it is retried after the throttle.
 fn start(spec: &ShellProcess, socket: &str, now: Instant) -> Phase {
-    let (program, args) = spec.command.split_first().expect("shell process commands are validated non-empty at load");
-    match Command::new(program).args(args).env("WAYLAND_DISPLAY", socket).env("XDG_CURRENT_DESKTOP", crate::state::CURRENT_DESKTOP).spawn() {
+    let (program, args) = spec
+        .command
+        .split_first()
+        .expect("shell process commands are validated non-empty at load");
+    match Command::new(program)
+        .args(args)
+        .env("WAYLAND_DISPLAY", socket)
+        .env("XDG_CURRENT_DESKTOP", crate::state::CURRENT_DESKTOP)
+        .spawn()
+    {
         Ok(child) => {
             tracing::info!(name = spec.name, pid = child.id(), "shell process started");
-            Phase::Running { child, started: now }
+            Phase::Running {
+                child,
+                started: now,
+            }
         }
         Err(e) => {
             tracing::warn!(name = spec.name, program, error = %e, "starting shell process failed");
@@ -98,7 +126,10 @@ mod tests {
     use super::*;
 
     fn spec(script: &str) -> ShellProcess {
-        ShellProcess { name: "test".into(), command: vec!["sh".into(), "-c".into(), script.into()] }
+        ShellProcess {
+            name: "test".into(),
+            command: vec!["sh".into(), "-c".into(), script.into()],
+        }
     }
 
     /// Poll every 20 ms until `done` holds or ten seconds pass.
@@ -123,20 +154,29 @@ mod tests {
         let script = format!("echo \"$WAYLAND_DISPLAY\" >> {}; exit 1", log.display());
         let mut s = Supervisor::new(&[spec(&script)], Instant::now());
         let begin = Instant::now();
-        poll_until(&mut s, |_| std::fs::read_to_string(&log).is_ok_and(|t| t.lines().count() >= 3));
+        poll_until(&mut s, |_| {
+            std::fs::read_to_string(&log).is_ok_and(|t| t.lines().count() >= 3)
+        });
         // three starts need two throttle intervals
         assert!(begin.elapsed() >= 2 * RESTART_THROTTLE);
-        assert_eq!(std::fs::read_to_string(&log).unwrap().lines().next(), Some("wayland-test"));
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap().lines().next(),
+            Some("wayland-test")
+        );
         drop(s);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn successful_process_is_started_once() {
-        let dir = std::env::temp_dir().join(format!("cupertino-supervisor-ok-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("cupertino-supervisor-ok-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let log = dir.join("starts");
-        let mut s = Supervisor::new(&[spec(&format!("echo start >> {}", log.display()))], Instant::now());
+        let mut s = Supervisor::new(
+            &[spec(&format!("echo start >> {}", log.display()))],
+            Instant::now(),
+        );
         poll_until(&mut s, |s| matches!(s.procs[0].phase, Phase::Stopped));
         // well past the throttle: a restart would have happened by now
         let end = Instant::now() + RESTART_THROTTLE * 2;

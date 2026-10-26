@@ -58,7 +58,11 @@ impl Fade {
     /// Head for `to` from wherever the fade is at `now`.
     fn retarget(&mut self, now: f64, to: f64) {
         if self.to != to {
-            *self = Fade { from: self.value(now), to, start: now };
+            *self = Fade {
+                from: self.value(now),
+                to,
+                start: now,
+            };
         }
     }
 }
@@ -106,7 +110,10 @@ pub struct NoAttempt;
 
 impl std::fmt::Display for NoAttempt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "an authentication result arrived with no attempt in flight")
+        write!(
+            f,
+            "an authentication result arrived with no attempt in flight"
+        )
     }
 }
 
@@ -136,7 +143,18 @@ pub struct LockScreen {
 impl LockScreen {
     /// A locked screen whose interface fades in from `now` and hides after `hide_after` seconds without input.
     pub fn new(now: f64, hide_after: f64) -> Self {
-        LockScreen { phase: Phase::Locked, password: empty_password(), notice: None, interface: Fade { from: 0.0, to: 1.0, start: now }, last_input: now, hide_after }
+        LockScreen {
+            phase: Phase::Locked,
+            password: empty_password(),
+            notice: None,
+            interface: Fade {
+                from: 0.0,
+                to: 1.0,
+                start: now,
+            },
+            last_input: now,
+            hide_after,
+        }
     }
 
     pub fn phase(&self) -> Phase {
@@ -162,7 +180,9 @@ impl LockScreen {
     /// frame 0; `None` before that and when no attempt is pending.
     pub fn spinner(&self, now: f64) -> Option<u32> {
         match self.phase {
-            Phase::Authenticating { since } if now - since >= spinner::SHOW_AFTER => Some(spinner::frame_at(now - since - spinner::SHOW_AFTER)),
+            Phase::Authenticating { since } if now - since >= spinner::SHOW_AFTER => {
+                Some(spinner::frame_at(now - since - spinner::SHOW_AFTER))
+            }
             _ => None,
         }
     }
@@ -195,7 +215,10 @@ impl LockScreen {
     pub fn press(&mut self, now: f64, key: Key) -> Option<Password> {
         let was_hidden = self.hidden();
         self.activity(now);
-        let typing = matches!(self.phase, Phase::Locked | Phase::Authenticating { .. } | Phase::Failed { .. });
+        let typing = matches!(
+            self.phase,
+            Phase::Locked | Phase::Authenticating { .. } | Phase::Failed { .. }
+        );
         if was_hidden || !typing {
             return None;
         }
@@ -214,7 +237,9 @@ impl LockScreen {
                 self.password = empty_password();
                 self.notice = None;
             }
-            Key::Return if self.password.is_empty() || matches!(self.phase, Phase::Authenticating { .. }) => {}
+            Key::Return
+                if self.password.is_empty()
+                    || matches!(self.phase, Phase::Authenticating { .. }) => {}
             Key::Return => {
                 self.phase = Phase::Authenticating { since: now };
                 self.notice = None;
@@ -268,7 +293,9 @@ impl LockScreen {
         match self.phase {
             Phase::Failed { since } if now - since >= SHAKE_DURATION => self.phase = Phase::Locked,
             Phase::Unlocking if self.interface.settled(now) => self.phase = Phase::Unlocked,
-            Phase::Locked if now - self.last_input >= self.hide_after => self.interface.retarget(now, 0.0),
+            Phase::Locked if now - self.last_input >= self.hide_after => {
+                self.interface.retarget(now, 0.0)
+            }
             _ => {}
         }
     }
@@ -277,18 +304,27 @@ impl LockScreen {
     /// spinner appearing or turning to its next frame. The caller draws a frame per refresh in between (the opacity and
     /// the shake change with time) and ticks at this deadline.
     pub fn next_wakeup(&self, now: f64) -> Option<f64> {
-        let fade_end = self.interface.start + (self.interface.to - self.interface.from).abs() * FADE_DURATION;
+        let fade_end =
+            self.interface.start + (self.interface.to - self.interface.from).abs() * FADE_DURATION;
         let deadlines = [
             (!self.interface.settled(now)).then_some(fade_end),
             match self.phase {
                 Phase::Failed { since } => Some(since + SHAKE_DURATION),
                 Phase::Locked if !self.hidden() => Some(self.last_input + self.hide_after),
-                Phase::Authenticating { since } if now - since < spinner::SHOW_AFTER => Some(since + spinner::SHOW_AFTER),
-                Phase::Authenticating { since } => Some(now + spinner::next_frame_in(now - since - spinner::SHOW_AFTER)),
+                Phase::Authenticating { since } if now - since < spinner::SHOW_AFTER => {
+                    Some(since + spinner::SHOW_AFTER)
+                }
+                Phase::Authenticating { since } => {
+                    Some(now + spinner::next_frame_in(now - since - spinner::SHOW_AFTER))
+                }
                 _ => None,
             },
         ];
-        deadlines.into_iter().flatten().reduce(f64::min).map(|at| (at - now).max(0.0))
+        deadlines
+            .into_iter()
+            .flatten()
+            .reduce(f64::min)
+            .map(|at| (at - now).max(0.0))
     }
 }
 
@@ -369,7 +405,9 @@ mod tests {
     fn return_hands_over_the_password_and_empties_the_field() {
         let mut screen = LockScreen::new(0.0, HIDE_AFTER);
         type_str(&mut screen, 1.0, "hunter2");
-        let password = screen.press(1.0, Key::Return).expect("the password is submitted");
+        let password = screen
+            .press(1.0, Key::Return)
+            .expect("the password is submitted");
         assert_eq!(password.as_str(), "hunter2");
         assert_eq!(screen.phase(), Phase::Authenticating { since: 1.0 });
         assert_eq!(screen.password_len(), 0);
@@ -397,7 +435,13 @@ mod tests {
         approx(screen.shake(2.5), 0.0);
         type_str(&mut screen, 2.5, "ght");
         assert_eq!(screen.password_len(), 5);
-        assert_eq!(screen.press(2.6, Key::Return).as_deref().map(String::as_str), Some("right"));
+        assert_eq!(
+            screen
+                .press(2.6, Key::Return)
+                .as_deref()
+                .map(String::as_str),
+            Some("right")
+        );
     }
 
     #[test]
@@ -405,7 +449,12 @@ mod tests {
         let mut screen = LockScreen::new(0.0, HIDE_AFTER);
         type_str(&mut screen, 1.0, "pw");
         screen.press(1.0, Key::Return);
-        screen.finish_auth(1.5, AuthOutcome::Error("authentication service unavailable".into())).unwrap();
+        screen
+            .finish_auth(
+                1.5,
+                AuthOutcome::Error("authentication service unavailable".into()),
+            )
+            .unwrap();
         assert_eq!(screen.phase(), Phase::Locked);
         assert_eq!(screen.notice(), Some("authentication service unavailable"));
         assert_eq!(screen.password_len(), 0);
@@ -445,7 +494,10 @@ mod tests {
         let mut screen = LockScreen::new(0.0, HIDE_AFTER);
         type_str(&mut screen, 1.0, "pw");
         screen.unlock_by_switch(2.0);
-        assert_eq!((screen.phase(), screen.password_len()), (Phase::Unlocking, 0));
+        assert_eq!(
+            (screen.phase(), screen.password_len()),
+            (Phase::Unlocking, 0)
+        );
         screen.tick(2.25);
         assert_eq!(screen.phase(), Phase::Unlocked);
         // also with an attempt on its way to the authenticator
@@ -459,7 +511,10 @@ mod tests {
     #[test]
     fn a_result_without_an_attempt_is_refused() {
         let mut screen = LockScreen::new(0.0, HIDE_AFTER);
-        assert_eq!(screen.finish_auth(1.0, AuthOutcome::Success), Err(NoAttempt));
+        assert_eq!(
+            screen.finish_auth(1.0, AuthOutcome::Success),
+            Err(NoAttempt)
+        );
         assert_eq!(screen.phase(), Phase::Locked);
     }
 
@@ -477,10 +532,27 @@ mod tests {
             Denied,
             Error,
         }
-        let steps = [Step::Type, Step::Backspace, Step::Escape, Step::Return, Step::Activity, Step::Tick(0.5), Step::Tick(40.0), Step::Denied, Step::Error];
+        let steps = [
+            Step::Type,
+            Step::Backspace,
+            Step::Escape,
+            Step::Return,
+            Step::Activity,
+            Step::Tick(0.5),
+            Step::Tick(40.0),
+            Step::Denied,
+            Step::Error,
+        ];
         let mut sequences: Vec<Vec<Step>> = vec![Vec::new()];
         for _ in 0..5 {
-            sequences = sequences.into_iter().flat_map(|s| steps.iter().map(move |&step| s.iter().copied().chain([step]).collect())).collect();
+            sequences = sequences
+                .into_iter()
+                .flat_map(|s| {
+                    steps
+                        .iter()
+                        .map(move |&step| s.iter().copied().chain([step]).collect())
+                })
+                .collect();
             for sequence in &sequences {
                 let mut screen = LockScreen::new(0.0, HIDE_AFTER);
                 let mut now = 0.0;
@@ -497,9 +569,14 @@ mod tests {
                             screen.tick(now);
                         }
                         Step::Denied => drop(screen.finish_auth(now, AuthOutcome::Denied)),
-                        Step::Error => drop(screen.finish_auth(now, AuthOutcome::Error("x".into()))),
+                        Step::Error => {
+                            let _ = screen.finish_auth(now, AuthOutcome::Error("x".into()));
+                        }
                     }
-                    assert!(!matches!(screen.phase(), Phase::Unlocking | Phase::Unlocked), "{sequence:?}");
+                    assert!(
+                        !matches!(screen.phase(), Phase::Unlocking | Phase::Unlocked),
+                        "{sequence:?}"
+                    );
                 }
             }
         }
@@ -512,8 +589,13 @@ mod tests {
         assert!(screen.press(1.0, Key::Return).is_some());
         screen.notify("The account is locked due to 3 failed logins.".to_owned());
         screen.notify("(10 minutes left to unlock)".to_owned());
-        assert_eq!(screen.notice(), Some("The account is locked due to 3 failed logins. (10 minutes left to unlock)"));
-        screen.finish_auth(2.0, AuthOutcome::Error("locked".to_owned())).unwrap();
+        assert_eq!(
+            screen.notice(),
+            Some("The account is locked due to 3 failed logins. (10 minutes left to unlock)")
+        );
+        screen
+            .finish_auth(2.0, AuthOutcome::Error("locked".to_owned()))
+            .unwrap();
         // a message outside an attempt replaces what is shown
         screen.notify("Enter an administrator's password.".to_owned());
         assert_eq!(screen.notice(), Some("Enter an administrator's password."));
@@ -571,7 +653,15 @@ mod tests {
         screen.press(2.0, Key::Return);
         assert_eq!((screen.spinner(2.0), screen.spinner(2.999)), (None, None));
         approx(screen.next_wakeup(2.5).unwrap(), 0.5);
-        assert_eq!((screen.spinner(3.0), screen.spinner(3.0 + 1.0 / 24.0), screen.spinner(3.5), screen.spinner(4.0)), (Some(0), Some(1), Some(12), Some(0)));
+        assert_eq!(
+            (
+                screen.spinner(3.0),
+                screen.spinner(3.0 + 1.0 / 24.0),
+                screen.spinner(3.5),
+                screen.spinner(4.0)
+            ),
+            (Some(0), Some(1), Some(12), Some(0))
+        );
         screen.finish_auth(4.2, AuthOutcome::Denied).unwrap();
         assert_eq!(screen.spinner(4.2), None);
     }

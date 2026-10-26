@@ -4,7 +4,9 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use cupertino_bluetooth::{Address, Command, ControlSocket, ControllerIndex, DeviceId, Drained, Error, Link, Result};
+use cupertino_bluetooth::{
+    Address, Command, ControlSocket, ControllerIndex, DeviceId, Drained, Error, Link, Result,
+};
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use rustix::io::Errno;
 
@@ -34,7 +36,10 @@ pub struct KernelTransport {
 
 impl KernelTransport {
     pub fn open() -> Result<Self> {
-        Ok(Self { socket: ControlSocket::open()?, links: Mutex::new(HashMap::new()) })
+        Ok(Self {
+            socket: ControlSocket::open()?,
+            links: Mutex::new(HashMap::new()),
+        })
     }
 }
 
@@ -44,13 +49,21 @@ impl Transport for KernelTransport {
     }
 
     fn receive(&self, timeout: Option<Duration>) -> Result<Drained> {
-        let timeout = timeout.map(|timeout| Timespec { tv_sec: timeout.as_secs() as i64, tv_nsec: i64::from(timeout.subsec_nanos()) });
+        let timeout = timeout.map(|timeout| Timespec {
+            tv_sec: timeout.as_secs() as i64,
+            tv_nsec: i64::from(timeout.subsec_nanos()),
+        });
         loop {
             let mut fds = [PollFd::new(&self.socket, PollFlags::IN)];
             match poll(&mut fds, timeout.as_ref()) {
                 Ok(_) => break,
                 Err(Errno::INTR) => continue,
-                Err(source) => return Err(Error::Syscall { call: "poll", source }),
+                Err(source) => {
+                    return Err(Error::Syscall {
+                        call: "poll",
+                        source,
+                    })
+                }
             }
         }
         self.socket.drain()
@@ -58,11 +71,17 @@ impl Transport for KernelTransport {
 
     fn open_link(&self, adapter: Address, device: DeviceId) -> Result<()> {
         let link = Link::open(adapter, device)?;
-        self.links.lock().expect("no thread panics while holding the links").insert((adapter, device), link);
+        self.links
+            .lock()
+            .expect("no thread panics while holding the links")
+            .insert((adapter, device), link);
         Ok(())
     }
 
     fn close_link(&self, adapter: Address, device: DeviceId) {
-        self.links.lock().expect("no thread panics while holding the links").remove(&(adapter, device));
+        self.links
+            .lock()
+            .expect("no thread panics while holding the links")
+            .remove(&(adapter, device));
     }
 }

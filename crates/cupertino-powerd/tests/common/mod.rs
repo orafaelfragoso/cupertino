@@ -34,7 +34,10 @@ pub const DISCHARGING_BAT0: [(&str, &str); 11] = [
 pub const BACKLIGHT: [(&str, &str); 3] = [
     ("class/backlight/nvidia_wmi_ec_backlight/type", "firmware\n"),
     ("class/backlight/nvidia_wmi_ec_backlight/brightness", "40\n"),
-    ("class/backlight/nvidia_wmi_ec_backlight/max_brightness", "100\n"),
+    (
+        "class/backlight/nvidia_wmi_ec_backlight/max_brightness",
+        "100\n",
+    ),
 ];
 
 /// A keyboard backlight at 1 of 2, and a lock-key LED that is not one.

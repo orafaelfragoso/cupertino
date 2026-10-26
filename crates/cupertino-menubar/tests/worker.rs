@@ -15,20 +15,38 @@ struct PrivateBus {
 
 impl PrivateBus {
     fn start() -> Option<PrivateBus> {
-        let out = Command::new("dbus-daemon").args(["--session", "--print-address=1", "--print-pid=1", "--fork"]).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
-        let text = String::from_utf8(out.stdout).ok().filter(|_| out.status.success())?;
+        let out = Command::new("dbus-daemon")
+            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        let text = String::from_utf8(out.stdout)
+            .ok()
+            .filter(|_| out.status.success())?;
         let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-        Some(PrivateBus { address: lines.next()?.to_string(), pid: lines.next()?.to_string() })
+        Some(PrivateBus {
+            address: lines.next()?.to_string(),
+            pid: lines.next()?.to_string(),
+        })
     }
 
     fn connect(&self) -> Connection {
-        block_on(connection::Builder::address(self.address.as_str()).expect("address").build()).expect("connect")
+        block_on(
+            connection::Builder::address(self.address.as_str())
+                .expect("address")
+                .build(),
+        )
+        .expect("connect")
     }
 }
 
 impl Drop for PrivateBus {
     fn drop(&mut self) {
-        Command::new("kill").arg(&self.pid).status().expect("kill the private bus");
+        Command::new("kill")
+            .arg(&self.pid)
+            .status()
+            .expect("kill the private bus");
     }
 }
 
@@ -54,13 +72,24 @@ fn the_worker_owns_the_watcher_and_relays_the_centre_toggle() {
     let (toggled_tx, toggled_rx) = mpsc::channel();
     let centre = bus.connect();
     block_on(async {
-        centre.object_server().at("/org/cupertino/NotificationCenter1", FakeCentre(toggled_tx)).await.unwrap();
-        centre.request_name("org.cupertino.NotificationCenter1").await.unwrap();
+        centre
+            .object_server()
+            .at("/org/cupertino/NotificationCenter1", FakeCentre(toggled_tx))
+            .await
+            .unwrap();
+        centre
+            .request_name("org.cupertino.NotificationCenter1")
+            .await
+            .unwrap();
     });
     worker.send(Request::ToggleCentre).unwrap();
     toggled_rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     // a second process cannot take the watcher's name
     let second = Worker::start(bus.connect(), || {});
-    assert!(matches!(second, Err(StartError::Watcher(zbus::Error::NameTaken))), "{:?}", second.err());
+    assert!(
+        matches!(second, Err(StartError::Watcher(zbus::Error::NameTaken))),
+        "{:?}",
+        second.err()
+    );
 }

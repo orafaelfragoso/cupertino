@@ -6,15 +6,29 @@ use std::sync::Mutex;
 
 use cupertino_wm::Command;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::reexports::wayland_server::{Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New};
+use smithay::reexports::wayland_server::{
+    Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New,
+};
 use wayland_protocols_plasma::appmenu::server::org_kde_kwin_appmenu::{self, OrgKdeKwinAppmenu};
-use wayland_protocols_plasma::appmenu::server::org_kde_kwin_appmenu_manager::{self, OrgKdeKwinAppmenuManager};
+use wayland_protocols_plasma::appmenu::server::org_kde_kwin_appmenu_manager::{
+    self, OrgKdeKwinAppmenuManager,
+};
 
 use crate::menu_bar::{GtkMenuProps, MenuAddress};
 use crate::state::Cupertino;
 
 pub mod gtk_shell {
-    #![allow(dead_code, non_camel_case_types, unused_unsafe, unused_variables, non_upper_case_globals, non_snake_case, unused_imports, missing_docs, clippy::all)]
+    #![allow(
+        dead_code,
+        non_camel_case_types,
+        unused_unsafe,
+        unused_variables,
+        non_upper_case_globals,
+        non_snake_case,
+        unused_imports,
+        missing_docs,
+        clippy::all
+    )]
     use wayland_server;
     use wayland_server::protocol::*;
 
@@ -52,24 +66,62 @@ impl MenuProtocols {
 }
 
 impl GlobalDispatch<OrgKdeKwinAppmenuManager, ()> for Cupertino {
-    fn bind(_: &mut Self, _: &DisplayHandle, _: &Client, resource: New<OrgKdeKwinAppmenuManager>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &Client,
+        resource: New<OrgKdeKwinAppmenuManager>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         init.init(resource, ());
     }
 }
 
 impl Dispatch<OrgKdeKwinAppmenuManager, ()> for Cupertino {
-    fn request(_: &mut Self, _: &Client, _: &OrgKdeKwinAppmenuManager, request: org_kde_kwin_appmenu_manager::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        _: &mut Self,
+        _: &Client,
+        _: &OrgKdeKwinAppmenuManager,
+        request: org_kde_kwin_appmenu_manager::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         if let org_kde_kwin_appmenu_manager::Request::Create { id, surface } = request {
-            init.init(id, SurfaceData { surface, gtk: Mutex::new(GtkMenuProps::default()) });
+            init.init(
+                id,
+                SurfaceData {
+                    surface,
+                    gtk: Mutex::new(GtkMenuProps::default()),
+                },
+            );
         }
     }
 }
 
 impl Dispatch<OrgKdeKwinAppmenu, SurfaceData> for Cupertino {
-    fn request(state: &mut Self, _: &Client, _: &OrgKdeKwinAppmenu, request: org_kde_kwin_appmenu::Request, data: &SurfaceData, _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        _: &OrgKdeKwinAppmenu,
+        request: org_kde_kwin_appmenu::Request,
+        data: &SurfaceData,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         match request {
-            org_kde_kwin_appmenu::Request::SetAddress { service_name, object_path } => {
-                state.set_menu_address(&data.surface, Some(MenuAddress::DbusMenu { service: service_name, path: object_path }));
+            org_kde_kwin_appmenu::Request::SetAddress {
+                service_name,
+                object_path,
+            } => {
+                state.set_menu_address(
+                    &data.surface,
+                    Some(MenuAddress::DbusMenu {
+                        service: service_name,
+                        path: object_path,
+                    }),
+                );
             }
             org_kde_kwin_appmenu::Request::Release => state.set_menu_address(&data.surface, None),
             _ => {}
@@ -78,23 +130,63 @@ impl Dispatch<OrgKdeKwinAppmenu, SurfaceData> for Cupertino {
 }
 
 impl GlobalDispatch<GtkShell1, ()> for Cupertino {
-    fn bind(_: &mut Self, _: &DisplayHandle, _: &Client, resource: New<GtkShell1>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &Client,
+        resource: New<GtkShell1>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         init.init(resource, ());
     }
 }
 
 impl Dispatch<GtkShell1, ()> for Cupertino {
-    fn request(_: &mut Self, _: &Client, _: &GtkShell1, request: gtk_shell1::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
-        if let gtk_shell1::Request::GetGtkSurface { gtk_surface, surface } = request {
-            init.init(gtk_surface, SurfaceData { surface, gtk: Mutex::new(GtkMenuProps::default()) });
+    fn request(
+        _: &mut Self,
+        _: &Client,
+        _: &GtkShell1,
+        request: gtk_shell1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        if let gtk_shell1::Request::GetGtkSurface {
+            gtk_surface,
+            surface,
+        } = request
+        {
+            init.init(
+                gtk_surface,
+                SurfaceData {
+                    surface,
+                    gtk: Mutex::new(GtkMenuProps::default()),
+                },
+            );
         }
     }
 }
 
 impl Dispatch<GtkSurface1, SurfaceData> for Cupertino {
-    fn request(state: &mut Self, _: &Client, _: &GtkSurface1, request: gtk_surface1::Request, data: &SurfaceData, _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        _: &GtkSurface1,
+        request: gtk_surface1::Request,
+        data: &SurfaceData,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         match request {
-            gtk_surface1::Request::SetDbusProperties { application_id, app_menu_path, menubar_path, window_object_path, application_object_path, unique_bus_name } => {
+            gtk_surface1::Request::SetDbusProperties {
+                application_id,
+                app_menu_path,
+                menubar_path,
+                window_object_path,
+                application_object_path,
+                unique_bus_name,
+            } => {
                 let props = GtkMenuProps {
                     bus_name: unique_bus_name.unwrap_or_default(),
                     application_id,
@@ -104,7 +196,8 @@ impl Dispatch<GtkSurface1, SurfaceData> for Cupertino {
                     app_menu_object_path: app_menu_path,
                 };
                 *data.gtk.lock().expect("gtk props") = props.clone();
-                let address = (props.has_menu_bar() && !props.bus_name.is_empty()).then_some(MenuAddress::Gtk(props));
+                let address = (props.has_menu_bar() && !props.bus_name.is_empty())
+                    .then_some(MenuAddress::Gtk(props));
                 state.set_menu_address(&data.surface, address);
             }
             gtk_surface1::Request::Present { .. } | gtk_surface1::Request::RequestFocus { .. } => {
@@ -121,7 +214,9 @@ impl Dispatch<GtkSurface1, SurfaceData> for Cupertino {
 impl Cupertino {
     /// A client announced (or withdrew) the menu export of `surface`.
     pub fn set_menu_address(&mut self, surface: &WlSurface, address: Option<MenuAddress>) {
-        let root = self.root_window_surface(surface).unwrap_or_else(|| surface.clone());
+        let root = self
+            .root_window_surface(surface)
+            .unwrap_or_else(|| surface.clone());
         match self.entry_for_surface(&root).map(|e| e.id.0) {
             Some(key) => self.menu_bars.set_address(key, address),
             None => self.menu_bars.set_pending(surface, address),

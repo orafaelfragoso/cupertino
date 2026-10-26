@@ -4,18 +4,28 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
-use cupertino_bluetooth::{Address, AddressType, DeviceId, KeyValue, LinkKey, LinkKeyType, LongTermKey, LongTermKeyType};
+use cupertino_bluetooth::{
+    Address, AddressType, DeviceId, KeyValue, LinkKey, LinkKeyType, LongTermKey, LongTermKeyType,
+};
 use cupertino_btd::keys::{KeyFileError, KeyFileErrorKind, KeySet, KeyStore, KeyStoreError};
 
 const ADAPTER: Address = Address::from_wire([0x01, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA]);
 
 fn id(last: u8, kind: AddressType) -> DeviceId {
-    DeviceId { address: Address::from_wire([last, 0x55, 0x44, 0x33, 0x22, 0x11]), kind }
+    DeviceId {
+        address: Address::from_wire([last, 0x55, 0x44, 0x33, 0x22, 0x11]),
+        kind,
+    }
 }
 
 fn sample() -> KeySet {
     let mut keys = KeySet::default();
-    keys.set_link_key(LinkKey { device: id(1, AddressType::BrEdr), key_type: LinkKeyType::AuthenticatedP256, value: KeyValue(*b"0123456789abcdef"), pin_length: 4 });
+    keys.set_link_key(LinkKey {
+        device: id(1, AddressType::BrEdr),
+        key_type: LinkKeyType::AuthenticatedP256,
+        value: KeyValue(*b"0123456789abcdef"),
+        pin_length: 4,
+    });
     assert!(keys.set_name(&id(1, AddressType::BrEdr), "Café Headset"));
     for (central, size) in [(true, 16), (false, 7)] {
         keys.set_long_term_key(LongTermKey {
@@ -55,23 +65,42 @@ fn saved_keys_load_back_unchanged_with_owner_only_permissions() {
 
     assert_eq!(store.load(ADAPTER).unwrap(), sample());
     let file = dir.path().join("bluetooth/AA-BB-CC-DD-EE-01.keys");
-    assert_eq!(fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
-    assert_eq!(fs::metadata(dir.path().join("bluetooth")).unwrap().permissions().mode() & 0o777, 0o700);
+    assert_eq!(
+        fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        fs::metadata(dir.path().join("bluetooth"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
     // The temporary file does not stay behind.
-    assert_eq!(fs::read_dir(dir.path().join("bluetooth")).unwrap().count(), 1);
+    assert_eq!(
+        fs::read_dir(dir.path().join("bluetooth")).unwrap().count(),
+        1
+    );
 
     // Saving again replaces the file and keeps the mode.
     let mut fewer = sample();
     assert!(fewer.remove(&id(2, AddressType::LeRandom)));
     store.save(ADAPTER, &fewer).unwrap();
     assert_eq!(store.load(ADAPTER).unwrap(), fewer);
-    assert_eq!(fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(
+        fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
 }
 
 #[test]
 fn an_adapter_without_a_file_has_no_bonds() {
     let dir = tempfile::tempdir().unwrap();
-    assert!(KeyStore::new(dir.path().to_owned()).load(ADAPTER).unwrap().is_empty());
+    assert!(KeyStore::new(dir.path().to_owned())
+        .load(ADAPTER)
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -84,9 +113,23 @@ fn a_corrupt_file_is_refused_and_left_alone() {
     fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
 
     let error = store.load(ADAPTER).unwrap_err();
-    let KeyStoreError::Corrupt { source, .. } = &error else { panic!("expected Corrupt, got {error}") };
-    assert_eq!(source, &KeyFileError { line: 4, kind: KeyFileErrorKind::Field("PIN length") });
-    assert_eq!(error.to_string(), format!("{}: line 4: invalid PIN length; the file was left as it is", file.display()));
+    let KeyStoreError::Corrupt { source, .. } = &error else {
+        panic!("expected Corrupt, got {error}")
+    };
+    assert_eq!(
+        source,
+        &KeyFileError {
+            line: 4,
+            kind: KeyFileErrorKind::Field("PIN length")
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "{}: line 4: invalid PIN length; the file was left as it is",
+            file.display()
+        )
+    );
     assert_eq!(fs::read_to_string(&file).unwrap(), corrupt);
 }
 
@@ -98,7 +141,13 @@ fn a_file_others_can_read_is_refused() {
     let file = dir.path().join("AA-BB-CC-DD-EE-01.keys");
     fs::set_permissions(&file, fs::Permissions::from_mode(0o640)).unwrap();
     let error = store.load(ADAPTER).unwrap_err();
-    assert_eq!(error.to_string(), format!("{}: mode 0640 lets others read the keys; fix it to 0600", file.display()));
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "{}: mode 0640 lets others read the keys; fix it to 0600",
+            file.display()
+        )
+    );
 }
 
 #[test]

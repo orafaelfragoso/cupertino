@@ -22,7 +22,10 @@ use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
-    LaunchApp { desktop_id: String, action: Option<String> },
+    LaunchApp {
+        desktop_id: String,
+        action: Option<String>,
+    },
     OpenPath(PathBuf),
     OpenUrl(String),
     CopyText(String),
@@ -240,7 +243,10 @@ pub struct Launcher {
 }
 
 fn exec_basename(exec: &str) -> String {
-    exec::tokenize(exec).and_then(|a| a.into_iter().next()).map(|p| p.rsplit('/').next().unwrap_or("").to_string()).unwrap_or_default()
+    exec::tokenize(exec)
+        .and_then(|a| a.into_iter().next())
+        .map(|p| p.rsplit('/').next().unwrap_or("").to_string())
+        .unwrap_or_default()
 }
 
 fn build_candidates(entries: &[DesktopEntry], include_actions: bool) -> Vec<AppCandidate> {
@@ -250,22 +256,50 @@ fn build_candidates(entries: &[DesktopEntry], include_actions: bool) -> Vec<AppC
         if !e.generic_name.is_empty() {
             fields.push(CandidateField::new(&e.generic_name, 0.7, true));
         }
-        fields.extend(e.keywords.iter().map(|k| CandidateField::new(k, 0.65, false)));
+        fields.extend(
+            e.keywords
+                .iter()
+                .map(|k| CandidateField::new(k, 0.65, false)),
+        );
         let base = exec_basename(&e.exec);
         if !base.is_empty() {
             fields.push(CandidateField::new(&base, 0.6, false));
         }
         let id_stem = e.id.trim_end_matches(".desktop");
-        fields.push(CandidateField::new(id_stem.rsplit('.').next().unwrap_or(id_stem), 0.4, false));
+        fields.push(CandidateField::new(
+            id_stem.rsplit('.').next().unwrap_or(id_stem),
+            0.4,
+            false,
+        ));
         if !e.comment.is_empty() {
             fields.push(CandidateField::new(&e.comment, 0.3, false));
         }
-        out.push(AppCandidate { entry: i, action: None, key: format!("app:{}", e.id), candidate: Candidate { fields, required_field: None } });
+        out.push(AppCandidate {
+            entry: i,
+            action: None,
+            key: format!("app:{}", e.id),
+            candidate: Candidate {
+                fields,
+                required_field: None,
+            },
+        });
         if include_actions {
             for (ai, a) in e.actions.iter().enumerate() {
                 let title = format!("{}: {}", e.name, a.name);
-                let fields = vec![CandidateField::new(&title, 0.8, true), CandidateField::new(&a.name, 1.0, false), CandidateField::new(&e.name, 0.5, false)];
-                out.push(AppCandidate { entry: i, action: Some(ai), key: format!("app:{}#{}", e.id, a.id), candidate: Candidate { fields, required_field: Some(1) } });
+                let fields = vec![
+                    CandidateField::new(&title, 0.8, true),
+                    CandidateField::new(&a.name, 1.0, false),
+                    CandidateField::new(&e.name, 0.5, false),
+                ];
+                out.push(AppCandidate {
+                    entry: i,
+                    action: Some(ai),
+                    key: format!("app:{}#{}", e.id, a.id),
+                    candidate: Candidate {
+                        fields,
+                        required_field: Some(1),
+                    },
+                });
             }
         }
     }
@@ -276,7 +310,9 @@ fn percent_encode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             b' ' => out.push('+'),
             _ => out.push_str(&format!("%{b:02X}")),
         }
@@ -301,12 +337,23 @@ fn home_relative(p: &std::path::Path) -> String {
 impl Launcher {
     pub fn new(config: LauncherConfig, entries: Vec<DesktopEntry>, frecency: Frecency) -> Self {
         let apps = build_candidates(&entries, config.include_actions);
-        Self { config, frecency, entries, apps, files: None, token_hook: None }
+        Self {
+            config,
+            frecency,
+            entries,
+            apps,
+            files: None,
+            token_hook: None,
+        }
     }
 
     /// Index the XDG application directories and load the persisted frecency store.
     pub fn from_system(config: LauncherConfig) -> Self {
-        let entries = crate::desktop::index_dirs(&crate::desktop::xdg_application_dirs(), &crate::desktop::Locale::from_env(), &crate::desktop::Visibility::from_env());
+        let entries = crate::desktop::index_dirs(
+            &crate::desktop::xdg_application_dirs(),
+            &crate::desktop::Locale::from_env(),
+            &crate::desktop::Visibility::from_env(),
+        );
         Self::new(config, entries, Frecency::load_default())
     }
 
@@ -342,11 +389,18 @@ impl Launcher {
                 id: c.key.clone(),
                 kind: ItemKind::Application,
                 title: e.name.clone(),
-                subtitle: if !e.generic_name.is_empty() { e.generic_name.clone() } else { e.comment.clone() },
+                subtitle: if !e.generic_name.is_empty() {
+                    e.generic_name.clone()
+                } else {
+                    e.comment.clone()
+                },
                 icon: e.icon.clone(),
                 score,
                 highlights,
-                action: Action::LaunchApp { desktop_id: e.id.clone(), action: None },
+                action: Action::LaunchApp {
+                    desktop_id: e.id.clone(),
+                    action: None,
+                },
             },
             Some(ai) => {
                 let a = &e.actions[ai];
@@ -358,7 +412,10 @@ impl Launcher {
                     icon: a.icon.clone().or_else(|| e.icon.clone()),
                     score,
                     highlights,
-                    action: Action::LaunchApp { desktop_id: e.id.clone(), action: Some(a.id.clone()) },
+                    action: Action::LaunchApp {
+                        desktop_id: e.id.clone(),
+                        action: Some(a.id.clone()),
+                    },
                 }
             }
         }
@@ -367,7 +424,10 @@ impl Launcher {
     /// Results for `text`. `now`: Unix seconds (frecency decay, file recency).
     pub fn query(&self, text: &str, now: f64) -> Results {
         let q = Query::new(text);
-        let mut results = Results { query: text.to_string(), sections: Vec::new() };
+        let mut results = Results {
+            query: text.to_string(),
+            sections: Vec::new(),
+        };
         if q.is_empty() {
             let items: Vec<ResultItem> = self
                 .frecency
@@ -381,7 +441,11 @@ impl Launcher {
                 .take(self.config.suggestions)
                 .collect();
             if !items.is_empty() {
-                results.sections.push(Section { kind: SectionKind::Suggestions, title: SectionKind::Suggestions.title().into(), items });
+                results.sections.push(Section {
+                    kind: SectionKind::Suggestions,
+                    title: SectionKind::Suggestions.title().into(),
+                    items,
+                });
             }
             return results;
         }
@@ -400,13 +464,19 @@ impl Launcher {
                     highlights: Vec::new(),
                     action: Action::CopyText(c.text),
                 };
-                results.sections.push(Section { kind: SectionKind::Calculator, title: SectionKind::Calculator.title().into(), items: vec![item] });
+                results.sections.push(Section {
+                    kind: SectionKind::Calculator,
+                    title: SectionKind::Calculator.title().into(),
+                    items: vec![item],
+                });
             }
         }
 
         let mut apps: Vec<(f64, f64, &AppCandidate, Vec<usize>)> = Vec::new();
         for c in &self.apps {
-            let Some(s) = matcher::score(&q, &c.candidate, &self.config.weights) else { continue };
+            let Some(s) = matcher::score(&q, &c.candidate, &self.config.weights) else {
+                continue;
+            };
             if s.score < self.config.min_app_score {
                 continue;
             }
@@ -415,17 +485,40 @@ impl Launcher {
         }
         apps.sort_by(|a, b| {
             b.0.total_cmp(&a.0)
-                .then_with(|| self.entries[a.2.entry].name.chars().count().cmp(&self.entries[b.2.entry].name.chars().count()))
-                .then_with(|| self.entries[a.2.entry].name.cmp(&self.entries[b.2.entry].name))
+                .then_with(|| {
+                    self.entries[a.2.entry]
+                        .name
+                        .chars()
+                        .count()
+                        .cmp(&self.entries[b.2.entry].name.chars().count())
+                })
+                .then_with(|| {
+                    self.entries[a.2.entry]
+                        .name
+                        .cmp(&self.entries[b.2.entry].name)
+                })
                 .then_with(|| a.2.key.cmp(&b.2.key))
         });
-        let items: Vec<ResultItem> = apps.into_iter().take(self.config.max_apps).map(|(total, _, c, pos)| self.app_item(c, total, pos)).collect();
+        let items: Vec<ResultItem> = apps
+            .into_iter()
+            .take(self.config.max_apps)
+            .map(|(total, _, c, pos)| self.app_item(c, total, pos))
+            .collect();
         if !items.is_empty() {
-            sections.push(Section { kind: SectionKind::Applications, title: SectionKind::Applications.title().into(), items });
+            sections.push(Section {
+                kind: SectionKind::Applications,
+                title: SectionKind::Applications.title().into(),
+                items,
+            });
         }
 
         if let Some(idx) = &self.files {
-            let found = idx.search(&q, (self.config.max_files + self.config.max_folders) * 4, now, &self.config.weights);
+            let found = idx.search(
+                &q,
+                (self.config.max_files + self.config.max_folders) * 4,
+                now,
+                &self.config.weights,
+            );
             let mut folders = Vec::new();
             let mut files = Vec::new();
             for m in found {
@@ -434,7 +527,11 @@ impl Launcher {
                 let score = m.score + self.frecency.bonus(&key, &qn, now);
                 let item = ResultItem {
                     id: key,
-                    kind: if e.is_dir { ItemKind::Folder } else { ItemKind::File },
+                    kind: if e.is_dir {
+                        ItemKind::Folder
+                    } else {
+                        ItemKind::File
+                    },
                     title: e.name.clone(),
                     subtitle: home_relative(e.path.parent().unwrap_or(&e.path)),
                     icon: None,
@@ -448,11 +545,22 @@ impl Launcher {
                     files.push(item);
                 }
             }
-            for (kind, mut items, max) in [(SectionKind::Folders, folders, self.config.max_folders), (SectionKind::Files, files, self.config.max_files)] {
-                items.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.title.cmp(&b.title)));
+            for (kind, mut items, max) in [
+                (SectionKind::Folders, folders, self.config.max_folders),
+                (SectionKind::Files, files, self.config.max_files),
+            ] {
+                items.sort_by(|a, b| {
+                    b.score
+                        .total_cmp(&a.score)
+                        .then_with(|| a.title.cmp(&b.title))
+                });
                 items.truncate(max);
                 if !items.is_empty() {
-                    sections.push(Section { kind, title: kind.title().into(), items });
+                    sections.push(Section {
+                        kind,
+                        title: kind.title().into(),
+                        items,
+                    });
                 }
             }
         }
@@ -475,17 +583,32 @@ impl Launcher {
             });
         }
 
-        let rank = |s: &Section| (s.kind != SectionKind::Web, s.items.first().map_or(0.0, |i| i.score));
+        let rank = |s: &Section| {
+            (
+                s.kind != SectionKind::Web,
+                s.items.first().map_or(0.0, |i| i.score),
+            )
+        };
         sections.sort_by(|a, b| {
             let (ra, rb) = (rank(a), rank(b));
-            rb.0.cmp(&ra.0).then(rb.1.total_cmp(&ra.1)).then((a.kind as u8).cmp(&(b.kind as u8)))
+            rb.0.cmp(&ra.0)
+                .then(rb.1.total_cmp(&ra.1))
+                .then((a.kind as u8).cmp(&(b.kind as u8)))
         });
         if self.config.top_hit {
             if let Some(first) = sections.first_mut() {
-                if matches!(first.kind, SectionKind::Applications | SectionKind::Files | SectionKind::Folders) && !first.items.is_empty() {
+                if matches!(
+                    first.kind,
+                    SectionKind::Applications | SectionKind::Files | SectionKind::Folders
+                ) && !first.items.is_empty()
+                {
                     let hit = first.items.remove(0);
                     let empty = first.items.is_empty();
-                    let top = Section { kind: SectionKind::TopHit, title: SectionKind::TopHit.title().into(), items: vec![hit] };
+                    let top = Section {
+                        kind: SectionKind::TopHit,
+                        title: SectionKind::TopHit.title().into(),
+                        items: vec![hit],
+                    };
                     if empty {
                         sections.remove(0);
                     }
@@ -501,7 +624,11 @@ impl Launcher {
         let (prog, rest) = self.config.open_command.split_first()?;
         let mut args = rest.to_vec();
         args.push(target.to_string());
-        Some(CommandSpec { program: prog.clone(), args, ..Default::default() })
+        Some(CommandSpec {
+            program: prog.clone(),
+            args,
+            ..Default::default()
+        })
     }
 
     fn command_for(&self, item: &ResultItem) -> Option<CommandSpec> {
@@ -512,7 +639,11 @@ impl Launcher {
                     None => exec::command_for_entry(e, &[])?,
                     Some(a) => exec::command_for_action(e, e.actions.iter().find(|x| &x.id == a)?)?,
                 };
-                Some(if e.terminal { spec.in_terminal(&self.config.terminal_command) } else { spec })
+                Some(if e.terminal {
+                    spec.in_terminal(&self.config.terminal_command)
+                } else {
+                    spec
+                })
             }
             Action::OpenPath(p) => self.open_with(&p.to_string_lossy()),
             Action::OpenUrl(u) => self.open_with(u),
@@ -525,17 +656,23 @@ impl Launcher {
         if let Action::CopyText(t) = &item.action {
             return Activation::CopyToClipboard(t.clone());
         }
-        let Some(mut cmd) = self.command_for(item) else { return Activation::Nothing };
+        let Some(mut cmd) = self.command_for(item) else {
+            return Activation::Nothing;
+        };
         let desktop_id = match &item.action {
             Action::LaunchApp { desktop_id, .. } => Some(desktop_id.clone()),
             _ => None,
         };
         if let Some(hook) = self.token_hook.as_mut() {
-            if let Some(t) = hook(&LaunchRequest { desktop_id, title: item.title.clone() }) {
+            if let Some(t) = hook(&LaunchRequest {
+                desktop_id,
+                title: item.title.clone(),
+            }) {
                 cmd = cmd.with_activation_token(&t);
             }
         }
-        self.frecency.record(&item.id, &Query::new(query).normalized(), now);
+        self.frecency
+            .record(&item.id, &Query::new(query).normalized(), now);
         Activation::Run(cmd)
     }
 }

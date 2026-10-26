@@ -34,7 +34,11 @@ pub enum MinimizeEffect {
 }
 
 impl MinimizeEffect {
-    pub const ALL: [MinimizeEffect; 3] = [MinimizeEffect::WarpMinimize, MinimizeEffect::Scale, MinimizeEffect::FunnelMinimize];
+    pub const ALL: [MinimizeEffect; 3] = [
+        MinimizeEffect::WarpMinimize,
+        MinimizeEffect::Scale,
+        MinimizeEffect::FunnelMinimize,
+    ];
 
     /// Effect duration in milliseconds: warp 500, scale 200, funnel 400.
     pub fn duration_ms(self) -> f64 {
@@ -51,7 +55,10 @@ impl MinimizeEffect {
     }
 }
 
-pub use cupertino_defaults::dock::{default_tile_size, sanitize_large_size, sanitize_tile_size, DEFAULT_LARGE_SIZE, DEFAULT_TILE_SIZE, DEFAULT_TILE_SIZE_SMALL_DISPLAY, SMALL_DISPLAY_HEIGHT};
+pub use cupertino_defaults::dock::{
+    default_tile_size, sanitize_large_size, sanitize_tile_size, DEFAULT_LARGE_SIZE,
+    DEFAULT_TILE_SIZE, DEFAULT_TILE_SIZE_SMALL_DISPLAY, SMALL_DISPLAY_HEIGHT,
+};
 /// Auto-hide speed per unit of the time modifier, in milliseconds.
 pub const AUTOHIDE_SPEED_MS: f64 = 60.0;
 
@@ -150,11 +157,19 @@ impl DockConfig {
     /// Defaults for a display of the given height in points (tile size 52 when it is at most
     /// 800 pt tall, else 64).
     pub fn for_display_height(display_height: f64) -> Self {
-        Self { tile_size: default_tile_size(display_height), ..Self::default() }
+        Self {
+            tile_size: default_tile_size(display_height),
+            ..Self::default()
+        }
     }
 
     /// Configuration from optional stored preferences with the design validation rules.
-    pub fn from_preferences(tile_size: Option<f64>, large_size: Option<f64>, magnification: Option<bool>, display_height: f64) -> Self {
+    pub fn from_preferences(
+        tile_size: Option<f64>,
+        large_size: Option<f64>,
+        magnification: Option<bool>,
+        display_height: f64,
+    ) -> Self {
         Self {
             tile_size: sanitize_tile_size(tile_size, display_height),
             large_size: sanitize_large_size(large_size),
@@ -267,12 +282,29 @@ impl Default for BounceConfig {
             secondary_duration: 1.4,
             secondary_interval: 1.0,
             tile_len: DEFAULT_TILE_SIZE,
-            launch_lift: LiftFormula { k: 0.2, m: 8.0, c: 6.0 },
-            attention_lift: LiftFormula { k: 1.0, m: 0.0, c: 1.0 },
+            launch_lift: LiftFormula {
+                k: 0.2,
+                m: 8.0,
+                c: 6.0,
+            },
+            attention_lift: LiftFormula {
+                k: 1.0,
+                m: 0.0,
+                c: 1.0,
+            },
             attention_hops: [
-                Hop { length_ms: 500.0, amplitude: 1.0 },
-                Hop { length_ms: 326.0, amplitude: 0.5 },
-                Hop { length_ms: 212.0, amplitude: 0.25 },
+                Hop {
+                    length_ms: 500.0,
+                    amplitude: 1.0,
+                },
+                Hop {
+                    length_ms: 326.0,
+                    amplitude: 0.5,
+                },
+                Hop {
+                    length_ms: 212.0,
+                    amplitude: 0.25,
+                },
             ],
             attention_cycle: 2.0,
             attention_initial_duration: 60.0,
@@ -286,7 +318,11 @@ impl BounceConfig {
     /// The generic parametric arcs (approximate), as used before the curves were
     /// available: lift 0.5 tiles, 0.7 s arcs, 20 s launch timeout.
     pub fn parametric() -> Self {
-        Self { model: BounceModel::Parametric, launch_timeout: 20.0, ..Self::default() }
+        Self {
+            model: BounceModel::Parametric,
+            launch_timeout: 20.0,
+            ..Self::default()
+        }
     }
 
     /// Total length of the hop sequence in seconds (about 1.038 s).

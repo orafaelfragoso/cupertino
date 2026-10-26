@@ -14,7 +14,11 @@ use crate::metrics::timing::WINDOW_RESIZE_CAP;
 
 /// Window-resize duration in seconds between two frames.
 pub fn resize_duration(from: &Rect, to: &Rect, velocity: f64) -> f64 {
-    let d = (to.x - from.x).abs().max((to.y - from.y).abs()).max((to.w - from.w).abs()).max((to.h - from.h).abs());
+    let d = (to.x - from.x)
+        .abs()
+        .max((to.y - from.y).abs())
+        .max((to.w - from.w).abs())
+        .max((to.h - from.h).abs());
     (181.0 * (d / 100.0 + 1.0).ln() / velocity).min(WINDOW_RESIZE_CAP)
 }
 
@@ -36,14 +40,28 @@ pub fn fit_content(content: Size, max: Size) -> Size {
         return Size { w: 0.0, h: 0.0 };
     }
     let s = (max.w / content.w).min(max.h / content.h).min(1.0);
-    Size { w: (content.w * s).round(), h: (content.h * s).round() }
+    Size {
+        w: (content.w * s).round(),
+        h: (content.h * s).round(),
+    }
 }
 
 /// Target rectangle: the fitted content centred in `work_area` (the share of the work area the
 /// panel may occupy, `max_fraction`, is approximate at 0.8).
 pub fn panel_frame(content: Size, work_area: Rect, max_fraction: f64) -> Rect {
-    let fitted = fit_content(content, Size { w: work_area.w * max_fraction, h: work_area.h * max_fraction });
-    Rect::new(work_area.x + (work_area.w - fitted.w) / 2.0, work_area.y + (work_area.h - fitted.h) / 2.0, fitted.w, fitted.h)
+    let fitted = fit_content(
+        content,
+        Size {
+            w: work_area.w * max_fraction,
+            h: work_area.h * max_fraction,
+        },
+    );
+    Rect::new(
+        work_area.x + (work_area.w - fitted.w) / 2.0,
+        work_area.y + (work_area.h - fitted.h) / 2.0,
+        fitted.w,
+        fitted.h,
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -65,25 +83,49 @@ pub struct ZoomTransition {
 
 impl ZoomTransition {
     pub fn open(source: Rect, target: Rect) -> Self {
-        ZoomTransition { source, target, duration: resize_duration(&source, &target, DEFAULT_VELOCITY), closing: false }
+        ZoomTransition {
+            source,
+            target,
+            duration: resize_duration(&source, &target, DEFAULT_VELOCITY),
+            closing: false,
+        }
     }
 
     pub fn close(self) -> Self {
-        ZoomTransition { closing: true, ..self }
+        ZoomTransition {
+            closing: true,
+            ..self
+        }
     }
 
     /// Slow-motion factor applied by the shell (Shift held): see [`crate::metrics::timing`].
     pub fn slowed(self, factor: f64) -> Self {
-        ZoomTransition { duration: self.duration * factor, ..self }
+        ZoomTransition {
+            duration: self.duration * factor,
+            ..self
+        }
     }
 
     /// Frame at `elapsed` seconds after the start of the transition.
     pub fn at(&self, elapsed: f64) -> Frame {
-        let t = if self.duration <= 0.0 { 1.0 } else { (elapsed / self.duration).clamp(0.0, 1.0) };
+        let t = if self.duration <= 0.0 {
+            1.0
+        } else {
+            (elapsed / self.duration).clamp(0.0, 1.0)
+        };
         let p = ease_in_out(if self.closing { 1.0 - t } else { t });
         let l = |a: f64, b: f64| a + (b - a) * p;
-        let rect = Rect::new(l(self.source.x, self.target.x), l(self.source.y, self.target.y), l(self.source.w, self.target.w), l(self.source.h, self.target.h));
-        Frame { rect, icon_alpha: 1.0 - p, content_alpha: p }
+        let rect = Rect::new(
+            l(self.source.x, self.target.x),
+            l(self.source.y, self.target.y),
+            l(self.source.w, self.target.w),
+            l(self.source.h, self.target.h),
+        );
+        Frame {
+            rect,
+            icon_alpha: 1.0 - p,
+            content_alpha: p,
+        }
     }
 
     pub fn finished(&self, elapsed: f64) -> bool {
@@ -105,20 +147,57 @@ mod tests {
         assert!(d_near < d_far);
         assert_eq!(resize_duration(&a, &a, DEFAULT_VELOCITY), 0.0);
         assert!(d_far <= 0.35 + 1e-12);
-        assert_eq!(resize_duration(&a, &Rect::new(1e6, 0.0, 1.0, 1.0), 10.0), 0.35);
+        assert_eq!(
+            resize_duration(&a, &Rect::new(1e6, 0.0, 1.0, 1.0), 10.0),
+            0.35
+        );
     }
 
     #[test]
     fn fit_keeps_aspect_and_never_enlarges() {
-        assert_eq!(fit_content(Size { w: 4000.0, h: 2000.0 }, Size { w: 1000.0, h: 1000.0 }), Size { w: 1000.0, h: 500.0 });
-        assert_eq!(fit_content(Size { w: 100.0, h: 50.0 }, Size { w: 1000.0, h: 1000.0 }), Size { w: 100.0, h: 50.0 });
-        assert_eq!(fit_content(Size { w: 0.0, h: 5.0 }, Size { w: 10.0, h: 10.0 }), Size { w: 0.0, h: 0.0 });
+        assert_eq!(
+            fit_content(
+                Size {
+                    w: 4000.0,
+                    h: 2000.0
+                },
+                Size {
+                    w: 1000.0,
+                    h: 1000.0
+                }
+            ),
+            Size {
+                w: 1000.0,
+                h: 500.0
+            }
+        );
+        assert_eq!(
+            fit_content(
+                Size { w: 100.0, h: 50.0 },
+                Size {
+                    w: 1000.0,
+                    h: 1000.0
+                }
+            ),
+            Size { w: 100.0, h: 50.0 }
+        );
+        assert_eq!(
+            fit_content(Size { w: 0.0, h: 5.0 }, Size { w: 10.0, h: 10.0 }),
+            Size { w: 0.0, h: 0.0 }
+        );
     }
 
     #[test]
     fn panel_is_centred_in_the_work_area() {
         let wa = Rect::new(0.0, 28.0, 1440.0, 872.0);
-        let f = panel_frame(Size { w: 3000.0, h: 1000.0 }, wa, 0.8);
+        let f = panel_frame(
+            Size {
+                w: 3000.0,
+                h: 1000.0,
+            },
+            wa,
+            0.8,
+        );
         assert!((f.center().x - 720.0).abs() < 1.0);
         assert!((f.center().y - (28.0 + 436.0)).abs() < 1.0);
         assert!(f.w <= 1152.0 && f.h <= 697.6);
@@ -126,7 +205,10 @@ mod tests {
 
     #[test]
     fn open_and_close_are_mirror_images() {
-        let t = ZoomTransition::open(Rect::new(100.0, 100.0, 64.0, 64.0), Rect::new(300.0, 200.0, 600.0, 400.0));
+        let t = ZoomTransition::open(
+            Rect::new(100.0, 100.0, 64.0, 64.0),
+            Rect::new(300.0, 200.0, 600.0, 400.0),
+        );
         let start = t.at(0.0);
         let end = t.at(t.duration);
         assert_eq!(start.rect, t.source);

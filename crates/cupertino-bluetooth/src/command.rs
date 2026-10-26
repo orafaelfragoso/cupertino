@@ -76,9 +76,13 @@ impl IoCapability {
 pub enum Discoverable {
     Off,
     /// General discoverable; `timeout` is in seconds, 0 for no timeout.
-    General { timeout: u16 },
+    General {
+        timeout: u16,
+    },
     /// Limited discoverable; the document requires a timeout.
-    Limited { timeout: u16 },
+    Limited {
+        timeout: u16,
+    },
 }
 
 /// A management command.
@@ -96,16 +100,31 @@ pub enum Command {
     StopDiscovery(AddressTypes),
     /// Answers a Device Found event that has the Confirm Name flag; `name_known` false makes the
     /// kernel look the name up.
-    ConfirmName { device: DeviceId, name_known: bool },
-    PairDevice { device: DeviceId, io_capability: IoCapability },
+    ConfirmName {
+        device: DeviceId,
+        name_known: bool,
+    },
+    PairDevice {
+        device: DeviceId,
+        io_capability: IoCapability,
+    },
     CancelPairDevice(DeviceId),
-    UnpairDevice { device: DeviceId, disconnect: bool },
+    UnpairDevice {
+        device: DeviceId,
+        disconnect: bool,
+    },
     Disconnect(DeviceId),
     GetConnections,
     /// `accept` false sends the negative reply.
-    UserConfirmationReply { device: DeviceId, accept: bool },
+    UserConfirmationReply {
+        device: DeviceId,
+        accept: bool,
+    },
     /// `passkey` `None` sends the negative reply.
-    UserPasskeyReply { device: DeviceId, passkey: Option<u32> },
+    UserPasskeyReply {
+        device: DeviceId,
+        passkey: Option<u32>,
+    },
     /// Refuses a legacy PIN request; this daemon does not support PIN pairing.
     PinCodeNegativeReply(DeviceId),
     /// Feeds the kernel the stored BR/EDR link keys. Debug keys are always refused.
@@ -133,8 +152,12 @@ impl Command {
             Self::Disconnect(_) => Opcode::DISCONNECT,
             Self::GetConnections => Opcode::GET_CONNECTIONS,
             Self::UserConfirmationReply { accept: true, .. } => Opcode::USER_CONFIRMATION_REPLY,
-            Self::UserConfirmationReply { accept: false, .. } => Opcode::USER_CONFIRMATION_NEGATIVE_REPLY,
-            Self::UserPasskeyReply { passkey: Some(_), .. } => Opcode::USER_PASSKEY_REPLY,
+            Self::UserConfirmationReply { accept: false, .. } => {
+                Opcode::USER_CONFIRMATION_NEGATIVE_REPLY
+            }
+            Self::UserPasskeyReply {
+                passkey: Some(_), ..
+            } => Opcode::USER_PASSKEY_REPLY,
             Self::UserPasskeyReply { passkey: None, .. } => Opcode::USER_PASSKEY_NEGATIVE_REPLY,
             Self::PinCodeNegativeReply(_) => Opcode::PIN_CODE_NEGATIVE_REPLY,
             Self::LoadLinkKeys(_) => Opcode::LOAD_LINK_KEYS,
@@ -150,15 +173,22 @@ impl Command {
             | Self::UnpairDevice { device, .. }
             | Self::UserConfirmationReply { device, .. }
             | Self::UserPasskeyReply { device, .. } => Some(*device),
-            Self::CancelPairDevice(device) | Self::Disconnect(device) | Self::PinCodeNegativeReply(device) => Some(*device),
+            Self::CancelPairDevice(device)
+            | Self::Disconnect(device)
+            | Self::PinCodeNegativeReply(device) => Some(*device),
             _ => None,
         }
     }
 
     fn parameters(&self) -> Vec<u8> {
         match self {
-            Self::ReadVersion | Self::ReadIndexList | Self::ReadControllerInfo | Self::GetConnections => Vec::new(),
-            Self::SetPowered(on) | Self::SetConnectable(on) | Self::SetBondable(on) => vec![u8::from(*on)],
+            Self::ReadVersion
+            | Self::ReadIndexList
+            | Self::ReadControllerInfo
+            | Self::GetConnections => Vec::new(),
+            Self::SetPowered(on) | Self::SetConnectable(on) | Self::SetBondable(on) => {
+                vec![u8::from(*on)]
+            }
             Self::SetDiscoverable(mode) => {
                 let (value, timeout) = match mode {
                     Discoverable::Off => (0u8, 0u16),
@@ -171,27 +201,42 @@ impl Command {
             }
             Self::SetIoCapability(capability) => vec![capability.to_wire()],
             Self::StartDiscovery(types) | Self::StopDiscovery(types) => vec![types.to_wire()],
-            Self::ConfirmName { device, name_known } => [&device.to_wire()[..], &[u8::from(*name_known)]].concat(),
-            Self::PairDevice { device, io_capability } => [&device.to_wire()[..], &[io_capability.to_wire()]].concat(),
-            Self::UnpairDevice { device, disconnect } => [&device.to_wire()[..], &[u8::from(*disconnect)]].concat(),
+            Self::ConfirmName { device, name_known } => {
+                [&device.to_wire()[..], &[u8::from(*name_known)]].concat()
+            }
+            Self::PairDevice {
+                device,
+                io_capability,
+            } => [&device.to_wire()[..], &[io_capability.to_wire()]].concat(),
+            Self::UnpairDevice { device, disconnect } => {
+                [&device.to_wire()[..], &[u8::from(*disconnect)]].concat()
+            }
             Self::CancelPairDevice(device)
             | Self::Disconnect(device)
             | Self::PinCodeNegativeReply(device)
             | Self::UserConfirmationReply { device, .. }
-            | Self::UserPasskeyReply { device, passkey: None } => device.to_wire().to_vec(),
-            Self::UserPasskeyReply { device, passkey: Some(passkey) } => [&device.to_wire()[..], &passkey.to_le_bytes()].concat(),
+            | Self::UserPasskeyReply {
+                device,
+                passkey: None,
+            } => device.to_wire().to_vec(),
+            Self::UserPasskeyReply {
+                device,
+                passkey: Some(passkey),
+            } => [&device.to_wire()[..], &passkey.to_le_bytes()].concat(),
             Self::LoadLinkKeys(keys) => {
                 // Debug_Keys 0: debug keys are never accepted.
                 let mut out = vec![0u8];
                 out.extend_from_slice(&(keys.len() as u16).to_le_bytes());
                 out.reserve(keys.len() * LINK_KEY_SIZE);
-                keys.iter().for_each(|key| out.extend_from_slice(&key.to_wire()));
+                keys.iter()
+                    .for_each(|key| out.extend_from_slice(&key.to_wire()));
                 out
             }
             Self::LoadLongTermKeys(keys) => {
                 let mut out = Vec::with_capacity(2 + keys.len() * LONG_TERM_KEY_SIZE);
                 out.extend_from_slice(&(keys.len() as u16).to_le_bytes());
-                keys.iter().for_each(|key| out.extend_from_slice(&key.to_wire()));
+                keys.iter()
+                    .for_each(|key| out.extend_from_slice(&key.to_wire()));
                 out
             }
         }
@@ -201,7 +246,10 @@ impl Command {
     pub fn encode(&self, index: ControllerIndex) -> Result<Vec<u8>> {
         let parameters = self.parameters();
         let opcode = self.opcode();
-        let length = u16::try_from(parameters.len()).map_err(|_| Error::CommandTooLong { opcode: opcode.0, length: parameters.len() })?;
+        let length = u16::try_from(parameters.len()).map_err(|_| Error::CommandTooLong {
+            opcode: opcode.0,
+            length: parameters.len(),
+        })?;
         let mut packet = Vec::with_capacity(6 + parameters.len());
         packet.extend_from_slice(&opcode.0.to_le_bytes());
         packet.extend_from_slice(&index.0.to_le_bytes());

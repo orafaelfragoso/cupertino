@@ -2,7 +2,11 @@
 //! popups, input routing and timers. The decisions live in the library modules (`feed`,
 //! `routing`, `popups`, `raster`); this file only connects them to the toolkit.
 
-use cupertino_client::{Anchor, Backdrop, Button, Client, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig, Margin, MenuBar, OutputGeometry, OutputId, PointerEvent, SurfaceId};
+use cupertino_assets::Assets;
+use cupertino_client::{
+    Anchor, Backdrop, Button, Client, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig,
+    Margin, MenuBar, OutputGeometry, OutputId, PointerEvent, SurfaceId,
+};
 use cupertino_defaults::menubar::MenuBarSettings;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_geometry::Rect as GRect;
@@ -16,7 +20,6 @@ use cupertino_menubar::feed::{status_icon, status_icon_px, BarFeed, Shared, Stat
 use cupertino_menubar::geom::{Point, Rect};
 use cupertino_menubar::layout::{BarMetrics, MenuMetrics};
 use cupertino_menubar::popups::{self, PopupOp};
-use cupertino_assets::Assets;
 use cupertino_menubar::raster::{BarText, MenuPalette, Style, POPUP_RADIUS};
 use cupertino_menubar::routing::{self, menu_key, Action, Context};
 use cupertino_menubar::worker::{self, Worker};
@@ -99,10 +102,18 @@ struct App {
 /// `menubar.conf` from the configuration directory (`CUPERTINO_MENUBAR_CONFIG` overrides the path); every key unset
 /// when there is none. Lines that are not understood are reported; with `last_good` their keys keep its values.
 fn load_conf(last_good: Option<&MenuBarSettings>) -> Result<MenuBarSettings> {
-    let Some(path) = MenuBarSettings::path() else { return Ok(MenuBarSettings::UNSET) };
-    let (settings, problems) = MenuBarSettings::load(&path, last_good).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let Some(path) = MenuBarSettings::path() else {
+        return Ok(MenuBarSettings::UNSET);
+    };
+    let (settings, problems) = MenuBarSettings::load(&path, last_good)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     for problem in problems {
-        eprintln!("cupertino-menubar: {} line {}: {}", path.display(), problem.line, problem.message);
+        eprintln!(
+            "cupertino-menubar: {} line {}: {}",
+            path.display(),
+            problem.line,
+            problem.message
+        );
     }
     Ok(settings)
 }
@@ -111,7 +122,9 @@ fn load_conf(last_good: Option<&MenuBarSettings>) -> Result<MenuBarSettings> {
 /// the next start.
 fn watch_conf(client: &Client) -> (Option<ConfigWatcher>, Receiver<WatchEvent>) {
     let (tx, rx) = std::sync::mpsc::channel();
-    let Some(path) = MenuBarSettings::path() else { return (None, rx) };
+    let Some(path) = MenuBarSettings::path() else {
+        return (None, rx);
+    };
     let waker = client.waker();
     let watch = ConfigWatcher::new(vec![path.clone()], move |event| {
         // the receiver is gone only while the process exits
@@ -122,7 +135,10 @@ fn watch_conf(client: &Client) -> (Option<ConfigWatcher>, Receiver<WatchEvent>) 
     match watch {
         Ok(w) => (Some(w), rx),
         Err(e) => {
-            eprintln!("cupertino-menubar: cannot watch {}: {e}; changes apply at the next start", path.display());
+            eprintln!(
+                "cupertino-menubar: cannot watch {}: {e}; changes apply at the next start",
+                path.display()
+            );
             (None, rx)
         }
     }
@@ -133,13 +149,22 @@ pub fn run() -> Result<std::convert::Infallible> {
     let assets = Assets::discover();
     let theme = Theme::load()?;
     let conf = load_conf(None)?;
-    let bar = BarMetrics { height: theme.shapes.menu_bar_height, selection_corner_radius: theme.shapes.menu_bar_selection_corner_radius, ..BarMetrics::default() };
+    let bar = BarMetrics {
+        height: theme.shapes.menu_bar_height,
+        selection_corner_radius: theme.shapes.menu_bar_selection_corner_radius,
+        ..BarMetrics::default()
+    };
     let text = BarText::new(theme.tokens.typography(), &assets)?;
 
     let client = Client::connect()?;
     let (conf_watch, conf_changes) = watch_conf(&client);
-    let style = Style { palette: MenuPalette::new(client.is_dark()), bar, menu: MenuMetrics::default() };
-    let session = zbus::block_on(zbus::Connection::session()).map_err(|e| format!("cannot connect to the session bus: {e}"))?;
+    let style = Style {
+        palette: MenuPalette::new(client.is_dark()),
+        bar,
+        menu: MenuMetrics::default(),
+    };
+    let session = zbus::block_on(zbus::Connection::session())
+        .map_err(|e| format!("cannot connect to the session bus: {e}"))?;
     let waker = client.waker();
     let (worker, events) = Worker::start(session.clone(), move || waker.wake())?;
     let waker = client.waker();
@@ -193,7 +218,10 @@ impl App {
             if b.surface == surface {
                 Some((i, Part::Bar))
             } else {
-                b.popups.iter().position(|p| p.surface == surface).map(|level| (i, Part::Popup(level)))
+                b.popups
+                    .iter()
+                    .position(|p| p.surface == surface)
+                    .map(|level| (i, Part::Popup(level)))
             }
         })
     }
@@ -214,7 +242,9 @@ impl App {
         }
         for info in outputs {
             // an output the server has not described yet gets its bar when it has
-            let Some(geometry) = info.geometry else { continue };
+            let Some(geometry) = info.geometry else {
+                continue;
+            };
             match self.bars.iter().position(|b| b.output == info.id) {
                 Some(i) => {
                     if self.bars[i].geometry != geometry {
@@ -245,7 +275,15 @@ impl App {
         let backdrop = self.client.backdrop(surface)?;
         backdrop.set_material("MenuBar");
         let text = self.text.for_output();
-        let mut controller = MenuController::new(Rect::new(0.0, 0.0, f64::from(geometry.width), f64::from(geometry.height)), Box::new(text.clone()));
+        let mut controller = MenuController::new(
+            Rect::new(
+                0.0,
+                0.0,
+                f64::from(geometry.width),
+                f64::from(geometry.height),
+            ),
+            Box::new(text.clone()),
+        );
         controller.bar_metrics = self.style.bar.clone();
         let key = self.next_key;
         self.next_key += 1;
@@ -281,7 +319,12 @@ impl App {
     /// The screen the controller lays menus out on: the bar's width and the output's height.
     fn set_screen(&mut self, i: usize) {
         let bar = &mut self.bars[i];
-        bar.controller.set_output(Rect::new(0.0, 0.0, f64::from(bar.width), f64::from(bar.geometry.height)));
+        bar.controller.set_output(Rect::new(
+            0.0,
+            0.0,
+            f64::from(bar.width),
+            f64::from(bar.geometry.height),
+        ));
     }
 
     // ---- events --------------------------------------------------------------------------
@@ -311,7 +354,10 @@ impl App {
                     let output = self.bars[i].output;
                     self.destroy_bar(i)?;
                     if self.client.outputs().iter().any(|o| o.id == output) {
-                        return Err("the server closed the menu bar of an output that is still present".into());
+                        return Err(
+                            "the server closed the menu bar of an output that is still present"
+                                .into(),
+                        );
                     }
                 }
             }
@@ -323,8 +369,15 @@ impl App {
                 }
             }
             Event::Pointer { surface, event } => self.pointer(surface, event)?,
-            Event::Key { surface, key, pressed, .. } => {
-                if let (true, Some((i, _)), Some(key)) = (pressed, self.locate(surface), menu_key(key)) {
+            Event::Key {
+                surface,
+                key,
+                pressed,
+                ..
+            } => {
+                if let (true, Some((i, _)), Some(key)) =
+                    (pressed, self.locate(surface), menu_key(key))
+                {
                     let now = self.now();
                     let outcome = self.bars[i].controller.key(key, now);
                     self.apply(i, outcome)?;
@@ -342,7 +395,9 @@ impl App {
             Event::MenuBar { surface, update } => {
                 if let Some((i, Part::Bar)) = self.locate(surface) {
                     let data_dirs = &self.data_dirs;
-                    self.bars[i].feed.apply(&update, &mut self.shared, |id| app_name(id, data_dirs));
+                    self.bars[i]
+                        .feed
+                        .apply(&update, &mut self.shared, |id| app_name(id, data_dirs));
                     if update.engage {
                         let outcome = self.bars[i].controller.focus_bar();
                         self.apply(i, outcome)?;
@@ -367,27 +422,48 @@ impl App {
             }
             Event::SessionLock { locked: false } => {}
             Event::OutputsChanged => self.reconcile_outputs()?,
-            Event::ActivationToken { .. } => return Err("an activation token arrived but this process asked for none".into()),
-            Event::Dock { .. } => return Err("a dock event arrived but this process has no dock".into()),
+            Event::ActivationToken { .. } => {
+                return Err("an activation token arrived but this process asked for none".into())
+            }
+            Event::Dock { .. } => {
+                return Err("a dock event arrived but this process has no dock".into())
+            }
         }
         Ok(())
     }
 
     fn pointer(&mut self, surface: SurfaceId, event: PointerEvent) -> Result<()> {
-        let Some((i, part)) = self.locate(surface) else { return Ok(()) };
+        let Some((i, part)) = self.locate(surface) else {
+            return Ok(());
+        };
         // the controller works in bar-surface coordinates; a popup's events are relative to its corner
         let origin = match part {
             Part::Bar => (0.0, 0.0),
-            Part::Popup(level) => (self.bars[i].popups[level].rect.x, self.bars[i].popups[level].rect.y),
+            Part::Popup(level) => (
+                self.bars[i].popups[level].rect.x,
+                self.bars[i].popups[level].rect.y,
+            ),
         };
         let at = |p: cupertino_geometry::Point| Point::new(p.x + origin.0, p.y + origin.1);
         let now = self.now();
         let outcome = match event {
-            PointerEvent::Enter(p) | PointerEvent::Motion(p) => self.bars[i].controller.pointer_move(at(p), now),
-            PointerEvent::Button { button: Button::Left, pressed: true, position } => self.bars[i].controller.pointer_press(at(position), now),
-            PointerEvent::Button { button: Button::Left, pressed: false, position } => self.bars[i].controller.pointer_release(at(position), now),
+            PointerEvent::Enter(p) | PointerEvent::Motion(p) => {
+                self.bars[i].controller.pointer_move(at(p), now)
+            }
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: true,
+                position,
+            } => self.bars[i].controller.pointer_press(at(position), now),
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: false,
+                position,
+            } => self.bars[i].controller.pointer_release(at(position), now),
             // the controller keeps its selection until the pointer shows up elsewhere
-            PointerEvent::Leave | PointerEvent::Button { .. } | PointerEvent::Scroll { .. } => return Ok(()),
+            PointerEvent::Leave | PointerEvent::Button { .. } | PointerEvent::Scroll { .. } => {
+                return Ok(())
+            }
         };
         self.apply(i, outcome)
     }
@@ -399,7 +475,9 @@ impl App {
     fn reload_conf(&mut self) {
         while let Ok(event) = self.conf_changes.try_recv() {
             match event {
-                WatchEvent::Error(e) => eprintln!("cupertino-menubar: watching menubar.conf failed: {e}"),
+                WatchEvent::Error(e) => {
+                    eprintln!("cupertino-menubar: watching menubar.conf failed: {e}")
+                }
                 WatchEvent::Changed(_) => match load_conf(Some(&self.conf)) {
                     Ok(conf) => {
                         self.conf = conf;
@@ -427,7 +505,11 @@ impl App {
                     let px = self.icon_px();
                     let icons = &mut self.icons;
                     let icon = status_icon(&item, px, |name, px| icons.load(name, px));
-                    self.shared.set_status(StatusState { item: *item, icon, menu });
+                    self.shared.set_status(StatusState {
+                        item: *item,
+                        icon,
+                        menu,
+                    });
                     self.redraw_all()?;
                 }
                 worker::Event::StatusRemoved { id } => {
@@ -460,7 +542,16 @@ impl App {
             .into_iter()
             .filter_map(|kind| {
                 let glyph = extras.glyph(kind)?;
-                let color = [text[0], text[1], text[2], if glyph.dimmed { text[3] * DIMMED_ALPHA } else { text[3] }];
+                let color = [
+                    text[0],
+                    text[1],
+                    text[2],
+                    if glyph.dimmed {
+                        text[3] * DIMMED_ALPHA
+                    } else {
+                        text[3]
+                    },
+                ];
                 Some((kind, Some(symbols.symbol(glyph.symbol, px, color).clone())))
             })
             .collect();
@@ -494,7 +585,11 @@ impl App {
                 self.worker.send(request)?;
             }
         }
-        let in_use: Vec<_> = self.bars.iter().map(|b| b.feed.source(&self.shared)).collect();
+        let in_use: Vec<_> = self
+            .bars
+            .iter()
+            .map(|b| b.feed.source(&self.shared))
+            .collect();
         self.shared.prune_layouts(&in_use);
         Ok(())
     }
@@ -505,7 +600,11 @@ impl App {
         let unix = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs_f64();
         if unix >= self.next_clock {
             self.next_clock = next_tick(unix, &self.clock);
-            self.shared.clock = clock_text(&local_time(unix.floor() as i64), &self.clock, separators_off(unix));
+            self.shared.clock = clock_text(
+                &local_time(unix.floor() as i64),
+                &self.clock,
+                separators_off(unix),
+            );
             self.refresh()?;
         }
         // the services announce their changes; the duration rows change with the hour and announce nothing
@@ -517,7 +616,11 @@ impl App {
         let now = self.now();
         let mut next = Duration::from_secs_f64((self.next_clock - unix).max(0.0));
         for i in 0..self.bars.len() {
-            if self.bars[i].controller.next_deadline().is_some_and(|d| d <= now) {
+            if self.bars[i]
+                .controller
+                .next_deadline()
+                .is_some_and(|d| d <= now)
+            {
                 let outcome = self.bars[i].controller.tick(now);
                 self.apply(i, outcome)?;
             }
@@ -534,8 +637,17 @@ impl App {
     fn apply(&mut self, i: usize, outcome: Outcome) -> Result<()> {
         let actions: Vec<Action> = {
             let bar = &self.bars[i];
-            let cx = Context { feed: &bar.feed, shared: &self.shared, layout: bar.controller.layout(), origin: (bar.geometry.x, bar.geometry.y) };
-            outcome.effects.into_iter().filter_map(|e| routing::resolve(e, &cx)).collect()
+            let cx = Context {
+                feed: &bar.feed,
+                shared: &self.shared,
+                layout: bar.controller.layout(),
+                origin: (bar.geometry.x, bar.geometry.y),
+            };
+            outcome
+                .effects
+                .into_iter()
+                .filter_map(|e| routing::resolve(e, &cx))
+                .collect()
         };
         for action in actions {
             match action {
@@ -543,8 +655,12 @@ impl App {
                 Action::SetMenuOpen(open) => self.bars[i].menu_bar.set_menu_open(open),
                 Action::Request(request) => self.worker.send(request)?,
                 Action::WindowCommand(command) => self.bars[i].menu_bar.window_command(command),
-                Action::MoveToWorkspace(workspace) => self.bars[i].menu_bar.move_to_workspace(workspace),
-                Action::ShowAbout => eprintln!("cupertino-menubar: about requested (there is no about panel yet)"),
+                Action::MoveToWorkspace(workspace) => {
+                    self.bars[i].menu_bar.move_to_workspace(workspace)
+                }
+                Action::ShowAbout => {
+                    eprintln!("cupertino-menubar: about requested (there is no about panel yet)")
+                }
                 Action::Extra(action) => self.extras.act(action)?,
             }
         }
@@ -554,24 +670,43 @@ impl App {
 
     /// Make the popup surfaces of bar `i` match the open menu levels.
     fn sync_popups(&mut self, i: usize) -> Result<()> {
-        let desired: Vec<Rect> = self.bars[i].controller.levels().iter().map(|l| popups::snap(l.layout.rect)).collect();
+        let desired: Vec<Rect> = self.bars[i]
+            .controller
+            .levels()
+            .iter()
+            .map(|l| popups::snap(l.layout.rect))
+            .collect();
         let current: Vec<Rect> = self.bars[i].popups.iter().map(|p| p.rect).collect();
         for op in popups::plan(&current, &desired) {
             match op {
                 PopupOp::Destroy { level } => {
-                    let popup = self.bars[i].popups.pop().filter(|_| level == self.bars[i].popups.len()).ok_or("popups are destroyed deepest first")?;
+                    let popup = self.bars[i]
+                        .popups
+                        .pop()
+                        .filter(|_| level == self.bars[i].popups.len())
+                        .ok_or("popups are destroyed deepest first")?;
                     drop(popup.backdrop);
                     self.client.destroy_surface(popup.surface)?;
                 }
                 PopupOp::Create { level, rect } => {
                     let bar = &self.bars[i];
-                    let parent = if level == 0 { bar.surface } else { bar.popups[level - 1].surface };
+                    let parent = if level == 0 {
+                        bar.surface
+                    } else {
+                        bar.popups[level - 1].surface
+                    };
                     let surface = self.client.popup(parent, &geometry_rect(rect))?;
                     let backdrop = self.client.backdrop(surface)?;
                     backdrop.set_material("Menu");
-                    self.bars[i].popups.push(PopupSurface { surface, backdrop, rect: desired[level] });
+                    self.bars[i].popups.push(PopupSurface {
+                        surface,
+                        backdrop,
+                        rect: desired[level],
+                    });
                 }
-                PopupOp::Reposition { level, rect } => self.client.reposition_popup(self.bars[i].popups[level].surface, &geometry_rect(rect))?,
+                PopupOp::Reposition { level, rect } => self
+                    .client
+                    .reposition_popup(self.bars[i].popups[level].surface, &geometry_rect(rect))?,
             }
         }
         for (popup, rect) in self.bars[i].popups.iter_mut().zip(desired) {
@@ -585,10 +720,15 @@ impl App {
     /// their popup grab.
     fn sync_keyboard(&mut self, i: usize) -> Result<()> {
         let bar = &mut self.bars[i];
-        let wanted = if bar.controller.mode() == Mode::TitleFocus { KeyboardInteractivity::Exclusive } else { KeyboardInteractivity::None };
+        let wanted = if bar.controller.mode() == Mode::TitleFocus {
+            KeyboardInteractivity::Exclusive
+        } else {
+            KeyboardInteractivity::None
+        };
         if bar.keyboard != wanted {
             bar.keyboard = wanted;
-            self.client.set_keyboard_interactivity(bar.surface, wanted)?;
+            self.client
+                .set_keyboard_interactivity(bar.surface, wanted)?;
             // the change applies with the next commit
             self.client.request_redraw(bar.surface)?;
         }
@@ -612,23 +752,47 @@ impl App {
 
     fn draw(&mut self, surface: SurfaceId) -> Result<()> {
         // the surface may be gone since the event was queued
-        let Some((i, part)) = self.locate(surface) else { return Ok(()) };
+        let Some((i, part)) = self.locate(surface) else {
+            return Ok(());
+        };
         let bar = &self.bars[i];
         let (width, height) = self.client.size(surface)?;
         let size = GRect::new(0.0, 0.0, f64::from(width), f64::from(height));
         match part {
             Part::Bar => {
                 bar.backdrop.set_shape(&size, 0.0)?;
-                let (c, text, style, shared) = (&bar.controller, &bar.text, &self.style, &self.shared);
-                self.client.draw(surface, |pm, scale| style.paint_bar(text, pm, c.layout(), c.content(), c.highlighted_slot(), shared, f64::from(scale.factor())))?;
+                let (c, text, style, shared) =
+                    (&bar.controller, &bar.text, &self.style, &self.shared);
+                self.client.draw(surface, |pm, scale| {
+                    style.paint_bar(
+                        text,
+                        pm,
+                        c.layout(),
+                        c.content(),
+                        c.highlighted_slot(),
+                        shared,
+                        f64::from(scale.factor()),
+                    )
+                })?;
             }
             Part::Popup(level) => {
                 // a level that closed since stays blank until its surface is destroyed
-                let Some(open) = bar.controller.levels().get(level) else { return Ok(()) };
+                let Some(open) = bar.controller.levels().get(level) else {
+                    return Ok(());
+                };
                 let popup = &bar.popups[level];
                 popup.backdrop.set_shape(&size, POPUP_RADIUS)?;
                 let (text, style, origin) = (&bar.text, &self.style, (popup.rect.x, popup.rect.y));
-                self.client.draw(surface, |pm, scale| style.paint_popup(text, pm, &open.layout, open.selected, origin, f64::from(scale.factor())))?;
+                self.client.draw(surface, |pm, scale| {
+                    style.paint_popup(
+                        text,
+                        pm,
+                        &open.layout,
+                        open.selected,
+                        origin,
+                        f64::from(scale.factor()),
+                    )
+                })?;
             }
         }
         Ok(())

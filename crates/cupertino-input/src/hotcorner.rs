@@ -21,7 +21,12 @@ pub enum Corner {
 }
 
 impl Corner {
-    pub const ALL: [Corner; 4] = [Corner::TopLeft, Corner::TopRight, Corner::BottomLeft, Corner::BottomRight];
+    pub const ALL: [Corner; 4] = [
+        Corner::TopLeft,
+        Corner::TopRight,
+        Corner::BottomLeft,
+        Corner::BottomRight,
+    ];
 
     fn index(self) -> usize {
         match self {
@@ -75,7 +80,10 @@ pub struct CornerBinding {
 
 impl CornerBinding {
     pub fn new(action: CornerAction) -> Self {
-        Self { action, modifiers: Modifiers::NONE }
+        Self {
+            action,
+            modifiers: Modifiers::NONE,
+        }
     }
 
     pub fn with_modifiers(action: CornerAction, modifiers: Modifiers) -> Self {
@@ -96,7 +104,11 @@ pub struct HotCornerConfig {
 
 impl Default for HotCornerConfig {
     fn default() -> Self {
-        Self { bindings: [None, None, None, None], size: 2.0, dwell: 0.1 }
+        Self {
+            bindings: [None, None, None, None],
+            size: 2.0,
+            dwell: 0.1,
+        }
     }
 }
 
@@ -114,7 +126,11 @@ impl HotCornerConfig {
 pub enum CornerEvent {
     /// The pointer entered a bound corner (and holds the required modifiers).
     Armed { corner: Corner, output: usize },
-    Triggered { corner: Corner, output: usize, action: CornerAction },
+    Triggered {
+        corner: Corner,
+        output: usize,
+        action: CornerAction,
+    },
     /// The pointer left the corner, or the required modifiers were released.
     Disarmed { corner: Corner, output: usize },
 }
@@ -145,7 +161,9 @@ impl HotCorners {
         let (ox, oy) = corner.outward();
         let probe_h = Point::new(c.x + 0.5 * ox, c.y - 0.5 * oy);
         let probe_v = Point::new(c.x - 0.5 * ox, c.y + 0.5 * oy);
-        !outputs.iter().any(|o| o.contains(probe_h) || o.contains(probe_v))
+        !outputs
+            .iter()
+            .any(|o| o.contains(probe_h) || o.contains(probe_v))
     }
 
     fn locate(&self, pointer: Point, outputs: &[Rect]) -> Option<(usize, Corner)> {
@@ -157,9 +175,21 @@ impl HotCorners {
             for corner in Corner::ALL {
                 let c = corner.point(*r);
                 let (ox, oy) = corner.outward();
-                let dx = if ox < 0.0 { pointer.x - c.x } else { c.x - pointer.x };
-                let dy = if oy < 0.0 { pointer.y - c.y } else { c.y - pointer.y };
-                if dx <= s && dy <= s && self.cfg.binding(corner).is_some() && Self::is_exposed(outputs, i, corner) {
+                let dx = if ox < 0.0 {
+                    pointer.x - c.x
+                } else {
+                    c.x - pointer.x
+                };
+                let dy = if oy < 0.0 {
+                    pointer.y - c.y
+                } else {
+                    c.y - pointer.y
+                };
+                if dx <= s
+                    && dy <= s
+                    && self.cfg.binding(corner).is_some()
+                    && Self::is_exposed(outputs, i, corner)
+                {
                     return Some((i, corner));
                 }
             }
@@ -168,31 +198,53 @@ impl HotCorners {
     }
 
     /// Feed the pointer position, the held modifiers and the output rectangles.
-    pub fn update(&mut self, pointer: Point, modifiers: Modifiers, outputs: &[Rect], now: f64) -> Vec<CornerEvent> {
+    pub fn update(
+        &mut self,
+        pointer: Point,
+        modifiers: Modifiers,
+        outputs: &[Rect],
+        now: f64,
+    ) -> Vec<CornerEvent> {
         let found = self.locate(pointer, outputs);
         let mut out = Vec::new();
         let same = matches!((found, self.hover), (Some((i, c)), Some(h)) if h.output == i && h.corner == c);
         if !same {
             if let Some(h) = self.hover.take() {
                 if h.since.is_some() {
-                    out.push(CornerEvent::Disarmed { corner: h.corner, output: h.output });
+                    out.push(CornerEvent::Disarmed {
+                        corner: h.corner,
+                        output: h.output,
+                    });
                 }
             }
             if let Some((output, corner)) = found {
-                self.hover = Some(Hover { corner, output, since: None, fired: false });
+                self.hover = Some(Hover {
+                    corner,
+                    output,
+                    since: None,
+                    fired: false,
+                });
             }
         }
         if let Some(h) = self.hover.as_mut() {
-            let satisfied = self.cfg.bindings[h.corner.index()].as_ref().is_some_and(|b| modifiers.contains(b.modifiers));
+            let satisfied = self.cfg.bindings[h.corner.index()]
+                .as_ref()
+                .is_some_and(|b| modifiers.contains(b.modifiers));
             match (satisfied, h.since) {
                 (true, None) => {
                     h.since = Some(now);
                     h.fired = false;
-                    out.push(CornerEvent::Armed { corner: h.corner, output: h.output });
+                    out.push(CornerEvent::Armed {
+                        corner: h.corner,
+                        output: h.output,
+                    });
                 }
                 (false, Some(_)) => {
                     h.since = None;
-                    out.push(CornerEvent::Disarmed { corner: h.corner, output: h.output });
+                    out.push(CornerEvent::Disarmed {
+                        corner: h.corner,
+                        output: h.output,
+                    });
                 }
                 _ => {}
             }
@@ -209,7 +261,11 @@ impl HotCorners {
                 if now - since >= self.cfg.dwell - 1e-9 {
                     h.fired = true;
                     if let Some(b) = self.cfg.bindings[h.corner.index()].as_ref() {
-                        out.push(CornerEvent::Triggered { corner: h.corner, output: h.output, action: b.action.clone() });
+                        out.push(CornerEvent::Triggered {
+                            corner: h.corner,
+                            output: h.output,
+                            action: b.action.clone(),
+                        });
                     }
                 }
             }
@@ -238,8 +294,20 @@ mod tests {
 
     fn corners() -> HotCorners {
         let mut cfg = HotCornerConfig::default();
-        cfg.set(Corner::TopLeft, Some(CornerBinding::new(CornerAction::Overview)));
-        cfg.set(Corner::BottomRight, Some(CornerBinding::with_modifiers(CornerAction::ShowDesktop, Modifiers { shift: true, ..Default::default() })));
+        cfg.set(
+            Corner::TopLeft,
+            Some(CornerBinding::new(CornerAction::Overview)),
+        );
+        cfg.set(
+            Corner::BottomRight,
+            Some(CornerBinding::with_modifiers(
+                CornerAction::ShowDesktop,
+                Modifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+            )),
+        );
         HotCorners::new(cfg)
     }
 
@@ -247,17 +315,39 @@ mod tests {
     fn dwell_then_trigger_once_per_visit() {
         let mut h = corners();
         let ev = h.update(Point::new(0.0, 0.0), Modifiers::NONE, &[OUT], 1.0);
-        assert_eq!(ev, vec![CornerEvent::Armed { corner: Corner::TopLeft, output: 0 }]);
+        assert_eq!(
+            ev,
+            vec![CornerEvent::Armed {
+                corner: Corner::TopLeft,
+                output: 0
+            }]
+        );
         assert_eq!(h.next_deadline(), Some(1.1));
         assert!(h.tick(1.05).is_empty());
         let ev = h.tick(1.1);
-        assert_eq!(ev, vec![CornerEvent::Triggered { corner: Corner::TopLeft, output: 0, action: CornerAction::Overview }]);
+        assert_eq!(
+            ev,
+            vec![CornerEvent::Triggered {
+                corner: Corner::TopLeft,
+                output: 0,
+                action: CornerAction::Overview
+            }]
+        );
         assert!(h.tick(5.0).is_empty(), "only once");
         assert_eq!(h.next_deadline(), None);
         let ev = h.update(Point::new(100.0, 100.0), Modifiers::NONE, &[OUT], 5.1);
-        assert_eq!(ev, vec![CornerEvent::Disarmed { corner: Corner::TopLeft, output: 0 }]);
+        assert_eq!(
+            ev,
+            vec![CornerEvent::Disarmed {
+                corner: Corner::TopLeft,
+                output: 0
+            }]
+        );
         let ev = h.update(Point::new(1.0, 1.0), Modifiers::NONE, &[OUT], 6.0);
-        assert!(matches!(ev[0], CornerEvent::Armed { .. }), "re-armed after leaving");
+        assert!(
+            matches!(ev[0], CornerEvent::Armed { .. }),
+            "re-armed after leaving"
+        );
     }
 
     #[test]
@@ -279,22 +369,59 @@ mod tests {
     #[test]
     fn modifier_requirement_gates_arming_and_disarms_on_release() {
         let mut h = corners();
-        let shift = Modifiers { shift: true, ..Default::default() };
-        assert!(h.update(Point::new(1919.0, 1079.0), Modifiers::NONE, &[OUT], 0.0).is_empty());
+        let shift = Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        assert!(h
+            .update(Point::new(1919.0, 1079.0), Modifiers::NONE, &[OUT], 0.0)
+            .is_empty());
         assert_eq!(h.next_deadline(), None);
         let ev = h.update(Point::new(1919.0, 1079.0), shift, &[OUT], 1.0);
-        assert_eq!(ev, vec![CornerEvent::Armed { corner: Corner::BottomRight, output: 0 }]);
+        assert_eq!(
+            ev,
+            vec![CornerEvent::Armed {
+                corner: Corner::BottomRight,
+                output: 0
+            }]
+        );
         let ev = h.update(Point::new(1919.0, 1079.0), Modifiers::NONE, &[OUT], 1.05);
-        assert_eq!(ev, vec![CornerEvent::Disarmed { corner: Corner::BottomRight, output: 0 }]);
+        assert_eq!(
+            ev,
+            vec![CornerEvent::Disarmed {
+                corner: Corner::BottomRight,
+                output: 0
+            }]
+        );
         assert!(h.tick(2.0).is_empty());
-        h.update(Point::new(1919.0, 1079.0), Modifiers { shift: true, ctrl: true, ..Default::default() }, &[OUT], 2.0);
-        assert!(matches!(h.tick(2.2)[0], CornerEvent::Triggered { corner: Corner::BottomRight, .. }), "extra modifiers allowed");
+        h.update(
+            Point::new(1919.0, 1079.0),
+            Modifiers {
+                shift: true,
+                ctrl: true,
+                ..Default::default()
+            },
+            &[OUT],
+            2.0,
+        );
+        assert!(
+            matches!(
+                h.tick(2.2)[0],
+                CornerEvent::Triggered {
+                    corner: Corner::BottomRight,
+                    ..
+                }
+            ),
+            "extra modifiers allowed"
+        );
     }
 
     #[test]
     fn unbound_corners_do_nothing() {
         let mut h = corners();
-        assert!(h.update(Point::new(1919.0, 0.0), Modifiers::NONE, &[OUT], 0.0).is_empty());
+        assert!(h
+            .update(Point::new(1919.0, 0.0), Modifiers::NONE, &[OUT], 0.0)
+            .is_empty());
         assert_eq!(h.current(), None);
     }
 
@@ -308,33 +435,75 @@ mod tests {
         assert!(!HotCorners::is_exposed(&outs, 1, Corner::TopLeft));
         assert!(HotCorners::is_exposed(&outs, 1, Corner::TopRight));
         let mut cfg = HotCornerConfig::default();
-        cfg.set(Corner::TopRight, Some(CornerBinding::new(CornerAction::Launcher)));
-        cfg.set(Corner::TopLeft, Some(CornerBinding::new(CornerAction::Launcher)));
+        cfg.set(
+            Corner::TopRight,
+            Some(CornerBinding::new(CornerAction::Launcher)),
+        );
+        cfg.set(
+            Corner::TopLeft,
+            Some(CornerBinding::new(CornerAction::Launcher)),
+        );
         let mut h = HotCorners::new(cfg);
-        assert!(h.update(Point::new(1919.5, 0.0), Modifiers::NONE, &outs, 0.0).is_empty(), "inner seam");
-        assert!(h.update(Point::new(1920.5, 0.0), Modifiers::NONE, &outs, 0.1).is_empty(), "inner seam");
+        assert!(
+            h.update(Point::new(1919.5, 0.0), Modifiers::NONE, &outs, 0.0)
+                .is_empty(),
+            "inner seam"
+        );
+        assert!(
+            h.update(Point::new(1920.5, 0.0), Modifiers::NONE, &outs, 0.1)
+                .is_empty(),
+            "inner seam"
+        );
         let ev = h.update(Point::new(3839.5, 0.0), Modifiers::NONE, &outs, 0.2);
-        assert_eq!(ev, vec![CornerEvent::Armed { corner: Corner::TopRight, output: 1 }]);
+        assert_eq!(
+            ev,
+            vec![CornerEvent::Armed {
+                corner: Corner::TopRight,
+                output: 1
+            }]
+        );
     }
 
     #[test]
     fn moving_between_corners_disarms_the_first() {
         let mut cfg = HotCornerConfig::default();
-        cfg.set(Corner::TopLeft, Some(CornerBinding::new(CornerAction::Overview)));
-        cfg.set(Corner::TopRight, Some(CornerBinding::new(CornerAction::AppOverview)));
+        cfg.set(
+            Corner::TopLeft,
+            Some(CornerBinding::new(CornerAction::Overview)),
+        );
+        cfg.set(
+            Corner::TopRight,
+            Some(CornerBinding::new(CornerAction::AppOverview)),
+        );
         let mut h = HotCorners::new(cfg);
         h.update(Point::new(0.0, 0.0), Modifiers::NONE, &[OUT], 0.0);
         let ev = h.update(Point::new(1919.0, 0.0), Modifiers::NONE, &[OUT], 0.01);
-        assert_eq!(ev[0], CornerEvent::Disarmed { corner: Corner::TopLeft, output: 0 });
-        assert_eq!(ev[1], CornerEvent::Armed { corner: Corner::TopRight, output: 0 });
+        assert_eq!(
+            ev[0],
+            CornerEvent::Disarmed {
+                corner: Corner::TopLeft,
+                output: 0
+            }
+        );
+        assert_eq!(
+            ev[1],
+            CornerEvent::Armed {
+                corner: Corner::TopRight,
+                output: 0
+            }
+        );
     }
 
     #[test]
     fn region_size_is_configurable() {
         let mut h = corners();
         h.cfg.size = 10.0;
-        assert!(!h.update(Point::new(8.0, 9.0), Modifiers::NONE, &[OUT], 0.0).is_empty());
+        assert!(!h
+            .update(Point::new(8.0, 9.0), Modifiers::NONE, &[OUT], 0.0)
+            .is_empty());
         let mut h = corners();
-        assert!(h.update(Point::new(8.0, 9.0), Modifiers::NONE, &[OUT], 0.0).is_empty());
+        assert!(h
+            .update(Point::new(8.0, 9.0), Modifiers::NONE, &[OUT], 0.0)
+            .is_empty());
     }
 }

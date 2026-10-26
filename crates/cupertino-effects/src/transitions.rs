@@ -104,7 +104,11 @@ pub struct TransformSample {
 
 impl TransformSample {
     /// The window as it is at rest: no scale, opaque, in place.
-    pub const IDENTITY: TransformSample = TransformSample { scale: 1.0, alpha: 1.0, dy: 0.0 };
+    pub const IDENTITY: TransformSample = TransformSample {
+        scale: 1.0,
+        alpha: 1.0,
+        dy: 0.0,
+    };
 }
 
 /// Window order-in / order-out transforms with progress functions.
@@ -171,10 +175,20 @@ impl TransformKind {
     /// unknown (recovers only the duration default), so `slow_motion` leaves them as they are.
     pub fn driver(self, slow_motion: bool) -> Driver {
         match self {
-            TransformKind::SheetIn | TransformKind::SheetOut => Driver::Timed { duration: self.duration(), ease: Ease::Linear },
+            TransformKind::SheetIn | TransformKind::SheetOut => Driver::Timed {
+                duration: self.duration(),
+                ease: Ease::Linear,
+            },
             _ => {
-                let factor = if slow_motion { TRANSFORM_SLOW_MOTION_FACTOR } else { 1.0 };
-                Driver::Timed { duration: self.duration() * factor, ease: Ease::Cosine }
+                let factor = if slow_motion {
+                    TRANSFORM_SLOW_MOTION_FACTOR
+                } else {
+                    1.0
+                };
+                Driver::Timed {
+                    duration: self.duration() * factor,
+                    ease: Ease::Cosine,
+                }
             }
         }
     }
@@ -188,7 +202,11 @@ impl TransformKind {
     /// themselves. Progress functions.
     pub fn sample(self, t: f64) -> TransformSample {
         let c = t.clamp(0.0, 1.0);
-        let scaled = |scale: f64, alpha: f64| TransformSample { scale, alpha, dy: 0.0 };
+        let scaled = |scale: f64, alpha: f64| TransformSample {
+            scale,
+            alpha,
+            dy: 0.0,
+        };
         match self {
             TransformKind::ScaleUpAndIn => {
                 let a = SCALE_UP_AND_IN_INITIAL_SCALE;
@@ -196,16 +214,29 @@ impl TransformKind {
             }
             TransformKind::PopIn => scaled(pop_in_scale(c), c),
             TransformKind::PopOut => scaled(pop_in_scale(1.0 - c), 1.0 - c),
-            TransformKind::ScaleDownAndOut => scaled(1.0 - (1.0 - SCALE_DOWN_AND_OUT_SCALE) * c, 1.0 - c),
+            TransformKind::ScaleDownAndOut => {
+                scaled(1.0 - (1.0 - SCALE_DOWN_AND_OUT_SCALE) * c, 1.0 - c)
+            }
             TransformKind::FadeOut => scaled(1.0, 1.0 - c),
-            TransformKind::SheetIn => TransformSample { scale: 1.0, alpha: (2.0 * c).min(1.0), dy: -SHEET_SLIDE * (1.0 - cosine(c)) },
-            TransformKind::SheetOut => TransformSample { scale: 1.0, alpha: 1.0 - c, dy: -SHEET_SLIDE * cosine(c) },
+            TransformKind::SheetIn => TransformSample {
+                scale: 1.0,
+                alpha: (2.0 * c).min(1.0),
+                dy: -SHEET_SLIDE * (1.0 - cosine(c)),
+            },
+            TransformKind::SheetOut => TransformSample {
+                scale: 1.0,
+                alpha: 1.0 - c,
+                dy: -SHEET_SLIDE * cosine(c),
+            },
         }
     }
 
     pub fn placement(self, rect: Rect, t: f64) -> Placement {
         let s = self.sample(t);
-        Placement { rect: scale_about_center(rect, s.scale).translate(0.0, s.dy), opacity: s.alpha }
+        Placement {
+            rect: scale_about_center(rect, s.scale).translate(0.0, s.dy),
+            opacity: s.alpha,
+        }
     }
 }
 
@@ -221,15 +252,21 @@ pub const FRAME_CHANGE_VELOCITY: f64 = 750.0;
 /// Duration of a zoom or programmatic frame change whose largest absolute change of x, y, width
 /// or height is `max_delta` points: `min(0.35, 181·ln(maxΔ/100 + 1)/750).
 pub fn frame_change_duration(max_delta: f64) -> f64 {
-    let t = FRAME_CHANGE_COEFFICIENT * (max_delta.abs() / FRAME_CHANGE_DELTA_SCALE + 1.0).ln() / FRAME_CHANGE_VELOCITY;
+    let t = FRAME_CHANGE_COEFFICIENT * (max_delta.abs() / FRAME_CHANGE_DELTA_SCALE + 1.0).ln()
+        / FRAME_CHANGE_VELOCITY;
     t.min(FRAME_CHANGE_MAX_DURATION)
 }
 
 /// Largest absolute change of x, y, width or height between two frames.
 pub fn frame_max_delta(from: Rect, to: Rect) -> f64 {
-    [to.min_x() - from.min_x(), to.min_y() - from.min_y(), to.width() - from.width(), to.height() - from.height()]
-        .into_iter()
-        .fold(0.0, |m, d| m.max(d.abs()))
+    [
+        to.min_x() - from.min_x(),
+        to.min_y() - from.min_y(),
+        to.width() - from.width(),
+        to.height() - from.height(),
+    ]
+    .into_iter()
+    .fold(0.0, |m, d| m.max(d.abs()))
 }
 
 /// Zoom (maximise / restore) and programmatic frame changes: a frame interpolation over
@@ -243,11 +280,17 @@ impl WindowZoom {
     }
 
     pub fn driver(&self, from: Rect, to: Rect) -> Driver {
-        Driver::Timed { duration: self.duration(from, to), ease: Ease::Cosine }
+        Driver::Timed {
+            duration: self.duration(from, to),
+            ease: Ease::Cosine,
+        }
     }
 
     pub fn placement(&self, from: Rect, to: Rect, progress: f64) -> Placement {
-        Placement { rect: lerp_rect(from, to, progress), opacity: 1.0 }
+        Placement {
+            rect: lerp_rect(from, to, progress),
+            opacity: 1.0,
+        }
     }
 
     pub fn animator(&self, from: Rect, to: Rect) -> ProgressAnimator {
@@ -284,13 +327,22 @@ impl FullScreenTransition {
     /// Linear progress over [`FullScreenTransition::duration`]; the curves are applied by
     /// [`FullScreenTransition::placement`].
     pub fn animator(&self) -> ProgressAnimator {
-        ProgressAnimator::new(Driver::Timed { duration: self.duration, ease: Ease::Linear }, 0.0)
+        ProgressAnimator::new(
+            Driver::Timed {
+                duration: self.duration,
+                ease: Ease::Linear,
+            },
+            0.0,
+        )
     }
 
     /// Frame at linear progress `x`, with the overlay opacity as `opacity`.
     pub fn placement(&self, from: Rect, to: Rect, x: f64) -> Placement {
         let x = x.clamp(0.0, 1.0);
-        Placement { rect: lerp_rect(from, to, self.frame_curve.eval(x)), opacity: self.fade_curve.eval(x / self.fade_fraction) }
+        Placement {
+            rect: lerp_rect(from, to, self.frame_curve.eval(x)),
+            opacity: self.fade_curve.eval(x / self.fade_fraction),
+        }
     }
 }
 
@@ -306,7 +358,10 @@ pub struct WorkspaceSlide {
 
 impl WorkspaceSlide {
     pub fn new(output_width: f64) -> Self {
-        Self { output_width, gap: SPACE_GAP }
+        Self {
+            output_width,
+            gap: SPACE_GAP,
+        }
     }
 
     pub fn pitch(&self) -> f64 {
@@ -319,7 +374,10 @@ impl WorkspaceSlide {
     }
 
     pub fn placement(&self, rect: Rect, index: usize, position: f64) -> Placement {
-        Placement { rect: rect.translate(self.offset_x(index, position), 0.0), opacity: 1.0 }
+        Placement {
+            rect: rect.translate(self.offset_x(index, position), 0.0),
+            opacity: 1.0,
+        }
     }
 
     /// Whether any part of workspace `index` is on the output.
@@ -335,7 +393,10 @@ pub const SERVER_MOVE_DURATION: f64 = 0.25;
 /// The driver of a window-server move: 0.25 s on the ease-in-ease-out cubic (0.42, 0, 0.58, 1)
 /// (timing function 4 of the server's table).
 pub fn server_move_driver() -> Driver {
-    Driver::Timed { duration: SERVER_MOVE_DURATION, ease: Ease::Bezier(CubicBezier::EASE_IN_EASE_OUT) }
+    Driver::Timed {
+        duration: SERVER_MOVE_DURATION,
+        ease: Ease::Bezier(CubicBezier::EASE_IN_EASE_OUT),
+    }
 }
 
 /// Springs of the tiling component's window properties (which property
@@ -377,13 +438,24 @@ pub struct OverviewZoom {
 
 impl Default for OverviewZoom {
     fn default() -> Self {
-        Self { duration: 0.25, slow_motion_duration: 2.0, ease: Ease::Bezier(CubicBezier::EASE_IN_EASE_OUT) }
+        Self {
+            duration: 0.25,
+            slow_motion_duration: 2.0,
+            ease: Ease::Bezier(CubicBezier::EASE_IN_EASE_OUT),
+        }
     }
 }
 
 impl OverviewZoom {
     pub fn driver(&self, slow_motion: bool) -> Driver {
-        Driver::Timed { duration: if slow_motion { self.slow_motion_duration } else { self.duration }, ease: self.ease }
+        Driver::Timed {
+            duration: if slow_motion {
+                self.slow_motion_duration
+            } else {
+                self.duration
+            },
+            ease: self.ease,
+        }
     }
 
     pub fn animator(&self, slow_motion: bool, initial: f64) -> ProgressAnimator {
@@ -392,7 +464,10 @@ impl OverviewZoom {
 
     /// `progress` is the already eased progress of the animator.
     pub fn placement(&self, window: Rect, slot: Rect, progress: f64) -> Placement {
-        Placement { rect: lerp_rect(window, slot, progress.clamp(0.0, 1.0)), opacity: 1.0 }
+        Placement {
+            rect: lerp_rect(window, slot, progress.clamp(0.0, 1.0)),
+            opacity: 1.0,
+        }
     }
 }
 
@@ -413,7 +488,11 @@ pub const SHOW_DESKTOP_RESPONSE: f64 = 0.3;
 
 impl Default for ShowDesktop {
     fn default() -> Self {
-        Self { driver: Driver::spring_response(SHOW_DESKTOP_RESPONSE, SHOW_DESKTOP_DAMPING_RATIO), peek: 0.0, allow_vertical: false }
+        Self {
+            driver: Driver::spring_response(SHOW_DESKTOP_RESPONSE, SHOW_DESKTOP_DAMPING_RATIO),
+            peek: 0.0,
+            allow_vertical: false,
+        }
     }
 }
 
@@ -429,12 +508,18 @@ impl ShowDesktop {
             moves.push((up, (0.0, -up)));
             moves.push((down, (0.0, down)));
         }
-        let (_, (dx, dy)) = moves.into_iter().min_by(|a, b| a.0.total_cmp(&b.0)).expect("at least two candidates");
+        let (_, (dx, dy)) = moves
+            .into_iter()
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .expect("at least two candidates");
         window.translate(dx, dy)
     }
 
     pub fn placement(&self, window: Rect, screen: Rect, progress: f64) -> Placement {
-        Placement { rect: lerp_rect(window, self.hidden_rect(window, screen), progress), opacity: 1.0 }
+        Placement {
+            rect: lerp_rect(window, self.hidden_rect(window, screen), progress),
+            opacity: 1.0,
+        }
     }
 
     pub fn animator(&self, initial: f64) -> ProgressAnimator {
@@ -455,10 +540,17 @@ mod tests {
     #[test]
     fn transform_table_per_window_kind() {
         use TransformKind::*;
-        let table: Vec<_> = [WindowKind::Plain, WindowKind::Document, WindowKind::Utility, WindowKind::Alert, WindowKind::AppModal, WindowKind::Sheet]
-            .into_iter()
-            .map(|k| (k.order_in(), k.order_out()))
-            .collect();
+        let table: Vec<_> = [
+            WindowKind::Plain,
+            WindowKind::Document,
+            WindowKind::Utility,
+            WindowKind::Alert,
+            WindowKind::AppModal,
+            WindowKind::Sheet,
+        ]
+        .into_iter()
+        .map(|k| (k.order_in(), k.order_out()))
+        .collect();
         assert_eq!(
             table,
             vec![
@@ -493,13 +585,34 @@ mod tests {
     fn document_grows_in_from_nothing_about_the_centre() {
         let w = Rect::new(400.0, 300.0, 800.0, 600.0);
         let k = TransformKind::ScaleUpAndIn;
-        assert_eq!(k.placement(w, 0.0), Placement { rect: Rect::new(800.0, 600.0, 0.0, 0.0), opacity: 0.0 });
-        assert_eq!(k.placement(w, 0.5), Placement { rect: Rect::new(600.0, 450.0, 400.0, 300.0), opacity: 0.5 });
-        assert_eq!(k.placement(w, 1.0), Placement { rect: w, opacity: 1.0 });
+        assert_eq!(
+            k.placement(w, 0.0),
+            Placement {
+                rect: Rect::new(800.0, 600.0, 0.0, 0.0),
+                opacity: 0.0
+            }
+        );
+        assert_eq!(
+            k.placement(w, 0.5),
+            Placement {
+                rect: Rect::new(600.0, 450.0, 400.0, 300.0),
+                opacity: 0.5
+            }
+        );
+        assert_eq!(
+            k.placement(w, 1.0),
+            Placement {
+                rect: w,
+                opacity: 1.0
+            }
+        );
         let mut a = k.animator(false);
         a.animate_to(1.0, 0.0);
         assert_close(a.value(0.1), 0.5);
-        assert_close(a.value(0.05), 0.5 - 0.5 * (std::f64::consts::PI / 4.0).cos());
+        assert_close(
+            a.value(0.05),
+            0.5 - 0.5 * (std::f64::consts::PI / 4.0).cos(),
+        );
         assert!(!a.is_animating(0.2));
     }
 
@@ -509,7 +622,10 @@ mod tests {
         assert_close(s(0.0).scale, 1.2 * 0.2f64.powi(3));
         assert_close(s(0.3).scale, 1.2 * 0.6f64.powi(3));
         assert_close(s(0.6).scale, 1.2);
-        assert_close(s(0.8).scale, 1.0 + 0.2 * (0.1 * std::f64::consts::PI).cos() * 0.5f64.powf(1.5));
+        assert_close(
+            s(0.8).scale,
+            1.0 + 0.2 * (0.1 * std::f64::consts::PI).cos() * 0.5f64.powf(1.5),
+        );
         assert_close(s(1.0).scale, 1.0);
         assert_eq!(s(0.6).alpha, 0.6);
         let out = TransformKind::PopOut.sample(0.4);
@@ -522,18 +638,45 @@ mod tests {
         let s = TransformKind::ScaleDownAndOut.sample(0.5);
         assert_close(s.scale, 0.95);
         assert_eq!(s.alpha, 0.5);
-        assert_eq!(TransformKind::ScaleDownAndOut.sample(1.0), TransformSample { scale: 0.9, alpha: 0.0, dy: 0.0 });
-        assert_eq!(TransformKind::FadeOut.sample(0.25), TransformSample { scale: 1.0, alpha: 0.75, dy: 0.0 });
+        assert_eq!(
+            TransformKind::ScaleDownAndOut.sample(1.0),
+            TransformSample {
+                scale: 0.9,
+                alpha: 0.0,
+                dy: 0.0
+            }
+        );
+        assert_eq!(
+            TransformKind::FadeOut.sample(0.25),
+            TransformSample {
+                scale: 1.0,
+                alpha: 0.75,
+                dy: 0.0
+            }
+        );
     }
 
     #[test]
     fn sheets_slide_32_points_on_linear_time_with_an_eased_offset() {
         for k in [TransformKind::SheetIn, TransformKind::SheetOut] {
-            assert_eq!(k.driver(false), Driver::Timed { duration: 0.26, ease: Ease::Linear });
+            assert_eq!(
+                k.driver(false),
+                Driver::Timed {
+                    duration: 0.26,
+                    ease: Ease::Linear
+                }
+            );
             assert_eq!(k.driver(true), k.driver(false), "no slow motion for sheets");
         }
         let open = |p| TransformKind::SheetIn.sample(p);
-        assert_eq!(open(0.0), TransformSample { scale: 1.0, alpha: 0.0, dy: -32.0 });
+        assert_eq!(
+            open(0.0),
+            TransformSample {
+                scale: 1.0,
+                alpha: 0.0,
+                dy: -32.0
+            }
+        );
         assert_close(open(0.25).alpha, 0.5);
         assert_close(open(0.25).dy, -32.0 * (1.0 - cosine(0.25)));
         assert_eq!(open(0.5).alpha, 1.0, "the fade completes at half time");
@@ -543,11 +686,23 @@ mod tests {
         assert_eq!(close(0.0), TransformSample::IDENTITY);
         assert_close(close(0.5).alpha, 0.5);
         assert_close(close(0.5).dy, -16.0);
-        assert_eq!(close(1.0), TransformSample { scale: 1.0, alpha: 0.0, dy: -32.0 });
+        assert_eq!(
+            close(1.0),
+            TransformSample {
+                scale: 1.0,
+                alpha: 0.0,
+                dy: -32.0
+            }
+        );
         let w = Rect::new(100.0, 200.0, 400.0, 300.0);
-        assert_eq!(TransformKind::SheetIn.placement(w, 0.0), Placement { rect: Rect::new(100.0, 168.0, 400.0, 300.0), opacity: 0.0 });
+        assert_eq!(
+            TransformKind::SheetIn.placement(w, 0.0),
+            Placement {
+                rect: Rect::new(100.0, 168.0, 400.0, 300.0),
+                opacity: 0.0
+            }
+        );
     }
-
 
     #[test]
     fn frame_change_duration_follows_the_log_formula() {
@@ -561,10 +716,19 @@ mod tests {
 
     #[test]
     fn zoom_uses_the_largest_component_change_and_the_sin2_ease() {
-        let (a, b) = (Rect::new(100.0, 100.0, 500.0, 400.0), Rect::new(150.0, 40.0, 600.0, 420.0));
+        let (a, b) = (
+            Rect::new(100.0, 100.0, 500.0, 400.0),
+            Rect::new(150.0, 40.0, 600.0, 420.0),
+        );
         let z = WindowZoom;
         assert_eq!(frame_max_delta(a, b), 100.0);
-        assert_eq!(z.driver(a, b), Driver::Timed { duration: frame_change_duration(100.0), ease: Ease::Cosine });
+        assert_eq!(
+            z.driver(a, b),
+            Driver::Timed {
+                duration: frame_change_duration(100.0),
+                ease: Ease::Cosine
+            }
+        );
         assert_eq!(z.placement(a, SCREEN, 0.0).rect, a);
         assert_eq!(z.placement(a, SCREEN, 1.0).rect, SCREEN);
         let mut an = z.animator(a, b);
@@ -576,12 +740,31 @@ mod tests {
     fn full_screen_frame_and_overlay_fade() {
         let f = FullScreenTransition::default();
         let (a, b) = (Rect::new(100.0, 100.0, 800.0, 600.0), SCREEN);
-        assert_eq!(f.placement(a, b, 0.0), Placement { rect: a, opacity: 0.0 });
-        assert_eq!(f.placement(a, b, 0.5).opacity, 1.0, "the fade ends at half time");
-        assert_eq!(f.placement(a, b, 1.0), Placement { rect: b, opacity: 1.0 });
+        assert_eq!(
+            f.placement(a, b, 0.0),
+            Placement {
+                rect: a,
+                opacity: 0.0
+            }
+        );
+        assert_eq!(
+            f.placement(a, b, 0.5).opacity,
+            1.0,
+            "the fade ends at half time"
+        );
+        assert_eq!(
+            f.placement(a, b, 1.0),
+            Placement {
+                rect: b,
+                opacity: 1.0
+            }
+        );
         let mid = CubicBezier::new(0.25, 0.0, 0.0, 1.0).eval(0.25);
         assert_eq!(f.placement(a, b, 0.25).rect, lerp_rect(a, b, mid));
-        assert_close(f.placement(a, b, 0.25).opacity, CubicBezier::new(0.0, 1.0, 1.0, 1.0).eval(0.5));
+        assert_close(
+            f.placement(a, b, 0.25).opacity,
+            CubicBezier::new(0.0, 1.0, 1.0, 1.0).eval(0.5),
+        );
         let mut an = f.animator();
         an.animate_to(1.0, 0.0);
         assert!(an.is_animating(0.49) && !an.is_animating(0.5));
@@ -591,7 +774,11 @@ mod tests {
     fn workspace_slide_geometry() {
         let s = WorkspaceSlide::new(1920.0);
         assert_eq!(s.offset_x(0, 0.0), 0.0);
-        assert_eq!(s.offset_x(1, 0.0), 1984.0, "neighbours sit one output width + 64 pt apart");
+        assert_eq!(
+            s.offset_x(1, 0.0),
+            1984.0,
+            "neighbours sit one output width + 64 pt apart"
+        );
         assert_eq!(s.offset_x(0, 1.0), -1984.0);
         assert_eq!(s.offset_x(0, 0.5), -992.0);
         assert_eq!(s.offset_x(1, 0.5), 992.0);
@@ -604,9 +791,18 @@ mod tests {
     #[test]
     fn overview_durations_are_verified() {
         let o = OverviewZoom::default();
-        assert_eq!(o.driver(false), Driver::Timed { duration: 0.25, ease: o.ease });
+        assert_eq!(
+            o.driver(false),
+            Driver::Timed {
+                duration: 0.25,
+                ease: o.ease
+            }
+        );
         assert!(matches!(o.driver(true), Driver::Timed { duration, .. } if duration == 2.0));
-        let (w, s) = (Rect::new(0.0, 0.0, 1000.0, 700.0), Rect::new(100.0, 100.0, 300.0, 200.0));
+        let (w, s) = (
+            Rect::new(0.0, 0.0, 1000.0, 700.0),
+            Rect::new(100.0, 100.0, 300.0, 200.0),
+        );
         assert_eq!(o.placement(w, s, 0.0).rect, w);
         assert_eq!(o.placement(w, s, 1.0).rect, s);
         let mut a = o.animator(false, 0.0);
@@ -622,7 +818,9 @@ mod tests {
 
     #[test]
     fn server_moves_run_0_25_s_on_ease_in_ease_out() {
-        let Driver::Timed { duration, ease } = server_move_driver() else { panic!("timed driver expected") };
+        let Driver::Timed { duration, ease } = server_move_driver() else {
+            panic!("timed driver expected")
+        };
         assert_eq!(duration, 0.25);
         assert_eq!(ease, Ease::Bezier(CubicBezier::new(0.42, 0.0, 0.58, 1.0)));
         assert_close(ease.apply(0.5), 0.5);
@@ -633,11 +831,18 @@ mod tests {
     fn tiling_springs_have_the_recovered_damping_and_response() {
         let t = TilingSprings::default();
         let shape = |d: Driver| {
-            let Driver::Spring(p) = d else { panic!("spring expected") };
+            let Driver::Spring(p) = d else {
+                panic!("spring expected")
+            };
             let s = cupertino_animation::Spring::new(p);
             (s.damping_ratio(), p.perceptual_duration())
         };
-        for (driver, ratio, response) in [(t.frame, 1.0, 0.38), (t.alpha, 1.0, 0.3), (t.corner_radius, 1.0, 0.2), (t.quick, 0.86, 0.15)] {
+        for (driver, ratio, response) in [
+            (t.frame, 1.0, 0.38),
+            (t.alpha, 1.0, 0.3),
+            (t.corner_radius, 1.0, 0.2),
+            (t.quick, 0.86, 0.15),
+        ] {
             let (damping, duration) = shape(driver);
             assert_close(damping, ratio);
             assert_close(duration, response);
@@ -647,7 +852,9 @@ mod tests {
     #[test]
     fn show_desktop_spring_is_the_verified_one() {
         let d = ShowDesktop::default();
-        let Driver::Spring(p) = d.driver else { panic!("spring expected") };
+        let Driver::Spring(p) = d.driver else {
+            panic!("spring expected")
+        };
         let s = cupertino_animation::Spring::new(p);
         assert!((s.damping_ratio() - 1.0).abs() < 1e-12);
         assert!((p.perceptual_duration() - 0.3).abs() < 1e-12);
@@ -661,10 +868,16 @@ mod tests {
         assert_eq!(d.hidden_rect(left, SCREEN).max_x(), 0.0);
         assert_eq!(d.hidden_rect(right, SCREEN).min_x(), 1920.0);
         assert_eq!(d.placement(left, SCREEN, 0.0).rect, left);
-        assert_eq!(d.placement(left, SCREEN, 1.0).rect, d.hidden_rect(left, SCREEN));
+        assert_eq!(
+            d.placement(left, SCREEN, 1.0).rect,
+            d.hidden_rect(left, SCREEN)
+        );
         let peek = ShowDesktop { peek: 20.0, ..d };
         assert_eq!(peek.hidden_rect(left, SCREEN).max_x(), 20.0);
-        let vert = ShowDesktop { allow_vertical: true, ..d };
+        let vert = ShowDesktop {
+            allow_vertical: true,
+            ..d
+        };
         let tall = Rect::new(400.0, 5.0, 1000.0, 700.0);
         assert_eq!(vert.hidden_rect(tall, SCREEN).max_y(), 0.0);
     }
@@ -678,7 +891,10 @@ mod tests {
         let mut prev_x = w.min_x() + 1.0;
         for k in 0..300 {
             let p = d.placement(w, SCREEN, a.value(k as f64 * 0.005));
-            assert!(p.rect.min_x() <= prev_x + 1e-9 && p.rect.max_x() >= d.hidden_rect(w, SCREEN).max_x() - 1e-6);
+            assert!(
+                p.rect.min_x() <= prev_x + 1e-9
+                    && p.rect.max_x() >= d.hidden_rect(w, SCREEN).max_x() - 1e-6
+            );
             prev_x = p.rect.min_x();
         }
         assert!(!a.is_animating(2.0));

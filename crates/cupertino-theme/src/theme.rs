@@ -2,7 +2,10 @@ use crate::animation::AnimationPresets;
 use crate::appearance::Appearance;
 use crate::error::Result;
 use crate::metrics::{ShapeTokens, WindowShadowPreset};
-use crate::recipe::{app_grid_background, switcher_panel, MaterialLibrary, MaterialOptions, Recipe, APP_GRID_MATERIAL, SWITCHER_MATERIAL};
+use crate::recipe::{
+    app_grid_background, switcher_panel, MaterialLibrary, MaterialOptions, Recipe,
+    APP_GRID_MATERIAL, SWITCHER_MATERIAL,
+};
 use crate::tokens::DesignTokens;
 use std::path::{Path, PathBuf};
 
@@ -59,7 +62,12 @@ impl Theme {
         })
     }
 
-    pub fn recipe(&self, appearance: Appearance, material: &str, opts: &MaterialOptions) -> Result<Recipe> {
+    pub fn recipe(
+        &self,
+        appearance: Appearance,
+        material: &str,
+        opts: &MaterialOptions,
+    ) -> Result<Recipe> {
         if material == SWITCHER_MATERIAL {
             return Ok(switcher_panel(appearance, opts.reduce_transparency));
         }
@@ -84,9 +92,17 @@ mod tests {
     fn from_strs_matches_from_dir() {
         let d = spec_dir();
         let read = |f: &str| std::fs::read_to_string(d.join(f)).unwrap();
-        let a = Theme::from_strs(&read(TOKENS_FILE), &read(MATERIALS_FILE), &read(ANIMATION_FILE)).unwrap();
+        let a = Theme::from_strs(
+            &read(TOKENS_FILE),
+            &read(MATERIALS_FILE),
+            &read(ANIMATION_FILE),
+        )
+        .unwrap();
         let b = Theme::load().unwrap();
-        assert_eq!(a.tokens.table(Appearance::Dark).len(), b.tokens.table(Appearance::Dark).len());
+        assert_eq!(
+            a.tokens.table(Appearance::Dark).len(),
+            b.tokens.table(Appearance::Dark).len()
+        );
         assert_eq!(a.animation.timing("default"), b.animation.timing("default"));
     }
 

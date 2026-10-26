@@ -72,7 +72,11 @@ pub enum FromWorker {
     /// outcome it exits.
     Decided { outcome: Outcome },
     /// The session is open and the leader runs; `uid` is the user it belongs to.
-    Started { session_id: String, leader: u32, uid: u32 },
+    Started {
+        session_id: String,
+        leader: u32,
+        uid: u32,
+    },
     /// The worker gives up; `reason` is for the journal and holds no secret.
     Failed { reason: String },
 }

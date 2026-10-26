@@ -109,15 +109,32 @@ pub struct WarpTiming {
 
 impl WarpTiming {
     /// `slide_dist = |s|`, `cross = |dxL| + |dxR|`, `stretch_len = |L|`, `window_len = L0`.
-    pub fn compute(slide_dist: f64, cross: f64, stretch_len: f64, window_len: f64, params: &WarpParams) -> Self {
+    pub fn compute(
+        slide_dist: f64,
+        cross: f64,
+        stretch_len: f64,
+        window_len: f64,
+        params: &WarpParams,
+    ) -> Self {
         let unit = params.time_unit;
-        let slide = ((slide_dist * 2.0).max(cross / 8.0) * 0.5 + 1.0).ln().trunc() * unit;
+        let slide = ((slide_dist * 2.0).max(cross / 8.0) * 0.5 + 1.0)
+            .ln()
+            .trunc()
+            * unit;
         let stretch = (stretch_len.abs() * 0.5 + 1.0).ln().trunc() * unit;
         let (slide, stretch) = (slide.max(unit), stretch.max(unit));
-        let ratio = if stretch_len.abs() > 0.0 { (stretch_len - window_len).abs() / stretch_len.abs() } else { 0.0 };
+        let ratio = if stretch_len.abs() > 0.0 {
+            (stretch_len - window_len).abs() / stretch_len.abs()
+        } else {
+            0.0
+        };
         let u = (1.0 - 2.0 * ratio).clamp(-1.0, 1.0).acos() / std::f64::consts::PI * stretch;
         let delay = (slide - u).max(0.0);
-        Self { slide, stretch, delay }
+        Self {
+            slide,
+            stretch,
+            delay,
+        }
     }
 
     pub fn total(&self) -> f64 {
@@ -142,12 +159,30 @@ pub fn subdivide(extent: f64, amplitude: f64, params: &WarpParams) -> Vec<f64> {
     let cap_depth = ((params.max_samples.max(2) - 1) as f64).log2().floor() as u32;
     let depth_limit = params.max_depth.min(cap_depth);
     let mut out = vec![0.0];
-    split(0.0, 1.0, 0, extent.abs(), amplitude.abs(), depth_limit, params, &mut out);
+    split(
+        0.0,
+        1.0,
+        0,
+        extent.abs(),
+        amplitude.abs(),
+        depth_limit,
+        params,
+        &mut out,
+    );
     out
 }
 
 #[allow(clippy::too_many_arguments)]
-fn split(v0: f64, v1: f64, depth: u32, extent: f64, amp: f64, limit: u32, p: &WarpParams, out: &mut Vec<f64>) {
+fn split(
+    v0: f64,
+    v1: f64,
+    depth: u32,
+    extent: f64,
+    amp: f64,
+    limit: u32,
+    p: &WarpParams,
+    out: &mut Vec<f64>,
+) {
     let len = (v1 - v0) * extent;
     let curve = |v: f64| amp * cosine(v);
     let vm = 0.5 * (v0 + v1);
@@ -155,7 +190,9 @@ fn split(v0: f64, v1: f64, depth: u32, extent: f64, amp: f64, limit: u32, p: &Wa
         .iter()
         .map(|&t| (curve(v0 + t * (v1 - v0)) - (curve(v0) + t * (curve(v1) - curve(v0)))).abs())
         .fold(0.0, f64::max);
-    let leaf = depth >= limit || len < p.min_segment || (len < p.flat_segment && chord_error < p.chord_tolerance);
+    let leaf = depth >= limit
+        || len < p.min_segment
+        || (len < p.flat_segment && chord_error < p.chord_tolerance);
     if leaf {
         out.push(v1);
     } else {
@@ -243,8 +280,28 @@ impl WarpGeometry {
         };
         let dx_low = low;
         let dx_high = high - width;
-        let timing = WarpTiming::compute(slide, dx_low.abs() + dx_high.abs(), far_target, length, params);
-        Self { direction, origin, axis, cross, length, width, slide, far_target, near_target, dx_low, dx_high, timing, params: *params }
+        let timing = WarpTiming::compute(
+            slide,
+            dx_low.abs() + dx_high.abs(),
+            far_target,
+            length,
+            params,
+        );
+        Self {
+            direction,
+            origin,
+            axis,
+            cross,
+            length,
+            width,
+            slide,
+            far_target,
+            near_target,
+            dx_low,
+            dx_high,
+            timing,
+            params: *params,
+        }
     }
 
     fn uv(&self, fa: f64, fb: f64) -> [f32; 2] {
@@ -258,7 +315,10 @@ impl WarpGeometry {
     }
 
     fn point(&self, a: f64, b: f64) -> [f32; 2] {
-        [(self.origin[0] + self.axis[0] * a + self.cross[0] * b) as f32, (self.origin[1] + self.axis[1] * a + self.cross[1] * b) as f32]
+        [
+            (self.origin[0] + self.axis[0] * a + self.cross[0] * b) as f32,
+            (self.origin[1] + self.axis[1] * a + self.cross[1] * b) as f32,
+        ]
     }
 
     /// Positions of the far and near end along the travel axis (from the far end's start) and the
@@ -288,8 +348,15 @@ impl WarpGeometry {
         };
         let make = |v: f64, high: bool| -> Vertex {
             let a = st.far + v * (st.near - st.far);
-            let b = if high { self.width + offset(self.dx_high, v) } else { offset(self.dx_low, v) };
-            Vertex { position: self.point(a, b), uv: self.uv(v, if high { 1.0 } else { 0.0 }) }
+            let b = if high {
+                self.width + offset(self.dx_high, v)
+            } else {
+                offset(self.dx_low, v)
+            };
+            Vertex {
+                position: self.point(a, b),
+                uv: self.uv(v, if high { 1.0 } else { 0.0 }),
+            }
         };
         let n = vs.len();
         let mut vertices = Vec::with_capacity(2 * n);
@@ -321,7 +388,13 @@ pub struct WarpState {
 }
 
 /// One-shot convenience: the mesh of a warp minimize at progress `p`.
-pub fn warp_mesh(window: Rect, slot: Rect, direction: WarpDirection, p: f64, params: &WarpParams) -> Mesh {
+pub fn warp_mesh(
+    window: Rect,
+    slot: Rect,
+    direction: WarpDirection,
+    p: f64,
+    params: &WarpParams,
+) -> Mesh {
     WarpGeometry::new(window, slot, direction, params).mesh(p)
 }
 
@@ -357,7 +430,12 @@ mod tests {
 
     #[test]
     fn phases_start_at_zero_and_end_at_one() {
-        let g = WarpGeometry::new(window(), slot(), WarpDirection::Down, &WarpParams::default());
+        let g = WarpGeometry::new(
+            window(),
+            slot(),
+            WarpDirection::Down,
+            &WarpParams::default(),
+        );
         assert_eq!(g.timing.phases(0.0), (0.0, 0.0));
         assert_eq!(g.timing.phases(1.0), (1.0, 1.0));
         let (e1, e2) = g.timing.phases(0.3);
@@ -366,22 +444,41 @@ mod tests {
 
     #[test]
     fn mesh_at_zero_is_the_window() {
-        for dir in [WarpDirection::Down, WarpDirection::Up, WarpDirection::Right, WarpDirection::Left] {
+        for dir in [
+            WarpDirection::Down,
+            WarpDirection::Up,
+            WarpDirection::Right,
+            WarpDirection::Left,
+        ] {
             let m = warp_mesh(window(), slot(), dir, 0.0, &WarpParams::default());
             assert!(m.bounds().size.width > 0.0);
             let b = m.bounds();
-            assert!((b.min_x() - 300.0).abs() < 1e-3 && (b.max_x() - 1100.0).abs() < 1e-3, "{dir:?} {b:?}");
-            assert!((b.min_y() - 100.0).abs() < 1e-3 && (b.max_y() - 600.0).abs() < 1e-3, "{dir:?} {b:?}");
+            assert!(
+                (b.min_x() - 300.0).abs() < 1e-3 && (b.max_x() - 1100.0).abs() < 1e-3,
+                "{dir:?} {b:?}"
+            );
+            assert!(
+                (b.min_y() - 100.0).abs() < 1e-3 && (b.max_y() - 600.0).abs() < 1e-3,
+                "{dir:?} {b:?}"
+            );
         }
     }
 
     #[test]
     fn mesh_at_zero_maps_texture_uniformly_to_window() {
-        let m = warp_mesh(window(), slot(), WarpDirection::Down, 0.0, &WarpParams::default());
+        let m = warp_mesh(
+            window(),
+            slot(),
+            WarpDirection::Down,
+            0.0,
+            &WarpParams::default(),
+        );
         for v in &m.vertices {
             let x = 300.0 + v.uv[0] as f64 * 800.0;
             let y = 100.0 + v.uv[1] as f64 * 500.0;
-            assert!((v.position[0] as f64 - x).abs() < 1e-3 && (v.position[1] as f64 - y).abs() < 1e-3);
+            assert!(
+                (v.position[0] as f64 - x).abs() < 1e-3 && (v.position[1] as f64 - y).abs() < 1e-3
+            );
         }
     }
 
@@ -389,13 +486,28 @@ mod tests {
     fn mesh_at_one_is_the_slot_with_icon_rect_landing() {
         for (dir, win, slot) in [
             (WarpDirection::Down, window(), slot()),
-            (WarpDirection::Up, Rect::new(300.0, 900.0, 800.0, 400.0), Rect::new(200.0, 300.0, 64.0, 64.0)),
-            (WarpDirection::Right, window(), Rect::new(1800.0, 400.0, 64.0, 64.0)),
-            (WarpDirection::Left, window(), Rect::new(20.0, 300.0, 64.0, 64.0)),
+            (
+                WarpDirection::Up,
+                Rect::new(300.0, 900.0, 800.0, 400.0),
+                Rect::new(200.0, 300.0, 64.0, 64.0),
+            ),
+            (
+                WarpDirection::Right,
+                window(),
+                Rect::new(1800.0, 400.0, 64.0, 64.0),
+            ),
+            (
+                WarpDirection::Left,
+                window(),
+                Rect::new(20.0, 300.0, 64.0, 64.0),
+            ),
         ] {
             let m = warp_mesh(win, slot, dir, 1.0, &WarpParams::default());
             let b = m.bounds();
-            assert!((b.min_x() - slot.min_x()).abs() < 1e-3, "{dir:?} {b:?} vs {slot:?}");
+            assert!(
+                (b.min_x() - slot.min_x()).abs() < 1e-3,
+                "{dir:?} {b:?} vs {slot:?}"
+            );
             assert!((b.max_x() - slot.max_x()).abs() < 1e-3, "{dir:?} {b:?}");
             assert!((b.min_y() - slot.min_y()).abs() < 1e-3, "{dir:?} {b:?}");
             assert!((b.max_y() - slot.max_y()).abs() < 1e-3, "{dir:?} {b:?}");
@@ -404,16 +516,31 @@ mod tests {
 
     #[test]
     fn uv_corners_land_on_matching_slot_corners() {
-        let m = warp_mesh(window(), slot(), WarpDirection::Down, 1.0, &WarpParams::default());
+        let m = warp_mesh(
+            window(),
+            slot(),
+            WarpDirection::Down,
+            1.0,
+            &WarpParams::default(),
+        );
         let corner = |u: f32, v: f32| m.vertices.iter().find(|x| x.uv == [u, v]).unwrap().position;
         let s = slot();
-        assert!((corner(0.0, 0.0)[0] as f64 - s.min_x()).abs() < 1e-3 && (corner(0.0, 0.0)[1] as f64 - s.min_y()).abs() < 1e-3);
-        assert!((corner(1.0, 1.0)[0] as f64 - s.max_x()).abs() < 1e-3 && (corner(1.0, 1.0)[1] as f64 - s.max_y()).abs() < 1e-3);
+        assert!(
+            (corner(0.0, 0.0)[0] as f64 - s.min_x()).abs() < 1e-3
+                && (corner(0.0, 0.0)[1] as f64 - s.min_y()).abs() < 1e-3
+        );
+        assert!(
+            (corner(1.0, 1.0)[0] as f64 - s.max_x()).abs() < 1e-3
+                && (corner(1.0, 1.0)[1] as f64 - s.max_y()).abs() < 1e-3
+        );
     }
 
     #[test]
     fn literal_landing_collapses_onto_the_near_edge() {
-        let p = WarpParams { landing: Landing::IconEdge, ..Default::default() };
+        let p = WarpParams {
+            landing: Landing::IconEdge,
+            ..Default::default()
+        };
         let m = warp_mesh(window(), slot(), WarpDirection::Down, 1.0, &p);
         let b = m.bounds();
         assert!(b.height() < 1e-3, "{b:?}");
@@ -425,7 +552,12 @@ mod tests {
     #[test]
     fn mesh_is_finite_and_within_the_vertex_budget_everywhere() {
         let p = WarpParams::default();
-        for dir in [WarpDirection::Down, WarpDirection::Up, WarpDirection::Right, WarpDirection::Left] {
+        for dir in [
+            WarpDirection::Down,
+            WarpDirection::Up,
+            WarpDirection::Right,
+            WarpDirection::Left,
+        ] {
             let g = WarpGeometry::new(window(), slot(), dir, &p);
             for k in 0..=200 {
                 let m = g.mesh(k as f64 / 200.0);
@@ -438,7 +570,12 @@ mod tests {
 
     #[test]
     fn travel_ends_move_monotonically() {
-        let g = WarpGeometry::new(window(), slot(), WarpDirection::Down, &WarpParams::default());
+        let g = WarpGeometry::new(
+            window(),
+            slot(),
+            WarpDirection::Down,
+            &WarpParams::default(),
+        );
         let (mut far, mut near) = (-1.0, -1.0);
         for k in 0..=400 {
             let s = g.state(k as f64 / 400.0);
@@ -451,22 +588,38 @@ mod tests {
 
     #[test]
     fn funnel_narrows_towards_the_near_end() {
-        let g = WarpGeometry::new(window(), slot(), WarpDirection::Down, &WarpParams::default());
+        let g = WarpGeometry::new(
+            window(),
+            slot(),
+            WarpDirection::Down,
+            &WarpParams::default(),
+        );
         let m = g.mesh(0.4);
         let first = m.vertex(1, 0).position[0] - m.vertex(0, 0).position[0];
         let last = m.vertex(1, m.rows - 1).position[0] - m.vertex(0, m.rows - 1).position[0];
-        assert!(last < first, "near end {last} narrower than far end {first}");
+        assert!(
+            last < first,
+            "near end {last} narrower than far end {first}"
+        );
     }
 
     #[test]
     fn subdivision_rules() {
         let p = WarpParams::default();
-        assert_eq!(subdivide(7.0, 100.0, &p), vec![0.0, 1.0], "shorter than 8 pt: a single segment");
+        assert_eq!(
+            subdivide(7.0, 100.0, &p),
+            vec![0.0, 1.0],
+            "shorter than 8 pt: a single segment"
+        );
         let flat = subdivide(100.0, 0.0, &p);
         assert_eq!(flat, vec![0.0, 1.0], "short and flat: a single segment");
         let long = subdivide(1000.0, 0.0, &p);
         assert!(long.len() > 8, "{}", long.len());
-        assert!(long.windows(2).all(|w| (w[1] - w[0]) * 1000.0 < 128.0 + 1e-9), "never longer than 128 pt");
+        assert!(
+            long.windows(2)
+                .all(|w| (w[1] - w[0]) * 1000.0 < 128.0 + 1e-9),
+            "never longer than 128 pt"
+        );
         let curvy = subdivide(120.0, 400.0, &p);
         assert!(curvy.len() > 2, "short but strongly curved subdivides");
         for v in [flat, long, curvy] {
@@ -478,20 +631,42 @@ mod tests {
 
     #[test]
     fn subdivision_respects_the_sample_budget() {
-        let p = WarpParams { max_depth: 30, ..Default::default() };
+        let p = WarpParams {
+            max_depth: 30,
+            ..Default::default()
+        };
         let v = subdivide(100_000.0, 5_000.0, &p);
         assert!(v.len() <= 400, "{}", v.len());
-        let tiny = WarpParams { max_samples: 5, ..Default::default() };
+        let tiny = WarpParams {
+            max_samples: 5,
+            ..Default::default()
+        };
         assert!(subdivide(100_000.0, 5_000.0, &tiny).len() <= 5);
     }
 
     #[test]
     fn direction_selection() {
         let w = window();
-        assert_eq!(WarpDirection::for_dock(DockEdge::Bottom, w, slot()), WarpDirection::Down);
-        assert_eq!(WarpDirection::for_dock(DockEdge::Bottom, Rect::new(0.0, 1100.0, 100.0, 100.0), slot()), WarpDirection::Up);
-        assert_eq!(WarpDirection::for_dock(DockEdge::Right, w, slot()), WarpDirection::Right);
-        assert_eq!(WarpDirection::for_dock(DockEdge::Left, w, slot()), WarpDirection::Left);
+        assert_eq!(
+            WarpDirection::for_dock(DockEdge::Bottom, w, slot()),
+            WarpDirection::Down
+        );
+        assert_eq!(
+            WarpDirection::for_dock(
+                DockEdge::Bottom,
+                Rect::new(0.0, 1100.0, 100.0, 100.0),
+                slot()
+            ),
+            WarpDirection::Up
+        );
+        assert_eq!(
+            WarpDirection::for_dock(DockEdge::Right, w, slot()),
+            WarpDirection::Right
+        );
+        assert_eq!(
+            WarpDirection::for_dock(DockEdge::Left, w, slot()),
+            WarpDirection::Left
+        );
     }
 
     #[test]
@@ -507,7 +682,12 @@ mod tests {
 
     #[test]
     fn degenerate_inputs_stay_finite() {
-        let g = WarpGeometry::new(Rect::new(0.0, 0.0, 0.0, 0.0), Rect::new(0.0, 0.0, 0.0, 0.0), WarpDirection::Down, &WarpParams::default());
+        let g = WarpGeometry::new(
+            Rect::new(0.0, 0.0, 0.0, 0.0),
+            Rect::new(0.0, 0.0, 0.0, 0.0),
+            WarpDirection::Down,
+            &WarpParams::default(),
+        );
         for k in 0..=10 {
             assert!(g.mesh(k as f64 / 10.0).is_finite());
         }

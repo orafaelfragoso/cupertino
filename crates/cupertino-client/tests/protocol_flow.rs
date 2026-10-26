@@ -1,14 +1,23 @@
 //! Runs the client against a minimal in-process server (shm, layer shell, popups, toplevels with
 //! decorations, backdrops, seat, activation, outputs) and checks what the server receives and what the client reports back.
 
-use cupertino_client::{ActiveApp, ClientError, LockState, Anchor, Button, Client, Connection, DisplayOptions, DockChange, DockWindow, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig, Margin, MenuBarUpdate, OutputGeometry, PointerEvent, Scale, TitlebarStyle, ToplevelConfig, WindowCommand, WindowMenu, WindowState};
+use cupertino_client::{
+    ActiveApp, Anchor, Button, Client, ClientError, Connection, DisplayOptions, DockChange,
+    DockWindow, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig, LockState, Margin,
+    MenuBarUpdate, OutputGeometry, PointerEvent, Scale, TitlebarStyle, ToplevelConfig,
+    WindowCommand, WindowMenu, WindowState,
+};
 use cupertino_geometry::{Point, Rect};
 use cupertino_protocols::server::cupertino_backdrop_v1::{self, CupertinoBackdropV1};
-use cupertino_protocols::server::cupertino_dock_v1::{self, CupertinoDockV1, WindowState as DockWindowState};
+use cupertino_protocols::server::cupertino_dock_v1::{
+    self, CupertinoDockV1, WindowState as DockWindowState,
+};
 use cupertino_protocols::server::cupertino_menu_bar_v1::{self, CupertinoMenuBarV1};
 use cupertino_protocols::server::cupertino_session_v1::{self, CupertinoSessionV1, DisplayOption};
 use cupertino_protocols::server::cupertino_shell_v1::{self, CupertinoShellV1};
-use cupertino_protocols::server::scroll::cupertino_pointer_scroll_v1::{self, CupertinoPointerScrollV1};
+use cupertino_protocols::server::scroll::cupertino_pointer_scroll_v1::{
+    self, CupertinoPointerScrollV1,
+};
 use cupertino_protocols::server::scroll::cupertino_scroll_v1::{self, CupertinoScrollV1};
 use memmap2::Mmap;
 use std::collections::VecDeque;
@@ -17,23 +26,41 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use wayland_protocols::ext::idle_notify::v1::server::ext_idle_notification_v1::ExtIdleNotificationV1;
-use wayland_protocols::ext::idle_notify::v1::server::ext_idle_notifier_v1::{self, ExtIdleNotifierV1};
-use wayland_protocols::ext::session_lock::v1::server::ext_session_lock_manager_v1::{self, ExtSessionLockManagerV1};
-use wayland_protocols::ext::session_lock::v1::server::ext_session_lock_surface_v1::{self, ExtSessionLockSurfaceV1};
-use wayland_protocols::ext::session_lock::v1::server::ext_session_lock_v1::{self, ExtSessionLockV1};
-use wayland_protocols::xdg::activation::v1::server::xdg_activation_token_v1::{self, XdgActivationTokenV1};
+use wayland_protocols::ext::idle_notify::v1::server::ext_idle_notifier_v1::{
+    self, ExtIdleNotifierV1,
+};
+use wayland_protocols::ext::session_lock::v1::server::ext_session_lock_manager_v1::{
+    self, ExtSessionLockManagerV1,
+};
+use wayland_protocols::ext::session_lock::v1::server::ext_session_lock_surface_v1::{
+    self, ExtSessionLockSurfaceV1,
+};
+use wayland_protocols::ext::session_lock::v1::server::ext_session_lock_v1::{
+    self, ExtSessionLockV1,
+};
+use wayland_protocols::xdg::activation::v1::server::xdg_activation_token_v1::{
+    self, XdgActivationTokenV1,
+};
 use wayland_protocols::xdg::activation::v1::server::xdg_activation_v1::{self, XdgActivationV1};
+use wayland_protocols::xdg::decoration::zv1::server::zxdg_decoration_manager_v1::{
+    self, ZxdgDecorationManagerV1,
+};
+use wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::{
+    self, ZxdgToplevelDecorationV1,
+};
 use wayland_protocols::xdg::shell::server::xdg_popup::{self, XdgPopup};
 use wayland_protocols::xdg::shell::server::xdg_positioner::{self, XdgPositioner};
-use wayland_protocols::xdg::decoration::zv1::server::zxdg_decoration_manager_v1::{self, ZxdgDecorationManagerV1};
-use wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::{self, ZxdgToplevelDecorationV1};
 use wayland_protocols::xdg::shell::server::xdg_surface::{self, XdgSurface};
 use wayland_protocols::xdg::shell::server::xdg_toplevel::{self, XdgToplevel};
 use wayland_protocols::xdg::shell::server::xdg_wm_base::{self, XdgWmBase};
-use wayland_protocols::xdg::xdg_output::zv1::server::zxdg_output_manager_v1::{self, ZxdgOutputManagerV1};
+use wayland_protocols::xdg::xdg_output::zv1::server::zxdg_output_manager_v1::{
+    self, ZxdgOutputManagerV1,
+};
 use wayland_protocols::xdg::xdg_output::zv1::server::zxdg_output_v1::ZxdgOutputV1;
 use wayland_protocols_wlr::layer_shell::v1::server::zwlr_layer_shell_v1::{self, ZwlrLayerShellV1};
-use wayland_protocols_wlr::layer_shell::v1::server::zwlr_layer_surface_v1::{self, ZwlrLayerSurfaceV1};
+use wayland_protocols_wlr::layer_shell::v1::server::zwlr_layer_surface_v1::{
+    self, ZwlrLayerSurfaceV1,
+};
 use wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use wayland_server::protocol::wl_buffer::{self, WlBuffer};
 use wayland_server::protocol::wl_callback::WlCallback;
@@ -45,7 +72,10 @@ use wayland_server::protocol::wl_seat::{self, Capability, WlSeat};
 use wayland_server::protocol::wl_shm::{self, WlShm};
 use wayland_server::protocol::wl_shm_pool::{self, WlShmPool};
 use wayland_server::protocol::wl_surface::{self, WlSurface};
-use wayland_server::{Client as ServerClient, DataInit, Dispatch, Display, DisplayHandle, GlobalDispatch, New, Resource};
+use wayland_server::{
+    Client as ServerClient, DataInit, Dispatch, Display, DisplayHandle, GlobalDispatch, New,
+    Resource,
+};
 
 /// What the server saw in one surface commit that carried a buffer.
 #[derive(Debug, PartialEq)]
@@ -94,12 +124,21 @@ enum Control {
 enum Seen {
     /// A popup was created: the geometry of its positioner, and whether it hangs off the layer
     /// surface or off another popup.
-    Popup { positioner: PositionerState, layer_parent: bool, grab_serial: u32 },
-    Reposition { positioner: PositionerState, token: u32 },
+    Popup {
+        positioner: PositionerState,
+        layer_parent: bool,
+        grab_serial: u32,
+    },
+    Reposition {
+        positioner: PositionerState,
+        token: u32,
+    },
     PopupDestroyed,
     Pong(u32),
     /// The menu-bar role was requested for the surface on the output.
-    MenuBar { surface_has_layer_role: bool },
+    MenuBar {
+        surface_has_layer_role: bool,
+    },
     MenuOpen(bool),
     Command(cupertino_menu_bar_v1::Command),
     Workspace(u32),
@@ -108,9 +147,14 @@ enum Seen {
     /// `xdg_toplevel.set_maximized` (true) or `unset_maximized`.
     Maximize(bool),
     /// The dock role was requested for the surface on the output.
-    Dock { surface_has_layer_role: bool },
+    Dock {
+        surface_has_layer_role: bool,
+    },
     Activate(String),
-    Restore { id: u32, rect: [i32; 4] },
+    Restore {
+        id: u32,
+        rect: [i32; 4],
+    },
     MinimizeTarget([i32; 4]),
     SwitcherSelect(u32),
     SwitcherActivate(u32),
@@ -203,12 +247,27 @@ impl ClientData for Data {
 }
 
 impl GlobalDispatch<WlCompositor, ()> for Mock {
-    fn bind(_: &mut Self, _: &DisplayHandle, _: &ServerClient, r: New<WlCompositor>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<WlCompositor>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         init.init(r, ());
     }
 }
 impl Dispatch<WlCompositor, ()> for Mock {
-    fn request(state: &mut Self, _: &ServerClient, _: &WlCompositor, request: wl_compositor::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &WlCompositor,
+        request: wl_compositor::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         match request {
             wl_compositor::Request::CreateSurface { id } => {
                 let surface = init.init(id, SurfaceData::default());
@@ -224,21 +283,47 @@ impl Dispatch<WlCompositor, ()> for Mock {
 }
 
 impl Dispatch<WlRegion, Arc<Mutex<Vec<[i32; 4]>>>> for Mock {
-    fn request(_: &mut Self, _: &ServerClient, _: &WlRegion, request: wl_region::Request, rects: &Arc<Mutex<Vec<[i32; 4]>>>, _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
-        if let wl_region::Request::Add { x, y, width, height } = request {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &WlRegion,
+        request: wl_region::Request,
+        rects: &Arc<Mutex<Vec<[i32; 4]>>>,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        if let wl_region::Request::Add {
+            x,
+            y,
+            width,
+            height,
+        } = request
+        {
             rects.lock().unwrap().push([x, y, width, height]);
         }
     }
 }
 
 impl Dispatch<WlSurface, SurfaceData> for Mock {
-    fn request(state: &mut Self, _: &ServerClient, surface: &WlSurface, request: wl_surface::Request, data: &SurfaceData, _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        surface: &WlSurface,
+        request: wl_surface::Request,
+        data: &SurfaceData,
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         let mut s = data.lock().unwrap();
         match request {
             wl_surface::Request::Attach { buffer, .. } => s.buffer = buffer,
             wl_surface::Request::SetBufferScale { scale } => s.scale = scale,
             wl_surface::Request::SetInputRegion { region } => {
-                s.region = region.map(|r| r.data::<Arc<Mutex<Vec<[i32; 4]>>>>().expect("region data").clone());
+                s.region = region.map(|r| {
+                    r.data::<Arc<Mutex<Vec<[i32; 4]>>>>()
+                        .expect("region data")
+                        .clone()
+                });
             }
             wl_surface::Request::Frame { callback } => s.frames.push(init.init(callback, ())),
             wl_surface::Request::Commit => {
@@ -248,7 +333,11 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
                     layer.configure(1, 100, 50);
                 }
                 let unbuffered = s.buffer.is_none();
-                if let Some(t) = state.toplevel.as_mut().filter(|t| !t.configured && unbuffered && t.surface == *surface) {
+                if let Some(t) = state
+                    .toplevel
+                    .as_mut()
+                    .filter(|t| !t.configured && unbuffered && t.surface == *surface)
+                {
                     // initial commit of a toplevel: leave the size to the client
                     t.configured = true;
                     surface.enter(&state.outputs[0]);
@@ -261,7 +350,9 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
                     surface.enter(&state.outputs[0]);
                     let [x, y, ..] = popup.positioner.anchor_rect;
                     state.next_serial += 1;
-                    popup.popup.configure(x, y, popup.positioner.size.0, popup.positioner.size.1);
+                    popup
+                        .popup
+                        .configure(x, y, popup.positioner.size.0, popup.positioner.size.1);
                     popup.xdg.configure(state.next_serial);
                 }
                 if let Some(buffer) = s.buffer.take() {
@@ -276,7 +367,11 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
                             offset: b.offset,
                             buffer_scale: s.scale,
                             first_pixel,
-                            backdrops: s.backdrops.iter().map(|b| b.lock().unwrap().clone()).collect(),
+                            backdrops: s
+                                .backdrops
+                                .iter()
+                                .map(|b| b.lock().unwrap().clone())
+                                .collect(),
                             input_region: s.region.as_ref().map(|r| r.lock().unwrap().clone()),
                         })
                         .unwrap();
@@ -293,16 +388,40 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
 }
 
 impl Dispatch<WlCallback, ()> for Mock {
-    fn request(_: &mut Self, _: &ServerClient, _: &WlCallback, _: wayland_server::protocol::wl_callback::Request, _: &(), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {}
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &WlCallback,
+        _: wayland_server::protocol::wl_callback::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+    }
 }
 
 impl GlobalDispatch<WlShm, ()> for Mock {
-    fn bind(_: &mut Self, _: &DisplayHandle, _: &ServerClient, r: New<WlShm>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<WlShm>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         init.init(r, ());
     }
 }
 impl Dispatch<WlShm, ()> for Mock {
-    fn request(_: &mut Self, _: &ServerClient, _: &WlShm, request: wl_shm::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &WlShm,
+        request: wl_shm::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         if let wl_shm::Request::CreatePool { id, fd, .. } = request {
             // SAFETY: the client sized the memfd before sending it and keeps it that size.
             let map = unsafe { Mmap::map(&std::fs::File::from(fd)) }.unwrap();
@@ -311,19 +430,60 @@ impl Dispatch<WlShm, ()> for Mock {
     }
 }
 impl Dispatch<WlShmPool, Arc<Mmap>> for Mock {
-    fn request(_: &mut Self, _: &ServerClient, _: &WlShmPool, request: wl_shm_pool::Request, map: &Arc<Mmap>, _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
-        if let wl_shm_pool::Request::CreateBuffer { id, offset, width, height, stride, format } = request {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &WlShmPool,
+        request: wl_shm_pool::Request,
+        map: &Arc<Mmap>,
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        if let wl_shm_pool::Request::CreateBuffer {
+            id,
+            offset,
+            width,
+            height,
+            stride,
+            format,
+        } = request
+        {
             assert_eq!(format.into_result().ok(), Some(wl_shm::Format::Argb8888));
-            init.init(id, BufferData { map: map.clone(), offset, width, height, stride });
+            init.init(
+                id,
+                BufferData {
+                    map: map.clone(),
+                    offset,
+                    width,
+                    height,
+                    stride,
+                },
+            );
         }
     }
 }
 impl Dispatch<WlBuffer, BufferData> for Mock {
-    fn request(_: &mut Self, _: &ServerClient, _: &WlBuffer, _: wl_buffer::Request, _: &BufferData, _: &DisplayHandle, _: &mut DataInit<'_, Self>) {}
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &WlBuffer,
+        _: wl_buffer::Request,
+        _: &BufferData,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+    }
 }
 
 impl GlobalDispatch<WlOutput, ()> for Mock {
-    fn bind(state: &mut Self, _: &DisplayHandle, _: &ServerClient, r: New<WlOutput>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        state: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<WlOutput>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         let output = init.init(r, ());
         output.scale(2);
         output.done();
@@ -331,16 +491,40 @@ impl GlobalDispatch<WlOutput, ()> for Mock {
     }
 }
 impl Dispatch<WlOutput, ()> for Mock {
-    fn request(_: &mut Self, _: &ServerClient, _: &WlOutput, _: wl_output::Request, _: &(), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {}
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &WlOutput,
+        _: wl_output::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+    }
 }
 
 impl GlobalDispatch<ZxdgOutputManagerV1, ()> for Mock {
-    fn bind(_: &mut Self, _: &DisplayHandle, _: &ServerClient, r: New<ZxdgOutputManagerV1>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<ZxdgOutputManagerV1>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         init.init(r, ());
     }
 }
 impl Dispatch<ZxdgOutputManagerV1, ()> for Mock {
-    fn request(_: &mut Self, _: &ServerClient, _: &ZxdgOutputManagerV1, request: zxdg_output_manager_v1::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &ZxdgOutputManagerV1,
+        request: zxdg_output_manager_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         if let zxdg_output_manager_v1::Request::GetXdgOutput { id, .. } = request {
             // the output sits right of a 1920 point wide neighbour
             let output = init.init(id, ());
@@ -351,63 +535,171 @@ impl Dispatch<ZxdgOutputManagerV1, ()> for Mock {
     }
 }
 impl Dispatch<ZxdgOutputV1, ()> for Mock {
-    fn request(_: &mut Self, _: &ServerClient, _: &ZxdgOutputV1, _: wayland_protocols::xdg::xdg_output::zv1::server::zxdg_output_v1::Request, _: &(), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {}
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &ZxdgOutputV1,
+        _: wayland_protocols::xdg::xdg_output::zv1::server::zxdg_output_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+    }
 }
 
 impl GlobalDispatch<WlSeat, ()> for Mock {
-    fn bind(_: &mut Self, _: &DisplayHandle, _: &ServerClient, r: New<WlSeat>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<WlSeat>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         init.init(r, ()).capabilities(Capability::Pointer);
     }
 }
 impl Dispatch<WlSeat, ()> for Mock {
-    fn request(state: &mut Self, _: &ServerClient, _: &WlSeat, request: wl_seat::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &WlSeat,
+        request: wl_seat::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         if let wl_seat::Request::GetPointer { id } = request {
             state.pointer = Some(init.init(id, ()));
         }
     }
 }
 impl Dispatch<WlPointer, ()> for Mock {
-    fn request(_: &mut Self, _: &ServerClient, _: &WlPointer, _: wl_pointer::Request, _: &(), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {}
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &WlPointer,
+        _: wl_pointer::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+    }
 }
 
 impl GlobalDispatch<CupertinoScrollV1, ()> for Mock {
-    fn bind(_: &mut Self, _: &DisplayHandle, _: &ServerClient, r: New<CupertinoScrollV1>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<CupertinoScrollV1>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         init.init(r, ());
     }
 }
 impl Dispatch<CupertinoScrollV1, ()> for Mock {
-    fn request(state: &mut Self, _: &ServerClient, _: &CupertinoScrollV1, request: cupertino_scroll_v1::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &CupertinoScrollV1,
+        request: cupertino_scroll_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         if let cupertino_scroll_v1::Request::GetScroll { id, .. } = request {
             state.scroll = Some(init.init(id, ()));
         }
     }
 }
 impl Dispatch<CupertinoPointerScrollV1, ()> for Mock {
-    fn request(_: &mut Self, _: &ServerClient, _: &CupertinoPointerScrollV1, _: cupertino_pointer_scroll_v1::Request, _: &(), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {}
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &CupertinoPointerScrollV1,
+        _: cupertino_pointer_scroll_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+    }
 }
 
 impl GlobalDispatch<ZwlrLayerShellV1, ()> for Mock {
-    fn bind(_: &mut Self, _: &DisplayHandle, _: &ServerClient, r: New<ZwlrLayerShellV1>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<ZwlrLayerShellV1>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         init.init(r, ());
     }
 }
 impl Dispatch<ZwlrLayerShellV1, ()> for Mock {
-    fn request(_: &mut Self, _: &ServerClient, _: &ZwlrLayerShellV1, request: zwlr_layer_shell_v1::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
-        if let zwlr_layer_shell_v1::Request::GetLayerSurface { id, surface, output, namespace, layer } = request {
-            assert_eq!((namespace.as_str(), layer.into_result().ok(), output.is_some()), ("test-shell", Some(zwlr_layer_shell_v1::Layer::Overlay), true));
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &ZwlrLayerShellV1,
+        request: zwlr_layer_shell_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        if let zwlr_layer_shell_v1::Request::GetLayerSurface {
+            id,
+            surface,
+            output,
+            namespace,
+            layer,
+        } = request
+        {
+            assert_eq!(
+                (
+                    namespace.as_str(),
+                    layer.into_result().ok(),
+                    output.is_some()
+                ),
+                (
+                    "test-shell",
+                    Some(zwlr_layer_shell_v1::Layer::Overlay),
+                    true
+                )
+            );
             let layer_surface = init.init(id, surface.clone());
             surface.data::<SurfaceData>().unwrap().lock().unwrap().layer = Some(layer_surface);
         }
     }
 }
 impl Dispatch<ZwlrLayerSurfaceV1, WlSurface> for Mock {
-    fn request(_: &mut Self, _: &ServerClient, _: &ZwlrLayerSurfaceV1, request: zwlr_layer_surface_v1::Request, _: &WlSurface, _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &ZwlrLayerSurfaceV1,
+        request: zwlr_layer_surface_v1::Request,
+        _: &WlSurface,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         match request {
             zwlr_layer_surface_v1::Request::GetPopup { popup } => {
                 let surface = popup.data::<WlSurface>().expect("popup data");
-                surface.data::<SurfaceData>().unwrap().lock().unwrap().popup.as_mut().expect("popup state").layer_parent = true;
+                surface
+                    .data::<SurfaceData>()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .popup
+                    .as_mut()
+                    .expect("popup state")
+                    .layer_parent = true;
             }
-            zwlr_layer_surface_v1::Request::SetSize { width, height } => assert_eq!((width, height), (100, 0)),
+            zwlr_layer_surface_v1::Request::SetSize { width, height } => {
+                assert_eq!((width, height), (100, 0))
+            }
             zwlr_layer_surface_v1::Request::SetExclusiveZone { zone } => assert_eq!(zone, -1),
             zwlr_layer_surface_v1::Request::AckConfigure { serial } => assert_eq!(serial, 1),
             _ => {}
@@ -416,12 +708,27 @@ impl Dispatch<ZwlrLayerSurfaceV1, WlSurface> for Mock {
 }
 
 impl GlobalDispatch<XdgWmBase, ()> for Mock {
-    fn bind(state: &mut Self, _: &DisplayHandle, _: &ServerClient, r: New<XdgWmBase>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        state: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<XdgWmBase>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         state.wm_base = Some(init.init(r, ()));
     }
 }
 impl Dispatch<XdgWmBase, ()> for Mock {
-    fn request(state: &mut Self, _: &ServerClient, _: &XdgWmBase, request: xdg_wm_base::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &XdgWmBase,
+        request: xdg_wm_base::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         match request {
             xdg_wm_base::Request::CreatePositioner { id } => {
                 init.init(id, Arc::new(Mutex::new(PositionerState::default())));
@@ -435,59 +742,137 @@ impl Dispatch<XdgWmBase, ()> for Mock {
     }
 }
 impl Dispatch<XdgPositioner, Arc<Mutex<PositionerState>>> for Mock {
-    fn request(_: &mut Self, _: &ServerClient, _: &XdgPositioner, request: xdg_positioner::Request, data: &Arc<Mutex<PositionerState>>, _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &XdgPositioner,
+        request: xdg_positioner::Request,
+        data: &Arc<Mutex<PositionerState>>,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         let mut p = data.lock().unwrap();
         match request {
             xdg_positioner::Request::SetSize { width, height } => p.size = (width, height),
-            xdg_positioner::Request::SetAnchorRect { x, y, width, height } => p.anchor_rect = [x, y, width, height],
+            xdg_positioner::Request::SetAnchorRect {
+                x,
+                y,
+                width,
+                height,
+            } => p.anchor_rect = [x, y, width, height],
             xdg_positioner::Request::SetAnchor { anchor } => p.anchor = anchor.into_result().ok(),
-            xdg_positioner::Request::SetGravity { gravity } => p.gravity = gravity.into_result().ok(),
+            xdg_positioner::Request::SetGravity { gravity } => {
+                p.gravity = gravity.into_result().ok()
+            }
             _ => {}
         }
     }
 }
 impl Dispatch<XdgSurface, WlSurface> for Mock {
-    fn request(state: &mut Self, _: &ServerClient, xdg: &XdgSurface, request: xdg_surface::Request, surface: &WlSurface, _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        xdg: &XdgSurface,
+        request: xdg_surface::Request,
+        surface: &WlSurface,
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         match request {
             xdg_surface::Request::GetPopup { id, positioner, .. } => {
                 let popup = init.init(id, surface.clone());
-                let positioner = positioner.data::<Arc<Mutex<PositionerState>>>().expect("positioner data").lock().unwrap().clone();
-                surface.data::<SurfaceData>().unwrap().lock().unwrap().popup = Some(PopupState { xdg: xdg.clone(), popup, positioner, mapped: false, layer_parent: false });
+                let positioner = positioner
+                    .data::<Arc<Mutex<PositionerState>>>()
+                    .expect("positioner data")
+                    .lock()
+                    .unwrap()
+                    .clone();
+                surface.data::<SurfaceData>().unwrap().lock().unwrap().popup = Some(PopupState {
+                    xdg: xdg.clone(),
+                    popup,
+                    positioner,
+                    mapped: false,
+                    layer_parent: false,
+                });
             }
             xdg_surface::Request::GetToplevel { id } => {
                 let toplevel = init.init(id, ());
-                state.toplevel = Some(ToplevelState { surface: surface.clone(), xdg: xdg.clone(), toplevel, configured: false });
+                state.toplevel = Some(ToplevelState {
+                    surface: surface.clone(),
+                    xdg: xdg.clone(),
+                    toplevel,
+                    configured: false,
+                });
             }
             _ => {}
         }
     }
 }
 impl Dispatch<XdgToplevel, ()> for Mock {
-    fn request(state: &mut Self, _: &ServerClient, _: &XdgToplevel, request: xdg_toplevel::Request, _: &(), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &XdgToplevel,
+        request: xdg_toplevel::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         match request {
-            xdg_toplevel::Request::SetAppId { app_id } => state.seen.send(Seen::AppId(app_id)).unwrap(),
-            xdg_toplevel::Request::SetTitle { title } => state.seen.send(Seen::Title(title)).unwrap(),
-            xdg_toplevel::Request::SetMinSize { width, height } => state.seen.send(Seen::MinSize(width, height)).unwrap(),
+            xdg_toplevel::Request::SetAppId { app_id } => {
+                state.seen.send(Seen::AppId(app_id)).unwrap()
+            }
+            xdg_toplevel::Request::SetTitle { title } => {
+                state.seen.send(Seen::Title(title)).unwrap()
+            }
+            xdg_toplevel::Request::SetMinSize { width, height } => {
+                state.seen.send(Seen::MinSize(width, height)).unwrap()
+            }
             xdg_toplevel::Request::SetMaximized => state.seen.send(Seen::Maximize(true)).unwrap(),
-            xdg_toplevel::Request::UnsetMaximized => state.seen.send(Seen::Maximize(false)).unwrap(),
+            xdg_toplevel::Request::UnsetMaximized => {
+                state.seen.send(Seen::Maximize(false)).unwrap()
+            }
             _ => {}
         }
     }
 }
 impl GlobalDispatch<ZxdgDecorationManagerV1, ()> for Mock {
-    fn bind(_: &mut Self, _: &DisplayHandle, _: &ServerClient, r: New<ZxdgDecorationManagerV1>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<ZxdgDecorationManagerV1>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         init.init(r, ());
     }
 }
 impl Dispatch<ZxdgDecorationManagerV1, ()> for Mock {
-    fn request(_: &mut Self, _: &ServerClient, _: &ZxdgDecorationManagerV1, request: zxdg_decoration_manager_v1::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &ZxdgDecorationManagerV1,
+        request: zxdg_decoration_manager_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         if let zxdg_decoration_manager_v1::Request::GetToplevelDecoration { id, .. } = request {
             init.init(id, ());
         }
     }
 }
 impl Dispatch<ZxdgToplevelDecorationV1, ()> for Mock {
-    fn request(state: &mut Self, _: &ServerClient, decoration: &ZxdgToplevelDecorationV1, request: zxdg_toplevel_decoration_v1::Request, _: &(), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        decoration: &ZxdgToplevelDecorationV1,
+        request: zxdg_toplevel_decoration_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         if let zxdg_toplevel_decoration_v1::Request::SetMode { mode } = request {
             let mode = mode.into_result().expect("a known decoration mode");
             state.seen.send(Seen::DecorationMode(mode)).unwrap();
@@ -496,26 +881,53 @@ impl Dispatch<ZxdgToplevelDecorationV1, ()> for Mock {
     }
 }
 impl Dispatch<XdgPopup, WlSurface> for Mock {
-    fn request(state: &mut Self, _: &ServerClient, popup: &XdgPopup, request: xdg_popup::Request, surface: &WlSurface, _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        popup: &XdgPopup,
+        request: xdg_popup::Request,
+        surface: &WlSurface,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         let data = surface.data::<SurfaceData>().unwrap();
         match request {
             xdg_popup::Request::Grab { serial, .. } => {
                 // the layer parent is set by a request that follows get_popup; report both at the grab
                 let s = data.lock().unwrap();
                 let p = s.popup.as_ref().expect("popup state");
-                state.seen.send(Seen::Popup { positioner: p.positioner.clone(), layer_parent: p.layer_parent, grab_serial: serial }).unwrap();
+                state
+                    .seen
+                    .send(Seen::Popup {
+                        positioner: p.positioner.clone(),
+                        layer_parent: p.layer_parent,
+                        grab_serial: serial,
+                    })
+                    .unwrap();
                 state.popups.push(popup.clone());
             }
             xdg_popup::Request::Reposition { positioner, token } => {
-                let positioner = positioner.data::<Arc<Mutex<PositionerState>>>().expect("positioner data").lock().unwrap().clone();
+                let positioner = positioner
+                    .data::<Arc<Mutex<PositionerState>>>()
+                    .expect("positioner data")
+                    .lock()
+                    .unwrap()
+                    .clone();
                 let mut s = data.lock().unwrap();
                 let p = s.popup.as_mut().expect("popup state");
                 p.positioner = positioner.clone();
-                state.seen.send(Seen::Reposition { positioner: positioner.clone(), token }).unwrap();
+                state
+                    .seen
+                    .send(Seen::Reposition {
+                        positioner: positioner.clone(),
+                        token,
+                    })
+                    .unwrap();
                 state.next_serial += 1;
                 p.popup.repositioned(token);
                 let [x, y, ..] = positioner.anchor_rect;
-                p.popup.configure(x, y, positioner.size.0, positioner.size.1);
+                p.popup
+                    .configure(x, y, positioner.size.0, positioner.size.1);
                 p.xdg.configure(state.next_serial);
             }
             xdg_popup::Request::Destroy => {
@@ -528,22 +940,57 @@ impl Dispatch<XdgPopup, WlSurface> for Mock {
 }
 
 impl GlobalDispatch<CupertinoShellV1, ()> for Mock {
-    fn bind(_: &mut Self, _: &DisplayHandle, _: &ServerClient, r: New<CupertinoShellV1>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<CupertinoShellV1>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         init.init(r, ());
     }
 }
 impl Dispatch<CupertinoShellV1, ()> for Mock {
-    fn request(state: &mut Self, _: &ServerClient, _: &CupertinoShellV1, request: cupertino_shell_v1::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &CupertinoShellV1,
+        request: cupertino_shell_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         match request {
             cupertino_shell_v1::Request::GetBackdrop { id, surface } => {
                 let state = Arc::new(Mutex::new(BackdropState::default()));
                 init.init(id, state.clone());
-                surface.data::<SurfaceData>().unwrap().lock().unwrap().backdrops.push(state);
+                surface
+                    .data::<SurfaceData>()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .backdrops
+                    .push(state);
             }
-            cupertino_shell_v1::Request::SetTitlebarStyle { style, .. } => state.seen.send(Seen::TitlebarStyle(style.into_result().unwrap())).unwrap(),
+            cupertino_shell_v1::Request::SetTitlebarStyle { style, .. } => state
+                .seen
+                .send(Seen::TitlebarStyle(style.into_result().unwrap()))
+                .unwrap(),
             cupertino_shell_v1::Request::GetMenuBar { id, surface, .. } => {
                 let bar = init.init(id, ());
-                state.seen.send(Seen::MenuBar { surface_has_layer_role: surface.data::<SurfaceData>().unwrap().lock().unwrap().layer.is_some() }).unwrap();
+                state
+                    .seen
+                    .send(Seen::MenuBar {
+                        surface_has_layer_role: surface
+                            .data::<SurfaceData>()
+                            .unwrap()
+                            .lock()
+                            .unwrap()
+                            .layer
+                            .is_some(),
+                    })
+                    .unwrap();
                 // the first group follows the object's creation
                 bar.active_app("org.example.editor".into(), "notes.txt".into());
                 bar.menu_dbusmenu(":1.42".into(), "/MenuBar".into());
@@ -553,10 +1000,31 @@ impl Dispatch<CupertinoShellV1, ()> for Mock {
             }
             cupertino_shell_v1::Request::GetDock { id, surface, .. } => {
                 let dock = init.init(id, ());
-                state.seen.send(Seen::Dock { surface_has_layer_role: surface.data::<SurfaceData>().unwrap().lock().unwrap().layer.is_some() }).unwrap();
+                state
+                    .seen
+                    .send(Seen::Dock {
+                        surface_has_layer_role: surface
+                            .data::<SurfaceData>()
+                            .unwrap()
+                            .lock()
+                            .unwrap()
+                            .layer
+                            .is_some(),
+                    })
+                    .unwrap();
                 // the first group lists every window
-                dock.window(1, "org.example.editor".into(), "notes.txt".into(), DockWindowState::Active);
-                dock.window(2, "org.example.mail".into(), "Inbox".into(), DockWindowState::Minimized);
+                dock.window(
+                    1,
+                    "org.example.editor".into(),
+                    "notes.txt".into(),
+                    DockWindowState::Active,
+                );
+                dock.window(
+                    2,
+                    "org.example.mail".into(),
+                    "Inbox".into(),
+                    DockWindowState::Minimized,
+                );
                 dock.done();
                 state.dock = Some(dock);
             }
@@ -573,22 +1041,56 @@ impl Dispatch<CupertinoShellV1, ()> for Mock {
     }
 }
 impl Dispatch<CupertinoMenuBarV1, ()> for Mock {
-    fn request(state: &mut Self, _: &ServerClient, _: &CupertinoMenuBarV1, request: cupertino_menu_bar_v1::Request, _: &(), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &CupertinoMenuBarV1,
+        request: cupertino_menu_bar_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         let seen = match request {
             cupertino_menu_bar_v1::Request::SetMenuOpen { open } => Seen::MenuOpen(open != 0),
-            cupertino_menu_bar_v1::Request::WindowCommand { command } => Seen::Command(command.into_result().unwrap()),
-            cupertino_menu_bar_v1::Request::MoveToWorkspace { workspace } => Seen::Workspace(workspace),
+            cupertino_menu_bar_v1::Request::WindowCommand { command } => {
+                Seen::Command(command.into_result().unwrap())
+            }
+            cupertino_menu_bar_v1::Request::MoveToWorkspace { workspace } => {
+                Seen::Workspace(workspace)
+            }
             _ => return,
         };
         state.seen.send(seen).unwrap();
     }
 }
 impl Dispatch<CupertinoDockV1, ()> for Mock {
-    fn request(state: &mut Self, _: &ServerClient, _: &CupertinoDockV1, request: cupertino_dock_v1::Request, _: &(), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &CupertinoDockV1,
+        request: cupertino_dock_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         let seen = match request {
             cupertino_dock_v1::Request::ActivateApp { app_id } => Seen::Activate(app_id),
-            cupertino_dock_v1::Request::RestoreWindow { id, x, y, width, height } => Seen::Restore { id, rect: [x, y, width, height] },
-            cupertino_dock_v1::Request::SetMinimizeTarget { x, y, width, height } => Seen::MinimizeTarget([x, y, width, height]),
+            cupertino_dock_v1::Request::RestoreWindow {
+                id,
+                x,
+                y,
+                width,
+                height,
+            } => Seen::Restore {
+                id,
+                rect: [x, y, width, height],
+            },
+            cupertino_dock_v1::Request::SetMinimizeTarget {
+                x,
+                y,
+                width,
+                height,
+            } => Seen::MinimizeTarget([x, y, width, height]),
             cupertino_dock_v1::Request::SwitcherSelect { index } => Seen::SwitcherSelect(index),
             cupertino_dock_v1::Request::SwitcherActivate { index } => Seen::SwitcherActivate(index),
             cupertino_dock_v1::Request::SwitcherCancel => Seen::SwitcherCancel,
@@ -598,14 +1100,45 @@ impl Dispatch<CupertinoDockV1, ()> for Mock {
     }
 }
 impl Dispatch<CupertinoSessionV1, ()> for Mock {
-    fn request(_: &mut Self, _: &ServerClient, _: &CupertinoSessionV1, _: cupertino_session_v1::Request, _: &(), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {}
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &CupertinoSessionV1,
+        _: cupertino_session_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+    }
 }
 impl Dispatch<CupertinoBackdropV1, Arc<Mutex<BackdropState>>> for Mock {
-    fn request(_: &mut Self, _: &ServerClient, _: &CupertinoBackdropV1, request: cupertino_backdrop_v1::Request, data: &Arc<Mutex<BackdropState>>, _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &CupertinoBackdropV1,
+        request: cupertino_backdrop_v1::Request,
+        data: &Arc<Mutex<BackdropState>>,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         let mut b = data.lock().unwrap();
         match request {
             cupertino_backdrop_v1::Request::SetMaterial { name } => b.material = name,
-            cupertino_backdrop_v1::Request::SetShape { x, y, width, height, radius } => b.shape = [f64::from(x), f64::from(y), f64::from(width), f64::from(height), radius],
+            cupertino_backdrop_v1::Request::SetShape {
+                x,
+                y,
+                width,
+                height,
+                radius,
+            } => {
+                b.shape = [
+                    f64::from(x),
+                    f64::from(y),
+                    f64::from(width),
+                    f64::from(height),
+                    radius,
+                ]
+            }
             cupertino_backdrop_v1::Request::SetAlpha { alpha } => b.alpha = alpha,
             _ => {}
         }
@@ -613,34 +1146,77 @@ impl Dispatch<CupertinoBackdropV1, Arc<Mutex<BackdropState>>> for Mock {
 }
 
 impl GlobalDispatch<XdgActivationV1, ()> for Mock {
-    fn bind(_: &mut Self, _: &DisplayHandle, _: &ServerClient, r: New<XdgActivationV1>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<XdgActivationV1>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         init.init(r, ());
     }
 }
 impl Dispatch<XdgActivationV1, ()> for Mock {
-    fn request(_: &mut Self, _: &ServerClient, _: &XdgActivationV1, request: xdg_activation_v1::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &XdgActivationV1,
+        request: xdg_activation_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         if let xdg_activation_v1::Request::GetActivationToken { id } = request {
             init.init(id, Arc::new(Mutex::new(None::<u32>)));
         }
     }
 }
 impl Dispatch<XdgActivationTokenV1, Arc<Mutex<Option<u32>>>> for Mock {
-    fn request(_: &mut Self, _: &ServerClient, token: &XdgActivationTokenV1, request: xdg_activation_token_v1::Request, serial: &Arc<Mutex<Option<u32>>>, _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        token: &XdgActivationTokenV1,
+        request: xdg_activation_token_v1::Request,
+        serial: &Arc<Mutex<Option<u32>>>,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         match request {
-            xdg_activation_token_v1::Request::SetSerial { serial: s, .. } => *serial.lock().unwrap() = Some(s),
-            xdg_activation_token_v1::Request::Commit => token.done(format!("token-for-serial-{}", serial.lock().unwrap().expect("serial set"))),
+            xdg_activation_token_v1::Request::SetSerial { serial: s, .. } => {
+                *serial.lock().unwrap() = Some(s)
+            }
+            xdg_activation_token_v1::Request::Commit => token.done(format!(
+                "token-for-serial-{}",
+                serial.lock().unwrap().expect("serial set")
+            )),
             _ => {}
         }
     }
 }
 
 impl GlobalDispatch<ExtSessionLockManagerV1, ()> for Mock {
-    fn bind(_: &mut Self, _: &DisplayHandle, _: &ServerClient, r: New<ExtSessionLockManagerV1>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<ExtSessionLockManagerV1>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         init.init(r, ());
     }
 }
 impl Dispatch<ExtSessionLockManagerV1, ()> for Mock {
-    fn request(state: &mut Self, _: &ServerClient, _: &ExtSessionLockManagerV1, request: ext_session_lock_manager_v1::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &ExtSessionLockManagerV1,
+        request: ext_session_lock_manager_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         if let ext_session_lock_manager_v1::Request::Lock { id } = request {
             init.init(id, ());
             state.seen.send(Seen::LockRequested).unwrap();
@@ -648,36 +1224,77 @@ impl Dispatch<ExtSessionLockManagerV1, ()> for Mock {
     }
 }
 impl Dispatch<ExtSessionLockV1, ()> for Mock {
-    fn request(state: &mut Self, _: &ServerClient, lock: &ExtSessionLockV1, request: ext_session_lock_v1::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        lock: &ExtSessionLockV1,
+        request: ext_session_lock_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         match request {
-            ext_session_lock_v1::Request::GetLockSurface { id, surface, output } => {
+            ext_session_lock_v1::Request::GetLockSurface {
+                id,
+                surface,
+                output,
+            } => {
                 assert_eq!(output, state.outputs[0]);
                 let lock_surface = init.init(id, surface);
                 lock_surface.configure(7, 640, 480);
                 lock.locked();
             }
-            ext_session_lock_v1::Request::UnlockAndDestroy => state.seen.send(Seen::Unlocked).unwrap(),
+            ext_session_lock_v1::Request::UnlockAndDestroy => {
+                state.seen.send(Seen::Unlocked).unwrap()
+            }
             _ => {}
         }
     }
 }
 impl Dispatch<ExtSessionLockSurfaceV1, WlSurface> for Mock {
-    fn request(state: &mut Self, _: &ServerClient, _: &ExtSessionLockSurfaceV1, request: ext_session_lock_surface_v1::Request, _: &WlSurface, _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &ExtSessionLockSurfaceV1,
+        request: ext_session_lock_surface_v1::Request,
+        _: &WlSurface,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         match request {
-            ext_session_lock_surface_v1::Request::AckConfigure { serial } => state.seen.send(Seen::LockSurfaceAcked(serial)).unwrap(),
-            ext_session_lock_surface_v1::Request::Destroy => state.seen.send(Seen::LockSurfaceDestroyed).unwrap(),
+            ext_session_lock_surface_v1::Request::AckConfigure { serial } => {
+                state.seen.send(Seen::LockSurfaceAcked(serial)).unwrap()
+            }
+            ext_session_lock_surface_v1::Request::Destroy => {
+                state.seen.send(Seen::LockSurfaceDestroyed).unwrap()
+            }
             _ => {}
         }
     }
 }
 
 impl GlobalDispatch<ExtIdleNotifierV1, ()> for Mock {
-    fn bind(_: &mut Self, _: &DisplayHandle, _: &ServerClient, r: New<ExtIdleNotifierV1>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<ExtIdleNotifierV1>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         init.init(r, ());
     }
 }
 impl Dispatch<ExtIdleNotifierV1, ()> for Mock {
-    fn request(state: &mut Self, _: &ServerClient, _: &ExtIdleNotifierV1, request: ext_idle_notifier_v1::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &ExtIdleNotifierV1,
+        request: ext_idle_notifier_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         if let ext_idle_notifier_v1::Request::GetIdleNotification { id, timeout, .. } = request {
             let notification = init.init(id, ());
             notification.idled();
@@ -687,7 +1304,16 @@ impl Dispatch<ExtIdleNotifierV1, ()> for Mock {
     }
 }
 impl Dispatch<ExtIdleNotificationV1, ()> for Mock {
-    fn request(_: &mut Self, _: &ServerClient, _: &ExtIdleNotificationV1, _: wayland_protocols::ext::idle_notify::v1::server::ext_idle_notification_v1::Request, _: &(), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {}
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &ExtIdleNotificationV1,
+        _: wayland_protocols::ext::idle_notify::v1::server::ext_idle_notification_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+    }
 }
 
 /// Run the server on a thread until the test drops the control channel.
@@ -711,14 +1337,36 @@ fn spawn_server(stream: UnixStream) -> (Sender<Control>, Receiver<Committed>, Re
         dh.create_global::<Mock, ExtIdleNotifierV1, _>(2, ());
         dh.create_global::<Mock, ZxdgDecorationManagerV1, _>(1, ());
         dh.create_global::<Mock, CupertinoScrollV1, _>(1, ());
-        let mut mock = Mock { committed: committed_tx, seen: seen_tx, next_serial: 1, popups: Vec::new(), wm_base: None, menu_bar: None, dock: None, session: None, outputs: Vec::new(), pointer: None, scroll: None, surface: None, pending_frames: Vec::new(), shown: None, idle: None, toplevel: None };
+        let mut mock = Mock {
+            committed: committed_tx,
+            seen: seen_tx,
+            next_serial: 1,
+            popups: Vec::new(),
+            wm_base: None,
+            menu_bar: None,
+            dock: None,
+            session: None,
+            outputs: Vec::new(),
+            pointer: None,
+            scroll: None,
+            surface: None,
+            pending_frames: Vec::new(),
+            shown: None,
+            idle: None,
+            toplevel: None,
+        };
         let mut display_handle = display.handle();
-        display_handle.insert_client(stream, Arc::new(Data)).unwrap();
+        display_handle
+            .insert_client(stream, Arc::new(Data))
+            .unwrap();
         loop {
             match control_rx.try_recv() {
                 Ok(Control::FrameDone) => mock.pending_frames.drain(..).for_each(|cb| cb.done(0)),
                 Ok(Control::PointerPress) => {
-                    let (pointer, surface) = (mock.pointer.as_ref().unwrap(), mock.surface.as_ref().unwrap());
+                    let (pointer, surface) = (
+                        mock.pointer.as_ref().unwrap(),
+                        mock.surface.as_ref().unwrap(),
+                    );
                     pointer.enter(5, surface, 1.5, 2.5);
                     pointer.motion(0, 10.25, 20.75);
                     pointer.button(6, 0, 0x110, wl_pointer::ButtonState::Pressed);
@@ -748,19 +1396,26 @@ fn spawn_server(stream: UnixStream) -> (Sender<Control>, Receiver<Committed>, Re
                 Ok(Control::SessionChange) => {
                     let session = mock.session.as_ref().unwrap();
                     session.appearance(0);
-                    session.display_options(DisplayOption::ReduceTransparency | DisplayOption::IncreaseContrast);
+                    session.display_options(
+                        DisplayOption::ReduceTransparency | DisplayOption::IncreaseContrast,
+                    );
                     session.locked();
                     session.unlocked();
                 }
                 Ok(Control::ResizeToplevel) => {
                     let t = mock.toplevel.as_ref().unwrap();
                     mock.next_serial += 1;
-                    let activated = (xdg_toplevel::State::Activated as u32).to_ne_bytes().to_vec();
+                    let activated = (xdg_toplevel::State::Activated as u32)
+                        .to_ne_bytes()
+                        .to_vec();
                     t.toplevel.configure(640, 480, activated);
                     t.xdg.configure(mock.next_serial);
                 }
                 Ok(Control::ScrollToplevel) => {
-                    let (pointer, t) = (mock.pointer.as_ref().unwrap(), mock.toplevel.as_ref().unwrap());
+                    let (pointer, t) = (
+                        mock.pointer.as_ref().unwrap(),
+                        mock.toplevel.as_ref().unwrap(),
+                    );
                     pointer.enter(20, &t.surface, 30.0, 40.0);
                     // the count of a frame goes after its axis event and before the frame
                     let scroll = mock.scroll.as_ref().unwrap();
@@ -789,7 +1444,11 @@ fn spawn_server(stream: UnixStream) -> (Sender<Control>, Receiver<Committed>, Re
 type Stash = VecDeque<Event>;
 
 /// Take events in order, waiting for more when the stash runs dry, until `pick` accepts one.
-fn wait_for<T>(client: &mut Client, stash: &mut Stash, mut pick: impl FnMut(&Event) -> Option<T>) -> T {
+fn wait_for<T>(
+    client: &mut Client,
+    stash: &mut Stash,
+    mut pick: impl FnMut(&Event) -> Option<T>,
+) -> T {
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         while let Some(event) = stash.pop_front() {
@@ -806,37 +1465,67 @@ fn wait_for<T>(client: &mut Client, stash: &mut Stash, mut pick: impl FnMut(&Eve
 fn surface_lifecycle_against_a_protocol_server() {
     let (client_stream, server_stream) = UnixStream::pair().unwrap();
     let (control, committed, _seen) = spawn_server(server_stream);
-    let mut client = Client::from_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
+    let mut client =
+        Client::from_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
     let outputs = client.outputs();
     assert_eq!(outputs.len(), 1);
-    assert_eq!(outputs[0].geometry, Some(OutputGeometry { x: 1920, y: 0, width: 1280, height: 800 }));
-    let surface = client.layer_surface(&LayerSurfaceConfig {
-        namespace: "test-shell".to_string(),
-        output: Some(outputs[0].id),
-        layer: Layer::Overlay,
-        anchor: Anchor::Top | Anchor::Right | Anchor::Bottom,
-        size: (100, 0),
-        margin: Margin::default(),
-        exclusive_zone: -1,
-        keyboard: KeyboardInteractivity::None,
-    }).unwrap();
+    assert_eq!(
+        outputs[0].geometry,
+        Some(OutputGeometry {
+            x: 1920,
+            y: 0,
+            width: 1280,
+            height: 800
+        })
+    );
+    let surface = client
+        .layer_surface(&LayerSurfaceConfig {
+            namespace: "test-shell".to_string(),
+            output: Some(outputs[0].id),
+            layer: Layer::Overlay,
+            anchor: Anchor::Top | Anchor::Right | Anchor::Bottom,
+            size: (100, 0),
+            margin: Margin::default(),
+            exclusive_zone: -1,
+            keyboard: KeyboardInteractivity::None,
+        })
+        .unwrap();
 
     // the server sized the surface 100x50; the output is at scale 2, so the first draw is 200x100
     let mut stash = Stash::new();
-    wait_for(&mut client, &mut stash, |e| matches!(e, Event::Configured { size, .. } if *size == (100, 50)).then_some(()));
-    assert_eq!(client.surface_outputs(surface).unwrap(), vec![outputs[0].id], "the server entered the surface into its output");
-    wait_for(&mut client, &mut stash, |e| matches!(e, Event::ScaleChanged { scale, .. } if *scale == Scale::from_integer(2).unwrap()).then_some(()));
-    wait_for(&mut client, &mut stash, |e| matches!(e, Event::Draw(_)).then_some(()));
+    wait_for(&mut client, &mut stash, |e| {
+        matches!(e, Event::Configured { size, .. } if *size == (100, 50)).then_some(())
+    });
+    assert_eq!(
+        client.surface_outputs(surface).unwrap(),
+        vec![outputs[0].id],
+        "the server entered the surface into its output"
+    );
+    wait_for(&mut client, &mut stash, |e| {
+        matches!(e, Event::ScaleChanged { scale, .. } if *scale == Scale::from_integer(2).unwrap())
+            .then_some(())
+    });
+    wait_for(&mut client, &mut stash, |e| {
+        matches!(e, Event::Draw(_)).then_some(())
+    });
     let backdrop = client.backdrop(surface).unwrap();
     backdrop.set_material("Menu");
-    backdrop.set_shape(&Rect::new(4.0, 6.0, 40.0, 20.0), 12.0).unwrap();
+    backdrop
+        .set_shape(&Rect::new(4.0, 6.0, 40.0, 20.0), 12.0)
+        .unwrap();
     backdrop.set_alpha(0.5).unwrap();
-    client.set_input_region(surface, &[Rect::new(0.0, 0.0, 10.5, 10.0)]).unwrap();
+    client
+        .set_input_region(surface, &[Rect::new(0.0, 0.0, 10.5, 10.0)])
+        .unwrap();
     client
         .draw(surface, |pixmap, scale| {
-            assert_eq!((pixmap.width(), pixmap.height(), scale), (200, 100, Scale::from_integer(2).unwrap()));
+            assert_eq!(
+                (pixmap.width(), pixmap.height(), scale),
+                (200, 100, Scale::from_integer(2).unwrap())
+            );
             // premultiplied RGBA (10, 20, 30, 40)
-            pixmap.pixels_mut()[0] = tiny_skia::PremultipliedColorU8::from_rgba(10, 20, 30, 40).unwrap();
+            pixmap.pixels_mut()[0] =
+                tiny_skia::PremultipliedColorU8::from_rgba(10, 20, 30, 40).unwrap();
         })
         .unwrap();
 
@@ -851,7 +1540,11 @@ fn surface_lifecycle_against_a_protocol_server() {
             offset: 0,
             buffer_scale: 2,
             first_pixel: [30, 20, 10, 40],
-            backdrops: vec![BackdropState { material: "Menu".to_string(), shape: [4.0, 6.0, 40.0, 20.0, 12.0], alpha: 0.5 }],
+            backdrops: vec![BackdropState {
+                material: "Menu".to_string(),
+                shape: [4.0, 6.0, 40.0, 20.0, 12.0],
+                alpha: 0.5
+            }],
             input_region: Some(vec![[0, 0, 11, 10]]),
         }
     );
@@ -859,9 +1552,14 @@ fn surface_lifecycle_against_a_protocol_server() {
     // no new frame is offered before the server answered the frame callback
     client.request_redraw(surface).unwrap();
     let early = client.wait(Some(Duration::from_millis(100))).unwrap();
-    assert!(!early.iter().any(|e| matches!(e, Event::Draw(_))), "{early:?}");
+    assert!(
+        !early.iter().any(|e| matches!(e, Event::Draw(_))),
+        "{early:?}"
+    );
     control.send(Control::FrameDone).unwrap();
-    wait_for(&mut client, &mut stash, |e| matches!(e, Event::Draw(_)).then_some(()));
+    wait_for(&mut client, &mut stash, |e| {
+        matches!(e, Event::Draw(_)).then_some(())
+    });
 
     // the second frame uses the other buffer of the pool
     client.draw(surface, |_, _| {}).unwrap();
@@ -883,7 +1581,11 @@ fn surface_lifecycle_against_a_protocol_server() {
         vec![
             PointerEvent::Enter(Point::new(1.5, 2.5)),
             PointerEvent::Motion(Point::new(10.25, 20.75)),
-            PointerEvent::Button { button: Button::Left, pressed: true, position: Point::new(10.25, 20.75) },
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: true,
+                position: Point::new(10.25, 20.75)
+            },
         ]
     );
     let request = client.request_activation_token(surface).unwrap();
@@ -895,10 +1597,18 @@ fn surface_lifecycle_against_a_protocol_server() {
 }
 
 /// Connect, create the layer surface, map it and give the client an input serial (6).
-fn connected_layer_surface() -> (Client, Sender<Control>, Receiver<Committed>, Receiver<Seen>, cupertino_client::SurfaceId, Stash) {
+fn connected_layer_surface() -> (
+    Client,
+    Sender<Control>,
+    Receiver<Committed>,
+    Receiver<Seen>,
+    cupertino_client::SurfaceId,
+    Stash,
+) {
     let (client_stream, server_stream) = UnixStream::pair().unwrap();
     let (control, committed, seen) = spawn_server(server_stream);
-    let mut client = Client::from_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
+    let mut client =
+        Client::from_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
     let surface = client
         .layer_surface(&LayerSurfaceConfig {
             namespace: "test-shell".to_string(),
@@ -912,9 +1622,20 @@ fn connected_layer_surface() -> (Client, Sender<Control>, Receiver<Committed>, R
         })
         .unwrap();
     let mut stash = Stash::new();
-    wait_for(&mut client, &mut stash, |e| matches!(e, Event::Draw(_)).then_some(()));
+    wait_for(&mut client, &mut stash, |e| {
+        matches!(e, Event::Draw(_)).then_some(())
+    });
     control.send(Control::PointerPress).unwrap();
-    wait_for(&mut client, &mut stash, |e| matches!(e, Event::Pointer { event: PointerEvent::Button { .. }, .. }).then_some(()));
+    wait_for(&mut client, &mut stash, |e| {
+        matches!(
+            e,
+            Event::Pointer {
+                event: PointerEvent::Button { .. },
+                ..
+            }
+        )
+        .then_some(())
+    });
     (client, control, committed, seen, surface, stash)
 }
 
@@ -923,7 +1644,9 @@ fn popups_are_placed_grabbed_resized_and_dismissed() {
     let (mut client, control, committed, seen, layer, mut stash) = connected_layer_surface();
 
     // the popup covers the rect rounded outwards, hangs off the layer surface and grabs with the press serial
-    let popup = client.popup(layer, &Rect::new(10.4, 24.0, 153.2, 88.5)).unwrap();
+    let popup = client
+        .popup(layer, &Rect::new(10.4, 24.0, 153.2, 88.5))
+        .unwrap();
     let placed = PositionerState {
         size: (154, 89),
         anchor_rect: [10, 24, 154, 89],
@@ -931,45 +1654,92 @@ fn popups_are_placed_grabbed_resized_and_dismissed() {
         gravity: Some(xdg_positioner::Gravity::BottomRight),
     };
     stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
-    assert_eq!(seen.recv_timeout(Duration::from_secs(5)).unwrap(), Seen::Popup { positioner: placed, layer_parent: true, grab_serial: 6 });
+    assert_eq!(
+        seen.recv_timeout(Duration::from_secs(5)).unwrap(),
+        Seen::Popup {
+            positioner: placed,
+            layer_parent: true,
+            grab_serial: 6
+        }
+    );
     let size = wait_for(&mut client, &mut stash, |e| match e {
         Event::Configured { surface, size } if *surface == popup => Some(*size),
         _ => None,
     });
     assert_eq!(size, (154, 89));
-    wait_for(&mut client, &mut stash, |e| matches!(e, Event::Draw(s) if *s == popup).then_some(()));
-    client.draw(popup, |pixmap, _| assert_eq!((pixmap.width(), pixmap.height()), (308, 178))).unwrap();
+    wait_for(&mut client, &mut stash, |e| {
+        matches!(e, Event::Draw(s) if *s == popup).then_some(())
+    });
+    client
+        .draw(popup, |pixmap, _| {
+            assert_eq!((pixmap.width(), pixmap.height()), (308, 178))
+        })
+        .unwrap();
     stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
-    assert_eq!(committed.recv_timeout(Duration::from_secs(5)).unwrap().buffer_size, (308, 178));
+    assert_eq!(
+        committed
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .buffer_size,
+        (308, 178)
+    );
 
     // a submenu is a popup of the popup, placed relative to it
-    let child = client.popup(popup, &Rect::new(150.0, 6.0, 80.0, 40.0)).unwrap();
+    let child = client
+        .popup(popup, &Rect::new(150.0, 6.0, 80.0, 40.0))
+        .unwrap();
     stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
-    assert_eq!(seen.recv_timeout(Duration::from_secs(5)).unwrap(), Seen::Popup {
-        positioner: PositionerState { size: (80, 40), anchor_rect: [150, 6, 80, 40], anchor: Some(xdg_positioner::Anchor::TopLeft), gravity: Some(xdg_positioner::Gravity::BottomRight) },
-        layer_parent: false,
-        grab_serial: 6,
-    });
-    assert!(matches!(client.destroy_surface(popup), Err(cupertino_client::ClientError::HasPopups)));
-    assert!(matches!(client.set_keyboard_interactivity(popup, KeyboardInteractivity::Exclusive), Err(cupertino_client::ClientError::NotLayerSurface)));
+    assert_eq!(
+        seen.recv_timeout(Duration::from_secs(5)).unwrap(),
+        Seen::Popup {
+            positioner: PositionerState {
+                size: (80, 40),
+                anchor_rect: [150, 6, 80, 40],
+                anchor: Some(xdg_positioner::Anchor::TopLeft),
+                gravity: Some(xdg_positioner::Gravity::BottomRight)
+            },
+            layer_parent: false,
+            grab_serial: 6,
+        }
+    );
+    assert!(matches!(
+        client.destroy_surface(popup),
+        Err(cupertino_client::ClientError::HasPopups)
+    ));
+    assert!(matches!(
+        client.set_keyboard_interactivity(popup, KeyboardInteractivity::Exclusive),
+        Err(cupertino_client::ClientError::NotLayerSurface)
+    ));
     client.destroy_surface(child).unwrap();
     stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
-    assert_eq!(seen.recv_timeout(Duration::from_secs(5)).unwrap(), Seen::PopupDestroyed);
+    assert_eq!(
+        seen.recv_timeout(Duration::from_secs(5)).unwrap(),
+        Seen::PopupDestroyed
+    );
 
     // a repositioned popup reports its new size
-    client.reposition_popup(popup, &Rect::new(10.0, 24.0, 200.0, 60.0)).unwrap();
+    client
+        .reposition_popup(popup, &Rect::new(10.0, 24.0, 200.0, 60.0))
+        .unwrap();
     stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
-    assert!(matches!(seen.recv_timeout(Duration::from_secs(5)).unwrap(), Seen::Reposition { token: 0, positioner } if positioner.size == (200, 60)));
+    assert!(
+        matches!(seen.recv_timeout(Duration::from_secs(5)).unwrap(), Seen::Reposition { token: 0, positioner } if positioner.size == (200, 60))
+    );
     let size = wait_for(&mut client, &mut stash, |e| match e {
         Event::Configured { surface, size } if *surface == popup => Some(*size),
         _ => None,
     });
     assert_eq!(size, (200, 60));
-    assert!(matches!(client.reposition_popup(layer, &Rect::new(0.0, 0.0, 10.0, 10.0)), Err(cupertino_client::ClientError::NotPopup)));
+    assert!(matches!(
+        client.reposition_popup(layer, &Rect::new(0.0, 0.0, 10.0, 10.0)),
+        Err(cupertino_client::ClientError::NotPopup)
+    ));
 
     // the server dismisses the grab; the client answers pings
     control.send(Control::DismissPopup).unwrap();
-    wait_for(&mut client, &mut stash, |e| matches!(e, Event::PopupDone(s) if *s == popup).then_some(()));
+    wait_for(&mut client, &mut stash, |e| {
+        matches!(e, Event::PopupDone(s) if *s == popup).then_some(())
+    });
     client.destroy_surface(popup).unwrap();
     control.send(Control::Ping(77)).unwrap();
     stash.extend(client.wait(Some(Duration::from_millis(100))).unwrap());
@@ -986,7 +1756,12 @@ fn menu_bar_groups_arrive_typed_and_requests_reach_the_server() {
     let (mut client, control, _committed, seen, layer, mut stash) = connected_layer_surface();
     let bar = client.menu_bar(layer, client.outputs()[0].id).unwrap();
     stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
-    assert_eq!(seen.recv_timeout(Duration::from_secs(5)).unwrap(), Seen::MenuBar { surface_has_layer_role: true });
+    assert_eq!(
+        seen.recv_timeout(Duration::from_secs(5)).unwrap(),
+        Seen::MenuBar {
+            surface_has_layer_role: true
+        }
+    );
 
     let first = wait_for(&mut client, &mut stash, |e| match e {
         Event::MenuBar { surface, update } if *surface == layer => Some(update.clone()),
@@ -995,24 +1770,49 @@ fn menu_bar_groups_arrive_typed_and_requests_reach_the_server() {
     assert_eq!(
         first,
         MenuBarUpdate {
-            active_app: Some(ActiveApp { app_id: "org.example.editor".into(), title: "notes.txt".into() }),
-            menu: Some(WindowMenu::DbusMenu { service: ":1.42".into(), path: "/MenuBar".into() }),
-            window_state: Some(WindowState { can_zoom: true, workspace: 2, workspaces: 4 }),
+            active_app: Some(ActiveApp {
+                app_id: "org.example.editor".into(),
+                title: "notes.txt".into()
+            }),
+            menu: Some(WindowMenu::DbusMenu {
+                service: ":1.42".into(),
+                path: "/MenuBar".into()
+            }),
+            window_state: Some(WindowState {
+                can_zoom: true,
+                workspace: 2,
+                workspaces: 4
+            }),
             engage: false,
             screen_capture: None,
         }
     );
     control.send(Control::Engage).unwrap();
-    wait_for(&mut client, &mut stash, |e| matches!(e, Event::MenuBar { update, .. } if update.engage).then_some(()));
-    wait_for(&mut client, &mut stash, |e| matches!(e, Event::MenuBar { update, .. } if update.screen_capture == Some(true)).then_some(()));
+    wait_for(&mut client, &mut stash, |e| {
+        matches!(e, Event::MenuBar { update, .. } if update.engage).then_some(())
+    });
+    wait_for(&mut client, &mut stash, |e| {
+        matches!(e, Event::MenuBar { update, .. } if update.screen_capture == Some(true))
+            .then_some(())
+    });
 
     bar.set_menu_open(true);
     bar.window_command(WindowCommand::Minimize);
     bar.move_to_workspace(3);
     bar.set_menu_open(false);
     stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
-    let sent: Vec<Seen> = (0..4).map(|_| seen.recv_timeout(Duration::from_secs(5)).unwrap()).collect();
-    assert_eq!(sent, vec![Seen::MenuOpen(true), Seen::Command(cupertino_menu_bar_v1::Command::Minimize), Seen::Workspace(3), Seen::MenuOpen(false)]);
+    let sent: Vec<Seen> = (0..4)
+        .map(|_| seen.recv_timeout(Duration::from_secs(5)).unwrap())
+        .collect();
+    assert_eq!(
+        sent,
+        vec![
+            Seen::MenuOpen(true),
+            Seen::Command(cupertino_menu_bar_v1::Command::Minimize),
+            Seen::Workspace(3),
+            Seen::MenuOpen(false)
+        ]
+    );
 }
 
 #[test]
@@ -1020,7 +1820,12 @@ fn dock_groups_arrive_typed_and_requests_reach_the_server() {
     let (mut client, control, _committed, seen, layer, mut stash) = connected_layer_surface();
     let dock = client.dock(layer, client.outputs()[0].id).unwrap();
     stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
-    assert_eq!(seen.recv_timeout(Duration::from_secs(5)).unwrap(), Seen::Dock { surface_has_layer_role: true });
+    assert_eq!(
+        seen.recv_timeout(Duration::from_secs(5)).unwrap(),
+        Seen::Dock {
+            surface_has_layer_role: true
+        }
+    );
 
     let dock_update = |e: &Event| match e {
         Event::Dock { surface, update } if *surface == layer => Some(update.clone()),
@@ -1030,8 +1835,20 @@ fn dock_groups_arrive_typed_and_requests_reach_the_server() {
     assert_eq!(
         first,
         vec![
-            DockChange::Window(DockWindow { id: 1, app_id: "org.example.editor".into(), title: "notes.txt".into(), minimized: false, active: true }),
-            DockChange::Window(DockWindow { id: 2, app_id: "org.example.mail".into(), title: "Inbox".into(), minimized: true, active: false }),
+            DockChange::Window(DockWindow {
+                id: 1,
+                app_id: "org.example.editor".into(),
+                title: "notes.txt".into(),
+                minimized: false,
+                active: true
+            }),
+            DockChange::Window(DockWindow {
+                id: 2,
+                app_id: "org.example.mail".into(),
+                title: "Inbox".into(),
+                minimized: true,
+                active: false
+            }),
         ]
     );
     control.send(Control::DockChange).unwrap();
@@ -1042,26 +1859,39 @@ fn dock_groups_arrive_typed_and_requests_reach_the_server() {
             DockChange::WindowClosed(2),
             DockChange::Launching("foot".into()),
             DockChange::ToggleAppGrid,
-            DockChange::SwitcherChanged { output: client.outputs()[0].id, apps: vec!["org.example.mail".into(), "org.example.editor".into()], selected: 1 },
+            DockChange::SwitcherChanged {
+                output: client.outputs()[0].id,
+                apps: vec!["org.example.mail".into(), "org.example.editor".into()],
+                selected: 1
+            },
             DockChange::SwitcherClosed { committed: false },
             DockChange::Attention("org.example.mail".into()),
         ]
     );
 
     dock.activate_app("org.example.editor");
-    dock.restore_window(2, &Rect::new(10.4, 20.0, 64.0, 64.5)).unwrap();
-    dock.set_minimize_target(&Rect::new(100.0, 8.0, 64.0, 64.0)).unwrap();
-    assert!(dock.set_minimize_target(&Rect::new(f64::NAN, 0.0, 1.0, 1.0)).is_err());
+    dock.restore_window(2, &Rect::new(10.4, 20.0, 64.0, 64.5))
+        .unwrap();
+    dock.set_minimize_target(&Rect::new(100.0, 8.0, 64.0, 64.0))
+        .unwrap();
+    assert!(dock
+        .set_minimize_target(&Rect::new(f64::NAN, 0.0, 1.0, 1.0))
+        .is_err());
     dock.switcher_select(1).unwrap();
     dock.switcher_activate(0).unwrap();
     dock.switcher_cancel();
     stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
-    let sent: Vec<Seen> = (0..6).map(|_| seen.recv_timeout(Duration::from_secs(5)).unwrap()).collect();
+    let sent: Vec<Seen> = (0..6)
+        .map(|_| seen.recv_timeout(Duration::from_secs(5)).unwrap())
+        .collect();
     assert_eq!(
         sent,
         vec![
             Seen::Activate("org.example.editor".into()),
-            Seen::Restore { id: 2, rect: [10, 20, 65, 65] },
+            Seen::Restore {
+                id: 2,
+                rect: [10, 20, 65, 65]
+            },
             Seen::MinimizeTarget([100, 8, 64, 64]),
             Seen::SwitcherSelect(1),
             Seen::SwitcherActivate(0),
@@ -1074,26 +1904,47 @@ fn dock_groups_arrive_typed_and_requests_reach_the_server() {
 fn a_session_lock_creates_lock_surfaces_and_unlocks_after_they_are_gone() {
     let (client_stream, server_stream) = UnixStream::pair().unwrap();
     let (_control, committed, seen) = spawn_server(server_stream);
-    let mut client = Client::from_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
+    let mut client =
+        Client::from_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
     let mut stash = Stash::new();
     assert_eq!(client.lock_state(), None);
-    assert!(matches!(client.unlock_session(), Err(ClientError::NotLocked)));
-    assert!(matches!(client.lock_surface(client.outputs()[0].id), Err(ClientError::NoSessionLock)));
+    assert!(matches!(
+        client.unlock_session(),
+        Err(ClientError::NotLocked)
+    ));
+    assert!(matches!(
+        client.lock_surface(client.outputs()[0].id),
+        Err(ClientError::NoSessionLock)
+    ));
 
     client.lock_session().unwrap();
-    assert!(matches!(client.lock_session(), Err(ClientError::SessionLockActive)));
+    assert!(matches!(
+        client.lock_session(),
+        Err(ClientError::SessionLockActive)
+    ));
     let surface = client.lock_surface(client.outputs()[0].id).unwrap();
-    assert!(matches!(client.set_keyboard_interactivity(surface, KeyboardInteractivity::Exclusive), Err(ClientError::NotLayerSurface)));
+    assert!(matches!(
+        client.set_keyboard_interactivity(surface, KeyboardInteractivity::Exclusive),
+        Err(ClientError::NotLayerSurface)
+    ));
     let size = wait_for(&mut client, &mut stash, |e| match e {
         Event::Configured { size, .. } => Some(*size),
         _ => None,
     });
     assert_eq!(size, (640, 480));
-    wait_for(&mut client, &mut stash, |e| matches!(e, Event::Draw(_)).then_some(()));
+    wait_for(&mut client, &mut stash, |e| {
+        matches!(e, Event::Draw(_)).then_some(())
+    });
     client.draw(surface, |_, _| {}).unwrap();
     // requests go out when the client waits
     stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
-    assert_eq!(committed.recv_timeout(Duration::from_secs(5)).unwrap().buffer_size, (640, 480));
+    assert_eq!(
+        committed
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .buffer_size,
+        (640, 480)
+    );
     let deadline = Instant::now() + Duration::from_secs(5);
     while client.lock_state() != Some(LockState::Locked) {
         assert!(Instant::now() < deadline, "the lock was never confirmed");
@@ -1103,14 +1954,23 @@ fn a_session_lock_creates_lock_surfaces_and_unlocks_after_they_are_gone() {
     client.unlock_session().unwrap();
     assert_eq!(client.lock_state(), None);
     let seen: Vec<Seen> = seen.try_iter().collect();
-    assert_eq!(seen, [Seen::LockRequested, Seen::LockSurfaceAcked(7), Seen::LockSurfaceDestroyed, Seen::Unlocked]);
+    assert_eq!(
+        seen,
+        [
+            Seen::LockRequested,
+            Seen::LockSurfaceAcked(7),
+            Seen::LockSurfaceDestroyed,
+            Seen::Unlocked
+        ]
+    );
 }
 
 #[test]
 fn an_idle_watch_reports_the_idle_edge_once() {
     let (client_stream, server_stream) = UnixStream::pair().unwrap();
     let (_control, _committed, seen) = spawn_server(server_stream);
-    let mut client = Client::from_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
+    let mut client =
+        Client::from_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
     assert!(!client.take_idle());
     client.watch_idle(Duration::from_secs(600)).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -1126,10 +1986,17 @@ fn an_idle_watch_reports_the_idle_edge_once() {
 fn the_session_state_at_connect_is_read_and_changes_arrive_as_events() {
     let (client_stream, server_stream) = UnixStream::pair().unwrap();
     let (control, _committed, _seen) = spawn_server(server_stream);
-    let mut client = Client::from_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
+    let mut client =
+        Client::from_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
     // no event for what connect already read
     assert!(client.is_dark());
-    assert_eq!(client.display_options(), DisplayOptions { reduce_motion: true, ..DisplayOptions::default() });
+    assert_eq!(
+        client.display_options(),
+        DisplayOptions {
+            reduce_motion: true,
+            ..DisplayOptions::default()
+        }
+    );
     assert!(!client.session_locked());
     let mut stash = Stash::new();
     control.send(Control::SessionChange).unwrap();
@@ -1137,15 +2004,33 @@ fn the_session_state_at_connect_is_read_and_changes_arrive_as_events() {
     wait_for(&mut client, &mut stash, |e| {
         match e {
             Event::Appearance { dark } => changes.push(format!("dark={dark}")),
-            Event::DisplayOptions(o) => changes.push(format!("motion={} transparency={} contrast={}", o.reduce_motion, o.reduce_transparency, o.increase_contrast)),
+            Event::DisplayOptions(o) => changes.push(format!(
+                "motion={} transparency={} contrast={}",
+                o.reduce_motion, o.reduce_transparency, o.increase_contrast
+            )),
             Event::SessionLock { locked } => changes.push(format!("locked={locked}")),
             _ => {}
         }
         (changes.len() == 4).then_some(())
     });
-    assert_eq!(changes, ["dark=false", "motion=false transparency=true contrast=true", "locked=true", "locked=false"]);
+    assert_eq!(
+        changes,
+        [
+            "dark=false",
+            "motion=false transparency=true contrast=true",
+            "locked=true",
+            "locked=false"
+        ]
+    );
     assert!(!client.is_dark());
-    assert_eq!(client.display_options(), DisplayOptions { reduce_transparency: true, increase_contrast: true, ..DisplayOptions::default() });
+    assert_eq!(
+        client.display_options(),
+        DisplayOptions {
+            reduce_transparency: true,
+            increase_contrast: true,
+            ..DisplayOptions::default()
+        }
+    );
     assert!(!client.session_locked());
 }
 
@@ -1153,26 +2038,57 @@ fn the_session_state_at_connect_is_read_and_changes_arrive_as_events() {
 fn a_unified_toplevel_asks_for_its_title_bar_style_and_moves_and_zooms_itself() {
     let (client_stream, server_stream) = UnixStream::pair().unwrap();
     let (_control, _committed, seen) = spawn_server(server_stream);
-    let mut client = Client::from_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
-    let window = client.toplevel(&ToplevelConfig { app_id: "org.example.files".into(), title: "Home".into(), size: (920, 436), min_size: (445, 139), titlebar: TitlebarStyle::Unified }).unwrap();
+    let mut client =
+        Client::from_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
+    let window = client
+        .toplevel(&ToplevelConfig {
+            app_id: "org.example.files".into(),
+            title: "Home".into(),
+            size: (920, 436),
+            min_size: (445, 139),
+            titlebar: TitlebarStyle::Unified,
+        })
+        .unwrap();
     let mut stash = Stash::new();
-    wait_for(&mut client, &mut stash, |e| matches!(e, Event::Configured { surface, .. } if *surface == window).then_some(()));
-    let requests: Vec<Seen> = (0..5).map(|_| seen.recv_timeout(Duration::from_secs(5)).unwrap()).collect();
-    assert_eq!(requests[4], Seen::TitlebarStyle(cupertino_shell_v1::TitlebarStyle::Unified));
+    wait_for(&mut client, &mut stash, |e| {
+        matches!(e, Event::Configured { surface, .. } if *surface == window).then_some(())
+    });
+    let requests: Vec<Seen> = (0..5)
+        .map(|_| seen.recv_timeout(Duration::from_secs(5)).unwrap())
+        .collect();
+    assert_eq!(
+        requests[4],
+        Seen::TitlebarStyle(cupertino_shell_v1::TitlebarStyle::Unified)
+    );
 
     // a window that has not been configured as maximized zooms; a move needs the press it answers
     client.toplevel_toggle_maximized(window).unwrap();
     stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
-    assert_eq!(seen.recv_timeout(Duration::from_secs(5)).unwrap(), Seen::Maximize(true));
-    assert!(matches!(client.toplevel_move(window), Err(ClientError::NoInputSerial)));
+    assert_eq!(
+        seen.recv_timeout(Duration::from_secs(5)).unwrap(),
+        Seen::Maximize(true)
+    );
+    assert!(matches!(
+        client.toplevel_move(window),
+        Err(ClientError::NoInputSerial)
+    ));
 }
 
 #[test]
 fn toplevels_are_decorated_by_the_server_sized_scrolled_and_closed() {
     let (client_stream, server_stream) = UnixStream::pair().unwrap();
     let (control, committed, seen) = spawn_server(server_stream);
-    let mut client = Client::from_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
-    let window = client.toplevel(&ToplevelConfig { app_id: "org.example.files".into(), title: "Home".into(), size: (920, 436), min_size: (445, 139), titlebar: TitlebarStyle::Standard }).unwrap();
+    let mut client =
+        Client::from_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
+    let window = client
+        .toplevel(&ToplevelConfig {
+            app_id: "org.example.files".into(),
+            title: "Home".into(),
+            size: (920, 436),
+            min_size: (445, 139),
+            titlebar: TitlebarStyle::Standard,
+        })
+        .unwrap();
     let mut stash = Stash::new();
 
     // the first configure suggests no size: the window takes the requested one, inactive
@@ -1182,17 +2098,41 @@ fn toplevels_are_decorated_by_the_server_sized_scrolled_and_closed() {
     });
     assert_eq!(size, (920, 436));
     assert!(!client.toplevel_activated(window).unwrap());
-    let requests: Vec<Seen> = (0..4).map(|_| seen.recv_timeout(Duration::from_secs(5)).unwrap()).collect();
-    assert_eq!(requests, [Seen::AppId("org.example.files".into()), Seen::Title("Home".into()), Seen::MinSize(445, 139), Seen::DecorationMode(zxdg_toplevel_decoration_v1::Mode::ServerSide)]);
-    wait_for(&mut client, &mut stash, |e| matches!(e, Event::Draw(s) if *s == window).then_some(()));
+    let requests: Vec<Seen> = (0..4)
+        .map(|_| seen.recv_timeout(Duration::from_secs(5)).unwrap())
+        .collect();
+    assert_eq!(
+        requests,
+        [
+            Seen::AppId("org.example.files".into()),
+            Seen::Title("Home".into()),
+            Seen::MinSize(445, 139),
+            Seen::DecorationMode(zxdg_toplevel_decoration_v1::Mode::ServerSide)
+        ]
+    );
+    wait_for(&mut client, &mut stash, |e| {
+        matches!(e, Event::Draw(s) if *s == window).then_some(())
+    });
     client.draw(window, |_, _| {}).unwrap();
     stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
     // the mock's output has scale 2
-    assert_eq!(committed.recv_timeout(Duration::from_secs(5)).unwrap().buffer_size, (1840, 872));
+    assert_eq!(
+        committed
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .buffer_size,
+        (1840, 872)
+    );
     client.set_title(window, "Documents").unwrap();
     stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
-    assert_eq!(seen.recv_timeout(Duration::from_secs(5)).unwrap(), Seen::Title("Documents".into()));
-    assert!(matches!(client.set_exclusive_zone(window, 0), Err(ClientError::NotLayerSurface)));
+    assert_eq!(
+        seen.recv_timeout(Duration::from_secs(5)).unwrap(),
+        Seen::Title("Documents".into())
+    );
+    assert!(matches!(
+        client.set_exclusive_zone(window, 0),
+        Err(ClientError::NotLayerSurface)
+    ));
 
     // a later configure resizes and activates
     control.send(Control::FrameDone).unwrap();
@@ -1203,17 +2143,28 @@ fn toplevels_are_decorated_by_the_server_sized_scrolled_and_closed() {
     });
     assert_eq!(size, (640, 480));
     assert!(client.toplevel_activated(window).unwrap());
-    wait_for(&mut client, &mut stash, |e| matches!(e, Event::Draw(s) if *s == window).then_some(()));
+    wait_for(&mut client, &mut stash, |e| {
+        matches!(e, Event::Draw(s) if *s == window).then_some(())
+    });
     client.draw(window, |_, _| {}).unwrap();
     stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
-    assert_eq!(committed.recv_timeout(Duration::from_secs(5)).unwrap().buffer_size, (1280, 960));
+    assert_eq!(
+        committed
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .buffer_size,
+        (1280, 960)
+    );
 
     // scrolling over it arrives as pointer events, one per axis event, with the count of its frame
     control.send(Control::ScrollToplevel).unwrap();
     let mut scrolls = Vec::new();
     while scrolls.len() < 3 {
         scrolls.push(wait_for(&mut client, &mut stash, |e| match e {
-            Event::Pointer { surface, event: PointerEvent::Scroll { dx, dy, count, .. } } if *surface == window => Some((*dx, *dy, *count)),
+            Event::Pointer {
+                surface,
+                event: PointerEvent::Scroll { dx, dy, count, .. },
+            } if *surface == window => Some((*dx, *dy, *count)),
             _ => None,
         }));
     }
@@ -1221,6 +2172,8 @@ fn toplevels_are_decorated_by_the_server_sized_scrolled_and_closed() {
 
     // the close request is the application's to act on
     control.send(Control::CloseToplevel).unwrap();
-    wait_for(&mut client, &mut stash, |e| matches!(e, Event::Closed(s) if *s == window).then_some(()));
+    wait_for(&mut client, &mut stash, |e| {
+        matches!(e, Event::Closed(s) if *s == window).then_some(())
+    });
     client.destroy_surface(window).unwrap();
 }

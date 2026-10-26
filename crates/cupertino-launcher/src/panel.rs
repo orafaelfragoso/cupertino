@@ -57,10 +57,30 @@ pub struct Mods {
 }
 
 impl Mods {
-    pub const NONE: Mods = Mods { ctrl: false, alt: false, shift: false, primary: false };
-    pub const CTRL: Mods = Mods { ctrl: true, alt: false, shift: false, primary: false };
-    pub const ALT: Mods = Mods { ctrl: false, alt: true, shift: false, primary: false };
-    pub const PRIMARY: Mods = Mods { ctrl: false, alt: false, shift: false, primary: true };
+    pub const NONE: Mods = Mods {
+        ctrl: false,
+        alt: false,
+        shift: false,
+        primary: false,
+    };
+    pub const CTRL: Mods = Mods {
+        ctrl: true,
+        alt: false,
+        shift: false,
+        primary: false,
+    };
+    pub const ALT: Mods = Mods {
+        ctrl: false,
+        alt: true,
+        shift: false,
+        primary: false,
+    };
+    pub const PRIMARY: Mods = Mods {
+        ctrl: false,
+        alt: false,
+        shift: false,
+        primary: true,
+    };
 
     /// Primary held without Ctrl / Alt / Shift (the design test for panel shortcuts).
     pub fn only_primary(self) -> bool {
@@ -224,7 +244,8 @@ impl Panel {
         self.visible = true;
         self.focus = Focus::Field;
         self.select_all = false;
-        self.appear.animate_to(1.0, Curve::Spring(self.spring), now.mono);
+        self.appear
+            .animate_to(1.0, Curve::Spring(self.spring), now.mono);
         self.requery(launcher, now.unix);
     }
 
@@ -264,7 +285,10 @@ impl Panel {
     }
 
     fn byte_at(&self, char_index: usize) -> usize {
-        self.query.char_indices().nth(char_index).map_or(self.query.len(), |(b, _)| b)
+        self.query
+            .char_indices()
+            .nth(char_index)
+            .map_or(self.query.len(), |(b, _)| b)
     }
 
     fn chars_len(&self) -> usize {
@@ -274,12 +298,19 @@ impl Panel {
     /// Row index of the flat result index (counting section headers).
     pub fn row_of(&self, flat: usize) -> Option<usize> {
         let (s, i) = self.results.locate(flat)?;
-        let before: usize = self.results.sections[..s].iter().map(|x| x.items.len() + 1).sum();
+        let before: usize = self.results.sections[..s]
+            .iter()
+            .map(|x| x.items.len() + 1)
+            .sum();
         Some(before + 1 + i)
     }
 
     pub fn total_rows(&self) -> usize {
-        self.results.sections.iter().map(|s| s.items.len() + 1).sum()
+        self.results
+            .sections
+            .iter()
+            .map(|s| s.items.len() + 1)
+            .sum()
     }
 
     fn clamp_scroll(&mut self) {
@@ -288,7 +319,10 @@ impl Panel {
             return;
         };
         let max = self.max_rows.max(1);
-        let first_in_section = self.results.locate(self.selected).is_some_and(|(_, i)| i == 0);
+        let first_in_section = self
+            .results
+            .locate(self.selected)
+            .is_some_and(|(_, i)| i == 0);
         let top = if first_in_section { row - 1 } else { row };
         if top < self.scroll_row {
             self.scroll_row = top;
@@ -304,7 +338,11 @@ impl Panel {
             return PanelEvent::None;
         }
         let target = self.selected as isize + delta;
-        let new = if wrap { target.rem_euclid(n as isize) as usize } else { target.clamp(0, n as isize - 1) as usize };
+        let new = if wrap {
+            target.rem_euclid(n as isize) as usize
+        } else {
+            target.clamp(0, n as isize - 1) as usize
+        };
         if new == self.selected {
             return PanelEvent::None;
         }
@@ -315,13 +353,24 @@ impl Panel {
 
     /// First result of the next (`forward`) or previous section (Primary+Down / Primary+Up).
     fn jump_section(&mut self, forward: bool) -> PanelEvent {
-        let Some((s, _)) = self.results.locate(self.selected) else { return PanelEvent::None };
-        let target = if forward { s + 1 } else { s.checked_sub(1).unwrap_or(usize::MAX) };
-        let Some(section) = self.results.sections.get(target) else { return PanelEvent::None };
+        let Some((s, _)) = self.results.locate(self.selected) else {
+            return PanelEvent::None;
+        };
+        let target = if forward {
+            s + 1
+        } else {
+            s.checked_sub(1).unwrap_or(usize::MAX)
+        };
+        let Some(section) = self.results.sections.get(target) else {
+            return PanelEvent::None;
+        };
         if section.items.is_empty() {
             return PanelEvent::None;
         }
-        let flat: usize = self.results.sections[..target].iter().map(|x| x.items.len()).sum();
+        let flat: usize = self.results.sections[..target]
+            .iter()
+            .map(|x| x.items.len())
+            .sum();
         self.focus = Focus::List;
         self.set_selected(flat);
         PanelEvent::Changed
@@ -358,7 +407,9 @@ impl Panel {
 
     /// Activate the result at a flat index (click, Alt+digit) and close.
     pub fn activate_index(&mut self, flat: usize, launcher: &mut Launcher, now: Now) -> PanelEvent {
-        let Some(item) = self.results.get(flat).cloned() else { return PanelEvent::None };
+        let Some(item) = self.results.get(flat).cloned() else {
+            return PanelEvent::None;
+        };
         let activation = launcher.activate(&item, &self.query, now.unix);
         self.hide(now.mono);
         PanelEvent::Activate(activation)
@@ -388,7 +439,13 @@ impl Panel {
         i
     }
 
-    fn delete_range(&mut self, from: usize, to: usize, launcher: &Launcher, now: Now) -> PanelEvent {
+    fn delete_range(
+        &mut self,
+        from: usize,
+        to: usize,
+        launcher: &Launcher,
+        now: Now,
+    ) -> PanelEvent {
         if from >= to {
             return PanelEvent::None;
         }
@@ -426,7 +483,13 @@ impl Panel {
     }
 
     /// Handle one key press. Returns what the host has to do.
-    pub fn handle_key(&mut self, key: Key, mods: Mods, launcher: &mut Launcher, now: Now) -> PanelEvent {
+    pub fn handle_key(
+        &mut self,
+        key: Key,
+        mods: Mods,
+        launcher: &mut Launcher,
+        now: Now,
+    ) -> PanelEvent {
         if !self.visible {
             return PanelEvent::None;
         }
@@ -472,15 +535,23 @@ impl Panel {
                 }
             }
             (Key::Enter, _) => self.activate_index(self.selected, launcher, now),
-            (Key::Char(c @ '1'..='9'), m) if m.alt => self.activate_index(c as usize - '1' as usize, launcher, now),
-            (Key::Char(' '), m) if self.focus == Focus::List && !m.ctrl && !m.alt && !m.primary => PanelEvent::Command(PanelCommand::Preview),
+            (Key::Char(c @ '1'..='9'), m) if m.alt => {
+                self.activate_index(c as usize - '1' as usize, launcher, now)
+            }
+            (Key::Char(' '), m) if self.focus == Focus::List && !m.ctrl && !m.alt && !m.primary => {
+                PanelEvent::Command(PanelCommand::Preview)
+            }
             (Key::Char('a'), m) if m.ctrl => self.move_cursor(0),
             (Key::Char('e'), m) if m.ctrl => self.move_cursor(self.chars_len()),
             (Key::Char('b'), m) if m.ctrl => self.move_cursor(self.cursor.saturating_sub(1)),
             (Key::Char('f'), m) if m.ctrl => self.move_cursor(self.cursor + 1),
             (Key::Char('u'), m) if m.ctrl => self.delete_range(0, self.cursor, launcher, now),
-            (Key::Char('k'), m) if m.ctrl => self.delete_range(self.cursor, self.chars_len(), launcher, now),
-            (Key::Char('w'), m) if m.ctrl => self.delete_range(self.word_start(self.cursor), self.cursor, launcher, now),
+            (Key::Char('k'), m) if m.ctrl => {
+                self.delete_range(self.cursor, self.chars_len(), launcher, now)
+            }
+            (Key::Char('w'), m) if m.ctrl => {
+                self.delete_range(self.word_start(self.cursor), self.cursor, launcher, now)
+            }
             (Key::Char('n'), m) if m.ctrl => self.arrow(true),
             (Key::Char('p'), m) if m.ctrl => self.arrow(false),
             (Key::Char(c), m) if !m.ctrl && !m.alt && !m.primary => self.insert(c, launcher, now),
@@ -490,14 +561,23 @@ impl Panel {
                 self.focus = Focus::Field;
                 PanelEvent::Changed
             }
-            (Key::Backspace, m) if m.ctrl => self.delete_range(self.word_start(self.cursor), self.cursor, launcher, now),
+            (Key::Backspace, m) if m.ctrl => {
+                self.delete_range(self.word_start(self.cursor), self.cursor, launcher, now)
+            }
             (Key::Backspace, _) if self.select_all => {
                 self.select_all = false;
                 self.set_query("", launcher, now);
                 PanelEvent::Changed
             }
-            (Key::Backspace, _) => self.delete_range(self.cursor.saturating_sub(1), self.cursor, launcher, now),
-            (Key::Delete, _) => self.delete_range(self.cursor, (self.cursor + 1).min(self.chars_len()), launcher, now),
+            (Key::Backspace, _) => {
+                self.delete_range(self.cursor.saturating_sub(1), self.cursor, launcher, now)
+            }
+            (Key::Delete, _) => self.delete_range(
+                self.cursor,
+                (self.cursor + 1).min(self.chars_len()),
+                launcher,
+                now,
+            ),
             (Key::Left, m) if m.ctrl => self.move_cursor(self.word_start(self.cursor)),
             (Key::Right, m) if m.ctrl => self.move_cursor(self.word_end(self.cursor)),
             (Key::Left, _) => self.move_cursor(self.cursor.saturating_sub(1)),

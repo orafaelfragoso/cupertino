@@ -5,7 +5,6 @@
 //! height: 20 pt for the default 16 pt icon and 13 pt font (derived from the font metrics). Columns
 //! abut; a cell's text keeps its own inset from the column edge (the renderer's).
 
-
 use crate::geom::Rect;
 use crate::metrics::list_view as m;
 use crate::settings::{ColumnDesc, ColumnId};
@@ -84,7 +83,10 @@ pub fn layout(p: &ListParams<'_>, rows: &[RowSpec]) -> ListLayout {
     let mut x = 0.0;
     let mut columns = Vec::new();
     for c in &visible {
-        columns.push(ColumnRect { id: c.id, frame: Rect::new(x, 0.0, c.width, m::HEADER_HEIGHT) });
+        columns.push(ColumnRect {
+            id: c.id,
+            frame: Rect::new(x, 0.0, c.width, m::HEADER_HEIGHT),
+        });
         x += c.width + m::INTERCELL.0;
     }
     let content_width = (x - m::INTERCELL.0).max(0.0).max(p.viewport_width.min(x));
@@ -96,7 +98,8 @@ pub fn layout(p: &ListParams<'_>, rows: &[RowSpec]) -> ListLayout {
     for (i, r) in rows.iter().enumerate() {
         let y = m::HEADER_HEIGHT + i as f64 * pitch;
         let lvl_x = r.level as f64 * indent;
-        let disclosure = (r.expandable && p.hierarchical).then(|| Rect::new(lvl_x, y + (rh - DISCLOSURE) / 2.0, DISCLOSURE, DISCLOSURE));
+        let disclosure = (r.expandable && p.hierarchical)
+            .then(|| Rect::new(lvl_x, y + (rh - DISCLOSURE) / 2.0, DISCLOSURE, DISCLOSURE));
         let icon_x = (r.level as f64 + 1.0) * indent;
         out.push(RowRect {
             index: i,
@@ -108,7 +111,14 @@ pub fn layout(p: &ListParams<'_>, rows: &[RowSpec]) -> ListLayout {
             text_x: icon_x + icon + ICON_TEXT_GAP,
         });
     }
-    ListLayout { header: Rect::new(0.0, 0.0, content_width, m::HEADER_HEIGHT), columns, rows: out, row_height: rh, content_width, content_height: m::HEADER_HEIGHT + rows.len() as f64 * pitch }
+    ListLayout {
+        header: Rect::new(0.0, 0.0, content_width, m::HEADER_HEIGHT),
+        columns,
+        rows: out,
+        row_height: rh,
+        content_width,
+        content_height: m::HEADER_HEIGHT + rows.len() as f64 * pitch,
+    }
 }
 
 impl ListLayout {
@@ -138,8 +148,16 @@ impl ListLayout {
 
 /// Minimum width of the name column so that the icon, indentation and a few characters fit
 /// (approximate; the design sums font-dependent terms).
-pub fn min_name_column_width(icon_size: u32, text_size: f64, deepest_level: u32, hierarchical: bool) -> f64 {
-    (deepest_level as f64 + 1.0) * indentation(hierarchical) + icon_size as f64 + ICON_TEXT_GAP + text_size * 6.0
+pub fn min_name_column_width(
+    icon_size: u32,
+    text_size: f64,
+    deepest_level: u32,
+    hierarchical: bool,
+) -> f64 {
+    (deepest_level as f64 + 1.0) * indentation(hierarchical)
+        + icon_size as f64
+        + ICON_TEXT_GAP
+        + text_size * 6.0
 }
 
 #[cfg(test)]
@@ -159,8 +177,23 @@ mod tests {
     #[test]
     fn columns_abut_and_rows_follow_at_the_row_height() {
         let cols = default_columns();
-        let rows: Vec<RowSpec> = (0..5).map(|i| RowSpec { level: (i % 2) as u32, expandable: i == 0, expanded: false }).collect();
-        let l = layout(&ListParams { icon_size: 16, font_line: 15.0, hierarchical: true, columns: &cols, viewport_width: 800.0 }, &rows);
+        let rows: Vec<RowSpec> = (0..5)
+            .map(|i| RowSpec {
+                level: (i % 2) as u32,
+                expandable: i == 0,
+                expanded: false,
+            })
+            .collect();
+        let l = layout(
+            &ListParams {
+                icon_size: 16,
+                font_line: 15.0,
+                hierarchical: true,
+                columns: &cols,
+                viewport_width: 800.0,
+            },
+            &rows,
+        );
         assert_eq!(l.columns.len(), 4);
         assert_eq!(l.columns[0].frame.x, 0.0);
         assert_eq!(l.columns[1].frame.x, 300.0);
@@ -172,17 +205,62 @@ mod tests {
     #[test]
     fn indentation_and_disclosure() {
         let cols = default_columns();
-        let rows = [RowSpec { level: 0, expandable: true, expanded: true }, RowSpec { level: 2, expandable: false, expanded: false }];
-        let l = layout(&ListParams { icon_size: 16, font_line: 15.0, hierarchical: true, columns: &cols, viewport_width: 800.0 }, &rows);
+        let rows = [
+            RowSpec {
+                level: 0,
+                expandable: true,
+                expanded: true,
+            },
+            RowSpec {
+                level: 2,
+                expandable: false,
+                expanded: false,
+            },
+        ];
+        let l = layout(
+            &ListParams {
+                icon_size: 16,
+                font_line: 15.0,
+                hierarchical: true,
+                columns: &cols,
+                viewport_width: 800.0,
+            },
+            &rows,
+        );
         assert_eq!(l.rows[0].disclosure.unwrap().x, 0.0);
         assert!(l.rows[1].disclosure.is_none());
         assert!(l.rows[0].expanded && !l.rows[1].expanded);
         // 15 pt per level: the icon of a level-1 row starts at 30
-        let child = layout(&ListParams { icon_size: 16, font_line: 15.0, hierarchical: true, columns: &cols, viewport_width: 800.0 }, &[RowSpec { level: 1, expandable: true, expanded: false }]);
-        assert_eq!((child.rows[0].disclosure.unwrap().x, child.rows[0].icon.x), (15.0, 30.0));
+        let child = layout(
+            &ListParams {
+                icon_size: 16,
+                font_line: 15.0,
+                hierarchical: true,
+                columns: &cols,
+                viewport_width: 800.0,
+            },
+            &[RowSpec {
+                level: 1,
+                expandable: true,
+                expanded: false,
+            }],
+        );
+        assert_eq!(
+            (child.rows[0].disclosure.unwrap().x, child.rows[0].icon.x),
+            (15.0, 30.0)
+        );
         assert_eq!(l.rows[1].icon.x, 45.0);
         assert_eq!(l.rows[1].text_x, 45.0 + 16.0 + 5.0);
-        let flat = layout(&ListParams { icon_size: 16, font_line: 15.0, hierarchical: false, columns: &cols, viewport_width: 800.0 }, &rows);
+        let flat = layout(
+            &ListParams {
+                icon_size: 16,
+                font_line: 15.0,
+                hierarchical: false,
+                columns: &cols,
+                viewport_width: 800.0,
+            },
+            &rows,
+        );
         assert_eq!(flat.rows[1].icon.x, 3.0);
         assert!(flat.rows[0].disclosure.is_none());
     }
@@ -190,8 +268,23 @@ mod tests {
     #[test]
     fn row_lookup_and_virtualisation() {
         let cols = default_columns();
-        let rows: Vec<RowSpec> = (0..100).map(|_| RowSpec { level: 0, expandable: false, expanded: false }).collect();
-        let l = layout(&ListParams { icon_size: 16, font_line: 15.0, hierarchical: true, columns: &cols, viewport_width: 800.0 }, &rows);
+        let rows: Vec<RowSpec> = (0..100)
+            .map(|_| RowSpec {
+                level: 0,
+                expandable: false,
+                expanded: false,
+            })
+            .collect();
+        let l = layout(
+            &ListParams {
+                icon_size: 16,
+                font_line: 15.0,
+                hierarchical: true,
+                columns: &cols,
+                viewport_width: 800.0,
+            },
+            &rows,
+        );
         assert_eq!(l.row_at(10.0), None);
         assert_eq!(l.row_at(28.0), Some(0));
         assert_eq!(l.row_at(28.0 + 20.0 * 3.0 + 19.0), Some(3));
@@ -205,7 +298,19 @@ mod tests {
     fn hidden_columns_are_skipped() {
         let mut cols = default_columns();
         cols[1].visible = false;
-        let l = layout(&ListParams { icon_size: 16, font_line: 15.0, hierarchical: true, columns: &cols, viewport_width: 800.0 }, &[]);
-        assert_eq!(l.columns.iter().map(|c| c.id).collect::<Vec<_>>(), [ColumnId::Name, ColumnId::Size, ColumnId::Kind]);
+        let l = layout(
+            &ListParams {
+                icon_size: 16,
+                font_line: 15.0,
+                hierarchical: true,
+                columns: &cols,
+                viewport_width: 800.0,
+            },
+            &[],
+        );
+        assert_eq!(
+            l.columns.iter().map(|c| c.id).collect::<Vec<_>>(),
+            [ColumnId::Name, ColumnId::Size, ColumnId::Kind]
+        );
     }
 }

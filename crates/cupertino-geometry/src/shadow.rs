@@ -23,7 +23,9 @@ pub fn gaussian_half_kernel(sigma: f64) -> Vec<f64> {
     if r == 0 {
         return vec![1.0];
     }
-    let mut w: Vec<f64> = (0..=r).map(|i| (-((i * i) as f64) / (2.0 * sigma * sigma)).exp()).collect();
+    let mut w: Vec<f64> = (0..=r)
+        .map(|i| (-((i * i) as f64) / (2.0 * sigma * sigma)).exp())
+        .collect();
     let sum = w[0] + 2.0 * w[1..].iter().sum::<f64>();
     w.iter_mut().for_each(|x| *x /= sum);
     w
@@ -43,7 +45,11 @@ pub fn erf(x: f64) -> f64 {
     let s = x.signum();
     let x = x.abs();
     let t = 1.0 / (1.0 + 0.327_591_1 * x);
-    let y = 1.0 - (((((1.061_405_429 * t - 1.453_152_027) * t) + 1.421_413_741) * t - 0.284_496_736) * t + 0.254_829_592) * t * (-x * x).exp();
+    let y = 1.0
+        - (((((1.061_405_429 * t - 1.453_152_027) * t) + 1.421_413_741) * t - 0.284_496_736) * t
+            + 0.254_829_592)
+            * t
+            * (-x * x).exp();
     s * y
 }
 
@@ -80,8 +86,16 @@ pub fn box_blur_sizes(sigma: f64, passes: usize) -> Vec<usize> {
         (m as f64 * a + (total - m) as f64 * b) / 12.0
     };
     let target = sigma * sigma;
-    let m = (0..=total).min_by(|&a, &b| (variance(a) - target).abs().total_cmp(&(variance(b) - target).abs())).unwrap_or(0);
-    (0..total).map(|i| if i < m { wl as usize } else { wu as usize }).collect()
+    let m = (0..=total)
+        .min_by(|&a, &b| {
+            (variance(a) - target)
+                .abs()
+                .total_cmp(&(variance(b) - target).abs())
+        })
+        .unwrap_or(0);
+    (0..total)
+        .map(|i| if i < m { wl as usize } else { wu as usize })
+        .collect()
 }
 
 /// Variance of the composite of box blurs with the given widths: Σ (w² − 1) / 12.
@@ -108,7 +122,9 @@ pub fn box_blur_kernel(sizes: &[usize]) -> Vec<f64> {
 /// Box width `d` of the three-pass box blur recommended for Gaussian blurs in the SVG filter
 /// specification: `d = floor(σ · 3·√(2π)/4 + 0.5)`.
 pub fn svg_box_size(sigma: f64) -> usize {
-    (sigma * 3.0 * (2.0 * std::f64::consts::PI).sqrt() / 4.0 + 0.5).floor().max(1.0) as usize
+    (sigma * 3.0 * (2.0 * std::f64::consts::PI).sqrt() / 4.0 + 0.5)
+        .floor()
+        .max(1.0) as usize
 }
 
 /// One-sided taps for a Gaussian blur using hardware bilinear filtering: adjacent sample pairs are
@@ -144,17 +160,26 @@ pub struct ShadowSpec {
 impl ShadowSpec {
     /// Conversion from the CSS-style blur radius, where `sigma = blur / 2`.
     pub fn from_css_blur(offset: Point, blur: f64, spread: f64, alpha: f64) -> Self {
-        Self { offset, sigma: blur * 0.5, spread, alpha }
+        Self {
+            offset,
+            sigma: blur * 0.5,
+            spread,
+            alpha,
+        }
     }
 
     /// Region touched by the shadow of a caster occupying `caster`.
     pub fn bounds(&self, caster: Rect) -> Rect {
-        caster.translate(self.offset.x, self.offset.y).outset(self.spread.max(0.0) + 3.0 * self.sigma)
+        caster
+            .translate(self.offset.x, self.offset.y)
+            .outset(self.spread.max(0.0) + 3.0 * self.sigma)
     }
 
     /// Shadow opacity at `p` for a rectangular caster (closed form).
     pub fn rect_alpha(&self, p: Point, caster: Rect) -> f64 {
-        let r = caster.translate(self.offset.x, self.offset.y).outset(self.spread);
+        let r = caster
+            .translate(self.offset.x, self.offset.y)
+            .outset(self.spread);
         self.alpha * blurred_rect(p, r, self.sigma)
     }
 }
@@ -183,8 +208,15 @@ mod tests {
         let s = 6.0;
         let w = gaussian_weights(s);
         let m = (w.len() / 2) as f64;
-        let var: f64 = w.iter().enumerate().map(|(i, v)| (i as f64 - m).powi(2) * v).sum();
-        assert!((var - s * s).abs() < 0.03 * s * s, "var {var} (3σ truncation loses about 2 %)");
+        let var: f64 = w
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i as f64 - m).powi(2) * v)
+            .sum();
+        assert!(
+            (var - s * s).abs() < 0.03 * s * s,
+            "var {var} (3σ truncation loses about 2 %)"
+        );
     }
 
     #[test]
@@ -209,7 +241,9 @@ mod tests {
         let (sigma, n) = (5.0, 200usize);
         let w = gaussian_weights(sigma);
         let r = kernel_radius(sigma) as i64;
-        let img: Vec<f64> = (0..n).map(|i| if (60..140).contains(&i) { 1.0 } else { 0.0 }).collect();
+        let img: Vec<f64> = (0..n)
+            .map(|i| if (60..140).contains(&i) { 1.0 } else { 0.0 })
+            .collect();
         for x in [40usize, 58, 60, 62, 100, 139] {
             let mut acc = 0.0;
             for (k, wk) in w.iter().enumerate() {
@@ -218,7 +252,8 @@ mod tests {
                     acc += wk * img[i as usize];
                 }
             }
-            let closed = gaussian_cdf(140.0 - (x as f64 + 0.5), sigma) - gaussian_cdf(60.0 - (x as f64 + 0.5), sigma);
+            let closed = gaussian_cdf(140.0 - (x as f64 + 0.5), sigma)
+                - gaussian_cdf(60.0 - (x as f64 + 0.5), sigma);
             assert!((acc - closed).abs() < 5e-3, "x={x}: {acc} vs {closed}");
         }
     }
@@ -230,7 +265,11 @@ mod tests {
             assert_eq!(sizes.len(), 3);
             assert!(sizes.iter().all(|w| w % 2 == 1));
             let var = box_blur_variance(&sizes);
-            assert!((var - s * s).abs() / (s * s) < 0.10, "σ={s}: variance {var} vs {}", s * s);
+            assert!(
+                (var - s * s).abs() / (s * s) < 0.10,
+                "σ={s}: variance {var} vs {}",
+                s * s
+            );
         }
     }
 
@@ -268,8 +307,15 @@ mod tests {
             signal(i) * (1.0 - f) + signal(i + 1.0) * f
         };
         let x0 = 50.0;
-        let direct: f64 = h[0] * signal(x0) + (1..h.len()).map(|i| h[i] * (signal(x0 + i as f64) + signal(x0 - i as f64))).sum::<f64>();
-        let merged: f64 = c * signal(x0) + taps.iter().map(|&(o, w)| w * (linear(x0 + o) + linear(x0 - o))).sum::<f64>();
+        let direct: f64 = h[0] * signal(x0)
+            + (1..h.len())
+                .map(|i| h[i] * (signal(x0 + i as f64) + signal(x0 - i as f64)))
+                .sum::<f64>();
+        let merged: f64 = c * signal(x0)
+            + taps
+                .iter()
+                .map(|&(o, w)| w * (linear(x0 + o) + linear(x0 - o)))
+                .sum::<f64>();
         assert!((direct - merged).abs() < 1e-3, "{direct} vs {merged}");
     }
 

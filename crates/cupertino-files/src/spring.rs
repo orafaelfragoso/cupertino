@@ -7,15 +7,19 @@
 //! * Holding the pointer inside the same target restarts nothing; entering another target or
 //!   leaving restarts / cancels (behaviour).
 
-use crate::metrics::timing::{SPRING_DELAY_DEFAULT_TICKS, SPRING_TICKS_MAX, SPRING_TICKS_MIN, SPRING_TICKS_PER_SECOND};
+use crate::metrics::timing::{
+    SPRING_DELAY_DEFAULT_TICKS, SPRING_TICKS_MAX, SPRING_TICKS_MIN, SPRING_TICKS_PER_SECOND,
+};
 
 pub fn ticks_from_seconds(seconds: f64) -> i32 {
-    ((seconds * SPRING_TICKS_PER_SECOND + SPRING_TICKS_MIN as f64) as i32).clamp(SPRING_TICKS_MIN, SPRING_TICKS_MAX)
+    ((seconds * SPRING_TICKS_PER_SECOND + SPRING_TICKS_MIN as f64) as i32)
+        .clamp(SPRING_TICKS_MIN, SPRING_TICKS_MAX)
 }
 
 /// Inverse of [`ticks_from_seconds`] (the design only shows the forward direction).
 pub fn seconds_from_ticks(ticks: i32) -> f64 {
-    (ticks.clamp(SPRING_TICKS_MIN, SPRING_TICKS_MAX) - SPRING_TICKS_MIN) as f64 / SPRING_TICKS_PER_SECOND
+    (ticks.clamp(SPRING_TICKS_MIN, SPRING_TICKS_MAX) - SPRING_TICKS_MIN) as f64
+        / SPRING_TICKS_PER_SECOND
 }
 
 pub fn default_delay() -> f64 {
@@ -32,7 +36,12 @@ pub struct SpringLoad<T: PartialEq + Clone> {
 
 impl<T: PartialEq + Clone> Default for SpringLoad<T> {
     fn default() -> Self {
-        SpringLoad { enabled: true, delay: default_delay(), target: None, fired: false }
+        SpringLoad {
+            enabled: true,
+            delay: default_delay(),
+            target: None,
+            fired: false,
+        }
     }
 }
 
@@ -117,7 +126,10 @@ mod tests {
 
     #[test]
     fn disabled_never_fires() {
-        let mut s: SpringLoad<u32> = SpringLoad { enabled: false, ..Default::default() };
+        let mut s: SpringLoad<u32> = SpringLoad {
+            enabled: false,
+            ..Default::default()
+        };
         s.hover(Some(1), 0.0);
         assert_eq!(s.poll(100.0), None);
     }

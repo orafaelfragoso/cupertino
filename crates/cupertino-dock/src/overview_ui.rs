@@ -5,7 +5,10 @@
 //! open/close transition and the windows themselves; this model is always at the final layout.
 
 use cupertino_overview::bar::{BarHit, BarLayout};
-use cupertino_overview::{Highlight, Key, Overview, OverviewAction, OverviewConfig, OverviewMode, OverviewWindow, PlacedWindow};
+use cupertino_overview::{
+    Highlight, Key, Overview, OverviewAction, OverviewConfig, OverviewMode, OverviewWindow,
+    PlacedWindow,
+};
 use cupertino_wm::geometry::{Point, Rect};
 use cupertino_wm::ids::{AppId, WindowId, WorkspaceId};
 
@@ -58,7 +61,10 @@ pub enum UiAction {
     AddWorkspace,
     RemoveWorkspace(u32),
     /// Move the workspace to this position in the bar.
-    MoveWorkspace { id: u32, index: usize },
+    MoveWorkspace {
+        id: u32,
+        index: usize,
+    },
 }
 
 /// A press on a workspace slot: a release in place switches, a release after moving reorders.
@@ -86,7 +92,13 @@ fn entries(windows: &[WindowEntry]) -> Vec<OverviewWindow> {
         .map(|w| {
             // `from` is the server's business (it animates); the layout only needs the size
             if w.minimized {
-                OverviewWindow::minimized(WindowId(u64::from(w.id)), AppId(0), &w.title, w.frame, w.frame)
+                OverviewWindow::minimized(
+                    WindowId(u64::from(w.id)),
+                    AppId(0),
+                    &w.title,
+                    w.frame,
+                    w.frame,
+                )
             } else {
                 OverviewWindow::new(WindowId(u64::from(w.id)), AppId(0), &w.title, w.frame)
             }
@@ -95,14 +107,26 @@ fn entries(windows: &[WindowEntry]) -> Vec<OverviewWindow> {
 }
 
 fn ids(workspaces: &[Workspace]) -> (Vec<WorkspaceId>, Option<WorkspaceId>) {
-    let ids: Vec<WorkspaceId> = workspaces.iter().map(|w| WorkspaceId(u64::from(w.id))).collect();
-    let current = workspaces.iter().find(|w| w.current).map(|w| WorkspaceId(u64::from(w.id)));
+    let ids: Vec<WorkspaceId> = workspaces
+        .iter()
+        .map(|w| WorkspaceId(u64::from(w.id)))
+        .collect();
+    let current = workspaces
+        .iter()
+        .find(|w| w.current)
+        .map(|w| WorkspaceId(u64::from(w.id)));
     (ids, current)
 }
 
 impl OverviewUi {
     /// The overview the server opened over `area` (output coordinates).
-    pub fn new(mode: Mode, area: Rect, windows: &[WindowEntry], workspaces: Vec<Workspace>, now: f64) -> Self {
+    pub fn new(
+        mode: Mode,
+        area: Rect,
+        windows: &[WindowEntry],
+        workspaces: Vec<Workspace>,
+        now: f64,
+    ) -> Self {
         let mut cfg = OverviewConfig::default();
         // the bar stays expanded (thumbnail slots with the add slot) for the whole overview; the
         // reference collapses it to names until the pointer reaches it (approximate)
@@ -117,7 +141,14 @@ impl OverviewUi {
         overview.bar.set_expanded(true, now - 10.0);
         let (list, current) = ids(&workspaces);
         overview.set_workspaces(&list, current);
-        Self { overview, mode, workspaces, closed_at: None, drag: None, hovered_slot: None }
+        Self {
+            overview,
+            mode,
+            workspaces,
+            closed_at: None,
+            drag: None,
+            hovered_slot: None,
+        }
     }
 
     pub fn mode(&self) -> Mode {
@@ -141,7 +172,12 @@ impl OverviewUi {
 
     /// The final frame of every window: what the server is told with `overview_frame`.
     pub fn frames(&self) -> Vec<(u32, Rect)> {
-        self.overview.shown_windows().iter().zip(self.overview.layout_rects()).map(|(w, r)| (w.id.0 as u32, *r)).collect()
+        self.overview
+            .shown_windows()
+            .iter()
+            .zip(self.overview.layout_rects())
+            .map(|(w, r)| (w.id.0 as u32, *r))
+            .collect()
     }
 
     /// The windows at `now` (the reflow spring may still be moving them), with titles and selection.
@@ -151,7 +187,11 @@ impl OverviewUi {
 
     /// The title of window `id`, from the window feed.
     pub fn title(&self, id: u32) -> Option<&str> {
-        self.overview.shown_windows().into_iter().find(|w| w.id.0 as u32 == id).map(|w| w.title.as_str())
+        self.overview
+            .shown_windows()
+            .into_iter()
+            .find(|w| w.id.0 as u32 == id)
+            .map(|w| w.title.as_str())
     }
 
     /// The selected window (hover or keyboard), if any.
@@ -174,16 +214,28 @@ impl OverviewUi {
 
     /// The slot being dragged and the pointer's offset from where the drag started.
     pub fn drag(&self) -> Option<(u32, Point)> {
-        self.drag.filter(|d| d.moved).map(|d| (d.id, Point::new(d.pointer.x - d.origin.x, d.pointer.y - d.origin.y)))
+        self.drag.filter(|d| d.moved).map(|d| {
+            (
+                d.id,
+                Point::new(d.pointer.x - d.origin.x, d.pointer.y - d.origin.y),
+            )
+        })
     }
 
     /// The remove button of a slot: a circle on its top-left corner.
     pub fn remove_button(slot: &Rect) -> Rect {
-        Rect::new(slot.x - REMOVE_BUTTON / 2.0, slot.y - REMOVE_BUTTON / 2.0, REMOVE_BUTTON, REMOVE_BUTTON)
+        Rect::new(
+            slot.x - REMOVE_BUTTON / 2.0,
+            slot.y - REMOVE_BUTTON / 2.0,
+            REMOVE_BUTTON,
+            REMOVE_BUTTON,
+        )
     }
 
     fn slot_hit(&self, p: Point, now: f64) -> Option<BarHit> {
-        (self.mode == Mode::All).then(|| self.overview.bar.hit_test(p, now)).flatten()
+        (self.mode == Mode::All)
+            .then(|| self.overview.bar.hit_test(p, now))
+            .flatten()
     }
 
     /// Pointer motion: hover selection, the hovered slot, and a drag in progress.
@@ -208,14 +260,21 @@ impl OverviewUi {
             return UiAction::None;
         }
         if let Some(bar) = self.bar(now) {
-            if let Some(slot) = bar.slots.iter().find(|s| Some(s.id.0 as u32) == self.hovered_slot && Self::remove_button(&s.rect).contains(p)) {
+            if let Some(slot) = bar.slots.iter().find(|s| {
+                Some(s.id.0 as u32) == self.hovered_slot && Self::remove_button(&s.rect).contains(p)
+            }) {
                 return UiAction::RemoveWorkspace(slot.id.0 as u32);
             }
         }
         match self.slot_hit(p, now) {
             Some(BarHit::Add) => return UiAction::AddWorkspace,
             Some(BarHit::Workspace(id)) => {
-                self.drag = Some(Drag { id: id.0 as u32, origin: p, pointer: p, moved: false });
+                self.drag = Some(Drag {
+                    id: id.0 as u32,
+                    origin: p,
+                    pointer: p,
+                    moved: false,
+                });
                 return UiAction::None;
             }
             None => {}
@@ -223,19 +282,29 @@ impl OverviewUi {
         match self.overview.click(p, now) {
             OverviewAction::Select(w) => UiAction::Select(w.0 as u32),
             OverviewAction::Close => UiAction::Close,
-            OverviewAction::None | OverviewAction::SwitchWorkspace(_) | OverviewAction::AddWorkspace => UiAction::None,
+            OverviewAction::None
+            | OverviewAction::SwitchWorkspace(_)
+            | OverviewAction::AddWorkspace => UiAction::None,
         }
     }
 
     /// A left release: ends a slot press as a switch (in place) or a reorder (after a drag, to the
     /// position of the slot under the pointer, or the end past the last one).
     pub fn release(&mut self, p: Point, now: f64) -> UiAction {
-        let Some(d) = self.drag.take() else { return UiAction::None };
+        let Some(d) = self.drag.take() else {
+            return UiAction::None;
+        };
         if !d.moved {
             return UiAction::SwitchWorkspace(d.id);
         }
-        let Some(bar) = self.bar(now) else { return UiAction::None };
-        let index = bar.slots.iter().position(|s| p.x < s.rect.right()).unwrap_or(bar.slots.len().saturating_sub(1));
+        let Some(bar) = self.bar(now) else {
+            return UiAction::None;
+        };
+        let index = bar
+            .slots
+            .iter()
+            .position(|s| p.x < s.rect.right())
+            .unwrap_or(bar.slots.len().saturating_sub(1));
         let from = self.workspaces.iter().position(|w| w.id == d.id);
         if from == Some(index) {
             return UiAction::None;
@@ -251,7 +320,9 @@ impl OverviewUi {
         match self.overview.key(key, now) {
             OverviewAction::Select(w) => UiAction::Select(w.0 as u32),
             OverviewAction::Close => UiAction::Close,
-            OverviewAction::None | OverviewAction::SwitchWorkspace(_) | OverviewAction::AddWorkspace => UiAction::None,
+            OverviewAction::None
+            | OverviewAction::SwitchWorkspace(_)
+            | OverviewAction::AddWorkspace => UiAction::None,
         }
     }
 
@@ -289,17 +360,41 @@ impl OverviewUi {
 mod tests {
     use super::*;
 
-    const AREA: Rect = Rect { x: 0.0, y: 24.0, w: 1000.0, h: 600.0 };
+    const AREA: Rect = Rect {
+        x: 0.0,
+        y: 24.0,
+        w: 1000.0,
+        h: 600.0,
+    };
 
     fn windows() -> Vec<WindowEntry> {
         vec![
-            WindowEntry { id: 1, frame: Rect::new(100.0, 100.0, 600.0, 400.0), title: "one".into(), minimized: false },
-            WindowEntry { id: 2, frame: Rect::new(200.0, 150.0, 600.0, 400.0), title: "two".into(), minimized: false },
+            WindowEntry {
+                id: 1,
+                frame: Rect::new(100.0, 100.0, 600.0, 400.0),
+                title: "one".into(),
+                minimized: false,
+            },
+            WindowEntry {
+                id: 2,
+                frame: Rect::new(200.0, 150.0, 600.0, 400.0),
+                title: "two".into(),
+                minimized: false,
+            },
         ]
     }
 
     fn workspaces() -> Vec<Workspace> {
-        vec![Workspace { id: 10, current: true }, Workspace { id: 11, current: false }]
+        vec![
+            Workspace {
+                id: 10,
+                current: true,
+            },
+            Workspace {
+                id: 11,
+                current: false,
+            },
+        ]
     }
 
     #[test]
@@ -312,7 +407,11 @@ mod tests {
         assert_eq!(bar.slots.len(), 2);
         assert!(bar.add.is_some(), "the bar is expanded with its add slot");
         for (_, f) in &frames {
-            assert!(f.y >= bar.rect.bottom(), "windows are laid out below the bar: {f:?} vs {:?}", bar.rect);
+            assert!(
+                f.y >= bar.rect.bottom(),
+                "windows are laid out below the bar: {f:?} vs {:?}",
+                bar.rect
+            );
             assert!(f.right() <= AREA.right() && f.bottom() <= AREA.bottom());
         }
         let app = OverviewUi::new(Mode::App, AREA, &windows(), Vec::new(), 0.0);
@@ -324,8 +423,14 @@ mod tests {
     fn a_press_on_a_window_selects_and_on_the_background_leaves() {
         let mut ui = OverviewUi::new(Mode::All, AREA, &windows(), workspaces(), 0.0);
         let (id, frame) = ui.frames()[1];
-        assert_eq!(ui.press(Point::new(frame.cx(), frame.cy()), 1.0), UiAction::Select(id));
-        assert_eq!(ui.press(Point::new(AREA.x + 1.0, AREA.bottom() - 1.0), 1.0), UiAction::Close);
+        assert_eq!(
+            ui.press(Point::new(frame.cx(), frame.cy()), 1.0),
+            UiAction::Select(id)
+        );
+        assert_eq!(
+            ui.press(Point::new(AREA.x + 1.0, AREA.bottom() - 1.0), 1.0),
+            UiAction::Close
+        );
     }
 
     #[test]
@@ -340,12 +445,18 @@ mod tests {
         assert_eq!(ui.release(centre, 1.0), UiAction::SwitchWorkspace(11));
         // the add slot
         let add = bar.add.unwrap();
-        assert_eq!(ui.press(Point::new(add.cx(), add.cy()), 1.0), UiAction::AddWorkspace);
+        assert_eq!(
+            ui.press(Point::new(add.cx(), add.cy()), 1.0),
+            UiAction::AddWorkspace
+        );
         // the remove button shows on the hovered slot only
         ui.pointer_moved(Some(centre), 1.0);
         assert_eq!(ui.hovered_slot(), Some(11));
         let button = OverviewUi::remove_button(&second);
-        assert_eq!(ui.press(Point::new(button.cx(), button.cy()), 1.0), UiAction::RemoveWorkspace(11));
+        assert_eq!(
+            ui.press(Point::new(button.cx(), button.cy()), 1.0),
+            UiAction::RemoveWorkspace(11)
+        );
         ui.pointer_moved(Some(Point::new(AREA.cx(), AREA.bottom() - 1.0)), 1.0);
         assert_eq!(ui.hovered_slot(), None);
         // a drag of the second slot to before the first reorders
@@ -354,18 +465,33 @@ mod tests {
         let first = bar.slots[0].rect;
         let target = Point::new(first.x + 2.0, first.cy());
         ui.pointer_moved(Some(target), 1.1);
-        assert_eq!(ui.drag().map(|d| d.0), Some(11), "past the slack the slot is dragged");
-        assert_eq!(ui.release(target, 1.2), UiAction::MoveWorkspace { id: 11, index: 0 });
+        assert_eq!(
+            ui.drag().map(|d| d.0),
+            Some(11),
+            "past the slack the slot is dragged"
+        );
+        assert_eq!(
+            ui.release(target, 1.2),
+            UiAction::MoveWorkspace { id: 11, index: 0 }
+        );
         assert!(ui.drag().is_none());
     }
 
     #[test]
     fn keys_walk_the_windows_and_return_selects() {
         let mut ui = OverviewUi::new(Mode::All, AREA, &windows(), workspaces(), 0.0);
-        assert_eq!(ui.key(Key::Activate, 1.0), UiAction::None, "nothing selected yet");
+        assert_eq!(
+            ui.key(Key::Activate, 1.0),
+            UiAction::None,
+            "nothing selected yet"
+        );
         assert_eq!(ui.key(Key::Next, 1.0), UiAction::None);
         let first = ui.selection().expect("the first window is selected");
-        assert_eq!(ui.highlight(1.5).map(|h| h.window.0 as u32), Some(first), "and highlighted once the fade ran");
+        assert_eq!(
+            ui.highlight(1.5).map(|h| h.window.0 as u32),
+            Some(first),
+            "and highlighted once the fade ran"
+        );
         assert_eq!(ui.key(Key::Right, 1.5), UiAction::None);
         let second = ui.selection().unwrap();
         assert_ne!(first, second);
@@ -384,7 +510,10 @@ mod tests {
         assert!(ui.is_gone(5.0 + HIDE_DURATION));
         assert_eq!(ui.alpha(6.0), 0.0);
         let (_, frame) = ui.frames()[0];
-        assert_eq!(ui.press(Point::new(frame.cx(), frame.cy()), 5.1), UiAction::None);
+        assert_eq!(
+            ui.press(Point::new(frame.cx(), frame.cy()), 5.1),
+            UiAction::None
+        );
         assert_eq!(ui.key(Key::Cancel, 5.1), UiAction::None);
     }
 
@@ -392,11 +521,32 @@ mod tests {
     fn a_new_window_set_reflows_and_keeps_the_ids_in_order() {
         let mut ui = OverviewUi::new(Mode::All, AREA, &windows(), workspaces(), 0.0);
         let mut more = windows();
-        more.push(WindowEntry { id: 3, frame: Rect::new(0.0, 24.0, 300.0, 200.0), title: "three".into(), minimized: false });
+        more.push(WindowEntry {
+            id: 3,
+            frame: Rect::new(0.0, 24.0, 300.0, 200.0),
+            title: "three".into(),
+            minimized: false,
+        });
         ui.set_windows(&more, 1.0);
-        assert_eq!(ui.frames().iter().map(|f| f.0).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert_eq!(
+            ui.frames().iter().map(|f| f.0).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
         assert!(ui.is_animating(1.01), "the reflow spring runs");
-        ui.set_workspaces(vec![Workspace { id: 10, current: false }, Workspace { id: 11, current: true }, Workspace { id: 12, current: false }]);
+        ui.set_workspaces(vec![
+            Workspace {
+                id: 10,
+                current: false,
+            },
+            Workspace {
+                id: 11,
+                current: true,
+            },
+            Workspace {
+                id: 12,
+                current: false,
+            },
+        ]);
         let bar = ui.bar(2.0).unwrap();
         assert_eq!(bar.slots.len(), 3);
         assert!(bar.slots[1].current);

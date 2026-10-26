@@ -23,7 +23,11 @@ impl FontMetrics {
     /// 0.62 em, line height 1.2 em).
     pub fn estimate(text_size: f64) -> Self {
         let sub = (text_size + m::SUBTITLE_SIZE_DELTA).max(m::SUBTITLE_MIN_SIZE);
-        FontMetrics { char_width: (text_size * 0.62).ceil(), line_height: (text_size * 1.2).ceil(), subtitle_line_height: (sub * 1.2).ceil() }
+        FontMetrics {
+            char_width: (text_size * 0.62).ceil(),
+            line_height: (text_size * 1.2).ceil(),
+            subtitle_line_height: (sub * 1.2).ceil(),
+        }
     }
 }
 
@@ -40,7 +44,14 @@ pub struct LabelPrefs {
 
 impl Default for LabelPrefs {
     fn default() -> Self {
-        LabelPrefs { max_chars: m::LABEL_MAX_CHARS, min_chars: 0, extra_width: m::LABEL_EXTRA_WIDTH, gap: m::LABEL_GAP, lines_max: 2, lines_min: 1 }
+        LabelPrefs {
+            max_chars: m::LABEL_MAX_CHARS,
+            min_chars: 0,
+            extra_width: m::LABEL_EXTRA_WIDTH,
+            gap: m::LABEL_GAP,
+            lines_max: 2,
+            lines_min: 1,
+        }
     }
 }
 
@@ -58,7 +69,14 @@ pub struct IconParams {
 }
 
 impl IconParams {
-    pub fn new(icon_size: u32, grid_spacing: u32, text_size: u16, label_on_bottom: bool, show_item_info: bool, font: FontMetrics) -> Self {
+    pub fn new(
+        icon_size: u32,
+        grid_spacing: u32,
+        text_size: u16,
+        label_on_bottom: bool,
+        show_item_info: bool,
+        font: FontMetrics,
+    ) -> Self {
         IconParams {
             icon_size: icon_size.clamp(m::ICON_SIZE_MIN, m::ICON_SIZE_MAX) as f64,
             grid_spacing: grid_spacing.clamp(m::GRID_SPACING_MIN, m::GRID_SPACING_MAX) as f64,
@@ -77,7 +95,10 @@ impl IconParams {
 
     /// Icon box: the icon plus its padding.
     pub fn icon_box(&self) -> Size {
-        Size { w: self.icon_size + self.pad(), h: self.icon_size + self.pad() }
+        Size {
+            w: self.icon_size + self.pad(),
+            h: self.icon_size + self.pad(),
+        }
     }
 }
 
@@ -87,8 +108,16 @@ pub fn max_title_lines(p: &IconParams) -> f64 {
         return 1.0;
     }
     let (lo, hi) = (p.prefs.lines_min as f64, p.prefs.lines_max as f64);
-    let t = if p.grid_spacing < 1.0 { p.grid_spacing } else { p.grid_spacing - 1.0 };
-    let lines = if t < 25.0 { lo + (hi - lo) * (t / 25.0) } else { hi };
+    let t = if p.grid_spacing < 1.0 {
+        p.grid_spacing
+    } else {
+        p.grid_spacing - 1.0
+    };
+    let lines = if t < 25.0 {
+        lo + (hi - lo) * (t / 25.0)
+    } else {
+        hi
+    };
     if lines < 1.0 {
         1.0
     } else {
@@ -115,7 +144,11 @@ pub fn max_text_size(p: &IconParams) -> (f64, f64, f64) {
     if p.subtitle_enabled {
         h += p.font.subtitle_line_height.ceil();
     }
-    let extra = if p.prefs.extra_width == 0 { 1 } else { p.prefs.extra_width.min(100) } as f64;
+    let extra = if p.prefs.extra_width == 0 {
+        1
+    } else {
+        p.prefs.extra_width.min(100)
+    } as f64;
     let w = w0.ceil() + extra;
     (w, h, w + m::LABEL_WIDTH_PAD)
 }
@@ -128,7 +161,11 @@ pub fn ideal_cell_size(p: &IconParams) -> Size {
         (w, h) = (b.w, b.h);
     } else {
         let (_, text_h, text_w) = max_text_size(p);
-        let g = if p.prefs.gap == 0 { 1 } else { p.prefs.gap.min(100) } as f64;
+        let g = if p.prefs.gap == 0 {
+            1
+        } else {
+            p.prefs.gap.min(100)
+        } as f64;
         if p.label_on_bottom {
             w = text_w;
             h = b.h + m::BOTTOM_LABEL_PAD.0 + text_h + g + m::BOTTOM_LABEL_PAD.1;
@@ -156,7 +193,10 @@ pub fn inter_item_spacing(icon_size: f64, label_on_bottom: bool) -> (f64, f64) {
     if label_on_bottom {
         (2.0, (icon_size * 0.0625).ceil())
     } else {
-        ((icon_size * 0.0625).ceil().max(2.0), (icon_size * 0.0625).ceil().max(2.0))
+        (
+            (icon_size * 0.0625).ceil().max(2.0),
+            (icon_size * 0.0625).ceil().max(2.0),
+        )
     }
 }
 
@@ -204,14 +244,16 @@ pub fn layout(p: &IconParams, width: f64, sections: &[SectionSpec], flow: Flow) 
     let lead = match flow {
         Flow::Leading => MARGIN,
         Flow::Justified => {
-            let free = (avail - columns as f64 * cell.w - (columns as f64 - 1.0) * spacing.0).max(0.0);
+            let free =
+                (avail - columns as f64 * cell.w - (columns as f64 - 1.0) * spacing.0).max(0.0);
             MARGIN + free / (columns as f64 + 1.0)
         }
     };
     let gap_x = match flow {
         Flow::Leading => spacing.0,
         Flow::Justified => {
-            let free = (avail - columns as f64 * cell.w - (columns as f64 - 1.0) * spacing.0).max(0.0);
+            let free =
+                (avail - columns as f64 * cell.w - (columns as f64 - 1.0) * spacing.0).max(0.0);
             spacing.0 + free / (columns as f64 + 1.0)
         }
     };
@@ -226,7 +268,12 @@ pub fn layout(p: &IconParams, width: f64, sections: &[SectionSpec], flow: Flow) 
         }
         for k in 0..s.count {
             let (col, row) = (k % columns, k / columns);
-            let frame = Rect::new(lead + col as f64 * (cell.w + gap_x), y + row as f64 * (cell.h + spacing.1), cell.w, cell.h);
+            let frame = Rect::new(
+                lead + col as f64 * (cell.w + gap_x),
+                y + row as f64 * (cell.h + spacing.1),
+                cell.w,
+                cell.h,
+            );
             cells.push(cell_parts(p, index, frame, cell));
             index += 1;
         }
@@ -235,7 +282,17 @@ pub fn layout(p: &IconParams, width: f64, sections: &[SectionSpec], flow: Flow) 
             y += rows as f64 * cell.h + (rows as f64 - 1.0) * spacing.1 + spacing.1;
         }
     }
-    IconLayout { cell, spacing, columns, cells, headers, content: Size { w: width, h: y + MARGIN } }
+    IconLayout {
+        cell,
+        spacing,
+        columns,
+        cells,
+        headers,
+        content: Size {
+            w: width,
+            h: y + MARGIN,
+        },
+    }
 }
 
 /// Icon and label rectangles inside a cell.
@@ -245,26 +302,63 @@ pub fn cell_parts(p: &IconParams, index: usize, frame: Rect, cell: Size) -> Icon
     let icon_sz = p.icon_size;
     if p.label_on_bottom {
         let box_x = frame.x + (cell.w - b.w) / 2.0;
-        let icon_frame = Rect::new(box_x + (b.w - icon_sz) / 2.0, frame.y + (b.h - icon_sz) / 2.0, icon_sz, icon_sz);
+        let icon_frame = Rect::new(
+            box_x + (b.w - icon_sz) / 2.0,
+            frame.y + (b.h - icon_sz) / 2.0,
+            icon_sz,
+            icon_sz,
+        );
         let lw = (text_w - m::LABEL_WIDTH_PAD).min(cell.w);
-        let label_frame = Rect::new(frame.x + (cell.w - lw) / 2.0, frame.y + b.h + m::BOTTOM_LABEL_PAD.0, lw, text_h);
-        IconCell { index, frame, icon_frame, label_frame }
+        let label_frame = Rect::new(
+            frame.x + (cell.w - lw) / 2.0,
+            frame.y + b.h + m::BOTTOM_LABEL_PAD.0,
+            lw,
+            text_h,
+        );
+        IconCell {
+            index,
+            frame,
+            icon_frame,
+            label_frame,
+        }
     } else {
-        let icon_frame = Rect::new(frame.x + (b.w - icon_sz) / 2.0, frame.y + (cell.h - icon_sz) / 2.0, icon_sz, icon_sz);
-        let label_frame = Rect::new(frame.x + b.w + m::RIGHT_LABEL_PAD, frame.y + (cell.h - text_h) / 2.0, text_w - m::LABEL_WIDTH_PAD, text_h);
-        IconCell { index, frame, icon_frame, label_frame }
+        let icon_frame = Rect::new(
+            frame.x + (b.w - icon_sz) / 2.0,
+            frame.y + (cell.h - icon_sz) / 2.0,
+            icon_sz,
+            icon_sz,
+        );
+        let label_frame = Rect::new(
+            frame.x + b.w + m::RIGHT_LABEL_PAD,
+            frame.y + (cell.h - text_h) / 2.0,
+            text_w - m::LABEL_WIDTH_PAD,
+            text_h,
+        );
+        IconCell {
+            index,
+            frame,
+            icon_frame,
+            label_frame,
+        }
     }
 }
 
 impl IconLayout {
     /// Item whose icon or label contains `pt` (the design hit-tests icon and text, not the whole cell).
     pub fn hit(&self, pt: Point) -> Option<usize> {
-        self.cells.iter().find(|c| c.icon_frame.contains(pt) || c.label_frame.contains(pt)).map(|c| c.index)
+        self.cells
+            .iter()
+            .find(|c| c.icon_frame.contains(pt) || c.label_frame.contains(pt))
+            .map(|c| c.index)
     }
 
     /// Items whose icon or label intersects the rubber-band rectangle.
     pub fn hits_in_rect(&self, r: &Rect) -> Vec<usize> {
-        self.cells.iter().filter(|c| c.icon_frame.intersects(r) || c.label_frame.intersects(r)).map(|c| c.index).collect()
+        self.cells
+            .iter()
+            .filter(|c| c.icon_frame.intersects(r) || c.label_frame.intersects(r))
+            .map(|c| c.index)
+            .collect()
     }
 
     /// Neighbour for arrow-key navigation: the nearest cell strictly in `dir`, preferring the same
@@ -304,22 +398,38 @@ pub struct FreeGrid {
 
 impl FreeGrid {
     pub fn new(bounds: Rect, cell: Size) -> Self {
-        FreeGrid { bounds, cell, margin: m::FREE_GRID_MARGIN }
+        FreeGrid {
+            bounds,
+            cell,
+            margin: m::FREE_GRID_MARGIN,
+        }
     }
     pub fn dimensions(&self) -> (usize, usize) {
         let w = self.bounds.w - 2.0 * self.margin;
         let h = self.bounds.h - 2.0 * self.margin;
-        (((w / self.cell.w).floor() as usize).max(1), ((h / self.cell.h).floor() as usize).max(1))
+        (
+            ((w / self.cell.w).floor() as usize).max(1),
+            ((h / self.cell.h).floor() as usize).max(1),
+        )
     }
     /// Grid location nearest to `pt` (column, row), clamped to the grid.
     pub fn nearest(&self, pt: Point) -> (usize, usize) {
         let (cols, rows) = self.dimensions();
-        let c = ((pt.x - self.bounds.x - self.margin) / self.cell.w).round().clamp(0.0, cols as f64 - 1.0);
-        let r = ((pt.y - self.bounds.y - self.margin) / self.cell.h).round().clamp(0.0, rows as f64 - 1.0);
+        let c = ((pt.x - self.bounds.x - self.margin) / self.cell.w)
+            .round()
+            .clamp(0.0, cols as f64 - 1.0);
+        let r = ((pt.y - self.bounds.y - self.margin) / self.cell.h)
+            .round()
+            .clamp(0.0, rows as f64 - 1.0);
         (c as usize, r as usize)
     }
     pub fn cell_frame(&self, col: usize, row: usize) -> Rect {
-        Rect::new(self.bounds.x + self.margin + col as f64 * self.cell.w, self.bounds.y + self.margin + row as f64 * self.cell.h, self.cell.w, self.cell.h)
+        Rect::new(
+            self.bounds.x + self.margin + col as f64 * self.cell.w,
+            self.bounds.y + self.margin + row as f64 * self.cell.h,
+            self.cell.w,
+            self.cell.h,
+        )
     }
 }
 
@@ -329,7 +439,11 @@ mod tests {
 
     fn params(icon: u32, spacing: u32, bottom: bool) -> IconParams {
         // a font with an 8 pt digit and 15 pt lines (the numbers only matter relative to each other)
-        let font = FontMetrics { char_width: 8.0, line_height: 15.0, subtitle_line_height: 13.0 };
+        let font = FontMetrics {
+            char_width: 8.0,
+            line_height: 15.0,
+            subtitle_line_height: 13.0,
+        };
         IconParams::new(icon, spacing, 12, bottom, false, font)
     }
 
@@ -371,13 +485,20 @@ mod tests {
         let b = p.icon_box().h;
         let (_, th, _) = max_text_size(&p);
         let c = ideal_cell_size(&p);
-        assert_eq!(c.h, (th.max(b) + 6.0).ceil() + ((th.max(b) + 6.0).ceil() % 2.0));
+        assert_eq!(
+            c.h,
+            (th.max(b) + 6.0).ceil() + ((th.max(b) + 6.0).ceil() % 2.0)
+        );
         // smallest icons use the compact rule
         let q = params(16, 54, false);
         let c16 = ideal_cell_size(&q);
         let (_, th16, _) = max_text_size(&q);
         let b16 = q.icon_box().h;
-        let expected = if b16 <= th16 + 2.0 { th16.max(b16) + 4.0 } else { th16.max(b16) + 1.0 };
+        let expected = if b16 <= th16 + 2.0 {
+            th16.max(b16) + 4.0
+        } else {
+            th16.max(b16) + 1.0
+        };
         assert_eq!(c16.h, expected.ceil() + (expected.ceil() % 2.0));
     }
 
@@ -397,14 +518,26 @@ mod tests {
     #[test]
     fn flow_layout_wraps_and_sections_get_headers() {
         let p = params(64, 54, true);
-        let sections = [SectionSpec { title: Some("Images".into()), count: 7 }, SectionSpec { title: Some("PDF".into()), count: 2 }];
+        let sections = [
+            SectionSpec {
+                title: Some("Images".into()),
+                count: 7,
+            },
+            SectionSpec {
+                title: Some("PDF".into()),
+                count: 2,
+            },
+        ];
         let l = layout(&p, 500.0, &sections, Flow::Leading);
         assert_eq!(l.columns, 4);
         assert_eq!(l.cells.len(), 9);
         assert_eq!(l.headers.len(), 2);
         assert_eq!(l.headers[0].1.h, 32.0);
         // second row starts below the first by cell height + spacing
-        assert_eq!(l.cells[4].frame.y - l.cells[0].frame.y, l.cell.h + l.spacing.1);
+        assert_eq!(
+            l.cells[4].frame.y - l.cells[0].frame.y,
+            l.cell.h + l.spacing.1
+        );
         // second section starts after two rows of the first plus the header
         assert!(l.cells[7].frame.y > l.cells[4].frame.bottom());
         assert!(l.cells.iter().all(|c| c.frame.right() <= 500.0));
@@ -413,30 +546,52 @@ mod tests {
     #[test]
     fn justified_layout_distributes_free_width() {
         let p = params(64, 54, true);
-        let sec = [SectionSpec { title: None, count: 8 }];
+        let sec = [SectionSpec {
+            title: None,
+            count: 8,
+        }];
         let l = layout(&p, 500.0, &sec, Flow::Justified);
         let left = l.cells[0].frame.x;
         let right_gap = 500.0 - l.cells[l.columns - 1].frame.right();
         assert!(left > MARGIN);
-        assert!((left - right_gap).abs() < 1e-6 + MARGIN, "{left} {right_gap}");
+        assert!(
+            (left - right_gap).abs() < 1e-6 + MARGIN,
+            "{left} {right_gap}"
+        );
     }
 
     #[test]
     fn hit_testing_uses_icon_and_label() {
         let p = params(64, 54, true);
-        let sec = [SectionSpec { title: None, count: 6 }];
+        let sec = [SectionSpec {
+            title: None,
+            count: 6,
+        }];
         let l = layout(&p, 600.0, &sec, Flow::Leading);
         let c = &l.cells[1];
         assert_eq!(l.hit(c.icon_frame.center()), Some(1));
         assert_eq!(l.hit(c.label_frame.center()), Some(1));
-        assert_eq!(l.hit(Point { x: c.frame.x + 1.0, y: c.frame.y + 1.0 }), None);
-        assert_eq!(l.hits_in_rect(&Rect::new(0.0, 0.0, 10_000.0, 10_000.0)).len(), 6);
+        assert_eq!(
+            l.hit(Point {
+                x: c.frame.x + 1.0,
+                y: c.frame.y + 1.0
+            }),
+            None
+        );
+        assert_eq!(
+            l.hits_in_rect(&Rect::new(0.0, 0.0, 10_000.0, 10_000.0))
+                .len(),
+            6
+        );
     }
 
     #[test]
     fn arrow_navigation_in_a_grid() {
         let p = params(64, 54, true);
-        let sec = [SectionSpec { title: None, count: 10 }];
+        let sec = [SectionSpec {
+            title: None,
+            count: 10,
+        }];
         let l = layout(&p, 500.0, &sec, Flow::Leading);
         assert_eq!(l.columns, 4);
         assert_eq!(l.neighbour(0, Direction::Right), Some(1));
@@ -448,10 +603,19 @@ mod tests {
 
     #[test]
     fn free_grid_snapping() {
-        let g = FreeGrid::new(Rect::new(0.0, 0.0, 1000.0, 600.0), Size { w: 100.0, h: 100.0 });
+        let g = FreeGrid::new(
+            Rect::new(0.0, 0.0, 1000.0, 600.0),
+            Size { w: 100.0, h: 100.0 },
+        );
         assert_eq!(g.dimensions(), (9, 5));
         assert_eq!(g.nearest(Point { x: 160.0, y: 130.0 }), (2, 1));
-        assert_eq!(g.nearest(Point { x: 9999.0, y: 9999.0 }), (8, 4));
+        assert_eq!(
+            g.nearest(Point {
+                x: 9999.0,
+                y: 9999.0
+            }),
+            (8, 4)
+        );
         assert_eq!(g.cell_frame(1, 1), Rect::new(104.0, 104.0, 100.0, 100.0));
     }
 

@@ -17,8 +17,16 @@ impl H {
     }
 
     pub fn with_config(cfg: WmConfig) -> H {
-        let mut h = H { wm: Wm::new(cfg), now: 0.0, next: 1 };
-        h.cmd(Command::AddOutput { output: OUT, rect: SCREEN, usable: USABLE });
+        let mut h = H {
+            wm: Wm::new(cfg),
+            now: 0.0,
+            next: 1,
+        };
+        h.cmd(Command::AddOutput {
+            output: OUT,
+            rect: SCREEN,
+            usable: USABLE,
+        });
         h
     }
 
@@ -82,13 +90,25 @@ pub fn has(fx: &[Effect], f: impl Fn(&Effect) -> bool) -> bool {
 }
 
 pub fn rect_eq(a: Rect, b: Rect) -> bool {
-    a.to_array().iter().zip(b.to_array()).all(|(x, y)| (x - y).abs() < 1e-6)
+    a.to_array()
+        .iter()
+        .zip(b.to_array())
+        .all(|(x, y)| (x - y).abs() < 1e-6)
 }
 
 pub fn motion(x: f64, y: f64) -> Command {
-    Command::PointerMotion { pointer: Point::new(x, y), modifiers: Modifiers::default() }
+    Command::PointerMotion {
+        pointer: Point::new(x, y),
+        modifiers: Modifiers::default(),
+    }
 }
 
 pub fn motion_opt(x: f64, y: f64) -> Command {
-    Command::PointerMotion { pointer: Point::new(x, y), modifiers: Modifiers { option: true, ..Default::default() } }
+    Command::PointerMotion {
+        pointer: Point::new(x, y),
+        modifiers: Modifiers {
+            option: true,
+            ..Default::default()
+        },
+    }
 }

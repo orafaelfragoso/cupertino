@@ -19,6 +19,8 @@ pub use bitset::BitSet;
 pub use device::{read_events, Device};
 pub use error::{Error, FrameError};
 pub use event::{InputEvent, EVENT_SIZE};
-pub use frame::{AbsPoint, Contact, Frame, KeyEvent, KeyState, Motion, Switch, SwitchEvent, Tool, Wheel};
+pub use frame::{
+    AbsPoint, Contact, Frame, KeyEvent, KeyState, Motion, Switch, SwitchEvent, Tool, Wheel,
+};
 pub use framer::{Framer, FramerOutput, Layout, MtSlotValues, Snapshot};
 pub use info::{AbsAxis, AbsInfo, DeviceId, DeviceInfo, Resolution};

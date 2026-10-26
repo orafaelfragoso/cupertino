@@ -42,7 +42,10 @@ pub struct Channel {
 impl Channel {
     /// A channel on `stream` that accepts frames of at most `limit` bytes.
     pub fn new(stream: UnixStream, limit: usize) -> Self {
-        Channel { stream, decoder: Decoder::new(limit) }
+        Channel {
+            stream,
+            decoder: Decoder::new(limit),
+        }
     }
 
     pub fn stream(&self) -> &UnixStream {
@@ -62,7 +65,10 @@ impl Channel {
                 Err(e) => return Err(ChannelError::Io(e)),
             }
         };
-        let frame = self.decoder.push(&buffer[..count]).map_err(ChannelError::Frame);
+        let frame = self
+            .decoder
+            .push(&buffer[..count])
+            .map_err(ChannelError::Frame);
         // the bytes read may be a secret
         zeroize::Zeroize::zeroize(&mut buffer[..count]);
         match frame? {
@@ -116,7 +122,12 @@ mod tests {
     fn a_length_over_the_cap_is_an_error_before_any_body_is_read() {
         let (mut channel, mut peer) = pair(2048);
         peer.write_all(&3072u32.to_le_bytes()).unwrap();
-        assert!(matches!(channel.read_message::<Request>(), Err(ChannelError::Frame(cupertino_login_ipc::FrameError::TooLarge))));
+        assert!(matches!(
+            channel.read_message::<Request>(),
+            Err(ChannelError::Frame(
+                cupertino_login_ipc::FrameError::TooLarge
+            ))
+        ));
     }
 
     #[test]
@@ -131,7 +142,10 @@ mod tests {
         }
         assert!(matches!(result, Err(ChannelError::Decode(_))));
         drop(peer);
-        assert!(matches!(channel.read_message::<Request>(), Err(ChannelError::Closed)));
+        assert!(matches!(
+            channel.read_message::<Request>(),
+            Err(ChannelError::Closed)
+        ));
     }
 
     #[test]

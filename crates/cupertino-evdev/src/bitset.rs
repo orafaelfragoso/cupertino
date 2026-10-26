@@ -21,7 +21,9 @@ impl BitSet {
 
     /// Whether `bit` is set; bits past the end are clear.
     pub fn contains(&self, bit: u16) -> bool {
-        self.0.get(usize::from(bit) / 8).is_some_and(|byte| byte & (1 << (bit % 8)) != 0)
+        self.0
+            .get(usize::from(bit) / 8)
+            .is_some_and(|byte| byte & (1 << (bit % 8)) != 0)
     }
 
     /// Sets or clears `bit`, growing the bitmap when needed.

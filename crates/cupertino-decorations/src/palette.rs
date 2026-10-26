@@ -44,7 +44,12 @@ pub struct Palette {
 }
 
 fn rgba8(c: [u8; 4]) -> Rgba {
-    [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, c[3] as f32 / 255.0]
+    [
+        c[0] as f32 / 255.0,
+        c[1] as f32 / 255.0,
+        c[2] as f32 / 255.0,
+        c[3] as f32 / 255.0,
+    ]
 }
 
 fn gray(v: f32) -> Rgba {
@@ -54,7 +59,12 @@ fn gray(v: f32) -> Rgba {
 /// Source-over of `top` (straight alpha) on an opaque `bottom`.
 pub fn over(top: Rgba, bottom: Rgba) -> Rgba {
     let a = top[3];
-    [top[0] * a + bottom[0] * (1.0 - a), top[1] * a + bottom[1] * (1.0 - a), top[2] * a + bottom[2] * (1.0 - a), 1.0]
+    [
+        top[0] * a + bottom[0] * (1.0 - a),
+        top[1] * a + bottom[1] * (1.0 - a),
+        top[2] * a + bottom[2] * (1.0 - a),
+        1.0,
+    ]
 }
 
 impl Palette {
@@ -111,7 +121,11 @@ impl Palette {
         let mut p = Self::builtin(appearance.is_dark());
         let sem = |c: SemanticColor| theme.tokens.semantic(appearance, c).map(|c| c.to_array());
         let fill = |material: &str, window: WindowState| -> Option<Rgba> {
-            let opts = MaterialOptions { window, reduce_transparency: true, ..Default::default() };
+            let opts = MaterialOptions {
+                window,
+                reduce_transparency: true,
+                ..Default::default()
+            };
             let r = theme.recipe(appearance, material, &opts).ok()?;
             r.fills.last().map(|f| f.rgba)
         };
@@ -181,14 +195,45 @@ mod tests {
     fn builtin_equals_the_palette_loaded_from_the_specification() {
         let theme = Theme::load().unwrap();
         for (appearance, dark) in [(Appearance::Light, false), (Appearance::Dark, true)] {
-            let (a, b) = (Palette::from_theme(&theme, appearance), Palette::builtin(dark));
-            assert!(close(a.titlebar_active, b.titlebar_active), "{appearance:?} titlebar active {:?} {:?}", a.titlebar_active, b.titlebar_active);
-            assert!(close(a.titlebar_inactive, b.titlebar_inactive), "{appearance:?} inactive");
-            assert!(close(a.unified_active, b.unified_active) && close(a.unified_inactive, b.unified_inactive), "{appearance:?} unified");
-            assert!(close(a.separator, b.separator) && close(a.title_active, b.title_active) && close(a.title_inactive, b.title_inactive));
-            assert!(close(a.close, b.close) && close(a.minimize, b.minimize) && close(a.zoom, b.zoom), "{appearance:?} buttons");
-            assert!(close(a.rim_1x, b.rim_1x) && close(a.rim_2x, b.rim_2x) && close(a.window_background, b.window_background));
-            assert!(close(a.button_inactive, b.button_inactive), "{appearance:?} {:?} {:?}", a.button_inactive, b.button_inactive);
+            let (a, b) = (
+                Palette::from_theme(&theme, appearance),
+                Palette::builtin(dark),
+            );
+            assert!(
+                close(a.titlebar_active, b.titlebar_active),
+                "{appearance:?} titlebar active {:?} {:?}",
+                a.titlebar_active,
+                b.titlebar_active
+            );
+            assert!(
+                close(a.titlebar_inactive, b.titlebar_inactive),
+                "{appearance:?} inactive"
+            );
+            assert!(
+                close(a.unified_active, b.unified_active)
+                    && close(a.unified_inactive, b.unified_inactive),
+                "{appearance:?} unified"
+            );
+            assert!(
+                close(a.separator, b.separator)
+                    && close(a.title_active, b.title_active)
+                    && close(a.title_inactive, b.title_inactive)
+            );
+            assert!(
+                close(a.close, b.close) && close(a.minimize, b.minimize) && close(a.zoom, b.zoom),
+                "{appearance:?} buttons"
+            );
+            assert!(
+                close(a.rim_1x, b.rim_1x)
+                    && close(a.rim_2x, b.rim_2x)
+                    && close(a.window_background, b.window_background)
+            );
+            assert!(
+                close(a.button_inactive, b.button_inactive),
+                "{appearance:?} {:?} {:?}",
+                a.button_inactive,
+                b.button_inactive
+            );
         }
     }
 
@@ -204,7 +249,10 @@ mod tests {
     fn titlebar_selection() {
         let p = Palette::builtin(false);
         assert_eq!(p.titlebar(TitlebarStyle::Standard, true), p.titlebar_active);
-        assert_eq!(p.titlebar(TitlebarStyle::Unified, false), p.unified_inactive);
+        assert_eq!(
+            p.titlebar(TitlebarStyle::Unified, false),
+            p.unified_inactive
+        );
     }
 
     #[test]

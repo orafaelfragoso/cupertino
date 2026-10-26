@@ -8,7 +8,12 @@ use cupertino_client::{key, Modifiers};
 /// a key with a command modifier held (Ctrl+A, Alt+1, Super+Y) is named by its lower-case letter,
 /// anything else types the character the layout produces.
 pub fn panel_key(code: u32, mods: Modifiers, character: Option<char>) -> Option<(Key, Mods)> {
-    let panel_mods = Mods { ctrl: mods.ctrl, alt: mods.alt, shift: mods.shift, primary: mods.logo };
+    let panel_mods = Mods {
+        ctrl: mods.ctrl,
+        alt: mods.alt,
+        shift: mods.shift,
+        primary: mods.logo,
+    };
     let named = match code {
         key::ENTER | key::KEYPAD_ENTER => Some(Key::Enter),
         key::ESCAPE => Some(Key::Escape),
@@ -30,7 +35,11 @@ pub fn panel_key(code: u32, mods: Modifiers, character: Option<char>) -> Option<
     }
     let character = character?;
     let command = mods.ctrl || mods.alt || mods.logo;
-    let character = if command { character.to_lowercase().next()? } else { character };
+    let character = if command {
+        character.to_lowercase().next()?
+    } else {
+        character
+    };
     Some((Key::Char(character), panel_mods))
 }
 
@@ -44,27 +53,86 @@ mod tests {
 
     #[test]
     fn named_keys_keep_their_modifiers() {
-        let shift = Modifiers { shift: true, ..Modifiers::default() };
-        assert_eq!(panel_key(key::ENTER, Modifiers::default(), None), Some((Key::Enter, Mods::NONE)));
-        assert_eq!(panel_key(key::TAB, shift, None), Some((Key::Tab, Mods { shift: true, ..Mods::NONE })));
-        assert_eq!(panel_key(key::PAGE_DOWN, Modifiers::default(), None), Some((Key::PageDown, Mods::NONE)));
+        let shift = Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            panel_key(key::ENTER, Modifiers::default(), None),
+            Some((Key::Enter, Mods::NONE))
+        );
+        assert_eq!(
+            panel_key(key::TAB, shift, None),
+            Some((
+                Key::Tab,
+                Mods {
+                    shift: true,
+                    ..Mods::NONE
+                }
+            ))
+        );
+        assert_eq!(
+            panel_key(key::PAGE_DOWN, Modifiers::default(), None),
+            Some((Key::PageDown, Mods::NONE))
+        );
     }
 
     #[test]
     fn typing_uses_the_produced_character() {
-        let shift = Modifiers { shift: true, ..Modifiers::default() };
-        assert_eq!(panel_key(KEY_A, Modifiers::default(), Some('a')), Some((Key::Char('a'), Mods::NONE)));
-        assert_eq!(panel_key(KEY_A, shift, Some('A')), Some((Key::Char('A'), Mods { shift: true, ..Mods::NONE })));
+        let shift = Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            panel_key(KEY_A, Modifiers::default(), Some('a')),
+            Some((Key::Char('a'), Mods::NONE))
+        );
+        assert_eq!(
+            panel_key(KEY_A, shift, Some('A')),
+            Some((
+                Key::Char('A'),
+                Mods {
+                    shift: true,
+                    ..Mods::NONE
+                }
+            ))
+        );
     }
 
     #[test]
     fn command_chords_are_named_by_the_lower_case_letter() {
-        let ctrl = Modifiers { ctrl: true, shift: true, ..Modifiers::default() };
-        assert_eq!(panel_key(KEY_A, ctrl, Some('A')), Some((Key::Char('a'), Mods { ctrl: true, shift: true, ..Mods::NONE })));
-        let alt = Modifiers { alt: true, ..Modifiers::default() };
-        assert_eq!(panel_key(KEY_1, alt, Some('1')), Some((Key::Char('1'), Mods::ALT)));
-        let logo = Modifiers { logo: true, ..Modifiers::default() };
-        assert_eq!(panel_key(KEY_A, logo, Some('a')), Some((Key::Char('a'), Mods::PRIMARY)));
+        let ctrl = Modifiers {
+            ctrl: true,
+            shift: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            panel_key(KEY_A, ctrl, Some('A')),
+            Some((
+                Key::Char('a'),
+                Mods {
+                    ctrl: true,
+                    shift: true,
+                    ..Mods::NONE
+                }
+            ))
+        );
+        let alt = Modifiers {
+            alt: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            panel_key(KEY_1, alt, Some('1')),
+            Some((Key::Char('1'), Mods::ALT))
+        );
+        let logo = Modifiers {
+            logo: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            panel_key(KEY_A, logo, Some('a')),
+            Some((Key::Char('a'), Mods::PRIMARY))
+        );
     }
 
     #[test]

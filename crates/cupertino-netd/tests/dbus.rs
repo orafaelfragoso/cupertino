@@ -38,20 +38,36 @@ struct PrivateBus {
 
 impl PrivateBus {
     fn start() -> Option<PrivateBus> {
-        let out = Process::new("dbus-daemon").args(["--session", "--print-address=1", "--print-pid=1", "--fork"]).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
-        let text = String::from_utf8(out.stdout).ok().filter(|_| out.status.success())?;
+        let out = Process::new("dbus-daemon")
+            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        let text = String::from_utf8(out.stdout)
+            .ok()
+            .filter(|_| out.status.success())?;
         let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
-        Some(PrivateBus { address: lines.next()?.to_owned(), pid: lines.next()?.to_owned() })
+        Some(PrivateBus {
+            address: lines.next()?.to_owned(),
+            pid: lines.next()?.to_owned(),
+        })
     }
 
     fn connect(&self) -> Connection {
-        zbus::blocking::connection::Builder::address(self.address.as_str()).unwrap().build().unwrap()
+        zbus::blocking::connection::Builder::address(self.address.as_str())
+            .unwrap()
+            .build()
+            .unwrap()
     }
 }
 
 impl Drop for PrivateBus {
     fn drop(&mut self) {
-        Process::new("kill").arg(&self.pid).status().expect("kill the private bus");
+        Process::new("kill")
+            .arg(&self.pid)
+            .status()
+            .expect("kill the private bus");
     }
 }
 
@@ -88,12 +104,18 @@ struct FakeEngine {
 }
 
 impl FakeEngine {
-    fn start(requests: Requests, answer: fn(&Command) -> std::result::Result<(), CommandError>) -> Self {
+    fn start(
+        requests: Requests,
+        answer: fn(&Command) -> std::result::Result<(), CommandError>,
+    ) -> Self {
         let commands = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let (seen, stopping) = (commands.clone(), stop.clone());
         let thread = thread::spawn(move || {
-            let timeout = Timespec { tv_sec: 0, tv_nsec: 50_000_000 };
+            let timeout = Timespec {
+                tv_sec: 0,
+                tv_nsec: 50_000_000,
+            };
             while !stopping.load(Ordering::SeqCst) {
                 let fd = requests.as_fd();
                 let mut fds = [PollFd::new(&fd, PollFlags::IN)];
@@ -105,7 +127,11 @@ impl FakeEngine {
                 }
             }
         });
-        Self { commands, stop, thread: Some(thread) }
+        Self {
+            commands,
+            stop,
+            thread: Some(thread),
+        }
     }
 
     fn commands(&self) -> Vec<Command> {
@@ -137,15 +163,35 @@ struct Running {
     asked: Arc<Mutex<Vec<u32>>>,
 }
 
-fn start(bus: &PrivateBus, decision: Decision, answer: fn(&Command) -> std::result::Result<(), CommandError>) -> Running {
+fn start(
+    bus: &PrivateBus,
+    decision: Decision,
+    answer: fn(&Command) -> std::result::Result<(), CommandError>,
+) -> Running {
     let asked = Arc::new(Mutex::new(Vec::new()));
-    let authorizer = Box::new(Scripted { decision, asked: asked.clone() });
-    let (daemon, requests) = Daemon::connect(Config { bus: Bus::Address(bus.address.clone()), authorizer }).unwrap();
+    let authorizer = Box::new(Scripted {
+        decision,
+        asked: asked.clone(),
+    });
+    let (daemon, requests) = Daemon::connect(Config {
+        bus: Bus::Address(bus.address.clone()),
+        authorizer,
+    })
+    .unwrap();
     daemon.claim_names().unwrap();
-    Running { daemon, engine: FakeEngine::start(requests, answer), asked }
+    Running {
+        daemon,
+        engine: FakeEngine::start(requests, answer),
+        asked,
+    }
 }
 
-fn proxy<'a>(client: &'a Connection, name: &'a str, path: &'a str, interface: &'a str) -> Proxy<'a> {
+fn proxy<'a>(
+    client: &'a Connection,
+    name: &'a str,
+    path: &'a str,
+    interface: &'a str,
+) -> Proxy<'a> {
     // Uncached: the tests read properties after the daemon changed them.
     zbus::blocking::proxy::Builder::<Proxy>::new(client)
         .destination(name)
@@ -181,8 +227,18 @@ fn property_error(result: zbus::fdo::Result<()>) -> String {
 }
 
 /// Forwards each emission of `member` on `interface`, decoded by `decode`.
-fn signals<T: Send + 'static>(client: &Connection, name: &'static str, path: &'static str, interface: &'static str, member: &'static str, decode: fn(&zbus::Message) -> T) -> mpsc::Receiver<T> {
-    let mut stream = Proxy::new(client, name, path, interface).unwrap().receive_signal(member).unwrap();
+fn signals<T: Send + 'static>(
+    client: &Connection,
+    name: &'static str,
+    path: &'static str,
+    interface: &'static str,
+    member: &'static str,
+    decode: fn(&zbus::Message) -> T,
+) -> mpsc::Receiver<T> {
+    let mut stream = Proxy::new(client, name, path, interface)
+        .unwrap()
+        .receive_signal(member)
+        .unwrap();
     let (sender, received) = mpsc::channel();
     thread::spawn(move || {
         for message in stream.by_ref() {
@@ -195,11 +251,26 @@ fn signals<T: Send + 'static>(client: &Connection, name: &'static str, path: &'s
 }
 
 /// Forwards each `PropertiesChanged` of `path` as `(interface, changed properties)`.
-fn property_changes(client: &Connection, name: &'static str, path: &'static str) -> mpsc::Receiver<(String, HashMap<String, OwnedValue>)> {
-    signals(client, name, path, "org.freedesktop.DBus.Properties", "PropertiesChanged", |message| {
-        let (interface, changed, _invalidated): (String, HashMap<String, OwnedValue>, Vec<String>) = message.body().deserialize().unwrap();
-        (interface, changed)
-    })
+fn property_changes(
+    client: &Connection,
+    name: &'static str,
+    path: &'static str,
+) -> mpsc::Receiver<(String, HashMap<String, OwnedValue>)> {
+    signals(
+        client,
+        name,
+        path,
+        "org.freedesktop.DBus.Properties",
+        "PropertiesChanged",
+        |message| {
+            let (interface, changed, _invalidated): (
+                String,
+                HashMap<String, OwnedValue>,
+                Vec<String>,
+            ) = message.body().deserialize().unwrap();
+            (interface, changed)
+        },
+    )
 }
 
 fn device(ifindex: u32, name: &str, kind: DeviceKind, state: DeviceState) -> DeviceView {
@@ -212,12 +283,24 @@ fn device(ifindex: u32, name: &str, kind: DeviceKind, state: DeviceState) -> Dev
         failure: None,
         address: (state == DeviceState::Connected).then_some((Ipv4Addr::new(10, 0, 0, 9), 24)),
         has_router: state == DeviceState::Connected,
-        metric: if kind == DeviceKind::Ethernet { 100 } else { 600 },
+        metric: if kind == DeviceKind::Ethernet {
+            100
+        } else {
+            600
+        },
     }
 }
 
 fn scanned(ssid: &str, security: Security, signal: i32, known: bool, connected: bool) -> Network {
-    Network { ssid: Ssid(ssid.as_bytes().to_vec()), security, signal_dbm: Some(signal), bssid: MacAddr([2, 0, 0, 0, 0, 1]), frequency_mhz: 2412, known, connected }
+    Network {
+        ssid: Ssid(ssid.as_bytes().to_vec()),
+        security,
+        signal_dbm: Some(signal),
+        bssid: MacAddr([2, 0, 0, 0, 0, 1]),
+        frequency_mhz: 2412,
+        known,
+        connected,
+    }
 }
 
 #[test]
@@ -232,13 +315,28 @@ fn a_client_reads_the_networkmanager_values_of_the_current_state() {
     assert_eq!(manager.get_property::<u32>("Connectivity").unwrap(), 1);
 
     let wired = device(2, "enp1s0", DeviceKind::Ethernet, DeviceState::Connected);
-    running.daemon.publish(Snapshot { wireless_enabled: true, devices: vec![wired], networks: Vec::new() }).unwrap();
+    running
+        .daemon
+        .publish(Snapshot {
+            wireless_enabled: true,
+            devices: vec![wired],
+            networks: Vec::new(),
+        })
+        .unwrap();
     assert_eq!(manager.get_property::<u32>("State").unwrap(), 70);
     assert_eq!(manager.get_property::<u32>("Connectivity").unwrap(), 0);
     assert!(manager.get_property::<bool>("NetworkingEnabled").unwrap());
     assert!(manager.get_property::<bool>("WirelessEnabled").unwrap());
-    assert_eq!(manager.get_property::<String>("PrimaryConnectionType").unwrap(), "802-3-ethernet");
-    assert_eq!(manager.call::<_, _, u32>("CheckConnectivity", &()).unwrap(), 0);
+    assert_eq!(
+        manager
+            .get_property::<String>("PrimaryConnectionType")
+            .unwrap(),
+        "802-3-ethernet"
+    );
+    assert_eq!(
+        manager.call::<_, _, u32>("CheckConnectivity", &()).unwrap(),
+        0
+    );
     // reads need no authorisation
     assert_eq!(*running.asked.lock().unwrap(), Vec::<u32>::new());
 }
@@ -248,13 +346,27 @@ fn state_changes_reach_listeners_as_signals_and_properties() {
     let bus = private_bus!();
     let running = start(&bus, Decision::Allowed, accept);
     let client = bus.connect();
-    let states = signals(&client, MANAGER, MANAGER_PATH, MANAGER, "StateChanged", |message| message.body().deserialize::<u32>().unwrap());
+    let states = signals(
+        &client,
+        MANAGER,
+        MANAGER_PATH,
+        MANAGER,
+        "StateChanged",
+        |message| message.body().deserialize::<u32>().unwrap(),
+    );
     let changes = property_changes(&client, MANAGER, MANAGER_PATH);
     // let the subscriptions reach the bus daemon before the change
     manager(&client).get_property::<u32>("State").unwrap();
 
     let wifi = device(3, "wlan0", DeviceKind::Wifi, DeviceState::Connected);
-    running.daemon.publish(Snapshot { wireless_enabled: true, devices: vec![wifi], networks: Vec::new() }).unwrap();
+    running
+        .daemon
+        .publish(Snapshot {
+            wireless_enabled: true,
+            devices: vec![wifi],
+            networks: Vec::new(),
+        })
+        .unwrap();
 
     assert_eq!(states.recv_timeout(WAIT).unwrap(), 70);
     let mut seen: HashMap<String, OwnedValue> = HashMap::new();
@@ -266,8 +378,14 @@ fn state_changes_reach_listeners_as_signals_and_properties() {
     // the first snapshot also switches the radio setting on (the default snapshot has it off)
     assert!(bool::try_from(seen.remove("WirelessEnabled").unwrap()).unwrap());
     assert_eq!(u32::try_from(seen.remove("State").unwrap()).unwrap(), 70);
-    assert_eq!(u32::try_from(seen.remove("Connectivity").unwrap()).unwrap(), 0);
-    assert_eq!(String::try_from(seen.remove("PrimaryConnectionType").unwrap()).unwrap(), "802-11-wireless");
+    assert_eq!(
+        u32::try_from(seen.remove("Connectivity").unwrap()).unwrap(),
+        0
+    );
+    assert_eq!(
+        String::try_from(seen.remove("PrimaryConnectionType").unwrap()).unwrap(),
+        "802-11-wireless"
+    );
 }
 
 #[test]
@@ -276,15 +394,36 @@ fn an_authorised_caller_switches_wifi_and_the_engine_hears_it() {
     let running = start(&bus, Decision::Allowed, accept);
     let client = bus.connect();
     let changes = property_changes(&client, NETWORK, NETWORK_PATH);
-    running.daemon.publish(Snapshot { wireless_enabled: true, devices: Vec::new(), networks: Vec::new() }).unwrap();
+    running
+        .daemon
+        .publish(Snapshot {
+            wireless_enabled: true,
+            devices: Vec::new(),
+            networks: Vec::new(),
+        })
+        .unwrap();
 
-    network(&client).set_property("WirelessEnabled", false).unwrap();
-    assert_eq!(running.engine.commands(), [Command::SetWirelessEnabled(false)]);
+    network(&client)
+        .set_property("WirelessEnabled", false)
+        .unwrap();
+    assert_eq!(
+        running.engine.commands(),
+        [Command::SetWirelessEnabled(false)]
+    );
     assert_eq!(running.asked.lock().unwrap().len(), 1);
 
     // the engine publishes the new state when the kernel reports the switch
-    running.daemon.publish(Snapshot { wireless_enabled: false, devices: Vec::new(), networks: Vec::new() }).unwrap();
-    assert!(!network(&client).get_property::<bool>("WirelessEnabled").unwrap());
+    running
+        .daemon
+        .publish(Snapshot {
+            wireless_enabled: false,
+            devices: Vec::new(),
+            networks: Vec::new(),
+        })
+        .unwrap();
+    assert!(!network(&client)
+        .get_property::<bool>("WirelessEnabled")
+        .unwrap());
     // Every signal before the one that says "off" says "on": the first snapshot switched the
     // setting on, and the bus library repeats the old value after the write, before the engine has
     // published the new one.
@@ -302,25 +441,58 @@ fn the_networkmanager_switch_is_the_same_switch() {
     let bus = private_bus!();
     let running = start(&bus, Decision::Allowed, accept);
     let client = bus.connect();
-    manager(&client).set_property("WirelessEnabled", true).unwrap();
-    assert_eq!(running.engine.commands(), [Command::SetWirelessEnabled(true)]);
+    manager(&client)
+        .set_property("WirelessEnabled", true)
+        .unwrap();
+    assert_eq!(
+        running.engine.commands(),
+        [Command::SetWirelessEnabled(true)]
+    );
 }
 
 #[test]
 fn a_refused_caller_cannot_switch_wifi_scan_connect_or_disconnect() {
     let bus = private_bus!();
-    let running = start(&bus, Decision::Denied("the caller is not in a login session".to_owned()), accept);
+    let running = start(
+        &bus,
+        Decision::Denied("the caller is not in a login session".to_owned()),
+        accept,
+    );
     let client = bus.connect();
-    running.daemon.publish(Snapshot { wireless_enabled: true, devices: Vec::new(), networks: Vec::new() }).unwrap();
+    running
+        .daemon
+        .publish(Snapshot {
+            wireless_enabled: true,
+            devices: Vec::new(),
+            networks: Vec::new(),
+        })
+        .unwrap();
 
-    assert_eq!(property_error(network(&client).set_property("WirelessEnabled", false)), "org.freedesktop.DBus.Error.AccessDenied");
-    assert_eq!(property_error(manager(&client).set_property("WirelessEnabled", false)), "org.freedesktop.DBus.Error.AccessDenied");
-    assert_eq!(error_name(network(&client).call::<_, _, ()>("Scan", &())), "org.cupertino.Network1.NotAuthorized");
-    assert_eq!(error_name(network(&client).call::<_, _, ()>("Connect", &("home", "secret"))), "org.cupertino.Network1.NotAuthorized");
-    assert_eq!(error_name(network(&client).call::<_, _, ()>("Disconnect", &())), "org.cupertino.Network1.NotAuthorized");
+    assert_eq!(
+        property_error(network(&client).set_property("WirelessEnabled", false)),
+        "org.freedesktop.DBus.Error.AccessDenied"
+    );
+    assert_eq!(
+        property_error(manager(&client).set_property("WirelessEnabled", false)),
+        "org.freedesktop.DBus.Error.AccessDenied"
+    );
+    assert_eq!(
+        error_name(network(&client).call::<_, _, ()>("Scan", &())),
+        "org.cupertino.Network1.NotAuthorized"
+    );
+    assert_eq!(
+        error_name(network(&client).call::<_, _, ()>("Connect", &("home", "secret"))),
+        "org.cupertino.Network1.NotAuthorized"
+    );
+    assert_eq!(
+        error_name(network(&client).call::<_, _, ()>("Disconnect", &())),
+        "org.cupertino.Network1.NotAuthorized"
+    );
 
     assert_eq!(running.engine.commands(), []);
-    assert!(network(&client).get_property::<bool>("WirelessEnabled").unwrap());
+    assert!(network(&client)
+        .get_property::<bool>("WirelessEnabled")
+        .unwrap());
 }
 
 #[test]
@@ -338,27 +510,68 @@ fn get_networks_lists_what_the_last_scan_found() {
     let bus = private_bus!();
     let running = start(&bus, Decision::Allowed, accept);
     let client = bus.connect();
-    let changed = signals(&client, NETWORK, NETWORK_PATH, NETWORK, "NetworksChanged", |_| ());
+    let changed = signals(
+        &client,
+        NETWORK,
+        NETWORK_PATH,
+        NETWORK,
+        "NetworksChanged",
+        |_| (),
+    );
     network(&client).get_property::<String>("State").unwrap();
 
-    assert_eq!(network(&client).call::<_, _, Vec<(String, i32, String, bool, bool)>>("GetNetworks", &()).unwrap(), []);
+    assert_eq!(
+        network(&client)
+            .call::<_, _, Vec<(String, i32, String, bool, bool)>>("GetNetworks", &())
+            .unwrap(),
+        []
+    );
 
     let mut wifi = device(3, "wlan0", DeviceKind::Wifi, DeviceState::Connected);
     wifi.ssid = Some("home".to_owned());
-    let networks = vec![scanned("home", Security::Wpa2, -45, true, true), scanned("cafe", Security::Open, -60, false, false), scanned("new", Security::Wpa2Wpa3, -72, false, false)];
-    running.daemon.publish(Snapshot { wireless_enabled: true, devices: vec![wifi], networks }).unwrap();
+    let networks = vec![
+        scanned("home", Security::Wpa2, -45, true, true),
+        scanned("cafe", Security::Open, -60, false, false),
+        scanned("new", Security::Wpa2Wpa3, -72, false, false),
+    ];
+    running
+        .daemon
+        .publish(Snapshot {
+            wireless_enabled: true,
+            devices: vec![wifi],
+            networks,
+        })
+        .unwrap();
 
     changed.recv_timeout(WAIT).unwrap();
     assert_eq!(
-        network(&client).call::<_, _, Vec<(String, i32, String, bool, bool)>>("GetNetworks", &()).unwrap(),
+        network(&client)
+            .call::<_, _, Vec<(String, i32, String, bool, bool)>>("GetNetworks", &())
+            .unwrap(),
         [
             ("home".to_owned(), -45, "wpa2".to_owned(), true, true),
             ("cafe".to_owned(), -60, "open".to_owned(), false, false),
             ("new".to_owned(), -72, "wpa2-wpa3".to_owned(), false, false),
         ]
     );
-    assert_eq!(network(&client).get_property::<Vec<(u32, String, String, String, String, String, String)>>("Devices").unwrap(), [(3, "wlan0".to_owned(), "wifi".to_owned(), "connected".to_owned(), "home".to_owned(), String::new(), "10.0.0.9/24".to_owned())]);
-    assert_eq!(network(&client).get_property::<String>("State").unwrap(), "connected");
+    assert_eq!(
+        network(&client)
+            .get_property::<Vec<(u32, String, String, String, String, String, String)>>("Devices")
+            .unwrap(),
+        [(
+            3,
+            "wlan0".to_owned(),
+            "wifi".to_owned(),
+            "connected".to_owned(),
+            "home".to_owned(),
+            String::new(),
+            "10.0.0.9/24".to_owned()
+        )]
+    );
+    assert_eq!(
+        network(&client).get_property::<String>("State").unwrap(),
+        "connected"
+    );
 }
 
 #[test]
@@ -366,14 +579,26 @@ fn connect_passes_the_ssid_and_passphrase_on_and_an_empty_passphrase_is_none() {
     let bus = private_bus!();
     let running = start(&bus, Decision::Allowed, accept);
     let client = bus.connect();
-    network(&client).call::<_, _, ()>("Connect", &("home", "correct horse")).unwrap();
-    network(&client).call::<_, _, ()>("Connect", &("cafe", "")).unwrap();
-    network(&client).call::<_, _, ()>("Disconnect", &()).unwrap();
+    network(&client)
+        .call::<_, _, ()>("Connect", &("home", "correct horse"))
+        .unwrap();
+    network(&client)
+        .call::<_, _, ()>("Connect", &("cafe", ""))
+        .unwrap();
+    network(&client)
+        .call::<_, _, ()>("Disconnect", &())
+        .unwrap();
     assert_eq!(
         running.engine.commands(),
         [
-            Command::Connect { ssid: "home".to_owned(), passphrase: Some("correct horse".to_owned()) },
-            Command::Connect { ssid: "cafe".to_owned(), passphrase: None },
+            Command::Connect {
+                ssid: "home".to_owned(),
+                passphrase: Some("correct horse".to_owned())
+            },
+            Command::Connect {
+                ssid: "cafe".to_owned(),
+                passphrase: None
+            },
             Command::Disconnect,
         ]
     );
@@ -385,7 +610,10 @@ fn a_request_the_engine_refuses_comes_back_as_a_named_error() {
     let running = start(&bus, Decision::Allowed, needs_passphrase);
     let client = bus.connect();
     let result = network(&client).call::<_, _, ()>("Connect", &("home", ""));
-    assert_eq!(error_name(result), "org.cupertino.Network1.PassphraseRequired");
+    assert_eq!(
+        error_name(result),
+        "org.cupertino.Network1.PassphraseRequired"
+    );
     drop(running);
 }
 
@@ -394,16 +622,30 @@ fn a_failed_connection_is_signalled_once_with_its_reason() {
     let bus = private_bus!();
     let running = start(&bus, Decision::Allowed, accept);
     let client = bus.connect();
-    let failures = signals(&client, NETWORK, NETWORK_PATH, NETWORK, "ConnectionFailed", |message| message.body().deserialize::<(String, String)>().unwrap());
+    let failures = signals(
+        &client,
+        NETWORK,
+        NETWORK_PATH,
+        NETWORK,
+        "ConnectionFailed",
+        |message| message.body().deserialize::<(String, String)>().unwrap(),
+    );
     network(&client).get_property::<String>("State").unwrap();
 
     let mut wifi = device(3, "wlan0", DeviceKind::Wifi, DeviceState::Disconnected);
     wifi.failure = Some(Failure::WrongPassphrase);
-    let snapshot = Snapshot { wireless_enabled: true, devices: vec![wifi], networks: Vec::new() };
+    let snapshot = Snapshot {
+        wireless_enabled: true,
+        devices: vec![wifi],
+        networks: Vec::new(),
+    };
     running.daemon.publish(snapshot.clone()).unwrap();
     running.daemon.publish(snapshot).unwrap();
 
-    assert_eq!(failures.recv_timeout(WAIT).unwrap(), ("wlan0".to_owned(), "wrong-passphrase".to_owned()));
+    assert_eq!(
+        failures.recv_timeout(WAIT).unwrap(),
+        ("wlan0".to_owned(), "wrong-passphrase".to_owned())
+    );
     assert!(failures.recv_timeout(Duration::from_millis(300)).is_err());
 }
 
@@ -412,8 +654,18 @@ fn a_second_daemon_cannot_take_the_names() {
     let bus = private_bus!();
     let first = start(&bus, Decision::Allowed, accept);
     let asked = Arc::new(Mutex::new(Vec::new()));
-    let (second, _requests) = Daemon::connect(Config { bus: Bus::Address(bus.address.clone()), authorizer: Box::new(Scripted { decision: Decision::Allowed, asked }) }).unwrap();
+    let (second, _requests) = Daemon::connect(Config {
+        bus: Bus::Address(bus.address.clone()),
+        authorizer: Box::new(Scripted {
+            decision: Decision::Allowed,
+            asked,
+        }),
+    })
+    .unwrap();
     let error = second.claim_names().unwrap_err();
-    assert_eq!(error.to_string(), "the bus name org.freedesktop.NetworkManager is owned by another process");
+    assert_eq!(
+        error.to_string(),
+        "the bus name org.freedesktop.NetworkManager is owned by another process"
+    );
     drop(first);
 }

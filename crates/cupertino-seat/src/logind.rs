@@ -18,7 +18,7 @@ use zbus::message::Type;
 use zbus::names::OwnedUniqueName;
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::{self, ObjectPath, OwnedObjectPath, OwnedValue};
-use zbus::{Message, MatchRule};
+use zbus::{MatchRule, Message};
 
 use crate::error::Error;
 use crate::state::{Input, PauseKind};
@@ -105,8 +105,20 @@ pub fn locate(conn: &Connection, lookup: &SessionLookup) -> Result<SessionRef, E
         SessionLookup::ByPid(_) => ("GetSessionByPID", "looking up the session by pid"),
     };
     let reply = match lookup {
-        SessionLookup::ById(id) => conn.call_method(Some(LOGIND), MANAGER_PATH, Some(MANAGER_INTERFACE), method, &(id.as_str(),)),
-        SessionLookup::ByPid(pid) => conn.call_method(Some(LOGIND), MANAGER_PATH, Some(MANAGER_INTERFACE), method, &(*pid,)),
+        SessionLookup::ById(id) => conn.call_method(
+            Some(LOGIND),
+            MANAGER_PATH,
+            Some(MANAGER_INTERFACE),
+            method,
+            &(id.as_str(),),
+        ),
+        SessionLookup::ByPid(pid) => conn.call_method(
+            Some(LOGIND),
+            MANAGER_PATH,
+            Some(MANAGER_INTERFACE),
+            method,
+            &(*pid,),
+        ),
     }
     .map_err(Error::bus(what))?;
     let path: OwnedObjectPath = reply.body().deserialize().map_err(Error::bus(what))?;
@@ -115,7 +127,9 @@ pub fn locate(conn: &Connection, lookup: &SessionLookup) -> Result<SessionRef, E
         .header()
         .sender()
         .map(|sender| OwnedUniqueName::from(sender.to_owned()))
-        .ok_or_else(|| Error::bus(what)(zbus::Error::Failure("the reply has no sender".to_owned())))?;
+        .ok_or_else(|| {
+            Error::bus(what)(zbus::Error::Failure("the reply has no sender".to_owned()))
+        })?;
     Ok(SessionRef { path, owner })
 }
 
@@ -133,7 +147,12 @@ pub fn inspect(conn: &Connection, session: &SessionRef) -> Result<SessionInfo, E
     })
 }
 
-fn proxy_for(conn: &Connection, owner: &OwnedUniqueName, path: ObjectPath<'static>, interface: &'static str) -> Result<Proxy<'static>, Error> {
+fn proxy_for(
+    conn: &Connection,
+    owner: &OwnedUniqueName,
+    path: ObjectPath<'static>,
+    interface: &'static str,
+) -> Result<Proxy<'static>, Error> {
     // Uncached: `Active` is read once at start and tracked through signals afterwards.
     Builder::<Proxy>::new(conn)
         .destination(owner.clone())
@@ -144,7 +163,12 @@ fn proxy_for(conn: &Connection, owner: &OwnedUniqueName, path: ObjectPath<'stati
 }
 
 fn session_proxy(conn: &Connection, session: &SessionRef) -> Result<Proxy<'static>, Error> {
-    proxy_for(conn, &session.owner, session.path.clone().into_inner(), SESSION_INTERFACE)
+    proxy_for(
+        conn,
+        &session.owner,
+        session.path.clone().into_inner(),
+        SESSION_INTERFACE,
+    )
 }
 
 fn property<T>(proxy: &Proxy<'_>, name: &'static str) -> Result<T, Error>
@@ -191,20 +215,33 @@ pub fn watch_owner(conn: &Connection, session: &SessionRef) -> Result<MessageIte
 pub fn decode(message: &Message) -> Result<Option<Input>, Error> {
     let what = "decoding a session signal";
     let header = message.header();
-    let (Some(interface), Some(member)) = (header.interface(), header.member()) else { return Ok(None) };
+    let (Some(interface), Some(member)) = (header.interface(), header.member()) else {
+        return Ok(None);
+    };
     let bus = Error::bus(what);
     match (interface.as_str(), member.as_str()) {
         (SESSION_INTERFACE, "PauseDevice") => {
-            let (major, minor, kind): (u32, u32, String) = message.body().deserialize().map_err(bus)?;
-            Ok(Some(Input::PauseDevice { dev: DevT::new(major, minor), kind: PauseKind::parse(&kind)? }))
+            let (major, minor, kind): (u32, u32, String) =
+                message.body().deserialize().map_err(bus)?;
+            Ok(Some(Input::PauseDevice {
+                dev: DevT::new(major, minor),
+                kind: PauseKind::parse(&kind)?,
+            }))
         }
         (SESSION_INTERFACE, "ResumeDevice") => {
             // The descriptor is closed here; see `Input::ResumeDevice`.
-            let (major, minor, _fd): (u32, u32, zvariant::OwnedFd) = message.body().deserialize().map_err(bus)?;
-            Ok(Some(Input::ResumeDevice { dev: DevT::new(major, minor) }))
+            let (major, minor, _fd): (u32, u32, zvariant::OwnedFd) =
+                message.body().deserialize().map_err(bus)?;
+            Ok(Some(Input::ResumeDevice {
+                dev: DevT::new(major, minor),
+            }))
         }
         (PROPERTIES_INTERFACE, "PropertiesChanged") => {
-            let (interface, changed, invalidated): (String, HashMap<String, OwnedValue>, Vec<String>) = message.body().deserialize().map_err(bus)?;
+            let (interface, changed, invalidated): (
+                String,
+                HashMap<String, OwnedValue>,
+                Vec<String>,
+            ) = message.body().deserialize().map_err(bus)?;
             if interface != SESSION_INTERFACE {
                 return Ok(None);
             }
@@ -212,7 +249,9 @@ pub fn decode(message: &Message) -> Result<Option<Input>, Error> {
                 return Err(Error::ActiveInvalidated);
             }
             match changed.get("Active") {
-                Some(value) => Ok(Some(Input::ActiveChanged(bool::try_from(value).map_err(|e| bus(e.into()))?))),
+                Some(value) => Ok(Some(Input::ActiveChanged(
+                    bool::try_from(value).map_err(|e| bus(e.into()))?,
+                ))),
                 None => Ok(None),
             }
         }
@@ -230,37 +269,57 @@ impl Logind {
     /// Calls `Session.TakeControl(false)` ("force" is root only and would evict another
     /// controller) and reads `Active` and the seat. Returns the control, the initial `Active`
     /// value and the seat name.
-    pub fn take_control(conn: &Connection, session: &SessionRef) -> Result<(Self, bool, String), Error> {
+    pub fn take_control(
+        conn: &Connection,
+        session: &SessionRef,
+    ) -> Result<(Self, bool, String), Error> {
         let proxy = session_proxy(conn, session)?;
-        proxy.call::<_, _, ()>("TakeControl", &(false,)).map_err(Error::bus("TakeControl"))?;
+        proxy
+            .call::<_, _, ()>("TakeControl", &(false,))
+            .map_err(Error::bus("TakeControl"))?;
         // From here on the control is ours and released by `Drop`, also when a later step fails.
         let (seat_name, seat_path): (String, OwnedObjectPath) = property(&proxy, "Seat")?;
         let active = property(&proxy, "Active")?;
         let seat = proxy_for(conn, &session.owner, seat_path.into_inner(), SEAT_INTERFACE)?;
-        Ok((Self { session: proxy, seat }, active, seat_name))
+        Ok((
+            Self {
+                session: proxy,
+                seat,
+            },
+            active,
+            seat_name,
+        ))
     }
 
     /// `Session.TakeDevice(major, minor)`: the descriptor and logind's `inactive` flag (the
     /// session is not active, so the descriptor is paused until `ResumeDevice`).
     pub fn take_device(&self, dev: DevT) -> Result<(OwnedFd, bool), Error> {
-        let (fd, inactive): (zvariant::OwnedFd, bool) =
-            self.session.call("TakeDevice", &(dev.major(), dev.minor())).map_err(Error::bus("TakeDevice"))?;
+        let (fd, inactive): (zvariant::OwnedFd, bool) = self
+            .session
+            .call("TakeDevice", &(dev.major(), dev.minor()))
+            .map_err(Error::bus("TakeDevice"))?;
         Ok((fd.into(), inactive))
     }
 
     /// `Session.ReleaseDevice(major, minor)`.
     pub fn release_device(&self, dev: DevT) -> Result<(), Error> {
-        self.session.call("ReleaseDevice", &(dev.major(), dev.minor())).map_err(Error::bus("ReleaseDevice"))
+        self.session
+            .call("ReleaseDevice", &(dev.major(), dev.minor()))
+            .map_err(Error::bus("ReleaseDevice"))
     }
 
     /// `Session.PauseDeviceComplete(major, minor)`: the answer to `PauseDevice("pause")`.
     pub fn pause_device_complete(&self, dev: DevT) -> Result<(), Error> {
-        self.session.call("PauseDeviceComplete", &(dev.major(), dev.minor())).map_err(Error::bus("PauseDeviceComplete"))
+        self.session
+            .call("PauseDeviceComplete", &(dev.major(), dev.minor()))
+            .map_err(Error::bus("PauseDeviceComplete"))
     }
 
     /// `Seat.SwitchTo(vtnr)`.
     pub fn switch_to(&self, vt: u32) -> Result<(), Error> {
-        self.seat.call("SwitchTo", &(vt,)).map_err(Error::bus("SwitchTo"))
+        self.seat
+            .call("SwitchTo", &(vt,))
+            .map_err(Error::bus("SwitchTo"))
     }
 }
 
@@ -291,20 +350,36 @@ mod tests {
 
     impl PrivateBus {
         fn start() -> Option<PrivateBus> {
-            let out = Command::new("dbus-daemon").args(["--session", "--print-address=1", "--print-pid=1", "--fork"]).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
-            let text = String::from_utf8(out.stdout).ok().filter(|_| out.status.success())?;
+            let out = Command::new("dbus-daemon")
+                .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+                .ok()?;
+            let text = String::from_utf8(out.stdout)
+                .ok()
+                .filter(|_| out.status.success())?;
             let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
-            Some(PrivateBus { address: lines.next()?.to_owned(), pid: lines.next()?.to_owned() })
+            Some(PrivateBus {
+                address: lines.next()?.to_owned(),
+                pid: lines.next()?.to_owned(),
+            })
         }
 
         fn connect(&self) -> Connection {
-            zbus::blocking::connection::Builder::address(self.address.as_str()).unwrap().build().unwrap()
+            zbus::blocking::connection::Builder::address(self.address.as_str())
+                .unwrap()
+                .build()
+                .unwrap()
         }
     }
 
     impl Drop for PrivateBus {
         fn drop(&mut self) {
-            Command::new("kill").arg(&self.pid).status().expect("kill the private bus");
+            Command::new("kill")
+                .arg(&self.pid)
+                .status()
+                .expect("kill the private bus");
         }
     }
 
@@ -315,7 +390,13 @@ mod tests {
             return;
         };
         let request = |conn: &Connection| {
-            zbus::blocking::fdo::DBusProxy::new(conn).unwrap().request_name(LOGIND.try_into().unwrap(), RequestNameFlags::DoNotQueue.into()).unwrap()
+            zbus::blocking::fdo::DBusProxy::new(conn)
+                .unwrap()
+                .request_name(
+                    LOGIND.try_into().unwrap(),
+                    RequestNameFlags::DoNotQueue.into(),
+                )
+                .unwrap()
         };
         let logind = bus.connect();
         assert_eq!(request(&logind), RequestNameReply::PrimaryOwner);
@@ -328,24 +409,49 @@ mod tests {
         let (sender, received) = mpsc::channel();
         std::thread::spawn(move || {
             for message in changes.by_ref() {
-                sender.send(message.unwrap().body().deserialize::<(String, String, String)>().unwrap()).unwrap();
+                sender
+                    .send(
+                        message
+                            .unwrap()
+                            .body()
+                            .deserialize::<(String, String, String)>()
+                            .unwrap(),
+                    )
+                    .unwrap();
             }
         });
 
-        let released = zbus::blocking::fdo::DBusProxy::new(&logind).unwrap().release_name(LOGIND.try_into().unwrap()).unwrap();
+        let released = zbus::blocking::fdo::DBusProxy::new(&logind)
+            .unwrap()
+            .release_name(LOGIND.try_into().unwrap())
+            .unwrap();
         assert_eq!(released, ReleaseNameReply::Released);
-        let (name, old, new) = received.recv_timeout(Duration::from_secs(5)).expect("the name change is reported");
-        assert_eq!((name.as_str(), old.as_str(), new.as_str()), (LOGIND, session.owner.as_str(), ""));
+        let (name, old, new) = received
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the name change is reported");
+        assert_eq!(
+            (name.as_str(), old.as_str(), new.as_str()),
+            (LOGIND, session.owner.as_str(), "")
+        );
 
         // A restarted logind taking the name moves it away from no one the session knows.
         let restarted = bus.connect();
         assert_eq!(request(&restarted), RequestNameReply::PrimaryOwner);
-        assert!(received.recv_timeout(Duration::from_millis(300)).is_err(), "reported once");
+        assert!(
+            received.recv_timeout(Duration::from_millis(300)).is_err(),
+            "reported once"
+        );
     }
 
     #[test]
     fn session_id_wins_over_pid() {
-        assert_eq!(SessionLookup::choose(Some("c2".to_owned()), 4242), SessionLookup::ById("c2".to_owned()));
-        assert_eq!(SessionLookup::choose(None, 4242), SessionLookup::ByPid(4242));
+        assert_eq!(
+            SessionLookup::choose(Some("c2".to_owned()), 4242),
+            SessionLookup::ById("c2".to_owned())
+        );
+        assert_eq!(
+            SessionLookup::choose(None, 4242),
+            SessionLookup::ByPid(4242)
+        );
     }
 }

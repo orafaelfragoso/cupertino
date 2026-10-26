@@ -26,11 +26,13 @@ use smithay::reexports::calloop::{Interest, Mode, PostAction, RegistrationToken}
 use smithay::reexports::rustix;
 use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::{DisplayHandle, Resource};
+use smithay::wayland::selection::data_device::{
+    request_data_device_client_selection, set_data_device_selection,
+};
 use smithay::wayland::selection::primary_selection::PrimarySelectionState;
 use smithay::wayland::selection::{ext_data_control, wlr_data_control};
-use smithay::{delegate_data_control, delegate_ext_data_control};
-use smithay::wayland::selection::data_device::{request_data_device_client_selection, set_data_device_selection};
 use smithay::wayland::selection::{SelectionSource, SelectionTarget};
+use smithay::{delegate_data_control, delegate_ext_data_control};
 
 use crate::state::Cupertino;
 
@@ -39,11 +41,25 @@ use crate::state::Cupertino;
 pub const CAPTURE_LIMIT: usize = 64 << 20;
 
 /// The names of UTF-8 text, in the order a copy is read by: the first one offered is read.
-pub const UTF8_TEXT: [&str; 4] = ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "TEXT"];
+pub const UTF8_TEXT: [&str; 4] = [
+    "text/plain;charset=utf-8",
+    "UTF8_STRING",
+    "text/plain",
+    "TEXT",
+];
 
 /// The other kept types, in reading order: file and web lists, rich text, tables, images, PDF. Legacy Latin-1 `STRING` is
 /// kept only when no UTF-8 name is offered.
-pub const KEPT_TYPES: [&str; 8] = ["text/uri-list", "text/html", "text/rtf", "text/tab-separated-values", "image/png", "image/tiff", "application/pdf", "STRING"];
+pub const KEPT_TYPES: [&str; 8] = [
+    "text/uri-list",
+    "text/html",
+    "text/rtf",
+    "text/tab-separated-values",
+    "image/png",
+    "image/tiff",
+    "application/pdf",
+    "STRING",
+];
 
 /// A kept clipboard: each offered name with its bytes.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -69,7 +85,11 @@ impl Snapshot {
         for (mime, data) in captured {
             let data: Arc<[u8]> = data.into();
             if UTF8_TEXT.contains(&mime.as_str()) {
-                entries.extend(UTF8_TEXT.iter().map(|name| (name.to_string(), data.clone())));
+                entries.extend(
+                    UTF8_TEXT
+                        .iter()
+                        .map(|name| (name.to_string(), data.clone())),
+                );
             } else {
                 entries.push((mime, data));
             }
@@ -82,8 +102,13 @@ impl Snapshot {
 pub fn types_to_keep(offered: &[String]) -> Vec<String> {
     let has = |m: &str| offered.iter().any(|o| o == m);
     let text = UTF8_TEXT.iter().find(|m| has(m));
-    let rest = KEPT_TYPES.iter().filter(|m| has(m) && !(**m == "STRING" && text.is_some()));
-    text.into_iter().chain(rest).map(|m| m.to_string()).collect()
+    let rest = KEPT_TYPES
+        .iter()
+        .filter(|m| has(m) && !(**m == "STRING" && text.is_some()));
+    text.into_iter()
+        .chain(rest)
+        .map(|m| m.to_string())
+        .collect()
 }
 
 /// The clipboard copy of the current client selection.
@@ -144,7 +169,12 @@ fn serve(state: &mut Cupertino, data: Arc<[u8]>, fd: OwnedFd) {
 impl Cupertino {
     /// A client set (`Some`) or cleared (`None`) a selection: forget the previous copy and start copying a
     /// new clipboard selection once smithay has made it current.
-    pub fn clipboard_selection_changed(&mut self, ty: SelectionTarget, source: Option<&SelectionSource>, seat: &Seat<Self>) {
+    pub fn clipboard_selection_changed(
+        &mut self,
+        ty: SelectionTarget,
+        source: Option<&SelectionSource>,
+        seat: &Seat<Self>,
+    ) {
         if ty != SelectionTarget::Clipboard {
             return;
         }
@@ -160,7 +190,8 @@ impl Cupertino {
         self.clipboard.queue.reverse();
         let generation = self.clipboard.generation;
         // smithay makes the selection current after this callback returns
-        self.loop_handle.insert_idle(move |state| state.clipboard_read_next(generation));
+        self.loop_handle
+            .insert_idle(move |state| state.clipboard_read_next(generation));
     }
 
     /// Drop the copy and the read in progress: the selection was replaced or cleared.
@@ -169,16 +200,24 @@ impl Cupertino {
             self.loop_handle.remove(token);
         }
         let generation = self.clipboard.generation + 1;
-        self.clipboard = Clipboard { generation, ..Clipboard::default() };
+        self.clipboard = Clipboard {
+            generation,
+            ..Clipboard::default()
+        };
     }
 
     fn clipboard_read_next(&mut self, generation: u64) {
         if generation != self.clipboard.generation || self.clipboard.reading.is_some() {
             return;
         }
-        let Some(mime) = self.clipboard.queue.pop() else { return };
+        let Some(mime) = self.clipboard.queue.pop() else {
+            return;
+        };
         // only the server's end is non-blocking: the client writes its end as it would any paste's
-        let pipe = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).and_then(|(read, write)| rustix::fs::fcntl_setfl(&read, rustix::fs::OFlags::NONBLOCK).map(|()| (read, write)));
+        let pipe =
+            rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).and_then(|(read, write)| {
+                rustix::fs::fcntl_setfl(&read, rustix::fs::OFlags::NONBLOCK).map(|()| (read, write))
+            });
         let (read, write) = match pipe {
             Ok(pair) => pair,
             Err(e) => {
@@ -202,11 +241,19 @@ impl Cupertino {
             loop {
                 match rustix::io::read(&**fd, &mut chunk) {
                     Ok(0) => {
-                        state.clipboard_read_done(generation, &kind, Some(std::mem::take(&mut data)));
+                        state.clipboard_read_done(
+                            generation,
+                            &kind,
+                            Some(std::mem::take(&mut data)),
+                        );
                         return Ok(PostAction::Remove);
                     }
                     Ok(n) if data.len() + n > budget => {
-                        tracing::info!(mime = kind, limit = CAPTURE_LIMIT, "clipboard content over the limit is not kept");
+                        tracing::info!(
+                            mime = kind,
+                            limit = CAPTURE_LIMIT,
+                            "clipboard content over the limit is not kept"
+                        );
                         state.clipboard_read_done(generation, &kind, None);
                         return Ok(PostAction::Remove);
                     }
@@ -243,15 +290,23 @@ impl Cupertino {
         if self.clipboard.queue.is_empty() {
             return;
         }
-        self.loop_handle.insert_idle(move |state| state.clipboard_read_next(generation));
+        self.loop_handle
+            .insert_idle(move |state| state.clipboard_read_next(generation));
     }
 
     /// After the clients were dispatched: when the owner of the selection being kept has disconnected, the
     /// server's copy becomes the clipboard. A type still being read when the owner went is incomplete and
     /// not offered.
     pub fn clipboard_check_owner(&mut self) {
-        let Some(owner) = self.clipboard.owner.clone() else { return };
-        if self.display_handle.backend_handle().get_client_data(owner).is_ok() {
+        let Some(owner) = self.clipboard.owner.clone() else {
+            return;
+        };
+        if self
+            .display_handle
+            .backend_handle()
+            .get_client_data(owner)
+            .is_ok()
+        {
             return;
         }
         let captured = std::mem::take(&mut self.clipboard.captured);
@@ -269,7 +324,10 @@ impl Cupertino {
     pub fn clipboard_serve_snapshot(&mut self, snapshot: &Snapshot, mime: &str, fd: OwnedFd) {
         match snapshot.get(mime) {
             Some(data) => serve(self, data.clone(), fd),
-            None => tracing::warn!(mime, "a paste asked the kept clipboard for a type it does not offer"),
+            None => tracing::warn!(
+                mime,
+                "a paste asked the kept clipboard for a type it does not offer"
+            ),
         }
     }
 }
@@ -277,7 +335,13 @@ impl Cupertino {
 /// The data control globals of clipboard managers, `ext-data-control-v1` and its predecessor
 /// `zwlr-data-control-v1`, both with the primary selection. Every client may bind them, as every client may
 /// bind the layer shell: the server has no sandbox identity (security-context) to deny them to.
-pub fn data_control_states(dh: &DisplayHandle, primary: &PrimarySelectionState) -> (ext_data_control::DataControlState, wlr_data_control::DataControlState) {
+pub fn data_control_states(
+    dh: &DisplayHandle,
+    primary: &PrimarySelectionState,
+) -> (
+    ext_data_control::DataControlState,
+    wlr_data_control::DataControlState,
+) {
     (
         ext_data_control::DataControlState::new::<Cupertino, _>(dh, Some(primary), |_| true),
         wlr_data_control::DataControlState::new::<Cupertino, _>(dh, Some(primary), |_| true),
@@ -308,16 +372,42 @@ mod tests {
 
     #[test]
     fn utf8_text_is_read_once_and_other_types_follow_in_order() {
-        let offered = strings(&["image/png", "TEXT", "text/plain;charset=utf-8", "STRING", "application/x-private", "text/html"]);
-        assert_eq!(types_to_keep(&offered), ["text/plain;charset=utf-8", "text/html", "image/png"]);
-        assert_eq!(types_to_keep(&strings(&["STRING", "x/y"])), ["STRING"], "Latin-1 only without UTF-8");
+        let offered = strings(&[
+            "image/png",
+            "TEXT",
+            "text/plain;charset=utf-8",
+            "STRING",
+            "application/x-private",
+            "text/html",
+        ]);
+        assert_eq!(
+            types_to_keep(&offered),
+            ["text/plain;charset=utf-8", "text/html", "image/png"]
+        );
+        assert_eq!(
+            types_to_keep(&strings(&["STRING", "x/y"])),
+            ["STRING"],
+            "Latin-1 only without UTF-8"
+        );
         assert!(types_to_keep(&strings(&["application/x-private"])).is_empty());
     }
 
     #[test]
     fn the_snapshot_offers_text_under_every_utf8_name() {
-        let s = Snapshot::from_captured(vec![("UTF8_STRING".into(), b"hi".to_vec()), ("image/png".into(), vec![1, 2])]);
-        assert_eq!(s.mime_types(), ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "TEXT", "image/png"]);
+        let s = Snapshot::from_captured(vec![
+            ("UTF8_STRING".into(), b"hi".to_vec()),
+            ("image/png".into(), vec![1, 2]),
+        ]);
+        assert_eq!(
+            s.mime_types(),
+            [
+                "text/plain;charset=utf-8",
+                "UTF8_STRING",
+                "text/plain",
+                "TEXT",
+                "image/png"
+            ]
+        );
         assert_eq!(s.get("text/plain").map(|d| &d[..]), Some(&b"hi"[..]));
         assert_eq!(s.get("image/png").map(|d| &d[..]), Some(&[1u8, 2][..]));
         assert!(s.get("STRING").is_none());

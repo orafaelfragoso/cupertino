@@ -61,14 +61,29 @@ pub fn write(images: &[XCursorImage]) -> Result<Vec<u8>, String> {
     put(&mut out, images.len() as u32);
     let mut pos = FILE_HEADER_SIZE + 12 * images.len() as u32;
     for img in images {
-        if img.width == 0 || img.height == 0 || img.width > MAX_DIMENSION || img.height > MAX_DIMENSION {
-            return Err(format!("image size {}x{} is out of range", img.width, img.height));
+        if img.width == 0
+            || img.height == 0
+            || img.width > MAX_DIMENSION
+            || img.height > MAX_DIMENSION
+        {
+            return Err(format!(
+                "image size {}x{} is out of range",
+                img.width, img.height
+            ));
         }
         if img.pixels.len() != (img.width * img.height) as usize {
-            return Err(format!("{} pixels for {}x{}", img.pixels.len(), img.width, img.height));
+            return Err(format!(
+                "{} pixels for {}x{}",
+                img.pixels.len(),
+                img.width,
+                img.height
+            ));
         }
         if img.xhot >= img.width || img.yhot >= img.height {
-            return Err(format!("hotspot ({}, {}) outside {}x{}", img.xhot, img.yhot, img.width, img.height));
+            return Err(format!(
+                "hotspot ({}, {}) outside {}x{}",
+                img.xhot, img.yhot, img.width, img.height
+            ));
         }
         put(&mut out, IMAGE_TYPE);
         put(&mut out, img.nominal_size);
@@ -76,7 +91,17 @@ pub fn write(images: &[XCursorImage]) -> Result<Vec<u8>, String> {
         pos += IMAGE_HEADER_SIZE + 4 * img.width * img.height;
     }
     for img in images {
-        for v in [IMAGE_HEADER_SIZE, IMAGE_TYPE, img.nominal_size, IMAGE_VERSION, img.width, img.height, img.xhot, img.yhot, img.delay_ms] {
+        for v in [
+            IMAGE_HEADER_SIZE,
+            IMAGE_TYPE,
+            img.nominal_size,
+            IMAGE_VERSION,
+            img.width,
+            img.height,
+            img.xhot,
+            img.yhot,
+            img.delay_ms,
+        ] {
             put(&mut out, v);
         }
         for p in &img.pixels {
@@ -87,7 +112,9 @@ pub fn write(images: &[XCursorImage]) -> Result<Vec<u8>, String> {
 }
 
 fn rd(b: &[u8], at: usize) -> Result<u32, ParseError> {
-    b.get(at..at + 4).map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]])).ok_or(ParseError::TooShort)
+    b.get(at..at + 4)
+        .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+        .ok_or(ParseError::TooShort)
 }
 
 /// Parse an XCursor file into its images in table-of-contents order. Entries that are not
@@ -114,14 +141,23 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<XCursorImage>, ParseError> {
         if ty != IMAGE_TYPE {
             continue;
         }
-        let (chunk_header, chunk_type, chunk_subtype) = (rd(bytes, pos)?, rd(bytes, pos + 4)?, rd(bytes, pos + 8)?);
+        let (chunk_header, chunk_type, chunk_subtype) =
+            (rd(bytes, pos)?, rd(bytes, pos + 4)?, rd(bytes, pos + 8)?);
         if chunk_type != ty || chunk_subtype != subtype {
-            return Err(ParseError::BadChunk("type or nominal size differs from the table of contents"));
+            return Err(ParseError::BadChunk(
+                "type or nominal size differs from the table of contents",
+            ));
         }
         if chunk_header < IMAGE_HEADER_SIZE {
             return Err(ParseError::BadChunk("header size"));
         }
-        let (width, height, xhot, yhot, delay) = (rd(bytes, pos + 16)?, rd(bytes, pos + 20)?, rd(bytes, pos + 24)?, rd(bytes, pos + 28)?, rd(bytes, pos + 32)?);
+        let (width, height, xhot, yhot, delay) = (
+            rd(bytes, pos + 16)?,
+            rd(bytes, pos + 20)?,
+            rd(bytes, pos + 24)?,
+            rd(bytes, pos + 28)?,
+            rd(bytes, pos + 32)?,
+        );
         if width == 0 || height == 0 || width > MAX_DIMENSION || height > MAX_DIMENSION {
             return Err(ParseError::BadChunk("dimensions"));
         }
@@ -133,8 +169,18 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<XCursorImage>, ParseError> {
         if bytes.len() < start + 4 * count {
             return Err(ParseError::TooShort);
         }
-        let pixels = (0..count).map(|k| rd(bytes, start + 4 * k)).collect::<Result<Vec<_>, _>>()?;
-        images.push(XCursorImage { nominal_size: subtype, width, height, xhot, yhot, delay_ms: delay, pixels });
+        let pixels = (0..count)
+            .map(|k| rd(bytes, start + 4 * k))
+            .collect::<Result<Vec<_>, _>>()?;
+        images.push(XCursorImage {
+            nominal_size: subtype,
+            width,
+            height,
+            xhot,
+            yhot,
+            delay_ms: delay,
+            pixels,
+        });
     }
     Ok(images)
 }
@@ -144,22 +190,42 @@ mod tests {
     use super::*;
 
     fn img(size: u32, w: u32, h: u32, hot: (u32, u32), delay: u32, seed: u32) -> XCursorImage {
-        XCursorImage { nominal_size: size, width: w, height: h, xhot: hot.0, yhot: hot.1, delay_ms: delay, pixels: (0..w * h).map(|i| 0xff00_0000 | (i.wrapping_mul(2654435761).wrapping_add(seed) & 0x00ff_ffff)).collect() }
+        XCursorImage {
+            nominal_size: size,
+            width: w,
+            height: h,
+            xhot: hot.0,
+            yhot: hot.1,
+            delay_ms: delay,
+            pixels: (0..w * h)
+                .map(|i| {
+                    0xff00_0000 | (i.wrapping_mul(2654435761).wrapping_add(seed) & 0x00ff_ffff)
+                })
+                .collect(),
+        }
     }
 
     #[test]
     fn round_trip_static_multi_size() {
-        let images = vec![img(24, 24, 24, (3, 4), 0, 1), img(32, 32, 32, (4, 5), 0, 2), img(48, 40, 50, (6, 7), 0, 3)];
+        let images = vec![
+            img(24, 24, 24, (3, 4), 0, 1),
+            img(32, 32, 32, (4, 5), 0, 2),
+            img(48, 40, 50, (6, 7), 0, 3),
+        ];
         let bytes = write(&images).unwrap();
         assert_eq!(parse(&bytes).unwrap(), images);
     }
 
     #[test]
     fn round_trip_animation_keeps_frame_order_and_delay() {
-        let frames: Vec<XCursorImage> = (0..5).map(|i| img(32, 16, 16, (8, 8), 33 + i, i)).collect();
+        let frames: Vec<XCursorImage> =
+            (0..5).map(|i| img(32, 16, 16, (8, 8), 33 + i, i)).collect();
         let parsed = parse(&write(&frames).unwrap()).unwrap();
         assert_eq!(parsed.len(), 5);
-        assert!(parsed.iter().enumerate().all(|(i, f)| f.delay_ms == 33 + i as u32 && f.pixels == frames[i].pixels));
+        assert!(parsed
+            .iter()
+            .enumerate()
+            .all(|(i, f)| f.delay_ms == 33 + i as u32 && f.pixels == frames[i].pixels));
     }
 
     #[test]
@@ -196,7 +262,9 @@ mod tests {
         let mut bad = img(24, 4, 4, (0, 0), 0, 0);
         bad.pixels.pop();
         assert!(write(&[bad]).is_err());
-        assert!(write(&[img(24, 4, 4, (4, 0), 0, 0)]).unwrap_err().contains("hotspot"));
+        assert!(write(&[img(24, 4, 4, (4, 0), 0, 0)])
+            .unwrap_err()
+            .contains("hotspot"));
         assert!(write(&[img(24, MAX_DIMENSION + 1, 1, (0, 0), 0, 0)]).is_err());
         assert!(write(&[]).is_ok());
     }

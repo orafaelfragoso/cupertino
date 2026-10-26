@@ -5,9 +5,9 @@
 //! front-to-back list the damage tracker expects.
 
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
+use smithay::backend::renderer::element::render_elements;
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
-use smithay::backend::renderer::element::render_elements;
 use smithay::backend::renderer::gles::GlesRenderer;
 
 pub mod clip;
@@ -91,7 +91,9 @@ pub struct LayerStack<T> {
 
 impl<T> Default for LayerStack<T> {
     fn default() -> Self {
-        Self { layers: Default::default() }
+        Self {
+            layers: Default::default(),
+        }
     }
 }
 
@@ -124,7 +126,11 @@ impl<T> LayerStack<T> {
 
     /// Items with their layer, front to back.
     pub fn flatten_with_layer(self) -> Vec<(SceneLayer, T)> {
-        self.layers.into_iter().rev().flat_map(|(l, v)| v.into_iter().map(move |i| (l, i))).collect()
+        self.layers
+            .into_iter()
+            .rev()
+            .flat_map(|(l, v)| v.into_iter().map(move |i| (l, i)))
+            .collect()
     }
 }
 
@@ -141,13 +147,39 @@ mod tests {
         s.push(SceneLayer::Windows, "w-below");
         s.push(SceneLayer::Banners, "banners");
         s.push(SceneLayer::LayerTop, "layer-top");
-        assert_eq!(s.flatten(), vec!["cursor", "banners", "layer-top", "w-top", "w-below", "wallpaper"]);
+        assert_eq!(
+            s.flatten(),
+            vec![
+                "cursor",
+                "banners",
+                "layer-top",
+                "w-top",
+                "w-below",
+                "wallpaper"
+            ]
+        );
     }
 
     #[test]
     fn required_order_background_desktop_workspace_windows_shell_overlays_cursor() {
         use SceneLayer::*;
-        let order = [Wallpaper, LayerBackground, LayerBottom, OverviewBackdrop, BackdropCapture, Windows, SnapPreview, LayerTop, Banners, InputHud, AccentPopup, LayerOverlay, DragIcon, DisplayFilter, Cursor];
+        let order = [
+            Wallpaper,
+            LayerBackground,
+            LayerBottom,
+            OverviewBackdrop,
+            BackdropCapture,
+            Windows,
+            SnapPreview,
+            LayerTop,
+            Banners,
+            InputHud,
+            AccentPopup,
+            LayerOverlay,
+            DragIcon,
+            DisplayFilter,
+            Cursor,
+        ];
         for w in order.windows(2) {
             assert!(w[0] < w[1], "{:?} must be below {:?}", w[0], w[1]);
         }
@@ -160,6 +192,9 @@ mod tests {
         let mut s = LayerStack::new();
         s.push(SceneLayer::Banners, 1);
         s.push(SceneLayer::Wallpaper, 2);
-        assert_eq!(s.flatten_with_layer(), vec![(SceneLayer::Banners, 1), (SceneLayer::Wallpaper, 2)]);
+        assert_eq!(
+            s.flatten_with_layer(),
+            vec![(SceneLayer::Banners, 1), (SceneLayer::Wallpaper, 2)]
+        );
     }
 }

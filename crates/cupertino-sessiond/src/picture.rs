@@ -30,7 +30,9 @@ impl fmt::Display for PictureProblem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Open(e) => write!(f, "cannot open the picture: {e}"),
-            Self::NotOwnRegularFile => f.write_str("the picture is not a regular file of the account"),
+            Self::NotOwnRegularFile => {
+                f.write_str("the picture is not a regular file of the account")
+            }
             Self::TooLarge => write!(f, "the picture is larger than {MAX_PICTURE_BYTES} bytes"),
             Self::Read(e) => write!(f, "cannot read the picture: {e}"),
         }
@@ -55,7 +57,11 @@ pub fn read(uid: u32, home: &Path) -> Result<Option<Vec<u8>>, PictureProblem> {
 }
 
 fn read_as_current_fsuid(uid: u32, path: &Path) -> Result<Option<Vec<u8>>, PictureProblem> {
-    let file = match File::options().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC).open(path) {
+    let file = match File::options()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+    {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(PictureProblem::Open(e)),
@@ -69,7 +75,9 @@ fn read_as_current_fsuid(uid: u32, path: &Path) -> Result<Option<Vec<u8>>, Pictu
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     // one byte more than the cap shows a file that grew since `fstat`
-    file.take(MAX_PICTURE_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(PictureProblem::Read)?;
+    file.take(MAX_PICTURE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(PictureProblem::Read)?;
     if bytes.len() > MAX_PICTURE_BYTES {
         return Err(PictureProblem::TooLarge);
     }
@@ -96,7 +104,10 @@ mod tests {
     fn a_regular_file_of_the_account_is_read_whole() {
         let home = tempfile::tempdir().unwrap();
         std::fs::write(home.path().join(".face"), b"\x89PNG bytes").unwrap();
-        assert_eq!(read(own_uid(), home.path()).unwrap().unwrap(), b"\x89PNG bytes");
+        assert_eq!(
+            read(own_uid(), home.path()).unwrap().unwrap(),
+            b"\x89PNG bytes"
+        );
     }
 
     #[test]
@@ -104,29 +115,44 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         std::fs::write(home.path().join("secret"), b"root only").unwrap();
         std::os::unix::fs::symlink("secret", home.path().join(".face")).unwrap();
-        assert!(matches!(read(own_uid(), home.path()), Err(PictureProblem::Open(_))));
+        assert!(matches!(
+            read(own_uid(), home.path()),
+            Err(PictureProblem::Open(_))
+        ));
     }
 
     #[test]
     fn a_device_or_a_directory_is_not_a_picture() {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir(home.path().join(".face")).unwrap();
-        assert!(matches!(read(own_uid(), home.path()), Err(PictureProblem::NotOwnRegularFile)));
+        assert!(matches!(
+            read(own_uid(), home.path()),
+            Err(PictureProblem::NotOwnRegularFile)
+        ));
     }
 
     #[test]
     fn a_file_of_another_account_is_refused() {
         let home = tempfile::tempdir().unwrap();
         std::fs::write(home.path().join(".face"), b"x").unwrap();
-        assert!(matches!(read(own_uid() + 1, home.path()), Err(PictureProblem::NotOwnRegularFile | PictureProblem::Open(_))));
+        assert!(matches!(
+            read(own_uid() + 1, home.path()),
+            Err(PictureProblem::NotOwnRegularFile | PictureProblem::Open(_))
+        ));
     }
 
     #[test]
     fn a_file_over_the_cap_is_refused() {
         let home = tempfile::tempdir().unwrap();
         std::fs::write(home.path().join(".face"), vec![0u8; MAX_PICTURE_BYTES + 1]).unwrap();
-        assert!(matches!(read(own_uid(), home.path()), Err(PictureProblem::TooLarge)));
+        assert!(matches!(
+            read(own_uid(), home.path()),
+            Err(PictureProblem::TooLarge)
+        ));
         std::fs::write(home.path().join(".face"), vec![0u8; MAX_PICTURE_BYTES]).unwrap();
-        assert_eq!(read(own_uid(), home.path()).unwrap().unwrap().len(), MAX_PICTURE_BYTES);
+        assert_eq!(
+            read(own_uid(), home.path()).unwrap().unwrap().len(),
+            MAX_PICTURE_BYTES
+        );
     }
 }

@@ -14,7 +14,10 @@ use std::num::NonZeroU32;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
 use rustix::io::Errno;
-use rustix::net::{bind, recv, send, socket_with, AddressFamily, Protocol, RecvFlags, SendFlags, SocketFlags, SocketType};
+use rustix::net::{
+    bind, recv, send, socket_with, AddressFamily, Protocol, RecvFlags, SendFlags, SocketFlags,
+    SocketType,
+};
 
 use crate::command::{Command, ControllerIndex};
 use crate::error::{Error, ParseError, Result};
@@ -48,7 +51,13 @@ impl ControlSocket {
         let syscall = |call| move |source| Error::Syscall { call, source };
         // BTPROTO_HCI is 1, so the protocol is never zero.
         let protocol = Protocol::from_raw(NonZeroU32::new(BTPROTO_HCI).expect("BTPROTO_HCI is 1"));
-        let fd = socket_with(AddressFamily::BLUETOOTH, SocketType::RAW, SocketFlags::CLOEXEC | SocketFlags::NONBLOCK, Some(protocol)).map_err(syscall("socket(BTPROTO_HCI)"))?;
+        let fd = socket_with(
+            AddressFamily::BLUETOOTH,
+            SocketType::RAW,
+            SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+            Some(protocol),
+        )
+        .map_err(syscall("socket(BTPROTO_HCI)"))?;
         bind(&fd, &SocketAddrControl).map_err(syscall("bind(HCI_CHANNEL_CONTROL)"))?;
         Ok(Self { fd })
     }
@@ -56,7 +65,10 @@ impl ControlSocket {
     /// Sends one command. A full socket queue is an error (`EAGAIN`), not a wait.
     pub fn send(&self, index: ControllerIndex, command: &Command) -> Result<()> {
         let packet = command.encode(index)?;
-        send(&self.fd, &packet, SendFlags::empty()).map_err(|source| Error::Syscall { call: "send", source })?;
+        send(&self.fd, &packet, SendFlags::empty()).map_err(|source| Error::Syscall {
+            call: "send",
+            source,
+        })?;
         Ok(())
     }
 
@@ -68,7 +80,12 @@ impl ControlSocket {
             match recv(&self.fd, &mut buffer[..], RecvFlags::empty()) {
                 Ok((received, _)) => packets.push(buffer[..received].to_vec()),
                 Err(Errno::AGAIN) => return Ok(packets),
-                Err(source) => return Err(Error::Syscall { call: "recv", source }),
+                Err(source) => {
+                    return Err(Error::Syscall {
+                        call: "recv",
+                        source,
+                    })
+                }
             }
         }
     }

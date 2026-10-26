@@ -42,12 +42,25 @@ impl Snapshot {
                 state: device.state,
                 ssid: device.network.as_ref().map(|ssid| ssid.to_text()),
                 failure: device.failure,
-                address: device.lease.as_ref().map(|lease| (lease.address, lease.prefix_len)),
-                has_router: device.lease.as_ref().is_some_and(|lease| !lease.routers.is_empty()),
+                address: device
+                    .lease
+                    .as_ref()
+                    .map(|lease| (lease.address, lease.prefix_len)),
+                has_router: device
+                    .lease
+                    .as_ref()
+                    .is_some_and(|lease| !lease.routers.is_empty()),
                 metric: route_metric(device.kind),
             })
             .collect();
-        let networks = model.wifi_device().map(|device| model.networks(device.ifindex)).unwrap_or_default();
-        Self { wireless_enabled: model.wireless_enabled(), devices, networks }
+        let networks = model
+            .wifi_device()
+            .map(|device| model.networks(device.ifindex))
+            .unwrap_or_default();
+        Self {
+            wireless_enabled: model.wireless_enabled(),
+            devices,
+            networks,
+        }
     }
 }

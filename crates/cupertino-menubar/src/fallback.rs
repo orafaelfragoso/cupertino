@@ -61,13 +61,18 @@ pub fn action_for(id: ItemId) -> Option<FallbackAction> {
         MINIMIZE => FallbackAction::Minimize,
         ZOOM => FallbackAction::Zoom,
         CLOSE_WINDOW => FallbackAction::CloseWindow,
-        n if n < MOVE_TO_WORKSPACE_BASE => FallbackAction::MoveToWorkspace((MOVE_TO_WORKSPACE_BASE - n) as u32),
+        n if n < MOVE_TO_WORKSPACE_BASE => {
+            FallbackAction::MoveToWorkspace((MOVE_TO_WORKSPACE_BASE - n) as u32)
+        }
         _ => return None,
     })
 }
 
 fn shortcut(mods: &[ShortcutModifier], key: &str) -> Shortcut {
-    Shortcut { modifiers: mods.to_vec(), key: key.to_string() }
+    Shortcut {
+        modifiers: mods.to_vec(),
+        key: key.to_string(),
+    }
 }
 
 /// Items of the app menu opened by the bold app name. `about` is offered when the app has a
@@ -79,11 +84,17 @@ pub fn app_menu(app_name: &str, about: bool) -> Vec<MenuItem> {
         items.push(MenuItem::new(ABOUT, &format!("About {app_name}")));
         items.push(MenuItem::separator(-1100));
     }
-    items.push(MenuItem::new(HIDE, &format!("Hide {app_name}")).with_shortcut(shortcut(&[Primary], "h")));
-    items.push(MenuItem::new(HIDE_OTHERS, "Hide Others").with_shortcut(shortcut(&[Primary, Alt], "h")));
+    items.push(
+        MenuItem::new(HIDE, &format!("Hide {app_name}")).with_shortcut(shortcut(&[Primary], "h")),
+    );
+    items.push(
+        MenuItem::new(HIDE_OTHERS, "Hide Others").with_shortcut(shortcut(&[Primary, Alt], "h")),
+    );
     items.push(MenuItem::new(SHOW_ALL, "Show All"));
     items.push(MenuItem::separator(-1101));
-    items.push(MenuItem::new(QUIT, &format!("Quit {app_name}")).with_shortcut(shortcut(&[Primary], "q")));
+    items.push(
+        MenuItem::new(QUIT, &format!("Quit {app_name}")).with_shortcut(shortcut(&[Primary], "q")),
+    );
     items
 }
 
@@ -99,12 +110,18 @@ pub fn window_menu(workspaces: u32, current: Option<u32>, can_zoom: bool) -> Men
     use ShortcutModifier::*;
     let mut children = vec![
         MenuItem::new(MINIMIZE, "Minimize").with_shortcut(shortcut(&[Primary], "m")),
-        MenuItem { enabled: can_zoom, ..MenuItem::new(ZOOM, "Zoom") },
+        MenuItem {
+            enabled: can_zoom,
+            ..MenuItem::new(ZOOM, "Zoom")
+        },
     ];
     if workspaces > 1 {
         let targets: Vec<MenuItem> = (1..=workspaces)
             .map(|n| {
-                let mut it = MenuItem::new(FallbackAction::MoveToWorkspace(n).item_id().0, &format!("Workspace {n}"));
+                let mut it = MenuItem::new(
+                    FallbackAction::MoveToWorkspace(n).item_id().0,
+                    &format!("Workspace {n}"),
+                );
                 if current == Some(n) {
                     it = it.with_toggle(crate::item::Toggle::Check(true)).disabled();
                 }
@@ -112,10 +129,15 @@ pub fn window_menu(workspaces: u32, current: Option<u32>, can_zoom: bool) -> Men
             })
             .collect();
         children.push(MenuItem::separator(-1102));
-        children.push(MenuItem::submenu(MOVE_TO_WORKSPACE_MENU, "Move to Workspace", targets));
+        children.push(MenuItem::submenu(
+            MOVE_TO_WORKSPACE_MENU,
+            "Move to Workspace",
+            targets,
+        ));
     }
     children.push(MenuItem::separator(-1103));
-    children.push(MenuItem::new(CLOSE_WINDOW, "Close Window").with_shortcut(shortcut(&[Primary], "w")));
+    children
+        .push(MenuItem::new(CLOSE_WINDOW, "Close Window").with_shortcut(shortcut(&[Primary], "w")));
     MenuItem::submenu(WINDOW_MENU.0, "Window", children)
 }
 
@@ -132,7 +154,18 @@ mod tests {
     fn app_menu_has_the_expected_entries() {
         let m = app_menu("Files", true);
         let labels: Vec<&str> = m.iter().map(|i| i.label.as_str()).collect();
-        assert_eq!(labels, vec!["About Files", "", "Hide Files", "Hide Others", "Show All", "", "Quit Files"]);
+        assert_eq!(
+            labels,
+            vec![
+                "About Files",
+                "",
+                "Hide Files",
+                "Hide Others",
+                "Show All",
+                "",
+                "Quit Files"
+            ]
+        );
         assert!(m[1].separator && m[5].separator);
         let quit = m.last().unwrap();
         assert_eq!(quit.shortcut.as_ref().unwrap().display(), "Super+q");
@@ -146,16 +179,35 @@ mod tests {
         let w = window_menu(3, Some(2), true);
         assert_eq!(w.label, "Window");
         let labels: Vec<&str> = w.children.iter().map(|i| i.label.as_str()).collect();
-        assert_eq!(labels, vec!["Minimize", "Zoom", "", "Move to Workspace", "", "Close Window"]);
+        assert_eq!(
+            labels,
+            vec![
+                "Minimize",
+                "Zoom",
+                "",
+                "Move to Workspace",
+                "",
+                "Close Window"
+            ]
+        );
         let sub = &w.children[3];
         assert!(sub.has_submenu);
         assert_eq!(sub.children.len(), 3);
-        assert!(!sub.children[1].enabled, "the current workspace is checked and disabled");
+        assert!(
+            !sub.children[1].enabled,
+            "the current workspace is checked and disabled"
+        );
         assert!(sub.children[1].toggle.is_marked());
         assert!(sub.children[0].enabled);
         let single = window_menu(1, Some(1), false);
-        assert!(single.children.iter().all(|c| c.label != "Move to Workspace"));
-        assert!(!single.children[1].enabled, "zoom disabled when the window cannot zoom");
+        assert!(single
+            .children
+            .iter()
+            .all(|c| c.label != "Move to Workspace"));
+        assert!(
+            !single.children[1].enabled,
+            "zoom disabled when the window cannot zoom"
+        );
     }
 
     #[test]

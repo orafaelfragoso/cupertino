@@ -53,8 +53,12 @@ impl Device {
     /// `uevent` file.
     pub fn from_syspath(syspath: &Path) -> Result<Self> {
         let uevent_path = syspath.join("uevent");
-        let parse_error = |source| Error::Parse { origin: uevent_path.display().to_string(), source };
-        let properties = uevent::parse_uevent_file(&sysfs::read_attr(&uevent_path)?).map_err(parse_error)?;
+        let parse_error = |source| Error::Parse {
+            origin: uevent_path.display().to_string(),
+            source,
+        };
+        let properties =
+            uevent::parse_uevent_file(&sysfs::read_attr(&uevent_path)?).map_err(parse_error)?;
         let devnum = uevent::devnum(&properties).map_err(parse_error)?;
         let devnode = uevent::devnode(&properties);
         let sysname = syspath
@@ -62,9 +66,18 @@ impl Device {
             .map(|name| name.to_string_lossy().into_owned())
             .ok_or_else(|| Error::Io {
                 path: syspath.to_owned(),
-                source: std::io::Error::new(std::io::ErrorKind::InvalidInput, "syspath has no final component"),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "syspath has no final component",
+                ),
             })?;
-        Ok(Self { syspath: syspath.to_owned(), sysname, properties, devnode, devnum })
+        Ok(Self {
+            syspath: syspath.to_owned(),
+            sysname,
+            properties,
+            devnode,
+            devnum,
+        })
     }
 
     /// The canonical sysfs directory, e.g. `/sys/devices/pci0000:00/.../drm/card1`.
@@ -130,12 +143,17 @@ impl Device {
 /// `/sys` as `sysfs_root`.
 pub fn enumerate(sysfs_root: &Path, subsystem: Subsystem) -> Result<Vec<Device>> {
     let class_dir = sysfs_root.join("class").join(subsystem.as_str());
-    let entries = std::fs::read_dir(&class_dir)
-        .map_err(|source| Error::Io { path: class_dir.clone(), source })?;
+    let entries = std::fs::read_dir(&class_dir).map_err(|source| Error::Io {
+        path: class_dir.clone(),
+        source,
+    })?;
 
     let mut nodes = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|source| Error::Io { path: class_dir.clone(), source })?;
+        let entry = entry.map_err(|source| Error::Io {
+            path: class_dir.clone(),
+            source,
+        })?;
         let name = entry.file_name();
         let Some(number) = name.to_str().and_then(|name| subsystem.node_number(name)) else {
             continue;
@@ -143,7 +161,10 @@ pub fn enumerate(sysfs_root: &Path, subsystem: Subsystem) -> Result<Vec<Device>>
         nodes.push((number, sysfs::canonicalize(&entry.path())?));
     }
     nodes.sort();
-    nodes.iter().map(|(_, syspath)| Device::from_syspath(syspath)).collect()
+    nodes
+        .iter()
+        .map(|(_, syspath)| Device::from_syspath(syspath))
+        .collect()
 }
 
 #[cfg(test)]

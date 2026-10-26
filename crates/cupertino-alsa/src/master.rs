@@ -50,12 +50,23 @@ pub fn select_master(elements: &[ElementInfo]) -> Option<(MasterRank, &ElementIn
     usable()
         .find(|info| info.id.name == MASTER_NAME)
         .map(|info| (MasterRank::Master, info))
-        .or_else(|| usable().find(|info| info.id.name == PCM_NAME).map(|info| (MasterRank::Pcm, info)))
-        .or_else(|| usable().next().map(|info| (MasterRank::FirstPlayback, info)))
+        .or_else(|| {
+            usable()
+                .find(|info| info.id.name == PCM_NAME)
+                .map(|info| (MasterRank::Pcm, info))
+        })
+        .or_else(|| {
+            usable()
+                .next()
+                .map(|info| (MasterRank::FirstPlayback, info))
+        })
 }
 
 /// The mute switch that belongs to `volume`, if the card has one.
-pub fn find_switch<'a>(elements: &'a [ElementInfo], volume: &ElementInfo) -> Option<&'a ElementInfo> {
+pub fn find_switch<'a>(
+    elements: &'a [ElementInfo],
+    volume: &ElementInfo,
+) -> Option<&'a ElementInfo> {
     let stem = volume.id.name.strip_suffix("Volume")?;
     let name = format!("{stem}Switch");
     elements.iter().find(|info| {
@@ -87,9 +98,14 @@ impl Master {
         for index in card_indexes(dir)? {
             let card = Card::open(dir, index, mode)?;
             let elements = card.elements()?;
-            let Some((rank, info)) = select_master(&elements) else { continue };
+            let Some((rank, info)) = select_master(&elements) else {
+                continue;
+            };
             // ascending card numbers: a later card replaces only a strictly better rank
-            if best.as_ref().is_none_or(|(best_rank, ..)| rank < *best_rank) {
+            if best
+                .as_ref()
+                .is_none_or(|(best_rank, ..)| rank < *best_rank)
+            {
                 let info = info.clone();
                 best = Some((rank, card, elements, info));
             }
@@ -102,7 +118,10 @@ impl Master {
     pub fn open_card(dir: &Path, index: u32, mode: OpenMode) -> Result<Self> {
         let card = Card::open(dir, index, mode)?;
         let elements = card.elements()?;
-        let volume = select_master(&elements).ok_or(Error::NoPlaybackVolume)?.1.clone();
+        let volume = select_master(&elements)
+            .ok_or(Error::NoPlaybackVolume)?
+            .1
+            .clone();
         Self::from_elements(card, &elements, volume)
     }
 
@@ -110,7 +129,12 @@ impl Master {
         let switch = find_switch(elements, &volume).cloned();
         let bounds = volume.range.expect("a selected master has a range");
         let range = VolumeRange::new(bounds.min, bounds.max, card.db_curve(&volume)?)?;
-        Ok(Self { card, volume, switch, range })
+        Ok(Self {
+            card,
+            volume,
+            switch,
+            range,
+        })
     }
 
     /// The card the master is on.
@@ -130,7 +154,11 @@ impl Master {
 
     /// The raw value of the first channel.
     fn raw(&self) -> Result<i64> {
-        self.card.read_values(&self.volume)?.first().copied().ok_or(Error::NotAnIntegerControl)
+        self.card
+            .read_values(&self.volume)?
+            .first()
+            .copied()
+            .ok_or(Error::NotAnIntegerControl)
     }
 
     /// The level, 0 to 1, of the first channel.
@@ -149,22 +177,28 @@ impl Master {
     }
 
     fn write_raw(&self, raw: i64) -> Result<f64> {
-        self.card.write_values(&self.volume, &vec![raw; self.volume.count as usize])?;
+        self.card
+            .write_values(&self.volume, &vec![raw; self.volume.count as usize])?;
         Ok(self.range.level(raw))
     }
 
     /// Whether the master is muted; `None` when it has no mute switch.
     pub fn muted(&self) -> Result<Option<bool>> {
-        let Some(switch) = &self.switch else { return Ok(None) };
+        let Some(switch) = &self.switch else {
+            return Ok(None);
+        };
         // a switch value of 0 is "off": the channel is silent
         let values = self.card.read_values(switch)?;
-        Ok(Some(values.first().copied().ok_or(Error::NotAnIntegerControl)? == 0))
+        Ok(Some(
+            values.first().copied().ok_or(Error::NotAnIntegerControl)? == 0,
+        ))
     }
 
     /// Mute or unmute every channel; fails with [`Error::NoMuteSwitch`] when the master has no switch.
     pub fn set_muted(&self, muted: bool) -> Result<()> {
         let switch = self.switch.as_ref().ok_or(Error::NoMuteSwitch)?;
-        self.card.write_values(switch, &vec![i64::from(!muted); switch.count as usize])
+        self.card
+            .write_values(switch, &vec![i64::from(!muted); switch.count as usize])
     }
 }
 
@@ -174,8 +208,25 @@ mod tests {
     use crate::abi::{Access, ElementId, IntegerRange};
 
     fn control(numid: u32, name: &str, index: u32, kind: ElementType, access: u32) -> ElementInfo {
-        let range = (kind == ElementType::Integer).then_some(IntegerRange { min: 0, max: 64, step: 1 });
-        ElementInfo { id: ElementId { numid, interface: Interface::Mixer, device: 0, subdevice: 0, name: name.into(), index }, kind, access: Access(access), count: 2, range }
+        let range = (kind == ElementType::Integer).then_some(IntegerRange {
+            min: 0,
+            max: 64,
+            step: 1,
+        });
+        ElementInfo {
+            id: ElementId {
+                numid,
+                interface: Interface::Mixer,
+                device: 0,
+                subdevice: 0,
+                name: name.into(),
+                index,
+            },
+            kind,
+            access: Access(access),
+            count: 2,
+            range,
+        }
     }
 
     const RW: u32 = Access::READ | Access::WRITE;
@@ -195,19 +246,46 @@ mod tests {
 
     #[test]
     fn pcm_is_next_and_then_the_first_playback_volume() {
-        let mut elements = vec![control(1, "Speaker Playback Volume", 0, ElementType::Integer, RW), control(2, "PCM Playback Volume", 0, ElementType::Integer, RW)];
-        assert_eq!(select_master(&elements).map(|(rank, info)| (rank, info.id.numid)), Some((MasterRank::Pcm, 2)));
+        let mut elements = vec![
+            control(1, "Speaker Playback Volume", 0, ElementType::Integer, RW),
+            control(2, "PCM Playback Volume", 0, ElementType::Integer, RW),
+        ];
+        assert_eq!(
+            select_master(&elements).map(|(rank, info)| (rank, info.id.numid)),
+            Some((MasterRank::Pcm, 2))
+        );
         elements.remove(1);
-        elements.push(control(5, "Headphone Playback Volume", 0, ElementType::Integer, RW));
-        assert_eq!(select_master(&elements).map(|(rank, info)| (rank, info.id.numid)), Some((MasterRank::FirstPlayback, 1)));
+        elements.push(control(
+            5,
+            "Headphone Playback Volume",
+            0,
+            ElementType::Integer,
+            RW,
+        ));
+        assert_eq!(
+            select_master(&elements).map(|(rank, info)| (rank, info.id.numid)),
+            Some((MasterRank::FirstPlayback, 1))
+        );
     }
 
     #[test]
     fn capture_controls_and_unusable_playback_controls_are_skipped() {
         let elements = vec![
             control(1, "Capture Volume", 0, ElementType::Integer, RW),
-            control(2, "Master Playback Volume", 0, ElementType::Integer, Access::READ),
-            control(3, "Master Playback Volume", 1, ElementType::Integer, RW | Access::INACTIVE),
+            control(
+                2,
+                "Master Playback Volume",
+                0,
+                ElementType::Integer,
+                Access::READ,
+            ),
+            control(
+                3,
+                "Master Playback Volume",
+                1,
+                ElementType::Integer,
+                RW | Access::INACTIVE,
+            ),
             control(4, "Master Playback Switch", 0, ElementType::Boolean, RW),
         ];
         assert_eq!(select_master(&elements), None);
@@ -215,7 +293,10 @@ mod tests {
 
     #[test]
     fn a_switch_of_another_index_is_not_the_masters() {
-        let elements = vec![control(1, "PCM Playback Volume", 0, ElementType::Integer, RW), control(2, "PCM Playback Switch", 1, ElementType::Boolean, RW)];
+        let elements = vec![
+            control(1, "PCM Playback Volume", 0, ElementType::Integer, RW),
+            control(2, "PCM Playback Switch", 1, ElementType::Boolean, RW),
+        ];
         let (_, info) = select_master(&elements).unwrap();
         assert_eq!(find_switch(&elements, info), None);
     }

@@ -32,10 +32,17 @@ impl SystemHost {
         };
         let rfkill = match Rfkill::open(rfkill_path) {
             Ok(rfkill) => Some(rfkill),
-            Err(cupertino_netlink::Error::Device { source: Errno::NOENT, .. }) => None,
+            Err(cupertino_netlink::Error::Device {
+                source: Errno::NOENT,
+                ..
+            }) => None,
             Err(error) => return Err(Error::Netlink(error)),
         };
-        Ok(Self { routes: RouteSocket::open()?, wireless, rfkill })
+        Ok(Self {
+            routes: RouteSocket::open()?,
+            wireless,
+            rfkill,
+        })
     }
 
     pub fn rfkill(&self) -> Option<&Rfkill> {
@@ -50,7 +57,11 @@ impl Host for SystemHost {
 
     fn wireless_indexes(&mut self) -> Result<Vec<u32>> {
         match &mut self.wireless {
-            Some(wireless) => Ok(wireless.interfaces()?.into_iter().map(|interface| interface.ifindex).collect()),
+            Some(wireless) => Ok(wireless
+                .interfaces()?
+                .into_iter()
+                .map(|interface| interface.ifindex)
+                .collect()),
             None => Ok(Vec::new()),
         }
     }
@@ -85,7 +96,11 @@ impl Host for SystemHost {
     fn set_wireless_blocked(&mut self, blocked: bool) -> Result<()> {
         match &self.rfkill {
             Some(rfkill) => Ok(rfkill.set_soft_block(Kind::Wlan, blocked)?),
-            None => Err(Error::Netlink(cupertino_netlink::Error::Device { path: cupertino_netlink::rfkill::DEVICE.into(), call: "open", source: Errno::NOENT })),
+            None => Err(Error::Netlink(cupertino_netlink::Error::Device {
+                path: cupertino_netlink::rfkill::DEVICE.into(),
+                call: "open",
+                source: Errno::NOENT,
+            })),
         }
     }
 

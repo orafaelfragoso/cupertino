@@ -24,7 +24,12 @@ pub struct ButtonState {
 
 impl Default for ButtonState {
     fn default() -> Self {
-        Self { window_active: true, group_hovered: false, pressed: false, enabled: true }
+        Self {
+            window_active: true,
+            group_hovered: false,
+            pressed: false,
+            enabled: true,
+        }
     }
 }
 
@@ -38,7 +43,11 @@ pub struct ButtonVisual {
 impl ButtonState {
     pub fn visual(self) -> ButtonVisual {
         let colored = self.enabled && (self.window_active || self.group_hovered || self.pressed);
-        ButtonVisual { colored, glyph: self.enabled && (self.group_hovered || self.pressed), pressed: self.pressed && self.enabled }
+        ButtonVisual {
+            colored,
+            glyph: self.enabled && (self.group_hovered || self.pressed),
+            pressed: self.pressed && self.enabled,
+        }
     }
 }
 
@@ -52,7 +61,11 @@ fn darken(c: Rgba, f: f32) -> Rgba {
 }
 
 pub fn button_fill(palette: &Palette, kind: ButtonKind, v: ButtonVisual) -> Rgba {
-    let base = if v.colored { palette.button_color(kind) } else { palette.button_inactive };
+    let base = if v.colored {
+        palette.button_color(kind)
+    } else {
+        palette.button_inactive
+    };
     if v.pressed {
         darken(base, PRESSED_DARKEN)
     } else {
@@ -72,16 +85,33 @@ pub fn glyph_strokes(kind: ButtonKind, h: f64) -> Vec<Stroke2> {
     match kind {
         ButtonKind::Close => vec![((-h, -h), (h, h)), ((-h, h), (h, -h))],
         ButtonKind::Minimize => vec![((-h * 1.25, 0.0), (h * 1.25, 0.0))],
-        ButtonKind::Zoom => vec![((-h * 1.25, 0.0), (h * 1.25, 0.0)), ((0.0, -h * 1.25), (0.0, h * 1.25))],
+        ButtonKind::Zoom => vec![
+            ((-h * 1.25, 0.0), (h * 1.25, 0.0)),
+            ((0.0, -h * 1.25), (0.0, h * 1.25)),
+        ],
     }
 }
 
 fn color(c: Rgba) -> Color {
-    Color::from_rgba(c[0].clamp(0.0, 1.0), c[1].clamp(0.0, 1.0), c[2].clamp(0.0, 1.0), c[3].clamp(0.0, 1.0)).expect("clamped components")
+    Color::from_rgba(
+        c[0].clamp(0.0, 1.0),
+        c[1].clamp(0.0, 1.0),
+        c[2].clamp(0.0, 1.0),
+        c[3].clamp(0.0, 1.0),
+    )
+    .expect("clamped components")
 }
 
 /// Draw one button centred at `center` (logical points) at `scale` device pixels per point.
-pub fn draw_button(pm: &mut Pixmap, kind: ButtonKind, center: Point, scale: f64, metrics: &DecorationMetrics, palette: &Palette, state: ButtonState) {
+pub fn draw_button(
+    pm: &mut Pixmap,
+    kind: ButtonKind,
+    center: Point,
+    scale: f64,
+    metrics: &DecorationMetrics,
+    palette: &Palette,
+    state: ButtonState,
+) {
     let v = state.visual();
     let (cx, cy) = ((center.x * scale) as f32, (center.y * scale) as f32);
     let ring_w = (metrics.button_diameter * metrics.button_ring * scale).max(0.5) as f32;
@@ -89,18 +119,37 @@ pub fn draw_button(pm: &mut Pixmap, kind: ButtonKind, center: Point, scale: f64,
     let mut pb = PathBuilder::new();
     pb.push_circle(cx, cy, r);
     let Some(disc) = pb.finish() else { return };
-    let mut paint = Paint { anti_alias: true, ..Paint::default() };
+    let mut paint = Paint {
+        anti_alias: true,
+        ..Paint::default()
+    };
     paint.set_color(color(button_ring(palette, kind, v)));
-    pm.fill_path(&disc, &paint, FillRule::Winding, Transform::identity(), None);
+    pm.fill_path(
+        &disc,
+        &paint,
+        FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
     let mut pb = PathBuilder::new();
     pb.push_circle(cx, cy, (r - ring_w).max(0.0));
     if let Some(inner) = pb.finish() {
         paint.set_color(color(button_fill(palette, kind, v)));
-        pm.fill_path(&inner, &paint, FillRule::Winding, Transform::identity(), None);
+        pm.fill_path(
+            &inner,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
     if v.glyph {
         paint.set_color(color(palette.glyph));
-        let stroke = Stroke { width: (metrics.glyph_stroke * scale) as f32, line_cap: LineCap::Round, ..Stroke::default() };
+        let stroke = Stroke {
+            width: (metrics.glyph_stroke * scale) as f32,
+            line_cap: LineCap::Round,
+            ..Stroke::default()
+        };
         let h = metrics.button_diameter * metrics.glyph_half_extent;
         for ((x0, y0), (x1, y1)) in glyph_strokes(kind, h) {
             let mut pb = PathBuilder::new();
@@ -121,15 +170,41 @@ mod tests {
     fn visual_states() {
         let normal = ButtonState::default().visual();
         assert!(normal.colored && !normal.glyph && !normal.pressed);
-        let hover = ButtonState { group_hovered: true, ..Default::default() }.visual();
+        let hover = ButtonState {
+            group_hovered: true,
+            ..Default::default()
+        }
+        .visual();
         assert!(hover.colored && hover.glyph);
-        let inactive = ButtonState { window_active: false, ..Default::default() }.visual();
+        let inactive = ButtonState {
+            window_active: false,
+            ..Default::default()
+        }
+        .visual();
         assert!(!inactive.colored && !inactive.glyph);
-        let inactive_hover = ButtonState { window_active: false, group_hovered: true, ..Default::default() }.visual();
-        assert!(inactive_hover.colored && inactive_hover.glyph, "colour and glyphs return on hover");
-        let disabled = ButtonState { enabled: false, group_hovered: true, pressed: true, ..Default::default() }.visual();
+        let inactive_hover = ButtonState {
+            window_active: false,
+            group_hovered: true,
+            ..Default::default()
+        }
+        .visual();
+        assert!(
+            inactive_hover.colored && inactive_hover.glyph,
+            "colour and glyphs return on hover"
+        );
+        let disabled = ButtonState {
+            enabled: false,
+            group_hovered: true,
+            pressed: true,
+            ..Default::default()
+        }
+        .visual();
         assert!(!disabled.colored && !disabled.glyph && !disabled.pressed);
-        let pressed = ButtonState { pressed: true, ..Default::default() }.visual();
+        let pressed = ButtonState {
+            pressed: true,
+            ..Default::default()
+        }
+        .visual();
         assert!(pressed.pressed && pressed.glyph);
     }
 
@@ -137,11 +212,42 @@ mod tests {
     fn pressed_is_darker_and_inactive_is_grey() {
         let p = Palette::builtin(false);
         let n = button_fill(&p, ButtonKind::Close, ButtonState::default().visual());
-        let d = button_fill(&p, ButtonKind::Close, ButtonState { pressed: true, ..Default::default() }.visual());
+        let d = button_fill(
+            &p,
+            ButtonKind::Close,
+            ButtonState {
+                pressed: true,
+                ..Default::default()
+            }
+            .visual(),
+        );
         assert!(d[0] < n[0] && d[1] < n[1]);
-        let g = button_fill(&p, ButtonKind::Close, ButtonState { window_active: false, ..Default::default() }.visual());
-        assert!((g[0] - g[1]).abs() < 1e-6 && (g[1] - g[2]).abs() < 1e-6, "inactive buttons are grey");
-        assert_eq!(g, button_fill(&p, ButtonKind::Zoom, ButtonState { window_active: false, ..Default::default() }.visual()), "all three are the same grey");
+        let g = button_fill(
+            &p,
+            ButtonKind::Close,
+            ButtonState {
+                window_active: false,
+                ..Default::default()
+            }
+            .visual(),
+        );
+        assert!(
+            (g[0] - g[1]).abs() < 1e-6 && (g[1] - g[2]).abs() < 1e-6,
+            "inactive buttons are grey"
+        );
+        assert_eq!(
+            g,
+            button_fill(
+                &p,
+                ButtonKind::Zoom,
+                ButtonState {
+                    window_active: false,
+                    ..Default::default()
+                }
+                .visual()
+            ),
+            "all three are the same grey"
+        );
     }
 
     #[test]
@@ -149,7 +255,9 @@ mod tests {
         for kind in ButtonKind::ALL {
             let strokes = glyph_strokes(kind, 2.4);
             assert!(!strokes.is_empty());
-            let (sx, sy): (f64, f64) = strokes.iter().fold((0.0, 0.0), |a, s| (a.0 + s.0 .0 + s.1 .0, a.1 + s.0 .1 + s.1 .1));
+            let (sx, sy): (f64, f64) = strokes.iter().fold((0.0, 0.0), |a, s| {
+                (a.0 + s.0 .0 + s.1 .0, a.1 + s.0 .1 + s.1 .1)
+            });
             assert!(sx.abs() < 1e-12 && sy.abs() < 1e-12, "{kind:?}");
         }
         assert_eq!(glyph_strokes(ButtonKind::Close, 2.0).len(), 2);

@@ -12,7 +12,10 @@ pub struct History<T> {
 impl<T: PartialEq + Copy> History<T> {
     /// A history holding only `start`.
     pub fn new(start: T) -> Self {
-        History { entries: vec![start], index: 0 }
+        History {
+            entries: vec![start],
+            index: 0,
+        }
     }
 
     pub fn current(&self) -> T {
@@ -72,14 +75,25 @@ mod tests {
         let mut h = History::new(1);
         assert!(!h.can_go_back() && !h.can_go_forward());
         assert!(h.push(2) && h.push(3));
-        assert_eq!((h.current(), h.can_go_back(), h.can_go_forward()), (3, true, false));
+        assert_eq!(
+            (h.current(), h.can_go_back(), h.can_go_forward()),
+            (3, true, false)
+        );
         assert_eq!(h.back(), Some(2));
         assert_eq!(h.back(), Some(1));
         assert_eq!(h.back(), None);
-        assert_eq!((h.len(), h.can_go_forward()), (3, true), "stepping back pushes nothing");
+        assert_eq!(
+            (h.len(), h.can_go_forward()),
+            (3, true),
+            "stepping back pushes nothing"
+        );
         assert_eq!(h.forward(), Some(2));
         assert!(h.push(4));
-        assert_eq!((h.len(), h.current(), h.can_go_forward()), (3, 4, false), "3 was dropped");
+        assert_eq!(
+            (h.len(), h.current(), h.can_go_forward()),
+            (3, 4, false),
+            "3 was dropped"
+        );
         assert!(!h.push(4), "pushing the current entry is not a push");
         assert_eq!(h.len(), 3);
     }
@@ -95,6 +109,10 @@ mod tests {
         while h.back().is_some() {
             steps += 1;
         }
-        assert_eq!((steps, h.current()), (10_000, 0), "every entry is reachable");
+        assert_eq!(
+            (steps, h.current()),
+            (10_000, 0),
+            "every entry is reachable"
+        );
     }
 }

@@ -55,7 +55,15 @@ impl Uuid {
 impl fmt::Display for Uuid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let v = self.0;
-        write!(f, "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}", (v >> 96) as u32, (v >> 80) as u16, (v >> 64) as u16, (v >> 48) as u16, v & 0xFFFF_FFFF_FFFF)
+        write!(
+            f,
+            "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+            (v >> 96) as u32,
+            (v >> 80) as u16,
+            (v >> 64) as u16,
+            (v >> 48) as u16,
+            v & 0xFFFF_FFFF_FFFF
+        )
     }
 }
 
@@ -103,17 +111,29 @@ impl Eir {
     }
 
     fn field(&mut self, kind: u8, payload: &[u8]) -> Result<(), ParseError> {
-        let wrong_length = || ParseError::EirFieldLength { kind, length: payload.len() };
+        let wrong_length = || ParseError::EirFieldLength {
+            kind,
+            length: payload.len(),
+        };
         match kind {
             FLAGS => self.flags = Some(*payload.first().ok_or_else(wrong_length)?),
-            UUID16_INCOMPLETE | UUID16_COMPLETE => self.uuids_of(payload, 2, |b| Uuid::from_u16(u16::from_le_bytes([b[0], b[1]])))?,
-            UUID32_INCOMPLETE | UUID32_COMPLETE => self.uuids_of(payload, 4, |b| Uuid::from_u32(u32::from_le_bytes([b[0], b[1], b[2], b[3]])))?,
+            UUID16_INCOMPLETE | UUID16_COMPLETE => self.uuids_of(payload, 2, |b| {
+                Uuid::from_u16(u16::from_le_bytes([b[0], b[1]]))
+            })?,
+            UUID32_INCOMPLETE | UUID32_COMPLETE => self.uuids_of(payload, 4, |b| {
+                Uuid::from_u32(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            })?,
             UUID128_INCOMPLETE | UUID128_COMPLETE => self.uuids_of(payload, 16, |b| {
                 let mut bytes = [0u8; 16];
                 bytes.copy_from_slice(b);
                 Uuid(u128::from_le_bytes(bytes))
             })?,
-            NAME_SHORTENED | NAME_COMPLETE => self.name = Some(EirName { text: String::from_utf8_lossy(payload).into_owned(), complete: kind == NAME_COMPLETE }),
+            NAME_SHORTENED | NAME_COMPLETE => {
+                self.name = Some(EirName {
+                    text: String::from_utf8_lossy(payload).into_owned(),
+                    complete: kind == NAME_COMPLETE,
+                })
+            }
             TX_POWER_LEVEL => match payload {
                 [level] => self.tx_power = Some(*level as i8),
                 _ => return Err(wrong_length()),
@@ -131,9 +151,17 @@ impl Eir {
         Ok(())
     }
 
-    fn uuids_of(&mut self, payload: &[u8], size: usize, make: impl Fn(&[u8]) -> Uuid) -> Result<(), ParseError> {
+    fn uuids_of(
+        &mut self,
+        payload: &[u8],
+        size: usize,
+        make: impl Fn(&[u8]) -> Uuid,
+    ) -> Result<(), ParseError> {
         if !payload.len().is_multiple_of(size) {
-            return Err(ParseError::EirUuidLength { size, length: payload.len() });
+            return Err(ParseError::EirUuidLength {
+                size,
+                length: payload.len(),
+            });
         }
         self.uuids.extend(payload.chunks_exact(size).map(make));
         Ok(())

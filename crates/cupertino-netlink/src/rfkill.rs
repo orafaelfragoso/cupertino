@@ -88,7 +88,9 @@ pub struct Event {
 /// the first 8 bytes are the same on all.
 pub fn parse_event(bytes: &[u8]) -> std::result::Result<Event, ParseError> {
     let Some(bytes) = bytes.get(..EVENT_SIZE) else {
-        return Err(ParseError::RfkillSize { actual: bytes.len() });
+        return Err(ParseError::RfkillSize {
+            actual: bytes.len(),
+        });
     };
     Ok(Event {
         index: u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
@@ -128,7 +130,8 @@ impl WlanSwitches {
         }
         match event.operation {
             Operation::Added | Operation::Changed => {
-                self.switches.insert(event.index, (event.soft_blocked, event.hard_blocked));
+                self.switches
+                    .insert(event.index, (event.soft_blocked, event.hard_blocked));
             }
             Operation::Deleted => {
                 self.switches.remove(&event.index);
@@ -163,8 +166,20 @@ pub struct Rfkill {
 impl Rfkill {
     /// Opens `path` (normally [`DEVICE`]) for reading and writing, non-blocking.
     pub fn open(path: &Path) -> Result<Self> {
-        let fd = open(path, OFlags::RDWR | OFlags::NONBLOCK | OFlags::CLOEXEC, Mode::empty()).map_err(|source| Error::Device { path: path.to_owned(), call: "open", source })?;
-        Ok(Self { fd, path: path.to_owned() })
+        let fd = open(
+            path,
+            OFlags::RDWR | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|source| Error::Device {
+            path: path.to_owned(),
+            call: "open",
+            source,
+        })?;
+        Ok(Self {
+            fd,
+            path: path.to_owned(),
+        })
     }
 
     /// Reads every queued event. Returns at once when there is none.
@@ -175,9 +190,17 @@ impl Rfkill {
             match read(&self.fd, &mut buffer) {
                 // End of file: only a regular file (a test double) ends; the device returns EAGAIN.
                 Ok(0) | Err(Errno::AGAIN) => return Ok(events),
-                Ok(length) => events.push(parse_event(&buffer[..length]).map_err(Error::parse("rfkill"))?),
+                Ok(length) => {
+                    events.push(parse_event(&buffer[..length]).map_err(Error::parse("rfkill"))?)
+                }
                 Err(Errno::INTR) => continue,
-                Err(source) => return Err(Error::Device { path: self.path.clone(), call: "read", source }),
+                Err(source) => {
+                    return Err(Error::Device {
+                        path: self.path.clone(),
+                        call: "read",
+                        source,
+                    })
+                }
             }
         }
     }
@@ -187,8 +210,16 @@ impl Rfkill {
         let event = encode_soft_block_all(kind, blocked);
         match write(&self.fd, &event) {
             Ok(EVENT_SIZE) => Ok(()),
-            Ok(_) => Err(Error::Device { path: self.path.clone(), call: "write", source: Errno::IO }),
-            Err(source) => Err(Error::Device { path: self.path.clone(), call: "write", source }),
+            Ok(_) => Err(Error::Device {
+                path: self.path.clone(),
+                call: "write",
+                source: Errno::IO,
+            }),
+            Err(source) => Err(Error::Device {
+                path: self.path.clone(),
+                call: "write",
+                source,
+            }),
         }
     }
 }
@@ -207,35 +238,70 @@ mod tests {
     fn decodes_an_added_wlan_switch_that_is_soft_blocked() {
         // index 3, type WLAN (1), op ADD (0), soft 1, hard 0
         let event = parse_event(&[3, 0, 0, 0, 1, 0, 1, 0]).unwrap();
-        assert_eq!(event, Event { index: 3, kind: Kind::Wlan, operation: Operation::Added, soft_blocked: true, hard_blocked: false });
+        assert_eq!(
+            event,
+            Event {
+                index: 3,
+                kind: Kind::Wlan,
+                operation: Operation::Added,
+                soft_blocked: true,
+                hard_blocked: false
+            }
+        );
     }
 
     #[test]
     fn a_newer_longer_event_decodes_by_its_first_eight_bytes() {
         let event = parse_event(&[0, 0, 0, 0, 2, 2, 0, 1, 7]).unwrap();
-        assert_eq!((event.kind, event.operation, event.hard_blocked), (Kind::Bluetooth, Operation::Changed, true));
+        assert_eq!(
+            (event.kind, event.operation, event.hard_blocked),
+            (Kind::Bluetooth, Operation::Changed, true)
+        );
     }
 
     #[test]
     fn a_short_event_is_an_error() {
-        assert_eq!(parse_event(&[1, 2, 3]), Err(ParseError::RfkillSize { actual: 3 }));
+        assert_eq!(
+            parse_event(&[1, 2, 3]),
+            Err(ParseError::RfkillSize { actual: 3 })
+        );
     }
 
     #[test]
     fn the_block_request_names_the_kind_and_the_op() {
         // idx 0, type WLAN, op CHANGE_ALL (3), soft 1, hard 0
-        assert_eq!(encode_soft_block_all(Kind::Wlan, true), [0, 0, 0, 0, 1, 3, 1, 0]);
-        assert_eq!(encode_soft_block_all(Kind::Wlan, false), [0, 0, 0, 0, 1, 3, 0, 0]);
+        assert_eq!(
+            encode_soft_block_all(Kind::Wlan, true),
+            [0, 0, 0, 0, 1, 3, 1, 0]
+        );
+        assert_eq!(
+            encode_soft_block_all(Kind::Wlan, false),
+            [0, 0, 0, 0, 1, 3, 0, 0]
+        );
     }
 
     #[test]
     fn the_wlan_state_follows_the_event_stream() {
-        let wlan = |index, operation, soft_blocked, hard_blocked| Event { index, kind: Kind::Wlan, operation, soft_blocked, hard_blocked };
+        let wlan = |index, operation, soft_blocked, hard_blocked| Event {
+            index,
+            kind: Kind::Wlan,
+            operation,
+            soft_blocked,
+            hard_blocked,
+        };
         let mut switches = WlanSwitches::new();
         assert!(!switches.is_present());
         switches.apply(&wlan(0, Operation::Added, false, false));
-        switches.apply(&Event { index: 1, kind: Kind::Bluetooth, operation: Operation::Added, soft_blocked: true, hard_blocked: true });
-        assert!(switches.is_present() && !switches.is_soft_blocked() && !switches.is_hard_blocked());
+        switches.apply(&Event {
+            index: 1,
+            kind: Kind::Bluetooth,
+            operation: Operation::Added,
+            soft_blocked: true,
+            hard_blocked: true,
+        });
+        assert!(
+            switches.is_present() && !switches.is_soft_blocked() && !switches.is_hard_blocked()
+        );
         switches.apply(&wlan(0, Operation::Changed, true, false));
         assert!(switches.is_soft_blocked() && !switches.is_hard_blocked());
         switches.apply(&wlan(0, Operation::Changed, true, true));
@@ -251,9 +317,18 @@ mod tests {
         std::fs::write(&path, [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 1, 0]).unwrap();
         let rfkill = Rfkill::open(&path).unwrap();
         let events = rfkill.read_events().unwrap();
-        assert_eq!(events.iter().map(|event| (event.index, event.operation, event.soft_blocked)).collect::<Vec<_>>(), [(0, Operation::Added, false), (1, Operation::Changed, true)]);
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| (event.index, event.operation, event.soft_blocked))
+                .collect::<Vec<_>>(),
+            [(0, Operation::Added, false), (1, Operation::Changed, true)]
+        );
         // the file offset is at the end, so the request is appended
         rfkill.set_soft_block(Kind::Wlan, true).unwrap();
-        assert_eq!(std::fs::read(&path).unwrap()[16..], [0, 0, 0, 0, 1, 3, 1, 0]);
+        assert_eq!(
+            std::fs::read(&path).unwrap()[16..],
+            [0, 0, 0, 0, 1, 3, 1, 0]
+        );
     }
 }

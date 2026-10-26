@@ -29,12 +29,22 @@ pub struct EdgeConfig {
 impl EdgeConfig {
     /// Dock on a bottom edge: reveal delay, hide delay approximate.
     pub fn dock(edge: Edge) -> Self {
-        Self { edge, thickness: 1.0, reveal_delay: 0.15, hide_delay: 0.0 }
+        Self {
+            edge,
+            thickness: 1.0,
+            reveal_delay: 0.15,
+            hide_delay: 0.0,
+        }
     }
 
     /// Fullscreen menu bar on the top edge: delays unknown placeholders.
     pub fn menu_bar() -> Self {
-        Self { edge: Edge::Top, thickness: 1.0, reveal_delay: 0.15, hide_delay: 0.3 }
+        Self {
+            edge: Edge::Top,
+            thickness: 1.0,
+            reveal_delay: 0.15,
+            hide_delay: 0.3,
+        }
     }
 }
 
@@ -47,8 +57,14 @@ pub enum EdgeEvent {
 #[derive(Clone, Copy, Debug)]
 enum State {
     Hidden,
-    Dwelling { output: usize, since: f64 },
-    Shown { output: usize, outside_since: Option<f64> },
+    Dwelling {
+        output: usize,
+        since: f64,
+    },
+    Shown {
+        output: usize,
+        outside_since: Option<f64>,
+    },
 }
 
 pub struct EdgeReveal {
@@ -59,7 +75,11 @@ pub struct EdgeReveal {
 
 impl EdgeReveal {
     pub fn new(cfg: EdgeConfig) -> Self {
-        Self { cfg, state: State::Hidden, hold: None }
+        Self {
+            cfg,
+            state: State::Hidden,
+            hold: None,
+        }
     }
 
     /// Region that keeps the surface shown while the pointer is inside (the revealed surface).
@@ -99,12 +119,27 @@ impl EdgeReveal {
             }
             State::Dwelling { output, .. } => match on_edge {
                 Some(o) if o == output => return self.tick(now),
-                Some(o) => self.state = State::Dwelling { output: o, since: now },
+                Some(o) => {
+                    self.state = State::Dwelling {
+                        output: o,
+                        since: now,
+                    }
+                }
                 None => self.state = State::Hidden,
             },
-            State::Shown { output, outside_since } => {
+            State::Shown {
+                output,
+                outside_since,
+            } => {
                 let inside = on_edge == Some(output) || in_hold;
-                self.state = State::Shown { output, outside_since: if inside { None } else { outside_since.or(Some(now)) } };
+                self.state = State::Shown {
+                    output,
+                    outside_since: if inside {
+                        None
+                    } else {
+                        outside_since.or(Some(now))
+                    },
+                };
                 return self.tick(now);
             }
         }
@@ -114,10 +149,16 @@ impl EdgeReveal {
     pub fn tick(&mut self, now: f64) -> Option<EdgeEvent> {
         match self.state {
             State::Dwelling { output, since } if now - since >= self.cfg.reveal_delay - 1e-9 => {
-                self.state = State::Shown { output, outside_since: None };
+                self.state = State::Shown {
+                    output,
+                    outside_since: None,
+                };
                 Some(EdgeEvent::Reveal { output })
             }
-            State::Shown { output, outside_since: Some(s) } if now - s >= self.cfg.hide_delay - 1e-9 => {
+            State::Shown {
+                output,
+                outside_since: Some(s),
+            } if now - s >= self.cfg.hide_delay - 1e-9 => {
                 self.state = State::Hidden;
                 Some(EdgeEvent::Hide { output })
             }
@@ -128,7 +169,10 @@ impl EdgeReveal {
     pub fn next_deadline(&self) -> Option<f64> {
         match self.state {
             State::Dwelling { since, .. } => Some(since + self.cfg.reveal_delay),
-            State::Shown { outside_since: Some(s), .. } => Some(s + self.cfg.hide_delay),
+            State::Shown {
+                outside_since: Some(s),
+                ..
+            } => Some(s + self.cfg.hide_delay),
             _ => None,
         }
     }
@@ -170,7 +214,11 @@ mod tests {
         assert_eq!(e.next_deadline(), None, "inside the bar");
         assert_eq!(e.update(Point::new(500.0, 300.0), &[OUT], 2.0), None);
         assert_eq!(e.next_deadline(), Some(2.3));
-        assert_eq!(e.update(Point::new(500.0, 20.0), &[OUT], 2.1), None, "re-entering cancels the hide");
+        assert_eq!(
+            e.update(Point::new(500.0, 20.0), &[OUT], 2.1),
+            None,
+            "re-entering cancels the hide"
+        );
         assert_eq!(e.next_deadline(), None);
         e.update(Point::new(500.0, 300.0), &[OUT], 3.0);
         assert_eq!(e.tick(3.3), Some(EdgeEvent::Hide { output: 0 }));
@@ -185,13 +233,27 @@ mod tests {
         cfg.reveal_delay = 0.0;
         let mut e = EdgeReveal::new(cfg);
         assert_eq!(e.update(Point::new(1919.5, 500.0), &[a, b], 0.0), None);
-        assert_eq!(e.update(Point::new(3839.5, 500.0), &[a, b], 1.0), Some(EdgeEvent::Reveal { output: 1 }));
+        assert_eq!(
+            e.update(Point::new(3839.5, 500.0), &[a, b], 1.0),
+            Some(EdgeEvent::Reveal { output: 1 })
+        );
     }
 
     #[test]
     fn zero_delays_act_immediately() {
-        let mut e = EdgeReveal::new(EdgeConfig { edge: Edge::Left, thickness: 2.0, reveal_delay: 0.0, hide_delay: 0.0 });
-        assert_eq!(e.update(Point::new(1.0, 10.0), &[OUT], 0.0), Some(EdgeEvent::Reveal { output: 0 }));
-        assert_eq!(e.update(Point::new(100.0, 10.0), &[OUT], 0.1), Some(EdgeEvent::Hide { output: 0 }));
+        let mut e = EdgeReveal::new(EdgeConfig {
+            edge: Edge::Left,
+            thickness: 2.0,
+            reveal_delay: 0.0,
+            hide_delay: 0.0,
+        });
+        assert_eq!(
+            e.update(Point::new(1.0, 10.0), &[OUT], 0.0),
+            Some(EdgeEvent::Reveal { output: 0 })
+        );
+        assert_eq!(
+            e.update(Point::new(100.0, 10.0), &[OUT], 0.1),
+            Some(EdgeEvent::Hide { output: 0 })
+        );
     }
 }

@@ -56,11 +56,17 @@ impl Entry {
     /// Stat `path`. Symlinks are listed as symlinks; `is_dir` follows the link.
     pub fn from_path(path: PathBuf) -> std::io::Result<Self> {
         use std::os::unix::fs::MetadataExt;
-        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string_lossy().into_owned());
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
         let lmeta = std::fs::symlink_metadata(&path)?;
         let ft = lmeta.file_type();
         let (kind, meta) = if ft.is_symlink() {
-            (Kind::Symlink, std::fs::metadata(&path).unwrap_or_else(|_| lmeta.clone()))
+            (
+                Kind::Symlink,
+                std::fs::metadata(&path).unwrap_or_else(|_| lmeta.clone()),
+            )
         } else if ft.is_dir() {
             (Kind::Directory, lmeta.clone())
         } else if ft.is_file() {

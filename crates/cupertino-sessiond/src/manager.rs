@@ -8,27 +8,30 @@ use std::collections::{HashSet, VecDeque};
 use std::fs::File;
 use std::io;
 use std::os::fd::OwnedFd;
-use std::sync::Arc;
 use std::os::unix::fs::{chown, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::process::{Child, Command, ExitCode, ExitStatus, Stdio};
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cupertino_defaults::login::LoginConfig;
 use cupertino_login_ipc::message::{MAX_EVENT_FRAME, MAX_REQUEST_FRAME};
-use cupertino_login_ipc::{encode, encode_secret, is_login_name, Account, Event, Outcome, PowerAction, PowerRefusal, ProtocolRefusal, Request, Secret, State, VERSION};
+use cupertino_login_ipc::{
+    encode, encode_secret, is_login_name, Account, Event, Outcome, PowerAction, PowerRefusal,
+    ProtocolRefusal, Request, Secret, State, VERSION,
+};
 use rustix::event::{eventfd, poll, EventfdFlags, PollFd, PollFlags, Timespec};
 use rustix::process::{pidfd_open, PidfdFlags};
 
 use crate::auto_login;
 use crate::caller::{may_end_other_sessions, Asker, CallerSession};
 use crate::channel::{Channel, ChannelError};
-use crate::worker_protocol::{FromWorker, Mode, SessionClass, ToWorker, MAX_FRAME};
 use crate::limits::{RateLimit, ATTEMPTS_PER_WINDOW, ATTEMPT_TIMEOUT, ATTEMPT_WINDOW};
 use crate::logind::{self, Logind, SeatSession, Signal};
 use crate::service::{self, Authorizer, Call, ReadyRefusal};
+use crate::worker_protocol::{FromWorker, Mode, SessionClass, ToWorker, MAX_FRAME};
 use crate::{picture, roster, users, vt};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -268,27 +271,45 @@ impl Manager {
     fn start() -> Result<Manager> {
         harden()?;
         let config = LoginConfig::load().map_err(|problems| {
-            let lines: Vec<String> = problems.iter().map(|(line, message)| if *line == 0 { message.clone() } else { format!("line {line}: {message}") }).collect();
+            let lines: Vec<String> = problems
+                .iter()
+                .map(|(line, message)| {
+                    if *line == 0 {
+                        message.clone()
+                    } else {
+                        format!("line {line}: {message}")
+                    }
+                })
+                .collect();
             format!("{}: {}", LoginConfig::path().display(), lines.join("; "))
         })?;
-        let greeter = users::by_name(&config.greeter_user)?.ok_or_else(|| format!("greeter-user {:?} has no password database entry", config.greeter_user))?;
+        let greeter = users::by_name(&config.greeter_user)?.ok_or_else(|| {
+            format!(
+                "greeter-user {:?} has no password database entry",
+                config.greeter_user
+            )
+        })?;
         if greeter.uid == 0 {
             return Err("greeter-user must not be root".into());
         }
         // auto login skips the password: only a settings file that root alone can change may turn it on
-        let auto_login = config.auto_login.clone().filter(|_| match auto_login::settings_are_trusted(&LoginConfig::path()) {
-            Ok(()) => true,
-            Err(reason) => {
-                eprintln!("cupertino-sessiond: auto login refused: {reason}");
-                false
-            }
-        });
+        let auto_login =
+            config.auto_login.clone().filter(|_| {
+                match auto_login::settings_are_trusted(&LoginConfig::path()) {
+                    Ok(()) => true,
+                    Err(reason) => {
+                        eprintln!("cupertino-sessiond: auto login refused: {reason}");
+                        false
+                    }
+                }
+            });
         let listener = bind(Path::new(SOCKET_PATH), greeter.uid, greeter.gid)?;
         let (logind, incoming, mailbox) = watch_logind()?;
         let bus = serve_bus(&mailbox)?;
         let mut manager = Manager {
             session_path: users::session_path()?,
-            _held_terminals: vec![vt::hold(config.vt).map_err(|e| format!("holding {}: {e}", vt::device(config.vt)))?],
+            _held_terminals: vec![vt::hold(config.vt)
+                .map_err(|e| format!("holding {}: {e}", vt::device(config.vt)))?],
             config,
             greeter,
             listener,
@@ -344,23 +365,47 @@ impl Manager {
     fn wait(&self) -> Result<Vec<Ready>> {
         let mut sources = vec![(Ready::Listener, PollFd::new(&self.listener, PollFlags::IN))];
         if let Some(screen) = &self.screen {
-            sources.push((Ready::Screen, PollFd::new(screen.channel.stream(), PollFlags::IN)));
+            sources.push((
+                Ready::Screen,
+                PollFd::new(screen.channel.stream(), PollFlags::IN),
+            ));
         }
         for worker in &self.workers {
-            sources.push((Ready::WorkerExited(worker.id), PollFd::new(&worker.exited, PollFlags::IN)));
+            sources.push((
+                Ready::WorkerExited(worker.id),
+                PollFd::new(&worker.exited, PollFlags::IN),
+            ));
             if let Some(channel) = &worker.channel {
-                sources.push((Ready::WorkerMessage(worker.id), PollFd::new(channel.stream(), PollFlags::IN)));
+                sources.push((
+                    Ready::WorkerMessage(worker.id),
+                    PollFd::new(channel.stream(), PollFlags::IN),
+                ));
             }
         }
         for adopted in &self.adopted {
-            sources.push((Ready::AdoptedExited(adopted.key), PollFd::new(&adopted.leader, PollFlags::IN)));
+            sources.push((
+                Ready::AdoptedExited(adopted.key),
+                PollFd::new(&adopted.leader, PollFlags::IN),
+            ));
         }
         sources.push((Ready::Incoming, PollFd::new(&*self.wake, PollFlags::IN)));
         let (kinds, mut fds): (Vec<Ready>, Vec<PollFd<'_>>) = sources.into_iter().unzip();
-        let deadline = [self.denial_at, self.greeter_restart_at, self.attempt.as_ref().and_then(|attempt| attempt.deadline), self.switch.as_ref().map(|switch| switch.next_poll)].into_iter().chain(self.sessions.iter().map(|session| session.ready_deadline)).flatten().min();
+        let deadline = [
+            self.denial_at,
+            self.greeter_restart_at,
+            self.attempt.as_ref().and_then(|attempt| attempt.deadline),
+            self.switch.as_ref().map(|switch| switch.next_poll),
+        ]
+        .into_iter()
+        .chain(self.sessions.iter().map(|session| session.ready_deadline))
+        .flatten()
+        .min();
         let timeout = deadline.map(|at| {
             let left = at.saturating_duration_since(Instant::now());
-            Timespec { tv_sec: left.as_secs() as i64, tv_nsec: i64::from(left.subsec_nanos()) }
+            Timespec {
+                tv_sec: left.as_secs() as i64,
+                tv_nsec: i64::from(left.subsec_nanos()),
+            }
         });
         loop {
             match poll(&mut fds, timeout.as_ref()) {
@@ -370,7 +415,12 @@ impl Manager {
             }
         }
         // a hang-up or an error is readable too: the read reports it
-        let mut ready: Vec<Ready> = kinds.into_iter().zip(&fds).filter(|(_, fd)| !fd.revents().is_empty()).map(|(kind, _)| kind).collect();
+        let mut ready: Vec<Ready> = kinds
+            .into_iter()
+            .zip(&fds)
+            .filter(|(_, fd)| !fd.revents().is_empty())
+            .map(|(kind, _)| kind)
+            .collect();
         if deadline.is_some_and(|at| at <= Instant::now()) {
             ready.push(Ready::Timer);
         }
@@ -382,12 +432,25 @@ impl Manager {
         let (stream, _) = match self.listener.accept() {
             Ok(pair) => pair,
             // the peer went away between `poll` and `accept`
-            Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::ConnectionAborted | io::ErrorKind::Interrupted) => return Ok(()),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::ConnectionAborted
+                        | io::ErrorKind::Interrupted
+                ) =>
+            {
+                return Ok(())
+            }
             Err(e) => return Err(format!("accept: {e}").into()),
         };
-        let peer = rustix::net::sockopt::socket_peercred(&stream).map_err(|e| format!("SO_PEERCRED: {e}"))?;
+        let peer = rustix::net::sockopt::socket_peercred(&stream)
+            .map_err(|e| format!("SO_PEERCRED: {e}"))?;
         if peer.uid.as_raw() != self.greeter.uid {
-            eprintln!("cupertino-sessiond: refused a connection from uid {}", peer.uid.as_raw());
+            eprintln!(
+                "cupertino-sessiond: refused a connection from uid {}",
+                peer.uid.as_raw()
+            );
             return Ok(());
         }
         if self.screen.is_some() {
@@ -395,14 +458,19 @@ impl Manager {
             return Ok(());
         }
         stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
-        self.screen = Some(Screen { channel: Channel::new(stream, MAX_REQUEST_FRAME), state: State::New });
+        self.screen = Some(Screen {
+            channel: Channel::new(stream, MAX_REQUEST_FRAME),
+            state: State::New,
+        });
         eprintln!("cupertino-sessiond: the login screen connected");
         Ok(())
     }
 
     /// The screen sent bytes, or hung up.
     fn screen_readable(&mut self) {
-        let Some(screen) = &mut self.screen else { return };
+        let Some(screen) = &mut self.screen else {
+            return;
+        };
         let request = match screen.channel.read_message::<Request>() {
             Ok(None) => return,
             Ok(Some(request)) => request,
@@ -419,8 +487,16 @@ impl Manager {
             }
         };
         // an answer needs a prompt to answer; the state machine does not see the prompts
-        let unasked = matches!(request, Request::Answer { .. }) && !self.attempt.as_ref().is_some_and(|attempt| attempt.prompt_open);
-        let next = if unasked { Err(ProtocolRefusal::State) } else { screen.state.next(&request) };
+        let unasked = matches!(request, Request::Answer { .. })
+            && !self
+                .attempt
+                .as_ref()
+                .is_some_and(|attempt| attempt.prompt_open);
+        let next = if unasked {
+            Err(ProtocolRefusal::State)
+        } else {
+            screen.state.next(&request)
+        };
         match next {
             Ok(state) => screen.state = state,
             Err(refusal) => {
@@ -454,19 +530,37 @@ impl Manager {
     /// The roster of the picker. Its accounts become the ones an attempt may name.
     fn build_roster(&mut self) -> Result<roster::Roster> {
         let accounts = users::login_accounts()?;
-        let admins = if self.config.hide_admin_users { users::admin_logins()? } else { Vec::new() };
+        let admins = if self.config.hide_admin_users {
+            users::admin_logins()?
+        } else {
+            Vec::new()
+        };
         let reported = &mut self.reported_pictures;
         let logged_in: Vec<u32> = self.sessions.iter().map(|session| session.uid).collect();
-        let roster = roster::build(&self.config, accounts, &admins, &logged_in, |account| match picture::read(account.uid, Path::new(&account.home)) {
-            Ok(bytes) => bytes,
-            Err(problem) => {
-                if reported.insert(account.uid) {
-                    eprintln!("cupertino-sessiond: no picture for uid {}: {problem}", account.uid);
-                }
-                None
-            }
-        });
-        self.listed = roster.users.iter().map(|row| (row.uid, row.login.clone())).collect();
+        let roster =
+            roster::build(
+                &self.config,
+                accounts,
+                &admins,
+                &logged_in,
+                |account| match picture::read(account.uid, Path::new(&account.home)) {
+                    Ok(bytes) => bytes,
+                    Err(problem) => {
+                        if reported.insert(account.uid) {
+                            eprintln!(
+                                "cupertino-sessiond: no picture for uid {}: {problem}",
+                                account.uid
+                            );
+                        }
+                        None
+                    }
+                },
+            );
+        self.listed = roster
+            .users
+            .iter()
+            .map(|row| (row.uid, row.login.clone()))
+            .collect();
         Ok(roster)
     }
 
@@ -474,13 +568,23 @@ impl Manager {
     fn welcome(&mut self) -> Result<Event> {
         let roster = self.build_roster()?;
         let will_prompt = self.other_users_logged_in()?;
-        Ok(Event::Welcome { users: roster.users, show_other: roster.show_other, power: roster::power_menu(&self.config), will_prompt, retries_until_hint: self.config.retries_until_hint })
+        Ok(Event::Welcome {
+            users: roster.users,
+            show_other: roster.show_other,
+            power: roster::power_menu(&self.config),
+            will_prompt,
+            retries_until_hint: self.config.retries_until_hint,
+        })
     }
 
     /// Send `event` to the screen and follow its state; a screen that cannot take it is dropped.
     fn send(&mut self, event: &Event) {
-        let Some(screen) = &mut self.screen else { return };
-        let sent = encode(event, MAX_EVENT_FRAME).map_err(|e| e.to_string()).and_then(|frame| screen.channel.send_frame(&frame).map_err(|e| e.to_string()));
+        let Some(screen) = &mut self.screen else {
+            return;
+        };
+        let sent = encode(event, MAX_EVENT_FRAME)
+            .map_err(|e| e.to_string())
+            .and_then(|frame| screen.channel.send_frame(&frame).map_err(|e| e.to_string()));
         match sent {
             Ok(()) => screen.state = screen.state.after(event),
             Err(e) => {
@@ -505,13 +609,19 @@ impl Manager {
     /// Whether an attempt may start now; when not, the screen has been answered `Busy`.
     fn may_start_attempt(&mut self) -> bool {
         if self.switch.is_some() {
-            eprintln!("cupertino-sessiond: a switch of the console is under way; refusing this attempt");
-            self.send(&Event::Result { outcome: Outcome::Busy });
+            eprintln!(
+                "cupertino-sessiond: a switch of the console is under way; refusing this attempt"
+            );
+            self.send(&Event::Result {
+                outcome: Outcome::Busy,
+            });
             return false;
         }
         if !self.attempts.allow(Instant::now()) {
             eprintln!("cupertino-sessiond: more than {ATTEMPTS_PER_WINDOW} attempts within {} s; refusing this one", ATTEMPT_WINDOW.as_secs());
-            self.send(&Event::Result { outcome: Outcome::Busy });
+            self.send(&Event::Result {
+                outcome: Outcome::Busy,
+            });
             return false;
         }
         true
@@ -526,7 +636,10 @@ impl Manager {
         let login = match account {
             Account::Listed { uid } => {
                 eprintln!("cupertino-sessiond: attempt for uid {uid}");
-                self.listed.iter().find(|(listed, _)| *listed == uid).map(|(_, login)| login.clone())
+                self.listed
+                    .iter()
+                    .find(|(listed, _)| *listed == uid)
+                    .map(|(_, login)| login.clone())
             }
             Account::Typed { name } => {
                 eprintln!("cupertino-sessiond: attempt for a typed name");
@@ -553,15 +666,23 @@ impl Manager {
         // a typed name is not logged: people type passwords there
         eprintln!("cupertino-sessiond: attempt to authorise {action:?}");
         if action == PowerAction::Sleep || !self.power_shown(action) {
-            eprintln!("cupertino-sessiond: {action:?} needs no authorisation or is disabled; refusing");
-            self.send(&Event::Result { outcome: Outcome::Refused });
+            eprintln!(
+                "cupertino-sessiond: {action:?} needs no authorisation or is disabled; refusing"
+            );
+            self.send(&Event::Result {
+                outcome: Outcome::Refused,
+            });
             return;
         }
         let administrator = match users::admin_logins() {
-            Ok(administrators) => is_login_name(name) && administrators.iter().any(|login| login == name),
+            Ok(administrators) => {
+                is_login_name(name) && administrators.iter().any(|login| login == name)
+            }
             Err(e) => {
                 eprintln!("cupertino-sessiond: {e}");
-                self.send(&Event::Result { outcome: Outcome::Internal });
+                self.send(&Event::Result {
+                    outcome: Outcome::Internal,
+                });
                 return;
             }
         };
@@ -576,19 +697,36 @@ impl Manager {
 
     /// Answer the open request like a wrong password, after the time one takes.
     fn deny_unknown_account(&mut self) {
-        self.attempt = Some(Attempt { worker: None, uid: None, prompt_open: false, deadline: None, decision: None, existing: None, power: None });
+        self.attempt = Some(Attempt {
+            worker: None,
+            uid: None,
+            prompt_open: false,
+            deadline: None,
+            decision: None,
+            existing: None,
+            power: None,
+        });
         self.denial_at = Some(Instant::now() + INVALID_ACCOUNT_DELAY);
     }
 
     /// Start the worker; the outcome to report when that cannot be done. An account with a session already is only checked
     /// (the worker opens nothing and the attempt ends in a switch to that session); any other gets a terminal of its own, held
     /// until its session is gone.
-    fn start_attempt(&mut self, login: String, power: Option<PowerAction>) -> std::result::Result<(), Outcome> {
-        let uid = users::by_name(&login).map_err(|e| {
-            eprintln!("cupertino-sessiond: {e}");
-            Outcome::Internal
-        })?.map(|account| account.uid);
-        let existing = uid.filter(|_| power.is_none()).and_then(|uid| self.sessions.iter().find(|session| session.uid == uid)).map(|session| session.id.clone());
+    fn start_attempt(
+        &mut self,
+        login: String,
+        power: Option<PowerAction>,
+    ) -> std::result::Result<(), Outcome> {
+        let uid = users::by_name(&login)
+            .map_err(|e| {
+                eprintln!("cupertino-sessiond: {e}");
+                Outcome::Internal
+            })?
+            .map(|account| account.uid);
+        let existing = uid
+            .filter(|_| power.is_none())
+            .and_then(|uid| self.sessions.iter().find(|session| session.uid == uid))
+            .map(|session| session.id.clone());
         let (mode, vt, terminal) = if existing.is_some() || power.is_some() {
             (Mode::Verify, self.config.vt, None)
         } else {
@@ -615,17 +753,29 @@ impl Manager {
             environment: Vec::new(),
             path: self.session_path.clone(),
         };
-        let worker = self.spawn_worker(Role::Session, &begin, terminal).map_err(|e| {
-            eprintln!("cupertino-sessiond: {e}");
-            Outcome::Internal
-        })?;
-        self.attempt = Some(Attempt { worker: Some(worker), uid, prompt_open: false, deadline: Some(Instant::now() + ATTEMPT_TIMEOUT), decision: None, existing, power });
+        let worker = self
+            .spawn_worker(Role::Session, &begin, terminal)
+            .map_err(|e| {
+                eprintln!("cupertino-sessiond: {e}");
+                Outcome::Internal
+            })?;
+        self.attempt = Some(Attempt {
+            worker: Some(worker),
+            uid,
+            prompt_open: false,
+            deadline: Some(Instant::now() + ATTEMPT_TIMEOUT),
+            decision: None,
+            existing,
+            power,
+        });
         Ok(())
     }
 
     /// `Answer`: pass the screen's answer to the worker that asked.
     fn answer(&mut self, secret: Secret) {
-        let Some(attempt) = &mut self.attempt else { return };
+        let Some(attempt) = &mut self.attempt else {
+            return;
+        };
         attempt.prompt_open = false;
         attempt.deadline = Some(Instant::now() + ATTEMPT_TIMEOUT);
         let Some(id) = attempt.worker else { return };
@@ -635,12 +785,23 @@ impl Manager {
 
     /// `Cancel` (or the screen's end): stop an attempt that has not been accepted. Once the session starts it runs on.
     fn cancel(&mut self) {
-        if self.attempt.as_ref().is_some_and(|attempt| attempt.decision == Some(Outcome::Accepted)) {
+        if self
+            .attempt
+            .as_ref()
+            .is_some_and(|attempt| attempt.decision == Some(Outcome::Accepted))
+        {
             return;
         }
         self.denial_at = None;
-        let Some(attempt) = self.attempt.take() else { return };
-        let Some(worker) = attempt.worker.and_then(|id| self.workers.iter_mut().find(|worker| worker.id == id)) else { return };
+        let Some(attempt) = self.attempt.take() else {
+            return;
+        };
+        let Some(worker) = attempt
+            .worker
+            .and_then(|id| self.workers.iter_mut().find(|worker| worker.id == id))
+        else {
+            return;
+        };
         // before the session is accepted the worker holds nothing that needs a clean end
         if let Err(e) = worker.child.kill() {
             eprintln!("cupertino-sessiond: stopping worker {}: {e}", worker.id);
@@ -650,9 +811,21 @@ impl Manager {
     /// The attempt waited too long for the screen or its worker: end the worker, whatever the attempt had reached.
     fn abort_attempt(&mut self) {
         let Some(attempt) = &self.attempt else { return };
-        let (waited_for, worker) = (if attempt.prompt_open { "the screen's answer to a prompt" } else { "its worker" }, attempt.worker);
-        eprintln!("cupertino-sessiond: an attempt waited {} s for {waited_for}; cancelling it", ATTEMPT_TIMEOUT.as_secs());
-        if let Some(worker) = worker.and_then(|id| self.workers.iter_mut().find(|worker| worker.id == id)) {
+        let (waited_for, worker) = (
+            if attempt.prompt_open {
+                "the screen's answer to a prompt"
+            } else {
+                "its worker"
+            },
+            attempt.worker,
+        );
+        eprintln!(
+            "cupertino-sessiond: an attempt waited {} s for {waited_for}; cancelling it",
+            ATTEMPT_TIMEOUT.as_secs()
+        );
+        if let Some(worker) =
+            worker.and_then(|id| self.workers.iter_mut().find(|worker| worker.id == id))
+        {
             if let Err(e) = worker.child.kill() {
                 eprintln!("cupertino-sessiond: stopping worker {}: {e}", worker.id);
             }
@@ -661,9 +834,23 @@ impl Manager {
     }
 
     /// Write a frame to worker `id`; a worker that cannot be written to is on its way out and the exit handles it.
-    fn send_to_worker(&mut self, id: u64, frame: std::result::Result<zeroize::Zeroizing<Vec<u8>>, cupertino_login_ipc::FrameError>) {
-        let Some(channel) = self.workers.iter_mut().find(|worker| worker.id == id).and_then(|worker| worker.channel.as_mut()) else { return };
-        if let Err(e) = frame.map_err(|e| e.to_string()).and_then(|frame| channel.send_frame(&frame).map_err(|e| e.to_string())) {
+    fn send_to_worker(
+        &mut self,
+        id: u64,
+        frame: std::result::Result<zeroize::Zeroizing<Vec<u8>>, cupertino_login_ipc::FrameError>,
+    ) {
+        let Some(channel) = self
+            .workers
+            .iter_mut()
+            .find(|worker| worker.id == id)
+            .and_then(|worker| worker.channel.as_mut())
+        else {
+            return;
+        };
+        if let Err(e) = frame
+            .map_err(|e| e.to_string())
+            .and_then(|frame| channel.send_frame(&frame).map_err(|e| e.to_string()))
+        {
             eprintln!("cupertino-sessiond: worker {id}: {e}");
         }
     }
@@ -681,7 +868,9 @@ impl Manager {
             if found.state == "closing" {
                 continue;
             }
-            if role == Role::Greeter && (found.uid != self.greeter.uid || self.greeter_session.is_some()) {
+            if role == Role::Greeter
+                && (found.uid != self.greeter.uid || self.greeter_session.is_some())
+            {
                 eprintln!("cupertino-sessiond: ignoring the login screen session {} (not the greeter account's, or a second one)", found.id);
                 continue;
             }
@@ -692,12 +881,18 @@ impl Manager {
 
     /// Adopt one session: watch its leader and, for a user, note it in the table and hold its terminal.
     fn adopt(&mut self, role: Role, found: SeatSession) -> Result<()> {
-        let leader = i32::try_from(found.leader).ok().and_then(rustix::process::Pid::from_raw).ok_or_else(|| format!("session {} has no leader process", found.id))?;
+        let leader = i32::try_from(found.leader)
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+            .ok_or_else(|| format!("session {} has no leader process", found.id))?;
         let watch = match pidfd_open(leader, PidfdFlags::empty()) {
             Ok(watch) => watch,
             Err(rustix::io::Errno::SRCH) => {
                 // the leader is gone: the session is ending and nothing is left to supervise
-                eprintln!("cupertino-sessiond: session {} has no leader any more; terminating it", found.id);
+                eprintln!(
+                    "cupertino-sessiond: session {} has no leader any more; terminating it",
+                    found.id
+                );
                 if let Err(e) = self.logind.terminate_session(&found.id) {
                     eprintln!("cupertino-sessiond: {e}");
                 }
@@ -707,7 +902,10 @@ impl Manager {
         };
         let key = self.next_worker;
         self.next_worker += 1;
-        eprintln!("cupertino-sessiond: adopted the {role:?} session {} (process {}, VT {})", found.id, found.leader, found.vt);
+        eprintln!(
+            "cupertino-sessiond: adopted the {role:?} session {} (process {}, VT {})",
+            found.id, found.leader, found.vt
+        );
         match role {
             Role::Greeter => {
                 self.greeter_session = Some(found.id.clone());
@@ -717,24 +915,45 @@ impl Manager {
                 let terminal = match vt::hold(found.vt) {
                     Ok(terminal) => Some(terminal),
                     Err(e) => {
-                        eprintln!("cupertino-sessiond: holding {} for session {}: {e}", vt::device(found.vt), found.id);
+                        eprintln!(
+                            "cupertino-sessiond: holding {} for session {}: {e}",
+                            vt::device(found.vt),
+                            found.id
+                        );
                         None
                     }
                 };
                 // an adopted session was running before this run: its agent announces itself again, so it counts as ready
-                self.sessions.push(Session { id: found.id.clone(), uid: found.uid, worker: None, ready: true, ready_deadline: None, agent: None, _terminal: terminal });
+                self.sessions.push(Session {
+                    id: found.id.clone(),
+                    uid: found.uid,
+                    worker: None,
+                    ready: true,
+                    ready_deadline: None,
+                    agent: None,
+                    _terminal: terminal,
+                });
             }
         }
-        self.adopted.push(Adopted { key, id: found.id, leader: watch });
+        self.adopted.push(Adopted {
+            key,
+            id: found.id,
+            leader: watch,
+        });
         Ok(())
     }
 
     /// The leader of an adopted session exited: its worker closes the PAM session, and what the leader left in the session is
     /// terminated so that logind can remove it (as for a session this run started, see `worker_exited`).
     fn adopted_exited(&mut self, key: u64) {
-        let Some(index) = self.adopted.iter().position(|adopted| adopted.key == key) else { return };
+        let Some(index) = self.adopted.iter().position(|adopted| adopted.key == key) else {
+            return;
+        };
         let adopted = self.adopted.remove(index);
-        eprintln!("cupertino-sessiond: the leader of the adopted session {} exited", adopted.id);
+        eprintln!(
+            "cupertino-sessiond: the leader of the adopted session {} exited",
+            adopted.id
+        );
         if let Err(e) = self.logind.terminate_session(&adopted.id) {
             eprintln!("cupertino-sessiond: {e}");
         }
@@ -744,21 +963,37 @@ impl Manager {
     /// the login screen's session is up. The claim is taken first, so a crash of the manager or a restart cannot repeat it, and
     /// it is skipped when the account has a session already (a person got there first).
     fn try_auto_login(&mut self) {
-        let Some(login) = self.auto_login.take() else { return };
+        let Some(login) = self.auto_login.take() else {
+            return;
+        };
         if let Err(reason) = self.auto_login_start(&login) {
             eprintln!("cupertino-sessiond: auto login: {reason}");
         }
     }
 
     fn auto_login_start(&mut self, login: &str) -> std::result::Result<(), String> {
-        let account = users::login_accounts().map_err(|e| e.to_string())?.into_iter().find(|account| account.login == login).ok_or_else(|| format!("{login:?} is not an ordinary account with a login shell"))?;
-        if !auto_login::claim(Path::new(auto_login::DONE_FLAG)).map_err(|e| format!("{}: {e}", auto_login::DONE_FLAG))? {
+        let account = users::login_accounts()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|account| account.login == login)
+            .ok_or_else(|| format!("{login:?} is not an ordinary account with a login shell"))?;
+        if !auto_login::claim(Path::new(auto_login::DONE_FLAG))
+            .map_err(|e| format!("{}: {e}", auto_login::DONE_FLAG))?
+        {
             return Err("already done since boot".to_owned());
         }
-        if self.logind.user_sessions().map_err(|e| e.to_string())?.iter().any(|session| session.uid == account.uid) {
+        if self
+            .logind
+            .user_sessions()
+            .map_err(|e| e.to_string())?
+            .iter()
+            .any(|session| session.uid == account.uid)
+        {
             return Err(format!("{login:?} has a session already"));
         }
-        let (vt, terminal) = vt::allocate(self.config.vt).map_err(|e| format!("allocating a virtual terminal: {e}"))?.ok_or("no virtual terminal is free for a session")?;
+        let (vt, terminal) = vt::allocate(self.config.vt)
+            .map_err(|e| format!("allocating a virtual terminal: {e}"))?
+            .ok_or("no virtual terminal is free for a session")?;
         let begin = ToWorker::Begin {
             service: AUTO_LOGIN_SERVICE.to_owned(),
             login: account.login,
@@ -770,7 +1005,9 @@ impl Manager {
             environment: Vec::new(),
             path: self.session_path.clone(),
         };
-        let worker = self.spawn_worker(Role::Session, &begin, Some(terminal)).map_err(|e| e.to_string())?;
+        let worker = self
+            .spawn_worker(Role::Session, &begin, Some(terminal))
+            .map_err(|e| e.to_string())?;
         self.auto_login_worker = Some(worker);
         eprintln!("cupertino-sessiond: auto login for uid {}", account.uid);
         Ok(())
@@ -793,7 +1030,12 @@ impl Manager {
     }
 
     /// Start `cupertino-sessiond worker` with one end of a socketpair as its standard input and send it `begin`.
-    fn spawn_worker(&mut self, role: Role, begin: &ToWorker, terminal: Option<File>) -> Result<u64> {
+    fn spawn_worker(
+        &mut self,
+        role: Role,
+        begin: &ToWorker,
+        terminal: Option<File>,
+    ) -> Result<u64> {
         let (ours, theirs) = UnixStream::pair()?;
         let child = Command::new(std::env::current_exe()?)
             .arg("worker")
@@ -801,21 +1043,37 @@ impl Manager {
             .stdin(Stdio::from(OwnedFd::from(theirs)))
             .spawn()
             .map_err(|e| format!("starting a worker: {e}"))?;
-        let exited = pidfd_open(rustix::process::Pid::from_raw(child.id() as i32).ok_or("a worker has no process id")?, PidfdFlags::empty()).map_err(|e| format!("pidfd_open: {e}"))?;
+        let exited = pidfd_open(
+            rustix::process::Pid::from_raw(child.id() as i32)
+                .ok_or("a worker has no process id")?,
+            PidfdFlags::empty(),
+        )
+        .map_err(|e| format!("pidfd_open: {e}"))?;
         let mut channel = Channel::new(ours, MAX_FRAME);
         channel.send_frame(&encode(begin, MAX_FRAME)?)?;
         let id = self.next_worker;
         self.next_worker += 1;
         eprintln!("cupertino-sessiond: worker {id} started for the {role:?}");
-        self.workers.push(Worker { id, role, child, exited, channel: Some(channel), terminal });
+        self.workers.push(Worker {
+            id,
+            role,
+            child,
+            exited,
+            channel: Some(channel),
+            terminal,
+        });
         Ok(id)
     }
 
     /// A worker wrote.
     fn worker_message(&mut self, id: u64) {
-        let Some(worker) = self.workers.iter_mut().find(|worker| worker.id == id) else { return };
+        let Some(worker) = self.workers.iter_mut().find(|worker| worker.id == id) else {
+            return;
+        };
         let role = worker.role;
-        let Some(channel) = &mut worker.channel else { return };
+        let Some(channel) = &mut worker.channel else {
+            return;
+        };
         let message = match channel.read_message::<FromWorker>() {
             Ok(None) => return,
             Ok(Some(message)) => message,
@@ -828,7 +1086,10 @@ impl Manager {
                 return;
             }
         };
-        let current = self.attempt.as_ref().is_some_and(|attempt| attempt.worker == Some(id));
+        let current = self
+            .attempt
+            .as_ref()
+            .is_some_and(|attempt| attempt.worker == Some(id));
         match message {
             FromWorker::Prompt { echo, text } if role == Role::Session && current => {
                 if let Some(attempt) = &mut self.attempt {
@@ -838,8 +1099,12 @@ impl Manager {
                 self.send(&Event::Prompt { echo, text });
             }
             // the login screen's own session asks nothing, and an attempt that was dropped has no one to ask
-            FromWorker::Prompt { .. } => self.send_to_worker(id, encode(&ToWorker::Cancel {}, MAX_FRAME)),
-            FromWorker::Notice { error, text } if current => self.send(&Event::Notice { error, text }),
+            FromWorker::Prompt { .. } => {
+                self.send_to_worker(id, encode(&ToWorker::Cancel {}, MAX_FRAME))
+            }
+            FromWorker::Notice { error, text } if current => {
+                self.send(&Event::Notice { error, text })
+            }
             FromWorker::Notice { .. } => {}
             FromWorker::Decided { outcome } if current => self.decided(outcome),
             FromWorker::Decided { outcome } => {
@@ -847,7 +1112,11 @@ impl Manager {
                     eprintln!("cupertino-sessiond: auto login was not accepted ({outcome:?})");
                 }
             }
-            FromWorker::Started { session_id, leader, uid } => self.started(id, role, &session_id, leader, uid),
+            FromWorker::Started {
+                session_id,
+                leader,
+                uid,
+            } => self.started(id, role, &session_id, leader, uid),
             FromWorker::Failed { reason } => {
                 eprintln!("cupertino-sessiond: worker {id} failed: {reason}");
                 if current {
@@ -859,7 +1128,9 @@ impl Manager {
 
     /// The worker decided the open attempt.
     fn decided(&mut self, outcome: Outcome) {
-        let Some(attempt) = &mut self.attempt else { return };
+        let Some(attempt) = &mut self.attempt else {
+            return;
+        };
         attempt.decision = Some(outcome);
         if outcome != Outcome::Accepted {
             self.attempt = None;
@@ -904,11 +1175,17 @@ impl Manager {
     /// proved it; unlock result 4 of the design), then the console switches and the login screen is
     /// shown again for the next time.
     fn switch_to_session(&mut self, id: &str) {
-        let agent = self.sessions.iter().find(|session| session.id == id).and_then(|session| session.agent.clone());
+        let agent = self
+            .sessions
+            .iter()
+            .find(|session| session.id == id)
+            .and_then(|session| session.agent.clone());
         match agent {
             Some(agent) => {
                 if let Err(e) = service::unlock(&self._bus, &agent) {
-                    eprintln!("cupertino-sessiond: telling the agent of session {id} to unlock: {e}");
+                    eprintln!(
+                        "cupertino-sessiond: telling the agent of session {id} to unlock: {e}"
+                    );
                 }
             }
             None => eprintln!("cupertino-sessiond: session {id} has no agent to unlock it"),
@@ -923,18 +1200,31 @@ impl Manager {
     fn activate(&mut self, id: &str) -> std::result::Result<(), logind::Error> {
         self.logind.activate_session(id)?;
         let now = Instant::now();
-        self.switch = Some(Switch { target: id.to_owned(), next_poll: now + SWITCH_POLL, give_up_at: now + SWITCH_GIVE_UP });
+        self.switch = Some(Switch {
+            target: id.to_owned(),
+            next_poll: now + SWITCH_POLL,
+            give_up_at: now + SWITCH_GIVE_UP,
+        });
         Ok(())
     }
 
     /// `SwitchToLoginWindow` of a session's agent (which locked its screen first): the login screen takes the console.
-    fn switch_to_login_window(&mut self, caller: &CallerSession) -> std::result::Result<(), service::SwitchRefusal> {
+    fn switch_to_login_window(
+        &mut self,
+        caller: &CallerSession,
+    ) -> std::result::Result<(), service::SwitchRefusal> {
         if self.switch.is_some() {
             eprintln!("cupertino-sessiond: session {} asked for the login window while a switch is under way; ignored", caller.id);
             return Ok(());
         }
-        let greeter = self.greeter_session.clone().ok_or(service::SwitchRefusal::NoLoginScreen)?;
-        eprintln!("cupertino-sessiond: session {} switches to the login window", caller.id);
+        let greeter = self
+            .greeter_session
+            .clone()
+            .ok_or(service::SwitchRefusal::NoLoginScreen)?;
+        eprintln!(
+            "cupertino-sessiond: session {} switches to the login window",
+            caller.id
+        );
         self.activate(&greeter).map_err(|e| {
             eprintln!("cupertino-sessiond: {e}");
             service::SwitchRefusal::Failed
@@ -957,15 +1247,35 @@ impl Manager {
             self.try_auto_login();
             return;
         }
-        let terminal = self.workers.iter_mut().find(|worker| worker.id == id).and_then(|worker| worker.terminal.take());
-        self.sessions.push(Session { id: session_id.to_owned(), uid, worker: Some(id), ready: false, ready_deadline: None, agent: None, _terminal: terminal });
-        if self.attempt.as_ref().is_some_and(|attempt| attempt.worker == Some(id)) {
+        let terminal = self
+            .workers
+            .iter_mut()
+            .find(|worker| worker.id == id)
+            .and_then(|worker| worker.terminal.take());
+        self.sessions.push(Session {
+            id: session_id.to_owned(),
+            uid,
+            worker: Some(id),
+            ready: false,
+            ready_deadline: None,
+            agent: None,
+            _terminal: terminal,
+        });
+        if self
+            .attempt
+            .as_ref()
+            .is_some_and(|attempt| attempt.worker == Some(id))
+        {
             self.attempt = None;
         }
         match self.bring_to_console(session_id) {
             // the login screen keeps its spinner until the session's agent says it is up, at most [`SESSION_READY_TIMEOUT`]
             Ok(()) => {
-                if let Some(session) = self.sessions.iter_mut().find(|session| session.id == session_id) {
+                if let Some(session) = self
+                    .sessions
+                    .iter_mut()
+                    .find(|session| session.id == session_id)
+                {
                     session.ready_deadline = Some(Instant::now() + SESSION_READY_TIMEOUT);
                 }
             }
@@ -983,7 +1293,10 @@ impl Manager {
     fn bring_to_console(&mut self, session_id: &str) -> Result<()> {
         if self.logind.is_active(session_id)? {
             eprintln!("cupertino-sessiond: logind activated session {session_id} by itself; activating the login screen's session again");
-            let greeter = self.greeter_session.as_deref().ok_or("the login screen has no session to activate again")?;
+            let greeter = self
+                .greeter_session
+                .as_deref()
+                .ok_or("the login screen has no session to activate again")?;
             self.logind.activate_session(greeter)?;
         } else {
             eprintln!("cupertino-sessiond: session {session_id} is not active; activating it");
@@ -994,9 +1307,13 @@ impl Manager {
 
     /// The open attempt cannot go on (its worker failed or died): `Internal` before the decision, a `Reset` after it.
     fn attempt_failed(&mut self) {
-        let Some(attempt) = self.attempt.take() else { return };
+        let Some(attempt) = self.attempt.take() else {
+            return;
+        };
         match attempt.decision {
-            None => self.send(&Event::Result { outcome: Outcome::Internal }),
+            None => self.send(&Event::Result {
+                outcome: Outcome::Internal,
+            }),
             Some(_) => self.send(&Event::Reset),
         }
     }
@@ -1006,23 +1323,42 @@ impl Manager {
         let now = Instant::now();
         if self.denial_at.is_some_and(|at| at <= now) {
             self.denial_at = None;
-            if self.attempt.as_ref().is_some_and(|attempt| attempt.worker.is_none()) {
+            if self
+                .attempt
+                .as_ref()
+                .is_some_and(|attempt| attempt.worker.is_none())
+            {
                 self.attempt = None;
-                self.send(&Event::Result { outcome: Outcome::Denied });
+                self.send(&Event::Result {
+                    outcome: Outcome::Denied,
+                });
             }
         }
-        if self.attempt.as_ref().and_then(|attempt| attempt.deadline).is_some_and(|at| at <= now) {
+        if self
+            .attempt
+            .as_ref()
+            .and_then(|attempt| attempt.deadline)
+            .is_some_and(|at| at <= now)
+        {
             self.abort_attempt();
         }
         if self.greeter_restart_at.is_some_and(|at| at <= now) {
             self.greeter_restart_at = None;
             self.start_greeter()?;
         }
-        if self.switch.as_ref().is_some_and(|switch| switch.next_poll <= now) {
+        if self
+            .switch
+            .as_ref()
+            .is_some_and(|switch| switch.next_poll <= now)
+        {
             self.follow_switch(now);
         }
         let mut gave_up = false;
-        for session in self.sessions.iter_mut().filter(|session| session.ready_deadline.is_some_and(|at| at <= now)) {
+        for session in self
+            .sessions
+            .iter_mut()
+            .filter(|session| session.ready_deadline.is_some_and(|at| at <= now))
+        {
             session.ready_deadline = None;
             gave_up = true;
             eprintln!("cupertino-sessiond: session {} sent no ready signal within {} s; showing the login screen again", session.id, SESSION_READY_TIMEOUT.as_secs());
@@ -1036,7 +1372,9 @@ impl Manager {
     /// Ask logind whether the session switched to is in the foreground; the switch is over when it is, or after
     /// [`SWITCH_GIVE_UP`].
     fn follow_switch(&mut self, now: Instant) {
-        let Some(switch) = &mut self.switch else { return };
+        let Some(switch) = &mut self.switch else {
+            return;
+        };
         match self.logind.is_active(&switch.target) {
             Ok(true) => self.switch = None,
             Ok(false) if now >= switch.give_up_at => {
@@ -1054,22 +1392,35 @@ impl Manager {
 
     /// A worker exited: reap it.
     fn worker_exited(&mut self, id: u64) -> Result<()> {
-        let Some(index) = self.workers.iter().position(|worker| worker.id == id) else { return Ok(()) };
+        let Some(index) = self.workers.iter().position(|worker| worker.id == id) else {
+            return Ok(());
+        };
         let mut worker = self.workers.remove(index);
         let status: ExitStatus = worker.child.wait()?;
-        eprintln!("cupertino-sessiond: worker {id} ({:?}) exited: {status}", worker.role);
+        eprintln!(
+            "cupertino-sessiond: worker {id} ({:?}) exited: {status}",
+            worker.role
+        );
         if self.auto_login_worker == Some(id) {
             self.auto_login_worker = None;
         }
         match worker.role {
             Role::Greeter => self.greeter_ended(),
             Role::Session => {
-                if self.attempt.as_ref().is_some_and(|attempt| attempt.worker == Some(id)) {
+                if self
+                    .attempt
+                    .as_ref()
+                    .is_some_and(|attempt| attempt.worker == Some(id))
+                {
                     self.attempt_failed();
                 }
                 // the leader is gone and its PAM session closed; whatever it left behind in the session is killed so that logind
                 // can remove the session (the design's final hooks end the session's processes the same way)
-                if let Some(session) = self.sessions.iter().find(|session| session.worker == Some(id)) {
+                if let Some(session) = self
+                    .sessions
+                    .iter()
+                    .find(|session| session.worker == Some(id))
+                {
                     if let Err(e) = self.logind.terminate_session(&session.id) {
                         eprintln!("cupertino-sessiond: {e}");
                     }
@@ -1084,7 +1435,11 @@ impl Manager {
         self.greeter_session = None;
         let now = Instant::now();
         self.greeter_failures.push_back(now);
-        while self.greeter_failures.front().is_some_and(|&at| now.duration_since(at) > GREETER_FAILURE_WINDOW) {
+        while self
+            .greeter_failures
+            .front()
+            .is_some_and(|&at| now.duration_since(at) > GREETER_FAILURE_WINDOW)
+        {
             self.greeter_failures.pop_front();
         }
         if self.greeter_failures.len() >= GREETER_FAILURES {
@@ -1107,7 +1462,9 @@ impl Manager {
         while let Ok(item) = self.incoming.try_recv() {
             match item {
                 Incoming::Logind(Signal::SessionRemoved(id)) => self.session_removed(&id)?,
-                Incoming::Logind(Signal::Ended(reason)) => return Err(format!("logind's signals ended ({reason})").into()),
+                Incoming::Logind(Signal::Ended(reason)) => {
+                    return Err(format!("logind's signals ended ({reason})").into())
+                }
                 Incoming::Call(call) => self.call(call),
             }
         }
@@ -1117,8 +1474,15 @@ impl Manager {
     /// A method of `org.cupertino.LoginManager1` that needs the manager's state; the caller is authorised already.
     fn call(&mut self, call: Call) {
         match call {
-            Call::Power { session, action, reply } => {
-                eprintln!("cupertino-sessiond: power request {action:?} from session {}", session.id);
+            Call::Power {
+                session,
+                action,
+                reply,
+            } => {
+                eprintln!(
+                    "cupertino-sessiond: power request {action:?} from session {}",
+                    session.id
+                );
                 let result = self.power(action, &Requester::Agent(&session));
                 if reply.send(result).is_err() {
                     eprintln!("cupertino-sessiond: the caller of RequestPower stopped waiting");
@@ -1127,10 +1491,16 @@ impl Manager {
             Call::SwitchToLoginWindow { session, reply } => {
                 let result = self.switch_to_login_window(&session);
                 if reply.send(result).is_err() {
-                    eprintln!("cupertino-sessiond: the caller of SwitchToLoginWindow stopped waiting");
+                    eprintln!(
+                        "cupertino-sessiond: the caller of SwitchToLoginWindow stopped waiting"
+                    );
                 }
             }
-            Call::Ready { session, agent, reply } => {
+            Call::Ready {
+                session,
+                agent,
+                reply,
+            } => {
                 let result = self.session_ready(&session, agent);
                 if reply.send(result).is_err() {
                     eprintln!("cupertino-sessiond: the caller of SessionReady stopped waiting");
@@ -1141,10 +1511,18 @@ impl Manager {
 
     /// The agent of a session this manager started is up: it is registered, and the login screen, which kept its spinner
     /// while the session started, is shown again.
-    fn session_ready(&mut self, caller: &CallerSession, agent: String) -> std::result::Result<(), ReadyRefusal> {
+    fn session_ready(
+        &mut self,
+        caller: &CallerSession,
+        agent: String,
+    ) -> std::result::Result<(), ReadyRefusal> {
         let id = caller.id.as_str();
         // the caller is the user the session was started for, as well as in the session
-        let session = self.sessions.iter_mut().find(|session| session.id == id && session.uid == caller.uid).ok_or(ReadyRefusal::UnknownSession)?;
+        let session = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == id && session.uid == caller.uid)
+            .ok_or(ReadyRefusal::UnknownSession)?;
         session.agent = Some(agent);
         // an agent that restarts, or that finds the manager restarted, announces the session again
         if session.ready {
@@ -1170,8 +1548,14 @@ impl Manager {
     /// is open, and an agent only when none is open that belongs to another user or when it belongs to an administrator (the
     /// reference asks for an administrator's authentication, the dialog is a later unit's). A block inhibitor refuses
     /// the call although the manager is root.
-    fn power(&mut self, action: PowerAction, requester: &Requester<'_>) -> std::result::Result<(), PowerRefusal> {
-        if matches!(requester, Requester::Screen | Requester::Administrator) && !self.power_shown(action) {
+    fn power(
+        &mut self,
+        action: PowerAction,
+        requester: &Requester<'_>,
+    ) -> std::result::Result<(), PowerRefusal> {
+        if matches!(requester, Requester::Screen | Requester::Administrator)
+            && !self.power_shown(action)
+        {
             return Err(PowerRefusal::Disabled);
         }
         if action != PowerAction::Sleep && !self.may_end_other_sessions(requester)? {
@@ -1203,12 +1587,21 @@ impl Manager {
     }
 
     /// Whether `requester` may end the sessions of users it is not.
-    fn may_end_other_sessions(&self, requester: &Requester<'_>) -> std::result::Result<bool, PowerRefusal> {
+    fn may_end_other_sessions(
+        &self,
+        requester: &Requester<'_>,
+    ) -> std::result::Result<bool, PowerRefusal> {
         let failed = |e: &dyn std::fmt::Display| {
             eprintln!("cupertino-sessiond: {e}");
             PowerRefusal::Failed
         };
-        let uids: Vec<u32> = self.logind.user_sessions().map_err(|e| failed(&e))?.iter().map(|session| session.uid).collect();
+        let uids: Vec<u32> = self
+            .logind
+            .user_sessions()
+            .map_err(|e| failed(&e))?
+            .iter()
+            .map(|session| session.uid)
+            .collect();
         let asker = match requester {
             Requester::Screen => Asker::Screen,
             Requester::Administrator => Asker::Administrator,
@@ -1232,7 +1625,9 @@ impl Manager {
             self.greeter_adopted = false;
             return self.greeter_ended();
         }
-        let Some(index) = self.sessions.iter().position(|session| session.id == id) else { return Ok(()) };
+        let Some(index) = self.sessions.iter().position(|session| session.id == id) else {
+            return Ok(());
+        };
         // dropping the record releases the terminal
         self.sessions.remove(index);
         let foreground = match self.logind.active_session() {
@@ -1266,8 +1661,14 @@ impl Manager {
         if self.screen.is_none() {
             return;
         }
-        match self.build_roster().and_then(|roster| Ok((roster, self.other_users_logged_in()?))) {
-            Ok((roster, will_prompt)) => self.send(&Event::Users { users: roster.users, will_prompt }),
+        match self
+            .build_roster()
+            .and_then(|roster| Ok((roster, self.other_users_logged_in()?)))
+        {
+            Ok((roster, will_prompt)) => self.send(&Event::Users {
+                users: roster.users,
+                will_prompt,
+            }),
             Err(e) => {
                 eprintln!("cupertino-sessiond: {e}");
                 self.drop_screen();
@@ -1291,7 +1692,10 @@ impl Manager {
 fn watch_logind() -> Result<(Logind, Receiver<Incoming>, Mailbox)> {
     let logind = Logind::connect()?;
     let (sender, incoming) = channel();
-    let mailbox = Mailbox { sender, wake: Arc::new(eventfd(0, EventfdFlags::CLOEXEC | EventfdFlags::NONBLOCK)?) };
+    let mailbox = Mailbox {
+        sender,
+        wake: Arc::new(eventfd(0, EventfdFlags::CLOEXEC | EventfdFlags::NONBLOCK)?),
+    };
     let signals = mailbox.clone();
     // the receiver lives as long as the manager
     logind.watch(move |signal| {
@@ -1306,21 +1710,30 @@ fn serve_bus(mailbox: &Mailbox) -> Result<zbus::blocking::Connection> {
     let authorizer = Arc::new(LogindAuthorizer(Logind::connect()?));
     let commands = mailbox.clone();
     let sink: service::Sink = Arc::new(move |call| commands.post(Incoming::Call(call)));
-    Ok(service::serve(zbus::blocking::connection::Builder::system()?, authorizer, sink).map_err(|e| format!("serving {}: {e}", service::BUS_NAME))?)
+    Ok(service::serve(
+        zbus::blocking::connection::Builder::system()?,
+        authorizer,
+        sink,
+    )
+    .map_err(|e| format!("serving {}: {e}", service::BUS_NAME))?)
 }
 
 /// Tell systemd the manager is up (`Type=notify`): the socket listens, the login screen's session is starting and the bus name
 /// is taken, so a unit ordered after this one finds the name. Outside systemd there is no `NOTIFY_SOCKET` and nothing to tell.
 fn notify_ready() -> Result<()> {
     use std::os::linux::net::SocketAddrExt;
-    let Some(path) = std::env::var_os("NOTIFY_SOCKET").filter(|path| !path.is_empty()) else { return Ok(()) };
+    let Some(path) = std::env::var_os("NOTIFY_SOCKET").filter(|path| !path.is_empty()) else {
+        return Ok(());
+    };
     let bytes = std::os::unix::ffi::OsStrExt::as_bytes(path.as_os_str());
     // an abstract socket's name starts with `@`
     let address = match bytes.strip_prefix(b"@") {
         Some(name) => std::os::unix::net::SocketAddr::from_abstract_name(name)?,
         None => std::os::unix::net::SocketAddr::from_pathname(&path)?,
     };
-    std::os::unix::net::UnixDatagram::unbound()?.send_to_addr(b"READY=1", &address).map_err(|e| format!("telling systemd the manager is ready: {e}"))?;
+    std::os::unix::net::UnixDatagram::unbound()?
+        .send_to_addr(b"READY=1", &address)
+        .map_err(|e| format!("telling systemd the manager is ready: {e}"))?;
     Ok(())
 }
 
@@ -1330,7 +1743,13 @@ fn harden() -> Result<()> {
     if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
         return Err(format!("PR_SET_DUMPABLE: {}", io::Error::last_os_error()).into());
     }
-    rustix::process::setrlimit(rustix::process::Resource::Core, rustix::process::Rlimit { current: Some(0), maximum: Some(0) })?;
+    rustix::process::setrlimit(
+        rustix::process::Resource::Core,
+        rustix::process::Rlimit {
+            current: Some(0),
+            maximum: Some(0),
+        },
+    )?;
     Ok(())
 }
 
@@ -1341,7 +1760,8 @@ fn bind(path: &Path, uid: u32, gid: u32) -> Result<UnixListener> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("removing {}: {e}", path.display()).into()),
     }
-    let listener = UnixListener::bind(path).map_err(|e| format!("binding {}: {e}", path.display()))?;
+    let listener =
+        UnixListener::bind(path).map_err(|e| format!("binding {}: {e}", path.display()))?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     chown(path, Some(uid), Some(gid))?;
     listener.set_nonblocking(true)?;
@@ -1359,7 +1779,10 @@ mod tests {
         // Safety: `getuid` and `getgid` have no preconditions.
         let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
         let _listener = bind(&path, uid, gid).unwrap();
-        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         // a stale socket of an earlier run does not stop the next bind
         drop(_listener);
         bind(&path, uid, gid).unwrap();

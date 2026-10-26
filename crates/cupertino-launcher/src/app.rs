@@ -2,16 +2,22 @@
 //! backdrop, routes keys and pointer input to the model and starts what it activates. The key
 //! translation lives in `cupertino_launcher::surface`.
 
-use cupertino_client::{ActivationRequest, Anchor, Backdrop, Button, Client, DisplayOptions, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig, Margin, OutputGeometry, OutputId, PointerEvent, SurfaceId};
+use cupertino_assets::{AssetError, Assets};
+use cupertino_client::{
+    ActivationRequest, Anchor, Backdrop, Button, Client, DisplayOptions, Event,
+    KeyboardInteractivity, Layer, LayerSurfaceConfig, Margin, OutputGeometry, OutputId,
+    PointerEvent, SurfaceId,
+};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_launcher::control;
 use cupertino_launcher::exec::CommandSpec;
 use cupertino_launcher::files::{FileIndex, FileSearchConfig};
 use cupertino_launcher::panel::{Focus, Now, Panel, PanelCommand, PanelEvent};
-use cupertino_launcher::render::{Layers, PanelImage, PanelLayout, PanelRenderer, PanelStyle, RenderOptions, SurfaceGeometry};
+use cupertino_launcher::render::{
+    Layers, PanelImage, PanelLayout, PanelRenderer, PanelStyle, RenderOptions, SurfaceGeometry,
+};
 use cupertino_launcher::surface::panel_key;
 use cupertino_launcher::{Action, Activation, Launcher, LauncherConfig};
-use cupertino_assets::{AssetError, Assets};
 use cupertino_theme::{Appearance, Theme};
 use std::collections::HashMap;
 use std::error::Error;
@@ -31,7 +37,11 @@ const NAMESPACE: &str = "cupertino-launcher";
 const MIN_OPACITY: f64 = 0.002;
 
 /// Shadow and content; the material is the server's backdrop.
-const LAYERS: Layers = Layers { shadow: true, background: false, content: true };
+const LAYERS: Layers = Layers {
+    shadow: true,
+    background: false,
+    content: true,
+};
 
 /// Command line of the process.
 pub struct Options {
@@ -44,12 +54,17 @@ pub struct Options {
 impl Options {
     /// Parse the arguments; the problem is returned as the error.
     pub fn parse(args: impl Iterator<Item = String>) -> std::result::Result<Self, String> {
-        let mut options = Options { files: true, terminal: None };
+        let mut options = Options {
+            files: true,
+            terminal: None,
+        };
         let mut args = args;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--no-files" => options.files = false,
-                "--terminal" => options.terminal = Some(args.next().ok_or("--terminal needs a program")?),
+                "--terminal" => {
+                    options.terminal = Some(args.next().ok_or("--terminal needs a program")?)
+                }
                 _ => return Err(format!("unknown argument {arg}")),
             }
         }
@@ -106,13 +121,25 @@ struct App {
 /// The first output the server has described: the guess a panel surface without an output is
 /// sized for.
 fn first_output(client: &Client) -> Result<(OutputId, OutputGeometry)> {
-    Ok(client.outputs().into_iter().find_map(|o| o.geometry.map(|g| (o.id, g))).ok_or("the server has no output")?)
+    Ok(client
+        .outputs()
+        .into_iter()
+        .find_map(|o| o.geometry.map(|g| (o.id, g)))
+        .ok_or("the server has no output")?)
 }
 
 /// The panel renderer for the session's appearance and display options.
-fn panel_renderer(theme: &Theme, assets: &Assets, dark: bool, options: DisplayOptions) -> std::result::Result<PanelRenderer, AssetError> {
+fn panel_renderer(
+    theme: &Theme,
+    assets: &Assets,
+    dark: bool,
+    options: DisplayOptions,
+) -> std::result::Result<PanelRenderer, AssetError> {
     let appearance = Appearance::of_session(dark, options.increase_contrast);
-    PanelRenderer::new(PanelStyle::from_theme(theme, appearance, options.reduce_transparency), assets)
+    PanelRenderer::new(
+        PanelStyle::from_theme(theme, appearance, options.reduce_transparency),
+        assets,
+    )
 }
 
 fn output_size(geometry: OutputGeometry) -> Size {
@@ -121,14 +148,22 @@ fn output_size(geometry: OutputGeometry) -> Size {
 
 /// The panel surface: over the menu bar's zone, as large as `geometry` says, at the top of `output`;
 /// without one the server puts it on the output under the pointer.
-fn panel_surface(client: &mut Client, output: Option<OutputId>, geometry: &SurfaceGeometry, keyboard: KeyboardInteractivity) -> Result<SurfaceId> {
+fn panel_surface(
+    client: &mut Client,
+    output: Option<OutputId>,
+    geometry: &SurfaceGeometry,
+    keyboard: KeyboardInteractivity,
+) -> Result<SurfaceId> {
     Ok(client.layer_surface(&LayerSurfaceConfig {
         namespace: NAMESPACE.to_string(),
         output,
         layer: Layer::Overlay,
         anchor: Anchor::Top,
         size: geometry.size,
-        margin: Margin { top: geometry.top_margin, ..Margin::default() },
+        margin: Margin {
+            top: geometry.top_margin,
+            ..Margin::default()
+        },
         exclusive_zone: -1,
         keyboard,
     })?)
@@ -146,7 +181,14 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     if let Some(terminal) = &options.terminal {
         config.terminal_command = vec![terminal.clone(), "-e".into()];
     }
-    let files = if options.files { Some(FileSearchConfig::home().ok_or("HOME is not set (start with --no-files to skip file results)")?) } else { None };
+    let files = if options.files {
+        Some(
+            FileSearchConfig::home()
+                .ok_or("HOME is not set (start with --no-files to skip file results)")?,
+        )
+    } else {
+        None
+    };
 
     let waker = client.waker();
     let toggle = Arc::new(AtomicBool::new(false));
@@ -160,7 +202,9 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         e => Box::new(e) as Box<dyn Error>,
     })?;
     let (output, output_geometry) = first_output(&client)?;
-    let geometry = renderer.style.surface_geometry(output_size(output_geometry));
+    let geometry = renderer
+        .style
+        .surface_geometry(output_size(output_geometry));
     let surface = panel_surface(&mut client, None, &geometry, KeyboardInteractivity::None)?;
     let mut app = App {
         client,
@@ -193,7 +237,10 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
 }
 
 fn unix_now() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).expect("the system clock is before the Unix epoch").as_secs_f64()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("the system clock is before the Unix epoch")
+        .as_secs_f64()
 }
 
 /// Run a command detached from the loop; its exit is reaped on a thread.
@@ -220,12 +267,23 @@ fn open(target: &str) {
 
 /// Percent-encode `text` for a URL query.
 fn percent_encode(text: &str) -> String {
-    text.bytes().map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+    text.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
 }
 
 impl App {
     fn now(&self) -> Now {
-        Now { mono: self.start.elapsed().as_secs_f64(), unix: unix_now() }
+        Now {
+            mono: self.start.elapsed().as_secs_f64(),
+            unix: unix_now(),
+        }
     }
 
     fn handle(&mut self, event: Event) -> Result<()> {
@@ -238,15 +296,28 @@ impl App {
             // of a catcher destroyed since
             Event::Draw(_) => {}
             // their output went away
-            Event::Closed(surface) if surface == self.surface || Some(surface) == self.catcher => self.output_gone()?,
+            Event::Closed(surface) if surface == self.surface || Some(surface) == self.catcher => {
+                self.output_gone()?
+            }
             Event::Closed(_) => return Err("the server closed a launcher surface".into()),
             Event::Pointer { surface, event } if surface == self.surface => self.pointer(event)?,
-            Event::Pointer { surface, event: PointerEvent::Button { pressed: true, .. } } if Some(surface) == self.catcher => self.hide()?,
+            Event::Pointer {
+                surface,
+                event: PointerEvent::Button { pressed: true, .. },
+            } if Some(surface) == self.catcher => self.hide()?,
             Event::Pointer { .. } => {}
-            Event::Key { key, pressed: true, mods, character, .. } if self.panel.is_visible() => {
+            Event::Key {
+                key,
+                pressed: true,
+                mods,
+                character,
+                ..
+            } if self.panel.is_visible() => {
                 if let Some((panel_key, panel_mods)) = panel_key(key, mods, character) {
                     let now = self.now();
-                    let outcome = self.panel.handle_key(panel_key, panel_mods, &mut self.launcher, now);
+                    let outcome =
+                        self.panel
+                            .handle_key(panel_key, panel_mods, &mut self.launcher, now);
                     self.outcome(outcome)?;
                 }
             }
@@ -257,9 +328,19 @@ impl App {
             Event::ActivationToken { request, token } => self.complete(request, token),
             Event::OutputsChanged => self.follow_output()?,
             Event::Appearance { .. } | Event::DisplayOptions(_) => {
-                self.renderer = panel_renderer(&self.theme, &self.assets, self.client.is_dark(), self.client.display_options())?;
+                self.renderer = panel_renderer(
+                    &self.theme,
+                    &self.assets,
+                    self.client.is_dark(),
+                    self.client.display_options(),
+                )?;
                 // the material differs between the appearances and options, and the shadow margins may
-                if self.renderer.style.surface_geometry(output_size(self.output_geometry)) == self.geometry {
+                if self
+                    .renderer
+                    .style
+                    .surface_geometry(output_size(self.output_geometry))
+                    == self.geometry
+                {
                     self.backdrop = None;
                     self.last = None;
                     self.image = None;
@@ -281,7 +362,15 @@ impl App {
     /// be moved or resized, so it is replaced, with the catcher if the panel is shown.
     fn follow_output(&mut self) -> Result<()> {
         // a gone output closes the surfaces on it first (`output_gone`)
-        let Some(geometry) = self.client.outputs().into_iter().find(|o| o.id == self.output).and_then(|o| o.geometry) else { return Ok(()) };
+        let Some(geometry) = self
+            .client
+            .outputs()
+            .into_iter()
+            .find(|o| o.id == self.output)
+            .and_then(|o| o.geometry)
+        else {
+            return Ok(());
+        };
         if geometry == self.output_geometry {
             return Ok(());
         }
@@ -293,8 +382,18 @@ impl App {
     /// sized for another output size, it is replaced on that output. The catcher of a shown panel
     /// goes on the same output.
     fn adopt_output(&mut self) -> Result<()> {
-        let output = *self.client.surface_outputs(self.surface)?.first().ok_or("the server placed the panel on no output")?;
-        let geometry = self.client.outputs().into_iter().find(|o| o.id == output).and_then(|o| o.geometry).ok_or("the output of the panel is not described")?;
+        let output = *self
+            .client
+            .surface_outputs(self.surface)?
+            .first()
+            .ok_or("the server placed the panel on no output")?;
+        let geometry = self
+            .client
+            .outputs()
+            .into_iter()
+            .find(|o| o.id == output)
+            .and_then(|o| o.geometry)
+            .ok_or("the output of the panel is not described")?;
         self.output = output;
         self.output_geometry = geometry;
         if self.renderer.style.surface_geometry(output_size(geometry)) != self.geometry {
@@ -317,14 +416,21 @@ impl App {
     /// gives for the output, on `output`; without one, the server chooses and the catcher follows once it has
     /// (`adopt_output`).
     fn place_surfaces(&mut self, output: Option<OutputId>) -> Result<()> {
-        self.geometry = self.renderer.style.surface_geometry(output_size(self.output_geometry));
+        self.geometry = self
+            .renderer
+            .style
+            .surface_geometry(output_size(self.output_geometry));
         // the backdrop goes before its surface
         self.backdrop = None;
         self.last = None;
         self.image = None;
         self.client.destroy_surface(self.surface)?;
         let visible = self.panel.is_visible();
-        let keyboard = if visible { KeyboardInteractivity::Exclusive } else { KeyboardInteractivity::None };
+        let keyboard = if visible {
+            KeyboardInteractivity::Exclusive
+        } else {
+            KeyboardInteractivity::None
+        };
         self.surface = panel_surface(&mut self.client, output, &self.geometry, keyboard)?;
         if let Some(catcher) = self.catcher.take() {
             self.client.destroy_surface(catcher)?;
@@ -359,7 +465,12 @@ impl App {
             }
         }
         if self.index.as_ref().is_some_and(JoinHandle::is_finished) {
-            let index = self.index.take().expect("checked above").join().map_err(|_| "the file index thread panicked")?;
+            let index = self
+                .index
+                .take()
+                .expect("checked above")
+                .join()
+                .map_err(|_| "the file index thread panicked")?;
             self.launcher.set_file_index(Some(Arc::new(index)));
             let now = self.now();
             self.panel.refresh(&self.launcher, now);
@@ -395,7 +506,8 @@ impl App {
         if let Some(catcher) = self.catcher.take() {
             self.client.destroy_surface(catcher)?;
         }
-        self.client.set_keyboard_interactivity(self.surface, KeyboardInteractivity::None)?;
+        self.client
+            .set_keyboard_interactivity(self.surface, KeyboardInteractivity::None)?;
         self.client.request_redraw(self.surface)?;
         Ok(())
     }
@@ -414,7 +526,9 @@ impl App {
                         command.arg(text);
                         spawn(command);
                     }
-                    Activation::Nothing => eprintln!("cupertino-launcher: the entry has no usable command"),
+                    Activation::Nothing => {
+                        eprintln!("cupertino-launcher: the entry has no usable command")
+                    }
                 }
             }
             PanelEvent::Command(command) => self.command(command)?,
@@ -427,20 +541,30 @@ impl App {
     fn command(&mut self, command: PanelCommand) -> Result<()> {
         match command {
             PanelCommand::Reveal => {
-                if let Some(Action::OpenPath(path)) = self.panel.selected_item().map(|item| item.action.clone()) {
-                    let directory = if path.is_dir() { path } else { path.parent().map(|p| p.to_path_buf()).unwrap_or(path) };
+                if let Some(Action::OpenPath(path)) =
+                    self.panel.selected_item().map(|item| item.action.clone())
+                {
+                    let directory = if path.is_dir() {
+                        path
+                    } else {
+                        path.parent().map(|p| p.to_path_buf()).unwrap_or(path)
+                    };
                     self.hide()?;
                     open(&directory.to_string_lossy());
                 }
             }
-            PanelCommand::WebSearch => match (&self.launcher.config.web_search_url, self.panel.query()) {
-                (Some(url), query) if !query.is_empty() => {
-                    let target = url.replace("{}", &percent_encode(query));
-                    self.hide()?;
-                    open(&target);
+            PanelCommand::WebSearch => {
+                match (&self.launcher.config.web_search_url, self.panel.query()) {
+                    (Some(url), query) if !query.is_empty() => {
+                        let target = url.replace("{}", &percent_encode(query));
+                        self.hide()?;
+                        open(&target);
+                    }
+                    _ => eprintln!(
+                        "cupertino-launcher: no web search URL configured (`web_search_url`)"
+                    ),
                 }
-                _ => eprintln!("cupertino-launcher: no web search URL configured (`web_search_url`)"),
-            },
+            }
             other => eprintln!("cupertino-launcher: {other:?} is not provided"),
         }
         Ok(())
@@ -459,7 +583,10 @@ impl App {
 
     /// Start the command that waited for `token`; the application uses it to take the focus.
     fn complete(&mut self, request: ActivationRequest, token: String) {
-        let spec = self.pending.remove(&request).expect("token for a request this process made");
+        let spec = self
+            .pending
+            .remove(&request)
+            .expect("token for a request this process made");
         spawn(spec.with_activation_token(&token).to_command());
     }
 
@@ -492,7 +619,11 @@ impl App {
         backdrop.set_shape(&rect, self.renderer.style.corner_radius)?;
         backdrop.set_alpha(opacity)?;
         // the panel takes input while shown; a press outside it reaches the catcher
-        let region = if self.panel.is_visible() { vec![rect] } else { Vec::new() };
+        let region = if self.panel.is_visible() {
+            vec![rect]
+        } else {
+            Vec::new()
+        };
         self.client.set_input_region(self.surface, &region)?;
 
         let (renderer, panel, image) = (&mut self.renderer, &self.panel, &mut self.image);
@@ -505,19 +636,45 @@ impl App {
                 selected: panel.selected(),
                 focus: panel.focus(),
                 query_selected: panel.query_selected(),
-                titles: panel.results().iter().map(|item| item.title.clone()).collect(),
+                titles: panel
+                    .results()
+                    .iter()
+                    .map(|item| item.title.clone())
+                    .collect(),
                 scale: factor.to_bits(),
             };
-            if image.as_ref().is_none_or(|(cached, _)| *cached != signature) {
-                let rendered = renderer.render(panel, &layout, &RenderOptions { scale: factor, caret_visible: true, backdrop: None, layers: LAYERS });
+            if image
+                .as_ref()
+                .is_none_or(|(cached, _)| *cached != signature)
+            {
+                let rendered = renderer.render(
+                    panel,
+                    &layout,
+                    &RenderOptions {
+                        scale: factor,
+                        caret_visible: true,
+                        backdrop: None,
+                        layers: LAYERS,
+                    },
+                );
                 *image = Some((signature, rendered));
             }
             let (_, rendered) = image.as_ref().expect("rendered above");
             let [left, top, ..] = rendered.margins;
             let x = (rect.x() * f64::from(factor)).round() as i32 - left as i32;
             let y = (rect.y() * f64::from(factor)).round() as i32 - top as i32;
-            let paint = PixmapPaint { opacity: opacity as f32, ..PixmapPaint::default() };
-            pixmap.draw_pixmap(x, y, rendered.pixmap.as_ref(), &paint, Transform::identity(), None);
+            let paint = PixmapPaint {
+                opacity: opacity as f32,
+                ..PixmapPaint::default()
+            };
+            pixmap.draw_pixmap(
+                x,
+                y,
+                rendered.pixmap.as_ref(),
+                &paint,
+                Transform::identity(),
+                None,
+            );
         })?;
         // frame callbacks pace the animation
         if animating {
@@ -529,7 +686,8 @@ impl App {
     /// Make the catcher take the input of the whole output; it is drawn once and stays transparent.
     fn draw_catcher(&mut self, catcher: SurfaceId) -> Result<()> {
         let (width, height) = self.client.size(catcher)?;
-        let region = Rect::from_origin_size(Point::ZERO, Size::new(f64::from(width), f64::from(height)));
+        let region =
+            Rect::from_origin_size(Point::ZERO, Size::new(f64::from(width), f64::from(height)));
         self.client.set_input_region(catcher, &[region])?;
         self.client.draw(catcher, |_, _| {})?;
         Ok(())
@@ -538,9 +696,16 @@ impl App {
     /// Hover selects the row under the pointer; a press on a row activates it, a press elsewhere
     /// in the panel is absorbed and a press outside it closes the panel.
     fn pointer(&mut self, event: PointerEvent) -> Result<()> {
-        let Some((layout, rect)) = self.last.as_ref().filter(|_| self.panel.is_visible()) else { return Ok(()) };
+        let Some((layout, rect)) = self.last.as_ref().filter(|_| self.panel.is_visible()) else {
+            return Ok(());
+        };
         // whether a point is in the panel, and the result row under it
-        let probe = |p: Point| (rect.contains(p), layout.item_at(Point::new(p.x - rect.x(), p.y - rect.y())));
+        let probe = |p: Point| {
+            (
+                rect.contains(p),
+                layout.item_at(Point::new(p.x - rect.x(), p.y - rect.y())),
+            )
+        };
         match event {
             PointerEvent::Enter(p) | PointerEvent::Motion(p) => {
                 if let (true, Some(flat)) = probe(p) {
@@ -549,7 +714,11 @@ impl App {
                     }
                 }
             }
-            PointerEvent::Button { button: Button::Left, pressed: true, position } => match probe(position) {
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: true,
+                position,
+            } => match probe(position) {
                 (false, _) => self.hide()?,
                 (true, Some(flat)) => {
                     let now = self.now();
@@ -559,7 +728,9 @@ impl App {
                 (true, None) => {}
             },
             PointerEvent::Button { pressed: true, .. } => self.hide()?,
-            PointerEvent::Leave | PointerEvent::Button { pressed: false, .. } | PointerEvent::Scroll { .. } => {}
+            PointerEvent::Leave
+            | PointerEvent::Button { pressed: false, .. }
+            | PointerEvent::Scroll { .. } => {}
         }
         Ok(())
     }

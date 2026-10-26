@@ -72,7 +72,11 @@ fn battery_icon(percentage: f64, state: State, is_present: bool) -> String {
         p if p < 80.0 => "good",
         _ => "full",
     };
-    let charging = if state == State::Charging { "-charging" } else { "" };
+    let charging = if state == State::Charging {
+        "-charging"
+    } else {
+        ""
+    };
     format!("battery-{level}{charging}-symbolic")
 }
 
@@ -164,7 +168,12 @@ impl DeviceView {
             view.icon_name = battery_icon(0.0, State::Unknown, false);
             return view;
         }
-        let total = |value: fn(&Battery) -> Option<f64>| batteries.iter().map(|battery| value(battery)).sum::<Option<f64>>();
+        let total = |value: fn(&Battery) -> Option<f64>| {
+            batteries
+                .iter()
+                .map(|battery| value(battery))
+                .sum::<Option<f64>>()
+        };
         let (energy, energy_full) = (total(Battery::energy), total(Battery::energy_full));
         let percentage = match (energy, energy_full) {
             (Some(now), Some(full)) if full > 0.0 => (now / full * 100.0).min(100.0),
@@ -201,7 +210,9 @@ impl DeviceView {
             _ => None,
         };
         let time_to_full = match (state, energy, energy_full, rate_of(State::Charging)) {
-            (State::Charging, Some(energy), Some(full), Some(rate)) => estimate(full - energy, rate),
+            (State::Charging, Some(energy), Some(full), Some(rate)) => {
+                estimate(full - energy, rate)
+            }
             _ => None,
         };
         let design = total(Battery::energy_full_design);
@@ -231,7 +242,9 @@ impl DeviceView {
 /// present power-supply battery is discharging or empty. A machine without batteries is never on
 /// battery.
 pub fn on_battery(supplies: &[Supply]) -> bool {
-    let line_power_online = supplies.iter().any(|supply| supply.kind == Kind::LinePower && supply.online == Some(true));
+    let line_power_online = supplies
+        .iter()
+        .any(|supply| supply.kind == Kind::LinePower && supply.online == Some(true));
     let draining = supplies
         .iter()
         .filter(|supply| supply.power_supply)

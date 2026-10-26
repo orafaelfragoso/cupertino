@@ -53,7 +53,12 @@ impl Reading {
     /// The reading of the power-supply batteries; `None` without one.
     pub fn of(supplies: &[Supply]) -> Option<Reading> {
         let view = DeviceView::display(supplies);
-        view.is_present.then(|| Reading { on_battery: on_battery(supplies), charging: view.state == State::Charging, full: view.state == State::FullyCharged, percentage: view.percentage })
+        view.is_present.then(|| Reading {
+            on_battery: on_battery(supplies),
+            charging: view.state == State::Charging,
+            full: view.state == State::FullyCharged,
+            percentage: view.percentage,
+        })
     }
 }
 
@@ -125,17 +130,37 @@ mod tests {
     use super::*;
 
     fn draining(percentage: f64) -> Option<Reading> {
-        Some(Reading { on_battery: true, charging: false, full: false, percentage })
+        Some(Reading {
+            on_battery: true,
+            charging: false,
+            full: false,
+            percentage,
+        })
     }
 
     #[test]
     fn the_thresholds_are_10_and_2_percent_on_battery_only() {
-        for (p, level) in [(11.0, Level::None), (10.4, Level::Early), (3.0, Level::Early), (2.0, Level::Final), (0.0, Level::Final)] {
+        for (p, level) in [
+            (11.0, Level::None),
+            (10.4, Level::Early),
+            (3.0, Level::Early),
+            (2.0, Level::Final),
+            (0.0, Level::Final),
+        ] {
             assert_eq!(Warnings::new().update(0.0, draining(p)), level, "{p} %");
         }
-        let plugged = Some(Reading { on_battery: false, charging: false, full: false, percentage: 1.0 });
+        let plugged = Some(Reading {
+            on_battery: false,
+            charging: false,
+            full: false,
+            percentage: 1.0,
+        });
         assert_eq!(Warnings::new().update(0.0, plugged), Level::None);
-        assert_eq!(Warnings::new().update(0.0, None), Level::None, "no battery, no warning");
+        assert_eq!(
+            Warnings::new().update(0.0, None),
+            Level::None,
+            "no battery, no warning"
+        );
     }
 
     #[test]
@@ -143,8 +168,17 @@ mod tests {
         let mut w = Warnings::new();
         assert_eq!(w.update(0.0, draining(9.0)), Level::Early);
         assert_eq!(w.update(1.0, draining(2.0)), Level::Final);
-        assert_eq!(w.update(2.0, draining(5.0)), Level::Final, "a reading that rises does not lower the level");
-        let plugged = Some(Reading { on_battery: false, charging: false, full: false, percentage: 2.0 });
+        assert_eq!(
+            w.update(2.0, draining(5.0)),
+            Level::Final,
+            "a reading that rises does not lower the level"
+        );
+        let plugged = Some(Reading {
+            on_battery: false,
+            charging: false,
+            full: false,
+            percentage: 2.0,
+        });
         assert_eq!(w.update(3.0, plugged), Level::None);
     }
 
@@ -160,7 +194,12 @@ mod tests {
     #[test]
     fn a_change_of_the_charging_state_holds_warnings_back_for_60_s() {
         let mut w = Warnings::new();
-        let charging = Some(Reading { on_battery: false, charging: true, full: false, percentage: 8.0 });
+        let charging = Some(Reading {
+            on_battery: false,
+            charging: true,
+            full: false,
+            percentage: 8.0,
+        });
         assert_eq!(w.update(0.0, charging), Level::None);
         // unplugged at 10 s: the state changes, the window opens
         assert_eq!(w.update(10.0, draining(8.0)), Level::None);
@@ -172,6 +211,9 @@ mod tests {
 
     #[test]
     fn the_upower_levels_are_none_low_and_critical() {
-        assert_eq!([Level::None, Level::Early, Level::Final].map(Level::upower), [1, 3, 4]);
+        assert_eq!(
+            [Level::None, Level::Early, Level::Final].map(Level::upower),
+            [1, 3, 4]
+        );
     }
 }

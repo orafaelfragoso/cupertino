@@ -47,14 +47,24 @@ pub fn window() -> Rect {
 
 /// The meter container.
 pub fn meter() -> Rect {
-    Rect::new(METER_LEFT, f64::from(WINDOW_SIZE) - METER_BOTTOM - METER_HEIGHT, METER_WIDTH, METER_HEIGHT)
+    Rect::new(
+        METER_LEFT,
+        f64::from(WINDOW_SIZE) - METER_BOTTOM - METER_HEIGHT,
+        METER_WIDTH,
+        METER_HEIGHT,
+    )
 }
 
 /// Segment `index` (0 is leftmost).
 pub fn segment(index: usize) -> Rect {
     assert!(index < SEGMENTS, "the meter has {SEGMENTS} segments");
     let container = meter();
-    Rect::new(container.x() + SEGMENT_PITCH * index as f64 + SEGMENT_INSET, container.y() + SEGMENT_INSET, f64::from(SEGMENT_WIDTH), SEGMENT_HEIGHT)
+    Rect::new(
+        container.x() + SEGMENT_PITCH * index as f64 + SEGMENT_INSET,
+        container.y() + SEGMENT_INSET,
+        f64::from(SEGMENT_WIDTH),
+        SEGMENT_HEIGHT,
+    )
 }
 
 #[cfg(test)]
@@ -76,6 +86,11 @@ mod tests {
     #[test]
     fn the_last_segment_ends_inside_the_container() {
         let last = segment(15);
-        assert!(last.max_x() <= meter().max_x(), "{} > {}", last.max_x(), meter().max_x());
+        assert!(
+            last.max_x() <= meter().max_x(),
+            "{} > {}",
+            last.max_x(),
+            meter().max_x()
+        );
     }
 }

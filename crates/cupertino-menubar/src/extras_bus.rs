@@ -8,7 +8,10 @@
 //! every action. Properties are read from the service every time, never from a cache. A service that cannot be read
 //! hides its item; why is reported on stderr once per new reason.
 
-use crate::extras::{BatteryState, BluetoothDevice, BluetoothState, ExtraAction, Extras, FocusLifetime, FocusState, WifiNetwork, WifiState};
+use crate::extras::{
+    BatteryState, BluetoothDevice, BluetoothState, ExtraAction, Extras, FocusLifetime, FocusState,
+    WifiNetwork, WifiState,
+};
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::sync::mpsc;
@@ -51,21 +54,33 @@ pub struct ExtrasBus {
 
 impl ExtrasBus {
     /// Start the task on the executor of `session`; `wake` is called after every new [`Extras`].
-    pub fn start(session: Connection, wake: impl Fn() + Send + Sync + 'static) -> (ExtrasBus, mpsc::Receiver<Extras>) {
+    pub fn start(
+        session: Connection,
+        wake: impl Fn() + Send + Sync + 'static,
+    ) -> (ExtrasBus, mpsc::Receiver<Extras>) {
         let (commands, rx) = async_channel::unbounded();
         let (out, events) = mpsc::channel();
         let executor = session.executor().clone();
-        executor.spawn(run(session, commands.clone(), rx, out, Arc::new(wake)), "cupertino-extras").detach();
+        executor
+            .spawn(
+                run(session, commands.clone(), rx, out, Arc::new(wake)),
+                "cupertino-extras",
+            )
+            .detach();
         (ExtrasBus { commands }, events)
     }
 
     /// Read every service again (the duration rows change with the hour).
     pub fn refresh(&self) -> Result<(), WorkerGone> {
-        self.commands.try_send(Command::Refresh).map_err(|_| WorkerGone)
+        self.commands
+            .try_send(Command::Refresh)
+            .map_err(|_| WorkerGone)
     }
 
     pub fn act(&self, action: ExtraAction) -> Result<(), WorkerGone> {
-        self.commands.try_send(Command::Act(action)).map_err(|_| WorkerGone)
+        self.commands
+            .try_send(Command::Act(action))
+            .map_err(|_| WorkerGone)
     }
 }
 
@@ -92,16 +107,29 @@ impl Reasons {
     }
 }
 
-async fn run(session: Connection, commands: async_channel::Sender<Command>, rx: async_channel::Receiver<Command>, out: mpsc::Sender<Extras>, wake: Arc<dyn Fn() + Send + Sync>) {
+async fn run(
+    session: Connection,
+    commands: async_channel::Sender<Command>,
+    rx: async_channel::Receiver<Command>,
+    out: mpsc::Sender<Extras>,
+    wake: Arc<dyn Fn() + Send + Sync>,
+) {
     let system = match Connection::system().await {
         Ok(system) => Some(system),
         Err(e) => {
-            eprintln!("cupertino-menubar: no system bus, so no Wi-Fi, battery or Bluetooth items: {e}");
+            eprintln!(
+                "cupertino-menubar: no system bus, so no Wi-Fi, battery or Bluetooth items: {e}"
+            );
             None
         }
     };
     if let Some(system) = &system {
-        for (name, path) in [(NETWORK_NAME, NETWORK_PATH), (BLUETOOTH_NAME, BLUETOOTH_PATH), (UPOWER_NAME, UPOWER_PATH), (UPOWER_NAME, UPOWER_DISPLAY_DEVICE_PATH)] {
+        for (name, path) in [
+            (NETWORK_NAME, NETWORK_PATH),
+            (BLUETOOTH_NAME, BLUETOOTH_PATH),
+            (UPOWER_NAME, UPOWER_PATH),
+            (UPOWER_NAME, UPOWER_DISPLAY_DEVICE_PATH),
+        ] {
             follow(system, name, path, &commands).await;
         }
     }
@@ -140,9 +168,17 @@ async fn run(session: Connection, commands: async_channel::Sender<Command>, rx: 
 }
 
 /// Queue a refresh for every signal on `path` and every owner change of `name`.
-async fn follow(conn: &Connection, name: &'static str, path: &'static str, commands: &async_channel::Sender<Command>) {
+async fn follow(
+    conn: &Connection,
+    name: &'static str,
+    path: &'static str,
+    commands: &async_channel::Sender<Command>,
+) {
     let rules = [
-        MatchRule::builder().msg_type(Type::Signal).path(path).map(|b| b.build()),
+        MatchRule::builder()
+            .msg_type(Type::Signal)
+            .path(path)
+            .map(|b| b.build()),
         MatchRule::builder()
             .msg_type(Type::Signal)
             .sender("org.freedesktop.DBus")
@@ -179,8 +215,19 @@ async fn follow(conn: &Connection, name: &'static str, path: &'static str, comma
     }
 }
 
-async fn proxy(conn: &Connection, name: &'static str, path: &'static str, interface: &'static str) -> zbus::Result<Proxy<'static>> {
-    Builder::new(conn).destination(name)?.path(path)?.interface(interface)?.cache_properties(CacheProperties::No).build().await
+async fn proxy(
+    conn: &Connection,
+    name: &'static str,
+    path: &'static str,
+    interface: &'static str,
+) -> zbus::Result<Proxy<'static>> {
+    Builder::new(conn)
+        .destination(name)?
+        .path(path)?
+        .interface(interface)?
+        .cache_properties(CacheProperties::No)
+        .build()
+        .await
 }
 
 /// Whether `error` says nobody owns the name: the service is not running, which hides its item without a report.
@@ -196,12 +243,19 @@ fn absent_if_not_running<T>(result: zbus::Result<Option<T>>) -> zbus::Result<Opt
     }
 }
 
-async fn read_all(system: Option<&Connection>, session: &Connection, reasons: &mut Reasons) -> Extras {
+async fn read_all(
+    system: Option<&Connection>,
+    session: &Connection,
+    reasons: &mut Reasons,
+) -> Extras {
     let mut extras = Extras::default();
     if let Some(system) = system {
         extras.wifi = reasons.note("Wi-Fi", absent_if_not_running(read_wifi(system).await));
         extras.battery = reasons.note("battery", absent_if_not_running(read_battery(system).await));
-        extras.bluetooth = reasons.note("Bluetooth", absent_if_not_running(read_bluetooth(system).await));
+        extras.bluetooth = reasons.note(
+            "Bluetooth",
+            absent_if_not_running(read_bluetooth(system).await),
+        );
     }
     extras.focus = reasons.note("Focus", absent_if_not_running(read_focus(session).await));
     extras
@@ -218,30 +272,55 @@ async fn read_wifi(conn: &Connection) -> zbus::Result<Option<WifiState>> {
     let records: Vec<NetworkRecord> = network.call("GetNetworks", &()).await?;
     let networks = records
         .into_iter()
-        .map(|(ssid, signal, security, known, connected)| WifiNetwork { ssid, signal_dbm: (signal != i32::MIN).then_some(signal), security, known, connected })
+        .map(|(ssid, signal, security, known, connected)| WifiNetwork {
+            ssid,
+            signal_dbm: (signal != i32::MIN).then_some(signal),
+            security,
+            known,
+            connected,
+        })
         .collect();
     Ok(Some(WifiState { enabled, networks }))
 }
 
 /// `None` without a battery.
 async fn read_battery(conn: &Connection) -> zbus::Result<Option<BatteryState>> {
-    let device = proxy(conn, UPOWER_NAME, UPOWER_DISPLAY_DEVICE_PATH, UPOWER_DEVICE_INTERFACE).await?;
+    let device = proxy(
+        conn,
+        UPOWER_NAME,
+        UPOWER_DISPLAY_DEVICE_PATH,
+        UPOWER_DEVICE_INTERFACE,
+    )
+    .await?;
     if !device.get_property::<bool>("IsPresent").await? {
         return Ok(None);
     }
     let percentage: f64 = device.get_property("Percentage").await?;
     let state: u32 = device.get_property("State").await?;
-    let on_battery: bool = proxy(conn, UPOWER_NAME, UPOWER_PATH, UPOWER_NAME).await?.get_property("OnBattery").await?;
-    Ok(Some(BatteryState { percent: percentage.round().clamp(0.0, 100.0) as u8, charging: state == UPOWER_STATE_CHARGING, on_battery }))
+    let on_battery: bool = proxy(conn, UPOWER_NAME, UPOWER_PATH, UPOWER_NAME)
+        .await?
+        .get_property("OnBattery")
+        .await?;
+    Ok(Some(BatteryState {
+        percent: percentage.round().clamp(0.0, 100.0) as u8,
+        charging: state == UPOWER_STATE_CHARGING,
+        on_battery,
+    }))
 }
 
-fn field<T: TryFrom<OwnedValue>>(device: &HashMap<String, OwnedValue>, key: &str) -> zbus::Result<Option<T>>
+fn field<T: TryFrom<OwnedValue>>(
+    device: &HashMap<String, OwnedValue>,
+    key: &str,
+) -> zbus::Result<Option<T>>
 where
     T::Error: std::fmt::Display,
 {
     device
         .get(key)
-        .map(|value| T::try_from(value.try_clone()?).map_err(|e| zbus::Error::Failure(format!("device field {key}: {e}"))))
+        .map(|value| {
+            T::try_from(value.try_clone()?)
+                .map_err(|e| zbus::Error::Failure(format!("device field {key}: {e}")))
+        })
         .transpose()
 }
 
@@ -276,18 +355,65 @@ async fn read_focus(conn: &Connection) -> zbus::Result<Option<FocusState>> {
     let centre = proxy(conn, CENTRE_NAME, CENTRE_PATH, CENTRE_NAME).await?;
     let active: bool = centre.get_property("DoNotDisturb").await?;
     let rows: Vec<(String, String)> = centre.get_property("FocusLifetimes").await?;
-    Ok(Some(FocusState { active, lifetimes: rows.into_iter().map(|(id, title)| FocusLifetime { id, title }).collect() }))
+    Ok(Some(FocusState {
+        active,
+        lifetimes: rows
+            .into_iter()
+            .map(|(id, title)| FocusLifetime { id, title })
+            .collect(),
+    }))
 }
 
-async fn act(system: Option<&Connection>, session: &Connection, action: &ExtraAction) -> zbus::Result<()> {
+async fn act(
+    system: Option<&Connection>,
+    session: &Connection,
+    action: &ExtraAction,
+) -> zbus::Result<()> {
     let system = || system.ok_or_else(|| zbus::Error::Failure("there is no system bus".to_owned()));
     match action {
-        ExtraAction::SetDoNotDisturb(on) => proxy(session, CENTRE_NAME, CENTRE_PATH, CENTRE_NAME).await?.call("SetDoNotDisturb", &(*on,)).await,
-        ExtraAction::DoNotDisturbFor(id) => proxy(session, CENTRE_NAME, CENTRE_PATH, CENTRE_NAME).await?.call("SetDoNotDisturbFor", &(id,)).await,
-        ExtraAction::SetWifiEnabled(on) => Ok(proxy(system()?, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME).await?.set_property("WirelessEnabled", *on).await?),
-        ExtraAction::JoinNetwork(ssid) => proxy(system()?, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME).await?.call("Connect", &(ssid, "")).await,
-        ExtraAction::SetBluetoothPowered(on) => Ok(proxy(system()?, BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME).await?.set_property("Powered", *on).await?),
-        ExtraAction::ConnectDevice(id) => proxy(system()?, BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME).await?.call("Connect", &(id,)).await,
-        ExtraAction::DisconnectDevice(id) => proxy(system()?, BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME).await?.call("Disconnect", &(id,)).await,
+        ExtraAction::SetDoNotDisturb(on) => {
+            proxy(session, CENTRE_NAME, CENTRE_PATH, CENTRE_NAME)
+                .await?
+                .call("SetDoNotDisturb", &(*on,))
+                .await
+        }
+        ExtraAction::DoNotDisturbFor(id) => {
+            proxy(session, CENTRE_NAME, CENTRE_PATH, CENTRE_NAME)
+                .await?
+                .call("SetDoNotDisturbFor", &(id,))
+                .await
+        }
+        ExtraAction::SetWifiEnabled(on) => {
+            Ok(proxy(system()?, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
+                .await?
+                .set_property("WirelessEnabled", *on)
+                .await?)
+        }
+        ExtraAction::JoinNetwork(ssid) => {
+            proxy(system()?, NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
+                .await?
+                .call("Connect", &(ssid, ""))
+                .await
+        }
+        ExtraAction::SetBluetoothPowered(on) => {
+            Ok(
+                proxy(system()?, BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
+                    .await?
+                    .set_property("Powered", *on)
+                    .await?,
+            )
+        }
+        ExtraAction::ConnectDevice(id) => {
+            proxy(system()?, BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
+                .await?
+                .call("Connect", &(id,))
+                .await
+        }
+        ExtraAction::DisconnectDevice(id) => {
+            proxy(system()?, BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
+                .await?
+                .call("Disconnect", &(id,))
+                .await
+        }
     }
 }

@@ -13,14 +13,19 @@ pub enum ParseError {
     /// `type` is none of `firmware`, `platform`, `raw`.
     UnknownType(String),
     /// A brightness attribute is not an unsigned integer.
-    NotANumber { attribute: &'static str, value: String },
+    NotANumber {
+        attribute: &'static str,
+        value: String,
+    },
 }
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnknownType(value) => write!(f, "unknown backlight type {value:?}"),
-            Self::NotANumber { attribute, value } => write!(f, "{attribute} is not an unsigned integer: {value:?}"),
+            Self::NotANumber { attribute, value } => {
+                write!(f, "{attribute} is not an unsigned integer: {value:?}")
+            }
         }
     }
 }
@@ -51,7 +56,10 @@ impl BacklightType {
 
 /// Parses a brightness attribute.
 pub fn brightness_value(attribute: &'static str, text: &str) -> Result<u32, ParseError> {
-    text.parse().map_err(|_| ParseError::NotANumber { attribute, value: text.to_owned() })
+    text.parse().map_err(|_| ParseError::NotANumber {
+        attribute,
+        value: text.to_owned(),
+    })
 }
 
 /// One display backlight.
@@ -69,7 +77,9 @@ pub struct Backlight {
 /// The backlight to control: the most preferred type, and the lowest name among equals so the
 /// choice does not depend on directory order.
 pub fn select(backlights: &[Backlight]) -> Option<&Backlight> {
-    backlights.iter().min_by(|a, b| (Reverse(a.kind), &a.name).cmp(&(Reverse(b.kind), &b.name)))
+    backlights
+        .iter()
+        .min_by(|a, b| (Reverse(a.kind), &a.name).cmp(&(Reverse(b.kind), &b.name)))
 }
 
 /// One keyboard backlight LED.
@@ -90,7 +100,12 @@ mod tests {
     use super::*;
 
     fn backlight(name: &str, kind: BacklightType) -> Backlight {
-        Backlight { name: name.to_owned(), kind, brightness: 0, max_brightness: 100 }
+        Backlight {
+            name: name.to_owned(),
+            kind,
+            brightness: 0,
+            max_brightness: 100,
+        }
     }
 
     #[test]
@@ -101,7 +116,11 @@ mod tests {
             backlight("acpi_video0", BacklightType::Platform),
         ];
         assert_eq!(select(&all).unwrap().name, "acpi_video0");
-        let with_firmware = [all.as_slice(), &[backlight("vendor_ec", BacklightType::Firmware)]].concat();
+        let with_firmware = [
+            all.as_slice(),
+            &[backlight("vendor_ec", BacklightType::Firmware)],
+        ]
+        .concat();
         assert_eq!(select(&with_firmware).unwrap().name, "vendor_ec");
         assert_eq!(select(&[]), None);
     }

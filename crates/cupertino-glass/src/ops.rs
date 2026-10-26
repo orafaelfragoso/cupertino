@@ -31,15 +31,36 @@ pub fn color_ops(ops: &[ColorOp]) -> Vec<Op> {
     let mut out = Vec::new();
     for o in ops {
         let packed: Vec<Op> = match o {
-            ColorOp::Saturate(s) => vec![Op { a: [OP_SATURATE, *s, 0.0, 0.0], b: [0.0; 4] }],
-            ColorOp::LumCurve(v, amt) => vec![Op { a: [OP_LUM_CURVE, *amt, 0.0, 0.0], b: curve_coeffs(*v) }],
-            ColorOp::Monochrome { color, amount } => vec![Op { a: [OP_MONOCHROME, *amount, 0.0, 0.0], b: [color[0], color[1], color[2], 0.0] }],
+            ColorOp::Saturate(s) => vec![Op {
+                a: [OP_SATURATE, *s, 0.0, 0.0],
+                b: [0.0; 4],
+            }],
+            ColorOp::LumCurve(v, amt) => vec![Op {
+                a: [OP_LUM_CURVE, *amt, 0.0, 0.0],
+                b: curve_coeffs(*v),
+            }],
+            ColorOp::Monochrome { color, amount } => vec![Op {
+                a: [OP_MONOCHROME, *amount, 0.0, 0.0],
+                b: [color[0], color[1], color[2], 0.0],
+            }],
             ColorOp::LinearMatrix(m) => vec![
-                Op { a: [OP_LINEAR_MATRIX, m[0][0], m[0][1], m[0][2]], b: [m[1][0], m[1][1], m[1][2], m[2][0]] },
-                Op { a: [OP_MATRIX_TAIL, m[2][1], m[2][2], 0.0], b: [0.0; 4] },
+                Op {
+                    a: [OP_LINEAR_MATRIX, m[0][0], m[0][1], m[0][2]],
+                    b: [m[1][0], m[1][1], m[1][2], m[2][0]],
+                },
+                Op {
+                    a: [OP_MATRIX_TAIL, m[2][1], m[2][2], 0.0],
+                    b: [0.0; 4],
+                },
             ],
-            ColorOp::Invert => vec![Op { a: [OP_INVERT, 0.0, 0.0, 0.0], b: [0.0; 4] }],
-            ColorOp::Contrast(c) => vec![Op { a: [OP_CONTRAST, *c, 0.0, 0.0], b: [0.0; 4] }],
+            ColorOp::Invert => vec![Op {
+                a: [OP_INVERT, 0.0, 0.0, 0.0],
+                b: [0.0; 4],
+            }],
+            ColorOp::Contrast(c) => vec![Op {
+                a: [OP_CONTRAST, *c, 0.0, 0.0],
+                b: [0.0; 4],
+            }],
         };
         if out.len() + packed.len() > MAX_OPS {
             break;
@@ -54,7 +75,15 @@ pub fn fill_ops(r: &Recipe) -> Vec<Op> {
     r.fills
         .iter()
         .take(MAX_FILLS)
-        .map(|f| Op { a: [f.blend as u32 as f32, if f.tint_layer { 1.0 } else { 0.0 }, 0.0, 0.0], b: f.rgba })
+        .map(|f| Op {
+            a: [
+                f.blend as u32 as f32,
+                if f.tint_layer { 1.0 } else { 0.0 },
+                0.0,
+                0.0,
+            ],
+            b: f.rgba,
+        })
         .collect()
 }
 
@@ -137,7 +166,10 @@ mod tests {
     use cupertino_theme::{Appearance, MaterialOptions, Theme};
 
     fn recipe(a: Appearance, m: &str) -> Recipe {
-        Theme::load().unwrap().recipe(a, m, &MaterialOptions::default()).unwrap()
+        Theme::load()
+            .unwrap()
+            .recipe(a, m, &MaterialOptions::default())
+            .unwrap()
     }
 
     #[test]
@@ -202,11 +234,30 @@ mod tests {
     #[test]
     fn a_linear_matrix_takes_two_slots_and_the_chain_stops_when_full() {
         let m = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]];
-        let ops = color_ops(&[ColorOp::LinearMatrix(m), ColorOp::Invert, ColorOp::Contrast(0.25)]);
-        assert_eq!(ops[0], Op { a: [OP_LINEAR_MATRIX, 1.0, 2.0, 3.0], b: [4.0, 5.0, 6.0, 7.0] });
+        let ops = color_ops(&[
+            ColorOp::LinearMatrix(m),
+            ColorOp::Invert,
+            ColorOp::Contrast(0.25),
+        ]);
+        assert_eq!(
+            ops[0],
+            Op {
+                a: [OP_LINEAR_MATRIX, 1.0, 2.0, 3.0],
+                b: [4.0, 5.0, 6.0, 7.0]
+            }
+        );
         assert_eq!(ops[1].a, [OP_MATRIX_TAIL, 8.0, 9.0, 0.0]);
-        assert_eq!((ops[2].a[0], ops[3].a), (OP_INVERT, [OP_CONTRAST, 0.25, 0.0, 0.0]));
-        let full = color_ops(&[vec![ColorOp::Invert; MAX_OPS - 1], vec![ColorOp::LinearMatrix(m)]].concat());
+        assert_eq!(
+            (ops[2].a[0], ops[3].a),
+            (OP_INVERT, [OP_CONTRAST, 0.25, 0.0, 0.0])
+        );
+        let full = color_ops(
+            &[
+                vec![ColorOp::Invert; MAX_OPS - 1],
+                vec![ColorOp::LinearMatrix(m)],
+            ]
+            .concat(),
+        );
         assert_eq!(full.len(), MAX_OPS - 1, "a matrix never loses its tail");
     }
 

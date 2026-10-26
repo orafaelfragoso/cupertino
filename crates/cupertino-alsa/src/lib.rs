@@ -16,7 +16,9 @@ pub mod master;
 pub mod tlv;
 pub mod volume;
 
-pub use abi::{Access, CardInfo, ElementId, ElementInfo, ElementType, Event, IntegerRange, Interface};
+pub use abi::{
+    Access, CardInfo, ElementId, ElementInfo, ElementType, Event, IntegerRange, Interface,
+};
 pub use card::{card_indexes, Card, OpenMode, DEVICE_DIR};
 pub use error::{Error, Result};
 pub use master::{find_switch, select_master, Master, MasterRank};

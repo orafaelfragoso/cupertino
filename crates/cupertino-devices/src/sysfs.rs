@@ -12,12 +12,18 @@ pub(crate) fn devices_dir(sysfs_root: &Path) -> Result<PathBuf> {
 }
 
 pub(crate) fn canonicalize(path: &Path) -> Result<PathBuf> {
-    fs::canonicalize(path).map_err(|source| Error::Io { path: path.to_owned(), source })
+    fs::canonicalize(path).map_err(|source| Error::Io {
+        path: path.to_owned(),
+        source,
+    })
 }
 
 /// Reads a sysfs attribute; a missing file is an error.
 pub(crate) fn read_attr(path: &Path) -> Result<String> {
-    fs::read_to_string(path).map_err(|source| Error::Io { path: path.to_owned(), source })
+    fs::read_to_string(path).map_err(|source| Error::Io {
+        path: path.to_owned(),
+        source,
+    })
 }
 
 /// Reads a sysfs attribute that may legitimately be absent; every other failure is an error.
@@ -25,7 +31,10 @@ pub(crate) fn read_attr_optional(path: &Path) -> Result<Option<String>> {
     match fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
         Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(Error::Io { path: path.to_owned(), source }),
+        Err(source) => Err(Error::Io {
+            path: path.to_owned(),
+            source,
+        }),
     }
 }
 
@@ -34,7 +43,10 @@ pub(crate) fn read_hex_u16(path: &Path, key: &'static str) -> Result<u16> {
     let text = read_attr(path)?;
     u16::from_str_radix(text.trim(), 16).map_err(|_| Error::Parse {
         origin: path.display().to_string(),
-        source: ParseError::InvalidNumber { key, value: text.trim().to_owned() },
+        source: ParseError::InvalidNumber {
+            key,
+            value: text.trim().to_owned(),
+        },
     })
 }
 

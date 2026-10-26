@@ -35,10 +35,19 @@ pub enum PlatterMaterial {
 }
 
 impl PlatterMaterial {
-    pub const ALL: [PlatterMaterial; 5] = [Self::UltraThin, Self::Thin, Self::Medium, Self::Thick, Self::UltraThick];
+    pub const ALL: [PlatterMaterial; 5] = [
+        Self::UltraThin,
+        Self::Thin,
+        Self::Medium,
+        Self::Thick,
+        Self::UltraThick,
+    ];
 
     const SATURATION: [[f32; 5]; 2] = [[1.8, 1.9, 2.0, 2.1, 2.2], [1.6, 1.8, 2.0, 2.2, 2.4]];
-    const BRIGHTNESS: [[f32; 5]; 2] = [[-0.01, -0.02, -0.03, -0.04, -0.05], [0.015, 0.02, 0.025, 0.03, 0.035]];
+    const BRIGHTNESS: [[f32; 5]; 2] = [
+        [-0.01, -0.02, -0.03, -0.04, -0.05],
+        [0.015, 0.02, 0.025, 0.03, 0.035],
+    ];
 
     /// amount (light/dark row choice ).
     pub fn saturation(self, dark: bool) -> f32 {
@@ -53,7 +62,11 @@ impl PlatterMaterial {
     /// The backdrop in the theme's recipe form: scale, blur and saturation (brightness has no
     /// recipe operation and is left out).
     pub fn backdrop(self, dark: bool) -> Backdrop {
-        Backdrop { scale: BACKDROP_SCALE, sigma_pt: BLUR_RADIUS, ops: vec![ColorOp::Saturate(self.saturation(dark))] }
+        Backdrop {
+            scale: BACKDROP_SCALE,
+            sigma_pt: BLUR_RADIUS,
+            ops: vec![ColorOp::Saturate(self.saturation(dark))],
+        }
     }
 }
 
@@ -68,7 +81,10 @@ pub struct PlatterShadow {
 
 impl PlatterShadow {
     pub fn new(dark: bool) -> Self {
-        Self { opacity: if dark { 0.25 } else { 0.20 }, radius: 4.0 }
+        Self {
+            opacity: if dark { 0.25 } else { 0.20 },
+            radius: 4.0,
+        }
     }
 
     /// Parameters for the renderer's shadow rasteriser: density = opacity, no offset, no top
@@ -95,9 +111,15 @@ pub struct VibrantRim {
 impl VibrantRim {
     pub fn new(dark: bool) -> Self {
         if dark {
-            Self { opacity: 1.0, radius: 0.5 }
+            Self {
+                opacity: 1.0,
+                radius: 0.5,
+            }
         } else {
-            Self { opacity: 0.35, radius: 0.625 }
+            Self {
+                opacity: 0.35,
+                radius: 0.625,
+            }
         }
     }
 }
@@ -108,18 +130,63 @@ mod tests {
 
     #[test]
     fn material_tables_follow_the_reference_rows() {
-        let light: Vec<(f32, f32)> = PlatterMaterial::ALL.iter().map(|m| (m.saturation(false), m.brightness(false))).collect();
-        assert_eq!(light, [(1.8, -0.01), (1.9, -0.02), (2.0, -0.03), (2.1, -0.04), (2.2, -0.05)]);
-        let dark: Vec<(f32, f32)> = PlatterMaterial::ALL.iter().map(|m| (m.saturation(true), m.brightness(true))).collect();
-        assert_eq!(dark, [(1.6, 0.015), (1.8, 0.02), (2.0, 0.025), (2.2, 0.03), (2.4, 0.035)]);
-        assert_eq!(PlatterMaterial::Thick.backdrop(true), Backdrop { scale: 0.125, sigma_pt: 30.0, ops: vec![ColorOp::Saturate(2.2)] });
+        let light: Vec<(f32, f32)> = PlatterMaterial::ALL
+            .iter()
+            .map(|m| (m.saturation(false), m.brightness(false)))
+            .collect();
+        assert_eq!(
+            light,
+            [
+                (1.8, -0.01),
+                (1.9, -0.02),
+                (2.0, -0.03),
+                (2.1, -0.04),
+                (2.2, -0.05)
+            ]
+        );
+        let dark: Vec<(f32, f32)> = PlatterMaterial::ALL
+            .iter()
+            .map(|m| (m.saturation(true), m.brightness(true)))
+            .collect();
+        assert_eq!(
+            dark,
+            [
+                (1.6, 0.015),
+                (1.8, 0.02),
+                (2.0, 0.025),
+                (2.2, 0.03),
+                (2.4, 0.035)
+            ]
+        );
+        assert_eq!(
+            PlatterMaterial::Thick.backdrop(true),
+            Backdrop {
+                scale: 0.125,
+                sigma_pt: 30.0,
+                ops: vec![ColorOp::Saturate(2.2)]
+            }
+        );
     }
 
     #[test]
     fn shadow_has_no_offset_and_appearance_dependent_opacity() {
         let light = PlatterShadow::new(false).params();
-        assert_eq!((light.density(), light.sigma(), light.vertical_offset(), light.entry.clip_top), (0.20, 2.0, 0.0, 0.0));
+        assert_eq!(
+            (
+                light.density(),
+                light.sigma(),
+                light.vertical_offset(),
+                light.entry.clip_top
+            ),
+            (0.20, 2.0, 0.0, 0.0)
+        );
         assert_eq!(PlatterShadow::new(true).params().density(), 0.25);
-        assert_eq!(VibrantRim::new(false), VibrantRim { opacity: 0.35, radius: 0.625 });
+        assert_eq!(
+            VibrantRim::new(false),
+            VibrantRim {
+                opacity: 0.35,
+                radius: 0.625
+            }
+        );
     }
 }

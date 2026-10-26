@@ -6,7 +6,10 @@ use std::collections::VecDeque;
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
-use cupertino_bluetooth::{Command, ControllerIndex, DeviceId, Drained, Eir, Event, FoundFlags, KeyValue, LinkKey, LinkKeyType, Opcode, Packet, Result, Status};
+use cupertino_bluetooth::{
+    Command, ControllerIndex, DeviceId, Drained, Eir, Event, FoundFlags, KeyValue, LinkKey,
+    LinkKeyType, Opcode, Packet, Result, Status,
+};
 use cupertino_btd::transport::Transport;
 use rustix::io::Errno;
 
@@ -31,7 +34,16 @@ pub struct FakeController {
 impl FakeController {
     /// A controller with the given settings that finds `nearby` when it scans.
     pub fn new(settings: u32, nearby: Vec<(DeviceId, Eir)>) -> Self {
-        Self { inner: Mutex::new(Inner { queue: VecDeque::new(), settings, sent: Vec::new(), nearby, closed: false }), wake: Condvar::new() }
+        Self {
+            inner: Mutex::new(Inner {
+                queue: VecDeque::new(),
+                settings,
+                sent: Vec::new(),
+                nearby,
+                closed: false,
+            }),
+            wake: Condvar::new(),
+        }
     }
 
     /// Every command received so far.
@@ -58,13 +70,20 @@ impl Inner {
     /// What the controller does with a command.
     fn react(&mut self, index: ControllerIndex, command: &Command) {
         match command {
-            Command::ReadIndexList => self.push(ControllerIndex::NONE, complete(Opcode::READ_INDEX_LIST, Status::Success, vec![1, 0, 0, 0])),
+            Command::ReadIndexList => self.push(
+                ControllerIndex::NONE,
+                complete(Opcode::READ_INDEX_LIST, Status::Success, vec![1, 0, 0, 0]),
+            ),
             Command::ReadControllerInfo => {
                 let info = info_reply(self.settings);
                 self.reply(command, info);
             }
             Command::SetPowered(on) => {
-                self.settings = if *on { self.settings | 1 } else { self.settings & !1 };
+                self.settings = if *on {
+                    self.settings | 1
+                } else {
+                    self.settings & !1
+                };
                 let settings = self.settings.to_le_bytes().to_vec();
                 self.reply(command, settings);
             }
@@ -72,28 +91,84 @@ impl Inner {
                 let settings = self.settings.to_le_bytes().to_vec();
                 self.reply(command, settings);
             }
-            Command::LoadLinkKeys(_) | Command::LoadLongTermKeys(_) | Command::SetIoCapability(_) => self.reply(command, Vec::new()),
+            Command::LoadLinkKeys(_)
+            | Command::LoadLongTermKeys(_)
+            | Command::SetIoCapability(_) => self.reply(command, Vec::new()),
             Command::GetConnections => self.reply(command, vec![0, 0]),
             Command::StartDiscovery(types) => {
                 self.reply(command, vec![types.to_wire()]);
-                self.push(index, Event::Discovering { types: *types, active: true });
+                self.push(
+                    index,
+                    Event::Discovering {
+                        types: *types,
+                        active: true,
+                    },
+                );
                 for (device, eir) in self.nearby.clone() {
-                    self.push(index, Event::DeviceFound { device, rssi: Some(-52), flags: FoundFlags(0), eir });
+                    self.push(
+                        index,
+                        Event::DeviceFound {
+                            device,
+                            rssi: Some(-52),
+                            flags: FoundFlags(0),
+                            eir,
+                        },
+                    );
                 }
             }
             Command::StopDiscovery(types) => {
                 self.reply(command, vec![types.to_wire()]);
-                self.push(index, Event::Discovering { types: *types, active: false });
+                self.push(
+                    index,
+                    Event::Discovering {
+                        types: *types,
+                        active: false,
+                    },
+                );
             }
-            Command::PairDevice { device, .. } => self.push(index, Event::UserConfirmationRequest { device: *device, just_works: false, value: PASSKEY }),
-            Command::UserConfirmationReply { device, accept: true } => {
-                let key = LinkKey { device: *device, key_type: LinkKeyType::AuthenticatedP256, value: KeyValue([0x42; 16]), pin_length: 0 };
+            Command::PairDevice { device, .. } => self.push(
+                index,
+                Event::UserConfirmationRequest {
+                    device: *device,
+                    just_works: false,
+                    value: PASSKEY,
+                },
+            ),
+            Command::UserConfirmationReply {
+                device,
+                accept: true,
+            } => {
+                let key = LinkKey {
+                    device: *device,
+                    key_type: LinkKeyType::AuthenticatedP256,
+                    value: KeyValue([0x42; 16]),
+                    pin_length: 0,
+                };
                 self.push(index, Event::NewLinkKey { store: true, key });
-                self.push(index, complete(Opcode::PAIR_DEVICE, Status::Success, device_reply(*device)));
+                self.push(
+                    index,
+                    complete(Opcode::PAIR_DEVICE, Status::Success, device_reply(*device)),
+                );
             }
-            Command::UserConfirmationReply { device, accept: false } => {
-                self.push(index, Event::AuthenticationFailed { device: *device, status: Status::AuthenticationFailed });
-                self.push(index, complete(Opcode::PAIR_DEVICE, Status::AuthenticationFailed, device_reply(*device)));
+            Command::UserConfirmationReply {
+                device,
+                accept: false,
+            } => {
+                self.push(
+                    index,
+                    Event::AuthenticationFailed {
+                        device: *device,
+                        status: Status::AuthenticationFailed,
+                    },
+                );
+                self.push(
+                    index,
+                    complete(
+                        Opcode::PAIR_DEVICE,
+                        Status::AuthenticationFailed,
+                        device_reply(*device),
+                    ),
+                );
             }
             other => panic!("the fake controller does not know {other:?}"),
         }
@@ -116,9 +191,15 @@ impl Transport for FakeController {
             inner = self.wake.wait_timeout(inner, timeout).unwrap().0;
         }
         if inner.closed {
-            return Err(cupertino_bluetooth::Error::Syscall { call: "recv", source: Errno::PIPE });
+            return Err(cupertino_bluetooth::Error::Syscall {
+                call: "recv",
+                source: Errno::PIPE,
+            });
         }
-        Ok(Drained { packets: inner.queue.drain(..).collect(), errors: Vec::new() })
+        Ok(Drained {
+            packets: inner.queue.drain(..).collect(),
+            errors: Vec::new(),
+        })
     }
 
     fn open_link(&self, _adapter: cupertino_bluetooth::Address, _device: DeviceId) -> Result<()> {

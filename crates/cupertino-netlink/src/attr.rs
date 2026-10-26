@@ -47,19 +47,37 @@ impl<'a> Iterator for Attrs<'a> {
 
 fn parse_attr(buffer: &[u8]) -> Result<(Attr<'_>, usize), ParseError> {
     if buffer.len() < NLA_HEADER_LEN {
-        return Err(ParseError::Truncated { what: "attribute header", needed: NLA_HEADER_LEN, have: buffer.len() });
+        return Err(ParseError::Truncated {
+            what: "attribute header",
+            needed: NLA_HEADER_LEN,
+            have: buffer.len(),
+        });
     }
     let length = u16::from_ne_bytes([buffer[0], buffer[1]]);
     let ty = u16::from_ne_bytes([buffer[2], buffer[3]]) & NLA_TYPE_MASK;
     if (length as usize) < NLA_HEADER_LEN || length as usize > buffer.len() {
-        return Err(ParseError::BadAttributeLength { attribute: ty, length, available: buffer.len() });
+        return Err(ParseError::BadAttributeLength {
+            attribute: ty,
+            length,
+            available: buffer.len(),
+        });
     }
-    Ok((Attr { ty, data: &buffer[NLA_HEADER_LEN..length as usize] }, align4(length as usize).min(buffer.len())))
+    Ok((
+        Attr {
+            ty,
+            data: &buffer[NLA_HEADER_LEN..length as usize],
+        },
+        align4(length as usize).min(buffer.len()),
+    ))
 }
 
 impl<'a> Attr<'a> {
     fn fixed<const N: usize>(&self) -> Result<[u8; N], ParseError> {
-        self.data.try_into().map_err(|_| ParseError::AttributeSize { attribute: self.ty, expected: N, actual: self.data.len() })
+        self.data.try_into().map_err(|_| ParseError::AttributeSize {
+            attribute: self.ty,
+            expected: N,
+            actual: self.data.len(),
+        })
     }
 
     pub fn u8(&self) -> Result<u8, ParseError> {
@@ -92,7 +110,10 @@ impl<'a> Attr<'a> {
         match self.data.len() {
             4 => Ok(IpAddr::V4(Ipv4Addr::from(self.fixed::<4>()?))),
             16 => Ok(IpAddr::V6(Ipv6Addr::from(self.fixed::<16>()?))),
-            actual => Err(ParseError::AddressSize { attribute: self.ty, actual }),
+            actual => Err(ParseError::AddressSize {
+                attribute: self.ty,
+                actual,
+            }),
         }
     }
 
@@ -116,9 +137,12 @@ mod tests {
     #[test]
     fn reads_scalars_strings_and_nested_children() {
         let mut body = Body::new();
-        body.attr_u32(1, 0xdead_beef).attr_cstr(2, "wlan0").attr(3, &[1, 2, 3, 4, 5, 6]).nested(4, |inner| {
-            inner.attr(1, &[9]);
-        });
+        body.attr_u32(1, 0xdead_beef)
+            .attr_cstr(2, "wlan0")
+            .attr(3, &[1, 2, 3, 4, 5, 6])
+            .nested(4, |inner| {
+                inner.attr(1, &[9]);
+            });
         let parsed: Vec<_> = attrs(body.as_bytes()).collect::<Result<_, _>>().unwrap();
         assert_eq!(parsed.len(), 4);
         assert_eq!(parsed[0].u32(), Ok(0xdead_beef));
@@ -130,26 +154,67 @@ mod tests {
 
     #[test]
     fn a_wrong_size_names_the_attribute() {
-        let attr = Attr { ty: 7, data: &[1, 2] };
-        assert_eq!(attr.u32(), Err(ParseError::AttributeSize { attribute: 7, expected: 4, actual: 2 }));
+        let attr = Attr {
+            ty: 7,
+            data: &[1, 2],
+        };
+        assert_eq!(
+            attr.u32(),
+            Err(ParseError::AttributeSize {
+                attribute: 7,
+                expected: 4,
+                actual: 2
+            })
+        );
     }
 
     #[test]
     fn an_attribute_longer_than_the_buffer_ends_the_iteration() {
         let buffer = [12, 0, 1, 0, 0, 0, 0, 0];
         let mut iterator = attrs(&buffer);
-        assert_eq!(iterator.next(), Some(Err(ParseError::BadAttributeLength { attribute: 1, length: 12, available: 8 })));
+        assert_eq!(
+            iterator.next(),
+            Some(Err(ParseError::BadAttributeLength {
+                attribute: 1,
+                length: 12,
+                available: 8
+            }))
+        );
         assert_eq!(iterator.next(), None);
     }
 
     #[test]
     fn invalid_utf8_is_an_error() {
-        assert_eq!(Attr { ty: 4, data: &[0xff, 0] }.string(), Err(ParseError::AttributeNotUtf8 { attribute: 4 }));
+        assert_eq!(
+            Attr {
+                ty: 4,
+                data: &[0xff, 0]
+            }
+            .string(),
+            Err(ParseError::AttributeNotUtf8 { attribute: 4 })
+        );
     }
 
     #[test]
     fn addresses_are_four_or_sixteen_bytes() {
-        assert_eq!(Attr { ty: 1, data: &[192, 168, 1, 2] }.ip(), Ok(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2))));
-        assert_eq!(Attr { ty: 1, data: &[1, 2, 3] }.ip(), Err(ParseError::AddressSize { attribute: 1, actual: 3 }));
+        assert_eq!(
+            Attr {
+                ty: 1,
+                data: &[192, 168, 1, 2]
+            }
+            .ip(),
+            Ok(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 2)))
+        );
+        assert_eq!(
+            Attr {
+                ty: 1,
+                data: &[1, 2, 3]
+            }
+            .ip(),
+            Err(ParseError::AddressSize {
+                attribute: 1,
+                actual: 3
+            })
+        );
     }
 }

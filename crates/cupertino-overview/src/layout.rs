@@ -28,7 +28,15 @@ pub struct LayoutParams {
 
 impl Default for LayoutParams {
     fn default() -> Self {
-        Self { inset: 20.0, gap: 8.0, lift: 20.0, tolerance: 4.0, shrink: 0.9, max_passes: 499, max_scale: 1.0 }
+        Self {
+            inset: 20.0,
+            gap: 8.0,
+            lift: 20.0,
+            tolerance: 4.0,
+            shrink: 0.9,
+            max_passes: 499,
+            max_scale: 1.0,
+        }
     }
 }
 
@@ -58,17 +66,35 @@ fn placed(c: (f64, f64), size: Rect, s: f64, work: Rect) -> Rect {
 pub fn pack(windows: &[Rect], area: Rect, p: &LayoutParams) -> Packing {
     let n = windows.len();
     if n == 0 {
-        return Packing { rects: Vec::new(), passes: 0 };
+        return Packing {
+            rects: Vec::new(),
+            passes: 0,
+        };
     }
     let work = area.inset(p.inset);
     let bbox = bounds(windows).expect("n > 0");
     // 1. start scale: the arrangement as a whole fits the work area
-    let mut s = p.max_scale.min(work.w / bbox.w.max(1.0)).min(work.h / bbox.h.max(1.0));
+    let mut s = p
+        .max_scale
+        .min(work.w / bbox.w.max(1.0))
+        .min(work.h / bbox.h.max(1.0));
     // 2. scaled centres about the work area's centre, lifted
-    let mut centres: Vec<(f64, f64)> = windows.iter().map(|w| (work.cx() + (w.cx() - work.cx()) * s, work.cy() + (w.cy() - work.cy()) * s - p.lift)).collect();
+    let mut centres: Vec<(f64, f64)> = windows
+        .iter()
+        .map(|w| {
+            (
+                work.cx() + (w.cx() - work.cx()) * s,
+                work.cy() + (w.cy() - work.cy()) * s - p.lift,
+            )
+        })
+        .collect();
     let mut passes = 0;
     let rects = loop {
-        let rects: Vec<Rect> = windows.iter().zip(&centres).map(|(w, c)| placed(*c, *w, s, work)).collect();
+        let rects: Vec<Rect> = windows
+            .iter()
+            .zip(&centres)
+            .map(|(w, c)| placed(*c, *w, s, work))
+            .collect();
         centres = rects.iter().map(|r| (r.cx(), r.cy())).collect();
         // 3. overlaps (with the gap between windows) and the push that resolves each
         let mut push = vec![(0.0, 0.0); n];
@@ -91,7 +117,11 @@ pub fn pack(windows: &[Rect], area: Rect, p: &LayoutParams) -> Packing {
                 } else {
                     (dx, dy) = (dx / len, dy / len);
                 }
-                let exit = [(ox, dx), (oy, dy)].into_iter().filter(|(_, d)| d.abs() > 1e-9).map(|(o, d)| o / d.abs()).fold(f64::INFINITY, f64::min);
+                let exit = [(ox, dx), (oy, dy)]
+                    .into_iter()
+                    .filter(|(_, d)| d.abs() > 1e-9)
+                    .map(|(o, d)| o / d.abs())
+                    .fold(f64::INFINITY, f64::min);
                 push[i].0 -= dx * exit / 2.0;
                 push[i].1 -= dy * exit / 2.0;
                 push[j].0 += dx * exit / 2.0;
@@ -106,7 +136,9 @@ pub fn pack(windows: &[Rect], area: Rect, p: &LayoutParams) -> Packing {
         passes += 1;
         // 5. shrink by how little room is left, and move each window by its damped push
         let used = bounds(&rects).expect("n > 0");
-        let room = ((work.w - used.w) / used.w.max(1.0)).max((work.h - used.h) / used.h.max(1.0)).clamp(0.0, 1.0);
+        let room = ((work.w - used.w) / used.w.max(1.0))
+            .max((work.h - used.h) / used.h.max(1.0))
+            .clamp(0.0, 1.0);
         s *= room + p.shrink * (1.0 - room);
         let damping = 1.0 / (max_move / 10.0 + 1.0);
         for (c, (dx, dy)) in centres.iter_mut().zip(&push) {
@@ -194,15 +226,30 @@ mod tests {
         assert_eq!(r.len(), windows.len());
         let scale = r[0].w / windows[0].w;
         for (i, a) in r.iter().enumerate() {
-            assert!(a.x >= work.x - 1e-6 && a.y >= work.y - 1e-6 && a.right() <= work.right() + 1e-6 && a.bottom() <= work.bottom() + 1e-6, "{a:?} outside {work:?}");
+            assert!(
+                a.x >= work.x - 1e-6
+                    && a.y >= work.y - 1e-6
+                    && a.right() <= work.right() + 1e-6
+                    && a.bottom() <= work.bottom() + 1e-6,
+                "{a:?} outside {work:?}"
+            );
             assert!(a.w <= windows[i].w + 1e-9, "no upscale");
-            assert!((a.w / a.h - windows[i].w / windows[i].h).abs() < 1e-6, "aspect preserved");
-            assert!((a.w / windows[i].w - scale).abs() < 1e-6, "one common scale");
+            assert!(
+                (a.w / a.h - windows[i].w / windows[i].h).abs() < 1e-6,
+                "aspect preserved"
+            );
+            assert!(
+                (a.w / windows[i].w - scale).abs() < 1e-6,
+                "one common scale"
+            );
             for b in &r[i + 1..] {
                 let (ga, gb) = (a.inset(-p.gap / 2.0), b.inset(-p.gap / 2.0));
                 let ox = ga.right().min(gb.right()) - ga.x.max(gb.x);
                 let oy = ga.bottom().min(gb.bottom()) - ga.y.max(gb.y);
-                assert!(ox <= p.tolerance + 1e-6 || oy <= p.tolerance + 1e-6, "{a:?} and {b:?} overlap by {ox}×{oy}");
+                assert!(
+                    ox <= p.tolerance + 1e-6 || oy <= p.tolerance + 1e-6,
+                    "{a:?} and {b:?} overlap by {ox}×{oy}"
+                );
             }
         }
         assert!(packing.passes <= p.max_passes);
@@ -212,8 +259,14 @@ mod tests {
     #[test]
     fn overlapping_windows_are_pushed_apart_inside_the_inset_work_area() {
         let packing = check(&wins(), AREA);
-        assert!(packing.passes > 0, "the cascade overlaps and needs relaxation");
-        assert!(packing.passes < LayoutParams::default().max_passes, "and settles before the pass limit");
+        assert!(
+            packing.passes > 0,
+            "the cascade overlaps and needs relaxation"
+        );
+        assert!(
+            packing.passes < LayoutParams::default().max_passes,
+            "and settles before the pass limit"
+        );
     }
 
     #[test]
@@ -224,7 +277,10 @@ mod tests {
         assert_eq!(packing.passes, 0);
         assert_eq!((r.w, r.h), (800.0, 600.0));
         assert!((r.cx() - w.cx()).abs() < 1e-9);
-        assert!((r.cy() - (w.cy() - 20.0)).abs() < 1e-9, "20 pt above its centre: {r:?}");
+        assert!(
+            (r.cy() - (w.cy() - 20.0)).abs() < 1e-9,
+            "20 pt above its centre: {r:?}"
+        );
     }
 
     #[test]
@@ -233,7 +289,10 @@ mod tests {
         let work = AREA.inset(20.0);
         let r = packing.rects[0];
         assert_eq!(packing.passes, 0);
-        assert!((r.w - work.w).abs() < 1e-6 || (r.h - work.h).abs() < 1e-6, "touches the work area on one axis: {r:?}");
+        assert!(
+            (r.w - work.w).abs() < 1e-6 || (r.h - work.h).abs() < 1e-6,
+            "touches the work area on one axis: {r:?}"
+        );
     }
 
     #[test]
@@ -242,16 +301,35 @@ mod tests {
         let packing = check(&[full, full], AREA);
         let [a, b] = [packing.rects[0], packing.rects[1]];
         let work = AREA.inset(20.0);
-        assert!(a.w <= work.w / 2.0 + 1e-6 && b.w <= work.w / 2.0 + 1e-6, "{a:?} {b:?}");
-        assert!((a.x - b.x).abs() > a.w - 4.0, "apart horizontally: {a:?} {b:?}");
+        assert!(
+            a.w <= work.w / 2.0 + 1e-6 && b.w <= work.w / 2.0 + 1e-6,
+            "{a:?} {b:?}"
+        );
+        assert!(
+            (a.x - b.x).abs() > a.w - 4.0,
+            "apart horizontally: {a:?} {b:?}"
+        );
     }
 
     #[test]
     fn many_windows_still_settle_within_the_pass_limit() {
-        let many: Vec<Rect> = (0..20).map(|i| Rect::new(60.0 * (i % 7) as f64, 90.0 + 50.0 * (i % 5) as f64, 900.0, 600.0)).collect();
+        let many: Vec<Rect> = (0..20)
+            .map(|i| {
+                Rect::new(
+                    60.0 * (i % 7) as f64,
+                    90.0 + 50.0 * (i % 5) as f64,
+                    900.0,
+                    600.0,
+                )
+            })
+            .collect();
         let packing = check(&many, AREA);
         assert!(packing.passes <= 499);
-        assert!(packing.rects[0].w < 400.0, "twenty windows are small: {:?}", packing.rects[0]);
+        assert!(
+            packing.rects[0].w < 400.0,
+            "twenty windows are small: {:?}",
+            packing.rects[0]
+        );
     }
 
     #[test]
@@ -260,7 +338,11 @@ mod tests {
         let packing = check(&[same, same, same], AREA);
         let xs: Vec<f64> = packing.rects.iter().map(|r| r.x).collect();
         assert!(xs.windows(2).all(|p| (p[0] - p[1]).abs() > 1.0), "{xs:?}");
-        assert_eq!(pack(&[same, same, same], AREA, &LayoutParams::default()), packing, "the same input packs the same way");
+        assert_eq!(
+            pack(&[same, same, same], AREA, &LayoutParams::default()),
+            packing,
+            "the same input packs the same way"
+        );
     }
 
     #[test]
@@ -269,22 +351,40 @@ mod tests {
         let a = Rect::new(400.0, 300.0, 500.0, 400.0);
         let b = Rect::new(500.0, 300.0, 500.0, 400.0);
         let packing = check(&[a, b], AREA);
-        assert!((packing.rects[0].w - 500.0).abs() < 1e-6, "room to spread: no shrink, got {:?}", packing.rects[0]);
+        assert!(
+            (packing.rects[0].w - 500.0).abs() < 1e-6,
+            "room to spread: no shrink, got {:?}",
+            packing.rects[0]
+        );
     }
 
     #[test]
     fn empty_input_is_empty_output() {
-        assert_eq!(pack(&[], AREA, &LayoutParams::default()), Packing { rects: vec![], passes: 0 });
+        assert_eq!(
+            pack(&[], AREA, &LayoutParams::default()),
+            Packing {
+                rects: vec![],
+                passes: 0
+            }
+        );
         assert!(layout(&[], AREA, &LayoutParams::default()).is_empty());
     }
 
     #[test]
     fn row_layout_is_ordered_scaled_and_centred() {
         let area = Rect::new(0.0, 800.0, 1000.0, 200.0);
-        let w = vec![Rect::new(0.0, 0.0, 800.0, 600.0), Rect::new(0.0, 0.0, 400.0, 300.0), Rect::new(0.0, 0.0, 600.0, 600.0)];
+        let w = vec![
+            Rect::new(0.0, 0.0, 800.0, 600.0),
+            Rect::new(0.0, 0.0, 400.0, 300.0),
+            Rect::new(0.0, 0.0, 600.0, 600.0),
+        ];
         let r = layout_row(&w, area, 20.0, 0.5);
-        assert!(r.windows(2).all(|p| p[0].right() + 20.0 - p[1].x < 1e-9 && p[0].x < p[1].x));
-        assert!(r.iter().all(|x| x.h <= 200.0 + 1e-9 && x.y >= area.y && x.bottom() <= area.bottom()));
+        assert!(r
+            .windows(2)
+            .all(|p| p[0].right() + 20.0 - p[1].x < 1e-9 && p[0].x < p[1].x));
+        assert!(r
+            .iter()
+            .all(|x| x.h <= 200.0 + 1e-9 && x.y >= area.y && x.bottom() <= area.bottom()));
         let s = r[0].w / w[0].w;
         assert!(r.iter().zip(&w).all(|(a, b)| (a.w / b.w - s).abs() < 1e-9));
         assert!(s <= 0.5 + 1e-12);

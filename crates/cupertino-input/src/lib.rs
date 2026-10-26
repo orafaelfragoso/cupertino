@@ -29,32 +29,44 @@ pub mod geom;
 pub mod gesture;
 pub mod hotcorner;
 pub mod keysym;
+pub mod pointer;
 pub mod scroll;
 pub mod scroll_accel;
 pub mod scroll_count;
-pub mod pointer;
 pub mod shortcuts;
 pub mod table;
 pub mod touchpad;
 pub mod velocity;
 
-pub use cursor::{clamp_cursor_scale, ShakeDetector, CURSOR_SCALE_LIMIT, CURSOR_SCALE_MAX, CURSOR_SCALE_MIN, SHAKE_EVALUATION_INTERVAL_S, SHAKE_SCALE_MAX};
+pub use cursor::{
+    clamp_cursor_scale, ShakeDetector, CURSOR_SCALE_LIMIT, CURSOR_SCALE_MAX, CURSOR_SCALE_MIN,
+    SHAKE_EVALUATION_INTERVAL_S, SHAKE_SCALE_MAX,
+};
 pub use edge::{Edge, EdgeConfig, EdgeEvent, EdgeReveal};
 pub use geom::{drag_started, Modifiers, Point, Rect, DRAG_START_THRESHOLD};
-pub use gesture::{fluid_swipe_commits, Direction, Disposition, GestureConfig, GestureEvent, GestureKind, GestureOutput, GestureRecognizer, Outcome};
-pub use hotcorner::{Corner, CornerAction, CornerBinding, CornerEvent, HotCornerConfig, HotCorners};
+pub use gesture::{
+    fluid_swipe_commits, Direction, Disposition, GestureConfig, GestureEvent, GestureKind,
+    GestureOutput, GestureRecognizer, Outcome,
+};
+pub use hotcorner::{
+    Corner, CornerAction, CornerBinding, CornerEvent, HotCornerConfig, HotCorners,
+};
 pub use pointer::{
-    double_click_space, scroll_point_delta, AccelCurve, CurveParams, ParametricCurve, PointerAccel, DEFAULT_ACCELERATION, DEFAULT_DOUBLE_CLICK_TIME,
-    DEFAULT_SCROLLING_SPEED, DEFAULT_TRACKING_SPEED, MOUSE_CURVES, POINTS_PER_LINE, TRACKING_SPEED_STOPS, TRACKPAD_CURVES, TRACKPAD_REPORT_RATE_HZ,
-    TRACKPAD_SCROLL_CURVES,
+    double_click_space, scroll_point_delta, AccelCurve, CurveParams, ParametricCurve, PointerAccel,
+    DEFAULT_ACCELERATION, DEFAULT_DOUBLE_CLICK_TIME, DEFAULT_SCROLLING_SPEED,
+    DEFAULT_TRACKING_SPEED, MOUSE_CURVES, POINTS_PER_LINE, TRACKING_SPEED_STOPS, TRACKPAD_CURVES,
+    TRACKPAD_REPORT_RATE_HZ, TRACKPAD_SCROLL_CURVES,
 };
 pub use scroll::{KineticScroller, MomentumKind, ScrollConfig};
-pub use scroll_accel::{ScrollAxisAccel, ScrollConsume, DEFAULT_SCROLL_REPORT_RATE_HZ, SCROLL_OUTPUT_SCALE, TRACKPAD_SCROLL_RESOLUTION};
+pub use scroll_accel::{
+    ScrollAxisAccel, ScrollConsume, DEFAULT_SCROLL_REPORT_RATE_HZ, SCROLL_OUTPUT_SCALE,
+    TRACKPAD_SCROLL_RESOLUTION,
+};
 pub use scroll_count::{ScrollCounter, ScrollPhase};
 pub use shortcuts::{Action, KeyCombo, ParseError, ScreenshotRequest, ShortcutMap};
 pub use table::{AccelTable, TableCurve, TableEntry, TableError, DEFAULT_TABLE};
 pub use touchpad::{
-    ClickPressure, CornerClick, SwipeAxis, TouchContact, Touchpad, TouchpadButton, TouchpadEvent, TouchpadFrame, TouchpadGeometry,
-    TouchpadSettings, MM_PER_COUNT, SWIPE_COMPLETE_MM,
+    ClickPressure, CornerClick, SwipeAxis, TouchContact, Touchpad, TouchpadButton, TouchpadEvent,
+    TouchpadFrame, TouchpadGeometry, TouchpadSettings, MM_PER_COUNT, SWIPE_COMPLETE_MM,
 };
 pub use velocity::VelocityTracker;

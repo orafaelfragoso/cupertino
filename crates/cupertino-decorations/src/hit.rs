@@ -33,7 +33,10 @@ pub enum Hit {
 /// Band around the frame in which the pointer resizes: from `outset` points outside to `inset`
 /// points inside the frame geometry (4 and 3 pt).
 pub fn resize_band(frame: Rect, metrics: &DecorationMetrics) -> (Rect, Rect) {
-    (frame.outset(metrics.resize_outset), frame.outset(-metrics.resize_inset))
+    (
+        frame.outset(metrics.resize_outset),
+        frame.outset(-metrics.resize_inset),
+    )
 }
 
 /// The rectangle in which the compositor must deliver pointer input for the frame to be
@@ -46,21 +49,34 @@ pub fn input_region(layout: &FrameLayout, metrics: &DecorationMetrics) -> Rect {
 /// along the edges from each corner (12 pt, the bottom-right one 15 pt). Server-decorated and
 /// client-decorated windows share it, measured from their frame. The part outside the frame exists for titled windows
 /// only (`exterior`); an untitled window has the inside band alone.
-pub fn resize_hit(f: Rect, metrics: &DecorationMetrics, p: Point, exterior: bool) -> Option<ResizeEdge> {
+pub fn resize_hit(
+    f: Rect,
+    metrics: &DecorationMetrics,
+    p: Point,
+    exterior: bool,
+) -> Option<ResizeEdge> {
     let (outer, inner) = resize_band(f, metrics);
     let outer = if exterior { outer } else { f };
     if !outer.contains(p) || inner.contains(p) {
         return None;
     }
     // corner zones run along the edges from the corner; the bottom-right one is longer
-    let (cx, cy) = (metrics.resize_corner.min(f.width() / 2.0), metrics.resize_corner.min(f.height() / 2.0));
-    let (sx, sy) = (metrics.resize_corner_bottom_right.min(f.width() / 2.0), metrics.resize_corner_bottom_right.min(f.height() / 2.0));
+    let (cx, cy) = (
+        metrics.resize_corner.min(f.width() / 2.0),
+        metrics.resize_corner.min(f.height() / 2.0),
+    );
+    let (sx, sy) = (
+        metrics.resize_corner_bottom_right.min(f.width() / 2.0),
+        metrics.resize_corner_bottom_right.min(f.height() / 2.0),
+    );
     let (on_left, on_right) = (p.x < inner.min_x(), p.x >= inner.max_x());
     let (on_top, on_bottom) = (p.y < inner.min_y(), p.y >= inner.max_y());
     let left = on_left || ((on_top || on_bottom) && p.x < f.min_x() + cx);
-    let right = !left && (on_right || (on_top && p.x >= f.max_x() - cx) || (on_bottom && p.x >= f.max_x() - sx));
+    let right = !left
+        && (on_right || (on_top && p.x >= f.max_x() - cx) || (on_bottom && p.x >= f.max_x() - sx));
     let top = on_top || ((on_left || on_right) && p.y < f.min_y() + cy);
-    let bottom = !top && (on_bottom || (on_left && p.y >= f.max_y() - cy) || (on_right && p.y >= f.max_y() - sy));
+    let bottom = !top
+        && (on_bottom || (on_left && p.y >= f.max_y() - cy) || (on_right && p.y >= f.max_y() - sy));
     Some(match (left, right, top, bottom) {
         (true, _, true, _) => ResizeEdge::TopLeft,
         (true, _, _, true) => ResizeEdge::BottomLeft,
@@ -74,7 +90,12 @@ pub fn resize_hit(f: Rect, metrics: &DecorationMetrics, p: Point, exterior: bool
 }
 
 /// What lies under `p`. `resizable = false` disables the resize zones.
-pub fn hit_test(layout: &FrameLayout, metrics: &DecorationMetrics, p: Point, resizable: bool) -> Hit {
+pub fn hit_test(
+    layout: &FrameLayout,
+    metrics: &DecorationMetrics,
+    p: Point,
+    resizable: bool,
+) -> Hit {
     for b in &layout.buttons {
         if b.art.contains(p) {
             return Hit::Button(b.kind);
@@ -113,7 +134,12 @@ impl ResizeEdge {
     /// Edge bits for a resize request: (left, right, top, bottom).
     pub fn sides(self) -> (bool, bool, bool, bool) {
         use ResizeEdge::*;
-        (matches!(self, Left | TopLeft | BottomLeft), matches!(self, Right | TopRight | BottomRight), matches!(self, Top | TopLeft | TopRight), matches!(self, Bottom | BottomLeft | BottomRight))
+        (
+            matches!(self, Left | TopLeft | BottomLeft),
+            matches!(self, Right | TopRight | BottomRight),
+            matches!(self, Top | TopLeft | TopRight),
+            matches!(self, Bottom | BottomLeft | BottomRight),
+        )
     }
 }
 
@@ -125,17 +151,35 @@ mod tests {
     fn an_untitled_frame_has_the_inside_band_only() {
         let m = DecorationMetrics::default();
         let f = Rect::new(0.0, 0.0, 400.0, 300.0);
-        assert_eq!(resize_hit(f, &m, Point::new(402.0, 150.0), true), Some(ResizeEdge::Right));
-        assert_eq!(resize_hit(f, &m, Point::new(402.0, 150.0), false), None, "outside");
-        assert_eq!(resize_hit(f, &m, Point::new(398.0, 150.0), false), Some(ResizeEdge::Right), "inside");
-        assert_eq!(resize_hit(f, &m, Point::new(396.0, 150.0), false), None, "past the 3 pt band");
+        assert_eq!(
+            resize_hit(f, &m, Point::new(402.0, 150.0), true),
+            Some(ResizeEdge::Right)
+        );
+        assert_eq!(
+            resize_hit(f, &m, Point::new(402.0, 150.0), false),
+            None,
+            "outside"
+        );
+        assert_eq!(
+            resize_hit(f, &m, Point::new(398.0, 150.0), false),
+            Some(ResizeEdge::Right),
+            "inside"
+        );
+        assert_eq!(
+            resize_hit(f, &m, Point::new(396.0, 150.0), false),
+            None,
+            "past the 3 pt band"
+        );
     }
     use crate::metrics::TitlebarStyle;
     use cupertino_geometry::Size;
 
     fn setup() -> (FrameLayout, DecorationMetrics) {
         let m = DecorationMetrics::default();
-        (FrameLayout::new(Size::new(800.0, 600.0), TitlebarStyle::Standard, &m, 12.0), m)
+        (
+            FrameLayout::new(Size::new(800.0, 600.0), TitlebarStyle::Standard, &m, 12.0),
+            m,
+        )
     }
 
     fn hit(p: (f64, f64)) -> Hit {
@@ -148,9 +192,21 @@ mod tests {
         let (l, m) = setup();
         for b in &l.buttons {
             assert_eq!(hit_test(&l, &m, b.center, true), Hit::Button(b.kind));
-            assert_eq!(hit_test(&l, &m, Point::new(b.art.min_x() + 0.5, b.art.min_y() + 0.5), true), Hit::Button(b.kind));
+            assert_eq!(
+                hit_test(
+                    &l,
+                    &m,
+                    Point::new(b.art.min_x() + 0.5, b.art.min_y() + 0.5),
+                    true
+                ),
+                Hit::Button(b.kind)
+            );
         }
-        assert_eq!(hit((l.buttons[1].art.max_x() + 0.5, 14.0)), Hit::Titlebar, "gap between art boxes");
+        assert_eq!(
+            hit((l.buttons[1].art.max_x() + 0.5, 14.0)),
+            Hit::Titlebar,
+            "gap between art boxes"
+        );
     }
 
     #[test]
@@ -191,12 +247,24 @@ mod tests {
         assert_eq!(hit((803.0, -3.0)), Hit::Resize(ResizeEdge::TopRight));
         assert_eq!(hit((-3.0, 631.0)), Hit::Resize(ResizeEdge::BottomLeft));
         assert_eq!(hit((803.0, 631.0)), Hit::Resize(ResizeEdge::BottomRight));
-        assert_eq!(hit((11.9, -3.0)), Hit::Resize(ResizeEdge::TopLeft), "along the edge near the corner");
-        assert_eq!(hit((12.0, -3.0)), Hit::Resize(ResizeEdge::Top), "12 pt corner");
+        assert_eq!(
+            hit((11.9, -3.0)),
+            Hit::Resize(ResizeEdge::TopLeft),
+            "along the edge near the corner"
+        );
+        assert_eq!(
+            hit((12.0, -3.0)),
+            Hit::Resize(ResizeEdge::Top),
+            "12 pt corner"
+        );
         assert_eq!(hit((788.0, -3.0)), Hit::Resize(ResizeEdge::TopRight));
         assert_eq!(hit((787.9, -3.0)), Hit::Resize(ResizeEdge::Top));
         assert_eq!(hit((785.0, 630.0)), Hit::Resize(ResizeEdge::BottomRight));
-        assert_eq!(hit((784.9, 630.0)), Hit::Resize(ResizeEdge::Bottom), "15 pt bottom-right corner");
+        assert_eq!(
+            hit((784.9, 630.0)),
+            Hit::Resize(ResizeEdge::Bottom),
+            "15 pt bottom-right corner"
+        );
         assert_eq!(hit((801.0, 613.0)), Hit::Resize(ResizeEdge::BottomRight));
         assert_eq!(hit((801.0, 612.9)), Hit::Resize(ResizeEdge::Right));
         assert_eq!(hit((-3.0, 616.0)), Hit::Resize(ResizeEdge::BottomLeft));
@@ -207,14 +275,20 @@ mod tests {
     fn buttons_win_over_resize_zones() {
         let (l, m) = setup();
         let b = l.buttons[0];
-        assert_eq!(hit_test(&l, &m, Point::new(b.art.min_x() + 0.1, b.center.y), true), Hit::Button(ButtonKind::Close));
+        assert_eq!(
+            hit_test(&l, &m, Point::new(b.art.min_x() + 0.1, b.center.y), true),
+            Hit::Button(ButtonKind::Close)
+        );
     }
 
     #[test]
     fn non_resizable_windows_have_no_resize_zones() {
         let (l, m) = setup();
         assert_eq!(hit_test(&l, &m, Point::new(-3.0, 300.0), false), Hit::None);
-        assert_eq!(hit_test(&l, &m, Point::new(1.0, 300.0), false), Hit::Content);
+        assert_eq!(
+            hit_test(&l, &m, Point::new(1.0, 300.0), false),
+            Hit::Content
+        );
     }
 
     #[test]
@@ -225,17 +299,35 @@ mod tests {
 
     #[test]
     fn double_click_acts_on_the_titlebar_only() {
-        assert_eq!(double_click(Hit::Titlebar, DoubleClickAction::Zoom), DoubleClickAction::Zoom);
-        assert_eq!(double_click(Hit::Titlebar, DoubleClickAction::Minimize), DoubleClickAction::Minimize);
-        assert_eq!(double_click(Hit::Content, DoubleClickAction::Zoom), DoubleClickAction::None);
-        assert_eq!(double_click(Hit::Button(ButtonKind::Zoom), DoubleClickAction::Zoom), DoubleClickAction::None);
+        assert_eq!(
+            double_click(Hit::Titlebar, DoubleClickAction::Zoom),
+            DoubleClickAction::Zoom
+        );
+        assert_eq!(
+            double_click(Hit::Titlebar, DoubleClickAction::Minimize),
+            DoubleClickAction::Minimize
+        );
+        assert_eq!(
+            double_click(Hit::Content, DoubleClickAction::Zoom),
+            DoubleClickAction::None
+        );
+        assert_eq!(
+            double_click(Hit::Button(ButtonKind::Zoom), DoubleClickAction::Zoom),
+            DoubleClickAction::None
+        );
     }
 
     #[test]
     fn button_group_hover() {
         let (l, _) = setup();
         assert!(in_button_group(&l, l.buttons[1].center));
-        assert!(in_button_group(&l, Point::new(l.buttons[1].art.max_x() + 1.0, l.buttons[1].center.y)), "gap inside the group");
+        assert!(
+            in_button_group(
+                &l,
+                Point::new(l.buttons[1].art.max_x() + 1.0, l.buttons[1].center.y)
+            ),
+            "gap inside the group"
+        );
         assert!(!in_button_group(&l, Point::new(400.0, 14.0)));
     }
 

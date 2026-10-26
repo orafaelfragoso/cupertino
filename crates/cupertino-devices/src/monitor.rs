@@ -14,9 +14,7 @@ use std::path::PathBuf;
 
 use rustix::io::Errno;
 use rustix::net::netlink::{SocketAddrNetlink, KOBJECT_UEVENT};
-use rustix::net::{
-    AddressFamily, RecvFlags, SocketFlags, SocketType, bind, recvfrom, socket_with,
-};
+use rustix::net::{bind, recvfrom, socket_with, AddressFamily, RecvFlags, SocketFlags, SocketType};
 
 use crate::dev_t::DevT;
 use crate::error::{Error, ParseError, Result};
@@ -141,7 +139,12 @@ impl Monitor {
                         drained.overflowed = true;
                         continue;
                     }
-                    Err(source) => return Err(Error::Syscall { call: "recvfrom", source }),
+                    Err(source) => {
+                        return Err(Error::Syscall {
+                            call: "recvfrom",
+                            source,
+                        })
+                    }
                 };
             let from_kernel = sender
                 .and_then(|address| SocketAddrNetlink::try_from(address).ok())
@@ -297,14 +300,30 @@ CONNECTOR=96\0DEVNAME=dri/card1\0MAJOR=226\0MINOR=1\0SEQNUM=4301\0";
         drained.record(b"libudev\0\xfe\xed\xca\xfe", false);
         drained.record(CHANGE_CARD, true);
         drained.record(REMOVE_CARD, false);
-        let actions: Vec<(Action, Option<DevT>)> = drained.events.iter().map(|e| (e.action.clone(), e.devnum)).collect();
-        assert_eq!(actions, [(Action::Added, Some(DevT::new(13, 69))), (Action::Removed, Some(DevT::new(226, 1)))]);
-        assert_eq!(drained.errors, [ParseError::MissingHeader, ParseError::Truncated]);
+        let actions: Vec<(Action, Option<DevT>)> = drained
+            .events
+            .iter()
+            .map(|e| (e.action.clone(), e.devnum))
+            .collect();
+        assert_eq!(
+            actions,
+            [
+                (Action::Added, Some(DevT::new(13, 69))),
+                (Action::Removed, Some(DevT::new(226, 1)))
+            ]
+        );
+        assert_eq!(
+            drained.errors,
+            [ParseError::MissingHeader, ParseError::Truncated]
+        );
         assert!(!drained.overflowed);
     }
 
     #[test]
     fn invalid_utf8_is_an_error() {
-        assert_eq!(parse_datagram(b"add@/devices/\xff\0"), Err(ParseError::NotUtf8));
+        assert_eq!(
+            parse_datagram(b"add@/devices/\xff\0"),
+            Err(ParseError::NotUtf8)
+        );
     }
 }

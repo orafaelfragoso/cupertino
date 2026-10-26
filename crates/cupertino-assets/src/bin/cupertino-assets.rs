@@ -9,7 +9,9 @@
 //! (the embedded font, a placeholder icon, the procedural cursors and wallpaper). It exits 1 only when the manifest
 //! cannot be read, is not valid JSON or has an unsupported version, never because assets are missing.
 
-use cupertino_assets::{Assets, FontRole, IconName, IconSource, CURSOR_NAMES, RASTER_NAMES, SYMBOL_NAMES};
+use cupertino_assets::{
+    Assets, FontRole, IconName, IconSource, CURSOR_NAMES, RASTER_NAMES, SYMBOL_NAMES,
+};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -45,8 +47,15 @@ fn report(assets: &Assets, notes: &[String]) -> String {
         out.push('\n');
     };
     for (root, name, credits) in assets.credits() {
-        line(format!("pack {} ({})", root.display(), name.unwrap_or("unnamed")));
-        line(format!("  credits: {}", credits.map_or("none".to_string(), |c| c.display().to_string())));
+        line(format!(
+            "pack {} ({})",
+            root.display(),
+            name.unwrap_or("unnamed")
+        ));
+        line(format!(
+            "  credits: {}",
+            credits.map_or("none".to_string(), |c| c.display().to_string())
+        ));
     }
     line(format!("problems: {}", notes.len()));
     for n in notes {
@@ -58,7 +67,10 @@ fn report(assets: &Assets, notes: &[String]) -> String {
         match assets.font_family(role) {
             Some(family) => line(format!("  {}: {family}", role.key())),
             None if role == FontRole::Ui => {
-                line(format!("  ui: built-in ({})", cupertino_assets::BUILTIN_UI_FAMILY));
+                line(format!(
+                    "  ui: built-in ({})",
+                    cupertino_assets::BUILTIN_UI_FAMILY
+                ));
                 fallbacks.push("font ui".to_string());
             }
             None => line(format!("  {}: not set (optional)", role.key())),
@@ -71,7 +83,11 @@ fn report(assets: &Assets, notes: &[String]) -> String {
             Some((_, IconSource::Raster(r))) => format!("raster {}", r.path.display()),
             Some((_, IconSource::Svg(p))) => format!("svg {}", p.display()),
             Some((_, IconSource::Symbol(p))) => format!("symbol {}", p.display()),
-            Some((_, IconSource::Theme { names, theme })) => format!("host theme {} ({})", theme.as_deref().unwrap_or("of the user"), names.join(", ")),
+            Some((_, IconSource::Theme { names, theme })) => format!(
+                "host theme {} ({})",
+                theme.as_deref().unwrap_or("of the user"),
+                names.join(", ")
+            ),
             None => {
                 fallbacks.push(format!("icon {name}"));
                 "placeholder (built-in)".to_string()
@@ -83,7 +99,11 @@ fn report(assets: &Assets, notes: &[String]) -> String {
     match assets.cursor_theme() {
         Some(theme) => {
             let dir = theme.search_dir.join(&theme.name).join("cursors");
-            line(format!("  theme {} in {}", theme.name, theme.search_dir.display()));
+            line(format!(
+                "  theme {} in {}",
+                theme.name,
+                theme.search_dir.display()
+            ));
             for name in CURSOR_NAMES {
                 if !dir.join(name).exists() {
                     fallbacks.push(format!("cursor {name}"));
@@ -120,11 +140,23 @@ mod tests {
     #[test]
     fn an_empty_pack_reports_every_name_as_falling_back() {
         let d = tempfile::tempdir().unwrap();
-        std::fs::write(d.path().join("manifest.json"), r#"{"version": 2, "name": "empty", "surplus": true}"#).unwrap();
+        std::fs::write(
+            d.path().join("manifest.json"),
+            r#"{"version": 2, "name": "empty", "surplus": true}"#,
+        )
+        .unwrap();
         let (assets, notes) = Assets::read_pack(d.path()).unwrap();
         let r = report(&assets, &notes);
-        assert!(r.contains("problems: 1") && r.contains("unknown key \"surplus\""), "{r}");
-        assert!(r.contains("ui: built-in (Inter Variable)") && r.contains("symbol.wifi: placeholder (built-in)") && r.contains("procedural (built-in)"), "{r}");
+        assert!(
+            r.contains("problems: 1") && r.contains("unknown key \"surplus\""),
+            "{r}"
+        );
+        assert!(
+            r.contains("ui: built-in (Inter Variable)")
+                && r.contains("symbol.wifi: placeholder (built-in)")
+                && r.contains("procedural (built-in)"),
+            "{r}"
+        );
         let expected = 1 + RASTER_NAMES.len() + SYMBOL_NAMES.len() + 1 + 2;
         assert!(r.contains(&format!("falls back: {expected}")), "{r}");
     }

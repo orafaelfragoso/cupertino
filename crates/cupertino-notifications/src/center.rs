@@ -11,7 +11,9 @@
 //! over, a hover hold polled every second, a slide by the banner width and a drag that dismisses
 //! rightwards and springs back leftwards.
 
-use crate::notification::{CloseReason, Expire, Notification, NotifyInput, Urgency, DEFAULT_ACTION_KEY};
+use crate::notification::{
+    CloseReason, Expire, Notification, NotifyInput, Urgency, DEFAULT_ACTION_KEY,
+};
 use cupertino_animation::{CubicBezier, Spring, SpringParams};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_theme::Theme;
@@ -102,7 +104,12 @@ pub struct StackLayout {
 
 impl Default for StackLayout {
     fn default() -> Self {
-        Self { width: 344.0, top_inset: 24.0 + Self::LIST_TOP_PADDING, right_margin: Self::ROW_SIDE_PADDING, fallback_height: 72.0 }
+        Self {
+            width: 344.0,
+            top_inset: 24.0 + Self::LIST_TOP_PADDING,
+            right_margin: Self::ROW_SIDE_PADDING,
+            fallback_height: 72.0,
+        }
     }
 }
 
@@ -121,7 +128,10 @@ impl StackLayout {
     /// Layout for the user's `width` preference: `clamp(setting, 344, 620), so an unset preference
     /// (0) gives 344 pt.
     pub fn with_width_setting(setting: i64) -> Self {
-        Self { width: setting.clamp(344, 620) as f64, ..Self::default() }
+        Self {
+            width: setting.clamp(344, 620) as f64,
+            ..Self::default()
+        }
     }
 }
 
@@ -176,7 +186,12 @@ impl Default for SwipeConfig {
             left_limit: -16.0,
             velocity_divisor: 100.0,
             min_dismiss_speed: 8.0,
-            spring_back: SpringParams { mass: 1.0, stiffness: 100.0, damping: 100.0, ..SpringParams::default() },
+            spring_back: SpringParams {
+                mass: 1.0,
+                stiffness: 100.0,
+                damping: 100.0,
+                ..SpringParams::default()
+            },
         }
     }
 }
@@ -208,7 +223,13 @@ pub struct Motion {
 
 impl Default for Motion {
     fn default() -> Self {
-        Self { duration: 0.25, curve: CubicBezier::EASE_IN_EASE_OUT, completion_slack: 0.01, reduce_motion: false, speed_divisor: 15.0 }
+        Self {
+            duration: 0.25,
+            curve: CubicBezier::EASE_IN_EASE_OUT,
+            completion_slack: 0.01,
+            reduce_motion: false,
+            speed_divisor: 15.0,
+        }
     }
 }
 
@@ -244,7 +265,15 @@ impl Default for CenterConfig {
             history_limit: 200,
             critical_bypasses_dnd: true,
             swipe_removes_from_centre: false,
-            capabilities: ["actions", "body", "body-markup", "icon-static", "persistence"].map(String::from).to_vec(),
+            capabilities: [
+                "actions",
+                "body",
+                "body-markup",
+                "icon-static",
+                "persistence",
+            ]
+            .map(String::from)
+            .to_vec(),
         }
     }
 }
@@ -252,8 +281,14 @@ impl Default for CenterConfig {
 impl CenterConfig {
     /// Defaults with the top inset below the theme's menu bar.
     pub fn from_theme(theme: &Theme) -> Self {
-        let layout = StackLayout { top_inset: theme.shapes.menu_bar_height + StackLayout::LIST_TOP_PADDING, ..StackLayout::default() };
-        Self { layout, ..Self::default() }
+        let layout = StackLayout {
+            top_inset: theme.shapes.menu_bar_height + StackLayout::LIST_TOP_PADDING,
+            ..StackLayout::default()
+        };
+        Self {
+            layout,
+            ..Self::default()
+        }
     }
 }
 
@@ -268,8 +303,15 @@ pub enum DndMode {
 /// Something the host has to report on the bus (or react to).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
-    Closed { id: u32, reason: CloseReason },
-    ActionInvoked { id: u32, key: String, activation_token: Option<String> },
+    Closed {
+        id: u32,
+        reason: CloseReason,
+    },
+    ActionInvoked {
+        id: u32,
+        key: String,
+        activation_token: Option<String>,
+    },
 }
 
 /// Measures banner heights; implemented by the renderer (text wrapping needs the font stack).
@@ -338,27 +380,59 @@ pub struct Group<'a> {
 enum Phase {
     /// In the waiting slot.
     Pending,
-    Visible { shown_at: f64 },
-    Leaving { ends_at: f64 },
+    Visible {
+        shown_at: f64,
+    },
+    Leaving {
+        ends_at: f64,
+    },
 }
 
 /// A scalar that is still, eased between two values, or settling with a spring.
 #[derive(Clone, Copy, Debug)]
 enum Track {
     Still(f64),
-    Eased { from: f64, to: f64, start: f64, duration: f64, curve: CubicBezier },
-    Spring { from: f64, to: f64, start: f64, ends: f64, spring: Spring },
+    Eased {
+        from: f64,
+        to: f64,
+        start: f64,
+        duration: f64,
+        curve: CubicBezier,
+    },
+    Spring {
+        from: f64,
+        to: f64,
+        start: f64,
+        ends: f64,
+        spring: Spring,
+    },
 }
 
 impl Track {
     fn value(&self, now: f64) -> f64 {
         match *self {
             Track::Still(v) => v,
-            Track::Eased { from, to, start, duration, curve } => {
-                let x = if duration <= 0.0 { 1.0 } else { ((now - start) / duration).clamp(0.0, 1.0) };
+            Track::Eased {
+                from,
+                to,
+                start,
+                duration,
+                curve,
+            } => {
+                let x = if duration <= 0.0 {
+                    1.0
+                } else {
+                    ((now - start) / duration).clamp(0.0, 1.0)
+                };
                 from + (to - from) * curve.eval(x)
             }
-            Track::Spring { from, to, start, ends, spring } => {
+            Track::Spring {
+                from,
+                to,
+                start,
+                ends,
+                spring,
+            } => {
                 if now >= ends {
                     to
                 } else {
@@ -371,14 +445,22 @@ impl Track {
     fn is_animating(&self, now: f64) -> bool {
         match *self {
             Track::Still(_) => false,
-            Track::Eased { start, duration, .. } => now < start + duration,
+            Track::Eased {
+                start, duration, ..
+            } => now < start + duration,
             Track::Spring { ends, .. } => now < ends,
         }
     }
 
     /// Ease from the current value to `to`.
     fn ease_to(&mut self, to: f64, motion: &Motion, duration: f64, now: f64) {
-        *self = Track::Eased { from: self.value(now), to, start: now, duration, curve: motion.curve };
+        *self = Track::Eased {
+            from: self.value(now),
+            to,
+            start: now,
+            duration,
+            curve: motion.curve,
+        };
     }
 }
 
@@ -436,7 +518,17 @@ impl Default for NotificationCenter {
 
 impl NotificationCenter {
     pub fn new(config: CenterConfig) -> Self {
-        Self { config, entries: Vec::new(), next_id: 1, next_seq: 0, dnd: DndMode::Off, screen_locked: false, events: VecDeque::new(), last_rects: Vec::new(), revision: 0 }
+        Self {
+            config,
+            entries: Vec::new(),
+            next_id: 1,
+            next_seq: 0,
+            dnd: DndMode::Off,
+            screen_locked: false,
+            events: VecDeque::new(),
+            last_rects: Vec::new(),
+            revision: 0,
+        }
     }
 
     /// Increments on every state change (cheap change detection for caches and redraw requests).
@@ -459,7 +551,11 @@ impl NotificationCenter {
     fn alloc_id(&mut self) -> u32 {
         loop {
             let id = self.next_id;
-            self.next_id = if self.next_id == u32::MAX { 1 } else { self.next_id + 1 };
+            self.next_id = if self.next_id == u32::MAX {
+                1
+            } else {
+                self.next_id + 1
+            };
             if id != 0 && !self.entries.iter().any(|e| e.n.id == id) {
                 return id;
             }
@@ -489,7 +585,13 @@ impl NotificationCenter {
     /// Index of a notification that has not been closed yet (still in the centre or on screen
     /// and not already on its way out).
     fn live_index(&self, id: u32) -> Option<usize> {
-        self.index_of(id).filter(|&i| self.entries[i].in_centre || matches!(self.phase_of(i), Some(Phase::Pending | Phase::Visible { .. })))
+        self.index_of(id).filter(|&i| {
+            self.entries[i].in_centre
+                || matches!(
+                    self.phase_of(i),
+                    Some(Phase::Pending | Phase::Visible { .. })
+                )
+        })
     }
 
     pub fn get(&self, id: u32) -> Option<&Notification> {
@@ -531,7 +633,10 @@ impl NotificationCenter {
         Banner {
             phase: Phase::Pending,
             seq: 0,
-            lifetime: self.config.timeouts.duration(n.urgency, n.expire, self.screen_locked),
+            lifetime: self
+                .config
+                .timeouts
+                .duration(n.urgency, n.expire, self.screen_locked),
             deadline: None,
             hovered: false,
             drag: None,
@@ -547,13 +652,23 @@ impl NotificationCenter {
     /// is already waiting. Alerts get none.
     fn arm(&self, lifetime: Option<f64>, now: f64) -> Option<f64> {
         let waiting = self.pending_index().is_some();
-        lifetime.map(|l| now + if waiting { l.min(self.config.timeouts.pending_lifetime) } else { l })
+        lifetime.map(|l| {
+            now + if waiting {
+                l.min(self.config.timeouts.pending_lifetime)
+            } else {
+                l
+            }
+        })
     }
 
     /// Handle a `Notify` call. Returns the id of the notification (the replaced id when it exists).
     pub fn notify(&mut self, input: NotifyInput, now: f64) -> u32 {
-        let existing = (input.replaces_id != 0).then(|| self.live_index(input.replaces_id)).flatten();
-        let suppressed = self.dnd_active(now) && !(self.config.critical_bypasses_dnd && input.hints.urgency == Some(Urgency::Critical));
+        let existing = (input.replaces_id != 0)
+            .then(|| self.live_index(input.replaces_id))
+            .flatten();
+        let suppressed = self.dnd_active(now)
+            && !(self.config.critical_bypasses_dnd
+                && input.hints.urgency == Some(Urgency::Critical));
         let id = match existing {
             Some(i) => self.entries[i].n.id,
             None => self.alloc_id(),
@@ -564,7 +679,10 @@ impl NotificationCenter {
         match existing {
             Some(i) => {
                 n.revision = self.entries[i].n.revision + 1;
-                let lifetime = self.config.timeouts.duration(n.urgency, n.expire, self.screen_locked);
+                let lifetime =
+                    self.config
+                        .timeouts
+                        .duration(n.urgency, n.expire, self.screen_locked);
                 let deadline = self.arm(lifetime, now);
                 let e = &mut self.entries[i];
                 e.n = n;
@@ -589,9 +707,18 @@ impl NotificationCenter {
             }
             None => {
                 if suppressed && !in_centre {
-                    self.events.push_back(Event::Closed { id, reason: CloseReason::Undefined });
+                    self.events.push_back(Event::Closed {
+                        id,
+                        reason: CloseReason::Undefined,
+                    });
                 } else {
-                    self.entries.push(Entry { n, in_centre, read: false, closed_signalled: false, banner: None });
+                    self.entries.push(Entry {
+                        n,
+                        in_centre,
+                        read: false,
+                        closed_signalled: false,
+                        banner: None,
+                    });
                     if !suppressed {
                         queued = Some(self.entries.len() - 1);
                     }
@@ -641,7 +768,10 @@ impl NotificationCenter {
             if self.entries[i].in_centre && self.entries[i].banner.is_none() {
                 let e = self.entries.remove(i);
                 if !e.closed_signalled {
-                    self.events.push_back(Event::Closed { id: e.n.id, reason: CloseReason::Undefined });
+                    self.events.push_back(Event::Closed {
+                        id: e.n.id,
+                        reason: CloseReason::Undefined,
+                    });
                 }
                 over -= 1;
             } else {
@@ -659,7 +789,9 @@ impl NotificationCenter {
         if self.visible_index().is_some() {
             return;
         }
-        let Some(i) = self.pending_index() else { return };
+        let Some(i) = self.pending_index() else {
+            return;
+        };
         self.next_seq += 1;
         let seq = self.next_seq;
         let m = self.config.motion.clone();
@@ -685,7 +817,9 @@ impl NotificationCenter {
     fn start_leaving(&mut self, idx: usize, reason: CloseReason, duration: f64, now: f64) {
         let m = self.config.motion.clone();
         let slide = self.config.layout.slide_distance();
-        let Some(b) = self.entries[idx].banner.as_mut() else { return };
+        let Some(b) = self.entries[idx].banner.as_mut() else {
+            return;
+        };
         if matches!(b.phase, Phase::Leaving { .. }) {
             return;
         }
@@ -693,7 +827,9 @@ impl NotificationCenter {
         b.hovered = false;
         b.deadline = None;
         b.offset = Track::Still(b.offset.value(now));
-        b.phase = Phase::Leaving { ends_at: now + duration + m.completion_slack };
+        b.phase = Phase::Leaving {
+            ends_at: now + duration + m.completion_slack,
+        };
         if m.reduce_motion {
             b.opacity.ease_to(0.0, &m, duration, now);
         } else {
@@ -722,7 +858,9 @@ impl NotificationCenter {
     }
 
     fn remove(&mut self, id: u32, reason: CloseReason, now: f64) -> bool {
-        let Some(i) = self.live_index(id) else { return false };
+        let Some(i) = self.live_index(id) else {
+            return false;
+        };
         self.entries[i].in_centre = false;
         match self.phase_of(i) {
             Some(Phase::Pending) => self.entries[i].banner = None,
@@ -737,7 +875,12 @@ impl NotificationCenter {
     }
 
     pub fn clear_group(&mut self, key: &str, now: f64) -> usize {
-        let ids: Vec<u32> = self.entries.iter().filter(|e| e.in_centre && e.n.group_key() == key).map(|e| e.n.id).collect();
+        let ids: Vec<u32> = self
+            .entries
+            .iter()
+            .filter(|e| e.in_centre && e.n.group_key() == key)
+            .map(|e| e.n.id)
+            .collect();
         ids.iter().for_each(|id| {
             self.clear(*id, now);
         });
@@ -747,7 +890,17 @@ impl NotificationCenter {
     /// Scopes the Clear menu offers now: "Banners Only" only while pinned notifications
     /// and others are both in the centre, "All Notifications" always. Empty-menu states do not occur.
     pub fn clear_scopes(&self) -> Vec<ClearScope> {
-        let (pinned, others) = self.entries.iter().filter(|e| e.in_centre).fold((0, 0), |(p, o), e| if is_pinned(&e.n) { (p + 1, o) } else { (p, o + 1) });
+        let (pinned, others) =
+            self.entries
+                .iter()
+                .filter(|e| e.in_centre)
+                .fold((0, 0), |(p, o), e| {
+                    if is_pinned(&e.n) {
+                        (p + 1, o)
+                    } else {
+                        (p, o + 1)
+                    }
+                });
         let mut scopes = Vec::new();
         if pinned > 0 && others > 0 {
             scopes.push(ClearScope::BannersOnly);
@@ -758,7 +911,12 @@ impl NotificationCenter {
 
     /// Clear the notification centre by `scope`; returns how many notifications left.
     pub fn clear_scope(&mut self, scope: ClearScope, now: f64) -> usize {
-        let ids: Vec<u32> = self.entries.iter().filter(|e| e.in_centre && (scope == ClearScope::All || !is_pinned(&e.n))).map(|e| e.n.id).collect();
+        let ids: Vec<u32> = self
+            .entries
+            .iter()
+            .filter(|e| e.in_centre && (scope == ClearScope::All || !is_pinned(&e.n)))
+            .map(|e| e.n.id)
+            .collect();
         ids.iter().for_each(|id| {
             self.clear(*id, now);
         });
@@ -774,12 +932,24 @@ impl NotificationCenter {
 
     /// Invoke an action (`ActionInvoked`). Unless the notification is resident it is closed
     /// afterwards, as the specification requires. `activation_token` is forwarded to the client.
-    pub fn invoke_action(&mut self, id: u32, key: &str, activation_token: Option<String>, now: f64) -> bool {
-        let Some(i) = self.live_index(id) else { return false };
+    pub fn invoke_action(
+        &mut self,
+        id: u32,
+        key: &str,
+        activation_token: Option<String>,
+        now: f64,
+    ) -> bool {
+        let Some(i) = self.live_index(id) else {
+            return false;
+        };
         if !self.entries[i].n.actions.iter().any(|a| a.key == key) {
             return false;
         }
-        self.events.push_back(Event::ActionInvoked { id, key: key.to_string(), activation_token });
+        self.events.push_back(Event::ActionInvoked {
+            id,
+            key: key.to_string(),
+            activation_token,
+        });
         self.entries[i].read = true;
         if self.entries[i].n.resident {
             self.dismiss_banner(id, now);
@@ -791,8 +961,15 @@ impl NotificationCenter {
     }
 
     /// Click on the banner body: invokes the default action, else dismisses the banner.
-    pub fn activate(&mut self, id: u32, activation_token: Option<String>, now: f64) -> ActivateOutcome {
-        let Some(i) = self.live_index(id) else { return ActivateOutcome::NotFound };
+    pub fn activate(
+        &mut self,
+        id: u32,
+        activation_token: Option<String>,
+        now: f64,
+    ) -> ActivateOutcome {
+        let Some(i) = self.live_index(id) else {
+            return ActivateOutcome::NotFound;
+        };
         if self.entries[i].n.has_default_action() {
             self.invoke_action(id, DEFAULT_ACTION_KEY, activation_token, now);
             ActivateOutcome::ActionInvoked
@@ -811,7 +988,9 @@ impl NotificationCenter {
                 self.drop_pending(i);
                 self.gc();
             }
-            Some(Phase::Visible { .. }) => self.start_leaving(i, CloseReason::Dismissed, self.config.motion.duration, now),
+            Some(Phase::Visible { .. }) => {
+                self.start_leaving(i, CloseReason::Dismissed, self.config.motion.duration, now)
+            }
             _ => {}
         }
         self.promote(now);
@@ -821,7 +1000,9 @@ impl NotificationCenter {
     /// Pointer hover (`None` = no banner hovered). A change of the hovered banner re-arms the
     /// visible banner's timer to its full lifetime; while hovered it does not expire.
     pub fn set_hover(&mut self, id: Option<u32>, now: f64) {
-        let Some(i) = self.visible_index() else { return };
+        let Some(i) = self.visible_index() else {
+            return;
+        };
         let want = Some(self.entries[i].n.id) == id;
         let b = self.entries[i].banner.as_mut().expect("visible banner");
         if b.hovered == want {
@@ -834,9 +1015,14 @@ impl NotificationCenter {
 
     /// Press on the visible banner; it becomes a drag once it moved [`SwipeConfig::min_distance`].
     pub fn swipe_begin(&mut self, id: u32, _now: f64) -> bool {
-        let Some(i) = self.visible_index().filter(|&i| self.entries[i].n.id == id) else { return false };
+        let Some(i) = self.visible_index().filter(|&i| self.entries[i].n.id == id) else {
+            return false;
+        };
         let b = self.entries[i].banner.as_mut().expect("visible banner");
-        b.drag = Some(Drag { dx: 0.0, recognised: false });
+        b.drag = Some(Drag {
+            dx: 0.0,
+            recognised: false,
+        });
         true
     }
 
@@ -844,7 +1030,9 @@ impl NotificationCenter {
     /// Leftward travel is clamped at [`SwipeConfig::left_limit`].
     pub fn swipe_update(&mut self, id: u32, dx: f64, _now: f64) {
         let cfg = self.config.swipe.clone();
-        let Some(i) = self.visible_index().filter(|&i| self.entries[i].n.id == id) else { return };
+        let Some(i) = self.visible_index().filter(|&i| self.entries[i].n.id == id) else {
+            return;
+        };
         let b = self.entries[i].banner.as_mut().expect("visible banner");
         let Some(drag) = b.drag.as_mut() else { return };
         drag.recognised |= dx.abs() >= cfg.min_distance;
@@ -859,15 +1047,28 @@ impl NotificationCenter {
     /// dismiss speed.
     pub fn swipe_end(&mut self, id: u32, now: f64) -> SwipeOutcome {
         let cfg = self.config.swipe.clone();
-        let Some(i) = self.visible_index().filter(|&i| self.entries[i].n.id == id) else { return SwipeOutcome::Cancelled };
+        let Some(i) = self.visible_index().filter(|&i| self.entries[i].n.id == id) else {
+            return SwipeOutcome::Cancelled;
+        };
         let b = self.entries[i].banner.as_mut().expect("visible banner");
-        let Some(drag) = b.drag.take() else { return SwipeOutcome::Cancelled };
+        let Some(drag) = b.drag.take() else {
+            return SwipeOutcome::Cancelled;
+        };
         if !drag.recognised {
             return SwipeOutcome::Click;
         }
         if drag.dx < 0.0 {
-            let spring = Spring::new(SpringParams { initial_velocity: drag.dx / cfg.velocity_divisor, ..cfg.spring_back });
-            b.offset = Track::Spring { from: drag.dx, to: 0.0, start: now, ends: now + spring.settling_duration(), spring };
+            let spring = Spring::new(SpringParams {
+                initial_velocity: drag.dx / cfg.velocity_divisor,
+                ..cfg.spring_back
+            });
+            b.offset = Track::Spring {
+                from: drag.dx,
+                to: 0.0,
+                start: now,
+                ends: now + spring.settling_duration(),
+                spring,
+            };
             self.touch();
             return SwipeOutcome::Cancelled;
         }
@@ -875,7 +1076,10 @@ impl NotificationCenter {
         if self.config.swipe_removes_from_centre {
             self.entries[i].in_centre = false;
         }
-        let duration = self.config.motion.duration_at_speed(cfg.dismiss_speed(drag.dx));
+        let duration = self
+            .config
+            .motion
+            .duration_at_speed(cfg.dismiss_speed(drag.dx));
         self.start_leaving(i, CloseReason::Dismissed, duration, now);
         self.gc();
         self.promote(now);
@@ -885,7 +1089,9 @@ impl NotificationCenter {
     /// Expire the visible banner when its timer is due; a hovered or dragged banner is checked
     /// again after [`TimeoutPolicy::hover_recheck`].
     fn expire_due(&mut self, now: f64) -> bool {
-        let Some(i) = self.visible_index() else { return false };
+        let Some(i) = self.visible_index() else {
+            return false;
+        };
         let recheck = self.config.timeouts.hover_recheck;
         let b = self.entries[i].banner.as_mut().expect("visible banner");
         if !b.deadline.is_some_and(|d| d <= now) {
@@ -923,7 +1129,14 @@ impl NotificationCenter {
     }
 
     pub fn is_animating(&self, now: f64) -> bool {
-        self.entries.iter().filter_map(|e| e.banner.as_ref()).any(|b| b.slide.is_animating(now) || b.opacity.is_animating(now) || b.offset.is_animating(now))
+        self.entries
+            .iter()
+            .filter_map(|e| e.banner.as_ref())
+            .any(|b| {
+                b.slide.is_animating(now)
+                    || b.opacity.is_animating(now)
+                    || b.offset.is_animating(now)
+            })
     }
 
     pub fn next_wakeup(&self, now: f64) -> Option<Wakeup> {
@@ -958,24 +1171,45 @@ impl NotificationCenter {
 
     /// Ids of the banners on screen: the visible one first, then leaving ones, newest first.
     pub fn visible_ids(&self) -> Vec<u32> {
-        let mut v: Vec<(u32, &Banner)> = self.entries.iter().filter_map(|e| e.banner.as_ref().map(|b| (e.n.id, b))).filter(|(_, b)| b.phase != Phase::Pending).collect();
-        v.sort_by_key(|(_, b)| (matches!(b.phase, Phase::Leaving { .. }), std::cmp::Reverse(b.seq)));
+        let mut v: Vec<(u32, &Banner)> = self
+            .entries
+            .iter()
+            .filter_map(|e| e.banner.as_ref().map(|b| (e.n.id, b)))
+            .filter(|(_, b)| b.phase != Phase::Pending)
+            .collect();
+        v.sort_by_key(|(_, b)| {
+            (
+                matches!(b.phase, Phase::Leaving { .. }),
+                std::cmp::Reverse(b.seq),
+            )
+        });
         v.into_iter().map(|(id, _)| id).collect()
     }
 
     /// Resolve the animated rectangles of the banners on screen at time `now`. Remeasures banners
     /// whose notification changed and caches the result for [`Self::banner_at`].
-    pub fn placements(&mut self, viewport: Size, measure: &mut dyn BannerMeasure, now: f64) -> Vec<Placement> {
+    pub fn placements(
+        &mut self,
+        viewport: Size,
+        measure: &mut dyn BannerMeasure,
+        now: f64,
+    ) -> Vec<Placement> {
         let layout = self.config.layout.clone();
         let mut out = Vec::new();
         for id in self.visible_ids() {
-            let e = self.entries.iter_mut().find(|e| e.n.id == id).expect("visible id");
+            let e = self
+                .entries
+                .iter_mut()
+                .find(|e| e.n.id == id)
+                .expect("visible id");
             let b = e.banner.as_mut().expect("banner");
             if b.measured_revision != Some(e.n.revision) {
                 b.height = measure.banner_height(&e.n, layout.width).max(1.0);
                 b.measured_revision = Some(e.n.revision);
             }
-            let x = viewport.width - layout.right_margin - layout.width + b.slide.value(now) + b.offset.value(now);
+            let x = viewport.width - layout.right_margin - layout.width
+                + b.slide.value(now)
+                + b.offset.value(now);
             out.push(Placement {
                 id,
                 rect: Rect::new(x, layout.top_inset, layout.width, b.height),
@@ -985,18 +1219,30 @@ impl NotificationCenter {
                 leaving: matches!(b.phase, Phase::Leaving { .. }),
             });
         }
-        self.last_rects = out.iter().filter(|p| !p.leaving).map(|p| (p.id, p.rect)).collect();
+        self.last_rects = out
+            .iter()
+            .filter(|p| !p.leaving)
+            .map(|p| (p.id, p.rect))
+            .collect();
         out
     }
 
     /// Non-leaving banner under `p` according to the last [`Self::placements`] call.
     pub fn banner_at(&self, p: Point) -> Option<u32> {
-        self.last_rects.iter().find(|(_, r)| r.contains(p)).map(|(id, _)| *id)
+        self.last_rects
+            .iter()
+            .find(|(_, r)| r.contains(p))
+            .map(|(id, _)| *id)
     }
 
     /// Notification-centre history, newest first.
     pub fn history(&self) -> Vec<&Notification> {
-        let mut v: Vec<&Notification> = self.entries.iter().filter(|e| e.in_centre).map(|e| &e.n).collect();
+        let mut v: Vec<&Notification> = self
+            .entries
+            .iter()
+            .filter(|e| e.in_centre)
+            .map(|e| &e.n)
+            .collect();
         v.sort_by(|a, b| b.timestamp.total_cmp(&a.timestamp).then(b.id.cmp(&a.id)));
         v
     }
@@ -1006,11 +1252,17 @@ impl NotificationCenter {
     }
 
     pub fn unread_count(&self) -> usize {
-        self.entries.iter().filter(|e| e.in_centre && !e.read).count()
+        self.entries
+            .iter()
+            .filter(|e| e.in_centre && !e.read)
+            .count()
     }
 
     pub fn is_read(&self, id: u32) -> bool {
-        self.entries.iter().find(|e| e.n.id == id).is_some_and(|e| e.read)
+        self.entries
+            .iter()
+            .find(|e| e.n.id == id)
+            .is_some_and(|e| e.read)
     }
 
     /// Notification-centre history grouped by application, groups ordered by their newest
@@ -1028,7 +1280,14 @@ impl NotificationCenter {
                         g.icon = &n.icon;
                     }
                 }
-                None => groups.push(Group { key, app_name: &n.app_name, icon: &n.icon, notifications: vec![n], unread, latest: n.timestamp }),
+                None => groups.push(Group {
+                    key,
+                    app_name: &n.app_name,
+                    icon: &n.icon,
+                    notifications: vec![n],
+                    unread,
+                    latest: n.timestamp,
+                }),
             }
         }
         groups

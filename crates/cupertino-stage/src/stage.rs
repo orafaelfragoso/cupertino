@@ -22,13 +22,26 @@ pub struct GroupId(pub u64);
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum StageEvent {
-    GroupCreated { group: GroupId },
-    GroupRemoved { group: GroupId },
+    GroupCreated {
+        group: GroupId,
+    },
+    GroupRemoved {
+        group: GroupId,
+    },
     /// `incoming` becomes the centre group; `outgoing` (if any) moves to the top of the strip.
-    Swap { incoming: GroupId, outgoing: Option<GroupId> },
+    Swap {
+        incoming: GroupId,
+        outgoing: Option<GroupId>,
+    },
     /// The centre group left the stage and nothing replaced it (empty stage).
-    CenterEmptied { group: Option<GroupId> },
-    WindowMoved { window: WindowId, from: GroupId, to: GroupId },
+    CenterEmptied {
+        group: Option<GroupId>,
+    },
+    WindowMoved {
+        window: WindowId,
+        from: GroupId,
+        to: GroupId,
+    },
     Enabled,
     Disabled,
     StripHidden,
@@ -132,10 +145,14 @@ impl Stage {
         self.windows.get(&window).map(|w| w.group)
     }
     pub fn group_windows(&self, group: GroupId) -> Vec<WindowId> {
-        self.group(group).map(|g| g.windows.clone()).unwrap_or_default()
+        self.group(group)
+            .map(|g| g.windows.clone())
+            .unwrap_or_default()
     }
     pub fn center_windows(&self) -> Vec<WindowId> {
-        self.center.map(|c| self.group_windows(c)).unwrap_or_default()
+        self.center
+            .map(|c| self.group_windows(c))
+            .unwrap_or_default()
     }
     pub fn group_apps(&self, group: GroupId) -> Vec<AppId> {
         let mut out = Vec::new();
@@ -171,7 +188,12 @@ impl Stage {
 
     /// Enable or disable the stage. Enabling builds groups from `windows` (most recently used
     /// first): the first becomes the centre group, the others fill the strip.
-    pub fn set_enabled(&mut self, enabled: bool, windows: &[(WindowId, AppId, Rect)], now: f64) -> Vec<StageEvent> {
+    pub fn set_enabled(
+        &mut self,
+        enabled: bool,
+        windows: &[(WindowId, AppId, Rect)],
+        now: f64,
+    ) -> Vec<StageEvent> {
         let mut ev = Vec::new();
         self.groups.clear();
         self.strip.clear();
@@ -186,8 +208,17 @@ impl Stage {
         }
         ev.push(StageEvent::Enabled);
         for (i, (w, app, frame)) in windows.iter().enumerate() {
-            self.windows.insert(*w, WindowInfo { app: *app, group: GroupId(0), frame: *frame });
-            let joined = self.find_group_for_app(*app).filter(|_| self.cfg.grouping == Grouping::AllWindows);
+            self.windows.insert(
+                *w,
+                WindowInfo {
+                    app: *app,
+                    group: GroupId(0),
+                    frame: *frame,
+                },
+            );
+            let joined = self
+                .find_group_for_app(*app)
+                .filter(|_| self.cfg.grouping == Grouping::AllWindows);
             match joined {
                 Some(g) => {
                     self.windows.get_mut(w).unwrap().group = g;
@@ -207,17 +238,27 @@ impl Stage {
             }
         }
         self.relayout_strip(now);
-        ev.push(StageEvent::DesktopItemsVisible(self.desktop_items_visible()));
+        ev.push(StageEvent::DesktopItemsVisible(
+            self.desktop_items_visible(),
+        ));
         ev
     }
 
     fn find_group_for_app(&self, app: AppId) -> Option<GroupId> {
         let has = |g: GroupId| self.windows.values().any(|w| w.group == g && w.app == app);
-        self.center.filter(|c| has(*c)).or_else(|| self.strip.iter().copied().find(|g| has(*g)))
+        self.center
+            .filter(|c| has(*c))
+            .or_else(|| self.strip.iter().copied().find(|g| has(*g)))
     }
 
     /// A window was mapped. Returns the resulting events (a swap when it takes the stage).
-    pub fn window_opened(&mut self, window: WindowId, app: AppId, frame: Rect, now: f64) -> Vec<StageEvent> {
+    pub fn window_opened(
+        &mut self,
+        window: WindowId,
+        app: AppId,
+        frame: Rect,
+        now: f64,
+    ) -> Vec<StageEvent> {
         if !self.enabled {
             return vec![];
         }
@@ -225,8 +266,19 @@ impl Stage {
             return self.window_activated(window, now);
         }
         let mut ev = Vec::new();
-        let existing = if self.cfg.grouping == Grouping::AllWindows { self.find_group_for_app(app) } else { None };
-        self.windows.insert(window, WindowInfo { app, group: GroupId(0), frame });
+        let existing = if self.cfg.grouping == Grouping::AllWindows {
+            self.find_group_for_app(app)
+        } else {
+            None
+        };
+        self.windows.insert(
+            window,
+            WindowInfo {
+                app,
+                group: GroupId(0),
+                frame,
+            },
+        );
         let g = match existing {
             Some(g) => {
                 self.windows.get_mut(&window).unwrap().group = g;
@@ -246,7 +298,9 @@ impl Stage {
 
     /// A window was focused (strip click, switcher, dock): its group takes the stage.
     pub fn window_activated(&mut self, window: WindowId, now: f64) -> Vec<StageEvent> {
-        let Some(g) = self.group_of(window) else { return vec![] };
+        let Some(g) = self.group_of(window) else {
+            return vec![];
+        };
         if let Some(gr) = self.group_mut(g) {
             gr.windows.retain(|w| *w != window);
             gr.windows.insert(0, window);
@@ -268,7 +322,9 @@ impl Stage {
         if old == Some(g) {
             if self.desktop_revealed {
                 self.desktop_revealed = false;
-                ev.push(StageEvent::DesktopItemsVisible(self.desktop_items_visible()));
+                ev.push(StageEvent::DesktopItemsVisible(
+                    self.desktop_items_visible(),
+                ));
             }
             return ev;
         }
@@ -281,10 +337,15 @@ impl Stage {
         if let Some(gr) = self.group_mut(g) {
             gr.blend.animate_to(1.0, curve, now);
         }
-        ev.push(StageEvent::Swap { incoming: g, outgoing: old });
+        ev.push(StageEvent::Swap {
+            incoming: g,
+            outgoing: old,
+        });
         if self.desktop_revealed {
             self.desktop_revealed = false;
-            ev.push(StageEvent::DesktopItemsVisible(self.desktop_items_visible()));
+            ev.push(StageEvent::DesktopItemsVisible(
+                self.desktop_items_visible(),
+            ));
         }
         self.relayout_strip(now);
         ev
@@ -307,7 +368,9 @@ impl Stage {
     }
 
     pub fn window_closed(&mut self, window: WindowId, now: f64) -> Vec<StageEvent> {
-        let Some(info) = self.windows.remove(&window) else { return vec![] };
+        let Some(info) = self.windows.remove(&window) else {
+            return vec![];
+        };
         let g = info.group;
         let mut ev = Vec::new();
         if let Some(gr) = self.group_mut(g) {
@@ -374,7 +437,12 @@ impl Stage {
     fn strip_drop_area(&self) -> Rect {
         let strip = self.strip_area();
         let right = strip.right() + self.cfg.stage_inset_from_strip / 2.0;
-        Rect::new(self.usable.x, strip.y, (right - self.usable.x).max(0.0), strip.h)
+        Rect::new(
+            self.usable.x,
+            strip.y,
+            (right - self.usable.x).max(0.0),
+            strip.h,
+        )
     }
 
     /// What dropping a dragged strip group / stage window at `pointer` would do.
@@ -397,14 +465,23 @@ impl Stage {
         if self.group(group).is_none() || self.center == Some(group) {
             return vec![];
         }
-        let Some(c) = self.center else { return self.make_center(group, now) };
-        let moved = self.group(group).map(|g| g.windows.clone()).unwrap_or_default();
+        let Some(c) = self.center else {
+            return self.make_center(group, now);
+        };
+        let moved = self
+            .group(group)
+            .map(|g| g.windows.clone())
+            .unwrap_or_default();
         let mut ev = Vec::new();
         self.strip.retain(|x| *x != group);
         self.groups.retain(|x| x.id != group);
         for w in &moved {
             self.windows.get_mut(w).unwrap().group = c;
-            ev.push(StageEvent::WindowMoved { window: *w, from: group, to: c });
+            ev.push(StageEvent::WindowMoved {
+                window: *w,
+                from: group,
+                to: c,
+            });
         }
         let cg = self.group_mut(c).unwrap();
         for w in moved.iter().rev() {
@@ -426,7 +503,9 @@ impl Stage {
 
     /// Drop a stage window at `pointer`: onto the strip moves it into its own strip group.
     pub fn drop_window(&mut self, window: WindowId, pointer: Point, now: f64) -> Vec<StageEvent> {
-        let Some(g) = self.group_of(window) else { return vec![] };
+        let Some(g) = self.group_of(window) else {
+            return vec![];
+        };
         if self.center != Some(g) || self.drop_target(pointer) != Some(DropTarget::Strip) {
             return vec![];
         }
@@ -444,7 +523,11 @@ impl Stage {
         ng.slot_valid = true;
         self.strip.insert(0, n);
         ev.push(StageEvent::GroupCreated { group: n });
-        ev.push(StageEvent::WindowMoved { window, from: g, to: n });
+        ev.push(StageEvent::WindowMoved {
+            window,
+            from: g,
+            to: n,
+        });
         self.relayout_strip(now);
         ev
     }
@@ -469,8 +552,12 @@ impl Stage {
         let avail = (self.usable.h - 2.0 * c.strip_vertical_padding).max(1.0);
         let nominal = c.strip_row_height.min(c.strip_max_item_height);
         let smallest = c.strip_preferred_min_item_height.min(nominal).max(1.0);
-        let fit = ((avail + c.strip_row_gap) / (smallest + c.strip_row_gap)).floor().max(0.0) as usize;
-        let rows = fit.clamp(c.strip_min_rows.min(c.strip_max_rows), c.strip_max_rows).max(1);
+        let fit = ((avail + c.strip_row_gap) / (smallest + c.strip_row_gap))
+            .floor()
+            .max(0.0) as usize;
+        let rows = fit
+            .clamp(c.strip_min_rows.min(c.strip_max_rows), c.strip_max_rows)
+            .max(1);
         let h = nominal
             .min((avail - c.strip_row_gap * (rows as f64 - 1.0)) / rows as f64)
             .max(c.strip_absolute_min_item_height.max(1.0));
@@ -493,13 +580,25 @@ impl Stage {
         let n = self.visible_strip().len().max(1);
         let total = n as f64 * h + (n as f64 - 1.0) * c.strip_row_gap;
         let avail = (self.usable.h - 2.0 * c.strip_vertical_padding).max(1.0);
-        let y0 = self.usable.y + c.strip_vertical_padding + (avail - total).max(0.0) * c.strip_vertical_align;
-        Rect::new(self.usable.x + c.strip_edge_inset, y0 + index as f64 * (h + c.strip_row_gap), c.strip_width, h)
+        let y0 = self.usable.y
+            + c.strip_vertical_padding
+            + (avail - total).max(0.0) * c.strip_vertical_align;
+        Rect::new(
+            self.usable.x + c.strip_edge_inset,
+            y0 + index as f64 * (h + c.strip_row_gap),
+            c.strip_width,
+            h,
+        )
     }
 
     /// Full-height strip column with the strip shown.
     pub fn strip_area(&self) -> Rect {
-        Rect::new(self.usable.x + self.cfg.strip_edge_inset, self.usable.y, self.cfg.strip_width, self.usable.h)
+        Rect::new(
+            self.usable.x + self.cfg.strip_edge_inset,
+            self.usable.y,
+            self.cfg.strip_width,
+            self.usable.h,
+        )
     }
 
     /// Area for the centre group's windows.
@@ -521,7 +620,9 @@ impl Stage {
         let targets: Vec<Rect> = (0..visible.len()).map(|i| self.slot_rect(i)).collect();
         for g in self.strip.clone() {
             let target = visible.iter().position(|v| *v == g).map(|i| targets[i]);
-            let Some(gr) = self.group_mut(g) else { continue };
+            let Some(gr) = self.group_mut(g) else {
+                continue;
+            };
             match target {
                 Some(t) if !gr.slot_valid => {
                     gr.slot.set_immediately(t.to_array());
@@ -566,7 +667,14 @@ impl Stage {
             _ => c.icon_three_spacing,
         };
         let icons = (0..shown)
-            .map(|k| Rect::new(slot.x + c.icon_left_offset + k as f64 * spacing, slot.bottom() - c.icon_bottom_offset - c.icon_size, c.icon_size, c.icon_size))
+            .map(|k| {
+                Rect::new(
+                    slot.x + c.icon_left_offset + k as f64 * spacing,
+                    slot.bottom() - c.icon_bottom_offset - c.icon_size,
+                    c.icon_size,
+                    c.icon_size,
+                )
+            })
             .collect();
         (apps, icons)
     }
@@ -583,18 +691,30 @@ impl Stage {
                 let gr = self.group(*g)?;
                 let rect = Rect::from_array(gr.slot.value(now)).translate(dx, 0.0);
                 let (apps, icons) = self.icons_for(*g, rect);
-                Some(StripSlot { group: *g, rect, blend: gr.blend.value(now), apps, icons })
+                Some(StripSlot {
+                    group: *g,
+                    rect,
+                    blend: gr.blend.value(now),
+                    apps,
+                    icons,
+                })
             })
             .collect()
     }
 
     pub fn hit_test_strip(&self, p: Point, now: f64) -> Option<GroupId> {
-        self.strip_slots(now).into_iter().find(|s| s.rect.contains(p)).map(|s| s.group)
+        self.strip_slots(now)
+            .into_iter()
+            .find(|s| s.rect.contains(p))
+            .map(|s| s.group)
     }
 
     fn union_of(&self, group: GroupId) -> Option<Rect> {
         let g = self.group(group)?;
-        g.windows.iter().map(|w| self.windows[w].frame).reduce(|a, b| a.union(&b))
+        g.windows
+            .iter()
+            .map(|w| self.windows[w].frame)
+            .reduce(|a, b| a.union(&b))
     }
 
     /// Visual frames of every window of every group (`blend` 1 = stage frame, 0 = thumbnail).
@@ -604,7 +724,9 @@ impl Stage {
         for g in &self.groups {
             let blend = g.blend.value(now);
             let union = self.union_of(g.id);
-            let slot = Rect::from_array(g.slot.value(now)).translate(dx, 0.0).inset(self.cfg.thumbnail_padding);
+            let slot = Rect::from_array(g.slot.value(now))
+                .translate(dx, 0.0)
+                .inset(self.cfg.thumbnail_padding);
             for w in &g.windows {
                 let stage = self.windows[w].frame;
                 let thumb = union.map_or(stage, |u| thumbnail(slot, u, stage));
@@ -623,16 +745,26 @@ impl Stage {
         if !self.enabled {
             return vec![];
         }
-        let dx = if self.hidden_target { -(self.strip_area().right() - (self.usable.x + self.cfg.strip_peek_width)).max(0.0) } else { 0.0 };
+        let dx = if self.hidden_target {
+            -(self.strip_area().right() - (self.usable.x + self.cfg.strip_peek_width)).max(0.0)
+        } else {
+            0.0
+        };
         let visible = self.visible_strip();
         let mut out = Vec::new();
         for g in &self.groups {
-            let slot = visible.iter().position(|v| *v == g.id).map(|i| self.slot_rect(i).translate(dx, 0.0).inset(self.cfg.thumbnail_padding));
+            let slot = visible.iter().position(|v| *v == g.id).map(|i| {
+                self.slot_rect(i)
+                    .translate(dx, 0.0)
+                    .inset(self.cfg.thumbnail_padding)
+            });
             let union = self.union_of(g.id);
             for w in &g.windows {
                 let placement = match (self.center == Some(g.id), slot, union) {
                     (true, _, _) => Placement::Stage,
-                    (false, Some(slot), Some(u)) => Placement::Strip(thumbnail(slot, u, self.windows[w].frame)),
+                    (false, Some(slot), Some(u)) => {
+                        Placement::Strip(thumbnail(slot, u, self.windows[w].frame))
+                    }
                     (false, _, _) => Placement::Hidden,
                 };
                 out.push((*w, placement));
@@ -645,8 +777,12 @@ impl Stage {
     /// Frames that fit the group's windows into the stage area: relative layout preserved, uniformly
     /// shrunk when too large (never enlarged), centred. Used after a merge or a resize.
     pub fn fit_group(&self, group: GroupId) -> Vec<(WindowId, Rect)> {
-        let Some(g) = self.group(group) else { return vec![] };
-        let Some(u) = self.union_of(group) else { return vec![] };
+        let Some(g) = self.group(group) else {
+            return vec![];
+        };
+        let Some(u) = self.union_of(group) else {
+            return vec![];
+        };
         let area = self.stage_area();
         let s = (area.w / u.w).min(area.h / u.h).min(1.0);
         let (nw, nh) = (u.w * s, u.h * s);
@@ -655,7 +791,10 @@ impl Stage {
             .iter()
             .map(|w| {
                 let f = self.windows[w].frame;
-                (*w, Rect::new(ox + (f.x - u.x) * s, oy + (f.y - u.y) * s, f.w * s, f.h * s))
+                (
+                    *w,
+                    Rect::new(ox + (f.x - u.x) * s, oy + (f.y - u.y) * s, f.w * s, f.h * s),
+                )
             })
             .collect()
     }
@@ -665,14 +804,21 @@ impl Stage {
     /// Whether any centre window intrudes into the strip column.
     pub fn center_overlaps_strip(&self) -> bool {
         let strip = self.strip_area().inset(self.cfg.overlap_margin);
-        self.center_windows().iter().any(|w| self.windows[w].frame.intersects(&strip))
+        self.center_windows()
+            .iter()
+            .any(|w| self.windows[w].frame.intersects(&strip))
     }
 
     fn set_hidden(&mut self, hidden: bool, now: f64, ev: &mut Vec<StageEvent>) {
         if self.hidden_target != hidden {
             self.hidden_target = hidden;
-            self.hidden.animate_to(if hidden { 1.0 } else { 0.0 }, self.cfg.slide_curve, now);
-            ev.push(if hidden { StageEvent::StripHidden } else { StageEvent::StripShown });
+            self.hidden
+                .animate_to(if hidden { 1.0 } else { 0.0 }, self.cfg.slide_curve, now);
+            ev.push(if hidden {
+                StageEvent::StripHidden
+            } else {
+                StageEvent::StripShown
+            });
         }
     }
 
@@ -690,8 +836,14 @@ impl Stage {
             self.set_hidden(false, now, &mut ev);
             return ev;
         }
-        let zone = Rect::new(self.usable.x, self.usable.y, self.cfg.reveal_zone_width.max(self.cfg.strip_peek_width), self.usable.h);
-        let over_strip = !self.hidden_target && pointer.is_some_and(|p| self.strip_area().inset(-8.0).contains(p));
+        let zone = Rect::new(
+            self.usable.x,
+            self.usable.y,
+            self.cfg.reveal_zone_width.max(self.cfg.strip_peek_width),
+            self.usable.h,
+        );
+        let over_strip = !self.hidden_target
+            && pointer.is_some_and(|p| self.strip_area().inset(-8.0).contains(p));
         let hot = pointer.is_some_and(|p| zone.contains(p)) || over_strip;
         if hot {
             self.cold_since = None;
@@ -715,7 +867,11 @@ impl Stage {
     }
 
     pub fn is_animating(&self, now: f64) -> bool {
-        self.hidden.is_animating(now) || self.groups.iter().any(|g| g.slot.is_animating(now) || g.blend.is_animating(now))
+        self.hidden.is_animating(now)
+            || self
+                .groups
+                .iter()
+                .any(|g| g.slot.is_animating(now) || g.blend.is_animating(now))
     }
 }
 
@@ -727,6 +883,14 @@ fn thumbnail(slot: Rect, union: Rect, frame: Rect) -> Rect {
         return frame;
     }
     let s = (slot.w / union.w).min(slot.h / union.h).min(1.0);
-    let (cx, cy) = (slot.cx() + (frame.cx() - union.cx()) * s, slot.cy() + (frame.cy() - union.cy()) * s);
-    Rect::new(cx - frame.w * s / 2.0, cy - frame.h * s / 2.0, frame.w * s, frame.h * s)
+    let (cx, cy) = (
+        slot.cx() + (frame.cx() - union.cx()) * s,
+        slot.cy() + (frame.cy() - union.cy()) * s,
+    );
+    Rect::new(
+        cx - frame.w * s / 2.0,
+        cy - frame.h * s / 2.0,
+        frame.w * s,
+        frame.h * s,
+    )
 }

@@ -26,12 +26,18 @@ mod tests {
     use super::*;
 
     fn window(identifier: &str, frame: Rect) -> PickWindow {
-        PickWindow { identifier: identifier.into(), frame }
+        PickWindow {
+            identifier: identifier.into(),
+            frame,
+        }
     }
 
     #[test]
     fn the_front_most_window_under_the_pointer_is_picked() {
-        let windows = [window("front", Rect::new(100.0, 100.0, 200.0, 200.0)), window("back", Rect::new(0.0, 0.0, 400.0, 400.0))];
+        let windows = [
+            window("front", Rect::new(100.0, 100.0, 200.0, 200.0)),
+            window("back", Rect::new(0.0, 0.0, 400.0, 400.0)),
+        ];
         assert_eq!(window_at(&windows, Point::new(150.0, 150.0)), Some(0));
         assert_eq!(window_at(&windows, Point::new(350.0, 50.0)), Some(1));
         assert_eq!(window_at(&windows, Point::new(500.0, 50.0)), None);
@@ -40,8 +46,14 @@ mod tests {
     #[test]
     fn the_highlight_is_the_window_clipped_to_the_output() {
         let w = window("a", Rect::new(1200.0, 100.0, 200.0, 100.0));
-        assert_eq!(highlight(&w, &Rect::new(0.0, 0.0, 1280.0, 800.0)), Some(Rect::new(1200.0, 100.0, 80.0, 100.0)));
-        assert_eq!(highlight(&w, &Rect::new(1280.0, 0.0, 1920.0, 1080.0)), Some(Rect::new(1280.0, 100.0, 120.0, 100.0)));
+        assert_eq!(
+            highlight(&w, &Rect::new(0.0, 0.0, 1280.0, 800.0)),
+            Some(Rect::new(1200.0, 100.0, 80.0, 100.0))
+        );
+        assert_eq!(
+            highlight(&w, &Rect::new(1280.0, 0.0, 1920.0, 1080.0)),
+            Some(Rect::new(1280.0, 100.0, 120.0, 100.0))
+        );
         assert_eq!(highlight(&w, &Rect::new(0.0, 900.0, 1280.0, 800.0)), None);
     }
 }

@@ -19,9 +19,13 @@ use smithay::backend::input::ButtonState;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
-use wayland_client::protocol::{wl_buffer, wl_compositor, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface};
+use wayland_client::protocol::{
+    wl_buffer, wl_compositor, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
+};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
-use wayland_protocols::xdg::decoration::zv1::client::{zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1};
+use wayland_protocols::xdg::decoration::zv1::client::{
+    zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1,
+};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
 const OUTPUT: (i32, i32) = (1000, 700);
@@ -42,7 +46,15 @@ impl Harness {
     fn new() -> Option<Harness> {
         let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().ok()?;
         let display: Display<Cupertino> = Display::new().ok()?;
-        let mut state = Cupertino::new(display, event_loop.handle(), event_loop.get_signal(), Config::default(), true, &cupertino_assets::Assets::discover()).ok()?;
+        let mut state = Cupertino::new(
+            display,
+            event_loop.handle(),
+            event_loop.get_signal(),
+            Config::default(),
+            true,
+            &cupertino_assets::Assets::builtin(),
+        )
+        .ok()?;
         match headless::init(&mut state, OUTPUT, 1.0) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
@@ -53,7 +65,12 @@ impl Harness {
     }
 
     fn step(&mut self) {
-        headless::step(&mut self.state, &mut self.event_loop, Duration::from_millis(5)).unwrap();
+        headless::step(
+            &mut self.state,
+            &mut self.event_loop,
+            Duration::from_millis(5),
+        )
+        .unwrap();
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
@@ -81,7 +98,9 @@ impl Harness {
 
     /// Wait for `count` mapped windows and settle model time so no open animation is running.
     fn mapped(&mut self, count: usize) {
-        self.wait_until("the windows to be mapped", |s| s.wm.windows().count() == count);
+        self.wait_until("the windows to be mapped", |s| {
+            s.wm.windows().count() == count
+        });
         let t = self.state.now() + 5.0;
         self.state.fixed_time = Some(t);
         self.state.tick();
@@ -114,7 +133,11 @@ impl Harness {
         for dy in (TITLE_BAR as i32 + 4..f.h as i32 - 4).step_by(8) {
             for dx in (4..f.w as i32 - 4).step_by(8) {
                 let p = (f.x + f64::from(dx), f.y + f64::from(dy));
-                if self.state.window_surface_under(p.into()).is_some_and(|(w, _, _)| w == id) {
+                if self
+                    .state
+                    .window_surface_under(p.into())
+                    .is_some_and(|(w, _, _)| w == id)
+                {
                     return p;
                 }
             }
@@ -136,7 +159,15 @@ struct ClientState {
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for ClientState {
-    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 macro_rules! ignore_events {
     ($($t:ty),*) => {$(
@@ -158,7 +189,14 @@ ignore_events!(
 );
 
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for ClientState {
-    fn event(_: &mut Self, base: &xdg_wm_base::XdgWmBase, event: xdg_wm_base::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        _: &mut Self,
+        base: &xdg_wm_base::XdgWmBase,
+        event: xdg_wm_base::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         if let xdg_wm_base::Event::Ping { serial } = event {
             base.pong(serial);
         }
@@ -166,13 +204,22 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for ClientState {
 }
 
 impl Dispatch<xdg_surface::XdgSurface, ()> for ClientState {
-    fn event(state: &mut Self, surface: &xdg_surface::XdgSurface, event: xdg_surface::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        surface: &xdg_surface::XdgSurface,
+        event: xdg_surface::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
         if let xdg_surface::Event::Configure { serial } = event {
             surface.ack_configure(serial);
             if !state.attached {
                 state.attached = true;
                 let (w, h) = state.size;
-                let fd = rustix::fs::memfd_create("cupertino-test", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
+                let fd =
+                    rustix::fs::memfd_create("cupertino-test", rustix::fs::MemfdFlags::CLOEXEC)
+                        .unwrap();
                 let mut file = std::fs::File::from(fd);
                 file.write_all(&vec![128u8; (w * h * 4) as usize]).unwrap();
                 let pool = state.shm.create_pool(file.as_fd(), w * h * 4, qh, ());
@@ -187,10 +234,29 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for ClientState {
 }
 
 impl Dispatch<wl_pointer::WlPointer, ()> for ClientState {
-    fn event(state: &mut Self, _: &wl_pointer::WlPointer, event: wl_pointer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
-        if let wl_pointer::Event::Button { serial, button, state: WEnum::Value(s), .. } = event {
-            state.log.lock().unwrap().push((button, s == wl_pointer::ButtonState::Pressed));
-            if let (wl_pointer::ButtonState::Pressed, Some((toplevel, seat))) = (s, state.move_on_press.take()) {
+    fn event(
+        state: &mut Self,
+        _: &wl_pointer::WlPointer,
+        event: wl_pointer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_pointer::Event::Button {
+            serial,
+            button,
+            state: WEnum::Value(s),
+            ..
+        } = event
+        {
+            state
+                .log
+                .lock()
+                .unwrap()
+                .push((button, s == wl_pointer::ButtonState::Pressed));
+            if let (wl_pointer::ButtonState::Pressed, Some((toplevel, seat))) =
+                (s, state.move_on_press.take())
+            {
                 toplevel._move(&seat, serial);
             }
         }
@@ -204,12 +270,20 @@ struct TestClient {
 }
 
 impl TestClient {
-    fn spawn(socket: PathBuf, app_id: &'static str, size: (i32, i32), move_on_press: bool) -> TestClient {
+    fn spawn(
+        socket: PathBuf,
+        app_id: &'static str,
+        size: (i32, i32),
+        move_on_press: bool,
+    ) -> TestClient {
         let stop = Arc::new(AtomicBool::new(false));
         let log: ButtonLog = Arc::default();
         let (stop2, log2) = (stop.clone(), log.clone());
         std::thread::spawn(move || {
-            let conn = Connection::from_socket(UnixStream::connect(&socket).expect("connecting to the compositor")).unwrap();
+            let conn = Connection::from_socket(
+                UnixStream::connect(&socket).expect("connecting to the compositor"),
+            )
+            .unwrap();
             let (globals, mut queue) = registry_queue_init::<ClientState>(&conn).unwrap();
             let qh = queue.handle();
             let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
@@ -221,12 +295,20 @@ impl TestClient {
             let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
             let toplevel = xdg.get_toplevel(&qh, ());
             toplevel.set_app_id(app_id.to_string());
-            let manager: zxdg_decoration_manager_v1::ZxdgDecorationManagerV1 = globals.bind(&qh, 1..=1, ()).unwrap();
+            let manager: zxdg_decoration_manager_v1::ZxdgDecorationManagerV1 =
+                globals.bind(&qh, 1..=1, ()).unwrap();
             let _decoration = manager.get_toplevel_decoration(&toplevel, &qh, ());
             _decoration.set_mode(zxdg_toplevel_decoration_v1::Mode::ServerSide);
             surface.commit();
             let move_on_press = move_on_press.then(|| (toplevel.clone(), seat.clone()));
-            let mut client = ClientState { shm, surface, size, attached: false, log: log2, move_on_press };
+            let mut client = ClientState {
+                shm,
+                surface,
+                size,
+                attached: false,
+                log: log2,
+                move_on_press,
+            };
             while !stop2.load(Ordering::SeqCst) {
                 if queue.roundtrip(&mut client).is_err() {
                     break;
@@ -264,14 +346,21 @@ fn a_release_after_a_press_on_a_title_bar_never_reaches_the_client() {
     h.move_to(cx, cy);
     h.button(BTN_RIGHT, ButtonState::Released);
     h.settle();
-    assert_eq!(client.log(), vec![], "the client saw a button event for a click the server consumed");
+    assert_eq!(
+        client.log(),
+        vec![],
+        "the client saw a button event for a click the server consumed"
+    );
 }
 
 #[test]
 fn a_release_after_a_press_on_server_ui_never_reaches_the_window_mapped_under_the_pointer() {
     let Some(mut h) = Harness::new() else { return };
     h.state.toggle_overview(false);
-    assert!(h.state.shell.overview_open(), "the overview opened on an empty desktop");
+    assert!(
+        h.state.shell.overview_open(),
+        "the overview opened on an empty desktop"
+    );
     let center = (f64::from(OUTPUT.0) / 2.0, f64::from(OUTPUT.1) / 2.0);
 
     // the press lands on the overview over an empty desktop, which launches a window under the pointer
@@ -284,7 +373,11 @@ fn a_release_after_a_press_on_server_ui_never_reaches_the_window_mapped_under_th
     h.move_to(cx, cy);
     h.button(BTN_LEFT, ButtonState::Released);
     h.settle();
-    assert_eq!(client.log(), vec![], "the window mapped after the press got a release without its press");
+    assert_eq!(
+        client.log(),
+        vec![],
+        "the window mapped after the press got a release without its press"
+    );
 }
 
 /// A press a client receives stays with that client until its release, wherever the pointer goes.
@@ -298,10 +391,23 @@ fn a_client_that_got_a_press_gets_its_release_after_the_pointer_moved_to_another
     let first = h.state.wm.key_window().unwrap();
     let b = TestClient::spawn(h.socket_path(), "org.example.b", (300, 200), false);
     h.mapped(2);
-    let second = h.state.wm.windows().map(|w| w.id).find(|w| *w != first).unwrap();
+    let second = h
+        .state
+        .wm
+        .windows()
+        .map(|w| w.id)
+        .find(|w| *w != first)
+        .unwrap();
     let (ax, ay) = h.content_point(first);
     let (bx, by) = h.content_point(second);
-    assert_ne!(h.state.window_surface_under((ax, ay).into()).map(|(w, _, _)| w), h.state.window_surface_under((bx, by).into()).map(|(w, _, _)| w));
+    assert_ne!(
+        h.state
+            .window_surface_under((ax, ay).into())
+            .map(|(w, _, _)| w),
+        h.state
+            .window_surface_under((bx, by).into())
+            .map(|(w, _, _)| w)
+    );
 
     h.move_to(ax, ay);
     h.button(BTN_LEFT, ButtonState::Pressed);
@@ -309,7 +415,11 @@ fn a_client_that_got_a_press_gets_its_release_after_the_pointer_moved_to_another
     h.button(BTN_LEFT, ButtonState::Released);
     h.settle();
     assert_eq!(a.log(), vec![(BTN_LEFT, true), (BTN_LEFT, false)]);
-    assert_eq!(b.log(), vec![], "the second window saw a release of a press it never got");
+    assert_eq!(
+        b.log(),
+        vec![],
+        "the second window saw a release of a press it never got"
+    );
 }
 
 /// A click that raises and focuses a window still reaches it as one press and one release.
@@ -323,14 +433,22 @@ fn a_click_that_focuses_a_background_window_reaches_it_as_a_press_and_a_release(
     let first = h.state.wm.key_window().unwrap();
     let b = TestClient::spawn(h.socket_path(), "org.example.b", (300, 200), false);
     h.mapped(2);
-    assert_ne!(h.state.wm.key_window(), Some(first), "the second window is in front");
+    assert_ne!(
+        h.state.wm.key_window(),
+        Some(first),
+        "the second window is in front"
+    );
     let (ax, ay) = h.content_point(first);
 
     h.move_to(ax, ay);
     h.button(BTN_LEFT, ButtonState::Pressed);
     h.button(BTN_LEFT, ButtonState::Released);
     h.settle();
-    assert_eq!(h.state.wm.key_window(), Some(first), "the click focused the window");
+    assert_eq!(
+        h.state.wm.key_window(),
+        Some(first),
+        "the click focused the window"
+    );
     assert_eq!(a.log(), vec![(BTN_LEFT, true), (BTN_LEFT, false)]);
     assert_eq!(b.log(), vec![]);
 }
@@ -347,7 +465,10 @@ fn a_client_that_asked_for_a_move_after_its_press_still_gets_the_release() {
     h.move_to(cx, cy);
     h.button(BTN_LEFT, ButtonState::Pressed);
     h.settle();
-    assert!(h.state.wm.is_interacting(), "the move request started a model move");
+    assert!(
+        h.state.wm.is_interacting(),
+        "the move request started a model move"
+    );
     h.button(BTN_LEFT, ButtonState::Released);
     h.settle();
     assert!(!h.state.wm.is_interacting(), "the release ended the move");
@@ -372,17 +493,30 @@ fn a_title_bar_press_moves_the_window_only_past_the_drag_threshold() {
     h.button(BTN_LEFT, ButtonState::Released);
     h.advance(1.0);
     assert_eq!(h.frame(id), frame, "the click left the window where it was");
-    assert!(h.state.pending_drag.is_none(), "the release ended the press");
+    assert!(
+        h.state.pending_drag.is_none(),
+        "the release ended the press"
+    );
 
     h.move_to(x, y);
     h.button(BTN_LEFT, ButtonState::Pressed);
     h.move_to(x + 5.0, y - 5.0);
     assert!(!h.state.wm.is_interacting(), "5 pt is still inside the box");
     h.move_to(x + 40.0, y + 30.0);
-    assert!(h.state.wm.is_interacting(), "leaving the box starts the move");
+    assert!(
+        h.state.wm.is_interacting(),
+        "leaving the box starts the move"
+    );
     h.button(BTN_LEFT, ButtonState::Released);
     h.advance(3.0);
     let moved = h.frame(id);
-    assert!((moved.x - frame.x - 40.0).abs() < 1.5 && (moved.y - frame.y - 30.0).abs() < 1.5, "moved {moved:?} from {frame:?}");
-    assert_eq!(client.log(), vec![], "the title bar presses were the server's");
+    assert!(
+        (moved.x - frame.x - 40.0).abs() < 1.5 && (moved.y - frame.y - 30.0).abs() < 1.5,
+        "moved {moved:?} from {frame:?}"
+    );
+    assert_eq!(
+        client.log(),
+        vec![],
+        "the title bar presses were the server's"
+    );
 }

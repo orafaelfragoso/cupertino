@@ -13,7 +13,10 @@
 
 use crate::geom::{Point, Rect};
 use crate::item::{ItemId, MenuItem};
-use crate::layout::{layout_bar, layout_popup, Anchor, BarContent, BarLayout, BarMetrics, MenuMetrics, PopupLayout, SlotKey, TextMeasure};
+use crate::layout::{
+    layout_bar, layout_popup, Anchor, BarContent, BarLayout, BarMetrics, MenuMetrics, PopupLayout,
+    SlotKey, TextMeasure,
+};
 
 /// Identifier of the synthetic root item of the app menu.
 pub const APP_MENU_ROOT: ItemId = ItemId(i32::MIN);
@@ -37,14 +40,24 @@ pub enum Effect {
     Redraw,
     /// A menu is about to be shown: let the source refresh or lazily load `item` (DBusMenu
     /// `AboutToShow`) and report new content through [`MenuController::set_content`].
-    AboutToShow { slot: SlotKey, item: ItemId },
-    Opened { slot: SlotKey },
+    AboutToShow {
+        slot: SlotKey,
+        item: ItemId,
+    },
+    Opened {
+        slot: SlotKey,
+    },
     /// All menus closed.
     Closed,
     /// The user chose an item.
-    Activate { slot: SlotKey, item: ItemId },
+    Activate {
+        slot: SlotKey,
+        item: ItemId,
+    },
     /// A slot without a menu (clock, control panel, status item) was clicked.
-    SlotActivated { slot: SlotKey },
+    SlotActivated {
+        slot: SlotKey,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -112,7 +125,9 @@ pub struct Level {
 
 impl Level {
     pub fn selected_item(&self) -> Option<&MenuItem> {
-        self.selected.and_then(|i| self.layout.rows.get(i)).map(|r| &r.item)
+        self.selected
+            .and_then(|i| self.layout.rows.get(i))
+            .map(|r| &r.item)
     }
 }
 
@@ -162,7 +177,12 @@ impl MenuController {
             measure,
             output,
             content: BarContent::default(),
-            layout: BarLayout { bar: Rect::default(), slots: Vec::new(), hidden_menus: Vec::new(), hidden_status: Vec::new() },
+            layout: BarLayout {
+                bar: Rect::default(),
+                slots: Vec::new(),
+                hidden_menus: Vec::new(),
+                hidden_status: Vec::new(),
+            },
             mode: Mode::Idle,
             open_slot: None,
             levels: Vec::new(),
@@ -234,7 +254,11 @@ impl MenuController {
                 self.close_all(&mut out);
             }
         }
-        if self.title_focus.as_ref().is_some_and(|k| self.layout.slot(k).is_none()) {
+        if self
+            .title_focus
+            .as_ref()
+            .is_some_and(|k| self.layout.slot(k).is_none())
+        {
             self.title_focus = None;
             if self.mode == Mode::TitleFocus {
                 self.mode = Mode::Idle;
@@ -246,16 +270,32 @@ impl MenuController {
     }
 
     fn relayout(&mut self) {
-        self.layout = layout_bar(self.output, &self.content, &self.bar_metrics, self.measure.as_ref());
+        self.layout = layout_bar(
+            self.output,
+            &self.content,
+            &self.bar_metrics,
+            self.measure.as_ref(),
+        );
     }
 
     fn root_item(&self, key: &SlotKey) -> Option<MenuItem> {
         match key {
-            SlotKey::AppMenu => {
-                Some(MenuItem { id: APP_MENU_ROOT, has_submenu: true, children: self.content.app_menu.clone(), label: self.content.app_name.clone(), enabled: true, visible: true, ..Default::default() })
-            }
+            SlotKey::AppMenu => Some(MenuItem {
+                id: APP_MENU_ROOT,
+                has_submenu: true,
+                children: self.content.app_menu.clone(),
+                label: self.content.app_name.clone(),
+                enabled: true,
+                visible: true,
+                ..Default::default()
+            }),
             SlotKey::Menu(id) => self.content.menus.iter().find(|m| m.id == *id).cloned(),
-            SlotKey::Status(id) => self.content.status.iter().find(|s| &s.id == id).and_then(|s| s.menu.clone()),
+            SlotKey::Status(id) => self
+                .content
+                .status
+                .iter()
+                .find(|s| &s.id == id)
+                .and_then(|s| s.menu.clone()),
             SlotKey::ControlPanel | SlotKey::Clock => None,
         }
     }
@@ -265,11 +305,18 @@ impl MenuController {
     }
 
     fn menu_slots(&self) -> Vec<SlotKey> {
-        self.layout.slots.iter().filter(|s| self.slot_has_menu(&s.key)).map(|s| s.key.clone()).collect()
+        self.layout
+            .slots
+            .iter()
+            .filter(|s| self.slot_has_menu(&s.key))
+            .map(|s| s.key.clone())
+            .collect()
     }
 
     fn rebuild_levels(&mut self) {
-        let Some(key) = self.open_slot.clone() else { return };
+        let Some(key) = self.open_slot.clone() else {
+            return;
+        };
         let Some(root) = self.root_item(&key) else {
             self.levels.clear();
             return;
@@ -285,18 +332,43 @@ impl MenuController {
             .collect();
         let mut new_levels: Vec<Level> = Vec::new();
         for (i, (menu_id, sel, scroll)) in old.iter().enumerate() {
-            let menu = if i == 0 { Some(root.clone()) } else { new_levels[i - 1].selected_item().and_then(|r| new_levels[i - 1].menu.find(r.id)).filter(|m| m.id == *menu_id).cloned() };
+            let menu = if i == 0 {
+                Some(root.clone())
+            } else {
+                new_levels[i - 1]
+                    .selected_item()
+                    .and_then(|r| new_levels[i - 1].menu.find(r.id))
+                    .filter(|m| m.id == *menu_id)
+                    .cloned()
+            };
             let Some(menu) = menu else { break };
             let anchor = if i == 0 {
                 Anchor::BelowSlot(slot_rect)
             } else {
                 let p = &new_levels[i - 1];
-                let row = p.selected.map(|s| p.layout.rows[s].rect).unwrap_or_default();
-                Anchor::BesideRow { row, parent: p.layout.rect }
+                let row = p
+                    .selected
+                    .map(|s| p.layout.rows[s].rect)
+                    .unwrap_or_default();
+                Anchor::BesideRow {
+                    row,
+                    parent: p.layout.rect,
+                }
             };
-            let layout = layout_popup(&menu, anchor, self.output, *scroll, &self.menu_metrics, self.measure.as_ref());
+            let layout = layout_popup(
+                &menu,
+                anchor,
+                self.output,
+                *scroll,
+                &self.menu_metrics,
+                self.measure.as_ref(),
+            );
             let selected = sel.and_then(|id| layout.index_of(id));
-            new_levels.push(Level { menu, layout, selected });
+            new_levels.push(Level {
+                menu,
+                layout,
+                selected,
+            });
         }
         self.levels = new_levels;
         if self.levels.is_empty() {
@@ -323,17 +395,39 @@ impl MenuController {
             self.hit_slot = Some(s.key.clone());
             return Hit::Slot;
         }
-        if self.layout.bar.contains(p) { Hit::Bar } else { Hit::Outside }
+        if self.layout.bar.contains(p) {
+            Hit::Bar
+        } else {
+            Hit::Outside
+        }
     }
 
     // ---- opening and closing -------------------------------------------------------------
 
     fn open_title(&mut self, key: SlotKey, out: &mut Outcome) {
-        let Some(root) = self.root_item(&key) else { return };
-        let Some(slot_rect) = self.layout.slot(&key).map(|s| s.rect) else { return };
-        let layout = layout_popup(&root, Anchor::BelowSlot(slot_rect), self.output, 0.0, &self.menu_metrics, self.measure.as_ref());
-        out.effects.push(Effect::AboutToShow { slot: key.clone(), item: root.id });
-        self.levels = vec![Level { menu: root, layout, selected: None }];
+        let Some(root) = self.root_item(&key) else {
+            return;
+        };
+        let Some(slot_rect) = self.layout.slot(&key).map(|s| s.rect) else {
+            return;
+        };
+        let layout = layout_popup(
+            &root,
+            Anchor::BelowSlot(slot_rect),
+            self.output,
+            0.0,
+            &self.menu_metrics,
+            self.measure.as_ref(),
+        );
+        out.effects.push(Effect::AboutToShow {
+            slot: key.clone(),
+            item: root.id,
+        });
+        self.levels = vec![Level {
+            menu: root,
+            layout,
+            selected: None,
+        }];
         self.open_slot = Some(key.clone());
         self.title_focus = None;
         self.pending = None;
@@ -357,7 +451,9 @@ impl MenuController {
 
     /// Open the submenu of the selected row in `level`.
     fn open_submenu(&mut self, level: usize, select_first: bool, out: &mut Outcome) {
-        let Some(slot) = self.open_slot.clone() else { return };
+        let Some(slot) = self.open_slot.clone() else {
+            return;
+        };
         let (child, row_rect, parent_rect) = {
             let l = &self.levels[level];
             let Some(sel) = l.selected else { return };
@@ -365,14 +461,37 @@ impl MenuController {
             if !row.item.has_submenu {
                 return;
             }
-            let Some(child) = l.menu.find(row.item.id).cloned() else { return };
+            let Some(child) = l.menu.find(row.item.id).cloned() else {
+                return;
+            };
             (child, row.rect, l.layout.rect)
         };
         self.levels.truncate(level + 1);
-        let layout = layout_popup(&child, Anchor::BesideRow { row: row_rect, parent: parent_rect }, self.output, 0.0, &self.menu_metrics, self.measure.as_ref());
-        let selected = if select_first { layout.rows.iter().position(|r| r.item.is_selectable()) } else { None };
-        out.effects.push(Effect::AboutToShow { slot, item: child.id });
-        self.levels.push(Level { menu: child, layout, selected });
+        let layout = layout_popup(
+            &child,
+            Anchor::BesideRow {
+                row: row_rect,
+                parent: parent_rect,
+            },
+            self.output,
+            0.0,
+            &self.menu_metrics,
+            self.measure.as_ref(),
+        );
+        let selected = if select_first {
+            layout.rows.iter().position(|r| r.item.is_selectable())
+        } else {
+            None
+        };
+        out.effects.push(Effect::AboutToShow {
+            slot,
+            item: child.id,
+        });
+        self.levels.push(Level {
+            menu: child,
+            layout,
+            selected,
+        });
         self.pending = None;
         out.effects.push(Effect::Redraw);
     }
@@ -395,8 +514,15 @@ impl MenuController {
         if !parent.rect.contains(from) {
             return false;
         }
-        let edge_x = if child.placed_left { child.rect.right() } else { child.rect.x };
-        let (a, b) = (Point::new(edge_x, child.rect.y), Point::new(edge_x, child.rect.bottom()));
+        let edge_x = if child.placed_left {
+            child.rect.right()
+        } else {
+            child.rect.x
+        };
+        let (a, b) = (
+            Point::new(edge_x, child.rect.y),
+            Point::new(edge_x, child.rect.bottom()),
+        );
         point_in_triangle(to, from, a, b)
     }
 
@@ -419,14 +545,20 @@ impl MenuController {
             }
             Hit::Slot => {
                 let key = self.hit_slot.clone().expect("slot hit");
-                if self.cfg.hover_switch && self.open_slot.as_ref() != Some(&key) && self.slot_has_menu(&key) {
+                if self.cfg.hover_switch
+                    && self.open_slot.as_ref() != Some(&key)
+                    && self.slot_has_menu(&key)
+                {
                     self.open_title(key, &mut out);
                 }
             }
             Hit::Bar | Hit::Outside => {
                 let deepest = self.levels.len() - 1;
                 let keeps_child = self.pending.is_some();
-                if !keeps_child && !prev.is_some_and(|p| deepest > 0 && self.in_safe_triangle(deepest - 1, p, pos)) {
+                if !keeps_child
+                    && !prev
+                        .is_some_and(|p| deepest > 0 && self.in_safe_triangle(deepest - 1, p, pos))
+                {
                     self.select(deepest, None, &mut out);
                 }
             }
@@ -434,7 +566,15 @@ impl MenuController {
         out
     }
 
-    fn hover_row(&mut self, level: usize, row: usize, prev: Option<Point>, pos: Point, now: f64, out: &mut Outcome) {
+    fn hover_row(
+        &mut self,
+        level: usize,
+        row: usize,
+        prev: Option<Point>,
+        pos: Point,
+        now: f64,
+        out: &mut Outcome,
+    ) {
         if prev.is_some_and(|p| self.in_safe_triangle(level, p, pos)) {
             return;
         }
@@ -448,12 +588,20 @@ impl MenuController {
         if let Some(it) = target.map(|_| &item).filter(|it| it.has_submenu) {
             let open_already = has_child && self.levels[level + 1].menu.id == it.id;
             if !open_already {
-                self.pending = Some(Pending { level, open: Some(it.id), due: now + self.cfg.submenu_open_delay });
+                self.pending = Some(Pending {
+                    level,
+                    open: Some(it.id),
+                    due: now + self.cfg.submenu_open_delay,
+                });
             } else {
                 self.pending = None;
             }
         } else if has_child && (changed || (target.is_none() && self.pending.is_none())) {
-            self.pending = Some(Pending { level, open: None, due: now + self.cfg.submenu_close_delay });
+            self.pending = Some(Pending {
+                level,
+                open: None,
+                due: now + self.cfg.submenu_close_delay,
+            });
         }
     }
 
@@ -534,13 +682,20 @@ impl MenuController {
                 let item = self.levels[level].layout.rows[row].item.clone();
                 if item.is_selectable() && !item.has_submenu {
                     let slot = self.open_slot.clone().expect("open slot");
-                    out.effects.push(Effect::Activate { slot, item: item.id });
+                    out.effects.push(Effect::Activate {
+                        slot,
+                        item: item.id,
+                    });
                     self.close_all(&mut out);
                 } else {
                     self.mode = Mode::Sticky;
                 }
             }
-            Hit::Slot if self.cfg.release_on_title_keeps_open && self.hit_slot == self.open_slot => self.mode = Mode::Sticky,
+            Hit::Slot
+                if self.cfg.release_on_title_keeps_open && self.hit_slot == self.open_slot =>
+            {
+                self.mode = Mode::Sticky
+            }
             Hit::PopupPadding { .. } => self.mode = Mode::Sticky,
             _ => self.close_all(&mut out),
         }
@@ -557,7 +712,10 @@ impl MenuController {
                     self.levels.truncate(p.level + 1);
                     out.effects.push(Effect::Redraw);
                     if let Some(id) = p.open {
-                        if self.levels[p.level].selected_item().is_some_and(|i| i.id == id) {
+                        if self.levels[p.level]
+                            .selected_item()
+                            .is_some_and(|i| i.id == id)
+                        {
                             self.open_submenu(p.level, false, &mut out);
                         }
                     }
@@ -572,7 +730,10 @@ impl MenuController {
     /// The "focus the menu bar" shortcut: highlight the first title for keyboard navigation (a
     /// second call leaves keyboard focus).
     pub fn focus_bar(&mut self) -> Outcome {
-        let mut out = Outcome { consumed: true, ..Default::default() };
+        let mut out = Outcome {
+            consumed: true,
+            ..Default::default()
+        };
         if self.mode == Mode::TitleFocus || self.is_open() {
             self.close_all(&mut out);
             return out;
@@ -603,8 +764,13 @@ impl MenuController {
     }
 
     fn key_title_focus(&mut self, key: Key) -> Outcome {
-        let mut out = Outcome { consumed: true, ..Default::default() };
-        let Some(cur) = self.title_focus.clone() else { return out };
+        let mut out = Outcome {
+            consumed: true,
+            ..Default::default()
+        };
+        let Some(cur) = self.title_focus.clone() else {
+            return out;
+        };
         match key {
             Key::Left => self.title_focus = self.step_title(&cur, -1),
             Key::Right => self.title_focus = self.step_title(&cur, 1),
@@ -615,7 +781,11 @@ impl MenuController {
                 self.mode = Mode::Keyboard;
                 self.keyboard_origin = true;
                 let rows = &self.levels[0].layout.rows;
-                let pick = if key == Key::Up { rows.iter().rposition(|r| r.item.is_selectable()) } else { rows.iter().position(|r| r.item.is_selectable()) };
+                let pick = if key == Key::Up {
+                    rows.iter().rposition(|r| r.item.is_selectable())
+                } else {
+                    rows.iter().position(|r| r.item.is_selectable())
+                };
                 self.levels[0].selected = pick;
                 return out;
             }
@@ -675,7 +845,14 @@ impl MenuController {
         }
         let menu = l.menu.clone();
         let anchor = self.level_anchor(level);
-        let layout = layout_popup(&menu, anchor, self.output, scroll, &self.menu_metrics, self.measure.as_ref());
+        let layout = layout_popup(
+            &menu,
+            anchor,
+            self.output,
+            scroll,
+            &self.menu_metrics,
+            self.measure.as_ref(),
+        );
         self.levels[level].layout = layout;
     }
 
@@ -685,22 +862,37 @@ impl MenuController {
             Anchor::BelowSlot(self.layout.slot(&key).map(|s| s.rect).unwrap_or_default())
         } else {
             let p = &self.levels[level - 1];
-            let row = p.selected.map(|s| p.layout.rows[s].rect).unwrap_or_default();
-            Anchor::BesideRow { row, parent: p.layout.rect }
+            let row = p
+                .selected
+                .map(|s| p.layout.rows[s].rect)
+                .unwrap_or_default();
+            Anchor::BesideRow {
+                row,
+                parent: p.layout.rect,
+            }
         }
     }
 
     fn switch_title(&mut self, delta: isize, out: &mut Outcome) {
-        let Some(cur) = self.open_slot.clone() else { return };
+        let Some(cur) = self.open_slot.clone() else {
+            return;
+        };
         if let Some(next) = self.step_title(&cur, delta) {
             self.open_title(next, out);
-            let first = self.levels[0].layout.rows.iter().position(|r| r.item.is_selectable());
+            let first = self.levels[0]
+                .layout
+                .rows
+                .iter()
+                .position(|r| r.item.is_selectable());
             self.levels[0].selected = first;
         }
     }
 
     fn key_menu(&mut self, key: Key, now: f64) -> Outcome {
-        let mut out = Outcome { consumed: true, ..Default::default() };
+        let mut out = Outcome {
+            consumed: true,
+            ..Default::default()
+        };
         if !self.is_open() {
             return out;
         }
@@ -712,15 +904,26 @@ impl MenuController {
             Key::Down => self.move_selection(level, 1, &mut out),
             Key::Up => self.move_selection(level, -1, &mut out),
             Key::Home => {
-                let first = self.levels[level].layout.rows.iter().position(|r| r.item.is_selectable());
+                let first = self.levels[level]
+                    .layout
+                    .rows
+                    .iter()
+                    .position(|r| r.item.is_selectable());
                 self.select(level, first, &mut out);
             }
             Key::End => {
-                let last = self.levels[level].layout.rows.iter().rposition(|r| r.item.is_selectable());
+                let last = self.levels[level]
+                    .layout
+                    .rows
+                    .iter()
+                    .rposition(|r| r.item.is_selectable());
                 self.select(level, last, &mut out);
             }
             Key::Right => {
-                if self.levels[level].selected_item().is_some_and(|i| i.has_submenu) {
+                if self.levels[level]
+                    .selected_item()
+                    .is_some_and(|i| i.has_submenu)
+                {
                     self.open_submenu(level, true, &mut out);
                 } else {
                     self.switch_title(1, &mut out);
@@ -740,7 +943,10 @@ impl MenuController {
                         self.open_submenu(level, true, &mut out);
                     } else {
                         let slot = self.open_slot.clone().expect("open slot");
-                        out.effects.push(Effect::Activate { slot, item: item.id });
+                        out.effects.push(Effect::Activate {
+                            slot,
+                            item: item.id,
+                        });
                         self.close_all(&mut out);
                     }
                 }
@@ -775,7 +981,11 @@ impl MenuController {
         self.type_ahead.extend(c.to_lowercase());
         let buf: Vec<char> = self.type_ahead.chars().collect();
         let repeated = buf.len() > 1 && buf.iter().all(|x| *x == buf[0]);
-        let (prefix, advance) = if repeated { (buf[0].to_string(), true) } else { (self.type_ahead.clone(), buf.len() == 1) };
+        let (prefix, advance) = if repeated {
+            (buf[0].to_string(), true)
+        } else {
+            (self.type_ahead.clone(), buf.len() == 1)
+        };
         let rows = &self.levels[level].layout.rows;
         let n = rows.len();
         if n == 0 {

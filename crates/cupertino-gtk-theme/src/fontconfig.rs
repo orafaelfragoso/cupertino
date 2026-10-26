@@ -16,7 +16,11 @@ pub struct FontOptions {
 
 impl FontOptions {
     pub fn new(family: &str) -> Self {
-        Self { family: family.into(), map_sans_serif: false, rendering: true }
+        Self {
+            family: family.into(),
+            map_sans_serif: false,
+            rendering: true,
+        }
     }
 }
 
@@ -68,13 +72,20 @@ mod tests {
         for s in ["system-ui", "ui-sans-serif", "Cantarell", "Adwaita Sans"] {
             assert!(src.iter().any(|a| a == s), "{s} in {src:?}");
         }
-        assert!(!src.iter().any(|a| a == "sans-serif"), "generic sans is untouched by default");
+        assert!(
+            !src.iter().any(|a| a == "sans-serif"),
+            "generic sans is untouched by default"
+        );
         assert!(x.contains("hintslight") && x.contains("<const>none</const>"));
     }
 
     #[test]
     fn options_toggle_sections() {
-        let x = snippet(&FontOptions { family: "Inter".into(), map_sans_serif: true, rendering: false });
+        let x = snippet(&FontOptions {
+            family: "Inter".into(),
+            map_sans_serif: true,
+            rendering: false,
+        });
         assert!(alias_sources(&x).contains(&"sans-serif".to_string()));
         assert!(!x.contains("hintstyle"));
     }
@@ -83,7 +94,11 @@ mod tests {
     fn xml_is_balanced() {
         let x = snippet(&FontOptions::new("Inter"));
         for tag in ["alias", "prefer", "match", "fontconfig", "edit"] {
-            assert_eq!(x.matches(&format!("<{tag}")).count(), x.matches(&format!("</{tag}>")).count(), "{tag}");
+            assert_eq!(
+                x.matches(&format!("<{tag}")).count(),
+                x.matches(&format!("</{tag}>")).count(),
+                "{tag}"
+            );
         }
     }
 }

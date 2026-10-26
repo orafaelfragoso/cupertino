@@ -14,7 +14,13 @@ pub struct SpringParams {
 
 impl Default for SpringParams {
     fn default() -> Self {
-        Self { mass: 1.0, stiffness: 100.0, damping: 10.0, initial_velocity: 0.0, allows_overdamping: false }
+        Self {
+            mass: 1.0,
+            stiffness: 100.0,
+            damping: 10.0,
+            initial_velocity: 0.0,
+            allows_overdamping: false,
+        }
     }
 }
 
@@ -23,9 +29,22 @@ impl SpringParams {
     /// mass = 1, stiffness = (2π/d)², damping = 4π(1−b)/d for b ≥ 0, 4π/((1+b)·d) for b < 0.
     pub fn from_perceptual(duration: f64, bounce: f64) -> Self {
         let inv = 1.0 / duration;
-        let stiffness = if duration > 0.0 { (std::f64::consts::TAU * inv).powi(2) } else { f64::INFINITY };
-        let b = if bounce < 0.0 { 1.0 / (bounce + 1.0) } else { 1.0 - bounce };
-        Self { mass: 1.0, stiffness, damping: b * 4.0 * std::f64::consts::PI * inv, ..Default::default() }
+        let stiffness = if duration > 0.0 {
+            (std::f64::consts::TAU * inv).powi(2)
+        } else {
+            f64::INFINITY
+        };
+        let b = if bounce < 0.0 {
+            1.0 / (bounce + 1.0)
+        } else {
+            1.0 - bounce
+        };
+        Self {
+            mass: 1.0,
+            stiffness,
+            damping: b * 4.0 * std::f64::consts::PI * inv,
+            ..Default::default()
+        }
     }
 
     /// Perceptual duration = 2π·sqrt(m/k)
@@ -35,15 +54,25 @@ impl SpringParams {
 
     /// Perceptual bounce
     pub fn bounce(&self) -> f64 {
-        let x = self.perceptual_duration() * self.damping / (self.mass * 4.0 * std::f64::consts::PI);
+        let x =
+            self.perceptual_duration() * self.damping / (self.mass * 4.0 * std::f64::consts::PI);
         let zeta = self.damping / (2.0 * (self.stiffness * self.mass).sqrt());
-        if zeta > 1.0 { 1.0 / x - 1.0 } else { 1.0 - x }
+        if zeta > 1.0 {
+            1.0 / x - 1.0
+        } else {
+            1.0 - x
+        }
     }
 
     /// Damping ratio-based constructor (approximate convenience, not part of the design API).
     pub fn from_ratio(response: f64, damping_ratio: f64) -> Self {
         let w0 = std::f64::consts::TAU / response;
-        Self { mass: 1.0, stiffness: w0 * w0, damping: 2.0 * damping_ratio * w0, ..Default::default() }
+        Self {
+            mass: 1.0,
+            stiffness: w0 * w0,
+            damping: 2.0 * damping_ratio * w0,
+            ..Default::default()
+        }
     }
 }
 
@@ -69,7 +98,10 @@ impl Spring {
         let v0 = params.initial_velocity;
         let mode = if zeta < 1.0 {
             let wd = (1.0 - zeta * zeta).sqrt() * w0;
-            Mode::Under { wd, b: (zeta * w0 - v0) / wd }
+            Mode::Under {
+                wd,
+                b: (zeta * w0 - v0) / wd,
+            }
         } else if zeta > 1.0 && params.allows_overdamping {
             // p(t) = 1 − c1·e^{(−ζω0+r)t} − c2·e^{(−ζω0−r)t}, with p(0)=0, p'(0)=v0
             let r = (zeta * zeta - 1.0).sqrt() * w0;
@@ -80,7 +112,12 @@ impl Spring {
         } else {
             Mode::Critical { b: w0 - v0 }
         };
-        Self { params, w0, zeta, mode }
+        Self {
+            params,
+            w0,
+            zeta,
+            mode,
+        }
     }
 
     pub fn damping_ratio(&self) -> f64 {
@@ -93,7 +130,9 @@ impl Spring {
             return 0.0;
         }
         match self.mode {
-            Mode::Under { wd, b } => 1.0 - (-self.zeta * self.w0 * t).exp() * ((wd * t).cos() + b * (wd * t).sin()),
+            Mode::Under { wd, b } => {
+                1.0 - (-self.zeta * self.w0 * t).exp() * ((wd * t).cos() + b * (wd * t).sin())
+            }
             Mode::Critical { b } => 1.0 - (-self.w0 * t).exp() * (1.0 + b * t),
             Mode::Over { r, c1, c2 } => {
                 let a = self.zeta * self.w0;
@@ -173,8 +212,19 @@ mod tests {
 
     #[test]
     fn boundary_conditions() {
-        for &(k, c, v0, over) in &[(100.0, 10.0, 0.0, false), (300.0, 40.0, 2.0, false), (100.0, 40.0, -1.0, true), (100.0, 40.0, 0.0, false)] {
-            let s = Spring::new(SpringParams { stiffness: k, damping: c, initial_velocity: v0, allows_overdamping: over, ..Default::default() });
+        for &(k, c, v0, over) in &[
+            (100.0, 10.0, 0.0, false),
+            (300.0, 40.0, 2.0, false),
+            (100.0, 40.0, -1.0, true),
+            (100.0, 40.0, 0.0, false),
+        ] {
+            let s = Spring::new(SpringParams {
+                stiffness: k,
+                damping: c,
+                initial_velocity: v0,
+                allows_overdamping: over,
+                ..Default::default()
+            });
             assert!(s.value(0.0).abs() < 1e-12);
             let h = 1e-6;
             let num = s.value(h) / h;
@@ -195,7 +245,10 @@ mod tests {
 
     #[test]
     fn velocity_matches_derivative() {
-        let s = Spring::new(SpringParams { initial_velocity: 3.0, ..Default::default() });
+        let s = Spring::new(SpringParams {
+            initial_velocity: 3.0,
+            ..Default::default()
+        });
         for i in 1..50 {
             let t = i as f64 * 0.037;
             let h = 1e-6;
@@ -206,8 +259,17 @@ mod tests {
 
     #[test]
     fn settling_is_monotone_in_stiffness() {
-        let a = Spring::new(SpringParams { stiffness: 100.0, ..Default::default() }).settling_duration();
-        let b = Spring::new(SpringParams { stiffness: 400.0, damping: 20.0, ..Default::default() }).settling_duration();
+        let a = Spring::new(SpringParams {
+            stiffness: 100.0,
+            ..Default::default()
+        })
+        .settling_duration();
+        let b = Spring::new(SpringParams {
+            stiffness: 400.0,
+            damping: 20.0,
+            ..Default::default()
+        })
+        .settling_duration();
         assert!(b < a);
     }
 }

@@ -16,10 +16,22 @@ pub struct Modifiers {
 }
 
 impl Modifiers {
-    pub const NONE: Modifiers = Modifiers { shift: false, primary: false };
-    pub const SHIFT: Modifiers = Modifiers { shift: true, primary: false };
-    pub const PRIMARY: Modifiers = Modifiers { shift: false, primary: true };
-    pub const BOTH: Modifiers = Modifiers { shift: true, primary: true };
+    pub const NONE: Modifiers = Modifiers {
+        shift: false,
+        primary: false,
+    };
+    pub const SHIFT: Modifiers = Modifiers {
+        shift: true,
+        primary: false,
+    };
+    pub const PRIMARY: Modifiers = Modifiers {
+        shift: false,
+        primary: true,
+    };
+    pub const BOTH: Modifiers = Modifiers {
+        shift: true,
+        primary: true,
+    };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,7 +172,12 @@ impl Selection {
 
     /// Replace the whole state, for example with the indexes the same items have after the list was
     /// rebuilt. A collapse deferred to mouse-up is dropped.
-    pub fn restore(&mut self, selected: impl IntoIterator<Item = usize>, anchor: Option<usize>, focus: Option<usize>) {
+    pub fn restore(
+        &mut self,
+        selected: impl IntoIterator<Item = usize>,
+        anchor: Option<usize>,
+        focus: Option<usize>,
+    ) {
         self.selected = selected.into_iter().collect();
         self.anchor = anchor;
         self.focus = focus;
@@ -175,7 +192,11 @@ impl Selection {
 
     /// Start a rubber-band drag: remembers the selection to combine with.
     pub fn rubber_band_begin(&mut self, mods: Modifiers) {
-        self.rubber_base = Some(if mods.shift || mods.primary { self.selected.clone() } else { BTreeSet::new() });
+        self.rubber_base = Some(if mods.shift || mods.primary {
+            self.selected.clone()
+        } else {
+            BTreeSet::new()
+        });
     }
 
     /// Update the rubber band with the indexes currently intersected. With a modifier the hit set
@@ -183,7 +204,11 @@ impl Selection {
     pub fn rubber_band_update(&mut self, hits: &[usize], mods: Modifiers) {
         let base = self.rubber_base.clone().unwrap_or_default();
         let hit: BTreeSet<usize> = hits.iter().copied().collect();
-        self.selected = if mods.shift || mods.primary { base.symmetric_difference(&hit).copied().collect() } else { hit };
+        self.selected = if mods.shift || mods.primary {
+            base.symmetric_difference(&hit).copied().collect()
+        } else {
+            hit
+        };
         if let Some(last) = hits.last() {
             self.focus = Some(*last);
             self.anchor.get_or_insert(*last);
@@ -205,7 +230,12 @@ impl Selection {
 
     /// Keep indexes valid after the item at `at` was removed (it leaves the selection).
     pub fn on_remove(&mut self, at: usize) {
-        self.selected = self.selected.iter().filter(|i| **i != at).map(|i| if *i > at { i - 1 } else { *i }).collect();
+        self.selected = self
+            .selected
+            .iter()
+            .filter(|i| **i != at)
+            .map(|i| if *i > at { i - 1 } else { *i })
+            .collect();
         let fix = |o: Option<usize>| match o {
             Some(i) if i == at => None,
             Some(i) if i > at => Some(i - 1),

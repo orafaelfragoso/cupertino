@@ -15,7 +15,9 @@ pub mod power;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
-use cupertino_defaults::displays::{display_key, DisplaySettings, DisplaysConfig, ModeSetting, Transform as StoredTransform};
+use cupertino_defaults::displays::{
+    display_key, DisplaySettings, DisplaysConfig, ModeSetting, Transform as StoredTransform,
+};
 use cupertino_wm::OutputId;
 use smithay::output::{Mode as OutputMode, PhysicalProperties, Subpixel};
 use smithay::reexports::wayland_server::backend::GlobalId;
@@ -38,7 +40,10 @@ pub struct HeadMode {
 
 impl HeadMode {
     pub fn output_mode(self) -> OutputMode {
-        OutputMode { size: (self.width, self.height).into(), refresh: self.refresh_mhz }
+        OutputMode {
+            size: (self.width, self.height).into(),
+            refresh: self.refresh_mhz,
+        }
     }
 }
 
@@ -162,7 +167,8 @@ impl Displays {
     /// Store the settings in `path` and read what it holds. Problems in the file are logged and
     /// the sections they are in are ignored; a file that cannot be read is an error.
     pub fn use_store(&mut self, path: PathBuf) -> Result<()> {
-        let (saved, problems) = DisplaysConfig::load(&path).map_err(|e| anyhow!("reading {}: {e}", path.display()))?;
+        let (saved, problems) =
+            DisplaysConfig::load(&path).map_err(|e| anyhow!("reading {}: {e}", path.display()))?;
         for p in problems {
             tracing::warn!(path = %path.display(), line = p.line, problem = %p.problem, "ignoring display setting");
         }
@@ -193,7 +199,16 @@ impl Displays {
         self.heads
             .iter()
             .filter(|h| h.id != except && h.state.enabled)
-            .map(|h| h.state.position.0 + output_rect(h.state.mode.output_mode(), h.state.scale, h.state.transform, (0, 0)).w as i32)
+            .map(|h| {
+                h.state.position.0
+                    + output_rect(
+                        h.state.mode.output_mode(),
+                        h.state.scale,
+                        h.state.transform,
+                        (0, 0),
+                    )
+                    .w as i32
+            })
             .max()
             .unwrap_or(0)
     }
@@ -206,7 +221,9 @@ pub fn default_scale(mode: HeadMode, physical_mm: (i32, i32)) -> f64 {
     let pixels = (mode.width.max(0) as u32, mode.height.max(0) as u32);
     let mm = (physical_mm.0.max(0) as u32, physical_mm.1.max(0) as u32);
     cupertino_displays::Panel::from_physical(pixels, mm, false)
-        .and_then(|panel| cupertino_displays::default_choice(&panel, mode.refresh_mhz.max(0) as u32))
+        .and_then(|panel| {
+            cupertino_displays::default_choice(&panel, mode.refresh_mhz.max(0) as u32)
+        })
         .map_or(1.0, |choice| choice.scale)
 }
 
@@ -239,7 +256,11 @@ fn from_stored_transform(t: StoredTransform) -> Transform {
 fn stored_settings(state: &HeadState) -> DisplaySettings {
     DisplaySettings {
         enabled: state.enabled,
-        mode: ModeSetting { width: state.mode.width as u32, height: state.mode.height as u32, refresh_mhz: state.mode.refresh_mhz as u32 },
+        mode: ModeSetting {
+            width: state.mode.width as u32,
+            height: state.mode.height as u32,
+            refresh_mhz: state.mode.refresh_mhz as u32,
+        },
         position: state.position,
         scale: state.scale,
         transform: stored_transform(state.transform),
@@ -251,22 +272,38 @@ fn check_head(head: &Head, wanted: &HeadState) -> Result<(), String> {
     let name = &head.info.connector;
     let caps = head.info.caps;
     if !wanted.enabled {
-        return if caps.can_disable { Ok(()) } else { Err(format!("{name} cannot be disabled")) };
+        return if caps.can_disable {
+            Ok(())
+        } else {
+            Err(format!("{name} cannot be disabled"))
+        };
     }
     if !(wanted.scale.is_finite() && wanted.scale > 0.0) {
         return Err(format!("{name}: scale {} is not above zero", wanted.scale));
     }
     let mode = wanted.mode;
     let listed = head.info.modes.contains(&mode);
-    if !listed && !(caps.custom_modes && mode.width > 0 && mode.height > 0 && mode.refresh_mhz >= 0) {
-        return Err(format!("{name} has no mode {}x{}@{}", mode.width, mode.height, mode.refresh_mhz));
+    if !listed && !(caps.custom_modes && mode.width > 0 && mode.height > 0 && mode.refresh_mhz >= 0)
+    {
+        return Err(format!(
+            "{name} has no mode {}x{}@{}",
+            mode.width, mode.height, mode.refresh_mhz
+        ));
     }
     if wanted.transform != Transform::Normal && !caps.transforms {
         return Err(format!("{name} cannot be rotated or flipped"));
     }
-    let rect = output_rect(mode.output_mode(), wanted.scale, wanted.transform, wanted.position);
+    let rect = output_rect(
+        mode.output_mode(),
+        wanted.scale,
+        wanted.transform,
+        wanted.position,
+    );
     if rect.w < 1.0 || rect.h < 1.0 {
-        return Err(format!("{name}: scale {} leaves no logical size", wanted.scale));
+        return Err(format!(
+            "{name}: scale {} leaves no logical size",
+            wanted.scale
+        ));
     }
     Ok(())
 }
@@ -280,21 +317,46 @@ impl Cupertino {
         assert!(!info.modes.is_empty(), "a head has at least one mode");
         let id = HeadId(self.displays.next_head);
         self.displays.next_head += 1;
-        let key = display_key(&info.connector, &info.make, &info.model, info.serial.as_deref());
+        let key = display_key(
+            &info.connector,
+            &info.make,
+            &info.model,
+            info.serial.as_deref(),
+        );
         let preferred = info.modes[0];
         let mut state = match self.displays.saved.get(&key) {
             Some(s) => {
-                let stored = HeadMode { width: s.mode.width as i32, height: s.mode.height as i32, refresh_mhz: s.mode.refresh_mhz as i32 };
+                let stored = HeadMode {
+                    width: s.mode.width as i32,
+                    height: s.mode.height as i32,
+                    refresh_mhz: s.mode.refresh_mhz as i32,
+                };
                 let mode = if info.modes.contains(&stored) || info.caps.custom_modes {
                     stored
                 } else {
                     tracing::info!(%key, "the stored mode is not offered any more, using the preferred mode");
                     preferred
                 };
-                let transform = if info.caps.transforms { from_stored_transform(s.transform) } else { Transform::Normal };
-                HeadState { enabled: s.enabled || !info.caps.can_disable, mode, position: s.position, scale: s.scale, transform }
+                let transform = if info.caps.transforms {
+                    from_stored_transform(s.transform)
+                } else {
+                    Transform::Normal
+                };
+                HeadState {
+                    enabled: s.enabled || !info.caps.can_disable,
+                    mode,
+                    position: s.position,
+                    scale: s.scale,
+                    transform,
+                }
             }
-            None => HeadState { enabled: true, mode: preferred, position: (self.displays.right_edge(id), 0), scale: default_scale(preferred, info.physical_mm), transform: Transform::Normal },
+            None => HeadState {
+                enabled: true,
+                mode: preferred,
+                position: (self.displays.right_edge(id), 0),
+                scale: default_scale(preferred, info.physical_mm),
+                transform: Transform::Normal,
+            },
         };
         if let Some(scale) = scale {
             state.scale = scale;
@@ -304,7 +366,15 @@ impl Cupertino {
             state.enabled = true;
         }
         tracing::info!(connector = %info.connector, %key, ?state, "display connected");
-        self.displays.heads.push(Head { id, info, key, state, output: None, powered: true, advertised: None });
+        self.displays.heads.push(Head {
+            id,
+            info,
+            key,
+            state,
+            output: None,
+            powered: true,
+            advertised: None,
+        });
         self.heads_changed();
         (id, state)
     }
@@ -312,7 +382,9 @@ impl Cupertino {
     /// A backend lost a display; it has already stopped driving it. Its output goes away, and when no
     /// display is left on, the first disabled one is turned on.
     pub fn disconnect_head(&mut self, id: HeadId) {
-        let Some(idx) = self.displays.heads.iter().position(|h| h.id == id) else { return };
+        let Some(idx) = self.displays.heads.iter().position(|h| h.id == id) else {
+            return;
+        };
         if self.displays.heads[idx].output.is_some() {
             self.drop_head_output(id);
         }
@@ -335,7 +407,10 @@ impl Cupertino {
 
     /// Ask the backend to carry out `op` on `head`.
     pub(crate) fn head_op(&mut self, head: HeadId, op: HeadOp) -> Result<()> {
-        let mut backend = self.backend.take().ok_or_else(|| anyhow!("no backend is running"))?;
+        let mut backend = self
+            .backend
+            .take()
+            .ok_or_else(|| anyhow!("no backend is running"))?;
         let result = match &mut backend {
             #[cfg(feature = "winit")]
             Backend::Winit(w) => crate::backend::winit::head_op(self, w, head, op),
@@ -356,8 +431,19 @@ impl Cupertino {
             make: head.info.make.clone(),
             model: head.info.model.clone(),
         };
-        let (name, s, transform) = (head.info.connector.clone(), head.state, head.output_transform());
-        let output = self.add_output(&name, physical, s.mode.output_mode(), s.scale, transform, s.position);
+        let (name, s, transform) = (
+            head.info.connector.clone(),
+            head.state,
+            head.output_transform(),
+        );
+        let output = self.add_output(
+            &name,
+            physical,
+            s.mode.output_mode(),
+            s.scale,
+            transform,
+            s.position,
+        );
         let head = self.displays.head_mut(id).expect("the head being enabled");
         head.output = Some(output);
         head.powered = true;
@@ -368,8 +454,12 @@ impl Cupertino {
     /// Drop the output of a head: its layer surfaces are closed and its power objects fail.
     /// Backends call this for [`HeadOp::Disable`] and when a display goes away.
     pub fn drop_head_output(&mut self, id: HeadId) {
-        let Some(head) = self.displays.head_mut(id) else { return };
-        let Some(output) = head.output.take() else { return };
+        let Some(head) = self.displays.head_mut(id) else {
+            return;
+        };
+        let Some(output) = head.output.take() else {
+            return;
+        };
         if let Some(entry) = self.output_entry(output) {
             let map = smithay::desktop::layer_map_for_output(&entry.output);
             for layer in map.layers() {
@@ -385,12 +475,27 @@ impl Cupertino {
     /// state. On a failure part way, the previous state is restored. An applied configuration is stored.
     /// The caller then reports the change with [`Cupertino::heads_changed`] (after answering the
     /// configuration, which the protocol orders first).
-    pub fn configure_heads(&mut self, wanted: &[(HeadId, HeadState)], test_only: bool) -> Result<(), String> {
-        let mut after: Vec<(HeadId, HeadState)> = self.displays.heads.iter().map(|h| (h.id, h.state)).collect();
+    pub fn configure_heads(
+        &mut self,
+        wanted: &[(HeadId, HeadState)],
+        test_only: bool,
+    ) -> Result<(), String> {
+        let mut after: Vec<(HeadId, HeadState)> = self
+            .displays
+            .heads
+            .iter()
+            .map(|h| (h.id, h.state))
+            .collect();
         for (id, state) in wanted {
-            let head = self.displays.head(*id).ok_or_else(|| format!("display {id:?} went away"))?;
+            let head = self
+                .displays
+                .head(*id)
+                .ok_or_else(|| format!("display {id:?} went away"))?;
             check_head(head, state)?;
-            let slot = after.iter_mut().find(|(h, _)| h == id).expect("every head is listed");
+            let slot = after
+                .iter_mut()
+                .find(|(h, _)| h == id)
+                .expect("every head is listed");
             slot.1 = *state;
         }
         if !after.iter().any(|(_, s)| s.enabled) {
@@ -399,7 +504,12 @@ impl Cupertino {
         if test_only {
             return Ok(());
         }
-        let before: Vec<(HeadId, HeadState)> = self.displays.heads.iter().map(|h| (h.id, h.state)).collect();
+        let before: Vec<(HeadId, HeadState)> = self
+            .displays
+            .heads
+            .iter()
+            .map(|h| (h.id, h.state))
+            .collect();
         let result = self.set_head_states(&after);
         if let Err(e) = &result {
             tracing::warn!(error = %e, "applying the display configuration failed, restoring the previous one");
@@ -417,7 +527,8 @@ impl Cupertino {
     fn set_head_states(&mut self, wanted: &[(HeadId, HeadState)]) -> Result<(), String> {
         for (id, state) in wanted.iter().filter(|(_, s)| !s.enabled) {
             if self.displays.head(*id).is_some_and(|h| h.output.is_some()) {
-                self.head_op(*id, HeadOp::Disable).map_err(|e| format!("{e:#}"))?;
+                self.head_op(*id, HeadOp::Disable)
+                    .map_err(|e| format!("{e:#}"))?;
             }
             self.displays.head_mut(*id).expect("checked").state = *state;
         }
@@ -437,12 +548,19 @@ impl Cupertino {
                 }
                 Some(output) => {
                     if state.mode != previous.mode {
-                        self.head_op(*id, HeadOp::SetMode(state.mode)).map_err(|e| format!("{e:#}"))?;
+                        self.head_op(*id, HeadOp::SetMode(state.mode))
+                            .map_err(|e| format!("{e:#}"))?;
                     }
                     let head = self.displays.head_mut(*id).expect("checked");
                     head.state = *state;
                     let transform = head.output_transform();
-                    self.configure_output(output, state.mode.output_mode(), state.scale, transform, state.position);
+                    self.configure_output(
+                        output,
+                        state.mode.output_mode(),
+                        state.scale,
+                        transform,
+                        state.position,
+                    );
                 }
             }
         }
@@ -452,7 +570,9 @@ impl Cupertino {
 
     /// The backend's only mode of a head changed (the nested window was resized): the head takes it.
     pub fn head_mode_replaced(&mut self, id: HeadId, mode: HeadMode) {
-        let Some(head) = self.displays.head_mut(id) else { return };
+        let Some(head) = self.displays.head_mut(id) else {
+            return;
+        };
         head.info.modes = vec![mode];
         head.state.mode = mode;
         let (output, s, transform) = (head.output, head.state, head.output_transform());
@@ -464,7 +584,11 @@ impl Cupertino {
 
     /// Power `output` on or off. Fails for an output without a head or when the backend cannot.
     pub fn set_output_power(&mut self, output: OutputId, on: bool) -> Result<()> {
-        let head = self.displays.head_of_output(output).map(|h| h.id).ok_or_else(|| anyhow!("the output has no display"))?;
+        let head = self
+            .displays
+            .head_of_output(output)
+            .map(|h| h.id)
+            .ok_or_else(|| anyhow!("the output has no display"))?;
         self.head_op(head, HeadOp::Power(on))?;
         self.displays.head_mut(head).expect("checked").powered = on;
         if on {
@@ -477,12 +601,18 @@ impl Cupertino {
     /// Write every connected head's state to the store, keeping the entries of absent displays.
     fn store_displays(&mut self) {
         for head in &self.displays.heads {
-            self.displays.saved.set(&head.key, stored_settings(&head.state));
+            self.displays
+                .saved
+                .set(&head.key, stored_settings(&head.state));
         }
-        let Some(path) = &self.displays.store else { return };
+        let Some(path) = &self.displays.store else {
+            return;
+        };
         match self.displays.saved.store(path) {
             Ok(()) => tracing::info!(path = %path.display(), "display configuration stored"),
-            Err(e) => tracing::error!(path = %path.display(), error = %e, "storing the display configuration failed"),
+            Err(e) => {
+                tracing::error!(path = %path.display(), error = %e, "storing the display configuration failed")
+            }
         }
     }
 
@@ -514,9 +644,13 @@ impl Cupertino {
     pub fn refresh_surface_scales(&mut self) {
         use smithay::wayland::compositor::with_states;
         use smithay::wayland::fractional_scale::with_fractional_scale;
-        let set = |surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface, scale: f64| {
-            with_states(surface, |states| with_fractional_scale(states, |fs| fs.set_preferred_scale(scale)));
-        };
+        let set =
+            |surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+             scale: f64| {
+                with_states(surface, |states| {
+                    with_fractional_scale(states, |fs| fs.set_preferred_scale(scale))
+                });
+            };
         for o in &self.outputs {
             let map = smithay::desktop::layer_map_for_output(&o.output);
             for layer in map.layers() {
@@ -535,7 +669,11 @@ mod tests {
     use super::*;
 
     fn head(caps: HeadCaps) -> Head {
-        let mode = HeadMode { width: 1920, height: 1080, refresh_mhz: 60_000 };
+        let mode = HeadMode {
+            width: 1920,
+            height: 1080,
+            refresh_mhz: 60_000,
+        };
         let info = HeadInfo {
             connector: "DP-1".into(),
             make: "GSM".into(),
@@ -546,35 +684,140 @@ mod tests {
             caps,
             base_transform: Transform::Normal,
         };
-        let state = HeadState { enabled: true, mode, position: (0, 0), scale: 1.0, transform: Transform::Normal };
-        Head { id: HeadId(1), info, key: "connector DP-1".into(), state, output: None, powered: true, advertised: None }
+        let state = HeadState {
+            enabled: true,
+            mode,
+            position: (0, 0),
+            scale: 1.0,
+            transform: Transform::Normal,
+        };
+        Head {
+            id: HeadId(1),
+            info,
+            key: "connector DP-1".into(),
+            state,
+            output: None,
+            powered: true,
+            advertised: None,
+        }
     }
 
     #[test]
     fn a_head_accepts_only_what_its_backend_can_do() {
-        let fixed = head(HeadCaps { can_disable: false, custom_modes: false, transforms: false });
+        let fixed = head(HeadCaps {
+            can_disable: false,
+            custom_modes: false,
+            transforms: false,
+        });
         let ok = fixed.state;
         assert_eq!(check_head(&fixed, &ok), Ok(()));
-        assert!(check_head(&fixed, &HeadState { enabled: false, ..ok }).is_err());
-        assert!(check_head(&fixed, &HeadState { transform: Transform::_90, ..ok }).is_err());
-        assert!(check_head(&fixed, &HeadState { mode: HeadMode { width: 800, height: 600, refresh_mhz: 60_000 }, ..ok }).is_err());
+        assert!(check_head(
+            &fixed,
+            &HeadState {
+                enabled: false,
+                ..ok
+            }
+        )
+        .is_err());
+        assert!(check_head(
+            &fixed,
+            &HeadState {
+                transform: Transform::_90,
+                ..ok
+            }
+        )
+        .is_err());
+        assert!(check_head(
+            &fixed,
+            &HeadState {
+                mode: HeadMode {
+                    width: 800,
+                    height: 600,
+                    refresh_mhz: 60_000
+                },
+                ..ok
+            }
+        )
+        .is_err());
         assert!(check_head(&fixed, &HeadState { scale: 0.0, ..ok }).is_err());
-        let free = head(HeadCaps { can_disable: true, custom_modes: true, transforms: true });
-        assert_eq!(check_head(&free, &HeadState { mode: HeadMode { width: 800, height: 600, refresh_mhz: 0 }, transform: Transform::Flipped270, ..ok }), Ok(()));
-        assert!(check_head(&free, &HeadState { scale: 4000.0, ..ok }).is_err(), "no logical size left");
+        let free = head(HeadCaps {
+            can_disable: true,
+            custom_modes: true,
+            transforms: true,
+        });
+        assert_eq!(
+            check_head(
+                &free,
+                &HeadState {
+                    mode: HeadMode {
+                        width: 800,
+                        height: 600,
+                        refresh_mhz: 0
+                    },
+                    transform: Transform::Flipped270,
+                    ..ok
+                }
+            ),
+            Ok(())
+        );
+        assert!(
+            check_head(
+                &free,
+                &HeadState {
+                    scale: 4000.0,
+                    ..ok
+                }
+            )
+            .is_err(),
+            "no logical size left"
+        );
     }
 
     #[test]
     fn a_new_display_starts_at_its_default_scale() {
         // 27-inch 4K: looks like 2560x1440; 24-inch 1080p: unscaled; no physical size: unscaled.
-        assert_eq!(default_scale(HeadMode { width: 3840, height: 2160, refresh_mhz: 60_000 }, (597, 336)), 1.5);
-        assert_eq!(default_scale(HeadMode { width: 1920, height: 1080, refresh_mhz: 60_000 }, (527, 296)), 1.0);
-        assert_eq!(default_scale(HeadMode { width: 3840, height: 2160, refresh_mhz: 60_000 }, (0, 0)), 1.0);
+        assert_eq!(
+            default_scale(
+                HeadMode {
+                    width: 3840,
+                    height: 2160,
+                    refresh_mhz: 60_000
+                },
+                (597, 336)
+            ),
+            1.5
+        );
+        assert_eq!(
+            default_scale(
+                HeadMode {
+                    width: 1920,
+                    height: 1080,
+                    refresh_mhz: 60_000
+                },
+                (527, 296)
+            ),
+            1.0
+        );
+        assert_eq!(
+            default_scale(
+                HeadMode {
+                    width: 3840,
+                    height: 2160,
+                    refresh_mhz: 60_000
+                },
+                (0, 0)
+            ),
+            1.0
+        );
     }
 
     #[test]
     fn the_winit_transform_stays_under_the_users() {
-        let mut h = head(HeadCaps { can_disable: false, custom_modes: false, transforms: false });
+        let mut h = head(HeadCaps {
+            can_disable: false,
+            custom_modes: false,
+            transforms: false,
+        });
         h.info.base_transform = Transform::Flipped180;
         assert_eq!(h.output_transform(), Transform::Flipped180);
     }

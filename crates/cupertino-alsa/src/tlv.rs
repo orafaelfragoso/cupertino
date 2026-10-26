@@ -56,7 +56,10 @@ pub struct DbSegment {
 }
 
 fn word(words: &[u32], index: usize) -> Result<u32> {
-    words.get(index).copied().ok_or(Error::MalformedTlv("data ends inside an entry"))
+    words
+        .get(index)
+        .copied()
+        .ok_or(Error::MalformedTlv("data ends inside an entry"))
 }
 
 /// Parse one `type, length, data` block from the start of `words`; returns the curve (if the type carries one) and
@@ -66,14 +69,24 @@ fn parse_block(words: &[u32]) -> Result<(Option<DbCurve>, usize)> {
     if !len.is_multiple_of(4) {
         return Err(Error::MalformedTlv("length is not a whole number of words"));
     }
-    let data = words.get(2..2 + len / 4).ok_or(Error::MalformedTlv("length runs past the data"))?;
+    let data = words
+        .get(2..2 + len / 4)
+        .ok_or(Error::MalformedTlv("length runs past the data"))?;
     let used = 2 + len / 4;
     let curve = match kind {
         TYPE_DB_SCALE => {
             let (min, step_and_mute) = (word(data, 0)?, word(data, 1)?);
-            Some(DbCurve::Scale { min: min as i32, step: step_and_mute & SCALE_STEP_MASK, mute: step_and_mute & SCALE_MUTE != 0 })
+            Some(DbCurve::Scale {
+                min: min as i32,
+                step: step_and_mute & SCALE_STEP_MASK,
+                mute: step_and_mute & SCALE_MUTE != 0,
+            })
         }
-        TYPE_DB_MINMAX | TYPE_DB_MINMAX_MUTE => Some(DbCurve::MinMax { min: word(data, 0)? as i32, max: word(data, 1)? as i32, mute: kind == TYPE_DB_MINMAX_MUTE }),
+        TYPE_DB_MINMAX | TYPE_DB_MINMAX_MUTE => Some(DbCurve::MinMax {
+            min: word(data, 0)? as i32,
+            max: word(data, 1)? as i32,
+            mute: kind == TYPE_DB_MINMAX_MUTE,
+        }),
         TYPE_DB_RANGE => parse_range(data)?,
         _ => None,
     };
@@ -88,7 +101,11 @@ fn parse_range(mut data: &[u32]) -> Result<Option<DbCurve>> {
         let (raw_min, raw_max) = (word(data, 0)? as i32, word(data, 1)? as i32);
         let (curve, used) = parse_block(&data[2..])?;
         let Some(curve) = curve else { return Ok(None) };
-        segments.push(DbSegment { raw_min: i64::from(raw_min), raw_max: i64::from(raw_max), curve });
+        segments.push(DbSegment {
+            raw_min: i64::from(raw_min),
+            raw_max: i64::from(raw_max),
+            curve,
+        });
         data = &data[2 + used..];
     }
     if segments.is_empty() {
@@ -125,13 +142,27 @@ impl DbCurve {
                     DB_GAIN_MUTE
                 } else {
                     let span = (raw_max - raw_min).max(1);
-                    let gain = f64::from(*min) + f64::from(max - min) * (raw - raw_min) as f64 / span as f64;
+                    let gain = f64::from(*min)
+                        + f64::from(max - min) * (raw - raw_min) as f64 / span as f64;
                     gain.round() as i32
                 }
             }
             DbCurve::Range(segments) => {
-                let segment = segments.iter().find(|s| (s.raw_min..=s.raw_max).contains(&raw)).unwrap_or_else(|| if raw < raw_min { &segments[0] } else { &segments[segments.len() - 1] });
-                segment.curve.db(segment.raw_min, segment.raw_max, raw.clamp(segment.raw_min, segment.raw_max))
+                let segment = segments
+                    .iter()
+                    .find(|s| (s.raw_min..=s.raw_max).contains(&raw))
+                    .unwrap_or_else(|| {
+                        if raw < raw_min {
+                            &segments[0]
+                        } else {
+                            &segments[segments.len() - 1]
+                        }
+                    });
+                segment.curve.db(
+                    segment.raw_min,
+                    segment.raw_max,
+                    raw.clamp(segment.raw_min, segment.raw_max),
+                )
             }
         }
     }
@@ -153,14 +184,23 @@ mod tests {
     #[test]
     fn db_scale_gains_follow_the_step() {
         let curve = DbCurve::parse(&hda_scale()).unwrap().unwrap();
-        assert_eq!(curve, DbCurve::Scale { min: -9750, step: 75, mute: false });
+        assert_eq!(
+            curve,
+            DbCurve::Scale {
+                min: -9750,
+                step: 75,
+                mute: false
+            }
+        );
         assert_eq!(curve.db(0, 87, 0), -9750);
         assert_eq!(curve.db(0, 87, 87), -3225);
     }
 
     #[test]
     fn db_scale_mute_flag_mutes_the_lowest_raw_value() {
-        let curve = DbCurve::parse(&bytes(&[1, 8, (-5100i32) as u32, 0x10000 | 100])).unwrap().unwrap();
+        let curve = DbCurve::parse(&bytes(&[1, 8, (-5100i32) as u32, 0x10000 | 100]))
+            .unwrap()
+            .unwrap();
         assert_eq!(curve.db(0, 51, 0), DB_GAIN_MUTE);
         assert_eq!(curve.db(0, 51, 1), -5000);
         assert_eq!(curve.db(0, 51, 51), 0);
@@ -168,11 +208,15 @@ mod tests {
 
     #[test]
     fn db_minmax_interpolates_between_the_ends() {
-        let curve = DbCurve::parse(&bytes(&[4, 8, (-4000i32) as u32, 2000])).unwrap().unwrap();
+        let curve = DbCurve::parse(&bytes(&[4, 8, (-4000i32) as u32, 2000]))
+            .unwrap()
+            .unwrap();
         assert_eq!(curve.db(0, 100, 0), -4000);
         assert_eq!(curve.db(0, 100, 50), -1000);
         assert_eq!(curve.db(0, 100, 100), 2000);
-        let muted = DbCurve::parse(&bytes(&[5, 8, (-4000i32) as u32, 2000])).unwrap().unwrap();
+        let muted = DbCurve::parse(&bytes(&[5, 8, (-4000i32) as u32, 2000]))
+            .unwrap()
+            .unwrap();
         assert_eq!(muted.db(0, 100, 0), DB_GAIN_MUTE);
         assert_eq!(muted.db(0, 100, 100), 2000);
     }
@@ -180,7 +224,22 @@ mod tests {
     #[test]
     fn db_range_picks_the_segment_of_the_raw_value() {
         // raw 0..=1: scale from -6000 with 0 step (flat); raw 2..=4: scale from -3000 with 500 per step
-        let block = bytes(&[3, 48, 0, 1, 1, 8, (-6000i32) as u32, 0, 2, 4, 1, 8, (-3000i32) as u32, 500]);
+        let block = bytes(&[
+            3,
+            48,
+            0,
+            1,
+            1,
+            8,
+            (-6000i32) as u32,
+            0,
+            2,
+            4,
+            1,
+            8,
+            (-3000i32) as u32,
+            500,
+        ]);
         let curve = DbCurve::parse(&block).unwrap().unwrap();
         assert_eq!(curve.db(0, 4, 1), -6000);
         assert_eq!(curve.db(0, 4, 2), -3000);
@@ -197,8 +256,17 @@ mod tests {
 
     #[test]
     fn truncated_blocks_are_errors() {
-        assert!(matches!(DbCurve::parse(&bytes(&[1, 8, 5])), Err(Error::MalformedTlv(_))));
-        assert!(matches!(DbCurve::parse(&[0, 0, 0]), Err(Error::MalformedTlv(_))));
-        assert!(matches!(DbCurve::parse(&bytes(&[1, 6, 5, 6])), Err(Error::MalformedTlv(_))));
+        assert!(matches!(
+            DbCurve::parse(&bytes(&[1, 8, 5])),
+            Err(Error::MalformedTlv(_))
+        ));
+        assert!(matches!(
+            DbCurve::parse(&[0, 0, 0]),
+            Err(Error::MalformedTlv(_))
+        ));
+        assert!(matches!(
+            DbCurve::parse(&bytes(&[1, 6, 5, 6])),
+            Err(Error::MalformedTlv(_))
+        ));
     }
 }

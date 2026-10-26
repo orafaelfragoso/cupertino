@@ -8,8 +8,8 @@
 
 use std::collections::HashMap;
 
-pub use crate::shortcut_table::{Assignment, SystemAction, ASSIGNMENTS};
 use crate::keys::Chord;
+pub use crate::shortcut_table::{Assignment, SystemAction, ASSIGNMENTS};
 
 /// Actions enabled by [`ShortcutSet::reference_defaults`] (approximate).
 pub const REFERENCE_ENABLED: &[SystemAction] = &[
@@ -107,7 +107,11 @@ impl ShortcutSet {
         let mut best: Option<(u16, SystemAction)> = None;
         for (a, c) in &self.assigned {
             if c == chord && self.is_enabled(*a) {
-                let id = ASSIGNMENTS.iter().find(|x| x.action == *a).map(|x| x.id).unwrap_or(u16::MAX);
+                let id = ASSIGNMENTS
+                    .iter()
+                    .find(|x| x.action == *a)
+                    .map(|x| x.id)
+                    .unwrap_or(u16::MAX);
                 if best.is_none_or(|(b, _)| id < b) {
                     best = Some((id, *a));
                 }
@@ -125,11 +129,21 @@ impl ShortcutSet {
                 continue;
             }
             let Some((l, r)) = line.split_once('=') else {
-                errs.push(ShortcutError { line: i + 1, message: "expected 'Action = chord'".into() });
+                errs.push(ShortcutError {
+                    line: i + 1,
+                    message: "expected 'Action = chord'".into(),
+                });
                 continue;
             };
-            let Some(action) = SystemAction::ALL.iter().copied().find(|a| a.name().eq_ignore_ascii_case(l.trim())) else {
-                errs.push(ShortcutError { line: i + 1, message: format!("unknown action '{}'", l.trim()) });
+            let Some(action) = SystemAction::ALL
+                .iter()
+                .copied()
+                .find(|a| a.name().eq_ignore_ascii_case(l.trim()))
+            else {
+                errs.push(ShortcutError {
+                    line: i + 1,
+                    message: format!("unknown action '{}'", l.trim()),
+                });
                 continue;
             };
             let r = r.trim();
@@ -142,7 +156,10 @@ impl ShortcutSet {
                     self.rebind(action, c);
                     self.set_enabled(action, true);
                 }
-                Err(e) => errs.push(ShortcutError { line: i + 1, message: e.to_string() }),
+                Err(e) => errs.push(ShortcutError {
+                    line: i + 1,
+                    message: e.to_string(),
+                }),
             }
         }
         errs
@@ -162,22 +179,64 @@ mod tests {
     fn table_has_expected_rows() {
         assert_eq!(ASSIGNMENTS.len(), 80);
         let s = ShortcutSet::all_assigned();
-        assert_eq!(s.chord_for(SystemAction::AppSwitcherNext), Some(c("Primary+Tab")));
-        assert_eq!(s.chord_for(SystemAction::AppSwitcherPrevious), Some(c("Primary+Shift+Tab")));
-        assert_eq!(s.chord_for(SystemAction::WindowCycleNext), Some(c("Primary+`")));
-        assert_eq!(s.chord_for(SystemAction::ScreenshotScreenToFile), Some(c("Primary+Shift+3")));
-        assert_eq!(s.chord_for(SystemAction::ScreenshotSelectionToFile), Some(c("Primary+Shift+4")));
-        assert_eq!(s.chord_for(SystemAction::ScreenshotOptions), Some(c("Primary+Shift+5")));
-        assert_eq!(s.chord_for(SystemAction::LauncherToggle), Some(c("Primary+Space")));
-        assert_eq!(s.chord_for(SystemAction::InputSourcePrevious), Some(c("Ctrl+Space")));
-        assert_eq!(s.chord_for(SystemAction::InputSourceNext), Some(c("Ctrl+Alt+Space")));
-        assert_eq!(s.chord_for(SystemAction::OverviewAllWindows), Some(c("Ctrl+Up")));
+        assert_eq!(
+            s.chord_for(SystemAction::AppSwitcherNext),
+            Some(c("Primary+Tab"))
+        );
+        assert_eq!(
+            s.chord_for(SystemAction::AppSwitcherPrevious),
+            Some(c("Primary+Shift+Tab"))
+        );
+        assert_eq!(
+            s.chord_for(SystemAction::WindowCycleNext),
+            Some(c("Primary+`"))
+        );
+        assert_eq!(
+            s.chord_for(SystemAction::ScreenshotScreenToFile),
+            Some(c("Primary+Shift+3"))
+        );
+        assert_eq!(
+            s.chord_for(SystemAction::ScreenshotSelectionToFile),
+            Some(c("Primary+Shift+4"))
+        );
+        assert_eq!(
+            s.chord_for(SystemAction::ScreenshotOptions),
+            Some(c("Primary+Shift+5"))
+        );
+        assert_eq!(
+            s.chord_for(SystemAction::LauncherToggle),
+            Some(c("Primary+Space"))
+        );
+        assert_eq!(
+            s.chord_for(SystemAction::InputSourcePrevious),
+            Some(c("Ctrl+Space"))
+        );
+        assert_eq!(
+            s.chord_for(SystemAction::InputSourceNext),
+            Some(c("Ctrl+Alt+Space"))
+        );
+        assert_eq!(
+            s.chord_for(SystemAction::OverviewAllWindows),
+            Some(c("Ctrl+Up"))
+        );
         assert_eq!(s.chord_for(SystemAction::ShowDesktop), Some(c("F11")));
-        assert_eq!(s.chord_for(SystemAction::ForceQuitDialog), Some(c("Primary+Alt+Escape")));
+        assert_eq!(
+            s.chord_for(SystemAction::ForceQuitDialog),
+            Some(c("Primary+Alt+Escape"))
+        );
         assert_eq!(s.chord_for(SystemAction::WorkspaceGoTo1), Some(c("Ctrl+1")));
-        assert_eq!(s.chord_for(SystemAction::WorkspaceGoTo11), Some(c("Ctrl+Alt+1")));
-        assert_eq!(s.chord_for(SystemAction::WorkspaceNext), Some(c("Ctrl+Right")));
-        assert_eq!(s.chord_for(SystemAction::DockAutoHideToggle), Some(c("Primary+Alt+D")));
+        assert_eq!(
+            s.chord_for(SystemAction::WorkspaceGoTo11),
+            Some(c("Ctrl+Alt+1"))
+        );
+        assert_eq!(
+            s.chord_for(SystemAction::WorkspaceNext),
+            Some(c("Ctrl+Right"))
+        );
+        assert_eq!(
+            s.chord_for(SystemAction::DockAutoHideToggle),
+            Some(c("Primary+Alt+D"))
+        );
     }
 
     #[test]
@@ -185,7 +244,10 @@ mod tests {
         let s = ShortcutSet::reference_defaults();
         assert!(s.is_enabled(SystemAction::LauncherToggle));
         assert!(!s.is_enabled(SystemAction::WorkspaceGoTo1));
-        assert_eq!(s.lookup(&c("Primary+Space")), Some(SystemAction::LauncherToggle));
+        assert_eq!(
+            s.lookup(&c("Primary+Space")),
+            Some(SystemAction::LauncherToggle)
+        );
         assert_eq!(s.lookup(&c("Ctrl+1")), None);
         let all = ShortcutSet::all_assigned();
         assert_eq!(all.lookup(&c("Ctrl+1")), Some(SystemAction::WorkspaceGoTo1));
@@ -196,17 +258,26 @@ mod tests {
         let mut s = ShortcutSet::reference_defaults();
         let errs = s.apply_overrides("LauncherToggle = Alt+Space\nShowDesktop = none\nNope = Ctrl+Q\nWorkspaceGoTo1 = Hyper+1\n");
         assert_eq!(errs.len(), 2);
-        assert_eq!(s.lookup(&c("Alt+Space")), Some(SystemAction::LauncherToggle));
+        assert_eq!(
+            s.lookup(&c("Alt+Space")),
+            Some(SystemAction::LauncherToggle)
+        );
         assert_eq!(s.lookup(&c("F11")), None);
     }
 
     #[test]
     fn implied_function_flag_is_not_a_modifier() {
-        let a = ASSIGNMENTS.iter().find(|a| a.action == SystemAction::WorkspaceNext).unwrap();
+        let a = ASSIGNMENTS
+            .iter()
+            .find(|a| a.action == SystemAction::WorkspaceNext)
+            .unwrap();
         assert!(a.implied_fn);
         assert!(!a.mods.contains(Mods::FN));
         assert_eq!(a.key, Key::Named(NamedKey::Right));
-        let q = ASSIGNMENTS.iter().find(|a| a.action == SystemAction::QuickNote).unwrap();
+        let q = ASSIGNMENTS
+            .iter()
+            .find(|a| a.action == SystemAction::QuickNote)
+            .unwrap();
         assert!(q.mods.contains(Mods::FN));
     }
 }

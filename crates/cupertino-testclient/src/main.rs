@@ -2,9 +2,9 @@
 //! It maps one window with the given application id and title, and appends what is typed into it to a file, so a
 //! check can tell which window has the keyboard focus. It is not part of the desktop.
 
+use std::error::Error;
 use std::fs::File;
 use std::io::Write;
-use std::error::Error;
 use std::process::ExitCode;
 
 use cupertino_client::{key, Client, Event, TitlebarStyle, ToplevelConfig};
@@ -70,12 +70,19 @@ fn run(options: &Options) -> Result<(), Box<dyn Error>> {
             match event {
                 // the client queues a draw after every configure and scale change
                 Event::Draw(surface) => {
-                    client.draw(surface, |pixmap, _scale| pixmap.fill(Color::from_rgba8(FILL_GREY, FILL_GREY, FILL_GREY, 255)))?;
+                    client.draw(surface, |pixmap, _scale| {
+                        pixmap.fill(Color::from_rgba8(FILL_GREY, FILL_GREY, FILL_GREY, 255))
+                    })?;
                     if output.is_none() {
                         output = Some(File::create(&options.output)?);
                     }
                 }
-                Event::Key { key, pressed: true, character, .. } => {
+                Event::Key {
+                    key,
+                    pressed: true,
+                    character,
+                    ..
+                } => {
                     if let (Some(file), Some(c)) = (output.as_mut(), typed_text(key, character)) {
                         write!(file, "{c}")?;
                     }
@@ -117,9 +124,26 @@ mod tests {
 
     #[test]
     fn options_need_all_three_flags() {
-        let args = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>().into_iter();
+        let args = |s: &str| {
+            s.split(' ')
+                .map(String::from)
+                .collect::<Vec<_>>()
+                .into_iter()
+        };
         let parsed = Options::parse(args("--app-id one --title Two --output /tmp/x")).unwrap();
-        assert_eq!((parsed.app_id.as_str(), parsed.title.as_str(), parsed.output.as_str()), ("one", "Two", "/tmp/x"));
-        assert_eq!(Options::parse(args("--app-id one --title Two")).err().as_deref(), Some("--output is required"));
+        assert_eq!(
+            (
+                parsed.app_id.as_str(),
+                parsed.title.as_str(),
+                parsed.output.as_str()
+            ),
+            ("one", "Two", "/tmp/x")
+        );
+        assert_eq!(
+            Options::parse(args("--app-id one --title Two"))
+                .err()
+                .as_deref(),
+            Some("--output is required")
+        );
     }
 }

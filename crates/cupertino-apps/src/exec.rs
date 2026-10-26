@@ -31,16 +31,23 @@ pub struct CommandSpec {
 
 impl CommandSpec {
     pub fn new(program: &str, args: &[&str]) -> Self {
-        Self { program: program.into(), args: args.iter().map(|s| s.to_string()).collect(), ..Default::default() }
+        Self {
+            program: program.into(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
     }
 
     pub fn argv(&self) -> Vec<&str> {
-        std::iter::once(self.program.as_str()).chain(self.args.iter().map(String::as_str)).collect()
+        std::iter::once(self.program.as_str())
+            .chain(self.args.iter().map(String::as_str))
+            .collect()
     }
 
     /// Add the activation token variables.
     pub fn with_activation_token(mut self, token: &str) -> Self {
-        self.env.retain(|(k, _)| k != ACTIVATION_TOKEN_ENV && k != STARTUP_ID_ENV);
+        self.env
+            .retain(|(k, _)| k != ACTIVATION_TOKEN_ENV && k != STARTUP_ID_ENV);
         self.env.push((ACTIVATION_TOKEN_ENV.into(), token.into()));
         self.env.push((STARTUP_ID_ENV.into(), token.into()));
         self
@@ -49,7 +56,9 @@ impl CommandSpec {
     /// Run inside a terminal emulator: `terminal` is the emulator's argv prefix, for example
     /// `["xterm", "-e"]. The prefix is unknown for this system, so it is configuration.
     pub fn in_terminal(mut self, terminal: &[String]) -> Self {
-        let Some((prog, rest)) = terminal.split_first() else { return self };
+        let Some((prog, rest)) = terminal.split_first() else {
+            return self;
+        };
         let mut args: Vec<String> = rest.to_vec();
         args.push(std::mem::take(&mut self.program));
         args.append(&mut self.args);
@@ -181,14 +190,27 @@ fn spec_from(argv: Vec<String>, entry: &DesktopEntry) -> CommandSpec {
     }
 }
 
-fn context<'a>(entry: &'a DesktopEntry, icon: Option<&'a str>, files: &'a [String], path: Option<&'a str>) -> ExpandContext<'a> {
-    ExpandContext { name: &entry.name, icon, desktop_path: path, files }
+fn context<'a>(
+    entry: &'a DesktopEntry,
+    icon: Option<&'a str>,
+    files: &'a [String],
+    path: Option<&'a str>,
+) -> ExpandContext<'a> {
+    ExpandContext {
+        name: &entry.name,
+        icon,
+        desktop_path: path,
+        files,
+    }
 }
 
 /// Command for launching `entry` (optionally with files), or `None` for an unusable `Exec`.
 pub fn command_for_entry(entry: &DesktopEntry, files: &[String]) -> Option<CommandSpec> {
     let path = entry.source.as_ref().and_then(|p| p.to_str());
-    let argv = strip_field_codes(&entry.exec, &context(entry, entry.icon.as_deref(), files, path))?;
+    let argv = strip_field_codes(
+        &entry.exec,
+        &context(entry, entry.icon.as_deref(), files, path),
+    )?;
     Some(spec_from(argv, entry))
 }
 
@@ -204,7 +226,12 @@ mod tests {
     use super::*;
 
     fn ctx<'a>(files: &'a [String]) -> ExpandContext<'a> {
-        ExpandContext { name: "My App", icon: Some("my-icon"), desktop_path: Some("/usr/share/applications/my.desktop"), files }
+        ExpandContext {
+            name: "My App",
+            icon: Some("my-icon"),
+            desktop_path: Some("/usr/share/applications/my.desktop"),
+            files,
+        }
     }
 
     fn strip(s: &str) -> Vec<String> {
@@ -215,7 +242,10 @@ mod tests {
     fn tokenizer_handles_quotes_and_escapes() {
         assert_eq!(tokenize("prog a  b").unwrap(), ["prog", "a", "b"]);
         assert_eq!(tokenize("prog \"a b\" c").unwrap(), ["prog", "a b", "c"]);
-        assert_eq!(tokenize("prog \"a \\\"q\\\" \\$HOME \\\\\"").unwrap(), ["prog", "a \"q\" $HOME \\"]);
+        assert_eq!(
+            tokenize("prog \"a \\\"q\\\" \\$HOME \\\\\"").unwrap(),
+            ["prog", "a \"q\" $HOME \\"]
+        );
         assert_eq!(tokenize("prog \"\" x").unwrap(), ["prog", "", "x"]);
         assert_eq!(tokenize("prog \"unterminated"), None);
         assert_eq!(tokenize("   ").unwrap(), Vec::<String>::new());
@@ -229,21 +259,44 @@ mod tests {
         assert_eq!(strip("viewer %f %U %d %D %n %N %v %m"), ["viewer"]);
         assert_eq!(strip("app --file=%f"), ["app", "--file="]);
         assert_eq!(strip("app 100%%"), ["app", "100%"]);
-        assert_eq!(strip("app %i %c %k"), ["app", "--icon", "my-icon", "My App", "/usr/share/applications/my.desktop"]);
+        assert_eq!(
+            strip("app %i %c %k"),
+            [
+                "app",
+                "--icon",
+                "my-icon",
+                "My App",
+                "/usr/share/applications/my.desktop"
+            ]
+        );
         assert_eq!(strip("app %z extra"), ["app", "extra"]);
     }
 
     #[test]
     fn files_expand_into_file_codes() {
         let f = vec!["/tmp/a.txt".to_string(), "/tmp/b c.txt".to_string()];
-        assert_eq!(expand_args(&tokenize("edit %F").unwrap(), &ctx(&f)), ["edit", "/tmp/a.txt", "/tmp/b c.txt"]);
-        assert_eq!(expand_args(&tokenize("edit %f").unwrap(), &ctx(&f)), ["edit", "/tmp/a.txt"]);
-        assert_eq!(expand_args(&tokenize("edit --open=%u").unwrap(), &ctx(&f)), ["edit", "--open=/tmp/a.txt"]);
+        assert_eq!(
+            expand_args(&tokenize("edit %F").unwrap(), &ctx(&f)),
+            ["edit", "/tmp/a.txt", "/tmp/b c.txt"]
+        );
+        assert_eq!(
+            expand_args(&tokenize("edit %f").unwrap(), &ctx(&f)),
+            ["edit", "/tmp/a.txt"]
+        );
+        assert_eq!(
+            expand_args(&tokenize("edit --open=%u").unwrap(), &ctx(&f)),
+            ["edit", "--open=/tmp/a.txt"]
+        );
     }
 
     #[test]
     fn missing_icon_drops_icon_code() {
-        let c = ExpandContext { name: "x", icon: None, desktop_path: None, files: &[] };
+        let c = ExpandContext {
+            name: "x",
+            icon: None,
+            desktop_path: None,
+            files: &[],
+        };
         assert_eq!(strip_field_codes("app %i", &c).unwrap(), ["app"]);
     }
 
@@ -285,8 +338,16 @@ mod tests {
 
     #[test]
     fn activation_token_sets_both_variables_once() {
-        let c = CommandSpec::new("x", &[]).with_activation_token("t1").with_activation_token("t2");
-        assert_eq!(c.env, vec![(ACTIVATION_TOKEN_ENV.to_string(), "t2".to_string()), (STARTUP_ID_ENV.to_string(), "t2".to_string())]);
+        let c = CommandSpec::new("x", &[])
+            .with_activation_token("t1")
+            .with_activation_token("t2");
+        assert_eq!(
+            c.env,
+            vec![
+                (ACTIVATION_TOKEN_ENV.to_string(), "t2".to_string()),
+                (STARTUP_ID_ENV.to_string(), "t2".to_string())
+            ]
+        );
     }
 
     #[test]
@@ -301,7 +362,12 @@ mod tests {
     fn action_command_uses_action_exec_and_icon() {
         let mut e = entry("app");
         e.terminal = false;
-        let a = DesktopAction { id: "new".into(), name: "New".into(), exec: "app --new %i".into(), icon: Some("new-icon".into()) };
+        let a = DesktopAction {
+            id: "new".into(),
+            name: "New".into(),
+            exec: "app --new %i".into(),
+            icon: Some("new-icon".into()),
+        };
         let c = command_for_action(&e, &a).unwrap();
         assert_eq!(c.argv(), ["app", "--new", "--icon", "new-icon"]);
     }

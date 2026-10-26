@@ -21,7 +21,9 @@ use smithay::backend::allocator::Fourcc;
 use smithay::backend::drm::compositor::{FrameError, FrameFlags};
 use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
 use smithay::backend::drm::output::{DrmOutput, DrmOutputManager, DrmOutputRenderElements};
-use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmError, DrmEvent, DrmEventTime, DrmNode, NodeType};
+use smithay::backend::drm::{
+    DrmDevice, DrmDeviceFd, DrmError, DrmEvent, DrmEventTime, DrmNode, NodeType,
+};
 use smithay::backend::egl::context::ContextPriority;
 use smithay::backend::egl::{EGLContext, EGLDevice, EGLDisplay};
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -30,7 +32,9 @@ use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::desktop::utils::OutputPresentationFeedback;
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{EventLoop, Interest, Mode, PostAction};
-use smithay::reexports::drm::control::{self, connector, crtc, Device as ControlDevice, ModeFlags, ModeTypeFlags};
+use smithay::reexports::drm::control::{
+    self, connector, crtc, Device as ControlDevice, ModeFlags, ModeTypeFlags,
+};
 use smithay::reexports::drm::Device as DrmDeviceTrait;
 use smithay::reexports::rustix::fs::OFlags;
 use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
@@ -47,8 +51,18 @@ use crate::state::Cupertino;
 const CLEAR: Color32F = Color32F::new(0.05, 0.05, 0.07, 1.0);
 const COLOR_FORMATS: [Fourcc; 2] = [Fourcc::Abgr8888, Fourcc::Argb8888];
 
-type Output_ = DrmOutput<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, Option<OutputPresentationFeedback>, DrmDeviceFd>;
-type Manager = DrmOutputManager<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, Option<OutputPresentationFeedback>, DrmDeviceFd>;
+type Output_ = DrmOutput<
+    GbmAllocator<DrmDeviceFd>,
+    GbmFramebufferExporter<DrmDeviceFd>,
+    Option<OutputPresentationFeedback>,
+    DrmDeviceFd,
+>;
+type Manager = DrmOutputManager<
+    GbmAllocator<DrmDeviceFd>,
+    GbmFramebufferExporter<DrmDeviceFd>,
+    Option<OutputPresentationFeedback>,
+    DrmDeviceFd,
+>;
 
 struct Surface {
     output: OutputId,
@@ -67,7 +81,18 @@ struct DrmHead {
 
 impl DrmHead {
     fn drm_mode(&self, mode: HeadMode) -> Result<control::Mode> {
-        self.modes.iter().find(|(m, _)| *m == mode).map(|(_, d)| *d).ok_or_else(|| anyhow!("no DRM mode {}x{}@{}", mode.width, mode.height, mode.refresh_mhz))
+        self.modes
+            .iter()
+            .find(|(m, _)| *m == mode)
+            .map(|(_, d)| *d)
+            .ok_or_else(|| {
+                anyhow!(
+                    "no DRM mode {}x{}@{}",
+                    mode.width,
+                    mode.height,
+                    mode.refresh_mhz
+                )
+            })
     }
 }
 
@@ -133,8 +158,14 @@ fn udev(state: &mut Cupertino) -> Option<&mut UdevBackend> {
 }
 
 /// Start the TTY backend and run until the compositor stops.
-pub fn run(state: &mut Cupertino, event_loop: &mut EventLoop<'static, Cupertino>, deadline: Option<Instant>, scale: Option<f64>) -> Result<()> {
-    let (session, mut notifier) = LogindSession::new().map_err(|e| anyhow!("opening a logind session: {e}"))?;
+pub fn run(
+    state: &mut Cupertino,
+    event_loop: &mut EventLoop<'static, Cupertino>,
+    deadline: Option<Instant>,
+    scale: Option<f64>,
+) -> Result<()> {
+    let (session, mut notifier) =
+        LogindSession::new().map_err(|e| anyhow!("opening a logind session: {e}"))?;
     // Devices are only known on the default seat.
     let seat = session.seat();
     if seat != SEAT0 {
@@ -145,34 +176,65 @@ pub fn run(state: &mut Cupertino, event_loop: &mut EventLoop<'static, Cupertino>
     // their own: the compositor's sources (shell processes, clients) need the outputs first.
     if !session.is_active() {
         tracing::info!("waiting for the session to become active");
-        let mut waiting: EventLoop<'_, ()> = EventLoop::try_new().context("creating the session wait loop")?;
-        waiting.handle().insert_source(&mut notifier, |_, &mut (), _| {}).map_err(|e| anyhow!("inserting the session source: {e}"))?;
+        let mut waiting: EventLoop<'_, ()> =
+            EventLoop::try_new().context("creating the session wait loop")?;
+        waiting
+            .handle()
+            .insert_source(&mut notifier, |_, &mut (), _| {})
+            .map_err(|e| anyhow!("inserting the session source: {e}"))?;
         while !session.is_active() {
-            waiting.dispatch(None, &mut ()).map_err(|e| anyhow!("waiting for the session: {e}"))?;
+            waiting
+                .dispatch(None, &mut ())
+                .map_err(|e| anyhow!("waiting for the session: {e}"))?;
         }
     }
-    let gpu = cupertino_devices::primary_gpu(Path::new("/sys")).map_err(|e| anyhow!("listing GPUs: {e}"))?.context("no GPU found")?;
-    let gpu_path = gpu.device.devnode().context("the GPU has no device file")?.to_owned();
-    let gpu_devnum = gpu.device.devnum().context("the GPU has no device number")?;
+    let gpu = cupertino_devices::primary_gpu(Path::new("/sys"))
+        .map_err(|e| anyhow!("listing GPUs: {e}"))?
+        .context("no GPU found")?;
+    let gpu_path = gpu
+        .device
+        .devnode()
+        .context("the GPU has no device file")?
+        .to_owned();
+    let gpu_devnum = gpu
+        .device
+        .devnum()
+        .context("the GPU has no device number")?;
     tracing::info!(path = %gpu_path.display(), seat = %seat, "using GPU");
 
-    let node = DrmNode::from_path(&gpu_path).map_err(|e| anyhow!("drm node for {}: {e}", gpu_path.display()))?;
+    let node = DrmNode::from_path(&gpu_path)
+        .map_err(|e| anyhow!("drm node for {}: {e}", gpu_path.display()))?;
     let fd = session
         .clone()
-        .open(&gpu_path, OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK)
+        .open(
+            &gpu_path,
+            OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK,
+        )
         .map_err(|e| anyhow!("opening {}: {e}", gpu_path.display()))?;
     let fd = DrmDeviceFd::new(DeviceFd::from(fd));
-    let (drm, drm_notifier) = DrmDevice::new(fd.clone(), true).map_err(|e| anyhow!("drm device: {e}"))?;
+    let (drm, drm_notifier) =
+        DrmDevice::new(fd.clone(), true).map_err(|e| anyhow!("drm device: {e}"))?;
     let gbm = GbmDevice::new(fd).map_err(|e| anyhow!("gbm device: {e}"))?;
 
-    let display = unsafe { EGLDisplay::new(gbm.clone()) }.map_err(|e| anyhow!("EGL display: {e}"))?;
-    let egl_device = EGLDevice::device_for_display(&display).map_err(|e| anyhow!("EGL device: {e}"))?;
+    let display =
+        unsafe { EGLDisplay::new(gbm.clone()) }.map_err(|e| anyhow!("EGL display: {e}"))?;
+    let egl_device =
+        EGLDevice::device_for_display(&display).map_err(|e| anyhow!("EGL device: {e}"))?;
     if egl_device.is_software() {
-        return Err(anyhow!("only a software renderer is available on {}", gpu_path.display()));
+        return Err(anyhow!(
+            "only a software renderer is available on {}",
+            gpu_path.display()
+        ));
     }
-    let render_node = egl_device.try_get_render_node().ok().flatten().or_else(|| node.node_with_type(NodeType::Render).and_then(|n| n.ok()));
-    let context = EGLContext::new_with_priority(&display, ContextPriority::High).map_err(|e| anyhow!("EGL context: {e}"))?;
-    let mut renderer = unsafe { GlesRenderer::new(context) }.map_err(|e| anyhow!("GLES renderer: {e}"))?;
+    let render_node = egl_device
+        .try_get_render_node()
+        .ok()
+        .flatten()
+        .or_else(|| node.node_with_type(NodeType::Render).and_then(|n| n.ok()));
+    let context = EGLContext::new_with_priority(&display, ContextPriority::High)
+        .map_err(|e| anyhow!("EGL context: {e}"))?;
+    let mut renderer =
+        unsafe { GlesRenderer::new(context) }.map_err(|e| anyhow!("GLES renderer: {e}"))?;
     let render_formats = renderer
         .egl_context()
         .dmabuf_render_formats()
@@ -183,9 +245,19 @@ pub fn run(state: &mut Cupertino, event_loop: &mut EventLoop<'static, Cupertino>
     state.render = Some(RenderResources::new(&mut renderer)?);
     super::init_buffers(state, &renderer);
 
-    let allocator = GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT);
+    let allocator = GbmAllocator::new(
+        gbm.clone(),
+        GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
+    );
     let exporter = GbmFramebufferExporter::new(gbm.clone(), render_node);
-    let manager = DrmOutputManager::new(drm, allocator, exporter, Some(gbm), COLOR_FORMATS, render_formats);
+    let manager = DrmOutputManager::new(
+        drm,
+        allocator,
+        exporter,
+        Some(gbm),
+        COLOR_FORMATS,
+        render_formats,
+    );
 
     let backend = UdevBackend {
         session: session.clone(),
@@ -235,7 +307,12 @@ pub fn run(state: &mut Cupertino, event_loop: &mut EventLoop<'static, Cupertino>
 
     handle
         .insert_source(drm_notifier, move |event, metadata, state| match event {
-            DrmEvent::VBlank(crtc) => frame_finish(state, crtc, metadata.as_ref().map(|m| m.time), metadata.as_ref().map(|m| m.sequence)),
+            DrmEvent::VBlank(crtc) => frame_finish(
+                state,
+                crtc,
+                metadata.as_ref().map(|m| m.time),
+                metadata.as_ref().map(|m| m.sequence),
+            ),
             DrmEvent::Error(e) => tracing::error!(error = %e, "DRM error"),
         })
         .map_err(|e| anyhow!("inserting the DRM source: {e}"))?;
@@ -243,29 +320,37 @@ pub fn run(state: &mut Cupertino, event_loop: &mut EventLoop<'static, Cupertino>
     let monitor = Monitor::new().map_err(|e| anyhow!("opening the uevent socket: {e}"))?;
     let hotplug_inputs = inputs.clone();
     handle
-        .insert_source(Generic::new(monitor, Interest::READ, Mode::Level), move |_, monitor, state| {
-            match monitor.drain() {
-                Ok(drained) => {
-                    for error in &drained.errors {
-                        tracing::warn!(error = %error, "dropping a malformed uevent");
-                    }
-                    for event in drained.events {
-                        if event.subsystem == Subsystem::Input.as_str() {
-                            input::hotplug(&hotplug_inputs, &event, state);
-                        } else if event.subsystem == Subsystem::Drm.as_str() && event.action == Action::Changed && event.devnum == Some(gpu_devnum) {
-                            scan_connectors(state);
+        .insert_source(
+            Generic::new(monitor, Interest::READ, Mode::Level),
+            move |_, monitor, state| {
+                match monitor.drain() {
+                    Ok(drained) => {
+                        for error in &drained.errors {
+                            tracing::warn!(error = %error, "dropping a malformed uevent");
+                        }
+                        for event in drained.events {
+                            if event.subsystem == Subsystem::Input.as_str() {
+                                input::hotplug(&hotplug_inputs, &event, state);
+                            } else if event.subsystem == Subsystem::Drm.as_str()
+                                && event.action == Action::Changed
+                                && event.devnum == Some(gpu_devnum)
+                            {
+                                scan_connectors(state);
+                            }
+                        }
+                        // Events were lost: the open devices may no longer match the nodes.
+                        if drained.overflowed {
+                            tracing::warn!(
+                                "the uevent queue overflowed, enumerating the input devices again"
+                            );
+                            input::resync(&hotplug_inputs, state);
                         }
                     }
-                    // Events were lost: the open devices may no longer match the nodes.
-                    if drained.overflowed {
-                        tracing::warn!("the uevent queue overflowed, enumerating the input devices again");
-                        input::resync(&hotplug_inputs, state);
-                    }
+                    Err(e) => tracing::warn!(error = %e, "reading a uevent failed"),
                 }
-                Err(e) => tracing::warn!(error = %e, "reading a uevent failed"),
-            }
-            Ok(PostAction::Continue)
-        })
+                Ok(PostAction::Continue)
+            },
+        )
         .map_err(|e| anyhow!("inserting the uevent source: {e}"))?;
 
     input::open_all(&inputs, state)?;
@@ -275,7 +360,9 @@ pub fn run(state: &mut Cupertino, event_loop: &mut EventLoop<'static, Cupertino>
     }
 
     while state.running {
-        event_loop.dispatch(Some(Duration::from_millis(4)), state).map_err(|e| anyhow!("event loop: {e}"))?;
+        event_loop
+            .dispatch(Some(Duration::from_millis(4)), state)
+            .map_err(|e| anyhow!("event loop: {e}"))?;
         state.tick();
         render_outputs(state);
         let _ = state.display_handle.flush_clients();
@@ -292,7 +379,9 @@ pub fn run(state: &mut Cupertino, event_loop: &mut EventLoop<'static, Cupertino>
 /// Announce the heads of newly connected connectors (enabling them unless their stored state is
 /// off) and disconnect the ones that went away.
 fn scan_connectors(state: &mut Cupertino) {
-    let Some(Backend::Udev(u)) = state.backend.as_mut() else { return };
+    let Some(Backend::Udev(u)) = state.backend.as_mut() else {
+        return;
+    };
     let events: Vec<DrmScanEvent> = match u.scanner.scan_connectors(u.manager.device()) {
         Ok(result) => result.into_iter().collect(),
         Err(e) => {
@@ -302,9 +391,16 @@ fn scan_connectors(state: &mut Cupertino) {
     };
     for event in events {
         match event {
-            DrmScanEvent::Connected { connector, crtc: Some(crtc) } => connector_connected(state, connector, crtc),
-            DrmScanEvent::Disconnected { crtc: Some(crtc), .. } => {
-                let Some(Backend::Udev(u)) = state.backend.as_mut() else { return };
+            DrmScanEvent::Connected {
+                connector,
+                crtc: Some(crtc),
+            } => connector_connected(state, connector, crtc),
+            DrmScanEvent::Disconnected {
+                crtc: Some(crtc), ..
+            } => {
+                let Some(Backend::Udev(u)) = state.backend.as_mut() else {
+                    return;
+                };
                 u.surfaces.remove(&crtc);
                 if let Some(gone) = u.heads.remove(&crtc) {
                     state.disconnect_head(gone.head);
@@ -323,7 +419,9 @@ fn refresh_mhz(mode: &control::Mode) -> i32 {
     if htotal == 0 || vtotal == 0 {
         return mode.vrefresh() as i32 * 1000;
     }
-    let mut refresh = (u64::from(mode.clock()) * 1_000_000 / u64::from(htotal) + u64::from(vtotal) / 2) / u64::from(vtotal);
+    let mut refresh = (u64::from(mode.clock()) * 1_000_000 / u64::from(htotal)
+        + u64::from(vtotal) / 2)
+        / u64::from(vtotal);
     let flags = mode.flags();
     if flags.contains(ModeFlags::INTERLACE) {
         refresh *= 2;
@@ -346,19 +444,37 @@ fn connector_edid(device: &impl ControlDevice, connector: connector::Handle) -> 
         if info.name().to_bytes() != b"EDID" {
             return None;
         }
-        let blob = info.value_type().convert_value(*value).as_blob().filter(|b| *b != 0)?;
+        let blob = info
+            .value_type()
+            .convert_value(*value)
+            .as_blob()
+            .filter(|b| *b != 0)?;
         device.get_property_blob(blob).ok()
     })
 }
 
 fn connector_connected(state: &mut Cupertino, connector: connector::Info, crtc: crtc::Handle) {
-    let Some(Backend::Udev(u)) = state.backend.as_mut() else { return };
-    let name = format!("{}-{}", connector.interface().as_str(), connector.interface_id());
-    let preferred = connector.modes().iter().position(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED)).unwrap_or(0);
+    let Some(Backend::Udev(u)) = state.backend.as_mut() else {
+        return;
+    };
+    let name = format!(
+        "{}-{}",
+        connector.interface().as_str(),
+        connector.interface_id()
+    );
+    let preferred = connector
+        .modes()
+        .iter()
+        .position(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
+        .unwrap_or(0);
     let mut modes: Vec<(HeadMode, control::Mode)> = Vec::new();
     for (i, m) in connector.modes().iter().enumerate() {
         let (w, h) = m.size();
-        let mode = HeadMode { width: i32::from(w), height: i32::from(h), refresh_mhz: refresh_mhz(m) };
+        let mode = HeadMode {
+            width: i32::from(w),
+            height: i32::from(h),
+            refresh_mhz: refresh_mhz(m),
+        };
         if modes.iter().any(|(known, _)| *known == mode) {
             continue;
         }
@@ -372,12 +488,15 @@ fn connector_connected(state: &mut Cupertino, connector: connector::Info, crtc: 
         tracing::warn!(connector = %name, "no modes");
         return;
     }
-    let identity = connector_edid(u.manager.device(), connector.handle()).and_then(|blob| edid::parse(&blob));
+    let identity =
+        connector_edid(u.manager.device(), connector.handle()).and_then(|blob| edid::parse(&blob));
     let (make, model, serial) = match identity {
         Some(id) => (id.make, id.model, id.serial),
         None => ("Unknown".to_string(), name.clone(), None),
     };
-    let physical_mm = connector.size().map_or((0, 0), |(w, h)| (w as i32, h as i32));
+    let physical_mm = connector
+        .size()
+        .map_or((0, 0), |(w, h)| (w as i32, h as i32));
     let info = HeadInfo {
         connector: name,
         make,
@@ -385,13 +504,26 @@ fn connector_connected(state: &mut Cupertino, connector: connector::Info, crtc: 
         serial,
         physical_mm,
         modes: modes.iter().map(|(m, _)| *m).collect(),
-        caps: HeadCaps { can_disable: true, custom_modes: false, transforms: true },
+        caps: HeadCaps {
+            can_disable: true,
+            custom_modes: false,
+            transforms: true,
+        },
         base_transform: Transform::Normal,
     };
     let scale = u.scale;
     let (head, initial) = state.connect_head(info, scale);
-    let Some(Backend::Udev(u)) = state.backend.as_mut() else { return };
-    u.heads.insert(crtc, DrmHead { head, connector: connector.handle(), modes });
+    let Some(Backend::Udev(u)) = state.backend.as_mut() else {
+        return;
+    };
+    u.heads.insert(
+        crtc,
+        DrmHead {
+            head,
+            connector: connector.handle(),
+            modes,
+        },
+    );
     if initial.enabled {
         if let Err(e) = state.head_op(head, HeadOp::Enable) {
             tracing::warn!(error = %e, "enabling the display failed");
@@ -401,27 +533,68 @@ fn connector_connected(state: &mut Cupertino, connector: connector::Info, crtc: 
 }
 
 /// Carry out `op` on a DRM head.
-pub(crate) fn head_op(state: &mut Cupertino, u: &mut UdevBackend, head: HeadId, op: HeadOp) -> Result<()> {
-    let (crtc, drm_head) = u.heads.iter().find(|(_, h)| h.head == head).map(|(c, h)| (*c, h)).context("the head has no connector")?;
+pub(crate) fn head_op(
+    state: &mut Cupertino,
+    u: &mut UdevBackend,
+    head: HeadId,
+    op: HeadOp,
+) -> Result<()> {
+    let (crtc, drm_head) = u
+        .heads
+        .iter()
+        .find(|(_, h)| h.head == head)
+        .map(|(c, h)| (*c, h))
+        .context("the head has no connector")?;
     match op {
         HeadOp::Enable => {
-            let mode = state.displays.head(head).context("the head being enabled")?.state.mode;
+            let mode = state
+                .displays
+                .head(head)
+                .context("the head being enabled")?
+                .state
+                .mode;
             let drm_mode = drm_head.drm_mode(mode)?;
             let connector = drm_head.connector;
             let id = state.create_head_output(head);
-            let output = state.output_entry(id).map(|o| o.output.clone()).context("the output just created")?;
-            let elements = DrmOutputRenderElements::<GlesRenderer, crate::render::CupertinoElement>::default();
+            let output = state
+                .output_entry(id)
+                .map(|o| o.output.clone())
+                .context("the output just created")?;
+            let elements =
+                DrmOutputRenderElements::<GlesRenderer, crate::render::CupertinoElement>::default();
             let mut planes = u.manager.device().planes(&crtc).ok();
             if let Some(p) = planes.as_mut() {
                 // overlay planes misbehave on the proprietary NVIDIA driver
-                if u.manager.device().get_driver().map(|d| d.name().to_string_lossy().to_lowercase().contains("nvidia")).unwrap_or(false) {
+                if u.manager
+                    .device()
+                    .get_driver()
+                    .map(|d| d.name().to_string_lossy().to_lowercase().contains("nvidia"))
+                    .unwrap_or(false)
+                {
                     p.overlay = vec![];
                 }
             }
-            match u.manager.initialize_output(crtc, drm_mode, &[connector], &output, planes, &mut u.renderer, &elements) {
+            match u.manager.initialize_output(
+                crtc,
+                drm_mode,
+                &[connector],
+                &output,
+                planes,
+                &mut u.renderer,
+                &elements,
+            ) {
                 Ok(drm_output) => {
-                    let refresh = Duration::from_secs_f64(1000.0 / mode.refresh_mhz.max(1000) as f64);
-                    u.surfaces.insert(crtc, Surface { output: id, drm_output, pending: false, refresh });
+                    let refresh =
+                        Duration::from_secs_f64(1000.0 / mode.refresh_mhz.max(1000) as f64);
+                    u.surfaces.insert(
+                        crtc,
+                        Surface {
+                            output: id,
+                            drm_output,
+                            pending: false,
+                            refresh,
+                        },
+                    );
                     tracing::info!(output = %output.name(), width = mode.width, height = mode.height, refresh_mhz = mode.refresh_mhz, "output initialised");
                     Ok(())
                 }
@@ -439,18 +612,31 @@ pub(crate) fn head_op(state: &mut Cupertino, u: &mut UdevBackend, head: HeadId, 
         }
         HeadOp::SetMode(mode) => {
             let drm_mode = drm_head.drm_mode(mode)?;
-            let surface = u.surfaces.get_mut(&crtc).context("the head is not enabled")?;
-            let elements = DrmOutputRenderElements::<GlesRenderer, crate::render::CupertinoElement>::default();
-            surface.drm_output.use_mode(drm_mode, &mut u.renderer, &elements).map_err(|e| anyhow!("switching the mode: {e}"))?;
+            let surface = u
+                .surfaces
+                .get_mut(&crtc)
+                .context("the head is not enabled")?;
+            let elements =
+                DrmOutputRenderElements::<GlesRenderer, crate::render::CupertinoElement>::default();
+            surface
+                .drm_output
+                .use_mode(drm_mode, &mut u.renderer, &elements)
+                .map_err(|e| anyhow!("switching the mode: {e}"))?;
             surface.refresh = Duration::from_secs_f64(1000.0 / mode.refresh_mhz.max(1000) as f64);
             surface.pending = false;
             Ok(())
         }
         HeadOp::Power(on) => {
-            let surface = u.surfaces.get_mut(&crtc).context("the head is not enabled")?;
+            let surface = u
+                .surfaces
+                .get_mut(&crtc)
+                .context("the head is not enabled")?;
             if !on {
                 // blanks the CRTC; the next queued frame turns it on again
-                surface.drm_output.with_compositor(|c| c.clear()).map_err(|e| anyhow!("blanking the output: {e}"))?;
+                surface
+                    .drm_output
+                    .with_compositor(|c| c.clear())
+                    .map_err(|e| anyhow!("blanking the output: {e}"))?;
                 surface.pending = false;
             }
             Ok(())
@@ -459,13 +645,26 @@ pub(crate) fn head_op(state: &mut Cupertino, u: &mut UdevBackend, head: HeadId, 
 }
 
 fn render_outputs(state: &mut Cupertino) {
-    let Some(mut backend) = state.backend.take() else { return };
+    let Some(mut backend) = state.backend.take() else {
+        return;
+    };
     if let Backend::Udev(u) = &mut backend {
         let crtcs: Vec<crtc::Handle> = u.surfaces.keys().copied().collect();
         for crtc in crtcs {
-            let Some(s) = u.surfaces.get(&crtc) else { continue };
-            let Some(idx) = state.outputs.iter().position(|o| o.id == s.output) else { continue };
-            if !state.displays.powered(s.output) || !frame_due(u.paused || u.asleep, s.pending, state.outputs[idx].redraw, state.wants_frames()) {
+            let Some(s) = u.surfaces.get(&crtc) else {
+                continue;
+            };
+            let Some(idx) = state.outputs.iter().position(|o| o.id == s.output) else {
+                continue;
+            };
+            if !state.displays.powered(s.output)
+                || !frame_due(
+                    u.paused || u.asleep,
+                    s.pending,
+                    state.outputs[idx].redraw,
+                    state.wants_frames(),
+                )
+            {
                 continue;
             }
             render_surface(state, u, crtc, idx);
@@ -476,8 +675,13 @@ fn render_outputs(state: &mut Cupertino) {
 
 fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle, idx: usize) {
     let elements = state.build_output_elements(&mut u.renderer, idx);
-    let Some(surface) = u.surfaces.get_mut(&crtc) else { return };
-    let result = surface.drm_output.render_frame(&mut u.renderer, &elements, CLEAR, FrameFlags::DEFAULT);
+    let Some(surface) = u.surfaces.get_mut(&crtc) else {
+        return;
+    };
+    let result =
+        surface
+            .drm_output
+            .render_frame(&mut u.renderer, &elements, CLEAR, FrameFlags::DEFAULT);
     let rendered = match result {
         Ok(r) => !r.is_empty,
         Err(e) => {
@@ -491,7 +695,9 @@ fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle
         match surface.drm_output.queue_frame(Some(feedback)) {
             Ok(()) => surface.pending = true,
             // logind drops DRM master before it sends the pause, so a flip in between is refused; the pause follows
-            Err(FrameError::DrmError(DrmError::Access(e))) if e.source.kind() == ErrorKind::PermissionDenied => {
+            Err(FrameError::DrmError(DrmError::Access(e)))
+                if e.source.kind() == ErrorKind::PermissionDenied =>
+            {
                 tracing::debug!(error = %e, "the page flip was refused: the session is being paused")
             }
             Err(e) => tracing::warn!(error = %e, "queueing the frame failed"),
@@ -505,20 +711,34 @@ fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle
     state.send_frames(idx, time);
 }
 
-fn frame_finish(state: &mut Cupertino, crtc: crtc::Handle, time: Option<DrmEventTime>, seq: Option<u32>) {
+fn frame_finish(
+    state: &mut Cupertino,
+    crtc: crtc::Handle,
+    time: Option<DrmEventTime>,
+    seq: Option<u32>,
+) {
     let (clock, flags) = match time {
         Some(DrmEventTime::Monotonic(t)) if !t.is_zero() => (
             t.into(),
-            wp_presentation_feedback::Kind::Vsync | wp_presentation_feedback::Kind::HwClock | wp_presentation_feedback::Kind::HwCompletion,
+            wp_presentation_feedback::Kind::Vsync
+                | wp_presentation_feedback::Kind::HwClock
+                | wp_presentation_feedback::Kind::HwCompletion,
         ),
         _ => (state.clock.now(), wp_presentation_feedback::Kind::Vsync),
     };
     let Some(u) = udev(state) else { return };
-    let Some(surface) = u.surfaces.get_mut(&crtc) else { return };
+    let Some(surface) = u.surfaces.get_mut(&crtc) else {
+        return;
+    };
     surface.pending = false;
     let output = surface.output;
     match surface.drm_output.frame_submitted() {
-        Ok(Some(Some(mut feedback))) => feedback.presented(clock, Refresh::fixed(surface.refresh), seq.unwrap_or(0) as u64, flags),
+        Ok(Some(Some(mut feedback))) => feedback.presented(
+            clock,
+            Refresh::fixed(surface.refresh),
+            seq.unwrap_or(0) as u64,
+            flags,
+        ),
         Ok(_) => {}
         Err(e) => tracing::warn!(error = %e, "frame submission failed"),
     }
@@ -537,7 +757,13 @@ mod tests {
         assert!(frame_due(false, false, true, false));
         assert!(frame_due(false, false, false, true));
         assert!(!frame_due(false, false, false, false), "nothing changed");
-        assert!(!frame_due(false, true, true, true), "a frame is still waiting for its vblank");
-        assert!(!frame_due(true, false, true, true), "the device rejects frames while paused");
+        assert!(
+            !frame_due(false, true, true, true),
+            "a frame is still waiting for its vblank"
+        );
+        assert!(
+            !frame_due(true, false, true, true),
+            "the device rejects frames while paused"
+        );
     }
 }

@@ -135,14 +135,25 @@ pub fn parse_user_dirs(text: &str, home: &Path) -> Vec<(String, PathBuf)> {
 
 /// The first `applications` folder of the system data folders `data_dirs`, most important first.
 pub fn applications_folder(data_dirs: &[PathBuf]) -> Option<PathBuf> {
-    data_dirs.iter().map(|d| d.join("applications")).find(|d| d.is_dir())
+    data_dirs
+        .iter()
+        .map(|d| d.join("applications"))
+        .find(|d| d.is_dir())
 }
 
 /// The `PRETTY_HOSTNAME` of a machine-info file (shell-style `KEY=VALUE` lines, the value optionally
 /// quoted); `None` when it is not set or empty.
 pub fn parse_pretty_hostname(text: &str) -> Option<String> {
-    let value = text.lines().rev().find_map(|line| line.trim().strip_prefix("PRETTY_HOSTNAME="))?.trim();
-    let value = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')).or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\''))).unwrap_or(value);
+    let value = text
+        .lines()
+        .rev()
+        .find_map(|line| line.trim().strip_prefix("PRETTY_HOSTNAME="))?
+        .trim();
+    let value = value
+        .strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+        .unwrap_or(value);
     (!value.is_empty()).then(|| value.replace("\\\"", "\"").replace("\\\\", "\\"))
 }
 
@@ -162,16 +173,26 @@ pub fn computer_name() -> io::Result<String> {
     if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } != 0 {
         return Err(io::Error::last_os_error());
     }
-    let end = buf.iter().position(|b| *b == 0).ok_or_else(|| io::Error::other("the host name is longer than 255 bytes"))?;
+    let end = buf
+        .iter()
+        .position(|b| *b == 0)
+        .ok_or_else(|| io::Error::other("the host name is longer than 255 bytes"))?;
     Ok(String::from_utf8_lossy(&buf[..end]).into_owned())
 }
 
 /// The user directories of this `home` and assignments that exist, in [`USER_DIRS`] order: a directory
 /// that is disabled (set to the home folder) or does not exist is left out.
-fn user_folders(home: &Path, user_dirs: &[(String, PathBuf)]) -> Vec<(PathBuf, &'static str, PlaceKind)> {
+fn user_folders(
+    home: &Path,
+    user_dirs: &[(String, PathBuf)],
+) -> Vec<(PathBuf, &'static str, PlaceKind)> {
     let mut out = Vec::new();
     for (key, name, kind) in USER_DIRS {
-        let assigned = user_dirs.iter().rev().find(|(k, _)| k == key).map(|(_, p)| p.clone());
+        let assigned = user_dirs
+            .iter()
+            .rev()
+            .find(|(k, _)| k == key)
+            .map(|(_, p)| p.clone());
         let path = match (assigned, key) {
             (Some(p), _) => p,
             (None, "DESKTOP") => home.join("Desktop"),
@@ -185,33 +206,83 @@ fn user_folders(home: &Path, user_dirs: &[(String, PathBuf)]) -> Vec<(PathBuf, &
 }
 
 /// The user directories the default Favorites list.
-const FAVORITE_USER_DIRS: [PlaceKind; 3] = [PlaceKind::Desktop, PlaceKind::Documents, PlaceKind::Downloads];
+const FAVORITE_USER_DIRS: [PlaceKind; 3] = [
+    PlaceKind::Desktop,
+    PlaceKind::Documents,
+    PlaceKind::Downloads,
+];
 
 /// The places of a session with this `home`, user directory assignments, home trash folder
 /// (`<trash>/files`), applications folder and computer name. A user directory that is disabled or does
 /// not exist is left out, and so is the trash before anything was ever trashed, and Applications when
 /// the system has no such folder.
-pub fn standard_places(home: &Path, user_dirs: &[(String, PathBuf)], trash_files: &Path, applications: Option<&Path>, computer: &str) -> Vec<Place> {
-    let mut places = vec![Place { name: "Recents".into(), path: crate::recents::location().to_path_buf(), group: PlaceGroup::Favorites, kind: PlaceKind::Recents }];
+pub fn standard_places(
+    home: &Path,
+    user_dirs: &[(String, PathBuf)],
+    trash_files: &Path,
+    applications: Option<&Path>,
+    computer: &str,
+) -> Vec<Place> {
+    let mut places = vec![Place {
+        name: "Recents".into(),
+        path: crate::recents::location().to_path_buf(),
+        group: PlaceGroup::Favorites,
+        kind: PlaceKind::Recents,
+    }];
     if let Some(path) = applications {
-        places.push(Place { name: "Applications".into(), path: path.to_path_buf(), group: PlaceGroup::Favorites, kind: PlaceKind::Applications });
+        places.push(Place {
+            name: "Applications".into(),
+            path: path.to_path_buf(),
+            group: PlaceGroup::Favorites,
+            kind: PlaceKind::Applications,
+        });
     }
-    for (path, name, kind) in user_folders(home, user_dirs).into_iter().filter(|(_, _, kind)| FAVORITE_USER_DIRS.contains(kind)) {
-        places.push(Place { name: name.into(), path, group: PlaceGroup::Favorites, kind });
+    for (path, name, kind) in user_folders(home, user_dirs)
+        .into_iter()
+        .filter(|(_, _, kind)| FAVORITE_USER_DIRS.contains(kind))
+    {
+        places.push(Place {
+            name: name.into(),
+            path,
+            group: PlaceGroup::Favorites,
+            kind,
+        });
     }
-    places.push(Place { name: computer.into(), path: PathBuf::from("/"), group: PlaceGroup::Locations, kind: PlaceKind::Computer });
+    places.push(Place {
+        name: computer.into(),
+        path: PathBuf::from("/"),
+        group: PlaceGroup::Locations,
+        kind: PlaceKind::Computer,
+    });
     if trash_files.is_dir() {
-        places.push(Place { name: "Trash".into(), path: trash_files.to_path_buf(), group: PlaceGroup::Locations, kind: PlaceKind::Trash });
+        places.push(Place {
+            name: "Trash".into(),
+            path: trash_files.to_path_buf(),
+            group: PlaceGroup::Locations,
+            kind: PlaceKind::Trash,
+        });
     }
     places
 }
 
 /// The folders that wear an icon of their own in listings and the path bar: the home folder, every
 /// existing user directory and the places that have one.
-pub fn folder_icons(home: &Path, user_dirs: &[(String, PathBuf)], places: &[Place]) -> Vec<(PathBuf, &'static str)> {
+pub fn folder_icons(
+    home: &Path,
+    user_dirs: &[(String, PathBuf)],
+    places: &[Place],
+) -> Vec<(PathBuf, &'static str)> {
     let mut icons = vec![(home.to_path_buf(), "folder.home")];
-    icons.extend(user_folders(home, user_dirs).into_iter().filter_map(|(path, _, kind)| Some((path, kind.folder_icon()?))));
-    icons.extend(places.iter().filter_map(|p| Some((p.path.clone(), p.kind.folder_icon()?))));
+    icons.extend(
+        user_folders(home, user_dirs)
+            .into_iter()
+            .filter_map(|(path, _, kind)| Some((path, kind.folder_icon()?))),
+    );
+    icons.extend(
+        places
+            .iter()
+            .filter_map(|p| Some((p.path.clone(), p.kind.folder_icon()?))),
+    );
     icons
 }
 
@@ -226,16 +297,30 @@ pub struct SessionPlaces {
 /// file assigns nothing), the home trash of [`crate::trash::Trash`], the applications folder of the
 /// system data folders `data_dirs` and the [`computer_name`].
 pub fn session_places(home: &Path, data_dirs: &[PathBuf]) -> io::Result<SessionPlaces> {
-    let config = cupertino_defaults::config_home().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "neither XDG_CONFIG_HOME nor HOME is set"))?;
+    let config = cupertino_defaults::config_home().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "neither XDG_CONFIG_HOME nor HOME is set",
+        )
+    })?;
     let user_dirs = match std::fs::read_to_string(config.join("user-dirs.dirs")) {
         Ok(text) => parse_user_dirs(&text, home),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(e),
     };
     let applications = applications_folder(data_dirs);
-    let places = standard_places(home, &user_dirs, &crate::trash::Trash::new().home_trash().join("files"), applications.as_deref(), &computer_name()?);
+    let places = standard_places(
+        home,
+        &user_dirs,
+        &crate::trash::Trash::new().home_trash().join("files"),
+        applications.as_deref(),
+        &computer_name()?,
+    );
     let folder_icons = folder_icons(home, &user_dirs, &places);
-    Ok(SessionPlaces { places, folder_icons })
+    Ok(SessionPlaces {
+        places,
+        folder_icons,
+    })
 }
 
 #[cfg(test)]
@@ -248,7 +333,11 @@ mod tests {
         let home = Path::new("/home/ada");
         assert_eq!(
             parse_user_dirs(text, home),
-            [("DESKTOP".to_string(), PathBuf::from("/home/ada/Desktop")), ("DOWNLOAD".to_string(), PathBuf::from("/data/incoming")), ("MUSIC".to_string(), PathBuf::from("/home/ada"))]
+            [
+                ("DESKTOP".to_string(), PathBuf::from("/home/ada/Desktop")),
+                ("DOWNLOAD".to_string(), PathBuf::from("/data/incoming")),
+                ("MUSIC".to_string(), PathBuf::from("/home/ada"))
+            ]
         );
     }
 
@@ -260,18 +349,43 @@ mod tests {
         }
         let trash = home.path().join(".local/share/Trash/files");
         // Documents is not assigned, Music is disabled, Pictures is not a Favorite; the desktop is the default one
-        let user_dirs = [("PICTURES".to_string(), home.path().join("Bilder")), ("MUSIC".to_string(), home.path().to_path_buf()), ("DOWNLOAD".to_string(), home.path().join("Eingang"))];
+        let user_dirs = [
+            ("PICTURES".to_string(), home.path().join("Bilder")),
+            ("MUSIC".to_string(), home.path().to_path_buf()),
+            ("DOWNLOAD".to_string(), home.path().join("Eingang")),
+        ];
         let places = standard_places(home.path(), &user_dirs, &trash, None, "ada's laptop");
-        let rows: Vec<(&str, PlaceGroup)> = places.iter().map(|p| (p.name.as_str(), p.group)).collect();
-        assert_eq!(rows, [("Recents", PlaceGroup::Favorites), ("Desktop", PlaceGroup::Favorites), ("Downloads", PlaceGroup::Favorites), ("ada's laptop", PlaceGroup::Locations)]);
+        let rows: Vec<(&str, PlaceGroup)> =
+            places.iter().map(|p| (p.name.as_str(), p.group)).collect();
+        assert_eq!(
+            rows,
+            [
+                ("Recents", PlaceGroup::Favorites),
+                ("Desktop", PlaceGroup::Favorites),
+                ("Downloads", PlaceGroup::Favorites),
+                ("ada's laptop", PlaceGroup::Locations)
+            ]
+        );
         assert_eq!(places[0].path, PathBuf::from("recent:///"));
         assert_eq!(places[2].path, home.path().join("Eingang"));
-        assert_eq!(places.iter().map(|p| p.kind.symbol()).collect::<Vec<_>>(), ["symbol.recents", "symbol.desktop", "symbol.download", "symbol.computer"]);
+        assert_eq!(
+            places.iter().map(|p| p.kind.symbol()).collect::<Vec<_>>(),
+            [
+                "symbol.recents",
+                "symbol.desktop",
+                "symbol.download",
+                "symbol.computer"
+            ]
+        );
         assert_eq!(places[3].kind.folder_icon(), Some("computer"));
         let icons = folder_icons(home.path(), &user_dirs, &places);
         let icon = |p: PathBuf| icons.iter().find(|(path, _)| *path == p).map(|(_, i)| *i);
         assert_eq!(icon(home.path().to_path_buf()), Some("folder.home"));
-        assert_eq!(icon(home.path().join("Bilder")), Some("folder.pictures"), "not in the sidebar, still its icon");
+        assert_eq!(
+            icon(home.path().join("Bilder")),
+            Some("folder.pictures"),
+            "not in the sidebar, still its icon"
+        );
         assert_eq!(icon(PathBuf::from("/")), Some("computer"));
 
         let apps = home.path().join("share/applications");
@@ -280,19 +394,45 @@ mod tests {
         assert_eq!(applications_folder(&data_dirs), Some(apps.clone()));
         let places = standard_places(home.path(), &user_dirs, &trash, Some(&apps), "ada's laptop");
         assert_eq!(places[1].name, "Applications");
-        assert_eq!((places[1].path.as_path(), places[1].kind.symbol(), places[1].kind.folder_icon()), (apps.as_path(), "symbol.applications", Some("folder.applications")));
+        assert_eq!(
+            (
+                places[1].path.as_path(),
+                places[1].kind.symbol(),
+                places[1].kind.folder_icon()
+            ),
+            (
+                apps.as_path(),
+                "symbol.applications",
+                Some("folder.applications")
+            )
+        );
 
         std::fs::create_dir_all(&trash).unwrap();
         let places = standard_places(home.path(), &user_dirs, &trash, None, "ada's laptop");
-        assert_eq!(places.last().map(|p| (p.name.as_str(), p.path.as_path())), Some(("Trash", trash.as_path())));
+        assert_eq!(
+            places.last().map(|p| (p.name.as_str(), p.path.as_path())),
+            Some(("Trash", trash.as_path()))
+        );
     }
 
     #[test]
     fn the_pretty_host_name_is_read_quoted_or_bare_and_empty_means_unset() {
-        assert_eq!(parse_pretty_hostname("CHASSIS=laptop\nPRETTY_HOSTNAME=\"Ada's Laptop\"\n"), Some("Ada's Laptop".into()));
-        assert_eq!(parse_pretty_hostname("PRETTY_HOSTNAME='Work \"PC\"'"), Some("Work \"PC\"".into()));
-        assert_eq!(parse_pretty_hostname("PRETTY_HOSTNAME=box"), Some("box".into()));
-        assert_eq!(parse_pretty_hostname("PRETTY_HOSTNAME=\"\"\nICON_NAME=computer"), None);
+        assert_eq!(
+            parse_pretty_hostname("CHASSIS=laptop\nPRETTY_HOSTNAME=\"Ada's Laptop\"\n"),
+            Some("Ada's Laptop".into())
+        );
+        assert_eq!(
+            parse_pretty_hostname("PRETTY_HOSTNAME='Work \"PC\"'"),
+            Some("Work \"PC\"".into())
+        );
+        assert_eq!(
+            parse_pretty_hostname("PRETTY_HOSTNAME=box"),
+            Some("box".into())
+        );
+        assert_eq!(
+            parse_pretty_hostname("PRETTY_HOSTNAME=\"\"\nICON_NAME=computer"),
+            None
+        );
         assert_eq!(parse_pretty_hostname("ICON_NAME=computer-laptop"), None);
     }
 }

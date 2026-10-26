@@ -73,7 +73,10 @@ impl fmt::Display for Error {
             Self::Io { op, errno } => write!(f, "{op}: {errno}"),
             Self::ReadDir { dir, source } => write!(f, "cannot list {}: {source}", dir.display()),
             Self::NotUtf8 { field } => write!(f, "the {field} field is not valid UTF-8"),
-            Self::NameTooLong { len } => write!(f, "an element name of {len} bytes does not fit 44 bytes with its NUL"),
+            Self::NameTooLong { len } => write!(
+                f,
+                "an element name of {len} bytes does not fit 44 bytes with its NUL"
+            ),
             Self::MalformedTlv(why) => write!(f, "malformed TLV data: {why}"),
             Self::EmptyRange { min, max } => write!(f, "the control range {min}..{max} is empty"),
             Self::NotAnIntegerControl => write!(f, "the control returned no value"),
@@ -81,7 +84,10 @@ impl fmt::Display for Error {
             Self::NoPlaybackVolume => write!(f, "no card has a playback volume control"),
             Self::NoMuteSwitch => write!(f, "the master volume has no mute switch"),
             Self::NoSuchCard { card } => write!(f, "sound card {card} has no control device"),
-            Self::TruncatedEvent { len } => write!(f, "a read of {len} bytes is not a whole number of control events"),
+            Self::TruncatedEvent { len } => write!(
+                f,
+                "a read of {len} bytes is not a whole number of control events"
+            ),
             Self::UnknownEventType { kind } => write!(f, "unknown control event type {kind}"),
         }
     }

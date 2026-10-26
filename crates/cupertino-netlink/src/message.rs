@@ -79,16 +79,37 @@ impl<'a> Iterator for Messages<'a> {
 /// (the last message of a buffer may omit its padding).
 fn parse_message(buffer: &[u8]) -> Result<(Message<'_>, usize), ParseError> {
     if buffer.len() < HEADER_LEN {
-        return Err(ParseError::Truncated { what: "netlink header", needed: HEADER_LEN, have: buffer.len() });
+        return Err(ParseError::Truncated {
+            what: "netlink header",
+            needed: HEADER_LEN,
+            have: buffer.len(),
+        });
     }
-    let word = |at: usize| u32::from_ne_bytes([buffer[at], buffer[at + 1], buffer[at + 2], buffer[at + 3]]);
+    let word = |at: usize| {
+        u32::from_ne_bytes([buffer[at], buffer[at + 1], buffer[at + 2], buffer[at + 3]])
+    };
     let half = |at: usize| u16::from_ne_bytes([buffer[at], buffer[at + 1]]);
-    let header = Header { length: word(0), ty: half(4), flags: half(6), sequence: word(8), pid: word(12) };
+    let header = Header {
+        length: word(0),
+        ty: half(4),
+        flags: half(6),
+        sequence: word(8),
+        pid: word(12),
+    };
     let length = header.length as usize;
     if length < HEADER_LEN || length > buffer.len() {
-        return Err(ParseError::BadMessageLength { length: header.length, available: buffer.len() });
+        return Err(ParseError::BadMessageLength {
+            length: header.length,
+            available: buffer.len(),
+        });
     }
-    Ok((Message { header, payload: &buffer[HEADER_LEN..length] }, align4(length).min(buffer.len())))
+    Ok((
+        Message {
+            header,
+            payload: &buffer[HEADER_LEN..length],
+        },
+        align4(length).min(buffer.len()),
+    ))
 }
 
 /// Writes the header of a request in front of `body`.
@@ -125,7 +146,8 @@ impl Body {
 
     /// Appends one attribute.
     pub fn attr(&mut self, ty: u16, data: &[u8]) -> &mut Self {
-        let length = u16::try_from(NLA_HEADER_LEN + data.len()).expect("an attribute is far below 64 KiB");
+        let length =
+            u16::try_from(NLA_HEADER_LEN + data.len()).expect("an attribute is far below 64 KiB");
         self.bytes.extend_from_slice(&length.to_ne_bytes());
         self.bytes.extend_from_slice(&ty.to_ne_bytes());
         self.bytes.extend_from_slice(data);
@@ -167,9 +189,11 @@ mod tests {
     #[test]
     fn frames_a_request_with_a_nested_attribute() {
         let mut body = Body::new();
-        body.header(&[2, 0, 0, 0]).attr_u32(3, 7).nested(45, |inner| {
-            inner.attr(1, &[]);
-        });
+        body.header(&[2, 0, 0, 0])
+            .attr_u32(3, 7)
+            .nested(45, |inner| {
+                inner.attr(1, &[]);
+            });
         let message = frame(18, NLM_F_REQUEST, 9, body.as_bytes());
         assert_eq!(
             message,
@@ -213,13 +237,26 @@ mod tests {
         let mut buffer = frame(16, 0, 1, &[0; 8]);
         buffer[0..4].copy_from_slice(&200u32.to_ne_bytes());
         let mut iterator = messages(&buffer);
-        assert_eq!(iterator.next(), Some(Err(ParseError::BadMessageLength { length: 200, available: 24 })));
+        assert_eq!(
+            iterator.next(),
+            Some(Err(ParseError::BadMessageLength {
+                length: 200,
+                available: 24
+            }))
+        );
         assert_eq!(iterator.next(), None);
     }
 
     #[test]
     fn a_partial_header_is_truncated() {
         let mut iterator = messages(&[0; 10]);
-        assert_eq!(iterator.next(), Some(Err(ParseError::Truncated { what: "netlink header", needed: 16, have: 10 })));
+        assert_eq!(
+            iterator.next(),
+            Some(Err(ParseError::Truncated {
+                what: "netlink header",
+                needed: 16,
+                have: 10
+            }))
+        );
     }
 }

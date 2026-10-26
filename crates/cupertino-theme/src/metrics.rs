@@ -5,7 +5,10 @@
 //! of the metric fields; all values are in points at 1×.
 
 use crate::evidence::Evidence;
-use crate::window_shadow::{window_shadow, ShadowOption, WindowCornerSize, WINDOW_CORNER_RADIUS_REGULAR, WINDOW_CORNER_RADIUS_SMALL};
+use crate::window_shadow::{
+    window_shadow, ShadowOption, WindowCornerSize, WINDOW_CORNER_RADIUS_REGULAR,
+    WINDOW_CORNER_RADIUS_SMALL,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ControlSize {
@@ -16,7 +19,12 @@ pub enum ControlSize {
 }
 
 impl ControlSize {
-    pub const ALL: [ControlSize; 4] = [ControlSize::Regular, ControlSize::Small, ControlSize::Mini, ControlSize::Large];
+    pub const ALL: [ControlSize; 4] = [
+        ControlSize::Regular,
+        ControlSize::Small,
+        ControlSize::Mini,
+        ControlSize::Large,
+    ];
 
     fn index(self) -> usize {
         self as usize
@@ -81,17 +89,58 @@ const fn m(
     image: Option<(f64, f64)>,
     parts: Option<u8>,
 ) -> ControlMetric {
-    ControlMetric { control, heights, widths: [N; 4], image_regular: image, parts }
+    ControlMetric {
+        control,
+        heights,
+        widths: [N; 4],
+        image_regular: image,
+        parts,
+    }
 }
 
 pub const CONTROL_METRICS: [ControlMetric; 17] = [
-    m(Control::PushButton, h(20.0, 16.0, 13.0, Some(28.0)), Some((38.0, 32.0)), Some(3)),
-    m(Control::PopUpButton, h(20.0, 16.0, 13.0, Some(28.0)), Some((47.0, 25.0)), Some(3)),
-    m(Control::ComboBox, h(20.0, 16.0, 13.0, N), Some((44.0, 23.0)), N_PARTS),
-    m(Control::TextField, h(20.0, 16.0, 13.0, Some(28.0)), Some((26.0, 22.0)), Some(9)),
-    m(Control::SegmentedControl, h(20.0, 16.0, 13.0, Some(28.0)), Some((38.0, 24.0)), Some(6)),
-    m(Control::ToolbarSegmented, h(22.0, 18.0, 15.0, Some(28.0)), Some((32.0, 25.0)), N_PARTS),
-    m(Control::CheckBoxRadio, h(14.0, 12.0, 10.0, Some(16.0)), Some((18.0, 18.0)), N_PARTS),
+    m(
+        Control::PushButton,
+        h(20.0, 16.0, 13.0, Some(28.0)),
+        Some((38.0, 32.0)),
+        Some(3),
+    ),
+    m(
+        Control::PopUpButton,
+        h(20.0, 16.0, 13.0, Some(28.0)),
+        Some((47.0, 25.0)),
+        Some(3),
+    ),
+    m(
+        Control::ComboBox,
+        h(20.0, 16.0, 13.0, N),
+        Some((44.0, 23.0)),
+        N_PARTS,
+    ),
+    m(
+        Control::TextField,
+        h(20.0, 16.0, 13.0, Some(28.0)),
+        Some((26.0, 22.0)),
+        Some(9),
+    ),
+    m(
+        Control::SegmentedControl,
+        h(20.0, 16.0, 13.0, Some(28.0)),
+        Some((38.0, 24.0)),
+        Some(6),
+    ),
+    m(
+        Control::ToolbarSegmented,
+        h(22.0, 18.0, 15.0, Some(28.0)),
+        Some((32.0, 25.0)),
+        N_PARTS,
+    ),
+    m(
+        Control::CheckBoxRadio,
+        h(14.0, 12.0, 10.0, Some(16.0)),
+        Some((18.0, 18.0)),
+        N_PARTS,
+    ),
     ControlMetric {
         control: Control::Switch,
         heights: h(22.0, 18.0, 15.0, N),
@@ -99,22 +148,70 @@ pub const CONTROL_METRICS: [ControlMetric; 17] = [
         image_regular: Some((42.0, 25.0)),
         parts: N_PARTS,
     },
-    m(Control::SliderKnob, h(20.0, 16.0, 13.0, N), Some((24.0, 28.0)), N_PARTS),
-    m(Control::SliderTrack, h(4.0, 4.0, 3.0, N), Some((14.0, 4.0)), N_PARTS),
-    m(Control::Stepper, h(20.0, 16.0, 13.0, N), Some((19.0, 28.0)), N_PARTS),
-    m(Control::DisclosureButton, h(20.0, 16.0, 13.0, Some(24.0)), Some((28.0, 26.0)), N_PARTS),
-    m(Control::OverlayScrollerThumb, [Some(12.0), Some(10.0), N, N], Some((24.0, 12.0)), N_PARTS),
-    m(Control::LegacyScrollerTrack, [Some(15.0), Some(11.0), N, N], Some((15.0, 15.0)), N_PARTS),
-    m(Control::WindowControlButton, [Some(12.0), Some(9.0), Some(9.0), N], Some((16.0, 16.0)), N_PARTS),
-    m(Control::TableHeaderClassic, [Some(17.0), N, N, N], N_IMG, N_PARTS),
-    m(Control::TableHeaderModern, [Some(28.0), N, N, N], N_IMG, N_PARTS),
+    m(
+        Control::SliderKnob,
+        h(20.0, 16.0, 13.0, N),
+        Some((24.0, 28.0)),
+        N_PARTS,
+    ),
+    m(
+        Control::SliderTrack,
+        h(4.0, 4.0, 3.0, N),
+        Some((14.0, 4.0)),
+        N_PARTS,
+    ),
+    m(
+        Control::Stepper,
+        h(20.0, 16.0, 13.0, N),
+        Some((19.0, 28.0)),
+        N_PARTS,
+    ),
+    m(
+        Control::DisclosureButton,
+        h(20.0, 16.0, 13.0, Some(24.0)),
+        Some((28.0, 26.0)),
+        N_PARTS,
+    ),
+    m(
+        Control::OverlayScrollerThumb,
+        [Some(12.0), Some(10.0), N, N],
+        Some((24.0, 12.0)),
+        N_PARTS,
+    ),
+    m(
+        Control::LegacyScrollerTrack,
+        [Some(15.0), Some(11.0), N, N],
+        Some((15.0, 15.0)),
+        N_PARTS,
+    ),
+    m(
+        Control::WindowControlButton,
+        [Some(12.0), Some(9.0), Some(9.0), N],
+        Some((16.0, 16.0)),
+        N_PARTS,
+    ),
+    m(
+        Control::TableHeaderClassic,
+        [Some(17.0), N, N, N],
+        N_IMG,
+        N_PARTS,
+    ),
+    m(
+        Control::TableHeaderModern,
+        [Some(28.0), N, N, N],
+        N_IMG,
+        N_PARTS,
+    ),
 ];
 
 const N_PARTS: Option<u8> = None;
 const N_IMG: Option<(f64, f64)> = None;
 
 pub fn control_metric(c: Control) -> &'static ControlMetric {
-    CONTROL_METRICS.iter().find(|m| m.control == c).expect("every control has a metric row")
+    CONTROL_METRICS
+        .iter()
+        .find(|m| m.control == c)
+        .expect("every control has a metric row")
 }
 
 /// Alignment height of `control` at `size`, if that size exists for the control.

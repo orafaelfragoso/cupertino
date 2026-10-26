@@ -100,7 +100,13 @@ mod tests {
     #[test]
     fn a_step_follows_the_update_rule() {
         let first = SpaceSlideState::at_rest(0.0).step(1.0);
-        assert_eq!(first, SpaceSlideState { x: 2.0 / 60.0, v: 2.0 });
+        assert_eq!(
+            first,
+            SpaceSlideState {
+                x: 2.0 / 60.0,
+                v: 2.0
+            }
+        );
         // v = 2·(1 − 1/30) + 0.695·2
         let second = first.step(1.0);
         assert_close(second.v, 3.323_333_333_333_333);
@@ -124,7 +130,10 @@ mod tests {
         for (spaces, target) in [(2, 1.0), (6, 0.2)] {
             let tolerance = SlideStart::Programmatic.tolerance(spaces, width);
             let seconds = settle_time(SpaceSlideState::at_rest(0.0), target, tolerance);
-            assert!((0.53..=0.73).contains(&seconds), "{spaces} spaces settled in {seconds} s");
+            assert!(
+                (0.53..=0.73).contains(&seconds),
+                "{spaces} spaces settled in {seconds} s"
+            );
 
             let mut state = SpaceSlideState::at_rest(0.0);
             let mut peak = 0.0_f64;
@@ -139,7 +148,10 @@ mod tests {
     #[test]
     fn the_rest_tolerance_is_one_point_programmatically_and_0_001_after_a_release() {
         assert_eq!(SlideStart::Programmatic.tolerance(2, 1440.0), 1.0 / 1504.0);
-        assert_eq!(SlideStart::Programmatic.tolerance(6, 1440.0), 1.0 / (5.0 * 1504.0));
+        assert_eq!(
+            SlideStart::Programmatic.tolerance(6, 1440.0),
+            1.0 / (5.0 * 1504.0)
+        );
         assert_eq!(SlideStart::Programmatic.tolerance(1, 1440.0), 1.0 / 1504.0);
         assert_eq!(SlideStart::Release.tolerance(6, 1440.0), 0.001);
     }

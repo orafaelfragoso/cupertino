@@ -10,12 +10,12 @@ use crate::geometry::Rect;
 use crate::ids::{AppId, OutputId, WindowId};
 use crate::interaction::Interaction;
 use crate::kind;
-use cupertino_effects::WindowKind;
 use crate::lifecycle::{Lifecycle, LifecycleState, Presentation};
 use crate::tiling::{tile_rect, TileKind};
 use crate::window::{App, Window, WindowLevel};
 use crate::workspace::OutputWorkspaces;
 use crate::zoom::best_fit;
+use cupertino_effects::WindowKind;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Output {
@@ -109,16 +109,26 @@ impl Wm {
     /// Opacity of the dimming over `parent` while sheets hang from it: how far
     /// its most shown sheet is shown; 0 without one.
     pub fn sheet_dimming(&self, parent: WindowId, now: f64) -> f64 {
-        self.windows.values().filter(|w| w.parent == Some(parent)).map(|w| w.lifecycle.sheet_shown(now)).fold(0.0, f64::max)
+        self.windows
+            .values()
+            .filter(|w| w.parent == Some(parent))
+            .map(|w| w.lifecycle.sheet_shown(now))
+            .fold(0.0, f64::max)
     }
 
     /// Whether the compositor should draw the window on its output right now (ignores animations
     /// in progress): lifecycle-visible, app not hidden, on the output's current workspace or sticky.
     pub fn window_on_screen(&self, id: WindowId) -> bool {
-        let Some(w) = self.windows.get(&id) else { return false };
+        let Some(w) = self.windows.get(&id) else {
+            return false;
+        };
         w.lifecycle.state().is_visible()
             && !self.apps.get(&w.app).is_some_and(|a| a.hidden)
-            && (w.sticky || self.workspaces.get(&w.output).is_some_and(|ws| ws.current == w.workspace))
+            && (w.sticky
+                || self
+                    .workspaces
+                    .get(&w.output)
+                    .is_some_and(|ws| ws.current == w.workspace))
     }
 
     /// Windows to draw on `output`, bottom to top.
@@ -132,10 +142,11 @@ impl Wm {
 
     /// Whether a window may take input focus right now.
     pub fn focusable(&self, id: WindowId) -> bool {
-        self.window_on_screen(id) && self.windows.get(&id).is_some_and(|w| {
-            let s = w.lifecycle.state();
-            !s.is_minimized() && !s.is_dead()
-        })
+        self.window_on_screen(id)
+            && self.windows.get(&id).is_some_and(|w| {
+                let s = w.lifecycle.state();
+                !s.is_minimized() && !s.is_dead()
+            })
     }
 
     /// True while any animation, dwell timer or gesture needs further `tick` calls.
@@ -148,18 +159,29 @@ impl Wm {
     pub fn handle(&mut self, cmd: Command, now: f64) -> Vec<Effect> {
         let mut out = Vec::new();
         let o = &mut out;
-        if !matches!(cmd, Command::CycleWindows { .. } | Command::PointerMotion { .. } | Command::PointerRelease) {
+        if !matches!(
+            cmd,
+            Command::CycleWindows { .. } | Command::PointerMotion { .. } | Command::PointerRelease
+        ) {
             self.finish_cycle();
         }
         match cmd {
-            Command::AddOutput { output, rect, usable } => self.add_output(output, rect, usable, o),
+            Command::AddOutput {
+                output,
+                rect,
+                usable,
+            } => self.add_output(output, rect, usable, o),
             Command::RemoveOutput { output } => self.remove_output(output, now, o),
             Command::SetUsableArea { output, usable } => {
                 if let Some(op) = self.outputs.iter_mut().find(|p| p.id == output) {
                     op.usable = usable;
                 }
             }
-            Command::SetOutputRect { output, rect, usable } => self.set_output_rect(output, rect, usable, o),
+            Command::SetOutputRect {
+                output,
+                rect,
+                usable,
+            } => self.set_output_rect(output, rect, usable, o),
             Command::SetDockZone { output, zone } => {
                 if let Some(op) = self.outputs.iter_mut().find(|p| p.id == output) {
                     op.dock_zone = zone;
@@ -177,7 +199,12 @@ impl Wm {
                     w.title = title;
                 }
             }
-            Command::SetSizeHints { window, min, max, content } => {
+            Command::SetSizeHints {
+                window,
+                min,
+                max,
+                content,
+            } => {
                 if let Some(w) = self.windows.get_mut(&window) {
                     w.min_size = min;
                     w.max_size = max;
@@ -206,7 +233,9 @@ impl Wm {
                 }
             }
             Command::ToggleZoom { window } => self.toggle_zoom(window, now, o),
-            Command::Fullscreen { window, output } => self.fullscreen_window(window, output, now, o),
+            Command::Fullscreen { window, output } => {
+                self.fullscreen_window(window, output, now, o)
+            }
             Command::ExitFullscreen { window } => self.exit_fullscreen_window(window, now, o),
             Command::Tile { window, kind } => self.tile_window(window, kind, now, o),
             Command::Untile { window } => self.untile_window(window, now, o),
@@ -230,23 +259,43 @@ impl Wm {
             Command::CycleWindows { backward } => self.cycle_windows(backward, o),
             Command::EndCycleWindows => {}
             Command::BeginMove { window, pointer } => self.begin_move(window, pointer, now, o),
-            Command::BeginResize { window, edges, pointer } => self.begin_resize(window, edges, pointer, now, o),
-            Command::SnapEdgesToScreen { window, edges, opposite } => self.snap_edges_to_screen(window, edges, opposite, now, o),
-            Command::PointerMotion { pointer, modifiers } => self.pointer_motion(pointer, modifiers, now, o),
+            Command::BeginResize {
+                window,
+                edges,
+                pointer,
+            } => self.begin_resize(window, edges, pointer, now, o),
+            Command::SnapEdgesToScreen {
+                window,
+                edges,
+                opposite,
+            } => self.snap_edges_to_screen(window, edges, opposite, now, o),
+            Command::PointerMotion { pointer, modifiers } => {
+                self.pointer_motion(pointer, modifiers, now, o)
+            }
             Command::PointerRelease => self.pointer_release(now, o),
             Command::CancelInteraction => self.cancel_interaction(now, o),
             Command::AddWorkspace { output } => {
                 self.add_workspace(output, o);
             }
             Command::RemoveWorkspace { workspace } => self.remove_workspace(workspace, now, o),
-            Command::MoveWorkspace { workspace, index } => self.move_workspace(workspace, index, now, o),
-            Command::SwitchWorkspace { output, workspace } => self.switch_workspace(output, workspace, true, now, o),
-            Command::SwitchWorkspaceRelative { output, delta } => self.switch_workspace_relative(output, delta, now, o),
-            Command::MoveWindowToWorkspace { window, workspace } => self.move_window_to_workspace(window, workspace, now, o),
+            Command::MoveWorkspace { workspace, index } => {
+                self.move_workspace(workspace, index, now, o)
+            }
+            Command::SwitchWorkspace { output, workspace } => {
+                self.switch_workspace(output, workspace, true, now, o)
+            }
+            Command::SwitchWorkspaceRelative { output, delta } => {
+                self.switch_workspace_relative(output, delta, now, o)
+            }
+            Command::MoveWindowToWorkspace { window, workspace } => {
+                self.move_window_to_workspace(window, workspace, now, o)
+            }
             Command::SetSticky { window, sticky } => self.set_sticky(window, sticky, false),
             Command::AssignApp { app, assignment } => self.assign_app(app, assignment),
             Command::WorkspaceGestureBegin { output } => self.workspace_gesture_begin(output, now),
-            Command::WorkspaceGestureUpdate { output, fraction } => self.workspace_gesture_update(output, fraction, now),
+            Command::WorkspaceGestureUpdate { output, fraction } => {
+                self.workspace_gesture_update(output, fraction, now)
+            }
             Command::WorkspaceGestureEnd { output } => self.workspace_gesture_end(output, now, o),
         }
         out
@@ -258,9 +307,15 @@ impl Wm {
         let mut ids: Vec<WindowId> = self.windows.keys().copied().collect();
         ids.sort();
         for id in ids {
-            let Some(w) = self.windows.get_mut(&id) else { continue };
+            let Some(w) = self.windows.get_mut(&id) else {
+                continue;
+            };
             if let Some((from, to)) = w.lifecycle.tick(now) {
-                out.push(Effect::WindowStateChanged { window: id, from, to });
+                out.push(Effect::WindowStateChanged {
+                    window: id,
+                    from,
+                    to,
+                });
                 if to == LifecycleState::Destroyed {
                     self.finalize_window(id, now, &mut out);
                 }
@@ -275,16 +330,28 @@ impl Wm {
         if self.outputs.iter().any(|o| o.id == id) {
             return;
         }
-        self.outputs.push(Output { id, rect, usable, dock_zone: None });
+        self.outputs.push(Output {
+            id,
+            rect,
+            usable,
+            dock_zone: None,
+        });
         self.create_output_workspaces(id, out);
     }
 
     /// Refit the windows of an output whose rectangle changed.
     fn set_output_rect(&mut self, id: OutputId, rect: Rect, usable: Rect, out: &mut Vec<Effect>) {
-        let Some(op) = self.outputs.iter_mut().find(|o| o.id == id) else { return };
+        let Some(op) = self.outputs.iter_mut().find(|o| o.id == id) else {
+            return;
+        };
         op.rect = rect;
         op.usable = usable;
-        let mut ids: Vec<WindowId> = self.windows.values().filter(|w| w.output == id).map(|w| w.id).collect();
+        let mut ids: Vec<WindowId> = self
+            .windows
+            .values()
+            .filter(|w| w.output == id)
+            .map(|w| w.id)
+            .collect();
         ids.sort();
         for wid in ids {
             let margin = self.cfg.snap.tiled_margin;
@@ -296,12 +363,16 @@ impl Wm {
                     let f = w.lifecycle.normal_frame().clamp_into(&usable);
                     f != w.lifecycle.normal_frame() && w.lifecycle.set_normal_frame(f)
                 }
-                LifecycleState::FullScreen | LifecycleState::EnterFullScreen => w.lifecycle.refit(rect, rect),
+                LifecycleState::FullScreen | LifecycleState::EnterFullScreen => {
+                    w.lifecycle.refit(rect, rect)
+                }
                 LifecycleState::Zoomed => {
                     let f = best_fit(&zoom_cfg, usable, w.lifecycle.target_frame(), &hints);
                     w.lifecycle.refit(f, f)
                 }
-                LifecycleState::Tiled(kind) | LifecycleState::Tiling(kind) => w.lifecycle.refit(tile_rect(kind, usable, margin), rect),
+                LifecycleState::Tiled(kind) | LifecycleState::Tiling(kind) => {
+                    w.lifecycle.refit(tile_rect(kind, usable, margin), rect)
+                }
                 _ => false,
             };
             if changed {
@@ -309,19 +380,31 @@ impl Wm {
                     out.push(c);
                 }
                 if let Some(w) = self.windows.get(&wid) {
-                    out.push(Effect::Place { window: wid, rect: w.geometry() });
+                    out.push(Effect::Place {
+                        window: wid,
+                        rect: w.geometry(),
+                    });
                 }
             }
         }
     }
 
     fn remove_output(&mut self, id: OutputId, now: f64, out: &mut Vec<Effect>) {
-        let Some(pos) = self.outputs.iter().position(|o| o.id == id) else { return };
+        let Some(pos) = self.outputs.iter().position(|o| o.id == id) else {
+            return;
+        };
         self.outputs.remove(pos);
         self.workspaces.remove(&id);
-        let Some(dest) = self.outputs.first().copied() else { return };
+        let Some(dest) = self.outputs.first().copied() else {
+            return;
+        };
         let dest_ws = self.workspaces[&dest.id].current;
-        let mut ids: Vec<WindowId> = self.windows.values().filter(|w| w.output == id).map(|w| w.id).collect();
+        let mut ids: Vec<WindowId> = self
+            .windows
+            .values()
+            .filter(|w| w.output == id)
+            .map(|w| w.id)
+            .collect();
         ids.sort();
         for wid in ids {
             let w = self.windows.get_mut(&wid).unwrap();
@@ -330,7 +413,10 @@ impl Wm {
             if w.lifecycle.state() == LifecycleState::Normal {
                 let f = w.lifecycle.normal_frame().clamp_into(&dest.usable);
                 w.lifecycle.set_normal_frame(f);
-                out.push(Effect::Place { window: wid, rect: f });
+                out.push(Effect::Place {
+                    window: wid,
+                    rect: f,
+                });
             }
         }
         let _ = now;
@@ -355,14 +441,22 @@ impl Wm {
         );
         self.identities.insert(identity.to_string(), id);
         self.focus.app_mru.push(id);
-        out.push(Effect::AppRegistered { app: id, identity: identity.to_string() });
+        out.push(Effect::AppRegistered {
+            app: id,
+            identity: identity.to_string(),
+        });
         id
     }
 
     fn remove_app(&mut self, app: AppId, now: f64, out: &mut Vec<Effect>) {
         let Some(a) = self.apps.get(&app) else { return };
         let ids = a.windows_mru.clone();
-        let mut all: Vec<WindowId> = self.windows.values().filter(|w| w.app == app).map(|w| w.id).collect();
+        let mut all: Vec<WindowId> = self
+            .windows
+            .values()
+            .filter(|w| w.app == app)
+            .map(|w| w.id)
+            .collect();
         all.sort();
         for w in ids.into_iter().chain(all) {
             self.destroy_window(w, now, out);
@@ -374,7 +468,12 @@ impl Wm {
         if self.focus.front_app == Some(app) {
             self.focus.front_app = None;
             self.focus.key_window = None;
-            let next = self.focus.app_mru.iter().copied().find(|a| self.apps.get(a).is_some_and(|a| !a.hidden));
+            let next = self
+                .focus
+                .app_mru
+                .iter()
+                .copied()
+                .find(|a| self.apps.get(a).is_some_and(|a| !a.hidden));
             match next {
                 Some(n) => self.activate_app(n, now, out),
                 None => {
@@ -390,13 +489,20 @@ impl Wm {
         let mut states = w.lifecycle.toplevel_states();
         states.activated = self.focus.key_window == Some(id);
         states.resizing = resizing;
-        Some(Effect::Configure { window: id, size: w.geometry().size(), states })
+        Some(Effect::Configure {
+            window: id,
+            size: w.geometry().size(),
+            states,
+        })
     }
 
     pub(crate) fn emit_layout(&self, id: WindowId, kind: AnimationKind, out: &mut Vec<Effect>) {
         if let (Some(c), Some(w)) = (self.configure_effect(id, false), self.windows.get(&id)) {
             out.push(c);
-            out.push(Effect::Place { window: id, rect: w.geometry() });
+            out.push(Effect::Place {
+                window: id,
+                rect: w.geometry(),
+            });
             out.push(Effect::StartAnimation { window: id, kind });
         }
     }
@@ -406,7 +512,10 @@ impl Wm {
             return;
         }
         let parent = p.parent.filter(|id| self.windows.contains_key(id));
-        let mut output = p.output.filter(|o| self.output(*o).is_some()).unwrap_or(self.outputs[0].id);
+        let mut output = p
+            .output
+            .filter(|o| self.output(*o).is_some())
+            .unwrap_or(self.outputs[0].id);
         let app = self.ensure_app(&p.app, out);
         let mut geometry = p.geometry;
         let mut kind = p.kind;
@@ -418,7 +527,10 @@ impl Wm {
                 kind = WindowKind::Sheet;
                 geometry = kind::sheet_frame(pf, geometry.size(), self.cfg.snap.titlebar_height);
             } else {
-                let usable = self.output(output).expect("a window's output exists while outputs do").usable;
+                let usable = self
+                    .output(output)
+                    .expect("a window's output exists while outputs do")
+                    .usable;
                 geometry = kind::child_frame(pf, geometry.size(), usable);
             }
         } else if kind == WindowKind::AppModal {
@@ -428,13 +540,22 @@ impl Wm {
                 .iter()
                 .rev()
                 .filter_map(|id| self.windows.get(id))
-                .find(|w| w.app == app && w.parent.is_none() && w.lifecycle.kind() == WindowKind::AppModal && !w.lifecycle.state().is_dead())
+                .find(|w| {
+                    w.app == app
+                        && w.parent.is_none()
+                        && w.lifecycle.kind() == WindowKind::AppModal
+                        && !w.lifecycle.state().is_dead()
+                })
                 .map(|w| (w.geometry().x, w.geometry().y));
             geometry = kind::modal_panel_frame(o.usable, o.rect, geometry.size(), previous);
         }
         let current = self.workspaces[&output].current;
         let (workspace, sticky, from_app) = match parent {
-            Some(par) => (self.windows[&par].workspace, self.windows[&par].sticky, false),
+            Some(par) => (
+                self.windows[&par].workspace,
+                self.windows[&par].sticky,
+                false,
+            ),
             None => match self.apps[&app].assignment {
                 crate::window::Assignment::AllWorkspaces => (current, true, true),
                 crate::window::Assignment::Workspace(ws)
@@ -498,16 +619,27 @@ impl Wm {
     /// Put `id` on top of the windows of its level, below any of a higher level.
     fn insert_in_stack(&mut self, id: WindowId) {
         self.stack.retain(|w| *w != id);
-        let level = self.windows.get(&id).map_or(WindowLevel::Normal, |w| w.level);
-        let at = self.stack.iter().rposition(|w| self.windows.get(w).is_some_and(|x| x.level <= level)).map_or(0, |i| i + 1);
+        let level = self
+            .windows
+            .get(&id)
+            .map_or(WindowLevel::Normal, |w| w.level);
+        let at = self
+            .stack
+            .iter()
+            .rposition(|w| self.windows.get(w).is_some_and(|x| x.level <= level))
+            .map_or(0, |i| i + 1);
         self.stack.insert(at, id);
     }
 
     pub(crate) fn raise(&mut self, id: WindowId, out: &mut Vec<Effect>) {
         self.insert_in_stack(id);
         out.push(Effect::Raise { window: id });
-        let mut children: Vec<WindowId> =
-            self.stack.iter().copied().filter(|c| self.windows.get(c).and_then(|w| w.parent) == Some(id)).collect();
+        let mut children: Vec<WindowId> = self
+            .stack
+            .iter()
+            .copied()
+            .filter(|c| self.windows.get(c).and_then(|w| w.parent) == Some(id))
+            .collect();
         children.retain(|c| *c != id);
         for c in children {
             self.raise(c, out);
@@ -515,12 +647,17 @@ impl Wm {
     }
 
     fn close_window(&mut self, id: WindowId, now: f64, out: &mut Vec<Effect>) {
-        let Some(w) = self.windows.get_mut(&id) else { return };
+        let Some(w) = self.windows.get_mut(&id) else {
+            return;
+        };
         if !w.lifecycle.close(now) {
             return;
         }
         let to = w.lifecycle.state();
-        out.push(Effect::StartAnimation { window: id, kind: AnimationKind::Close });
+        out.push(Effect::StartAnimation {
+            window: id,
+            kind: AnimationKind::Close,
+        });
         self.cancel_interaction_for(id, now, out);
         self.release_window(id, now, out);
         if to == LifecycleState::Destroyed {
@@ -529,7 +666,9 @@ impl Wm {
     }
 
     pub(crate) fn destroy_window(&mut self, id: WindowId, now: f64, out: &mut Vec<Effect>) {
-        let Some(w) = self.windows.get_mut(&id) else { return };
+        let Some(w) = self.windows.get_mut(&id) else {
+            return;
+        };
         w.lifecycle.destroy();
         self.cancel_interaction_for(id, now, out);
         self.release_window(id, now, out);
@@ -538,7 +677,9 @@ impl Wm {
 
     /// Take a closing window out of focus, MRU and full-screen bookkeeping (idempotent).
     fn release_window(&mut self, id: WindowId, now: f64, out: &mut Vec<Effect>) {
-        let Some(w) = self.windows.get(&id) else { return };
+        let Some(w) = self.windows.get(&id) else {
+            return;
+        };
         let app = w.app;
         if self.fullscreen_workspace_of(id).is_some() {
             self.leave_fullscreen_workspace(id, now, out);
@@ -570,45 +711,83 @@ impl Wm {
         Rect::new(r.cx() - 24.0, r.bottom() - 48.0, 48.0, 48.0)
     }
 
-    fn minimize_window(&mut self, id: WindowId, target: Option<Rect>, now: f64, out: &mut Vec<Effect>) {
-        let Some(w) = self.windows.get(&id) else { return };
+    fn minimize_window(
+        &mut self,
+        id: WindowId,
+        target: Option<Rect>,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
+        let Some(w) = self.windows.get(&id) else {
+            return;
+        };
         let target = target.unwrap_or_else(|| self.default_minimize_target(w.output));
         let w = self.windows.get_mut(&id).unwrap();
         if !w.lifecycle.minimize(target, now) {
             return;
         }
-        out.push(Effect::StartAnimation { window: id, kind: AnimationKind::Minimize });
+        out.push(Effect::StartAnimation {
+            window: id,
+            kind: AnimationKind::Minimize,
+        });
         self.cancel_interaction_for(id, now, out);
         self.release_focus(id, now, out);
     }
 
     pub(crate) fn restore_window(&mut self, id: WindowId, now: f64, out: &mut Vec<Effect>) {
-        let Some(w) = self.windows.get_mut(&id) else { return };
+        let Some(w) = self.windows.get_mut(&id) else {
+            return;
+        };
         if w.lifecycle.restore(now) {
-            out.push(Effect::StartAnimation { window: id, kind: AnimationKind::Restore });
+            out.push(Effect::StartAnimation {
+                window: id,
+                kind: AnimationKind::Restore,
+            });
         }
     }
 
     fn toggle_zoom(&mut self, id: WindowId, now: f64, out: &mut Vec<Effect>) {
-        let Some(w) = self.windows.get(&id) else { return };
+        let Some(w) = self.windows.get(&id) else {
+            return;
+        };
         if matches!(w.state(), LifecycleState::Zooming | LifecycleState::Zoomed) {
             if self.windows.get_mut(&id).unwrap().lifecycle.unzoom(now) {
                 self.emit_layout(id, AnimationKind::Unzoom, out);
             }
             return;
         }
-        let Some(usable) = self.output(w.output).map(|o| o.usable) else { return };
+        let Some(usable) = self.output(w.output).map(|o| o.usable) else {
+            return;
+        };
         let current = w.lifecycle.presentation(now).frame;
         let target = best_fit(&self.cfg.zoom, usable, current, &w.hints());
-        if self.windows.get_mut(&id).unwrap().lifecycle.zoom(target, now) {
+        if self
+            .windows
+            .get_mut(&id)
+            .unwrap()
+            .lifecycle
+            .zoom(target, now)
+        {
             self.emit_layout(id, AnimationKind::Zoom, out);
         }
     }
 
-    fn fullscreen_window(&mut self, id: WindowId, output: Option<OutputId>, now: f64, out: &mut Vec<Effect>) {
-        let Some(w) = self.windows.get(&id) else { return };
-        let output = output.filter(|o| self.output(*o).is_some()).unwrap_or(w.output);
-        let Some(rect) = self.output(output).map(|o| o.rect) else { return };
+    fn fullscreen_window(
+        &mut self,
+        id: WindowId,
+        output: Option<OutputId>,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
+        let Some(w) = self.windows.get(&id) else {
+            return;
+        };
+        let output = output
+            .filter(|o| self.output(*o).is_some())
+            .unwrap_or(w.output);
+        let Some(rect) = self.output(output).map(|o| o.rect) else {
+            return;
+        };
         let w = self.windows.get_mut(&id).unwrap();
         if !w.lifecycle.fullscreen(rect, now) {
             return;
@@ -625,24 +804,44 @@ impl Wm {
     }
 
     fn exit_fullscreen_window(&mut self, id: WindowId, now: f64, out: &mut Vec<Effect>) {
-        let Some(w) = self.windows.get_mut(&id) else { return };
+        let Some(w) = self.windows.get_mut(&id) else {
+            return;
+        };
         if w.lifecycle.exit_fullscreen(now) {
             self.leave_fullscreen_workspace(id, now, out);
             self.emit_layout(id, AnimationKind::ExitFullScreen, out);
         }
     }
 
-    pub(crate) fn tile_window(&mut self, id: WindowId, kind: TileKind, now: f64, out: &mut Vec<Effect>) {
-        let Some(w) = self.windows.get(&id) else { return };
-        let Some(usable) = self.output(w.output).map(|o| o.usable) else { return };
+    pub(crate) fn tile_window(
+        &mut self,
+        id: WindowId,
+        kind: TileKind,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
+        let Some(w) = self.windows.get(&id) else {
+            return;
+        };
+        let Some(usable) = self.output(w.output).map(|o| o.usable) else {
+            return;
+        };
         let rect = tile_rect(kind, usable, self.cfg.snap.tiled_margin);
-        if self.windows.get_mut(&id).unwrap().lifecycle.tile(kind, rect, now) {
+        if self
+            .windows
+            .get_mut(&id)
+            .unwrap()
+            .lifecycle
+            .tile(kind, rect, now)
+        {
             self.emit_layout(id, AnimationKind::Tile(kind), out);
         }
     }
 
     fn untile_window(&mut self, id: WindowId, now: f64, out: &mut Vec<Effect>) {
-        let Some(w) = self.windows.get_mut(&id) else { return };
+        let Some(w) = self.windows.get_mut(&id) else {
+            return;
+        };
         if w.lifecycle.drag_out(None, now) {
             self.emit_layout(id, AnimationKind::DragOut, out);
         }

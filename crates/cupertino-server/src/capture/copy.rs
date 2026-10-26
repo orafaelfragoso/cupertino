@@ -51,9 +51,16 @@ impl Image {
     fn new(width: i32, height: i32, rgba: Vec<u8>) -> Result<Self> {
         let expected = usize::try_from(width)? * usize::try_from(height)? * 4;
         if rgba.len() != expected {
-            return Err(anyhow!("a {width} x {height} image read back {} bytes, not {expected}", rgba.len()));
+            return Err(anyhow!(
+                "a {width} x {height} image read back {} bytes, not {expected}",
+                rgba.len()
+            ));
         }
-        Ok(Self { width, height, rgba })
+        Ok(Self {
+            width,
+            height,
+            rgba,
+        })
     }
 
     fn size(&self) -> (i32, i32) {
@@ -66,20 +73,37 @@ impl Image {
 fn changed_rect(old: &Image, new: &Image) -> Option<(i32, i32, i32, i32)> {
     let row_bytes = new.width as usize * 4;
     let (mut x0, mut x1, mut y0, mut y1) = (usize::MAX, 0, usize::MAX, 0);
-    for (y, (a, b)) in old.rgba.chunks_exact(row_bytes).zip(new.rgba.chunks_exact(row_bytes)).enumerate() {
+    for (y, (a, b)) in old
+        .rgba
+        .chunks_exact(row_bytes)
+        .zip(new.rgba.chunks_exact(row_bytes))
+        .enumerate()
+    {
         if a == b {
             continue;
         }
         let differs = |x: &usize| a[x * 4..x * 4 + 4] != b[x * 4..x * 4 + 4];
         let width = new.width as usize;
-        let first = (0..width).find(differs).expect("a differing row has a differing pixel");
-        let last = (0..width).rev().find(differs).expect("a differing row has a differing pixel");
+        let first = (0..width)
+            .find(differs)
+            .expect("a differing row has a differing pixel");
+        let last = (0..width)
+            .rev()
+            .find(differs)
+            .expect("a differing row has a differing pixel");
         x0 = x0.min(first);
         x1 = x1.max(last);
         y0 = y0.min(y);
         y1 = y1.max(y);
     }
-    (y0 != usize::MAX).then(|| (x0 as i32, y0 as i32, (x1 - x0 + 1) as i32, (y1 - y0 + 1) as i32))
+    (y0 != usize::MAX).then(|| {
+        (
+            x0 as i32,
+            y0 as i32,
+            (x1 - x0 + 1) as i32,
+            (y1 - y0 + 1) as i32,
+        )
+    })
 }
 
 /// Why a frame could not be copied into its buffer.
@@ -94,7 +118,10 @@ enum CopyError {
 fn copy_into(buffer: &WlBuffer, image: &Image) -> std::result::Result<(), CopyError> {
     let copied = with_buffer_contents_mut(buffer, |ptr, len, data| {
         let row_bytes = image.width as usize * 4;
-        if (data.width, data.height) != image.size() || !SHM_FORMATS.contains(&data.format) || (data.stride as usize) < row_bytes {
+        if (data.width, data.height) != image.size()
+            || !SHM_FORMATS.contains(&data.format)
+            || (data.stride as usize) < row_bytes
+        {
             return Err(CopyError::Constraints);
         }
         let (offset, stride) = (data.offset as usize, data.stride as usize);
@@ -105,7 +132,12 @@ fn copy_into(buffer: &WlBuffer, image: &Image) -> std::result::Result<(), CopyEr
         let memory = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
         for (y, row) in image.rgba.chunks_exact(row_bytes).enumerate() {
             let start = offset + y * stride;
-            for (dst, src) in memory[start..start + row_bytes].as_chunks_mut::<4>().0.iter_mut().zip(row.as_chunks::<4>().0) {
+            for (dst, src) in memory[start..start + row_bytes]
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(row.as_chunks::<4>().0)
+            {
                 *dst = [src[2], src[1], src[0], src[3]];
             }
         }
@@ -196,7 +228,10 @@ impl Sessions {
     }
 
     fn frame_mut(&mut self, resource: &ExtImageCopyCaptureFrameV1) -> &mut Frame {
-        self.frames.iter_mut().find(|f| f.resource == *resource).expect("a frame stays listed until its object is destroyed")
+        self.frames
+            .iter_mut()
+            .find(|f| f.resource == *resource)
+            .expect("a frame stays listed until its object is destroyed")
     }
 }
 
@@ -204,8 +239,22 @@ impl Sessions {
 type RenderKey = (Option<cupertino_wm::WindowId>, bool);
 
 impl Cupertino {
-    fn add_session(&mut self, id: u64, resource: ExtImageCopyCaptureSessionV1, source: Source, paint_cursors: bool) {
-        let mut session = Session { id, resource, source, paint_cursors, size: None, last: None, stopped: false };
+    fn add_session(
+        &mut self,
+        id: u64,
+        resource: ExtImageCopyCaptureSessionV1,
+        source: Source,
+        paint_cursors: bool,
+    ) {
+        let mut session = Session {
+            id,
+            resource,
+            source,
+            paint_cursors,
+            size: None,
+            last: None,
+            stopped: false,
+        };
         match self.placement(&session.source) {
             Some(p) => session.send_constraints(p.size),
             None => session.stop(),
@@ -222,7 +271,13 @@ impl Cupertino {
     /// Stop the sessions whose source went away, fail the frames waiting on them, then copy the waiting frames of the
     /// sources drawn on output `idx`.
     pub(super) fn copy_frames(&mut self, renderer: &mut GlesRenderer, idx: usize) {
-        let placements: Vec<Option<Placement>> = self.capture.copy.sessions.iter().map(|s| self.placement(&s.source)).collect();
+        let placements: Vec<Option<Placement>> = self
+            .capture
+            .copy
+            .sessions
+            .iter()
+            .map(|s| self.placement(&s.source))
+            .collect();
         let copy = &mut self.capture.copy;
         let mut stopped = false;
         for (session, placement) in copy.sessions.iter_mut().zip(&placements) {
@@ -236,11 +291,22 @@ impl Cupertino {
         }
         let copy = &mut self.capture.copy;
         let mut due: Vec<(usize, usize, Placement)> = Vec::new();
-        for (fi, f) in copy.frames.iter_mut().enumerate().filter(|(_, f)| f.state == FrameState::Waiting) {
-            match copy.sessions.iter().position(|s| s.id == f.session).filter(|si| !copy.sessions[*si].stopped) {
+        for (fi, f) in copy
+            .frames
+            .iter_mut()
+            .enumerate()
+            .filter(|(_, f)| f.state == FrameState::Waiting)
+        {
+            match copy
+                .sessions
+                .iter()
+                .position(|s| s.id == f.session)
+                .filter(|si| !copy.sessions[*si].stopped)
+            {
                 None => f.fail(FailureReason::Stopped),
                 Some(si) => {
-                    let placement = placements[si].expect("a session that is not stopped has a placement");
+                    let placement =
+                        placements[si].expect("a session that is not stopped has a placement");
                     if placement.output == idx {
                         due.push((fi, si, placement));
                     }
@@ -250,7 +316,10 @@ impl Cupertino {
         // sessions on one source with the same cursor option share one rendering
         let mut rendered: Vec<(RenderKey, Arc<Image>)> = Vec::new();
         for (fi, si, placement) in due {
-            let key = (placement.window, self.capture.copy.sessions[si].paint_cursors);
+            let key = (
+                placement.window,
+                self.capture.copy.sessions[si].paint_cursors,
+            );
             let image = match rendered.iter().find(|(k, _)| *k == key) {
                 Some((_, image)) => image.clone(),
                 None => {
@@ -285,12 +354,19 @@ impl Cupertino {
             // an unchanged source keeps the frame waiting for the next change
             let Some((x, y, w, h)) = damage else { continue };
             let f = &mut copy.frames[fi];
-            let buffer = f.buffer.as_ref().expect("a frame waits only after a buffer was attached");
+            let buffer = f
+                .buffer
+                .as_ref()
+                .expect("a frame waits only after a buffer was attached");
             match copy_into(buffer, &image) {
                 Ok(()) => {
                     f.resource.transform(wl_output::Transform::Normal);
                     f.resource.damage(x, y, w, h);
-                    f.resource.presentation_time((time.as_secs() >> 32) as u32, time.as_secs() as u32, time.subsec_nanos());
+                    f.resource.presentation_time(
+                        (time.as_secs() >> 32) as u32,
+                        time.as_secs() as u32,
+                        time.subsec_nanos(),
+                    );
                     f.resource.ready();
                     f.state = FrameState::Done;
                     session.last = Some(image);
@@ -302,7 +378,12 @@ impl Cupertino {
     }
 
     /// Output `idx` as its next frame shows it, the cursor drawn only with `paint_cursors`.
-    fn render_output_image(&mut self, renderer: &mut GlesRenderer, idx: usize, paint_cursors: bool) -> Result<Image> {
+    fn render_output_image(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        idx: usize,
+        paint_cursors: bool,
+    ) -> Result<Image> {
         let elements = self
             .with_scene(renderer, idx, |r, mut p| {
                 if !paint_cursors {
@@ -312,34 +393,69 @@ impl Cupertino {
             })
             .context("the render resources are not loaded")?;
         let out = &self.outputs[idx];
-        let size = out.output.current_mode().context("the output has no mode")?.size;
-        let image = crate::render::screenshot::render_to_image(renderer, &elements, size, out.scale, crate::frame::SCREENSHOT_CLEAR)?;
+        let size = out
+            .output
+            .current_mode()
+            .context("the output has no mode")?
+            .size;
+        let image = crate::render::screenshot::render_to_image(
+            renderer,
+            &elements,
+            size,
+            out.scale,
+            crate::frame::SCREENSHOT_CLEAR,
+        )?;
         Image::new(size.w, size.h, image.into_raw())
     }
 
     /// The window at its natural size with its decorations and without its shadow, as the window snapshots draw it.
-    fn render_toplevel_image(&mut self, renderer: &mut GlesRenderer, idx: usize, window: cupertino_wm::WindowId) -> Result<Image> {
-        let frame = self.wm.window(window).context("the window left the model")?.geometry();
+    fn render_toplevel_image(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        idx: usize,
+        window: cupertino_wm::WindowId,
+    ) -> Result<Image> {
+        let frame = self
+            .wm
+            .window(window)
+            .context("the window left the model")?
+            .geometry();
         let active = self.wm.key_window() == Some(window);
         let (texture, _) = self
             .with_scene(renderer, idx, |r, mut p| {
                 let windows = p.windows;
                 let entry = windows.iter().find(|w| w.id == window)?;
                 let geo = entry.window.geometry();
-                let natural = cupertino_wm::Rect::new(frame.x, frame.y, f64::from(geo.size.w) + entry.insets.horizontal(), f64::from(geo.size.h) + entry.insets.vertical());
+                let natural = cupertino_wm::Rect::new(
+                    frame.x,
+                    frame.y,
+                    f64::from(geo.size.w) + entry.insets.horizontal(),
+                    f64::from(geo.size.h) + entry.insets.vertical(),
+                );
                 capture_window(r, &mut p, entry, natural, active, 0.0, false)
             })
             .flatten()
             .context("the window could not be rendered")?;
         let size = texture.size();
-        let mapping = renderer.copy_texture(&texture, Rectangle::from_size(size), Fourcc::Abgr8888).map_err(|e| anyhow!("reading the window back: {e}"))?;
-        let bytes = renderer.map_texture(&mapping).map_err(|e| anyhow!("mapping the window: {e}"))?;
+        let mapping = renderer
+            .copy_texture(&texture, Rectangle::from_size(size), Fourcc::Abgr8888)
+            .map_err(|e| anyhow!("reading the window back: {e}"))?;
+        let bytes = renderer
+            .map_texture(&mapping)
+            .map_err(|e| anyhow!("mapping the window: {e}"))?;
         Image::new(size.w, size.h, bytes.to_vec())
     }
 }
 
 impl GlobalDispatch<ExtImageCopyCaptureManagerV1, ()> for Cupertino {
-    fn bind(_: &mut Self, _: &DisplayHandle, _: &Client, resource: New<ExtImageCopyCaptureManagerV1>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &Client,
+        resource: New<ExtImageCopyCaptureManagerV1>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         init.init(resource, ());
     }
 
@@ -349,19 +465,47 @@ impl GlobalDispatch<ExtImageCopyCaptureManagerV1, ()> for Cupertino {
 }
 
 impl Dispatch<ExtImageCopyCaptureManagerV1, ()> for Cupertino {
-    fn request(state: &mut Self, _: &Client, resource: &ExtImageCopyCaptureManagerV1, request: manager::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        resource: &ExtImageCopyCaptureManagerV1,
+        request: manager::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         match request {
-            manager::Request::CreateSession { session, source, options } => {
-                let source = source.data::<Source>().expect("every capture source is created by a source manager").clone();
+            manager::Request::CreateSession {
+                session,
+                source,
+                options,
+            } => {
+                let source = source
+                    .data::<Source>()
+                    .expect("every capture source is created by a source manager")
+                    .clone();
                 let id = state.capture.copy.allocate();
                 let resource_session = init.init(session, SessionId(id));
                 match options {
-                    WEnum::Value(options) => state.add_session(id, resource_session, source, options.contains(Options::PaintCursors)),
-                    WEnum::Unknown(bits) => resource.post_error(manager::Error::InvalidOption, format!("unknown option bits {bits:#x}")),
+                    WEnum::Value(options) => state.add_session(
+                        id,
+                        resource_session,
+                        source,
+                        options.contains(Options::PaintCursors),
+                    ),
+                    WEnum::Unknown(bits) => resource.post_error(
+                        manager::Error::InvalidOption,
+                        format!("unknown option bits {bits:#x}"),
+                    ),
                 }
             }
             manager::Request::CreatePointerCursorSession { session, .. } => {
-                init.init(session, CursorSessionData { taken: AtomicBool::new(false) });
+                init.init(
+                    session,
+                    CursorSessionData {
+                        taken: AtomicBool::new(false),
+                    },
+                );
             }
             manager::Request::Destroy => {}
             _ => unreachable!("ext_image_copy_capture_manager_v1 version 1 has no other request"),
@@ -370,16 +514,32 @@ impl Dispatch<ExtImageCopyCaptureManagerV1, ()> for Cupertino {
 }
 
 impl Dispatch<ExtImageCopyCaptureSessionV1, SessionId> for Cupertino {
-    fn request(state: &mut Self, _: &Client, resource: &ExtImageCopyCaptureSessionV1, request: session::Request, data: &SessionId, _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        resource: &ExtImageCopyCaptureSessionV1,
+        request: session::Request,
+        data: &SessionId,
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         match request {
             session::Request::CreateFrame { frame } => {
                 let resource_frame = init.init(frame, SessionId(data.0));
                 let copy = &mut state.capture.copy;
                 if copy.frames.iter().any(|f| f.session == data.0) {
-                    resource.post_error(session::Error::DuplicateFrame, "the session already has a frame");
+                    resource.post_error(
+                        session::Error::DuplicateFrame,
+                        "the session already has a frame",
+                    );
                     return;
                 }
-                copy.frames.push(Frame { resource: resource_frame, session: data.0, buffer: None, state: FrameState::Open });
+                copy.frames.push(Frame {
+                    resource: resource_frame,
+                    session: data.0,
+                    buffer: None,
+                    state: FrameState::Open,
+                });
             }
             session::Request::Destroy => {}
             _ => unreachable!("ext_image_copy_capture_session_v1 version 1 has no other request"),
@@ -387,10 +547,19 @@ impl Dispatch<ExtImageCopyCaptureSessionV1, SessionId> for Cupertino {
     }
 
     /// Frames waiting on the session fail; the others fail when they ask for a capture.
-    fn destroyed(state: &mut Self, _: ClientId, _: &ExtImageCopyCaptureSessionV1, data: &SessionId) {
+    fn destroyed(
+        state: &mut Self,
+        _: ClientId,
+        _: &ExtImageCopyCaptureSessionV1,
+        data: &SessionId,
+    ) {
         let copy = &mut state.capture.copy;
         copy.sessions.retain(|s| s.id != data.0);
-        for f in copy.frames.iter_mut().filter(|f| f.session == data.0 && f.state == FrameState::Waiting) {
+        for f in copy
+            .frames
+            .iter_mut()
+            .filter(|f| f.session == data.0 && f.state == FrameState::Waiting)
+        {
             f.fail(FailureReason::Stopped);
         }
         state.refresh_capture_indicator();
@@ -398,22 +567,41 @@ impl Dispatch<ExtImageCopyCaptureSessionV1, SessionId> for Cupertino {
 }
 
 impl Dispatch<ExtImageCopyCaptureFrameV1, SessionId> for Cupertino {
-    fn request(state: &mut Self, _: &Client, resource: &ExtImageCopyCaptureFrameV1, request: frame::Request, _: &SessionId, _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        resource: &ExtImageCopyCaptureFrameV1,
+        request: frame::Request,
+        _: &SessionId,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         if matches!(request, frame::Request::Destroy) {
             return;
         }
         let copy = &mut state.capture.copy;
         let f = copy.frame_mut(resource);
         if f.state != FrameState::Open {
-            resource.post_error(frame::Error::AlreadyCaptured, "the frame was already captured");
+            resource.post_error(
+                frame::Error::AlreadyCaptured,
+                "the frame was already captured",
+            );
             return;
         }
         match request {
             frame::Request::AttachBuffer { buffer } => f.buffer = Some(buffer),
             // every capture copies the whole buffer, so the client's damage needs no bookkeeping
-            frame::Request::DamageBuffer { x, y, width, height } => {
+            frame::Request::DamageBuffer {
+                x,
+                y,
+                width,
+                height,
+            } => {
                 if x < 0 || y < 0 || width <= 0 || height <= 0 {
-                    resource.post_error(frame::Error::InvalidBufferDamage, format!("damage {x},{y} {width}x{height}"));
+                    resource.post_error(
+                        frame::Error::InvalidBufferDamage,
+                        format!("damage {x},{y} {width}x{height}"),
+                    );
                 }
             }
             frame::Request::Capture => {
@@ -423,7 +611,12 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, SessionId> for Cupertino {
                 }
                 f.state = FrameState::Waiting;
                 let session = f.session;
-                if copy.sessions.iter().find(|s| s.id == session).is_none_or(|s| s.stopped) {
+                if copy
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == session)
+                    .is_none_or(|s| s.stopped)
+                {
                     copy.frame_mut(resource).fail(FailureReason::Stopped);
                     return;
                 }
@@ -433,8 +626,17 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, SessionId> for Cupertino {
         }
     }
 
-    fn destroyed(state: &mut Self, _: ClientId, resource: &ExtImageCopyCaptureFrameV1, _: &SessionId) {
-        state.capture.copy.frames.retain(|f| f.resource != *resource);
+    fn destroyed(
+        state: &mut Self,
+        _: ClientId,
+        resource: &ExtImageCopyCaptureFrameV1,
+        _: &SessionId,
+    ) {
+        state
+            .capture
+            .copy
+            .frames
+            .retain(|f| f.resource != *resource);
     }
 }
 
@@ -453,15 +655,28 @@ impl Dispatch<ExtImageCopyCaptureCursorSessionV1, CursorSessionData> for Cuperti
                 let id = state.capture.copy.allocate();
                 let resource_session = init.init(session, SessionId(id));
                 if data.taken.swap(true, Ordering::Relaxed) {
-                    resource.post_error(cursor_session::Error::DuplicateSession, "the cursor session already has its capture session");
+                    resource.post_error(
+                        cursor_session::Error::DuplicateSession,
+                        "the cursor session already has its capture session",
+                    );
                     return;
                 }
-                let mut session = Session { id, resource: resource_session, source: Source::Output(None), paint_cursors: false, size: None, last: None, stopped: false };
+                let mut session = Session {
+                    id,
+                    resource: resource_session,
+                    source: Source::Output(None),
+                    paint_cursors: false,
+                    size: None,
+                    last: None,
+                    stopped: false,
+                };
                 session.stop();
                 state.capture.copy.sessions.push(session);
             }
             cursor_session::Request::Destroy => {}
-            _ => unreachable!("ext_image_copy_capture_cursor_session_v1 version 1 has no other request"),
+            _ => unreachable!(
+                "ext_image_copy_capture_cursor_session_v1 version 1 has no other request"
+            ),
         }
     }
 }
@@ -480,14 +695,23 @@ mod tests {
 
     #[test]
     fn equal_images_have_no_damage() {
-        assert_eq!(changed_rect(&image(8, 6, &[(2, 2)]), &image(8, 6, &[(2, 2)])), None);
+        assert_eq!(
+            changed_rect(&image(8, 6, &[(2, 2)]), &image(8, 6, &[(2, 2)])),
+            None
+        );
     }
 
     #[test]
     fn damage_is_the_bounding_rectangle_of_the_changed_pixels() {
         let old = image(8, 6, &[]);
-        assert_eq!(changed_rect(&old, &image(8, 6, &[(3, 1)])), Some((3, 1, 1, 1)));
-        assert_eq!(changed_rect(&old, &image(8, 6, &[(6, 1), (1, 4)])), Some((1, 1, 6, 4)));
+        assert_eq!(
+            changed_rect(&old, &image(8, 6, &[(3, 1)])),
+            Some((3, 1, 1, 1))
+        );
+        assert_eq!(
+            changed_rect(&old, &image(8, 6, &[(6, 1), (1, 4)])),
+            Some((1, 1, 6, 4))
+        );
     }
 
     #[test]

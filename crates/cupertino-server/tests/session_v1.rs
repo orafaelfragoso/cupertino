@@ -20,9 +20,13 @@ use cupertino_theme::Appearance;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use wayland_client::globals::{registry_queue_init, GlobalList, GlobalListContents};
-use wayland_client::protocol::{wl_buffer, wl_compositor, wl_output, wl_registry, wl_shm, wl_shm_pool, wl_surface};
+use wayland_client::protocol::{
+    wl_buffer, wl_compositor, wl_output, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+};
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
-use wayland_protocols::ext::session_lock::v1::client::{ext_session_lock_manager_v1, ext_session_lock_surface_v1, ext_session_lock_v1};
+use wayland_protocols::ext::session_lock::v1::client::{
+    ext_session_lock_manager_v1, ext_session_lock_surface_v1, ext_session_lock_v1,
+};
 
 const OUTPUT: (i32, i32) = (1000, 700);
 
@@ -35,7 +39,15 @@ impl Harness {
     fn new() -> Option<Harness> {
         let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().ok()?;
         let display: Display<Cupertino> = Display::new().ok()?;
-        let mut state = Cupertino::new(display, event_loop.handle(), event_loop.get_signal(), Config::default(), true, &cupertino_assets::Assets::discover()).ok()?;
+        let mut state = Cupertino::new(
+            display,
+            event_loop.handle(),
+            event_loop.get_signal(),
+            Config::default(),
+            true,
+            &cupertino_assets::Assets::builtin(),
+        )
+        .ok()?;
         match headless::init(&mut state, OUTPUT, 1.0) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
@@ -48,7 +60,12 @@ impl Harness {
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
         let end = Instant::now() + Duration::from_secs(10);
         while Instant::now() < end {
-            headless::step(&mut self.state, &mut self.event_loop, Duration::from_millis(5)).unwrap();
+            headless::step(
+                &mut self.state,
+                &mut self.event_loop,
+                Duration::from_millis(5),
+            )
+            .unwrap();
             if cond(&self.state) {
                 return;
             }
@@ -74,7 +91,11 @@ enum Told {
     Unlocked,
 }
 
-fn solid_buffer(shm: &wl_shm::WlShm, size: (i32, i32), qh: &QueueHandle<ClientState>) -> wl_buffer::WlBuffer {
+fn solid_buffer(
+    shm: &wl_shm::WlShm,
+    size: (i32, i32),
+    qh: &QueueHandle<ClientState>,
+) -> wl_buffer::WlBuffer {
     let (w, h) = size;
     let fd = rustix::fs::memfd_create("cupertino-test", rustix::fs::MemfdFlags::CLOEXEC).unwrap();
     let mut file = std::fs::File::from(fd);
@@ -92,7 +113,15 @@ struct ClientState {
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for ClientState {
-    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 macro_rules! ignore_events {
     ($($t:ty),*) => {$(
@@ -113,10 +142,22 @@ ignore_events!(
 );
 
 impl Dispatch<CupertinoSessionV1, ()> for ClientState {
-    fn event(state: &mut Self, _: &CupertinoSessionV1, event: cupertino_session_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        _: &CupertinoSessionV1,
+        event: cupertino_session_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         let told = match event {
             cupertino_session_v1::Event::Appearance { dark } => Told::Dark(dark == 1),
-            cupertino_session_v1::Event::DisplayOptions { options } => Told::Options(options.into_result().expect("known display option bits").bits()),
+            cupertino_session_v1::Event::DisplayOptions { options } => Told::Options(
+                options
+                    .into_result()
+                    .expect("known display option bits")
+                    .bits(),
+            ),
             cupertino_session_v1::Event::Locked => Told::Locked,
             cupertino_session_v1::Event::Unlocked => Told::Unlocked,
             _ => return,
@@ -126,7 +167,14 @@ impl Dispatch<CupertinoSessionV1, ()> for ClientState {
 }
 
 impl Dispatch<ext_session_lock_v1::ExtSessionLockV1, ()> for ClientState {
-    fn event(state: &mut Self, _: &ext_session_lock_v1::ExtSessionLockV1, event: ext_session_lock_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        _: &ext_session_lock_v1::ExtSessionLockV1,
+        event: ext_session_lock_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         if let ext_session_lock_v1::Event::Locked = event {
             state.locked.store(true, Ordering::SeqCst);
         }
@@ -134,9 +182,23 @@ impl Dispatch<ext_session_lock_v1::ExtSessionLockV1, ()> for ClientState {
 }
 
 /// The surface is the user data, so the configure can attach a buffer of the configured size.
-impl Dispatch<ext_session_lock_surface_v1::ExtSessionLockSurfaceV1, wl_surface::WlSurface> for ClientState {
-    fn event(state: &mut Self, lock_surface: &ext_session_lock_surface_v1::ExtSessionLockSurfaceV1, event: ext_session_lock_surface_v1::Event, surface: &wl_surface::WlSurface, _: &Connection, qh: &QueueHandle<Self>) {
-        if let ext_session_lock_surface_v1::Event::Configure { serial, width, height } = event {
+impl Dispatch<ext_session_lock_surface_v1::ExtSessionLockSurfaceV1, wl_surface::WlSurface>
+    for ClientState
+{
+    fn event(
+        state: &mut Self,
+        lock_surface: &ext_session_lock_surface_v1::ExtSessionLockSurfaceV1,
+        event: ext_session_lock_surface_v1::Event,
+        surface: &wl_surface::WlSurface,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let ext_session_lock_surface_v1::Event::Configure {
+            serial,
+            width,
+            height,
+        } = event
+        {
             lock_surface.ack_configure(serial);
             let size = (width as i32, height as i32);
             surface.attach(Some(&solid_buffer(&state.shm, size, qh)), 0, 0);
@@ -157,17 +219,37 @@ struct Client {
 }
 
 impl Client {
-    fn run(socket: PathBuf, setup: impl FnOnce(&mut EventQueue<ClientState>, &mut ClientState, &GlobalList) -> Option<ext_session_lock_v1::ExtSessionLockV1> + Send + 'static) -> Client {
-        let (stop, unlock) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
-        let (told, locked) = (Arc::new(Mutex::new(Vec::new())), Arc::new(AtomicBool::new(false)));
-        let (stop2, unlock2, told2, locked2) = (stop.clone(), unlock.clone(), told.clone(), locked.clone());
+    fn run(
+        socket: PathBuf,
+        setup: impl FnOnce(
+                &mut EventQueue<ClientState>,
+                &mut ClientState,
+                &GlobalList,
+            ) -> Option<ext_session_lock_v1::ExtSessionLockV1>
+            + Send
+            + 'static,
+    ) -> Client {
+        let (stop, unlock) = (
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let (told, locked) = (
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let (stop2, unlock2, told2, locked2) =
+            (stop.clone(), unlock.clone(), told.clone(), locked.clone());
         let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
         let thread_stream = stream.try_clone().unwrap();
         std::thread::spawn(move || {
             let conn = Connection::from_socket(thread_stream).unwrap();
             let (globals, mut queue) = registry_queue_init::<ClientState>(&conn).unwrap();
             let qh = queue.handle();
-            let mut client = ClientState { shm: globals.bind(&qh, 1..=1, ()).unwrap(), told: told2, locked: locked2 };
+            let mut client = ClientState {
+                shm: globals.bind(&qh, 1..=1, ()).unwrap(),
+                told: told2,
+                locked: locked2,
+            };
             let mut lock = setup(&mut queue, &mut client, &globals);
             while !stop2.load(Ordering::SeqCst) {
                 if unlock2.swap(false, Ordering::SeqCst) {
@@ -181,7 +263,13 @@ impl Client {
                 std::thread::sleep(Duration::from_millis(5));
             }
         });
-        Client { stream, stop, unlock, told, locked }
+        Client {
+            stream,
+            stop,
+            unlock,
+            told,
+            locked,
+        }
     }
 
     /// A shell process that observes the session at `version` of the shell global.
@@ -201,7 +289,8 @@ impl Client {
         Self::run(socket, |queue, client, globals| {
             let qh = queue.handle();
             let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
-            let manager: ext_session_lock_manager_v1::ExtSessionLockManagerV1 = globals.bind(&qh, 1..=1, ()).unwrap();
+            let manager: ext_session_lock_manager_v1::ExtSessionLockManagerV1 =
+                globals.bind(&qh, 1..=1, ()).unwrap();
             let output: wl_output::WlOutput = globals.bind(&qh, 1..=4, ()).unwrap();
             let lock = manager.lock(&qh, ());
             let surface = compositor.create_surface(&qh, ());
@@ -243,17 +332,29 @@ impl Drop for Client {
 fn binding_tells_the_current_appearance_display_options_and_lock_state() {
     let Some(mut h) = Harness::new() else { return };
     let before = Client::observer(h.socket_path(), 2);
-    h.wait_until("the first observer to be told", |_| before.told().len() == 3);
-    assert_eq!(before.told(), [Told::Dark(false), Told::Options(0), Told::Unlocked]);
+    h.wait_until("the first observer to be told", |_| {
+        before.told().len() == 3
+    });
+    assert_eq!(
+        before.told(),
+        [Told::Dark(false), Told::Options(0), Told::Unlocked]
+    );
 
     h.state.set_appearance(Appearance::Dark);
-    h.state.set_display_option(DisplayOption::ReduceTransparency, true);
-    h.state.set_display_option(DisplayOption::DifferentiateWithoutColor, true);
+    h.state
+        .set_display_option(DisplayOption::ReduceTransparency, true);
+    h.state
+        .set_display_option(DisplayOption::DifferentiateWithoutColor, true);
     let locker = Client::locker(h.socket_path());
     h.wait_until("the session to be locked", |_| locker.locked());
     let after = Client::observer(h.socket_path(), 2);
-    h.wait_until("the second observer to be told", |_| after.told().len() == 3);
-    assert_eq!(after.told(), [Told::Dark(true), Told::Options(2 | 8), Told::Locked]);
+    h.wait_until("the second observer to be told", |_| {
+        after.told().len() == 3
+    });
+    assert_eq!(
+        after.told(),
+        [Told::Dark(true), Told::Options(2 | 8), Told::Locked]
+    );
 }
 
 #[test]
@@ -268,11 +369,26 @@ fn appearance_changes_and_the_lock_cycle_reach_an_observer_in_order() {
     let locker = Client::locker(h.socket_path());
     h.wait_until("the session to be locked", |_| locker.locked());
     locker.unlock();
-    h.wait_until("the unlock to reach the observer", |_| observer.told().len() == 6);
+    h.wait_until("the unlock to reach the observer", |_| {
+        observer.told().len() == 6
+    });
     h.state.set_appearance(Appearance::Light);
-    h.wait_until("the second appearance change", |_| observer.told().len() == 7);
+    h.wait_until("the second appearance change", |_| {
+        observer.told().len() == 7
+    });
 
-    assert_eq!(observer.told(), [Told::Dark(false), Told::Options(0), Told::Unlocked, Told::Dark(true), Told::Locked, Told::Unlocked, Told::Dark(false)]);
+    assert_eq!(
+        observer.told(),
+        [
+            Told::Dark(false),
+            Told::Options(0),
+            Told::Unlocked,
+            Told::Dark(true),
+            Told::Locked,
+            Told::Unlocked,
+            Told::Dark(false)
+        ]
+    );
 }
 
 #[test]
@@ -280,25 +396,49 @@ fn every_display_option_change_reaches_a_version_two_observer_and_none_a_version
     let Some(mut h) = Harness::new() else { return };
     let current = Client::observer(h.socket_path(), 2);
     let old = Client::observer(h.socket_path(), 1);
-    h.wait_until("both observers to be told", |_| current.told().len() == 3 && old.told().len() == 2);
+    h.wait_until("both observers to be told", |_| {
+        current.told().len() == 3 && old.told().len() == 2
+    });
 
     h.state.toggle_display_option(DisplayOption::ReduceMotion);
     // the value it already has: nothing to tell
-    h.state.set_display_option(DisplayOption::ReduceMotion, true);
-    h.state.toggle_display_option(DisplayOption::IncreaseContrast);
+    h.state
+        .set_display_option(DisplayOption::ReduceMotion, true);
+    h.state
+        .toggle_display_option(DisplayOption::IncreaseContrast);
     h.state.toggle_display_option(DisplayOption::ReduceMotion);
     // a colour filter alone changes no display option
     let mut settings = h.state.accessibility.settings;
     settings.color_filter = Some(cupertino_defaults::accessibility::ColorFilter::Grayscale);
     h.state.set_accessibility(settings);
-    h.state.toggle_display_option(DisplayOption::ReduceTransparency);
-    h.wait_until("the changes to reach the observer", |_| current.told().len() == 7);
+    h.state
+        .toggle_display_option(DisplayOption::ReduceTransparency);
+    h.wait_until("the changes to reach the observer", |_| {
+        current.told().len() == 7
+    });
     // the version 1 observer gets the appearance change sent after the options, and nothing before it
     h.state.toggle_appearance();
-    h.wait_until("the appearance to reach both", |_| current.told().len() == 8 && old.told().len() == 3);
+    h.wait_until("the appearance to reach both", |_| {
+        current.told().len() == 8 && old.told().len() == 3
+    });
 
-    assert_eq!(current.told(), [Told::Dark(false), Told::Options(0), Told::Unlocked, Told::Options(1), Told::Options(1 | 4), Told::Options(4), Told::Options(4 | 2), Told::Dark(true)]);
-    assert_eq!(old.told(), [Told::Dark(false), Told::Unlocked, Told::Dark(true)]);
+    assert_eq!(
+        current.told(),
+        [
+            Told::Dark(false),
+            Told::Options(0),
+            Told::Unlocked,
+            Told::Options(1),
+            Told::Options(1 | 4),
+            Told::Options(4),
+            Told::Options(4 | 2),
+            Told::Dark(true)
+        ]
+    );
+    assert_eq!(
+        old.told(),
+        [Told::Dark(false), Told::Unlocked, Told::Dark(true)]
+    );
 }
 
 #[test]
@@ -310,11 +450,24 @@ fn a_lock_whose_client_crashes_stays_locked_and_a_takeover_tells_nothing_new() {
     let holder = Client::locker(h.socket_path());
     h.wait_until("the session to be locked", |_| holder.locked());
     holder.kill();
-    h.wait_until("the lock to be orphaned", |s| s.surface_under((500.0, 350.0).into()).is_none());
+    h.wait_until("the lock to be orphaned", |s| {
+        s.surface_under((500.0, 350.0).into()).is_none()
+    });
     let successor = Client::locker(h.socket_path());
     h.wait_until("a new client to take the lock", |_| successor.locked());
     successor.unlock();
-    h.wait_until("the unlock to reach the observer", |_| observer.told().len() == 5);
+    h.wait_until("the unlock to reach the observer", |_| {
+        observer.told().len() == 5
+    });
 
-    assert_eq!(observer.told(), [Told::Dark(false), Told::Options(0), Told::Unlocked, Told::Locked, Told::Unlocked]);
+    assert_eq!(
+        observer.told(),
+        [
+            Told::Dark(false),
+            Told::Options(0),
+            Told::Unlocked,
+            Told::Locked,
+            Told::Unlocked
+        ]
+    );
 }

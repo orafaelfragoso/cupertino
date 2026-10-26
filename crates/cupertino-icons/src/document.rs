@@ -157,6 +157,12 @@ impl FileIcons {
         }
     }
 
+    /// File icons drawn by `system`, so a test controls the host themes (the packs and nothing else, when `system` has none).
+    #[cfg(test)]
+    fn with_system(system: SystemIcons, db: MimeDatabase, folders: HashMap<PathBuf, &'static str>) -> FileIcons {
+        FileIcons { system, db, folders }
+    }
+
     /// The MIME database the icons are resolved with.
     pub fn database(&self) -> &MimeDatabase {
         &self.db
@@ -289,8 +295,10 @@ mod tests {
             .copied()
             .filter(|n| *n != "document.image")
             .collect();
-        let mut files = FileIcons::new(
-            &fixture::assets(dir.path(), &names, &[]),
+        let isolated = |assets: &Assets| SystemIcons::with_host(assets, Vec::new(), None);
+        let packs = fixture::assets(dir.path(), &names, &[]);
+        let mut files = FileIcons::with_system(
+            isolated(&packs),
             database(dir.path()),
             HashMap::from([(PathBuf::from("/h"), "folder.home")]),
         );
@@ -305,8 +313,9 @@ mod tests {
             "the special folder's icon is missing"
         );
         let other = tempfile::tempdir().unwrap();
-        let mut none = FileIcons::new(
-            &fixture::assets(other.path(), &[], &[]),
+        let empty = fixture::assets(other.path(), &[], &[]);
+        let mut none = FileIcons::with_system(
+            isolated(&empty),
             database(other.path()),
             HashMap::new(),
         );

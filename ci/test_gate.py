@@ -1,5 +1,6 @@
 """Tests of the source gate: `python3 -I ci/test_gate.py`."""
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -58,6 +59,25 @@ class ForbiddenFileTest(unittest.TestCase):
         word = "recover" + "ed"  # built from parts so that this file passes the gate itself
         problems = run({"crates/x/src/lib.rs": f"// {word} from a binary\n"})
         self.assertEqual(len(problems), 1, problems)
+
+
+class IgnoredOutputTest(unittest.TestCase):
+    def test_a_gitignored_build_file_is_not_scanned(self):
+        word = "Safa" + "ri"  # built from parts so that this file passes the gate itself
+        files = {
+            ".gitignore": "docs/book/\n",
+            "docs/book/search.js": f"// {word}\n",
+            "docs/visible.js": f"// {word}\n",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for rel, text in files.items():
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_text(text)
+            subprocess.run(["git", "init", "--quiet"], cwd=root, check=True, capture_output=True)
+            problems = gate.gate(root.resolve())[1]
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("docs/visible.js", problems[0])
 
 
 if __name__ == "__main__":

@@ -430,20 +430,20 @@ fn status_notifier_watcher_host_and_item_roundtrip() {
         let shell = bus.connect().await;
         let (watcher, events) = WatcherService::start(&shell).await.unwrap();
 
-        let app = bus.connect().await;
         let activations = Arc::new(Mutex::new(Vec::new()));
-        app.object_server()
-            .at(
+        let rec = Arc::new(Mutex::new(Recorded::default()));
+        let app = connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .serve_at(
                 "/StatusNotifierItem",
                 FakeItem {
                     activations: activations.clone(),
                 },
             )
-            .await
-            .unwrap();
-        let rec = Arc::new(Mutex::new(Recorded::default()));
-        app.object_server()
-            .at("/Menu", FakeDBusMenu { rec: rec.clone() })
+            .unwrap()
+            .serve_at("/Menu", FakeDBusMenu { rec: rec.clone() })
+            .unwrap()
+            .build()
             .await
             .unwrap();
 
@@ -635,30 +635,28 @@ impl FakeGtkActions {
 fn gtk_menu_model_is_read_and_activated() {
     let bus = bus_or_skip!();
     block_on(async {
-        let app = bus.connect().await;
         let log = Arc::new(Mutex::new(Vec::new()));
-        app.object_server()
-            .at("/org/example/menus/menubar", FakeGtkMenus)
-            .await
-            .unwrap();
-        app.object_server()
-            .at(
+        let app = connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .serve_at("/org/example/menus/menubar", FakeGtkMenus)
+            .unwrap()
+            .serve_at(
                 "/org/example",
                 FakeGtkActions {
                     scope: "app",
                     log: log.clone(),
                 },
             )
-            .await
-            .unwrap();
-        app.object_server()
-            .at(
+            .unwrap()
+            .serve_at(
                 "/org/example/window/1",
                 FakeGtkActions {
                     scope: "win",
                     log: log.clone(),
                 },
             )
+            .unwrap()
+            .build()
             .await
             .unwrap();
 

@@ -103,5 +103,12 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Layer rules
         run: cargo run -p cupertino-layers
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: nextest@0.9.149
+          fallback: none
+      # nextest enforces the per-test time limit in .config/nextest.toml; it does not run doctests.
       - name: Tests
-        run: cargo test --workspace --all-features --no-fail-fast
+        run: cargo nextest run --workspace --all-features --no-fail-fast
+      - name: Doctests
+        run: cargo test --workspace --all-features --doc

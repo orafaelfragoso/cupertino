@@ -64,6 +64,7 @@ const WEIGHT_NAMES: [(&str, u16); 15] = [
 
 /// CSS weight a named instance stands for: its `wght` coordinate when the axis spans only the standard 1..=1000 scale,
 /// else the weight of its style name; `None` for a name outside [`WEIGHT_NAMES`] on a non-standard axis.
+/// An axis whose minimum is below 1 (for example one starting at 0) counts as non-standard and falls back to the names.
 fn instance_weight(wght: f32, axis_range: (f32, f32), name: Option<&str>) -> Option<u16> {
     if axis_range.0 >= 1.0 && axis_range.1 <= 1000.0 {
         return Some(wght.round() as u16);

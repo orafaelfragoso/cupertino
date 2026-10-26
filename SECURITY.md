@@ -1,0 +1,35 @@
+# Security policy
+
+## Supported versions
+
+Cupertino is pre-1.0. Only the latest release receives security fixes.
+
+## Reporting a vulnerability
+
+Do not open a public issue for a security problem.
+
+Report it privately through the repository's **private vulnerability reporting** (Security tab, "Report a vulnerability"), or by email to `<PLACEHOLDER: security contact address, to be set by the maintainer before publication>`.
+
+Include what you found, the version or commit, how to reproduce it and what an attacker gains. We aim to acknowledge a report within 7 days and to tell you the plan within 30 days. We credit reporters who want credit when the fix ships.
+
+## Scope
+
+In scope:
+
+- `cupertino-sessiond`, the root-owned session manager: its login socket, PAM handling and session and terminal management.
+- `cupertino-netd`, `cupertino-btd` and `cupertino-powerd`, the daemons on the system bus, and how they authorise callers.
+- `cupertino-login` and the lock screen, including anything that lets a locked session be bypassed.
+- The compositor's handling of untrusted Wayland clients (input isolation, clipboard, screen capture, session lock).
+- The private shell protocol and the D-Bus interfaces under `org.cupertino.*`.
+
+Out of scope: problems in third-party software that Cupertino runs or depends on (report those upstream), attacks that need root or the user's own session already compromised, and denial of service by a client that the user chose to run.
+
+## Design notes that matter for reports
+
+- Privileged work stays in the daemons. They authorise a caller by its D-Bus peer credentials and by whether it is the active seat user.
+- Secrets typed into the login screen are zeroed after use and never printed in debug output.
+- **Known limitation:** the settings setters on the session bus (`org.cupertino.Session1`) trust any client on the same user's session bus. A sandboxed application with access to that bus can change appearance and accessibility settings. The planned fix is to check the caller's user id; reports about this limitation are welcome but known.
+
+## Disclosure
+
+We prefer coordinated disclosure: a fix and a release first, details after. If you plan to publish, tell us the date so we can ship before it.

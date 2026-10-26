@@ -55,8 +55,10 @@ fn name(s: &str) -> IconName {
 }
 
 fn sources(a: &Assets, n: &str, px: u32) -> Vec<IconSource> {
+    // the packs' own sources: the built-in host-theme names that end every list have an empty pack path
     a.icon_sources(&name(n), px)
         .into_iter()
+        .filter(|(root, _)| !root.as_os_str().is_empty())
         .map(|(_, s)| s)
         .collect()
 }
@@ -426,4 +428,32 @@ fn the_strict_check_names_a_file_the_manifest_names_but_lacks() {
         let msg = Assets::open(d.path()).unwrap_err().to_string();
         assert!(msg.contains("missing"), "{rel}: {msg}");
     }
+}
+
+#[test]
+fn the_builtin_icon_map_covers_every_logical_name_and_parses() {
+    let map = builtin_icon_map();
+    for name in RASTER_NAMES.iter().chain(&SYMBOL_NAMES) {
+        assert!(map.get(*name).is_some_and(|n| !n.is_empty()), "no host-theme names for {name}");
+    }
+    assert_eq!(map["folder.downloads"], ["folder-download", "folder-downloads"]);
+    assert!(map.keys().all(|k| IconName::new(k).is_ok()));
+}
+
+#[test]
+fn with_no_pack_every_icon_resolves_to_the_host_theme() {
+    let none = Assets::builtin();
+    let name = IconName::new("symbol.wifi").unwrap();
+    let sources = none.icon_sources(&name, 16);
+    assert_eq!(sources.len(), 1);
+    assert!(matches!(&sources[0].1, IconSource::Theme { names, theme: None } if names[0] == "network-wireless-symbolic"));
+}
+
+#[test]
+fn a_pack_source_comes_before_the_builtin_host_names() {
+    let d = pack(MANIFEST, &FILES);
+    let a = Assets::from_dirs(&[d.path().to_path_buf()]);
+    let sources = a.icon_sources(&IconName::new("folder").unwrap(), 32);
+    assert!(matches!(sources.first(), Some((_, IconSource::Raster(_)))));
+    assert!(matches!(sources.last(), Some((_, IconSource::Theme { theme: None, .. }))));
 }

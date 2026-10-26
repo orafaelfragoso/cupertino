@@ -159,6 +159,9 @@ pub struct IconLookup {
     cache: HashMap<(String, u32, u32), Option<PathBuf>>,
 }
 
+/// The icon theme searched when neither the pack nor the user's GTK settings name one.
+const DEFAULT_HOST_THEME: &str = "Adwaita";
+
 const EXTENSIONS: [&str; 2] = ["png", "svg"];
 
 impl IconLookup {
@@ -275,12 +278,13 @@ impl HostThemes {
             .as_ref()
     }
 
-    /// `theme` (the user's theme when `None`), its `Inherits` chain (each theme once), then `hicolor`.
+    /// `theme` (the user's theme when `None`, else [`DEFAULT_HOST_THEME`]), its `Inherits` chain (each theme once), then `hicolor`.
     fn chain(&mut self, theme: Option<&str>) -> Vec<String> {
         let mut chain: Vec<String> = Vec::new();
         let mut todo: Vec<String> = theme
             .map(str::to_string)
             .or_else(|| self.user.clone())
+            .or_else(|| Some(DEFAULT_HOST_THEME.to_string()))
             .into_iter()
             .collect();
         while let Some(name) = todo.pop() {
@@ -1001,6 +1005,19 @@ mod tests {
             icons.unprovided(&["folder.documents", "folder.movies"], &[]),
             ["folder.movies"]
         );
+    }
+
+    #[test]
+    fn with_no_pack_and_no_user_theme_the_host_adwaita_serves_every_mapped_name() {
+        let host = tempfile::tempdir().unwrap();
+        let dir = host.path().join("Adwaita");
+        std::fs::create_dir_all(dir.join("16x16/places")).unwrap();
+        std::fs::write(dir.join("index.theme"), "[Icon Theme]\nName=Adwaita\nDirectories=16x16/places\n\n[16x16/places]\nSize=16\nType=Fixed\n").unwrap();
+        // `folder-download` is the first name of the built-in map for `folder.downloads`
+        image::RgbaImage::from_pixel(16, 16, image::Rgba([40, 0, 0, 255])).save(dir.join("16x16/places/folder-download.png")).unwrap();
+        let mut icons = SystemIcons::with_host(&Assets::builtin(), vec![host.path().to_path_buf()], None);
+        assert_eq!(icons.raster("folder.downloads", 16).pixel(8, 8).unwrap().red(), 40);
+        assert_eq!(icons.unprovided(&["folder.downloads", "folder.movies"], &[]), ["folder.movies"], "only a name the host theme lacks is a placeholder");
     }
 
     #[test]

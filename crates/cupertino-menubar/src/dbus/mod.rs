@@ -59,7 +59,10 @@ pub(crate) fn prop_i32(props: &HashMap<String, OwnedValue>, key: &str) -> Option
 /// Claim a well-known name without replacing or queueing behind another owner.
 pub(crate) async fn claim_name(conn: &zbus::Connection, name: &'static str) -> zbus::Result<()> {
     use zbus::fdo::{RequestNameFlags, RequestNameReply};
-    match conn.request_name_with_flags(name, RequestNameFlags::DoNotQueue.into()).await? {
+    match conn
+        .request_name_with_flags(name, RequestNameFlags::DoNotQueue.into())
+        .await?
+    {
         RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => Ok(()),
         RequestNameReply::Exists | RequestNameReply::InQueue => Err(zbus::Error::NameTaken),
     }

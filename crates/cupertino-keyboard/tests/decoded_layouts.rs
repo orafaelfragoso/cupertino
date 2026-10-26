@@ -8,7 +8,9 @@ use std::process::{Command, Stdio};
 use cupertino_keyboard::{generate, GenOptions, Keyboard, Layout};
 
 fn dir() -> Option<PathBuf> {
-    std::env::var_os("CUPERTINO_LAYOUT_DIR").map(PathBuf::from).filter(|d| d.is_dir())
+    std::env::var_os("CUPERTINO_LAYOUT_DIR")
+        .map(PathBuf::from)
+        .filter(|d| d.is_dir())
 }
 
 fn compiles(keymap: &str) -> Option<bool> {
@@ -27,14 +29,30 @@ fn compiles(keymap: &str) -> Option<bool> {
 #[test]
 fn common_layouts_generate_and_compile() {
     let Some(d) = dir() else { return };
-    for file in ["U_S_0.json", "ABC_252.json", "British_2.json", "German_3.json", "French_1.json", "Spanish_8.json", "Dvorak_16300.json", "Colemak_12825.json"] {
+    for file in [
+        "U_S_0.json",
+        "ABC_252.json",
+        "British_2.json",
+        "German_3.json",
+        "French_1.json",
+        "Spanish_8.json",
+        "Dvorak_16300.json",
+        "Colemak_12825.json",
+    ] {
         let p = d.join(file);
         if !p.exists() {
             continue;
         }
         let layout = Layout::from_json_file(&p).unwrap();
         for kb in [Keyboard::Ansi, Keyboard::Iso] {
-            let out = generate(&layout, &GenOptions { keyboard: kb, ..GenOptions::default() }).unwrap();
+            let out = generate(
+                &layout,
+                &GenOptions {
+                    keyboard: kb,
+                    ..GenOptions::default()
+                },
+            )
+            .unwrap();
             assert!(out.keymap.contains("xkb_symbols"), "{file}");
             assert!(!out.compose.is_empty(), "{file}");
             if let Some(ok) = compiles(&out.keymap) {

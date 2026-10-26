@@ -59,7 +59,13 @@ impl ScrollConsume {
     /// `resolution` is the device's scroll resolution for this axis, counts per inch.
     pub fn new(resolution: f64) -> Self {
         let unit = (2.0 * resolution / 100.0).trunc();
-        Self { unit, threshold: 3.0 * unit, positive: false, lines: 0.0, raw_sum: 0.0 }
+        Self {
+            unit,
+            threshold: 3.0 * unit,
+            positive: false,
+            lines: 0.0,
+            raw_sum: 0.0,
+        }
     }
 
     /// Lines to emit for an event of `raw` counts that the accelerator turned into `lines`: zero
@@ -130,11 +136,19 @@ impl ScrollAxisAccel {
     /// Accelerate one raw `delta` that arrived at `time_ms`. `momentum_dispatch_rate` is the
     /// dispatch rate (Hz) of a momentum event, `None` for a direct one. A zero delta is
     /// returned unchanged and does not enter the history. Panics on a dispatch rate ≤ 0.
-    pub fn accelerate(&mut self, delta: f64, time_ms: f64, momentum_dispatch_rate: Option<f64>) -> f64 {
+    pub fn accelerate(
+        &mut self,
+        delta: f64,
+        time_ms: f64,
+        momentum_dispatch_rate: Option<f64>,
+    ) -> f64 {
         if delta == 0.0 {
             return 0.0;
         }
-        assert!(momentum_dispatch_rate.is_none_or(|r| r > 0.0), "momentum dispatch rate must be positive");
+        assert!(
+            momentum_dispatch_rate.is_none_or(|r| r > 0.0),
+            "momentum dispatch rate must be positive"
+        );
         let m = momentum_dispatch_rate.map_or(1.0, |r| r / MOMENTUM_BASE_RATE_HZ);
         self.accelerate_raw(delta * m, time_ms) / m
     }
@@ -206,10 +220,18 @@ mod tests {
     }
 
     /// Feed `events` of `(delta, time_ms)` and compare against `expected`.
-    fn check(mut a: ScrollAxisAccel, events: &[(f64, f64)], momentum: Option<f64>, expected: &[f64]) {
+    fn check(
+        mut a: ScrollAxisAccel,
+        events: &[(f64, f64)],
+        momentum: Option<f64>,
+        expected: &[f64],
+    ) {
         for (&(d, t), want) in events.iter().zip(expected) {
             let got = a.accelerate(d, t, momentum);
-            assert!((got - want).abs() < 1e-12 * want.abs().max(1.0), "t {t}: {got} vs {want}");
+            assert!(
+                (got - want).abs() < 1e-12 * want.abs().max(1.0),
+                "t {t}: {got} vs {want}"
+            );
         }
     }
 
@@ -227,13 +249,25 @@ mod tests {
             ScrollAxisAccel::new(table(0.3125), 400.0, rate),
             &steady(1.0, 25.0),
             None,
-            &[3.902232390069384e-05, 0.009876582971134433, 0.024758586204527443, 0.03343352371732829, 0.04078254709786619],
+            &[
+                3.902232390069384e-05,
+                0.009876582971134433,
+                0.024758586204527443,
+                0.03343352371732829,
+                0.04078254709786619,
+            ],
         );
         check(
             ScrollAxisAccel::new(table(1.0), 400.0, rate),
             &steady(8.0, 12.0),
             None,
-            &[0.0002955988184088988, 0.20656173430958039, 0.8416231804546546, 1.2141229943101304, 1.529913891932944],
+            &[
+                0.0002955988184088988,
+                0.20656173430958039,
+                0.8416231804546546,
+                1.2141229943101304,
+                1.529913891932944,
+            ],
         );
     }
 
@@ -244,37 +278,74 @@ mod tests {
             ScrollAxisAccel::new(curve(1.0), 400.0, 67.0),
             &steady(4.0, 16.0),
             None,
-            &[0.09229750528657668, 0.12849227114475326, 0.1450069675456642, 0.15410403213877347, 0.15983178999178574],
+            &[
+                0.09229750528657668,
+                0.12849227114475326,
+                0.1450069675456642,
+                0.15410403213877347,
+                0.15983178999178574,
+            ],
         );
         check(
             ScrollAxisAccel::new(curve(0.3125), 400.0, 125.0),
             &steady(2.0, 25.0),
             None,
-            &[0.08288324996594171, 0.08288324996594171, 0.0866276853973835, 0.09010181197555317, 0.09244963007720403],
+            &[
+                0.08288324996594171,
+                0.08288324996594171,
+                0.0866276853973835,
+                0.09010181197555317,
+                0.09244963007720403,
+            ],
         );
     }
 
     #[test]
     fn trackpad_scroll_curves_match_reference_implementation() {
-        let curve = |s| AccelCurve::Parametric(ParametricCurve::new(&TRACKPAD_SCROLL_CURVES, s).unwrap());
-        let trackpad = |s| ScrollAxisAccel::new(curve(s), TRACKPAD_SCROLL_RESOLUTION, DEFAULT_SCROLL_REPORT_RATE_HZ);
+        let curve =
+            |s| AccelCurve::Parametric(ParametricCurve::new(&TRACKPAD_SCROLL_CURVES, s).unwrap());
+        let trackpad = |s| {
+            ScrollAxisAccel::new(
+                curve(s),
+                TRACKPAD_SCROLL_RESOLUTION,
+                DEFAULT_SCROLL_REPORT_RATE_HZ,
+            )
+        };
         check(
             trackpad(0.3125),
             &steady(4.0, 10.0),
             None,
-            &[0.08887067994726819, 0.10800083003165198, 0.11678223450360818, 0.12162381569780409, 0.1246730456809513],
+            &[
+                0.08887067994726819,
+                0.10800083003165198,
+                0.11678223450360818,
+                0.12162381569780409,
+                0.1246730456809513,
+            ],
         );
         check(
             trackpad(0.3125),
             &steady(30.0, 8.0),
             None,
-            &[0.6697329504898516, 1.7655862070282453, 2.270026594958617, 2.548338533127098, 2.7236750541732406],
+            &[
+                0.6697329504898516,
+                1.7655862070282453,
+                2.270026594958617,
+                2.548338533127098,
+                2.7236750541732406,
+            ],
         );
         check(
             trackpad(1.0),
             &steady(12.0, 16.0),
             None,
-            &[0.21870425586362358, 0.9596084640810058, 1.2968116290570155, 1.482332291964435, 1.5990587954431006],
+            &[
+                0.21870425586362358,
+                0.9596084640810058,
+                1.2968116290570155,
+                1.482332291964435,
+                1.5990587954431006,
+            ],
         );
     }
 
@@ -282,7 +353,14 @@ mod tests {
     fn direction_change_and_long_gap_reset_the_history() {
         check(
             ScrollAxisAccel::new(table(1.0), 400.0, DEFAULT_SCROLL_REPORT_RATE_HZ),
-            &[(3.0, 0.0), (3.0, 10.0), (3.0, 20.0), (-3.0, 30.0), (-3.0, 40.0), (-3.0, 600.0)],
+            &[
+                (3.0, 0.0),
+                (3.0, 10.0),
+                (3.0, 20.0),
+                (-3.0, 30.0),
+                (-3.0, 40.0),
+                (-3.0, 600.0),
+            ],
             None,
             &[
                 0.00011084955690333707,
@@ -302,7 +380,12 @@ mod tests {
             ScrollAxisAccel::new(table(1.0), 400.0, DEFAULT_SCROLL_REPORT_RATE_HZ),
             &[(5.0, 0.0), (5.0, 8.0), (5.0, 16.0), (5.0, 24.0)],
             Some(120.0),
-            &[0.00018474926150556176, 0.16513510130671144, 0.5780447101986634, 0.8206805933263328],
+            &[
+                0.00018474926150556176,
+                0.16513510130671144,
+                0.5780447101986634,
+                0.8206805933263328,
+            ],
         );
     }
 
@@ -349,7 +432,11 @@ mod tests {
 
     #[test]
     fn scroll_lines_emits_the_truncated_sum_of_the_accelerated_events() {
-        let mut a = ScrollAxisAccel::new(table(1.0), TRACKPAD_SCROLL_RESOLUTION, DEFAULT_SCROLL_REPORT_RATE_HZ);
+        let mut a = ScrollAxisAccel::new(
+            table(1.0),
+            TRACKPAD_SCROLL_RESOLUTION,
+            DEFAULT_SCROLL_REPORT_RATE_HZ,
+        );
         let mut twin = a.clone();
         let sum = twin.accelerate(1.0, 0.0, None) + twin.accelerate(9.0, 15.0, None);
         assert_eq!(a.scroll_lines(1.0, 0.0), 0.0);

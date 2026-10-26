@@ -18,6 +18,9 @@ mod tests {
 
     #[test]
     fn displays_lower_case_pairs() {
-        assert_eq!(MacAddr([0x02, 0x00, 0x0a, 0xbc, 0xde, 0xf0]).to_string(), "02:00:0a:bc:de:f0");
+        assert_eq!(
+            MacAddr([0x02, 0x00, 0x0a, 0xbc, 0xde, 0xf0]).to_string(),
+            "02:00:0a:bc:de:f0"
+        );
     }
 }

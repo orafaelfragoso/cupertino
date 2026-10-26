@@ -18,14 +18,17 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::binding_table::STANDARD;
 pub use crate::binding_table::TextAction;
+use crate::binding_table::STANDARD;
 use crate::keys::{Chord, ChordError};
 
 impl TextAction {
     /// Looks an action up by its (case-insensitive) name.
     pub fn from_name(name: &str) -> Option<TextAction> {
-        TextAction::ALL.iter().copied().find(|a| a.name().eq_ignore_ascii_case(name))
+        TextAction::ALL
+            .iter()
+            .copied()
+            .find(|a| a.name().eq_ignore_ascii_case(name))
     }
 }
 
@@ -81,7 +84,9 @@ impl BindingTable {
     }
 
     fn has_longer(&self, prefix: &[Chord]) -> bool {
-        self.map.keys().any(|k| k.len() > prefix.len() && k.starts_with(prefix))
+        self.map
+            .keys()
+            .any(|k| k.len() > prefix.len() && k.starts_with(prefix))
     }
 
     /// Applies override text; returns the problems found.
@@ -93,7 +98,10 @@ impl BindingTable {
                 continue;
             }
             let Some((lhs, rhs)) = line.split_once('=') else {
-                errs.push(OverrideError { line: i + 1, message: "expected 'chord = action'".into() });
+                errs.push(OverrideError {
+                    line: i + 1,
+                    message: "expected 'chord = action'".into(),
+                });
                 continue;
             };
             let mut seq = Vec::new();
@@ -102,7 +110,10 @@ impl BindingTable {
                 match Chord::parse(tok) {
                     Ok(c) => seq.push(c),
                     Err(e) => {
-                        errs.push(OverrideError { line: i + 1, message: describe(&e) });
+                        errs.push(OverrideError {
+                            line: i + 1,
+                            message: describe(&e),
+                        });
                         bad = true;
                         break;
                     }
@@ -112,7 +123,10 @@ impl BindingTable {
                 continue;
             }
             if seq.is_empty() {
-                errs.push(OverrideError { line: i + 1, message: "empty chord".into() });
+                errs.push(OverrideError {
+                    line: i + 1,
+                    message: "empty chord".into(),
+                });
                 continue;
             }
             let rhs = rhs.trim();
@@ -125,7 +139,10 @@ impl BindingTable {
                 match TextAction::from_name(a.trim()) {
                     Some(x) => acts.push(x),
                     None => {
-                        errs.push(OverrideError { line: i + 1, message: format!("unknown action '{}'", a.trim()) });
+                        errs.push(OverrideError {
+                            line: i + 1,
+                            message: format!("unknown action '{}'", a.trim()),
+                        });
                         bad = true;
                         break;
                     }
@@ -155,7 +172,9 @@ impl BindingTable {
     /// Standard table plus the user file when present.
     pub fn load_default() -> (BindingTable, Vec<OverrideError>) {
         let mut t = BindingTable::standard();
-        let errs = Self::default_user_path().and_then(|p| t.load_user_file(&p).ok()).unwrap_or_default();
+        let errs = Self::default_user_path()
+            .and_then(|p| t.load_user_file(&p).ok())
+            .unwrap_or_default();
         (t, errs)
     }
 }
@@ -184,7 +203,10 @@ pub struct Resolver {
 
 impl Resolver {
     pub fn new(table: BindingTable) -> Resolver {
-        Resolver { table, pending: Vec::new() }
+        Resolver {
+            table,
+            pending: Vec::new(),
+        }
     }
 
     pub fn table(&self) -> &BindingTable {
@@ -234,14 +256,38 @@ mod tests {
     fn standard_table_rows() {
         let t = BindingTable::standard();
         assert!(t.len() >= 100);
-        assert_eq!(t.get(&[c("Ctrl+A")]), Some(&[TextAction::MoveToBeginningOfParagraph][..]));
-        assert_eq!(t.get(&[c("Ctrl+Shift+A")]), Some(&[TextAction::MoveToBeginningOfParagraphAndModifySelection][..]));
-        assert_eq!(t.get(&[c("Alt+Left")]), Some(&[TextAction::MoveWordLeft][..]));
-        assert_eq!(t.get(&[c("Primary+Left")]), Some(&[TextAction::MoveToLeftEndOfLine][..]));
-        assert_eq!(t.get(&[c("Primary+Shift+Up")]), Some(&[TextAction::MoveToBeginningOfDocumentAndModifySelection][..]));
-        assert_eq!(t.get(&[c("Alt+Backspace")]), Some(&[TextAction::DeleteWordBackward][..]));
-        assert_eq!(t.get(&[c("Primary+Backspace")]), Some(&[TextAction::DeleteToBeginningOfLine][..]));
-        assert_eq!(t.get(&[c("Ctrl+K")]), Some(&[TextAction::DeleteToEndOfParagraph][..]));
+        assert_eq!(
+            t.get(&[c("Ctrl+A")]),
+            Some(&[TextAction::MoveToBeginningOfParagraph][..])
+        );
+        assert_eq!(
+            t.get(&[c("Ctrl+Shift+A")]),
+            Some(&[TextAction::MoveToBeginningOfParagraphAndModifySelection][..])
+        );
+        assert_eq!(
+            t.get(&[c("Alt+Left")]),
+            Some(&[TextAction::MoveWordLeft][..])
+        );
+        assert_eq!(
+            t.get(&[c("Primary+Left")]),
+            Some(&[TextAction::MoveToLeftEndOfLine][..])
+        );
+        assert_eq!(
+            t.get(&[c("Primary+Shift+Up")]),
+            Some(&[TextAction::MoveToBeginningOfDocumentAndModifySelection][..])
+        );
+        assert_eq!(
+            t.get(&[c("Alt+Backspace")]),
+            Some(&[TextAction::DeleteWordBackward][..])
+        );
+        assert_eq!(
+            t.get(&[c("Primary+Backspace")]),
+            Some(&[TextAction::DeleteToBeginningOfLine][..])
+        );
+        assert_eq!(
+            t.get(&[c("Ctrl+K")]),
+            Some(&[TextAction::DeleteToEndOfParagraph][..])
+        );
         assert_eq!(t.get(&[c("Ctrl+Y")]), Some(&[TextAction::Yank][..]));
         assert_eq!(t.get(&[c("Ctrl+T")]), Some(&[TextAction::Transpose][..]));
     }
@@ -249,17 +295,42 @@ mod tests {
     #[test]
     fn multi_action_rows() {
         let t = BindingTable::standard();
-        assert_eq!(t.get(&[c("Alt+Up")]), Some(&[TextAction::MoveBackward, TextAction::MoveToBeginningOfParagraph][..]));
-        assert_eq!(t.get(&[c("Ctrl+O")]), Some(&[TextAction::InsertNewlineIgnoringFieldEditor, TextAction::MoveBackward][..]));
+        assert_eq!(
+            t.get(&[c("Alt+Up")]),
+            Some(
+                &[
+                    TextAction::MoveBackward,
+                    TextAction::MoveToBeginningOfParagraph
+                ][..]
+            )
+        );
+        assert_eq!(
+            t.get(&[c("Ctrl+O")]),
+            Some(
+                &[
+                    TextAction::InsertNewlineIgnoringFieldEditor,
+                    TextAction::MoveBackward
+                ][..]
+            )
+        );
     }
 
     #[test]
     fn plain_arrows_and_page_keys() {
         let t = BindingTable::standard();
         assert_eq!(t.get(&[c("Left")]), Some(&[TextAction::MoveLeft][..]));
-        assert_eq!(t.get(&[c("Shift+Left")]), Some(&[TextAction::MoveLeftAndModifySelection][..]));
-        assert_eq!(t.get(&[c("PageDown")]), Some(&[TextAction::ScrollPageDown][..]));
-        assert_eq!(t.get(&[c("Delete")]), Some(&[TextAction::DeleteForward][..]));
+        assert_eq!(
+            t.get(&[c("Shift+Left")]),
+            Some(&[TextAction::MoveLeftAndModifySelection][..])
+        );
+        assert_eq!(
+            t.get(&[c("PageDown")]),
+            Some(&[TextAction::ScrollPageDown][..])
+        );
+        assert_eq!(
+            t.get(&[c("Delete")]),
+            Some(&[TextAction::DeleteForward][..])
+        );
     }
 
     #[test]
@@ -268,9 +339,15 @@ mod tests {
         let errs = t.apply_overrides(
             "# test\nCtrl+K = DeleteToBeginningOfLine\nCtrl+Y = unbind\nAlt+Left = MoveWordLeft, MoveLeft\nbogus line\nCtrl+Q = NoSuchAction\nHyper+A = Noop\n",
         );
-        assert_eq!(t.get(&[c("Ctrl+K")]), Some(&[TextAction::DeleteToBeginningOfLine][..]));
+        assert_eq!(
+            t.get(&[c("Ctrl+K")]),
+            Some(&[TextAction::DeleteToBeginningOfLine][..])
+        );
         assert_eq!(t.get(&[c("Ctrl+Y")]), None);
-        assert_eq!(t.get(&[c("Alt+Left")]), Some(&[TextAction::MoveWordLeft, TextAction::MoveLeft][..]));
+        assert_eq!(
+            t.get(&[c("Alt+Left")]),
+            Some(&[TextAction::MoveWordLeft, TextAction::MoveLeft][..])
+        );
         assert_eq!(errs.len(), 3);
         assert_eq!(errs[0].line, 5);
     }
@@ -282,9 +359,15 @@ mod tests {
         let mut r = Resolver::new(t);
         assert_eq!(r.feed(c("Ctrl+X")), Resolution::Pending);
         assert!(r.is_pending());
-        assert_eq!(r.feed(c("Ctrl+K")), Resolution::Actions(vec![TextAction::DeleteToBeginningOfLine]));
+        assert_eq!(
+            r.feed(c("Ctrl+K")),
+            Resolution::Actions(vec![TextAction::DeleteToBeginningOfLine])
+        );
         assert_eq!(r.feed(c("Ctrl+X")), Resolution::Pending);
-        assert_eq!(r.feed(c("Ctrl+B")), Resolution::Actions(vec![TextAction::MoveBackward]));
+        assert_eq!(
+            r.feed(c("Ctrl+B")),
+            Resolution::Actions(vec![TextAction::MoveBackward])
+        );
         assert_eq!(r.feed(c("A")), Resolution::NoMatch);
     }
 
@@ -303,7 +386,10 @@ mod tests {
         std::fs::write(&p, "Ctrl+J = InsertNewline\n").unwrap();
         let mut t = BindingTable::standard();
         assert!(t.load_user_file(&p).unwrap().is_empty());
-        assert_eq!(t.get(&[c("Ctrl+J")]), Some(&[TextAction::InsertNewline][..]));
+        assert_eq!(
+            t.get(&[c("Ctrl+J")]),
+            Some(&[TextAction::InsertNewline][..])
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

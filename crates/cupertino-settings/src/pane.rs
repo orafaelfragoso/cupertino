@@ -61,33 +61,188 @@ pub struct Pane {
     pub words: &'static [&'static str],
 }
 
-const fn pane(id: PaneId, title: &'static str, symbol: &'static str, enclosure: Enclosure, tier: Tier, sections: &'static [&'static str], words: &'static [&'static str]) -> Pane {
-    Pane { id, title, symbol, enclosure, tier, sections, words }
+const fn pane(
+    id: PaneId,
+    title: &'static str,
+    symbol: &'static str,
+    enclosure: Enclosure,
+    tier: Tier,
+    sections: &'static [&'static str],
+    words: &'static [&'static str],
+) -> Pane {
+    Pane {
+        id,
+        title,
+        symbol,
+        enclosure,
+        tier,
+        sections,
+        words,
+    }
 }
 
 /// Every pane of the minimum set.
 pub const PANES: [Pane; 15] = [
-    pane(PaneId::Wifi, "Wi-Fi", "symbol.wifi", Enclosure::Blue, Tier::Live, &["Known Networks", "Other Networks"], &["wireless", "internet", "join", "password", "hotspot"]),
-    pane(PaneId::Bluetooth, "Bluetooth", "symbol.bluetooth", Enclosure::Blue, Tier::Live, &["My Devices", "Nearby Devices"], &["pair", "wireless", "headphones", "connect"]),
-    pane(PaneId::Network, "Network", "symbol.network", Enclosure::Blue, Tier::Live, &["Devices"], &["ethernet", "connection", "address", "interface"]),
-    pane(PaneId::Battery, "Battery", "symbol.battery", Enclosure::Green, Tier::Live, &["Battery Level", "System Sleep"], &["power", "charge", "energy", "adapter"]),
-    pane(PaneId::Accessibility, "Accessibility", "symbol.accessibility", Enclosure::Blue, Tier::Live, &["Display", "Pointer", "Keyboard"], &["reduce motion", "transparency", "contrast", "colour filter", "cursor", "sticky keys", "slow keys", "mouse keys"]),
-    pane(PaneId::Appearance, "Appearance", "symbol.appearance", Enclosure::Black, Tier::Live, &["Appearance"], &["dark", "light", "mode", "theme"]),
-    pane(PaneId::ControlPanel, "Control Panel", "symbol.control-panel", Enclosure::Gray, Tier::Live, &["Clock Options"], &["clock", "date", "time", "seconds", "menu bar", "24-hour"]),
-    pane(PaneId::DesktopDock, "Desktop & Dock", "symbol.desktop", Enclosure::Black, Tier::Live, &["Dock", "Hot Corners"], &["size", "magnification", "position", "minimize", "hide", "recent applications"]),
-    pane(PaneId::Displays, "Displays", "symbol.sun", Enclosure::Blue, Tier::Live, &["Resolution", "Brightness"], &["refresh rate", "rotation", "scale", "monitor"]),
-    pane(PaneId::Sound, "Sound", "symbol.speaker.high", Enclosure::Pink, Tier::Live, &["Output"], &["volume", "mute", "speakers", "audio"]),
-    pane(PaneId::Focus, "Focus", "symbol.moon.fill", Enclosure::Indigo, Tier::Live, &["Do Not Disturb"], &["notifications", "silence", "quiet"]),
-    pane(PaneId::LockScreen, "Lock Screen", "symbol.lock-screen", Enclosure::Black, Tier::File, &["Display Sleep", "Password"], &["lock", "inactive", "screen off"]),
-    pane(PaneId::Keyboard, "Keyboard", "symbol.keyboard", Enclosure::Gray, Tier::Live, &["Key Repeat", "Modifier Keys", "Function Key"], &["repeat rate", "delay", "caps lock", "fn", "accents"]),
-    pane(PaneId::Mouse, "Mouse", "symbol.mouse", Enclosure::Gray, Tier::Live, &["Tracking", "Scrolling"], &["speed", "acceleration", "natural scrolling", "pointer"]),
-    pane(PaneId::Trackpad, "Trackpad", "symbol.trackpad", Enclosure::Gray, Tier::Live, &["Tracking", "Scrolling"], &["speed", "natural scrolling", "touchpad"]),
+    pane(
+        PaneId::Wifi,
+        "Wi-Fi",
+        "symbol.wifi",
+        Enclosure::Blue,
+        Tier::Live,
+        &["Known Networks", "Other Networks"],
+        &["wireless", "internet", "join", "password", "hotspot"],
+    ),
+    pane(
+        PaneId::Bluetooth,
+        "Bluetooth",
+        "symbol.bluetooth",
+        Enclosure::Blue,
+        Tier::Live,
+        &["My Devices", "Nearby Devices"],
+        &["pair", "wireless", "headphones", "connect"],
+    ),
+    pane(
+        PaneId::Network,
+        "Network",
+        "symbol.network",
+        Enclosure::Blue,
+        Tier::Live,
+        &["Devices"],
+        &["ethernet", "connection", "address", "interface"],
+    ),
+    pane(
+        PaneId::Battery,
+        "Battery",
+        "symbol.battery",
+        Enclosure::Green,
+        Tier::Live,
+        &["Battery Level", "System Sleep"],
+        &["power", "charge", "energy", "adapter"],
+    ),
+    pane(
+        PaneId::Accessibility,
+        "Accessibility",
+        "symbol.accessibility",
+        Enclosure::Blue,
+        Tier::Live,
+        &["Display", "Pointer", "Keyboard"],
+        &[
+            "reduce motion",
+            "transparency",
+            "contrast",
+            "colour filter",
+            "cursor",
+            "sticky keys",
+            "slow keys",
+            "mouse keys",
+        ],
+    ),
+    pane(
+        PaneId::Appearance,
+        "Appearance",
+        "symbol.appearance",
+        Enclosure::Black,
+        Tier::Live,
+        &["Appearance"],
+        &["dark", "light", "mode", "theme"],
+    ),
+    pane(
+        PaneId::ControlPanel,
+        "Control Panel",
+        "symbol.control-panel",
+        Enclosure::Gray,
+        Tier::Live,
+        &["Clock Options"],
+        &["clock", "date", "time", "seconds", "menu bar", "24-hour"],
+    ),
+    pane(
+        PaneId::DesktopDock,
+        "Desktop & Dock",
+        "symbol.desktop",
+        Enclosure::Black,
+        Tier::Live,
+        &["Dock", "Hot Corners"],
+        &[
+            "size",
+            "magnification",
+            "position",
+            "minimize",
+            "hide",
+            "recent applications",
+        ],
+    ),
+    pane(
+        PaneId::Displays,
+        "Displays",
+        "symbol.sun",
+        Enclosure::Blue,
+        Tier::Live,
+        &["Resolution", "Brightness"],
+        &["refresh rate", "rotation", "scale", "monitor"],
+    ),
+    pane(
+        PaneId::Sound,
+        "Sound",
+        "symbol.speaker.high",
+        Enclosure::Pink,
+        Tier::Live,
+        &["Output"],
+        &["volume", "mute", "speakers", "audio"],
+    ),
+    pane(
+        PaneId::Focus,
+        "Focus",
+        "symbol.moon.fill",
+        Enclosure::Indigo,
+        Tier::Live,
+        &["Do Not Disturb"],
+        &["notifications", "silence", "quiet"],
+    ),
+    pane(
+        PaneId::LockScreen,
+        "Lock Screen",
+        "symbol.lock-screen",
+        Enclosure::Black,
+        Tier::File,
+        &["Display Sleep", "Password"],
+        &["lock", "inactive", "screen off"],
+    ),
+    pane(
+        PaneId::Keyboard,
+        "Keyboard",
+        "symbol.keyboard",
+        Enclosure::Gray,
+        Tier::Live,
+        &["Key Repeat", "Modifier Keys", "Function Key"],
+        &["repeat rate", "delay", "caps lock", "fn", "accents"],
+    ),
+    pane(
+        PaneId::Mouse,
+        "Mouse",
+        "symbol.mouse",
+        Enclosure::Gray,
+        Tier::Live,
+        &["Tracking", "Scrolling"],
+        &["speed", "acceleration", "natural scrolling", "pointer"],
+    ),
+    pane(
+        PaneId::Trackpad,
+        "Trackpad",
+        "symbol.trackpad",
+        Enclosure::Gray,
+        Tier::Live,
+        &["Tracking", "Scrolling"],
+        &["speed", "natural scrolling", "touchpad"],
+    ),
 ];
 
 impl PaneId {
     /// The pane with this id: every id has one.
     pub fn pane(self) -> &'static Pane {
-        PANES.iter().find(|p| p.id == self).expect("every pane id is in PANES")
+        PANES
+            .iter()
+            .find(|p| p.id == self)
+            .expect("every pane id is in PANES")
     }
 
     /// The title the window shows: the Battery row is "Energy Saver" on a machine without a battery
@@ -138,13 +293,29 @@ mod tests {
     #[test]
     fn every_pane_has_one_entry_and_a_round_tripping_key() {
         for p in &PANES {
-            assert_eq!(PANES.iter().filter(|q| q.id == p.id).count(), 1, "{:?}", p.id);
+            assert_eq!(
+                PANES.iter().filter(|q| q.id == p.id).count(),
+                1,
+                "{:?}",
+                p.id
+            );
             assert_eq!(PaneId::from_key(p.id.key()), Some(p.id));
             assert!(p.symbol.starts_with("symbol."), "{}", p.symbol);
             assert!(!p.sections.is_empty(), "{} has a findable section", p.title);
         }
-        assert_eq!(PaneId::from_key("general"), None, "a reference pane with no backend is not a pane");
+        assert_eq!(
+            PaneId::from_key("general"),
+            None,
+            "a reference pane with no backend is not a pane"
+        );
         assert_eq!(PaneId::Keyboard.pane().title, "Keyboard");
-        assert_eq!((PaneId::Battery.title(Some(false)), PaneId::Battery.title(Some(true)), PaneId::Battery.title(None)), ("Energy Saver", "Battery", "Battery"));
+        assert_eq!(
+            (
+                PaneId::Battery.title(Some(false)),
+                PaneId::Battery.title(Some(true)),
+                PaneId::Battery.title(None)
+            ),
+            ("Energy Saver", "Battery", "Battery")
+        );
     }
 }

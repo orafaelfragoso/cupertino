@@ -99,11 +99,23 @@ pub struct Capturer {
 }
 
 /// Bind a global the capture needs; the server offers them all to the screenshot process.
-fn bind<I: Proxy + 'static>(globals: &GlobalList, qh: &QueueHandle<State>, version: u32) -> Result<I>
+fn bind<I: Proxy + 'static>(
+    globals: &GlobalList,
+    qh: &QueueHandle<State>,
+    version: u32,
+) -> Result<I>
 where
     State: Dispatch<I, ()>,
 {
-    globals.bind::<I, State, ()>(qh, version..=version, ()).map_err(|e| format!("binding {}: {e} (was the process started by the server?)", I::interface().name).into())
+    globals
+        .bind::<I, State, ()>(qh, version..=version, ())
+        .map_err(|e| {
+            format!(
+                "binding {}: {e} (was the process started by the server?)",
+                I::interface().name
+            )
+            .into()
+        })
 }
 
 impl Capturer {
@@ -130,7 +142,11 @@ impl Capturer {
             clipboard_cancelled: false,
             clipboard_error: None,
         };
-        let mut capturer = Self { globals, queue, state };
+        let mut capturer = Self {
+            globals,
+            queue,
+            state,
+        };
         capturer.queue.roundtrip(&mut capturer.state)?;
         Ok(capturer)
     }
@@ -149,7 +165,15 @@ impl Capturer {
     /// Copy the output `output` (its mode size in pixels).
     pub fn output(&mut self, output: OutputId, pointer: bool) -> Result<Pixmap> {
         let name = output.registry_name();
-        let version = self.globals.contents().with_list(|list| list.iter().find(|g| g.name == name && g.interface == "wl_output").map(|g| g.version)).ok_or("the output went away")?;
+        let version = self
+            .globals
+            .contents()
+            .with_list(|list| {
+                list.iter()
+                    .find(|g| g.name == name && g.interface == "wl_output")
+                    .map(|g| g.version)
+            })
+            .ok_or("the output went away")?;
         let qh = self.queue.handle();
         let wl_output: WlOutput = self.globals.registry().bind(name, version.min(4), &qh, ());
         let source = self.state.output_sources.create_source(&wl_output, &qh, ());
@@ -182,7 +206,11 @@ impl Capturer {
         let qh = self.queue.handle();
         self.state.constraints = Constraints::default();
         self.state.frame = None;
-        let options = if pointer { Options::PaintCursors } else { Options::empty() };
+        let options = if pointer {
+            Options::PaintCursors
+        } else {
+            Options::empty()
+        };
         let session = self.state.copy.create_session(source, options, &qh, ());
         while !self.state.constraints.done && !self.state.constraints.stopped {
             self.queue.blocking_dispatch(&mut self.state)?;
@@ -191,11 +219,25 @@ impl Capturer {
             session.destroy();
             return Err("the server stopped the capture (the output or window went away)".into());
         }
-        let (width, height) = self.state.constraints.size.ok_or("the capture announced no buffer size")?;
+        let (width, height) = self
+            .state
+            .constraints
+            .size
+            .ok_or("the capture announced no buffer size")?;
         // a toplevel keeps its transparent corners with alpha; an output is opaque either way
-        let (format, wl_format) = if self.state.constraints.formats.contains(&wl_shm::Format::Argb8888) {
+        let (format, wl_format) = if self
+            .state
+            .constraints
+            .formats
+            .contains(&wl_shm::Format::Argb8888)
+        {
             (Format::Argb8888, wl_shm::Format::Argb8888)
-        } else if self.state.constraints.formats.contains(&wl_shm::Format::Xrgb8888) {
+        } else if self
+            .state
+            .constraints
+            .formats
+            .contains(&wl_shm::Format::Xrgb8888)
+        {
             (Format::Xrgb8888, wl_shm::Format::Xrgb8888)
         } else {
             session.destroy();
@@ -206,8 +248,19 @@ impl Capturer {
         let fd: OwnedFd = memfd_create("cupertino-screenshot", MemfdFlags::CLOEXEC)?;
         let file = File::from(fd);
         file.set_len(len as u64)?;
-        let pool = self.state.shm.create_pool(file.as_fd(), len as i32, &qh, ());
-        let buffer = pool.create_buffer(0, width as i32, height as i32, stride as i32, wl_format, &qh, ());
+        let pool = self
+            .state
+            .shm
+            .create_pool(file.as_fd(), len as i32, &qh, ());
+        let buffer = pool.create_buffer(
+            0,
+            width as i32,
+            height as i32,
+            stride as i32,
+            wl_format,
+            &qh,
+            (),
+        );
         let frame = session.create_frame(&qh, ());
         frame.attach_buffer(&buffer);
         frame.damage_buffer(0, 0, width as i32, height as i32);
@@ -227,7 +280,8 @@ impl Capturer {
         }
         // SAFETY: the memfd is private to this process and the server, which wrote the frame before `ready`.
         let map = unsafe { Mmap::map(&file) }?;
-        image::from_shm(width, height, stride, &map, format).ok_or_else(|| format!("the {width} x {height} buffer does not hold its image").into())
+        image::from_shm(width, height, stride, &map, format)
+            .ok_or_else(|| format!("the {width} x {height} buffer does not hold its image").into())
     }
 
     /// Offer `png` as the clipboard selection. The server accepts it only while a surface of this connection has the
@@ -236,7 +290,10 @@ impl Capturer {
         let qh = self.queue.handle();
         let source = self.state.data_devices.create_data_source(&qh, ());
         source.offer(PNG_MIME.into());
-        let device = self.state.data_devices.get_data_device(&self.state.seat, &qh, ());
+        let device = self
+            .state
+            .data_devices
+            .get_data_device(&self.state.seat, &qh, ());
         device.set_selection(Some(&source), serial);
         self.state.clipboard = Some(png);
         self.queue.roundtrip(&mut self.state)?;
@@ -257,7 +314,14 @@ impl Capturer {
 }
 
 impl Dispatch<WlRegistry, GlobalListContents> for State {
-    fn event(_: &mut Self, _: &WlRegistry, _: wayland_client::protocol::wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        _: &mut Self,
+        _: &WlRegistry,
+        _: wayland_client::protocol::wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         // outputs are looked up in the global list when they are captured
     }
 }
@@ -275,11 +339,22 @@ delegate_noop!(State: ExtImageCaptureSourceV1);
 delegate_noop!(State: ExtImageCopyCaptureManagerV1);
 
 impl Dispatch<ExtImageCopyCaptureSessionV1, ()> for State {
-    fn event(state: &mut Self, _: &ExtImageCopyCaptureSessionV1, event: ext_image_copy_capture_session_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        _: &ExtImageCopyCaptureSessionV1,
+        event: ext_image_copy_capture_session_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         let c = &mut state.constraints;
         match event {
-            ext_image_copy_capture_session_v1::Event::BufferSize { width, height } => c.size = Some((width, height)),
-            ext_image_copy_capture_session_v1::Event::ShmFormat { format: WEnum::Value(format) } => c.formats.push(format),
+            ext_image_copy_capture_session_v1::Event::BufferSize { width, height } => {
+                c.size = Some((width, height))
+            }
+            ext_image_copy_capture_session_v1::Event::ShmFormat {
+                format: WEnum::Value(format),
+            } => c.formats.push(format),
             ext_image_copy_capture_session_v1::Event::Done => c.done = true,
             ext_image_copy_capture_session_v1::Event::Stopped => c.stopped = true,
             // unknown shm formats and dma-buf constraints are not used
@@ -289,10 +364,19 @@ impl Dispatch<ExtImageCopyCaptureSessionV1, ()> for State {
 }
 
 impl Dispatch<ExtImageCopyCaptureFrameV1, ()> for State {
-    fn event(state: &mut Self, _: &ExtImageCopyCaptureFrameV1, event: ext_image_copy_capture_frame_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        _: &ExtImageCopyCaptureFrameV1,
+        event: ext_image_copy_capture_frame_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         match event {
             ext_image_copy_capture_frame_v1::Event::Ready => state.frame = Some(FrameEnd::Ready),
-            ext_image_copy_capture_frame_v1::Event::Failed { reason } => state.frame = Some(FrameEnd::Failed(format!("{reason:?}"))),
+            ext_image_copy_capture_frame_v1::Event::Failed { reason } => {
+                state.frame = Some(FrameEnd::Failed(format!("{reason:?}")))
+            }
             // the whole buffer is read, whatever the damage; transform and timing are not used
             _ => {}
         }
@@ -300,7 +384,14 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, ()> for State {
 }
 
 impl Dispatch<ExtForeignToplevelListV1, ()> for State {
-    fn event(state: &mut Self, _: &ExtForeignToplevelListV1, event: ext_foreign_toplevel_list_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        _: &ExtForeignToplevelListV1,
+        event: ext_foreign_toplevel_list_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         if let ext_foreign_toplevel_list_v1::Event::Toplevel { toplevel } = event {
             state.toplevels.push((toplevel, Toplevel::default()));
         }
@@ -312,10 +403,21 @@ impl Dispatch<ExtForeignToplevelListV1, ()> for State {
 }
 
 impl Dispatch<ExtForeignToplevelHandleV1, ()> for State {
-    fn event(state: &mut Self, handle: &ExtForeignToplevelHandleV1, event: ext_foreign_toplevel_handle_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
-        let Some(index) = state.toplevels.iter().position(|(h, _)| h == handle) else { return };
+    fn event(
+        state: &mut Self,
+        handle: &ExtForeignToplevelHandleV1,
+        event: ext_foreign_toplevel_handle_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let Some(index) = state.toplevels.iter().position(|(h, _)| h == handle) else {
+            return;
+        };
         match event {
-            ext_foreign_toplevel_handle_v1::Event::Identifier { identifier } => state.toplevels[index].1.identifier = Some(identifier),
+            ext_foreign_toplevel_handle_v1::Event::Identifier { identifier } => {
+                state.toplevels[index].1.identifier = Some(identifier)
+            }
             ext_foreign_toplevel_handle_v1::Event::Closed => {
                 state.toplevels.remove(index).0.destroy();
             }
@@ -326,10 +428,31 @@ impl Dispatch<ExtForeignToplevelHandleV1, ()> for State {
 }
 
 impl Dispatch<CupertinoScreenshotV1, ()> for State {
-    fn event(state: &mut Self, _: &CupertinoScreenshotV1, event: cupertino_screenshot_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        _: &CupertinoScreenshotV1,
+        event: cupertino_screenshot_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         match event {
-            cupertino_screenshot_v1::Event::Window { identifier, x, y, width, height } => {
-                state.feed_pending.push(PickWindow { identifier, frame: Rect::new(f64::from(x), f64::from(y), f64::from(width), f64::from(height)) });
+            cupertino_screenshot_v1::Event::Window {
+                identifier,
+                x,
+                y,
+                width,
+                height,
+            } => {
+                state.feed_pending.push(PickWindow {
+                    identifier,
+                    frame: Rect::new(
+                        f64::from(x),
+                        f64::from(y),
+                        f64::from(width),
+                        f64::from(height),
+                    ),
+                });
             }
             cupertino_screenshot_v1::Event::Done => {
                 state.windows = std::mem::take(&mut state.feed_pending);
@@ -341,7 +464,14 @@ impl Dispatch<CupertinoScreenshotV1, ()> for State {
 }
 
 impl Dispatch<WlDataDevice, ()> for State {
-    fn event(_: &mut Self, _: &WlDataDevice, _: wl_data_device::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        _: &mut Self,
+        _: &WlDataDevice,
+        _: wl_data_device::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         // offers of other clients are not read; their objects are destroyed with the connection
     }
 
@@ -351,14 +481,25 @@ impl Dispatch<WlDataDevice, ()> for State {
 }
 
 impl Dispatch<WlDataSource, ()> for State {
-    fn event(state: &mut Self, source: &WlDataSource, event: wl_data_source::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        source: &WlDataSource,
+        event: wl_data_source::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         match event {
             wl_data_source::Event::Send { mime_type, fd } => {
-                let Some(png) = state.clipboard.as_ref().filter(|_| mime_type == PNG_MIME) else { return };
+                let Some(png) = state.clipboard.as_ref().filter(|_| mime_type == PNG_MIME) else {
+                    return;
+                };
                 // the pasting client reads until the descriptor closes, which dropping the file does
                 let mut file = File::from(fd);
                 if let Err(e) = file.write_all(png) {
-                    state.clipboard_error = Some(format!("writing the screenshot to a pasting client failed: {e}"));
+                    state.clipboard_error = Some(format!(
+                        "writing the screenshot to a pasting client failed: {e}"
+                    ));
                 }
             }
             wl_data_source::Event::Cancelled => {

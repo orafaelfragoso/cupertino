@@ -26,9 +26,16 @@ pub enum UsersError {
     /// The password database cannot be searched.
     Database(io::Error),
     /// A file the list is read from cannot be read.
-    File { path: &'static str, source: io::Error },
+    File {
+        path: &'static str,
+        source: io::Error,
+    },
     /// A line of one of those files is not in the format the list needs.
-    Malformed { path: &'static str, line: usize, reason: &'static str },
+    Malformed {
+        path: &'static str,
+        line: usize,
+        reason: &'static str,
+    },
 }
 
 impl fmt::Display for UsersError {
@@ -59,7 +66,11 @@ impl Account {
     /// The full name from the comment field, else the account name.
     pub fn display_name(&self) -> String {
         let full_name = self.gecos.split(',').next().unwrap_or("").trim();
-        if full_name.is_empty() { self.login.clone() } else { full_name.to_owned() }
+        if full_name.is_empty() {
+            self.login.clone()
+        } else {
+            full_name.to_owned()
+        }
     }
 }
 
@@ -88,15 +99,27 @@ fn read(path: &'static str) -> Result<String, UsersError> {
 /// The account named `login`, from the password database (so also a directory service's); `None` when there is none or the
 /// text is not a name the database can hold (it has a nul byte).
 pub fn by_name(login: &str) -> Result<Option<Account>, UsersError> {
-    let Ok(name) = CString::new(login) else { return Ok(None) };
+    let Ok(name) = CString::new(login) else {
+        return Ok(None);
+    };
     // Safety: `getpwnam_r` gets valid pointers, and the buffer length it is given.
-    read_entry(|passwd, buffer, found| unsafe { libc::getpwnam_r(name.as_ptr(), passwd, buffer.as_mut_ptr().cast(), buffer.len(), found) })
+    read_entry(|passwd, buffer, found| unsafe {
+        libc::getpwnam_r(
+            name.as_ptr(),
+            passwd,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            found,
+        )
+    })
 }
 
 /// The account with user id `uid`.
 pub fn by_uid(uid: u32) -> Result<Option<Account>, UsersError> {
     // Safety: as for `by_name`.
-    read_entry(|passwd, buffer, found| unsafe { libc::getpwuid_r(uid, passwd, buffer.as_mut_ptr().cast(), buffer.len(), found) })
+    read_entry(|passwd, buffer, found| unsafe {
+        libc::getpwuid_r(uid, passwd, buffer.as_mut_ptr().cast(), buffer.len(), found)
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,11 +130,24 @@ struct UidRange {
 
 /// `UID_MIN` and `UID_MAX` from the text of `login.defs`: lines of a name and a value, `#` starts a comment.
 fn parse_uid_range(login_defs: &str) -> Result<UidRange, UsersError> {
-    let mut range = UidRange { min: DEFAULT_UID_MIN, max: DEFAULT_UID_MAX };
+    let mut range = UidRange {
+        min: DEFAULT_UID_MIN,
+        max: DEFAULT_UID_MAX,
+    };
     for (number, line) in login_defs.lines().enumerate() {
-        let mut words = line.split_once('#').map_or(line, |(before, _)| before).split_whitespace();
-        let (Some(name @ ("UID_MIN" | "UID_MAX")), Some(value)) = (words.next(), words.next()) else { continue };
-        let value = value.parse().map_err(|_| UsersError::Malformed { path: LOGIN_DEFS, line: number + 1, reason: "not a user id" })?;
+        let mut words = line
+            .split_once('#')
+            .map_or(line, |(before, _)| before)
+            .split_whitespace();
+        let (Some(name @ ("UID_MIN" | "UID_MAX")), Some(value)) = (words.next(), words.next())
+        else {
+            continue;
+        };
+        let value = value.parse().map_err(|_| UsersError::Malformed {
+            path: LOGIN_DEFS,
+            line: number + 1,
+            reason: "not a user id",
+        })?;
         if name == "UID_MIN" {
             range.min = value;
         } else {
@@ -126,25 +162,57 @@ fn parse_env_path(login_defs: &str) -> String {
     login_defs
         .lines()
         .filter_map(|line| {
-            let mut words = line.split_once('#').map_or(line, |(before, _)| before).split_whitespace();
-            (words.next() == Some("ENV_PATH")).then(|| words.next()).flatten()
+            let mut words = line
+                .split_once('#')
+                .map_or(line, |(before, _)| before)
+                .split_whitespace();
+            (words.next() == Some("ENV_PATH"))
+                .then(|| words.next())
+                .flatten()
         })
         .next_back()
-        .map_or_else(|| DEFAULT_ENV_PATH.to_owned(), |value| value.strip_prefix("PATH=").unwrap_or(value).to_owned())
+        .map_or_else(
+            || DEFAULT_ENV_PATH.to_owned(),
+            |value| value.strip_prefix("PATH=").unwrap_or(value).to_owned(),
+        )
 }
 
 /// The accounts of `/etc/passwd` text with a user id in `range` and a shell that allows logins.
 fn parse_passwd(passwd: &str, range: UidRange) -> Result<Vec<Account>, UsersError> {
     let mut accounts = Vec::new();
-    for (number, line) in passwd.lines().enumerate().filter(|(_, line)| !line.trim().is_empty()) {
-        let malformed = |reason| UsersError::Malformed { path: PASSWD, line: number + 1, reason };
+    for (number, line) in passwd
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+    {
+        let malformed = |reason| UsersError::Malformed {
+            path: PASSWD,
+            line: number + 1,
+            reason,
+        };
         let fields: Vec<&str> = line.split(':').collect();
-        let [login, _password, uid, gid, gecos, home, shell] = fields[..] else { return Err(malformed("not seven fields")) };
-        let uid: u32 = uid.parse().map_err(|_| malformed("the user id is not a number"))?;
-        let gid: u32 = gid.parse().map_err(|_| malformed("the group id is not a number"))?;
-        let refuses = shell.rsplit('/').next().is_some_and(|name| REFUSING_SHELLS.contains(&name));
+        let [login, _password, uid, gid, gecos, home, shell] = fields[..] else {
+            return Err(malformed("not seven fields"));
+        };
+        let uid: u32 = uid
+            .parse()
+            .map_err(|_| malformed("the user id is not a number"))?;
+        let gid: u32 = gid
+            .parse()
+            .map_err(|_| malformed("the group id is not a number"))?;
+        let refuses = shell
+            .rsplit('/')
+            .next()
+            .is_some_and(|name| REFUSING_SHELLS.contains(&name));
         if (range.min..=range.max).contains(&uid) && !refuses {
-            accounts.push(Account { uid, gid, login: login.to_owned(), gecos: gecos.to_owned(), home: home.to_owned(), shell: shell.to_owned() });
+            accounts.push(Account {
+                uid,
+                gid,
+                login: login.to_owned(),
+                gecos: gecos.to_owned(),
+                home: home.to_owned(),
+                shell: shell.to_owned(),
+            });
         }
     }
     Ok(accounts)
@@ -154,13 +222,28 @@ fn parse_passwd(passwd: &str, range: UidRange) -> Result<Vec<Account>, UsersErro
 /// such group.
 fn parse_group_members(text: &str, group: &str) -> Result<Vec<String>, UsersError> {
     let mut members = Vec::new();
-    for (number, line) in text.lines().enumerate().filter(|(_, line)| !line.trim().is_empty()) {
-        let malformed = |reason| UsersError::Malformed { path: GROUP, line: number + 1, reason };
+    for (number, line) in text
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+    {
+        let malformed = |reason| UsersError::Malformed {
+            path: GROUP,
+            line: number + 1,
+            reason,
+        };
         let fields: Vec<&str> = line.split(':').collect();
-        let [name, _password, gid, list] = fields[..] else { return Err(malformed("not four fields")) };
-        gid.parse::<u32>().map_err(|_| malformed("the group id is not a number"))?;
+        let [name, _password, gid, list] = fields[..] else {
+            return Err(malformed("not four fields"));
+        };
+        gid.parse::<u32>()
+            .map_err(|_| malformed("the group id is not a number"))?;
         if name == group {
-            members.extend(list.split(',').filter(|member| !member.is_empty()).map(str::to_owned));
+            members.extend(
+                list.split(',')
+                    .filter(|member| !member.is_empty())
+                    .map(str::to_owned),
+            );
         }
     }
     Ok(members)
@@ -168,7 +251,9 @@ fn parse_group_members(text: &str, group: &str) -> Result<Vec<String>, UsersErro
 
 /// Run a `getpw*_r` call with a buffer that grows until the entry fits; `None` when there is no such entry. `call` gets the
 /// `passwd` to fill, the buffer and the result pointer.
-fn read_entry(call: impl Fn(&mut libc::passwd, &mut [u8], &mut *mut libc::passwd) -> libc::c_int) -> Result<Option<Account>, UsersError> {
+fn read_entry(
+    call: impl Fn(&mut libc::passwd, &mut [u8], &mut *mut libc::passwd) -> libc::c_int,
+) -> Result<Option<Account>, UsersError> {
     let mut buffer = vec![0u8; 1024];
     // Safety: all-zero is a valid `passwd` (null pointers and zero ids), and `call` overwrites it.
     let mut passwd: libc::passwd = unsafe { std::mem::zeroed() };
@@ -184,7 +269,16 @@ fn read_entry(call: impl Fn(&mut libc::passwd, &mut [u8], &mut *mut libc::passwd
         return Ok(None);
     }
     // Safety: on success the fields point at nul-terminated strings inside `buffer`.
-    Ok(Some(unsafe { Account { uid: passwd.pw_uid, gid: passwd.pw_gid, login: field(passwd.pw_name), gecos: field(passwd.pw_gecos), home: field(passwd.pw_dir), shell: field(passwd.pw_shell) } }))
+    Ok(Some(unsafe {
+        Account {
+            uid: passwd.pw_uid,
+            gid: passwd.pw_gid,
+            login: field(passwd.pw_name),
+            gecos: field(passwd.pw_gecos),
+            home: field(passwd.pw_dir),
+            shell: field(passwd.pw_shell),
+        }
+    }))
 }
 
 /// # Safety
@@ -209,14 +303,32 @@ mod tests {
     #[test]
     fn the_uid_range_is_read_from_login_defs_and_not_confused_with_the_system_range() {
         let defs = "# comment\nSYS_UID_MIN\t500\nUID_MIN\t\t 1000 # first\nUID_MAX 2000\nSUB_UID_MAX 600100000\n";
-        assert_eq!(parse_uid_range(defs).unwrap(), UidRange { min: 1000, max: 2000 });
-        assert_eq!(parse_uid_range("PASS_MAX_DAYS 99999\n").unwrap(), UidRange { min: 1000, max: 60000 });
-        assert!(matches!(parse_uid_range("UID_MIN abc\n"), Err(UsersError::Malformed { line: 1, .. })));
+        assert_eq!(
+            parse_uid_range(defs).unwrap(),
+            UidRange {
+                min: 1000,
+                max: 2000
+            }
+        );
+        assert_eq!(
+            parse_uid_range("PASS_MAX_DAYS 99999\n").unwrap(),
+            UidRange {
+                min: 1000,
+                max: 60000
+            }
+        );
+        assert!(matches!(
+            parse_uid_range("UID_MIN abc\n"),
+            Err(UsersError::Malformed { line: 1, .. })
+        ));
     }
 
     #[test]
     fn the_session_path_is_env_path_or_the_default() {
-        assert_eq!(parse_env_path("ENV_PATH PATH=/usr/bin:/bin # sessions\nENV_SUPATH PATH=/sbin\n"), "/usr/bin:/bin");
+        assert_eq!(
+            parse_env_path("ENV_PATH PATH=/usr/bin:/bin # sessions\nENV_SUPATH PATH=/sbin\n"),
+            "/usr/bin:/bin"
+        );
         assert_eq!(parse_env_path("ENV_PATH\t/opt/bin\n"), "/opt/bin");
         assert_eq!(parse_env_path("UID_MIN 1000\n"), DEFAULT_ENV_PATH);
     }
@@ -230,23 +342,65 @@ mod tests {
                       guest:x:1002:1002::/home/guest:/bin/false\n\
                       bob:x:1003:1004::/home/bob:\n\
                       nobody:x:65534:65534:Kernel Overflow User:/:/usr/bin/nologin\n";
-        let accounts = parse_passwd(passwd, UidRange { min: 1000, max: 60000 }).unwrap();
-        let listed: Vec<(u32, u32, String, String)> = accounts.iter().map(|a| (a.uid, a.gid, a.login.clone(), a.display_name())).collect();
-        assert_eq!(listed, [(1000, 1000, "alice".to_owned(), "Alice Liddell".to_owned()), (1003, 1004, "bob".to_owned(), "bob".to_owned())]);
-        assert!(matches!(parse_passwd("alice:x:1000\n", UidRange { min: 0, max: 9 }), Err(UsersError::Malformed { line: 1, .. })));
+        let accounts = parse_passwd(
+            passwd,
+            UidRange {
+                min: 1000,
+                max: 60000,
+            },
+        )
+        .unwrap();
+        let listed: Vec<(u32, u32, String, String)> = accounts
+            .iter()
+            .map(|a| (a.uid, a.gid, a.login.clone(), a.display_name()))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (1000, 1000, "alice".to_owned(), "Alice Liddell".to_owned()),
+                (1003, 1004, "bob".to_owned(), "bob".to_owned())
+            ]
+        );
+        assert!(matches!(
+            parse_passwd("alice:x:1000\n", UidRange { min: 0, max: 9 }),
+            Err(UsersError::Malformed { line: 1, .. })
+        ));
     }
 
     #[test]
     fn the_administrators_are_the_members_listed_for_wheel() {
         let group = "root:x:0:\nwheel:x:998:alice,carol\nusers:x:100:bob\nwheelchair:x:999:dave\n\nadm:x:4:\n";
-        assert_eq!(parse_group_members(group, "wheel").unwrap(), ["alice", "carol"]);
-        assert_eq!(parse_group_members("wheel:x:998:\n", "wheel").unwrap(), Vec::<String>::new());
-        assert_eq!(parse_group_members("users:x:100:bob\n", "wheel").unwrap(), Vec::<String>::new());
+        assert_eq!(
+            parse_group_members(group, "wheel").unwrap(),
+            ["alice", "carol"]
+        );
+        assert_eq!(
+            parse_group_members("wheel:x:998:\n", "wheel").unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            parse_group_members("users:x:100:bob\n", "wheel").unwrap(),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
     fn a_malformed_group_line_is_an_error_with_its_number() {
-        assert!(matches!(parse_group_members("root:x:0:\nwheel:x:998\n", "wheel"), Err(UsersError::Malformed { path: "/etc/group", line: 2, .. })));
-        assert!(matches!(parse_group_members("wheel:x:abc:alice\n", "wheel"), Err(UsersError::Malformed { line: 1, reason: "the group id is not a number", .. })));
+        assert!(matches!(
+            parse_group_members("root:x:0:\nwheel:x:998\n", "wheel"),
+            Err(UsersError::Malformed {
+                path: "/etc/group",
+                line: 2,
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse_group_members("wheel:x:abc:alice\n", "wheel"),
+            Err(UsersError::Malformed {
+                line: 1,
+                reason: "the group id is not a number",
+                ..
+            })
+        ));
     }
 }

@@ -33,20 +33,32 @@ pub fn render(servers: &[Ipv4Addr], domain: Option<&str>) -> String {
 /// Replaces the file at `path` with the configuration: written next to it, then renamed, so a
 /// reader sees the old file or the new one and never half of one. Creates the directory.
 pub fn write(path: &Path, servers: &[Ipv4Addr], domain: Option<&str>) -> Result<()> {
-    let directory = path.parent().filter(|directory| !directory.as_os_str().is_empty()).ok_or_else(|| Error::Io {
-        path: path.to_owned(),
-        source: std::io::Error::new(std::io::ErrorKind::InvalidInput, "the path has no directory"),
-    })?;
+    let directory = path
+        .parent()
+        .filter(|directory| !directory.as_os_str().is_empty())
+        .ok_or_else(|| Error::Io {
+            path: path.to_owned(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "the path has no directory",
+            ),
+        })?;
     fs::create_dir_all(directory).map_err(Error::io(directory))?;
     let mut file = tempfile::NamedTempFile::new_in(directory).map_err(Error::io(directory))?;
-    file.write_all(render(servers, domain).as_bytes()).map_err(Error::io(path))?;
+    file.write_all(render(servers, domain).as_bytes())
+        .map_err(Error::io(path))?;
     // 0644: every process resolves names
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        file.as_file().set_permissions(fs::Permissions::from_mode(0o644)).map_err(Error::io(path))?;
+        file.as_file()
+            .set_permissions(fs::Permissions::from_mode(0o644))
+            .map_err(Error::io(path))?;
     }
-    file.persist(path).map_err(|error| Error::Io { path: path.to_owned(), source: error.error })?;
+    file.persist(path).map_err(|error| Error::Io {
+        path: path.to_owned(),
+        source: error.error,
+    })?;
     Ok(())
 }
 
@@ -56,7 +68,10 @@ mod tests {
 
     #[test]
     fn servers_keep_their_order_and_the_domain_becomes_the_search_list() {
-        let text = render(&[Ipv4Addr::new(10, 0, 0, 2), Ipv4Addr::new(1, 1, 1, 1)], Some("lan.example"));
+        let text = render(
+            &[Ipv4Addr::new(10, 0, 0, 2), Ipv4Addr::new(1, 1, 1, 1)],
+            Some("lan.example"),
+        );
         assert_eq!(text, "# written by cupertino-netd\nsearch lan.example\nnameserver 10.0.0.2\nnameserver 1.1.1.1\n");
     }
 
@@ -73,7 +88,10 @@ mod tests {
         let path = root.path().join("run/cupertino/resolv.conf");
         write(&path, &[Ipv4Addr::new(10, 0, 0, 1)], None).unwrap();
         write(&path, &[Ipv4Addr::new(10, 0, 1, 1)], Some("home")).unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), "# written by cupertino-netd\nsearch home\nnameserver 10.0.1.1\n");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "# written by cupertino-netd\nsearch home\nnameserver 10.0.1.1\n"
+        );
         assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
     }
 }

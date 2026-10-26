@@ -71,9 +71,15 @@ impl NameKey {
                 while i < chars.len() && fold_width(chars[i]).is_ascii_digit() {
                     i += 1;
                 }
-                let digits: Vec<u8> = chars[start..i].iter().map(|d| fold_width(*d) as u8).collect();
+                let digits: Vec<u8> = chars[start..i]
+                    .iter()
+                    .map(|d| fold_width(*d) as u8)
+                    .collect();
                 let trimmed: &[u8] = {
-                    let nz = digits.iter().position(|d| *d != b'0').unwrap_or(digits.len().saturating_sub(1));
+                    let nz = digits
+                        .iter()
+                        .position(|d| *d != b'0')
+                        .unwrap_or(digits.len().saturating_sub(1));
                     &digits[nz..]
                 };
                 primary.push(0x20);
@@ -90,7 +96,9 @@ impl NameKey {
                     let reps = if l == 'ß' { 2 } else { 1 };
                     for _ in 0..reps {
                         primary.push(0x30);
-                        primary.extend_from_slice(&((if l == 'ß' { 's' } else { base }) as u32).to_be_bytes());
+                        primary.extend_from_slice(
+                            &((if l == 'ß' { 's' } else { base }) as u32).to_be_bytes(),
+                        );
                     }
                     secondary.push(accent);
                 }
@@ -123,7 +131,9 @@ pub fn compare_names(a: &str, b: &str) -> Ordering {
 /// Collation used while typing to select: case-insensitive, accents and punctuation
 /// significant, digits compared as text (the digit-as-number option is off by default).
 pub fn type_select_key(name: &str) -> Vec<char> {
-    name.chars().flat_map(|c| fold_width(c).to_lowercase()).collect()
+    name.chars()
+        .flat_map(|c| fold_width(c).to_lowercase())
+        .collect()
 }
 
 #[cfg(test)]
@@ -137,31 +147,49 @@ mod tests {
 
     #[test]
     fn numeric_runs_compare_by_value() {
-        assert_eq!(sorted(vec!["file10", "file2", "file1", "file20"]), vec!["file1", "file2", "file10", "file20"]);
-        assert_eq!(sorted(vec!["a100b", "a99b", "a100a"]), vec!["a99b", "a100a", "a100b"]);
+        assert_eq!(
+            sorted(vec!["file10", "file2", "file1", "file20"]),
+            vec!["file1", "file2", "file10", "file20"]
+        );
+        assert_eq!(
+            sorted(vec!["a100b", "a99b", "a100a"]),
+            vec!["a99b", "a100a", "a100b"]
+        );
     }
 
     #[test]
     fn case_insensitive_with_forced_order() {
-        assert_eq!(sorted(vec!["banana", "Avocado", "avocado", "Cherry"]), vec!["avocado", "Avocado", "banana", "Cherry"]);
+        assert_eq!(
+            sorted(vec!["banana", "Avocado", "avocado", "Cherry"]),
+            vec!["avocado", "Avocado", "banana", "Cherry"]
+        );
         assert_ne!(compare_names("a", "A"), Ordering::Equal);
         assert_eq!(compare_names("same", "same"), Ordering::Equal);
     }
 
     #[test]
     fn punctuation_sorts_before_digits_before_letters() {
-        assert_eq!(sorted(vec!["b", "1", "_x", "-y"]), vec!["-y", "_x", "1", "b"]);
+        assert_eq!(
+            sorted(vec!["b", "1", "_x", "-y"]),
+            vec!["-y", "_x", "1", "b"]
+        );
     }
 
     #[test]
     fn accents_are_secondary_not_ignored() {
-        assert_eq!(sorted(vec!["eclair", "écran", "ecran", "eclat"]), vec!["eclair", "eclat", "ecran", "écran"]);
+        assert_eq!(
+            sorted(vec!["eclair", "écran", "ecran", "eclat"]),
+            vec!["eclair", "eclat", "ecran", "écran"]
+        );
         assert_ne!(compare_names("e", "é"), Ordering::Equal);
     }
 
     #[test]
     fn width_insensitive() {
-        assert_eq!(NameKey::new("ＡＢＣ１").as_bytes()[..13], NameKey::new("ABC1").as_bytes()[..13]);
+        assert_eq!(
+            NameKey::new("ＡＢＣ１").as_bytes()[..13],
+            NameKey::new("ABC1").as_bytes()[..13]
+        );
     }
 
     #[test]

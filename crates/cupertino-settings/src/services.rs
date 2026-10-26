@@ -13,7 +13,9 @@ use zbus::zvariant::{ObjectPath, OwnedValue};
 
 use crate::agent::{Agent, AGENT_PATH};
 
-use crate::live::{Battery, BatteryState, Bluetooth, BtDevice, Device, Focus, Network, Reading, Volume, Wifi};
+use crate::live::{
+    Battery, BatteryState, Bluetooth, BtDevice, Device, Focus, Network, Reading, Volume, Wifi,
+};
 use crate::panes::Call;
 
 pub const NETWORK_NAME: &str = "org.cupertino.Network1";
@@ -42,16 +44,25 @@ pub struct Bus {
 
 impl Bus {
     pub fn system() -> Self {
-        Bus { connect: Connection::system, connection: None }
+        Bus {
+            connect: Connection::system,
+            connection: None,
+        }
     }
 
     pub fn session() -> Self {
-        Bus { connect: Connection::session, connection: None }
+        Bus {
+            connect: Connection::session,
+            connection: None,
+        }
     }
 
     /// A bus at `address` (the tests' private buses).
     pub fn at(connection: Connection) -> Self {
-        Bus { connect: || Err(zbus::Error::Failure("the test bus is gone".into())), connection: Some(connection) }
+        Bus {
+            connect: || Err(zbus::Error::Failure("the test bus is gone".into())),
+            connection: Some(connection),
+        }
     }
 
     pub fn connection(&mut self) -> zbus::Result<&Connection> {
@@ -61,9 +72,19 @@ impl Bus {
         Ok(self.connection.as_ref().expect("connected above"))
     }
 
-    pub fn proxy(&mut self, name: &'static str, path: &'static str, interface: &'static str) -> zbus::Result<Proxy<'static>> {
+    pub fn proxy(
+        &mut self,
+        name: &'static str,
+        path: &'static str,
+        interface: &'static str,
+    ) -> zbus::Result<Proxy<'static>> {
         let connection = self.connection()?;
-        Builder::new(connection).destination(name)?.path(path)?.interface(interface)?.cache_properties(CacheProperties::No).build()
+        Builder::new(connection)
+            .destination(name)?
+            .path(path)?
+            .interface(interface)?
+            .cache_properties(CacheProperties::No)
+            .build()
     }
 
     /// Forget the connection after a failure of the bus itself, so the next use connects again.
@@ -80,7 +101,10 @@ fn failure(e: &zbus::Error) -> String {
     match e {
         zbus::Error::MethodError(name, message, _) => error_text(name.as_str(), message.as_deref()),
         // property reads report the daemon's error as a standard one
-        zbus::Error::FDO(e) => error_text(zbus::DBusError::name(e.as_ref()).as_str(), zbus::DBusError::description(e.as_ref())),
+        zbus::Error::FDO(e) => error_text(
+            zbus::DBusError::name(e.as_ref()).as_str(),
+            zbus::DBusError::description(e.as_ref()),
+        ),
         other => other.to_string(),
     }
 }
@@ -94,13 +118,19 @@ fn error_text(name: &str, message: Option<&str>) -> String {
 }
 
 /// The bus's errors for a name nobody owns.
-const ABSENT: [&str; 2] = ["org.freedesktop.DBus.Error.ServiceUnknown", "org.freedesktop.DBus.Error.NameHasNoOwner"];
+const ABSENT: [&str; 2] = [
+    "org.freedesktop.DBus.Error.ServiceUnknown",
+    "org.freedesktop.DBus.Error.NameHasNoOwner",
+];
 
 /// Whether `e` says the service is not on the bus at all.
 fn absent(e: &zbus::Error) -> bool {
     match e {
         zbus::Error::MethodError(name, _, _) => ABSENT.contains(&name.as_str()),
-        zbus::Error::FDO(e) => matches!(e.as_ref(), zbus::fdo::Error::ServiceUnknown(_) | zbus::fdo::Error::NameHasNoOwner(_)),
+        zbus::Error::FDO(e) => matches!(
+            e.as_ref(),
+            zbus::fdo::Error::ServiceUnknown(_) | zbus::fdo::Error::NameHasNoOwner(_)
+        ),
         _ => false,
     }
 }
@@ -129,29 +159,58 @@ pub struct Services {
 
 impl Services {
     pub fn new() -> Self {
-        Services { system: Bus::system(), session: Bus::session(), mixer: None, alsa_dir: PathBuf::from(cupertino_alsa::DEVICE_DIR) }
+        Services {
+            system: Bus::system(),
+            session: Bus::session(),
+            mixer: None,
+            alsa_dir: PathBuf::from(cupertino_alsa::DEVICE_DIR),
+        }
     }
 
     /// Services on given buses (tests).
     pub fn on(system: Bus, session: Bus) -> Self {
-        Services { system, session, mixer: None, alsa_dir: PathBuf::from(cupertino_alsa::DEVICE_DIR) }
+        Services {
+            system,
+            session,
+            mixer: None,
+            alsa_dir: PathBuf::from(cupertino_alsa::DEVICE_DIR),
+        }
     }
 
     // ---- reading ---------------------------------------------------------------------------------------------------
 
     pub fn focus(&mut self) -> Reading<Focus> {
-        let result = self.session.proxy(CENTRE_NAME, CENTRE_PATH, CENTRE_NAME).and_then(|p| Ok(Focus { on: p.get_property("DoNotDisturb")?, lifetimes: p.get_property("FocusLifetimes")? }));
-        reading(self.session.checked(result), "The notification centre is not running")
+        let result = self
+            .session
+            .proxy(CENTRE_NAME, CENTRE_PATH, CENTRE_NAME)
+            .and_then(|p| {
+                Ok(Focus {
+                    on: p.get_property("DoNotDisturb")?,
+                    lifetimes: p.get_property("FocusLifetimes")?,
+                })
+            });
+        reading(
+            self.session.checked(result),
+            "The notification centre is not running",
+        )
     }
 
     pub fn brightness(&mut self) -> Reading<f64> {
-        let result = self.system.proxy(POWER_NAME, POWER_PATH, POWER_NAME).and_then(|p| {
-            let current: u32 = p.call("GetBrightness", &())?;
-            let max: u32 = p.call("GetMaxBrightness", &())?;
-            Ok((current, max))
-        });
-        match reading(self.system.checked(result), "This display has no brightness control") {
-            Reading::Ready((_, 0)) => Reading::Unavailable("This display has no brightness control".into()),
+        let result = self
+            .system
+            .proxy(POWER_NAME, POWER_PATH, POWER_NAME)
+            .and_then(|p| {
+                let current: u32 = p.call("GetBrightness", &())?;
+                let max: u32 = p.call("GetMaxBrightness", &())?;
+                Ok((current, max))
+            });
+        match reading(
+            self.system.checked(result),
+            "This display has no brightness control",
+        ) {
+            Reading::Ready((_, 0)) => {
+                Reading::Unavailable("This display has no brightness control".into())
+            }
             Reading::Ready((current, max)) => Reading::Ready(f64::from(current) / f64::from(max)),
             Reading::Unavailable(r) => Reading::Unavailable(r),
             Reading::Unknown => Reading::Unknown,
@@ -159,39 +218,78 @@ impl Services {
     }
 
     pub fn battery(&mut self) -> Reading<Option<Battery>> {
-        let result = self.system.proxy(UPOWER_NAME, UPOWER_DISPLAY_DEVICE, UPOWER_DEVICE).and_then(|p| {
-            if !p.get_property::<bool>("IsPresent")? {
-                return Ok(None);
-            }
-            Ok(Some(Battery {
-                percent: p.get_property("Percentage")?,
-                state: BatteryState::from_upower(p.get_property("State")?),
-                time_to_empty: p.get_property("TimeToEmpty")?,
-                time_to_full: p.get_property("TimeToFull")?,
-            }))
-        });
-        reading(self.system.checked(result), "The power service is not running")
+        let result = self
+            .system
+            .proxy(UPOWER_NAME, UPOWER_DISPLAY_DEVICE, UPOWER_DEVICE)
+            .and_then(|p| {
+                if !p.get_property::<bool>("IsPresent")? {
+                    return Ok(None);
+                }
+                Ok(Some(Battery {
+                    percent: p.get_property("Percentage")?,
+                    state: BatteryState::from_upower(p.get_property("State")?),
+                    time_to_empty: p.get_property("TimeToEmpty")?,
+                    time_to_full: p.get_property("TimeToFull")?,
+                }))
+            });
+        reading(
+            self.system.checked(result),
+            "The power service is not running",
+        )
     }
 
     pub fn wifi(&mut self, keep: Option<&Wifi>) -> Reading<Wifi> {
-        let result = self.system.proxy(NETWORK_NAME, NETWORK_PATH, NETWORK_NAME).and_then(|p| {
-            let devices: Vec<DeviceRecord> = p.get_property("Devices")?;
-            let networks: Vec<NetworkRecord> = p.call("GetNetworks", &())?;
-            Ok(Wifi {
-                enabled: p.get_property("WirelessEnabled")?,
-                devices: devices.into_iter().map(|(index, name, kind, state, ssid, failure, address)| Device { index, name, kind, state, ssid, failure, address }).collect(),
-                state: p.get_property("State")?,
-                networks: networks.into_iter().map(|(ssid, signal, security, saved, connected)| Network { ssid, signal, security, saved, connected }).collect(),
-                joining: None,
-                failure: None,
-            })
-        });
+        let result = self
+            .system
+            .proxy(NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
+            .and_then(|p| {
+                let devices: Vec<DeviceRecord> = p.get_property("Devices")?;
+                let networks: Vec<NetworkRecord> = p.call("GetNetworks", &())?;
+                Ok(Wifi {
+                    enabled: p.get_property("WirelessEnabled")?,
+                    devices: devices
+                        .into_iter()
+                        .map(
+                            |(index, name, kind, state, ssid, failure, address)| Device {
+                                index,
+                                name,
+                                kind,
+                                state,
+                                ssid,
+                                failure,
+                                address,
+                            },
+                        )
+                        .collect(),
+                    state: p.get_property("State")?,
+                    networks: networks
+                        .into_iter()
+                        .map(|(ssid, signal, security, saved, connected)| Network {
+                            ssid,
+                            signal,
+                            security,
+                            saved,
+                            connected,
+                        })
+                        .collect(),
+                    joining: None,
+                    failure: None,
+                })
+            });
         match reading(self.system.checked(result), "Wi-Fi is not available") {
             Reading::Ready(mut w) => {
                 // a Join in progress ends when its network is connected or a device reports a failure
                 if let Some(previous) = keep {
-                    w.joining = previous.joining.clone().filter(|ssid| !w.networks.iter().any(|n| &n.ssid == ssid && n.connected) && w.devices.iter().all(|d| d.failure.is_empty()));
-                    w.failure = previous.failure.clone().or_else(|| w.devices.iter().find(|d| !d.failure.is_empty() && previous.joining.is_some()).map(|d| d.failure.clone()));
+                    w.joining = previous.joining.clone().filter(|ssid| {
+                        !w.networks.iter().any(|n| &n.ssid == ssid && n.connected)
+                            && w.devices.iter().all(|d| d.failure.is_empty())
+                    });
+                    w.failure = previous.failure.clone().or_else(|| {
+                        w.devices
+                            .iter()
+                            .find(|d| !d.failure.is_empty() && previous.joining.is_some())
+                            .map(|d| d.failure.clone())
+                    });
                 }
                 Reading::Ready(w)
             }
@@ -200,33 +298,45 @@ impl Services {
     }
 
     pub fn bluetooth(&mut self, keep: Option<&Bluetooth>) -> Reading<Bluetooth> {
-        let result = self.system.proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME).and_then(|p| {
-            let devices: Vec<HashMap<String, OwnedValue>> = p.get_property("Devices")?;
-            Ok(Bluetooth {
-                available: p.get_property("Available")?,
-                powered: p.get_property("Powered")?,
-                discovering: p.get_property("Discovering")?,
-                devices: devices.iter().filter_map(bt_device).collect(),
-                agent_elsewhere: keep.is_some_and(|b| b.agent_elsewhere),
-                failure: keep.and_then(|b| b.failure.clone()),
-            })
-        });
+        let result = self
+            .system
+            .proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
+            .and_then(|p| {
+                let devices: Vec<HashMap<String, OwnedValue>> = p.get_property("Devices")?;
+                Ok(Bluetooth {
+                    available: p.get_property("Available")?,
+                    powered: p.get_property("Powered")?,
+                    discovering: p.get_property("Discovering")?,
+                    devices: devices.iter().filter_map(bt_device).collect(),
+                    agent_elsewhere: keep.is_some_and(|b| b.agent_elsewhere),
+                    failure: keep.and_then(|b| b.failure.clone()),
+                })
+            });
         reading(self.system.checked(result), "Bluetooth is not available")
     }
 
     pub fn volume(&mut self) -> Reading<Volume> {
         match self.with_mixer(|m| {
             let level = m.level()?;
-            Ok(Volume { level, muted: m.muted()?.unwrap_or(level <= 0.0) })
+            Ok(Volume {
+                level,
+                muted: m.muted()?.unwrap_or(level <= 0.0),
+            })
         }) {
             Ok(v) => Reading::Ready(v),
             Err(e) => Reading::Unavailable(format!("No sound output is available ({e})")),
         }
     }
 
-    fn with_mixer<T>(&mut self, action: impl FnOnce(&cupertino_alsa::Master) -> cupertino_alsa::Result<T>) -> cupertino_alsa::Result<T> {
+    fn with_mixer<T>(
+        &mut self,
+        action: impl FnOnce(&cupertino_alsa::Master) -> cupertino_alsa::Result<T>,
+    ) -> cupertino_alsa::Result<T> {
         if self.mixer.is_none() {
-            self.mixer = Some(cupertino_alsa::Master::open_default(&self.alsa_dir, cupertino_alsa::OpenMode::ReadWrite)?);
+            self.mixer = Some(cupertino_alsa::Master::open_default(
+                &self.alsa_dir,
+                cupertino_alsa::OpenMode::ReadWrite,
+            )?);
         }
         let result = action(self.mixer.as_ref().expect("opened above"));
         if result.is_err() {
@@ -239,10 +349,11 @@ impl Services {
 
     /// Carry out `call`; the error text for the row when it is refused or fails.
     pub fn call(&mut self, call: &Call) -> Result<(), String> {
-        let system = |s: &mut Self, name, path, iface, f: &dyn Fn(&Proxy<'static>) -> zbus::Result<()>| {
-            let result = s.system.proxy(name, path, iface).and_then(|p| f(&p));
-            s.system.checked(result).map_err(|e| failure(&e))
-        };
+        let system =
+            |s: &mut Self, name, path, iface, f: &dyn Fn(&Proxy<'static>) -> zbus::Result<()>| {
+                let result = s.system.proxy(name, path, iface).and_then(|p| f(&p));
+                s.system.checked(result).map_err(|e| failure(&e))
+            };
         match call {
             Call::SetDoNotDisturb(on) => {
                 let result = self.session.proxy(CENTRE_NAME, CENTRE_PATH, CENTRE_NAME).and_then(|p| p.call::<_, _, ()>("SetDoNotDisturb", &(*on,)));
@@ -282,7 +393,10 @@ impl Services {
 
     /// Ask the Wi-Fi device to scan (the pane open and every 10 s while the radio is on, approximate).
     pub fn scan(&mut self) -> Result<(), String> {
-        let result = self.system.proxy(NETWORK_NAME, NETWORK_PATH, NETWORK_NAME).and_then(|p| p.call::<_, _, ()>("Scan", &()));
+        let result = self
+            .system
+            .proxy(NETWORK_NAME, NETWORK_PATH, NETWORK_NAME)
+            .and_then(|p| p.call::<_, _, ()>("Scan", &()));
         self.system.checked(result).map_err(|e| failure(&e))
     }
 
@@ -290,15 +404,26 @@ impl Services {
     /// another client's agent is registered (`AgentExists`), so pairing questions go to its dialog.
     pub fn register_agent(&mut self, agent: Agent) -> Result<bool, String> {
         let connection = self.system.connection().map_err(|e| failure(&e))?.clone();
-        connection.object_server().at(AGENT_PATH, agent).map_err(|e| failure(&e))?;
+        connection
+            .object_server()
+            .at(AGENT_PATH, agent)
+            .map_err(|e| failure(&e))?;
         let path = ObjectPath::try_from(AGENT_PATH).expect("a valid object path");
-        let result = self.system.proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME).and_then(|p| p.call::<_, _, ()>("RegisterAgent", &(path,)));
+        let result = self
+            .system
+            .proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
+            .and_then(|p| p.call::<_, _, ()>("RegisterAgent", &(path,)));
         match self.system.checked(result) {
             Ok(()) => Ok(true),
             Err(e) => {
-                connection.object_server().remove::<Agent, _>(AGENT_PATH).map_err(|e| failure(&e))?;
+                connection
+                    .object_server()
+                    .remove::<Agent, _>(AGENT_PATH)
+                    .map_err(|e| failure(&e))?;
                 match &e {
-                    zbus::Error::MethodError(name, _, _) if name.as_str() == AGENT_EXISTS => Ok(false),
+                    zbus::Error::MethodError(name, _, _) if name.as_str() == AGENT_EXISTS => {
+                        Ok(false)
+                    }
                     _ => Err(failure(&e)),
                 }
             }
@@ -307,30 +432,55 @@ impl Services {
 
     /// Unregister the agent and stop serving it (the pane left or the window closed).
     pub fn unregister_agent(&mut self) -> Result<(), String> {
-        let result = self.system.proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME).and_then(|p| p.call::<_, _, ()>("UnregisterAgent", &()));
+        let result = self
+            .system
+            .proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
+            .and_then(|p| p.call::<_, _, ()>("UnregisterAgent", &()));
         let unregistered = self.system.checked(result).map_err(|e| failure(&e));
         let connection = self.system.connection().map_err(|e| failure(&e))?;
-        connection.object_server().remove::<Agent, _>(AGENT_PATH).map_err(|e| failure(&e))?;
+        connection
+            .object_server()
+            .remove::<Agent, _>(AGENT_PATH)
+            .map_err(|e| failure(&e))?;
         unregistered
     }
 
     /// Pair device `id` on a thread of its own: `Pair` returns only when the pairing is over, and meanwhile the daemon
     /// asks the agent, whose sheet needs the window. `done` gets the outcome on that thread.
-    pub fn pair(&mut self, id: &str, done: impl FnOnce(Result<(), String>) + Send + 'static) -> Result<(), String> {
-        let proxy = self.system.proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME);
+    pub fn pair(
+        &mut self,
+        id: &str,
+        done: impl FnOnce(Result<(), String>) + Send + 'static,
+    ) -> Result<(), String> {
+        let proxy = self
+            .system
+            .proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME);
         let proxy = self.system.checked(proxy).map_err(|e| failure(&e))?;
         let id = id.to_string();
         std::thread::Builder::new()
             .name("bluetooth-pair".into())
-            .spawn(move || done(proxy.call::<_, _, ()>("Pair", &(id.as_str(),)).map_err(|e| failure(&e))))
+            .spawn(move || {
+                done(
+                    proxy
+                        .call::<_, _, ()>("Pair", &(id.as_str(),))
+                        .map_err(|e| failure(&e)),
+                )
+            })
             .map_err(|e| format!("cannot start the pairing: {e}"))?;
         Ok(())
     }
 
     /// Start or stop Bluetooth discovery (the pane open, §6.4).
     pub fn discovery(&mut self, on: bool) -> Result<(), String> {
-        let method = if on { "StartDiscovery" } else { "StopDiscovery" };
-        let result = self.system.proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME).and_then(|p| p.call::<_, _, ()>(method, &()));
+        let method = if on {
+            "StartDiscovery"
+        } else {
+            "StopDiscovery"
+        };
+        let result = self
+            .system
+            .proxy(BLUETOOTH_NAME, BLUETOOTH_PATH, BLUETOOTH_NAME)
+            .and_then(|p| p.call::<_, _, ()>(method, &()));
         self.system.checked(result).map_err(|e| failure(&e))
     }
 }
@@ -343,7 +493,18 @@ impl Default for Services {
 
 /// A device of `Bluetooth1.Devices`; one without its always-present keys is skipped.
 fn bt_device(d: &HashMap<String, OwnedValue>) -> Option<BtDevice> {
-    let text = |k: &str| d.get(k).and_then(|v| String::try_from(v.try_clone().ok()?).ok());
+    let text = |k: &str| {
+        d.get(k)
+            .and_then(|v| String::try_from(v.try_clone().ok()?).ok())
+    };
     let flag = |k: &str| d.get(k).and_then(|v| bool::try_from(v).ok());
-    Some(BtDevice { id: text("Id")?, address: text("Address")?, name: text("Name"), icon: text("Icon")?, paired: flag("Paired")?, connected: flag("Connected")?, pairing: flag("Pairing")? })
+    Some(BtDevice {
+        id: text("Id")?,
+        address: text("Address")?,
+        name: text("Name"),
+        icon: text("Icon")?,
+        paired: flag("Paired")?,
+        connected: flag("Connected")?,
+        pairing: flag("Pairing")?,
+    })
 }

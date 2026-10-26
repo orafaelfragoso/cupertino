@@ -23,7 +23,11 @@ impl<'a> Reader<'a> {
 
     pub(crate) fn take(&mut self, count: usize) -> Result<&'a [u8], ParseError> {
         if self.bytes.len() < count {
-            return Err(ParseError::Truncated { what: self.what, needed: count, found: self.bytes.len() });
+            return Err(ParseError::Truncated {
+                what: self.what,
+                needed: count,
+                found: self.bytes.len(),
+            });
         }
         let (head, tail) = self.bytes.split_at(count);
         self.bytes = tail;
@@ -59,7 +63,10 @@ impl<'a> Reader<'a> {
 
     pub(crate) fn device(&mut self) -> Result<DeviceId, ParseError> {
         let address = Address::from_wire(self.array()?);
-        Ok(DeviceId { address, kind: AddressType::from_wire(self.u8()?)? })
+        Ok(DeviceId {
+            address,
+            kind: AddressType::from_wire(self.u8()?)?,
+        })
     }
 
     pub(crate) fn rest(&mut self) -> &'a [u8] {
@@ -70,7 +77,10 @@ impl<'a> Reader<'a> {
     pub(crate) fn finish(self) -> Result<(), ParseError> {
         match self.bytes.len() {
             0 => Ok(()),
-            extra => Err(ParseError::TrailingBytes { what: self.what, extra }),
+            extra => Err(ParseError::TrailingBytes {
+                what: self.what,
+                extra,
+            }),
         }
     }
 }

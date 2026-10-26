@@ -132,7 +132,16 @@ pub struct Machine {
 impl Machine {
     /// A session that starts with `Active` set to `active`.
     pub fn new(active: bool) -> Self {
-        Self { phase: if active { Phase::Running } else { Phase::Paused }, logind_active: active, devices: HashMap::new(), unreleased: HashSet::new() }
+        Self {
+            phase: if active {
+                Phase::Running
+            } else {
+                Phase::Paused
+            },
+            logind_active: active,
+            devices: HashMap::new(),
+            unreleased: HashSet::new(),
+        }
     }
 
     /// Whether the session is running, which is what the holder's `is_active` reports.
@@ -150,10 +159,18 @@ impl Machine {
     /// allows taking a device again once it was reported gone; a descriptor handed out for the
     /// replaced entry is then no longer recognised by [`Machine::release`].
     pub fn take(&mut self, dev: DevT, fd: RawFd, inactive: bool) -> Result<(), Error> {
-        if self.devices.get(&dev).is_some_and(|tracked| tracked.state != DeviceState::Gone) {
+        if self
+            .devices
+            .get(&dev)
+            .is_some_and(|tracked| tracked.state != DeviceState::Gone)
+        {
             return Err(Error::AlreadyTaken(dev));
         }
-        let state = if inactive { DeviceState::Paused } else { DeviceState::Active };
+        let state = if inactive {
+            DeviceState::Paused
+        } else {
+            DeviceState::Active
+        };
         self.devices.insert(dev, Tracked { fd, state });
         Ok(())
     }
@@ -161,8 +178,16 @@ impl Machine {
     /// Forgets the device behind descriptor number `fd`. A device that still needs `ReleaseDevice`
     /// stays recorded as unreleased until [`Machine::confirm_release`].
     pub fn release(&mut self, fd: RawFd) -> Result<Released, Error> {
-        let dev = self.devices.iter().find(|(_, tracked)| tracked.fd == fd).map(|(dev, _)| *dev).ok_or(Error::UnknownFd(fd))?;
-        let tracked = self.devices.remove(&dev).expect("the device was just found");
+        let dev = self
+            .devices
+            .iter()
+            .find(|(_, tracked)| tracked.fd == fd)
+            .map(|(dev, _)| *dev)
+            .ok_or(Error::UnknownFd(fd))?;
+        let tracked = self
+            .devices
+            .remove(&dev)
+            .expect("the device was just found");
         let notify_logind = tracked.state != DeviceState::Gone;
         if notify_logind {
             self.unreleased.insert(dev);
@@ -199,7 +224,9 @@ impl Machine {
         let mut outputs = Vec::new();
         match input {
             Input::PauseDevice { dev, kind } => {
-                let Some(tracked) = self.devices.get_mut(&dev) else { return outputs };
+                let Some(tracked) = self.devices.get_mut(&dev) else {
+                    return outputs;
+                };
                 if tracked.state == DeviceState::Gone {
                     return outputs;
                 }
@@ -217,7 +244,9 @@ impl Machine {
                 }
             }
             Input::ResumeDevice { dev } => {
-                let Some(tracked) = self.devices.get_mut(&dev) else { return outputs };
+                let Some(tracked) = self.devices.get_mut(&dev) else {
+                    return outputs;
+                };
                 if tracked.state == DeviceState::Gone {
                     return outputs;
                 }
@@ -250,7 +279,10 @@ impl Machine {
     /// never saw `Active` turn false (`Pausing`) only activates when a resume proves devices came
     /// back, not when a release or a property change merely finds the device list empty.
     fn try_activate(&mut self, from_resume: bool, outputs: &mut Vec<Output>) {
-        let idle = !self.devices.values().any(|tracked| tracked.state.blocks_activation());
+        let idle = !self
+            .devices
+            .values()
+            .any(|tracked| tracked.state.blocks_activation());
         let ready = match self.phase {
             Phase::Running => false,
             Phase::Pausing => from_resume && idle,
@@ -304,7 +336,10 @@ mod tests {
         let mut machine = running();
         assert_eq!(
             machine.step(pause(drm(), PauseKind::Pause)),
-            vec![Output::Transition(Transition::Pause), Output::CompletePause(drm())]
+            vec![
+                Output::Transition(Transition::Pause),
+                Output::CompletePause(drm())
+            ]
         );
         assert!(!machine.is_running());
         assert!(machine.ack_pause(drm()));
@@ -315,7 +350,10 @@ mod tests {
     fn second_pause_does_not_report_the_session_again() {
         let mut machine = running();
         machine.step(pause(drm(), PauseKind::Pause));
-        assert_eq!(machine.step(pause(event(), PauseKind::Pause)), vec![Output::CompletePause(event())]);
+        assert_eq!(
+            machine.step(pause(event(), PauseKind::Pause)),
+            vec![Output::CompletePause(event())]
+        );
     }
 
     #[test]
@@ -323,7 +361,13 @@ mod tests {
         let mut machine = running();
         machine.step(pause(drm(), PauseKind::Pause));
         machine.step(pause(event(), PauseKind::Pause));
-        assert_eq!(machine.release(9).unwrap(), Released { dev: event(), notify_logind: true });
+        assert_eq!(
+            machine.release(9).unwrap(),
+            Released {
+                dev: event(),
+                notify_logind: true
+            }
+        );
         assert!(!machine.ack_pause(event()));
         assert!(machine.ack_pause(drm()));
     }
@@ -331,7 +375,10 @@ mod tests {
     #[test]
     fn forced_pause_reports_the_session_without_an_ack() {
         let mut machine = running();
-        assert_eq!(machine.step(pause(drm(), PauseKind::Force)), vec![Output::Transition(Transition::Pause)]);
+        assert_eq!(
+            machine.step(pause(drm(), PauseKind::Force)),
+            vec![Output::Transition(Transition::Pause)]
+        );
         assert!(!machine.ack_pause(drm()));
     }
 
@@ -340,7 +387,13 @@ mod tests {
         let mut machine = running();
         assert_eq!(machine.step(pause(event(), PauseKind::Gone)), vec![]);
         assert!(machine.is_running());
-        assert_eq!(machine.release(9).unwrap(), Released { dev: event(), notify_logind: false });
+        assert_eq!(
+            machine.release(9).unwrap(),
+            Released {
+                dev: event(),
+                notify_logind: false
+            }
+        );
     }
 
     #[test]
@@ -362,7 +415,10 @@ mod tests {
         assert_eq!(machine.step(active(false)), vec![]);
         // Switching back: Active turns true first, then ResumeDevice.
         assert_eq!(machine.step(active(true)), vec![], "drm() is still paused");
-        assert_eq!(machine.step(resume(drm())), vec![Output::Transition(Transition::Activate)]);
+        assert_eq!(
+            machine.step(resume(drm())),
+            vec![Output::Transition(Transition::Activate)]
+        );
         assert!(machine.is_running());
     }
 
@@ -374,7 +430,10 @@ mod tests {
         machine.step(active(false));
         machine.step(active(true));
         assert_eq!(machine.step(resume(event())), vec![]);
-        assert_eq!(machine.step(resume(drm())), vec![Output::Transition(Transition::Activate)]);
+        assert_eq!(
+            machine.step(resume(drm())),
+            vec![Output::Transition(Transition::Activate)]
+        );
     }
 
     #[test]
@@ -386,7 +445,10 @@ mod tests {
         assert_eq!(machine.step(recheck()), vec![]);
         machine.release(9).unwrap();
         assert!(machine.is_waiting_to_activate());
-        assert_eq!(machine.step(recheck()), vec![Output::Transition(Transition::Activate)]);
+        assert_eq!(
+            machine.step(recheck()),
+            vec![Output::Transition(Transition::Activate)]
+        );
     }
 
     #[test]
@@ -401,8 +463,14 @@ mod tests {
     #[test]
     fn active_false_without_a_device_pause_reports_the_session() {
         let mut machine = Machine::new(true);
-        assert_eq!(machine.step(active(false)), vec![Output::Transition(Transition::Pause)]);
-        assert_eq!(machine.step(active(true)), vec![Output::Transition(Transition::Activate)]);
+        assert_eq!(
+            machine.step(active(false)),
+            vec![Output::Transition(Transition::Pause)]
+        );
+        assert_eq!(
+            machine.step(active(true)),
+            vec![Output::Transition(Transition::Activate)]
+        );
     }
 
     #[test]
@@ -411,29 +479,49 @@ mod tests {
         assert!(!machine.is_running());
         machine.take(drm(), 7, true).unwrap();
         assert_eq!(machine.step(active(true)), vec![]);
-        assert_eq!(machine.step(resume(drm())), vec![Output::Transition(Transition::Activate)]);
+        assert_eq!(
+            machine.step(resume(drm())),
+            vec![Output::Transition(Transition::Activate)]
+        );
     }
 
     #[test]
     fn taking_a_held_device_twice_fails_but_a_gone_one_can_be_retaken() {
         let mut machine = running();
-        assert!(matches!(machine.take(drm(), 11, false), Err(Error::AlreadyTaken(dev)) if dev == drm()));
+        assert!(
+            matches!(machine.take(drm(), 11, false), Err(Error::AlreadyTaken(dev)) if dev == drm())
+        );
         machine.step(pause(drm(), PauseKind::Gone));
         machine.take(drm(), 11, false).unwrap();
-        assert_eq!(machine.release(11).unwrap(), Released { dev: drm(), notify_logind: true });
+        assert_eq!(
+            machine.release(11).unwrap(),
+            Released {
+                dev: drm(),
+                notify_logind: true
+            }
+        );
     }
 
     #[test]
     fn device_stays_unreleased_until_the_release_is_confirmed() {
         let mut machine = running();
         machine.release(9).unwrap();
-        assert!(machine.is_unreleased(event()), "ReleaseDevice has not succeeded yet");
-        assert!(machine.step(pause(event(), PauseKind::Pause)).is_empty(), "no longer held");
+        assert!(
+            machine.is_unreleased(event()),
+            "ReleaseDevice has not succeeded yet"
+        );
+        assert!(
+            machine.step(pause(event(), PauseKind::Pause)).is_empty(),
+            "no longer held"
+        );
         machine.confirm_release(event());
         assert!(!machine.is_unreleased(event()));
         machine.step(pause(drm(), PauseKind::Gone));
         machine.release(7).unwrap();
-        assert!(!machine.is_unreleased(drm()), "a gone device needs no release");
+        assert!(
+            !machine.is_unreleased(drm()),
+            "a gone device needs no release"
+        );
     }
 
     #[test]
@@ -447,6 +535,8 @@ mod tests {
         assert_eq!(PauseKind::parse("pause").unwrap(), PauseKind::Pause);
         assert_eq!(PauseKind::parse("force").unwrap(), PauseKind::Force);
         assert_eq!(PauseKind::parse("gone").unwrap(), PauseKind::Gone);
-        assert!(matches!(PauseKind::parse("suspend"), Err(Error::UnknownPauseType(kind)) if kind == "suspend"));
+        assert!(
+            matches!(PauseKind::parse("suspend"), Err(Error::UnknownPauseType(kind)) if kind == "suspend")
+        );
     }
 }

@@ -184,7 +184,11 @@ pub fn keysym_to_utf32(keysym: Keysym) -> u32 {
 
 /// The UTF-8 text of a keysym, empty when it has none.
 pub fn keysym_to_utf8(keysym: Keysym) -> String {
-    keysym.key_char().filter(|c| *c != '\0').map(String::from).unwrap_or_default()
+    keysym
+        .key_char()
+        .filter(|c| *c != '\0')
+        .map(String::from)
+        .unwrap_or_default()
 }
 
 /// The keysym of a Unicode code point, `NoSymbol` for a value that is no Unicode scalar value.
@@ -230,13 +234,18 @@ impl Keymap {
     fn from_engine(engine: rs::Keymap) -> Result<Keymap, String> {
         let mut level_syms = BTreeMap::new();
         for &code in engine.iter_keycodes() {
-            let layouts = engine.num_layouts_for_key(code).ok_or_else(|| format!("keycode {code} is listed but has no key"))?;
+            let layouts = engine
+                .num_layouts_for_key(code)
+                .ok_or_else(|| format!("keycode {code} is listed but has no key"))?;
             let mut lists = Vec::new();
             for layout in 0..layouts {
                 for level in 0..engine.num_levels_for_key(code, layout) {
-                    let syms = engine
-                        .key_get_syms_by_level(code, layout, level)
-                        .map_err(|err| format!("keycode {code}, layout {layout}, level {level}: {err}"))?;
+                    let syms =
+                        engine
+                            .key_get_syms_by_level(code, layout, level)
+                            .map_err(|err| {
+                                format!("keycode {code}, layout {layout}, level {level}: {err}")
+                            })?;
                     if !syms.is_empty() {
                         lists.push(syms.into_boxed_slice());
                     }
@@ -244,7 +253,9 @@ impl Keymap {
             }
             level_syms.insert(code, lists);
         }
-        Ok(Keymap { data: Arc::new(KeymapData { engine, level_syms }) })
+        Ok(Keymap {
+            data: Arc::new(KeymapData { engine, level_syms }),
+        })
     }
 
     /// Hand out the stored slice equal to `syms`, which the engine computed from one level of `code`.
@@ -277,12 +288,26 @@ impl Keymap {
             variant.borrow(),
             options.as_deref().unwrap_or(""),
         );
-        Self::report(rs::Keymap::new_from_names(context.engine.clone(), Some(names), flags))
+        Self::report(rs::Keymap::new_from_names(
+            context.engine.clone(),
+            Some(names),
+            flags,
+        ))
     }
 
     /// Parse a keymap in text format, `None` if it does not compile. The reason is printed to standard error.
-    pub fn new_from_string(context: &Context, string: String, format: KeymapFormat, flags: KeymapCompileFlags) -> Option<Keymap> {
-        Self::report(rs::Keymap::new_from_string(context.engine.clone(), &string, format, flags))
+    pub fn new_from_string(
+        context: &Context,
+        string: String,
+        format: KeymapFormat,
+        flags: KeymapCompileFlags,
+    ) -> Option<Keymap> {
+        Self::report(rs::Keymap::new_from_string(
+            context.engine.clone(),
+            &string,
+            format,
+            flags,
+        ))
     }
 
     /// Parse the keymap in the first `size - 1` bytes of the file `fd` (`size` counts the terminating NUL of the
@@ -290,17 +315,33 @@ impl Keymap {
     ///
     /// # Safety
     /// No other process may truncate the file while it is mapped.
-    pub unsafe fn new_from_fd(context: &Context, fd: OwnedFd, size: usize, format: KeymapFormat, flags: KeymapCompileFlags) -> io::Result<Option<Keymap>> {
+    pub unsafe fn new_from_fd(
+        context: &Context,
+        fd: OwnedFd,
+        size: usize,
+        format: KeymapFormat,
+        flags: KeymapCompileFlags,
+    ) -> io::Result<Option<Keymap>> {
         if size == 0 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "the keymap size is 0, which leaves no room for its terminating NUL"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "the keymap size is 0, which leaves no room for its terminating NUL",
+            ));
         }
-        let map = MmapOptions::new().len(size).map_copy_read_only(&std::fs::File::from(fd))?;
+        let map = MmapOptions::new()
+            .len(size)
+            .map_copy_read_only(&std::fs::File::from(fd))?;
         let text = &map[..size - 1];
         let Ok(string) = std::str::from_utf8(text) else {
             eprintln!("xkbcommon: the keymap is not valid UTF-8");
             return Ok(None);
         };
-        Ok(Self::new_from_string(context, string.to_owned(), format, flags))
+        Ok(Self::new_from_string(
+            context,
+            string.to_owned(),
+            format,
+            flags,
+        ))
     }
 
     fn report(result: Result<rs::Keymap, rs::error::keymap::KeymapCompileError>) -> Option<Keymap> {
@@ -321,7 +362,10 @@ impl Keymap {
 
     /// The keymap in text format, which `new_from_string` parses back into the same keymap.
     pub fn get_as_string(&self, format: KeymapFormat) -> String {
-        self.data.engine.get_as_string(format).expect("a compiled keymap serialises")
+        self.data
+            .engine
+            .get_as_string(format)
+            .expect("a compiled keymap serialises")
     }
 
     /// The smallest keycode of the keymap.
@@ -356,12 +400,18 @@ impl Keymap {
 
     /// The name of a modifier; panics if `idx` is not below `num_mods`.
     pub fn mod_get_name(&self, idx: ModIndex) -> &str {
-        self.data.engine.mod_get_name(widen(idx)).expect("modifier index in range")
+        self.data
+            .engine
+            .mod_get_name(widen(idx))
+            .expect("modifier index in range")
     }
 
     /// The index of the modifier with this name, [`MOD_INVALID`] if there is none.
     pub fn mod_get_index<S: Borrow<str> + ?Sized>(&self, name: &S) -> ModIndex {
-        self.data.engine.mod_get_index(name.borrow()).map_or(MOD_INVALID, narrow)
+        self.data
+            .engine
+            .mod_get_index(name.borrow())
+            .map_or(MOD_INVALID, narrow)
     }
 
     /// The names of the layouts, in index order. A layout without a name is skipped.
@@ -376,12 +426,18 @@ impl Keymap {
 
     /// The name of a layout; panics if `idx` is not below `num_layouts` or the layout has no name.
     pub fn layout_get_name(&self, idx: LayoutIndex) -> &str {
-        self.data.engine.layout_get_name(widen(idx)).expect("layout index in range with a name")
+        self.data
+            .engine
+            .layout_get_name(widen(idx))
+            .expect("layout index in range with a name")
     }
 
     /// The index of the layout with this name, [`LAYOUT_INVALID`] if there is none.
     pub fn layout_get_index<S: Borrow<str> + ?Sized>(&self, name: &S) -> LayoutIndex {
-        self.data.engine.layout_get_index(name.borrow()).map_or(LAYOUT_INVALID, narrow)
+        self.data
+            .engine
+            .layout_get_index(name.borrow())
+            .map_or(LAYOUT_INVALID, narrow)
     }
 
     /// The names of the LEDs, in index order. Unused indices are skipped.
@@ -391,12 +447,18 @@ impl Keymap {
 
     /// The name of a LED; panics if the index has no LED.
     pub fn led_get_name(&self, idx: LedIndex) -> &str {
-        self.data.engine.led_get_name(widen(idx)).expect("LED index in use")
+        self.data
+            .engine
+            .led_get_name(widen(idx))
+            .expect("LED index in use")
     }
 
     /// The index of the LED with this name, [`LED_INVALID`] if there is none.
     pub fn led_get_index<S: Borrow<str> + ?Sized>(&self, name: &S) -> LedIndex {
-        self.data.engine.led_get_index(name.borrow()).map_or(LED_INVALID, narrow)
+        self.data
+            .engine
+            .led_get_index(name.borrow())
+            .map_or(LED_INVALID, narrow)
     }
 
     /// The name of a key such as `AE01`, `None` for a keycode without a key.
@@ -406,17 +468,33 @@ impl Keymap {
 
     /// The number of layouts that define the key, 0 for a keycode without a key.
     pub fn num_layouts_for_key(&self, key: Keycode) -> LayoutIndex {
-        self.data.engine.num_layouts_for_key(key.raw()).map_or(0, narrow)
+        self.data
+            .engine
+            .num_layouts_for_key(key.raw())
+            .map_or(0, narrow)
     }
 
     /// The number of levels of the key in a layout (wrapped into range like the key does), 0 for no key.
     pub fn num_levels_for_key(&self, key: Keycode, layout: LayoutIndex) -> LevelIndex {
-        narrow(self.data.engine.num_levels_for_key(key.raw(), widen(layout)))
+        narrow(
+            self.data
+                .engine
+                .num_levels_for_key(key.raw(), widen(layout)),
+        )
     }
 
     /// The keysyms of the key at an explicit layout and level, empty for no key or an unknown level.
-    pub fn key_get_syms_by_level(&self, key: Keycode, layout: LayoutIndex, level: LevelIndex) -> &[Keysym] {
-        match self.data.engine.key_get_syms_by_level(key.raw(), widen(layout), widen(level)) {
+    pub fn key_get_syms_by_level(
+        &self,
+        key: Keycode,
+        layout: LayoutIndex,
+        level: LevelIndex,
+    ) -> &[Keysym] {
+        match self
+            .data
+            .engine
+            .key_get_syms_by_level(key.raw(), widen(layout), widen(level))
+        {
             Ok(syms) => self.level_syms(key.raw(), &syms),
             Err(_) => &[],
         }
@@ -442,7 +520,10 @@ pub struct State {
 impl State {
     /// A state with nothing pressed or locked.
     pub fn new(keymap: &Keymap) -> State {
-        State { keymap: keymap.clone(), engine: rs::State::new(keymap.data.engine.clone()) }
+        State {
+            keymap: keymap.clone(),
+            engine: rs::State::new(keymap.data.engine.clone()),
+        }
     }
 
     /// The keymap the state was created with.
@@ -471,19 +552,29 @@ impl State {
         latched_layout: LayoutIndex,
         locked_layout: LayoutIndex,
     ) -> StateComponent {
-        let changed = self.engine.update_mask(depressed_mods, latched_mods, locked_mods, widen(depressed_layout), widen(latched_layout), widen(locked_layout));
+        let changed = self.engine.update_mask(
+            depressed_mods,
+            latched_mods,
+            locked_mods,
+            widen(depressed_layout),
+            widen(latched_layout),
+            widen(locked_layout),
+        );
         u32::from(changed.bits())
     }
 
     /// The keysyms of the key in the current state, without the capitalisation or control transformations.
     pub fn key_get_syms(&self, key: Keycode) -> &[Keysym] {
-        self.keymap.level_syms(key.raw(), &self.engine.key_get_syms(key.raw()))
+        self.keymap
+            .level_syms(key.raw(), &self.engine.key_get_syms(key.raw()))
     }
 
     /// The single keysym of the key in the current state with capitalisation applied; `NoSymbol` if the key has
     /// none or more than one.
     pub fn key_get_one_sym(&self, key: Keycode) -> Keysym {
-        self.engine.key_get_one_sym(key.raw()).unwrap_or(Keysym::new(0))
+        self.engine
+            .key_get_one_sym(key.raw())
+            .unwrap_or(Keysym::new(0))
     }
 
     /// The text of the key in the current state with capitalisation and control transformations applied; empty for
@@ -502,7 +593,9 @@ impl State {
 
     /// The layout the key uses in the current state, [`LAYOUT_INVALID`] for a keycode without a key.
     pub fn key_get_layout(&self, key: Keycode) -> LayoutIndex {
-        self.engine.key_get_layout(key.raw()).map_or(LAYOUT_INVALID, narrow)
+        self.engine
+            .key_get_layout(key.raw())
+            .map_or(LAYOUT_INVALID, narrow)
     }
 
     /// The modifier mask of the given components (`STATE_MODS_*`), for a `wl_keyboard.modifiers` event.
@@ -516,18 +609,34 @@ impl State {
     }
 
     /// Whether the named modifier is active in the given components; `false` for an unknown name.
-    pub fn mod_name_is_active<S: Borrow<str> + ?Sized>(&self, name: &S, components: StateComponent) -> bool {
-        matches!(self.engine.mod_name_is_active(name.borrow(), component_flags(components)), Ok(true))
+    pub fn mod_name_is_active<S: Borrow<str> + ?Sized>(
+        &self,
+        name: &S,
+        components: StateComponent,
+    ) -> bool {
+        matches!(
+            self.engine
+                .mod_name_is_active(name.borrow(), component_flags(components)),
+            Ok(true)
+        )
     }
 
     /// Whether the modifier with this index is active in the given components; `false` for an unknown index.
     pub fn mod_index_is_active(&self, idx: ModIndex, components: StateComponent) -> bool {
-        matches!(self.engine.mod_index_is_active(widen(idx), component_flags(components)), Ok(true))
+        matches!(
+            self.engine
+                .mod_index_is_active(widen(idx), component_flags(components)),
+            Ok(true)
+        )
     }
 
     /// Whether the layout with this index is active in the given components; `false` for an unknown index.
     pub fn layout_index_is_active(&self, idx: LayoutIndex, components: StateComponent) -> bool {
-        matches!(self.engine.layout_index_is_active(widen(idx), component_flags(components)), Ok(true))
+        matches!(
+            self.engine
+                .layout_index_is_active(widen(idx), component_flags(components)),
+            Ok(true)
+        )
     }
 
     /// Whether the named LED is lit; `false` for an unknown name.
@@ -548,7 +657,9 @@ impl State {
 
 /// The engine's flag set for a mask of `STATE_*` bits; unknown bits are dropped like the C library does.
 fn component_flags(components: StateComponent) -> rs::xkb_state::StateComponent {
-    rs::xkb_state::StateComponent::from_bits_truncate(u16::try_from(components & 0xffff).expect("masked to 16 bits"))
+    rs::xkb_state::StateComponent::from_bits_truncate(
+        u16::try_from(components & 0xffff).expect("masked to 16 bits"),
+    )
 }
 
 #[cfg(test)]
@@ -560,7 +671,18 @@ mod tests {
         let fd = OwnedFd::from(std::fs::File::open("/dev/null").unwrap());
         let context = Context::new(CONTEXT_NO_FLAGS);
         // SAFETY: nothing is mapped for a zero size.
-        let result = unsafe { Keymap::new_from_fd(&context, fd, 0, KEYMAP_FORMAT_TEXT_V1, KEYMAP_COMPILE_NO_FLAGS) };
-        assert_eq!(result.err().map(|err| err.kind()), Some(io::ErrorKind::InvalidData));
+        let result = unsafe {
+            Keymap::new_from_fd(
+                &context,
+                fd,
+                0,
+                KEYMAP_FORMAT_TEXT_V1,
+                KEYMAP_COMPILE_NO_FLAGS,
+            )
+        };
+        assert_eq!(
+            result.err().map(|err| err.kind()),
+            Some(io::ErrorKind::InvalidData)
+        );
     }
 }

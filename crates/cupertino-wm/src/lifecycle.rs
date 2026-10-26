@@ -26,7 +26,9 @@
 
 use cupertino_animation::spring::Spring;
 use cupertino_animation::{AnimatedValue, CubicBezier, Curve};
-use cupertino_effects::{cosine, frame_change_duration, ProgressAnimator, TransformKind, TransformSample, WindowKind};
+use cupertino_effects::{
+    cosine, frame_change_duration, ProgressAnimator, TransformKind, TransformSample, WindowKind,
+};
 
 use crate::config::AnimationConfig;
 use crate::geometry::{Edges, Rect};
@@ -63,17 +65,34 @@ pub enum LifecycleState {
 impl LifecycleState {
     pub fn is_transient(self) -> bool {
         use LifecycleState::*;
-        matches!(self, Opening | Minimizing | Restoring | Zooming | Unzooming | EnterFullScreen | ExitFullScreen | Tiling(_) | Closing)
+        matches!(
+            self,
+            Opening
+                | Minimizing
+                | Restoring
+                | Zooming
+                | Unzooming
+                | EnterFullScreen
+                | ExitFullScreen
+                | Tiling(_)
+                | Closing
+        )
     }
     /// Whether the window is drawn at all.
     pub fn is_visible(self) -> bool {
-        !matches!(self, LifecycleState::Created | LifecycleState::Minimized | LifecycleState::Destroyed)
+        !matches!(
+            self,
+            LifecycleState::Created | LifecycleState::Minimized | LifecycleState::Destroyed
+        )
     }
     pub fn is_minimized(self) -> bool {
         matches!(self, LifecycleState::Minimizing | LifecycleState::Minimized)
     }
     pub fn is_fullscreen(self) -> bool {
-        matches!(self, LifecycleState::EnterFullScreen | LifecycleState::FullScreen)
+        matches!(
+            self,
+            LifecycleState::EnterFullScreen | LifecycleState::FullScreen
+        )
     }
     pub fn is_dead(self) -> bool {
         matches!(self, LifecycleState::Closing | LifecycleState::Destroyed)
@@ -132,12 +151,19 @@ struct FrameMotion {
 
 impl FrameMotion {
     fn new(frame: Rect) -> Self {
-        Self { curve: AnimatedValue::new(frame.to_array()), sin2: None }
+        Self {
+            curve: AnimatedValue::new(frame.to_array()),
+            sin2: None,
+        }
     }
 
     fn value(&self, now: f64) -> Rect {
         match self.sin2 {
-            Some(r) if r.duration > 0.0 => Rect::lerp(r.from, r.to, cosine(((now - r.start) / r.duration).clamp(0.0, 1.0))),
+            Some(r) if r.duration > 0.0 => Rect::lerp(
+                r.from,
+                r.to,
+                cosine(((now - r.start) / r.duration).clamp(0.0, 1.0)),
+            ),
             Some(r) => r.to,
             None => Rect::from_array(self.curve.value(now)),
         }
@@ -154,7 +180,12 @@ impl FrameMotion {
     fn ease_to(&mut self, to: Rect, duration: f64, now: f64) {
         let from = self.value(now);
         self.curve.set_immediately(to.to_array());
-        self.sin2 = Some(Sin2Run { from, to, start: now, duration });
+        self.sin2 = Some(Sin2Run {
+            from,
+            to,
+            start: now,
+            duration,
+        });
     }
 
     fn set_immediately(&mut self, frame: Rect) {
@@ -200,12 +231,17 @@ pub struct Lifecycle {
 }
 
 fn instant() -> Curve {
-    Curve::Timed { duration: 0.0, bezier: CubicBezier::LINEAR }
+    Curve::Timed {
+        duration: 0.0,
+        bezier: CubicBezier::LINEAR,
+    }
 }
 
 /// Largest absolute change of x, y, width or height (the `maxΔ` of ).
 fn max_delta(a: Rect, b: Rect) -> f64 {
-    [b.x - a.x, b.y - a.y, b.w - a.w, b.h - a.h].into_iter().fold(0.0, |m, d| m.max(d.abs()))
+    [b.x - a.x, b.y - a.y, b.w - a.w, b.h - a.h]
+        .into_iter()
+        .fold(0.0, |m, d| m.max(d.abs()))
 }
 
 pub fn curve_duration(c: Curve) -> f64 {
@@ -290,9 +326,10 @@ impl Lifecycle {
             LifecycleState::Zooming | LifecycleState::Zoomed => s.maximized = true,
             LifecycleState::EnterFullScreen | LifecycleState::FullScreen => s.fullscreen = true,
             LifecycleState::Tiling(k) | LifecycleState::Tiled(k) => s.tiled = k.boundary_edges(),
-            LifecycleState::Minimizing | LifecycleState::Minimized | LifecycleState::Restoring | LifecycleState::ExitFullScreen => {
-                rest_states(&mut s, self.rest)
-            }
+            LifecycleState::Minimizing
+            | LifecycleState::Minimized
+            | LifecycleState::Restoring
+            | LifecycleState::ExitFullScreen => rest_states(&mut s, self.rest),
             _ => {}
         }
         s
@@ -300,7 +337,9 @@ impl Lifecycle {
 
     pub fn presentation(&self, now: f64) -> Presentation {
         let warp = self.warp.value(now);
-        let t = self.transform.map_or(TransformSample::IDENTITY, |t| t.kind.sample(t.progress.value(now)));
+        let t = self.transform.map_or(TransformSample::IDENTITY, |t| {
+            t.kind.sample(t.progress.value(now))
+        });
         let mut frame = self.frame.value(now);
         if let Some(c) = self.catch_up {
             let left = 1.0 - c.curve.eval(((now - c.start) / c.duration).clamp(0.0, 1.0));
@@ -332,15 +371,26 @@ impl Lifecycle {
             progress.animate_to(1.0, now);
             Transform { kind, progress }
         });
-        self.transform.map_or(0.0, |t| t.progress.driver().settle_time())
+        self.transform
+            .map_or(0.0, |t| t.progress.driver().settle_time())
     }
 
     fn layout_active(&self) -> bool {
         use LifecycleState::*;
-        matches!(self.state, Opening | Normal | Zooming | Zoomed | Unzooming | Tiling(_) | Tiled(_))
+        matches!(
+            self.state,
+            Opening | Normal | Zooming | Zoomed | Unzooming | Tiling(_) | Tiled(_)
+        )
     }
 
-    fn enter_rest(&mut self, rest: Resting, target: Rect, state: LifecycleState, curve: Curve, now: f64) {
+    fn enter_rest(
+        &mut self,
+        rest: Resting,
+        target: Rect,
+        state: LifecycleState,
+        curve: Curve,
+        now: f64,
+    ) {
         self.rest = rest;
         match rest {
             Resting::Zoomed => self.zoom_frame = target,
@@ -399,8 +449,14 @@ impl Lifecycle {
             return 0.0;
         }
         match self.transform {
-            Some(Transform { kind: TransformKind::SheetIn, progress }) => progress.value(now).clamp(0.0, 1.0),
-            Some(Transform { kind: TransformKind::SheetOut, progress }) => (1.0 - progress.value(now)).clamp(0.0, 1.0),
+            Some(Transform {
+                kind: TransformKind::SheetIn,
+                progress,
+            }) => progress.value(now).clamp(0.0, 1.0),
+            Some(Transform {
+                kind: TransformKind::SheetOut,
+                progress,
+            }) => (1.0 - progress.value(now)).clamp(0.0, 1.0),
             _ if self.state == LifecycleState::Closing => 0.0,
             _ => 1.0,
         }
@@ -415,7 +471,12 @@ impl Lifecycle {
             return false;
         }
         let target = f.to_array();
-        self.catch_up = Some(CatchUp { offset: std::array::from_fn(|i| shown[i] - target[i]), start: now, duration, curve });
+        self.catch_up = Some(CatchUp {
+            offset: std::array::from_fn(|i| shown[i] - target[i]),
+            start: now,
+            duration,
+            curve,
+        });
         true
     }
 
@@ -484,10 +545,17 @@ impl Lifecycle {
         if !self.layout_active() {
             return false;
         }
-        if matches!(self.state, Tiling(_) | Tiled(_)) && self.rest == Resting::Tiled(kind) && self.tile_frame == target {
+        if matches!(self.state, Tiling(_) | Tiled(_))
+            && self.rest == Resting::Tiled(kind)
+            && self.tile_frame == target
+        {
             return false;
         }
-        let c = if self.cfg.disable_tiling { instant() } else { self.cfg.tiling };
+        let c = if self.cfg.disable_tiling {
+            instant()
+        } else {
+            self.cfg.tiling
+        };
         self.enter_rest(Resting::Tiled(kind), target, Tiling(kind), c, now);
         true
     }
@@ -502,7 +570,11 @@ impl Lifecycle {
         if let Some(f) = frame {
             self.normal_frame = f;
         }
-        let c = if self.cfg.disable_tiling { instant() } else { self.cfg.untile };
+        let c = if self.cfg.disable_tiling {
+            instant()
+        } else {
+            self.cfg.untile
+        };
         let t = self.normal_frame;
         self.rest = Resting::Normal;
         self.frame.animate_to(t, c, now);
@@ -527,7 +599,10 @@ impl Lifecycle {
 
     /// Retarget the rectangle of a minimizing or minimized window; false in any other state.
     pub fn set_minimize_target(&mut self, target: Rect) -> bool {
-        let applies = matches!(self.state, LifecycleState::Minimizing | LifecycleState::Minimized);
+        let applies = matches!(
+            self.state,
+            LifecycleState::Minimizing | LifecycleState::Minimized
+        );
         if applies {
             self.minimize_target = target;
         }
@@ -687,7 +762,10 @@ mod tests {
     }
 
     fn rect_eq(a: Rect, b: Rect) -> bool {
-        a.to_array().iter().zip(b.to_array()).all(|(x, y)| (x - y).abs() < 1e-6)
+        a.to_array()
+            .iter()
+            .zip(b.to_array())
+            .all(|(x, y)| (x - y).abs() < 1e-6)
     }
 
     #[test]
@@ -696,7 +774,10 @@ mod tests {
         assert!(!l.presentation(0.0).visible);
         l.map(1.0);
         let p = l.presentation(1.0);
-        assert_eq!((p.visible, p.opacity, p.scale, p.shadow), (true, 1.0, 1.0, 1.0));
+        assert_eq!(
+            (p.visible, p.opacity, p.scale, p.shadow),
+            (true, 1.0, 1.0, 1.0)
+        );
         assert_eq!(l.tick(1.0), Some((Opening, Normal)));
         assert!(!l.map(5.0), "map only from Created");
         assert!(l.close(2.0));
@@ -711,14 +792,21 @@ mod tests {
         let p0 = l.presentation(1.0);
         assert_eq!((p0.opacity, p0.scale, p0.shadow), (0.0, 0.0, 0.0));
         let mid = l.presentation(1.1);
-        assert!((mid.scale - 0.5).abs() < 1e-12 && (mid.opacity - 0.5).abs() < 1e-12, "{mid:?}");
+        assert!(
+            (mid.scale - 0.5).abs() < 1e-12 && (mid.opacity - 0.5).abs() < 1e-12,
+            "{mid:?}"
+        );
         assert!(l.tick(1.19).is_none());
         assert_eq!(l.tick(1.2), Some((Opening, Normal)));
         let p = l.presentation(1.2);
         assert_eq!((p.opacity, p.scale, p.shadow), (1.0, 1.0, 1.0));
         assert!(rect_eq(p.frame, N));
         assert!(l.close(2.0));
-        assert_eq!(l.tick(2.0), Some((Closing, Destroyed)), "documents close without a transform");
+        assert_eq!(
+            l.tick(2.0),
+            Some((Closing, Destroyed)),
+            "documents close without a transform"
+        );
     }
 
     #[test]
@@ -731,7 +819,10 @@ mod tests {
         let t = settle(&mut l, 0.0);
         assert!(l.close(t));
         let mid = l.presentation(t + 0.075);
-        assert!((mid.scale - 0.95).abs() < 1e-12 && (mid.opacity - 0.5).abs() < 1e-12, "{mid:?}");
+        assert!(
+            (mid.scale - 0.95).abs() < 1e-12 && (mid.opacity - 0.5).abs() < 1e-12,
+            "{mid:?}"
+        );
         assert!(l.tick(t + 0.149).is_none());
         assert_eq!(l.tick(t + 0.15), Some((Closing, Destroyed)));
     }
@@ -741,16 +832,25 @@ mod tests {
         let mut l = Lifecycle::new(AnimationConfig::default(), WindowKind::Sheet, N);
         l.map(1.0);
         let p0 = l.presentation(1.0);
-        assert!(rect_eq(p0.frame, N.translate(0.0, -32.0)), "starts 32 pt above its place: {p0:?}");
+        assert!(
+            rect_eq(p0.frame, N.translate(0.0, -32.0)),
+            "starts 32 pt above its place: {p0:?}"
+        );
         assert_eq!((p0.opacity, p0.scale), (0.0, 1.0));
         let mid = l.presentation(1.13);
-        assert!(rect_eq(mid.frame, N.translate(0.0, -16.0)) && (mid.opacity - 1.0).abs() < 1e-12, "{mid:?}");
+        assert!(
+            rect_eq(mid.frame, N.translate(0.0, -16.0)) && (mid.opacity - 1.0).abs() < 1e-12,
+            "{mid:?}"
+        );
         assert!(l.tick(1.25).is_none());
         assert_eq!(l.tick(1.26), Some((Opening, Normal)));
         assert!(rect_eq(l.presentation(1.26).frame, N));
         assert!(l.close(2.0));
         let out = l.presentation(2.13);
-        assert!(rect_eq(out.frame, N.translate(0.0, -16.0)) && (out.opacity - 0.5).abs() < 1e-12, "{out:?}");
+        assert!(
+            rect_eq(out.frame, N.translate(0.0, -16.0)) && (out.opacity - 0.5).abs() < 1e-12,
+            "{out:?}"
+        );
         assert_eq!(l.tick(2.26), Some((Closing, Destroyed)));
     }
 
@@ -760,15 +860,29 @@ mod tests {
         let near = Rect::new(150.0, 100.0, 700.0, 400.0);
         assert!(l.zoom(near, t));
         let d = 181.0 * 2f64.ln() / 750.0;
-        assert!(rect_eq(l.presentation(t + d / 2.0).frame, Rect::lerp(N, near, 0.5)));
-        assert!(rect_eq(l.presentation(t + d / 4.0).frame, Rect::lerp(N, near, 0.5 - 0.5 * (std::f64::consts::PI / 4.0).cos())));
+        assert!(rect_eq(
+            l.presentation(t + d / 2.0).frame,
+            Rect::lerp(N, near, 0.5)
+        ));
+        assert!(rect_eq(
+            l.presentation(t + d / 4.0).frame,
+            Rect::lerp(N, near, 0.5 - 0.5 * (std::f64::consts::PI / 4.0).cos())
+        ));
         assert!(l.tick(t + d - 1e-6).is_none());
         assert_eq!(l.tick(t + d), Some((Zooming, Zoomed)));
         assert!(l.unzoom(t + 1.0));
-        assert_eq!(l.tick(t + 1.0 + d), Some((Unzooming, Normal)), "the same distance back takes the same time");
+        assert_eq!(
+            l.tick(t + 1.0 + d),
+            Some((Unzooming, Normal)),
+            "the same distance back takes the same time"
+        );
         assert!(l.zoom(ZOOM, t + 2.0));
         assert!(l.tick(t + 2.0 + 0.349).is_none());
-        assert_eq!(l.tick(t + 2.0 + 0.35), Some((Zooming, Zoomed)), "large changes cap at 0.35 s");
+        assert_eq!(
+            l.tick(t + 2.0 + 0.35),
+            Some((Zooming, Zoomed)),
+            "large changes cap at 0.35 s"
+        );
     }
 
     #[test]
@@ -782,9 +896,15 @@ mod tests {
         let expected = moved.x - 30.0 * (1.0 - CubicBezier::EASE_OUT.eval(0.5));
         assert!((half - expected).abs() < 1e-9, "{half} vs {expected}");
         l.set_normal_frame(moved.translate(10.0, 0.0));
-        assert!((l.presentation(t + 0.075).frame.x - (expected + 10.0)).abs() < 1e-9, "the lag survives later moves");
+        assert!(
+            (l.presentation(t + 0.075).frame.x - (expected + 10.0)).abs() < 1e-9,
+            "the lag survives later moves"
+        );
         assert!(l.is_catching_up(t + 0.149) && !l.is_animating(t + 0.15));
-        assert!(rect_eq(l.presentation(t + 0.15).frame, moved.translate(10.0, 0.0)));
+        assert!(rect_eq(
+            l.presentation(t + 0.15).frame,
+            moved.translate(10.0, 0.0)
+        ));
     }
 
     #[test]
@@ -837,7 +957,10 @@ mod tests {
         assert!(f1.w > N.w && f1.w < ZOOM.w);
         assert!(l.unzoom(t1));
         assert_eq!(l.state(), Unzooming);
-        assert!(rect_eq(l.presentation(t1).frame, f1), "retarget keeps position");
+        assert!(
+            rect_eq(l.presentation(t1).frame, f1),
+            "retarget keeps position"
+        );
         let t = settle(&mut l, t1);
         assert_eq!(l.state(), Normal);
         assert!(rect_eq(l.presentation(t).frame, N));
@@ -892,7 +1015,11 @@ mod tests {
         assert!(rect_eq(l.presentation(t1).frame, f));
         settle(&mut l, t1);
         assert_eq!(l.state(), Tiled(TileKind::TopRight));
-        assert!(!l.tile(TileKind::TopRight, Rect::new(960.0, 24.0, 960.0, 528.0), 50.0));
+        assert!(!l.tile(
+            TileKind::TopRight,
+            Rect::new(960.0, 24.0, 960.0, 528.0),
+            50.0
+        ));
     }
 
     #[test]

@@ -60,7 +60,11 @@ fn open_with(apps: &[AppChoice]) -> Vec<MenuItem> {
     let mut items: Vec<MenuItem> = apps
         .iter()
         .map(|a| {
-            let label = if a.is_default { format!("{} (default)", a.name) } else { a.name.clone() };
+            let label = if a.is_default {
+                format!("{} (default)", a.name)
+            } else {
+                a.name.clone()
+            };
             MenuItem::command(&label, Command::OpenWith(a.id.clone()), true)
         })
         .collect();
@@ -76,12 +80,19 @@ pub fn condense(items: Vec<MenuItem>) -> Vec<MenuItem> {
     let mut out: Vec<MenuItem> = Vec::with_capacity(items.len());
     for item in items {
         let is_sep = item.kind == ItemKind::Separator;
-        if is_sep && out.last().is_none_or(|last| last.kind == ItemKind::Separator) {
+        if is_sep
+            && out
+                .last()
+                .is_none_or(|last| last.kind == ItemKind::Separator)
+        {
             continue;
         }
         out.push(item);
     }
-    if out.last().is_some_and(|last| last.kind == ItemKind::Separator) {
+    if out
+        .last()
+        .is_some_and(|last| last.kind == ItemKind::Separator)
+    {
         out.pop();
     }
     out
@@ -93,22 +104,46 @@ pub fn item_menu(subject: &Subject, apps: &[AppChoice]) -> Vec<MenuItem> {
     let mut rows = Vec::new();
     if !subject.in_trash {
         // descriptor 0
-        let label = if one { "New Folder with Selection (1 Item)".to_string() } else { format!("New Folder with Selection ({} Items)", subject.count) };
-        rows.push(MenuItem::command(&label, Command::NewFolderWithSelection, true));
+        let label = if one {
+            "New Folder with Selection (1 Item)".to_string()
+        } else {
+            format!("New Folder with Selection ({} Items)", subject.count)
+        };
+        rows.push(MenuItem::command(
+            &label,
+            Command::NewFolderWithSelection,
+            true,
+        ));
     }
     // descriptors 3 and 4: Open, with Open in New Window(s) while Alt is held when every item is a folder
     let mut open = MenuItem::command("Open", Command::Open, true);
     if subject.all_folders {
-        let label = if one { "Open in New Window" } else { "Open in New Windows" };
-        open = open.with_alternate(Mods::ALT, MenuItem::command(label, Command::OpenInNewWindow, true));
+        let label = if one {
+            "Open in New Window"
+        } else {
+            "Open in New Windows"
+        };
+        open = open.with_alternate(
+            Mods::ALT,
+            MenuItem::command(label, Command::OpenInNewWindow, true),
+        );
     }
     rows.push(open);
     // descriptor 5: Open With, and Always Open With on Alt
     let enabled = !apps.is_empty();
-    rows.push(MenuItem::submenu("Open With", open_with(apps), enabled).with_alternate(Mods::ALT, MenuItem::submenu("Always Open With", open_with(apps), enabled)));
+    rows.push(
+        MenuItem::submenu("Open With", open_with(apps), enabled).with_alternate(
+            Mods::ALT,
+            MenuItem::submenu("Always Open With", open_with(apps), enabled),
+        ),
+    );
     // descriptor 7 (links) and 11 (the trash)
     if subject.single_link {
-        rows.push(MenuItem::command("Show Original", Command::ShowOriginal, true));
+        rows.push(MenuItem::command(
+            "Show Original",
+            Command::ShowOriginal,
+            true,
+        ));
     }
     if subject.in_trash {
         rows.push(MenuItem::command("Put Back", Command::PutBack, true));
@@ -118,24 +153,67 @@ pub fn item_menu(subject: &Subject, apps: &[AppChoice]) -> Vec<MenuItem> {
     if subject.in_trash {
         rows.push(MenuItem::unavailable("Delete Immediately…"));
     } else {
-        rows.push(MenuItem::command("Move to Trash", Command::MoveToTrash, true).with_alternate(Mods::ALT, MenuItem::unavailable("Delete Immediately…")));
+        rows.push(
+            MenuItem::command("Move to Trash", Command::MoveToTrash, true)
+                .with_alternate(Mods::ALT, MenuItem::unavailable("Delete Immediately…")),
+        );
     }
     rows.push(MenuItem::separator());
     // descriptors 39 to 41: Get Info, Show Inspector on Alt, Get Summary Info on Ctrl
-    rows.push(MenuItem::unavailable("Get Info").with_alternate(Mods::ALT, MenuItem::unavailable("Show Inspector")).with_alternate(Mods::CTRL, MenuItem::unavailable("Get Summary Info")));
+    rows.push(
+        MenuItem::unavailable("Get Info")
+            .with_alternate(Mods::ALT, MenuItem::unavailable("Show Inspector"))
+            .with_alternate(Mods::CTRL, MenuItem::unavailable("Get Summary Info")),
+    );
     // descriptors 46 to 52
     rows.push(MenuItem::command("Rename", Command::Rename, one));
-    rows.push(MenuItem::unavailable(&named(subject, "Compress “{}”", "Compress {} Items")).with_alternate(Mods::ALT, MenuItem::unavailable(&named(subject, "Compress “{}”…", "Compress {} Items…"))));
-    rows.push(MenuItem::command("Duplicate", Command::Duplicate, true).with_alternate(Mods::SHIFT_ALT, MenuItem::unavailable("Duplicate Exactly")));
+    rows.push(
+        MenuItem::unavailable(&named(subject, "Compress “{}”", "Compress {} Items"))
+            .with_alternate(
+                Mods::ALT,
+                MenuItem::unavailable(&named(subject, "Compress “{}”…", "Compress {} Items…")),
+            ),
+    );
+    rows.push(
+        MenuItem::command("Duplicate", Command::Duplicate, true)
+            .with_alternate(Mods::SHIFT_ALT, MenuItem::unavailable("Duplicate Exactly")),
+    );
     rows.push(MenuItem::command("Make Alias", Command::MakeAlias, true));
-    rows.push(MenuItem::unavailable(&named(subject, "Quick Preview “{}”", "Quick Preview {} Items")).with_alternate(Mods::ALT, MenuItem::unavailable(&named(subject, "Slideshow “{}”", "Slideshow {} Items"))));
+    rows.push(
+        MenuItem::unavailable(&named(
+            subject,
+            "Quick Preview “{}”",
+            "Quick Preview {} Items",
+        ))
+        .with_alternate(
+            Mods::ALT,
+            MenuItem::unavailable(&named(subject, "Slideshow “{}”", "Slideshow {} Items")),
+        ),
+    );
     rows.push(MenuItem::separator());
     // descriptors 59 and 60: Copy, Copy as Pathname on Alt; 63: Share
-    rows.push(MenuItem::unavailable(&named(subject, "Copy “{}”", "Copy {} Items")).with_alternate(Mods::ALT, MenuItem::unavailable(&named(subject, "Copy “{}” as Pathname", "Copy {} Items as Pathnames"))));
+    rows.push(
+        MenuItem::unavailable(&named(subject, "Copy “{}”", "Copy {} Items")).with_alternate(
+            Mods::ALT,
+            MenuItem::unavailable(&named(
+                subject,
+                "Copy “{}” as Pathname",
+                "Copy {} Items as Pathnames",
+            )),
+        ),
+    );
     rows.push(MenuItem::submenu("Share", Vec::new(), false));
     rows.push(MenuItem::separator());
     // descriptor 69: the tag row
-    rows.push(MenuItem { label: "Tags…".into(), kind: ItemKind::TagRow { on: subject.tags_on.clone() }, enabled: true, checked: false, alternates: Vec::new() });
+    rows.push(MenuItem {
+        label: "Tags…".into(),
+        kind: ItemKind::TagRow {
+            on: subject.tags_on.clone(),
+        },
+        enabled: true,
+        checked: false,
+        alternates: Vec::new(),
+    });
     rows.push(MenuItem::separator());
     // descriptor 77: Quick Actions
     rows.push(MenuItem::submenu("Quick Actions", Vec::new(), false));
@@ -158,21 +236,46 @@ fn sort_choices() -> [(&'static str, Option<(SortKey, bool)>); 8] {
 }
 
 fn sort_menu(current: SortSpec) -> Vec<MenuItem> {
-    let mut items = vec![MenuItem::command("None", Command::SortBy(SortKey::None, true), true).checked(current.key == SortKey::None), MenuItem::separator(), MenuItem::unavailable("Snap to Grid"), MenuItem::separator()];
+    let mut items = vec![
+        MenuItem::command("None", Command::SortBy(SortKey::None, true), true)
+            .checked(current.key == SortKey::None),
+        MenuItem::separator(),
+        MenuItem::unavailable("Snap to Grid"),
+        MenuItem::separator(),
+    ];
     for (title, choice) in sort_choices().into_iter().skip(1) {
         items.push(match choice {
-            Some((key, ascending)) => MenuItem::command(title, Command::SortBy(key, ascending), true).checked(current.key == key),
+            Some((key, ascending)) => {
+                MenuItem::command(title, Command::SortBy(key, ascending), true)
+                    .checked(current.key == key)
+            }
             None => MenuItem::unavailable(title),
         });
     }
-    items.push(MenuItem::command("Tags", Command::SortBy(SortKey::Tags, true), true).checked(current.key == SortKey::Tags));
+    items.push(
+        MenuItem::command("Tags", Command::SortBy(SortKey::Tags, true), true)
+            .checked(current.key == SortKey::Tags),
+    );
     items
 }
 
 /// The Group By menu: the folder view does not draw groups yet, so every choice is disabled.
 fn group_menu() -> Vec<MenuItem> {
     let mut items = vec![MenuItem::unavailable("None"), MenuItem::separator()];
-    items.extend(["Name", "Kind", "Application", "Date Last Opened", "Date Added", "Date Modified", "Date Created", "Size", "Tags"].map(MenuItem::unavailable));
+    items.extend(
+        [
+            "Name",
+            "Kind",
+            "Application",
+            "Date Last Opened",
+            "Date Added",
+            "Date Modified",
+            "Date Created",
+            "Size",
+            "Tags",
+        ]
+        .map(MenuItem::unavailable),
+    );
     items
 }
 
@@ -182,7 +285,9 @@ pub fn background_menu(ctx: &Background) -> Vec<MenuItem> {
         // descriptor 1
         MenuItem::command("New Folder", Command::NewFolder, !ctx.in_trash),
         // descriptors 17 to 19: Paste Item, Move Item Here on Alt, Paste Item Exactly on Shift + Alt
-        MenuItem::unavailable("Paste Item").with_alternate(Mods::ALT, MenuItem::unavailable("Move Item Here")).with_alternate(Mods::SHIFT_ALT, MenuItem::unavailable("Paste Item Exactly")),
+        MenuItem::unavailable("Paste Item")
+            .with_alternate(Mods::ALT, MenuItem::unavailable("Move Item Here"))
+            .with_alternate(Mods::SHIFT_ALT, MenuItem::unavailable("Paste Item Exactly")),
         MenuItem::separator(),
     ];
     // descriptor 27
@@ -191,11 +296,21 @@ pub fn background_menu(ctx: &Background) -> Vec<MenuItem> {
     }
     rows.push(MenuItem::separator());
     // descriptors 39 and 40
-    rows.push(MenuItem::unavailable("Get Info").with_alternate(Mods::ALT, MenuItem::unavailable("Show Inspector")).with_alternate(Mods::CTRL, MenuItem::unavailable("Get Summary Info")));
+    rows.push(
+        MenuItem::unavailable("Get Info")
+            .with_alternate(Mods::ALT, MenuItem::unavailable("Show Inspector"))
+            .with_alternate(Mods::CTRL, MenuItem::unavailable("Get Summary Info")),
+    );
     rows.push(MenuItem::separator());
     // descriptor 71: the view modes; 72: the view-specific block (Use Groups, Group By, Sort By, Clean Up By);
     // 73: Show View Options
-    rows.push(MenuItem { label: "As Icons".into(), kind: ItemKind::ViewRow { current: ctx.view }, enabled: true, checked: false, alternates: Vec::new() });
+    rows.push(MenuItem {
+        label: "As Icons".into(),
+        kind: ItemKind::ViewRow { current: ctx.view },
+        enabled: true,
+        checked: false,
+        alternates: Vec::new(),
+    });
     rows.push(MenuItem::unavailable("Use Groups"));
     rows.push(MenuItem::submenu("Group By", group_menu(), false));
     rows.push(MenuItem::submenu("Sort By", sort_menu(ctx.sort), true));
@@ -208,8 +323,10 @@ pub fn background_menu(ctx: &Background) -> Vec<MenuItem> {
 /// the window has those views. Titles approximate (the popup's titles is not known).
 pub fn view_menu(current: ViewMode) -> Vec<MenuItem> {
     vec![
-        MenuItem::command("Icons", Command::SetView(ViewMode::Icons), true).checked(current == ViewMode::Icons),
-        MenuItem::command("List", Command::SetView(ViewMode::List), true).checked(current == ViewMode::List),
+        MenuItem::command("Icons", Command::SetView(ViewMode::Icons), true)
+            .checked(current == ViewMode::Icons),
+        MenuItem::command("List", Command::SetView(ViewMode::List), true)
+            .checked(current == ViewMode::List),
         MenuItem::unavailable("Columns"),
         MenuItem::unavailable("Gallery"),
     ]
@@ -218,7 +335,13 @@ pub fn view_menu(current: ViewMode) -> Vec<MenuItem> {
 /// The toolbar's Tags popup: a row per tag colour in the tag row's order, checked when every selected item has it, all
 /// disabled without a selection. approximate: the design opens a tag editor with a name field here.
 pub fn tags_menu(on: &[TagColor], has_selection: bool) -> Vec<MenuItem> {
-    crate::context_menu::TAG_ROW_ORDER.iter().map(|&color| MenuItem::command(color.title(), Command::ToggleTag(color), has_selection).checked(on.contains(&color))).collect()
+    crate::context_menu::TAG_ROW_ORDER
+        .iter()
+        .map(|&color| {
+            MenuItem::command(color.title(), Command::ToggleTag(color), has_selection)
+                .checked(on.contains(&color))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -226,15 +349,42 @@ mod tests {
     use super::*;
 
     fn subject(count: usize) -> Subject {
-        Subject { count, name: "notes.txt".into(), all_folders: false, single_link: false, in_trash: false, tags_on: Vec::new() }
+        Subject {
+            count,
+            name: "notes.txt".into(),
+            all_folders: false,
+            single_link: false,
+            in_trash: false,
+            tags_on: Vec::new(),
+        }
     }
 
     fn apps() -> Vec<AppChoice> {
-        vec![AppChoice { id: "viewer.desktop".into(), name: "Viewer".into(), is_default: true }, AppChoice { id: "editor.desktop".into(), name: "Editor".into(), is_default: false }]
+        vec![
+            AppChoice {
+                id: "viewer.desktop".into(),
+                name: "Viewer".into(),
+                is_default: true,
+            },
+            AppChoice {
+                id: "editor.desktop".into(),
+                name: "Editor".into(),
+                is_default: false,
+            },
+        ]
     }
 
     fn labels(items: &[MenuItem]) -> Vec<&str> {
-        items.iter().map(|i| if i.kind == ItemKind::Separator { "-" } else { i.label.as_str() }).collect()
+        items
+            .iter()
+            .map(|i| {
+                if i.kind == ItemKind::Separator {
+                    "-"
+                } else {
+                    i.label.as_str()
+                }
+            })
+            .collect()
     }
 
     #[test]
@@ -269,11 +419,25 @@ mod tests {
     #[test]
     fn rows_without_a_backend_are_present_and_disabled() {
         let items = item_menu(&subject(2), &apps());
-        for title in ["Get Info", "Compress 2 Items", "Quick Preview 2 Items", "Copy 2 Items", "Share", "Quick Actions"] {
-            let item = items.iter().find(|i| i.label == title).unwrap_or_else(|| panic!("{title} is missing"));
-            assert!(!item.enabled && !item.is_selectable(), "{title} has no backend");
+        for title in [
+            "Get Info",
+            "Compress 2 Items",
+            "Quick Preview 2 Items",
+            "Copy 2 Items",
+            "Share",
+            "Quick Actions",
+        ] {
+            let item = items
+                .iter()
+                .find(|i| i.label == title)
+                .unwrap_or_else(|| panic!("{title} is missing"));
+            assert!(
+                !item.enabled && !item.is_selectable(),
+                "{title} has no backend"
+            );
         }
-        let doing = ["Open", "Move to Trash", "Duplicate", "Make Alias"].map(|t| items.iter().find(|i| i.label == t).unwrap().enabled);
+        let doing = ["Open", "Move to Trash", "Duplicate", "Make Alias"]
+            .map(|t| items.iter().find(|i| i.label == t).unwrap().enabled);
         assert_eq!(doing, [true; 4]);
     }
 
@@ -282,15 +446,27 @@ mod tests {
         let items = item_menu(&subject(3), &[]);
         let enabled = |title: &str| items.iter().find(|i| i.label == title).unwrap().enabled;
         assert!(!enabled("Rename") && !enabled("Open With"));
-        assert!(item_menu(&subject(1), &apps()).iter().find(|i| i.label == "Rename").unwrap().enabled);
+        assert!(
+            item_menu(&subject(1), &apps())
+                .iter()
+                .find(|i| i.label == "Rename")
+                .unwrap()
+                .enabled
+        );
     }
 
     #[test]
     fn open_with_lists_the_applications_with_the_default_marked_and_other_disabled() {
         let items = item_menu(&subject(1), &apps());
-        let ItemKind::Submenu(sub) = &items.iter().find(|i| i.label == "Open With").unwrap().kind else { panic!("Open With is a submenu") };
+        let ItemKind::Submenu(sub) = &items.iter().find(|i| i.label == "Open With").unwrap().kind
+        else {
+            panic!("Open With is a submenu")
+        };
         assert_eq!(labels(sub), ["Viewer (default)", "Editor", "-", "Other…"]);
-        assert_eq!(sub[1].kind, ItemKind::Command(Command::OpenWith("editor.desktop".into())));
+        assert_eq!(
+            sub[1].kind,
+            ItemKind::Command(Command::OpenWith("editor.desktop".into()))
+        );
         assert!(!sub[3].enabled);
     }
 
@@ -304,7 +480,15 @@ mod tests {
         assert_eq!(open.alternates[0].1.label, "Open in New Windows");
         let with = items.iter().find(|i| i.label == "Open With").unwrap();
         assert_eq!(with.alternates[0].1.label, "Always Open With");
-        assert!(item_menu(&subject(1), &apps()).iter().find(|i| i.label == "Open").unwrap().alternates.is_empty(), "files have no new window");
+        assert!(
+            item_menu(&subject(1), &apps())
+                .iter()
+                .find(|i| i.label == "Open")
+                .unwrap()
+                .alternates
+                .is_empty(),
+            "files have no new window"
+        );
     }
 
     #[test]
@@ -314,33 +498,97 @@ mod tests {
         assert!(labels(&item_menu(&link, &apps())).contains(&"Show Original"));
         let mut trashed = subject(1);
         trashed.in_trash = true;
-        let labels = labels(&item_menu(&trashed, &apps())).into_iter().map(str::to_string).collect::<Vec<_>>();
-        assert!(labels.contains(&"Put Back".to_string()) && !labels.contains(&"Move to Trash".to_string()));
+        let labels = labels(&item_menu(&trashed, &apps()))
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert!(
+            labels.contains(&"Put Back".to_string())
+                && !labels.contains(&"Move to Trash".to_string())
+        );
         assert!(!labels.iter().any(|l| l.starts_with("New Folder")));
     }
 
     #[test]
     fn the_background_menu_follows_the_table_and_marks_the_sort() {
-        let ctx = Background { view: ViewMode::Icons, sort: SortSpec::default(), in_trash: false };
+        let ctx = Background {
+            view: ViewMode::Icons,
+            sort: SortSpec::default(),
+            in_trash: false,
+        };
         let items = background_menu(&ctx);
-        assert_eq!(labels(&items), ["New Folder", "Paste Item", "-", "Get Info", "-", "As Icons", "Use Groups", "Group By", "Sort By", "Clean Up By", "Show View Options"]);
-        let ItemKind::Submenu(sort) = &items[8].kind else { panic!("Sort By is a submenu") };
-        assert_eq!(labels(sort), ["None", "-", "Snap to Grid", "-", "Name", "Kind", "Date Last Opened", "Date Added", "Date Modified", "Date Created", "Size", "Tags"]);
-        let checked: Vec<&str> = sort.iter().filter(|i| i.checked).map(|i| i.label.as_str()).collect();
+        assert_eq!(
+            labels(&items),
+            [
+                "New Folder",
+                "Paste Item",
+                "-",
+                "Get Info",
+                "-",
+                "As Icons",
+                "Use Groups",
+                "Group By",
+                "Sort By",
+                "Clean Up By",
+                "Show View Options"
+            ]
+        );
+        let ItemKind::Submenu(sort) = &items[8].kind else {
+            panic!("Sort By is a submenu")
+        };
+        assert_eq!(
+            labels(sort),
+            [
+                "None",
+                "-",
+                "Snap to Grid",
+                "-",
+                "Name",
+                "Kind",
+                "Date Last Opened",
+                "Date Added",
+                "Date Modified",
+                "Date Created",
+                "Size",
+                "Tags"
+            ]
+        );
+        let checked: Vec<&str> = sort
+            .iter()
+            .filter(|i| i.checked)
+            .map(|i| i.label.as_str())
+            .collect();
         assert_eq!(checked, ["Name"]);
-        assert_eq!(sort[5].kind, ItemKind::Command(Command::SortBy(SortKey::Kind, true)));
+        assert_eq!(
+            sort[5].kind,
+            ItemKind::Command(Command::SortBy(SortKey::Kind, true))
+        );
         assert!(!sort[7].enabled, "no date added in the listing");
     }
 
     #[test]
     fn paste_alternates_and_the_trash_row_follow_the_descriptors() {
-        let ctx = Background { view: ViewMode::List, sort: SortSpec::default(), in_trash: true };
+        let ctx = Background {
+            view: ViewMode::List,
+            sort: SortSpec::default(),
+            in_trash: true,
+        };
         let items = background_menu(&ctx);
         assert!(!items[0].enabled, "nothing is created inside the trash");
         assert!(labels(&items).contains(&"Empty Trash"));
         let paste = items.iter().find(|i| i.label == "Paste Item").unwrap();
-        let alts: Vec<(Mods, &str)> = paste.alternates.iter().map(|(m, a)| (*m, a.label.as_str())).collect();
-        assert_eq!(alts, [(Mods::ALT, "Move Item Here"), (Mods::SHIFT_ALT, "Paste Item Exactly")]);
+        let alts: Vec<(Mods, &str)> = paste
+            .alternates
+            .iter()
+            .map(|(m, a)| (*m, a.label.as_str()))
+            .collect();
+        assert_eq!(
+            alts,
+            [
+                (Mods::ALT, "Move Item Here"),
+                (Mods::SHIFT_ALT, "Paste Item Exactly")
+            ]
+        );
     }
 
     #[test]
@@ -355,16 +603,38 @@ mod tests {
     fn the_view_popup_checks_the_mode_and_disables_the_views_not_built() {
         let items = view_menu(ViewMode::List);
         assert_eq!(labels(&items), ["Icons", "List", "Columns", "Gallery"]);
-        assert_eq!(items.iter().map(|i| (i.enabled, i.checked)).collect::<Vec<_>>(), [(true, false), (true, true), (false, false), (false, false)]);
-        assert_eq!(items[0].kind, ItemKind::Command(Command::SetView(ViewMode::Icons)));
+        assert_eq!(
+            items
+                .iter()
+                .map(|i| (i.enabled, i.checked))
+                .collect::<Vec<_>>(),
+            [(true, false), (true, true), (false, false), (false, false)]
+        );
+        assert_eq!(
+            items[0].kind,
+            ItemKind::Command(Command::SetView(ViewMode::Icons))
+        );
     }
 
     #[test]
     fn the_tags_popup_toggles_each_colour_of_the_selection() {
         let items = tags_menu(&[TagColor::Blue], true);
-        assert_eq!(labels(&items), ["Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Gray"]);
-        assert_eq!(items.iter().filter(|i| i.checked).map(|i| i.label.as_str()).collect::<Vec<_>>(), ["Blue"]);
-        assert_eq!(items[4].kind, ItemKind::Command(Command::ToggleTag(TagColor::Blue)));
+        assert_eq!(
+            labels(&items),
+            ["Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Gray"]
+        );
+        assert_eq!(
+            items
+                .iter()
+                .filter(|i| i.checked)
+                .map(|i| i.label.as_str())
+                .collect::<Vec<_>>(),
+            ["Blue"]
+        );
+        assert_eq!(
+            items[4].kind,
+            ItemKind::Command(Command::ToggleTag(TagColor::Blue))
+        );
         assert!(tags_menu(&[], false).iter().all(|i| !i.enabled));
     }
 }

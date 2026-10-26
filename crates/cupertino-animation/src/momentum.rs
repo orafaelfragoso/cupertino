@@ -24,7 +24,13 @@ impl Momentum {
     pub const REFERENCE_DECELERATION: f64 = 0.998;
 
     pub fn new(origin: f64, velocity_pt_per_s: f64, min: f64, max: f64) -> Self {
-        Self { origin, velocity_pt_per_s, factor_per_ms: Self::REFERENCE_DECELERATION, min, max }
+        Self {
+            origin,
+            velocity_pt_per_s,
+            factor_per_ms: Self::REFERENCE_DECELERATION,
+            min,
+            max,
+        }
     }
 
     fn v_ms(&self) -> f64 {
@@ -34,7 +40,11 @@ impl Momentum {
     /// Unclamped resting displacement (formula).
     pub fn displacement(&self) -> f64 {
         let v = self.v_ms();
-        if v.abs() > 0.01 { v * self.factor_per_ms / (1.0 - self.factor_per_ms) } else { 0.0 }
+        if v.abs() > 0.01 {
+            v * self.factor_per_ms / (1.0 - self.factor_per_ms)
+        } else {
+            0.0
+        }
     }
 
     pub fn destination(&self) -> f64 {
@@ -82,15 +92,27 @@ impl QuarticMomentum {
     pub const DURATION_EXPONENT: f64 = 0.25;
 
     pub fn new(origin: f64, velocity_pt_per_s: f64) -> Self {
-        Self { origin, velocity_pt_per_s, constant: Self::CONSTANT }
+        Self {
+            origin,
+            velocity_pt_per_s,
+            constant: Self::CONSTANT,
+        }
     }
 
     pub fn with_constant(origin: f64, velocity_pt_per_s: f64, constant: f64) -> Self {
-        Self { origin, velocity_pt_per_s, constant }
+        Self {
+            origin,
+            velocity_pt_per_s,
+            constant,
+        }
     }
 
     fn sign(&self) -> f64 {
-        if self.velocity_pt_per_s < 0.0 { -1.0 } else { 1.0 }
+        if self.velocity_pt_per_s < 0.0 {
+            -1.0
+        } else {
+            1.0
+        }
     }
 
     /// Signed resting displacement `D`.
@@ -175,7 +197,11 @@ impl MomentumModel {
             Self::Exponential(m) => {
                 let n = (t * 1000.0).max(0.0).trunc();
                 let v = m.velocity_pt_per_s * m.factor_per_ms.powf(n);
-                if v.abs() / 1000.0 > 0.01 { v } else { 0.0 }
+                if v.abs() / 1000.0 > 0.01 {
+                    v
+                } else {
+                    0.0
+                }
             }
         }
     }
@@ -213,7 +239,11 @@ impl QuarticMomentum2D {
     pub fn with_constant(origin: [f64; 2], velocity: [f64; 2], constant: f64) -> Self {
         let dx = QuarticMomentum::with_constant(0.0, velocity[0], constant).displacement();
         let dy = QuarticMomentum::with_constant(0.0, velocity[1], constant).displacement();
-        Self { origin, displacement: [dx, dy], constant }
+        Self {
+            origin,
+            displacement: [dx, dy],
+            constant,
+        }
     }
 
     pub fn duration(&self) -> f64 {
@@ -224,7 +254,10 @@ impl QuarticMomentum2D {
     }
 
     pub fn destination(&self) -> [f64; 2] {
-        [self.origin[0] + self.displacement[0], self.origin[1] + self.displacement[1]]
+        [
+            self.origin[0] + self.displacement[0],
+            self.origin[1] + self.displacement[1],
+        ]
     }
 
     fn progress(&self, t: f64) -> f64 {
@@ -238,7 +271,10 @@ impl QuarticMomentum2D {
 
     pub fn position(&self, t: f64) -> [f64; 2] {
         let p = self.progress(t);
-        [self.origin[0] + self.displacement[0] * p, self.origin[1] + self.displacement[1] * p]
+        [
+            self.origin[0] + self.displacement[0] * p,
+            self.origin[1] + self.displacement[1] * p,
+        ]
     }
 
     pub fn velocity(&self, t: f64) -> [f64; 2] {
@@ -335,7 +371,10 @@ mod tests {
 
     #[test]
     fn model_selector_defaults_to_quartic() {
-        assert!(matches!(MomentumModel::default_for(0.0, 1000.0), MomentumModel::Quartic(_)));
+        assert!(matches!(
+            MomentumModel::default_for(0.0, 1000.0),
+            MomentumModel::Quartic(_)
+        ));
         let e = MomentumModel::exponential(0.0, 2000.0);
         assert!((e.destination() - 998.0).abs() < 1e-6);
         assert!(e.duration() > 0.0 && e.velocity(0.0) > 0.0);

@@ -54,12 +54,17 @@ impl Transition {
         let p = self.progress.value(now);
         let v = self.progress.velocity(now);
         let open = p + v * self.projection_s >= 0.5;
-        self.progress.release(if open { 1.0 } else { 0.0 }, self.spring(), now);
+        self.progress
+            .release(if open { 1.0 } else { 0.0 }, self.spring(), now);
         open
     }
 
     pub fn toggle(&mut self, open: bool, now: f64) {
-        self.progress.animate_to(if open { 1.0 } else { 0.0 }, Curve::Spring(self.spring()), now);
+        self.progress.animate_to(
+            if open { 1.0 } else { 0.0 },
+            Curve::Spring(self.spring()),
+            now,
+        );
     }
 
     /// The slow-motion modifier is held: transitions that start from now on use the slow duration.
@@ -73,7 +78,11 @@ impl Transition {
 
     /// Open/close spring: the configured one, or the slow-motion one while the modifier is held.
     pub fn spring(&self) -> SpringParams {
-        if self.slow_motion { self.slow_spring } else { self.spring }
+        if self.slow_motion {
+            self.slow_spring
+        } else {
+            self.spring
+        }
     }
 
     pub fn is_open(&self) -> bool {

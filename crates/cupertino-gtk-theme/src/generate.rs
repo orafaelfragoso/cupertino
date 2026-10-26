@@ -33,7 +33,13 @@ pub struct GeneratorOptions {
 
 impl Default for GeneratorOptions {
     fn default() -> Self {
-        Self { name: "Cupertino".into(), accent: Accent::Blue, size: ControlSizeName::Regular, high_contrast: false, map_sans_serif: false }
+        Self {
+            name: "Cupertino".into(),
+            accent: Accent::Blue,
+            size: ControlSizeName::Regular,
+            high_contrast: false,
+            map_sans_serif: false,
+        }
     }
 }
 
@@ -44,7 +50,10 @@ pub struct GeneratedFile {
 }
 
 fn file(path: impl Into<PathBuf>, contents: String) -> GeneratedFile {
-    GeneratedFile { path: path.into(), contents }
+    GeneratedFile {
+        path: path.into(),
+        contents,
+    }
 }
 
 fn compact(name: &str) -> String {
@@ -82,30 +91,87 @@ pub fn generate(theme: &Theme, o: &GeneratorOptions) -> Vec<GeneratedFile> {
 
     for (dir, mode) in [(o.name.as_str(), false), (dark_name.as_str(), true)] {
         let base = Path::new("themes").join(dir);
-        let (own, other) = if mode { (&dark, &dark) } else { (&light, &dark) };
-        files.push(file(base.join("index.theme"), index_theme(dir, if mode { "Dark appearance generated from the design tokens" } else { "Light appearance generated from the design tokens" })));
+        let (own, other) = if mode {
+            (&dark, &dark)
+        } else {
+            (&light, &dark)
+        };
+        files.push(file(
+            base.join("index.theme"),
+            index_theme(
+                dir,
+                if mode {
+                    "Dark appearance generated from the design tokens"
+                } else {
+                    "Light appearance generated from the design tokens"
+                },
+            ),
+        ));
         files.push(file(base.join("gtk-3.0/gtk.css"), css::gtk3_theme(own, &m)));
-        files.push(file(base.join("gtk-3.0/gtk-dark.css"), css::gtk3_theme(other, &m)));
+        files.push(file(
+            base.join("gtk-3.0/gtk-dark.css"),
+            css::gtk3_theme(other, &m),
+        ));
         files.push(file(base.join("gtk-4.0/gtk.css"), css::gtk4_theme(own, &m)));
-        files.push(file(base.join("gtk-4.0/gtk-dark.css"), css::gtk4_theme(other, &m)));
+        files.push(file(
+            base.join("gtk-4.0/gtk-dark.css"),
+            css::gtk4_theme(other, &m),
+        ));
     }
 
-    files.push(file("config/gtk-4.0/gtk.css", css::libadwaita_override(&light, &m)));
-    files.push(file("config/gtk-4.0/gtk-dark.css", css::libadwaita_override(&dark, &m)));
-    files.push(file("config/gtk-3.0/settings.ini", settings_ini(&o.name, &m)));
-    files.push(file("config/gtk-4.0/settings.ini", settings_ini(&o.name, &m)));
+    files.push(file(
+        "config/gtk-4.0/gtk.css",
+        css::libadwaita_override(&light, &m),
+    ));
+    files.push(file(
+        "config/gtk-4.0/gtk-dark.css",
+        css::libadwaita_override(&dark, &m),
+    ));
+    files.push(file(
+        "config/gtk-3.0/settings.ini",
+        settings_ini(&o.name, &m),
+    ));
+    files.push(file(
+        "config/gtk-4.0/settings.ini",
+        settings_ini(&o.name, &m),
+    ));
 
     let stem = compact(&o.name);
     for (palette, mode, other_palette) in [(&light, "Light", &dark), (&dark, "Dark", &light)] {
         let file_stem = format!("{stem}{mode}");
-        files.push(file(format!("qt/color-schemes/{file_stem}.colors"), qt::kde_colors(palette, other_palette, &format!("{} {mode}", o.name), &file_stem)));
+        files.push(file(
+            format!("qt/color-schemes/{file_stem}.colors"),
+            qt::kde_colors(
+                palette,
+                other_palette,
+                &format!("{} {mode}", o.name),
+                &file_stem,
+            ),
+        ));
         let scheme = qt::qtct_scheme(palette);
-        files.push(file(format!("qt/qt5ct/colors/{file_stem}.conf"), scheme.clone()));
+        files.push(file(
+            format!("qt/qt5ct/colors/{file_stem}.conf"),
+            scheme.clone(),
+        ));
         files.push(file(format!("qt/qt6ct/colors/{file_stem}.conf"), scheme));
     }
-    files.push(file("qt/qt6ct/qt6ct.conf.snippet", qt::qtct_conf_snippet(&format!("~/.config/qt6ct/colors/{stem}Light.conf"), &m.font_family, m.font_pt)));
+    files.push(file(
+        "qt/qt6ct/qt6ct.conf.snippet",
+        qt::qtct_conf_snippet(
+            &format!("~/.config/qt6ct/colors/{stem}Light.conf"),
+            &m.font_family,
+            m.font_pt,
+        ),
+    ));
 
-    files.push(file(Path::new("fontconfig/conf.d").join(FONTCONFIG_FILE), fontconfig::snippet(&FontOptions { family: m.font_family.clone(), map_sans_serif: o.map_sans_serif, rendering: true })));
+    files.push(file(
+        Path::new("fontconfig/conf.d").join(FONTCONFIG_FILE),
+        fontconfig::snippet(&FontOptions {
+            family: m.font_family.clone(),
+            map_sans_serif: o.map_sans_serif,
+            rendering: true,
+        }),
+    ));
     files.push(file("README.txt", readme(o, &m, &files)));
     files
 }

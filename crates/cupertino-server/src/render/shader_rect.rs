@@ -6,7 +6,9 @@ use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::hash::{Hash, Hasher};
 
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
-use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesPixelProgram, GlesRenderer, Uniform};
+use smithay::backend::renderer::gles::{
+    GlesError, GlesFrame, GlesPixelProgram, GlesRenderer, Uniform,
+};
 use smithay::backend::renderer::utils::{CommitCounter, OpaqueRegions};
 use smithay::utils::{Buffer, Logical, Physical, Rectangle, Scale, Size};
 
@@ -64,7 +66,12 @@ pub struct ElementCache {
 impl ElementCache {
     /// Id and commit for `key`; the commit counter advances when `sig` differs from the last call.
     pub fn slot(&mut self, key: ElementKey, sig: u64) -> (Id, CommitCounter) {
-        let s = self.slots.entry(key).or_insert_with(|| Slot { id: Id::new(), commit: CommitCounter::default(), sig, used: true });
+        let s = self.slots.entry(key).or_insert_with(|| Slot {
+            id: Id::new(),
+            commit: CommitCounter::default(),
+            sig,
+            used: true,
+        });
         if s.sig != sig {
             s.sig = sig;
             s.commit.increment();
@@ -75,7 +82,8 @@ impl ElementCache {
 
     /// Forget every key that was not requested since the previous call.
     pub fn end_frame(&mut self) {
-        self.slots.retain(|_, s| std::mem::replace(&mut s.used, false));
+        self.slots
+            .retain(|_, s| std::mem::replace(&mut s.used, false));
     }
 
     pub fn len(&self) -> usize {
@@ -93,7 +101,10 @@ pub fn to_physical_rect(r: Rectangle<f64, Logical>, scale: Scale<f64>) -> Rectan
     let y0 = (r.loc.y * scale.y).round();
     let x1 = ((r.loc.x + r.size.w) * scale.x).round();
     let y1 = ((r.loc.y + r.size.h) * scale.y).round();
-    Rectangle::new((x0 as i32, y0 as i32).into(), ((x1 - x0) as i32, (y1 - y0) as i32).into())
+    Rectangle::new(
+        (x0 as i32, y0 as i32).into(),
+        ((x1 - x0) as i32, (y1 - y0) as i32).into(),
+    )
 }
 
 /// A rectangle drawn by a pixel shader. The shader sees `v_coords` in `[0, 1]` across the
@@ -120,8 +131,19 @@ impl ShaderRect {
         mut uniforms: Vec<Uniform<'static>>,
         opaque: bool,
     ) -> Self {
-        uniforms.push(Uniform::new("area_pt", (area.size.w as f32, area.size.h as f32)));
-        Self { program, id, commit, area, alpha, uniforms, opaque }
+        uniforms.push(Uniform::new(
+            "area_pt",
+            (area.size.w as f32, area.size.h as f32),
+        ));
+        Self {
+            program,
+            id,
+            commit,
+            area,
+            alpha,
+            uniforms,
+            opaque,
+        }
     }
 
     pub fn area(&self) -> Rectangle<f64, Logical> {
@@ -172,7 +194,15 @@ impl RenderElement<GlesRenderer> for ShaderRect {
         damage: &[Rectangle<i32, Physical>],
         _opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
-        frame.render_pixel_shader_to(&self.program, src, dst, Size::from((1, 1)), Some(damage), self.alpha, &self.uniforms)
+        frame.render_pixel_shader_to(
+            &self.program,
+            src,
+            dst,
+            Size::from((1, 1)),
+            Some(damage),
+            self.alpha,
+            &self.uniforms,
+        )
     }
 
     fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
@@ -220,6 +250,9 @@ mod tests {
     #[test]
     fn signature_differs_by_value() {
         assert_ne!(Sig::new().f(1.0).finish(), Sig::new().f(2.0).finish());
-        assert_eq!(Sig::new().u(3).f(1.5).finish(), Sig::new().u(3).f(1.5).finish());
+        assert_eq!(
+            Sig::new().u(3).f(1.5).finish(),
+            Sig::new().u(3).f(1.5).finish()
+        );
     }
 }

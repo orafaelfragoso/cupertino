@@ -48,7 +48,8 @@ pub(crate) const ELEM_WRITE: Opcode = opcode::read_write::<[u8; ELEM_VALUE_SIZE]
 /// `SNDRV_CTL_IOCTL_SUBSCRIBE_EVENTS`.
 pub(crate) const SUBSCRIBE_EVENTS: Opcode = opcode::read_write::<i32>(CTL_TYPE, 0x16);
 /// `SNDRV_CTL_IOCTL_TLV_READ`: the encoded size is the header only; the kernel reads `length` from it and fills the words after it.
-pub(crate) const TLV_READ: Opcode = opcode::from_components(Direction::ReadWrite, CTL_TYPE, 0x1a, TLV_HEADER_SIZE);
+pub(crate) const TLV_READ: Opcode =
+    opcode::from_components(Direction::ReadWrite, CTL_TYPE, 0x1a, TLV_HEADER_SIZE);
 
 fn u32_at(buf: &[u8], offset: usize) -> u32 {
     u32::from_ne_bytes(buf[offset..offset + 4].try_into().expect("4-byte slice"))
@@ -252,7 +253,9 @@ impl ElementId {
     /// Write the 64 bytes at the start of `buf`.
     pub fn encode(&self, buf: &mut [u8]) -> Result<()> {
         if self.name.len() >= NAME_FIELD {
-            return Err(Error::NameTooLong { len: self.name.len() });
+            return Err(Error::NameTooLong {
+                len: self.name.len(),
+            });
         }
         buf[0..4].copy_from_slice(&self.numid.to_ne_bytes());
         buf[4..8].copy_from_slice(&self.interface.raw().to_ne_bytes());
@@ -296,10 +299,20 @@ impl ElementInfo {
     pub fn parse(buf: &[u8; ELEM_INFO_SIZE]) -> Result<Self> {
         let kind = ElementType::from_raw(u32_at(buf, 64));
         let range = match kind {
-            ElementType::Integer | ElementType::Integer64 => Some(IntegerRange { min: i64_at(buf, 80), max: i64_at(buf, 88), step: i64_at(buf, 96) }),
+            ElementType::Integer | ElementType::Integer64 => Some(IntegerRange {
+                min: i64_at(buf, 80),
+                max: i64_at(buf, 88),
+                step: i64_at(buf, 96),
+            }),
             _ => None,
         };
-        Ok(Self { id: ElementId::parse(buf)?, kind, access: Access(u32_at(buf, 68)), count: u32_at(buf, 72), range })
+        Ok(Self {
+            id: ElementId::parse(buf)?,
+            kind,
+            access: Access(u32_at(buf, 68)),
+            count: u32_at(buf, 72),
+            range,
+        })
     }
 }
 
@@ -327,7 +340,9 @@ pub(crate) fn list_reply(buf: &[u8; ELEM_LIST_SIZE]) -> (u32, u32) {
 /// The request buffer of an element read or write: `id` and `values` (`long` each, booleans included).
 pub(crate) fn value_request(id: &ElementId, values: &[i64]) -> Result<[u8; ELEM_VALUE_SIZE]> {
     if values.len() > MAX_VALUES {
-        return Err(Error::ValueCount { count: values.len() as u32 });
+        return Err(Error::ValueCount {
+            count: values.len() as u32,
+        });
     }
     let mut buf = [0u8; ELEM_VALUE_SIZE];
     id.encode(&mut buf)?;
@@ -342,7 +357,9 @@ pub(crate) fn value_reply(buf: &[u8; ELEM_VALUE_SIZE], count: u32) -> Result<Vec
     if count as usize > MAX_VALUES {
         return Err(Error::ValueCount { count });
     }
-    Ok((0..count as usize).map(|i| i64_at(buf, 72 + i * 8)).collect())
+    Ok((0..count as usize)
+        .map(|i| i64_at(buf, 72 + i * 8))
+        .collect())
 }
 
 /// `SNDRV_CTL_EVENT_MASK_REMOVE`: the element was removed.
@@ -383,7 +400,10 @@ impl Event {
                 if kind != 0 {
                     return Err(Error::UnknownEventType { kind });
                 }
-                Ok(Event { mask: u32_at(record, 4), id: ElementId::parse(&record[8..])? })
+                Ok(Event {
+                    mask: u32_at(record, 4),
+                    id: ElementId::parse(&record[8..])?,
+                })
             })
             .collect()
     }
@@ -396,7 +416,15 @@ mod tests {
     #[test]
     fn struct_sizes_match_the_header() {
         assert_eq!(
-            (CARD_INFO_SIZE, ELEM_ID_SIZE, ELEM_LIST_SIZE, ELEM_INFO_SIZE, ELEM_VALUE_SIZE, EVENT_SIZE, TLV_HEADER_SIZE),
+            (
+                CARD_INFO_SIZE,
+                ELEM_ID_SIZE,
+                ELEM_LIST_SIZE,
+                ELEM_INFO_SIZE,
+                ELEM_VALUE_SIZE,
+                EVENT_SIZE,
+                TLV_HEADER_SIZE
+            ),
             (376, 64, 80, 272, 1224, 72, 8)
         );
     }
@@ -424,7 +452,17 @@ mod tests {
     #[test]
     fn element_id_round_trips_through_its_layout() {
         let id = ElementId::parse(&master_id_bytes()).unwrap();
-        assert_eq!(id, ElementId { numid: 7, interface: Interface::Mixer, device: 0, subdevice: 0, name: "Master Playback Volume".into(), index: 0 });
+        assert_eq!(
+            id,
+            ElementId {
+                numid: 7,
+                interface: Interface::Mixer,
+                device: 0,
+                subdevice: 0,
+                name: "Master Playback Volume".into(),
+                index: 0
+            }
+        );
         let mut encoded = [0xffu8; ELEM_ID_SIZE];
         id.encode(&mut encoded).unwrap();
         assert_eq!(encoded, master_id_bytes());
@@ -432,8 +470,18 @@ mod tests {
 
     #[test]
     fn element_names_that_do_not_fit_are_refused() {
-        let id = ElementId { numid: 1, interface: Interface::Mixer, device: 0, subdevice: 0, name: "x".repeat(44), index: 0 };
-        assert!(matches!(id.encode(&mut [0u8; ELEM_ID_SIZE]), Err(Error::NameTooLong { len: 44 })));
+        let id = ElementId {
+            numid: 1,
+            interface: Interface::Mixer,
+            device: 0,
+            subdevice: 0,
+            name: "x".repeat(44),
+            index: 0,
+        };
+        assert!(matches!(
+            id.encode(&mut [0u8; ELEM_ID_SIZE]),
+            Err(Error::NameTooLong { len: 44 })
+        ));
     }
 
     #[test]
@@ -448,7 +496,14 @@ mod tests {
         let info = CardInfo::parse(&buf).unwrap();
         assert_eq!(
             info,
-            CardInfo { card: 1, id: "Intel".into(), driver: "HDA-Int".into(), name: "HDA Intel PCH  ".into(), long_name: "long txt".into(), mixer_name: "Realtek".into() }
+            CardInfo {
+                card: 1,
+                id: "Intel".into(),
+                driver: "HDA-Int".into(),
+                name: "HDA Intel PCH  ".into(),
+                long_name: "long txt".into(),
+                mixer_name: "Realtek".into()
+            }
         );
     }
 
@@ -457,7 +512,8 @@ mod tests {
         let mut buf = [0u8; ELEM_INFO_SIZE];
         buf[..ELEM_ID_SIZE].copy_from_slice(&master_id_bytes());
         buf[64..68].copy_from_slice(&2u32.to_ne_bytes());
-        buf[68..72].copy_from_slice(&(Access::READ | Access::WRITE | Access::TLV_READ).to_ne_bytes());
+        buf[68..72]
+            .copy_from_slice(&(Access::READ | Access::WRITE | Access::TLV_READ).to_ne_bytes());
         buf[72..76].copy_from_slice(&2u32.to_ne_bytes());
         buf[80..88].copy_from_slice(&0i64.to_ne_bytes());
         buf[88..96].copy_from_slice(&87i64.to_ne_bytes());
@@ -465,7 +521,14 @@ mod tests {
         let info = ElementInfo::parse(&buf).unwrap();
         assert_eq!(info.kind, ElementType::Integer);
         assert_eq!(info.count, 2);
-        assert_eq!(info.range, Some(IntegerRange { min: 0, max: 87, step: 1 }));
+        assert_eq!(
+            info.range,
+            Some(IntegerRange {
+                min: 0,
+                max: 87,
+                step: 1
+            })
+        );
         assert!(info.access.writable() && info.access.tlv_readable() && !info.access.inactive());
     }
 
@@ -495,12 +558,18 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].id.numid, 7);
         assert!(events[0].value_changed() && !events[0].removed());
-        assert!(matches!(Event::parse_all(&record[..71]), Err(Error::TruncatedEvent { len: 71 })));
+        assert!(matches!(
+            Event::parse_all(&record[..71]),
+            Err(Error::TruncatedEvent { len: 71 })
+        ));
     }
 
     #[test]
     fn removal_mask_is_not_a_value_change() {
-        let event = Event { mask: !0, id: ElementId::parse(&master_id_bytes()).unwrap() };
+        let event = Event {
+            mask: !0,
+            id: ElementId::parse(&master_id_bytes()).unwrap(),
+        };
         assert!(event.removed() && !event.value_changed());
     }
 }

@@ -6,14 +6,17 @@
 
 use std::fmt;
 
+use cupertino_assets::{AssetError, Assets, FontRole};
 use cupertino_decorations::palette::Rgba;
 use cupertino_decorations::shape::rounded_path;
-use cupertino_assets::{AssetError, Assets, FontRole};
 use cupertino_decorations::text::TextRenderer;
 use cupertino_geometry::shadow::blurred_rect;
 use cupertino_geometry::{CornerStyle, Insets, Point, Radii, Rect};
 use cupertino_theme::{AccentColor, Appearance, SemanticColor, Theme, Typography};
-use tiny_skia::{BlendMode, Color, FillRule, FilterQuality, LineCap, LineJoin, Mask, Paint, PathBuilder, Pixmap, PixmapPaint, Stroke, StrokeDash, Transform};
+use tiny_skia::{
+    BlendMode, Color, FillRule, FilterQuality, LineCap, LineJoin, Mask, Paint, PathBuilder, Pixmap,
+    PixmapPaint, Stroke, StrokeDash, Transform,
+};
 
 use crate::selection::{self, Handle};
 use crate::session::Style;
@@ -21,8 +24,10 @@ use crate::settings::Mode;
 use crate::thumbnail::Look;
 use crate::toolbar::{self, Item, MenuRow, MENU_FONT_SIZE, MENU_RADIUS, MENU_WIDTH};
 use crate::values::{
-    BORDER_DASH, BORDER_WIDTH, CROSSHAIR_ARM, CROSSHAIR_CENTRE, CROSSHAIR_CORE, CROSSHAIR_GAP, CROSSHAIR_HALO, DIM, HANDLE_FILL, HANDLE_STROKE, LABEL_BACKDROP, LABEL_FONT_SIZE, LABEL_RADIUS, LABEL_TEXT,
-    PICK_HIGHLIGHT, SIMPLE_TINT, THUMBNAIL_BORDER, THUMBNAIL_BORDER_COLOR, THUMBNAIL_RADIUS, THUMBNAIL_SHADOW_ALPHA, THUMBNAIL_SHADOW_OUTSET, THUMBNAIL_SHADOW_SIGMA,
+    BORDER_DASH, BORDER_WIDTH, CROSSHAIR_ARM, CROSSHAIR_CENTRE, CROSSHAIR_CORE, CROSSHAIR_GAP,
+    CROSSHAIR_HALO, DIM, HANDLE_FILL, HANDLE_STROKE, LABEL_BACKDROP, LABEL_FONT_SIZE, LABEL_RADIUS,
+    LABEL_TEXT, PICK_HIGHLIGHT, SIMPLE_TINT, THUMBNAIL_BORDER, THUMBNAIL_BORDER_COLOR,
+    THUMBNAIL_RADIUS, THUMBNAIL_SHADOW_ALPHA, THUMBNAIL_SHADOW_OUTSET, THUMBNAIL_SHADOW_SIGMA,
 };
 
 /// Diameter of the round handle drawn in each 16 pt handle square (approximate: the handle path is not known).
@@ -61,20 +66,36 @@ pub struct Palette {
 
 impl Palette {
     pub fn from_theme(theme: &Theme, appearance: Appearance) -> Result<Self, MissingColor> {
-        let get = |c: SemanticColor, name: &'static str| theme.tokens.semantic(appearance, c).map(|c| c.to_array()).ok_or(MissingColor(name));
+        let get = |c: SemanticColor, name: &'static str| {
+            theme
+                .tokens
+                .semantic(appearance, c)
+                .map(|c| c.to_array())
+                .ok_or(MissingColor(name))
+        };
         Ok(Self {
             text: get(SemanticColor::ControlText, "control-text")?,
             secondary: get(SemanticColor::SecondaryLabel, "secondary-label")?,
             disabled: get(SemanticColor::DisabledControlText, "disabled-control-text")?,
             selected: get(SemanticColor::SecondarySystemFill, "secondary-system-fill")?,
             separator: get(SemanticColor::Grid, "grid")?,
-            highlight: theme.tokens.accent(appearance, AccentColor::Blue).map(|c| c.to_array()).ok_or(MissingColor("control-accent-blue"))?,
+            highlight: theme
+                .tokens
+                .accent(appearance, AccentColor::Blue)
+                .map(|c| c.to_array())
+                .ok_or(MissingColor("control-accent-blue"))?,
         })
     }
 }
 
 fn skia(c: Rgba) -> Color {
-    Color::from_rgba(c[0].clamp(0.0, 1.0), c[1].clamp(0.0, 1.0), c[2].clamp(0.0, 1.0), c[3].clamp(0.0, 1.0)).expect("clamped channels are colours")
+    Color::from_rgba(
+        c[0].clamp(0.0, 1.0),
+        c[1].clamp(0.0, 1.0),
+        c[2].clamp(0.0, 1.0),
+        c[3].clamp(0.0, 1.0),
+    )
+    .expect("clamped channels are colours")
 }
 
 fn paint(c: Rgba) -> Paint<'static> {
@@ -90,7 +111,12 @@ fn with_alpha(c: Rgba, alpha: f64) -> Rgba {
 
 /// `r` in device pixels as a `tiny-skia` rectangle; `None` when it is empty.
 fn device(r: &Rect, s: f64) -> Option<tiny_skia::Rect> {
-    tiny_skia::Rect::from_xywh((r.x() * s) as f32, (r.y() * s) as f32, (r.width() * s) as f32, (r.height() * s) as f32)
+    tiny_skia::Rect::from_xywh(
+        (r.x() * s) as f32,
+        (r.y() * s) as f32,
+        (r.width() * s) as f32,
+        (r.height() * s) as f32,
+    )
 }
 
 /// Fill `r` without anti-aliasing: on whole device pixels, the edges a pixel grid draws. (Anti-aliased thin rectangles
@@ -101,7 +127,12 @@ fn fill_rect(pm: &mut Pixmap, r: &Rect, s: f64, c: Rgba) {
 
 /// [`fill_rect`] with a blend mode; [`BlendMode::Clear`] cuts a hole.
 fn fill_rect_blended(pm: &mut Pixmap, r: &Rect, s: f64, c: Rgba, blend: BlendMode) {
-    let snapped = Rect::from_ltrb((r.min_x() * s).round(), (r.min_y() * s).round(), (r.max_x() * s).round(), (r.max_y() * s).round());
+    let snapped = Rect::from_ltrb(
+        (r.min_x() * s).round(),
+        (r.min_y() * s).round(),
+        (r.max_x() * s).round(),
+        (r.max_y() * s).round(),
+    );
     if let Some(r) = device(&snapped, 1.0) {
         let mut p = paint(c);
         p.anti_alias = false;
@@ -112,16 +143,31 @@ fn fill_rect_blended(pm: &mut Pixmap, r: &Rect, s: f64, c: Rgba, blend: BlendMod
 
 fn fill_rounded(pm: &mut Pixmap, r: &Rect, radius: f64, s: f64, c: Rgba) {
     if let Some(path) = rounded_path(*r, Radii::uniform(radius), CornerStyle::Circular, s) {
-        pm.fill_path(&path, &paint(c), FillRule::Winding, Transform::identity(), None);
+        pm.fill_path(
+            &path,
+            &paint(c),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 }
 
 fn circle(center: Point, radius: f64, s: f64) -> Option<tiny_skia::Path> {
-    PathBuilder::from_circle((center.x * s) as f32, (center.y * s) as f32, (radius * s) as f32)
+    PathBuilder::from_circle(
+        (center.x * s) as f32,
+        (center.y * s) as f32,
+        (radius * s) as f32,
+    )
 }
 
 fn stroke(width: f64, s: f64) -> Stroke {
-    Stroke { width: (width * s) as f32, line_cap: LineCap::Round, line_join: LineJoin::Round, ..Stroke::default() }
+    Stroke {
+        width: (width * s) as f32,
+        line_cap: LineCap::Round,
+        line_join: LineJoin::Round,
+        ..Stroke::default()
+    }
 }
 
 /// A polyline through `points` (logical) at scale `s`.
@@ -140,7 +186,13 @@ fn polyline(points: &[(f64, f64)], s: f64, close: bool) -> Option<tiny_skia::Pat
 
 fn stroke_path(pm: &mut Pixmap, path: Option<tiny_skia::Path>, width: f64, s: f64, c: Rgba) {
     if let Some(path) = path {
-        pm.stroke_path(&path, &paint(c), &stroke(width, s), Transform::identity(), None);
+        pm.stroke_path(
+            &path,
+            &paint(c),
+            &stroke(width, s),
+            Transform::identity(),
+            None,
+        );
     }
 }
 
@@ -177,9 +229,18 @@ pub struct Painter {
 }
 
 impl Painter {
-    pub fn new(palette: Palette, typography: Typography, assets: &Assets) -> Result<Self, AssetError> {
+    pub fn new(
+        palette: Palette,
+        typography: Typography,
+        assets: &Assets,
+    ) -> Result<Self, AssetError> {
         let text = TextRenderer::new(assets, FontRole::Ui)?;
-        Ok(Self { palette, typography, text, shadow: None })
+        Ok(Self {
+            palette,
+            typography,
+            text,
+            shadow: None,
+        })
     }
 
     /// Width of `text` in points at `size`.
@@ -190,12 +251,35 @@ impl Painter {
 
     /// Draw `text` with its left edge at `x`, centred vertically in the band `top..top + height` (logical points).
     #[allow(clippy::too_many_arguments)]
-    fn text_in_band(&mut self, pm: &mut Pixmap, text: &str, x: f64, top: f64, height: f64, size: f64, weight: u16, s: f64, color: Rgba) {
+    fn text_in_band(
+        &mut self,
+        pm: &mut Pixmap,
+        text: &str,
+        x: f64,
+        top: f64,
+        height: f64,
+        size: f64,
+        weight: u16,
+        s: f64,
+        color: Rgba,
+    ) {
         let m = &self.typography.metrics;
-        let (ascent, descent) = (m.ascender / m.units_per_em * size, m.descender.abs() / m.units_per_em * size);
+        let (ascent, descent) = (
+            m.ascender / m.units_per_em * size,
+            m.descender.abs() / m.units_per_em * size,
+        );
         let baseline = top + (height - (ascent + descent)) / 2.0 + ascent;
         self.text.set_scale(s as f32);
-        self.text.draw(pm, text, (x * s) as f32, (baseline * s) as f32, (size * s) as f32, weight, 0.0, color);
+        self.text.draw(
+            pm,
+            text,
+            (x * s) as f32,
+            (baseline * s) as f32,
+            (size * s) as f32,
+            weight,
+            0.0,
+            color,
+        );
     }
 
     // ---- overlay ---------------------------------------------------------------------------------------------------
@@ -204,7 +288,9 @@ impl Painter {
     pub fn overlay(&mut self, pm: &mut Pixmap, s: f64, v: &OverlayView) {
         let local = |r: &Rect| r.translate(-v.bounds.x(), -v.bounds.y());
         let full = Rect::new(0.0, 0.0, v.bounds.width(), v.bounds.height());
-        let selection = v.selection.and_then(|r| r.intersection(&v.bounds).map(|_| local(&r)));
+        let selection = v
+            .selection
+            .and_then(|r| r.intersection(&v.bounds).map(|_| local(&r)));
         match (v.style, v.mode) {
             (Style::Interactive, Mode::Selection) => {
                 fill_rect(pm, &full, s, DIM);
@@ -215,8 +301,20 @@ impl Painter {
                     for h in Handle::ALL {
                         let c = h.anchor(&sel);
                         if let Some(path) = circle(c, HANDLE_DOT / 2.0, s) {
-                            pm.fill_path(&path, &paint(HANDLE_FILL), FillRule::Winding, Transform::identity(), None);
-                            pm.stroke_path(&path, &paint([1.0, 1.0, 1.0, 1.0]), &stroke(HANDLE_STROKE, s), Transform::identity(), None);
+                            pm.fill_path(
+                                &path,
+                                &paint(HANDLE_FILL),
+                                FillRule::Winding,
+                                Transform::identity(),
+                                None,
+                            );
+                            pm.stroke_path(
+                                &path,
+                                &paint([1.0, 1.0, 1.0, 1.0]),
+                                &stroke(HANDLE_STROKE, s),
+                                Transform::identity(),
+                                None,
+                            );
                         }
                     }
                 }
@@ -233,14 +331,27 @@ impl Painter {
             }
             (_, Mode::Screen) => {}
         }
-        let pointer = v.pointer.filter(|p| v.bounds.contains(*p)).map(|p| Point::new(p.x - v.bounds.x(), p.y - v.bounds.y()));
+        let pointer = v
+            .pointer
+            .filter(|p| v.bounds.contains(*p))
+            .map(|p| Point::new(p.x - v.bounds.x(), p.y - v.bounds.y()));
         if let (true, Some(sel), Some(p)) = (v.sizing, v.selection, pointer) {
             let text = selection::label_text(&sel);
             let width = self.measure(&text, LABEL_FONT_SIZE, TEXT_WEIGHT);
             let r = selection::label_rect(width, p, &full);
             fill_rounded(pm, &r, LABEL_RADIUS, s, LABEL_BACKDROP);
             let x = r.x() + (r.width() - width) / 2.0;
-            self.text_in_band(pm, &text, x, r.y(), r.height(), LABEL_FONT_SIZE, TEXT_WEIGHT, s, LABEL_TEXT);
+            self.text_in_band(
+                pm,
+                &text,
+                x,
+                r.y(),
+                r.height(),
+                LABEL_FONT_SIZE,
+                TEXT_WEIGHT,
+                s,
+                LABEL_TEXT,
+            );
         }
         if let (true, Some(p)) = (v.crosshair, pointer) {
             crosshair(pm, p, s);
@@ -249,13 +360,27 @@ impl Painter {
 
     /// The interactive selection's border: black under white dashes.
     fn border(&self, pm: &mut Pixmap, sel: &Rect, s: f64) {
-        let Some(path) = device(sel, s).map(PathBuilder::from_rect) else { return };
+        let Some(path) = device(sel, s).map(PathBuilder::from_rect) else {
+            return;
+        };
         let mut solid = stroke(BORDER_WIDTH, s);
         solid.line_cap = LineCap::Butt;
-        pm.stroke_path(&path, &paint([0.0, 0.0, 0.0, 1.0]), &solid, Transform::identity(), None);
+        pm.stroke_path(
+            &path,
+            &paint([0.0, 0.0, 0.0, 1.0]),
+            &solid,
+            Transform::identity(),
+            None,
+        );
         let mut dashed = solid.clone();
         dashed.dash = StrokeDash::new(BORDER_DASH.iter().map(|d| d * s as f32).collect(), 0.0);
-        pm.stroke_path(&path, &paint([1.0, 1.0, 1.0, 1.0]), &dashed, Transform::identity(), None);
+        pm.stroke_path(
+            &path,
+            &paint([1.0, 1.0, 1.0, 1.0]),
+            &dashed,
+            Transform::identity(),
+            None,
+        );
     }
 
     // ---- toolbar ---------------------------------------------------------------------------------------------------
@@ -276,7 +401,13 @@ impl Painter {
                 p.secondary
             };
             if item == Item::Mode(v.mode) {
-                fill_rounded(pm, &r.inset(Insets::uniform(SELECTED_INSET)), SELECTED_RADIUS, s, p.selected);
+                fill_rounded(
+                    pm,
+                    &r.inset(Insets::uniform(SELECTED_INSET)),
+                    SELECTED_RADIUS,
+                    s,
+                    p.selected,
+                );
             }
             match item {
                 Item::Close => close_glyph(pm, &r, s, color),
@@ -292,15 +423,47 @@ impl Painter {
                     let w = self.measure(label, MENU_FONT_SIZE, TEXT_WEIGHT);
                     // the popup arrow asset is 8 x 4, 4 pt after the title (approximate)
                     let x = r.x() + (r.width() - w - 12.0) / 2.0;
-                    let text = if v.hovered == Some(item) { p.text } else { p.secondary };
-                    self.text_in_band(pm, label, x, r.y(), r.height(), MENU_FONT_SIZE, TEXT_WEIGHT, s, text);
+                    let text = if v.hovered == Some(item) {
+                        p.text
+                    } else {
+                        p.secondary
+                    };
+                    self.text_in_band(
+                        pm,
+                        label,
+                        x,
+                        r.y(),
+                        r.height(),
+                        MENU_FONT_SIZE,
+                        TEXT_WEIGHT,
+                        s,
+                        text,
+                    );
                     let (ax, ay) = (x + w + 4.0, r.center().y - 2.0);
-                    stroke_path(pm, polyline(&[(ax, ay), (ax + 4.0, ay + 4.0), (ax + 8.0, ay)], s, false), 1.5, s, text);
+                    stroke_path(
+                        pm,
+                        polyline(&[(ax, ay), (ax + 4.0, ay + 4.0), (ax + 8.0, ay)], s, false),
+                        1.5,
+                        s,
+                        text,
+                    );
                 }
                 Item::Capture => {
-                    let label = v.countdown.map_or_else(|| "Capture".to_string(), |n| n.to_string());
+                    let label = v
+                        .countdown
+                        .map_or_else(|| "Capture".to_string(), |n| n.to_string());
                     let w = self.measure(&label, MENU_FONT_SIZE, TEXT_WEIGHT);
-                    self.text_in_band(pm, &label, r.x() + (r.width() - w) / 2.0, r.y(), r.height(), MENU_FONT_SIZE, TEXT_WEIGHT, s, p.text);
+                    self.text_in_band(
+                        pm,
+                        &label,
+                        r.x() + (r.width() - w) / 2.0,
+                        r.y(),
+                        r.height(),
+                        MENU_FONT_SIZE,
+                        TEXT_WEIGHT,
+                        s,
+                        p.text,
+                    );
                 }
             }
         }
@@ -314,21 +477,64 @@ impl Painter {
         let (rects, _) = toolbar::menu_layout(rows);
         for (i, (row, r)) in rows.iter().zip(&rects).enumerate() {
             match row {
-                MenuRow::Separator => fill_rect(pm, &Rect::new(10.0, r.center().y - 0.5, MENU_WIDTH - 20.0, 1.0), s, p.separator),
-                MenuRow::Header(title) => self.text_in_band(pm, title, 10.0, r.y(), r.height(), MENU_FONT_SIZE, HEADER_WEIGHT, s, p.secondary),
+                MenuRow::Separator => fill_rect(
+                    pm,
+                    &Rect::new(10.0, r.center().y - 0.5, MENU_WIDTH - 20.0, 1.0),
+                    s,
+                    p.separator,
+                ),
+                MenuRow::Header(title) => self.text_in_band(
+                    pm,
+                    title,
+                    10.0,
+                    r.y(),
+                    r.height(),
+                    MENU_FONT_SIZE,
+                    HEADER_WEIGHT,
+                    s,
+                    p.secondary,
+                ),
                 MenuRow::Choice { label, checked, .. } => {
                     let lit = hovered == Some(i);
                     if lit {
-                        fill_rounded(pm, &Rect::new(5.0, r.y(), MENU_WIDTH - 10.0, r.height()), MENU_RADIUS / 2.0, s, p.highlight);
+                        fill_rounded(
+                            pm,
+                            &Rect::new(5.0, r.y(), MENU_WIDTH - 10.0, r.height()),
+                            MENU_RADIUS / 2.0,
+                            s,
+                            p.highlight,
+                        );
                     }
                     let color = if lit { [1.0, 1.0, 1.0, 1.0] } else { p.text };
                     if *checked {
                         let (x, y) = (12.0, r.center().y);
-                        stroke_path(pm, polyline(&[(x, y), (x + 3.5, y + 3.5), (x + 10.0, y - 4.0)], s, false), 1.6, s, color);
+                        stroke_path(
+                            pm,
+                            polyline(&[(x, y), (x + 3.5, y + 3.5), (x + 10.0, y - 4.0)], s, false),
+                            1.6,
+                            s,
+                            color,
+                        );
                     }
                     self.text.set_scale(s as f32);
-                    let (text, _) = self.text.fit(label, (MENU_FONT_SIZE * s) as f32, TEXT_WEIGHT, 0.0, ((MENU_WIDTH - 40.0) * s) as f32);
-                    self.text_in_band(pm, &text, 28.0, r.y(), r.height(), MENU_FONT_SIZE, TEXT_WEIGHT, s, color);
+                    let (text, _) = self.text.fit(
+                        label,
+                        (MENU_FONT_SIZE * s) as f32,
+                        TEXT_WEIGHT,
+                        0.0,
+                        ((MENU_WIDTH - 40.0) * s) as f32,
+                    );
+                    self.text_in_band(
+                        pm,
+                        &text,
+                        28.0,
+                        r.y(),
+                        r.height(),
+                        MENU_FONT_SIZE,
+                        TEXT_WEIGHT,
+                        s,
+                        color,
+                    );
                 }
             }
         }
@@ -338,30 +544,86 @@ impl Painter {
 
     /// Draw the thumbnail `image` (already at the device size of `size` points) with its shadow, offset and alpha
     /// from `look`, into a surface of `size` plus the shadow outset on every side.
-    pub fn thumbnail(&mut self, pm: &mut Pixmap, s: f64, image: &Pixmap, size: (f64, f64), look: Look) {
+    pub fn thumbnail(
+        &mut self,
+        pm: &mut Pixmap,
+        s: f64,
+        image: &Pixmap,
+        size: (f64, f64),
+        look: Look,
+    ) {
         let outset = THUMBNAIL_SHADOW_OUTSET;
         let rect = Rect::new(outset + look.offset, outset, size.0, size.1);
         let shadow = self.shadow_for(pm.width(), pm.height(), s, size);
-        let shadow_paint = PixmapPaint { opacity: look.alpha as f32, ..PixmapPaint::default() };
-        pm.draw_pixmap((look.offset * s).round() as i32, 0, shadow.as_ref(), &shadow_paint, Transform::identity(), None);
-        let Some(path) = rounded_path(rect, Radii::uniform(THUMBNAIL_RADIUS), CornerStyle::Circular, s) else { return };
+        let shadow_paint = PixmapPaint {
+            opacity: look.alpha as f32,
+            ..PixmapPaint::default()
+        };
+        pm.draw_pixmap(
+            (look.offset * s).round() as i32,
+            0,
+            shadow.as_ref(),
+            &shadow_paint,
+            Transform::identity(),
+            None,
+        );
+        let Some(path) = rounded_path(
+            rect,
+            Radii::uniform(THUMBNAIL_RADIUS),
+            CornerStyle::Circular,
+            s,
+        ) else {
+            return;
+        };
         let mut mask = Mask::new(pm.width(), pm.height()).expect("the surface has a size");
         mask.fill_path(&path, FillRule::Winding, true, Transform::identity());
-        let image_paint = PixmapPaint { opacity: look.alpha as f32, quality: FilterQuality::Nearest, ..PixmapPaint::default() };
-        pm.draw_pixmap((rect.x() * s).round() as i32, (rect.y() * s).round() as i32, image.as_ref(), &image_paint, Transform::identity(), Some(&mask));
-        pm.stroke_path(&path, &paint(with_alpha(THUMBNAIL_BORDER_COLOR, look.alpha)), &stroke(THUMBNAIL_BORDER, s), Transform::identity(), None);
+        let image_paint = PixmapPaint {
+            opacity: look.alpha as f32,
+            quality: FilterQuality::Nearest,
+            ..PixmapPaint::default()
+        };
+        pm.draw_pixmap(
+            (rect.x() * s).round() as i32,
+            (rect.y() * s).round() as i32,
+            image.as_ref(),
+            &image_paint,
+            Transform::identity(),
+            Some(&mask),
+        );
+        pm.stroke_path(
+            &path,
+            &paint(with_alpha(THUMBNAIL_BORDER_COLOR, look.alpha)),
+            &stroke(THUMBNAIL_BORDER, s),
+            Transform::identity(),
+            None,
+        );
     }
 
     /// The shadow of a thumbnail of `size` points in a surface of `width` x `height` pixels, computed once per size.
     fn shadow_for(&mut self, width: u32, height: u32, s: f64, size: (f64, f64)) -> &Pixmap {
-        if self.shadow.as_ref().is_none_or(|(key, _)| *key != (width, height)) {
+        if self
+            .shadow
+            .as_ref()
+            .is_none_or(|(key, _)| *key != (width, height))
+        {
             let mut pm = Pixmap::new(width, height).expect("the surface has a size");
-            let rect = Rect::new(THUMBNAIL_SHADOW_OUTSET * s, THUMBNAIL_SHADOW_OUTSET * s, size.0 * s, size.1 * s);
+            let rect = Rect::new(
+                THUMBNAIL_SHADOW_OUTSET * s,
+                THUMBNAIL_SHADOW_OUTSET * s,
+                size.0 * s,
+                size.1 * s,
+            );
             let sigma = THUMBNAIL_SHADOW_SIGMA * s;
             let data = pm.data_mut();
             for y in 0..height {
                 for x in 0..width {
-                    let a = (blurred_rect(Point::new(f64::from(x) + 0.5, f64::from(y) + 0.5), rect, sigma) * THUMBNAIL_SHADOW_ALPHA * 255.0).round() as u8;
+                    let a = (blurred_rect(
+                        Point::new(f64::from(x) + 0.5, f64::from(y) + 0.5),
+                        rect,
+                        sigma,
+                    ) * THUMBNAIL_SHADOW_ALPHA
+                        * 255.0)
+                        .round() as u8;
                     let i = ((y * width + x) * 4) as usize;
                     data[i..i + 4].copy_from_slice(&[0, 0, 0, a]);
                 }
@@ -380,9 +642,15 @@ pub fn downscale(image: &Pixmap, width: u32, height: u32) -> Option<Pixmap> {
     let src = image.data();
     let dst = out.data_mut();
     for y in 0..height as usize {
-        let (y0, y1) = (y * sh / height as usize, ((y + 1) * sh).div_ceil(height as usize).min(sh));
+        let (y0, y1) = (
+            y * sh / height as usize,
+            ((y + 1) * sh).div_ceil(height as usize).min(sh),
+        );
         for x in 0..width as usize {
-            let (x0, x1) = (x * sw / width as usize, ((x + 1) * sw).div_ceil(width as usize).min(sw));
+            let (x0, x1) = (
+                x * sw / width as usize,
+                ((x + 1) * sw).div_ceil(width as usize).min(sw),
+            );
             let mut sum = [0u32; 4];
             for yy in y0..y1 {
                 for xx in x0..x1 {
@@ -410,8 +678,28 @@ fn crosshair(pm: &mut Pixmap, p: Point, s: f64) {
     let arms = [(from, -CROSSHAIR_GAP), (CROSSHAIR_GAP, to)];
     for (halo, color) in [(1.0, CROSSHAIR_HALO), (0.0, CROSSHAIR_CORE)] {
         for (a, b) in arms {
-            fill_rect(pm, &Rect::new(p.x + a - halo, p.y - 0.5 - halo, b - a + 2.0 * halo, 1.0 + 2.0 * halo), s, color);
-            fill_rect(pm, &Rect::new(p.x - 0.5 - halo, p.y + a - halo, 1.0 + 2.0 * halo, b - a + 2.0 * halo), s, color);
+            fill_rect(
+                pm,
+                &Rect::new(
+                    p.x + a - halo,
+                    p.y - 0.5 - halo,
+                    b - a + 2.0 * halo,
+                    1.0 + 2.0 * halo,
+                ),
+                s,
+                color,
+            );
+            fill_rect(
+                pm,
+                &Rect::new(
+                    p.x - 0.5 - halo,
+                    p.y + a - halo,
+                    1.0 + 2.0 * halo,
+                    b - a + 2.0 * halo,
+                ),
+                s,
+                color,
+            );
         }
     }
 }
@@ -420,12 +708,21 @@ fn close_glyph(pm: &mut Pixmap, r: &Rect, s: f64, color: Rgba) {
     let c = r.center();
     let radius = r.width().min(r.height()) / 2.0;
     if let Some(path) = circle(c, radius, s) {
-        pm.fill_path(&path, &paint(color), FillRule::Winding, Transform::identity(), None);
+        pm.fill_path(
+            &path,
+            &paint(color),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
     let d = radius * 0.4;
     let mut cut = paint([0.0, 0.0, 0.0, 1.0]);
     cut.blend_mode = BlendMode::Clear;
-    for (a, b) in [((c.x - d, c.y - d), (c.x + d, c.y + d)), ((c.x - d, c.y + d), (c.x + d, c.y - d))] {
+    for (a, b) in [
+        ((c.x - d, c.y - d), (c.x + d, c.y + d)),
+        ((c.x - d, c.y + d), (c.x + d, c.y - d)),
+    ] {
         if let Some(path) = polyline(&[a, b], s, false) {
             pm.stroke_path(&path, &cut, &stroke(1.5, s), Transform::identity(), None);
         }
@@ -442,16 +739,34 @@ fn badge(pm: &mut Pixmap, c: Point, s: f64, color: Rgba) {
     if let Some(path) = circle(at, 4.5, s) {
         let mut clear = paint([0.0, 0.0, 0.0, 1.0]);
         clear.blend_mode = BlendMode::Clear;
-        pm.fill_path(&path, &clear, FillRule::Winding, Transform::identity(), None);
+        pm.fill_path(
+            &path,
+            &clear,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
     if let Some(path) = circle(at, 3.0, s) {
-        pm.fill_path(&path, &paint(color), FillRule::Winding, Transform::identity(), None);
+        pm.fill_path(
+            &path,
+            &paint(color),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 }
 
 fn outline(pm: &mut Pixmap, r: &Rect, radius: f64, s: f64, color: Rgba) {
     if let Some(path) = rounded_path(*r, Radii::uniform(radius), CornerStyle::Circular, s) {
-        pm.stroke_path(&path, &paint(color), &stroke(1.3, s), Transform::identity(), None);
+        pm.stroke_path(
+            &path,
+            &paint(color),
+            &stroke(1.3, s),
+            Transform::identity(),
+            None,
+        );
     }
 }
 
@@ -460,7 +775,12 @@ fn screen_glyph(pm: &mut Pixmap, c: Point, s: f64, color: Rgba, record: bool) {
     let f = frame(c);
     outline(pm, &f, 2.0, s, color);
     fill_rect(pm, &Rect::new(f.x(), f.y(), f.width(), 2.5), s, color);
-    fill_rect(pm, &Rect::new(c.x - 5.0, f.max_y() - 4.0, 10.0, 2.0), s, color);
+    fill_rect(
+        pm,
+        &Rect::new(c.x - 5.0, f.max_y() - 4.0, 10.0, 2.0),
+        s,
+        color,
+    );
     if record {
         badge(pm, c, s, color);
     }
@@ -492,9 +812,21 @@ fn selection_glyph(pm: &mut Pixmap, c: Point, s: f64, color: Rgba, record: bool)
 
 fn stop_glyph(pm: &mut Pixmap, c: Point, s: f64, color: Rgba) {
     if let Some(path) = circle(c, 8.5, s) {
-        pm.fill_path(&path, &paint(color), FillRule::Winding, Transform::identity(), None);
+        pm.fill_path(
+            &path,
+            &paint(color),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
-    fill_rect_blended(pm, &Rect::new(c.x - 3.0, c.y - 3.0, 6.0, 6.0), s, [0.0, 0.0, 0.0, 1.0], BlendMode::Clear);
+    fill_rect_blended(
+        pm,
+        &Rect::new(c.x - 3.0, c.y - 3.0, 6.0, 6.0),
+        s,
+        [0.0, 0.0, 0.0, 1.0],
+        BlendMode::Clear,
+    );
 }
 
 #[cfg(test)]
@@ -509,7 +841,19 @@ mod tests {
     /// Needs the asset directory (`CUPERTINO_ASSET_DIR`); fails with the build instructions when it is missing.
     fn painter() -> Painter {
         let assets = Assets::discover();
-        Painter::new(Palette { text: [0.0; 4], secondary: [0.0; 4], disabled: [0.0; 4], selected: [0.0; 4], separator: [0.0; 4], highlight: [0.0; 4] }, Typography::default(), &assets).unwrap_or_else(|e| panic!("{e}"))
+        Painter::new(
+            Palette {
+                text: [0.0; 4],
+                secondary: [0.0; 4],
+                disabled: [0.0; 4],
+                selected: [0.0; 4],
+                separator: [0.0; 4],
+                highlight: [0.0; 4],
+            },
+            Typography::default(),
+            &assets,
+        )
+        .unwrap_or_else(|e| panic!("{e}"))
     }
 
     #[test]
@@ -527,8 +871,16 @@ mod tests {
             crosshair: false,
         };
         painter.overlay(&mut pm, 1.0, &view);
-        assert_eq!(pixel(&pm, 10, 10), [0, 0, 0, 128], "the dim is black at half alpha");
-        assert_eq!(pixel(&pm, 150, 125), [0, 0, 0, 0], "the selection is a hole");
+        assert_eq!(
+            pixel(&pm, 10, 10),
+            [0, 0, 0, 128],
+            "the dim is black at half alpha"
+        );
+        assert_eq!(
+            pixel(&pm, 150, 125),
+            [0, 0, 0, 0],
+            "the selection is a hole"
+        );
         assert_eq!(pixel(&pm, 100, 125)[3], 255, "the border is opaque");
     }
 
@@ -541,13 +893,34 @@ mod tests {
         let rows = toolbar::menu(&crate::settings::Settings::default());
         let image = Pixmap::new(30, 20).expect("a pixmap");
         for (scale, offset) in [(1.0, 0.3), (1.5, 0.5), (1.25, 0.77), (2.0, 0.1)] {
-            let mut bar = Pixmap::new((628.0 * scale) as u32, (104.0 * scale) as u32).expect("a pixmap");
-            painter.toolbar(&mut bar, scale, &ToolbarView { mode: Mode::Window, hovered: Some(Item::Options), countdown: Some(3) });
-            let mut menu = Pixmap::new((MENU_WIDTH * scale) as u32, (400.0 * scale) as u32).expect("a pixmap");
+            let mut bar =
+                Pixmap::new((628.0 * scale) as u32, (104.0 * scale) as u32).expect("a pixmap");
+            painter.toolbar(
+                &mut bar,
+                scale,
+                &ToolbarView {
+                    mode: Mode::Window,
+                    hovered: Some(Item::Options),
+                    countdown: Some(3),
+                },
+            );
+            let mut menu =
+                Pixmap::new((MENU_WIDTH * scale) as u32, (400.0 * scale) as u32).expect("a pixmap");
             painter.menu(&mut menu, scale, &rows, Some(1));
-            let mut thumb = Pixmap::new((142.0 * scale) as u32, (132.0 * scale) as u32).expect("a pixmap");
-            painter.thumbnail(&mut thumb, scale, &image, (30.0, 20.0), Look { offset: 7.0 + offset, alpha: 0.5 });
-            let mut pm = Pixmap::new((400.0 * scale) as u32, (300.0 * scale) as u32).expect("a pixmap");
+            let mut thumb =
+                Pixmap::new((142.0 * scale) as u32, (132.0 * scale) as u32).expect("a pixmap");
+            painter.thumbnail(
+                &mut thumb,
+                scale,
+                &image,
+                (30.0, 20.0),
+                Look {
+                    offset: 7.0 + offset,
+                    alpha: 0.5,
+                },
+            );
+            let mut pm =
+                Pixmap::new((400.0 * scale) as u32, (300.0 * scale) as u32).expect("a pixmap");
             for style in [Style::Simple, Style::Interactive] {
                 let view = OverlayView {
                     bounds: Rect::new(0.0, 0.0, 400.0, 300.0),

@@ -35,7 +35,13 @@ const DILATION_PER_LUMINANCE: f32 = 0.01;
 /// The fill colour's luminance as the dilation reads it: linear sRGB, Rec. 709 weights, alpha ignored, rounded half away
 /// from zero to a quarter. `rgb` is the sRGB-encoded colour, 0 to 1.
 pub fn quantized_luminance(rgb: [f32; 3]) -> f32 {
-    let linear = |c: f32| if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
+    let linear = |c: f32| {
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
     let y = 0.2126 * linear(rgb[0]) + 0.7152 * linear(rgb[1]) + 0.0722 * linear(rgb[2]);
     (4.0 * y).round() / 4.0
 }
@@ -92,12 +98,19 @@ fn polygons(points: &[Point], verbs: &[Verb], offset: (f32, f32)) -> Vec<Vec<Poi
                 i += 1;
             }
             Verb::LineTo => {
-                contours.last_mut().expect("an outline starts with a move").push(shift(points[i]));
+                contours
+                    .last_mut()
+                    .expect("an outline starts with a move")
+                    .push(shift(points[i]));
                 i += 1;
             }
             Verb::QuadTo => {
                 let c = contours.last_mut().expect("an outline starts with a move");
-                let (p0, p1, p2) = (*c.last().expect("a contour has its start"), shift(points[i]), shift(points[i + 1]));
+                let (p0, p1, p2) = (
+                    *c.last().expect("a contour has its start"),
+                    shift(points[i]),
+                    shift(points[i + 1]),
+                );
                 let dd = (p0 - p1 * 2.0 + p2).length();
                 let n = ((dd / (8.0 * TOLERANCE)).sqrt().ceil() as usize).clamp(1, 64);
                 for k in 1..=n {
@@ -109,13 +122,25 @@ fn polygons(points: &[Point], verbs: &[Verb], offset: (f32, f32)) -> Vec<Vec<Poi
             }
             Verb::CurveTo => {
                 let c = contours.last_mut().expect("an outline starts with a move");
-                let (p0, p1, p2, p3) = (*c.last().expect("a contour has its start"), shift(points[i]), shift(points[i + 1]), shift(points[i + 2]));
-                let dd = (p0 - p1 * 2.0 + p2).length().max((p1 - p2 * 2.0 + p3).length());
+                let (p0, p1, p2, p3) = (
+                    *c.last().expect("a contour has its start"),
+                    shift(points[i]),
+                    shift(points[i + 1]),
+                    shift(points[i + 2]),
+                );
+                let dd = (p0 - p1 * 2.0 + p2)
+                    .length()
+                    .max((p1 - p2 * 2.0 + p3).length());
                 let n = ((3.0 * dd / (4.0 * TOLERANCE)).sqrt().ceil() as usize).clamp(1, 64);
                 for k in 1..=n {
                     let t = k as f32 / n as f32;
                     let u = 1.0 - t;
-                    c.push(p0 * (u * u * u) + p1 * (3.0 * u * u * t) + p2 * (3.0 * u * t * t) + p3 * (t * t * t));
+                    c.push(
+                        p0 * (u * u * u)
+                            + p1 * (3.0 * u * u * t)
+                            + p2 * (3.0 * u * t * t)
+                            + p3 * (t * t * t),
+                    );
                 }
                 i += 3;
             }
@@ -128,23 +153,45 @@ fn polygons(points: &[Point], verbs: &[Verb], offset: (f32, f32)) -> Vec<Vec<Poi
 
 /// Twice the signed area of the polygons, y up: positive when the outer contours run counter-clockwise.
 fn signed_area(contours: &[Vec<Point>]) -> f32 {
-    contours.iter().map(|c| (0..c.len()).map(|k| {
-        let (a, b) = (c[k], c[(k + 1) % c.len()]);
-        a.x * b.y - b.x * a.y
-    }).sum::<f32>()).sum()
+    contours
+        .iter()
+        .map(|c| {
+            (0..c.len())
+                .map(|k| {
+                    let (a, b) = (c[k], c[(k + 1) % c.len()]);
+                    a.x * b.y - b.x * a.y
+                })
+                .sum::<f32>()
+        })
+        .sum()
 }
 
 /// The edges of `contours` after the dilation `(dx, dy) of: each edge translated by its own direction, the
 /// translated edges joined end to start. `orientation` is +1 for counter-clockwise outer contours, −1 for clockwise
 /// ones (TrueType), so that the symmetric part always grows the ink; the +dy shift is upward either way.
-fn dilated_edges(contours: &[Vec<Point>], (dx, dy): (f32, f32), orientation: f32) -> Vec<(Point, Point)> {
-    let sign = |v: f32| if v > 0.0 { 1.0 } else if v < 0.0 { -1.0 } else { 0.0 };
+fn dilated_edges(
+    contours: &[Vec<Point>],
+    (dx, dy): (f32, f32),
+    orientation: f32,
+) -> Vec<(Point, Point)> {
+    let sign = |v: f32| {
+        if v > 0.0 {
+            1.0
+        } else if v < 0.0 {
+            -1.0
+        } else {
+            0.0
+        }
+    };
     let mut edges = Vec::new();
     for c in contours {
         let moved: Vec<(Point, Point)> = (0..c.len())
             .map(|k| {
                 let (a, b) = (c[k], c[(k + 1) % c.len()]);
-                let t = Point::new(orientation * sign(b.y - a.y) * dx, -orientation * sign(b.x - a.x) * dy + dy);
+                let t = Point::new(
+                    orientation * sign(b.y - a.y) * dx,
+                    -orientation * sign(b.x - a.x) * dy + dy,
+                );
                 (a + t, b + t)
             })
             .filter(|(a, b)| a != b)
@@ -162,12 +209,21 @@ fn dilated_edges(contours: &[Vec<Point>], (dx, dy): (f32, f32), orientation: f32
 
 /// Rasterise the outline `points` / `verbs` (pixels, y up, origin on the baseline; a scaled glyph outline) at the
 /// subpixel `offset` with the dilation `dilation`. `None` for an empty outline.
-pub fn rasterize(points: &[Point], verbs: &[Verb], offset: (f32, f32), dilation: (f32, f32)) -> Option<Mask> {
+pub fn rasterize(
+    points: &[Point],
+    verbs: &[Verb],
+    offset: (f32, f32),
+    dilation: (f32, f32),
+) -> Option<Mask> {
     let contours = polygons(points, verbs, offset);
     if contours.is_empty() {
         return None;
     }
-    let orientation = if signed_area(&contours) >= 0.0 { 1.0 } else { -1.0 };
+    let orientation = if signed_area(&contours) >= 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
     let edges = dilated_edges(&contours, dilation, orientation);
     let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     for (a, b) in &edges {
@@ -176,7 +232,10 @@ pub fn rasterize(points: &[Point], verbs: &[Verb], offset: (f32, f32), dilation:
         }
     }
     let (left, top) = (x0.floor() as i32, y1.ceil() as i32);
-    let (width, height) = ((x1.ceil() as i32 - left).max(1) as usize, (top - y0.floor() as i32).max(1) as usize);
+    let (width, height) = (
+        (x1.ceil() as i32 - left).max(1) as usize,
+        (top - y0.floor() as i32).max(1) as usize,
+    );
     // two spare columns: a segment adds to the pixel right of the last one it touches
     let stride = width + 2;
     let mut acc = vec![0.0f32; stride * height];
@@ -193,7 +252,13 @@ pub fn rasterize(points: &[Point], verbs: &[Verb], offset: (f32, f32), dilation:
             data[row * width + col] = (sum.abs().min(1.0) * 255.0).round() as u8;
         }
     }
-    Some(Mask { left, top, width: width as u32, height: height as u32, data })
+    Some(Mask {
+        left,
+        top,
+        width: width as u32,
+        height: height as u32,
+        data,
+    })
 }
 
 /// Add the signed area of the segment `p0`–`p1` (raster space) to the accumulation buffer `acc`: after a running sum
@@ -202,7 +267,11 @@ fn line(acc: &mut [f32], stride: usize, height: usize, p0: (f32, f32), p1: (f32,
     if p0.1 == p1.1 {
         return;
     }
-    let (dir, p0, p1) = if p0.1 < p1.1 { (1.0, p0, p1) } else { (-1.0, p1, p0) };
+    let (dir, p0, p1) = if p0.1 < p1.1 {
+        (1.0, p0, p1)
+    } else {
+        (-1.0, p1, p0)
+    };
     let dxdy = (p1.0 - p0.0) / (p1.1 - p0.1);
     let mut x = p0.0;
     let y_start = p0.1.max(0.0);
@@ -258,12 +327,23 @@ mod tests {
 
     /// Add a square contour from (x0, y0) to (x1, y1), y up, counter-clockwise when `ccw`.
     fn square(path: &mut (Vec<Point>, Vec<Verb>), [x0, y0, x1, y1]: [f32; 4], ccw: bool) {
-        let mut corners = vec![Point::new(x0, y0), Point::new(x1, y0), Point::new(x1, y1), Point::new(x0, y1)];
+        let mut corners = vec![
+            Point::new(x0, y0),
+            Point::new(x1, y0),
+            Point::new(x1, y1),
+            Point::new(x0, y1),
+        ];
         if !ccw {
             corners.reverse();
         }
         path.0.extend(corners);
-        path.1.extend([Verb::MoveTo, Verb::LineTo, Verb::LineTo, Verb::LineTo, Verb::Close]);
+        path.1.extend([
+            Verb::MoveTo,
+            Verb::LineTo,
+            Verb::LineTo,
+            Verb::LineTo,
+            Verb::Close,
+        ]);
     }
 
     fn raster(path: &(Vec<Point>, Vec<Verb>), dilation: (f32, f32)) -> Mask {
@@ -285,18 +365,35 @@ mod tests {
         let black = quantized_luminance([0.0, 0.0, 0.0]);
         let white = quantized_luminance([1.0, 1.0, 1.0]);
         assert_eq!((black, white), (0.0, 1.0));
-        for (s, yq, d) in [(26.0, black, 0.1508), (26.0, white, 0.3), (13.0, black, 0.0754), (22.0, black, 0.1276)] {
-            assert!((Smoothing::On.dilation(s, yq) - d).abs() < 1e-5, "{s} px, Yq {yq}: {}", Smoothing::On.dilation(s, yq));
+        for (s, yq, d) in [
+            (26.0, black, 0.1508),
+            (26.0, white, 0.3),
+            (13.0, black, 0.0754),
+            (22.0, black, 0.1276),
+        ] {
+            assert!(
+                (Smoothing::On.dilation(s, yq) - d).abs() < 1e-5,
+                "{s} px, Yq {yq}: {}",
+                Smoothing::On.dilation(s, yq)
+            );
         }
         assert_eq!(Smoothing::Off.dilation(26.0, white), 0.0);
         // the declarative renderer's 26 px becomes 1.25^14 = 22.74, so dark text gets 0.1319
         let s = declarative_size(26.0);
         assert!((s - 22.737).abs() < 1e-3, "{s}");
         assert!((Smoothing::On.dilation(s, black) - 0.1319).abs() < 1e-4);
-        assert!((declarative_size(25.0) - 22.737).abs() < 1e-3 && (declarative_size(28.5) - 28.422).abs() < 1e-3, "floors, never rounds up");
+        assert!(
+            (declarative_size(25.0) - 22.737).abs() < 1e-3
+                && (declarative_size(28.5) - 28.422).abs() < 1e-3,
+            "floors, never rounds up"
+        );
         // greys: sRGB 0.5 is linear 0.214, 4Y = 0.856, so Yq = 0.25; sRGB 0.735 is linear 0.4995, 4Y = 1.998, so 0.5
         assert_eq!(quantized_luminance([0.5, 0.5, 0.5]), 0.25);
-        assert!((Smoothing::On.dilation(26.0, quantized_luminance([0.5, 0.5, 0.5])) - 0.2158).abs() < 1e-5, "sRGB 0.5 grey at 26 px");
+        assert!(
+            (Smoothing::On.dilation(26.0, quantized_luminance([0.5, 0.5, 0.5])) - 0.2158).abs()
+                < 1e-5,
+            "sRGB 0.5 grey at 26 px"
+        );
         // near-black ends below linear 0.125: sRGB 0.38 is linear 0.1195, so Yq = 0 and 0.1508 at 26 px
         assert_eq!(quantized_luminance([0.38, 0.38, 0.38]), 0.0);
         assert_eq!(quantized_luminance([0.735, 0.735, 0.735]), 0.5);
@@ -308,7 +405,19 @@ mod tests {
     #[test]
     fn origin_quantisation_follows_the_size_table() {
         // 6-8 px (5, 2), 9-11 (4, 1), 12-16 (3, 1), 17-24 (2, 1), one position from 34 px
-        for (px, q) in [(6.0, (5, 2)), (8.0, (5, 2)), (9.0, (4, 1)), (11.0, (4, 1)), (12.0, (3, 1)), (13.0, (3, 1)), (16.0, (3, 1)), (17.0, (2, 1)), (24.0, (2, 1)), (26.0, (2, 1)), (34.0, (1, 1))] {
+        for (px, q) in [
+            (6.0, (5, 2)),
+            (8.0, (5, 2)),
+            (9.0, (4, 1)),
+            (11.0, (4, 1)),
+            (12.0, (3, 1)),
+            (13.0, (3, 1)),
+            (16.0, (3, 1)),
+            (17.0, (2, 1)),
+            (24.0, (2, 1)),
+            (26.0, (2, 1)),
+            (34.0, (1, 1)),
+        ] {
             assert_eq!(quantization(px), q, "{px} px");
         }
     }
@@ -321,17 +430,33 @@ mod tests {
             let mut path = (Vec::new(), Vec::new());
             square(&mut path, [2.0, 2.0, 8.0, 8.0], ccw);
             let m = raster(&path, (dx, dy));
-            assert_eq!(at(&m, 1, 4), 40, "left column: dx = 0.1573 of the pixel ({ccw})");
+            assert_eq!(
+                at(&m, 1, 4),
+                40,
+                "left column: dx = 0.1573 of the pixel ({ccw})"
+            );
             assert_eq!(at(&m, 8, 4), 40, "right column");
-            assert_eq!(at(&m, 4, 8), 100, "row above the top: 2 dy = 0.3933 ({ccw})");
+            assert_eq!(
+                at(&m, 4, 8),
+                100,
+                "row above the top: 2 dy = 0.3933 ({ccw})"
+            );
             assert_eq!(at(&m, 4, 1), 0, "nothing below the bottom edge");
             assert_eq!(at(&m, 4, 4), 255);
-            assert_eq!(at(&m, 1, 8), 12, "corner, under the join: 1.5 dx dy = 0.0464");
+            assert_eq!(
+                at(&m, 1, 8),
+                12,
+                "corner, under the join: 1.5 dx dy = 0.0464"
+            );
         }
         let mut path = (Vec::new(), Vec::new());
         square(&mut path, [2.0, 2.0, 8.0, 8.0], true);
         let plain = raster(&path, (0.0, 0.0));
-        assert_eq!((plain.left, plain.top, plain.width, plain.height), (2, 8, 6, 6), "no dilation: the square's own pixels");
+        assert_eq!(
+            (plain.left, plain.top, plain.width, plain.height),
+            (2, 8, 6, 6),
+            "no dilation: the square's own pixels"
+        );
         assert!(plain.data.iter().all(|&c| c == 255));
     }
 
@@ -343,7 +468,15 @@ mod tests {
         square(&mut path, [3.0, 3.0, 7.0, 7.0], false);
         let m = raster(&path, (0.3, 0.3));
         assert_eq!(at(&m, 3, 5), 77, "the hole's left column: 0.3 inked");
-        assert_eq!(at(&m, 5, 6), 0, "the hole's top edge rises by 2 dy: its top row stays clear");
-        assert_eq!(at(&m, 5, 3), 153, "the hole's bottom edge rises by 2 dy = 0.6");
+        assert_eq!(
+            at(&m, 5, 6),
+            0,
+            "the hole's top edge rises by 2 dy: its top row stays clear"
+        );
+        assert_eq!(
+            at(&m, 5, 3),
+            153,
+            "the hole's bottom edge rises by 2 dy = 0.6"
+        );
     }
 }

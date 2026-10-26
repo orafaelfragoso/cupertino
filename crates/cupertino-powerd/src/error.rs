@@ -12,20 +12,32 @@ pub enum Error {
     /// Reading, listing or writing a sysfs path failed.
     Io { path: PathBuf, source: io::Error },
     /// A power supply attribute does not parse.
-    Supply { name: String, source: supply::ParseError },
+    Supply {
+        name: String,
+        source: supply::ParseError,
+    },
     /// A backlight attribute does not parse.
-    Backlight { name: String, source: backlight::ParseError },
+    Backlight {
+        name: String,
+        source: backlight::ParseError,
+    },
     /// Enumerating or classifying input devices failed.
     Devices(cupertino_devices::Error),
     /// Opening or reading the lid switch device failed.
-    Evdev { path: PathBuf, source: cupertino_evdev::Error },
+    Evdev {
+        path: PathBuf,
+        source: cupertino_evdev::Error,
+    },
     /// Opening a device node failed.
     Open { path: PathBuf, errno: Errno },
     /// Waiting for events failed.
     Poll(Errno),
     /// A D-Bus call or the bus connection failed; `what` names the step.
     #[cfg(feature = "dbus")]
-    Bus { what: &'static str, source: Box<zbus::Error> },
+    Bus {
+        what: &'static str,
+        source: Box<zbus::Error>,
+    },
     /// Another process owns the bus name.
     #[cfg(feature = "dbus")]
     NameTaken(&'static str),
@@ -41,7 +53,10 @@ impl Error {
     /// The adapter for `map_err` on a D-Bus call: names the step that failed. The `zbus` error is
     /// boxed because it is large.
     pub(crate) fn bus(what: &'static str) -> impl Fn(zbus::Error) -> Self + Copy {
-        move |source| Self::Bus { what, source: Box::new(source) }
+        move |source| Self::Bus {
+            what,
+            source: Box::new(source),
+        }
     }
 }
 

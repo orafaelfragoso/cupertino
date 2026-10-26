@@ -81,10 +81,30 @@ impl NineSlice {
             d.top *= f;
             d.bottom *= f;
         }
-        let sx = [0.0, si.left, self.source.width - si.right, self.source.width];
-        let sy = [0.0, si.top, self.source.height - si.bottom, self.source.height];
-        let dx = [dest.min_x(), dest.min_x() + d.left, dest.max_x() - d.right, dest.max_x()];
-        let dy = [dest.min_y(), dest.min_y() + d.top, dest.max_y() - d.bottom, dest.max_y()];
+        let sx = [
+            0.0,
+            si.left,
+            self.source.width - si.right,
+            self.source.width,
+        ];
+        let sy = [
+            0.0,
+            si.top,
+            self.source.height - si.bottom,
+            self.source.height,
+        ];
+        let dx = [
+            dest.min_x(),
+            dest.min_x() + d.left,
+            dest.max_x() - d.right,
+            dest.max_x(),
+        ];
+        let dy = [
+            dest.min_y(),
+            dest.min_y() + d.top,
+            dest.max_y() - d.bottom,
+            dest.max_y(),
+        ];
         std::array::from_fn(|i| {
             let (row, col) = (i / 3, i % 3);
             Slice {
@@ -96,7 +116,10 @@ impl NineSlice {
 
     /// Non-empty slices only.
     pub fn visible_slices(&self, dest: Rect, scale: f64) -> Vec<Slice> {
-        self.slices(dest, scale).into_iter().filter(|s| !s.is_empty()).collect()
+        self.slices(dest, scale)
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect()
     }
 }
 

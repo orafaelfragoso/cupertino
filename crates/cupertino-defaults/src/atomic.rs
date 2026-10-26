@@ -22,26 +22,40 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
 
 /// [`write_atomic`] with `before_rename` run on the flushed temporary file just before the rename (tests use it to
 /// fail or crash there).
-pub(crate) fn write_atomic_with(path: &Path, contents: &[u8], before_rename: &dyn Fn(&Path) -> io::Result<()>) -> io::Result<()> {
+pub(crate) fn write_atomic_with(
+    path: &Path,
+    contents: &[u8],
+    before_rename: &dyn Fn(&Path) -> io::Result<()>,
+) -> io::Result<()> {
     // a link is followed: the file it names is replaced, in that file's directory
     let path = &match fs::canonicalize(path) {
         Ok(resolved) => resolved,
         Err(e) if e.kind() == io::ErrorKind::NotFound => path.to_path_buf(),
         Err(e) => return Err(e),
     };
-    let name = path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{} names no file", path.display())))?;
+    let name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} names no file", path.display()),
+        )
+    })?;
     let dir = match path.parent() {
         Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
         _ => PathBuf::from("."),
     };
     fs::create_dir_all(&dir)?;
     let (tmp, file) = create_temp(&dir, &name.to_string_lossy())?;
-    let written = write_temp(file, path, contents).and_then(|()| before_rename(&tmp)).and_then(|()| fs::rename(&tmp, path));
+    let written = write_temp(file, path, contents)
+        .and_then(|()| before_rename(&tmp))
+        .and_then(|()| fs::rename(&tmp, path));
     if let Err(e) = written {
         return Err(match fs::remove_file(&tmp) {
             Ok(()) => e,
             Err(cleanup) if cleanup.kind() == io::ErrorKind::NotFound => e,
-            Err(cleanup) => io::Error::new(e.kind(), format!("{e}; removing {} also failed: {cleanup}", tmp.display())),
+            Err(cleanup) => io::Error::new(
+                e.kind(),
+                format!("{e}; removing {} also failed: {cleanup}", tmp.display()),
+            ),
         });
     }
     File::open(&dir)?.sync_all()
@@ -51,7 +65,11 @@ pub(crate) fn write_atomic_with(path: &Path, contents: &[u8], before_rename: &dy
 fn create_temp(dir: &Path, name: &str) -> io::Result<(PathBuf, File)> {
     let mut last = None;
     for _ in 0..TEMP_ATTEMPTS {
-        let tmp = dir.join(format!(".{name}.{}.{}.tmp", std::process::id(), NEXT_TEMP.fetch_add(1, Ordering::Relaxed)));
+        let tmp = dir.join(format!(
+            ".{name}.{}.{}.tmp",
+            std::process::id(),
+            NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+        ));
         match OpenOptions::new().write(true).create_new(true).open(&tmp) {
             Ok(file) => return Ok((tmp, file)),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = Some(e),
@@ -80,7 +98,11 @@ mod tests {
     const CRASH_CHILD_ENV: &str = "CUPERTINO_DEFAULTS_CRASH_CHILD";
 
     fn temp_files(dir: &Path) -> Vec<String> {
-        let mut names: Vec<String> = fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).filter(|n| n.ends_with(".tmp")).collect();
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
         names.sort();
         names
     }
@@ -106,7 +128,13 @@ mod tests {
         fs::create_dir(link.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&target, &link).unwrap();
         write_atomic(&link, b"tile_size = 64\n").unwrap();
-        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "still a link");
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "still a link"
+        );
         assert_eq!(fs::read_to_string(&target).unwrap(), "tile_size = 64\n");
         assert!(temp_files(&dotfiles).is_empty() && temp_files(link.parent().unwrap()).is_empty());
     }
@@ -118,10 +146,18 @@ mod tests {
         // the names the next writes of this process would take, as a crash with this pid would have left them
         let next = NEXT_TEMP.load(Ordering::Relaxed);
         for n in next..next + 4 {
-            fs::write(dir.path().join(format!(".power.conf.{}.{n}.tmp", std::process::id())), "old").unwrap();
+            fs::write(
+                dir.path()
+                    .join(format!(".power.conf.{}.{n}.tmp", std::process::id())),
+                "old",
+            )
+            .unwrap();
         }
         write_atomic(&path, b"dim_before_display_sleep = off\n").unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), "dim_before_display_sleep = off\n");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "dim_before_display_sleep = off\n"
+        );
     }
 
     #[test]
@@ -132,7 +168,10 @@ mod tests {
         fs::write(&path, "old\n").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         write_atomic(&path, b"new\n").unwrap();
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     #[test]
@@ -140,7 +179,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("dock.conf");
         fs::write(&path, "tile_size = 48\n").unwrap();
-        let error = write_atomic_with(&path, b"tile_size = 64\n", &|_| Err(io::Error::other("disk full"))).unwrap_err();
+        let error = write_atomic_with(&path, b"tile_size = 64\n", &|_| {
+            Err(io::Error::other("disk full"))
+        })
+        .unwrap_err();
         assert_eq!(error.to_string(), "disk full");
         assert_eq!(fs::read_to_string(&path).unwrap(), "tile_size = 48\n");
         assert!(temp_files(dir.path()).is_empty());
@@ -150,25 +192,47 @@ mod tests {
     fn a_process_killed_between_write_and_rename_leaves_the_old_file() {
         if let Some(target) = std::env::var_os(CRASH_CHILD_ENV) {
             // the child: the new contents are on disk in the temporary file when the process dies
-            write_atomic_with(Path::new(&target), b"tile_size = 64\n", &|_| std::process::abort()).unwrap();
+            write_atomic_with(Path::new(&target), b"tile_size = 64\n", &|_| {
+                std::process::abort()
+            })
+            .unwrap();
             unreachable!("the child aborts before the rename");
         }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("dock.conf");
         fs::write(&path, "tile_size = 48\n").unwrap();
         let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "atomic::tests::a_process_killed_between_write_and_rename_leaves_the_old_file", "--test-threads=1"])
+            .args([
+                "--exact",
+                "atomic::tests::a_process_killed_between_write_and_rename_leaves_the_old_file",
+                "--test-threads=1",
+            ])
             .env(CRASH_CHILD_ENV, &path)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
             .unwrap();
         assert!(!status.success(), "the child crashed");
-        assert_eq!(fs::read_to_string(&path).unwrap(), "tile_size = 48\n", "the old file survives");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "tile_size = 48\n",
+            "the old file survives"
+        );
         let leftovers = temp_files(dir.path());
-        assert_eq!(leftovers.len(), 1, "the crash leaves the temporary file: {leftovers:?}");
-        assert_eq!(fs::read_to_string(dir.path().join(&leftovers[0])).unwrap(), "tile_size = 64\n");
+        assert_eq!(
+            leftovers.len(),
+            1,
+            "the crash leaves the temporary file: {leftovers:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join(&leftovers[0])).unwrap(),
+            "tile_size = 64\n"
+        );
         write_atomic(&path, b"tile_size = 32\n").unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), "tile_size = 32\n", "the next write is not hindered by the leftover");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "tile_size = 32\n",
+            "the next write is not hindered by the leftover"
+        );
     }
 }

@@ -43,7 +43,10 @@ pub struct BarSetConfig {
 
 impl Default for BarSetConfig {
     fn default() -> Self {
-        let timed = Curve::Timed { duration: 0.2, bezier: CubicBezier::EASE_IN_EASE_OUT };
+        let timed = Curve::Timed {
+            duration: 0.2,
+            bezier: CubicBezier::EASE_IN_EASE_OUT,
+        };
         Self {
             bar_height: 24.0,
             auto_hide: AutoHide::FullscreenOnly,
@@ -58,10 +61,16 @@ impl Default for BarSetConfig {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BarEvent {
-    Revealed { output: OutputId },
-    Hidden { output: OutputId },
+    Revealed {
+        output: OutputId,
+    },
+    Hidden {
+        output: OutputId,
+    },
     /// The area reserved for the bar changed (auto-hide toggled): recompute usable areas.
-    UsableAreaChanged { output: OutputId },
+    UsableAreaChanged {
+        output: OutputId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -97,12 +106,21 @@ pub struct MenuBarSet {
 
 impl MenuBarSet {
     pub fn new(cfg: BarSetConfig) -> Self {
-        Self { cfg, outputs: HashMap::new(), order: Vec::new(), active: None }
+        Self {
+            cfg,
+            outputs: HashMap::new(),
+            order: Vec::new(),
+            active: None,
+        }
     }
 
     pub fn add_output(&mut self, id: OutputId, rect: Rect, now: f64) {
         let height = self.cfg.bar_height;
-        let inactive = if self.active.is_some_and(|a| a != id) { 1.0 } else { 0.0 };
+        let inactive = if self.active.is_some_and(|a| a != id) {
+            1.0
+        } else {
+            0.0
+        };
         self.outputs.insert(
             id,
             OutputState {
@@ -172,7 +190,9 @@ impl MenuBarSet {
     }
 
     pub fn set_fullscreen(&mut self, id: OutputId, fullscreen: bool, now: f64) -> Vec<BarEvent> {
-        let Some(o) = self.outputs.get_mut(&id) else { return Vec::new() };
+        let Some(o) = self.outputs.get_mut(&id) else {
+            return Vec::new();
+        };
         let before = Self::hidden_target_of(&self.cfg, o);
         o.fullscreen = fullscreen;
         o.revealed = false;
@@ -227,7 +247,9 @@ impl MenuBarSet {
     }
 
     fn retarget_visible(&mut self, id: OutputId, now: f64) {
-        let Some(shown) = self.visible_target(id) else { return };
+        let Some(shown) = self.visible_target(id) else {
+            return;
+        };
         let curve = self.cfg.slide_curve;
         if let Some(o) = self.outputs.get_mut(&id) {
             let target = if shown { 1.0 } else { 0.0 };
@@ -238,12 +260,17 @@ impl MenuBarSet {
     }
 
     fn at_top_edge(&self, id: OutputId, p: Point) -> bool {
-        let Some(o) = self.outputs.get(&id) else { return false };
+        let Some(o) = self.outputs.get(&id) else {
+            return false;
+        };
         if !o.rect.contains(p) || p.y - o.rect.y >= self.cfg.edge_thickness {
             return false;
         }
         let probe = Point::new(p.x, o.rect.y - 0.5);
-        !self.outputs.values().any(|other| other.rect.contains(probe))
+        !self
+            .outputs
+            .values()
+            .any(|other| other.rect.contains(probe))
     }
 
     /// Feed the pointer position (global coordinates).
@@ -260,7 +287,8 @@ impl MenuBarSet {
             }
             let at_edge = self.at_top_edge(id, pointer);
             let height = self.outputs[&id].height;
-            let in_bar = self.outputs[&id].rect.contains(pointer) && pointer.y - self.outputs[&id].rect.y < height;
+            let in_bar = self.outputs[&id].rect.contains(pointer)
+                && pointer.y - self.outputs[&id].rect.y < height;
             let o = self.outputs.get_mut(&id).expect("output");
             if !o.revealed {
                 match (at_edge, o.dwell_since) {
@@ -281,7 +309,9 @@ impl MenuBarSet {
     /// Reveal or hide the auto-hidden bar of `id` on behalf of an external dwell timer (an edge
     /// reveal component): the bar's own dwell state is cleared.
     pub fn set_revealed(&mut self, id: OutputId, revealed: bool, now: f64) -> Vec<BarEvent> {
-        let Some(o) = self.outputs.get_mut(&id) else { return Vec::new() };
+        let Some(o) = self.outputs.get_mut(&id) else {
+            return Vec::new();
+        };
         o.dwell_since = None;
         o.leave_since = None;
         if o.revealed == revealed {
@@ -289,7 +319,11 @@ impl MenuBarSet {
         }
         o.revealed = revealed;
         self.retarget_visible(id, now);
-        vec![if revealed { BarEvent::Revealed { output: id } } else { BarEvent::Hidden { output: id } }]
+        vec![if revealed {
+            BarEvent::Revealed { output: id }
+        } else {
+            BarEvent::Hidden { output: id }
+        }]
     }
 
     /// Fire reveal / hide timers.
@@ -298,9 +332,16 @@ impl MenuBarSet {
         let ids = self.order.clone();
         for id in ids {
             let (reveal, hide) = {
-                let Some(o) = self.outputs.get(&id) else { continue };
-                let reveal = !o.revealed && o.dwell_since.is_some_and(|s| now - s >= self.cfg.reveal_dwell - 1e-9);
-                let hide = o.revealed && !o.menu_open && o.leave_since.is_some_and(|s| now - s >= self.cfg.hide_delay - 1e-9);
+                let Some(o) = self.outputs.get(&id) else {
+                    continue;
+                };
+                let reveal = !o.revealed
+                    && o.dwell_since
+                        .is_some_and(|s| now - s >= self.cfg.reveal_dwell - 1e-9);
+                let hide = o.revealed
+                    && !o.menu_open
+                    && o.leave_since
+                        .is_some_and(|s| now - s >= self.cfg.hide_delay - 1e-9);
                 (reveal, hide)
             };
             if reveal {
@@ -338,20 +379,31 @@ impl MenuBarSet {
 
     /// Whether the bar currently takes room from windows on `id`.
     pub fn reserves_space(&self, id: OutputId) -> bool {
-        self.outputs.get(&id).is_some_and(|o| !Self::hidden_target_of(&self.cfg, o))
+        self.outputs
+            .get(&id)
+            .is_some_and(|o| !Self::hidden_target_of(&self.cfg, o))
     }
 
     /// Height the bar takes from windows on `id`: its height, or 0 while it is auto-hidden.
     pub fn reserved_height(&self, id: OutputId) -> Option<f64> {
         let o = self.outputs.get(&id)?;
-        Some(if Self::hidden_target_of(&self.cfg, o) { 0.0 } else { o.height })
+        Some(if Self::hidden_target_of(&self.cfg, o) {
+            0.0
+        } else {
+            o.height
+        })
     }
 
     /// The output rectangle minus the area reserved by the bar.
     pub fn usable_area(&self, id: OutputId) -> Option<Rect> {
         let o = self.outputs.get(&id)?;
         let h = self.reserved_height(id)?;
-        Some(Rect::new(o.rect.x, o.rect.y + h, o.rect.w, (o.rect.h - h).max(0.0)))
+        Some(Rect::new(
+            o.rect.x,
+            o.rect.y + h,
+            o.rect.w,
+            (o.rect.h - h).max(0.0),
+        ))
     }
 
     pub fn presentation(&self, id: OutputId, now: f64) -> Option<BarPresentation> {
@@ -391,7 +443,11 @@ mod tests {
         assert_eq!(s.presentation(O1, 0.0).unwrap().inactive, 0.0);
         assert_eq!(s.presentation(O2, 0.0).unwrap().inactive, 1.0);
         s.set_active_output(Some(O2), 1.0);
-        assert_eq!(s.presentation(O1, 1.0).unwrap().inactive, 0.0, "starts from the old value");
+        assert_eq!(
+            s.presentation(O1, 1.0).unwrap().inactive,
+            0.0,
+            "starts from the old value"
+        );
         let mid = s.presentation(O1, 1.1).unwrap();
         assert!(mid.inactive > 0.0 && mid.inactive < 1.0 && mid.animating);
         assert_eq!(s.presentation(O1, 5.0).unwrap().inactive, 1.0);
@@ -410,11 +466,18 @@ mod tests {
     #[test]
     fn bars_reserve_space_unless_hidden() {
         let mut s = two();
-        assert_eq!(s.usable_area(O1), Some(Rect::new(0.0, 24.0, 1920.0, 1056.0)));
+        assert_eq!(
+            s.usable_area(O1),
+            Some(Rect::new(0.0, 24.0, 1920.0, 1056.0))
+        );
         let ev = s.set_fullscreen(O1, true, 1.0);
         assert_eq!(ev, vec![BarEvent::UsableAreaChanged { output: O1 }]);
         assert_eq!(s.usable_area(O1), Some(A));
-        assert_eq!(s.usable_area(O2), Some(Rect::new(1920.0, 24.0, 1280.0, 776.0)), "other outputs are unaffected");
+        assert_eq!(
+            s.usable_area(O2),
+            Some(Rect::new(1920.0, 24.0, 1280.0, 776.0)),
+            "other outputs are unaffected"
+        );
         assert!(!s.reserves_space(O1) && s.reserves_space(O2));
         assert!(s.set_fullscreen(O1, true, 2.0).is_empty(), "no change");
     }
@@ -506,7 +569,11 @@ mod tests {
         s.add_output(O2, Rect::new(0.0, 1080.0, 1920.0, 1080.0), 0.0);
         s.set_auto_hide(AutoHide::Always, 0.0);
         s.pointer_moved(Point::new(500.0, 1080.0), 1.0);
-        assert_eq!(s.next_deadline(), None, "the top of the lower output touches the upper one");
+        assert_eq!(
+            s.next_deadline(),
+            None,
+            "the top of the lower output touches the upper one"
+        );
         s.pointer_moved(Point::new(500.0, 0.0), 1.1);
         assert!(s.next_deadline().is_some());
     }
@@ -524,10 +591,19 @@ mod tests {
         let mut s = two();
         s.set_auto_hide(AutoHide::Always, 0.0);
         assert_eq!(s.presentation(O1, 9.0).unwrap().visible, 0.0);
-        assert_eq!(s.set_revealed(O1, true, 10.0), vec![BarEvent::Revealed { output: O1 }]);
+        assert_eq!(
+            s.set_revealed(O1, true, 10.0),
+            vec![BarEvent::Revealed { output: O1 }]
+        );
         assert_eq!(s.presentation(O1, 20.0).unwrap().visible, 1.0);
-        assert!(s.set_revealed(O1, true, 20.0).is_empty(), "already revealed");
-        assert_eq!(s.set_revealed(O1, false, 21.0), vec![BarEvent::Hidden { output: O1 }]);
+        assert!(
+            s.set_revealed(O1, true, 20.0).is_empty(),
+            "already revealed"
+        );
+        assert_eq!(
+            s.set_revealed(O1, false, 21.0),
+            vec![BarEvent::Hidden { output: O1 }]
+        );
         assert_eq!(s.presentation(O1, 30.0).unwrap().visible, 0.0);
         assert!(s.set_revealed(OutputId(9), true, 0.0).is_empty());
     }

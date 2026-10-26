@@ -26,7 +26,10 @@ pub struct GtkMenu {
 pub enum WindowMenu {
     /// The window exports none.
     None,
-    DbusMenu { service: String, path: String },
+    DbusMenu {
+        service: String,
+        path: String,
+    },
     Gtk(GtkMenu),
 }
 
@@ -123,10 +126,21 @@ impl GroupBuilder {
         use cupertino_menu_bar_v1::Event;
         let optional = |s: String| Some(s).filter(|s| !s.is_empty());
         match event {
-            Event::ActiveApp { app_id, title } => self.update.active_app = Some(ActiveApp { app_id, title }),
+            Event::ActiveApp { app_id, title } => {
+                self.update.active_app = Some(ActiveApp { app_id, title })
+            }
             Event::MenuNone => self.update.menu = Some(WindowMenu::None),
-            Event::MenuDbusmenu { service, path } => self.update.menu = Some(WindowMenu::DbusMenu { service, path }),
-            Event::MenuGtk { bus_name, application_id, application_object_path, window_object_path, menubar_object_path, app_menu_object_path } => {
+            Event::MenuDbusmenu { service, path } => {
+                self.update.menu = Some(WindowMenu::DbusMenu { service, path })
+            }
+            Event::MenuGtk {
+                bus_name,
+                application_id,
+                application_object_path,
+                window_object_path,
+                menubar_object_path,
+                app_menu_object_path,
+            } => {
                 self.update.menu = Some(WindowMenu::Gtk(GtkMenu {
                     bus_name,
                     application_id: optional(application_id),
@@ -136,7 +150,17 @@ impl GroupBuilder {
                     app_menu_object_path: optional(app_menu_object_path),
                 }))
             }
-            Event::WindowState { can_zoom, workspace, workspaces } => self.update.window_state = Some(WindowState { can_zoom: can_zoom != 0, workspace, workspaces }),
+            Event::WindowState {
+                can_zoom,
+                workspace,
+                workspaces,
+            } => {
+                self.update.window_state = Some(WindowState {
+                    can_zoom: can_zoom != 0,
+                    workspace,
+                    workspaces,
+                })
+            }
             Event::Engage => self.update.engage = true,
             Event::ScreenCapture { active } => self.update.screen_capture = Some(active != 0),
             Event::Done => {
@@ -162,17 +186,37 @@ mod tests {
     #[test]
     fn a_group_is_applied_at_its_done_event() {
         let updates = feed(vec![
-            Event::ActiveApp { app_id: "org.example.editor".into(), title: "notes.txt".into() },
-            Event::MenuDbusmenu { service: ":1.42".into(), path: "/MenuBar".into() },
-            Event::WindowState { can_zoom: 1, workspace: 2, workspaces: 4 },
+            Event::ActiveApp {
+                app_id: "org.example.editor".into(),
+                title: "notes.txt".into(),
+            },
+            Event::MenuDbusmenu {
+                service: ":1.42".into(),
+                path: "/MenuBar".into(),
+            },
+            Event::WindowState {
+                can_zoom: 1,
+                workspace: 2,
+                workspaces: 4,
+            },
             Event::Done,
         ]);
         assert_eq!(
             updates,
             vec![MenuBarUpdate {
-                active_app: Some(ActiveApp { app_id: "org.example.editor".into(), title: "notes.txt".into() }),
-                menu: Some(WindowMenu::DbusMenu { service: ":1.42".into(), path: "/MenuBar".into() }),
-                window_state: Some(WindowState { can_zoom: true, workspace: 2, workspaces: 4 }),
+                active_app: Some(ActiveApp {
+                    app_id: "org.example.editor".into(),
+                    title: "notes.txt".into()
+                }),
+                menu: Some(WindowMenu::DbusMenu {
+                    service: ":1.42".into(),
+                    path: "/MenuBar".into()
+                }),
+                window_state: Some(WindowState {
+                    can_zoom: true,
+                    workspace: 2,
+                    workspaces: 4
+                }),
                 engage: false,
                 screen_capture: None,
             }]
@@ -181,10 +225,29 @@ mod tests {
 
     #[test]
     fn groups_do_not_leak_into_each_other() {
-        let updates = feed(vec![Event::MenuNone, Event::Done, Event::Engage, Event::Done, Event::ScreenCapture { active: 1 }, Event::Done]);
+        let updates = feed(vec![
+            Event::MenuNone,
+            Event::Done,
+            Event::Engage,
+            Event::Done,
+            Event::ScreenCapture { active: 1 },
+            Event::Done,
+        ]);
         assert_eq!(updates[0].menu, Some(WindowMenu::None));
-        assert_eq!(updates[1], MenuBarUpdate { engage: true, ..MenuBarUpdate::default() });
-        assert_eq!(updates[2], MenuBarUpdate { screen_capture: Some(true), ..MenuBarUpdate::default() });
+        assert_eq!(
+            updates[1],
+            MenuBarUpdate {
+                engage: true,
+                ..MenuBarUpdate::default()
+            }
+        );
+        assert_eq!(
+            updates[2],
+            MenuBarUpdate {
+                screen_capture: Some(true),
+                ..MenuBarUpdate::default()
+            }
+        );
     }
 
     #[test]
@@ -216,6 +279,9 @@ mod tests {
     #[test]
     fn a_group_without_content_yields_nothing() {
         assert_eq!(feed(vec![Event::Done]), vec![]);
-        assert_eq!(feed(vec![Event::MenuNone, Event::Done])[0].menu, Some(WindowMenu::None));
+        assert_eq!(
+            feed(vec![Event::MenuNone, Event::Done])[0].menu,
+            Some(WindowMenu::None)
+        );
     }
 }

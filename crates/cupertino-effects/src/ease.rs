@@ -82,7 +82,14 @@ pub struct ProgressAnimator {
 
 impl ProgressAnimator {
     pub fn new(driver: Driver, initial: f64) -> Self {
-        Self { driver, from: initial, to: initial, start: 0.0, duration: 0.0, spring: None }
+        Self {
+            driver,
+            from: initial,
+            to: initial,
+            start: 0.0,
+            duration: 0.0,
+            spring: None,
+        }
     }
 
     pub fn driver(&self) -> Driver {
@@ -97,7 +104,9 @@ impl ProgressAnimator {
         let t = now - self.start;
         match (self.driver, self.spring) {
             (_, _) if self.duration <= 0.0 => self.to,
-            (Driver::Timed { ease, .. }, _) => self.from + (self.to - self.from) * ease.apply(t / self.duration),
+            (Driver::Timed { ease, .. }, _) => {
+                self.from + (self.to - self.from) * ease.apply(t / self.duration)
+            }
             (Driver::Spring(_), Some(s)) => self.from + (self.to - self.from) * s.value(t),
             (Driver::Spring(_), None) => self.to,
         }
@@ -176,7 +185,13 @@ mod tests {
 
     #[test]
     fn timed_run_and_reversal_are_continuous() {
-        let mut a = ProgressAnimator::new(Driver::Timed { duration: 0.5, ease: Ease::Cosine }, 0.0);
+        let mut a = ProgressAnimator::new(
+            Driver::Timed {
+                duration: 0.5,
+                ease: Ease::Cosine,
+            },
+            0.0,
+        );
         a.animate_to(1.0, 10.0);
         assert!(a.is_animating(10.1));
         let mid = a.value(10.2);
@@ -190,7 +205,13 @@ mod tests {
 
     #[test]
     fn reversal_takes_proportional_time() {
-        let mut a = ProgressAnimator::new(Driver::Timed { duration: 1.0, ease: Ease::Linear }, 0.0);
+        let mut a = ProgressAnimator::new(
+            Driver::Timed {
+                duration: 1.0,
+                ease: Ease::Linear,
+            },
+            0.0,
+        );
         a.animate_to(1.0, 0.0);
         a.animate_to(0.0, 0.25);
         assert!(a.is_animating(0.45));
@@ -205,7 +226,12 @@ mod tests {
         assert!(v > 0.0);
         a.animate_to(0.0, 0.1);
         assert!((a.value(0.1) - p).abs() < 1e-9);
-        assert!((a.velocity(0.1) - v).abs() < 0.02 * v.abs() + 1e-6, "{} vs {}", a.velocity(0.1), v);
+        assert!(
+            (a.velocity(0.1) - v).abs() < 0.02 * v.abs() + 1e-6,
+            "{} vs {}",
+            a.velocity(0.1),
+            v
+        );
         assert!(a.value(5.0).abs() < 1e-3);
     }
 

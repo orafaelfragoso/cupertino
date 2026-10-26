@@ -15,10 +15,17 @@ const SMALL_PAGE: usize = 12;
 const SMALL_SCREEN: (f64, f64) = (1024.0, 768.0);
 
 /// Rows and columns of the grid for n = 1 … 24 tiles (tables at ``).
-const ROWS: [usize; 24] = [1, 2, 3, 2, 3, 3, 4, 4, 3, 4, 4, 4, 5, 5, 5, 4, 5, 5, 5, 5, 6, 6, 6, 6];
-const COLUMNS: [usize; 24] = [1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4];
+const ROWS: [usize; 24] = [
+    1, 2, 3, 2, 3, 3, 4, 4, 3, 4, 4, 4, 5, 5, 5, 4, 5, 5, 5, 5, 6, 6, 6, 6,
+];
+const COLUMNS: [usize; 24] = [
+    1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+];
 /// The grid for the larger page and for any n outside 1 … 24.
-const FULL_GRID: Grid = Grid { rows: 5, columns: 5 };
+const FULL_GRID: Grid = Grid {
+    rows: 5,
+    columns: 5,
+};
 
 /// The longest name the "Other…" tile takes, in bytes (approximate: `useradd(8) limits a login name to 32).
 const MAX_NAME_BYTES: usize = 32;
@@ -43,7 +50,10 @@ impl Grid {
     /// The grid for `n` = the smaller of the page size and the tile count.
     pub fn for_count(n: usize) -> Grid {
         match n {
-            1..=24 => Grid { rows: ROWS[n - 1], columns: COLUMNS[n - 1] },
+            1..=24 => Grid {
+                rows: ROWS[n - 1],
+                columns: COLUMNS[n - 1],
+            },
             _ => FULL_GRID,
         }
     }
@@ -63,7 +73,11 @@ pub struct Cell {
 pub fn cell_of(index: usize, count: usize, max_per_page: usize) -> Cell {
     let grid = Grid::for_count(max_per_page.min(count));
     let k = index % max_per_page;
-    Cell { page: index / max_per_page, row: k / grid.columns, column: k % grid.columns }
+    Cell {
+        page: index / max_per_page,
+        row: k / grid.columns,
+        column: k % grid.columns,
+    }
 }
 
 /// One tile of the picker.
@@ -109,7 +123,11 @@ impl Picker {
     /// feature, which this system does not have. The first tile is selected; with no tile at all there is no picker.
     pub fn new(mut accounts: Vec<User>, other: bool) -> Result<Picker, NoTiles> {
         accounts.sort_by_cached_key(|user| (user.display.to_lowercase(), user.login.clone()));
-        let tiles: Vec<Tile> = accounts.into_iter().map(Tile::Account).chain(other.then_some(Tile::Other)).collect();
+        let tiles: Vec<Tile> = accounts
+            .into_iter()
+            .map(Tile::Account)
+            .chain(other.then_some(Tile::Other))
+            .collect();
         if tiles.is_empty() {
             return Err(NoTiles);
         }
@@ -146,8 +164,10 @@ impl Picker {
         let target = match direction {
             Direction::Left => self.selected.checked_sub(1),
             Direction::Right => Some(self.selected + 1),
-            Direction::Up => (cell_of(self.selected, self.tiles.len(), max_per_page).row > 0).then(|| self.selected - columns),
-            Direction::Down => Some(self.selected + columns).filter(|&below| below / max_per_page == self.selected / max_per_page),
+            Direction::Up => (cell_of(self.selected, self.tiles.len(), max_per_page).row > 0)
+                .then(|| self.selected - columns),
+            Direction::Down => Some(self.selected + columns)
+                .filter(|&below| below / max_per_page == self.selected / max_per_page),
         };
         if let Some(target) = target.filter(|&target| target < self.tiles.len()) {
             self.selected = target;
@@ -179,10 +199,18 @@ impl NameEntry {
 
     pub fn press(&mut self, key: Key) -> NameKey {
         match key {
-            Key::Char(c) if !c.is_control() && !c.is_whitespace() && self.text.len() + c.len_utf8() <= MAX_NAME_BYTES => self.text.push(c),
+            Key::Char(c)
+                if !c.is_control()
+                    && !c.is_whitespace()
+                    && self.text.len() + c.len_utf8() <= MAX_NAME_BYTES =>
+            {
+                self.text.push(c)
+            }
             Key::Char(_) => {}
             Key::Backspace => drop(self.text.pop()),
-            Key::Return if !self.text.is_empty() => return NameKey::Submit(std::mem::take(&mut self.text)),
+            Key::Return if !self.text.is_empty() => {
+                return NameKey::Submit(std::mem::take(&mut self.text))
+            }
             Key::Return => {}
             Key::Escape => return NameKey::Cancel,
         }
@@ -195,49 +223,151 @@ mod tests {
     use super::*;
 
     fn account(login: &str, display: &str) -> User {
-        User { login: login.into(), display: display.into(), picture: None, uid: None, logged_in: false }
+        User {
+            login: login.into(),
+            display: display.into(),
+            picture: None,
+            uid: None,
+            logged_in: false,
+        }
     }
 
     fn picker(count: usize) -> Picker {
-        Picker::new((0..count).map(|i| account(&format!("u{i:02}"), &format!("User {i:02}"))).collect(), true).unwrap()
+        Picker::new(
+            (0..count)
+                .map(|i| account(&format!("u{i:02}"), &format!("User {i:02}")))
+                .collect(),
+            true,
+        )
+        .unwrap()
     }
 
     fn labels(picker: &Picker) -> Vec<String> {
-        picker.tiles().iter().map(|tile| match tile {
-            Tile::Account(user) => user.display.clone(),
-            Tile::Other => "Other".into(),
-        }).collect()
+        picker
+            .tiles()
+            .iter()
+            .map(|tile| match tile {
+                Tile::Account(user) => user.display.clone(),
+                Tile::Other => "Other".into(),
+            })
+            .collect()
     }
 
     #[test]
     fn the_grid_follows_the_register_tables() {
-        let grids: Vec<(usize, usize)> = [1, 2, 3, 4, 5, 9, 12, 13, 16, 24, 25].into_iter().map(Grid::for_count).map(|g| (g.rows, g.columns)).collect();
-        assert_eq!(grids, [(1, 1), (2, 1), (3, 1), (2, 2), (3, 2), (3, 3), (4, 3), (5, 3), (4, 4), (6, 4), (5, 5)]);
+        let grids: Vec<(usize, usize)> = [1, 2, 3, 4, 5, 9, 12, 13, 16, 24, 25]
+            .into_iter()
+            .map(Grid::for_count)
+            .map(|g| (g.rows, g.columns))
+            .collect();
+        assert_eq!(
+            grids,
+            [
+                (1, 1),
+                (2, 1),
+                (3, 1),
+                (2, 2),
+                (3, 2),
+                (3, 3),
+                (4, 3),
+                (5, 3),
+                (4, 4),
+                (6, 4),
+                (5, 5)
+            ]
+        );
         // outside the tables the full grid
-        assert_eq!((Grid::for_count(0), Grid::for_count(40)), (Grid { rows: 5, columns: 5 }, Grid { rows: 5, columns: 5 }));
+        assert_eq!(
+            (Grid::for_count(0), Grid::for_count(40)),
+            (
+                Grid {
+                    rows: 5,
+                    columns: 5
+                },
+                Grid {
+                    rows: 5,
+                    columns: 5
+                }
+            )
+        );
     }
 
     #[test]
     fn tiles_are_assigned_to_pages_rows_and_columns() {
         // 14 tiles on pages of 12: the grid is that of 12 tiles, 4 rows of 3
-        let cells: Vec<(usize, usize, usize)> = [0, 2, 3, 11, 12, 13].into_iter().map(|i| cell_of(i, 14, 12)).map(|c| (c.page, c.row, c.column)).collect();
-        assert_eq!(cells, [(0, 0, 0), (0, 0, 2), (0, 1, 0), (0, 3, 2), (1, 0, 0), (1, 0, 1)]);
+        let cells: Vec<(usize, usize, usize)> = [0, 2, 3, 11, 12, 13]
+            .into_iter()
+            .map(|i| cell_of(i, 14, 12))
+            .map(|c| (c.page, c.row, c.column))
+            .collect();
+        assert_eq!(
+            cells,
+            [
+                (0, 0, 0),
+                (0, 0, 2),
+                (0, 1, 0),
+                (0, 3, 2),
+                (1, 0, 0),
+                (1, 0, 1)
+            ]
+        );
         // 4 tiles: 2 rows of 2
-        assert_eq!(cell_of(3, 4, 25), Cell { page: 0, row: 1, column: 1 });
+        assert_eq!(
+            cell_of(3, 4, 25),
+            Cell {
+                page: 0,
+                row: 1,
+                column: 1
+            }
+        );
         // 30 tiles on pages of 25: 5 x 5
-        assert_eq!(cell_of(24, 30, 25), Cell { page: 0, row: 4, column: 4 });
-        assert_eq!(cell_of(29, 30, 25), Cell { page: 1, row: 0, column: 4 });
+        assert_eq!(
+            cell_of(24, 30, 25),
+            Cell {
+                page: 0,
+                row: 4,
+                column: 4
+            }
+        );
+        assert_eq!(
+            cell_of(29, 30, 25),
+            Cell {
+                page: 1,
+                row: 0,
+                column: 4
+            }
+        );
     }
 
     #[test]
     fn the_page_size_depends_on_the_screen() {
-        assert_eq!((max_per_page(1920.0, 1080.0), max_per_page(1024.0, 768.0), max_per_page(800.0, 600.0)), (25, 12, 12));
+        assert_eq!(
+            (
+                max_per_page(1920.0, 1080.0),
+                max_per_page(1024.0, 768.0),
+                max_per_page(800.0, 600.0)
+            ),
+            (25, 12, 12)
+        );
     }
 
     #[test]
     fn accounts_sort_without_regard_to_case_and_other_comes_last() {
-        let picker = Picker::new(vec![account("zed", "zed"), account("bob", "Bob"), account("alice", "alice"), account("carol", "Carol"), account("al2", "alice")], true).unwrap();
-        assert_eq!(labels(&picker), ["alice", "alice", "Bob", "Carol", "zed", "Other"]);
+        let picker = Picker::new(
+            vec![
+                account("zed", "zed"),
+                account("bob", "Bob"),
+                account("alice", "alice"),
+                account("carol", "Carol"),
+                account("al2", "alice"),
+            ],
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            labels(&picker),
+            ["alice", "alice", "Bob", "Carol", "zed", "Other"]
+        );
         // equal names by account name
         assert!(matches!(&picker.tiles()[0], Tile::Account(user) if user.login == "al2"));
     }
@@ -251,7 +381,11 @@ mod tests {
 
     #[test]
     fn without_the_other_tile_the_accounts_are_all_there_is() {
-        let picker = Picker::new(vec![account("bob", "Bob"), account("alice", "Alice")], false).unwrap();
+        let picker = Picker::new(
+            vec![account("bob", "Bob"), account("alice", "Alice")],
+            false,
+        )
+        .unwrap();
         assert_eq!(labels(&picker), ["Alice", "Bob"]);
     }
 

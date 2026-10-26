@@ -9,7 +9,9 @@ use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_protocols::server::cupertino_session_v1::{self, CupertinoSessionV1, DisplayOption};
 use cupertino_theme::Appearance;
 use smithay::reexports::wayland_server::backend::ClientId;
-use smithay::reexports::wayland_server::{Client, DataInit, Dispatch, DisplayHandle, New, Resource};
+use smithay::reexports::wayland_server::{
+    Client, DataInit, Dispatch, DisplayHandle, New, Resource,
+};
 
 use crate::state::Cupertino;
 
@@ -49,9 +51,15 @@ fn send_display_options(observer: &CupertinoSessionV1, options: DisplayOptions) 
     }
     let mut bits = DisplayOption::empty();
     bits.set(DisplayOption::ReduceMotion, options.reduce_motion);
-    bits.set(DisplayOption::ReduceTransparency, options.reduce_transparency);
+    bits.set(
+        DisplayOption::ReduceTransparency,
+        options.reduce_transparency,
+    );
     bits.set(DisplayOption::IncreaseContrast, options.increase_contrast);
-    bits.set(DisplayOption::DifferentiateWithoutColor, options.differentiate_without_color);
+    bits.set(
+        DisplayOption::DifferentiateWithoutColor,
+        options.differentiate_without_color,
+    );
     observer.display_options(bits);
 }
 
@@ -65,7 +73,11 @@ fn send_lock(observer: &CupertinoSessionV1, locked: bool) {
 
 impl Cupertino {
     /// `cupertino_shell_v1.get_session`: register the observer and send it the current state.
-    pub fn create_session_observer(&mut self, id: New<CupertinoSessionV1>, init: &mut DataInit<'_, Self>) {
+    pub fn create_session_observer(
+        &mut self,
+        id: New<CupertinoSessionV1>,
+        init: &mut DataInit<'_, Self>,
+    ) {
         let observer = init.init(id, ());
         observer.appearance(u32::from(self.config.is_dark()));
         send_display_options(&observer, self.display_options());
@@ -88,12 +100,24 @@ impl Cupertino {
 
     /// Light becomes dark and dark becomes light.
     pub fn toggle_appearance(&mut self) {
-        self.set_appearance(if self.config.is_dark() { Appearance::Light } else { Appearance::Dark });
+        self.set_appearance(if self.config.is_dark() {
+            Appearance::Light
+        } else {
+            Appearance::Dark
+        });
     }
 }
 
 impl Dispatch<CupertinoSessionV1, ()> for Cupertino {
-    fn request(_: &mut Self, _: &Client, _: &CupertinoSessionV1, _: cupertino_session_v1::Request, _: &(), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        _: &mut Self,
+        _: &Client,
+        _: &CupertinoSessionV1,
+        _: cupertino_session_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         // `Destroy` is handled in `destroyed`
     }
 

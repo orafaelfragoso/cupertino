@@ -37,7 +37,10 @@ impl Hit {
 
 /// `text` case- and width-folded (diacritics kept).
 fn fold(text: &str) -> String {
-    text.chars().map(fold_width).flat_map(char::to_lowercase).collect()
+    text.chars()
+        .map(fold_width)
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 /// The words an entry is found by: its whitespace-separated words, folded, with each hyphenated word also joined.
@@ -59,12 +62,19 @@ fn words(text: &str) -> Vec<String> {
 /// Whether every word of `query` is a prefix of a word of `text`.
 fn prefixes(query: &[String], text: &str) -> bool {
     let entry = words(text);
-    !query.is_empty() && query.iter().all(|q| entry.iter().any(|w| w.starts_with(q.as_str())))
+    !query.is_empty()
+        && query
+            .iter()
+            .all(|q| entry.iter().any(|w| w.starts_with(q.as_str())))
 }
 
 /// The best match of `query` in `pane`: the title, else each section, else an index word.
 fn matches(pane: &Pane, query: &[String], joined: &str) -> Vec<Hit> {
-    let hit = |section, rank| Hit { pane: pane.id, section, rank };
+    let hit = |section, rank| Hit {
+        pane: pane.id,
+        section,
+        rank,
+    };
     let mut out = Vec::new();
     if fold(pane.title) == joined {
         out.push(hit(None, Rank::ExactTitle));
@@ -206,13 +216,25 @@ pub mod popup {
     /// content padding, in popup points.
     pub fn rows(count: usize, width: f64, size: RowSize) -> Vec<crate::Rect> {
         let h = row_height(size);
-        (0..count.max(1)).map(|i| crate::Rect::new(CONTENT_PADDING, CONTENT_PADDING + i as f64 * (h + ROW_SPACING), (width - 2.0 * CONTENT_PADDING).max(0.0), h)).collect()
+        (0..count.max(1))
+            .map(|i| {
+                crate::Rect::new(
+                    CONTENT_PADDING,
+                    CONTENT_PADDING + i as f64 * (h + ROW_SPACING),
+                    (width - 2.0 * CONTENT_PADDING).max(0.0),
+                    h,
+                )
+            })
+            .collect()
     }
 
     /// The popup's size at factor `f` for `count` results: the creation width, as many rows as there are results
     /// (one for none) up to [`MAX_ROWS`].
     pub fn size(f: f64, count: usize, size: RowSize) -> (f64, f64) {
-        (creation_size(f).0, height(&vec![Item::Row; count.max(1)], size))
+        (
+            creation_size(f).0,
+            height(&vec![Item::Row; count.max(1)], size),
+        )
     }
 
     /// One line of the popup.
@@ -248,25 +270,58 @@ mod tests {
     use super::*;
 
     fn panes(query: &str) -> Vec<(PaneId, Option<&'static str>, Rank)> {
-        search(query).iter().map(|h| (h.pane, h.subtitle(), h.rank)).collect()
+        search(query)
+            .iter()
+            .map(|h| (h.pane, h.subtitle(), h.rank))
+            .collect()
     }
 
     #[test]
     fn words_match_by_prefix_without_case_or_width_but_with_diacritics() {
-        assert_eq!(panes("keyb")[0], (PaneId::Keyboard, None, Rank::TitlePrefix));
-        assert_eq!(panes("KEYBOARD")[0], (PaneId::Keyboard, None, Rank::ExactTitle));
-        assert_eq!(panes("ｋｅｙｂｏａｒｄ")[0], (PaneId::Keyboard, None, Rank::ExactTitle), "fullwidth letters");
-        assert_eq!(panes("wifi")[0], (PaneId::Wifi, None, Rank::TitlePrefix), "a hyphenated title without the hyphen");
+        assert_eq!(
+            panes("keyb")[0],
+            (PaneId::Keyboard, None, Rank::TitlePrefix)
+        );
+        assert_eq!(
+            panes("KEYBOARD")[0],
+            (PaneId::Keyboard, None, Rank::ExactTitle)
+        );
+        assert_eq!(
+            panes("ｋｅｙｂｏａｒｄ")[0],
+            (PaneId::Keyboard, None, Rank::ExactTitle),
+            "fullwidth letters"
+        );
+        assert_eq!(
+            panes("wifi")[0],
+            (PaneId::Wifi, None, Rank::TitlePrefix),
+            "a hyphenated title without the hyphen"
+        );
         assert_eq!(panes("désktop"), [], "diacritics are significant");
-        assert_eq!(panes("dock desk")[0], (PaneId::DesktopDock, None, Rank::TitlePrefix), "every word, in any order");
+        assert_eq!(
+            panes("dock desk")[0],
+            (PaneId::DesktopDock, None, Rank::TitlePrefix),
+            "every word, in any order"
+        );
         assert!(search("").is_empty() && search("   ").is_empty());
     }
 
     #[test]
     fn titles_rank_before_sections_before_index_words_and_ties_follow_the_sidebar() {
         // "Display" is a title prefix of Displays and a section title of Accessibility; Mouse and Trackpad share "Tracking"
-        assert_eq!(panes("display")[..2], [(PaneId::Displays, None, Rank::TitlePrefix), (PaneId::Accessibility, Some("Display"), Rank::Section)]);
-        assert_eq!(panes("tracking"), [(PaneId::Mouse, Some("Tracking"), Rank::Section), (PaneId::Trackpad, Some("Tracking"), Rank::Section)]);
+        assert_eq!(
+            panes("display")[..2],
+            [
+                (PaneId::Displays, None, Rank::TitlePrefix),
+                (PaneId::Accessibility, Some("Display"), Rank::Section)
+            ]
+        );
+        assert_eq!(
+            panes("tracking"),
+            [
+                (PaneId::Mouse, Some("Tracking"), Rank::Section),
+                (PaneId::Trackpad, Some("Tracking"), Rank::Section)
+            ]
+        );
         assert_eq!(panes("volume"), [(PaneId::Sound, None, Rank::Word)]);
         assert_eq!(panes("sound")[0].2, Rank::ExactTitle);
     }
@@ -276,7 +331,13 @@ mod tests {
         for p in &PANES {
             for (i, section) in p.sections.iter().enumerate() {
                 let hits = search(section);
-                assert!(hits.iter().any(|h| h.pane == p.id && (h.section == Some(i) || h.rank <= Rank::TitlePrefix)), "{} › {section}: {hits:?}", p.title);
+                assert!(
+                    hits.iter()
+                        .any(|h| h.pane == p.id
+                            && (h.section == Some(i) || h.rank <= Rank::TitlePrefix)),
+                    "{} › {section}: {hits:?}",
+                    p.title
+                );
             }
         }
     }
@@ -290,14 +351,21 @@ mod tests {
         assert!(f.is_open());
         assert_eq!(f.highlighted(), Some(0));
         f.step(5);
-        assert_eq!(f.highlighted(), Some(f.results().len() - 1), "the highlight stays on the results");
+        assert_eq!(
+            f.highlighted(),
+            Some(f.results().len() - 1),
+            "the highlight stays on the results"
+        );
         f.step(-10);
         assert_eq!(f.highlighted(), Some(0));
         let hit = f.choose().unwrap();
         assert_eq!(hit.pane, PaneId::Trackpad);
         assert_eq!((f.text(), f.is_open(), f.results().len()), ("", false, 0));
         f.type_char('z');
-        assert!(f.is_open() && f.results().is_empty() && f.choose().is_none(), "no results: nothing to choose, the popup stays");
+        assert!(
+            f.is_open() && f.results().is_empty() && f.choose().is_none(),
+            "no results: nothing to choose, the popup stays"
+        );
     }
 
     #[test]
@@ -307,12 +375,33 @@ mod tests {
         let rows: Vec<f64> = RowSize::ALL.iter().map(|s| popup::row_height(*s)).collect();
         assert_eq!(rows, [22.0, 32.0, 42.0]);
         assert_eq!(popup::row_padding(RowSize::Medium), (4.0, 10.0));
-        let items = [Item::GroupTitle, Item::Row, Item::Row, Item::Divider, Item::GroupTitle, Item::Row];
-        assert_eq!(popup::height(&items, RowSize::Medium), 5.0 + 25.0 + 32.0 + 32.0 + 10.0 + 25.0 + 32.0 + 5.0);
+        let items = [
+            Item::GroupTitle,
+            Item::Row,
+            Item::Row,
+            Item::Divider,
+            Item::GroupTitle,
+            Item::Row,
+        ];
+        assert_eq!(
+            popup::height(&items, RowSize::Medium),
+            5.0 + 25.0 + 32.0 + 32.0 + 10.0 + 25.0 + 32.0 + 5.0
+        );
         let many = [Item::Row; 9];
-        assert_eq!(popup::height(&many, RowSize::Medium), 10.0 + 6.0 * 32.0, "rows past six scroll");
-        assert_eq!(popup::size(1.0, 0, RowSize::Medium), (200.0, 42.0), "the No results row");
+        assert_eq!(
+            popup::height(&many, RowSize::Medium),
+            10.0 + 6.0 * 32.0,
+            "rows past six scroll"
+        );
+        assert_eq!(
+            popup::size(1.0, 0, RowSize::Medium),
+            (200.0, 42.0),
+            "the No results row"
+        );
         assert_eq!(popup::size(1.0, 2, RowSize::Medium), (200.0, 74.0));
-        assert_eq!(popup::rows(2, 200.0, RowSize::Medium)[1], crate::Rect::new(5.0, 37.0, 190.0, 32.0));
+        assert_eq!(
+            popup::rows(2, 200.0, RowSize::Medium)[1],
+            crate::Rect::new(5.0, 37.0, 190.0, 32.0)
+        );
     }
 }

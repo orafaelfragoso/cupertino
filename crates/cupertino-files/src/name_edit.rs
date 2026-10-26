@@ -18,7 +18,13 @@ impl NameEdit {
     /// Edit the name of item `index`.
     pub fn new(index: usize, name: &str, is_dir: bool) -> Self {
         let range = initial_selection(name, is_dir);
-        NameEdit { index, original: name.to_string(), chars: name.chars().collect(), caret: range.end, anchor: range.start }
+        NameEdit {
+            index,
+            original: name.to_string(),
+            chars: name.chars().collect(),
+            caret: range.end,
+            anchor: range.start,
+        }
     }
 
     /// The item being renamed (an index of the listing it was started in).
@@ -78,13 +84,21 @@ impl NameEdit {
 
     /// Move the caret one character left; with a selection and no `extend` it goes to the selection's start.
     pub fn left(&mut self, extend: bool) {
-        let to = if !extend && !self.selection().is_empty() { self.selection().start } else { self.caret.saturating_sub(1) };
+        let to = if !extend && !self.selection().is_empty() {
+            self.selection().start
+        } else {
+            self.caret.saturating_sub(1)
+        };
         self.move_to(to, extend);
     }
 
     /// Move the caret one character right; with a selection and no `extend` it goes to the selection's end.
     pub fn right(&mut self, extend: bool) {
-        let to = if !extend && !self.selection().is_empty() { self.selection().end } else { (self.caret + 1).min(self.chars.len()) };
+        let to = if !extend && !self.selection().is_empty() {
+            self.selection().end
+        } else {
+            (self.caret + 1).min(self.chars.len())
+        };
         self.move_to(to, extend);
     }
 

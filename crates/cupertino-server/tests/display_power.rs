@@ -26,8 +26,19 @@ impl Harness {
     fn new(power: PowerSettings) -> Option<Harness> {
         let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().ok()?;
         let display: Display<Cupertino> = Display::new().ok()?;
-        let config = Config { power, ..Config::default() };
-        let mut state = Cupertino::new(display, event_loop.handle(), event_loop.get_signal(), config, false, &cupertino_assets::Assets::discover()).ok()?;
+        let config = Config {
+            power,
+            ..Config::default()
+        };
+        let mut state = Cupertino::new(
+            display,
+            event_loop.handle(),
+            event_loop.get_signal(),
+            config,
+            false,
+            &cupertino_assets::Assets::discover(),
+        )
+        .ok()?;
         if let Err(e) = headless::init(&mut state, OUTPUT, 1.0) {
             eprintln!("skipping: no EGL device ({e:#})");
             return None;
@@ -42,35 +53,64 @@ impl Harness {
     fn at(&mut self, t: f64) {
         self.state.fixed_time = Some(t);
         for _ in 0..3 {
-            headless::step(&mut self.state, &mut self.event_loop, Duration::from_millis(1)).unwrap();
+            headless::step(
+                &mut self.state,
+                &mut self.event_loop,
+                Duration::from_millis(1),
+            )
+            .unwrap();
         }
     }
 
     /// Mean of the red, green and blue channels over the output.
     fn brightness(&mut self, name: &str) -> f64 {
-        let path = std::env::temp_dir().join(format!("cupertino-test-{}-power-{name}.png", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "cupertino-test-{}-power-{name}.png",
+            std::process::id()
+        ));
         self.state.screenshot_requests.push(path.clone());
         self.state.request_redraw();
         let end = Instant::now() + Duration::from_secs(10);
         while !path.exists() {
-            assert!(Instant::now() < end, "timed out waiting for the screenshot {name}");
-            headless::step(&mut self.state, &mut self.event_loop, Duration::from_millis(5)).unwrap();
+            assert!(
+                Instant::now() < end,
+                "timed out waiting for the screenshot {name}"
+            );
+            headless::step(
+                &mut self.state,
+                &mut self.event_loop,
+                Duration::from_millis(5),
+            )
+            .unwrap();
         }
         let img = image::open(&path).unwrap().to_rgb8();
         std::fs::remove_file(&path).unwrap();
-        let sum: u64 = img.pixels().map(|p| u64::from(p.0[0]) + u64::from(p.0[1]) + u64::from(p.0[2])).sum();
+        let sum: u64 = img
+            .pixels()
+            .map(|p| u64::from(p.0[0]) + u64::from(p.0[1]) + u64::from(p.0[2]))
+            .sum();
         sum as f64 / (img.width() * img.height() * 3) as f64
     }
 }
 
 fn short_timers() -> PowerSettings {
-    let timers = SourceTimers { display_sleep: Timer::After(Duration::from_secs(SLEEP_S as u64)), system_sleep: Timer::Never };
-    PowerSettings { ac: timers, battery: timers, require_password_after: Timer::Never, ..PowerSettings::default() }
+    let timers = SourceTimers {
+        display_sleep: Timer::After(Duration::from_secs(SLEEP_S as u64)),
+        system_sleep: Timer::Never,
+    };
+    PowerSettings {
+        ac: timers,
+        battery: timers,
+        require_password_after: Timer::Never,
+        ..PowerSettings::default()
+    }
 }
 
 #[test]
 fn the_display_dims_then_goes_black_and_input_wakes_it() {
-    let Some(mut h) = Harness::new(short_timers()) else { return };
+    let Some(mut h) = Harness::new(short_timers()) else {
+        return;
+    };
     h.at(T0 + 1.0);
     let lit = h.brightness("lit");
     assert!(lit > 20.0, "the wallpaper is drawn: {lit}");
@@ -81,10 +121,16 @@ fn the_display_dims_then_goes_black_and_input_wakes_it() {
     let ramping = h.brightness("ramping");
     h.at(T0 + SLEEP_S - 15.0 + RAMP_S + 0.1);
     let dimmed = h.brightness("dimmed");
-    assert!(ramping < lit && dimmed < ramping, "the ramp darkens step by step: {lit} {ramping} {dimmed}");
+    assert!(
+        ramping < lit && dimmed < ramping,
+        "the ramp darkens step by step: {lit} {ramping} {dimmed}"
+    );
     // factor 0.01 in linear light is about 0.1 of the encoded value
     let ratio = dimmed / lit;
-    assert!((0.07..0.14).contains(&ratio), "dimmed to the dim factor: {ratio}");
+    assert!(
+        (0.07..0.14).contains(&ratio),
+        "dimmed to the dim factor: {ratio}"
+    );
 
     h.at(T0 + SLEEP_S);
     assert_eq!(h.state.power.policy().state(), DisplayState::Asleep);
@@ -93,12 +139,17 @@ fn the_display_dims_then_goes_black_and_input_wakes_it() {
     h.state.input_activity();
     assert_eq!(h.state.power.policy().state(), DisplayState::On);
     let woken = h.brightness("woken");
-    assert!((woken - lit).abs() < 0.5, "waking switches the picture back at once: {woken} against {lit}");
+    assert!(
+        (woken - lit).abs() < 0.5,
+        "waking switches the picture back at once: {woken} against {lit}"
+    );
 }
 
 #[test]
 fn input_while_dimmed_ramps_back_to_full_brightness() {
-    let Some(mut h) = Harness::new(short_timers()) else { return };
+    let Some(mut h) = Harness::new(short_timers()) else {
+        return;
+    };
     h.at(T0 + 1.0);
     let lit = h.brightness("lit2");
     h.at(T0 + SLEEP_S - 15.0);
@@ -109,5 +160,8 @@ fn input_while_dimmed_ramps_back_to_full_brightness() {
     assert!(start < lit / 2.0, "the undim starts dark: {start}");
     h.at(T0 + SLEEP_S - 14.0 + RAMP_S + 0.1);
     let back = h.brightness("undim-end");
-    assert!((back - lit).abs() < 0.5, "and ends at full brightness: {back} against {lit}");
+    assert!(
+        (back - lit).abs() < 0.5,
+        "and ends at full brightness: {back} against {lit}"
+    );
 }

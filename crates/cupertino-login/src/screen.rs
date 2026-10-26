@@ -26,7 +26,10 @@ pub struct Notifier<M> {
 
 impl<M> Clone for Notifier<M> {
     fn clone(&self) -> Self {
-        Notifier { sender: self.sender.clone(), waker: self.waker.clone() }
+        Notifier {
+            sender: self.sender.clone(),
+            waker: self.waker.clone(),
+        }
     }
 }
 
@@ -36,7 +39,9 @@ impl<M> Notifier<M> {
     }
 
     pub fn send(&self, message: M) {
-        self.sender.send(message).expect("the receiver lives as long as the process");
+        self.sender
+            .send(message)
+            .expect("the receiver lives as long as the process");
         self.waker.wake();
     }
 }
@@ -129,14 +134,29 @@ pub struct PickerKey {
 
 impl PickerKey {
     pub fn new(picker: &Picker, max_per_page: usize, power: Option<&Menu>) -> Result<PickerKey> {
-        let logged_in = picker.tiles().iter().map(|tile| matches!(tile, Tile::Account(user) if user.logged_in)).collect();
-        Ok(PickerKey { time: format_time(unix_seconds()?, TIME_FORMAT)?, selected: picker.selected_index(), max_per_page, power_open: power.and_then(Menu::open), power_prompts: power.is_some_and(Menu::will_prompt), logged_in })
+        let logged_in = picker
+            .tiles()
+            .iter()
+            .map(|tile| matches!(tile, Tile::Account(user) if user.logged_in))
+            .collect();
+        Ok(PickerKey {
+            time: format_time(unix_seconds()?, TIME_FORMAT)?,
+            selected: picker.selected_index(),
+            max_per_page,
+            power_open: power.and_then(Menu::open),
+            power_prompts: power.is_some_and(Menu::will_prompt),
+            logged_in,
+        })
     }
 }
 
 /// What the renderer needs of the power item.
 fn power_view(power: Option<&Menu>) -> Option<PowerView<'_>> {
-    power.map(|menu| PowerView { items: menu.items(), open: menu.open(), will_prompt: menu.will_prompt() })
+    power.map(|menu| PowerView {
+        items: menu.items(),
+        open: menu.open(),
+        will_prompt: menu.will_prompt(),
+    })
 }
 
 /// The key of the screen a pressed key stands for, or `None` for a key that is only activity (a shortcut is not part of
@@ -152,29 +172,75 @@ pub fn typed_key(code: u32, mods: Modifiers, character: Option<char>) -> Option<
 }
 
 /// Draw the frame `key` on `surface`, the password screen of `user` (`None`: the name screen of "Other…").
-pub fn draw(client: &mut Client, renderer: &mut Renderer, key: &FrameKey, user: Option<&User>, power: Option<&Menu>, surface: SurfaceId) -> Result<()> {
+pub fn draw(
+    client: &mut Client,
+    renderer: &mut Renderer,
+    key: &FrameKey,
+    user: Option<&User>,
+    power: Option<&Menu>,
+    surface: SurfaceId,
+) -> Result<()> {
     let date = format_time(unix_seconds()?, DATE_FORMAT)?;
     let field = match &key.field {
         FieldKey::Password(len) => Field::Password(*len),
         FieldKey::Name(text) => Field::Name(text),
     };
-    let view = View { time: &key.time, date: &date, user, field, notice: key.notice.as_deref(), caps_lock: key.caps_lock, spinner: key.spinner, help: key.help, power: power_view(power), opacity: key.opacity, shake: key.shake };
-    client.draw(surface, |pixmap, scale| renderer.render(&view, pixmap, scale.factor()))?;
+    let view = View {
+        time: &key.time,
+        date: &date,
+        user,
+        field,
+        notice: key.notice.as_deref(),
+        caps_lock: key.caps_lock,
+        spinner: key.spinner,
+        help: key.help,
+        power: power_view(power),
+        opacity: key.opacity,
+        shake: key.shake,
+    };
+    client.draw(surface, |pixmap, scale| {
+        renderer.render(&view, pixmap, scale.factor())
+    })?;
     Ok(())
 }
 
 /// Draw the frame `key` of the user picker on `surface`.
-pub fn draw_picker(client: &mut Client, renderer: &mut Renderer, key: &PickerKey, picker: &Picker, power: Option<&Menu>, surface: SurfaceId) -> Result<()> {
+pub fn draw_picker(
+    client: &mut Client,
+    renderer: &mut Renderer,
+    key: &PickerKey,
+    picker: &Picker,
+    power: Option<&Menu>,
+    surface: SurfaceId,
+) -> Result<()> {
     let date = format_time(unix_seconds()?, DATE_FORMAT)?;
     let page = picker.page(key.max_per_page);
-    let view = PickerView { power: power_view(power), time: &key.time, date: &date, tiles: &picker.tiles()[page.clone()], grid: Grid::for_count(key.max_per_page.min(picker.tiles().len())), selected: key.selected - page.start };
-    client.draw(surface, |pixmap, scale| renderer.render_picker(&view, pixmap, scale.factor()))?;
+    let view = PickerView {
+        power: power_view(power),
+        time: &key.time,
+        date: &date,
+        tiles: &picker.tiles()[page.clone()],
+        grid: Grid::for_count(key.max_per_page.min(picker.tiles().len())),
+        selected: key.selected - page.start,
+    };
+    client.draw(surface, |pixmap, scale| {
+        renderer.render_picker(&view, pixmap, scale.factor())
+    })?;
     Ok(())
 }
 
 /// Keep exactly one surface per output the server has described, made by `create`.
-pub fn arrange_surfaces(client: &mut Client, surfaces: &mut Vec<(SurfaceId, OutputId)>, create: impl Fn(&mut Client, OutputId) -> Result<SurfaceId>) -> Result<()> {
-    let outputs: Vec<OutputId> = client.outputs().into_iter().filter(|o| o.geometry.is_some()).map(|o| o.id).collect();
+pub fn arrange_surfaces(
+    client: &mut Client,
+    surfaces: &mut Vec<(SurfaceId, OutputId)>,
+    create: impl Fn(&mut Client, OutputId) -> Result<SurfaceId>,
+) -> Result<()> {
+    let outputs: Vec<OutputId> = client
+        .outputs()
+        .into_iter()
+        .filter(|o| o.geometry.is_some())
+        .map(|o| o.id)
+        .collect();
     let mut gone = Vec::new();
     surfaces.retain(|&(surface, output)| {
         let keep = outputs.contains(&output);

@@ -50,11 +50,18 @@ impl Transform {
     ];
 
     pub fn name(self) -> &'static str {
-        Self::NAMES.iter().find(|(t, _)| *t == self).map(|(_, n)| *n).expect("every transform is named")
+        Self::NAMES
+            .iter()
+            .find(|(t, _)| *t == self)
+            .map(|(_, n)| *n)
+            .expect("every transform is named")
     }
 
     pub fn from_name(name: &str) -> Option<Transform> {
-        Self::NAMES.iter().find(|(_, n)| *n == name).map(|(t, _)| *t)
+        Self::NAMES
+            .iter()
+            .find(|(_, n)| *n == name)
+            .map(|(t, _)| *t)
     }
 }
 
@@ -104,7 +111,9 @@ pub fn display_key(connector: &str, make: &str, model: &str, serial: Option<&str
         Some(serial) => format!("{} {} {}", make.trim(), model.trim(), serial.trim()),
         None => format!("connector {}", connector.trim()),
     };
-    key.chars().map(|c| if c == ']' || c.is_control() { '_' } else { c }).collect()
+    key.chars()
+        .map(|c| if c == ']' || c.is_control() { '_' } else { c })
+        .collect()
 }
 
 impl DisplaysConfig {
@@ -136,14 +145,24 @@ impl DisplaysConfig {
                 if let Some(done) = section.take() {
                     done.finish(&mut config, &mut problems);
                 }
-                match header.strip_suffix(']').map(str::trim).filter(|k| !k.is_empty()) {
+                match header
+                    .strip_suffix(']')
+                    .map(str::trim)
+                    .filter(|k| !k.is_empty())
+                {
                     Some(key) => section = Some(Section::new(key, line_no)),
-                    None => problems.push(Problem { line: line_no, problem: format!("expected `[display key]`, got {line:?}") }),
+                    None => problems.push(Problem {
+                        line: line_no,
+                        problem: format!("expected `[display key]`, got {line:?}"),
+                    }),
                 }
                 continue;
             }
             let Some(current) = section.as_mut() else {
-                problems.push(Problem { line: line_no, problem: "setting outside a display section".into() });
+                problems.push(Problem {
+                    line: line_no,
+                    problem: "setting outside a display section".into(),
+                });
                 continue;
             };
             let Some((key, value)) = line.split_once('=') else {
@@ -162,7 +181,9 @@ impl DisplaysConfig {
 
     /// The file's text; [`DisplaysConfig::parse`] reads it back unchanged.
     pub fn to_text(&self) -> String {
-        let mut out = String::from("# Display arrangement, written by the compositor when a configuration is applied.\n");
+        let mut out = String::from(
+            "# Display arrangement, written by the compositor when a configuration is applied.\n",
+        );
         for (key, s) in &self.displays {
             out.push_str(&format!(
                 "\n[{key}]\nenabled = {}\nmode = {}x{}@{}\nposition = {},{}\nscale = {}\ntransform = {}\n",
@@ -183,7 +204,9 @@ impl DisplaysConfig {
     pub fn load(path: &Path) -> io::Result<(DisplaysConfig, Vec<Problem>)> {
         match std::fs::read_to_string(path) {
             Ok(text) => Ok(Self::parse(&text)),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok((DisplaysConfig::default(), Vec::new())),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                Ok((DisplaysConfig::default(), Vec::new()))
+            }
             Err(e) => Err(e),
         }
     }
@@ -208,7 +231,16 @@ struct Section {
 
 impl Section {
     fn new(key: &str, line: usize) -> Section {
-        Section { key: key.to_string(), line, enabled: None, mode: None, position: None, scale: None, transform: None, errors: Vec::new() }
+        Section {
+            key: key.to_string(),
+            line,
+            enabled: None,
+            mode: None,
+            position: None,
+            scale: None,
+            transform: None,
+            errors: Vec::new(),
+        }
     }
 
     fn error(&mut self, line: usize, problem: String) {
@@ -217,17 +249,30 @@ impl Section {
 
     fn apply(&mut self, key: &str, value: &str) -> Result<(), String> {
         match key {
-            "enabled" => self.enabled = Some(value.parse().map_err(|_| format!("enabled: expected true or false, got {value:?}"))?),
+            "enabled" => {
+                self.enabled = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("enabled: expected true or false, got {value:?}"))?,
+                )
+            }
             "mode" => self.mode = Some(parse_mode(value)?),
             "position" => self.position = Some(parse_position(value)?),
             "scale" => {
-                let scale: f64 = value.parse().map_err(|_| format!("scale: expected a number, got {value:?}"))?;
+                let scale: f64 = value
+                    .parse()
+                    .map_err(|_| format!("scale: expected a number, got {value:?}"))?;
                 if !(scale.is_finite() && scale > 0.0) {
                     return Err(format!("scale: must be above zero, got {value}"));
                 }
                 self.scale = Some(scale);
             }
-            "transform" => self.transform = Some(Transform::from_name(value).ok_or_else(|| format!("transform: unknown {value:?}"))?),
+            "transform" => {
+                self.transform = Some(
+                    Transform::from_name(value)
+                        .ok_or_else(|| format!("transform: unknown {value:?}"))?,
+                )
+            }
             other => return Err(format!("unknown setting {other:?}")),
         }
         Ok(())
@@ -248,16 +293,37 @@ impl Section {
         let dropped = !self.errors.is_empty() || !missing.is_empty();
         problems.extend(self.errors);
         if !missing.is_empty() {
-            problems.push(Problem { line: self.line, problem: format!("[{}] lacks {}", self.key, missing.join(", ")) });
+            problems.push(Problem {
+                line: self.line,
+                problem: format!("[{}] lacks {}", self.key, missing.join(", ")),
+            });
         }
         if dropped {
-            problems.push(Problem { line: self.line, problem: format!("[{}] ignored", self.key) });
+            problems.push(Problem {
+                line: self.line,
+                problem: format!("[{}] ignored", self.key),
+            });
             return;
         }
-        let (Some(enabled), Some(mode), Some(position), Some(scale), Some(transform)) = (self.enabled, self.mode, self.position, self.scale, self.transform) else {
+        let (Some(enabled), Some(mode), Some(position), Some(scale), Some(transform)) = (
+            self.enabled,
+            self.mode,
+            self.position,
+            self.scale,
+            self.transform,
+        ) else {
             unreachable!("checked for missing settings above")
         };
-        config.set(&self.key, DisplaySettings { enabled, mode, position, scale, transform });
+        config.set(
+            &self.key,
+            DisplaySettings {
+                enabled,
+                mode,
+                position,
+                scale,
+                transform,
+            },
+        );
     }
 }
 
@@ -279,7 +345,10 @@ fn parse_mode(value: &str) -> Result<ModeSetting, String> {
 fn parse_position(value: &str) -> Result<(i32, i32), String> {
     let bad = || format!("position: expected X,Y, got {value:?}");
     let (x, y) = value.split_once(',').ok_or_else(bad)?;
-    Ok((x.trim().parse().map_err(|_| bad())?, y.trim().parse().map_err(|_| bad())?))
+    Ok((
+        x.trim().parse().map_err(|_| bad())?,
+        y.trim().parse().map_err(|_| bad())?,
+    ))
 }
 
 #[cfg(test)]
@@ -287,14 +356,31 @@ mod tests {
     use super::*;
 
     fn settings() -> DisplaySettings {
-        DisplaySettings { enabled: true, mode: ModeSetting { width: 3840, height: 2160, refresh_mhz: 59_997 }, position: (-1280, 120), scale: 1.375, transform: Transform::Rotate90 }
+        DisplaySettings {
+            enabled: true,
+            mode: ModeSetting {
+                width: 3840,
+                height: 2160,
+                refresh_mhz: 59_997,
+            },
+            position: (-1280, 120),
+            scale: 1.375,
+            transform: Transform::Rotate90,
+        }
     }
 
     #[test]
     fn the_file_round_trips() {
         let mut config = DisplaysConfig::default();
         config.set("GSM LG HDR 4K 0x0001a2b3", settings());
-        config.set("connector HDMI-A-1", DisplaySettings { enabled: false, transform: Transform::Flipped270, ..settings() });
+        config.set(
+            "connector HDMI-A-1",
+            DisplaySettings {
+                enabled: false,
+                transform: Transform::Flipped270,
+                ..settings()
+            },
+        );
         let (back, problems) = DisplaysConfig::parse(&config.to_text());
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(back, config);
@@ -304,7 +390,10 @@ mod tests {
     fn store_and_load_round_trip_and_a_missing_file_is_empty() {
         let dir = std::env::temp_dir().join(format!("cupertino-displays-{}", std::process::id()));
         let path = dir.join("nested").join(DISPLAYS_FILE);
-        assert_eq!(DisplaysConfig::load(&path).unwrap(), (DisplaysConfig::default(), Vec::new()));
+        assert_eq!(
+            DisplaysConfig::load(&path).unwrap(),
+            (DisplaysConfig::default(), Vec::new())
+        );
         let mut config = DisplaysConfig::default();
         config.set("connector headless-2", settings());
         config.store(&path).unwrap();
@@ -316,7 +405,13 @@ mod tests {
     fn setting_a_key_again_replaces_it() {
         let mut config = DisplaysConfig::default();
         config.set("a", settings());
-        config.set("a", DisplaySettings { scale: 2.0, ..settings() });
+        config.set(
+            "a",
+            DisplaySettings {
+                scale: 2.0,
+                ..settings()
+            },
+        );
         assert_eq!(config.displays.len(), 1);
         assert_eq!(config.get("a").unwrap().scale, 2.0);
     }
@@ -327,15 +422,38 @@ mod tests {
                     [bad scale]\nenabled = true\nmode = 800x600@60000\nposition = 0,0\nscale = 0\ntransform = normal\n\
                     [incomplete]\nenabled = false\n";
         let (config, problems) = DisplaysConfig::parse(text);
-        assert_eq!(config.displays.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), vec!["good"]);
-        assert!(problems.iter().any(|p| p.line == 11 && p.problem.contains("above zero")), "{problems:?}");
-        assert!(problems.iter().any(|p| p.problem.contains("[incomplete] lacks mode, position, scale, transform")), "{problems:?}");
+        assert_eq!(
+            config
+                .displays
+                .iter()
+                .map(|(k, _)| k.as_str())
+                .collect::<Vec<_>>(),
+            vec!["good"]
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.line == 11 && p.problem.contains("above zero")),
+            "{problems:?}"
+        );
+        assert!(
+            problems.iter().any(|p| p
+                .problem
+                .contains("[incomplete] lacks mode, position, scale, transform")),
+            "{problems:?}"
+        );
     }
 
     #[test]
     fn keys_prefer_the_serial_and_fall_back_to_the_connector() {
-        assert_eq!(display_key("DP-1", "GSM", "LG HDR 4K", Some("0x0001a2b3")), "GSM LG HDR 4K 0x0001a2b3");
-        assert_eq!(display_key("DP-1", "GSM", "LG HDR 4K", Some("  ")), "connector DP-1");
+        assert_eq!(
+            display_key("DP-1", "GSM", "LG HDR 4K", Some("0x0001a2b3")),
+            "GSM LG HDR 4K 0x0001a2b3"
+        );
+        assert_eq!(
+            display_key("DP-1", "GSM", "LG HDR 4K", Some("  ")),
+            "connector DP-1"
+        );
         assert_eq!(display_key("DP-1", "X", "Y]", Some("1\n")), "X Y_ 1");
     }
 }

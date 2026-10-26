@@ -41,7 +41,9 @@ const VERSION: u32 = 1;
 
 /// Whether `client` may see the capture globals: a shell process the server started itself ([`launch`]).
 fn privileged(client: &Client) -> bool {
-    client.get_data::<ClientState>().is_some_and(|c| c.privileged)
+    client
+        .get_data::<ClientState>()
+        .is_some_and(|c| c.privileged)
 }
 
 /// What an `ext_image_capture_source_v1` captures; `None` when the output or window was already gone when the source
@@ -71,8 +73,14 @@ impl Capture {
     pub fn new(dh: &DisplayHandle) -> Self {
         Self {
             _globals: [
-                dh.create_global::<Cupertino, ExtOutputImageCaptureSourceManagerV1, ()>(VERSION, ()),
-                dh.create_global::<Cupertino, ExtForeignToplevelImageCaptureSourceManagerV1, ()>(VERSION, ()),
+                dh.create_global::<Cupertino, ExtOutputImageCaptureSourceManagerV1, ()>(
+                    VERSION,
+                    (),
+                ),
+                dh.create_global::<Cupertino, ExtForeignToplevelImageCaptureSourceManagerV1, ()>(
+                    VERSION,
+                    (),
+                ),
                 dh.create_global::<Cupertino, ExtImageCopyCaptureManagerV1, ()>(VERSION, ()),
                 dh.create_global::<Cupertino, CupertinoScreenshotV1, ()>(VERSION, ()),
             ],
@@ -97,12 +105,20 @@ impl Cupertino {
                 let output = weak.as_ref()?.upgrade()?;
                 let idx = self.outputs.iter().position(|o| o.output == output)?;
                 let mode = output.current_mode()?;
-                Some(Placement { output: idx, size: (mode.size.w, mode.size.h), window: None })
+                Some(Placement {
+                    output: idx,
+                    size: (mode.size.w, mode.size.h),
+                    window: None,
+                })
             }
             Source::Toplevel(weak) => {
                 let handle = weak.as_ref()?.upgrade().filter(|h| !h.is_closed())?;
                 let identifier = handle.identifier();
-                let entry = self.windows.iter().find(|e| e.foreign.as_ref().is_some_and(|f| f.identifier() == identifier))?;
+                let entry = self.windows.iter().find(|e| {
+                    e.foreign
+                        .as_ref()
+                        .is_some_and(|f| f.identifier() == identifier)
+                })?;
                 let window = self.wm.window(entry.id)?;
                 let idx = self.outputs.iter().position(|o| o.id == window.output)?;
                 let scale = self.outputs[idx].scale;
@@ -110,15 +126,29 @@ impl Cupertino {
                 let ins = entry.insets;
                 // the size `capture_window` renders the window at
                 let px = |logical: f64| ((logical * scale).round() as i32).max(1);
-                let size = (px(f64::from(geo.size.w) + ins.horizontal()), px(f64::from(geo.size.h) + ins.vertical()));
-                Some(Placement { output: idx, size, window: Some(entry.id) })
+                let size = (
+                    px(f64::from(geo.size.w) + ins.horizontal()),
+                    px(f64::from(geo.size.h) + ins.vertical()),
+                );
+                Some(Placement {
+                    output: idx,
+                    size,
+                    window: Some(entry.id),
+                })
             }
         }
     }
 }
 
 impl GlobalDispatch<ExtOutputImageCaptureSourceManagerV1, ()> for Cupertino {
-    fn bind(_: &mut Self, _: &DisplayHandle, _: &Client, resource: New<ExtOutputImageCaptureSourceManagerV1>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &Client,
+        resource: New<ExtOutputImageCaptureSourceManagerV1>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         init.init(resource, ());
     }
 
@@ -128,19 +158,39 @@ impl GlobalDispatch<ExtOutputImageCaptureSourceManagerV1, ()> for Cupertino {
 }
 
 impl Dispatch<ExtOutputImageCaptureSourceManagerV1, ()> for Cupertino {
-    fn request(_: &mut Self, _: &Client, _: &ExtOutputImageCaptureSourceManagerV1, request: output_manager::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        _: &mut Self,
+        _: &Client,
+        _: &ExtOutputImageCaptureSourceManagerV1,
+        request: output_manager::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         match request {
             output_manager::Request::CreateSource { source, output } => {
-                init.init(source, Source::Output(Output::from_resource(&output).map(|o| o.downgrade())));
+                init.init(
+                    source,
+                    Source::Output(Output::from_resource(&output).map(|o| o.downgrade())),
+                );
             }
             output_manager::Request::Destroy => {}
-            _ => unreachable!("ext_output_image_capture_source_manager_v1 version 1 has no other request"),
+            _ => unreachable!(
+                "ext_output_image_capture_source_manager_v1 version 1 has no other request"
+            ),
         }
     }
 }
 
 impl GlobalDispatch<ExtForeignToplevelImageCaptureSourceManagerV1, ()> for Cupertino {
-    fn bind(_: &mut Self, _: &DisplayHandle, _: &Client, resource: New<ExtForeignToplevelImageCaptureSourceManagerV1>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &Client,
+        resource: New<ExtForeignToplevelImageCaptureSourceManagerV1>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         init.init(resource, ());
     }
 
@@ -150,7 +200,15 @@ impl GlobalDispatch<ExtForeignToplevelImageCaptureSourceManagerV1, ()> for Cuper
 }
 
 impl Dispatch<ExtForeignToplevelImageCaptureSourceManagerV1, ()> for Cupertino {
-    fn request(_: &mut Self, _: &Client, _: &ExtForeignToplevelImageCaptureSourceManagerV1, request: toplevel_manager::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        _: &mut Self,
+        _: &Client,
+        _: &ExtForeignToplevelImageCaptureSourceManagerV1,
+        request: toplevel_manager::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         match request {
             toplevel_manager::Request::CreateSource { source, toplevel_handle } => {
                 init.init(source, Source::Toplevel(ForeignToplevelHandle::from_resource(&toplevel_handle).map(|h| h.downgrade())));

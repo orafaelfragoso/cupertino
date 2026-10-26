@@ -23,7 +23,13 @@ pub type Timestamp = Duration;
 /// Retransmission delays of DISCOVER and REQUEST: "exponential backoff ... starting at 4 seconds
 /// and doubling up to 64 seconds" (RFC 2131, 4.1). The ±1 s randomisation the RFC adds is omitted
 /// (approximate): the machine is deterministic, so a host that wants jitter adds it to the timers.
-const RETRANSMIT_DELAYS: [Duration; 5] = [Duration::from_secs(4), Duration::from_secs(8), Duration::from_secs(16), Duration::from_secs(32), Duration::from_secs(64)];
+const RETRANSMIT_DELAYS: [Duration; 5] = [
+    Duration::from_secs(4),
+    Duration::from_secs(8),
+    Duration::from_secs(16),
+    Duration::from_secs(32),
+    Duration::from_secs(64),
+];
 
 /// How long a client waits after a NAK before it discovers again: "a minimum of ten seconds"
 /// (RFC 2131, 3.1 item 5, to avoid looping).
@@ -78,7 +84,10 @@ pub struct Lease {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     /// Send `message` in an IPv4 packet to `destination` (a server, or the broadcast address).
-    Send { message: Message, destination: Ipv4Addr },
+    Send {
+        message: Message,
+        destination: Ipv4Addr,
+    },
     /// The server acknowledged: configure the address, routes and DNS. Sent for every ACK; compare
     /// with the previous lease to see whether anything but the times changed.
     Bound(Lease),
@@ -152,9 +161,20 @@ impl Client {
     pub fn next_deadline(&self) -> Option<Timestamp> {
         match self.state {
             State::Init | State::Selecting | State::Requesting => self.timer,
-            State::Bound => self.binding.as_ref().and_then(|binding| [binding.t1, binding.expires].into_iter().flatten().min()),
-            State::Renewing => self.binding.as_ref().and_then(|binding| [self.timer, binding.t2, binding.expires].into_iter().flatten().min()),
-            State::Rebinding => self.binding.as_ref().and_then(|binding| [self.timer, binding.expires].into_iter().flatten().min()),
+            State::Bound => self
+                .binding
+                .as_ref()
+                .and_then(|binding| [binding.t1, binding.expires].into_iter().flatten().min()),
+            State::Renewing => self.binding.as_ref().and_then(|binding| {
+                [self.timer, binding.t2, binding.expires]
+                    .into_iter()
+                    .flatten()
+                    .min()
+            }),
+            State::Rebinding => self
+                .binding
+                .as_ref()
+                .and_then(|binding| [self.timer, binding.expires].into_iter().flatten().min()),
         }
     }
 
@@ -175,7 +195,9 @@ impl Client {
                         actions.extend(self.retransmit_or_give_up(now));
                     }
                 }
-                State::Bound | State::Renewing | State::Rebinding => actions.extend(self.tick_bound(now)),
+                State::Bound | State::Renewing | State::Rebinding => {
+                    actions.extend(self.tick_bound(now))
+                }
             }
             if (self.state, self.timer, self.attempt) == before {
                 return actions;
@@ -190,13 +212,18 @@ impl Client {
         }
         match (self.state, message.message_type) {
             (State::Selecting, MessageType::Offer) => self.on_offer(now, message),
-            (State::Requesting | State::Renewing | State::Rebinding, MessageType::Ack) => self.on_ack(message),
+            (State::Requesting | State::Renewing | State::Rebinding, MessageType::Ack) => {
+                self.on_ack(message)
+            }
             (State::Requesting, MessageType::Nak) => {
                 self.enter_init(now + NAK_HOLDOFF);
                 Vec::new()
             }
             (State::Renewing | State::Rebinding, MessageType::Nak) => {
-                let lost = self.binding.take().map(|binding| Action::Lost(binding.lease));
+                let lost = self
+                    .binding
+                    .take()
+                    .map(|binding| Action::Lost(binding.lease));
                 self.enter_init(now + NAK_HOLDOFF);
                 lost.into_iter().collect()
             }
@@ -211,7 +238,10 @@ impl Client {
             let mut message = self.message(MessageType::Release, Duration::ZERO);
             message.client_address = binding.lease.address;
             message.options.server_id = Some(binding.lease.server);
-            actions.push(Action::Send { message, destination: binding.lease.server });
+            actions.push(Action::Send {
+                message,
+                destination: binding.lease.server,
+            });
             actions.push(Action::Lost(binding.lease));
         }
         self.state = State::Init;
@@ -228,7 +258,8 @@ impl Client {
     /// A message of this client for the current transaction.
     fn message(&self, message_type: MessageType, now: Timestamp) -> Message {
         let mut message = Message::new(message_type, self.xid, self.config.hardware);
-        message.seconds = u16::try_from(now.saturating_sub(self.began).as_secs()).unwrap_or(u16::MAX);
+        message.seconds =
+            u16::try_from(now.saturating_sub(self.began).as_secs()).unwrap_or(u16::MAX);
         let mut client_id = vec![1];
         client_id.extend_from_slice(&self.config.hardware.0);
         message.options.client_id = Some(client_id);
@@ -256,17 +287,25 @@ impl Client {
         let mut message = self.message(MessageType::Discover, now);
         message.broadcast = true;
         message.options.parameter_request_list = PARAMETER_REQUEST_LIST.to_vec();
-        Action::Send { message, destination: Ipv4Addr::BROADCAST }
+        Action::Send {
+            message,
+            destination: Ipv4Addr::BROADCAST,
+        }
     }
 
     fn send_selecting_request(&self, now: Timestamp) -> Action {
-        let (server, address) = self.offer.expect("a request in REQUESTING follows an offer");
+        let (server, address) = self
+            .offer
+            .expect("a request in REQUESTING follows an offer");
         let mut message = self.message(MessageType::Request, now);
         message.broadcast = true;
         message.options.requested_address = Some(address);
         message.options.server_id = Some(server);
         message.options.parameter_request_list = PARAMETER_REQUEST_LIST.to_vec();
-        Action::Send { message, destination: Ipv4Addr::BROADCAST }
+        Action::Send {
+            message,
+            destination: Ipv4Addr::BROADCAST,
+        }
     }
 
     /// RENEWING sends to the server, REBINDING to everyone, both from the leased address with
@@ -276,7 +315,10 @@ impl Client {
         let mut message = self.message(MessageType::Request, now);
         message.client_address = lease.address;
         message.options.parameter_request_list = PARAMETER_REQUEST_LIST.to_vec();
-        Action::Send { message, destination }
+        Action::Send {
+            message,
+            destination,
+        }
     }
 
     fn on_offer(&mut self, now: Timestamp, offer: &Message) -> Vec<Action> {
@@ -299,7 +341,9 @@ impl Client {
     fn lease_of(ack: &Message) -> Option<(Lease, Option<u32>, Option<u32>)> {
         let options = &ack.options;
         let mask = u32::from(options.subnet_mask?);
-        let prefix_len = u8::try_from(mask.leading_ones()).ok().filter(|ones| mask.checked_shl(u32::from(*ones)).unwrap_or(0) == 0)?;
+        let prefix_len = u8::try_from(mask.leading_ones())
+            .ok()
+            .filter(|ones| mask.checked_shl(u32::from(*ones)).unwrap_or(0) == 0)?;
         let seconds = options.lease_time?;
         let lease = Lease {
             address: ack.your_address,
@@ -323,8 +367,24 @@ impl Client {
         // the lease counts from the first copy of the REQUEST (RFC 2131, 4.4.5)
         let start = self.request_sent;
         let binding = Binding {
-            t1: lease.duration.map(|duration| start + timer_after(duration, renewal, DEFAULT_T1_NUMERATOR, DEFAULT_T1_DENOMINATOR)),
-            t2: lease.duration.map(|duration| start + timer_after(duration, rebinding, DEFAULT_T2_NUMERATOR, DEFAULT_T2_DENOMINATOR)),
+            t1: lease.duration.map(|duration| {
+                start
+                    + timer_after(
+                        duration,
+                        renewal,
+                        DEFAULT_T1_NUMERATOR,
+                        DEFAULT_T1_DENOMINATOR,
+                    )
+            }),
+            t2: lease.duration.map(|duration| {
+                start
+                    + timer_after(
+                        duration,
+                        rebinding,
+                        DEFAULT_T2_NUMERATOR,
+                        DEFAULT_T2_DENOMINATOR,
+                    )
+            }),
             expires: lease.duration.map(|duration| start + duration),
             lease: lease.clone(),
         };
@@ -339,7 +399,11 @@ impl Client {
         if self.attempt + 1 < RETRANSMIT_DELAYS.len() {
             self.attempt += 1;
             self.timer = Some(now + RETRANSMIT_DELAYS[self.attempt]);
-            let send = if self.state == State::Selecting { self.send_discover(now) } else { self.send_selecting_request(now) };
+            let send = if self.state == State::Selecting {
+                self.send_discover(now)
+            } else {
+                self.send_selecting_request(now)
+            };
             return vec![send];
         }
         let mut actions = vec![Action::GaveUp];
@@ -369,7 +433,11 @@ impl Client {
             return self.renewal_attempt(now, binding.lease.server, &binding, true);
         }
         if matches!(self.state, State::Renewing | State::Rebinding) && due(self.timer) {
-            let destination = if self.state == State::Renewing { binding.lease.server } else { Ipv4Addr::BROADCAST };
+            let destination = if self.state == State::Renewing {
+                binding.lease.server
+            } else {
+                Ipv4Addr::BROADCAST
+            };
             return self.renewal_attempt(now, destination, &binding, false);
         }
         Vec::new()
@@ -378,12 +446,22 @@ impl Client {
     /// Sends a renewal REQUEST and sets the next retransmission: half the time left until T2
     /// (RENEWING) or until expiry (REBINDING), at least 60 s (RFC 2131, 4.4.5). A new request of
     /// a state starts a new transaction.
-    fn renewal_attempt(&mut self, now: Timestamp, destination: Ipv4Addr, binding: &Binding, first: bool) -> Vec<Action> {
+    fn renewal_attempt(
+        &mut self,
+        now: Timestamp,
+        destination: Ipv4Addr,
+        binding: &Binding,
+        first: bool,
+    ) -> Vec<Action> {
         if first {
             self.new_transaction();
             self.request_sent = now;
         }
-        let until = if self.state == State::Renewing { binding.t2.or(binding.expires) } else { binding.expires };
+        let until = if self.state == State::Renewing {
+            binding.t2.or(binding.expires)
+        } else {
+            binding.expires
+        };
         let remaining = until.map_or(MIN_RENEW_RETRY, |until| until.saturating_sub(now));
         self.timer = Some(now + (remaining / 2).max(MIN_RENEW_RETRY));
         vec![self.send_renewal_request(now, destination)]
@@ -392,8 +470,16 @@ impl Client {
 
 /// The time from the start of the lease to a timer: the server's value, else `numerator /
 /// denominator` of the lease.
-fn timer_after(lease: Duration, server_value: Option<u32>, numerator: u32, denominator: u32) -> Duration {
-    server_value.map_or_else(|| lease * numerator / denominator, |seconds| Duration::from_secs(u64::from(seconds)))
+fn timer_after(
+    lease: Duration,
+    server_value: Option<u32>,
+    numerator: u32,
+    denominator: u32,
+) -> Duration {
+    server_value.map_or_else(
+        || lease * numerator / denominator,
+        |seconds| Duration::from_secs(u64::from(seconds)),
+    )
 }
 
 #[cfg(test)]
@@ -410,20 +496,32 @@ mod tests {
     }
 
     fn client() -> Client {
-        Client::new(ClientConfig { hardware: MAC, xid_seed: 1000 })
+        Client::new(ClientConfig {
+            hardware: MAC,
+            xid_seed: 1000,
+        })
     }
 
     fn sent(actions: &[Action]) -> Vec<(MessageType, Ipv4Addr)> {
         actions
             .iter()
             .filter_map(|action| match action {
-                Action::Send { message, destination } => Some((message.message_type, *destination)),
+                Action::Send {
+                    message,
+                    destination,
+                } => Some((message.message_type, *destination)),
                 _ => None,
             })
             .collect()
     }
 
-    fn server_message(message_type: MessageType, xid: u32, lease_seconds: u32, renewal: Option<u32>, rebinding: Option<u32>) -> Message {
+    fn server_message(
+        message_type: MessageType,
+        xid: u32,
+        lease_seconds: u32,
+        renewal: Option<u32>,
+        rebinding: Option<u32>,
+    ) -> Message {
         let mut message = Message::new(message_type, xid, MAC);
         message.your_address = ADDRESS;
         message.options = Options {
@@ -444,37 +542,80 @@ mod tests {
     fn bound_client() -> Client {
         let mut client = client();
         let actions = client.start(at(0));
-        let Action::Send { message, .. } = &actions[0] else { panic!("expected a send") };
+        let Action::Send { message, .. } = &actions[0] else {
+            panic!("expected a send")
+        };
         let xid = message.xid;
-        client.receive(at(0), &server_message(MessageType::Offer, xid, 1000, None, None));
-        client.receive(at(0), &server_message(MessageType::Ack, xid, 1000, None, None));
+        client.receive(
+            at(0),
+            &server_message(MessageType::Offer, xid, 1000, None, None),
+        );
+        client.receive(
+            at(0),
+            &server_message(MessageType::Ack, xid, 1000, None, None),
+        );
         assert_eq!(client.state(), State::Bound);
         client
     }
 
     fn xid_of(actions: &[Action]) -> u32 {
-        actions.iter().find_map(|action| if let Action::Send { message, .. } = action { Some(message.xid) } else { None }).expect("a message was sent")
+        actions
+            .iter()
+            .find_map(|action| {
+                if let Action::Send { message, .. } = action {
+                    Some(message.xid)
+                } else {
+                    None
+                }
+            })
+            .expect("a message was sent")
     }
 
     #[test]
     fn a_full_lease_discover_offer_request_ack() {
         let mut client = client();
         let discover = client.start(at(0));
-        assert_eq!(sent(&discover), [(MessageType::Discover, Ipv4Addr::BROADCAST)]);
-        let Action::Send { message, .. } = &discover[0] else { unreachable!() };
+        assert_eq!(
+            sent(&discover),
+            [(MessageType::Discover, Ipv4Addr::BROADCAST)]
+        );
+        let Action::Send { message, .. } = &discover[0] else {
+            unreachable!()
+        };
         assert_eq!(message.xid, 1000);
         assert!(message.broadcast);
-        assert_eq!(message.options.parameter_request_list, [1, 3, 6, 15, 51, 58, 59]);
+        assert_eq!(
+            message.options.parameter_request_list,
+            [1, 3, 6, 15, 51, 58, 59]
+        );
         assert_eq!(message.options.client_id, Some(vec![1, 2, 0, 0, 0, 0, 1]));
         assert_eq!(client.state(), State::Selecting);
 
-        let request = client.receive(at(1), &server_message(MessageType::Offer, 1000, 1000, None, None));
-        assert_eq!(sent(&request), [(MessageType::Request, Ipv4Addr::BROADCAST)]);
-        let Action::Send { message, .. } = &request[0] else { unreachable!() };
-        assert_eq!((message.options.requested_address, message.options.server_id, message.client_address), (Some(ADDRESS), Some(SERVER), Ipv4Addr::UNSPECIFIED));
+        let request = client.receive(
+            at(1),
+            &server_message(MessageType::Offer, 1000, 1000, None, None),
+        );
+        assert_eq!(
+            sent(&request),
+            [(MessageType::Request, Ipv4Addr::BROADCAST)]
+        );
+        let Action::Send { message, .. } = &request[0] else {
+            unreachable!()
+        };
+        assert_eq!(
+            (
+                message.options.requested_address,
+                message.options.server_id,
+                message.client_address
+            ),
+            (Some(ADDRESS), Some(SERVER), Ipv4Addr::UNSPECIFIED)
+        );
         assert_eq!(client.state(), State::Requesting);
 
-        let bound = client.receive(at(1), &server_message(MessageType::Ack, 1000, 1000, None, None));
+        let bound = client.receive(
+            at(1),
+            &server_message(MessageType::Ack, 1000, 1000, None, None),
+        );
         assert_eq!(
             bound,
             [Action::Bound(Lease {
@@ -496,7 +637,12 @@ mod tests {
     fn messages_of_another_transaction_or_client_are_ignored() {
         let mut client = client();
         client.start(at(0));
-        assert!(client.receive(at(1), &server_message(MessageType::Offer, 999, 1000, None, None)).is_empty());
+        assert!(client
+            .receive(
+                at(1),
+                &server_message(MessageType::Offer, 999, 1000, None, None)
+            )
+            .is_empty());
         let mut other = server_message(MessageType::Offer, 1000, 1000, None, None);
         other.client_hardware = MacAddr([2, 0, 0, 0, 0, 9]);
         assert!(client.receive(at(1), &other).is_empty());
@@ -517,7 +663,10 @@ mod tests {
     fn an_ack_without_a_lease_time_or_with_a_ragged_mask_is_ignored() {
         let mut client = client();
         client.start(at(0));
-        client.receive(at(0), &server_message(MessageType::Offer, 1000, 1000, None, None));
+        client.receive(
+            at(0),
+            &server_message(MessageType::Offer, 1000, 1000, None, None),
+        );
         let mut ack = server_message(MessageType::Ack, 1000, 1000, None, None);
         ack.options.lease_time = None;
         assert!(client.receive(at(1), &ack).is_empty());
@@ -533,7 +682,10 @@ mod tests {
         client.start(at(0));
         assert_eq!(client.next_deadline(), Some(at(4)));
         assert!(client.tick(at(3)).is_empty());
-        assert_eq!(sent(&client.tick(at(4))), [(MessageType::Discover, Ipv4Addr::BROADCAST)]);
+        assert_eq!(
+            sent(&client.tick(at(4))),
+            [(MessageType::Discover, Ipv4Addr::BROADCAST)]
+        );
         // 4, then +8, +16, +32 and +64 s
         assert_eq!(client.next_deadline(), Some(at(12)));
         client.tick(at(12));
@@ -542,7 +694,10 @@ mod tests {
         assert_eq!(client.next_deadline(), Some(at(124)));
         let actions = client.tick(at(124));
         assert_eq!(actions[0], Action::GaveUp);
-        assert_eq!(sent(&actions), [(MessageType::Discover, Ipv4Addr::BROADCAST)]);
+        assert_eq!(
+            sent(&actions),
+            [(MessageType::Discover, Ipv4Addr::BROADCAST)]
+        );
         // a fresh transaction
         assert_eq!(xid_of(&actions), 1001);
         assert_eq!(client.next_deadline(), Some(at(128)));
@@ -552,12 +707,23 @@ mod tests {
     fn a_nak_to_the_request_restarts_after_ten_seconds() {
         let mut client = client();
         client.start(at(0));
-        client.receive(at(1), &server_message(MessageType::Offer, 1000, 1000, None, None));
-        assert!(client.receive(at(2), &server_message(MessageType::Nak, 1000, 0, None, None)).is_empty());
+        client.receive(
+            at(1),
+            &server_message(MessageType::Offer, 1000, 1000, None, None),
+        );
+        assert!(client
+            .receive(
+                at(2),
+                &server_message(MessageType::Nak, 1000, 0, None, None)
+            )
+            .is_empty());
         assert_eq!(client.state(), State::Init);
         assert!(client.tick(at(11)).is_empty());
         let actions = client.tick(at(12));
-        assert_eq!(sent(&actions), [(MessageType::Discover, Ipv4Addr::BROADCAST)]);
+        assert_eq!(
+            sent(&actions),
+            [(MessageType::Discover, Ipv4Addr::BROADCAST)]
+        );
         assert_eq!(xid_of(&actions), 1001);
         assert_eq!(client.state(), State::Selecting);
     }
@@ -566,8 +732,14 @@ mod tests {
     fn the_request_is_retransmitted_when_the_server_is_silent() {
         let mut client = client();
         client.start(at(0));
-        client.receive(at(1), &server_message(MessageType::Offer, 1000, 1000, None, None));
-        assert_eq!(sent(&client.tick(at(5))), [(MessageType::Request, Ipv4Addr::BROADCAST)]);
+        client.receive(
+            at(1),
+            &server_message(MessageType::Offer, 1000, 1000, None, None),
+        );
+        assert_eq!(
+            sent(&client.tick(at(5))),
+            [(MessageType::Request, Ipv4Addr::BROADCAST)]
+        );
     }
 
     #[test]
@@ -576,15 +748,23 @@ mod tests {
         assert!(client.tick(at(499)).is_empty());
         let actions = client.tick(at(500));
         assert_eq!(sent(&actions), [(MessageType::Request, SERVER)]);
-        let Action::Send { message, .. } = &actions[0] else { unreachable!() };
+        let Action::Send { message, .. } = &actions[0] else {
+            unreachable!()
+        };
         assert_eq!(message.client_address, ADDRESS);
-        assert_eq!((message.options.requested_address, message.options.server_id), (None, None));
+        assert_eq!(
+            (message.options.requested_address, message.options.server_id),
+            (None, None)
+        );
         assert!(!message.broadcast);
         assert_eq!(client.state(), State::Renewing);
         // half the 375 s left until T2 (875 s)
         assert_eq!(client.next_deadline(), Some(Duration::from_millis(687_500)));
 
-        let ack = client.receive(at(501), &server_message(MessageType::Ack, message.xid, 2000, None, None));
+        let ack = client.receive(
+            at(501),
+            &server_message(MessageType::Ack, message.xid, 2000, None, None),
+        );
         assert!(matches!(&ack[..], [Action::Bound(lease)] if lease.duration == Some(at(2000))));
         assert_eq!(client.state(), State::Bound);
         // the new lease counts from the renewal REQUEST at 500 s: T1 = 500 + 1000
@@ -596,11 +776,17 @@ mod tests {
         let mut client = bound_client();
         client.tick(at(500));
         let actions = client.tick(at(875));
-        assert_eq!(sent(&actions), [(MessageType::Request, Ipv4Addr::BROADCAST)]);
+        assert_eq!(
+            sent(&actions),
+            [(MessageType::Request, Ipv4Addr::BROADCAST)]
+        );
         assert_eq!(client.state(), State::Rebinding);
         // half of the 125 s left to expiry
         assert_eq!(client.next_deadline(), Some(Duration::from_millis(937_500)));
-        let ack = client.receive(at(876), &server_message(MessageType::Ack, xid_of(&actions), 1000, None, None));
+        let ack = client.receive(
+            at(876),
+            &server_message(MessageType::Ack, xid_of(&actions), 1000, None, None),
+        );
         assert!(matches!(&ack[..], [Action::Bound(_)]));
         assert_eq!(client.state(), State::Bound);
     }
@@ -609,7 +795,10 @@ mod tests {
     fn a_nak_while_renewing_drops_the_lease() {
         let mut client = bound_client();
         let actions = client.tick(at(500));
-        let lost = client.receive(at(501), &server_message(MessageType::Nak, xid_of(&actions), 0, None, None));
+        let lost = client.receive(
+            at(501),
+            &server_message(MessageType::Nak, xid_of(&actions), 0, None, None),
+        );
         assert!(matches!(&lost[..], [Action::Lost(lease)] if lease.address == ADDRESS));
         assert_eq!(client.state(), State::Init);
         assert_eq!(client.lease(), None);
@@ -622,7 +811,10 @@ mod tests {
         client.tick(at(875));
         let actions = client.tick(at(1000));
         assert!(matches!(&actions[0], Action::Lost(lease) if lease.address == ADDRESS));
-        assert_eq!(sent(&actions), [(MessageType::Discover, Ipv4Addr::BROADCAST)]);
+        assert_eq!(
+            sent(&actions),
+            [(MessageType::Discover, Ipv4Addr::BROADCAST)]
+        );
         assert_eq!(client.state(), State::Selecting);
     }
 
@@ -638,8 +830,14 @@ mod tests {
     fn the_server_may_set_t1_and_t2() {
         let mut client = client();
         client.start(at(0));
-        client.receive(at(0), &server_message(MessageType::Offer, 1000, 1000, None, None));
-        client.receive(at(0), &server_message(MessageType::Ack, 1000, 1000, Some(100), Some(200)));
+        client.receive(
+            at(0),
+            &server_message(MessageType::Offer, 1000, 1000, None, None),
+        );
+        client.receive(
+            at(0),
+            &server_message(MessageType::Ack, 1000, 1000, Some(100), Some(200)),
+        );
         assert_eq!(client.next_deadline(), Some(at(100)));
         client.tick(at(100));
         assert_eq!(client.next_deadline(), Some(at(100 + 60)));
@@ -651,8 +849,14 @@ mod tests {
     fn an_infinite_lease_never_renews() {
         let mut client = client();
         client.start(at(0));
-        client.receive(at(0), &server_message(MessageType::Offer, 1000, u32::MAX, None, None));
-        let bound = client.receive(at(0), &server_message(MessageType::Ack, 1000, u32::MAX, None, None));
+        client.receive(
+            at(0),
+            &server_message(MessageType::Offer, 1000, u32::MAX, None, None),
+        );
+        let bound = client.receive(
+            at(0),
+            &server_message(MessageType::Ack, 1000, u32::MAX, None, None),
+        );
         assert!(matches!(&bound[..], [Action::Bound(lease)] if lease.duration.is_none()));
         assert_eq!(client.next_deadline(), None);
         assert!(client.tick(at(10_000_000)).is_empty());
@@ -663,9 +867,17 @@ mod tests {
         let mut client = bound_client();
         let actions = client.release();
         assert_eq!(sent(&actions), [(MessageType::Release, SERVER)]);
-        let Action::Send { message, .. } = &actions[0] else { unreachable!() };
-        assert_eq!((message.client_address, message.options.server_id), (ADDRESS, Some(SERVER)));
+        let Action::Send { message, .. } = &actions[0] else {
+            unreachable!()
+        };
+        assert_eq!(
+            (message.client_address, message.options.server_id),
+            (ADDRESS, Some(SERVER))
+        );
         assert!(matches!(&actions[1], Action::Lost(_)));
-        assert_eq!((client.state(), client.lease(), client.next_deadline()), (State::Init, None, None));
+        assert_eq!(
+            (client.state(), client.lease(), client.next_deadline()),
+            (State::Init, None, None)
+        );
     }
 }

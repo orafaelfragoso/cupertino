@@ -59,7 +59,13 @@ pub struct TilePress {
 
 impl TilePress {
     pub fn new(id: TileId, origin: Point, now: f64) -> Self {
-        Self { id, origin, started: now, dragging: false, held: false }
+        Self {
+            id,
+            origin,
+            started: now,
+            dragging: false,
+            held: false,
+        }
     }
 
     /// Seconds until a press that stays in place opens the tile's menu; `None` once it became a
@@ -77,7 +83,10 @@ impl TilePress {
 
     /// The pointer moved to `p`. True exactly once: when the press turns into a drag.
     pub fn moved(&mut self, p: Point) -> bool {
-        if self.dragging || ((p.x - self.origin.x).abs() <= DRAG_THRESHOLD && (p.y - self.origin.y).abs() <= DRAG_THRESHOLD) {
+        if self.dragging
+            || ((p.x - self.origin.x).abs() <= DRAG_THRESHOLD
+                && (p.y - self.origin.y).abs() <= DRAG_THRESHOLD)
+        {
             return false;
         }
         self.dragging = true;
@@ -111,12 +120,21 @@ mod tests {
     #[test]
     fn a_press_becomes_a_drag_once_past_the_threshold_on_either_axis_and_stays_one() {
         let mut press = TilePress::new(TileId(3), Point::new(100.0, 40.0), 0.0);
-        assert!(!press.moved(Point::new(100.0 + DRAG_THRESHOLD, 40.0 - DRAG_THRESHOLD)), "the threshold itself is still a click");
+        assert!(
+            !press.moved(Point::new(100.0 + DRAG_THRESHOLD, 40.0 - DRAG_THRESHOLD)),
+            "the threshold itself is still a click"
+        );
         assert!(!press.is_dragging());
         assert!(press.moved(Point::new(100.0, 40.0 + DRAG_THRESHOLD + 0.5)));
         assert!(press.is_dragging());
-        assert!(!press.moved(Point::new(300.0, 40.0)), "the drag begins once");
-        assert!(!press.moved(Point::new(100.0, 40.0)) && press.is_dragging(), "coming back does not undo it");
+        assert!(
+            !press.moved(Point::new(300.0, 40.0)),
+            "the drag begins once"
+        );
+        assert!(
+            !press.moved(Point::new(100.0, 40.0)) && press.is_dragging(),
+            "coming back does not undo it"
+        );
     }
 
     #[test]
@@ -129,15 +147,25 @@ mod tests {
         assert_eq!(press.hold_due(11.0), None);
         let mut dragged = TilePress::new(TileId(3), Point::new(100.0, 40.0), 10.0);
         assert!(dragged.moved(Point::new(110.0, 40.0)));
-        assert!(!dragged.held(11.0), "a press that began to drag has no menu to open");
+        assert!(
+            !dragged.held(11.0),
+            "a press that began to drag has no menu to open"
+        );
     }
 
     #[test]
     fn the_puff_runs_for_its_duration_and_then_is_over() {
-        let poof = Poof { centre: Point::new(10.0, 10.0), started: 2.0 };
+        let poof = Poof {
+            centre: Point::new(10.0, 10.0),
+            started: 2.0,
+        };
         assert_eq!(poof.progress(2.0), Some(0.0));
         assert!((poof.progress(2.0 + POOF_DURATION / 2.0).unwrap() - 0.5).abs() < 1e-9);
         assert_eq!(poof.progress(2.0 + POOF_DURATION), None);
-        assert_eq!(poof.progress(1.0), None, "before it started there is nothing");
+        assert_eq!(
+            poof.progress(1.0),
+            None,
+            "before it started there is nothing"
+        );
     }
 }

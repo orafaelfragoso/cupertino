@@ -73,8 +73,14 @@ impl Default for PowerSettings {
     fn default() -> Self {
         let minutes = |m: u64| Timer::After(Duration::from_secs(m * 60));
         Self {
-            ac: SourceTimers { display_sleep: minutes(10), system_sleep: minutes(10) },
-            battery: SourceTimers { display_sleep: minutes(2), system_sleep: minutes(10) },
+            ac: SourceTimers {
+                display_sleep: minutes(10),
+                system_sleep: minutes(10),
+            },
+            battery: SourceTimers {
+                display_sleep: minutes(2),
+                system_sleep: minutes(10),
+            },
             dim_before_display_sleep: true,
             require_password_after: Timer::After(Duration::from_secs(300)),
             lock_screen_display_sleep: Duration::from_secs(30),
@@ -100,7 +106,13 @@ impl PowerSettings {
     /// The defaults with the lines of `text` applied, and the problems of its lines; with `last_good`, a key whose line
     /// is wrong keeps its last good value.
     pub fn parse(text: &str, last_good: Option<&Self>) -> (Self, Vec<Problem>) {
-        conf::read(&conf::ConfText::parse(text), KEYS, &Self::default(), last_good, None)
+        conf::read(
+            &conf::ConfText::parse(text),
+            KEYS,
+            &Self::default(),
+            last_good,
+            None,
+        )
     }
 
     /// [`Self::parse`] of the file at `path`; a missing file gives the defaults, one that cannot be read is an error.
@@ -115,7 +127,10 @@ impl PowerSettings {
 }
 
 fn seconds(value: &str) -> Result<Duration, String> {
-    value.parse::<u64>().map(Duration::from_secs).map_err(|_| format!("expected seconds, got {value:?}"))
+    value
+        .parse::<u64>()
+        .map(Duration::from_secs)
+        .map_err(|_| format!("expected seconds, got {value:?}"))
 }
 
 /// A sleep timer: seconds (at least 1) or `never`.
@@ -140,16 +155,45 @@ fn timer_text(timer: Timer) -> String {
 }
 
 const KEYS: &[Key<PowerSettings>] = &[
-    Key { name: "display_sleep_ac", read: |s, v| parse_timer(v).map(|t| s.ac.display_sleep = t), write: |s| Some(timer_text(s.ac.display_sleep)), keep: |s, g| s.ac.display_sleep = g.ac.display_sleep },
-    Key { name: "display_sleep_battery", read: |s, v| parse_timer(v).map(|t| s.battery.display_sleep = t), write: |s| Some(timer_text(s.battery.display_sleep)), keep: |s, g| s.battery.display_sleep = g.battery.display_sleep },
-    Key { name: "system_sleep_ac", read: |s, v| parse_timer(v).map(|t| s.ac.system_sleep = t), write: |s| Some(timer_text(s.ac.system_sleep)), keep: |s, g| s.ac.system_sleep = g.ac.system_sleep },
-    Key { name: "system_sleep_battery", read: |s, v| parse_timer(v).map(|t| s.battery.system_sleep = t), write: |s| Some(timer_text(s.battery.system_sleep)), keep: |s, g| s.battery.system_sleep = g.battery.system_sleep },
-    Key { name: "dim_before_display_sleep", read: |s, v| parse_switch(v).map(|b| s.dim_before_display_sleep = b), write: |s| Some(switch_text(s.dim_before_display_sleep)), keep: |s, g| s.dim_before_display_sleep = g.dim_before_display_sleep },
+    Key {
+        name: "display_sleep_ac",
+        read: |s, v| parse_timer(v).map(|t| s.ac.display_sleep = t),
+        write: |s| Some(timer_text(s.ac.display_sleep)),
+        keep: |s, g| s.ac.display_sleep = g.ac.display_sleep,
+    },
+    Key {
+        name: "display_sleep_battery",
+        read: |s, v| parse_timer(v).map(|t| s.battery.display_sleep = t),
+        write: |s| Some(timer_text(s.battery.display_sleep)),
+        keep: |s, g| s.battery.display_sleep = g.battery.display_sleep,
+    },
+    Key {
+        name: "system_sleep_ac",
+        read: |s, v| parse_timer(v).map(|t| s.ac.system_sleep = t),
+        write: |s| Some(timer_text(s.ac.system_sleep)),
+        keep: |s, g| s.ac.system_sleep = g.ac.system_sleep,
+    },
+    Key {
+        name: "system_sleep_battery",
+        read: |s, v| parse_timer(v).map(|t| s.battery.system_sleep = t),
+        write: |s| Some(timer_text(s.battery.system_sleep)),
+        keep: |s, g| s.battery.system_sleep = g.battery.system_sleep,
+    },
+    Key {
+        name: "dim_before_display_sleep",
+        read: |s, v| parse_switch(v).map(|b| s.dim_before_display_sleep = b),
+        write: |s| Some(switch_text(s.dim_before_display_sleep)),
+        keep: |s, g| s.dim_before_display_sleep = g.dim_before_display_sleep,
+    },
     // 0 is allowed here: the session locks as the display goes to sleep
     Key {
         name: "require_password_after",
         read: |s, v| {
-            s.require_password_after = if v == "never" { Timer::Never } else { Timer::After(seconds(v)?) };
+            s.require_password_after = if v == "never" {
+                Timer::Never
+            } else {
+                Timer::After(seconds(v)?)
+            };
             Ok(())
         },
         write: |s| Some(timer_text(s.require_password_after)),
@@ -177,11 +221,20 @@ mod tests {
     #[test]
     fn the_defaults_are_the_reference_power_table() {
         let s = PowerSettings::default();
-        assert_eq!(s.timers(false).display_sleep, Timer::After(Duration::from_secs(600)));
-        assert_eq!(s.timers(true).display_sleep, Timer::After(Duration::from_secs(120)));
+        assert_eq!(
+            s.timers(false).display_sleep,
+            Timer::After(Duration::from_secs(600))
+        );
+        assert_eq!(
+            s.timers(true).display_sleep,
+            Timer::After(Duration::from_secs(120))
+        );
         assert_eq!(s.timers(false).system_sleep, s.timers(true).system_sleep);
         assert!(s.dim_before_display_sleep);
-        assert_eq!(s.require_password_after, Timer::After(Duration::from_secs(300)));
+        assert_eq!(
+            s.require_password_after,
+            Timer::After(Duration::from_secs(300))
+        );
     }
 
     #[test]
@@ -191,8 +244,15 @@ mod tests {
         assert_eq!(s.battery.system_sleep, Timer::Never);
         assert!(!s.dim_before_display_sleep);
         assert_eq!(s.require_password_after, Timer::After(Duration::ZERO));
-        assert_eq!(errors.iter().map(|p| p.line).collect::<Vec<_>>(), vec![6, 7, 8]);
-        assert_eq!(s.battery.display_sleep, Timer::After(Duration::from_secs(120)), "a rejected value leaves the default");
+        assert_eq!(
+            errors.iter().map(|p| p.line).collect::<Vec<_>>(),
+            vec![6, 7, 8]
+        );
+        assert_eq!(
+            s.battery.display_sleep,
+            Timer::After(Duration::from_secs(120)),
+            "a rejected value leaves the default"
+        );
     }
 
     #[test]
@@ -210,9 +270,18 @@ mod tests {
 
     #[test]
     fn a_bad_timer_keeps_the_last_good_value() {
-        let good = PowerSettings { ac: SourceTimers { display_sleep: Timer::Never, ..PowerSettings::default().ac }, ..PowerSettings::default() };
+        let good = PowerSettings {
+            ac: SourceTimers {
+                display_sleep: Timer::Never,
+                ..PowerSettings::default().ac
+            },
+            ..PowerSettings::default()
+        };
         let (s, problems) = PowerSettings::parse("display_sleep_ac = soon\n", Some(&good));
         assert_eq!(s.ac.display_sleep, Timer::Never);
-        assert_eq!(problems[0].message, "display_sleep_ac: expected seconds, got \"soon\"");
+        assert_eq!(
+            problems[0].message,
+            "display_sleep_ac: expected seconds, got \"soon\""
+        );
     }
 }

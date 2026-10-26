@@ -42,8 +42,15 @@ pub fn xdg_states(states: &ToplevelStates, activated: bool) -> Vec<State> {
 }
 
 /// All states the model controls (everything except activation is owned by the model).
-pub const MODEL_STATES: [State; 7] =
-    [State::Maximized, State::Fullscreen, State::Resizing, State::TiledLeft, State::TiledRight, State::TiledTop, State::TiledBottom];
+pub const MODEL_STATES: [State; 7] = [
+    State::Maximized,
+    State::Fullscreen,
+    State::Resizing,
+    State::TiledLeft,
+    State::TiledRight,
+    State::TiledTop,
+    State::TiledBottom,
+];
 
 pub fn resize_edges(edge: ResizeEdge) -> Edges {
     let (l, r, t, b) = match edge {
@@ -57,14 +64,22 @@ pub fn resize_edges(edge: ResizeEdge) -> Edges {
         ResizeEdge::BottomRight => (false, true, false, true),
         _ => (false, false, false, false),
     };
-    Edges { left: l, right: r, top: t, bottom: b }
+    Edges {
+        left: l,
+        right: r,
+        top: t,
+        bottom: b,
+    }
 }
 
 /// Size a new window opens at: the client's when it has one, otherwise a fraction of `v`; at most
 /// the size of `v` (approximate stand-in for the design's constraint to the screen).
 pub fn new_window_size(v: Rect, size: Option<Size>, cfg: &Config) -> Size {
     let size = size.filter(|s| s.w > 0.0 && s.h > 0.0).unwrap_or_else(|| {
-        Size::new((v.w * cfg.default_window_fraction).round(), (v.h * cfg.default_window_fraction).round())
+        Size::new(
+            (v.w * cfg.default_window_fraction).round(),
+            (v.h * cfg.default_window_fraction).round(),
+        )
     });
     Size::new(size.w.min(v.w), size.h.min(v.h))
 }
@@ -84,7 +99,12 @@ fn snap_floor(x: f64) -> f64 {
 /// is taller. The design's bottom-up `y = minY + min(dy, ⌊0.75·dy⌋) in top-down coordinates.
 pub fn centred(v: Rect, size: Size) -> Rect {
     let (dx, dy) = (v.w - size.w, v.h - size.h);
-    Rect::new(v.x + snap_floor(0.5 * dx), v.y + dy - dy.min(snap_floor(0.75 * dy)), size.w, size.h)
+    Rect::new(
+        v.x + snap_floor(0.5 * dx),
+        v.y + dy - dy.min(snap_floor(0.75 * dy)),
+        size.w,
+        size.h,
+    )
 }
 
 /// Cascade state of one application: the wrap offsets, statics of the design's application
@@ -102,7 +122,14 @@ impl AppCascade {
     /// for a window at `frame` in the visible frame `v` of the output `screen`, cascading from
     /// `from` (`None`: the zero point, which leaves the window where it is and skips the horizontal
     /// test). Returns the window's top-left and the point the next window cascades from.
-    fn cascade(&mut self, frame: Rect, from: Option<Point>, v: Rect, screen: Rect, step: f64) -> (Point, Point) {
+    fn cascade(
+        &mut self,
+        frame: Rect,
+        from: Option<Point>,
+        v: Rect,
+        screen: Rect,
+        step: f64,
+    ) -> (Point, Point) {
         let (w, h) = (frame.w, frame.h);
         let leaves_x = |x: f64| x < v.x || x + w > v.right();
         let x = match from {
@@ -152,9 +179,22 @@ impl Cascade {
 
     /// Frame of the new window `window` of application `app`, of `size`, on the output `screen`
     /// whose visible frame (usable area, or the stage frame) is `v`; `step` is the cascade step.
-    pub fn place(&mut self, app: &str, window: WindowId, size: Size, v: Rect, screen: Rect, step: f64) -> Rect {
+    pub fn place(
+        &mut self,
+        app: &str,
+        window: WindowId,
+        size: Size,
+        v: Rect,
+        screen: Rect,
+        step: f64,
+    ) -> Rect {
         let state = self.apps.entry(app.to_string()).or_default();
-        let from = state.next.iter().rev().map(|(_, p)| *p).find(|p| screen.contains(*p));
+        let from = state
+            .next
+            .iter()
+            .rev()
+            .map(|(_, p)| *p)
+            .find(|p| screen.contains(*p));
         let start = centred(v, size);
         let (top_left, next) = state.cascade(start, from, v, screen, step);
         state.next.push((window, next));
@@ -164,7 +204,11 @@ impl Cascade {
 
 /// Application identity string for grouping: the toolkit application id, falling back to the title.
 pub fn app_identity(app_id: Option<&str>, title: Option<&str>) -> String {
-    app_id.filter(|s| !s.is_empty()).or(title.filter(|s| !s.is_empty())).unwrap_or("unknown").to_string()
+    app_id
+        .filter(|s| !s.is_empty())
+        .or(title.filter(|s| !s.is_empty()))
+        .unwrap_or("unknown")
+        .to_string()
 }
 
 /// Seconds since an arbitrary epoch from the presentation clock (monotonic milliseconds).
@@ -183,18 +227,48 @@ mod tests {
 
     #[test]
     fn states_map_one_to_one() {
-        let s = ToplevelStates { maximized: true, tiled: Edges { left: true, ..Edges::NONE }, ..Default::default() };
+        let s = ToplevelStates {
+            maximized: true,
+            tiled: Edges {
+                left: true,
+                ..Edges::NONE
+            },
+            ..Default::default()
+        };
         let v = xdg_states(&s, true);
-        assert_eq!(v, vec![State::Activated, State::Maximized, State::TiledLeft]);
+        assert_eq!(
+            v,
+            vec![State::Activated, State::Maximized, State::TiledLeft]
+        );
         assert!(xdg_states(&ToplevelStates::default(), false).is_empty());
-        let fs = ToplevelStates { fullscreen: true, resizing: true, ..Default::default() };
-        assert_eq!(xdg_states(&fs, false), vec![State::Fullscreen, State::Resizing]);
+        let fs = ToplevelStates {
+            fullscreen: true,
+            resizing: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            xdg_states(&fs, false),
+            vec![State::Fullscreen, State::Resizing]
+        );
     }
 
     #[test]
     fn resize_edges_translate() {
-        assert_eq!(resize_edges(ResizeEdge::BottomRight), Edges { right: true, bottom: true, ..Edges::NONE });
-        assert_eq!(resize_edges(ResizeEdge::Left), Edges { left: true, ..Edges::NONE });
+        assert_eq!(
+            resize_edges(ResizeEdge::BottomRight),
+            Edges {
+                right: true,
+                bottom: true,
+                ..Edges::NONE
+            }
+        );
+        assert_eq!(
+            resize_edges(ResizeEdge::Left),
+            Edges {
+                left: true,
+                ..Edges::NONE
+            }
+        );
         assert!(!resize_edges(ResizeEdge::None).any());
     }
 
@@ -205,30 +279,54 @@ mod tests {
 
     /// Frames of `n` new windows of one application.
     fn cascade_of(c: &mut Cascade, app: &str, first_id: u64, n: usize, size: Size) -> Vec<Rect> {
-        (0..n).map(|i| c.place(app, WindowId(first_id + i as u64), size, V, SCREEN, 29.0)).collect()
+        (0..n)
+            .map(|i| c.place(app, WindowId(first_id + i as u64), size, V, SCREEN, 29.0))
+            .collect()
     }
 
     #[test]
     fn a_first_window_is_centred_with_a_quarter_of_the_slack_above() {
         // slack 1120 x 456: x = 560, 114 above (24 + 114 = 138) and 342 below
         assert_eq!(centred(V, SIZE), Rect::new(560.0, 138.0, 800.0, 600.0));
-        assert_eq!(centred(V, Size::new(801.0, 601.0)), Rect::new(559.0, 138.0, 801.0, 601.0), "slack 1119 x 455: 559.5 and 341.25 round down");
-        assert_eq!(centred(V, Size::new(800.0, 1200.0)), Rect::new(560.0, 24.0, 800.0, 1200.0), "taller than the area: top on its top");
+        assert_eq!(
+            centred(V, Size::new(801.0, 601.0)),
+            Rect::new(559.0, 138.0, 801.0, 601.0),
+            "slack 1119 x 455: 559.5 and 341.25 round down"
+        );
+        assert_eq!(
+            centred(V, Size::new(800.0, 1200.0)),
+            Rect::new(560.0, 24.0, 800.0, 1200.0),
+            "taller than the area: top on its top"
+        );
     }
 
     #[test]
     fn later_windows_of_the_app_cascade_29_pt_right_and_down() {
         let mut c = Cascade::default();
         let frames = cascade_of(&mut c, "org.example.notes", 1, 3, SIZE);
-        assert_eq!(frames, vec![Rect::new(560.0, 138.0, 800.0, 600.0), Rect::new(589.0, 167.0, 800.0, 600.0), Rect::new(618.0, 196.0, 800.0, 600.0)]);
+        assert_eq!(
+            frames,
+            vec![
+                Rect::new(560.0, 138.0, 800.0, 600.0),
+                Rect::new(589.0, 167.0, 800.0, 600.0),
+                Rect::new(618.0, 196.0, 800.0, 600.0)
+            ]
+        );
     }
 
     #[test]
     fn another_app_s_first_window_is_centred_not_cascaded() {
         let mut c = Cascade::default();
         cascade_of(&mut c, "org.example.notes", 1, 2, SIZE);
-        assert_eq!(c.place("org.example.editor", WindowId(10), SIZE, V, SCREEN, 29.0), Rect::new(560.0, 138.0, 800.0, 600.0));
-        assert_eq!(c.place("org.example.notes", WindowId(11), SIZE, V, SCREEN, 29.0), Rect::new(618.0, 196.0, 800.0, 600.0), "the first app goes on from its newest window");
+        assert_eq!(
+            c.place("org.example.editor", WindowId(10), SIZE, V, SCREEN, 29.0),
+            Rect::new(560.0, 138.0, 800.0, 600.0)
+        );
+        assert_eq!(
+            c.place("org.example.notes", WindowId(11), SIZE, V, SCREEN, 29.0),
+            Rect::new(618.0, 196.0, 800.0, 600.0),
+            "the first app goes on from its newest window"
+        );
     }
 
     #[test]
@@ -263,10 +361,29 @@ mod tests {
         let mut c = Cascade::default();
         // a visible frame ending 20 pt above the screen bottom (a bottom dock), its top 120 pt above it
         let low = Rect::new(0.0, 960.0, 1920.0, 100.0);
-        let frames: Vec<(f64, f64)> =
-            (1..=4).map(|i| c.place("org.example.notes", WindowId(i), Size::new(400.0, 10.0), low, SCREEN, 29.0)).map(|r| (r.x, r.y)).collect();
+        let frames: Vec<(f64, f64)> = (1..=4)
+            .map(|i| {
+                c.place(
+                    "org.example.notes",
+                    WindowId(i),
+                    Size::new(400.0, 10.0),
+                    low,
+                    SCREEN,
+                    29.0,
+                )
+            })
+            .map(|r| (r.x, r.y))
+            .collect();
         // the 4th top 1070 leaves the area; the wrapped top 974 fits, but 1080 - 974 = 106 < 116: back to 960
-        assert_eq!(frames, vec![(760.0, 983.0), (789.0, 1012.0), (818.0, 1041.0), (847.0, 960.0)]);
+        assert_eq!(
+            frames,
+            vec![
+                (760.0, 983.0),
+                (789.0, 1012.0),
+                (818.0, 1041.0),
+                (847.0, 960.0)
+            ]
+        );
         assert_eq!(c.apps["org.example.notes"].y_offset, 0.0);
     }
 
@@ -275,22 +392,42 @@ mod tests {
         let mut c = Cascade::default();
         cascade_of(&mut c, "org.example.notes", 1, 2, SIZE);
         c.retain(|id| id == WindowId(1));
-        assert_eq!(c.place("org.example.notes", WindowId(3), SIZE, V, SCREEN, 29.0), Rect::new(589.0, 167.0, 800.0, 600.0), "from the first window, the second closed");
+        assert_eq!(
+            c.place("org.example.notes", WindowId(3), SIZE, V, SCREEN, 29.0),
+            Rect::new(589.0, 167.0, 800.0, 600.0),
+            "from the first window, the second closed"
+        );
         let other = Rect::new(1920.0, 0.0, 1280.0, 800.0);
         let v2 = Rect::new(1920.0, 24.0, 1280.0, 776.0);
-        assert_eq!(c.place("org.example.notes", WindowId(4), SIZE, v2, other, 29.0), centred(v2, SIZE), "no window of the app on that output yet");
+        assert_eq!(
+            c.place("org.example.notes", WindowId(4), SIZE, v2, other, 29.0),
+            centred(v2, SIZE),
+            "no window of the app on that output yet"
+        );
     }
 
     #[test]
     fn a_new_window_without_a_size_opens_at_a_fraction_of_the_area_and_never_larger() {
         let cfg = Config::default();
-        assert_eq!(new_window_size(V, None, &cfg), Size::new((1920.0 * cfg.default_window_fraction).round(), (1056.0 * cfg.default_window_fraction).round()));
-        assert_eq!(new_window_size(V, Some(Size::new(5000.0, 5000.0)), &cfg), Size::new(1920.0, 1056.0));
+        assert_eq!(
+            new_window_size(V, None, &cfg),
+            Size::new(
+                (1920.0 * cfg.default_window_fraction).round(),
+                (1056.0 * cfg.default_window_fraction).round()
+            )
+        );
+        assert_eq!(
+            new_window_size(V, Some(Size::new(5000.0, 5000.0)), &cfg),
+            Size::new(1920.0, 1056.0)
+        );
     }
 
     #[test]
     fn identity_falls_back_to_title() {
-        assert_eq!(app_identity(Some("org.example.app"), Some("t")), "org.example.app");
+        assert_eq!(
+            app_identity(Some("org.example.app"), Some("t")),
+            "org.example.app"
+        );
         assert_eq!(app_identity(Some(""), Some("t")), "t");
         assert_eq!(app_identity(None, None), "unknown");
     }

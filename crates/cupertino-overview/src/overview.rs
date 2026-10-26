@@ -35,12 +35,26 @@ pub struct OverviewWindow {
 
 impl OverviewWindow {
     pub fn new(id: WindowId, app: AppId, title: &str, frame: Rect) -> Self {
-        Self { id, app, title: title.to_string(), from: frame, size: frame, minimized: false }
+        Self {
+            id,
+            app,
+            title: title.to_string(),
+            from: frame,
+            size: frame,
+            minimized: false,
+        }
     }
 
     /// A minimized window: `size` is its real frame, `dock_rect` its dock tile.
     pub fn minimized(id: WindowId, app: AppId, title: &str, size: Rect, dock_rect: Rect) -> Self {
-        Self { id, app, title: title.to_string(), from: dock_rect, size, minimized: true }
+        Self {
+            id,
+            app,
+            title: title.to_string(),
+            from: dock_rect,
+            size,
+            minimized: true,
+        }
     }
 }
 
@@ -106,7 +120,12 @@ pub struct Overview {
 
 impl Overview {
     /// `area` is the output rectangle available to the overview.
-    pub fn new(cfg: OverviewConfig, area: Rect, mode: OverviewMode, windows: Vec<OverviewWindow>) -> Self {
+    pub fn new(
+        cfg: OverviewConfig,
+        area: Rect,
+        mode: OverviewMode,
+        windows: Vec<OverviewWindow>,
+    ) -> Self {
         let bar = WorkspaceBar::new(cfg.bar.clone(), area, area);
         let transition = Transition::new(&cfg);
         let mut o = Self {
@@ -140,7 +159,12 @@ impl Overview {
         match self.mode {
             OverviewMode::Overview => {
                 let top = self.cfg.bar.reserved_height();
-                Rect::new(self.area.x, self.area.y + top, self.area.w, (self.area.h - top).max(1.0))
+                Rect::new(
+                    self.area.x,
+                    self.area.y + top,
+                    self.area.w,
+                    (self.area.h - top).max(1.0),
+                )
             }
             OverviewMode::AppOverview(_) => self.area,
         }
@@ -176,11 +200,17 @@ impl Overview {
                     )
                 };
                 let frames: Vec<Rect> = open.iter().map(|i| shown[*i].size).collect();
-                for (k, r) in layout(&frames, upper, &self.cfg.layout).into_iter().enumerate() {
+                for (k, r) in layout(&frames, upper, &self.cfg.layout)
+                    .into_iter()
+                    .enumerate()
+                {
                     out[open[k]] = r;
                 }
                 let frames: Vec<Rect> = mini.iter().map(|i| shown[*i].size).collect();
-                for (k, r) in layout_row(&frames, row, ao.row_gap, ao.row_max_scale).into_iter().enumerate() {
+                for (k, r) in layout_row(&frames, row, ao.row_gap, ao.row_max_scale)
+                    .into_iter()
+                    .enumerate()
+                {
                     out[mini[k]] = r;
                 }
                 out
@@ -190,26 +220,44 @@ impl Overview {
 
     /// Recompute `shown`/`to`. With `now`, windows glide from their current positions.
     fn current_targets(&self, now: f64) -> HashMap<WindowId, Rect> {
-        self.shown.iter().zip(self.targets(now)).map(|(i, r)| (self.all[*i].id, r)).collect()
+        self.shown
+            .iter()
+            .zip(self.targets(now))
+            .map(|(i, r)| (self.all[*i].id, r))
+            .collect()
     }
 
     fn relayout(&mut self, now: Option<f64>, current: HashMap<WindowId, Rect>) {
-        self.shown = (0..self.all.len()).filter(|i| self.is_shown(&self.all[*i])).collect();
+        self.shown = (0..self.all.len())
+            .filter(|i| self.is_shown(&self.all[*i]))
+            .collect();
         let shown: Vec<&OverviewWindow> = self.shown.iter().map(|i| &self.all[*i]).collect();
         self.to = self.compute_layout(&shown);
-        self.prev_to = self.shown.iter().zip(&self.to).map(|(i, r)| current.get(&self.all[*i].id).copied().unwrap_or(*r)).collect();
+        self.prev_to = self
+            .shown
+            .iter()
+            .zip(&self.to)
+            .map(|(i, r)| current.get(&self.all[*i].id).copied().unwrap_or(*r))
+            .collect();
         if let Some(t) = now {
             self.reflow.set_immediately(0.0);
             self.reflow.animate_to(1.0, self.cfg.reflow, t);
         }
-        if self.selection.is_some_and(|s| !self.shown.iter().any(|i| self.all[*i].id == s)) {
+        if self
+            .selection
+            .is_some_and(|s| !self.shown.iter().any(|i| self.all[*i].id == s))
+        {
             self.selection = None;
         }
     }
 
     fn targets(&self, now: f64) -> Vec<Rect> {
         let r = self.reflow.value(now);
-        self.prev_to.iter().zip(&self.to).map(|(a, b)| Rect::lerp(*a, *b, r)).collect()
+        self.prev_to
+            .iter()
+            .zip(&self.to)
+            .map(|(a, b)| Rect::lerp(*a, *b, r))
+            .collect()
     }
 
     /// Replace the window set (a window opened, closed or changed); windows reflow with a spring.
@@ -237,7 +285,8 @@ impl Overview {
 
     /// Gesture-driven progress (0 = desktop, 1 = overview), rubber-banded beyond the ends.
     pub fn gesture_update(&mut self, cumulative_delta: f64, start_progress: f64, now: f64) {
-        self.transition.gesture_update(cumulative_delta, start_progress, now);
+        self.transition
+            .gesture_update(cumulative_delta, start_progress, now);
     }
 
     /// Decide the target from position and velocity (projected end point) and spring to it.
@@ -282,7 +331,9 @@ impl Overview {
 
     /// Window title opacity (approximate schedule: fade in after progress 0.8).
     pub fn title_opacity(&self, now: f64) -> f64 {
-        self.cfg.title_fade.opacity(self.transition.progress_at(now))
+        self.cfg
+            .title_fade
+            .opacity(self.transition.progress_at(now))
     }
 
     /// Windows shown in the current mode, in layout order of `shown`.
@@ -307,7 +358,13 @@ impl Overview {
             .zip(self.frames(now))
             .map(|(i, frame)| {
                 let w = &self.all[*i];
-                PlacedWindow { id: w.id, frame, title_opacity: op, minimized: w.minimized, selected: self.selection == Some(w.id) }
+                PlacedWindow {
+                    id: w.id,
+                    frame,
+                    title_opacity: op,
+                    minimized: w.minimized,
+                    selected: self.selection == Some(w.id),
+                }
             })
             .collect()
     }
@@ -331,7 +388,11 @@ impl Overview {
     /// Window under `p` in the final layout.
     pub fn hit_test(&self, p: Point, now: f64) -> Option<WindowId> {
         let targets = self.targets(now);
-        self.shown.iter().zip(targets).find(|(_, r)| r.contains(p)).map(|(i, _)| self.all[*i].id)
+        self.shown
+            .iter()
+            .zip(targets)
+            .find(|(_, r)| r.contains(p))
+            .map(|(i, _)| self.all[*i].id)
     }
 
     fn set_selection(&mut self, sel: Option<WindowId>, now: f64) {
@@ -343,7 +404,10 @@ impl Overview {
 
     fn update_highlight(&mut self, now: f64) {
         let h = &self.cfg.highlight;
-        let fade = Curve::Timed { duration: h.fade_s, bezier: CubicBezier::EASE_IN_EASE_OUT };
+        let fade = Curve::Timed {
+            duration: h.fade_s,
+            bezier: CubicBezier::EASE_IN_EASE_OUT,
+        };
         match self.selection.and_then(|s| self.rect_of(s, now)) {
             Some(r) => {
                 let target = r.inset(-h.inset).to_array();
@@ -361,7 +425,11 @@ impl Overview {
     pub fn highlight(&self, now: f64) -> Option<Highlight> {
         let window = self.selection?;
         let opacity = self.highlight_opacity.value(now);
-        (opacity > 0.0).then(|| Highlight { window, rect: Rect::from_array(self.highlight_rect.value(now)), opacity })
+        (opacity > 0.0).then(|| Highlight {
+            window,
+            rect: Rect::from_array(self.highlight_rect.value(now)),
+            opacity,
+        })
     }
 
     /// Pointer motion: hover selection (suppressed while the keyboard drives the selection until
@@ -402,8 +470,12 @@ impl Overview {
 
     fn navigation_order(&self, now: f64) -> Vec<usize> {
         let targets = self.targets(now);
-        let open: Vec<usize> = (0..targets.len()).filter(|k| !self.all[self.shown[*k]].minimized).collect();
-        let mini: Vec<usize> = (0..targets.len()).filter(|k| self.all[self.shown[*k]].minimized).collect();
+        let open: Vec<usize> = (0..targets.len())
+            .filter(|k| !self.all[self.shown[*k]].minimized)
+            .collect();
+        let mini: Vec<usize> = (0..targets.len())
+            .filter(|k| self.all[self.shown[*k]].minimized)
+            .collect();
         let order = |ids: &[usize]| -> Vec<usize> {
             let rects: Vec<Rect> = ids.iter().map(|k| targets[*k]).collect();
             reading_order(&rects).into_iter().map(|j| ids[j]).collect()
@@ -416,7 +488,11 @@ impl Overview {
     pub fn key(&mut self, key: Key, now: f64) -> OverviewAction {
         match key {
             Key::Cancel => return OverviewAction::Close,
-            Key::Activate => return self.selection.map_or(OverviewAction::None, OverviewAction::Select),
+            Key::Activate => {
+                return self
+                    .selection
+                    .map_or(OverviewAction::None, OverviewAction::Select)
+            }
             _ => {}
         }
         if self.shown.is_empty() {
@@ -425,13 +501,25 @@ impl Overview {
         self.keyboard_active = true;
         let targets = self.targets(now);
         let order = self.navigation_order(now);
-        let cur = self.selection.and_then(|s| self.shown.iter().position(|i| self.all[*i].id == s));
+        let cur = self
+            .selection
+            .and_then(|s| self.shown.iter().position(|i| self.all[*i].id == s));
         let next = match (key, cur) {
-            (_, None) => Some(if key == Key::Previous { *order.last().unwrap() } else { order[0] }),
+            (_, None) => Some(if key == Key::Previous {
+                *order.last().unwrap()
+            } else {
+                order[0]
+            }),
             (Key::Next, Some(c)) | (Key::Previous, Some(c)) => {
                 let pos = order.iter().position(|k| *k == c).unwrap_or(0);
                 let n = order.len();
-                Some(order[if key == Key::Next { (pos + 1) % n } else { (pos + n - 1) % n }])
+                Some(
+                    order[if key == Key::Next {
+                        (pos + 1) % n
+                    } else {
+                        (pos + n - 1) % n
+                    }],
+                )
             }
             (dir, Some(c)) => {
                 let from = targets[c];

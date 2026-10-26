@@ -124,7 +124,15 @@ pub struct MouseKeys {
 
 impl MouseKeys {
     pub fn new(enabled: bool, shortcut: bool, initial_delay_ms: u64, max_speed: u32) -> MouseKeys {
-        MouseKeys { enabled, shortcut, initial_delay_ms, max_speed, alt_presses: 0, window_start_ms: 0, moving: None }
+        MouseKeys {
+            enabled,
+            shortcut,
+            initial_delay_ms,
+            max_speed,
+            alt_presses: 0,
+            window_start_ms: 0,
+            moving: None,
+        }
     }
 
     pub fn enabled(&self) -> bool {
@@ -153,7 +161,9 @@ impl MouseKeys {
         if !self.enabled {
             return out;
         }
-        let Some(role) = role_of(code) else { return out };
+        let Some(role) = role_of(code) else {
+            return out;
+        };
         out.consumed = true;
         match (role, pressed) {
             (Role::Direction(dx, dy), true) => {
@@ -161,8 +171,19 @@ impl MouseKeys {
                 if first {
                     out.actions.push(PointerAction::Move { dx, dy });
                 }
-                let next_ms = now_ms + if first { self.initial_delay_ms + TICK_MS } else { TICK_MS };
-                self.moving = Some(Moving { code, dir: (dx, dy), next_ms, speed: 1, tick: 1 });
+                let next_ms = now_ms
+                    + if first {
+                        self.initial_delay_ms + TICK_MS
+                    } else {
+                        TICK_MS
+                    };
+                self.moving = Some(Moving {
+                    code,
+                    dir: (dx, dy),
+                    next_ms,
+                    speed: 1,
+                    tick: 1,
+                });
             }
             (Role::Direction(..), false) => {
                 if self.moving.is_some_and(|m| m.code == code) {
@@ -170,7 +191,9 @@ impl MouseKeys {
                 }
             }
             (Role::Click, true) | (Role::Hold, true) => out.actions.push(PointerAction::Press),
-            (Role::Click, false) | (Role::Release, true) => out.actions.push(PointerAction::Release),
+            (Role::Click, false) | (Role::Release, true) => {
+                out.actions.push(PointerAction::Release)
+            }
             (Role::Hold, false) | (Role::Release, false) => {}
         }
         out
@@ -188,7 +211,10 @@ impl MouseKeys {
         while let Some(m) = self.moving.as_mut().filter(|m| m.next_ms <= now_ms) {
             m.speed = ramp(m.speed, &mut m.tick, max);
             let step = i32::try_from(m.speed).unwrap_or(i32::MAX);
-            out.push(PointerAction::Move { dx: m.dir.0 * step, dy: m.dir.1 * step });
+            out.push(PointerAction::Move {
+                dx: m.dir.0 * step,
+                dy: m.dir.1 * step,
+            });
             m.next_ms += TICK_MS;
         }
         out
@@ -200,7 +226,9 @@ impl MouseKeys {
             return false;
         }
         if pressed {
-            if self.alt_presses == 0 || now_ms.saturating_sub(self.window_start_ms) >= TOGGLE_WINDOW_MS {
+            if self.alt_presses == 0
+                || now_ms.saturating_sub(self.window_start_ms) >= TOGGLE_WINDOW_MS
+            {
                 self.alt_presses = 0;
                 self.window_start_ms = now_ms;
             }
@@ -240,7 +268,17 @@ mod tests {
         assert_eq!(out.actions, vec![PointerAction::Move { dx: 1, dy: 0 }]);
         assert_eq!(m.poll(1049), vec![]);
         // first repeat 50 ms after the 1 s delay; the speed ramps by one per tick up to 11
-        let moves: Vec<i32> = m.poll(1000 + 50 * 12).iter().map(|a| if let PointerAction::Move { dx, .. } = a { *dx } else { 0 }).collect();
+        let moves: Vec<i32> = m
+            .poll(1000 + 50 * 12)
+            .iter()
+            .map(|a| {
+                if let PointerAction::Move { dx, .. } = a {
+                    *dx
+                } else {
+                    0
+                }
+            })
+            .collect();
         assert_eq!(moves, vec![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 11, 11]);
         m.key(KP6, false, 1700);
         assert_eq!(m.poll(5000), vec![]);
@@ -249,18 +287,35 @@ mod tests {
     #[test]
     fn diagonals_move_on_both_axes_and_up_is_negative_y() {
         let mut m = on();
-        assert_eq!(m.key(KP3, true, 0).actions, vec![PointerAction::Move { dx: 1, dy: 1 }]);
-        assert_eq!(m.key(KP8, true, 10).actions, vec![PointerAction::Move { dx: 0, dy: -1 }], "a new direction replaces the old one");
+        assert_eq!(
+            m.key(KP3, true, 0).actions,
+            vec![PointerAction::Move { dx: 1, dy: 1 }]
+        );
+        assert_eq!(
+            m.key(KP8, true, 10).actions,
+            vec![PointerAction::Move { dx: 0, dy: -1 }],
+            "a new direction replaces the old one"
+        );
         assert_eq!(m.poll(1060), vec![PointerAction::Move { dx: 0, dy: -2 }]);
         m.key(KP3, false, 1070);
-        assert_eq!(m.deadline(), Some(1110), "releasing the replaced key does not stop the new one");
+        assert_eq!(
+            m.deadline(),
+            Some(1110),
+            "releasing the replaced key does not stop the new one"
+        );
     }
 
     #[test]
     fn without_an_initial_delay_the_repeat_starts_at_once() {
         let mut m = MouseKeys::new(true, false, 0, DEFAULT_MAX_SPEED);
         assert_eq!(m.key(KP6, true, 0).actions, vec![]);
-        assert_eq!(m.poll(100), vec![PointerAction::Move { dx: 2, dy: 0 }, PointerAction::Move { dx: 3, dy: 0 }]);
+        assert_eq!(
+            m.poll(100),
+            vec![
+                PointerAction::Move { dx: 2, dy: 0 },
+                PointerAction::Move { dx: 3, dy: 0 }
+            ]
+        );
     }
 
     #[test]
@@ -269,7 +324,13 @@ mod tests {
         assert_eq!(m.key(KP5, true, 0).actions, vec![PointerAction::Press]);
         assert_eq!(m.key(KP5, false, 10).actions, vec![PointerAction::Release]);
         assert_eq!(m.key(KP0, true, 20).actions, vec![PointerAction::Press]);
-        assert_eq!(m.key(KP0, false, 30), MouseKeysOutcome { consumed: true, ..Default::default() });
+        assert_eq!(
+            m.key(KP0, false, 30),
+            MouseKeysOutcome {
+                consumed: true,
+                ..Default::default()
+            }
+        );
         assert_eq!(m.key(KPDOT, true, 40).actions, vec![PointerAction::Release]);
         assert!(!m.key(A, true, 50).consumed, "other keys type");
     }
@@ -281,7 +342,10 @@ mod tests {
             m.key(ALT, true, t * 100);
             assert_eq!(m.key(ALT, false, t * 100 + 50).toggled, None);
         }
-        assert!(!m.key(KP6, true, 450).consumed, "keypad keys type while it is off");
+        assert!(
+            !m.key(KP6, true, 450).consumed,
+            "keypad keys type while it is off"
+        );
         // the keypad key reset the count
         for t in 0..5 {
             m.key(ALT, true, 1000 + t * 100);
@@ -300,7 +364,11 @@ mod tests {
             m.key(ALT, false, t);
         }
         m.key(ALT, true, 30_000);
-        assert_eq!(m.key(ALT, false, 30_001).toggled, None, "the fifth press came after the window");
+        assert_eq!(
+            m.key(ALT, false, 30_001).toggled,
+            None,
+            "the fifth press came after the window"
+        );
         let mut quiet = MouseKeys::new(false, false, DEFAULT_INITIAL_DELAY_MS, DEFAULT_MAX_SPEED);
         for t in 0..6 {
             quiet.key(ALT, true, t);

@@ -39,7 +39,11 @@ pub fn step_level(level: f64, direction: i32, fine: bool) -> f64 {
 /// Whole seconds the overlay holds at full opacity before its fade: `floor(msecUntilFade / 1000),
 /// with the sender's 4000 ms after a change and 1000 ms otherwise.
 pub fn hold_seconds(changed: bool) -> f64 {
-    let msec = if changed { HOLD_CHANGED_MSEC } else { HOLD_UNCHANGED_MSEC };
+    let msec = if changed {
+        HOLD_CHANGED_MSEC
+    } else {
+        HOLD_UNCHANGED_MSEC
+    };
     f64::from(msec / 1000)
 }
 

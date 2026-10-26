@@ -34,8 +34,17 @@ pub enum Module {
 impl Module {
     /// Every module in grid order: the connectivity tile's three rows, the focus mode tile, the stage and screen
     /// mirroring tiles, then the display, sound and now playing rows.
-    pub const ALL: [Module; 9] =
-        [Module::WiFi, Module::Bluetooth, Module::FileSharing, Module::FocusMode, Module::Stage, Module::ScreenMirroring, Module::Display, Module::Sound, Module::NowPlaying];
+    pub const ALL: [Module; 9] = [
+        Module::WiFi,
+        Module::Bluetooth,
+        Module::FileSharing,
+        Module::FocusMode,
+        Module::Stage,
+        Module::ScreenMirroring,
+        Module::Display,
+        Module::Sound,
+        Module::NowPlaying,
+    ];
 
     /// The tile's title.
     pub fn title(self) -> &'static str {
@@ -59,7 +68,11 @@ impl Module {
             Module::Stage => Some("the stage process is not wired"),
             Module::ScreenMirroring => Some("no screen mirroring service exists yet"),
             Module::NowPlaying => Some("no media player service exists yet"),
-            Module::WiFi | Module::Bluetooth | Module::FocusMode | Module::Display | Module::Sound => None,
+            Module::WiFi
+            | Module::Bluetooth
+            | Module::FocusMode
+            | Module::Display
+            | Module::Sound => None,
         }
     }
 }
@@ -140,7 +153,9 @@ impl Battery {
 
     /// Width of the fill in points: `clamp(round(level * 19), 2, 19).
     pub fn fill_width(&self) -> f64 {
-        (self.level() * BATTERY_FILL_MAX).round().clamp(BATTERY_FILL_MIN, BATTERY_FILL_MAX)
+        (self.level() * BATTERY_FILL_MAX)
+            .round()
+            .clamp(BATTERY_FILL_MIN, BATTERY_FILL_MAX)
     }
 
     /// Whether the fill is red (`level <= 0.1`).
@@ -218,7 +233,9 @@ impl Controls {
             Module::FocusMode => switch(&self.focus_mode),
             Module::Display => switch(&self.brightness.as_usable()),
             Module::Sound => switch(&self.volume.as_usable()),
-            Module::FileSharing | Module::Stage | Module::ScreenMirroring | Module::NowPlaying => unreachable!("unsupported modules returned above"),
+            Module::FileSharing | Module::Stage | Module::ScreenMirroring | Module::NowPlaying => {
+                unreachable!("unsupported modules returned above")
+            }
         }
     }
 
@@ -228,7 +245,10 @@ impl Controls {
         match (module, self.tile(module)) {
             (_, TileState::Disabled(_)) => "Unavailable",
             (Module::WiFi, TileState::On) => match &self.wifi {
-                Reading::Ready(WifiStatus { network: Some(network), .. }) => network,
+                Reading::Ready(WifiStatus {
+                    network: Some(network),
+                    ..
+                }) => network,
                 _ => "On",
             },
             (_, TileState::On) => "On",
@@ -250,7 +270,12 @@ impl Controls {
         let fraction = fraction.clamp(0.0, 1.0);
         match (slider, &mut self.brightness, &mut self.volume) {
             (Slider::Display, Reading::Ready(level), _) => *level = fraction,
-            (Slider::Sound, _, Reading::Ready(volume)) => *volume = VolumeState { level: fraction, muted: fraction < MUTE_BELOW },
+            (Slider::Sound, _, Reading::Ready(volume)) => {
+                *volume = VolumeState {
+                    level: fraction,
+                    muted: fraction < MUTE_BELOW,
+                }
+            }
             _ => return false,
         }
         true
@@ -263,19 +288,41 @@ mod tests {
 
     fn ready() -> Controls {
         Controls {
-            wifi: Reading::Ready(WifiStatus { enabled: true, network: Some("Home".into()) }),
+            wifi: Reading::Ready(WifiStatus {
+                enabled: true,
+                network: Some("Home".into()),
+            }),
             bluetooth: Reading::Ready(false),
             focus_mode: Reading::Unavailable("no service".into()),
             brightness: Reading::Ready(0.25),
-            volume: Reading::Ready(VolumeState { level: 0.5, muted: false }),
-            battery: Some(Battery { percent: 80, charging: false }),
+            volume: Reading::Ready(VolumeState {
+                level: 0.5,
+                muted: false,
+            }),
+            battery: Some(Battery {
+                percent: 80,
+                charging: false,
+            }),
         }
     }
 
     #[test]
     fn modules_are_in_grid_order() {
         let names: Vec<_> = Module::ALL.iter().map(|m| m.title()).collect();
-        assert_eq!(names, ["Wi-Fi", "Bluetooth", "File Sharing", "Focus Mode", "Stage", "Mirroring", "Display", "Sound", "Now Playing"]);
+        assert_eq!(
+            names,
+            [
+                "Wi-Fi",
+                "Bluetooth",
+                "File Sharing",
+                "Focus Mode",
+                "Stage",
+                "Mirroring",
+                "Display",
+                "Sound",
+                "Now Playing"
+            ]
+        );
     }
 
     #[test]
@@ -283,15 +330,28 @@ mod tests {
         let controls = ready();
         assert_eq!(controls.tile(Module::WiFi), TileState::On);
         assert_eq!(controls.tile(Module::Bluetooth), TileState::Off);
-        assert_eq!(controls.tile(Module::FocusMode), TileState::Disabled("no service".into()));
+        assert_eq!(
+            controls.tile(Module::FocusMode),
+            TileState::Disabled("no service".into())
+        );
         assert_eq!(controls.tile(Module::Display), TileState::On);
-        assert_eq!(controls.tile(Module::Stage), TileState::Disabled("the stage process is not wired".into()));
+        assert_eq!(
+            controls.tile(Module::Stage),
+            TileState::Disabled("the stage process is not wired".into())
+        );
     }
 
     #[test]
     fn subtitles_name_the_network_or_the_switch() {
         let controls = ready();
-        assert_eq!((controls.subtitle(Module::WiFi), controls.subtitle(Module::Bluetooth), controls.subtitle(Module::FocusMode)), ("Home", "Off", "Unavailable"));
+        assert_eq!(
+            (
+                controls.subtitle(Module::WiFi),
+                controls.subtitle(Module::Bluetooth),
+                controls.subtitle(Module::FocusMode)
+            ),
+            ("Home", "Off", "Unavailable")
+        );
     }
 
     #[test]
@@ -307,7 +367,13 @@ mod tests {
     fn dragging_the_volume_to_the_end_mutes_it() {
         let mut controls = ready();
         controls.set_fraction(Slider::Sound, 0.0005);
-        assert_eq!(controls.volume, Reading::Ready(VolumeState { level: 0.0005, muted: true }));
+        assert_eq!(
+            controls.volume,
+            Reading::Ready(VolumeState {
+                level: 0.0005,
+                muted: true
+            })
+        );
     }
 
     #[test]
@@ -319,14 +385,31 @@ mod tests {
 
     #[test]
     fn the_battery_fill_is_clamped_between_two_and_nineteen_points() {
-        let width = |percent| Battery { percent, charging: false }.fill_width();
-        assert_eq!((width(0), width(5), width(50), width(100)), (2.0, 2.0, 10.0, 19.0));
+        let width = |percent| {
+            Battery {
+                percent,
+                charging: false,
+            }
+            .fill_width()
+        };
+        assert_eq!(
+            (width(0), width(5), width(50), width(100)),
+            (2.0, 2.0, 10.0, 19.0)
+        );
     }
 
     #[test]
     fn the_battery_is_low_at_ten_percent() {
-        assert!(Battery { percent: 10, charging: false }.is_low());
-        assert!(!Battery { percent: 11, charging: false }.is_low());
+        assert!(Battery {
+            percent: 10,
+            charging: false
+        }
+        .is_low());
+        assert!(!Battery {
+            percent: 11,
+            charging: false
+        }
+        .is_low());
     }
 
     #[test]

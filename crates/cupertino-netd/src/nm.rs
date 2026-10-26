@@ -27,7 +27,11 @@ pub enum Connectivity {
 
 /// The connected device that carries the default route: the lowest metric, then the lowest index.
 fn primary(snapshot: &Snapshot) -> Option<&DeviceView> {
-    snapshot.devices.iter().filter(|device| device.state == DeviceState::Connected && device.has_router).min_by_key(|device| (device.metric, device.ifindex))
+    snapshot
+        .devices
+        .iter()
+        .filter(|device| device.state == DeviceState::Connected && device.has_router)
+        .min_by_key(|device| (device.metric, device.ifindex))
 }
 
 /// The global state: a default route is global, an address without one is local, a device that
@@ -35,9 +39,17 @@ fn primary(snapshot: &Snapshot) -> Option<&DeviceView> {
 pub fn state(snapshot: &Snapshot) -> State {
     if primary(snapshot).is_some() {
         State::ConnectedGlobal
-    } else if snapshot.devices.iter().any(|device| device.state == DeviceState::Connected) {
+    } else if snapshot
+        .devices
+        .iter()
+        .any(|device| device.state == DeviceState::Connected)
+    {
         State::ConnectedLocal
-    } else if snapshot.devices.iter().any(|device| matches!(device.state, DeviceState::Configuring(_))) {
+    } else if snapshot
+        .devices
+        .iter()
+        .any(|device| matches!(device.state, DeviceState::Configuring(_)))
+    {
         State::Connecting
     } else {
         State::Disconnected
@@ -57,7 +69,11 @@ impl State {
 }
 
 pub fn connectivity(snapshot: &Snapshot) -> Connectivity {
-    if snapshot.devices.iter().any(|device| device.state == DeviceState::Connected) {
+    if snapshot
+        .devices
+        .iter()
+        .any(|device| device.state == DeviceState::Connected)
+    {
         Connectivity::Unknown
     } else {
         Connectivity::None
@@ -95,36 +111,81 @@ mod tests {
     }
 
     fn snapshot(devices: Vec<DeviceView>) -> Snapshot {
-        Snapshot { wireless_enabled: true, devices, networks: Vec::new() }
+        Snapshot {
+            wireless_enabled: true,
+            devices,
+            networks: Vec::new(),
+        }
     }
 
     #[test]
     fn no_devices_or_none_ready_is_disconnected_with_no_connectivity() {
-        let none = snapshot(vec![device(2, DeviceKind::Ethernet, DeviceState::Unavailable, false), device(3, DeviceKind::Wifi, DeviceState::Disconnected, false)]);
-        assert_eq!((state(&none) as u32, connectivity(&none) as u32, primary_connection_type(&none)), (20, 1, ""));
+        let none = snapshot(vec![
+            device(2, DeviceKind::Ethernet, DeviceState::Unavailable, false),
+            device(3, DeviceKind::Wifi, DeviceState::Disconnected, false),
+        ]);
+        assert_eq!(
+            (
+                state(&none) as u32,
+                connectivity(&none) as u32,
+                primary_connection_type(&none)
+            ),
+            (20, 1, "")
+        );
     }
 
     #[test]
     fn a_device_asking_for_an_address_is_connecting() {
-        let connecting = snapshot(vec![device(3, DeviceKind::Wifi, DeviceState::Configuring(Stage::Addressing), false)]);
-        assert_eq!((state(&connecting) as u32, connectivity(&connecting) as u32), (40, 1));
+        let connecting = snapshot(vec![device(
+            3,
+            DeviceKind::Wifi,
+            DeviceState::Configuring(Stage::Addressing),
+            false,
+        )]);
+        assert_eq!(
+            (state(&connecting) as u32, connectivity(&connecting) as u32),
+            (40, 1)
+        );
     }
 
     #[test]
     fn a_lease_with_a_router_is_global_and_names_the_connection_type() {
-        let global = snapshot(vec![device(3, DeviceKind::Wifi, DeviceState::Connected, true)]);
-        assert_eq!((state(&global) as u32, connectivity(&global) as u32, primary_connection_type(&global)), (70, 0, "802-11-wireless"));
+        let global = snapshot(vec![device(
+            3,
+            DeviceKind::Wifi,
+            DeviceState::Connected,
+            true,
+        )]);
+        assert_eq!(
+            (
+                state(&global) as u32,
+                connectivity(&global) as u32,
+                primary_connection_type(&global)
+            ),
+            (70, 0, "802-11-wireless")
+        );
     }
 
     #[test]
     fn a_lease_without_a_router_is_local_only() {
-        let local = snapshot(vec![device(2, DeviceKind::Ethernet, DeviceState::Connected, false)]);
-        assert_eq!((state(&local) as u32, primary_connection_type(&local)), (50, ""));
+        let local = snapshot(vec![device(
+            2,
+            DeviceKind::Ethernet,
+            DeviceState::Connected,
+            false,
+        )]);
+        assert_eq!(
+            (state(&local) as u32, primary_connection_type(&local)),
+            (50, "")
+        );
     }
 
     #[test]
     fn ethernet_is_primary_over_wifi() {
-        let both = snapshot(vec![device(3, DeviceKind::Wifi, DeviceState::Connected, true), device(7, DeviceKind::Ethernet, DeviceState::Connected, true)]);
+        let both = snapshot(vec![
+            device(3, DeviceKind::Wifi, DeviceState::Connected, true),
+            device(7, DeviceKind::Ethernet, DeviceState::Connected, true),
+        ]);
         assert_eq!(primary_connection_type(&both), "802-3-ethernet");
     }
 }

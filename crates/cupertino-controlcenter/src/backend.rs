@@ -88,7 +88,9 @@ pub struct Unavailable {
 
 impl Unavailable {
     pub fn new(reason: &str) -> Self {
-        Self { reason: reason.to_string() }
+        Self {
+            reason: reason.to_string(),
+        }
     }
 
     fn fail<T>(&self) -> Result<T, BackendError> {
@@ -162,7 +164,10 @@ impl Wifi for MemoryWifi {
         Ok(self.0.clone())
     }
     fn set_enabled(&mut self, enabled: bool) -> Result<(), BackendError> {
-        self.0 = WifiStatus { enabled, network: self.0.network.clone().filter(|_| enabled) };
+        self.0 = WifiStatus {
+            enabled,
+            network: self.0.network.clone().filter(|_| enabled),
+        };
         Ok(())
     }
 }
@@ -242,13 +247,19 @@ pub struct RecordingOverlay {
 impl RecordingOverlay {
     /// Everything shown so far, oldest first.
     pub fn shown(&self) -> Vec<(OverlayKind, f64)> {
-        self.shown.lock().expect("the lock is never poisoned").clone()
+        self.shown
+            .lock()
+            .expect("the lock is never poisoned")
+            .clone()
     }
 }
 
 impl OverlayNotifier for RecordingOverlay {
     fn show(&mut self, kind: OverlayKind, level: f64) -> Result<(), BackendError> {
-        self.shown.lock().expect("the lock is never poisoned").push((kind, level));
+        self.shown
+            .lock()
+            .expect("the lock is never poisoned")
+            .push((kind, level));
         Ok(())
     }
 }
@@ -263,14 +274,22 @@ pub struct AlsaVolume {
 
 impl fmt::Debug for AlsaVolume {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AlsaVolume").field("dir", &self.dir).field("card", &self.card).field("open", &self.master.is_some()).finish()
+        f.debug_struct("AlsaVolume")
+            .field("dir", &self.dir)
+            .field("card", &self.card)
+            .field("open", &self.master.is_some())
+            .finish()
     }
 }
 
 impl AlsaVolume {
     /// The master of card `card`, or the best master of all cards (see `cupertino_alsa::master`), below `dir`.
     pub fn new(dir: PathBuf, card: Option<u32>) -> Self {
-        Self { dir, card, master: None }
+        Self {
+            dir,
+            card,
+            master: None,
+        }
     }
 
     fn master(&mut self) -> Result<&Master, cupertino_alsa::Error> {
@@ -284,7 +303,10 @@ impl AlsaVolume {
     }
 
     /// Run `action` on the master; a failure drops the open device so the next call opens it again.
-    fn with_master<T>(&mut self, action: impl FnOnce(&Master) -> Result<T, cupertino_alsa::Error>) -> Result<T, BackendError> {
+    fn with_master<T>(
+        &mut self,
+        action: impl FnOnce(&Master) -> Result<T, cupertino_alsa::Error>,
+    ) -> Result<T, BackendError> {
         let result = self.master().and_then(action);
         if result.is_err() {
             self.master = None;
@@ -296,7 +318,10 @@ impl AlsaVolume {
 /// The level and mute state of `master`; a card without a mute switch is muted exactly at level 0, as in the overlay.
 fn state(master: &Master) -> Result<VolumeState, cupertino_alsa::Error> {
     let level = master.level()?;
-    Ok(VolumeState { level, muted: master.muted()?.unwrap_or(level <= 0.0) })
+    Ok(VolumeState {
+        level,
+        muted: master.muted()?.unwrap_or(level <= 0.0),
+    })
 }
 
 impl Volume for AlsaVolume {
@@ -322,16 +347,31 @@ mod tests {
 
     #[test]
     fn the_memory_radio_loses_its_network_when_switched_off() {
-        let mut wifi = MemoryWifi(WifiStatus { enabled: true, network: Some("Home".into()) });
+        let mut wifi = MemoryWifi(WifiStatus {
+            enabled: true,
+            network: Some("Home".into()),
+        });
         wifi.set_enabled(false).unwrap();
-        assert_eq!(wifi.read().unwrap(), WifiStatus { enabled: false, network: None });
+        assert_eq!(
+            wifi.read().unwrap(),
+            WifiStatus {
+                enabled: false,
+                network: None
+            }
+        );
     }
 
     #[test]
     fn an_unavailable_backend_fails_with_its_reason() {
         let mut backend = Unavailable::new("no adapter");
-        assert_eq!(Bluetooth::read(&mut backend).unwrap_err().to_string(), "no adapter");
-        assert_eq!(Brightness::set(&mut backend, 0.5).unwrap_err().to_string(), "no adapter");
+        assert_eq!(
+            Bluetooth::read(&mut backend).unwrap_err().to_string(),
+            "no adapter"
+        );
+        assert_eq!(
+            Brightness::set(&mut backend, 0.5).unwrap_err().to_string(),
+            "no adapter"
+        );
     }
 
     #[test]
@@ -340,6 +380,9 @@ mod tests {
         let mut notifier = overlay.clone();
         notifier.show(OverlayKind::Volume, 0.5).unwrap();
         notifier.show(OverlayKind::Mute, 0.0).unwrap();
-        assert_eq!(overlay.shown(), [(OverlayKind::Volume, 0.5), (OverlayKind::Mute, 0.0)]);
+        assert_eq!(
+            overlay.shown(),
+            [(OverlayKind::Volume, 0.5), (OverlayKind::Mute, 0.0)]
+        );
     }
 }

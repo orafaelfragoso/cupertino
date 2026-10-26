@@ -34,13 +34,23 @@ pub struct XdgDirs {
 fn env_dir(var: &str, home: &Option<PathBuf>, under_home: &str) -> Result<PathBuf, String> {
     match std::env::var_os(var).filter(|v| !v.is_empty()) {
         Some(v) => Ok(PathBuf::from(v)),
-        None => home.as_ref().map(|h| h.join(under_home)).ok_or_else(|| format!("neither {var} nor HOME is set")),
+        None => home
+            .as_ref()
+            .map(|h| h.join(under_home))
+            .ok_or_else(|| format!("neither {var} nor HOME is set")),
     }
 }
 
 fn env_list(var: &str, default: &str) -> Vec<PathBuf> {
-    let value = std::env::var(var).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| default.to_string());
-    value.split(':').filter(|d| !d.is_empty()).map(PathBuf::from).collect()
+    let value = std::env::var(var)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| default.to_string());
+    value
+        .split(':')
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .collect()
 }
 
 impl XdgDirs {
@@ -48,19 +58,30 @@ impl XdgDirs {
     /// `~/.local/share`, `/usr/local/share:/usr/share`). `Err` when a home-relative default is needed and
     /// `HOME` is not set.
     pub fn from_env() -> Result<XdgDirs, String> {
-        let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
+        let home = std::env::var_os("HOME")
+            .filter(|h| !h.is_empty())
+            .map(PathBuf::from);
         Ok(XdgDirs {
             config_home: env_dir("XDG_CONFIG_HOME", &home, ".config")?,
             config_dirs: env_list("XDG_CONFIG_DIRS", "/etc/xdg"),
             data_home: env_dir("XDG_DATA_HOME", &home, ".local/share")?,
             data_dirs: env_list("XDG_DATA_DIRS", "/usr/local/share:/usr/share"),
-            current_desktops: std::env::var("XDG_CURRENT_DESKTOP").map(|v| v.split(':').filter(|s| !s.is_empty()).map(String::from).collect()).unwrap_or_default(),
+            current_desktops: std::env::var("XDG_CURRENT_DESKTOP")
+                .map(|v| {
+                    v.split(':')
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 
     /// The XDG data directories, most important first.
     pub fn all_data_dirs(&self) -> Vec<PathBuf> {
-        std::iter::once(self.data_home.clone()).chain(self.data_dirs.iter().cloned()).collect()
+        std::iter::once(self.data_home.clone())
+            .chain(self.data_dirs.iter().cloned())
+            .collect()
     }
 }
 
@@ -92,8 +113,13 @@ impl ListFile {
                 };
                 continue;
             }
-            let (Some(map), Some((mime, ids))) = (group.as_deref_mut(), line.split_once('=')) else { continue };
-            let list = map.entry(db.canonical(mime.trim()).to_string()).or_default();
+            let (Some(map), Some((mime, ids))) = (group.as_deref_mut(), line.split_once('='))
+            else {
+                continue;
+            };
+            let list = map
+                .entry(db.canonical(mime.trim()).to_string())
+                .or_default();
             for id in ids.split(';').map(str::trim).filter(|id| !id.is_empty()) {
                 if !list.iter().any(|x| x == id) {
                     list.push(id.to_string());
@@ -211,8 +237,17 @@ impl MimeApps {
     /// Read the list files and the application directories of `dirs`. Unreadable files are errors; files
     /// and directories that do not exist are skipped. Hidden entries and entries whose `TryExec` fails
     /// are not installed but still shadow less important entries of the same ID.
-    pub fn load(dirs: &XdgDirs, db: MimeDatabase, locale: &Locale, vis: &Visibility) -> io::Result<MimeApps> {
-        let desktops: Vec<String> = dirs.current_desktops.iter().map(|d| d.to_lowercase()).collect();
+    pub fn load(
+        dirs: &XdgDirs,
+        db: MimeDatabase,
+        locale: &Locale,
+        vis: &Visibility,
+    ) -> io::Result<MimeApps> {
+        let desktops: Vec<String> = dirs
+            .current_desktops
+            .iter()
+            .map(|d| d.to_lowercase())
+            .collect();
         let read_lists = |dir: &Path| -> io::Result<Vec<ListFile>> {
             let mut lists = Vec::new();
             for desktop in &desktops {
@@ -227,13 +262,23 @@ impl MimeApps {
         };
         let mut levels = Vec::new();
         for dir in std::iter::once(&dirs.config_home).chain(&dirs.config_dirs) {
-            levels.push(Level { lists: read_lists(dir)?, app_dir: None });
+            levels.push(Level {
+                lists: read_lists(dir)?,
+                app_dir: None,
+            });
         }
-        let app_dirs: Vec<PathBuf> = dirs.all_data_dirs().iter().map(|d| d.join("applications")).collect();
+        let app_dirs: Vec<PathBuf> = dirs
+            .all_data_dirs()
+            .iter()
+            .map(|d| d.join("applications"))
+            .collect();
         let mut installed: HashMap<String, Installed> = HashMap::new();
         let mut shadowed: HashSet<String> = HashSet::new();
         for (position, dir) in app_dirs.iter().enumerate() {
-            levels.push(Level { lists: read_lists(dir)?, app_dir: Some(position) });
+            levels.push(Level {
+                lists: read_lists(dir)?,
+                app_dir: Some(position),
+            });
             let mut files = Vec::new();
             desktop_files(dir, "", &mut files)?;
             for (id, path) in files {
@@ -244,15 +289,31 @@ impl MimeApps {
                 if !shadowed.insert(id.clone()) {
                     continue;
                 }
-                let text = std::fs::read_to_string(&path).map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", path.display())))?;
+                let text = std::fs::read_to_string(&path)
+                    .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", path.display())))?;
                 if let Ok(mut handler) = parse_handler(&id, &text, locale, vis) {
                     handler.entry.source = Some(path);
-                    handler.mime_types = handler.mime_types.iter().map(|m| db.canonical(m).to_string()).collect();
-                    installed.insert(id, Installed { handler, dir: position, deepest: position });
+                    handler.mime_types = handler
+                        .mime_types
+                        .iter()
+                        .map(|m| db.canonical(m).to_string())
+                        .collect();
+                    installed.insert(
+                        id,
+                        Installed {
+                            handler,
+                            dir: position,
+                            deepest: position,
+                        },
+                    );
                 }
             }
         }
-        Ok(MimeApps { levels, installed, db })
+        Ok(MimeApps {
+            levels,
+            installed,
+            db,
+        })
     }
 
     /// The MIME database the resolver canonicalises types with.
@@ -268,7 +329,9 @@ impl MimeApps {
     /// Whether `id` is installed in an application directory at `level` or below (a configuration level
     /// sees every application directory).
     fn visible_from(&self, id: &str, level: &Level) -> bool {
-        self.installed.get(id).is_some_and(|a| level.app_dir.is_none_or(|p| a.deepest >= p))
+        self.installed
+            .get(id)
+            .is_some_and(|a| level.app_dir.is_none_or(|p| a.deepest >= p))
     }
 
     /// The applications associated with exactly `mime` (canonical), most preferred first: the
@@ -281,14 +344,32 @@ impl MimeApps {
         for level in &self.levels {
             for list in &level.lists {
                 for id in list.added.get(mime).into_iter().flatten() {
-                    if !blocked.contains(id.as_str()) && self.visible_from(id, level) && !out.contains(&id.as_str()) {
+                    if !blocked.contains(id.as_str())
+                        && self.visible_from(id, level)
+                        && !out.contains(&id.as_str())
+                    {
                         out.push(id);
                     }
                 }
-                blocked.extend(list.removed.get(mime).into_iter().flatten().map(String::as_str));
+                blocked.extend(
+                    list.removed
+                        .get(mime)
+                        .into_iter()
+                        .flatten()
+                        .map(String::as_str),
+                );
             }
-            let Some(position) = level.app_dir else { continue };
-            let mut here: Vec<&str> = self.installed.iter().filter(|(_, a)| a.dir == position && a.handler.mime_types.iter().any(|m| m == mime)).map(|(id, _)| id.as_str()).collect();
+            let Some(position) = level.app_dir else {
+                continue;
+            };
+            let mut here: Vec<&str> = self
+                .installed
+                .iter()
+                .filter(|(_, a)| {
+                    a.dir == position && a.handler.mime_types.iter().any(|m| m == mime)
+                })
+                .map(|(id, _)| id.as_str())
+                .collect();
             here.sort_unstable();
             for id in here {
                 if !blocked.contains(id) && !out.contains(&id) {
@@ -307,8 +388,15 @@ impl MimeApps {
     pub fn default_for(&self, mime: &str) -> Option<&DesktopEntry> {
         for ty in self.db.ancestors(mime) {
             let associated = self.associations(&ty);
-            let listed = self.levels.iter().flat_map(|l| &l.lists).flat_map(|list| list.defaults.get(&ty).into_iter().flatten());
-            if let Some(id) = listed.map(String::as_str).find(|id| associated.contains(id)) {
+            let listed = self
+                .levels
+                .iter()
+                .flat_map(|l| &l.lists)
+                .flat_map(|list| list.defaults.get(&ty).into_iter().flatten());
+            if let Some(id) = listed
+                .map(String::as_str)
+                .find(|id| associated.contains(id))
+            {
                 return self.entry(id);
             }
             if let Some(id) = associated.first() {
@@ -340,8 +428,18 @@ impl MimeApps {
         }
         let default = self.default_for(mime).map(|e| e.id.as_str());
         let mut entries: Vec<&DesktopEntry> = ids.iter().filter_map(|id| self.entry(id)).collect();
-        entries.sort_by(|a, b| (Some(b.id.as_str()) == default).cmp(&(Some(a.id.as_str()) == default)).then_with(|| compare_names(a, b)));
-        entries.into_iter().map(|entry| OpenWithItem { entry, is_default: Some(entry.id.as_str()) == default }).collect()
+        entries.sort_by(|a, b| {
+            (Some(b.id.as_str()) == default)
+                .cmp(&(Some(a.id.as_str()) == default))
+                .then_with(|| compare_names(a, b))
+        });
+        entries
+            .into_iter()
+            .map(|entry| OpenWithItem {
+                entry,
+                is_default: Some(entry.id.as_str()) == default,
+            })
+            .collect()
     }
 }
 
@@ -356,8 +454,13 @@ mod tests {
 
     impl Tree {
         fn new() -> Tree {
-            let tree = Tree { root: tempfile::tempdir().unwrap() };
-            tree.write("usr/mime/subclasses", "application/x-shellscript text/plain\ntext/x-csrc text/plain\n");
+            let tree = Tree {
+                root: tempfile::tempdir().unwrap(),
+            };
+            tree.write(
+                "usr/mime/subclasses",
+                "application/x-shellscript text/plain\ntext/x-csrc text/plain\n",
+            );
             tree.write("usr/mime/aliases", "text/x-c text/x-csrc\n");
             tree
         }
@@ -374,13 +477,23 @@ mod tests {
 
         fn dirs(&self, desktops: &[&str]) -> XdgDirs {
             let p = |d: &str| self.root.path().join(d);
-            XdgDirs { config_home: p("config"), config_dirs: vec![p("etc")], data_home: p("local"), data_dirs: vec![p("usr")], current_desktops: desktops.iter().map(|d| d.to_string()).collect() }
+            XdgDirs {
+                config_home: p("config"),
+                config_dirs: vec![p("etc")],
+                data_home: p("local"),
+                data_dirs: vec![p("usr")],
+                current_desktops: desktops.iter().map(|d| d.to_string()).collect(),
+            }
         }
 
         fn load(&self, desktops: &[&str]) -> MimeApps {
             let dirs = self.dirs(desktops);
             let db = MimeDatabase::load(&dirs.all_data_dirs()).unwrap();
-            let vis = Visibility { current_desktops: vec![], path_dirs: vec![], skip_try_exec: true };
+            let vis = Visibility {
+                current_desktops: vec![],
+                path_dirs: vec![],
+                skip_try_exec: true,
+            };
             MimeApps::load(&dirs, db, &Locale::default(), &vis).unwrap()
         }
     }
@@ -390,7 +503,10 @@ mod tests {
     }
 
     fn open_with<'a>(apps: &'a MimeApps, mime: &str) -> Vec<(&'a str, bool)> {
-        apps.open_with(mime).iter().map(|i| (i.entry.id.as_str(), i.is_default)).collect()
+        apps.open_with(mime)
+            .iter()
+            .map(|i| (i.entry.id.as_str(), i.is_default))
+            .collect()
     }
 
     #[test]
@@ -399,7 +515,11 @@ mod tests {
         t.app("usr", "viewer.desktop", "Viewer", "image/png;");
         t.app("local", "paint.desktop", "Paint", "image/png;");
         let apps = t.load(&[]);
-        assert_eq!(default_id(&apps, "image/png"), Some("paint.desktop"), "the user's applications come first");
+        assert_eq!(
+            default_id(&apps, "image/png"),
+            Some("paint.desktop"),
+            "the user's applications come first"
+        );
         assert_eq!(default_id(&apps, "image/jpeg"), None);
     }
 
@@ -409,10 +529,20 @@ mod tests {
         t.app("usr", "viewer.desktop", "Viewer", "image/png;");
         t.app("usr", "paint.desktop", "Paint", "image/png;");
         t.app("usr", "editor.desktop", "Editor", "text/plain;");
-        t.write("usr/applications/mimeapps.list", "[Default Applications]\nimage/png=viewer.desktop\n");
-        t.write("config/mimeapps.list", "[Default Applications]\nimage/png=missing.desktop;editor.desktop;paint.desktop\n");
+        t.write(
+            "usr/applications/mimeapps.list",
+            "[Default Applications]\nimage/png=viewer.desktop\n",
+        );
+        t.write(
+            "config/mimeapps.list",
+            "[Default Applications]\nimage/png=missing.desktop;editor.desktop;paint.desktop\n",
+        );
         let apps = t.load(&[]);
-        assert_eq!(default_id(&apps, "image/png"), Some("paint.desktop"), "missing is not installed, the editor not associated");
+        assert_eq!(
+            default_id(&apps, "image/png"),
+            Some("paint.desktop"),
+            "missing is not installed, the editor not associated"
+        );
     }
 
     #[test]
@@ -421,12 +551,22 @@ mod tests {
         t.app("usr", "viewer.desktop", "Viewer", "image/png;");
         t.app("usr", "paint.desktop", "Paint", "image/png;");
         t.app("usr", "draw.desktop", "Draw", "image/x-other;");
-        t.write("config/mimeapps.list", "[Default Applications]\nimage/png=viewer.desktop\n");
+        t.write(
+            "config/mimeapps.list",
+            "[Default Applications]\nimage/png=viewer.desktop\n",
+        );
         t.write("config/cupertino-mimeapps.list", "[Default Applications]\nimage/png=paint.desktop\n[Added Associations]\nimage/png=draw.desktop\n");
         let apps = t.load(&["Cupertino"]);
         assert_eq!(default_id(&apps, "image/png"), Some("paint.desktop"));
-        assert_eq!(open_with(&apps, "image/png"), [("paint.desktop", true), ("viewer.desktop", false)], "a desktop-specific list adds nothing");
-        assert_eq!(default_id(&t.load(&[]), "image/png"), Some("viewer.desktop"));
+        assert_eq!(
+            open_with(&apps, "image/png"),
+            [("paint.desktop", true), ("viewer.desktop", false)],
+            "a desktop-specific list adds nothing"
+        );
+        assert_eq!(
+            default_id(&t.load(&[]), "image/png"),
+            Some("viewer.desktop")
+        );
     }
 
     #[test]
@@ -437,7 +577,10 @@ mod tests {
         t.app("local", "mine.desktop", "Mine", "image/x-other;");
         t.write("config/mimeapps.list", "[Removed Associations]\nimage/png=viewer.desktop\n[Added Associations]\nimage/png=paint.desktop\n");
         // a system list cannot add an application that only the user's directory, above it, has
-        t.write("usr/applications/mimeapps.list", "[Added Associations]\nimage/png=mine.desktop\n");
+        t.write(
+            "usr/applications/mimeapps.list",
+            "[Added Associations]\nimage/png=mine.desktop\n",
+        );
         let apps = t.load(&[]);
         assert_eq!(open_with(&apps, "image/png"), [("paint.desktop", true)]);
     }
@@ -446,7 +589,10 @@ mod tests {
     fn a_removal_for_a_broader_type_keeps_the_specific_association() {
         let t = Tree::new();
         t.app("usr", "editor.desktop", "Editor", "text/plain;text/x-csrc;");
-        t.write("config/mimeapps.list", "[Removed Associations]\ntext/plain=editor.desktop\n");
+        t.write(
+            "config/mimeapps.list",
+            "[Removed Associations]\ntext/plain=editor.desktop\n",
+        );
         let apps = t.load(&[]);
         assert_eq!(default_id(&apps, "text/x-csrc"), Some("editor.desktop"));
         assert_eq!(default_id(&apps, "text/plain"), None);
@@ -457,23 +603,56 @@ mod tests {
         let t = Tree::new();
         t.app("usr", "editor.desktop", "Editor", "text/plain;");
         t.app("usr", "ccode.desktop", "C Code", "text/x-c;");
-        t.write("config/mimeapps.list", "[Default Applications]\ntext/plain=editor.desktop\n");
+        t.write(
+            "config/mimeapps.list",
+            "[Default Applications]\ntext/plain=editor.desktop\n",
+        );
         let apps = t.load(&[]);
-        assert_eq!(default_id(&apps, "application/x-shellscript"), Some("editor.desktop"));
-        assert_eq!(default_id(&apps, "text/x-csrc"), Some("ccode.desktop"), "a handler of the specific type beats a parent's default");
-        assert_eq!(default_id(&apps, "text/x-c"), Some("ccode.desktop"), "an alias is its canonical type");
-        assert_eq!(open_with(&apps, "text/x-csrc"), [("ccode.desktop", true), ("editor.desktop", false)]);
+        assert_eq!(
+            default_id(&apps, "application/x-shellscript"),
+            Some("editor.desktop")
+        );
+        assert_eq!(
+            default_id(&apps, "text/x-csrc"),
+            Some("ccode.desktop"),
+            "a handler of the specific type beats a parent's default"
+        );
+        assert_eq!(
+            default_id(&apps, "text/x-c"),
+            Some("ccode.desktop"),
+            "an alias is its canonical type"
+        );
+        assert_eq!(
+            open_with(&apps, "text/x-csrc"),
+            [("ccode.desktop", true), ("editor.desktop", false)]
+        );
     }
 
     #[test]
     fn open_with_puts_the_default_first_and_sorts_the_rest_naturally() {
         let t = Tree::new();
-        for (id, name) in [("b.desktop", "beta"), ("a10.desktop", "Editor 10"), ("a9.desktop", "Editor 9"), ("z.desktop", "Zed")] {
+        for (id, name) in [
+            ("b.desktop", "beta"),
+            ("a10.desktop", "Editor 10"),
+            ("a9.desktop", "Editor 9"),
+            ("z.desktop", "Zed"),
+        ] {
             t.app("usr", id, name, "text/plain;");
         }
-        t.write("config/mimeapps.list", "[Default Applications]\ntext/plain=z.desktop\n");
+        t.write(
+            "config/mimeapps.list",
+            "[Default Applications]\ntext/plain=z.desktop\n",
+        );
         let apps = t.load(&[]);
-        assert_eq!(open_with(&apps, "text/plain"), [("z.desktop", true), ("b.desktop", false), ("a9.desktop", false), ("a10.desktop", false)]);
+        assert_eq!(
+            open_with(&apps, "text/plain"),
+            [
+                ("z.desktop", true),
+                ("b.desktop", false),
+                ("a9.desktop", false),
+                ("a10.desktop", false)
+            ]
+        );
     }
 
     #[test]
@@ -483,7 +662,10 @@ mod tests {
         t.app("usr", "viewer.desktop", "Viewer", "image/png;");
         let apps = t.load(&[]);
         assert_eq!(open_with(&apps, "image/png"), [("viewer.desktop", true)]);
-        assert_eq!(open_with(&apps, "application/x-unknown"), [("hex.desktop", true)]);
+        assert_eq!(
+            open_with(&apps, "application/x-unknown"),
+            [("hex.desktop", true)]
+        );
     }
 
     #[test]
@@ -491,10 +673,20 @@ mod tests {
         let t = Tree::new();
         t.write("usr/applications/handler.desktop", "[Desktop Entry]\nType=Application\nName=Handler\nExec=h %u\nNoDisplay=true\nMimeType=x-scheme-handler/demo;\n");
         t.app("usr", "gone.desktop", "Gone", "image/png;");
-        t.write("local/applications/gone.desktop", "[Desktop Entry]\nType=Application\nName=Gone\nExec=g\nHidden=true\n");
+        t.write(
+            "local/applications/gone.desktop",
+            "[Desktop Entry]\nType=Application\nName=Gone\nExec=g\nHidden=true\n",
+        );
         let apps = t.load(&[]);
-        assert_eq!(default_id(&apps, "x-scheme-handler/demo"), Some("handler.desktop"));
-        assert_eq!(default_id(&apps, "image/png"), None, "the user's hidden copy removes the application");
+        assert_eq!(
+            default_id(&apps, "x-scheme-handler/demo"),
+            Some("handler.desktop")
+        );
+        assert_eq!(
+            default_id(&apps, "image/png"),
+            None,
+            "the user's hidden copy removes the application"
+        );
     }
 
     #[test]

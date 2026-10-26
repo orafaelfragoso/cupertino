@@ -36,7 +36,9 @@ pub mod text;
 pub use buttons::{ButtonState, ButtonVisual};
 pub use hit::{resize_hit, Hit, ResizeEdge};
 pub use layout::{ButtonLayout, FrameLayout};
-pub use metrics::{ButtonKind, DecorationMetrics, DoubleClickAction, TitleAlignment, TitlebarStyle};
+pub use metrics::{
+    ButtonKind, DecorationMetrics, DoubleClickAction, TitleAlignment, TitlebarStyle,
+};
 pub use palette::Palette;
 pub use render::{DecorationConfig, DecorationState, Decorations};
 pub use shadow::{Margins, ShadowGpuParams, ShadowImage, ShadowParams, ShadowRasterizer};

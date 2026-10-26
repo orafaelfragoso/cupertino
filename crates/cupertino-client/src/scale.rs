@@ -14,7 +14,10 @@ impl Scale {
 
     /// Scale of a `wl_output.scale` factor; `None` for zero.
     pub fn from_integer(factor: u32) -> Option<Scale> {
-        factor.checked_mul(Self::DENOMINATOR).and_then(NonZeroU32::new).map(Scale)
+        factor
+            .checked_mul(Self::DENOMINATOR)
+            .and_then(NonZeroU32::new)
+            .map(Scale)
     }
 
     /// Scale of a `preferred_scale` value; `None` for zero.
@@ -29,7 +32,10 @@ impl Scale {
 
     /// The factor when it is a whole number, as `wl_surface.set_buffer_scale` needs it.
     pub fn integer(self) -> Option<i32> {
-        self.0.get().is_multiple_of(Self::DENOMINATOR).then(|| (self.0.get() / Self::DENOMINATOR) as i32)
+        self.0
+            .get()
+            .is_multiple_of(Self::DENOMINATOR)
+            .then(|| (self.0.get() / Self::DENOMINATOR) as i32)
     }
 
     /// Buffer extent for a logical extent, rounded to the nearest pixel with halves up (the
@@ -63,7 +69,10 @@ mod tests {
     fn physical_size_rounds_to_nearest_with_halves_up() {
         let s = Scale::from_120ths(150).unwrap();
         // 1.25 * 3 = 3.75 -> 4; 1.25 * 2 = 2.5 -> 3; 1.25 * 1 = 1.25 -> 1
-        assert_eq!((s.to_physical(3), s.to_physical(2), s.to_physical(1)), (4, 3, 1));
+        assert_eq!(
+            (s.to_physical(3), s.to_physical(2), s.to_physical(1)),
+            (4, 3, 1)
+        );
         assert_eq!(Scale::ONE.to_physical(344), 344);
         assert_eq!(Scale::from_integer(2).unwrap().to_physical(344), 688);
     }

@@ -132,18 +132,30 @@ pub struct Message {
 /// Why bytes are not a DHCP message this client can use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecodeError {
-    TooShort { length: usize },
+    TooShort {
+        length: usize,
+    },
     BadMagicCookie,
     BadOp(u8),
     /// `htype`/`hlen` that are not Ethernet.
-    BadHardware { hardware_type: u8, length: u8 },
+    BadHardware {
+        hardware_type: u8,
+        length: u8,
+    },
     MissingMessageType,
     BadMessageType(u8),
     /// The option runs past the end of the message.
-    TruncatedOption { code: u8 },
+    TruncatedOption {
+        code: u8,
+    },
     /// The option's length does not fit its type.
-    OptionLength { code: u8, length: usize },
-    OptionNotUtf8 { code: u8 },
+    OptionLength {
+        code: u8,
+        length: usize,
+    },
+    OptionNotUtf8 {
+        code: u8,
+    },
     /// Option 52.
     Overload,
     /// `op` and the message type disagree (a server message sent as a request).
@@ -156,11 +168,19 @@ impl fmt::Display for DecodeError {
             Self::TooShort { length } => write!(f, "{length} bytes is shorter than a DHCP message"),
             Self::BadMagicCookie => write!(f, "no DHCP magic cookie"),
             Self::BadOp(op) => write!(f, "op {op} is neither a request nor a reply"),
-            Self::BadHardware { hardware_type, length } => write!(f, "hardware type {hardware_type} of length {length} is not Ethernet"),
+            Self::BadHardware {
+                hardware_type,
+                length,
+            } => write!(
+                f,
+                "hardware type {hardware_type} of length {length} is not Ethernet"
+            ),
             Self::MissingMessageType => write!(f, "no message type option"),
             Self::BadMessageType(raw) => write!(f, "message type {raw} is unknown"),
             Self::TruncatedOption { code } => write!(f, "option {code} runs past the end"),
-            Self::OptionLength { code, length } => write!(f, "option {code} cannot have {length} bytes"),
+            Self::OptionLength { code, length } => {
+                write!(f, "option {code} cannot have {length} bytes")
+            }
             Self::OptionNotUtf8 { code } => write!(f, "option {code} is not UTF-8"),
             Self::Overload => write!(f, "option overload is not supported"),
             Self::OpMismatch => write!(f, "op does not match the message type"),
@@ -178,7 +198,14 @@ fn put_option(out: &mut Vec<u8>, code: u8, data: &[u8]) {
 
 fn put_addresses(out: &mut Vec<u8>, code: u8, addresses: &[Ipv4Addr]) {
     if !addresses.is_empty() {
-        put_option(out, code, &addresses.iter().flat_map(|address| address.octets()).collect::<Vec<u8>>());
+        put_option(
+            out,
+            code,
+            &addresses
+                .iter()
+                .flat_map(|address| address.octets())
+                .collect::<Vec<u8>>(),
+        );
     }
 }
 
@@ -201,11 +228,25 @@ impl Message {
 
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(FIXED_LEN + 64);
-        out.extend_from_slice(&[if self.message_type.is_reply() { OP_REPLY } else { OP_REQUEST }, HARDWARE_ETHERNET, HARDWARE_LENGTH, 0]);
+        out.extend_from_slice(&[
+            if self.message_type.is_reply() {
+                OP_REPLY
+            } else {
+                OP_REQUEST
+            },
+            HARDWARE_ETHERNET,
+            HARDWARE_LENGTH,
+            0,
+        ]);
         out.extend_from_slice(&self.xid.to_be_bytes());
         out.extend_from_slice(&self.seconds.to_be_bytes());
         out.extend_from_slice(&(if self.broadcast { FLAG_BROADCAST } else { 0 }).to_be_bytes());
-        for address in [self.client_address, self.your_address, self.server_address, self.gateway_address] {
+        for address in [
+            self.client_address,
+            self.your_address,
+            self.server_address,
+            self.gateway_address,
+        ] {
             out.extend_from_slice(&address.octets());
         }
         out.extend_from_slice(&self.client_hardware.0);
@@ -226,7 +267,11 @@ impl Message {
         if let Some(address) = options.requested_address {
             put_option(&mut out, OPTION_REQUESTED_ADDRESS, &address.octets());
         }
-        for (code, value) in [(OPTION_LEASE_TIME, options.lease_time), (OPTION_RENEWAL_TIME, options.renewal_time), (OPTION_REBINDING_TIME, options.rebinding_time)] {
+        for (code, value) in [
+            (OPTION_LEASE_TIME, options.lease_time),
+            (OPTION_RENEWAL_TIME, options.renewal_time),
+            (OPTION_REBINDING_TIME, options.rebinding_time),
+        ] {
             if let Some(seconds) = value {
                 put_option(&mut out, code, &seconds.to_be_bytes());
             }
@@ -235,7 +280,11 @@ impl Message {
             put_option(&mut out, OPTION_SERVER_ID, &address.octets());
         }
         if !options.parameter_request_list.is_empty() {
-            put_option(&mut out, OPTION_PARAMETER_REQUEST_LIST, &options.parameter_request_list);
+            put_option(
+                &mut out,
+                OPTION_PARAMETER_REQUEST_LIST,
+                &options.parameter_request_list,
+            );
         }
         if let Some(text) = &options.message {
             put_option(&mut out, OPTION_MESSAGE, text.as_bytes());
@@ -249,19 +298,25 @@ impl Message {
 
     pub fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         if bytes.len() < FIXED_LEN + MAGIC_COOKIE.len() {
-            return Err(DecodeError::TooShort { length: bytes.len() });
+            return Err(DecodeError::TooShort {
+                length: bytes.len(),
+            });
         }
         let op = bytes[0];
         if op != OP_REQUEST && op != OP_REPLY {
             return Err(DecodeError::BadOp(op));
         }
         if bytes[1] != HARDWARE_ETHERNET || bytes[2] != HARDWARE_LENGTH {
-            return Err(DecodeError::BadHardware { hardware_type: bytes[1], length: bytes[2] });
+            return Err(DecodeError::BadHardware {
+                hardware_type: bytes[1],
+                length: bytes[2],
+            });
         }
         if bytes[FIXED_LEN..FIXED_LEN + 4] != MAGIC_COOKIE {
             return Err(DecodeError::BadMagicCookie);
         }
-        let address = |at: usize| Ipv4Addr::new(bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]);
+        let address =
+            |at: usize| Ipv4Addr::new(bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]);
         let mut options = Options::default();
         let mut message_type = None;
 
@@ -275,20 +330,39 @@ impl Message {
                 OPTION_END => break,
                 _ => {}
             }
-            let (&length, tail) = tail.split_first().ok_or(DecodeError::TruncatedOption { code })?;
+            let (&length, tail) = tail
+                .split_first()
+                .ok_or(DecodeError::TruncatedOption { code })?;
             let length = usize::from(length);
-            let data = tail.get(..length).ok_or(DecodeError::TruncatedOption { code })?;
+            let data = tail
+                .get(..length)
+                .ok_or(DecodeError::TruncatedOption { code })?;
             rest = &tail[length..];
             let bad_length = || DecodeError::OptionLength { code, length };
-            let one_address = || <[u8; 4]>::try_from(data).map(Ipv4Addr::from).map_err(|_| bad_length());
-            let number = || <[u8; 4]>::try_from(data).map(u32::from_be_bytes).map_err(|_| bad_length());
+            let one_address = || {
+                <[u8; 4]>::try_from(data)
+                    .map(Ipv4Addr::from)
+                    .map_err(|_| bad_length())
+            };
+            let number = || {
+                <[u8; 4]>::try_from(data)
+                    .map(u32::from_be_bytes)
+                    .map_err(|_| bad_length())
+            };
             let address_list = || {
                 if data.is_empty() || data.len() % 4 != 0 {
                     return Err(bad_length());
                 }
-                Ok(data.as_chunks::<4>().0.iter().map(|chunk| Ipv4Addr::from(*chunk)).collect::<Vec<_>>())
+                Ok(data
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|chunk| Ipv4Addr::from(*chunk))
+                    .collect::<Vec<_>>())
             };
-            let text = || String::from_utf8(data.to_vec()).map_err(|_| DecodeError::OptionNotUtf8 { code });
+            let text = || {
+                String::from_utf8(data.to_vec()).map_err(|_| DecodeError::OptionNotUtf8 { code })
+            };
             match code {
                 OPTION_SUBNET_MASK => options.subnet_mask = Some(one_address()?),
                 OPTION_ROUTER => options.routers = address_list()?,
@@ -298,8 +372,11 @@ impl Message {
                 OPTION_LEASE_TIME => options.lease_time = Some(number()?),
                 OPTION_OVERLOAD => return Err(DecodeError::Overload),
                 OPTION_MESSAGE_TYPE => {
-                    let [raw] = data else { return Err(bad_length()) };
-                    message_type = Some(MessageType::from_raw(*raw).ok_or(DecodeError::BadMessageType(*raw))?);
+                    let [raw] = data else {
+                        return Err(bad_length());
+                    };
+                    message_type =
+                        Some(MessageType::from_raw(*raw).ok_or(DecodeError::BadMessageType(*raw))?);
                 }
                 OPTION_SERVER_ID => options.server_id = Some(one_address()?),
                 OPTION_PARAMETER_REQUEST_LIST => options.parameter_request_list = data.to_vec(),
@@ -325,7 +402,9 @@ impl Message {
             your_address: address(16),
             server_address: address(20),
             gateway_address: address(24),
-            client_hardware: MacAddr([bytes[28], bytes[29], bytes[30], bytes[31], bytes[32], bytes[33]]),
+            client_hardware: MacAddr([
+                bytes[28], bytes[29], bytes[30], bytes[31], bytes[32], bytes[33],
+            ]),
             options,
         })
     }
@@ -399,7 +478,9 @@ mod tests {
         expected.extend_from_slice(&[0; 16]); // ciaddr, yiaddr, siaddr, giaddr
         expected.extend_from_slice(&[2, 0, 0, 0, 0, 1]);
         expected.resize(236, 0);
-        expected.extend_from_slice(&[99, 130, 83, 99, 53, 1, 1, 55, 3, 1, 3, 6, 61, 7, 1, 2, 0, 0, 0, 0, 1, 255]);
+        expected.extend_from_slice(&[
+            99, 130, 83, 99, 53, 1, 1, 55, 3, 1, 3, 6, 61, 7, 1, 2, 0, 0, 0, 0, 1, 255,
+        ]);
         assert_eq!(discover.encode(), expected);
     }
 
@@ -417,12 +498,18 @@ mod tests {
         let mut nak = Message::new(MessageType::Nak, 9, MAC);
         nak.options.message = Some("wrong network".to_owned());
         let decoded = Message::decode(&nak.encode()).unwrap();
-        assert_eq!((decoded.message_type, decoded.options.message.as_deref()), (MessageType::Nak, Some("wrong network")));
+        assert_eq!(
+            (decoded.message_type, decoded.options.message.as_deref()),
+            (MessageType::Nak, Some("wrong network"))
+        );
     }
 
     #[test]
     fn short_input_and_a_missing_cookie_are_errors() {
-        assert_eq!(Message::decode(&[0; 100]), Err(DecodeError::TooShort { length: 100 }));
+        assert_eq!(
+            Message::decode(&[0; 100]),
+            Err(DecodeError::TooShort { length: 100 })
+        );
         let mut bytes = offer_bytes();
         bytes[236] = 0;
         assert_eq!(Message::decode(&bytes), Err(DecodeError::BadMagicCookie));
@@ -433,7 +520,10 @@ mod tests {
         let mut bytes = offer_bytes();
         bytes.truncate(236 + 4);
         bytes.extend_from_slice(&[53, 1, 2, 15, 40, b'x']);
-        assert_eq!(Message::decode(&bytes), Err(DecodeError::TruncatedOption { code: 15 }));
+        assert_eq!(
+            Message::decode(&bytes),
+            Err(DecodeError::TruncatedOption { code: 15 })
+        );
     }
 
     #[test]
@@ -441,7 +531,10 @@ mod tests {
         let mut bytes = offer_bytes();
         bytes.truncate(236 + 4);
         bytes.extend_from_slice(&[53, 1, 2, 1, 3, 1, 2, 3, 255]);
-        assert_eq!(Message::decode(&bytes), Err(DecodeError::OptionLength { code: 1, length: 3 }));
+        assert_eq!(
+            Message::decode(&bytes),
+            Err(DecodeError::OptionLength { code: 1, length: 3 })
+        );
     }
 
     #[test]
@@ -449,7 +542,10 @@ mod tests {
         let mut bytes = offer_bytes();
         bytes.truncate(236 + 4);
         bytes.push(255);
-        assert_eq!(Message::decode(&bytes), Err(DecodeError::MissingMessageType));
+        assert_eq!(
+            Message::decode(&bytes),
+            Err(DecodeError::MissingMessageType)
+        );
     }
 
     #[test]

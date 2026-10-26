@@ -75,8 +75,16 @@ pub struct AnimationPresets {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum RawSpring {
-    Physical { mass: f64, stiffness: f64, damping: f64, initial_velocity: f64 },
-    Perceptual { perceptual_duration: f64, bounce: f64 },
+    Physical {
+        mass: f64,
+        stiffness: f64,
+        damping: f64,
+        initial_velocity: f64,
+    },
+    Perceptual {
+        perceptual_duration: f64,
+        bounce: f64,
+    },
 }
 
 #[derive(Deserialize)]
@@ -116,18 +124,38 @@ impl AnimationPresets {
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(json: &str) -> Result<Self> {
         let raw: RawAnimations = serde_json::from_str(json)?;
-        let timing: BTreeMap<String, CubicBezier> = raw.timing_functions.into_iter().map(|(k, b)| (k, CubicBezier::new(b[0], b[1], b[2], b[3]))).collect();
+        let timing: BTreeMap<String, CubicBezier> = raw
+            .timing_functions
+            .into_iter()
+            .map(|(k, b)| (k, CubicBezier::new(b[0], b[1], b[2], b[3])))
+            .collect();
         let springs = raw
             .springs
             .into_iter()
             .map(|(name, s)| {
                 let preset = match s {
-                    RawSpring::Physical { mass, stiffness, damping, initial_velocity } => {
-                        SpringPreset { params: SpringParams { mass, stiffness, damping, initial_velocity, allows_overdamping: false }, perceptual: None }
-                    }
-                    RawSpring::Perceptual { perceptual_duration, bounce } => {
-                        SpringPreset { params: SpringParams::from_perceptual(perceptual_duration, bounce), perceptual: Some((perceptual_duration, bounce)) }
-                    }
+                    RawSpring::Physical {
+                        mass,
+                        stiffness,
+                        damping,
+                        initial_velocity,
+                    } => SpringPreset {
+                        params: SpringParams {
+                            mass,
+                            stiffness,
+                            damping,
+                            initial_velocity,
+                            allows_overdamping: false,
+                        },
+                        perceptual: None,
+                    },
+                    RawSpring::Perceptual {
+                        perceptual_duration,
+                        bounce,
+                    } => SpringPreset {
+                        params: SpringParams::from_perceptual(perceptual_duration, bounce),
+                        perceptual: Some((perceptual_duration, bounce)),
+                    },
                 };
                 (name, preset)
             })
@@ -139,7 +167,11 @@ impl AnimationPresets {
             }
             Easing::CosineEase
         } else {
-            Easing::Bezier(*timing.get(curve_name).ok_or_else(|| Error::Invalid(format!("unknown easing {curve_name} in dock.autohide.curve")))?)
+            Easing::Bezier(*timing.get(curve_name).ok_or_else(|| {
+                Error::Invalid(format!(
+                    "unknown easing {curve_name} in dock.autohide.curve"
+                ))
+            })?)
         };
         let dock = DockAnimation {
             fish_speed: raw.dock.fish_speed,
@@ -174,7 +206,10 @@ impl AnimationPresets {
 
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let text = std::fs::read_to_string(path).map_err(|source| Error::Io { path: path.to_path_buf(), source })?;
+        let text = std::fs::read_to_string(path).map_err(|source| Error::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
         Self::from_str(&text)
     }
 
@@ -209,7 +244,10 @@ impl AnimationPresets {
     }
 
     pub fn momentum(&self, origin: f64, velocity_pt_per_s: f64, min: f64, max: f64) -> Momentum {
-        Momentum { factor_per_ms: self.momentum_deceleration_per_ms, ..Momentum::new(origin, velocity_pt_per_s, min, max) }
+        Momentum {
+            factor_per_ms: self.momentum_deceleration_per_ms,
+            ..Momentum::new(origin, velocity_pt_per_s, min, max)
+        }
     }
 
     pub fn rubber_band(&self, dimension: f64) -> RubberBand {
@@ -238,7 +276,10 @@ mod tests {
         assert_eq!(p.timing("linear"), Some(CubicBezier::LINEAR));
         assert_eq!(p.timing("easeIn"), Some(CubicBezier::EASE_IN));
         assert_eq!(p.timing("easeOut"), Some(CubicBezier::EASE_OUT));
-        assert_eq!(p.timing("easeInEaseOut"), Some(CubicBezier::EASE_IN_EASE_OUT));
+        assert_eq!(
+            p.timing("easeInEaseOut"),
+            Some(CubicBezier::EASE_IN_EASE_OUT)
+        );
         assert_eq!(p.timing_names().count(), 5);
     }
 
@@ -256,7 +297,12 @@ mod tests {
         let p = presets();
         let s = p.spring("window_move_resize_snap").unwrap();
         assert_eq!(s, SpringParams::from_perceptual(0.35, 0.0));
-        assert_eq!(p.spring_preset("window_move_resize_snap").unwrap().perceptual, Some((0.35, 0.0)));
+        assert_eq!(
+            p.spring_preset("window_move_resize_snap")
+                .unwrap()
+                .perceptual,
+            Some((0.35, 0.0))
+        );
         assert!(p.spring("overview_toggle").is_some());
         assert!(p.spring("perceptual_formula").is_none());
         assert_eq!(p.settling_epsilon, 0.001);
@@ -288,7 +334,10 @@ mod tests {
     fn cosine_ease_is_not_a_bezier() {
         let p = presets();
         assert_eq!(p.easing("cosine_ease"), Some(Easing::CosineEase));
-        assert_eq!(p.easing("easeOut"), Some(Easing::Bezier(CubicBezier::EASE_OUT)));
+        assert_eq!(
+            p.easing("easeOut"),
+            Some(Easing::Bezier(CubicBezier::EASE_OUT))
+        );
         assert_eq!(p.easing("nope"), None);
         assert!(p.timing("cosine_ease").is_none());
         let c = Easing::CosineEase;
@@ -300,7 +349,8 @@ mod tests {
 
     #[test]
     fn unknown_autohide_curve_is_an_error() {
-        let json = std::fs::read_to_string(crate::spec_dir().join(crate::theme::ANIMATION_FILE)).unwrap();
+        let json =
+            std::fs::read_to_string(crate::spec_dir().join(crate::theme::ANIMATION_FILE)).unwrap();
         let bad = json.replace("\"curve\": \"cosine_ease\"", "\"curve\": \"wobble\"");
         assert_ne!(json, bad);
         assert!(AnimationPresets::from_str(&bad).is_err());
@@ -309,16 +359,27 @@ mod tests {
     #[test]
     fn minimize_effects() {
         let e = presets().minimize_effects().to_vec();
-        assert_eq!(e, vec![MinimizeEffect::WarpMinimize, MinimizeEffect::Scale, MinimizeEffect::Suck]);
+        assert_eq!(
+            e,
+            vec![
+                MinimizeEffect::WarpMinimize,
+                MinimizeEffect::Scale,
+                MinimizeEffect::Suck
+            ]
+        );
     }
 
     #[test]
     fn rejects_incomplete_documents() {
         assert!(AnimationPresets::from_str("{}").is_err());
-        let json = std::fs::read_to_string(crate::spec_dir().join(crate::theme::ANIMATION_FILE)).unwrap();
+        let json =
+            std::fs::read_to_string(crate::spec_dir().join(crate::theme::ANIMATION_FILE)).unwrap();
         let bad = json.replace("\"scale\"", "\"wobble\"");
         assert_ne!(json, bad);
-        assert!(AnimationPresets::from_str(&bad).is_err(), "an unknown minimize effect is an error");
+        assert!(
+            AnimationPresets::from_str(&bad).is_err(),
+            "an unknown minimize effect is an error"
+        );
         assert!(AnimationPresets::from_str("not json").is_err());
     }
 }

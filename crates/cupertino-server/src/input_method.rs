@@ -32,7 +32,8 @@ use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{wl_compositor, wl_registry, wl_seat, wl_surface};
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols_misc::zwp_input_method_v2::client::{
-    zwp_input_method_manager_v2::ZwpInputMethodManagerV2, zwp_input_method_v2, zwp_input_method_v2::ZwpInputMethodV2, zwp_input_popup_surface_v2::ZwpInputPopupSurfaceV2,
+    zwp_input_method_manager_v2::ZwpInputMethodManagerV2, zwp_input_method_v2,
+    zwp_input_method_v2::ZwpInputMethodV2, zwp_input_popup_surface_v2::ZwpInputPopupSurfaceV2,
 };
 
 use crate::kbd_ui::TextOp;
@@ -97,11 +98,16 @@ struct Client {
 impl Client {
     /// Byte length of the last `chars` characters before the cursor (one byte each when the text is unknown).
     fn bytes_before_cursor(&self, chars: usize) -> u32 {
-        let Some((text, cursor)) = &self.surrounding else { return chars as u32 };
+        let Some((text, cursor)) = &self.surrounding else {
+            return chars as u32;
+        };
         let end = (*cursor as usize).min(text.len());
         let before = text.get(..end).unwrap_or("");
         let skip = before.chars().count().saturating_sub(chars);
-        before.char_indices().nth(skip).map_or(0, |(i, _)| (before.len() - i) as u32)
+        before
+            .char_indices()
+            .nth(skip)
+            .map_or(0, |(i, _)| (before.len() - i) as u32)
     }
 
     fn apply(&mut self, op: TextOp) {
@@ -110,14 +116,20 @@ impl Client {
             return;
         }
         match op {
-            TextOp::Preedit { delete_before, text } => {
+            TextOp::Preedit {
+                delete_before,
+                text,
+            } => {
                 if delete_before > 0 {
                     im.delete_surrounding_text(self.bytes_before_cursor(delete_before), 0);
                 }
                 let len = text.len() as i32;
                 im.set_preedit_string(text, 0, len);
             }
-            TextOp::Commit { delete_before, text } => {
+            TextOp::Commit {
+                delete_before,
+                text,
+            } => {
                 if delete_before > 0 {
                     im.delete_surrounding_text(self.bytes_before_cursor(delete_before), 0);
                 }
@@ -134,7 +146,15 @@ impl Client {
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Client {
-    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 macro_rules! ignore_events {
@@ -144,14 +164,29 @@ macro_rules! ignore_events {
         }
     )*};
 }
-ignore_events!(wl_seat::WlSeat, wl_compositor::WlCompositor, wl_surface::WlSurface, ZwpInputMethodManagerV2, ZwpInputPopupSurfaceV2);
+ignore_events!(
+    wl_seat::WlSeat,
+    wl_compositor::WlCompositor,
+    wl_surface::WlSurface,
+    ZwpInputMethodManagerV2,
+    ZwpInputPopupSurfaceV2
+);
 
 impl Dispatch<ZwpInputMethodV2, ()> for Client {
-    fn event(state: &mut Self, _: &ZwpInputMethodV2, event: zwp_input_method_v2::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        _: &ZwpInputMethodV2,
+        event: zwp_input_method_v2::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         match event {
             zwp_input_method_v2::Event::Activate => state.pending_active = true,
             zwp_input_method_v2::Event::Deactivate => state.pending_active = false,
-            zwp_input_method_v2::Event::SurroundingText { text, cursor, .. } => state.surrounding = Some((text, cursor)),
+            zwp_input_method_v2::Event::SurroundingText { text, cursor, .. } => {
+                state.surrounding = Some((text, cursor))
+            }
             zwp_input_method_v2::Event::Done => {
                 state.serial = state.serial.wrapping_add(1);
                 if state.pending_active != state.active {
@@ -171,21 +206,43 @@ impl Dispatch<ZwpInputMethodV2, ()> for Client {
     }
 }
 
-fn run(stream: UnixStream, commands: Receiver<Command>, events: LoopSender<ImEvent>, wake_rd: OwnedFd) -> Result<(), String> {
+fn run(
+    stream: UnixStream,
+    commands: Receiver<Command>,
+    events: LoopSender<ImEvent>,
+    wake_rd: OwnedFd,
+) -> Result<(), String> {
     let conn = Connection::from_socket(stream).map_err(|e| e.to_string())?;
     let (globals, mut queue) = registry_queue_init::<Client>(&conn).map_err(|e| e.to_string())?;
     let qh = queue.handle();
-    let manager: ZwpInputMethodManagerV2 = globals.bind(&qh, 1..=1, ()).map_err(|e| format!("zwp_input_method_manager_v2: {e}"))?;
-    let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=1, ()).map_err(|e| format!("wl_seat: {e}"))?;
-    let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 1..=1, ()).map_err(|e| format!("wl_compositor: {e}"))?;
+    let manager: ZwpInputMethodManagerV2 = globals
+        .bind(&qh, 1..=1, ())
+        .map_err(|e| format!("zwp_input_method_manager_v2: {e}"))?;
+    let seat: wl_seat::WlSeat = globals
+        .bind(&qh, 1..=1, ())
+        .map_err(|e| format!("wl_seat: {e}"))?;
+    let compositor: wl_compositor::WlCompositor = globals
+        .bind(&qh, 1..=1, ())
+        .map_err(|e| format!("wl_compositor: {e}"))?;
     let im = manager.get_input_method(&seat, &qh, ());
     // an (unmapped) popup surface makes the compositor report the text cursor rectangle
     let surface = compositor.create_surface(&qh, ());
     let _popup = im.get_input_popup_surface(&surface, &qh, ());
     surface.commit();
-    let mut client = Client { commands, events, im: Some(im), serial: 0, pending_active: false, active: false, surrounding: None, stop: false };
+    let mut client = Client {
+        commands,
+        events,
+        im: Some(im),
+        serial: 0,
+        pending_active: false,
+        active: false,
+        surrounding: None,
+        stop: false,
+    };
     loop {
-        queue.dispatch_pending(&mut client).map_err(|e| e.to_string())?;
+        queue
+            .dispatch_pending(&mut client)
+            .map_err(|e| e.to_string())?;
         while let Ok(cmd) = client.commands.try_recv() {
             match cmd {
                 Command::Op(op) => client.apply(op),
@@ -196,10 +253,20 @@ fn run(stream: UnixStream, commands: Receiver<Command>, events: LoopSender<ImEve
             return Ok(());
         }
         conn.flush().map_err(|e| e.to_string())?;
-        let Some(guard) = queue.prepare_read() else { continue };
+        let Some(guard) = queue.prepare_read() else {
+            continue;
+        };
         let mut fds = [
-            libc::pollfd { fd: guard.connection_fd().as_raw_fd(), events: libc::POLLIN, revents: 0 },
-            libc::pollfd { fd: wake_rd.as_raw_fd(), events: libc::POLLIN, revents: 0 },
+            libc::pollfd {
+                fd: guard.connection_fd().as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: wake_rd.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
         ];
         // Safety: two valid pollfd entries.
         let n = unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) };
@@ -222,7 +289,10 @@ impl Cupertino {
     /// export the input-method global (created in `Cupertino::new` when the picker is configured).
     pub fn start_input_method(&mut self, events: LoopSender<ImEvent>) -> Option<ImBridge> {
         let (server_end, client_end) = UnixStream::pair().ok()?;
-        let data = Arc::new(ClientState { internal: true, ..Default::default() });
+        let data = Arc::new(ClientState {
+            internal: true,
+            ..Default::default()
+        });
         if let Err(e) = self.display_handle.insert_client(server_end, data) {
             tracing::warn!(error = %e, "input method bridge: cannot add the client");
             return None;
@@ -235,11 +305,13 @@ impl Cupertino {
         // Safety: both descriptors were just created and are owned here.
         let (rd, wr) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
         let (tx, rx) = channel();
-        let spawned = std::thread::Builder::new().name("cupertino-input-method".into()).spawn(move || {
-            if let Err(e) = run(client_end, rx, events, rd) {
-                tracing::warn!(error = %e, "input method bridge stopped");
-            }
-        });
+        let spawned = std::thread::Builder::new()
+            .name("cupertino-input-method".into())
+            .spawn(move || {
+                if let Err(e) = run(client_end, rx, events, rd) {
+                    tracing::warn!(error = %e, "input method bridge stopped");
+                }
+            });
         spawned.ok()?;
         Some(ImBridge { tx, wake: wr })
     }
@@ -283,12 +355,19 @@ impl Cupertino {
         let id = self.wm.key_window()?;
         let g = self.wm.window(id)?.geometry();
         let ins = self.entry(id).map(|e| e.insets).unwrap_or_default();
-        Some(cupertino_geometry::Rect::new(g.x + ins.left + f64::from(r.loc.x), g.y + ins.top + f64::from(r.loc.y), f64::from(r.size.w.max(1)), f64::from(r.size.h.max(1))))
+        Some(cupertino_geometry::Rect::new(
+            g.x + ins.left + f64::from(r.loc.x),
+            g.y + ins.top + f64::from(r.loc.y),
+            f64::from(r.size.w.max(1)),
+            f64::from(r.size.h.max(1)),
+        ))
     }
 
     /// Deliver one edit to the focused client's text input through the bridge.
     pub fn deliver_text_op(&self, op: &TextOp) -> bool {
-        self.input_method.as_ref().is_some_and(|b| b.send(op.clone()))
+        self.input_method
+            .as_ref()
+            .is_some_and(|b| b.send(op.clone()))
     }
 }
 

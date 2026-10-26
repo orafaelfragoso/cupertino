@@ -170,21 +170,41 @@ impl From<BluetoothError> for fdo::Error {
 /// Maps the caller's bus name to its process through `GetConnectionCredentials` and asks the
 /// authorizer. The pid comes from the bus daemon, not from the message, so the caller cannot
 /// choose it.
-async fn authorize(shared: &Shared, header: &Header<'_>, connection: &Connection) -> Result<(), BluetoothError> {
-    let failed = |what: &str, error: &dyn std::fmt::Display| BluetoothError::Failed(format!("{what}: {error}"));
-    let sender = header.sender().ok_or_else(|| BluetoothError::Failed("the call has no sender".to_owned()))?;
-    let bus = fdo::DBusProxy::new(connection).await.map_err(|e| failed("connecting to the bus daemon", &e))?;
-    let credentials = bus.get_connection_credentials(BusName::from(sender.clone())).await.map_err(|e| failed("reading the caller's credentials", &e))?;
-    let pid = credentials.process_id().ok_or_else(|| BluetoothError::Failed("the bus did not report the caller's process".to_owned()))?;
+async fn authorize(
+    shared: &Shared,
+    header: &Header<'_>,
+    connection: &Connection,
+) -> Result<(), BluetoothError> {
+    let failed = |what: &str, error: &dyn std::fmt::Display| {
+        BluetoothError::Failed(format!("{what}: {error}"))
+    };
+    let sender = header
+        .sender()
+        .ok_or_else(|| BluetoothError::Failed("the call has no sender".to_owned()))?;
+    let bus = fdo::DBusProxy::new(connection)
+        .await
+        .map_err(|e| failed("connecting to the bus daemon", &e))?;
+    let credentials = bus
+        .get_connection_credentials(BusName::from(sender.clone()))
+        .await
+        .map_err(|e| failed("reading the caller's credentials", &e))?;
+    let pid = credentials.process_id().ok_or_else(|| {
+        BluetoothError::Failed("the bus did not report the caller's process".to_owned())
+    })?;
     match shared.authorizer().authorize(pid) {
         Ok(Decision::Allowed) => Ok(()),
         Ok(Decision::Denied(reason)) => Err(BluetoothError::NotAuthorized(reason)),
-        Err(error) => Err(failed("asking whether the caller may change the adapter", &error)),
+        Err(error) => Err(failed(
+            "asking whether the caller may change the adapter",
+            &error,
+        )),
     }
 }
 
 fn reference(address: &str) -> Result<DeviceRef, BluetoothError> {
-    address.parse().map_err(|error| BluetoothError::InvalidArguments(format!("{address}: {error}")))
+    address
+        .parse()
+        .map_err(|error| BluetoothError::InvalidArguments(format!("{address}: {error}")))
 }
 
 /// `org.cupertino.Bluetooth1`.
@@ -192,7 +212,12 @@ pub struct Bluetooth(pub Arc<Shared>);
 
 impl Bluetooth {
     /// Authorises the caller, then runs the request.
-    async fn write(&self, header: &Header<'_>, connection: &Connection, request: Request) -> Result<(), BluetoothError> {
+    async fn write(
+        &self,
+        header: &Header<'_>,
+        connection: &Connection,
+        request: Request,
+    ) -> Result<(), BluetoothError> {
         authorize(&self.0, header, connection).await?;
         self.0.submit(request).await?;
         Ok(())
@@ -203,70 +228,141 @@ impl Bluetooth {
 impl Bluetooth {
     /// Starts looking for devices. Stops by itself after a while, and when `stop_discovery` is
     /// called.
-    async fn start_discovery(&self, #[zbus(header)] header: Header<'_>, #[zbus(connection)] connection: &Connection) -> Result<(), BluetoothError> {
-        self.write(&header, connection, Request::StartDiscovery).await
+    async fn start_discovery(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+    ) -> Result<(), BluetoothError> {
+        self.write(&header, connection, Request::StartDiscovery)
+            .await
     }
 
-    async fn stop_discovery(&self, #[zbus(header)] header: Header<'_>, #[zbus(connection)] connection: &Connection) -> Result<(), BluetoothError> {
-        self.write(&header, connection, Request::StopDiscovery).await
+    async fn stop_discovery(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+    ) -> Result<(), BluetoothError> {
+        self.write(&header, connection, Request::StopDiscovery)
+            .await
     }
 
     /// Pairs with a discovered device, asking the registered agent to confirm. Returns when the
     /// pairing is over. `address` is `AA:BB:CC:DD:EE:FF`, with `/bredr`, `/le-public` or
     /// `/le-random` added when the same address is known twice.
-    async fn pair(&self, #[zbus(header)] header: Header<'_>, #[zbus(connection)] connection: &Connection, address: &str) -> Result<(), BluetoothError> {
-        self.write(&header, connection, Request::Pair(reference(address)?)).await
+    async fn pair(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        address: &str,
+    ) -> Result<(), BluetoothError> {
+        self.write(&header, connection, Request::Pair(reference(address)?))
+            .await
     }
 
     /// Connects to a device and keeps the link up. It does not start any profile.
-    async fn connect(&self, #[zbus(header)] header: Header<'_>, #[zbus(connection)] connection: &Connection, address: &str) -> Result<(), BluetoothError> {
-        self.write(&header, connection, Request::Connect(reference(address)?)).await
+    async fn connect(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        address: &str,
+    ) -> Result<(), BluetoothError> {
+        self.write(&header, connection, Request::Connect(reference(address)?))
+            .await
     }
 
-    async fn disconnect(&self, #[zbus(header)] header: Header<'_>, #[zbus(connection)] connection: &Connection, address: &str) -> Result<(), BluetoothError> {
-        self.write(&header, connection, Request::Disconnect(reference(address)?)).await
+    async fn disconnect(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        address: &str,
+    ) -> Result<(), BluetoothError> {
+        self.write(
+            &header,
+            connection,
+            Request::Disconnect(reference(address)?),
+        )
+        .await
     }
 
     /// Unpairs a device and deletes its keys, or forgets a device that was only discovered.
-    async fn remove(&self, #[zbus(header)] header: Header<'_>, #[zbus(connection)] connection: &Connection, address: &str) -> Result<(), BluetoothError> {
-        self.write(&header, connection, Request::Remove(reference(address)?)).await
+    async fn remove(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        address: &str,
+    ) -> Result<(), BluetoothError> {
+        self.write(&header, connection, Request::Remove(reference(address)?))
+            .await
     }
 
     /// Registers the caller's object at `path` as the pairing agent. Another client's agent that
     /// is still on the bus is not replaced.
-    async fn register_agent(&self, #[zbus(header)] header: Header<'_>, #[zbus(connection)] connection: &Connection, path: ObjectPath<'_>) -> Result<(), BluetoothError> {
+    async fn register_agent(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        path: ObjectPath<'_>,
+    ) -> Result<(), BluetoothError> {
         authorize(&self.0, &header, connection).await?;
-        let sender = header.sender().ok_or_else(|| BluetoothError::Failed("the call has no sender".to_owned()))?.clone().into_owned();
-        let agent = Agent { sender: sender.clone(), path: path.into_owned() };
+        let sender = header
+            .sender()
+            .ok_or_else(|| BluetoothError::Failed("the call has no sender".to_owned()))?
+            .clone()
+            .into_owned();
+        let agent = Agent {
+            sender: sender.clone(),
+            path: path.into_owned(),
+        };
         // Whether the registered agent still has an owner is asked of the bus first: the lock on
         // the slot cannot be held across the call.
-        let bus = fdo::DBusProxy::new(connection).await.map_err(|e| BluetoothError::Failed(format!("connecting to the bus daemon: {e}")))?;
+        let bus = fdo::DBusProxy::new(connection)
+            .await
+            .map_err(|e| BluetoothError::Failed(format!("connecting to the bus daemon: {e}")))?;
         let current = self.0.agent();
         let alive = match &current {
-            Some(current) if current.sender != sender => bus.name_has_owner(BusName::from(current.sender.clone())).await.map_err(|e| BluetoothError::Failed(format!("asking the bus about the registered agent: {e}")))?,
+            Some(current) if current.sender != sender => bus
+                .name_has_owner(BusName::from(current.sender.clone()))
+                .await
+                .map_err(|e| {
+                    BluetoothError::Failed(format!(
+                        "asking the bus about the registered agent: {e}"
+                    ))
+                })?,
             _ => false,
         };
         let registered = self.0.register_agent(agent, |slot| match (slot, &current) {
             (None, None) => true,
-            (Some(slot), Some(seen)) => slot.sender == seen.sender && slot.path == seen.path && !alive,
+            (Some(slot), Some(seen)) => {
+                slot.sender == seen.sender && slot.path == seen.path && !alive
+            }
             // The slot changed while the bus was asked: do not guess.
             _ => false,
         });
         if registered {
             Ok(())
         } else {
-            Err(BluetoothError::AgentExists("another client's pairing agent is registered".to_owned()))
+            Err(BluetoothError::AgentExists(
+                "another client's pairing agent is registered".to_owned(),
+            ))
         }
     }
 
     /// Removes the caller's agent. Fails if the caller has none registered.
-    async fn unregister_agent(&self, #[zbus(header)] header: Header<'_>, #[zbus(connection)] connection: &Connection) -> Result<(), BluetoothError> {
+    async fn unregister_agent(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+    ) -> Result<(), BluetoothError> {
         authorize(&self.0, &header, connection).await?;
-        let sender = header.sender().ok_or_else(|| BluetoothError::Failed("the call has no sender".to_owned()))?;
+        let sender = header
+            .sender()
+            .ok_or_else(|| BluetoothError::Failed("the call has no sender".to_owned()))?;
         if self.0.unregister_agent(sender) {
             Ok(())
         } else {
-            Err(BluetoothError::InvalidArguments("the caller has no pairing agent registered".to_owned()))
+            Err(BluetoothError::InvalidArguments(
+                "the caller has no pairing agent registered".to_owned(),
+            ))
         }
     }
 
@@ -274,7 +370,10 @@ impl Bluetooth {
     pub async fn device_added(emitter: &SignalEmitter<'_>, device: DeviceView) -> zbus::Result<()>;
 
     #[zbus(signal)]
-    pub async fn device_changed(emitter: &SignalEmitter<'_>, device: DeviceView) -> zbus::Result<()>;
+    pub async fn device_changed(
+        emitter: &SignalEmitter<'_>,
+        device: DeviceView,
+    ) -> zbus::Result<()>;
 
     /// `id` is the device's `Id`.
     #[zbus(signal)]
@@ -293,10 +392,18 @@ impl Bluetooth {
     }
 
     #[zbus(property)]
-    async fn set_powered(&self, powered: bool, #[zbus(header)] header: Option<Header<'_>>, #[zbus(connection)] connection: &Connection) -> Result<(), BluetoothError> {
+    async fn set_powered(
+        &self,
+        powered: bool,
+        #[zbus(header)] header: Option<Header<'_>>,
+        #[zbus(connection)] connection: &Connection,
+    ) -> Result<(), BluetoothError> {
         // A setter has no header when the daemon itself sets the property, which it never does.
-        let header = header.ok_or_else(|| BluetoothError::Failed("the property was set without a call".to_owned()))?;
-        self.write(&header, connection, Request::SetPowered(powered)).await
+        let header = header.ok_or_else(|| {
+            BluetoothError::Failed("the property was set without a call".to_owned())
+        })?;
+        self.write(&header, connection, Request::SetPowered(powered))
+            .await
     }
 
     #[zbus(property)]

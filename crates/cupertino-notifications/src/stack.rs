@@ -32,7 +32,15 @@ pub struct GroupStack {
 
 impl Default for GroupStack {
     fn default() -> Self {
-        Self { width: 344.0, width_step: 20.0, brightness_step: 0.03, max_behind: 2, max_step: 3, peek: 8.0, bottom_padding: 6.0 }
+        Self {
+            width: 344.0,
+            width_step: 20.0,
+            brightness_step: 0.03,
+            max_behind: 2,
+            max_step: 3,
+            peek: 8.0,
+            bottom_padding: 6.0,
+        }
     }
 }
 
@@ -67,7 +75,12 @@ impl GroupStack {
                 let scale = self.scale(depth);
                 let (w, h) = (front.width() * scale, front.height() * scale);
                 let bottom = front.max_y() + self.peek * depth as f64;
-                StackCard { depth, scale, brightness: self.brightness(depth), rect: Rect::new(front.x() + (front.width() - w) / 2.0, bottom - h, w, h) }
+                StackCard {
+                    depth,
+                    scale,
+                    brightness: self.brightness(depth),
+                    rect: Rect::new(front.x() + (front.width() - w) / 2.0, bottom - h, w, h),
+                }
             })
             .collect()
     }
@@ -97,7 +110,14 @@ mod tests {
         let r = cards[0].rect;
         assert_eq!((r.x(), r.width(), r.max_y()), (10.0, 324.0, 94.0));
         assert!((r.height() - 81.0).abs() < 1e-9, "86 · 324/344");
-        assert_eq!((cards[1].rect.x(), cards[1].rect.width(), cards[1].rect.max_y()), (20.0, 304.0, 102.0));
+        assert_eq!(
+            (
+                cards[1].rect.x(),
+                cards[1].rect.width(),
+                cards[1].rect.max_y()
+            ),
+            (20.0, 304.0, 102.0)
+        );
         let brightness: Vec<f64> = cards.iter().map(|c| c.brightness).collect();
         assert_eq!(brightness, [-0.03, -0.06]);
     }

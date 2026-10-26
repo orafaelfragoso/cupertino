@@ -14,7 +14,9 @@ use smithay::reexports::wayland_protocols_wlr::output_management::v1::server::{
 };
 use smithay::reexports::wayland_server::backend::{ClientId, GlobalId};
 use smithay::reexports::wayland_server::protocol::wl_output;
-use smithay::reexports::wayland_server::{Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource, WEnum};
+use smithay::reexports::wayland_server::{
+    Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource, WEnum,
+};
 use smithay::utils::Transform;
 
 use super::{Head, HeadId, HeadMode, HeadState};
@@ -79,9 +81,21 @@ fn describe_mode(resource: &ZwlrOutputModeV1, mode: HeadMode, preferred: bool) {
     }
 }
 
-fn new_mode(dh: &DisplayHandle, client: &Client, head: &HeadObject, mode: HeadMode, preferred: bool) -> Option<ZwlrOutputModeV1> {
+fn new_mode(
+    dh: &DisplayHandle,
+    client: &Client,
+    head: &HeadObject,
+    mode: HeadMode,
+    preferred: bool,
+) -> Option<ZwlrOutputModeV1> {
     let version = head.resource.version().min(MODE_VERSION);
-    let resource = client.create_resource::<ZwlrOutputModeV1, (HeadId, HeadMode), Cupertino>(dh, version, (head.head, mode)).ok()?;
+    let resource = client
+        .create_resource::<ZwlrOutputModeV1, (HeadId, HeadMode), Cupertino>(
+            dh,
+            version,
+            (head.head, mode),
+        )
+        .ok()?;
     head.resource.mode(&resource);
     describe_mode(&resource, mode, preferred);
     Some(resource)
@@ -110,7 +124,9 @@ fn describe_state(object: &HeadObject, now: &HeadState, before: Option<&HeadStat
         object.resource.position(now.position.0, now.position.1);
     }
     if before.is_none_or(|b| b.transform != now.transform) {
-        object.resource.transform(wl_output::Transform::from(now.transform));
+        object
+            .resource
+            .transform(wl_output::Transform::from(now.transform));
     }
     if before.is_none_or(|b| b.scale != now.scale) {
         object.resource.scale(now.scale);
@@ -118,8 +134,15 @@ fn describe_state(object: &HeadObject, now: &HeadState, before: Option<&HeadStat
 }
 
 /// Introduce `head` to a manager with everything it has.
-fn announce(dh: &DisplayHandle, client: &Client, manager: &ZwlrOutputManagerV1, head: &Head) -> Option<HeadObject> {
-    let resource = client.create_resource::<ZwlrOutputHeadV1, HeadId, Cupertino>(dh, manager.version(), head.id).ok()?;
+fn announce(
+    dh: &DisplayHandle,
+    client: &Client,
+    manager: &ZwlrOutputManagerV1,
+    head: &Head,
+) -> Option<HeadObject> {
+    let resource = client
+        .create_resource::<ZwlrOutputHeadV1, HeadId, Cupertino>(dh, manager.version(), head.id)
+        .ok()?;
     manager.head(&resource);
     let info = &head.info;
     resource.name(info.connector.clone());
@@ -127,7 +150,11 @@ fn announce(dh: &DisplayHandle, client: &Client, manager: &ZwlrOutputManagerV1, 
     if info.physical_mm.0 > 0 && info.physical_mm.1 > 0 {
         resource.physical_size(info.physical_mm.0, info.physical_mm.1);
     }
-    let mut object = HeadObject { head: head.id, resource, modes: Vec::new() };
+    let mut object = HeadObject {
+        head: head.id,
+        resource,
+        modes: Vec::new(),
+    };
     for (i, mode) in info.modes.iter().enumerate() {
         if let Some(m) = new_mode(dh, client, &object, *mode, i == 0) {
             object.modes.push((*mode, m));
@@ -152,7 +179,9 @@ pub(crate) fn head_changed(state: &mut Cupertino, idx: usize) {
     let dh = state.display_handle.clone();
     let head = &state.displays.heads[idx];
     for manager in &mut state.displays.managers {
-        let Some(client) = manager.resource.client() else { continue };
+        let Some(client) = manager.resource.client() else {
+            continue;
+        };
         let Some(object) = manager.heads.iter_mut().find(|o| o.head == head.id) else {
             if let Some(object) = announce(&dh, &client, &manager.resource, head) {
                 manager.heads.push(object);
@@ -173,7 +202,11 @@ pub(crate) fn head_changed(state: &mut Cupertino, idx: usize) {
                 }
             }
         }
-        describe_state(object, &head.state, head.advertised.as_ref().map(|(s, _)| s));
+        describe_state(
+            object,
+            &head.state,
+            head.advertised.as_ref().map(|(s, _)| s),
+        );
     }
 }
 
@@ -201,19 +234,45 @@ pub(crate) fn done(state: &mut Cupertino) {
 }
 
 impl GlobalDispatch<ZwlrOutputManagerV1, ()> for Cupertino {
-    fn bind(state: &mut Self, dh: &DisplayHandle, client: &Client, resource: New<ZwlrOutputManagerV1>, _: &(), init: &mut DataInit<'_, Self>) {
+    fn bind(
+        state: &mut Self,
+        dh: &DisplayHandle,
+        client: &Client,
+        resource: New<ZwlrOutputManagerV1>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
         let resource = init.init(resource, ());
-        let heads = state.displays.heads.iter().filter_map(|h| announce(dh, client, &resource, h)).collect();
+        let heads = state
+            .displays
+            .heads
+            .iter()
+            .filter_map(|h| announce(dh, client, &resource, h))
+            .collect();
         resource.done(state.displays.serial);
         state.displays.managers.push(Manager { resource, heads });
     }
 }
 
 impl Dispatch<ZwlrOutputManagerV1, ()> for Cupertino {
-    fn request(state: &mut Self, _: &Client, resource: &ZwlrOutputManagerV1, request: zwlr_output_manager_v1::Request, _: &(), _: &DisplayHandle, init: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        resource: &ZwlrOutputManagerV1,
+        request: zwlr_output_manager_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
         match request {
             zwlr_output_manager_v1::Request::CreateConfiguration { id, serial } => {
-                init.init(id, ConfigurationData { serial, inner: Mutex::new(Configuration::default()) });
+                init.init(
+                    id,
+                    ConfigurationData {
+                        serial,
+                        inner: Mutex::new(Configuration::default()),
+                    },
+                );
             }
             zwlr_output_manager_v1::Request::Stop => {
                 resource.finished();
@@ -229,7 +288,15 @@ impl Dispatch<ZwlrOutputManagerV1, ()> for Cupertino {
 }
 
 impl Dispatch<ZwlrOutputHeadV1, HeadId> for Cupertino {
-    fn request(state: &mut Self, _: &Client, resource: &ZwlrOutputHeadV1, request: zwlr_output_head_v1::Request, _: &HeadId, _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        resource: &ZwlrOutputHeadV1,
+        request: zwlr_output_head_v1::Request,
+        _: &HeadId,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         if let zwlr_output_head_v1::Request::Release = request {
             forget_head(state, resource);
         }
@@ -247,13 +314,26 @@ fn forget_head(state: &mut Cupertino, resource: &ZwlrOutputHeadV1) {
 }
 
 impl Dispatch<ZwlrOutputModeV1, (HeadId, HeadMode)> for Cupertino {
-    fn request(state: &mut Self, _: &Client, resource: &ZwlrOutputModeV1, request: zwlr_output_mode_v1::Request, _: &(HeadId, HeadMode), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        resource: &ZwlrOutputModeV1,
+        request: zwlr_output_mode_v1::Request,
+        _: &(HeadId, HeadMode),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
         if let zwlr_output_mode_v1::Request::Release = request {
             forget_mode(state, resource);
         }
     }
 
-    fn destroyed(state: &mut Self, _: ClientId, resource: &ZwlrOutputModeV1, _: &(HeadId, HeadMode)) {
+    fn destroyed(
+        state: &mut Self,
+        _: ClientId,
+        resource: &ZwlrOutputModeV1,
+        _: &(HeadId, HeadMode),
+    ) {
         forget_mode(state, resource);
     }
 }
@@ -287,18 +367,32 @@ impl Dispatch<ZwlrOutputConfigurationV1, ConfigurationData> for Cupertino {
             _ => return,
         };
         if config.used {
-            resource.post_error(Error::AlreadyUsed, "the configuration was already applied or tested");
+            resource.post_error(
+                Error::AlreadyUsed,
+                "the configuration was already applied or tested",
+            );
             return;
         }
         if let Some((head, enable)) = head {
-            let id = *head.data::<HeadId>().expect("head objects carry their head");
+            let id = *head
+                .data::<HeadId>()
+                .expect("head objects carry their head");
             if config.heads.iter().any(|(h, _)| *h == id) {
-                resource.post_error(Error::AlreadyConfiguredHead, "the head is already in the configuration");
+                resource.post_error(
+                    Error::AlreadyConfiguredHead,
+                    "the head is already in the configuration",
+                );
                 return;
             }
             let pending = enable.map(|new| {
                 let pending = Arc::new(Mutex::new(PendingHead::default()));
-                init.init(new, ConfigurationHeadData { head: id, pending: pending.clone() });
+                init.init(
+                    new,
+                    ConfigurationHeadData {
+                        head: id,
+                        pending: pending.clone(),
+                    },
+                );
                 pending
             });
             config.heads.push((id, pending));
@@ -309,8 +403,16 @@ impl Dispatch<ZwlrOutputConfigurationV1, ConfigurationData> for Cupertino {
             resource.cancelled();
             return;
         }
-        if let Some(missing) = state.displays.heads.iter().find(|h| !config.heads.iter().any(|(id, _)| *id == h.id)) {
-            resource.post_error(Error::UnconfiguredHead, format!("{} is not in the configuration", missing.info.connector));
+        if let Some(missing) = state
+            .displays
+            .heads
+            .iter()
+            .find(|h| !config.heads.iter().any(|(id, _)| *id == h.id))
+        {
+            resource.post_error(
+                Error::UnconfiguredHead,
+                format!("{} is not in the configuration", missing.info.connector),
+            );
             return;
         }
         let mut wanted = Vec::with_capacity(config.heads.len());
@@ -372,18 +474,31 @@ impl Dispatch<ZwlrOutputConfigurationHeadV1, ConfigurationHeadData> for Cupertin
                 }
                 match mode.data::<(HeadId, HeadMode)>() {
                     Some((head, mode)) if *head == data.head => p.mode = Some(*mode),
-                    _ => resource.post_error(Error::InvalidMode, "the mode belongs to another head"),
+                    _ => {
+                        resource.post_error(Error::InvalidMode, "the mode belongs to another head")
+                    }
                 }
             }
-            Request::SetCustomMode { width, height, refresh } => {
+            Request::SetCustomMode {
+                width,
+                height,
+                refresh,
+            } => {
                 if already(p.mode.is_some()) {
                     return;
                 }
                 if width <= 0 || height <= 0 || refresh < 0 {
-                    resource.post_error(Error::InvalidCustomMode, format!("{width}x{height}@{refresh} is not a mode"));
+                    resource.post_error(
+                        Error::InvalidCustomMode,
+                        format!("{width}x{height}@{refresh} is not a mode"),
+                    );
                     return;
                 }
-                p.mode = Some(HeadMode { width, height, refresh_mhz: refresh });
+                p.mode = Some(HeadMode {
+                    width,
+                    height,
+                    refresh_mhz: refresh,
+                });
             }
             Request::SetPosition { x, y } => {
                 if !already(p.position.is_some()) {
@@ -396,7 +511,10 @@ impl Dispatch<ZwlrOutputConfigurationHeadV1, ConfigurationHeadData> for Cupertin
                 }
                 match transform {
                     WEnum::Value(t) => p.transform = Some(Transform::from(t)),
-                    WEnum::Unknown(v) => resource.post_error(Error::InvalidTransform, format!("transform {v} is outside the enum")),
+                    WEnum::Unknown(v) => resource.post_error(
+                        Error::InvalidTransform,
+                        format!("transform {v} is outside the enum"),
+                    ),
                 }
             }
             Request::SetScale { scale } => {
@@ -404,7 +522,10 @@ impl Dispatch<ZwlrOutputConfigurationHeadV1, ConfigurationHeadData> for Cupertin
                     return;
                 }
                 if !(scale.is_finite() && scale > 0.0) {
-                    resource.post_error(Error::InvalidScale, format!("scale {scale} is not above zero"));
+                    resource.post_error(
+                        Error::InvalidScale,
+                        format!("scale {scale} is not above zero"),
+                    );
                     return;
                 }
                 p.scale = Some(scale);
@@ -415,7 +536,10 @@ impl Dispatch<ZwlrOutputConfigurationHeadV1, ConfigurationHeadData> for Cupertin
                 }
                 match state {
                     WEnum::Value(s) => p.adaptive_sync = Some(s == AdaptiveSyncState::Enabled),
-                    WEnum::Unknown(v) => resource.post_error(Error::InvalidAdaptiveSyncState, format!("adaptive sync state {v} is outside the enum")),
+                    WEnum::Unknown(v) => resource.post_error(
+                        Error::InvalidAdaptiveSyncState,
+                        format!("adaptive sync state {v} is outside the enum"),
+                    ),
                 }
             }
             _ => {}

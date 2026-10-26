@@ -39,16 +39,33 @@ enum Refusal {
 /// Maps the caller's bus name to its process through `GetConnectionCredentials` and asks the
 /// authorizer. The pid comes from the bus daemon, not from the message, so the caller cannot
 /// choose it.
-async fn authorize(shared: &Shared, header: Option<&Header<'_>>, connection: &Connection) -> Result<(), Refusal> {
-    let failed = |what: &str, error: &dyn std::fmt::Display| Refusal::Failed(format!("{what}: {error}"));
-    let sender = header.and_then(Header::sender).ok_or_else(|| Refusal::Failed("the call has no sender".to_owned()))?;
-    let bus = fdo::DBusProxy::new(connection).await.map_err(|e| failed("connecting to the bus daemon", &e))?;
-    let credentials = bus.get_connection_credentials(BusName::from(sender.clone())).await.map_err(|e| failed("reading the caller's credentials", &e))?;
-    let pid = credentials.process_id().ok_or_else(|| Refusal::Failed("the bus did not report the caller's process".to_owned()))?;
+async fn authorize(
+    shared: &Shared,
+    header: Option<&Header<'_>>,
+    connection: &Connection,
+) -> Result<(), Refusal> {
+    let failed =
+        |what: &str, error: &dyn std::fmt::Display| Refusal::Failed(format!("{what}: {error}"));
+    let sender = header
+        .and_then(Header::sender)
+        .ok_or_else(|| Refusal::Failed("the call has no sender".to_owned()))?;
+    let bus = fdo::DBusProxy::new(connection)
+        .await
+        .map_err(|e| failed("connecting to the bus daemon", &e))?;
+    let credentials = bus
+        .get_connection_credentials(BusName::from(sender.clone()))
+        .await
+        .map_err(|e| failed("reading the caller's credentials", &e))?;
+    let pid = credentials
+        .process_id()
+        .ok_or_else(|| Refusal::Failed("the bus did not report the caller's process".to_owned()))?;
     match shared.authorizer().authorize(pid) {
         Ok(Decision::Allowed) => Ok(()),
         Ok(Decision::Denied(reason)) => Err(Refusal::Denied(reason)),
-        Err(error) => Err(failed("asking whether the caller may change the network settings", &error)),
+        Err(error) => Err(failed(
+            "asking whether the caller may change the network settings",
+            &error,
+        )),
     }
 }
 
@@ -114,7 +131,11 @@ pub struct NetworkObject(pub Arc<Shared>);
 #[zbus::interface(name = "org.cupertino.Network1")]
 impl NetworkObject {
     /// Asks for a scan. The list changes (`NetworksChanged`) when it ends.
-    async fn scan(&self, #[zbus(header)] header: Header<'_>, #[zbus(connection)] connection: &Connection) -> Result<(), NetworkError> {
+    async fn scan(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+    ) -> Result<(), NetworkError> {
         authorize(&self.0, Some(&header), connection).await?;
         Ok(self.0.submit(Command::Scan).await?)
     }
@@ -125,20 +146,38 @@ impl NetworkObject {
             .snapshot()
             .networks
             .iter()
-            .map(|network| (network.ssid.to_text(), network.signal_dbm.unwrap_or(i32::MIN), security_name(network.security).to_owned(), network.known, network.connected))
+            .map(|network| {
+                (
+                    network.ssid.to_text(),
+                    network.signal_dbm.unwrap_or(i32::MIN),
+                    security_name(network.security).to_owned(),
+                    network.known,
+                    network.connected,
+                )
+            })
             .collect()
     }
 
     /// Connects to a network of the last scan. `passphrase` may be empty for an open network or
     /// one with saved credentials. Returns when the attempt has begun; the outcome is the device's
     /// state, and `ConnectionFailed` when it fails.
-    async fn connect(&self, #[zbus(header)] header: Header<'_>, #[zbus(connection)] connection: &Connection, ssid: String, passphrase: String) -> Result<(), NetworkError> {
+    async fn connect(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+        ssid: String,
+        passphrase: String,
+    ) -> Result<(), NetworkError> {
         authorize(&self.0, Some(&header), connection).await?;
         let passphrase = (!passphrase.is_empty()).then_some(passphrase);
         Ok(self.0.submit(Command::Connect { ssid, passphrase }).await?)
     }
 
-    async fn disconnect(&self, #[zbus(header)] header: Header<'_>, #[zbus(connection)] connection: &Connection) -> Result<(), NetworkError> {
+    async fn disconnect(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &Connection,
+    ) -> Result<(), NetworkError> {
         authorize(&self.0, Some(&header), connection).await?;
         Ok(self.0.submit(Command::Disconnect).await?)
     }
@@ -151,7 +190,11 @@ impl NetworkObject {
     /// `wrong-passphrase`, `network-not-found`, `connection-failed`, `connection-lost`,
     /// `no-address`.
     #[zbus(signal)]
-    pub async fn connection_failed(emitter: &SignalEmitter<'_>, device: &str, reason: &str) -> zbus::Result<()>;
+    pub async fn connection_failed(
+        emitter: &SignalEmitter<'_>,
+        device: &str,
+        reason: &str,
+    ) -> zbus::Result<()>;
 
     /// Whether Wi-Fi is switched on (the software switch of the radio).
     #[zbus(property)]
@@ -160,7 +203,12 @@ impl NetworkObject {
     }
 
     #[zbus(property)]
-    async fn set_wireless_enabled(&self, value: bool, #[zbus(header)] header: Option<Header<'_>>, #[zbus(connection)] connection: &Connection) -> zbus::Result<()> {
+    async fn set_wireless_enabled(
+        &self,
+        value: bool,
+        #[zbus(header)] header: Option<Header<'_>>,
+        #[zbus(connection)] connection: &Connection,
+    ) -> zbus::Result<()> {
         set_wireless(&self.0, value, header, connection).await
     }
 
@@ -177,8 +225,14 @@ impl NetworkObject {
                     device.kind.name().to_owned(),
                     device.state.name().to_owned(),
                     device.ssid.clone().unwrap_or_default(),
-                    device.failure.map(|failure| failure.name().to_owned()).unwrap_or_default(),
-                    device.address.map(|(address, prefix)| format!("{address}/{prefix}")).unwrap_or_default(),
+                    device
+                        .failure
+                        .map(|failure| failure.name().to_owned())
+                        .unwrap_or_default(),
+                    device
+                        .address
+                        .map(|(address, prefix)| format!("{address}/{prefix}"))
+                        .unwrap_or_default(),
                 )
             })
             .collect()
@@ -207,12 +261,22 @@ fn security_name(security: Security) -> &'static str {
 }
 
 /// The write behind both `WirelessEnabled` properties.
-async fn set_wireless(shared: &Shared, value: bool, header: Option<Header<'_>>, connection: &Connection) -> zbus::Result<()> {
-    authorize(shared, header.as_ref(), connection).await.map_err(|refusal| match refusal {
-        Refusal::Denied(reason) => fdo::Error::AccessDenied(reason),
-        Refusal::Failed(reason) => fdo::Error::Failed(reason),
-    })?;
-    shared.submit(Command::SetWirelessEnabled(value)).await.map_err(|error| fdo::Error::Failed(error.to_string()))?;
+async fn set_wireless(
+    shared: &Shared,
+    value: bool,
+    header: Option<Header<'_>>,
+    connection: &Connection,
+) -> zbus::Result<()> {
+    authorize(shared, header.as_ref(), connection)
+        .await
+        .map_err(|refusal| match refusal {
+            Refusal::Denied(reason) => fdo::Error::AccessDenied(reason),
+            Refusal::Failed(reason) => fdo::Error::Failed(reason),
+        })?;
+    shared
+        .submit(Command::SetWirelessEnabled(value))
+        .await
+        .map_err(|error| fdo::Error::Failed(error.to_string()))?;
     Ok(())
 }
 
@@ -250,7 +314,12 @@ impl Manager {
     }
 
     #[zbus(property)]
-    async fn set_wireless_enabled(&self, value: bool, #[zbus(header)] header: Option<Header<'_>>, #[zbus(connection)] connection: &Connection) -> zbus::Result<()> {
+    async fn set_wireless_enabled(
+        &self,
+        value: bool,
+        #[zbus(header)] header: Option<Header<'_>>,
+        #[zbus(connection)] connection: &Connection,
+    ) -> zbus::Result<()> {
         set_wireless(&self.0, value, header, connection).await
     }
 

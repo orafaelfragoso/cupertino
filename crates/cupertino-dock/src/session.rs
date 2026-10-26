@@ -54,7 +54,12 @@ pub struct Session {
 
 impl Session {
     pub fn new(dock: Dock, desktop: DesktopIndex) -> Self {
-        Self { dock, desktop, windows: BTreeMap::new(), live: false }
+        Self {
+            dock,
+            desktop,
+            windows: BTreeMap::new(),
+            live: false,
+        }
     }
 
     /// The windows the server listed when the dock started are in: from now on a window of an
@@ -80,7 +85,9 @@ impl Session {
                     return candidate.to_string();
                 }
             }
-            let aliased = self.dock.tiles().into_iter().find(|t| t.kind == TileKind::App && self.desktop.find(&t.key).is_some_and(|x| x.id == e.id));
+            let aliased = self.dock.tiles().into_iter().find(|t| {
+                t.kind == TileKind::App && self.desktop.find(&t.key).is_some_and(|x| x.id == e.id)
+            });
             if let Some(t) = aliased {
                 return t.key.clone();
             }
@@ -101,9 +108,22 @@ impl Session {
                 self.dock.app_started(&key, now);
             }
         }
-        let was_minimized = self.windows.insert(id, Window { app_id: app_id.to_string(), key: key.clone(), title: title.to_string(), minimized }).is_some_and(|w| w.minimized);
+        let was_minimized = self
+            .windows
+            .insert(
+                id,
+                Window {
+                    app_id: app_id.to_string(),
+                    key: key.clone(),
+                    title: title.to_string(),
+                    minimized,
+                },
+            )
+            .is_some_and(|w| w.minimized);
         match (was_minimized, minimized) {
-            (false, true) => self.dock.window_minimized(WindowId(u64::from(id)), &key, title, now),
+            (false, true) => self
+                .dock
+                .window_minimized(WindowId(u64::from(id)), &key, title, now),
             (true, false) => self.dock.window_restored(WindowId(u64::from(id)), now),
             _ => {}
         }
@@ -111,7 +131,9 @@ impl Session {
 
     /// A window went away; the application leaves the running state with its last window.
     pub fn window_closed(&mut self, id: u32, now: f64) {
-        let Some(window) = self.windows.remove(&id) else { return };
+        let Some(window) = self.windows.remove(&id) else {
+            return;
+        };
         if window.minimized {
             self.dock.window_restored(WindowId(u64::from(id)), now);
         }
@@ -128,7 +150,10 @@ impl Session {
     /// The application id of the windows an application tile stands for; `None` while none runs.
     pub fn running_app_id(&self, id: TileId) -> Option<&str> {
         let tile = self.dock.tile(id)?;
-        self.windows.values().find(|w| w.key == tile.key).map(|w| w.app_id.as_str())
+        self.windows
+            .values()
+            .find(|w| w.key == tile.key)
+            .map(|w| w.app_id.as_str())
     }
 
     /// The server started a program of this application: its tile bounces until a window appears.
@@ -148,11 +173,17 @@ impl Session {
     pub fn activation(&self, id: TileId) -> Option<Activation> {
         let tile = self.dock.tile(id)?;
         match tile.kind {
-            TileKind::MinimizedWindow => tile.window.map(|w| Activation::RestoreWindow(u32::try_from(w.0).expect("window ids come from the server as u32"))),
-            TileKind::App | TileKind::Recent => Some(match self.windows.values().find(|w| w.key == tile.key) {
-                Some(w) => Activation::ActivateApp(w.app_id.clone()),
-                None => Activation::Launch(tile.key.clone()),
+            TileKind::MinimizedWindow => tile.window.map(|w| {
+                Activation::RestoreWindow(
+                    u32::try_from(w.0).expect("window ids come from the server as u32"),
+                )
             }),
+            TileKind::App | TileKind::Recent => {
+                Some(match self.windows.values().find(|w| w.key == tile.key) {
+                    Some(w) => Activation::ActivateApp(w.app_id.clone()),
+                    None => Activation::Launch(tile.key.clone()),
+                })
+            }
             TileKind::Trash => Some(Activation::OpenTrash),
             TileKind::Separator => None,
         }
@@ -162,15 +193,23 @@ impl Session {
     /// the key itself as a command when there is no entry.
     pub fn launch(&self, key: &str) -> Launch {
         match self.desktop.find(key) {
-            Some(e) => Launch { argv: exec_command(&e.exec), terminal: e.terminal },
-            None => Launch { argv: vec![key.to_string()], terminal: false },
+            Some(e) => Launch {
+                argv: exec_command(&e.exec),
+                terminal: e.terminal,
+            },
+            None => Launch {
+                argv: vec![key.to_string()],
+                terminal: false,
+            },
         }
     }
 
     /// The command that opens `target` (a folder or `trash:///`) in the session's file manager
     /// ([`FILE_MANAGER`]); `None` when it is not installed.
     pub fn file_manager_command(&self, target: &str) -> Option<Vec<String>> {
-        self.desktop.find(FILE_MANAGER).map(|e| exec_command_with(&e.exec, target))
+        self.desktop
+            .find(FILE_MANAGER)
+            .map(|e| exec_command_with(&e.exec, target))
     }
 }
 
@@ -183,13 +222,37 @@ mod tests {
 
     #[test]
     fn the_trash_and_folders_open_in_the_session_file_manager_when_installed() {
-        let entry = |id: &str, exec: &str| parse_entry(id, Path::new("x"), &format!("[Desktop Entry]\nName={id}\nExec={exec}\n")).unwrap();
-        let host = DesktopIndex { entries: vec![entry("org.gnome.Nautilus", "nautilus --new-window %U")] };
-        assert_eq!(Session::new(Dock::new(DockConfig::default()), host.clone()).file_manager_command("trash:///"), None);
+        let entry = |id: &str, exec: &str| {
+            parse_entry(
+                id,
+                Path::new("x"),
+                &format!("[Desktop Entry]\nName={id}\nExec={exec}\n"),
+            )
+            .unwrap()
+        };
+        let host = DesktopIndex {
+            entries: vec![entry("org.gnome.Nautilus", "nautilus --new-window %U")],
+        };
+        assert_eq!(
+            Session::new(Dock::new(DockConfig::default()), host.clone())
+                .file_manager_command("trash:///"),
+            None
+        );
         let mut session_apps = host;
-        session_apps.entries.push(entry("cupertino-files", "cupertino-files %U"));
+        session_apps
+            .entries
+            .push(entry("cupertino-files", "cupertino-files %U"));
         let session = Session::new(Dock::new(DockConfig::default()), session_apps);
-        assert_eq!(session.file_manager_command("trash:///"), Some(vec!["cupertino-files".to_string(), "trash:///".to_string()]));
-        assert_eq!(session.file_manager_command("/usr/share/applications"), Some(vec!["cupertino-files".to_string(), "/usr/share/applications".to_string()]));
+        assert_eq!(
+            session.file_manager_command("trash:///"),
+            Some(vec!["cupertino-files".to_string(), "trash:///".to_string()])
+        );
+        assert_eq!(
+            session.file_manager_command("/usr/share/applications"),
+            Some(vec![
+                "cupertino-files".to_string(),
+                "/usr/share/applications".to_string()
+            ])
+        );
     }
 }

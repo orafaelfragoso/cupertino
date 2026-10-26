@@ -15,10 +15,20 @@ struct PrivateBus {
 
 impl PrivateBus {
     fn start() -> Option<PrivateBus> {
-        let out = Command::new("dbus-daemon").args(["--session", "--print-address=1", "--print-pid=1", "--fork"]).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
-        let text = String::from_utf8(out.stdout).ok().filter(|_| out.status.success())?;
+        let out = Command::new("dbus-daemon")
+            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        let text = String::from_utf8(out.stdout)
+            .ok()
+            .filter(|_| out.status.success())?;
         let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-        Some(PrivateBus { address: lines.next()?.to_string(), pid: lines.next()?.to_string() })
+        Some(PrivateBus {
+            address: lines.next()?.to_string(),
+            pid: lines.next()?.to_string(),
+        })
     }
 
     fn builder(&self) -> connection::Builder<'static> {
@@ -28,7 +38,10 @@ impl PrivateBus {
 
 impl Drop for PrivateBus {
     fn drop(&mut self) {
-        Command::new("kill").arg(&self.pid).status().expect("kill the private bus");
+        Command::new("kill")
+            .arg(&self.pid)
+            .status()
+            .expect("kill the private bus");
     }
 }
 
@@ -39,14 +52,28 @@ fn toggle_reaches_the_launcher_and_a_second_launcher_cannot_take_the_name() {
         return;
     };
     let (toggled_tx, toggled_rx) = mpsc::channel();
-    let _launcher = serve(bus.builder(), move || toggled_tx.send(()).unwrap()).expect("claims the name");
+    let _launcher =
+        serve(bus.builder(), move || toggled_tx.send(()).unwrap()).expect("claims the name");
 
     // what the server does: call `Toggle` on the well-known name
     let caller: Connection = block_on(bus.builder().build()).expect("connect");
-    block_on(caller.call_method(Some(BUS_NAME), OBJECT_PATH, Some("org.cupertino.Launcher1"), "Toggle", &())).expect("Toggle");
-    toggled_rx.recv_timeout(Duration::from_secs(5)).expect("the toggle callback ran");
+    block_on(caller.call_method(
+        Some(BUS_NAME),
+        OBJECT_PATH,
+        Some("org.cupertino.Launcher1"),
+        "Toggle",
+        &(),
+    ))
+    .expect("Toggle");
+    toggled_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the toggle callback ran");
     assert_eq!(toggled_rx.try_recv(), Err(mpsc::TryRecvError::Empty));
 
     let second = serve(bus.builder(), || {});
-    assert!(matches!(second, Err(zbus::Error::NameTaken)), "{:?}", second.err());
+    assert!(
+        matches!(second, Err(zbus::Error::NameTaken)),
+        "{:?}",
+        second.err()
+    );
 }

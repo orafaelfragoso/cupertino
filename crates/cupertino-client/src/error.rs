@@ -13,7 +13,10 @@ pub enum ClientError {
     /// A required global is not advertised by the server.
     MissingGlobal(&'static str),
     /// A global is advertised in a version below what the toolkit needs.
-    GlobalVersion { interface: &'static str, minimum: u32 },
+    GlobalVersion {
+        interface: &'static str,
+        minimum: u32,
+    },
     /// The connection failed or the server raised a protocol error.
     Dispatch(DispatchError),
     /// Reading from or writing to the connection failed.
@@ -65,8 +68,13 @@ impl fmt::Display for ClientError {
         match self {
             Self::Connect(e) => write!(f, "cannot connect to the display server: {e}"),
             Self::Registry(e) => write!(f, "cannot read the registry: {e}"),
-            Self::MissingGlobal(name) => write!(f, "the server does not advertise the required global {name}"),
-            Self::GlobalVersion { interface, minimum } => write!(f, "the server offers {interface} below version {minimum}"),
+            Self::MissingGlobal(name) => write!(
+                f,
+                "the server does not advertise the required global {name}"
+            ),
+            Self::GlobalVersion { interface, minimum } => {
+                write!(f, "the server offers {interface} below version {minimum}")
+            }
             Self::Dispatch(e) => write!(f, "connection error: {e}"),
             Self::Wayland(e) => write!(f, "connection error: {e}"),
             Self::Shm(e) => write!(f, "shared memory: {e}"),
@@ -80,13 +88,23 @@ impl fmt::Display for ClientError {
             Self::NotToplevel => write!(f, "the surface is not an application window"),
             Self::HasPopups => write!(f, "the surface still has popups"),
             Self::NotConfigured => write!(f, "the surface has not been configured yet"),
-            Self::BufferSize { width, height } => write!(f, "no shm buffer for a {width}x{height} surface"),
+            Self::BufferSize { width, height } => {
+                write!(f, "no shm buffer for a {width}x{height} surface")
+            }
             Self::NoFreeBuffer => write!(f, "both buffers are still in use by the server"),
-            Self::NoInputSerial => write!(f, "no input event yet to derive an activation token from"),
-            Self::InvalidShape => write!(f, "backdrop shape has a negative size or radius or a non-finite value"),
+            Self::NoInputSerial => {
+                write!(f, "no input event yet to derive an activation token from")
+            }
+            Self::InvalidShape => write!(
+                f,
+                "backdrop shape has a negative size or radius or a non-finite value"
+            ),
             Self::InvalidAlpha => write!(f, "backdrop alpha is outside 0 to 1"),
             Self::SessionLockActive => write!(f, "a session lock already exists"),
-            Self::NoSessionLock => write!(f, "no session lock is requested or it was finished by the server"),
+            Self::NoSessionLock => write!(
+                f,
+                "no session lock is requested or it was finished by the server"
+            ),
             Self::NotLocked => write!(f, "the session is not locked"),
             Self::InvalidTimeout => write!(f, "idle timeout does not fit in milliseconds"),
         }

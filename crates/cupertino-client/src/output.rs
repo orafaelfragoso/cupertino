@@ -58,7 +58,12 @@ impl GeometryBuilder {
     /// The group ended. Returns the geometry when it is complete and different from the last one.
     pub(crate) fn done(&mut self) -> Option<OutputGeometry> {
         let ((x, y), (width, height)) = self.position.zip(self.size)?;
-        let geometry = OutputGeometry { x, y, width, height };
+        let geometry = OutputGeometry {
+            x,
+            y,
+            width,
+            height,
+        };
         (self.committed.replace(geometry) != Some(geometry)).then_some(geometry)
     }
 
@@ -77,7 +82,15 @@ mod tests {
         b.position(1920, 0);
         assert_eq!(b.done(), None);
         assert!(b.size(1280, 800));
-        assert_eq!(b.done(), Some(OutputGeometry { x: 1920, y: 0, width: 1280, height: 800 }));
+        assert_eq!(
+            b.done(),
+            Some(OutputGeometry {
+                x: 1920,
+                y: 0,
+                width: 1280,
+                height: 800
+            })
+        );
     }
 
     #[test]
@@ -88,8 +101,24 @@ mod tests {
         b.done();
         assert_eq!(b.done(), None);
         b.size(1920, 1080);
-        assert_eq!(b.done(), Some(OutputGeometry { x: 0, y: 0, width: 1920, height: 1080 }));
-        assert_eq!(b.geometry(), Some(OutputGeometry { x: 0, y: 0, width: 1920, height: 1080 }));
+        assert_eq!(
+            b.done(),
+            Some(OutputGeometry {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080
+            })
+        );
+        assert_eq!(
+            b.geometry(),
+            Some(OutputGeometry {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080
+            })
+        );
     }
 
     #[test]

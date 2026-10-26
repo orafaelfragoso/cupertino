@@ -4,7 +4,9 @@ use std::num::NonZeroU32;
 use std::os::fd::BorrowedFd;
 
 use crate::bitset::BitSet;
-use crate::codes::{ABS_MAX, EV_ABS, EV_KEY, EV_MAX, EV_REL, EV_SW, INPUT_PROP_MAX, KEY_MAX, REL_MAX, SW_MAX};
+use crate::codes::{
+    ABS_MAX, EV_ABS, EV_KEY, EV_MAX, EV_REL, EV_SW, INPUT_PROP_MAX, KEY_MAX, REL_MAX, SW_MAX,
+};
 use crate::error::Error;
 use crate::ioctl;
 
@@ -34,7 +36,10 @@ impl Resolution {
     /// Parses the raw `input_absinfo.resolution`. A non-positive value is [`Resolution::Unknown`]: some drivers
     /// report a negative resolution, and the kernel and libevdev accept any value, so it must not fail the device.
     pub fn from_raw(raw: i32) -> Self {
-        u32::try_from(raw).ok().and_then(NonZeroU32::new).map_or(Self::Unknown, Self::UnitsPerMm)
+        u32::try_from(raw)
+            .ok()
+            .and_then(NonZeroU32::new)
+            .map_or(Self::Unknown, Self::UnitsPerMm)
     }
 }
 
@@ -112,7 +117,12 @@ impl DeviceInfo {
         let abs_codes = bits(EV_ABS, ABS_MAX)?;
         let abs_axes = abs_codes
             .iter()
-            .map(|code| Ok(AbsAxis { code, info: ioctl::abs_info(fd, code)? }))
+            .map(|code| {
+                Ok(AbsAxis {
+                    code,
+                    info: ioctl::abs_info(fd, code)?,
+                })
+            })
             .collect::<Result<Vec<_>, Error>>()?;
         Ok(Self {
             name: ioctl::name(fd)?,
@@ -128,7 +138,10 @@ impl DeviceInfo {
 
     /// The geometry of absolute axis `code`, if the device has it.
     pub fn abs(&self, code: u16) -> Option<&AbsInfo> {
-        self.abs_axes.iter().find(|axis| axis.code == code).map(|axis| &axis.info)
+        self.abs_axes
+            .iter()
+            .find(|axis| axis.code == code)
+            .map(|axis| &axis.info)
     }
 
     /// Whether the device declares input property `property` (`INPUT_PROP_*`).
@@ -146,7 +159,10 @@ mod tests {
         assert_eq!(Resolution::from_raw(0), Resolution::Unknown);
         assert_eq!(Resolution::from_raw(-1), Resolution::Unknown);
         assert_eq!(Resolution::from_raw(i32::MIN), Resolution::Unknown);
-        assert_eq!(Resolution::from_raw(40), Resolution::UnitsPerMm(NonZeroU32::new(40).unwrap()));
+        assert_eq!(
+            Resolution::from_raw(40),
+            Resolution::UnitsPerMm(NonZeroU32::new(40).unwrap())
+        );
         let info = |raw| AbsInfo {
             value: 0,
             min: 0,

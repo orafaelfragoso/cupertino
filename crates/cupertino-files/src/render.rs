@@ -3,21 +3,21 @@
 //! one, and with none at all to a placeholder.
 
 use crate::entry::{Entry, Kind};
-use cupertino_icons::document::{badge_rect, Badge, FileIcons};
-use cupertino_icons::SystemIcons;
 use crate::geom::{Rect, Size};
 use crate::group::Group;
 use crate::layout::icon::{self, FontMetrics, IconParams};
 use crate::layout::list::{self, ListParams, RowSpec};
 use crate::metrics::{icon_view as im, list_view as lm, selection as sel};
 use crate::mime;
-use crate::tags::TagColor;
 use crate::settings::{ColumnId, IconViewSettings, ListViewSettings};
 use crate::sort::SortSpec;
-use cupertino_decorations::palette::{Palette as DecorationPalette, Rgba};
-use cupertino_decorations::TitlebarStyle;
+use crate::tags::TagColor;
 use cupertino_assets::{AssetError, Assets, FontRole};
+use cupertino_decorations::palette::{Palette as DecorationPalette, Rgba};
 use cupertino_decorations::text::TextRenderer;
+use cupertino_decorations::TitlebarStyle;
+use cupertino_icons::document::{badge_rect, Badge, FileIcons};
+use cupertino_icons::SystemIcons;
 use cupertino_theme::{Appearance, SemanticColor, Theme};
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect as SkRect, Stroke, Transform};
 
@@ -53,13 +53,32 @@ fn c8(r: u8, g: u8, b: u8) -> Rgba {
 /// The system colours of the tag colours when the specification files are missing, in the order of [`TagColor::ALL`]:
 /// gray, green, purple, blue, yellow, red, orange. approximate (the design tokens give the real ones, which
 /// [`Palette::from_theme`] reads).
-const TAG_COLORS_LIGHT: [Rgba; 7] = [[0.557, 0.557, 0.576, 1.0], [0.204, 0.78, 0.349, 1.0], [0.686, 0.322, 0.871, 1.0], [0.0, 0.478, 1.0, 1.0], [1.0, 0.8, 0.0, 1.0], [1.0, 0.231, 0.188, 1.0], [1.0, 0.584, 0.0, 1.0]];
-const TAG_COLORS_DARK: [Rgba; 7] = [[0.596, 0.596, 0.616, 1.0], [0.188, 0.82, 0.345, 1.0], [0.749, 0.353, 0.949, 1.0], [0.039, 0.518, 1.0, 1.0], [1.0, 0.839, 0.039, 1.0], [1.0, 0.271, 0.227, 1.0], [1.0, 0.624, 0.039, 1.0]];
+const TAG_COLORS_LIGHT: [Rgba; 7] = [
+    [0.557, 0.557, 0.576, 1.0],
+    [0.204, 0.78, 0.349, 1.0],
+    [0.686, 0.322, 0.871, 1.0],
+    [0.0, 0.478, 1.0, 1.0],
+    [1.0, 0.8, 0.0, 1.0],
+    [1.0, 0.231, 0.188, 1.0],
+    [1.0, 0.584, 0.0, 1.0],
+];
+const TAG_COLORS_DARK: [Rgba; 7] = [
+    [0.596, 0.596, 0.616, 1.0],
+    [0.188, 0.82, 0.345, 1.0],
+    [0.749, 0.353, 0.949, 1.0],
+    [0.039, 0.518, 1.0, 1.0],
+    [1.0, 0.839, 0.039, 1.0],
+    [1.0, 0.271, 0.227, 1.0],
+    [1.0, 0.624, 0.039, 1.0],
+];
 
 impl Palette {
     /// The colour of tag colour `color`.
     pub fn tag_color(&self, color: TagColor) -> Rgba {
-        self.tag_colors[TagColor::ALL.iter().position(|c| *c == color).expect("every tag colour is in ALL")]
+        self.tag_colors[TagColor::ALL
+            .iter()
+            .position(|c| *c == color)
+            .expect("every tag colour is in ALL")]
     }
 
     /// Colours used when the specification files are not available (the same numbers as the
@@ -118,7 +137,10 @@ impl Palette {
         p.separator = sem(SemanticColor::Grid).unwrap_or(p.separator);
         p.accent = sem(SemanticColor::SystemBlue).unwrap_or(p.accent);
         for (slot, color) in p.tag_colors.iter_mut().zip(TagColor::ALL) {
-            *slot = theme.tokens.color(appearance, color.system_color_name()).map_or(*slot, |c| c.to_array());
+            *slot = theme
+                .tokens
+                .color(appearance, color.system_color_name())
+                .map_or(*slot, |c| c.to_array());
         }
         p.tertiary_label = sem(SemanticColor::TertiaryLabel).unwrap_or(p.tertiary_label);
         p.quaternary_label = sem(SemanticColor::QuaternaryLabel).unwrap_or(p.quaternary_label);
@@ -134,7 +156,12 @@ pub(crate) fn paint(c: Rgba) -> Paint<'static> {
 }
 
 fn rounded(r: &Rect, radius: f64, s: f32) -> Option<tiny_skia::Path> {
-    let (x, y, w, h) = (r.x as f32 * s, r.y as f32 * s, r.w as f32 * s, r.h as f32 * s);
+    let (x, y, w, h) = (
+        r.x as f32 * s,
+        r.y as f32 * s,
+        r.w as f32 * s,
+        r.h as f32 * s,
+    );
     let rad = (radius as f32 * s).min(w / 2.0).min(h / 2.0);
     let mut pb = PathBuilder::new();
     pb.move_to(x + rad, y);
@@ -152,7 +179,13 @@ fn rounded(r: &Rect, radius: f64, s: f32) -> Option<tiny_skia::Path> {
 
 pub(crate) fn fill_rounded(pm: &mut Pixmap, r: &Rect, radius: f64, s: f32, c: Rgba) {
     if let Some(p) = rounded(r, radius, s) {
-        pm.fill_path(&p, &paint(c), FillRule::Winding, Transform::identity(), None);
+        pm.fill_path(
+            &p,
+            &paint(c),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 }
 
@@ -165,25 +198,52 @@ pub(crate) fn paint_icon_bubble(pm: &mut Pixmap, icon: &Rect, scale: f32, pal: &
     fill_rounded(pm, &bubble, pad, scale, pal.quaternary_label);
     let border = pad.trunc().min(sel::BUBBLE_BORDER_MAX);
     if border >= 1.0 {
-        stroke_rounded(pm, &bubble.inset(border / 2.0, border / 2.0), (pad - border / 2.0).max(0.0), border, scale, [1.0, 1.0, 1.0, sel::BUBBLE_BORDER_ALPHA]);
+        stroke_rounded(
+            pm,
+            &bubble.inset(border / 2.0, border / 2.0),
+            (pad - border / 2.0).max(0.0),
+            border,
+            scale,
+            [1.0, 1.0, 1.0, sel::BUBBLE_BORDER_ALPHA],
+        );
     }
 }
 
 /// Stroke the outline of `r` (the stroke is centred on it).
 pub(crate) fn stroke_rounded(pm: &mut Pixmap, r: &Rect, radius: f64, width: f64, s: f32, c: Rgba) {
     if let Some(p) = rounded(r, radius, s) {
-        pm.stroke_path(&p, &paint(c), &Stroke { width: width as f32 * s, ..Default::default() }, Transform::identity(), None);
+        pm.stroke_path(
+            &p,
+            &paint(c),
+            &Stroke {
+                width: width as f32 * s,
+                ..Default::default()
+            },
+            Transform::identity(),
+            None,
+        );
     }
 }
 
 pub(crate) fn fill_rect(pm: &mut Pixmap, r: &Rect, s: f32, c: Rgba) {
-    if let Some(rr) = SkRect::from_xywh(r.x as f32 * s, r.y as f32 * s, r.w as f32 * s, r.h as f32 * s) {
+    if let Some(rr) = SkRect::from_xywh(
+        r.x as f32 * s,
+        r.y as f32 * s,
+        r.w as f32 * s,
+        r.h as f32 * s,
+    ) {
         pm.fill_rect(rr, &paint(c), Transform::identity(), None);
     }
 }
 
 /// Split `text` into at most `max_lines` lines no wider than `max_w`; the last line is middle-truncated.
-pub fn wrap_label(tr: &mut TextRenderer, text: &str, px: f32, max_w: f32, max_lines: usize) -> Vec<String> {
+pub fn wrap_label(
+    tr: &mut TextRenderer,
+    text: &str,
+    px: f32,
+    max_w: f32,
+    max_lines: usize,
+) -> Vec<String> {
     if tr.measure(text, px, 400, 0.0) <= max_w || max_lines <= 1 {
         return vec![truncate_middle(tr, text, px, max_w)];
     }
@@ -208,8 +268,16 @@ pub fn wrap_label(tr: &mut TextRenderer, text: &str, px: f32, max_w: f32, max_li
             lines.push(chars[start.min(chars.len())..].iter().collect::<String>());
             break;
         }
-        let cut = last_break.filter(|b| *b > start).unwrap_or(end.max(start + 1));
-        lines.push(chars[start..cut].iter().collect::<String>().trim_end().to_string());
+        let cut = last_break
+            .filter(|b| *b > start)
+            .unwrap_or(end.max(start + 1));
+        lines.push(
+            chars[start..cut]
+                .iter()
+                .collect::<String>()
+                .trim_end()
+                .to_string(),
+        );
         start = cut;
     }
     if start < chars.len() {
@@ -223,9 +291,22 @@ pub fn wrap_label(tr: &mut TextRenderer, text: &str, px: f32, max_w: f32, max_li
 /// Draw `icon` scaled to fit a `px` square with its top-left corner at (`x`, `y`) device pixels.
 fn draw_pixmap_fit(pm: &mut Pixmap, icon: &Pixmap, x: f32, y: f32, px: u32) {
     let k = px as f32 / icon.width().max(icon.height()) as f32;
-    let (dx, dy) = ((px as f32 - icon.width() as f32 * k) / 2.0, (px as f32 - icon.height() as f32 * k) / 2.0);
-    let paint = tiny_skia::PixmapPaint { quality: tiny_skia::FilterQuality::Bilinear, ..Default::default() };
-    pm.draw_pixmap(0, 0, icon.as_ref(), &paint, Transform::from_row(k, 0.0, 0.0, k, x + dx, y + dy), None);
+    let (dx, dy) = (
+        (px as f32 - icon.width() as f32 * k) / 2.0,
+        (px as f32 - icon.height() as f32 * k) / 2.0,
+    );
+    let paint = tiny_skia::PixmapPaint {
+        quality: tiny_skia::FilterQuality::Bilinear,
+        ..Default::default()
+    };
+    pm.draw_pixmap(
+        0,
+        0,
+        icon.as_ref(),
+        &paint,
+        Transform::from_row(k, 0.0, 0.0, k, x + dx, y + dy),
+        None,
+    );
 }
 
 /// Middle truncation: keep the start and the end (with the extension) and put an ellipsis between.
@@ -238,7 +319,9 @@ pub fn truncate_middle(tr: &mut TextRenderer, text: &str, px: f32, max_w: f32) -
     for keep in (2..n).rev() {
         let tail = keep / 2;
         let head = keep - tail;
-        let s: String = chars[..head].iter().collect::<String>() + "…" + &chars[n - tail..].iter().collect::<String>();
+        let s: String = chars[..head].iter().collect::<String>()
+            + "…"
+            + &chars[n - tail..].iter().collect::<String>();
         if tr.measure(&s, px, 400, 0.0) <= max_w {
             return s;
         }
@@ -254,7 +337,12 @@ pub fn truncate_tail(tr: &mut TextRenderer, text: &str, px: f32, max_w: f32) -> 
     }
     let chars: Vec<char> = text.chars().collect();
     for keep in (1..chars.len()).rev() {
-        let s: String = chars[..keep].iter().collect::<String>().trim_end().to_string() + "…";
+        let s: String = chars[..keep]
+            .iter()
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+            + "…";
         if tr.measure(&s, px, 400, 0.0) <= max_w {
             return s;
         }
@@ -310,17 +398,39 @@ impl Renderer {
     /// A renderer with the `ui` font and the symbols of the asset packs, drawing items with `icons`. Fails only when no
     /// usable font is left ([`TextRenderer::new`]); a symbol of [`SYMBOL_NAMES`] no pack provides is reported and drawn as a placeholder.
     pub fn new(icons: FileIcons, assets: &Assets) -> Result<Self, AssetError> {
-        Ok(Renderer { text: TextRenderer::new(assets, FontRole::Ui)?, icons, symbols: SystemIcons::required(assets, &[], &SYMBOL_NAMES) })
+        Ok(Renderer {
+            text: TextRenderer::new(assets, FontRole::Ui)?,
+            icons,
+            symbols: SystemIcons::required(assets, &[], &SYMBOL_NAMES),
+        })
     }
 
     /// Draw the template symbol `name` of the asset packs in `color`, fitted to `fit` points and centred in `r` (a
     /// placeholder when no pack provides it).
-    pub fn draw_symbol(&mut self, pm: &mut Pixmap, r: &Rect, name: &str, fit: f64, s: f32, color: Rgba) {
+    pub fn draw_symbol(
+        &mut self,
+        pm: &mut Pixmap,
+        r: &Rect,
+        name: &str,
+        fit: f64,
+        s: f32,
+        color: Rgba,
+    ) {
         let px = (fit * f64::from(s)).round().max(1.0) as u32;
         let symbol = self.symbols.symbol(name, px, color);
         let c = r.center();
-        let (x, y) = (c.x as f32 * s - symbol.width() as f32 / 2.0, c.y as f32 * s - symbol.height() as f32 / 2.0);
-        pm.draw_pixmap(x.round() as i32, y.round() as i32, symbol.as_ref(), &tiny_skia::PixmapPaint::default(), Transform::identity(), None);
+        let (x, y) = (
+            c.x as f32 * s - symbol.width() as f32 / 2.0,
+            c.y as f32 * s - symbol.height() as f32 / 2.0,
+        );
+        pm.draw_pixmap(
+            x.round() as i32,
+            y.round() as i32,
+            symbol.as_ref(),
+            &tiny_skia::PixmapPaint::default(),
+            Transform::identity(),
+            None,
+        );
     }
 
     /// Draw the icon of `e` into `r`: its icon from the asset directory with the alias badge on a symbolic link.
@@ -329,12 +439,21 @@ impl Renderer {
         let side = r.w.min(r.h);
         let px = (side * s as f64).round().max(1.0) as u32;
         let mime = crate::open::file_type(icons.database(), &e.path, e.is_dir).to_string();
-        let (x, y) = ((r.x + (r.w - side) / 2.0) as f32 * s, (r.y + (r.h - side) / 2.0) as f32 * s);
+        let (x, y) = (
+            (r.x + (r.w - side) / 2.0) as f32 * s,
+            (r.y + (r.h - side) / 2.0) as f32 * s,
+        );
         draw_pixmap_fit(pm, icons.document(&e.path, &mime, px), x, y, px);
         if e.kind == Kind::Symlink {
             let (bx, by, bside) = badge_rect(side);
             let bpx = (bside * s as f64).round().max(1.0) as u32;
-            draw_pixmap_fit(pm, icons.badge(Badge::Alias, bpx), x + bx as f32 * s, y + by as f32 * s, bpx);
+            draw_pixmap_fit(
+                pm,
+                icons.badge(Badge::Alias, bpx),
+                x + bx as f32 * s,
+                y + by as f32 * s,
+                bpx,
+            );
         }
     }
 
@@ -343,35 +462,99 @@ impl Renderer {
         let px = text_size as f32 * scale;
         let cw = (self.text.measure("0", px, 400, 0.0) / scale).ceil() as f64;
         let est = FontMetrics::estimate(text_size);
-        FontMetrics { char_width: if cw > 0.0 { cw } else { est.char_width }, ..est }
+        FontMetrics {
+            char_width: if cw > 0.0 { cw } else { est.char_width },
+            ..est
+        }
     }
 
     /// Parameters and flow layout of an icon view `width` points wide, measured with the shaper at `scale`. The
     /// drawing of [`Renderer::icon_view`] and the hit testing of a window share it.
-    pub fn icon_layout(&mut self, settings: &IconViewSettings, sections: &[icon::SectionSpec], width: f64, scale: f32) -> (IconParams, icon::IconLayout) {
+    pub fn icon_layout(
+        &mut self,
+        settings: &IconViewSettings,
+        sections: &[icon::SectionSpec],
+        width: f64,
+        scale: f32,
+    ) -> (IconParams, icon::IconLayout) {
         let font = self.font_metrics(settings.text_size as f64, scale);
-        let params = IconParams::new(settings.icon_size, settings.grid_spacing, settings.text_size, settings.label_on_bottom, settings.show_item_info, font);
+        let params = IconParams::new(
+            settings.icon_size,
+            settings.grid_spacing,
+            settings.text_size,
+            settings.label_on_bottom,
+            settings.show_item_info,
+            font,
+        );
         let layout = icon::layout(&params, width, sections, icon::Flow::Leading);
         (params, layout)
     }
 
     /// Layout of a list view of the rows `outline` (one per displayed item: its level and disclosure state) `width`
     /// points wide, measured with the shaper at `scale`. Shared by [`Renderer::list_view`] and hit testing.
-    pub fn list_layout(&mut self, outline: &[RowSpec], settings: &ListViewSettings, width: f64, scale: f32) -> list::ListLayout {
-        let font_line = self.font_metrics(settings.text_size as f64, scale).line_height;
-        list::layout(&ListParams { icon_size: settings.icon_size, font_line, hierarchical: true, columns: &settings.columns, viewport_width: width }, outline)
+    pub fn list_layout(
+        &mut self,
+        outline: &[RowSpec],
+        settings: &ListViewSettings,
+        width: f64,
+        scale: f32,
+    ) -> list::ListLayout {
+        let font_line = self
+            .font_metrics(settings.text_size as f64, scale)
+            .line_height;
+        list::layout(
+            &ListParams {
+                icon_size: settings.icon_size,
+                font_line,
+                hierarchical: true,
+                columns: &settings.columns,
+                viewport_width: width,
+            },
+            outline,
+        )
     }
 
     /// Render an icon view of `entries` (already in display order) into a pixmap of `size` points, with the top
     /// `scroll` points of the content scrolled out of view.
     #[allow(clippy::too_many_arguments)]
-    pub fn icon_view(&mut self, entries: &[Entry], groups: Option<&[Group]>, selected: &[usize], active: bool, settings: &IconViewSettings, size: Size, scroll: f64, scale: f32, pal: &Palette) -> Pixmap {
-        let mut pm = Pixmap::new((size.w as f32 * scale) as u32, (size.h as f32 * scale) as u32).unwrap();
-        pm.fill(Color::from_rgba(pal.background[0], pal.background[1], pal.background[2], 1.0).unwrap());
+    pub fn icon_view(
+        &mut self,
+        entries: &[Entry],
+        groups: Option<&[Group]>,
+        selected: &[usize],
+        active: bool,
+        settings: &IconViewSettings,
+        size: Size,
+        scroll: f64,
+        scale: f32,
+        pal: &Palette,
+    ) -> Pixmap {
+        let mut pm = Pixmap::new(
+            (size.w as f32 * scale) as u32,
+            (size.h as f32 * scale) as u32,
+        )
+        .unwrap();
+        pm.fill(
+            Color::from_rgba(pal.background[0], pal.background[1], pal.background[2], 1.0).unwrap(),
+        );
         // sections follow the group order; the display order of items is the concatenation of the groups
         let (order, sections): (Vec<usize>, Vec<icon::SectionSpec>) = match groups {
-            Some(gs) => (gs.iter().flat_map(|g| g.items.iter().copied()).collect(), gs.iter().map(|g| icon::SectionSpec { title: Some(g.title.clone()), count: g.items.len() }).collect()),
-            None => ((0..entries.len()).collect(), vec![icon::SectionSpec { title: None, count: entries.len() }]),
+            Some(gs) => (
+                gs.iter().flat_map(|g| g.items.iter().copied()).collect(),
+                gs.iter()
+                    .map(|g| icon::SectionSpec {
+                        title: Some(g.title.clone()),
+                        count: g.items.len(),
+                    })
+                    .collect(),
+            ),
+            None => (
+                (0..entries.len()).collect(),
+                vec![icon::SectionSpec {
+                    title: None,
+                    count: entries.len(),
+                }],
+            ),
         };
         let (params, l) = self.icon_layout(settings, &sections, size.w, scale);
         let font = params.font;
@@ -379,11 +562,30 @@ impl Renderer {
         let viewport = Rect::new(0.0, scroll, size.w, size.h);
         for (title, r) in l.headers.iter().filter(|(_, r)| r.intersects(&viewport)) {
             let r = r.offset(0.0, -scroll);
-            self.text.draw(&mut pm, title, (r.x as f32 + 12.0) * scale, (r.y as f32 + 21.0) * scale, 13.0 * scale, 600, 0.0, pal.text);
-            fill_rect(&mut pm, &Rect::new(12.0, r.bottom() - 1.0, r.w - 24.0, 1.0), scale, pal.separator);
+            self.text.draw(
+                &mut pm,
+                title,
+                (r.x as f32 + 12.0) * scale,
+                (r.y as f32 + 21.0) * scale,
+                13.0 * scale,
+                600,
+                0.0,
+                pal.text,
+            );
+            fill_rect(
+                &mut pm,
+                &Rect::new(12.0, r.bottom() - 1.0, r.w - 24.0, 1.0),
+                scale,
+                pal.separator,
+            );
         }
         for cell in l.cells.iter().filter(|c| c.frame.intersects(&viewport)) {
-            let cell = icon::IconCell { index: cell.index, frame: cell.frame.offset(0.0, -scroll), icon_frame: cell.icon_frame.offset(0.0, -scroll), label_frame: cell.label_frame.offset(0.0, -scroll) };
+            let cell = icon::IconCell {
+                index: cell.index,
+                frame: cell.frame.offset(0.0, -scroll),
+                icon_frame: cell.icon_frame.offset(0.0, -scroll),
+                label_frame: cell.label_frame.offset(0.0, -scroll),
+            };
             let e = &entries[order[cell.index]];
             let is_sel = selected.contains(&order[cell.index]);
             if is_sel {
@@ -392,19 +594,60 @@ impl Renderer {
             self.draw_item_icon(&mut pm, &cell.icon_frame, e, scale);
             let max_w = cell.label_frame.w as f32 * scale - 6.0 * scale;
             let max_lines = icon::max_title_lines(&params).ceil() as usize;
-            let lines = if settings.label_on_bottom { wrap_label(&mut self.text, &e.name, px, max_w, max_lines) } else { vec![truncate_middle(&mut self.text, &e.name, px, max_w)] };
+            let lines = if settings.label_on_bottom {
+                wrap_label(&mut self.text, &e.name, px, max_w, max_lines)
+            } else {
+                vec![truncate_middle(&mut self.text, &e.name, px, max_w)]
+            };
             let lh = font.line_height as f32 * scale;
             let total = lh * lines.len() as f32;
-            let top = cell.label_frame.y as f32 * scale + (cell.label_frame.h as f32 * scale - total) / 2.0;
+            let top = cell.label_frame.y as f32 * scale
+                + (cell.label_frame.h as f32 * scale - total) / 2.0;
             for (i, line) in lines.iter().enumerate() {
                 let w = self.text.measure(line, px, 400, 0.0);
-                let (x, color) = if settings.label_on_bottom { (cell.label_frame.x as f32 * scale + (cell.label_frame.w as f32 * scale - w) / 2.0, pal.text) } else { (cell.label_frame.x as f32 * scale, pal.text) };
+                let (x, color) = if settings.label_on_bottom {
+                    (
+                        cell.label_frame.x as f32 * scale
+                            + (cell.label_frame.w as f32 * scale - w) / 2.0,
+                        pal.text,
+                    )
+                } else {
+                    (cell.label_frame.x as f32 * scale, pal.text)
+                };
                 if is_sel {
-                    let r = Rect::new((x - 3.0 * scale) as f64 / scale as f64, (top + i as f32 * lh) as f64 / scale as f64, (w + 6.0 * scale) as f64 / scale as f64, font.line_height);
-                    fill_rounded(&mut pm, &r, font.line_height / 4.0, scale, if active { pal.accent } else { pal.inactive_selection });
+                    let r = Rect::new(
+                        (x - 3.0 * scale) as f64 / scale as f64,
+                        (top + i as f32 * lh) as f64 / scale as f64,
+                        (w + 6.0 * scale) as f64 / scale as f64,
+                        font.line_height,
+                    );
+                    fill_rounded(
+                        &mut pm,
+                        &r,
+                        font.line_height / 4.0,
+                        scale,
+                        if active {
+                            pal.accent
+                        } else {
+                            pal.inactive_selection
+                        },
+                    );
                 }
-                let col = if is_sel && active { pal.accent_text } else { color };
-                self.text.draw(&mut pm, line, x, top + i as f32 * lh + lh * 0.78, px, 400, 0.0, col);
+                let col = if is_sel && active {
+                    pal.accent_text
+                } else {
+                    color
+                };
+                self.text.draw(
+                    &mut pm,
+                    line,
+                    x,
+                    top + i as f32 * lh + lh * 0.78,
+                    px,
+                    400,
+                    0.0,
+                    col,
+                );
             }
         }
         pm
@@ -414,10 +657,29 @@ impl Renderer {
     /// header scrolled up by `scroll` points; `outline` as for [`Renderer::list_layout`], one row per entry. The column of
     /// `sort` carries the sort caret.
     #[allow(clippy::too_many_arguments)]
-    pub fn list_view(&mut self, entries: &[Entry], outline: &[RowSpec], selected: &[usize], active: bool, settings: &ListViewSettings, sort: SortSpec, size: Size, scroll: f64, scale: f32, pal: &Palette, now: std::time::SystemTime) -> Pixmap {
+    pub fn list_view(
+        &mut self,
+        entries: &[Entry],
+        outline: &[RowSpec],
+        selected: &[usize],
+        active: bool,
+        settings: &ListViewSettings,
+        sort: SortSpec,
+        size: Size,
+        scroll: f64,
+        scale: f32,
+        pal: &Palette,
+        now: std::time::SystemTime,
+    ) -> Pixmap {
         assert_eq!(entries.len(), outline.len(), "one outline row per entry");
-        let mut pm = Pixmap::new((size.w as f32 * scale) as u32, (size.h as f32 * scale) as u32).unwrap();
-        pm.fill(Color::from_rgba(pal.background[0], pal.background[1], pal.background[2], 1.0).unwrap());
+        let mut pm = Pixmap::new(
+            (size.w as f32 * scale) as u32,
+            (size.h as f32 * scale) as u32,
+        )
+        .unwrap();
+        pm.fill(
+            Color::from_rgba(pal.background[0], pal.background[1], pal.background[2], 1.0).unwrap(),
+        );
         let px = settings.text_size as f32 * scale;
         let l = self.list_layout(outline, settings, size.w, scale);
         // the rows under the header are drawn too: the header covers them
@@ -436,18 +698,44 @@ impl Renderer {
             let is_sel = selected.contains(&i);
             let band = Rect::new(0.0, row.frame.y, size.w, row.frame.h);
             if is_sel {
-                fill_rect(&mut pm, &band, scale, if active { pal.accent } else { pal.inactive_selection });
+                fill_rect(
+                    &mut pm,
+                    &band,
+                    scale,
+                    if active {
+                        pal.accent
+                    } else {
+                        pal.inactive_selection
+                    },
+                );
             } else if list::ListLayout::is_alternate(i) {
                 fill_rect(&mut pm, &band, scale, pal.row_alternate);
             }
-            let fg = if is_sel && active { pal.accent_text } else { pal.text };
-            let fg2 = if is_sel && active { [1.0, 1.0, 1.0, 0.85] } else { pal.secondary_text };
+            let fg = if is_sel && active {
+                pal.accent_text
+            } else {
+                pal.text
+            };
+            let fg2 = if is_sel && active {
+                [1.0, 1.0, 1.0, 0.85]
+            } else {
+                pal.secondary_text
+            };
             if let Some(d) = row.disclosure {
                 // a chevron pointing right, turned down when the folder is expanded (approximate shape)
                 let mut pb = PathBuilder::new();
                 let (cx, cy) = (d.center().x as f32 * scale, d.center().y as f32 * scale);
-                let point = |along: f32, across: f32| if row.expanded { (cx - across * scale, cy + along * scale) } else { (cx + along * scale, cy + across * scale) };
-                for (i, (x, y)) in [point(-2.0, -3.5), point(2.5, 0.0), point(-2.0, 3.5)].into_iter().enumerate() {
+                let point = |along: f32, across: f32| {
+                    if row.expanded {
+                        (cx - across * scale, cy + along * scale)
+                    } else {
+                        (cx + along * scale, cy + across * scale)
+                    }
+                };
+                for (i, (x, y)) in [point(-2.0, -3.5), point(2.5, 0.0), point(-2.0, 3.5)]
+                    .into_iter()
+                    .enumerate()
+                {
                     if i == 0 {
                         pb.move_to(x, y);
                     } else {
@@ -455,7 +743,16 @@ impl Renderer {
                     }
                 }
                 if let Some(p) = pb.finish() {
-                    pm.stroke_path(&p, &paint(fg2), &Stroke { width: 1.4 * scale, ..Default::default() }, Transform::identity(), None);
+                    pm.stroke_path(
+                        &p,
+                        &paint(fg2),
+                        &Stroke {
+                            width: 1.4 * scale,
+                            ..Default::default()
+                        },
+                        Transform::identity(),
+                        None,
+                    );
                 }
             }
             self.draw_item_icon(&mut pm, &row.icon, e, scale);
@@ -463,9 +760,23 @@ impl Renderer {
             let mut col_x = 0.0;
             for c in l.columns.iter() {
                 let text = match c.id {
-                    ColumnId::Name => truncate_middle(&mut self.text, &e.name, px, (c.frame.w as f32 - row.text_x as f32 - 4.0) * scale),
-                    ColumnId::DateModified => e.modified.map(|t| relative_date(t, now)).unwrap_or_else(|| "--".into()),
-                    ColumnId::Size => if e.is_dir { "--".into() } else { human_size(e.size) },
+                    ColumnId::Name => truncate_middle(
+                        &mut self.text,
+                        &e.name,
+                        px,
+                        (c.frame.w as f32 - row.text_x as f32 - 4.0) * scale,
+                    ),
+                    ColumnId::DateModified => e
+                        .modified
+                        .map(|t| relative_date(t, now))
+                        .unwrap_or_else(|| "--".into()),
+                    ColumnId::Size => {
+                        if e.is_dir {
+                            "--".into()
+                        } else {
+                            human_size(e.size)
+                        }
+                    }
                     ColumnId::Kind => mime::kind_description(&mime::entry_mime(e)),
                     _ => String::new(),
                 };
@@ -480,7 +791,10 @@ impl Renderer {
                 // sizes are right-aligned in their column (approximate, a screenshot)
                 let x = match c.id {
                     ColumnId::Name => row.text_x as f32 * scale,
-                    ColumnId::Size => (c.frame.right() as f32 - CELL_TRAILING) * scale - self.text.measure(&text, px, 400, 0.0),
+                    ColumnId::Size => {
+                        (c.frame.right() as f32 - CELL_TRAILING) * scale
+                            - self.text.measure(&text, px, 400, 0.0)
+                    }
                     _ => (c.frame.x as f32 + CELL_LEADING) * scale,
                 };
                 self.text.draw(&mut pm, &text, x, base, px, 400, 0.0, col);
@@ -489,8 +803,18 @@ impl Renderer {
             let _ = col_x;
         }
         // header
-        fill_rect(&mut pm, &Rect::new(0.0, 0.0, size.w, lm::HEADER_HEIGHT), scale, pal.header);
-        fill_rect(&mut pm, &Rect::new(0.0, lm::HEADER_HEIGHT - 1.0, size.w, 1.0), scale, pal.separator);
+        fill_rect(
+            &mut pm,
+            &Rect::new(0.0, 0.0, size.w, lm::HEADER_HEIGHT),
+            scale,
+            pal.header,
+        );
+        fill_rect(
+            &mut pm,
+            &Rect::new(0.0, lm::HEADER_HEIGHT - 1.0, size.w, 1.0),
+            scale,
+            pal.separator,
+        );
         for c in &l.columns {
             let title = match c.id {
                 ColumnId::Name => "Name",
@@ -502,10 +826,28 @@ impl Renderer {
                 ColumnId::Version => "Version",
                 ColumnId::Comments => "Comments",
             };
-            let x = if c.id == ColumnId::Name { 12.0 } else { c.frame.x + f64::from(CELL_LEADING) };
-            self.text.draw(&mut pm, title, x as f32 * scale, (lm::HEADER_HEIGHT as f32 / 2.0) * scale + 4.5 * scale, 12.0 * scale, 600, 0.0, pal.text);
+            let x = if c.id == ColumnId::Name {
+                12.0
+            } else {
+                c.frame.x + f64::from(CELL_LEADING)
+            };
+            self.text.draw(
+                &mut pm,
+                title,
+                x as f32 * scale,
+                (lm::HEADER_HEIGHT as f32 / 2.0) * scale + 4.5 * scale,
+                12.0 * scale,
+                600,
+                0.0,
+                pal.text,
+            );
             if c.id != ColumnId::Name {
-                fill_rect(&mut pm, &Rect::new(c.frame.x, 6.0, 1.0, lm::HEADER_HEIGHT - 12.0), scale, pal.separator);
+                fill_rect(
+                    &mut pm,
+                    &Rect::new(c.frame.x, 6.0, 1.0, lm::HEADER_HEIGHT - 12.0),
+                    scale,
+                    pal.separator,
+                );
             }
         }
         if let Some(c) = l.columns.iter().find(|c| c.id.sort_key() == sort.key) {
@@ -528,7 +870,10 @@ const SORT_CARET_INSET: f32 = 14.0;
 
 /// Draw the sort caret into the header cell `column` (header coordinates, points).
 fn paint_sort_caret(pm: &mut Pixmap, column: &Rect, ascending: bool, scale: f32, color: Rgba) {
-    let (cx, cy) = ((column.right() as f32 - SORT_CARET_INSET) * scale, (lm::HEADER_HEIGHT as f32 / 2.0) * scale);
+    let (cx, cy) = (
+        (column.right() as f32 - SORT_CARET_INSET) * scale,
+        (lm::HEADER_HEIGHT as f32 / 2.0) * scale,
+    );
     let (hw, hh) = (SORT_CARET.0 / 2.0 * scale, SORT_CARET.1 / 2.0 * scale);
     let tip = if ascending { -hh } else { hh };
     let mut pb = PathBuilder::new();
@@ -536,7 +881,16 @@ fn paint_sort_caret(pm: &mut Pixmap, column: &Rect, ascending: bool, scale: f32,
     pb.line_to(cx, cy + tip);
     pb.line_to(cx + hw, cy - tip);
     if let Some(p) = pb.finish() {
-        pm.stroke_path(&p, &paint(color), &Stroke { width: 1.4 * scale, ..Default::default() }, Transform::identity(), None);
+        pm.stroke_path(
+            &p,
+            &paint(color),
+            &Stroke {
+                width: 1.4 * scale,
+                ..Default::default()
+            },
+            Transform::identity(),
+            None,
+        );
     }
 }
 
@@ -562,7 +916,9 @@ pub fn human_size(bytes: u64) -> String {
 }
 
 /// Month abbreviations of the list's dates (English; the design follows the locale, approximate).
-const MONTH_ABBREVIATIONS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTH_ABBREVIATIONS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 /// "Today at 09:41", "Yesterday at 18:02", else "22 Nov 2024 at 08:30" in local time: relative dates are on by default;
 /// the medium date with " at " and the time is a screenshot's (approximate, the
@@ -582,7 +938,12 @@ pub fn relative_date(t: std::time::SystemTime, now: std::time::SystemTime) -> St
     let hm = format!("{:02}:{:02}", tm.tm_hour, tm.tm_min);
     match bucket.as_str() {
         "Today" | "Yesterday" => format!("{bucket} at {hm}"),
-        _ => format!("{} {} {} at {hm}", tm.tm_mday, MONTH_ABBREVIATIONS[tm.tm_mon as usize], tm.tm_year + 1900),
+        _ => format!(
+            "{} {} {} at {hm}",
+            tm.tm_mday,
+            MONTH_ABBREVIATIONS[tm.tm_mon as usize],
+            tm.tm_year + 1900
+        ),
     }
 }
 
@@ -590,7 +951,11 @@ pub fn relative_date(t: std::time::SystemTime, now: std::time::SystemTime) -> St
 #[cfg(test)]
 pub(crate) fn renderer() -> Renderer {
     let assets = Assets::discover();
-    let icons = FileIcons::new(&assets, cupertino_apps::MimeDatabase::load(&[]).unwrap(), std::collections::HashMap::new());
+    let icons = FileIcons::new(
+        &assets,
+        cupertino_apps::MimeDatabase::load(&[]).unwrap(),
+        std::collections::HashMap::new(),
+    );
     Renderer::new(icons, &assets).unwrap_or_else(|e| panic!("{e}"))
 }
 
@@ -608,20 +973,64 @@ mod tests {
 
     #[test]
     fn renders_without_panicking_and_paints_content() {
-        let entries: Vec<Entry> = ["Documents", "photo.png", "a-very-long-name-that-has-to-wrap-and-truncate-in-the-middle.txt"].iter().map(|n| Entry::synthetic(n, *n == "Documents", 1234)).collect();
+        let entries: Vec<Entry> = [
+            "Documents",
+            "photo.png",
+            "a-very-long-name-that-has-to-wrap-and-truncate-in-the-middle.txt",
+        ]
+        .iter()
+        .map(|n| Entry::synthetic(n, *n == "Documents", 1234))
+        .collect();
         let mut r = renderer();
         let pal = Palette::builtin(false);
-        let pm = r.icon_view(&entries, None, &[1], true, &IconViewSettings::default(), Size { w: 420.0, h: 240.0 }, 0.0, 1.0, &pal);
-        assert!(pm.pixels().iter().any(|p| p.red() != 255 || p.green() != 255));
-        let outline: Vec<RowSpec> = entries.iter().map(|e| RowSpec { level: 0, expandable: e.is_dir, expanded: false }).collect();
-        let pm = r.list_view(&entries, &outline, &[0], true, &ListViewSettings::default(), SortSpec::default(), Size { w: 640.0, h: 160.0 }, 0.0, 1.0, &pal, std::time::SystemTime::now());
+        let pm = r.icon_view(
+            &entries,
+            None,
+            &[1],
+            true,
+            &IconViewSettings::default(),
+            Size { w: 420.0, h: 240.0 },
+            0.0,
+            1.0,
+            &pal,
+        );
+        assert!(pm
+            .pixels()
+            .iter()
+            .any(|p| p.red() != 255 || p.green() != 255));
+        let outline: Vec<RowSpec> = entries
+            .iter()
+            .map(|e| RowSpec {
+                level: 0,
+                expandable: e.is_dir,
+                expanded: false,
+            })
+            .collect();
+        let pm = r.list_view(
+            &entries,
+            &outline,
+            &[0],
+            true,
+            &ListViewSettings::default(),
+            SortSpec::default(),
+            Size { w: 640.0, h: 160.0 },
+            0.0,
+            1.0,
+            &pal,
+            std::time::SystemTime::now(),
+        );
         assert!(pm.pixels().iter().any(|p| p.blue() > p.red()));
     }
 
     #[test]
     fn middle_truncation_keeps_the_extension() {
         let mut r = renderer();
-        let s = truncate_middle(&mut r.text, "some-long-document-name.final.pdf", 12.0, 100.0);
+        let s = truncate_middle(
+            &mut r.text,
+            "some-long-document-name.final.pdf",
+            12.0,
+            100.0,
+        );
         assert!(s.contains('…'));
         assert!(s.ends_with("pdf"), "{s}");
     }
@@ -630,7 +1039,14 @@ mod tests {
     fn local(year: i32, month: i32, day: i32, hour: i32, minute: i32) -> std::time::SystemTime {
         // SAFETY: a zeroed tm is valid input once its fields are set; mktime only reads and normalises it
         let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-        (tm.tm_year, tm.tm_mon, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_isdst) = (year - 1900, month - 1, day, hour, minute, -1);
+        (
+            tm.tm_year,
+            tm.tm_mon,
+            tm.tm_mday,
+            tm.tm_hour,
+            tm.tm_min,
+            tm.tm_isdst,
+        ) = (year - 1900, month - 1, day, hour, minute, -1);
         let t = unsafe { libc::mktime(&mut tm) };
         std::time::UNIX_EPOCH + std::time::Duration::from_secs(t as u64)
     }
@@ -638,30 +1054,72 @@ mod tests {
     #[test]
     fn dates_are_relative_words_for_the_last_two_days_and_a_medium_date_before() {
         let now = local(2026, 10, 25, 18, 0);
-        assert_eq!(relative_date(local(2026, 10, 25, 9, 41), now), "Today at 09:41");
-        assert_eq!(relative_date(local(2026, 10, 24, 18, 2), now), "Yesterday at 18:02");
-        assert_eq!(relative_date(local(2024, 11, 22, 8, 30), now), "22 Nov 2024 at 08:30");
-        assert_eq!(relative_date(local(2026, 1, 5, 23, 59), now), "5 Jan 2026 at 23:59");
+        assert_eq!(
+            relative_date(local(2026, 10, 25, 9, 41), now),
+            "Today at 09:41"
+        );
+        assert_eq!(
+            relative_date(local(2026, 10, 24, 18, 2), now),
+            "Yesterday at 18:02"
+        );
+        assert_eq!(
+            relative_date(local(2024, 11, 22, 8, 30), now),
+            "22 Nov 2024 at 08:30"
+        );
+        assert_eq!(
+            relative_date(local(2026, 1, 5, 23, 59), now),
+            "5 Jan 2026 at 23:59"
+        );
     }
 
     #[test]
     fn the_sorted_column_has_the_caret_and_sizes_end_at_the_column_edge() {
         use crate::sort::SortKey;
         let entries = vec![Entry::synthetic("report.txt", false, 1500)];
-        let outline = [RowSpec { level: 0, expandable: false, expanded: false }];
+        let outline = [RowSpec {
+            level: 0,
+            expandable: false,
+            expanded: false,
+        }];
         let mut r = renderer();
         let pal = Palette::builtin(false);
         let settings = ListViewSettings::default();
         let size = Size { w: 760.0, h: 120.0 };
-        let draw = |r: &mut Renderer, key: SortKey| r.list_view(&entries, &outline, &[], true, &settings, SortSpec { key, ascending: true, ..SortSpec::default() }, size, 0.0, 1.0, &pal, std::time::SystemTime::now());
+        let draw = |r: &mut Renderer, key: SortKey| {
+            r.list_view(
+                &entries,
+                &outline,
+                &[],
+                true,
+                &settings,
+                SortSpec {
+                    key,
+                    ascending: true,
+                    ..SortSpec::default()
+                },
+                size,
+                0.0,
+                1.0,
+                &pal,
+                std::time::SystemTime::now(),
+            )
+        };
         let l = r.list_layout(&outline, &settings, size.w, 1.0);
         let column = |id: ColumnId| l.columns.iter().find(|c| c.id == id).unwrap().frame;
         // ink in a box around a point (header and row coordinates, points)
-        let inked = |pm: &Pixmap, x: f64, y: f64, half: f64| (((x - half) as u32)..((x + half) as u32)).any(|px| (((y - half) as u32)..((y + half) as u32)).any(|py| pm.pixel(px, py).unwrap().red() < 200));
+        let inked = |pm: &Pixmap, x: f64, y: f64, half: f64| {
+            (((x - half) as u32)..((x + half) as u32)).any(|px| {
+                (((y - half) as u32)..((y + half) as u32))
+                    .any(|py| pm.pixel(px, py).unwrap().red() < 200)
+            })
+        };
         let (name, size_column) = (column(ColumnId::Name), column(ColumnId::Size));
         let caret_y = lm::HEADER_HEIGHT / 2.0;
         let by_name = draw(&mut r, SortKey::Name);
-        assert!(inked(&by_name, name.right() - 14.0, caret_y, 4.0), "caret 14 pt inside the Name column's right edge");
+        assert!(
+            inked(&by_name, name.right() - 14.0, caret_y, 4.0),
+            "caret 14 pt inside the Name column's right edge"
+        );
         assert!(!inked(&by_name, size_column.right() - 14.0, caret_y, 4.0));
         let by_size = draw(&mut r, SortKey::Size);
         assert!(inked(&by_size, size_column.right() - 14.0, caret_y, 4.0));
@@ -689,7 +1147,19 @@ mod tests {
     #[test]
     fn every_symbol_a_place_shows_is_required() {
         use crate::places::PlaceKind::*;
-        for kind in [Home, Desktop, Documents, Downloads, Music, Pictures, Videos, Recents, Applications, Computer, Trash] {
+        for kind in [
+            Home,
+            Desktop,
+            Documents,
+            Downloads,
+            Music,
+            Pictures,
+            Videos,
+            Recents,
+            Applications,
+            Computer,
+            Trash,
+        ] {
             assert!(SYMBOL_NAMES.contains(&kind.symbol()), "{}", kind.symbol());
         }
     }

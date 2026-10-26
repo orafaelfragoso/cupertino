@@ -20,10 +20,10 @@ use crate::history::History;
 use crate::layout::list::RowSpec;
 use crate::model::{DirectoryModel, ModelDelta, ModelOptions, Notify, DEFAULT_BATCH};
 use crate::recents;
-use cupertino_apps::MimeDatabase;
 use crate::selection::{Modifiers, MouseDown, Selection};
 use crate::sort::{SortKey, SortSpec};
 use crate::typeselect::{Outcome, TypeSelect};
+use cupertino_apps::MimeDatabase;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -81,11 +81,22 @@ pub struct Browser {
 
 /// Lay out `entries` at `level` with the items of the expanded folders under them, noting the expanded
 /// folders reached.
-fn flatten(entries: &[Entry], level: u32, expanded: &HashMap<PathBuf, DirectoryModel>, rows: &mut Vec<Entry>, outline: &mut Vec<RowSpec>, reached: &mut HashSet<PathBuf>) {
+fn flatten(
+    entries: &[Entry],
+    level: u32,
+    expanded: &HashMap<PathBuf, DirectoryModel>,
+    rows: &mut Vec<Entry>,
+    outline: &mut Vec<RowSpec>,
+    reached: &mut HashSet<PathBuf>,
+) {
     for e in entries {
         let folder = e.kind == Kind::Directory;
         let children = expanded.get(&e.path).filter(|_| folder);
-        outline.push(RowSpec { level, expandable: folder, expanded: children.is_some() });
+        outline.push(RowSpec {
+            level,
+            expandable: folder,
+            expanded: children.is_some(),
+        });
         rows.push(e.clone());
         if let Some(model) = children {
             reached.insert(e.path.clone());
@@ -100,13 +111,30 @@ type SelectionPaths = (Vec<PathBuf>, Option<PathBuf>, Option<PathBuf>);
 /// The options every folder of a window is opened with: hidden files off (default,
 /// ), watched for live changes, tags not read, typed with the window's MIME database `types`.
 fn model_options(sort: SortSpec, types: &Option<Arc<MimeDatabase>>) -> ModelOptions {
-    ModelOptions { batch_size: DEFAULT_BATCH, show_hidden: false, sort, watch: true, read_tags: false, types: types.clone() }
+    ModelOptions {
+        batch_size: DEFAULT_BATCH,
+        show_hidden: false,
+        sort,
+        watch: true,
+        read_tags: false,
+        types: types.clone(),
+    }
 }
 
 /// A live model of `dir`, or of the Recents list `recents_file` when `dir` is [`recents::RECENTS`].
-fn open_model(dir: &Path, sort: SortSpec, recents_file: &Path, types: &Option<Arc<MimeDatabase>>, notify: Notify) -> io::Result<DirectoryModel> {
+fn open_model(
+    dir: &Path,
+    sort: SortSpec,
+    recents_file: &Path,
+    types: &Option<Arc<MimeDatabase>>,
+    notify: Notify,
+) -> io::Result<DirectoryModel> {
     if dir == recents::location() {
-        DirectoryModel::open_recents(recents_file.to_path_buf(), model_options(sort, types), notify)
+        DirectoryModel::open_recents(
+            recents_file.to_path_buf(),
+            model_options(sort, types),
+            notify,
+        )
     } else {
         DirectoryModel::open_notifying(dir, model_options(sort, types), notify)
     }
@@ -116,7 +144,13 @@ impl Browser {
     /// A window on `start` listed in `sort` order, its Recents folder from the bookmark file `recents_file`, its items
     /// typed with the MIME database `types` ([`ModelOptions::types`]); `notify` runs on other threads whenever there is
     /// something to [`Browser::poll`].
-    pub fn open(start: PathBuf, sort: SortSpec, recents_file: PathBuf, types: Option<Arc<MimeDatabase>>, notify: Notify) -> io::Result<Self> {
+    pub fn open(
+        start: PathBuf,
+        sort: SortSpec,
+        recents_file: PathBuf,
+        types: Option<Arc<MimeDatabase>>,
+        notify: Notify,
+    ) -> io::Result<Self> {
         let queued = Arc::new(AtomicBool::new(false));
         let flag = queued.clone();
         let notify: Notify = Arc::new(move || {
@@ -124,7 +158,24 @@ impl Browser {
             notify();
         });
         let model = open_model(&start, sort, &recents_file, &types, notify.clone())?;
-        Ok(Browser { history: History::new(start), model, selection: Selection::new(), sort, notify, queued, type_select: TypeSelect::default(), select_when_listed: None, awaited: None, focus_moved: false, expanded: HashMap::new(), rows: Vec::new(), outline: Vec::new(), recents_file, types, filter: None })
+        Ok(Browser {
+            history: History::new(start),
+            model,
+            selection: Selection::new(),
+            sort,
+            notify,
+            queued,
+            type_select: TypeSelect::default(),
+            select_when_listed: None,
+            awaited: None,
+            focus_moved: false,
+            expanded: HashMap::new(),
+            rows: Vec::new(),
+            outline: Vec::new(),
+            recents_file,
+            types,
+            filter: None,
+        })
     }
 
     /// The folder is not a directory of the file system (Recents): it has no enclosing folder and no free space.
@@ -171,7 +222,8 @@ impl Browser {
         if self.is_virtual() {
             return Ok(None);
         }
-        let dir = std::ffi::CString::new(self.dir().as_os_str().as_encoded_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+        let dir = std::ffi::CString::new(self.dir().as_os_str().as_encoded_bytes())
+            .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
         // SAFETY: a zeroed statvfs is a valid out value; the path is NUL-terminated and outlives the call
         let mut fs: libc::statvfs = unsafe { std::mem::zeroed() };
         if unsafe { libc::statvfs(dir.as_ptr(), &mut fs) } != 0 {
@@ -209,12 +261,41 @@ impl Browser {
         let (mut rows, mut outline, mut reached) = (Vec::new(), Vec::new(), HashSet::new());
         if let Some(query) = &self.filter {
             // search results are flat: no folder expands among them
-            rows = self.model.entries().iter().filter(|e| e.name.to_lowercase().contains(query.as_str())).cloned().collect();
-            outline = vec![RowSpec { level: 0, expandable: false, expanded: false }; rows.len()];
+            rows = self
+                .model
+                .entries()
+                .iter()
+                .filter(|e| e.name.to_lowercase().contains(query.as_str()))
+                .cloned()
+                .collect();
+            outline = vec![
+                RowSpec {
+                    level: 0,
+                    expandable: false,
+                    expanded: false
+                };
+                rows.len()
+            ];
         } else if self.expanded.is_empty() {
-            outline = self.model.entries().iter().map(|e| RowSpec { level: 0, expandable: e.kind == Kind::Directory, expanded: false }).collect();
+            outline = self
+                .model
+                .entries()
+                .iter()
+                .map(|e| RowSpec {
+                    level: 0,
+                    expandable: e.kind == Kind::Directory,
+                    expanded: false,
+                })
+                .collect();
         } else {
-            flatten(self.model.entries(), 0, &self.expanded, &mut rows, &mut outline, &mut reached);
+            flatten(
+                self.model.entries(),
+                0,
+                &self.expanded,
+                &mut rows,
+                &mut outline,
+                &mut reached,
+            );
             self.expanded.retain(|path, _| reached.contains(path));
             if self.expanded.is_empty() {
                 rows.clear();
@@ -227,9 +308,19 @@ impl Browser {
     /// Expand folder row `index` (its disclosure triangle, or Right): its items load under it. `Ok(false)` when
     /// the row is not a folder or is expanded already.
     pub fn expand(&mut self, index: usize) -> io::Result<bool> {
-        let Some(e) = self.entries().get(index).filter(|e| self.filter.is_none() && e.kind == Kind::Directory && !self.expanded.contains_key(&e.path)) else { return Ok(false) };
+        let Some(e) = self.entries().get(index).filter(|e| {
+            self.filter.is_none()
+                && e.kind == Kind::Directory
+                && !self.expanded.contains_key(&e.path)
+        }) else {
+            return Ok(false);
+        };
         let path = e.path.clone();
-        let model = DirectoryModel::open_notifying(&path, model_options(self.sort, &self.types), self.notify.clone())?;
+        let model = DirectoryModel::open_notifying(
+            &path,
+            model_options(self.sort, &self.types),
+            self.notify.clone(),
+        )?;
         let kept = self.selection_paths();
         self.expanded.insert(path, model);
         self.rebuild();
@@ -240,7 +331,14 @@ impl Browser {
     /// Collapse folder row `index` and every folder expanded inside it; selected items inside give their selection to
     /// the folder. `false` when the row is not expanded.
     pub fn collapse(&mut self, index: usize) -> bool {
-        let Some(path) = self.entries().get(index).filter(|e| self.expanded.contains_key(&e.path)).map(|e| e.path.clone()) else { return false };
+        let Some(path) = self
+            .entries()
+            .get(index)
+            .filter(|e| self.expanded.contains_key(&e.path))
+            .map(|e| e.path.clone())
+        else {
+            return false;
+        };
         let (selected, anchor, focus) = self.selection_paths();
         let inside = |p: &PathBuf| p != &path && p.starts_with(&path);
         let mut kept: Vec<PathBuf> = selected.iter().filter(|p| !inside(p)).cloned().collect();
@@ -267,7 +365,9 @@ impl Browser {
     /// folder, or moves the focus from an item inside one to that folder (the outline view convention).
     /// `false` when nothing changed.
     pub fn disclose_focus(&mut self, expand: bool) -> io::Result<bool> {
-        let Some(focus) = self.selection.focus().filter(|f| *f < self.outline.len()) else { return Ok(false) };
+        let Some(focus) = self.selection.focus().filter(|f| *f < self.outline.len()) else {
+            return Ok(false);
+        };
         if expand {
             return self.expand(focus);
         }
@@ -276,7 +376,10 @@ impl Browser {
             return Ok(true);
         }
         let level = self.outline[focus].level;
-        match (0..focus).rev().find(|&i| level > 0 && self.outline[i].level + 1 == level) {
+        match (0..focus)
+            .rev()
+            .find(|&i| level > 0 && self.outline[i].level + 1 == level)
+        {
             Some(parent) => {
                 self.move_focus(parent, false);
                 Ok(true)
@@ -311,7 +414,13 @@ impl Browser {
 
     /// Replace the model with one on `to`; the history is the caller's.
     fn show(&mut self, to: &Path) -> io::Result<()> {
-        self.model = open_model(to, self.sort, &self.recents_file, &self.types, self.notify.clone())?;
+        self.model = open_model(
+            to,
+            self.sort,
+            &self.recents_file,
+            &self.types,
+            self.notify.clone(),
+        )?;
         self.expanded.clear();
         self.filter = None;
         self.rebuild();
@@ -334,7 +443,9 @@ impl Browser {
 
     /// Go back; `false` when there is nothing to go back to.
     pub fn back(&mut self) -> io::Result<bool> {
-        let Some(to) = self.history.back_target().map(Path::to_path_buf) else { return Ok(false) };
+        let Some(to) = self.history.back_target().map(Path::to_path_buf) else {
+            return Ok(false);
+        };
         self.show(&to)?;
         self.history.back();
         Ok(true)
@@ -342,7 +453,9 @@ impl Browser {
 
     /// Go forward; `false` when nothing was gone back from.
     pub fn forward(&mut self) -> io::Result<bool> {
-        let Some(to) = self.history.forward_target().map(Path::to_path_buf) else { return Ok(false) };
+        let Some(to) = self.history.forward_target().map(Path::to_path_buf) else {
+            return Ok(false);
+        };
         self.show(&to)?;
         self.history.forward();
         Ok(true)
@@ -354,7 +467,9 @@ impl Browser {
             return Ok(false);
         }
         let here = self.dir().to_path_buf();
-        let (Some(parent), Some(name)) = (here.parent(), here.file_name()) else { return Ok(false) };
+        let (Some(parent), Some(name)) = (here.parent(), here.file_name()) else {
+            return Ok(false);
+        };
         self.go(parent.to_path_buf())?;
         self.select_when_listed = Some(name.to_string_lossy().into_owned());
         self.select_pending();
@@ -369,12 +484,18 @@ impl Browser {
         }
         let kept = self.selection_paths();
         let deltas = self.model.poll();
-        let mut polled = Polled { changed: !deltas.is_empty(), errors: Vec::new() };
+        let mut polled = Polled {
+            changed: !deltas.is_empty(),
+            errors: Vec::new(),
+        };
         let mut reordered = false;
         let mut gone = false;
         for delta in deltas {
             match delta {
-                ModelDelta::Reloaded { .. } | ModelDelta::Inserted { .. } | ModelDelta::Removed { .. } | ModelDelta::Moved { .. } => reordered = true,
+                ModelDelta::Reloaded { .. }
+                | ModelDelta::Inserted { .. }
+                | ModelDelta::Removed { .. }
+                | ModelDelta::Moved { .. } => reordered = true,
                 ModelDelta::LoadComplete { .. } | ModelDelta::Changed { .. } => {}
                 ModelDelta::DirectoryGone => gone = true,
                 ModelDelta::Error(e) => polled.errors.push(e),
@@ -385,8 +506,13 @@ impl Browser {
             for delta in model.poll() {
                 polled.changed = true;
                 match delta {
-                    ModelDelta::Reloaded { .. } | ModelDelta::Inserted { .. } | ModelDelta::Removed { .. } | ModelDelta::Moved { .. } => reordered = true,
-                    ModelDelta::LoadComplete { .. } | ModelDelta::Changed { .. } | ModelDelta::DirectoryGone => {}
+                    ModelDelta::Reloaded { .. }
+                    | ModelDelta::Inserted { .. }
+                    | ModelDelta::Removed { .. }
+                    | ModelDelta::Moved { .. } => reordered = true,
+                    ModelDelta::LoadComplete { .. }
+                    | ModelDelta::Changed { .. }
+                    | ModelDelta::DirectoryGone => {}
                     ModelDelta::Error(e) => polled.errors.push(format!("{}: {e}", path.display())),
                 }
             }
@@ -398,9 +524,13 @@ impl Browser {
             match self.nearest_existing_ancestor() {
                 Some(to) => match self.go(to) {
                     Ok(()) => return polled,
-                    Err(e) => polled.errors.push(format!("cannot open the enclosing folder: {e}")),
+                    Err(e) => polled
+                        .errors
+                        .push(format!("cannot open the enclosing folder: {e}")),
                 },
-                None => polled.errors.push("the folder and every folder above it are gone".into()),
+                None => polled
+                    .errors
+                    .push("the folder and every folder above it are gone".into()),
             }
         }
         if reordered {
@@ -412,21 +542,38 @@ impl Browser {
     }
 
     fn nearest_existing_ancestor(&self) -> Option<PathBuf> {
-        self.dir().ancestors().skip(1).find(|p| p.is_dir()).map(Path::to_path_buf)
+        self.dir()
+            .ancestors()
+            .skip(1)
+            .find(|p| p.is_dir())
+            .map(Path::to_path_buf)
     }
 
     /// The paths of the selected, anchor and focus items: names repeat at different levels of the outline.
     fn selection_paths(&self) -> SelectionPaths {
         let entries = self.entries();
         let path = |i: usize| entries.get(i).map(|e| e.path.clone());
-        (self.selection.indices().filter_map(path).collect(), self.selection.anchor().and_then(path), self.selection.focus().and_then(path))
+        (
+            self.selection.indices().filter_map(path).collect(),
+            self.selection.anchor().and_then(path),
+            self.selection.focus().and_then(path),
+        )
     }
 
     /// Select the items at these paths again at their new indexes; paths no longer displayed drop out.
     fn restore_selection(&mut self, (selected, anchor, focus): SelectionPaths) {
-        let index: HashMap<&Path, usize> = self.entries().iter().enumerate().map(|(i, e)| (e.path.as_path(), i)).collect();
+        let index: HashMap<&Path, usize> = self
+            .entries()
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.path.as_path(), i))
+            .collect();
         let at = |p: &PathBuf| index.get(p.as_path()).copied();
-        let (selected, anchor, focus): (Vec<usize>, _, _) = (selected.iter().filter_map(at).collect(), anchor.as_ref().and_then(at), focus.as_ref().and_then(at));
+        let (selected, anchor, focus): (Vec<usize>, _, _) = (
+            selected.iter().filter_map(at).collect(),
+            anchor.as_ref().and_then(at),
+            focus.as_ref().and_then(at),
+        );
         self.selection.restore(selected, anchor, focus);
     }
 
@@ -437,7 +584,9 @@ impl Browser {
     /// Select the item a step to the parent came from once it is listed; give up when the listing is complete
     /// without it.
     fn select_pending(&mut self) {
-        let Some(name) = &self.select_when_listed else { return };
+        let Some(name) = &self.select_when_listed else {
+            return;
+        };
         if let Some(i) = self.index_of_path(&self.dir().join(name)) {
             self.selection.set_single(i);
             self.focus_moved = true;
@@ -456,7 +605,13 @@ impl Browser {
     }
 
     fn select_awaited(&mut self) {
-        let Some(i) = self.awaited.as_deref().and_then(|path| self.index_of_path(path)) else { return };
+        let Some(i) = self
+            .awaited
+            .as_deref()
+            .and_then(|path| self.index_of_path(path))
+        else {
+            return;
+        };
         self.selection.set_single(i);
         self.focus_moved = true;
         self.awaited = None;
@@ -465,7 +620,11 @@ impl Browser {
     /// Order by `key`: the same key again reverses the order, another key starts in `ascending` order (the
     /// column's own default direction).
     pub fn sort_by(&mut self, key: SortKey, ascending: bool) {
-        let ascending = if self.sort.key == key { !self.sort.ascending } else { ascending };
+        let ascending = if self.sort.key == key {
+            !self.sort.ascending
+        } else {
+            ascending
+        };
         self.set_sort(key, ascending);
     }
 
@@ -515,7 +674,11 @@ impl Browser {
     /// Order by `key` in the given direction (a menu choice: unlike [`Browser::sort_by`] it never reverses).
     pub fn set_sort(&mut self, key: SortKey, ascending: bool) {
         let kept = self.selection_paths();
-        self.sort = SortSpec { key, ascending, ..self.sort };
+        self.sort = SortSpec {
+            key,
+            ascending,
+            ..self.sort
+        };
         self.model.set_sort(self.sort);
         for model in self.expanded.values_mut() {
             model.set_sort(self.sort);
@@ -541,7 +704,11 @@ impl Browser {
     /// what was typed recently. `true` when the selection changed.
     pub fn type_text(&mut self, text: &str, now: f64) -> bool {
         // the fields, not `entries()`: type-select is borrowed mutably beside them
-        let entries = if self.filter.is_some() || !self.expanded.is_empty() { &self.rows } else { self.model.entries() };
+        let entries = if self.filter.is_some() || !self.expanded.is_empty() {
+            &self.rows
+        } else {
+            self.model.entries()
+        };
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         match self.type_select.type_text(text, now, &names) {
             Outcome::Select(i) => {
@@ -600,7 +767,10 @@ mod tests {
     }
 
     fn selected(b: &Browser) -> Vec<&str> {
-        b.selection().indices().map(|i| b.entries()[i].name.as_str()).collect()
+        b.selection()
+            .indices()
+            .map(|i| b.entries()[i].name.as_str())
+            .collect()
     }
 
     /// Poll until `done` holds; panics after five seconds.
@@ -626,18 +796,35 @@ mod tests {
     #[test]
     fn listing_is_natural_and_live_changes_keep_the_selection_on_its_item() {
         let d = tree();
-        let mut b = Browser::open(d.path().to_path_buf(), SortSpec::default(), unused_recents(), None, quiet()).unwrap();
+        let mut b = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            unused_recents(),
+            None,
+            quiet(),
+        )
+        .unwrap();
         pump(&mut b, "the listing", |b| b.entries().len() == 4);
-        assert_eq!(names(&b), ["file2.txt", "file10.txt", "Notes.md", "Projects"]);
+        assert_eq!(
+            names(&b),
+            ["file2.txt", "file10.txt", "Notes.md", "Projects"]
+        );
 
-        let notes = b.entries().iter().position(|e| e.name == "Notes.md").unwrap();
+        let notes = b
+            .entries()
+            .iter()
+            .position(|e| e.name == "Notes.md")
+            .unwrap();
         b.press(notes, Modifiers::NONE);
         b.release();
         // a new item sorted in front of the selection shifts its index; the selection follows the item
         std::fs::write(d.path().join("file1.txt"), b"x").unwrap();
         pump(&mut b, "the new file", |b| b.entries().len() == 5);
         assert_eq!(selected(&b), ["Notes.md"]);
-        assert_eq!(b.selection().focus().map(|i| b.entries()[i].name.as_str()), Some("Notes.md"));
+        assert_eq!(
+            b.selection().focus().map(|i| b.entries()[i].name.as_str()),
+            Some("Notes.md")
+        );
         // and a removed selected item leaves the selection
         std::fs::remove_file(d.path().join("Notes.md")).unwrap();
         pump(&mut b, "the removal", |b| b.entries().len() == 4);
@@ -647,12 +834,22 @@ mod tests {
     #[test]
     fn sorting_again_by_the_same_key_reverses_and_the_selection_stays() {
         let d = tree();
-        let mut b = Browser::open(d.path().to_path_buf(), SortSpec::default(), unused_recents(), None, quiet()).unwrap();
+        let mut b = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            unused_recents(),
+            None,
+            quiet(),
+        )
+        .unwrap();
         pump(&mut b, "the listing", |b| b.entries().len() == 4);
         b.press(0, Modifiers::NONE);
         assert_eq!(selected(&b), ["file2.txt"]);
         b.sort_by(SortKey::Name, true);
-        assert_eq!(names(&b), ["Projects", "Notes.md", "file10.txt", "file2.txt"]);
+        assert_eq!(
+            names(&b),
+            ["Projects", "Notes.md", "file10.txt", "file2.txt"]
+        );
         assert_eq!(selected(&b), ["file2.txt"]);
         assert_eq!(b.selection().focus(), Some(3));
         b.sort_by(SortKey::Size, false);
@@ -662,20 +859,42 @@ mod tests {
     #[test]
     fn opening_navigates_and_the_parent_step_selects_where_the_window_came_from() {
         let d = tree();
-        let mut b = Browser::open(d.path().to_path_buf(), SortSpec::default(), unused_recents(), None, quiet()).unwrap();
+        let mut b = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            unused_recents(),
+            None,
+            quiet(),
+        )
+        .unwrap();
         pump(&mut b, "the listing", |b| b.entries().len() == 4);
-        let projects = b.entries().iter().position(|e| e.name == "Projects").unwrap();
+        let projects = b
+            .entries()
+            .iter()
+            .position(|e| e.name == "Projects")
+            .unwrap();
         b.press(projects, Modifiers::NONE);
         b.press(0, Modifiers::PRIMARY);
-        assert_eq!(b.activation(), Activation { folder: Some(d.path().join("Projects")), files: vec![d.path().join("file2.txt")] });
+        assert_eq!(
+            b.activation(),
+            Activation {
+                folder: Some(d.path().join("Projects")),
+                files: vec![d.path().join("file2.txt")]
+            }
+        );
 
         b.go(d.path().join("Projects")).unwrap();
-        assert!(b.selection().is_empty(), "a new folder starts without a selection");
+        assert!(
+            b.selection().is_empty(),
+            "a new folder starts without a selection"
+        );
         pump(&mut b, "the sub folder", |b| b.entries().len() == 1);
         b.go(d.path().join("Projects/cupertino")).unwrap();
         assert!(b.parent().unwrap());
         assert_eq!(b.dir(), d.path().join("Projects"));
-        pump(&mut b, "the selection of the child", |b| !b.selection().is_empty());
+        pump(&mut b, "the selection of the child", |b| {
+            !b.selection().is_empty()
+        });
         assert_eq!(selected(&b), ["cupertino"]);
         assert!(b.take_focus_moved());
 
@@ -690,7 +909,14 @@ mod tests {
     #[test]
     fn a_folder_that_cannot_be_opened_leaves_the_window_where_it_is() {
         let d = tree();
-        let mut b = Browser::open(d.path().to_path_buf(), SortSpec::default(), unused_recents(), None, quiet()).unwrap();
+        let mut b = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            unused_recents(),
+            None,
+            quiet(),
+        )
+        .unwrap();
         assert!(b.go(d.path().join("missing")).is_err());
         assert!(b.go(d.path().join("Notes.md")).is_err());
         assert_eq!(b.dir(), d.path());
@@ -701,7 +927,14 @@ mod tests {
     fn a_deleted_folder_is_replaced_by_its_nearest_existing_ancestor() {
         let d = tree();
         let deep = d.path().join("Projects/cupertino");
-        let mut b = Browser::open(deep.clone(), SortSpec::default(), unused_recents(), None, quiet()).unwrap();
+        let mut b = Browser::open(
+            deep.clone(),
+            SortSpec::default(),
+            unused_recents(),
+            None,
+            quiet(),
+        )
+        .unwrap();
         pump(&mut b, "the empty listing", |b| !b.model.is_loading());
         std::fs::remove_dir_all(d.path().join("Projects")).unwrap();
         pump(&mut b, "the move to the ancestor", |b| b.dir() == d.path());
@@ -710,7 +943,14 @@ mod tests {
     #[test]
     fn keyboard_focus_extends_from_the_anchor_and_type_select_jumps() {
         let d = tree();
-        let mut b = Browser::open(d.path().to_path_buf(), SortSpec::default(), unused_recents(), None, quiet()).unwrap();
+        let mut b = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            unused_recents(),
+            None,
+            quiet(),
+        )
+        .unwrap();
         pump(&mut b, "the listing", |b| b.entries().len() == 4);
         b.move_focus(1, false);
         b.move_focus(3, true);
@@ -718,7 +958,11 @@ mod tests {
         assert!(b.take_focus_moved());
         assert!(!b.take_focus_moved());
         b.move_focus(9, false);
-        assert_eq!(b.selection().focus(), Some(3), "an index past the listing is ignored");
+        assert_eq!(
+            b.selection().focus(),
+            Some(3),
+            "an index past the listing is ignored"
+        );
 
         assert!(b.type_text("n", 10.0));
         assert_eq!(selected(&b), ["Notes.md"]);
@@ -731,7 +975,14 @@ mod tests {
     #[test]
     fn an_item_the_window_made_is_selected_when_the_watcher_lists_it_unless_the_user_chose_first() {
         let d = tree();
-        let mut b = Browser::open(d.path().to_path_buf(), SortSpec::default(), unused_recents(), None, quiet()).unwrap();
+        let mut b = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            unused_recents(),
+            None,
+            quiet(),
+        )
+        .unwrap();
         pump(&mut b, "the listing", |b| b.entries().len() == 4);
         std::fs::create_dir(d.path().join("made")).unwrap();
         b.select_when_appears(d.path().join("made"));
@@ -746,23 +997,48 @@ mod tests {
     }
 
     fn levels(b: &Browser) -> Vec<(&str, u32, bool)> {
-        b.entries().iter().zip(b.outline()).map(|(e, r)| (e.name.as_str(), r.level, r.expanded)).collect()
+        b.entries()
+            .iter()
+            .zip(b.outline())
+            .map(|(e, r)| (e.name.as_str(), r.level, r.expanded))
+            .collect()
     }
 
     #[test]
     fn a_folder_expands_in_place_one_level_deeper_and_collapsing_gives_the_selection_to_it() {
         let d = tree();
         std::fs::write(d.path().join("Projects/plan.txt"), b"x").unwrap();
-        let mut b = Browser::open(d.path().to_path_buf(), SortSpec::default(), unused_recents(), None, quiet()).unwrap();
+        let mut b = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            unused_recents(),
+            None,
+            quiet(),
+        )
+        .unwrap();
         pump(&mut b, "the listing", |b| b.entries().len() == 4);
-        assert_eq!(b.outline().iter().map(|r| r.expandable).collect::<Vec<_>>(), [false, false, false, true], "only folders have a triangle");
+        assert_eq!(
+            b.outline().iter().map(|r| r.expandable).collect::<Vec<_>>(),
+            [false, false, false, true],
+            "only folders have a triangle"
+        );
         assert!(!b.expand(0).unwrap(), "a file does not expand");
 
         // the children load lazily: nothing until the folder is expanded, then batches through poll
         assert!(b.expand(3).unwrap());
         assert!(!b.expand(3).unwrap(), "already expanded");
         pump(&mut b, "the folder's items", |b| b.entries().len() == 6);
-        assert_eq!(levels(&b), [("file2.txt", 0, false), ("file10.txt", 0, false), ("Notes.md", 0, false), ("Projects", 0, true), ("cupertino", 1, false), ("plan.txt", 1, false)]);
+        assert_eq!(
+            levels(&b),
+            [
+                ("file2.txt", 0, false),
+                ("file10.txt", 0, false),
+                ("Notes.md", 0, false),
+                ("Projects", 0, true),
+                ("cupertino", 1, false),
+                ("plan.txt", 1, false)
+            ]
+        );
 
         // a nested folder, then the selection inside: Left steps to the enclosing folder, then collapses it
         assert!(b.expand(4).unwrap());
@@ -773,35 +1049,74 @@ mod tests {
         assert!(b.disclose_focus(false).unwrap());
         assert_eq!(selected(&b), ["cupertino"]);
         assert!(b.disclose_focus(false).unwrap());
-        assert_eq!(levels(&b)[4..], [("cupertino", 1, false), ("plan.txt", 1, false)]);
+        assert_eq!(
+            levels(&b)[4..],
+            [("cupertino", 1, false), ("plan.txt", 1, false)]
+        );
         b.move_focus(5, false);
         assert!(b.collapse(3));
-        assert_eq!(names(&b), ["file2.txt", "file10.txt", "Notes.md", "Projects"]);
-        assert_eq!(selected(&b), ["Projects"], "the hidden selection went to the collapsed folder");
-        assert!(b.disclose_focus(true).unwrap(), "Right expands the focused folder");
+        assert_eq!(
+            names(&b),
+            ["file2.txt", "file10.txt", "Notes.md", "Projects"]
+        );
+        assert_eq!(
+            selected(&b),
+            ["Projects"],
+            "the hidden selection went to the collapsed folder"
+        );
+        assert!(
+            b.disclose_focus(true).unwrap(),
+            "Right expands the focused folder"
+        );
         pump(&mut b, "the items again", |b| b.entries().len() == 6);
-        assert!(!b.outline()[4].expanded, "collapsing forgot the folder expanded inside");
+        assert!(
+            !b.outline()[4].expanded,
+            "collapsing forgot the folder expanded inside"
+        );
     }
 
     #[test]
     fn expanded_items_follow_the_sort_and_live_changes_and_another_folder_collapses_everything() {
         let d = tree();
         std::fs::write(d.path().join("Projects/a.txt"), b"x").unwrap();
-        let mut b = Browser::open(d.path().to_path_buf(), SortSpec::default(), unused_recents(), None, quiet()).unwrap();
+        let mut b = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            unused_recents(),
+            None,
+            quiet(),
+        )
+        .unwrap();
         pump(&mut b, "the listing", |b| b.entries().len() == 4);
         b.expand(3).unwrap();
         pump(&mut b, "the folder's items", |b| b.entries().len() == 6);
         b.move_focus(5, false);
         assert_eq!(selected(&b), ["cupertino"]);
         b.set_sort(SortKey::Name, false);
-        assert_eq!(names(&b), ["Projects", "cupertino", "a.txt", "Notes.md", "file10.txt", "file2.txt"]);
-        assert_eq!(selected(&b), ["cupertino"], "the selection follows its path through the sort");
+        assert_eq!(
+            names(&b),
+            [
+                "Projects",
+                "cupertino",
+                "a.txt",
+                "Notes.md",
+                "file10.txt",
+                "file2.txt"
+            ]
+        );
+        assert_eq!(
+            selected(&b),
+            ["cupertino"],
+            "the selection follows its path through the sort"
+        );
 
         std::fs::write(d.path().join("Projects/b.txt"), b"x").unwrap();
         pump(&mut b, "a new item inside", |b| b.entries().len() == 7);
         assert_eq!(names(&b)[..4], ["Projects", "cupertino", "b.txt", "a.txt"]);
         std::fs::remove_dir_all(d.path().join("Projects")).unwrap();
-        pump(&mut b, "the expanded folder's removal", |b| b.entries().len() == 3);
+        pump(&mut b, "the expanded folder's removal", |b| {
+            b.entries().len() == 3
+        });
         assert!(b.outline().iter().all(|r| r.level == 0 && !r.expanded));
 
         std::fs::create_dir(d.path().join("Again")).unwrap();
@@ -810,16 +1125,39 @@ mod tests {
         b.go(d.path().join("Again")).unwrap();
         b.back().unwrap();
         pump(&mut b, "the listing again", |b| b.entries().len() == 4);
-        assert!(b.outline().iter().all(|r| !r.expanded), "navigating shows the folder collapsed");
+        assert!(
+            b.outline().iter().all(|r| !r.expanded),
+            "navigating shows the folder collapsed"
+        );
     }
 
     #[test]
     fn recents_lists_the_bookmarked_files_live_and_has_no_enclosing_folder() {
         let d = tree();
         let xbel = d.path().join(recents::XBEL_NAME);
-        let href = |name: &str| format!("<bookmark href=\"file://{}\" added=\"2026-10-01T09:00:00Z\"/>", d.path().join(name).display());
-        std::fs::write(&xbel, format!("<xbel>{}{}</xbel>", href("Notes.md"), href("Projects/cupertino"))).unwrap();
-        let mut b = Browser::open(recents::location().to_path_buf(), SortSpec::default(), xbel.clone(), None, quiet()).unwrap();
+        let href = |name: &str| {
+            format!(
+                "<bookmark href=\"file://{}\" added=\"2026-10-01T09:00:00Z\"/>",
+                d.path().join(name).display()
+            )
+        };
+        std::fs::write(
+            &xbel,
+            format!(
+                "<xbel>{}{}</xbel>",
+                href("Notes.md"),
+                href("Projects/cupertino")
+            ),
+        )
+        .unwrap();
+        let mut b = Browser::open(
+            recents::location().to_path_buf(),
+            SortSpec::default(),
+            xbel.clone(),
+            None,
+            quiet(),
+        )
+        .unwrap();
         assert!(b.is_virtual());
         pump(&mut b, "the recent items", |b| b.entries().len() == 2);
         assert_eq!(names(&b), ["cupertino", "Notes.md"]);
@@ -839,7 +1177,14 @@ mod tests {
     #[test]
     fn a_search_shows_the_matching_items_flat_and_live_and_another_folder_ends_it() {
         let d = tree();
-        let mut b = Browser::open(d.path().to_path_buf(), SortSpec::default(), unused_recents(), None, quiet()).unwrap();
+        let mut b = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            unused_recents(),
+            None,
+            quiet(),
+        )
+        .unwrap();
         pump(&mut b, "the listing", |b| b.entries().len() == 4);
         b.expand(3).unwrap();
         pump(&mut b, "the folder's items", |b| b.entries().len() == 5);
@@ -848,14 +1193,20 @@ mod tests {
         assert_eq!(names(&b), ["file2.txt", "file10.txt"]);
         assert_eq!((b.filter(), b.item_count()), (Some("file"), 2));
         assert!(b.selection().is_empty(), "Notes.md is not shown");
-        assert!(b.outline().iter().all(|r| !r.expandable), "results are flat");
+        assert!(
+            b.outline().iter().all(|r| !r.expandable),
+            "results are flat"
+        );
         assert!(!b.expand(0).unwrap());
         std::fs::write(d.path().join("profile.txt"), b"x").unwrap();
         pump(&mut b, "a new match", |b| b.entries().len() == 3);
         assert_eq!(names(&b), ["file2.txt", "file10.txt", "profile.txt"]);
         b.set_filter("");
         assert_eq!(b.entries().len(), 5);
-        assert!(b.outline().iter().all(|r| !r.expanded), "the search collapsed the folders");
+        assert!(
+            b.outline().iter().all(|r| !r.expanded),
+            "the search collapsed the folders"
+        );
         b.set_filter("notes");
         b.go(d.path().join("Projects")).unwrap();
         assert_eq!(b.filter(), None);

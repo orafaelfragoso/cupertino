@@ -71,16 +71,29 @@ impl DesignTokens {
         let raw: RawTokens = serde_json::from_str(json)?;
         let mut colors = HashMap::new();
         for a in Appearance::ALL {
-            let cat = raw.appearances.get(a.as_str()).ok_or_else(|| Error::NotFound(format!("colour catalog for {}", a.as_str())))?;
-            let map = cat.0.iter().map(|(k, v)| (k.clone(), Color::from_rgba8(*v))).collect();
+            let cat = raw
+                .appearances
+                .get(a.as_str())
+                .ok_or_else(|| Error::NotFound(format!("colour catalog for {}", a.as_str())))?;
+            let map = cat
+                .0
+                .iter()
+                .map(|(k, v)| (k.clone(), Color::from_rgba8(*v)))
+                .collect();
             colors.insert(a, ColorTable { map });
         }
-        Ok(Self { colors, typography: Typography::from_raw(&raw.typography) })
+        Ok(Self {
+            colors,
+            typography: Typography::from_raw(&raw.typography),
+        })
     }
 
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let text = std::fs::read_to_string(path).map_err(|source| Error::Io { path: path.to_path_buf(), source })?;
+        let text = std::fs::read_to_string(path).map_err(|source| Error::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
         Self::from_str(&text)
     }
 
@@ -92,7 +105,13 @@ impl DesignTokens {
     /// Colour by name. High-contrast catalogs only override part of the palette, so a missing entry falls back to the
     /// matching normal-contrast appearance.
     pub fn color(&self, a: Appearance, name: &str) -> Option<Color> {
-        self.colors[&a].get(name).or_else(|| if a.is_high_contrast() { self.colors[&a.base()].get(name) } else { None })
+        self.colors[&a].get(name).or_else(|| {
+            if a.is_high_contrast() {
+                self.colors[&a.base()].get(name)
+            } else {
+                None
+            }
+        })
     }
 
     pub fn semantic(&self, a: Appearance, c: SemanticColor) -> Option<Color> {
@@ -121,17 +140,32 @@ mod tests {
     fn documented_values_match() {
         let t = tokens();
         let hex = |a, c| t.semantic(a, c).unwrap().hex();
-        assert_eq!(hex(Appearance::Light, SemanticColor::WindowBackground), "#ECECEC");
-        assert_eq!(hex(Appearance::Dark, SemanticColor::WindowBackground), "#323232");
-        assert_eq!(hex(Appearance::Light, SemanticColor::ControlBackground), "#FFFFFF");
-        assert_eq!(hex(Appearance::Dark, SemanticColor::ControlBackground), "#1E1E1E");
+        assert_eq!(
+            hex(Appearance::Light, SemanticColor::WindowBackground),
+            "#ECECEC"
+        );
+        assert_eq!(
+            hex(Appearance::Dark, SemanticColor::WindowBackground),
+            "#323232"
+        );
+        assert_eq!(
+            hex(Appearance::Light, SemanticColor::ControlBackground),
+            "#FFFFFF"
+        );
+        assert_eq!(
+            hex(Appearance::Dark, SemanticColor::ControlBackground),
+            "#1E1E1E"
+        );
         assert_eq!(hex(Appearance::Light, SemanticColor::SystemBlue), "#007AFF");
         assert_eq!(hex(Appearance::Dark, SemanticColor::SystemBlue), "#0A84FF");
         assert_eq!(hex(Appearance::Light, SemanticColor::SystemRed), "#FF3B30");
         assert_eq!(hex(Appearance::Dark, SemanticColor::SystemRed), "#FF453A");
         assert_eq!(hex(Appearance::Light, SemanticColor::Grid), "#E6E6E6");
         assert_eq!(hex(Appearance::Dark, SemanticColor::Grid), "#1A1A1A");
-        assert_eq!(hex(Appearance::Light, SemanticColor::KeyboardFocusIndicator), "#3B99FC");
+        assert_eq!(
+            hex(Appearance::Light, SemanticColor::KeyboardFocusIndicator),
+            "#3B99FC"
+        );
     }
 
     #[test]
@@ -140,7 +174,9 @@ mod tests {
         let label = t.semantic(Appearance::Light, SemanticColor::Label).unwrap();
         assert_eq!(label.to_rgba8(), [0, 0, 0, 216]);
         assert!((label.a - 0.847).abs() < 0.001);
-        let rim = t.semantic(Appearance::Light, SemanticColor::WindowRim).unwrap();
+        let rim = t
+            .semantic(Appearance::Light, SemanticColor::WindowRim)
+            .unwrap();
         assert!((rim.a - 0.349).abs() < 0.002);
         let dark_label = t.semantic(Appearance::Dark, SemanticColor::Label).unwrap();
         assert_eq!(dark_label.hex(), "#FFFFFF");
@@ -159,7 +195,10 @@ mod tests {
         let t = tokens();
         let name = SemanticColor::KeyboardFocusIndicator.name();
         assert!(t.table(Appearance::DarkHighContrast).get(name).is_none());
-        assert_eq!(t.color(Appearance::DarkHighContrast, name), t.table(Appearance::Dark).get(name));
+        assert_eq!(
+            t.color(Appearance::DarkHighContrast, name),
+            t.table(Appearance::Dark).get(name)
+        );
         assert!(t.color(Appearance::Light, "no-such-colour").is_none());
     }
 
@@ -181,6 +220,9 @@ mod tests {
         assert!(DesignTokens::from_str("{").is_err());
         assert!(DesignTokens::from_str("{\"appearances\":{},\"typography\":{}}").is_err());
         let light_only = "{\"appearances\":{\"light\":{}},\"typography\":{\"sizes\":{},\"system_font\":{\"units_per_em\":1,\"ascender\":1,\"descender\":0,\"line_gap\":0,\"cap_height\":1,\"x_height\":1,\"tracking\":{}}}}";
-        assert!(matches!(DesignTokens::from_str(light_only), Err(Error::NotFound(_))));
+        assert!(matches!(
+            DesignTokens::from_str(light_only),
+            Err(Error::NotFound(_))
+        ));
     }
 }

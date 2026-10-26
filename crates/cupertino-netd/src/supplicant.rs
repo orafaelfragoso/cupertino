@@ -57,18 +57,31 @@ pub enum ConnectFailure {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SupplicantEvent {
     /// Joining a network has begun (also when the supplicant picks a saved network itself).
-    Connecting { ifindex: u32 },
-    Connected { ifindex: u32, ssid: Ssid },
+    Connecting {
+        ifindex: u32,
+    },
+    Connected {
+        ifindex: u32,
+        ssid: Ssid,
+    },
     /// The association ended.
-    Disconnected { ifindex: u32 },
+    Disconnected {
+        ifindex: u32,
+    },
     /// A connection attempt that this daemon asked for failed.
-    Failed { ifindex: u32, reason: ConnectFailure },
+    Failed {
+        ifindex: u32,
+        reason: ConnectFailure,
+    },
 }
 
 impl SupplicantEvent {
     pub fn ifindex(&self) -> u32 {
         match self {
-            Self::Connecting { ifindex } | Self::Connected { ifindex, .. } | Self::Disconnected { ifindex } | Self::Failed { ifindex, .. } => *ifindex,
+            Self::Connecting { ifindex }
+            | Self::Connected { ifindex, .. }
+            | Self::Disconnected { ifindex }
+            | Self::Failed { ifindex, .. } => *ifindex,
         }
     }
 }
@@ -94,7 +107,13 @@ pub trait Supplicant {
 
     /// Starts a connection. `passphrase` is for a [`NetworkClass::Psk`] network the supplicant has
     /// no credentials for; it goes to the supplicant only when the supplicant asks for it.
-    fn connect(&mut self, interface: Interface<'_>, ssid: &Ssid, class: NetworkClass, passphrase: Option<&str>) -> Result<()>;
+    fn connect(
+        &mut self,
+        interface: Interface<'_>,
+        ssid: &Ssid,
+        class: NetworkClass,
+        passphrase: Option<&str>,
+    ) -> Result<()>;
 
     fn disconnect(&mut self, interface: Interface<'_>) -> Result<()>;
 
@@ -114,7 +133,12 @@ pub mod fake {
     pub enum Call {
         PowerOn(u32),
         Scan(u32),
-        Connect { ifindex: u32, ssid: Ssid, class: NetworkClass, passphrase: Option<String> },
+        Connect {
+            ifindex: u32,
+            ssid: Ssid,
+            class: NetworkClass,
+            passphrase: Option<String>,
+        },
         Disconnect(u32),
     }
 
@@ -141,8 +165,19 @@ pub mod fake {
             Ok(self.known.clone())
         }
 
-        fn connect(&mut self, interface: Interface<'_>, ssid: &Ssid, class: NetworkClass, passphrase: Option<&str>) -> Result<()> {
-            self.calls.push(Call::Connect { ifindex: interface.index, ssid: ssid.clone(), class, passphrase: passphrase.map(str::to_owned) });
+        fn connect(
+            &mut self,
+            interface: Interface<'_>,
+            ssid: &Ssid,
+            class: NetworkClass,
+            passphrase: Option<&str>,
+        ) -> Result<()> {
+            self.calls.push(Call::Connect {
+                ifindex: interface.index,
+                ssid: ssid.clone(),
+                class,
+                passphrase: passphrase.map(str::to_owned),
+            });
             Ok(())
         }
 
@@ -152,7 +187,10 @@ pub mod fake {
         }
 
         fn events(&mut self) -> Vec<Result<SupplicantEvent>> {
-            std::mem::take(&mut self.queued).into_iter().map(Ok).collect()
+            std::mem::take(&mut self.queued)
+                .into_iter()
+                .map(Ok)
+                .collect()
         }
 
         fn as_fd(&self) -> Option<BorrowedFd<'_>> {

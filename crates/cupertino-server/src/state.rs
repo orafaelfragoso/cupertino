@@ -5,7 +5,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use cupertino_wm::{AppId, Command, Effect, MapParams, OutputId, Point as MPoint, Rect, Size, WindowId, Wm, WmConfig};
+use cupertino_wm::{
+    AppId, Command, Effect, MapParams, OutputId, Point as MPoint, Rect, Size, WindowId, Wm,
+    WmConfig,
+};
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::desktop::{layer_map_for_output, PopupManager, Window, WindowSurfaceType};
 use smithay::input::keyboard::XkbConfig;
@@ -18,7 +21,9 @@ use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Display, DisplayHandle};
-use smithay::utils::{Clock, Logical, Monotonic, Point, Rectangle, Serial, Size as SmSize, Transform, SERIAL_COUNTER};
+use smithay::utils::{
+    Clock, Logical, Monotonic, Point, Rectangle, Serial, Size as SmSize, Transform, SERIAL_COUNTER,
+};
 use smithay::wayland::compositor::{with_states, CompositorClientState, CompositorState};
 use smithay::wayland::cursor_shape::CursorShapeManagerState;
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufState};
@@ -42,26 +47,26 @@ use smithay::wayland::xdg_activation::XdgActivationState;
 use crate::backend::Backend;
 use crate::config::Config;
 use crate::cursor::CursorLoader;
-use cupertino_assets::Assets;
-use crate::decor::Decor;
 use crate::dbus::DbusHandle;
-use crate::dock::Docks;
-use crate::scroll_v1::ScrollObservers;
-use crate::session_v1::SessionObservers;
-use crate::window_manager::WindowManagers;
+use crate::decor::Decor;
 use crate::desktop::DesktopIndex;
+use crate::dock::Docks;
 use crate::fx::Effects;
+use crate::input::{ActionContext, ActionPlan, KeyRouter, ShellOp};
 use crate::kbd::CapsDebounce;
 use crate::menu_bar::MenuBars;
 use crate::overlays::Overlays;
-use crate::protocols::MenuProtocols;
-use crate::shell_v1::ShellV1Global;
-use crate::supervisor::Supervisor;
-use crate::input::{ActionContext, ActionPlan, KeyRouter, ShellOp};
 use crate::policy;
+use crate::protocols::MenuProtocols;
 use crate::render::scene::RenderResources;
 use crate::render::ElementCache;
+use crate::scroll_v1::ScrollObservers;
+use crate::session_v1::SessionObservers;
 use crate::shell::{self, Shell};
+use crate::shell_v1::ShellV1Global;
+use crate::supervisor::Supervisor;
+use crate::window_manager::WindowManagers;
+use cupertino_assets::Assets;
 
 #[derive(Debug, Default)]
 pub struct ClientState {
@@ -85,7 +90,10 @@ pub fn set_minimize_timing(cfg: &mut WmConfig, effects: crate::fx::EffectsConfig
     let defaults = WmConfig::default().animation;
     let (minimizing, restoring) = match effects.minimize {
         Some(kind) => {
-            let linear = cupertino_animation::Curve::Timed { duration: kind.duration_s(false), bezier: cupertino_animation::CubicBezier::LINEAR };
+            let linear = cupertino_animation::Curve::Timed {
+                duration: kind.duration_s(false),
+                bezier: cupertino_animation::CubicBezier::LINEAR,
+            };
             (linear, linear)
         }
         None => (defaults.minimizing, defaults.restoring),
@@ -128,8 +136,12 @@ impl WindowEntry {
     /// Apply a model configure: client size (frame minus insets), model states, activation.
     pub fn configure(&self, frame: Rect, states: &cupertino_wm::ToplevelStates, activated: bool) {
         let ins = self.insets;
-        let size = (frame.w > ins.horizontal() && frame.h > ins.vertical())
-            .then(|| ((frame.w - ins.horizontal()).round() as i32, (frame.h - ins.vertical()).round() as i32));
+        let size = (frame.w > ins.horizontal() && frame.h > ins.vertical()).then(|| {
+            (
+                (frame.w - ins.horizontal()).round() as i32,
+                (frame.h - ins.vertical()).round() as i32,
+            )
+        });
         let t = &self.toplevel;
         t.with_pending_state(|st| {
             if let Some(sz) = size {
@@ -189,9 +201,19 @@ pub struct OutputEntry {
 /// What the pointer is over inside the window stack.
 #[derive(Clone, Debug)]
 pub enum WindowTarget {
-    Surface { id: WindowId, surface: WlSurface, origin: Point<f64, Logical> },
+    Surface {
+        id: WindowId,
+        surface: WlSurface,
+        origin: Point<f64, Logical>,
+    },
     /// Compositor-drawn decorations: `local` is frame-local, `content` the surface size.
-    Decoration { id: WindowId, style: cupertino_decorations::TitlebarStyle, hit: cupertino_decorations::Hit, content: (f64, f64), local: (f64, f64) },
+    Decoration {
+        id: WindowId,
+        style: cupertino_decorations::TitlebarStyle,
+        hit: cupertino_decorations::Hit,
+        content: (f64, f64),
+        local: (f64, f64),
+    },
 }
 
 /// Pointer interaction owned by the window model (move / resize) or the shell.
@@ -338,11 +360,15 @@ impl Cupertino {
         let clock = Clock::new();
 
         let socket_name = if listen_on_socket {
-            let source = ListeningSocketSource::new_auto().context("creating the wayland socket")?;
+            let source =
+                ListeningSocketSource::new_auto().context("creating the wayland socket")?;
             let name = source.socket_name().to_string_lossy().into_owned();
             loop_handle
                 .insert_source(source, |stream, _, state| {
-                    if let Err(e) = state.display_handle.insert_client(stream, Arc::new(ClientState::default())) {
+                    if let Err(e) = state
+                        .display_handle
+                        .insert_client(stream, Arc::new(ClientState::default()))
+                    {
                         tracing::warn!(error = %e, "adding wayland client failed");
                     }
                 })
@@ -353,14 +379,20 @@ impl Cupertino {
             None
         };
         loop_handle
-            .insert_source(Generic::new(display, Interest::READ, Mode::Level), |_, display, state| {
-                // Safety: the display is never dropped while the source is installed.
-                unsafe {
-                    display.get_mut().dispatch_clients(state).expect("dispatching wayland clients");
-                }
-                state.clipboard_check_owner();
-                Ok(PostAction::Continue)
-            })
+            .insert_source(
+                Generic::new(display, Interest::READ, Mode::Level),
+                |_, display, state| {
+                    // Safety: the display is never dropped while the source is installed.
+                    unsafe {
+                        display
+                            .get_mut()
+                            .dispatch_clients(state)
+                            .expect("dispatching wayland clients");
+                    }
+                    state.clipboard_check_owner();
+                    Ok(PostAction::Continue)
+                },
+            )
             .map_err(|e| anyhow::anyhow!("inserting display source: {e}"))?;
 
         let compositor_state = CompositorState::new::<Self>(&dh);
@@ -372,7 +404,8 @@ impl Cupertino {
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let primary_selection_state = PrimarySelectionState::new::<Self>(&dh);
-        let (ext_data_control_state, wlr_data_control_state) = crate::clipboard::data_control_states(&dh, &primary_selection_state);
+        let (ext_data_control_state, wlr_data_control_state) =
+            crate::clipboard::data_control_states(&dh, &primary_selection_state);
         let viewporter_state = ViewporterState::new::<Self>(&dh);
         let fractional_scale_state = FractionalScaleManagerState::new::<Self>(&dh);
         let presentation_state = PresentationState::new::<Self>(&dh, clock.id() as u32);
@@ -384,7 +417,10 @@ impl Cupertino {
             smithay::wayland::idle_notify::IdleNotifierState::new(&dh, loop_handle.clone()),
             smithay::wayland::idle_inhibit::IdleInhibitManagerState::new::<Self>(&dh),
         );
-        let power = crate::power::Power::new(crate::display_power::IdlePolicy::new(config.power, policy::clock_seconds(std::time::Duration::from(clock.now()))));
+        let power = crate::power::Power::new(crate::display_power::IdlePolicy::new(
+            config.power,
+            policy::clock_seconds(std::time::Duration::from(clock.now())),
+        ));
         let _ = PointerGesturesState::new::<Self>(&dh);
         let _ = RelativePointerManagerState::new::<Self>(&dh);
 
@@ -416,9 +452,13 @@ impl Cupertino {
         let key_filters = crate::kbd_filters::KeyFilters::new(&config.keyboard);
         let cursor_loader = CursorLoader::load(assets.cursor_theme(), config.pointer.cursor_colors);
         let with_bridge = overlays.accent.has_table();
-        let text_input_state = with_bridge.then(|| smithay::wayland::text_input::TextInputManagerState::new::<Self>(&dh));
-        let input_method_state = with_bridge
-            .then(|| smithay::wayland::input_method::InputMethodManagerState::new::<Self, _>(&dh, |client| client.get_data::<ClientState>().is_some_and(|c| c.internal)));
+        let text_input_state = with_bridge
+            .then(|| smithay::wayland::text_input::TextInputManagerState::new::<Self>(&dh));
+        let input_method_state = with_bridge.then(|| {
+            smithay::wayland::input_method::InputMethodManagerState::new::<Self, _>(&dh, |client| {
+                client.get_data::<ClientState>().is_some_and(|c| c.internal)
+            })
+        });
         let mut me = Self {
             display_handle: dh,
             loop_handle,
@@ -473,7 +513,9 @@ impl Cupertino {
             input_method: None,
             text_cursor: None,
             caps_press_time: 0,
-            gestures: cupertino_input::GestureRecognizer::new(cupertino_input::GestureConfig::default()),
+            gestures: cupertino_input::GestureRecognizer::new(
+                cupertino_input::GestureConfig::default(),
+            ),
             pointer_devices: HashMap::new(),
             gesture_forwarded: false,
             gesture_source: Default::default(),
@@ -509,7 +551,9 @@ impl Cupertino {
             exit_after_screenshot: false,
             fixed_time: None,
             time_scale: 1.0,
-            time_origin: policy::clock_seconds(std::time::Duration::from(Clock::<Monotonic>::new().now())),
+            time_origin: policy::clock_seconds(std::time::Duration::from(
+                Clock::<Monotonic>::new().now(),
+            )),
         };
         me.apply_keyboard_settings();
         Ok(me)
@@ -546,20 +590,50 @@ impl Cupertino {
     /// Register an output of `mode` at `scale` and `transform` with its top-left corner at
     /// `position` in the global logical space. Returns its model id. Outputs are created for the
     /// enabled heads of `crate::displays`.
-    pub fn add_output(&mut self, name: &str, physical: PhysicalProperties, mode: OutputMode, scale: f64, transform: Transform, position: (i32, i32)) -> OutputId {
+    pub fn add_output(
+        &mut self,
+        name: &str,
+        physical: PhysicalProperties,
+        mode: OutputMode,
+        scale: f64,
+        transform: Transform,
+        position: (i32, i32),
+    ) -> OutputId {
         let output = Output::new(name.to_string(), physical);
         let global = output.create_global::<Self>(&self.display_handle);
-        output.change_current_state(Some(mode), Some(transform), Some(OutputScale::Fractional(scale)), Some(position.into()));
+        output.change_current_state(
+            Some(mode),
+            Some(transform),
+            Some(OutputScale::Fractional(scale)),
+            Some(position.into()),
+        );
         output.set_preferred(mode);
         let id = OutputId(self.next_output);
         self.next_output += 1;
         let rect = output_rect(mode, scale, transform, position);
         let tracker = OutputDamageTracker::from_output(&output);
-        self.outputs.push(OutputEntry { output: output.clone(), id, rect, scale, tracker, cache: ElementCache::default(), redraw: true, global: Some(global), lock: Default::default() });
+        self.outputs.push(OutputEntry {
+            output: output.clone(),
+            id,
+            rect,
+            scale,
+            tracker,
+            cache: ElementCache::default(),
+            redraw: true,
+            global: Some(global),
+            lock: Default::default(),
+        });
         let now = self.now();
         self.menu_bars.set.add_output(id, rect, now);
         let usable = self.usable_area(id);
-        let fx = self.wm.handle(Command::AddOutput { output: id, rect, usable }, now);
+        let fx = self.wm.handle(
+            Command::AddOutput {
+                output: id,
+                rect,
+                usable,
+            },
+            now,
+        );
         self.apply_effects(fx);
         self.refresh_usable_area(id);
         id
@@ -567,7 +641,9 @@ impl Cupertino {
 
     /// Remove an output (hot-unplug): its windows move to the first remaining output.
     pub fn remove_output(&mut self, id: OutputId) {
-        let Some(idx) = self.outputs.iter().position(|o| o.id == id) else { return };
+        let Some(idx) = self.outputs.iter().position(|o| o.id == id) else {
+            return;
+        };
         let entry = self.outputs.remove(idx);
         let now = self.now();
         self.menu_bars.remove_output(id, now);
@@ -584,10 +660,24 @@ impl Cupertino {
 
     /// Give an output a new mode, scale, transform or position (a nested window resized, an
     /// output configuration applied): its layer surfaces, lock surface, menu bar and windows follow.
-    pub fn configure_output(&mut self, id: OutputId, mode: OutputMode, scale: f64, transform: Transform, position: (i32, i32)) {
-        let Some(idx) = self.outputs.iter().position(|o| o.id == id) else { return };
+    pub fn configure_output(
+        &mut self,
+        id: OutputId,
+        mode: OutputMode,
+        scale: f64,
+        transform: Transform,
+        position: (i32, i32),
+    ) {
+        let Some(idx) = self.outputs.iter().position(|o| o.id == id) else {
+            return;
+        };
         let entry = &mut self.outputs[idx];
-        entry.output.change_current_state(Some(mode), Some(transform), Some(OutputScale::Fractional(scale)), Some(position.into()));
+        entry.output.change_current_state(
+            Some(mode),
+            Some(transform),
+            Some(OutputScale::Fractional(scale)),
+            Some(position.into()),
+        );
         entry.output.set_preferred(mode);
         entry.scale = scale;
         entry.rect = output_rect(mode, scale, transform, position);
@@ -598,7 +688,11 @@ impl Cupertino {
         self.configure_lock_surface(idx);
         self.menu_bars.set.set_output_rect(id, rect);
         let usable = self.usable_area(id);
-        self.command(Command::SetOutputRect { output: id, rect, usable });
+        self.command(Command::SetOutputRect {
+            output: id,
+            rect,
+            usable,
+        });
         self.refresh_usable_area(id);
         self.request_redraw();
     }
@@ -636,12 +730,25 @@ impl Cupertino {
     /// Area available to windows on `id` (menu bar and layer-shell zones removed; the dock's
     /// exclusive zone is one of them).
     pub fn usable_area(&self, id: OutputId) -> Rect {
-        let Some(o) = self.output_entry(id) else { return Rect::default() };
-        let menu = if self.config.shell.show_menu_bar { self.menu_bars.reserved_height(id) } else { 0.0 };
+        let Some(o) = self.output_entry(id) else {
+            return Rect::default();
+        };
+        let menu = if self.config.shell.show_menu_bar {
+            self.menu_bars.reserved_height(id)
+        } else {
+            0.0
+        };
         let zone = {
             let map = layer_map_for_output(&o.output);
             let z = map.non_exclusive_zone();
-            (z.size.w > 0 && z.size.h > 0).then(|| Rect::new(o.rect.x + z.loc.x as f64, o.rect.y + z.loc.y as f64, z.size.w as f64, z.size.h as f64))
+            (z.size.w > 0 && z.size.h > 0).then(|| {
+                Rect::new(
+                    o.rect.x + z.loc.x as f64,
+                    o.rect.y + z.loc.y as f64,
+                    z.size.w as f64,
+                    z.size.h as f64,
+                )
+            })
         };
         shell::usable_area(o.rect, menu, zone)
     }
@@ -649,9 +756,17 @@ impl Cupertino {
     pub fn refresh_usable_area(&mut self, id: OutputId) {
         let usable = self.usable_area(id);
         let now = self.now();
-        let fx = self.wm.handle(Command::SetUsableArea { output: id, usable }, now);
+        let fx = self
+            .wm
+            .handle(Command::SetUsableArea { output: id, usable }, now);
         self.apply_effects(fx);
-        let fx = self.wm.handle(Command::SetDockZone { output: id, zone: self.dock_rect(id) }, now);
+        let fx = self.wm.handle(
+            Command::SetDockZone {
+                output: id,
+                zone: self.dock_rect(id),
+            },
+            now,
+        );
         self.apply_effects(fx);
         self.refresh_window_managers();
     }
@@ -679,15 +794,22 @@ impl Cupertino {
         if self.entry_for_surface(&root).is_some() {
             return Some(root);
         }
-        self.popups.find_popup(surface).and_then(|p| smithay::desktop::find_popup_root_surface(&p).ok())
+        self.popups
+            .find_popup(surface)
+            .and_then(|p| smithay::desktop::find_popup_root_surface(&p).ok())
     }
 
     /// Called on a toplevel commit: sends the initial configure, maps the window once it has a
     /// buffer and tracks unmapping.
     pub fn toplevel_committed(&mut self, surface: &WlSurface) {
-        let Some(idx) = self.windows.iter().position(|w| w.has_surface(surface)) else { return };
+        let Some(idx) = self.windows.iter().position(|w| w.has_surface(surface)) else {
+            return;
+        };
         let initial_sent = with_states(surface, |s| {
-            s.data_map.get::<XdgToplevelSurfaceData>().map(|d| d.lock().unwrap().initial_configure_sent).unwrap_or(false)
+            s.data_map
+                .get::<XdgToplevelSurfaceData>()
+                .map(|d| d.lock().unwrap().initial_configure_sent)
+                .unwrap_or(false)
         });
         if !initial_sent {
             use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
@@ -698,7 +820,11 @@ impl Cupertino {
             t.send_configure();
             return;
         }
-        let has_buffer = smithay::backend::renderer::utils::with_renderer_surface_state(surface, |s| s.buffer().is_some()).unwrap_or(false);
+        let has_buffer =
+            smithay::backend::renderer::utils::with_renderer_surface_state(surface, |s| {
+                s.buffer().is_some()
+            })
+            .unwrap_or(false);
         let (mapped, id) = (self.windows[idx].mapped, self.windows[idx].id);
         match (mapped, has_buffer) {
             (false, true) => self.map_window(idx),
@@ -713,7 +839,15 @@ impl Cupertino {
                 self.refresh_snapshot(id);
                 let (min, max) = frame_limits(self.windows[idx].insets, size_hints(surface));
                 let now = self.now();
-                let fx = self.wm.handle(Command::SetSizeHints { window: id, min, max, content: None }, now);
+                let fx = self.wm.handle(
+                    Command::SetSizeHints {
+                        window: id,
+                        min,
+                        max,
+                        content: None,
+                    },
+                    now,
+                );
                 self.apply_effects(fx);
             }
             (false, false) => {}
@@ -725,7 +859,12 @@ impl Cupertino {
         let surface = self.windows[idx].surface().clone();
         let id = self.windows[idx].id;
         let (app_id, title) = with_states(&surface, |s| {
-            let d = s.data_map.get::<XdgToplevelSurfaceData>().unwrap().lock().unwrap();
+            let d = s
+                .data_map
+                .get::<XdgToplevelSurfaceData>()
+                .unwrap()
+                .lock()
+                .unwrap();
             (d.app_id.clone(), d.title.clone())
         });
         let identity = policy::app_identity(app_id.as_deref(), title.as_deref());
@@ -734,24 +873,47 @@ impl Cupertino {
         let (min, max) = frame_limits(self.windows[idx].insets, size_hints(&surface));
         // the protocol facts the window kind is chosen from (`cupertino_wm::window_kind`): parent and
         // modality; Wayland has no utility-window signal
-        let parent = self.windows[idx].toplevel.parent().and_then(|p| self.window_id_for_surface(&p));
+        let parent = self.windows[idx]
+            .toplevel
+            .parent()
+            .and_then(|p| self.window_id_for_surface(&p));
         let output = self
             .output_at(self.pointer.current_location())
             .map(|o| o.id)
             .or_else(|| self.outputs.first().map(|o| o.id));
         let Some(output) = output else { return };
-        let (screen, usable) = self.wm.output(output).map(|o| (o.rect, o.usable)).unwrap_or_default();
+        let (screen, usable) = self
+            .wm
+            .output(output)
+            .map(|o| (o.rect, o.usable))
+            .unwrap_or_default();
         // the visible frame new windows are placed in: the stage frame while the stage is on
-        let visible = if self.window_managers.stage_active(output) { cupertino_stage::StageConfig::default().stage_frame(usable) } else { usable };
+        let visible = if self.window_managers.stage_active(output) {
+            cupertino_stage::StageConfig::default().stage_frame(usable)
+        } else {
+            usable
+        };
         let ins = self.windows[idx].insets;
-        let size = (geo.size.w > 0 && geo.size.h > 0).then(|| Size::new(geo.size.w as f64 + ins.horizontal(), geo.size.h as f64 + ins.vertical()));
+        let size = (geo.size.w > 0 && geo.size.h > 0).then(|| {
+            Size::new(
+                geo.size.w as f64 + ins.horizontal(),
+                geo.size.h as f64 + ins.vertical(),
+            )
+        });
         let size = policy::new_window_size(visible, size, &self.config);
         let frame = if parent.is_some() {
             // the model places child windows itself (sheets, dialogs)
             policy::centred(visible, size)
         } else {
             self.cascade.retain(|w| self.wm.window(w).is_some());
-            self.cascade.place(&identity, id, size, visible, screen, self.config.cascade_step)
+            self.cascade.place(
+                &identity,
+                id,
+                size,
+                visible,
+                screen,
+                self.config.cascade_step,
+            )
         };
         let mut params = MapParams::new(id, &identity, frame);
         params.title = title.unwrap_or_default();
@@ -764,7 +926,9 @@ impl Cupertino {
         params.output = Some(output);
         self.windows[idx].mapped = true;
         self.apply_pending_menu_addresses(id.0, &surface);
-        let handle = self.foreign_toplevel_state.new_toplevel::<Self>(&params.title, &identity);
+        let handle = self
+            .foreign_toplevel_state
+            .new_toplevel::<Self>(&params.title, &identity);
         self.windows[idx].foreign = Some(handle);
         let now = self.now();
         let fx = self.wm.handle(Command::Map(params), now);
@@ -772,7 +936,10 @@ impl Cupertino {
     }
 
     /// Insets for a window decorated by the compositor with a title bar of `style`.
-    pub fn decoration_insets(&self, style: cupertino_decorations::TitlebarStyle) -> crate::config::Insets {
+    pub fn decoration_insets(
+        &self,
+        style: cupertino_decorations::TitlebarStyle,
+    ) -> crate::config::Insets {
         if self.config.window.decorations {
             self.decor.insets(style)
         } else {
@@ -782,11 +949,19 @@ impl Cupertino {
 
     /// The cursor of the resize zone `edge` of window `id` at its size now, `None` where it cannot resize that way
     /// (`decor::resize_cursor`).
-    pub fn resize_cursor(&self, id: WindowId, edge: cupertino_decorations::ResizeEdge) -> Option<smithay::input::pointer::CursorIcon> {
+    pub fn resize_cursor(
+        &self,
+        id: WindowId,
+        edge: cupertino_decorations::ResizeEdge,
+    ) -> Option<smithay::input::pointer::CursorIcon> {
         let w = self.wm.window(id)?;
         let (min, max) = w.size_limits();
         let f = w.geometry();
-        crate::decor::resize_cursor(edge, crate::decor::AxisFreedom::of(f.w, min.w, max.w), crate::decor::AxisFreedom::of(f.h, min.h, max.h))
+        crate::decor::resize_cursor(
+            edge,
+            crate::decor::AxisFreedom::of(f.w, min.w, max.w),
+            crate::decor::AxisFreedom::of(f.h, min.h, max.h),
+        )
     }
 
     /// What is under `pos` (global logical), from the top down: an override-redirect surface, then per window, in
@@ -800,34 +975,74 @@ impl Cupertino {
         }
         let out = self.output_at(pos)?;
         let now = self.now();
-        let list = crate::render::scene::windows_on_output(&self.wm, out.id, out.rect.w, crate::render::motion::WorkspaceTransition::for_options(self.display_options()), now);
+        let list = crate::render::scene::windows_on_output(
+            &self.wm,
+            out.id,
+            out.rect.w,
+            crate::render::motion::WorkspaceTransition::for_options(self.display_options()),
+            now,
+        );
         for (id, slide, _) in list.into_iter().rev() {
             // strip thumbnails and hidden windows take no input of their clients (`window_manager_press`)
             if self.window_managers.passes_input(id) {
                 continue;
             }
-            let Some(entry) = self.entry(id) else { continue };
-            let Some((plan, _)) = crate::render::scene::plan_for(&self.wm, entry, slide, now, &self.fx, self.display_options()) else { continue };
+            let Some(entry) = self.entry(id) else {
+                continue;
+            };
+            let Some((plan, _)) = crate::render::scene::plan_for(
+                &self.wm,
+                entry,
+                slide,
+                now,
+                &self.fx,
+                self.display_options(),
+            ) else {
+                continue;
+            };
             let geo = entry.window.geometry();
             let ins = entry.insets;
-            let origin = Point::<f64, Logical>::from((plan.visual.x + ins.left - geo.loc.x as f64, plan.visual.y + ins.top - geo.loc.y as f64));
+            let origin = Point::<f64, Logical>::from((
+                plan.visual.x + ins.left - geo.loc.x as f64,
+                plan.visual.y + ins.top - geo.loc.y as f64,
+            ));
             let style = entry.titlebar;
-            let decorated = entry.server_side && self.config.window.decorations && plan.exact && (ins.top > 0.0 || style == cupertino_decorations::TitlebarStyle::Unified);
+            let decorated = entry.server_side
+                && self.config.window.decorations
+                && plan.exact
+                && (ins.top > 0.0 || style == cupertino_decorations::TitlebarStyle::Unified);
             let decoration_hit = |resize: bool| {
                 let content = (f64::from(geo.size.w), f64::from(geo.size.h));
                 let local = (pos.x - plan.visual.x, pos.y - plan.visual.y);
-                (self.decor.hit_test(style, content, local, resize), content, local)
+                (
+                    self.decor.hit_test(style, content, local, resize),
+                    content,
+                    local,
+                )
             };
             // the window control buttons of a unified bar lie over the client's surface and take the pointer first
             if decorated && style == cupertino_decorations::TitlebarStyle::Unified {
                 let (hit, content, local) = decoration_hit(false);
                 if matches!(hit, cupertino_decorations::Hit::Button(_)) {
-                    return Some(WindowTarget::Decoration { id, style, hit, content, local });
+                    return Some(WindowTarget::Decoration {
+                        id,
+                        style,
+                        hit,
+                        content,
+                        local,
+                    });
                 }
             }
             // popups lie above the window and its resize band
-            if let Some((surface, loc)) = entry.window.surface_under(pos - origin, WindowSurfaceType::POPUP) {
-                return Some(WindowTarget::Surface { id, surface, origin: origin + loc.to_f64() });
+            if let Some((surface, loc)) = entry
+                .window
+                .surface_under(pos - origin, WindowSurfaceType::POPUP)
+            {
+                return Some(WindowTarget::Surface {
+                    id,
+                    surface,
+                    origin: origin + loc.to_f64(),
+                });
             }
             // the resize zones, where the window can resize that way (the cursor follows; dropping the zone with the cursor is)
             let edge = if decorated {
@@ -835,30 +1050,55 @@ impl Cupertino {
                     cupertino_decorations::Hit::Resize(edge) => Some(edge),
                     _ => None,
                 }
-            } else if plan.exact && (!entry.server_side || !self.config.window.decorations || ins.top == 0.0) {
+            } else if plan.exact
+                && (!entry.server_side || !self.config.window.decorations || ins.top == 0.0)
+            {
                 // a client-decorated toplevel draws its own title bar: titled, the band reaches outside its window
                 // geometry; a window of ours without a title bar is untitled and has the inside band only
                 let local = (pos.x - plan.visual.x, pos.y - plan.visual.y);
-                self.decor.resize_hit((plan.visual.w, plan.visual.h), local, !entry.server_side)
+                self.decor
+                    .resize_hit((plan.visual.w, plan.visual.h), local, !entry.server_side)
             } else {
                 None
             };
             if let Some(edge) = edge.filter(|e| self.resize_cursor(id, *e).is_some()) {
                 let content = (f64::from(geo.size.w), f64::from(geo.size.h));
                 let local = (pos.x - plan.visual.x, pos.y - plan.visual.y);
-                return Some(WindowTarget::Decoration { id, style, hit: cupertino_decorations::Hit::Resize(edge), content, local });
+                return Some(WindowTarget::Decoration {
+                    id,
+                    style,
+                    hit: cupertino_decorations::Hit::Resize(edge),
+                    content,
+                    local,
+                });
             }
             let v = plan.visual;
             let in_frame = pos.x >= v.x && pos.x < v.x + v.w && pos.y >= v.y && pos.y < v.y + v.h;
             if in_frame {
-                if let Some((surface, loc)) = entry.window.surface_under(pos - origin, WindowSurfaceType::TOPLEVEL | WindowSurfaceType::SUBSURFACE) {
-                    return Some(WindowTarget::Surface { id, surface, origin: origin + loc.to_f64() });
+                if let Some((surface, loc)) = entry.window.surface_under(
+                    pos - origin,
+                    WindowSurfaceType::TOPLEVEL | WindowSurfaceType::SUBSURFACE,
+                ) {
+                    return Some(WindowTarget::Surface {
+                        id,
+                        surface,
+                        origin: origin + loc.to_f64(),
+                    });
                 }
             }
             if decorated {
                 let (hit, content, local) = decoration_hit(false);
-                if matches!(hit, cupertino_decorations::Hit::Button(_) | cupertino_decorations::Hit::Titlebar) {
-                    return Some(WindowTarget::Decoration { id, style, hit, content, local });
+                if matches!(
+                    hit,
+                    cupertino_decorations::Hit::Button(_) | cupertino_decorations::Hit::Titlebar
+                ) {
+                    return Some(WindowTarget::Decoration {
+                        id,
+                        style,
+                        hit,
+                        content,
+                        local,
+                    });
                 }
             }
         }
@@ -867,16 +1107,26 @@ impl Cupertino {
 
     /// Window id under `pos` (global logical), with the surface and its origin, from the topmost
     /// window down. Popups of a window are part of it.
-    pub fn window_surface_under(&self, pos: Point<f64, Logical>) -> Option<(WindowId, WlSurface, Point<f64, Logical>)> {
+    pub fn window_surface_under(
+        &self,
+        pos: Point<f64, Logical>,
+    ) -> Option<(WindowId, WlSurface, Point<f64, Logical>)> {
         match self.window_target_under(pos)? {
-            WindowTarget::Surface { id, surface, origin } => Some((id, surface, origin)),
+            WindowTarget::Surface {
+                id,
+                surface,
+                origin,
+            } => Some((id, surface, origin)),
             WindowTarget::Decoration { .. } => None,
         }
     }
 
     /// Pointer focus target under `pos`: overlay layer surfaces, override-redirect surfaces, top
     /// layer surfaces, windows, layer surfaces below (the drawing order).
-    pub fn surface_under(&self, pos: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>)> {
+    pub fn surface_under(
+        &self,
+        pos: Point<f64, Logical>,
+    ) -> Option<(WlSurface, Point<f64, Logical>)> {
         if self.session_lock.is_active() {
             return self.lock_surface_under(pos);
         }
@@ -892,8 +1142,15 @@ impl Cupertino {
                 for surface in map.layers_on(*l).rev() {
                     let geo = map.layer_geometry(surface)?;
                     // a menu bar is offset while it hides or reveals
-                    let shift = Point::<f64, Logical>::from((0.0, self.menu_bars.look(surface.wl_surface(), out.rect.y, now).map_or(0.0, |l| l.dy)));
-                    if let Some((s, loc)) = surface.surface_under(rel - geo.loc.to_f64() - shift, WindowSurfaceType::ALL) {
+                    let shift = Point::<f64, Logical>::from((
+                        0.0,
+                        self.menu_bars
+                            .look(surface.wl_surface(), out.rect.y, now)
+                            .map_or(0.0, |l| l.dy),
+                    ));
+                    if let Some((s, loc)) = surface
+                        .surface_under(rel - geo.loc.to_f64() - shift, WindowSurfaceType::ALL)
+                    {
                         return Some((s, origin + (geo.loc + loc).to_f64() + shift));
                     }
                 }
@@ -907,7 +1164,9 @@ impl Cupertino {
             return None;
         }
         match self.window_target_under(pos) {
-            Some(WindowTarget::Surface { surface, origin, .. }) => return Some((surface, origin)),
+            Some(WindowTarget::Surface {
+                surface, origin, ..
+            }) => return Some((surface, origin)),
             Some(WindowTarget::Decoration { .. }) => return None,
             None => {}
         }
@@ -920,7 +1179,13 @@ impl Cupertino {
         let now = self.now();
         // a minimize without a target (key binding, action) flies into the dock's slot
         let cmd = match cmd {
-            Command::Minimize { window, target: None } => Command::Minimize { window, target: self.minimize_target(window) },
+            Command::Minimize {
+                window,
+                target: None,
+            } => Command::Minimize {
+                window,
+                target: self.minimize_target(window),
+            },
             other => other,
         };
         let fx = self.wm.handle(cmd, now);
@@ -948,22 +1213,45 @@ impl Cupertino {
         self.tick_input_timers(now);
         self.tick_overlays(now);
         // windows without a close transform are skipped by `refresh_snapshot`
-        let missing: Vec<WindowId> = self.windows.iter().filter(|e| e.mapped && self.fx.snapshot_age(e.id, now).is_infinite()).map(|e| e.id).collect();
+        let missing: Vec<WindowId> = self
+            .windows
+            .iter()
+            .filter(|e| e.mapped && self.fx.snapshot_age(e.id, now).is_infinite())
+            .map(|e| e.id)
+            .collect();
         for id in missing {
             self.refresh_snapshot(id);
         }
-        if self.shell.overview.as_ref().is_some_and(|o| o.closing && !o.is_animating(now)) {
+        if self
+            .shell
+            .overview
+            .as_ref()
+            .is_some_and(|o| o.closing && !o.is_animating(now))
+        {
             self.shell.overview = None;
             self.request_redraw();
         }
-        if self.wm.wants_tick(now) || self.shell.wants_tick(now) || self.fx.wants_tick(now) || self.window_managers.wants_tick(now) || self.menu_bars_want_tick(now) || self.overlays.wants_tick() {
+        if self.wm.wants_tick(now)
+            || self.shell.wants_tick(now)
+            || self.fx.wants_tick(now)
+            || self.window_managers.wants_tick(now)
+            || self.menu_bars_want_tick(now)
+            || self.overlays.wants_tick()
+        {
             self.request_redraw();
         }
     }
 
     pub fn wants_frames(&self) -> bool {
         let now = self.now();
-        self.wm.wants_tick(now) || self.shell.wants_tick(now) || self.fx.wants_tick(now) || self.window_managers.wants_tick(now) || self.menu_bars_want_tick(now) || self.overlays.wants_tick() || self.power.policy().animating(now) || self.outputs.iter().any(|o| o.redraw)
+        self.wm.wants_tick(now)
+            || self.shell.wants_tick(now)
+            || self.fx.wants_tick(now)
+            || self.window_managers.wants_tick(now)
+            || self.menu_bars_want_tick(now)
+            || self.overlays.wants_tick()
+            || self.power.policy().animating(now)
+            || self.outputs.iter().any(|o| o.redraw)
     }
 
     pub fn apply_effects(&mut self, effects: Vec<Effect>) {
@@ -971,10 +1259,18 @@ impl Cupertino {
         for fx in effects {
             redraw = true;
             match fx {
-                Effect::Configure { window, size, states } => {
+                Effect::Configure {
+                    window,
+                    size,
+                    states,
+                } => {
                     let activated = self.wm.key_window() == Some(window);
                     if let Some(e) = self.entry(window) {
-                        let pos = self.wm.window(window).map(|w| w.geometry()).unwrap_or_default();
+                        let pos = self
+                            .wm
+                            .window(window)
+                            .map(|w| w.geometry())
+                            .unwrap_or_default();
                         e.configure(Rect::new(pos.x, pos.y, size.w, size.h), &states, activated);
                     }
                 }
@@ -987,7 +1283,9 @@ impl Cupertino {
                     // an exclusive layer surface keeps the keyboard; the key window gets it when
                     // the layer lets go (`layer_keyboard_exclusivity`)
                     if self.exclusive_layer.is_none() {
-                        let surface = window.and_then(|w| self.entry(w)).map(|e| e.surface().clone());
+                        let surface = window
+                            .and_then(|w| self.entry(w))
+                            .map(|e| e.surface().clone());
                         self.set_keyboard_focus(surface);
                     }
                     // focus moved elsewhere: the accent popup loses its reason to stay open
@@ -1000,7 +1298,11 @@ impl Cupertino {
                     }
                 }
                 Effect::SwitcherChanged { apps, selected } => {
-                    let names = apps.iter().filter_map(|a| self.wm.app(*a)).map(|a| a.identity.clone()).collect();
+                    let names = apps
+                        .iter()
+                        .filter_map(|a| self.wm.app(*a))
+                        .map(|a| a.identity.clone())
+                        .collect();
                     self.switcher_changed(names, selected);
                 }
                 Effect::AppAttention { app } => {
@@ -1016,7 +1318,9 @@ impl Cupertino {
                         self.close_overview();
                     }
                 }
-                Effect::WorkspaceCreated { .. } | Effect::WorkspaceRemoved { .. } | Effect::WorkspacesReordered { .. } => self.send_overview_to_docks(),
+                Effect::WorkspaceCreated { .. }
+                | Effect::WorkspaceRemoved { .. }
+                | Effect::WorkspacesReordered { .. } => self.send_overview_to_docks(),
                 Effect::Activate { .. }
                 | Effect::AppRegistered { .. }
                 | Effect::WindowStateChanged { .. }
@@ -1040,10 +1344,22 @@ impl Cupertino {
     /// Keep the open overview in sync with windows that opened, closed or changed state: a changed
     /// set goes to the dock for a new layout.
     fn refresh_overview_windows(&mut self) {
-        let Some(out) = self.shell.overview.as_ref().filter(|s| !s.closing).map(|s| s.output) else { return };
+        let Some(out) = self
+            .shell
+            .overview
+            .as_ref()
+            .filter(|s| !s.closing)
+            .map(|s| s.output)
+        else {
+            return;
+        };
         let now = self.now();
         let windows = shell::overview_windows(&self.wm, out, now, self.dock_rect(out));
-        let changed = self.shell.overview.as_mut().is_some_and(|s| s.set_windows(windows));
+        let changed = self
+            .shell
+            .overview
+            .as_mut()
+            .is_some_and(|s| s.set_windows(windows));
         if changed {
             self.send_overview_to_docks();
         }
@@ -1058,7 +1374,9 @@ impl Cupertino {
     }
 
     pub fn set_keyboard_focus(&mut self, surface: Option<WlSurface>) {
-        if self.session_lock.is_active() && !surface.as_ref().is_some_and(|s| self.is_lock_surface(s)) {
+        if self.session_lock.is_active()
+            && !surface.as_ref().is_some_and(|s| self.is_lock_surface(s))
+        {
             return;
         }
         let keyboard = self.seat.get_keyboard().unwrap();
@@ -1067,7 +1385,11 @@ impl Cupertino {
 
     /// Give the keyboard back to the key window.
     pub fn restore_keyboard_focus(&mut self) {
-        let surface = self.wm.key_window().and_then(|w| self.entry(w)).map(|e| e.surface().clone());
+        let surface = self
+            .wm
+            .key_window()
+            .and_then(|w| self.entry(w))
+            .map(|e| e.surface().clone());
         self.set_keyboard_focus(surface);
     }
 
@@ -1090,16 +1412,26 @@ impl Cupertino {
     // ---- actions ---------------------------------------------------------------------------
 
     pub fn action_context(&self) -> ActionContext {
-        let output = self.output_at(self.pointer.current_location()).map(|o| o.id).or_else(|| self.outputs.first().map(|o| o.id));
+        let output = self
+            .output_at(self.pointer.current_location())
+            .map(|o| o.id)
+            .or_else(|| self.outputs.first().map(|o| o.id));
         let (workspaces, current) = output
             .map(|o| {
                 let list: Vec<_> = self.wm.workspaces(o).iter().map(|w| w.id).collect();
-                let cur = self.wm.current_workspace(o).and_then(|c| list.iter().position(|w| *w == c)).unwrap_or(0);
+                let cur = self
+                    .wm
+                    .current_workspace(o)
+                    .and_then(|c| list.iter().position(|w| *w == c))
+                    .unwrap_or(0);
                 (list, cur)
             })
             .unwrap_or_default();
         let front_app = self.wm.front_app();
-        let front_app_windows = front_app.and_then(|a| self.wm.app(a)).map(|a| a.windows_mru.clone()).unwrap_or_default();
+        let front_app_windows = front_app
+            .and_then(|a| self.wm.app(a))
+            .map(|a| a.windows_mru.clone())
+            .unwrap_or_default();
         ActionContext {
             key_window: self.wm.key_window(),
             front_app,
@@ -1148,7 +1480,8 @@ impl Cupertino {
                 ShellOp::ToggleDockAutoHide => self.docks.toggle_auto_hide(),
                 ShellOp::ToggleStage => self.window_managers.toggle_stage(),
                 ShellOp::Exec(i) => {
-                    if let Some(cmd) = self.key_router.bindings.exec_command(i).map(str::to_string) {
+                    if let Some(cmd) = self.key_router.bindings.exec_command(i).map(str::to_string)
+                    {
                         self.spawn_command_line(&cmd);
                     }
                 }
@@ -1176,7 +1509,8 @@ impl Cupertino {
         let mut cmd = std::process::Command::new(program);
         cmd.args(args);
         let token = self.server_activation_token();
-        cmd.env("XDG_ACTIVATION_TOKEN", &token).env("DESKTOP_STARTUP_ID", &token);
+        cmd.env("XDG_ACTIVATION_TOKEN", &token)
+            .env("DESKTOP_STARTUP_ID", &token);
         self.spawn_prepared(cmd);
     }
 
@@ -1185,19 +1519,30 @@ impl Cupertino {
         if let Some(s) = &self.socket_name {
             cmd.env("WAYLAND_DISPLAY", s);
         }
-        cmd.env("XDG_SESSION_TYPE", "wayland").env("XDG_CURRENT_DESKTOP", CURRENT_DESKTOP);
+        cmd.env("XDG_SESSION_TYPE", "wayland")
+            .env("XDG_CURRENT_DESKTOP", CURRENT_DESKTOP);
         // clients that draw their own cursors draw them in the asset theme (the only one on their path) at the user cursor
         // size; without a theme they keep the cursor theme of their environment
-        cmd.env("XCURSOR_SIZE", self.cursor_loader.client_size(self.config.pointer.cursor_scale).to_string());
+        cmd.env(
+            "XCURSOR_SIZE",
+            self.cursor_loader
+                .client_size(self.config.pointer.cursor_scale)
+                .to_string(),
+        );
         if let Some(theme) = self.cursor_loader.theme() {
-            cmd.env("XCURSOR_THEME", &theme.name).env("XCURSOR_PATH", &theme.search_dir);
+            cmd.env("XCURSOR_THEME", &theme.name)
+                .env("XCURSOR_PATH", &theme.search_dir);
         }
         // Wayland clients only: an X11 toolkit must not reach the X server of the session around us
         cmd.env_remove("DISPLAY");
         let program = cmd.get_program().to_string_lossy().into_owned();
         // the docks key tiles by desktop entry id; a program without an entry (a script, a shell)
         // is not an application launch
-        let app_id = std::path::Path::new(&program).file_name().and_then(|n| n.to_str()).and_then(|n| self.desktop.find(n)).map(|e| e.id.clone());
+        let app_id = std::path::Path::new(&program)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| self.desktop.find(n))
+            .map(|e| e.id.clone());
         match cmd.spawn() {
             Ok(mut child) => {
                 if let Some(app_id) = app_id {
@@ -1230,7 +1575,10 @@ impl Cupertino {
     }
 
     pub fn rect_to_logical(r: Rect) -> Rectangle<i32, Logical> {
-        Rectangle::new((r.x.round() as i32, r.y.round() as i32).into(), (r.w.round() as i32, r.h.round() as i32).into())
+        Rectangle::new(
+            (r.x.round() as i32, r.y.round() as i32).into(),
+            (r.w.round() as i32, r.h.round() as i32).into(),
+        )
     }
 
     /// Preferred fractional scale for surfaces (the primary output's scale).
@@ -1241,16 +1589,42 @@ impl Cupertino {
 
 /// The rectangle of an output in the global logical space: its mode turned by `transform`, divided
 /// by `scale`, at `position`.
-pub fn output_rect(mode: OutputMode, scale: f64, transform: Transform, position: (i32, i32)) -> Rect {
+pub fn output_rect(
+    mode: OutputMode,
+    scale: f64,
+    transform: Transform,
+    position: (i32, i32),
+) -> Rect {
     let size = transform.transform_size(mode.size);
-    Rect::new(f64::from(position.0), f64::from(position.1), (f64::from(size.w) / scale).round(), (f64::from(size.h) / scale).round())
+    Rect::new(
+        f64::from(position.0),
+        f64::from(position.1),
+        (f64::from(size.w) / scale).round(),
+        (f64::from(size.h) / scale).round(),
+    )
 }
 
 /// Size constraints of a toplevel from its cached state (zero means unset).
 /// The client's size limits (`size_hints`) as limits of the frame the window model resizes: the `insets` around the
 /// surface added to every limit that is set (0, no limit, stays 0).
-pub fn frame_limits(insets: crate::config::Insets, (min, max): (Option<Size>, Option<Size>)) -> (Option<Size>, Option<Size>) {
-    let grow = |s: Size| Size::new(if s.w > 0.0 { s.w + insets.horizontal() } else { 0.0 }, if s.h > 0.0 { s.h + insets.vertical() } else { 0.0 });
+pub fn frame_limits(
+    insets: crate::config::Insets,
+    (min, max): (Option<Size>, Option<Size>),
+) -> (Option<Size>, Option<Size>) {
+    let grow = |s: Size| {
+        Size::new(
+            if s.w > 0.0 {
+                s.w + insets.horizontal()
+            } else {
+                0.0
+            },
+            if s.h > 0.0 {
+                s.h + insets.vertical()
+            } else {
+                0.0
+            },
+        )
+    };
     (min.map(grow), max.map(grow))
 }
 
@@ -1259,17 +1633,23 @@ pub fn size_hints(surface: &WlSurface) -> (Option<Size>, Option<Size>) {
     with_states(surface, |s| {
         let mut cached = s.cached_state.get::<XdgCached>();
         let cur = cached.current();
-        let conv = |sz: SmSize<i32, Logical>| (sz.w > 0 || sz.h > 0).then(|| Size::new(sz.w as f64, sz.h as f64));
+        let conv = |sz: SmSize<i32, Logical>| {
+            (sz.w > 0 || sz.h > 0).then(|| Size::new(sz.w as f64, sz.h as f64))
+        };
         (conv(cur.min_size), conv(cur.max_size))
     })
 }
 
 pub(crate) fn which(program: &str) -> Option<std::path::PathBuf> {
     if program.contains('/') {
-        return std::path::Path::new(program).is_file().then(|| program.into());
+        return std::path::Path::new(program)
+            .is_file()
+            .then(|| program.into());
     }
     let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).map(|d| d.join(program)).find(|p| p.is_file())
+    std::env::split_paths(&path)
+        .map(|d| d.join(program))
+        .find(|p| p.is_file())
 }
 
 /// Map from output name to the model id used by tests.

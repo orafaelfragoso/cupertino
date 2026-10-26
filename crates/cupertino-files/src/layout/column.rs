@@ -34,7 +34,12 @@ pub fn layout(widths: &[f64], show_preview: bool, viewport_width: f64) -> Column
         x += m::PREVIEW_COLUMN_WIDTH;
         r
     });
-    ColumnLayout { columns, preview, content_width: x, scroll_to_end: (x - viewport_width).max(0.0) }
+    ColumnLayout {
+        columns,
+        preview,
+        content_width: x,
+        scroll_to_end: (x - viewport_width).max(0.0),
+    }
 }
 
 /// Width available to the preview image inside the preview column.

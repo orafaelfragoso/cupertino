@@ -22,13 +22,17 @@ impl State {
         match (self, request) {
             (State::New, Request::Hello { version }) if *version == VERSION => Ok(State::Idle),
             (State::New, Request::Hello { .. }) => Err(ProtocolRefusal::Version),
-            (State::Idle, Request::Authenticate { .. } | Request::AuthenticatePower { .. }) => Ok(State::Authenticating),
+            (State::Idle, Request::Authenticate { .. } | Request::AuthenticatePower { .. }) => {
+                Ok(State::Authenticating)
+            }
             (State::Authenticating, Request::Answer { .. }) => Ok(State::Authenticating),
             // an abort with nothing to abort, or after the attempt was accepted, changes nothing
             (State::Idle | State::Starting, Request::Cancel {}) => Ok(self),
             (State::Authenticating, Request::Cancel {}) => Ok(State::Idle),
             // the power menu stays reachable on every screen; the request changes nothing about the attempt
-            (State::Idle | State::Authenticating | State::Starting, Request::Power { .. }) => Ok(self),
+            (State::Idle | State::Authenticating | State::Starting, Request::Power { .. }) => {
+                Ok(self)
+            }
             _ => Err(ProtocolRefusal::State),
         }
     }
@@ -36,7 +40,12 @@ impl State {
     /// The state after the manager sent `event`.
     pub fn after(self, event: &Event) -> State {
         match (self, event) {
-            (State::Authenticating, Event::Result { outcome: Outcome::Accepted }) => State::Starting,
+            (
+                State::Authenticating,
+                Event::Result {
+                    outcome: Outcome::Accepted,
+                },
+            ) => State::Starting,
             (State::Authenticating, Event::Result { .. }) => State::Idle,
             (State::Starting | State::Authenticating, Event::Reset) => State::Idle,
             _ => self,

@@ -57,89 +57,213 @@ impl MapParams {
 
 #[derive(Clone, Debug)]
 pub enum Command {
-    AddOutput { output: OutputId, rect: Rect, usable: Rect },
-    RemoveOutput { output: OutputId },
-    SetUsableArea { output: OutputId, usable: Rect },
+    AddOutput {
+        output: OutputId,
+        rect: Rect,
+        usable: Rect,
+    },
+    RemoveOutput {
+        output: OutputId,
+    },
+    SetUsableArea {
+        output: OutputId,
+        usable: Rect,
+    },
     /// The output changed size or position: windows resting in full screen, zoomed, tiled or
     /// normal layouts are refitted to the new `rect` / `usable` area (no animation).
-    SetOutputRect { output: OutputId, rect: Rect, usable: Rect },
+    SetOutputRect {
+        output: OutputId,
+        rect: Rect,
+        usable: Rect,
+    },
     /// Region owned by the dock of `output`; tiling hot zones inside it are ignored when configured.
-    SetDockZone { output: OutputId, zone: Option<Rect> },
+    SetDockZone {
+        output: OutputId,
+        zone: Option<Rect>,
+    },
 
-    RegisterApp { identity: String },
-    RemoveApp { app: AppId },
+    RegisterApp {
+        identity: String,
+    },
+    RemoveApp {
+        app: AppId,
+    },
 
     Map(MapParams),
     /// The client unmapped its surface: plays the closing animation, then destroys.
-    Unmap { window: WindowId },
+    Unmap {
+        window: WindowId,
+    },
     /// The surface is gone: immediate destruction.
-    Destroy { window: WindowId },
-    SetTitle { window: WindowId, title: String },
-    SetSizeHints { window: WindowId, min: Option<Size>, max: Option<Size>, content: Option<Size> },
-    SetParent { window: WindowId, parent: Option<WindowId> },
-    SetModal { window: WindowId, modal: bool },
+    Destroy {
+        window: WindowId,
+    },
+    SetTitle {
+        window: WindowId,
+        title: String,
+    },
+    SetSizeHints {
+        window: WindowId,
+        min: Option<Size>,
+        max: Option<Size>,
+        content: Option<Size>,
+    },
+    SetParent {
+        window: WindowId,
+        parent: Option<WindowId>,
+    },
+    SetModal {
+        window: WindowId,
+        modal: bool,
+    },
     /// Ask the client to close (compositor-initiated, e.g. window control button).
-    RequestClose { window: WindowId },
+    RequestClose {
+        window: WindowId,
+    },
 
-    Minimize { window: WindowId, target: Option<Rect> },
-    Restore { window: WindowId },
+    Minimize {
+        window: WindowId,
+        target: Option<Rect>,
+    },
+    Restore {
+        window: WindowId,
+    },
     /// Move the rectangle a minimized window's restore animation flows out of (its tile moved).
     /// Ignored unless the window is minimizing or minimized.
-    SetMinimizeTarget { window: WindowId, target: Rect },
-    ToggleZoom { window: WindowId },
-    Fullscreen { window: WindowId, output: Option<OutputId> },
-    ExitFullscreen { window: WindowId },
-    Tile { window: WindowId, kind: TileKind },
-    Untile { window: WindowId },
+    SetMinimizeTarget {
+        window: WindowId,
+        target: Rect,
+    },
+    ToggleZoom {
+        window: WindowId,
+    },
+    Fullscreen {
+        window: WindowId,
+        output: Option<OutputId>,
+    },
+    ExitFullscreen {
+        window: WindowId,
+    },
+    Tile {
+        window: WindowId,
+        kind: TileKind,
+    },
+    Untile {
+        window: WindowId,
+    },
 
-    FocusWindow { window: WindowId },
+    FocusWindow {
+        window: WindowId,
+    },
     /// The client of `window` wants attention: an activation the compositor refused
     /// ([`crate::Wm::activation_allowed`]). Its application's tile bounces unless it is active.
-    DemandAttention { window: WindowId },
-    ActivateApp { app: AppId },
-    HideApp { app: AppId },
-    UnhideApp { app: AppId },
-    HideOthers { app: AppId },
+    DemandAttention {
+        window: WindowId,
+    },
+    ActivateApp {
+        app: AppId,
+    },
+    HideApp {
+        app: AppId,
+    },
+    UnhideApp {
+        app: AppId,
+    },
+    HideOthers {
+        app: AppId,
+    },
     ShowAll,
 
     /// The switch chord: opens the switcher, or steps it like a fresh Tab press when it is open.
-    SwitcherOpen { backward: bool },
+    SwitcherOpen {
+        backward: bool,
+    },
     /// A switcher key moved the selection; `repeat` is a key repeat, which does not wrap.
-    SwitcherStep { step: SwitcherStep, repeat: bool },
+    SwitcherStep {
+        step: SwitcherStep,
+        repeat: bool,
+    },
     /// Select entry `index` of the open switcher (a pointer on its panel); out of range or without
     /// a switcher it does nothing.
-    SwitcherSelect { index: usize },
+    SwitcherSelect {
+        index: usize,
+    },
     SwitcherCommit,
     SwitcherCancel,
     /// Q in the switcher: ask the selected application's windows to close.
     SwitcherQuit,
     /// H in the switcher: hide the selected application, or show it when hidden.
     SwitcherToggleHide,
-    CycleWindows { backward: bool },
+    CycleWindows {
+        backward: bool,
+    },
     EndCycleWindows,
 
-    BeginMove { window: WindowId, pointer: Point },
-    BeginResize { window: WindowId, edges: Edges, pointer: Point },
+    BeginMove {
+        window: WindowId,
+        pointer: Point,
+    },
+    BeginResize {
+        window: WindowId,
+        edges: Edges,
+        pointer: Point,
+    },
     /// Double click on a resize edge or corner: each of `edges` (with `opposite`, the Alt
     /// modifier, also the opposite ones) moves to the usable area's edge.
-    SnapEdgesToScreen { window: WindowId, edges: Edges, opposite: bool },
-    PointerMotion { pointer: Point, modifiers: Modifiers },
+    SnapEdgesToScreen {
+        window: WindowId,
+        edges: Edges,
+        opposite: bool,
+    },
+    PointerMotion {
+        pointer: Point,
+        modifiers: Modifiers,
+    },
     PointerRelease,
     CancelInteraction,
 
-    AddWorkspace { output: OutputId },
-    RemoveWorkspace { workspace: WorkspaceId },
+    AddWorkspace {
+        output: OutputId,
+    },
+    RemoveWorkspace {
+        workspace: WorkspaceId,
+    },
     /// Move a regular workspace to `index` (0-based, clamped to the end) among its output's workspaces.
-    MoveWorkspace { workspace: WorkspaceId, index: usize },
-    SwitchWorkspace { output: OutputId, workspace: WorkspaceId },
-    SwitchWorkspaceRelative { output: OutputId, delta: i32 },
-    MoveWindowToWorkspace { window: WindowId, workspace: WorkspaceId },
-    SetSticky { window: WindowId, sticky: bool },
-    AssignApp { app: AppId, assignment: Assignment },
+    MoveWorkspace {
+        workspace: WorkspaceId,
+        index: usize,
+    },
+    SwitchWorkspace {
+        output: OutputId,
+        workspace: WorkspaceId,
+    },
+    SwitchWorkspaceRelative {
+        output: OutputId,
+        delta: i32,
+    },
+    MoveWindowToWorkspace {
+        window: WindowId,
+        workspace: WorkspaceId,
+    },
+    SetSticky {
+        window: WindowId,
+        sticky: bool,
+    },
+    AssignApp {
+        app: AppId,
+        assignment: Assignment,
+    },
     /// `fraction` is the finger displacement divided by the output width (positive = right).
-    WorkspaceGestureBegin { output: OutputId },
-    WorkspaceGestureUpdate { output: OutputId, fraction: f64 },
-    WorkspaceGestureEnd { output: OutputId },
+    WorkspaceGestureBegin {
+        output: OutputId,
+    },
+    WorkspaceGestureUpdate {
+        output: OutputId,
+        fraction: f64,
+    },
+    WorkspaceGestureEnd {
+        output: OutputId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -158,33 +282,89 @@ pub enum AnimationKind {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
-    AppRegistered { app: AppId, identity: String },
+    AppRegistered {
+        app: AppId,
+        identity: String,
+    },
     /// `xdg_toplevel` configure: size and states.
-    Configure { window: WindowId, size: Size, states: ToplevelStates },
+    Configure {
+        window: WindowId,
+        size: Size,
+        states: ToplevelStates,
+    },
     /// Logical frame (position and size) of the window.
-    Place { window: WindowId, rect: Rect },
-    RequestClose { window: WindowId },
+    Place {
+        window: WindowId,
+        rect: Rect,
+    },
+    RequestClose {
+        window: WindowId,
+    },
     /// Keyboard focus; `None` clears it.
-    Focus { window: Option<WindowId> },
+    Focus {
+        window: Option<WindowId>,
+    },
     /// Application owning the menu bar; `None` when no app is active.
-    Activate { app: Option<AppId> },
-    Raise { window: WindowId },
+    Activate {
+        app: Option<AppId>,
+    },
+    Raise {
+        window: WindowId,
+    },
     /// App-level hide/unhide (`hidden` apps are withheld from rendering).
-    SetVisible { window: WindowId, visible: bool },
-    StartAnimation { window: WindowId, kind: AnimationKind },
-    WindowStateChanged { window: WindowId, from: LifecycleState, to: LifecycleState },
-    WindowDestroyed { window: WindowId },
+    SetVisible {
+        window: WindowId,
+        visible: bool,
+    },
+    StartAnimation {
+        window: WindowId,
+        kind: AnimationKind,
+    },
+    WindowStateChanged {
+        window: WindowId,
+        from: LifecycleState,
+        to: LifecycleState,
+    },
+    WindowDestroyed {
+        window: WindowId,
+    },
     /// A click on a modal-blocked window: pulse the dialog.
-    Attention { window: WindowId },
+    Attention {
+        window: WindowId,
+    },
     /// The application asked for attention while inactive: its dock tile bounces once
     /// (informational request).
-    AppAttention { app: AppId },
-    WorkspaceCreated { output: OutputId, workspace: WorkspaceId, index: usize },
-    WorkspaceRemoved { output: OutputId, workspace: WorkspaceId },
-    WorkspaceSwitched { output: OutputId, from: WorkspaceId, to: WorkspaceId },
-    WorkspacesReordered { output: OutputId },
-    SnapPreview { window: WindowId, rect: Option<Rect>, immediate: bool },
-    SwitcherChanged { apps: Vec<AppId>, selected: usize },
+    AppAttention {
+        app: AppId,
+    },
+    WorkspaceCreated {
+        output: OutputId,
+        workspace: WorkspaceId,
+        index: usize,
+    },
+    WorkspaceRemoved {
+        output: OutputId,
+        workspace: WorkspaceId,
+    },
+    WorkspaceSwitched {
+        output: OutputId,
+        from: WorkspaceId,
+        to: WorkspaceId,
+    },
+    WorkspacesReordered {
+        output: OutputId,
+    },
+    SnapPreview {
+        window: WindowId,
+        rect: Option<Rect>,
+        immediate: bool,
+    },
+    SwitcherChanged {
+        apps: Vec<AppId>,
+        selected: usize,
+    },
     /// The switcher is gone. A commit fades the panel out, a cancel removes it at once.
-    SwitcherClosed { committed: bool },
+    SwitcherClosed {
+        committed: bool,
+    },
 }

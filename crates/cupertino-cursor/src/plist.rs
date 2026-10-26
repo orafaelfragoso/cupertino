@@ -41,7 +41,9 @@ fn be(bytes: &[u8]) -> u64 {
 
 impl Reader<'_> {
     fn slice(&self, at: usize, len: usize) -> Result<&[u8], String> {
-        at.checked_add(len).and_then(|e| self.b.get(at..e)).ok_or_else(|| "offset out of range".to_string())
+        at.checked_add(len)
+            .and_then(|e| self.b.get(at..e))
+            .ok_or_else(|| "offset out of range".to_string())
     }
 
     fn int_at(&self, at: usize, size: usize) -> Result<u64, String> {
@@ -97,7 +99,10 @@ impl Reader<'_> {
             0x6 => {
                 let (len, start) = self.length(at, lo)?;
                 let raw = self.slice(start, len.checked_mul(2).ok_or("length overflow")?)?;
-                let units: Vec<u16> = raw.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+                let units: Vec<u16> = raw
+                    .chunks_exact(2)
+                    .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                    .collect();
                 Value::Str(String::from_utf16_lossy(&units))
             }
             0xa => {
@@ -115,7 +120,9 @@ impl Reader<'_> {
                 for i in 0..len {
                     let k = self.int_at(start + i * self.ref_size, self.ref_size)? as usize;
                     let v = self.int_at(start + (len + i) * self.ref_size, self.ref_size)? as usize;
-                    let Value::Str(key) = self.object(k, depth + 1)? else { return Err("dictionary key is not a string".into()) };
+                    let Value::Str(key) = self.object(k, depth + 1)? else {
+                        return Err("dictionary key is not a string".into());
+                    };
                     map.insert(key, self.object(v, depth + 1)?);
                 }
                 Value::Dict(map)
@@ -132,13 +139,27 @@ pub fn parse(bytes: &[u8]) -> Result<Value, String> {
     }
     let t = &bytes[bytes.len() - 32..];
     let (offset_size, ref_size) = (t[6] as usize, t[7] as usize);
-    let (count, top, table) = (be(&t[8..16]) as usize, be(&t[16..24]) as usize, be(&t[24..32]) as usize);
-    if !(1..=8).contains(&offset_size) || !(1..=8).contains(&ref_size) || count == 0 || count > 1_000_000 {
+    let (count, top, table) = (
+        be(&t[8..16]) as usize,
+        be(&t[16..24]) as usize,
+        be(&t[24..32]) as usize,
+    );
+    if !(1..=8).contains(&offset_size)
+        || !(1..=8).contains(&ref_size)
+        || count == 0
+        || count > 1_000_000
+    {
         return Err("invalid trailer".into());
     }
-    let mut r = Reader { b: bytes, offsets: Vec::with_capacity(count), ref_size };
+    let mut r = Reader {
+        b: bytes,
+        offsets: Vec::with_capacity(count),
+        ref_size,
+    };
     for i in 0..count {
-        let at = table.checked_add(i.checked_mul(offset_size).ok_or("overflow")?).ok_or("overflow")?;
+        let at = table
+            .checked_add(i.checked_mul(offset_size).ok_or("overflow")?)
+            .ok_or("overflow")?;
         let off = r.int_at(at, offset_size)? as usize;
         r.offsets.push(off);
     }
@@ -147,7 +168,9 @@ pub fn parse(bytes: &[u8]) -> Result<Value, String> {
 
 /// Convert the root dictionary of a cursor's property list to metadata keys.
 pub fn raw_meta(root: &Value) -> Result<RawMeta, String> {
-    let Value::Dict(d) = root else { return Err("the property list root is not a dictionary".into()) };
+    let Value::Dict(d) = root else {
+        return Err("the property list root is not a dictionary".into());
+    };
     let num = |k: &str| d.get(k).and_then(Value::as_f64);
     let flag = |k: &str| match d.get(k) {
         Some(Value::Bool(b)) => Some(*b),
@@ -216,7 +239,9 @@ pub(crate) mod tests {
             Value::Str(s) => {
                 let units: Vec<u16> = s.encode_utf16().collect();
                 let mut b = count(units.len(), 6);
-                units.iter().for_each(|u| b.extend_from_slice(&u.to_be_bytes()));
+                units
+                    .iter()
+                    .for_each(|u| b.extend_from_slice(&u.to_be_bytes()));
                 (b, vec![])
             }
             Value::Array(a) => {
@@ -224,7 +249,10 @@ pub(crate) mod tests {
                 (count(a.len(), 0xa), refs)
             }
             Value::Dict(d) => {
-                let keys: Vec<usize> = d.keys().map(|k| emit(&Value::Str(k.clone()), entries)).collect();
+                let keys: Vec<usize> = d
+                    .keys()
+                    .map(|k| emit(&Value::Str(k.clone()), entries))
+                    .collect();
                 let vals: Vec<usize> = d.values().map(|x| emit(x, entries)).collect();
                 (count(d.len(), 0xd), keys.into_iter().chain(vals).collect())
             }
@@ -262,7 +290,12 @@ pub(crate) mod tests {
     }
 
     fn dict(items: &[(&str, Value)]) -> Value {
-        Value::Dict(items.iter().map(|(k, v)| (k.to_string(), v.clone())).collect())
+        Value::Dict(
+            items
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+        )
     }
 
     #[test]
@@ -271,7 +304,15 @@ pub(crate) mod tests {
             ("hotx", Value::Int(5)),
             ("blur", Value::Real(1.8)),
             ("vectoronly", Value::Bool(true)),
-            ("shadowcolor", Value::Array(vec![Value::Real(0.0), Value::Real(0.0), Value::Real(0.0), Value::Real(0.65)])),
+            (
+                "shadowcolor",
+                Value::Array(vec![
+                    Value::Real(0.0),
+                    Value::Real(0.0),
+                    Value::Real(0.0),
+                    Value::Real(0.65),
+                ]),
+            ),
             ("name", Value::Str("héllo".into())),
             ("long", Value::Str("x".repeat(40))),
         ]);
@@ -285,7 +326,15 @@ pub(crate) mod tests {
             ("hoty", Value::Int(9)),
             ("hotx-scaled", Value::Real(13.0)),
             ("hoty-scaled", Value::Int(10)),
-            ("shadowcolor", Value::Array(vec![Value::Int(0), Value::Int(0), Value::Int(0), Value::Real(0.5)])),
+            (
+                "shadowcolor",
+                Value::Array(vec![
+                    Value::Int(0),
+                    Value::Int(0),
+                    Value::Int(0),
+                    Value::Real(0.5),
+                ]),
+            ),
             ("shadowoffsetx", Value::Int(0)),
             ("shadowoffsety", Value::Int(-1)),
             ("blur", Value::Real(0.8)),
@@ -342,13 +391,16 @@ pub(crate) mod tests {
 
     #[test]
     fn real_reference_property_lists_parse_when_provided() {
-        let Some(dir) = std::env::var_os("CUPERTINO_CURSOR_SOURCE") else { return };
+        let Some(dir) = std::env::var_os("CUPERTINO_CURSOR_SOURCE") else {
+            return;
+        };
         let mut n = 0;
         for e in std::fs::read_dir(dir).unwrap().flatten() {
             let p = e.path().join("info.plist");
             if let Ok(bytes) = std::fs::read(&p) {
                 if bytes.starts_with(b"bplist00") {
-                    raw_meta_from_bytes(&bytes).unwrap_or_else(|err| panic!("{}: {err}", p.display()));
+                    raw_meta_from_bytes(&bytes)
+                        .unwrap_or_else(|err| panic!("{}: {err}", p.display()));
                     n += 1;
                 }
             }

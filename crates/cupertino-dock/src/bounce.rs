@@ -33,14 +33,22 @@ fn arc(u: f64) -> f64 {
 
 impl Bounce {
     pub fn new(kind: BounceKind, start: f64) -> Self {
-        Self { kind, start, stop_at: None }
+        Self {
+            kind,
+            start,
+            stop_at: None,
+        }
     }
 
     fn natural_end(&self, cfg: &BounceConfig) -> Option<f64> {
         match (self.kind, cfg.model) {
             (BounceKind::Launch, _) => Some(self.start + cfg.launch_timeout),
-            (BounceKind::Informational, BounceModel::Verified) => Some(self.start + cfg.attention_sequence_s()),
-            (BounceKind::Informational, BounceModel::Parametric) => Some(self.start + cfg.informational_arcs as f64 * cfg.period),
+            (BounceKind::Informational, BounceModel::Verified) => {
+                Some(self.start + cfg.attention_sequence_s())
+            }
+            (BounceKind::Informational, BounceModel::Parametric) => {
+                Some(self.start + cfg.informational_arcs as f64 * cfg.period)
+            }
             (BounceKind::Critical, _) => None,
         }
     }
@@ -131,7 +139,11 @@ impl Bounce {
                     }
                     _ => ((t / cfg.period).floor(), (t / cfg.period).fract()),
                 };
-                let decay = if kind == BounceKind::Informational { cfg.decay.powf(index) } else { 1.0 };
+                let decay = if kind == BounceKind::Informational {
+                    cfg.decay.powf(index)
+                } else {
+                    1.0
+                };
                 decay * arc(u)
             }
         }
@@ -189,7 +201,10 @@ mod tests {
 
     #[test]
     fn launch_times_out() {
-        let cfg = BounceConfig { launch_timeout: 2.0, ..BounceConfig::parametric() };
+        let cfg = BounceConfig {
+            launch_timeout: 2.0,
+            ..BounceConfig::parametric()
+        };
         let b = Bounce::new(BounceKind::Launch, 0.0);
         assert!(b.is_active(&cfg, 1.9));
         assert!(!b.is_active(&cfg, 2.0));
@@ -197,7 +212,11 @@ mod tests {
 
     #[test]
     fn informational_has_fixed_arc_count_and_decay() {
-        let cfg = BounceConfig { informational_arcs: 3, decay: 0.5, ..BounceConfig::parametric() };
+        let cfg = BounceConfig {
+            informational_arcs: 3,
+            decay: 0.5,
+            ..BounceConfig::parametric()
+        };
         let b = Bounce::new(BounceKind::Informational, 0.0);
         let peak = |k: f64| b.offset(&cfg, (k + 0.5) * cfg.period);
         assert!((peak(0.0) - cfg.height).abs() < 1e-12);
@@ -208,7 +227,12 @@ mod tests {
 
     #[test]
     fn critical_repeats_in_bursts_until_stopped() {
-        let cfg = BounceConfig { period: 1.0, secondary_duration: 2.0, secondary_interval: 3.0, ..BounceConfig::parametric() };
+        let cfg = BounceConfig {
+            period: 1.0,
+            secondary_duration: 2.0,
+            secondary_interval: 3.0,
+            ..BounceConfig::parametric()
+        };
         let mut b = Bounce::new(BounceKind::Critical, 0.0);
         assert!(b.offset(&cfg, 0.5) > 0.0);
         assert!(b.offset(&cfg, 1.5) > 0.0);
@@ -228,7 +252,11 @@ mod tests {
         assert!(b.shape(&cfg, 0.699).abs() < 1e-2);
         for k in 0..700 {
             let t = k as f64 / 1000.0;
-            let s = if t + 0.35 >= 0.7 { t + 0.35 - 0.7 } else { t + 0.35 };
+            let s = if t + 0.35 >= 0.7 {
+                t + 0.35 - 0.7
+            } else {
+                t + 0.35
+            };
             let s = if s > 0.35 { s - 0.7 } else { s };
             let expected = 1.0 - (s / 0.35) * (s / 0.35);
             assert!((b.shape(&cfg, t) - expected).abs() < 1e-9, "t={t}");
@@ -253,9 +281,16 @@ mod tests {
         assert!((b.shape(&cfg, 0.250) - 1.0).abs() < 1e-12);
         assert!((b.shape(&cfg, 0.500 + 0.163) - 0.5).abs() < 1e-12);
         assert!((b.shape(&cfg, 0.826 + 0.106) - 0.25).abs() < 1e-12);
-        assert_eq!(b.shape(&cfg, 0.5), 0.0, "hops touch the ground between each other");
+        assert_eq!(
+            b.shape(&cfg, 0.5),
+            0.0,
+            "hops touch the ground between each other"
+        );
         assert_eq!(b.shape(&cfg, 1.5), 0.0, "rest until 2000 ms");
-        assert!((b.shape(&cfg, 2.250) - 1.0).abs() < 1e-12, "repeats every 2000 ms");
+        assert!(
+            (b.shape(&cfg, 2.250) - 1.0).abs() < 1e-12,
+            "repeats every 2000 ms"
+        );
         assert!(b.is_active(&cfg, 1000.0));
         assert!((cfg.attention_sequence_s() - 1.038).abs() < 1e-12);
         assert!((b.peak_lift_pt(&cfg, 64.0) - 65.0).abs() < 1e-12, "len + 1");
@@ -279,17 +314,27 @@ mod tests {
         assert!(!b.is_active(&cfg, 0.826 + 1e-9));
         let mut r = Bounce::new(BounceKind::Critical, 0.0);
         r.stop(&cfg, 1.5);
-        assert!(!r.is_active(&cfg, 1.5 + 1e-9), "stopping at rest is immediate");
+        assert!(
+            !r.is_active(&cfg, 1.5 + 1e-9),
+            "stopping at rest is immediate"
+        );
         let mut l = Bounce::new(BounceKind::Launch, 0.0);
         l.stop(&cfg, 0.75);
         assert!(l.is_active(&cfg, 1.39));
-        assert!(!l.is_active(&cfg, 1.4 + 1e-9), "rounded up to the end of the 700 ms cycle");
+        assert!(
+            !l.is_active(&cfg, 1.4 + 1e-9),
+            "rounded up to the end of the 700 ms cycle"
+        );
     }
 
     #[test]
     fn shapes_stay_in_unit_range() {
         let cfg = BounceConfig::default();
-        for kind in [BounceKind::Launch, BounceKind::Informational, BounceKind::Critical] {
+        for kind in [
+            BounceKind::Launch,
+            BounceKind::Informational,
+            BounceKind::Critical,
+        ] {
             let b = Bounce::new(kind, 0.3);
             for k in 0..6000 {
                 let s = b.shape(&cfg, k as f64 / 1000.0);
@@ -298,4 +343,3 @@ mod tests {
         }
     }
 }
-

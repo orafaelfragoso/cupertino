@@ -23,11 +23,17 @@ pub struct RubberBand {
 
 impl RubberBand {
     pub fn new(dimension: f64) -> Self {
-        Self { dimension, coefficient: DEFAULT_COEFFICIENT }
+        Self {
+            dimension,
+            coefficient: DEFAULT_COEFFICIENT,
+        }
     }
 
     pub fn with_coefficient(dimension: f64, coefficient: f64) -> Self {
-        Self { dimension, coefficient }
+        Self {
+            dimension,
+            coefficient,
+        }
     }
 
     /// Displayed overscroll for a raw overscroll `offset` (signed).
@@ -112,7 +118,13 @@ pub struct ElasticMotion {
 
 impl Default for ElasticMotion {
     fn default() -> Self {
-        Self { amplitude: 0.31, period: 1.6, stiffness: 20.0, velocity_max: 20000.0, settle_threshold: 0.5 }
+        Self {
+            amplitude: 0.31,
+            period: 1.6,
+            stiffness: 20.0,
+            velocity_max: 20000.0,
+            settle_threshold: 0.5,
+        }
     }
 }
 
@@ -169,7 +181,11 @@ pub struct RubberBandFilterConfig {
 
 impl Default for RubberBandFilterConfig {
     fn default() -> Self {
-        Self { stiffness: 20.0, direction_lock_stretch_ratio: 1.0, min_delta_before_stretch: 10.0 }
+        Self {
+            stiffness: 20.0,
+            direction_lock_stretch_ratio: 1.0,
+            min_delta_before_stretch: 10.0,
+        }
     }
 }
 
@@ -184,7 +200,11 @@ pub struct RubberBandFilter {
 
 impl RubberBandFilter {
     pub fn new(config: RubberBandFilterConfig) -> Self {
-        Self { config, pending: [0.0; 2], stretching: false }
+        Self {
+            config,
+            pending: [0.0; 2],
+            stretching: false,
+        }
     }
 
     pub fn is_stretching(&self) -> bool {
@@ -199,7 +219,11 @@ impl RubberBandFilter {
     /// Feed a raw two-axis overscroll delta; returns the delta allowed to stretch the content.
     pub fn add_delta(&mut self, delta: [f64; 2]) -> [f64; 2] {
         let ratio = self.config.direction_lock_stretch_ratio;
-        let locked = if delta[0].abs() * ratio >= delta[1].abs() { [delta[0], 0.0] } else { [0.0, delta[1]] };
+        let locked = if delta[0].abs() * ratio >= delta[1].abs() {
+            [delta[0], 0.0]
+        } else {
+            [0.0, delta[1]]
+        };
         if self.stretching {
             return locked;
         }
@@ -258,7 +282,8 @@ mod tests {
     fn slope_matches_numeric_derivative() {
         for x in [0.0, 13.0, 200.0, 900.0] {
             let h = 1e-5;
-            let num = (rubber_band(x + h, 400.0, 0.55) - rubber_band(x - h, 400.0, 0.55)) / (2.0 * h);
+            let num =
+                (rubber_band(x + h, 400.0, 0.55) - rubber_band(x - h, 400.0, 0.55)) / (2.0 * h);
             assert!((num - slope(x, 400.0, 0.55)).abs() < 1e-6);
         }
     }
@@ -296,13 +321,19 @@ mod tests {
 
     #[test]
     fn momentum_alias_matches() {
-        assert_eq!(crate::momentum::rubber_band(33.0, 400.0, 0.55), rubber_band(33.0, 400.0, 0.55));
+        assert_eq!(
+            crate::momentum::rubber_band(33.0, 400.0, 0.55),
+            rubber_band(33.0, 400.0, 0.55)
+        );
     }
 
     #[test]
     fn elastic_defaults_and_decay_rate() {
         let e = ElasticMotion::default();
-        assert_eq!((e.amplitude, e.period, e.stiffness, e.velocity_max), (0.31, 1.6, 20.0, 20000.0));
+        assert_eq!(
+            (e.amplitude, e.period, e.stiffness, e.velocity_max),
+            (0.31, 1.6, 20.0, 20000.0)
+        );
         assert!((e.decay_rate() - 12.5).abs() < 1e-12);
     }
 
@@ -334,7 +365,14 @@ mod tests {
     #[test]
     fn filter_defaults() {
         let c = RubberBandFilterConfig::default();
-        assert_eq!((c.stiffness, c.direction_lock_stretch_ratio, c.min_delta_before_stretch), (20.0, 1.0, 10.0));
+        assert_eq!(
+            (
+                c.stiffness,
+                c.direction_lock_stretch_ratio,
+                c.min_delta_before_stretch
+            ),
+            (20.0, 1.0, 10.0)
+        );
     }
 
     #[test]

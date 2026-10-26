@@ -38,7 +38,10 @@ impl SocketAddrControl {
 // SAFETY: `with_sockaddr` passes a pointer to `bytes`, which is live for the call, with its exact
 // length, and the bytes are `struct sockaddr_hci`.
 unsafe impl SocketAddrArg for SocketAddrControl {
-    unsafe fn with_sockaddr<R>(&self, f: impl FnOnce(*const SocketAddrOpaque, SocketAddrLen) -> R) -> R {
+    unsafe fn with_sockaddr<R>(
+        &self,
+        f: impl FnOnce(*const SocketAddrOpaque, SocketAddrLen) -> R,
+    ) -> R {
         let bytes = self.to_bytes();
         f(bytes.as_ptr().cast(), bytes.len() as SocketAddrLen)
     }
@@ -68,7 +71,10 @@ impl SocketAddrL2 {
 
 // SAFETY: as for `SocketAddrControl`; the bytes are `struct sockaddr_l2`.
 unsafe impl SocketAddrArg for SocketAddrL2 {
-    unsafe fn with_sockaddr<R>(&self, f: impl FnOnce(*const SocketAddrOpaque, SocketAddrLen) -> R) -> R {
+    unsafe fn with_sockaddr<R>(
+        &self,
+        f: impl FnOnce(*const SocketAddrOpaque, SocketAddrLen) -> R,
+    ) -> R {
         let bytes = self.to_bytes();
         f(bytes.as_ptr().cast(), bytes.len() as SocketAddrLen)
     }
@@ -93,13 +99,28 @@ mod tests {
     fn an_l2cap_address_is_a_sockaddr_l2() {
         // PSM 1 (service discovery) to 11:22:33:44:55:66, BR/EDR: family, psm (le16), bdaddr in
         // wire order, cid (le16), bdaddr_type, pad.
-        let address = SocketAddrL2 { psm: 1, address: "11:22:33:44:55:66".parse().unwrap(), cid: 0, kind: AddressType::BrEdr };
+        let address = SocketAddrL2 {
+            psm: 1,
+            address: "11:22:33:44:55:66".parse().unwrap(),
+            cid: 0,
+            kind: AddressType::BrEdr,
+        };
         let mut expected = Vec::new();
         expected.extend_from_slice(&31u16.to_ne_bytes());
-        expected.extend_from_slice(&[0x01, 0x00, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00, 0x00, 0x00, 0x00]);
+        expected.extend_from_slice(&[
+            0x01, 0x00, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00, 0x00, 0x00, 0x00,
+        ]);
         assert_eq!(address.to_bytes().to_vec(), expected);
         // The attribute channel, CID 4, to an LE random address (type 2).
-        let address = SocketAddrL2 { psm: 0, address: "11:22:33:44:55:66".parse().unwrap(), cid: 4, kind: AddressType::LeRandom };
-        assert_eq!(address.to_bytes()[2..], [0x00, 0x00, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x04, 0x00, 0x02, 0x00]);
+        let address = SocketAddrL2 {
+            psm: 0,
+            address: "11:22:33:44:55:66".parse().unwrap(),
+            cid: 4,
+            kind: AddressType::LeRandom,
+        };
+        assert_eq!(
+            address.to_bytes()[2..],
+            [0x00, 0x00, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x04, 0x00, 0x02, 0x00]
+        );
     }
 }

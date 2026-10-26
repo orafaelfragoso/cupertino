@@ -31,7 +31,14 @@ impl ViewStyle {
         }
     }
     pub fn from_code(c: &str) -> Option<Self> {
-        [ViewStyle::Icon, ViewStyle::List, ViewStyle::Column, ViewStyle::Gallery].into_iter().find(|s| s.code() == c)
+        [
+            ViewStyle::Icon,
+            ViewStyle::List,
+            ViewStyle::Column,
+            ViewStyle::Gallery,
+        ]
+        .into_iter()
+        .find(|s| s.code() == c)
     }
 }
 
@@ -100,7 +107,14 @@ impl ColumnId {
 /// Default list columns, in order. (table): identifier,
 /// default / minimum / maximum width and visibility. Name, Date Modified, Size, Kind are visible.
 pub fn default_columns() -> Vec<ColumnDesc> {
-    let c = |id, width, min_width, max_width, visible, ascending| ColumnDesc { id, width, min_width, max_width, visible, ascending };
+    let c = |id, width, min_width, max_width, visible, ascending| ColumnDesc {
+        id,
+        width,
+        min_width,
+        max_width,
+        visible,
+        ascending,
+    };
     vec![
         c(ColumnId::Name, 300.0, 80.0, 5000.0, true, true),
         c(ColumnId::DateModified, 181.0, 80.0, 512.0, true, false),
@@ -150,7 +164,13 @@ pub struct ColumnViewSettings {
 
 impl Default for ColumnViewSettings {
     fn default() -> Self {
-        ColumnViewSettings { preferred_column_width: column_view::PREFERRED_WIDTH, text_size: list_view::TEXT_SIZE_DEFAULT, show_icons: true, show_preview_column: true, show_icon_preview: true }
+        ColumnViewSettings {
+            preferred_column_width: column_view::PREFERRED_WIDTH,
+            text_size: list_view::TEXT_SIZE_DEFAULT,
+            show_icons: true,
+            show_preview_column: true,
+            show_icon_preview: true,
+        }
     }
 }
 
@@ -164,7 +184,12 @@ pub struct GalleryViewSettings {
 
 impl Default for GalleryViewSettings {
     fn default() -> Self {
-        GalleryViewSettings { icon_size: 64, show_titles: true, show_preview_pane: true, preview_pane_width: column_view::PREVIEW_PANE_WIDTH }
+        GalleryViewSettings {
+            icon_size: 64,
+            show_titles: true,
+            show_preview_pane: true,
+            preview_pane_width: column_view::PREVIEW_PANE_WIDTH,
+        }
     }
 }
 
@@ -197,14 +222,38 @@ impl Default for ViewSettings {
 impl ViewSettings {
     /// Bring every value into its valid range.
     pub fn clamp(&mut self) {
-        self.icon.icon_size = self.icon.icon_size.clamp(icon_view::ICON_SIZE_MIN, icon_view::ICON_SIZE_MAX);
-        self.icon.grid_spacing = self.icon.grid_spacing.clamp(icon_view::GRID_SPACING_MIN, icon_view::GRID_SPACING_MAX);
-        self.icon.text_size = self.icon.text_size.clamp(icon_view::TEXT_SIZE_MIN, icon_view::TEXT_SIZE_MAX);
-        self.list.icon_size = self.list.icon_size.clamp(list_view::ICON_SIZE_MIN, list_view::ICON_SIZE_MAX);
-        self.list.text_size = self.list.text_size.clamp(list_view::TEXT_SIZE_MIN, list_view::TEXT_SIZE_MAX);
-        self.column.text_size = self.column.text_size.clamp(list_view::TEXT_SIZE_MIN, list_view::TEXT_SIZE_MAX);
-        self.column.preferred_column_width = self.column.preferred_column_width.max(column_view::MIN_WIDTH);
-        self.gallery.icon_size = self.gallery.icon_size.clamp(icon_view::ICON_SIZE_MIN, icon_view::ICON_SIZE_MAX);
+        self.icon.icon_size = self
+            .icon
+            .icon_size
+            .clamp(icon_view::ICON_SIZE_MIN, icon_view::ICON_SIZE_MAX);
+        self.icon.grid_spacing = self
+            .icon
+            .grid_spacing
+            .clamp(icon_view::GRID_SPACING_MIN, icon_view::GRID_SPACING_MAX);
+        self.icon.text_size = self
+            .icon
+            .text_size
+            .clamp(icon_view::TEXT_SIZE_MIN, icon_view::TEXT_SIZE_MAX);
+        self.list.icon_size = self
+            .list
+            .icon_size
+            .clamp(list_view::ICON_SIZE_MIN, list_view::ICON_SIZE_MAX);
+        self.list.text_size = self
+            .list
+            .text_size
+            .clamp(list_view::TEXT_SIZE_MIN, list_view::TEXT_SIZE_MAX);
+        self.column.text_size = self
+            .column
+            .text_size
+            .clamp(list_view::TEXT_SIZE_MIN, list_view::TEXT_SIZE_MAX);
+        self.column.preferred_column_width = self
+            .column
+            .preferred_column_width
+            .max(column_view::MIN_WIDTH);
+        self.gallery.icon_size = self
+            .gallery
+            .icon_size
+            .clamp(icon_view::ICON_SIZE_MIN, icon_view::ICON_SIZE_MAX);
         for c in &mut self.list.columns {
             c.width = c.width.clamp(c.min_width, c.max_width);
         }
@@ -232,7 +281,11 @@ impl FolderKey {
         use std::os::unix::fs::MetadataExt;
         let canon = std::fs::canonicalize(path)?;
         let m = std::fs::metadata(&canon)?;
-        Ok(FolderKey { path: canon.to_string_lossy().into_owned(), dev: m.dev(), inode: m.ino() })
+        Ok(FolderKey {
+            path: canon.to_string_lossy().into_owned(),
+            dev: m.dev(),
+            inode: m.ino(),
+        })
     }
     fn storage_key(&self) -> String {
         format!("{}:{}", self.dev, self.inode)
@@ -265,15 +318,25 @@ impl SettingsStore {
         let file = file.into();
         let data = match std::fs::read(&file) {
             Ok(b) => serde_json::from_slice(&b).unwrap_or_default(),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => StoreFile { version: 1, ..Default::default() },
+            Err(e) if e.kind() == io::ErrorKind::NotFound => StoreFile {
+                version: 1,
+                ..Default::default()
+            },
             Err(e) => return Err(e),
         };
-        Ok(SettingsStore { file, data, dirty: false })
+        Ok(SettingsStore {
+            file,
+            data,
+            dirty: false,
+        })
     }
 
     /// Default location: `$XDG_DATA_HOME/cupertino-files/folders.json`.
     pub fn default_path() -> PathBuf {
-        let base = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share"))).unwrap_or_else(|| PathBuf::from("."));
+        let base = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+            .unwrap_or_else(|| PathBuf::from("."));
         base.join("cupertino-files").join("folders.json")
     }
 
@@ -288,7 +351,12 @@ impl SettingsStore {
 
     /// Settings of a folder, falling back to the defaults. The result is clamped.
     pub fn get(&self, key: &FolderKey) -> ViewSettings {
-        let mut s = self.data.folders.get(&key.storage_key()).map(|x| x.settings.clone()).unwrap_or_else(|| self.defaults());
+        let mut s = self
+            .data
+            .folders
+            .get(&key.storage_key())
+            .map(|x| x.settings.clone())
+            .unwrap_or_else(|| self.defaults());
         s.clamp();
         s
     }
@@ -299,7 +367,13 @@ impl SettingsStore {
 
     pub fn set(&mut self, key: &FolderKey, mut s: ViewSettings) {
         s.clamp();
-        self.data.folders.insert(key.storage_key(), Stored { path: key.path.clone(), settings: s });
+        self.data.folders.insert(
+            key.storage_key(),
+            Stored {
+                path: key.path.clone(),
+                settings: s,
+            },
+        );
         self.dirty = true;
     }
 
@@ -312,7 +386,11 @@ impl SettingsStore {
     /// Drop entries whose folder no longer exists (same inode at the stored path).
     pub fn prune(&mut self) -> usize {
         let before = self.data.folders.len();
-        self.data.folders.retain(|k, v| FolderKey::of(Path::new(&v.path)).map(|f| f.storage_key() == *k).unwrap_or(false));
+        self.data.folders.retain(|k, v| {
+            FolderKey::of(Path::new(&v.path))
+                .map(|f| f.storage_key() == *k)
+                .unwrap_or(false)
+        });
         let n = before - self.data.folders.len();
         if n > 0 {
             self.dirty = true;
@@ -337,7 +415,10 @@ impl SettingsStore {
         }
         self.data.version = 1;
         let tmp = self.file.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(&self.data).map_err(io::Error::other)?)?;
+        std::fs::write(
+            &tmp,
+            serde_json::to_vec_pretty(&self.data).map_err(io::Error::other)?,
+        )?;
         std::fs::rename(&tmp, &self.file)?;
         self.dirty = false;
         Ok(())
@@ -351,16 +432,38 @@ mod tests {
     #[test]
     fn defaults_are_the_measured_ones() {
         let s = ViewSettings::default();
-        assert_eq!((s.icon.icon_size, s.icon.grid_spacing, s.icon.text_size), (64, 54, 12));
+        assert_eq!(
+            (s.icon.icon_size, s.icon.grid_spacing, s.icon.text_size),
+            (64, 54, 12)
+        );
         assert_eq!((s.list.icon_size, s.list.text_size), (16, 13));
         assert_eq!(s.column.preferred_column_width, 245.0);
-        let vis: Vec<ColumnId> = s.list.columns.iter().filter(|c| c.visible).map(|c| c.id).collect();
-        assert_eq!(vis, [ColumnId::Name, ColumnId::DateModified, ColumnId::Size, ColumnId::Kind]);
+        let vis: Vec<ColumnId> = s
+            .list
+            .columns
+            .iter()
+            .filter(|c| c.visible)
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(
+            vis,
+            [
+                ColumnId::Name,
+                ColumnId::DateModified,
+                ColumnId::Size,
+                ColumnId::Kind
+            ]
+        );
     }
 
     #[test]
     fn style_codes_roundtrip() {
-        for s in [ViewStyle::Icon, ViewStyle::List, ViewStyle::Column, ViewStyle::Gallery] {
+        for s in [
+            ViewStyle::Icon,
+            ViewStyle::List,
+            ViewStyle::Column,
+            ViewStyle::Gallery,
+        ] {
             assert_eq!(ViewStyle::from_code(s.code()), Some(s));
         }
         assert_eq!(ViewStyle::Icon.code(), "icnv");
@@ -376,7 +479,10 @@ mod tests {
         s.list.icon_size = 64;
         s.list.text_size = 99;
         s.clamp();
-        assert_eq!((s.icon.icon_size, s.icon.grid_spacing, s.icon.text_size), (512, 1, 10));
+        assert_eq!(
+            (s.icon.icon_size, s.icon.grid_spacing, s.icon.text_size),
+            (512, 1, 10)
+        );
         assert_eq!((s.list.icon_size, s.list.text_size), (32, 16));
     }
 
@@ -398,7 +504,10 @@ mod tests {
         {
             let mut st = SettingsStore::open(&file).unwrap();
             assert!(!st.has(&key));
-            let mut s = ViewSettings { style: ViewStyle::List, ..Default::default() };
+            let mut s = ViewSettings {
+                style: ViewStyle::List,
+                ..Default::default()
+            };
             s.icon.icon_size = 128;
             st.set(&key, s);
             st.save().unwrap();
@@ -414,7 +523,10 @@ mod tests {
         // an unknown folder gets the defaults
         let other = dir.path().join("c");
         std::fs::create_dir(&other).unwrap();
-        assert_eq!(st.get(&FolderKey::of(&other).unwrap()).style, ViewStyle::Icon);
+        assert_eq!(
+            st.get(&FolderKey::of(&other).unwrap()).style,
+            ViewStyle::Icon
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@
 
 use zbus::blocking::{Connection, Proxy};
 
-use crate::backend::{linear_raw, Backlight, BackendError};
+use crate::backend::{linear_raw, BackendError, Backlight};
 use crate::sender::DISPLAY_FLOOR_RAW;
 
 const POWER_NAME: &str = "org.cupertino.Power1";
@@ -20,11 +20,21 @@ struct SystemBus {
 }
 
 impl SystemBus {
-    fn proxy(&mut self, name: &'static str, path: &'static str, interface: &'static str) -> zbus::Result<Proxy<'static>> {
+    fn proxy(
+        &mut self,
+        name: &'static str,
+        path: &'static str,
+        interface: &'static str,
+    ) -> zbus::Result<Proxy<'static>> {
         if self.connection.is_none() {
             self.connection = Some(Connection::system()?);
         }
-        Proxy::new(self.connection.as_ref().expect("connected above"), name, path, interface)
+        Proxy::new(
+            self.connection.as_ref().expect("connected above"),
+            name,
+            path,
+            interface,
+        )
     }
 
     /// Forget the connection after a failure so the next call connects again.
@@ -49,7 +59,9 @@ pub struct DisplayBacklight {
 impl DisplayBacklight {
     /// A display backlight; nothing is contacted until the first press.
     pub fn new() -> Self {
-        Self { bus: SystemBus { connection: None } }
+        Self {
+            bus: SystemBus { connection: None },
+        }
     }
 
     fn read_raw(proxy: &Proxy<'_>) -> RawRead {
@@ -86,12 +98,18 @@ impl Default for DisplayBacklight {
 
 impl Backlight for DisplayBacklight {
     fn level(&mut self) -> Result<f64, BackendError> {
-        let result = self.bus.proxy(POWER_NAME, POWER_PATH, POWER_INTERFACE).and_then(|proxy| Self::level_raw(&proxy));
+        let result = self
+            .bus
+            .proxy(POWER_NAME, POWER_PATH, POWER_INTERFACE)
+            .and_then(|proxy| Self::level_raw(&proxy));
         self.bus.failed(result)?
     }
 
     fn set_level(&mut self, level: f64) -> Result<f64, BackendError> {
-        let result = self.bus.proxy(POWER_NAME, POWER_PATH, POWER_INTERFACE).and_then(|proxy| Self::set_raw(&proxy, level));
+        let result = self
+            .bus
+            .proxy(POWER_NAME, POWER_PATH, POWER_INTERFACE)
+            .and_then(|proxy| Self::set_raw(&proxy, level));
         self.bus.failed(result)?
     }
 }
@@ -104,14 +122,19 @@ pub struct KeyboardBacklight {
 impl KeyboardBacklight {
     /// A keyboard backlight; nothing is contacted until the first press.
     pub fn new() -> Self {
-        Self { bus: SystemBus { connection: None } }
+        Self {
+            bus: SystemBus { connection: None },
+        }
     }
 
     fn read_raw(proxy: &Proxy<'_>) -> RawRead {
         let current: i32 = proxy.call("GetBrightness", &())?;
         let max: i32 = proxy.call("GetMaxBrightness", &())?;
         let (Ok(current), Ok(max)) = (u32::try_from(current), u32::try_from(max)) else {
-            return Ok(Err(format!("the keyboard backlight reports {current} of {max}").into()));
+            return Ok(Err(format!(
+                "the keyboard backlight reports {current} of {max}"
+            )
+            .into()));
         };
         if max == 0 {
             return Ok(Err("the keyboard backlight reports a maximum of 0".into()));
@@ -144,12 +167,18 @@ impl Default for KeyboardBacklight {
 
 impl Backlight for KeyboardBacklight {
     fn level(&mut self) -> Result<f64, BackendError> {
-        let result = self.bus.proxy(UPOWER_NAME, KEYBOARD_PATH, KEYBOARD_INTERFACE).and_then(|proxy| Self::level_raw(&proxy));
+        let result = self
+            .bus
+            .proxy(UPOWER_NAME, KEYBOARD_PATH, KEYBOARD_INTERFACE)
+            .and_then(|proxy| Self::level_raw(&proxy));
         self.bus.failed(result)?
     }
 
     fn set_level(&mut self, level: f64) -> Result<f64, BackendError> {
-        let result = self.bus.proxy(UPOWER_NAME, KEYBOARD_PATH, KEYBOARD_INTERFACE).and_then(|proxy| Self::set_raw(&proxy, level));
+        let result = self
+            .bus
+            .proxy(UPOWER_NAME, KEYBOARD_PATH, KEYBOARD_INTERFACE)
+            .and_then(|proxy| Self::set_raw(&proxy, level));
         self.bus.failed(result)?
     }
 }

@@ -2,15 +2,24 @@
 //! banners and the list, requests one backdrop per card and routes pointer and key input.
 //! The layout and routing decisions live in `cupertino_notifications::surface`.
 
-use cupertino_client::{key, Anchor, Backdrop, Button, Client, DisplayOptions, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig, Margin, PointerEvent, SurfaceId, Waker};
+use cupertino_assets::{AssetError, Assets};
+use cupertino_client::{
+    key, Anchor, Backdrop, Button, Client, DisplayOptions, Event, KeyboardInteractivity, Layer,
+    LayerSurfaceConfig, Margin, PointerEvent, SurfaceId, Waker,
+};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_notifications::dbus::{Server, ServerOptions};
-use cupertino_notifications::render::{BannerHit, BannerImage, BannerRenderer, BannerStyle, Layers, RenderOptions};
-use cupertino_notifications::surface::{
-    banner_press, card_at, card_press, centre_cards, centre_header, clear_menu, header_press, input_region, local_to, surface_width, BannerPress, CardPress, CentreHeader, ClearMenu, HeaderPress, MENU_RADIUS,
+use cupertino_notifications::render::{
+    BannerHit, BannerImage, BannerRenderer, BannerStyle, Layers, RenderOptions,
 };
-use cupertino_notifications::{CenterConfig, ClearScope, GroupStack, Notification, Placement, SwipeOutcome, Wakeup};
-use cupertino_assets::{AssetError, Assets};
+use cupertino_notifications::surface::{
+    banner_press, card_at, card_press, centre_cards, centre_header, clear_menu, header_press,
+    input_region, local_to, surface_width, BannerPress, CardPress, CentreHeader, ClearMenu,
+    HeaderPress, MENU_RADIUS,
+};
+use cupertino_notifications::{
+    CenterConfig, ClearScope, GroupStack, Notification, Placement, SwipeOutcome, Wakeup,
+};
 use cupertino_theme::{Appearance, Theme};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -29,7 +38,11 @@ const NAMESPACE: &str = "cupertino-notifications";
 const MIN_OPACITY: f64 = 0.002;
 
 /// Shadow and content; the material is the server's backdrop.
-const LAYERS: Layers = Layers { shadow: true, background: false, content: true };
+const LAYERS: Layers = Layers {
+    shadow: true,
+    background: false,
+    content: true,
+};
 
 /// Command line of the process.
 pub struct Options {
@@ -40,7 +53,9 @@ pub struct Options {
 impl Options {
     /// Parse the arguments; the unknown one is returned as the error.
     pub fn parse(args: impl Iterator<Item = String>) -> std::result::Result<Self, String> {
-        let mut options = Options { replace_existing: false };
+        let mut options = Options {
+            replace_existing: false,
+        };
         for arg in args {
             match arg.as_str() {
                 "--replace" => options.replace_existing = true,
@@ -116,9 +131,17 @@ struct App {
 }
 
 /// The renderer for the session's appearance and display options.
-fn banner_renderer(theme: &Theme, assets: &Assets, dark: bool, options: DisplayOptions) -> std::result::Result<BannerRenderer, AssetError> {
+fn banner_renderer(
+    theme: &Theme,
+    assets: &Assets,
+    dark: bool,
+    options: DisplayOptions,
+) -> std::result::Result<BannerRenderer, AssetError> {
     let appearance = Appearance::of_session(dark, options.increase_contrast);
-    BannerRenderer::new(BannerStyle::from_theme(theme, appearance, options.reduce_transparency), assets)
+    BannerRenderer::new(
+        BannerStyle::from_theme(theme, appearance, options.reduce_transparency),
+        assets,
+    )
 }
 
 /// Connect, claim the bus names and serve until the connection or the bus fails.
@@ -131,7 +154,11 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     // banners fade instead of sliding while the session reduces motion
     center_config.motion.reduce_motion = client.display_options().reduce_motion;
     // the shadow margins do not depend on the appearance, so the surface keeps its width when it changes
-    let width = surface_width(&center_config.layout, &center_config.swipe, f64::from(renderer.style.shadow.margins_px(1.0).left));
+    let width = surface_width(
+        &center_config.layout,
+        &center_config.swipe,
+        f64::from(renderer.style.shadow.margins_px(1.0).left),
+    );
 
     let waker = client.waker();
     let server = start_server(options, center_config, &waker)?;
@@ -189,7 +216,12 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
 /// Start the `org.freedesktop.Notifications` server; model changes from the bus wake the loop.
 fn start_server(options: &Options, config: CenterConfig, waker: &Waker) -> Result<Server> {
     let wake = waker.clone();
-    let opts = ServerOptions { config, wake: Some(Box::new(move || wake.wake())), replace_existing: options.replace_existing, ..ServerOptions::default() };
+    let opts = ServerOptions {
+        config,
+        wake: Some(Box::new(move || wake.wake())),
+        replace_existing: options.replace_existing,
+        ..ServerOptions::default()
+    };
     Server::start(opts).map_err(|e| match e {
         zbus::Error::NameTaken => "another notification daemon owns org.freedesktop.Notifications (start with --replace to take it over)".into(),
         e => Box::new(e) as Box<dyn Error>,
@@ -219,7 +251,9 @@ impl App {
             Event::Draw(_) => self.draw()?,
             Event::Closed(_) => return Err("the server closed the notification surface".into()),
             Event::Pointer { event, .. } => self.pointer(event)?,
-            Event::Key { key: code, pressed, .. } => {
+            Event::Key {
+                key: code, pressed, ..
+            } => {
                 if pressed && code == key::ESCAPE && self.centre_open {
                     if self.menu_open {
                         self.menu_open = false;
@@ -233,7 +267,8 @@ impl App {
             Event::Appearance { .. } | Event::DisplayOptions(_) => {
                 // layouts and rendered cards belong to the style they were made with
                 let options = self.client.display_options();
-                self.renderer = banner_renderer(&self.theme, &self.assets, self.client.is_dark(), options)?;
+                self.renderer =
+                    banner_renderer(&self.theme, &self.assets, self.client.is_dark(), options)?;
                 self.server.center().config.motion.reduce_motion = options.reduce_motion;
                 self.images.clear();
                 self.client.request_redraw(self.surface)?;
@@ -246,7 +281,11 @@ impl App {
             }
             Event::SessionLock { locked: false } => {}
             // the surface follows the output the server chose for it; it has no popups or menu-bar role
-            Event::OutputsChanged | Event::PopupDone(_) | Event::MenuBar { .. } | Event::Dock { .. } | Event::KeyboardLeave(_) => {}
+            Event::OutputsChanged
+            | Event::PopupDone(_)
+            | Event::MenuBar { .. }
+            | Event::Dock { .. }
+            | Event::KeyboardLeave(_) => {}
         }
         Ok(())
     }
@@ -284,7 +323,11 @@ impl App {
         if !self.centre_open {
             self.cards.clear();
         }
-        let mode = if self.centre_open { KeyboardInteractivity::Exclusive } else { KeyboardInteractivity::None };
+        let mode = if self.centre_open {
+            KeyboardInteractivity::Exclusive
+        } else {
+            KeyboardInteractivity::None
+        };
         self.client.set_keyboard_interactivity(self.surface, mode)?;
         self.client.request_redraw(self.surface)?;
         Ok(())
@@ -304,7 +347,13 @@ impl App {
             // the open list replaces the banners on screen; they stay in the model and in the list
             for pl in self.placements.iter().filter(|_| !self.centre_open) {
                 if let Some(note) = c.get(pl.id).cloned() {
-                    items.push(Item { slot: Slot::Banner(pl.id), rect: pl.rect, opacity: pl.opacity, hovered: pl.hovered, note });
+                    items.push(Item {
+                        slot: Slot::Banner(pl.id),
+                        rect: pl.rect,
+                        opacity: pl.opacity,
+                        hovered: pl.hovered,
+                        note,
+                    });
                 }
             }
             if self.centre_open {
@@ -314,12 +363,34 @@ impl App {
                 let scopes = c.clear_scopes();
                 let header = centre_header(&layout, surface_size, renderer.clear_button_width());
                 let labels: Vec<&str> = scopes.iter().map(|s| s.label()).collect();
-                self.menu = self.menu_open.then(|| (clear_menu(header.clear, scopes.len(), renderer.widest_label(&labels)), scopes));
+                self.menu = self.menu_open.then(|| {
+                    (
+                        clear_menu(header.clear, scopes.len(), renderer.widest_label(&labels)),
+                        scopes,
+                    )
+                });
                 self.header = Some(header);
-                self.cards = centre_cards(history.iter().map(|n| (n.id, renderer.layout_cached(n, layout.width).size.height, 1)), &GroupStack::default(), &layout, surface_size);
+                self.cards = centre_cards(
+                    history
+                        .iter()
+                        .map(|n| (n.id, renderer.layout_cached(n, layout.width).size.height, 1)),
+                    &GroupStack::default(),
+                    &layout,
+                    surface_size,
+                );
                 for (id, rect) in &self.cards {
-                    let note = history.iter().find(|n| n.id == *id).expect("card of a history entry").clone();
-                    items.push(Item { slot: Slot::Card(*id), rect: *rect, opacity: 1.0, hovered: self.centre_hover == Some(*id), note });
+                    let note = history
+                        .iter()
+                        .find(|n| n.id == *id)
+                        .expect("card of a history entry")
+                        .clone();
+                    items.push(Item {
+                        slot: Slot::Card(*id),
+                        rect: *rect,
+                        opacity: 1.0,
+                        hovered: self.centre_hover == Some(*id),
+                        note,
+                    });
                 }
             }
         }
@@ -356,37 +427,96 @@ impl App {
             }
             None => self.menu_backdrop = None,
         }
-        let banners: Vec<Rect> = items.iter().filter(|i| matches!(i.slot, Slot::Banner(_))).map(|i| i.rect).collect();
-        self.client.set_input_region(self.surface, &input_region(&banners, self.centre_open, surface_size))?;
+        let banners: Vec<Rect> = items
+            .iter()
+            .filter(|i| matches!(i.slot, Slot::Banner(_)))
+            .map(|i| i.rect)
+            .collect();
+        self.client.set_input_region(
+            self.surface,
+            &input_region(&banners, self.centre_open, surface_size),
+        )?;
 
         let (renderer, images) = (&mut self.renderer, &mut self.images);
-        let (header, menu, clear_hover, menu_hover) = (self.header, &self.menu, self.clear_hover, self.menu_hover);
+        let (header, menu, clear_hover, menu_hover) =
+            (self.header, &self.menu, self.clear_hover, self.menu_hover);
         self.client.draw(self.surface, |pixmap, scale| {
             let factor = scale.factor();
             if let Some(header) = &header {
                 let image = renderer.render_header(header, clear_hover || menu.is_some(), factor);
-                let (x, y) = ((header.row.x() * f64::from(factor)).round() as i32, (header.row.y() * f64::from(factor)).round() as i32);
-                pixmap.draw_pixmap(x, y, image.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
+                let (x, y) = (
+                    (header.row.x() * f64::from(factor)).round() as i32,
+                    (header.row.y() * f64::from(factor)).round() as i32,
+                );
+                pixmap.draw_pixmap(
+                    x,
+                    y,
+                    image.as_ref(),
+                    &PixmapPaint::default(),
+                    Transform::identity(),
+                    None,
+                );
             }
             for item in &items {
-                let layout = renderer.layout_cached(&item.note, item.rect.width()).clone();
-                let signature: Signature = (item.note.id, item.note.revision, item.hovered, layout.size.width.to_bits(), layout.size.height.to_bits(), factor.to_bits());
-                if images.get(&item.slot).is_none_or(|(sig, _)| *sig != signature) {
-                    let image = renderer.render(&item.note, &layout, &RenderOptions { scale: factor, hovered: item.hovered, backdrop: None, layers: LAYERS });
+                let layout = renderer
+                    .layout_cached(&item.note, item.rect.width())
+                    .clone();
+                let signature: Signature = (
+                    item.note.id,
+                    item.note.revision,
+                    item.hovered,
+                    layout.size.width.to_bits(),
+                    layout.size.height.to_bits(),
+                    factor.to_bits(),
+                );
+                if images
+                    .get(&item.slot)
+                    .is_none_or(|(sig, _)| *sig != signature)
+                {
+                    let image = renderer.render(
+                        &item.note,
+                        &layout,
+                        &RenderOptions {
+                            scale: factor,
+                            hovered: item.hovered,
+                            backdrop: None,
+                            layers: LAYERS,
+                        },
+                    );
                     images.insert(item.slot, (signature, image));
                 }
                 let (_, image) = &images[&item.slot];
                 let [left, top, ..] = image.margins;
                 let x = (item.rect.x() * f64::from(factor)).round() as i32 - left as i32;
                 let y = (item.rect.y() * f64::from(factor)).round() as i32 - top as i32;
-                let paint = PixmapPaint { opacity: item.opacity.clamp(0.0, 1.0) as f32, ..PixmapPaint::default() };
-                pixmap.draw_pixmap(x, y, image.pixmap.as_ref(), &paint, Transform::identity(), None);
+                let paint = PixmapPaint {
+                    opacity: item.opacity.clamp(0.0, 1.0) as f32,
+                    ..PixmapPaint::default()
+                };
+                pixmap.draw_pixmap(
+                    x,
+                    y,
+                    image.pixmap.as_ref(),
+                    &paint,
+                    Transform::identity(),
+                    None,
+                );
             }
             if let Some((menu, scopes)) = menu {
                 let labels: Vec<&str> = scopes.iter().map(|s| s.label()).collect();
                 let image = renderer.render_clear_menu(menu, &labels, menu_hover, factor);
-                let (x, y) = ((menu.panel.x() * f64::from(factor)).round() as i32, (menu.panel.y() * f64::from(factor)).round() as i32);
-                pixmap.draw_pixmap(x, y, image.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
+                let (x, y) = (
+                    (menu.panel.x() * f64::from(factor)).round() as i32,
+                    (menu.panel.y() * f64::from(factor)).round() as i32,
+                );
+                pixmap.draw_pixmap(
+                    x,
+                    y,
+                    image.as_ref(),
+                    &PixmapPaint::default(),
+                    Transform::identity(),
+                    None,
+                );
             }
         })?;
         Ok(())
@@ -404,8 +534,16 @@ impl App {
                 self.centre_hover = None;
                 self.client.request_redraw(self.surface)?;
             }
-            PointerEvent::Button { button: Button::Left, pressed: true, position } => self.press(position, now)?,
-            PointerEvent::Button { button: Button::Left, pressed: false, .. } => self.release(now)?,
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: true,
+                position,
+            } => self.press(position, now)?,
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: false,
+                ..
+            } => self.release(now)?,
             PointerEvent::Button { .. } | PointerEvent::Scroll { .. } => {}
         }
         Ok(())
@@ -415,7 +553,10 @@ impl App {
     fn motion(&mut self, p: Point, now: f64) -> Result<()> {
         if self.centre_open {
             let clear_hover = self.header.is_some_and(|h| h.clear.contains(p));
-            let menu_hover = self.menu.as_ref().and_then(|(m, _)| m.rows.iter().position(|r| r.contains(p)));
+            let menu_hover = self
+                .menu
+                .as_ref()
+                .and_then(|(m, _)| m.rows.iter().position(|r| r.contains(p)));
             if clear_hover != self.clear_hover || menu_hover != self.menu_hover {
                 self.clear_hover = clear_hover;
                 self.menu_hover = menu_hover;
@@ -431,7 +572,9 @@ impl App {
             }
         }
         if let Some(d) = &self.drag {
-            self.server.center().swipe_update(d.id, p.x - d.start_x, now);
+            self.server
+                .center()
+                .swipe_update(d.id, p.x - d.start_x, now);
             self.client.request_redraw(self.surface)?;
             return Ok(());
         }
@@ -447,7 +590,9 @@ impl App {
     fn press(&mut self, p: Point, now: f64) -> Result<()> {
         if self.centre_open {
             let menu = self.menu.as_ref().map(|(m, _)| m);
-            let press = self.header.map_or(HeaderPress::Elsewhere, |h| header_press(&h, menu, p));
+            let press = self
+                .header
+                .map_or(HeaderPress::Elsewhere, |h| header_press(&h, menu, p));
             match press {
                 HeaderPress::ToggleMenu => self.menu_open = !self.menu_open,
                 HeaderPress::Choose(i) => {
@@ -480,8 +625,17 @@ impl App {
             // a press outside the cards closes the list and is then handled as a press on the banners
             self.toggle_centre()?;
         }
-        let Some(id) = self.server.center().banner_at(p) else { return Ok(()) };
-        let Some((rect, hovered)) = self.placements.iter().find(|pl| pl.id == id).map(|pl| (pl.rect, pl.hovered)) else { return Ok(()) };
+        let Some(id) = self.server.center().banner_at(p) else {
+            return Ok(());
+        };
+        let Some((rect, hovered)) = self
+            .placements
+            .iter()
+            .find(|pl| pl.id == id)
+            .map(|pl| (pl.rect, pl.hovered))
+        else {
+            return Ok(());
+        };
         match banner_press(self.hit(id, rect, p, hovered)) {
             BannerPress::Dismiss => self.server.center().dismiss_banner(id, now),
             BannerPress::Invoke(key) => self.begin_activation(Pending::Invoke(id, key))?,
@@ -496,7 +650,9 @@ impl App {
     }
 
     fn release(&mut self, now: f64) -> Result<()> {
-        let Some(d) = self.drag.take() else { return Ok(()) };
+        let Some(d) = self.drag.take() else {
+            return Ok(());
+        };
         let outcome = self.server.center().swipe_end(d.id, now);
         match outcome {
             SwipeOutcome::Click => self.begin_activation(Pending::Activate(d.id))?,
@@ -508,8 +664,12 @@ impl App {
 
     /// What a press at `p` on the card `id` at `rect` hit; nothing when the notification is gone.
     fn hit(&mut self, id: u32, rect: Rect, p: Point, close_visible: bool) -> BannerHit {
-        let Some(note) = self.server.center().get(id).cloned() else { return BannerHit::None };
-        self.renderer.layout_cached(&note, rect.width()).hit(local_to(rect, p), close_visible)
+        let Some(note) = self.server.center().get(id).cloned() else {
+            return BannerHit::None;
+        };
+        self.renderer
+            .layout_cached(&note, rect.width())
+            .hit(local_to(rect, p), close_visible)
     }
 
     /// Fetch an activation token for the click; the action runs when it arrives.
@@ -521,7 +681,10 @@ impl App {
 
     /// Run the action that waited for `token`; the signals carry it to the application.
     fn complete(&mut self, request: cupertino_client::ActivationRequest, token: String) {
-        let pending = self.pending.remove(&request).expect("token for a request this process made");
+        let pending = self
+            .pending
+            .remove(&request)
+            .expect("token for a request this process made");
         let now = self.server.now();
         let mut c = self.server.center();
         // the notification may have expired while the token was fetched: nothing to run then

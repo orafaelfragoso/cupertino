@@ -94,7 +94,10 @@ impl fmt::Display for Error {
             Self::Io { op, errno } => write!(f, "{op} failed: {errno}"),
             Self::NameNotUtf8 => f.write_str("device name is not valid UTF-8"),
             Self::TruncatedRecord { len } => {
-                write!(f, "read returned {len} bytes, not a whole number of input_event records")
+                write!(
+                    f,
+                    "read returned {len} bytes, not a whole number of input_event records"
+                )
             }
             Self::Frame(error) => error.fmt(f),
         }
@@ -114,15 +117,31 @@ impl fmt::Display for FrameError {
             Self::ProtocolA => f.write_str("SYN_MT_REPORT: multitouch protocol A is not supported"),
             Self::UnknownEventType { kind } => write!(f, "unknown event type {kind:#x}"),
             Self::UnexpectedEvent { kind, code } => {
-                write!(f, "event type {kind:#x} code {code:#x} is not valid for this device")
+                write!(
+                    f,
+                    "event type {kind:#x} code {code:#x} is not valid for this device"
+                )
             }
-            Self::InvalidKeyValue { code, value } => write!(f, "key {code:#x} has invalid value {value}"),
-            Self::InvalidSwitchValue { code, value } => write!(f, "switch {code:#x} has invalid value {value}"),
-            Self::SlotOutOfRange { slot, slot_count } => write!(f, "slot {slot} out of range for {slot_count} slots"),
+            Self::InvalidKeyValue { code, value } => {
+                write!(f, "key {code:#x} has invalid value {value}")
+            }
+            Self::InvalidSwitchValue { code, value } => {
+                write!(f, "switch {code:#x} has invalid value {value}")
+            }
+            Self::SlotOutOfRange { slot, slot_count } => {
+                write!(f, "slot {slot} out of range for {slot_count} slots")
+            }
             Self::InvalidTrackingId { value } => write!(f, "invalid tracking id {value}"),
             Self::MissingSnapshotAxis { code } => write!(f, "resync snapshot lacks axis {code:#x}"),
-            Self::SnapshotSlotCount { code, actual, expected } => {
-                write!(f, "resync snapshot has {actual} values for axis {code:#x}, expected {expected}")
+            Self::SnapshotSlotCount {
+                code,
+                actual,
+                expected,
+            } => {
+                write!(
+                    f,
+                    "resync snapshot has {actual} values for axis {code:#x}, expected {expected}"
+                )
             }
         }
     }

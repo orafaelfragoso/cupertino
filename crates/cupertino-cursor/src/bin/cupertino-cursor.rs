@@ -18,7 +18,8 @@ use std::process::ExitCode;
 
 const DEFAULT_OUTPUT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/output/cursor-theme");
 
-const HELP: &str = "cupertino-cursor: build an XCursor theme from vector PDFs or the procedural cursor set
+const HELP: &str =
+    "cupertino-cursor: build an XCursor theme from vector PDFs or the procedural cursor set
 
 usage: cupertino-cursor [options]
   --source DIR          directory with <cursor>/cursor.pdf (+ info.plist): a vector cursor set
@@ -59,9 +60,20 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Option<(BuildOptions, b
             "--output" => o.output = PathBuf::from(value("--output")?),
             "--name" => o.name = value("--name")?,
             "--sizes" => {
-                o.sizes = value("--sizes")?.split(',').map(|s| s.trim().parse::<u32>().map_err(|_| format!("bad size {s:?}"))).collect::<Result<_, _>>()?;
+                o.sizes = value("--sizes")?
+                    .split(',')
+                    .map(|s| {
+                        s.trim()
+                            .parse::<u32>()
+                            .map_err(|_| format!("bad size {s:?}"))
+                    })
+                    .collect::<Result<_, _>>()?;
             }
-            "--base-size" => o.base_size = value("--base-size")?.parse().map_err(|_| "bad base size".to_string())?,
+            "--base-size" => {
+                o.base_size = value("--base-size")?
+                    .parse()
+                    .map_err(|_| "bad base size".to_string())?
+            }
             "--hotspot" => {
                 o.hotspot_source = match value("--hotspot")?.as_str() {
                     "unscaled" => HotspotSource::Unscaled,
@@ -73,7 +85,11 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Option<(BuildOptions, b
             "--no-default-shadow" => o.default_shadow = false,
             "--no-flip-shadow-y" => o.flip_shadow_y = false,
             "--no-fill" => o.fill_missing = false,
-            "--default-delay-ms" => o.default_delay_ms = value("--default-delay-ms")?.parse().map_err(|_| "bad delay".to_string())?,
+            "--default-delay-ms" => {
+                o.default_delay_ms = value("--default-delay-ms")?
+                    .parse()
+                    .map_err(|_| "bad delay".to_string())?
+            }
             "--hyprcursor" => o.hyprcursor = true,
             "--inherits" => o.inherits = Some(value("--inherits")?),
             "--pdftocairo" => o.poppler.pdftocairo = PathBuf::from(value("--pdftocairo")?),
@@ -105,9 +121,17 @@ fn main() -> ExitCode {
     };
     if list {
         for m in names::REFERENCE_MAP.iter().chain(names::PROCEDURAL_ONLY) {
-            println!("{:<26} -> {:<14} {}", m.reference, m.primary, m.aliases.join(" "));
+            println!(
+                "{:<26} -> {:<14} {}",
+                m.reference,
+                m.primary,
+                m.aliases.join(" ")
+            );
         }
-        println!("\ninstalled under their own name only: {}", names::UNMAPPED_REFERENCE.join(" "));
+        println!(
+            "\ninstalled under their own name only: {}",
+            names::UNMAPPED_REFERENCE.join(" ")
+        );
         return ExitCode::SUCCESS;
     }
     match build_theme(&o) {
@@ -115,7 +139,12 @@ fn main() -> ExitCode {
             for w in &r.warnings {
                 eprintln!("warning: {w}");
             }
-            println!("wrote {} files and {} symlinks to {}", r.files.len(), r.symlinks.len(), r.theme_dir.display());
+            println!(
+                "wrote {} files and {} symlinks to {}",
+                r.files.len(),
+                r.symlinks.len(),
+                r.theme_dir.display()
+            );
             if let Some(h) = r.hypr_dir {
                 println!("wrote hyprcursor source theme to {}", h.display());
             }
@@ -143,14 +172,29 @@ mod tests {
     #[test]
     fn default_output_is_the_git_ignored_reference_directory() {
         let (o, _) = p(&[]).unwrap().unwrap();
-        assert!(o.output.ends_with("output/cursor-theme"), "{}", o.output.display());
+        assert!(
+            o.output.ends_with("output/cursor-theme"),
+            "{}",
+            o.output.display()
+        );
         assert_eq!(o.source, Source::Procedural);
         assert_eq!(o.sizes, DEFAULT_SIZES.to_vec());
     }
 
     #[test]
     fn source_selects_pdf_mode_and_default_metadata() {
-        let (o, _) = p(&["--source", "/some/dir", "--sizes", "24, 48", "--hotspot", "scaled", "--no-shadow", "--hyprcursor"]).unwrap().unwrap();
+        let (o, _) = p(&[
+            "--source",
+            "/some/dir",
+            "--sizes",
+            "24, 48",
+            "--hotspot",
+            "scaled",
+            "--no-shadow",
+            "--hyprcursor",
+        ])
+        .unwrap()
+        .unwrap();
         assert_eq!(o.source, Source::Pdf("/some/dir".into()));
         assert_eq!(o.sizes, vec![24, 48]);
         assert_eq!(o.hotspot_source, HotspotSource::Scaled);

@@ -22,8 +22,8 @@ use crate::lifecycle::LifecycleState;
 use crate::magnet::{Guide, Magnet, MagnetStep};
 use crate::pieces::window_guides;
 use crate::tiling::{hot_zone_hit, is_still, preview_frame, tile_rect, TileKind};
-use crate::workspace::WorkspaceKind;
 use crate::wm::Wm;
+use crate::workspace::WorkspaceKind;
 
 #[derive(Clone, Copy, Debug)]
 struct SnapCandidate {
@@ -106,7 +106,10 @@ pub struct PreviewPresentation {
 
 /// Whether the pointer has left the toolkit drag-start box around the press point.
 fn left_press_box(press: Point, pointer: Point) -> bool {
-    drag_started(cupertino_input::Point::new(press.x, press.y), cupertino_input::Point::new(pointer.x, pointer.y))
+    drag_started(
+        cupertino_input::Point::new(press.x, press.y),
+        cupertino_input::Point::new(pointer.x, pointer.y),
+    )
 }
 
 impl Wm {
@@ -126,15 +129,29 @@ impl Wm {
         match &self.interaction {
             Interaction::Moving(m) => m.preview.as_ref().map(|p| {
                 let rect = Rect::from_array(p.frame.value(now));
-                PreviewPresentation { window: m.window, rect, frame: preview_frame(rect, self.cfg.snap.preview_outset), opacity: p.opacity.value(now), kind: p.kind }
+                PreviewPresentation {
+                    window: m.window,
+                    rect,
+                    frame: preview_frame(rect, self.cfg.snap.preview_outset),
+                    opacity: p.opacity.value(now),
+                    kind: p.kind,
+                }
             }),
             _ => None,
         }
     }
 
-    pub(crate) fn begin_move(&mut self, window: WindowId, pointer: Point, now: f64, out: &mut Vec<Effect>) {
+    pub(crate) fn begin_move(
+        &mut self,
+        window: WindowId,
+        pointer: Point,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
         self.cancel_interaction(now, out);
-        let Some(w) = self.windows.get(&window) else { return };
+        let Some(w) = self.windows.get(&window) else {
+            return;
+        };
         let s = w.lifecycle.state();
         if s.is_fullscreen() || s.is_minimized() || s.is_dead() || s == LifecycleState::Created {
             return;
@@ -158,12 +175,21 @@ impl Wm {
         }));
     }
 
-    pub(crate) fn begin_resize(&mut self, window: WindowId, edges: Edges, pointer: Point, now: f64, out: &mut Vec<Effect>) {
+    pub(crate) fn begin_resize(
+        &mut self,
+        window: WindowId,
+        edges: Edges,
+        pointer: Point,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
         self.cancel_interaction(now, out);
         if !edges.any() {
             return;
         }
-        let Some(w) = self.windows.get_mut(&window) else { return };
+        let Some(w) = self.windows.get_mut(&window) else {
+            return;
+        };
         let s = w.lifecycle.state();
         if s.is_fullscreen() || s.is_minimized() || s.is_dead() || s == LifecycleState::Created {
             return;
@@ -176,13 +202,27 @@ impl Wm {
         let start_frame = w.lifecycle.normal_frame();
         self.focus_window(window, now, out);
         let magnet = Magnet::new(pointer, start_frame, now);
-        self.interaction = Interaction::Resizing(Box::new(ResizeState { window, edges, start_pointer: pointer, start_frame, magnet, pointer, rest: None }));
+        self.interaction = Interaction::Resizing(Box::new(ResizeState {
+            window,
+            edges,
+            start_pointer: pointer,
+            start_frame,
+            magnet,
+            pointer,
+            rest: None,
+        }));
         if let Some(c) = self.configure_effect(window, true) {
             out.push(c);
         }
     }
 
-    pub(crate) fn pointer_motion(&mut self, pointer: Point, modifiers: Modifiers, now: f64, out: &mut Vec<Effect>) {
+    pub(crate) fn pointer_motion(
+        &mut self,
+        pointer: Point,
+        modifiers: Modifiers,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
         match std::mem::replace(&mut self.interaction, Interaction::Idle) {
             Interaction::Moving(mut m) => {
                 self.move_step(&mut m, pointer, modifiers, now, out);
@@ -196,7 +236,14 @@ impl Wm {
         }
     }
 
-    fn move_step(&mut self, m: &mut MoveState, pointer: Point, modifiers: Modifiers, now: f64, out: &mut Vec<Effect>) {
+    fn move_step(
+        &mut self,
+        m: &mut MoveState,
+        pointer: Point,
+        modifiers: Modifiers,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
         let cfg: SnapConfig = self.cfg.snap.clone();
         m.pointer = pointer;
         if !self.windows.contains_key(&m.window) {
@@ -220,28 +267,50 @@ impl Wm {
             let gy = (m.start_pointer.y - cur.y).clamp(0.0, cfg.titlebar_height);
             m.grab = Point::new(frac * normal_size.w, gy);
         }
-        let mut frame = Rect::from_origin_size(Point::new(pointer.x - m.grab.x, pointer.y - m.grab.y), normal_size);
+        let mut frame = Rect::from_origin_size(
+            Point::new(pointer.x - m.grab.x, pointer.y - m.grab.y),
+            normal_size,
+        );
         if cfg.keep_titlebar_visible && usable.h > 0.0 {
-            frame.y = frame.y.max(usable.y).min(usable.bottom() - cfg.titlebar_height);
+            frame.y = frame
+                .y
+                .max(usable.y)
+                .min(usable.bottom() - cfg.titlebar_height);
         }
         let step = match m.magnet.as_mut() {
             Some(magnet) => {
                 let enabled = mcfg.enabled && !(mcfg.disable_with_alt && modifiers.option);
                 let may_snap = !w.lifecycle.is_catching_up(now);
-                magnet.step(mcfg, pointer, frame, Edges::ALL, &guides, enabled, may_snap, now)
+                magnet.step(
+                    mcfg,
+                    pointer,
+                    frame,
+                    Edges::ALL,
+                    &guides,
+                    enabled,
+                    may_snap,
+                    now,
+                )
             }
             None => {
                 m.magnet = Some(Magnet::new(pointer, frame, now));
-                MagnetStep { frame, jumped: false }
+                MagnetStep {
+                    frame,
+                    jumped: false,
+                }
             }
         };
         let frame = step.frame;
         let before = w.lifecycle.normal_frame();
-        let was_tiled = !matches!(w.lifecycle.state(), LifecycleState::Normal | LifecycleState::Opening);
+        let was_tiled = !matches!(
+            w.lifecycle.state(),
+            LifecycleState::Normal | LifecycleState::Opening
+        );
         if was_tiled {
             w.lifecycle.drag_out(Some(frame), now);
         } else if step.jumped && !w.lifecycle.presentation(now).frame.contains(pointer) {
-            w.lifecycle.catch_up_to(frame, mcfg.catch_up_duration, mcfg.catch_up_curve, now);
+            w.lifecycle
+                .catch_up_to(frame, mcfg.catch_up_duration, mcfg.catch_up_curve, now);
         } else {
             w.lifecycle.set_normal_frame(frame);
         }
@@ -256,22 +325,36 @@ impl Wm {
         if was_tiled {
             self.emit_layout(m.window, AnimationKind::DragOut, out);
         } else {
-            out.push(Effect::Place { window: m.window, rect: frame });
+            out.push(Effect::Place {
+                window: m.window,
+                rect: frame,
+            });
         }
         self.move_children(m.window, frame.x - before.x, frame.y - before.y, out);
 
-        let (out_rect, dock_zone) = self.output(m.output).map_or((Rect::default(), None), |o| (o.rect, o.dock_zone));
+        let (out_rect, dock_zone) = self
+            .output(m.output)
+            .map_or((Rect::default(), None), |o| (o.rect, o.dock_zone));
         match hot_zone_hit(&cfg, out_rect, usable, pointer, modifiers.option, dock_zone) {
             None => self.clear_preview(m, out),
             Some(hit) => {
                 if m.snap.map(|s| s.kind) != Some(hit.kind) {
-                    m.snap = Some(SnapCandidate { kind: hit.kind, since: now, anchor: pointer, immediate: hit.immediate, delay: hit.delay });
+                    m.snap = Some(SnapCandidate {
+                        kind: hit.kind,
+                        since: now,
+                        anchor: pointer,
+                        immediate: hit.immediate,
+                        delay: hit.delay,
+                    });
                 } else if let Some(s) = m.snap.as_mut() {
                     s.immediate |= hit.immediate;
                     s.delay = s.delay.min(hit.delay);
                     // a dwell that has not shown the preview yet starts again once the pointer moves
                     // past the stillness tolerance
-                    if m.preview.is_none() && !s.immediate && !is_still(s.kind, s.anchor, pointer, cfg.dwell_stillness) {
+                    if m.preview.is_none()
+                        && !s.immediate
+                        && !is_still(s.kind, s.anchor, pointer, cfg.dwell_stillness)
+                    {
                         s.since = now;
                         s.anchor = pointer;
                     }
@@ -285,7 +368,11 @@ impl Wm {
     fn clear_preview(&mut self, m: &mut MoveState, out: &mut Vec<Effect>) {
         m.snap = None;
         if m.preview.take().is_some() {
-            out.push(Effect::SnapPreview { window: m.window, rect: None, immediate: false });
+            out.push(Effect::SnapPreview {
+                window: m.window,
+                rect: None,
+                immediate: false,
+            });
         }
     }
 
@@ -295,7 +382,9 @@ impl Wm {
         if !(s.immediate || now - s.since >= s.delay) {
             return;
         }
-        let Some(usable) = self.output(m.output).map(|o| o.usable) else { return };
+        let Some(usable) = self.output(m.output).map(|o| o.usable) else {
+            return;
+        };
         let target = tile_rect(s.kind, usable, cfg.tiled_margin);
         let (frame_curve, opacity_curve) = (cfg.preview_frame_curve, cfg.preview_opacity_curve);
         let opacity = cfg.preview_opacity;
@@ -306,13 +395,26 @@ impl Wm {
                 frame.animate_to(target.to_array(), frame_curve, now);
                 let mut op = AnimatedValue::new(0.0);
                 op.animate_to(opacity, opacity_curve, now);
-                m.preview = Some(Preview { kind: s.kind, immediate: s.immediate, frame, opacity: op });
-                out.push(Effect::SnapPreview { window: m.window, rect: Some(target), immediate: s.immediate });
+                m.preview = Some(Preview {
+                    kind: s.kind,
+                    immediate: s.immediate,
+                    frame,
+                    opacity: op,
+                });
+                out.push(Effect::SnapPreview {
+                    window: m.window,
+                    rect: Some(target),
+                    immediate: s.immediate,
+                });
             }
             Some(p) if p.kind != s.kind => {
                 p.kind = s.kind;
                 p.frame.animate_to(target.to_array(), frame_curve, now);
-                out.push(Effect::SnapPreview { window: m.window, rect: Some(target), immediate: p.immediate });
+                out.push(Effect::SnapPreview {
+                    window: m.window,
+                    rect: Some(target),
+                    immediate: p.immediate,
+                });
             }
             Some(_) => {}
         }
@@ -323,7 +425,9 @@ impl Wm {
         if !cfg.workspace_edge_switch {
             return;
         }
-        let Some(r) = self.output(m.output).map(|o| o.rect) else { return };
+        let Some(r) = self.output(m.output).map(|o| o.rect) else {
+            return;
+        };
         let side: i8 = if m.pointer.x - r.x <= cfg.edge_threshold {
             -1
         } else if r.right() - m.pointer.x <= cfg.edge_threshold {
@@ -336,19 +440,46 @@ impl Wm {
             (0, _) => m.edge = None,
             (s, Some(e)) if e.side == s => {
                 if now - e.since >= dwell && self.edge_switch(m, s, now, out) {
-                    m.edge = Some(EdgeDwell { side: s, since: now });
+                    m.edge = Some(EdgeDwell {
+                        side: s,
+                        since: now,
+                    });
                 }
             }
-            (s, _) => m.edge = Some(EdgeDwell { side: s, since: now }),
+            (s, _) => {
+                m.edge = Some(EdgeDwell {
+                    side: s,
+                    since: now,
+                })
+            }
         }
     }
 
     /// Move the window to the adjacent regular workspace in direction `side` and switch to it.
-    fn edge_switch(&mut self, m: &mut MoveState, side: i8, now: f64, out: &mut Vec<Effect>) -> bool {
-        let Some(ws) = self.workspaces.get(&m.output) else { return false };
-        let Some(cur) = ws.index_of(ws.current) else { return false };
-        let range: Vec<usize> = if side < 0 { (0..cur).rev().collect() } else { (cur + 1..ws.list.len()).collect() };
-        let Some(target) = range.into_iter().find(|i| ws.list[*i].kind == WorkspaceKind::Regular) else { return false };
+    fn edge_switch(
+        &mut self,
+        m: &mut MoveState,
+        side: i8,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) -> bool {
+        let Some(ws) = self.workspaces.get(&m.output) else {
+            return false;
+        };
+        let Some(cur) = ws.index_of(ws.current) else {
+            return false;
+        };
+        let range: Vec<usize> = if side < 0 {
+            (0..cur).rev().collect()
+        } else {
+            (cur + 1..ws.list.len()).collect()
+        };
+        let Some(target) = range
+            .into_iter()
+            .find(|i| ws.list[*i].kind == WorkspaceKind::Regular)
+        else {
+            return false;
+        };
         let target = ws.list[target].id;
         self.clear_preview(m, out);
         let mut moved = vec![m.window];
@@ -368,7 +499,12 @@ impl Wm {
         let mut result = Vec::new();
         let mut frontier = vec![id];
         while let Some(p) = frontier.pop() {
-            let mut kids: Vec<WindowId> = self.windows.values().filter(|w| w.parent == Some(p)).map(|w| w.id).collect();
+            let mut kids: Vec<WindowId> = self
+                .windows
+                .values()
+                .filter(|w| w.parent == Some(p))
+                .map(|w| w.id)
+                .collect();
             kids.sort();
             for k in kids {
                 if !result.contains(&k) && k != id {
@@ -386,8 +522,13 @@ impl Wm {
             return;
         }
         for c in self.descendants(parent) {
-            let Some(w) = self.windows.get_mut(&c) else { continue };
-            if matches!(w.lifecycle.state(), LifecycleState::Normal | LifecycleState::Opening) {
+            let Some(w) = self.windows.get_mut(&c) else {
+                continue;
+            };
+            if matches!(
+                w.lifecycle.state(),
+                LifecycleState::Normal | LifecycleState::Opening
+            ) {
                 let f = w.lifecycle.normal_frame().translate(dx, dy);
                 w.lifecycle.set_normal_frame(f);
                 out.push(Effect::Place { window: c, rect: f });
@@ -401,7 +542,13 @@ impl Wm {
     /// front to back so that a partly covered window guides only with its visible pieces
     /// ([`crate::pieces`]); and with `screen` the usable rectangle (the session rect
     /// excludes the menu bar and dock), added last.
-    fn magnet_guides(&self, window: WindowId, output: OutputId, screen: bool, now: f64) -> Vec<Guide> {
+    fn magnet_guides(
+        &self,
+        window: WindowId,
+        output: OutputId,
+        screen: bool,
+        now: f64,
+    ) -> Vec<Guide> {
         let cfg = &self.cfg.magnet;
         let group = self.descendants(window);
         let front_to_back: Vec<Rect> = self
@@ -410,24 +557,39 @@ impl Wm {
             .rev()
             .filter(|id| *id != window && !group.contains(id))
             .map(|id| self.windows[&id].lifecycle.presentation(now))
-            .filter(|p| p.opacity >= cfg.guide_min_opacity && p.scale == 1.0 && p.minimize_progress == 0.0)
+            .filter(|p| {
+                p.opacity >= cfg.guide_min_opacity && p.scale == 1.0 && p.minimize_progress == 0.0
+            })
             .map(|p| p.frame)
             .collect();
         let mut guides = window_guides(&front_to_back, cfg.min_piece);
-        if let Some(u) = self.output(output).map(|o| o.usable).filter(|u| screen && u.w > cfg.screen_guide_min && u.h > cfg.screen_guide_min) {
+        if let Some(u) = self
+            .output(output)
+            .map(|o| o.usable)
+            .filter(|u| screen && u.w > cfg.screen_guide_min && u.h > cfg.screen_guide_min)
+        {
             guides.push(Guide::Screen(u));
         }
         guides
     }
 
-    fn resize_step(&mut self, r: &mut ResizeState, pointer: Point, modifiers: Modifiers, now: f64, out: &mut Vec<Effect>) {
+    fn resize_step(
+        &mut self,
+        r: &mut ResizeState,
+        pointer: Point,
+        modifiers: Modifiers,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
         // sheets and child windows do not snap while resizing
         let guides = match self.windows.get(&r.window) {
             Some(w) if w.parent.is_none() => self.magnet_guides(r.window, w.output, false, now),
             _ => Vec::new(),
         };
         let mcfg = &self.cfg.magnet;
-        let Some(w) = self.windows.get_mut(&r.window) else { return };
+        let Some(w) = self.windows.get_mut(&r.window) else {
+            return;
+        };
         let (dx, dy) = (pointer.x - r.start_pointer.x, pointer.y - r.start_pointer.y);
         let s = r.start_frame;
         let (min, max) = w.size_limits();
@@ -449,22 +611,31 @@ impl Wm {
         let enabled = mcfg.enabled && !(mcfg.disable_with_alt && modifiers.option);
         // a snap the size limits reject is not kept: the magnet only advances its pointer history
         let mut trial = r.magnet.clone();
-        let snapped = trial.step(mcfg, pointer, f, r.edges, &guides, enabled, true, now).frame;
+        let snapped = trial
+            .step(mcfg, pointer, f, r.edges, &guides, enabled, true, now)
+            .frame;
         if (min.w..=max.w).contains(&snapped.w) && (min.h..=max.h).contains(&snapped.h) {
             f = snapped;
             r.magnet = trial;
         } else {
-            r.magnet.step(mcfg, pointer, f, r.edges, &guides, false, true, now);
+            r.magnet
+                .step(mcfg, pointer, f, r.edges, &guides, false, true, now);
         }
         w.lifecycle.set_normal_frame(f);
         let output = w.output;
         r.pointer = pointer;
         // every step restarts the settle timer of the edges that rest near the screen's edges
-        r.rest = self.output(output).filter(|_| self.cfg.snap.snap_size_to_screen_edges).and_then(|o| {
-            let near = near_edges(f, o.usable, r.edges, self.cfg.snap.snap_size_delta);
-            near.any().then_some((near, now))
+        r.rest = self
+            .output(output)
+            .filter(|_| self.cfg.snap.snap_size_to_screen_edges)
+            .and_then(|o| {
+                let near = near_edges(f, o.usable, r.edges, self.cfg.snap.snap_size_delta);
+                near.any().then_some((near, now))
+            });
+        out.push(Effect::Place {
+            window: r.window,
+            rect: f,
         });
-        out.push(Effect::Place { window: r.window, rect: f });
         if let Some(c) = self.configure_effect(r.window, true) {
             out.push(c);
         }
@@ -478,13 +649,27 @@ impl Wm {
             return;
         }
         r.rest = None;
-        let axes = Edges { left: near.left || near.right, right: near.left || near.right, top: near.top || near.bottom, bottom: near.top || near.bottom };
-        let Some(f) = self.screen_snapped_frame(r.window, axes) else { return };
-        if self.windows.get_mut(&r.window).is_some_and(|w| w.lifecycle.animate_normal_frame(f, now)) {
+        let axes = Edges {
+            left: near.left || near.right,
+            right: near.left || near.right,
+            top: near.top || near.bottom,
+            bottom: near.top || near.bottom,
+        };
+        let Some(f) = self.screen_snapped_frame(r.window, axes) else {
+            return;
+        };
+        if self
+            .windows
+            .get_mut(&r.window)
+            .is_some_and(|w| w.lifecycle.animate_normal_frame(f, now))
+        {
             r.start_frame = f;
             r.start_pointer = r.pointer;
             r.magnet = Magnet::new(r.pointer, f, now);
-            out.push(Effect::Place { window: r.window, rect: f });
+            out.push(Effect::Place {
+                window: r.window,
+                rect: f,
+            });
             if let Some(c) = self.configure_effect(r.window, true) {
                 out.push(c);
             }
@@ -498,12 +683,24 @@ impl Wm {
         let u = self.output(w.output)?.usable;
         let f0 = w.lifecycle.normal_frame();
         let (min, max) = (w.min_size, w.max_size);
-        let fits = |len: f64, lo: Option<f64>, hi: Option<f64>| lo.is_none_or(|v| len >= v) && hi.filter(|v| *v > 0.0).is_none_or(|v| len <= v);
-        let (mut x0, mut x1) = (if edges.left { u.x } else { f0.x }, if edges.right { u.right() } else { f0.right() });
+        let fits = |len: f64, lo: Option<f64>, hi: Option<f64>| {
+            lo.is_none_or(|v| len >= v) && hi.filter(|v| *v > 0.0).is_none_or(|v| len <= v)
+        };
+        let (mut x0, mut x1) = (
+            if edges.left { u.x } else { f0.x },
+            if edges.right { u.right() } else { f0.right() },
+        );
         if !fits(x1 - x0, min.map(|m| m.w), max.map(|m| m.w)) {
             (x0, x1) = (f0.x, f0.right());
         }
-        let (mut y0, mut y1) = (if edges.top { u.y } else { f0.y }, if edges.bottom { u.bottom() } else { f0.bottom() });
+        let (mut y0, mut y1) = (
+            if edges.top { u.y } else { f0.y },
+            if edges.bottom {
+                u.bottom()
+            } else {
+                f0.bottom()
+            },
+        );
         if !fits(y1 - y0, min.map(|m| m.h), max.map(|m| m.h)) {
             (y0, y1) = (f0.y, f0.bottom());
         }
@@ -514,16 +711,42 @@ impl Wm {
     /// Double click on a resize edge or corner: the hit edges, with `opposite` also the
     /// opposite ones, move to the usable area's edges, animated. Off while full screen and when
     /// the setting is off; only a window in the normal layout snaps.
-    pub(crate) fn snap_edges_to_screen(&mut self, window: WindowId, edges: Edges, opposite: bool, now: f64, out: &mut Vec<Effect>) {
+    pub(crate) fn snap_edges_to_screen(
+        &mut self,
+        window: WindowId,
+        edges: Edges,
+        opposite: bool,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
         if !self.cfg.snap.snap_size_on_double_click || self.is_interacting() {
             return;
         }
-        if !self.windows.get(&window).is_some_and(|w| matches!(w.state(), LifecycleState::Normal | LifecycleState::Opening)) {
+        if !self
+            .windows
+            .get(&window)
+            .is_some_and(|w| matches!(w.state(), LifecycleState::Normal | LifecycleState::Opening))
+        {
             return;
         }
-        let e = if opposite { Edges { left: edges.left || edges.right, right: edges.left || edges.right, top: edges.top || edges.bottom, bottom: edges.top || edges.bottom } } else { edges };
-        let Some(f) = self.screen_snapped_frame(window, e) else { return };
-        if self.windows.get_mut(&window).is_some_and(|w| w.lifecycle.animate_normal_frame(f, now)) {
+        let e = if opposite {
+            Edges {
+                left: edges.left || edges.right,
+                right: edges.left || edges.right,
+                top: edges.top || edges.bottom,
+                bottom: edges.top || edges.bottom,
+            }
+        } else {
+            edges
+        };
+        let Some(f) = self.screen_snapped_frame(window, e) else {
+            return;
+        };
+        if self
+            .windows
+            .get_mut(&window)
+            .is_some_and(|w| w.lifecycle.animate_normal_frame(f, now))
+        {
             if let Some(c) = self.configure_effect(window, false) {
                 out.push(c);
             }
@@ -556,14 +779,20 @@ impl Wm {
                 self.clear_preview(&mut m, out);
                 if let Some(w) = self.windows.get_mut(&m.window) {
                     if m.pulled_out && w.lifecycle.set_normal_frame(m.start_frame) {
-                        out.push(Effect::Place { window: m.window, rect: m.start_frame });
+                        out.push(Effect::Place {
+                            window: m.window,
+                            rect: m.start_frame,
+                        });
                     }
                 }
             }
             Interaction::Resizing(r) => {
                 if let Some(w) = self.windows.get_mut(&r.window) {
                     w.lifecycle.set_normal_frame(r.start_frame);
-                    out.push(Effect::Place { window: r.window, rect: r.start_frame });
+                    out.push(Effect::Place {
+                        window: r.window,
+                        rect: r.start_frame,
+                    });
                 }
                 if let Some(c) = self.configure_effect(r.window, false) {
                     out.push(c);
@@ -574,13 +803,22 @@ impl Wm {
     }
 
     /// Drop the interaction without touching geometry (the window is going away or minimizing).
-    pub(crate) fn cancel_interaction_for(&mut self, window: WindowId, _now: f64, out: &mut Vec<Effect>) {
+    pub(crate) fn cancel_interaction_for(
+        &mut self,
+        window: WindowId,
+        _now: f64,
+        out: &mut Vec<Effect>,
+    ) {
         if self.interacting_window() != Some(window) {
             return;
         }
         if let Interaction::Moving(m) = &self.interaction {
             if m.preview.is_some() {
-                out.push(Effect::SnapPreview { window, rect: None, immediate: false });
+                out.push(Effect::SnapPreview {
+                    window,
+                    rect: None,
+                    immediate: false,
+                });
             }
         }
         self.interaction = Interaction::Idle;

@@ -74,12 +74,21 @@ pub const SECRET_BYTES: usize = 256;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Kind {
     /// The passphrase of a secured network that is not saved. The passphrase is never stored by the application.
-    Passphrase { ssid: String, text: Secret, failure: Option<String> },
+    Passphrase {
+        ssid: String,
+        text: Secret,
+        failure: Option<String>,
+    },
     /// Forget a Bluetooth device: Cancel is the default, "Forget Device" is destructive (wording approximate).
     Forget { id: String, name: String },
     /// A question of the Bluetooth daemon to the pairing agent (`org.cupertino.Bluetooth1.Agent`); `id` is the pairing.
     /// The wording is approximate (the design's pairing dialog is not known).
-    Pairing { id: u64, device: String, prompt: Prompt, text: Secret },
+    Pairing {
+        id: u64,
+        device: String,
+        prompt: Prompt,
+        text: Secret,
+    },
 }
 
 /// What the daemon asks during a pairing.
@@ -135,15 +144,33 @@ pub struct SheetLayout {
 
 impl Sheet {
     pub fn passphrase(ssid: &str) -> Self {
-        Sheet { kind: Kind::Passphrase { ssid: ssid.to_string(), text: Secret::new(), failure: None } }
+        Sheet {
+            kind: Kind::Passphrase {
+                ssid: ssid.to_string(),
+                text: Secret::new(),
+                failure: None,
+            },
+        }
     }
 
     pub fn forget(id: &str, name: &str) -> Self {
-        Sheet { kind: Kind::Forget { id: id.to_string(), name: name.to_string() } }
+        Sheet {
+            kind: Kind::Forget {
+                id: id.to_string(),
+                name: name.to_string(),
+            },
+        }
     }
 
     pub fn pairing(id: u64, device: &str, prompt: Prompt) -> Self {
-        Sheet { kind: Kind::Pairing { id, device: device.to_string(), prompt, text: Secret::new() } }
+        Sheet {
+            kind: Kind::Pairing {
+                id,
+                device: device.to_string(),
+                prompt,
+                text: Secret::new(),
+            },
+        }
     }
 
     /// The pairing this sheet answers, if it is a pairing prompt.
@@ -156,11 +183,25 @@ impl Sheet {
 
     pub fn title(&self) -> String {
         match &self.kind {
-            Kind::Passphrase { ssid, .. } => format!("Enter the password for \u{201c}{ssid}\u{201d}"),
+            Kind::Passphrase { ssid, .. } => {
+                format!("Enter the password for \u{201c}{ssid}\u{201d}")
+            }
             Kind::Forget { name, .. } => format!("Forget \u{201c}{name}\u{201d}?"),
-            Kind::Pairing { device, prompt: Prompt::Confirm { .. }, .. } => format!("Pair with \u{201c}{device}\u{201d}?"),
-            Kind::Pairing { device, prompt: Prompt::Request, .. } => format!("Enter the code shown on \u{201c}{device}\u{201d}"),
-            Kind::Pairing { device, prompt: Prompt::Display { .. }, .. } => format!("Pairing with \u{201c}{device}\u{201d}"),
+            Kind::Pairing {
+                device,
+                prompt: Prompt::Confirm { .. },
+                ..
+            } => format!("Pair with \u{201c}{device}\u{201d}?"),
+            Kind::Pairing {
+                device,
+                prompt: Prompt::Request,
+                ..
+            } => format!("Enter the code shown on \u{201c}{device}\u{201d}"),
+            Kind::Pairing {
+                device,
+                prompt: Prompt::Display { .. },
+                ..
+            } => format!("Pairing with \u{201c}{device}\u{201d}"),
         }
     }
 
@@ -180,9 +221,15 @@ impl Sheet {
         match &self.kind {
             Kind::Passphrase { .. } => "Join",
             Kind::Forget { .. } => "Forget Device",
-            Kind::Pairing { prompt: Prompt::Confirm { .. } | Prompt::Request, .. } => "Pair",
+            Kind::Pairing {
+                prompt: Prompt::Confirm { .. } | Prompt::Request,
+                ..
+            } => "Pair",
             // the daemon asks nothing back: the sheet only goes away
-            Kind::Pairing { prompt: Prompt::Display { .. }, .. } => "OK",
+            Kind::Pairing {
+                prompt: Prompt::Display { .. },
+                ..
+            } => "OK",
         }
     }
 
@@ -190,7 +237,11 @@ impl Sheet {
     pub fn field_text(&self) -> Option<String> {
         match &self.kind {
             Kind::Passphrase { text, .. } => Some("\u{2022}".repeat(text.chars().count())),
-            Kind::Pairing { prompt: Prompt::Request, text, .. } => Some(text.to_string()),
+            Kind::Pairing {
+                prompt: Prompt::Request,
+                text,
+                ..
+            } => Some(text.to_string()),
             Kind::Forget { .. } | Kind::Pairing { .. } => None,
         }
     }
@@ -200,20 +251,48 @@ impl Sheet {
     fn action(&mut self) -> Outcome {
         match &mut self.kind {
             Kind::Passphrase { text, .. } if text.is_empty() => Outcome::Stay,
-            Kind::Passphrase { ssid, text, .. } => Outcome::Do(Call::Join { ssid: ssid.clone(), passphrase: Some(std::mem::take(text)) }),
-            Kind::Forget { id, .. } => Outcome::Do(Call::Remove { id: id.clone(), confirmed: true }),
-            Kind::Pairing { prompt: Prompt::Confirm { .. }, .. } => Outcome::Answer(Answer::Confirm),
-            Kind::Pairing { prompt: Prompt::Request, text, .. } if text.len() < PASSKEY_DIGITS => Outcome::Stay,
-            Kind::Pairing { prompt: Prompt::Request, text, .. } => Outcome::Answer(Answer::Passkey(text.parse().expect("six decimal digits"))),
-            Kind::Pairing { prompt: Prompt::Display { .. }, .. } => Outcome::Cancel,
+            Kind::Passphrase { ssid, text, .. } => Outcome::Do(Call::Join {
+                ssid: ssid.clone(),
+                passphrase: Some(std::mem::take(text)),
+            }),
+            Kind::Forget { id, .. } => Outcome::Do(Call::Remove {
+                id: id.clone(),
+                confirmed: true,
+            }),
+            Kind::Pairing {
+                prompt: Prompt::Confirm { .. },
+                ..
+            } => Outcome::Answer(Answer::Confirm),
+            Kind::Pairing {
+                prompt: Prompt::Request,
+                text,
+                ..
+            } if text.len() < PASSKEY_DIGITS => Outcome::Stay,
+            Kind::Pairing {
+                prompt: Prompt::Request,
+                text,
+                ..
+            } => Outcome::Answer(Answer::Passkey(text.parse().expect("six decimal digits"))),
+            Kind::Pairing {
+                prompt: Prompt::Display { .. },
+                ..
+            } => Outcome::Cancel,
         }
     }
 
     /// Cancel: a pairing question is refused; every other sheet just closes.
     fn cancel(&self) -> Outcome {
         match &self.kind {
-            Kind::Pairing { prompt: Prompt::Confirm { .. } | Prompt::Request, .. } => Outcome::Answer(Answer::Reject),
-            Kind::Passphrase { .. } | Kind::Forget { .. } | Kind::Pairing { prompt: Prompt::Display { .. }, .. } => Outcome::Cancel,
+            Kind::Pairing {
+                prompt: Prompt::Confirm { .. } | Prompt::Request,
+                ..
+            } => Outcome::Answer(Answer::Reject),
+            Kind::Passphrase { .. }
+            | Kind::Forget { .. }
+            | Kind::Pairing {
+                prompt: Prompt::Display { .. },
+                ..
+            } => Outcome::Cancel,
         }
     }
 
@@ -229,17 +308,35 @@ impl Sheet {
                 }
                 Outcome::Stay
             }
-            (SheetKey::Type(c), Kind::Pairing { prompt: Prompt::Request, text, .. }) => {
+            (
+                SheetKey::Type(c),
+                Kind::Pairing {
+                    prompt: Prompt::Request,
+                    text,
+                    ..
+                },
+            ) => {
                 if c.is_ascii_digit() && text.len() < PASSKEY_DIGITS {
                     text.push(c);
                 }
                 Outcome::Stay
             }
-            (SheetKey::Backspace, Kind::Passphrase { text, .. } | Kind::Pairing { prompt: Prompt::Request, text, .. }) => {
+            (
+                SheetKey::Backspace,
+                Kind::Passphrase { text, .. }
+                | Kind::Pairing {
+                    prompt: Prompt::Request,
+                    text,
+                    ..
+                },
+            ) => {
                 text.pop();
                 Outcome::Stay
             }
-            (SheetKey::Type(_) | SheetKey::Backspace, Kind::Forget { .. } | Kind::Pairing { .. }) => Outcome::Stay,
+            (
+                SheetKey::Type(_) | SheetKey::Backspace,
+                Kind::Forget { .. } | Kind::Pairing { .. },
+            ) => Outcome::Stay,
         }
     }
 
@@ -255,16 +352,45 @@ impl Sheet {
     /// The layout of the sheet centred in the content column `content`, near its top.
     pub fn layout(&self, content: &Rect) -> SheetLayout {
         let field = self.field_text().is_some();
-        let h = m::PADDING * 2.0 + m::TITLE_HEIGHT + m::GAP / 2.0 + m::MESSAGE_HEIGHT + if field { m::FIELD_HEIGHT + m::GAP } else { 0.0 } + m::GAP + m::BUTTON.1;
-        let frame = Rect::new(content.x + (content.w - m::WIDTH) / 2.0, content.y + m::PADDING, m::WIDTH, h);
+        let h = m::PADDING * 2.0
+            + m::TITLE_HEIGHT
+            + m::GAP / 2.0
+            + m::MESSAGE_HEIGHT
+            + if field { m::FIELD_HEIGHT + m::GAP } else { 0.0 }
+            + m::GAP
+            + m::BUTTON.1;
+        let frame = Rect::new(
+            content.x + (content.w - m::WIDTH) / 2.0,
+            content.y + m::PADDING,
+            m::WIDTH,
+            h,
+        );
         let inner = frame.inset(m::PADDING, m::PADDING);
         let title = Rect::new(inner.x, inner.y, inner.w, m::TITLE_HEIGHT);
-        let message = Rect::new(inner.x, title.bottom() + m::GAP / 2.0, inner.w, m::MESSAGE_HEIGHT);
-        let field_rect = field.then(|| Rect::new(inner.x, message.bottom(), inner.w, m::FIELD_HEIGHT));
+        let message = Rect::new(
+            inner.x,
+            title.bottom() + m::GAP / 2.0,
+            inner.w,
+            m::MESSAGE_HEIGHT,
+        );
+        let field_rect =
+            field.then(|| Rect::new(inner.x, message.bottom(), inner.w, m::FIELD_HEIGHT));
         let by = inner.bottom() - m::BUTTON.1;
         let action = Rect::new(inner.right() - m::BUTTON.0, by, m::BUTTON.0, m::BUTTON.1);
-        let cancel = Rect::new(action.x - m::GAP - m::BUTTON.0, by, m::BUTTON.0, m::BUTTON.1);
-        SheetLayout { frame, title, message, field: field_rect, cancel, action }
+        let cancel = Rect::new(
+            action.x - m::GAP - m::BUTTON.0,
+            by,
+            m::BUTTON.0,
+            m::BUTTON.1,
+        );
+        SheetLayout {
+            frame,
+            title,
+            message,
+            field: field_rect,
+            cancel,
+            action,
+        }
     }
 
     /// A press at `p` in a sheet laid out as `layout`.
@@ -309,12 +435,24 @@ mod tests {
             pairing.key(SheetKey::Type(c));
         }
         for shown in [format!("{s:?}"), format!("{pairing:?}")] {
-            assert!(!shown.contains("hunter22") && !shown.contains("482916") && shown.contains("[secret]"), "{shown}");
+            assert!(
+                !shown.contains("hunter22")
+                    && !shown.contains("482916")
+                    && shown.contains("[secret]"),
+                "{shown}"
+            );
         }
         let call = s.key(SheetKey::Return);
         let shown = format!("{call:?}");
-        assert!(!shown.contains("hunter22") && shown.contains("[secret]"), "{shown}");
-        assert_eq!(s.field_text().as_deref(), Some(""), "the passphrase moved into the call");
+        assert!(
+            !shown.contains("hunter22") && shown.contains("[secret]"),
+            "{shown}"
+        );
+        assert_eq!(
+            s.field_text().as_deref(),
+            Some(""),
+            "the passphrase moved into the call"
+        );
     }
 
     #[test]
@@ -326,9 +464,18 @@ mod tests {
         }
         s.key(SheetKey::Backspace);
         assert_eq!(s.field_text().as_deref(), Some("•••••"));
-        assert_eq!(s.key(SheetKey::Return), Outcome::Do(Call::Join { ssid: "office".into(), passphrase: Some(typed("secre")) }));
+        assert_eq!(
+            s.key(SheetKey::Return),
+            Outcome::Do(Call::Join {
+                ssid: "office".into(),
+                passphrase: Some(typed("secre"))
+            })
+        );
         s.failed("The password is not correct.");
-        assert_eq!((s.message().as_str(), s.field_text().as_deref()), ("The password is not correct.", Some("")));
+        assert_eq!(
+            (s.message().as_str(), s.field_text().as_deref()),
+            ("The password is not correct.", Some(""))
+        );
         assert_eq!(s.key(SheetKey::Escape), Outcome::Cancel);
     }
 
@@ -339,8 +486,18 @@ mod tests {
         assert_eq!(l.frame.w, 340.0);
         assert!(l.field.is_none());
         assert_eq!(s.press(&l, l.cancel.center()), Outcome::Cancel);
-        assert_eq!(s.press(&l, l.action.center()), Outcome::Do(Call::Remove { id: "dev-1".into(), confirmed: true }));
-        assert_eq!(s.clone().key(SheetKey::Return), Outcome::Cancel, "Cancel is the default");
+        assert_eq!(
+            s.press(&l, l.action.center()),
+            Outcome::Do(Call::Remove {
+                id: "dev-1".into(),
+                confirmed: true
+            })
+        );
+        assert_eq!(
+            s.clone().key(SheetKey::Return),
+            Outcome::Cancel,
+            "Cancel is the default"
+        );
         assert_eq!(s.action_title(), "Forget Device");
     }
 
@@ -349,20 +506,51 @@ mod tests {
         let mut confirm = Sheet::pairing(7, "Keyboard", Prompt::Confirm { passkey: Some(42) });
         assert_eq!(confirm.message(), "Check that the device shows 000042.");
         assert_eq!(confirm.pairing_id(), Some(7));
-        assert_eq!(confirm.key(SheetKey::Return), Outcome::Answer(Answer::Confirm));
-        assert_eq!(confirm.key(SheetKey::Escape), Outcome::Answer(Answer::Reject));
+        assert_eq!(
+            confirm.key(SheetKey::Return),
+            Outcome::Answer(Answer::Confirm)
+        );
+        assert_eq!(
+            confirm.key(SheetKey::Escape),
+            Outcome::Answer(Answer::Reject)
+        );
         let mut request = Sheet::pairing(8, "Keyboard", Prompt::Request);
         for c in "12a34567".chars() {
             request.key(SheetKey::Type(c));
         }
-        assert_eq!(request.field_text().as_deref(), Some("123456"), "digits only, six at most");
+        assert_eq!(
+            request.field_text().as_deref(),
+            Some("123456"),
+            "digits only, six at most"
+        );
         request.key(SheetKey::Backspace);
-        assert_eq!(request.key(SheetKey::Return), Outcome::Stay, "five digits are not a passkey");
+        assert_eq!(
+            request.key(SheetKey::Return),
+            Outcome::Stay,
+            "five digits are not a passkey"
+        );
         request.key(SheetKey::Type('0'));
-        assert_eq!(request.key(SheetKey::Return), Outcome::Answer(Answer::Passkey(123450)));
-        let mut display = Sheet::pairing(9, "Keyboard", Prompt::Display { passkey: 987654, entered: 2 });
+        assert_eq!(
+            request.key(SheetKey::Return),
+            Outcome::Answer(Answer::Passkey(123450))
+        );
+        let mut display = Sheet::pairing(
+            9,
+            "Keyboard",
+            Prompt::Display {
+                passkey: 987654,
+                entered: 2,
+            },
+        );
         let l = display.layout(&Rect::new(216.0, 52.0, 499.0, 573.0));
         assert!(l.field.is_none());
-        assert_eq!((display.press(&l, l.cancel.center()), display.press(&l, l.action.center())), (Outcome::Cancel, Outcome::Cancel), "nothing to answer");
+        assert_eq!(
+            (
+                display.press(&l, l.cancel.center()),
+                display.press(&l, l.action.center())
+            ),
+            (Outcome::Cancel, Outcome::Cancel),
+            "nothing to answer"
+        );
     }
 }

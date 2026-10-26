@@ -19,7 +19,12 @@ impl Cupertino {
             self.close_overview();
             return;
         }
-        let Some(output) = self.output_at(self.pointer.current_location()).map(|o| o.id) else { return };
+        let Some(output) = self
+            .output_at(self.pointer.current_location())
+            .map(|o| o.id)
+        else {
+            return;
+        };
         let mode = match (app_mode, self.wm.front_app()) {
             (true, Some(app)) => OverviewMode::AppOverview(app),
             _ => OverviewMode::Overview,
@@ -32,14 +37,25 @@ impl Cupertino {
         if self.shell.overview_open() {
             return;
         }
-        let Some(rect) = self.output_entry(output).map(|o| o.rect) else { return };
+        let Some(rect) = self.output_entry(output).map(|o| o.rect) else {
+            return;
+        };
         let now = self.now();
         // the dock lays the windows out in the usable area (below the menu bar, clear of the dock)
         let area = self.wm.output(output).map(|o| o.usable).unwrap_or(rect);
         let windows = shell::overview_windows(&self.wm, output, now, self.dock_rect(output));
-        let mut session = OverviewSession::new(&OverviewConfig::default(), output, area, mode, windows);
+        let mut session =
+            OverviewSession::new(&OverviewConfig::default(), output, area, mode, windows);
         session.transition.toggle(true, now);
-        tracing::info!(output = output.0, x = area.x, y = area.y, width = area.w, height = area.h, windows = session.windows.len(), "overview opened");
+        tracing::info!(
+            output = output.0,
+            x = area.x,
+            y = area.y,
+            width = area.w,
+            height = area.h,
+            windows = session.windows.len(),
+            "overview opened"
+        );
         self.shell.overview = Some(session);
         self.send_overview_to_docks();
         self.request_redraw();
@@ -61,12 +77,24 @@ impl Cupertino {
     /// Leave the overview activating `window` (a minimized one is restored). False when the window
     /// is not in the overview.
     pub fn overview_select(&mut self, window: WindowId) -> bool {
-        if !self.shell.overview.as_ref().is_some_and(|s| !s.closing && s.contains(window)) {
+        if !self
+            .shell
+            .overview
+            .as_ref()
+            .is_some_and(|s| !s.closing && s.contains(window))
+        {
             return false;
         }
-        let minimized = self.wm.window(window).is_some_and(|w| w.state().is_minimized());
+        let minimized = self
+            .wm
+            .window(window)
+            .is_some_and(|w| w.state().is_minimized());
         self.close_overview();
-        self.command(if minimized { Command::Restore { window } } else { Command::FocusWindow { window } });
+        self.command(if minimized {
+            Command::Restore { window }
+        } else {
+            Command::FocusWindow { window }
+        });
         true
     }
 
@@ -74,7 +102,9 @@ impl Cupertino {
     /// is selected, an empty spot leaves. Works without a dock. False when no overview is open.
     pub fn overview_click(&mut self, pos: Point<f64, Logical>) -> bool {
         let now = self.now();
-        let Some(s) = self.shell.overview.as_ref().filter(|s| !s.closing) else { return false };
+        let Some(s) = self.shell.overview.as_ref().filter(|s| !s.closing) else {
+            return false;
+        };
         let hit = s.hit(MPoint::new(pos.x, pos.y), self.wm.stacking_order(), now);
         match hit {
             Some(window) => self.overview_select(window),
@@ -88,9 +118,23 @@ impl Cupertino {
     /// `overview_frame`: the dock laid a window out; it glides there.
     pub fn dock_overview_frame(&mut self, output: OutputId, id: u32, rect: cupertino_wm::Rect) {
         let now = self.now();
-        let Some(s) = self.shell.overview.as_mut().filter(|s| !s.closing && s.output == output) else { return };
+        let Some(s) = self
+            .shell
+            .overview
+            .as_mut()
+            .filter(|s| !s.closing && s.output == output)
+        else {
+            return;
+        };
         if s.set_target(WindowId(u64::from(id)), rect, now) {
-            tracing::info!(id, x = rect.x, y = rect.y, width = rect.w, height = rect.h, "overview frame");
+            tracing::info!(
+                id,
+                x = rect.x,
+                y = rect.y,
+                width = rect.w,
+                height = rect.h,
+                "overview frame"
+            );
             self.request_redraw();
         }
     }
@@ -120,7 +164,9 @@ impl Cupertino {
 
     /// `app_command`: a tile's context menu item for the application.
     pub fn dock_app_command(&mut self, output: OutputId, app_id: &str, command: AppCommand) {
-        let Some(app) = self.wm.app_for_identity(app_id) else { return };
+        let Some(app) = self.wm.app_for_identity(app_id) else {
+            return;
+        };
         match command {
             AppCommand::ShowWindows => {
                 if self.shell.overview_open() {
@@ -130,25 +176,55 @@ impl Cupertino {
             }
             AppCommand::Hide => self.command(Command::HideApp { app }),
             AppCommand::Quit => {
-                let windows: Vec<WindowId> = self.wm.app(app).map(|a| a.windows_mru.clone()).unwrap_or_default();
-                self.commands(windows.into_iter().map(|window| Command::RequestClose { window }).collect());
+                let windows: Vec<WindowId> = self
+                    .wm
+                    .app(app)
+                    .map(|a| a.windows_mru.clone())
+                    .unwrap_or_default();
+                self.commands(
+                    windows
+                        .into_iter()
+                        .map(|window| Command::RequestClose { window })
+                        .collect(),
+                );
             }
             // the generated enum is non-exhaustive; the dispatcher already rejected unknown values
-            _ => tracing::warn!(?command, "dock sent an app command this server does not know"),
+            _ => tracing::warn!(
+                ?command,
+                "dock sent an app command this server does not know"
+            ),
         }
     }
 
     fn input_rect(r: cupertino_wm::Rect) -> cupertino_input::Rect {
-        cupertino_input::Rect { x: r.x, y: r.y, w: r.w, h: r.h }
+        cupertino_input::Rect {
+            x: r.x,
+            y: r.y,
+            w: r.w,
+            h: r.h,
+        }
     }
 
     /// Feed the pointer to the edge reveal (full-screen menu bar) and the hot corners.
     pub fn update_input_pointer(&mut self, pos: Point<f64, Logical>, now: f64) {
         let ip = cupertino_input::Point::new(pos.x, pos.y);
-        let outputs: Vec<cupertino_input::Rect> = self.outputs.iter().map(|o| Self::input_rect(o.rect)).collect();
+        let outputs: Vec<cupertino_input::Rect> = self
+            .outputs
+            .iter()
+            .map(|o| Self::input_rect(o.rect))
+            .collect();
         if let Some(o) = self.output_at(pos).map(|o| (o.id, o.rect)) {
-            let shown = self.menu_bars.set.presentation(o.0, now).map_or(1.0, |b| b.visible);
-            let bar = cupertino_wm::Rect::new(o.1.x, o.1.y, o.1.w, self.config.shell.menu_bar_height * shown.max(0.5));
+            let shown = self
+                .menu_bars
+                .set
+                .presentation(o.0, now)
+                .map_or(1.0, |b| b.visible);
+            let bar = cupertino_wm::Rect::new(
+                o.1.x,
+                o.1.y,
+                o.1.w,
+                self.config.shell.menu_bar_height * shown.max(0.5),
+            );
             self.bar_edge.set_hold_region(Some(Self::input_rect(bar)));
         }
         if let Some(ev) = self.bar_edge.update(ip, &outputs, now) {
@@ -170,11 +246,15 @@ impl Cupertino {
     /// A corner fired: the dock of that output maps it to its action. The binding's own action is
     /// only what arms the corner (`config.rs`).
     fn hot_corner_event(&mut self, ev: cupertino_input::CornerEvent) {
-        let cupertino_input::CornerEvent::Triggered { corner, output, .. } = ev else { return };
+        let cupertino_input::CornerEvent::Triggered { corner, output, .. } = ev else {
+            return;
+        };
         if self.session_lock.is_active() {
             return;
         }
-        let Some(output) = self.outputs.get(output).map(|o| o.id) else { return };
+        let Some(output) = self.outputs.get(output).map(|o| o.id) else {
+            return;
+        };
         let corner = match corner {
             cupertino_input::Corner::TopLeft => Corner::TopLeft,
             cupertino_input::Corner::TopRight => Corner::TopRight,

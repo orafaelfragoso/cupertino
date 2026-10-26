@@ -48,16 +48,18 @@
 
 use std::path::PathBuf;
 
-use cupertino_defaults::keyboard::{expand_home, FnKey, KeyboardSettings as KeyboardConf, LayoutKeyboard, Level3};
+use cupertino_defaults::keyboard::{
+    expand_home, FnKey, KeyboardSettings as KeyboardConf, LayoutKeyboard, Level3,
+};
 use cupertino_input::{Action as InputAction, KeyCombo, Modifiers, ScreenshotRequest, ShortcutMap};
 use cupertino_keyboard::keys::{Key, NamedKey};
 use cupertino_keyboard::modifiers::{FnUsage, ModifierProfile, RawMods};
-use cupertino_keyboard::rewrite::ClientClass;
 use cupertino_keyboard::repeat::{CapsLockDelay, RepeatConfig, RepeatInfo, CAPS_HOLD_DEFAULT_MS};
-use cupertino_keyboard::xkb::{Keyboard, Level3Keys};
-use cupertino_keyboard::{mouse_keys, slow_keys};
+use cupertino_keyboard::rewrite::ClientClass;
 use cupertino_keyboard::shortcuts::{ShortcutSet, SystemAction};
 use cupertino_keyboard::switcher::{self, Step, SwitchEvent, Switcher};
+use cupertino_keyboard::xkb::{Keyboard, Level3Keys};
+use cupertino_keyboard::{mouse_keys, slow_keys};
 use smithay::input::keyboard::{keysyms, xkb, ModifiersState};
 
 use crate::input::Mods;
@@ -77,7 +79,12 @@ pub struct AccentSettings {
 
 impl Default for AccentSettings {
     fn default() -> Self {
-        Self { enabled: true, table: None, keyboards: vec!["default".into()], disabled_apps: Vec::new() }
+        Self {
+            enabled: true,
+            table: None,
+            keyboards: vec!["default".into()],
+            disabled_apps: Vec::new(),
+        }
     }
 }
 
@@ -145,8 +152,16 @@ pub struct KeyboardSettings {
 
 /// Application ids of the terminal emulators the rewrite knows (approximate, §10.5).
 /// `cupertino-terminal` is not listed: a `cupertino- client is first-party and never rewritten.
-const DEFAULT_REWRITE_TERMINALS: [&str; 8] =
-    ["foot", "kitty", "Alacritty", "org.wezfurlong.wezterm", "com.mitchellh.ghostty", "org.gnome.Terminal", "org.kde.konsole", "xterm"];
+const DEFAULT_REWRITE_TERMINALS: [&str; 8] = [
+    "foot",
+    "kitty",
+    "Alacritty",
+    "org.wezfurlong.wezterm",
+    "com.mitchellh.ghostty",
+    "org.gnome.Terminal",
+    "org.kde.konsole",
+    "xterm",
+];
 
 impl Default for KeyboardSettings {
     fn default() -> Self {
@@ -163,7 +178,10 @@ impl Default for KeyboardSettings {
             layout_keyboard: Keyboard::Ansi,
             layout_level3: Level3Keys::RightAlt,
             client_rewrite: true,
-            rewrite_terminals: DEFAULT_REWRITE_TERMINALS.iter().map(|id| (*id).to_string()).collect(),
+            rewrite_terminals: DEFAULT_REWRITE_TERMINALS
+                .iter()
+                .map(|id| (*id).to_string())
+                .collect(),
             rewrite_off: Vec::new(),
         }
     }
@@ -188,7 +206,9 @@ impl KeyboardSettings {
                     s.apply_file(&read);
                     file = read;
                 }
-                Err(e) => tracing::warn!(path = %path.display(), error = %e, "cannot read the keyboard settings: the defaults apply"),
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "cannot read the keyboard settings: the defaults apply")
+                }
             }
         }
         (s, file)
@@ -241,7 +261,13 @@ impl KeyboardSettings {
             };
         }
         let a = &mut self.access;
-        for (set, field) in [(f.slow_keys, &mut a.slow_keys), (f.sticky_keys, &mut a.sticky_keys), (f.sticky_keys_shortcut, &mut a.sticky_keys_shortcut), (f.mouse_keys, &mut a.mouse_keys), (f.mouse_keys_shortcut, &mut a.mouse_keys_shortcut)] {
+        for (set, field) in [
+            (f.slow_keys, &mut a.slow_keys),
+            (f.sticky_keys, &mut a.sticky_keys),
+            (f.sticky_keys_shortcut, &mut a.sticky_keys_shortcut),
+            (f.mouse_keys, &mut a.mouse_keys),
+            (f.mouse_keys_shortcut, &mut a.mouse_keys_shortcut),
+        ] {
             if let Some(v) = set {
                 *field = v;
             }
@@ -309,7 +335,8 @@ impl KeyboardSettings {
     /// Tap action of the globe / fn key: the configured one, else change input source with two or more sources and
     /// nothing otherwise (default).
     pub fn fn_action(&self) -> FnUsage {
-        self.fn_usage.unwrap_or_else(|| FnUsage::default_for(self.sources.len()))
+        self.fn_usage
+            .unwrap_or_else(|| FnUsage::default_for(self.sources.len()))
     }
 
     /// The class of the client with application id `app` for the chord rewrite (first-party `cupertino-` ids, the
@@ -340,23 +367,52 @@ impl KeyboardSettings {
     /// Logical modifiers (`logo` = the primary modifier of the profile) of a physical modifier state.
     pub fn translate(&self, m: &ModifiersState) -> Mods {
         let mut raw = 0u8;
-        for (on, bit) in [(m.shift, RawMods::SHIFT), (m.ctrl, RawMods::CTRL), (m.alt, RawMods::ALT), (m.logo, RawMods::SUPER)] {
+        for (on, bit) in [
+            (m.shift, RawMods::SHIFT),
+            (m.ctrl, RawMods::CTRL),
+            (m.alt, RawMods::ALT),
+            (m.logo, RawMods::SUPER),
+        ] {
             if on {
                 raw |= bit.0;
             }
         }
         let l = self.modifier_profile().translate(RawMods(raw));
         use cupertino_keyboard::keys::Mods as L;
-        Mods { ctrl: l.contains(L::CTRL), alt: l.contains(L::ALT), shift: l.contains(L::SHIFT), logo: l.contains(L::PRIMARY) }
+        Mods {
+            ctrl: l.contains(L::CTRL),
+            alt: l.contains(L::ALT),
+            shift: l.contains(L::SHIFT),
+            logo: l.contains(L::PRIMARY),
+        }
     }
 
     /// Comma separated xkb layout and variant lists for `XkbConfig` of the system layouts among the sources (empty
     /// without configured system layouts).
     pub fn xkb_names(&self) -> (String, String) {
-        let system: Vec<&SourceSpec> = self.sources.iter().filter(|s| s.decoded.is_none()).collect();
-        let layouts = system.iter().map(|s| s.layout.as_str()).collect::<Vec<_>>().join(",");
-        let variants = system.iter().map(|s| s.variant.as_str()).collect::<Vec<_>>().join(",");
-        (layouts, if system.iter().all(|s| s.variant.is_empty()) { String::new() } else { variants })
+        let system: Vec<&SourceSpec> = self
+            .sources
+            .iter()
+            .filter(|s| s.decoded.is_none())
+            .collect();
+        let layouts = system
+            .iter()
+            .map(|s| s.layout.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        let variants = system
+            .iter()
+            .map(|s| s.variant.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        (
+            layouts,
+            if system.iter().all(|s| s.variant.is_empty()) {
+                String::new()
+            } else {
+                variants
+            },
+        )
     }
 }
 
@@ -407,9 +463,13 @@ pub fn system_action_to_input(a: SystemAction) -> Option<InputAction> {
         // the five hot keys the design registers; the clipboard form of the toolbar chord is in the table
         // but not registered there
         S::ScreenshotScreenToFile => InputAction::Screenshot(ScreenshotRequest::Screen),
-        S::ScreenshotScreenToClipboard => InputAction::Screenshot(ScreenshotRequest::ScreenToClipboard),
+        S::ScreenshotScreenToClipboard => {
+            InputAction::Screenshot(ScreenshotRequest::ScreenToClipboard)
+        }
         S::ScreenshotSelectionToFile => InputAction::Screenshot(ScreenshotRequest::Selection),
-        S::ScreenshotSelectionToClipboard => InputAction::Screenshot(ScreenshotRequest::SelectionToClipboard),
+        S::ScreenshotSelectionToClipboard => {
+            InputAction::Screenshot(ScreenshotRequest::SelectionToClipboard)
+        }
         S::ScreenshotOptions => InputAction::Screenshot(ScreenshotRequest::Toolbar),
         S::OverviewAllWindows => InputAction::Overview,
         S::OverviewAppWindows => InputAction::AppOverview,
@@ -457,7 +517,9 @@ pub fn merge_reference_shortcuts(map: &mut ShortcutMap, set: &ShortcutSet) -> Me
         if !set.is_enabled(*a) {
             continue;
         }
-        let Some(chord) = set.chord_for(*a) else { continue };
+        let Some(chord) = set.chord_for(*a) else {
+            continue;
+        };
         let Some(action) = system_action_to_input(*a) else {
             report.unsupported.push(*a);
             continue;
@@ -468,11 +530,20 @@ pub fn merge_reference_shortcuts(map: &mut ShortcutMap, set: &ShortcutSet) -> Me
         };
         use cupertino_keyboard::keys::Mods as L;
         // the table's logical primary modifier is Super in this compositor (`ModifierProfile` translates the rest)
-        let mods = Modifiers::new(chord.mods.contains(L::SHIFT), chord.mods.contains(L::CTRL), chord.mods.contains(L::ALT), chord.mods.contains(L::PRIMARY));
+        let mods = Modifiers::new(
+            chord.mods.contains(L::SHIFT),
+            chord.mods.contains(L::CTRL),
+            chord.mods.contains(L::ALT),
+            chord.mods.contains(L::PRIMARY),
+        );
         let combo = KeyCombo::new(mods, sym);
         match map.lookup(combo.modifiers, combo.keysym) {
             Some(existing) if *existing == action => report.identical += 1,
-            Some(existing) => report.conflicts.push((combo.to_string(), action.name(), existing.name())),
+            Some(existing) => {
+                report
+                    .conflicts
+                    .push((combo.to_string(), action.name(), existing.name()))
+            }
             None => {
                 map.bind(combo, action.clone());
                 report.added.push((combo.to_string(), action.name()));
@@ -520,19 +591,27 @@ pub struct CapsDebounce {
 
 impl CapsDebounce {
     pub fn new(config: CapsLockDelay, switch_hold_ms: Option<u32>) -> Self {
-        Self { config, switch_hold_ms, pending: None }
+        Self {
+            config,
+            switch_hold_ms,
+            pending: None,
+        }
     }
 
     /// Whether the debounce holds presses back at all.
     pub fn active(&self) -> bool {
-        self.switch_hold_ms.is_some() || self.config.delay_ms > 0 || self.config.override_ms.is_some_and(|v| v > 0)
+        self.switch_hold_ms.is_some()
+            || self.config.delay_ms > 0
+            || self.config.override_ms.is_some_and(|v| v > 0)
     }
 
     /// The press has lasted long enough to count.
     fn counts(&self, held_ms: u64) -> bool {
         match self.switch_hold_ms {
             Some(hold) => held_ms >= u64::from(hold),
-            None => self.config.press_counts(held_ms.min(u64::from(u32::MAX)) as u32),
+            None => self
+                .config
+                .press_counts(held_ms.min(u64::from(u32::MAX)) as u32),
         }
     }
 
@@ -578,7 +657,12 @@ impl CapsDebounce {
     }
 
     pub fn delay_ms(&self) -> u64 {
-        u64::from(self.switch_hold_ms.unwrap_or_else(|| self.config.override_ms.filter(|v| *v > 0).unwrap_or(self.config.delay_ms)))
+        u64::from(self.switch_hold_ms.unwrap_or_else(|| {
+            self.config
+                .override_ms
+                .filter(|v| *v > 0)
+                .unwrap_or(self.config.delay_ms)
+        }))
     }
 }
 
@@ -597,11 +681,13 @@ pub struct HudView {
 
 impl HudView {
     pub fn alpha(&self, now: f64) -> f64 {
-        self.fading_since.map_or(1.0, |t| switcher::fade_alpha(now - t))
+        self.fading_since
+            .map_or(1.0, |t| switcher::fade_alpha(now - t))
     }
 
     pub fn finished(&self, now: f64) -> bool {
-        self.fading_since.is_some_and(|t| now - t >= switcher::HUD_FADE_OUT_S)
+        self.fading_since
+            .is_some_and(|t| now - t >= switcher::HUD_FADE_OUT_S)
     }
 }
 
@@ -613,10 +699,26 @@ pub struct DecodedSource {
 }
 
 /// Generate the keymap of a `decoded:` source (`cupertino-keyboard::xkb`, validated on the 232 decoded layouts).
-pub fn generate_decoded(path: &std::path::Path, keyboard: Keyboard, level3: Level3Keys) -> Result<DecodedSource, String> {
-    let layout = cupertino_keyboard::Layout::from_json_file(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let out = cupertino_keyboard::generate(&layout, &cupertino_keyboard::GenOptions { keyboard, set_index: 0, level3 }).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(DecodedSource { keymap: out.keymap, label: layout.name })
+pub fn generate_decoded(
+    path: &std::path::Path,
+    keyboard: Keyboard,
+    level3: Level3Keys,
+) -> Result<DecodedSource, String> {
+    let layout = cupertino_keyboard::Layout::from_json_file(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let out = cupertino_keyboard::generate(
+        &layout,
+        &cupertino_keyboard::GenOptions {
+            keyboard,
+            set_index: 0,
+            level3,
+        },
+    )
+    .map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(DecodedSource {
+        keymap: out.keymap,
+        label: layout.name,
+    })
 }
 
 /// Input-source state: the MRU switcher plus the HUD view.
@@ -633,7 +735,10 @@ pub struct InputSources {
 
 impl InputSources {
     pub fn new(specs: Vec<SourceSpec>) -> Self {
-        let mut s = Self { specs, ..Self::default() };
+        let mut s = Self {
+            specs,
+            ..Self::default()
+        };
         let ids: Vec<String> = s.specs.iter().map(|x| x.id.clone()).collect();
         s.switcher.set_sources(ids.clone());
         if let Some(first) = ids.first() {
@@ -648,7 +753,10 @@ impl InputSources {
 
     /// Index of a system source in the xkb layout list (`None` for a decoded source).
     pub fn group_of(&self, id: &str) -> Option<usize> {
-        self.specs.iter().filter(|s| s.decoded.is_none()).position(|s| s.id == id)
+        self.specs
+            .iter()
+            .filter(|s| s.decoded.is_none())
+            .position(|s| s.id == id)
     }
 
     pub fn current(&self) -> Option<&str> {
@@ -656,12 +764,22 @@ impl InputSources {
     }
 
     /// Run a switcher event. Returns the source to activate now, if any. `label` names a source for the HUD.
-    pub fn apply(&mut self, ev: SwitchEvent, now: f64, label: impl Fn(&str) -> String) -> Option<String> {
+    pub fn apply(
+        &mut self,
+        ev: SwitchEvent,
+        now: f64,
+        label: impl Fn(&str) -> String,
+    ) -> Option<String> {
         match ev {
             SwitchEvent::None => None,
             SwitchEvent::ShowHud { order, selection } => {
                 let labels = order.iter().map(|id| label(id)).collect();
-                self.hud = Some(HudView { order, labels, selection, fading_since: None });
+                self.hud = Some(HudView {
+                    order,
+                    labels,
+                    selection,
+                    fading_since: None,
+                });
                 None
             }
             SwitchEvent::MoveSelection { selection } => {
@@ -738,7 +856,13 @@ mod tests {
         let s = KeyboardSettings::default();
         assert_eq!((s.repeat.initial_delay_ms, s.repeat.interval_ms), (500, 83));
         // 1000 / 83 ms = 12.05 characters per second
-        assert_eq!(s.repeat_info(), RepeatInfo { rate: 12, delay: 500 });
+        assert_eq!(
+            s.repeat_info(),
+            RepeatInfo {
+                rate: 12,
+                delay: 500
+            }
+        );
         assert_eq!(s.caps.delay_ms, 75);
         assert_eq!(s.profile, "cupertino");
     }
@@ -746,14 +870,26 @@ mod tests {
     #[test]
     fn keyboard_conf_applies_and_reports() {
         let mut s = KeyboardSettings::default();
-        let errs = apply(&mut s, 
+        let errs = apply(&mut s,
             "# comment\nrepeat_delay = 300\nrepeat_interval = 40  # fast\ninput_sources = us, de, fr(nodeadkeys)\nmodifier_profile = classic-pc\n\
              caps_lock_delay = 0\naccent_picker = off\naccent_table = ~/a.json\naccent_keyboards = default, en\nbogus = 1\nrepeat_delay = x\nnonsense\nmodifier_profile = nope\n",
         );
         assert_eq!(errs, vec![10, 11, 12, 13]);
-        assert_eq!(s.repeat_info(), RepeatInfo { rate: 25, delay: 300 });
-        assert_eq!(s.sources.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), vec!["us", "de", "fr(nodeadkeys)"]);
-        assert_eq!(s.xkb_names(), ("us,de,fr".to_string(), ",,nodeadkeys".to_string()));
+        assert_eq!(
+            s.repeat_info(),
+            RepeatInfo {
+                rate: 25,
+                delay: 300
+            }
+        );
+        assert_eq!(
+            s.sources.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(),
+            vec!["us", "de", "fr(nodeadkeys)"]
+        );
+        assert_eq!(
+            s.xkb_names(),
+            ("us,de,fr".to_string(), ",,nodeadkeys".to_string())
+        );
         assert_eq!(s.profile, "classic-pc");
         assert_eq!(s.caps.delay_ms, 0);
         assert!(!s.accent.enabled);
@@ -771,8 +907,15 @@ mod tests {
         assert_eq!(s.client_class("Alacritty"), ClientClass::Terminal);
         assert_eq!(s.client_class("ALACRITTY"), ClientClass::Terminal);
         assert_eq!(s.client_class("firefox"), ClientClass::Other);
-        assert!(apply(&mut s, "rewrite_terminals = firefox, st\nrewrite_off = Code\n").is_empty());
-        assert_eq!((s.client_class("firefox"), s.client_class("foot")), (ClientClass::Terminal, ClientClass::Other));
+        assert!(apply(
+            &mut s,
+            "rewrite_terminals = firefox, st\nrewrite_off = Code\n"
+        )
+        .is_empty());
+        assert_eq!(
+            (s.client_class("firefox"), s.client_class("foot")),
+            (ClientClass::Terminal, ClientClass::Other)
+        );
         assert!(s.rewrite_opted_out("code") && !s.rewrite_opted_out("firefox"));
         assert!(apply(&mut s, "client_rewrite = off").is_empty());
         assert!(s.rewrite_opted_out("firefox"));
@@ -780,27 +923,70 @@ mod tests {
 
     #[test]
     fn no_sources_are_no_xkb_names() {
-        assert_eq!(KeyboardSettings::default().xkb_names(), (String::new(), String::new()));
+        assert_eq!(
+            KeyboardSettings::default().xkb_names(),
+            (String::new(), String::new())
+        );
     }
 
     #[test]
     fn modifier_profile_translates_physical_modifiers() {
         let mut s = KeyboardSettings::default();
-        let m = ModifiersState { logo: true, shift: true, ..Default::default() };
-        assert_eq!(s.translate(&m), Mods { logo: true, shift: true, ..Mods::NONE });
-        let ctrl = ModifiersState { ctrl: true, ..Default::default() };
-        assert_eq!(s.translate(&ctrl), Mods { ctrl: true, ..Mods::NONE });
+        let m = ModifiersState {
+            logo: true,
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            s.translate(&m),
+            Mods {
+                logo: true,
+                shift: true,
+                ..Mods::NONE
+            }
+        );
+        let ctrl = ModifiersState {
+            ctrl: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            s.translate(&ctrl),
+            Mods {
+                ctrl: true,
+                ..Mods::NONE
+            }
+        );
         s.profile = "classic-pc".into();
         // Ctrl carries the shortcuts, Super is not a modifier of shortcut matching
-        assert_eq!(s.translate(&ctrl), Mods { logo: true, ..Mods::NONE });
-        assert_eq!(s.translate(&m), Mods { shift: true, ..Mods::NONE });
+        assert_eq!(
+            s.translate(&ctrl),
+            Mods {
+                logo: true,
+                ..Mods::NONE
+            }
+        );
+        assert_eq!(
+            s.translate(&m),
+            Mods {
+                shift: true,
+                ..Mods::NONE
+            }
+        );
     }
 
     #[test]
     fn reference_table_merges_without_conflicts() {
         let (map, report) = default_shortcut_map();
-        assert!(report.conflicts.is_empty(), "conflicts: {:?}", report.conflicts);
-        assert!(report.identical >= 10, "shared chords: {}", report.identical);
+        assert!(
+            report.conflicts.is_empty(),
+            "conflicts: {:?}",
+            report.conflicts
+        );
+        assert!(
+            report.identical >= 10,
+            "shared chords: {}",
+            report.identical
+        );
         let look = |text: &str| {
             let c: KeyCombo = text.parse().unwrap();
             map.lookup(c.modifiers, c.keysym).cloned()
@@ -822,26 +1008,44 @@ mod tests {
         let mut map = ShortcutMap::new();
         map.bind_str("Ctrl+space", InputAction::Launcher).unwrap();
         let r = merge_reference_shortcuts(&mut map, &ShortcutSet::reference_defaults());
-        let c = r.conflicts.iter().find(|c| c.0.contains("space") && c.1 == "input-source-previous").expect("conflict reported");
+        let c = r
+            .conflicts
+            .iter()
+            .find(|c| c.0.contains("space") && c.1 == "input-source-previous")
+            .expect("conflict reported");
         assert_eq!(c.2, "launcher");
         let combo: KeyCombo = "Ctrl+space".parse().unwrap();
-        assert_eq!(map.lookup(combo.modifiers, combo.keysym), Some(&InputAction::Launcher));
+        assert_eq!(
+            map.lookup(combo.modifiers, combo.keysym),
+            Some(&InputAction::Launcher)
+        );
     }
 
     #[test]
     fn user_config_can_remove_table_rows() {
         let (mut map, _) = default_shortcut_map();
-        assert!(map.apply_config("Ctrl+space = none\nCtrl+Alt+space = launcher\n").is_empty());
+        assert!(map
+            .apply_config("Ctrl+space = none\nCtrl+Alt+space = launcher\n")
+            .is_empty());
         let c: KeyCombo = "Ctrl+space".parse().unwrap();
         assert_eq!(map.lookup(c.modifiers, c.keysym), None);
         let c: KeyCombo = "Ctrl+Alt+space".parse().unwrap();
-        assert_eq!(map.lookup(c.modifiers, c.keysym), Some(&InputAction::Launcher));
+        assert_eq!(
+            map.lookup(c.modifiers, c.keysym),
+            Some(&InputAction::Launcher)
+        );
     }
 
     #[test]
     fn keysyms_of_table_keys() {
-        assert_eq!(key_to_keysym(Key::Named(NamedKey::Space)), Some(keysyms::KEY_space));
-        assert_eq!(key_to_keysym(Key::Named(NamedKey::F(11))), Some(keysyms::KEY_F11));
+        assert_eq!(
+            key_to_keysym(Key::Named(NamedKey::Space)),
+            Some(keysyms::KEY_space)
+        );
+        assert_eq!(
+            key_to_keysym(Key::Named(NamedKey::F(11))),
+            Some(keysyms::KEY_F11)
+        );
         assert_eq!(key_to_keysym(Key::Char('`')), Some(keysyms::KEY_grave));
         assert_eq!(key_to_keysym(Key::Char('3')), Some(keysyms::KEY_3));
         assert_eq!(key_to_keysym(Key::Named(NamedKey::Globe)), None);
@@ -869,7 +1073,13 @@ mod tests {
         assert_eq!(c.due(4100), None);
         assert_eq!(c.release(4010), CapsStep::Deliver);
         // disabled
-        let mut off = CapsDebounce::new(CapsLockDelay { delay_ms: 0, override_ms: None }, None);
+        let mut off = CapsDebounce::new(
+            CapsLockDelay {
+                delay_ms: 0,
+                override_ms: None,
+            },
+            None,
+        );
         assert_eq!(off.press(5), CapsStep::Deliver);
     }
 
@@ -877,7 +1087,11 @@ mod tests {
     fn caps_hold_to_switch_taps_switch_and_holds_lock() {
         let mut c = CapsDebounce::new(CapsLockDelay::default(), Some(500));
         assert!(c.active());
-        assert_eq!(c.delay_ms(), 500, "the hold duration replaces the 75 ms delay");
+        assert_eq!(
+            c.delay_ms(),
+            500,
+            "the hold duration replaces the 75 ms delay"
+        );
         // a tap: no caps lock, the source switches
         assert_eq!(c.press(1000), CapsStep::Hold);
         assert_eq!(c.due(1499), None);
@@ -887,15 +1101,29 @@ mod tests {
         assert_eq!(c.due(2500), Some(2000));
         assert_eq!(c.release(2700), CapsStep::Deliver);
         // even with the caps-lock delay off, the switch holds the press back
-        assert!(CapsDebounce::new(CapsLockDelay { delay_ms: 0, override_ms: None }, Some(500)).active());
+        assert!(CapsDebounce::new(
+            CapsLockDelay {
+                delay_ms: 0,
+                override_ms: None
+            },
+            Some(500)
+        )
+        .active());
     }
 
     #[test]
     fn accessibility_globe_and_layout_settings_parse() {
         let mut s = KeyboardSettings::default();
         assert_eq!(s.access, AccessSettings::default());
-        assert_eq!((s.access.slow_keys_delay_ms, s.access.mouse_keys_delay_ms, s.access.mouse_keys_max_speed), (250, 1000, 11));
-        let errs = apply(&mut s, 
+        assert_eq!(
+            (
+                s.access.slow_keys_delay_ms,
+                s.access.mouse_keys_delay_ms,
+                s.access.mouse_keys_max_speed
+            ),
+            (250, 1000, 11)
+        );
+        let errs = apply(&mut s,
             "slow_keys = on\nslow_keys_delay = 300\nsticky_keys = on\nsticky_keys_shortcut = yes\nmouse_keys = on\nmouse_keys_shortcut = on\n\
              mouse_keys_delay = 0\nmouse_keys_max_speed = 40\nfn_key = do-nothing\ncaps_lock_switch = on\ncaps_lock_hold = 800\n\
              layout_keyboard = iso\nlayout_level3 = both-alt\n\
@@ -903,12 +1131,28 @@ mod tests {
         );
         assert_eq!(errs, vec![14, 15, 16, 17, 18, 19]);
         let a = &s.access;
-        assert!(a.slow_keys && a.sticky_keys && a.sticky_keys_shortcut && a.mouse_keys && a.mouse_keys_shortcut);
-        assert_eq!((a.slow_keys_delay_ms, a.mouse_keys_delay_ms, a.mouse_keys_max_speed), (300, 0, 40));
+        assert!(
+            a.slow_keys
+                && a.sticky_keys
+                && a.sticky_keys_shortcut
+                && a.mouse_keys
+                && a.mouse_keys_shortcut
+        );
+        assert_eq!(
+            (
+                a.slow_keys_delay_ms,
+                a.mouse_keys_delay_ms,
+                a.mouse_keys_max_speed
+            ),
+            (300, 0, 40)
+        );
         assert_eq!(s.fn_usage, Some(FnUsage::DoNothing));
         assert!(s.caps_switch);
         assert_eq!(s.caps_hold_ms, 800);
-        assert_eq!((s.layout_keyboard, s.layout_level3), (Keyboard::Iso, Level3Keys::BothAlt));
+        assert_eq!(
+            (s.layout_keyboard, s.layout_level3),
+            (Keyboard::Iso, Level3Keys::BothAlt)
+        );
     }
 
     #[test]
@@ -916,9 +1160,19 @@ mod tests {
         let mut s = KeyboardSettings::default();
         s.access.slow_keys = true;
         // 420 ms delay and interval whatever is configured: 1000 / 420 = 2.4 characters per second
-        assert_eq!(s.repeat_info(), RepeatInfo { rate: 2, delay: 420 });
+        assert_eq!(
+            s.repeat_info(),
+            RepeatInfo {
+                rate: 2,
+                delay: 420
+            }
+        );
         s.repeat.initial_delay_ms = 0;
-        assert_eq!(s.repeat_info(), RepeatInfo { rate: 0, delay: 0 }, "repeat off stays off");
+        assert_eq!(
+            s.repeat_info(),
+            RepeatInfo { rate: 0, delay: 0 },
+            "repeat off stays off"
+        );
     }
 
     #[test]
@@ -926,7 +1180,11 @@ mod tests {
         let mut s = KeyboardSettings::default();
         assert_eq!(s.fn_action(), FnUsage::DoNothing);
         s.caps_switch = true;
-        assert_eq!(s.caps_switch_hold(), None, "one source: nothing to switch to");
+        assert_eq!(
+            s.caps_switch_hold(),
+            None,
+            "one source: nothing to switch to"
+        );
         apply(&mut s, "input_sources = us, de");
         assert_eq!(s.fn_action(), FnUsage::ChangeInputSource);
         assert_eq!(s.caps_switch_hold(), Some(500));
@@ -940,12 +1198,20 @@ mod tests {
         let inputs = InputSources::new(s.sources.clone());
         assert_eq!(inputs.group_of("de"), Some(1));
         assert_eq!(inputs.group_of("decoded:/l/ABC.json"), None);
-        assert!(generate_decoded(std::path::Path::new("/nonexistent/layout.json"), Keyboard::Ansi, Level3Keys::RightAlt).is_err());
+        assert!(generate_decoded(
+            std::path::Path::new("/nonexistent/layout.json"),
+            Keyboard::Ansi,
+            Level3Keys::RightAlt
+        )
+        .is_err());
     }
 
     #[test]
     fn input_sources_follow_the_mru_hud_flow() {
-        let specs: Vec<SourceSpec> = ["us", "de", "fr"].iter().map(|s| SourceSpec::parse(s).unwrap()).collect();
+        let specs: Vec<SourceSpec> = ["us", "de", "fr"]
+            .iter()
+            .map(|s| SourceSpec::parse(s).unwrap())
+            .collect();
         let mut s = InputSources::new(specs);
         assert!(s.enabled());
         assert_eq!(s.current(), Some("us"));
@@ -978,6 +1244,9 @@ mod tests {
     fn hud_size_uses_the_recovered_metrics() {
         let labels: Vec<String> = ["US", "German"].iter().map(|s| s.to_string()).collect();
         assert_eq!(hud_size(&labels, |_| 40.0), (167.0, 2.0 * 40.0 + 20.0));
-        assert_eq!(hud_size(&labels, |_| 200.0).0, 200.0 + HUD_LABEL_EXTRA + 20.0);
+        assert_eq!(
+            hud_size(&labels, |_| 200.0).0,
+            200.0 + HUD_LABEL_EXTRA + 20.0
+        );
     }
 }

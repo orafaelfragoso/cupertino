@@ -54,14 +54,28 @@ use metrics as m;
 
 /// The default window size at the interface width factor `f`: `(ceil(715 f), 625).
 pub fn default_size(f: f64) -> Size {
-    Size { w: (m::DEFAULT_WIDTH * f).ceil(), h: m::DEFAULT_HEIGHT }
+    Size {
+        w: (m::DEFAULT_WIDTH * f).ceil(),
+        h: m::DEFAULT_HEIGHT,
+    }
 }
 
 /// The sidebar width at factor `f` for `rows` and whether scroll bars are always shown.
 pub fn sidebar_width(f: f64, rows: RowSize, scrollers_shown: bool) -> f64 {
-    let large = if rows == RowSize::Large { m::SIDEBAR_LARGE_EXTRA } else { 0.0 };
-    let index = RowSize::ALL.iter().position(|r| *r == rows).expect("every row size is in ALL");
-    let scrollers = if scrollers_shown { m::SIDEBAR_SCROLLER_EXTRA[index] } else { 0.0 };
+    let large = if rows == RowSize::Large {
+        m::SIDEBAR_LARGE_EXTRA
+    } else {
+        0.0
+    };
+    let index = RowSize::ALL
+        .iter()
+        .position(|r| *r == rows)
+        .expect("every row size is in ALL");
+    let scrollers = if scrollers_shown {
+        m::SIDEBAR_SCROLLER_EXTRA[index]
+    } else {
+        0.0
+    };
     m::SIDEBAR_WIDTH * f + large + scrollers
 }
 
@@ -100,14 +114,25 @@ pub struct WindowLayout {
 }
 
 impl WindowLayout {
-    pub fn new(size: Size, f: f64, row_size: RowSize, groups: &[Vec<PaneId>], navigation: bool) -> Self {
+    pub fn new(
+        size: Size,
+        f: f64,
+        row_size: RowSize,
+        groups: &[Vec<PaneId>],
+        navigation: bool,
+    ) -> Self {
         let sw = sidebar_width(f, row_size, false).min(size.w);
         let sidebar = Rect::new(0.0, 0.0, sw, size.h);
         let divider = Rect::new(sw, 0.0, m::DIVIDER, size.h);
         let cx = sw + m::DIVIDER;
         let cw = (size.w - cx).max(0.0);
         let toolbar = Rect::new(cx, 0.0, cw, m::TOOLBAR_HEIGHT.min(size.h));
-        let content = Rect::new(cx, toolbar.bottom(), cw, (size.h - toolbar.bottom()).max(0.0));
+        let content = Rect::new(
+            cx,
+            toolbar.bottom(),
+            cw,
+            (size.h - toolbar.bottom()).max(0.0),
+        );
         let (bw, bh) = m::BACK_FORWARD;
         let by = (m::TOOLBAR_HEIGHT - bh) / 2.0;
         let (back, forward, tx) = if navigation {
@@ -117,8 +142,18 @@ impl WindowLayout {
         } else {
             (None, None, cx + m::TITLE_LEADING)
         };
-        let title = Rect::new(tx, by, (toolbar.right() - m::TOOLBAR_INSET - tx).max(0.0), bh);
-        let search = Rect::new(m::SEARCH_LEADING, m::SEARCH_TOP, (sw - m::SEARCH_LEADING - m::SEARCH_TRAILING).max(0.0), m::SEARCH_HEIGHT);
+        let title = Rect::new(
+            tx,
+            by,
+            (toolbar.right() - m::TOOLBAR_INSET - tx).max(0.0),
+            bh,
+        );
+        let search = Rect::new(
+            m::SEARCH_LEADING,
+            m::SEARCH_TOP,
+            (sw - m::SEARCH_LEADING - m::SEARCH_TRAILING).max(0.0),
+            m::SEARCH_HEIGHT,
+        );
         let mut rows = Vec::new();
         let mut y = search.bottom() + m::ROWS_TOP_GAP;
         for (i, group) in groups.iter().enumerate() {
@@ -126,11 +161,31 @@ impl WindowLayout {
                 y += row::GROUP_GAP;
             }
             for pane in group {
-                rows.push((*pane, Rect::new(row::BACKGROUND_INSET, y, (sw - 2.0 * row::BACKGROUND_INSET).max(0.0), row_size.row_height())));
+                rows.push((
+                    *pane,
+                    Rect::new(
+                        row::BACKGROUND_INSET,
+                        y,
+                        (sw - 2.0 * row::BACKGROUND_INSET).max(0.0),
+                        row_size.row_height(),
+                    ),
+                ));
                 y += row_size.row_height();
             }
         }
-        WindowLayout { size, row_size, sidebar, divider, toolbar, content, back, forward, title, search, rows }
+        WindowLayout {
+            size,
+            row_size,
+            sidebar,
+            divider,
+            toolbar,
+            content,
+            back,
+            forward,
+            title,
+            search,
+            rows,
+        }
     }
 
     /// The rectangle of `pane`'s sidebar row.
@@ -141,7 +196,12 @@ impl WindowLayout {
     /// The icon enclosure of a row: the row size's icon, `ICON_LEADING` into the row background, centred vertically.
     pub fn icon(&self, row_rect: &Rect) -> Rect {
         let side = self.row_size.icon();
-        Rect::new(row_rect.x + row::ICON_LEADING, row_rect.y + (row_rect.h - side) / 2.0, side, side)
+        Rect::new(
+            row_rect.x + row::ICON_LEADING,
+            row_rect.y + (row_rect.h - side) / 2.0,
+            side,
+            side,
+        )
     }
 
     pub fn hit(&self, p: Point) -> Hit {
@@ -174,41 +234,96 @@ mod tests {
 
     #[test]
     fn the_default_size_follows_the_width_factor() {
-        let sizes: Vec<(f64, f64)> = [1.0, 1.1, 1.3].iter().map(|f| default_size(*f)).map(|s| (s.w, s.h)).collect();
+        let sizes: Vec<(f64, f64)> = [1.0, 1.1, 1.3]
+            .iter()
+            .map(|f| default_size(*f))
+            .map(|s| (s.w, s.h))
+            .collect();
         assert_eq!(sizes, [(715.0, 625.0), (787.0, 625.0), (930.0, 625.0)]);
     }
 
     #[test]
     fn the_sidebar_width_follows_row_size_and_scrollers_and_leaves_499_for_the_content() {
-        let widths: Vec<(f64, f64)> = RowSize::ALL.iter().map(|r| (sidebar_width(1.0, *r, false), sidebar_width(1.0, *r, true))).collect();
+        let widths: Vec<(f64, f64)> = RowSize::ALL
+            .iter()
+            .map(|r| (sidebar_width(1.0, *r, false), sidebar_width(1.0, *r, true)))
+            .collect();
         assert_eq!(widths, [(215.0, 215.0), (215.0, 223.0), (227.0, 242.0)]);
-        let l = WindowLayout::new(default_size(1.0), 1.0, RowSize::Medium, &sidebar::groups(), false);
-        assert_eq!((l.sidebar, l.divider.w, l.content.w), (Rect::new(0.0, 0.0, 215.0, 625.0), 1.0, 499.0));
+        let l = WindowLayout::new(
+            default_size(1.0),
+            1.0,
+            RowSize::Medium,
+            &sidebar::groups(),
+            false,
+        );
+        assert_eq!(
+            (l.sidebar, l.divider.w, l.content.w),
+            (Rect::new(0.0, 0.0, 215.0, 625.0), 1.0, 499.0)
+        );
         assert_eq!(l.toolbar, Rect::new(216.0, 0.0, 499.0, 52.0));
         assert_eq!(l.content, Rect::new(216.0, 52.0, 499.0, 573.0));
     }
 
     #[test]
     fn rows_stack_in_groups_under_the_search_field() {
-        let l = WindowLayout::new(default_size(1.0), 1.0, RowSize::Medium, &sidebar::groups(), false);
-        assert_eq!(l.search, Rect::new(8.5, 52.0, 196.5, 28.0), "the large field, 196.5 wide as on the photograph");
+        let l = WindowLayout::new(
+            default_size(1.0),
+            1.0,
+            RowSize::Medium,
+            &sidebar::groups(),
+            false,
+        );
+        assert_eq!(
+            l.search,
+            Rect::new(8.5, 52.0, 196.5, 28.0),
+            "the large field, 196.5 wide as on the photograph"
+        );
         assert_eq!(l.rows.len(), 15);
-        assert_eq!(l.row(PaneId::Wifi), Some(Rect::new(10.0, 90.0, 195.0, 28.0)));
+        assert_eq!(
+            l.row(PaneId::Wifi),
+            Some(Rect::new(10.0, 90.0, 195.0, 28.0))
+        );
         // four rows, then a group gap
-        assert_eq!(l.row(PaneId::Accessibility).unwrap().y, 90.0 + 4.0 * 28.0 + 13.0);
-        assert_eq!(l.icon(&l.row(PaneId::Wifi).unwrap()), Rect::new(16.0, 94.0, 20.0, 20.0), "the medium icon field,");
-        let small = WindowLayout::new(default_size(1.0), 1.0, RowSize::Small, &sidebar::groups(), false);
+        assert_eq!(
+            l.row(PaneId::Accessibility).unwrap().y,
+            90.0 + 4.0 * 28.0 + 13.0
+        );
+        assert_eq!(
+            l.icon(&l.row(PaneId::Wifi).unwrap()),
+            Rect::new(16.0, 94.0, 20.0, 20.0),
+            "the medium icon field,"
+        );
+        let small = WindowLayout::new(
+            default_size(1.0),
+            1.0,
+            RowSize::Small,
+            &sidebar::groups(),
+            false,
+        );
         assert_eq!(small.row(PaneId::Bluetooth).unwrap().h, 24.0);
     }
 
     #[test]
     fn hits_find_the_toolbar_controls_the_search_field_and_rows() {
-        let l = WindowLayout::new(default_size(1.0), 1.0, RowSize::Medium, &sidebar::groups(), true);
+        let l = WindowLayout::new(
+            default_size(1.0),
+            1.0,
+            RowSize::Medium,
+            &sidebar::groups(),
+            true,
+        );
         assert_eq!(l.hit(l.back.unwrap().center()), Hit::Back);
         assert_eq!(l.hit(l.forward.unwrap().center()), Hit::Forward);
         assert_eq!(l.hit(l.search.center()), Hit::Search);
-        assert_eq!(l.hit(l.row(PaneId::Sound).unwrap().center()), Hit::Row(PaneId::Sound));
-        assert_eq!(l.hit(Point { x: 100.0, y: 20.0 }), Hit::Titlebar, "the sidebar's top under the window control buttons");
+        assert_eq!(
+            l.hit(l.row(PaneId::Sound).unwrap().center()),
+            Hit::Row(PaneId::Sound)
+        );
+        assert_eq!(
+            l.hit(Point { x: 100.0, y: 20.0 }),
+            Hit::Titlebar,
+            "the sidebar's top under the window control buttons"
+        );
         assert_eq!(l.hit(Point { x: 600.0, y: 20.0 }), Hit::Titlebar);
         assert_eq!(l.hit(Point { x: 600.0, y: 300.0 }), Hit::Content);
         assert_eq!(l.hit(Point { x: 100.0, y: 600.0 }), Hit::Sidebar);
@@ -216,11 +331,34 @@ mod tests {
 
     #[test]
     fn without_history_the_title_takes_the_place_of_the_back_forward_group() {
-        let first = WindowLayout::new(default_size(1.0), 1.0, RowSize::Medium, &sidebar::groups(), false);
+        let first = WindowLayout::new(
+            default_size(1.0),
+            1.0,
+            RowSize::Medium,
+            &sidebar::groups(),
+            false,
+        );
         assert_eq!((first.back, first.forward), (None, None));
-        assert_eq!(first.title.x, 216.0 + 13.0, "13 pt from the content's leading edge");
-        assert_eq!(first.hit(Point { x: 216.0 + 8.0 + 10.0, y: 26.0 }), Hit::Titlebar, "no hidden button under the pointer");
-        let later = WindowLayout::new(default_size(1.0), 1.0, RowSize::Medium, &sidebar::groups(), true);
+        assert_eq!(
+            first.title.x,
+            216.0 + 13.0,
+            "13 pt from the content's leading edge"
+        );
+        assert_eq!(
+            first.hit(Point {
+                x: 216.0 + 8.0 + 10.0,
+                y: 26.0
+            }),
+            Hit::Titlebar,
+            "no hidden button under the pointer"
+        );
+        let later = WindowLayout::new(
+            default_size(1.0),
+            1.0,
+            RowSize::Medium,
+            &sidebar::groups(),
+            true,
+        );
         assert_eq!(later.title.x, 216.0 + 8.0 + 53.0 + 12.0);
         // the title is centred on the window control buttons' line: the middle of the 52 pt region
         assert_eq!(first.title.center().y, 26.0);

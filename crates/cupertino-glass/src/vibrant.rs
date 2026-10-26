@@ -25,7 +25,12 @@ pub struct VibrantStyle {
 
 impl VibrantStyle {
     pub fn new(mode: VibrantMode) -> Self {
-        Self { mode, reversed: false, c0: [1.0; 4], c1: [1.0; 4] }
+        Self {
+            mode,
+            reversed: false,
+            c0: [1.0; 4],
+            c1: [1.0; 4],
+        }
     }
 }
 
@@ -40,7 +45,12 @@ pub struct VibrantDraw<'a> {
 
 impl<'a> VibrantDraw<'a> {
     pub fn new(glyphs: &'a wgpu::TextureView, rect: [f32; 4], style: VibrantStyle) -> Self {
-        Self { glyphs, rect, uv: [0.0, 0.0, 1.0, 1.0], style }
+        Self {
+            glyphs,
+            rect,
+            uv: [0.0, 0.0, 1.0, 1.0],
+            style,
+        }
     }
 
     pub(crate) fn uniform(&self, target: (u32, u32)) -> VibrantUniform {
@@ -48,7 +58,16 @@ impl<'a> VibrantDraw<'a> {
             rect: self.rect,
             uv: self.uv,
             sizes: [target.0 as f32, target.1 as f32, 0.0, 0.0],
-            mode: [if self.style.mode == VibrantMode::Light { 1.0 } else { 0.0 }, if self.style.reversed { 1.0 } else { 0.0 }, 0.0, 0.0],
+            mode: [
+                if self.style.mode == VibrantMode::Light {
+                    1.0
+                } else {
+                    0.0
+                },
+                if self.style.reversed { 1.0 } else { 0.0 },
+                0.0,
+                0.0,
+            ],
             c0: self.style.c0,
             c1: self.style.c1,
         }

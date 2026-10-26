@@ -46,7 +46,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - run: cargo fmt --all --check
+      # Without --all: only the workspace members, not the vendored third-party crate.
+      - run: cargo fmt --check
 
   # Lint, layer rules and the whole test suite on one build. No CUPERTINO_* variable is set anywhere in this
   # workflow: the tests must pass on the built-in assets alone.

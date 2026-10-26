@@ -15,7 +15,9 @@ use std::sync::mpsc;
 
 use smithay::reexports::calloop::channel::{self, Event};
 
-use crate::display_power::{overlay_alpha, ActivationFade, DisplayState, Effect, Facts, IdlePolicy};
+use crate::display_power::{
+    overlay_alpha, ActivationFade, DisplayState, Effect, Facts, IdlePolicy,
+};
 use crate::render::programs::u4;
 use crate::render::shader_rect::{ElementKey, ShaderRect, Sig};
 use crate::render::CupertinoElement;
@@ -36,7 +38,13 @@ pub struct Power {
 
 impl Power {
     pub fn new(policy: IdlePolicy) -> Self {
-        Self { policy, on_battery: None, idle_blocked: false, bus: None, fade: ActivationFade::default() }
+        Self {
+            policy,
+            on_battery: None,
+            idle_blocked: false,
+            bus: None,
+            fade: ActivationFade::default(),
+        }
     }
 
     pub fn policy(&self) -> &IdlePolicy {
@@ -91,7 +99,11 @@ impl Cupertino {
     /// Advance the idle policy; called from [`Cupertino::tick`].
     pub fn tick_display_power(&mut self) {
         let now = self.now();
-        let facts = Facts { on_battery: self.power.on_battery.unwrap_or(false), inhibited: self.idle.inhibited() || self.power.idle_blocked, locked: self.session_lock.is_active() };
+        let facts = Facts {
+            on_battery: self.power.on_battery.unwrap_or(false),
+            inhibited: self.idle.inhibited() || self.power.idle_blocked,
+            locked: self.session_lock.is_active(),
+        };
         let effects = self.power.policy.tick(now, facts);
         self.apply_power_effects(effects);
         if self.power.policy.animating(now) || self.power.fade.animating(now) {
@@ -153,10 +165,27 @@ impl Cupertino {
         const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
         let program = self.render.as_ref()?.programs.wallpaper.clone();
         let out = &mut self.outputs[idx];
-        let area = smithay::utils::Rectangle::new((0.0, 0.0).into(), (out.rect.w, out.rect.h).into());
-        let (id, commit) = out.cache.slot(ElementKey::new("power-overlay", 0), Sig::new().rect(area).f(alpha).finish());
+        let area =
+            smithay::utils::Rectangle::new((0.0, 0.0).into(), (out.rect.w, out.rect.h).into());
+        let (id, commit) = out.cache.slot(
+            ElementKey::new("power-overlay", 0),
+            Sig::new().rect(area).f(alpha).finish(),
+        );
         let opaque = alpha >= 1.0;
-        Some(CupertinoElement::Shader(ShaderRect::new(program, id, commit, area, alpha as f32, vec![u4("c0", BLACK), u4("c1", BLACK), u4("c2", BLACK), u4("c3", BLACK)], opaque)))
+        Some(CupertinoElement::Shader(ShaderRect::new(
+            program,
+            id,
+            commit,
+            area,
+            alpha as f32,
+            vec![
+                u4("c0", BLACK),
+                u4("c1", BLACK),
+                u4("c2", BLACK),
+                u4("c3", BLACK),
+            ],
+            opaque,
+        )))
     }
 
     /// The black overlay over output `idx` while the screen fades in after the session became active; front-most element.
@@ -168,9 +197,26 @@ impl Cupertino {
         const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
         let program = self.render.as_ref()?.programs.wallpaper.clone();
         let out = &mut self.outputs[idx];
-        let area = smithay::utils::Rectangle::new((0.0, 0.0).into(), (out.rect.w, out.rect.h).into());
-        let (id, commit) = out.cache.slot(ElementKey::new("activation-fade", 0), Sig::new().rect(area).f(alpha).finish());
-        Some(CupertinoElement::Shader(ShaderRect::new(program, id, commit, area, alpha as f32, vec![u4("c0", BLACK), u4("c1", BLACK), u4("c2", BLACK), u4("c3", BLACK)], alpha >= 1.0)))
+        let area =
+            smithay::utils::Rectangle::new((0.0, 0.0).into(), (out.rect.w, out.rect.h).into());
+        let (id, commit) = out.cache.slot(
+            ElementKey::new("activation-fade", 0),
+            Sig::new().rect(area).f(alpha).finish(),
+        );
+        Some(CupertinoElement::Shader(ShaderRect::new(
+            program,
+            id,
+            commit,
+            area,
+            alpha as f32,
+            vec![
+                u4("c0", BLACK),
+                u4("c1", BLACK),
+                u4("c2", BLACK),
+                u4("c3", BLACK),
+            ],
+            alpha >= 1.0,
+        )))
     }
 
     fn on_power_bus(&mut self, event: BusEvent) {
@@ -222,7 +268,9 @@ pub fn start_power_bus(state: &mut Cupertino) {
     let (requests, requests_rx) = mpsc::channel();
     match bus::start(events, requests_rx) {
         Ok(()) => state.power.bus = Some(requests),
-        Err(e) => tracing::warn!(error = %e, "no system bus: power source, idle inhibitors and system sleep are unavailable"),
+        Err(e) => {
+            tracing::warn!(error = %e, "no system bus: power source, idle inhibitors and system sleep are unavailable")
+        }
     }
 }
 
@@ -248,29 +296,59 @@ mod bus {
 
     pub fn start(events: Sender<BusEvent>, requests: Receiver<BusRequest>) -> zbus::Result<()> {
         let conn = Connection::system()?;
-        let changes = |interface: &'static str, path: &'static str| -> zbus::Result<MessageIterator> {
-            let rule = MatchRule::builder().msg_type(Type::Signal).interface(PROPERTIES)?.member("PropertiesChanged")?.path(path)?.arg(0, interface)?.build();
-            MessageIterator::for_match_rule(rule, &conn, None)
-        };
+        let changes =
+            |interface: &'static str, path: &'static str| -> zbus::Result<MessageIterator> {
+                let rule = MatchRule::builder()
+                    .msg_type(Type::Signal)
+                    .interface(PROPERTIES)?
+                    .member("PropertiesChanged")?
+                    .path(path)?
+                    .arg(0, interface)?
+                    .build();
+                MessageIterator::for_match_rule(rule, &conn, None)
+            };
         let upower_changes = changes(UPOWER, UPOWER_PATH)?;
         let logind_changes = changes(LOGIND_MANAGER, LOGIND_PATH)?;
-        let owner_rule = MatchRule::builder().msg_type(Type::Signal).sender("org.freedesktop.DBus")?.member("NameOwnerChanged")?.arg(0, UPOWER)?.build();
+        let owner_rule = MatchRule::builder()
+            .msg_type(Type::Signal)
+            .sender("org.freedesktop.DBus")?
+            .member("NameOwnerChanged")?
+            .arg(0, UPOWER)?
+            .build();
         let owners = MessageIterator::for_match_rule(owner_rule, &conn, None)?;
-        let sleep_rule = MatchRule::builder().msg_type(Type::Signal).sender(LOGIND)?.path(LOGIND_PATH)?.interface(LOGIND_MANAGER)?.member("PrepareForSleep")?.build();
+        let sleep_rule = MatchRule::builder()
+            .msg_type(Type::Signal)
+            .sender(LOGIND)?
+            .path(LOGIND_PATH)?
+            .interface(LOGIND_MANAGER)?
+            .member("PrepareForSleep")?
+            .build();
         let sleeps = MessageIterator::for_match_rule(sleep_rule, &conn, None)?;
 
         // the subscriptions are up: read the current values
         report_on_battery(&conn, &events);
-        match get(&conn, LOGIND, LOGIND_PATH, LOGIND_MANAGER, "BlockInhibited").and_then(|v| String::try_from(v).map_err(zbus::Error::from)) {
+        match get(&conn, LOGIND, LOGIND_PATH, LOGIND_MANAGER, "BlockInhibited")
+            .and_then(|v| String::try_from(v).map_err(zbus::Error::from))
+        {
             Ok(what) => send(&events, BusEvent::IdleBlocked(names_idle(&what))),
-            Err(e) => send(&events, BusEvent::Stopped(format!("reading logind's BlockInhibited: {e}"))),
+            Err(e) => send(
+                &events,
+                BusEvent::Stopped(format!("reading logind's BlockInhibited: {e}")),
+            ),
         }
 
         let e = events.clone();
         reader("power-source", upower_changes, e, |message, events| {
-            let (_, changed, _): (String, std::collections::HashMap<String, OwnedValue>, Vec<String>) = message.body().deserialize()?;
+            let (_, changed, _): (
+                String,
+                std::collections::HashMap<String, OwnedValue>,
+                Vec<String>,
+            ) = message.body().deserialize()?;
             if let Some(v) = changed.get("OnBattery") {
-                send(events, BusEvent::OnBattery(bool::try_from(v).map_err(zbus::Error::from)?));
+                send(
+                    events,
+                    BusEvent::OnBattery(bool::try_from(v).map_err(zbus::Error::from)?),
+                );
             }
             Ok(())
         })?;
@@ -279,7 +357,10 @@ mod bus {
         reader("power-daemon", owners, e, move |message, events| {
             let (_, _, new_owner): (String, String, String) = message.body().deserialize()?;
             if new_owner.is_empty() {
-                send(events, BusEvent::NoPowerSource(format!("{UPOWER} left the bus")));
+                send(
+                    events,
+                    BusEvent::NoPowerSource(format!("{UPOWER} left the bus")),
+                );
             } else {
                 report_on_battery(&c, events);
             }
@@ -287,9 +368,18 @@ mod bus {
         })?;
         let e = events.clone();
         reader("idle-inhibitors", logind_changes, e, |message, events| {
-            let (_, changed, _): (String, std::collections::HashMap<String, OwnedValue>, Vec<String>) = message.body().deserialize()?;
+            let (_, changed, _): (
+                String,
+                std::collections::HashMap<String, OwnedValue>,
+                Vec<String>,
+            ) = message.body().deserialize()?;
             if let Some(v) = changed.get("BlockInhibited") {
-                send(events, BusEvent::IdleBlocked(names_idle(&String::try_from(v.try_clone()?).map_err(zbus::Error::from)?)));
+                send(
+                    events,
+                    BusEvent::IdleBlocked(names_idle(
+                        &String::try_from(v.try_clone()?).map_err(zbus::Error::from)?,
+                    )),
+                );
             }
             Ok(())
         })?;
@@ -322,16 +412,33 @@ mod bus {
         what.split(':').any(|w| w == "idle")
     }
 
-    fn get(conn: &Connection, name: &str, path: &str, interface: &str, property: &str) -> zbus::Result<OwnedValue> {
-        let reply = conn.call_method(Some(name), path, Some(PROPERTIES), "Get", &(interface, property))?;
+    fn get(
+        conn: &Connection,
+        name: &str,
+        path: &str,
+        interface: &str,
+        property: &str,
+    ) -> zbus::Result<OwnedValue> {
+        let reply = conn.call_method(
+            Some(name),
+            path,
+            Some(PROPERTIES),
+            "Get",
+            &(interface, property),
+        )?;
         let value: OwnedValue = reply.body().deserialize()?;
         Ok(value)
     }
 
     fn report_on_battery(conn: &Connection, events: &Sender<BusEvent>) {
-        match get(conn, UPOWER, UPOWER_PATH, UPOWER, "OnBattery").and_then(|v| bool::try_from(&*v).map_err(zbus::Error::from)) {
+        match get(conn, UPOWER, UPOWER_PATH, UPOWER, "OnBattery")
+            .and_then(|v| bool::try_from(&*v).map_err(zbus::Error::from))
+        {
             Ok(on_battery) => send(events, BusEvent::OnBattery(on_battery)),
-            Err(e) => send(events, BusEvent::NoPowerSource(format!("reading {UPOWER}.OnBattery: {e}"))),
+            Err(e) => send(
+                events,
+                BusEvent::NoPowerSource(format!("reading {UPOWER}.OnBattery: {e}")),
+            ),
         }
     }
 
@@ -340,7 +447,12 @@ mod bus {
         let _ = events.send(event);
     }
 
-    fn reader(name: &str, messages: MessageIterator, events: Sender<BusEvent>, handle: impl Fn(&zbus::Message, &Sender<BusEvent>) -> zbus::Result<()> + Send + 'static) -> zbus::Result<()> {
+    fn reader(
+        name: &str,
+        messages: MessageIterator,
+        events: Sender<BusEvent>,
+        handle: impl Fn(&zbus::Message, &Sender<BusEvent>) -> zbus::Result<()> + Send + 'static,
+    ) -> zbus::Result<()> {
         let label = name.to_owned();
         std::thread::Builder::new()
             .name(name.into())
@@ -350,12 +462,14 @@ mod bus {
                         return send(&events, BusEvent::Stopped(format!("{label}: {e}")));
                     }
                 }
-                send(&events, BusEvent::Stopped(format!("{label}: the signal stream ended")));
+                send(
+                    &events,
+                    BusEvent::Stopped(format!("{label}: the signal stream ended")),
+                );
             })
             .map(drop)
             .map_err(|e| zbus::Error::Failure(format!("starting the {name} reader: {e}")))
     }
-
 }
 
 #[cfg(test)]
@@ -364,7 +478,10 @@ mod tests {
     fn block_inhibited_names_idle_only_as_a_whole_item() {
         assert!(super::bus::names_idle("shutdown:sleep:idle"));
         assert!(super::bus::names_idle("idle"));
-        assert!(!super::bus::names_idle("handle-power-key:handle-idle"), "handle-idle is not idle");
+        assert!(
+            !super::bus::names_idle("handle-power-key:handle-idle"),
+            "handle-idle is not idle"
+        );
         assert!(!super::bus::names_idle(""));
     }
 }

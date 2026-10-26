@@ -17,23 +17,51 @@ pub struct Mapping {
     pub aliases: &'static [&'static str],
 }
 
-const fn m(reference: &'static str, primary: &'static str, aliases: &'static [&'static str]) -> Mapping {
-    Mapping { reference, primary, aliases }
+const fn m(
+    reference: &'static str,
+    primary: &'static str,
+    aliases: &'static [&'static str],
+) -> Mapping {
+    Mapping {
+        reference,
+        primary,
+        aliases,
+    }
 }
 
 /// Reference cursors that have a freedesktop meaning.
 pub const REFERENCE_MAP: &[Mapping] = &[
-    m("pointinghand", "pointer", &["hand1", "hand2", "pointing_hand"]),
+    m(
+        "pointinghand",
+        "pointer",
+        &["hand1", "hand2", "pointing_hand"],
+    ),
     m("openhand", "grab", &["openhand"]),
     m("closedhand", "grabbing", &["closedhand"]),
     m("ibeamvertical", "vertical-text", &[]),
-    m("cross", "crosshair", &["cross", "tcross", "diamond_cross", "cross_reverse"]),
-    m("notallowed", "not-allowed", &["crossed_circle", "forbidden", "no-drop", "dnd-no-drop"]),
+    m(
+        "cross",
+        "crosshair",
+        &["cross", "tcross", "diamond_cross", "cross_reverse"],
+    ),
+    m(
+        "notallowed",
+        "not-allowed",
+        &["crossed_circle", "forbidden", "no-drop", "dnd-no-drop"],
+    ),
     m("copy", "copy", &["dnd-copy"]),
     m("makealias", "alias", &["link", "dnd-link"]),
     m("contextualmenu", "context-menu", &[]),
-    m("help", "help", &["question_arrow", "whats_this", "left_ptr_help"]),
-    m("busybutclickable", "progress", &["left_ptr_watch", "half-busy", "wait", "watch"]),
+    m(
+        "help",
+        "help",
+        &["question_arrow", "whats_this", "left_ptr_help"],
+    ),
+    m(
+        "busybutclickable",
+        "progress",
+        &["left_ptr_watch", "half-busy", "wait", "watch"],
+    ),
     m("cell", "cell", &["plus"]),
     m("move", "move", &["all-scroll", "fleur", "size_all"]),
     m("zoomin", "zoom-in", &[]),
@@ -46,8 +74,16 @@ pub const REFERENCE_MAP: &[Mapping] = &[
     m("resizenorthwest", "nw-resize", &["top_left_corner"]),
     m("resizesoutheast", "se-resize", &["bottom_right_corner"]),
     m("resizesouthwest", "sw-resize", &["bottom_left_corner"]),
-    m("resizeeastwest", "ew-resize", &["sb_h_double_arrow", "size_hor", "h_double_arrow"]),
-    m("resizenorthsouth", "ns-resize", &["sb_v_double_arrow", "size_ver", "v_double_arrow"]),
+    m(
+        "resizeeastwest",
+        "ew-resize",
+        &["sb_h_double_arrow", "size_hor", "h_double_arrow"],
+    ),
+    m(
+        "resizenorthsouth",
+        "ns-resize",
+        &["sb_v_double_arrow", "size_ver", "v_double_arrow"],
+    ),
     m("resizenortheastsouthwest", "nesw-resize", &["size_bdiag"]),
     m("resizenorthwestsoutheast", "nwse-resize", &["size_fdiag"]),
     m("resizeleftright", "col-resize", &["split_h"]),
@@ -55,7 +91,14 @@ pub const REFERENCE_MAP: &[Mapping] = &[
 ];
 
 /// Freedesktop names provided by the procedural set only (no reference cursor).
-pub const PROCEDURAL_ONLY: &[Mapping] = &[m("default", "default", &["left_ptr", "arrow", "top_left_arrow"]), m("text", "text", &["xterm", "ibeam"])];
+pub const PROCEDURAL_ONLY: &[Mapping] = &[
+    m(
+        "default",
+        "default",
+        &["left_ptr", "arrow", "top_left_arrow"],
+    ),
+    m("text", "text", &["xterm", "ibeam"]),
+];
 
 /// Names every complete theme must contain (the CSS cursor set plus the common legacy ones).
 pub const REQUIRED_NAMES: &[&str] = &[
@@ -101,8 +144,18 @@ pub const REQUIRED_NAMES: &[&str] = &[
 ];
 
 /// Cursors of the design set that are installed under their own name only.
-pub const UNMAPPED_REFERENCE: &[&str] =
-    &["countingdownhand", "countingupandownhand", "countinguphand", "poof", "resizedown", "resizeleft", "resizeright", "resizeup", "screenshotselection", "screenshotwindow"];
+pub const UNMAPPED_REFERENCE: &[&str] = &[
+    "countingdownhand",
+    "countingupandownhand",
+    "countinguphand",
+    "poof",
+    "resizedown",
+    "resizeleft",
+    "resizeright",
+    "resizeup",
+    "screenshotselection",
+    "screenshotwindow",
+];
 
 pub fn mapping_for_reference(name: &str) -> Option<&'static Mapping> {
     REFERENCE_MAP.iter().find(|m| m.reference == name)
@@ -130,18 +183,30 @@ mod tests {
 
     #[test]
     fn required_names_are_covered() {
-        let covered: HashSet<&str> = REFERENCE_MAP.iter().chain(PROCEDURAL_ONLY).flat_map(all_names).collect();
+        let covered: HashSet<&str> = REFERENCE_MAP
+            .iter()
+            .chain(PROCEDURAL_ONLY)
+            .flat_map(all_names)
+            .collect();
         for n in REQUIRED_NAMES {
             assert!(covered.contains(n), "{n} has no mapping");
         }
     }
 
-
     #[test]
     fn primary_names_are_unique_and_lookup_works() {
-        assert_eq!(mapping_for_reference("pointinghand").unwrap().primary, "pointer");
-        assert_eq!(mapping_for_reference("busybutclickable").unwrap().primary, "progress");
+        assert_eq!(
+            mapping_for_reference("pointinghand").unwrap().primary,
+            "pointer"
+        );
+        assert_eq!(
+            mapping_for_reference("busybutclickable").unwrap().primary,
+            "progress"
+        );
         assert!(mapping_for_reference("nonsense").is_none());
-        assert!(mapping_for_reference("busybutclickable").unwrap().aliases.contains(&"wait"));
+        assert!(mapping_for_reference("busybutclickable")
+            .unwrap()
+            .aliases
+            .contains(&"wait"));
     }
 }

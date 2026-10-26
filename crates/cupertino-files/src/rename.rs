@@ -25,7 +25,10 @@ pub enum RenameEvent {
 
 impl Default for RenameTrigger {
     fn default() -> Self {
-        RenameTrigger { interval: DOUBLE_CLICK_INTERVAL, pending: None }
+        RenameTrigger {
+            interval: DOUBLE_CLICK_INTERVAL,
+            pending: None,
+        }
     }
 }
 
@@ -39,7 +42,11 @@ impl RenameTrigger {
                 self.pending = None;
             }
             _ => {
-                self.pending = if on_name && was_selected { Some((index, now)) } else { None };
+                self.pending = if on_name && was_selected {
+                    Some((index, now))
+                } else {
+                    None
+                };
             }
         }
     }
@@ -136,7 +143,11 @@ pub fn unique_name(base: &str, is_dir: bool, taken: &dyn Fn(&str) -> bool) -> St
     };
     let mut n = 1;
     loop {
-        let cand = if n == 1 { format!("{stem} copy{ext}") } else { format!("{stem} copy {n}{ext}") };
+        let cand = if n == 1 {
+            format!("{stem} copy{ext}")
+        } else {
+            format!("{stem} copy {n}{ext}")
+        };
         if !taken(&cand) {
             return cand;
         }

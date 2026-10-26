@@ -21,14 +21,33 @@ use crate::item::{ItemId, MenuItem, Shortcut, Toggle};
 pub type RawNode = (i32, HashMap<String, OwnedValue>, Vec<OwnedValue>);
 
 /// Properties requested from `GetLayout`.
-pub const LAYOUT_PROPERTIES: &[&str] =
-    &["type", "label", "enabled", "visible", "icon-name", "icon-data", "shortcut", "toggle-type", "toggle-state", "children-display"];
+pub const LAYOUT_PROPERTIES: &[&str] = &[
+    "type",
+    "label",
+    "enabled",
+    "visible",
+    "icon-name",
+    "icon-data",
+    "shortcut",
+    "toggle-type",
+    "toggle-state",
+    "children-display",
+];
 
 #[proxy(interface = "com.canonical.dbusmenu", assume_defaults = false)]
 pub trait DBusMenu {
-    fn get_layout(&self, parent_id: i32, recursion_depth: i32, property_names: &[&str]) -> zbus::Result<(u32, RawNode)>;
+    fn get_layout(
+        &self,
+        parent_id: i32,
+        recursion_depth: i32,
+        property_names: &[&str],
+    ) -> zbus::Result<(u32, RawNode)>;
 
-    fn get_group_properties(&self, ids: &[i32], property_names: &[&str]) -> zbus::Result<Vec<(i32, HashMap<String, OwnedValue>)>>;
+    fn get_group_properties(
+        &self,
+        ids: &[i32],
+        property_names: &[&str],
+    ) -> zbus::Result<Vec<(i32, HashMap<String, OwnedValue>)>>;
 
     fn get_property(&self, id: i32, name: &str) -> zbus::Result<OwnedValue>;
 
@@ -37,7 +56,11 @@ pub trait DBusMenu {
     fn about_to_show(&self, id: i32) -> zbus::Result<bool>;
 
     #[zbus(signal)]
-    fn items_properties_updated(&self, updated_props: Vec<(i32, HashMap<String, OwnedValue>)>, removed_props: Vec<(i32, Vec<String>)>) -> zbus::Result<()>;
+    fn items_properties_updated(
+        &self,
+        updated_props: Vec<(i32, HashMap<String, OwnedValue>)>,
+        removed_props: Vec<(i32, Vec<String>)>,
+    ) -> zbus::Result<()>;
 
     #[zbus(signal)]
     fn layout_updated(&self, revision: u32, parent: i32) -> zbus::Result<()>;
@@ -75,7 +98,9 @@ const MAX_DEPTH: usize = 32;
 
 /// Convert a variant holding a nested node into a [`RawNode`].
 pub fn node_from_value(v: &Value<'_>) -> Result<RawNode, ParseError> {
-    let Value::Structure(s) = super::unwrap_variant(v) else { return Err(ParseError::NotAStructure) };
+    let Value::Structure(s) = super::unwrap_variant(v) else {
+        return Err(ParseError::NotAStructure);
+    };
     let fields = s.fields();
     if fields.len() != 3 {
         return Err(ParseError::BadNode("expected three fields"));
@@ -88,8 +113,11 @@ pub fn node_from_value(v: &Value<'_>) -> Result<RawNode, ParseError> {
         Value::Dict(d) => {
             let mut m = HashMap::new();
             for (k, val) in d.iter() {
-                let Value::Str(k) = super::unwrap_variant(k) else { return Err(ParseError::BadNode("property key")) };
-                let owned = OwnedValue::try_from(val).map_err(|_| ParseError::BadNode("property value"))?;
+                let Value::Str(k) = super::unwrap_variant(k) else {
+                    return Err(ParseError::BadNode("property key"));
+                };
+                let owned =
+                    OwnedValue::try_from(val).map_err(|_| ParseError::BadNode("property value"))?;
                 m.insert(k.as_str().to_string(), owned);
             }
             m
@@ -97,7 +125,10 @@ pub fn node_from_value(v: &Value<'_>) -> Result<RawNode, ParseError> {
         _ => return Err(ParseError::BadNode("properties")),
     };
     let children = match super::unwrap_variant(&fields[2]) {
-        Value::Array(a) => a.iter().map(|c| OwnedValue::try_from(c).map_err(|_| ParseError::BadNode("child"))).collect::<Result<Vec<_>, _>>()?,
+        Value::Array(a) => a
+            .iter()
+            .map(|c| OwnedValue::try_from(c).map_err(|_| ParseError::BadNode("child")))
+            .collect::<Result<Vec<_>, _>>()?,
         _ => return Err(ParseError::BadNode("children")),
     };
     Ok((id, props, children))
@@ -124,13 +155,31 @@ pub fn apply_properties(item: &mut MenuItem, props: &HashMap<String, OwnedValue>
         item.icon_name = (!n.is_empty()).then_some(n);
     }
     if let Some(Value::Array(a)) = prop(props, "icon-data") {
-        let bytes: Vec<u8> = a.iter().filter_map(|v| if let Value::U8(b) = super::unwrap_variant(v) { Some(*b) } else { None }).collect();
+        let bytes: Vec<u8> = a
+            .iter()
+            .filter_map(|v| {
+                if let Value::U8(b) = super::unwrap_variant(v) {
+                    Some(*b)
+                } else {
+                    None
+                }
+            })
+            .collect();
         item.icon_data = (!bytes.is_empty()).then_some(bytes);
     }
     if let Some(Value::Array(a)) = prop(props, "shortcut") {
         // aas: take the first combination
         if let Some(Value::Array(first)) = a.iter().next().map(super::unwrap_variant) {
-            let tokens: Vec<String> = first.iter().filter_map(|t| if let Value::Str(s) = super::unwrap_variant(t) { Some(s.as_str().to_string()) } else { None }).collect();
+            let tokens: Vec<String> = first
+                .iter()
+                .filter_map(|t| {
+                    if let Value::Str(s) = super::unwrap_variant(t) {
+                        Some(s.as_str().to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
             item.shortcut = Shortcut::from_tokens(&tokens);
         }
     }
@@ -185,7 +234,12 @@ fn parse_node(node: &RawNode, depth: usize) -> Result<MenuItem, ParseError> {
         return Err(ParseError::TooDeep);
     }
     let (id, props, children) = node;
-    let mut item = MenuItem { id: ItemId(*id), enabled: true, visible: true, ..Default::default() };
+    let mut item = MenuItem {
+        id: ItemId(*id),
+        enabled: true,
+        visible: true,
+        ..Default::default()
+    };
     apply_properties(&mut item, props);
     if item.separator {
         item.enabled = false;
@@ -206,7 +260,11 @@ pub fn parse_layout(node: &RawNode) -> Result<MenuItem, ParseError> {
 }
 
 /// Apply an `ItemsPropertiesUpdated` signal to a tree. Unknown ids are ignored.
-pub fn apply_properties_update(root: &mut MenuItem, updated: &[(i32, HashMap<String, OwnedValue>)], removed: &[(i32, Vec<String>)]) {
+pub fn apply_properties_update(
+    root: &mut MenuItem,
+    updated: &[(i32, HashMap<String, OwnedValue>)],
+    removed: &[(i32, Vec<String>)],
+) {
     for (id, props) in updated {
         if let Some(item) = root.find_mut(ItemId(*id)) {
             apply_properties(item, props);
@@ -237,7 +295,10 @@ pub fn replace_subtree(root: &mut MenuItem, fresh: MenuItem) -> bool {
 pub enum MenuUpdate {
     /// The layout below `parent` changed; refetch it.
     Layout { revision: u32, parent: ItemId },
-    Properties { updated: Vec<(i32, HashMap<String, OwnedValue>)>, removed: Vec<(i32, Vec<String>)> },
+    Properties {
+        updated: Vec<(i32, HashMap<String, OwnedValue>)>,
+        removed: Vec<(i32, Vec<String>)>,
+    },
     /// The service asks for the item to be activated (for example a hot key was pressed).
     ActivationRequested { id: ItemId, timestamp: u32 },
 }
@@ -254,13 +315,24 @@ pub fn node_to_value(node: RawNode) -> zbus::zvariant::Result<OwnedValue> {
     for c in children {
         array.append(Value::Value(Box::new(Value::from(c))))?;
     }
-    let st = StructureBuilder::new().add_field(id).append_field(Value::Dict(dict)).append_field(Value::Array(array)).build()?;
+    let st = StructureBuilder::new()
+        .add_field(id)
+        .append_field(Value::Dict(dict))
+        .append_field(Value::Array(array))
+        .build()?;
     OwnedValue::try_from(Value::Structure(st))
 }
 
 /// Build a wire node from plain parts: `children` are nodes of the same shape.
-pub fn make_node(id: i32, props: HashMap<String, OwnedValue>, children: Vec<RawNode>) -> zbus::zvariant::Result<RawNode> {
-    let kids = children.into_iter().map(node_to_value).collect::<Result<Vec<_>, _>>()?;
+pub fn make_node(
+    id: i32,
+    props: HashMap<String, OwnedValue>,
+    children: Vec<RawNode>,
+) -> zbus::zvariant::Result<RawNode> {
+    let kids = children
+        .into_iter()
+        .map(node_to_value)
+        .collect::<Result<Vec<_>, _>>()?;
     Ok((id, props, kids))
 }
 
@@ -270,7 +342,11 @@ pub struct DBusMenuClient {
 
 impl DBusMenuClient {
     pub async fn connect(conn: &Connection, service: &str, path: &str) -> zbus::Result<Self> {
-        let proxy = DBusMenuProxy::builder(conn).destination(service.to_string())?.path(path.to_string())?.build().await?;
+        let proxy = DBusMenuProxy::builder(conn)
+            .destination(service.to_string())?
+            .path(path.to_string())?
+            .build()
+            .await?;
         Ok(Self { proxy })
     }
 
@@ -280,7 +356,10 @@ impl DBusMenuClient {
 
     /// Fetch the layout below `parent` (0 for the root) down to `depth` levels (-1 = all).
     pub async fn fetch(&self, parent: ItemId, depth: i32) -> zbus::Result<(u32, MenuItem)> {
-        let (revision, node) = self.proxy.get_layout(parent.0, depth, LAYOUT_PROPERTIES).await?;
+        let (revision, node) = self
+            .proxy
+            .get_layout(parent.0, depth, LAYOUT_PROPERTIES)
+            .await?;
         let item = parse_layout(&node).map_err(|e| zbus::Error::Failure(e.to_string()))?;
         Ok((revision, item))
     }
@@ -292,32 +371,64 @@ impl DBusMenuClient {
 
     /// Send the `clicked` event for `id`.
     pub async fn activate(&self, id: ItemId, timestamp: u32) -> zbus::Result<()> {
-        self.proxy.event(id.0, "clicked", &Value::from(0i32), timestamp).await
+        self.proxy
+            .event(id.0, "clicked", &Value::from(0i32), timestamp)
+            .await
     }
 
     pub async fn hover(&self, id: ItemId, timestamp: u32) -> zbus::Result<()> {
-        self.proxy.event(id.0, "hovered", &Value::from(0i32), timestamp).await
+        self.proxy
+            .event(id.0, "hovered", &Value::from(0i32), timestamp)
+            .await
     }
 
     /// Tell the service a submenu was opened (`opened`) or closed (`closed`).
     pub async fn notify_open(&self, id: ItemId, open: bool, timestamp: u32) -> zbus::Result<()> {
-        self.proxy.event(id.0, if open { "opened" } else { "closed" }, &Value::from(0i32), timestamp).await
+        self.proxy
+            .event(
+                id.0,
+                if open { "opened" } else { "closed" },
+                &Value::from(0i32),
+                timestamp,
+            )
+            .await
     }
 
     /// Stream of change notifications from the service.
     pub async fn updates(&self) -> zbus::Result<impl Stream<Item = MenuUpdate> + Unpin> {
-        let layout = self.proxy.receive_layout_updated().await?.filter_map(|s| async move {
-            let a = s.args().ok()?;
-            Some(MenuUpdate::Layout { revision: a.revision, parent: ItemId(a.parent) })
-        });
-        let props = self.proxy.receive_items_properties_updated().await?.filter_map(|s| async move {
-            let a = s.args().ok()?;
-            Some(MenuUpdate::Properties { updated: a.updated_props, removed: a.removed_props })
-        });
-        let act = self.proxy.receive_item_activation_requested().await?.filter_map(|s| async move {
-            let a = s.args().ok()?;
-            Some(MenuUpdate::ActivationRequested { id: ItemId(a.id), timestamp: a.timestamp })
-        });
+        let layout = self
+            .proxy
+            .receive_layout_updated()
+            .await?
+            .filter_map(|s| async move {
+                let a = s.args().ok()?;
+                Some(MenuUpdate::Layout {
+                    revision: a.revision,
+                    parent: ItemId(a.parent),
+                })
+            });
+        let props = self
+            .proxy
+            .receive_items_properties_updated()
+            .await?
+            .filter_map(|s| async move {
+                let a = s.args().ok()?;
+                Some(MenuUpdate::Properties {
+                    updated: a.updated_props,
+                    removed: a.removed_props,
+                })
+            });
+        let act = self
+            .proxy
+            .receive_item_activation_requested()
+            .await?
+            .filter_map(|s| async move {
+                let a = s.args().ok()?;
+                Some(MenuUpdate::ActivationRequested {
+                    id: ItemId(a.id),
+                    timestamp: a.timestamp,
+                })
+            });
         Ok(futures_util::stream::select(futures_util::stream::select(layout, props), act).boxed())
     }
 }
@@ -327,19 +438,80 @@ mod tests {
     use super::*;
 
     fn props(pairs: Vec<(&str, Value<'static>)>) -> HashMap<String, OwnedValue> {
-        pairs.into_iter().map(|(k, v)| (k.to_string(), OwnedValue::try_from(v).unwrap())).collect()
+        pairs
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), OwnedValue::try_from(v).unwrap()))
+            .collect()
     }
 
     fn sample() -> RawNode {
-        let new = make_node(2, props(vec![("label", "_New".into()), ("shortcut", vec![vec!["Control", "N"]].into()), ("icon-name", "document-new".into())]), vec![]).unwrap();
+        let new = make_node(
+            2,
+            props(vec![
+                ("label", "_New".into()),
+                ("shortcut", vec![vec!["Control", "N"]].into()),
+                ("icon-name", "document-new".into()),
+            ]),
+            vec![],
+        )
+        .unwrap();
         let sep = make_node(3, props(vec![("type", "separator".into())]), vec![]).unwrap();
-        let check = make_node(4, props(vec![("label", "Show Hidden".into()), ("toggle-type", "checkmark".into()), ("toggle-state", 1i32.into())]), vec![]).unwrap();
-        let radio = make_node(5, props(vec![("label", "Mode A".into()), ("toggle-type", "radio".into()), ("toggle-state", 0i32.into())]), vec![]).unwrap();
-        let disabled = make_node(6, props(vec![("label", "Close".into()), ("enabled", false.into())]), vec![]).unwrap();
-        let hidden = make_node(7, props(vec![("label", "Secret".into()), ("visible", false.into())]), vec![]).unwrap();
-        let file = make_node(1, props(vec![("label", "_File".into()), ("children-display", "submenu".into())]), vec![new, sep, check, radio, disabled, hidden]).unwrap();
-        let edit = make_node(8, props(vec![("label", "Edit".into()), ("children-display", "submenu".into())]), vec![]).unwrap();
-        make_node(0, props(vec![("children-display", "submenu".into())]), vec![file, edit]).unwrap()
+        let check = make_node(
+            4,
+            props(vec![
+                ("label", "Show Hidden".into()),
+                ("toggle-type", "checkmark".into()),
+                ("toggle-state", 1i32.into()),
+            ]),
+            vec![],
+        )
+        .unwrap();
+        let radio = make_node(
+            5,
+            props(vec![
+                ("label", "Mode A".into()),
+                ("toggle-type", "radio".into()),
+                ("toggle-state", 0i32.into()),
+            ]),
+            vec![],
+        )
+        .unwrap();
+        let disabled = make_node(
+            6,
+            props(vec![("label", "Close".into()), ("enabled", false.into())]),
+            vec![],
+        )
+        .unwrap();
+        let hidden = make_node(
+            7,
+            props(vec![("label", "Secret".into()), ("visible", false.into())]),
+            vec![],
+        )
+        .unwrap();
+        let file = make_node(
+            1,
+            props(vec![
+                ("label", "_File".into()),
+                ("children-display", "submenu".into()),
+            ]),
+            vec![new, sep, check, radio, disabled, hidden],
+        )
+        .unwrap();
+        let edit = make_node(
+            8,
+            props(vec![
+                ("label", "Edit".into()),
+                ("children-display", "submenu".into()),
+            ]),
+            vec![],
+        )
+        .unwrap();
+        make_node(
+            0,
+            props(vec![("children-display", "submenu".into())]),
+            vec![file, edit],
+        )
+        .unwrap()
     }
 
     #[test]
@@ -348,7 +520,10 @@ mod tests {
         assert_eq!(root.id, ItemId(0));
         assert_eq!(root.children.len(), 2);
         let file = &root.children[0];
-        assert_eq!((file.label.as_str(), file.mnemonic, file.has_submenu), ("File", Some('F'), true));
+        assert_eq!(
+            (file.label.as_str(), file.mnemonic, file.has_submenu),
+            ("File", Some('F'), true)
+        );
         let new = &file.children[0];
         assert_eq!(new.label, "New");
         assert_eq!(new.shortcut.as_ref().unwrap().display(), "Ctrl+N");
@@ -360,7 +535,11 @@ mod tests {
         assert_eq!(file.children[3].toggle, Toggle::Radio(false));
         assert!(!file.children[4].enabled);
         assert!(!file.children[5].visible);
-        assert_eq!(file.visible_children().len(), 5, "the hidden item is skipped");
+        assert_eq!(
+            file.visible_children().len(),
+            5,
+            "the hidden item is skipped"
+        );
     }
 
     #[test]
@@ -374,20 +553,39 @@ mod tests {
     #[test]
     fn indeterminate_and_unknown_toggles() {
         let mut item = MenuItem::new(1, "x");
-        apply_properties(&mut item, &props(vec![("toggle-type", "checkmark".into()), ("toggle-state", (-1i32).into())]));
+        apply_properties(
+            &mut item,
+            &props(vec![
+                ("toggle-type", "checkmark".into()),
+                ("toggle-state", (-1i32).into()),
+            ]),
+        );
         assert_eq!(item.toggle, Toggle::Indeterminate);
         apply_properties(&mut item, &props(vec![("toggle-type", "".into())]));
         assert_eq!(item.toggle, Toggle::None);
-        apply_properties(&mut item, &props(vec![("toggle-type", "radio".into()), ("toggle-state", 1i32.into())]));
+        apply_properties(
+            &mut item,
+            &props(vec![
+                ("toggle-type", "radio".into()),
+                ("toggle-state", 1i32.into()),
+            ]),
+        );
         assert_eq!(item.toggle, Toggle::Radio(true));
         apply_properties(&mut item, &props(vec![("toggle-state", 0i32.into())]));
-        assert_eq!(item.toggle, Toggle::Radio(false), "a state update keeps the toggle kind");
+        assert_eq!(
+            item.toggle,
+            Toggle::Radio(false),
+            "a state update keeps the toggle kind"
+        );
     }
 
     #[test]
     fn icon_data_is_copied() {
         let mut item = MenuItem::new(1, "x");
-        apply_properties(&mut item, &props(vec![("icon-data", vec![137u8, 80, 78, 71].into())]));
+        apply_properties(
+            &mut item,
+            &props(vec![("icon-data", vec![137u8, 80, 78, 71].into())]),
+        );
         assert_eq!(item.icon_data.as_deref(), Some(&[137u8, 80, 78, 71][..]));
         apply_properties(&mut item, &props(vec![("icon-name", "".into())]));
         assert_eq!(item.icon_name, None);
@@ -396,8 +594,20 @@ mod tests {
     #[test]
     fn property_updates_and_removals() {
         let mut root = parse_layout(&sample()).unwrap();
-        let updated = vec![(2, props(vec![("label", "New _Tab".into()), ("enabled", false.into())])), (99, props(vec![("label", "ghost".into())]))];
-        let removed = vec![(2, vec!["enabled".to_string(), "icon-name".to_string()]), (4, vec!["toggle-state".to_string()])];
+        let updated = vec![
+            (
+                2,
+                props(vec![
+                    ("label", "New _Tab".into()),
+                    ("enabled", false.into()),
+                ]),
+            ),
+            (99, props(vec![("label", "ghost".into())])),
+        ];
+        let removed = vec![
+            (2, vec!["enabled".to_string(), "icon-name".to_string()]),
+            (4, vec!["toggle-state".to_string()]),
+        ];
         apply_properties_update(&mut root, &updated, &removed);
         let new = root.find(ItemId(2)).unwrap();
         assert_eq!(new.label, "New Tab");
@@ -419,14 +629,21 @@ mod tests {
 
     #[test]
     fn malformed_children_are_errors() {
-        let bad = (0, HashMap::new(), vec![OwnedValue::try_from(Value::from(5i32)).unwrap()]);
+        let bad = (
+            0,
+            HashMap::new(),
+            vec![OwnedValue::try_from(Value::from(5i32)).unwrap()],
+        );
         assert!(matches!(parse_layout(&bad), Err(ParseError::NotAStructure)));
         let short = {
             use zbus::zvariant::StructureBuilder;
             let st = StructureBuilder::new().add_field(1i32).build().unwrap();
             OwnedValue::try_from(Value::Structure(st)).unwrap()
         };
-        assert!(matches!(parse_layout(&(0, HashMap::new(), vec![short])), Err(ParseError::BadNode(_))));
+        assert!(matches!(
+            parse_layout(&(0, HashMap::new(), vec![short])),
+            Err(ParseError::BadNode(_))
+        ));
     }
 
     #[test]

@@ -51,7 +51,8 @@ pub const DRAG_START_THRESHOLD: f64 = 5.0;
 /// Whether `pointer` has left the box of [`DRAG_START_THRESHOLD`] around `press`, so the press
 /// becomes a drag (the strictness of the comparison is).
 pub fn drag_started(press: Point, pointer: Point) -> bool {
-    (pointer.x - press.x).abs() > DRAG_START_THRESHOLD || (pointer.y - press.y).abs() > DRAG_START_THRESHOLD
+    (pointer.x - press.x).abs() > DRAG_START_THRESHOLD
+        || (pointer.y - press.y).abs() > DRAG_START_THRESHOLD
 }
 
 /// Keyboard modifiers. `super_key` is the compositor's primary shortcut modifier.
@@ -64,10 +65,20 @@ pub struct Modifiers {
 }
 
 impl Modifiers {
-    pub const NONE: Modifiers = Modifiers { shift: false, ctrl: false, alt: false, super_key: false };
+    pub const NONE: Modifiers = Modifiers {
+        shift: false,
+        ctrl: false,
+        alt: false,
+        super_key: false,
+    };
 
     pub const fn new(shift: bool, ctrl: bool, alt: bool, super_key: bool) -> Self {
-        Self { shift, ctrl, alt, super_key }
+        Self {
+            shift,
+            ctrl,
+            alt,
+            super_key,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -76,7 +87,10 @@ impl Modifiers {
 
     /// Every modifier set in `required` is also set in `self`.
     pub fn contains(&self, required: Modifiers) -> bool {
-        (!required.shift || self.shift) && (!required.ctrl || self.ctrl) && (!required.alt || self.alt) && (!required.super_key || self.super_key)
+        (!required.shift || self.shift)
+            && (!required.ctrl || self.ctrl)
+            && (!required.alt || self.alt)
+            && (!required.super_key || self.super_key)
     }
 }
 
@@ -102,10 +116,20 @@ mod tests {
 
     #[test]
     fn modifier_subset() {
-        let held = Modifiers { ctrl: true, alt: true, ..Default::default() };
-        assert!(held.contains(Modifiers { ctrl: true, ..Default::default() }));
+        let held = Modifiers {
+            ctrl: true,
+            alt: true,
+            ..Default::default()
+        };
+        assert!(held.contains(Modifiers {
+            ctrl: true,
+            ..Default::default()
+        }));
         assert!(held.contains(Modifiers::NONE));
-        assert!(!held.contains(Modifiers { shift: true, ..Default::default() }));
+        assert!(!held.contains(Modifiers {
+            shift: true,
+            ..Default::default()
+        }));
         assert!(Modifiers::NONE.is_empty() && !held.is_empty());
     }
 }

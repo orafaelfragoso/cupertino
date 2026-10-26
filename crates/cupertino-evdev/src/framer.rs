@@ -5,7 +5,9 @@ use crate::bitset::BitSet;
 use crate::codes::*;
 use crate::error::FrameError;
 use crate::event::InputEvent;
-use crate::frame::{AbsPoint, Contact, Frame, KeyEvent, KeyState, Motion, Switch, SwitchEvent, Tool, Wheel};
+use crate::frame::{
+    AbsPoint, Contact, Frame, KeyEvent, KeyState, Motion, Switch, SwitchEvent, Tool, Wheel,
+};
 use crate::info::DeviceInfo;
 
 /// What the framer needs to know about a device, derived once from its [`DeviceInfo`].
@@ -39,11 +41,15 @@ impl Layout {
                 .ok()
                 .filter(|&count| count > 0)
                 .ok_or(FrameError::EmptySlotRange)?,
-            None if info.abs(ABS_MT_POSITION_X).is_some() => return Err(FrameError::MultitouchWithoutSlots),
+            None if info.abs(ABS_MT_POSITION_X).is_some() => {
+                return Err(FrameError::MultitouchWithoutSlots)
+            }
             None => 0,
         };
         if slot_count > 0
-            && [ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_TRACKING_ID].iter().any(|&code| info.abs(code).is_none())
+            && [ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_TRACKING_ID]
+                .iter()
+                .any(|&code| info.abs(code).is_none())
         {
             return Err(FrameError::MultitouchWithoutPosition);
         }
@@ -56,7 +62,9 @@ impl Layout {
             has_tool_type: info.abs(ABS_MT_TOOL_TYPE).is_some(),
             hi_res_vertical: info.rel_axes.contains(REL_WHEEL_HI_RES),
             hi_res_horizontal: info.rel_axes.contains(REL_HWHEEL_HI_RES),
-            has_finger_tools: FINGER_TOOLS.iter().any(|&(code, _)| info.keys.contains(code)),
+            has_finger_tools: FINGER_TOOLS
+                .iter()
+                .any(|&(code, _)| info.keys.contains(code)),
         })
     }
 
@@ -84,7 +92,12 @@ impl Layout {
             (self.has_touch_minor, ABS_MT_TOUCH_MINOR),
             (self.has_tool_type, ABS_MT_TOOL_TYPE),
         ];
-        codes.extend(optional.into_iter().filter(|&(present, _)| present).map(|(_, code)| code));
+        codes.extend(
+            optional
+                .into_iter()
+                .filter(|&(present, _)| present)
+                .map(|(_, code)| code),
+        );
         codes
     }
 }
@@ -99,7 +112,10 @@ const FINGER_TOOLS: [(u16, u8); 5] = [
 ];
 
 fn finger_tool_count(code: u16) -> Option<u8> {
-    FINGER_TOOLS.iter().find(|&&(tool, _)| tool == code).map(|&(_, count)| count)
+    FINGER_TOOLS
+        .iter()
+        .find(|&&(tool, _)| tool == code)
+        .map(|&(_, count)| count)
 }
 
 /// Per-axis values of every slot, as `EVIOCGMTSLOTS` returns them.
@@ -134,9 +150,17 @@ impl Snapshot {
     }
 
     fn slot_values(&self, code: u16, slot_count: u32) -> Result<&[i32], FrameError> {
-        let axis = self.mt.iter().find(|axis| axis.code == code).ok_or(FrameError::MissingSnapshotAxis { code })?;
+        let axis = self
+            .mt
+            .iter()
+            .find(|axis| axis.code == code)
+            .ok_or(FrameError::MissingSnapshotAxis { code })?;
         if axis.values.len() != slot_count as usize {
-            return Err(FrameError::SnapshotSlotCount { code, actual: axis.values.len(), expected: slot_count });
+            return Err(FrameError::SnapshotSlotCount {
+                code,
+                actual: axis.values.len(),
+                expected: slot_count,
+            });
         }
         Ok(&axis.values)
     }
@@ -252,13 +276,17 @@ impl Framer {
         if self.dropping {
             if event.kind == EV_SYN && event.code == SYN_REPORT {
                 self.dropping = false;
-                return Ok(Some(FramerOutput::ResyncNeeded { time_us: event.time_us() }));
+                return Ok(Some(FramerOutput::ResyncNeeded {
+                    time_us: event.time_us(),
+                }));
             }
             return Ok(None);
         }
         match event.kind {
             EV_SYN => match event.code {
-                SYN_REPORT => Ok(Some(FramerOutput::Frame(self.report(event.time_us(), false)?))),
+                SYN_REPORT => Ok(Some(FramerOutput::Frame(
+                    self.report(event.time_us(), false)?,
+                ))),
                 SYN_MT_REPORT => Err(FrameError::ProtocolA),
                 _ => Ok(None),
             },
@@ -274,15 +302,26 @@ impl Framer {
     /// Replaces the framer's state with `snapshot` and returns a frame marked `resynced`: its `keys` and `switches`
     /// are the transitions needed to get from the old state to the new one (stuck keys come out as releases), and its
     /// contacts, buttons and pointer are the device's state now. Any partial frame is discarded.
-    pub fn apply_snapshot(&mut self, snapshot: &Snapshot, time_us: i64) -> Result<Frame, FrameError> {
+    pub fn apply_snapshot(
+        &mut self,
+        snapshot: &Snapshot,
+        time_us: i64,
+    ) -> Result<Frame, FrameError> {
         let layout = self.layout;
         // Validate and decode everything before touching state, so a bad snapshot leaves the framer unchanged.
         let abs_point = if layout.has_abs_xy {
-            Some(AbsPoint { x: snapshot.abs_value(ABS_X)?, y: snapshot.abs_value(ABS_Y)? })
+            Some(AbsPoint {
+                x: snapshot.abs_value(ABS_X)?,
+                y: snapshot.abs_value(ABS_Y)?,
+            })
         } else {
             None
         };
-        let (slots, current_slot) = if layout.slot_count > 0 { self.decode_slots(snapshot)? } else { (Vec::new(), 0) };
+        let (slots, current_slot) = if layout.slot_count > 0 {
+            self.decode_slots(snapshot)?
+        } else {
+            (Vec::new(), 0)
+        };
 
         let mut pending = Pending::default();
         for code in 0..=KEY_MAX {
@@ -292,7 +331,11 @@ impl Framer {
                 continue;
             }
             self.pressed.insert(code, now);
-            let state = if now { KeyState::Pressed } else { KeyState::Released };
+            let state = if now {
+                KeyState::Pressed
+            } else {
+                KeyState::Released
+            };
             pending.keys.push(KeyEvent { code, state });
         }
         self.finger_count = FINGER_TOOLS
@@ -325,7 +368,10 @@ impl Framer {
         let current_slot = usize::try_from(current)
             .ok()
             .filter(|&slot| slot < count as usize)
-            .ok_or(FrameError::SlotOutOfRange { slot: current, slot_count: count })?;
+            .ok_or(FrameError::SlotOutOfRange {
+                slot: current,
+                slot_count: count,
+            })?;
         let ids = snapshot.slot_values(ABS_MT_TRACKING_ID, count)?;
         let xs = snapshot.slot_values(ABS_MT_POSITION_X, count)?;
         let ys = snapshot.slot_values(ABS_MT_POSITION_Y, count)?;
@@ -347,7 +393,8 @@ impl Framer {
             if id == -1 {
                 continue;
             }
-            slot.tracking_id = Some(u32::try_from(id).map_err(|_| FrameError::InvalidTrackingId { value: id })?);
+            slot.tracking_id =
+                Some(u32::try_from(id).map_err(|_| FrameError::InvalidTrackingId { value: id })?);
             slot.x = xs[index];
             slot.y = ys[index];
             slot.pressure = pressures.map_or(0, |values| values[index]);
@@ -397,15 +444,23 @@ impl Framer {
         match code {
             REL_X => pending.motion.dx = pending.motion.dx.saturating_add(value),
             REL_Y => pending.motion.dy = pending.motion.dy.saturating_add(value),
-            REL_WHEEL => pending.legacy_wheel.vertical = pending.legacy_wheel.vertical.saturating_add(value),
-            REL_HWHEEL => pending.legacy_wheel.horizontal = pending.legacy_wheel.horizontal.saturating_add(value),
+            REL_WHEEL => {
+                pending.legacy_wheel.vertical = pending.legacy_wheel.vertical.saturating_add(value)
+            }
+            REL_HWHEEL => {
+                pending.legacy_wheel.horizontal =
+                    pending.legacy_wheel.horizontal.saturating_add(value)
+            }
             REL_WHEEL_HI_RES if self.layout.hi_res_vertical => {
                 pending.hi_res_wheel.vertical = pending.hi_res_wheel.vertical.saturating_add(value)
             }
             REL_HWHEEL_HI_RES if self.layout.hi_res_horizontal => {
-                pending.hi_res_wheel.horizontal = pending.hi_res_wheel.horizontal.saturating_add(value)
+                pending.hi_res_wheel.horizontal =
+                    pending.hi_res_wheel.horizontal.saturating_add(value)
             }
-            REL_WHEEL_HI_RES | REL_HWHEEL_HI_RES => return Err(FrameError::UnexpectedEvent { kind: EV_REL, code }),
+            REL_WHEEL_HI_RES | REL_HWHEEL_HI_RES => {
+                return Err(FrameError::UnexpectedEvent { kind: EV_REL, code })
+            }
             _ => {}
         }
         Ok(())
@@ -432,10 +487,15 @@ impl Framer {
                 self.current_slot = usize::try_from(value)
                     .ok()
                     .filter(|&slot| slot < slot_count as usize)
-                    .ok_or(FrameError::SlotOutOfRange { slot: value, slot_count })?;
+                    .ok_or(FrameError::SlotOutOfRange {
+                        slot: value,
+                        slot_count,
+                    })?;
             }
-            ABS_MT_TRACKING_ID | ABS_MT_POSITION_X | ABS_MT_POSITION_Y | ABS_MT_PRESSURE | ABS_MT_TOUCH_MAJOR
-            | ABS_MT_TOUCH_MINOR | ABS_MT_TOOL_TYPE => self.mt_axis(code, value)?,
+            ABS_MT_TRACKING_ID | ABS_MT_POSITION_X | ABS_MT_POSITION_Y | ABS_MT_PRESSURE
+            | ABS_MT_TOUCH_MAJOR | ABS_MT_TOUCH_MINOR | ABS_MT_TOOL_TYPE => {
+                self.mt_axis(code, value)?
+            }
             _ => {}
         }
         Ok(())
@@ -541,7 +601,11 @@ impl Framer {
             time_us,
             resynced,
             keys: pending.keys,
-            held_buttons: self.pressed.iter().filter(|code| is_button(*code)).collect(),
+            held_buttons: self
+                .pressed
+                .iter()
+                .filter(|code| is_button(*code))
+                .collect(),
             motion: pending.motion,
             wheel,
             abs_pointer: layout.has_abs_xy.then_some(self.abs_point),

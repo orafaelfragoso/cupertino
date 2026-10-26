@@ -55,7 +55,11 @@ impl CubicBezier {
         t = x;
         while hi - lo > 1e-9 {
             let v = Self::sample(ax, bx, cx, t);
-            if v < x { lo = t } else { hi = t }
+            if v < x {
+                lo = t
+            } else {
+                hi = t
+            }
             t = 0.5 * (lo + hi);
         }
         t
@@ -94,8 +98,14 @@ pub enum TimingPreset {
 }
 
 impl TimingPreset {
-    pub const TABLE: [TimingPreset; 6] =
-        [Self::Ease, Self::Linear, Self::EaseIn, Self::EaseOut, Self::EaseInOut, Self::Spring];
+    pub const TABLE: [TimingPreset; 6] = [
+        Self::Ease,
+        Self::Linear,
+        Self::EaseIn,
+        Self::EaseOut,
+        Self::EaseInOut,
+        Self::Spring,
+    ];
 
     pub fn from_index(i: usize) -> Option<Self> {
         Self::TABLE.get(i).copied()
@@ -139,7 +149,11 @@ impl TimingPreset {
     /// absolute time and settles by itself).
     pub fn sample(self, elapsed: f64, duration: f64) -> f64 {
         match self.bezier() {
-            Some(b) => b.eval(if duration <= 0.0 { 1.0 } else { elapsed / duration }),
+            Some(b) => b.eval(if duration <= 0.0 {
+                1.0
+            } else {
+                elapsed / duration
+            }),
             None => Spring::new(SpringParams::default()).value(elapsed),
         }
     }
@@ -157,7 +171,12 @@ mod tests {
     use super::*;
     #[test]
     fn endpoints_and_linear() {
-        for f in [CubicBezier::DEFAULT, CubicBezier::EASE_IN, CubicBezier::EASE_OUT, CubicBezier::EASE_IN_EASE_OUT] {
+        for f in [
+            CubicBezier::DEFAULT,
+            CubicBezier::EASE_IN,
+            CubicBezier::EASE_OUT,
+            CubicBezier::EASE_IN_EASE_OUT,
+        ] {
             assert_eq!(f.eval(0.0), 0.0);
             assert_eq!(f.eval(1.0), 1.0);
         }
@@ -172,7 +191,13 @@ mod tests {
     #[test]
     fn preset_table_matches_recovered_values() {
         assert_eq!(TimingPreset::TABLE.len(), 6);
-        let want = [(0.25, 0.1, 0.25, 1.0), (0.0, 0.0, 1.0, 1.0), (0.42, 0.0, 1.0, 1.0), (0.0, 0.0, 0.58, 1.0), (0.42, 0.0, 0.58, 1.0)];
+        let want = [
+            (0.25, 0.1, 0.25, 1.0),
+            (0.0, 0.0, 1.0, 1.0),
+            (0.42, 0.0, 1.0, 1.0),
+            (0.0, 0.0, 0.58, 1.0),
+            (0.42, 0.0, 0.58, 1.0),
+        ];
         for (i, w) in want.iter().enumerate() {
             let b = TimingPreset::from_index(i).unwrap().bezier().unwrap();
             assert_eq!((b.x1, b.y1, b.x2, b.y2), *w);
@@ -201,7 +226,10 @@ mod tests {
         let t: f64 = 0.3;
         let want = 1.0 - (-5.0 * t).exp() * ((wd * t).cos() + 0.5 * 10.0 / wd * (wd * t).sin());
         assert!((sp.sample(t, 1.0) - want).abs() < 1e-9);
-        assert!(matches!(TimingPreset::EaseIn.curve(0.2), Curve::Timed { .. }));
+        assert!(matches!(
+            TimingPreset::EaseIn.curve(0.2),
+            Curve::Timed { .. }
+        ));
         assert!(matches!(sp.curve(0.2), Curve::Spring(_)));
     }
 

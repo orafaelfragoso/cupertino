@@ -36,7 +36,12 @@ impl Switcher {
     /// or a selection outside it).
     pub fn new(apps: Vec<String>, selected: usize, now: f64) -> Result<Self, &'static str> {
         check(&apps, selected)?;
-        Ok(Self { apps, selected, opened_at: now, closed_at: None })
+        Ok(Self {
+            apps,
+            selected,
+            opened_at: now,
+            closed_at: None,
+        })
     }
 
     pub fn apps(&self) -> &[String] {
@@ -77,7 +82,9 @@ impl Switcher {
 
     /// Panel opacity: 1 until the fade starts, then `1 - ease(t)` over [`HIDE_DURATION`].
     pub fn alpha(&self, now: f64) -> f64 {
-        self.closed_at.map_or(1.0, |at| 1.0 - CubicBezier::EASE_IN_EASE_OUT.eval(((now - at) / HIDE_DURATION).clamp(0.0, 1.0)))
+        self.closed_at.map_or(1.0, |at| {
+            1.0 - CubicBezier::EASE_IN_EASE_OUT.eval(((now - at) / HIDE_DURATION).clamp(0.0, 1.0))
+        })
     }
 
     /// Whether the fade-out has finished and the panel can go.
@@ -161,11 +168,23 @@ impl SwitcherLayout {
         let n32 = n.max(1) as u32;
         let avail = (w - 2.0 * Self::INSET_X - Self::DISPLAY_MARGIN).max(0.0) as u32;
         let gaps = 5 * (n32 - 1);
-        let tile = if Self::MAX_TILE * n32 + gaps <= avail { Self::MAX_TILE } else { avail.saturating_sub(gaps) / n32 };
+        let tile = if Self::MAX_TILE * n32 + gaps <= avail {
+            Self::MAX_TILE
+        } else {
+            avail.saturating_sub(gaps) / n32
+        };
         let tile = f64::from(tile);
         let pw = f64::from(n32) * tile + f64::from(gaps) + 2.0 * Self::INSET_X;
         let ph = tile + 2.0 * Self::INSET_Y;
-        Self { panel: Rect::new((w / 2.0 - pw / 2.0).trunc(), (h / 2.0 - ph / 2.0).trunc(), pw, ph), tile }
+        Self {
+            panel: Rect::new(
+                (w / 2.0 - pw / 2.0).trunc(),
+                (h / 2.0 - ph / 2.0).trunc(),
+                pw,
+                ph,
+            ),
+            tile,
+        }
     }
 
     pub fn item(&self, i: usize) -> Rect {
@@ -188,8 +207,16 @@ impl SwitcherLayout {
     /// 3 pt above the panel bottom.
     pub fn label(&self, i: usize, text_width: f64) -> Rect {
         let w = (text_width + Self::LABEL_EXTRA_WIDTH).min(self.panel.w - 2.0 * Self::INSET_X);
-        let x = (self.selection(i).cx() - w / 2.0).trunc().clamp(self.panel.x + Self::INSET_X, self.panel.right() - Self::INSET_X - w);
-        Rect::new(x, self.panel.bottom() - Self::LABEL_BOTTOM - Self::LABEL_HEIGHT, w, Self::LABEL_HEIGHT)
+        let x = (self.selection(i).cx() - w / 2.0).trunc().clamp(
+            self.panel.x + Self::INSET_X,
+            self.panel.right() - Self::INSET_X - w,
+        );
+        Rect::new(
+            x,
+            self.panel.bottom() - Self::LABEL_BOTTOM - Self::LABEL_HEIGHT,
+            w,
+            Self::LABEL_HEIGHT,
+        )
     }
 
     /// Selection highlight fill. Light: gray 0.75 at layer opacity 0.65 (the linear-burn
@@ -208,7 +235,11 @@ impl SwitcherLayout {
     /// Label colour: the gray the label's compositing leaves over the panel's fill gray
     /// (approximate the same way as [`Self::selection_fill`]).
     pub fn label_color(dark: bool) -> [f32; 4] {
-        let (mode, i) = if dark { (Compositing::PlusLighter, 1) } else { (Compositing::PlusDarker, 0) };
+        let (mode, i) = if dark {
+            (Compositing::PlusLighter, 1)
+        } else {
+            (Compositing::PlusDarker, 0)
+        };
         let gray = mode.over(Self::PANEL_FILL_GRAY[i], Self::LABEL_GRAY[i]);
         [gray, gray, gray, 1.0]
     }
@@ -256,8 +287,16 @@ mod tests {
         let l = SwitcherLayout::new(3, 1440.0, 900.0);
         assert_eq!(l.item(1).x - l.item(0).right(), 5.0);
         assert_eq!(l.hit(l.item(2).center(), 3), Some(2));
-        assert_eq!(l.hit(Point::new(l.item(0).right() + 2.0, l.item(0).cy()), 3), None, "the gap is no tile");
-        assert_eq!(l.hit(Point::new(l.panel.x + 5.0, l.item(0).cy()), 3), None, "nor is the inset");
+        assert_eq!(
+            l.hit(Point::new(l.item(0).right() + 2.0, l.item(0).cy()), 3),
+            None,
+            "the gap is no tile"
+        );
+        assert_eq!(
+            l.hit(Point::new(l.panel.x + 5.0, l.item(0).cy()), 3),
+            None,
+            "nor is the inset"
+        );
     }
 
     #[test]
@@ -275,7 +314,10 @@ mod tests {
         assert_eq!(s.alpha(11.0), 1.0, "no fade before the commit");
         s.close(11.0);
         assert_eq!(s.alpha(11.0), 1.0);
-        assert!((s.alpha(11.125) - 0.5).abs() < 1e-9, "the curve is symmetric about the midpoint");
+        assert!(
+            (s.alpha(11.125) - 0.5).abs() < 1e-9,
+            "the curve is symmetric about the midpoint"
+        );
         assert!(s.alpha(11.0625) > 0.85, "ease-in: slow start");
         assert!(!s.is_gone(11.249));
         assert!(s.is_gone(11.25));
@@ -309,8 +351,16 @@ mod tests {
         assert_eq!(label.bottom(), l.panel.bottom() - 3.0);
         assert_eq!(label.x, (l.selection(1).cx() - 30.5).trunc());
         let first = l.label(0, 400.0);
-        assert_eq!(first.x, l.panel.x + 23.0, "a wide label is pushed inside the left inset");
-        assert_eq!(l.label(2, 10_000.0).w, l.panel.w - 46.0, "and never wider than the panel content");
+        assert_eq!(
+            first.x,
+            l.panel.x + 23.0,
+            "a wide label is pushed inside the left inset"
+        );
+        assert_eq!(
+            l.label(2, 10_000.0).w,
+            l.panel.w - 46.0,
+            "and never wider than the panel content"
+        );
     }
 
     #[test]
@@ -327,7 +377,10 @@ mod tests {
     #[test]
     fn hovering_selects_only_after_the_pointer_left_the_3_pt_box() {
         let mut gate = HoverGate::default();
-        assert!(!gate.moved(Point::new(100.0, 100.0)), "the first position is the box's centre");
+        assert!(
+            !gate.moved(Point::new(100.0, 100.0)),
+            "the first position is the box's centre"
+        );
         assert!(!gate.moved(Point::new(103.0, 97.0)), "3 pt is still inside");
         assert!(gate.moved(Point::new(103.5, 100.0)));
         assert!(gate.moved(Point::new(100.0, 100.0)), "armed stays armed");

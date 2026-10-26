@@ -288,10 +288,17 @@ fn missing(message: &'static str, attribute: &'static str) -> ParseError {
     ParseError::MissingAttribute { message, attribute }
 }
 
-fn family_header<'a, const N: usize>(payload: &'a [u8], what: &'static str) -> std::result::Result<([u8; N], &'a [u8]), ParseError> {
+fn family_header<'a, const N: usize>(
+    payload: &'a [u8],
+    what: &'static str,
+) -> std::result::Result<([u8; N], &'a [u8]), ParseError> {
     match payload.split_first_chunk::<N>() {
         Some((header, rest)) => Ok((*header, rest)),
-        None => Err(ParseError::Truncated { what, needed: N, have: payload.len() }),
+        None => Err(ParseError::Truncated {
+            what,
+            needed: N,
+            have: payload.len(),
+        }),
     }
 }
 
@@ -300,8 +307,11 @@ pub fn parse_link(payload: &[u8]) -> std::result::Result<Link, ParseError> {
     let (header, rest) = family_header::<16>(payload, "ifinfomsg")?;
     let hardware_type = u16::from_ne_bytes([header[2], header[3]]);
     let index = u32::from_ne_bytes([header[4], header[5], header[6], header[7]]);
-    let flags = LinkFlags(u32::from_ne_bytes([header[8], header[9], header[10], header[11]]));
-    let (mut name, mut oper_state, mut mac, mut mtu, mut info_kind, mut master) = (None, OperState::Unknown, None, None, None, None);
+    let flags = LinkFlags(u32::from_ne_bytes([
+        header[8], header[9], header[10], header[11],
+    ]));
+    let (mut name, mut oper_state, mut mac, mut mtu, mut info_kind, mut master) =
+        (None, OperState::Unknown, None, None, None, None);
     for attr in attrs(rest) {
         let attr = attr?;
         match attr.ty {
@@ -321,7 +331,17 @@ pub fn parse_link(payload: &[u8]) -> std::result::Result<Link, ParseError> {
             _ => {}
         }
     }
-    Ok(Link { index, name: name.ok_or_else(|| missing("link", "IFLA_IFNAME"))?, hardware_type, flags, oper_state, mac, mtu, info_kind, master })
+    Ok(Link {
+        index,
+        name: name.ok_or_else(|| missing("link", "IFLA_IFNAME"))?,
+        hardware_type,
+        flags,
+        oper_state,
+        mac,
+        mtu,
+        info_kind,
+        master,
+    })
 }
 
 /// Decodes the payload of an `RTM_NEWADDR` or `RTM_DELADDR`: an `ifaddrmsg` and attributes.
@@ -344,8 +364,18 @@ pub fn parse_address(payload: &[u8]) -> std::result::Result<Option<Address>, Par
             _ => {}
         }
     }
-    let address = local.or(address).ok_or_else(|| missing("address", "IFA_ADDRESS"))?;
-    Ok(Some(Address { index, family, prefix_len, scope, flags, address, label }))
+    let address = local
+        .or(address)
+        .ok_or_else(|| missing("address", "IFA_ADDRESS"))?;
+    Ok(Some(Address {
+        index,
+        family,
+        prefix_len,
+        scope,
+        flags,
+        address,
+        label,
+    }))
 }
 
 /// Decodes the payload of an `RTM_NEWROUTE` or `RTM_DELROUTE`: an `rtmsg` and attributes.
@@ -356,8 +386,10 @@ pub fn parse_route(payload: &[u8]) -> std::result::Result<Option<Route>, ParseEr
         return Ok(None);
     };
     let dst_len = header[1];
-    let (header_table, protocol, scope, route_type) = (header[4], header[5], Scope::from_raw(header[6]), header[7]);
-    let (mut destination, mut gateway, mut index, mut metric, mut preferred_source) = (None, None, None, None, None);
+    let (header_table, protocol, scope, route_type) =
+        (header[4], header[5], Scope::from_raw(header[6]), header[7]);
+    let (mut destination, mut gateway, mut index, mut metric, mut preferred_source) =
+        (None, None, None, None, None);
     let mut table = u32::from(header_table);
     for attr in attrs(rest) {
         let attr = attr?;
@@ -372,7 +404,19 @@ pub fn parse_route(payload: &[u8]) -> std::result::Result<Option<Route>, ParseEr
             _ => {}
         }
     }
-    Ok(Some(Route { family, destination, dst_len, gateway, index, metric, table, protocol, scope, route_type, preferred_source }))
+    Ok(Some(Route {
+        family,
+        destination,
+        dst_len,
+        gateway,
+        index,
+        metric,
+        table,
+        protocol,
+        scope,
+        route_type,
+        preferred_source,
+    }))
 }
 
 /// The messages of `raw` with type `ty`; `NLMSG_DONE` and acknowledgements are skipped.
@@ -390,7 +434,10 @@ fn payloads_of<'a>(raw: &'a [u8], ty: u16, origin: &'static str) -> Result<Vec<M
 /// Decodes a `RTM_GETLINK` dump.
 pub fn parse_links(raw: &[u8]) -> Result<Vec<Link>> {
     let origin = "RTM_GETLINK";
-    payloads_of(raw, RTM_NEWLINK, origin)?.iter().map(|message| parse_link(message.payload).map_err(Error::parse(origin))).collect()
+    payloads_of(raw, RTM_NEWLINK, origin)?
+        .iter()
+        .map(|message| parse_link(message.payload).map_err(Error::parse(origin)))
+        .collect()
 }
 
 /// Decodes a `RTM_GETADDR` dump.
@@ -485,8 +532,13 @@ fn address_body(change: &AddressChange) -> Body {
     // A /31 or /32 has no broadcast address.
     if let IpAddr::V4(address) = change.address {
         if change.prefix_len <= 30 {
-            let host_bits = u32::MAX.checked_shr(u32::from(change.prefix_len)).unwrap_or(0);
-            body.attr(IFA_BROADCAST, &Ipv4Addr::from(u32::from(address) | host_bits).octets());
+            let host_bits = u32::MAX
+                .checked_shr(u32::from(change.prefix_len))
+                .unwrap_or(0);
+            body.attr(
+                IFA_BROADCAST,
+                &Ipv4Addr::from(u32::from(address) | host_bits).octets(),
+            );
         }
     }
     body
@@ -499,7 +551,12 @@ fn route_body(change: &RouteChange) -> Body {
     header[1] = change.destination.map_or(0, |(_, length)| length);
     header[4] = TABLE_MAIN as u8;
     header[5] = change.protocol;
-    header[6] = if change.gateway.is_some() { Scope::Universe } else { Scope::Link }.to_raw();
+    header[6] = if change.gateway.is_some() {
+        Scope::Universe
+    } else {
+        Scope::Link
+    }
+    .to_raw();
     header[7] = ROUTE_UNICAST;
     let mut body = Body::new();
     body.header(&header);
@@ -524,28 +581,33 @@ pub struct RouteSocket {
 
 impl RouteSocket {
     pub fn open() -> Result<Self> {
-        Ok(Self { socket: Socket::open(None, 0, Mode::Blocking)? })
+        Ok(Self {
+            socket: Socket::open(None, 0, Mode::Blocking)?,
+        })
     }
 
     /// The raw reply of `RTM_GETLINK`, as the kernel wrote it. [`parse_links`] decodes it.
     pub fn dump_links_raw(&mut self) -> Result<Vec<u8>> {
         let mut body = Body::new();
         body.header(&[AF_UNSPEC; 16]);
-        self.socket.call("RTM_GETLINK", RTM_GETLINK, NLM_F_DUMP, body.as_bytes())
+        self.socket
+            .call("RTM_GETLINK", RTM_GETLINK, NLM_F_DUMP, body.as_bytes())
     }
 
     /// The raw reply of `RTM_GETADDR`. [`parse_addresses`] decodes it.
     pub fn dump_addresses_raw(&mut self) -> Result<Vec<u8>> {
         let mut body = Body::new();
         body.header(&[AF_UNSPEC; 8]);
-        self.socket.call("RTM_GETADDR", RTM_GETADDR, NLM_F_DUMP, body.as_bytes())
+        self.socket
+            .call("RTM_GETADDR", RTM_GETADDR, NLM_F_DUMP, body.as_bytes())
     }
 
     /// The raw reply of `RTM_GETROUTE`. [`parse_routes`] decodes it.
     pub fn dump_routes_raw(&mut self) -> Result<Vec<u8>> {
         let mut body = Body::new();
         body.header(&[AF_UNSPEC; 12]);
-        self.socket.call("RTM_GETROUTE", RTM_GETROUTE, NLM_F_DUMP, body.as_bytes())
+        self.socket
+            .call("RTM_GETROUTE", RTM_GETROUTE, NLM_F_DUMP, body.as_bytes())
     }
 
     pub fn dump_links(&mut self) -> Result<Vec<Link>> {
@@ -562,27 +624,62 @@ impl RouteSocket {
 
     /// Sets or clears `IFF_UP`. Needs `CAP_NET_ADMIN`.
     pub fn set_link_up(&mut self, index: u32, up: bool) -> Result<()> {
-        self.socket.call("RTM_NEWLINK", RTM_NEWLINK, 0, link_state_body(index, up).as_bytes()).map(drop)
+        self.socket
+            .call(
+                "RTM_NEWLINK",
+                RTM_NEWLINK,
+                0,
+                link_state_body(index, up).as_bytes(),
+            )
+            .map(drop)
     }
 
     /// Adds an address, or updates it when it exists. Needs `CAP_NET_ADMIN`.
     pub fn add_address(&mut self, change: &AddressChange) -> Result<()> {
-        self.socket.call("RTM_NEWADDR", RTM_NEWADDR, NLM_F_CREATE | NLM_F_REPLACE, address_body(change).as_bytes()).map(drop)
+        self.socket
+            .call(
+                "RTM_NEWADDR",
+                RTM_NEWADDR,
+                NLM_F_CREATE | NLM_F_REPLACE,
+                address_body(change).as_bytes(),
+            )
+            .map(drop)
     }
 
     /// Removes an address; `ENOENT` when it is not there. Needs `CAP_NET_ADMIN`.
     pub fn remove_address(&mut self, change: &AddressChange) -> Result<()> {
-        self.socket.call("RTM_DELADDR", RTM_DELADDR, 0, address_body(change).as_bytes()).map(drop)
+        self.socket
+            .call(
+                "RTM_DELADDR",
+                RTM_DELADDR,
+                0,
+                address_body(change).as_bytes(),
+            )
+            .map(drop)
     }
 
     /// Adds a route, or replaces the one with the same destination and metric. Needs `CAP_NET_ADMIN`.
     pub fn add_route(&mut self, change: &RouteChange) -> Result<()> {
-        self.socket.call("RTM_NEWROUTE", RTM_NEWROUTE, NLM_F_CREATE | NLM_F_REPLACE, route_body(change).as_bytes()).map(drop)
+        self.socket
+            .call(
+                "RTM_NEWROUTE",
+                RTM_NEWROUTE,
+                NLM_F_CREATE | NLM_F_REPLACE,
+                route_body(change).as_bytes(),
+            )
+            .map(drop)
     }
 
     /// Removes a route; `ESRCH` when it is not there. Needs `CAP_NET_ADMIN`.
     pub fn remove_route(&mut self, change: &RouteChange) -> Result<()> {
-        self.socket.call("RTM_DELROUTE", RTM_DELROUTE, 0, route_body(change).as_bytes()).map(drop)
+        self.socket
+            .call(
+                "RTM_DELROUTE",
+                RTM_DELROUTE,
+                0,
+                route_body(change).as_bytes(),
+            )
+            .map(drop)
     }
 }
 
@@ -607,12 +704,22 @@ pub struct RouteMonitor {
 impl RouteMonitor {
     /// Opens a non-blocking socket (`AsFd`, register it with the event loop).
     pub fn open() -> Result<Self> {
-        Ok(Self { socket: Socket::open(None, MONITOR_GROUPS, Mode::NonBlocking)? })
+        Ok(Self {
+            socket: Socket::open(None, MONITOR_GROUPS, Mode::NonBlocking)?,
+        })
     }
 
     pub fn drain(&self) -> Result<RouteEvents> {
-        let Drained { datagrams, overflowed, truncated } = self.socket.drain()?;
-        let mut events = RouteEvents { overflowed, truncated, ..RouteEvents::default() };
+        let Drained {
+            datagrams,
+            overflowed,
+            truncated,
+        } = self.socket.drain()?;
+        let mut events = RouteEvents {
+            overflowed,
+            truncated,
+            ..RouteEvents::default()
+        };
         for datagram in &datagrams {
             for message in messages(datagram) {
                 match message.and_then(|message| parse_event(&message)) {
@@ -644,7 +751,11 @@ mod tests {
         header[4..8].copy_from_slice(&2u32.to_ne_bytes());
         header[8..12].copy_from_slice(&(IFF_UP | IFF_RUNNING | IFF_LOWER_UP | 0x2).to_ne_bytes());
         let mut body = Body::new();
-        body.header(&header).attr_cstr(IFLA_IFNAME, "eth0").attr_u32(IFLA_MTU, 1500).attr(IFLA_OPERSTATE, &[6]).attr(IFLA_ADDRESS, &[2, 0, 0, 0, 0, 1]);
+        body.header(&header)
+            .attr_cstr(IFLA_IFNAME, "eth0")
+            .attr_u32(IFLA_MTU, 1500)
+            .attr(IFLA_OPERSTATE, &[6])
+            .attr(IFLA_ADDRESS, &[2, 0, 0, 0, 0, 1]);
         body.as_bytes().to_vec()
     }
 
@@ -667,9 +778,11 @@ mod tests {
         header[2..4].copy_from_slice(&1u16.to_ne_bytes());
         header[4..8].copy_from_slice(&9u32.to_ne_bytes());
         let mut body = Body::new();
-        body.header(&header).attr_cstr(IFLA_IFNAME, "veth0").nested(IFLA_LINKINFO, |info| {
-            info.attr_cstr(IFLA_INFO_KIND, "veth");
-        });
+        body.header(&header)
+            .attr_cstr(IFLA_IFNAME, "veth0")
+            .nested(IFLA_LINKINFO, |info| {
+                info.attr_cstr(IFLA_INFO_KIND, "veth");
+            });
         let link = parse_link(body.as_bytes()).unwrap();
         assert_eq!(link.info_kind.as_deref(), Some("veth"));
         assert_eq!(link.class(&[]), LinkClass::Virtual);
@@ -679,7 +792,13 @@ mod tests {
     fn a_link_without_a_name_is_an_error() {
         let mut body = Body::new();
         body.header(&[0; 16]);
-        assert_eq!(parse_link(body.as_bytes()), Err(ParseError::MissingAttribute { message: "link", attribute: "IFLA_IFNAME" }));
+        assert_eq!(
+            parse_link(body.as_bytes()),
+            Err(ParseError::MissingAttribute {
+                message: "link",
+                attribute: "IFLA_IFNAME"
+            })
+        );
     }
 
     #[test]
@@ -690,10 +809,16 @@ mod tests {
         header[2] = 0x80;
         header[4..8].copy_from_slice(&2u32.to_ne_bytes());
         let mut body = Body::new();
-        body.header(&header).attr(IFA_ADDRESS, &[10, 0, 0, 1]).attr(IFA_LOCAL, &[10, 0, 0, 9]).attr_cstr(IFA_LABEL, "eth0");
+        body.header(&header)
+            .attr(IFA_ADDRESS, &[10, 0, 0, 1])
+            .attr(IFA_LOCAL, &[10, 0, 0, 9])
+            .attr_cstr(IFA_LABEL, "eth0");
         let address = parse_address(body.as_bytes()).unwrap().unwrap();
         assert_eq!(address.address, IpAddr::V4(Ipv4Addr::new(10, 0, 0, 9)));
-        assert_eq!((address.prefix_len, address.flags, address.index), (24, 0x80, 2));
+        assert_eq!(
+            (address.prefix_len, address.flags, address.index),
+            (24, 0x80, 2)
+        );
         assert_eq!(address.label.as_deref(), Some("eth0"));
     }
 
@@ -704,7 +829,12 @@ mod tests {
         header[1] = 64;
         header[2] = 0x80;
         let mut body = Body::new();
-        body.header(&header).attr(IFA_ADDRESS, &[0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]).attr_u32(IFA_FLAGS, 0x1_0080 | 0x40);
+        body.header(&header)
+            .attr(
+                IFA_ADDRESS,
+                &[0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            )
+            .attr_u32(IFA_FLAGS, 0x1_0080 | 0x40);
         let address = parse_address(body.as_bytes()).unwrap().unwrap();
         assert!(address.is_tentative());
         assert_eq!(address.flags, 0x1_00c0);
@@ -728,11 +858,18 @@ mod tests {
         header[5] = PROTOCOL_DHCP;
         header[7] = ROUTE_UNICAST;
         let mut body = Body::new();
-        body.header(&header).attr(RTA_GATEWAY, &[10, 0, 0, 1]).attr_u32(RTA_OIF, 2).attr_u32(RTA_PRIORITY, 600).attr_u32(RTA_TABLE, TABLE_MAIN);
+        body.header(&header)
+            .attr(RTA_GATEWAY, &[10, 0, 0, 1])
+            .attr_u32(RTA_OIF, 2)
+            .attr_u32(RTA_PRIORITY, 600)
+            .attr_u32(RTA_TABLE, TABLE_MAIN);
         let route = parse_route(body.as_bytes()).unwrap().unwrap();
         assert!(route.is_default());
         assert_eq!(route.gateway, Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
-        assert_eq!((route.index, route.metric, route.protocol), (Some(2), Some(600), PROTOCOL_DHCP));
+        assert_eq!(
+            (route.index, route.metric, route.protocol),
+            (Some(2), Some(600), PROTOCOL_DHCP)
+        );
     }
 
     #[test]
@@ -751,14 +888,22 @@ mod tests {
         let mut raw = frame(RTM_NEWLINK, 2, 1, &eth0_payload());
         raw.extend(frame(crate::message::NLMSG_DONE, 2, 1, &0i32.to_ne_bytes()));
         let links = parse_links(&raw).unwrap();
-        assert_eq!(links.iter().map(|link| link.name.as_str()).collect::<Vec<_>>(), ["eth0"]);
+        assert_eq!(
+            links
+                .iter()
+                .map(|link| link.name.as_str())
+                .collect::<Vec<_>>(),
+            ["eth0"]
+        );
     }
 
     #[test]
     fn an_event_carries_its_direction() {
         let raw = frame(RTM_DELLINK, 0, 0, &eth0_payload());
         let message = messages(&raw).next().unwrap().unwrap();
-        assert!(matches!(parse_event(&message), Ok(Some(RouteEvent::LinkDeleted(link))) if link.index == 2));
+        assert!(
+            matches!(parse_event(&message), Ok(Some(RouteEvent::LinkDeleted(link))) if link.index == 2)
+        );
     }
 
     #[test]
@@ -769,21 +914,41 @@ mod tests {
         expected[8..12].copy_from_slice(&1u32.to_ne_bytes());
         expected[12..16].copy_from_slice(&1u32.to_ne_bytes());
         assert_eq!(body.as_bytes(), expected);
-        assert_eq!(&link_state_body(5, false).as_bytes()[8..16], [0, 0, 0, 0, 1, 0, 0, 0]);
+        assert_eq!(
+            &link_state_body(5, false).as_bytes()[8..16],
+            [0, 0, 0, 0, 1, 0, 0, 0]
+        );
     }
 
     #[test]
     fn a_v4_address_request_names_the_address_and_its_broadcast() {
-        let body = address_body(&AddressChange { index: 3, address: IpAddr::V4(Ipv4Addr::new(192, 168, 7, 20)), prefix_len: 24 });
+        let body = address_body(&AddressChange {
+            index: 3,
+            address: IpAddr::V4(Ipv4Addr::new(192, 168, 7, 20)),
+            prefix_len: 24,
+        });
         let mut expected = Body::new();
-        expected.header(&[AF_INET, 24, 0, 0, 3, 0, 0, 0]).attr(IFA_LOCAL, &[192, 168, 7, 20]).attr(IFA_ADDRESS, &[192, 168, 7, 20]).attr(IFA_BROADCAST, &[192, 168, 7, 255]);
+        expected
+            .header(&[AF_INET, 24, 0, 0, 3, 0, 0, 0])
+            .attr(IFA_LOCAL, &[192, 168, 7, 20])
+            .attr(IFA_ADDRESS, &[192, 168, 7, 20])
+            .attr(IFA_BROADCAST, &[192, 168, 7, 255]);
         assert_eq!(body, expected);
     }
 
     #[test]
     fn a_host_address_has_no_broadcast() {
-        let body = address_body(&AddressChange { index: 3, address: IpAddr::V4(Ipv4Addr::new(192, 168, 7, 20)), prefix_len: 32 });
-        assert_eq!(attrs(&body.as_bytes()[8..]).map(|attr| attr.unwrap().ty).collect::<Vec<_>>(), [IFA_LOCAL, IFA_ADDRESS]);
+        let body = address_body(&AddressChange {
+            index: 3,
+            address: IpAddr::V4(Ipv4Addr::new(192, 168, 7, 20)),
+            prefix_len: 32,
+        });
+        assert_eq!(
+            attrs(&body.as_bytes()[8..])
+                .map(|attr| attr.unwrap().ty)
+                .collect::<Vec<_>>(),
+            [IFA_LOCAL, IFA_ADDRESS]
+        );
     }
 
     #[test]
@@ -797,7 +962,24 @@ mod tests {
             protocol: PROTOCOL_DHCP,
         });
         let mut expected = Body::new();
-        expected.header(&[AF_INET, 0, 0, 0, 254, PROTOCOL_DHCP, 0, ROUTE_UNICAST, 0, 0, 0, 0]).attr(RTA_GATEWAY, &[10, 0, 0, 1]).attr_u32(RTA_OIF, 2).attr_u32(RTA_PRIORITY, 600);
+        expected
+            .header(&[
+                AF_INET,
+                0,
+                0,
+                0,
+                254,
+                PROTOCOL_DHCP,
+                0,
+                ROUTE_UNICAST,
+                0,
+                0,
+                0,
+                0,
+            ])
+            .attr(RTA_GATEWAY, &[10, 0, 0, 1])
+            .attr_u32(RTA_OIF, 2)
+            .attr_u32(RTA_PRIORITY, 600);
         assert_eq!(body, expected);
     }
 }

@@ -166,14 +166,19 @@ mod tests {
     #[test]
     fn button_size_classes_follow_the_control_table() {
         assert_eq!(DecorationMetrics::default().button_diameter, 12.0);
-        assert_eq!(DecorationMetrics::for_button_size(ControlSize::Small).button_diameter, 9.0);
+        assert_eq!(
+            DecorationMetrics::for_button_size(ControlSize::Small).button_diameter,
+            9.0
+        );
         assert_eq!(DecorationMetrics::default().button_art, 16.0);
     }
 
     #[test]
     fn a_unified_titlebar_is_taller_and_takes_no_frame_height() {
         let m = DecorationMetrics::default();
-        assert!(m.titlebar_height(TitlebarStyle::Unified) > m.titlebar_height(TitlebarStyle::Standard));
+        assert!(
+            m.titlebar_height(TitlebarStyle::Unified) > m.titlebar_height(TitlebarStyle::Standard)
+        );
         assert_eq!(m.titlebar_reserved(TitlebarStyle::Standard), 28.0);
         assert_eq!(m.titlebar_reserved(TitlebarStyle::Unified), 0.0);
     }

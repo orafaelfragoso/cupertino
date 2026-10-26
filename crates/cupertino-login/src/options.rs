@@ -44,23 +44,37 @@ impl Options {
             match arg.as_str() {
                 "--greeter" => greeter = true,
                 "--idle-timeout" => {
-                    let seconds = args.next().ok_or("--idle-timeout needs a number of seconds")?;
-                    let seconds: u64 = seconds.parse().map_err(|_| format!("{seconds:?} is not a number of seconds"))?;
+                    let seconds = args
+                        .next()
+                        .ok_or("--idle-timeout needs a number of seconds")?;
+                    let seconds: u64 = seconds
+                        .parse()
+                        .map_err(|_| format!("{seconds:?} is not a number of seconds"))?;
                     if seconds == 0 {
                         return Err("--idle-timeout must be at least one second".into());
                     }
                     idle_timeout = Some(Duration::from_secs(seconds));
                 }
                 "--retries-until-hint" => {
-                    let count = args.next().ok_or("--retries-until-hint needs a number of failed attempts")?;
-                    retries_until_hint = Some(count.parse::<u32>().map_err(|_| format!("{count:?} is not a number of failed attempts"))?);
+                    let count = args
+                        .next()
+                        .ok_or("--retries-until-hint needs a number of failed attempts")?;
+                    retries_until_hint =
+                        Some(count.parse::<u32>().map_err(|_| {
+                            format!("{count:?} is not a number of failed attempts")
+                        })?);
                 }
-                "--power-button-sleeps-system" => power_button_sleeps_system = Some(parse_flag(&arg, args.next())?),
+                "--power-button-sleeps-system" => {
+                    power_button_sleeps_system = Some(parse_flag(&arg, args.next())?)
+                }
                 _ => return Err(format!("unknown argument {arg}")),
             }
         }
         if greeter {
-            if idle_timeout.is_some() || retries_until_hint.is_some() || power_button_sleeps_system.is_some() {
+            if idle_timeout.is_some()
+                || retries_until_hint.is_some()
+                || power_button_sleeps_system.is_some()
+            {
                 return Err("--greeter takes no other option: the session manager supplies the settings of the login screen".into());
             }
             return Ok(Options::Greeter);
@@ -68,7 +82,8 @@ impl Options {
         Ok(Options::Session(SessionOptions {
             idle_timeout,
             retries_until_hint: retries_until_hint.unwrap_or(RETRIES_UNTIL_HINT_ABSENT),
-            power_button_sleeps_system: power_button_sleeps_system.unwrap_or(POWER_BUTTON_SLEEPS_SYSTEM_ABSENT),
+            power_button_sleeps_system: power_button_sleeps_system
+                .unwrap_or(POWER_BUTTON_SLEEPS_SYSTEM_ABSENT),
         }))
     }
 }
@@ -93,22 +108,53 @@ mod tests {
 
     #[test]
     fn no_arguments_run_the_session_without_an_idle_lock() {
-        assert_eq!(parse(&[]), Ok(Options::Session(SessionOptions { idle_timeout: None, retries_until_hint: 0, power_button_sleeps_system: false })));
-        assert_eq!(parse(&["--idle-timeout", "30"]), Ok(Options::Session(SessionOptions { idle_timeout: Some(Duration::from_secs(30)), retries_until_hint: 0, power_button_sleeps_system: false })));
+        assert_eq!(
+            parse(&[]),
+            Ok(Options::Session(SessionOptions {
+                idle_timeout: None,
+                retries_until_hint: 0,
+                power_button_sleeps_system: false
+            }))
+        );
+        assert_eq!(
+            parse(&["--idle-timeout", "30"]),
+            Ok(Options::Session(SessionOptions {
+                idle_timeout: Some(Duration::from_secs(30)),
+                retries_until_hint: 0,
+                power_button_sleeps_system: false
+            }))
+        );
         assert!(parse(&["--idle-timeout", "0"]).is_err());
     }
 
     #[test]
     fn the_hint_threshold_is_a_count() {
-        assert_eq!(parse(&["--retries-until-hint", "2"]), Ok(Options::Session(SessionOptions { idle_timeout: None, retries_until_hint: 2, power_button_sleeps_system: false })));
+        assert_eq!(
+            parse(&["--retries-until-hint", "2"]),
+            Ok(Options::Session(SessionOptions {
+                idle_timeout: None,
+                retries_until_hint: 2,
+                power_button_sleeps_system: false
+            }))
+        );
         assert!(parse(&["--retries-until-hint", "-1"]).is_err());
         assert!(parse(&["--retries-until-hint"]).is_err());
     }
 
     #[test]
     fn power_button_sleeps_system_is_a_flag_and_off_when_absent() {
-        assert_eq!(parse(&["--power-button-sleeps-system", "true"]), Ok(Options::Session(SessionOptions { idle_timeout: None, retries_until_hint: 0, power_button_sleeps_system: true })));
-        assert_eq!(parse(&["--power-button-sleeps-system", "false"]), parse(&[]));
+        assert_eq!(
+            parse(&["--power-button-sleeps-system", "true"]),
+            Ok(Options::Session(SessionOptions {
+                idle_timeout: None,
+                retries_until_hint: 0,
+                power_button_sleeps_system: true
+            }))
+        );
+        assert_eq!(
+            parse(&["--power-button-sleeps-system", "false"]),
+            parse(&[])
+        );
         assert!(parse(&["--power-button-sleeps-system", "1"]).is_err());
         assert!(parse(&["--power-button-sleeps-system"]).is_err());
     }
@@ -116,13 +162,22 @@ mod tests {
     #[test]
     fn the_greeter_takes_no_other_option() {
         assert_eq!(parse(&["--greeter"]), Ok(Options::Greeter));
-        for extra in [&["--idle-timeout", "5"][..], &["--retries-until-hint", "3"], &["--power-button-sleeps-system", "true"]] {
+        for extra in [
+            &["--idle-timeout", "5"][..],
+            &["--retries-until-hint", "3"],
+            &["--power-button-sleeps-system", "true"],
+        ] {
             let mut args = vec!["--greeter"];
             args.extend_from_slice(extra);
             assert!(parse(&args).is_err(), "{extra:?}");
         }
         // the settings the manager owns are no options at all
-        for gone in ["--user", "--session-command", "--hidden-users", "--restart-disabled"] {
+        for gone in [
+            "--user",
+            "--session-command",
+            "--hidden-users",
+            "--restart-disabled",
+        ] {
             assert!(parse(&["--greeter", gone, "x"]).is_err(), "{gone}");
         }
     }

@@ -6,14 +6,19 @@ use std::error::Error;
 use std::time::{Duration, Instant};
 
 use cupertino_assets::Assets;
-use cupertino_client::{key, Anchor, Backdrop, Button, Client, Connection, CursorLook, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig, Margin, OutputId, PointerEvent, SurfaceId};
+use cupertino_client::{
+    key, Anchor, Backdrop, Button, Client, Connection, CursorLook, Event, KeyboardInteractivity,
+    Layer, LayerSurfaceConfig, Margin, OutputId, PointerEvent, SurfaceId,
+};
 use cupertino_geometry::{Point, Rect};
 use cupertino_screenshot::image;
 use cupertino_screenshot::render::{OverlayView, Painter, Palette, ToolbarView};
 use cupertino_screenshot::session::{Key, Outcome, Pointer, Session, Style, Target};
 use cupertino_screenshot::settings::{Location, Mode, Settings};
 use cupertino_screenshot::toolbar::{self, Item, MenuRow, MENU_RADIUS, MENU_WIDTH};
-use cupertino_screenshot::values::{TOOLBAR_BOTTOM, TOOLBAR_MATERIAL, TOOLBAR_RADIUS, TOOLBAR_SIZE};
+use cupertino_screenshot::values::{
+    TOOLBAR_BOTTOM, TOOLBAR_MATERIAL, TOOLBAR_RADIUS, TOOLBAR_SIZE,
+};
 use cupertino_theme::{Appearance, Theme};
 use tiny_skia::Pixmap;
 
@@ -57,19 +62,26 @@ impl Options {
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--mode" => {
-                    let value = args.next().ok_or("--mode needs screen, selection or toolbar")?;
+                    let value = args
+                        .next()
+                        .ok_or("--mode needs screen, selection or toolbar")?;
                     mode = Some(match value.as_str() {
                         "screen" => StartMode::Screen,
                         "selection" => StartMode::Selection,
                         "toolbar" => StartMode::Toolbar,
-                        other => return Err(format!("{other:?} is not screen, selection or toolbar")),
+                        other => {
+                            return Err(format!("{other:?} is not screen, selection or toolbar"))
+                        }
                     });
                 }
                 "--clipboard" => clipboard = true,
                 _ => return Err(format!("unknown argument {arg}")),
             }
         }
-        Ok(Options { mode: mode.ok_or("--mode is required")?, clipboard })
+        Ok(Options {
+            mode: mode.ok_or("--mode is required")?,
+            clipboard,
+        })
     }
 }
 
@@ -89,7 +101,17 @@ fn screens(client: &Client) -> Result<Vec<Screen>> {
     let screens: Vec<Screen> = client
         .outputs()
         .into_iter()
-        .filter_map(|o| o.geometry.map(|g| Screen { id: o.id, rect: Rect::new(f64::from(g.x), f64::from(g.y), f64::from(g.width), f64::from(g.height)) }))
+        .filter_map(|o| {
+            o.geometry.map(|g| Screen {
+                id: o.id,
+                rect: Rect::new(
+                    f64::from(g.x),
+                    f64::from(g.y),
+                    f64::from(g.width),
+                    f64::from(g.height),
+                ),
+            })
+        })
         .collect();
     if screens.is_empty() {
         return Err("the server has no output".into());
@@ -100,7 +122,9 @@ fn screens(client: &Client) -> Result<Vec<Screen>> {
 /// Connect, run the capture the options ask for and deliver it.
 pub fn run(options: &Options) -> Result<()> {
     let assets = Assets::discover();
-    let settings_path = cupertino_defaults::config_file("CUPERTINO_SCREENSHOT_CONFIG", "screenshot.conf").ok_or("neither XDG_CONFIG_HOME nor HOME is set")?;
+    let settings_path =
+        cupertino_defaults::config_file("CUPERTINO_SCREENSHOT_CONFIG", "screenshot.conf")
+            .ok_or("neither XDG_CONFIG_HOME nor HOME is set")?;
     let (mut settings, problems) = Settings::load(&settings_path)?;
     for p in problems {
         eprintln!("cupertino-screenshot: {}: {p}", settings_path.display());
@@ -114,15 +138,29 @@ pub fn run(options: &Options) -> Result<()> {
         StartMode::Screen => {
             let mut shots = Vec::new();
             for s in &screens {
-                shots.push(Shot { image: capturer.output(s.id, settings.show_pointer)? });
+                shots.push(Shot {
+                    image: capturer.output(s.id, settings.show_pointer)?,
+                });
             }
             (shots, options.clipboard)
         }
         StartMode::Selection | StartMode::Toolbar => {
             let theme = Theme::load()?;
-            let appearance = if client.is_dark() { Appearance::Dark } else { Appearance::Light };
-            let painter = Painter::new(Palette::from_theme(&theme, appearance)?, theme.tokens.typography().clone(), &assets)?;
-            let style = if options.mode == StartMode::Toolbar { Style::Interactive } else { Style::Simple };
+            let appearance = if client.is_dark() {
+                Appearance::Dark
+            } else {
+                Appearance::Light
+            };
+            let painter = Painter::new(
+                Palette::from_theme(&theme, appearance)?,
+                theme.tokens.typography().clone(),
+                &assets,
+            )?;
+            let style = if options.mode == StartMode::Toolbar {
+                Style::Interactive
+            } else {
+                Style::Simple
+            };
             let mut overlay = Overlay::new(&mut client, &screens, style, &settings, painter)?;
             let outcome = overlay.run(&mut client, &mut capturer, &mut settings, &settings_path)?;
             if settings.show_pointer && matches!(outcome, Outcome::Capture { .. }) {
@@ -130,8 +168,13 @@ pub fn run(options: &Options) -> Result<()> {
                 overlay.show_arrow(&mut client)?;
             }
             overlay.close(&mut client)?;
-            let Outcome::Capture { target, clipboard } = outcome else { return Ok(()) };
-            (capture(&mut capturer, &screens, &target, settings.show_pointer)?, clipboard || options.clipboard)
+            let Outcome::Capture { target, clipboard } = outcome else {
+                return Ok(());
+            };
+            (
+                capture(&mut capturer, &screens, &target, settings.show_pointer)?,
+                clipboard || options.clipboard,
+            )
         }
     };
     if clipboard || settings.location == Location::Clipboard {
@@ -142,23 +185,39 @@ pub fn run(options: &Options) -> Result<()> {
 }
 
 /// Copy what `target` covers.
-fn capture(capturer: &mut Capturer, screens: &[Screen], target: &Target, pointer: bool) -> Result<Vec<Shot>> {
+fn capture(
+    capturer: &mut Capturer,
+    screens: &[Screen],
+    target: &Target,
+    pointer: bool,
+) -> Result<Vec<Shot>> {
     Ok(match target {
         Target::Screens => {
             let mut shots = Vec::new();
             for s in screens {
-                shots.push(Shot { image: capturer.output(s.id, pointer)? });
+                shots.push(Shot {
+                    image: capturer.output(s.id, pointer)?,
+                });
             }
             shots
         }
-        Target::Output(i) => vec![Shot { image: capturer.output(screens[*i].id, pointer)? }],
+        Target::Output(i) => vec![Shot {
+            image: capturer.output(screens[*i].id, pointer)?,
+        }],
         Target::Area { output, rect } => {
             let s = screens[*output];
             let whole = capturer.output(s.id, pointer)?;
-            let area = image::area_pixels(rect, &s.rect, (whole.width(), whole.height())).ok_or("the selection is outside its output")?;
-            vec![Shot { image: whole.clone_rect(area).ok_or("the selection is outside the captured image")? }]
+            let area = image::area_pixels(rect, &s.rect, (whole.width(), whole.height()))
+                .ok_or("the selection is outside its output")?;
+            vec![Shot {
+                image: whole
+                    .clone_rect(area)
+                    .ok_or("the selection is outside the captured image")?,
+            }]
         }
-        Target::Window(identifier) => vec![Shot { image: capturer.window(identifier, pointer)? }],
+        Target::Window(identifier) => vec![Shot {
+            image: capturer.window(identifier, pointer)?,
+        }],
     })
 }
 
@@ -192,7 +251,13 @@ struct Overlay {
 }
 
 impl Overlay {
-    fn new(client: &mut Client, screens: &[Screen], style: Style, settings: &Settings, painter: Painter) -> Result<Self> {
+    fn new(
+        client: &mut Client,
+        screens: &[Screen],
+        style: Style,
+        settings: &Settings,
+        painter: Painter,
+    ) -> Result<Self> {
         let mut surfaces = Vec::new();
         for (i, s) in screens.iter().enumerate() {
             surfaces.push(client.layer_surface(&LayerSurfaceConfig {
@@ -204,14 +269,33 @@ impl Overlay {
                 margin: Margin::default(),
                 exclusive_zone: -1,
                 // one surface takes the keys for the whole overlay
-                keyboard: if i == 0 { KeyboardInteractivity::Exclusive } else { KeyboardInteractivity::None },
+                keyboard: if i == 0 {
+                    KeyboardInteractivity::Exclusive
+                } else {
+                    KeyboardInteractivity::None
+                },
             })?);
         }
         let (session, toolbar) = match style {
-            Style::Simple => (Session::new(Style::Simple, Mode::Selection, screens.iter().map(|s| s.rect).collect(), None, 0), None),
+            Style::Simple => (
+                Session::new(
+                    Style::Simple,
+                    Mode::Selection,
+                    screens.iter().map(|s| s.rect).collect(),
+                    None,
+                    0,
+                ),
+                None,
+            ),
             Style::Interactive => {
                 let remembered = settings.selection.filter(|_| settings.remember_selection);
-                let session = Session::new(Style::Interactive, settings.mode, screens.iter().map(|s| s.rect).collect(), remembered, settings.timer);
+                let session = Session::new(
+                    Style::Interactive,
+                    settings.mode,
+                    screens.iter().map(|s| s.rect).collect(),
+                    remembered,
+                    settings.timer,
+                );
                 // created after the overlays, so it is stacked above them; on the first screen, above the dock's
                 // exclusive zone, which stands in for the design's visible frame
                 let surface = client.layer_surface(&LayerSurfaceConfig {
@@ -220,14 +304,33 @@ impl Overlay {
                     layer: Layer::Overlay,
                     anchor: Anchor::Bottom,
                     size: (TOOLBAR_SIZE.0 as u32, TOOLBAR_SIZE.1 as u32),
-                    margin: Margin { bottom: TOOLBAR_BOTTOM, ..Margin::default() },
+                    margin: Margin {
+                        bottom: TOOLBAR_BOTTOM,
+                        ..Margin::default()
+                    },
                     exclusive_zone: 0,
                     keyboard: KeyboardInteractivity::None,
                 })?;
-                (session, Some(ToolbarSurface { surface, backdrop: None, hovered: None }))
+                (
+                    session,
+                    Some(ToolbarSurface {
+                        surface,
+                        backdrop: None,
+                        hovered: None,
+                    }),
+                )
             }
         };
-        Ok(Self { surfaces, screens: screens.to_vec(), toolbar, menu: None, session, painter, start: Instant::now(), look: None })
+        Ok(Self {
+            surfaces,
+            screens: screens.to_vec(),
+            toolbar,
+            menu: None,
+            session,
+            painter,
+            start: Instant::now(),
+            look: None,
+        })
     }
 
     fn now(&self) -> f64 {
@@ -235,10 +338,19 @@ impl Overlay {
     }
 
     /// Run until the session captures or is cancelled.
-    fn run(&mut self, client: &mut Client, capturer: &mut Capturer, settings: &mut Settings, settings_path: &std::path::Path) -> Result<Outcome> {
+    fn run(
+        &mut self,
+        client: &mut Client,
+        capturer: &mut Capturer,
+        settings: &mut Settings,
+        settings_path: &std::path::Path,
+    ) -> Result<Outcome> {
         loop {
             let now = self.now();
-            let timeout = self.session.deadline(now).map(|at| Duration::from_secs_f64((at - now).max(0.0)));
+            let timeout = self
+                .session
+                .deadline(now)
+                .map(|at| Duration::from_secs_f64((at - now).max(0.0)));
             let events = client.wait(timeout)?;
             capturer.dispatch()?;
             if let Some(windows) = capturer.take_windows() {
@@ -299,7 +411,13 @@ impl Overlay {
         }
     }
 
-    fn handle(&mut self, client: &mut Client, event: Event, settings: &mut Settings, settings_path: &std::path::Path) -> Result<Option<Outcome>> {
+    fn handle(
+        &mut self,
+        client: &mut Client,
+        event: Event,
+        settings: &mut Settings,
+        settings_path: &std::path::Path,
+    ) -> Result<Option<Outcome>> {
         let now = self.now();
         match event {
             Event::Configured { .. } | Event::ScaleChanged { .. } => {}
@@ -308,8 +426,17 @@ impl Overlay {
             // the description the process connected with also reports as a change; only a real one ends the overlay
             Event::OutputsChanged if screens(client)? == self.screens => {}
             Event::OutputsChanged => return Err("the outputs changed during the screenshot".into()),
-            Event::PopupDone(surface) if self.menu.as_ref().is_some_and(|m| m.surface == surface) => self.close_menu(client)?,
-            Event::Key { key: code, pressed: true, mods, .. } => {
+            Event::PopupDone(surface)
+                if self.menu.as_ref().is_some_and(|m| m.surface == surface) =>
+            {
+                self.close_menu(client)?
+            }
+            Event::Key {
+                key: code,
+                pressed: true,
+                mods,
+                ..
+            } => {
                 let key = match code {
                     key::ESCAPE => Key::Escape,
                     key::SPACE => Key::Space,
@@ -321,14 +448,31 @@ impl Overlay {
                 self.redraw_toolbar(client)?;
                 return Ok(outcome);
             }
-            Event::Pointer { surface, event } => return self.pointer(client, surface, event, settings, settings_path),
+            Event::Pointer { surface, event } => {
+                return self.pointer(client, surface, event, settings, settings_path)
+            }
             // the overlay has no menu-bar or dock role, asks for no activation and keeps its look for its short life
-            Event::KeyboardLeave(_) | Event::Key { .. } | Event::PopupDone(_) | Event::ActivationToken { .. } | Event::MenuBar { .. } | Event::Dock { .. } | Event::Appearance { .. } | Event::DisplayOptions(_) | Event::SessionLock { .. } => {}
+            Event::KeyboardLeave(_)
+            | Event::Key { .. }
+            | Event::PopupDone(_)
+            | Event::ActivationToken { .. }
+            | Event::MenuBar { .. }
+            | Event::Dock { .. }
+            | Event::Appearance { .. }
+            | Event::DisplayOptions(_)
+            | Event::SessionLock { .. } => {}
         }
         Ok(None)
     }
 
-    fn pointer(&mut self, client: &mut Client, surface: SurfaceId, event: PointerEvent, settings: &mut Settings, settings_path: &std::path::Path) -> Result<Option<Outcome>> {
+    fn pointer(
+        &mut self,
+        client: &mut Client,
+        surface: SurfaceId,
+        event: PointerEvent,
+        settings: &mut Settings,
+        settings_path: &std::path::Path,
+    ) -> Result<Option<Outcome>> {
         let now = self.now();
         if let Some(i) = self.surfaces.iter().position(|s| *s == surface) {
             let origin = self.screens[i].rect.origin;
@@ -338,8 +482,16 @@ impl Overlay {
                     self.session.pointer_moved(global(p));
                     None
                 }
-                PointerEvent::Button { button: Button::Left, pressed, position } => self.session.button(pressed, global(position), client.modifiers().ctrl, now),
-                PointerEvent::Leave | PointerEvent::Button { .. } | PointerEvent::Scroll { .. } => None,
+                PointerEvent::Button {
+                    button: Button::Left,
+                    pressed,
+                    position,
+                } => self
+                    .session
+                    .button(pressed, global(position), client.modifiers().ctrl, now),
+                PointerEvent::Leave | PointerEvent::Button { .. } | PointerEvent::Scroll { .. } => {
+                    None
+                }
             };
             if matches!(event, PointerEvent::Enter(_)) {
                 // a surface entered keeps the look its client set last; set it again
@@ -359,21 +511,40 @@ impl Overlay {
         Ok(None)
     }
 
-    fn toolbar_pointer(&mut self, client: &mut Client, event: PointerEvent, settings: &mut Settings, settings_path: &std::path::Path, now: f64) -> Result<Option<Outcome>> {
+    fn toolbar_pointer(
+        &mut self,
+        client: &mut Client,
+        event: PointerEvent,
+        settings: &mut Settings,
+        settings_path: &std::path::Path,
+        now: f64,
+    ) -> Result<Option<Outcome>> {
         if matches!(event, PointerEvent::Enter(_)) {
             self.look = None;
         }
         self.set_look(client, CursorLook::Arrow)?;
         let hovered = match event {
-            PointerEvent::Enter(p) | PointerEvent::Motion(p) | PointerEvent::Button { position: p, .. } => toolbar::item_at(p),
+            PointerEvent::Enter(p)
+            | PointerEvent::Motion(p)
+            | PointerEvent::Button { position: p, .. } => toolbar::item_at(p),
             PointerEvent::Leave | PointerEvent::Scroll { .. } => None,
         };
-        let toolbar = self.toolbar.as_mut().expect("the toolbar received the event");
+        let toolbar = self
+            .toolbar
+            .as_mut()
+            .expect("the toolbar received the event");
         if toolbar.hovered != hovered {
             toolbar.hovered = hovered;
             client.request_redraw(toolbar.surface)?;
         }
-        let PointerEvent::Button { button: Button::Left, pressed: false, .. } = event else { return Ok(None) };
+        let PointerEvent::Button {
+            button: Button::Left,
+            pressed: false,
+            ..
+        } = event
+        else {
+            return Ok(None);
+        };
         let outcome = match hovered {
             Some(Item::Close) => Some(Outcome::Cancel),
             Some(Item::Mode(mode)) => {
@@ -387,24 +558,46 @@ impl Overlay {
                 None
             }
             Some(Item::Capture) => self.session.capture(client.modifiers().ctrl, now),
-            Some(Item::RecordScreen | Item::RecordWindow | Item::StopRecording | Item::RecordSelection) | None => None,
+            Some(
+                Item::RecordScreen
+                | Item::RecordWindow
+                | Item::StopRecording
+                | Item::RecordSelection,
+            )
+            | None => None,
         };
         self.redraw_overlays(client)?;
         self.redraw_toolbar(client)?;
         Ok(outcome)
     }
 
-    fn menu_pointer(&mut self, client: &mut Client, event: PointerEvent, settings: &mut Settings, settings_path: &std::path::Path) -> Result<()> {
+    fn menu_pointer(
+        &mut self,
+        client: &mut Client,
+        event: PointerEvent,
+        settings: &mut Settings,
+        settings_path: &std::path::Path,
+    ) -> Result<()> {
         let menu = self.menu.as_mut().expect("the menu received the event");
         let hovered = match event {
-            PointerEvent::Enter(p) | PointerEvent::Motion(p) | PointerEvent::Button { position: p, .. } => toolbar::menu_row_at(&menu.rows, p),
+            PointerEvent::Enter(p)
+            | PointerEvent::Motion(p)
+            | PointerEvent::Button { position: p, .. } => toolbar::menu_row_at(&menu.rows, p),
             PointerEvent::Leave | PointerEvent::Scroll { .. } => None,
         };
         if menu.hovered != hovered {
             menu.hovered = hovered;
             client.request_redraw(menu.surface)?;
         }
-        if let (PointerEvent::Button { button: Button::Left, pressed: false, .. }, Some(row)) = (event, hovered) {
+        if let (
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: false,
+                ..
+            },
+            Some(row),
+        ) = (event, hovered)
+        {
             if let MenuRow::Choice { action, .. } = &menu.rows[row] {
                 toolbar::apply(settings, action);
                 settings.store(settings_path)?;
@@ -418,14 +611,31 @@ impl Overlay {
         if self.menu.is_some() {
             return self.close_menu(client);
         }
-        let toolbar = self.toolbar.as_ref().expect("the Options button is on the toolbar");
+        let toolbar = self
+            .toolbar
+            .as_ref()
+            .expect("the Options button is on the toolbar");
         let rows = toolbar::menu(settings);
         let (_, height) = toolbar::menu_layout(&rows);
-        let button = toolbar::items().into_iter().find(|(i, _)| *i == Item::Options).map(|(_, r)| r).expect("the toolbar has an Options button");
+        let button = toolbar::items()
+            .into_iter()
+            .find(|(i, _)| *i == Item::Options)
+            .map(|(_, r)| r)
+            .expect("the toolbar has an Options button");
         // above the button: the toolbar sits at the bottom of the screen
-        let rect = Rect::new(button.x(), toolbar::background().y() - MENU_GAP - height, MENU_WIDTH, height);
+        let rect = Rect::new(
+            button.x(),
+            toolbar::background().y() - MENU_GAP - height,
+            MENU_WIDTH,
+            height,
+        );
         let surface = client.popup(toolbar.surface, &rect)?;
-        self.menu = Some(Menu { surface, backdrop: None, rows, hovered: None });
+        self.menu = Some(Menu {
+            surface,
+            backdrop: None,
+            rows,
+            hovered: None,
+        });
         Ok(())
     }
 
@@ -464,7 +674,9 @@ impl Overlay {
                 crosshair: s.pointer_look() == Pointer::Crosshair,
             };
             let painter = &mut self.painter;
-            client.draw(surface, |pm, scale| painter.overlay(pm, f64::from(scale.factor()), &view))?;
+            client.draw(surface, |pm, scale| {
+                painter.overlay(pm, f64::from(scale.factor()), &view)
+            })?;
             return Ok(());
         }
         if let Some(t) = self.toolbar.as_mut().filter(|t| t.surface == surface) {
@@ -475,9 +687,15 @@ impl Overlay {
                 t.backdrop = Some(backdrop);
             }
             client.set_input_region(surface, &[toolbar::background()])?;
-            let view = ToolbarView { mode: self.session.mode(), hovered: t.hovered, countdown: self.session.countdown(self.start.elapsed().as_secs_f64()) };
+            let view = ToolbarView {
+                mode: self.session.mode(),
+                hovered: t.hovered,
+                countdown: self.session.countdown(self.start.elapsed().as_secs_f64()),
+            };
             let painter = &mut self.painter;
-            client.draw(surface, |pm, scale| painter.toolbar(pm, f64::from(scale.factor()), &view))?;
+            client.draw(surface, |pm, scale| {
+                painter.toolbar(pm, f64::from(scale.factor()), &view)
+            })?;
             return Ok(());
         }
         if let Some(m) = self.menu.as_mut().filter(|m| m.surface == surface) {
@@ -490,7 +708,9 @@ impl Overlay {
             }
             let (rows, hovered) = (m.rows.clone(), m.hovered);
             let painter = &mut self.painter;
-            client.draw(surface, |pm, scale| painter.menu(pm, f64::from(scale.factor()), &rows, hovered))?;
+            client.draw(surface, |pm, scale| {
+                painter.menu(pm, f64::from(scale.factor()), &rows, hovered)
+            })?;
         }
         Ok(())
     }

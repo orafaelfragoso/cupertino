@@ -58,13 +58,22 @@ pub enum PointerEvent {
     Motion(Point),
     Leave,
     /// A button changed state with the pointer at `position`.
-    Button { button: Button, pressed: bool, position: Point },
+    Button {
+        button: Button,
+        pressed: bool,
+        position: Point,
+    },
     /// The wheel or a scroll gesture moved: `dx` and `dy` in logical points (positive right and
     /// down), one per `wl_pointer.axis` event, so one of them is zero. `count` is the scroll count of
     /// the touchpad's flick series (`cupertino_scroll_v1`): 0 for a wheel, for a scroll too slow to
     /// start a series and when the server offers no count; 1 for the first flick, 2 for the second,
     /// and from the third on it grows with the speed.
-    Scroll { dx: f64, dy: f64, count: u32, position: Point },
+    Scroll {
+        dx: f64,
+        dy: f64,
+        count: u32,
+        position: Point,
+    },
 }
 
 /// Handle of a request for an activation token, matched to [`Event::ActivationToken`].
@@ -75,7 +84,10 @@ pub struct ActivationRequest(pub(crate) u32);
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     /// The server sized the surface (logical points); also the first configure that maps it.
-    Configured { surface: SurfaceId, size: (u32, u32) },
+    Configured {
+        surface: SurfaceId,
+        size: (u32, u32),
+    },
     /// The buffer scale changed: draw again.
     ScaleChanged { surface: SurfaceId, scale: Scale },
     /// The surface was asked to redraw ([`Client::request_redraw`](crate::Client::request_redraw)) and can take a frame now.
@@ -87,18 +99,36 @@ pub enum Event {
     /// The server dismissed the popup, usually because the user clicked outside its grab. The
     /// application destroys it ([`Client::destroy_surface`](crate::Client::destroy_surface)).
     PopupDone(SurfaceId),
-    Pointer { surface: SurfaceId, event: PointerEvent },
+    Pointer {
+        surface: SurfaceId,
+        event: PointerEvent,
+    },
     /// The surface lost the keyboard focus.
     KeyboardLeave(SurfaceId),
     /// A key changed state on the keyboard-focused surface (evdev code, see [`key`]). A held key
     /// that repeats arrives as further presses. `character` is what the key types under the
     /// layout and `mods` the modifiers held at that moment.
-    Key { surface: SurfaceId, key: u32, pressed: bool, mods: Modifiers, character: Option<char> },
-    ActivationToken { request: ActivationRequest, token: String },
+    Key {
+        surface: SurfaceId,
+        key: u32,
+        pressed: bool,
+        mods: Modifiers,
+        character: Option<char>,
+    },
+    ActivationToken {
+        request: ActivationRequest,
+        token: String,
+    },
     /// The server described the active application and its menus to the menu bar of `surface`.
-    MenuBar { surface: SurfaceId, update: MenuBarUpdate },
+    MenuBar {
+        surface: SurfaceId,
+        update: MenuBarUpdate,
+    },
     /// The server described the windows of the session to the dock of `surface`.
-    Dock { surface: SurfaceId, update: DockUpdate },
+    Dock {
+        surface: SurfaceId,
+        update: DockUpdate,
+    },
     /// The session's appearance changed: draw again with it. The appearance at connect is
     /// [`Client::is_dark`](crate::Client::is_dark) and queues no event.
     Appearance { dark: bool },
@@ -125,7 +155,11 @@ pub(crate) struct PointerTracker {
 }
 
 impl PointerTracker {
-    pub(crate) fn enter(&mut self, surface: SurfaceId, position: Point) -> (SurfaceId, PointerEvent) {
+    pub(crate) fn enter(
+        &mut self,
+        surface: SurfaceId,
+        position: Point,
+    ) -> (SurfaceId, PointerEvent) {
         self.focus = Some(surface);
         self.position = position;
         (surface, PointerEvent::Enter(position))
@@ -148,12 +182,26 @@ impl PointerTracker {
     }
 
     pub(crate) fn button(&self, code: u32, pressed: bool) -> Option<(SurfaceId, PointerEvent)> {
-        self.focus.map(|s| (s, PointerEvent::Button { button: Button::from_evdev(code), pressed, position: self.position }))
+        self.focus.map(|s| {
+            (
+                s,
+                PointerEvent::Button {
+                    button: Button::from_evdev(code),
+                    pressed,
+                    position: self.position,
+                },
+            )
+        })
     }
 
     /// One axis of a scroll; `vertical` selects `dy`. With `counted` the event waits for the frame
     /// ([`PointerTracker::frame`]), which brings the scroll counts.
-    pub(crate) fn scroll(&mut self, vertical: bool, value: f64, counted: bool) -> Option<(SurfaceId, PointerEvent)> {
+    pub(crate) fn scroll(
+        &mut self,
+        vertical: bool,
+        value: f64,
+        counted: bool,
+    ) -> Option<(SurfaceId, PointerEvent)> {
         if counted {
             self.held.push((vertical, value));
             return None;
@@ -169,12 +217,32 @@ impl PointerTracker {
     /// The end of a frame: the held scrolls with their counts.
     pub(crate) fn frame(&mut self) -> Vec<(SurfaceId, PointerEvent)> {
         let counts = std::mem::take(&mut self.counts);
-        std::mem::take(&mut self.held).into_iter().filter_map(|(vertical, value)| self.scroll_event(vertical, value, counts[usize::from(vertical)])).collect()
+        std::mem::take(&mut self.held)
+            .into_iter()
+            .filter_map(|(vertical, value)| {
+                self.scroll_event(vertical, value, counts[usize::from(vertical)])
+            })
+            .collect()
     }
 
-    fn scroll_event(&self, vertical: bool, value: f64, count: u32) -> Option<(SurfaceId, PointerEvent)> {
+    fn scroll_event(
+        &self,
+        vertical: bool,
+        value: f64,
+        count: u32,
+    ) -> Option<(SurfaceId, PointerEvent)> {
         let (dx, dy) = if vertical { (0.0, value) } else { (value, 0.0) };
-        self.focus.map(|s| (s, PointerEvent::Scroll { dx, dy, count, position: self.position }))
+        self.focus.map(|s| {
+            (
+                s,
+                PointerEvent::Scroll {
+                    dx,
+                    dy,
+                    count,
+                    position: self.position,
+                },
+            )
+        })
     }
 }
 
@@ -197,8 +265,29 @@ mod tests {
         let s = SurfaceId(3);
         t.enter(s, Point::new(1.0, 2.0));
         t.motion(Point::new(10.5, 20.5));
-        assert_eq!(t.button(0x110, true), Some((s, PointerEvent::Button { button: Button::Left, pressed: true, position: Point::new(10.5, 20.5) })));
-        assert_eq!(t.scroll(true, -10.0, false), Some((s, PointerEvent::Scroll { dx: 0.0, dy: -10.0, count: 0, position: Point::new(10.5, 20.5) })));
+        assert_eq!(
+            t.button(0x110, true),
+            Some((
+                s,
+                PointerEvent::Button {
+                    button: Button::Left,
+                    pressed: true,
+                    position: Point::new(10.5, 20.5)
+                }
+            ))
+        );
+        assert_eq!(
+            t.scroll(true, -10.0, false),
+            Some((
+                s,
+                PointerEvent::Scroll {
+                    dx: 0.0,
+                    dy: -10.0,
+                    count: 0,
+                    position: Point::new(10.5, 20.5)
+                }
+            ))
+        );
         assert_eq!(t.leave(), Some((s, PointerEvent::Leave)));
         assert_eq!(t.motion(Point::new(0.0, 0.0)), None);
         assert_eq!(t.scroll(false, 3.0, false), None);
@@ -215,10 +304,40 @@ mod tests {
         t.scroll_count(true, 4);
         assert_eq!(
             t.frame(),
-            vec![(s, PointerEvent::Scroll { dx: 0.0, dy: 15.0, count: 4, position }), (s, PointerEvent::Scroll { dx: -2.0, dy: 0.0, count: 0, position })]
+            vec![
+                (
+                    s,
+                    PointerEvent::Scroll {
+                        dx: 0.0,
+                        dy: 15.0,
+                        count: 4,
+                        position
+                    }
+                ),
+                (
+                    s,
+                    PointerEvent::Scroll {
+                        dx: -2.0,
+                        dy: 0.0,
+                        count: 0,
+                        position
+                    }
+                )
+            ]
         );
         // the counts belong to one frame
         assert_eq!(t.scroll(true, 1.0, true), None);
-        assert_eq!(t.frame(), vec![(s, PointerEvent::Scroll { dx: 0.0, dy: 1.0, count: 0, position })]);
+        assert_eq!(
+            t.frame(),
+            vec![(
+                s,
+                PointerEvent::Scroll {
+                    dx: 0.0,
+                    dy: 1.0,
+                    count: 0,
+                    position
+                }
+            )]
+        );
     }
 }

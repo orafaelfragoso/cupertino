@@ -1,7 +1,10 @@
 use super::*;
 use crate::notification::Hints;
 
-const VP: Size = Size { width: 1000.0, height: 700.0 };
+const VP: Size = Size {
+    width: 1000.0,
+    height: 700.0,
+};
 /// Resting x of a banner: 1000 − 16 (right margin) − 344 (width).
 const REST_X: f64 = 640.0;
 
@@ -48,21 +51,39 @@ fn ids_are_unique_and_replacement_keeps_the_id() {
 #[test]
 fn timeouts_follow_urgency_and_client_request() {
     let p = TimeoutPolicy::default();
-    assert_eq!(p.duration(Urgency::Normal, Expire::Default, false), Some(5.0));
+    assert_eq!(
+        p.duration(Urgency::Normal, Expire::Default, false),
+        Some(5.0)
+    );
     assert_eq!(p.duration(Urgency::Low, Expire::Default, false), Some(5.0));
     assert_eq!(p.duration(Urgency::Critical, Expire::Default, false), None);
     assert_eq!(p.duration(Urgency::Normal, Expire::Never, false), None);
-    assert_eq!(p.duration(Urgency::Normal, Expire::Millis(1500), false), Some(1.5));
-    assert_eq!(p.duration(Urgency::Critical, Expire::Millis(1500), false), None);
-    assert_eq!(p.duration(Urgency::Normal, Expire::Millis(10_000_000), false), Some(60.0));
+    assert_eq!(
+        p.duration(Urgency::Normal, Expire::Millis(1500), false),
+        Some(1.5)
+    );
+    assert_eq!(
+        p.duration(Urgency::Critical, Expire::Millis(1500), false),
+        None
+    );
+    assert_eq!(
+        p.duration(Urgency::Normal, Expire::Millis(10_000_000), false),
+        Some(60.0)
+    );
 }
 
 #[test]
 fn the_lock_screen_lifetime_is_10_s_for_default_timeouts_only() {
     let p = TimeoutPolicy::default();
-    assert_eq!(p.duration(Urgency::Normal, Expire::Default, true), Some(10.0));
+    assert_eq!(
+        p.duration(Urgency::Normal, Expire::Default, true),
+        Some(10.0)
+    );
     assert_eq!(p.duration(Urgency::Critical, Expire::Default, true), None);
-    assert_eq!(p.duration(Urgency::Normal, Expire::Millis(1500), true), Some(1.5));
+    assert_eq!(
+        p.duration(Urgency::Normal, Expire::Millis(1500), true),
+        Some(1.5)
+    );
 }
 
 #[test]
@@ -78,7 +99,9 @@ fn a_banner_shown_on_the_lock_screen_expires_after_10_s() {
 
 #[test]
 fn the_width_setting_is_clamped_to_344_620() {
-    let widths: Vec<f64> = [0, 300, 344, 500, 620, 900].map(|w| StackLayout::with_width_setting(w).width).to_vec();
+    let widths: Vec<f64> = [0, 300, 344, 500, 620, 900]
+        .map(|w| StackLayout::with_width_setting(w).width)
+        .to_vec();
     assert_eq!(widths, [344.0, 344.0, 344.0, 500.0, 620.0, 620.0]);
 }
 
@@ -91,7 +114,11 @@ fn banner_lives_five_seconds_and_leaves_after_the_exit_transition() {
     assert!(closed(&mut c).is_empty());
     c.tick(5.0);
     assert_eq!(closed(&mut c), vec![(id, CloseReason::Expired)]);
-    assert_eq!(c.next_wakeup(5.3), Some(Wakeup::At(5.26)), "0.25 s exit + 0.01 s");
+    assert_eq!(
+        c.next_wakeup(5.3),
+        Some(Wakeup::At(5.26)),
+        "0.25 s exit + 0.01 s"
+    );
     c.tick(5.25);
     assert_eq!(c.visible_count(), 1, "still sliding out");
     c.tick(5.26);
@@ -104,7 +131,10 @@ fn banner_lives_five_seconds_and_leaves_after_the_exit_transition() {
 #[test]
 fn critical_is_an_alert_without_timer_and_holds_the_slot() {
     let mut c = center();
-    let id = c.notify(input("app", "disk full").with_urgency(Urgency::Critical), 0.0);
+    let id = c.notify(
+        input("app", "disk full").with_urgency(Urgency::Critical),
+        0.0,
+    );
     let next = c.notify(input("app", "next"), 10.0);
     c.tick(3600.0);
     assert_eq!(c.visible_ids(), vec![id]);
@@ -112,7 +142,11 @@ fn critical_is_an_alert_without_timer_and_holds_the_slot() {
     assert_eq!(c.next_wakeup(3600.0), None);
     c.dismiss_banner(id, 3600.0);
     assert_eq!(closed(&mut c), vec![(id, CloseReason::Dismissed)]);
-    assert_eq!(c.visible_ids(), vec![next, id], "the waiting banner enters while the alert leaves");
+    assert_eq!(
+        c.visible_ids(),
+        vec![next, id],
+        "the waiting banner enters while the alert leaves"
+    );
 }
 
 #[test]
@@ -164,7 +198,10 @@ fn a_newer_banner_replaces_the_waiting_one() {
     assert_eq!(c.queued_count(), 1);
     c.tick(1.0);
     assert_eq!(c.visible_ids(), vec![d, a]);
-    assert!(closed(&mut c).iter().all(|(id, _)| *id != b), "b goes to the centre without a close");
+    assert!(
+        closed(&mut c).iter().all(|(id, _)| *id != b),
+        "b goes to the centre without a close"
+    );
     assert_eq!(c.history_len(), 3);
 }
 
@@ -191,7 +228,10 @@ fn dnd_suppresses_banners_but_keeps_history_and_critical_bypasses() {
     c.notify(input("app", "urgent").with_urgency(Urgency::Critical), 0.0);
     assert_eq!(c.visible_count(), 1);
     c.config.critical_bypasses_dnd = false;
-    c.notify(input("app", "urgent 2").with_urgency(Urgency::Critical), 0.0);
+    c.notify(
+        input("app", "urgent 2").with_urgency(Urgency::Critical),
+        0.0,
+    );
     assert_eq!((c.visible_count(), c.queued_count()), (1, 0));
 }
 
@@ -223,7 +263,10 @@ fn enabling_dnd_drops_the_waiting_banner() {
 fn transient_notifications_skip_the_centre() {
     let mut c = center();
     let mut i = input("app", "volume");
-    i.hints = Hints { transient: true, ..Default::default() };
+    i.hints = Hints {
+        transient: true,
+        ..Default::default()
+    };
     let id = c.notify(i, 0.0);
     assert_eq!(c.history_len(), 0);
     assert_eq!(c.visible_count(), 1);
@@ -267,8 +310,21 @@ fn action_invocation_closes_unless_resident() {
     let a = c.notify(input("app", "a").with_action("reply", "Reply"), 0.0);
     assert!(c.invoke_action(a, "reply", Some("tok".into()), 1.0));
     let ev = c.take_events();
-    assert_eq!(ev[0], Event::ActionInvoked { id: a, key: "reply".into(), activation_token: Some("tok".into()) });
-    assert_eq!(ev[1], Event::Closed { id: a, reason: CloseReason::Dismissed });
+    assert_eq!(
+        ev[0],
+        Event::ActionInvoked {
+            id: a,
+            key: "reply".into(),
+            activation_token: Some("tok".into())
+        }
+    );
+    assert_eq!(
+        ev[1],
+        Event::Closed {
+            id: a,
+            reason: CloseReason::Dismissed
+        }
+    );
     assert_eq!(c.history_len(), 0);
     assert!(!c.invoke_action(a, "reply", None, 2.0));
 
@@ -307,7 +363,13 @@ fn groups_collect_by_app_and_order_by_recency() {
     let g = c.groups();
     assert_eq!(g.len(), 2);
     assert_eq!(g[0].key, "Mail");
-    assert_eq!(g[0].notifications.iter().map(|n| n.summary.as_str()).collect::<Vec<_>>(), ["m3", "m2", "m1"]);
+    assert_eq!(
+        g[0].notifications
+            .iter()
+            .map(|n| n.summary.as_str())
+            .collect::<Vec<_>>(),
+        ["m3", "m2", "m1"]
+    );
     assert_eq!(g[0].unread, 2);
     assert_eq!(g[1].key, "Chat");
     assert_eq!(c.clear_group("Mail", 5.0), 3);
@@ -318,7 +380,10 @@ fn groups_collect_by_app_and_order_by_recency() {
 
 #[test]
 fn history_is_bounded() {
-    let mut c = NotificationCenter::new(CenterConfig { history_limit: 3, ..CenterConfig::default() });
+    let mut c = NotificationCenter::new(CenterConfig {
+        history_limit: 3,
+        ..CenterConfig::default()
+    });
     c.set_dnd(DndMode::On, 0.0);
     for i in 0..6 {
         c.notify(input("app", &format!("{i}")), i as f64);
@@ -334,12 +399,26 @@ fn banner_slides_in_by_the_column_width_with_ease_in_out() {
     let mut c = center();
     c.notify(input("app", "x"), 0.0);
     assert_eq!(x_at(&mut c, 0.0), REST_X + 376.0);
-    assert!((x_at(&mut c, 0.125) - (REST_X + 188.0)).abs() < 1e-6, "half way at half time");
+    assert!(
+        (x_at(&mut c, 0.125) - (REST_X + 188.0)).abs() < 1e-6,
+        "half way at half time"
+    );
     assert_eq!(c.next_wakeup(0.1), Some(Wakeup::Frame));
     let p = c.placements(VP, &mut FixedHeight(60.0), 0.25);
-    assert_eq!((p[0].rect.x(), p[0].rect.y(), p[0].rect.width(), p[0].opacity), (REST_X, 40.0, 344.0, 1.0));
+    assert_eq!(
+        (
+            p[0].rect.x(),
+            p[0].rect.y(),
+            p[0].rect.width(),
+            p[0].opacity
+        ),
+        (REST_X, 40.0, 344.0, 1.0)
+    );
     c.tick(5.0);
-    assert!((x_at(&mut c, 5.125) - (REST_X + 188.0)).abs() < 1e-6, "slides out the same way");
+    assert!(
+        (x_at(&mut c, 5.125) - (REST_X + 188.0)).abs() < 1e-6,
+        "slides out the same way"
+    );
 }
 
 #[test]
@@ -347,7 +426,8 @@ fn reduce_motion_fades_in_place() {
     let mut c = center();
     c.config.motion.reduce_motion = true;
     c.notify(input("app", "x"), 0.0);
-    let opacity = |c: &mut NotificationCenter, t: f64| c.placements(VP, &mut FixedHeight(60.0), t)[0].opacity;
+    let opacity =
+        |c: &mut NotificationCenter, t: f64| c.placements(VP, &mut FixedHeight(60.0), t)[0].opacity;
     assert_eq!(x_at(&mut c, 0.0), REST_X);
     assert_eq!(opacity(&mut c, 0.0), 0.0);
     assert!((opacity(&mut c, 0.125) - 0.5).abs() < 1e-6);
@@ -361,7 +441,11 @@ fn a_press_without_travel_is_a_click() {
     let id = c.notify(input("app", "x"), 0.0);
     assert!(c.swipe_begin(id, 1.0));
     c.swipe_update(id, 4.9, 1.05);
-    assert_eq!(x_at(&mut c, 1.05), REST_X, "under the 5 pt minimum distance");
+    assert_eq!(
+        x_at(&mut c, 1.05),
+        REST_X,
+        "under the 5 pt minimum distance"
+    );
     assert_eq!(c.swipe_end(id, 1.1), SwipeOutcome::Click);
     assert_eq!(c.visible_ids(), vec![id]);
 }
@@ -375,7 +459,11 @@ fn leftward_drag_is_clamped_at_16_and_springs_back() {
     assert_eq!(x_at(&mut c, 1.1), REST_X - 16.0);
     assert_eq!(c.swipe_end(id, 1.1), SwipeOutcome::Cancelled);
     // critically damped (ζ = 5 is clamped), ω0 = 10, v0 = −16/100: p(0.1) = 1 − e^−1 · (1 + 10.16 · 0.1)
-    assert!((x_at(&mut c, 1.2) - 628.133_68).abs() < 1e-4, "{}", x_at(&mut c, 1.2));
+    assert!(
+        (x_at(&mut c, 1.2) - 628.133_68).abs() < 1e-4,
+        "{}",
+        x_at(&mut c, 1.2)
+    );
     assert_eq!(x_at(&mut c, 4.0), REST_X);
     assert!(closed(&mut c).is_empty());
 }
@@ -383,7 +471,10 @@ fn leftward_drag_is_clamped_at_16_and_springs_back() {
 #[test]
 fn rightward_release_dismisses_at_the_dismiss_speed() {
     let swipe = SwipeConfig::default();
-    assert_eq!((swipe.dismiss_speed(50.0), swipe.dismiss_speed(1500.0)), (8.0, 15.0));
+    assert_eq!(
+        (swipe.dismiss_speed(50.0), swipe.dismiss_speed(1500.0)),
+        (8.0, 15.0)
+    );
 
     let mut c = center();
     let id = c.notify(input("app", "x"), 0.0);
@@ -488,7 +579,10 @@ fn banners_only_keeps_pinned_and_is_offered_only_with_both_kinds() {
     let pinned = c.notify(alert, 2.0);
     assert_eq!(c.clear_scopes(), [ClearScope::BannersOnly, ClearScope::All]);
     assert_eq!(c.clear_scope(ClearScope::BannersOnly, 3.0), 1);
-    assert_eq!(c.history().iter().map(|n| n.id).collect::<Vec<_>>(), [pinned]);
+    assert_eq!(
+        c.history().iter().map(|n| n.id).collect::<Vec<_>>(),
+        [pinned]
+    );
     assert_ne!(normal, pinned);
     assert_eq!(c.clear_scope(ClearScope::All, 4.0), 1);
     assert_eq!(c.history_len(), 0);

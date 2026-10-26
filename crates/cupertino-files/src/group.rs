@@ -28,7 +28,10 @@ pub struct Group {
 
 /// Seconds-resolution calendar needed for the date buckets (local time through `localtime_r`).
 fn local_ymd(t: SystemTime) -> (i32, u32, u32) {
-    let secs = t.duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let secs = t
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     let tt = secs as libc::time_t;
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     unsafe {
@@ -37,7 +40,20 @@ fn local_ymd(t: SystemTime) -> (i32, u32, u32) {
     (tm.tm_year + 1900, tm.tm_mon as u32 + 1, tm.tm_mday as u32)
 }
 
-const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const MONTHS: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
 
 fn day_number(y: i32, m: u32, d: u32) -> i64 {
     // days from civil (Howard Hinnant)
@@ -52,7 +68,9 @@ fn day_number(y: i32, m: u32, d: u32) -> i64 {
 
 /// Bucket title and sort rank (lower = nearer to now) of a date relative to `now`.
 pub fn date_bucket(t: Option<SystemTime>, now: SystemTime) -> (String, i64) {
-    let Some(t) = t else { return ("Unknown".into(), i64::MAX) };
+    let Some(t) = t else {
+        return ("Unknown".into(), i64::MAX);
+    };
     let (ty, tm, td) = local_ymd(t);
     let (ny, nm, nd) = local_ymd(now);
     let age = day_number(ny, nm, nd) - day_number(ty, tm, td);
@@ -61,7 +79,10 @@ pub fn date_bucket(t: Option<SystemTime>, now: SystemTime) -> (String, i64) {
         1 => ("Yesterday".into(), 1),
         2..=7 => ("Previous 7 Days".into(), 2),
         8..=30 => ("Previous 30 Days".into(), 3),
-        _ if ty == ny => (MONTHS[tm as usize - 1].to_string(), 100 + (nm as i64 - tm as i64)),
+        _ if ty == ny => (
+            MONTHS[tm as usize - 1].to_string(),
+            100 + (nm as i64 - tm as i64),
+        ),
         _ => (ty.to_string(), 1000 + (ny - ty) as i64),
     }
 }
@@ -88,7 +109,14 @@ pub fn group_entries(entries: &[Entry], by: GroupBy, now: SystemTime) -> Vec<Gro
             GroupBy::None => (0, String::new()),
             GroupBy::Kind => {
                 let g = mime::kind_group(&mime::entry_mime(e));
-                (if g == KindGroup::Other { i64::MAX } else { g as i64 }, g.title().to_string())
+                (
+                    if g == KindGroup::Other {
+                        i64::MAX
+                    } else {
+                        g as i64
+                    },
+                    g.title().to_string(),
+                )
             }
             GroupBy::DateModified => {
                 let (t, r) = date_bucket(e.modified, now);
@@ -117,7 +145,13 @@ pub fn group_entries(entries: &[Entry], by: GroupBy, now: SystemTime) -> Vec<Gro
     for (rank, title, i) in keyed {
         match groups.iter_mut().find(|(_, g)| g.title == title) {
             Some((_, g)) => g.items.push(i),
-            None => groups.push((rank, Group { title, items: vec![i] })),
+            None => groups.push((
+                rank,
+                Group {
+                    title,
+                    items: vec![i],
+                },
+            )),
         }
     }
     if by == GroupBy::Tags || by == GroupBy::Kind {
@@ -170,7 +204,10 @@ mod tests {
 
     #[test]
     fn size_buckets_are_monotonic() {
-        let ranks: Vec<u8> = [0, 5, 50_000, 5_000_000, 5_000_000_000, 50_000_000_000].iter().map(|s| size_bucket(*s).1).collect();
+        let ranks: Vec<u8> = [0, 5, 50_000, 5_000_000, 5_000_000_000, 50_000_000_000]
+            .iter()
+            .map(|s| size_bucket(*s).1)
+            .collect();
         assert_eq!(ranks, vec![0, 1, 2, 3, 4, 5]);
     }
 

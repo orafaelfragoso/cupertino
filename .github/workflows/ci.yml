@@ -32,6 +32,34 @@ jobs:
       - run: python3 -I packaging/test_release.py
       - run: python3 -I ci/gate.py .
 
+  # The book must build, and its internal links and anchors must resolve. mdBook and lychee are
+  # pinned, and both release archives are checked against the published sha256.
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: mdBook and link checker
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --output mdbook.tar.gz \
+            https://github.com/rust-lang/mdBook/releases/download/v0.5.4/mdbook-v0.5.4-x86_64-unknown-linux-gnu.tar.gz
+          curl --fail --location --silent --show-error --output lychee.tar.gz \
+            https://github.com/lycheeverse/lychee/releases/download/lychee-v0.24.2/lychee-x86_64-unknown-linux-gnu.tar.gz
+          echo "3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7  mdbook.tar.gz" | sha256sum --check --strict
+          echo "1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a  lychee.tar.gz" | sha256sum --check --strict
+          mkdir -p "$HOME/.local/bin" lychee
+          tar --extract --gzip --file mdbook.tar.gz --directory "$HOME/.local/bin"
+          tar --extract --gzip --file lychee.tar.gz --directory lychee --strip-components=1
+          install --mode 0755 lychee/lychee "$HOME/.local/bin/lychee"
+          rm -r mdbook.tar.gz lychee.tar.gz lychee
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build the book
+        run: mdbook build docs
+      # Offline: local files only, so another site's outage cannot fail the build.
+      - name: Internal links and anchors
+        run: lychee --offline --no-progress --include-fragments 'docs/src/**/*.md'
+
   # Licences, advisories, bans and sources, as set in deny.toml.
   deny:
     runs-on: ubuntu-latest

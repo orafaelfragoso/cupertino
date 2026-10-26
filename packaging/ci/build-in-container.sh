@@ -1,25 +1,29 @@
 #!/usr/bin/env bash
 # Build, inspect and install-test the native packages of one distribution in pinned containers.
 #
-#   packaging/ci/build-in-container.sh {debian|fedora} DIST_DIR
+#   packaging/ci/build-in-container.sh {arch|debian|fedora} DIST_DIR
 #
 # The source is the committed HEAD (git archive), so untracked or modified files never reach a package. A build
-# container compiles the workspace and makes the runtime and data packages; release.py verifies each against the
-# manifest. A second, fresh container of the same base installs them, checks the login-screen account, the unit
+# container compiles the workspace and makes the runtime and data packages (Arch: makepkg with check() on the release
+# source archive and the stable PKGBUILD, then namcap); release.py verifies each against the manifest. A second, fresh container of the same base installs them, checks the login-screen account, the unit
 # state, the payload and conffile preservation across a reinstall, then removes them. Packages, file lists and the
 # test log land in DIST_DIR. Needs docker and git; nothing is installed on the host.
 set -euo pipefail
 
-usage="usage: build-in-container.sh debian|fedora DIST_DIR"
+usage="usage: build-in-container.sh arch|debian|fedora DIST_DIR"
 distro=${1:?$usage}
 dist=${2:?$usage}
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 
-# Images by digest; the Rust toolchain is fixed, as are the packaging tools.
+# Images by digest; the Rust toolchain is fixed (Arch: the rolling distribution's rust), as are the packaging tools.
 RUST_TOOLCHAIN=1.99.1
 CARGO_DEB=3.8.0
 CARGO_GENERATE_RPM=0.21.1
 case $distro in
+arch)
+    build_image=docker.io/library/archlinux@sha256:3cbf69d2d5958d6a294f3722c5668e6187c4df8e00fa27f72352f0bf83e495e1 # base-devel
+    test_image=$build_image
+    ;;
 debian)
     build_image=docker.io/library/rust@sha256:931c2c0531a8b143e044f0f3914dfe802f15bb3d1955f0b657e9359327ac2ffc # 1.99.1-trixie
     test_image=docker.io/library/debian@sha256:4c25275446ca371766b8b093c696782eabce06263fccacb8d5d813b3dc44b308 # trixie
@@ -39,12 +43,30 @@ dist=$(cd "$dist" && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 git -C "$root" archive --format=tar --prefix=src/ HEAD | tar -x -C "$work"
+if [ "$distro" = arch ]; then
+    mkdir "$work/src/arch-build"
+    archive=$(python3 "$root/packaging/release.py" source --output "$work/src/arch-build")
+    python3 "$root/packaging/release.py" pkgbuild "$archive" "$work/src/arch-build/PKGBUILD" >/dev/null
+fi
 
 build_script=$(cat <<EOF
 set -euo pipefail
 trap 'chown -R $(id -u):$(id -g) /dist' EXIT
 cd /src
+export CARGO_INCREMENTAL=0 CUPERTINO_THEME_DIR=/usr/share/cupertino/theme
 case $distro in
+arch)
+    pacman -Syu --noconfirm --needed -q rust python mesa libglvnd pam dbus namcap >/dev/null
+    useradd -m builder
+    chown -R builder /src/arch-build
+    su builder -c 'cd /src/arch-build && makepkg --noconfirm'
+    namcap arch-build/PKGBUILD arch-build/*.pkg.tar.zst | tee /dist/namcap.log
+    cp arch-build/*.pkg.tar.zst arch-build/PKGBUILD /dist/
+    python3 packaging/release.py verify --format arch --package runtime /dist/cupertino-0*.pkg.tar.zst
+    python3 packaging/release.py verify --format arch --package data /dist/cupertino-data-*.pkg.tar.zst
+    for p in /dist/*.pkg.tar.zst; do pacman -Qip "\$p" > "\$p.info"; pacman -Qlp "\$p" > "\$p.contents"; done
+    exit 0
+    ;;
 debian)
     apt-get update -qq
     apt-get install -y -qq --no-install-recommends pkg-config libgbm-dev libpam0g-dev dpkg-dev >/dev/null
@@ -58,7 +80,6 @@ fedora)
     ;;
 esac
 rustc --version
-export CARGO_INCREMENTAL=0 CUPERTINO_THEME_DIR=/usr/share/cupertino/theme
 export RUSTFLAGS="--remap-path-prefix=/src=/usr/src/cupertino --remap-path-prefix=\${CARGO_HOME:-\$HOME/.cargo}=/cargo"
 cargo build --locked --release --workspace --all-features --bins
 mkdir -p /dist
@@ -85,6 +106,12 @@ EOF
 test_script=$(cat <<'EOF'
 set -euo pipefail
 case $1 in
+arch)
+    pacman -Syu --noconfirm -q >/dev/null
+    pacman -U --noconfirm /dist/cupertino-data-*.pkg.tar.zst /dist/cupertino-0*.pkg.tar.zst >/dev/null
+    reinstall() { pacman -U --noconfirm /dist/cupertino-0*.pkg.tar.zst >/dev/null 2>&1; }
+    remove() { pacman -Rns --noconfirm cupertino cupertino-data >/dev/null; }
+    ;;
 debian)
     apt-get update -qq
     apt-get install -y -qq /dist/cupertino-data_*.deb /dist/cupertino_*_amd64.deb >/dev/null

@@ -238,8 +238,19 @@ def git(*a):
     return subprocess.run(['git', '-C', str(ROOT), *a], capture_output=True, text=True, check=True).stdout.strip()
 
 
+TAG = re.compile(r'v(\d+\.\d+\.\d+)(?:-(rc\d+))?')
+
+
+def release_version(tag):
+    """The Arch pkgver of a v<version> or v<version>-rc<N> tag: 0.1.0 or 0.1.0rc1 (no hyphen; sorts before 0.1.0)."""
+    m = TAG.fullmatch(tag or f'v{version("cupertino-server")}')
+    if not m:
+        fail(f'tag {tag} is neither v<version> nor v<version>-rc<N>')
+    return m[1] + (m[2] or '')
+
+
 def cmd_source(args):
-    v = version('cupertino-server')
+    v = release_version(args.tag)
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
     tar = subprocess.run(['git', '-C', str(ROOT), 'archive', '--format=tar', f'--prefix=cupertino-{v}/', 'HEAD'],
@@ -255,14 +266,19 @@ def cmd_pkgbuild(args):
     if "sha256sums=('UNRELEASED')" not in text:
         fail('packaging/arch/cupertino/PKGBUILD has no UNRELEASED checksum to fill')
     digest = hashlib.sha256(Path(args.archive).read_bytes()).hexdigest()
+    text = text.replace("sha256sums=('UNRELEASED')", f"sha256sums=('{digest}')")
+    if args.tag:
+        text = text.replace(f'pkgver={version("cupertino-server")}\n', f'pkgver={release_version(args.tag)}\n', 1)
+        text = text.replace('_tag=v$pkgver\n', f'_tag={args.tag}\n', 1)
     out = Path(args.output)
-    out.write_text(text.replace("sha256sums=('UNRELEASED')", f"sha256sums=('{digest}')"))
+    out.write_text(text)
     print(out)
 
 
 def cmd_verify_tag(args):
     v = version('cupertino-server')
-    if args.tag != f'v{v}':
+    m = TAG.fullmatch(args.tag)
+    if not m or m[1] != v:
         fail(f'tag {args.tag} does not match the cupertino-server version {v}')
     if version('cupertino-assets') != v:
         fail(f'cupertino-assets is {version("cupertino-assets")}, cupertino-server {v}')
@@ -284,9 +300,12 @@ def main():
     sub.choices['install'].add_argument('--bindir', default=str(ROOT / 'target/release'))
     sub.choices['verify'].add_argument('artifact')
     sub.add_parser('check-metadata')
-    sub.add_parser('source').add_argument('--output', required=True)
+    c = sub.add_parser('source')
+    c.add_argument('--output', required=True)
+    c.add_argument('--tag')
     sub.add_parser('verify-tag').add_argument('tag')
     k = sub.add_parser('pkgbuild')
+    k.add_argument('--tag')
     k.add_argument('archive')
     k.add_argument('output')
     args = p.parse_args()

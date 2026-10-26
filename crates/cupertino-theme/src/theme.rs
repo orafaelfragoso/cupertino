@@ -123,8 +123,15 @@ mod tests {
         let compiled = option_env!("CUPERTINO_THEME_DIR").map(PathBuf::from);
         let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/theme");
         assert_eq!(spec_dir_from(None), compiled.unwrap_or(repository));
-        assert_eq!(spec_dir_from(Some("".into())), spec_dir_from(None), "empty counts as unset");
-        assert_eq!(spec_dir_from(Some("/opt/theme".into())), PathBuf::from("/opt/theme"));
+        assert_eq!(
+            spec_dir_from(Some("".into())),
+            spec_dir_from(None),
+            "empty counts as unset"
+        );
+        assert_eq!(
+            spec_dir_from(Some("/opt/theme".into())),
+            PathBuf::from("/opt/theme")
+        );
     }
 
     #[test]

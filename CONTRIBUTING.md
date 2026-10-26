@@ -19,6 +19,19 @@ Notes:
 - Build artifacts are large. Keep several GB free and do not point `CARGO_TARGET_DIR` at a small or shared disk.
 - Run the compositor nested while you work: `cargo run -p cupertino-server -- --winit --spawn foot`. Export `XDG_DATA_DIRS="$PWD/crates/cupertino-files/data:$PWD/crates/cupertino-settings/data:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"` first, or the menu bar and dock show `Cupertino-files` and a generic icon instead of the apps' names and icons (see [Building](docs/src/building.md)). Headless screenshots (`--headless --screenshot out.png --exit-after-screenshot`) are the quickest visual check and work in CI.
 
+## Docs
+
+The book in `docs/` builds with mdBook 0.5.4 and checks its internal links and anchors with lychee 0.24.2:
+
+```bash
+cargo install mdbook --version 0.5.4 --locked
+cargo install lychee --version 0.24.2 --locked
+mdbook build docs
+lychee --offline --no-progress --include-fragments 'docs/src/**/*.md'
+```
+
+A broken link or anchor in the book fails both commands. CI installs the same two versions from their released binaries (`.github/workflows/ci.yml`). The link check runs offline, so external web links are not checked and another site's outage cannot fail it.
+
 ## What a good change looks like
 
 1. **One purpose.** A bug fix, a feature or a refactor, not a mix.

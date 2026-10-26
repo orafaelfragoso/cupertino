@@ -500,7 +500,7 @@ mod tests {
 
     /// Needs the asset directory (`CUPERTINO_ASSET_DIR`); fails with the build instructions when it is missing.
     fn decor(appearance: Appearance) -> Decor {
-        let assets = Assets::discover();
+        let assets = Assets::builtin();
         Decor::new(appearance, &assets).unwrap_or_else(|e| panic!("{e}"))
     }
 

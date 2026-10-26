@@ -8,7 +8,9 @@
 //! stderr. The built-in fallback is the embedded Inter font ([`BUILTIN_UI_FAMILY`]); icons the packs lack are drawn as
 //! placeholders by `cupertino-icons`, cursors fall back to the procedural theme in the server and the wallpaper to the
 //! procedural one. Callers ask for logical names ([`IconName`], [`FontRole`]); the mapping to files lives only in the
-//! packs. [`Assets::open`] is the strict check of one pack, for pack authors and tests.
+//! packs. [`Assets::open`] is the strict check of one pack, for pack authors and tests. Tests and package builds that
+//! must not depend on what is installed set `CUPERTINO_ASSET_SEARCH_PATH` ([`SEARCH_PATH_ENV`]), which replaces the whole
+//! list.
 
 mod error;
 mod manifest;
@@ -24,6 +26,10 @@ use std::path::{Path, PathBuf};
 
 /// Name of the environment variable that names the first asset pack.
 pub const ASSET_DIR_ENV: &str = "CUPERTINO_ASSET_DIR";
+/// Name of the environment variable that replaces the search list: its colon-separated directories are the packs, in
+/// order, and nothing else is searched. Set to an empty value it selects the built-in fallback alone. It is for tests
+/// and package builds whose result must not depend on the packs installed on the machine.
+pub const SEARCH_PATH_ENV: &str = "CUPERTINO_ASSET_SEARCH_PATH";
 /// The system-wide pack, the last one before the built-in fallback.
 pub const SYSTEM_PACK: &str = "/usr/share/cupertino/assets";
 /// Family of the embedded built-in font (a subset of Inter, SIL Open Font License 1.1; see `fonts/OFL.txt`).
@@ -310,13 +316,19 @@ fn font_files(dir: &Path, manifest: &Manifest) -> Result<Vec<PathBuf>, AssetErro
 }
 
 /// The pack directories [`Assets::discover`] tries, in order: `$CUPERTINO_ASSET_DIR` (when set and not empty), the
-/// user pack under `$XDG_DATA_HOME` (`$HOME/.local/share` when unset), the system pack [`SYSTEM_PACK`].
+/// user pack under `$XDG_DATA_HOME` (`$HOME/.local/share` when unset), the system pack [`SYSTEM_PACK`]; or, when
+/// `$CUPERTINO_ASSET_SEARCH_PATH` is set (even to an empty value), exactly the directories it lists.
 pub fn search_path() -> Vec<PathBuf> {
     search_path_from(|name| std::env::var_os(name))
 }
 
 /// [`search_path`] with the environment read through `env`.
 fn search_path_from(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathBuf> {
+    if let Some(list) = env(SEARCH_PATH_ENV) {
+        return std::env::split_paths(&list)
+            .filter(|d| !d.as_os_str().is_empty())
+            .collect();
+    }
     let var = |name: &str| env(name).filter(|v| !v.is_empty()).map(PathBuf::from);
     let data_home = var("XDG_DATA_HOME").or_else(|| var("HOME").map(|h| h.join(".local/share")));
     var(ASSET_DIR_ENV)

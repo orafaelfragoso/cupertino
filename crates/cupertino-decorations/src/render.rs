@@ -425,9 +425,9 @@ mod tests {
         decorations_with(DecorationConfig::builtin(appearance, style))
     }
 
-    /// Needs the asset directory (`CUPERTINO_ASSET_DIR`); fails with the build instructions when it is missing.
+    /// Uses the built-in assets only, so the result does not depend on the packs installed on the machine.
     fn decorations_with(config: DecorationConfig) -> Decorations {
-        let assets = Assets::discover();
+        let assets = Assets::builtin();
         Decorations::new(config, &assets).unwrap_or_else(|e| panic!("{e}"))
     }
 

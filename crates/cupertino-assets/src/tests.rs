@@ -230,13 +230,15 @@ fn a_version_2_pack_resolves_every_kind_of_source() {
     );
 }
 
+/// An environment holding `vars`, for [`search_path_from`].
+fn environment<'a>(vars: &'a [(&str, &str)]) -> impl Fn(&str) -> Option<std::ffi::OsString> + 'a {
+    move |name| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| v.into())
+}
+
 #[test]
 fn the_search_path_is_the_variable_then_the_user_then_the_system_pack() {
-    let env = |vars: &'static [(&'static str, &'static str)]| {
-        move |name: &str| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| v.into())
-    };
     assert_eq!(
-        search_path_from(env(&[
+        search_path_from(environment(&[
             ("CUPERTINO_ASSET_DIR", "/packs/dev"),
             ("XDG_DATA_HOME", "/data"),
             ("HOME", "/home/u")
@@ -248,13 +250,32 @@ fn the_search_path_is_the_variable_then_the_user_then_the_system_pack() {
         ]
     );
     assert_eq!(
-        search_path_from(env(&[("CUPERTINO_ASSET_DIR", ""), ("HOME", "/home/u")])),
+        search_path_from(environment(&[
+            ("CUPERTINO_ASSET_DIR", ""),
+            ("HOME", "/home/u")
+        ])),
         [
             PathBuf::from("/home/u/.local/share/cupertino/assets"),
             SYSTEM_PACK.into()
         ]
     );
-    assert_eq!(search_path_from(env(&[])), [PathBuf::from(SYSTEM_PACK)]);
+    assert_eq!(
+        search_path_from(environment(&[])),
+        [PathBuf::from(SYSTEM_PACK)]
+    );
+}
+
+#[test]
+fn the_search_path_variable_replaces_the_whole_list() {
+    let list = |search: &str| {
+        search_path_from(environment(&[
+            ("CUPERTINO_ASSET_SEARCH_PATH", search),
+            ("CUPERTINO_ASSET_DIR", "/packs/dev"),
+            ("HOME", "/home/u"),
+        ]))
+    };
+    assert_eq!(list("/a:/b"), [PathBuf::from("/a"), "/b".into()]);
+    assert_eq!(list(""), Vec::<PathBuf>::new(), "empty: built-in only");
 }
 
 #[test]

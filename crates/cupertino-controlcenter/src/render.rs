@@ -738,10 +738,10 @@ mod tests {
         }
     }
 
-    /// Needs the asset directory (`CUPERTINO_ASSET_DIR`); fails with the build instructions when it is missing.
+    /// Uses the built-in assets only, so the result does not depend on the packs installed on the machine.
     fn renderer(appearance: Appearance) -> Renderer {
         let theme = Theme::load().unwrap();
-        let assets = Assets::discover();
+        let assets = Assets::builtin();
         Renderer::new(
             Palette::from_theme(&theme, appearance).unwrap(),
             theme.tokens.typography().clone(),

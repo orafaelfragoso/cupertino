@@ -1,11 +1,10 @@
-//! Text rendering with the fonts of the asset directory.
+//! Text rendering with the fonts of the asset packs.
 //!
-//! Faces are read only from `$CUPERTINO_ASSET_DIR/fonts`; no host font is ever loaded. The family comes from
-//! the manifest's font role. The tracking table of the design font
+//! Faces are read from the asset packs' font files and the built-in font; no host font is ever loaded. The family comes
+//! from the packs' font role. The tracking table of the design font
 //! is applied as additional advance per glyph through [`TextRenderer::draw`]'s `letter_spacing_px`.
 //!
-//! The `ui` family is one variable font (axes `wdth`, `opsz`, `GRAD`, `wght`;
-//! section 1), so a weight is a variation coordinate, not a separate face. Shaping and rasterisation both
+//! The `ui` family is one variable font (axes `wdth`, `opsz`, `GRAD`, `wght`), so a weight is a variation coordinate, not a separate face. Shaping and rasterisation both
 //! run through `swash` with the coordinates of the request: advances change with `wght` and with `opsz`, so
 //! the coordinates must reach the shaper and not only the rasteriser.
 //!
@@ -580,9 +579,9 @@ impl TextRenderer {
 mod tests {
     use super::*;
 
-    /// Needs an asset pack with the UI font (`CUPERTINO_ASSET_DIR`).
+    /// Uses the built-in assets only, so the result does not depend on the packs installed on the machine.
     fn renderer() -> TextRenderer {
-        let assets = Assets::discover();
+        let assets = Assets::builtin();
         TextRenderer::new(&assets, FontRole::Ui).unwrap_or_else(|e| panic!("{e}"))
     }
 

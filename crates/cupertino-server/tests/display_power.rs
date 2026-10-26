@@ -36,7 +36,7 @@ impl Harness {
             event_loop.get_signal(),
             config,
             false,
-            &cupertino_assets::Assets::discover(),
+            &cupertino_assets::Assets::builtin(),
         )
         .ok()?;
         if let Err(e) = headless::init(&mut state, OUTPUT, 1.0) {

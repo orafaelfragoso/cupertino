@@ -947,10 +947,10 @@ pub fn relative_date(t: std::time::SystemTime, now: std::time::SystemTime) -> St
     }
 }
 
-/// A renderer for tests. Needs the asset directory (`CUPERTINO_ASSET_DIR`); fails with the build instructions when it is missing.
+/// A renderer for tests. Uses the built-in assets only, so the result does not depend on the packs installed on the machine.
 #[cfg(test)]
 pub(crate) fn renderer() -> Renderer {
-    let assets = Assets::discover();
+    let assets = Assets::builtin();
     let icons = FileIcons::new(
         &assets,
         cupertino_apps::MimeDatabase::load(&[]).unwrap(),

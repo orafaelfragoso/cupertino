@@ -91,7 +91,7 @@ mod tests {
 
     #[test]
     fn preview_layers_are_in_place() {
-        let assets = cupertino_assets::Assets::discover();
+        let assets = cupertino_assets::Assets::builtin();
         let mut dec = Decorations::new(
             DecorationConfig::builtin(Appearance::Light, TitlebarStyle::Standard),
             &assets,

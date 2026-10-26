@@ -63,7 +63,7 @@ impl Server {
             event_loop.get_signal(),
             cfg,
             true,
-            &cupertino_assets::Assets::discover(),
+            &cupertino_assets::Assets::builtin(),
         )
         .unwrap();
         if offscreen {
@@ -285,7 +285,8 @@ impl Drop for PrivateBus {
 }
 
 /// A real shell process on the private bus: `env` puts the bus address in its environment, which
-/// the supervisor then passes on with `WAYLAND_DISPLAY`.
+/// the supervisor then passes on with `WAYLAND_DISPLAY`. The empty `CUPERTINO_ASSET_SEARCH_PATH` gives it the
+/// built-in assets alone, like the test process, whatever asset packs the machine has installed.
 fn real_process(binary: &str, bus: &PrivateBus) -> ShellProcess {
     let path = shell_bin_dir().join(binary);
     ShellProcess {
@@ -293,6 +294,7 @@ fn real_process(binary: &str, bus: &PrivateBus) -> ShellProcess {
         command: vec![
             "env".into(),
             format!("DBUS_SESSION_BUS_ADDRESS={}", bus.address),
+            "CUPERTINO_ASSET_SEARCH_PATH=".into(),
             path.display().to_string(),
         ],
     }
@@ -751,12 +753,13 @@ fn the_dock_process_draws_the_switcher_panel_while_the_switch_is_open() {
         layer_geometry(&server.state, "cupertino-dock-switcher"),
         Some(Rectangle::new((413, 257).into(), (174, 186).into()))
     );
-    // the 128 pt tile sits at (23, 29) in the panel; wherever the generic icon (the packs' one, else the opaque
-    // placeholder of the built-in fallback) is fully opaque the panel shows it
-    let assets = cupertino_assets::Assets::discover();
+    // the 128 pt tile sits at (23, 29) in the panel; wherever the generic icon (here the opaque placeholder of the
+    // built-in assets, which both this test and the dock process use) is fully opaque the panel shows it
+    let assets = cupertino_assets::Assets::builtin();
     let icon = cupertino_icons::SystemIcons::new(&assets)
         .raster("application.generic", 128)
         .clone();
+    assert_eq!((icon.width(), icon.height()), (128, 128));
     let (mut opaque, mut same) = (0, 0);
     for (i, p) in icon.pixels().iter().enumerate() {
         if p.alpha() != 255 {

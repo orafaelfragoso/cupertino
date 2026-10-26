@@ -838,9 +838,9 @@ mod tests {
         [c.red(), c.green(), c.blue(), c.alpha()]
     }
 
-    /// Needs the asset directory (`CUPERTINO_ASSET_DIR`); fails with the build instructions when it is missing.
+    /// Uses the built-in assets only, so the result does not depend on the packs installed on the machine.
     fn painter() -> Painter {
-        let assets = Assets::discover();
+        let assets = Assets::builtin();
         Painter::new(
             Palette {
                 text: [0.0; 4],

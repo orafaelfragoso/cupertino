@@ -6,7 +6,8 @@ Thanks for helping. This page covers how to build, what a good change looks like
 
 ```bash
 cargo build --workspace
-cargo test --workspace
+cargo nextest run --workspace --all-features
+cargo test --workspace --all-features --doc
 cargo run -p cupertino-layers      # dependency rules between layers
 cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
@@ -15,7 +16,7 @@ cargo fmt --all -- --check
 Notes:
 
 - Shell and app crates build their process code behind the `app` feature. Use `cargo test -p <crate> --features app` for those.
-- If a full `cargo test --workspace` hangs on a D-Bus test, test crate by crate and stop any stray test `dbus-daemon` (never your real session bus).
+- Install [cargo-nextest](https://nexte.st) (`cargo install cargo-nextest --locked`; CI uses 0.9.149). It runs every test in its own process and kills a test that runs longer than 2 minutes (`.config/nextest.toml`), so a hang fails with the test's name. `cargo test` has no time limit. A killed run can leave a test `dbus-daemon` behind: stop it, never your real session bus. Plain `cargo test --workspace --all-features` still works but has no per-test limit.
 - Build artifacts are large. Keep several GB free and do not point `CARGO_TARGET_DIR` at a small or shared disk.
 - Run the compositor nested while you work: `cargo run -p cupertino-server -- --winit --spawn foot`. Export `XDG_DATA_DIRS="$PWD/crates/cupertino-files/data:$PWD/crates/cupertino-settings/data:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"` first, or the menu bar and dock show `Cupertino-files` and a generic icon instead of the apps' names and icons (see [Building](docs/src/building.md)). Headless screenshots are the quickest visual check and work in CI. Take them with `crates/cupertino-server/scripts/capture.sh out.png --spawn cupertino-files`: it runs the whole desktop with a temporary sample home folder, so a screenshot never shows your own files (see the script header for more examples).
 

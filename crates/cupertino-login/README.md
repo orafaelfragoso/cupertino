@@ -22,7 +22,8 @@ manager through `cupertino-login-ipc` (`models/`), and the manager runs the auth
 
 ## Running
 
-Feature `app` builds the binary: a client of `cupertino-server` (`render/cupertino-client`) that needs the server's
+Feature `app` builds the binary: a client of `cupertino-server` on `cupertino-wayland-client`, `cupertino-shell-client` and a `cupertino-ui-wayland`
+presenter per surface, that needs the server's
 `ext_session_lock_manager_v1` and `ext_idle_notifier_v1` globals besides the toolkit's usual ones. The server starts and
 restarts it through the `shell` key of its configuration:
 
@@ -385,7 +386,7 @@ network users).
 | Password help | failed attempts are counted per user and restart at 1 when another user fails; with `RetriesUntilHint` R = 0 (absent) the help shows at 3 failures and without hint text, with R > 0 at R failures (`hint::FailedAttempts`); the shake plays on every failure |
 | Picker | grid rows and columns by n = min(M, count), M = 25 above 1024 x 768 else 12, 5 x 5 for 25 and outside 1 … 24; item i at page i / M, column k % columns, row k / columns; users sorted by case-insensitive name, then "Other…" |
 | Spinner | drawn from numbers, no artwork: 12 spokes from r 11.77 to r 26.57 and 5.26 wide on a 64 unit canvas, white; 24 frames of 1/24 s, frame `round(frac(t) * 24) mod 24`; head spoke `floor((f - 1) / 2) mod 12` clockwise from 12 o'clock, spoke k steps behind it has `ramp[11 - k]` (ramp A on even frames, B on odd); shown in the field's trailing slot (in place of the badge) once an attempt has been pending for 1.0 s, from frame 0 (`spinner`, `model::LockScreen::spinner`) |
-| Caps lock badge | shown while the field has the focus and Caps Lock is on (xkb `Lock` modifier from `wl_keyboard.modifiers`, read with `Client::caps_lock`); an 18 pt slot at the pill's trailing edge, a 16 x 16 pt rounded square (radius 4) stretched by `min(h / 17, 1.2) = 1.2 in the 28 pt pill, white, glyph cut out; no animation |
+| Caps lock badge | shown while the field has the focus and Caps Lock is on (xkb `Lock` modifier from `wl_keyboard.modifiers`, read from the transport's `Connection::modifiers`); an 18 pt slot at the pill's trailing edge, a 16 x 16 pt rounded square (radius 4) stretched by `min(h / 17, 1.2) = 1.2 in the 28 pt pill, white, glyph cut out; no animation |
 
 ### Approximated values
 
@@ -477,7 +478,7 @@ Not covered by a test:
   `cupertino-sessiond` (`tests/service.rs`) and by the QEMU checks `28` and `29`.
 - The drawing of the panel and of the greeter, and the PAM success path (it needs the user's password).
 - The lock and unlock cycle against a server with `ext-session-lock`: the phase 5 QEMU check, and `cupertino-client`'s
-  `tests/protocol_flow.rs` for the toolkit side.
+  `tests/protocol_flow.rs` for the `cupertino-shell-client` lock it uses.
 
 On the development host a wrong password through the real PAM stack (`pam_unix`, service `vlock`) returned `Denied`, and the sleep
 inhibitor showed up in `systemd-inhibit --list`.

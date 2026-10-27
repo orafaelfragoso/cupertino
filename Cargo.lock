@@ -987,13 +987,15 @@ name = "cupertino-login"
 version = "0.1.0"
 dependencies = [
  "cupertino-assets",
- "cupertino-client",
  "cupertino-decorations",
  "cupertino-geometry",
  "cupertino-login-ipc",
  "cupertino-peer",
  "cupertino-seat",
+ "cupertino-shell-client",
  "cupertino-theme",
+ "cupertino-ui-wayland",
+ "cupertino-wayland-client",
  "libc",
  "pam-client2",
  "tempfile",

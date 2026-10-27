@@ -1,12 +1,14 @@
 //! What the lock screen and the greeter share: the clock text, the frame bookkeeping, the key translation and the
 //! drawing of the screen on a surface.
 
-use cupertino_client::{key, Client, Modifiers, OutputId, SurfaceId, Waker};
 use cupertino_login::model::{Key, LockScreen};
 use cupertino_login::picker::{Grid, NameEntry, Picker, Tile};
 use cupertino_login::power::Menu;
 use cupertino_login::render::{Field, PickerView, PowerView, Renderer, View};
 use cupertino_login::user::{format_time, User};
+use cupertino_shell_client::LayerSurface;
+use cupertino_ui_wayland::{Ready, ShmPresenter};
+use cupertino_wayland_client::{key, Connection, Modifiers, OutputId, SurfaceId, Waker};
 use std::error::Error;
 use std::sync::mpsc::Sender;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -171,14 +173,53 @@ pub fn typed_key(code: u32, mods: Modifiers, character: Option<char>) -> Option<
     }
 }
 
-/// Draw the frame `key` on `surface`, the password screen of `user` (`None`: the name screen of "Other…").
+/// The full-output surface of one output: a lock surface, or a layer surface (`layer`) for the greeter.
+pub struct OutputSurface {
+    pub output: OutputId,
+    pub layer: Option<LayerSurface>,
+    pub presenter: ShmPresenter,
+}
+
+impl OutputSurface {
+    pub fn surface(&self) -> SurfaceId {
+        self.presenter.surface()
+    }
+
+    /// A configure of the surface with the size as sent.
+    pub fn configured(&mut self, size: (u32, u32)) -> Result<()> {
+        let size = match &self.layer {
+            Some(layer) => layer.configured(size)?,
+            None => size,
+        };
+        self.presenter.configured(size);
+        Ok(())
+    }
+}
+
+/// The surfaces of `surfaces` that can take a frame now; poll again after drawing them.
+pub fn ready(conn: &Connection, surfaces: &mut [OutputSurface]) -> Result<Vec<SurfaceId>> {
+    let mut ready = Vec::new();
+    for s in surfaces {
+        loop {
+            match s.presenter.poll(conn)? {
+                // a draw follows every scale change
+                Ready::ScaleChanged(_) => {}
+                Ready::Draw => break ready.push(s.surface()),
+                Ready::Idle => break,
+            }
+        }
+    }
+    Ok(ready)
+}
+
+/// Draw the frame `key` on `presenter`, the password screen of `user` (`None`: the name screen of "Other…").
 pub fn draw(
-    client: &mut Client,
+    conn: &mut Connection,
+    presenter: &mut ShmPresenter,
     renderer: &mut Renderer,
     key: &FrameKey,
     user: Option<&User>,
     power: Option<&Menu>,
-    surface: SurfaceId,
 ) -> Result<()> {
     let date = format_time(unix_seconds()?, DATE_FORMAT)?;
     let field = match &key.field {
@@ -198,20 +239,20 @@ pub fn draw(
         opacity: key.opacity,
         shake: key.shake,
     };
-    client.draw(surface, |pixmap, scale| {
-        renderer.render(&view, pixmap, scale.factor())
+    presenter.draw(conn, None, |pixmap, scale| {
+        renderer.render(&view, pixmap, scale.factor() as f32)
     })?;
     Ok(())
 }
 
-/// Draw the frame `key` of the user picker on `surface`.
+/// Draw the frame `key` of the user picker on `presenter`.
 pub fn draw_picker(
-    client: &mut Client,
+    conn: &mut Connection,
+    presenter: &mut ShmPresenter,
     renderer: &mut Renderer,
     key: &PickerKey,
     picker: &Picker,
     power: Option<&Menu>,
-    surface: SurfaceId,
 ) -> Result<()> {
     let date = format_time(unix_seconds()?, DATE_FORMAT)?;
     let page = picker.page(key.max_per_page);
@@ -223,38 +264,43 @@ pub fn draw_picker(
         grid: Grid::for_count(key.max_per_page.min(picker.tiles().len())),
         selected: key.selected - page.start,
     };
-    client.draw(surface, |pixmap, scale| {
-        renderer.render_picker(&view, pixmap, scale.factor())
+    presenter.draw(conn, None, |pixmap, scale| {
+        renderer.render_picker(&view, pixmap, scale.factor() as f32)
     })?;
     Ok(())
 }
 
 /// Keep exactly one surface per output the server has described, made by `create`.
 pub fn arrange_surfaces(
-    client: &mut Client,
-    surfaces: &mut Vec<(SurfaceId, OutputId)>,
-    create: impl Fn(&mut Client, OutputId) -> Result<SurfaceId>,
+    conn: &mut Connection,
+    surfaces: &mut Vec<OutputSurface>,
+    create: impl Fn(&mut Connection, OutputId) -> Result<(SurfaceId, Option<LayerSurface>)>,
 ) -> Result<()> {
-    let outputs: Vec<OutputId> = client
+    let outputs: Vec<OutputId> = conn
         .outputs()
         .into_iter()
         .filter(|o| o.geometry.is_some())
         .map(|o| o.id)
         .collect();
     let mut gone = Vec::new();
-    surfaces.retain(|&(surface, output)| {
-        let keep = outputs.contains(&output);
+    surfaces.retain(|s| {
+        let keep = outputs.contains(&s.output);
         if !keep {
-            gone.push(surface);
+            gone.push(s.surface());
         }
         keep
     });
     for surface in gone {
-        client.destroy_surface(surface)?;
+        conn.destroy(surface)?;
     }
     for output in outputs {
-        if !surfaces.iter().any(|&(_, o)| o == output) {
-            surfaces.push((create(client, output)?, output));
+        if !surfaces.iter().any(|s| s.output == output) {
+            let (surface, layer) = create(conn, output)?;
+            surfaces.push(OutputSurface {
+                output,
+                layer,
+                presenter: ShmPresenter::new(surface),
+            });
         }
     }
     Ok(())

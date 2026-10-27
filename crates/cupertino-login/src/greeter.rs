@@ -4,12 +4,8 @@
 //! accounts, the settings and the authentication; this process draws and relays what the user types. It never ends by
 //! itself: the server restarts it if it fails.
 
-use crate::screen::{self, FrameKey, Notifier, PickerKey, Result, Scene};
+use crate::screen::{self, FrameKey, Notifier, OutputSurface, PickerKey, Result, Scene};
 use cupertino_assets::Assets;
-use cupertino_client::{
-    key, Anchor, Button, Client, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig, Margin,
-    Modifiers, OutputId, PointerEvent, SurfaceId,
-};
 use cupertino_geometry::Point;
 use cupertino_login::hint::FailedAttempts;
 use cupertino_login::layout::Layout;
@@ -23,7 +19,13 @@ use cupertino_login_ipc::{
     Account, Event as ManagerEvent, Outcome, PowerAction, PowerMenu, PowerRefusal, Request, Secret,
     UserRow, VERSION,
 };
+use cupertino_shell_client::{
+    Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurfaceConfig, Margin, ShellEvent,
+};
 use cupertino_theme::Theme;
+use cupertino_wayland_client::{
+    key, Button, Connection as Wayland, Event, KeyboardEvent, Modifiers, PointerEvent, SurfaceId,
+};
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
@@ -57,7 +59,8 @@ enum Drawn {
 }
 
 struct App {
-    client: Client,
+    wayland: Wayland,
+    layer_shell: LayerShell,
     renderer: Renderer,
     connection: Connection,
     /// The password of the attempt that is open, until the manager asks for it.
@@ -74,7 +77,7 @@ struct App {
     /// Shut Down chosen while a user session is open.
     authorising: Option<PowerAction>,
     /// The surface of each output.
-    surfaces: Vec<(SurfaceId, OutputId)>,
+    surfaces: Vec<OutputSurface>,
     /// The last frame drawn.
     drawn: Option<Drawn>,
     /// `greeter ready` has been logged.
@@ -249,9 +252,11 @@ pub fn run() -> Result<std::convert::Infallible> {
 
     let socket = std::env::var(SOCKET_VARIABLE).map_err(|e| format!("{SOCKET_VARIABLE}: {e}"))?;
     let stream = connect(&socket)?;
-    let client = Client::connect_shell()?;
+    let mut wayland = Wayland::connect()?;
+    let layer_shell =
+        LayerShell::bind(&mut wayland).ok_or("the server lacks zwlr_layer_shell_v1")?;
     let (sender, messages) = mpsc::channel();
-    let notifier = Notifier::new(sender, client.waker());
+    let notifier = Notifier::new(sender, wayland.waker());
     let connection = Connection::spawn(stream, move |message| notifier.send(message))?;
     let welcome = await_welcome(&messages)?;
 
@@ -273,7 +278,8 @@ pub fn run() -> Result<std::convert::Infallible> {
 
     let start = Instant::now();
     let mut app = App {
-        client,
+        wayland,
+        layer_shell,
         renderer,
         connection,
         pending: None,
@@ -292,8 +298,9 @@ pub fn run() -> Result<std::convert::Infallible> {
     };
     app.arrange_surfaces()?;
     loop {
+        app.present()?;
         let timeout = app.timeout()?;
-        for event in app.client.wait(timeout)? {
+        for event in app.wayland.wait(timeout)? {
             app.handle(event)?;
         }
         app.housekeeping()?;
@@ -320,7 +327,7 @@ impl App {
     /// The tiles per page, from the first output the server has described.
     fn max_per_page(&self) -> Result<usize> {
         let geometry = self
-            .client
+            .wayland
             .outputs()
             .into_iter()
             .find_map(|o| o.geometry)
@@ -346,7 +353,7 @@ impl App {
             Stage::Password { user, screen } => Drawn::Field(FrameKey::new(
                 &Scene {
                     screen,
-                    caps_lock: self.client.caps_lock(),
+                    caps_lock: self.wayland.modifiers().caps_lock,
                     help: self.failed.help_shown(&user.login, self.retries_until_hint),
                     power: menu,
                 },
@@ -362,30 +369,50 @@ impl App {
     fn handle(&mut self, event: Event) -> Result<()> {
         let now = self.now();
         match event {
-            Event::Draw(surface) => self.draw(surface)?,
-            Event::Key {
-                pressed: true,
-                key,
-                mods,
-                character,
+            Event::Frame(frame) => {
+                if let Some(s) = self.surface_mut(frame.surface) {
+                    s.presenter.frame_done();
+                }
+            }
+            Event::Keyboard {
+                event:
+                    KeyboardEvent::Key {
+                        code,
+                        pressed: true,
+                        mods,
+                        character,
+                        ..
+                    },
                 ..
-            } => self.press(now, key, mods, character)?,
+            } => self.press(now, code, mods, character)?,
             Event::Pointer { surface, event } => self.pointer(now, surface, event)?,
             Event::OutputsChanged => self.arrange_surfaces()?,
-            Event::Closed(_) => return Err("the server closed a surface of the greeter".into()),
-            // the draw that follows a configure or scale change does the work
-            Event::Configured { .. } | Event::ScaleChanged { .. } => {}
-            Event::Key { .. } | Event::KeyboardLeave(_) => {}
-            // the screens have one fixed look, and this process is the one that holds the lock
-            Event::Appearance { .. }
-            | Event::DisplayOptions(_)
-            | Event::SessionLock { .. }
-            | Event::LockRequested { .. }
-            | Event::LogOutRequested => {}
-            Event::PopupDone(_)
-            | Event::ActivationToken { .. }
-            | Event::MenuBar { .. }
-            | Event::Dock { .. } => {}
+            Event::Extension(event) => match event.downcast_ref::<ShellEvent>() {
+                Some(&ShellEvent::Configure { surface, size }) => {
+                    // of a surface destroyed since
+                    if let Some(s) = self.surface_mut(surface) {
+                        s.configured(size)?;
+                    }
+                }
+                Some(ShellEvent::Closed(_)) => {
+                    return Err("the server closed a surface of the greeter".into())
+                }
+                _ => {}
+            },
+            // the screens have one fixed look and no popups
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn surface_mut(&mut self, surface: SurfaceId) -> Option<&mut OutputSurface> {
+        self.surfaces.iter_mut().find(|s| s.surface() == surface)
+    }
+
+    /// Draw every surface that can take a frame.
+    fn present(&mut self) -> Result<()> {
+        for surface in screen::ready(&self.wayland, &mut self.surfaces)? {
+            self.draw(surface)?;
         }
         Ok(())
     }
@@ -514,11 +541,11 @@ impl App {
         let output = self
             .surfaces
             .iter()
-            .find(|&&(s, _)| s == surface)
-            .map(|&(_, o)| o)
+            .find(|s| s.surface() == surface)
+            .map(|s| s.output)
             .ok_or("a pointer event on an unknown surface")?;
         let geometry = self
-            .client
+            .wayland
             .outputs()
             .into_iter()
             .find(|o| o.id == output)
@@ -664,8 +691,8 @@ impl App {
             screen.tick(now);
         }
         if self.drawn.as_ref() != Some(&self.current(now)?) {
-            for (surface, _) in &self.surfaces {
-                self.client.request_redraw(*surface)?;
+            for s in &mut self.surfaces {
+                s.presenter.request_redraw();
             }
         }
         Ok(())
@@ -772,51 +799,57 @@ impl App {
 
     /// Keep exactly one surface per output the server has described.
     fn arrange_surfaces(&mut self) -> Result<()> {
-        screen::arrange_surfaces(&mut self.client, &mut self.surfaces, |client, output| {
-            Ok(client.layer_surface(&LayerSurfaceConfig {
-                namespace: NAMESPACE.to_string(),
-                output: Some(output),
-                layer: Layer::Overlay,
-                anchor: Anchor::Top | Anchor::Right | Anchor::Bottom | Anchor::Left,
-                size: (0, 0),
-                margin: Margin::default(),
-                exclusive_zone: -1,
-                keyboard: KeyboardInteractivity::Exclusive,
-            })?)
+        let layer_shell = &self.layer_shell;
+        screen::arrange_surfaces(&mut self.wayland, &mut self.surfaces, |wayland, output| {
+            let layer = layer_shell.layer_surface(
+                wayland,
+                &LayerSurfaceConfig {
+                    namespace: NAMESPACE.to_string(),
+                    output: Some(output),
+                    layer: Layer::Overlay,
+                    anchor: Anchor::Top | Anchor::Right | Anchor::Bottom | Anchor::Left,
+                    size: (0, 0),
+                    margin: Margin::default(),
+                    exclusive_zone: -1,
+                    keyboard: KeyboardInteractivity::Exclusive,
+                },
+            )?;
+            Ok((layer.surface(), Some(layer)))
         })
     }
 
     fn draw(&mut self, surface: SurfaceId) -> Result<()> {
         // of a surface destroyed since
-        if !self.surfaces.iter().any(|&(s, _)| s == surface) {
+        let Some(i) = self.surfaces.iter().position(|s| s.surface() == surface) else {
             return Ok(());
-        }
+        };
         let drawn = self.current(self.now())?;
         let menu = self.power.as_ref();
+        let presenter = &mut self.surfaces[i].presenter;
         match (&drawn, &self.stage) {
             (Drawn::Picker(key), _) => screen::draw_picker(
-                &mut self.client,
+                &mut self.wayland,
+                presenter,
                 &mut self.renderer,
                 key,
                 &self.picker,
                 menu,
-                surface,
             )?,
             (Drawn::Field(key), Stage::Password { user, .. }) => screen::draw(
-                &mut self.client,
+                &mut self.wayland,
+                presenter,
                 &mut self.renderer,
                 key,
                 Some(user),
                 menu,
-                surface,
             )?,
             (Drawn::Field(key), _) => screen::draw(
-                &mut self.client,
+                &mut self.wayland,
+                presenter,
                 &mut self.renderer,
                 key,
                 None,
                 menu,
-                surface,
             )?,
         }
         self.drawn = Some(drawn);

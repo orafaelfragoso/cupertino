@@ -552,6 +552,8 @@ const TOOLBAR_GLYPH: f64 = 13.0;
 /// The up-down chevrons of the view popup, the search field's text size and its focus ring. approximate.
 const POPUP_CHEVRON_GLYPH: f64 = 9.0;
 const SEARCH_TEXT_SIZE: f64 = 13.0;
+/// The most bytes the toolbar search holds.
+pub const SEARCH_MAX_LEN: usize = 1024;
 const SEARCH_RING: f64 = 2.0;
 /// Longest side of a sidebar symbol in points: 16 of the 17 pt icon field; the symbol's size inside the field
 /// and the accent tint of the sidebar symbols are approximate (not known).
@@ -577,12 +579,6 @@ fn paint_marquee(pm: &mut Pixmap, scale: f32, band: &Rect, content: &Rect, pal: 
     ] {
         fill_rect(pm, &edge, scale, pal.tertiary_label);
     }
-}
-
-/// `x` (points) moved to the nearest device pixel: a caret, a one-pixel rect, is drawn there because tiny-skia's
-/// anti-aliased path for such a rect at a fractional position asserts in debug builds.
-fn on_pixel(x: f64, scale: f32) -> f64 {
-    (x * f64::from(scale)).round() / f64::from(scale)
 }
 
 /// One frame of the window: its layout, the content layout and the scroll position.
@@ -714,9 +710,11 @@ pub struct WindowState<'a> {
     pub mode: ViewMode,
     /// The window has the focus: selections use the accent colour.
     pub active: bool,
-    /// The search field's text, and whether it has the keyboard.
-    pub search: &'a str,
+    /// The search field, and whether it has the keyboard.
+    pub search: &'a TextField,
     pub search_focused: bool,
+    /// The search field's caret shows now (it has the keyboard, nothing is selected, the blink is on).
+    pub search_caret: bool,
     /// The folder's name, the window's title.
     pub title: &'a str,
     pub now: SystemTime,
@@ -740,6 +738,8 @@ pub struct WindowPainter {
     pub list: ListViewSettings,
     /// The name editor's text area and the x of each of its caret positions, as last drawn (window points).
     editor_text: Option<(Rect, Vec<f64>)>,
+    /// The search field's text area, the x of each of its caret positions and the scroll it was drawn with.
+    search_text: Option<(Rect, Vec<f64>, f64)>,
 }
 
 impl WindowPainter {
@@ -750,7 +750,29 @@ impl WindowPainter {
             icons: IconViewSettings::default(),
             list: ListViewSettings::default(),
             editor_text: None,
+            search_text: None,
         }
+    }
+
+    /// The caret position of the search `field` under `at` as last drawn, `None` before it was drawn.
+    pub fn search_index(&self, field: &TextField, at: Point) -> Option<usize> {
+        let (area, offsets, scroll) = self.search_text.as_ref()?;
+        Some(field.index_at(offsets, at.x - area.x + scroll))
+    }
+
+    /// Scroll the search `field` as it was last drawn, which keeps its caret in view.
+    pub fn follow_search_caret(&self, field: &mut TextField) {
+        let Some((area, offsets, _)) = &self.search_text else {
+            return;
+        };
+        let caret_x = field
+            .boundaries()
+            .iter()
+            .position(|b| *b == field.caret())
+            .and_then(|i| offsets.get(i))
+            .copied()
+            .unwrap_or(0.0);
+        field.follow_caret(caret_x, offsets.last().copied().unwrap_or(0.0), area.w);
     }
 
     /// The caret position of the name editor's `field` under `at` as last drawn, `None` outside its text area.
@@ -1553,68 +1575,67 @@ impl WindowPainter {
             scale,
             pal.secondary_text,
         );
-        let px = SEARCH_TEXT_SIZE as f32 * scale;
         let x = glass.right() + m::SEARCH_INSET;
-        let room = ((r.right() - m::SEARCH_INSET - x) as f32 * scale).max(0.0);
-        let baseline = r.center().y as f32 * scale + px * 0.36;
-        if state.search.is_empty() && !state.search_focused {
+        let area = Rect::new(x, r.y, (r.right() - m::SEARCH_INSET - x).max(0.0), r.h);
+        let geo = GeoRect::new(area.x, area.y, area.w, area.h);
+        let baseline = centred_baseline(&geo, SEARCH_TEXT_SIZE);
+        let field = state.search;
+        if field.is_empty() && !state.search_focused {
             self.renderer.text.draw(
                 pm,
                 "Search",
                 x as f32 * scale,
-                baseline,
-                px,
+                baseline as f32 * scale,
+                SEARCH_TEXT_SIZE as f32 * scale,
                 400,
                 0.0,
                 pal.secondary_text,
             );
+            self.search_text = None;
             return;
         }
-        // the end of a long query stays in sight, as typed
-        let text = truncate_head(&mut self.renderer.text, state.search, px, room);
-        self.renderer.text.draw(
-            pm,
-            &text,
-            x as f32 * scale,
-            baseline,
-            px,
-            400,
-            0.0,
-            pal.text,
+        let style = FieldStyle {
+            size: SEARCH_TEXT_SIZE,
+            weight: 400,
+            letter_spacing: 0.0,
+            text: pal.text,
+            selection: pal.text_selection,
+            caret: pal.text,
+            caret_width: 1.0,
+        };
+        let boundaries = field.boundaries();
+        let offsets = caret_offsets(
+            &mut self.renderer.text,
+            field.text(),
+            &boundaries,
+            &style,
+            scale,
         );
-        if state.search_focused {
-            let caret = on_pixel(
-                x + f64::from(self.renderer.text.measure(&text, px, 400, 0.0) / scale),
-                scale,
-            );
-            fill_rect(
-                pm,
-                &Rect::new(caret, r.y + 4.0, 1.0, r.h - 8.0),
-                scale,
-                pal.text,
-            );
-        }
+        let caret_x = boundaries
+            .iter()
+            .position(|b| *b == field.caret())
+            .map_or(0.0, |i| offsets[i]);
+        let scroll = field.scroll_for(caret_x, offsets.last().copied().unwrap_or(0.0), area.w);
+        let content = FieldContent {
+            text: field.text(),
+            boundaries: &boundaries,
+            offsets: &offsets,
+            selection: field.selection(),
+            composition: field.composition(),
+            caret: state.search_caret.then_some(field.caret()),
+            scroll,
+        };
+        draw_field(
+            &mut self.renderer.text,
+            pm,
+            &geo,
+            baseline,
+            scale,
+            &content,
+            &style,
+        );
+        self.search_text = Some((area, offsets, scroll));
     }
-}
-
-/// The start of `text` cut so that its end fits `max_w` pixels, behind an ellipsis.
-fn truncate_head(
-    tr: &mut cupertino_decorations::text::TextRenderer,
-    text: &str,
-    px: f32,
-    max_w: f32,
-) -> String {
-    if tr.measure(text, px, 400, 0.0) <= max_w {
-        return text.to_string();
-    }
-    let chars: Vec<char> = text.chars().collect();
-    for start in 1..chars.len() {
-        let s = format!("…{}", chars[start..].iter().collect::<String>());
-        if tr.measure(&s, px, 400, 0.0) <= max_w {
-            return s;
-        }
-    }
-    "…".to_string()
 }
 
 /// A small chevron pointing down centred on `c` (window points): the menu marker of a popup item. approximate shape.
@@ -1938,8 +1959,9 @@ mod tests {
             places: &places,
             mode: ViewMode::Icons,
             active: true,
-            search: "",
+            search: &TextField::new(),
             search_focused: false,
+            search_caret: false,
             title: "Here",
             now: SystemTime::now(),
             edit: None,
@@ -2153,8 +2175,9 @@ mod tests {
             places: &places,
             mode: ViewMode::Icons,
             active: true,
-            search: "",
+            search: &TextField::new(),
             search_focused: false,
+            search_caret: false,
             title: "Here",
             now: SystemTime::now(),
             edit: None,
@@ -2181,8 +2204,9 @@ mod tests {
             places: &places,
             mode: ViewMode::List,
             active: true,
-            search: "",
+            search: &TextField::new(),
             search_focused: false,
+            search_caret: false,
             title: "Here",
             now: SystemTime::now(),
             edit: None,
@@ -2563,13 +2587,16 @@ mod tests {
             1.0,
         );
         let mut pm = Pixmap::new(920, 436).unwrap();
+        let mut search = TextField::new();
+        search.insert("ed");
         let state = WindowState {
             browser: &browser,
             places: &places,
             mode: ViewMode::List,
             active: true,
-            search: "ed",
+            search: &search,
             search_focused: true,
+            search_caret: true,
             title: "Here",
             now: SystemTime::now(),
             edit: None,
@@ -2588,6 +2615,110 @@ mod tests {
             .1;
         let ring = pm.pixel(field.center().x as u32, field.y as u32).unwrap();
         assert!(ring.blue() > ring.red(), "the accent ring");
+    }
+
+    /// A browser on a folder with one file, the painter and a frame of a 920 x 436 window at `scale`.
+    fn search_window(scale: f32) -> (tempfile::TempDir, Browser, Vec<Place>, WindowPainter, Frame) {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("editor.txt"), b"x").unwrap();
+        let mut browser = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            PathBuf::from("/nonexistent/recently-used.xbel"),
+            None,
+            Arc::new(|| {}),
+        )
+        .unwrap();
+        while browser.entries().is_empty() {
+            browser.poll();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let places = places();
+        let mut painter = WindowPainter::new(crate::render::renderer());
+        let frame = painter.frame(
+            Size { w: 920.0, h: 436.0 },
+            &places,
+            Bars::HIDDEN,
+            d.path(),
+            ViewMode::List,
+            browser.outline(),
+            0.0,
+            scale,
+        );
+        (d, browser, places, painter, frame)
+    }
+
+    fn paint_search(
+        painter: &mut WindowPainter,
+        frame: &Frame,
+        browser: &Browser,
+        places: &[Place],
+        search: &TextField,
+        scale: f32,
+    ) -> Pixmap {
+        let mut pm = Pixmap::new((920.0 * scale) as u32, (436.0 * scale) as u32).unwrap();
+        let state = WindowState {
+            browser,
+            places,
+            mode: ViewMode::List,
+            active: true,
+            search,
+            search_focused: true,
+            search_caret: true,
+            title: "Here",
+            now: SystemTime::now(),
+            edit: None,
+            edit_caret: false,
+            drop_target: None,
+            marquee: None,
+            status: "",
+        };
+        painter.paint(&mut pm, scale, frame, &state, &Palette::builtin(false));
+        pm
+    }
+
+    #[test]
+    fn the_search_selection_lies_on_the_token_and_a_press_lands_on_the_caret_drawn_there() {
+        let scale = 1.5;
+        let (_d, browser, places, mut painter, frame) = search_window(scale);
+        let mut search = TextField::with_max_len(SEARCH_MAX_LEN);
+        search.insert("notes editor");
+        search.select(0..5);
+        let pm = paint_search(&mut painter, &frame, &browser, &places, &search, scale);
+        let (area, offsets, scroll) = painter.search_text.clone().unwrap();
+        // inside the band, above the glyphs
+        let y = ((area.y + area.h / 2.0 - SEARCH_TEXT_SIZE / 2.0 - 1.0) * 1.5) as u32;
+        let x = ((area.x + offsets[2] - scroll) * 1.5) as u32;
+        let p = pm.pixel(x, y).unwrap().demultiply();
+        assert!(
+            p.blue() > p.red().saturating_add(40),
+            "the selected-text background: {:?}",
+            (p.red(), p.green(), p.blue())
+        );
+        for (i, caret) in search.boundaries().into_iter().enumerate() {
+            let at = Point {
+                x: area.x + offsets[i] - scroll,
+                y: area.y + area.h / 2.0,
+            };
+            assert_eq!(painter.search_index(&search, at), Some(caret), "at {caret}");
+        }
+    }
+
+    #[test]
+    fn a_long_paste_is_cut_to_the_search_cap_and_drawn_in_time_at_any_length() {
+        let (_d, browser, places, mut painter, frame) = search_window(1.0);
+        for n in [1_000, 2_000, 4_000, 10_000] {
+            let mut search = TextField::with_max_len(SEARCH_MAX_LEN);
+            let start = std::time::Instant::now();
+            search.paste(&"word ".repeat(n / 5));
+            paint_search(&mut painter, &frame, &browser, &places, &search, 1.0);
+            painter.follow_search_caret(&mut search);
+            let took = start.elapsed();
+            eprintln!("{n} characters pasted: {took:?}");
+            assert_eq!(search.text().len(), n.min(SEARCH_MAX_LEN));
+            assert!(search.scroll() > 0.0, "the caret at the end stays in view");
+            assert!(took < std::time::Duration::from_secs(1), "{n}: {took:?}");
+        }
     }
 
     #[test]
@@ -2629,8 +2760,9 @@ mod tests {
                 places: &places,
                 mode,
                 active,
-                search: "",
+                search: &TextField::new(),
                 search_focused: false,
+                search_caret: false,
                 title: "Here",
                 now: SystemTime::now(),
                 edit: None,
@@ -2707,8 +2839,9 @@ mod tests {
                             places: &places,
                             mode,
                             active: true,
-                            search: "",
+                            search: &TextField::new(),
                             search_focused: false,
+                            search_caret: false,
                             title: "Here",
                             now: SystemTime::now(),
                             edit: Some(&edit),
@@ -2733,7 +2866,5 @@ mod tests {
                 }
             }
         }
-        assert_eq!(on_pixel(10.3, 2.0), 10.5);
-        assert_eq!(on_pixel(10.3, 1.0), 10.0);
     }
 }

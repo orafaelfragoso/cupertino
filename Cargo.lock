@@ -1002,6 +1002,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-menu-model"
+version = "0.1.0"
+
+[[package]]
 name = "cupertino-menubar"
 version = "0.1.0"
 dependencies = [

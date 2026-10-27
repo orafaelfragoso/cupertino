@@ -395,7 +395,10 @@ impl App {
                     self.close_menu()?;
                 }
             }
-            Event::OutputsChanged | Event::SessionLock { .. } | Event::LockRequested { .. } | Event::ActivationToken { .. } => {}
+            Event::OutputsChanged
+            | Event::SessionLock { .. }
+            | Event::LockRequested { .. }
+            | Event::ActivationToken { .. } => {}
             Event::MenuBar { .. } | Event::Dock { .. } => {
                 return Err(
                     "an event for a menu bar or dock arrived, and this process has none".into(),

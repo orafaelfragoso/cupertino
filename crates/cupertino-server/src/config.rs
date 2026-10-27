@@ -388,6 +388,9 @@ impl Config {
             Path::new(SYSTEM_CONFIG),
         ) {
             let file = cfg.apply_path(&path);
+            if path == Path::new(SYSTEM_CONFIG) && file.shell.is_none() {
+                tracing::error!(path = %path.display(), "the system configuration is unreadable or has no shell list: the shell list is empty unless the user's file sets one");
+            }
             if Some(&path) == user.as_ref() {
                 compositor = file;
             }

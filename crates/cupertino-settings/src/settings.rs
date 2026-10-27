@@ -219,16 +219,20 @@ impl Settings {
     }
 
     /// Take the accessibility settings from `held`, the server's `Accessibility` property (every key of the file with
-    /// its value as the file writes it); a key or value this build does not understand is skipped.
+    /// its value as the file writes it). A key or value this build does not understand is skipped and named in the
+    /// returned messages.
     pub fn apply_session_accessibility(
         &mut self,
         held: &std::collections::HashMap<String, String>,
-    ) {
-        for (key, value) in held {
-            if let Err(e) = self.accessibility.set(key, value) {
-                eprintln!("cupertino-settings: the session's accessibility setting {key}: {e}");
-            }
-        }
+    ) -> Vec<String> {
+        held.iter()
+            .filter_map(|(key, value)| {
+                self.accessibility
+                    .set(key, value)
+                    .err()
+                    .map(|e| format!("the session's accessibility setting {key}: {e}"))
+            })
+            .collect()
     }
 
     /// Store the resolution `dpi` of the mouse `key` in `compositor.json` over the file as it is now, so a key the

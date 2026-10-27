@@ -20,7 +20,7 @@ use cupertino_settings::form::{self, RowSpec, SectionLayout, SectionSpec};
 use cupertino_settings::history::History;
 use cupertino_settings::instance;
 use cupertino_settings::keys::{self, Action, Focus, Mods, SearchKey};
-use cupertino_settings::live::Live;
+use cupertino_settings::live::{Live, Reading};
 use cupertino_settings::menu;
 use cupertino_settings::paint::{
     menu_rows, popup_hit, search_text_area, Painter, Palette, PaneView, WindowState,
@@ -107,6 +107,8 @@ struct App {
     settings: Settings,
     /// The text of the last refused change of a control, shown under its row until it changes again.
     errors: Vec<(ControlId, String)>,
+    /// Problems already written to the log, so a repeating one is logged once per run.
+    reported: std::collections::HashSet<String>,
     /// The pane the content column shows, its scroll offset and its layout as last drawn.
     content_pane: PaneId,
     scroll: f64,
@@ -264,6 +266,7 @@ pub fn run(pane: PaneId) -> Result<()> {
         paths,
         settings,
         errors: Vec::new(),
+        reported: std::collections::HashSet::new(),
         content_pane: pane,
         scroll: 0.0,
         form: Vec::new(),
@@ -1362,8 +1365,19 @@ impl App {
     /// their only writer, and it keeps them in memory only when it has no file to store them in, so the file is not
     /// the truth. Without the property the file's values stay.
     fn sync_accessibility(&mut self) {
-        if let Some(held) = self.services.accessibility().ready() {
-            self.settings.apply_session_accessibility(held);
+        let problems = match self.services.accessibility() {
+            Reading::Ready(held) => self.settings.apply_session_accessibility(&held),
+            Reading::Unavailable(reason) => {
+                vec![format!(
+                    "the session's accessibility settings cannot be read: {reason}"
+                )]
+            }
+            Reading::Unknown => Vec::new(),
+        };
+        for problem in problems {
+            if self.reported.insert(problem.clone()) {
+                eprintln!("cupertino-settings: {problem}");
+            }
         }
     }
 

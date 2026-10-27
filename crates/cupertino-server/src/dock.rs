@@ -119,7 +119,7 @@ impl Docks {
 
     /// Tell every dock that `app_id` stopped answering its pings (`unresponsive` true) or answers again.
     pub fn unresponsive(&self, app_id: &str, unresponsive: bool) {
-        for dock in self.docks.iter().filter(|d| d.resource.version() >= 2) {
+        for dock in self.docks.iter().filter(|d| d.resource.version() >= 4) {
             dock.resource
                 .unresponsive(app_id.to_string(), u32::from(unresponsive));
             dock.resource.done();
@@ -128,7 +128,7 @@ impl Docks {
 
     /// Tell every dock the Force Quit shortcut was pressed: it opens or closes its dialog.
     pub fn force_quit_dialog(&self) {
-        for dock in self.docks.iter().filter(|d| d.resource.version() >= 2) {
+        for dock in self.docks.iter().filter(|d| d.resource.version() >= 4) {
             dock.resource.force_quit_dialog();
             dock.resource.done();
         }
@@ -331,7 +331,7 @@ impl Cupertino {
             .docks
             .docks
             .last()
-            .filter(|d| d.resource.version() >= 2)
+            .filter(|d| d.resource.version() >= 4)
         {
             let unresponsive = self.unresponsive_apps();
             for app_id in &unresponsive {

@@ -1,6 +1,8 @@
 use super::*;
 use crate::engine::tests_support::{app, test_launcher};
 use crate::frecency::Frecency;
+use cupertino_text_field::{KeyInput, Keymap, Response};
+use std::time::Instant;
 
 fn now(t: f64) -> Now {
     Now {
@@ -16,9 +18,41 @@ fn open() -> (Panel, Launcher) {
     (p, l)
 }
 
+/// A key press as the app handles it: the panel's keys first, the rest through the query field (standard chords).
+fn press(p: &mut Panel, l: &mut Launcher, key: Key, mods: Mods) -> PanelEvent {
+    let event = p.handle_key(key, mods, l, now(0.0));
+    if event != PanelEvent::Edit {
+        return event;
+    }
+    let (code, character) = match key {
+        Key::Char(c) => (0, Some(c)),
+        Key::Backspace => (14, None),
+        Key::Delete => (111, None),
+        Key::Left => (105, None),
+        Key::Right => (106, None),
+        Key::Home => (102, None),
+        Key::End => (107, None),
+        other => unreachable!("{other:?} is a panel key"),
+    };
+    let input = KeyInput::new(
+        code,
+        mods.shift,
+        mods.ctrl,
+        mods.alt,
+        mods.primary,
+        character,
+    );
+    match p.edit(l, now(0.0), |f| {
+        f.key(&mut Keymap::standard(), input, Instant::now())
+    }) {
+        Response::Ignored => PanelEvent::None,
+        _ => PanelEvent::Changed,
+    }
+}
+
 fn type_str(p: &mut Panel, l: &mut Launcher, s: &str) {
     for c in s.chars() {
-        p.handle_key(Key::Char(c), Mods::NONE, l, now(0.0));
+        press(p, l, Key::Char(c), Mods::NONE);
     }
 }
 
@@ -28,7 +62,7 @@ fn typing_updates_query_cursor_and_results() {
     assert!(p.is_visible() && p.results().is_empty());
     type_str(&mut p, &mut l, "fire");
     assert_eq!(p.query(), "fire");
-    assert_eq!(p.cursor(), 4);
+    assert_eq!(p.field().caret(), 4);
     assert_eq!(p.selected_item().unwrap().title, "Firefox");
     assert_eq!(p.selected(), 0);
 }
@@ -37,53 +71,50 @@ fn typing_updates_query_cursor_and_results() {
 fn editing_in_the_middle_and_unicode() {
     let (mut p, mut l) = open();
     type_str(&mut p, &mut l, "caf");
-    p.handle_key(Key::Char('é'), Mods::NONE, &mut l, now(0.0));
+    press(&mut p, &mut l, Key::Char('é'), Mods::NONE);
     assert_eq!(p.query(), "café");
-    p.handle_key(Key::Left, Mods::NONE, &mut l, now(0.0));
-    p.handle_key(Key::Left, Mods::NONE, &mut l, now(0.0));
-    assert_eq!(p.cursor(), 2);
-    p.handle_key(Key::Char('X'), Mods::NONE, &mut l, now(0.0));
+    press(&mut p, &mut l, Key::Left, Mods::NONE);
+    press(&mut p, &mut l, Key::Left, Mods::NONE);
+    assert_eq!(p.field().caret(), 2);
+    press(&mut p, &mut l, Key::Char('X'), Mods::NONE);
     assert_eq!(p.query(), "caXfé");
-    p.handle_key(Key::Backspace, Mods::NONE, &mut l, now(0.0));
-    p.handle_key(Key::Delete, Mods::NONE, &mut l, now(0.0));
-    assert_eq!(p.query(), "caé");
-    assert_eq!(p.cursor(), 2);
-    p.handle_key(Key::End, Mods::NONE, &mut l, now(0.0));
-    p.handle_key(Key::Backspace, Mods::NONE, &mut l, now(0.0));
+    press(&mut p, &mut l, Key::Backspace, Mods::NONE);
+    press(&mut p, &mut l, Key::Delete, Mods::NONE);
+    assert_eq!((p.query(), p.field().caret()), ("caé", 2));
+    press(&mut p, &mut l, Key::End, Mods::NONE);
+    press(&mut p, &mut l, Key::Backspace, Mods::NONE);
     assert_eq!(p.query(), "ca");
-    p.handle_key(Key::Home, Mods::NONE, &mut l, now(0.0));
-    assert_eq!(
-        p.handle_key(Key::Backspace, Mods::NONE, &mut l, now(0.0)),
-        PanelEvent::None
-    );
-    assert_eq!(
-        p.handle_key(Key::Left, Mods::NONE, &mut l, now(0.0)),
-        PanelEvent::None
-    );
+    press(&mut p, &mut l, Key::Home, Mods::NONE);
+    press(&mut p, &mut l, Key::Backspace, Mods::NONE);
+    assert_eq!((p.query(), p.field().caret()), ("ca", 0));
 }
 
 #[test]
-fn emacs_bindings_and_word_operations() {
+fn editing_chords_come_from_the_standard_table() {
     let (mut p, mut l) = open();
     p.set_query("libre office writer", &l, now(0.0));
-    p.handle_key(Key::Char('w'), Mods::CTRL, &mut l, now(0.0));
+    press(&mut p, &mut l, Key::Backspace, Mods::ALT);
     assert_eq!(p.query(), "libre office ");
-    p.handle_key(Key::Backspace, Mods::CTRL, &mut l, now(0.0));
+    press(&mut p, &mut l, Key::Backspace, Mods::ALT);
     assert_eq!(p.query(), "libre ");
-    p.handle_key(Key::Left, Mods::CTRL, &mut l, now(0.0));
-    assert_eq!(p.cursor(), 0);
-    p.handle_key(Key::Right, Mods::CTRL, &mut l, now(0.0));
-    assert_eq!(p.cursor(), 5);
-    p.handle_key(Key::Char('k'), Mods::CTRL, &mut l, now(0.0));
+    press(&mut p, &mut l, Key::Left, Mods::ALT);
+    assert_eq!(p.field().caret(), 0);
+    press(&mut p, &mut l, Key::Right, Mods::ALT);
+    assert_eq!(p.field().caret(), 5);
+    press(&mut p, &mut l, Key::Char('k'), Mods::CTRL);
     assert_eq!(p.query(), "libre");
-    p.handle_key(Key::Char('a'), Mods::CTRL, &mut l, now(0.0));
-    assert_eq!(p.cursor(), 0);
-    p.handle_key(Key::Char('e'), Mods::CTRL, &mut l, now(0.0));
-    assert_eq!(p.cursor(), 5);
-    p.handle_key(Key::Char('b'), Mods::CTRL, &mut l, now(0.0));
-    p.handle_key(Key::Char('u'), Mods::CTRL, &mut l, now(0.0));
-    assert_eq!(p.query(), "e");
-    assert_eq!(p.cursor(), 0);
+    press(&mut p, &mut l, Key::Char('a'), Mods::CTRL);
+    assert_eq!(p.field().caret(), 0);
+    press(&mut p, &mut l, Key::Char('e'), Mods::CTRL);
+    assert_eq!(p.field().caret(), 5);
+    press(&mut p, &mut l, Key::Char('b'), Mods::CTRL);
+    press(&mut p, &mut l, Key::Char('k'), Mods::CTRL);
+    assert_eq!((p.query(), p.field().caret()), ("libr", 4));
+    assert_eq!(
+        p.results().is_empty(),
+        l.query("libr", now(0.0).unix).is_empty(),
+        "the query ran again"
+    );
 }
 
 #[test]
@@ -187,7 +218,7 @@ fn tab_completes_to_the_selected_title() {
         PanelEvent::Changed
     );
     assert_eq!(p.query(), "Firefox");
-    assert_eq!(p.cursor(), 7);
+    assert_eq!(p.field().caret(), 7);
     assert_eq!(
         p.handle_key(Key::Tab, Mods::NONE, &mut l, now(0.0)),
         PanelEvent::None
@@ -296,12 +327,12 @@ fn refresh_keeps_selection_when_possible() {
 fn control_characters_are_not_inserted() {
     let (mut p, mut l) = open();
     assert_eq!(
-        p.handle_key(Key::Char('\n'), Mods::NONE, &mut l, now(0.0)),
+        press(&mut p, &mut l, Key::Char('\n'), Mods::NONE),
         PanelEvent::None
     );
     assert_eq!(p.query(), "");
     assert_eq!(
-        p.handle_key(Key::Char('z'), Mods::CTRL, &mut l, now(0.0)),
+        press(&mut p, &mut l, Key::Char('z'), Mods::CTRL),
         PanelEvent::None
     );
 }
@@ -359,7 +390,7 @@ fn leaving_the_list_upwards_selects_the_query_and_typing_replaces_it() {
 fn space_previews_only_with_list_focus() {
     let (mut p, mut l) = open();
     type_str(&mut p, &mut l, "e");
-    p.handle_key(Key::Char(' '), Mods::NONE, &mut l, now(0.0));
+    press(&mut p, &mut l, Key::Char(' '), Mods::NONE);
     assert_eq!(
         p.query(),
         "e ",
@@ -415,10 +446,7 @@ fn primary_shortcuts_are_commands() {
         shift: true,
         ..Mods::PRIMARY
     };
-    assert_eq!(
-        p.handle_key(Key::Char('b'), m, &mut l, now(0.0)),
-        PanelEvent::None
-    );
+    assert_eq!(press(&mut p, &mut l, Key::Char('b'), m), PanelEvent::None);
 }
 
 #[test]

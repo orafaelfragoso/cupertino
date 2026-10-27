@@ -17,6 +17,7 @@
 use crate::engine::{ItemKind, ResultItem};
 use crate::panel::Panel;
 use cupertino_assets::{AssetError, Assets, FontRole};
+use cupertino_decorations::field::{caret_offsets, draw_field, FieldContent, FieldStyle};
 use cupertino_decorations::shadow::{ShadowParams, ShadowRasterizer};
 use cupertino_decorations::shape::rounded_path;
 use cupertino_decorations::text::TextRenderer;
@@ -51,6 +52,8 @@ pub struct PanelPalette {
     pub selection: Rgba,
     /// Accent colour (insertion point).
     pub accent: Rgba,
+    /// Background of selected query text.
+    pub text_selection: Rgba,
     pub separator: Rgba,
     pub rim: Rgba,
     pub fallback_background: Rgba,
@@ -86,6 +89,10 @@ impl PanelPalette {
             tertiary_label: sem(SemanticColor::TertiaryLabel, [0.5, 0.5, 0.5, 0.4]),
             selection: sem(SemanticColor::QuaternaryLabel, [0.5, 0.5, 0.5, 0.16]),
             accent,
+            text_selection: sem(
+                SemanticColor::SelectedTextBackground,
+                [0.0, 0.48, 1.0, 0.35],
+            ),
             separator: sem(SemanticColor::Grid, [0.5, 0.5, 0.5, 0.3]),
             rim: sem(SemanticColor::WindowRim, [1.0, 1.0, 1.0, 0.35]),
             fallback_background: [window[0], window[1], window[2], 0.94],
@@ -299,6 +306,10 @@ impl PanelLayout {
 
 /// Semantic name of the generic application icon.
 const GENERIC_APPLICATION_ICON: &str = "application.generic";
+/// Points between the search symbol and the query.
+const FIELD_GAP: f64 = 12.0;
+/// The insertion point's width in points.
+const CARET_WIDTH: f64 = 1.4;
 
 /// Source of application icon pixmaps for an icon name or path.
 pub trait IconSource {
@@ -890,40 +901,42 @@ impl PanelRenderer {
             s.palette.secondary_label,
         );
 
-        let text_x = ox + s.side_padding + ic + 12.0;
         let base = oy + s.centered_baseline(s.input_font_size, layout.input.height());
-        let query = panel.query();
-        if query.is_empty() {
+        let area = self.field_area(layout).translate(ox, oy);
+        if panel.query().is_empty() {
             self.draw_text(
                 &mut pm,
                 &s.placeholder,
-                text_x,
+                area.x(),
                 base,
                 s.input_font_size,
                 400,
                 s.palette.tertiary_label,
                 scale,
             );
-            if opts.caret_visible {
-                self.caret(&mut pm, text_x, base, scale);
-            }
-        } else {
-            self.draw_text(
-                &mut pm,
-                query,
-                text_x,
-                base,
-                s.input_font_size,
-                400,
-                s.palette.label,
-                scale,
-            );
-            if opts.caret_visible {
-                let before: String = query.chars().take(panel.cursor()).collect();
-                let off = self.measure(&before, s.input_font_size, 400);
-                self.caret(&mut pm, text_x + off, base, scale);
-            }
         }
+        let field = panel.field();
+        let style = self.field_style();
+        let boundaries = field.boundaries();
+        let offsets = caret_offsets(&mut self.text, field.text(), &boundaries, &style, scale);
+        let content = FieldContent {
+            text: field.text(),
+            boundaries: &boundaries,
+            offsets: &offsets,
+            selection: field.selection(),
+            composition: field.composition(),
+            caret: opts.caret_visible.then_some(field.caret()),
+            scroll: field.scroll(),
+        };
+        draw_field(
+            &mut self.text,
+            &mut pm,
+            &area,
+            base,
+            scale,
+            &content,
+            &style,
+        );
 
         if layout.total_rows > 0 {
             let sep_y = ((oy + layout.input.height()) * sc) as f32;
@@ -1112,20 +1125,42 @@ impl PanelRenderer {
         }
     }
 
-    fn caret(&self, pm: &mut Pixmap, x: f64, baseline: f64, scale: f32) {
+    /// The query's text area in panel points: right of the search symbol to the side padding.
+    pub fn field_area(&self, layout: &PanelLayout) -> Rect {
         let s = &self.style;
-        let px = s.typography.substitute_size(s.input_font_size);
-        let (top, bottom) = (baseline - px * 0.85, baseline + px * 0.22);
-        let xx = (x * scale as f64 + 0.5) as f32;
-        line(
-            pm,
-            &[
-                (xx, (top * scale as f64) as f32),
-                (xx, (bottom * scale as f64) as f32),
-            ],
-            (1.4 * scale).max(1.0),
-            s.palette.accent,
-        );
+        let x = s.side_padding + s.input_icon_size + FIELD_GAP;
+        Rect::new(
+            x,
+            0.0,
+            (layout.size.width - s.side_padding - x).max(0.0),
+            layout.input.height(),
+        )
+    }
+
+    /// The x in points of each caret position of the query ([`TextField::boundaries`]) at `scale`.
+    pub fn field_offsets(&mut self, panel: &Panel, scale: f32) -> Vec<f64> {
+        let style = self.field_style();
+        let field = panel.field();
+        caret_offsets(
+            &mut self.text,
+            field.text(),
+            &field.boundaries(),
+            &style,
+            scale,
+        )
+    }
+
+    fn field_style(&self) -> FieldStyle {
+        let s = &self.style;
+        FieldStyle {
+            size: f64::from(s.px(s.input_font_size)),
+            weight: 400,
+            letter_spacing: f64::from(s.tracking(s.input_font_size)),
+            text: s.palette.label,
+            selection: s.palette.text_selection,
+            caret: s.palette.accent,
+            caret_width: CARET_WIDTH,
+        }
     }
 }
 
@@ -1134,6 +1169,7 @@ mod tests {
     use super::*;
     use crate::engine::tests_support::test_launcher;
     use crate::panel::{Key, Mods, Now};
+    use cupertino_text_field::TextField;
 
     /// Uses the built-in assets only, so the result does not depend on the packs installed on the machine.
     fn renderer() -> PanelRenderer {
@@ -1147,16 +1183,14 @@ mod tests {
     }
 
     fn panel_with(query: &str) -> (Panel, crate::engine::Launcher) {
-        let mut l = test_launcher();
+        let l = test_launcher();
         let mut p = Panel::new();
         let now = Now {
             mono: 0.0,
             unix: 1.0e6,
         };
         p.show(&l, now);
-        for c in query.chars() {
-            p.handle_key(Key::Char(c), Mods::NONE, &mut l, now);
-        }
+        p.set_query(query, &l, now);
         (p, l)
     }
 
@@ -1319,9 +1353,7 @@ mod tests {
             unix: 1.0e6,
         };
         p.show(&l, now);
-        for c in "tool".chars() {
-            p.handle_key(Key::Char(c), Mods::NONE, &mut l, now);
-        }
+        p.set_query("tool", &l, now);
         for _ in 0..15 {
             p.handle_key(Key::Down, Mods::NONE, &mut l, now);
         }
@@ -1410,9 +1442,62 @@ mod tests {
     }
 
     #[test]
+    fn a_selected_query_lies_on_the_selected_text_token() {
+        let mut r = renderer();
+        let (mut p, l) = panel_with("fire");
+        let now = Now {
+            mono: 0.0,
+            unix: 1.0e6,
+        };
+        let layout = r.layout(&p);
+        let draw = |r: &mut PanelRenderer, p: &Panel| {
+            r.render(
+                p,
+                &layout,
+                &RenderOptions {
+                    caret_visible: false,
+                    ..Default::default()
+                },
+            )
+        };
+        let plain = draw(&mut r, &p);
+        p.edit(&l, now, TextField::select_all);
+        let selected = draw(&mut r, &p);
+        let (ox, oy) = selected.panel_origin();
+        let size = f64::from(r.style.px(r.style.input_font_size));
+        let base = r
+            .style
+            .centered_baseline(r.style.input_font_size, layout.input.height());
+        // one row inside the band's top, above the glyphs
+        let y = oy + (base - 0.86 * size - 1.0) as u32;
+        let area = r.field_area(&layout);
+        let width = *r.field_offsets(&p, 1.0).last().unwrap();
+        let x = ox + (area.x() + width / 2.0) as u32;
+        let px = |img: &PanelImage| {
+            let c = img.pixmap.pixel(x, y).unwrap().demultiply();
+            [c.red(), c.green(), c.blue()]
+        };
+        let (before, after) = (px(&plain), px(&selected));
+        // the selected-text-background token (0, 122, 255) at 89 / 255 over what was there (the panel's translucent
+        // background blends premultiplied, a few levels off a plain mix)
+        let alpha = 89.0 / 255.0;
+        let expected: Vec<f64> = [0.0, 122.0, 255.0]
+            .iter()
+            .zip(before)
+            .map(|(token, under)| token * alpha + f64::from(under) * (1.0 - alpha))
+            .collect();
+        for (got, want) in after.iter().zip(&expected) {
+            assert!(
+                (f64::from(*got) - want).abs() <= 4.0,
+                "{before:?} -> {after:?}, expected {expected:?}"
+            );
+        }
+    }
+
+    #[test]
     fn caret_follows_the_cursor() {
         let mut r = renderer();
-        let (mut p, mut l) = panel_with("abc");
+        let (mut p, l) = panel_with("abc");
         let layout = r.layout(&p);
         let a = r.render(
             &p,
@@ -1435,7 +1520,7 @@ mod tests {
             mono: 0.0,
             unix: 1.0e6,
         };
-        p.handle_key(Key::Home, Mods::NONE, &mut l, now);
+        p.edit(&l, now, |f| f.select(0..0));
         let layout = r.layout(&p);
         let c = r.render(
             &p,
@@ -1568,10 +1653,7 @@ mod tests {
             unix: 1.0e6,
         };
         p.show(&l, now);
-        let mut l = l;
-        for c in "solo".chars() {
-            p.handle_key(Key::Char(c), Mods::NONE, &mut l, now);
-        }
+        p.set_query("solo", &l, now);
         assert_eq!(
             r.layout(&p).size.height,
             430.0,

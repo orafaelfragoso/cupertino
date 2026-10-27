@@ -27,7 +27,7 @@ use smithay::reexports::wayland_server::{
 use smithay::utils::{Logical, Point};
 use smithay::wayland::shell::wlr_layer::Layer;
 
-use crate::authorization::{require, ShellRole};
+use crate::authorization::{authorized, require, ShellRole};
 use crate::state::{Cupertino, WindowEntry};
 
 /// Where a placed window is headed. A window on the stage has no entry once its animation ended.
@@ -345,6 +345,30 @@ fn send_feed(resource: &CupertinoWindowManagerV1, known: Option<&Feed>, feed: &F
 }
 
 impl Cupertino {
+    /// Drop the window managers whose connection no longer holds the WindowManager role.
+    pub(crate) fn release_revoked_window_managers(&mut self) {
+        let revoked: Vec<_> = self
+            .window_managers
+            .managers
+            .iter()
+            .filter(|m| {
+                m.resource
+                    .client()
+                    .is_some_and(|c| !authorized(&c, ShellRole::WindowManager))
+            })
+            .map(|m| (m.resource.clone(), m.output))
+            .collect();
+        for (resource, output) in revoked {
+            self.window_managers
+                .managers
+                .retain(|m| m.resource != resource);
+            self.window_managers
+                .placed
+                .retain(|_, p| p.output != output);
+        }
+        self.request_redraw();
+    }
+
     /// `cupertino_shell_v1.get_window_manager`: one per output; send the first group.
     pub fn create_window_manager(
         &mut self,

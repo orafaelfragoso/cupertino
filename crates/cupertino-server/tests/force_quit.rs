@@ -170,7 +170,7 @@ fn log_out_force_quit_over_the_bus_is_done_for_a_shell_process() {
     };
     h.state.supervisor = Supervisor::new(&[agent], Instant::now());
     h.state.supervisor.poll(Instant::now(), "unused", &mut |_| {
-        UnixStream::pair().map(|(ours, _)| ours)
+        UnixStream::pair().map(|(ours, _)| (ours, std::sync::Arc::new(Default::default())))
     });
     let pid = h.state.supervisor.pid_of("agent").unwrap();
 

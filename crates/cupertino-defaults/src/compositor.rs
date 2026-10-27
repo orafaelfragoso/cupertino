@@ -84,14 +84,17 @@ pub enum ShellRoleName {
     MenuBar,
     Dock,
     WindowManager,
+    /// Take the session lock (`ext-session-lock`): the lock screen.
+    SessionLock,
 }
 
 impl ShellRoleName {
-    pub const ALL: [ShellRoleName; 4] = [
+    pub const ALL: [ShellRoleName; 5] = [
         ShellRoleName::Session,
         ShellRoleName::MenuBar,
         ShellRoleName::Dock,
         ShellRoleName::WindowManager,
+        ShellRoleName::SessionLock,
     ];
 
     pub fn name(self) -> &'static str {
@@ -100,6 +103,7 @@ impl ShellRoleName {
             ShellRoleName::MenuBar => "menu_bar",
             ShellRoleName::Dock => "dock",
             ShellRoleName::WindowManager => "window_manager",
+            ShellRoleName::SessionLock => "session_lock",
         }
     }
 

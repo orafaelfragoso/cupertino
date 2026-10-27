@@ -29,7 +29,7 @@ use memmap2::Mmap;
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use std::collections::VecDeque;
 use std::io::{Read, Write};
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, IntoRawFd};
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -2574,4 +2574,19 @@ fn a_damaged_frame_keeps_the_last_one_repaints_its_rectangles_and_reports_only_t
     // the second buffer was never written: it got the whole frame, red at its corner
     assert_eq!(frames[1].first_pixel, [0, 0, 255, 255]);
     assert_ne!(frames[0].offset, frames[1].offset, "the other slot");
+}
+
+/// A shell process that connected over the `WAYLAND_SOCKET` the server gave it does not pass that connection on: a
+/// program it starts afterwards has no such variable.
+#[test]
+fn a_program_started_after_the_shell_connection_has_no_wayland_socket() {
+    let (client_stream, server_stream) = UnixStream::pair().unwrap();
+    let (_control, _committed, _seen) = spawn_server(server_stream);
+    std::env::set_var("WAYLAND_SOCKET", client_stream.into_raw_fd().to_string());
+    let _client = Client::connect_shell().unwrap();
+    let output = std::process::Command::new("sh")
+        .args(["-c", "printf %s \"${WAYLAND_SOCKET-unset}\""])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "unset");
 }

@@ -288,7 +288,7 @@ fn a_token_made_before_the_person_moved_on_does_not() {
 fn a_program_that_maps_while_the_session_is_locked_does_not_take_the_keyboard_at_unlock() {
     let Some(mut h) = Harness::new() else { return };
     let (_a, front) = with_front_window(&mut h);
-    let locker = Client::locker(h.socket_path());
+    let locker = Client::locker(common::session_agent(&h.state));
     h.wait_until("the session to be locked", |_| locker.locked());
     let _intruder = Client::toplevel_after(
         h.socket_path(),

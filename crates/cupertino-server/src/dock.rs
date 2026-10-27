@@ -38,7 +38,7 @@ use smithay::reexports::wayland_server::{
 use smithay::wayland::compositor::{with_states, Cacheable};
 
 use crate::app_effects_v1::surface_backdrops;
-use crate::authorization::{require, ShellRole};
+use crate::authorization::{authorized, require, ShellRole};
 use crate::state::Cupertino;
 
 /// Where a minimizing window lands: the dock's `set_minimize_target`, in surface-local logical
@@ -257,6 +257,25 @@ pub struct DockData {
 }
 
 impl Cupertino {
+    /// Drop the docks whose connection no longer holds the Dock role.
+    pub(crate) fn release_revoked_docks(&mut self) {
+        let revoked: Vec<_> = self
+            .docks
+            .docks
+            .iter()
+            .filter(|d| {
+                d.resource
+                    .client()
+                    .is_some_and(|c| !authorized(&c, ShellRole::Dock))
+            })
+            .map(|d| (d.resource.clone(), d.output))
+            .collect();
+        for (resource, output) in revoked {
+            self.docks.docks.retain(|d| d.resource != resource);
+            self.dock_gone(output);
+        }
+    }
+
     /// `cupertino_shell_v1.get_dock`: validate the role, register the dock and send its first group.
     pub fn create_dock(
         &mut self,

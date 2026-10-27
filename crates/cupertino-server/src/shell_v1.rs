@@ -53,6 +53,7 @@ impl Dispatch<CupertinoShellV1, ()> for Cupertino {
         _: &DisplayHandle,
         init: &mut DataInit<'_, Self>,
     ) {
+        state.release_revoked_roles();
         let caps = capabilities(client);
         match request {
             cupertino_shell_v1::Request::GetMenuBar {

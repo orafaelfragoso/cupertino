@@ -9,7 +9,7 @@
 //!
 //! | File | Applied at once | At the next start |
 //! |---|---|---|
-//! | `compositor.json` | appearance, tracking speeds, acceleration, scroll direction, cursor size, colours and shake, minimize effect, closing animation, hot corner size and dwell, corner radius, key bindings, terminals, screenshot command | `decorations` (new windows only), `menu_bar_height`, `show_menu_bar`, `shell` |
+//! | `compositor.json` | appearance, tracking speeds, acceleration, scroll direction, cursor size, colours and shake, minimize effect, closing animation, hot corner size and dwell, corner radius, key bindings, terminals | `decorations` (new windows only), `menu_bar_height`, `show_menu_bar`, `shell`, `screenshot` (privileged processes: read at start) |
 //! | `keyboard.conf` | every key: repeat, caps lock, filters, rewrite, accent picker, input sources and layouts (the keymap is rebuilt) | — |
 //! | `power.conf` | every key (the countdown in progress continues with the new timers) | — |
 
@@ -192,9 +192,6 @@ impl Cupertino {
         }
         if changed!(terminals) {
             self.config.terminals = target.terminals.clone();
-        }
-        if changed!(screenshot) {
-            self.config.screenshot_command = target.screenshot_command.clone();
         }
         if changed!(keybindings) {
             self.config.keybindings = target.keybindings.clone();

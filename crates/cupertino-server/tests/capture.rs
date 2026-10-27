@@ -807,7 +807,7 @@ fn a_locked_session_delivers_no_new_capture_buffer_until_it_is_unlocked() {
     first.destroy();
     c.state.frame = Default::default();
 
-    let locker = common::Client::locker(h.socket_path());
+    let locker = common::Client::locker(common::session_agent(&h.state));
     for _ in 0..200 {
         if locker.locked() {
             break;
@@ -825,6 +825,48 @@ fn a_locked_session_delivers_no_new_capture_buffer_until_it_is_unlocked() {
     assert!(
         !c.state.frame.ready && c.state.frame.failed.is_none(),
         "a frame was delivered while the session was locked"
+    );
+
+    locker.unlock();
+    h.pump_until(&mut c, "the frame after the unlock", |s| {
+        s.frame.ready || s.frame.failed.is_some()
+    });
+    assert!(c.state.frame.ready, "failed: {:?}", c.state.frame.failed);
+}
+
+/// SEC-05: a console switch away and back while the session is locked does not open the screen to capture.
+#[test]
+fn a_session_resumed_while_locked_still_delivers_no_capture_buffer() {
+    let Some(mut h) = Harness::new() else { return };
+    let (mut app, frame) = mapped_app(&mut h);
+    h.state
+        .pointer_moved_to((frame.x + 20.0, frame.y + 200.0).into(), 0, None);
+    h.idle(&mut app, 5);
+    let mut c = TestClient::privileged(&mut h);
+    let source = c.output_source();
+    let capture = c.session(&mut h, &source, true);
+
+    let locker = common::Client::locker(common::session_agent(&h.state));
+    for _ in 0..200 {
+        if locker.locked() {
+            break;
+        }
+        h.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(locker.locked(), "the session lock was not granted");
+
+    h.state.session_activated();
+    let _frame = c.request_frame(&capture);
+    h.state.request_redraw();
+    h.idle(&mut c, 40);
+    assert!(
+        !c.state.frame.ready && c.state.frame.failed.is_none(),
+        "a frame was delivered after the session resumed while locked"
+    );
+    assert!(
+        h.state.session_lock.is_active(),
+        "the resume ended the lock"
     );
 
     locker.unlock();

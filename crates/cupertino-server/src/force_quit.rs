@@ -41,6 +41,18 @@ impl ProcessHandle {
         Ok(Self { pid, fd })
     }
 
+    /// Whether the process has exited: its pidfd is readable then.
+    pub fn has_exited(&self) -> bool {
+        let mut poll = libc::pollfd {
+            fd: self.fd.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // Safety: poll on one valid pollfd with a zero timeout.
+        let ready = unsafe { libc::poll(&mut poll, 1, 0) };
+        ready > 0 && poll.revents & libc::POLLIN != 0
+    }
+
     /// Send `signal` to the process; fails when it has exited.
     pub fn send(&self, signal: i32) -> std::io::Result<()> {
         // Safety: pidfd_send_signal on a descriptor this value owns, with no siginfo and no flags.

@@ -83,6 +83,9 @@ pub struct ClientState {
     /// What the server lets the client do: set only for the processes the server started on a connection of their own
     /// (`crate::shell_connection`), empty for a client of the public socket.
     pub capabilities: ClientCapabilitySet,
+    /// The process the connection was made for, held from its spawn ([`crate::shell_connection::bind_holder`]): the
+    /// capabilities end with it, so a connection kept alive by another process holds nothing.
+    pub holder: std::sync::OnceLock<crate::force_quit::ProcessHandle>,
 }
 
 impl Default for ClientState {
@@ -93,6 +96,7 @@ impl Default for ClientState {
             mapped_toplevel: std::sync::atomic::AtomicBool::new(false),
             internal: false,
             capabilities: ClientCapabilitySet::NONE,
+            holder: std::sync::OnceLock::new(),
         }
     }
 }
@@ -1508,7 +1512,15 @@ impl Cupertino {
 
     /// A layer surface above the windows that asks for exclusive keyboard interactivity takes the
     /// keyboard; when it stops asking or goes away the key window gets it back.
+    ///
+    /// While the session is locked only a shell process can take it: an application's layer surface must not collect
+    /// what is typed at the lock screen, nor wait to take the keyboard at the unlock.
     pub fn layer_keyboard_exclusivity(&mut self, surface: &WlSurface, exclusive: bool) {
+        let exclusive = exclusive
+            && (!self.session_lock.is_active()
+                || surface
+                    .client()
+                    .is_some_and(|c| crate::authorization::capabilities(&c).holds_shell_role()));
         let holds = self.exclusive_layer.as_ref() == Some(surface);
         if exclusive && !holds {
             self.exclusive_layer = Some(surface.clone());
@@ -1653,7 +1665,7 @@ impl Cupertino {
                 .env("XCURSOR_PATH", &theme.search_dir);
         }
         // Wayland clients only: an X11 toolkit must not reach the X server of the session around us
-        cmd.env_remove("DISPLAY");
+        cmd.env_remove("DISPLAY").env_remove("WAYLAND_SOCKET");
         let program = cmd.get_program().to_string_lossy().into_owned();
         // the docks key tiles by desktop entry id; a program without an entry (a script, a shell)
         // is not an application launch

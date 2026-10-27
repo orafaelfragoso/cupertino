@@ -31,6 +31,11 @@ pub struct Cli {
     /// Run without a window system (offscreen EGL device).
     #[arg(long)]
     pub headless: bool,
+    /// Development and nested runs: let any configuration file name the shell processes and the screenshot process, from
+    /// any path. Without it only the system file, programs under /usr, and the person's file removing or reordering them
+    /// apply.
+    #[arg(long)]
+    pub dev_shell: bool,
     /// Output size in pixels, e.g. 1280x800 (nested window / headless output).
     #[arg(long, value_parser = parse_size, default_value = "1280x800")]
     pub size: (u32, u32),
@@ -179,7 +184,7 @@ impl Cli {
 
     /// The configuration of the settings files and the command line, and what the files held.
     pub fn config(&self) -> Result<(Config, crate::config::SettingsFiles)> {
-        let (mut cfg, files) = Config::load_with_files();
+        let (mut cfg, files) = Config::load_with_files(self.dev_shell);
         if let Some(a) = &self.appearance {
             cfg.appearance = a.parse().map_err(|e: String| anyhow!(e))?;
         }
@@ -340,7 +345,10 @@ pub fn start_shell_supervision(
                 .expect("the server listens on a socket when it supervises shell processes");
             let display = state.display_handle.clone();
             state.supervisor.poll(Instant::now(), &socket, &mut |spec| {
-                crate::shell_connection::shell_process_connection(&display, &spec.roles)
+                crate::shell_connection::connect_bound_client(
+                    &display,
+                    crate::shell_connection::shell_process_state(&spec.roles),
+                )
             });
             TimeoutAction::ToDuration(SUPERVISION_INTERVAL)
         })

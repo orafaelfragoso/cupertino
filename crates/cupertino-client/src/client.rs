@@ -131,7 +131,9 @@ struct Session {
 
 /// The extension globals.
 struct Globals {
-    layer_shell: LayerShell,
+    /// Absent from a server that does not offer it to this connection (a sandboxed application); only
+    /// [`Client::layer_surface`] needs it.
+    layer_shell: Option<LayerShell>,
     effects: AppEffects,
     /// Bound on a shell connection only ([`Client::connect_shell`]).
     shell: Option<Shell>,
@@ -214,8 +216,7 @@ impl Client {
             (None, None, Some(appearance), SessionState::default(), early)
         };
         let globals = Globals {
-            layer_shell: LayerShell::bind(&mut conn)
-                .ok_or(ClientError::MissingGlobal("zwlr_layer_shell_v1"))?,
+            layer_shell: LayerShell::bind(&mut conn),
             effects,
             shell,
             session_lock_manager: SessionLockManager::bind(&mut conn),
@@ -279,6 +280,8 @@ impl Client {
         let layer = self
             .globals
             .layer_shell
+            .as_ref()
+            .ok_or(ClientError::MissingGlobal("zwlr_layer_shell_v1"))?
             .layer_surface(&mut self.conn, config)?;
         let id = SurfaceId(layer.surface());
         self.surfaces

@@ -298,6 +298,8 @@ fn a_sandboxed_connection_is_not_offered_the_globals_that_reach_other_clients() 
         "zwlr_output_manager_v1",
         "zwlr_output_power_manager_v1",
         "wp_security_context_manager_v1",
+        "zwlr_layer_shell_v1",
+        "ext_foreign_toplevel_list_v1",
     ] {
         assert!(ordinary.contains_key(name), "{name}");
         assert!(!sandboxed.contains_key(name), "{name}");

@@ -38,10 +38,10 @@ converted into it, and only they are reported with `damage_buffer`, so the serve
 up to the buffer convert it once, whole. A frame at another size or scale is drawn whole. A process runs one loop around `Client::wait` and reacts to
 the returned `Event`s. Other threads wake the loop with a `Waker`.
 
-A missing required global is an error at `Client::connect`, never a degraded mode. The required globals are layer shell,
+A missing required global is an error at `Client::connect`, never a degraded mode. The required globals are
 `cupertino_app_effects_v1` (`cupertino_shell_v1` too on `Client::connect_shell`), `xdg_activation_v1`, `zxdg_output_manager_v1`, shm and a seat. Fractional scale is used with
 viewporter when offered. `zxdg_decoration_manager_v1` is optional at connect, but `Client::toplevel` errors without it, and
-a server that refuses server-side decorations fails the client with `ClientError::Protocol` (the toolkit draws no title bar).
+a server that refuses server-side decorations fails the client with `ClientError::Protocol` (the toolkit draws no title bar). The layer shell is optional at connect, since the server does not offer it to a sandboxed application: `Client::layer_surface` fails with `ClientError::MissingGlobal("zwlr_layer_shell_v1")` without it.
 
 ## Tests
 

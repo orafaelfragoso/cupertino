@@ -1,0 +1,7 @@
+accepted = [
+    "0BSD", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "CC0-1.0", "ISC", "MIT", "MPL-2.0", "OFL-1.1", "Unicode-3.0",
+    "Unlicense", "Zlib", "GPL-3.0-or-later",
+]
+targets = ["x86_64-unknown-linux-gnu"]
+ignore-build-dependencies = false
+ignore-dev-dependencies = true

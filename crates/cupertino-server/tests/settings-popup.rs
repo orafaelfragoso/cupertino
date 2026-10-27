@@ -39,6 +39,12 @@ impl Drop for Process {
     }
 }
 
+/// The theme files of the checkout: the settings binary is built with the installed theme directory when a package
+/// build sets CUPERTINO_THEME_DIR, and that directory does not exist while the tests run.
+fn spec_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/theme")
+}
+
 fn settings_binary() -> &'static PathBuf {
     static BINARY: OnceLock<PathBuf> = OnceLock::new();
     BINARY.get_or_init(|| {
@@ -121,6 +127,7 @@ impl Harness {
                 .env("XDG_RUNTIME_DIR", home.path())
                 .env("WAYLAND_DISPLAY", socket)
                 .env("CUPERTINO_ASSET_SEARCH_PATH", "")
+                .env("CUPERTINO_SPEC_DIR", spec_dir())
                 .env("DBUS_SESSION_BUS_ADDRESS", &address)
                 .env("DBUS_SYSTEM_BUS_ADDRESS", &address)
                 .spawn()
@@ -208,6 +215,7 @@ impl Harness {
             Command::new(settings_binary())
                 .args(["--pane", "appearance"])
                 .env_clear()
+                .env("CUPERTINO_SPEC_DIR", spec_dir())
                 .env("HOME", self.home.path())
                 .env("DBUS_SESSION_BUS_ADDRESS", &self.address)
                 .spawn()

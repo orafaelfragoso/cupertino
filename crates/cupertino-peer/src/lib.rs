@@ -174,7 +174,12 @@ fn process_of(credentials: &ConnectionCredentials) -> Option<ProcessHandle> {
             .is_none_or(|pid| pid == process.pid);
         return agrees.then_some(process);
     }
-    ProcessHandle::open(credentials.process_id()?).ok()
+    let pid = credentials.process_id()?;
+    tracing::debug!(
+        pid,
+        "the bus gave no process descriptor; the caller is identified by its process id"
+    );
+    ProcessHandle::open(pid).ok()
 }
 
 impl Caller {

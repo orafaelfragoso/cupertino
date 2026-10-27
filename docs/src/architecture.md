@@ -37,7 +37,7 @@ A crash in a shell process never takes the desktop down.
 
 1. **The server does only what a window server does.** The server restarts a shell process that exits with failure, at most once per second.
 2. **Standard protocols first:** layer-shell, `ext-foreign-toplevel-list`, `ext-session-lock`, `ext-idle-notify`, `ext-image-copy-capture`, `xdg-activation`.
-3. **A private protocol covers the gaps.** The public `cupertino_app_effects_v1` carries backdrop materials by recipe, the title bar style and the appearance; the private `cupertino_shell_v1`, offered only to the shell processes the server starts, carries dock tile rectangles for the minimize effect, overview and workspace transforms driven by the dock, menu bar overrides, application activation and grouping, gesture events, and session lock and appearance notifications.
+3. **A private protocol covers the gaps.** The public `cupertino_app_effects_v1` carries backdrop materials by recipe, the title bar style, the appearance and where a window's menus are on the session bus; the private `cupertino_shell_v1`, offered only to the shell processes the server starts, carries dock tile rectangles for the minimize effect, overview and workspace transforms driven by the dock, menu bar overrides, application activation and grouping, gesture events, and session lock and appearance notifications.
 4. **One settings store:** `cupertino-defaults`. Files live in `$XDG_CONFIG_HOME/cupertino/`, each with its own environment override. Writes are atomic and change notification is an inotify watch coalesced until a burst is quiet.
 5. **Privileges stay in the daemons.** They authorise callers by D-Bus peer credentials plus "is this the active seat user". There is no polkit. System daemons ship unit files; that is packaging, not a code dependency.
 6. **IPC:** Wayland between the server and the shell; D-Bus between the shell, apps and the daemons.
@@ -48,10 +48,10 @@ A crate's layer is declared in its manifest (`[package.metadata.cupertino] layer
 
 | Layer | Crates | May depend on |
 |---|---|---|
-| `foundation` | cupertino-animation, -apps, -assets, -defaults, -filepicker, -geometry, -theme, -thumbnails, -typeahead, -xkbcommon | `foundation` |
+| `foundation` | cupertino-animation, -apps, -assets, -defaults, -filepicker, -geometry, -menu-model, -theme, -thumbnails, -typeahead, -xkbcommon | `foundation` |
 | `models` (pure logic, no I/O) | cupertino-displays, -effects, -input, -keyboard, -login-ipc, -overview, -stage, -text-field, -wm | `foundation`, `models` |
 | `platform` (kernel interfaces only) | cupertino-alsa, -bluetooth, -devices, -evdev, -netlink, -peer, -seat | `foundation`, `platform` |
-| `render` | cupertino-app-protocols, -client, -cursor, -decorations, -glass, -icons, -protocol-app, -protocols, -shell-client, -ui-wayland, -wayland-client | `foundation`, `platform`, `render` |
+| `render` | cupertino-app-protocols, -client, -cursor, -decorations, -glass, -icons, -protocol-app, -protocols, -shell-client, -ui-menus, -ui-wayland, -wayland-client | `foundation`, `platform`, `render` |
 | `core` | cupertino-server | `foundation`, `models`, `platform`, `render` |
 | `shell` | cupertino-controlcenter, -dock, -launcher, -login, -menubar, -notifications, -osd, -screenshot, -windowmanager | `foundation`, `models`, `platform`, `render` |
 | `services` | cupertino-btd, -netd, -powerd, -sessiond | as `shell` |

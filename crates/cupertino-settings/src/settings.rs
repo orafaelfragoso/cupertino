@@ -231,6 +231,24 @@ impl Settings {
         }
     }
 
+    /// Store the resolution `dpi` of the mouse `key` in `compositor.json` over the file as it is now, so a key the
+    /// server wrote since the last read (the appearance) is not put back; on a failure the settings stay as they were.
+    pub fn set_mouse_dpi(&mut self, paths: &Paths, key: &str, dpi: u32) -> Result<(), String> {
+        let before = self.clone();
+        let outcome = self
+            .reload(paths)
+            .map_err(|e| format!("The settings could not be read: {e}."))
+            .and_then(|()| self.compositor.set_mouse_dpi(key, Some(dpi)))
+            .and_then(|()| {
+                self.store(paths, File::Compositor)
+                    .map_err(|e| e.to_string())
+            });
+        if outcome.is_err() {
+            *self = before;
+        }
+        outcome
+    }
+
     /// Write `file` to its path atomically.
     pub fn store(&self, paths: &Paths, file: File) -> Result<(), StoreError> {
         let path = paths.of(file).ok_or(StoreError::NoPath(file))?;

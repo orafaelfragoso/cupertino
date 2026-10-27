@@ -57,6 +57,8 @@ pub enum Request {
     ToggleCentre,
     /// Open or close the control panel process.
     TogglePanel,
+    /// Own `com.canonical.AppMenu.Registrar` while a bar exists, so toolkits keep their own menu bar otherwise.
+    AppMenuRegistrar(bool),
 }
 
 /// What the worker reports.
@@ -227,6 +229,10 @@ async fn run(
             Work::GtkLoaded(props, client) => {
                 gtk.insert(props, *client);
             }
+            // awaited in order: a bar that goes and comes back leaves the name owned
+            Work::Request(Request::AppMenuRegistrar(owned)) => {
+                app_menu_registrar(&conn, owned).await
+            }
             Work::Request(request) => handle(&conn, &out, &tx, &mut gtk, request),
         }
     }
@@ -238,11 +244,23 @@ async fn serve(conn: &Connection, tx: &async_channel::Sender<Work>) -> Result<()
         .await
         .map_err(StartError::Watcher)?;
     forward(events, tx.clone(), Work::Watcher);
-    // another registrar makes toolkits export their menus just the same
     if let Err(e) = registrar::serve(conn).await {
         report(&format!("cannot serve {}", registrar::REGISTRAR_NAME), e);
     }
     Ok(())
+}
+
+async fn app_menu_registrar(conn: &Connection, owned: bool) {
+    let result = if owned {
+        registrar::own(conn).await
+    } else {
+        registrar::release(conn).await
+    };
+    // another registrar makes toolkits export their menus just the same
+    if let Err(e) = result {
+        let verb = if owned { "own" } else { "release" };
+        report(&format!("cannot {verb} {}", registrar::REGISTRAR_NAME), e);
+    }
 }
 
 /// Publish a status item, then again every time it changes.
@@ -445,6 +463,7 @@ fn handle(
             },
             "cupertino-toggle-centre",
         ),
+        Request::AppMenuRegistrar(_) => unreachable!("the worker's loop handles the registrar"),
         Request::TogglePanel => executor.spawn(
             async move {
                 if let Err(e) = conn

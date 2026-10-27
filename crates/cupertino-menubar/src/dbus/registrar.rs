@@ -25,8 +25,18 @@ impl Registrar {
     }
 }
 
-/// Serve the registrar on `conn` and claim its name; `NameTaken` when another process owns it.
+/// Serve the registrar on `conn`; toolkits see it only while [`own`] holds the name.
 pub async fn serve(conn: &Connection) -> zbus::Result<()> {
     conn.object_server().at(REGISTRAR_PATH, Registrar).await?;
+    Ok(())
+}
+
+/// Claim the name; `NameTaken` when another process owns it.
+pub async fn own(conn: &Connection) -> zbus::Result<()> {
     super::claim_name(conn, REGISTRAR_NAME).await
+}
+
+/// Give the name up; a name another process owns stays with it.
+pub async fn release(conn: &Connection) -> zbus::Result<()> {
+    conn.release_name(REGISTRAR_NAME).await.map(drop)
 }

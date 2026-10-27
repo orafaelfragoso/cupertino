@@ -17,7 +17,7 @@ computes, and feeds the crate pointer, key and timer events with absolute timest
 | `source` | `MenuSourceMap`: window → `MenuSource::{Kde, Gtk, Synthetic}`. A window gets only the menus it exported, never another window of its application. |
 | `dbus::dbusmenu` | `DBusMenuClient`: `GetLayout` parsing (`parse_layout`), `Event`, `AboutToShow`, and `LayoutUpdated` / `ItemsPropertiesUpdated` / `ItemActivationRequested` as a `MenuUpdate` stream, property update helpers. |
 | `dbus::sni` | `WatcherService` serving `org.kde.StatusNotifierWatcher` (the compositor is the host), `WatcherClient`, `fetch_item` (icons including ARGB pixmaps, status, tooltip, menu path), `load_menu` through DBusMenu, `activate_item` / `secondary_activate_item` / `context_menu_item` / `scroll_item`, `best_pixmap`. |
-| `dbus::registrar` | The `com.canonical.AppMenu.Registrar` stub the worker serves after the watcher. |
+| `dbus::registrar` | The `com.canonical.AppMenu.Registrar` stub the worker serves after the watcher; the process asks it to own the name with the first bar and to release it with the last. |
 | `dbus::gtk` | `GtkMenuClient`: an `org.gtk.Menus` + `org.gtk.Actions` reader (`Start`, sections flattened, namespaces, accelerators, enabled / toggle state from actions) and `Activate`. |
 
 Feature `dbus` (default) enables the zbus-based layer. Without it the crate depends only on `cupertino-animation`. The D-Bus
@@ -113,7 +113,7 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
 | `org.cupertino.NotificationCenter1` | Session bus. `ToggleCentre` on a click on the clock. Do-not-disturb state and `FocusLifetimes` for the Focus item. |
 | `org.cupertino.ControlPanel1` | Session bus. `Toggle` on a click on the control panel slot. |
 | `org.kde.StatusNotifierWatcher` | Owned by the process, which is the status item host. |
-| `com.canonical.AppMenu.Registrar` | Owned by the process when no other process owns it; registers nothing. Qt, KDE Frameworks, Chromium and LibreOffice export their menus and hide their in-window menu bar only while the name has an owner. |
+| `com.canonical.AppMenu.Registrar` | Owned by the process while it shows a bar and no other process owns the name; released with the last bar. Registers nothing. Qt, KDE Frameworks, Chromium and LibreOffice export their menus and hide their in-window menu bar only while the name has an owner. |
 | `org.cupertino.Network1` | System bus. `Devices`, `WirelessEnabled`, `GetNetworks`, `Connect`. |
 | UPower | System bus. The display device and `OnBattery`. |
 | `org.cupertino.Bluetooth1` | System bus. `Available`, `Powered`, `Devices`, `Connect`, `Disconnect`. |

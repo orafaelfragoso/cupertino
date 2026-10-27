@@ -20,7 +20,7 @@ use cupertino_settings::form::{self, RowSpec, SectionLayout, SectionSpec};
 use cupertino_settings::history::History;
 use cupertino_settings::instance;
 use cupertino_settings::keys::{self, Action, Focus, Mods, SearchKey};
-use cupertino_settings::live::{Live, Reading};
+use cupertino_settings::live::{Live, Pictures, Reading};
 use cupertino_settings::menu;
 use cupertino_settings::paint::{
     menu_rows, popup_hit, search_text_area, Painter, Palette, PaneView, WindowState,
@@ -131,6 +131,9 @@ struct App {
     /// What arrived from the bus threads.
     background: std::sync::mpsc::Receiver<Background>,
     notify: Notify,
+    assets: Assets,
+    /// The pictures whose thumbnail is asked for, so each is made once.
+    thumbnails_asked: std::collections::HashSet<std::path::PathBuf>,
     /// The open pairing question's answer, sent when its sheet decides.
     agent_answer: Option<(u64, async_channel::Sender<Answer>)>,
     /// Whether this window's pairing agent is registered.
@@ -149,6 +152,11 @@ enum Background {
     Paired(std::result::Result<(), String>),
     /// A settings file changed on disk.
     Files(WatchEvent),
+    /// The thumbnail of a picture of the Wallpaper pane is made.
+    Thumbnail {
+        image: std::path::PathBuf,
+        thumbnail: std::path::PathBuf,
+    },
 }
 
 /// Hands a [`Background`] to the window loop and wakes it.
@@ -284,6 +292,8 @@ pub fn run(pane: PaneId) -> Result<()> {
         scanned: f64::NEG_INFINITY,
         background,
         notify,
+        assets,
+        thumbnails_asked: std::collections::HashSet::new(),
         agent_answer: None,
         agent_registered: false,
         _files: files,
@@ -480,6 +490,9 @@ impl App {
             return Ok(());
         }
         self.scanned = f64::NEG_INFINITY;
+        if to == PaneId::Wallpaper {
+            self.load_pictures();
+        }
         self.refresh(self.now())?;
         if to == PaneId::Bluetooth && self.live.bluetooth.ready().is_some_and(|b| b.available) {
             let notify = self.notify.clone();
@@ -1251,6 +1264,67 @@ impl App {
         Ok(())
     }
 
+    /// List the pictures of the packs and of the added folders, and start the thumbnails of those without one.
+    fn load_pictures(&mut self) {
+        let folders = self
+            .settings
+            .compositor
+            .wallpaper_folders
+            .iter()
+            .flatten()
+            .map(|folder| {
+                let path = std::path::PathBuf::from(folder);
+                let pictures = cupertino_assets::pictures_in(&path);
+                (path, pictures)
+            })
+            .collect();
+        self.live.pictures = Pictures {
+            bundled: self.assets.wallpaper_files(),
+            folders,
+            default: self.assets.wallpaper_path(false),
+        };
+        let wanted: Vec<std::path::PathBuf> = self
+            .live
+            .pictures
+            .bundled
+            .iter()
+            .chain(
+                self.live
+                    .pictures
+                    .folders
+                    .iter()
+                    .flat_map(|(_, files)| files),
+            )
+            .map(|f| f.light.clone())
+            .filter(|image| {
+                !self.painter.has_thumbnail(image) && self.thumbnails_asked.insert(image.clone())
+            })
+            .collect();
+        if wanted.is_empty() {
+            return;
+        }
+        let notify = self.notify.clone();
+        let spawned = std::thread::Builder::new()
+            .name("wallpaper-thumbnails".into())
+            .spawn(move || {
+                let cache = cupertino_thumbnails::Thumbnailer::from_env("cupertino-settings");
+                for image in wanted {
+                    match cache.get_or_create(&image, cupertino_thumbnails::ThumbSize::Large) {
+                        Ok(thumbnail) => notify(Background::Thumbnail { image, thumbnail }),
+                        Err(e) => {
+                            eprintln!(
+                                "cupertino-settings: no thumbnail of {}: {e}",
+                                image.display()
+                            )
+                        }
+                    }
+                }
+            });
+        if let Err(e) = spawned {
+            eprintln!("cupertino-settings: cannot start the thumbnails: {e}");
+        }
+    }
+
     /// Store the typed resolution of the mouse `key`; the server applies the file.
     fn set_mouse_dpi(&mut self, key: &str, dpi: u32) -> std::result::Result<(), String> {
         self.settings.set_mouse_dpi(&self.paths, key, dpi)
@@ -1275,6 +1349,11 @@ impl App {
                 if self.sheet.as_ref().and_then(Sheet::pairing_id) == Some(id) {
                     self.sheet = None;
                     self.agent_answer = None;
+                    self.client.request_redraw(self.window)?;
+                }
+            }
+            Background::Thumbnail { image, thumbnail } => {
+                if self.painter.set_thumbnail(&image, &thumbnail) {
                     self.client.request_redraw(self.window)?;
                 }
             }

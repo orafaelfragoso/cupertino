@@ -42,7 +42,7 @@ pub struct Palette {
     pub search_fill: Rgba,
     /// A control's own background and an off switch's track, a slider's track.
     pub control_background: Rgba,
-    /// A form section's box and the lines between its rows: the box 3 levels from the content colour toward the
+    /// A form section's box and the lines between its rows: the box 3 levels from the window background toward the
     /// control background, the line 13 levels from the box toward the text, with no outline (approximate, O4: measured
     /// on a screenshot; the design's fill is unknown).
     pub box_fill: Rgba,
@@ -388,8 +388,8 @@ impl Painter {
     ) {
         self.text.set_scale(s);
         fill_rect(pm, &layout.content, s, pal.control_background);
-        // the pane scrolls under the title region, which takes the content colour (no strip, no separator; how the
-        // reference shows content scrolled under it is unknown)
+        // the pane scrolls under the title region, which takes the content colour (no strip, no separator; content
+        // scrolling under the title region is not designed yet)
         self.paint_pane(pm, s, pane, pal);
         fill_rect(pm, &layout.toolbar, s, pal.control_background);
         fill_rect(pm, &layout.divider, s, pal.separator);
@@ -1297,5 +1297,51 @@ mod tests {
             assert!(all.contains(&p.symbol), "{}", p.symbol);
         }
         assert!(all.contains(&"symbol.search") && all.contains(&"symbol.xmark.circle"));
+    }
+
+    #[test]
+    fn the_content_and_the_toolbar_are_filled_with_the_control_background_in_both_appearances() {
+        let theme = Theme::load().expect("the design tokens of the repository");
+        let mut painter = Painter::new(&Assets::builtin()).expect("the painter");
+        let size = crate::window::default_size(1.0);
+        let layout = WindowLayout::new(
+            size,
+            1.0,
+            RowSize::default(),
+            &crate::sidebar::groups(),
+            false,
+        );
+        let history = History::new(PaneId::Wifi);
+        let search = SearchField::default();
+        let state = WindowState {
+            selected: PaneId::Wifi,
+            has_battery: None,
+            active: true,
+            history: &history,
+            search: &search,
+            search_focused: false,
+        };
+        let view = PaneView {
+            sections: &[],
+            layout: &[],
+            scroll: 0.0,
+            dragging: None,
+        };
+        for appearance in [Appearance::Light, Appearance::Dark] {
+            let pal = Palette::from_theme(&theme, appearance).unwrap();
+            let mut pm = Pixmap::new(size.w as u32, size.h as u32).unwrap();
+            painter.paint_window(&mut pm, 1.0, &layout, &state, &view, &pal);
+            let expected = pal.control_background.map(|c| (c * 255.0).round() as u8);
+            for (name, r) in [("content", layout.content), ("toolbar", layout.toolbar)] {
+                let px = pm
+                    .pixel((r.x + r.w / 2.0) as u32, (r.y + r.h / 2.0) as u32)
+                    .unwrap();
+                assert_eq!(
+                    [px.red(), px.green(), px.blue(), px.alpha()],
+                    expected,
+                    "{name} in {appearance:?}"
+                );
+            }
+        }
     }
 }

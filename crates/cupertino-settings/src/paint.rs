@@ -1173,9 +1173,10 @@ impl Painter {
                 }
             }
             Control::Tiles { tiles, selected } => {
+                let caption = controls::tile_caption_height(tiles);
                 for (i, (tile, r)) in tiles
                     .iter()
-                    .zip(controls::tile_rects(frame, tiles.len()))
+                    .zip(controls::tile_rects(frame, tiles.len(), caption))
                     .enumerate()
                 {
                     match self.thumbnails.get(&tile.image) {
@@ -1225,6 +1226,19 @@ impl Painter {
                         s,
                         pal.text,
                     );
+                    if let Some(author) = &tile.credit {
+                        self.label(
+                            pm,
+                            &Rect::new(r.x, r.bottom() + 17.0, r.w, 14.0),
+                            author,
+                            Font {
+                                size: 11.0,
+                                weight: 400,
+                            },
+                            s,
+                            pal.secondary_text,
+                        );
+                    }
                 }
             }
             Control::Text { value } => {

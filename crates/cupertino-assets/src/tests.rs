@@ -540,3 +540,31 @@ fn the_packs_list_their_wallpapers_and_the_first_pack_wins_a_name() {
         ]
     );
 }
+
+#[test]
+fn the_credits_file_names_the_title_and_photographer_of_each_picture() {
+    let text = "Wallpapers: photographs from Unsplash.\n\nwallpapers/snow-W3V.jpg\n  \"Trees covering snow\" by Ryan Pohanic (https://unsplash.com/@elevatedtv)\n  Source: https://unsplash.com/photos/snow\n  License: Unsplash License\n\nwallpapers/other.jpg\n  no quotes here\n";
+    let credits = parse_credits(text);
+    assert_eq!(
+        credits.get("snow-W3V.jpg"),
+        Some(&Credit {
+            title: "Trees covering snow".into(),
+            author: "Ryan Pohanic".into()
+        })
+    );
+    assert_eq!(credits.len(), 1);
+    let pack_dir = pack(
+        MANIFEST,
+        &["wallpapers/snow-W3V.jpg", "wallpapers/plain.png"],
+    );
+    fs::write(pack_dir.path().join("wallpapers/credits.txt"), text).unwrap();
+    let a = Assets::from_dirs(&[pack_dir.path().to_path_buf()]);
+    let files = a.wallpaper_files();
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0].name, "plain");
+    assert_eq!(files[0].credit, None);
+    assert_eq!(
+        files[1].credit.as_ref().map(|c| c.author.as_str()),
+        Some("Ryan Pohanic")
+    );
+}

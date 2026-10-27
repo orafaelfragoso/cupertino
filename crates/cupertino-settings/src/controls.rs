@@ -43,6 +43,8 @@ pub mod metrics {
     pub const TILE_GAP: f64 = 12.0;
     pub const TILE_ASPECT: f64 = 0.625;
     pub const TILE_TITLE_HEIGHT: f64 = 20.0;
+    /// The title and the photographer's name under a picture.
+    pub const TILE_CREDITED_HEIGHT: f64 = 34.0;
     pub const TILE_RADIUS: f64 = 8.0;
 }
 
@@ -102,6 +104,17 @@ pub struct Tile {
     pub image: std::path::PathBuf,
     /// The tile is a light and a dark picture.
     pub pair: bool,
+    /// Who made the picture, shown under its title.
+    pub credit: Option<String>,
+}
+
+/// The height under a picture of `tiles` for its title (and the photographer, when one is named).
+pub fn tile_caption_height(tiles: &[Tile]) -> f64 {
+    if tiles.iter().any(|t| t.credit.is_some()) {
+        m::TILE_CREDITED_HEIGHT
+    } else {
+        m::TILE_TITLE_HEIGHT
+    }
 }
 
 /// How many tiles a grid `width` wide has in a row.
@@ -110,19 +123,18 @@ pub fn tile_columns(width: f64) -> usize {
 }
 
 /// The height of a grid of `count` tiles `width` wide.
-pub fn tiles_height(width: f64, count: usize) -> f64 {
+pub fn tiles_height(width: f64, count: usize, caption: f64) -> f64 {
     let columns = tile_columns(width);
     let tile_w = (width - m::TILE_GAP * (columns - 1) as f64) / columns as f64;
     let rows = count.div_ceil(columns);
     if rows == 0 {
         return 0.0;
     }
-    rows as f64 * (tile_w * m::TILE_ASPECT + m::TILE_TITLE_HEIGHT) + (rows - 1) as f64 * m::TILE_GAP
+    rows as f64 * (tile_w * m::TILE_ASPECT + caption) + (rows - 1) as f64 * m::TILE_GAP
 }
 
-/// The picture of each of `count` tiles of the grid in `frame`; the title lies under it, [`metrics::TILE_TITLE_HEIGHT`]
-/// high.
-pub fn tile_rects(frame: &Rect, count: usize) -> Vec<Rect> {
+/// The picture of each of `count` tiles of the grid in `frame`; the title lies under it, `caption` high.
+pub fn tile_rects(frame: &Rect, count: usize, caption: f64) -> Vec<Rect> {
     let columns = tile_columns(frame.w);
     let tile_w = (frame.w - m::TILE_GAP * (columns - 1) as f64) / columns as f64;
     let tile_h = tile_w * m::TILE_ASPECT;
@@ -131,7 +143,7 @@ pub fn tile_rects(frame: &Rect, count: usize) -> Vec<Rect> {
             let (row, column) = (i / columns, i % columns);
             Rect::new(
                 frame.x + column as f64 * (tile_w + m::TILE_GAP),
-                frame.y + row as f64 * (tile_h + m::TILE_TITLE_HEIGHT + m::TILE_GAP),
+                frame.y + row as f64 * (tile_h + caption + m::TILE_GAP),
                 tile_w,
                 tile_h,
             )
@@ -317,7 +329,7 @@ pub fn press(control: &Control, frame: &Rect, p: Point) -> Option<Press> {
         Control::Level { .. } => unreachable!("handled above"),
         Control::Text { .. } => return None,
         Control::Tiles { tiles, .. } => {
-            let hit = tile_rects(frame, tiles.len())
+            let hit = tile_rects(frame, tiles.len(), tile_caption_height(tiles))
                 .iter()
                 .position(|r| r.contains(p))?;
             Press::Commit(Value::Index(hit))
@@ -446,8 +458,13 @@ mod tests {
         assert_eq!(tile_columns(600.0), 3);
         assert_eq!(tile_columns(400.0), 2);
         assert_eq!(tile_columns(100.0), 1);
-        let frame = Rect::new(20.0, 100.0, 600.0, tiles_height(600.0, 4));
-        let rects = tile_rects(&frame, 4);
+        let frame = Rect::new(
+            20.0,
+            100.0,
+            600.0,
+            tiles_height(600.0, 4, m::TILE_TITLE_HEIGHT),
+        );
+        let rects = tile_rects(&frame, 4, m::TILE_TITLE_HEIGHT);
         assert_eq!(rects.len(), 4);
         assert_eq!(rects[0].x, 20.0);
         assert!(
@@ -460,6 +477,7 @@ mod tests {
                     title: i.to_string(),
                     image: format!("/{i}.png").into(),
                     pair: false,
+                    credit: None,
                 })
                 .collect(),
             selected: None,

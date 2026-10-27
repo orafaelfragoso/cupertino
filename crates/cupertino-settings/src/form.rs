@@ -109,7 +109,8 @@ pub fn layout(
         for spec in &s.rows {
             // a grid of pictures takes the whole width, with no padding and no label
             if let Control::Tiles { tiles, .. } = spec.control {
-                let h = controls::tiles_height(w, tiles.len());
+                let h =
+                    controls::tiles_height(w, tiles.len(), controls::tile_caption_height(tiles));
                 let row = Rect::new(cx, y, w, h);
                 rows.push(RowLayout {
                     row,

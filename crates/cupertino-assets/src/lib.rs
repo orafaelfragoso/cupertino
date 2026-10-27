@@ -364,6 +364,38 @@ pub struct WallpaperFile {
     pub light: PathBuf,
     /// The picture of the dark appearance; `None` when the one image serves both.
     pub dark: Option<PathBuf>,
+    /// The picture's title and its photographer, from the pack's `wallpapers/credits.txt` when it names the file.
+    pub credit: Option<Credit>,
+}
+
+/// Who made a picture.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Credit {
+    pub title: String,
+    pub author: String,
+}
+
+/// The credits of `text`, by file name: a line `wallpapers/<file>` followed by an indented line
+/// `"<title>" by <author> (<link>)`.
+pub fn parse_credits(text: &str) -> std::collections::HashMap<String, Credit> {
+    let mut out = std::collections::HashMap::new();
+    let mut file: Option<String> = None;
+    for line in text.lines() {
+        if !line.starts_with(' ') && !line.starts_with('\t') {
+            file = line.trim().strip_prefix("wallpapers/").map(str::to_string);
+            continue;
+        }
+        let Some(name) = &file else { continue };
+        let line = line.trim();
+        if let Some((title, rest)) = line.strip_prefix('"').and_then(|l| l.split_once("\" by ")) {
+            let author = rest.split(" (").next().unwrap_or(rest).trim();
+            out.entry(name.clone()).or_insert(Credit {
+                title: title.to_string(),
+                author: author.to_string(),
+            });
+        }
+    }
+    out
 }
 
 /// The pictures in `dir` (PNG and JPEG, no hidden files), by name; `<name>-dark.<ext>` next to `<name>.<ext>` makes
@@ -397,6 +429,7 @@ pub fn pictures_in(dir: &Path) -> Vec<WallpaperFile> {
                     .iter()
                     .find(|(other, _)| other.strip_suffix("-dark") == Some(stem.as_str()))
                     .map(|(_, dark)| dark.clone()),
+                credit: None,
             }),
         }
     }
@@ -504,7 +537,17 @@ impl Assets {
     pub fn wallpaper_files(&self) -> Vec<WallpaperFile> {
         let mut out: Vec<WallpaperFile> = Vec::new();
         for pack in &self.packs {
-            for file in pictures_in(&pack.root.join("wallpapers")) {
+            let dir = pack.root.join("wallpapers");
+            let credits = std::fs::read_to_string(dir.join("credits.txt"))
+                .map(|text| parse_credits(&text))
+                .unwrap_or_default();
+            for mut file in pictures_in(&dir) {
+                file.credit = file
+                    .light
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .and_then(|n| credits.get(n))
+                    .cloned();
                 if !out.iter().any(|f| f.name == file.name) {
                     out.push(file);
                 }

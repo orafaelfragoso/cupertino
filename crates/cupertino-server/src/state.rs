@@ -410,7 +410,7 @@ fn listening_socket() -> Result<ListeningSocketSource> {
         }
         Err(e) => return Err(e).context("creating the wayland socket"),
     }
-    loop {
+    for _ in 0..OWN_NAME_TRIES {
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let name = format!("wayland-cupertino-{}-{n}", std::process::id());
         match ListeningSocketSource::with_name(&name) {
@@ -419,7 +419,11 @@ fn listening_socket() -> Result<ListeningSocketSource> {
             Err(e) => return Err(e).context("creating the wayland socket"),
         }
     }
+    anyhow::bail!("creating the wayland socket: no free wayland-N name and {OWN_NAME_TRIES} names of its own are taken")
 }
+
+/// How many names of its own a server tries once the `wayland-N` names are gone.
+const OWN_NAME_TRIES: u32 = 1024;
 
 impl Cupertino {
     pub fn new(

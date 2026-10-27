@@ -141,6 +141,9 @@ pub enum Focus {
     List,
 }
 
+/// The most bytes the query holds.
+pub const QUERY_MAX_LEN: usize = 1024;
+
 pub struct Panel {
     field: TextField,
     results: Results,
@@ -163,7 +166,7 @@ impl Default for Panel {
 impl Panel {
     pub fn new() -> Self {
         Self {
-            field: TextField::new(),
+            field: TextField::with_max_len(QUERY_MAX_LEN),
             results: Results::default(),
             selected: 0,
             scroll_row: 0,

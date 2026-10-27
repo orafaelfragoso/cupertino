@@ -5,6 +5,9 @@
 use crate::rename::{initial_selection, validate_name, NameError};
 use cupertino_text_field::TextField;
 
+/// The most bytes a file name holds (the file system's limit).
+pub const NAME_MAX_LEN: usize = 255;
+
 #[derive(Clone, Debug)]
 pub struct NameEdit {
     index: usize,
@@ -17,7 +20,7 @@ impl NameEdit {
     pub fn new(index: usize, name: &str, is_dir: bool) -> Self {
         let chars = initial_selection(name, is_dir);
         let byte = |c: usize| name.char_indices().nth(c).map_or(name.len(), |(b, _)| b);
-        let mut field = TextField::new();
+        let mut field = TextField::with_max_len(NAME_MAX_LEN);
         field.set_text(name);
         field.select(byte(chars.start)..byte(chars.end));
         NameEdit {
@@ -69,6 +72,18 @@ mod tests {
         assert_eq!((edit.text(), edit.field().caret()), ("summary.pdf", 7));
         let folder = NameEdit::new(0, "a.b", true);
         assert_eq!(folder.field().selection(), 0..3, "a folder's whole name");
+    }
+
+    #[test]
+    fn a_name_holds_at_most_255_bytes() {
+        let mut edit = NameEdit::new(0, "a", false);
+        edit.field_mut().select_all();
+        edit.field_mut().paste(&"é".repeat(200));
+        assert_eq!(
+            edit.text(),
+            "é".repeat(127),
+            "254 bytes: half an é does not fit"
+        );
     }
 
     #[test]

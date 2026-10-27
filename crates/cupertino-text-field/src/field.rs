@@ -80,11 +80,22 @@ pub struct TextField {
     /// When the caret last moved; the blink counts from it.
     activity: Option<Instant>,
     scroll: f64,
+    /// The most bytes the text holds; `None` for no limit.
+    max_len: Option<usize>,
 }
 
 impl TextField {
     pub fn new() -> Self {
         TextField::default()
+    }
+
+    /// A field whose text holds at most `max_len` bytes: typing, a paste or a composition past it is cut at a grapheme
+    /// boundary.
+    pub fn with_max_len(max_len: usize) -> Self {
+        TextField {
+            max_len: Some(max_len),
+            ..TextField::default()
+        }
     }
 
     pub fn text(&self) -> &str {
@@ -121,7 +132,7 @@ impl TextField {
 
     /// Replace the whole text (not an edit: undo starts over); the caret goes to the end.
     pub fn set_text(&mut self, text: &str) {
-        self.text = single_line(text);
+        self.text = self.fit(&single_line(text), 0).to_string();
         self.caret = self.text.len();
         self.anchor = self.caret;
         self.composition = None;
@@ -537,7 +548,28 @@ impl TextField {
         self.replace_selection(&swapped, None);
     }
 
+    /// The longest grapheme prefix of `s` that fits with `kept` bytes of the text staying.
+    fn fit<'a>(&self, s: &'a str, kept: usize) -> &'a str {
+        let Some(room) = self.max_len.map(|max| max.saturating_sub(kept)) else {
+            return s;
+        };
+        if s.len() <= room {
+            return s;
+        }
+        let end = s
+            .grapheme_indices(true)
+            .map(|(i, g)| i + g.len())
+            .take_while(|end| *end <= room)
+            .last()
+            .unwrap_or(0);
+        &s[..end]
+    }
+
     fn replace_selection(&mut self, s: &str, group: Option<Group>) {
+        let s = self.fit(s, self.text.len() - self.selection().len());
+        if s.is_empty() && self.selection().is_empty() {
+            return;
+        }
         if group.is_none() || group != self.group {
             self.undo.push(self.snapshot());
         }

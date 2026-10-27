@@ -412,3 +412,33 @@ fn a_composition_is_an_undo_step_of_its_own() {
     f.field.undo();
     assert_eq!(f.field.text(), "");
 }
+
+#[test]
+fn a_field_with_a_maximum_length_cuts_typing_pastes_and_compositions_at_a_grapheme() {
+    let mut f = TextField::with_max_len(8);
+    f.set_text("abcdefghij");
+    assert_eq!(f.text(), "abcdefgh", "set text is cut too");
+    f.select(2..5);
+    f.paste("e\u{301}\u{1F600}xyz");
+    assert_eq!(
+        f.text(),
+        "abe\u{301}fgh",
+        "the accented e fits in 3 bytes, the emoji not"
+    );
+    f.insert("z");
+    assert_eq!(
+        f.text(),
+        "abe\u{301}fgh",
+        "a full field takes no more typing"
+    );
+    f.select(0..f.text().len());
+    f.set_composition("123456789");
+    assert_eq!(f.text(), "12345678");
+    f.undo();
+    assert_eq!(f.text(), "abe\u{301}fgh");
+    f.undo();
+    assert_eq!(f.text(), "abcdefgh", "the refused typing left no undo step");
+    let mut big = TextField::with_max_len(1024);
+    big.paste(&"x".repeat(10_000));
+    assert_eq!(big.text().len(), 1024);
+}

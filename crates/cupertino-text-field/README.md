@@ -29,6 +29,8 @@ manager's rename editor). Pure logic: no drawing and no Wayland. The app feeds k
   starts a new step. Undo brings back the selection an edit replaced.
 - **Caret.** It shows for 0.5 s after every edit, move or press, then blinks 0.5 s off and 0.5 s on (approximated: a
   design value, not measured); it hides while text is selected.
+- **Length.** `TextField::with_max_len` caps the text in bytes; typing, a paste or a composition past the cap is cut at
+  a grapheme boundary (the apps: 1 KiB for the search fields, 255 bytes for a file name).
 - **Single line.** Pasted or composed line breaks and tabs become spaces; other control characters and the bidi
   embedding, override and isolate controls are dropped, so a paste holds only what typing could.
 - **Other layouts.** With Ctrl or Super held, a key whose layout letter is not Latin is named by the key's Latin letter,

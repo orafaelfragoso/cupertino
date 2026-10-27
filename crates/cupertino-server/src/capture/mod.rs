@@ -7,6 +7,8 @@
 //! Every global is offered only to privileged clients: the shell processes the server started on a connection of its
 //! own ([`launch`]). A client of the public socket does not see them, so an application cannot read the screen.
 //!
+//! The screen is not captured while the session is locked: requested frames wait until it is unlocked.
+//!
 //! Frames are copied after an output's frame was rendered ([`Cupertino::process_captures`]): the source is rendered once
 //! more offscreen (an output through the normal element tree, a toplevel at its natural size like the window
 //! snapshots), compared with the last frame its session delivered and, when something changed or the session has had no
@@ -34,16 +36,15 @@ use smithay::wayland::foreign_toplevel_list::{ForeignToplevelHandle, ForeignTopl
 use cupertino_protocols::server::screenshot::cupertino_screenshot_v1::CupertinoScreenshotV1;
 use cupertino_wm::WindowId;
 
-use crate::state::{ClientState, Cupertino};
+use crate::authorization::{authorized, ShellRole};
+use crate::state::Cupertino;
 
 /// Version of every global of this module.
 const VERSION: u32 = 1;
 
-/// Whether `client` may see the capture globals: a shell process the server started itself ([`launch`]).
+/// Whether `client` may see and use the capture globals: the screenshot process the server started itself ([`launch`]).
 fn privileged(client: &Client) -> bool {
-    client
-        .get_data::<ClientState>()
-        .is_some_and(|c| c.privileged)
+    authorized(client, ShellRole::Capture)
 }
 
 /// What an `ext_image_capture_source_v1` captures; `None` when the output or window was already gone when the source
@@ -92,8 +93,13 @@ impl Capture {
 
 impl Cupertino {
     /// Copy the frames waiting on the sources drawn on output `idx` and refresh the window feeds. Called after the
-    /// output's frame was rendered, by every backend (through [`Cupertino::process_screenshots`]).
+    /// output's frame was rendered, by every backend (through [`Cupertino::process_screenshots`]). While the session is
+    /// locked or about to be, nothing is copied and the feeds stay as they were: the requested frames wait for the
+    /// unlock, so a capture session delivers no buffer of a locked screen.
     pub fn process_captures(&mut self, renderer: &mut GlesRenderer, idx: usize) {
+        if self.session_lock.is_active() {
+            return;
+        }
         self.refresh_window_feeds();
         self.copy_frames(renderer, idx);
     }

@@ -127,7 +127,7 @@ impl Cupertino {
             // the server's own connections and its shell processes are not applications
             if client
                 .get_data::<ClientState>()
-                .is_none_or(|c| c.internal || c.privileged || c.shell_process)
+                .is_none_or(|c| c.internal || !c.capabilities.is_empty())
             {
                 continue;
             }

@@ -249,7 +249,7 @@ pub fn run() -> Result<std::convert::Infallible> {
 
     let socket = std::env::var(SOCKET_VARIABLE).map_err(|e| format!("{SOCKET_VARIABLE}: {e}"))?;
     let stream = connect(&socket)?;
-    let client = Client::connect()?;
+    let client = Client::connect_shell()?;
     let (sender, messages) = mpsc::channel();
     let notifier = Notifier::new(sender, client.waker());
     let connection = Connection::spawn(stream, move |message| notifier.send(message))?;

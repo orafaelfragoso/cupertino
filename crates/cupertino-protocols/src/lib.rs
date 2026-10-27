@@ -1,4 +1,4 @@
-//! Generated bindings of `protocols/cupertino-shell-v1.xml`, `protocols/cupertino-screenshot-v1.xml` and `protocols/cupertino-scroll-v1.xml`: enable
+//! Generated bindings of `protocols/cupertino-shell-v1.xml`, `protocols/cupertino-screenshot-v1.xml`, `protocols/cupertino-scroll-v1.xml` and `protocols/cupertino-app-effects-v1.xml`: enable
 //! `client` in shell processes and `server` in the display server.
 
 #![allow(clippy::all)]
@@ -54,6 +54,21 @@ pub mod client {
 
         wayland_scanner::generate_client_code!("protocols/cupertino-scroll-v1.xml");
     }
+
+    /// Bindings of `protocols/cupertino-app-effects-v1.xml`, the public protocol, in a module of their own for the same
+    /// reason.
+    pub mod app_effects {
+        use wayland_client;
+        use wayland_client::protocol::*;
+
+        pub mod __interfaces {
+            use wayland_client::protocol::__interfaces::*;
+            wayland_scanner::generate_interfaces!("protocols/cupertino-app-effects-v1.xml");
+        }
+        use self::__interfaces::*;
+
+        wayland_scanner::generate_client_code!("protocols/cupertino-app-effects-v1.xml");
+    }
 }
 
 #[cfg(feature = "server")]
@@ -106,5 +121,20 @@ pub mod server {
         use self::__interfaces::*;
 
         wayland_scanner::generate_server_code!("protocols/cupertino-scroll-v1.xml");
+    }
+
+    /// Bindings of `protocols/cupertino-app-effects-v1.xml`, the public protocol, in a module of their own for the same
+    /// reason.
+    pub mod app_effects {
+        use wayland_server;
+        use wayland_server::protocol::*;
+
+        pub mod __interfaces {
+            use wayland_server::protocol::__interfaces::*;
+            wayland_scanner::generate_interfaces!("protocols/cupertino-app-effects-v1.xml");
+        }
+        use self::__interfaces::*;
+
+        wayland_scanner::generate_server_code!("protocols/cupertino-app-effects-v1.xml");
     }
 }

@@ -10,6 +10,8 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+mod common;
+
 use cupertino_protocols::client::screenshot::cupertino_screenshot_v1::{
     self, CupertinoScreenshotV1,
 };
@@ -787,4 +789,47 @@ fn a_toplevel_is_captured_at_its_frame_size_and_listed_in_the_window_feed() {
     assert_eq!(capture.pixel(w / 2, hh / 4), RED, "the top half is on top");
     assert_eq!(capture.pixel(w / 2, hh * 3 / 4), BLUE);
     drop((feed, list));
+}
+
+/// SEC-05: once the session is locked, a capture session gets no new buffer until the unlock.
+#[test]
+fn a_locked_session_delivers_no_new_capture_buffer_until_it_is_unlocked() {
+    let Some(mut h) = Harness::new() else { return };
+    let (mut app, frame) = mapped_app(&mut h);
+    h.state
+        .pointer_moved_to((frame.x + 20.0, frame.y + 200.0).into(), 0, None);
+    h.idle(&mut app, 5);
+    let mut c = TestClient::privileged(&mut h);
+    let source = c.output_source();
+    let capture = c.session(&mut h, &source, true);
+    let first = c.request_frame(&capture);
+    h.pump_until(&mut c, "the first frame before the lock", |s| s.frame.ready);
+    first.destroy();
+    c.state.frame = Default::default();
+
+    let locker = common::Client::locker(h.socket_path());
+    for _ in 0..200 {
+        if locker.locked() {
+            break;
+        }
+        h.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(locker.locked(), "the session lock was not granted");
+
+    let _second = c.request_frame(&capture);
+    h.state
+        .pointer_moved_to((frame.x + 300.0, frame.y + 60.0).into(), 1, None);
+    h.state.request_redraw();
+    h.idle(&mut c, 40);
+    assert!(
+        !c.state.frame.ready && c.state.frame.failed.is_none(),
+        "a frame was delivered while the session was locked"
+    );
+
+    locker.unlock();
+    h.pump_until(&mut c, "the frame after the unlock", |s| {
+        s.frame.ready || s.frame.failed.is_some()
+    });
+    assert!(c.state.frame.ready, "failed: {:?}", c.state.frame.failed);
 }

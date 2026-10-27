@@ -37,7 +37,8 @@ use smithay::reexports::wayland_server::{
 };
 use smithay::wayland::compositor::{with_states, Cacheable};
 
-use crate::shell_v1::surface_backdrops;
+use crate::app_effects_v1::surface_backdrops;
+use crate::authorization::{require, ShellRole};
 use crate::state::Cupertino;
 
 /// Where a minimizing window lands: the dock's `set_minimize_target`, in surface-local logical
@@ -270,7 +271,7 @@ impl Cupertino {
             init.init(id, DockData { output: None });
             shell.post_error(
                 ShellError::Permission,
-                "get_dock is for the shell processes the server started",
+                "get_dock needs the Dock role, which only a shell process the server started for it holds",
             );
             return;
         }
@@ -615,14 +616,17 @@ impl Cupertino {
 impl Dispatch<CupertinoDockV1, DockData> for Cupertino {
     fn request(
         state: &mut Self,
-        _: &Client,
-        _: &CupertinoDockV1,
+        client: &Client,
+        dock: &CupertinoDockV1,
         request: cupertino_dock_v1::Request,
         data: &DockData,
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
         let Some(output) = data.output else { return };
+        if !require(client, ShellRole::Dock, dock) {
+            return;
+        }
         match request {
             cupertino_dock_v1::Request::ActivateApp { app_id } => state.dock_activate_app(&app_id),
             cupertino_dock_v1::Request::ForceQuitApp { app_id } => state.force_quit_app(&app_id),

@@ -5,16 +5,19 @@
   </copyright>
 
   <description summary="private protocol between the Cupertino server and its shell processes">
-    Requests the shell processes (dock, menu bar, notifications, launcher, control panel, overlays)
-    need from the server that no standard protocol carries. The protocol is unstable until phase 1 of
+    Roles the server gives only to the shell processes it starts (menu bar, dock, window manager,
+    session observer). Applications use cupertino_app_effects_v1 instead. The protocol is unstable until phase 1 of
      ends: interfaces may change without a version bump until then.
   </description>
 
-  <interface name="cupertino_shell_v1" version="4">
+  <interface name="cupertino_shell_v1" version="5">
     <description summary="shell services of the server">
-      Global singleton. A client that binds it is a shell process. Version 2 adds the display
-      options of the session object, version 3 the screen capture state of the menu bar object, version 4
-      the titlebar style of an application window.
+      Global singleton, offered only to the processes the server started for a shell role, on a
+      connection of their own. Each request needs the role it creates: a connection that holds
+      other roles, or none, gets the permission error. Version 2 adds the display options of the
+      session object, version 3 the screen capture state of the menu bar object. Version 5 moves
+      the backdrops and the title bar style of application windows to the public
+      cupertino_app_effects_v1 protocol, which any client may use, and removes their requests here.
     </description>
 
     <request name="destroy" type="destructor">
@@ -23,31 +26,9 @@
       </description>
     </request>
 
-    <request name="get_backdrop">
-      <description summary="create a material backdrop under a surface">
-        Creates a backdrop drawn by the server directly below the surface's content: the pixels
-        behind the region are blurred and coloured by a material recipe and composited through a
-        rounded mask. The client draws only its own content, usually with a transparent background.
-        A surface may have several backdrops; they are drawn in creation order, all below the
-        surface. A new backdrop has no material and draws nothing until the material and shape
-        are set and the surface is committed.
-      </description>
-      <arg name="id" type="new_id" interface="cupertino_backdrop_v1"/>
-      <arg name="surface" type="object" interface="wl_surface"/>
-    </request>
-
     <enum name="error">
-      <entry name="role" value="0" summary="the surface is not a layer surface or already has a shell role"/>
-      <entry name="window" value="1" summary="the surface is not an application window, or the window is already mapped"/>
-      <entry name="permission" value="2" summary="only the shell processes the server started may ask for this object"/>
-    </enum>
-
-    <enum name="titlebar_style">
-      <description summary="how the server decorates an application window">
-        Applies to windows the server decorates (xdg-decoration server-side mode).
-      </description>
-      <entry name="standard" value="0" summary="a title bar above the surface, drawn by the server with the window's title"/>
-      <entry name="unified" value="1" summary="the surface fills the whole window and the title bar lies over its top; the server draws only the window control buttons"/>
+      <entry name="role" value="0" summary="the surface is not a layer surface of that output, already has a role, or the output already has this role holder"/>
+      <entry name="permission" value="2" summary="the connection does not hold the role the request needs"/>
     </enum>
 
     <request name="get_menu_bar">
@@ -97,21 +78,6 @@
       </description>
       <arg name="id" type="new_id" interface="cupertino_window_manager_v1"/>
       <arg name="output" type="object" interface="wl_output"/>
-    </request>
-
-    <request name="set_titlebar_style" since="4">
-      <description summary="choose the title bar style of an application window">
-        Chooses how the server decorates the xdg toplevel of the surface. The default is standard.
-        With the unified style the surface starts at the top edge of the window: the client draws
-        its toolbar, the fill behind it and the window's title in the top strip, and keeps the area
-        of the window control buttons at the strip's leading edge free of controls, because the
-        buttons take the pointer there. The server does not move the window from the strip: the
-        client does, with xdg_toplevel.move, and a double click may call xdg_toplevel.set_maximized.
-        Resize zones and the window shape are the server's in both styles.
-        Posts the window error when the surface is not an xdg toplevel or has committed a buffer.
-      </description>
-      <arg name="surface" type="object" interface="wl_surface"/>
-      <arg name="style" type="uint" enum="titlebar_style"/>
     </request>
   </interface>
 
@@ -397,53 +363,6 @@
         1-based workspace index.
       </description>
       <arg name="workspace" type="uint"/>
-    </request>
-  </interface>
-
-  <interface name="cupertino_backdrop_v1" version="1">
-    <description summary="a material region below a surface">
-      All state is double-buffered: it applies on the next wl_surface.commit of the surface the
-      backdrop was created for, together with that commit's buffer, so the backdrop and the content
-      always move together. When the surface is destroyed the backdrop becomes inert.
-    </description>
-
-    <enum name="error">
-      <entry name="unknown_material" value="0" summary="the material name is not a recipe of the server's design tokens"/>
-      <entry name="invalid_shape" value="1" summary="negative width or height, or a negative corner radius"/>
-      <entry name="invalid_alpha" value="2" summary="alpha outside 0 to 1"/>
-    </enum>
-
-    <request name="destroy" type="destructor">
-      <description summary="remove the backdrop">
-        The backdrop disappears with the next commit of its surface.
-      </description>
-    </request>
-
-    <request name="set_material">
-      <description summary="choose the material recipe">
-        Name of a material recipe of the design tokens, for example "Menu" or "Sidebar". The
-        server picks the light or dark variant from the current appearance.
-      </description>
-      <arg name="name" type="string"/>
-    </request>
-
-    <request name="set_shape">
-      <description summary="set the region and its corner radius">
-        Rectangle in surface-local logical coordinates and the radius of its continuous corners in
-        logical points. A zero width or height hides the backdrop.
-      </description>
-      <arg name="x" type="int"/>
-      <arg name="y" type="int"/>
-      <arg name="width" type="int"/>
-      <arg name="height" type="int"/>
-      <arg name="radius" type="fixed"/>
-    </request>
-
-    <request name="set_alpha">
-      <description summary="set the opacity of the whole backdrop">
-        Opacity from 0 to 1 applied to the composited backdrop, for fades. The initial value is 1.
-      </description>
-      <arg name="alpha" type="fixed"/>
     </request>
   </interface>
 

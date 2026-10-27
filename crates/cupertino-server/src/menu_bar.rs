@@ -21,6 +21,7 @@ use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, New, Resource, WEnum,
 };
 
+use crate::authorization::{require, ShellRole};
 use crate::state::Cupertino;
 
 /// Opacity lost by the bar of an inactive output. approximate.
@@ -201,11 +202,20 @@ impl Cupertino {
     pub fn create_menu_bar(
         &mut self,
         shell: &CupertinoShellV1,
+        permitted: bool,
         id: New<CupertinoMenuBarV1>,
         surface: WlSurface,
         output: &WlOutput,
         init: &mut DataInit<'_, Self>,
     ) {
+        if !permitted {
+            init.init(id, MenuBarData { output: None });
+            shell.post_error(
+                ShellError::Permission,
+                "get_menu_bar needs the MenuBar role, which only a shell process the server started for it holds",
+            );
+            return;
+        }
         let target = Output::from_resource(output)
             .and_then(|o| self.output_by_wl(&o).map(|e| (e.id, e.output.clone())));
         let rejection = match &target {
@@ -471,7 +481,7 @@ impl Cupertino {
 impl Dispatch<CupertinoMenuBarV1, MenuBarData> for Cupertino {
     fn request(
         state: &mut Self,
-        _: &Client,
+        client: &Client,
         resource: &CupertinoMenuBarV1,
         request: cupertino_menu_bar_v1::Request,
         data: &MenuBarData,
@@ -479,6 +489,9 @@ impl Dispatch<CupertinoMenuBarV1, MenuBarData> for Cupertino {
         _: &mut DataInit<'_, Self>,
     ) {
         let Some(output) = data.output else { return };
+        if !require(client, ShellRole::MenuBar, resource) {
+            return;
+        }
         match request {
             cupertino_menu_bar_v1::Request::SetMenuOpen { open } => {
                 let now = state.now();

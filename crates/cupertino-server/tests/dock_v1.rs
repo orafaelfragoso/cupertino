@@ -13,11 +13,13 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use cupertino_protocols::client::cupertino_backdrop_v1::CupertinoBackdropV1;
+use cupertino_protocols::client::app_effects::cupertino_app_effects_v1::CupertinoAppEffectsV1;
+use cupertino_protocols::client::app_effects::cupertino_backdrop_v1::CupertinoBackdropV1;
 use cupertino_protocols::client::cupertino_dock_v1::{
     self, AppCommand, CupertinoDockV1, WindowState,
 };
 use cupertino_protocols::client::cupertino_shell_v1::{self, CupertinoShellV1};
+use cupertino_server::authorization::ShellRole;
 use cupertino_server::backend::headless::{self, HeadlessDisplay};
 use cupertino_server::config::Config;
 use cupertino_server::desktop::DesktopIndex;
@@ -123,8 +125,11 @@ impl Harness {
 
     /// A connection of a shell process the server supervises: the only kind that may be a dock.
     fn shell_stream(&mut self) -> UnixStream {
-        cupertino_server::shell_connection::shell_process_connection(&self.state.display_handle)
-            .unwrap()
+        cupertino_server::shell_connection::shell_process_connection(
+            &self.state.display_handle,
+            &[ShellRole::Session, ShellRole::Dock],
+        )
+        .unwrap()
     }
 
     fn socket_path(&self) -> PathBuf {
@@ -270,6 +275,7 @@ ignore_events!(
     wl_output::WlOutput,
     zwlr_layer_shell_v1::ZwlrLayerShellV1,
     CupertinoShellV1,
+    CupertinoAppEffectsV1,
     CupertinoBackdropV1,
     xdg_activation_v1::XdgActivationV1
 );
@@ -517,7 +523,8 @@ impl DockClient {
         DockClient(run_client(stream, move |globals, qh, status| {
             let compositor: wl_compositor::WlCompositor = globals.bind(qh, 4..=6, ()).unwrap();
             let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
-            let shell: CupertinoShellV1 = globals.bind(qh, 1..=4, ()).unwrap();
+            let shell: CupertinoShellV1 = globals.bind(qh, 5..=5, ()).unwrap();
+            let effects: CupertinoAppEffectsV1 = globals.bind(qh, 1..=1, ()).unwrap();
             let global = globals
                 .contents()
                 .clone_list()
@@ -552,7 +559,7 @@ impl DockClient {
             }
             let dock = shell.get_dock(&surface, &output, qh, ());
             if layer {
-                let backdrop = shell.get_backdrop(&surface, qh, ());
+                let backdrop = effects.get_backdrop(&surface, qh, ());
                 backdrop.set_material("Menu".into());
                 backdrop.set_shape(BAR.0, BAR.1, BAR.2, BAR.3, 16.0);
             }
@@ -668,7 +675,7 @@ fn a_surface_without_the_layer_role_is_a_role_error() {
     );
 }
 
-/// An application on the public socket asking for a dock is refused, so it cannot send `force_quit_app` either.
+/// A shell process that holds other roles but not the dock role, asking for a dock, is refused, so it cannot send `force_quit_app` either.
 #[test]
 fn an_application_that_is_not_a_shell_process_cannot_be_a_dock_or_end_an_application() {
     let Some(mut h) = Harness::new() else { return };
@@ -681,7 +688,11 @@ fn an_application_that_is_not_a_shell_process_cannot_be_a_dock_or_end_an_applica
         Box::new(move |process, signal| recorder.borrow_mut().push((process.pid, signal)));
 
     let intruder = DockClient::spawn(
-        UnixStream::connect(h.socket_path()).expect("connecting to the compositor"),
+        cupertino_server::shell_connection::shell_process_connection(
+            &h.state.display_handle,
+            &[ShellRole::Session, ShellRole::MenuBar],
+        )
+        .unwrap(),
         true,
     );
     let end = Instant::now() + Duration::from_secs(10);

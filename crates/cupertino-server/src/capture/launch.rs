@@ -16,6 +16,7 @@ use std::process::Command;
 use cupertino_input::ScreenshotRequest;
 use smithay::desktop::layer_map_for_output;
 
+use crate::authorization::{ClientCapabilitySet, ShellRole};
 use crate::shell_connection::{connect_client, hand_over};
 use crate::state::{ClientState, Cupertino};
 
@@ -40,7 +41,7 @@ impl Cupertino {
         connect_client(
             &self.display_handle,
             ClientState {
-                privileged: true,
+                capabilities: ClientCapabilitySet::of([ShellRole::Capture, ShellRole::Session]),
                 ..ClientState::default()
             },
         )

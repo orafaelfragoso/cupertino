@@ -8,7 +8,13 @@ use cupertino_client::{
     WindowCommand, WindowMenu, WindowState,
 };
 use cupertino_geometry::{Point, Rect};
-use cupertino_protocols::server::cupertino_backdrop_v1::{self, CupertinoBackdropV1};
+use cupertino_protocols::server::app_effects::cupertino_app_effects_v1::{
+    self, CupertinoAppEffectsV1,
+};
+use cupertino_protocols::server::app_effects::cupertino_appearance_v1::{
+    self, CupertinoAppearanceV1, DisplayOption as AppearanceOption,
+};
+use cupertino_protocols::server::app_effects::cupertino_backdrop_v1::{self, CupertinoBackdropV1};
 use cupertino_protocols::server::cupertino_dock_v1::{
     self, CupertinoDockV1, WindowState as DockWindowState,
 };
@@ -161,7 +167,8 @@ enum Seen {
     Command(cupertino_menu_bar_v1::Command),
     Workspace(u32),
     /// The title bar style of a window, chosen with `set_titlebar_style`.
-    TitlebarStyle(cupertino_shell_v1::TitlebarStyle),
+    TitlebarStyle(cupertino_app_effects_v1::TitlebarStyle),
+    ShellBound,
     /// `xdg_toplevel.set_maximized` (true) or `unset_maximized`.
     Maximize(bool),
     /// The dock role was requested for the surface on the output.
@@ -243,12 +250,14 @@ struct BufferData {
 struct Mock {
     committed: Sender<Committed>,
     seen: Sender<Seen>,
+    report_shell_bind: bool,
     next_serial: u32,
     popups: Vec<XdgPopup>,
     wm_base: Option<XdgWmBase>,
     menu_bar: Option<CupertinoMenuBarV1>,
     dock: Option<CupertinoDockV1>,
     session: Option<CupertinoSessionV1>,
+    appearance: Option<CupertinoAppearanceV1>,
     outputs: Vec<WlOutput>,
     pointer: Option<WlPointer>,
     scroll: Option<CupertinoPointerScrollV1>,
@@ -970,7 +979,7 @@ impl Dispatch<XdgPopup, WlSurface> for Mock {
 
 impl GlobalDispatch<CupertinoShellV1, ()> for Mock {
     fn bind(
-        _: &mut Self,
+        state: &mut Self,
         _: &DisplayHandle,
         _: &ServerClient,
         r: New<CupertinoShellV1>,
@@ -978,6 +987,70 @@ impl GlobalDispatch<CupertinoShellV1, ()> for Mock {
         init: &mut DataInit<'_, Self>,
     ) {
         init.init(r, ());
+        if state.report_shell_bind {
+            state.seen.send(Seen::ShellBound).unwrap();
+        }
+    }
+}
+impl GlobalDispatch<CupertinoAppEffectsV1, ()> for Mock {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<CupertinoAppEffectsV1>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
+        init.init(r, ());
+    }
+}
+impl Dispatch<CupertinoAppEffectsV1, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &CupertinoAppEffectsV1,
+        request: cupertino_app_effects_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        match request {
+            cupertino_app_effects_v1::Request::GetBackdrop { id, surface } => {
+                let state = Arc::new(Mutex::new(BackdropState::default()));
+                init.init(id, state.clone());
+                surface
+                    .data::<SurfaceData>()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .backdrops
+                    .push(state);
+            }
+            cupertino_app_effects_v1::Request::SetTitlebarStyle { style, .. } => state
+                .seen
+                .send(Seen::TitlebarStyle(style.into_result().unwrap()))
+                .unwrap(),
+            cupertino_app_effects_v1::Request::GetAppearance { id } => {
+                let observer = init.init(id, ());
+                // the session starts dark and with reduce motion
+                observer.appearance(1);
+                observer.display_options(AppearanceOption::ReduceMotion);
+                state.appearance = Some(observer);
+            }
+            _ => {}
+        }
+    }
+}
+impl Dispatch<CupertinoAppearanceV1, ()> for Mock {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &CupertinoAppearanceV1,
+        _: cupertino_appearance_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
     }
 }
 impl Dispatch<CupertinoShellV1, ()> for Mock {
@@ -991,21 +1064,6 @@ impl Dispatch<CupertinoShellV1, ()> for Mock {
         init: &mut DataInit<'_, Self>,
     ) {
         match request {
-            cupertino_shell_v1::Request::GetBackdrop { id, surface } => {
-                let state = Arc::new(Mutex::new(BackdropState::default()));
-                init.init(id, state.clone());
-                surface
-                    .data::<SurfaceData>()
-                    .unwrap()
-                    .lock()
-                    .unwrap()
-                    .backdrops
-                    .push(state);
-            }
-            cupertino_shell_v1::Request::SetTitlebarStyle { style, .. } => state
-                .seen
-                .send(Seen::TitlebarStyle(style.into_result().unwrap()))
-                .unwrap(),
             cupertino_shell_v1::Request::GetMenuBar { id, surface, .. } => {
                 let bar = init.init(id, ());
                 state
@@ -1440,6 +1498,15 @@ impl Dispatch<WlDataOffer, String> for Mock {
 
 /// Run the server on a thread until the test drops the control channel.
 fn spawn_server(stream: UnixStream) -> (Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
+    spawn_server_reporting(stream, false)
+}
+
+/// [`spawn_server`]; with `report_shell_bind` the server tells [`Seen::ShellBound`] when a client binds the private shell
+/// global.
+fn spawn_server_reporting(
+    stream: UnixStream,
+    report_shell_bind: bool,
+) -> (Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
     let (control_tx, control_rx) = channel::<Control>();
     let (committed_tx, committed_rx) = channel();
     let (seen_tx, seen_rx) = channel();
@@ -1451,7 +1518,8 @@ fn spawn_server(stream: UnixStream) -> (Sender<Control>, Receiver<Committed>, Re
         dh.create_global::<Mock, WlOutput, _>(4, ());
         dh.create_global::<Mock, WlSeat, _>(7, ());
         dh.create_global::<Mock, ZwlrLayerShellV1, _>(4, ());
-        dh.create_global::<Mock, CupertinoShellV1, _>(4, ());
+        dh.create_global::<Mock, CupertinoShellV1, _>(5, ());
+        dh.create_global::<Mock, CupertinoAppEffectsV1, _>(1, ());
         dh.create_global::<Mock, XdgActivationV1, _>(1, ());
         dh.create_global::<Mock, ZxdgOutputManagerV1, _>(3, ());
         dh.create_global::<Mock, XdgWmBase, _>(6, ());
@@ -1468,7 +1536,9 @@ fn spawn_server(stream: UnixStream) -> (Sender<Control>, Receiver<Committed>, Re
             wm_base: None,
             menu_bar: None,
             dock: None,
+            report_shell_bind,
             session: None,
+            appearance: None,
             outputs: Vec::new(),
             pointer: None,
             scroll: None,
@@ -1519,13 +1589,21 @@ fn spawn_server(stream: UnixStream) -> (Sender<Control>, Receiver<Committed>, Re
                     dock.done();
                 }
                 Ok(Control::SessionChange) => {
-                    let session = mock.session.as_ref().unwrap();
-                    session.appearance(0);
-                    session.display_options(
-                        DisplayOption::ReduceTransparency | DisplayOption::IncreaseContrast,
-                    );
-                    session.locked();
-                    session.unlocked();
+                    if let Some(session) = mock.session.as_ref() {
+                        session.appearance(0);
+                        session.display_options(
+                            DisplayOption::ReduceTransparency | DisplayOption::IncreaseContrast,
+                        );
+                        session.locked();
+                        session.unlocked();
+                    }
+                    if let Some(observer) = mock.appearance.as_ref() {
+                        observer.appearance(0);
+                        observer.display_options(
+                            AppearanceOption::ReduceTransparency
+                                | AppearanceOption::IncreaseContrast,
+                        );
+                    }
                 }
                 Ok(Control::ResizeToplevel) => {
                     let t = mock.toplevel.as_ref().unwrap();
@@ -1763,7 +1841,7 @@ fn connected_layer_surface() -> (
     let (client_stream, server_stream) = UnixStream::pair().unwrap();
     let (control, committed, seen) = spawn_server(server_stream);
     let mut client =
-        Client::from_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
+        Client::from_shell_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
     let surface = client
         .layer_surface(&LayerSurfaceConfig {
             namespace: "test-shell".to_string(),
@@ -2142,7 +2220,7 @@ fn the_session_state_at_connect_is_read_and_changes_arrive_as_events() {
     let (client_stream, server_stream) = UnixStream::pair().unwrap();
     let (control, _committed, _seen) = spawn_server(server_stream);
     let mut client =
-        Client::from_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
+        Client::from_shell_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
     // no event for what connect already read
     assert!(client.is_dark());
     assert_eq!(
@@ -2190,6 +2268,57 @@ fn the_session_state_at_connect_is_read_and_changes_arrive_as_events() {
 }
 
 #[test]
+fn the_public_connection_follows_the_appearance_but_not_the_lock_and_binds_no_private_object() {
+    let (client_stream, server_stream) = UnixStream::pair().unwrap();
+    let (control, _committed, seen) = spawn_server_reporting(server_stream, true);
+    let mut client =
+        Client::from_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
+    assert!(client.is_dark());
+    assert!(client.display_options().reduce_motion);
+    let mut stash = Stash::new();
+    control.send(Control::SessionChange).unwrap();
+    let mut changes = Vec::new();
+    wait_for(&mut client, &mut stash, |e| {
+        match e {
+            Event::Appearance { dark } => changes.push(format!("dark={dark}")),
+            Event::DisplayOptions(o) => changes.push(format!(
+                "transparency={} contrast={}",
+                o.reduce_transparency, o.increase_contrast
+            )),
+            _ => {}
+        }
+        (changes.len() == 2).then_some(())
+    });
+    assert_eq!(changes, ["dark=false", "transparency=true contrast=true"]);
+    assert!(!client.session_locked());
+    let output = client.outputs()[0].id;
+    let surface = client
+        .layer_surface(&LayerSurfaceConfig {
+            namespace: "public".to_string(),
+            output: Some(output),
+            layer: Layer::Top,
+            anchor: Anchor::Top,
+            size: (100, 20),
+            margin: Margin::default(),
+            exclusive_zone: 0,
+            keyboard: KeyboardInteractivity::None,
+        })
+        .unwrap();
+    assert!(matches!(
+        client.menu_bar(surface, output),
+        Err(ClientError::MissingGlobal("cupertino_shell_v1"))
+    ));
+    assert!(matches!(
+        client.dock(surface, output),
+        Err(ClientError::MissingGlobal("cupertino_shell_v1"))
+    ));
+    assert!(
+        seen.try_iter().all(|s| !matches!(s, Seen::ShellBound)),
+        "the public connection bound cupertino_shell_v1"
+    );
+}
+
+#[test]
 fn a_unified_toplevel_asks_for_its_title_bar_style_and_moves_and_zooms_itself() {
     let (client_stream, server_stream) = UnixStream::pair().unwrap();
     let (_control, _committed, seen) = spawn_server(server_stream);
@@ -2213,7 +2342,7 @@ fn a_unified_toplevel_asks_for_its_title_bar_style_and_moves_and_zooms_itself() 
         .collect();
     assert_eq!(
         requests[4],
-        Seen::TitlebarStyle(cupertino_shell_v1::TitlebarStyle::Unified)
+        Seen::TitlebarStyle(cupertino_app_effects_v1::TitlebarStyle::Unified)
     );
 
     // a window that has not been configured as maximized zooms; a move needs the press it answers

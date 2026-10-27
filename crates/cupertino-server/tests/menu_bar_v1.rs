@@ -15,6 +15,7 @@ use cupertino_protocols::client::cupertino_menu_bar_v1::{
     self, Command as BarCommand, CupertinoMenuBarV1,
 };
 use cupertino_protocols::client::cupertino_shell_v1::{self, CupertinoShellV1};
+use cupertino_server::authorization::ShellRole;
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
 use cupertino_server::Cupertino;
@@ -103,6 +104,15 @@ impl Harness {
             "timed out waiting for group {count}, have {:?}",
             bar.groups()
         );
+    }
+
+    /// A connection of a shell process the server supervises, holding the roles of the menu bar process.
+    fn shell_stream(&mut self) -> UnixStream {
+        cupertino_server::shell_connection::shell_process_connection(
+            &self.state.display_handle,
+            &[ShellRole::Session, ShellRole::MenuBar],
+        )
+        .unwrap()
     }
 
     fn socket_path(&self) -> PathBuf {
@@ -370,7 +380,7 @@ type Setup = Box<
 >;
 
 fn run_client(
-    socket: PathBuf,
+    stream: UnixStream,
     setup: impl FnOnce(
             &wayland_client::globals::GlobalList,
             &QueueHandle<ClientState>,
@@ -379,10 +389,7 @@ fn run_client(
         + Send
         + 'static,
 ) -> TestClient {
-    run_client_on(
-        UnixStream::connect(&socket).expect("connecting to the compositor"),
-        Box::new(setup),
-    )
+    run_client_on(stream, Box::new(setup))
 }
 
 /// A client thread on a connected stream (a privileged client's stream comes from the server itself).
@@ -421,13 +428,13 @@ struct BarClient(TestClient);
 
 impl BarClient {
     /// `layer` false makes the menu bar of a surface that has no layer role.
-    fn spawn(socket: PathBuf, layer: bool) -> BarClient {
-        Self::spawn_at(socket, layer, 1)
+    fn spawn(stream: UnixStream, layer: bool) -> BarClient {
+        Self::spawn_at(stream, layer, 1)
     }
 
     /// A bar on a shell global bound at `version`.
-    fn spawn_at(socket: PathBuf, layer: bool, version: u32) -> BarClient {
-        BarClient(run_client(socket, move |globals, qh, status| {
+    fn spawn_at(stream: UnixStream, layer: bool, version: u32) -> BarClient {
+        BarClient(run_client(stream, move |globals, qh, status| {
             let compositor: wl_compositor::WlCompositor = globals.bind(qh, 4..=6, ()).unwrap();
             let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
             let shell: CupertinoShellV1 = globals.bind(qh, version..=version, ()).unwrap();
@@ -564,7 +571,8 @@ struct AppClient(TestClient);
 
 impl AppClient {
     fn spawn(socket: PathBuf, app_id: &'static str) -> AppClient {
-        AppClient(run_client(socket, move |globals, qh, status| {
+        let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
+        AppClient(run_client(stream, move |globals, qh, status| {
             let compositor: wl_compositor::WlCompositor = globals.bind(qh, 4..=6, ()).unwrap();
             let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
             let wm_base: xdg_wm_base::XdgWmBase = globals.bind(qh, 1..=5, ()).unwrap();
@@ -623,7 +631,7 @@ fn the_bar_gets_a_first_group_and_the_server_reserves_its_height() {
     let Some(mut h) = Harness::new() else { return };
     let out = h.state.outputs[0].id;
     assert_eq!(h.state.usable_area(out), Rect::new(0.0, 0.0, 1000.0, 700.0));
-    let bar = BarClient::spawn(h.socket_path(), true);
+    let bar = BarClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&bar, 1);
     assert_eq!(bar.groups(), vec![empty_group()]);
     // the client's exclusive zone is 0: the reservation is the server's
@@ -637,7 +645,7 @@ fn the_bar_gets_a_first_group_and_the_server_reserves_its_height() {
 #[test]
 fn a_version_3_bar_shows_whether_a_capture_session_runs() {
     let Some(mut h) = Harness::new() else { return };
-    let bar = BarClient::spawn_at(h.socket_path(), true, 3);
+    let bar = BarClient::spawn_at(h.shell_stream(), true, 3);
     h.wait_for_groups(&bar, 2);
     assert_eq!(
         bar.groups(),
@@ -668,7 +676,7 @@ fn a_version_3_bar_shows_whether_a_capture_session_runs() {
 #[test]
 fn a_surface_without_the_layer_role_is_a_role_error() {
     let Some(mut h) = Harness::new() else { return };
-    let bar = BarClient::spawn(h.socket_path(), false);
+    let bar = BarClient::spawn(h.shell_stream(), false);
     let end = Instant::now() + Duration::from_secs(10);
     while bar.error().is_none() && Instant::now() < end {
         h.step();
@@ -692,7 +700,7 @@ fn a_surface_without_the_layer_role_is_a_role_error() {
 #[test]
 fn the_active_window_its_menu_and_commands_go_through_the_bar() {
     let Some(mut h) = Harness::new() else { return };
-    let bar = BarClient::spawn(h.socket_path(), true);
+    let bar = BarClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&bar, 1);
 
     // a second client maps and takes focus: its app id, no menu, its window state
@@ -753,7 +761,7 @@ fn the_active_window_its_menu_and_commands_go_through_the_bar() {
 #[test]
 fn move_to_workspace_moves_the_active_window_and_updates_the_state() {
     let Some(mut h) = Harness::new() else { return };
-    let bar = BarClient::spawn(h.socket_path(), true);
+    let bar = BarClient::spawn(h.shell_stream(), true);
     let _app = AppClient::spawn(h.socket_path(), "org.example.mover");
     let id = h.mapped_window(1);
     let out = h.state.outputs[0].id;
@@ -781,7 +789,7 @@ fn move_to_workspace_moves_the_active_window_and_updates_the_state() {
 #[test]
 fn the_menu_bar_shortcut_engages_the_bar_of_the_active_output() {
     let Some(mut h) = Harness::new() else { return };
-    let bar = BarClient::spawn(h.socket_path(), true);
+    let bar = BarClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&bar, 1);
     h.state.focus_menu_bar();
     // the client applies events per group: engage must end with done to take effect
@@ -799,7 +807,7 @@ fn an_engaged_bar_holds_the_keyboard_over_window_focus_changes() {
     let first = h.mapped_window(1);
     let _second = AppClient::spawn(h.socket_path(), "org.example.second");
     let second = h.mapped_window(2);
-    let bar = BarClient::spawn(h.socket_path(), true);
+    let bar = BarClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&bar, 1);
     let surface = |h: &Harness, id| {
         h.state
@@ -842,7 +850,7 @@ fn an_engaged_bar_holds_the_keyboard_over_window_focus_changes() {
 #[test]
 fn a_bar_gone_with_a_menu_open_does_not_keep_the_next_bar_revealed() {
     let Some(mut h) = Harness::new() else { return };
-    let bar = BarClient::spawn(h.socket_path(), true);
+    let bar = BarClient::spawn(h.shell_stream(), true);
     let _app = AppClient::spawn(h.socket_path(), "org.example.full");
     let id = h.mapped_window(1);
     let out = h.state.outputs[0].id;
@@ -868,7 +876,7 @@ fn a_bar_gone_with_a_menu_open_does_not_keep_the_next_bar_revealed() {
 
     bar.send(Cmd::Destroy);
     h.wait_until("the first bar to go", |s| !s.menu_bars.has_bar(out));
-    let next = BarClient::spawn(h.socket_path(), true);
+    let next = BarClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&next, 1);
     h.advance(1.0);
     assert_eq!(visible(&h), 0.0, "the next bar is hidden in full screen");
@@ -877,7 +885,7 @@ fn a_bar_gone_with_a_menu_open_does_not_keep_the_next_bar_revealed() {
 #[test]
 fn full_screen_hides_the_bar_and_an_open_menu_or_the_top_edge_reveals_it() {
     let Some(mut h) = Harness::new() else { return };
-    let bar = BarClient::spawn(h.socket_path(), true);
+    let bar = BarClient::spawn(h.shell_stream(), true);
     let _app = AppClient::spawn(h.socket_path(), "org.example.full");
     let id = h.mapped_window(1);
     let out = h.state.outputs[0].id;

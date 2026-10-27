@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="cupertino_app_effects_v1">
+  <copyright>
+    SPDX-License-Identifier: MIT OR Apache-2.0
+  </copyright>
+
+  <description summary="effects any client may ask the server to draw for its own windows">
+    Public protocol: the material backdrops and the title bar style of a client's own surfaces,
+    and the appearance of the session. A request names surfaces of the client that sends it; the
+    server never lets a client change the look of another client's surface. Nothing here gives
+    control over other clients, the windows' arrangement or the session; those roles are in the
+    private cupertino_shell_v1.
+  </description>
+
+  <interface name="cupertino_app_effects_v1" version="1">
+    <description summary="effects for the client's own surfaces">
+      Global singleton, offered to every client.
+    </description>
+
+    <enum name="error">
+      <entry name="invalid_surface" value="0" summary="the surface belongs to another client or is gone"/>
+      <entry name="window" value="1" summary="the surface is not an application window, or the window is already mapped"/>
+    </enum>
+
+    <enum name="titlebar_style">
+      <description summary="how the server decorates an application window">
+        Applies to windows the server decorates (xdg-decoration server-side mode).
+      </description>
+      <entry name="standard" value="0" summary="a title bar above the surface, drawn by the server with the window's title"/>
+      <entry name="unified" value="1" summary="the surface fills the whole window and the title bar lies over its top; the server draws only the window control buttons"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="unbind the global">
+        Objects created through this global stay valid.
+      </description>
+    </request>
+
+    <request name="get_backdrop">
+      <description summary="create a material backdrop under a surface">
+        Creates a backdrop drawn by the server directly below the surface's content: the pixels
+        behind the region are blurred and coloured by a material recipe and composited through a
+        rounded mask. The client draws only its own content, usually with a transparent background.
+        A surface may have several backdrops; they are drawn in creation order, all below the
+        surface. A new backdrop has no material and draws nothing until the material and shape
+        are set and the surface is committed.
+        Posts invalid_surface when the surface belongs to another client.
+      </description>
+      <arg name="id" type="new_id" interface="cupertino_backdrop_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+
+    <request name="set_titlebar_style">
+      <description summary="choose the title bar style of an application window">
+        Chooses how the server decorates the xdg toplevel of the surface. The default is standard.
+        With the unified style the surface starts at the top edge of the window: the client draws
+        its toolbar, the fill behind it and the window's title in the top strip, and keeps the area
+        of the window control buttons at the strip's leading edge free of controls, because the
+        buttons take the pointer there. The server does not move the window from the strip: the
+        client does, with xdg_toplevel.move, and a double click may call xdg_toplevel.set_maximized.
+        Resize zones and the window shape are the server's in both styles.
+        Posts invalid_surface when the surface belongs to another client, and window when it is
+        not an xdg toplevel or has committed a buffer.
+      </description>
+      <arg name="surface" type="object" interface="wl_surface"/>
+      <arg name="style" type="uint" enum="titlebar_style"/>
+    </request>
+
+    <request name="get_appearance">
+      <description summary="follow the appearance of the session">
+        Creates an observer of the appearance and the accessibility display options. It has no
+        surface, so a client may create any number of them. The server sends the current state
+        right after the object is created and again on every change.
+      </description>
+      <arg name="id" type="new_id" interface="cupertino_appearance_v1"/>
+    </request>
+  </interface>
+
+  <interface name="cupertino_backdrop_v1" version="1">
+    <description summary="a material region below a surface">
+      All state is double-buffered: it applies on the next wl_surface.commit of the surface the
+      backdrop was created for, together with that commit's buffer, so the backdrop and the content
+      always move together. When the surface is destroyed the backdrop becomes inert.
+    </description>
+
+    <enum name="error">
+      <entry name="unknown_material" value="0" summary="the material name is not a recipe of the server's design tokens"/>
+      <entry name="invalid_shape" value="1" summary="negative width or height, or a negative corner radius"/>
+      <entry name="invalid_alpha" value="2" summary="alpha outside 0 to 1"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="remove the backdrop">
+        The backdrop disappears with the next commit of its surface.
+      </description>
+    </request>
+
+    <request name="set_material">
+      <description summary="choose the material recipe">
+        Name of a material recipe of the design tokens, for example "Menu" or "Sidebar". The
+        server picks the light or dark variant from the current appearance.
+      </description>
+      <arg name="name" type="string"/>
+    </request>
+
+    <request name="set_shape">
+      <description summary="set the region and its corner radius">
+        Rectangle in surface-local logical coordinates and the radius of its continuous corners in
+        logical points. A zero width or height hides the backdrop.
+      </description>
+      <arg name="x" type="int"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int"/>
+      <arg name="height" type="int"/>
+      <arg name="radius" type="fixed"/>
+    </request>
+
+    <request name="set_alpha">
+      <description summary="set the opacity of the whole backdrop">
+        Opacity from 0 to 1 applied to the composited backdrop, for fades. The initial value is 1.
+      </description>
+      <arg name="alpha" type="fixed"/>
+    </request>
+  </interface>
+
+  <interface name="cupertino_appearance_v1" version="1">
+    <description summary="appearance and display options of the session">
+      Right after the object is created the server sends appearance, then display_options. Later
+      events say what changed; an event is complete by itself and is not part of a group.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="stop observing the appearance"/>
+    </request>
+
+    <event name="appearance">
+      <description summary="the session's appearance">
+        1 for the dark appearance, 0 for the light one. The client draws again with it, for
+        example from the colours of its materials and palettes. The materials of the client's
+        backdrops follow the appearance in the server and need no request.
+      </description>
+      <arg name="dark" type="uint"/>
+    </event>
+
+    <enum name="display_option" bitfield="true">
+      <entry name="reduce_motion" value="1" summary="replace spatial transitions with fades"/>
+      <entry name="reduce_transparency" value="2" summary="draw materials opaque"/>
+      <entry name="increase_contrast" value="4" summary="draw with the high-contrast colours"/>
+      <entry name="differentiate_without_color" value="8" summary="do not carry state by colour alone"/>
+    </enum>
+
+    <event name="display_options">
+      <description summary="the accessibility display options of the session">
+        The options that are on. The client draws again with them: with reduce_motion it fades
+        what it would slide, scale or magnify; with reduce_transparency and increase_contrast it
+        picks its opaque and high-contrast palettes. The materials of the client's backdrops
+        follow the options in the server and need no request. Bits the client does not know
+        are reserved and stay 0.
+      </description>
+      <arg name="options" type="uint" enum="display_option"/>
+    </event>
+  </interface>
+</protocol>

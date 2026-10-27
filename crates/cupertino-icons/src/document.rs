@@ -303,7 +303,7 @@ mod tests {
             .copied()
             .filter(|n| *n != "document.image")
             .collect();
-        let isolated = |assets: &Assets| SystemIcons::with_host(assets, Vec::new(), None);
+        let isolated = |assets: &Assets| SystemIcons::with_host(assets, Vec::new());
         let packs = fixture::assets(dir.path(), &names, &[]);
         let mut files = FileIcons::with_system(
             isolated(&packs),

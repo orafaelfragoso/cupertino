@@ -15,6 +15,7 @@
 //! | `SetAccessibility(s key, s value)` | one key of `accessibility.conf` with a value as the file writes it (`reduce_motion` `on`, `color_filter` `tint 0.5`, ...): applied and stored like the key actions; an unknown key or bad value is `InvalidArgs` |
 //! | `Appearance` property `s` | `light` or `dark`, the session's appearance (with `PropertiesChanged`) |
 //! | `Accessibility` property `a{ss}` | every key of `accessibility.conf` with its value (with `PropertiesChanged`) |
+//! | `Mice` property `a(ssub)` | read-only: the connected mice (no touchpads), each as `(key, name, dpi, stored)`: the `mouse_dpi` key of `compositor.json` (`vendor:product:name`, hex ids), the device name, the resolution in use (the stored one, else the hardware database's, else 1000) and whether it is the stored one; changes with `PropertiesChanged` on a mouse being plugged or removed and on a change of `mouse_dpi` |
 //!
 //! Which application goes first is approximate: the design walks its process list from the end, whose order was not
 //! read; most recently used first is our choice.
@@ -44,22 +45,35 @@ struct Quitting {
 pub struct Quit {
     quitting: Option<Quitting>,
     /// What the bus thread is to emit; `None` until it runs.
-    signals: Option<async_channel::Sender<BusOut>>,
+    pub(crate) signals: Option<async_channel::Sender<BusOut>>,
 }
 
 /// What the compositor tells the bus thread.
 #[derive(Debug)]
 pub enum BusOut {
     ApplicationQuit(String),
-    /// The appearance or the accessibility settings changed: their values now.
+    /// The appearance, the accessibility settings or the mice changed: the values now.
     Settings(SessionSettings),
 }
 
-/// The values of the two properties.
+/// One connected mouse as the `Mice` property lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MouseEntry {
+    /// `cupertino_defaults::compositor::mouse_dpi_key` of the device.
+    pub key: String,
+    pub name: String,
+    /// The resolution in use, in dots per inch.
+    pub dpi: u32,
+    /// The user stored the resolution (`mouse_dpi`), as opposed to the hardware database or the default.
+    pub stored: bool,
+}
+
+/// The values of the properties.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionSettings {
     pub appearance: String,
     pub accessibility: HashMap<String, String>,
+    pub mice: Vec<MouseEntry>,
 }
 
 /// Why a settings call was refused.
@@ -218,7 +232,20 @@ impl Cupertino {
         SessionSettings {
             appearance,
             accessibility,
+            mice: self.mice(),
         }
+    }
+
+    /// The connected mice by key; a key two devices share (the nodes of one mouse, identical mice) is listed once.
+    fn mice(&self) -> Vec<MouseEntry> {
+        let mut mice: Vec<MouseEntry> = self
+            .pointer_devices
+            .values()
+            .filter_map(|device| device.mouse_entry(&self.config.pointer))
+            .collect();
+        mice.sort_by(|a, b| a.key.cmp(&b.key));
+        mice.dedup_by(|a, b| a.key == b.key);
+        mice
     }
 
     /// Tell the session interface that the appearance or the accessibility settings changed; called by every path
@@ -356,6 +383,18 @@ impl Session1 {
             .clone()
     }
 
+    /// Read-only on purpose: the resolution a user stores goes through `compositor.json`.
+    #[zbus(property)]
+    async fn mice(&self) -> Vec<(String, String, u32, bool)> {
+        self.settings
+            .lock()
+            .expect("no thread panics while holding the settings")
+            .mice
+            .iter()
+            .map(|m| (m.key.clone(), m.name.clone(), m.dpi, m.stored))
+            .collect()
+    }
+
     #[zbus(signal)]
     async fn application_quit(emitter: &SignalEmitter<'_>, app_id: &str) -> zbus::Result<()>;
 }
@@ -392,6 +431,9 @@ pub fn start_session_service(state: &mut Cupertino) {
                         }
                         if before.accessibility != now.accessibility {
                             iface.accessibility_changed(&emitter).await?;
+                        }
+                        if before.mice != now.mice {
+                            iface.mice_changed(&emitter).await?;
                         }
                     }
                 }

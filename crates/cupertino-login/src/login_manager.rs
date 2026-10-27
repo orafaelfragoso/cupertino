@@ -86,6 +86,7 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// The connection to the manager.
+#[derive(Clone)]
 pub struct LoginManager {
     connection: Connection,
 }

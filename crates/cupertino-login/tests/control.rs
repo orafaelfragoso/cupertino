@@ -302,7 +302,17 @@ fn sleep_and_the_power_dialog_reach_the_callback_and_a_locked_session_refuses_th
         requests_rx.recv_timeout(Duration::from_secs(5)),
         Ok(Request::Panel(Kind::PowerButton))
     );
+    call("RefreshCapabilities").expect("RefreshCapabilities");
+    assert_eq!(
+        requests_rx.recv_timeout(Duration::from_secs(5)),
+        Ok(Request::RefreshCapabilities)
+    );
     login.set_locked(true).unwrap();
+    call("RefreshCapabilities").expect("a locked session may refresh what the menu shows");
+    assert_eq!(
+        requests_rx.recv_timeout(Duration::from_secs(5)),
+        Ok(Request::RefreshCapabilities)
+    );
     for method in ["Sleep", "RequestPowerDialog"] {
         let refused = call(method).expect_err(method).to_string();
         assert!(

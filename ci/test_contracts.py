@@ -2,6 +2,7 @@
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # isolated mode (-I) does not add the script's directory
@@ -32,7 +33,8 @@ LIB = '#[zbus::interface(name = "org.cupertino.Demo1")]\nstruct Demo;\n'
 BUILT = {"cupertino-demo": ("cupertino-demo", "crates/cupertino-demo/src/main.rs")}
 
 
-def run(registry, files=None, built=BUILT, shipped=frozenset({"cupertino-demo"})):
+def run(registry, files=None, built=BUILT, shipped=frozenset({"cupertino-demo"}), unknown=None):
+    unknown = registry.count("test_owner: unknown") if unknown is None else unknown
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         files = {"crates/cupertino-demo/src/lib.rs": LIB, "crates/cupertino-demo/src/main.rs": "fn main() {}\n",
@@ -40,7 +42,8 @@ def run(registry, files=None, built=BUILT, shipped=frozenset({"cupertino-demo"})
         for rel, text in files.items():
             (root / rel).parent.mkdir(parents=True, exist_ok=True)
             (root / rel).write_text(text)
-        return contracts.check(root.resolve(), built, set(shipped))
+        with mock.patch.object(contracts, "UNKNOWN_TEST_OWNERS", unknown):
+            return contracts.check(root.resolve(), built, set(shipped))
 
 
 class RegistryTest(unittest.TestCase):
@@ -99,6 +102,57 @@ class RegistryTest(unittest.TestCase):
     def test_a_source_line_outside_the_file_fails(self):
         problems = run(INTERFACE_ENTRY.replace("lib.rs:1", "lib.rs:99") + BINARY_ENTRY)
         self.assertTrue(any("is not path:line of an existing line" in p for p in problems), problems)
+
+
+def attribute_case(source):
+    """What the check says about a crate whose only interface is declared by `source`."""
+    return run(BINARY_ENTRY, {"crates/cupertino-demo/src/lib.rs": source})
+
+
+class BypassTest(unittest.TestCase):
+    def test_an_attribute_that_spans_lines_is_read(self):
+        problems = attribute_case('#[zbus::interface(\n    name = "org.freedesktop.portal.FileChooser"\n)]\nstruct A;\n')
+        self.assertEqual(problems[:1], ["crates/cupertino-demo/src/lib.rs:1: D-Bus interface "
+                                        "org.freedesktop.portal.FileChooser has no entry in "
+                                        "docs/architecture/contracts.yaml"])
+
+    def test_a_name_that_is_a_constant_is_unparsed(self):
+        problems = attribute_case('#[zbus::interface(name = INTERFACE)]\nstruct A;\n')
+        self.assertEqual(problems, ["crates/cupertino-demo/src/lib.rs:1: unparsed interface attribute: the name must "
+                                    "be a string literal"])
+
+    def test_the_imported_form_is_read(self):
+        problems = attribute_case('use zbus::interface;\n\n#[interface(name = "org.freedesktop.portal.Other")]\n'
+                                  'struct A;\n')
+        self.assertEqual(problems, ["crates/cupertino-demo/src/lib.rs:3: D-Bus interface "
+                                    "org.freedesktop.portal.Other has no entry in docs/architecture/contracts.yaml"])
+
+    def test_an_attribute_without_a_name_is_unparsed(self):
+        for source in ("#[zbus::interface]\nstruct A;\n", "#[zbus::interface()]\nstruct A;\n",
+                       "#[zbus::interface(spawn = false)]\nstruct A;\n"):
+            with self.subTest(source=source):
+                self.assertEqual(attribute_case(source), ["crates/cupertino-demo/src/lib.rs:1: unparsed interface "
+                                                          "attribute: the name must be a string literal"])
+
+    def test_a_name_with_other_arguments_is_read(self):
+        problems = attribute_case('#[zbus::interface(name = "org.cupertino.Demo1", spawn = false)]\nstruct A;\n')
+        self.assertTrue(all("org.cupertino.Demo1" in p for p in problems), problems)
+        self.assertEqual(len(problems), 2, problems)
+
+    def test_a_commented_out_attribute_is_ignored(self):
+        self.assertEqual(attribute_case('// #[zbus::interface(name = INTERFACE)]\n'), [])
+
+
+class RatchetTest(unittest.TestCase):
+    def test_more_unknown_test_owners_than_the_limit_fail(self):
+        problems = run(INTERFACE_ENTRY + BINARY_ENTRY, unknown=1)
+        self.assertEqual(problems, ["docs/architecture/contracts.yaml: 2 entries have test_owner unknown, at most 1 "
+                                    "are allowed"])
+
+    def test_fewer_unknown_test_owners_than_the_limit_ask_to_lower_it(self):
+        problems = run(INTERFACE_ENTRY + BINARY_ENTRY, unknown=3)
+        self.assertEqual(problems, ["ci/contracts.py: only 2 entries have test_owner unknown, lower "
+                                    "UNKNOWN_TEST_OWNERS from 3"])
 
 
 class RepositoryTest(unittest.TestCase):

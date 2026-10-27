@@ -15,7 +15,7 @@
 #               system: system bus, or a root-owned daemon
 #   role        globals only: none, or the shell roles (any one of them) that see it; `internal client` for a
 #               connection the server made for its own process
-#   advertised  globals only: always, or conditional (not advertised by the test harness, so not compared at run time)
+#   advertised  globals only: always, or accent-table (only when the server is started with an accent table)
 #   bus, bus_name  D-Bus only: session or system; the well-known name its owner claims (none if it claims none)
 #   shipped     binaries only: yes when packaging/release.py installs it
 #   test_owner  test file that exercises it, or `unknown`
@@ -392,22 +392,22 @@
   source: crates/cupertino-server/src/capture/mod.rs:86
 - name: zwp_text_input_manager_v3
   kind: wayland-global
-  version: unknown
+  version: 1
   owner_crate: cupertino-server
   owner_area: compositor
   scope: public
   role: none
-  advertised: conditional
+  advertised: accent-table
   test_owner: crates/cupertino-server/tests/overlays.rs
   source: crates/cupertino-server/src/state.rs:534
 - name: zwp_input_method_manager_v2
   kind: wayland-global
-  version: unknown
+  version: 1
   owner_crate: cupertino-server
   owner_area: compositor
   scope: shell-private
   role: internal client
-  advertised: conditional
+  advertised: accent-table
   test_owner: crates/cupertino-server/tests/overlays.rs
   source: crates/cupertino-server/src/state.rs:536
 - name: org.cupertino.Login1

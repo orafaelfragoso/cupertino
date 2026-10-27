@@ -153,6 +153,9 @@ jobs:
           fallback: none
       # nextest enforces the per-test time limit in .config/nextest.toml; it does not run doctests.
       - name: Tests
+        env:
+          # A runner without an EGL device fails crates/cupertino-server/tests/contracts.rs instead of skipping it.
+          CUPERTINO_EGL_REQUIRED: "1"
         run: cargo nextest run --workspace --all-features --no-fail-fast
       - name: Doctests
         run: cargo test --workspace --all-features --doc

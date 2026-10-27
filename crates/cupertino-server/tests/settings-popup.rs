@@ -248,7 +248,6 @@ fn window_pixels(state: &Cupertino) -> Vec<u8> {
 }
 
 #[test]
-#[ignore = "#5"]
 fn outside_click_dismisses_without_activating_the_underlying_pane() {
     let mut h = Harness::new();
     h.click(APPEARANCE_ROW);
@@ -261,7 +260,6 @@ fn outside_click_dismisses_without_activating_the_underlying_pane() {
 }
 
 #[test]
-#[ignore = "#5"]
 fn changing_settings_pane_destroys_the_choice_popup() {
     let mut h = Harness::new();
     h.show_appearance();
@@ -273,7 +271,6 @@ fn changing_settings_pane_destroys_the_choice_popup() {
 }
 
 #[test]
-#[ignore = "#5"]
 fn appearance_change_does_not_leave_an_orphaned_choice_popup() {
     let mut h = Harness::new();
     h.show_appearance();

@@ -2,9 +2,9 @@
 //! decorations, backdrops, seat, activation, outputs) and checks what the server receives and what the client reports back.
 
 use cupertino_client::{
-    ActiveApp, Anchor, Button, Client, ClientError, Connection, DisplayOptions, DockChange,
-    DockWindow, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig, LockState, Margin,
-    MenuBarUpdate, OutputGeometry, PointerEvent, Scale, TitlebarStyle, ToplevelConfig,
+    rgba_to_argb8888, ActiveApp, Anchor, Button, Client, ClientError, Connection, DisplayOptions,
+    DockChange, DockWindow, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig, LockState,
+    Margin, MenuBarUpdate, OutputGeometry, PointerEvent, Scale, TitlebarStyle, ToplevelConfig,
     WindowCommand, WindowMenu, WindowState,
 };
 use cupertino_geometry::{Point, Rect};
@@ -99,10 +99,21 @@ struct Committed {
     buffer: u32,
     buffer_scale: i32,
     first_pixel: [u8; 4],
+    pixels: Pixels,
     backdrops: Vec<BackdropState>,
     input_region: Option<Vec<[i32; 4]>>,
     /// The `damage_buffer` rectangles of the commit (x, y, width, height).
     damage: Vec<[i32; 4]>,
+}
+
+/// The bytes of a committed buffer.
+#[derive(Clone, PartialEq)]
+struct Pixels(Vec<u8>);
+
+impl std::fmt::Debug for Pixels {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Pixels({} bytes)", self.0.len())
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -405,6 +416,9 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
                             buffer: buffer.id().protocol_id(),
                             buffer_scale: s.scale,
                             first_pixel,
+                            pixels: Pixels(
+                                b.map[start..start + (b.stride * b.height) as usize].to_vec(),
+                            ),
                             backdrops: s
                                 .backdrops
                                 .iter()
@@ -1779,6 +1793,7 @@ fn surface_lifecycle_against_a_protocol_server() {
             buffer: first.buffer,
             buffer_scale: 2,
             first_pixel: [30, 20, 10, 40],
+            pixels: first.pixels.clone(),
             backdrops: vec![BackdropState {
                 material: "Menu".to_string(),
                 shape: [4.0, 6.0, 40.0, 20.0, 12.0],
@@ -2585,6 +2600,86 @@ fn a_damaged_frame_keeps_the_last_one_repaints_its_rectangles_and_reports_only_t
     // the second buffer was never written: it got the whole frame, red at its corner
     assert_eq!(frames[1].first_pixel, [0, 0, 255, 255]);
     assert_ne!(frames[0].buffer, frames[1].buffer, "the other buffer");
+}
+
+/// The server holds the buffer on screen, so frames take turns between two buffers. A damaged frame converts only its
+/// rectangles and what its buffer missed of the frame before, and every committed buffer equals the whole frame.
+#[test]
+fn buffers_taking_turns_hold_every_damaged_frame_exactly() {
+    let (mut client, control, committed, _seen, surface, mut stash) = connected_layer_surface();
+    while committed.try_recv().is_ok() {}
+    let shade = |i: u8| tiny_skia::Color::from_rgba8(i.wrapping_mul(40), 200 - i, i, 255);
+    let r = Rect::new;
+    // `None` draws a whole frame
+    let frames = [
+        None,
+        Some(vec![r(1.0, 1.0, 4.0, 3.0)]),
+        Some(vec![r(50.0, 20.0, 30.0, 10.0), r(0.0, 0.0, 2.0, 2.0)]),
+        Some(vec![]),
+        Some(vec![r(90.0, 40.0, 20.0, 20.0)]),
+        None,
+        Some(vec![r(10.5, 7.25, 3.0, 12.0)]),
+        Some(vec![r(1.0, 1.0, 4.0, 3.0)]),
+        Some(vec![r(30.0, 60.0, 8.0, 8.0)]),
+    ];
+    let mut shown: Vec<Committed> = Vec::new();
+    for (i, damage) in frames.iter().enumerate() {
+        if i > 0 {
+            client.request_redraw(surface).unwrap();
+            control.send(Control::FrameDone).unwrap();
+            wait_for(&mut client, &mut stash, |e| {
+                matches!(e, Event::Draw(_)).then_some(())
+            });
+        }
+        let mut frame = Vec::new();
+        let paint = |pixmap: &mut tiny_skia::Pixmap, scale: cupertino_client::Scale| {
+            let mut paint = tiny_skia::Paint::default();
+            paint.set_color(shade(i as u8));
+            let to_device = tiny_skia::Transform::from_scale(scale.factor(), scale.factor());
+            match damage {
+                None => pixmap.fill(shade(i as u8)),
+                Some(rects) => {
+                    for d in rects {
+                        let d = tiny_skia::Rect::from_xywh(
+                            d.x() as f32,
+                            d.y() as f32,
+                            d.width() as f32,
+                            d.height() as f32,
+                        )
+                        .unwrap();
+                        pixmap.fill_rect(d, &paint, to_device, None);
+                    }
+                }
+            }
+            frame = pixmap.data().to_vec();
+        };
+        match damage {
+            None => client.draw(surface, paint),
+            Some(rects) => client.draw_damage(surface, rects, paint),
+        }
+        .unwrap();
+        stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
+        let c = committed.recv_timeout(Duration::from_secs(5)).unwrap();
+        let mut whole = vec![0; frame.len()];
+        rgba_to_argb8888(&frame, &mut whole);
+        assert!(
+            c.pixels.0 == whole,
+            "frame {i}: the buffer differs from the frame"
+        );
+        if let Some(last) = shown.last() {
+            assert_ne!(c.buffer, last.buffer, "frame {i}: the buffer on screen");
+        }
+        shown.push(c);
+    }
+    assert_eq!(
+        shown
+            .iter()
+            .map(|c| c.buffer)
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        2,
+        "two buffers take turns"
+    );
 }
 
 /// A shell process that connected over the `WAYLAND_SOCKET` the server gave it does not pass that connection on: a

@@ -9,7 +9,7 @@ use crate::extensions::{Emitted, LayerRole, LockGeneration, LockRole, Quiet, Rol
 use crate::keyboard::Modifiers;
 use crate::menu_bar::MenuBar;
 use crate::output::{OutputId, OutputInfo};
-use crate::pixels::rgba_to_argb8888;
+use crate::pixels::{convert_rects, rgba_to_argb8888};
 use crate::popup::PopupGeometry;
 use crate::scale::Scale;
 use crate::{Anchor, ClientError, KeyboardInteractivity, Layer};
@@ -927,8 +927,25 @@ impl Client {
             }
         }
         paint(&mut pixmap, scale);
-        // the lease holds an earlier frame or nothing, so the whole frame goes in; only the damage is reported
-        rgba_to_argb8888(pixmap.data(), lease.pixels_mut());
+        // the buffer needs what this frame changed and what it missed of the frames shown since it last held one
+        let regions: Option<Vec<PixelRect>> = damage
+            .as_ref()
+            .zip(lease.missed())
+            .map(|(damage, missed)| damage.iter().chain(missed).copied().collect())
+            // rectangles that add up to the buffer cost more than converting it once
+            .filter(|rects: &Vec<PixelRect>| {
+                rects
+                    .iter()
+                    .map(|r| u64::from(r.width) * u64::from(r.height))
+                    .sum::<u64>()
+                    < u64::from(pw) * u64::from(ph)
+            });
+        match regions {
+            Some(rects) => {
+                convert_rects(pixmap.data(), lease.pixels_mut(), layout.stride(), &rects)
+            }
+            None => rgba_to_argb8888(pixmap.data(), lease.pixels_mut()),
+        }
         lease.present_damage(damage.as_deref())?;
         s.frame_pending = true;
         s.pixmap = Some(pixmap);

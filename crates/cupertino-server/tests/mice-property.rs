@@ -87,6 +87,7 @@ fn the_mice_property_lists_the_mice_with_their_resolution_and_follows_the_config
         SettingsFiles::default(),
         SettingsPaths {
             compositor: Some(compositor.clone()),
+            system: None,
             keyboard: None,
             power: None,
         },

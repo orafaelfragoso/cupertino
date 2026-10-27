@@ -546,6 +546,81 @@ fn the_real_shell_processes_work_with_the_server() {
     );
 }
 
+/// The centre puts a backdrop on every visible card and one on the Clear menu, all on one surface: a long history must
+/// not end the process's connection.
+#[test]
+fn the_notification_centre_with_a_long_history_keeps_its_connection() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let Some(mut server) = Server::start(vec![real_process("cupertino-notifications", &bus)], true)
+    else {
+        return;
+    };
+    let answer = ask_notification_server(&bus);
+    server.wait_until("the notification server to answer", |_| {
+        answer.try_recv().is_ok()
+    });
+    let pid = server
+        .state
+        .supervisor
+        .pid_of("cupertino-notifications")
+        .expect("the notifications process runs");
+
+    let conn = zbus::block_on(
+        zbus::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .build(),
+    )
+    .unwrap();
+    for n in 0..20 {
+        let hints: std::collections::HashMap<&str, zbus::zvariant::Value> =
+            std::collections::HashMap::new();
+        zbus::block_on(conn.call_method(
+            Some("org.freedesktop.Notifications"),
+            "/org/freedesktop/Notifications",
+            Some("org.freedesktop.Notifications"),
+            "Notify",
+            &(
+                "history-test",
+                0u32,
+                "",
+                format!("Notification {n}"),
+                "body",
+                Vec::<&str>::new(),
+                hints,
+                0i32,
+            ),
+        ))
+        .unwrap();
+    }
+    zbus::block_on(conn.call_method(
+        Some("org.cupertino.NotificationCenter1"),
+        "/org/cupertino/NotificationCenter1",
+        Some("org.cupertino.NotificationCenter1"),
+        "ToggleCentre",
+        &(),
+    ))
+    .unwrap();
+
+    let output = server.state.outputs.first().unwrap().output.clone();
+    let mut most = 0;
+    server.wait_until("the centre to put a backdrop behind its cards", |_| {
+        most = most.max(cupertino_server::app_effects_v1::layer_backdrops(&output).len());
+        most > 8
+    });
+    let settle = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < settle {
+        server.step();
+    }
+    assert_eq!(
+        server.state.supervisor.pid_of("cupertino-notifications"),
+        Some(pid),
+        "the notifications process kept its connection and was not restarted"
+    );
+}
+
 #[test]
 fn the_dock_process_applies_a_changed_dock_conf_at_once() {
     let Some(bus) = PrivateBus::start() else {

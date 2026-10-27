@@ -507,6 +507,12 @@ pub struct Renderer {
     symbols: SystemIcons,
     /// The content view of the last frame, given back by [`Renderer::recycle`]: the next view of its size reuses it.
     spare: Option<Pixmap>,
+    /// Rows the last list view drew: what a band costs.
+    #[cfg(test)]
+    pub(crate) rows_drawn: usize,
+    /// Content view pixmaps allocated: a view of the last view's size allocates none.
+    #[cfg(test)]
+    pub(crate) views_allocated: usize,
 }
 
 impl Renderer {
@@ -518,6 +524,10 @@ impl Renderer {
             icons,
             symbols: SystemIcons::required(assets, &[], &SYMBOL_NAMES),
             spare: None,
+            #[cfg(test)]
+            rows_drawn: 0,
+            #[cfg(test)]
+            views_allocated: 0,
         })
     }
 
@@ -526,7 +536,13 @@ impl Renderer {
     fn view_pixmap(&mut self, w: u32, h: u32, pal: &Palette) -> Pixmap {
         let mut pm = match self.spare.take() {
             Some(pm) if (pm.width(), pm.height()) == (w, h) => pm,
-            _ => Pixmap::new(w, h).unwrap(),
+            _ => {
+                #[cfg(test)]
+                {
+                    self.views_allocated += 1;
+                }
+                Pixmap::new(w, h).unwrap()
+            }
         };
         pm.fill(
             Color::from_rgba(pal.background[0], pal.background[1], pal.background[2], 1.0).unwrap(),
@@ -820,8 +836,16 @@ impl Renderer {
         let header_up = band.map_or(0, |b| b.top) as f32;
         let up = scroll_pixels(scroll, scale) + header_up;
         let first = f64::from(up) / f64::from(scale);
+        #[cfg(test)]
+        {
+            self.rows_drawn = 0;
+        }
         // the rows under the header are drawn too: the header covers them
         for i in l.visible_rows(first - CULL_MARGIN, first + height + CULL_MARGIN) {
+            #[cfg(test)]
+            {
+                self.rows_drawn += 1;
+            }
             let e = &entries[i];
             let row = &l.rows[i];
             let is_sel = selected.contains(&i);
@@ -1107,6 +1131,12 @@ pub fn relative_date(t: std::time::SystemTime, now: std::time::SystemTime) -> St
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The row copies and bytes [`copy_opaque`] made on this thread.
+    static COPIED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
 /// Put the opaque `src` into `dst` with its top left corner at device pixel (`x`, `y`), clipped to `dst`: row copies,
 /// the same pixels as drawing it over, at a fraction of the cost.
 pub(crate) fn copy_opaque(dst: &mut Pixmap, src: &Pixmap, x: i32, y: i32) {
@@ -1125,6 +1155,11 @@ pub(crate) fn copy_opaque(dst: &mut Pixmap, src: &Pixmap, x: i32, y: i32) {
         let d = row as usize * dst_stride + x0 as usize * 4;
         let s = (row - y) as usize * src_stride + (x0 - x) as usize * 4;
         dst_data[d..d + len].copy_from_slice(&src_data[s..s + len]);
+        #[cfg(test)]
+        COPIED.with(|c| {
+            let (rows, bytes) = c.get();
+            c.set((rows + 1, bytes + len));
+        });
     }
 }
 
@@ -1202,28 +1237,40 @@ mod tests {
     }
 
     #[test]
-    fn copying_a_view_in_costs_a_fraction_of_drawing_it_over_at_every_size() {
+    fn copying_a_view_in_costs_one_slice_copy_per_visible_row_at_every_size() {
+        let mut work = Vec::new();
         for (w, h) in [(600, 400), (1920, 1080), (2560, 1440)] {
             let src = opaque(w, h);
-            let mut dst = Pixmap::new(w, h).unwrap();
-            let start = std::time::Instant::now();
-            copy_opaque(&mut dst, &src, 0, 0);
-            let copied = start.elapsed();
-            let start = std::time::Instant::now();
-            let over = drawn_over(&dst, &src, 0, 0);
-            let drawn = start.elapsed();
-            eprintln!("{w} x {h}: copied {copied:?}, drawn over {drawn:?}");
-            assert!(
-                copied * 3 < drawn,
-                "{w} x {h}: copied {copied:?}, drawn over {drawn:?}"
-            );
-            assert!(over.data() == dst.data());
+            for (x, y) in [(0, 0), (w as i32 / 4, h as i32 / 4)] {
+                let mut dst = Pixmap::new(w, h).unwrap();
+                COPIED.with(|c| c.set((0, 0)));
+                copy_opaque(&mut dst, &src, x, y);
+                work.push(COPIED.with(|c| c.get()));
+                assert!(drawn_over(&Pixmap::new(w, h).unwrap(), &src, x, y).data() == dst.data());
+            }
         }
+        // (rows, bytes): the whole view, then the view moved a quarter right and down, clipped by the window
+        assert_eq!(
+            work,
+            [
+                (400, 600 * 400 * 4),
+                (300, 450 * 300 * 4),
+                (1080, 1920 * 1080 * 4),
+                (810, 1440 * 810 * 4),
+                (1440, 2560 * 1440 * 4),
+                (1080, 1920 * 1080 * 4),
+            ]
+        );
     }
 
     /// Forty entries with names of every length, folders among them, a few selected.
     fn many_entries() -> (Vec<Entry>, Vec<RowSpec>, Vec<usize>) {
-        let entries: Vec<Entry> = (0..40)
+        entries(40)
+    }
+
+    /// `n` entries with names of every length, folders among them, a few selected.
+    fn entries(n: usize) -> (Vec<Entry>, Vec<RowSpec>, Vec<usize>) {
+        let entries: Vec<Entry> = (0..n)
             .map(|i| {
                 let name = format!("item {i:02} {}.txt", "x".repeat(i % 13));
                 Entry::synthetic(&name, i % 7 == 0, 1000 + i as u64)
@@ -1326,50 +1373,41 @@ mod tests {
 
     #[test]
     fn a_band_costs_its_rows_not_the_view_at_every_height() {
-        let (entries, outline, selected) = many_entries();
+        let (entries, outline, selected) = entries(200);
         let mut r = renderer();
         let pal = Palette::builtin(false);
-        for h in [300.0, 1080.0, 2160.0] {
-            let size = Size { w: 1600.0, h };
-            let draw = |r: &mut Renderer, band: Option<Band>| {
-                (0..3)
-                    .map(|_| {
-                        let start = std::time::Instant::now();
-                        let pm = r.list_view(
-                            &entries,
-                            &outline,
-                            &selected,
-                            true,
-                            &ListViewSettings::default(),
-                            SortSpec::default(),
-                            size,
-                            0.0,
-                            band,
-                            1.0,
-                            &pal,
-                            std::time::UNIX_EPOCH,
-                        );
-                        let took = start.elapsed();
-                        r.recycle(pm);
-                        took
-                    })
-                    .min()
-                    .unwrap()
-            };
-            let whole = draw(&mut r, None);
-            let band = draw(
-                &mut r,
-                Some(Band {
-                    top: (h / 2.0) as u32,
-                    height: 40,
-                }),
+        let rows_drawn = |r: &mut Renderer, h: f64, band: Option<Band>| {
+            let pm = r.list_view(
+                &entries,
+                &outline,
+                &selected,
+                true,
+                &ListViewSettings::default(),
+                SortSpec::default(),
+                Size { w: 1600.0, h },
+                0.0,
+                band,
+                1.0,
+                &pal,
+                std::time::UNIX_EPOCH,
             );
-            eprintln!("{h} pt high: whole view {whole:?}, a 40 px band {band:?}");
-            assert!(
-                band * 4 < whole,
-                "{h}: band {band:?} against whole {whole:?}"
-            );
-        }
+            r.recycle(pm);
+            r.rows_drawn
+        };
+        let heights = [300.0, 1080.0, 2160.0];
+        let whole: Vec<usize> = heights
+            .iter()
+            .map(|&h| rows_drawn(&mut r, h, None))
+            .collect();
+        let band: Vec<usize> = heights
+            .iter()
+            .map(|&h| {
+                let top = (h / 2.0) as u32;
+                rows_drawn(&mut r, h, Some(Band { top, height: 40 }))
+            })
+            .collect();
+        assert_eq!(whole, vec![14, 53, 107]);
+        assert_eq!(band, vec![3, 3, 3]);
     }
 
     #[test]

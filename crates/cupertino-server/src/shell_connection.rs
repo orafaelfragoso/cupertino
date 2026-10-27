@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use smithay::reexports::wayland_server::DisplayHandle;
 
-use crate::authorization::{ClientCapabilitySet, ShellRole};
+use crate::authorization::{ClientCapabilitySet, Holder, ShellRole};
 use crate::force_quit::ProcessHandle;
 use crate::state::ClientState;
 
@@ -42,25 +42,28 @@ pub fn shell_process_state(roles: &[ShellRole]) -> ClientState {
     }
 }
 
-/// A connection for a shell process the server supervises, holding `roles` and no other.
+/// A connection for a client that runs in the server's own process (tests), holding `roles` and no other for as long
+/// as it is open. A shell process the server starts is bound to its process instead ([`bind_holder`]).
 pub fn shell_process_connection(
     display: &DisplayHandle,
     roles: &[ShellRole],
 ) -> std::io::Result<UnixStream> {
-    connect_client(display, shell_process_state(roles))
+    connect_client(
+        display,
+        ClientState::detached(ClientCapabilitySet::of(roles.iter().copied())),
+    )
 }
 
 /// Bind the connection to the process started for it: its capabilities end when the process exits, so a connection
 /// kept open by anything else (a descriptor passed on, a leftover child) holds nothing. The child has not been waited
-/// for yet, so its pid cannot belong to another process. A process that is already gone is not bound, and its
-/// connection closes with it.
-pub fn bind_holder(state: &ClientState, pid: u32) {
-    match ProcessHandle::open(pid) {
-        Ok(handle) => {
-            let _ = state.holder.set(handle);
-        }
-        Err(e) => tracing::warn!(pid, error = %e, "binding a connection to its process failed"),
-    }
+/// for yet, so its pid cannot belong to another process. A connection that is not bound holds nothing; when binding
+/// fails the caller ends the process.
+pub fn bind_holder(state: &ClientState, pid: u32) -> std::io::Result<()> {
+    let handle = ProcessHandle::open(pid)?;
+    state
+        .holder
+        .set(Holder::Process(handle))
+        .map_err(|_| std::io::Error::other("the connection already has a holder"))
 }
 
 /// Pass `stream` to the process `command` starts as `WAYLAND_SOCKET`.

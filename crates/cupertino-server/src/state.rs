@@ -84,8 +84,9 @@ pub struct ClientState {
     /// (`crate::shell_connection`), empty for a client of the public socket.
     pub capabilities: ClientCapabilitySet,
     /// The process the connection was made for, held from its spawn ([`crate::shell_connection::bind_holder`]): the
-    /// capabilities end with it, so a connection kept alive by another process holds nothing.
-    pub holder: std::sync::OnceLock<crate::force_quit::ProcessHandle>,
+    /// capabilities end with it, so a connection kept alive by another process holds nothing. Until a holder is
+    /// bound the connection holds nothing.
+    pub holder: std::sync::OnceLock<crate::authorization::Holder>,
 }
 
 impl Default for ClientState {

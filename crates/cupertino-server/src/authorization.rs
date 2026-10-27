@@ -11,6 +11,7 @@ use cupertino_defaults::compositor::ShellRoleName;
 use cupertino_protocols::server::cupertino_shell_v1::Error as ShellError;
 use smithay::reexports::wayland_server::{Client, Resource};
 
+use crate::force_quit::ProcessHandle;
 use crate::state::{ClientState, Cupertino};
 
 /// A privilege of a shell process.
@@ -81,14 +82,42 @@ impl ClientCapabilitySet {
     }
 }
 
-impl ClientState {
-    /// The capabilities in force: none once the process the connection was made for has exited.
-    pub fn granted(&self) -> ClientCapabilitySet {
-        if self.holder.get().is_some_and(|h| h.has_exited()) {
-            ClientCapabilitySet::NONE
-        } else {
-            self.capabilities
+/// What a connection's capabilities depend on.
+#[derive(Debug)]
+pub enum Holder {
+    /// The process the server started for the connection: the capabilities end when it exits.
+    Process(ProcessHandle),
+    /// A client in the server's own process (tests, the accent bridge): nothing ends the capabilities.
+    Detached,
+}
+
+impl Holder {
+    fn has_exited(&self) -> bool {
+        match self {
+            Holder::Process(process) => process.has_exited(),
+            Holder::Detached => false,
         }
+    }
+}
+
+impl ClientState {
+    /// The capabilities in force: none until a holder is bound, and none once the process the connection was made for
+    /// has exited.
+    pub fn granted(&self) -> ClientCapabilitySet {
+        match self.holder.get() {
+            Some(holder) if !holder.has_exited() => self.capabilities,
+            _ => ClientCapabilitySet::NONE,
+        }
+    }
+
+    /// A state for a client that runs inside the server's process: `capabilities` hold for the life of the connection.
+    pub fn detached(capabilities: ClientCapabilitySet) -> Self {
+        let state = ClientState {
+            capabilities,
+            ..ClientState::default()
+        };
+        let _ = state.holder.set(Holder::Detached);
+        state
     }
 }
 
@@ -120,14 +149,24 @@ pub fn require<R: Resource>(client: &Client, role: ShellRole, object: &R) -> boo
     if authorized(client, role) {
         return true;
     }
+    refuse(object, role);
+    false
+}
+
+/// Refuse a request that needs `role`: one warning with the client, the interface and the role (never a credential),
+/// and the shell protocol's permission error on `object`.
+pub fn refuse<R: Resource>(object: &R, role: ShellRole) {
+    let interface = object.id().interface().name;
+    tracing::warn!(
+        client = ?object.client().map(|c| c.id()),
+        interface,
+        ?role,
+        "a request needs a role the connection does not hold"
+    );
     object.post_error(
         ShellError::Permission,
-        format!(
-            "{} needs the {role:?} role, which this connection does not hold",
-            object.id().interface().name
-        ),
+        format!("{interface} needs the {role:?} role, which this connection does not hold"),
     );
-    false
 }
 
 #[cfg(test)]

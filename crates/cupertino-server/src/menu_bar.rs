@@ -21,7 +21,7 @@ use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, New, Resource, WEnum,
 };
 
-use crate::authorization::{authorized, require, ShellRole};
+use crate::authorization::{authorized, refuse, require, ShellRole};
 use crate::state::Cupertino;
 
 /// Opacity lost by the bar of an inactive output. approximate.
@@ -229,10 +229,7 @@ impl Cupertino {
     ) {
         if !permitted {
             init.init(id, MenuBarData { output: None });
-            shell.post_error(
-                ShellError::Permission,
-                "get_menu_bar needs the MenuBar role, which only a shell process the server started for it holds",
-            );
+            refuse(shell, ShellRole::MenuBar);
             return;
         }
         let target = Output::from_resource(output)

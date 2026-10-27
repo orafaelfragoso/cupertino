@@ -19,14 +19,25 @@ pub use cupertino_defaults::compositor::COMPOSITOR_CONF_ENV as CONFIG_ENV;
 /// The system configuration file the packages install: the shell processes and whatever else a fresh account needs.
 pub const SYSTEM_CONFIG: &str = "/etc/cupertino/compositor.json";
 
+/// The system file of the login screen's server, which `$CUPERTINO_SERVER_CONFIG` names when the packages start it.
+pub const GREETER_CONFIG: &str = "/etc/cupertino/greeter.json";
+
 /// Where the programs of the shell processes and the screenshot process must be installed. The install prefix of the
 /// build is added to `/usr` when it is set (`CUPERTINO_INSTALL_PREFIX` at compile time).
 fn installed_roots() -> impl Iterator<Item = &'static Path> {
-    ["/usr"]
-        .into_iter()
-        .chain(option_env!("CUPERTINO_INSTALL_PREFIX"))
-        .map(Path::new)
+    ["/usr"].into_iter().chain(INSTALL_PREFIX).map(Path::new)
 }
+
+const INSTALL_PREFIX: Option<&str> = option_env!("CUPERTINO_INSTALL_PREFIX");
+
+const _: () = {
+    if let Some(prefix) = INSTALL_PREFIX {
+        assert!(
+            prefix.len() > 1 && prefix.as_bytes()[0] == b'/',
+            "CUPERTINO_INSTALL_PREFIX must be an absolute path other than /"
+        );
+    }
+};
 
 /// The screenshot process of an installation.
 const INSTALLED_SCREENSHOT: &str = "/usr/bin/cupertino-screenshot";
@@ -56,13 +67,45 @@ pub enum LayerTrust {
     Dev,
 }
 
-/// Whether `path` is a system file: under `/etc/cupertino`, owned by root and not writable by anyone else.
-fn is_system_file(path: &Path) -> bool {
-    let Ok(real) = path.canonicalize() else {
-        return false;
+/// The trust of the layer at `path`. It comes from which file the layer is, never from where the path resolves: only
+/// the two system files, named exactly, are [`LayerTrust::System`], and a link to them is a file of the person.
+fn layer_trust(path: &Path, dev_shell: bool) -> LayerTrust {
+    if dev_shell {
+        LayerTrust::Dev
+    } else if [SYSTEM_CONFIG, GREETER_CONFIG]
+        .into_iter()
+        .any(|system| path == Path::new(system))
+    {
+        LayerTrust::System
+    } else {
+        LayerTrust::User
+    }
+}
+
+/// The text of a system file, read from the one descriptor that was checked: opened without following a link, owned by
+/// root and not writable by anyone else. `None` when there is no such file.
+fn read_system_file(path: &Path) -> std::io::Result<Option<String>> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
     };
-    real.starts_with("/etc/cupertino")
-        && std::fs::metadata(&real).is_ok_and(|m| m.uid() == 0 && m.mode() & 0o022 == 0)
+    let meta = file.metadata()?;
+    if !meta.is_file() || meta.uid() != 0 || meta.mode() & 0o022 != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "a system configuration must be a regular file owned by root that no one else can write",
+        ));
+    }
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    Ok(Some(text))
 }
 
 /// A shell process the server starts and keeps alive (see [`crate::supervisor`]).
@@ -497,11 +540,7 @@ impl Config {
             user.clone(),
             Path::new(SYSTEM_CONFIG),
         ) {
-            let trust = match (dev_shell, is_system_file(&path)) {
-                (true, _) => LayerTrust::Dev,
-                (false, true) => LayerTrust::System,
-                (false, false) => LayerTrust::User,
-            };
+            let trust = layer_trust(&path, dev_shell);
             let file = cfg.apply_path(&path, trust);
             if path == Path::new(SYSTEM_CONFIG) && file.shell.is_none() {
                 tracing::error!(path = %path.display(), "the system configuration is unreadable or has no shell list: the shell list is empty unless the user's file sets one");
@@ -525,7 +564,16 @@ impl Config {
 
     /// Apply the settings file at `path` and return them; problems are reported and their keys keep their values.
     fn apply_path(&mut self, path: &Path, trust: LayerTrust) -> CompositorSettings {
-        match CompositorSettings::load(path, None) {
+        let loaded = match trust {
+            LayerTrust::System => read_system_file(path).map(|text| {
+                text.map_or_else(
+                    || (CompositorSettings::default(), Vec::new()),
+                    |text| CompositorSettings::parse(&text, None),
+                )
+            }),
+            LayerTrust::User | LayerTrust::Dev => CompositorSettings::load(path, None),
+        };
+        match loaded {
             Ok((file, problems)) => {
                 for p in problems {
                     tracing::warn!(path = %path.display(), key = p.key, error = %p.message, "ignoring invalid configuration");
@@ -707,7 +755,7 @@ mod tests {
         assert_eq!(layers, vec![system.clone(), user.clone()]);
         let mut c = Config::default();
         for path in &layers {
-            c.apply_path(path, LayerTrust::System);
+            c.apply_path(path, LayerTrust::Dev);
         }
         assert_eq!(c.appearance, Appearance::Light);
         assert_eq!(c.shell_processes.len(), 1);
@@ -985,12 +1033,53 @@ mod tests {
     }
 
     #[test]
-    fn a_file_outside_etc_is_never_a_system_file() {
+    fn only_the_system_files_by_name_are_system_layers() {
+        assert_eq!(
+            layer_trust(Path::new(SYSTEM_CONFIG), false),
+            LayerTrust::System
+        );
+        assert_eq!(
+            layer_trust(Path::new(GREETER_CONFIG), false),
+            LayerTrust::System
+        );
+        assert_eq!(
+            layer_trust(Path::new("/etc/cupertino/other.json"), false),
+            LayerTrust::User
+        );
+        assert_eq!(layer_trust(Path::new(SYSTEM_CONFIG), true), LayerTrust::Dev);
+
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("compositor.json");
+        std::os::unix::fs::symlink(SYSTEM_CONFIG, &link).unwrap();
+        assert_eq!(layer_trust(&link, false), LayerTrust::User);
+        let mut c = system_config();
+        let problems = c.apply_privileged(
+            &settings(r#"{"shell":[{"name":"evil","command":["/usr/bin/sh","-c","x"],"roles":["dock","session_lock"]}]}"#),
+            layer_trust(&link, false),
+        );
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert_eq!(names(&c), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn a_system_file_is_read_through_one_checked_descriptor() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("compositor.json");
         std::fs::write(&file, "{}").unwrap();
-        assert!(!is_system_file(&file));
-        assert!(!is_system_file(&dir.path().join("missing.json")));
+        assert!(read_system_file(&dir.path().join("missing.json"))
+            .unwrap()
+            .is_none());
+
+        let link = dir.path().join("link.json");
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+        assert!(read_system_file(&link).is_err(), "a link is never followed");
+        if unsafe { libc::geteuid() } != 0 {
+            assert_eq!(
+                read_system_file(&file).unwrap_err().kind(),
+                std::io::ErrorKind::PermissionDenied,
+                "a file the person owns is no system file"
+            );
+        }
     }
 
     #[test]

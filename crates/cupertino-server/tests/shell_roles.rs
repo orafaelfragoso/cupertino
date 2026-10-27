@@ -41,6 +41,8 @@ const BACKDROP_SET_MATERIAL: u16 = 1;
 /// `wl_display.error` code of a global the client is not offered; the server reports it on `wl_display` itself. A
 /// request on an object id the server does not know ends the connection without an error event.
 const INVALID_OBJECT: u32 = 0;
+/// `cupertino_shell_v1.error.role`.
+const ROLE: u32 = 0;
 /// `cupertino_shell_v1.error.permission`.
 const PERMISSION: u32 = 2;
 
@@ -99,7 +101,7 @@ impl Harness {
     fn held_shell(&mut self, roles: &[ShellRole], process: &Child) -> Wire {
         let (stream, state) =
             connect_bound_client(&self.state.display_handle, shell_process_state(roles)).unwrap();
-        bind_holder(&state, process.id());
+        bind_holder(&state, process.id()).unwrap();
         Wire::new(stream)
     }
 
@@ -601,8 +603,8 @@ fn a_restarted_process_gets_the_role_once_the_old_process_is_gone() {
     );
     h.settle(&mut [&mut early.wire]);
     assert_eq!(
-        early.wire.error().map(|(object, _)| object),
-        Some(early.shell),
+        early.wire.error(),
+        Some((early.shell, ROLE)),
         "a second holder of the role while the first process is alive"
     );
     end(early_process);
@@ -699,4 +701,50 @@ fn the_session_lock_is_offered_to_the_lock_screen_alone() {
     assert_eq!(public.error(), Some((DISPLAY, INVALID_OBJECT)));
     assert!(public.closed);
     assert_eq!(public.events_of(guessed), 0);
+}
+
+/// A connection whose process was never bound holds nothing, whatever roles it was made with.
+#[test]
+fn a_connection_without_a_bound_holder_holds_nothing() {
+    let Some(mut h) = Harness::new() else { return };
+    let (stream, _state) = connect_bound_client(
+        &h.state.display_handle,
+        shell_process_state(&[ShellRole::Session, ShellRole::Dock, ShellRole::Capture]),
+    )
+    .unwrap();
+    let mut wire = Wire::new(stream);
+    let registry = wire.get_registry();
+    h.settle(&mut [&mut wire]);
+    assert!(offered(&wire, registry, "cupertino_shell_v1").is_none());
+    assert!(offered(&wire, registry, "ext_image_copy_capture_manager_v1").is_none());
+}
+
+/// An observer whose process exited is told nothing more, though its connection is still open.
+#[test]
+fn a_session_observer_of_an_exited_process_hears_no_more() {
+    let Some(mut h) = Harness::new() else { return };
+    let process = sleeper();
+    let wire = h.held_shell(&[ShellRole::Session], &process);
+    let mut observer = ShellClient::over(&mut h, wire).unwrap();
+    let id = observer.wire.new_id();
+    observer
+        .wire
+        .send(observer.shell, SHELL_GET_SESSION, &[Arg::Uint(id)]);
+    h.settle(&mut [&mut observer.wire]);
+    assert_eq!(observer.wire.error(), None);
+    let before = observer.wire.events_of(id);
+    assert!(before > 0, "the observer is told the state at once");
+
+    h.state.sessions.lock(true);
+    h.settle(&mut [&mut observer.wire]);
+    assert!(
+        observer.wire.events_of(id) > before,
+        "a live observer hears the lock"
+    );
+
+    let heard = observer.wire.events_of(id);
+    end(process);
+    h.state.sessions.lock(false);
+    h.settle(&mut [&mut observer.wire]);
+    assert_eq!(observer.wire.events_of(id), heard);
 }

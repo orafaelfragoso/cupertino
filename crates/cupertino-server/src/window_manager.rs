@@ -27,7 +27,7 @@ use smithay::reexports::wayland_server::{
 use smithay::utils::{Logical, Point};
 use smithay::wayland::shell::wlr_layer::Layer;
 
-use crate::authorization::{authorized, require, ShellRole};
+use crate::authorization::{authorized, refuse, require, ShellRole};
 use crate::state::{Cupertino, WindowEntry};
 
 /// Where a placed window is headed. A window on the stage has no entry once its animation ended.
@@ -380,10 +380,7 @@ impl Cupertino {
     ) {
         if !permitted {
             init.init(id, WindowManagerData { output: None });
-            shell.post_error(
-                ShellError::Permission,
-                "get_window_manager needs the WindowManager role, which only a shell process the server started for it holds",
-            );
+            refuse(shell, ShellRole::WindowManager);
             return;
         }
         let target =

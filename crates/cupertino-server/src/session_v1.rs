@@ -11,13 +11,14 @@ use cupertino_protocols::server::app_effects::cupertino_appearance_v1::{
     self, CupertinoAppearanceV1, DisplayOption as AppearanceOption,
 };
 use cupertino_protocols::server::cupertino_session_v1::{self, CupertinoSessionV1, DisplayOption};
-use cupertino_protocols::server::cupertino_shell_v1::{CupertinoShellV1, Error as ShellError};
+use cupertino_protocols::server::cupertino_shell_v1::CupertinoShellV1;
 use cupertino_theme::Appearance;
 use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, New, Resource,
 };
 
+use crate::authorization::{authorized, refuse, ShellRole};
 use crate::state::Cupertino;
 
 /// The session observers of every client, in creation order.
@@ -27,10 +28,17 @@ pub struct SessionObservers {
     appearance_observers: Vec<CupertinoAppearanceV1>,
 }
 
+/// Whether the connection of `observer` still holds the Session role: an observer whose holder exited is not told.
+fn permitted(observer: &CupertinoSessionV1) -> bool {
+    observer
+        .client()
+        .is_some_and(|c| authorized(&c, ShellRole::Session))
+}
+
 impl SessionObservers {
     /// Tell every observer the appearance changed.
     fn appearance(&self, dark: bool) {
-        for observer in &self.observers {
+        for observer in self.observers.iter().filter(|o| permitted(o)) {
             observer.appearance(u32::from(dark));
         }
         for observer in &self.appearance_observers {
@@ -40,7 +48,7 @@ impl SessionObservers {
 
     /// Tell every observer of version 2 or later the display options changed.
     pub fn display_options(&self, options: DisplayOptions) {
-        for observer in &self.observers {
+        for observer in self.observers.iter().filter(|o| permitted(o)) {
             send_display_options(observer, options);
         }
         for observer in &self.appearance_observers {
@@ -50,7 +58,7 @@ impl SessionObservers {
 
     /// Tell every observer the session was locked or unlocked.
     pub fn lock(&self, locked: bool) {
-        for observer in &self.observers {
+        for observer in self.observers.iter().filter(|o| permitted(o)) {
             send_lock(observer, locked);
         }
     }
@@ -112,10 +120,7 @@ impl Cupertino {
     ) {
         let observer = init.init(id, ());
         if !permitted {
-            shell.post_error(
-                ShellError::Permission,
-                "get_session needs the Session role, which only a shell process the server started for it holds",
-            );
+            refuse(shell, ShellRole::Session);
             return;
         }
         observer.appearance(u32::from(self.config.is_dark()));

@@ -4,8 +4,8 @@
 use cupertino_geometry::Rect;
 use cupertino_wayland_client::{
     Anchor, BufferFormat, Button, Capability, Connection, ConstraintAdjustment, Decorations, Error,
-    Event, Extension, Gravity, KeyboardEvent, OutputGeometry, PointerEvent, PopupPlacement, Scale,
-    SurfaceId, Toplevel, ToplevelConfig, WindowConfigure,
+    Event, Extension, Gravity, KeyboardEvent, OutputGeometry, PixelRect, PointerEvent,
+    PopupPlacement, Scale, SurfaceId, Toplevel, ToplevelConfig, WindowConfigure,
 };
 use std::collections::VecDeque;
 use std::io::Write;
@@ -1144,6 +1144,76 @@ fn each_resize_draws_at_the_configured_size_and_acknowledges_its_serial() {
             }
         );
     }
+}
+
+#[test]
+fn a_leased_buffer_names_what_it_missed_of_the_frames_shown_in_the_others() {
+    let (mut conn, _control, _seen) = connect(Globals::core());
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    let s = w.surface();
+    let r = |x, y, width, height| PixelRect {
+        x,
+        y,
+        width,
+        height,
+    };
+    // lease, maybe write, present `damage` unless it is `None`, and say what the buffer missed
+    let missed = |conn: &mut Connection, damage: Option<&[PixelRect]>, write: bool| {
+        let mut lease = conn.lease(s, (64, 64), BufferFormat::Xrgb8888).unwrap();
+        let missed = lease.missed().map(<[_]>::to_vec);
+        if write {
+            lease.pixels_mut()[0] = 1;
+        }
+        if let Some(damage) = damage {
+            lease.present_damage(Some(damage)).unwrap();
+        }
+        // the compositor releases the buffer it showed before
+        conn.roundtrip().unwrap();
+        missed
+    };
+    let all = [r(0, 0, 64, 64)];
+    assert_eq!(missed(&mut conn, Some(&all), false), None, "a new buffer");
+    assert_eq!(
+        missed(&mut conn, Some(&[r(60, 50, 10, 10)]), false),
+        None,
+        "a second new buffer while the first is shown"
+    );
+    assert_eq!(
+        missed(&mut conn, Some(&[r(1, 2, 3, 4), r(5, 6, 7, 8)]), false),
+        Some(vec![r(60, 50, 4, 10)]),
+        "the first buffer missed the frame of the second, cut to the buffer"
+    );
+    assert_eq!(
+        missed(&mut conn, None, true),
+        Some(vec![r(1, 2, 3, 4), r(5, 6, 7, 8)])
+    );
+    let lease = conn.lease(s, (64, 64), BufferFormat::Xrgb8888).unwrap();
+    assert_eq!(lease.missed(), None, "written but not presented");
+    lease.present().unwrap();
+    conn.roundtrip().unwrap();
+    let lease = conn.lease(s, (64, 64), BufferFormat::Xrgb8888).unwrap();
+    assert_eq!(lease.missed(), None, "a whole frame passed it by");
+    lease.present_damage(Some(&[])).unwrap();
+    conn.roundtrip().unwrap();
+    assert_eq!(
+        conn.lease(s, (64, 64), BufferFormat::Xrgb8888)
+            .unwrap()
+            .missed(),
+        Some(&[][..]),
+        "an empty frame passed it by"
+    );
+    let lease = conn.lease(s, (80, 64), BufferFormat::Xrgb8888).unwrap();
+    assert_eq!(lease.missed(), None, "a buffer of the new size");
+    lease.present_damage(Some(&[r(0, 0, 1, 1)])).unwrap();
+    conn.roundtrip().unwrap();
+    let lease = conn.lease(s, (64, 64), BufferFormat::Xrgb8888).unwrap();
+    assert_eq!(
+        lease.missed(),
+        None,
+        "back at the old size, after frames of another"
+    );
 }
 
 #[test]

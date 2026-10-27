@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use rustix::fs::{fcntl_setfl, OFlags};
+use rustix::io::Errno;
 use wayland_client::protocol::wl_data_device::{self, WlDataDevice};
 use wayland_client::protocol::wl_data_device_manager::WlDataDeviceManager;
 use wayland_client::protocol::wl_data_offer::{self, WlDataOffer};
@@ -144,12 +145,16 @@ fn read_limited(
         }
         let timeout = Timespec::try_from(left).expect("a deadline fits a timespec");
         let mut fds = [PollFd::new(&*reader, PollFlags::IN)];
-        if poll(&mut fds, Some(&timeout))? == 0 {
-            return Ok(None);
+        match poll(&mut fds, Some(&timeout)) {
+            Ok(0) => return Ok(None),
+            Ok(_) | Err(Errno::INTR) => {}
+            Err(e) => return Err(e.into()),
         }
-        match reader.read(&mut chunk)? {
-            0 => return Ok(Some(bytes)),
-            n => bytes.extend_from_slice(&chunk[..n.min(limit - bytes.len())]),
+        match reader.read(&mut chunk) {
+            Ok(0) => return Ok(Some(bytes)),
+            Ok(n) => bytes.extend_from_slice(&chunk[..n.min(limit - bytes.len())]),
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
         }
     }
     Ok(Some(bytes))

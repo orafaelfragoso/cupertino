@@ -296,7 +296,7 @@ Shortcuts are the `cupertino-input` `ShortcutMap` (defaults approximate, `Super`
 | file | override | read by | content |
 |---|---|---|---|
 | `~/.config/cupertino/shortcuts.conf` | `$CUPERTINO_SHORTCUTS` | server | chord to action lines, applied on top of the defaults: `Super+x = exec:foot`, `F5 = show-desktop`, `Super+Tab = none`. `# starts a comment. Invalid lines are reported and skipped. |
-| `~/.config/cupertino/compositor.json` | `$CUPERTINO_SERVER_CONFIG` | server | the keys below. Overrides single chords after `shortcuts.conf`. |
+| `~/.config/cupertino/compositor.json` | `$CUPERTINO_SERVER_CONFIG` | server | the keys below. Overrides single chords after `shortcuts.conf`. `/etc/cupertino/compositor.json` (installed by the packages: the `shell` list of the whole desktop) is applied first; the user file overrides its keys. A file named by the variable replaces both. |
 | `~/.config/cupertino/keyboard.conf` | `$CUPERTINO_KEYBOARD_CONFIG` | server | see *Keyboard* |
 | `~/.config/cupertino/dock.conf` | | dock process | what a corner or gesture does |
 | `~/.local/share/cupertino/launcher.json` | | launcher process | its history |

@@ -233,15 +233,15 @@ fn shell_bin_dir() -> &'static Path {
         // <target>/<profile>/deps/<this test> -> <target>/<profile>
         let profile_dir = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().to_path_buf();
         let mut cargo = Command::new(std::env::var_os("CARGO").expect("CARGO is set by `cargo test`"));
-        cargo.args(["build", "-p", "cupertino-dock", "-p", "cupertino-menubar", "-p", "cupertino-notifications", "-p", "cupertino-windowmanager", "-p", "cupertino-screenshot"]);
-        cargo.args(["--features", "cupertino-dock/app,cupertino-menubar/app,cupertino-notifications/app,cupertino-windowmanager/app,cupertino-screenshot/app"]);
+        cargo.args(["build", "-p", "cupertino-dock", "-p", "cupertino-menubar", "-p", "cupertino-notifications", "-p", "cupertino-windowmanager", "-p", "cupertino-screenshot", "-p", "cupertino-osd", "-p", "cupertino-controlcenter"]);
+        cargo.args(["--features", "cupertino-dock/app,cupertino-menubar/app,cupertino-notifications/app,cupertino-windowmanager/app,cupertino-screenshot/app,cupertino-osd/app,cupertino-controlcenter/app"]);
         cargo.args(["--target-dir", profile_dir.parent().unwrap().to_str().unwrap()]);
         if profile_dir.file_name().unwrap() == "release" {
             cargo.arg("--release");
         }
         let status = cargo.status().unwrap();
         assert!(status.success(), "building the shell process binaries: {status}");
-        for name in ["cupertino-dock", "cupertino-menubar", "cupertino-notifications", "cupertino-windowmanager", "cupertino-screenshot"] {
+        for name in ["cupertino-dock", "cupertino-menubar", "cupertino-notifications", "cupertino-windowmanager", "cupertino-screenshot", "cupertino-osd", "cupertino-controlcenter"] {
             assert!(profile_dir.join(name).is_file(), "missing binary {name} in {}", profile_dir.display());
         }
         profile_dir
@@ -470,7 +470,7 @@ fn ask_notification_server(bus: &PrivateBus) -> Receiver<(String, String, String
     rx
 }
 
-/// Dock, menu bar and notifications as the server's own children, with one application window.
+/// Dock, menu bar, notifications, overlay and control panel as the server's own children, with one application window.
 #[test]
 fn the_real_shell_processes_work_with_the_server() {
     let Some(bus) = PrivateBus::start() else {
@@ -481,12 +481,26 @@ fn the_real_shell_processes_work_with_the_server() {
         "cupertino-dock",
         "cupertino-menubar",
         "cupertino-notifications",
+        "cupertino-osd",
+        "cupertino-controlcenter",
     ]
     .map(|b| real_process(b, &bus))
     .to_vec();
     let Some(mut server) = Server::start(procs, true) else {
         return;
     };
+    // the overlay and the control panel map their surfaces and keep running to the end
+    server.wait_until("the overlay and the control panel to map", |s| {
+        layer_geometry(s, "cupertino-osd").is_some()
+            && layer_geometry(s, "cupertino-controlcenter").is_some()
+    });
+    let panels = ["cupertino-osd", "cupertino-controlcenter"].map(|name| {
+        server
+            .state
+            .supervisor
+            .pid_of(name)
+            .expect("the process runs")
+    });
     let output = server
         .state
         .outputs
@@ -543,6 +557,12 @@ fn the_real_shell_processes_work_with_the_server() {
     assert_eq!(
         (name.as_str(), vendor.as_str()),
         ("cupertino-notifications", "Cupertino")
+    );
+    assert_eq!(
+        ["cupertino-osd", "cupertino-controlcenter"]
+            .map(|name| server.state.supervisor.pid_of(name)),
+        panels.map(Some),
+        "the overlay and the control panel kept their connections and were not restarted"
     );
 }
 

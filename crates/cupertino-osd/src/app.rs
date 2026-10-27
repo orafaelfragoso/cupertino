@@ -3,10 +3,6 @@
 
 use cupertino_alsa::DEVICE_DIR;
 use cupertino_assets::Assets;
-use cupertino_client::{
-    Anchor, Backdrop, Client, DisplayOptions, Event, KeyboardInteractivity, Layer,
-    LayerSurfaceConfig, Margin, OutputId, SurfaceId,
-};
 use cupertino_osd::backend::{AlsaVolume, Backlight, MemoryBacklight, MemoryVolume, Volume};
 use cupertino_osd::control;
 use cupertino_osd::controller::{Command, Controller};
@@ -14,7 +10,14 @@ use cupertino_osd::layout::{self, BOTTOM_MARGIN, CORNER_RADIUS, WINDOW_SIZE};
 use cupertino_osd::model::{Phase, View};
 use cupertino_osd::render::{Palette, Renderer, MATERIAL};
 use cupertino_osd::system::{DisplayBacklight, KeyboardBacklight};
+use cupertino_protocol_app::{AppEffects, Backdrop};
+use cupertino_shell_client::{
+    Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
+    Session, SessionChange, SessionState, Shell, ShellEvent,
+};
 use cupertino_theme::{Appearance, Theme};
+use cupertino_ui_wayland::{Ready, ShmPresenter};
+use cupertino_wayland_client::{Connection, Event, OutputId};
 use std::error::Error;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
@@ -64,11 +67,15 @@ impl Options {
 }
 
 struct App {
-    client: Client,
+    conn: Connection,
+    effects: AppEffects,
+    _session: Session,
+    session: SessionState,
     theme: Theme,
     assets: Assets,
     /// The 200 x 200 window, mapped all the time; it draws nothing and takes no input while hidden.
-    surface: SurfaceId,
+    layer: LayerSurface,
+    presenter: ShmPresenter,
     output: OutputId,
     controller: Controller,
     commands: Receiver<Command>,
@@ -80,8 +87,8 @@ struct App {
 }
 
 /// The first output the server has described.
-fn first_output(client: &Client) -> Result<OutputId> {
-    Ok(client
+fn first_output(conn: &Connection) -> Result<OutputId> {
+    Ok(conn
         .outputs()
         .into_iter()
         .find(|o| o.geometry.is_some())
@@ -111,15 +118,10 @@ fn controller(options: &Options) -> Controller {
 }
 
 /// The renderer for the session's appearance and display options.
-fn overlay_renderer(
-    theme: &Theme,
-    assets: &Assets,
-    dark: bool,
-    options: DisplayOptions,
-) -> Result<Renderer> {
-    let appearance = Appearance::of_session(dark, options.increase_contrast);
+fn overlay_renderer(theme: &Theme, assets: &Assets, session: &SessionState) -> Result<Renderer> {
+    let appearance = Appearance::of_session(session.dark, session.display.increase_contrast);
     Ok(Renderer::new(
-        Palette::from_theme(theme, appearance, options.reduce_transparency)?,
+        Palette::from_theme(theme, appearance, session.display.reduce_transparency)?,
         theme.tokens.typography().clone(),
         assets,
     )?)
@@ -129,9 +131,13 @@ fn overlay_renderer(
 pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let assets = Assets::discover();
     let theme = Theme::load()?;
-    let mut client = Client::connect_shell()?;
-    let renderer = overlay_renderer(&theme, &assets, client.is_dark(), client.display_options())?;
-    let waker = client.waker();
+    let mut conn = Connection::connect()?;
+    let layer_shell = LayerShell::bind(&mut conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
+    let effects = AppEffects::bind(&mut conn).ok_or("the server lacks cupertino_app_effects_v1")?;
+    let shell = Shell::bind(&mut conn).ok_or("the server lacks cupertino_shell_v1")?;
+    let (session_observer, session, early) = shell.observe(&mut conn)?;
+    let renderer = overlay_renderer(&theme, &assets, &session)?;
+    let waker = conn.waker();
     let (sender, commands) = mpsc::channel();
     // the bus thread only queues; the loop below carries the commands out, so the effects never block the bus
     let sender = Mutex::new(sender);
@@ -148,26 +154,33 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         e => Box::new(e) as Box<dyn Error>,
     })?;
 
-    let output = first_output(&client)?;
-    let surface = client.layer_surface(&LayerSurfaceConfig {
-        namespace: NAMESPACE.to_string(),
-        output: Some(output),
-        layer: Layer::Overlay,
-        // anchored to the bottom only: centred horizontally, BOTTOM_MARGIN above the edge
-        anchor: Anchor::Bottom,
-        size: (WINDOW_SIZE, WINDOW_SIZE),
-        margin: Margin {
-            bottom: BOTTOM_MARGIN,
-            ..Margin::default()
+    let output = first_output(&conn)?;
+    let layer = layer_shell.layer_surface(
+        &mut conn,
+        &LayerSurfaceConfig {
+            namespace: NAMESPACE.to_string(),
+            output: Some(output),
+            layer: Layer::Overlay,
+            // anchored to the bottom only: centred horizontally, BOTTOM_MARGIN above the edge
+            anchor: Anchor::Bottom,
+            size: (WINDOW_SIZE, WINDOW_SIZE),
+            margin: Margin {
+                bottom: BOTTOM_MARGIN,
+                ..Margin::default()
+            },
+            exclusive_zone: -1,
+            keyboard: KeyboardInteractivity::None,
         },
-        exclusive_zone: -1,
-        keyboard: KeyboardInteractivity::None,
-    })?;
+    )?;
     let mut app = App {
-        client,
+        presenter: ShmPresenter::new(layer.surface()),
+        conn,
+        effects,
+        _session: session_observer,
+        session,
         theme,
         assets,
-        surface,
+        layer,
         output,
         controller: controller(options),
         commands,
@@ -176,13 +189,17 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         phase: Phase::Hidden,
         backdrop: None,
     };
+    for event in early {
+        app.handle(event)?;
+    }
     loop {
+        app.present()?;
         let now = app.now();
         let timeout = app.controller.until_fade(now).map(Duration::from_secs_f64);
-        for event in app.client.wait(timeout)? {
+        for event in app.conn.wait(timeout)? {
             app.handle(event)?;
         }
-        app.housekeeping()?;
+        app.housekeeping();
     }
 }
 
@@ -193,43 +210,54 @@ impl App {
 
     fn handle(&mut self, event: Event) -> Result<()> {
         match event {
-            // a draw follows every configure and scale change
-            Event::Configured { .. } | Event::ScaleChanged { .. } => {}
-            Event::Draw(surface) if surface == self.surface => self.draw()?,
-            Event::Draw(_) => {}
-            Event::Closed(_) => return Err("the server closed the overlay surface".into()),
+            Event::Frame(frame) if frame.surface == self.layer.surface() => {
+                self.presenter.frame_done()
+            }
             Event::OutputsChanged => {
-                if !self.client.outputs().iter().any(|o| o.id == self.output) {
+                if !self.conn.outputs().iter().any(|o| o.id == self.output) {
                     return Err("the output of the overlay went away".into());
                 }
             }
-            Event::Appearance { .. } | Event::DisplayOptions(_) => {
-                self.renderer = overlay_renderer(
-                    &self.theme,
-                    &self.assets,
-                    self.client.is_dark(),
-                    self.client.display_options(),
-                )?;
-                self.client.request_redraw(self.surface)?;
-            }
-            // the surface takes no input and has no popups or menu-bar role; a lock leaves the overlay alone, which the server hides
-            Event::SessionLock { .. }
-            | Event::LockRequested { .. }
-            | Event::LogOutRequested
-            | Event::Pointer { .. }
-            | Event::Key { .. }
-            | Event::KeyboardLeave(_)
-            | Event::ActivationToken { .. }
-            | Event::PopupDone(_)
-            | Event::MenuBar { .. }
-            | Event::Dock { .. } => {}
+            Event::Extension(event) => match self.session.apply(&event) {
+                Some(SessionChange::Appearance { .. } | SessionChange::DisplayOptions(_)) => {
+                    self.renderer = overlay_renderer(&self.theme, &self.assets, &self.session)?;
+                    self.presenter.request_redraw();
+                }
+                // a lock leaves the overlay alone, which the server hides
+                Some(SessionChange::Lock { .. }) => {}
+                None => match event.downcast_ref::<ShellEvent>() {
+                    Some(&ShellEvent::Configure { surface, size })
+                        if surface == self.layer.surface() =>
+                    {
+                        self.presenter.configured(self.layer.configured(size)?);
+                    }
+                    Some(ShellEvent::Closed(_)) => {
+                        return Err("the server closed the overlay surface".into())
+                    }
+                    _ => {}
+                },
+            },
+            // the surface takes no input and has no popups; the presenter reads scale changes itself
+            _ => {}
         }
         Ok(())
     }
 
+    /// Draw while the presenter can take a frame.
+    fn present(&mut self) -> Result<()> {
+        loop {
+            match self.presenter.poll(&self.conn)? {
+                Ready::Idle => return Ok(()),
+                // a draw follows every scale change
+                Ready::ScaleChanged(_) => {}
+                Ready::Draw => self.draw()?,
+            }
+        }
+    }
+
     /// Carry out the queued commands (a failure is logged and shows nothing) and redraw when something changed or the
     /// lifetime moved to its next phase.
-    fn housekeeping(&mut self) -> Result<()> {
+    fn housekeeping(&mut self) {
         let mut changed = false;
         while let Ok(command) = self.commands.try_recv() {
             match self.controller.apply(self.now(), command) {
@@ -240,9 +268,8 @@ impl App {
         let phase = self.controller.phase(self.now());
         if changed || phase != self.phase {
             self.phase = phase;
-            self.client.request_redraw(self.surface)?;
+            self.presenter.request_redraw();
         }
-        Ok(())
     }
 
     /// Draw the overlay with the backdrop of its material, or clear the surface when it is gone.
@@ -250,12 +277,13 @@ impl App {
         let now = self.now();
         let Some(View { overlay, alpha }) = self.controller.view(now) else {
             self.backdrop = None;
-            self.client.set_input_region(self.surface, &[])?;
-            self.client.draw(self.surface, |_, _| {})?;
+            self.conn
+                .set_input_region(self.layer.surface(), Some(&[]))?;
+            self.presenter.draw(&mut self.conn, None, |_, _| {})?;
             return Ok(());
         };
         if self.backdrop.is_none() {
-            let backdrop = self.client.backdrop(self.surface)?;
+            let backdrop = self.effects.backdrop(&self.conn, self.layer.surface())?;
             backdrop.set_material(MATERIAL);
             self.backdrop = Some(backdrop);
         }
@@ -263,10 +291,11 @@ impl App {
         backdrop.set_shape(&layout::window(), CORNER_RADIUS)?;
         backdrop.set_alpha(alpha.clamp(0.0, 1.0))?;
         // the window ignores the mouse
-        self.client.set_input_region(self.surface, &[])?;
+        self.conn
+            .set_input_region(self.layer.surface(), Some(&[]))?;
         let renderer = &mut self.renderer;
-        self.client.draw(self.surface, |pixmap, scale| {
-            let rendered = renderer.render(&overlay, scale.factor());
+        self.presenter.draw(&mut self.conn, None, |pixmap, scale| {
+            let rendered = renderer.render(&overlay, scale.factor() as f32);
             let paint = PixmapPaint {
                 opacity: alpha as f32,
                 ..PixmapPaint::default()
@@ -275,7 +304,7 @@ impl App {
         })?;
         // frame callbacks pace the fade
         if self.controller.phase(now) == Phase::Fading {
-            self.client.request_redraw(self.surface)?;
+            self.presenter.request_redraw();
         }
         Ok(())
     }

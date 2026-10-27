@@ -11,8 +11,8 @@ partial-segment rule and the fade follow the analysis. The items marked approxim
 
 ## Running
 
-Feature `app` builds the `cupertino-osd` binary: the overlay on a layer surface, as a client of `cupertino-server`
-(`render/cupertino-client`). The server starts and restarts it through the `shell` key of its configuration.
+Feature `app` builds the `cupertino-osd` binary: the overlay on a layer surface, as a client of `cupertino-server` on
+`cupertino-wayland-client`, `cupertino-shell-client`, `cupertino-protocol-app` and a `cupertino-ui-wayland` presenter. The server starts and restarts it through the `shell` key of its configuration.
 
 ```json
 {"shell": [{"name": "osd", "command": ["cupertino-osd"]}]}

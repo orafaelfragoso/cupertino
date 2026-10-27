@@ -1,5 +1,5 @@
 // cupertino-layers --graph target
-// 55 crates, 174 internal dependencies
+// 55 crates, 184 internal dependencies
 // per layer: foundation 11, models 7, platform 7, protocol 3, transport 3, render 4, ui 2, core 1, shell 9, services 4, apps 2, tools 2
 // forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden normal edge cupertino-files (apps) -> cupertino-icons (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
@@ -113,11 +113,14 @@ digraph "target" {
   "cupertino-client" -> "cupertino-wayland-client";
   "cupertino-controlcenter" -> "cupertino-alsa";
   "cupertino-controlcenter" -> "cupertino-assets";
-  "cupertino-controlcenter" -> "cupertino-client";
   "cupertino-controlcenter" -> "cupertino-decorations";
   "cupertino-controlcenter" -> "cupertino-geometry";
   "cupertino-controlcenter" -> "cupertino-icons";
+  "cupertino-controlcenter" -> "cupertino-protocol-app";
+  "cupertino-controlcenter" -> "cupertino-shell-client";
   "cupertino-controlcenter" -> "cupertino-theme";
+  "cupertino-controlcenter" -> "cupertino-ui-wayland";
+  "cupertino-controlcenter" -> "cupertino-wayland-client";
   "cupertino-decorations" -> "cupertino-assets";
   "cupertino-decorations" -> "cupertino-geometry";
   "cupertino-decorations" -> "cupertino-theme";
@@ -184,20 +187,26 @@ digraph "target" {
   "cupertino-netd" -> "cupertino-seat";
   "cupertino-notifications" -> "cupertino-animation";
   "cupertino-notifications" -> "cupertino-assets";
-  "cupertino-notifications" -> "cupertino-client";
   "cupertino-notifications" -> "cupertino-decorations";
   "cupertino-notifications" -> "cupertino-geometry";
   "cupertino-notifications" -> "cupertino-glass";
   "cupertino-notifications" -> "cupertino-icons";
+  "cupertino-notifications" -> "cupertino-protocol-app";
+  "cupertino-notifications" -> "cupertino-shell-client";
   "cupertino-notifications" -> "cupertino-theme";
+  "cupertino-notifications" -> "cupertino-ui-wayland";
+  "cupertino-notifications" -> "cupertino-wayland-client";
   "cupertino-osd" -> "cupertino-alsa";
   "cupertino-osd" -> "cupertino-assets";
-  "cupertino-osd" -> "cupertino-client";
   "cupertino-osd" -> "cupertino-decorations";
   "cupertino-osd" -> "cupertino-geometry";
   "cupertino-osd" -> "cupertino-icons";
   "cupertino-osd" -> "cupertino-peer";
+  "cupertino-osd" -> "cupertino-protocol-app";
+  "cupertino-osd" -> "cupertino-shell-client";
   "cupertino-osd" -> "cupertino-theme";
+  "cupertino-osd" -> "cupertino-ui-wayland";
+  "cupertino-osd" -> "cupertino-wayland-client";
   "cupertino-overview" -> "cupertino-animation";
   "cupertino-overview" -> "cupertino-wm";
   "cupertino-powerd" -> "cupertino-devices";
@@ -255,6 +264,7 @@ digraph "target" {
   "cupertino-settings" -> "cupertino-theme";
   "cupertino-settings" -> "cupertino-thumbnails";
   "cupertino-settings" -> "cupertino-typeahead";
+  "cupertino-shell-client" -> "cupertino-defaults";
   "cupertino-shell-client" -> "cupertino-geometry";
   "cupertino-shell-client" -> "cupertino-protocol-app";
   "cupertino-shell-client" -> "cupertino-protocols";

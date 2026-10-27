@@ -3,7 +3,8 @@ Upstream-Name: cupertino
 Upstream-Contact: Cupertino contributors
 Source: https://github.com/orafaelfragoso/cupertino
 Comment: The desktop, server and applications are GPL-3+. The toolkit library crates (animation, apps, assets,
- defaults, geometry, icons, keyboard, text-field, theme, typeahead, wayland-client) are MPL-2.0, xkbcommon is MIT over the vendored libxkbcommon port (third-party/xkbcommon-rs) and
+ app-protocols, defaults, geometry, icons, keyboard, protocol-app, text-field, theme, typeahead, ui-wayland,
+ wayland-client) are MPL-2.0, the protocol description files of the workspace are MIT or Apache-2.0, xkbcommon is MIT over the vendored libxkbcommon port (third-party/xkbcommon-rs) and
  the Inter font in the assets crate is OFL-1.1; all are linked into the binaries.
  The licence texts and NOTICE files of the registry crates linked into the binaries are in
  /usr/share/doc/cupertino/THIRD-PARTY-LICENSES.
@@ -14,11 +15,16 @@ Files: *
 Copyright: Cupertino contributors
 License: GPL-3+
 
-Files: crates/cupertino-animation/* crates/cupertino-apps/* crates/cupertino-assets/* crates/cupertino-defaults/*
- crates/cupertino-geometry/* crates/cupertino-icons/* crates/cupertino-keyboard/* crates/cupertino-text-field/*
- crates/cupertino-theme/* crates/cupertino-typeahead/* crates/cupertino-wayland-client/*
+Files: crates/cupertino-animation/* crates/cupertino-app-protocols/* crates/cupertino-apps/* crates/cupertino-assets/*
+ crates/cupertino-defaults/* crates/cupertino-geometry/* crates/cupertino-icons/* crates/cupertino-keyboard/*
+ crates/cupertino-protocol-app/* crates/cupertino-text-field/* crates/cupertino-theme/* crates/cupertino-typeahead/*
+ crates/cupertino-ui-wayland/* crates/cupertino-wayland-client/*
 Copyright: Cupertino contributors
 License: MPL-2.0
+
+Files: crates/*/protocols/*.xml
+Copyright: Cupertino contributors
+License: MIT or Apache-2.0
 
 Files: crates/cupertino-xkbcommon/*
 Copyright: 2016 Remi Thebault
@@ -64,6 +70,13 @@ License: MPL-2.0
  .
  On Debian systems, the full text of the Mozilla Public License version 2.0 can be found in
  /usr/share/common-licenses/MPL-2.0.
+
+License: Apache-2.0
+ Licensed under the Apache License, Version 2.0 (the "License"); you may not use these files except in
+ compliance with the License. You may obtain a copy of the License at https://www.apache.org/licenses/LICENSE-2.0.
+ .
+ On Debian systems, the full text of the Apache License version 2.0 can be found in
+ /usr/share/common-licenses/Apache-2.0.
 
 License: MIT
  Copyright (c) 2016 Remi Thebault (the xkbcommon crate, whose API and keysym constants this crate reproduces)

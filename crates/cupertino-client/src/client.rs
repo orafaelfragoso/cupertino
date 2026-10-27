@@ -1,79 +1,35 @@
-//! The shell processes' client API on the transport (`cupertino-wayland-client`): the shell's protocols are extensions
-//! on its queue ([`crate::extensions`]), and its events are translated into this crate's. The API stays until the shell
-//! processes move to the transport, and goes away then.
+//! The shell processes' client API on the transport (`cupertino-wayland-client`): the protocols are extensions on its
+//! queue (`cupertino-protocol-app`, `cupertino-shell-client`), surfaces draw through `cupertino-ui-wayland`, and the
+//! events are translated into this crate's. The API stays until the shell processes move to those crates, and goes
+//! away then.
 
-use crate::backdrop::Backdrop;
-use crate::dock::Dock;
 use crate::event::{ActivationRequest, Event, PointerEvent, ScrollCounts};
-use crate::extensions::{Emitted, LayerRole, LockGeneration, LockRole, Quiet, RoleData};
 use crate::keyboard::Modifiers;
-use crate::menu_bar::MenuBar;
-use crate::output::{OutputId, OutputInfo};
-use crate::pixels::{convert_rects, rgba_to_argb8888};
-use crate::popup::PopupGeometry;
+use crate::output::OutputInfo;
 use crate::scale::Scale;
-use crate::{Anchor, ClientError, KeyboardInteractivity, Layer};
+use crate::{Anchor, ClientError, KeyboardInteractivity, LayerSurfaceConfig};
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_geometry::Rect;
-use cupertino_protocols::client::app_effects::cupertino_app_effects_v1::{
-    self, CupertinoAppEffectsV1,
+use cupertino_protocol_app::{
+    AppEffects, AppEvent, Appearance, Backdrop, PointerScroll, ScrollCounts as ScrollGlobal,
 };
-use cupertino_protocols::client::app_effects::cupertino_appearance_v1::CupertinoAppearanceV1;
-use cupertino_protocols::client::cupertino_session_v1::CupertinoSessionV1;
-use cupertino_protocols::client::cupertino_shell_v1::CupertinoShellV1;
-use cupertino_protocols::client::scroll::cupertino_pointer_scroll_v1::CupertinoPointerScrollV1;
-use cupertino_protocols::client::scroll::cupertino_scroll_v1::CupertinoScrollV1;
+use cupertino_shell_client::{
+    Dock, IdleNotifier, IdleWatch, LayerShell, LayerSurface, MenuBar, Session as SessionObserver,
+    SessionLockManager, Shell, ShellEvent,
+};
+use cupertino_ui_wayland::{clipboard, popup, Ready, ShmPresenter};
 use cupertino_wayland_client::{
-    Anchor as PopupAnchor, BufferFormat, Capability, ClipboardOffer, Connection,
-    ConstraintAdjustment, CursorShape, Decorations, Error, Gravity, KeyboardEvent, PixelRect,
-    Popup, PopupPlacement, Toplevel, ToplevelConfig as WindowConfig,
+    Capability, ClipboardOffer, Connection, CursorShape, Decorations, Error, KeyboardEvent,
+    OutputId, Popup, Toplevel, ToplevelConfig as WindowConfig,
 };
-use std::sync::Mutex;
 use std::time::Duration;
-use tiny_skia::{Color, Pixmap};
-use wayland_client::protocol::wl_output::WlOutput;
-use wayland_protocols::ext::idle_notify::v1::client::ext_idle_notification_v1::ExtIdleNotificationV1;
-use wayland_protocols::ext::idle_notify::v1::client::ext_idle_notifier_v1::ExtIdleNotifierV1;
-use wayland_protocols::ext::session_lock::v1::client::ext_session_lock_manager_v1::ExtSessionLockManagerV1;
-use wayland_protocols::ext::session_lock::v1::client::ext_session_lock_v1::ExtSessionLockV1;
-use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1;
-use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrLayerSurfaceV1;
+use tiny_skia::Pixmap;
 
 pub use cupertino_wayland_client::Waker;
-
-/// The MIME types of text on the clipboard, in order of preference.
-const TEXT_TYPES: [&str; 3] = ["text/plain;charset=utf-8", "text/plain", "UTF8_STRING"];
 
 /// Handle of a surface of a [`Client`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SurfaceId(pub(crate) cupertino_wayland_client::SurfaceId);
-
-/// Distance of a layer surface from its anchored edges, in logical points.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Margin {
-    pub top: i32,
-    pub right: i32,
-    pub bottom: i32,
-    pub left: i32,
-}
-
-/// Everything a layer surface is created with; the settings can be changed later only where
-/// a setter exists.
-#[derive(Clone, Debug)]
-pub struct LayerSurfaceConfig {
-    /// Role of the surface for the server (`wlr-layer-shell` namespace), for example `"notifications"`.
-    pub namespace: String,
-    /// The output the surface belongs to; `None` lets the server choose.
-    pub output: Option<OutputId>,
-    pub layer: Layer,
-    pub anchor: Anchor,
-    /// Requested logical size; a zero extent asks the server to fill the anchored axis.
-    pub size: (u32, u32),
-    pub margin: Margin,
-    /// `-1` ignores other surfaces' exclusive zones, `0` respects them (protocol text).
-    pub exclusive_zone: i32,
-    pub keyboard: KeyboardInteractivity,
-}
 
 /// Everything an application window is created with ([`Client::toplevel`]).
 #[derive(Clone, Debug)]
@@ -124,7 +80,7 @@ pub enum CursorLook {
 
 /// What gives a surface its place on screen.
 enum Role {
-    Layer(ZwlrLayerSurfaceV1),
+    Layer(LayerSurface),
     Popup {
         popup: Popup,
         parent: SurfaceId,
@@ -143,15 +99,7 @@ struct Surface {
     id: SurfaceId,
     role: Role,
     requested_size: (u32, u32),
-    /// Logical size from the last configure.
-    size: Option<(u32, u32)>,
-    /// Scale last reported to the application.
-    reported_scale: Scale,
-    pixmap: Option<Pixmap>,
-    /// The scale the last frame was drawn at: a frame at another one is drawn whole.
-    drawn_scale: Option<Scale>,
-    frame_pending: bool,
-    wants_redraw: bool,
+    presenter: ShmPresenter,
 }
 
 impl Surface {
@@ -160,19 +108,13 @@ impl Surface {
             id,
             role,
             requested_size,
-            size: None,
-            reported_scale: Scale::ONE,
-            pixmap: None,
-            drawn_scale: None,
-            frame_pending: false,
-            wants_redraw: false,
+            presenter: ShmPresenter::new(id.0),
         }
     }
 }
 
 struct SessionLock {
-    proxy: ExtSessionLockV1,
-    generation: u32,
+    lock: cupertino_shell_client::SessionLock,
     state: LockState,
 }
 
@@ -180,8 +122,8 @@ struct SessionLock {
 /// display options of `cupertino_appearance_v1` (the lock state stays false).
 struct Session {
     /// Kept alive: the server stops sending when the object is destroyed.
-    _session: Option<CupertinoSessionV1>,
-    _appearance: Option<CupertinoAppearanceV1>,
+    _session: Option<SessionObserver>,
+    _appearance: Option<Appearance>,
     dark: bool,
     display: DisplayOptions,
     locked: bool,
@@ -191,14 +133,14 @@ struct Session {
 
 /// The extension globals.
 struct Globals {
-    layer_shell: ZwlrLayerShellV1,
-    effects: CupertinoAppEffectsV1,
+    layer_shell: LayerShell,
+    effects: AppEffects,
     /// Bound on a shell connection only ([`Client::connect_shell`]).
-    shell: Option<CupertinoShellV1>,
-    session_lock_manager: Option<ExtSessionLockManagerV1>,
-    idle_notifier: Option<ExtIdleNotifierV1>,
+    shell: Option<Shell>,
+    session_lock_manager: Option<SessionLockManager>,
+    idle_notifier: Option<IdleNotifier>,
     /// Offered by the server: the scroll count of the pointer's scrolls (`cupertino_scroll_v1`).
-    scroll_counts: Option<CupertinoScrollV1>,
+    scroll_counts: Option<ScrollGlobal>,
 }
 
 /// Connection to the server and the surfaces of one shell process.
@@ -207,12 +149,11 @@ pub struct Client {
     globals: Globals,
     session: Session,
     session_lock: Option<SessionLock>,
-    next_lock: u32,
-    idle_notification: Option<ExtIdleNotificationV1>,
+    idle_notification: Option<IdleWatch>,
     /// The seat went idle since [`Client::take_idle`] last ran.
     idled: bool,
     /// Kept alive: the server stops sending when the object is destroyed.
-    pointer_scroll: Option<CupertinoPointerScrollV1>,
+    pointer_scroll: Option<PointerScroll>,
     scroll: ScrollCounts,
     surfaces: Vec<Surface>,
     key_focus: Option<SurfaceId>,
@@ -221,19 +162,6 @@ pub struct Client {
     own_text: Option<String>,
     events: Vec<Event>,
     fault: Option<ClientError>,
-}
-
-/// Bind an extension global the client needs.
-fn require<I>(
-    conn: &mut Connection,
-    versions: std::ops::RangeInclusive<u32>,
-) -> Result<I, ClientError>
-where
-    I: wayland_client::Proxy + 'static,
-    cupertino_wayland_client::State: wayland_client::Dispatch<I, Quiet>,
-{
-    conn.bind_extension(versions, Quiet)
-        .ok_or(ClientError::MissingGlobal(I::interface().name))
 }
 
 impl Client {
@@ -275,24 +203,24 @@ impl Client {
                 return Err(Error::Unsupported(capability).into());
             }
         }
-        let qh = conn.queue_handle();
-        let effects: CupertinoAppEffectsV1 = require(&mut conn, 1..=1)?;
-        // version 2 adds the display options of the session object, version 3 the screen capture state of the menu bar,
-        // version 5 moves the backdrops and the title bar style to the app effects, version 6 adds the menu bar's session actions
+        let effects = AppEffects::bind(&mut conn)
+            .ok_or(ClientError::MissingGlobal("cupertino_app_effects_v1"))?;
         let (shell, session, appearance) = if shell_roles {
-            let shell: CupertinoShellV1 = require(&mut conn, 9..=9)?;
-            let session = shell.get_session(&qh, Quiet);
+            let shell =
+                Shell::bind(&mut conn).ok_or(ClientError::MissingGlobal("cupertino_shell_v1"))?;
+            let session = shell.session(&conn);
             (Some(shell), Some(session), None)
         } else {
-            (None, None, Some(effects.get_appearance(&qh, Quiet)))
+            (None, None, Some(effects.appearance(&conn)))
         };
         let globals = Globals {
-            layer_shell: require(&mut conn, 1..=4)?,
+            layer_shell: LayerShell::bind(&mut conn)
+                .ok_or(ClientError::MissingGlobal("zwlr_layer_shell_v1"))?,
             effects,
             shell,
-            session_lock_manager: conn.bind_extension(1..=1, Quiet),
-            idle_notifier: conn.bind_extension(1..=2, Quiet),
-            scroll_counts: conn.bind_extension(1..=1, Quiet),
+            session_lock_manager: SessionLockManager::bind(&mut conn),
+            idle_notifier: IdleNotifier::bind(&mut conn),
+            scroll_counts: ScrollGlobal::bind(&mut conn),
         };
         let mut client = Client {
             conn,
@@ -306,7 +234,6 @@ impl Client {
                 settled: false,
             },
             session_lock: None,
-            next_lock: 0,
             idle_notification: None,
             idled: false,
             pointer_scroll: None,
@@ -348,46 +275,16 @@ impl Client {
     /// `leave`). A layer surface created without an output finds the one the server chose here by
     /// its first [`Event::Configured`].
     pub fn surface_outputs(&mut self, id: SurfaceId) -> Result<Vec<OutputId>, ClientError> {
-        Ok(self
-            .conn
-            .surface_outputs(id.0)?
-            .into_iter()
-            .map(|o| OutputId(o.registry_name()))
-            .collect())
+        Ok(self.conn.surface_outputs(id.0)?)
     }
 
     /// Create a layer surface. It is mapped and sized by the first [`Event::Configured`], which
     /// is followed by [`Event::Draw`].
     pub fn layer_surface(&mut self, config: &LayerSurfaceConfig) -> Result<SurfaceId, ClientError> {
-        let output = match config.output {
-            Some(id) => Some(self.wl_output(id)?),
-            None => None,
-        };
-        let shell = self.globals.layer_shell.clone();
-        let mut proxy = None;
-        let id = self.conn.external_surface(|wl, qh, id| {
-            let layer = shell.get_layer_surface(
-                wl,
-                output.as_ref(),
-                config.layer,
-                config.namespace.clone(),
-                qh,
-                SurfaceId(id),
-            );
-            layer.set_size(config.size.0, config.size.1);
-            layer.set_anchor(config.anchor);
-            layer.set_margin(
-                config.margin.top,
-                config.margin.right,
-                config.margin.bottom,
-                config.margin.left,
-            );
-            layer.set_exclusive_zone(config.exclusive_zone);
-            layer.set_keyboard_interactivity(config.keyboard);
-            proxy = Some(layer.clone());
-            LayerRole(layer)
-        });
-        let layer = proxy.expect("the role was assigned");
+        let (id, layer) = self
+            .globals
+            .layer_shell
+            .layer_surface(&mut self.conn, config)?;
         self.surfaces
             .push(Surface::new(SurfaceId(id), Role::Layer(layer), config.size));
         Ok(SurfaceId(id))
@@ -421,11 +318,9 @@ impl Client {
             decorations: Decorations::Server,
         })?;
         if config.titlebar == TitlebarStyle::Unified {
-            // before the first buffer, which the server reads the style with
-            self.globals.effects.set_titlebar_style(
-                &self.conn.wl_surface(window.surface())?,
-                cupertino_app_effects_v1::TitlebarStyle::Unified,
-            );
+            self.globals
+                .effects
+                .unify_titlebar(&self.conn, window.surface())?;
         }
         let id = SurfaceId(window.surface());
         let role = Role::Toplevel {
@@ -495,11 +390,7 @@ impl Client {
     /// Put `text` on the clipboard, as the answer to the latest input event (a copy or cut key). The client serves it
     /// to pasting clients from [`Client::wait`] until another selection replaces it.
     pub fn set_clipboard_text(&mut self, text: String) -> Result<(), ClientError> {
-        let contents = TEXT_TYPES
-            .iter()
-            .map(|mime| (mime.to_string(), text.as_bytes().to_vec()))
-            .collect();
-        self.conn.set_selection(contents)?;
+        clipboard::set_text(&mut self.conn, &text)?;
         self.own_text = Some(text);
         Ok(())
     }
@@ -507,20 +398,9 @@ impl Client {
     /// The clipboard's text for a paste, `None` when it holds no text. Reading another client's selection waits up to
     /// a second for it.
     pub fn clipboard_text(&mut self) -> Result<Option<String>, ClientError> {
-        let Some(offer) = &self.selection else {
-            return Ok(self.own_text.clone());
-        };
-        let Some(mime) = TEXT_TYPES
-            .iter()
-            .find(|t| offer.mime_types().iter().any(|m| m == *t))
-        else {
-            return Ok(None);
-        };
-        match self.conn.receive(offer, mime) {
-            Ok(bytes) => Ok(Some(text_of(&bytes))),
-            // replaced while reading, or the copying client did not answer in time
-            Err(Error::Cancelled) => Ok(None),
-            Err(e) => Err(e.into()),
+        match &self.selection {
+            Some(offer) => Ok(clipboard::text(&mut self.conn, offer)?),
+            None => Ok(self.own_text.clone()),
         }
     }
 
@@ -536,29 +416,29 @@ impl Client {
     /// ([`Event::PopupDone`]) when the user clicks elsewhere. It is mapped and sized by the first
     /// [`Event::Configured`]. Destroy a popup before its parent.
     pub fn popup(&mut self, parent: SurfaceId, rect: &Rect) -> Result<SurfaceId, ClientError> {
-        let geometry = PopupGeometry::from_rect(rect)?;
+        let placement = popup::placement(rect, true)?;
         self.conn.input_serial().ok_or(ClientError::NoInputSerial)?;
         if let Role::Lock = self.surface(parent)?.role {
             return Err(ClientError::NotLayerSurface);
         }
-        let popup = self.conn.popup(parent.0, &placement(&geometry, true))?;
+        let popup = self.conn.popup(parent.0, &placement)?;
         let id = SurfaceId(popup.surface());
-        let size = (geometry.width as u32, geometry.height as u32);
-        self.surfaces
-            .push(Surface::new(id, Role::Popup { popup, parent }, size));
+        self.surfaces.push(Surface::new(
+            id,
+            Role::Popup { popup, parent },
+            placement.size,
+        ));
         Ok(id)
     }
 
     /// Move or resize a popup to `rect` (parent-local, as for [`Client::popup`]). The new size
     /// arrives as [`Event::Configured`].
     pub fn reposition_popup(&mut self, id: SurfaceId, rect: &Rect) -> Result<(), ClientError> {
-        let geometry = PopupGeometry::from_rect(rect)?;
+        let placement = popup::placement(rect, true)?;
         let Role::Popup { popup, .. } = self.surface(id)?.role else {
             return Err(ClientError::NotPopup);
         };
-        Ok(self
-            .conn
-            .reposition_popup(popup, &placement(&geometry, true))?)
+        Ok(self.conn.reposition_popup(popup, &placement)?)
     }
 
     /// Destroy a surface with its role objects. Its popups must be destroyed first. Destroy a
@@ -586,16 +466,19 @@ impl Client {
 
     /// Logical size of a configured surface.
     pub fn size(&mut self, id: SurfaceId) -> Result<(u32, u32), ClientError> {
-        self.surface(id)?.size.ok_or(ClientError::NotConfigured)
+        self.surface(id)?
+            .presenter
+            .size()
+            .ok_or(ClientError::NotConfigured)
     }
 
     /// Ask for an [`Event::Draw`] as soon as the surface can take a frame.
     pub fn request_redraw(&mut self, id: SurfaceId) -> Result<(), ClientError> {
-        self.surface_mut(id)?.wants_redraw = true;
+        self.surface_mut(id)?.presenter.request_redraw();
         Ok(())
     }
 
-    fn layer(&self, id: SurfaceId) -> Result<&ZwlrLayerSurfaceV1, ClientError> {
+    fn layer(&self, id: SurfaceId) -> Result<&LayerSurface, ClientError> {
         match &self.surface(id)?.role {
             Role::Layer(layer) => Ok(layer),
             Role::Popup { .. } | Role::Lock | Role::Toplevel { .. } => {
@@ -644,20 +527,18 @@ impl Client {
         let manager = self
             .globals
             .session_lock_manager
-            .as_ref()
+            .as_mut()
             .ok_or(ClientError::MissingGlobal("ext_session_lock_manager_v1"))?;
-        match &self.session_lock {
-            Some(lock) if lock.state != LockState::Finished => {
-                return Err(ClientError::SessionLockActive)
+        if let Some(lock) = &self.session_lock {
+            if lock.state != LockState::Finished {
+                return Err(ClientError::SessionLockActive);
             }
-            Some(lock) => lock.proxy.destroy(),
-            None => {}
         }
-        self.next_lock += 1;
-        let generation = self.next_lock;
+        if let Some(previous) = self.session_lock.take() {
+            previous.lock.destroy();
+        }
         self.session_lock = Some(SessionLock {
-            proxy: manager.lock(&self.conn.queue_handle(), LockGeneration(generation)),
-            generation,
+            lock: manager.lock(&self.conn),
             state: LockState::Requested,
         });
         Ok(())
@@ -695,14 +576,14 @@ impl Client {
     /// Create the lock surface of `output`. It is sized by the first [`Event::Configured`], which is followed by
     /// [`Event::Draw`]; it takes keyboard and pointer input once the session is locked. One per output.
     pub fn lock_surface(&mut self, output: OutputId) -> Result<SurfaceId, ClientError> {
-        let output = self.wl_output(output)?;
+        self.conn
+            .wl_output(output)
+            .ok_or(ClientError::UnknownOutput)?;
         let lock = match &self.session_lock {
-            Some(lock) if lock.state != LockState::Finished => lock.proxy.clone(),
+            Some(lock) if lock.state != LockState::Finished => &lock.lock,
             _ => return Err(ClientError::NoSessionLock),
         };
-        let id = self.conn.external_surface(|wl, qh, id| {
-            LockRole(lock.get_lock_surface(wl, &output, qh, SurfaceId(id)))
-        });
+        let id = lock.lock_surface(&mut self.conn, output)?;
         self.surfaces
             .push(Surface::new(SurfaceId(id), Role::Lock, (0, 0)));
         Ok(SurfaceId(id))
@@ -727,7 +608,7 @@ impl Client {
         for id in surfaces {
             self.destroy_surface(id)?;
         }
-        lock.proxy.unlock_and_destroy();
+        lock.lock.unlock();
         self.conn.roundtrip()?;
         Ok(())
     }
@@ -746,12 +627,9 @@ impl Client {
             .conn
             .seat()
             .ok_or(ClientError::MissingGlobal("wl_seat"))?;
-        if let Some(previous) = self.idle_notification.take() {
-            previous.destroy();
-        }
+        self.idle_notification = None;
         self.idled = false;
-        self.idle_notification =
-            Some(notifier.get_idle_notification(millis, &seat, &self.conn.queue_handle(), Quiet));
+        self.idle_notification = Some(notifier.watch(&self.conn, &seat, millis));
         Ok(())
     }
 
@@ -770,18 +648,13 @@ impl Client {
 
     /// Create a backdrop below the surface's content.
     pub fn backdrop(&mut self, id: SurfaceId) -> Result<Backdrop, ClientError> {
-        let wl = self.conn.wl_surface(id.0)?;
-        let proxy = self
-            .globals
-            .effects
-            .get_backdrop(&wl, &self.conn.queue_handle(), Quiet);
-        Ok(Backdrop::new(proxy))
+        Ok(self.globals.effects.backdrop(&self.conn, id.0)?)
     }
 
-    fn shell_roles(&self) -> Result<CupertinoShellV1, ClientError> {
+    fn shell_roles(&self) -> Result<&Shell, ClientError> {
         self.globals
             .shell
-            .clone()
+            .as_ref()
             .ok_or(ClientError::MissingGlobal("cupertino_shell_v1"))
     }
 
@@ -792,37 +665,15 @@ impl Client {
         surface: SurfaceId,
         output: OutputId,
     ) -> Result<MenuBar, ClientError> {
-        let shell = self.shell_roles()?;
-        let wl = self.conn.wl_surface(surface.0)?;
-        let output = self.wl_output(output)?;
-        let data = RoleData {
-            surface,
-            group: Mutex::default(),
-        };
-        Ok(MenuBar::new(shell.get_menu_bar(
-            &wl,
-            &output,
-            &self.conn.queue_handle(),
-            data,
-        )))
+        Ok(self
+            .shell_roles()?
+            .menu_bar(&self.conn, surface.0, output)?)
     }
 
     /// Give a layer surface the dock role of `output`. The server then lists the windows of the
     /// session and reports changes as [`Event::Dock`], the first group right away.
     pub fn dock(&mut self, surface: SurfaceId, output: OutputId) -> Result<Dock, ClientError> {
-        let shell = self.shell_roles()?;
-        let wl = self.conn.wl_surface(surface.0)?;
-        let output = self.wl_output(output)?;
-        let data = RoleData {
-            surface,
-            group: Mutex::default(),
-        };
-        Ok(Dock::new(shell.get_dock(
-            &wl,
-            &output,
-            &self.conn.queue_handle(),
-            data,
-        )))
+        Ok(self.shell_roles()?.dock(&self.conn, surface.0, output)?)
     }
 
     /// Request an `xdg_activation_v1` token for the surface from the latest input event; it
@@ -892,65 +743,9 @@ impl Client {
             .iter_mut()
             .find(|s| s.id == id)
             .ok_or(ClientError::UnknownSurface)?;
-        let size = s.size.ok_or(ClientError::NotConfigured)?;
-        let mut lease = self.conn.lease(id.0, size, BufferFormat::Argb8888)?;
-        let layout = lease.layout();
-        let (pw, ph) = (layout.width(), layout.height());
-        let scale = Scale::of(lease.scale());
-        let kept = s
-            .pixmap
-            .as_ref()
-            .is_some_and(|p| p.width() == pw && p.height() == ph)
-            && s.drawn_scale == Some(scale);
-        let mut pixmap = match s.pixmap.take() {
-            Some(p) if p.width() == pw && p.height() == ph => p,
-            _ => Pixmap::new(pw, ph).ok_or(ClientError::BufferSize {
-                width: pw,
-                height: ph,
-            })?,
-        };
-        let damage: Option<Vec<PixelRect>> = match damage {
-            Some(rects) if kept => Some(
-                rects
-                    .iter()
-                    .filter_map(|r| clamp(pixel_rect(r, scale.factor()), pw, ph))
-                    .collect(),
-            ),
-            _ => None,
-        };
-        match &damage {
-            None => pixmap.fill(Color::TRANSPARENT),
-            Some(rects) => {
-                for r in rects {
-                    clear(&mut pixmap, r);
-                }
-            }
-        }
-        paint(&mut pixmap, scale);
-        // the buffer needs what this frame changed and what it missed of the frames shown since it last held one
-        let regions: Option<Vec<PixelRect>> = damage
-            .as_ref()
-            .zip(lease.missed())
-            .map(|(damage, missed)| damage.iter().chain(missed).copied().collect())
-            // rectangles that add up to the buffer cost more than converting it once
-            .filter(|rects: &Vec<PixelRect>| {
-                rects
-                    .iter()
-                    .map(|r| u64::from(r.width) * u64::from(r.height))
-                    .sum::<u64>()
-                    < u64::from(pw) * u64::from(ph)
-            });
-        match regions {
-            Some(rects) => {
-                convert_rects(pixmap.data(), lease.pixels_mut(), layout.stride(), &rects)
-            }
-            None => rgba_to_argb8888(pixmap.data(), lease.pixels_mut()),
-        }
-        lease.present_damage(damage.as_deref())?;
-        s.frame_pending = true;
-        s.pixmap = Some(pixmap);
-        s.drawn_scale = Some(scale);
-        Ok(())
+        Ok(s.presenter.draw(&mut self.conn, damage, |pixmap, scale| {
+            paint(pixmap, Scale::of(scale))
+        })?)
     }
 
     /// Flush requests and block until something needs the application's attention, the
@@ -970,16 +765,6 @@ impl Client {
             Some(e) => Err(e),
             None => Ok(std::mem::take(&mut self.events)),
         }
-    }
-
-    /// The `wl_output` of `output`, for a request that names it.
-    fn wl_output(&self, output: OutputId) -> Result<WlOutput, ClientError> {
-        self.conn
-            .outputs()
-            .into_iter()
-            .find(|o| o.id.registry_name() == output.0)
-            .and_then(|o| self.conn.wl_output(o.id))
-            .ok_or(ClientError::UnknownOutput)
     }
 
     fn surface(&self, id: SurfaceId) -> Result<&Surface, ClientError> {
@@ -1002,42 +787,33 @@ impl Client {
             return;
         }
         if let (Some(counts), Some(pointer)) = (&self.globals.scroll_counts, self.conn.pointer()) {
-            self.pointer_scroll =
-                Some(counts.get_scroll(&pointer, &self.conn.queue_handle(), Quiet));
+            self.pointer_scroll = Some(counts.watch(&self.conn, &pointer));
         }
     }
 
     /// Report scale changes and surfaces that can take their requested frame.
     fn update(&mut self) -> Result<(), ClientError> {
-        for s in self.surfaces.iter_mut().filter(|s| s.size.is_some()) {
-            let scale = Scale::of(self.conn.scale(s.id.0)?);
-            if s.reported_scale != scale {
-                s.reported_scale = scale;
-                s.wants_redraw = true;
-                self.events.push(Event::ScaleChanged {
-                    surface: s.id,
-                    scale,
-                });
-            }
-        }
+        let mut draws = Vec::new();
         for s in &mut self.surfaces {
-            if s.wants_redraw
-                && s.size.is_some()
-                && !s.frame_pending
-                && self.conn.buffer_free(s.id.0)?
-            {
-                s.wants_redraw = false;
-                self.events.push(Event::Draw(s.id));
+            loop {
+                match s.presenter.poll(&self.conn)? {
+                    Ready::Idle => break,
+                    Ready::ScaleChanged(scale) => self.events.push(Event::ScaleChanged {
+                        surface: s.id,
+                        scale: Scale::of(scale),
+                    }),
+                    Ready::Draw => draws.push(Event::Draw(s.id)),
+                }
             }
         }
+        self.events.extend(draws);
         Ok(())
     }
 
     /// A configure: the surface takes `size` and draws again.
     fn configured(&mut self, id: SurfaceId, size: (u32, u32)) {
         if let Ok(s) = self.surface_mut(id) {
-            s.size = Some(size);
-            s.wants_redraw = true;
+            s.presenter.configured(size);
             self.events.push(Event::Configured { surface: id, size });
         }
     }
@@ -1065,7 +841,7 @@ impl Client {
                     *activated = configure.states.activated;
                     *maximized = configure.states.maximized;
                 }
-                let current = s.size.unwrap_or(s.requested_size);
+                let current = s.presenter.size().unwrap_or(s.requested_size);
                 let size = configured_size(configure.size.unwrap_or((0, 0)), current);
                 self.configured(id, size);
             }
@@ -1081,7 +857,7 @@ impl Client {
                 .push(Event::PopupDone(SurfaceId(popup.surface()))),
             T::Frame(callback) => {
                 if let Ok(s) = self.surface_mut(SurfaceId(callback.surface)) {
-                    s.frame_pending = false;
+                    s.presenter.frame_done();
                 }
             }
             // the scale is read for every configured surface in `update`
@@ -1097,11 +873,14 @@ impl Client {
                 request: ActivationRequest(request),
                 token,
             }),
-            T::Extension(event) => {
-                if let Ok(emitted) = event.downcast::<Emitted>() {
-                    self.extension(&emitted);
+            T::Extension(event) => match event.downcast::<ShellEvent>() {
+                Ok(event) => self.shell_event(&event),
+                Err(event) => {
+                    if let Ok(event) = event.downcast::<AppEvent>() {
+                        self.app_event(*event);
+                    }
                 }
-            }
+            },
         }
     }
 
@@ -1153,10 +932,11 @@ impl Client {
         }
     }
 
-    fn extension(&mut self, emitted: &Emitted) {
-        match emitted {
-            Emitted::Configure { surface, size } => {
-                let Ok(s) = self.surface(*surface) else {
+    fn shell_event(&mut self, event: &ShellEvent) {
+        match event {
+            ShellEvent::Configure { surface, size } => {
+                let surface = SurfaceId(*surface);
+                let Ok(s) = self.surface(surface) else {
                     return;
                 };
                 let size = configured_size(*size, s.requested_size);
@@ -1165,14 +945,15 @@ impl Client {
                         "configure without a size for a surface that requested none",
                     ));
                 }
-                self.configured(*surface, size);
+                self.configured(surface, size);
             }
-            Emitted::Lock { generation, locked } => {
+            ShellEvent::Closed(surface) => self.events.push(Event::Closed(SurfaceId(*surface))),
+            ShellEvent::Lock { generation, locked } => {
                 // an event of a lock replaced since belongs to no one
                 if let Some(lock) = self
                     .session_lock
                     .as_mut()
-                    .filter(|lock| lock.generation == *generation)
+                    .filter(|lock| lock.lock.generation() == *generation)
                 {
                     lock.state = if *locked {
                         LockState::Locked
@@ -1181,43 +962,50 @@ impl Client {
                     };
                 }
             }
-            Emitted::Idle(idle) => self.idled = *idle,
-            Emitted::ScrollCount { vertical, count } => self.scroll.set(*vertical, *count),
-            Emitted::Session(event) => {
-                match event {
-                    Event::Appearance { dark } => self.session.dark = *dark,
-                    Event::DisplayOptions(options) => self.session.display = *options,
-                    Event::SessionLock { locked } => self.session.locked = *locked,
-                    _ => {}
-                }
-                if self.session.settled {
-                    self.events.push(event.clone());
-                }
+            ShellEvent::Idle(idle) => self.idled = *idle,
+            ShellEvent::SessionLock { locked } => {
+                self.session.locked = *locked;
+                self.session_changed(Event::SessionLock { locked: *locked });
             }
-            Emitted::Event(event) => self.events.push(event.clone()),
+            ShellEvent::LockRequested { explicit } => self.session_changed(Event::LockRequested {
+                explicit: *explicit,
+            }),
+            ShellEvent::LogOutRequested => self.session_changed(Event::LogOutRequested),
+            ShellEvent::MenuBar { surface, update } => self.events.push(Event::MenuBar {
+                surface: SurfaceId(*surface),
+                update: update.clone(),
+            }),
+            ShellEvent::Dock { surface, update } => self.events.push(Event::Dock {
+                surface: SurfaceId(*surface),
+                update: update.clone(),
+            }),
+        }
+    }
+
+    fn app_event(&mut self, event: AppEvent) {
+        match event {
+            AppEvent::Appearance { dark } => {
+                self.session.dark = dark;
+                self.session_changed(Event::Appearance { dark });
+            }
+            AppEvent::DisplayOptions(options) => {
+                self.session.display = options;
+                self.session_changed(Event::DisplayOptions(options));
+            }
+            AppEvent::ScrollCount { vertical, count } => self.scroll.set(vertical, count),
+        }
+    }
+
+    /// The session's state at connect is read silently; later changes queue `event`.
+    fn session_changed(&mut self, event: Event) {
+        if self.session.settled {
+            self.events.push(event);
         }
     }
 
     /// End the next wait with `e`; the first error wins.
     fn fault(&mut self, e: ClientError) {
         self.fault.get_or_insert(e);
-    }
-}
-
-/// The popup's top-left corner at the geometry's, whatever the parent's size.
-fn placement(g: &PopupGeometry, grab: bool) -> PopupPlacement {
-    PopupPlacement {
-        anchor_rect: Rect::new(
-            f64::from(g.x),
-            f64::from(g.y),
-            f64::from(g.width),
-            f64::from(g.height),
-        ),
-        size: (g.width as u32, g.height as u32),
-        anchor: PopupAnchor::TopLeft,
-        gravity: Gravity::BottomRight,
-        constraint_adjustment: ConstraintAdjustment::empty(),
-        grab,
     }
 }
 
@@ -1238,67 +1026,6 @@ fn configured_size(suggested: (u32, u32), current: (u32, u32)) -> (u32, u32) {
     )
 }
 
-/// The device pixels `r` (points) touches at `factor` pixels a point.
-fn pixel_rect(r: &Rect, factor: f32) -> PixelRect {
-    let f = f64::from(factor);
-    let (x0, y0) = ((r.x() * f).floor().max(0.0), (r.y() * f).floor().max(0.0));
-    let (x1, y1) = (
-        ((r.x() + r.width()) * f).ceil().max(0.0),
-        ((r.y() + r.height()) * f).ceil().max(0.0),
-    );
-    PixelRect {
-        x: x0 as u32,
-        y: y0 as u32,
-        width: (x1 - x0) as u32,
-        height: (y1 - y0) as u32,
-    }
-}
-
-/// `r` cut to a `width` × `height` buffer; `None` when nothing of it is inside.
-fn clamp(r: PixelRect, width: u32, height: u32) -> Option<PixelRect> {
-    let (x1, y1) = (
-        r.x.saturating_add(r.width).min(width),
-        r.y.saturating_add(r.height).min(height),
-    );
-    (r.x < x1 && r.y < y1).then(|| PixelRect {
-        x: r.x,
-        y: r.y,
-        width: x1 - r.x,
-        height: y1 - r.y,
-    })
-}
-
-/// Make the pixels of `r` (inside `pixmap`) transparent.
-fn clear(pixmap: &mut Pixmap, r: &PixelRect) {
-    let stride = pixmap.width() as usize * 4;
-    let (start, len) = (r.x as usize * 4, r.width as usize * 4);
-    let data = pixmap.data_mut();
-    for row in r.y..r.y + r.height {
-        let at = row as usize * stride + start;
-        data[at..at + len].fill(0);
-    }
-}
-
-pub(crate) fn outward_rect(r: &Rect) -> (i32, i32, i32, i32) {
-    let (left, top) = (r.min_x().floor() as i32, r.min_y().floor() as i32);
-    let (right, bottom) = (r.max_x().ceil() as i32, r.max_y().ceil() as i32);
-    (
-        left,
-        top,
-        right.saturating_sub(left),
-        bottom.saturating_sub(top),
-    )
-}
-
-/// `bytes` as text: invalid sequences replaced, a character cut by the read limit dropped.
-fn text_of(bytes: &[u8]) -> String {
-    let whole = match std::str::from_utf8(bytes) {
-        Err(e) if e.error_len().is_none() => &bytes[..e.valid_up_to()],
-        _ => bytes,
-    };
-    String::from_utf8_lossy(whole).into_owned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1308,44 +1035,5 @@ mod tests {
         assert_eq!(configured_size((0, 0), (920, 436)), (920, 436));
         assert_eq!(configured_size((1200, 0), (920, 436)), (1200, 436));
         assert_eq!(configured_size((640, 480), (920, 436)), (640, 480));
-    }
-
-    #[test]
-    fn input_regions_round_outwards() {
-        assert_eq!(
-            outward_rect(&Rect::new(10.2, 20.7, 100.0, 50.0)),
-            (10, 20, 101, 51)
-        );
-        assert_eq!(
-            outward_rect(&Rect::new(0.0, 0.0, 344.0, 72.0)),
-            (0, 0, 344, 72)
-        );
-    }
-
-    #[test]
-    fn damage_is_cut_to_the_buffer() {
-        let r = PixelRect {
-            x: 90,
-            y: 5,
-            width: 20,
-            height: 10,
-        };
-        assert_eq!(
-            clamp(r, 100, 100),
-            Some(PixelRect {
-                x: 90,
-                y: 5,
-                width: 10,
-                height: 10
-            })
-        );
-        assert_eq!(clamp(r, 90, 100), None);
-    }
-
-    #[test]
-    fn a_character_cut_by_the_read_limit_is_dropped() {
-        assert_eq!(text_of("aé".as_bytes()), "aé");
-        assert_eq!(text_of(&"aé".as_bytes()[..2]), "a");
-        assert_eq!(text_of(b"a\xFFb"), "a\u{FFFD}b");
     }
 }

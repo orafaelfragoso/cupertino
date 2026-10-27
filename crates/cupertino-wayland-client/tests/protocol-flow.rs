@@ -1147,6 +1147,48 @@ fn each_resize_draws_at_the_configured_size_and_acknowledges_its_serial() {
 }
 
 #[test]
+fn a_configure_overtaken_before_the_draw_is_skipped_for_the_latest() {
+    let (mut conn, control, seen) = connect(Globals::core());
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    present(&mut conn, w.surface(), (320, 240));
+    next_seen(&seen);
+    next_seen(&seen);
+    for (width, height) in [(640, 480), (1024, 768)] {
+        control
+            .send(Control::Configure {
+                width,
+                height,
+                states: vec![],
+            })
+            .unwrap();
+    }
+    let latest = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::Configure { window, configure }
+            if *window == w && configure.size == Some((1024, 768)) =>
+        {
+            Some(*configure)
+        }
+        _ => None,
+    });
+    let lease = conn
+        .lease(w.surface(), (100, 100), BufferFormat::Xrgb8888)
+        .unwrap();
+    assert_eq!(lease.logical_size(), (1024, 768));
+    lease.present().unwrap();
+    assert_eq!(next_seen(&seen), Seen::Ack(latest.serial));
+    assert_eq!(
+        next_seen(&seen),
+        Seen::Commit {
+            size: (1024, 768),
+            scale: 1,
+            format: wl_shm::Format::Xrgb8888
+        }
+    );
+}
+
+#[test]
 fn a_leased_buffer_names_what_it_missed_of_the_frames_shown_in_the_others() {
     let (mut conn, _control, _seen) = connect(Globals::core());
     let mut stash = Stash::new();

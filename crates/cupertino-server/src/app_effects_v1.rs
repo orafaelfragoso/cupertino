@@ -39,8 +39,9 @@ impl AppEffectsV1Global {
     }
 }
 
-/// Most backdrops one surface may hold: the dock and the menus use a few per surface.
-const MAX_BACKDROPS_PER_SURFACE: usize = 8;
+/// Most backdrops one surface may hold: the notification centre puts one behind every visible card and one behind its
+/// menu, so this sits well above legitimate use and the per-client limit is the bound that counts.
+const MAX_BACKDROPS_PER_SURFACE: usize = 64;
 /// Most backdrops one client may hold, over all its surfaces.
 const MAX_BACKDROPS_PER_CLIENT: usize = 128;
 
@@ -212,6 +213,7 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Cupertino {
                     );
                     return;
                 }
+                // a client without `ClientState` (none is created in this crate) is counted by a counter of its own
                 let held = client
                     .get_data::<ClientState>()
                     .map(|data| data.backdrops.clone())

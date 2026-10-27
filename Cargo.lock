@@ -1247,8 +1247,7 @@ dependencies = [
 name = "cupertino-testclient"
 version = "0.1.0"
 dependencies = [
- "cupertino-client",
- "tiny-skia",
+ "cupertino-wayland-client",
 ]
 
 [[package]]

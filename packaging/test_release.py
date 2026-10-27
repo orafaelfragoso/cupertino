@@ -88,8 +88,70 @@ class LicenceTest(unittest.TestCase):
         declared = {'PKGBUILD': {'GPL-3.0-or-later'}, 'rpm': {'GPL-3.0-or-later', 'MPL-2.0', 'OFL-1.1'}}
         self.assertEqual(release.missing_licenses(shipped, declared), ['PKGBUILD lacks MPL-2.0'])
 
-    def test_the_runtime_ships_the_licences_of_the_crates_its_binaries_link(self):
-        self.assertEqual(release.shipped_licenses('runtime'), {'GPL-3.0-or-later', 'MPL-2.0', 'MIT', 'OFL-1.1'})
+    def test_the_runtime_ships_the_licences_of_its_crates_and_embedded_notices(self):
+        self.assertEqual(release.shipped_licenses('runtime'), {'GPL-3.0-or-later', 'MPL-2.0', 'MIT', 'OFL-1.1', 'LGPL-2.1-or-later', 'MIT-CMU', 'BSD-3-Clause'})
+
+    def test_notice_files_are_found_by_name_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ('NOTICE', 'notice.md', 'NOTICES.txt', 'LICENSE', 'NOTICE-extra'):
+                (Path(tmp) / name).write_text('x')
+            found = release.notice_files({'manifest_path': f'{tmp}/Cargo.toml'})
+        self.assertEqual([f.name for f in found], ['NOTICE', 'NOTICES.txt', 'notice.md'])
+
+    def test_the_khronos_licence_comments_are_extracted(self):
+        crate = next(p for p in release.linked_packages() if p['name'] == 'khronos_api')
+        found = dict(release.embedded_notices(crate))
+        self.assertIn('Copyright (c) 2013-2017 The Khronos Group Inc.', found['api_egl/api/egl.xml'])
+        self.assertIn('Licensed under the Apache License, Version 2.0', found['api/xml/gl.xml'])
+        text = (release.ROOT / release.THIRD_PARTY).read_text()
+        self.assertIn('The Khronos Group Inc.', text)
+
+    def test_the_protocol_files_the_scanner_compiles_carry_their_notices(self):
+        text = (release.ROOT / release.THIRD_PARTY).read_text()
+        linked = {p['name']: p for p in release.linked_packages()}
+        self.assertEqual(release.embedded_notice_files(linked['wayland-server']), ['wayland.xml'])
+        self.assertIn('Kristian', dict(release.embedded_notices(linked['wayland-server']))['wayland.xml'])
+        for crate in release.SCANNER_CRATES:
+            notices = release.embedded_notices(linked[crate])
+            self.assertTrue(notices, crate)
+            self.assertTrue(all(body in text for _name, body in notices), crate)
+
+    def test_every_licence_an_embedded_notice_names_has_its_text_and_a_licence_field(self):
+        named = release.notice_licenses()
+        self.assertEqual(set(named), {'LGPL-2.1-or-later', 'MIT-CMU', 'BSD-3-Clause', 'MIT'})
+        text = (release.ROOT / release.THIRD_PARTY).read_text()
+        for ident in named:
+            self.assertRegex(text, rf'(?m)^--- .*\({re.escape(ident)}\)$')
+        self.assertLessEqual(set(named), release.shipped_licenses('runtime'))
+
+    def test_a_licence_named_by_a_notice_without_its_text_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stale = Path(tmp) / 'THIRD-PARTY-LICENSES'
+            text = (release.ROOT / release.THIRD_PARTY).read_text()
+            stale.write_text(re.sub(r'(?m)^(--- .*)\(MIT-CMU\)$', r'\1(removed)', text))
+            with mock.patch.object(release, 'THIRD_PARTY', str(stale)):
+                problems = release.third_party_problems()
+        self.assertEqual(problems, [f'{stale} has no text of MIT-CMU, which an embedded notice names'])
+
+    def test_an_embedded_notice_file_that_is_missing_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, 'api_egl/api/egl.xml is missing'):
+                release.embedded_notices({'name': 'khronos_api', 'version': '0', 'manifest_path': f'{tmp}/Cargo.toml'})
+
+    def test_a_missing_or_stale_third_party_file_is_reported(self):
+        self.assertEqual(release.third_party_problems(), [])
+        with tempfile.TemporaryDirectory() as tmp:
+            stale = Path(tmp) / 'THIRD-PARTY-LICENSES'
+            with mock.patch.object(release, 'THIRD_PARTY', str(stale)):
+                self.assertRegex(release.third_party_problems()[0], 'is missing')
+                text = (release.ROOT / 'packaging/licenses/THIRD-PARTY-LICENSES').read_text()
+                first = re.search(r'^CRATES \(\d+\)\n=+\n(\S+) (\S+)\n', text, re.M)
+                name, version = first[1], first[2]
+                stale.write_text(text.replace(f'\n{name} {version}\n', f'\n{name} 0.0.0-stale\n', 1))
+                problems = release.third_party_problems()
+        self.assertEqual(len(problems), 2)
+        self.assertRegex(problems[0], f'lacks {name} {version}')
+        self.assertRegex(problems[1], f'lists {name} 0.0.0-stale, which is not linked')
 
     def test_every_package_lists_what_it_ships(self):
         for package in release.MANIFESTS:

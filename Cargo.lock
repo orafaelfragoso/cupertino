@@ -779,11 +779,14 @@ version = "0.1.0"
 dependencies = [
  "cupertino-alsa",
  "cupertino-assets",
- "cupertino-client",
  "cupertino-decorations",
  "cupertino-geometry",
  "cupertino-icons",
+ "cupertino-protocol-app",
+ "cupertino-shell-client",
  "cupertino-theme",
+ "cupertino-ui-wayland",
+ "cupertino-wayland-client",
  "tiny-skia",
  "zbus",
 ]

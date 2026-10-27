@@ -4,10 +4,6 @@
 
 use cupertino_alsa::DEVICE_DIR;
 use cupertino_assets::Assets;
-use cupertino_client::{
-    key, Anchor, Backdrop, Button, Client, DisplayOptions, Event, KeyboardInteractivity, Layer,
-    LayerSurfaceConfig, Margin, OutputId, PointerEvent, SurfaceId,
-};
 use cupertino_controlcenter::backend::{
     AlsaVolume, MemoryBattery, MemoryBluetooth, MemoryBrightness, MemoryFocusMode, MemoryVolume,
     MemoryWifi, RecordingOverlay,
@@ -24,7 +20,16 @@ use cupertino_controlcenter::system::{
     BtdBluetooth, NetdWifi, NotificationFocusMode, PowerdBattery, PowerdBrightness, SessionOverlay,
 };
 use cupertino_geometry::{Point, Rect};
+use cupertino_protocol_app::{AppEffects, Backdrop};
+use cupertino_shell_client::{
+    Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
+    Session, SessionChange, SessionState, Shell, ShellEvent,
+};
 use cupertino_theme::{Appearance, Theme};
+use cupertino_ui_wayland::{Ready, ShmPresenter};
+use cupertino_wayland_client::{
+    key, Button, Connection, Event, KeyboardEvent, OutputId, PointerEvent, SurfaceId,
+};
 use std::error::Error;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
@@ -77,13 +82,18 @@ impl Options {
 }
 
 struct App {
-    client: Client,
+    conn: Connection,
+    layer_shell: LayerShell,
+    effects: AppEffects,
+    _session: Session,
+    session: SessionState,
     theme: Theme,
     assets: Assets,
     /// The surface of the card and its shadow, mapped all the time; it draws nothing and takes no input while hidden.
-    surface: SurfaceId,
+    layer: LayerSurface,
+    presenter: ShmPresenter,
     /// Full-output surface below the card that catches a press outside it; exists only while the panel is shown.
-    catcher: Option<SurfaceId>,
+    catcher: Option<(LayerSurface, ShmPresenter)>,
     output: OutputId,
     controller: Controller,
     commands: Receiver<()>,
@@ -101,8 +111,8 @@ struct App {
 }
 
 /// The first output the server has described.
-fn first_output(client: &Client) -> Result<OutputId> {
-    Ok(client
+fn first_output(conn: &Connection) -> Result<OutputId> {
+    Ok(conn
         .outputs()
         .into_iter()
         .find(|o| o.geometry.is_some())
@@ -146,13 +156,8 @@ fn backends(options: &Options) -> Backends {
 }
 
 /// The renderer for the session's appearance, in its high-contrast catalog under Increase Contrast.
-fn panel_renderer(
-    theme: &Theme,
-    assets: &Assets,
-    dark: bool,
-    options: DisplayOptions,
-) -> Result<Renderer> {
-    let appearance = Appearance::of_session(dark, options.increase_contrast);
+fn panel_renderer(theme: &Theme, assets: &Assets, session: &SessionState) -> Result<Renderer> {
+    let appearance = Appearance::of_session(session.dark, session.display.increase_contrast);
     Ok(Renderer::new(
         Palette::from_theme(theme, appearance)?,
         theme.tokens.typography().clone(),
@@ -164,9 +169,13 @@ fn panel_renderer(
 pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let assets = Assets::discover();
     let theme = Theme::load()?;
-    let mut client = Client::connect_shell()?;
-    let renderer = panel_renderer(&theme, &assets, client.is_dark(), client.display_options())?;
-    let waker = client.waker();
+    let mut conn = Connection::connect()?;
+    let layer_shell = LayerShell::bind(&mut conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
+    let effects = AppEffects::bind(&mut conn).ok_or("the server lacks cupertino_app_effects_v1")?;
+    let shell = Shell::bind(&mut conn).ok_or("the server lacks cupertino_shell_v1")?;
+    let (session_observer, session, early) = shell.observe(&mut conn)?;
+    let renderer = panel_renderer(&theme, &assets, &session)?;
+    let waker = conn.waker();
     let (sender, commands) = mpsc::channel();
     // the bus thread only queues; the loop below carries the toggles out, so the effects never block the bus
     let sender = Mutex::new(sender);
@@ -183,30 +192,38 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         e => Box::new(e) as Box<dyn Error>,
     })?;
 
-    let output = first_output(&client)?;
+    let output = first_output(&conn)?;
     let (width, height) = surface_size();
-    let surface = client.layer_surface(&LayerSurfaceConfig {
-        namespace: NAMESPACE.to_string(),
-        output: Some(output),
-        layer: Layer::Overlay,
-        // top right, below the menu bar: the bar reserves no layer zone (the server keeps windows clear of it), so the
-        // margin carries its height
-        anchor: Anchor::Top | Anchor::Right,
-        size: (width, height),
-        margin: Margin {
-            top: theme.shapes.menu_bar_height.ceil() as i32 + EDGE_MARGIN
-                - SHADOW_INSETS.top as i32,
-            right: EDGE_MARGIN - SHADOW_INSETS.right as i32,
-            ..Margin::default()
+    let layer = layer_shell.layer_surface(
+        &mut conn,
+        &LayerSurfaceConfig {
+            namespace: NAMESPACE.to_string(),
+            output: Some(output),
+            layer: Layer::Overlay,
+            // top right, below the menu bar: the bar reserves no layer zone (the server keeps windows clear of it), so the
+            // margin carries its height
+            anchor: Anchor::Top | Anchor::Right,
+            size: (width, height),
+            margin: Margin {
+                top: theme.shapes.menu_bar_height.ceil() as i32 + EDGE_MARGIN
+                    - SHADOW_INSETS.top as i32,
+                right: EDGE_MARGIN - SHADOW_INSETS.right as i32,
+                ..Margin::default()
+            },
+            exclusive_zone: -1,
+            keyboard: KeyboardInteractivity::None,
         },
-        exclusive_zone: -1,
-        keyboard: KeyboardInteractivity::None,
-    })?;
+    )?;
     let mut app = App {
-        client,
+        presenter: ShmPresenter::new(layer.surface()),
+        conn,
+        layer_shell,
+        effects,
+        _session: session_observer,
+        session,
         theme,
         assets,
-        surface,
+        layer,
         catcher: None,
         output,
         controller: Controller::new(backends(options)),
@@ -219,12 +236,16 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         drag: None,
         backdrop: None,
     };
+    for event in early {
+        app.handle(event)?;
+    }
     loop {
+        app.present()?;
         let timeout = app
             .controller
             .next_wakeup(app.now())
             .map(Duration::from_secs_f64);
-        for event in app.client.wait(timeout)? {
+        for event in app.conn.wait(timeout)? {
             app.handle(event)?;
         }
         app.housekeeping()?;
@@ -237,15 +258,17 @@ impl App {
     }
 
     fn handle(&mut self, event: Event) -> Result<()> {
+        let catcher = self.catcher.as_ref().map(|(layer, _)| layer.surface());
         match event {
-            // a draw follows every configure and scale change
-            Event::Configured { .. } | Event::ScaleChanged { .. } => {}
-            Event::Draw(surface) if surface == self.surface => self.draw()?,
-            Event::Draw(surface) if Some(surface) == self.catcher => self.draw_catcher(surface)?,
-            // of a catcher destroyed since
-            Event::Draw(_) => {}
-            Event::Closed(_) => return Err("the server closed a control panel surface".into()),
-            Event::Pointer { surface, event } if surface == self.surface => self.pointer(event)?,
+            Event::Frame(frame) if frame.surface == self.layer.surface() => {
+                self.presenter.frame_done()
+            }
+            Event::Frame(frame) if Some(frame.surface) == catcher => {
+                self.catcher_presenter().frame_done()
+            }
+            Event::Pointer { surface, event } if surface == self.layer.surface() => {
+                self.pointer(event)
+            }
             // a left or right press outside the card dismisses it (global mouse monitor mask 0xa)
             Event::Pointer {
                 surface,
@@ -255,50 +278,92 @@ impl App {
                         button: Button::Left | Button::Right,
                         ..
                     },
-            } if Some(surface) == self.catcher => self.controller.dismiss(self.now()),
-            Event::Pointer { .. } => {}
+            } if Some(surface) == catcher => self.controller.dismiss(self.now()),
             // Escape is not in the design; it is added (approximate)
-            Event::Key {
-                key: key::ESCAPE,
-                pressed: true,
+            Event::Keyboard {
+                event:
+                    KeyboardEvent::Key {
+                        code: key::ESCAPE,
+                        pressed: true,
+                        ..
+                    },
                 ..
             } => self.controller.dismiss(self.now()),
-            Event::Key { .. } => {}
             // the design dismisses when the panel resigns the key window (observer)
-            Event::KeyboardLeave(_) => self.controller.dismiss(self.now()),
+            Event::Keyboard {
+                event: KeyboardEvent::Leave,
+                ..
+            } => self.controller.dismiss(self.now()),
             Event::OutputsChanged => {
-                if !self.client.outputs().iter().any(|o| o.id == self.output) {
+                if !self.conn.outputs().iter().any(|o| o.id == self.output) {
                     return Err("the output of the control panel went away".into());
                 }
             }
-            Event::Appearance { .. } | Event::DisplayOptions(_) => {
-                self.renderer = panel_renderer(
-                    &self.theme,
-                    &self.assets,
-                    self.client.is_dark(),
-                    self.client.display_options(),
-                )?;
-                self.client.request_redraw(self.surface)?;
+            Event::Extension(event) => match self.session.apply(&event) {
+                Some(SessionChange::Appearance { .. } | SessionChange::DisplayOptions(_)) => {
+                    self.renderer = panel_renderer(&self.theme, &self.assets, &self.session)?;
+                    self.presenter.request_redraw();
+                }
+                // the server draws the lock screen: only the shown panel has to go
+                Some(SessionChange::Lock { locked: true }) => self.controller.dismiss(self.now()),
+                Some(SessionChange::Lock { locked: false }) => {}
+                None => match event.downcast_ref::<ShellEvent>() {
+                    Some(&ShellEvent::Configure { surface, size }) => {
+                        self.configured(surface, size)?
+                    }
+                    Some(ShellEvent::Closed(_)) => {
+                        return Err("the server closed a control panel surface".into())
+                    }
+                    _ => {}
+                },
+            },
+            // the surfaces have no activation or popups
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// A configure of the card or of the catcher; one of a catcher destroyed since is dropped.
+    fn configured(&mut self, surface: SurfaceId, size: (u32, u32)) -> Result<()> {
+        if surface == self.layer.surface() {
+            self.presenter.configured(self.layer.configured(size)?);
+        } else if let Some((layer, presenter)) = &mut self.catcher {
+            if surface == layer.surface() {
+                presenter.configured(layer.configured(size)?);
             }
-            // the server draws the lock screen: only the shown panel has to go
-            Event::SessionLock { locked: true } => self.controller.dismiss(self.now()),
-            Event::SessionLock { locked: false }
-            | Event::LockRequested { .. }
-            | Event::LogOutRequested => {}
-            // the surfaces have no activation, popups or menu-bar role
-            Event::ActivationToken { .. }
-            | Event::PopupDone(_)
-            | Event::MenuBar { .. }
-            | Event::Dock { .. } => {}
+        }
+        Ok(())
+    }
+
+    fn catcher_presenter(&mut self) -> &mut ShmPresenter {
+        &mut self.catcher.as_mut().expect("a catcher").1
+    }
+
+    /// Draw every surface that can take a frame.
+    fn present(&mut self) -> Result<()> {
+        loop {
+            match self.presenter.poll(&self.conn)? {
+                Ready::Idle => break,
+                // a draw follows every scale change
+                Ready::ScaleChanged(_) => {}
+                Ready::Draw => self.draw()?,
+            }
+        }
+        while let Some((_, presenter)) = &mut self.catcher {
+            match presenter.poll(&self.conn)? {
+                Ready::Idle => break,
+                Ready::ScaleChanged(_) => {}
+                Ready::Draw => self.draw_catcher()?,
+            }
         }
         Ok(())
     }
 
     /// Press a toggle or start, follow and end a slider drag.
-    fn pointer(&mut self, event: PointerEvent) -> Result<()> {
+    fn pointer(&mut self, event: PointerEvent) {
         let now = self.now();
         if self.controller.phase(now) != Phase::Shown {
-            return Ok(());
+            return;
         }
         let origin = card_origin();
         let card = |p: Point| Point::new(p.x - origin.x, p.y - origin.y);
@@ -310,13 +375,13 @@ impl App {
             } => match self.layout.hit(card(position)) {
                 Hit::Toggle(module) => {
                     if self.controller.press(module) {
-                        self.client.request_redraw(self.surface)?;
+                        self.presenter.request_redraw();
                     }
                 }
                 Hit::Slider(slider, fraction) => {
                     self.drag = Some(slider);
                     self.controller.slide(now, slider, fraction);
-                    self.client.request_redraw(self.surface)?;
+                    self.presenter.request_redraw();
                 }
                 Hit::Panel | Hit::Outside => {}
             },
@@ -324,7 +389,7 @@ impl App {
                 if let Some(slider) = self.drag {
                     let fraction = fraction_at(&self.layout.track(slider), card(position).x);
                     self.controller.slide(now, slider, fraction);
-                    self.client.request_redraw(self.surface)?;
+                    self.presenter.request_redraw();
                 }
             }
             PointerEvent::Button {
@@ -334,7 +399,7 @@ impl App {
             } => {
                 if self.drag.take().is_some() {
                     self.controller.release(now);
-                    self.client.request_redraw(self.surface)?;
+                    self.presenter.request_redraw();
                 }
             }
             PointerEvent::Enter(_)
@@ -342,7 +407,6 @@ impl App {
             | PointerEvent::Button { .. }
             | PointerEvent::Scroll { .. } => {}
         }
-        Ok(())
     }
 
     /// Carry out the queued toggles and the controller's timers, arrange the surfaces for the phase and redraw when
@@ -361,7 +425,7 @@ impl App {
             self.drag = None;
         }
         if phase != Phase::Hidden && self.drawn.as_ref() != Some(self.controller.controls()) {
-            self.client.request_redraw(self.surface)?;
+            self.presenter.request_redraw();
         }
         Ok(())
     }
@@ -371,26 +435,31 @@ impl App {
     fn arrange(&mut self, phase: Phase) -> Result<()> {
         self.phase = phase;
         if phase == Phase::Shown {
-            self.catcher = Some(self.client.layer_surface(&LayerSurfaceConfig {
-                namespace: NAMESPACE.to_string(),
-                output: Some(self.output),
-                layer: Layer::Top,
-                anchor: Anchor::Top | Anchor::Right | Anchor::Bottom | Anchor::Left,
-                size: (0, 0),
-                margin: Margin::default(),
-                exclusive_zone: -1,
-                keyboard: KeyboardInteractivity::None,
-            })?);
-            self.client
-                .set_keyboard_interactivity(self.surface, KeyboardInteractivity::Exclusive)?;
+            let catcher = self.layer_shell.layer_surface(
+                &mut self.conn,
+                &LayerSurfaceConfig {
+                    namespace: NAMESPACE.to_string(),
+                    output: Some(self.output),
+                    layer: Layer::Top,
+                    anchor: Anchor::Top | Anchor::Right | Anchor::Bottom | Anchor::Left,
+                    size: (0, 0),
+                    margin: Margin::default(),
+                    exclusive_zone: -1,
+                    keyboard: KeyboardInteractivity::None,
+                },
+            )?;
+            let presenter = ShmPresenter::new(catcher.surface());
+            self.catcher = Some((catcher, presenter));
+            self.layer
+                .set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
         } else {
-            if let Some(catcher) = self.catcher.take() {
-                self.client.destroy_surface(catcher)?;
+            if let Some((catcher, _)) = self.catcher.take() {
+                self.conn.destroy(catcher.surface())?;
             }
-            self.client
-                .set_keyboard_interactivity(self.surface, KeyboardInteractivity::None)?;
+            self.layer
+                .set_keyboard_interactivity(KeyboardInteractivity::None);
         }
-        self.client.request_redraw(self.surface)?;
+        self.presenter.request_redraw();
         Ok(())
     }
 
@@ -401,8 +470,9 @@ impl App {
         if phase == Phase::Hidden {
             self.backdrop = None;
             self.drawn = None;
-            self.client.set_input_region(self.surface, &[])?;
-            self.client.draw(self.surface, |_, _| {})?;
+            self.conn
+                .set_input_region(self.layer.surface(), Some(&[]))?;
+            self.presenter.draw(&mut self.conn, None, |_, _| {})?;
             return Ok(());
         }
         let opacity = self.controller.opacity(now);
@@ -411,7 +481,7 @@ impl App {
         let origin = card_origin();
         let card = Rect::from_origin_size(origin, self.layout.size());
         if self.backdrop.is_none() {
-            let backdrop = self.client.backdrop(self.surface)?;
+            let backdrop = self.effects.backdrop(&self.conn, self.layer.surface())?;
             backdrop.set_material(MATERIAL);
             self.backdrop = Some(backdrop);
         }
@@ -424,10 +494,11 @@ impl App {
         } else {
             Vec::new()
         };
-        self.client.set_input_region(self.surface, &region)?;
+        self.conn
+            .set_input_region(self.layer.surface(), Some(&region))?;
         let renderer = &mut self.renderer;
-        self.client.draw(self.surface, |pixmap, scale| {
-            let rendered = renderer.render(&controls, scale.factor());
+        self.presenter.draw(&mut self.conn, None, |pixmap, scale| {
+            let rendered = renderer.render(&controls, scale.factor() as f32);
             let paint = PixmapPaint {
                 opacity: opacity as f32,
                 ..PixmapPaint::default()
@@ -437,17 +508,21 @@ impl App {
         self.drawn = Some(controls);
         // frame callbacks pace the fade
         if phase == Phase::Hiding {
-            self.client.request_redraw(self.surface)?;
+            self.presenter.request_redraw();
         }
         Ok(())
     }
 
     /// Make the catcher take the input of the whole output; it is drawn once and stays transparent.
-    fn draw_catcher(&mut self, catcher: SurfaceId) -> Result<()> {
-        let (width, height) = self.client.size(catcher)?;
+    fn draw_catcher(&mut self) -> Result<()> {
+        let Some((layer, presenter)) = &mut self.catcher else {
+            return Ok(());
+        };
+        let (width, height) = presenter.size().ok_or("drawn before its configure")?;
         let region = Rect::new(0.0, 0.0, f64::from(width), f64::from(height));
-        self.client.set_input_region(catcher, &[region])?;
-        self.client.draw(catcher, |_, _| {})?;
+        self.conn
+            .set_input_region(layer.surface(), Some(&[region]))?;
+        presenter.draw(&mut self.conn, None, |_, _| {})?;
         Ok(())
     }
 }

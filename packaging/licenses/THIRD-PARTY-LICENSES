@@ -1043,7 +1043,7 @@ THIS SOFTWARE.
 
 --- wayland-protocols 0.32.13
 Copyright © 2018 NXP
-Copyright © 2019 Status Research &amp; Development GmbH.
+Copyright © 2019 Status Research & Development GmbH.
 Copyright © 2021 Xaver Hugl
 
 Permission is hereby granted, free of charge, to any person obtaining a
@@ -1162,8 +1162,8 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 --- wayland-protocols 0.32.13
-Copyright © 2020 Aleix Pol Gonzalez &lt;aleixpol@kde.org&gt;
-Copyright © 2020 Carlos Garnacho &lt;carlosg@gnome.org&gt;
+Copyright © 2020 Aleix Pol Gonzalez <aleixpol@kde.org>
+Copyright © 2020 Carlos Garnacho <carlosg@gnome.org>
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),

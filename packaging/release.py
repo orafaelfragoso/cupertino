@@ -28,6 +28,7 @@ The runtime version is cupertino-server's, the data version cupertino-assets'. N
 import argparse
 import os
 import hashlib
+import html
 import io
 import lzma
 import re
@@ -280,7 +281,7 @@ def embedded_notices(package):
         xml = path.read_text()
         m = (re.search(r'<registry>\s*(?:<!--(.*?)-->|<comment>(.*?)</comment>)', xml, re.S)
              or re.search(r'<copyright>(.*?)</copyright>', xml, re.S))
-        text = textwrap.dedent(next((g for g in m.groups() if g), '')).strip() if m else ''
+        text = textwrap.dedent(html.unescape(next((g for g in m.groups() if g), ''))).strip() if m else ''
         if 'opyright' in text:
             found.append((name, text))
         elif package['name'] not in SCANNER_CRATES:  # a protocol file may carry no notice; a registry file must

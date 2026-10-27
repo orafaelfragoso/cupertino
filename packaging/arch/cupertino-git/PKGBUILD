@@ -30,7 +30,9 @@ prepare() {
 
 build() {
   cd cupertino
-  export CARGO_INCREMENTAL=0
+  # The packaged binaries are stripped; debug info only fills the build tree (15 GB with the test build) and must
+  # match check(), or the tests rebuild every dependency.
+  export CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0
   # The installed theme directory is compiled in; no build or home path may end up in the binaries.
   export CUPERTINO_THEME_DIR=/usr/share/cupertino/theme
   export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/usr/src/debug/$pkgname --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
@@ -39,7 +41,7 @@ build() {
 
 check() {
   cd cupertino
-  export CARGO_INCREMENTAL=0 CUPERTINO_THEME_DIR=/usr/share/cupertino/theme CUPERTINO_SPEC_DIR="$PWD/data/theme"
+  export CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0 CUPERTINO_THEME_DIR=/usr/share/cupertino/theme CUPERTINO_SPEC_DIR="$PWD/data/theme"
   # The compositor tests open a Wayland socket; the build environment has no runtime directory of its own.
   export XDG_RUNTIME_DIR="$srcdir/runtime"
   install -d -m 700 "$XDG_RUNTIME_DIR"

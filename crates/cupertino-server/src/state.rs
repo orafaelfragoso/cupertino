@@ -20,6 +20,7 @@ use smithay::reexports::calloop::{Interest, LoopHandle, LoopSignal, Mode, PostAc
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::BindError;
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::{Display, DisplayHandle};
 use smithay::utils::{
@@ -397,6 +398,33 @@ pub struct Cupertino {
     pub(crate) time_origin: f64,
 }
 
+/// The socket the server listens on: the first free `wayland-N` of the runtime directory, as every compositor does. Only
+/// 32 of them exist, and other sessions and servers running at the same time use them up, so when none is free the
+/// socket gets a name of its own (`wayland-cupertino-<pid>-<n>`, which `WAYLAND_DISPLAY` carries like any other).
+fn listening_socket() -> Result<ListeningSocketSource> {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    match ListeningSocketSource::new_auto() {
+        Ok(source) => return Ok(source),
+        Err(BindError::AlreadyInUse) => {
+            tracing::info!("no free wayland-N socket: using a name of its own")
+        }
+        Err(e) => return Err(e).context("creating the wayland socket"),
+    }
+    for _ in 0..OWN_NAME_TRIES {
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let name = format!("wayland-cupertino-{}-{n}", std::process::id());
+        match ListeningSocketSource::with_name(&name) {
+            Ok(source) => return Ok(source),
+            Err(BindError::AlreadyInUse) => {}
+            Err(e) => return Err(e).context("creating the wayland socket"),
+        }
+    }
+    anyhow::bail!("creating the wayland socket: no free wayland-N name and {OWN_NAME_TRIES} names of its own are taken")
+}
+
+/// How many names of its own a server tries once the `wayland-N` names are gone.
+const OWN_NAME_TRIES: u32 = 1024;
+
 impl Cupertino {
     pub fn new(
         display: Display<Cupertino>,
@@ -410,8 +438,7 @@ impl Cupertino {
         let clock = Clock::new();
 
         let socket_name = if listen_on_socket {
-            let source =
-                ListeningSocketSource::new_auto().context("creating the wayland socket")?;
+            let source = listening_socket()?;
             let name = source.socket_name().to_string_lossy().into_owned();
             loop_handle
                 .insert_source(source, |stream, _, state| {

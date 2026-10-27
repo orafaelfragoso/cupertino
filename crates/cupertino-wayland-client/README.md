@@ -21,7 +21,7 @@ workspace's pure-Rust `cupertino-xkbcommon`); `cupertino-layers` fails the build
 | `PointerEvent`, `KeyboardEvent`, `Button`, `Modifiers`, `CursorShape`, `ResizeEdge` | pointer and key input; the axes of one `wl_pointer.frame` arrive as one scroll; keys carry keysym and text from the compositor's keymap, key repeat runs in the client; `wl_pointer.axis_source`, `axis_stop` and `axis_discrete` are dropped for now. `Connection::{modifiers, input_serial}` read the held modifiers and the serial of the latest input event; `Connection::set_cursor` sets a named cursor (`wp_cursor_shape_v1`), `Connection::hide_cursor` hides it |
 | `Connection::{set_selection, receive}`, `ClipboardOffer`, `Event::Selection` | the clipboard: offer contents in several MIME types, list and read another client's |
 | `Error`, `Disconnect` | typed errors: a missing required protocol with its minimum version, the disconnect cause, a configure serial that did not increase, an unsupported format or MIME type, a denied or cancelled transfer, no free buffer |
-| `State`, `ExternalRole`, `Event::Extension`, `ExtensionEvent`, `Connection::{bind_extension, queue_handle, external_surface, wl_surface, wl_output, seat, pointer, surface_outputs, roundtrip}`, `OutputId::registry_name` | the extension hook: another crate adds protocols of its own on the same queue (below) |
+| `State`, `ExternalRole`, `Event::Extension`, `ExtensionEvent`, `Connection::{bind_extension, queue_handle, external_surface, wl_surface, wl_output, seat, pointer, surface_outputs, roundtrip}`, `OutputId::{registry_name, from_registry_name}` | the extension hook: another crate adds protocols of its own on the same queue (below) |
 
 ## How it works
 

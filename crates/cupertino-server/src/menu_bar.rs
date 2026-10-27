@@ -140,6 +140,10 @@ impl MenuBars {
         self.bars.iter().any(|b| &b.surface == surface)
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.bars.is_empty()
+    }
+
     pub fn has_bar(&self, output: OutputId) -> bool {
         self.bars.iter().any(|b| b.output == output)
     }
@@ -273,6 +277,7 @@ impl Cupertino {
         self.refresh_menu_bars();
         self.refresh_capture_indicator();
         self.refresh_session_agent();
+        self.refresh_gtk_capabilities();
     }
 
     /// The layer surface of a bar went away: the role ends with it.
@@ -296,6 +301,7 @@ impl Cupertino {
         let now = self.now();
         self.menu_bars.set.set_menu_open(output, false, now);
         self.refresh_usable_area(output);
+        self.refresh_gtk_capabilities();
     }
 
     /// The group the bars show now: the key window and the menu it exports.

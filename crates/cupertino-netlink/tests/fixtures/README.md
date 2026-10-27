@@ -19,7 +19,7 @@ datagrams of one reply concatenated, headers and `NLMSG_DONE` included, as `Sock
 
 ## Re-recording
 
-Re-record with `cargo run -p cupertino-netlink --example record -- platform/cupertino-netlink/tests/fixtures`
+Re-record with `cargo run -p cupertino-netlink --example record-netlink -- crates/cupertino-netlink/tests/fixtures`
 from `prototypes/`. All requests are read-only dumps and need no capability. Recording again changes the numbers
 the tests assert (a different room has different neighbours), so update `tests/recorded.rs` with it.
 

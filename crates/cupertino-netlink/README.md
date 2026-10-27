@@ -53,6 +53,6 @@ parser is a pure function of bytes. Not audited: the current versions of `netlin
 README says how they were recorded and scrubbed): link names and flags, the LAN address and the default route, the
 `nl80211` family, the station, and the scan list (28 access points: open, WPA, WPA2 and the transition mode). Unit tests
 build the cases a room does not have, byte by byte: WPA3 (SAE), OWE, WEP, enterprise, an unknown suite, truncated
-elements, and the netlink framing errors. `examples/record.rs` records the fixtures. It only dumps (it never triggers a
+elements, and the netlink framing errors. `examples/record-netlink.rs` records the fixtures. It only dumps (it never triggers a
 scan) and refuses to write a file that still holds a real address.
 

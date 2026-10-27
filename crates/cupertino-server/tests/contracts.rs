@@ -1,6 +1,7 @@
 //! The Wayland globals the server advertises, against docs/architecture/contracts.yaml: an ordinary client and a
 //! connection made for each shell role see exactly the registry entries of their scope. A global added in code without
-//! an entry (or an entry for a global that is gone) fails here. Tests skip (pass) when no EGL device is available.
+//! an entry (or an entry for a global that is gone) fails here. Without an EGL device the tests
+//! skip with a message, unless CUPERTINO_EGL_REQUIRED=1 (CI), which makes a missing device a failure.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -8,6 +9,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use cupertino_server::shell_connection::{connect_client, shell_process_connection};
 use cupertino_server::{
     authorization::ShellRole, backend::headless, config::Config, state::ClientState, Cupertino,
 };
@@ -49,25 +51,49 @@ const ROLES: [ShellRole; 6] = [
     ShellRole::SessionLock,
 ];
 
+const SIZE: (i32, i32) = (1000, 700);
+
 type Globals = BTreeMap<String, u32>;
 
-/// The `wayland-global` entries of the registry that every connection holding `roles` is offered.
-fn registered(registry: &str, roles: &[ShellRole]) -> Globals {
-    let held: Vec<String> = roles.iter().map(|role| format!("{role:?}")).collect();
+/// Who is looking at the registry.
+#[derive(Clone, Copy, Debug)]
+enum Peer<'a> {
+    Ordinary,
+    Shell(&'a [ShellRole]),
+    /// The compositor's own connection (the accent picker's input method).
+    Internal,
+}
+
+impl Peer<'_> {
+    fn sees(self, role: &str) -> bool {
+        match self {
+            Peer::Ordinary => false,
+            Peer::Shell(roles) => role
+                .split(' ')
+                .any(|r| roles.iter().any(|held| format!("{held:?}") == r)),
+            Peer::Internal => role == "internal client",
+        }
+    }
+}
+
+/// The `wayland-global` entries of the registry that `peer` is offered; `accent_table` is whether the server was
+/// started with an accent table.
+fn registered(registry: &str, peer: Peer, accent_table: bool) -> Globals {
     let mut globals = Globals::new();
     let mut entry: BTreeMap<&str, &str> = BTreeMap::new();
     let mut flush = |entry: &mut BTreeMap<&str, &str>| {
-        if entry.get("kind") == Some(&"wayland-global")
-            && entry.get("advertised") == Some(&"always")
-        {
+        if entry.get("kind") == Some(&"wayland-global") {
+            let present = match entry["advertised"] {
+                "always" => true,
+                "accent-table" => accent_table,
+                other => panic!("{}: advertised {other}", entry["name"]),
+            };
             let offered = match entry["scope"] {
                 "public" => true,
-                "shell-private" => entry["role"]
-                    .split(' ')
-                    .any(|role| held.iter().any(|h| h == role)),
+                "shell-private" => peer.sees(entry["role"]),
                 scope => panic!("{}: scope {scope} for a global", entry["name"]),
             };
-            if offered {
+            if present && offered {
                 let version = entry["version"].parse().expect("a version number");
                 globals.insert(entry["name"].to_string(), version);
             }
@@ -113,78 +139,121 @@ fn differences(registered: &Globals, observed: &Globals) -> Vec<String> {
     problems
 }
 
-fn advertised(
-    server: &mut Cupertino,
-    event_loop: &mut EventLoop<'static, Cupertino>,
-    roles: &[ShellRole],
-) -> Globals {
-    let stream = if roles.is_empty() {
-        cupertino_server::shell_connection::connect_client(
-            &server.display_handle,
-            ClientState::default(),
+struct Server {
+    state: Cupertino,
+    event_loop: EventLoop<'static, Cupertino>,
+}
+
+impl Server {
+    /// A headless server, or None (with a message) when there is no EGL device; CUPERTINO_EGL_REQUIRED=1 makes that
+    /// a failure.
+    fn start(config: Config) -> Option<Server> {
+        let event_loop = EventLoop::<Cupertino>::try_new().unwrap();
+        let display = Display::<Cupertino>::new().unwrap();
+        let mut state = Cupertino::new(
+            display,
+            event_loop.handle(),
+            event_loop.get_signal(),
+            config,
+            false,
+            &cupertino_assets::Assets::builtin(),
         )
-    } else {
-        cupertino_server::shell_connection::shell_process_connection(&server.display_handle, roles)
-    }
-    .unwrap();
-    let (tx, rx) = mpsc::channel();
-    let client = thread::spawn(move || {
-        let connection = Connection::from_socket(stream).unwrap();
-        let (globals, _) = registry_queue_init::<RegistryClient>(&connection).unwrap();
-        let values: Globals = globals
-            .contents()
-            .clone_list()
-            .into_iter()
-            .map(|global| (global.interface, global.version))
-            .collect();
-        tx.send(values).unwrap();
-    });
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let values = loop {
-        headless::step(server, event_loop, Duration::from_millis(5)).unwrap();
-        match rx.try_recv() {
-            Ok(values) => break values,
-            Err(mpsc::TryRecvError::Disconnected) => panic!("registry client failed"),
-            Err(mpsc::TryRecvError::Empty) => assert!(Instant::now() < deadline),
+        .unwrap();
+        if let Err(e) = headless::init(&mut state, SIZE, 1.0) {
+            let required = std::env::var("CUPERTINO_EGL_REQUIRED").as_deref() == Ok("1");
+            assert!(
+                !required,
+                "no EGL device and CUPERTINO_EGL_REQUIRED=1: {e:#}"
+            );
+            eprintln!(
+                "SKIPPED: no EGL device ({e:#}); set CUPERTINO_EGL_REQUIRED=1 to fail instead"
+            );
+            return None;
         }
-    };
-    client.join().unwrap();
-    values
+        Some(Server { state, event_loop })
+    }
+
+    fn advertised(&mut self, peer: Peer) -> Globals {
+        let display = &self.state.display_handle;
+        let stream = match peer {
+            Peer::Ordinary => connect_client(display, ClientState::default()),
+            Peer::Internal => connect_client(
+                display,
+                ClientState {
+                    internal: true,
+                    ..ClientState::default()
+                },
+            ),
+            Peer::Shell(roles) => shell_process_connection(display, roles),
+        }
+        .unwrap();
+        let (tx, rx) = mpsc::channel();
+        let client = thread::spawn(move || {
+            let connection = Connection::from_socket(stream).unwrap();
+            let (globals, _) = registry_queue_init::<RegistryClient>(&connection).unwrap();
+            let values: Globals = globals
+                .contents()
+                .clone_list()
+                .into_iter()
+                .map(|global| (global.interface, global.version))
+                .collect();
+            tx.send(values).unwrap();
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let values = loop {
+            headless::step(
+                &mut self.state,
+                &mut self.event_loop,
+                Duration::from_millis(5),
+            )
+            .unwrap();
+            match rx.try_recv() {
+                Ok(values) => break values,
+                Err(mpsc::TryRecvError::Disconnected) => panic!("registry client failed"),
+                Err(mpsc::TryRecvError::Empty) => assert!(Instant::now() < deadline),
+            }
+        };
+        client.join().unwrap();
+        values
+    }
 }
 
 #[test]
 fn every_connection_sees_the_registry_entries_of_its_scope() {
-    let mut event_loop = EventLoop::<Cupertino>::try_new().unwrap();
-    let display = Display::<Cupertino>::new().unwrap();
-    let mut server = Cupertino::new(
-        display,
-        event_loop.handle(),
-        event_loop.get_signal(),
-        Config::default(),
-        false,
-        &cupertino_assets::Assets::builtin(),
-    )
-    .unwrap();
-    if let Err(e) = headless::init(&mut server, (1000, 700), 1.0) {
-        eprintln!("skipping: no EGL device ({e:#})");
-        return;
-    }
-
     let registry = registry();
-    let mut cases: Vec<Vec<ShellRole>> = vec![vec![]];
-    cases.extend(ROLES.iter().map(|role| vec![*role]));
-    cases.push(ROLES.to_vec());
-    for roles in cases {
-        let observed = advertised(&mut server, &mut event_loop, &roles);
-        let problems = differences(&registered(&registry, &roles), &observed);
-        assert!(problems.is_empty(), "roles {roles:?}: {problems:#?}");
+    let table = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/accents.json");
+    for table in [None, Some(table)] {
+        let accent_table = table.is_some();
+        let mut config = Config::default();
+        config.keyboard.accent.table = table;
+        let Some(mut server) = Server::start(config) else {
+            return;
+        };
+        let mut peers = vec![Peer::Ordinary, Peer::Internal];
+        peers.extend(
+            ROLES
+                .iter()
+                .map(|role| Peer::Shell(std::slice::from_ref(role))),
+        );
+        peers.push(Peer::Shell(&ROLES));
+        for peer in peers {
+            let problems = differences(
+                &registered(&registry, peer, accent_table),
+                &server.advertised(peer),
+            );
+            assert!(
+                problems.is_empty(),
+                "{peer:?}, accent table {accent_table}: {problems:#?}"
+            );
+        }
     }
 }
 
 #[test]
 fn the_shell_global_is_registered_for_the_roles_of_a_shell_process() {
-    let ordinary = registered(&registry(), &[]);
-    let session = registered(&registry(), &[ShellRole::Session]);
+    let registry = registry();
+    let ordinary = registered(&registry, Peer::Ordinary, false);
+    let session = registered(&registry, Peer::Shell(&[ShellRole::Session]), false);
     assert!(!ordinary.contains_key("cupertino_shell_v1"));
     assert!(session.contains_key("cupertino_shell_v1"));
     assert!(!session.contains_key("ext_session_lock_manager_v1"));
@@ -199,13 +268,13 @@ fn a_global_without_an_entry_is_reported() {
         .filter(|entry| !entry.starts_with("name: wl_seat\n"))
         .collect::<Vec<_>>()
         .join("\n- ");
-    let observed = registered(&registry, &[]);
+    let observed = registered(&registry, Peer::Ordinary, false);
     assert_eq!(
-        differences(&registered(&without, &[]), &observed),
+        differences(&registered(&without, Peer::Ordinary, false), &observed),
         ["wl_seat v9 is advertised and has no registry entry"]
     );
     assert_eq!(
-        differences(&observed, &registered(&without, &[])),
+        differences(&observed, &registered(&without, Peer::Ordinary, false)),
         ["wl_seat has a registry entry and is not advertised"]
     );
 }

@@ -22,7 +22,10 @@ EXTRA = {
     "binary": {"shipped"},
 }
 OPTIONAL = {"note"}
-INTERFACE = re.compile(r'#\[zbus::interface\(name = "([^"]+)"')
+ATTRIBUTE = re.compile(r"^[ \t]*#\[\s*(?:cfg_attr\([^,]*,\s*)?(?:zbus\s*::\s*)?interface\b(.*?)\]", re.M | re.S)
+LITERAL_NAME = re.compile(r'\(\s*name\s*=\s*"([^"]+)"\s*[,)]')
+# Entries without a test file. It only goes down: give an entry a test_owner and lower this number.
+UNKNOWN_TEST_OWNERS = 32
 NAME = re.compile(r'"(org\.cupertino\.[A-Za-z0-9.]+)"')
 
 
@@ -93,19 +96,41 @@ def check_entries(entries, root):
     return problems
 
 
+def interfaces(text):
+    """(line, name) of every `interface` attribute in `text`; name is None when it is not a string literal."""
+    found = []
+    for match in ATTRIBUTE.finditer(text):
+        literal = LITERAL_NAME.match(match.group(1))
+        found.append((text.count("\n", 0, match.start()) + 1, literal.group(1) if literal else None))
+    return found
+
+
+def check_ratchet(entries):
+    unknown = sum(e.get("test_owner") == "unknown" for e in entries)
+    if unknown > UNKNOWN_TEST_OWNERS:
+        return [f"{REGISTRY}: {unknown} entries have test_owner unknown, at most {UNKNOWN_TEST_OWNERS} are allowed"]
+    if unknown < UNKNOWN_TEST_OWNERS:
+        return [f"ci/contracts.py: only {unknown} entries have test_owner unknown, lower UNKNOWN_TEST_OWNERS from "
+                f"{UNKNOWN_TEST_OWNERS}"]
+    return []
+
+
 def check_dbus(entries, root):
     problems, found = [], set()
     registered = {e["name"]: e for e in entries if e.get("kind") == "dbus-interface"}
     names = set(registered) | {e["bus_name"] for e in registered.values() if e.get("bus_name") != "none"}
     for path, text in sources(root):
+        for number, name in interfaces(text):
+            if name is None:
+                problems.append(f"{path}:{number}: unparsed interface attribute: the name must be a string literal")
+                continue
+            found.add(name)
+            entry = registered.get(name)
+            if not entry:
+                problems.append(f"{path}:{number}: D-Bus interface {name} has no entry in {REGISTRY}")
+            elif entry["source"] != f"{path}:{number}":
+                problems.append(f"{path}:{number}: {name} is registered at {entry['source']}")
         for number, line in enumerate(text.splitlines(), 1):
-            for name in INTERFACE.findall(line):
-                found.add(name)
-                entry = registered.get(name)
-                if not entry:
-                    problems.append(f"{path}:{number}: D-Bus interface {name} has no entry in {REGISTRY}")
-                elif entry["source"] != f"{path}:{number}":
-                    problems.append(f"{path}:{number}: {name} is registered at {entry['source']}")
             for name in NAME.findall(line):
                 name = re.sub(r"\.Error.*", "", name)
                 if name != "org.cupertino" and not any(name == n or name.startswith(n + ".") for n in names):
@@ -143,7 +168,7 @@ def check_binaries(entries, root, built=None, shipped=None):
 
 def check(root, built=None, shipped=None):
     entries = parse((root / REGISTRY).read_text())
-    return (check_entries(entries, root) + check_dbus(entries, root) + check_binaries(entries, root, built, shipped))
+    return (check_entries(entries, root) + check_dbus(entries, root) + check_ratchet(entries) + check_binaries(entries, root, built, shipped))
 
 
 def main(argv):

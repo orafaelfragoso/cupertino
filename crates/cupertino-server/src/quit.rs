@@ -9,7 +9,7 @@
 //! | Member | What it does |
 //! |---|---|
 //! | `QuitNextApplication -> (s app_id, u windows)` | activates the most recently used application that has toplevels and sends `close` to each of them (`xdg_toplevel.close`); `("", 0) when no application has a window |
-//! | `ForceQuitApplication(s app_id) -> u` | sends SIGKILL to the client processes of that application's toplevels; returns how many processes |
+//! | `ForceQuitApplication(s app_id) -> u` | sends SIGKILL to the client processes of that application's toplevels, by the rules of Force Quit; returns how many processes. Only a shell process the server started (the session agent) may call it; any other caller gets `AccessDenied` |
 //! | `ApplicationQuit(s app_id) signal | the last toplevel of the application being quit went away |
 //! | `SetAppearance(s appearance)` | `light` or `dark`: stored as `appearance` in `compositor.json`, then applied at once; `auto` is refused with `NotSupported` (no time-of-day or location backend), anything else with `InvalidArgs`; a failed store, or no settings directory to store in, changes nothing (`Failed`) |
 //! | `SetAccessibility(s key, s value)` | one key of `accessibility.conf` with a value as the file writes it (`reduce_motion` `on`, `color_filter` `tint 0.5`, ...): applied and stored like the key actions; an unknown key or bad value is `InvalidArgs` |
@@ -86,7 +86,8 @@ pub enum Refusal {
 /// A call that arrived on the bus, with where its answer goes.
 pub enum Call {
     QuitNext(async_channel::Sender<(String, u32)>),
-    ForceQuit(String, async_channel::Sender<u32>),
+    /// The application, the process id of the caller, and the answer (`None`: the caller may not force quit).
+    ForceQuit(String, Option<u32>, async_channel::Sender<Option<u32>>),
     SetAppearance(String, async_channel::Sender<Result<(), Refusal>>),
     SetAccessibility(String, String, async_channel::Sender<Result<(), Refusal>>),
 }
@@ -168,6 +169,23 @@ impl Cupertino {
             "log out: force quit"
         );
         processes.len() as u32
+    }
+
+    /// `ForceQuitApplication` from the bus: only for a shell process the server started (the session agent).
+    pub fn force_quit_application_for(
+        &mut self,
+        caller: Option<u32>,
+        identity: &str,
+    ) -> Option<u32> {
+        if !caller.is_some_and(|pid| self.supervisor.pids().contains(&pid)) {
+            tracing::warn!(
+                caller,
+                app = identity,
+                "log out: force quit refused to a caller that is not a shell process"
+            );
+            return None;
+        }
+        Some(self.force_quit_application(identity))
     }
 
     /// Announce the end of the application being quit once its last toplevel is gone; called from [`Cupertino::tick`].
@@ -276,8 +294,8 @@ impl Cupertino {
         // a caller that went away before the answer is not an error of ours
         match call {
             Call::QuitNext(reply) => drop(reply.try_send(self.quit_next_application())),
-            Call::ForceQuit(identity, reply) => {
-                let _ = reply.try_send(self.force_quit_application(&identity));
+            Call::ForceQuit(identity, caller, reply) => {
+                let _ = reply.try_send(self.force_quit_application_for(caller, &identity));
             }
             Call::SetAppearance(appearance, reply) => {
                 let _ = reply.try_send(self.set_session_appearance(&appearance));
@@ -326,8 +344,25 @@ impl Session1 {
         self.ask(Call::QuitNext).await
     }
 
-    async fn force_quit_application(&self, app_id: String) -> zbus::fdo::Result<u32> {
-        self.ask(|tx| Call::ForceQuit(app_id, tx)).await
+    async fn force_quit_application(
+        &self,
+        app_id: String,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> zbus::fdo::Result<u32> {
+        let caller = match header.sender() {
+            Some(sender) => zbus::fdo::DBusProxy::new(connection)
+                .await?
+                .get_connection_unix_process_id(sender.clone().into())
+                .await
+                .ok(),
+            None => None,
+        };
+        self.ask(|tx| Call::ForceQuit(app_id, caller, tx))
+            .await?
+            .ok_or_else(|| {
+                zbus::fdo::Error::AccessDenied("only the session agent may force quit".into())
+            })
     }
 
     async fn set_appearance(&self, appearance: String) -> zbus::fdo::Result<()> {

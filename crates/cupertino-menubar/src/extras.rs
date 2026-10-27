@@ -9,7 +9,7 @@
 //! * the battery and Bluetooth row layouts are not mapped: their rows here are approximate, as are every
 //!   icon name (freedesktop symbolic names) and the signal and charge bounds between icons.
 
-use crate::item::{ItemId, MenuItem, Shortcut, ShortcutModifier, Toggle};
+use crate::item::{plain_text, ItemId, MenuItem, Shortcut, ShortcutModifier, Toggle};
 
 /// Security name of a network that needs no passphrase in `org.cupertino.Network1.GetNetworks`.
 const OPEN: &str = "open";
@@ -195,17 +195,9 @@ impl Default for SessionCaps {
 /// The most characters of the person's name the Log Out entry shows.
 const MAX_NAME_CHARS: usize = 64;
 
-/// A person's name as menu text: without control characters or the characters that turn the text around (the name is
-/// the account's own, which its owner can set), at most [`MAX_NAME_CHARS`] characters.
+/// A person's name as menu text (the name is the account's own, which its owner can set).
 fn display_name(name: &str) -> String {
-    name.chars()
-        .filter(|c| {
-            !c.is_control() && !matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-        })
-        .take(MAX_NAME_CHARS)
-        .collect::<String>()
-        .trim()
-        .to_string()
+    plain_text(name, MAX_NAME_CHARS)
 }
 
 /// What the system menu is built from.

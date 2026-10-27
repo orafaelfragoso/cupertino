@@ -17,7 +17,7 @@ dev, one edge per kind), and prints one line per problem to stderr; target probl
 is a summary:
 
 ```
-50 crates, 157 internal dependencies, 0 pending, 7 target exceptions, 0 problems
+51 crates, 160 internal dependencies, 0 pending, 7 target exceptions, 0 problems
 ```
 
 It exits with failure on any problem, in both modes; lists it among the pre-finish checks.
@@ -56,7 +56,7 @@ without the `cupertino-` prefix):
 | `models` | `foundation`, `models` | displays, effects, input, keyboard, overview, stage, wm |
 | `platform` | `foundation`, `platform` | alsa, bluetooth, devices, evdev, netlink, peer, seat |
 | `protocol` | `foundation`, `protocol` | login-ipc, protocols |
-| `transport` | `foundation`, `platform`, `protocol`, `transport` | client |
+| `transport` | `foundation`, `platform`, `protocol`, `transport` | client, wayland-client |
 | `render` | `foundation`, `platform`, `render` | cursor, decorations, glass, icons |
 | `ui` | `foundation`, `protocol`, `transport`, `ui` | none yet |
 | `core` | `foundation`, `models`, `platform`, `protocol`, `render` | server |
@@ -69,7 +69,9 @@ Pure toolkit-facing models (filepicker, text-field, typeahead) are `foundation`,
 `keyboard` stays in `models`: it is compositor keyboard policy.
 
 `DENIED_PATHS` forbids any chain of dependencies from `ui` to `core`, `shell` or `services`; a denied path fails the
-check even when exceptions excuse its edges.
+check even when exceptions excuse its edges. `DENIED_CRATES` forbids any chain of normal dependencies, external crates
+included, from `cupertino-wayland-client` to `cupertino-protocols` or another compositor's protocol crates: the public
+transport speaks standard protocols only.
 
 `PENDING` (for `RULES`, empty) and `TARGET_EXCEPTIONS` (for `TARGET_RULES`) hold `Exception` values: `from`, `to`, the
 dependency `kind` it excuses, an owner `area` (compositor, rendering, design, apps, services, packaging), a `reason`
@@ -85,7 +87,7 @@ An entry that no longer matches an edge of its kind is an error, so both lists o
 
 Library: `Layer` (`ALL`, `name`, `from_name`), `Kind`, `allows(rules, from, to)`, `Edge`, `edges(layers, deps)`,
 `classify(crates, target)`, `Exception`, `Area`, `Tracking`, `check(rules, edges, exceptions, denied)`,
-`exception(exceptions, edge)`, `Problem`, `denied_paths(edges, denied)`, `dot(…)`.
+`exception(exceptions, edge)`, `Problem`, `denied_paths(edges, denied)`, `denied_crate_paths(deps, denied)`, `dot(…)`.
 
 ## Tests
 

@@ -4,8 +4,8 @@
 use cupertino_geometry::Rect;
 use cupertino_wayland_client::{
     Anchor, BufferFormat, Button, Capability, Connection, ConstraintAdjustment, Decorations, Error,
-    Event, Gravity, KeyboardEvent, PointerEvent, PopupPlacement, Scale, SurfaceId, Toplevel,
-    ToplevelConfig, WindowConfigure,
+    Event, Extension, Gravity, KeyboardEvent, PointerEvent, PopupPlacement, Scale, SurfaceId,
+    Toplevel, ToplevelConfig, WindowConfigure,
 };
 use std::collections::VecDeque;
 use std::io::Write;
@@ -1283,11 +1283,8 @@ mod layer {
     }
 
     impl Layers {
-        pub fn bind(conn: &Connection) -> Layers {
-            let shell = conn
-                .globals()
-                .bind(&conn.queue_handle(), 1..=4, ShellData)
-                .unwrap();
+        pub fn bind(conn: &mut Connection) -> Layers {
+            let shell = conn.bind_extension(1..=4, ShellData).unwrap();
             Layers {
                 shell,
                 inbox: Inbox::default(),
@@ -1306,7 +1303,6 @@ mod layer {
                 layer.set_size(size.0, size.1);
                 LayerRole(layer)
             })
-            .unwrap()
         }
 
         /// What the extension received since the last call.
@@ -1342,8 +1338,7 @@ mod layer {
                 height,
             } = event
             {
-                let size = (width > 0 && height > 0).then_some((width, height));
-                state.configure_external(data.surface, serial, size);
+                state.configure_external(data.surface, serial, (width, height));
                 data.inbox.lock().unwrap().push(Configured {
                     surface: data.surface,
                     serial,
@@ -1381,8 +1376,15 @@ fn an_extension_role_draws_through_the_lease_and_acknowledges_through_its_own_pr
         layer_shell: true,
         ..Globals::core()
     });
-    let layers = layer::Layers::bind(&conn);
+    let layers = layer::Layers::bind(&mut conn);
     let surface = layers.surface(&mut conn, (200, 100));
+    assert_eq!(
+        conn.capabilities().extensions(),
+        [Extension {
+            interface: "zwlr_layer_shell_v1",
+            version: 4
+        }]
+    );
     let (configures, _) = layer_configures(&mut conn, &layers, 1);
     assert_eq!(configures[0].size, (200, 100));
     {
@@ -1430,12 +1432,37 @@ fn an_extension_role_draws_through_the_lease_and_acknowledges_through_its_own_pr
 }
 
 #[test]
+fn a_zero_dimension_of_an_extension_configure_is_left_to_the_client() {
+    let (mut conn, _control, _seen) = connect(Globals {
+        layer_shell: true,
+        ..Globals::core()
+    });
+    let layers = layer::Layers::bind(&mut conn);
+    let surface = layers.surface(&mut conn, (0, 30));
+    layer_configures(&mut conn, &layers, 1);
+    let lease = conn
+        .lease(surface, (640, 1), BufferFormat::Argb8888)
+        .unwrap();
+    assert_eq!(lease.logical_size(), (640, 30));
+}
+
+#[test]
+fn an_extension_the_compositor_does_not_offer_binds_nothing_and_is_not_listed() {
+    let (mut conn, _control, _seen) = connect(Globals::core());
+    let shell: Option<
+        wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1,
+    > = conn.bind_extension(1..=4, layer::ShellData);
+    assert!(shell.is_none());
+    assert_eq!(conn.capabilities().extensions(), []);
+}
+
+#[test]
 fn a_burst_of_extension_events_ends_one_wait_not_one_per_event() {
     let (mut conn, control, _seen) = connect(Globals {
         layer_shell: true,
         ..Globals::core()
     });
-    let layers = layer::Layers::bind(&conn);
+    let layers = layer::Layers::bind(&mut conn);
     let surface = layers.surface(&mut conn, (200, 100));
     layer_configures(&mut conn, &layers, 1);
     control.send(Control::LayerConfigures(100)).unwrap();

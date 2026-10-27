@@ -79,7 +79,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | Super+Up | enclosing folder, with the folder just left selected |
 | Super+1 / Super+2 or the view popup | icon / list view (the popup lists Columns and Gallery disabled) |
 | Tags popup, Action (…) popup | toggle a tag colour on the selection; the selection's context menu, or the folder's without a selection |
-| click the search field and type | show the folder's items whose names contain the text, flat; Backspace edits, Escape clears, Return / Tab keep it; another folder ends it |
+| click the search field and type | show the folder's items whose names contain the text, flat; the field is a shared text field (`cupertino-text-field`: caret with blink, word and line moves, Shift selection, click, double and triple click, drag, copy, cut and paste, undo; at most 1 KiB); Escape clears, Return / Tab keep it; another folder ends it |
 | Right / Left in the list, a click on a triangle | expand / collapse the focused folder; Left inside an expanded folder moves to it |
 | Alt+Super+P / Super+/ | show or hide the path bar / the status bar |
 | arrows, Home / End, Tab, typing; Shift / Ctrl click; Super+A; a list column header | selection, type-select, select all, sort (again: reverse) |
@@ -162,8 +162,7 @@ Values live in `metrics.rs`.
 * The toolbar has no share, preview or path controls and no sidebar toggle: their sizes are as designed but nothing
   in the application stands behind them; items that do not fit are dropped, not moved into an overflow menu. Group By waits
   for grouping. The Tags popup is a menu of the seven colours, not the design's tag editor. The search filters the
-  folder shown by name (the design searches the computer by default); its field has no caret movement, selection or
-  clear button. The toolbar's item order, the title's position and
+  folder shown by name (the design searches the computer by default); its field has no clear button. The toolbar's item order, the title's position and
   type, the strip's separator and the sidebar's top inset are approximate. The toolbar's 8 pt side insets are the leading and
   trailing fields of the unified metrics record; fields 4 to 12 of the record (item viewer layout) are not
   separated yet.

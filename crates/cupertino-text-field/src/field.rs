@@ -184,12 +184,19 @@ impl TextField {
     /// Scroll so that the caret at `caret_x` (unscrolled points from the text's start) is inside a field `width`
     /// points wide, and no further than the text's width `text_width` needs.
     pub fn follow_caret(&mut self, caret_x: f64, text_width: f64, width: f64) {
-        if caret_x < self.scroll {
-            self.scroll = caret_x;
+        self.scroll = self.scroll_for(caret_x, text_width, width);
+    }
+
+    /// The scroll [`TextField::follow_caret`] would set, without setting it (for drawing before the field is updated).
+    pub fn scroll_for(&self, caret_x: f64, text_width: f64, width: f64) -> f64 {
+        let scroll = if caret_x < self.scroll {
+            caret_x
         } else if caret_x > self.scroll + width {
-            self.scroll = caret_x - width;
-        }
-        self.scroll = self.scroll.min((text_width - width).max(0.0)).max(0.0);
+            caret_x - width
+        } else {
+            self.scroll
+        };
+        scroll.min((text_width - width).max(0.0)).max(0.0)
     }
 
     /// Whether the caret shows at `now`: never while text is selected, else in the blink's on phase.

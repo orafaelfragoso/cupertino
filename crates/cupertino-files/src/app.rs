@@ -42,12 +42,13 @@ use cupertino_files::selection::Modifiers;
 use cupertino_files::tags::{self, TagColor};
 use cupertino_files::trash::Trash;
 use cupertino_files::window::{
-    metrics, status_text, Bars, Frame, Hit, Move, ToolbarItem, ViewMode, WindowPainter, WindowState,
+    metrics, status_text, Bars, Frame, Hit, Move, ToolbarItem, ViewMode, WindowPainter,
+    WindowState, SEARCH_MAX_LEN,
 };
 use cupertino_files::{Entry, Kind, Point, Size, SortSpec};
 use cupertino_geometry::Rect as PopupRect;
 use cupertino_icons::document::FileIcons;
-use cupertino_text_field::{KeyInput, Keymap, Response};
+use cupertino_text_field::{KeyInput, Keymap, Response, TextField};
 use cupertino_theme::{Appearance, Theme, WindowCornerSize};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -89,9 +90,9 @@ struct App {
     /// Space left on the folder's file system for the status bar, read on entering the folder and when its listing
     /// changes.
     available: Option<u64>,
-    /// The toolbar search as typed (the browser shows the folder's items that match it), and whether the field has the
+    /// The toolbar search field (the browser shows the folder's items that match its text), and whether it has the
     /// keyboard.
-    search: String,
+    search: TextField,
     search_focused: bool,
     /// The frame drawn last: clicks and arrow keys are resolved against it.
     frame: Option<Frame>,
@@ -249,7 +250,7 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
         mode: ViewMode::Icons,
         bars: Bars::HIDDEN,
         available: None,
-        search: String::new(),
+        search: TextField::with_max_len(SEARCH_MAX_LEN),
         search_focused: false,
         frame: None,
         scroll: 0.0,
@@ -403,6 +404,10 @@ impl App {
             self.menu.as_ref().and_then(|open| open.menu.deadline()),
             self.rename.deadline(),
             self.marquee.as_ref().map(|m| m.next_scroll),
+            self.search_focused
+                .then(|| self.search.next_blink(Instant::now()))
+                .flatten()
+                .map(|d| self.now() + d.as_secs_f64()),
             self.edit
                 .as_ref()
                 .and_then(|(e, _)| e.field().next_blink(Instant::now()))
@@ -416,7 +421,7 @@ impl App {
 
     /// Run the timers that are due.
     fn tick(&mut self) -> Result<()> {
-        if self.edit_caret() != self.caret_drawn {
+        if self.caret_shown() != self.caret_drawn {
             self.client.request_redraw(self.window)?;
         }
         let now = self.now();
@@ -436,7 +441,8 @@ impl App {
         let (width, height) = self.client.size(self.window)?;
         let active = self.client.toplevel_activated(self.window)?;
         let edit_caret = active && self.edit_caret();
-        self.caret_drawn = edit_caret;
+        let search_caret = active && self.search_caret();
+        self.caret_drawn = edit_caret || search_caret;
         let reveal = self
             .browser
             .take_focus_moved()
@@ -476,8 +482,9 @@ impl App {
             places,
             mode: *mode,
             active,
-            search: search.as_str(),
+            search,
             search_focused: *search_focused,
+            search_caret,
             title: &title,
             now: SystemTime::now(),
             edit: edit.as_ref().map(|(e, _)| e),
@@ -522,6 +529,7 @@ impl App {
         let frame = drawn.expect("draw runs the paint closure");
         self.scroll = frame.scroll;
         self.frame = Some(frame);
+        self.painter.follow_search_caret(&mut self.search);
         // a scroll or a resize moves the content under a band that the pointer is not moving
         if self.marquee_apply() {
             self.client.request_redraw(self.window)?;
@@ -599,8 +607,12 @@ impl App {
             self.last_press = None;
         }
         // a press anywhere else takes the keyboard from the search field, which keeps its text
-        if hit != Hit::Toolbar(ToolbarItem::Search) && self.search_focused {
+        if hit == Hit::Toolbar(ToolbarItem::Search) {
+            return self.search_press(at);
+        }
+        if self.search_focused {
             self.search_focused = false;
+            self.search.blur();
             self.client.request_redraw(self.window)?;
         }
         match hit {
@@ -844,7 +856,7 @@ impl App {
         self.client
             .set_title(self.window, &title(self.browser.dir(), &self.places))?;
         // another folder ends the search (the browser shows it whole)
-        self.search.clear();
+        self.search.set_text("");
         self.search_focused = false;
         self.update_available();
         Ok(self.client.request_redraw(self.window)?)
@@ -1050,34 +1062,60 @@ impl App {
                 self.open_menu(items, below)
             }
             ToolbarItem::Search => {
-                self.search_focused = true;
-                Ok(self.client.request_redraw(self.window)?)
+                unreachable!("a press on the search field goes to `search_press`")
             }
             ToolbarItem::GroupBy => unreachable!("a disabled item is not hit"),
         }
     }
 
-    /// A key while the search field has the keyboard: text edits the query and the listing follows it; Escape clears it
-    /// and gives the keyboard back, Return and Tab give it back keeping the query.
+    /// A key while the search field has the keyboard: the text field edits the query and the listing follows it;
+    /// Escape clears it and gives the keyboard back, Return and Tab give it back keeping the query.
     fn search_key(&mut self, code: u32, mods: KeyModifiers, character: Option<char>) -> Result<()> {
+        let before = self.search.text().to_string();
         match code {
             key::ESCAPE => {
-                self.search.clear();
+                self.search.set_text("");
                 self.search_focused = false;
             }
-            key::ENTER | key::KEYPAD_ENTER | key::TAB => self.search_focused = false,
-            key::BACKSPACE => {
-                self.search.pop();
+            key::ENTER | key::KEYPAD_ENTER | key::TAB => {
+                self.search.blur();
+                self.search_focused = false;
             }
-            _ if mods.logo || mods.ctrl || mods.alt => return Ok(()),
-            _ => match character.filter(|c| !c.is_control()) {
-                Some(c) => self.search.push(c),
-                None => return Ok(()),
-            },
+            _ => {
+                let input =
+                    KeyInput::new(code, mods.shift, mods.ctrl, mods.alt, mods.logo, character);
+                match self.search.key(&mut self.keymap, input, Instant::now()) {
+                    Response::Ignored => return Ok(()),
+                    Response::Moved | Response::Edited => {}
+                    Response::Copy(text) | Response::Cut(text) => {
+                        if let Err(e) = self.client.set_clipboard_text(text) {
+                            eprintln!("cupertino-files: copy: {e}");
+                        }
+                    }
+                    Response::Paste => match self.client.clipboard_text() {
+                        Ok(Some(text)) => self.search.paste(&text),
+                        Ok(None) => {}
+                        Err(e) => eprintln!("cupertino-files: paste: {e}"),
+                    },
+                }
+            }
         }
-        self.browser.set_filter(&self.search);
-        self.scroll = 0.0;
-        self.update_available();
+        if self.search.text() != before {
+            self.browser.set_filter(self.search.text());
+            self.scroll = 0.0;
+            self.update_available();
+        }
+        Ok(self.client.request_redraw(self.window)?)
+    }
+
+    /// A press on the search field gives it the keyboard and places the caret there (Shift extends; a double press
+    /// selects a word, a triple press the whole query).
+    fn search_press(&mut self, at: Point) -> Result<()> {
+        self.search_focused = true;
+        if let Some(index) = self.painter.search_index(&self.search, at) {
+            let extend = self.client.modifiers().shift;
+            self.search.press(index, extend, Instant::now());
+        }
         Ok(self.client.request_redraw(self.window)?)
     }
 
@@ -1566,6 +1604,17 @@ impl App {
         Ok(())
     }
 
+    /// Whether the search field's caret shows now: it has the keyboard (no name is being edited), nothing is selected
+    /// and the blink is on.
+    fn search_caret(&self) -> bool {
+        self.search_focused && self.edit.is_none() && self.search.caret_visible(Instant::now())
+    }
+
+    /// Whether a caret shows now, the name editor's or the search field's.
+    fn caret_shown(&self) -> bool {
+        self.edit_caret() || self.search_caret()
+    }
+
     /// Whether the name editor's caret shows now (nothing selected, the blink on).
     fn edit_caret(&self) -> bool {
         self.edit
@@ -1576,6 +1625,13 @@ impl App {
     /// The pointer moved with the left button down on an item: past the start distance the selection is dragged, and
     /// the folder or place under the pointer is the target.
     fn drag_motion(&mut self, at: Point) -> Result<()> {
+        if self.search.is_dragging() {
+            if let Some(index) = self.painter.search_index(&self.search, at) {
+                self.search.drag_to(index);
+                self.client.request_redraw(self.window)?;
+            }
+            return Ok(());
+        }
         if let Some((edit, _)) = self.edit.as_mut().filter(|(e, _)| e.field().is_dragging()) {
             if let Some(index) = self.painter.editor_index(edit.field(), at) {
                 edit.field_mut().drag_to(index);
@@ -1683,6 +1739,7 @@ impl App {
 
     /// The left button went up: end a drag by dropping on its target, else finish the click.
     fn release(&mut self) -> Result<()> {
+        self.search.release();
         if let Some((edit, _)) = self.edit.as_mut() {
             edit.field_mut().release();
         }

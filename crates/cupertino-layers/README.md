@@ -54,7 +54,7 @@ without the `cupertino-` prefix):
 |---|---|---|
 | `foundation` | `foundation` | animation, apps, assets, defaults, filepicker, geometry, text-field, theme, thumbnails, typeahead, xkbcommon |
 | `models` | `foundation`, `models` | displays, effects, input, keyboard, overview, stage, wm |
-| `platform` | `foundation`, `platform` | alsa, bluetooth, devices, evdev, netlink, seat |
+| `platform` | `foundation`, `platform` | alsa, bluetooth, devices, evdev, netlink, peer, seat |
 | `protocol` | `foundation`, `protocol` | login-ipc, protocols |
 | `transport` | `foundation`, `platform`, `protocol`, `transport` | client |
 | `render` | `foundation`, `platform`, `render` | cursor, decorations, glass, icons |

@@ -274,6 +274,9 @@ impl Settings {
         paths: &Paths,
         folder: &std::path::Path,
     ) -> Result<(), String> {
+        if !folder.is_absolute() {
+            return Err("That folder is not an absolute path.".to_string());
+        }
         let folder = folder.to_string_lossy().into_owned();
         self.rewrite_compositor(paths, |c| {
             let folders = c.wallpaper_folders.get_or_insert_with(Vec::new);
@@ -290,6 +293,9 @@ impl Settings {
         paths: &Paths,
         picture: &std::path::Path,
     ) -> Result<(), String> {
+        if !picture.is_absolute() {
+            return Err("That picture is not an absolute path.".to_string());
+        }
         let picture = picture.to_string_lossy().into_owned();
         self.rewrite_compositor(paths, |c| {
             c.wallpaper = Some(picture);

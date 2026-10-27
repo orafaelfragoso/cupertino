@@ -568,3 +568,18 @@ fn the_credits_file_names_the_title_and_photographer_of_each_picture() {
         Some("Ryan Pohanic")
     );
 }
+
+#[test]
+fn only_the_first_megabyte_of_a_credits_file_is_read() {
+    let pack_dir = pack(MANIFEST, &["wallpapers/a.jpg", "wallpapers/z.jpg"]);
+    let mut text = String::from("wallpapers/a.jpg\n  \"First\" by Early (x)\n");
+    text.push_str(&" ".repeat(2 << 20));
+    text.push_str("\nwallpapers/z.jpg\n  \"Last\" by Late (y)\n");
+    fs::write(pack_dir.path().join("wallpapers/credits.txt"), text).unwrap();
+    let files = Assets::from_dirs(&[pack_dir.path().to_path_buf()]).wallpaper_files();
+    assert_eq!(
+        files[0].credit.as_ref().map(|c| c.author.as_str()),
+        Some("Early")
+    );
+    assert_eq!(files[1].credit, None, "a credit past the cap is not read");
+}

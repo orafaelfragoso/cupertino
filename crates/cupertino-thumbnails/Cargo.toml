@@ -9,11 +9,11 @@ description = "The freedesktop.org thumbnail cache: look up or create the PNG th
 layer = "foundation"
 
 [dependencies]
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+rustix = { version = "1", features = ["fs"] }
 png = "0.17"
 percent-encoding = "2"
 md5 = "0.7"
-mime_guess = "2"
 
 [dev-dependencies]
 tempfile = "3"

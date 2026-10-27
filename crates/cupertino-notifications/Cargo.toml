@@ -10,7 +10,7 @@ layer = "shell"
 
 [features]
 default = ["dbus", "material"]
-dbus = ["dep:zbus", "dep:libc"]
+dbus = ["dep:zbus", "dep:libc", "dep:cupertino-peer"]
 material = ["dep:cupertino-glass", "dep:image"]
 # the `cupertino-notifications` process: banners and the notification centre list as a client of the server
 app = [
@@ -28,6 +28,7 @@ cupertino-theme = { path = "../cupertino-theme" }
 cupertino-animation = { path = "../cupertino-animation" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-decorations = { path = "../cupertino-decorations" }
+cupertino-peer = { path = "../cupertino-peer", optional = true }
 cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
 cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
@@ -40,6 +41,8 @@ zbus = { version = "5", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+futures-lite = "2"
+zbus = { version = "5", features = ["p2p"] }
 
 [[bin]]
 name = "cupertino-notifications"

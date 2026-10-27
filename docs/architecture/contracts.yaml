@@ -620,7 +620,7 @@
   owner_area: apps
   scope: public
   test_owner: crates/cupertino-notifications/tests/dbus_integration.rs
-  source: crates/cupertino-notifications/src/dbus.rs:180
+  source: crates/cupertino-notifications/src/dbus.rs:181
   note: any application may notify
 - name: org.cupertino.NotificationCenter1
   kind: dbus-interface
@@ -631,7 +631,8 @@
   owner_area: apps
   scope: public
   test_owner: crates/cupertino-notifications/tests/dbus_integration.rs
-  source: crates/cupertino-notifications/src/dbus.rs:274
+  source: crates/cupertino-notifications/src/dbus.rs:294
+  note: every method refuses sandboxed and unnamed callers
 - name: org.kde.StatusNotifierWatcher
   kind: dbus-interface
   version: n/a

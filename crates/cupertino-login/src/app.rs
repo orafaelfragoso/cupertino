@@ -13,6 +13,7 @@ use cupertino_client::{
 };
 use cupertino_login::auth::{self, Authenticator};
 use cupertino_login::autostart;
+use cupertino_login::capabilities::{Answer, Capabilities, Inputs};
 use cupertino_login::control::{self, Request};
 use cupertino_login::hint::FailedAttempts;
 use cupertino_login::interrupt::{self, Choice};
@@ -25,6 +26,7 @@ use cupertino_login::model::{
 };
 use cupertino_login::panel::{Action, Decision, Frames, Kind, Panel};
 use cupertino_login::power_button::{Effect, PowerButton};
+use cupertino_login::probe;
 use cupertino_login::render::{PanelView, Renderer};
 use cupertino_login::user::User;
 use cupertino_login::{session, upower};
@@ -45,6 +47,8 @@ enum Message {
     PowerKey(bool),
     /// `SwitchToLoginWindow` on the control interface: lock, then hand the console to the login screen.
     SwitchToLoginWindow,
+    /// `Sleep` on the control interface: sleep without a panel.
+    Sleep,
     /// The session manager's `Unlock`: the person at the login screen proved this session's password.
     Unlock,
     /// The session manager's bus name has an owner again: it restarted and does not know this session's agent.
@@ -99,6 +103,8 @@ struct InterruptState {
 const PANEL_NAMESPACE: &str = "login-panel";
 
 struct App {
+    /// Asks the probe thread to read logind and the session manager again.
+    refresh: mpsc::Sender<()>,
     client: Client,
     user: User,
     renderer: Renderer,
@@ -151,14 +157,29 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     let notifier = Notifier::new(sender, client.waker());
 
     let request_notifier = notifier.clone();
-    let control = control::serve(zbus::connection::Builder::session()?, move |request| {
-        request_notifier.send(match request {
-            Request::Lock { explicit } => Message::Lock { explicit },
-            Request::Panel(kind) => Message::Panel(kind),
-            Request::PowerKey { pressed } => Message::PowerKey(pressed),
-            Request::SwitchToLoginWindow => Message::SwitchToLoginWindow,
-        })
-    })
+    // `RefreshCapabilities` goes to the probe thread, not through the loop: the menu's question must not wait for it
+    let (refresh, refresh_requests) = mpsc::channel::<()>();
+    let refresh_from_bus = refresh.clone();
+    let control = control::serve(
+        zbus::connection::Builder::session()?,
+        user.display.clone(),
+        Capabilities::default(),
+        move |request| {
+            if request == Request::RefreshCapabilities {
+                // the probe thread is gone only while the process ends
+                let _ = refresh_from_bus.send(());
+                return;
+            }
+            request_notifier.send(match request {
+                Request::Lock { explicit } => Message::Lock { explicit },
+                Request::Panel(kind) => Message::Panel(kind),
+                Request::PowerKey { pressed } => Message::PowerKey(pressed),
+                Request::SwitchToLoginWindow => Message::SwitchToLoginWindow,
+                Request::Sleep => Message::Sleep,
+                Request::RefreshCapabilities => unreachable!("handled above"),
+            })
+        },
+    )
     .map_err(|e| match e {
         zbus::Error::NameTaken => "another lock screen owns org.cupertino.Login1".into(),
         e => Box::new(e) as Box<dyn Error>,
@@ -218,7 +239,9 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
         Ok(()) => eprintln!("cupertino-login: session announced to the session manager"),
         Err(e) => eprintln!("cupertino-login: {e}"),
     }
+    spawn_capability_probe(refresh_requests, &logind, &manager, &control)?;
     let mut app = App {
+        refresh,
         client,
         user,
         renderer,
@@ -241,6 +264,7 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
         low_battery: LowBattery::new(),
         session_bus,
     };
+    app.refresh_capabilities();
     loop {
         let timeout = app.timeout()?;
         for event in app.client.wait(timeout)? {
@@ -304,7 +328,49 @@ fn start_login_item(item: &autostart::Item) {
     }
 }
 
+/// Start the thread that keeps `Capabilities` current ([`probe`]).
+fn spawn_capability_probe(
+    requests: mpsc::Receiver<()>,
+    logind: &Logind,
+    manager: &LoginManager,
+    control: &control::Service,
+) -> Result<()> {
+    let (logind, manager, control) = (logind.clone(), manager.clone(), control.clone());
+    std::thread::Builder::new()
+        .name("login-capabilities".into())
+        .spawn(move || {
+            let answer = |action: Power| match logind.can(action) {
+                Ok(answer) => answer,
+                Err(e) => {
+                    eprintln!("cupertino-login: {e}");
+                    Answer::NotAvailable
+                }
+            };
+            probe::run(
+                requests,
+                || Inputs {
+                    can_suspend: answer(Power::Sleep),
+                    can_reboot: answer(Power::Restart),
+                    can_power_off: answer(Power::ShutDown),
+                    session_manager: manager.is_present(),
+                },
+                |capabilities| {
+                    if let Err(e) = control.set_capabilities(capabilities) {
+                        eprintln!("cupertino-login: publishing the capabilities: {e}");
+                    }
+                },
+            )
+        })?;
+    Ok(())
+}
+
 impl App {
+    /// Ask for a fresh reading of the menu's capabilities; the probe thread answers on its own.
+    fn refresh_capabilities(&self) {
+        // the thread is gone only while the process ends
+        let _ = self.refresh.send(());
+    }
+
     fn now(&self) -> f64 {
         self.start.elapsed().as_secs_f64()
     }
@@ -475,6 +541,7 @@ impl App {
                     self.switch_pending = true;
                     self.request_lock(now, false)?;
                 }
+                Message::Sleep => self.request_power(Power::Sleep)?,
                 Message::Unlock => match &mut self.lock {
                     Some(lock) => {
                         eprintln!("cupertino-login: unlocked by a fast user switch");
@@ -482,12 +549,15 @@ impl App {
                     }
                     None => eprintln!("cupertino-login: unlock ignored: the session is not locked"),
                 },
-                Message::ManagerRestarted => match self.manager.session_ready() {
-                    Ok(()) => eprintln!(
-                        "cupertino-login: session announced again to the restarted session manager"
-                    ),
-                    Err(e) => eprintln!("cupertino-login: {e}"),
-                },
+                Message::ManagerRestarted => {
+                    self.refresh_capabilities();
+                    match self.manager.session_ready() {
+                        Ok(()) => eprintln!(
+                            "cupertino-login: session announced again to the restarted session manager"
+                        ),
+                        Err(e) => eprintln!("cupertino-login: {e}"),
+                    }
+                }
                 Message::Auth(event) => self.handle_auth(now, event)?,
                 Message::Failed(reason) => return Err(reason.into()),
                 Message::Battery(report) => self.battery(report),
@@ -792,6 +862,23 @@ impl App {
         match self.manager.request_power(action) {
             Ok(()) => {}
             Err(e) if e.refusal().is_some() => {
+                eprintln!("cupertino-login: {action:?} refused: {e}");
+                self.logging_out = false;
+            }
+            // a session another display manager started: logind does it
+            Err(e) if e.manager_absent() => self.power_through_logind(action)?,
+            Err(e) => return Err(e.into()),
+        }
+        Ok(())
+    }
+
+    /// Restart, shut down or sleep through logind, for a session that has no session manager. A refusal (another user's
+    /// session is open, a block inhibitor, the person may not) is reported and the session goes on.
+    fn power_through_logind(&mut self, action: Power) -> Result<()> {
+        eprintln!("cupertino-login: no session manager: asking logind to {action:?}");
+        match self.logind.power(action) {
+            Ok(()) => {}
+            Err(e) if e.is_refusal() => {
                 eprintln!("cupertino-login: {action:?} refused: {e}");
                 self.logging_out = false;
             }

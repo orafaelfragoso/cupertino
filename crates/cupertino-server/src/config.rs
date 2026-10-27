@@ -170,6 +170,7 @@ pub struct Config {
     /// Program and leading arguments of the screenshot process (`screenshot` in the JSON file), started by the
     /// screenshot shortcuts with the mode appended ([`crate::capture::launch`]); never empty.
     pub screenshot_command: Vec<String>,
+    pub wallpaper: WallpaperSettings,
     /// Cascade step of new windows without a position, right and down (points). 29 pt
     /// (the design's horizontal and vertical cascade amounts).
     pub cascade_step: f64,
@@ -181,6 +182,27 @@ pub struct Config {
     pub pointer: PointerSettings,
     /// Dim, display sleep, the password delay and system sleep (`power.conf`).
     pub power: cupertino_defaults::power::PowerSettings,
+}
+
+/// The wallpaper images of the user (`wallpaper`, `wallpaper_dark` in the JSON file); a pack's wallpaper and then the
+/// procedural one stand in for what is not set or cannot be read.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WallpaperSettings {
+    pub light: Option<std::path::PathBuf>,
+    /// The dark appearance's; `light` serves both when this is not set.
+    pub dark: Option<std::path::PathBuf>,
+}
+
+impl WallpaperSettings {
+    /// The user's image for an appearance, if one is set.
+    pub fn for_appearance(&self, dark: bool) -> Option<&std::path::Path> {
+        let chosen = if dark {
+            self.dark.as_ref().or(self.light.as_ref())
+        } else {
+            self.light.as_ref()
+        };
+        chosen.map(std::path::PathBuf::as_path)
+    }
 }
 
 /// Pointer settings.
@@ -279,6 +301,7 @@ impl Default for Config {
             keyboard: crate::kbd::KeyboardSettings::default(),
             pointer: PointerSettings::default(),
             power: cupertino_defaults::power::PowerSettings::default(),
+            wallpaper: WallpaperSettings::default(),
         }
     }
 }
@@ -481,6 +504,12 @@ impl Config {
             self.hot_corners.dwell = d;
         }
         self.pointer.apply_file(f);
+        if let Some(path) = &f.wallpaper {
+            self.wallpaper.light = Some(path.into());
+        }
+        if let Some(path) = &f.wallpaper_dark {
+            self.wallpaper.dark = Some(path.into());
+        }
         if let Some(procs) = &f.shell {
             self.shell_processes = procs
                 .iter()

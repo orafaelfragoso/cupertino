@@ -20,6 +20,7 @@ pub mod scene;
 pub mod screenshot;
 pub mod shader_rect;
 pub mod ui;
+pub mod wallpaper;
 
 pub use clip::{ClipElement, ClipShape};
 pub use material::{GpuRecipe, MaterialElement, MaterialGl, MaterialStage, SharedMaterial};

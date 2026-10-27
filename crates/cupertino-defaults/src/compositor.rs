@@ -18,6 +18,7 @@
 //! | `mouse_dpi` | object: mouse key ([`mouse_dpi_key`]) → resolution in dots per inch, 50 to 32000 |
 //! | `cursor_size` | cursor scale |
 //! | `cursor_fill`, `cursor_outline` | `#rrggbb` or `#rrggbbaa` |
+//! | `wallpaper`, `wallpaper_dark` | absolute path of a PNG or JPEG: the wallpaper, and the one of the dark appearance (else `wallpaper` is used) |
 //! | `shell` | list of `{"name": …, "command": [program, args…]}`, commands not empty |
 //! | `screenshot` | the screenshot command, not empty |
 
@@ -109,6 +110,9 @@ pub struct CompositorSettings {
     pub cursor_fill: Option<[u8; 4]>,
     pub cursor_outline: Option<[u8; 4]>,
     pub shake_to_locate: Option<bool>,
+    /// Absolute path of the wallpaper image; the dark appearance uses `wallpaper_dark` when it is set.
+    pub wallpaper: Option<String>,
+    pub wallpaper_dark: Option<String>,
     pub shell: Option<Vec<ShellEntry>>,
     pub screenshot: Option<Vec<String>>,
 }
@@ -208,6 +212,16 @@ macro_rules! json_key {
             keep: |s, g| s.$field = g.$field.clone(),
         }
     };
+}
+
+/// An absolute path as text.
+fn absolute_path(v: &Value) -> Result<String, String> {
+    let text = string(v)?;
+    if Path::new(text).is_absolute() {
+        Ok(text.to_string())
+    } else {
+        Err(format!("{text:?} is not an absolute path"))
+    }
 }
 
 fn number_value(n: &f64) -> Value {
@@ -319,6 +333,12 @@ const KEYS: &[JsonKey] = &[
         |c: &[u8; 4]| Value::String(rgba_text(*c))
     ),
     json_key!(shake_to_locate, boolean, bool_value),
+    json_key!(wallpaper, absolute_path, |s: &String| Value::String(
+        s.clone()
+    )),
+    json_key!(wallpaper_dark, absolute_path, |s: &String| Value::String(
+        s.clone()
+    )),
     json_key!(shell, shell_entries, |list: &Vec<ShellEntry>| Value::Array(
         list.iter()
             .map(|e| {
@@ -461,6 +481,18 @@ impl CompositorSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_wallpapers_are_absolute_paths() {
+        let (read, problems) = CompositorSettings::parse(
+            r#"{"wallpaper": "/home/u/day.png", "wallpaper_dark": "night.png"}"#,
+            None,
+        );
+        assert_eq!(read.wallpaper.as_deref(), Some("/home/u/day.png"));
+        assert_eq!(read.wallpaper_dark, None);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert_eq!(problems[0].key, "wallpaper_dark");
+    }
 
     #[test]
     fn the_resolution_of_each_mouse_is_stored_by_its_key() {

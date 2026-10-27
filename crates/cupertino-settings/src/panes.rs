@@ -291,9 +291,13 @@ fn picture_section(
             tiles: files
                 .iter()
                 .map(|f| Tile {
-                    title: picture_title(&f.name),
+                    title: f
+                        .credit
+                        .as_ref()
+                        .map_or_else(|| picture_title(&f.name), |c| c.title.clone()),
                     image: f.light.clone(),
                     pair: f.dark.is_some(),
+                    credit: f.credit.as_ref().map(|c| c.author.clone()),
                 })
                 .collect(),
             selected,
@@ -2652,6 +2656,7 @@ mod tests {
             name: name.to_string(),
             light: format!("/pics/{name}.jpg").into(),
             dark: dark.then(|| format!("/pics/{name}-dark.jpg").into()),
+            credit: None,
         }
     }
 
@@ -2771,5 +2776,29 @@ mod tests {
             &live
         )
         .is_empty());
+    }
+
+    #[test]
+    fn a_credited_picture_shows_its_title_and_photographer_and_the_grid_makes_room() {
+        let mut live = wallpaper_live();
+        live.pictures.bundled[0].credit = Some(cupertino_assets::Credit {
+            title: "Trees covering snow".into(),
+            author: "Ryan Pohanic".into(),
+        });
+        let sections = sections(PaneId::Wallpaper, &unset(), LIGHT, &live);
+        let Control::Tiles { tiles, .. } = &sections[0].rows[0].control else {
+            panic!("a grid");
+        };
+        assert_eq!(tiles[0].title, "Trees covering snow");
+        assert_eq!(tiles[0].credit.as_deref(), Some("Ryan Pohanic"));
+        assert_eq!(
+            tiles[1].title, "Sunrise bay",
+            "an uncredited picture is named by its file"
+        );
+        assert_eq!(tiles[1].credit, None);
+        assert!(
+            crate::controls::tile_caption_height(tiles)
+                > crate::controls::tile_caption_height(&tiles[1..])
+        );
     }
 }

@@ -422,9 +422,13 @@ fn isolated(test: &str, shell: bool, work: impl FnOnce(&str)) {
             child.env(key, value);
         }
     }
+    let output = child.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    print!("{stdout}");
+    assert!(output.status.success(), "isolated golden worker failed");
     assert!(
-        child.status().unwrap().success(),
-        "isolated golden worker failed"
+        stdout.lines().any(|l| l == format!("test {test} ... ok")),
+        "the worker did not run {test}: its name is passed to isolated() and must match the test function"
     );
 }
 

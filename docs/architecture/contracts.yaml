@@ -18,6 +18,8 @@
 #   version_without_render_node
 #               globals only, optional: the version when the EGL display has no render node (the server then builds
 #               the global without default feedback, crates/cupertino-server/src/backend/mod.rs:61-73)
+#   visible_to  globals only, optional: `unsandboxed` when a client connected through a security context
+#               (wp_security_context_v1) does not see the global
 #   advertised  globals only: always, or accent-table (only when the server is started with an accent table)
 #   bus, bus_name  D-Bus only: session or system; the well-known name its owner claims (none if it claims none)
 #   shipped     binaries only: yes when packaging/release.py installs it
@@ -142,7 +144,9 @@
   role: none
   advertised: always
   test_owner: unknown
-  source: crates/cupertino-server/src/clipboard.rs:346
+  source: crates/cupertino-server/src/clipboard.rs:403
+  visible_to: unsandboxed
+  note: hidden from a client connected through a security context; while the session is locked no selection is offered and none is accepted
 - name: zwlr_data_control_manager_v1
   kind: wayland-global
   version: 2
@@ -152,7 +156,9 @@
   role: none
   advertised: always
   test_owner: unknown
-  source: crates/cupertino-server/src/clipboard.rs:347
+  source: crates/cupertino-server/src/clipboard.rs:408
+  visible_to: unsandboxed
+  note: hidden from a client connected through a security context; while the session is locked no selection is offered and none is accepted
 - name: wp_viewporter
   kind: wayland-global
   version: 1
@@ -274,6 +280,18 @@
   advertised: always
   test_owner: unknown
   source: crates/cupertino-server/src/backend/mod.rs:72
+- name: wp_security_context_manager_v1
+  kind: wayland-global
+  version: 1
+  owner_crate: cupertino-server
+  owner_area: compositor
+  scope: public
+  role: none
+  advertised: always
+  test_owner: crates/cupertino-server/tests/sandbox_globals.rs
+  source: crates/cupertino-server/src/state.rs:489
+  visible_to: unsandboxed
+  note: hidden from a client that is already connected through a security context
 - name: zwlr_output_manager_v1
   kind: wayland-global
   version: 4
@@ -284,6 +302,8 @@
   advertised: always
   test_owner: crates/cupertino-server/tests/output_management.rs
   source: crates/cupertino-server/src/displays/management.rs:70
+  visible_to: unsandboxed
+  note: hidden from a client connected through a security context; while the session is locked a bind is finished at once and a configuration fails
 - name: zwlr_output_power_manager_v1
   kind: wayland-global
   version: 1
@@ -294,6 +314,8 @@
   advertised: always
   test_owner: unknown
   source: crates/cupertino-server/src/displays/power.rs:26
+  visible_to: unsandboxed
+  note: hidden from a client connected through a security context; stays available while the session is locked
 - name: org_kde_kwin_appmenu_manager
   kind: wayland-global
   version: 2

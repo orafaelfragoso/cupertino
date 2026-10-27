@@ -32,6 +32,12 @@ impl<K: Eq + Hash + Clone> InFlight<K> {
         }
     }
 
+    /// The read of `key` could not start or is given up: nothing is running or waiting for it any more.
+    pub fn abandon(&mut self, key: &K) {
+        self.running.remove(key);
+        self.again.remove(key);
+    }
+
     /// The read of `key` is over. `true` when it was asked for again meanwhile: the caller starts one more read, and
     /// the key stays in flight for it (however often it was asked for, one read follows).
     pub fn finish(&mut self, key: &K) -> bool {
@@ -71,6 +77,13 @@ impl<K: Eq + Hash + Clone, J> Reads<K, J> {
             self.waiting.insert(key, job);
             None
         }
+    }
+
+    /// The read of `key` could not start (no thread, no job): forget it and the job waiting for it, so that the next ask
+    /// starts a read.
+    pub fn abandon(&mut self, key: &K) {
+        self.in_flight.abandon(key);
+        self.waiting.remove(key);
     }
 
     /// The read of `key` was answered. `Some(job)` when another was asked for meanwhile: start it now (the key stays
@@ -152,5 +165,19 @@ mod tests {
             Some(5),
             "after the last answer a new read starts"
         );
+    }
+
+    #[test]
+    fn a_read_that_could_not_start_is_forgotten_so_the_next_ask_starts_one() {
+        let mut reads: Reads<&str, u32> = Reads::default();
+        assert_eq!(reads.ask("/home/u", 1), Some(1));
+        assert_eq!(reads.ask("/home/u", 2), None, "a job is waiting");
+        reads.abandon(&"/home/u");
+        assert_eq!(
+            reads.answered(&"/home/u"),
+            None,
+            "nothing runs or waits any more"
+        );
+        assert_eq!(reads.ask("/home/u", 3), Some(3), "the folder lists again");
     }
 }

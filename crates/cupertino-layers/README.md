@@ -69,7 +69,9 @@ Pure toolkit-facing models (filepicker, text-field, typeahead) are `foundation`,
 `keyboard` stays in `models`: it is compositor keyboard policy.
 
 `DENIED_PATHS` forbids any chain of dependencies from `ui` to `core`, `shell` or `services`; a denied path fails the
-check even when exceptions excuse its edges. `DENIED_CRATES` forbids any chain of normal dependencies, external crates
+check even when exceptions excuse its edges. `licence_problems` checks the licence split: a crate whose `license` starts with `MPL-2.0` may not have a normal dependency on a workspace crate under a GPL or AGPL licence (build and dev dependencies do not count), and needs a `LICENSE` file with the MPL-2.0 text next to its manifest. Both fail the check.
+
+`DENIED_CRATES` forbids any chain of normal dependencies, external crates
 included, from `cupertino-wayland-client` to `cupertino-protocols` or another compositor's protocol crates: the public
 transport speaks standard protocols only.
 
@@ -87,7 +89,7 @@ An entry that no longer matches an edge of its kind is an error, so both lists o
 
 Library: `Layer` (`ALL`, `name`, `from_name`), `Kind`, `allows(rules, from, to)`, `Edge`, `edges(layers, deps)`,
 `classify(crates, target)`, `Exception`, `Area`, `Tracking`, `check(rules, edges, exceptions, denied)`,
-`exception(exceptions, edge)`, `Problem`, `denied_paths(edges, denied)`, `denied_crate_paths(deps, denied)`, `dot(…)`.
+`exception(exceptions, edge)`, `Problem`, `denied_paths(edges, denied)`, `denied_crate_paths(deps, denied)`, `licence_problems(licences, deps, has_text)`, `is_mpl`, `is_gpl`, `dot(…)`.
 
 ## Tests
 

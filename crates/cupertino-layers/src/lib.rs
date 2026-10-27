@@ -392,6 +392,10 @@ pub enum Problem {
     StaleException(Exception),
     Unclassified(String),
     NotACrate(&'static str),
+    /// An MPL-2.0 crate with a normal dependency on a crate under a GPL licence: `(from, to, licence of to)`.
+    GplDependency(String, String, String),
+    /// An MPL-2.0 crate without the licence text in a `LICENSE` file next to its manifest.
+    MissingLicenceText(String),
 }
 
 impl fmt::Display for Problem {
@@ -413,6 +417,16 @@ impl fmt::Display for Problem {
             Problem::Unclassified(name) => write!(f, "{name} has no entry in TARGET"),
             Problem::NotACrate(name) => {
                 write!(f, "{name} is in TARGET but is not a workspace crate")
+            }
+            Problem::GplDependency(from, to, licence) => write!(
+                f,
+                "{from} is MPL-2.0 and must not depend on {to} ({licence}), normal dependency"
+            ),
+            Problem::MissingLicenceText(name) => {
+                write!(
+                    f,
+                    "{name} is MPL-2.0 and has no LICENSE with the MPL-2.0 text"
+                )
             }
         }
     }
@@ -473,6 +487,45 @@ pub fn classify<'a>(
         }
     }
     (layers, problems)
+}
+
+/// Whether the SPDX expression `licence` names `MPL-2.0` first: the crate's own code is under the MPL (a bundled font
+/// or similar may add terms with `AND`).
+pub fn is_mpl(licence: &str) -> bool {
+    licence.split_whitespace().next() == Some("MPL-2.0")
+}
+
+/// Whether the SPDX expression `licence` names a GPL or AGPL licence (LGPL is not one).
+pub fn is_gpl(licence: &str) -> bool {
+    licence
+        .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '+')))
+        .any(|id| id.starts_with("GPL-") || id.starts_with("AGPL-"))
+}
+
+/// A problem for each normal dependency of an MPL-2.0 workspace crate on a workspace crate under a GPL licence, and for
+/// each MPL-2.0 crate for which `has_text` finds no licence text. `licences` is the SPDX expression of each workspace
+/// crate; build and dev dependencies are not linked into the crate and do not count.
+pub fn licence_problems(
+    licences: &BTreeMap<String, String>,
+    deps: &BTreeSet<Dep>,
+    has_text: impl Fn(&str) -> bool,
+) -> Vec<Problem> {
+    let mut out: Vec<Problem> = deps
+        .iter()
+        .filter(|(_, _, kind)| *kind == Kind::Normal)
+        .filter_map(|(from, to, _)| {
+            let (from_licence, to_licence) = (licences.get(from)?, licences.get(to)?);
+            (is_mpl(from_licence) && is_gpl(to_licence))
+                .then(|| Problem::GplDependency(from.clone(), to.clone(), to_licence.clone()))
+        })
+        .collect();
+    out.extend(
+        licences
+            .iter()
+            .filter(|(name, licence)| is_mpl(licence) && !has_text(name))
+            .map(|(name, _)| Problem::MissingLicenceText(name.clone())),
+    );
+    out
 }
 
 #[cfg(test)]
@@ -637,5 +690,79 @@ mod tests {
         assert_eq!(Kind::from_metadata(None), Some(Kind::Normal));
         assert_eq!(Kind::from_metadata(Some("dev")), Some(Kind::Dev));
         assert_eq!(Kind::from_metadata(Some("proc")), None);
+    }
+
+    fn licences(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
+        entries
+            .iter()
+            .map(|(n, l)| (n.to_string(), l.to_string()))
+            .collect()
+    }
+
+    fn dep(from: &str, to: &str, kind: Kind) -> Dep {
+        (from.into(), to.into(), kind)
+    }
+
+    #[test]
+    fn an_mpl_crate_may_not_link_a_gpl_crate() {
+        let licences = licences(&[
+            ("kit", "MPL-2.0"),
+            ("font", "MPL-2.0 AND OFL-1.1"),
+            ("shell", "GPL-3.0-or-later"),
+            ("data", "GPL-3.0-or-later AND OFL-1.1"),
+            ("lib", "MPL-2.0"),
+        ]);
+        let deps = BTreeSet::from([
+            dep("kit", "lib", Kind::Normal),
+            dep("kit", "shell", Kind::Normal),
+            dep("font", "data", Kind::Normal),
+            dep("kit", "serde", Kind::Normal),
+            dep("shell", "kit", Kind::Normal),
+        ]);
+        assert_eq!(
+            licence_problems(&licences, &deps, |_| true),
+            vec![
+                Problem::GplDependency(
+                    "font".into(),
+                    "data".into(),
+                    "GPL-3.0-or-later AND OFL-1.1".into()
+                ),
+                Problem::GplDependency("kit".into(), "shell".into(), "GPL-3.0-or-later".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_and_dev_dependencies_and_lgpl_do_not_count() {
+        let licences = licences(&[
+            ("kit", "MPL-2.0"),
+            ("shell", "GPL-3.0-or-later"),
+            ("lgpl", "LGPL-2.1-or-later"),
+        ]);
+        let deps = BTreeSet::from([
+            dep("kit", "shell", Kind::Dev),
+            dep("kit", "shell", Kind::Build),
+            dep("kit", "lgpl", Kind::Normal),
+        ]);
+        assert_eq!(licence_problems(&licences, &deps, |_| true), vec![]);
+    }
+
+    #[test]
+    fn an_mpl_crate_needs_its_licence_text() {
+        let licences = licences(&[("kit", "MPL-2.0"), ("shell", "GPL-3.0-or-later")]);
+        assert_eq!(
+            licence_problems(&licences, &BTreeSet::new(), |name| name != "kit"),
+            vec![Problem::MissingLicenceText("kit".into())]
+        );
+    }
+
+    #[test]
+    fn mpl_means_the_first_term_of_the_expression() {
+        assert!(is_mpl("MPL-2.0 AND OFL-1.1"));
+        assert!(!is_mpl("GPL-3.0-or-later AND OFL-1.1"));
+        assert!(!is_mpl("MIT OR MPL-2.0"));
+        assert!(is_gpl("(GPL-3.0-or-later)"));
+        assert!(is_gpl("AGPL-3.0-only"));
+        assert!(!is_gpl("LGPL-2.1-or-later"));
     }
 }

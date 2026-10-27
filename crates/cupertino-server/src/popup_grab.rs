@@ -5,6 +5,7 @@
 use smithay::desktop::{find_popup_root_surface, PopupGrab, PopupUngrabStrategy};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Serial, SERIAL_COUNTER};
+use smithay::wayland::compositor::get_parent;
 
 use crate::state::Cupertino;
 
@@ -21,10 +22,14 @@ impl ActivePopupGrab {
 }
 
 impl Cupertino {
-    /// Whether `surface` is a popup of the grabbed toplevel.
+    /// Whether `surface`, or the surface its subsurfaces hang from, is a popup of the grabbed toplevel.
     fn in_popup_chain(&self, surface: &WlSurface, root: &WlSurface) -> bool {
+        let mut top = surface.clone();
+        while let Some(parent) = get_parent(&top) {
+            top = parent;
+        }
         self.popups
-            .find_popup(surface)
+            .find_popup(&top)
             .and_then(|popup| find_popup_root_surface(&popup).ok())
             .is_some_and(|popup_root| &popup_root == root)
     }
@@ -78,7 +83,19 @@ impl Cupertino {
         {
             return false;
         }
-        if let Some(mut active) = self.popup_grab.take() {
+        self.end_popup_grab(serial, time);
+        let under = self.surface_under(pos);
+        self.send_pointer_motion(under, pos, time, None);
+        true
+    }
+
+    /// End the popup grab, if any: the popups of its chain are dismissed, the keyboard goes back to the toplevel and the
+    /// pointer grab is released.
+    pub fn end_popup_grab(&mut self, serial: Serial, time: u32) {
+        let Some(mut active) = self.popup_grab.take() else {
+            return;
+        };
+        {
             let _ = active.grab.ungrab(PopupUngrabStrategy::All);
             if let Some(keyboard) = self.seat.get_keyboard() {
                 if keyboard.is_grabbed()
@@ -101,8 +118,5 @@ impl Cupertino {
         }
         let pointer = self.pointer.clone();
         pointer.unset_grab(self, serial, time);
-        let under = self.surface_under(pos);
-        self.send_pointer_motion(under, pos, time, None);
-        true
     }
 }

@@ -19,6 +19,7 @@ workspace's pure-Rust `cupertino-xkbcommon`); `cupertino-layers` fails the build
 | `PointerEvent`, `KeyboardEvent`, `Button`, `Modifiers`, `CursorShape`, `ResizeEdge` | pointer and key input; keys carry keysym and text from the compositor's keymap, key repeat runs in the client. `Connection::set_cursor` sets a named cursor (`wp_cursor_shape_v1`) |
 | `Connection::{set_selection, receive}`, `ClipboardOffer`, `Event::Selection` | the clipboard: offer contents in several MIME types, list and read another client's |
 | `Error`, `Disconnect` | typed errors: a missing required protocol with its minimum version, the disconnect cause, a configure serial that did not increase, an unsupported format or MIME type, a denied or cancelled transfer, no free buffer |
+| `State`, `ExternalRole`, `Connection::{queue_handle, globals, external_surface, wl_surface, wl_output, seat, roundtrip}` | the extension hook: another crate adds protocols of its own on the same queue (below) |
 
 ## How it works
 
@@ -32,6 +33,30 @@ largest scale of the outputs the surface entered; without the viewporter it is r
 
 Copying serves each paste on a short-lived thread (at most 8 at once, 1 s each); pasting reads at most 16 MiB within
 1 s, and returns the client's own contents directly.
+
+## Extensions
+
+A crate above the transport, such as one for the desktop's own protocols, adds them on the connection's queue, so its
+events stay in order with the standard ones and `Connection::wait` dispatches both in one pass. The transport itself
+names no protocol beyond the standard ones.
+
+- Binding: `Connection::globals` lists the compositor's globals; bind with `Connection::queue_handle` and user data
+  of a type the extension crate defines. Rust allows the extension's `impl Dispatch<TheirInterface, TheirData> for
+  State` only with that local type; `()` is refused.
+- Events: the `Dispatch` impl puts what it receives where the extension reads it, typically a queue shared through the
+  user data. `Connection::wait` returns after each read from the compositor, maybe with no `Event`, once everything read
+  is dispatched; the extension then reads its queue. A burst of extension events costs one wait, not one each.
+- Surface roles: `Connection::external_surface(assign)` creates a `wl_surface` and calls `assign` with it, the queue
+  handle and its `SurfaceId`, before the first commit; `assign` creates the role's objects and returns an
+  `ExternalRole`. Each configure of the role goes to `State::configure_external(surface, serial, size)` from the
+  extension's `Dispatch` impl (`None` leaves the size to the client; a serial that does not increase ends the next
+  wait with `Error::InvalidSerial`). The surface then draws through `Connection::lease` like any other: present calls
+  `ExternalRole::ack_configure` before the commit, once per configure. `Connection::destroy` destroys its popups, calls
+  `ExternalRole::destroy`, then the surface. `Connection::popup` with it as parent creates the popup without a parent
+  and hands it to `ExternalRole::adopt_popup` before its first commit; the default refuses.
+- Objects the extension's requests name: `Connection::{wl_surface, wl_output, seat}`. `Connection::roundtrip`
+  dispatches the answers to requests sent so far, for state an extension reads at setup; the transport's own events
+  stay for the next wait.
 
 ## Example
 
@@ -50,5 +75,7 @@ cargo nextest run -p cupertino-wayland-client --run-ignored only   # needs westo
 ```
 
 `tests/protocol-flow.rs` runs a minimal protocol server in-process: required globals, configure and ack, resize, buffer
-reuse, scale, decorations, popups, input, clipboard and disconnect. `tests/weston.rs` runs `simple-window` on Weston's
+reuse, scale, decorations, popups, input, clipboard and disconnect. Its `layer` module is an extension written against
+the public API (layer shell, a protocol the transport does not know): a layer surface draws through the lease, acks
+through its own protocol, takes a popup, and a burst of 100 of its configures arrives in at most three waits. `tests/weston.rs` runs `simple-window` on Weston's
 headless backend; `cupertino-server`'s `tests/standard-clients.rs` runs it and `cupertino-testclient` on the real server.

@@ -1,0 +1,112 @@
+//! Who is on the other end of a session bus call (the identification is `cupertino-peer`'s), and what the methods of the
+//! session interface need of their caller.
+
+use std::path::Path;
+
+pub use cupertino_peer::{identify, Caller, Denial, Identified, Sandbox};
+
+/// What a method needs of its caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Need {
+    /// The session agent the server supervises (`cupertino-login`).
+    SessionAgent,
+    /// The settings application, or the session agent.
+    SettingsClient,
+}
+
+/// Whether `caller` may use a method that needs `need`. `agents` are the processes the server supervises with the
+/// session agent's role, `own_pid` is the server itself, and `settings_client` says whether a program is the settings
+/// application.
+pub fn authorize(
+    caller: &Caller,
+    need: Need,
+    agents: &[u32],
+    own_pid: u32,
+    settings_client: impl Fn(&Path) -> bool,
+) -> Result<(), Denial> {
+    let caller = caller.unsandboxed()?;
+    let pid = caller.process.pid;
+    if pid == own_pid || agents.contains(&pid) {
+        return Ok(());
+    }
+    match need {
+        Need::SettingsClient if caller.exe.as_deref().is_some_and(settings_client) => Ok(()),
+        Need::SessionAgent | Need::SettingsClient => Err(Denial::Untrusted),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::fd::OwnedFd;
+
+    use cupertino_peer::ProcessHandle;
+
+    use super::*;
+
+    fn own_pidfd() -> OwnedFd {
+        // Safety: pidfd_open returns a new descriptor for our own pid, which nothing else owns.
+        unsafe {
+            std::os::fd::FromRawFd::from_raw_fd(libc::syscall(
+                libc::SYS_pidfd_open,
+                std::process::id() as libc::pid_t,
+                0,
+            ) as i32)
+        }
+    }
+
+    fn process(sandbox: Option<Sandbox>, exe: &str) -> Caller {
+        Caller::Process(Identified {
+            process: ProcessHandle::from_pidfd(own_pidfd()).unwrap(),
+            sandbox,
+            exe: Some(exe.into()),
+        })
+    }
+
+    #[test]
+    fn only_the_server_the_agent_and_for_settings_the_settings_program_are_trusted() {
+        let me = std::process::id();
+        let settings = |exe: &Path| exe == Path::new("/usr/bin/cupertino-settings");
+        let host = process(None, "/usr/bin/cupertino-files");
+        assert_eq!(
+            authorize(&host, Need::SessionAgent, &[], 1, settings),
+            Err(Denial::Untrusted)
+        );
+        assert_eq!(
+            authorize(&host, Need::SettingsClient, &[], 1, settings),
+            Err(Denial::Untrusted)
+        );
+        assert_eq!(
+            authorize(&host, Need::SessionAgent, &[me], 1, settings),
+            Ok(())
+        );
+        assert_eq!(
+            authorize(&host, Need::SessionAgent, &[], me, settings),
+            Ok(())
+        );
+
+        let settings_app = process(None, "/usr/bin/cupertino-settings");
+        assert_eq!(
+            authorize(&settings_app, Need::SettingsClient, &[], 1, settings),
+            Ok(())
+        );
+        assert_eq!(
+            authorize(&settings_app, Need::SessionAgent, &[], 1, settings),
+            Err(Denial::Untrusted),
+            "the settings program does not quit applications"
+        );
+    }
+
+    #[test]
+    fn a_sandboxed_caller_is_refused_even_as_the_settings_program_or_the_agent() {
+        let me = std::process::id();
+        for sandbox in [Sandbox::Flatpak, Sandbox::Snap] {
+            let caller = process(Some(sandbox), "/usr/bin/cupertino-settings");
+            for need in [Need::SessionAgent, Need::SettingsClient] {
+                assert_eq!(
+                    authorize(&caller, need, &[me], me, |_| true),
+                    Err(Denial::Sandboxed(sandbox))
+                );
+            }
+        }
+    }
+}

@@ -86,6 +86,18 @@ impl Supervisor {
             .collect()
     }
 
+    /// The pids of the running processes whose connection holds `role`.
+    pub fn pids_with_role(&self, role: crate::authorization::ShellRole) -> Vec<u32> {
+        self.procs
+            .iter()
+            .filter(|p| p.spec.roles.contains(&role))
+            .filter_map(|p| match &p.phase {
+                Phase::Running { child, .. } => Some(child.id()),
+                Phase::Waiting(_) | Phase::Stopped => None,
+            })
+            .collect()
+    }
+
     /// The pid of the running process named `name`; `None` while it is not running.
     pub fn pid_of(&self, name: &str) -> Option<u32> {
         self.procs

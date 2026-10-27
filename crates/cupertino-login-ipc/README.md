@@ -9,9 +9,9 @@ only, never on D-Bus.
 
 | Item | Contents |
 |---|---|
-| `Request` | screen to manager: `Hello { version }`, `Authenticate { account }` (valid with no attempt open), `Answer { secret }` (valid while a prompt is open), `AuthenticatePower { name, action }` (an administrator's authentication for Restart or Shut Down while a user session is open, an attempt like `Authenticate`), `Cancel` (always valid, ignored with nothing to abort), `Power { action }` (valid after `Hello` on every screen; the machine going down is the success answer) |
+| `Request` | screen to manager: `Hello { version }`, `Authenticate { account }` (valid with no attempt open), `Answer { conversation, secret }` (valid once, while the prompt with that `conversation` is open; any other answer is dropped), `AuthenticatePower { name, action }` (an administrator's authentication for Restart or Shut Down while a user session is open, an attempt like `Authenticate`), `Cancel` (always valid, ignored with nothing to abort), `Power { action }` (valid after `Hello` on every screen; the machine going down is the success answer) |
 | `Account` | `Listed { uid }` (a row of the last list) or `Typed { name }` (the "Other…" name); `is_login_name` is the rule for typed names: 1 to 32 bytes, no whitespace or control character, none of `:` `/` `\`, not starting with `- |
-| `Event` | manager to screen: `Hello { version }`, `Welcome { users, show_other, power, will_prompt, retries_until_hint }`, `Users { users, will_prompt }` (`will_prompt`: a user session is open, so Restart and Shut Down ask for an administrator and show an ellipsis), `Prompt { echo, text }`, `Notice { error, text }`, `Result { outcome }`, `SessionStarting { uid }`, `Reset`, `Refused { reason }`, `PowerRefused { reason } |
+| `Event` | manager to screen: `Hello { version }`, `Welcome { users, show_other, power, will_prompt, retries_until_hint }`, `Users { users, will_prompt }` (`will_prompt`: a user session is open, so Restart and Shut Down ask for an administrator and show an ellipsis), `Prompt { conversation, echo, text }`, `Notice { error, text }`, `Result { outcome }`, `SessionStarting { uid }`, `Reset`, `Refused { reason }`, `PowerRefused { reason } |
 | `Outcome` | `Accepted`, `Denied` (a wrong password and an unknown account alike), `Locked`, `Expired`, `Refused`, `Busy`, `Internal` |
 | `UserRow`, `Picture`, `PowerMenu`, `ProtocolRefusal` | the rows of the picker (uid, login, full name, optional picture, `logged_in`: the account has a session, so choosing it returns to that session), which power items show, why a connection is refused |
 | `PowerAction`, `PowerRefusal` | `Restart`, `ShutDown`, `Sleep`; why the manager did not do one: `OtherUsersLoggedIn`, `Inhibited`, `Disabled` (the settings hide the item), `Failed` (the cause is in the journal) |
@@ -34,7 +34,7 @@ only, never on D-Bus.
   log line may print more.
 - **Hex for secrets and pictures:** a hex string holds no character JSON escapes, so the parser never copies it into its scratch
   buffer, which is not zeroed. `Secret` is zeroed on drop; the decoder's body buffers and `encode`'s output are `Zeroizing`.
-- **Version:** `VERSION` is 4 (2 added `Power` and `PowerRefused`, 3 `UserRow::logged_in`, 4 `AuthenticatePower` and `will_prompt`), the first message each way carries it. A change that adds or removes a message increments it; the
+- **Version:** `VERSION` is 5 (2 added `Power` and `PowerRefused`, 3 `UserRow::logged_in`, 4 `AuthenticatePower` and `will_prompt`, 5 the `conversation` of `Prompt` and `Answer`), the first message each way carries it. A change that adds or removes a message increments it; the
   screen and the manager ship in one package, so there is no negotiation.
 
 ## Tests

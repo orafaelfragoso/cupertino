@@ -49,6 +49,7 @@ cupertino-input = { path = "../cupertino-input" }
 cupertino-keyboard = { path = "../cupertino-keyboard" }
 cupertino-devices = { path = "../cupertino-devices", optional = true }
 cupertino-evdev = { path = "../cupertino-evdev", optional = true }
+cupertino-peer = { path = "../cupertino-peer" }
 cupertino-seat = { path = "../cupertino-seat", optional = true }
 async-channel = "2"
 libc = "0.2"

@@ -14,7 +14,7 @@ use cupertino_icons::{SystemIcons, ThemeIcons};
 use cupertino_menubar::clock::{clock_text, local_time, next_tick, separators_off, ClockSettings};
 use cupertino_menubar::controller::{MenuController, Mode, Outcome};
 use cupertino_menubar::desktop::app_name;
-use cupertino_menubar::extras::{self, ExtraKind, Extras};
+use cupertino_menubar::extras::{self, ExtraAction, ExtraKind, Extras, SessionAction};
 use cupertino_menubar::extras_bus::ExtrasBus;
 use cupertino_menubar::feed::{status_icon, status_icon_px, BarFeed, Shared, StatusState};
 use cupertino_menubar::geom::{Point, Rect};
@@ -661,6 +661,9 @@ impl App {
                 Action::ShowAbout => {
                     eprintln!("cupertino-menubar: about requested (there is no about panel yet)")
                 }
+                Action::Extra(ExtraAction::Session(action)) => self.bars[i]
+                    .menu_bar
+                    .session_action(client_session_action(action)),
                 Action::Extra(action) => self.extras.act(action)?,
             }
         }
@@ -796,5 +799,17 @@ impl App {
             }
         }
         Ok(())
+    }
+}
+
+fn client_session_action(action: SessionAction) -> cupertino_client::SessionAction {
+    match action {
+        SessionAction::Sleep => cupertino_client::SessionAction::Sleep,
+        SessionAction::Restart => cupertino_client::SessionAction::Restart,
+        SessionAction::ShutDown => cupertino_client::SessionAction::ShutDown,
+        SessionAction::Lock => cupertino_client::SessionAction::Lock,
+        SessionAction::LogOut => cupertino_client::SessionAction::LogOut,
+        SessionAction::SwitchUser => cupertino_client::SessionAction::SwitchUser,
+        SessionAction::RefreshCapabilities => cupertino_client::SessionAction::RefreshCapabilities,
     }
 }

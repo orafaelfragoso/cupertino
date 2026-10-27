@@ -278,7 +278,7 @@ fn offered(wire: &Wire, registry: u32, interface: &str) -> Option<(u32, u32)> {
         .map(|(name, _, version)| (name, version))
 }
 
-/// A client of `h` with an output, a surface and the shell global bound (at its version 5).
+/// A client of `h` with an output, a surface and the shell global bound (at its version 6).
 struct ShellClient {
     wire: Wire,
     shell: u32,
@@ -299,7 +299,7 @@ impl ShellClient {
         let (output_name, output_version) = offered(&wire, registry, "wl_output").unwrap();
         let (compositor_name, compositor_version) =
             offered(&wire, registry, "wl_compositor").unwrap();
-        let shell = wire.bind(registry, shell_name, "cupertino_shell_v1", 5);
+        let shell = wire.bind(registry, shell_name, "cupertino_shell_v1", 6);
         let output = wire.bind(registry, output_name, "wl_output", output_version.min(4));
         let compositor = wire.bind(
             registry,
@@ -333,7 +333,7 @@ fn a_public_client_cannot_see_bind_or_use_a_role_global() {
 
     let (shell_name, shell_version) = offered(&holder, holder_registry, "cupertino_shell_v1")
         .expect("a shell process is offered cupertino_shell_v1");
-    assert_eq!(shell_version, 5);
+    assert_eq!(shell_version, 6);
     let public_interfaces: Vec<String> = public
         .globals(registry)
         .into_iter()
@@ -348,7 +348,7 @@ fn a_public_client_cannot_see_bind_or_use_a_role_global() {
         "the public client is not offered the app effects: {public_interfaces:?}"
     );
 
-    let guessed = public.bind(registry, shell_name, "cupertino_shell_v1", 5);
+    let guessed = public.bind(registry, shell_name, "cupertino_shell_v1", 6);
     h.settle(&mut [&mut public]);
     assert_eq!(
         public.error(),

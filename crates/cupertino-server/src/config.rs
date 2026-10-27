@@ -24,7 +24,7 @@ pub const GREETER_CONFIG: &str = "/etc/cupertino/greeter.json";
 
 /// Where the programs of the shell processes and the screenshot process must be installed. The install prefix of the
 /// build is added to `/usr` when it is set (`CUPERTINO_INSTALL_PREFIX` at compile time).
-fn installed_roots() -> impl Iterator<Item = &'static Path> {
+pub(crate) fn installed_roots() -> impl Iterator<Item = &'static Path> {
     ["/usr"].into_iter().chain(INSTALL_PREFIX).map(Path::new)
 }
 
@@ -263,6 +263,8 @@ pub struct Config {
     /// Program and leading arguments of the screenshot process (`screenshot` in the JSON file), started by the
     /// screenshot shortcuts with the mode appended ([`crate::capture::launch`]); never empty.
     pub screenshot_command: Vec<String>,
+    /// `--dev-shell`: a checkout or nested run, where the programs of the session are found by name.
+    pub dev_shell: bool,
     pub wallpaper: WallpaperSettings,
     /// Cascade step of new windows without a position, right and down (points). 29 pt
     /// (the design's horizontal and vertical cascade amounts).
@@ -389,6 +391,7 @@ impl Default for Config {
                 .map(String::from)
                 .to_vec(),
             screenshot_command: vec![INSTALLED_SCREENSHOT.to_string()],
+            dev_shell: false,
             cascade_step: 29.0,
             default_window_fraction: 0.6,
             keyboard: crate::kbd::KeyboardSettings::default(),
@@ -527,6 +530,7 @@ impl Config {
             keybindings: KeyBindings::from_shortcuts(&shortcut_map()),
             keyboard,
             power,
+            dev_shell,
             ..Config::default()
         };
         if dev_shell {

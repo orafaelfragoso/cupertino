@@ -50,7 +50,7 @@ A crate's layer is declared in its manifest (`[package.metadata.cupertino] layer
 |---|---|---|
 | `foundation` | cupertino-animation, -apps, -assets, -defaults, -filepicker, -geometry, -theme, -thumbnails, -typeahead, -xkbcommon | `foundation` |
 | `models` (pure logic, no I/O) | cupertino-displays, -effects, -input, -keyboard, -login-ipc, -overview, -stage, -text-field, -wm | `foundation`, `models` |
-| `platform` (kernel interfaces only) | cupertino-alsa, -bluetooth, -devices, -evdev, -netlink, -seat | `foundation`, `platform` |
+| `platform` (kernel interfaces only) | cupertino-alsa, -bluetooth, -devices, -evdev, -netlink, -peer, -seat | `foundation`, `platform` |
 | `render` | cupertino-client, -cursor, -decorations, -glass, -icons, -protocols | `foundation`, `platform`, `render` |
 | `core` | cupertino-server | `foundation`, `models`, `platform`, `render` |
 | `shell` | cupertino-controlcenter, -dock, -launcher, -login, -menubar, -notifications, -osd, -screenshot, -windowmanager | `foundation`, `models`, `platform`, `render` |

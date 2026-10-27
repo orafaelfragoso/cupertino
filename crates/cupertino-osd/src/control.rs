@@ -1,6 +1,11 @@
 //! `org.cupertino.Osd1`: the control interface of the `cupertino-osd` process. The server calls the step methods for
 //! the volume, brightness and keyboard-backlight keys; the control panel calls `Show` after it changed a level itself.
+//!
+//! The step methods change hardware levels, so they check their caller (`cupertino-peer`): only the server, which started
+//! this process, and this process itself may call them; any other caller, a sandboxed or anonymous one included, gets an
+//! error of `org.cupertino.Error.*` and nothing changes. `Show` only draws the overlay and stays open to every caller.
 
+use cupertino_peer::{check_call, CallerError, Relation};
 use zbus::fdo;
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::{connection, Connection};
@@ -11,6 +16,9 @@ use crate::model::{Kind, Overlay};
 /// Name, path and interface of the control interface (the server calls it by these strings).
 pub const BUS_NAME: &str = "org.cupertino.Osd1";
 pub const OBJECT_PATH: &str = "/org/cupertino/Osd1";
+
+/// Who may change a level.
+const SERVER: &[Relation] = &[Relation::Itself, Relation::Parent];
 
 struct Control {
     on_command: Box<dyn Fn(Command) + Send + Sync>,
@@ -31,7 +39,21 @@ fn check_direction(direction: i32) -> fdo::Result<i32> {
 #[zbus::interface(name = "org.cupertino.Osd1")]
 impl Control {
     /// Raise (`direction` > 0) or lower the volume one press; `fine` is a Shift+Alt press.
-    fn volume_step(&self, direction: i32, fine: bool) -> fdo::Result<()> {
+    async fn volume_step(
+        &self,
+        direction: i32,
+        fine: bool,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallerError> {
+        check_call(
+            connection,
+            &header,
+            "org.cupertino.Osd1",
+            "VolumeStep",
+            SERVER,
+        )
+        .await?;
         (self.on_command)(Command::VolumeStep {
             direction: check_direction(direction)?,
             fine,
@@ -40,12 +62,39 @@ impl Control {
     }
 
     /// Mute, or unmute when muted.
-    fn toggle_mute(&self) {
+    async fn toggle_mute(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallerError> {
+        check_call(
+            connection,
+            &header,
+            "org.cupertino.Osd1",
+            "ToggleMute",
+            SERVER,
+        )
+        .await?;
         (self.on_command)(Command::ToggleMute);
+        Ok(())
     }
 
     /// Raise or lower the display brightness one press.
-    fn brightness_step(&self, direction: i32, fine: bool) -> fdo::Result<()> {
+    async fn brightness_step(
+        &self,
+        direction: i32,
+        fine: bool,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallerError> {
+        check_call(
+            connection,
+            &header,
+            "org.cupertino.Osd1",
+            "BrightnessStep",
+            SERVER,
+        )
+        .await?;
         (self.on_command)(Command::BrightnessStep {
             direction: check_direction(direction)?,
             fine,
@@ -54,7 +103,21 @@ impl Control {
     }
 
     /// Raise or lower the keyboard backlight one press.
-    fn keyboard_brightness_step(&self, direction: i32, fine: bool) -> fdo::Result<()> {
+    async fn keyboard_brightness_step(
+        &self,
+        direction: i32,
+        fine: bool,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallerError> {
+        check_call(
+            connection,
+            &header,
+            "org.cupertino.Osd1",
+            "KeyboardBrightnessStep",
+            SERVER,
+        )
+        .await?;
         (self.on_command)(Command::KeyboardBrightnessStep {
             direction: check_direction(direction)?,
             fine,

@@ -403,3 +403,73 @@ fn the_menu_properties_are_read_and_capabilities_announce_a_change() {
     );
     assert!(read()["switch-user"]);
 }
+
+fn dbus_send(bus: &PrivateBus, member: &str, arguments: &[&str]) -> std::process::Output {
+    Command::new("dbus-send")
+        .arg(format!("--bus={}", bus.address))
+        .args(["--print-reply", "--dest=org.cupertino.Login1", OBJECT_PATH])
+        .arg(format!("{INTERFACE}.{member}"))
+        .args(arguments)
+        .output()
+        .expect("dbus-send")
+}
+
+/// SEC-04: a process of the same user that is neither the server nor started by it cannot lock, sleep or press the power
+/// key; each refusal has its own error name, and the properties stay readable.
+#[test]
+fn a_host_process_that_the_server_did_not_start_is_refused_every_method() {
+    if Command::new("dbus-send").arg("--version").output().is_err() {
+        eprintln!("skipping: dbus-send is not available");
+        return;
+    }
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let (requests_tx, requests_rx) = mpsc::channel();
+    let _login = serve(
+        bus.builder(),
+        "Test User".into(),
+        Capabilities::default(),
+        move |request| requests_tx.send(request).unwrap(),
+    )
+    .expect("claims the name");
+
+    for (member, arguments) in [
+        ("Lock", vec![]),
+        ("LockNow", vec![]),
+        ("RequestLogOut", vec![]),
+        ("RequestRestart", vec![]),
+        ("RequestShutDown", vec![]),
+        ("RequestPowerDialog", vec![]),
+        ("Sleep", vec![]),
+        ("RefreshCapabilities", vec![]),
+        ("SwitchToLoginWindow", vec![]),
+        ("PowerKey", vec!["boolean:true"]),
+    ] {
+        let out = dbus_send(&bus, member, &arguments);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{member} was accepted");
+        assert!(
+            stderr.contains("org.cupertino.Error.UntrustedCaller"),
+            "{member}: {stderr}"
+        );
+    }
+    assert_eq!(
+        requests_rx.try_recv(),
+        Err(mpsc::TryRecvError::Empty),
+        "a refused call reached the process"
+    );
+
+    let read = Command::new("dbus-send")
+        .arg(format!("--bus={}", bus.address))
+        .args(["--print-reply", "--dest=org.cupertino.Login1", OBJECT_PATH])
+        .args([
+            "org.freedesktop.DBus.Properties.Get",
+            "string:org.cupertino.Login1",
+            "string:Locked",
+        ])
+        .output()
+        .expect("dbus-send");
+    assert!(read.status.success(), "the properties stay readable");
+}

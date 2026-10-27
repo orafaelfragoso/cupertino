@@ -3,7 +3,7 @@ Upstream-Name: cupertino
 Upstream-Contact: Cupertino contributors
 Source: https://github.com/orafaelfragoso/cupertino
 Comment: The desktop, server and applications are GPL-3+. The toolkit library crates (animation, apps, assets,
- app-protocols, defaults, geometry, icons, keyboard, protocol-app, text-field, theme, typeahead, ui-wayland,
+ app-protocols, defaults, geometry, icons, keyboard, menu-model, protocol-app, text-field, theme, typeahead, ui-wayland,
  wayland-client) are MPL-2.0, the protocol description files of the workspace are MIT or Apache-2.0 (the GTK shell
  extension's, from GTK, is LGPL-2.1+), xkbcommon is MIT over the vendored libxkbcommon port (third-party/xkbcommon-rs) and
  the Inter font in the assets crate is OFL-1.1; all are linked into the binaries.
@@ -18,8 +18,8 @@ License: GPL-3+
 
 Files: crates/cupertino-animation/* crates/cupertino-app-protocols/* crates/cupertino-apps/* crates/cupertino-assets/*
  crates/cupertino-defaults/* crates/cupertino-geometry/* crates/cupertino-icons/* crates/cupertino-keyboard/*
- crates/cupertino-protocol-app/* crates/cupertino-text-field/* crates/cupertino-theme/* crates/cupertino-typeahead/*
- crates/cupertino-ui-wayland/* crates/cupertino-wayland-client/*
+ crates/cupertino-menu-model/* crates/cupertino-protocol-app/* crates/cupertino-text-field/* crates/cupertino-theme/*
+ crates/cupertino-typeahead/* crates/cupertino-ui-wayland/* crates/cupertino-wayland-client/*
 Copyright: Cupertino contributors
 License: MPL-2.0
 

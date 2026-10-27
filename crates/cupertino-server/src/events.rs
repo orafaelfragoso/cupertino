@@ -1099,10 +1099,9 @@ impl Cupertino {
     /// A pointer axis event (also used by scripted input): the scroll goes to the focused client as one
     /// `wl_pointer.frame`, with the scroll count of a touchpad scroll before the frame.
     pub fn pointer_axis(&mut self, input: &AxisInput) {
-        // A wheel detent (120 v120 units) is one line of 10 points. Finger scrolling of a
+        // A wheel notch (120 v120 units) scrolls three lines. Finger scrolling of a
         // device with a scroll resolution (the touchpad's counts) is accelerated; other sources,
         // and finger scrolling of other devices, keep the backend's value.
-        let line = cupertino_input::POINTS_PER_LINE / 120.0;
         let usec = input.usec;
         let mut device = self.pointer_devices.get_mut(&input.device);
         let mut amount = |axis: Axis| match (
@@ -1110,12 +1109,14 @@ impl Cupertino {
             input.v120[axis_index(axis)],
             input.amount[axis_index(axis)],
         ) {
-            (AxisSource::Wheel, Some(v120), _) => v120 * line,
+            (AxisSource::Wheel, Some(v120), _) => cupertino_input::wheel_points(v120),
             (AxisSource::Finger, _, Some(counts)) => device
                 .as_deref_mut()
                 .and_then(|d| d.scroll_points(axis, counts, usec))
                 .unwrap_or(counts),
-            (_, v120, amount) => amount.unwrap_or_else(|| v120.unwrap_or(0.0) * line),
+            (_, v120, amount) => {
+                amount.unwrap_or_else(|| cupertino_input::wheel_points(v120.unwrap_or(0.0)))
+            }
         };
         let (h, v) = (amount(Axis::Horizontal), amount(Axis::Vertical));
         // A touchpad gesture ends with a stop: no axis moves and one is exactly zero.

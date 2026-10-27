@@ -387,11 +387,11 @@ impl Painter {
         pal: &Palette,
     ) {
         self.text.set_scale(s);
-        fill_rect(pm, &layout.content, s, pal.window_background);
+        fill_rect(pm, &layout.content, s, pal.control_background);
         // the pane scrolls under the title region, which takes the content colour (no strip, no separator; how the
         // reference shows content scrolled under it is unknown)
         self.paint_pane(pm, s, pane, pal);
-        fill_rect(pm, &layout.toolbar, s, pal.window_background);
+        fill_rect(pm, &layout.toolbar, s, pal.control_background);
         fill_rect(pm, &layout.divider, s, pal.separator);
         self.paint_toolbar(pm, s, layout, state, pal);
         self.paint_search_field(pm, s, layout, state, pal);

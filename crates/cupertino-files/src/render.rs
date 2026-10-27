@@ -190,8 +190,28 @@ fn rounded_px(x: f32, y: f32, w: f32, h: f32, radius: f32) -> Option<tiny_skia::
     pb.finish()
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The pixels the fills and copies of this crate wrote on this thread ([`written`]).
+    pub(crate) static WRITTEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Count the pixels of `r` inside `pm` as written by a fill or a copy, in test builds: the work of a frame grows with
+/// these.
+fn written(pm: &Pixmap, r: Option<SkRect>) {
+    #[cfg(test)]
+    if let Some(r) = r {
+        let w = (r.right().min(pm.width() as f32) - r.left().max(0.0)).max(0.0);
+        let h = (r.bottom().min(pm.height() as f32) - r.top().max(0.0)).max(0.0);
+        WRITTEN.with(|c| c.set(c.get() + (w * h).round() as u64));
+    }
+    #[cfg(not(test))]
+    let _ = (pm, r);
+}
+
 pub(crate) fn fill_rounded(pm: &mut Pixmap, r: &Rect, radius: f64, s: f32, c: Rgba) {
     if let Some(p) = rounded(r, radius, s) {
+        written(pm, Some(p.bounds()));
         pm.fill_path(
             &p,
             &paint(c),
@@ -242,6 +262,7 @@ fn in_layer(
         return;
     };
     draw(&mut layer, x - x0, y - y0);
+    written(pm, SkRect::from_xywh(x0, y0 - up, w, h));
     pm.draw_pixmap(
         x0 as i32,
         (y0 - up) as i32,
@@ -276,6 +297,17 @@ pub(crate) fn paint_icon_bubble(pm: &mut Pixmap, icon: &Rect, scale: f32, up: f3
 /// Stroke the outline of `r` (the stroke is centred on it).
 pub(crate) fn stroke_rounded(pm: &mut Pixmap, r: &Rect, radius: f64, width: f64, s: f32, c: Rgba) {
     if let Some(p) = rounded(r, radius, s) {
+        let half = width as f32 * s / 2.0;
+        let b = p.bounds();
+        written(
+            pm,
+            SkRect::from_ltrb(
+                b.left() - half,
+                b.top() - half,
+                b.right() + half,
+                b.bottom() + half,
+            ),
+        );
         pm.stroke_path(
             &p,
             &paint(c),
@@ -321,6 +353,7 @@ pub(crate) fn fill_rect_up(pm: &mut Pixmap, r: &Rect, s: f32, up: f32, c: Rgba) 
         r.w as f32 * s,
         r.h as f32 * s,
     ) {
+        written(pm, Some(rr));
         pm.fill_rect(rr, &paint(c), Transform::identity(), None);
     }
 }
@@ -388,6 +421,7 @@ fn draw_pixmap_fit(pm: &mut Pixmap, icon: &Pixmap, x: f32, y: f32, px: u32) {
         quality: tiny_skia::FilterQuality::Bilinear,
         ..Default::default()
     };
+    written(pm, SkRect::from_xywh(x, y, px as f32, px as f32));
     pm.draw_pixmap(
         0,
         0,
@@ -544,6 +578,7 @@ impl Renderer {
                 Pixmap::new(w, h).unwrap()
             }
         };
+        written(&pm, SkRect::from_xywh(0.0, 0.0, w as f32, h as f32));
         pm.fill(
             Color::from_rgba(pal.background[0], pal.background[1], pal.background[2], 1.0).unwrap(),
         );
@@ -572,6 +607,15 @@ impl Renderer {
         let (x, y) = (
             c.x as f32 * s - symbol.width() as f32 / 2.0,
             c.y as f32 * s - symbol.height() as f32 / 2.0,
+        );
+        written(
+            pm,
+            SkRect::from_xywh(
+                x.round(),
+                y.round(),
+                symbol.width() as f32,
+                symbol.height() as f32,
+            ),
         );
         pm.draw_pixmap(
             x.round() as i32,
@@ -1148,6 +1192,10 @@ pub(crate) fn copy_opaque(dst: &mut Pixmap, src: &Pixmap, x: i32, y: i32) {
     if x0 >= x1 || y0 >= y1 {
         return;
     }
+    written(
+        dst,
+        SkRect::from_ltrb(x0 as f32, y0 as f32, x1 as f32, y1 as f32),
+    );
     let len = ((x1 - x0) * 4) as usize;
     let (dst_stride, src_stride) = (dw as usize * 4, sw as usize * 4);
     let (src_data, dst_data) = (src.data(), dst.data_mut());

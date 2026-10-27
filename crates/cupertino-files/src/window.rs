@@ -3127,13 +3127,15 @@ mod tests {
     }
 
     #[test]
-    fn the_no_results_view_redraws_from_its_caches_at_any_window_size_and_scale() {
+    fn the_no_results_view_redraws_from_its_caches_and_writes_at_most_twice_its_pixels_at_any_size()
+    {
         let (_d, mut browser, places, mut painter, _frame) = search_window(1.0);
         browser.set_filter("zzz-nothing");
         assert!(browser.no_results());
         let mut search = TextField::with_max_len(SEARCH_MAX_LEN);
         search.insert("zzz-nothing");
         let mut work = Vec::new();
+        let mut written = Vec::new();
         for (w, h, scale) in [
             (600.0, 400.0, 1.0),
             (920.0, 436.0, 1.0),
@@ -3171,7 +3173,7 @@ mod tests {
                 status: "",
             };
             // a first frame at a new size allocates its content view and fills the glyph cache; the frames after it
-            // rasterize no glyph, allocate no view and draw no row: what is left is fills and copies of their pixels
+            // rasterize no glyph, allocate no view and draw no row: what is left is fills and copies, counted in pixels
             let views = painter.renderer.views_allocated;
             painter.paint(&mut pm, scale, &frame, &state, &Palette::builtin(false));
             let first_views = painter.renderer.views_allocated - views;
@@ -3180,10 +3182,16 @@ mod tests {
                 painter.renderer.views_allocated,
             );
             let mut rows = 0;
+            crate::render::WRITTEN.with(|c| c.set(0));
             for _ in 0..3 {
                 painter.paint(&mut pm, scale, &frame, &state, &Palette::builtin(false));
                 rows += painter.renderer.rows_drawn;
             }
+            let pixels = u64::from(pm.width()) * u64::from(pm.height());
+            written.push((
+                format!("{w} x {h} at {scale}x"),
+                crate::render::WRITTEN.with(|c| c.get()) as f64 / 3.0 / pixels as f64,
+            ));
             work.push((
                 format!("{w} x {h} at {scale}x"),
                 first_views,
@@ -3203,5 +3211,12 @@ mod tests {
         .map(|what| (what.to_owned(), 1, 0, 0, 0))
         .collect();
         assert_eq!(work, expected);
+        // the work grows with the pixels: each pixel of the window is filled once and the content view copied over
+        // once, so a frame writes at most twice its pixels
+        let over: Vec<_> = written.iter().filter(|(_, ratio)| *ratio > 2.0).collect();
+        assert!(
+            over.is_empty(),
+            "pixels written per frame pixel: {written:?}"
+        );
     }
 }

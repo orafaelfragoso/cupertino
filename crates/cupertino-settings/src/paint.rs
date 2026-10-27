@@ -3,11 +3,15 @@
 //! active appearance (§6.2); a missing token is an error, not a stand-in colour.
 
 use cupertino_assets::{AssetError, Assets, FontRole};
+use cupertino_decorations::field::{
+    caret_offsets, centred_baseline, draw_field, FieldContent, FieldStyle,
+};
 use cupertino_decorations::palette::Rgba;
 use cupertino_decorations::shape::rounded_path;
 use cupertino_decorations::text::TextRenderer;
 use cupertino_geometry::{CornerStyle, Radii, Rect as GeoRect};
 use cupertino_icons::SystemIcons;
+use cupertino_text_field::TextField;
 use cupertino_theme::{Appearance, SemanticColor, Theme};
 use tiny_skia::{Color, FillRule, Paint, Pixmap, PixmapPaint, Rect as SkRect, Stroke, Transform};
 
@@ -38,6 +42,8 @@ pub struct Palette {
     pub inactive_selection: Rgba,
     /// A hovered result row.
     pub quaternary: Rgba,
+    /// The background of selected text in the search field.
+    pub text_selection: Rgba,
     /// The sidebar search field's fill: at [`SEARCH_FILL_SHARE`] of its opacity.
     pub search_fill: Rgba,
     /// A control's own background and an off switch's track, a slider's track.
@@ -160,6 +166,7 @@ impl Palette {
             accent,
             inactive_selection: sem(SemanticColor::TertiaryLabel)?,
             quaternary: sem(SemanticColor::QuaternaryLabel)?,
+            text_selection: sem(SemanticColor::SelectedTextBackground)?,
             search_fill: {
                 let q = sem(SemanticColor::QuaternaryLabel)?;
                 [q[0], q[1], q[2], q[3] * SEARCH_FILL_SHARE]
@@ -222,10 +229,6 @@ const FIELD_GLYPH: f64 = 12.0;
 const FIELD_RADIUS: f64 = 6.0;
 const FIELD_TEXT: f64 = 13.0;
 const FIELD_GLYPH_INSET: f64 = 6.0;
-/// Opacity of the accent behind selected text, the value of the file manager's name editor.
-const TEXT_SELECTION_ALPHA: f32 = 0.35;
-/// Height of the selection band: the text size plus 2 points above and below, as in the name editor.
-const TEXT_SELECTION_HEIGHT: f64 = FIELD_TEXT + 4.0;
 /// A result row's selection fill radius (approximate, §5).
 const RESULT_RADIUS: f64 = 6.0;
 
@@ -307,6 +310,31 @@ pub struct WindowState<'a> {
     pub search: &'a SearchField,
     /// The search field has the keyboard (its outline shows).
     pub search_focused: bool,
+    /// The search field's caret shows now (focused, nothing selected, the blink on).
+    pub search_caret: bool,
+}
+
+/// The text area of the search field `f`: right of the magnifier, left of the clear button when there is text.
+pub fn search_text_area(f: &Rect, has_text: bool) -> Rect {
+    let x = f.x + FIELD_GLYPH_INSET + FIELD_GLYPH + FIELD_GLYPH_INSET;
+    let right = if has_text {
+        f.right() - FIELD_GLYPH_INSET - FIELD_GLYPH - FIELD_GLYPH_INSET / 2.0
+    } else {
+        f.right() - FIELD_GLYPH_INSET
+    };
+    Rect::new(x, f.y, (right - x).max(0.0), f.h)
+}
+
+fn search_style(pal: &Palette) -> FieldStyle {
+    FieldStyle {
+        size: FIELD_TEXT,
+        weight: 400,
+        letter_spacing: 0.0,
+        text: pal.text,
+        selection: pal.text_selection,
+        caret: pal.text,
+        caret_width: 1.0,
+    }
 }
 
 /// Text, symbols and the drawing of the window and the results popup.
@@ -508,14 +536,8 @@ impl Painter {
             s,
             pal.secondary_text,
         );
-        let text_x = glyph.right() + FIELD_GLYPH_INSET;
-        let mut text = Rect::new(
-            text_x,
-            f.y,
-            (f.right() - text_x - FIELD_GLYPH_INSET).max(0.0),
-            f.h,
-        );
         let typed = state.search.text();
+        let text = search_text_area(&f, !typed.is_empty());
         if typed.is_empty() {
             self.label(
                 pm,
@@ -543,40 +565,42 @@ impl Painter {
                 s,
                 pal.secondary_text,
             );
-            text.w = (clear.x - text.x - FIELD_GLYPH_INSET / 2.0).max(0.0);
-            if state.search.is_selected() {
-                let (_, width) =
-                    self.text
-                        .fit(typed, FIELD_TEXT as f32 * s, 400, 0.0, text.w as f32 * s);
-                fill_rect(
-                    pm,
-                    &Rect::new(
-                        text.x,
-                        text.y + (text.h - TEXT_SELECTION_HEIGHT) / 2.0,
-                        f64::from(width / s),
-                        TEXT_SELECTION_HEIGHT,
-                    ),
-                    s,
-                    [
-                        pal.accent[0],
-                        pal.accent[1],
-                        pal.accent[2],
-                        TEXT_SELECTION_ALPHA,
-                    ],
-                );
-            }
-            self.label(
-                pm,
-                &text,
-                typed,
-                Font {
-                    size: FIELD_TEXT,
-                    weight: 400,
-                },
-                s,
-                pal.text,
-            );
         }
+        let field = state.search.field();
+        let style = search_style(pal);
+        let boundaries = field.boundaries();
+        let offsets = caret_offsets(&mut self.text, typed, &boundaries, &style, s);
+        let content = FieldContent {
+            text: typed,
+            boundaries: &boundaries,
+            offsets: &offsets,
+            selection: field.selection(),
+            composition: field.composition(),
+            caret: state.search_caret.then_some(field.caret()),
+            scroll: field.scroll(),
+        };
+        let area = GeoRect::new(text.x, text.y, text.w, text.h);
+        draw_field(
+            &mut self.text,
+            pm,
+            &area,
+            centred_baseline(&area, FIELD_TEXT),
+            s,
+            &content,
+            &style,
+        );
+    }
+
+    /// The x in points of each caret position of the search field's text ([`TextField::boundaries`]) at scale `s`.
+    pub fn search_offsets(&mut self, field: &TextField, s: f32, pal: &Palette) -> Vec<f64> {
+        self.text.set_scale(s);
+        caret_offsets(
+            &mut self.text,
+            field.text(),
+            &field.boundaries(),
+            &search_style(pal),
+            s,
+        )
     }
 
     /// Draw the results popup of `field`: `rows` are the result rows' rectangles in popup points
@@ -1315,8 +1339,35 @@ mod tests {
         assert_eq!(dark.sidebar_selection, dark.accent);
     }
 
+    /// The search field of `search` painted at scale 1, its caret showing when `caret`.
+    fn paint_field(
+        painter: &mut Painter,
+        layout: &WindowLayout,
+        search: &SearchField,
+        caret: bool,
+        pal: &Palette,
+    ) -> Pixmap {
+        let history = History::new(PaneId::Appearance);
+        let mut pm = Pixmap::new(
+            layout.sidebar.w as u32,
+            (layout.search.bottom() + 4.0) as u32,
+        )
+        .unwrap();
+        let state = WindowState {
+            selected: PaneId::Appearance,
+            has_battery: None,
+            active: true,
+            history: &history,
+            search,
+            search_focused: true,
+            search_caret: caret,
+        };
+        painter.paint_search_field(&mut pm, 1.0, layout, &state, pal);
+        pm
+    }
+
     #[test]
-    fn selected_search_text_is_drawn_on_the_accent_in_both_appearances() {
+    fn selected_search_text_lies_on_the_selected_text_token_and_the_caret_follows_the_text() {
         let theme = Theme::load().expect("the design tokens of the repository");
         let mut painter = Painter::new(&Assets::builtin()).unwrap();
         let layout = WindowLayout::new(
@@ -1326,45 +1377,74 @@ mod tests {
             &crate::sidebar::groups(),
             false,
         );
-        let history = History::new(PaneId::Appearance);
+        let f = layout.search;
+        // the row above the glyphs, inside the selection band and the caret
+        let y = (f.y + f.h / 2.0 - FIELD_TEXT / 2.0) as u32;
         for appearance in [Appearance::Light, Appearance::Dark] {
-            let mut search = SearchField::default();
-            for c in "Mouse".chars() {
-                search.type_char(c);
-            }
             let pal = Palette::from_theme(&theme, appearance).unwrap();
-            // the row above the glyphs, inside the selection band
-            let f = layout.search;
-            let y = (f.y + f.h / 2.0 - FIELD_TEXT / 2.0) as u32;
-            let mut accent_pixels = |search: &SearchField| {
-                let mut pm =
-                    Pixmap::new(layout.sidebar.w as u32, (f.bottom() + 4.0) as u32).unwrap();
-                let state = WindowState {
-                    selected: PaneId::Appearance,
-                    has_battery: None,
-                    active: true,
-                    history: &history,
-                    search,
-                    search_focused: true,
-                };
-                painter.paint_search_field(&mut pm, 1.0, &layout, &state, &pal);
+            assert_eq!(
+                pal.text_selection.map(|c| (c * 255.0).round() as u8),
+                [0, 122, 255, 89],
+                "{appearance:?}"
+            );
+            let mut search = SearchField::default();
+            search.edit(|t| t.insert("Mouse"));
+            let row = |pm: &Pixmap| -> Vec<[u8; 4]> {
                 (f.x as u32 + 1..f.right() as u32 - 1)
-                    .map(|x| pm.pixel(x, y).unwrap().demultiply())
-                    .filter(|p| p.alpha() > 64 && p.blue() > p.red().saturating_add(64))
+                    .map(|x| {
+                        let p = pm.pixel(x, y).unwrap().demultiply();
+                        [p.red(), p.green(), p.blue(), p.alpha()]
+                    })
+                    .collect()
+            };
+            let bluish = |row: &[[u8; 4]]| {
+                row.iter()
+                    .filter(|p| p[3] > 64 && p[2] > p[0].saturating_add(64))
                     .count()
             };
-            let plain = accent_pixels(&search);
-            search.select_all();
-            let selected = accent_pixels(&search);
+            let plain = row(&paint_field(&mut painter, &layout, &search, false, &pal));
+            search.edit(TextField::select_all);
+            let selected = row(&paint_field(&mut painter, &layout, &search, false, &pal));
             assert_eq!(
-                plain, 0,
-                "{appearance:?}: unselected text has no accent band"
+                bluish(&plain),
+                0,
+                "{appearance:?}: no band without a selection"
             );
-            assert!(
-                selected > 20,
-                "{appearance:?}: the selection shows ({selected} accent pixels)"
+            assert!(bluish(&selected) > 20, "{appearance:?}: the band shows");
+            search.edit(|t| t.select(5..5));
+            let with_caret = row(&paint_field(&mut painter, &layout, &search, true, &pal));
+            let changed: Vec<usize> = (0..plain.len())
+                .filter(|i| plain[*i] != with_caret[*i])
+                .collect();
+            let text = search_text_area(&f, true);
+            let end = painter.search_offsets(search.field(), 1.0, &pal)[5];
+            assert_eq!(
+                changed,
+                vec![(text.x.round() + end.round()) as usize - f.x as usize - 1],
+                "{appearance:?}: one caret column after the text"
             );
         }
+    }
+
+    #[test]
+    fn a_ten_thousand_character_paste_is_cut_to_the_field_and_redrawn_quickly() {
+        let theme = Theme::load().expect("the design tokens of the repository");
+        let pal = Palette::from_theme(&theme, Appearance::Light).unwrap();
+        let mut painter = Painter::new(&Assets::builtin()).unwrap();
+        let layout = WindowLayout::new(
+            crate::window::default_size(1.0),
+            1.0,
+            RowSize::Medium,
+            &crate::sidebar::groups(),
+            false,
+        );
+        let mut search = SearchField::default();
+        let start = std::time::Instant::now();
+        search.edit(|f| f.paste(&"word ".repeat(2_000)));
+        assert_eq!(search.text().len(), crate::search::MAX_LEN);
+        paint_field(&mut painter, &layout, &search, true, &pal);
+        let took = start.elapsed();
+        assert!(took < std::time::Duration::from_secs(2), "{took:?}");
     }
 
     #[test]
@@ -1397,6 +1477,7 @@ mod tests {
             history: &history,
             search: &search,
             search_focused: false,
+            search_caret: false,
         };
         let view = PaneView {
             sections: &[],

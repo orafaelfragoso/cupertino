@@ -47,6 +47,7 @@ use cupertino_files::window::{
 use cupertino_files::{Entry, Kind, Point, Size, SortSpec};
 use cupertino_geometry::Rect as PopupRect;
 use cupertino_icons::document::FileIcons;
+use cupertino_text_field::{KeyInput, Keymap, Response};
 use cupertino_theme::{Appearance, Theme, WindowCornerSize};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -110,6 +111,10 @@ struct App {
     menu: Option<OpenMenu>,
     /// The name being edited in place, with the path of the item it renames.
     edit: Option<(NameEdit, PathBuf)>,
+    /// The user's modifier profile and editing chords, for the name editor.
+    keymap: Keymap,
+    /// Whether the last frame showed the name editor's caret; a blink redraws when it changes.
+    caret_drawn: bool,
     rename: RenameTrigger,
     /// A new folder to edit the name of once the listing shows it.
     edit_when_listed: Option<PathBuf>,
@@ -256,6 +261,8 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
         terminal,
         menu: None,
         edit: None,
+        keymap: Keymap::load(),
+        caret_drawn: false,
         rename: RenameTrigger::default(),
         edit_when_listed: None,
         drag: None,
@@ -396,6 +403,10 @@ impl App {
             self.menu.as_ref().and_then(|open| open.menu.deadline()),
             self.rename.deadline(),
             self.marquee.as_ref().map(|m| m.next_scroll),
+            self.edit
+                .as_ref()
+                .and_then(|(e, _)| e.field().next_blink(Instant::now()))
+                .map(|d| self.now() + d.as_secs_f64()),
         ]
         .into_iter()
         .flatten()
@@ -405,6 +416,9 @@ impl App {
 
     /// Run the timers that are due.
     fn tick(&mut self) -> Result<()> {
+        if self.edit_caret() != self.caret_drawn {
+            self.client.request_redraw(self.window)?;
+        }
         let now = self.now();
         if self.menu.as_mut().is_some_and(|open| open.menu.poll(now)) {
             self.sync_menu()?;
@@ -421,6 +435,8 @@ impl App {
         let dy = std::mem::take(&mut self.pending_scroll);
         let (width, height) = self.client.size(self.window)?;
         let active = self.client.toplevel_activated(self.window)?;
+        let edit_caret = active && self.edit_caret();
+        self.caret_drawn = edit_caret;
         let reveal = self
             .browser
             .take_focus_moved()
@@ -465,6 +481,7 @@ impl App {
             title: &title,
             now: SystemTime::now(),
             edit: edit.as_ref().map(|(e, _)| e),
+            edit_caret,
             drop_target,
             marquee: marquee.as_ref().map(|m| (m.origin, m.at)),
             status: &status,
@@ -561,7 +578,10 @@ impl App {
 
     fn press(&mut self, at: Point) -> Result<()> {
         // a press ends the edit of a name, except one in the editor itself or one that finds the name invalid
-        if self.edit.is_some() && (self.in_editor(at) || !self.end_edit()?) {
+        if self.edit.is_some() && self.in_editor(at) {
+            return self.editor_press(at);
+        }
+        if self.edit.is_some() && !self.end_edit()? {
             return Ok(());
         }
         self.drag = None;
@@ -1498,36 +1518,71 @@ impl App {
         Ok(true)
     }
 
-    /// Keys while a name is edited.
+    /// Keys while a name is edited: Escape cancels, Return commits, the rest goes to the text field.
     fn edit_key(&mut self, code: u32, mods: KeyModifiers, character: Option<char>) -> Result<()> {
-        let Some((edit, _)) = self.edit.as_mut() else {
-            return Ok(());
-        };
         match code {
             key::ESCAPE => self.edit = None,
             key::ENTER | key::KEYPAD_ENTER => {
                 self.end_edit()?;
             }
-            key::BACKSPACE => edit.backspace(),
-            key::DELETE => edit.delete(),
-            key::LEFT => edit.left(mods.shift),
-            key::RIGHT => edit.right(mods.shift),
-            key::HOME => edit.home(mods.shift),
-            key::END => edit.end(mods.shift),
-            _ if mods.logo && character == Some('a') => edit.select_all(),
-            _ if mods.logo || mods.ctrl || mods.alt => {}
             _ => {
-                if let Some(c) = character.filter(|c| !c.is_control()) {
-                    edit.insert(c.encode_utf8(&mut [0; 4]));
+                let Some((edit, _)) = self.edit.as_mut() else {
+                    return Ok(());
+                };
+                let input =
+                    KeyInput::new(code, mods.shift, mods.ctrl, mods.alt, mods.logo, character);
+                match edit
+                    .field_mut()
+                    .key(&mut self.keymap, input, Instant::now())
+                {
+                    Response::Ignored => return Ok(()),
+                    Response::Moved | Response::Edited => {}
+                    Response::Copy(text) | Response::Cut(text) => {
+                        if let Err(e) = self.client.set_clipboard_text(text) {
+                            eprintln!("cupertino-files: copy: {e}");
+                        }
+                    }
+                    Response::Paste => match self.client.clipboard_text() {
+                        Ok(Some(text)) => edit.field_mut().paste(&text),
+                        Ok(None) => {}
+                        Err(e) => eprintln!("cupertino-files: paste: {e}"),
+                    },
                 }
             }
         }
         Ok(self.client.request_redraw(self.window)?)
     }
 
+    /// A press in the name editor places the caret there (Shift extends; a double press selects a word, a triple
+    /// press the whole name).
+    fn editor_press(&mut self, at: Point) -> Result<()> {
+        let extend = self.client.modifiers().shift;
+        if let Some((edit, _)) = self.edit.as_mut() {
+            if let Some(index) = self.painter.editor_index(edit.field(), at) {
+                edit.field_mut().press(index, extend, Instant::now());
+                self.client.request_redraw(self.window)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the name editor's caret shows now (nothing selected, the blink on).
+    fn edit_caret(&self) -> bool {
+        self.edit
+            .as_ref()
+            .is_some_and(|(e, _)| e.field().caret_visible(Instant::now()))
+    }
+
     /// The pointer moved with the left button down on an item: past the start distance the selection is dragged, and
     /// the folder or place under the pointer is the target.
     fn drag_motion(&mut self, at: Point) -> Result<()> {
+        if let Some((edit, _)) = self.edit.as_mut().filter(|(e, _)| e.field().is_dragging()) {
+            if let Some(index) = self.painter.editor_index(edit.field(), at) {
+                edit.field_mut().drag_to(index);
+                self.client.request_redraw(self.window)?;
+            }
+            return Ok(());
+        }
         if let Some(marquee) = self.marquee.as_mut() {
             marquee.at = at;
             self.marquee_apply();
@@ -1628,6 +1683,9 @@ impl App {
 
     /// The left button went up: end a drag by dropping on its target, else finish the click.
     fn release(&mut self) -> Result<()> {
+        if let Some((edit, _)) = self.edit.as_mut() {
+            edit.field_mut().release();
+        }
         if self.marquee.take().is_some() {
             self.browser.rubber_band_end();
             return Ok(self.client.request_redraw(self.window)?);

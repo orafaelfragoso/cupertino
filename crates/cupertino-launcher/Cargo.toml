@@ -22,6 +22,7 @@ cupertino-theme = { path = "../cupertino-theme" }
 cupertino-animation = { path = "../cupertino-animation" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-decorations = { path = "../cupertino-decorations" }
+cupertino-text-field = { path = "../cupertino-text-field" }
 cupertino-client = { path = "../cupertino-client", optional = true }
 cupertino-glass = { path = "../cupertino-glass", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }

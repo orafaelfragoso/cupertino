@@ -20,6 +20,7 @@ cupertino-icons = { path = "../cupertino-icons" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-decorations = { path = "../cupertino-decorations" }
 cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-text-field = { path = "../cupertino-text-field" }
 cupertino-client = { path = "../cupertino-client", optional = true }
 cupertino-alsa = { path = "../cupertino-alsa", optional = true }
 tiny-skia = "0.11"

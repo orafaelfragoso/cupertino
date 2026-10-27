@@ -5,7 +5,8 @@
 //! scale with viewporter when offered) and owns the surfaces: layer surfaces on a chosen
 //! output, application windows with server-side decorations ([`Client::toplevel`]), popups of both with a seat
 //! grab, the menu-bar and dock roles, and the lock surfaces of a session lock
-//! (`ext_session_lock_v1`, [`Client::lock_session`]) with idle notifications ([`Client::watch_idle`]). Drawing is tiny-skia on a [`tiny_skia::Pixmap`] at the
+//! (`ext_session_lock_v1`, [`Client::lock_session`]) with idle notifications ([`Client::watch_idle`]), and the text
+//! clipboard ([`Client::set_clipboard_text`], [`Client::clipboard_text`]). Drawing is tiny-skia on a [`tiny_skia::Pixmap`] at the
 //! surface's device scale, double-buffered through shm and paced by frame callbacks. The
 //! application runs one loop around [`Client::wait`] and reacts to the returned [`Event`]s;
 //! other threads wake it with a [`Waker`].
@@ -14,6 +15,7 @@
 
 mod backdrop;
 mod client;
+mod clipboard;
 mod dock;
 mod error;
 mod event;

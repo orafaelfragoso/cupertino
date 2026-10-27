@@ -34,6 +34,8 @@ pub struct Palette {
     pub separator: Rgba,
     pub accent: Rgba,
     pub accent_text: Rgba,
+    /// The background of selected text (the name editor).
+    pub text_selection: Rgba,
     pub inactive_selection: Rgba,
     /// and: the rubber band's border and fill, the icon bubble's fill.
     pub tertiary_label: Rgba,
@@ -45,6 +47,9 @@ pub struct Palette {
     /// The system colours of the seven tag colours, indexed like [`TagColor::ALL`].
     pub tag_colors: [Rgba; 7],
 }
+
+/// The `selected-text-background` token of both appearances, for [`Palette::builtin`].
+const TEXT_SELECTION: Rgba = [0.0, 122.0 / 255.0, 1.0, 89.0 / 255.0];
 
 fn c8(r: u8, g: u8, b: u8) -> Rgba {
     [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
@@ -96,6 +101,7 @@ impl Palette {
                 separator: [1.0, 1.0, 1.0, 0.1],
                 accent: c8(0x0A, 0x84, 0xFF),
                 accent_text: [1.0, 1.0, 1.0, 1.0],
+                text_selection: TEXT_SELECTION,
                 inactive_selection: [1.0, 1.0, 1.0, 0.2],
                 tertiary_label: [1.0, 1.0, 1.0, 0.2471],
                 quaternary_label: [1.0, 1.0, 1.0, 0.098],
@@ -114,6 +120,7 @@ impl Palette {
                 separator: [0.0, 0.0, 0.0, 0.1],
                 accent: c8(0x00, 0x7A, 0xFF),
                 accent_text: [1.0, 1.0, 1.0, 1.0],
+                text_selection: TEXT_SELECTION,
                 inactive_selection: [0.0, 0.0, 0.0, 0.12],
                 tertiary_label: [0.0, 0.0, 0.0, 0.2588],
                 quaternary_label: [0.0, 0.0, 0.0, 0.098],
@@ -136,6 +143,7 @@ impl Palette {
         p.secondary_text = sem(SemanticColor::SecondaryLabel).unwrap_or(p.secondary_text);
         p.separator = sem(SemanticColor::Grid).unwrap_or(p.separator);
         p.accent = sem(SemanticColor::SystemBlue).unwrap_or(p.accent);
+        p.text_selection = sem(SemanticColor::SelectedTextBackground).unwrap_or(p.text_selection);
         for (slot, color) in p.tag_colors.iter_mut().zip(TagColor::ALL) {
             *slot = theme
                 .tokens

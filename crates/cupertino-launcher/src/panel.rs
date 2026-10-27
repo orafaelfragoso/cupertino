@@ -1,15 +1,11 @@
 //! Panel state: query editing, result selection, scrolling and the appear/disappear animation.
 //!
 //! The panel is a model. The compositor feeds it translated key events ([`Key`], [`Mods`]) and
-//! pointer events and draws it with [`crate::render`]. Editing uses emacs-style bindings:
+//! pointer events and draws it with [`crate::render`]. The query is a shared text field (`cupertino-text-field`):
+//! every key the table below does not name is [`PanelEvent::Edit`], which the host passes to [`Panel::edit`].
 //!
 //! | key | action |
 //! |---|---|
-//! | characters, Backspace, Delete, Left, Right, Home, End | edit the query |
-//! | Ctrl+A / Ctrl+E | start / end of the query |
-//! | Ctrl+B / Ctrl+F, Ctrl+Left / Ctrl+Right | character / word movement |
-//! | Ctrl+U / Ctrl+K | delete to start / to end |
-//! | Ctrl+W, Ctrl+Backspace | delete the previous word |
 //! | Down / Ctrl+N, Up / Ctrl+P | next / previous result, no wrap-around; Up on the first result returns to the field |
 //! | Primary+Down, Primary+Up | first result of the next / previous section |
 //! | PageDown, PageUp | move by a page |
@@ -28,6 +24,7 @@
 
 use crate::engine::{Activation, Launcher, ResultItem, Results};
 use cupertino_animation::{AnimatedValue, Curve, SpringParams};
+use cupertino_text_field::TextField;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
@@ -107,6 +104,8 @@ pub enum PanelEvent {
     Activate(Activation),
     /// A panel shortcut the host has to carry out (the panel stays open unless noted).
     Command(PanelCommand),
+    /// A key of the query field: the host passes it to the field through [`Panel::edit`].
+    Edit,
 }
 
 /// Shortcut commands of the panel. The selected item, when needed, is
@@ -142,16 +141,16 @@ pub enum Focus {
     List,
 }
 
+/// The most bytes the query holds.
+pub const QUERY_MAX_LEN: usize = 1024;
+
 pub struct Panel {
-    query: String,
-    cursor: usize,
+    field: TextField,
     results: Results,
     selected: usize,
     scroll_row: usize,
     visible: bool,
     focus: Focus,
-    /// The whole query is selected (after the invocation and after leaving the list upwards): typing replaces it.
-    select_all: bool,
     appear: AnimatedValue<f64>,
     /// Rows (headers included) shown at once; keep equal to the style's `max_rows`.
     pub max_rows: usize,
@@ -164,21 +163,15 @@ impl Default for Panel {
     }
 }
 
-fn is_sep(c: char) -> bool {
-    c.is_whitespace()
-}
-
 impl Panel {
     pub fn new() -> Self {
         Self {
-            query: String::new(),
-            cursor: 0,
+            field: TextField::with_max_len(QUERY_MAX_LEN),
             results: Results::default(),
             selected: 0,
             scroll_row: 0,
             visible: false,
             focus: Focus::Field,
-            select_all: false,
             appear: AnimatedValue::new(0.0),
             max_rows: 9,
             spring: SpringParams::from_perceptual(0.3, 0.0),
@@ -186,12 +179,28 @@ impl Panel {
     }
 
     pub fn query(&self) -> &str {
-        &self.query
+        self.field.text()
     }
 
-    /// Cursor position in characters.
-    pub fn cursor(&self) -> usize {
-        self.cursor
+    /// The query's text field (caret, selection, scroll).
+    pub fn field(&self) -> &TextField {
+        &self.field
+    }
+
+    /// Change the query field with `f`; when its text changes the query runs again and the field takes the keyboard.
+    pub fn edit<R>(
+        &mut self,
+        launcher: &Launcher,
+        now: Now,
+        f: impl FnOnce(&mut TextField) -> R,
+    ) -> R {
+        let before = self.field.text().to_string();
+        let r = f(&mut self.field);
+        if self.field.text() != before {
+            self.focus = Focus::Field;
+            self.requery(launcher, now.unix);
+        }
+        r
     }
 
     pub fn results(&self) -> &Results {
@@ -218,9 +227,19 @@ impl Panel {
         self.focus
     }
 
+    /// Scroll the query so that the caret at `caret_x` stays inside a field `width` points wide.
+    pub fn follow_caret(&mut self, caret_x: f64, text_width: f64, width: f64) {
+        self.field.follow_caret(caret_x, text_width, width);
+    }
+
+    /// A click in the query field gives it the keyboard.
+    pub fn focus_field(&mut self) {
+        self.focus = Focus::Field;
+    }
+
     /// `true` while the whole query is selected (typing replaces it).
-    pub fn query_selected(&self) -> bool {
-        self.select_all
+    fn query_selected(&self) -> bool {
+        !self.field.is_empty() && self.field.selection() == (0..self.field.text().len())
     }
 
     /// Appear progress 0…1 (the spring may overshoot slightly with a bouncy configuration).
@@ -239,11 +258,9 @@ impl Panel {
 
     /// Open with an empty query (suggestions).
     pub fn show(&mut self, launcher: &Launcher, now: Now) {
-        self.query.clear();
-        self.cursor = 0;
+        self.field.set_text("");
         self.visible = true;
         self.focus = Focus::Field;
-        self.select_all = false;
         self.appear
             .animate_to(1.0, Curve::Spring(self.spring), now.mono);
         self.requery(launcher, now.unix);
@@ -264,8 +281,7 @@ impl Panel {
     }
 
     pub fn set_query(&mut self, text: &str, launcher: &Launcher, now: Now) {
-        self.query = text.to_string();
-        self.cursor = self.query.chars().count();
+        self.field.set_text(text);
         self.requery(launcher, now.unix);
     }
 
@@ -273,26 +289,15 @@ impl Panel {
     /// arrive late, for example when the file index finishes).
     pub fn refresh(&mut self, launcher: &Launcher, now: Now) {
         let keep = self.selected;
-        self.results = launcher.query(&self.query, now.unix);
+        self.results = launcher.query(self.field.text(), now.unix);
         self.selected = keep.min(self.results.len().saturating_sub(1));
         self.clamp_scroll();
     }
 
     fn requery(&mut self, launcher: &Launcher, unix: f64) {
-        self.results = launcher.query(&self.query, unix);
+        self.results = launcher.query(self.field.text(), unix);
         self.selected = 0;
         self.scroll_row = 0;
-    }
-
-    fn byte_at(&self, char_index: usize) -> usize {
-        self.query
-            .char_indices()
-            .nth(char_index)
-            .map_or(self.query.len(), |(b, _)| b)
-    }
-
-    fn chars_len(&self) -> usize {
-        self.query.chars().count()
     }
 
     /// Row index of the flat result index (counting section headers).
@@ -382,15 +387,15 @@ impl Panel {
             return PanelEvent::None;
         }
         if !down && self.selected == 0 {
-            if self.focus == Focus::List || !self.select_all {
+            if self.focus == Focus::List || !self.query_selected() {
                 self.focus = Focus::Field;
-                self.select_all = !self.query.is_empty();
+                self.field.select_all();
                 return PanelEvent::Changed;
             }
             return PanelEvent::None;
         }
         self.focus = Focus::List;
-        self.select_all = false;
+        self.field.blur();
         self.move_selection(if down { 1 } else { -1 }, false);
         PanelEvent::Changed
     }
@@ -410,76 +415,9 @@ impl Panel {
         let Some(item) = self.results.get(flat).cloned() else {
             return PanelEvent::None;
         };
-        let activation = launcher.activate(&item, &self.query, now.unix);
+        let activation = launcher.activate(&item, self.field.text(), now.unix);
         self.hide(now.mono);
         PanelEvent::Activate(activation)
-    }
-
-    fn word_start(&self, from: usize) -> usize {
-        let chars: Vec<char> = self.query.chars().collect();
-        let mut i = from;
-        while i > 0 && is_sep(chars[i - 1]) {
-            i -= 1;
-        }
-        while i > 0 && !is_sep(chars[i - 1]) {
-            i -= 1;
-        }
-        i
-    }
-
-    fn word_end(&self, from: usize) -> usize {
-        let chars: Vec<char> = self.query.chars().collect();
-        let mut i = from;
-        while i < chars.len() && is_sep(chars[i]) {
-            i += 1;
-        }
-        while i < chars.len() && !is_sep(chars[i]) {
-            i += 1;
-        }
-        i
-    }
-
-    fn delete_range(
-        &mut self,
-        from: usize,
-        to: usize,
-        launcher: &Launcher,
-        now: Now,
-    ) -> PanelEvent {
-        if from >= to {
-            return PanelEvent::None;
-        }
-        let (b0, b1) = (self.byte_at(from), self.byte_at(to));
-        self.query.replace_range(b0..b1, "");
-        self.cursor = from;
-        self.requery(launcher, now.unix);
-        PanelEvent::Changed
-    }
-
-    fn insert(&mut self, c: char, launcher: &Launcher, now: Now) -> PanelEvent {
-        if c.is_control() {
-            return PanelEvent::None;
-        }
-        if self.select_all {
-            self.query.clear();
-            self.cursor = 0;
-            self.select_all = false;
-        }
-        self.focus = Focus::Field;
-        let b = self.byte_at(self.cursor);
-        self.query.insert(b, c);
-        self.cursor += 1;
-        self.requery(launcher, now.unix);
-        PanelEvent::Changed
-    }
-
-    fn move_cursor(&mut self, to: usize) -> PanelEvent {
-        let to = to.min(self.chars_len());
-        if to == self.cursor {
-            return PanelEvent::None;
-        }
-        self.cursor = to;
-        PanelEvent::Changed
     }
 
     /// Handle one key press. Returns what the host has to do.
@@ -525,9 +463,8 @@ impl Panel {
                 if self.focus == Focus::List {
                     self.focus = Focus::Field;
                     PanelEvent::Changed
-                } else if !self.query.is_empty() {
+                } else if !self.field.is_empty() {
                     self.set_query("", launcher, now);
-                    self.select_all = false;
                     PanelEvent::Changed
                 } else {
                     self.hide(now.mono);
@@ -541,60 +478,25 @@ impl Panel {
             (Key::Char(' '), m) if self.focus == Focus::List && !m.ctrl && !m.alt && !m.primary => {
                 PanelEvent::Command(PanelCommand::Preview)
             }
-            (Key::Char('a'), m) if m.ctrl => self.move_cursor(0),
-            (Key::Char('e'), m) if m.ctrl => self.move_cursor(self.chars_len()),
-            (Key::Char('b'), m) if m.ctrl => self.move_cursor(self.cursor.saturating_sub(1)),
-            (Key::Char('f'), m) if m.ctrl => self.move_cursor(self.cursor + 1),
-            (Key::Char('u'), m) if m.ctrl => self.delete_range(0, self.cursor, launcher, now),
-            (Key::Char('k'), m) if m.ctrl => {
-                self.delete_range(self.cursor, self.chars_len(), launcher, now)
-            }
-            (Key::Char('w'), m) if m.ctrl => {
-                self.delete_range(self.word_start(self.cursor), self.cursor, launcher, now)
-            }
             (Key::Char('n'), m) if m.ctrl => self.arrow(true),
             (Key::Char('p'), m) if m.ctrl => self.arrow(false),
-            (Key::Char(c), m) if !m.ctrl && !m.alt && !m.primary => self.insert(c, launcher, now),
-            (Key::Char(_), _) => PanelEvent::None,
             // Delete and Tab in the list only return the keyboard to the field.
             (Key::Backspace | Key::Delete | Key::Tab, _) if self.focus == Focus::List => {
                 self.focus = Focus::Field;
                 PanelEvent::Changed
             }
-            (Key::Backspace, m) if m.ctrl => {
-                self.delete_range(self.word_start(self.cursor), self.cursor, launcher, now)
-            }
-            (Key::Backspace, _) if self.select_all => {
-                self.select_all = false;
-                self.set_query("", launcher, now);
-                PanelEvent::Changed
-            }
-            (Key::Backspace, _) => {
-                self.delete_range(self.cursor.saturating_sub(1), self.cursor, launcher, now)
-            }
-            (Key::Delete, _) => self.delete_range(
-                self.cursor,
-                (self.cursor + 1).min(self.chars_len()),
-                launcher,
-                now,
-            ),
-            (Key::Left, m) if m.ctrl => self.move_cursor(self.word_start(self.cursor)),
-            (Key::Right, m) if m.ctrl => self.move_cursor(self.word_end(self.cursor)),
-            (Key::Left, _) => self.move_cursor(self.cursor.saturating_sub(1)),
-            (Key::Right, _) => self.move_cursor(self.cursor + 1),
-            (Key::Home, _) => self.move_cursor(0),
-            (Key::End, _) => self.move_cursor(self.chars_len()),
             (Key::Down, _) => self.arrow(true),
             (Key::Up, _) => self.arrow(false),
             (Key::PageDown, _) => self.move_selection(page, false),
             (Key::PageUp, _) => self.move_selection(-page, false),
             (Key::Tab, _) => match self.selected_item().map(|i| i.title.clone()) {
-                Some(t) if t != self.query => {
+                Some(t) if t != self.field.text() => {
                     self.set_query(&t, launcher, now);
                     PanelEvent::Changed
                 }
                 _ => PanelEvent::None,
             },
+            _ => PanelEvent::Edit,
         }
     }
 }

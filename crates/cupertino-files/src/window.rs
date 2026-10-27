@@ -30,7 +30,12 @@ use crate::render::{
 };
 use crate::settings::{ColumnDesc, ColumnId, IconViewSettings, ListViewSettings};
 use crate::tags::TagColor;
+use cupertino_decorations::field::{
+    caret_offsets, centred_baseline, draw_field, FieldContent, FieldStyle,
+};
 use cupertino_decorations::palette::Rgba;
+use cupertino_geometry::Rect as GeoRect;
+use cupertino_text_field::TextField;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tiny_skia::{PathBuilder, Pixmap, PixmapPaint, Stroke, Transform};
@@ -538,8 +543,7 @@ impl ContentLayout {
 
 /// Opacity of the accent over the folder a drag is over. approximate.
 const DROP_TARGET_ALPHA: f32 = 0.3;
-/// Opacity of the accent behind selected text in the name editor, and of the text of a disabled menu row. approximate.
-const SELECTION_ALPHA: f32 = 0.35;
+/// Opacity of the text of a disabled menu row. approximate.
 const DISABLED_ALPHA: f32 = 0.4;
 /// Name editor: padding either side of the text, minimum text width, border width and corner radius. approximate.
 /// Longest side of a toolbar symbol (the chevrons, the two view modes) in points. approximate: the symbols' own
@@ -579,11 +583,6 @@ fn paint_marquee(pm: &mut Pixmap, scale: f32, band: &Rect, content: &Rect, pal: 
 /// anti-aliased path for such a rect at a fractional position asserts in debug builds.
 fn on_pixel(x: f64, scale: f32) -> f64 {
     (x * f64::from(scale)).round() / f64::from(scale)
-}
-
-/// The first `end` characters of `text`.
-fn text_prefix(text: &str, end: usize) -> String {
-    text.chars().take(end).collect()
 }
 
 /// One frame of the window: its layout, the content layout and the scroll position.
@@ -723,6 +722,8 @@ pub struct WindowState<'a> {
     pub now: SystemTime,
     /// The name being edited in place, if any.
     pub edit: Option<&'a NameEdit>,
+    /// The name editor's caret shows now (the window is active, nothing is selected, the blink is on).
+    pub edit_caret: bool,
     /// The folder item a drag is over: outlined as the place the items would go.
     pub drop_target: Option<usize>,
     /// The rubber band being dragged: where it started in content coordinates and where the pointer is now in window
@@ -737,6 +738,8 @@ pub struct WindowPainter {
     pub renderer: Renderer,
     pub icons: IconViewSettings,
     pub list: ListViewSettings,
+    /// The name editor's text area and the x of each of its caret positions, as last drawn (window points).
+    editor_text: Option<(Rect, Vec<f64>)>,
 }
 
 impl WindowPainter {
@@ -746,7 +749,21 @@ impl WindowPainter {
             renderer,
             icons: IconViewSettings::default(),
             list: ListViewSettings::default(),
+            editor_text: None,
         }
+    }
+
+    /// The caret position of the name editor's `field` under `at` as last drawn, `None` outside its text area.
+    pub fn editor_index(&self, field: &TextField, at: Point) -> Option<usize> {
+        let (area, offsets) = self.editor_text.as_ref()?;
+        let row = Rect::new(
+            area.x - EDITOR_PADDING,
+            area.y,
+            area.w + 2.0 * EDITOR_PADDING,
+            area.h,
+        );
+        row.contains(at)
+            .then(|| field.index_at(offsets, at.x - area.x + field.scroll()))
     }
 
     /// The frame of a window of `size` points on the folder `dir` with the `bars` shown, showing the items of `outline`
@@ -931,8 +948,9 @@ impl WindowPainter {
                 pal,
             );
         }
+        self.editor_text = None;
         if let Some(edit) = state.edit {
-            self.paint_editor(pm, scale, frame, edit, state.mode, pal);
+            self.paint_editor(pm, scale, frame, edit, state, pal);
         }
     }
 
@@ -1061,26 +1079,35 @@ impl WindowPainter {
         scale: f32,
         frame: &Frame,
         edit: &NameEdit,
-        mode: ViewMode,
+        state: &WindowState<'_>,
         pal: &Palette,
     ) {
         let Some(label) = frame.name_frame(edit.index()) else {
             return;
         };
-        let text_size = match mode {
+        let text_size = match state.mode {
             ViewMode::Icons => f64::from(self.icons.text_size),
             ViewMode::List => f64::from(self.list.text_size),
         };
-        let px = text_size as f32 * scale;
-        let text = edit.text();
-        let width_to = |renderer: &mut Renderer, end: usize| {
-            f64::from(
-                renderer
-                    .text
-                    .measure(&text_prefix(&text, end), px, 400, 0.0),
-            ) / f64::from(scale)
+        let field = edit.field();
+        let style = FieldStyle {
+            size: text_size,
+            weight: 400,
+            letter_spacing: 0.0,
+            text: pal.text,
+            selection: pal.text_selection,
+            caret: pal.text,
+            caret_width: 1.0,
         };
-        let text_w = width_to(&mut self.renderer, text.chars().count());
+        let boundaries = field.boundaries();
+        let offsets = caret_offsets(
+            &mut self.renderer.text,
+            field.text(),
+            &boundaries,
+            &style,
+            scale,
+        );
+        let text_w = offsets.last().copied().unwrap_or(0.0);
         let inner_w = text_w
             .max(label.w - 2.0 * EDITOR_PADDING)
             .max(EDITOR_MIN_WIDTH);
@@ -1088,7 +1115,7 @@ impl WindowPainter {
             inner_w + 2.0 * EDITOR_PADDING,
             label.h.min(text_size * 1.6 + 4.0).max(text_size + 4.0),
         );
-        let x = match mode {
+        let x = match state.mode {
             ViewMode::Icons => label.center().x - w / 2.0,
             ViewMode::List => label.x - EDITOR_PADDING,
         }
@@ -1113,39 +1140,27 @@ impl WindowPainter {
             scale,
             pal.background,
         );
-        let (left, baseline) = (x + EDITOR_PADDING, (y + h / 2.0) as f32 * scale + px * 0.36);
-        let selection = edit.selection();
-        if !selection.is_empty() {
-            let (a, b) = (
-                width_to(&mut self.renderer, selection.start),
-                width_to(&mut self.renderer, selection.end),
-            );
-            fill_rect(
-                pm,
-                &Rect::new(left + a, y + 2.0, b - a, h - 4.0),
-                scale,
-                [pal.accent[0], pal.accent[1], pal.accent[2], SELECTION_ALPHA],
-            );
-        }
-        self.renderer.text.draw(
+        let area = Rect::new(x + EDITOR_PADDING, y, inner_w, h);
+        let geo = GeoRect::new(area.x, area.y, area.w, area.h);
+        let content = FieldContent {
+            text: field.text(),
+            boundaries: &boundaries,
+            offsets: &offsets,
+            selection: field.selection(),
+            composition: field.composition(),
+            caret: state.edit_caret.then_some(field.caret()),
+            scroll: field.scroll(),
+        };
+        draw_field(
+            &mut self.renderer.text,
             pm,
-            &text,
-            left as f32 * scale,
-            baseline,
-            px,
-            400,
-            0.0,
-            pal.text,
+            &geo,
+            centred_baseline(&geo, text_size),
+            scale,
+            &content,
+            &style,
         );
-        if selection.is_empty() {
-            let caret = on_pixel(left + width_to(&mut self.renderer, edit.caret()), scale);
-            fill_rect(
-                pm,
-                &Rect::new(caret, y + 2.0, 1.0, h - 4.0),
-                scale,
-                pal.text,
-            );
-        }
+        self.editor_text = Some((area, offsets));
     }
 
     /// Draw level `level` of an open context menu into `pm` (device pixels, sized to the level's popup; the server draws the
@@ -1928,6 +1943,7 @@ mod tests {
             title: "Here",
             now: SystemTime::now(),
             edit: None,
+            edit_caret: false,
             drop_target: None,
             marquee: None,
             status: "3 items",
@@ -2142,6 +2158,7 @@ mod tests {
             title: "Here",
             now: SystemTime::now(),
             edit: None,
+            edit_caret: false,
             drop_target: None,
             marquee: Some((origin, at)),
             status: "3 items",
@@ -2169,6 +2186,7 @@ mod tests {
             title: "Here",
             now: SystemTime::now(),
             edit: None,
+            edit_caret: false,
             drop_target: None,
             marquee: Some((origin, at)),
             status: "3 items",
@@ -2555,6 +2573,7 @@ mod tests {
             title: "Here",
             now: SystemTime::now(),
             edit: None,
+            edit_caret: false,
             drop_target: None,
             marquee: None,
             status: "1 item",
@@ -2615,6 +2634,7 @@ mod tests {
                 title: "Here",
                 now: SystemTime::now(),
                 edit: None,
+                edit_caret: false,
                 drop_target: None,
                 marquee: None,
                 status: "",
@@ -2644,7 +2664,7 @@ mod tests {
     }
 
     #[test]
-    fn the_rename_editor_draws_its_caret_at_any_position_and_scale() {
+    fn a_press_on_the_rename_editor_lands_on_the_caret_position_drawn_there_at_any_scale() {
         let d = tempfile::tempdir().unwrap();
         for name in ["a report.txt", "Notes 2026.md"] {
             std::fs::write(d.path().join(name), b"x").unwrap();
@@ -2680,8 +2700,8 @@ mod tests {
                 let mut pm = Pixmap::new((600.0 * scale) as u32, (300.0 * scale) as u32).unwrap();
                 for (index, e) in browser.entries().iter().enumerate() {
                     let mut edit = NameEdit::new(index, &e.name, false);
-                    edit.end(false);
-                    for _ in 0..=e.name.chars().count() {
+                    for (i, caret) in edit.field().boundaries().into_iter().enumerate() {
+                        edit.field_mut().select(caret..caret);
                         let state = WindowState {
                             browser: &browser,
                             places: &places,
@@ -2692,12 +2712,23 @@ mod tests {
                             title: "Here",
                             now: SystemTime::now(),
                             edit: Some(&edit),
+                            edit_caret: true,
                             drop_target: None,
                             marquee: None,
                             status: "",
                         };
                         painter.paint(&mut pm, scale, &frame, &state, &pal);
-                        edit.left(false);
+                        let (area, offsets) = painter.editor_text.clone().unwrap();
+                        let at = Point {
+                            x: area.x + offsets[i],
+                            y: area.y + area.h / 2.0,
+                        };
+                        assert_eq!(
+                            painter.editor_index(edit.field(), at),
+                            Some(caret),
+                            "{:?} at {caret}, scale {scale}, {mode:?}",
+                            e.name
+                        );
                     }
                 }
             }

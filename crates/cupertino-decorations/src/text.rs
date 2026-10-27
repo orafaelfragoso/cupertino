@@ -205,6 +205,8 @@ struct PlacedGlyph {
 struct Line {
     glyphs: Vec<PlacedGlyph>,
     width: f32,
+    /// Each cluster's source range (bytes of the line's text), its pen position and the glyphs drawn before it.
+    clusters: Vec<(std::ops::Range<usize>, f32, usize)>,
 }
 
 /// Key of a rasterised glyph: face, glyph, size, variation coordinates, subpixel bins and dilation, all as exact bits.
@@ -383,6 +385,7 @@ impl TextRenderer {
             return Line {
                 glyphs: Vec::new(),
                 width: 0.0,
+                clusters: Vec::new(),
             };
         };
         let mut runs: Vec<(usize, String)> = Vec::new();
@@ -394,7 +397,9 @@ impl TextRenderer {
             }
         }
         let mut glyphs = Vec::new();
+        let mut clusters = Vec::new();
         let mut pen = 0.0f32;
+        let mut run_start = 0;
         for (face, run) in runs {
             let settings = self.settings(face, px, weight);
             let script = run
@@ -417,6 +422,12 @@ impl TextRenderer {
                 .build();
             shaper.add_str(&run);
             shaper.shape_with(|cluster| {
+                let source = cluster.source.to_range();
+                clusters.push((
+                    run_start + source.start..run_start + source.end,
+                    pen,
+                    glyphs.len(),
+                ));
                 for g in cluster.glyphs {
                     glyphs.push(PlacedGlyph {
                         face,
@@ -427,8 +438,13 @@ impl TextRenderer {
                     pen += g.advance;
                 }
             });
+            run_start += run.len();
         }
-        Line { glyphs, width: pen }
+        Line {
+            glyphs,
+            width: pen,
+            clusters,
+        }
     }
 
     /// Face that draws `ch`: the primary one when it maps the character (or nothing else does), else the
@@ -449,6 +465,49 @@ impl TextRenderer {
             0 => 0.0,
             n => line.width + (n - 1) as f32 * letter_spacing_px,
         }
+    }
+
+    /// The pen position in pixels at each of `boundaries` (ascending byte offsets of `text` on character
+    /// boundaries), from one shaping pass: the position of the cluster that starts there, a share of the cluster's
+    /// advance for a boundary inside one (a ligature), the line's width at the end. The same widths as
+    /// [`TextRenderer::measure`] of each prefix give, short of kerning across the boundary.
+    pub fn offsets(
+        &mut self,
+        text: &str,
+        boundaries: &[usize],
+        px: f32,
+        weight: u16,
+        letter_spacing_px: f32,
+    ) -> Vec<f32> {
+        let line = self.shape(text, px, weight);
+        let spacing = |glyphs: usize| glyphs as f32 * letter_spacing_px;
+        let end = line.width + spacing(line.glyphs.len().saturating_sub(1));
+        let x_of = |i: usize| {
+            line.clusters
+                .get(i)
+                .map_or(end, |(_, x, before)| x + spacing(*before))
+        };
+        let mut i = 0;
+        boundaries
+            .iter()
+            .map(|&b| {
+                while line
+                    .clusters
+                    .get(i)
+                    .is_some_and(|(range, _, _)| range.end <= b)
+                {
+                    i += 1;
+                }
+                match line.clusters.get(i) {
+                    None => end,
+                    Some((range, _, _)) if b <= range.start => x_of(i),
+                    Some((range, _, _)) => {
+                        let (here, next) = (x_of(i), x_of(i + 1));
+                        here + (next - here) * (b - range.start) as f32 / range.len() as f32
+                    }
+                }
+            })
+            .collect()
     }
 
     /// Longest prefix of `text` that fits in `max_px` once an ellipsis is appended; the text itself

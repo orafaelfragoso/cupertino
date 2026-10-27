@@ -1,11 +1,30 @@
 //! `org.cupertino.Login1`: the control interface of the `cupertino-login` process, which is the session agent. The server
 //! calls `Lock` for the lock shortcut and `PowerKey` for the press and the release of the power key; any client may call
-//! the `Request*` methods, which show the confirmation panel of [`crate::panel`], and read `Locked`.
+//! the `Request*` methods, which show the confirmation panel of [`crate::panel`], and read `Locked`, `UserName` and
+//! `Capabilities` (what the session menu of the menu bar offers).
 
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::{connection, Connection};
 
+use std::collections::HashMap;
+
+use crate::capabilities::Capabilities;
 use crate::panel::Kind;
+
+/// Longest name the menu is given, in characters.
+const MAX_NAME_CHARS: usize = 64;
+
+/// A name for a menu: from the account database, so not trusted. Control characters (newlines, escapes, the bidirectional
+/// overrides) are dropped, the ends trimmed, and the length capped.
+pub fn clean_name(text: &str) -> String {
+    text.chars()
+        .filter(|c| !c.is_control() && !matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(MAX_NAME_CHARS)
+        .collect()
+}
 
 /// Name, path and interface of the control interface (the callers use these strings).
 pub const BUS_NAME: &str = "org.cupertino.Login1";
@@ -23,11 +42,17 @@ pub enum Request {
     PowerKey { pressed: bool },
     /// `SwitchToLoginWindow`.
     SwitchToLoginWindow,
+    /// `Sleep`: lock and put the computer to sleep, without a panel.
+    Sleep,
+    /// `RefreshCapabilities`: read logind again.
+    RefreshCapabilities,
 }
 
 struct Control {
     on_request: Box<dyn Fn(Request) + Send + Sync>,
     locked: bool,
+    user_name: String,
+    capabilities: Capabilities,
 }
 
 impl Control {
@@ -68,6 +93,29 @@ impl Control {
         self.panel(Kind::ShutDown)
     }
 
+    /// Put the computer to sleep without asking: the session locks first (the sleep preparation does it). Fails while the
+    /// session is locked, like the panels.
+    fn sleep(&self) -> zbus::fdo::Result<()> {
+        if self.locked {
+            return Err(zbus::fdo::Error::Failed("the session is locked".into()));
+        }
+        (self.on_request)(Request::Sleep);
+        Ok(())
+    }
+
+    /// Read logind's policy and the session manager again and update `Capabilities`; returns at once, and
+    /// `PropertiesChanged` follows when something changed. A menu calls it when it opens, since the answers change with the
+    /// open sessions and the inhibitors.
+    fn refresh_capabilities(&self) {
+        (self.on_request)(Request::RefreshCapabilities);
+    }
+
+    /// Show the power panel (Restart, Sleep, Cancel, Shut Down), the one a held power button shows. Fails while the session
+    /// is locked.
+    fn request_power_dialog(&self) -> zbus::fdo::Result<()> {
+        self.panel(Kind::PowerButton)
+    }
+
     /// Lock the session and hand the console to the login screen, where another user can log in and this one can come back
     /// (fast user switching). A session that is locked already switches too.
     fn switch_to_login_window(&self) {
@@ -85,9 +133,23 @@ impl Control {
     fn locked(&self) -> bool {
         self.locked
     }
+
+    /// The name of the person, for "Log Out <name>…": the account's full name, else its login.
+    #[zbus(property)]
+    fn user_name(&self) -> String {
+        self.user_name.clone()
+    }
+
+    /// Which of `sleep`, `restart`, `shut-down`, `log-out`, `switch-user` and `lock` work on this machine; a menu hides or
+    /// disables the others. See [`Capabilities`].
+    #[zbus(property)]
+    fn capabilities(&self) -> HashMap<String, bool> {
+        self.capabilities.to_map()
+    }
 }
 
 /// The served interface; it stays on the bus while this lives.
+#[derive(Clone)]
 pub struct Service {
     connection: Connection,
 }
@@ -96,6 +158,25 @@ impl Service {
     /// The session bus connection the interface is served on.
     pub fn connection(&self) -> zbus::blocking::Connection {
         zbus::blocking::Connection::from(self.connection.clone())
+    }
+
+    /// Set `Capabilities`, and emit `PropertiesChanged` when the value changes.
+    pub fn set_capabilities(&self, capabilities: Capabilities) -> zbus::Result<()> {
+        zbus::block_on(async {
+            let interface = self
+                .connection
+                .object_server()
+                .interface::<_, Control>(OBJECT_PATH)
+                .await?;
+            let mut control = interface.get_mut().await;
+            if control.capabilities != capabilities {
+                control.capabilities = capabilities;
+                control
+                    .capabilities_changed(interface.signal_emitter())
+                    .await?;
+            }
+            Ok(())
+        })
     }
 
     /// Set `Locked`, and emit `PropertiesChanged` when the value changes.
@@ -117,10 +198,12 @@ impl Service {
 }
 
 /// Export the interface at [`OBJECT_PATH`] and claim [`BUS_NAME`] on the bus `builder` connects to. `on_request` runs on
-/// the bus thread for every call. The interface is served while the returned [`Service`] lives. Fails with
-/// `zbus::Error::NameTaken` when another lock screen owns the name.
+/// the bus thread for every call. The interface is served while the returned [`Service`] lives, with `user_name` and
+/// `capabilities` as the properties start out. Fails with `zbus::Error::NameTaken` when another lock screen owns the name.
 pub fn serve(
     builder: connection::Builder<'static>,
+    user_name: String,
+    capabilities: Capabilities,
     on_request: impl Fn(Request) + Send + Sync + 'static,
 ) -> zbus::Result<Service> {
     zbus::block_on(async {
@@ -130,6 +213,8 @@ pub fn serve(
                 Control {
                     on_request: Box::new(on_request),
                     locked: false,
+                    user_name: clean_name(&user_name),
+                    capabilities,
                 },
             )?
             .build()
@@ -145,4 +230,17 @@ pub fn serve(
             RequestNameReply::Exists | RequestNameReply::InQueue => Err(zbus::Error::NameTaken),
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_name_for_the_menu_has_no_control_characters_and_a_bounded_length() {
+        assert_eq!(clean_name("Rafael Fragoso"), "Rafael Fragoso");
+        assert_eq!(clean_name("  Ra\nfa\x1b[31mel\u{202e}  "), "Rafa[31mel");
+        assert_eq!(clean_name("\t\n"), "");
+        assert_eq!(clean_name(&"é".repeat(200)).chars().count(), MAX_NAME_CHARS);
+    }
 }

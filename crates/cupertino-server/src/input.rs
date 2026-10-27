@@ -119,6 +119,10 @@ pub enum Action {
     /// Start the screenshot process in one of its modes.
     Screenshot(ScreenshotRequest),
     QuitCompositor,
+    /// Ask the login process whether to log out of the session.
+    LogOut,
+    /// Open the login process's power panel.
+    PowerDialog,
     SwitchVt(i32),
     ShowDesktop,
     AppGrid,
@@ -232,6 +236,8 @@ const NAMES: &[(&str, Action)] = &[
     ("toggle-stage", Action::ToggleStage),
     ("lock", Action::Lock),
     ("power-key", Action::PowerKey),
+    ("log-out", Action::LogOut),
+    ("power-dialog", Action::PowerDialog),
     ("input-source-previous", Action::InputSourcePrevious),
     ("input-source-next", Action::InputSourceNext),
     (
@@ -452,7 +458,8 @@ impl KeyBindings {
             I::PowerKey => Action::PowerKey,
             I::InputSourcePrevious => Action::InputSourcePrevious,
             I::InputSourceNext => Action::InputSourceNext,
-            I::Logout => Action::QuitCompositor,
+            I::Logout => Action::LogOut,
+            I::PowerDialog => Action::PowerDialog,
             I::Screenshot(r) => Action::Screenshot(*r),
             I::Exec(cmd) => {
                 self.exec.push(cmd.clone());
@@ -624,6 +631,10 @@ pub enum ShellOp {
     },
     /// Ask the login process to lock the session.
     Lock,
+    /// Ask the login process whether to log out.
+    LogOut,
+    /// Open the login process's power panel.
+    PowerDialog,
     /// Tell the login process the power key went down (`true`) or up. It times the hold.
     PowerKey {
         pressed: bool,
@@ -801,6 +812,8 @@ pub fn translate_action(action: Action, ctx: &ActionContext) -> ActionPlan {
         Action::ToggleStage => plan.ops.push(ShellOp::ToggleStage),
         Action::Lock => plan.ops.push(ShellOp::Lock),
         Action::PowerKey => plan.ops.push(ShellOp::PowerKey { pressed: true }),
+        Action::LogOut => plan.ops.push(ShellOp::LogOut),
+        Action::PowerDialog => plan.ops.push(ShellOp::PowerDialog),
         Action::Exec(i) => plan.ops.push(ShellOp::Exec(i)),
         Action::Osd { key, fine } => plan.ops.push(ShellOp::Osd { key, fine }),
         Action::Workspace(n) => {
@@ -1453,6 +1466,35 @@ mod tests {
     }
 
     #[test]
+    fn log_out_and_the_power_dialog_are_bound_and_ask_the_login_process() {
+        let b = Config::default().keybindings;
+        for (chord, action, name, op) in [
+            ("Super+Shift+q", Action::LogOut, "log-out", ShellOp::LogOut),
+            (
+                "Ctrl+XF86PowerOff",
+                Action::PowerDialog,
+                "power-dialog",
+                ShellOp::PowerDialog,
+            ),
+            (
+                "Ctrl+XF86Eject",
+                Action::PowerDialog,
+                "power-dialog",
+                ShellOp::PowerDialog,
+            ),
+        ] {
+            let combo = parse_chord(chord).unwrap();
+            assert_eq!(b.lookup(combo.sym, combo.mods), Some(action), "{chord}");
+            assert_eq!(Action::from_name(name), Some(action));
+            assert_eq!(action.name(), name);
+            assert_eq!(dbg(&translate_action(action, &ctx()).ops), dbg(&vec![op]));
+        }
+        // the plain power key is still the power key
+        let power = parse_chord("XF86PowerOff").unwrap();
+        assert_eq!(b.lookup(power.sym, power.mods), Some(Action::PowerKey));
+    }
+
+    #[test]
     fn the_power_key_release_reaches_the_login_process_and_repeats_do_not() {
         let mut r = KeyRouter::new(Config::default().keybindings);
         let c = ctx();
@@ -1607,6 +1649,8 @@ mod tests {
             Action::Overview,
             Action::CloseWindow,
             Action::Lock,
+            Action::LogOut,
+            Action::PowerDialog,
             Action::PowerKey,
             Action::Osd {
                 key: OsdKey::Mute,

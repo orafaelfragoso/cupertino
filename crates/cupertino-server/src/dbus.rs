@@ -31,6 +31,10 @@ pub enum Request {
     Lock,
     /// Lock the session on the person's request (the lock shortcut; lock request type 8, whose lock screen hides after 5 s).
     LockNow,
+    /// Ask `cupertino-login` whether to log out (its confirmation panel).
+    LogOut,
+    /// Open `cupertino-login`'s power panel.
+    PowerDialog,
     /// The power key went down (`true`) or up; `cupertino-login` times the hold.
     PowerKey {
         pressed: bool,
@@ -95,6 +99,20 @@ impl Request {
                 "LockNow",
                 Body::Empty,
             ),
+            Request::LogOut => (
+                "org.cupertino.Login1",
+                "/org/cupertino/Login1",
+                "org.cupertino.Login1",
+                "RequestLogOut",
+                Body::Empty,
+            ),
+            Request::PowerDialog => (
+                "org.cupertino.Login1",
+                "/org/cupertino/Login1",
+                "org.cupertino.Login1",
+                "RequestPowerDialog",
+                Body::Empty,
+            ),
             Request::PowerKey { pressed } => (
                 "org.cupertino.Login1",
                 "/org/cupertino/Login1",
@@ -125,13 +143,23 @@ pub struct DbusHandle {
     tx: async_channel::Sender<Request>,
 }
 
+/// Runs on the worker thread when the login process, the one that shows the log out panel, is not on the bus.
+pub type LoginMissing = std::sync::Arc<dyn Fn() + Send + Sync>;
+
 impl DbusHandle {
     /// Start the worker.
     pub fn start() -> Option<DbusHandle> {
+        Self::start_with(|| {})
+    }
+
+    /// Start the worker; `login_missing` runs on it when a log out request finds nobody to ask (no `org.cupertino.Login1`
+    /// on the bus), so the caller can do what a session without a login process does.
+    pub fn start_with(login_missing: impl Fn() + Send + Sync + 'static) -> Option<DbusHandle> {
         let (tx, rx) = async_channel::unbounded::<Request>();
+        let login_missing: LoginMissing = std::sync::Arc::new(login_missing);
         let spawned = std::thread::Builder::new()
             .name("cupertino-dbus".into())
-            .spawn(move || zbus::block_on(worker(rx)));
+            .spawn(move || zbus::block_on(worker(rx, login_missing)));
         match spawned {
             Ok(_) => Some(DbusHandle { tx }),
             Err(e) => {
@@ -141,15 +169,17 @@ impl DbusHandle {
         }
     }
 
-    /// Queue a call on a shell process.
-    pub fn send(&self, what: Request) {
-        if self.tx.try_send(what).is_err() {
+    /// Queue a call on a shell process; false when the worker is gone (no session bus).
+    pub fn send(&self, what: Request) -> bool {
+        let queued = self.tx.try_send(what).is_ok();
+        if !queued {
             tracing::warn!(?what, "no session bus: cannot reach the shell process");
         }
+        queued
     }
 }
 
-async fn worker(rx: async_channel::Receiver<Request>) {
+async fn worker(rx: async_channel::Receiver<Request>, login_missing: LoginMissing) {
     let conn = match zbus::Connection::session().await {
         Ok(c) => c,
         Err(e) => {
@@ -161,12 +191,13 @@ async fn worker(rx: async_channel::Receiver<Request>) {
         let conn = conn.clone();
         // a key's press and release must arrive in the order they happened, so those calls are awaited in turn
         if matches!(what, Request::PowerKey { .. }) {
-            call(&conn, what).await;
+            call(&conn, what, &login_missing).await;
         } else {
+            let login_missing = login_missing.clone();
             conn.executor()
                 .clone()
                 .spawn(
-                    async move { call(&conn, what).await },
+                    async move { call(&conn, what, &login_missing).await },
                     "cupertino-shell-call",
                 )
                 .detach();
@@ -175,7 +206,7 @@ async fn worker(rx: async_channel::Receiver<Request>) {
 }
 
 /// Make the call of `what` and log a failure.
-async fn call(conn: &zbus::Connection, what: Request) {
+async fn call(conn: &zbus::Connection, what: Request, login_missing: &LoginMissing) {
     let (name, path, interface, method, body) = what.call();
     let sent = match body {
         Body::Empty => {
@@ -198,8 +229,25 @@ async fn call(conn: &zbus::Connection, what: Request) {
         }
     };
     if let Err(e) = sent {
+        if what == Request::LogOut && is_nobody_there(&e) {
+            tracing::warn!("no login process on the bus: the log out shortcut ends the server");
+            login_missing();
+            return;
+        }
         tracing::warn!(?what, name, error = %e, "cannot reach the shell process");
     }
+}
+
+/// Whether a call failed because nobody owns the name it went to.
+fn is_nobody_there(e: &zbus::Error) -> bool {
+    matches!(
+        e,
+        zbus::Error::MethodError(name, ..)
+            if matches!(
+                name.as_str(),
+                "org.freedesktop.DBus.Error.ServiceUnknown" | "org.freedesktop.DBus.Error.NameHasNoOwner"
+            )
+    )
 }
 
 impl crate::state::Cupertino {
@@ -228,6 +276,20 @@ impl crate::state::Cupertino {
         self.shell_call(Request::LockNow);
     }
 
+    /// Ask the login process whether to log out. A session without one (no session bus, or no login process on it: a
+    /// headless or capture run) ends the server instead, as the shortcut did before there was a panel.
+    pub fn log_out_session(&mut self) {
+        if !self.dbus.as_ref().is_some_and(|d| d.send(Request::LogOut)) {
+            tracing::warn!("no login process to ask: the log out shortcut ends the server");
+            self.quit_compositor();
+        }
+    }
+
+    /// Open the login process's power panel.
+    pub fn power_dialog(&mut self) {
+        self.shell_call(Request::PowerDialog);
+    }
+
     /// Tell the login process the power key went down or up.
     pub fn power_key(&mut self, pressed: bool) {
         self.shell_call(Request::PowerKey { pressed });
@@ -240,7 +302,9 @@ impl crate::state::Cupertino {
 
     fn shell_call(&mut self, what: Request) {
         match &self.dbus {
-            Some(dbus) => dbus.send(what),
+            Some(dbus) => {
+                dbus.send(what);
+            }
             None => tracing::warn!(?what, "no session bus: cannot reach the shell process"),
         }
     }
@@ -262,6 +326,25 @@ mod tests {
                 Body::Empty
             )
         );
+    }
+
+    #[test]
+    fn the_log_out_and_power_dialog_requests_call_the_panels_of_the_login_process() {
+        for (request, method) in [
+            (Request::LogOut, "RequestLogOut"),
+            (Request::PowerDialog, "RequestPowerDialog"),
+        ] {
+            assert_eq!(
+                request.call(),
+                (
+                    "org.cupertino.Login1",
+                    "/org/cupertino/Login1",
+                    "org.cupertino.Login1",
+                    method,
+                    Body::Empty
+                )
+            );
+        }
     }
 
     #[test]

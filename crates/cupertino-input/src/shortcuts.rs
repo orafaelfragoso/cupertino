@@ -60,7 +60,10 @@ pub enum Action {
     ToggleStage,
     /// The power key: its press and release go to the login process, which times the hold.
     PowerKey,
+    /// Ask the login process whether to log out (confirmation panel, countdown, applications quit first).
     Logout,
+    /// Open the power panel of the login process: Restart, Sleep, Cancel, Shut Down.
+    PowerDialog,
     /// Step to the previously used input source (HUD while the modifiers are held).
     InputSourcePrevious,
     /// Step to the next input source in menu order.
@@ -145,6 +148,7 @@ impl Action {
             Action::ToggleStage => "toggle-stage".into(),
             Action::PowerKey => "power-key".into(),
             Action::Logout => "logout".into(),
+            Action::PowerDialog => "power-dialog".into(),
             Action::InputSourcePrevious => "input-source-previous".into(),
             Action::InputSourceNext => "input-source-next".into(),
             Action::Screenshot(r) => r.name().into(),
@@ -245,6 +249,7 @@ impl FromStr for Action {
             "toggle-stage" => Action::ToggleStage,
             "power-key" => Action::PowerKey,
             "logout" => Action::Logout,
+            "power-dialog" => Action::PowerDialog,
             "input-source-previous" => Action::InputSourcePrevious,
             "input-source-next" => Action::InputSourceNext,
             other => match ScreenshotRequest::ALL
@@ -476,7 +481,10 @@ Ctrl+F2 = focus-menu-bar
 Ctrl+F3 = focus-dock
 Super+Alt+d = toggle-dock-auto-hide
 Super+Ctrl+q = lock
+Super+Shift+q = logout
 XF86PowerOff = power-key
+Ctrl+XF86PowerOff = power-dialog
+Ctrl+XF86Eject = power-dialog
 Super+Shift+3 = screenshot
 Super+Shift+4 = screenshot-area
 Super+Shift+5 = screenshot-toolbar

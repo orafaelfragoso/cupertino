@@ -1,6 +1,7 @@
 //! Backends: nested winit window (development), DRM/KMS on a TTY (`udev` feature) and an
 //! offscreen EGL device (headless tests and screenshots).
 
+use smithay::backend::drm::DrmNode;
 use smithay::backend::egl::EGLDevice;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::{ImportDma, ImportMemWl};
@@ -54,13 +55,18 @@ impl Backend {
     }
 }
 
+/// The render node of the EGL display `renderer` draws on, if it has one.
+pub fn render_node(renderer: &GlesRenderer) -> Option<DrmNode> {
+    EGLDevice::device_for_display(renderer.egl_context().display())
+        .ok()
+        .and_then(|d| d.try_get_render_node().ok().flatten())
+}
+
 /// Create the dmabuf global (with default feedback when the render node is known) and publish the
 /// shm formats of `renderer`.
 pub fn init_buffers(state: &mut Cupertino, renderer: &GlesRenderer) {
     let formats = renderer.dmabuf_formats();
-    let node = EGLDevice::device_for_display(renderer.egl_context().display())
-        .ok()
-        .and_then(|d| d.try_get_render_node().ok().flatten());
+    let node = render_node(renderer);
     let dh = state.display_handle.clone();
     let global = match node.and_then(|n| {
         DmabufFeedbackBuilder::new(n.dev_id(), formats.clone())

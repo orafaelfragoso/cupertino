@@ -179,6 +179,11 @@ impl Server {
         Some(Server { state, event_loop })
     }
 
+    fn has_render_node(&mut self) -> bool {
+        let renderer = self.state.backend.as_mut().unwrap().renderer();
+        cupertino_server::backend::render_node(renderer).is_some()
+    }
+
     fn advertised(&mut self, peer: Peer) -> Globals {
         let display = &self.state.display_handle;
         let stream = match peer {
@@ -235,10 +240,9 @@ fn every_connection_sees_the_registry_entries_of_its_scope() {
         let Some(mut server) = Server::start(config) else {
             return;
         };
-        // The dmabuf global has default feedback (a higher version) only when the EGL display has a render node, which
-        // the machine decides: the registry holds both versions, and the one advertised picks the branch under test.
-        let with_node = registered(&registry, Peer::Ordinary, accent_table, true);
-        let render_node = server.advertised(Peer::Ordinary).get(DMABUF) == with_node.get(DMABUF);
+        // The dmabuf global has default feedback (a higher version) only when the EGL display has a render node: the
+        // registry holds both versions, and the renderer decides which one this machine must advertise.
+        let render_node = server.has_render_node();
         eprintln!("render node: {render_node}");
         let mut peers = vec![Peer::Ordinary, Peer::Internal];
         peers.extend(

@@ -218,6 +218,19 @@ impl Settings {
         })
     }
 
+    /// Take the accessibility settings from `held`, the server's `Accessibility` property (every key of the file with
+    /// its value as the file writes it); a key or value this build does not understand is skipped.
+    pub fn apply_session_accessibility(
+        &mut self,
+        held: &std::collections::HashMap<String, String>,
+    ) {
+        for (key, value) in held {
+            if let Err(e) = self.accessibility.set(key, value) {
+                eprintln!("cupertino-settings: the session's accessibility setting {key}: {e}");
+            }
+        }
+    }
+
     /// Write `file` to its path atomically.
     pub fn store(&self, paths: &Paths, file: File) -> Result<(), StoreError> {
         let path = paths.of(file).ok_or(StoreError::NoPath(file))?;

@@ -27,6 +27,7 @@ use smithay::reexports::wayland_server::{
 use smithay::utils::{Logical, Point};
 use smithay::wayland::shell::wlr_layer::Layer;
 
+use crate::authorization::{require, ShellRole};
 use crate::state::{Cupertino, WindowEntry};
 
 /// Where a placed window is headed. A window on the stage has no entry once its animation ended.
@@ -357,7 +358,7 @@ impl Cupertino {
             init.init(id, WindowManagerData { output: None });
             shell.post_error(
                 ShellError::Permission,
-                "get_window_manager is for the shell processes the server started",
+                "get_window_manager needs the WindowManager role, which only a shell process the server started for it holds",
             );
             return;
         }
@@ -562,7 +563,7 @@ impl Cupertino {
 impl Dispatch<CupertinoWindowManagerV1, WindowManagerData> for Cupertino {
     fn request(
         state: &mut Self,
-        _: &Client,
+        client: &Client,
         resource: &CupertinoWindowManagerV1,
         request: cupertino_window_manager_v1::Request,
         data: &WindowManagerData,
@@ -570,6 +571,9 @@ impl Dispatch<CupertinoWindowManagerV1, WindowManagerData> for Cupertino {
         _: &mut DataInit<'_, Self>,
     ) {
         let Some(output) = data.output else { return };
+        if !require(client, ShellRole::WindowManager, resource) {
+            return;
+        }
         match request {
             cupertino_window_manager_v1::Request::SetPlacement {
                 id,

@@ -266,7 +266,7 @@ fn load_dock_settings(
 /// Connect, take the dock role of the first output and serve until the connection fails.
 pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let assets = Assets::discover();
-    let mut client = Client::connect()?;
+    let mut client = Client::connect_shell()?;
     let (output, geometry) = client
         .outputs()
         .into_iter()

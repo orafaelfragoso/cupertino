@@ -47,12 +47,12 @@ impl Supervisor {
     }
 
     /// Start due processes and restart exited ones as the policy says. Children get `WAYLAND_DISPLAY=socket` for the
-    /// programs they start, and their own connection from `connect` as `WAYLAND_SOCKET`.
+    /// programs they start, and their own connection from `connect` (made for the process's roles) as `WAYLAND_SOCKET`.
     pub fn poll(
         &mut self,
         now: Instant,
         socket: &str,
-        connect: &mut dyn FnMut() -> std::io::Result<UnixStream>,
+        connect: &mut dyn FnMut(&ShellProcess) -> std::io::Result<UnixStream>,
     ) {
         for p in &mut self.procs {
             p.phase = match std::mem::replace(&mut p.phase, Phase::Stopped) {
@@ -103,14 +103,14 @@ impl Supervisor {
 fn start(
     spec: &ShellProcess,
     socket: &str,
-    connect: &mut dyn FnMut() -> std::io::Result<UnixStream>,
+    connect: &mut dyn FnMut(&ShellProcess) -> std::io::Result<UnixStream>,
     now: Instant,
 ) -> Phase {
     let (program, args) = spec
         .command
         .split_first()
         .expect("shell process commands are validated non-empty at load");
-    let stream = match connect() {
+    let stream = match connect(spec) {
         Ok(stream) => stream,
         Err(e) => {
             tracing::warn!(name = spec.name, error = %e, "creating the shell process's connection failed");
@@ -161,11 +161,12 @@ mod tests {
         ShellProcess {
             name: "test".into(),
             command: vec!["sh".into(), "-c".into(), script.into()],
+            roles: Vec::new(),
         }
     }
 
     /// A connection nobody listens on: these tests run plain scripts.
-    fn connect() -> std::io::Result<UnixStream> {
+    fn connect(_: &ShellProcess) -> std::io::Result<UnixStream> {
         UnixStream::pair().map(|(_, client)| client)
     }
 

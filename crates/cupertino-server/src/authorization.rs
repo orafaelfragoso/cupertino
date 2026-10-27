@@ -1,0 +1,127 @@
+//! What the server lets a connection do. A connection holds capabilities only when the server made it for a process it
+//! starts ([`crate::shell_connection`]); a client of the public socket holds none. The capabilities live in the server's
+//! data of the connection, so they cannot be claimed, passed on or copied: a process that is not on the other end of
+//! the connection has no way to use them.
+//!
+//! Each privileged global is offered only to the connections that hold its role (`can_view`), and each privileged
+//! request checks the role again in its handler, so a request on an object id the client guessed is a protocol error
+//! of its own.
+
+use cupertino_defaults::compositor::ShellRoleName;
+use cupertino_protocols::server::cupertino_shell_v1::Error as ShellError;
+use smithay::reexports::wayland_server::{Client, Resource};
+
+use crate::state::ClientState;
+
+/// A privilege of a shell process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShellRole {
+    /// Bind `cupertino_shell_v1` and follow the appearance, display options and lock state of the session.
+    Session,
+    /// Be the menu bar of an output.
+    MenuBar,
+    /// Be the dock of an output, which can end applications.
+    Dock,
+    /// Arrange the windows of an output.
+    WindowManager,
+    /// See the capture globals and the window feed of the screenshot process.
+    Capture,
+}
+
+impl ShellRole {
+    const fn bit(self) -> u8 {
+        1 << self as u8
+    }
+}
+
+impl From<ShellRoleName> for ShellRole {
+    fn from(name: ShellRoleName) -> Self {
+        match name {
+            ShellRoleName::Session => ShellRole::Session,
+            ShellRoleName::MenuBar => ShellRole::MenuBar,
+            ShellRoleName::Dock => ShellRole::Dock,
+            ShellRoleName::WindowManager => ShellRole::WindowManager,
+        }
+    }
+}
+
+/// The roles one connection holds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClientCapabilitySet(u8);
+
+impl ClientCapabilitySet {
+    /// The set of a client of the public socket.
+    pub const NONE: Self = Self(0);
+
+    pub fn of(roles: impl IntoIterator<Item = ShellRole>) -> Self {
+        Self(roles.into_iter().fold(0, |bits, r| bits | r.bit()))
+    }
+
+    pub fn contains(self, role: ShellRole) -> bool {
+        self.0 & role.bit() != 0
+    }
+
+    /// Whether the set holds a role of the shell protocol, which is what makes `cupertino_shell_v1` visible.
+    pub fn holds_shell_role(self) -> bool {
+        [
+            ShellRole::Session,
+            ShellRole::MenuBar,
+            ShellRole::Dock,
+            ShellRole::WindowManager,
+        ]
+        .into_iter()
+        .any(|r| self.contains(r))
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+/// The capabilities of `client`; none when its data is not a [`ClientState`].
+pub fn capabilities(client: &Client) -> ClientCapabilitySet {
+    client
+        .get_data::<ClientState>()
+        .map_or(ClientCapabilitySet::NONE, |c| c.capabilities)
+}
+
+/// Whether `client` holds `role`.
+pub fn authorized(client: &Client, role: ShellRole) -> bool {
+    capabilities(client).contains(role)
+}
+
+/// Request-time check of a role object: the connection must still hold `role`. When it does not, the object's client
+/// gets the shell protocol's permission error and the request is not to be carried out.
+pub fn require<R: Resource>(client: &Client, role: ShellRole, object: &R) -> bool {
+    if authorized(client, role) {
+        return true;
+    }
+    object.post_error(
+        ShellError::Permission,
+        format!(
+            "{} needs the {role:?} role, which this connection does not hold",
+            object.id().interface().name
+        ),
+    );
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_set_holds_exactly_its_roles() {
+        let set = ClientCapabilitySet::of([ShellRole::Dock, ShellRole::Capture]);
+        assert!(set.contains(ShellRole::Dock) && set.contains(ShellRole::Capture));
+        assert!(!set.contains(ShellRole::WindowManager) && !set.contains(ShellRole::Session));
+        assert!(!ClientCapabilitySet::NONE.holds_shell_role());
+        assert!(ClientCapabilitySet::NONE.is_empty());
+    }
+
+    #[test]
+    fn capture_alone_does_not_make_the_shell_global_visible() {
+        assert!(!ClientCapabilitySet::of([ShellRole::Capture]).holds_shell_role());
+        assert!(ClientCapabilitySet::of([ShellRole::MenuBar]).holds_shell_role());
+    }
+}

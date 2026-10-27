@@ -339,8 +339,8 @@ pub fn start_shell_supervision(
                 .clone()
                 .expect("the server listens on a socket when it supervises shell processes");
             let display = state.display_handle.clone();
-            state.supervisor.poll(Instant::now(), &socket, &mut || {
-                crate::shell_connection::shell_process_connection(&display)
+            state.supervisor.poll(Instant::now(), &socket, &mut |spec| {
+                crate::shell_connection::shell_process_connection(&display, &spec.roles)
             });
             TimeoutAction::ToDuration(SUPERVISION_INTERVAL)
         })

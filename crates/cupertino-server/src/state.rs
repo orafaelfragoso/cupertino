@@ -45,6 +45,8 @@ use smithay::wayland::socket::ListeningSocketSource;
 use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::xdg_activation::XdgActivationState;
 
+use crate::app_effects_v1::AppEffectsV1Global;
+use crate::authorization::ClientCapabilitySet;
 use crate::backend::Backend;
 use crate::config::Config;
 use crate::cursor::CursorLoader;
@@ -78,12 +80,9 @@ pub struct ClientState {
     pub mapped_toplevel: std::sync::atomic::AtomicBool,
     /// The compositor's own connection (the accent picker's input method bridge).
     pub internal: bool,
-    /// A shell process the server started on a connection of its own (`crate::capture::launch`): only such a client
-    /// sees the screen-capture globals.
-    pub privileged: bool,
-    /// A shell process the server supervises (`crate::supervisor`), on a connection of its own: the only kind of client
-    /// that may be a dock or a window manager.
-    pub shell_process: bool,
+    /// What the server lets the client do: set only for the processes the server started on a connection of their own
+    /// (`crate::shell_connection`), empty for a client of the public socket.
+    pub capabilities: ClientCapabilitySet,
 }
 
 impl Default for ClientState {
@@ -93,8 +92,7 @@ impl Default for ClientState {
             connected_at: std::time::Instant::now(),
             mapped_toplevel: std::sync::atomic::AtomicBool::new(false),
             internal: false,
-            privileged: false,
-            shell_process: false,
+            capabilities: ClientCapabilitySet::NONE,
         }
     }
 }
@@ -135,7 +133,7 @@ pub struct WindowEntry {
     /// Known to the window model (has committed a buffer).
     pub mapped: bool,
     pub server_side: bool,
-    /// Title bar style the client chose (`cupertino_shell_v1.set_titlebar_style`); it applies while the
+    /// Title bar style the client chose (`cupertino_app_effects_v1.set_titlebar_style`); it applies while the
     /// window is `server_side`.
     pub titlebar: cupertino_decorations::TitlebarStyle,
     pub foreign: Option<ForeignToplevelHandle>,
@@ -366,6 +364,7 @@ pub struct Cupertino {
     /// The heads the backends found, their configuration and the output-management protocols.
     pub displays: crate::displays::Displays,
     pub shell_v1: ShellV1Global,
+    pub app_effects_v1: AppEffectsV1Global,
     pub supervisor: Supervisor,
     /// Screen capture for the screenshot process: its globals, sessions and pending frames.
     pub capture: crate::capture::Capture,
@@ -485,6 +484,7 @@ impl Cupertino {
         let menu_protocols = MenuProtocols::new(&dh);
         let displays = crate::displays::Displays::new(&dh);
         let shell_v1 = ShellV1Global::new(&dh);
+        let app_effects_v1 = AppEffectsV1Global::new(&dh);
         let capture = crate::capture::Capture::new(&dh);
         let scroll_counts = ScrollObservers::new(&dh);
         let supervisor = Supervisor::new(&config.shell_processes, std::time::Instant::now());
@@ -587,6 +587,7 @@ impl Cupertino {
             menu_protocols,
             displays,
             shell_v1,
+            app_effects_v1,
             supervisor,
             capture,
             wm,

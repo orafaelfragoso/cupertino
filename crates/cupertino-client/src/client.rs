@@ -13,11 +13,17 @@ use crate::shm::{BufferLayout, BufferPool, BufferTag, Damage, PixelRect};
 use crate::{Anchor, ClientError, KeyboardInteractivity, Layer};
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_geometry::{Point, Rect};
-use cupertino_protocols::client::cupertino_backdrop_v1::CupertinoBackdropV1;
+use cupertino_protocols::client::app_effects::cupertino_app_effects_v1::{
+    self, CupertinoAppEffectsV1,
+};
+use cupertino_protocols::client::app_effects::cupertino_appearance_v1::{
+    self, CupertinoAppearanceV1,
+};
+use cupertino_protocols::client::app_effects::cupertino_backdrop_v1::CupertinoBackdropV1;
 use cupertino_protocols::client::cupertino_dock_v1::{self, CupertinoDockV1};
 use cupertino_protocols::client::cupertino_menu_bar_v1::{self, CupertinoMenuBarV1};
 use cupertino_protocols::client::cupertino_session_v1::{self, CupertinoSessionV1, DisplayOption};
-use cupertino_protocols::client::cupertino_shell_v1::{self, CupertinoShellV1};
+use cupertino_protocols::client::cupertino_shell_v1::CupertinoShellV1;
 use cupertino_protocols::client::scroll::cupertino_pointer_scroll_v1::{
     self, CupertinoPointerScrollV1,
 };
@@ -133,7 +139,7 @@ pub struct ToplevelConfig {
     pub titlebar: TitlebarStyle,
 }
 
-/// The title bar the server draws on an application window (`cupertino_shell_v1.set_titlebar_style`).
+/// The title bar the server draws on an application window (`cupertino_app_effects_v1.set_titlebar_style`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TitlebarStyle {
     /// A title bar above the surface, with the window's title and the window control buttons.
@@ -254,10 +260,12 @@ struct Surface {
     wants_redraw: bool,
 }
 
-/// What the server last said about the session (`cupertino_session_v1`).
+/// What the server last said about the session: `cupertino_session_v1` on a shell connection, else the appearance and
+/// display options of `cupertino_appearance_v1` (the lock state stays false).
 struct Session {
     /// Kept alive: the server stops sending when the object is destroyed.
-    _observer: CupertinoSessionV1,
+    _session: Option<CupertinoSessionV1>,
+    _appearance: Option<CupertinoAppearanceV1>,
     dark: bool,
     display: DisplayOptions,
     locked: bool,
@@ -270,7 +278,9 @@ pub(crate) struct State {
     compositor: WlCompositor,
     shm: WlShm,
     layer_shell: ZwlrLayerShellV1,
-    shell: CupertinoShellV1,
+    effects: CupertinoAppEffectsV1,
+    /// Bound on a shell connection only ([`Client::connect_shell`]).
+    shell: Option<CupertinoShellV1>,
     session: Session,
     activation: XdgActivationV1,
     wm_base: XdgWmBase,
@@ -439,8 +449,8 @@ where
 }
 
 impl Client {
-    /// Connect to the display named by `WAYLAND_DISPLAY` and bind the globals. Requires the
-    /// compositor, shm, seat, layer shell, `cupertino_shell_v1`, `xdg_activation_v1`, `xdg_wm_base` (version 3 or newer) and
+    /// Connect to the display named by `WAYLAND_DISPLAY` and bind the globals an application may use. Requires the
+    /// compositor, shm, seat, layer shell, `cupertino_app_effects_v1`, `xdg_activation_v1`, `xdg_wm_base` (version 3 or newer) and
     /// `zxdg_output_manager_v1` globals; fractional scale and viewporter are used when both are offered. The session
     /// lock, idle notification and decoration globals are optional here: [`Client::lock_session`],
     /// [`Client::watch_idle`] and [`Client::toplevel`] fail with [`ClientError::MissingGlobal`] when the server lacks them.
@@ -448,8 +458,25 @@ impl Client {
         Self::from_connection(Connection::connect_to_env().map_err(ClientError::Connect)?)
     }
 
-    /// [`Client::connect`] over an established connection.
+    /// [`Client::connect`] over an established connection. Binds no private object: the menu-bar and dock roles
+    /// and [`Client::session_locked`] need [`Client::from_shell_connection`].
     pub fn from_connection(conn: Connection) -> Result<Client, ClientError> {
+        Self::from_connection_with(conn, false)
+    }
+
+    /// [`Client::connect`] for a shell process the server started: the connection is the one the server made for the
+    /// process (`WAYLAND_SOCKET`, else `WAYLAND_DISPLAY`), and `cupertino_shell_v1` is bound as well, so the session
+    /// observer reports the lock state and the roles the server gave the process can be asked for.
+    pub fn connect_shell() -> Result<Client, ClientError> {
+        Self::from_shell_connection(Connection::connect_to_env().map_err(ClientError::Connect)?)
+    }
+
+    /// [`Client::connect_shell`] over an established connection.
+    pub fn from_shell_connection(conn: Connection) -> Result<Client, ClientError> {
+        Self::from_connection_with(conn, true)
+    }
+
+    fn from_connection_with(conn: Connection, shell_roles: bool) -> Result<Client, ClientError> {
         let (globals, mut queue) =
             registry_queue_init::<State>(&conn).map_err(ClientError::Registry)?;
         let qh = queue.handle();
@@ -460,10 +487,16 @@ impl Client {
             (Some(manager), Some(viewporter)) => Some((manager, viewporter)),
             _ => None,
         };
+        let effects: CupertinoAppEffectsV1 = bind_required(&globals, &qh, 1..=1)?;
         // version 2 adds the display options of the session object, version 3 the screen capture state of the menu bar,
-        // version 4 the title bar style of application windows
-        let shell: CupertinoShellV1 = bind_required(&globals, &qh, 3..=4)?;
-        let observer = shell.get_session(&qh, ());
+        // version 5 moves the backdrops and the title bar style to the app effects
+        let (shell, session, appearance) = if shell_roles {
+            let shell: CupertinoShellV1 = bind_required(&globals, &qh, 5..=5)?;
+            let session = shell.get_session(&qh, ());
+            (Some(shell), Some(session), None)
+        } else {
+            (None, None, Some(effects.get_appearance(&qh, ())))
+        };
         let seat: WlSeat = bind_required(&globals, &qh, 1..=7)?;
         let data_device_manager: Option<WlDataDeviceManager> = bind_optional(&globals, &qh, 1..=3)?;
         let clipboard = Clipboard::new(data_device_manager.as_ref(), &seat, &qh);
@@ -471,9 +504,11 @@ impl Client {
             compositor: bind_required(&globals, &qh, 4..=6)?,
             shm: bind_required(&globals, &qh, 1..=1)?,
             layer_shell: bind_required(&globals, &qh, 1..=4)?,
+            effects,
             shell,
             session: Session {
-                _observer: observer,
+                _session: session,
+                _appearance: appearance,
                 dark: false,
                 display: DisplayOptions::default(),
                 locked: false,
@@ -649,14 +684,8 @@ impl Client {
         let decoration = manager.get_toplevel_decoration(&toplevel, &qh, id);
         decoration.set_mode(zxdg_toplevel_decoration_v1::Mode::ServerSide);
         if config.titlebar == TitlebarStyle::Unified {
-            if st.shell.version() < 4 {
-                return Err(ClientError::GlobalVersion {
-                    interface: CupertinoShellV1::interface().name,
-                    minimum: 4,
-                });
-            }
-            st.shell
-                .set_titlebar_style(&wl, cupertino_shell_v1::TitlebarStyle::Unified);
+            st.effects
+                .set_titlebar_style(&wl, cupertino_app_effects_v1::TitlebarStyle::Unified);
         }
         // the initial commit carries no buffer; the server answers with a configure
         wl.commit();
@@ -1112,7 +1141,7 @@ impl Client {
     pub fn backdrop(&mut self, id: SurfaceId) -> Result<Backdrop, ClientError> {
         let qh = self.queue.handle();
         let wl = self.state.surface_mut(id)?.wl.clone();
-        let proxy: CupertinoBackdropV1 = self.state.shell.get_backdrop(&wl, &qh, ());
+        let proxy: CupertinoBackdropV1 = self.state.effects.get_backdrop(&wl, &qh, ());
         Ok(Backdrop::new(proxy))
     }
 
@@ -1125,6 +1154,7 @@ impl Client {
     ) -> Result<MenuBar, ClientError> {
         let qh = self.queue.handle();
         let st = &mut self.state;
+        let shell = st.shell_roles()?.clone();
         let wl = st.surface_mut(surface)?.wl.clone();
         let output = st
             .outputs
@@ -1133,9 +1163,7 @@ impl Client {
             .ok_or(ClientError::UnknownOutput)?
             .wl
             .clone();
-        Ok(MenuBar::new(
-            st.shell.get_menu_bar(&wl, &output, &qh, surface),
-        ))
+        Ok(MenuBar::new(shell.get_menu_bar(&wl, &output, &qh, surface)))
     }
 
     /// Give a layer surface the dock role of `output`. The server then lists the windows of the
@@ -1143,6 +1171,7 @@ impl Client {
     pub fn dock(&mut self, surface: SurfaceId, output: OutputId) -> Result<Dock, ClientError> {
         let qh = self.queue.handle();
         let st = &mut self.state;
+        let shell = st.shell_roles()?.clone();
         let wl = st.surface_mut(surface)?.wl.clone();
         let output = st
             .outputs
@@ -1151,7 +1180,7 @@ impl Client {
             .ok_or(ClientError::UnknownOutput)?
             .wl
             .clone();
-        Ok(Dock::new(st.shell.get_dock(&wl, &output, &qh, surface)))
+        Ok(Dock::new(shell.get_dock(&wl, &output, &qh, surface)))
     }
 
     /// Request an `xdg_activation_v1` token for the surface from the latest input event; it
@@ -1604,6 +1633,42 @@ impl Dispatch<CupertinoMenuBarV1, SurfaceId> for State {
     }
 }
 
+impl State {
+    /// The private shell global; a connection made with [`Client::from_connection`] has none.
+    fn shell_roles(&self) -> Result<&CupertinoShellV1, ClientError> {
+        self.shell.as_ref().ok_or(ClientError::MissingGlobal(
+            CupertinoShellV1::interface().name,
+        ))
+    }
+
+    fn set_dark(&mut self, dark: u32) -> Option<Event> {
+        if dark > 1 {
+            self.fail(ClientError::Protocol("appearance other than 0 or 1"));
+            return None;
+        }
+        self.session.dark = dark == 1;
+        Some(Event::Appearance {
+            dark: self.session.dark,
+        })
+    }
+
+    fn set_display_options(&mut self, bits: DisplayOption) -> Event {
+        self.session.display = DisplayOptions {
+            reduce_motion: bits.contains(DisplayOption::ReduceMotion),
+            reduce_transparency: bits.contains(DisplayOption::ReduceTransparency),
+            increase_contrast: bits.contains(DisplayOption::IncreaseContrast),
+            differentiate_without_color: bits.contains(DisplayOption::DifferentiateWithoutColor),
+        };
+        Event::DisplayOptions(self.session.display)
+    }
+
+    fn queue_session_event(&mut self, event: Event) {
+        if self.session.settled {
+            self.events.push(event);
+        }
+    }
+}
+
 impl Dispatch<CupertinoSessionV1, ()> for State {
     fn event(
         state: &mut Self,
@@ -1615,26 +1680,16 @@ impl Dispatch<CupertinoSessionV1, ()> for State {
     ) {
         let queued = match event {
             cupertino_session_v1::Event::Appearance { dark } => {
-                if dark > 1 {
-                    return state.fail(ClientError::Protocol("appearance other than 0 or 1"));
-                }
-                state.session.dark = dark == 1;
-                Event::Appearance {
-                    dark: state.session.dark,
-                }
+                let Some(event) = state.set_dark(dark) else {
+                    return;
+                };
+                event
             }
             cupertino_session_v1::Event::DisplayOptions { options } => {
                 let Ok(bits) = options.into_result() else {
                     return state.fail(ClientError::Protocol("display options with reserved bits"));
                 };
-                state.session.display = DisplayOptions {
-                    reduce_motion: bits.contains(DisplayOption::ReduceMotion),
-                    reduce_transparency: bits.contains(DisplayOption::ReduceTransparency),
-                    increase_contrast: bits.contains(DisplayOption::IncreaseContrast),
-                    differentiate_without_color: bits
-                        .contains(DisplayOption::DifferentiateWithoutColor),
-                };
-                Event::DisplayOptions(state.session.display)
+                state.set_display_options(bits)
             }
             cupertino_session_v1::Event::Locked => {
                 state.session.locked = true;
@@ -1646,9 +1701,47 @@ impl Dispatch<CupertinoSessionV1, ()> for State {
             }
             _ => return,
         };
-        if state.session.settled {
-            state.events.push(queued);
-        }
+        state.queue_session_event(queued);
+    }
+}
+
+impl Dispatch<CupertinoAppearanceV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &CupertinoAppearanceV1,
+        event: cupertino_appearance_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let queued = match event {
+            cupertino_appearance_v1::Event::Appearance { dark } => {
+                let Some(event) = state.set_dark(dark) else {
+                    return;
+                };
+                event
+            }
+            cupertino_appearance_v1::Event::DisplayOptions { options } => {
+                let Ok(bits) = options.into_result() else {
+                    return state.fail(ClientError::Protocol("display options with reserved bits"));
+                };
+                state.set_display_options(DisplayOption::from_bits_truncate(bits.bits()))
+            }
+            _ => return,
+        };
+        state.queue_session_event(queued);
+    }
+}
+
+impl Dispatch<CupertinoAppEffectsV1, ()> for State {
+    fn event(
+        _: &mut Self,
+        _: &CupertinoAppEffectsV1,
+        _: cupertino_app_effects_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
     }
 }
 

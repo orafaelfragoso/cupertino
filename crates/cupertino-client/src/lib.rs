@@ -1,7 +1,7 @@
 //! Client toolkit of the Cupertino shell processes (notifications, menu bar, launcher, dock).
 //!
-//! A [`Client`] connects to the server, binds the globals every shell process needs (layer shell,
-//! `cupertino_shell_v1`, `xdg_activation_v1`, `zxdg_output_manager_v1`, shm, seat; fractional
+//! A [`Client`] connects to the server, binds the globals every client needs (layer shell,
+//! `cupertino_app_effects_v1`, `xdg_activation_v1`, `zxdg_output_manager_v1`, shm, seat; fractional
 //! scale with viewporter when offered) and owns the surfaces: layer surfaces on a chosen
 //! output, application windows with server-side decorations ([`Client::toplevel`]), popups of both with a seat
 //! grab, the menu-bar and dock roles, and the lock surfaces of a session lock
@@ -11,7 +11,9 @@
 //! application runs one loop around [`Client::wait`] and reacts to the returned [`Event`]s;
 //! other threads wake it with a [`Waker`].
 //!
-//! A missing required global is an error at [`Client::connect`], never a degraded mode.
+//! [`Client::connect`] binds no private object; a shell process the server started uses [`Client::connect_shell`], which
+//! adds `cupertino_shell_v1` for the menu-bar and dock roles and the lock state. A missing required global is an error at
+//! connect, never a degraded mode.
 
 mod backdrop;
 mod client;

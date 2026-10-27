@@ -1,12 +1,12 @@
 {
   "shell": [
-    {"name": "dock", "command": ["cupertino-dock"]},
-    {"name": "menubar", "command": ["cupertino-menubar"]},
+    {"name": "dock", "command": ["cupertino-dock"], "roles": ["session", "dock"]},
+    {"name": "menubar", "command": ["cupertino-menubar"], "roles": ["session", "menu_bar"]},
     {"name": "launcher", "command": ["cupertino-launcher"]},
     {"name": "notifications", "command": ["cupertino-notifications"]},
     {"name": "controlcenter", "command": ["cupertino-controlcenter"]},
     {"name": "osd", "command": ["cupertino-osd"]},
-    {"name": "windowmanager", "command": ["cupertino-windowmanager"]},
+    {"name": "windowmanager", "command": ["cupertino-windowmanager"], "roles": ["window_manager"]},
     {"name": "login", "command": ["cupertino-login"]}
   ]
 }

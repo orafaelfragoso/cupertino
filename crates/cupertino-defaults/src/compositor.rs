@@ -20,7 +20,7 @@
 //! | `cursor_fill`, `cursor_outline` | `#rrggbb` or `#rrggbbaa` |
 //! | `wallpaper_folders` | absolute paths of the folders the Settings wallpaper pane lists besides the packs' pictures; the server ignores it |
 //! | `wallpaper`, `wallpaper_dark` | absolute path of a PNG or JPEG: the wallpaper, and the one of the dark appearance (else `wallpaper` is used) |
-//! | `shell` | list of `{"name": …, "command": [program, args…]}`, commands not empty |
+//! | `shell` | list of `{"name": …, "command": [program, args…], "roles": […]}`, commands not empty; `roles` (optional, default `["session"]`) lists what the server lets the process do: `session`, `menu_bar`, `dock`, `window_manager` |
 //! | `screenshot` | the screenshot command, not empty |
 
 use std::collections::BTreeMap;
@@ -76,6 +76,38 @@ pub enum MinimizeEffectName {
     Plain,
 }
 
+/// A role of the shell protocol a process the server starts can be given.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShellRoleName {
+    /// Observe the session (appearance, display options, lock state).
+    Session,
+    MenuBar,
+    Dock,
+    WindowManager,
+}
+
+impl ShellRoleName {
+    pub const ALL: [ShellRoleName; 4] = [
+        ShellRoleName::Session,
+        ShellRoleName::MenuBar,
+        ShellRoleName::Dock,
+        ShellRoleName::WindowManager,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ShellRoleName::Session => "session",
+            ShellRoleName::MenuBar => "menu_bar",
+            ShellRoleName::Dock => "dock",
+            ShellRoleName::WindowManager => "window_manager",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<ShellRoleName> {
+        Self::ALL.into_iter().find(|r| r.name() == name)
+    }
+}
+
 /// A shell process the server starts and keeps alive.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShellEntry {
@@ -83,6 +115,8 @@ pub struct ShellEntry {
     pub name: String,
     /// Program and arguments; never empty.
     pub command: Vec<String>,
+    /// What the server lets the process do on its connection; a process the file gives no roles observes the session.
+    pub roles: Vec<ShellRoleName>,
 }
 
 /// Everything in `compositor.json`; `None` is a key the file does not set.
@@ -192,7 +226,21 @@ fn shell_entries(v: &Value) -> Result<Vec<ShellEntry>, String> {
         if command.is_empty() {
             return Err(format!("shell process {name} has an empty command"));
         }
-        out.push(ShellEntry { name, command });
+        let roles = match obj.get("roles") {
+            None => vec![ShellRoleName::Session],
+            Some(v) => strings(v)?
+                .iter()
+                .map(|r| {
+                    ShellRoleName::from_name(r)
+                        .ok_or_else(|| format!("shell process {name} has the unknown role {r:?}"))
+                })
+                .collect::<Result<_, _>>()?,
+        };
+        out.push(ShellEntry {
+            name,
+            command,
+            roles,
+        });
     }
     Ok(out)
 }
@@ -365,6 +413,15 @@ const KEYS: &[JsonKey] = &[
                 let mut m = Map::new();
                 m.insert("name".into(), Value::String(e.name.clone()));
                 m.insert("command".into(), strings_value(&e.command));
+                m.insert(
+                    "roles".into(),
+                    Value::Array(
+                        e.roles
+                            .iter()
+                            .map(|r| Value::String(r.name().into()))
+                            .collect(),
+                    ),
+                );
                 Value::Object(m)
             })
             .collect()
@@ -503,6 +560,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_shell_process_has_the_roles_the_file_lists_and_the_session_role_by_default() {
+        let (s, problems) = CompositorSettings::parse(
+            r#"{"shell":[{"name":"bar","command":["bar"],"roles":["session","menu_bar"]},{"name":"osd","command":["osd"]}]}"#,
+            None,
+        );
+        assert_eq!(problems, vec![]);
+        let roles: Vec<_> = s.shell.unwrap().into_iter().map(|e| e.roles).collect();
+        assert_eq!(
+            roles,
+            vec![
+                vec![ShellRoleName::Session, ShellRoleName::MenuBar],
+                vec![ShellRoleName::Session]
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unknown_shell_role_is_a_problem_and_the_list_is_ignored() {
+        let (s, problems) = CompositorSettings::parse(
+            r#"{"shell":[{"name":"bar","command":["bar"],"roles":["root"]}]}"#,
+            None,
+        );
+        assert_eq!(s.shell, None);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].key, "shell");
+        assert!(
+            problems[0].message.contains("unknown role \"root\""),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
     fn the_wallpapers_are_absolute_paths() {
         let (read, problems) = CompositorSettings::parse(
             r#"{"wallpaper": "/home/u/day.png", "wallpaper_dark": "night.png"}"#,
@@ -595,7 +684,7 @@ mod tests {
         let (s, problems) = CompositorSettings::parse(
             r##"{"appearance":"dark","corner_radius":10,"terminals":["kitty"],"keybindings":{"Super+t":"spawn-terminal"},
                 "minimize_effect":"none","decorations":false,"closing_animation":false,"hot_corner_dwell":0.2,"mouse_speed":0.6875,
-                "cursor_fill":"#ff0000","cursor_outline":"#00ff0080","shell":[{"name":"dock","command":["cupertino-dock","--bar"]}],
+                "cursor_fill":"#ff0000","cursor_outline":"#00ff0080","shell":[{"name":"dock","command":["cupertino-dock","--bar"],"roles":["dock"]}],
                 "screenshot":["/opt/cupertino/bin/cupertino-screenshot"],"future_key":{"kept":true}}"##,
             None,
         );
@@ -618,7 +707,8 @@ mod tests {
             s.shell,
             Some(vec![ShellEntry {
                 name: "dock".into(),
-                command: vec!["cupertino-dock".into(), "--bar".into()]
+                command: vec!["cupertino-dock".into(), "--bar".into()],
+                roles: vec![ShellRoleName::Dock],
             }])
         );
         assert_eq!(

@@ -131,7 +131,7 @@ pub fn run(options: &Options) -> Result<()> {
     }
     // the toolkit and the capture share the connection the server started the process with
     let conn = Connection::connect_to_env()?;
-    let mut client = Client::from_connection(conn.clone())?;
+    let mut client = Client::from_shell_connection(conn.clone())?;
     let mut capturer = Capturer::new(&conn)?;
     let screens = screens(&client)?;
     let (shots, clipboard) = match options.mode {

@@ -172,6 +172,7 @@ fn files_process(home: &Path, data_dirs: &Path) -> ShellProcess {
     ShellProcess {
         name: "cupertino-files".into(),
         command,
+        roles: Vec::new(),
     }
 }
 

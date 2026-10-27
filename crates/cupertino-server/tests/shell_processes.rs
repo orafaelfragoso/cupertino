@@ -12,6 +12,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use cupertino_input::ScreenshotRequest;
+use cupertino_server::authorization::ShellRole;
 use cupertino_server::backend::headless;
 use cupertino_server::cli::start_shell_supervision;
 use cupertino_server::config::{Config, ShellProcess};
@@ -156,6 +157,7 @@ fn stand_in(name: &str, script: &str, log: &Path) -> ShellProcess {
             "sh".into(),
             log.display().to_string(),
         ],
+        roles: roles_of(name),
     }
 }
 
@@ -297,6 +299,17 @@ fn real_process(binary: &str, bus: &PrivateBus) -> ShellProcess {
             "CUPERTINO_ASSET_SEARCH_PATH=".into(),
             path.display().to_string(),
         ],
+        roles: roles_of(binary),
+    }
+}
+
+/// The roles the server gives the shell binaries that hold any.
+fn roles_of(binary: &str) -> Vec<ShellRole> {
+    match binary.trim_start_matches("cupertino-") {
+        "dock" => vec![ShellRole::Session, ShellRole::Dock],
+        "menubar" => vec![ShellRole::Session, ShellRole::MenuBar],
+        "windowmanager" => vec![ShellRole::WindowManager],
+        _ => vec![ShellRole::Session],
     }
 }
 

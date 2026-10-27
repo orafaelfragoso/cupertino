@@ -1,12 +1,17 @@
-//! Server side of the session observer (`cupertino_shell_v1.get_session`, `cupertino_session_v1`):
-//! tells the shell processes the session's appearance, accessibility display options (version 2)
-//! and lock state, on bind and on every change. The appearance changes only through
+//! Server side of the session observers: `cupertino_shell_v1.get_session` (`cupertino_session_v1`, shell processes
+//! with the Session role) tells the session's appearance, accessibility display options (version 2) and lock state,
+//! on bind and on every change; `cupertino_app_effects_v1.get_appearance` (`cupertino_appearance_v1`, any client) tells
+//! the appearance and display options only, so the lock state stays with the shell. The appearance changes only through
 //! [`Cupertino::set_appearance`], the display options through `accessibility.rs`, which calls
 //! [`SessionObservers::display_options`]; the lock state follows `session_lock.rs`, which calls
 //! [`SessionObservers::lock`] where the lock begins and ends.
 
 use cupertino_defaults::accessibility::DisplayOptions;
+use cupertino_protocols::server::app_effects::cupertino_appearance_v1::{
+    self, CupertinoAppearanceV1, DisplayOption as AppearanceOption,
+};
 use cupertino_protocols::server::cupertino_session_v1::{self, CupertinoSessionV1, DisplayOption};
+use cupertino_protocols::server::cupertino_shell_v1::{CupertinoShellV1, Error as ShellError};
 use cupertino_theme::Appearance;
 use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::{
@@ -19,6 +24,7 @@ use crate::state::Cupertino;
 #[derive(Default)]
 pub struct SessionObservers {
     observers: Vec<CupertinoSessionV1>,
+    appearance_observers: Vec<CupertinoAppearanceV1>,
 }
 
 impl SessionObservers {
@@ -27,12 +33,18 @@ impl SessionObservers {
         for observer in &self.observers {
             observer.appearance(u32::from(dark));
         }
+        for observer in &self.appearance_observers {
+            observer.appearance(u32::from(dark));
+        }
     }
 
     /// Tell every observer of version 2 or later the display options changed.
     pub fn display_options(&self, options: DisplayOptions) {
         for observer in &self.observers {
             send_display_options(observer, options);
+        }
+        for observer in &self.appearance_observers {
+            send_appearance_options(observer, options);
         }
     }
 
@@ -63,6 +75,24 @@ fn send_display_options(observer: &CupertinoSessionV1, options: DisplayOptions) 
     observer.display_options(bits);
 }
 
+fn send_appearance_options(observer: &CupertinoAppearanceV1, options: DisplayOptions) {
+    let mut bits = AppearanceOption::empty();
+    bits.set(AppearanceOption::ReduceMotion, options.reduce_motion);
+    bits.set(
+        AppearanceOption::ReduceTransparency,
+        options.reduce_transparency,
+    );
+    bits.set(
+        AppearanceOption::IncreaseContrast,
+        options.increase_contrast,
+    );
+    bits.set(
+        AppearanceOption::DifferentiateWithoutColor,
+        options.differentiate_without_color,
+    );
+    observer.display_options(bits);
+}
+
 fn send_lock(observer: &CupertinoSessionV1, locked: bool) {
     if locked {
         observer.locked();
@@ -75,14 +105,35 @@ impl Cupertino {
     /// `cupertino_shell_v1.get_session`: register the observer and send it the current state.
     pub fn create_session_observer(
         &mut self,
+        shell: &CupertinoShellV1,
+        permitted: bool,
         id: New<CupertinoSessionV1>,
         init: &mut DataInit<'_, Self>,
     ) {
         let observer = init.init(id, ());
+        if !permitted {
+            shell.post_error(
+                ShellError::Permission,
+                "get_session needs the Session role, which only a shell process the server started for it holds",
+            );
+            return;
+        }
         observer.appearance(u32::from(self.config.is_dark()));
         send_display_options(&observer, self.display_options());
         send_lock(&observer, self.session_lock.is_active());
         self.sessions.observers.push(observer);
+    }
+
+    /// `cupertino_app_effects_v1.get_appearance`: register the observer and send it the current state.
+    pub fn create_appearance_observer(
+        &mut self,
+        id: New<CupertinoAppearanceV1>,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        let observer = init.init(id, ());
+        observer.appearance(u32::from(self.config.is_dark()));
+        send_appearance_options(&observer, self.display_options());
+        self.sessions.appearance_observers.push(observer);
     }
 
     /// Switch the session's appearance: the server's own drawing follows on the next frame and the
@@ -123,5 +174,26 @@ impl Dispatch<CupertinoSessionV1, ()> for Cupertino {
 
     fn destroyed(state: &mut Self, _: ClientId, resource: &CupertinoSessionV1, _: &()) {
         state.sessions.observers.retain(|o| o != resource);
+    }
+}
+
+impl Dispatch<CupertinoAppearanceV1, ()> for Cupertino {
+    fn request(
+        _: &mut Self,
+        _: &Client,
+        _: &CupertinoAppearanceV1,
+        _: cupertino_appearance_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        // `Destroy` is handled in `destroyed`
+    }
+
+    fn destroyed(state: &mut Self, _: ClientId, resource: &CupertinoAppearanceV1, _: &()) {
+        state
+            .sessions
+            .appearance_observers
+            .retain(|o| o != resource);
     }
 }

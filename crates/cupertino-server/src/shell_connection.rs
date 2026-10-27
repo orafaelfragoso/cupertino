@@ -1,7 +1,7 @@
 //! Connections the server hands to the processes it starts: one end of a socket pair is inserted as a client with the
 //! given [`ClientState`], the other goes to the process as `WAYLAND_SOCKET`. Such a client cannot be told apart from an
-//! application on the public socket by anything but this state, which is why the dock, the window manager and the
-//! screen capture are offered to it alone.
+//! application on the public socket by anything but this state ([`crate::authorization`]), which is why the shell
+//! roles and the screen capture are offered to it alone.
 
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use smithay::reexports::wayland_server::DisplayHandle;
 
+use crate::authorization::{ClientCapabilitySet, ShellRole};
 use crate::state::ClientState;
 
 /// A new client with `state`: the server end is inserted, the other end is returned.
@@ -20,12 +21,15 @@ pub fn connect_client(display: &DisplayHandle, state: ClientState) -> std::io::R
     Ok(client)
 }
 
-/// A connection for a shell process the server supervises.
-pub fn shell_process_connection(display: &DisplayHandle) -> std::io::Result<UnixStream> {
+/// A connection for a shell process the server supervises, holding `roles` and no other.
+pub fn shell_process_connection(
+    display: &DisplayHandle,
+    roles: &[ShellRole],
+) -> std::io::Result<UnixStream> {
     connect_client(
         display,
         ClientState {
-            shell_process: true,
+            capabilities: ClientCapabilitySet::of(roles.iter().copied()),
             ..ClientState::default()
         },
     )

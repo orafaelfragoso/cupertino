@@ -7,6 +7,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use crate::authorization::ShellRole;
 use crate::input::{Action, KeyBindings};
 use cupertino_defaults::compositor::{AppearanceName, CompositorSettings, MinimizeEffectName};
 use cupertino_theme::Appearance;
@@ -24,6 +25,8 @@ pub struct ShellProcess {
     pub name: String,
     /// Program and arguments; never empty.
     pub command: Vec<String>,
+    /// The roles the server gives the process's connection.
+    pub roles: Vec<ShellRole>,
 }
 
 /// One window shadow preset: Gaussian σ and y offset in points, density as peak alpha.
@@ -546,6 +549,7 @@ impl Config {
                 .map(|p| ShellProcess {
                     name: p.name.clone(),
                     command: p.command.clone(),
+                    roles: p.roles.iter().copied().map(ShellRole::from).collect(),
                 })
                 .collect();
         }
@@ -741,7 +745,8 @@ mod tests {
             c.shell_processes,
             vec![ShellProcess {
                 name: "dock".into(),
-                command: vec!["cupertino-dock".into(), "--bar".into()]
+                command: vec!["cupertino-dock".into(), "--bar".into()],
+                roles: vec![ShellRole::Session],
             }]
         );
         assert!(!apply(&mut c, r#"{"shell":[{"name":"dock","command":[]}]}"#).is_empty());

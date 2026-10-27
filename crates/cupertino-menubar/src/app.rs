@@ -156,7 +156,7 @@ pub fn run() -> Result<std::convert::Infallible> {
     };
     let text = BarText::new(theme.tokens.typography(), &assets)?;
 
-    let client = Client::connect()?;
+    let client = Client::connect_shell()?;
     let (conf_watch, conf_changes) = watch_conf(&client);
     let style = Style {
         palette: MenuPalette::new(client.is_dark()),

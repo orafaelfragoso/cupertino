@@ -1,0 +1,12 @@
+{
+  "shell": [
+    {"name": "dock", "command": ["cupertino-dock"]},
+    {"name": "menubar", "command": ["cupertino-menubar"]},
+    {"name": "launcher", "command": ["cupertino-launcher"]},
+    {"name": "notifications", "command": ["cupertino-notifications"]},
+    {"name": "controlcenter", "command": ["cupertino-controlcenter"]},
+    {"name": "osd", "command": ["cupertino-osd"]},
+    {"name": "windowmanager", "command": ["cupertino-windowmanager"]},
+    {"name": "login", "command": ["cupertino-login"]}
+  ]
+}

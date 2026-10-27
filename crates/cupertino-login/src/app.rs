@@ -133,8 +133,14 @@ struct App {
     session_bus: zbus::blocking::Connection,
 }
 
+/// Why [`run`] returned without a failure.
+pub enum Ended {
+    /// The process belongs to no login session (a container, CI): there is no session to lock.
+    NoLoginSession,
+}
+
 /// Connect, serve the control interface and run until a connection or thread fails.
-pub fn run(options: &SessionOptions) -> Result<std::convert::Infallible> {
+pub fn run(options: &SessionOptions) -> Result<Ended> {
     let assets = Assets::discover();
     let theme = Theme::load()?;
     let renderer = Renderer::new(theme.tokens.typography(), &assets)?;
@@ -158,7 +164,9 @@ pub fn run(options: &SessionOptions) -> Result<std::convert::Infallible> {
         e => Box::new(e) as Box<dyn Error>,
     })?;
 
-    let logind = Logind::connect()?;
+    let Some(logind) = Logind::connect()? else {
+        return Ok(Ended::NoLoginSession);
+    };
     let signal_notifier = notifier.clone();
     logind.listen(move |signal| {
         signal_notifier.send(match signal {

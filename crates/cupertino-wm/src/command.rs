@@ -18,6 +18,39 @@ pub struct Modifiers {
     pub ctrl: bool,
 }
 
+/// What the compositor made of an activation token for a window that is about to map.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Grant {
+    /// When the token was made, on the model's clock.
+    pub created: f64,
+    /// It was made by the compositor, or by a client for an input event it got while it had the keyboard focus.
+    pub valid: bool,
+}
+
+/// The facts the focus-on-map rule ([`crate::Wm`]) needs from the compositor, which owns the connections and the input.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MapFocus {
+    /// The window is the first toplevel its client maps.
+    pub first_of_client: bool,
+    /// The person has given input to another client since this one connected.
+    pub input_elsewhere: bool,
+    /// The activation token the client presented for this window, if any.
+    pub grant: Option<Grant>,
+    /// The last key or button press, on the model's clock.
+    pub last_user_event: Option<f64>,
+}
+
+/// Whether a window that maps takes the keyboard.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Activation {
+    /// Always: the shell's own windows and the tests.
+    #[default]
+    Always,
+    /// When the focus policy allows it; else the window opens behind the key window and its application's tile asks for
+    /// attention.
+    Policy(MapFocus),
+}
+
 #[derive(Clone, Debug)]
 pub struct MapParams {
     pub window: WindowId,
@@ -31,8 +64,8 @@ pub struct MapParams {
     pub modal: bool,
     /// Output to open on; defaults to the first registered output.
     pub output: Option<OutputId>,
-    /// Focus and raise the new window (activation policy is the caller's).
-    pub activate: bool,
+    /// Whether the new window takes the focus.
+    pub activation: Activation,
     /// Selects the open / close transform (table).
     pub kind: WindowKind,
 }
@@ -49,7 +82,7 @@ impl MapParams {
             parent: None,
             modal: false,
             output: None,
-            activate: true,
+            activation: Activation::Always,
             kind: WindowKind::Plain,
         }
     }

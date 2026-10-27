@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use crate::command::{AnimationKind, Command, Effect, MapParams};
+use crate::command::{Activation, AnimationKind, Command, Effect, MapParams};
 use crate::config::WmConfig;
 use crate::focus::FocusState;
 use crate::geometry::Rect;
@@ -591,8 +591,15 @@ impl Wm {
         self.insert_in_stack(p.window);
         self.apps.get_mut(&app).unwrap().windows_mru.push(p.window);
         self.emit_layout(p.window, AnimationKind::Opening, out);
-        if p.activate {
+        let takes_focus = match p.activation {
+            Activation::Always => true,
+            Activation::Policy(facts) => self.takes_focus_on_map(app, parent, &facts, now),
+        };
+        if takes_focus {
             self.focus_window(p.window, now, out);
+        } else {
+            self.place_behind_key_window(p.window);
+            self.demand_attention(p.window, out);
         }
     }
 

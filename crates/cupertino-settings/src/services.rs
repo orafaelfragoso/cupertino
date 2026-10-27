@@ -99,15 +99,20 @@ impl Bus {
     }
 }
 
+/// The most distinct messages [`log_once`] remembers.
+const LOG_ONCE_MAX: usize = 256;
+
 /// Write `detail` to the log the first time it comes, so a failure that repeats on every refresh is logged once.
 pub fn log_once(detail: &str) {
     static SEEN: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
         std::sync::Mutex::new(None);
     let mut seen = SEEN.lock().expect("no thread panics while logging");
-    if seen
-        .get_or_insert_with(Default::default)
-        .insert(detail.to_string())
-    {
+    let seen = seen.get_or_insert_with(Default::default);
+    // messages with a varying part must not grow the set without bound: a full set starts over
+    if seen.len() >= LOG_ONCE_MAX {
+        seen.clear();
+    }
+    if seen.insert(detail.to_string()) {
         eprintln!("cupertino-settings: {detail}");
     }
 }
@@ -115,25 +120,49 @@ pub fn log_once(detail: &str) {
 /// What the pane says when the bus or a device failed: the problem stays in the log, never on screen.
 pub const SERVICE_UNAVAILABLE: &str = "The service is not available.";
 
-/// Whether the daemon itself answered with an error (its text is meant for the pane), not the bus or the connection.
-fn from_daemon(e: &zbus::Error) -> bool {
-    matches!(e, zbus::Error::MethodError(..) | zbus::Error::FDO(_))
+/// The standard errors a service answers with its own plain text (the Cupertino daemons refuse with these).
+/// The network daemon refuses an unauthorized change with `AccessDenied` and a sentence; the bus daemon's own policy
+/// denial says "Rejected send message ..." and is told apart by that text.
+const SERVICE_STANDARD: [&str; 4] = [
+    "org.freedesktop.DBus.Error.Failed",
+    "org.freedesktop.DBus.Error.InvalidArgs",
+    "org.freedesktop.DBus.Error.NotSupported",
+    "org.freedesktop.DBus.Error.AccessDenied",
+];
+
+/// The name of the D-Bus error `e` carries, if it came over the bus.
+fn error_name(e: &zbus::Error) -> Option<String> {
+    match e {
+        zbus::Error::MethodError(name, _, _) => Some(name.to_string()),
+        zbus::Error::FDO(e) => Some(zbus::DBusError::name(e.as_ref()).to_string()),
+        _ => None,
+    }
 }
 
-/// The text of a service failure for the pane: the daemon's own message when it sent one; a problem of the bus or
-/// the connection is logged and shown as [`SERVICE_UNAVAILABLE`].
+/// Whether a service itself answered with an error whose text is meant for the pane: a name of its own, or one of
+/// [`SERVICE_STANDARD`]. The bus daemon's errors (no reply, access denied, timeout, limits) and the connection's are not.
+fn from_daemon(e: &zbus::Error) -> bool {
+    !e.to_string().contains("Rejected send message")
+        && error_name(e).is_some_and(|name| {
+            !name.starts_with("org.freedesktop.DBus.Error.")
+                || SERVICE_STANDARD.contains(&name.as_str())
+        })
+}
+
+/// The text of a service failure for the pane: the service's own message when it sent one; a problem of the bus
+/// daemon or the connection is logged and shown as [`SERVICE_UNAVAILABLE`].
 pub fn failure(e: &zbus::Error) -> String {
+    if !from_daemon(e) {
+        log_once(&e.to_string());
+        return SERVICE_UNAVAILABLE.to_string();
+    }
     match e {
         zbus::Error::MethodError(name, message, _) => error_text(name.as_str(), message.as_deref()),
-        // property reads report the daemon's error as a standard one
         zbus::Error::FDO(e) => error_text(
             zbus::DBusError::name(e.as_ref()).as_str(),
             zbus::DBusError::description(e.as_ref()),
         ),
-        other => {
-            log_once(&other.to_string());
-            SERVICE_UNAVAILABLE.to_string()
-        }
+        other => other.to_string(),
     }
 }
 
@@ -531,7 +560,10 @@ impl Services {
                         .map_err(|e| failure(&e)),
                 )
             })
-            .map_err(|e| format!("cannot start the pairing: {e}"))?;
+            .map_err(|e| {
+                log_once(&format!("cannot start the pairing: {e}"));
+                "The pairing could not be started.".to_string()
+            })?;
         Ok(())
     }
 

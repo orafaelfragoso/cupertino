@@ -17,12 +17,6 @@ ALLOWED_BINARIES = {
     "crates/cupertino-assets/fonts/InterVariable-subset.ttf": "a38802ab5d40c789b19864858e7329f79787a12cff0f8904933295729189dd6f",
 }
 
-# The one configuration value that may carry a name the gate otherwise rejects: the directory name of the external
-# cursor theme package that the default asset pack points at. It is accepted only as the value of this key in this file;
-# the same word anywhere else (another key, another file) still fails.
-ALLOWED_VALUES = {
-    "packaging/data/manifest.json": [(("cursors", "theme"), "macOS")],
-}
 
 MACHO_MAGIC = {b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe"}
 
@@ -50,39 +44,6 @@ GATE_EXEMPT = {
 
 THIRD_PARTY_EXEMPT = {"private document path", "cleanup remnant"}
 
-def allowed_value_scrubbed(rel: str, text: str) -> str:
-    """`text` with the pinned values of `ALLOWED_VALUES[rel]` blanked out (same length, so line numbers stay true).
-
-    A value is blanked only when the file parses as JSON and holds exactly that value at exactly that key path, and the
-    key path's innermost object contains the value once.
-    """
-    try:
-        document = json.loads(text)
-    except ValueError:
-        return text
-    for keys, value in ALLOWED_VALUES.get(rel, []):
-        node = document
-        for key in keys:
-            node = node.get(key) if isinstance(node, dict) else None
-        if node != value:
-            continue
-        # the innermost object's text: the key path's parent object, found by its key and balanced braces
-        opening = re.search(r'"' + re.escape(keys[-2]) + r'"\s*:\s*\{', text) if len(keys) > 1 else None
-        if opening is None:
-            continue
-        depth, end = 0, opening.end() - 1
-        for index in range(end, len(text)):
-            depth += {"{": 1, "}": -1}.get(text[index], 0)
-            if depth == 0:
-                end = index
-                break
-        body = text[opening.end() : end]
-        pattern = re.compile(r'("' + re.escape(keys[-1]) + r'"\s*:\s*)"' + re.escape(value) + '"')
-        if len(pattern.findall(body)) != 1:
-            continue
-        blanked = pattern.sub(lambda m: m.group(1) + '"' + "_" * len(value) + '"', body)
-        text = text[: opening.end()] + blanked + text[end:]
-    return text
 
 
 def policy_text(text: str) -> str:
@@ -90,7 +51,7 @@ def policy_text(text: str) -> str:
     lines = text.splitlines(keepends=True)
     for node in ast.parse(text).body:
         if isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id in {"ID", "CLASS", "CACHE_ADDR", "GATE", "ALLOWED_VALUES"}
+            isinstance(target, ast.Name) and target.id in {"ID", "CLASS", "CACHE_ADDR", "GATE"}
             for target in node.targets
         ):
             for index in range(node.lineno - 1, node.end_lineno):
@@ -152,7 +113,6 @@ def gate(root: Path) -> tuple[Counter, list[str]]:
                 continue
             if rel == "ci/gate.py":
                 text = policy_text(text)
-            text = allowed_value_scrubbed(rel, text)
             exempt = GATE_EXEMPT.get(rel, set())
             if path.relative_to(root).parts[0] == "third-party":
                 exempt = exempt | THIRD_PARTY_EXEMPT

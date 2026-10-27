@@ -61,7 +61,6 @@ package_cupertino-data() {
   arch=('any')
   license=('GPL-3.0-or-later' 'OFL-1.1' 'LicenseRef-Unsplash')
   depends=('adwaita-icon-theme')
-  optdepends=('apple_cursor: the cursor theme the pack selects (built-in cursors otherwise)')
   cd "cupertino-$pkgver"
   python3 packaging/release.py install --format arch --package data --destdir "$pkgdir"
 }

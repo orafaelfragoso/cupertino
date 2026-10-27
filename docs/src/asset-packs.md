@@ -20,7 +20,7 @@ Resolution is **per asset**: for each logical name the first pack that provides 
 | Cursors | the procedural cursor set of `cupertino-cursor` |
 | Wallpaper | a procedural wallpaper |
 
-The default pack uses Inter, a separately licensed cursor theme, the host system's freedesktop icon theme and wallpapers chosen for the project. Packs are data and are not part of the source tree.
+The default pack uses Inter, Cupertino's built-in cursors, the host system's freedesktop icon theme and wallpapers chosen for the project. Packs are data and are not part of the source tree.
 
 ## Manifest, version 2
 

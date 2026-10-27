@@ -82,6 +82,21 @@ class TagTest(unittest.TestCase):
 GIT_RECIPE = Path(__file__).resolve().parent / 'arch/cupertino-git/PKGBUILD'
 
 
+class LicenceTest(unittest.TestCase):
+    def test_a_list_missing_a_shipped_licence_is_reported(self):
+        shipped = {'GPL-3.0-or-later', 'MPL-2.0'}
+        declared = {'PKGBUILD': {'GPL-3.0-or-later'}, 'rpm': {'GPL-3.0-or-later', 'MPL-2.0', 'OFL-1.1'}}
+        self.assertEqual(release.missing_licenses(shipped, declared), ['PKGBUILD lacks MPL-2.0'])
+
+    def test_the_runtime_ships_the_licences_of_the_crates_its_binaries_link(self):
+        self.assertEqual(release.shipped_licenses('runtime'), {'GPL-3.0-or-later', 'MPL-2.0', 'MIT', 'OFL-1.1'})
+
+    def test_every_package_lists_what_it_ships(self):
+        for package in release.MANIFESTS:
+            self.assertEqual(
+                release.missing_licenses(release.shipped_licenses(package), release.declared_licenses(package)), [])
+
+
 def git_pkgver(describe):
     """What pkgver() of the -git recipe makes of a `git describe --long` line."""
     script = re.search(r"git describe .*\| (sed .+)$", GIT_RECIPE.read_text(), re.M)[1]

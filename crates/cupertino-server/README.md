@@ -319,7 +319,7 @@ Shortcuts are the `cupertino-input` `ShortcutMap` (defaults approximate, `Super`
 | `hot_corner_size` | number | `2` | hot corner size |
 | `mouse_speed`, `trackpad_speed` | number | `0.6875` | tracking speed |
 | `mouse_acceleration` | bool | `true` | pointer acceleration |
-| `natural_scrolling` | bool | `true` | natural scrolling |
+| `natural_scrolling` | bool | `true` | natural scrolling of wheels and touchpads; applies live, to the next event of every device |
 | `cursor_size` | number | `1.0` | cursor scale, clamped to 1 to 4 |
 | `cursor_fill`, `cursor_outline` | `#rrggbb` or `#rrggbbaa` | `#000000`, `#ffffffff` | cursor colours |
 | `shake_to_locate` | bool | `true` | shake to locate |

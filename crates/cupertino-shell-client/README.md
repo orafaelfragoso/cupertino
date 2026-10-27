@@ -8,7 +8,7 @@ GPL-3.0-or-later. Depends on `cupertino-wayland-client`, `cupertino-protocol-app
 
 | Item | Contents |
 |---|---|
-| `LayerShell`, `LayerSurfaceConfig`, `Margin`, `LayerSurface`, `Layer`, `Anchor`, `KeyboardInteractivity` | `zwlr_layer_shell_v1`: `bind`, `layer_surface(config)` returns a `LayerSurface` with the transport's surface (`surface`). `LayerSurface::configured(sent)` is the size to draw at: an extent the server left at 0 is the requested one, and 0 on both sides fails (`Error::Unsized`). `set_placement`, `set_exclusive_zone` and `set_keyboard_interactivity` apply with the next commit; popups of it work through the transport |
+| `LayerShell`, `LayerSurfaceConfig`, `Margin`, `LayerSurface`, `Layer`, `Anchor`, `KeyboardInteractivity` | `zwlr_layer_shell_v1` version 4 (on-demand keyboard interactivity): `bind`, `layer_surface(config)` returns a `LayerSurface` with the transport's surface (`surface`). `LayerSurface::configured(sent)` is the size to draw at: an extent the server left at 0 is the requested one, and 0 on both sides fails (`Error::Unsized`). `set_placement`, `set_exclusive_zone` and `set_keyboard_interactivity` apply with the next commit; popups of it work through the transport |
 | `SessionLockManager`, `SessionLock` | `ext_session_lock_v1`: `lock` numbers each lock (`generation`), `lock_surface(output)`, `unlock` once confirmed, else `destroy` |
 | `IdleNotifier`, `IdleWatch` | `ext_idle_notify_v1`: `watch(seat, millis)`; dropping it stops the events |
 | `Shell`, `Session` | `cupertino_shell_v1` (version 9): `session` observes the session, `observe` does so and reads its state before it returns (with the other events that arrived meanwhile, for the caller's loop), `menu_bar` and `dock` give a layer surface the role of an output |

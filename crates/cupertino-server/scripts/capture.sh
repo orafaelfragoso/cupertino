@@ -11,6 +11,7 @@
 # Environment: AFTER (seconds before the shot, default 5), SIZE (default 1280x800), BIN_DIR (default
 # target/release, else target/debug; build with: cargo build --release --workspace --all-features --bins).
 # The shell processes are the ones the packages install as /etc/cupertino/compositor.json, found on PATH (BIN_DIR first).
+# XDG_SESSION_ID is passed on: cupertino-login (the lock agent) needs the caller's logind session.
 # Needs: dbus-run-session.
 set -eu
 
@@ -64,6 +65,7 @@ env -i \
     XDG_CACHE_HOME="$FHOME/.cache" \
     XDG_RUNTIME_DIR="$RUNTIME" \
     XDG_CURRENT_DESKTOP=Cupertino \
+    XDG_SESSION_ID="${XDG_SESSION_ID:-}" \
     XDG_DATA_DIRS="$ROOT/crates/cupertino-files/data:$ROOT/crates/cupertino-settings/data:/usr/local/share:/usr/share" \
     CUPERTINO_ASSET_SEARCH_PATH="$PACK" \
     CUPERTINO_SERVER_CONFIG="$ROOT/packaging/files/etc/cupertino/compositor.json" \

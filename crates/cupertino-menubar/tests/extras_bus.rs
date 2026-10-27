@@ -3,7 +3,8 @@
 #![cfg(feature = "app")]
 
 use cupertino_menubar::extras::{
-    BatteryState, BluetoothDevice, ExtraAction, Extras, FocusLifetime, WifiNetwork,
+    BatteryState, BluetoothDevice, ExtraAction, Extras, FocusLifetime, SessionAction, SessionUser,
+    WifiNetwork,
 };
 use cupertino_menubar::extras_bus::ExtrasBus;
 use std::collections::HashMap;
@@ -53,6 +54,42 @@ impl Drop for PrivateBus {
             .arg(&self.pid)
             .status()
             .expect("kill the private bus");
+    }
+}
+
+/// Stands in for the session agent of `cupertino-login`: the properties of the system menu and the calls it records.
+struct FakeLogin {
+    calls: mpsc::Sender<String>,
+}
+
+#[zbus::interface(name = "org.cupertino.Login1")]
+impl FakeLogin {
+    #[zbus(property)]
+    fn locked(&self) -> bool {
+        false
+    }
+
+    #[zbus(property)]
+    fn user_name(&self) -> String {
+        "Rafael".into()
+    }
+
+    #[zbus(property)]
+    fn users(&self) -> Vec<(String, String, String, bool)> {
+        vec![("ana".into(), "Ana".into(), String::new(), true)]
+    }
+
+    #[zbus(property)]
+    fn capabilities(&self) -> HashMap<String, bool> {
+        [("sleep".to_string(), false)].into()
+    }
+
+    fn sleep(&self) {
+        self.calls.send("Sleep".into()).unwrap();
+    }
+
+    fn request_restart(&self) {
+        self.calls.send("RequestRestart".into()).unwrap();
     }
 }
 
@@ -203,6 +240,7 @@ fn the_extras_follow_the_services_and_act_on_them() {
         return;
     };
     let (calls_tx, calls) = mpsc::channel();
+    let (login_tx, login_calls) = mpsc::channel();
     let services = bus.connect();
     block_on(async {
         let server = services.object_server();
@@ -235,11 +273,16 @@ fn the_extras_follow_the_services_and_act_on_them() {
             .at("/org/cupertino/NotificationCenter1", FakeCentre)
             .await
             .unwrap();
+        server
+            .at("/org/cupertino/Login1", FakeLogin { calls: login_tx })
+            .await
+            .unwrap();
         for name in [
             "org.cupertino.Network1",
             "org.freedesktop.UPower",
             "org.cupertino.Bluetooth1",
             "org.cupertino.NotificationCenter1",
+            "org.cupertino.Login1",
         ] {
             services.request_name(name).await.unwrap();
         }
@@ -299,6 +342,26 @@ fn the_extras_follow_the_services_and_act_on_them() {
         }]
     );
 
+    // the system menu's state: the name, the other accounts, a capability the agent says no to
+    let session = first.session.as_ref().expect("the session agent");
+    assert_eq!(session.user_name, "Rafael");
+    assert_eq!(
+        session.users,
+        [SessionUser {
+            login: "ana".into(),
+            name: "Ana".into(),
+            logged_in: true
+        }]
+    );
+    assert!(!session.caps.sleep && session.caps.restart && session.caps.lock);
+    extras
+        .act(ExtraAction::Session(SessionAction::Restart))
+        .unwrap();
+    assert_eq!(
+        login_calls.recv_timeout(Duration::from_secs(5)).unwrap(),
+        "RequestRestart"
+    );
+
     // joining an open network calls the service without a passphrase, and the bar reads the result back
     extras.act(ExtraAction::JoinNetwork("cafe".into())).unwrap();
     assert_eq!(
@@ -316,6 +379,11 @@ fn the_extras_follow_the_services_and_act_on_them() {
         .map(|n| n.ssid.as_str())
         .collect();
     assert_eq!(connected, ["cafe"]);
+
+    // an agent that leaves takes the system menu with it
+    block_on(services.release_name("org.cupertino.Login1")).unwrap();
+    let no_agent = next(&events);
+    assert_eq!(no_agent.session, None);
 
     // a service that leaves hides its item
     block_on(services.release_name("org.cupertino.Bluetooth1")).unwrap();

@@ -209,6 +209,7 @@ impl Style {
                 );
             }
             match &slot.key {
+                SlotKey::System => draw_system_mark(pm, r, scale, self.color(1.0)),
                 SlotKey::AppMenu => text.draw(
                     pm,
                     &content.app_name,
@@ -543,6 +544,37 @@ fn draw_control_panel(pm: &mut Pixmap, r: GRect, scale: f64, color: Rgba) {
                 None,
             );
         }
+    }
+}
+
+/// The system menu's mark: a ring open at the top with a stem through the gap (a power mark, drawn as paths).
+fn draw_system_mark(pm: &mut Pixmap, r: GRect, scale: f64, color: Rgba) {
+    let (cx, cy) = (r.x() + r.width() / 2.0, r.y() + r.height() / 2.0);
+    let radius = 5.2;
+    let mut ring = PathBuilder::new();
+    let (from, sweep) = (-90.0_f64 + 38.0, 360.0_f64 - 76.0);
+    for step in 0..=32 {
+        let angle = (from + sweep * f64::from(step) / 32.0).to_radians();
+        let point = (
+            ((cx + radius * angle.cos()) * scale) as f32,
+            ((cy + 0.6 + radius * angle.sin()) * scale) as f32,
+        );
+        if step == 0 {
+            ring.move_to(point.0, point.1);
+        } else {
+            ring.line_to(point.0, point.1);
+        }
+    }
+    let mut stem = PathBuilder::new();
+    stem.move_to((cx * scale) as f32, ((cy - 5.8) * scale) as f32);
+    stem.line_to((cx * scale) as f32, ((cy - 0.6) * scale) as f32);
+    let stroke = Stroke {
+        width: (1.5 * scale) as f32,
+        line_cap: tiny_skia::LineCap::Round,
+        ..Stroke::default()
+    };
+    for path in [ring.finish(), stem.finish()].into_iter().flatten() {
+        pm.stroke_path(&path, &paint(color), &stroke, Transform::identity(), None);
     }
 }
 

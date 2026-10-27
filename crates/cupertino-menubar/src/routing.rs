@@ -119,6 +119,16 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
             item,
         } => fallback_action(item),
         Effect::Activate {
+            slot: SlotKey::System,
+            item,
+        } => cx
+            .shared
+            .extras
+            .session_menu()?
+            .action(item)
+            .cloned()
+            .map(Action::Extra),
+        Effect::Activate {
             slot: SlotKey::ControlPanel | SlotKey::Clock,
             ..
         } => None,
@@ -140,7 +150,7 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
             }
             SlotKey::ControlPanel => Some(Action::Request(Request::TogglePanel)),
             SlotKey::Clock => Some(Action::Request(Request::ToggleCentre)),
-            SlotKey::AppMenu | SlotKey::Menu(_) => None,
+            SlotKey::System | SlotKey::AppMenu | SlotKey::Menu(_) => None,
         },
     }
 }
@@ -457,6 +467,30 @@ mod tests {
                 item: ItemId(99)
             }),
             None
+        );
+    }
+
+    #[test]
+    fn a_system_menu_entry_goes_to_the_session_agent() {
+        let mut f = Fixture::new(WindowMenu::None);
+        f.shared.extras.session = Some(crate::extras::SessionState::default());
+        let menu = f.shared.extras.session_menu().unwrap();
+        let restart = menu
+            .rows
+            .iter()
+            .find(|r| r.label.starts_with("Restart"))
+            .unwrap();
+        assert_eq!(
+            f.resolve(activate(SlotKey::System, restart.id.0)),
+            Some(Action::Extra(ExtraAction::Session(
+                crate::extras::SessionAction::Restart
+            )))
+        );
+        f.shared.extras.session = None;
+        assert_eq!(
+            f.resolve(activate(SlotKey::System, restart.id.0)),
+            None,
+            "no agent, nothing to call"
         );
     }
 }

@@ -937,3 +937,92 @@ fn a_key_the_server_holds_that_this_build_does_not_know_is_named_not_applied() {
         "the known keys still apply"
     );
 }
+
+// ---- Plain failure texts -----------------------------------------------------------------------------------------
+
+#[test]
+fn a_bus_that_cannot_be_reached_shows_the_plain_state_and_never_the_error() {
+    // one test of this binary sets the buses' addresses; the others read them from their own connections
+    std::env::set_var(
+        "DBUS_SYSTEM_BUS_ADDRESS",
+        "unix:path=/nonexistent/cupertino-test-bus",
+    );
+    std::env::set_var(
+        "DBUS_SESSION_BUS_ADDRESS",
+        "unix:path=/nonexistent/cupertino-test-bus",
+    );
+    let mut services = Services::on(Bus::system(), Bus::session());
+    fn reason<T: std::fmt::Debug>(reading: Reading<T>) -> String {
+        match reading {
+            Reading::Unavailable(reason) => reason,
+            other => panic!("unavailable, got {other:?}"),
+        }
+    }
+    assert_eq!(reason(services.wifi(None)), "Wi-Fi is not available");
+    assert_eq!(
+        reason(services.bluetooth(None)),
+        "Bluetooth is not available"
+    );
+    assert_eq!(
+        reason(services.battery()),
+        "The power service is not running"
+    );
+    assert_eq!(
+        reason(services.focus()),
+        "The notification centre is not running"
+    );
+}
+
+struct RefusingSession;
+
+#[zbus::interface(name = "org.cupertino.Session1")]
+impl RefusingSession {
+    #[zbus(property)]
+    fn mice(&self) -> zbus::fdo::Result<Vec<(String, String, u32, bool)>> {
+        Err(zbus::fdo::Error::AccessDenied(
+            "Rejected send message, 0 matched rules; interface=\"org.example\" (uid 1000)".into(),
+        ))
+    }
+}
+
+#[test]
+fn the_bus_daemons_own_errors_never_reach_the_pane_but_a_services_plain_refusal_does() {
+    use cupertino_settings::services::{failure, SERVICE_UNAVAILABLE};
+    let fdo = |e: zbus::fdo::Error| zbus::Error::FDO(Box::new(e));
+    for bus_error in [
+        zbus::fdo::Error::NoReply("Did not receive a reply. Possible causes include: the remote application did not send a reply".into()),
+        zbus::fdo::Error::AccessDenied(
+            "Rejected send message, 0 matched rules; interface=\"org.x\" (uid 1000)".into(),
+        ),
+        zbus::fdo::Error::AccessDenied(
+            "Sender is not authorized to send message to destination=:1.7 (interface=org.x)".into(),
+        ),
+        zbus::fdo::Error::AccessDenied(
+            "Receiver is not authorized to receive message from :1.3".into(),
+        ),
+        zbus::fdo::Error::TimedOut("Activation timed out".into()),
+        zbus::fdo::Error::LimitsExceeded("too many".into()),
+    ] {
+        assert_eq!(failure(&fdo(bus_error)), SERVICE_UNAVAILABLE);
+    }
+    assert_eq!(
+        failure(&fdo(zbus::fdo::Error::Failed(
+            "The radio is switched off.".into()
+        ))),
+        "The radio is switched off.",
+        "a daemon's own refusal keeps its plain text"
+    );
+    let Some(bus) = common::bus() else { return };
+    let _session = zbus::blocking::connection::Builder::address(bus.address.as_str())
+        .unwrap()
+        .serve_at("/org/cupertino/Session1", RefusingSession)
+        .unwrap()
+        .name("org.cupertino.Session1")
+        .unwrap()
+        .build()
+        .unwrap();
+    match services(&bus).mice() {
+        Reading::Unavailable(reason) => assert_eq!(reason, "The session is not running"),
+        other => panic!("unavailable, got {other:?}"),
+    }
+}

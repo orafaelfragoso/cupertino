@@ -99,11 +99,74 @@ impl Bus {
     }
 }
 
-/// The text of a service failure for the pane: the daemon's error name when it sent one, the bus problem otherwise.
-fn failure(e: &zbus::Error) -> String {
+/// The most distinct messages [`log_once`] remembers.
+const LOG_ONCE_MAX: usize = 256;
+
+/// Write `detail` to the log the first time it comes, so a failure that repeats on every refresh is logged once.
+pub fn log_once(detail: &str) {
+    static SEEN: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+        std::sync::Mutex::new(None);
+    let mut seen = SEEN.lock().expect("no thread panics while logging");
+    let seen = seen.get_or_insert_with(Default::default);
+    // messages with a varying part must not grow the set without bound: a full set starts over
+    if seen.len() >= LOG_ONCE_MAX {
+        seen.clear();
+    }
+    if seen.insert(detail.to_string()) {
+        eprintln!("cupertino-settings: {detail}");
+    }
+}
+
+/// What the pane says when the bus or a device failed: the problem stays in the log, never on screen.
+pub const SERVICE_UNAVAILABLE: &str = "The service is not available.";
+
+/// The standard errors a service answers with its own plain text (the Cupertino daemons refuse with these).
+/// The network daemon refuses an unauthorized change with `AccessDenied` and a sentence; the bus daemon's own policy
+/// denial says "Rejected send message ..." (dbus-daemon) or "Sender is not authorized to send message" / "Receiver is
+/// not authorized to receive message" (dbus-broker) and is told apart by that text.
+const SERVICE_STANDARD: [&str; 4] = [
+    "org.freedesktop.DBus.Error.Failed",
+    "org.freedesktop.DBus.Error.InvalidArgs",
+    "org.freedesktop.DBus.Error.NotSupported",
+    "org.freedesktop.DBus.Error.AccessDenied",
+];
+
+/// How the bus daemons word a policy denial.
+const BUS_POLICY_TEXTS: [&str; 3] = [
+    "Rejected send message",
+    "Sender is not authorized to send message",
+    "Receiver is not authorized to receive message",
+];
+
+/// The name of the D-Bus error `e` carries, if it came over the bus.
+fn error_name(e: &zbus::Error) -> Option<String> {
+    match e {
+        zbus::Error::MethodError(name, _, _) => Some(name.to_string()),
+        zbus::Error::FDO(e) => Some(zbus::DBusError::name(e.as_ref()).to_string()),
+        _ => None,
+    }
+}
+
+/// Whether a service itself answered with an error whose text is meant for the pane: a name of its own, or one of
+/// [`SERVICE_STANDARD`]. The bus daemon's errors (no reply, access denied, timeout, limits) and the connection's are not.
+fn from_daemon(e: &zbus::Error) -> bool {
+    let text = e.to_string();
+    !BUS_POLICY_TEXTS.iter().any(|t| text.contains(t))
+        && error_name(e).is_some_and(|name| {
+            !name.starts_with("org.freedesktop.DBus.Error.")
+                || SERVICE_STANDARD.contains(&name.as_str())
+        })
+}
+
+/// The text of a service failure for the pane: the service's own message when it sent one; a problem of the bus
+/// daemon or the connection is logged and shown as [`SERVICE_UNAVAILABLE`].
+pub fn failure(e: &zbus::Error) -> String {
+    if !from_daemon(e) {
+        log_once(&e.to_string());
+        return SERVICE_UNAVAILABLE.to_string();
+    }
     match e {
         zbus::Error::MethodError(name, message, _) => error_text(name.as_str(), message.as_deref()),
-        // property reads report the daemon's error as a standard one
         zbus::Error::FDO(e) => error_text(
             zbus::DBusError::name(e.as_ref()).as_str(),
             zbus::DBusError::description(e.as_ref()),
@@ -143,6 +206,10 @@ fn reading<T>(result: zbus::Result<T>, missing: &str) -> Reading<T> {
     match result {
         Ok(v) => Reading::Ready(v),
         Err(e) if absent(&e) => Reading::Unavailable(missing.to_string()),
+        Err(e) if !from_daemon(&e) => {
+            log_once(&e.to_string());
+            Reading::Unavailable(missing.to_string())
+        }
         Err(e) => Reading::Unavailable(failure(&e)),
     }
 }
@@ -354,7 +421,10 @@ impl Services {
             })
         }) {
             Ok(v) => Reading::Ready(v),
-            Err(e) => Reading::Unavailable(format!("No sound output is available ({e})")),
+            Err(e) => {
+                log_once(&format!("no sound output: {e}"));
+                Reading::Unavailable("No sound output is available".into())
+            }
         }
     }
 
@@ -401,7 +471,10 @@ impl Services {
                     }
                     Ok(())
                 })
-                .map_err(|e| format!("The volume could not be changed: {e}")),
+                .map_err(|e| {
+                    log_once(&format!("the volume could not be changed: {e}"));
+                    "The volume could not be changed.".to_string()
+                }),
             Call::SetBrightness(level) => system(self, POWER_NAME, POWER_PATH, POWER_NAME, &|p| {
                 let max: u32 = p.call("GetMaxBrightness", &())?;
                 let raw = ((level.clamp(0.0, 1.0) * f64::from(max)).round() as u32).clamp(BRIGHTNESS_FLOOR.min(max), max);
@@ -496,7 +569,10 @@ impl Services {
                         .map_err(|e| failure(&e)),
                 )
             })
-            .map_err(|e| format!("cannot start the pairing: {e}"))?;
+            .map_err(|e| {
+                log_once(&format!("cannot start the pairing: {e}"));
+                "The pairing could not be started.".to_string()
+            })?;
         Ok(())
     }
 

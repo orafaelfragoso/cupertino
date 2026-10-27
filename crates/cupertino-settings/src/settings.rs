@@ -120,7 +120,7 @@ impl std::fmt::Display for StoreError {
             StoreError::NoPath(_) => {
                 write!(f, "There is no settings folder to save the change in.")
             }
-            StoreError::Io(_, e) => write!(f, "The change could not be saved: {e}."),
+            StoreError::Io(..) => write!(f, "The change could not be saved."),
         }
     }
 }
@@ -241,7 +241,10 @@ impl Settings {
         let before = self.clone();
         let outcome = self
             .reload(paths)
-            .map_err(|e| format!("The settings could not be read: {e}."))
+            .map_err(|e| {
+                eprintln!("cupertino-settings: the settings could not be read: {e}");
+                "The settings could not be read.".to_string()
+            })
             .and_then(|()| self.compositor.set_mouse_dpi(key, Some(dpi)))
             .and_then(|()| {
                 self.store(paths, File::Compositor)
@@ -263,7 +266,10 @@ impl Settings {
             File::Keyboard => self.keyboard.store(path).map(drop),
             File::Power => self.power.store(path).map(drop),
         };
-        stored.map_err(|e| StoreError::Io(file, e))
+        stored.map_err(|e| {
+            eprintln!("cupertino-settings: the {file:?} settings could not be saved: {e}");
+            StoreError::Io(file, e)
+        })
     }
 
     // ---- the values in effect: the file's, else the key's default ------------------------------------------------

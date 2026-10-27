@@ -272,6 +272,7 @@ pub fn run(pane: PaneId) -> Result<()> {
         _instance: instance,
     };
     app.dark = app.client.is_dark();
+    app.sync_accessibility();
     app.enter_pane(None, pane)?;
     loop {
         let timeout = app.timeout();
@@ -1050,6 +1051,7 @@ impl App {
             self.client.request_redraw(self.window)?;
             return Ok(());
         }
+        self.sync_accessibility();
         let before = self.settings.clone();
         let effects = panes::change(id, value, &mut self.settings, &self.live);
         // restoring `before` on a failure undoes the whole commit only while a commit has one effect
@@ -1200,6 +1202,7 @@ impl App {
                 if let Err(e) = self.settings.reload(&self.paths) {
                     eprintln!("cupertino-settings: the settings could not be read again: {e}");
                 }
+                self.sync_accessibility();
                 self.client.request_redraw(self.window)?;
             }
             Background::Files(WatchEvent::Error(e)) => {
@@ -1262,8 +1265,8 @@ impl App {
         Ok(self.bus.as_ref().expect("connected above"))
     }
 
-    /// Ask the server to set one key of `accessibility.conf` (`org.cupertino.Session1.SetAccessibility`), then read the
-    /// file it stored again; the display options themselves arrive from the session.
+    /// Ask the server to set one key of `accessibility.conf` (`org.cupertino.Session1.SetAccessibility`) and show what
+    /// the server now holds; the display options themselves arrive from the session.
     fn set_accessibility(&mut self, key: &str, value: &str) -> std::result::Result<(), String> {
         let bus = self.bus()?;
         bus.call_method(
@@ -1274,12 +1277,17 @@ impl App {
             &(key, value),
         )
         .map_err(|e| format!("The setting could not be changed: {e}."))?;
-        if let Some(path) = &self.paths.accessibility {
-            let (stored, _) = cupertino_defaults::accessibility::AccessibilitySettings::load(path)
-                .map_err(|e| format!("The changed setting could not be read back: {e}."))?;
-            self.settings.accessibility = stored;
-        }
+        self.sync_accessibility();
         Ok(())
+    }
+
+    /// The accessibility settings as the server holds them (`org.cupertino.Session1.Accessibility`): the server is
+    /// their only writer, and it keeps them in memory only when it has no file to store them in, so the file is not
+    /// the truth. Without the property the file's values stay.
+    fn sync_accessibility(&mut self) {
+        if let Some(held) = self.services.accessibility().ready() {
+            self.settings.apply_session_accessibility(held);
+        }
     }
 
     /// Open the menu of a pop-up button in `frame` under it.

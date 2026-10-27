@@ -121,6 +121,15 @@ impl ClientState {
     }
 }
 
+/// Whether `client` is not in a sandbox: it did not connect through a security context. The globals that read or change
+/// what other clients own (the clipboard managers, display configuration and power, and the security context global
+/// itself, which a sandboxed client must not use to make a context of its own) are offered to these only.
+pub fn unsandboxed(client: &Client) -> bool {
+    client
+        .get_data::<ClientState>()
+        .is_some_and(|data| !data.sandboxed)
+}
+
 /// The capabilities of `client`; none when its data is not a [`ClientState`] or its holder has exited.
 pub fn capabilities(client: &Client) -> ClientCapabilitySet {
     client

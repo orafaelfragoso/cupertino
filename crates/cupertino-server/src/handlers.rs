@@ -181,6 +181,28 @@ impl CompositorHandler for Cupertino {
         self.request_redraw();
     }
 }
+impl smithay::wayland::security_context::SecurityContextHandler for Cupertino {
+    fn context_created(
+        &mut self,
+        source: smithay::wayland::security_context::SecurityContextListenerSource,
+        _context: smithay::wayland::security_context::SecurityContext,
+    ) {
+        let inserted = self.loop_handle.insert_source(source, |stream, _, state| {
+            let data = std::sync::Arc::new(crate::state::ClientState {
+                sandboxed: true,
+                ..crate::state::ClientState::default()
+            });
+            if let Err(e) = state.display_handle.insert_client(stream, data) {
+                tracing::warn!(error = %e, "adding a sandboxed wayland client failed");
+            }
+        });
+        if let Err(e) = inserted {
+            tracing::warn!(error = %e, "listening for a security context failed");
+        }
+    }
+}
+smithay::delegate_security_context!(Cupertino);
+
 delegate_compositor!(Cupertino);
 
 impl ShmHandler for Cupertino {
@@ -270,6 +292,10 @@ impl SelectionHandler for Cupertino {
         source: Option<smithay::wayland::selection::SelectionSource>,
         seat: Seat<Self>,
     ) {
+        if self.session_lock.is_active() {
+            self.clipboard_set_while_locked();
+            return;
+        }
         self.clipboard_selection_changed(ty, source.as_ref(), &seat);
     }
 

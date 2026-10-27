@@ -190,6 +190,8 @@ impl Cupertino {
         // a takeover of an orphaned lock finds the session locked already
         if !was_active {
             self.sessions.lock(true);
+            self.clipboard_session_locked();
+            crate::displays::management::session_locked(self);
         }
         self.refresh_pointer_focus();
         self.request_redraw();
@@ -294,6 +296,7 @@ impl Cupertino {
     fn restore_after_lock(&mut self) {
         self.session_lock.state = LockState::Unlocked;
         self.sessions.lock(false);
+        self.clipboard_session_unlocked();
         for o in &mut self.outputs {
             o.lock = OutputLock::default();
         }

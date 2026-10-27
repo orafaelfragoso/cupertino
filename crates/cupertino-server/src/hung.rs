@@ -52,6 +52,11 @@ impl Liveness {
     pub fn is_unresponsive(&self) -> bool {
         self.unresponsive
     }
+
+    /// A ping went out and has not been answered yet.
+    pub fn awaiting_pong(&self) -> bool {
+        self.outstanding.is_some()
+    }
 }
 
 struct Watched {
@@ -117,6 +122,12 @@ impl Pings {
         self.watched
             .iter()
             .any(|w| &w.client == client && w.liveness.is_unresponsive())
+    }
+
+    /// Whether any client has a ping it has not answered yet. A model clock that jumps while this holds counts the jump
+    /// as time the client took to answer.
+    pub fn awaiting_pong(&self) -> bool {
+        self.watched.iter().any(|w| w.liveness.awaiting_pong())
     }
 
     /// Whether any client is unresponsive.
@@ -200,10 +211,13 @@ mod tests {
     fn a_client_that_answers_is_pinged_every_second_and_never_unresponsive() {
         let mut l = Liveness::default();
         assert!(l.ping_due(0.0), "the first ping is due at once");
+        assert!(!l.awaiting_pong());
         l.pinged(0.0);
+        assert!(l.awaiting_pong());
         assert!(!l.ping_due(0.5), "one is outstanding");
         assert!(!l.check(1.9));
         assert!(!l.ponged());
+        assert!(!l.awaiting_pong());
         assert!(!l.ping_due(0.9), "the interval has not passed");
         assert!(l.ping_due(1.0));
         l.pinged(1.0);

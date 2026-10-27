@@ -7,11 +7,12 @@
 //! ```
 
 use cupertino_layers::{
-    check, classify, denied_crate_paths, dot, edges, Dep, Kind, Layer, Problem, DENIED_CRATES,
-    DENIED_PATHS, PENDING, RULES, TARGET, TARGET_EXCEPTIONS, TARGET_RULES,
+    check, classify, denied_crate_paths, dot, edges, licence_problems, Dep, Kind, Layer, Problem,
+    DENIED_CRATES, DENIED_PATHS, PENDING, RULES, TARGET, TARGET_EXCEPTIONS, TARGET_RULES,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 use std::process::{Command, ExitCode};
 
 fn main() -> ExitCode {
@@ -25,7 +26,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let (layers, deps) = workspace();
+    let (layers, deps, licences) = workspace();
     let current_edges = edges(&layers, &deps);
     let (target, mut target_problems) = classify(layers.keys(), TARGET);
     let target_edges = edges(&target, &deps);
@@ -35,6 +36,9 @@ fn main() -> ExitCode {
             .into_iter()
             .map(Problem::DeniedPath),
     );
+    problems.extend(licence_problems(&licences.licences, &deps, |name| {
+        licences.has_text.get(name).copied().unwrap_or(false)
+    }));
     target_problems.extend(check(
         TARGET_RULES,
         &target_edges,
@@ -87,8 +91,14 @@ fn main() -> ExitCode {
     }
 }
 
-/// Each workspace crate's declared layer, and every dependency (normal, build, dev) of a workspace crate.
-fn workspace() -> (BTreeMap<String, Layer>, BTreeSet<Dep>) {
+/// The licence of each workspace crate, and whether a `LICENSE` file with the MPL-2.0 text sits next to its manifest.
+struct Licences {
+    licences: BTreeMap<String, String>,
+    has_text: BTreeMap<String, bool>,
+}
+
+/// Each workspace crate's declared layer, every dependency (normal, build, dev) of a workspace crate, and its licence.
+fn workspace() -> (BTreeMap<String, Layer>, BTreeSet<Dep>, Licences) {
     let out = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
         .args(["metadata", "--format-version", "1", "--no-deps"])
         .output()
@@ -101,6 +111,10 @@ fn workspace() -> (BTreeMap<String, Layer>, BTreeSet<Dep>) {
     let meta: Value = serde_json::from_slice(&out.stdout).expect("cargo metadata JSON");
     let mut layers = BTreeMap::new();
     let mut deps = BTreeSet::new();
+    let mut licences = Licences {
+        licences: BTreeMap::new(),
+        has_text: BTreeMap::new(),
+    };
     for p in meta["packages"].as_array().expect("packages") {
         let name = p["name"].as_str().expect("package name");
         let layer = p["metadata"]["cupertino"]["layer"]
@@ -112,6 +126,17 @@ fn workspace() -> (BTreeMap<String, Layer>, BTreeSet<Dep>) {
             .filter(|l| RULES.iter().any(|(r, _)| r == l))
             .unwrap_or_else(|| panic!("{name}: `{layer}` is not a layer in RULES"));
         layers.insert(name.to_owned(), layer);
+        licences.licences.insert(
+            name.to_owned(),
+            p["license"].as_str().unwrap_or_default().to_owned(),
+        );
+        let manifest = Path::new(p["manifest_path"].as_str().expect("manifest path"));
+        let text = std::fs::read_to_string(manifest.with_file_name("LICENSE")).unwrap_or_default();
+        licences.has_text.insert(
+            name.to_owned(),
+            text.trim_start()
+                .starts_with("Mozilla Public License Version 2.0"),
+        );
         for d in p["dependencies"].as_array().expect("dependencies") {
             let to = d["name"].as_str().expect("dependency name");
             let kind = Kind::from_metadata(d["kind"].as_str())
@@ -119,5 +144,5 @@ fn workspace() -> (BTreeMap<String, Layer>, BTreeSet<Dep>) {
             deps.insert((name.to_owned(), to.to_owned(), kind));
         }
     }
-    (layers, deps)
+    (layers, deps, licences)
 }

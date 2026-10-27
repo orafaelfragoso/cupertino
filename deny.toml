@@ -1,5 +1,6 @@
-# cargo-deny policy: the code is GPL-3.0-or-later, so every dependency must carry a licence that GPL-3.0 can absorb, and
-# no dependency may carry a known vulnerability. Run `cargo deny check`.
+# cargo-deny policy: the code is GPL-3.0-or-later, except the MPL-2.0 library crates (checked by cupertino-layers), so
+# every dependency must carry a licence that GPL-3.0 can absorb, and no dependency may carry a known vulnerability.
+# Run `cargo deny check`.
 [graph]
 all-features = true
 

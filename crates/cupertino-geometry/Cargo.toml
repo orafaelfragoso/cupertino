@@ -2,7 +2,7 @@
 name = "cupertino-geometry"
 version = "0.1.0"
 edition.workspace = true
-license.workspace = true
+license = "MPL-2.0"
 description = "Dependency-free 2D geometry for the Cupertino compositor: rects, continuous-corner rounded rectangles (path, signed distance, coverage), nine-slice math and shadow kernel helpers"
 
 [package.metadata.cupertino]

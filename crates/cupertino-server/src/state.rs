@@ -90,6 +90,9 @@ pub struct ClientState {
     pub holder: std::sync::OnceLock<crate::authorization::Holder>,
     /// How many material backdrops the client holds (`cupertino_app_effects_v1.get_backdrop`).
     pub backdrops: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// The client connected through a security context (`wp_security_context_v1`): a sandboxed application. It is not
+    /// offered the globals that read or change what other clients own ([`crate::authorization::unsandboxed`]).
+    pub sandboxed: bool,
 }
 
 impl Default for ClientState {
@@ -102,6 +105,7 @@ impl Default for ClientState {
             capabilities: ClientCapabilitySet::NONE,
             holder: std::sync::OnceLock::new(),
             backdrops: std::sync::Arc::default(),
+            sandboxed: false,
         }
     }
 }
@@ -272,6 +276,7 @@ pub struct Cupertino {
     pub data_device_state: DataDeviceState,
     pub primary_selection_state: PrimarySelectionState,
     /// `ext-data-control-v1` and `zwlr-data-control-v1` for clipboard managers (`clipboard`).
+    pub security_context_state: smithay::wayland::security_context::SecurityContextState,
     pub ext_data_control_state: smithay::wayland::selection::ext_data_control::DataControlState,
     pub wlr_data_control_state: smithay::wayland::selection::wlr_data_control::DataControlState,
     /// The server's copy of the clipboard, kept when its client exits (`clipboard`).
@@ -481,6 +486,10 @@ impl Cupertino {
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let primary_selection_state = PrimarySelectionState::new::<Self>(&dh);
+        let security_context_state = smithay::wayland::security_context::SecurityContextState::new::<
+            Self,
+            _,
+        >(&dh, crate::authorization::unsandboxed);
         let (ext_data_control_state, wlr_data_control_state) =
             crate::clipboard::data_control_states(&dh, &primary_selection_state);
         let viewporter_state = ViewporterState::new::<Self>(&dh);
@@ -556,6 +565,7 @@ impl Cupertino {
             data_device_state,
             primary_selection_state,
             ext_data_control_state,
+            security_context_state,
             wlr_data_control_state,
             clipboard: crate::clipboard::Clipboard::default(),
             viewporter_state,

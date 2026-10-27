@@ -190,6 +190,7 @@ impl Cupertino {
         // a takeover of an orphaned lock finds the session locked already
         if !was_active {
             self.sessions.lock(true);
+            crate::displays::management::session_locked(self);
         }
         self.refresh_pointer_focus();
         self.request_redraw();

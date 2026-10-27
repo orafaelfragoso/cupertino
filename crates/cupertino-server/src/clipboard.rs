@@ -27,9 +27,12 @@ use smithay::reexports::rustix;
 use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::{DisplayHandle, Resource};
 use smithay::wayland::selection::data_device::{
+    clear_data_device_selection, current_data_device_selection_userdata,
     request_data_device_client_selection, set_data_device_selection,
 };
-use smithay::wayland::selection::primary_selection::PrimarySelectionState;
+use smithay::wayland::selection::primary_selection::{
+    clear_primary_selection, PrimarySelectionState,
+};
 use smithay::wayland::selection::{ext_data_control, wlr_data_control};
 use smithay::wayland::selection::{SelectionSource, SelectionTarget};
 use smithay::{delegate_data_control, delegate_ext_data_control};
@@ -320,6 +323,50 @@ impl Cupertino {
         set_data_device_selection(&self.display_handle, &self.seat, mime_types, snapshot);
     }
 
+    /// The server's copy of the current clipboard: the kept snapshot, or the owner's types when all of them were read.
+    fn clipboard_copy(&self) -> Option<Arc<Snapshot>> {
+        match current_data_device_selection_userdata(&self.seat) {
+            Some(snapshot) => Some(snapshot.clone()),
+            None if self.clipboard.owner.is_some()
+                && self.clipboard.is_complete()
+                && !self.clipboard.captured.is_empty() =>
+            {
+                Some(Arc::new(Snapshot::from_captured(
+                    self.clipboard.captured.clone(),
+                )))
+            }
+            None => None,
+        }
+    }
+
+    /// A selection was set or cleared while the session is locked: nobody may. Once smithay has made it current, the
+    /// clipboard goes back to the server's copy of what it was (which also cancels the refused source); a primary
+    /// selection, which the server does not copy, is cleared.
+    pub fn clipboard_refuse_set_while_locked(&mut self, ty: SelectionTarget) {
+        let kept = (ty == SelectionTarget::Clipboard).then(|| self.clipboard_copy());
+        self.loop_handle.insert_idle(move |state| {
+            if !state.session_lock.is_active() {
+                return;
+            }
+            match kept {
+                Some(Some(snapshot)) => {
+                    state.clipboard_forget();
+                    set_data_device_selection(
+                        &state.display_handle,
+                        &state.seat,
+                        snapshot.mime_types(),
+                        snapshot,
+                    );
+                }
+                Some(None) => {
+                    state.clipboard_forget();
+                    clear_data_device_selection(&state.display_handle, &state.seat);
+                }
+                None => clear_primary_selection(&state.display_handle, &state.seat),
+            }
+        });
+    }
+
     /// Serve a paste of the kept clipboard from its snapshot (the selection's user data).
     pub fn clipboard_serve_snapshot(&mut self, snapshot: &Snapshot, mime: &str, fd: OwnedFd) {
         match snapshot.get(mime) {
@@ -333,8 +380,8 @@ impl Cupertino {
 }
 
 /// The data control globals of clipboard managers, `ext-data-control-v1` and its predecessor
-/// `zwlr-data-control-v1`, both with the primary selection. Every client may bind them, as every client may
-/// bind the layer shell: the server has no sandbox identity (security-context) to deny them to.
+/// `zwlr-data-control-v1`, both with the primary selection. Every client outside a sandbox may bind them (clipboard
+/// managers need no focus); a client that connected through a security context does not see them.
 pub fn data_control_states(
     dh: &DisplayHandle,
     primary: &PrimarySelectionState,
@@ -343,8 +390,16 @@ pub fn data_control_states(
     wlr_data_control::DataControlState,
 ) {
     (
-        ext_data_control::DataControlState::new::<Cupertino, _>(dh, Some(primary), |_| true),
-        wlr_data_control::DataControlState::new::<Cupertino, _>(dh, Some(primary), |_| true),
+        ext_data_control::DataControlState::new::<Cupertino, _>(
+            dh,
+            Some(primary),
+            crate::authorization::unsandboxed,
+        ),
+        wlr_data_control::DataControlState::new::<Cupertino, _>(
+            dh,
+            Some(primary),
+            crate::authorization::unsandboxed,
+        ),
     )
 }
 

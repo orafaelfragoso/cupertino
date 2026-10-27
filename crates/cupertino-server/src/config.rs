@@ -1,10 +1,11 @@
 //! Compositor configuration: window style, shell geometry, key bindings and spawn defaults.
 //!
 //! Every value that is not is approximate or unknown and therefore configurable. An
-//! optional JSON file (`$CUPERTINO_SERVER_CONFIG`, else
-//! `$XDG_CONFIG_HOME/cupertino/compositor.json`) overrides the defaults; unknown keys are ignored.
+//! optional JSON file (`$CUPERTINO_SERVER_CONFIG`, else `$XDG_CONFIG_HOME/cupertino/compositor.json` over the system
+//! file `/etc/cupertino/compositor.json`) overrides the defaults; unknown keys are ignored.
 
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 use crate::input::{Action, KeyBindings};
 use cupertino_defaults::compositor::{AppearanceName, CompositorSettings, MinimizeEffectName};
@@ -12,6 +13,9 @@ use cupertino_theme::Appearance;
 
 /// Environment variable naming the configuration file.
 pub use cupertino_defaults::compositor::COMPOSITOR_CONF_ENV as CONFIG_ENV;
+
+/// The system configuration file the packages install: the shell processes and whatever else a fresh account needs.
+pub const SYSTEM_CONFIG: &str = "/etc/cupertino/compositor.json";
 
 /// A shell process the server starts and keeps alive (see [`crate::supervisor`]).
 #[derive(Clone, Debug, PartialEq)]
@@ -348,6 +352,14 @@ pub struct SettingsFiles {
     pub power: cupertino_defaults::power::PowerSettings,
 }
 
+/// The files to apply, first to last: the system file when `CUPERTINO_SERVER_CONFIG` is unset, then the configured or
+/// the user's file. A file the person sets in `CUPERTINO_SERVER_CONFIG` stands alone.
+fn config_layers(env: Option<OsString>, user: Option<PathBuf>, system: &Path) -> Vec<PathBuf> {
+    let explicit = env.is_some_and(|p| !p.is_empty());
+    let system = (!explicit && system.is_file()).then(|| system.to_path_buf());
+    system.into_iter().chain(user).collect()
+}
+
 impl Config {
     /// Path of the configuration file, if one is configured or present.
     pub fn path() -> Option<PathBuf> {
@@ -369,20 +381,15 @@ impl Config {
             ..Config::default()
         };
         let mut compositor = CompositorSettings::default();
-        if let Some(path) = Self::path() {
-            match CompositorSettings::load(&path, None) {
-                Ok((file, problems)) => {
-                    for p in problems {
-                        tracing::warn!(path = %path.display(), key = p.key, error = %p.message, "ignoring invalid configuration");
-                    }
-                    for problem in cfg.apply_file(&file) {
-                        tracing::warn!(path = %path.display(), error = %problem, "ignoring invalid configuration");
-                    }
-                    compositor = file;
-                }
-                Err(e) => {
-                    tracing::warn!(path = %path.display(), error = %e, "cannot read configuration")
-                }
+        let user = Self::path();
+        for path in config_layers(
+            std::env::var_os(CONFIG_ENV),
+            user.clone(),
+            Path::new(SYSTEM_CONFIG),
+        ) {
+            let file = cfg.apply_path(&path);
+            if Some(&path) == user.as_ref() {
+                compositor = file;
             }
         }
         (
@@ -393,6 +400,25 @@ impl Config {
                 power,
             },
         )
+    }
+
+    /// Apply the settings file at `path` and return them; problems are reported and their keys keep their values.
+    fn apply_path(&mut self, path: &Path) -> CompositorSettings {
+        match CompositorSettings::load(path, None) {
+            Ok((file, problems)) => {
+                for p in problems {
+                    tracing::warn!(path = %path.display(), key = p.key, error = %p.message, "ignoring invalid configuration");
+                }
+                for problem in self.apply_file(&file) {
+                    tracing::warn!(path = %path.display(), error = %problem, "ignoring invalid configuration");
+                }
+                file
+            }
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "cannot read configuration");
+                CompositorSettings::default()
+            }
+        }
     }
 
     /// [`Config::load_with_files`] without the files.
@@ -477,6 +503,38 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_system_file_is_applied_under_the_users_file_and_never_under_an_explicit_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let system = dir.path().join("system.json");
+        let user = dir.path().join("user.json");
+        std::fs::write(
+            &system,
+            r#"{"appearance":"dark","shell":[{"name":"dock","command":["cupertino-dock"]}]}"#,
+        )
+        .unwrap();
+        std::fs::write(&user, r#"{"appearance":"light"}"#).unwrap();
+
+        let layers = config_layers(None, Some(user.clone()), &system);
+        assert_eq!(layers, vec![system.clone(), user.clone()]);
+        let mut c = Config::default();
+        for path in &layers {
+            c.apply_path(path);
+        }
+        assert_eq!(c.appearance, Appearance::Light);
+        assert_eq!(c.shell_processes.len(), 1);
+
+        assert_eq!(config_layers(None, None, &system), vec![system.clone()]);
+        assert_eq!(
+            config_layers(None, Some(user.clone()), &dir.path().join("none.json")),
+            vec![user.clone()]
+        );
+        assert_eq!(
+            config_layers(Some(user.clone().into()), Some(user.clone()), &system),
+            vec![user]
+        );
+    }
+
     use super::*;
 
     /// Apply `json` to `c`; the problems of the file and those the server finds, as text.

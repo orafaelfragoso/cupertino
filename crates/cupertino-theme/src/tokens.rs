@@ -185,8 +185,8 @@ mod tests {
     #[test]
     fn catalog_sizes() {
         let t = tokens();
-        assert_eq!(t.table(Appearance::Light).len(), 49);
-        assert_eq!(t.table(Appearance::Dark).len(), 46);
+        assert_eq!(t.table(Appearance::Light).len(), 50);
+        assert_eq!(t.table(Appearance::Dark).len(), 47);
         assert!(t.table(Appearance::LightHighContrast).len() < t.table(Appearance::Light).len());
     }
 

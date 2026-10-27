@@ -1216,6 +1216,7 @@ dependencies = [
  "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-icons",
+ "cupertino-text-field",
  "cupertino-theme",
  "cupertino-typeahead",
  "serde_json",
@@ -1239,6 +1240,15 @@ version = "0.1.0"
 dependencies = [
  "cupertino-client",
  "tiny-skia",
+]
+
+[[package]]
+name = "cupertino-text-field"
+version = "0.1.0"
+dependencies = [
+ "cupertino-defaults",
+ "cupertino-keyboard",
+ "unicode-segmentation",
 ]
 
 [[package]]

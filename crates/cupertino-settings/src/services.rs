@@ -99,8 +99,30 @@ impl Bus {
     }
 }
 
-/// The text of a service failure for the pane: the daemon's error name when it sent one, the bus problem otherwise.
-fn failure(e: &zbus::Error) -> String {
+/// Write `detail` to the log the first time it comes, so a failure that repeats on every refresh is logged once.
+pub fn log_once(detail: &str) {
+    static SEEN: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+        std::sync::Mutex::new(None);
+    let mut seen = SEEN.lock().expect("no thread panics while logging");
+    if seen
+        .get_or_insert_with(Default::default)
+        .insert(detail.to_string())
+    {
+        eprintln!("cupertino-settings: {detail}");
+    }
+}
+
+/// What the pane says when the bus or a device failed: the problem stays in the log, never on screen.
+pub const SERVICE_UNAVAILABLE: &str = "The service is not available.";
+
+/// Whether the daemon itself answered with an error (its text is meant for the pane), not the bus or the connection.
+fn from_daemon(e: &zbus::Error) -> bool {
+    matches!(e, zbus::Error::MethodError(..) | zbus::Error::FDO(_))
+}
+
+/// The text of a service failure for the pane: the daemon's own message when it sent one; a problem of the bus or
+/// the connection is logged and shown as [`SERVICE_UNAVAILABLE`].
+pub fn failure(e: &zbus::Error) -> String {
     match e {
         zbus::Error::MethodError(name, message, _) => error_text(name.as_str(), message.as_deref()),
         // property reads report the daemon's error as a standard one
@@ -108,7 +130,10 @@ fn failure(e: &zbus::Error) -> String {
             zbus::DBusError::name(e.as_ref()).as_str(),
             zbus::DBusError::description(e.as_ref()),
         ),
-        other => other.to_string(),
+        other => {
+            log_once(&other.to_string());
+            SERVICE_UNAVAILABLE.to_string()
+        }
     }
 }
 
@@ -143,6 +168,10 @@ fn reading<T>(result: zbus::Result<T>, missing: &str) -> Reading<T> {
     match result {
         Ok(v) => Reading::Ready(v),
         Err(e) if absent(&e) => Reading::Unavailable(missing.to_string()),
+        Err(e) if !from_daemon(&e) => {
+            log_once(&e.to_string());
+            Reading::Unavailable(missing.to_string())
+        }
         Err(e) => Reading::Unavailable(failure(&e)),
     }
 }
@@ -354,7 +383,10 @@ impl Services {
             })
         }) {
             Ok(v) => Reading::Ready(v),
-            Err(e) => Reading::Unavailable(format!("No sound output is available ({e})")),
+            Err(e) => {
+                log_once(&format!("no sound output: {e}"));
+                Reading::Unavailable("No sound output is available".into())
+            }
         }
     }
 
@@ -401,7 +433,10 @@ impl Services {
                     }
                     Ok(())
                 })
-                .map_err(|e| format!("The volume could not be changed: {e}")),
+                .map_err(|e| {
+                    log_once(&format!("the volume could not be changed: {e}"));
+                    "The volume could not be changed.".to_string()
+                }),
             Call::SetBrightness(level) => system(self, POWER_NAME, POWER_PATH, POWER_NAME, &|p| {
                 let max: u32 = p.call("GetMaxBrightness", &())?;
                 let raw = ((level.clamp(0.0, 1.0) * f64::from(max)).round() as u32).clamp(BRIGHTNESS_FLOOR.min(max), max);

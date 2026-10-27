@@ -12,9 +12,7 @@ use crate::fallback;
 use crate::item::MenuItem;
 use crate::layout::{BarContent, StatusEntry};
 use crate::raster::{PRIVACY_DOT_PT, STATUS_ICON_PT};
-use crate::source::{
-    GtkMenuProps, KdeAppMenu, MenuSource, MenuSourceMap, WindowIdentity, WindowKey,
-};
+use crate::source::{GtkMenuProps, KdeAppMenu, MenuSource, MenuSourceMap, WindowKey};
 use crate::worker::Request;
 use cupertino_icons::from_argb;
 use cupertino_shell_client::{GtkMenu, MenuBarUpdate, WindowMenu, WindowState};
@@ -128,13 +126,8 @@ pub fn status_icon_px(scale: f64) -> u32 {
 pub struct BarFeed {
     /// Identifies the bar's announced menu in [`Shared::sources`].
     key: WindowKey,
-    app: Option<ActiveApp>,
+    app: Option<AppName>,
     window: WindowState,
-}
-
-struct ActiveApp {
-    id: String,
-    name: AppName,
 }
 
 impl BarFeed {
@@ -158,10 +151,7 @@ impl BarFeed {
         names: impl FnOnce(&str) -> AppName,
     ) {
         if let Some(active) = &update.active_app {
-            self.app = (!active.app_id.is_empty()).then(|| ActiveApp {
-                id: active.app_id.clone(),
-                name: names(&active.app_id),
-            });
+            self.app = (!active.app_id.is_empty()).then(|| names(&active.app_id));
         }
         if let Some(menu) = &update.menu {
             match menu {
@@ -189,12 +179,7 @@ impl BarFeed {
 
     /// Where the active window's menus come from.
     pub fn source(&self, shared: &Shared) -> MenuSource {
-        let app_id = self.app.as_ref().map(|a| a.id.clone()).unwrap_or_default();
-        shared.sources.resolve(&WindowIdentity {
-            window: self.key,
-            app_id,
-            pid: None,
-        })
+        shared.sources.resolve(self.key)
     }
 
     /// The bar content: the application menu and the application's menus (those of its exporter
@@ -215,8 +200,8 @@ impl BarFeed {
                     fallback::menus(self.window.workspaces, current, self.window.can_zoom)
                 };
                 (
-                    app.name.name.clone(),
-                    fallback::app_menu(&app.name.name, app.name.has_entry),
+                    app.name.clone(),
+                    fallback::app_menu(&app.name, app.has_entry),
                     menus,
                 )
             }
@@ -302,7 +287,7 @@ mod tests {
     use super::*;
     use crate::dbus::sni::{IconPixmap, ItemStatus};
     use crate::extras::{BatteryState, WifiState};
-    use cupertino_shell_client::ActiveApp as ReportedApp;
+    use cupertino_shell_client::ActiveApp;
 
     fn editor() -> AppName {
         AppName {
@@ -313,7 +298,7 @@ mod tests {
 
     fn update(app_id: &str, menu: Option<WindowMenu>) -> MenuBarUpdate {
         MenuBarUpdate {
-            active_app: Some(ReportedApp {
+            active_app: Some(ActiveApp {
                 app_id: app_id.into(),
                 title: String::new(),
             }),
@@ -479,6 +464,39 @@ mod tests {
             |_| editor(),
         );
         assert_eq!(feed.source(&shared), MenuSource::Synthetic);
+    }
+
+    #[test]
+    fn another_window_of_the_app_never_shows_the_first_windows_menus() {
+        let (mut feed, mut shared) = ready(Some(dbusmenu()));
+        shared.layouts.insert(kde(), exporter_tree());
+        let mut focus = |menu: WindowMenu| {
+            feed.apply(
+                &update("org.example.editor", Some(menu)),
+                &mut shared,
+                |_| editor(),
+            );
+            feed.content(&shared)
+                .menus
+                .into_iter()
+                .map(|m| m.label)
+                .collect::<Vec<_>>()
+        };
+        let gtk = GtkMenu {
+            bus_name: ":1.5".into(),
+            application_id: None,
+            application_object_path: None,
+            window_object_path: None,
+            menubar_object_path: Some("/org/example/editor/menus/menubar".into()),
+            app_menu_object_path: None,
+        };
+        assert_eq!(
+            focus(WindowMenu::Gtk(gtk)),
+            Vec::<String>::new(),
+            "its own tree is not loaded yet"
+        );
+        assert_eq!(focus(WindowMenu::None), ["Window"]);
+        assert_eq!(focus(dbusmenu()), ["File", "Edit"]);
     }
 
     #[test]

@@ -426,9 +426,20 @@ pub enum Nav {
     Enter,
 }
 
+/// A key of an open menu: a move, or Space (picks the highlighted row as Return does) or the cancel chords.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Key {
+    Nav(Nav),
+    Space,
+    /// Escape or Super+. : the menu closes and nothing runs.
+    Cancel,
+}
+
 /// What a press or key did.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
+    /// The menu closes and nothing runs.
+    Close,
     /// Run the command; the menu closes.
     Run(Command),
     /// The menu changed (a submenu opened or closed, the highlight moved): draw it again.
@@ -663,6 +674,14 @@ impl Menu {
 
     /// A navigation key. Up and Down move the highlight of the deepest level over selectable rows and stop at the ends;
     /// from no highlight they start at the first and the last row.
+    pub fn press_key(&mut self, key: Key) -> Outcome {
+        match key {
+            Key::Nav(nav) => self.navigate(nav),
+            Key::Space => self.navigate(Nav::Enter),
+            Key::Cancel => Outcome::Close,
+        }
+    }
+
     pub fn navigate(&mut self, key: Nav) -> Outcome {
         let level = self.layouts.len() - 1;
         let items = self.items(level);
@@ -962,6 +981,24 @@ mod tests {
         );
         assert_eq!(menu.navigate(Nav::Left), Outcome::Changed);
         assert_eq!((menu.levels(), menu.hovered(0)), (1, Some(with)));
+    }
+
+    #[test]
+    fn space_picks_the_highlighted_row_like_return_and_cancel_closes_without_running() {
+        let mut menu = open(item_menu(&subject(), &apps()));
+        assert_eq!(
+            menu.press_key(Key::Space),
+            Outcome::Nothing,
+            "nothing is highlighted yet"
+        );
+        let open_row = row_of(&menu, "Open");
+        menu.hover(0, Some(open_row), 0.0);
+        assert_eq!(menu.press_key(Key::Space), Outcome::Run(Command::Open));
+        let with = row_of(&menu, "Open With");
+        menu.hover(0, Some(with), 0.0);
+        assert_eq!(menu.press_key(Key::Space), Outcome::Changed);
+        assert_eq!(menu.levels(), 2, "Space on a submenu row opens it");
+        assert_eq!(menu.press_key(Key::Cancel), Outcome::Close);
     }
 
     #[test]

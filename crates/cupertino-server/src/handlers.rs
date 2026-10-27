@@ -292,7 +292,8 @@ impl SelectionHandler for Cupertino {
         source: Option<smithay::wayland::selection::SelectionSource>,
         seat: Seat<Self>,
     ) {
-        if self.session_lock.is_active() {
+        // a clear is allowed while locked: a password tool's timed clear must not leave the password behind
+        if source.is_some() && self.session_lock.is_active() {
             self.clipboard_refuse_set_while_locked(ty);
             return;
         }

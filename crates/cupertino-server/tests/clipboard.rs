@@ -579,7 +579,7 @@ fn a_selection_set_by_a_clipboard_manager_while_locked_is_cancelled() {
 
     let locker = common::Client::locker(common::session_agent(&h.state));
     h.wait_until("the lock", |_| locker.locked());
-    let manager = ClipboardManager::spawn(h.socket_path());
+    let manager = ClipboardManager::spawn(h.socket_path(), false);
     h.wait_until("the manager's source to be cancelled", |_| {
         manager.cancelled()
     });
@@ -603,6 +603,58 @@ fn a_selection_set_by_a_clipboard_manager_while_locked_is_cancelled() {
         b.shared().pasted,
         [("text/plain".to_string(), TEXT.to_vec())]
     );
+}
+
+/// A clipboard manager clearing the clipboard while the session is locked (a password tool's timed clear) empties it
+/// for good: the server's copy goes too, and nothing comes back at the unlock.
+#[test]
+fn a_clear_by_a_clipboard_manager_while_locked_empties_the_clipboard() {
+    let Some(mut h) = Harness::new() else { return };
+    let (role, _) = copier(&[("text/plain;charset=utf-8", TEXT)]);
+    let a = TestClient::spawn(h.socket_path(), "org.example.copy", role);
+    h.wait_until("the copy to be read", |s| {
+        s.clipboard.is_complete() && s.clipboard.captured_types() == ["text/plain;charset=utf-8"]
+    });
+    a.exit(&mut h);
+    h.wait_until("the server to keep the clipboard", |s| {
+        current_data_device_selection_userdata(&s.seat).is_some()
+    });
+
+    let locker = common::Client::locker(common::session_agent(&h.state));
+    h.wait_until("the lock", |_| locker.locked());
+    let _manager = ClipboardManager::spawn(h.socket_path(), true);
+    h.wait_until("the clipboard to be cleared", |s| {
+        current_data_device_selection_userdata(&s.seat).is_none()
+    });
+    for _ in 0..40 {
+        h.step();
+    }
+    assert_eq!(
+        h.kept(),
+        None,
+        "the cleared clipboard stays cleared while locked"
+    );
+    locker.unlock();
+    h.wait_until("the unlock", |s| !s.session_lock.is_active());
+
+    let b = TestClient::spawn(
+        h.socket_path(),
+        "org.example.paste",
+        paster(&["text/plain"]),
+    );
+    h.wait_until("the second client's selection", |_| {
+        b.shared().offered.is_some()
+    });
+    for _ in 0..40 {
+        h.step();
+    }
+    assert_eq!(h.kept(), None);
+    assert_eq!(
+        b.shared().offered.as_deref(),
+        Some(&[][..]),
+        "no selection is offered"
+    );
+    assert!(b.shared().pasted.is_empty());
 }
 
 /// A data control client that sets a selection of its own and stays until dropped.
@@ -673,7 +725,7 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for ManagerState {
 }
 
 impl ClipboardManager {
-    fn spawn(socket: PathBuf) -> ClipboardManager {
+    fn spawn(socket: PathBuf, clear: bool) -> ClipboardManager {
         let stop = Arc::new(AtomicBool::new(false));
         let cancelled = Arc::new(AtomicBool::new(false));
         let (stop2, cancelled2) = (stop.clone(), cancelled.clone());
@@ -686,7 +738,7 @@ impl ClipboardManager {
             let device = manager.get_data_device(&seat, &qh, ());
             let source = manager.create_data_source(&qh, ());
             source.offer("text/plain".into());
-            device.set_selection(Some(&source));
+            device.set_selection((!clear).then_some(&source));
             let mut state = ManagerState {
                 cancelled: cancelled2,
             };

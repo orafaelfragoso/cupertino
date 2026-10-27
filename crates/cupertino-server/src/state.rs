@@ -81,6 +81,9 @@ pub struct ClientState {
     /// A shell process the server started on a connection of its own (`crate::capture::launch`): only such a client
     /// sees the screen-capture globals.
     pub privileged: bool,
+    /// A shell process the server supervises (`crate::supervisor`), on a connection of its own: the only kind of client
+    /// that may be a dock or a window manager.
+    pub shell_process: bool,
 }
 
 impl Default for ClientState {
@@ -91,6 +94,7 @@ impl Default for ClientState {
             mapped_toplevel: std::sync::atomic::AtomicBool::new(false),
             internal: false,
             privileged: false,
+            shell_process: false,
         }
     }
 }
@@ -284,6 +288,12 @@ pub struct Cupertino {
     pub popups: PopupManager,
     /// Which clients answer their pings (`hung.rs`).
     pub hung: crate::hung::Pings,
+    /// The unresponsive applications the docks were last told about.
+    pub hung_announced: std::collections::BTreeSet<String>,
+    /// SIGKILLs promised to applications that were asked to quit (`force_quit.rs`).
+    pub force_quits: crate::force_quit::ForceQuits,
+    /// Send a signal to a process: `kill(2)`; replaced in tests, which run inside the processes they would signal.
+    pub send_signal: crate::force_quit::SendSignal,
     /// The popup chain that holds the pointer and keyboard, with the toplevel it belongs to (`popup_grab.rs`).
     pub popup_grab: Option<crate::popup_grab::ActivePopupGrab>,
 
@@ -528,6 +538,9 @@ impl Cupertino {
             dmabuf_global: None,
             popups: PopupManager::default(),
             hung: crate::hung::Pings::default(),
+            hung_announced: Default::default(),
+            force_quits: Default::default(),
+            send_signal: Box::new(crate::force_quit::signal_process),
             popup_grab: None,
             seat,
             pointer,
@@ -1302,6 +1315,7 @@ impl Cupertino {
         self.tick_display_power();
         self.tick_quit();
         self.tick_hung(now);
+        self.tick_force_quit(now);
         let fx = self.wm.tick(now);
         self.apply_effects(fx);
         self.fx.tick(now);
@@ -1564,6 +1578,7 @@ impl Cupertino {
                     self.request_redraw();
                 }
                 ShellOp::ToggleAppGrid => self.docks.toggle_app_grid(),
+                ShellOp::OpenForceQuit => self.docks.force_quit_dialog(),
                 ShellOp::ToggleLauncher => self.toggle_launcher(),
                 ShellOp::ToggleNotificationCenter => self.toggle_notification_center(),
                 ShellOp::ToggleControlPanel => self.toggle_control_panel(),

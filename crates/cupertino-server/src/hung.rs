@@ -141,6 +141,7 @@ impl crate::state::Cupertino {
             tracing::warn!("an application does not answer its pings");
             self.request_redraw();
         }
+        self.announce_responsiveness();
     }
 
     /// Whether the client of window `id` does not answer its pings.
@@ -158,6 +159,36 @@ impl crate::state::Cupertino {
             Some(crate::state::WindowTarget::Surface { id, .. }) => self.window_is_unresponsive(id),
             _ => false,
         }
+    }
+}
+
+impl crate::state::Cupertino {
+    /// The application ids whose clients do not answer their pings.
+    pub fn unresponsive_apps(&self) -> std::collections::BTreeSet<String> {
+        if !self.hung.any_unresponsive() {
+            return Default::default();
+        }
+        self.windows
+            .iter()
+            .filter(|e| e.mapped && self.hung.is_unresponsive(&e.toplevel.client()))
+            .filter_map(|e| self.wm.window(e.id))
+            .filter_map(|w| self.app_identity_of(w.app))
+            .collect()
+    }
+
+    /// Tell the docks which applications started or stopped answering since they were last told.
+    pub(crate) fn announce_responsiveness(&mut self) {
+        let now_unresponsive = self.unresponsive_apps();
+        if now_unresponsive == self.hung_announced {
+            return;
+        }
+        for app_id in now_unresponsive.difference(&self.hung_announced) {
+            self.docks.unresponsive(app_id, true);
+        }
+        for app_id in self.hung_announced.difference(&now_unresponsive) {
+            self.docks.unresponsive(app_id, false);
+        }
+        self.hung_announced = now_unresponsive;
     }
 }
 

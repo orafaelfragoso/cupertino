@@ -14,6 +14,12 @@ Command line: `cupertino-dock [--terminal PROGRAM]`.
 `--terminal` names the terminal program that runs `Terminal=true` entries. The dock also tries it first when it picks default
 pins.
 
+## Force Quit
+
+The Force Quit Applications dialog is a centred overlay layer surface of this process. The server opens it with the `force_quit_dialog` event (`Super+Alt+Escape`). The list holds the running applications by application id, alphabetical without regard to case with the file manager last; the first one the server reported as unresponsive (`unresponsive` event) is selected and shows `(not responding)` after its name. Click selects a row, Ctrl or Super toggles it, Shift takes a range, and Shift with the arrows grows the selection. Force Quit (Return) needs at least one selected row and opens the second step, a smaller panel that asks about one application or about the N selected ones; its Force Quit sends one `force_quit_app` per application, and Cancel is the default. An unresponsive application's tile menu starts with a disabled "Application Not Responding" row and offers Force Quit in place of Quit; it opens the dialog on the second step.
+
+When `CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE=id,id` is set, `capture.sh` builds a separate dock with `--cfg cupertino_capture_fixtures` (a `RUSTFLAGS` cfg, not a cargo feature, so `--all-features` builds never contain it) that marks those application ids unresponsive at startup.
+
 | Setting | Effect |
 |---|---|
 | `~/.config/cupertino/dock.conf` | The configuration file, read and written by `cupertino_defaults::dock` (with the triggers and actions, the size defaults and their validation) and applied by `src/conf.rs`. `$CUPERTINO_DOCK_CONFIG` overrides the path. The dock never rewrites it (the settings application does). A line that is not understood is reported on stderr with its number and leaves that key's default. |
@@ -251,7 +257,7 @@ to another slot (approximate slack). The add slot sends `add_workspace` and the 
 cargo test -p cupertino-dock --features app
 ```
 
-`cargo test -p cupertino-dock --features app` runs 172 tests; without the feature the process code is skipped.
+`cargo test -p cupertino-dock --features app` runs 188 tests; without the feature the process code is skipped.
 
 | Test | Proves |
 |---|---|

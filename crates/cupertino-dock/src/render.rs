@@ -1108,6 +1108,356 @@ pub fn paint_menu(
     }
 }
 
+/// What the Force Quit Applications dialog shows this frame.
+pub struct ForceQuitView<'a> {
+    pub dialog: &'a crate::force_quit::Dialog,
+    pub layout: &'a crate::force_quit::Layout,
+    pub desktop: &'a DesktopIndex,
+    pub dark: bool,
+    /// The row under the pointer, and the button under it.
+    pub hover_row: Option<usize>,
+    pub hover_button: Option<crate::force_quit::Button>,
+}
+
+/// The dialog's colours (approximate, except the unresponsive name's red and the suffix's grey).
+struct FqPalette {
+    fill: [f32; 4],
+    edge: [f32; 4],
+    ink: [f32; 4],
+    faint: [f32; 4],
+    list: [f32; 4],
+    name_not_responding: [f32; 4],
+    suffix: [f32; 4],
+}
+
+const FQ_ACCENT: [f32; 4] = [0.04, 0.52, 1.0, 1.0];
+
+impl FqPalette {
+    fn new(dark: bool) -> Self {
+        if dark {
+            FqPalette {
+                fill: [0.17, 0.17, 0.19, 1.0],
+                edge: [1.0, 1.0, 1.0, 0.14],
+                ink: [1.0, 1.0, 1.0, 1.0],
+                faint: [1.0, 1.0, 1.0, 0.6],
+                list: [1.0, 1.0, 1.0, 0.06],
+                name_not_responding: [1.0, 0.35, 0.3, 1.0],
+                suffix: [0.6, 0.6, 0.6, 1.0],
+            }
+        } else {
+            FqPalette {
+                fill: [0.97, 0.97, 0.98, 1.0],
+                edge: [0.0, 0.0, 0.0, 0.14],
+                ink: [0.0, 0.0, 0.0, 0.9],
+                faint: [0.0, 0.0, 0.0, 0.55],
+                list: [0.0, 0.0, 0.0, 0.05],
+                name_not_responding: [0.609, 0.0, 0.0, 1.0],
+                suffix: [0.6, 0.6, 0.6, 1.0],
+            }
+        }
+    }
+}
+
+/// Draw `line` left-aligned at `x`, centred on `cy`, in points at `scale`; `max_w` cuts it with an ellipsis.
+fn fq_text(
+    pixmap: &mut Pixmap,
+    text: &mut LabelText,
+    scale: f32,
+    line: &str,
+    (x, cy, max_w): (f64, f64, f64),
+    (pt, weight): (f64, u16),
+    color: [f32; 4],
+) -> f64 {
+    let px = (pt * f64::from(scale)) as f32;
+    let (fitted, width_px) =
+        text.text
+            .fit(line, px, weight, 0.0, (max_w * f64::from(scale)) as f32);
+    let baseline = (cy * f64::from(scale)) as f32 + text.cap_height * px / 2.0;
+    text.text.draw(
+        pixmap,
+        &fitted,
+        (x * f64::from(scale)) as f32,
+        baseline,
+        px,
+        weight,
+        0.0,
+        color,
+    );
+    f64::from(width_px) / f64::from(scale)
+}
+
+/// Words broken at spaces into lines of at most `max_w` points.
+fn fq_wrap(text: &mut LabelText, line: &str, pt: f64, max_w: f64) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in line.split_whitespace() {
+        match lines.last_mut() {
+            Some(last) if text.width(&format!("{last} {word}"), pt) <= max_w => {
+                last.push(' ');
+                last.push_str(word);
+            }
+            _ => lines.push(word.to_string()),
+        }
+    }
+    lines
+}
+
+/// Lines of `line` wrapped to `rect`'s width, `line_height` apart from the top of `rect`.
+fn fq_paragraph(
+    pixmap: &mut Pixmap,
+    text: &mut LabelText,
+    scale: f32,
+    line: &str,
+    rect: &Rect,
+    (pt, weight, line_height): (f64, u16, f64),
+    color: [f32; 4],
+) {
+    for (k, part) in fq_wrap(text, line, pt, rect.w).iter().enumerate() {
+        let cy = rect.y + line_height / 2.0 + k as f64 * line_height;
+        fq_text(
+            pixmap,
+            text,
+            scale,
+            part,
+            (rect.x, cy, rect.w),
+            (pt, weight),
+            color,
+        );
+    }
+}
+
+fn fq_button(
+    pixmap: &mut Pixmap,
+    text: &mut LabelText,
+    scale: f32,
+    palette: &FqPalette,
+    rect: &Rect,
+    label: &str,
+    (filled, hovered, enabled): (bool, bool, bool),
+) {
+    let base = if filled {
+        FQ_ACCENT
+    } else if palette.ink[0] > 0.5 {
+        [1.0, 1.0, 1.0, 0.2]
+    } else {
+        [0.0, 0.0, 0.0, 0.1]
+    };
+    let alpha = match (enabled, hovered) {
+        (false, _) => 0.4,
+        (true, true) => 0.85,
+        (true, false) => 1.0,
+    };
+    // the frame is the button's hit area; the visible button is narrower, so two side by side keep a gap
+    let shown = Rect::new(rect.x + 3.0, rect.y, rect.w - 6.0, rect.h);
+    fill_rounded(
+        pixmap,
+        &shown,
+        7.0,
+        [base[0], base[1], base[2], base[3] * alpha],
+        scale,
+    );
+    let ink = palette.ink;
+    let color = if filled {
+        [1.0, 1.0, 1.0, alpha]
+    } else {
+        [ink[0], ink[1], ink[2], ink[3] * alpha]
+    };
+    let width = text.width(label, 13.0);
+    fq_text(
+        pixmap,
+        text,
+        scale,
+        label,
+        (rect.x + (rect.w - width) / 2.0, rect.cy(), rect.w),
+        (13.0, 500),
+        color,
+    );
+}
+
+pub fn paint_force_quit(
+    pixmap: &mut Pixmap,
+    scale: f32,
+    view: &ForceQuitView<'_>,
+    icons: &mut Icons,
+    text: &mut LabelText,
+) {
+    use crate::force_quit::{self as fq, Button, Layout};
+    text.text.set_scale(scale);
+    let (dialog, palette) = (view.dialog, FqPalette::new(view.dark));
+    let (width, height) = view.layout.size();
+    let body = Rect::new(0.0, 0.0, width, height);
+    fill_rounded(pixmap, &body, fq::RADIUS, palette.fill, scale);
+    stroke_rounded(pixmap, &body.inset(0.5), fq::RADIUS, palette.edge, scale);
+    let button = |pixmap: &mut Pixmap,
+                  text: &mut LabelText,
+                  rect: &Rect,
+                  label: &str,
+                  state: (bool, bool, bool)| {
+        fq_button(pixmap, text, scale, &palette, rect, label, state)
+    };
+    match view.layout {
+        Layout::Question(q) => {
+            let asked = dialog.confirming().unwrap_or_default();
+            let icon_px = (q.icon.w * f64::from(scale)).ceil() as u32;
+            if let Some(first) = asked.first() {
+                draw_icon(
+                    pixmap,
+                    icons.app(&view.desktop.icon_name(&first.app_id), icon_px),
+                    &q.icon,
+                    1.0,
+                    scale,
+                );
+            }
+            fq_text(
+                pixmap,
+                text,
+                scale,
+                &fq::question(&asked),
+                (q.question.x, q.question.cy(), q.question.w),
+                (13.0, 600),
+                palette.ink,
+            );
+            fq_text(
+                pixmap,
+                text,
+                scale,
+                fq::UNSAVED_CHANGES,
+                (q.detail.x, q.detail.cy(), q.detail.w),
+                (11.0, 400),
+                palette.faint,
+            );
+            // Cancel is the default button
+            let hovered = |b| view.hover_button == Some(b);
+            button(
+                pixmap,
+                text,
+                &q.cancel,
+                fq::CANCEL,
+                (true, hovered(Button::Cancel), true),
+            );
+            button(
+                pixmap,
+                text,
+                &q.confirm,
+                fq::FORCE_QUIT,
+                (false, hovered(Button::ForceQuit), true),
+            );
+        }
+        Layout::List(l) => {
+            let title_w = text.width(fq::TITLE, 13.0);
+            fq_text(
+                pixmap,
+                text,
+                scale,
+                fq::TITLE,
+                (
+                    l.title_bar.x + (l.title_bar.w - title_w) / 2.0,
+                    l.title_bar.cy(),
+                    l.title_bar.w,
+                ),
+                (13.0, 600),
+                palette.ink,
+            );
+            fill_rounded(
+                pixmap,
+                &Rect::new(0.0, l.title_bar.bottom() - 1.0, l.title_bar.w, 1.0),
+                0.0,
+                palette.edge,
+                scale,
+            );
+            fq_paragraph(
+                pixmap,
+                text,
+                scale,
+                fq::HEADING,
+                &l.heading,
+                (13.0, 400, 17.0),
+                palette.ink,
+            );
+            fill_rounded(pixmap, &l.list, 6.0, palette.list, scale);
+            if dialog.entries().is_empty() {
+                let width = text.width(fq::NO_APPLICATIONS, 13.0);
+                fq_text(
+                    pixmap,
+                    text,
+                    scale,
+                    fq::NO_APPLICATIONS,
+                    (l.list.x + (l.list.w - width) / 2.0, l.list.cy(), l.list.w),
+                    (13.0, 400),
+                    palette.faint,
+                );
+            }
+            let icon_px = (16.0 * f64::from(scale)).ceil() as u32;
+            for (i, row) in &l.rows {
+                let entry = &dialog.entries()[*i];
+                let selected = dialog.is_selected(*i);
+                let shown = Rect::new(row.x, row.y + 1.0, row.w, row.h - 2.0);
+                if selected {
+                    fill_rounded(pixmap, &shown, 5.0, FQ_ACCENT, scale);
+                } else if view.hover_row == Some(*i) {
+                    fill_rounded(pixmap, &shown, 5.0, palette.list, scale);
+                }
+                draw_icon(
+                    pixmap,
+                    icons.app(&view.desktop.icon_name(&entry.app_id), icon_px),
+                    &Rect::new(row.x + 6.0, row.cy() - 8.0, 16.0, 16.0),
+                    1.0,
+                    scale,
+                );
+                let name_color = match (selected, entry.unresponsive) {
+                    (true, _) => [1.0, 1.0, 1.0, 1.0],
+                    (false, true) => palette.name_not_responding,
+                    (false, false) => palette.ink,
+                };
+                let suffix_w = if entry.unresponsive {
+                    text.width(fq::NOT_RESPONDING_SUFFIX, 13.0)
+                } else {
+                    0.0
+                };
+                let name_w = fq_text(
+                    pixmap,
+                    text,
+                    scale,
+                    &entry.name,
+                    (row.x + 28.0, row.cy(), row.w - 28.0 - suffix_w - 6.0),
+                    (13.0, 400),
+                    name_color,
+                );
+                if entry.unresponsive {
+                    fq_text(
+                        pixmap,
+                        text,
+                        scale,
+                        fq::NOT_RESPONDING_SUFFIX,
+                        (row.x + 28.0 + name_w, row.cy(), suffix_w + 2.0),
+                        (13.0, 400),
+                        palette.suffix,
+                    );
+                }
+            }
+            fq_paragraph(
+                pixmap,
+                text,
+                scale,
+                fq::FOOTER,
+                &l.footer,
+                (10.0, 400, 13.0),
+                palette.faint,
+            );
+            button(
+                pixmap,
+                text,
+                &l.force_quit,
+                fq::FORCE_QUIT,
+                (
+                    true,
+                    view.hover_button == Some(Button::ForceQuit),
+                    dialog.can_force_quit(),
+                ),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1466,6 +1816,59 @@ mod tests {
     }
 
     #[test]
+    fn the_force_quit_dialog_paints_both_steps() {
+        use crate::force_quit::{Dialog, Entry, Layout};
+        let entries = vec![
+            Entry {
+                app_id: FIRST.into(),
+                name: "First".into(),
+                unresponsive: true,
+                built_in: false,
+            },
+            Entry {
+                app_id: SECOND.into(),
+                name: "Second".into(),
+                unresponsive: false,
+                built_in: false,
+            },
+        ];
+        let desktop = DesktopIndex::default();
+        let paint = |dialog: &Dialog| {
+            let layout = Layout::for_dialog(dialog);
+            let (width, height) = layout.size();
+            let mut pixmap = Pixmap::new(width as u32, height as u32).unwrap();
+            let view = ForceQuitView {
+                dialog,
+                layout: &layout,
+                desktop: &desktop,
+                dark: false,
+                hover_row: None,
+                hover_button: None,
+            };
+            paint_force_quit(
+                &mut pixmap,
+                1.0,
+                &view,
+                &mut bare_icons(),
+                &mut label_text(),
+            );
+            (pixmap, layout)
+        };
+        let (list, layout) = paint(&Dialog::new(entries.clone()));
+        let crate::force_quit::Layout::List(l) = &layout else {
+            panic!("the first step is the list")
+        };
+        let c = l.force_quit.center();
+        assert!(list.pixel(c.x as u32, c.y as u32).unwrap().alpha() > 200);
+        let (confirm, confirm_layout) = paint(&Dialog::asking_about(entries, FIRST));
+        assert!(
+            confirm_layout.size().1 < layout.size().1,
+            "the question has no list"
+        );
+        assert_ne!(list.data(), confirm.data(), "the second step differs");
+    }
+
+    #[test]
     fn the_switcher_highlights_the_selected_tile_and_draws_every_tile() {
         let (pixmap, layout) = switcher_pixmap(1, 1.0);
         let ring = layout.selection(1);
@@ -1732,6 +2135,7 @@ mod tests {
             pinned: false,
             built_in: false,
             running_app_id: None,
+            unresponsive: false,
             entry_path: None,
         });
         let mut text = label_text();

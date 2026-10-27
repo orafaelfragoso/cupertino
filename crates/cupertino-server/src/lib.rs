@@ -30,6 +30,7 @@ pub mod live;
 pub mod menu_bar;
 pub mod overlays;
 pub mod policy;
+pub mod popup_grab;
 pub mod power;
 pub mod protocols;
 pub mod quit;

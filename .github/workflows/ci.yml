@@ -87,6 +87,10 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      # The test binaries each link the whole workspace: with line tables the build took 12 GB of the runner's disk
+      # and ran it out of space; without debug information it takes 4 GB. Panics still name file and line.
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: System packages
@@ -103,6 +107,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Layer rules
         run: cargo run -p cupertino-layers
+      - name: Disk after the lint build
+        run: df -h .
       # The keymap oracle's recordings are only valid for the xkeyboard-config release they were made with
       # (crates/cupertino-xkbcommon/tests/fixtures/xkb-data.txt), and the runner's distribution ships another. This is
       # that release's package (byte-identical data), verified against a pinned checksum.
@@ -123,3 +129,6 @@ jobs:
         run: cargo nextest run --workspace --all-features --no-fail-fast
       - name: Doctests
         run: cargo test --workspace --all-features --doc
+      - name: Disk after the tests
+        if: always()
+        run: df -h . && du -sh target

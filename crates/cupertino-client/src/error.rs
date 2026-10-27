@@ -175,6 +175,9 @@ impl From<cupertino_shell_client::Error> for ClientError {
             cupertino_shell_client::Error::Transport(e) => e.into(),
             cupertino_shell_client::Error::UnknownOutput => Self::UnknownOutput,
             cupertino_shell_client::Error::InvalidShape => Self::InvalidShape,
+            cupertino_shell_client::Error::Unsized => {
+                Self::Protocol("configure without a size for a surface that requested none")
+            }
         }
     }
 }

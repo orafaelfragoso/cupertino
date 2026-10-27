@@ -1265,6 +1265,7 @@ dependencies = [
 name = "cupertino-shell-client"
 version = "0.1.0"
 dependencies = [
+ "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-protocol-app",
  "cupertino-protocols",

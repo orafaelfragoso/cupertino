@@ -11,6 +11,7 @@ mod dock;
 mod error;
 mod menu_bar;
 mod roles;
+mod session;
 
 pub use dock::{
     AppCommand, Corner, Dock, DockChange, DockUpdate, DockWindow, Gesture, OverviewMode,
@@ -22,10 +23,11 @@ pub use menu_bar::{
     WindowMenu, WindowState,
 };
 pub use roles::{
-    IdleNotifier, IdleWatch, LayerShell, LayerSurfaceConfig, Margin, Session, SessionLock,
-    SessionLockManager, Shell, ShellEvent,
+    IdleNotifier, IdleWatch, LayerShell, LayerSurface, LayerSurfaceConfig, Margin, Session,
+    SessionLock, SessionLockManager, Shell, ShellEvent,
 };
+pub use session::{SessionChange, SessionState};
 pub use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
 pub use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
-    Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1 as LayerSurface,
+    Anchor, KeyboardInteractivity,
 };

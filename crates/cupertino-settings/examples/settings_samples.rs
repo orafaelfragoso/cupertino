@@ -10,7 +10,7 @@
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_settings::form::{self, RowSpec, SectionSpec};
 use cupertino_settings::history::History;
-use cupertino_settings::live::{Device, Live, Network, Reading, Volume, Wifi};
+use cupertino_settings::live::{Device, Live, Mouse, Network, Reading, Volume, Wifi};
 use cupertino_settings::paint::{Painter, Palette, PaneView, WindowState};
 use cupertino_settings::panes::{self, Session};
 use cupertino_settings::search::{popup, SearchField};
@@ -87,6 +87,34 @@ fn main() {
     };
     let settings = Settings::load(&paths, 1080.0).unwrap_or_else(|e| panic!("{e}"));
     let live = live();
+    let mice = |list: &[(&str, &str, u32, bool)]| Live {
+        mice: Reading::Ready(
+            list.iter()
+                .map(|(key, name, dpi, stored)| Mouse {
+                    key: (*key).into(),
+                    name: (*name).into(),
+                    dpi: *dpi,
+                    stored: *stored,
+                })
+                .collect(),
+        ),
+        ..live.clone()
+    };
+    let one_mouse = mice(&[(
+        "046d:c077:USB Optical Mouse",
+        "USB Optical Mouse",
+        800,
+        false,
+    )]);
+    let two_mice = mice(&[
+        (
+            "046d:c077:USB Optical Mouse",
+            "USB Optical Mouse",
+            1600,
+            true,
+        ),
+        ("1532:0043:Gaming Mouse", "Gaming Mouse", 2400, true),
+    ]);
     let size = window::default_size(WIDTH_FACTOR);
     let layout = WindowLayout::new(
         size,
@@ -114,13 +142,15 @@ fn main() {
                 differentiate_without_color: false,
             },
         };
-        for pane in [
-            PaneId::Wifi,
-            PaneId::DesktopDock,
-            PaneId::Sound,
-            PaneId::Keyboard,
+        for (pane, tag, live) in [
+            (PaneId::Wifi, "", &live),
+            (PaneId::DesktopDock, "", &live),
+            (PaneId::Sound, "", &live),
+            (PaneId::Keyboard, "", &live),
+            (PaneId::Mouse, "-one-mouse", &one_mouse),
+            (PaneId::Mouse, "-two-mice", &two_mice),
         ] {
-            let sections = panes::sections(pane, &settings, session, &live);
+            let sections = panes::sections(pane, &settings, session, live);
             let specs: Vec<SectionSpec<'_>> = sections
                 .iter()
                 .map(|s| SectionSpec {
@@ -163,7 +193,7 @@ fn main() {
                 },
                 &pal,
             );
-            pm.save_png(out.join(format!("{}-{name}.png", pane.key())))
+            pm.save_png(out.join(format!("{}{tag}-{name}.png", pane.key())))
                 .unwrap();
         }
         // the results window of a search that finds several panes

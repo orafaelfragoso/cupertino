@@ -213,7 +213,7 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Cupertino {
                     );
                     return;
                 }
-                // a client without `ClientState` (none is created in this crate) is counted by a counter of its own
+                // a client without `ClientState` (none is created in this crate) is not counted: it gets a counter of its own each time
                 let held = client
                     .get_data::<ClientState>()
                     .map(|data| data.backdrops.clone())

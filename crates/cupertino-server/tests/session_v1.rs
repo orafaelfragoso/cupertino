@@ -113,6 +113,8 @@ enum Told {
     Unlocked,
     /// `lock_requested`, with `explicit`.
     LockRequested(bool),
+    /// `log_out_requested`.
+    LogOutRequested,
 }
 
 fn solid_buffer(
@@ -187,6 +189,7 @@ impl Dispatch<CupertinoSessionV1, ()> for ClientState {
             cupertino_session_v1::Event::LockRequested { explicit } => {
                 Told::LockRequested(explicit == 1)
             }
+            cupertino_session_v1::Event::LogOutRequested => Told::LogOutRequested,
             _ => return,
         };
         state.told.lock().unwrap().push(told);
@@ -540,6 +543,9 @@ impl Squatter {
     fn lock_now(&self) {
         *self.0.lock().unwrap() += 1;
     }
+    fn request_log_out(&self) {
+        *self.0.lock().unwrap() += 1;
+    }
 }
 
 /// SEC-04: the lock goes to the login process over the server's own connection, so a process that owns the session bus name
@@ -572,8 +578,8 @@ fn a_lock_request_reaches_the_lock_screen_while_a_squatter_owns_the_login_name()
     .expect("the squatter");
 
     // another shell process with the Session role only is not asked
-    let other = Client::observer(h.shell_stream(), 8);
-    let login = Client::observer(h.login_stream(), 8);
+    let other = Client::observer(h.shell_stream(), 9);
+    let login = Client::observer(h.login_stream(), 9);
     h.wait_until("both observers to be told", |_| {
         other.told().len() == 3 && login.told().len() == 3
     });
@@ -593,6 +599,15 @@ fn a_lock_request_reaches_the_lock_screen_while_a_squatter_owns_the_login_name()
         "a process without the lock role is not asked"
     );
 
+    // a log out goes the same way: the lock screen is asked over the private connection, and nothing ends the session
+    h.state.log_out_session();
+    h.wait_until("the login process to be asked to log out", |_| {
+        login.told().len() == 6
+    });
+    assert_eq!(login.told()[5], Told::LogOutRequested);
+    assert_eq!(other.told().len(), 3);
+    assert!(h.state.running, "the session goes on");
+
     // the bus path would have been tried by now
     let end = Instant::now() + Duration::from_millis(500);
     while Instant::now() < end {
@@ -604,11 +619,13 @@ fn a_lock_request_reaches_the_lock_screen_while_a_squatter_owns_the_login_name()
         "the squatter got a lock request"
     );
 
-    // no lock screen connected: the bus is the way, and the squatter is still refused
+    // no lock screen connected: the bus is the way, and the squatter is still refused; a log out it would answer for
+    // neither reaches it nor ends the session
     drop(login);
     drop(other);
     h.state.sessions = Default::default();
     h.state.lock_session_now();
+    h.state.log_out_session();
     let end = Instant::now() + Duration::from_millis(500);
     while Instant::now() < end {
         h.wait_until("a step", |_| true);

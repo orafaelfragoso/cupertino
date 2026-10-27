@@ -279,7 +279,9 @@ impl App {
                     self.toggle_centre()?;
                 }
             }
-            Event::SessionLock { locked: false } | Event::LockRequested { .. } => {}
+            Event::SessionLock { locked: false }
+            | Event::LockRequested { .. }
+            | Event::LogOutRequested => {}
             // the surface follows the output the server chose for it; it has no popups or menu-bar role
             Event::OutputsChanged
             | Event::PopupDone(_)

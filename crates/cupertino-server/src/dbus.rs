@@ -324,11 +324,9 @@ async fn call(
     login: &SharedLoginTrust,
 ) {
     let (name, path, interface, method, body) = what.call();
+    // an owner that is not the login process gets nothing, and a log out is not the end of the session then: the name
+    // being taken is not the same as nobody to ask
     let Some(destination) = destination(conn, name, login).await else {
-        if what == Request::LogOut {
-            tracing::warn!("no login process on the bus: the log out shortcut ends the server");
-            login_missing();
-        }
         return;
     };
     let destination = Some(destination.as_str());
@@ -406,9 +404,14 @@ impl crate::state::Cupertino {
         }
     }
 
-    /// Ask the login process whether to log out. A session without one (no session bus, or no login process on it: a
-    /// headless or capture run) ends the server instead, as the shortcut did before there was a panel.
+    /// Ask the login process whether to log out. The private connection of the lock screen carries the request while one
+    /// is connected, so a process that took `org.cupertino.Login1` first cannot turn it into the end of the session. A
+    /// session without a login process (no session bus, or nobody owns the name: a headless or capture run) ends the
+    /// server instead, as the shortcut did before there was a panel.
     pub fn log_out_session(&mut self) {
+        if self.sessions.log_out_requested() {
+            return;
+        }
         if !self.dbus.as_ref().is_some_and(|d| d.send(Request::LogOut)) {
             tracing::warn!("no login process to ask: the log out shortcut ends the server");
             self.quit_compositor();
@@ -418,6 +421,9 @@ impl crate::state::Cupertino {
     /// A menu bar entry of the session menu: the server asks the login process on the menu bar's behalf, because the login
     /// process answers only the server.
     pub fn menu_bar_session_action(&mut self, action: Request) {
+        if action == Request::LogOut {
+            return self.log_out_session();
+        }
         self.shell_call(action);
     }
 

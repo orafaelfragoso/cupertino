@@ -582,14 +582,17 @@ impl App {
             PanelEvent::None | PanelEvent::Changed | PanelEvent::Edit => {}
             PanelEvent::Close => self.hide()?,
             PanelEvent::Activate(activation) => {
+                // the selection is set while the panel still has the keyboard, with the serial of the key or click
+                // that chose the result; the launcher serves it until another selection replaces it
+                if let Activation::CopyToClipboard(text) = &activation {
+                    if let Err(e) = self.client.set_clipboard_text(text.clone()) {
+                        eprintln!("cupertino-launcher: copy: {e}");
+                    }
+                }
                 self.hide()?;
                 match activation {
                     Activation::Run(spec) => self.begin_launch(spec)?,
-                    Activation::CopyToClipboard(text) => {
-                        let mut command = Command::new("wl-copy");
-                        command.arg(text);
-                        spawn(command);
-                    }
+                    Activation::CopyToClipboard(_) => {}
                     Activation::Nothing => {
                         eprintln!("cupertino-launcher: the entry has no usable command")
                     }

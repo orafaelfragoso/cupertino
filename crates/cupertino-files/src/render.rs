@@ -509,7 +509,10 @@ pub struct Renderer {
     spare: Option<Pixmap>,
     /// Rows the last list view drew: what a band costs.
     #[cfg(test)]
-    rows_drawn: usize,
+    pub(crate) rows_drawn: usize,
+    /// Content view pixmaps allocated: a view of the last view's size allocates none.
+    #[cfg(test)]
+    pub(crate) views_allocated: usize,
 }
 
 impl Renderer {
@@ -523,6 +526,8 @@ impl Renderer {
             spare: None,
             #[cfg(test)]
             rows_drawn: 0,
+            #[cfg(test)]
+            views_allocated: 0,
         })
     }
 
@@ -531,7 +536,13 @@ impl Renderer {
     fn view_pixmap(&mut self, w: u32, h: u32, pal: &Palette) -> Pixmap {
         let mut pm = match self.spare.take() {
             Some(pm) if (pm.width(), pm.height()) == (w, h) => pm,
-            _ => Pixmap::new(w, h).unwrap(),
+            _ => {
+                #[cfg(test)]
+                {
+                    self.views_allocated += 1;
+                }
+                Pixmap::new(w, h).unwrap()
+            }
         };
         pm.fill(
             Color::from_rgba(pal.background[0], pal.background[1], pal.background[2], 1.0).unwrap(),

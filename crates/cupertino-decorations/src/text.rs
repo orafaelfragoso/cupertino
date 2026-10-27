@@ -235,6 +235,8 @@ pub struct TextRenderer {
     /// The text is the design's declarative toolkit's: its dilation size is floored.
     declarative: bool,
     images: HashMap<GlyphKey, Option<Mask>>,
+    /// Glyph images rasterized into `images`.
+    rasterized: u64,
 }
 
 impl TextRenderer {
@@ -290,6 +292,7 @@ impl TextRenderer {
             smoothing: DEFAULT_SMOOTHING,
             declarative: false,
             images: HashMap::new(),
+            rasterized: 0,
         })
     }
 
@@ -304,7 +307,14 @@ impl TextRenderer {
             smoothing: DEFAULT_SMOOTHING,
             declarative: false,
             images: HashMap::new(),
+            rasterized: 0,
         }
+    }
+
+    /// Glyph images rasterized so far. Text drawn again at the same size, weight and subpixel position rasterizes
+    /// nothing: its glyphs come from the cache.
+    pub fn glyphs_rasterized(&self) -> u64 {
+        self.rasterized
     }
 
     /// Resolved family name; `None` for a renderer without fonts.
@@ -611,7 +621,9 @@ impl TextRenderer {
             };
             let faces = &self.faces;
             let scale_cx = &mut self.scale_cx;
+            let rasterized = &mut self.rasterized;
             let img = self.images.entry(key).or_insert_with(|| {
+                *rasterized += 1;
                 let f = &faces[g.face];
                 let font = FontRef {
                     data: &f.data,

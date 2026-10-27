@@ -481,7 +481,8 @@ impl Cupertino {
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
         let xdg_decoration_state = XdgDecorationState::new::<Self>(&dh);
         let xdg_dialog_state = XdgDialogState::new::<Self>(&dh);
-        let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
+        let layer_shell_state =
+            WlrLayerShellState::new_with_filter::<Self, _>(&dh, crate::authorization::unsandboxed);
         let shm_state = ShmState::new::<Self>(&dh, vec![]);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let data_device_state = DataDeviceState::new::<Self>(&dh);
@@ -497,7 +498,10 @@ impl Cupertino {
         let presentation_state = PresentationState::new::<Self>(&dh, clock.id() as u32);
         let xdg_activation_state = XdgActivationState::new::<Self>(&dh);
         let cursor_shape_state = CursorShapeManagerState::new::<Self>(&dh);
-        let foreign_toplevel_state = ForeignToplevelListState::new::<Self>(&dh);
+        let foreign_toplevel_state = ForeignToplevelListState::new_with_filter::<Self>(
+            &dh,
+            crate::authorization::unsandboxed,
+        );
         let session_lock = crate::session_lock::SessionLock::new(&dh);
         let idle = crate::idle::Idle::new(
             smithay::wayland::idle_notify::IdleNotifierState::new(&dh, loop_handle.clone()),

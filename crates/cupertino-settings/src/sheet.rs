@@ -293,7 +293,7 @@ impl Sheet {
             Kind::Picker { chooser, .. } if chooser.0.unreadable() => {
                 "That folder cannot be opened.".to_string()
             }
-            Kind::Picker { chooser, .. } => chooser.0.dir().display().to_string(),
+            Kind::Picker { chooser, .. } => crate::panes::home_relative(chooser.0.dir()),
             Kind::Resolution { .. } => format!(
                 "Type the resolution in dots per inch, from {} to {}.",
                 MOUSE_DPI_RANGE.start(),

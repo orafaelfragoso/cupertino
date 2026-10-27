@@ -369,6 +369,18 @@ fn current_section(settings: &Settings, live: &Live) -> Section {
     }
 }
 
+/// `path` with the home folder written `~`.
+pub fn home_relative(path: &Path) -> String {
+    match std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .and_then(|home| path.strip_prefix(home).ok().map(Path::to_path_buf))
+    {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
+}
+
 fn wallpaper_sections(settings: &Settings, live: &Live) -> Vec<Section> {
     let pictures = &live.pictures;
     let default = pictures.default.as_deref();
@@ -386,7 +398,7 @@ fn wallpaper_sections(settings: &Settings, live: &Live) -> Vec<Section> {
             header: None,
             rows: vec![row(
                 ControlId::WallpaperRemoveFolder(i),
-                folder.display().to_string(),
+                home_relative(folder),
                 Control::Button {
                     title: "Remove".to_string(),
                 },

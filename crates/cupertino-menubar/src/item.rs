@@ -5,6 +5,22 @@
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ItemId(pub i32);
 
+/// The most characters of a shortcut key name a menu shows (the name comes from the app).
+const MAX_KEY_CHARS: usize = 16;
+
+/// Text from outside as menu text: without control characters or the characters that turn the text around, at most
+/// `max_chars` characters, trimmed.
+pub fn plain_text(text: &str, max_chars: usize) -> String {
+    text.chars()
+        .filter(|c| {
+            !c.is_control() && !matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
+        .take(max_chars)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Toggle {
     #[default]
@@ -68,11 +84,8 @@ impl Shortcut {
             }
         }
         modifiers.sort();
-        let key = key.as_ref();
-        (!key.is_empty()).then(|| Shortcut {
-            modifiers,
-            key: key.to_string(),
-        })
+        let key = plain_text(key.as_ref(), MAX_KEY_CHARS);
+        (!key.is_empty()).then_some(Shortcut { modifiers, key })
     }
 
     /// The shortcut as a menu draws it: the modifier glyphs in the order control, option, shift, command (the primary
@@ -295,6 +308,14 @@ mod tests {
         assert!(Shortcut::from_tokens(&["Hyper", "x"]).is_none());
         assert!(Shortcut::from_tokens::<&str>(&[]).is_none());
         assert_eq!(Shortcut::from_tokens(&["F5"]).unwrap().modifiers, vec![]);
+    }
+
+    #[test]
+    fn an_app_shortcut_key_is_plain_and_short() {
+        let key = |k: &str| Shortcut::from_tokens(&["Control", k]).map(|s| s.key);
+        assert_eq!(key("\u{202e}Q\u{7}"), Some("Q".to_string()));
+        assert_eq!(key(&"X".repeat(200)), Some("X".repeat(16)));
+        assert_eq!(key("\u{202e}\u{7}"), None);
     }
 
     #[test]

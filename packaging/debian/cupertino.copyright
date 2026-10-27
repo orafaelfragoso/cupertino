@@ -7,6 +7,8 @@ Comment: The desktop, server and applications are GPL-3+. The toolkit library cr
  the Inter font in the assets crate is OFL-1.1; all are linked into the binaries.
  The licence texts and NOTICE files of the registry crates linked into the binaries are in
  /usr/share/doc/cupertino/THIRD-PARTY-LICENSES.
+ The LGPL-2.1+, MIT-CMU, BSD-3-Clause and MIT licences below cover protocol description files of registry
+ crates that are compiled into the binaries; their copyright notices are in the same file.
 
 Files: *
 Copyright: Cupertino contributors
@@ -43,10 +45,6 @@ Copyright: 2009-2012, 2016 Daniel Stone
  1992 by Oki Technosystems Laboratory, Inc.
  1992 by Fuji Xerox Co., Ltd.
 License: libxkbcommon
-
-Files: wayland-protocols-plasma/plasma-wayland-protocols/src/protocols/* wayland-protocols-misc/protocols/*
-Copyright: the authors named in each protocol file, reproduced in /usr/share/doc/cupertino/THIRD-PARTY-LICENSES
-License: LGPL-2.1+ and MIT-CMU and BSD-3-Clause and MIT
 
 Files: crates/cupertino-assets/fonts/*
 Copyright: 2016 The Inter Project Authors (https://github.com/rsms/inter)

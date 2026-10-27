@@ -10,7 +10,7 @@
 
 use crate::extras::{
     BatteryState, BluetoothDevice, BluetoothState, ExtraAction, Extras, FocusLifetime, FocusState,
-    WifiNetwork, WifiState,
+    SessionAction, SessionCaps, SessionState, WifiNetwork, WifiState,
 };
 use futures_util::StreamExt;
 use std::collections::HashMap;
@@ -23,6 +23,8 @@ use zbus::{Connection, MatchRule, MessageStream, Proxy};
 
 use crate::worker::WorkerGone;
 
+const LOGIN_NAME: &str = "org.cupertino.Login1";
+const LOGIN_PATH: &str = "/org/cupertino/Login1";
 const NETWORK_NAME: &str = "org.cupertino.Network1";
 const NETWORK_PATH: &str = "/org/cupertino/Network1";
 const BLUETOOTH_NAME: &str = "org.cupertino.Bluetooth1";
@@ -134,6 +136,7 @@ async fn run(
         }
     }
     follow(&session, CENTRE_NAME, CENTRE_PATH, &commands).await;
+    follow(&session, LOGIN_NAME, LOGIN_PATH, &commands).await;
 
     let mut reasons = Reasons::default();
     let mut last: Option<Extras> = None;
@@ -258,7 +261,39 @@ async fn read_all(
         );
     }
     extras.focus = reasons.note("Focus", absent_if_not_running(read_focus(session).await));
+    extras.session = reasons.note(
+        "system menu",
+        absent_if_not_running(read_session(session).await),
+    );
     extras
+}
+
+/// The session agent's entries for the system menu; `None` without the agent. Only `Locked` has to be there: the
+/// other properties are newer, and a missing one reads as the default (every entry possible, the name from `$USER`).
+async fn read_session(conn: &Connection) -> zbus::Result<Option<SessionState>> {
+    let login = proxy(conn, LOGIN_NAME, LOGIN_PATH, LOGIN_NAME).await?;
+    let _locked: bool = login.get_property("Locked").await?;
+    let user_name: String = login
+        .get_property("UserName")
+        .await
+        .ok()
+        .filter(|name: &String| !name.is_empty())
+        .or_else(|| std::env::var("USER").ok())
+        .unwrap_or_default();
+    let capabilities: HashMap<String, bool> =
+        login.get_property("Capabilities").await.unwrap_or_default();
+    let can = |key: &str| capabilities.get(key).copied().unwrap_or(true);
+    Ok(Some(SessionState {
+        user_name,
+        caps: SessionCaps {
+            sleep: can("sleep"),
+            restart: can("restart"),
+            shut_down: can("shut-down"),
+            log_out: can("log-out"),
+            switch_user: can("switch-user"),
+            lock: can("lock"),
+        },
+    }))
 }
 
 /// `None` without a Wi-Fi device.
@@ -371,6 +406,21 @@ async fn act(
 ) -> zbus::Result<()> {
     let system = || system.ok_or_else(|| zbus::Error::Failure("there is no system bus".to_owned()));
     match action {
+        ExtraAction::Session(action) => {
+            let method = match action {
+                SessionAction::Sleep => "Sleep",
+                SessionAction::Restart => "RequestRestart",
+                SessionAction::ShutDown => "RequestShutDown",
+                SessionAction::Lock => "LockNow",
+                SessionAction::LogOut => "RequestLogOut",
+                SessionAction::SwitchUser => "SwitchToLoginWindow",
+                SessionAction::RefreshCapabilities => "RefreshCapabilities",
+            };
+            proxy(session, LOGIN_NAME, LOGIN_PATH, LOGIN_NAME)
+                .await?
+                .call(method, &())
+                .await
+        }
         ExtraAction::SetDoNotDisturb(on) => {
             proxy(session, CENTRE_NAME, CENTRE_PATH, CENTRE_NAME)
                 .await?

@@ -4,7 +4,7 @@
 //! renderer. Every metric is approximate unless a doc comment says otherwise.
 
 use crate::geom::{Point, Rect};
-use crate::item::{ItemId, MenuItem};
+use crate::item::{ItemId, MenuItem, Shortcut, ShortcutGlyphs};
 
 /// Measures the advance width of a run of text in the bar / menu font.
 pub trait TextMeasure {
@@ -44,6 +44,8 @@ pub struct BarMetrics {
     pub title_padding: f64,
     /// Horizontal padding around a status item icon (each side).
     pub status_padding: f64,
+    /// Width of the system menu slot.
+    pub system_width: f64,
     /// Width of the control panel slot.
     pub control_panel_width: f64,
     /// Padding of the clock text (each side).
@@ -63,6 +65,7 @@ impl Default for BarMetrics {
             edge_inset: 6.0,
             title_padding: 8.0,
             status_padding: 5.0,
+            system_width: 28.0,
             control_panel_width: 28.0,
             clock_padding: 8.0,
             min_gap: 24.0,
@@ -74,6 +77,8 @@ impl Default for BarMetrics {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SlotKey {
+    /// The system menu at the left end of the bar.
+    System,
     /// The bold app-name menu.
     AppMenu,
     Menu(ItemId),
@@ -95,6 +100,8 @@ pub struct StatusEntry {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BarContent {
     pub app_name: String,
+    /// The entries of the system menu; none leaves the slot out.
+    pub system_menu: Vec<MenuItem>,
     /// Items of the app menu opened by the bold app name.
     pub app_menu: Vec<MenuItem>,
     /// Top-level menus of the focused app: submenu items whose label is the title.
@@ -154,6 +161,14 @@ pub fn layout_bar(
         });
         *x += w;
     };
+    if !content.system_menu.is_empty() {
+        slots.push(Slot {
+            key: SlotKey::System,
+            rect: Rect::new(x, bar.y, metrics.system_width, bar.h),
+            bold: false,
+        });
+        x += metrics.system_width;
+    }
     push_left(
         &mut slots,
         SlotKey::AppMenu,
@@ -208,7 +223,7 @@ pub fn layout_bar(
             ends[count - 1]
         }
     };
-    let app_end = slots[0].rect.right();
+    let app_end = slots[left_menu_start - 1].rect.right();
     let mut menu_count = content.menus.len();
     let mut status_count = status_slots.len();
     let status_start = |n: usize, status: &[Slot]| {
@@ -289,7 +304,8 @@ pub struct PopupRow {
     /// A copy of the item without its children.
     pub item: MenuItem,
     pub rect: Rect,
-    pub shortcut_text: Option<String>,
+    /// The shortcut's modifier glyphs and key, drawn in two columns.
+    pub shortcut: Option<ShortcutGlyphs>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -303,6 +319,8 @@ pub struct PopupLayout {
     pub scroll: f64,
     /// Submenu popups only: placed to the left of the parent because the right side had no room.
     pub placed_left: bool,
+    /// The width of the column the shortcuts' keys stand in, right of their modifier glyphs.
+    pub shortcut_key_width: f64,
 }
 
 impl PopupLayout {
@@ -348,7 +366,8 @@ pub fn layout_popup(
         + if any_mark { m.mark_column } else { 0.0 }
         + if any_icon { m.icon_column } else { 0.0 };
     let mut label_w: f64 = 0.0;
-    let mut shortcut_w: f64 = 0.0;
+    let mut modifiers_w: f64 = 0.0;
+    let mut key_w: f64 = 0.0;
     let mut any_arrow = false;
     for c in &children {
         if c.separator {
@@ -356,13 +375,15 @@ pub fn layout_popup(
         }
         label_w = label_w.max(measure.width(&c.label, false));
         if let Some(s) = &c.shortcut {
-            shortcut_w = shortcut_w.max(measure.width(&s.display(), false));
+            let glyphs = s.glyphs();
+            modifiers_w = modifiers_w.max(measure.width(&glyphs.modifiers, false));
+            key_w = key_w.max(measure.width(&glyphs.key, false));
         }
         any_arrow |= c.has_submenu;
     }
     let trailing = m.padding_x
-        + if shortcut_w > 0.0 {
-            m.shortcut_gap + shortcut_w
+        + if modifiers_w + key_w > 0.0 {
+            m.shortcut_gap + modifiers_w + key_w
         } else {
             0.0
         }
@@ -422,7 +443,7 @@ pub fn layout_popup(
             let mut item = (*c).clone();
             item.children = Vec::new();
             PopupRow {
-                shortcut_text: c.shortcut.as_ref().map(|s| s.display()),
+                shortcut: c.shortcut.as_ref().map(Shortcut::glyphs),
                 item,
                 rect: r,
             }
@@ -435,6 +456,7 @@ pub fn layout_popup(
         content_height: content_h,
         scroll,
         placed_left,
+        shortcut_key_width: key_w,
     }
 }
 
@@ -447,6 +469,7 @@ mod tests {
     fn content() -> BarContent {
         BarContent {
             app_name: "Files".into(),
+            system_menu: vec![],
             app_menu: vec![],
             menus: vec![
                 MenuItem::submenu(1, "File", vec![]),
@@ -610,13 +633,20 @@ mod tests {
         );
         assert_eq!(p.rows[0].rect.y, 24.0 + m.padding_y);
         assert_eq!(p.rows[1].rect.h, m.separator_height);
-        assert_eq!(p.rows[0].shortcut_text.as_deref(), Some("Ctrl+N"));
+        assert_eq!(
+            p.rows[0].shortcut,
+            Some(ShortcutGlyphs {
+                modifiers: "\u{2303}".into(),
+                key: "N".into()
+            })
+        );
+        assert_eq!(p.shortcut_key_width, 7.0, "one character of the key column");
         let min_w = m.padding_x
             + m.mark_column
             + 11.0 * 7.0
             + m.padding_x
             + m.shortcut_gap
-            + 6.0 * 7.0
+            + 2.0 * 7.0
             + m.arrow_width;
         assert!((p.rect.w - min_w.max(m.min_width)).abs() < 1e-9);
         assert!(p.rows.iter().all(|r| r.item.children.is_empty()));
@@ -736,5 +766,30 @@ mod tests {
             &MonoMeasure::default(),
         );
         assert_eq!(p.rows.len(), 1);
+    }
+
+    #[test]
+    fn the_system_menu_slot_is_the_first_slot_and_leaves_the_app_menu_after_it() {
+        let mut with = content();
+        with.system_menu = vec![MenuItem::new(1, "Sleep")];
+        let metrics = BarMetrics::default();
+        let measure = MonoMeasure::default();
+        let rect = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let plain = layout_bar(rect, &content(), &metrics, &measure);
+        let l = layout_bar(rect, &with, &metrics, &measure);
+        assert_eq!(l.slots[0].key, SlotKey::System);
+        assert_eq!(l.slots[0].rect.x, metrics.edge_inset);
+        assert_eq!(l.slots[0].rect.w, metrics.system_width);
+        assert_eq!(l.slots[1].key, SlotKey::AppMenu);
+        assert_eq!(
+            l.slots[1].rect.x,
+            plain.slots[0].rect.x + metrics.system_width,
+            "the app menu moves right by the mark's width"
+        );
+        assert_eq!(
+            plain.slots[0].key,
+            SlotKey::AppMenu,
+            "without entries no slot"
+        );
     }
 }

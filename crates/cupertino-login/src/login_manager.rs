@@ -50,6 +50,19 @@ pub enum Refusal {
 }
 
 impl Error {
+    /// The manager is not on the bus: the call found no owner of its name (a session another display manager started, or a
+    /// manager that is not running).
+    pub fn manager_absent(&self) -> bool {
+        let zbus::Error::MethodError(name, _, _) = self.source.as_ref() else {
+            return false;
+        };
+        matches!(
+            name.as_str(),
+            "org.freedesktop.DBus.Error.ServiceUnknown"
+                | "org.freedesktop.DBus.Error.NameHasNoOwner"
+        )
+    }
+
     /// The refusal this error is, or `None` for a failure (no manager on the bus, a broken connection, a failed operation).
     pub fn refusal(&self) -> Option<Refusal> {
         let zbus::Error::MethodError(name, _, _) = self.source.as_ref() else {
@@ -103,6 +116,21 @@ impl LoginManager {
                 what,
                 source: Box::new(source),
             })
+    }
+
+    /// Whether the manager owns its name on the bus now.
+    pub fn is_present(&self) -> bool {
+        self.connection
+            .call_method(
+                Some("org.freedesktop.DBus"),
+                "/org/freedesktop/DBus",
+                Some("org.freedesktop.DBus"),
+                "NameHasOwner",
+                &(BUS_NAME,),
+            )
+            .ok()
+            .and_then(|reply| reply.body().deserialize::<bool>().ok())
+            .unwrap_or(false)
     }
 
     /// The login screen takes the console (`SwitchToLoginWindow`); the caller has locked its screen first.
@@ -234,5 +262,45 @@ impl LoginManager {
                 what: "announcing the session",
                 source: Box::new(source),
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn method_error(name: &str) -> Error {
+        let call = zbus::Message::method_call("/", "Ping")
+            .unwrap()
+            .build(&())
+            .unwrap();
+        Error {
+            what: "test",
+            source: Box::new(zbus::Error::MethodError(
+                name.try_into().unwrap(),
+                None,
+                call,
+            )),
+        }
+    }
+
+    #[test]
+    fn a_missing_manager_is_told_from_a_refusal_and_from_a_fault() {
+        for name in [
+            "org.freedesktop.DBus.Error.ServiceUnknown",
+            "org.freedesktop.DBus.Error.NameHasNoOwner",
+        ] {
+            let e = method_error(name);
+            assert!(e.manager_absent(), "{name}");
+            assert_eq!(e.refusal(), None);
+        }
+        let refused = method_error("org.cupertino.LoginManager1.Error.Inhibited");
+        assert!(!refused.manager_absent());
+        assert_eq!(refused.refusal(), Some(Refusal::Inhibited));
+        let fault = Error {
+            what: "test",
+            source: Box::new(zbus::Error::Failure("broken".into())),
+        };
+        assert!(!fault.manager_absent() && fault.refusal().is_none());
     }
 }

@@ -2,6 +2,7 @@
 //! available.
 #![cfg(feature = "dbus")]
 
+use cupertino_login::capabilities::{Answer, Capabilities, Inputs};
 use cupertino_login::control::{serve, Request, BUS_NAME, OBJECT_PATH};
 use cupertino_login::panel::Kind;
 use std::collections::HashMap;
@@ -59,9 +60,12 @@ fn lock_reaches_the_callback_and_a_second_lock_screen_cannot_take_the_name() {
         return;
     };
     let (locked_tx, locked_rx) = mpsc::channel();
-    let _login = serve(bus.builder(), move |request| {
-        locked_tx.send(request).unwrap()
-    })
+    let _login = serve(
+        bus.builder(),
+        "Test User".into(),
+        Capabilities::default(),
+        move |request| locked_tx.send(request).unwrap(),
+    )
     .expect("claims the name");
 
     // what the server does for the lock shortcut: call `Lock` on the well-known name
@@ -92,7 +96,12 @@ fn lock_reaches_the_callback_and_a_second_lock_screen_cannot_take_the_name() {
         Ok(Request::Lock { explicit: true })
     );
 
-    let second = serve(bus.builder(), |_| {});
+    let second = serve(
+        bus.builder(),
+        "Test User".into(),
+        Capabilities::default(),
+        |_| {},
+    );
     assert!(
         matches!(second, Err(zbus::Error::NameTaken)),
         "{:?}",
@@ -107,9 +116,12 @@ fn the_panel_methods_reach_the_callback_until_the_session_is_locked() {
         return;
     };
     let (requests_tx, requests_rx) = mpsc::channel();
-    let login = serve(bus.builder(), move |request| {
-        requests_tx.send(request).unwrap()
-    })
+    let login = serve(
+        bus.builder(),
+        "Test User".into(),
+        Capabilities::default(),
+        move |request| requests_tx.send(request).unwrap(),
+    )
     .expect("claims the name");
     let caller: Connection = block_on(bus.builder().build()).expect("connect");
     let call = |method: &'static str| {
@@ -145,9 +157,12 @@ fn the_power_key_press_and_release_reach_the_callback_in_order_even_when_locked(
         return;
     };
     let (requests_tx, requests_rx) = mpsc::channel();
-    let login = serve(bus.builder(), move |request| {
-        requests_tx.send(request).unwrap()
-    })
+    let login = serve(
+        bus.builder(),
+        "Test User".into(),
+        Capabilities::default(),
+        move |request| requests_tx.send(request).unwrap(),
+    )
     .expect("claims the name");
     let caller: Connection = block_on(bus.builder().build()).expect("connect");
     let call = |pressed: bool| {
@@ -187,7 +202,13 @@ fn locked_is_readable_and_announces_each_change_once() {
         eprintln!("skipping: dbus-daemon is not available");
         return;
     };
-    let login = serve(bus.builder(), |_| {}).expect("claims the name");
+    let login = serve(
+        bus.builder(),
+        "Test User".into(),
+        Capabilities::default(),
+        |_| {},
+    )
+    .expect("claims the name");
     let caller = zbus::blocking::connection::Builder::address(bus.address.as_str())
         .expect("address")
         .build()
@@ -251,4 +272,124 @@ fn locked_is_readable_and_announces_each_change_once() {
         Err(mpsc::RecvTimeoutError::Timeout)
     );
     assert!(!read_locked());
+}
+
+#[test]
+fn sleep_and_the_power_dialog_reach_the_callback_and_a_locked_session_refuses_them() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let (requests_tx, requests_rx) = mpsc::channel();
+    let login = serve(
+        bus.builder(),
+        "Test User".into(),
+        Capabilities::default(),
+        move |request| requests_tx.send(request).unwrap(),
+    )
+    .expect("claims the name");
+    let caller: Connection = block_on(bus.builder().build()).expect("connect");
+    let call = |method: &str| {
+        block_on(caller.call_method(Some(BUS_NAME), OBJECT_PATH, Some(INTERFACE), method, &()))
+    };
+    call("Sleep").expect("Sleep");
+    call("RequestPowerDialog").expect("RequestPowerDialog");
+    assert_eq!(
+        requests_rx.recv_timeout(Duration::from_secs(5)),
+        Ok(Request::Sleep)
+    );
+    assert_eq!(
+        requests_rx.recv_timeout(Duration::from_secs(5)),
+        Ok(Request::Panel(Kind::PowerButton))
+    );
+    login.set_locked(true).unwrap();
+    for method in ["Sleep", "RequestPowerDialog"] {
+        let refused = call(method).expect_err(method).to_string();
+        assert!(
+            refused.contains("the session is locked"),
+            "{method}: {refused}"
+        );
+    }
+    assert!(
+        requests_rx.try_recv().is_err(),
+        "a locked session starts nothing"
+    );
+}
+
+#[test]
+fn the_menu_properties_are_read_and_capabilities_announce_a_change() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let before = Capabilities::new(&Inputs {
+        can_suspend: Answer::Yes,
+        can_reboot: Answer::Challenge,
+        can_power_off: Answer::No,
+        session_manager: false,
+    });
+    let login = serve(bus.builder(), "Rafael".into(), before, |_| {}).expect("claims the name");
+    let caller = zbus::blocking::connection::Builder::address(bus.address.as_str())
+        .expect("address")
+        .build()
+        .expect("connect");
+    let get = |name: &str| -> OwnedValue {
+        let reply = caller
+            .call_method(
+                Some(BUS_NAME),
+                OBJECT_PATH,
+                Some("org.freedesktop.DBus.Properties"),
+                "Get",
+                &(INTERFACE, name),
+            )
+            .expect("Get");
+        reply.body().deserialize().expect("a variant")
+    };
+    assert_eq!(String::try_from(get("UserName")).unwrap(), "Rafael");
+    let read = || -> HashMap<String, bool> { HashMap::try_from(get("Capabilities")).unwrap() };
+    assert_eq!(read(), before.to_map());
+    assert!(read()["restart"]);
+    assert!(!read()["shut-down"]);
+    assert!(!read()["switch-user"]);
+
+    let rule = MatchRule::builder()
+        .msg_type(Type::Signal)
+        .interface("org.freedesktop.DBus.Properties")
+        .unwrap()
+        .member("PropertiesChanged")
+        .unwrap()
+        .path(OBJECT_PATH)
+        .unwrap()
+        .build();
+    let signals = MessageIterator::for_match_rule(rule, &caller, None).expect("subscribe");
+    let (announced_tx, announced_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for signal in signals {
+            let body = signal.expect("a signal").body();
+            let (_, changed, _): (String, HashMap<String, OwnedValue>, Vec<String>) =
+                body.deserialize().expect("PropertiesChanged arguments");
+            if let Some(value) = changed.get("Capabilities") {
+                let map = HashMap::<String, bool>::try_from(value.try_clone().unwrap()).unwrap();
+                announced_tx.send(map).unwrap();
+            }
+        }
+    });
+    // the session manager comes up: nothing else changes
+    let after = Capabilities {
+        switch_user: true,
+        ..before
+    };
+    login.set_capabilities(after).unwrap();
+    login.set_capabilities(after).unwrap();
+    assert_eq!(
+        announced_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+        after.to_map()
+    );
+    assert!(
+        announced_rx
+            .recv_timeout(Duration::from_millis(300))
+            .is_err(),
+        "an unchanged value is not announced again"
+    );
+    assert!(read()["switch-user"]);
 }

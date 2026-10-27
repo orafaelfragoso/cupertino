@@ -1,6 +1,8 @@
 //! What logind asks of a lock screen and a session agent: lock the session (`loginctl lock-session`), prepare for sleep, the
 //! delay inhibitor that holds sleep back until the lock is up, the block inhibitor on the power key, and the call that ends the
-//! session. Restarting, shutting down and sleeping go through the session manager ([`crate::login_manager`]).
+//! session. Restarting, shutting down and sleeping go through the session manager ([`crate::login_manager`]); when there is none
+//! (the session was started by another display manager) the process asks logind itself ([`Logind::power`]), and logind's
+//! answers say which of them the menu may offer ([`Logind::can`]).
 //!
 //! The signals arrive on reader threads (the blocking `zbus` API has no pollable descriptor) and reach the caller through
 //! the callback of [`Logind::listen`].
@@ -13,6 +15,9 @@ use zbus::zvariant::OwnedFd;
 use zbus::{MatchRule, Message};
 
 use cupertino_seat::{SessionLookup, SessionRef};
+
+use crate::capabilities::Answer;
+use crate::login_manager::Power;
 
 const LOGIND: &str = "org.freedesktop.login1";
 const MANAGER_PATH: &str = "/org/freedesktop/login1";
@@ -32,6 +37,17 @@ impl Error {
             what,
             source: Box::new(source),
         }
+    }
+}
+
+impl Error {
+    /// logind answered with an error of its own (access denied, a block inhibitor, an operation already running): the
+    /// request was understood and refused, which is an outcome, not a fault of the connection.
+    pub fn is_refusal(&self) -> bool {
+        matches!(
+            self.source.downcast_ref::<zbus::Error>(),
+            Some(zbus::Error::MethodError(..))
+        )
     }
 }
 
@@ -168,6 +184,54 @@ impl Logind {
         ))
     }
 
+    /// Whether the machine can `action` and whether the person may (`CanSuspend`, `CanReboot`, `CanPowerOff`).
+    pub fn can(&self, action: Power) -> Result<Answer, Error> {
+        let (method, what) = match action {
+            Power::Sleep => ("CanSuspend", "asking logind whether the computer can sleep"),
+            Power::Restart => (
+                "CanReboot",
+                "asking logind whether the computer can restart",
+            ),
+            Power::ShutDown => (
+                "CanPowerOff",
+                "asking logind whether the computer can shut down",
+            ),
+        };
+        let reply = self
+            .connection
+            .call_method(
+                Some(LOGIND),
+                MANAGER_PATH,
+                Some(MANAGER_INTERFACE),
+                method,
+                &(),
+            )
+            .map_err(Error::bus(what))?;
+        let text: String = reply.body().deserialize().map_err(Error::bus(what))?;
+        Ok(Answer::from_logind(&text))
+    }
+
+    /// Suspend, restart or power off the computer through logind (`Suspend`, `Reboot`, `PowerOff`), without an
+    /// authentication dialog: logind decides from the open sessions and the block inhibitors, and refuses what the person may
+    /// not do ([`Error::is_refusal`]).
+    pub fn power(&self, action: Power) -> Result<(), Error> {
+        let (method, what) = match action {
+            Power::Sleep => ("Suspend", "putting the computer to sleep through logind"),
+            Power::Restart => ("Reboot", "restarting the computer through logind"),
+            Power::ShutDown => ("PowerOff", "shutting the computer down through logind"),
+        };
+        self.connection
+            .call_method(
+                Some(LOGIND),
+                MANAGER_PATH,
+                Some(MANAGER_INTERFACE),
+                method,
+                &(false,),
+            )
+            .map(drop)
+            .map_err(Error::bus(what))
+    }
+
     /// End this process's session (`TerminateSession`).
     pub fn terminate_session(&self) -> Result<(), Error> {
         self.connection
@@ -260,6 +324,30 @@ mod tests {
             what: "test",
             source: Box::new(source),
         }
+    }
+
+    #[test]
+    fn an_error_of_logind_is_a_refusal_and_a_broken_connection_is_not() {
+        let call = Message::method_call("/", "Reboot")
+            .unwrap()
+            .build(&())
+            .unwrap();
+        let refused = Error {
+            what: "test",
+            source: Box::new(zbus::Error::MethodError(
+                "org.freedesktop.DBus.Error.AccessDenied"
+                    .try_into()
+                    .unwrap(),
+                Some("Interactive authentication required.".into()),
+                call,
+            )),
+        };
+        assert!(refused.is_refusal());
+        let broken = Error {
+            what: "test",
+            source: Box::new(zbus::Error::Failure("gone".into())),
+        };
+        assert!(!broken.is_refusal());
     }
 
     #[test]

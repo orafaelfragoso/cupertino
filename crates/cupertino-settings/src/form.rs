@@ -121,6 +121,17 @@ pub fn layout(
                 y += h;
                 continue;
             }
+            if let Control::Preview { .. } = spec.control {
+                let row = Rect::new(cx, y, w, controls::metrics::PREVIEW.1);
+                rows.push(RowLayout {
+                    row,
+                    label: Rect::new(cx, y, 0.0, 0.0),
+                    control: row,
+                    error: None,
+                });
+                y += row.h;
+                continue;
+            }
             let (cw, ch) = spec.control.size();
             let text = m::LABEL_HEIGHT + if spec.error { m::ERROR_HEIGHT } else { 0.0 };
             let h = (ch.max(text) + 2.0 * m::ROW_PADDING_V).max(m::ROW_MIN_HEIGHT);

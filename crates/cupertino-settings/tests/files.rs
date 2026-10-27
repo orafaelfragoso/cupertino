@@ -171,5 +171,42 @@ fn a_typed_mouse_resolution_keeps_what_the_server_wrote_since_the_last_read() {
             .and_then(|m| m.get("1:1:Mouse")),
         Some(&1600),
         "a refused value leaves the settings as they were"
+
+fn adding_a_folder_and_choosing_a_photo_write_over_what_the_server_wrote_meanwhile() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = paths(dir.path());
+    let file = dir.path().join("compositor.json");
+    std::fs::write(
+        &file,
+        r#"{"appearance": "light", "wallpaper_dark": "/old-dark.jpg"}"#,
+    )
+    .unwrap();
+    let mut s = Settings::load(&p, 1080.0).unwrap();
+    std::fs::write(
+        &file,
+        r#"{"appearance": "dark", "wallpaper_dark": "/old-dark.jpg", "wallpaper_folders": ["/one"]}"#,
+    )
+    .unwrap();
+    s.add_wallpaper_folder(&p, std::path::Path::new("/two"))
+        .unwrap();
+    s.add_wallpaper_folder(&p, std::path::Path::new("/two"))
+        .unwrap();
+    s.set_wallpaper(&p, std::path::Path::new("/home/u/me.png"))
+        .unwrap();
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains(r#""appearance": "dark""#), "{text}");
+    assert!(
+        text.contains(r#""/one""#) && text.contains(r#""/two""#),
+        "{text}"
+    );
+    assert_eq!(
+        text.matches("\"/two\"").count(),
+        1,
+        "a folder is listed once: {text}"
+    );
+    assert!(text.contains(r#""wallpaper": "/home/u/me.png""#), "{text}");
+    assert!(
+        !text.contains("old-dark"),
+        "a single picture forgets the dark one: {text}"
     );
 }

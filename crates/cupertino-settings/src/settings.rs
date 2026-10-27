@@ -256,6 +256,59 @@ impl Settings {
         outcome
     }
 
+    /// Change `compositor.json` over the file as it is now, so a key another writer set since the last read is not put
+    /// back; on a failure the settings stay as they were.
+    pub fn rewrite_compositor(
+        &mut self,
+        paths: &Paths,
+        change: impl FnOnce(&mut cupertino_defaults::compositor::CompositorSettings),
+    ) -> Result<(), String> {
+        let before = self.clone();
+        let outcome = self
+            .reload(paths)
+            .map_err(|e| {
+                eprintln!("cupertino-settings: the settings could not be read: {e}");
+                "The settings could not be read.".to_string()
+            })
+            .and_then(|()| {
+                change(&mut self.compositor);
+                self.store(paths, File::Compositor)
+                    .map_err(|e| e.to_string())
+            });
+        if outcome.is_err() {
+            *self = before;
+        }
+        outcome
+    }
+
+    /// List the folder `folder` in the Wallpaper pane.
+    pub fn add_wallpaper_folder(
+        &mut self,
+        paths: &Paths,
+        folder: &std::path::Path,
+    ) -> Result<(), String> {
+        let folder = folder.to_string_lossy().into_owned();
+        self.rewrite_compositor(paths, |c| {
+            let folders = c.wallpaper_folders.get_or_insert_with(Vec::new);
+            if !folders.contains(&folder) {
+                folders.push(folder);
+            }
+        })
+    }
+
+    /// Show the picture `picture` on the desktop in both appearances.
+    pub fn set_wallpaper(
+        &mut self,
+        paths: &Paths,
+        picture: &std::path::Path,
+    ) -> Result<(), String> {
+        let picture = picture.to_string_lossy().into_owned();
+        self.rewrite_compositor(paths, |c| {
+            c.wallpaper = Some(picture);
+            c.wallpaper_dark = None;
+        })
+    }
+
     /// Write `file` to its path atomically.
     pub fn store(&self, paths: &Paths, file: File) -> Result<(), StoreError> {
         let path = paths.of(file).ok_or(StoreError::NoPath(file))?;

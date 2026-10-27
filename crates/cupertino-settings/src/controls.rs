@@ -46,6 +46,9 @@ pub mod metrics {
     /// The title and the photographer's name under a picture.
     pub const TILE_CREDITED_HEIGHT: f64 = 34.0;
     pub const TILE_RADIUS: f64 = 8.0;
+    /// The preview of the shown picture: its size (16:10) and the gap to its text. approximate.
+    pub const PREVIEW: (f64, f64) = (200.0, 125.0);
+    pub const PREVIEW_GAP: f64 = 16.0;
 }
 
 use metrics as m;
@@ -88,6 +91,12 @@ pub enum Control {
     /// A value that is only shown.
     Text {
         value: String,
+    },
+    /// The picture the desktop shows: large, with its name and a note (a pair of light and dark pictures).
+    Preview {
+        image: Option<std::path::PathBuf>,
+        title: String,
+        note: Option<String>,
     },
     /// A grid of pictures; a press commits the index of the one hit.
     Tiles {
@@ -177,8 +186,8 @@ impl Control {
                 m::BUTTON.1,
             ),
             Control::Text { .. } => m::TEXT,
-            // the form sizes a grid by its width
-            Control::Tiles { .. } => (0.0, 0.0),
+            // the form sizes a grid and a preview by their content
+            Control::Tiles { .. } | Control::Preview { .. } => (0.0, 0.0),
         }
     }
 
@@ -327,7 +336,7 @@ pub fn press(control: &Control, frame: &Rect, p: Point) -> Option<Press> {
             Press::Commit(Value::Index(i))
         }
         Control::Level { .. } => unreachable!("handled above"),
-        Control::Text { .. } => return None,
+        Control::Text { .. } | Control::Preview { .. } => return None,
         Control::Tiles { tiles, .. } => {
             let hit = tile_rects(frame, tiles.len(), tile_caption_height(tiles))
                 .iter()

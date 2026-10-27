@@ -799,15 +799,14 @@ impl Painter {
                 );
             }
             let frame = l.frame.offset(0.0, dy);
-            let grid = section
-                .rows
-                .first()
-                .is_some_and(|r| matches!(r.control, Control::Tiles { .. }));
+            let grid = section.rows.first().is_some_and(|r| {
+                matches!(r.control, Control::Tiles { .. } | Control::Preview { .. })
+            });
             if !grid {
                 fill_rounded(pm, &frame, fm::BOX_RADIUS, false, s, pal.box_fill);
             }
             for (ri, (row, rl)) in section.rows.iter().zip(&l.rows).enumerate() {
-                if let Control::Tiles { .. } = row.control {
+                if let Control::Tiles { .. } | Control::Preview { .. } = row.control {
                     self.paint_control(pm, s, &row.control, &rl.control.offset(0.0, dy), None, pal);
                     continue;
                 }
@@ -1172,6 +1171,43 @@ impl Painter {
                     );
                 }
             }
+            Control::Preview { image, title, note } => {
+                let (pw, ph) = cm::PREVIEW;
+                let picture = Rect::new(frame.x, frame.y, pw.min(frame.w), ph);
+                match image.as_ref().and_then(|i| self.thumbnails.get(i)) {
+                    Some(thumbnail) => fill_cover(pm, &picture, thumbnail, cm::TILE_RADIUS, s),
+                    None => fill_rounded(pm, &picture, cm::TILE_RADIUS, false, s, pal.box_fill),
+                }
+                stroke_rounded(pm, &picture, cm::TILE_RADIUS, 1.0, s, pal.separator);
+                let text_x = picture.right() + cm::PREVIEW_GAP;
+                let text_w = (frame.right() - text_x).max(0.0);
+                let mut y = picture.y + 8.0;
+                self.label(
+                    pm,
+                    &Rect::new(text_x, y, text_w, 18.0),
+                    title,
+                    Font {
+                        size: 13.0,
+                        weight: 600,
+                    },
+                    s,
+                    pal.text,
+                );
+                y += 20.0;
+                if let Some(note) = note {
+                    self.label(
+                        pm,
+                        &Rect::new(text_x, y, text_w, 16.0),
+                        note,
+                        Font {
+                            size: 11.0,
+                            weight: 400,
+                        },
+                        s,
+                        pal.secondary_text,
+                    );
+                }
+            }
             Control::Tiles { tiles, selected } => {
                 let caption = controls::tile_caption_height(tiles);
                 for (i, (tile, r)) in tiles
@@ -1353,7 +1389,10 @@ impl Painter {
         );
         match &sheet.kind {
             // the default button uses the accent (no pulse in this build)
-            Kind::Passphrase { .. } | Kind::Resolution { .. } | Kind::Pairing { .. } => {
+            Kind::Passphrase { .. }
+            | Kind::Resolution { .. }
+            | Kind::Picker { .. }
+            | Kind::Pairing { .. } => {
                 fill_rounded(pm, &l.action, cm::RADIUS, false, s, pal.accent);
                 let w = f64::from(self.text.measure(sheet.action_title(), 13.0 * s, 400, 0.0) / s);
                 self.label(
@@ -1400,6 +1439,75 @@ impl Painter {
                     s,
                     pal.red,
                 );
+            }
+        }
+        if let (Kind::Picker { chooser, top }, Some(list), Some(up)) = (&sheet.kind, l.list, l.up) {
+            self.paint_control(
+                pm,
+                s,
+                &Control::Button { title: "Up".into() },
+                &up,
+                None,
+                pal,
+            );
+            fill_rounded(pm, &list, cm::RADIUS, false, s, pal.control_background);
+            stroke_rounded(pm, &list.inset(0.5, 0.5), cm::RADIUS, 1.0, s, pal.separator);
+            let entries = chooser.0.entries();
+            if entries.is_empty() {
+                self.label(
+                    pm,
+                    &list,
+                    "Nothing to show here",
+                    Font {
+                        size: 12.0,
+                        weight: 400,
+                    },
+                    s,
+                    pal.secondary_text,
+                );
+            }
+            for (k, (i, entry)) in entries
+                .iter()
+                .enumerate()
+                .skip(*top)
+                .take(crate::sheet::metrics::PICKER_ROWS)
+                .enumerate()
+            {
+                let row = Rect::new(
+                    list.x + 4.0,
+                    list.y + k as f64 * crate::sheet::metrics::PICKER_ROW,
+                    list.w - 8.0,
+                    crate::sheet::metrics::PICKER_ROW,
+                );
+                let on = chooser.0.highlighted() == Some(i);
+                if on {
+                    fill_rounded(pm, &row, 5.0, false, s, pal.accent);
+                }
+                let color = if on { WHITE } else { pal.text };
+                self.label(
+                    pm,
+                    &Rect::new(row.x + 8.0, row.y, row.w - 28.0, row.h),
+                    &entry.name,
+                    Font {
+                        size: 12.0,
+                        weight: 400,
+                    },
+                    s,
+                    color,
+                );
+                if entry.is_dir {
+                    self.label(
+                        pm,
+                        &Rect::new(row.right() - 18.0, row.y, 12.0, row.h),
+                        "\u{203a}",
+                        Font {
+                            size: 13.0,
+                            weight: 400,
+                        },
+                        s,
+                        if on { WHITE } else { pal.secondary_text },
+                    );
+                }
             }
         }
     }

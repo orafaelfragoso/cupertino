@@ -706,12 +706,17 @@ impl App {
             return Err("the session manager answered while no password was asked".into());
         };
         match event {
-            ManagerEvent::Prompt { echo, text } => {
+            ManagerEvent::Prompt {
+                conversation,
+                echo,
+                text,
+            } => {
                 if echo {
                     screen.notify(text);
                 }
                 match self.pending.take() {
                     Some(password) => self.connection.send(&Request::Answer {
+                        conversation,
                         secret: Secret::new(password).map_err(|e| e.to_string())?,
                     })?,
                     // the password is spent: a second question is more than this screen can answer

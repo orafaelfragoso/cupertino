@@ -10,7 +10,7 @@
 
 use crate::extras::{
     BatteryState, BluetoothDevice, BluetoothState, ExtraAction, Extras, FocusLifetime, FocusState,
-    SessionAction, SessionCaps, SessionState, WifiNetwork, WifiState,
+    SessionCaps, SessionState, WifiNetwork, WifiState,
 };
 use futures_util::StreamExt;
 use std::collections::HashMap;
@@ -406,21 +406,10 @@ async fn act(
 ) -> zbus::Result<()> {
     let system = || system.ok_or_else(|| zbus::Error::Failure("there is no system bus".to_owned()));
     match action {
-        ExtraAction::Session(action) => {
-            let method = match action {
-                SessionAction::Sleep => "Sleep",
-                SessionAction::Restart => "RequestRestart",
-                SessionAction::ShutDown => "RequestShutDown",
-                SessionAction::Lock => "LockNow",
-                SessionAction::LogOut => "RequestLogOut",
-                SessionAction::SwitchUser => "SwitchToLoginWindow",
-                SessionAction::RefreshCapabilities => "RefreshCapabilities",
-            };
-            proxy(session, LOGIN_NAME, LOGIN_PATH, LOGIN_NAME)
-                .await?
-                .call(method, &())
-                .await
-        }
+        // the server asks the session agent for the menu bar (`SessionAction` over the shell protocol)
+        ExtraAction::Session(_) => Err(zbus::Error::Failure(
+            "session actions go through the server".to_owned(),
+        )),
         ExtraAction::SetDoNotDisturb(on) => {
             proxy(session, CENTRE_NAME, CENTRE_PATH, CENTRE_NAME)
                 .await?

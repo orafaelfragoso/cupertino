@@ -174,3 +174,57 @@ fn a_second_overlay_cannot_take_the_name() {
         second.err()
     );
 }
+
+/// SEC-04: a process of the same user that is neither the server nor this process cannot change a hardware level; each
+/// refusal has its own error name. `Show` only draws and stays open.
+#[test]
+fn a_host_process_that_is_not_the_server_cannot_step_a_level() {
+    if Process::new("dbus-send").arg("--version").output().is_err() {
+        eprintln!("skipping: dbus-send is not available");
+        return;
+    }
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let (commands_tx, commands_rx) = mpsc::channel();
+    let _osd = serve(bus.builder(), move |command| {
+        commands_tx.send(command).unwrap()
+    })
+    .expect("claims the name");
+    let send = |member: &str, arguments: &[&str]| {
+        Process::new("dbus-send")
+            .arg(format!("--bus={}", bus.address))
+            .args(["--print-reply", "--dest=org.cupertino.Osd1", OBJECT_PATH])
+            .arg(format!("{INTERFACE}.{member}"))
+            .args(arguments)
+            .output()
+            .expect("dbus-send")
+    };
+
+    for (member, arguments) in [
+        ("VolumeStep", vec!["int32:1", "boolean:false"]),
+        ("ToggleMute", vec![]),
+        ("BrightnessStep", vec!["int32:-1", "boolean:false"]),
+        ("KeyboardBrightnessStep", vec!["int32:1", "boolean:true"]),
+    ] {
+        let out = send(member, &arguments);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{member} was accepted");
+        assert!(
+            stderr.contains("org.cupertino.Error.UntrustedCaller"),
+            "{member}: {stderr}"
+        );
+    }
+    assert!(
+        commands_rx.try_recv().is_err(),
+        "a refused call reached the controller"
+    );
+
+    let shown = send("Show", &["string:volume", "double:0.5"]);
+    assert!(shown.status.success(), "Show stays open");
+    assert!(matches!(
+        commands_rx.recv_timeout(Duration::from_secs(5)),
+        Ok(Command::Show(_))
+    ));
+}

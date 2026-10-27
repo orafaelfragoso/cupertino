@@ -248,7 +248,7 @@ pub fn run() -> Result<Infallible, String> {
         .map_err(|e| format!("cannot read the server's globals: {e}"))?;
     let qh = queue.handle();
     let shell: CupertinoShellV1 = globals
-        .bind(&qh, 5..=5, ())
+        .bind(&qh, 6..=6, ())
         .map_err(|e| format!("the server has no cupertino_shell_v1: {e}"))?;
     let mut app = App {
         shell,

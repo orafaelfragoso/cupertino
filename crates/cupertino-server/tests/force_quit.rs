@@ -11,8 +11,11 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use common::Client;
+use cupertino_server::authorization::ShellRole;
 use cupertino_server::backend::headless;
+use cupertino_server::caller::{Caller, Denial, Identified, Sandbox};
 use cupertino_server::config::{Config, ShellProcess};
+use cupertino_server::force_quit::ProcessHandle;
 use cupertino_server::supervisor::Supervisor;
 use cupertino_server::Cupertino;
 use smithay::reexports::calloop::EventLoop;
@@ -143,30 +146,57 @@ fn log_out_force_quits_through_the_same_rules() {
     assert_eq!(*sent.borrow(), vec![]);
 }
 
-#[test]
-fn log_out_force_quit_over_the_bus_is_refused_to_a_caller_that_is_not_a_shell_process() {
-    let Some(mut h) = Harness::new() else { return };
-    let (_client, _id) = mapped_window(&mut h);
-    let sent = record_signals(&mut h);
-
-    assert_eq!(
-        h.state
-            .force_quit_application_for(Some(std::process::id()), APP),
-        None
-    );
-    assert_eq!(h.state.force_quit_application_for(None, APP), None);
-    assert_eq!(*sent.borrow(), vec![]);
+/// A caller the bus daemon named: the process `pid` on the host.
+fn host_caller(pid: u32) -> Caller {
+    Caller::Process(Identified {
+        process: ProcessHandle::open(pid).unwrap(),
+        sandbox: None,
+        exe: None,
+    })
 }
 
 #[test]
-fn log_out_force_quit_over_the_bus_is_done_for_a_shell_process() {
+fn log_out_force_quit_over_the_bus_is_refused_to_every_caller_but_the_session_agent() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_client, _id) = mapped_window(&mut h);
+    let sent = record_signals(&mut h);
+    let mut other = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+
+    assert_eq!(
+        h.state
+            .force_quit_application_for(&host_caller(other.id()), APP),
+        Err(Denial::Untrusted)
+    );
+    assert_eq!(
+        h.state.force_quit_application_for(&Caller::Anonymous, APP),
+        Err(Denial::Anonymous)
+    );
+    let Caller::Process(mut flatpak) = host_caller(other.id()) else {
+        unreachable!()
+    };
+    flatpak.sandbox = Some(Sandbox::Flatpak);
+    assert_eq!(
+        h.state
+            .force_quit_application_for(&Caller::Process(flatpak), APP),
+        Err(Denial::Sandboxed(Sandbox::Flatpak))
+    );
+    assert_eq!(*sent.borrow(), vec![]);
+    other.kill().unwrap();
+    other.wait().unwrap();
+}
+
+#[test]
+fn log_out_force_quit_over_the_bus_is_done_for_the_session_agent() {
     let Some(mut h) = Harness::new() else { return };
     let (_client, _id) = mapped_window(&mut h);
     let sent = record_signals(&mut h);
     let agent = ShellProcess {
         name: "agent".into(),
         command: vec!["sleep".into(), "30".into()],
-        roles: Vec::new(),
+        roles: vec![ShellRole::SessionLock],
     };
     h.state.supervisor = Supervisor::new(&[agent], Instant::now());
     h.state.supervisor.poll(Instant::now(), "unused", &mut |_| {
@@ -174,11 +204,11 @@ fn log_out_force_quit_over_the_bus_is_done_for_a_shell_process() {
     });
     let pid = h.state.supervisor.pid_of("agent").unwrap();
 
-    let answer = h.state.force_quit_application_for(Some(pid), APP);
+    let answer = h.state.force_quit_application_for(&host_caller(pid), APP);
     let _ = std::process::Command::new("kill")
         .arg(pid.to_string())
         .status();
-    assert_eq!(answer, Some(1));
+    assert_eq!(answer, Ok(1));
     assert_eq!(*sent.borrow(), vec![(std::process::id(), 9)]);
 }
 

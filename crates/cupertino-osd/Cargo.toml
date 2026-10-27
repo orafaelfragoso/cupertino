@@ -18,6 +18,7 @@ app = ["dbus", "dep:cupertino-client"]
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-alsa = { path = "../cupertino-alsa" }
 cupertino-icons = { path = "../cupertino-icons" }
+cupertino-peer = { path = "../cupertino-peer" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-decorations = { path = "../cupertino-decorations" }

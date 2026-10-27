@@ -435,3 +435,77 @@ fn the_setters_are_served_on_the_session_bus() {
         "the appearance was stored"
     );
 }
+
+/// SEC-04: a process of the same user that is neither the session agent nor the settings application cannot change the
+/// session, whatever it calls; the refusal has its own error name, and the properties stay readable.
+#[test]
+fn the_session_interface_refuses_a_host_process_that_is_not_the_agent() {
+    if std::process::Command::new("dbus-send")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: no dbus-send");
+        return;
+    }
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: no dbus-daemon");
+        return;
+    };
+    let Some(mut h) = Harness::new() else { return };
+    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
+    cupertino_server::quit::start_session_service(&mut h.state);
+    let address = bus.address.clone();
+    let client = std::thread::spawn(move || {
+        let call = |member: &str, arguments: &[&str]| {
+            std::process::Command::new("dbus-send")
+                .arg(format!("--bus={address}"))
+                .args(["--print-reply", "--dest=org.cupertino.Session1"])
+                .arg("/org/cupertino/Session1")
+                .arg(format!("org.cupertino.Session1.{member}"))
+                .args(arguments)
+                .output()
+                .unwrap()
+        };
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            let probe = call("QuitNextApplication", &[]);
+            let stderr = String::from_utf8_lossy(&probe.stderr).to_string();
+            if !stderr.contains("ServiceUnknown") && !stderr.contains("NameHasNoOwner") {
+                break;
+            }
+            assert!(Instant::now() < end, "the session interface did not appear");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        [
+            call("QuitNextApplication", &[]),
+            call("ForceQuitApplication", &["string:org.example.App"]),
+            call("SetAppearance", &["string:dark"]),
+            call("SetAccessibility", &["string:reduce_motion", "string:on"]),
+        ]
+        .map(|out| {
+            (
+                out.status.success(),
+                String::from_utf8_lossy(&out.stderr).to_string(),
+            )
+        })
+    });
+    while !client.is_finished() {
+        h.step();
+    }
+    for (succeeded, stderr) in client.join().unwrap() {
+        assert!(
+            !succeeded,
+            "a host process that is no agent changed the session"
+        );
+        assert!(
+            stderr.contains("org.cupertino.Session1.Error.UntrustedCaller"),
+            "{stderr}"
+        );
+    }
+    assert_eq!(
+        h.state.session_settings().appearance,
+        "light",
+        "the appearance was not set"
+    );
+}

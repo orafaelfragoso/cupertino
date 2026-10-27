@@ -1,8 +1,14 @@
 //! `org.cupertino.Login1`: the control interface of the `cupertino-login` process, which is the session agent. The server
-//! calls `Lock` for the lock shortcut and `PowerKey` for the press and the release of the power key; any client may call
-//! the `Request*` methods, which show the confirmation panel of [`crate::panel`], and read `Locked`, `UserName` and
+//! calls `Lock` for the lock shortcut and `PowerKey` for the press and the release of the power key, and the `Request*`
+//! methods, which show the confirmation panel of [`crate::panel`]; any client may read `Locked`, `UserName` and
 //! `Capabilities` (what the session menu of the menu bar offers).
+//!
+//! Every method checks its caller (`cupertino-peer`): only the server, which started this process, and this process itself
+//! may call. The menu bar asks the server (`cupertino_menu_bar_v1.session_action`), which calls on its behalf. An
+//! anonymous, sandboxed or unrelated caller, an application the server started included, gets an error of
+//! `org.cupertino.Error.*` and nothing happens. The properties are readable by anyone.
 
+use cupertino_peer::{check_call, CallerError, Relation};
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::{connection, Connection};
 
@@ -29,6 +35,10 @@ pub fn clean_name(text: &str) -> String {
 /// Name, path and interface of the control interface (the callers use these strings).
 pub const BUS_NAME: &str = "org.cupertino.Login1";
 pub const OBJECT_PATH: &str = "/org/cupertino/Login1";
+
+/// Who may call the methods: the server, which started this process, and this process itself. The other shell processes
+/// ask the server to call for them.
+const SERVER: &[Relation] = &[Relation::Itself, Relation::Parent];
 
 /// What a caller of the interface asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,9 +67,9 @@ struct Control {
 
 impl Control {
     /// A panel cannot be shown on a locked session: its surface is not drawn there, and an action no one sees must not run.
-    fn panel(&self, kind: Kind) -> zbus::fdo::Result<()> {
+    fn panel(&self, kind: Kind) -> Result<(), CallerError> {
         if self.locked {
-            return Err(zbus::fdo::Error::Failed("the session is locked".into()));
+            return Err(zbus::fdo::Error::Failed("the session is locked".into()).into());
         }
         (self.on_request)(Request::Panel(kind));
         Ok(())
@@ -69,35 +79,95 @@ impl Control {
 #[zbus::interface(name = "org.cupertino.Login1")]
 impl Control {
     /// Lock the session, or do nothing when it is locked already.
-    fn lock(&self) {
+    async fn lock(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallerError> {
+        check_call(connection, &header, "org.cupertino.Login1", "Lock", SERVER).await?;
         (self.on_request)(Request::Lock { explicit: false });
+        Ok(())
     }
 
     /// Lock the session because the person asked for it (the lock shortcut), or do nothing when it is locked already.
-    fn lock_now(&self) {
+    async fn lock_now(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallerError> {
+        check_call(
+            connection,
+            &header,
+            "org.cupertino.Login1",
+            "LockNow",
+            SERVER,
+        )
+        .await?;
         (self.on_request)(Request::Lock { explicit: true });
+        Ok(())
     }
 
     /// Ask whether to log out, with a countdown that logs out when it ends. Fails while the session is locked.
-    fn request_log_out(&self) -> zbus::fdo::Result<()> {
+    async fn request_log_out(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallerError> {
+        check_call(
+            connection,
+            &header,
+            "org.cupertino.Login1",
+            "RequestLogOut",
+            SERVER,
+        )
+        .await?;
         self.panel(Kind::LogOut)
     }
 
     /// Ask whether to restart the computer, with a countdown. Fails while the session is locked.
-    fn request_restart(&self) -> zbus::fdo::Result<()> {
+    async fn request_restart(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallerError> {
+        check_call(
+            connection,
+            &header,
+            "org.cupertino.Login1",
+            "RequestRestart",
+            SERVER,
+        )
+        .await?;
         self.panel(Kind::Restart)
     }
 
     /// Ask whether to shut the computer down, with a countdown. Fails while the session is locked.
-    fn request_shut_down(&self) -> zbus::fdo::Result<()> {
+    async fn request_shut_down(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallerError> {
+        check_call(
+            connection,
+            &header,
+            "org.cupertino.Login1",
+            "RequestShutDown",
+            SERVER,
+        )
+        .await?;
         self.panel(Kind::ShutDown)
     }
 
     /// Put the computer to sleep without asking: the session locks first (the sleep preparation does it). Fails while the
     /// session is locked, like the panels.
-    fn sleep(&self) -> zbus::fdo::Result<()> {
+    async fn sleep(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallerError> {
+        check_call(connection, &header, "org.cupertino.Login1", "Sleep", SERVER).await?;
         if self.locked {
-            return Err(zbus::fdo::Error::Failed("the session is locked".into()));
+            return Err(zbus::fdo::Error::Failed("the session is locked".into()).into());
         }
         (self.on_request)(Request::Sleep);
         Ok(())
@@ -106,26 +176,78 @@ impl Control {
     /// Read logind's policy and the session manager again and update `Capabilities`; returns at once, and
     /// `PropertiesChanged` follows when something changed. A menu calls it when it opens, since the answers change with the
     /// open sessions and the inhibitors.
-    fn refresh_capabilities(&self) {
+    async fn refresh_capabilities(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallerError> {
+        check_call(
+            connection,
+            &header,
+            "org.cupertino.Login1",
+            "RefreshCapabilities",
+            SERVER,
+        )
+        .await?;
         (self.on_request)(Request::RefreshCapabilities);
+        Ok(())
     }
 
     /// Show the power panel (Restart, Sleep, Cancel, Shut Down), the one a held power button shows. Fails while the session
     /// is locked.
-    fn request_power_dialog(&self) -> zbus::fdo::Result<()> {
+    async fn request_power_dialog(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallerError> {
+        check_call(
+            connection,
+            &header,
+            "org.cupertino.Login1",
+            "RequestPowerDialog",
+            SERVER,
+        )
+        .await?;
         self.panel(Kind::PowerButton)
     }
 
     /// Lock the session and hand the console to the login screen, where another user can log in and this one can come back
     /// (fast user switching). A session that is locked already switches too.
-    fn switch_to_login_window(&self) {
+    async fn switch_to_login_window(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallerError> {
+        check_call(
+            connection,
+            &header,
+            "org.cupertino.Login1",
+            "SwitchToLoginWindow",
+            SERVER,
+        )
+        .await?;
         (self.on_request)(Request::SwitchToLoginWindow);
+        Ok(())
     }
 
     /// The power key went down or up; this process times the hold ([`crate::power_button`]). A locked session ignores the
     /// call, which never fails.
-    fn power_key(&self, pressed: bool) {
+    async fn power_key(
+        &self,
+        pressed: bool,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallerError> {
+        check_call(
+            connection,
+            &header,
+            "org.cupertino.Login1",
+            "PowerKey",
+            SERVER,
+        )
+        .await?;
         (self.on_request)(Request::PowerKey { pressed });
+        Ok(())
     }
 
     /// Whether the session is locked (the server confirmed the lock and it has not been unlocked).

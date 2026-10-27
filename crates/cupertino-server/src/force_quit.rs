@@ -7,8 +7,6 @@
 //! an application of its own is signalled: not the server, init, a shell process, or a client that serves windows of more
 //! than one application (a proxy).
 
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-
 use cupertino_wm::AppId;
 use smithay::reexports::wayland_server::Client;
 use smithay::reexports::wayland_server::Resource;
@@ -21,56 +19,7 @@ pub const KILL_GRACE: f64 = 3.0;
 const SIGTERM: i32 = 15;
 pub(crate) const SIGKILL: i32 = 9;
 
-/// A process held by a pidfd.
-#[derive(Debug)]
-pub struct ProcessHandle {
-    pub pid: u32,
-    fd: OwnedFd,
-}
-
-impl ProcessHandle {
-    /// Hold the process `pid`; fails when it is gone.
-    pub fn open(pid: u32) -> std::io::Result<Self> {
-        // Safety: pidfd_open takes a pid and flags and returns a new file descriptor or -1.
-        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0) };
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // Safety: the descriptor was just returned by the kernel and nothing else owns it.
-        let fd = unsafe { OwnedFd::from_raw_fd(fd as i32) };
-        Ok(Self { pid, fd })
-    }
-
-    /// Whether the process has exited: its pidfd is readable then.
-    pub fn has_exited(&self) -> bool {
-        let mut poll = libc::pollfd {
-            fd: self.fd.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        // Safety: poll on one valid pollfd with a zero timeout.
-        let ready = unsafe { libc::poll(&mut poll, 1, 0) };
-        ready > 0 && poll.revents & libc::POLLIN != 0
-    }
-
-    /// Send `signal` to the process; fails when it has exited.
-    pub fn send(&self, signal: i32) -> std::io::Result<()> {
-        // Safety: pidfd_send_signal on a descriptor this value owns, with no siginfo and no flags.
-        let result = unsafe {
-            libc::syscall(
-                libc::SYS_pidfd_send_signal,
-                self.fd.as_raw_fd(),
-                signal,
-                std::ptr::null::<libc::siginfo_t>(),
-                0,
-            )
-        };
-        if result < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(())
-    }
-}
+pub use cupertino_peer::ProcessHandle;
 
 /// Delivers a signal to a held process; replaced in tests.
 pub type SendSignal = Box<dyn FnMut(&ProcessHandle, i32)>;

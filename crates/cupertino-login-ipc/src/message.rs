@@ -10,7 +10,7 @@ use crate::secret::Secret;
 
 /// The protocol version both sides send in their first message. A change that adds or removes a message increments it: the
 /// login screen and the manager ship in one package, so there is no negotiation.
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 
 /// The largest frame the login screen sends: a 512-byte password in hex plus its envelope fits in 2 KiB.
 pub const MAX_REQUEST_FRAME: usize = 2 * 1024;
@@ -137,8 +137,8 @@ pub enum Request {
     Hello { version: u32 },
     /// Start an attempt. Valid only when no attempt is open.
     Authenticate { account: Account },
-    /// The answer to the last `Prompt`. Valid only while a prompt is open.
-    Answer { secret: Secret },
+    /// The answer to the `Prompt` with this `conversation`. Valid once, while that prompt is open; any other is dropped.
+    Answer { conversation: u64, secret: Secret },
     /// Abort the open attempt (Escape, back to the picker). Always valid; with no attempt it is ignored.
     Cancel {},
     /// Restart or shut down with an administrator's authentication, for the case where [`PowerRefusal::OtherUsersLoggedIn`] would
@@ -228,6 +228,8 @@ pub enum Event {
     },
     /// PAM asks. `echo` false is a password field; true is a visible field whose text also shows as the notice.
     Prompt {
+        /// Names this prompt; the `Answer` repeats it.
+        conversation: u64,
         echo: bool,
         text: String,
     },

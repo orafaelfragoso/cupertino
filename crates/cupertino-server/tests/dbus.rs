@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use cupertino_server::dbus::{DbusHandle, Request, Toggle};
+use cupertino_server::dbus::{DbusHandle, LoginTrust, Request, Toggle};
 use cupertino_server::input::OsdKey;
 use zbus::{block_on, connection};
 
@@ -129,6 +129,7 @@ fn each_toggle_calls_its_own_process() {
             .await
             .expect("connect");
         let handle = DbusHandle::start().expect("worker thread");
+        handle.set_login(LoginTrust::Agent(std::process::id()));
         handle.send(Request::Toggle(Toggle::Launcher));
         for _ in 0..200 {
             if *launcher_toggles.lock().unwrap() > 0 {
@@ -256,6 +257,7 @@ fn a_log_out_request_without_a_login_process_runs_the_fallback_and_with_one_does
         let counted = fallbacks.clone();
         let handle =
             DbusHandle::start_with(move || *counted.lock().unwrap() += 1).expect("worker thread");
+        handle.set_login(LoginTrust::Agent(std::process::id()));
         assert!(handle.send(Request::LogOut));
         for _ in 0..200 {
             if *fallbacks.lock().unwrap() > 0 {
@@ -302,4 +304,62 @@ fn a_log_out_request_without_a_login_process_runs_the_fallback_and_with_one_does
             "and the fallback did not run again"
         );
     });
+}
+
+/// Send a log out request while `trust` is set and report whether the login process got it and whether the fallback ran.
+fn log_out_with(bus: &PrivateBus, trust: LoginTrust) -> (u32, u32) {
+    let _env = SESSION_BUS_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
+    block_on(async {
+        let (asked, fallbacks) = (Arc::new(Mutex::new(0u32)), Arc::new(Mutex::new(0u32)));
+        let _login = connection::Builder::address(bus.address.as_str())
+            .expect("address")
+            .name("org.cupertino.Login1")
+            .expect("name")
+            .serve_at("/org/cupertino/Login1", FakeLoginPanel(asked.clone()))
+            .expect("object")
+            .build()
+            .await
+            .expect("connect");
+        let counted = fallbacks.clone();
+        let handle =
+            DbusHandle::start_with(move || *counted.lock().unwrap() += 1).expect("worker thread");
+        handle.set_login(trust);
+        assert!(handle.send(Request::LogOut));
+        for _ in 0..50 {
+            if *asked.lock().unwrap() + *fallbacks.lock().unwrap() > 0 {
+                break;
+            }
+            async_io::Timer::after(Duration::from_millis(20)).await;
+        }
+        async_io::Timer::after(Duration::from_millis(100)).await;
+        let counts = (*asked.lock().unwrap(), *fallbacks.lock().unwrap());
+        counts
+    })
+}
+
+#[test]
+fn only_the_supervised_login_process_owns_the_login_name() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let mut other = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("sleep");
+    let other_pid = other.id();
+    let results = (
+        log_out_with(&bus, LoginTrust::Agent(std::process::id())),
+        log_out_with(&bus, LoginTrust::Any),
+        log_out_with(&bus, LoginTrust::Agent(other_pid)),
+        log_out_with(&bus, LoginTrust::Nobody),
+    );
+    let _ = other.kill();
+    let _ = other.wait();
+    assert_eq!(
+        results,
+        ((1, 0), (1, 0), (0, 1), (0, 1)),
+        "delivered to the supervised process or in a dev shell; a squatter or no login process runs the fallback"
+    );
 }

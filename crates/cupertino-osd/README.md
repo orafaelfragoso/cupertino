@@ -63,6 +63,11 @@ after a failure. A failure (no sound card, no backlight, daemon absent) shows no
 The process owns `org.cupertino.Osd1` at `/org/cupertino/Osd1` on the session bus. A second overlay cannot take the name and
 exits with failure. The interface lives in `control` (`BUS_NAME`, `OBJECT_PATH`, `serve`).
 
+Callers: `VolumeStep`, `ToggleMute`, `BrightnessStep` and `KeyboardBrightnessStep` change hardware levels, so only the server
+(this process's parent) and this process itself may call them (`cupertino-peer`). An anonymous, sandboxed (Flatpak, Snap) or
+unrelated caller gets `org.cupertino.Error.AnonymousCaller`, `FlatpakCaller`, `SnapCaller` or `UntrustedCaller`, one warning
+is logged and nothing changes. `Show` only draws the overlay, so it stays open to every caller (the control panel uses it).
+
 | Method | Effect |
 |---|---|
 | `VolumeStep(i32 direction, bool fine) | Raises (`direction` > 0) or lowers the volume one press (a level of 0 mutes, a level above 0 unmutes) and shows the level. |
@@ -153,7 +158,7 @@ cargo test -p cupertino-osd --features app
 | Model unit tests | The fill rule and the lifetime at literal instants. |
 | Sender and controller unit tests | The step formulas, the mute rules, and the 4 s and 1 s holds. |
 | Layout and render unit tests | The meter geometry and its pixels. |
-| `tests/control.rs` | The bus interface against a private `dbus-daemon` with in-memory backends. |
+| `tests/control.rs` | The bus interface against a private `dbus-daemon` with in-memory backends; a host process (`dbus-send`) is refused every step method with `UntrustedCaller`, and `Show` stays open. |
 
 Screenshots of the process on the headless compositor are in `output/` (`osd-volume.png`, `osd-brightness.png`,
 `osd-fade.png`). They were taken with `--fake-backends`: a server config with the `osd` shell entry on a private session bus,

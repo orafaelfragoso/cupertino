@@ -5,6 +5,7 @@
 //! through [`DbusHandle::send`]. Without a session bus the worker ends after logging and the
 //! requests fail with a warning.
 
+use crate::caller::identify;
 use crate::input::OsdKey;
 
 /// What the worker asks a shell process to toggle.
@@ -35,10 +36,29 @@ pub enum Request {
     LogOut,
     /// Open `cupertino-login`'s power panel.
     PowerDialog,
+    /// The menu bar's entries, forwarded by the server: sleep without a panel, the restart and shut down panels, the
+    /// switch to the login window, and reading what the machine allows again.
+    Sleep,
+    Restart,
+    ShutDown,
+    SwitchUser,
+    RefreshCapabilities,
     /// The power key went down (`true`) or up; `cupertino-login` times the hold.
     PowerKey {
         pressed: bool,
     },
+}
+
+fn login_call(
+    method: &'static str,
+) -> (&'static str, &'static str, &'static str, &'static str, Body) {
+    (
+        "org.cupertino.Login1",
+        "/org/cupertino/Login1",
+        "org.cupertino.Login1",
+        method,
+        Body::Empty,
+    )
 }
 
 /// Arguments of a control method.
@@ -113,6 +133,11 @@ impl Request {
                 "RequestPowerDialog",
                 Body::Empty,
             ),
+            Request::Sleep => login_call("Sleep"),
+            Request::Restart => login_call("RequestRestart"),
+            Request::ShutDown => login_call("RequestShutDown"),
+            Request::SwitchUser => login_call("SwitchToLoginWindow"),
+            Request::RefreshCapabilities => login_call("RefreshCapabilities"),
             Request::PowerKey { pressed } => (
                 "org.cupertino.Login1",
                 "/org/cupertino/Login1",
@@ -138,9 +163,21 @@ impl Request {
     }
 }
 
+/// Who may own `org.cupertino.Login1`: the lock, log out and power key requests go to nobody else.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoginTrust {
+    /// No login process is supervised: no owner of the name is trusted.
+    Nobody,
+    /// The supervised login process, by its process id.
+    Agent(u32),
+    /// A development run: the owner of the name is whoever started it.
+    Any,
+}
+
 /// Handle on the worker thread.
 pub struct DbusHandle {
     tx: async_channel::Sender<Request>,
+    login: std::sync::Arc<std::sync::Mutex<LoginTrust>>,
 }
 
 /// Runs on the worker thread when the login process, the one that shows the log out panel, is not on the bus.
@@ -157,16 +194,26 @@ impl DbusHandle {
     pub fn start_with(login_missing: impl Fn() + Send + Sync + 'static) -> Option<DbusHandle> {
         let (tx, rx) = async_channel::unbounded::<Request>();
         let login_missing: LoginMissing = std::sync::Arc::new(login_missing);
+        let login = std::sync::Arc::new(std::sync::Mutex::new(LoginTrust::Nobody));
+        let worker_login = login.clone();
         let spawned = std::thread::Builder::new()
             .name("cupertino-dbus".into())
-            .spawn(move || zbus::block_on(worker(rx, login_missing)));
+            .spawn(move || zbus::block_on(worker(rx, login_missing, worker_login)));
         match spawned {
-            Ok(_) => Some(DbusHandle { tx }),
+            Ok(_) => Some(DbusHandle { tx, login }),
             Err(e) => {
                 tracing::warn!(error = %e, "cannot start the D-Bus worker");
                 None
             }
         }
+    }
+
+    /// Say whose ownership of `org.cupertino.Login1` the worker may trust.
+    pub fn set_login(&self, trust: LoginTrust) {
+        *self
+            .login
+            .lock()
+            .expect("no thread panics while holding the login trust") = trust;
     }
 
     /// Queue a call on a shell process; false when the worker is gone (no session bus).
@@ -179,7 +226,13 @@ impl DbusHandle {
     }
 }
 
-async fn worker(rx: async_channel::Receiver<Request>, login_missing: LoginMissing) {
+type SharedLoginTrust = std::sync::Arc<std::sync::Mutex<LoginTrust>>;
+
+async fn worker(
+    rx: async_channel::Receiver<Request>,
+    login_missing: LoginMissing,
+    login: SharedLoginTrust,
+) {
     let conn = match zbus::Connection::session().await {
         Ok(c) => c,
         Err(e) => {
@@ -191,13 +244,14 @@ async fn worker(rx: async_channel::Receiver<Request>, login_missing: LoginMissin
         let conn = conn.clone();
         // a key's press and release must arrive in the order they happened, so those calls are awaited in turn
         if matches!(what, Request::PowerKey { .. }) {
-            call(&conn, what, &login_missing).await;
+            call(&conn, what, &login_missing, &login).await;
         } else {
             let login_missing = login_missing.clone();
+            let login = login.clone();
             conn.executor()
                 .clone()
                 .spawn(
-                    async move { call(&conn, what, &login_missing).await },
+                    async move { call(&conn, what, &login_missing, &login).await },
                     "cupertino-shell-call",
                 )
                 .detach();
@@ -205,17 +259,74 @@ async fn worker(rx: async_channel::Receiver<Request>, login_missing: LoginMissin
     }
 }
 
+/// Where to send a call for the owner of `name`. The login process is looked for by its connection: the owner of
+/// `org.cupertino.Login1` must be the supervised process, and the call goes to its unique name, so a client that takes
+/// the name later gets nothing. `None`: the owner is not the login process.
+async fn destination(
+    conn: &zbus::Connection,
+    name: &str,
+    login: &SharedLoginTrust,
+) -> Option<String> {
+    if name != LOGIN_NAME {
+        return Some(name.to_string());
+    }
+    let trust = *login
+        .lock()
+        .expect("no thread panics while holding the login trust");
+    let Ok(proxy) = zbus::fdo::DBusProxy::new(conn).await else {
+        return Some(name.to_string());
+    };
+    let Ok(bus_name) = zbus::names::BusName::try_from(name) else {
+        return Some(name.to_string());
+    };
+    let Ok(owner) = proxy.get_name_owner(bus_name).await else {
+        // nobody owns it: the call fails the way it did, and the log out request finds nobody to ask
+        return Some(name.to_string());
+    };
+    let caller = identify(conn, &owner).await;
+    let trusted = match (trust, caller.pid()) {
+        (LoginTrust::Any, _) => true,
+        (LoginTrust::Agent(expected), Some(pid)) => pid == expected,
+        (LoginTrust::Agent(_) | LoginTrust::Nobody, _) => false,
+    };
+    if !trusted {
+        tracing::warn!(
+            name,
+            owner = %owner,
+            pid = caller.pid(),
+            "the owner of the login process's name is not the login process: the request is not sent"
+        );
+        return None;
+    }
+    Some(owner.to_string())
+}
+
+const LOGIN_NAME: &str = "org.cupertino.Login1";
+
 /// Make the call of `what` and log a failure.
-async fn call(conn: &zbus::Connection, what: Request, login_missing: &LoginMissing) {
+async fn call(
+    conn: &zbus::Connection,
+    what: Request,
+    login_missing: &LoginMissing,
+    login: &SharedLoginTrust,
+) {
     let (name, path, interface, method, body) = what.call();
+    let Some(destination) = destination(conn, name, login).await else {
+        if what == Request::LogOut {
+            tracing::warn!("no login process on the bus: the log out shortcut ends the server");
+            login_missing();
+        }
+        return;
+    };
+    let destination = Some(destination.as_str());
     let sent = match body {
         Body::Empty => {
-            conn.call_method(Some(name), path, Some(interface), method, &())
+            conn.call_method(destination, path, Some(interface), method, &())
                 .await
         }
         Body::Step(direction, fine) => {
             conn.call_method(
-                Some(name),
+                destination,
                 path,
                 Some(interface),
                 method,
@@ -224,7 +335,7 @@ async fn call(conn: &zbus::Connection, what: Request, login_missing: &LoginMissi
             .await
         }
         Body::Pressed(pressed) => {
-            conn.call_method(Some(name), path, Some(interface), method, &pressed)
+            conn.call_method(destination, path, Some(interface), method, &pressed)
                 .await
         }
     };
@@ -283,6 +394,12 @@ impl crate::state::Cupertino {
             tracing::warn!("no login process to ask: the log out shortcut ends the server");
             self.quit_compositor();
         }
+    }
+
+    /// A menu bar entry of the session menu: the server asks the login process on the menu bar's behalf, because the login
+    /// process answers only the server.
+    pub fn menu_bar_session_action(&mut self, action: Request) {
+        self.shell_call(action);
     }
 
     /// Open the login process's power panel.

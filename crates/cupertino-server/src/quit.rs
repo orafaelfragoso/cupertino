@@ -6,10 +6,17 @@
 //! sheet is visible, sends it the quit event, and gives it 45 s before the interrupt panel shows; the next application
 //! follows 0.1 s after one quits. The timers are the agent's; this side does the Wayland part:
 //!
+//! Every mutating method checks its caller ([`crate::caller`]): the process behind the connection, from the bus
+//! daemon's `ProcessFD`. `QuitNextApplication` and `ForceQuitApplication` are for the session agent the server
+//! supervises; `SetAppearance` and `SetAccessibility` for the settings application (a known program under `/usr`) and
+//! that agent. A caller without a process descriptor, a Flatpak or a Snap is refused, with an error name of its own
+//! (`org.cupertino.Session1.Error.AnonymousCaller`, `.FlatpakCaller`, `.SnapCaller`; `.UntrustedCaller` for any other
+//! process), and every refusal is logged. The properties are open to every caller.
+//!
 //! | Member | What it does |
 //! |---|---|
 //! | `QuitNextApplication -> (s app_id, u windows)` | activates the most recently used application that has toplevels and sends `close` to each of them (`xdg_toplevel.close`); `("", 0) when no application has a window |
-//! | `ForceQuitApplication(s app_id) -> u` | sends SIGKILL to the client processes of that application's toplevels, by the rules of Force Quit; returns how many processes. Only a shell process the server started (the session agent) may call it; any other caller gets `AccessDenied` |
+//! | `ForceQuitApplication(s app_id) -> u` | sends SIGKILL to the client processes of that application's toplevels, by the rules of Force Quit; returns how many processes. Only the session agent may call it |
 //! | `ApplicationQuit(s app_id) signal | the last toplevel of the application being quit went away |
 //! | `SetAppearance(s appearance)` | `light` or `dark`: stored as `appearance` in `compositor.json`, then applied at once; `auto` is refused with `NotSupported` (no time-of-day or location backend), anything else with `InvalidArgs`; a failed store, or no settings directory to store in, changes nothing (`Failed`) |
 //! | `SetAccessibility(s key, s value)` | one key of `accessibility.conf` with a value as the file writes it (`reduce_motion` `on`, `color_filter` `tint 0.5`, ...): applied and stored like the key actions; an unknown key or bad value is `InvalidArgs` |
@@ -26,6 +33,8 @@ use std::sync::{Arc, Mutex};
 use smithay::reexports::calloop::channel::{self, Event};
 use zbus::object_server::SignalEmitter;
 
+use crate::authorization::ShellRole;
+use crate::caller::{identify, Caller, Denial, Need, Sandbox};
 use crate::state::Cupertino;
 use cupertino_wm::{AppId, Command};
 
@@ -83,13 +92,25 @@ pub enum Refusal {
     Failed(String),
 }
 
-/// A call that arrived on the bus, with where its answer goes.
+/// Why a call was not carried out.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Reject {
+    Caller(Denial),
+    Refusal(Refusal),
+}
+
+/// A call that arrived on the bus, with its caller and where its answer goes.
 pub enum Call {
-    QuitNext(async_channel::Sender<(String, u32)>),
-    /// The application, the process id of the caller, and the answer (`None`: the caller may not force quit).
-    ForceQuit(String, Option<u32>, async_channel::Sender<Option<u32>>),
-    SetAppearance(String, async_channel::Sender<Result<(), Refusal>>),
-    SetAccessibility(String, String, async_channel::Sender<Result<(), Refusal>>),
+    QuitNext(Caller, async_channel::Sender<Result<(String, u32), Reject>>),
+    /// The application to force quit.
+    ForceQuit(String, Caller, async_channel::Sender<Result<u32, Reject>>),
+    SetAppearance(String, Caller, async_channel::Sender<Result<(), Reject>>),
+    SetAccessibility(
+        String,
+        String,
+        Caller,
+        async_channel::Sender<Result<(), Reject>>,
+    ),
 }
 
 impl Cupertino {
@@ -171,21 +192,46 @@ impl Cupertino {
         processes.len() as u32
     }
 
-    /// `ForceQuitApplication` from the bus: only for a shell process the server started (the session agent).
+    /// Whether `exe` is the settings application: the one under an install root, or by name in a development run.
+    fn is_settings_program(&self, exe: &std::path::Path) -> bool {
+        if self.config.dev_shell {
+            exe.file_name().is_some_and(|n| n == "cupertino-settings")
+        } else {
+            crate::config::installed_roots().any(|root| exe == root.join("bin/cupertino-settings"))
+        }
+    }
+
+    /// Judge the caller of `method` ([`Caller::authorize`]); a refusal is logged with the caller's process and kind,
+    /// never with the arguments.
+    pub fn authorize_call(
+        &self,
+        method: &'static str,
+        caller: &Caller,
+        need: Need,
+    ) -> Result<(), Denial> {
+        let agents = self.supervisor.pids_with_role(ShellRole::SessionLock);
+        let decision = crate::caller::authorize(caller, need, &agents, std::process::id(), |exe| {
+            self.is_settings_program(exe)
+        });
+        if let Err(denial) = decision {
+            tracing::warn!(
+                method,
+                pid = caller.pid(),
+                ?denial,
+                "session interface: the caller is refused"
+            );
+        }
+        decision
+    }
+
+    /// `ForceQuitApplication` from the bus: only for the session agent.
     pub fn force_quit_application_for(
         &mut self,
-        caller: Option<u32>,
+        caller: &Caller,
         identity: &str,
-    ) -> Option<u32> {
-        if !caller.is_some_and(|pid| self.supervisor.pids().contains(&pid)) {
-            tracing::warn!(
-                caller,
-                app = identity,
-                "log out: force quit refused to a caller that is not a shell process"
-            );
-            return None;
-        }
-        Some(self.force_quit_application(identity))
+    ) -> Result<u32, Denial> {
+        self.authorize_call("ForceQuitApplication", caller, Need::SessionAgent)?;
+        Ok(self.force_quit_application(identity))
     }
 
     /// Announce the end of the application being quit once its last toplevel is gone; called from [`Cupertino::tick`].
@@ -290,18 +336,41 @@ impl Cupertino {
         Ok(())
     }
 
-    fn on_quit_call(&mut self, call: Call) {
+    pub fn on_quit_call(&mut self, call: Call) {
         // a caller that went away before the answer is not an error of ours
         match call {
-            Call::QuitNext(reply) => drop(reply.try_send(self.quit_next_application())),
+            Call::QuitNext(caller, reply) => {
+                let answer = self
+                    .authorize_call("QuitNextApplication", &caller, Need::SessionAgent)
+                    .map(|()| self.quit_next_application())
+                    .map_err(Reject::Caller);
+                let _ = reply.try_send(answer);
+            }
             Call::ForceQuit(identity, caller, reply) => {
-                let _ = reply.try_send(self.force_quit_application_for(caller, &identity));
+                let answer = self
+                    .force_quit_application_for(&caller, &identity)
+                    .map_err(Reject::Caller);
+                let _ = reply.try_send(answer);
             }
-            Call::SetAppearance(appearance, reply) => {
-                let _ = reply.try_send(self.set_session_appearance(&appearance));
+            Call::SetAppearance(appearance, caller, reply) => {
+                let answer = self
+                    .authorize_call("SetAppearance", &caller, Need::SettingsClient)
+                    .map_err(Reject::Caller)
+                    .and_then(|()| {
+                        self.set_session_appearance(&appearance)
+                            .map_err(Reject::Refusal)
+                    });
+                let _ = reply.try_send(answer);
             }
-            Call::SetAccessibility(key, value, reply) => {
-                let _ = reply.try_send(self.set_session_accessibility(&key, &value));
+            Call::SetAccessibility(key, value, caller, reply) => {
+                let answer = self
+                    .authorize_call("SetAccessibility", &caller, Need::SettingsClient)
+                    .map_err(Reject::Caller)
+                    .and_then(|()| {
+                        self.set_session_accessibility(&key, &value)
+                            .map_err(Reject::Refusal)
+                    });
+                let _ = reply.try_send(answer);
             }
         }
     }
@@ -313,19 +382,51 @@ struct Session1 {
     settings: Arc<Mutex<SessionSettings>>,
 }
 
-fn refused(r: Refusal) -> zbus::fdo::Error {
-    match r {
-        Refusal::InvalidArgs(m) => zbus::fdo::Error::InvalidArgs(m),
-        Refusal::NotSupported(m) => zbus::fdo::Error::NotSupported(m),
-        Refusal::Failed(m) => zbus::fdo::Error::Failed(m),
+/// What a call of the session interface fails with: the standard errors, and one name for each way a caller is refused.
+#[derive(Debug, zbus::DBusError)]
+#[zbus(prefix = "org.cupertino.Session1.Error")]
+enum CallError {
+    #[zbus(error)]
+    ZBus(zbus::Error),
+    AnonymousCaller(String),
+    FlatpakCaller(String),
+    SnapCaller(String),
+    UntrustedCaller(String),
+}
+
+impl From<zbus::fdo::Error> for CallError {
+    fn from(e: zbus::fdo::Error) -> Self {
+        CallError::ZBus(e.into())
+    }
+}
+
+impl From<Reject> for CallError {
+    fn from(reject: Reject) -> Self {
+        match reject {
+            Reject::Caller(Denial::Anonymous) => {
+                CallError::AnonymousCaller("the bus gave no process for this caller".into())
+            }
+            Reject::Caller(Denial::Sandboxed(Sandbox::Flatpak)) => {
+                CallError::FlatpakCaller("a Flatpak may not use this method".into())
+            }
+            Reject::Caller(Denial::Sandboxed(Sandbox::Snap)) => {
+                CallError::SnapCaller("a Snap may not use this method".into())
+            }
+            Reject::Caller(Denial::Untrusted) => {
+                CallError::UntrustedCaller("this process may not use this method".into())
+            }
+            Reject::Refusal(Refusal::InvalidArgs(m)) => zbus::fdo::Error::InvalidArgs(m).into(),
+            Reject::Refusal(Refusal::NotSupported(m)) => zbus::fdo::Error::NotSupported(m).into(),
+            Reject::Refusal(Refusal::Failed(m)) => zbus::fdo::Error::Failed(m).into(),
+        }
     }
 }
 
 impl Session1 {
     async fn ask<T>(
         &self,
-        make: impl FnOnce(async_channel::Sender<T>) -> Call,
-    ) -> zbus::fdo::Result<T> {
+        make: impl FnOnce(async_channel::Sender<Result<T, Reject>>) -> Call,
+    ) -> Result<T, CallError> {
         let (tx, rx) = async_channel::bounded(1);
         self.calls
             .lock()
@@ -334,14 +435,28 @@ impl Session1 {
             .map_err(|_| zbus::fdo::Error::Failed("the compositor is shutting down".into()))?;
         rx.recv()
             .await
-            .map_err(|_| zbus::fdo::Error::Failed("the compositor dropped the call".into()))
+            .map_err(|_| zbus::fdo::Error::Failed("the compositor dropped the call".into()))?
+            .map_err(CallError::from)
+    }
+}
+
+/// The caller of a method, from the header of its message.
+async fn caller_of(header: &zbus::message::Header<'_>, connection: &zbus::Connection) -> Caller {
+    match header.sender() {
+        Some(sender) => identify(connection, sender).await,
+        None => Caller::Anonymous,
     }
 }
 
 #[zbus::interface(name = "org.cupertino.Session1")]
 impl Session1 {
-    async fn quit_next_application(&self) -> zbus::fdo::Result<(String, u32)> {
-        self.ask(Call::QuitNext).await
+    async fn quit_next_application(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(String, u32), CallError> {
+        let caller = caller_of(&header, connection).await;
+        self.ask(|tx| Call::QuitNext(caller, tx)).await
     }
 
     async fn force_quit_application(
@@ -349,32 +464,32 @@ impl Session1 {
         app_id: String,
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
-    ) -> zbus::fdo::Result<u32> {
-        let caller = match header.sender() {
-            Some(sender) => zbus::fdo::DBusProxy::new(connection)
-                .await?
-                .get_connection_unix_process_id(sender.clone().into())
-                .await
-                .ok(),
-            None => None,
-        };
-        self.ask(|tx| Call::ForceQuit(app_id, caller, tx))
-            .await?
-            .ok_or_else(|| {
-                zbus::fdo::Error::AccessDenied("only the session agent may force quit".into())
-            })
+    ) -> Result<u32, CallError> {
+        let caller = caller_of(&header, connection).await;
+        self.ask(|tx| Call::ForceQuit(app_id, caller, tx)).await
     }
 
-    async fn set_appearance(&self, appearance: String) -> zbus::fdo::Result<()> {
-        self.ask(|tx| Call::SetAppearance(appearance, tx))
-            .await?
-            .map_err(refused)
+    async fn set_appearance(
+        &self,
+        appearance: String,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallError> {
+        let caller = caller_of(&header, connection).await;
+        self.ask(|tx| Call::SetAppearance(appearance, caller, tx))
+            .await
     }
 
-    async fn set_accessibility(&self, key: String, value: String) -> zbus::fdo::Result<()> {
-        self.ask(|tx| Call::SetAccessibility(key, value, tx))
-            .await?
-            .map_err(refused)
+    async fn set_accessibility(
+        &self,
+        key: String,
+        value: String,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallError> {
+        let caller = caller_of(&header, connection).await;
+        self.ask(|tx| Call::SetAccessibility(key, value, caller, tx))
+            .await
     }
 
     #[zbus(property)]

@@ -971,6 +971,7 @@ dependencies = [
  "cupertino-decorations",
  "cupertino-geometry",
  "cupertino-login-ipc",
+ "cupertino-peer",
  "cupertino-seat",
  "cupertino-theme",
  "libc",
@@ -1059,6 +1060,7 @@ dependencies = [
  "cupertino-decorations",
  "cupertino-geometry",
  "cupertino-icons",
+ "cupertino-peer",
  "cupertino-theme",
  "serde",
  "tiny-skia",
@@ -1071,6 +1073,16 @@ version = "0.1.0"
 dependencies = [
  "cupertino-animation",
  "cupertino-wm",
+]
+
+[[package]]
+name = "cupertino-peer"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tempfile",
+ "tracing",
+ "zbus",
 ]
 
 [[package]]
@@ -1152,6 +1164,7 @@ dependencies = [
  "cupertino-input",
  "cupertino-keyboard",
  "cupertino-overview",
+ "cupertino-peer",
  "cupertino-protocols",
  "cupertino-seat",
  "cupertino-stage",

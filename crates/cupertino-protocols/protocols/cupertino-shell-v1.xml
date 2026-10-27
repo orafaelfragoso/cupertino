@@ -10,14 +10,15 @@
      ends: interfaces may change without a version bump until then.
   </description>
 
-  <interface name="cupertino_shell_v1" version="5">
+  <interface name="cupertino_shell_v1" version="6">
     <description summary="shell services of the server">
       Global singleton, offered only to the processes the server started for a shell role, on a
       connection of their own. Each request needs the role it creates: a connection that holds
       other roles, or none, gets the permission error. Version 2 adds the display options of the
       session object, version 3 the screen capture state of the menu bar object. Version 5 moves
       the backdrops and the title bar style of application windows to the public
-      cupertino_app_effects_v1 protocol, which any client may use, and removes their requests here.
+      cupertino_app_effects_v1 protocol, which any client may use, and removes their requests here. Version 6 adds the
+      session_action request of the menu bar object.
     </description>
 
     <request name="destroy" type="destructor">
@@ -253,7 +254,7 @@
     </event>
   </interface>
 
-  <interface name="cupertino_menu_bar_v1" version="3">
+  <interface name="cupertino_menu_bar_v1" version="4">
     <description summary="the menu bar of one output">
       Events describe the active application and the menus its active window exports. They
       come in groups ended by a done event; the client applies a group at once. The first group
@@ -356,6 +357,7 @@
 
     <enum name="error">
       <entry name="invalid_command" value="0" summary="the window_command value is not an entry of the command enum"/>
+      <entry name="invalid_session_action" value="1" summary="the session_action value is not an entry of the session_action enum"/>
     </enum>
 
     <request name="move_to_workspace">
@@ -363,6 +365,25 @@
         1-based workspace index.
       </description>
       <arg name="workspace" type="uint"/>
+    </request>
+
+    <enum name="session_action" since="4">
+      <entry name="sleep" value="0" summary="put the computer to sleep without asking"/>
+      <entry name="restart" value="1" summary="ask whether to restart"/>
+      <entry name="shut_down" value="2" summary="ask whether to shut down"/>
+      <entry name="lock" value="3" summary="lock the session on the person's request"/>
+      <entry name="log_out" value="4" summary="ask whether to log out"/>
+      <entry name="switch_user" value="5" summary="lock the session and show the login window"/>
+      <entry name="refresh_capabilities" value="6" summary="read again what the session menu may offer"/>
+    </enum>
+
+    <request name="session_action" since="4">
+      <description summary="an entry of the session menu was chosen">
+        The server asks the session agent on the menu bar's behalf: the agent answers only the
+        server and the process itself, so a shell process cannot reach it directly. The result
+        shows in the agent's properties.
+      </description>
+      <arg name="action" type="uint" enum="session_action"/>
     </request>
   </interface>
 

@@ -259,6 +259,7 @@ pub const TARGET: &[(&str, Layer)] = &[
     ("cupertino-notifications", Shell),
     ("cupertino-osd", Shell),
     ("cupertino-overview", Models),
+    ("cupertino-peer", Platform),
     ("cupertino-powerd", Services),
     ("cupertino-protocols", Protocol),
     ("cupertino-screenshot", Shell),

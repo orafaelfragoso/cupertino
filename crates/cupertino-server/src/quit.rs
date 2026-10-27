@@ -24,7 +24,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use smithay::reexports::calloop::channel::{self, Event};
-use smithay::reexports::wayland_server::Resource;
 use zbus::object_server::SignalEmitter;
 
 use crate::state::Cupertino;
@@ -154,43 +153,21 @@ impl Cupertino {
         (identity, windows)
     }
 
-    /// `ForceQuitApplication`: SIGKILL the processes behind the application's toplevels.
+    /// `ForceQuitApplication`: SIGKILL the processes behind the application's toplevels, by the same rules as Force Quit.
     pub fn force_quit_application(&mut self, identity: &str) -> u32 {
         let Some(app) = self.wm.app_for_identity(identity) else {
             return 0;
         };
-        let mut pids: Vec<u32> = Vec::new();
-        for entry in self
-            .windows
-            .iter()
-            .filter(|e| self.wm.window(e.id).is_some_and(|w| w.app == app))
-        {
-            let pid = entry
-                .surface()
-                .client()
-                .and_then(|c| c.get_credentials(&self.display_handle).ok())
-                .map(|c| c.pid as u32);
-            match pid {
-                Some(pid) if !pids.contains(&pid) => pids.push(pid),
-                Some(_) => {}
-                None => tracing::warn!(
-                    app = identity,
-                    "a window of the application has no known process"
-                ),
-            }
-        }
-        for pid in &pids {
-            // Safety: kill(2) with a pid read from the client's socket credentials.
-            if unsafe { libc::kill(*pid as libc::pid_t, libc::SIGKILL) } != 0 {
-                tracing::warn!(app = identity, pid, error = %std::io::Error::last_os_error(), "force quit failed");
-            }
+        let processes = self.app_processes(app, identity);
+        for (_, process) in &processes {
+            (self.send_signal)(process, crate::force_quit::SIGKILL);
         }
         tracing::info!(
             app = identity,
-            processes = pids.len(),
+            processes = processes.len(),
             "log out: force quit"
         );
-        pids.len() as u32
+        processes.len() as u32
     }
 
     /// Announce the end of the application being quit once its last toplevel is gone; called from [`Cupertino::tick`].

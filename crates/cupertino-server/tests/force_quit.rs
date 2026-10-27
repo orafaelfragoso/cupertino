@@ -123,6 +123,25 @@ fn an_application_that_answers_is_sent_sigterm_and_sigkill_three_seconds_later()
 }
 
 #[test]
+fn log_out_force_quits_through_the_same_rules() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_client, _id) = mapped_window(&mut h);
+    let sent = record_signals(&mut h);
+
+    assert_eq!(h.state.force_quit_application(APP), 1);
+    assert_eq!(*sent.borrow(), vec![(std::process::id(), 9)]);
+
+    sent.borrow_mut().clear();
+    h.state.force_quits.own_pid = std::process::id();
+    assert_eq!(
+        h.state.force_quit_application(APP),
+        0,
+        "the server's own process"
+    );
+    assert_eq!(*sent.borrow(), vec![]);
+}
+
+#[test]
 fn an_application_that_does_not_answer_is_killed_at_once() {
     let Some(mut h) = Harness::new() else { return };
     let (client, id) = mapped_window(&mut h);

@@ -238,22 +238,7 @@ impl Settings {
     /// Store the resolution `dpi` of the mouse `key` in `compositor.json` over the file as it is now, so a key the
     /// server wrote since the last read (the appearance) is not put back; on a failure the settings stay as they were.
     pub fn set_mouse_dpi(&mut self, paths: &Paths, key: &str, dpi: u32) -> Result<(), String> {
-        let before = self.clone();
-        let outcome = self
-            .reload(paths)
-            .map_err(|e| {
-                eprintln!("cupertino-settings: the settings could not be read: {e}");
-                "The settings could not be read.".to_string()
-            })
-            .and_then(|()| self.compositor.set_mouse_dpi(key, Some(dpi)))
-            .and_then(|()| {
-                self.store(paths, File::Compositor)
-                    .map_err(|e| e.to_string())
-            });
-        if outcome.is_err() {
-            *self = before;
-        }
-        outcome
+        self.rewrite_compositor(paths, |c| c.set_mouse_dpi(key, Some(dpi)))
     }
 
     /// Change `compositor.json` over the file as it is now, so a key another writer set since the last read is not put
@@ -261,7 +246,9 @@ impl Settings {
     pub fn rewrite_compositor(
         &mut self,
         paths: &Paths,
-        change: impl FnOnce(&mut cupertino_defaults::compositor::CompositorSettings),
+        change: impl FnOnce(
+            &mut cupertino_defaults::compositor::CompositorSettings,
+        ) -> Result<(), String>,
     ) -> Result<(), String> {
         let before = self.clone();
         let outcome = self
@@ -270,8 +257,8 @@ impl Settings {
                 eprintln!("cupertino-settings: the settings could not be read: {e}");
                 "The settings could not be read.".to_string()
             })
+            .and_then(|()| change(&mut self.compositor))
             .and_then(|()| {
-                change(&mut self.compositor);
                 self.store(paths, File::Compositor)
                     .map_err(|e| e.to_string())
             });
@@ -293,6 +280,7 @@ impl Settings {
             if !folders.contains(&folder) {
                 folders.push(folder);
             }
+            Ok(())
         })
     }
 
@@ -306,6 +294,7 @@ impl Settings {
         self.rewrite_compositor(paths, |c| {
             c.wallpaper = Some(picture);
             c.wallpaper_dark = None;
+            Ok(())
         })
     }
 

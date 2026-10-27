@@ -191,6 +191,11 @@ impl Browser {
         }
     }
 
+    /// A search is shown, the folder has been read and nothing matches it: the view says "No Results".
+    pub fn no_results(&self) -> bool {
+        self.filter.is_some() && self.item_count() == 0 && !self.model.is_loading()
+    }
+
     /// Show only the items whose names contain `query`, ignoring case, as a flat list; an empty query shows the folder
     /// again. approximate: the design's search field searches the whole computer by default; this one filters the
     /// folder shown. The selection stays on the items still shown.
@@ -1210,5 +1215,43 @@ mod tests {
         b.set_filter("notes");
         b.go(d.path().join("Projects")).unwrap();
         assert_eq!(b.filter(), None);
+    }
+
+    #[test]
+    fn a_search_with_no_match_says_no_results_once_the_folder_is_read_and_an_empty_folder_without_a_search_does_not(
+    ) {
+        let d = tree();
+        let mut b = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            unused_recents(),
+            None,
+            quiet(),
+        )
+        .unwrap();
+        assert!(!b.no_results(), "no search, nothing to report");
+        pump(&mut b, "the listing", |b| b.entries().len() == 4);
+        b.set_filter("zzz-no-such-name");
+        assert!(b.no_results());
+        b.set_filter("file");
+        assert!(!b.no_results(), "something matches");
+        b.set_filter("");
+        assert!(!b.no_results());
+        let empty = tempfile::tempdir().unwrap();
+        let mut e = Browser::open(
+            empty.path().to_path_buf(),
+            SortSpec::default(),
+            unused_recents(),
+            None,
+            quiet(),
+        )
+        .unwrap();
+        pump(&mut e, "the empty listing", |e| !e.model.is_loading());
+        assert!(
+            !e.no_results(),
+            "an empty folder without a search is just empty"
+        );
+        e.set_filter("a");
+        assert!(e.no_results());
     }
 }

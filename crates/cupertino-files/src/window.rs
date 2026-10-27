@@ -210,6 +210,60 @@ pub enum Hit {
     Chrome,
 }
 
+/// The width of the toolbar search field: its resting width, or [`window::SEARCH_GROWTH`] times that while it has the keyboard
+/// or holds text, changing in [`window::SEARCH_GROW_SECONDS`] with an ease-out.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SearchWidth {
+    from: f64,
+    to: f64,
+    start: f64,
+    open: bool,
+}
+
+impl Default for SearchWidth {
+    fn default() -> Self {
+        let rest = window::TOOLBAR_SEARCH_FIELD.0;
+        SearchWidth {
+            from: rest,
+            to: rest,
+            start: 0.0,
+            open: false,
+        }
+    }
+}
+
+impl SearchWidth {
+    /// The field wants to be open (`open`) or at rest at `now` seconds. Without `animate` (reduce motion) the width
+    /// changes at once; a change in mid-flight starts from the width shown.
+    pub fn set_open(&mut self, open: bool, now: f64, animate: bool) {
+        if open == self.open {
+            return;
+        }
+        let rest = window::TOOLBAR_SEARCH_FIELD.0;
+        let shown = self.width(now);
+        self.open = open;
+        self.to = if open {
+            rest * window::SEARCH_GROWTH
+        } else {
+            rest
+        };
+        self.from = if animate { shown } else { self.to };
+        self.start = now;
+    }
+
+    /// The width at `now` seconds.
+    pub fn width(&self, now: f64) -> f64 {
+        let t = ((now - self.start) / window::SEARCH_GROW_SECONDS).clamp(0.0, 1.0);
+        let eased = 1.0 - (1.0 - t).powi(3);
+        self.from + (self.to - self.from) * eased
+    }
+
+    /// The width is still changing at `now`.
+    pub fn animating(&self, now: f64) -> bool {
+        self.from != self.to && now - self.start < window::SEARCH_GROW_SECONDS - 1e-9
+    }
+}
+
 /// The fixed parts of the window for a size.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowLayout {
@@ -235,6 +289,16 @@ pub struct WindowLayout {
 
 impl WindowLayout {
     pub fn new(size: Size, places: &[Place], bars: Bars) -> Self {
+        Self::with_search(size, places, bars, window::TOOLBAR_SEARCH_FIELD.0)
+    }
+
+    /// [`WindowLayout::new`] with the search field `search_width` wide: it grows to the left, and the toolbar drops items
+    /// as it does for a narrow window when they no longer fit.
+    pub fn with_search(size: Size, places: &[Place], bars: Bars, search_width: f64) -> Self {
+        let item_size = |item: ToolbarItem| match item {
+            ToolbarItem::Search => (search_width, window::TOOLBAR_SEARCH_FIELD.1),
+            other => other.size(),
+        };
         // the sidebar gives way to the browser minimum down to its own minimum
         let sidebar_w = (size.w - m::SEPARATOR - m::BROWSER_MIN.0)
             .clamp(m::SIDEBAR_MIN, sidebar::DEFAULT_WIDTH);
@@ -258,7 +322,7 @@ impl WindowLayout {
         let forward = Rect::new(back.right(), control_y, bw / 2.0, bh);
         let title_x = forward.right() + m::TITLE_GAP;
         let width = |shown: &[ToolbarItem]| {
-            shown.iter().map(|i| i.size().0).sum::<f64>()
+            shown.iter().map(|i| item_size(*i).0).sum::<f64>()
                 + shown.len().saturating_sub(1) as f64 * m::ITEM_GAP
         };
         let room =
@@ -276,7 +340,7 @@ impl WindowLayout {
             .iter()
             .rev()
             .map(|&item| {
-                let (w, h) = item.size();
+                let (w, h) = item_size(item);
                 x -= w;
                 let r = Rect::new(x, (m::TOOLBAR_HEIGHT - h) / 2.0, w, h);
                 x -= m::ITEM_GAP;
@@ -552,6 +616,9 @@ const TOOLBAR_GLYPH: f64 = 13.0;
 /// The up-down chevrons of the view popup, the search field's text size and its focus ring. approximate.
 const POPUP_CHEVRON_GLYPH: f64 = 9.0;
 const SEARCH_TEXT_SIZE: f64 = 13.0;
+/// The words and the size of the message of a search without a match. approximate.
+const NO_RESULTS: &str = "No Results";
+const NO_RESULTS_SIZE: f64 = 17.0;
 /// The most bytes the toolbar search holds.
 pub const SEARCH_MAX_LEN: usize = 1024;
 const SEARCH_RING: f64 = 2.0;
@@ -797,6 +864,7 @@ impl WindowPainter {
         size: Size,
         places: &[Place],
         bars: Bars,
+        search_width: f64,
         dir: &Path,
         mode: ViewMode,
         outline: &[RowSpec],
@@ -804,7 +872,7 @@ impl WindowPainter {
         scale: f32,
     ) -> Frame {
         self.renderer.text.set_scale(scale);
-        let window = WindowLayout::new(size, places, bars);
+        let window = WindowLayout::with_search(size, places, bars, search_width);
         let path = match &window.path_bar {
             Some(bar) => {
                 let chain = path_chain(dir, places);
@@ -939,6 +1007,9 @@ impl WindowPainter {
             Transform::identity(),
             None,
         );
+        if state.browser.no_results() {
+            self.paint_no_results(pm, scale, &w.content, state.mode, pal);
+        }
         if let Some(target) = state.drop_target.and_then(|i| frame.item_frame(i)) {
             let outline = [
                 pal.accent[0],
@@ -974,6 +1045,35 @@ impl WindowPainter {
         if let Some(edit) = state.edit {
             self.paint_editor(pm, scale, frame, edit, state, pal);
         }
+    }
+
+    /// "No Results" centred in the content area (below the list header in the list view), in the secondary label colour.
+    fn paint_no_results(
+        &mut self,
+        pm: &mut Pixmap,
+        scale: f32,
+        content: &Rect,
+        mode: ViewMode,
+        pal: &Palette,
+    ) {
+        let px = NO_RESULTS_SIZE as f32 * scale;
+        let width = self.renderer.text.measure(NO_RESULTS, px, 400, 0.0);
+        let top = if mode == ViewMode::List {
+            list_view::HEADER_HEIGHT
+        } else {
+            0.0
+        };
+        let centre_y = content.y + top + (content.h - top) / 2.0;
+        self.renderer.text.draw(
+            pm,
+            NO_RESULTS,
+            content.center().x as f32 * scale - width / 2.0,
+            centre_y as f32 * scale + px * 0.36,
+            px,
+            400,
+            0.0,
+            pal.secondary_text,
+        );
     }
 
     /// The path bar on the content background and the status bar on the toolbar's fill, each under a separator (the
@@ -1752,6 +1852,7 @@ mod tests {
             size,
             &places(),
             Bars::HIDDEN,
+            window::TOOLBAR_SEARCH_FIELD.0,
             Path::new("/home/ada"),
             ViewMode::Icons,
             &rows(&items),
@@ -1804,6 +1905,7 @@ mod tests {
             size,
             &places(),
             Bars::HIDDEN,
+            window::TOOLBAR_SEARCH_FIELD.0,
             Path::new("/home/ada"),
             ViewMode::List,
             &rows(&items),
@@ -1839,6 +1941,7 @@ mod tests {
             Size { w: 920.0, h: 436.0 },
             &places(),
             Bars::HIDDEN,
+            window::TOOLBAR_SEARCH_FIELD.0,
             Path::new("/home/ada"),
             ViewMode::List,
             &rows(&items),
@@ -1875,6 +1978,7 @@ mod tests {
                 size,
                 &places(),
                 Bars::HIDDEN,
+                window::TOOLBAR_SEARCH_FIELD.0,
                 Path::new("/home/ada"),
                 ViewMode::List,
                 &rows(&items),
@@ -1896,6 +2000,7 @@ mod tests {
                 size,
                 &places(),
                 Bars::HIDDEN,
+                window::TOOLBAR_SEARCH_FIELD.0,
                 Path::new("/home/ada"),
                 ViewMode::Icons,
                 &rows(&items),
@@ -1947,6 +2052,7 @@ mod tests {
             size,
             &places,
             Bars::HIDDEN,
+            window::TOOLBAR_SEARCH_FIELD.0,
             Path::new("/home/ada"),
             ViewMode::Icons,
             browser.outline(),
@@ -2019,6 +2125,7 @@ mod tests {
                 size,
                 &places(),
                 Bars::HIDDEN,
+                window::TOOLBAR_SEARCH_FIELD.0,
                 Path::new("/home/ada"),
                 mode,
                 &rows(&items),
@@ -2029,6 +2136,7 @@ mod tests {
                 size,
                 &places(),
                 Bars::HIDDEN,
+                window::TOOLBAR_SEARCH_FIELD.0,
                 Path::new("/home/ada"),
                 mode,
                 &rows(&items),
@@ -2088,6 +2196,7 @@ mod tests {
             size,
             &places,
             Bars::HIDDEN,
+            window::TOOLBAR_SEARCH_FIELD.0,
             Path::new("/home/ada"),
             ViewMode::Icons,
             &rows(&entries),
@@ -2122,6 +2231,7 @@ mod tests {
             size,
             &places,
             Bars::HIDDEN,
+            window::TOOLBAR_SEARCH_FIELD.0,
             Path::new("/home/ada"),
             ViewMode::List,
             &rows(&entries),
@@ -2158,6 +2268,7 @@ mod tests {
             size,
             &places,
             Bars::HIDDEN,
+            window::TOOLBAR_SEARCH_FIELD.0,
             Path::new("/home/ada"),
             ViewMode::Icons,
             browser.outline(),
@@ -2192,6 +2303,7 @@ mod tests {
             size,
             &places,
             Bars::HIDDEN,
+            window::TOOLBAR_SEARCH_FIELD.0,
             Path::new("/home/ada"),
             ViewMode::List,
             browser.outline(),
@@ -2473,6 +2585,7 @@ mod tests {
                 path: true,
                 status: true,
             },
+            window::TOOLBAR_SEARCH_FIELD.0,
             Path::new("/home/ada/Desktop"),
             ViewMode::List,
             &rows(&items),
@@ -2580,6 +2693,7 @@ mod tests {
                 path: true,
                 status: true,
             },
+            window::TOOLBAR_SEARCH_FIELD.0,
             d.path(),
             ViewMode::List,
             browser.outline(),
@@ -2639,6 +2753,7 @@ mod tests {
             Size { w: 920.0, h: 436.0 },
             &places,
             Bars::HIDDEN,
+            window::TOOLBAR_SEARCH_FIELD.0,
             d.path(),
             ViewMode::List,
             browser.outline(),
@@ -2748,6 +2863,7 @@ mod tests {
                 size,
                 &places,
                 Bars::HIDDEN,
+                window::TOOLBAR_SEARCH_FIELD.0,
                 d.path(),
                 mode,
                 browser.outline(),
@@ -2823,6 +2939,7 @@ mod tests {
                     Size { w: 600.0, h: 300.0 },
                     &places,
                     Bars::HIDDEN,
+                    window::TOOLBAR_SEARCH_FIELD.0,
                     d.path(),
                     mode,
                     browser.outline(),
@@ -2865,6 +2982,197 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn the_search_field_opens_with_an_ease_out_to_two_and_a_half_times_its_rest_width_and_closes_back(
+    ) {
+        let rest = window::TOOLBAR_SEARCH_FIELD.0;
+        let open = rest * window::SEARCH_GROWTH;
+        let mut field = SearchWidth::default();
+        assert_eq!(field.width(0.0), rest);
+        assert!(!field.animating(0.0));
+        field.set_open(true, 10.0, true);
+        assert_eq!(field.width(10.0), rest, "it starts at rest");
+        let half = field.width(10.0 + window::SEARCH_GROW_SECONDS / 2.0);
+        assert!(
+            half > rest + (open - rest) / 2.0 && half < open,
+            "ease-out: more than half way at half the time, got {half}"
+        );
+        assert!(field.animating(10.05));
+        assert_eq!(field.width(10.0 + window::SEARCH_GROW_SECONDS), open);
+        assert!(!field.animating(10.0 + window::SEARCH_GROW_SECONDS));
+        // closing in mid-flight starts from the width shown
+        field.set_open(false, 11.0, true);
+        let shown = field.width(11.0);
+        assert_eq!(shown, open);
+        field.set_open(true, 11.1, true);
+        field.set_open(false, 11.15, true);
+        assert!(field.width(11.15) > rest && field.width(11.15) < open);
+        assert_eq!(field.width(11.15 + window::SEARCH_GROW_SECONDS), rest);
+        // reduce motion: at once
+        let mut still = SearchWidth::default();
+        still.set_open(true, 5.0, false);
+        assert_eq!(still.width(5.0), open);
+        assert!(!still.animating(5.0));
+    }
+
+    #[test]
+    fn a_wider_search_field_grows_to_the_left_and_the_toolbar_never_overlaps_its_neighbours() {
+        let places = places();
+        let rest = window::TOOLBAR_SEARCH_FIELD.0;
+        let open = rest * window::SEARCH_GROWTH;
+        for width in [920.0, 700.0, 560.0, 480.0] {
+            let size = Size { w: width, h: 436.0 };
+            let at_rest = WindowLayout::with_search(size, &places, Bars::HIDDEN, rest);
+            let wide = WindowLayout::with_search(size, &places, Bars::HIDDEN, open);
+            let search = |l: &WindowLayout| {
+                l.items
+                    .iter()
+                    .find(|(i, _)| *i == ToolbarItem::Search)
+                    .map(|(_, r)| *r)
+            };
+            if let (Some(a), Some(b)) = (search(&at_rest), search(&wide)) {
+                assert_eq!(
+                    a.right(),
+                    b.right(),
+                    "it grows to the left from the same right edge ({width})"
+                );
+                assert_eq!(b.w, open);
+            }
+            for l in [&at_rest, &wide] {
+                for pair in l.items.windows(2) {
+                    assert!(
+                        pair[0].1.right() <= pair[1].1.x,
+                        "items do not overlap ({width})"
+                    );
+                }
+                if let Some((_, first)) = l.items.first() {
+                    assert!(
+                        l.title.right() <= first.x,
+                        "the title stays clear of the items ({width})"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            WindowLayout::new(Size { w: 920.0, h: 436.0 }, &places, Bars::HIDDEN),
+            WindowLayout::with_search(Size { w: 920.0, h: 436.0 }, &places, Bars::HIDDEN, rest),
+            "new is the layout at rest"
+        );
+    }
+
+    #[test]
+    fn a_search_without_a_match_draws_no_results_in_the_middle_of_the_content_and_a_match_does_not()
+    {
+        let (_d, mut browser, places, mut painter, frame) = search_window(1.0);
+        let mut search = TextField::with_max_len(SEARCH_MAX_LEN);
+        search.insert("zzz-nothing");
+        let content = frame.window.content;
+        let centre = |pm: &Pixmap| {
+            let (cx, cy) = (
+                content.center().x as u32,
+                (content.y + content.h / 2.0) as u32,
+            );
+            let corner = pm.pixel(cx - 60, cy - 14).unwrap();
+            (cx - 60..cx + 60)
+                .flat_map(|x| (cy - 14..cy + 14).map(move |y| (x, y)))
+                .any(|(x, y)| pm.pixel(x, y).unwrap() != corner)
+        };
+        assert!(!centre(&paint_search(
+            &mut painter,
+            &frame,
+            &browser,
+            &places,
+            &search,
+            1.0
+        )));
+        browser.set_filter("zzz-nothing");
+        assert!(browser.no_results());
+        assert!(
+            centre(&paint_search(
+                &mut painter,
+                &frame,
+                &browser,
+                &places,
+                &search,
+                1.0
+            )),
+            "text in the middle"
+        );
+        browser.set_filter("editor");
+        assert!(!centre(&paint_search(
+            &mut painter,
+            &frame,
+            &browser,
+            &places,
+            &search,
+            1.0
+        )));
+    }
+
+    #[test]
+    fn the_no_results_view_draws_in_time_at_any_window_size_and_scale() {
+        let (_d, mut browser, places, mut painter, _frame) = search_window(1.0);
+        browser.set_filter("zzz-nothing");
+        assert!(browser.no_results());
+        let mut search = TextField::with_max_len(SEARCH_MAX_LEN);
+        search.insert("zzz-nothing");
+        let mut per_pixel: Vec<(f64, String)> = Vec::new();
+        for (w, h, scale) in [
+            (600.0, 400.0, 1.0),
+            (920.0, 436.0, 1.0),
+            (1920.0, 1080.0, 1.0),
+            (1920.0, 1080.0, 2.0),
+            (3840.0, 2160.0, 1.0),
+        ] {
+            let frame = painter.frame(
+                Size { w, h },
+                &places,
+                Bars::HIDDEN,
+                window::TOOLBAR_SEARCH_FIELD.0 * window::SEARCH_GROWTH,
+                browser.dir(),
+                ViewMode::List,
+                browser.outline(),
+                0.0,
+                scale,
+            );
+            let mut pm =
+                Pixmap::new((w * f64::from(scale)) as u32, (h * f64::from(scale)) as u32).unwrap();
+            let state = WindowState {
+                browser: &browser,
+                places: &places,
+                mode: ViewMode::List,
+                active: true,
+                search: &search,
+                search_focused: true,
+                search_caret: true,
+                title: "Here",
+                now: SystemTime::now(),
+                edit: None,
+                edit_caret: false,
+                drop_target: None,
+                marquee: None,
+                status: "",
+            };
+            let start = std::time::Instant::now();
+            painter.paint(&mut pm, scale, &frame, &state, &Palette::builtin(false));
+            let took = start.elapsed().as_secs_f64();
+            let pixels = f64::from(pm.width()) * f64::from(pm.height());
+            eprintln!("{w} x {h} at {scale}x: {took:.3} s");
+            per_pixel.push((took / pixels, format!("{w} x {h} at {scale}x")));
+        }
+        // the cost follows the pixels drawn: no size takes much more per pixel than the cheapest
+        let cheapest = per_pixel
+            .iter()
+            .map(|(c, _)| *c)
+            .fold(f64::INFINITY, f64::min);
+        for (cost, what) in &per_pixel {
+            assert!(
+                *cost < cheapest * 6.0,
+                "{what}: {cost:e} s a pixel against {cheapest:e}"
+            );
         }
     }
 }

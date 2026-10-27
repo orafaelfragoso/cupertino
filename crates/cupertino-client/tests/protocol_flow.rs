@@ -94,6 +94,8 @@ struct Committed {
     first_pixel: [u8; 4],
     backdrops: Vec<BackdropState>,
     input_region: Option<Vec<[i32; 4]>>,
+    /// The `damage_buffer` rectangles of the commit (x, y, width, height).
+    damage: Vec<[i32; 4]>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -209,6 +211,7 @@ struct PositionerState {
 #[derive(Default)]
 struct SurfaceState {
     buffer: Option<WlBuffer>,
+    damage: Vec<[i32; 4]>,
     scale: i32,
     region: Option<Arc<Mutex<Vec<[i32; 4]>>>>,
     frames: Vec<WlCallback>,
@@ -336,6 +339,12 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
         let mut s = data.lock().unwrap();
         match request {
             wl_surface::Request::Attach { buffer, .. } => s.buffer = buffer,
+            wl_surface::Request::DamageBuffer {
+                x,
+                y,
+                width,
+                height,
+            } => s.damage.push([x, y, width, height]),
             wl_surface::Request::SetBufferScale { scale } => s.scale = scale,
             wl_surface::Request::SetInputRegion { region } => {
                 s.region = region.map(|r| {
@@ -392,6 +401,7 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
                                 .map(|b| b.lock().unwrap().clone())
                                 .collect(),
                             input_region: s.region.as_ref().map(|r| r.lock().unwrap().clone()),
+                            damage: std::mem::take(&mut s.damage),
                         })
                         .unwrap();
                     // like a compositor that keeps the current buffer until the next one replaces it
@@ -1690,6 +1700,7 @@ fn surface_lifecycle_against_a_protocol_server() {
                 alpha: 0.5
             }],
             input_region: Some(vec![[0, 0, 11, 10]]),
+            damage: vec![[0, 0, i32::MAX, i32::MAX]],
         }
     );
 
@@ -2379,4 +2390,59 @@ fn copied_text_is_offered_with_the_input_serial_and_served_to_a_paste() {
         Some("copied text"),
         "a paste in the copying client reads its own text"
     );
+}
+
+#[test]
+fn a_damaged_frame_keeps_the_last_one_repaints_its_rectangles_and_reports_only_them() {
+    let (mut client, control, committed, _seen, surface, mut stash) = connected_layer_surface();
+    while committed.try_recv().is_ok() {}
+    let red = tiny_skia::Color::from_rgba8(255, 0, 0, 255);
+    let blue = tiny_skia::Color::from_rgba8(0, 0, 255, 255);
+    client.draw(surface, |pixmap, _| pixmap.fill(red)).unwrap();
+    // the wait sends the commit
+    stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
+    let mut frames = vec![committed.recv_timeout(Duration::from_secs(5)).unwrap()];
+    // a rectangle in points; the output is at scale 2
+    let rect = Rect::new(10.0, 5.25, 4.0, 3.0);
+    for damage in [vec![rect], vec![]] {
+        client.request_redraw(surface).unwrap();
+        control.send(Control::FrameDone).unwrap();
+        wait_for(&mut client, &mut stash, |e| {
+            matches!(e, Event::Draw(_)).then_some(())
+        });
+        client
+            .draw_damage(surface, &damage, |pixmap, _| {
+                let at = |x, y| pixmap.pixel(x, y).unwrap().demultiply();
+                assert_eq!(
+                    at(0, 0),
+                    red.to_color_u8(),
+                    "outside the damage: the last frame"
+                );
+                if !damage.is_empty() {
+                    assert_eq!(at(20, 10).alpha(), 0, "inside: cleared");
+                    assert_eq!(at(27, 16).alpha(), 0, "inside: cleared");
+                    assert_eq!(at(28, 16), red.to_color_u8(), "right of it: kept");
+                    let r = tiny_skia::Rect::from_xywh(20.0, 10.0, 8.0, 7.0).unwrap();
+                    let mut paint = tiny_skia::Paint::default();
+                    paint.set_color(blue);
+                    pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), None);
+                }
+            })
+            .unwrap();
+        stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
+        frames.push(committed.recv_timeout(Duration::from_secs(5)).unwrap());
+    }
+    let damage: Vec<_> = frames.iter().map(|c| c.damage.clone()).collect();
+    assert_eq!(
+        damage,
+        vec![
+            vec![[0, 0, i32::MAX, i32::MAX]],
+            vec![[20, 10, 8, 7]],
+            vec![]
+        ],
+        "a whole frame, then the rectangle rounded out to device pixels, then nothing"
+    );
+    // the second buffer was never written: it got the whole frame, red at its corner
+    assert_eq!(frames[1].first_pixel, [0, 0, 255, 255]);
+    assert_ne!(frames[0].offset, frames[1].offset, "the other slot");
 }

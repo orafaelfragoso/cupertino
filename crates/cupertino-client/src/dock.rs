@@ -72,6 +72,11 @@ pub enum DockChange {
     },
     /// The application asked for attention while inactive: bounce its tile once.
     Attention(String),
+    /// The application stopped answering (`true`) or answers again (`false`): "Not Responding" in the dock menu, the
+    /// switcher and the Force Quit dialog. Also sent once for each application that is unresponsive when the dock binds.
+    Unresponsive { app_id: String, unresponsive: bool },
+    /// The Force Quit shortcut was pressed: open the Force Quit dialog, or close it when it is open.
+    ForceQuitDialog,
     /// The switch ended: `committed` when the selected application was activated, else cancelled.
     SwitcherClosed { committed: bool },
     /// The overview opened on the dock's output, or its windows or workspaces changed while open:
@@ -109,6 +114,13 @@ impl Dock {
     /// server (the application may have just quit).
     pub fn activate_app(&self, app_id: &str) {
         self.proxy.activate_app(app_id.to_string());
+    }
+
+    /// End the application, after the person confirmed in the Force Quit dialog. The server kills one that does not
+    /// answer its pings at once; any other is asked to close and sent SIGTERM, then SIGKILL after three seconds. The
+    /// result is the application's windows closing; an unknown id is ignored.
+    pub fn force_quit_app(&self, app_id: &str) {
+        self.proxy.force_quit_app(app_id.to_string());
     }
 
     /// Restore a minimized window out of the tile `rect` (surface-local logical points, rounded
@@ -295,6 +307,11 @@ impl GroupBuilder {
                 });
             }
             Event::Attention { app_id } => self.changes.push(DockChange::Attention(app_id)),
+            Event::Unresponsive { app_id, state } => self.changes.push(DockChange::Unresponsive {
+                app_id,
+                unresponsive: state != 0,
+            }),
+            Event::ForceQuitDialog => self.changes.push(DockChange::ForceQuitDialog),
             Event::SwitcherClosed { committed } => self.changes.push(DockChange::SwitcherClosed {
                 committed: committed != 0,
             }),
@@ -449,6 +466,14 @@ mod tests {
             },
         );
         push(&mut group, Event::SwitcherClosed { committed: 1 });
+        push(
+            &mut group,
+            Event::Unresponsive {
+                app_id: "org.example.e".into(),
+                state: 1,
+            },
+        );
+        push(&mut group, Event::ForceQuitDialog);
         assert_eq!(
             push(&mut group, Event::Done),
             Some(vec![
@@ -464,6 +489,11 @@ mod tests {
                 },
                 DockChange::Attention("org.example.d".into()),
                 DockChange::SwitcherClosed { committed: true },
+                DockChange::Unresponsive {
+                    app_id: "org.example.e".into(),
+                    unresponsive: true
+                },
+                DockChange::ForceQuitDialog,
             ])
         );
     }

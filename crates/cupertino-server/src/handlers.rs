@@ -528,6 +528,7 @@ impl XdgShellHandler for Cupertino {
     fn client_pong(&mut self, client: ShellClient) {
         if self.hung.pong(&client).0 {
             tracing::info!("an application answers its pings again");
+            self.announce_responsiveness();
             self.request_redraw();
         }
     }

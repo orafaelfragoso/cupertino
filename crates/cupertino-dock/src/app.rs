@@ -619,6 +619,7 @@ impl App {
                 DockChange::Gesture(gesture) => self.run_trigger(trigger_of_gesture(gesture))?,
                 // a refused activation: the tile hops once (informational attention)
                 DockChange::Attention(app_id) => self.session.attention(&app_id, now),
+                DockChange::Unresponsive { .. } | DockChange::ForceQuitDialog => {}
             }
         }
         self.session.list_taken();

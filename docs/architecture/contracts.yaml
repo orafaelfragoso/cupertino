@@ -633,6 +633,17 @@
   test_owner: crates/cupertino-notifications/tests/dbus_integration.rs
   source: crates/cupertino-notifications/src/dbus.rs:294
   note: every method refuses sandboxed and unnamed callers
+- name: com.canonical.AppMenu.Registrar
+  kind: dbus-interface
+  version: n/a
+  bus: session
+  bus_name: com.canonical.AppMenu.Registrar
+  owner_crate: cupertino-menubar
+  owner_area: apps
+  scope: public
+  test_owner: crates/cupertino-menubar/tests/worker.rs
+  source: crates/cupertino-menubar/src/dbus/registrar.rs:13
+  note: registers nothing; owned only when no other process owns the name
 - name: org.kde.StatusNotifierWatcher
   kind: dbus-interface
   version: n/a

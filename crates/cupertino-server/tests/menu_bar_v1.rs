@@ -39,6 +39,29 @@ use wayland_protocols_plasma::appmenu::client::{
 };
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
+mod gtk_shell {
+    #![allow(
+        dead_code,
+        non_camel_case_types,
+        non_upper_case_globals,
+        unused_imports,
+        missing_docs,
+        clippy::all
+    )]
+    use wayland_client;
+    use wayland_client::protocol::*;
+
+    pub mod __interfaces {
+        use wayland_client::protocol::__interfaces::*;
+        wayland_scanner::generate_interfaces!("protocols/gtk-shell.xml");
+    }
+    use self::__interfaces::*;
+
+    wayland_scanner::generate_client_code!("protocols/gtk-shell.xml");
+}
+
+use gtk_shell::gtk_shell1::{self, GtkShell1};
+
 const OUTPUT: (i32, i32) = (1000, 700);
 /// Height of the bar surface; the server reserves the height of the design tokens (24 pt).
 const BAR_HEIGHT: i32 = 24;
@@ -194,6 +217,10 @@ struct Status {
     events: Vec<BarEvent>,
     /// The protocol error the server posted: object interface and code.
     error: Option<(String, u32)>,
+    /// The `gtk_shell1` capabilities received, in order.
+    gtk_capabilities: Vec<u32>,
+    /// Round trips completed: the events of every request sent before the last one have arrived.
+    roundtrips: usize,
 }
 
 struct ClientState {
@@ -239,6 +266,21 @@ ignore_events!(
     ext_image_copy_capture_manager_v1::ExtImageCopyCaptureManagerV1,
     ext_image_copy_capture_session_v1::ExtImageCopyCaptureSessionV1
 );
+
+impl Dispatch<GtkShell1, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        _: &GtkShell1,
+        event: gtk_shell1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let gtk_shell1::Event::Capabilities { capabilities } = event;
+        let mut status = state.status.lock().unwrap();
+        status.gtk_capabilities.push(capabilities);
+    }
+}
 
 impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for ClientState {
     fn event(
@@ -454,6 +496,7 @@ fn run_client_on(stream: UnixStream, setup: Setup) -> TestClient {
                 st.lock().unwrap().error = Some((error.object_interface, error.code));
                 return;
             }
+            st.lock().unwrap().roundtrips += 1;
             std::thread::sleep(Duration::from_millis(5));
         }
     });
@@ -611,6 +654,40 @@ impl CaptureClient {
 }
 
 /// An application with one 300x200 toplevel.
+/// A GTK application's connection: it binds `gtk_shell1` and nothing more.
+struct GtkClient(TestClient);
+
+impl GtkClient {
+    fn spawn(socket: PathBuf) -> GtkClient {
+        let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
+        GtkClient(run_client(stream, move |globals, qh, status| {
+            let compositor: wl_compositor::WlCompositor = globals.bind(qh, 4..=6, ()).unwrap();
+            let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
+            let shell: GtkShell1 = globals.bind(qh, 1..=7, ()).unwrap();
+            let state = ClientState {
+                status: status.clone(),
+                shm,
+                surface: compositor.create_surface(qh, ()),
+                attached: false,
+                toplevel_size: (0, 0),
+            };
+            let apply = Box::new(move |_: Cmd| {
+                let _ = &shell;
+                panic!("a GTK client takes no command")
+            });
+            (state, apply)
+        }))
+    }
+
+    fn capabilities(&self) -> Vec<u32> {
+        self.0.status.lock().unwrap().gtk_capabilities.clone()
+    }
+
+    fn roundtrips(&self) -> usize {
+        self.0.status.lock().unwrap().roundtrips
+    }
+}
+
 struct AppClient(TestClient);
 
 impl AppClient {
@@ -913,6 +990,47 @@ fn the_bar_gets_the_menus_of_the_focused_window_of_a_client_with_two() {
             && latest_title_and_menu(&bar) == Some((first_title.clone(), first_menu.clone()))
     });
     assert_eq!(bar.error(), None);
+}
+
+/// GTK hides a window's own menu bar on `global_menu_bar` (2): the server announces it only while a menu bar shows
+/// the menus, to clients already connected and to new ones, and withdraws it (0) when the bar goes.
+#[test]
+fn gtk_clients_are_told_of_a_global_menu_bar_only_while_a_bar_exists() {
+    let Some(mut h) = Harness::new() else { return };
+    let early = GtkClient::spawn(h.socket_path());
+    h.wait_until("the client to have bound", |_| early.roundtrips() > 0);
+    assert_eq!(early.capabilities(), Vec::<u32>::new(), "no bar yet");
+
+    let bar = BarClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&bar, 1);
+    h.wait_until("the connected client to be told", |_| {
+        early.capabilities() == [2]
+    });
+    let late = GtkClient::spawn(h.socket_path());
+    h.wait_until("a new client to be told on bind", |_| {
+        late.capabilities() == [2]
+    });
+
+    bar.send(Cmd::Destroy);
+    h.wait_until("both clients to be told the bar is gone", |_| {
+        early.capabilities() == [2, 0] && late.capabilities() == [2, 0]
+    });
+}
+
+/// The output of the last bar unplugged: the bar goes with it, and so does `global_menu_bar`.
+#[test]
+fn gtk_clients_are_told_the_bar_is_gone_when_its_output_is() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = BarClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&bar, 1);
+    let gtk = GtkClient::spawn(h.socket_path());
+    h.wait_until("the client to be told", |_| gtk.capabilities() == [2]);
+
+    let output = h.state.outputs[0].id;
+    h.state.remove_output(output);
+    h.wait_until("the client to be told the bar is gone", |_| {
+        gtk.capabilities() == [2, 0]
+    });
 }
 
 #[test]

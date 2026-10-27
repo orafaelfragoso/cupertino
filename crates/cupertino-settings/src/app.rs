@@ -328,6 +328,7 @@ impl App {
             Event::Appearance { dark } => {
                 self.dark = dark;
                 self.palette = palette(&self.theme, dark, self.client.display_options())?;
+                self.close_menu()?;
                 self.redraw()?;
             }
             Event::DisplayOptions(options) => {
@@ -631,6 +632,7 @@ impl App {
     }
 
     fn show_current(&mut self) -> Result<()> {
+        self.close_menu()?;
         let pane = self.history.current();
         self.showing = pane;
         self.client
@@ -640,6 +642,10 @@ impl App {
     }
 
     fn pointer(&mut self, event: PointerEvent) -> Result<()> {
+        if self.menu.is_some() && matches!(event, PointerEvent::Button { pressed: true, .. }) {
+            // a press outside the open menu closes it and reaches nothing underneath
+            return self.close_menu();
+        }
         let Some(layout) = &self.layout else {
             return Ok(());
         };

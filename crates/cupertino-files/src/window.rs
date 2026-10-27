@@ -25,8 +25,8 @@ use crate::metrics::{list_view, marquee, menu as menu_metrics, sidebar, window};
 use crate::name_edit::NameEdit;
 use crate::places::{Place, PlaceGroup, PlaceKind};
 use crate::render::{
-    available_size, fill_rect, fill_rounded, paint, stroke_rounded, truncate_middle, truncate_tail,
-    Palette, Renderer,
+    available_size, copy_opaque, fill_rect, fill_rounded, paint, stroke_rounded, truncate_middle,
+    truncate_tail, Band, Palette, Renderer,
 };
 use crate::settings::{ColumnDesc, ColumnId, IconViewSettings, ListViewSettings};
 use crate::tags::TagColor;
@@ -38,7 +38,7 @@ use cupertino_geometry::Rect as GeoRect;
 use cupertino_text_field::TextField;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-use tiny_skia::{PathBuilder, Pixmap, PixmapPaint, Stroke, Transform};
+use tiny_skia::{PathBuilder, Pixmap, Stroke, Transform};
 
 /// Window chrome metrics.
 pub mod metrics {
@@ -928,15 +928,8 @@ impl WindowPainter {
     ) {
         self.renderer.text.set_scale(scale);
         let w = &frame.window;
-        // the sidebar is left clear: the server draws its material below the surface. An active window's strip is the
-        // content background (the header's resting fill is the content background and the header reads
-        // as part of the strip)
-        let strip = if state.active {
-            pal.background
-        } else {
-            pal.toolbar_inactive
-        };
-        fill_rect(pm, &w.toolbar, scale, strip);
+        // the sidebar is left clear: the server draws its material below the surface
+        fill_rect(pm, &w.toolbar, scale, strip(state, pal));
         self.paint_sidebar(pm, scale, w, state, pal);
         fill_rect(
             pm,
@@ -957,56 +950,10 @@ impl WindowPainter {
         self.paint_toolbar(pm, scale, w, state, pal);
         self.paint_bars(pm, scale, frame, state, pal);
 
-        let entries = state.browser.entries();
-        let selected: Vec<usize> = state.browser.selection().indices().collect();
-        let size = Size {
-            w: w.content.w,
-            h: w.content.h,
-        };
-        if size.w < 1.0 || size.h < 1.0 {
+        if w.content.w < 1.0 || w.content.h < 1.0 {
             return;
         }
-        let content = match state.mode {
-            ViewMode::Icons => self.renderer.icon_view(
-                entries,
-                None,
-                &selected,
-                state.active,
-                &self.icons,
-                size,
-                frame.scroll,
-                scale,
-                pal,
-            ),
-            ViewMode::List => self.renderer.list_view(
-                entries,
-                state.browser.outline(),
-                &selected,
-                state.active,
-                &self.list,
-                state.browser.sort(),
-                size,
-                frame.scroll,
-                scale,
-                &Palette {
-                    header: strip,
-                    ..*pal
-                },
-                state.now,
-            ),
-        };
-        let (x, y) = (
-            (w.content.x as f32 * scale).round() as i32,
-            (w.content.y as f32 * scale).round() as i32,
-        );
-        pm.draw_pixmap(
-            x,
-            y,
-            content.as_ref(),
-            &PixmapPaint::default(),
-            Transform::identity(),
-            None,
-        );
+        self.paint_content(pm, scale, frame, state, pal, None);
         if state.browser.no_results() {
             self.paint_no_results(pm, scale, &w.content, state.mode, pal);
         }
@@ -1045,6 +992,62 @@ impl WindowPainter {
         if let Some(edit) = state.edit {
             self.paint_editor(pm, scale, frame, edit, state, pal);
         }
+    }
+
+    /// The content view, or the `band` of it, copied in at its place in the window.
+    fn paint_content(
+        &mut self,
+        pm: &mut Pixmap,
+        scale: f32,
+        frame: &Frame,
+        state: &WindowState<'_>,
+        pal: &Palette,
+        band: Option<Band>,
+    ) {
+        let w = &frame.window;
+        let entries = state.browser.entries();
+        let selected: Vec<usize> = state.browser.selection().indices().collect();
+        let size = Size {
+            w: w.content.w,
+            h: w.content.h,
+        };
+        let content = match state.mode {
+            ViewMode::Icons => self.renderer.icon_view(
+                entries,
+                None,
+                &selected,
+                state.active,
+                &self.icons,
+                size,
+                frame.scroll,
+                band,
+                scale,
+                pal,
+            ),
+            ViewMode::List => self.renderer.list_view(
+                entries,
+                state.browser.outline(),
+                &selected,
+                state.active,
+                &self.list,
+                state.browser.sort(),
+                size,
+                frame.scroll,
+                band,
+                scale,
+                &Palette {
+                    header: strip(state, pal),
+                    ..*pal
+                },
+                state.now,
+            ),
+        };
+        let (x, y) = (
+            (w.content.x as f32 * scale).round() as i32,
+            (w.content.y as f32 * scale).round() as i32 + band.map_or(0, |b| b.top as i32),
+        );
+        copy_opaque(pm, &content, x, y);
+        self.renderer.recycle(content);
     }
 
     /// "No Results" centred in the content area (below the list header in the list view), in the secondary label colour.
@@ -1133,6 +1136,7 @@ impl WindowPainter {
                             ..Entry::synthetic(&segment.name, true, 0)
                         },
                         scale,
+                        0.0,
                     ),
                 }
                 if segment.text.w > 0.0 {
@@ -1759,6 +1763,16 @@ fn paint_chevron_down(pm: &mut Pixmap, c: Point, scale: f32, color: Rgba) {
     }
 }
 
+/// The toolbar strip's fill. An active window's strip is the content background (the list header's resting fill is the
+/// content background and the header reads as part of the strip).
+fn strip(state: &WindowState<'_>, pal: &Palette) -> Rgba {
+    if state.active {
+        pal.background
+    } else {
+        pal.toolbar_inactive
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2365,7 +2379,7 @@ mod tests {
         let mut pm = Pixmap::new(200, 200).unwrap();
         pm.fill(tiny_skia::Color::WHITE);
         let icon = Rect::new(60.0, 60.0, 64.0, 64.0);
-        crate::render::paint_icon_bubble(&mut pm, &icon, 1.0, &pal);
+        crate::render::paint_icon_bubble(&mut pm, &icon, 1.0, 0.0, &pal);
         // padding and radius 4, border 2: the bubble spans 56 to 128
         assert_eq!(
             pm.pixel(92, 57).unwrap().red(),
@@ -3119,7 +3133,7 @@ mod tests {
         assert!(browser.no_results());
         let mut search = TextField::with_max_len(SEARCH_MAX_LEN);
         search.insert("zzz-nothing");
-        let mut per_pixel: Vec<(f64, String)> = Vec::new();
+        let mut per_pixel: Vec<(f64, f64, String)> = Vec::new();
         for (w, h, scale) in [
             (600.0, 400.0, 1.0),
             (920.0, 436.0, 1.0),
@@ -3156,23 +3170,28 @@ mod tests {
                 marquee: None,
                 status: "",
             };
-            let start = std::time::Instant::now();
+            // a first frame fills the glyph and view caches; the cost of a frame is the best of the next three
             painter.paint(&mut pm, scale, &frame, &state, &Palette::builtin(false));
-            let took = start.elapsed().as_secs_f64();
+            let took = (0..3)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    painter.paint(&mut pm, scale, &frame, &state, &Palette::builtin(false));
+                    start.elapsed().as_secs_f64()
+                })
+                .fold(f64::INFINITY, f64::min);
             let pixels = f64::from(pm.width()) * f64::from(pm.height());
             eprintln!("{w} x {h} at {scale}x: {took:.3} s");
-            per_pixel.push((took / pixels, format!("{w} x {h} at {scale}x")));
+            per_pixel.push((pixels, took / pixels, format!("{w} x {h} at {scale}x")));
         }
-        // the cost follows the pixels drawn: no size takes much more per pixel than the cheapest
-        let cheapest = per_pixel
-            .iter()
-            .map(|(c, _)| *c)
-            .fold(f64::INFINITY, f64::min);
-        for (cost, what) in &per_pixel {
-            assert!(
-                *cost < cheapest * 6.0,
-                "{what}: {cost:e} s a pixel against {cheapest:e}"
-            );
+        // the cost grows no faster than the pixels drawn: no size takes much more per pixel than a smaller one (a
+        // small frame costs more per pixel, its fixed work spread over fewer pixels)
+        for (pixels, cost, what) in &per_pixel {
+            for (smaller, smaller_cost, than) in per_pixel.iter().filter(|(p, _, _)| p <= pixels) {
+                assert!(
+                    *cost < smaller_cost * 2.0,
+                    "{what}: {cost:e} s a pixel against {smaller_cost:e} for {than} ({smaller} pixels)"
+                );
+            }
         }
     }
 }

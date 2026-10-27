@@ -39,5 +39,9 @@ name = "cupertino-settings"
 path = "src/main.rs"
 required-features = ["app"]
 
+[[bench]]
+name = "frame"
+harness = false
+
 [[example]]
 name = "settings_samples"

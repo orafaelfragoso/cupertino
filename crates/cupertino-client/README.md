@@ -23,8 +23,11 @@ manager). One `Client` connects to the server, binds the globals every process n
 ## How it works
 
 Drawing is tiny-skia on a `Pixmap` at the surface's device scale, double-buffered through shm and paced by frame
-callbacks. A process runs one loop around `Client::wait` and reacts to the returned `Event`s. Other threads wake the loop
-with a `Waker`.
+callbacks. `Client::draw` paints a whole frame; `Client::draw_damage` repaints only rectangles of the last one (cleared
+for the paint, rounded out to device pixels): only they are converted into the shm buffer, together with what that
+buffer missed while the other one was on screen, and only they are reported with `damage_buffer`, so the server uploads
+only them. A frame at another size or scale is drawn whole. A process runs one loop around `Client::wait` and reacts to
+the returned `Event`s. Other threads wake the loop with a `Waker`.
 
 A missing required global is an error at `Client::connect`, never a degraded mode. The required globals are layer shell,
 `cupertino_shell_v1`, `xdg_activation_v1`, `zxdg_output_manager_v1`, shm and a seat. Fractional scale is used with

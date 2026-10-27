@@ -42,8 +42,8 @@ use cupertino_files::selection::Modifiers;
 use cupertino_files::tags::{self, TagColor};
 use cupertino_files::trash::Trash;
 use cupertino_files::window::{
-    metrics, status_text, Bars, Frame, Hit, Move, ToolbarItem, ViewMode, WindowPainter,
-    WindowState, SEARCH_MAX_LEN,
+    metrics, status_text, Bars, Frame, Hit, Move, SearchWidth, ToolbarItem, ViewMode,
+    WindowPainter, WindowState, SEARCH_MAX_LEN,
 };
 use cupertino_files::{Entry, Kind, Point, Size, SortSpec};
 use cupertino_geometry::Rect as PopupRect;
@@ -71,6 +71,9 @@ const MENU_MATERIAL: &str = "Menu";
 const SIDEBAR_MATERIAL: &str = "Sidebar";
 
 /// Two presses on the same item within this interval open it (default).
+/// One frame of an animation (seconds).
+const FRAME_SECONDS: f64 = 1.0 / 60.0;
+
 const DOUBLE_CLICK: Duration =
     Duration::from_millis((timing::DOUBLE_CLICK_INTERVAL * 1000.0) as u64);
 
@@ -94,6 +97,8 @@ struct App {
     /// keyboard.
     search: TextField,
     search_focused: bool,
+    /// How wide the search field is now: it opens while focused or holding text.
+    search_width: SearchWidth,
     /// The frame drawn last: clicks and arrow keys are resolved against it.
     frame: Option<Frame>,
     scroll: f64,
@@ -252,6 +257,7 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
         available: None,
         search: TextField::with_max_len(SEARCH_MAX_LEN),
         search_focused: false,
+        search_width: SearchWidth::default(),
         frame: None,
         scroll: 0.0,
         pending_scroll: 0.0,
@@ -403,6 +409,9 @@ impl App {
         let due = [
             self.menu.as_ref().and_then(|open| open.menu.deadline()),
             self.rename.deadline(),
+            self.search_width
+                .animating(self.now())
+                .then(|| self.now() + FRAME_SECONDS),
             self.marquee.as_ref().map(|m| m.next_scroll),
             self.search_focused
                 .then(|| self.search.next_blink(Instant::now()))
@@ -421,7 +430,7 @@ impl App {
 
     /// Run the timers that are due.
     fn tick(&mut self) -> Result<()> {
-        if self.caret_shown() != self.caret_drawn {
+        if self.caret_shown() != self.caret_drawn || self.search_width.animating(self.now()) {
             self.client.request_redraw(self.window)?;
         }
         let now = self.now();
@@ -442,6 +451,11 @@ impl App {
         let active = self.client.toplevel_activated(self.window)?;
         let edit_caret = active && self.edit_caret();
         let search_caret = active && self.search_caret();
+        let now = self.now();
+        let animate = !self.client.display_options().reduce_motion;
+        self.search_width
+            .set_open(self.search_focused || !self.search.is_empty(), now, animate);
+        let search_width = self.search_width.width(now);
         self.caret_drawn = edit_caret || search_caret;
         let reveal = self
             .browser
@@ -500,6 +514,7 @@ impl App {
                 size,
                 state.places,
                 *bars,
+                search_width,
                 state.browser.dir(),
                 state.mode,
                 state.browser.outline(),

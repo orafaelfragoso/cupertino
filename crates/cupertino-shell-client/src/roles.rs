@@ -124,12 +124,13 @@ impl LayerShell {
         conn.bind_extension(1..=4, Quiet).map(LayerShell)
     }
 
-    /// Create a layer surface. Its configures arrive as [`ShellEvent::Configure`], acknowledged by the transport.
+    /// Create a layer surface. Its configures arrive as [`ShellEvent::Configure`], acknowledged by the transport;
+    /// [`LayerSurface::configured`] gives the size to draw at.
     pub fn layer_surface(
         &self,
         conn: &mut Connection,
         config: &LayerSurfaceConfig,
-    ) -> Result<(SurfaceId, ZwlrLayerSurfaceV1), Error> {
+    ) -> Result<LayerSurface, Error> {
         let output = match config.output {
             Some(id) => Some(conn.wl_output(id).ok_or(Error::UnknownOutput)?),
             None => None,
@@ -157,7 +158,56 @@ impl LayerShell {
             proxy = Some(layer.clone());
             LayerRole(layer)
         });
-        Ok((surface, proxy.expect("the role was assigned")))
+        Ok(LayerSurface {
+            surface,
+            proxy: proxy.expect("the role was assigned"),
+            requested: config.size,
+        })
+    }
+}
+
+/// A layer surface's role object and the size it asked for. Destroying the surface with the transport destroys it.
+pub struct LayerSurface {
+    surface: SurfaceId,
+    proxy: ZwlrLayerSurfaceV1,
+    requested: (u32, u32),
+}
+
+impl LayerSurface {
+    pub fn surface(&self) -> SurfaceId {
+        self.surface
+    }
+
+    /// The size to draw at for a configure of `sent`: an extent the server left at 0 is the requested one. Fails when
+    /// both left it at 0.
+    pub fn configured(&self, sent: (u32, u32)) -> Result<(u32, u32), Error> {
+        configured_size(sent, self.requested)
+    }
+
+    /// Change the keyboard interactivity; applies with the next commit.
+    pub fn set_keyboard_interactivity(&self, mode: KeyboardInteractivity) {
+        self.proxy.set_keyboard_interactivity(mode);
+    }
+
+    /// Change the distance from the anchored edge that other surfaces keep clear; applies with the next commit.
+    pub fn set_exclusive_zone(&self, zone: i32) {
+        self.proxy.set_exclusive_zone(zone);
+    }
+
+    /// Move or resize: the edges it is anchored to and its size (0 across an axis anchored to both edges); applies with
+    /// the next commit, after which the server configures it.
+    pub fn set_placement(&mut self, anchor: Anchor, size: (u32, u32)) {
+        self.proxy.set_anchor(anchor);
+        self.proxy.set_size(size.0, size.1);
+        self.requested = size;
+    }
+}
+
+fn configured_size(sent: (u32, u32), requested: (u32, u32)) -> Result<(u32, u32), Error> {
+    let pick = |sent: u32, requested: u32| if sent == 0 { requested } else { sent };
+    match (pick(sent.0, requested.0), pick(sent.1, requested.1)) {
+        (0, _) | (_, 0) => Err(Error::Unsized),
+        size => Ok(size),
     }
 }
 
@@ -549,5 +599,29 @@ impl Dispatch<CupertinoDockV1, RoleData<DockGroup>> for State {
             Ok(None) => {}
             Err(what) => state.fail(cupertino_wayland_client::Error::Protocol(what)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_extent_left_at_0_is_the_requested_one() {
+        assert_eq!(configured_size((0, 0), (200, 200)).unwrap(), (200, 200));
+        assert_eq!(configured_size((1920, 0), (0, 30)).unwrap(), (1920, 30));
+        assert_eq!(configured_size((640, 480), (200, 200)).unwrap(), (640, 480));
+    }
+
+    #[test]
+    fn an_extent_neither_side_sized_fails() {
+        assert!(matches!(
+            configured_size((0, 30), (0, 30)),
+            Err(Error::Unsized)
+        ));
+        assert!(matches!(
+            configured_size((1920, 0), (0, 0)),
+            Err(Error::Unsized)
+        ));
     }
 }

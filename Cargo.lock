@@ -779,11 +779,14 @@ version = "0.1.0"
 dependencies = [
  "cupertino-alsa",
  "cupertino-assets",
- "cupertino-client",
  "cupertino-decorations",
  "cupertino-geometry",
  "cupertino-icons",
+ "cupertino-protocol-app",
+ "cupertino-shell-client",
  "cupertino-theme",
+ "cupertino-ui-wayland",
+ "cupertino-wayland-client",
  "tiny-skia",
  "zbus",
 ]
@@ -1052,12 +1055,15 @@ version = "0.1.0"
 dependencies = [
  "cupertino-animation",
  "cupertino-assets",
- "cupertino-client",
  "cupertino-decorations",
  "cupertino-geometry",
  "cupertino-glass",
  "cupertino-icons",
+ "cupertino-protocol-app",
+ "cupertino-shell-client",
  "cupertino-theme",
+ "cupertino-ui-wayland",
+ "cupertino-wayland-client",
  "image",
  "libc",
  "tempfile",
@@ -1071,12 +1077,15 @@ version = "0.1.0"
 dependencies = [
  "cupertino-alsa",
  "cupertino-assets",
- "cupertino-client",
  "cupertino-decorations",
  "cupertino-geometry",
  "cupertino-icons",
  "cupertino-peer",
+ "cupertino-protocol-app",
+ "cupertino-shell-client",
  "cupertino-theme",
+ "cupertino-ui-wayland",
+ "cupertino-wayland-client",
  "serde",
  "tiny-skia",
  "zbus",
@@ -1265,6 +1274,7 @@ dependencies = [
 name = "cupertino-shell-client"
 version = "0.1.0"
 dependencies = [
+ "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-protocol-app",
  "cupertino-protocols",

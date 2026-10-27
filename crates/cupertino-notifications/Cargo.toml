@@ -13,7 +13,13 @@ default = ["dbus", "material"]
 dbus = ["dep:zbus", "dep:libc"]
 material = ["dep:cupertino-glass", "dep:image"]
 # the `cupertino-notifications` process: banners and the notification centre list as a client of the server
-app = ["dbus", "dep:cupertino-client"]
+app = [
+    "dbus",
+    "dep:cupertino-protocol-app",
+    "dep:cupertino-shell-client",
+    "dep:cupertino-ui-wayland",
+    "dep:cupertino-wayland-client",
+]
 
 [dependencies]
 cupertino-assets = { path = "../cupertino-assets" }
@@ -22,7 +28,10 @@ cupertino-theme = { path = "../cupertino-theme" }
 cupertino-animation = { path = "../cupertino-animation" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-decorations = { path = "../cupertino-decorations" }
-cupertino-client = { path = "../cupertino-client", optional = true }
+cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
+cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
+cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
+cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 cupertino-glass = { path = "../cupertino-glass", optional = true }
 libc = { version = "0.2", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }

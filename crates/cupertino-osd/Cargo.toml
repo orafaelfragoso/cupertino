@@ -12,7 +12,13 @@ layer = "shell"
 default = []
 dbus = ["dep:zbus"]
 # the `cupertino-osd` process: the overlay on a layer surface as a client of the server
-app = ["dbus", "dep:cupertino-client"]
+app = [
+    "dbus",
+    "dep:cupertino-protocol-app",
+    "dep:cupertino-shell-client",
+    "dep:cupertino-ui-wayland",
+    "dep:cupertino-wayland-client",
+]
 
 [dependencies]
 cupertino-assets = { path = "../cupertino-assets" }
@@ -22,7 +28,10 @@ cupertino-peer = { path = "../cupertino-peer" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-decorations = { path = "../cupertino-decorations" }
-cupertino-client = { path = "../cupertino-client", optional = true }
+cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
+cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
+cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
+cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 tiny-skia = "0.11"
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"], optional = true }
 

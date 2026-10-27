@@ -5,7 +5,8 @@ manager). One `Client` connects to the server, binds the globals every process n
 transport, `cupertino-wayland-client`: the standard protocols are the transport's, the public ones of the desktop are
 `cupertino-protocol-app`'s, the privileged ones (layer shell, session lock, idle notify, the shell roles) are
 `cupertino-shell-client`'s, and every surface draws through a `cupertino-ui-wayland` presenter. This public API is an
-adapter onto those crates, to be deleted once the shell processes use them directly. Depends on them,
+adapter onto those crates, to be deleted once the shell processes use them directly; `cupertino-osd`,
+`cupertino-notifications` and `cupertino-controlcenter` already do. Depends on them,
 `cupertino-geometry`, `cupertino-defaults` and `tiny-skia`.
 
 ## Public API

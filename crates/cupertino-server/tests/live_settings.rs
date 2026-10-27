@@ -44,6 +44,7 @@ impl Harness {
         let dir = tempfile::tempdir().unwrap();
         let paths = SettingsPaths {
             compositor: Some(dir.path().join("compositor.json")),
+            system: Some(dir.path().join("system.json")),
             keyboard: Some(dir.path().join("keyboard.conf")),
             power: Some(dir.path().join("power.conf")),
         };
@@ -304,6 +305,45 @@ impl Drop for PrivateBus {
             "killing the private bus"
         );
     }
+}
+
+#[test]
+fn the_system_file_applies_live_under_the_users_file_and_a_removed_user_key_falls_back_to_it() {
+    let Some(mut h) = Harness::new() else { return };
+    let radius = |h: &Harness| h.state.config.window.corner_radius;
+    let default = Config::default().window.corner_radius;
+
+    // the system file alone
+    h.write("system.json", r#"{"corner_radius":14}"#);
+    assert_eq!(radius(&h), 14.0, "a change of the system file applies");
+
+    // the user's file over it
+    h.write("compositor.json", r#"{"corner_radius":20}"#);
+    assert_eq!(radius(&h), 20.0);
+    h.write("system.json", r#"{"corner_radius":16}"#);
+    assert_eq!(
+        radius(&h),
+        20.0,
+        "the user's value stays over a changed system value"
+    );
+
+    // the key leaves the user's file: the system file's value, not the default
+    h.write("compositor.json", r#"{}"#);
+    assert_eq!(radius(&h), 16.0);
+
+    // and leaves the system file too
+    h.write("system.json", r#"{}"#);
+    assert_eq!(radius(&h), default);
+
+    // the layers combine key by key
+    h.write("system.json", r#"{"corner_radius":12,"mouse_speed":1.5}"#);
+    h.write("compositor.json", r#"{"mouse_speed":2.5}"#);
+    assert_eq!(
+        (radius(&h), h.state.config.pointer.mouse_speed),
+        (12.0, 2.5)
+    );
+    h.write("compositor.json", r#"{"corner_radius":8}"#);
+    assert_eq!((radius(&h), h.state.config.pointer.mouse_speed), (8.0, 1.5));
 }
 
 #[test]

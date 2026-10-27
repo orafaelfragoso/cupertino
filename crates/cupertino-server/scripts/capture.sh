@@ -12,7 +12,7 @@
 # target/release, else target/debug; build with: cargo build --release --workspace --all-features --bins).
 # The shell processes are the ones the packages install as /etc/cupertino/compositor.json, found on PATH (BIN_DIR first),
 # without cupertino-login: it works on the system bus and the caller's logind session, which a capture must not touch.
-# Needs: dbus-run-session.
+# Needs: dbus-run-session, python3.
 set -eu
 
 [ $# -ge 1 ] || { sed -n '5,7p' "$0" >&2; exit 2; }

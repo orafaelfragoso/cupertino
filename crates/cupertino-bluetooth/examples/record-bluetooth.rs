@@ -1,7 +1,7 @@
 //! Records management traffic from this machine, read-only, as a fixture.
 //!
 //! ```sh
-//! cargo run -p cupertino-bluetooth --example record -- [--listen SECONDS] > capture.txt
+//! cargo run -p cupertino-bluetooth --example record-bluetooth -- [--listen SECONDS] > capture.txt
 //! ```
 //!
 //! It sends only Read Management Version Information, Read Controller Index List and Read
@@ -168,7 +168,7 @@ fn main() -> ExitCode {
             }
         },
         _ => {
-            eprintln!("usage: record [--listen SECONDS]");
+            eprintln!("usage: record-bluetooth [--listen SECONDS]");
             return ExitCode::FAILURE;
         }
     };

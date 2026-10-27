@@ -1,4 +1,4 @@
-//! Traffic recorded from a real controller with `examples/record.rs` (read-only; the controller's
+//! Traffic recorded from a real controller with `examples/record-bluetooth.rs` (read-only; the controller's
 //! address and name were replaced by fixed fake values). The codec must reproduce the commands the
 //! example sent byte for byte and decode what the kernel answered.
 

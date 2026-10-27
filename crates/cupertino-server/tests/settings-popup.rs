@@ -9,9 +9,10 @@ use std::time::{Duration, Instant};
 
 use cupertino_server::{backend::headless, config::Config, Cupertino};
 use cupertino_theme::Appearance;
-use smithay::backend::input::ButtonState;
+use smithay::backend::input::{ButtonState, KeyState};
 use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::desktop::{PopupKind, PopupManager};
+use smithay::input::keyboard::Keycode;
 use smithay::input::pointer::MotionEvent;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
@@ -193,6 +194,14 @@ impl Harness {
         self.state.pointer_button(0x110, ButtonState::Released, 0);
     }
 
+    fn tap(&mut self, evdev: u32) {
+        let code = Keycode::new(evdev + 8);
+        self.state.keyboard_event_now(code, KeyState::Pressed, 0);
+        self.step();
+        self.state.keyboard_event_now(code, KeyState::Released, 0);
+        self.step();
+    }
+
     // Use the public ShowPane handoff so the navigation assertion is independent of pointer dismissal.
     fn show_appearance(&mut self) {
         let mut handoff = Process(
@@ -371,5 +380,41 @@ fn a_popup_under_a_stationary_pointer_takes_the_pointer_focus() {
         pointer.current_focus().as_ref(),
         Some(popup.wl_surface()),
         "the menu takes the pointer without any motion"
+    );
+}
+
+const KEY_ESC: u32 = 1;
+const KEY_ENTER: u32 = 28;
+const KEY_DOWN: u32 = 108;
+const KEY_TAB: u32 = 15;
+
+#[test]
+fn escape_closes_the_open_menu_and_tab_does_not_reach_the_pane() {
+    let mut h = Harness::new();
+    h.tap(KEY_TAB);
+    assert_eq!(popup_count(&h.state), 1, "Tab does not close the menu");
+    h.tap(KEY_ESC);
+    h.run_for(Duration::from_millis(250));
+    assert_eq!(
+        (popup_count(&h.state), title(&h.state)),
+        (0, "Accessibility".into()),
+        "Escape closes the menu and leaves the pane as it was"
+    );
+}
+
+#[test]
+fn down_and_return_choose_the_next_item_of_the_open_menu() {
+    let mut h = Harness::with_menu("desktop-dock", "Desktop & Dock", TOP_LEFT_CORNER);
+    h.tap(KEY_DOWN);
+    assert_eq!(popup_count(&h.state), 1, "Down only moves the highlight");
+    h.tap(KEY_ENTER);
+    h.run_for(Duration::from_millis(500));
+    assert_eq!(popup_count(&h.state), 0, "the menu closes on the choice");
+    let stored = std::fs::read_to_string(h.home.path().join("config/cupertino/dock.conf")).unwrap();
+    assert!(
+        stored
+            .lines()
+            .any(|l| l.trim() == "corner_top_left = overview"),
+        "the next item is committed: {stored:?}"
     );
 }

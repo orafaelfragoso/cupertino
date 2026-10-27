@@ -175,15 +175,44 @@ struct Reply {
     outcome: Outcome,
 }
 
-/// What the worker keeps between requests: the decoded image of the last file, bounded by the decoder's limits.
+/// What the main thread tells the worker.
+enum Message {
+    Request(Request),
+    /// The output is gone or shows no image any more.
+    Forget(u64),
+}
+
+/// What the worker keeps between requests: the decoded image of the last file, bounded by the decoder's limits, for as
+/// long as an output wants that file.
 #[derive(Default)]
 struct WorkerState {
     source: Option<(PathBuf, Stamp, Arc<RgbaImage>)>,
     failed: HashSet<(PathBuf, Stamp)>,
     logged: HashSet<(PathBuf, String)>,
+    /// The files each output last asked for.
+    wanted: HashMap<u64, Vec<PathBuf>>,
+    /// Bytes of the decoded image held, for the diagnostics and the tests.
+    cached: Arc<AtomicUsize>,
 }
 
 impl WorkerState {
+    /// Let go of the decoded image when no output asks for its file any more.
+    fn prune(&mut self) {
+        if self
+            .source
+            .as_ref()
+            .is_some_and(|(path, _, _)| !self.wanted.values().any(|files| files.contains(path)))
+        {
+            self.source = None;
+        }
+        self.cached.store(
+            self.source
+                .as_ref()
+                .map_or(0, |(_, _, image)| image.as_raw().len()),
+            Ordering::SeqCst,
+        );
+    }
+
     fn note(&mut self, path: &Path, what: &str) {
         if self.logged.len() >= MAX_FAILED {
             self.logged.clear();
@@ -251,36 +280,53 @@ impl WorkerState {
 
 /// The worker thread and its queues.
 struct Loader {
-    requests: Sender<Request>,
+    requests: Sender<Message>,
     replies: Receiver<Reply>,
     decodes: Arc<AtomicUsize>,
+    cached: Arc<AtomicUsize>,
 }
 
 impl Loader {
     fn start(decode: Decoder) -> std::io::Result<Self> {
-        let (requests, request_rx) = std::sync::mpsc::channel::<Request>();
+        let (requests, request_rx) = std::sync::mpsc::channel::<Message>();
         let (reply_tx, replies) = std::sync::mpsc::channel::<Reply>();
         let decodes = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&decodes);
+        let mut state = WorkerState::default();
+        let cached = Arc::clone(&state.cached);
         std::thread::Builder::new()
             .name("cupertino-wallpaper".into())
             .spawn(move || {
-                let mut state = WorkerState::default();
                 while let Ok(first) = request_rx.recv() {
                     // what piled up while the last request ran: only the newest of each output is of interest
-                    let mut newest = vec![first];
-                    while let Ok(next) = request_rx.try_recv() {
-                        match newest.iter_mut().find(|r| r.output == next.output) {
-                            Some(slot) => *slot = next,
-                            None => newest.push(next),
+                    let mut newest: Vec<Request> = Vec::new();
+                    let mut take = |message: Message, state: &mut WorkerState| match message {
+                        Message::Request(request) => {
+                            state
+                                .wanted
+                                .insert(request.output, request.candidates.clone());
+                            match newest.iter_mut().find(|r| r.output == request.output) {
+                                Some(slot) => *slot = request,
+                                None => newest.push(request),
+                            }
                         }
+                        Message::Forget(output) => {
+                            state.wanted.remove(&output);
+                            newest.retain(|r| r.output != output);
+                        }
+                    };
+                    take(first, &mut state);
+                    while let Ok(next) = request_rx.try_recv() {
+                        take(next, &mut state);
                     }
+                    state.prune();
                     for request in newest {
                         let outcome =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 state.process(&request, &decode, &counter)
                             }))
                             .unwrap_or(Outcome::Failed);
+                        state.prune();
                         let reply = Reply {
                             output: request.output,
                             ticket: request.ticket,
@@ -296,6 +342,7 @@ impl Loader {
             requests,
             replies,
             decodes,
+            cached,
         })
     }
 }
@@ -370,6 +417,16 @@ impl Wallpapers {
             .collect()
     }
 
+    /// The output shows no image any more (or is gone): drop what is kept for it, here and in the worker.
+    fn forget(&mut self, output: u64) {
+        if self.outputs.remove(&output).is_some() {
+            if let Some(loader) = &self.loader {
+                // a stopped worker has nothing left to forget
+                let _ = loader.requests.send(Message::Forget(output));
+            }
+        }
+    }
+
     /// Take in the answers the worker has.
     fn collect(&mut self) {
         let Some(loader) = &self.loader else { return };
@@ -434,7 +491,7 @@ impl Wallpapers {
         if self
             .loader
             .as_ref()
-            .is_some_and(|l| l.requests.send(request).is_err())
+            .is_some_and(|l| l.requests.send(Message::Request(request)).is_err())
         {
             tracing::warn!("the wallpaper worker has stopped");
             self.loader = None;
@@ -447,8 +504,15 @@ impl Wallpapers {
     /// Bring the output's state up to date with what is wanted: no file system access, no waiting.
     fn update(&mut self, output: u64, candidates: Vec<PathBuf>, dst: (u32, u32), now: f64) {
         self.collect();
-        self.outputs
-            .retain(|_, s| s.in_flight || now - s.seen_at < FORGET_SECONDS);
+        let idle: Vec<u64> = self
+            .outputs
+            .iter()
+            .filter(|(_, s)| !s.in_flight && now - s.seen_at >= FORGET_SECONDS)
+            .map(|(output, _)| *output)
+            .collect();
+        for output in idle {
+            self.forget(output);
+        }
         let key = key_of(&candidates, dst);
         let state = self.outputs.entry(output).or_default();
         state.seen_at = now;
@@ -482,7 +546,7 @@ impl Wallpapers {
         }
         let candidates = self.candidates(config, dark);
         if candidates.is_empty() {
-            self.outputs.remove(&output);
+            self.forget(output);
             self.tint = None;
             return None;
         }
@@ -514,6 +578,13 @@ impl Wallpapers {
                 None
             }
         }
+    }
+
+    /// Bytes of the decoded image the worker holds: none once no output wants its file.
+    pub fn cached_source_bytes(&self) -> usize {
+        self.loader
+            .as_ref()
+            .map_or(0, |l| l.cached.load(Ordering::SeqCst))
     }
 
     /// Images the worker has decoded so far (one per file and change of the file).
@@ -823,5 +894,56 @@ mod tests {
         rig.settle(&fifo, (4, 4), 0.0);
         assert_eq!(rig.wallpapers.decodes(), 0);
         assert!(rig.wallpapers.outputs[&1].loaded.is_none());
+    }
+
+    #[test]
+    fn the_decoded_image_is_let_go_when_no_output_wants_its_file_any_more() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_png(dir.path(), "w.png", (16, 8), |_, _| [1, 2, 3, 255]);
+        let mut rig = rig();
+        let until = |rig: &mut Rig, now: f64, done: &dyn Fn(&Wallpapers) -> bool| {
+            let end = std::time::Instant::now() + Duration::from_secs(10);
+            while !done(&rig.wallpapers) {
+                assert!(std::time::Instant::now() < end, "the worker did not let go");
+                rig.wallpapers.update(1, vec![path.clone()], (8, 4), now);
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        };
+        // two outputs share the file: one going away keeps the image for the other
+        rig.settle(&path, (8, 4), 0.0);
+        rig.wallpapers.update(2, vec![path.clone()], (8, 4), 0.0);
+        until(&mut rig, 0.0, &|w| {
+            !w.pending() && w.cached_source_bytes() == 16 * 8 * 4
+        });
+        rig.wallpapers.forget(2);
+        rig.settle(&path, (4, 2), 1.0);
+        assert_eq!(rig.wallpapers.cached_source_bytes(), 16 * 8 * 4);
+        // the wallpaper goes back to procedural: nothing wants the file
+        rig.wallpapers.forget(1);
+        let end = std::time::Instant::now() + Duration::from_secs(10);
+        while rig.wallpapers.cached_source_bytes() != 0 {
+            assert!(std::time::Instant::now() < end, "the image stayed");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        // an output nobody asks about for a minute is forgotten too
+        rig.wallpapers.update(3, vec![path.clone()], (8, 4), 100.0);
+        let end = std::time::Instant::now() + Duration::from_secs(10);
+        while rig.wallpapers.cached_source_bytes() == 0 {
+            assert!(std::time::Instant::now() < end);
+            rig.wallpapers.update(3, vec![path.clone()], (8, 4), 100.0);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        rig.wallpapers
+            .update(4, vec![dir.path().join("other.png")], (8, 4), 200.0);
+        let end = std::time::Instant::now() + Duration::from_secs(10);
+        while rig.wallpapers.cached_source_bytes() != 0 {
+            assert!(
+                std::time::Instant::now() < end,
+                "the idle output kept its image"
+            );
+            rig.wallpapers
+                .update(4, vec![dir.path().join("other.png")], (8, 4), 200.0);
+            std::thread::sleep(Duration::from_millis(2));
+        }
     }
 }

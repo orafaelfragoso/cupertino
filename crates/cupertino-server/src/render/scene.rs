@@ -393,12 +393,12 @@ fn wallpaper_element(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> Cu
     let dark = p.config.is_dark();
     let image = p.overlays.wallpaper.element(
         renderer,
-        &mut p.overlays.images,
         p.output_id.0,
         &p.config.wallpaper,
         dark,
         p.output_px,
         p.scale,
+        p.now,
     );
     image.unwrap_or_else(|| wallpaper(p).into())
 }

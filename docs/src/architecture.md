@@ -60,6 +60,8 @@ A crate's layer is declared in its manifest (`[package.metadata.cupertino] layer
 
 `shell`, `services`, `apps` and `tools` crates never depend on `core` or on each other. Each shell component is one crate: its pure model plus a binary behind an `app` feature. Only `cupertino-server` and `cupertino-seat` (which implements Smithay's session trait) depend on Smithay. The `xkbcommon` package of the workspace is `cupertino-xkbcommon`, a pure-Rust drop-in for the C-binding crate, selected through `[patch.crates-io]`.
 
+The migration moves to twelve layers (adding `protocol`, `transport` and `ui`). `cupertino-layers` also checks every crate's target layer, with each edge that the target forbids today listed as an exception (permanent, or migration debt with its issue), and fails on any dependency chain from `ui` to `core`, `shell` or `services`; its README has the target table, and `crates/cupertino-layers/graph/` holds DOT snapshots of both views, checked by a test (`cargo run -p cupertino-layers -- --graph current|target`).
+
 ## Replacing the Linux stack
 
 | Replaces | Component | Kernel interface |

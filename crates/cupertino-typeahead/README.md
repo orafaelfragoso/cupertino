@@ -9,4 +9,8 @@ next item whose title starts with it, ignoring case.
 - Items that cannot be chosen (separators, disabled rows) are passed as `None` and never match.
 - A space is part of the text while a search is under way (`typing`); the caller treats it as a choice otherwise.
 
+Titles and the typed text are compared as they are, lowercased: there is no Unicode normalization, so a decomposed accent
+(`e` and a combining acute) does not match a precomposed one (`é`). The crate stays free of dependencies; a caller that
+needs the match normalizes the titles and the text first.
+
 Used by `cupertino-settings` (choice menus) and `cupertino-files` (context menus).

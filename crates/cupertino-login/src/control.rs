@@ -44,6 +44,8 @@ pub enum Request {
     SwitchToLoginWindow,
     /// `Sleep`: lock and put the computer to sleep, without a panel.
     Sleep,
+    /// `RefreshCapabilities`: read logind again.
+    RefreshCapabilities,
 }
 
 struct Control {
@@ -101,6 +103,13 @@ impl Control {
         Ok(())
     }
 
+    /// Read logind's policy and the session manager again and update `Capabilities`; returns at once, and
+    /// `PropertiesChanged` follows when something changed. A menu calls it when it opens, since the answers change with the
+    /// open sessions and the inhibitors.
+    fn refresh_capabilities(&self) {
+        (self.on_request)(Request::RefreshCapabilities);
+    }
+
     /// Show the power panel (Restart, Sleep, Cancel, Shut Down), the one a held power button shows. Fails while the session
     /// is locked.
     fn request_power_dialog(&self) -> zbus::fdo::Result<()> {
@@ -140,6 +149,7 @@ impl Control {
 }
 
 /// The served interface; it stays on the bus while this lives.
+#[derive(Clone)]
 pub struct Service {
     connection: Connection,
 }

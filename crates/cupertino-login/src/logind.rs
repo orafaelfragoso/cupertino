@@ -76,6 +76,7 @@ pub enum Signal {
 pub struct Inhibitor(#[allow(dead_code)] OwnedFd);
 
 /// This process's session and the system bus it is on.
+#[derive(Clone)]
 pub struct Logind {
     connection: Connection,
     session: SessionRef,

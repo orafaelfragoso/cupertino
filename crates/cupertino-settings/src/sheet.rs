@@ -111,7 +111,12 @@ pub enum Kind {
         text: String,
     },
     /// A chooser of a folder or a picture; `top` is the first row of its list that shows.
-    Picker { chooser: Chooser, top: usize },
+    Picker {
+        chooser: Chooser,
+        top: usize,
+        /// The row under the pointer.
+        hovered: Option<usize>,
+    },
     /// A question of the Bluetooth daemon to the pairing agent (`org.cupertino.Bluetooth1.Agent`); `id` is the pairing.
     /// The wording is approximate (the design's pairing dialog is not known).
     Pairing {
@@ -225,6 +230,7 @@ impl Sheet {
             kind: Kind::Picker {
                 chooser: Chooser(Picker::open(start, mode)),
                 top: 0,
+                hovered: None,
             },
         }
     }
@@ -410,7 +416,7 @@ impl Sheet {
 
     /// [`Sheet::key`] at `now` seconds: the chooser's type-to-select forgets the typed text after a pause.
     pub fn key_at(&mut self, key: SheetKey, now: f64) -> Outcome {
-        if let Kind::Picker { chooser, top } = &mut self.kind {
+        if let Kind::Picker { chooser, top, .. } = &mut self.kind {
             let picker_key = match key {
                 SheetKey::Escape => return Outcome::Cancel,
                 SheetKey::Return => PickerKey::Return,
@@ -607,9 +613,46 @@ impl Sheet {
         }
     }
 
+    /// The pointer is at `p` (`None`: it left): the chooser's row under it shows its hover. `true` when that changed.
+    pub fn hover(&mut self, layout: &SheetLayout, p: Option<Point>) -> bool {
+        let Kind::Picker {
+            chooser,
+            top,
+            hovered,
+        } = &mut self.kind
+        else {
+            return false;
+        };
+        let row = p.zip(layout.list).and_then(|(p, list)| {
+            list.contains(p)
+                .then(|| *top + ((p.y - list.y) / m::PICKER_ROW) as usize)
+        });
+        let row = row.filter(|r| *r < chooser.0.entries().len());
+        std::mem::replace(hovered, row) != row
+    }
+
+    /// The wheel moved by `dy` points with the pointer at `p`: the chooser's list scrolls when `p` is over it. `true`
+    /// when it moved.
+    pub fn scroll(&mut self, layout: &SheetLayout, p: Point, dy: f64) -> bool {
+        let Kind::Picker { chooser, top, .. } = &mut self.kind else {
+            return false;
+        };
+        if !layout.list.is_some_and(|list| list.contains(p)) || dy == 0.0 {
+            return false;
+        }
+        let rows = (dy / m::PICKER_ROW).round().abs().max(1.0) as usize;
+        let last = chooser.0.entries().len().saturating_sub(m::PICKER_ROWS);
+        let to = if dy > 0.0 {
+            (*top + rows).min(last)
+        } else {
+            top.saturating_sub(rows)
+        };
+        std::mem::replace(top, to) != to
+    }
+
     /// A press at `p` in a sheet laid out as `layout`.
     pub fn press(&mut self, layout: &SheetLayout, p: Point) -> Outcome {
-        if let Kind::Picker { chooser, top } = &mut self.kind {
+        if let Kind::Picker { chooser, top, .. } = &mut self.kind {
             let outcome = if layout.up.is_some_and(|up| up.contains(p)) {
                 chooser.0.parent()
             } else if let Some(list) = layout.list.filter(|l| l.contains(p)) {
@@ -930,5 +973,56 @@ mod tests {
         );
         assert_eq!(sheet.press(&l, l.cancel.center()), Outcome::Cancel);
         assert!(l.frame.w <= content.w && l.frame.bottom() <= content.bottom());
+    }
+
+    #[test]
+    fn the_chooser_list_scrolls_with_the_wheel_and_shows_the_row_under_the_pointer() {
+        let d = tempfile::tempdir().unwrap();
+        for i in 0..30 {
+            std::fs::write(d.path().join(format!("p{i:02}.jpg")), b"x").unwrap();
+        }
+        let content = Rect::new(0.0, 0.0, 600.0, 600.0);
+        let mut sheet = Sheet::picker(d.path(), Mode::Photo);
+        let l = sheet.layout(&content);
+        let list = l.list.unwrap();
+        let at = |row: usize| Point {
+            x: list.x + 10.0,
+            y: list.y + (row as f64 + 0.5) * m::PICKER_ROW,
+        };
+        let outside = Point {
+            x: list.x - 5.0,
+            y: list.y,
+        };
+        assert!(
+            !sheet.scroll(&l, outside, 40.0),
+            "the wheel only scrolls over the list"
+        );
+        assert!(
+            !sheet.scroll(&l, at(0), -40.0),
+            "nothing above the first row"
+        );
+        assert!(sheet.scroll(&l, at(0), 2.0 * m::PICKER_ROW));
+        assert!(sheet.hover(&l, Some(at(0))));
+        assert!(
+            !sheet.hover(&l, Some(at(0))),
+            "the same row again changes nothing"
+        );
+        // the pointer is now on the third entry
+        assert_eq!(sheet.press(&l, at(0)), Outcome::Stay);
+        assert_eq!(
+            sheet.key(SheetKey::Return),
+            picked(d.path().join("p02.jpg"), false)
+        );
+        assert!(
+            sheet.scroll(&l, at(0), 1000.0),
+            "a long scroll stops at the last row"
+        );
+        assert!(!sheet.scroll(&l, at(0), 1000.0));
+        assert_eq!(sheet.press(&l, at(m::PICKER_ROWS - 1)), Outcome::Stay);
+        assert_eq!(
+            sheet.key(SheetKey::Return),
+            picked(d.path().join("p29.jpg"), false)
+        );
+        assert!(sheet.hover(&l, None), "the pointer left");
     }
 }

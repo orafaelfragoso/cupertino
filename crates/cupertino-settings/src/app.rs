@@ -761,6 +761,37 @@ impl App {
                     Hit::Sidebar => {}
                 }
             }
+            PointerEvent::Motion(position) | PointerEvent::Enter(position)
+                if self.sheet.is_some() =>
+            {
+                let sheet = self.sheet.as_mut().expect("checked by the guard");
+                let l = sheet.layout(&layout.content);
+                let p = Point {
+                    x: position.x,
+                    y: position.y,
+                };
+                if sheet.hover(&l, Some(p)) {
+                    self.client.request_redraw(self.window)?;
+                }
+            }
+            PointerEvent::Leave if self.sheet.is_some() => {
+                let sheet = self.sheet.as_mut().expect("checked by the guard");
+                let l = sheet.layout(&layout.content);
+                if sheet.hover(&l, None) {
+                    self.client.request_redraw(self.window)?;
+                }
+            }
+            PointerEvent::Scroll { dy, position, .. } if self.sheet.is_some() => {
+                let sheet = self.sheet.as_mut().expect("checked by the guard");
+                let l = sheet.layout(&layout.content);
+                let p = Point {
+                    x: position.x,
+                    y: position.y,
+                };
+                if sheet.scroll(&l, p, dy) {
+                    self.client.request_redraw(self.window)?;
+                }
+            }
             PointerEvent::Motion(position) if self.search.field().is_dragging() => {
                 let area = search_text_area(&layout.search, !self.search.text().is_empty());
                 let index = self.search.field().index_at(

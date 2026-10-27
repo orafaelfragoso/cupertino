@@ -412,6 +412,20 @@ impl Painter {
         self.thumbnails.contains_key(image)
     }
 
+    /// Draw the raster icon `name` fitted into `r` (a placeholder when no pack or host theme gives it).
+    fn raster_icon(&mut self, pm: &mut Pixmap, r: &Rect, name: &str, s: f32) {
+        let px = (r.w.min(r.h) * f64::from(s)).round().max(1.0) as u32;
+        let icon = self.symbols.raster(name, px);
+        pm.draw_pixmap(
+            (r.x as f32 * s).round() as i32,
+            (r.y as f32 * s).round() as i32,
+            icon.as_ref(),
+            &PixmapPaint::default(),
+            Transform::identity(),
+            None,
+        );
+    }
+
     /// Draw the template symbol `name` in `color`, fitted to `fit` points and centred in `r` (a placeholder when no
     /// asset pack provides it).
     fn symbol(&mut self, pm: &mut Pixmap, r: &Rect, name: &str, fit: f64, s: f32, color: Rgba) {
@@ -1441,7 +1455,16 @@ impl Painter {
                 );
             }
         }
-        if let (Kind::Picker { chooser, top }, Some(list), Some(up)) = (&sheet.kind, l.list, l.up) {
+        if let (
+            Kind::Picker {
+                chooser,
+                top,
+                hovered,
+            },
+            Some(list),
+            Some(up),
+        ) = (&sheet.kind, l.list, l.up)
+        {
             self.paint_control(
                 pm,
                 s,
@@ -1482,11 +1505,23 @@ impl Painter {
                 let on = chooser.0.highlighted() == Some(i);
                 if on {
                     fill_rounded(pm, &row, 5.0, false, s, pal.accent);
+                } else if *hovered == Some(i) {
+                    fill_rounded(pm, &row, 5.0, false, s, pal.box_fill);
                 }
+                self.raster_icon(
+                    pm,
+                    &Rect::new(row.x + 6.0, row.y + 3.0, 16.0, 16.0),
+                    if entry.is_dir {
+                        "folder"
+                    } else {
+                        "document.image"
+                    },
+                    s,
+                );
                 let color = if on { WHITE } else { pal.text };
                 self.label(
                     pm,
-                    &Rect::new(row.x + 8.0, row.y, row.w - 28.0, row.h),
+                    &Rect::new(row.x + 28.0, row.y, row.w - 36.0, row.h),
                     &entry.name,
                     Font {
                         size: 12.0,
@@ -1495,19 +1530,6 @@ impl Painter {
                     s,
                     color,
                 );
-                if entry.is_dir {
-                    self.label(
-                        pm,
-                        &Rect::new(row.right() - 18.0, row.y, 12.0, row.h),
-                        "\u{203a}",
-                        Font {
-                            size: 13.0,
-                            weight: 400,
-                        },
-                        s,
-                        if on { WHITE } else { pal.secondary_text },
-                    );
-                }
             }
         }
     }

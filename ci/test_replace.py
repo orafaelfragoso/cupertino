@@ -13,10 +13,10 @@ def replace(files: dict[str, str], *args: str) -> tuple[int, str, dict[str, str]
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         for name, text in files.items():
-            (root / name).write_text(text)
+            (root / name).write_bytes(text.encode())
         done = subprocess.run([sys.executable, "-I", str(HERE / "replace.py"), *args, *[str(root / n) for n in files]],
                               capture_output=True, text=True)
-        return done.returncode, done.stderr.replace(tmp + "/", ""), {n: (root / n).read_text() for n in files}
+        return done.returncode, done.stderr.replace(tmp + "/", ""), {n: (root / n).read_bytes().decode() for n in files}
 
 
 class ReplaceTest(unittest.TestCase):
@@ -46,6 +46,40 @@ class ReplaceTest(unittest.TestCase):
             done = subprocess.run([sys.executable, "-I", str(HERE / "replace.py"), "x", "y", f"{tmp}/missing"],
                                   capture_output=True, text=True)
             self.assertEqual(done.returncode, 1)
+
+    def test_line_endings_and_non_ascii_text_are_kept(self):
+        status, _, after = replace({"a": "caf\u00e9 x\r\ny\r\n"}, "x", "z")
+        self.assertEqual((status, after["a"]), (0, "caf\u00e9 z\r\ny\r\n"))
+
+    def test_an_empty_pattern_or_a_zero_width_match_fails(self):
+        for args in (("", "y"), ("--regex", "x*", "y")):
+            status, err, after = replace({"a": "x"}, *args)
+            self.assertEqual((status, after["a"]), (1, "x"), args)
+        self.assertEqual(err, "replace: a: the pattern matches zero characters\n")
+
+    def test_a_write_failure_leaves_every_file_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first, second = Path(tmp, "a"), Path(tmp, "locked", "b")
+            first.write_text("x")
+            second.parent.mkdir()
+            second.write_text("x")
+            second.parent.chmod(0o500)
+            try:
+                done = subprocess.run([sys.executable, "-I", str(HERE / "replace.py"), "x", "y", str(first), str(second)],
+                                      capture_output=True, text=True)
+            finally:
+                second.parent.chmod(0o700)
+            self.assertEqual(done.returncode, 1)
+            self.assertEqual((first.read_text(), second.read_text()), ("x", "x"))
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["a", "locked"])
+
+    def test_the_file_mode_is_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "run.sh")
+            path.write_text("x")
+            path.chmod(0o755)
+            subprocess.run([sys.executable, "-I", str(HERE / "replace.py"), "x", "y", str(path)], check=True, capture_output=True)
+            self.assertEqual((path.read_text(), path.stat().st_mode & 0o777), ("y", 0o755))
 
 
 if __name__ == "__main__":

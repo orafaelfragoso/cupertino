@@ -219,16 +219,38 @@ impl Settings {
     }
 
     /// Take the accessibility settings from `held`, the server's `Accessibility` property (every key of the file with
-    /// its value as the file writes it); a key or value this build does not understand is skipped.
+    /// its value as the file writes it). A key or value this build does not understand is skipped and named in the
+    /// returned messages.
     pub fn apply_session_accessibility(
         &mut self,
         held: &std::collections::HashMap<String, String>,
-    ) {
-        for (key, value) in held {
-            if let Err(e) = self.accessibility.set(key, value) {
-                eprintln!("cupertino-settings: the session's accessibility setting {key}: {e}");
-            }
+    ) -> Vec<String> {
+        held.iter()
+            .filter_map(|(key, value)| {
+                self.accessibility
+                    .set(key, value)
+                    .err()
+                    .map(|e| format!("the session's accessibility setting {key}: {e}"))
+            })
+            .collect()
+    }
+
+    /// Store the resolution `dpi` of the mouse `key` in `compositor.json` over the file as it is now, so a key the
+    /// server wrote since the last read (the appearance) is not put back; on a failure the settings stay as they were.
+    pub fn set_mouse_dpi(&mut self, paths: &Paths, key: &str, dpi: u32) -> Result<(), String> {
+        let before = self.clone();
+        let outcome = self
+            .reload(paths)
+            .map_err(|e| format!("The settings could not be read: {e}."))
+            .and_then(|()| self.compositor.set_mouse_dpi(key, Some(dpi)))
+            .and_then(|()| {
+                self.store(paths, File::Compositor)
+                    .map_err(|e| e.to_string())
+            });
+        if outcome.is_err() {
+            *self = before;
         }
+        outcome
     }
 
     /// Write `file` to its path atomically.

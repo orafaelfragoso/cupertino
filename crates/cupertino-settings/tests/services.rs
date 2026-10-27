@@ -900,7 +900,7 @@ fn the_colour_filter_button_shows_what_the_server_holds_not_the_file() {
         Reading::Ready(held) => held,
         other => panic!("the session's property, got {other:?}"),
     };
-    settings.apply_session_accessibility(&held);
+    assert!(settings.apply_session_accessibility(&held).is_empty());
     assert_eq!(colour_filter(&settings), "Grayscale");
     let paths = Paths {
         dock: None,
@@ -916,5 +916,24 @@ fn the_colour_filter_button_shows_what_the_server_holds_not_the_file() {
         colour_filter(&settings),
         "Grayscale",
         "a re-read of the file does not undo it"
+    );
+}
+
+#[test]
+fn a_key_the_server_holds_that_this_build_does_not_know_is_named_not_applied() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut settings = settings(dir.path());
+    let held: HashMap<String, String> = [
+        ("color_filter".to_string(), "grayscale".to_string()),
+        ("future_option".to_string(), "on".to_string()),
+    ]
+    .into();
+    let problems = settings.apply_session_accessibility(&held);
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].contains("future_option"), "{problems:?}");
+    assert_eq!(
+        settings.accessibility.color_filter,
+        Some(cupertino_defaults::accessibility::ColorFilter::Grayscale),
+        "the known keys still apply"
     );
 }

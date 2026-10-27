@@ -20,7 +20,7 @@ use cupertino_settings::form::{self, RowSpec, SectionLayout, SectionSpec};
 use cupertino_settings::history::History;
 use cupertino_settings::instance;
 use cupertino_settings::keys::{self, Action, Focus, Mods, SearchKey};
-use cupertino_settings::live::Live;
+use cupertino_settings::live::{Live, Reading};
 use cupertino_settings::menu;
 use cupertino_settings::paint::{
     menu_rows, popup_hit, search_text_area, Painter, Palette, PaneView, WindowState,
@@ -28,7 +28,7 @@ use cupertino_settings::paint::{
 use cupertino_settings::panes::{self, Call, ControlId, Effect, Section, Session};
 use cupertino_settings::search::{popup, SearchField};
 use cupertino_settings::services::{Services, SESSION_NAME, SESSION_PATH};
-use cupertino_settings::settings::{File, Paths, Settings};
+use cupertino_settings::settings::{Paths, Settings};
 use cupertino_settings::sheet::{Answer, Outcome, Sheet, SheetKey};
 use cupertino_settings::sidebar::{self, RowSize};
 use cupertino_settings::window::{self, metrics, Hit, WindowLayout};
@@ -107,6 +107,8 @@ struct App {
     settings: Settings,
     /// The text of the last refused change of a control, shown under its row until it changes again.
     errors: Vec<(ControlId, String)>,
+    /// Problems already written to the log, so a repeating one is logged once per run.
+    reported: std::collections::HashSet<String>,
     /// The pane the content column shows, its scroll offset and its layout as last drawn.
     content_pane: PaneId,
     scroll: f64,
@@ -264,6 +266,7 @@ pub fn run(pane: PaneId) -> Result<()> {
         paths,
         settings,
         errors: Vec::new(),
+        reported: std::collections::HashSet::new(),
         content_pane: pane,
         scroll: 0.0,
         form: Vec::new(),
@@ -1250,14 +1253,7 @@ impl App {
 
     /// Store the typed resolution of the mouse `key`; the server applies the file.
     fn set_mouse_dpi(&mut self, key: &str, dpi: u32) -> std::result::Result<(), String> {
-        let before = self.settings.clone();
-        self.settings.compositor.set_mouse_dpi(key, Some(dpi))?;
-        self.settings
-            .store(&self.paths, File::Compositor)
-            .map_err(|e| {
-                self.settings = before;
-                e.to_string()
-            })
+        self.settings.set_mouse_dpi(&self.paths, key, dpi)
     }
 
     /// Something from a bus thread: a pane to show, a question of the pairing agent, the end of a pairing.
@@ -1369,8 +1365,19 @@ impl App {
     /// their only writer, and it keeps them in memory only when it has no file to store them in, so the file is not
     /// the truth. Without the property the file's values stay.
     fn sync_accessibility(&mut self) {
-        if let Some(held) = self.services.accessibility().ready() {
-            self.settings.apply_session_accessibility(held);
+        let problems = match self.services.accessibility() {
+            Reading::Ready(held) => self.settings.apply_session_accessibility(&held),
+            Reading::Unavailable(reason) => {
+                vec![format!(
+                    "the session's accessibility settings cannot be read: {reason}"
+                )]
+            }
+            Reading::Unknown => Vec::new(),
+        };
+        for problem in problems {
+            if self.reported.insert(problem.clone()) {
+                eprintln!("cupertino-settings: {problem}");
+            }
         }
     }
 

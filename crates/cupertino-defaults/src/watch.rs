@@ -3,16 +3,17 @@
 //! creation or removal are all seen, also for a file an environment variable moved out of the settings directory.
 //!
 //! The events of one change come in bursts (create, write and rename of the temporary file; an editor's backup and
-//! write). The watcher waits until a burst has been quiet for [`COALESCE`], then reports each watched file whose
-//! contents changed since the last report, once. A burst that leaves a file as it was (a `touch`, a write of the same
-//! text) reports nothing. Reports go to a callback on the watcher's thread; a process forwards them to its event loop
+//! write). The watcher waits until events touching watched files or their directories are quiet for [`COALESCE`],
+//! then reports each watched file whose contents changed since the last report, once. A burst that leaves a file
+//! as it was (a `touch`, a write of the same text) reports nothing. Reports go to a callback on the watcher's thread;
+//! a process forwards them to its event loop
 //! (the server's calloop channel, a shell process's waker).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use notify::{RecursiveMode, Watcher};
 
@@ -131,13 +132,14 @@ fn watch_loop(
                     }
                 }
                 Some(
-                    event
-                        .paths
-                        .iter()
-                        .any(|p| watched.contains(p) || dirs.contains(p)),
+                    event.need_rescan()
+                        || event
+                            .paths
+                            .iter()
+                            .any(|p| watched.contains(p) || dirs.contains(p)),
                 )
             }
-            // an overflowing queue loses events: compare every file
+            // A notification error may have lost events: compare every file.
             Msg::Event(Err(e)) => {
                 report(WatchEvent::Error(e.to_string()));
                 Some(true)
@@ -147,21 +149,23 @@ fn watch_loop(
     loop {
         // wait for the first event of a burst, then until the burst is quiet
         let Ok(first) = rx.recv() else { return };
-        let Some(mut touched) = handle(first, report) else {
+        let Some(touched) = handle(first, report) else {
             return;
         };
-        loop {
-            match rx.recv_timeout(COALESCE) {
+        if !touched {
+            continue;
+        }
+        let mut deadline = Instant::now() + COALESCE;
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            match rx.recv_timeout(left) {
                 Ok(msg) => match handle(msg, report) {
-                    Some(t) => touched |= t,
+                    Some(true) => deadline = Instant::now() + COALESCE,
+                    Some(false) => (),
                     None => return,
                 },
                 Err(mpsc::RecvTimeoutError::Timeout) => break,
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
             }
-        }
-        if !touched {
-            continue;
         }
         let mut changed = Vec::new();
         for f in files {
@@ -206,6 +210,71 @@ mod tests {
     }
 
     const WINDOW: Duration = Duration::from_millis(600);
+
+    #[test]
+    fn unrelated_parent_activity_does_not_delay_a_change_report() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("cupertino/dock.conf");
+        let noise = root.path().join("other.conf");
+        let (_w, rx) = watch(vec![path.clone()]);
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let received = std::thread::scope(|scope| {
+            let (stop_tx, stop_rx) = mpsc::channel::<()>();
+            let writer = scope.spawn(move || {
+                std::fs::write(&noise, "unrelated").unwrap();
+                ready_tx.send(()).unwrap();
+                while matches!(
+                    stop_rx.recv_timeout(Duration::from_millis(2)),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                ) {
+                    std::fs::remove_file(&noise).unwrap();
+                    std::fs::write(&noise, "unrelated").unwrap();
+                }
+            });
+            ready_rx.recv_timeout(WINDOW).unwrap();
+            crate::atomic::write_atomic(&path, b"tile_size = 64\n").unwrap();
+            let received = rx.recv_timeout(WINDOW);
+            drop(stop_tx);
+            writer.join().unwrap();
+            received
+        });
+        assert_eq!(received, Ok(WatchEvent::Changed(vec![path])));
+        assert_eq!(reports(&rx, WINDOW), vec![]);
+    }
+
+    #[test]
+    fn a_rescan_reports_a_change_without_a_path_event() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("dock.conf");
+        std::fs::write(&path, "tile_size = 48\n").unwrap();
+        let mut last = BTreeMap::from([(path.clone(), snapshot(&path).unwrap())]);
+        std::fs::write(&path, "tile_size = 64\n").unwrap();
+        let (tx, rx) = mpsc::channel();
+        let (report_tx, report_rx) = mpsc::channel();
+        tx.send(Msg::Event(Ok(
+            notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan)
+        )))
+        .unwrap();
+        let received = std::thread::scope(|scope| {
+            let files = [path.clone()];
+            let worker = scope.spawn(move || {
+                let watcher = notify::recommended_watcher(|_| {}).unwrap();
+                watch_loop(
+                    watcher,
+                    &rx,
+                    &files,
+                    &BTreeSet::new(),
+                    &mut last,
+                    &mut |event| report_tx.send(event).unwrap(),
+                );
+            });
+            let received = report_rx.recv_timeout(WINDOW);
+            tx.send(Msg::Stop).unwrap();
+            worker.join().unwrap();
+            received
+        });
+        assert_eq!(received, Ok(WatchEvent::Changed(vec![path])));
+    }
 
     #[test]
     fn an_atomic_replacement_is_reported_once() {

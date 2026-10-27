@@ -77,7 +77,7 @@ fn is_absent(e: &cupertino_seat::Error) -> bool {
             name.as_str(),
             "org.freedesktop.login1.NoSessionForPID" | "org.freedesktop.login1.NoSuchSession"
         ),
-        zbus::Error::InputOutput(io) => matches!(
+        zbus::Error::Connection(io, _) | zbus::Error::InputOutput(io) => matches!(
             io.kind(),
             std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
         ),

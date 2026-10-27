@@ -414,6 +414,7 @@ async fn act(
                 SessionAction::Lock => "LockNow",
                 SessionAction::LogOut => "RequestLogOut",
                 SessionAction::SwitchUser => "SwitchToLoginWindow",
+                SessionAction::RefreshCapabilities => "RefreshCapabilities",
             };
             proxy(session, LOGIN_NAME, LOGIN_PATH, LOGIN_NAME)
                 .await?

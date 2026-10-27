@@ -163,6 +163,9 @@ pub enum SessionAction {
     LogOut,
     /// Lock the session and show the login window, where another person can log in.
     SwitchUser,
+    /// The menu is about to open: ask the agent to read what the machine allows again; it answers by changing
+    /// `Capabilities`. Not an entry of the menu.
+    RefreshCapabilities,
 }
 
 /// Which entries of the system menu the session can carry out; a missing key reads as `true`.

@@ -85,6 +85,10 @@ impl FakeLogin {
     fn request_restart(&self) {
         self.calls.send("RequestRestart".into()).unwrap();
     }
+
+    fn refresh_capabilities(&self) {
+        self.calls.send("RefreshCapabilities".into()).unwrap();
+    }
 }
 
 type DeviceRecord = (u32, String, String, String, String, String, String);
@@ -346,6 +350,13 @@ fn the_extras_follow_the_services_and_act_on_them() {
     assert_eq!(
         login_calls.recv_timeout(Duration::from_secs(5)).unwrap(),
         "RequestRestart"
+    );
+    extras
+        .act(ExtraAction::Session(SessionAction::RefreshCapabilities))
+        .unwrap();
+    assert_eq!(
+        login_calls.recv_timeout(Duration::from_secs(5)).unwrap(),
+        "RefreshCapabilities"
     );
 
     // joining an open network calls the service without a passphrase, and the bar reads the result back

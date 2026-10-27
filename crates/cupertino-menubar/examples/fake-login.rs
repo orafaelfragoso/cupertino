@@ -23,6 +23,10 @@ impl FakeLogin {
         HashMap::new()
     }
 
+    fn refresh_capabilities(&self) {
+        eprintln!("fake-login: RefreshCapabilities");
+    }
+
     fn sleep(&self) {
         eprintln!("fake-login: Sleep");
     }

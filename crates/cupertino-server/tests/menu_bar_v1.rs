@@ -1017,6 +1017,22 @@ fn gtk_clients_are_told_of_a_global_menu_bar_only_while_a_bar_exists() {
     });
 }
 
+/// The output of the last bar unplugged: the bar goes with it, and so does `global_menu_bar`.
+#[test]
+fn gtk_clients_are_told_the_bar_is_gone_when_its_output_is() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = BarClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&bar, 1);
+    let gtk = GtkClient::spawn(h.socket_path());
+    h.wait_until("the client to be told", |_| gtk.capabilities() == [2]);
+
+    let output = h.state.outputs[0].id;
+    h.state.remove_output(output);
+    h.wait_until("the client to be told the bar is gone", |_| {
+        gtk.capabilities() == [2, 0]
+    });
+}
+
 #[test]
 fn move_to_workspace_moves_the_active_window_and_updates_the_state() {
     let Some(mut h) = Harness::new() else { return };

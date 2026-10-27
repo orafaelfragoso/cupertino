@@ -666,6 +666,28 @@
   test_owner: crates/cupertino-menubar/tests/dbus_integration.rs
   source: crates/cupertino-menubar/src/dbus/sni.rs:66
   note: any application registers its tray item
+- name: org.gtk.Menus
+  kind: dbus-interface
+  version: n/a
+  bus: session
+  bus_name: none
+  owner_crate: cupertino-ui-menus
+  owner_area: design
+  scope: public
+  test_owner: crates/cupertino-ui-menus/tests/bus.rs
+  source: crates/cupertino-ui-menus/src/objects.rs:25
+  note: served by each CupertinoKit application on its own connection; the menu bar reads it
+- name: org.gtk.Actions
+  kind: dbus-interface
+  version: n/a
+  bus: session
+  bus_name: none
+  owner_crate: cupertino-ui-menus
+  owner_area: design
+  scope: public
+  test_owner: crates/cupertino-ui-menus/tests/bus.rs
+  source: crates/cupertino-ui-menus/src/objects.rs:61
+  note: any session-bus peer may activate an enabled action, as for every GTK application
 - name: cupertino-assets
   kind: binary
   version: 0.1.0

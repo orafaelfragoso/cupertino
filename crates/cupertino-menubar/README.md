@@ -14,7 +14,7 @@ computes, and feeds the crate pointer, key and timer events with absolute timest
 | `extras` | The bar's own status items (Wi-Fi, battery, Bluetooth, Focus): which show, their icons, menus (`ExtraMenu`) and row actions (`ExtraAction`), from an `Extras` snapshot of the services. |
 | `item` | `MenuItem`: label, mnemonic, separator, enabled, visible, `Toggle`, `Shortcut`, icon name / data, children. |
 | `fallback` | Synthetic app menu (About, Hide, Hide Others, Show All, Quit) and Window menu (Minimize, Zoom, Move to Workspace, Close Window). `action_for` maps activated ids back to `FallbackAction`. |
-| `source` | `MenuSourceMap`: window / app identity → `MenuSource::{Kde, Gtk, Synthetic}, service-vanished cleanup. |
+| `source` | `MenuSourceMap`: window → `MenuSource::{Kde, Gtk, Synthetic}`. A window gets only the menus it exported, never another window of its application. |
 | `dbus::dbusmenu` | `DBusMenuClient`: `GetLayout` parsing (`parse_layout`), `Event`, `AboutToShow`, and `LayoutUpdated` / `ItemsPropertiesUpdated` / `ItemActivationRequested` as a `MenuUpdate` stream, property update helpers. |
 | `dbus::sni` | `WatcherService` serving `org.kde.StatusNotifierWatcher` (the compositor is the host), `WatcherClient`, `fetch_item` (icons including ARGB pixmaps, status, tooltip, menu path), `load_menu` through DBusMenu, `activate_item` / `secondary_activate_item` / `context_menu_item` / `scroll_item`, `best_pixmap`. |
 | `dbus::gtk` | `GtkMenuClient`: an `org.gtk.Menus` + `org.gtk.Actions` reader (`Start`, sections flattened, namespaces, accelerators, enabled / toggle state from actions) and `Activate`. |

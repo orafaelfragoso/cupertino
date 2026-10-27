@@ -1,12 +1,15 @@
 //! Issue #5: the real Settings choice menu must not survive dismissal or navigation.
 //! Run with `cargo test -p cupertino-server --test settings-popup -- --test-threads=1`.
 
+mod common;
+
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use common::spawn;
 use cupertino_server::{backend::headless, config::Config, Cupertino};
 use cupertino_theme::Appearance;
 use smithay::backend::input::{ButtonState, KeyState};
@@ -37,12 +40,6 @@ impl Drop for Process {
         }
         self.0.wait().unwrap();
     }
-}
-
-/// The theme files of the checkout: the settings binary is built with the installed theme directory when a package
-/// build sets CUPERTINO_THEME_DIR, and that directory does not exist while the tests run.
-fn spec_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/theme")
 }
 
 fn settings_binary() -> &'static PathBuf {
@@ -116,18 +113,14 @@ impl Harness {
         let socket = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR"))
             .join(state.socket_name.as_ref().unwrap());
         let app = Process(
-            Command::new(binary)
+            spawn::cleared(binary, home.path())
                 .args(["--pane", pane])
-                .env_clear()
-                .env("PATH", "/usr/bin:/bin")
-                .env("HOME", home.path())
                 .env("XDG_CONFIG_HOME", home.path().join("config"))
                 .env("XDG_DATA_HOME", home.path().join("data"))
                 .env("XDG_DATA_DIRS", home.path().join("share"))
                 .env("XDG_RUNTIME_DIR", home.path())
                 .env("WAYLAND_DISPLAY", socket)
                 .env("CUPERTINO_ASSET_SEARCH_PATH", "")
-                .env("CUPERTINO_SPEC_DIR", spec_dir())
                 .env("DBUS_SESSION_BUS_ADDRESS", &address)
                 .env("DBUS_SYSTEM_BUS_ADDRESS", &address)
                 .spawn()
@@ -212,11 +205,8 @@ impl Harness {
     // Use the public ShowPane handoff so the navigation assertion is independent of pointer dismissal.
     fn show_appearance(&mut self) {
         let mut handoff = Process(
-            Command::new(settings_binary())
+            spawn::cleared(settings_binary(), self.home.path())
                 .args(["--pane", "appearance"])
-                .env_clear()
-                .env("CUPERTINO_SPEC_DIR", spec_dir())
-                .env("HOME", self.home.path())
                 .env("DBUS_SESSION_BUS_ADDRESS", &self.address)
                 .spawn()
                 .unwrap(),

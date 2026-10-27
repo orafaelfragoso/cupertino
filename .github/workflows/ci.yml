@@ -83,11 +83,18 @@ jobs:
       # Without --all: only the workspace members, not the vendored third-party crate.
       - run: cargo fmt --check
 
-  # Lint, layer rules and the whole test suite on one build. No CUPERTINO_* variable is set anywhere in this
-  # workflow: the tests must pass on the built-in assets alone.
+  # Lint, layer rules and the whole test suite on one build, with no CUPERTINO_* variable set: the tests must pass on
+  # the built-in assets alone. The second leg runs the tests as the Arch package's check() does: binaries compiled with
+  # the installed theme directory, which does not exist here, and CUPERTINO_SPEC_DIR pointing at the checkout. A test
+  # that starts a binary with a cleared environment and does not pass CUPERTINO_SPEC_DIR fails only there.
   check:
+    name: check${{ matrix.package-env && ' (package build environment)' || '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        package-env: [false, true]
     env:
       # The test binaries each link the whole workspace: with line tables the build took 12 GB of the runner's disk
       # and ran it out of space; without debug information it takes 4 GB. Panics still name file and line.
@@ -110,10 +117,19 @@ jobs:
         with:
           toolchain: stable
           components: clippy
+      - name: The package build environment
+        if: matrix.package-env
+        run: |
+          echo "CUPERTINO_THEME_DIR=/usr/share/cupertino/theme" >> "$GITHUB_ENV"
+          echo "CUPERTINO_SPEC_DIR=$GITHUB_WORKSPACE/data/theme" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: package-env-${{ matrix.package-env }}
       - name: Clippy
+        if: "!matrix.package-env"
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Layer rules
+        if: "!matrix.package-env"
         run: cargo run -p cupertino-layers
       - name: Disk after the lint build
         run: df -h .

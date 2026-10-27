@@ -337,12 +337,27 @@ impl Extras {
         menu
     }
 
-    /// The system menu, `None` without the session agent: Sleep, Restart…, Shut Down…, Lock Screen and Log Out <name>…,
-    /// then the login window entry. The ellipsis entries open the agent's confirmation panel.
-    pub fn session_menu(&self) -> Option<ExtraMenu> {
-        let session = self.session.as_ref()?;
-        let caps = session.caps;
+    /// The system menu: Sleep, Restart…, Shut Down…, Lock Screen and Log Out <name>…, then the login window entry. The
+    /// ellipsis entries open the agent's confirmation panel. Without a session agent (none runs, or the owner of its
+    /// name is not the one the server started) only Lock Screen is left: the server locks without the agent.
+    pub fn session_menu(&self) -> ExtraMenu {
         let mut menu = ExtraMenu::default();
+        let lock = |caps: &SessionCaps, menu: &mut ExtraMenu| {
+            menu.row_with_shortcut(
+                "Lock Screen",
+                caps.lock,
+                Shortcut {
+                    modifiers: vec![ShortcutModifier::Ctrl, ShortcutModifier::Primary],
+                    key: "Q".to_owned(),
+                },
+                ExtraAction::Session(SessionAction::Lock),
+            );
+        };
+        let Some(session) = self.session.as_ref() else {
+            lock(&SessionCaps::default(), &mut menu);
+            return menu;
+        };
+        let caps = session.caps;
         let action = |a| Some(ExtraAction::Session(a));
         menu.row(
             "Sleep",
@@ -363,15 +378,7 @@ impl Extras {
             action(SessionAction::ShutDown),
         );
         menu.separator();
-        menu.row_with_shortcut(
-            "Lock Screen",
-            caps.lock,
-            Shortcut {
-                modifiers: vec![ShortcutModifier::Ctrl, ShortcutModifier::Primary],
-                key: "Q".to_owned(),
-            },
-            ExtraAction::Session(SessionAction::Lock),
-        );
+        lock(&caps, &mut menu);
         let name = display_name(&session.user_name);
         let log_out = if name.is_empty() {
             "Log Out\u{2026}".to_owned()
@@ -396,7 +403,7 @@ impl Extras {
                 action(SessionAction::SwitchUser),
             );
         }
-        Some(menu)
+        menu
     }
 
     /// The menu as the bar's status menu: a submenu titled with the item.
@@ -851,10 +858,7 @@ mod tests {
 
     #[test]
     fn the_system_menu_lists_the_session_entries_with_the_name_the_chords_and_one_action_each() {
-        assert_eq!(Extras::default().session_menu(), None, "no agent, no menu");
-        let menu = session("Rafael", SessionCaps::default())
-            .session_menu()
-            .unwrap();
+        let menu = session("Rafael", SessionCaps::default()).session_menu();
         assert_eq!(
             entries(&menu),
             [
@@ -904,7 +908,7 @@ mod tests {
             sleep: false,
             ..SessionCaps::default()
         };
-        let menu = session("", caps).session_menu().unwrap();
+        let menu = session("", caps).session_menu();
         assert_eq!(
             entries(&menu),
             [
@@ -923,15 +927,24 @@ mod tests {
             switch_user: false,
             ..SessionCaps::default()
         };
-        let menu = session("Rafael", alone).session_menu().unwrap();
+        let menu = session("Rafael", alone).session_menu();
         assert!(!entries(&menu).iter().any(|l| l.contains("Login Window")));
     }
 
     #[test]
+    fn without_a_session_agent_the_system_menu_still_locks() {
+        let menu = Extras::default().session_menu();
+        assert_eq!(entries(&menu), ["Lock Screen"]);
+        assert!(menu.rows[0].enabled);
+        assert_eq!(
+            menu.action(menu.rows[0].id),
+            Some(&ExtraAction::Session(SessionAction::Lock))
+        );
+    }
+
+    #[test]
     fn the_name_in_log_out_is_plain_text_so_underscores_and_ampersands_are_not_mnemonics() {
-        let menu = session("Ana_&Co", SessionCaps::default())
-            .session_menu()
-            .unwrap();
+        let menu = session("Ana_&Co", SessionCaps::default()).session_menu();
         let log_out = menu
             .rows
             .iter()
@@ -944,9 +957,7 @@ mod tests {
     #[test]
     fn the_name_in_log_out_loses_control_and_direction_characters_and_is_cut_to_64_characters() {
         let dirty = format!("Ana\u{1b}[31m\n\u{202e}Bob{}", "x".repeat(100));
-        let menu = session(&dirty, SessionCaps::default())
-            .session_menu()
-            .unwrap();
+        let menu = session(&dirty, SessionCaps::default()).session_menu();
         let log_out = menu
             .rows
             .iter()
@@ -960,9 +971,7 @@ mod tests {
         assert!(name.starts_with("Ana[31mBobxxx"), "{name:?}");
         assert_eq!(name.chars().count(), 64);
         assert!(!name.chars().any(|c| c.is_control() || c == '\u{202e}'));
-        let blank = session("\u{1b}\u{202e} ", SessionCaps::default())
-            .session_menu()
-            .unwrap();
+        let blank = session("\u{1b}\u{202e} ", SessionCaps::default()).session_menu();
         assert!(
             blank.rows.iter().any(|r| r.label == "Log Out\u{2026}"),
             "nothing left: plain Log Out"

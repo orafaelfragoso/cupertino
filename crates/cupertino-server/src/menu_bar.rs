@@ -6,9 +6,9 @@
 
 use std::collections::HashMap;
 
-use crate::dbus::Request as DbusRequest;
+use crate::dbus::{LoginTrust, Request as DbusRequest};
 use cupertino_protocols::server::cupertino_menu_bar_v1::{
-    self, Command as BarCommand, CupertinoMenuBarV1, Error as BarError, SessionAction,
+    self, AgentTrust, Command as BarCommand, CupertinoMenuBarV1, Error as BarError, SessionAction,
 };
 use cupertino_protocols::server::cupertino_shell_v1::{CupertinoShellV1, Error as ShellError};
 use cupertino_wm::menu_bar::{BarSetConfig, MenuBarSet};
@@ -101,6 +101,8 @@ struct Bar {
     sent: Option<Feed>,
     /// The screen capture state last sent (version 3); `None` until the first one.
     capture_sent: Option<bool>,
+    /// The session agent last named (version 5); `None` until the first time.
+    agent_sent: Option<LoginTrust>,
 }
 
 /// Where the bar of a surface is drawn: offset from its layout position and opacity.
@@ -265,10 +267,12 @@ impl Cupertino {
             output: out,
             sent: None,
             capture_sent: None,
+            agent_sent: None,
         });
         self.refresh_usable_area(out);
         self.refresh_menu_bars();
         self.refresh_capture_indicator();
+        self.refresh_session_agent();
     }
 
     /// The layer surface of a bar went away: the role ends with it.
@@ -358,6 +362,26 @@ impl Cupertino {
             bar.resource.screen_capture(u32::from(active));
             bar.resource.done();
             bar.capture_sent = Some(active);
+        }
+    }
+
+    /// Tell the bars of version 5 or later which process is the session agent, each one when that changed for it.
+    pub fn refresh_session_agent(&mut self) {
+        let trust = self.login_trust();
+        for bar in self
+            .menu_bars
+            .bars
+            .iter_mut()
+            .filter(|b| b.resource.version() >= 5 && b.agent_sent != Some(trust))
+        {
+            let (kind, pid) = match trust {
+                LoginTrust::Nobody => (AgentTrust::None, 0),
+                LoginTrust::Agent(pid) => (AgentTrust::Process, pid),
+                LoginTrust::Any => (AgentTrust::Any, 0),
+            };
+            bar.resource.session_agent(kind, pid);
+            bar.resource.done();
+            bar.agent_sent = Some(trust);
         }
     }
 

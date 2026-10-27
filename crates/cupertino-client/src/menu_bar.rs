@@ -1,8 +1,9 @@
 //! Typed wrapper of `cupertino_menu_bar_v1`: the menu-bar role of a layer surface.
 
 use cupertino_protocols::client::cupertino_menu_bar_v1::{
-    self, Command, CupertinoMenuBarV1, SessionAction as WireSessionAction,
+    self, AgentTrust, Command, CupertinoMenuBarV1, SessionAction as WireSessionAction,
 };
+use wayland_client::WEnum;
 
 /// Application id (the desktop entry id when known) and title of the active window; both are
 /// empty when no window is active.
@@ -56,6 +57,19 @@ pub struct MenuBarUpdate {
     pub engage: bool,
     /// Whether a screen or window capture runs (the screen capture indicator).
     pub screen_capture: Option<bool>,
+    /// Which process may answer as the session agent.
+    pub session_agent: Option<SessionAgent>,
+}
+
+/// The process whose ownership of the session agent's bus name is trusted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionAgent {
+    /// No session agent runs.
+    None,
+    /// The owner of the name is the agent when it is this process.
+    Process(u32),
+    /// A development run: whoever owns the name.
+    Any,
 }
 
 /// A window-management command of the fallback menus.
@@ -200,6 +214,13 @@ impl GroupBuilder {
             }
             Event::Engage => self.update.engage = true,
             Event::ScreenCapture { active } => self.update.screen_capture = Some(active != 0),
+            Event::SessionAgent { trust, pid } => {
+                self.update.session_agent = Some(match trust {
+                    WEnum::Value(AgentTrust::Process) => SessionAgent::Process(pid),
+                    WEnum::Value(AgentTrust::Any) => SessionAgent::Any,
+                    WEnum::Value(_) | WEnum::Unknown(_) => SessionAgent::None,
+                })
+            }
             Event::Done => {
                 let update = std::mem::take(&mut self.update);
                 return (update != MenuBarUpdate::default()).then_some(update);
@@ -256,6 +277,7 @@ mod tests {
                 }),
                 engage: false,
                 screen_capture: None,
+                session_agent: None,
             }]
         );
     }

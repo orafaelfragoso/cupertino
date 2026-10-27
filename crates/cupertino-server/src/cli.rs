@@ -350,20 +350,11 @@ pub fn start_shell_supervision(
                     crate::shell_connection::shell_process_state(&spec.roles),
                 )
             });
-            let trust = if state.config.dev_shell {
-                crate::dbus::LoginTrust::Any
-            } else {
-                state
-                    .supervisor
-                    .pids_with_role(crate::authorization::ShellRole::SessionLock)
-                    .first()
-                    .map_or(crate::dbus::LoginTrust::Nobody, |pid| {
-                        crate::dbus::LoginTrust::Agent(*pid)
-                    })
-            };
+            let trust = state.login_trust();
             if let Some(dbus) = &state.dbus {
                 dbus.set_login(trust);
             }
+            state.refresh_session_agent();
             TimeoutAction::ToDuration(SUPERVISION_INTERVAL)
         })
         .map_err(|e| anyhow::anyhow!("inserting the shell supervision timer: {e}"))?;

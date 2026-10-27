@@ -7,7 +7,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -1386,12 +1386,18 @@ fn the_file_manager_and_the_settings_app_map_their_windows() {
         return;
     };
     server.wait_until("the file manager and the settings app to map", |s| {
-        s.wm.windows().count() == 2
+        let mut identities: Vec<&str> =
+            s.wm.windows()
+                .filter_map(|w| s.wm.app(w.app))
+                .map(|app| app.identity.as_str())
+                .collect();
+        identities.sort_unstable();
+        identities == ["cupertino-files", "cupertino-settings"]
     });
 }
 
 /// Outside a login session the lock-screen process connects to the server with its roles, finds no session to lock and
-/// exits with that message (the supervisor restarts it after the throttle). The lock and unlock cycle needs logind and
+/// exits with that message, a success exit the supervisor does not restart. The lock and unlock cycle needs logind and
 /// is not run here.
 #[test]
 fn the_login_process_connects_and_exits_outside_a_login_session() {
@@ -1517,10 +1523,11 @@ fn the_network_bluetooth_and_power_daemons_own_their_bus_names() {
     }
 }
 
-/// The session manager is a system service: without root, logind and its configuration it starts, says why it cannot
-/// run and exits with a failure instead of hanging; a worker argument it does not know is refused.
+/// The session manager refuses a mode it does not know. Its start without an argument is a system service (it binds
+/// the greeter socket, takes a terminal and waits for logind): there it is only run where it cannot reach those, as a
+/// user other than root on a host without `/etc/cupertino/login.conf`, and must fail naming that file.
 #[test]
-fn the_session_manager_binary_runs_and_refuses_what_it_cannot_serve() {
+fn the_session_manager_binary_refuses_what_it_cannot_serve() {
     let sessiond = shell_bin_dir().join("cupertino-sessiond");
     let output = Command::new(&sessiond)
         .arg("no-such-mode")
@@ -1532,27 +1539,29 @@ fn the_session_manager_binary_runs_and_refuses_what_it_cannot_serve() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    // Safety: geteuid has no preconditions.
+    let root = unsafe { libc::geteuid() } == 0;
+    if root || Path::new("/etc/cupertino/login.conf").exists() {
+        eprintln!("skipping the start: root or a login.conf would let the manager run");
+        return;
+    }
     let output = Command::new(&sessiond).output().expect("the binary starts");
     assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        String::from_utf8_lossy(&output.stderr).starts_with("cupertino-sessiond: "),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+        stderr.starts_with("cupertino-sessiond: /etc/cupertino/login.conf: "),
+        "{stderr}"
     );
 }
 
-/// The server binary as a nested session in a window of the host compositor: it listens on its own socket and connects
-/// its output. Skipped without a host display or an EGL device.
-#[test]
-fn the_server_starts_as_a_nested_session() {
-    if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none() {
-        eprintln!("skipping: no host display");
-        return;
-    }
-    let config = TempDir::new("nested-config");
+/// The server binary with `mode` (`--headless` or `--winit`): it listens on its own socket and connects its output.
+/// `None` when the output cannot be made for want of an EGL device, unless `CUPERTINO_EGL_REQUIRED=1` (CI), which makes
+/// that a failure.
+fn start_server_binary(mode: &str) -> Option<Daemon> {
+    let config = TempDir::new(&format!("server-binary{mode}"));
     let mut server = Daemon(
         Command::new(env!("CARGO_BIN_EXE_cupertino-server"))
-            .args(["--winit", "--size", "800x600"])
+            .args([mode, "--size", "800x600"])
             .env("XDG_CONFIG_HOME", &config.0)
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -1569,31 +1578,57 @@ fn the_server_starts_as_a_nested_session() {
         }
     });
     let end = Instant::now() + TIMEOUT;
-    let mut lines = Vec::new();
-    while !lines
-        .iter()
-        .any(|l: &String| l.contains("display connected"))
-    {
+    let mut lines: Vec<String> = Vec::new();
+    let has = |lines: &[String], text: &str| lines.iter().any(|l| l.contains(text));
+    loop {
+        match rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(line) => lines.push(line),
+            Err(RecvTimeoutError::Timeout) => {}
+            // the server closed its stderr: it has ended
+            Err(RecvTimeoutError::Disconnected) => {
+                if has(&lines, "display connected") {
+                    break;
+                }
+                let no_egl = lines.iter().any(|l| l.to_lowercase().contains("egl"));
+                let required = std::env::var("CUPERTINO_EGL_REQUIRED").as_deref() == Ok("1");
+                assert!(
+                    no_egl && !required,
+                    "the server {mode} ended before it connected its output:\n{}",
+                    lines.join("\n")
+                );
+                eprintln!("SKIPPED: no EGL device for {mode}; set CUPERTINO_EGL_REQUIRED=1 to fail instead");
+                return None;
+            }
+        }
+        if has(&lines, "listening") && has(&lines, "display connected") {
+            break;
+        }
         assert!(
-            server.0.try_wait().unwrap().is_none(),
-            "the nested server ended early:\n{}",
+            Instant::now() < end,
+            "the server {mode} never connected its output:\n{}",
             lines.join("\n")
         );
-        match rx.recv_timeout(end.saturating_duration_since(Instant::now())) {
-            Ok(line) => lines.push(line),
-            Err(_)
-                if lines
-                    .iter()
-                    .any(|l| l.contains("EGL") && l.contains("rror")) =>
-            {
-                eprintln!("skipping: no EGL device for the nested window");
-                return;
-            }
-            Err(e) => panic!(
-                "the nested server never connected its output ({e}):\n{}",
-                lines.join("\n")
-            ),
-        }
     }
-    assert!(lines.iter().any(|l| l.contains("listening")), "{lines:?}");
+    assert!(
+        server.0.try_wait().unwrap().is_none(),
+        "{}",
+        lines.join("\n")
+    );
+    Some(server)
+}
+
+/// The shipped server binary starts headless: it listens and connects its output.
+#[test]
+fn the_server_starts_headless() {
+    let _server = start_server_binary("--headless");
+}
+
+/// The server binary as a nested session in a window of the host compositor. Only where the host has a display.
+#[test]
+fn the_server_starts_as_a_nested_session() {
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none() {
+        eprintln!("skipping: no host display");
+        return;
+    }
+    let _server = start_server_binary("--winit");
 }

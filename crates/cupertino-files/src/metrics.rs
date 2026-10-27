@@ -30,6 +30,10 @@ pub mod window {
     /// Toolbar controls of the browser window, `(width, height).
     pub const TOOLBAR_BACK_FORWARD: (f64, f64) = (53.0, 28.0);
     pub const TOOLBAR_SEARCH_FIELD: (f64, f64) = (112.0, 22.0);
+    /// The search field's width while it has the keyboard or holds text, over its resting width (approximate), and the
+    /// time it takes to change (seconds).
+    pub const SEARCH_GROWTH: f64 = 2.5;
+    pub const SEARCH_GROW_SECONDS: f64 = 0.2;
     pub const TOOLBAR_SHARE: (f64, f64) = (29.0, 25.0);
     pub const TOOLBAR_PREVIEW_BUTTON: (f64, f64) = (28.0, 26.0);
     pub const TOOLBAR_ACTION_POPUP: (f64, f64) = (41.0, 24.0);

@@ -47,7 +47,7 @@ pub enum ClientError {
     BufferSize { width: u32, height: u32 },
     /// Both buffers of the surface are still held by the server.
     NoFreeBuffer,
-    /// An activation token needs the serial of an input event and none arrived yet.
+    /// An activation token or a clipboard selection needs the serial of an input event and none arrived yet.
     NoInputSerial,
     /// A backdrop shape, popup rectangle or window size with a negative or empty extent, or a non-finite value.
     InvalidShape,
@@ -93,7 +93,7 @@ impl fmt::Display for ClientError {
             }
             Self::NoFreeBuffer => write!(f, "both buffers are still in use by the server"),
             Self::NoInputSerial => {
-                write!(f, "no input event yet to derive an activation token from")
+                write!(f, "no input event yet to take a serial from")
             }
             Self::InvalidShape => write!(
                 f,

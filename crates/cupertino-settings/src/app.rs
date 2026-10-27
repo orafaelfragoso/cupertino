@@ -4,6 +4,7 @@
 //! their controls commit on the moments of §7.2 and write through `cupertino-defaults` or call `org.cupertino.Session1`.
 
 use std::error::Error;
+use std::time::Instant;
 
 use cupertino_assets::Assets;
 use cupertino_client::{
@@ -21,7 +22,9 @@ use cupertino_settings::instance;
 use cupertino_settings::keys::{self, Action, Focus, Mods, SearchKey};
 use cupertino_settings::live::Live;
 use cupertino_settings::menu;
-use cupertino_settings::paint::{menu_rows, popup_hit, Painter, Palette, PaneView, WindowState};
+use cupertino_settings::paint::{
+    menu_rows, popup_hit, search_text_area, Painter, Palette, PaneView, WindowState,
+};
 use cupertino_settings::panes::{self, Call, ControlId, Effect, Section, Session};
 use cupertino_settings::search::{popup, SearchField};
 use cupertino_settings::services::{Services, SESSION_NAME, SESSION_PATH};
@@ -30,6 +33,7 @@ use cupertino_settings::sheet::{Answer, Outcome, Sheet, SheetKey};
 use cupertino_settings::sidebar::{self, RowSize};
 use cupertino_settings::window::{self, metrics, Hit, WindowLayout};
 use cupertino_settings::{PaneId, Point, Size};
+use cupertino_text_field::{KeyInput, Keymap, Response, TextField};
 use cupertino_theme::{Appearance, Theme, WindowCornerSize};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -85,6 +89,12 @@ struct App {
     groups: Vec<Vec<PaneId>>,
     history: History<PaneId>,
     search: SearchField,
+    /// The user's modifier profile and editing chords, for the search field.
+    keymap: Keymap,
+    /// The x of each caret position of the search text as last drawn (points from the text's start).
+    search_offsets: Vec<f64>,
+    /// Whether the last frame showed the search field's caret; a blink redraws when it changes.
+    caret_drawn: bool,
     results: Option<Results>,
     focus: Focus,
     layout: Option<WindowLayout>,
@@ -242,6 +252,9 @@ pub fn run(pane: PaneId) -> Result<()> {
         groups: sidebar::groups(),
         history: History::new(pane),
         search: SearchField::default(),
+        keymap: Keymap::load(),
+        search_offsets: Vec::new(),
+        caret_drawn: false,
         results: None,
         focus: Focus::Sidebar,
         layout: None,
@@ -362,7 +375,7 @@ impl App {
         self.start.elapsed().as_secs_f64()
     }
 
-    /// Until the next refresh, or the level slider's waiting write.
+    /// Until the next refresh, the level slider's waiting write, or the search field's caret blink.
     fn timeout(&self) -> std::time::Duration {
         let now = self.now();
         let mut due = self.refreshed + REFRESH;
@@ -371,12 +384,22 @@ impl App {
                 due = due.min(t);
             }
         }
+        if self.focus == Focus::Search {
+            if let Some(blink) = self.search.field().next_blink(Instant::now()) {
+                due = due.min(now + blink.as_secs_f64());
+            }
+        }
         std::time::Duration::from_secs_f64((due - now).clamp(0.0, REFRESH))
             + std::time::Duration::from_millis(1)
     }
 
     /// Run what is due: the level slider's waiting write, the refresh of the live readings, the Wi-Fi scan.
     fn tick(&mut self) -> Result<()> {
+        if self.focus == Focus::Search
+            && self.search.field().caret_visible(Instant::now()) != self.caret_drawn
+        {
+            self.client.request_redraw(self.window)?;
+        }
         let now = self.now();
         if let Some((section, row, _, mut writer)) = self.level.take() {
             let write = writer.tick(now);
@@ -558,6 +581,8 @@ impl App {
             .map(|d| (d.section, d.row, d.shown))
             .or(self.level.as_ref().map(|l| (l.0, l.1, l.2)));
         let has_battery = self.live.has_battery();
+        let search_focused = self.focus == Focus::Search;
+        let caret = search_focused && active && self.search.field().caret_visible(Instant::now());
         let App {
             client,
             window,
@@ -565,20 +590,12 @@ impl App {
             palette,
             history,
             search,
-            focus,
+            search_offsets,
             showing,
             scroll,
             sheet,
             ..
         } = self;
-        let state = WindowState {
-            selected: *showing,
-            has_battery,
-            active,
-            history,
-            search,
-            search_focused: *focus == Focus::Search,
-        };
         let view = PaneView {
             sections: &sections,
             layout: &form,
@@ -587,6 +604,21 @@ impl App {
         };
         let content = layout.content;
         client.draw(*window, |pm, scale| {
+            let offsets = painter.search_offsets(search.field(), scale.factor(), palette);
+            let area = search_text_area(&layout.search, !search.text().is_empty());
+            let caret_x = caret_x(search.field(), &offsets);
+            let text_width = offsets.last().copied().unwrap_or(0.0);
+            search.edit(|f| f.follow_caret(caret_x, text_width, area.w));
+            *search_offsets = offsets;
+            let state = WindowState {
+                selected: *showing,
+                has_battery,
+                active,
+                history,
+                search,
+                search_focused,
+                search_caret: caret,
+            };
             painter.paint_window(pm, scale.factor(), &layout, &state, &view, palette);
             if let Some(sheet) = sheet.as_ref() {
                 painter.paint_sheet(
@@ -600,6 +632,7 @@ impl App {
             }
         })?;
         self.layout = Some(layout);
+        self.caret_drawn = caret;
         self.form = form;
         self.form_height = form_height;
         Ok(())
@@ -686,7 +719,17 @@ impl App {
                             self.show_current()?;
                         }
                     }
-                    Hit::Search => self.set_focus(Focus::Search)?,
+                    Hit::Search => {
+                        let area = search_text_area(&layout.search, !self.search.text().is_empty());
+                        self.set_focus(Focus::Search)?;
+                        let index = self.search.field().index_at(
+                            &self.search_offsets,
+                            p.x - area.x + self.search.field().scroll(),
+                        );
+                        let extend = self.client.modifiers().shift;
+                        self.search.edit(|f| f.press(index, extend, Instant::now()));
+                        self.client.request_redraw(self.window)?;
+                    }
                     Hit::Row(pane) => {
                         // the selection fill shows on the press; the history push waits for the release (approximate)
                         self.pressed_row = Some(pane);
@@ -701,6 +744,20 @@ impl App {
                     Hit::Sidebar => {}
                 }
             }
+            PointerEvent::Motion(position) if self.search.field().is_dragging() => {
+                let area = search_text_area(&layout.search, !self.search.text().is_empty());
+                let index = self.search.field().index_at(
+                    &self.search_offsets,
+                    position.x - area.x + self.search.field().scroll(),
+                );
+                self.search.edit(|f| f.drag_to(index));
+                self.client.request_redraw(self.window)?;
+            }
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: false,
+                ..
+            } if self.search.field().is_dragging() => self.search.edit(TextField::release),
             PointerEvent::Motion(position) if self.level.is_some() => {
                 let (section, row, _, mut writer) =
                     self.level.take().expect("checked by the guard");
@@ -798,7 +855,11 @@ impl App {
     fn set_focus(&mut self, focus: Focus) -> Result<()> {
         if self.focus != focus {
             if self.focus == Focus::Search {
-                self.search.deselect();
+                self.search.edit(TextField::blur);
+            }
+            if focus == Focus::Search {
+                // the keyboard brings the whole text selected; a click places the caret after this
+                self.search.edit(TextField::select_all);
             }
             self.focus = focus;
             self.client.request_redraw(self.window)?;
@@ -849,7 +910,10 @@ impl App {
             Action::FocusNext => self.set_focus(keys::cycle(self.focus, true))?,
             Action::FocusPrevious => self.set_focus(keys::cycle(self.focus, false))?,
             Action::FocusSidebar => self.set_focus(Focus::Sidebar)?,
-            Action::Search(k) => self.search_key(k)?,
+            Action::Search(k) => self.search_key(
+                k,
+                KeyInput::new(code, mods.shift, mods.ctrl, mods.alt, mods.logo, character),
+            )?,
             Action::None => {}
         }
         Ok(())
@@ -866,11 +930,26 @@ impl App {
         self.go(rows[to])
     }
 
-    fn search_key(&mut self, k: SearchKey) -> Result<()> {
+    fn search_key(&mut self, k: SearchKey, input: KeyInput) -> Result<()> {
         match k {
-            SearchKey::Type(c) => self.search.type_char(c),
-            SearchKey::Backspace => self.search.backspace(),
-            SearchKey::SelectAll => self.search.select_all(),
+            SearchKey::Edit => {
+                let keymap = &mut self.keymap;
+                let response = self.search.edit(|f| f.key(keymap, input, Instant::now()));
+                match response {
+                    Response::Ignored => return Ok(()),
+                    Response::Moved | Response::Edited => {}
+                    Response::Copy(text) | Response::Cut(text) => {
+                        if let Err(e) = self.client.set_clipboard_text(text) {
+                            eprintln!("cupertino-settings: copy: {e}");
+                        }
+                    }
+                    Response::Paste => match self.client.clipboard_text() {
+                        Ok(Some(text)) => self.search.edit(|f| f.paste(&text)),
+                        Ok(None) => {}
+                        Err(e) => eprintln!("cupertino-settings: paste: {e}"),
+                    },
+                }
+            }
             SearchKey::Up => self.search.step(-1),
             SearchKey::Down => self.search.step(1),
             SearchKey::Clear => self.search.clear(),
@@ -1424,4 +1503,15 @@ impl App {
         }
         Ok(())
     }
+}
+
+/// The x of `field`'s caret among `offsets` (one per [`TextField::boundaries`]).
+fn caret_x(field: &TextField, offsets: &[f64]) -> f64 {
+    field
+        .boundaries()
+        .iter()
+        .position(|b| *b == field.caret())
+        .and_then(|i| offsets.get(i))
+        .copied()
+        .unwrap_or(0.0)
 }

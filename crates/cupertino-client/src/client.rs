@@ -1,6 +1,7 @@
 //! Connection, globals, surfaces and the event loop primitive.
 
 use crate::backdrop::Backdrop;
+use crate::clipboard::Clipboard;
 use crate::dock::{Dock, GroupBuilder as DockGroup};
 use crate::event::{ActivationRequest, Event, PointerTracker};
 use crate::keyboard::{Modifiers, Repeat, Translator};
@@ -33,6 +34,7 @@ use wayland_client::globals::{registry_queue_init, BindError, GlobalList, Global
 use wayland_client::protocol::wl_buffer::{self, WlBuffer};
 use wayland_client::protocol::wl_callback::{self, WlCallback};
 use wayland_client::protocol::wl_compositor::WlCompositor;
+use wayland_client::protocol::wl_data_device_manager::WlDataDeviceManager;
 use wayland_client::protocol::wl_keyboard::{self, KeyState, WlKeyboard};
 use wayland_client::protocol::wl_output::{self, WlOutput};
 use wayland_client::protocol::wl_pointer::{self, Axis, ButtonState, WlPointer};
@@ -291,6 +293,8 @@ pub(crate) struct State {
     /// Created by the first [`Client::set_cursor`] that needs a shape.
     cursor_device: Option<WpCursorShapeDeviceV1>,
     keyboard: Option<WlKeyboard>,
+    data_device_manager: Option<WlDataDeviceManager>,
+    pub(crate) clipboard: Clipboard,
     outputs: Vec<Output>,
     surfaces: Vec<Surface>,
     next_surface: u32,
@@ -458,6 +462,9 @@ impl Client {
         // version 4 the title bar style of application windows
         let shell: CupertinoShellV1 = bind_required(&globals, &qh, 3..=4)?;
         let observer = shell.get_session(&qh, ());
+        let seat: WlSeat = bind_required(&globals, &qh, 1..=7)?;
+        let data_device_manager: Option<WlDataDeviceManager> = bind_optional(&globals, &qh, 1..=3)?;
+        let clipboard = Clipboard::new(data_device_manager.as_ref(), &seat, &qh);
         let mut state = State {
             compositor: bind_required(&globals, &qh, 4..=6)?,
             shm: bind_required(&globals, &qh, 1..=1)?,
@@ -477,7 +484,7 @@ impl Client {
             // version 2 announces every change with a `done` event; version 3 moved that to wl_output
             xdg_output: bind_required(&globals, &qh, 1..=2)?,
             scaling,
-            seat: bind_required(&globals, &qh, 1..=7)?,
+            seat,
             session_lock_manager: bind_optional(&globals, &qh, 1..=1)?,
             idle_notifier: bind_optional(&globals, &qh, 1..=2)?,
             session_lock: None,
@@ -490,6 +497,8 @@ impl Client {
             cursor_shape: bind_optional(&globals, &qh, 1..=1)?,
             cursor_device: None,
             keyboard: None,
+            data_device_manager,
+            clipboard,
             outputs: Vec::new(),
             surfaces: Vec::new(),
             next_surface: 0,
@@ -744,6 +753,23 @@ impl Client {
     /// such as setting the clipboard selection on a connection of the application's own.
     pub fn input_serial(&self) -> Option<u32> {
         self.state.last_serial
+    }
+
+    /// Put `text` on the clipboard, as the answer to the latest input event (a copy or cut key). The client serves it
+    /// to pasting clients from [`Client::wait`] until another selection replaces it.
+    pub fn set_clipboard_text(&mut self, text: String) -> Result<(), ClientError> {
+        let serial = self.state.last_serial.ok_or(ClientError::NoInputSerial)?;
+        let qh = self.queue.handle();
+        self.state
+            .clipboard
+            .set_text(self.state.data_device_manager.as_ref(), text, serial, &qh)
+    }
+
+    /// The clipboard's text for a paste, `None` when it holds no text. Reading another client's selection waits up to
+    /// a second for it.
+    pub fn clipboard_text(&mut self) -> Result<Option<String>, ClientError> {
+        self.queue.dispatch_pending(&mut self.state)?;
+        self.state.clipboard.text(&self.conn)
     }
 
     /// The modifiers held now, as of the last `wl_keyboard.modifiers` event; none before the keymap arrives. Pointer

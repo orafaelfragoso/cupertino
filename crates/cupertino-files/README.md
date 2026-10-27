@@ -86,7 +86,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | right click | context menu (`menu_spec`): on an item the design's items menu, on empty space its background menu; rows without a backend are shown disabled (Policies). Hover, click, arrow keys, Return and Escape work; a submenu opens 0.2 s after the pointer rests on its row; holding Alt (and Shift+Alt, Ctrl) swaps the rows that have alternates |
 | press on empty space and drag | rubber band (icon and list view): the items it touches are selected live; Shift or Ctrl toggles them against the selection kept; near the top or bottom edge (50 pt) the view scrolls up to 20 pt every 0.05 s |
 | Super+Backspace | move the selection to the trash (`$XDG_DATA_HOME/Trash`, freedesktop Trash 1.0) |
-| click on the name of the only selected item, or Rename | edit the name in place: the name without its extension is selected; Return commits, Escape cancels; a name that exists is refused (never replaced) and an invalid one keeps the editor open |
+| click on the name of the only selected item, or Rename | edit the name in place in a shared text field (`cupertino-text-field`: caret with blink, word and line moves, Shift selection, click, double and triple click, drag, copy, cut and paste, undo): the name without its extension is selected; Return commits, Escape cancels; a name that exists is refused (never replaced) and an invalid one keeps the editor open |
 | press an item and move 5 pt | drag the selection onto a folder of the window or a place of the sidebar: moves there (Alt copies, Super moves, copy across volumes, a clash renames the arrival `name copy`); onto the trash place it is trashed; Escape cancels |
 
 ## Design
@@ -101,7 +101,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | `selection` | selection model | `Selection::{mouse_down, mouse_up, click_empty, move_focus, rubber_band_*, on_insert, on_remove, on_move}` (the window's `Frame::hits_in` gives it the band's items), `Modifiers` |
 | `rename`, `typeselect`, `spring` | interaction logic | `RenameTrigger`, `validate_name`, `needs_extension_warning`, `initial_selection`, `unique_name`; `TypeSelect::{type_text, tab}`; `SpringLoad`, `ticks_from_seconds` |
 | `context_menu`, `menu_spec` | context menus | `menu_spec::{item_menu, background_menu, condense}` (the descriptor table), `common_apps`, `Menu::{open, set_mods, hover, poll, press, press_at, navigate, hit}` (levels, alternates, hover, 0.2 s submenu timer, no-wrap arrow keys), `Command` |
-| `name_edit`, `operations` | rename in place and file changes | `NameEdit::{insert, backspace, left, right, commit}`; `rename_item` (no replace), `new_folder`, `drop_action`, `drop_into` (move or copy, `name copy` on a clash) |
+| `name_edit`, `operations` | rename in place and file changes | `NameEdit::{field, field_mut, commit}`; `rename_item` (no replace), `new_folder`, `drop_action`, `drop_into` (move or copy, `name copy` on a clash) |
 | `trash` | freedesktop Trash 1.0 | `Trash::{trash, list, restore, delete, empty, purge_older_than}`; home and mount-point trash, `.trashinfo`, `directorysizes` |
 | `thumbnail` | freedesktop thumbnail cache | `Thumbnailer::{lookup, lookup_at_least, create, get_or_create}`, `ThumbSize::for_icon`, `file_uri`, failure markers |
 | `tags`, `mime` | metadata | `read_tags` / `write_tags` (`user.xdg.tags`), `TagColor` (seven label colours), `parse_reference_tags`; `detect`, `kind_group`, `kind_description` |

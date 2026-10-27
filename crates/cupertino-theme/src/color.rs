@@ -110,6 +110,7 @@ names! {
         SecondarySystemFill => "secondary-system-fill",
         TertiarySystemFill => "tertiary-system-fill",
         QuaternarySystemFill => "quaternary-system-fill",
+        SelectedTextBackground => "selected-text-background",
     }
 }
 

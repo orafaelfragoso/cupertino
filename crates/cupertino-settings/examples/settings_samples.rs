@@ -177,6 +177,7 @@ fn main() {
                 history: &history,
                 search: &search,
                 search_focused: false,
+                search_caret: false,
             };
             let mut pm = Pixmap::new(size.w as u32, size.h as u32).unwrap();
             fill(&mut pm, pal.window_background);
@@ -198,9 +199,7 @@ fn main() {
         }
         // the results window of a search that finds several panes
         let mut search = SearchField::default();
-        for c in "scroll".chars() {
-            search.type_char(c);
-        }
+        search.edit(|f| f.insert("scroll"));
         let (w, h) = popup::size(WIDTH_FACTOR, search.results().len(), RowSize::default());
         let rows = popup::rows(search.results().len(), w, RowSize::default());
         let mut pm = Pixmap::new(w as u32, h.ceil() as u32).unwrap();

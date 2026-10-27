@@ -8,6 +8,8 @@
 //! * [`buttons`]: window control button states, colours and the authored vector glyphs.
 //! * [`palette`]: colours resolved from the `cupertino-theme` tokens (with a built-in copy).
 //! * [`text`]: title text with the fonts of the asset directory and the tracking table of the theme.
+//! * [`field`]: the inside of a single-line text field (selection band, text, composition underline, caret), clipped
+//!   and scrolled, for the apps' fields.
 //! * [`shadow`]: window shadow parameters from the verified table (all 32 rows live in
 //!   `cupertino_theme::window_shadow`), GPU parameters and a nine-slice cached CPU rasteriser.
 //! * [`render`]: [`Decorations`], the façade that lays out, hit-tests and rasterises the titlebar
@@ -22,6 +24,7 @@
 //! approximate and configurable.
 
 pub mod buttons;
+pub mod field;
 pub mod glyph;
 pub mod hit;
 pub mod layout;

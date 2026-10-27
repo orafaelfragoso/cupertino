@@ -18,6 +18,7 @@ use cupertino_launcher::render::{
 };
 use cupertino_launcher::surface::panel_key;
 use cupertino_launcher::{Action, Activation, Launcher, LauncherConfig};
+use cupertino_text_field::{KeyInput, Keymap, Response, TextField};
 use cupertino_theme::{Appearance, Theme};
 use std::collections::HashMap;
 use std::error::Error;
@@ -77,10 +78,12 @@ impl Options {
 struct Signature {
     layout: PanelLayout,
     query: String,
-    cursor: usize,
+    caret: usize,
+    field_selection: std::ops::Range<usize>,
+    field_scroll: u64,
+    caret_visible: bool,
     selected: usize,
     focus: Focus,
-    query_selected: bool,
     titles: Vec<String>,
     scale: u32,
 }
@@ -113,6 +116,12 @@ struct App {
     last: Option<(PanelLayout, Rect)>,
     backdrop: Option<Backdrop>,
     image: Option<(Signature, PanelImage)>,
+    /// The user's modifier profile and editing chords, for the query field.
+    keymap: Keymap,
+    /// The x of each caret position of the query as last drawn (points from the text's start).
+    field_offsets: Vec<f64>,
+    /// Whether the last frame showed the caret; a blink redraws when it changes.
+    caret_drawn: bool,
     /// Commands waiting for the activation token being fetched.
     pending: HashMap<ActivationRequest, CommandSpec>,
     waker: cupertino_client::Waker,
@@ -225,11 +234,15 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         last: None,
         backdrop: None,
         image: None,
+        keymap: Keymap::load(),
+        field_offsets: Vec::new(),
+        caret_drawn: false,
         pending: HashMap::new(),
         waker,
     };
     loop {
-        for event in app.client.wait(None)? {
+        let blink = app.blink_due();
+        for event in app.client.wait(blink)? {
             app.handle(event)?;
         }
         app.housekeeping()?;
@@ -313,11 +326,19 @@ impl App {
                 character,
                 ..
             } if self.panel.is_visible() => {
-                if let Some((panel_key, panel_mods)) = panel_key(key, mods, character) {
-                    let now = self.now();
-                    let outcome =
+                let now = self.now();
+                let outcome = match panel_key(key, mods, character) {
+                    Some((panel_key, panel_mods)) => {
                         self.panel
-                            .handle_key(panel_key, panel_mods, &mut self.launcher, now);
+                            .handle_key(panel_key, panel_mods, &mut self.launcher, now)
+                    }
+                    None => PanelEvent::Edit,
+                };
+                if outcome == PanelEvent::Edit {
+                    let input =
+                        KeyInput::new(key, mods.shift, mods.ctrl, mods.alt, mods.logo, character);
+                    self.field_key(input)?;
+                } else {
                     self.outcome(outcome)?;
                 }
             }
@@ -456,7 +477,49 @@ impl App {
     }
 
     /// Handle `Toggle` and the finished file index.
+    /// A key of the query field; the clipboard requests go to the system clipboard.
+    fn field_key(&mut self, input: KeyInput) -> Result<()> {
+        let now = self.now();
+        let keymap = &mut self.keymap;
+        let response = self.panel.edit(&self.launcher, now, |f| {
+            f.key(keymap, input, Instant::now())
+        });
+        match response {
+            Response::Ignored => return Ok(()),
+            Response::Moved | Response::Edited => {}
+            Response::Copy(text) | Response::Cut(text) => {
+                if let Err(e) = self.client.set_clipboard_text(text) {
+                    eprintln!("cupertino-launcher: copy: {e}");
+                }
+            }
+            Response::Paste => match self.client.clipboard_text() {
+                Ok(Some(text)) => self.panel.edit(&self.launcher, now, |f| f.paste(&text)),
+                Ok(None) => {}
+                Err(e) => eprintln!("cupertino-launcher: paste: {e}"),
+            },
+        }
+        self.client.request_redraw(self.surface)?;
+        Ok(())
+    }
+
+    /// Whether the query field's caret shows now: the panel is open with the keyboard in the field and the blink is on.
+    fn caret_visible(&self) -> bool {
+        self.panel.is_visible()
+            && self.panel.focus() == Focus::Field
+            && self.panel.field().caret_visible(Instant::now())
+    }
+
+    /// Until the caret's next blink while it can show.
+    fn blink_due(&self) -> Option<std::time::Duration> {
+        (self.panel.is_visible() && self.panel.focus() == Focus::Field)
+            .then(|| self.panel.field().next_blink(Instant::now()))
+            .flatten()
+    }
+
     fn housekeeping(&mut self) -> Result<()> {
+        if self.caret_visible() != self.caret_drawn {
+            self.client.request_redraw(self.surface)?;
+        }
         if self.toggle.swap(false, Ordering::SeqCst) {
             if self.panel.is_visible() {
                 self.hide()?;
@@ -515,7 +578,8 @@ impl App {
     /// Carry out what the panel asked for.
     fn outcome(&mut self, outcome: PanelEvent) -> Result<()> {
         match outcome {
-            PanelEvent::None | PanelEvent::Changed => {}
+            // field keys go to `field_key` before an outcome is handled
+            PanelEvent::None | PanelEvent::Changed | PanelEvent::Edit => {}
             PanelEvent::Close => self.hide()?,
             PanelEvent::Activate(activation) => {
                 self.hide()?;
@@ -626,16 +690,30 @@ impl App {
         };
         self.client.set_input_region(self.surface, &region)?;
 
-        let (renderer, panel, image) = (&mut self.renderer, &self.panel, &mut self.image);
+        let caret_visible = self.caret_visible();
+        self.caret_drawn = caret_visible;
+        let (renderer, panel, image, field_offsets) = (
+            &mut self.renderer,
+            &mut self.panel,
+            &mut self.image,
+            &mut self.field_offsets,
+        );
         self.client.draw(self.surface, |pixmap, scale| {
             let factor = scale.factor();
+            let offsets = renderer.field_offsets(panel, factor);
+            let caret_x = caret_x(panel.field(), &offsets);
+            let width = renderer.field_area(&layout).width();
+            panel.follow_caret(caret_x, offsets.last().copied().unwrap_or(0.0), width);
+            *field_offsets = offsets;
             let signature = Signature {
                 layout: layout.clone(),
                 query: panel.query().to_string(),
-                cursor: panel.cursor(),
+                caret: panel.field().caret(),
+                field_selection: panel.field().selection(),
+                field_scroll: panel.field().scroll().to_bits(),
+                caret_visible,
                 selected: panel.selected(),
                 focus: panel.focus(),
-                query_selected: panel.query_selected(),
                 titles: panel
                     .results()
                     .iter()
@@ -652,7 +730,7 @@ impl App {
                     &layout,
                     &RenderOptions {
                         scale: factor,
-                        caret_visible: true,
+                        caret_visible,
                         backdrop: None,
                         layers: LAYERS,
                     },
@@ -706,7 +784,45 @@ impl App {
                 layout.item_at(Point::new(p.x - rect.x(), p.y - rect.y())),
             )
         };
+        let area = self
+            .renderer
+            .field_area(layout)
+            .translate(rect.x(), rect.y());
         match event {
+            PointerEvent::Motion(p) if self.panel.field().is_dragging() => {
+                let index = self.panel.field().index_at(
+                    &self.field_offsets,
+                    p.x - area.x() + self.panel.field().scroll(),
+                );
+                let now = self.now();
+                self.panel.edit(&self.launcher, now, |f| f.drag_to(index));
+                self.client.request_redraw(self.surface)?;
+            }
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: false,
+                ..
+            } if self.panel.field().is_dragging() => {
+                let now = self.now();
+                self.panel.edit(&self.launcher, now, TextField::release);
+            }
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: true,
+                position,
+            } if area.contains(position) => {
+                let index = self.panel.field().index_at(
+                    &self.field_offsets,
+                    position.x - area.x() + self.panel.field().scroll(),
+                );
+                let extend = self.client.modifiers().shift;
+                let now = self.now();
+                self.panel.focus_field();
+                self.panel.edit(&self.launcher, now, |f| {
+                    f.press(index, extend, Instant::now())
+                });
+                self.client.request_redraw(self.surface)?;
+            }
             PointerEvent::Enter(p) | PointerEvent::Motion(p) => {
                 if let (true, Some(flat)) = probe(p) {
                     if self.panel.set_selected(flat) == PanelEvent::Changed {
@@ -734,4 +850,15 @@ impl App {
         }
         Ok(())
     }
+}
+
+/// The x of `field`'s caret among `offsets` (one per [`TextField::boundaries`]).
+fn caret_x(field: &TextField, offsets: &[f64]) -> f64 {
+    field
+        .boundaries()
+        .iter()
+        .position(|b| *b == field.caret())
+        .and_then(|i| offsets.get(i))
+        .copied()
+        .unwrap_or(0.0)
 }

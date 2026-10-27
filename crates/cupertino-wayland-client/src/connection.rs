@@ -964,7 +964,8 @@ impl Connection {
 
     /// A buffer to draw the next frame of `surface` into, at the surface's scale. Its logical size is the configured
     /// one; `preferred` (logical points) applies when the compositor leaves the size to the client. The pixels are
-    /// those of an earlier frame or zero: draw all of them. Dropping the lease without presenting gives it back.
+    /// those of an earlier frame or zero; [`BufferLease::missed`] tells which differ from the frame shown last. Dropping
+    /// the lease without presenting gives it back.
     pub fn lease(
         &mut self,
         surface: SurfaceId,
@@ -1139,14 +1140,25 @@ impl BufferLease<'_> {
         self.serial
     }
 
+    /// The rectangles in which this buffer differs from the frame shown last: what the frames shown in the other
+    /// buffers since it last held one changed. Drawing the next frame needs only them and its own damage. `None` when
+    /// its pixels are unknown, such as a new buffer, one of another size or one written but not presented: draw all of
+    /// it.
+    pub fn missed(&self) -> Option<&[PixelRect]> {
+        self.slot_ref().missed.rects()
+    }
+
+    /// The pixels to draw the frame into. What [`BufferLease::missed`] says holds until the lease is presented.
     pub fn pixels_mut(&mut self) -> &mut [u8] {
         let (surface, slot) = (self.surface, self.slot);
-        self.connection
+        let slot = &mut self
+            .connection
             .state
             .surface_mut(surface)
             .expect("a leased surface lives while the lease does")
-            .slots[slot]
-            .pixels_mut()
+            .slots[slot];
+        slot.missed.forget();
+        slot.pixels_mut()
     }
 
     fn slot_ref(&self) -> &Slot {
@@ -1175,9 +1187,20 @@ impl BufferLease<'_> {
                 Role::External { role, .. } => role.ack_configure(serial),
             }
         }
+        let layout = surf.slots[self.slot].layout;
+        let damage: Option<Vec<PixelRect>> =
+            damage.map(|rects| rects.iter().filter_map(|r| r.clamp(layout)).collect());
+        for (i, slot) in surf.slots.iter_mut().enumerate() {
+            if i == self.slot {
+                slot.missed.shown();
+            } else if slot.layout == layout {
+                slot.missed.passed(damage.as_deref());
+            } else {
+                slot.missed.forget();
+            }
+        }
         let slot = &mut surf.slots[self.slot];
         slot.busy = true;
-        let layout = slot.layout;
         surf.wl.attach(Some(&slot.buffer), 0, 0);
         match (&surf.viewport, self.scale.integer()) {
             (Some(viewport), _) => {
@@ -1190,7 +1213,7 @@ impl BufferLease<'_> {
         match damage {
             None => surf.wl.damage_buffer(0, 0, i32::MAX, i32::MAX),
             Some(rects) => {
-                for r in rects.iter().filter_map(|r| r.clamp(layout)) {
+                for r in rects {
                     surf.wl
                         .damage_buffer(r.x as i32, r.y as i32, r.width as i32, r.height as i32);
                 }

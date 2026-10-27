@@ -37,6 +37,8 @@ GATE = [
 GATE_EXEMPT = {
     "crates/cupertino-files/src/mime.rs": {"evidence class"},
     "crates/cupertino-theme/src/evidence.rs": {"evidence class"},
+    # Copyright holders named in the protocol notices of the generated file.
+    "packaging/licenses/THIRD-PARTY-LICENSES": {"provenance wording"},
 }
 
 THIRD_PARTY_EXEMPT = {"private document path", "cleanup remnant"}

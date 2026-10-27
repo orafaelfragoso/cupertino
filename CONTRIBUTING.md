@@ -10,11 +10,12 @@ cargo nextest run --workspace --all-features
 cargo test --workspace --all-features --doc
 cargo run -p cupertino-layers      # dependency rules between layers
 cargo clippy --workspace --all-targets
-cargo fmt --all -- --check
+cargo fmt --check
 ```
 
 Notes:
 
+- Run `cargo fmt` without `--all`, as CI does: `--all` also formats the vendored crates in `third-party/`, which stay as their authors wrote them (and one is missing the test files that its sources declare).
 - Shell and app crates build their process code behind the `app` feature. Use `cargo test -p <crate> --features app` for those.
 - Install [cargo-nextest](https://nexte.st) (`cargo install cargo-nextest --locked`; CI uses 0.9.149). It runs every test in its own process and kills a test that runs longer than 2 minutes (`.config/nextest.toml`), so a hang fails with the test's name. `cargo test` has no time limit. A killed run can leave a test `dbus-daemon` behind: stop it, never your real session bus. Plain `cargo test --workspace --all-features` still works but has no per-test limit.
 - Build artifacts are large. Keep several GB free and do not point `CARGO_TARGET_DIR` at a small or shared disk.

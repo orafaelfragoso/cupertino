@@ -1131,6 +1131,12 @@ pub fn relative_date(t: std::time::SystemTime, now: std::time::SystemTime) -> St
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The row copies and bytes [`copy_opaque`] made on this thread.
+    static COPIED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
 /// Put the opaque `src` into `dst` with its top left corner at device pixel (`x`, `y`), clipped to `dst`: row copies,
 /// the same pixels as drawing it over, at a fraction of the cost.
 pub(crate) fn copy_opaque(dst: &mut Pixmap, src: &Pixmap, x: i32, y: i32) {
@@ -1149,6 +1155,11 @@ pub(crate) fn copy_opaque(dst: &mut Pixmap, src: &Pixmap, x: i32, y: i32) {
         let d = row as usize * dst_stride + x0 as usize * 4;
         let s = (row - y) as usize * src_stride + (x0 - x) as usize * 4;
         dst_data[d..d + len].copy_from_slice(&src_data[s..s + len]);
+        #[cfg(test)]
+        COPIED.with(|c| {
+            let (rows, bytes) = c.get();
+            c.set((rows + 1, bytes + len));
+        });
     }
 }
 
@@ -1226,23 +1237,30 @@ mod tests {
     }
 
     #[test]
-    fn copying_a_view_in_costs_a_fraction_of_drawing_it_over_at_every_size() {
+    fn copying_a_view_in_costs_one_slice_copy_per_visible_row_at_every_size() {
+        let mut work = Vec::new();
         for (w, h) in [(600, 400), (1920, 1080), (2560, 1440)] {
             let src = opaque(w, h);
-            let mut dst = Pixmap::new(w, h).unwrap();
-            let start = std::time::Instant::now();
-            copy_opaque(&mut dst, &src, 0, 0);
-            let copied = start.elapsed();
-            let start = std::time::Instant::now();
-            let over = drawn_over(&dst, &src, 0, 0);
-            let drawn = start.elapsed();
-            eprintln!("{w} x {h}: copied {copied:?}, drawn over {drawn:?}");
-            assert!(
-                copied * 3 < drawn,
-                "{w} x {h}: copied {copied:?}, drawn over {drawn:?}"
-            );
-            assert!(over.data() == dst.data());
+            for (x, y) in [(0, 0), (w as i32 / 4, h as i32 / 4)] {
+                let mut dst = Pixmap::new(w, h).unwrap();
+                COPIED.with(|c| c.set((0, 0)));
+                copy_opaque(&mut dst, &src, x, y);
+                work.push(COPIED.with(|c| c.get()));
+                assert!(drawn_over(&Pixmap::new(w, h).unwrap(), &src, x, y).data() == dst.data());
+            }
         }
+        // (rows, bytes): the whole view, then the view moved a quarter right and down, clipped by the window
+        assert_eq!(
+            work,
+            [
+                (400, 600 * 400 * 4),
+                (300, 450 * 300 * 4),
+                (1080, 1920 * 1080 * 4),
+                (810, 1440 * 810 * 4),
+                (1440, 2560 * 1440 * 4),
+                (1080, 1920 * 1080 * 4),
+            ]
+        );
     }
 
     /// Forty entries with names of every length, folders among them, a few selected.

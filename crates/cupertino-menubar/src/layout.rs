@@ -4,7 +4,7 @@
 //! renderer. Every metric is approximate unless a doc comment says otherwise.
 
 use crate::geom::{Point, Rect};
-use crate::item::{ItemId, MenuItem};
+use crate::item::{ItemId, MenuItem, Shortcut, ShortcutGlyphs};
 
 /// Measures the advance width of a run of text in the bar / menu font.
 pub trait TextMeasure {
@@ -304,7 +304,8 @@ pub struct PopupRow {
     /// A copy of the item without its children.
     pub item: MenuItem,
     pub rect: Rect,
-    pub shortcut_text: Option<String>,
+    /// The shortcut's modifier glyphs and key, drawn in two columns.
+    pub shortcut: Option<ShortcutGlyphs>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -318,6 +319,8 @@ pub struct PopupLayout {
     pub scroll: f64,
     /// Submenu popups only: placed to the left of the parent because the right side had no room.
     pub placed_left: bool,
+    /// The width of the column the shortcuts' keys stand in, right of their modifier glyphs.
+    pub shortcut_key_width: f64,
 }
 
 impl PopupLayout {
@@ -363,7 +366,8 @@ pub fn layout_popup(
         + if any_mark { m.mark_column } else { 0.0 }
         + if any_icon { m.icon_column } else { 0.0 };
     let mut label_w: f64 = 0.0;
-    let mut shortcut_w: f64 = 0.0;
+    let mut modifiers_w: f64 = 0.0;
+    let mut key_w: f64 = 0.0;
     let mut any_arrow = false;
     for c in &children {
         if c.separator {
@@ -371,13 +375,15 @@ pub fn layout_popup(
         }
         label_w = label_w.max(measure.width(&c.label, false));
         if let Some(s) = &c.shortcut {
-            shortcut_w = shortcut_w.max(measure.width(&s.display(), false));
+            let glyphs = s.glyphs();
+            modifiers_w = modifiers_w.max(measure.width(&glyphs.modifiers, false));
+            key_w = key_w.max(measure.width(&glyphs.key, false));
         }
         any_arrow |= c.has_submenu;
     }
     let trailing = m.padding_x
-        + if shortcut_w > 0.0 {
-            m.shortcut_gap + shortcut_w
+        + if modifiers_w + key_w > 0.0 {
+            m.shortcut_gap + modifiers_w + key_w
         } else {
             0.0
         }
@@ -437,7 +443,7 @@ pub fn layout_popup(
             let mut item = (*c).clone();
             item.children = Vec::new();
             PopupRow {
-                shortcut_text: c.shortcut.as_ref().map(|s| s.display()),
+                shortcut: c.shortcut.as_ref().map(Shortcut::glyphs),
                 item,
                 rect: r,
             }
@@ -450,6 +456,7 @@ pub fn layout_popup(
         content_height: content_h,
         scroll,
         placed_left,
+        shortcut_key_width: key_w,
     }
 }
 
@@ -626,13 +633,20 @@ mod tests {
         );
         assert_eq!(p.rows[0].rect.y, 24.0 + m.padding_y);
         assert_eq!(p.rows[1].rect.h, m.separator_height);
-        assert_eq!(p.rows[0].shortcut_text.as_deref(), Some("Ctrl+N"));
+        assert_eq!(
+            p.rows[0].shortcut,
+            Some(ShortcutGlyphs {
+                modifiers: "\u{2303}".into(),
+                key: "N".into()
+            })
+        );
+        assert_eq!(p.shortcut_key_width, 7.0, "one character of the key column");
         let min_w = m.padding_x
             + m.mark_column
             + 11.0 * 7.0
             + m.padding_x
             + m.shortcut_gap
-            + 6.0 * 7.0
+            + 2.0 * 7.0
             + m.arrow_width;
         assert!((p.rect.w - min_w.max(m.min_width)).abs() < 1e-9);
         assert!(p.rows.iter().all(|r| r.item.children.is_empty()));

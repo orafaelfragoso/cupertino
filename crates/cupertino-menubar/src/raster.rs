@@ -397,20 +397,24 @@ impl Style {
                 false,
                 color,
             );
-            if let Some(sc) = &row.shortcut_text {
-                let w = text.width(sc, false);
+            if let Some(sc) = &row.shortcut {
                 let right = rr.x() + rr.width()
                     - m.padding_x
                     - if item.has_submenu { m.arrow_width } else { 0.0 };
+                let faded = [color[0], color[1], color[2], color[3] * 0.65];
+                // the keys in a column of their own, the modifier glyphs right-aligned just before it
+                let key_x = right - layout.shortcut_key_width;
+                text.draw(pm, &sc.key, key_x, rr.y(), rr.height(), scale, false, faded);
+                let modifiers_w = text.width(&sc.modifiers, false);
                 text.draw(
                     pm,
-                    sc,
-                    right - w,
+                    &sc.modifiers,
+                    key_x - modifiers_w,
                     rr.y(),
                     rr.height(),
                     scale,
                     false,
-                    [color[0], color[1], color[2], color[3] * 0.65],
+                    faded,
                 );
             }
             if item.has_submenu {

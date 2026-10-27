@@ -1,0 +1,37 @@
+# Nightly: the Arch package build of the release, without publishing anything. It runs the same pinned-container script
+# as the release workflow (build, check(), manifest verification, namcap, install test) on the default branch, so a
+# failure that only shows in the package environment surfaces the next morning, not on a release tag. The packages and
+# logs are kept as workflow artifacts for a week.
+name: Nightly package build
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: nightly-package
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  arch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Report free disk space
+        run: df -h / /mnt
+      - name: Build, verify and install-test in the pinned Arch container
+        run: bash packaging/ci/build-in-container.sh arch out/arch
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: nightly-arch
+          path: out/arch/*
+          retention-days: 7
+          if-no-files-found: ignore

@@ -15,6 +15,25 @@ const BTN_MIDDLE: u32 = 0x112;
 /// Offset between evdev key codes and xkb key codes.
 const EVDEV_OFFSET: u32 = 8;
 
+/// Evdev codes of common keys, as [`KeyboardEvent::Key`] carries them (`linux/input-event-codes.h`).
+pub mod key {
+    pub const ESCAPE: u32 = 1;
+    pub const ENTER: u32 = 28;
+    pub const KEYPAD_ENTER: u32 = 96;
+    pub const SPACE: u32 = 57;
+    pub const BACKSPACE: u32 = 14;
+    pub const TAB: u32 = 15;
+    pub const HOME: u32 = 102;
+    pub const UP: u32 = 103;
+    pub const PAGE_UP: u32 = 104;
+    pub const LEFT: u32 = 105;
+    pub const RIGHT: u32 = 106;
+    pub const END: u32 = 107;
+    pub const DOWN: u32 = 108;
+    pub const PAGE_DOWN: u32 = 109;
+    pub const DELETE: u32 = 111;
+}
+
 /// A pointer button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {

@@ -39,7 +39,7 @@ Tagged on `c47d32a`. This entry covers the changes since the initial import (`cf
 - An installed session starts the full shell: `/etc/cupertino/compositor.json` supplies the process list, under the user's own `compositor.json` when there is one ([#17](https://github.com/orafaelfragoso/cupertino/issues/17)).
 - `run-cupertino.sh` starts the compositor and every shell process from a text console, with a fresh session bus and a log at `~/cupertino-tty.log`.
 - `capture.sh` renders the desktop in a fixture home and never starts the login agent or touches the host session ([#10](https://github.com/orafaelfragoso/cupertino/issues/10)).
-- The lock agent is part of the installed and TTY shell lists, so locking works there.
+- The lock agent is started in the installed and TTY sessions.
 
 ### Packaging and release
 
@@ -58,7 +58,7 @@ Tagged on `c47d32a`. This entry covers the changes since the initial import (`cf
 
 ### Documentation
 
-- Public README, CONTRIBUTING (with the CLA), SECURITY, Code of Conduct, and a docs book covering architecture, building and running, asset packs and trying Cupertino.
+- Public README, CONTRIBUTING (CLA process; the CLA text link is still to be set), SECURITY, Code of Conduct, and a docs book covering architecture, building and running, asset packs and trying Cupertino.
 - Bug report and feature request forms.
 - A release-candidate hardware checklist.
 
@@ -77,7 +77,7 @@ From a checkout, on a text console (`Ctrl+Alt+F3`):
 For an installed session, download the Arch packages `cupertino` and `cupertino-data` from the `v0.1.0-rc3` release and install both from the same candidate:
 
 ```bash
-sudo pacman -U cupertino-*.pkg.tar.zst cupertino-data-*.pkg.tar.zst
+sudo pacman -U cupertino-0*.pkg.tar.zst cupertino-data-*.pkg.tar.zst
 ```
 
 Both packages are replaced together. `/etc/cupertino/compositor.json` is a package config file, and files under `~/.config/cupertino/` are read as before.

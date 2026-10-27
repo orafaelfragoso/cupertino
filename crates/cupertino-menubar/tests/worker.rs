@@ -6,6 +6,7 @@ use cupertino_menubar::worker::{Request, StartError, Worker};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
+use zbus::zvariant::{ObjectPath, OwnedObjectPath};
 use zbus::{block_on, connection, Connection};
 
 struct PrivateBus {
@@ -92,4 +93,59 @@ fn the_worker_owns_the_watcher_and_relays_the_centre_toggle() {
         "{:?}",
         second.err()
     );
+}
+
+#[test]
+fn the_worker_owns_the_app_menu_registrar_unless_another_process_does() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let other = bus.connect();
+    let get_menu = |conn: &Connection| -> (String, OwnedObjectPath) {
+        block_on(conn.call_method(
+            Some("com.canonical.AppMenu.Registrar"),
+            "/com/canonical/AppMenu/Registrar",
+            Some("com.canonical.AppMenu.Registrar"),
+            "GetMenuForWindow",
+            &(7u32,),
+        ))
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap()
+    };
+
+    let (_worker, _events) = Worker::start(bus.connect(), || {}).unwrap();
+    block_on(other.call_method(
+        Some("com.canonical.AppMenu.Registrar"),
+        "/com/canonical/AppMenu/Registrar",
+        Some("com.canonical.AppMenu.Registrar"),
+        "RegisterWindow",
+        &(7u32, ObjectPath::from_static_str_unchecked("/MenuBar/1")),
+    ))
+    .unwrap();
+    assert_eq!(
+        get_menu(&other),
+        (String::new(), OwnedObjectPath::try_from("/").unwrap()),
+        "registrations are not kept"
+    );
+
+    // a registrar of another desktop keeps its name and the worker starts all the same
+    let second_bus = PrivateBus::start().unwrap();
+    let foreign = second_bus.connect();
+    block_on(foreign.request_name("com.canonical.AppMenu.Registrar")).unwrap();
+    assert!(Worker::start(second_bus.connect(), || {}).is_ok());
+    let owner: String = block_on(foreign.call_method(
+        Some("org.freedesktop.DBus"),
+        "/org/freedesktop/DBus",
+        Some("org.freedesktop.DBus"),
+        "GetNameOwner",
+        &("com.canonical.AppMenu.Registrar",),
+    ))
+    .unwrap()
+    .body()
+    .deserialize()
+    .unwrap();
+    assert_eq!(owner, foreign.unique_name().unwrap().as_str());
 }

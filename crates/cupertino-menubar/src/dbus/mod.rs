@@ -4,12 +4,14 @@
 //! * [`dbusmenu`]: client for `com.canonical.dbusmenu` (layout parsing, events, update signals).
 //! * [`sni`]: `org.kde.StatusNotifierWatcher` service plus `org.kde.StatusNotifierItem` client.
 //! * [`gtk`]: reader for `org.gtk.Menus` / `org.gtk.Actions` (GMenuModel).
+//! * [`registrar`]: `com.canonical.AppMenu.Registrar`, owned so toolkits hide their in-window menu bar.
 //!
 //! All futures are runtime-agnostic (zbus is built with its own `async-io` executor); use any
 //! executor or [`zbus::block_on`] to drive them.
 
 pub mod dbusmenu;
 pub mod gtk;
+pub mod registrar;
 pub mod sni;
 
 pub use zbus;

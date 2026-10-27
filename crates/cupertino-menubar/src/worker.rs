@@ -7,6 +7,7 @@
 
 use crate::dbus::dbusmenu::DBusMenuClient;
 use crate::dbus::gtk::GtkMenuClient;
+use crate::dbus::registrar;
 use crate::dbus::sni::{self, StatusItem, WatcherEvent, WatcherService};
 use crate::item::{ItemId, MenuItem};
 use crate::source::{GtkMenuProps, KdeAppMenu, MenuSource};
@@ -231,12 +232,16 @@ async fn run(
     }
 }
 
-/// Claim the watcher and forward its events.
+/// Claim the watcher and forward its events, then serve the registrar.
 async fn serve(conn: &Connection, tx: &async_channel::Sender<Work>) -> Result<(), StartError> {
     let (_service, events) = WatcherService::start(conn)
         .await
         .map_err(StartError::Watcher)?;
     forward(events, tx.clone(), Work::Watcher);
+    // another registrar makes toolkits export their menus just the same
+    if let Err(e) = registrar::serve(conn).await {
+        report(&format!("cannot serve {}", registrar::REGISTRAR_NAME), e);
+    }
     Ok(())
 }
 

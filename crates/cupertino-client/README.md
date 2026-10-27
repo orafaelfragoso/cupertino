@@ -1,7 +1,12 @@
 # cupertino-client
 
 Client toolkit of the shell processes (notifications, menu bar, launcher, dock) and of the application windows (file
-manager). One `Client` connects to the server, binds the globals every process needs and owns its surfaces. Depends on `cupertino-geometry`, `cupertino-defaults` and `cupertino-protocols` (feature `client`).
+manager). One `Client` connects to the server, binds the globals every process needs and owns its surfaces. It runs on the
+transport, `cupertino-wayland-client`: the standard protocols are the transport's, and the ones outside its set (layer
+shell, session lock, idle notify and the desktop's own) are extensions on the transport's queue in `src/extensions.rs`.
+This public API is an adapter onto the transport, to be deleted once the shell processes use the transport directly.
+Depends on `cupertino-wayland-client`, `cupertino-geometry`, `cupertino-defaults` and `cupertino-protocols` (feature
+`client`).
 
 ## Public API
 
@@ -9,8 +14,8 @@ manager). One `Client` connects to the server, binds the globals every process n
 |---|---|
 | `Client`, `LayerSurfaceConfig`, `Margin`, `SurfaceId`, `Waker` | connection, layer surfaces on a chosen output (`set_layer_placement` moves or resizes one, `set_exclusive_zone` changes its zone; both apply with the next draw), popups of them with a seat grab |
 | `Client::toplevel`, `ToplevelConfig`, `Client::{set_title, toplevel_activated} | an xdg toplevel (application window) with server-side decorations: app id, title, initial and minimum size; a configure resizes it, `Event::Closed` is the close request, scrolling over it is `PointerEvent::Scroll` as on any surface |
-| `Client::{set_clipboard_text, clipboard_text}` | the text clipboard (`wl_data_device`, optional at connect): copy offers `text/plain;charset=utf-8`, `text/plain` and `UTF8_STRING` with the serial of the latest input event and serves pasting clients until another selection replaces it, each on a short-lived thread that writes without blocking and closes the descriptor after 1 s at most (at most 8 at once; a paste beyond them gets its descriptor closed at once); a paste returns the client's own copy directly or reads another client's selection through a pipe, at most 1 MiB, and blocks the caller for up to 1 s (`None` when the other client does not finish in time) |
-| `Event`, `PointerEvent`, `Button`, `key`, `Modifiers`, `ActivationRequest` | pointer and key events, `Client::modifiers` for the held modifiers; `PointerEvent::Scroll` carries `count`, the touchpad's scroll count from `cupertino_scroll_v1` (optional at connect; 0 for a wheel, a slow scroll or a server without the global). With the global bound, scroll events wait for the `wl_pointer.frame` that brings their count and are queued then, in order; the keymap is translated with `xkbcommon`, key repeat runs in the client |
+| `Client::{set_clipboard_text, clipboard_text}` | the text clipboard (`wl_data_device`, optional at connect): copy offers `text/plain;charset=utf-8`, `text/plain` and `UTF8_STRING` with the serial of the latest input event, served by the transport; a paste returns the client's own copy directly or reads another client's selection within the transport's limits, blocking the caller for up to 1 s (`None` when the other client does not finish in time) |
+| `Event`, `PointerEvent`, `Button`, `key`, `Modifiers`, `ActivationRequest` | pointer and key events, `Client::modifiers` for the held modifiers; `PointerEvent::Scroll` carries `count`, the touchpad's scroll count from `cupertino_scroll_v1` (optional at connect; 0 for a wheel, a slow scroll or a server without the global). With the global bound, scroll events wait for the `wl_pointer.frame` that brings their count and are queued then, in order; the transport translates the keymap and runs key repeat |
 | `CursorLook`, `Client::set_cursor`, `Client::input_serial` | the pointer's look over the surface it entered last: hidden (the process draws its own) or the server's arrow (`wp_cursor_shape_v1`, optional at connect); the serial of the latest input event |
 | `OutputInfo`, `OutputGeometry`, `OutputId`, `Scale` | outputs with logical geometry and the buffer scale; `Client::surface_outputs` lists the outputs the server entered a surface into, which is how a layer surface created without an output learns the one the server chose; `OutputId::registry_name` binds the same output on another event queue |
 | `Backdrop` | a server-rendered material below a surface (`cupertino_backdrop_v1` of the public `cupertino_app_effects_v1`) |
@@ -19,15 +24,15 @@ manager). One `Client` connects to the server, binds the globals every process n
 | `MenuBar`, `MenuBarUpdate`, `ActiveApp`, `WindowCommand`, `WindowMenu`, `WindowState`, `GtkMenu` | the menu-bar role, with `done`-grouped updates (from version 3 also the screen capture state, `MenuBarUpdate::screen_capture`) |
 | `Dock`, `DockUpdate`, `DockChange`, `DockWindow`, `OverviewMode`, `OverviewWindow`, `OverviewWorkspace`, `Corner`, `Gesture`, `AppCommand` | the dock role: window feed, activation, restore, minimize target, the app-grid action (`DockChange::ToggleAppGrid`), the application switcher (`DockChange::SwitcherChanged` with the panel's `OutputId` / `SwitcherClosed`, `Dock::switcher_select`, `switcher_activate`, `switcher_cancel`), attention (`DockChange::Attention`), the overview (`DockChange::OverviewChanged` / `OverviewClosed`; `Dock::overview_frame`, `overview_select`, `overview_close`), workspaces (`switch_workspace`, `add_workspace`, `remove_workspace`, `move_workspace`), hot corners and gestures (`DockChange::HotCorner` / `Gesture`, `Dock::run_action`) and tile menu commands (`Dock::app_command`) |
 | `Client::is_dark`, `Client::display_options`, `Client::session_locked`, `Event::Appearance`, `Event::DisplayOptions`, `Event::SessionLock` | the session state, read before `connect` returns: on a public connection from `cupertino_appearance_v1` (appearance and display options; `session_locked` stays false), on a shell connection (`Client::connect_shell`) from `cupertino_session_v1` version 2, which adds the lock state. The state at connect is read before `connect` returns, changes arrive as events. `DisplayOptions` is `cupertino_defaults::accessibility::DisplayOptions`; options with reserved bits are a protocol error |
-| `rgba_to_argb8888`, `BufferLayout`, `ClientError` | shm helpers and errors |
+| `Client::from_connection`, `Connection` | the client over an established `wayland_client::Connection`, which the process may share with event queues of its own |
+| `rgba_to_argb8888`, `ClientError` | the pixel conversion into shm buffers, and errors |
 
 ## How it works
 
-Drawing is tiny-skia on a `Pixmap` at the surface's device scale, double-buffered through shm and paced by frame
-callbacks. `Client::draw` paints a whole frame; `Client::draw_damage` repaints only rectangles of the last one (cleared
-for the paint, rounded out to device pixels): only they are converted into the shm buffer, together with what that
-buffer missed while the other one was on screen, and only they are reported with `damage_buffer`, so the server uploads
-only them. A frame at another size or scale is drawn whole. A process runs one loop around `Client::wait` and reacts to
+Drawing is tiny-skia on a `Pixmap` at the surface's device scale, presented through the transport's buffer leases and
+paced by frame callbacks; `Event::Draw` waits for a free buffer. `Client::draw` paints a whole frame;
+`Client::draw_damage` repaints only rectangles of the last one (cleared for the paint, rounded out to device pixels), and
+only they are reported with `damage_buffer`, so the server uploads only them. A frame at another size or scale is drawn whole. A process runs one loop around `Client::wait` and reacts to
 the returned `Event`s. Other threads wake the loop with a `Waker`.
 
 A missing required global is an error at `Client::connect`, never a degraded mode. The required globals are layer shell,
@@ -37,7 +42,9 @@ a server that refuses server-side decorations fails the client with `ClientError
 
 ## Open issues
 
-`xkbcommon` is a C library; the workspace replaces it with the pure-Rust `cupertino-xkbcommon`.
+Each frame converts the whole pixmap into the leased buffer, damaged or not, because a lease does not say what its buffer
+already holds; the buffer's age on the lease would let a damaged frame convert only its rectangles and what the buffer
+missed.
 
 ## Tests
 

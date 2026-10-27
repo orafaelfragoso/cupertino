@@ -355,6 +355,87 @@ pub struct Assets {
     packs: Vec<Pack>,
 }
 
+/// A picture the desktop can show: one image, or a light and a dark one that go together.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WallpaperFile {
+    /// The file name without its extension (without `-dark` for a pair): `sunrise` for `sunrise.jpg` and
+    /// `sunrise-dark.jpg`.
+    pub name: String,
+    pub light: PathBuf,
+    /// The picture of the dark appearance; `None` when the one image serves both.
+    pub dark: Option<PathBuf>,
+    /// The picture's title and its photographer, from the pack's `wallpapers/credits.txt` when it names the file.
+    pub credit: Option<Credit>,
+}
+
+/// Who made a picture.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Credit {
+    pub title: String,
+    pub author: String,
+}
+
+/// The credits of `text`, by file name: a line `wallpapers/<file>` followed by an indented line
+/// `"<title>" by <author> (<link>)`.
+pub fn parse_credits(text: &str) -> std::collections::HashMap<String, Credit> {
+    let mut out = std::collections::HashMap::new();
+    let mut file: Option<String> = None;
+    for line in text.lines() {
+        if !line.starts_with(' ') && !line.starts_with('\t') {
+            file = line.trim().strip_prefix("wallpapers/").map(str::to_string);
+            continue;
+        }
+        let Some(name) = &file else { continue };
+        let line = line.trim();
+        if let Some((title, rest)) = line.strip_prefix('"').and_then(|l| l.split_once("\" by ")) {
+            let author = rest.split(" (").next().unwrap_or(rest).trim();
+            out.entry(name.clone()).or_insert(Credit {
+                title: title.to_string(),
+                author: author.to_string(),
+            });
+        }
+    }
+    out
+}
+
+/// The pictures in `dir` (PNG and JPEG, no hidden files), by name; `<name>-dark.<ext>` next to `<name>.<ext>` makes
+/// them one pair. A directory that cannot be read has none.
+pub fn pictures_in(dir: &Path) -> Vec<WallpaperFile> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<(String, PathBuf)> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .filter_map(|p| {
+            let name = p.file_name()?.to_str()?;
+            let (stem, ext) = name.rsplit_once('.')?;
+            let ext = ext.to_ascii_lowercase();
+            (!name.starts_with('.') && matches!(ext.as_str(), "png" | "jpg" | "jpeg"))
+                .then(|| (stem.to_string(), p.clone()))
+        })
+        .collect();
+    files.sort();
+    let light_names: Vec<String> = files.iter().map(|(stem, _)| stem.clone()).collect();
+    let mut out: Vec<WallpaperFile> = Vec::new();
+    for (stem, path) in &files {
+        match stem.strip_suffix("-dark") {
+            Some(base) if light_names.iter().any(|n| n == base) => {}
+            _ => out.push(WallpaperFile {
+                name: stem.clone(),
+                light: path.clone(),
+                dark: files
+                    .iter()
+                    .find(|(other, _)| other.strip_suffix("-dark") == Some(stem.as_str()))
+                    .map(|(_, dark)| dark.clone()),
+                credit: None,
+            }),
+        }
+    }
+    out
+}
+
 impl Assets {
     /// The packs of [`search_path`]. Never fails: a directory that does not exist is skipped silently (most systems
     /// have only some of them), one that exists but cannot be used is skipped with a message on stderr.
@@ -449,6 +530,30 @@ impl Assets {
     /// The cursor theme of the first pack whose theme is found; `None` means the built-in cursors.
     pub fn cursor_theme(&self) -> Option<CursorTheme> {
         self.packs.iter().find_map(Pack::cursor_theme)
+    }
+
+    /// The pictures the packs ship in their `wallpapers` directory, the first pack's first; a name an earlier pack has
+    /// is not listed again.
+    pub fn wallpaper_files(&self) -> Vec<WallpaperFile> {
+        let mut out: Vec<WallpaperFile> = Vec::new();
+        for pack in &self.packs {
+            let dir = pack.root.join("wallpapers");
+            let credits = std::fs::read_to_string(dir.join("credits.txt"))
+                .map(|text| parse_credits(&text))
+                .unwrap_or_default();
+            for mut file in pictures_in(&dir) {
+                file.credit = file
+                    .light
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .and_then(|n| credits.get(n))
+                    .cloned();
+                if !out.iter().any(|f| f.name == file.name) {
+                    out.push(file);
+                }
+            }
+        }
+        out
     }
 
     /// The default desktop picture for the light or `dark` appearance (the light one when a pack has no dark one) of

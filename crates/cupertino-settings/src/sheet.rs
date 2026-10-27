@@ -7,6 +7,8 @@ use zeroize::{Zeroize, Zeroizing};
 
 use cupertino_defaults::compositor::MOUSE_DPI_RANGE;
 
+use cupertino_filepicker::{Key as PickerKey, Mode, Outcome as PickerOutcome, Picker};
+
 use crate::geom::{Point, Rect};
 use crate::panes::Call;
 
@@ -20,6 +22,11 @@ pub mod metrics {
     pub const BUTTON: (f64, f64) = (96.0, 20.0);
     pub const GAP: f64 = 12.0;
     pub const RADIUS: f64 = 10.0;
+    /// The chooser sheet: its width, a row of its list, the rows shown and the Up button. approximate.
+    pub const PICKER_WIDTH: f64 = 460.0;
+    pub const PICKER_ROW: f64 = 22.0;
+    pub const PICKER_ROWS: usize = 12;
+    pub const PICKER_UP: (f64, f64) = (48.0, 20.0);
 }
 
 use metrics as m;
@@ -72,6 +79,20 @@ impl Zeroize for Secret {
 /// The room of a [`Secret`] (ours, approximate: a WPA passphrase is at most 63 characters, IEEE 802.11i).
 pub const SECRET_BYTES: usize = 256;
 
+/// An open file chooser; two of them are equal when they show the same folder with the same highlight.
+#[derive(Clone, Debug)]
+pub struct Chooser(pub Picker);
+
+impl PartialEq for Chooser {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.mode() == other.0.mode()
+            && self.0.dir() == other.0.dir()
+            && self.0.highlighted() == other.0.highlighted()
+    }
+}
+
+impl Eq for Chooser {}
+
 /// What a sheet asks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -88,6 +109,13 @@ pub enum Kind {
         key: String,
         name: String,
         text: String,
+    },
+    /// A chooser of a folder or a picture; `top` is the first row of its list that shows.
+    Picker {
+        chooser: Chooser,
+        top: usize,
+        /// The row under the pointer.
+        hovered: Option<usize>,
     },
     /// A question of the Bluetooth daemon to the pairing agent (`org.cupertino.Bluetooth1.Agent`); `id` is the pairing.
     /// The wording is approximate (the design's pairing dialog is not known).
@@ -145,6 +173,11 @@ pub enum Outcome {
         key: String,
         dpi: u32,
     },
+    /// The chooser's result, a folder or a picture; the sheet closes.
+    Picked {
+        path: std::path::PathBuf,
+        folder: bool,
+    },
 }
 
 /// Where a sheet's parts lie in a content column `content`.
@@ -156,6 +189,9 @@ pub struct SheetLayout {
     pub field: Option<Rect>,
     pub cancel: Rect,
     pub action: Rect,
+    /// The chooser's list of rows and its Up button.
+    pub list: Option<Rect>,
+    pub up: Option<Rect>,
 }
 
 impl Sheet {
@@ -188,6 +224,17 @@ impl Sheet {
         }
     }
 
+    /// A chooser of a folder (`Mode::Folder`) or a picture, opened at `start`.
+    pub fn picker(start: &std::path::Path, mode: Mode) -> Self {
+        Sheet {
+            kind: Kind::Picker {
+                chooser: Chooser(Picker::open(start, mode)),
+                top: 0,
+                hovered: None,
+            },
+        }
+    }
+
     pub fn pairing(id: u64, device: &str, prompt: Prompt) -> Self {
         Sheet {
             kind: Kind::Pairing {
@@ -203,7 +250,10 @@ impl Sheet {
     pub fn pairing_id(&self) -> Option<u64> {
         match &self.kind {
             Kind::Pairing { id, .. } => Some(*id),
-            Kind::Passphrase { .. } | Kind::Forget { .. } | Kind::Resolution { .. } => None,
+            Kind::Passphrase { .. }
+            | Kind::Forget { .. }
+            | Kind::Resolution { .. }
+            | Kind::Picker { .. } => None,
         }
     }
 
@@ -213,6 +263,10 @@ impl Sheet {
                 format!("Enter the password for \u{201c}{ssid}\u{201d}")
             }
             Kind::Forget { name, .. } => format!("Forget \u{201c}{name}\u{201d}?"),
+            Kind::Picker { chooser, .. } => match chooser.0.mode() {
+                Mode::Folder => "Add a Folder".to_string(),
+                Mode::Photo => "Add a Photo".to_string(),
+            },
             Kind::Resolution { name, .. } => format!("Resolution of \u{201c}{name}\u{201d}"),
             Kind::Pairing {
                 device,
@@ -236,6 +290,10 @@ impl Sheet {
         match &self.kind {
             Kind::Passphrase { failure: Some(f), .. } => f.clone(),
             Kind::Passphrase { .. } => "The network needs a password to join.".to_string(),
+            Kind::Picker { chooser, .. } if chooser.0.unreadable() => {
+                "That folder cannot be opened.".to_string()
+            }
+            Kind::Picker { chooser, .. } => crate::panes::home_relative(chooser.0.dir()),
             Kind::Resolution { .. } => format!(
                 "Type the resolution in dots per inch, from {} to {}.",
                 MOUSE_DPI_RANGE.start(),
@@ -254,6 +312,10 @@ impl Sheet {
             Kind::Passphrase { .. } => "Join",
             Kind::Forget { .. } => "Forget Device",
             Kind::Resolution { .. } => "Set",
+            Kind::Picker { chooser, .. } => match chooser.0.mode() {
+                Mode::Folder => "Choose",
+                Mode::Photo => "Add",
+            },
             Kind::Pairing {
                 prompt: Prompt::Confirm { .. } | Prompt::Request,
                 ..
@@ -276,7 +338,7 @@ impl Sheet {
                 ..
             } => Some(text.to_string()),
             Kind::Resolution { text, .. } => Some(text.clone()),
-            Kind::Forget { .. } | Kind::Pairing { .. } => None,
+            Kind::Forget { .. } | Kind::Pairing { .. } | Kind::Picker { .. } => None,
         }
     }
 
@@ -289,6 +351,13 @@ impl Sheet {
                 ssid: ssid.clone(),
                 passphrase: Some(std::mem::take(text)),
             }),
+            Kind::Picker { chooser, .. } => match chooser.0.choice() {
+                Some(path) => Outcome::Picked {
+                    folder: chooser.0.mode() == Mode::Folder,
+                    path,
+                },
+                None => Outcome::Stay,
+            },
             Kind::Resolution { key, text, .. } => match text.parse::<u32>() {
                 Ok(dpi) if MOUSE_DPI_RANGE.contains(&dpi) => Outcome::Resolution {
                     key: key.clone(),
@@ -331,6 +400,7 @@ impl Sheet {
             Kind::Passphrase { .. }
             | Kind::Forget { .. }
             | Kind::Resolution { .. }
+            | Kind::Picker { .. }
             | Kind::Pairing {
                 prompt: Prompt::Display { .. },
                 ..
@@ -341,6 +411,27 @@ impl Sheet {
     /// A typed character, Backspace, Return or Escape. Return is the default button: Join or Pair, or Cancel when
     /// forgetting.
     pub fn key(&mut self, key: SheetKey) -> Outcome {
+        self.key_at(key, 0.0)
+    }
+
+    /// [`Sheet::key`] at `now` seconds: the chooser's type-to-select forgets the typed text after a pause.
+    pub fn key_at(&mut self, key: SheetKey, now: f64) -> Outcome {
+        if let Kind::Picker { chooser, top, .. } = &mut self.kind {
+            let picker_key = match key {
+                SheetKey::Escape => return Outcome::Cancel,
+                SheetKey::Return => PickerKey::Return,
+                SheetKey::Up => PickerKey::Up,
+                SheetKey::Down => PickerKey::Down,
+                SheetKey::Home => PickerKey::Home,
+                SheetKey::End => PickerKey::End,
+                SheetKey::Parent => PickerKey::Parent,
+                SheetKey::Choose => PickerKey::Choose,
+                SheetKey::Type(c) => PickerKey::Type(c),
+                SheetKey::Backspace => return Outcome::Stay,
+            };
+            let outcome = chooser.0.key(picker_key, now);
+            return picked(chooser, top, outcome);
+        }
         match (key, &mut self.kind) {
             (SheetKey::Escape, _) | (SheetKey::Return, Kind::Forget { .. }) => self.cancel(),
             (
@@ -388,9 +479,21 @@ impl Sheet {
                 text.pop();
                 Outcome::Stay
             }
+            (SheetKey::Return | SheetKey::Type(_) | SheetKey::Backspace, Kind::Picker { .. }) => {
+                Outcome::Stay
+            }
             (
                 SheetKey::Type(_) | SheetKey::Backspace,
                 Kind::Forget { .. } | Kind::Pairing { .. },
+            ) => Outcome::Stay,
+            (
+                SheetKey::Up
+                | SheetKey::Down
+                | SheetKey::Home
+                | SheetKey::End
+                | SheetKey::Parent
+                | SheetKey::Choose,
+                _,
             ) => Outcome::Stay,
         }
     }
@@ -406,6 +509,9 @@ impl Sheet {
 
     /// The layout of the sheet centred in the content column `content`, near its top.
     pub fn layout(&self, content: &Rect) -> SheetLayout {
+        if let Kind::Picker { .. } = self.kind {
+            return self.picker_layout(content);
+        }
         let field = self.field_text().is_some();
         let h = m::PADDING * 2.0
             + m::TITLE_HEIGHT
@@ -445,11 +551,127 @@ impl Sheet {
             field: field_rect,
             cancel,
             action,
+            list: None,
+            up: None,
         }
+    }
+
+    /// The chooser: the title with the Up button at its end, the folder under it, the list, then the buttons.
+    fn picker_layout(&self, content: &Rect) -> SheetLayout {
+        let list_h = m::PICKER_ROW * m::PICKER_ROWS as f64;
+        let h = m::PADDING * 2.0
+            + m::TITLE_HEIGHT
+            + m::GAP / 2.0
+            + m::FIELD_HEIGHT
+            + m::GAP
+            + list_h
+            + m::GAP
+            + m::BUTTON.1;
+        let frame = Rect::new(
+            content.x + (content.w - m::PICKER_WIDTH).max(0.0) / 2.0,
+            content.y + m::PADDING,
+            m::PICKER_WIDTH.min(content.w),
+            h,
+        );
+        let inner = frame.inset(m::PADDING, m::PADDING);
+        let up = Rect::new(
+            inner.right() - m::PICKER_UP.0,
+            inner.y - 1.0,
+            m::PICKER_UP.0,
+            m::PICKER_UP.1,
+        );
+        let title = Rect::new(
+            inner.x,
+            inner.y,
+            inner.w - m::PICKER_UP.0 - m::GAP,
+            m::TITLE_HEIGHT,
+        );
+        let message = Rect::new(
+            inner.x,
+            title.bottom() + m::GAP / 2.0,
+            inner.w,
+            m::FIELD_HEIGHT,
+        );
+        let list = Rect::new(inner.x, message.bottom() + m::GAP, inner.w, list_h);
+        let by = inner.bottom() - m::BUTTON.1;
+        let action = Rect::new(inner.right() - m::BUTTON.0, by, m::BUTTON.0, m::BUTTON.1);
+        let cancel = Rect::new(
+            action.x - m::GAP - m::BUTTON.0,
+            by,
+            m::BUTTON.0,
+            m::BUTTON.1,
+        );
+        SheetLayout {
+            frame,
+            title,
+            message,
+            field: None,
+            cancel,
+            action,
+            list: Some(list),
+            up: Some(up),
+        }
+    }
+
+    /// The pointer is at `p` (`None`: it left): the chooser's row under it shows its hover. `true` when that changed.
+    pub fn hover(&mut self, layout: &SheetLayout, p: Option<Point>) -> bool {
+        let Kind::Picker {
+            chooser,
+            top,
+            hovered,
+        } = &mut self.kind
+        else {
+            return false;
+        };
+        let row = p.zip(layout.list).and_then(|(p, list)| {
+            list.contains(p)
+                .then(|| *top + ((p.y - list.y) / m::PICKER_ROW) as usize)
+        });
+        let row = row.filter(|r| *r < chooser.0.entries().len());
+        std::mem::replace(hovered, row) != row
+    }
+
+    /// The wheel moved by `dy` points with the pointer at `p`: the chooser's list scrolls when `p` is over it. `true`
+    /// when it moved.
+    pub fn scroll(&mut self, layout: &SheetLayout, p: Point, dy: f64) -> bool {
+        let Kind::Picker { chooser, top, .. } = &mut self.kind else {
+            return false;
+        };
+        if !layout.list.is_some_and(|list| list.contains(p)) || dy == 0.0 {
+            return false;
+        }
+        let rows = (dy / m::PICKER_ROW).round().abs().max(1.0) as usize;
+        let last = chooser.0.entries().len().saturating_sub(m::PICKER_ROWS);
+        let to = if dy > 0.0 {
+            (*top + rows).min(last)
+        } else {
+            top.saturating_sub(rows)
+        };
+        std::mem::replace(top, to) != to
     }
 
     /// A press at `p` in a sheet laid out as `layout`.
     pub fn press(&mut self, layout: &SheetLayout, p: Point) -> Outcome {
+        if let Kind::Picker { chooser, top, .. } = &mut self.kind {
+            let outcome = if layout.up.is_some_and(|up| up.contains(p)) {
+                chooser.0.parent()
+            } else if let Some(list) = layout.list.filter(|l| l.contains(p)) {
+                let row = *top + ((p.y - list.y) / m::PICKER_ROW) as usize;
+                // a press on the highlighted row opens it (the second press of a double click)
+                if chooser.0.highlighted() == Some(row) {
+                    chooser.0.activate(row)
+                } else {
+                    chooser.0.highlight(row)
+                }
+            } else if layout.cancel.contains(p) {
+                return Outcome::Cancel;
+            } else if layout.action.contains(p) {
+                return self.action();
+            } else {
+                return Outcome::Stay;
+            };
+            return picked(chooser, top, outcome);
+        }
         if layout.cancel.contains(p) {
             self.cancel()
         } else if layout.action.contains(p) {
@@ -467,6 +689,33 @@ pub enum SheetKey {
     Backspace,
     Return,
     Escape,
+    /// The chooser's keys: the arrows, Home and End, Super+Up (the parent folder) and Super+Return (choose).
+    Up,
+    Down,
+    Home,
+    End,
+    Parent,
+    Choose,
+}
+
+/// The sheet's outcome of what the chooser did, with its list scrolled to show the highlighted row.
+fn picked(chooser: &Chooser, top: &mut usize, outcome: PickerOutcome) -> Outcome {
+    let rows = chooser.0.entries().len();
+    *top = match chooser.0.highlighted() {
+        Some(i) if i < *top => i,
+        Some(i) if i >= *top + m::PICKER_ROWS => i + 1 - m::PICKER_ROWS,
+        Some(_) => *top,
+        None => 0,
+    }
+    .min(rows.saturating_sub(m::PICKER_ROWS));
+    match outcome {
+        PickerOutcome::Choose(path) => Outcome::Picked {
+            path,
+            folder: chooser.0.mode() == Mode::Folder,
+        },
+        PickerOutcome::Cancel => Outcome::Cancel,
+        PickerOutcome::Changed | PickerOutcome::Ignore => Outcome::Stay,
+    }
 }
 
 #[cfg(test)]
@@ -633,5 +882,147 @@ mod tests {
         s.key(SheetKey::Backspace);
         assert_eq!(s.field_text(), Some(String::new()));
         assert_eq!(s.key(SheetKey::Escape), Outcome::Cancel);
+    }
+
+    fn pictures_dir() -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("Trips")).unwrap();
+        for f in ["a.jpg", "b.png", "notes.txt"] {
+            std::fs::write(d.path().join(f), b"x").unwrap();
+        }
+        d
+    }
+
+    fn picked(path: std::path::PathBuf, folder: bool) -> Outcome {
+        Outcome::Picked { path, folder }
+    }
+
+    #[test]
+    fn the_chooser_sheet_moves_with_the_keys_opens_folders_and_returns_the_picture() {
+        let d = pictures_dir();
+        let mut sheet = Sheet::picker(d.path(), Mode::Photo);
+        assert_eq!(sheet.title(), "Add a Photo");
+        assert_eq!(sheet.action_title(), "Add");
+        assert_eq!(
+            sheet.key(SheetKey::Return),
+            Outcome::Stay,
+            "nothing is highlighted"
+        );
+        assert_eq!(
+            sheet.key(SheetKey::Choose),
+            Outcome::Stay,
+            "nothing to choose yet"
+        );
+        sheet.key(SheetKey::Down);
+        assert_eq!(
+            sheet.key(SheetKey::Choose),
+            Outcome::Stay,
+            "a folder is not a picture"
+        );
+        sheet.key(SheetKey::Return);
+        assert_eq!(
+            sheet.message(),
+            d.path().join("Trips").display().to_string()
+        );
+        assert_eq!(sheet.key(SheetKey::Parent), Outcome::Stay);
+        assert_eq!(sheet.message(), d.path().display().to_string());
+        sheet.key(SheetKey::End);
+        assert_eq!(
+            sheet.key(SheetKey::Return),
+            picked(d.path().join("b.png"), false)
+        );
+        assert_eq!(sheet.key(SheetKey::Escape), Outcome::Cancel);
+        let mut folder = Sheet::picker(d.path(), Mode::Folder);
+        assert_eq!(folder.action_title(), "Choose");
+        assert_eq!(
+            folder.key(SheetKey::Choose),
+            picked(d.path().to_path_buf(), true)
+        );
+    }
+
+    #[test]
+    fn the_chooser_sheet_takes_presses_on_its_rows_up_and_the_buttons() {
+        let d = pictures_dir();
+        let content = Rect::new(0.0, 0.0, 600.0, 600.0);
+        let mut sheet = Sheet::picker(&d.path().join("Trips"), Mode::Photo);
+        let l = sheet.layout(&content);
+        let (list, up) = (l.list.unwrap(), l.up.unwrap());
+        assert_eq!(sheet.press(&l, up.center()), Outcome::Stay);
+        assert_eq!(
+            sheet.message(),
+            d.path().display().to_string(),
+            "Up opens the parent"
+        );
+        let row = |i: usize| Point {
+            x: list.x + 10.0,
+            y: list.y + (i as f64 + 0.5) * m::PICKER_ROW,
+        };
+        assert_eq!(
+            sheet.press(&l, row(1)),
+            Outcome::Stay,
+            "a press highlights a row"
+        );
+        assert_eq!(
+            sheet.press(&l, l.action.center()),
+            picked(d.path().join("a.jpg"), false)
+        );
+        assert_eq!(
+            sheet.press(&l, row(1)),
+            picked(d.path().join("a.jpg"), false),
+            "the second press on a picture chooses it"
+        );
+        assert_eq!(sheet.press(&l, l.cancel.center()), Outcome::Cancel);
+        assert!(l.frame.w <= content.w && l.frame.bottom() <= content.bottom());
+    }
+
+    #[test]
+    fn the_chooser_list_scrolls_with_the_wheel_and_shows_the_row_under_the_pointer() {
+        let d = tempfile::tempdir().unwrap();
+        for i in 0..30 {
+            std::fs::write(d.path().join(format!("p{i:02}.jpg")), b"x").unwrap();
+        }
+        let content = Rect::new(0.0, 0.0, 600.0, 600.0);
+        let mut sheet = Sheet::picker(d.path(), Mode::Photo);
+        let l = sheet.layout(&content);
+        let list = l.list.unwrap();
+        let at = |row: usize| Point {
+            x: list.x + 10.0,
+            y: list.y + (row as f64 + 0.5) * m::PICKER_ROW,
+        };
+        let outside = Point {
+            x: list.x - 5.0,
+            y: list.y,
+        };
+        assert!(
+            !sheet.scroll(&l, outside, 40.0),
+            "the wheel only scrolls over the list"
+        );
+        assert!(
+            !sheet.scroll(&l, at(0), -40.0),
+            "nothing above the first row"
+        );
+        assert!(sheet.scroll(&l, at(0), 2.0 * m::PICKER_ROW));
+        assert!(sheet.hover(&l, Some(at(0))));
+        assert!(
+            !sheet.hover(&l, Some(at(0))),
+            "the same row again changes nothing"
+        );
+        // the pointer is now on the third entry
+        assert_eq!(sheet.press(&l, at(0)), Outcome::Stay);
+        assert_eq!(
+            sheet.key(SheetKey::Return),
+            picked(d.path().join("p02.jpg"), false)
+        );
+        assert!(
+            sheet.scroll(&l, at(0), 1000.0),
+            "a long scroll stops at the last row"
+        );
+        assert!(!sheet.scroll(&l, at(0), 1000.0));
+        assert_eq!(sheet.press(&l, at(m::PICKER_ROWS - 1)), Outcome::Stay);
+        assert_eq!(
+            sheet.key(SheetKey::Return),
+            picked(d.path().join("p29.jpg"), false)
+        );
+        assert!(sheet.hover(&l, None), "the pointer left");
     }
 }

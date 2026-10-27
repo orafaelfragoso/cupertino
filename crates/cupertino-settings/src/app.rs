@@ -13,6 +13,7 @@ use cupertino_client::{
 };
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
+use cupertino_filepicker::Mode;
 use cupertino_geometry::Rect as PopupRect;
 use cupertino_settings::agent::{Agent, AgentEvent};
 use cupertino_settings::controls::{self, Control, Press, Value};
@@ -20,7 +21,7 @@ use cupertino_settings::form::{self, RowSpec, SectionLayout, SectionSpec};
 use cupertino_settings::history::History;
 use cupertino_settings::instance;
 use cupertino_settings::keys::{self, Action, Focus, Mods, SearchKey};
-use cupertino_settings::live::{Live, Reading};
+use cupertino_settings::live::{Live, Pictures, Reading};
 use cupertino_settings::menu;
 use cupertino_settings::paint::{
     menu_rows, popup_hit, search_text_area, Painter, Palette, PaneView, WindowState,
@@ -131,6 +132,9 @@ struct App {
     /// What arrived from the bus threads.
     background: std::sync::mpsc::Receiver<Background>,
     notify: Notify,
+    assets: Assets,
+    /// The pictures whose thumbnail is asked for, so each is made once.
+    thumbnails_asked: std::collections::HashSet<std::path::PathBuf>,
     /// The open pairing question's answer, sent when its sheet decides.
     agent_answer: Option<(u64, async_channel::Sender<Answer>)>,
     /// Whether this window's pairing agent is registered.
@@ -149,6 +153,11 @@ enum Background {
     Paired(std::result::Result<(), String>),
     /// A settings file changed on disk.
     Files(WatchEvent),
+    /// The thumbnail of a picture of the Wallpaper pane is made.
+    Thumbnail {
+        image: std::path::PathBuf,
+        thumbnail: std::path::PathBuf,
+    },
 }
 
 /// Hands a [`Background`] to the window loop and wakes it.
@@ -284,6 +293,8 @@ pub fn run(pane: PaneId) -> Result<()> {
         scanned: f64::NEG_INFINITY,
         background,
         notify,
+        assets,
+        thumbnails_asked: std::collections::HashSet::new(),
         agent_answer: None,
         agent_registered: false,
         _files: files,
@@ -480,6 +491,9 @@ impl App {
             return Ok(());
         }
         self.scanned = f64::NEG_INFINITY;
+        if to == PaneId::Wallpaper {
+            self.load_pictures();
+        }
         self.refresh(self.now())?;
         if to == PaneId::Bluetooth && self.live.bluetooth.ready().is_some_and(|b| b.available) {
             let notify = self.notify.clone();
@@ -747,6 +761,37 @@ impl App {
                     Hit::Sidebar => {}
                 }
             }
+            PointerEvent::Motion(position) | PointerEvent::Enter(position)
+                if self.sheet.is_some() =>
+            {
+                let sheet = self.sheet.as_mut().expect("checked by the guard");
+                let l = sheet.layout(&layout.content);
+                let p = Point {
+                    x: position.x,
+                    y: position.y,
+                };
+                if sheet.hover(&l, Some(p)) {
+                    self.client.request_redraw(self.window)?;
+                }
+            }
+            PointerEvent::Leave if self.sheet.is_some() => {
+                let sheet = self.sheet.as_mut().expect("checked by the guard");
+                let l = sheet.layout(&layout.content);
+                if sheet.hover(&l, None) {
+                    self.client.request_redraw(self.window)?;
+                }
+            }
+            PointerEvent::Scroll { dy, position, .. } if self.sheet.is_some() => {
+                let sheet = self.sheet.as_mut().expect("checked by the guard");
+                let l = sheet.layout(&layout.content);
+                let p = Point {
+                    x: position.x,
+                    y: position.y,
+                };
+                if sheet.scroll(&l, p, dy) {
+                    self.client.request_redraw(self.window)?;
+                }
+            }
             PointerEvent::Motion(position) if self.search.field().is_dragging() => {
                 let area = search_text_area(&layout.search, !self.search.text().is_empty());
                 let index = self.search.field().index_at(
@@ -877,14 +922,21 @@ impl App {
         if let Some(sheet) = &mut self.sheet {
             let key = match code {
                 keys::code::ESCAPE => SheetKey::Escape,
+                keys::code::ENTER | keys::code::KEYPAD_ENTER if mods.logo => SheetKey::Choose,
                 keys::code::ENTER | keys::code::KEYPAD_ENTER => SheetKey::Return,
                 keys::code::BACKSPACE => SheetKey::Backspace,
+                keys::code::UP if mods.logo => SheetKey::Parent,
+                keys::code::UP => SheetKey::Up,
+                keys::code::DOWN => SheetKey::Down,
+                keys::code::HOME => SheetKey::Home,
+                keys::code::END => SheetKey::End,
+                _ if mods.logo => return Ok(()),
                 _ => match character.filter(|c| !c.is_control()) {
                     Some(c) => SheetKey::Type(c),
                     None => return Ok(()),
                 },
             };
-            let outcome = sheet.key(key);
+            let outcome = sheet.key_at(key, self.start.elapsed().as_secs_f64());
             return self.sheet_outcome(outcome);
         }
         let mods = Mods {
@@ -1166,6 +1218,18 @@ impl App {
                     Ok(())
                 }
                 Effect::Service(call) => self.service_call(&call),
+                Effect::AskPicture { folder } => {
+                    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+                    let start = home
+                        .as_ref()
+                        .map(|h| h.join("Pictures"))
+                        .filter(|p| p.is_dir())
+                        .or(home)
+                        .unwrap_or_else(|| std::path::PathBuf::from("/"));
+                    let mode = if folder { Mode::Folder } else { Mode::Photo };
+                    self.sheet = Some(Sheet::picker(&start, mode));
+                    Ok(())
+                }
                 Effect::AskResolution { key, name } => {
                     self.sheet = Some(Sheet::resolution(&key, &name));
                     Ok(())
@@ -1230,6 +1294,18 @@ impl App {
                     eprintln!("cupertino-settings: {e}");
                 }
             }
+            Outcome::Picked { path, folder } => {
+                self.sheet = None;
+                let added = if folder {
+                    self.settings.add_wallpaper_folder(&self.paths, &path)
+                } else {
+                    self.settings.set_wallpaper(&self.paths, &path)
+                };
+                match added {
+                    Ok(()) => self.load_pictures(),
+                    Err(e) => eprintln!("cupertino-settings: {e}"),
+                }
+            }
             Outcome::Do(call) => match self.service_call(&call) {
                 Ok(()) => self.sheet = None,
                 // the passphrase sheet stays with the error (§7.2); a failed removal closes it and shows the error
@@ -1249,6 +1325,74 @@ impl App {
         }
         self.client.request_redraw(self.window)?;
         Ok(())
+    }
+
+    /// List the pictures of the packs and of the added folders, and start the thumbnails of those without one.
+    fn load_pictures(&mut self) {
+        let folders = self
+            .settings
+            .compositor
+            .wallpaper_folders
+            .iter()
+            .flatten()
+            .map(|folder| {
+                let path = std::path::PathBuf::from(folder);
+                let pictures = cupertino_assets::pictures_in(&path);
+                (path, pictures)
+            })
+            .collect();
+        self.live.pictures = Pictures {
+            bundled: self.assets.wallpaper_files(),
+            folders,
+            default: self.assets.wallpaper_path(false),
+        };
+        let wanted: Vec<std::path::PathBuf> = self
+            .live
+            .pictures
+            .bundled
+            .iter()
+            .chain(
+                self.live
+                    .pictures
+                    .folders
+                    .iter()
+                    .flat_map(|(_, files)| files),
+            )
+            .map(|f| f.light.clone())
+            .chain(
+                self.settings
+                    .compositor
+                    .wallpaper
+                    .iter()
+                    .map(std::path::PathBuf::from),
+            )
+            .filter(|image| {
+                !self.painter.has_thumbnail(image) && self.thumbnails_asked.insert(image.clone())
+            })
+            .collect();
+        if wanted.is_empty() {
+            return;
+        }
+        let notify = self.notify.clone();
+        let spawned = std::thread::Builder::new()
+            .name("wallpaper-thumbnails".into())
+            .spawn(move || {
+                let cache = cupertino_thumbnails::Thumbnailer::from_env("cupertino-settings");
+                for image in wanted {
+                    match cache.get_or_create(&image, cupertino_thumbnails::ThumbSize::Large) {
+                        Ok(thumbnail) => notify(Background::Thumbnail { image, thumbnail }),
+                        Err(e) => {
+                            eprintln!(
+                                "cupertino-settings: no thumbnail of {}: {e}",
+                                image.display()
+                            )
+                        }
+                    }
+                }
+            });
+        if let Err(e) = spawned {
+            eprintln!("cupertino-settings: cannot start the thumbnails: {e}");
+        }
     }
 
     /// Store the typed resolution of the mouse `key`; the server applies the file.
@@ -1275,6 +1419,11 @@ impl App {
                 if self.sheet.as_ref().and_then(Sheet::pairing_id) == Some(id) {
                     self.sheet = None;
                     self.agent_answer = None;
+                    self.client.request_redraw(self.window)?;
+                }
+            }
+            Background::Thumbnail { image, thumbnail } => {
+                if self.painter.set_thumbnail(&image, &thumbnail) {
                     self.client.request_redraw(self.window)?;
                 }
             }

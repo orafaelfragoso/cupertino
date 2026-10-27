@@ -2331,6 +2331,23 @@ fn observe_reads_the_session_state_before_it_returns() {
         .any(|e| matches!(e, cupertino_wayland_client::Event::Extension(_))));
 }
 
+/// A shell process (login, dock, menu bar) needs the layer shell and fails at start, naming the global, when the
+/// server does not offer it.
+#[test]
+fn a_shell_process_does_not_start_without_the_layer_shell() {
+    let (client_stream, server_stream) = UnixStream::pair().unwrap();
+    let (_control, _committed, _seen) = spawn_server_offering(server_stream, false, false);
+    let client = Client::from_shell_connection(Connection::from_socket(client_stream).unwrap());
+    assert!(
+        matches!(
+            client,
+            Err(ClientError::MissingGlobal("zwlr_layer_shell_v1"))
+        ),
+        "{:?}",
+        client.err()
+    );
+}
+
 /// A server that does not offer the layer shell (it does not to a sandboxed application): an application connects and
 /// draws a window; only a layer surface fails, naming the global.
 #[test]

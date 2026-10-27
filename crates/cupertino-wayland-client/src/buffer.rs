@@ -41,10 +41,13 @@ pub struct BufferLayout {
 }
 
 impl BufferLayout {
-    /// `None` for an empty buffer or one larger than `wl_shm` addresses (`i32` bytes).
+    /// The largest width or height: a buffer stays within 1 GiB, and a surface's slots within 3 GiB.
+    pub const MAX_EXTENT: u32 = 16384;
+
+    /// `None` for an empty buffer or one wider or taller than [`Self::MAX_EXTENT`].
     pub fn new(width: u32, height: u32, format: BufferFormat) -> Option<Self> {
-        let bytes = u64::from(width) * u64::from(height) * 4;
-        (width > 0 && height > 0 && bytes <= i32::MAX as u64).then_some(Self {
+        let extent = 1..=Self::MAX_EXTENT;
+        (extent.contains(&width) && extent.contains(&height)).then_some(Self {
             width,
             height,
             format,
@@ -205,8 +208,12 @@ mod tests {
         let f = BufferFormat::Xrgb8888;
         assert_eq!(BufferLayout::new(0, 10, f), None);
         assert_eq!(BufferLayout::new(10, 0, f), None);
-        assert_eq!(BufferLayout::new(30_000, 30_000, f), None);
-        assert!(BufferLayout::new(3840 * 2, 2160 * 2, f).is_some());
+        assert_eq!(BufferLayout::new(16_385, 1, f), None);
+        assert_eq!(BufferLayout::new(1, 16_385, f), None);
+        assert_eq!(
+            BufferLayout::new(16_384, 16_384, f).map(BufferLayout::buffer_len),
+            Some(1 << 30)
+        );
     }
 
     #[test]

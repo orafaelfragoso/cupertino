@@ -749,6 +749,7 @@ dependencies = [
  "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-protocols",
+ "cupertino-wayland-client",
  "memmap2",
  "rustix 1.1.5",
  "tiny-skia",
@@ -756,7 +757,6 @@ dependencies = [
  "wayland-protocols",
  "wayland-protocols-wlr",
  "wayland-server",
- "xkbcommon",
 ]
 
 [[package]]

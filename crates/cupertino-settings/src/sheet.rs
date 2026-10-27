@@ -5,6 +5,8 @@
 
 use zeroize::{Zeroize, Zeroizing};
 
+use cupertino_defaults::compositor::MOUSE_DPI_RANGE;
+
 use crate::geom::{Point, Rect};
 use crate::panes::Call;
 
@@ -81,6 +83,12 @@ pub enum Kind {
     },
     /// Forget a Bluetooth device: Cancel is the default, "Forget Device" is destructive (wording approximate).
     Forget { id: String, name: String },
+    /// A typed resolution of the mouse `key` called `name`, in dots per inch.
+    Resolution {
+        key: String,
+        name: String,
+        text: String,
+    },
     /// A question of the Bluetooth daemon to the pairing agent (`org.cupertino.Bluetooth1.Agent`); `id` is the pairing.
     /// The wording is approximate (the design's pairing dialog is not known).
     Pairing {
@@ -113,6 +121,9 @@ pub enum Answer {
 /// The longest passkey: six decimal digits (Bluetooth Core, Vol 3 Part H, Passkey Entry: 000000 to 999999).
 const PASSKEY_DIGITS: usize = 6;
 
+/// The longest typed resolution: five digits, 32000 at most.
+const RESOLUTION_DIGITS: usize = 5;
+
 /// An open sheet.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sheet {
@@ -129,6 +140,11 @@ pub enum Outcome {
     Do(Call),
     /// The pairing agent's answer; the sheet closes.
     Answer(Answer),
+    /// The typed resolution of the mouse `key`; the sheet closes.
+    Resolution {
+        key: String,
+        dpi: u32,
+    },
 }
 
 /// Where a sheet's parts lie in a content column `content`.
@@ -162,6 +178,16 @@ impl Sheet {
         }
     }
 
+    pub fn resolution(key: &str, name: &str) -> Self {
+        Sheet {
+            kind: Kind::Resolution {
+                key: key.to_string(),
+                name: name.to_string(),
+                text: String::new(),
+            },
+        }
+    }
+
     pub fn pairing(id: u64, device: &str, prompt: Prompt) -> Self {
         Sheet {
             kind: Kind::Pairing {
@@ -177,7 +203,7 @@ impl Sheet {
     pub fn pairing_id(&self) -> Option<u64> {
         match &self.kind {
             Kind::Pairing { id, .. } => Some(*id),
-            Kind::Passphrase { .. } | Kind::Forget { .. } => None,
+            Kind::Passphrase { .. } | Kind::Forget { .. } | Kind::Resolution { .. } => None,
         }
     }
 
@@ -187,6 +213,7 @@ impl Sheet {
                 format!("Enter the password for \u{201c}{ssid}\u{201d}")
             }
             Kind::Forget { name, .. } => format!("Forget \u{201c}{name}\u{201d}?"),
+            Kind::Resolution { name, .. } => format!("Resolution of \u{201c}{name}\u{201d}"),
             Kind::Pairing {
                 device,
                 prompt: Prompt::Confirm { .. },
@@ -209,6 +236,11 @@ impl Sheet {
         match &self.kind {
             Kind::Passphrase { failure: Some(f), .. } => f.clone(),
             Kind::Passphrase { .. } => "The network needs a password to join.".to_string(),
+            Kind::Resolution { .. } => format!(
+                "Type the resolution in dots per inch, from {} to {}.",
+                MOUSE_DPI_RANGE.start(),
+                MOUSE_DPI_RANGE.end()
+            ),
             Kind::Forget { .. } => "The device will need to be paired again to be used.".to_string(),
             Kind::Pairing { prompt: Prompt::Confirm { passkey: Some(p) }, .. } => format!("Check that the device shows {p:06}."),
             Kind::Pairing { prompt: Prompt::Confirm { passkey: None }, .. } => "The device asks to pair with this computer.".to_string(),
@@ -221,6 +253,7 @@ impl Sheet {
         match &self.kind {
             Kind::Passphrase { .. } => "Join",
             Kind::Forget { .. } => "Forget Device",
+            Kind::Resolution { .. } => "Set",
             Kind::Pairing {
                 prompt: Prompt::Confirm { .. } | Prompt::Request,
                 ..
@@ -242,6 +275,7 @@ impl Sheet {
                 text,
                 ..
             } => Some(text.to_string()),
+            Kind::Resolution { text, .. } => Some(text.clone()),
             Kind::Forget { .. } | Kind::Pairing { .. } => None,
         }
     }
@@ -255,6 +289,13 @@ impl Sheet {
                 ssid: ssid.clone(),
                 passphrase: Some(std::mem::take(text)),
             }),
+            Kind::Resolution { key, text, .. } => match text.parse::<u32>() {
+                Ok(dpi) if MOUSE_DPI_RANGE.contains(&dpi) => Outcome::Resolution {
+                    key: key.clone(),
+                    dpi,
+                },
+                _ => Outcome::Stay,
+            },
             Kind::Forget { id, .. } => Outcome::Do(Call::Remove {
                 id: id.clone(),
                 confirmed: true,
@@ -289,6 +330,7 @@ impl Sheet {
             } => Outcome::Answer(Answer::Reject),
             Kind::Passphrase { .. }
             | Kind::Forget { .. }
+            | Kind::Resolution { .. }
             | Kind::Pairing {
                 prompt: Prompt::Display { .. },
                 ..
@@ -301,7 +343,16 @@ impl Sheet {
     pub fn key(&mut self, key: SheetKey) -> Outcome {
         match (key, &mut self.kind) {
             (SheetKey::Escape, _) | (SheetKey::Return, Kind::Forget { .. }) => self.cancel(),
-            (SheetKey::Return, Kind::Passphrase { .. } | Kind::Pairing { .. }) => self.action(),
+            (
+                SheetKey::Return,
+                Kind::Passphrase { .. } | Kind::Resolution { .. } | Kind::Pairing { .. },
+            ) => self.action(),
+            (SheetKey::Type(c), Kind::Resolution { text, .. }) => {
+                if c.is_ascii_digit() && text.len() < RESOLUTION_DIGITS {
+                    text.push(c);
+                }
+                Outcome::Stay
+            }
             (SheetKey::Type(c), Kind::Passphrase { text, .. }) => {
                 if text.len() + c.len_utf8() <= SECRET_BYTES {
                     text.push(c);
@@ -330,6 +381,10 @@ impl Sheet {
                     ..
                 },
             ) => {
+                text.pop();
+                Outcome::Stay
+            }
+            (SheetKey::Backspace, Kind::Resolution { text, .. }) => {
                 text.pop();
                 Outcome::Stay
             }
@@ -552,5 +607,31 @@ mod tests {
             (Outcome::Cancel, Outcome::Cancel),
             "nothing to answer"
         );
+    }
+
+    #[test]
+    fn the_resolution_sheet_takes_digits_and_sets_only_a_value_in_range() {
+        let typed = |text: &str| {
+            let mut s = Sheet::resolution("1:1:A", "A");
+            for c in text.chars() {
+                s.key(SheetKey::Type(c));
+            }
+            (s.field_text(), s.key(SheetKey::Return))
+        };
+        let set = |dpi| Outcome::Resolution {
+            key: "1:1:A".into(),
+            dpi,
+        };
+        assert_eq!(typed("12x00"), (Some("1200".into()), set(1200)));
+        assert_eq!(typed("").1, Outcome::Stay);
+        assert_eq!(typed("49").1, Outcome::Stay);
+        assert_eq!(typed("32001").1, Outcome::Stay);
+        assert_eq!(typed("32000").1, set(32_000));
+        assert_eq!(typed("320000").0, Some("32000".into()), "no sixth digit");
+        let mut s = Sheet::resolution("1:1:A", "A");
+        s.key(SheetKey::Type('7'));
+        s.key(SheetKey::Backspace);
+        assert_eq!(s.field_text(), Some(String::new()));
+        assert_eq!(s.key(SheetKey::Escape), Outcome::Cancel);
     }
 }

@@ -677,3 +677,181 @@ fn st19_a_missing_daemon_disables_the_switch_with_the_reason() {
     }
     assert!(matches!(live.brightness, Reading::Unavailable(_)));
 }
+
+// ---- Mouse resolution --------------------------------------------------------------------------------------------
+
+struct FakeSession {
+    mice: Vec<(String, String, u32, bool)>,
+}
+
+#[zbus::interface(name = "org.cupertino.Session1")]
+impl FakeSession {
+    #[zbus(property)]
+    fn mice(&self) -> Vec<(String, String, u32, bool)> {
+        self.mice.clone()
+    }
+}
+
+fn mouse(key: &str, name: &str, dpi: u32, stored: bool) -> (String, String, u32, bool) {
+    (key.into(), name.into(), dpi, stored)
+}
+
+/// The mouse pane with `mice` listed by a fake session on a private bus.
+fn mouse_pane(
+    mice: Vec<(String, String, u32, bool)>,
+    dir: &std::path::Path,
+) -> (Vec<Section>, Live) {
+    let bus = common::bus().expect("a private bus");
+    let _session = zbus::blocking::connection::Builder::address(bus.address.as_str())
+        .unwrap()
+        .serve_at("/org/cupertino/Session1", FakeSession { mice })
+        .unwrap()
+        .name("org.cupertino.Session1")
+        .unwrap()
+        .build()
+        .unwrap();
+    let live = Live {
+        mice: services(&bus).mice(),
+        ..Live::default()
+    };
+    (sections(PaneId::Mouse, &settings(dir), LIGHT, &live), live)
+}
+
+fn popup_of(row: &cupertino_settings::panes::Row) -> (&[String], usize) {
+    match &row.control {
+        Control::Popup { choices, selected } => (choices, *selected),
+        other => panic!("a pop-up, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_single_mouse_gets_one_resolution_row_and_none_gets_no_row() {
+    if common::bus().is_none() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (none, _) = mouse_pane(vec![], dir.path());
+    assert_eq!(none.len(), 1, "no mouse, no resolution row");
+    let (one, _) = mouse_pane(
+        vec![mouse("046d:c077:Mouse", "Mouse", 800, false)],
+        dir.path(),
+    );
+    assert_eq!(one.len(), 2);
+    assert_eq!(one[1].header, None);
+    assert_eq!(labels(&one[1]), ["Mouse resolution"]);
+    let (choices, selected) = popup_of(&one[1].rows[0]);
+    assert_eq!(
+        choices,
+        [
+            "Automatic (800 dpi)",
+            "400 dpi",
+            "800 dpi",
+            "1200 dpi",
+            "1600 dpi",
+            "3200 dpi",
+            "6400 dpi",
+            "Custom\u{2026}"
+        ]
+    );
+    assert_eq!(selected, 0, "automatic is selected until a value is stored");
+}
+
+#[test]
+fn several_mice_get_a_row_each_and_a_stored_value_outside_the_list_is_an_extra_item() {
+    if common::bus().is_none() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (s, _) = mouse_pane(
+        vec![
+            mouse("1:1:Mouse", "USB Mouse", 1600, true),
+            mouse("1:2:Mouse", "USB Mouse", 2400, true),
+            mouse("2:3:Gamer", "Gamer", 1000, false),
+        ],
+        dir.path(),
+    );
+    assert_eq!(s[1].header.as_deref(), Some("Mouse resolution"));
+    assert_eq!(labels(&s[1]), ["USB Mouse (1)", "USB Mouse (2)", "Gamer"]);
+    let (first, selected) = popup_of(&s[1].rows[0]);
+    assert_eq!((first[selected].as_str(), first.len()), ("1600 dpi", 8));
+    let (second, selected) = popup_of(&s[1].rows[1]);
+    assert_eq!(
+        (
+            second[selected].as_str(),
+            second.last().map(String::as_str),
+            second.len()
+        ),
+        ("2400 dpi", Some("Custom\u{2026}"), 9)
+    );
+    assert_eq!(
+        popup_of(&s[1].rows[2]).0[popup_of(&s[1].rows[2]).1],
+        "Automatic (1000 dpi)"
+    );
+}
+
+#[test]
+fn choosing_a_resolution_stores_it_for_that_mouse_and_automatic_forgets_it() {
+    if common::bus().is_none() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (_, live) = mouse_pane(
+        vec![
+            mouse("1:1:A", "A", 1000, false),
+            mouse("1:2:B", "B", 800, true),
+        ],
+        dir.path(),
+    );
+    let mut settings = settings(dir.path());
+    let effects = change(
+        ControlId::MouseResolution(0),
+        Value::Index(4),
+        &mut settings,
+        &live,
+    );
+    assert_eq!(
+        effects,
+        [Effect::Store(
+            cupertino_settings::settings::File::Compositor
+        )]
+    );
+    assert_eq!(
+        settings.compositor.mouse_dpi,
+        Some([("1:1:A".to_string(), 1600)].into())
+    );
+    change(
+        ControlId::MouseResolution(1),
+        Value::Index(2),
+        &mut settings,
+        &live,
+    );
+    assert_eq!(
+        settings.compositor.mouse_dpi,
+        Some([("1:1:A".to_string(), 1600), ("1:2:B".to_string(), 800)].into())
+    );
+    change(
+        ControlId::MouseResolution(0),
+        Value::Index(0),
+        &mut settings,
+        &live,
+    );
+    assert_eq!(
+        settings.compositor.mouse_dpi,
+        Some([("1:2:B".to_string(), 800)].into()),
+        "Automatic forgets only that mouse's value"
+    );
+    let custom = change(
+        ControlId::MouseResolution(0),
+        Value::Index(7),
+        &mut settings,
+        &live,
+    );
+    assert_eq!(
+        custom,
+        [Effect::AskResolution {
+            key: "1:1:A".into(),
+            name: "A".into()
+        }],
+        "Custom asks in a sheet and changes nothing yet"
+    );
+}

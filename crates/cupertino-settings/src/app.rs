@@ -23,8 +23,8 @@ use cupertino_settings::live::Live;
 use cupertino_settings::paint::{menu_rows, popup_hit, Painter, Palette, PaneView, WindowState};
 use cupertino_settings::panes::{self, Call, ControlId, Effect, Section, Session};
 use cupertino_settings::search::{popup, SearchField};
-use cupertino_settings::services::Services;
-use cupertino_settings::settings::{Paths, Settings};
+use cupertino_settings::services::{Services, SESSION_NAME, SESSION_PATH};
+use cupertino_settings::settings::{File, Paths, Settings};
 use cupertino_settings::sheet::{Answer, Outcome, Sheet, SheetKey};
 use cupertino_settings::sidebar::{self, RowSize};
 use cupertino_settings::window::{self, metrics, Hit, WindowLayout};
@@ -45,10 +45,6 @@ const POPUP_MATERIAL: &str = "Menu";
 
 /// The interface width factor: 1 for English (approximate).
 const WIDTH_FACTOR: f64 = 1.0;
-
-/// The session bus service that applies the appearance (the server's, `quit.rs`).
-const SESSION_NAME: &str = "org.cupertino.Session1";
-const SESSION_PATH: &str = "/org/cupertino/Session1";
 
 /// A pop-up button's open menu of choices.
 struct ChoiceMenu {
@@ -433,6 +429,7 @@ impl App {
                     }
                 }
             }
+            PaneId::Mouse => self.live.mice = self.services.mice(),
             PaneId::Bluetooth => {
                 let keep = self.live.bluetooth.ready().cloned();
                 self.live.bluetooth = self.services.bluetooth(keep.as_ref());
@@ -1080,6 +1077,10 @@ impl App {
                     Ok(())
                 }
                 Effect::Service(call) => self.service_call(&call),
+                Effect::AskResolution { key, name } => {
+                    self.sheet = Some(Sheet::resolution(&key, &name));
+                    Ok(())
+                }
                 Effect::Store(file) => self
                     .settings
                     .store(&self.paths, file)
@@ -1134,6 +1135,12 @@ impl App {
                     let _ = sender.try_send(answer);
                 }
             }
+            Outcome::Resolution { key, dpi } => {
+                self.sheet = None;
+                if let Err(e) = self.set_mouse_dpi(&key, dpi) {
+                    eprintln!("cupertino-settings: {e}");
+                }
+            }
             Outcome::Do(call) => match self.service_call(&call) {
                 Ok(()) => self.sheet = None,
                 // the passphrase sheet stays with the error (§7.2); a failed removal closes it and shows the error
@@ -1153,6 +1160,18 @@ impl App {
         }
         self.client.request_redraw(self.window)?;
         Ok(())
+    }
+
+    /// Store the typed resolution of the mouse `key`; the server applies the file.
+    fn set_mouse_dpi(&mut self, key: &str, dpi: u32) -> std::result::Result<(), String> {
+        let before = self.settings.clone();
+        self.settings.compositor.set_mouse_dpi(key, Some(dpi))?;
+        self.settings
+            .store(&self.paths, File::Compositor)
+            .map_err(|e| {
+                self.settings = before;
+                e.to_string()
+            })
     }
 
     /// Something from a bus thread: a pane to show, a question of the pairing agent, the end of a pairing.

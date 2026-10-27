@@ -166,10 +166,11 @@ fn log_out_force_quit_over_the_bus_is_done_for_a_shell_process() {
     let agent = ShellProcess {
         name: "agent".into(),
         command: vec!["sleep".into(), "30".into()],
+        roles: Vec::new(),
     };
     h.state.supervisor = Supervisor::new(&[agent], Instant::now());
-    h.state.supervisor.poll(Instant::now(), "unused", &mut || {
-        UnixStream::pair().map(|(ours, _)| ours)
+    h.state.supervisor.poll(Instant::now(), "unused", &mut |_| {
+        UnixStream::pair().map(|(ours, _)| (ours, std::sync::Arc::new(Default::default())))
     });
     let pid = h.state.supervisor.pid_of("agent").unwrap();
 

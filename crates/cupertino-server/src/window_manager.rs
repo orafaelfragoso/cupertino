@@ -27,6 +27,7 @@ use smithay::reexports::wayland_server::{
 use smithay::utils::{Logical, Point};
 use smithay::wayland::shell::wlr_layer::Layer;
 
+use crate::authorization::{authorized, refuse, require, ShellRole};
 use crate::state::{Cupertino, WindowEntry};
 
 /// Where a placed window is headed. A window on the stage has no entry once its animation ended.
@@ -344,6 +345,30 @@ fn send_feed(resource: &CupertinoWindowManagerV1, known: Option<&Feed>, feed: &F
 }
 
 impl Cupertino {
+    /// Drop the window managers whose connection no longer holds the WindowManager role.
+    pub(crate) fn release_revoked_window_managers(&mut self) {
+        let revoked: Vec<_> = self
+            .window_managers
+            .managers
+            .iter()
+            .filter(|m| {
+                m.resource
+                    .client()
+                    .is_some_and(|c| !authorized(&c, ShellRole::WindowManager))
+            })
+            .map(|m| (m.resource.clone(), m.output))
+            .collect();
+        for (resource, output) in revoked {
+            self.window_managers
+                .managers
+                .retain(|m| m.resource != resource);
+            self.window_managers
+                .placed
+                .retain(|_, p| p.output != output);
+        }
+        self.request_redraw();
+    }
+
     /// `cupertino_shell_v1.get_window_manager`: one per output; send the first group.
     pub fn create_window_manager(
         &mut self,
@@ -355,10 +380,7 @@ impl Cupertino {
     ) {
         if !permitted {
             init.init(id, WindowManagerData { output: None });
-            shell.post_error(
-                ShellError::Permission,
-                "get_window_manager is for the shell processes the server started",
-            );
+            refuse(shell, ShellRole::WindowManager);
             return;
         }
         let target =
@@ -562,7 +584,7 @@ impl Cupertino {
 impl Dispatch<CupertinoWindowManagerV1, WindowManagerData> for Cupertino {
     fn request(
         state: &mut Self,
-        _: &Client,
+        client: &Client,
         resource: &CupertinoWindowManagerV1,
         request: cupertino_window_manager_v1::Request,
         data: &WindowManagerData,
@@ -570,6 +592,9 @@ impl Dispatch<CupertinoWindowManagerV1, WindowManagerData> for Cupertino {
         _: &mut DataInit<'_, Self>,
     ) {
         let Some(output) = data.output else { return };
+        if !require(client, ShellRole::WindowManager, resource) {
+            return;
+        }
         match request {
             cupertino_window_manager_v1::Request::SetPlacement {
                 id,

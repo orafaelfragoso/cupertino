@@ -5,8 +5,10 @@
 //! file `/etc/cupertino/compositor.json`) overrides the defaults; unknown keys are ignored.
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::os::unix::fs::MetadataExt;
+use std::path::{Component, Path, PathBuf};
 
+use crate::authorization::ShellRole;
 use crate::input::{Action, KeyBindings};
 use cupertino_defaults::compositor::{AppearanceName, CompositorSettings, MinimizeEffectName};
 use cupertino_theme::Appearance;
@@ -17,6 +19,95 @@ pub use cupertino_defaults::compositor::COMPOSITOR_CONF_ENV as CONFIG_ENV;
 /// The system configuration file the packages install: the shell processes and whatever else a fresh account needs.
 pub const SYSTEM_CONFIG: &str = "/etc/cupertino/compositor.json";
 
+/// The system file of the login screen's server, which `$CUPERTINO_SERVER_CONFIG` names when the packages start it.
+pub const GREETER_CONFIG: &str = "/etc/cupertino/greeter.json";
+
+/// Where the programs of the shell processes and the screenshot process must be installed. The install prefix of the
+/// build is added to `/usr` when it is set (`CUPERTINO_INSTALL_PREFIX` at compile time).
+fn installed_roots() -> impl Iterator<Item = &'static Path> {
+    ["/usr"].into_iter().chain(INSTALL_PREFIX).map(Path::new)
+}
+
+const INSTALL_PREFIX: Option<&str> = option_env!("CUPERTINO_INSTALL_PREFIX");
+
+const _: () = {
+    if let Some(prefix) = INSTALL_PREFIX {
+        assert!(
+            prefix.len() > 1 && prefix.as_bytes()[0] == b'/',
+            "CUPERTINO_INSTALL_PREFIX must be an absolute path other than /"
+        );
+    }
+};
+
+/// The screenshot process of an installation.
+const INSTALLED_SCREENSHOT: &str = "/usr/bin/cupertino-screenshot";
+
+/// Whether `command` starts a program the install put in place: an absolute path under an install root, with no `..`.
+pub fn is_installed_program(command: &[String]) -> bool {
+    let Some(program) = command.first().map(Path::new) else {
+        return false;
+    };
+    program.is_absolute()
+        && !program
+            .components()
+            .any(|c| matches!(c, Component::ParentDir))
+        && installed_roots().any(|root| program.starts_with(root))
+}
+
+/// What a configuration file may decide about the processes the server starts with privileges (the shell processes
+/// and the screenshot process). Everything else a file sets is the same for every layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayerTrust {
+    /// The system file, owned by root: it may name privileged processes, only programs the install put in place.
+    System,
+    /// A file of the person: it may disable or reorder what the system file names, never add or change a privileged
+    /// process.
+    User,
+    /// A development or nested run (`--dev-shell`): every file may name any program.
+    Dev,
+}
+
+/// The trust of the layer at `path`. It comes from which file the layer is, never from where the path resolves: only
+/// the two system files, named exactly, are [`LayerTrust::System`], and a link to them is a file of the person.
+fn layer_trust(path: &Path, dev_shell: bool) -> LayerTrust {
+    if dev_shell {
+        LayerTrust::Dev
+    } else if [SYSTEM_CONFIG, GREETER_CONFIG]
+        .into_iter()
+        .any(|system| path == Path::new(system))
+    {
+        LayerTrust::System
+    } else {
+        LayerTrust::User
+    }
+}
+
+/// The text of a system file, read from the one descriptor that was checked: opened without following a link, owned by
+/// root and not writable by anyone else. `None` when there is no such file.
+fn read_system_file(path: &Path) -> std::io::Result<Option<String>> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let meta = file.metadata()?;
+    if !meta.is_file() || meta.uid() != 0 || meta.mode() & 0o022 != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "a system configuration must be a regular file owned by root that no one else can write",
+        ));
+    }
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    Ok(Some(text))
+}
+
 /// A shell process the server starts and keeps alive (see [`crate::supervisor`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShellProcess {
@@ -24,6 +115,8 @@ pub struct ShellProcess {
     pub name: String,
     /// Program and arguments; never empty.
     pub command: Vec<String>,
+    /// The roles the server gives the process's connection.
+    pub roles: Vec<ShellRole>,
 }
 
 /// One window shadow preset: Gaussian σ and y offset in points, density as peak alpha.
@@ -295,7 +388,7 @@ impl Default for Config {
             terminals: ["foot", "alacritty", "kitty", "wezterm", "xterm"]
                 .map(String::from)
                 .to_vec(),
-            screenshot_command: vec!["cupertino-screenshot".to_string()],
+            screenshot_command: vec![INSTALLED_SCREENSHOT.to_string()],
             cascade_step: 29.0,
             default_window_fraction: 0.6,
             keyboard: crate::kbd::KeyboardSettings::default(),
@@ -427,7 +520,7 @@ impl Config {
 
     /// Defaults overridden by the settings files, and what the files held. Problems are reported and their keys keep
     /// the defaults.
-    pub fn load_with_files() -> (Self, SettingsFiles) {
+    pub fn load_with_files(dev_shell: bool) -> (Self, SettingsFiles) {
         let (keyboard, keyboard_file) = crate::kbd::KeyboardSettings::load();
         let power = load_power();
         let mut cfg = Config {
@@ -436,6 +529,9 @@ impl Config {
             power,
             ..Config::default()
         };
+        if dev_shell {
+            cfg.screenshot_command = vec!["cupertino-screenshot".to_string()];
+        }
         let mut compositor = CompositorSettings::default();
         let mut system_file = CompositorSettings::default();
         let user = Self::path();
@@ -444,7 +540,8 @@ impl Config {
             user.clone(),
             Path::new(SYSTEM_CONFIG),
         ) {
-            let file = cfg.apply_path(&path);
+            let trust = layer_trust(&path, dev_shell);
+            let file = cfg.apply_path(&path, trust);
             if path == Path::new(SYSTEM_CONFIG) && file.shell.is_none() {
                 tracing::error!(path = %path.display(), "the system configuration is unreadable or has no shell list: the shell list is empty unless the user's file sets one");
             }
@@ -466,13 +563,26 @@ impl Config {
     }
 
     /// Apply the settings file at `path` and return them; problems are reported and their keys keep their values.
-    fn apply_path(&mut self, path: &Path) -> CompositorSettings {
-        match CompositorSettings::load(path, None) {
+    fn apply_path(&mut self, path: &Path, trust: LayerTrust) -> CompositorSettings {
+        let loaded = match trust {
+            LayerTrust::System => read_system_file(path).map(|text| {
+                text.map_or_else(
+                    || (CompositorSettings::default(), Vec::new()),
+                    |text| CompositorSettings::parse(&text, None),
+                )
+            }),
+            LayerTrust::User | LayerTrust::Dev => CompositorSettings::load(path, None),
+        };
+        match loaded {
             Ok((file, problems)) => {
                 for p in problems {
                     tracing::warn!(path = %path.display(), key = p.key, error = %p.message, "ignoring invalid configuration");
                 }
-                for problem in self.apply_file(&file) {
+                let problems = self
+                    .apply_file(&file)
+                    .into_iter()
+                    .chain(self.apply_privileged(&file, trust));
+                for problem in problems.collect::<Vec<_>>() {
                     tracing::warn!(path = %path.display(), error = %problem, "ignoring invalid configuration");
                 }
                 file
@@ -486,7 +596,7 @@ impl Config {
 
     /// [`Config::load_with_files`] without the files.
     pub fn load() -> Self {
-        Self::load_with_files().0
+        Self::load_with_files(false).0
     }
 
     /// Apply the keys `f` sets on top of the current values. Returns what the server itself refuses (an unknown key
@@ -540,18 +650,6 @@ impl Config {
         if let Some(path) = &f.wallpaper_dark {
             self.wallpaper.dark = Some(path.into());
         }
-        if let Some(procs) = &f.shell {
-            self.shell_processes = procs
-                .iter()
-                .map(|p| ShellProcess {
-                    name: p.name.clone(),
-                    command: p.command.clone(),
-                })
-                .collect();
-        }
-        if let Some(command) = &f.screenshot {
-            self.screenshot_command = command.clone();
-        }
         for (chord, action) in f.keybindings.iter().flatten() {
             match Action::from_name(action) {
                 Some(a) => {
@@ -560,6 +658,75 @@ impl Config {
                     }
                 }
                 None => problems.push(format!("keybindings: {chord}: unknown action {action}")),
+            }
+        }
+        problems
+    }
+
+    /// Apply the `shell` and `screenshot` keys of a file by what its layer is trusted with. Returns what is refused;
+    /// the rest of the file applies.
+    pub fn apply_privileged(&mut self, f: &CompositorSettings, trust: LayerTrust) -> Vec<String> {
+        let mut problems = Vec::new();
+        if let Some(list) = &f.shell {
+            let entry = |e: &cupertino_defaults::compositor::ShellEntry| ShellProcess {
+                name: e.name.clone(),
+                command: e.command.clone(),
+                roles: e.roles.iter().copied().map(ShellRole::from).collect(),
+            };
+            self.shell_processes = match trust {
+                LayerTrust::Dev => list.iter().map(entry).collect(),
+                LayerTrust::System => list
+                    .iter()
+                    .filter(|e| {
+                        let allowed = e.roles.is_empty() || is_installed_program(&e.command);
+                        if !allowed {
+                            problems.push(format!(
+                                "shell: {}: a process with roles must be a program installed under {}",
+                                e.name,
+                                installed_roots().map(|r| r.display().to_string()).collect::<Vec<_>>().join(" or ")
+                            ));
+                        }
+                        allowed
+                    })
+                    .map(entry)
+                    .collect(),
+                LayerTrust::User => list
+                    .iter()
+                    .filter_map(|e| {
+                        let known = self.shell_processes.iter().find(|p| p.name == e.name);
+                        match (known, e.roles.is_empty()) {
+                            (Some(known), _) => {
+                                if known.command != e.command
+                                    || known.roles != e.roles.iter().copied().map(ShellRole::from).collect::<Vec<_>>()
+                                {
+                                    problems.push(format!("shell: {}: the user configuration cannot change a shell process of the system", e.name));
+                                }
+                                Some(known.clone())
+                            }
+                            (None, true) => Some(entry(e)),
+                            (None, false) => {
+                                problems.push(format!("shell: {}: the user configuration cannot add a process with roles", e.name));
+                                None
+                            }
+                        }
+                    })
+                    .collect(),
+            };
+        }
+        if let Some(command) = &f.screenshot {
+            match trust {
+                LayerTrust::Dev => self.screenshot_command = command.clone(),
+                LayerTrust::System if is_installed_program(command) => {
+                    self.screenshot_command = command.clone();
+                }
+                LayerTrust::System => problems.push(format!(
+                    "screenshot: {}: the program must be installed under /usr",
+                    command.join(" ")
+                )),
+                LayerTrust::User => problems.push(
+                    "screenshot: only the system configuration sets the screenshot process"
+                        .to_string(),
+                ),
             }
         }
         problems
@@ -579,7 +746,7 @@ mod tests {
         let user = dir.path().join("user.json");
         std::fs::write(
             &system,
-            r#"{"appearance":"dark","shell":[{"name":"dock","command":["cupertino-dock"]}]}"#,
+            r#"{"appearance":"dark","shell":[{"name":"dock","command":["/usr/bin/cupertino-dock"]}]}"#,
         )
         .unwrap();
         std::fs::write(&user, r#"{"appearance":"light"}"#).unwrap();
@@ -588,7 +755,7 @@ mod tests {
         assert_eq!(layers, vec![system.clone(), user.clone()]);
         let mut c = Config::default();
         for path in &layers {
-            c.apply_path(path);
+            c.apply_path(path, LayerTrust::Dev);
         }
         assert_eq!(c.appearance, Appearance::Light);
         assert_eq!(c.shell_processes.len(), 1);
@@ -614,6 +781,7 @@ mod tests {
             .map(|p| format!("{}: {}", p.key, p.message))
             .collect();
         out.extend(c.apply_file(&file));
+        out.extend(c.apply_privileged(&file, LayerTrust::Dev));
         out
     }
 
@@ -741,13 +909,14 @@ mod tests {
             c.shell_processes,
             vec![ShellProcess {
                 name: "dock".into(),
-                command: vec!["cupertino-dock".into(), "--bar".into()]
+                command: vec!["cupertino-dock".into(), "--bar".into()],
+                roles: vec![ShellRole::Session],
             }]
         );
         assert!(!apply(&mut c, r#"{"shell":[{"name":"dock","command":[]}]}"#).is_empty());
         assert_eq!(
             c.screenshot_command,
-            vec!["cupertino-screenshot".to_string()]
+            vec!["/usr/bin/cupertino-screenshot".to_string()]
         );
         assert_eq!(
             apply(
@@ -761,5 +930,185 @@ mod tests {
             vec!["/opt/cupertino/bin/cupertino-screenshot".to_string()]
         );
         assert!(!apply(&mut c, r#"{"screenshot":[]}"#).is_empty());
+    }
+
+    fn settings(json: &str) -> CompositorSettings {
+        CompositorSettings::parse(json, None).0
+    }
+
+    const SYSTEM_SHELL: &str = r#"{"screenshot":["/usr/bin/cupertino-screenshot"],"shell":[
+        {"name":"dock","command":["/usr/bin/cupertino-dock"],"roles":["session","dock"]},
+        {"name":"menubar","command":["/usr/bin/cupertino-menubar"],"roles":["session","menu_bar"]}]}"#;
+
+    fn system_config() -> Config {
+        let mut c = Config::default();
+        assert!(c
+            .apply_privileged(&settings(SYSTEM_SHELL), LayerTrust::System)
+            .is_empty());
+        c
+    }
+
+    fn names(c: &Config) -> Vec<&str> {
+        c.shell_processes.iter().map(|p| p.name.as_str()).collect()
+    }
+
+    #[test]
+    fn only_programs_the_install_put_in_place_are_installed_programs() {
+        let program = |s: &str| is_installed_program(&[s.to_string()]);
+        assert!(program("/usr/bin/cupertino-dock"));
+        assert!(program("/usr/lib/cupertino/greeter"));
+        assert!(!program("cupertino-dock"));
+        assert!(!program("/home/me/bin/cupertino-dock"));
+        assert!(!program("/tmp/usr/bin/x"));
+        assert!(!program("/usr/../tmp/x"));
+        assert!(!program("/usrx/bin/x"));
+        assert!(!is_installed_program(&[]));
+    }
+
+    #[test]
+    fn the_system_file_names_privileged_processes_only_under_usr() {
+        let c = system_config();
+        assert_eq!(names(&c), ["dock", "menubar"]);
+
+        let mut c = Config::default();
+        let problems = c.apply_privileged(
+            &settings(
+                r#"{"shell":[
+                {"name":"dock","command":["/usr/bin/cupertino-dock"],"roles":["dock"]},
+                {"name":"evil","command":["/tmp/evil"],"roles":["window_manager"]},
+                {"name":"relative","command":["cupertino-menubar"],"roles":["menu_bar"]}],
+                "screenshot":["/tmp/evil"]}"#,
+            ),
+            LayerTrust::System,
+        );
+        assert_eq!(names(&c), ["dock"]);
+        assert_eq!(problems.len(), 3, "{problems:?}");
+        assert_eq!(c.screenshot_command, ["/usr/bin/cupertino-screenshot"]);
+    }
+
+    #[test]
+    fn the_user_file_may_disable_and_reorder_but_never_add_or_change_a_privileged_process() {
+        let mut c = system_config();
+        let problems = c.apply_privileged(
+            &settings(
+                r#"{"shell":[
+                {"name":"menubar","command":["/usr/bin/cupertino-menubar"],"roles":["session","menu_bar"]},
+                {"name":"dock","command":["/home/me/dock"],"roles":["session","dock","window_manager"]},
+                {"name":"mine","command":["/home/me/bin/wm"],"roles":["window_manager"]}],
+                "screenshot":["/usr/bin/python3"]}"#,
+            ),
+            LayerTrust::User,
+        );
+        assert_eq!(
+            names(&c),
+            ["menubar", "dock"],
+            "reordered, and nothing added"
+        );
+        let dock = &c.shell_processes[1];
+        assert_eq!(dock.command, ["/usr/bin/cupertino-dock"]);
+        assert_eq!(dock.roles, [ShellRole::Session, ShellRole::Dock]);
+        assert_eq!(problems.len(), 3, "{problems:?}");
+        assert_eq!(c.screenshot_command, ["/usr/bin/cupertino-screenshot"]);
+
+        c.apply_privileged(&settings(r#"{"shell":[]}"#), LayerTrust::User);
+        assert!(c.shell_processes.is_empty(), "the user disables them all");
+    }
+
+    #[test]
+    fn a_user_process_without_roles_is_allowed_and_a_dev_run_trusts_every_layer() {
+        let mut c = system_config();
+        let json = r#"{"shell":[{"name":"mine","command":["/home/me/bin/tool"],"roles":[]}]}"#;
+        assert!(c
+            .apply_privileged(&settings(json), LayerTrust::User)
+            .is_empty());
+        assert_eq!(names(&c), ["mine"]);
+
+        let mut dev = Config::default();
+        let json = r#"{"shell":[{"name":"wm","command":["target/debug/wm"],"roles":["window_manager"]}],"screenshot":["target/debug/shot"]}"#;
+        assert!(dev
+            .apply_privileged(&settings(json), LayerTrust::Dev)
+            .is_empty());
+        assert_eq!(dev.shell_processes[0].roles, [ShellRole::WindowManager]);
+        assert_eq!(dev.screenshot_command, ["target/debug/shot"]);
+    }
+
+    #[test]
+    fn only_the_system_files_by_name_are_system_layers() {
+        assert_eq!(
+            layer_trust(Path::new(SYSTEM_CONFIG), false),
+            LayerTrust::System
+        );
+        assert_eq!(
+            layer_trust(Path::new(GREETER_CONFIG), false),
+            LayerTrust::System
+        );
+        assert_eq!(
+            layer_trust(Path::new("/etc/cupertino/other.json"), false),
+            LayerTrust::User
+        );
+        assert_eq!(layer_trust(Path::new(SYSTEM_CONFIG), true), LayerTrust::Dev);
+
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("compositor.json");
+        std::os::unix::fs::symlink(SYSTEM_CONFIG, &link).unwrap();
+        assert_eq!(layer_trust(&link, false), LayerTrust::User);
+        let mut c = system_config();
+        let problems = c.apply_privileged(
+            &settings(r#"{"shell":[{"name":"evil","command":["/usr/bin/sh","-c","x"],"roles":["dock","session_lock"]}]}"#),
+            layer_trust(&link, false),
+        );
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert_eq!(names(&c), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn a_system_file_is_read_through_one_checked_descriptor() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("compositor.json");
+        std::fs::write(&file, "{}").unwrap();
+        assert!(read_system_file(&dir.path().join("missing.json"))
+            .unwrap()
+            .is_none());
+
+        let link = dir.path().join("link.json");
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+        assert!(read_system_file(&link).is_err(), "a link is never followed");
+        if unsafe { libc::geteuid() } != 0 {
+            assert_eq!(
+                read_system_file(&file).unwrap_err().kind(),
+                std::io::ErrorKind::PermissionDenied,
+                "a file the person owns is no system file"
+            );
+        }
+    }
+
+    #[test]
+    fn the_packaged_system_files_pass_their_own_screening() {
+        let etc = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap()
+            .join("packaging/files/etc/cupertino");
+        let files = ["compositor.json", "greeter.json"]
+            .map(|name| std::fs::read_to_string(etc.join(name)).unwrap());
+        for json in &files {
+            let file = settings(json);
+            let mut c = Config::default();
+            let problems = c.apply_privileged(&file, LayerTrust::System);
+            assert!(problems.is_empty(), "{problems:?}");
+            assert_eq!(c.shell_processes.len(), file.shell.unwrap().len());
+        }
+        let mut c = Config::default();
+        c.apply_privileged(&settings(&files[0]), LayerTrust::System);
+        let login = c
+            .shell_processes
+            .iter()
+            .find(|p| p.name == "login")
+            .unwrap();
+        assert!(login.roles.contains(&ShellRole::SessionLock));
+        let others = c.shell_processes.iter().filter(|p| p.name != "login");
+        assert!(others
+            .flat_map(|p| &p.roles)
+            .all(|r| *r != ShellRole::SessionLock));
     }
 }

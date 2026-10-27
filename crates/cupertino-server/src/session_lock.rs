@@ -22,6 +22,7 @@ use smithay::wayland::session_lock::{
     LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker,
 };
 
+use crate::authorization::{authorized, ShellRole};
 use crate::render::scene::LockView;
 use crate::state::Cupertino;
 
@@ -58,7 +59,9 @@ pub struct SessionLock {
 impl SessionLock {
     pub fn new(dh: &DisplayHandle) -> Self {
         Self {
-            manager: SessionLockManagerState::new::<Cupertino, _>(dh, |_| true),
+            manager: SessionLockManagerState::new::<Cupertino, _>(dh, |client| {
+                authorized(client, ShellRole::SessionLock)
+            }),
             state: LockState::Unlocked,
             unlock_requested: false,
         }
@@ -104,6 +107,14 @@ impl SessionLockHandler for Cupertino {
 
     fn lock(&mut self, confirmation: SessionLocker) {
         self.settle_session_lock();
+        if !confirmation
+            .ext_session_lock()
+            .client()
+            .is_some_and(|c| authorized(&c, ShellRole::SessionLock))
+        {
+            tracing::warn!("session lock refused: its client does not hold the session lock role");
+            return;
+        }
         // dropping the locker tells the requesting client `finished`
         if !matches!(
             self.session_lock.state,

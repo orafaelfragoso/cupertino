@@ -252,6 +252,22 @@ impl Client {
             + Send
             + 'static,
     ) -> Client {
+        Self::run_over(
+            UnixStream::connect(&socket).expect("connecting to the compositor"),
+            setup,
+        )
+    }
+
+    fn run_over(
+        stream: UnixStream,
+        setup: impl FnOnce(
+                &mut wayland_client::EventQueue<ClientState>,
+                &mut ClientState,
+                &wayland_client::globals::GlobalList,
+            ) -> Setup
+            + Send
+            + 'static,
+    ) -> Client {
         let (stop, unlock) = (
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicBool::new(false)),
@@ -264,7 +280,6 @@ impl Client {
             lock_status.clone(),
             silent.clone(),
         );
-        let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
         let thread_stream = stream.try_clone().unwrap();
         std::thread::spawn(move || {
             let conn = Connection::from_socket(thread_stream).unwrap();
@@ -367,8 +382,8 @@ impl Client {
     }
 
     /// A client that locks the session and covers the output with a lock surface.
-    pub fn locker(socket: PathBuf) -> Client {
-        Self::run(socket, |queue, client, globals| {
+    pub fn locker(stream: UnixStream) -> Client {
+        Self::run_over(stream, |queue, client, globals| {
             let qh = queue.handle();
             let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
             let manager: ext_session_lock_manager_v1::ExtSessionLockManagerV1 =
@@ -418,6 +433,15 @@ impl Drop for Client {
 
 /// The clients of a test are threads of the test process: make each connection stand for a process of its own, as the
 /// first-window rule of the focus policy sees them.
+/// A connection the server made for the lock screen: the session lock is offered to it alone.
+pub fn session_agent(state: &Cupertino) -> UnixStream {
+    cupertino_server::shell_connection::shell_process_connection(
+        &state.display_handle,
+        &[cupertino_server::authorization::ShellRole::SessionLock],
+    )
+    .unwrap()
+}
+
 pub fn each_connection_a_process(state: &mut Cupertino) {
     state.process_of = Box::new(|_, client| {
         let mut hasher = DefaultHasher::new();

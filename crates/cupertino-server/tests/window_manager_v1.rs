@@ -16,6 +16,7 @@ use cupertino_protocols::client::cupertino_shell_v1::{self, CupertinoShellV1};
 use cupertino_protocols::client::cupertino_window_manager_v1::{
     self, CupertinoWindowManagerV1, Placement, WindowState,
 };
+use cupertino_server::authorization::ShellRole;
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
 use cupertino_server::events::BTN_LEFT;
@@ -88,8 +89,11 @@ impl Harness {
 
     /// A connection of a shell process the server supervises: the only kind that may be a window manager.
     fn shell_stream(&mut self) -> UnixStream {
-        cupertino_server::shell_connection::shell_process_connection(&self.state.display_handle)
-            .unwrap()
+        cupertino_server::shell_connection::shell_process_connection(
+            &self.state.display_handle,
+            &[ShellRole::WindowManager],
+        )
+        .unwrap()
     }
 
     fn socket_path(&self) -> PathBuf {
@@ -453,10 +457,14 @@ fn uncovered_point(h: &Harness, a: WindowId, b: WindowId) -> (f64, f64) {
 
 /// An application on the public socket asking to be a window manager is refused.
 #[test]
-fn an_application_that_is_not_a_shell_process_cannot_be_a_window_manager() {
+fn a_shell_process_without_the_window_manager_role_cannot_be_a_window_manager() {
     let Some(mut h) = Harness::new() else { return };
     let intruder = WmClient::spawn(
-        UnixStream::connect(h.socket_path()).expect("connecting to the compositor"),
+        cupertino_server::shell_connection::shell_process_connection(
+            &h.state.display_handle,
+            &[ShellRole::Session, ShellRole::Dock],
+        )
+        .unwrap(),
     );
     h.wait_until("the permission error", |_| intruder.error().is_some());
     // error 2 of cupertino_shell_v1.error is `permission`

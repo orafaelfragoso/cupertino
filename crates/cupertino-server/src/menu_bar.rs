@@ -21,6 +21,7 @@ use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, New, Resource, WEnum,
 };
 
+use crate::authorization::{authorized, refuse, require, ShellRole};
 use crate::state::Cupertino;
 
 /// Opacity lost by the bar of an inactive output. approximate.
@@ -197,15 +198,40 @@ pub struct MenuBarData {
 }
 
 impl Cupertino {
+    /// Drop the bars whose connection no longer holds the MenuBar role.
+    pub(crate) fn release_revoked_menu_bars(&mut self) {
+        let revoked: Vec<_> = self
+            .menu_bars
+            .bars
+            .iter()
+            .filter(|b| {
+                b.resource
+                    .client()
+                    .is_some_and(|c| !authorized(&c, ShellRole::MenuBar))
+            })
+            .map(|b| (b.resource.clone(), b.output))
+            .collect();
+        for (resource, output) in revoked {
+            self.menu_bars.bars.retain(|b| b.resource != resource);
+            self.menu_bar_gone(output);
+        }
+    }
+
     /// `cupertino_shell_v1.get_menu_bar`: validate the role, register the bar and send its first group.
     pub fn create_menu_bar(
         &mut self,
         shell: &CupertinoShellV1,
+        permitted: bool,
         id: New<CupertinoMenuBarV1>,
         surface: WlSurface,
         output: &WlOutput,
         init: &mut DataInit<'_, Self>,
     ) {
+        if !permitted {
+            init.init(id, MenuBarData { output: None });
+            refuse(shell, ShellRole::MenuBar);
+            return;
+        }
         let target = Output::from_resource(output)
             .and_then(|o| self.output_by_wl(&o).map(|e| (e.id, e.output.clone())));
         let rejection = match &target {
@@ -471,7 +497,7 @@ impl Cupertino {
 impl Dispatch<CupertinoMenuBarV1, MenuBarData> for Cupertino {
     fn request(
         state: &mut Self,
-        _: &Client,
+        client: &Client,
         resource: &CupertinoMenuBarV1,
         request: cupertino_menu_bar_v1::Request,
         data: &MenuBarData,
@@ -479,6 +505,9 @@ impl Dispatch<CupertinoMenuBarV1, MenuBarData> for Cupertino {
         _: &mut DataInit<'_, Self>,
     ) {
         let Some(output) = data.output else { return };
+        if !require(client, ShellRole::MenuBar, resource) {
+            return;
+        }
         match request {
             cupertino_menu_bar_v1::Request::SetMenuOpen { open } => {
                 let now = state.now();

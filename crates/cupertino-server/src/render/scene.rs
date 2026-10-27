@@ -35,12 +35,12 @@ use super::programs::{corner_uniforms, u4, Programs};
 use super::shader_rect::{to_physical_rect, ElementCache, ElementKey, ShaderRect, Sig};
 use super::ui::{rounded_rect, RoundedRectSpec};
 use super::{CupertinoElement, LayerStack, SceneLayer};
+use crate::app_effects_v1::{surface_backdrops, BackdropArea};
 use crate::config::Config;
 use crate::cursor::CursorFrame;
 use crate::decor::{Decor, DecorInput};
 use crate::fx::{Effects, IntoGeom};
 use crate::shell::Shell;
-use crate::shell_v1::{surface_backdrops, BackdropArea};
 use crate::state::WindowEntry;
 use crate::window_manager::Look;
 

@@ -129,7 +129,7 @@ fn overlay_renderer(
 pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let assets = Assets::discover();
     let theme = Theme::load()?;
-    let mut client = Client::connect()?;
+    let mut client = Client::connect_shell()?;
     let renderer = overlay_renderer(&theme, &assets, client.is_dark(), client.display_options())?;
     let waker = client.waker();
     let (sender, commands) = mpsc::channel();

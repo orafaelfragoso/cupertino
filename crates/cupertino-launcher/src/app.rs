@@ -182,7 +182,7 @@ fn panel_surface(
 pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let assets = Assets::discover();
     let theme = Theme::load()?;
-    let mut client = Client::connect()?;
+    let mut client = Client::connect_shell()?;
     let renderer = panel_renderer(&theme, &assets, client.is_dark(), client.display_options())?;
     let mut panel = Panel::new();
     panel.max_rows = renderer.style.max_rows;

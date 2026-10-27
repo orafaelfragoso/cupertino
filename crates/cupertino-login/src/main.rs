@@ -19,8 +19,12 @@ fn main() -> ExitCode {
         }
     };
     let result = match options {
-        // `run` only returns on failure
-        Options::Session(options) => app::run(&options).map(|never| match never {}),
+        Options::Session(options) => app::run(&options).map(|ended| match ended {
+            // a success exit: the server does not restart the process
+            app::Ended::NoLoginSession => eprintln!(
+                "cupertino-login: this process is in no login session: there is no session to lock, exiting"
+            ),
+        }),
         // `run` only returns on failure
         Options::Greeter => greeter::run().map(|never| match never {}),
     };

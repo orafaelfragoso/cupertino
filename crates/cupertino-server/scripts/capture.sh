@@ -10,7 +10,9 @@
 # $XDG_DATA_HOME (or ~/.local/share), else none (built-in assets only; the system pack is not searched).
 # Environment: AFTER (seconds before the shot, default 5), SIZE (default 1280x800), BIN_DIR (default
 # target/release, else target/debug; build with: cargo build --release --workspace --all-features --bins).
-# Needs: dbus-run-session.
+# The shell processes are the ones the packages install as /etc/cupertino/compositor.json, found on PATH (BIN_DIR first),
+# without cupertino-login: it works on the system bus and the caller's logind session, which a capture must not touch.
+# Needs: dbus-run-session, python3.
 set -eu
 
 [ $# -ge 1 ] || { sed -n '5,7p' "$0" >&2; exit 2; }
@@ -25,7 +27,7 @@ PACK=${CUPERTINO_ASSET_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/cupertino/asset
 [ -d "$PACK" ] || PACK=
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/cupertino-capture.XXXXXX")
-trap 'rm -rf "$SCRATCH"' EXIT
+trap 'fusermount3 -u "$RUNTIME/doc" 2>/dev/null || true; rm -rf "$SCRATCH"' EXIT
 FHOME=$SCRATCH/home
 RUNTIME=$SCRATCH/runtime
 mkdir -p "$FHOME"/{Desktop,Documents/Projects,Downloads,Music,Pictures,Videos} \
@@ -49,16 +51,11 @@ printf 'Sample download.\n' >"$FHOME/Downloads/Release Notes.txt"
 : >"$FHOME/Music/Song.ogg"
 touch -d 2026-01-01T12:00:00 "$FHOME" "$FHOME"/* "$FHOME"/*/* "$FHOME"/*/*/* 2>/dev/null || true
 
-cat >"$SCRATCH/server.json" <<EOF
-{"shell": [
-  {"name": "dock",          "command": ["$BIN_DIR/cupertino-dock"]},
-  {"name": "menubar",       "command": ["$BIN_DIR/cupertino-menubar"]},
-  {"name": "launcher",      "command": ["$BIN_DIR/cupertino-launcher"]},
-  {"name": "notifications", "command": ["$BIN_DIR/cupertino-notifications"]},
-  {"name": "controlcenter", "command": ["$BIN_DIR/cupertino-controlcenter"]},
-  {"name": "osd",           "command": ["$BIN_DIR/cupertino-osd"]},
-  {"name": "windowmanager", "command": ["$BIN_DIR/cupertino-windowmanager"]}
-]}
+python3 -I - "$ROOT/packaging/files/etc/cupertino/compositor.json" "$SCRATCH/server.json" <<'EOF'
+import json, sys
+config = json.load(open(sys.argv[1]))
+config["shell"] = [p for p in config["shell"] if p["name"] != "login"]
+json.dump(config, open(sys.argv[2], "w"))
 EOF
 
 mkdir -p "$(dirname "$OUT")"
@@ -78,6 +75,7 @@ env -i \
     XDG_DATA_DIRS="$ROOT/crates/cupertino-files/data:$ROOT/crates/cupertino-settings/data:/usr/local/share:/usr/share" \
     CUPERTINO_ASSET_SEARCH_PATH="$PACK" \
     CUPERTINO_SERVER_CONFIG="$SCRATCH/server.json" \
+    DBUS_SYSTEM_BUS_ADDRESS="unix:path=$SCRATCH/no-system-bus" \
     dbus-run-session -- "$BIN_DIR/cupertino-server" --headless --dbus --size "${SIZE:-1280x800}" \
     --screenshot "$OUT" --screenshot-after "${AFTER:-5}" --exit-after-screenshot "$@"
 [ -s "$OUT" ] || { echo "capture.sh: no screenshot written" >&2; exit 1; }

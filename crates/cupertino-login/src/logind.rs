@@ -67,25 +67,52 @@ pub struct Logind {
     session_id: String,
 }
 
+/// Whether `e` says that the machine has no system bus or logind has no session for this process, rather than that a
+/// request failed. Only a lookup by process id can say so: a login (`pam_systemd`) sets `XDG_SESSION_ID`, and with it
+/// set every failure is a fault to retry.
+fn is_absent(lookup: &SessionLookup, e: &cupertino_seat::Error) -> bool {
+    let (SessionLookup::ByPid(_), cupertino_seat::Error::Bus { source, .. }) = (lookup, e) else {
+        return false;
+    };
+    match &**source {
+        zbus::Error::MethodError(name, ..) => {
+            name.as_str() == "org.freedesktop.login1.NoSessionForPID"
+        }
+        zbus::Error::Connection(io, _) | zbus::Error::InputOutput(io) => matches!(
+            io.kind(),
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+        ),
+        _ => false,
+    }
+}
+
 impl Logind {
     /// Connect to the system bus and find the session of this process (`XDG_SESSION_ID`, else the process id).
-    pub fn connect() -> Result<Self, Error> {
+    /// `None` when there is no session to lock: `XDG_SESSION_ID` is unset and there is no system bus or logind knows no
+    /// session of this process.
+    pub fn connect() -> Result<Option<Self>, Error> {
         let what = "finding the login session";
         let wrap = |e: cupertino_seat::Error| Error {
             what,
             source: Box::new(e),
         };
-        let connection = cupertino_seat::connect().map_err(wrap)?;
         let lookup = SessionLookup::from_environment().map_err(wrap)?;
-        let session = cupertino_seat::locate(&connection, &lookup).map_err(wrap)?;
+        let connection = match cupertino_seat::connect() {
+            Err(e) if is_absent(&lookup, &e) => return Ok(None),
+            connection => connection.map_err(wrap)?,
+        };
+        let session = match cupertino_seat::locate(&connection, &lookup) {
+            Err(e) if is_absent(&lookup, &e) => return Ok(None),
+            session => session.map_err(wrap)?,
+        };
         let session_id = cupertino_seat::inspect(&connection, &session)
             .map_err(wrap)?
             .id;
-        Ok(Logind {
+        Ok(Some(Logind {
             connection,
             session,
             session_id,
-        })
+        }))
     }
 
     /// The session's `Id`.
@@ -222,4 +249,38 @@ fn decode_lock(message: &Message) -> Result<Option<Signal>, zbus::Error> {
 fn decode_sleep(message: &Message) -> Result<Option<Signal>, zbus::Error> {
     let going_to_sleep: bool = message.body().deserialize()?;
     Ok(going_to_sleep.then_some(Signal::PrepareForSleep))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bus(source: zbus::Error) -> cupertino_seat::Error {
+        cupertino_seat::Error::Bus {
+            what: "test",
+            source: Box::new(source),
+        }
+    }
+
+    #[test]
+    fn only_a_lookup_by_process_id_can_find_no_session() {
+        let io = |kind| bus(zbus::Error::InputOutput(std::io::Error::from(kind).into()));
+        let by_pid = SessionLookup::ByPid(42);
+        let by_id = SessionLookup::ById("7".into());
+        assert!(is_absent(&by_pid, &io(std::io::ErrorKind::NotFound)));
+        assert!(is_absent(
+            &by_pid,
+            &io(std::io::ErrorKind::ConnectionRefused)
+        ));
+        assert!(!is_absent(
+            &by_pid,
+            &io(std::io::ErrorKind::PermissionDenied)
+        ));
+        assert!(!is_absent(&by_pid, &cupertino_seat::Error::SignalsEnded));
+        assert!(!is_absent(&by_id, &io(std::io::ErrorKind::NotFound)));
+        assert!(!is_absent(
+            &by_id,
+            &io(std::io::ErrorKind::ConnectionRefused)
+        ));
+    }
 }

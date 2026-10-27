@@ -136,6 +136,11 @@ impl SearchField {
         self.selected = !self.text.is_empty();
     }
 
+    /// Keep the text and drop the selection (the field lost the keyboard).
+    pub fn deselect(&mut self) {
+        self.selected = false;
+    }
+
     /// Whether the results popup is open: while the field has text (an empty result shows "No results").
     pub fn is_open(&self) -> bool {
         !self.text.is_empty()
@@ -401,6 +406,17 @@ mod tests {
         f.select_all();
         f.backspace();
         assert_eq!((f.text(), f.is_selected(), f.is_open()), ("", false, false));
+        for c in "Sound".chars() {
+            f.type_char(c);
+        }
+        f.select_all();
+        f.deselect();
+        f.type_char('s');
+        assert_eq!(
+            (f.text(), f.is_selected()),
+            ("Sounds", false),
+            "after the field loses the keyboard, typing appends"
+        );
     }
 
     #[test]

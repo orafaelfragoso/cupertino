@@ -1,9 +1,9 @@
 // cupertino-layers --graph target
-// 52 crates, 162 internal dependencies
-// per layer: foundation 11, models 7, platform 7, protocol 3, transport 2, render 4, ui 0, core 1, shell 9, services 4, apps 2, tools 2
+// 55 crates, 174 internal dependencies
+// per layer: foundation 11, models 7, platform 7, protocol 3, transport 3, render 4, ui 2, core 1, shell 9, services 4, apps 2, tools 2
 // forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden normal edge cupertino-files (apps) -> cupertino-icons (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
-// forbidden dev edge cupertino-server (core) -> cupertino-client (transport), permanent exception (compositor): server integration tests connect real shell clients
+// forbidden dev edge cupertino-server (core) -> cupertino-client (ui), permanent exception (compositor): server integration tests connect real shell clients
 // forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the mixer itself until audio goes through a service
 // forbidden normal edge cupertino-settings (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden normal edge cupertino-settings (apps) -> cupertino-icons (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
@@ -52,8 +52,9 @@ digraph "target" {
     "cupertino-protocols";
   }
   subgraph "cluster_transport" {
-    label="transport (2)";
-    "cupertino-client";
+    label="transport (3)";
+    "cupertino-protocol-app";
+    "cupertino-shell-client";
     "cupertino-wayland-client";
   }
   subgraph "cluster_render" {
@@ -62,6 +63,11 @@ digraph "target" {
     "cupertino-decorations";
     "cupertino-glass";
     "cupertino-icons";
+  }
+  subgraph "cluster_ui" {
+    label="ui (2)";
+    "cupertino-client";
+    "cupertino-ui-wayland";
   }
   subgraph "cluster_core" {
     label="core (1)";
@@ -100,8 +106,10 @@ digraph "target" {
   "cupertino-btd" -> "cupertino-seat";
   "cupertino-client" -> "cupertino-defaults";
   "cupertino-client" -> "cupertino-geometry";
-  "cupertino-client" -> "cupertino-protocols";
+  "cupertino-client" -> "cupertino-protocol-app";
   "cupertino-client" -> "cupertino-protocols" [label="dev"];
+  "cupertino-client" -> "cupertino-shell-client";
+  "cupertino-client" -> "cupertino-ui-wayland";
   "cupertino-client" -> "cupertino-wayland-client";
   "cupertino-controlcenter" -> "cupertino-alsa";
   "cupertino-controlcenter" -> "cupertino-assets";
@@ -195,6 +203,10 @@ digraph "target" {
   "cupertino-powerd" -> "cupertino-devices";
   "cupertino-powerd" -> "cupertino-evdev";
   "cupertino-powerd" -> "cupertino-seat";
+  "cupertino-protocol-app" -> "cupertino-app-protocols";
+  "cupertino-protocol-app" -> "cupertino-defaults";
+  "cupertino-protocol-app" -> "cupertino-geometry";
+  "cupertino-protocol-app" -> "cupertino-wayland-client";
   "cupertino-protocols" -> "cupertino-app-protocols";
   "cupertino-screenshot" -> "cupertino-animation";
   "cupertino-screenshot" -> "cupertino-assets";
@@ -243,12 +255,18 @@ digraph "target" {
   "cupertino-settings" -> "cupertino-theme";
   "cupertino-settings" -> "cupertino-thumbnails";
   "cupertino-settings" -> "cupertino-typeahead";
+  "cupertino-shell-client" -> "cupertino-geometry";
+  "cupertino-shell-client" -> "cupertino-protocol-app";
+  "cupertino-shell-client" -> "cupertino-protocols";
+  "cupertino-shell-client" -> "cupertino-wayland-client";
   "cupertino-stage" -> "cupertino-animation";
   "cupertino-stage" -> "cupertino-wm";
   "cupertino-testclient" -> "cupertino-wayland-client";
   "cupertino-text-field" -> "cupertino-defaults";
   "cupertino-text-field" -> "cupertino-keyboard" [color=orange, style=dashed];
   "cupertino-theme" -> "cupertino-animation";
+  "cupertino-ui-wayland" -> "cupertino-geometry";
+  "cupertino-ui-wayland" -> "cupertino-wayland-client";
   "cupertino-wayland-client" -> "cupertino-geometry";
   "cupertino-wayland-client" -> "xkbcommon";
   "cupertino-windowmanager" -> "cupertino-defaults";

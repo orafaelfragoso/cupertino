@@ -1,11 +1,11 @@
 //! Typed wrapper of `cupertino_backdrop_v1`: a material the server draws below a surface.
 
-use crate::ClientError;
+use crate::Error;
+use cupertino_app_protocols::client::app_effects::cupertino_backdrop_v1::CupertinoBackdropV1;
 use cupertino_geometry::Rect;
-use cupertino_protocols::client::app_effects::cupertino_backdrop_v1::CupertinoBackdropV1;
 
 /// A server-rendered material region below the content of a surface. Every setter takes
-/// effect with the next commit of the surface, i.e. the next [`Client::draw`](crate::Client::draw).
+/// effect with the next commit of the surface.
 /// Dropping it removes the backdrop with that commit.
 pub struct Backdrop {
     proxy: CupertinoBackdropV1,
@@ -24,14 +24,14 @@ struct Shape {
 impl Shape {
     /// Round `rect` to whole logical points. Errors on a negative extent or radius or a
     /// non-finite value, which the server would reject as a protocol error.
-    fn new(rect: &Rect, radius: f64) -> Result<Self, ClientError> {
+    fn new(rect: &Rect, radius: f64) -> Result<Self, Error> {
         let values = [rect.x(), rect.y(), rect.width(), rect.height(), radius];
         if !values.iter().all(|v| v.is_finite())
             || rect.width().round() < 0.0
             || rect.height().round() < 0.0
             || radius < 0.0
         {
-            return Err(ClientError::InvalidShape);
+            return Err(Error::InvalidShape);
         }
         Ok(Self {
             x: rect.x().round() as i32,
@@ -55,16 +55,16 @@ impl Backdrop {
 
     /// Region in surface-local logical points with continuous corners of `radius` points; a
     /// zero width or height hides the backdrop.
-    pub fn set_shape(&self, rect: &Rect, radius: f64) -> Result<(), ClientError> {
+    pub fn set_shape(&self, rect: &Rect, radius: f64) -> Result<(), Error> {
         let s = Shape::new(rect, radius)?;
         self.proxy.set_shape(s.x, s.y, s.width, s.height, s.radius);
         Ok(())
     }
 
     /// Opacity of the whole backdrop, 0 to 1.
-    pub fn set_alpha(&self, alpha: f64) -> Result<(), ClientError> {
+    pub fn set_alpha(&self, alpha: f64) -> Result<(), Error> {
         if !(0.0..=1.0).contains(&alpha) {
-            return Err(ClientError::InvalidAlpha);
+            return Err(Error::InvalidAlpha);
         }
         self.proxy.set_alpha(alpha);
         Ok(())
@@ -94,15 +94,15 @@ mod tests {
     fn shape_rejects_what_the_server_rejects() {
         assert!(matches!(
             Shape::new(&Rect::new(0.0, 0.0, -1.0, 5.0), 1.0),
-            Err(ClientError::InvalidShape)
+            Err(Error::InvalidShape)
         ));
         assert!(matches!(
             Shape::new(&Rect::new(0.0, 0.0, 5.0, 5.0), -0.5),
-            Err(ClientError::InvalidShape)
+            Err(Error::InvalidShape)
         ));
         assert!(matches!(
             Shape::new(&Rect::new(f64::NAN, 0.0, 5.0, 5.0), 1.0),
-            Err(ClientError::InvalidShape)
+            Err(Error::InvalidShape)
         ));
     }
 }

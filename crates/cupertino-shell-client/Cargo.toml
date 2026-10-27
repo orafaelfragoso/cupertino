@@ -1,0 +1,18 @@
+[package]
+name = "cupertino-shell-client"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The privileged protocols of the Cupertino shell processes on the transport's queue: layer surfaces, the session lock, idle notification, the session observer and the menu-bar and dock roles"
+
+[package.metadata.cupertino]
+layer = "render"
+
+[dependencies]
+cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-protocol-app = { path = "../cupertino-protocol-app" }
+cupertino-protocols = { path = "../cupertino-protocols", features = ["client"] }
+cupertino-wayland-client = { path = "../cupertino-wayland-client" }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }

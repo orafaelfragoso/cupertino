@@ -1,10 +1,10 @@
 //! Events delivered to the application.
 
-use crate::dock::DockUpdate;
 use crate::keyboard::Modifiers;
-use crate::menu_bar::MenuBarUpdate;
 use crate::{Scale, SurfaceId};
 use cupertino_geometry::Point;
+use cupertino_shell_client::DockUpdate;
+use cupertino_shell_client::MenuBarUpdate;
 pub use cupertino_wayland_client::Button;
 
 /// Evdev key codes of keys the shell processes react to (`linux/input-event-codes.h`).

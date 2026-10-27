@@ -759,7 +759,10 @@ version = "0.1.0"
 dependencies = [
  "cupertino-defaults",
  "cupertino-geometry",
+ "cupertino-protocol-app",
  "cupertino-protocols",
+ "cupertino-shell-client",
+ "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "memmap2",
  "rustix 1.1.5",
@@ -1110,6 +1113,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-protocol-app"
+version = "0.1.0"
+dependencies = [
+ "cupertino-app-protocols",
+ "cupertino-defaults",
+ "cupertino-geometry",
+ "cupertino-wayland-client",
+ "wayland-client",
+]
+
+[[package]]
 name = "cupertino-protocols"
 version = "0.1.0"
 dependencies = [
@@ -1248,6 +1262,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-shell-client"
+version = "0.1.0"
+dependencies = [
+ "cupertino-geometry",
+ "cupertino-protocol-app",
+ "cupertino-protocols",
+ "cupertino-wayland-client",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
+]
+
+[[package]]
 name = "cupertino-stage"
 version = "0.1.0"
 dependencies = [
@@ -1295,6 +1322,15 @@ dependencies = [
 [[package]]
 name = "cupertino-typeahead"
 version = "0.1.0"
+
+[[package]]
+name = "cupertino-ui-wayland"
+version = "0.1.0"
+dependencies = [
+ "cupertino-geometry",
+ "cupertino-wayland-client",
+ "tiny-skia",
+]
 
 [[package]]
 name = "cupertino-wayland-client"

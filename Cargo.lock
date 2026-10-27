@@ -1344,6 +1344,14 @@ name = "cupertino-typeahead"
 version = "0.1.0"
 
 [[package]]
+name = "cupertino-ui-menus"
+version = "0.1.0"
+dependencies = [
+ "cupertino-menu-model",
+ "zbus",
+]
+
+[[package]]
 name = "cupertino-ui-wayland"
 version = "0.1.0"
 dependencies = [

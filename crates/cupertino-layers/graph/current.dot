@@ -1,6 +1,6 @@
 // cupertino-layers --graph current
-// 55 crates, 199 internal dependencies
-// per layer: foundation 11, models 9, platform 7, render 10, core 1, shell 9, services 4, apps 2, tools 2
+// 56 crates, 200 internal dependencies
+// per layer: foundation 11, models 9, platform 7, render 11, core 1, shell 9, services 4, apps 2, tools 2
 // forbidden edges: none
 // denied paths ui -> core, shell, services: none
 digraph "current" {
@@ -42,7 +42,7 @@ digraph "current" {
     "cupertino-seat";
   }
   subgraph "cluster_render" {
-    label="render (10)";
+    label="render (11)";
     "cupertino-app-protocols";
     "cupertino-cursor";
     "cupertino-decorations";
@@ -51,6 +51,7 @@ digraph "current" {
     "cupertino-protocol-app";
     "cupertino-protocols";
     "cupertino-shell-client";
+    "cupertino-ui-menus";
     "cupertino-ui-wayland";
     "cupertino-wayland-client";
   }
@@ -275,6 +276,7 @@ digraph "current" {
   "cupertino-text-field" -> "cupertino-defaults";
   "cupertino-text-field" -> "cupertino-keyboard";
   "cupertino-theme" -> "cupertino-animation";
+  "cupertino-ui-menus" -> "cupertino-menu-model";
   "cupertino-ui-wayland" -> "cupertino-geometry";
   "cupertino-ui-wayland" -> "cupertino-wayland-client";
   "cupertino-wayland-client" -> "cupertino-geometry";

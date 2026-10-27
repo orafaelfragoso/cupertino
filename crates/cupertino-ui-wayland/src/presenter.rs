@@ -6,23 +6,24 @@ use cupertino_geometry::Rect;
 use cupertino_wayland_client::{BufferFormat, Connection, PixelRect, Scale, SurfaceId};
 use tiny_skia::{Color, Pixmap};
 
-/// What [`Presenter::poll`] asks of the application.
+/// What [`ShmPresenter::poll`] asks of the application.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ready {
     Idle,
     /// The surface's scale changed since the last report; a draw follows.
     ScaleChanged(Scale),
-    /// Draw a frame now ([`Presenter::draw`]).
+    /// Draw a frame now ([`ShmPresenter::draw`]).
     Draw,
 }
 
-/// Draws one surface with tiny-skia into a kept pixmap and paces its frames. It holds no protocol object: the
+/// Draws one surface on the CPU with tiny-skia into a kept pixmap, presents it in the transport's shm buffers and paces
+/// its frames. A GPU path is a presenter of its own. It holds no protocol object: the
 /// application owns the surface's role and reports its configures and frame callbacks.
-pub struct Presenter {
+pub struct ShmPresenter {
     surface: SurfaceId,
     /// Logical size from the last configure.
     size: Option<(u32, u32)>,
-    /// Scale last reported by [`Presenter::poll`].
+    /// Scale last reported by [`ShmPresenter::poll`].
     reported_scale: Scale,
     pixmap: Option<Pixmap>,
     /// The scale the last frame was drawn at: a frame at another one is drawn whole.
@@ -31,9 +32,9 @@ pub struct Presenter {
     wants_redraw: bool,
 }
 
-impl Presenter {
-    pub fn new(surface: SurfaceId) -> Presenter {
-        Presenter {
+impl ShmPresenter {
+    pub fn new(surface: SurfaceId) -> ShmPresenter {
+        ShmPresenter {
             surface,
             size: None,
             reported_scale: Scale::ONE,
@@ -228,5 +229,18 @@ mod tests {
             })
         );
         assert_eq!(clamp(r, 90, 100), None);
+    }
+
+    #[test]
+    fn damage_rounds_outwards_to_whole_pixels_at_a_fractional_scale() {
+        assert_eq!(
+            pixel_rect(&Rect::new(1.0, 1.0, 2.0, 1.0), 1.25),
+            PixelRect {
+                x: 1,
+                y: 1,
+                width: 3,
+                height: 2
+            }
+        );
     }
 }

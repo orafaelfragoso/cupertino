@@ -39,6 +39,7 @@
     <enum name="error">
       <entry name="role" value="0" summary="the surface is not a layer surface or already has a shell role"/>
       <entry name="window" value="1" summary="the surface is not an application window, or the window is already mapped"/>
+      <entry name="permission" value="2" summary="only the shell processes the server started may ask for this object"/>
     </enum>
 
     <enum name="titlebar_style">

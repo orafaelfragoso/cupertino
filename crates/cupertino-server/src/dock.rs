@@ -260,11 +260,20 @@ impl Cupertino {
     pub fn create_dock(
         &mut self,
         shell: &CupertinoShellV1,
+        permitted: bool,
         id: New<CupertinoDockV1>,
         surface: WlSurface,
         output: &WlOutput,
         init: &mut DataInit<'_, Self>,
     ) {
+        if !permitted {
+            init.init(id, DockData { output: None });
+            shell.post_error(
+                ShellError::Permission,
+                "get_dock is for the shell processes the server started",
+            );
+            return;
+        }
         let target = Output::from_resource(output)
             .and_then(|o| self.output_by_wl(&o).map(|e| (e.id, e.output.clone())));
         let rejection = match &target {

@@ -10,15 +10,13 @@
 //! While a screenshot overlay is on screen (a layer surface of namespace [`OVERLAY_NAMESPACE`]) a further shortcut
 //! starts nothing: the overlay is already in front and has the keyboard.
 
-use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt;
 use std::process::Command;
-use std::sync::Arc;
 
 use cupertino_input::ScreenshotRequest;
 use smithay::desktop::layer_map_for_output;
 
+use crate::shell_connection::{connect_client, hand_over};
 use crate::state::{ClientState, Cupertino};
 
 /// The layer-shell namespace of the screenshot process's overlay and toolbar (its floating thumbnail uses another).
@@ -39,15 +37,13 @@ impl Cupertino {
     /// A new privileged client: the server inserts one end of a socket pair and returns the other, for a process the
     /// server starts (`WAYLAND_SOCKET`) or, in tests, for a client in the same process.
     pub fn privileged_client(&mut self) -> std::io::Result<UnixStream> {
-        let (server, client) = UnixStream::pair()?;
-        self.display_handle.insert_client(
-            server,
-            Arc::new(ClientState {
+        connect_client(
+            &self.display_handle,
+            ClientState {
                 privileged: true,
                 ..ClientState::default()
-            }),
-        )?;
-        Ok(client)
+            },
+        )
     }
 
     /// Whether a screenshot overlay or toolbar is on an output.
@@ -78,21 +74,9 @@ impl Cupertino {
                 return;
             }
         };
-        let fd = stream.as_raw_fd();
         // the process reaches the server only through its own connection, never through the public socket
-        command
-            .env("WAYLAND_SOCKET", fd.to_string())
-            .env_remove("WAYLAND_DISPLAY");
-        // Safety: the closure runs in the child between fork and exec and calls only fcntl, which is async-signal-safe.
-        unsafe {
-            command.pre_exec(move || {
-                // `UnixStream::pair` sets close-on-exec; the child keeps its end across exec
-                if libc::fcntl(fd, libc::F_SETFD, 0) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+        hand_over(&mut command, &stream);
+        command.env_remove("WAYLAND_DISPLAY");
         match command.spawn() {
             Ok(mut child) => {
                 let pid = child.id();

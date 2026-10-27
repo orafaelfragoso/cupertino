@@ -121,6 +121,12 @@ impl Harness {
         );
     }
 
+    /// A connection of a shell process the server supervises: the only kind that may be a dock.
+    fn shell_stream(&mut self) -> UnixStream {
+        cupertino_server::shell_connection::shell_process_connection(&self.state.display_handle)
+            .unwrap()
+    }
+
     fn socket_path(&self) -> PathBuf {
         let dir = std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR");
         PathBuf::from(dir).join(self.state.socket_name.as_ref().unwrap())
@@ -456,7 +462,7 @@ impl Drop for TestClient {
 }
 
 fn run_client(
-    socket: PathBuf,
+    stream: UnixStream,
     setup: impl FnOnce(
             &wayland_client::globals::GlobalList,
             &QueueHandle<ClientState>,
@@ -469,7 +475,6 @@ fn run_client(
     let status = Arc::new(Mutex::new(Status::default()));
     let st = status.clone();
     let thread = std::thread::spawn(move || {
-        let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
         let conn = Connection::from_socket(stream).unwrap();
         let (globals, mut queue) = registry_queue_init::<ClientState>(&conn).unwrap();
         let qh = queue.handle();
@@ -503,13 +508,13 @@ struct DockClient(TestClient);
 
 impl DockClient {
     /// `layer` false makes the dock of a surface that has no layer role.
-    fn spawn(socket: PathBuf, layer: bool) -> DockClient {
-        Self::spawn_on(socket, layer, 0)
+    fn spawn(stream: UnixStream, layer: bool) -> DockClient {
+        Self::spawn_on(stream, layer, 0)
     }
 
     /// The dock of the `index`th output the server announces.
-    fn spawn_on(socket: PathBuf, layer: bool, index: usize) -> DockClient {
-        DockClient(run_client(socket, move |globals, qh, status| {
+    fn spawn_on(stream: UnixStream, layer: bool, index: usize) -> DockClient {
+        DockClient(run_client(stream, move |globals, qh, status| {
             let compositor: wl_compositor::WlCompositor = globals.bind(qh, 4..=6, ()).unwrap();
             let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
             let shell: CupertinoShellV1 = globals.bind(qh, 1..=4, ()).unwrap();
@@ -613,7 +618,8 @@ impl DockClient {
 
 /// An application with one 300x200 toplevel.
 fn spawn_app(socket: PathBuf, app_id: &'static str) -> TestClient {
-    run_client(socket, move |globals, qh, status| {
+    let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
+    run_client(stream, move |globals, qh, status| {
         let compositor: wl_compositor::WlCompositor = globals.bind(qh, 4..=6, ()).unwrap();
         let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
         let wm_base: xdg_wm_base::XdgWmBase = globals.bind(qh, 1..=5, ()).unwrap();
@@ -645,7 +651,7 @@ fn spawn_app(socket: PathBuf, app_id: &'static str) -> TestClient {
 #[test]
 fn a_surface_without_the_layer_role_is_a_role_error() {
     let Some(mut h) = Harness::new() else { return };
-    let dock = DockClient::spawn(h.socket_path(), false);
+    let dock = DockClient::spawn(h.shell_stream(), false);
     let end = Instant::now() + Duration::from_secs(10);
     while dock.error().is_none() && Instant::now() < end {
         h.step();
@@ -662,12 +668,46 @@ fn a_surface_without_the_layer_role_is_a_role_error() {
     );
 }
 
+/// An application on the public socket asking for a dock is refused, so it cannot send `force_quit_app` either.
+#[test]
+fn an_application_that_is_not_a_shell_process_cannot_be_a_dock_or_end_an_application() {
+    let Some(mut h) = Harness::new() else { return };
+    let _victim = spawn_app(h.socket_path(), "org.example.victim");
+    h.mapped_window(1);
+    let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let recorder = sent.clone();
+    h.state.force_quits.own_pid = u32::MAX;
+    h.state.send_signal =
+        Box::new(move |process, signal| recorder.borrow_mut().push((process.pid, signal)));
+
+    let intruder = DockClient::spawn(
+        UnixStream::connect(h.socket_path()).expect("connecting to the compositor"),
+        true,
+    );
+    let end = Instant::now() + Duration::from_secs(10);
+    while intruder.error().is_none() && Instant::now() < end {
+        h.step();
+    }
+    // error 2 of cupertino_shell_v1.error is `permission`
+    assert_eq!(
+        intruder.error(),
+        Some((
+            cupertino_shell_v1::CupertinoShellV1::interface()
+                .name
+                .to_string(),
+            2
+        ))
+    );
+    assert_eq!(intruder.groups(), Vec::<Vec<DockEvent>>::new());
+    assert_eq!(*sent.borrow(), vec![], "nothing was signalled");
+}
+
 #[test]
 fn the_first_group_lists_the_windows_and_the_bar_backdrop_is_the_docks_rectangle() {
     let Some(mut h) = Harness::new() else { return };
     let _app = spawn_app(h.socket_path(), "org.example.editor");
     let id = h.mapped_window(1);
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&dock, 1);
     assert_eq!(
         dock.groups(),
@@ -698,7 +738,7 @@ fn the_first_group_lists_the_windows_and_the_bar_backdrop_is_the_docks_rectangle
 #[test]
 fn minimizing_sends_the_state_and_animates_toward_the_committed_target() {
     let Some(mut h) = Harness::new() else { return };
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&dock, 1);
     let _app = spawn_app(h.socket_path(), "org.example.editor");
     let id = h.mapped_window(1);
@@ -751,7 +791,7 @@ fn minimizing_sends_the_state_and_animates_toward_the_committed_target() {
 #[test]
 fn minimizing_without_a_target_animates_toward_the_dock_slot() {
     let Some(mut h) = Harness::new() else { return };
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&dock, 1);
     let _app = spawn_app(h.socket_path(), "org.example.editor");
     let id = h.mapped_window(1);
@@ -780,7 +820,7 @@ fn minimizing_without_a_target_animates_toward_the_dock_slot() {
 #[test]
 fn activate_app_raises_the_application() {
     let Some(mut h) = Harness::new() else { return };
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     let _a = spawn_app(h.socket_path(), "org.example.a");
     let first = h.mapped_window(1);
     let _b = spawn_app(h.socket_path(), "org.example.b");
@@ -796,7 +836,7 @@ fn activate_app_raises_the_application() {
 #[test]
 fn restore_window_unminimizes_out_of_the_given_tile() {
     let Some(mut h) = Harness::new() else { return };
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     let _app = spawn_app(h.socket_path(), "org.example.editor");
     let id = h.mapped_window(1);
     h.state.command(Command::Minimize {
@@ -832,7 +872,7 @@ fn restore_window_unminimizes_out_of_the_given_tile() {
 #[test]
 fn restoring_a_window_that_is_not_minimized_is_ignored() {
     let Some(mut h) = Harness::new() else { return };
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     let _app = spawn_app(h.socket_path(), "org.example.editor");
     let id = h.mapped_window(1);
     dock.send(Cmd::RestoreWindow(id.0 as u32));
@@ -849,7 +889,7 @@ fn restoring_a_window_that_is_not_minimized_is_ignored() {
 #[test]
 fn a_program_the_server_starts_is_announced_as_launching() {
     let Some(mut h) = Harness::new() else { return };
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&dock, 1);
     // the announcement carries the desktop entry id of the program
     let data = std::env::temp_dir().join(format!(
@@ -878,7 +918,7 @@ fn a_program_the_server_starts_is_announced_as_launching() {
 #[test]
 fn a_token_that_names_an_application_announces_it_as_launching() {
     let Some(mut h) = Harness::new() else { return };
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&dock, 1);
     // a launcher or file manager asks for a token for the application it is about to start
     let named = XdgActivationTokenData {
@@ -917,7 +957,7 @@ fn a_token_that_names_an_application_announces_it_as_launching() {
 #[test]
 fn the_auto_hide_shortcut_reaches_the_dock() {
     let Some(mut h) = Harness::new() else { return };
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&dock, 1);
     h.state.docks.toggle_auto_hide();
     h.wait_for_groups(&dock, 2);
@@ -936,7 +976,7 @@ fn the_app_grid_action_reaches_the_dock_as_a_toggle() {
         commands: Vec::new(),
         ops: vec![ShellOp::ToggleAppGrid],
     });
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&dock, 1);
     for _ in 0..2 {
         h.state.execute_plan(ActionPlan {
@@ -961,7 +1001,7 @@ fn the_app_grid_action_reaches_the_dock_as_a_toggle() {
 #[test]
 fn the_force_quit_action_opens_the_dialog_in_the_dock() {
     let Some(mut h) = Harness::new() else { return };
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&dock, 1);
     h.state.execute_plan(ActionPlan {
         commands: Vec::new(),
@@ -978,7 +1018,7 @@ fn the_force_quit_action_opens_the_dialog_in_the_dock() {
 #[test]
 fn an_application_going_unresponsive_is_announced_to_the_dock() {
     let Some(mut h) = Harness::new() else { return };
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&dock, 1);
     h.state.docks.unresponsive("org.example.a", true);
     h.state.docks.unresponsive("org.example.a", false);
@@ -1008,12 +1048,14 @@ fn an_application_going_unresponsive_is_announced_to_the_dock() {
 #[test]
 fn force_quit_app_from_the_dock_asks_the_application_to_quit() {
     let Some(mut h) = Harness::new() else { return };
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     let _a = spawn_app(h.socket_path(), "org.example.a");
     h.mapped_window(1);
     let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let recorder = sent.clone();
-    h.state.send_signal = Box::new(move |pid, signal| recorder.borrow_mut().push((pid, signal)));
+    h.state.force_quits.own_pid = u32::MAX;
+    h.state.send_signal =
+        Box::new(move |process, signal| recorder.borrow_mut().push((process.pid, signal)));
 
     dock.send(Cmd::ForceQuitApp("org.example.a"));
     h.wait_until("SIGTERM", |_| !sent.borrow().is_empty());
@@ -1108,7 +1150,7 @@ fn the_switcher_opens_steps_and_commits_without_a_dock() {
 fn a_dock_is_told_the_switcher_in_order_and_picks_an_entry() {
     let Some(mut h) = Harness::new() else { return };
     let (_apps, [_three, _two, one]) = h.three_apps();
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&dock, 1);
     h.key(KEY_SUPER, true);
     h.tap(KEY_TAB);
@@ -1147,7 +1189,7 @@ fn a_dock_that_binds_mid_switch_gets_the_switcher_and_a_cancel_reaches_it() {
     let (_apps, [three, ..]) = h.three_apps();
     h.key(KEY_SUPER, true);
     h.tap(KEY_TAB);
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&dock, 2);
     assert_eq!(dock.groups()[1], switcher_group(1));
     h.tap(KEY_ESCAPE);
@@ -1248,7 +1290,7 @@ fn a_click_off_the_panel_cancels_the_switch_and_reaches_no_window() {
 fn a_release_on_a_panel_entry_switches_at_once_and_one_off_the_entries_cancels() {
     let Some(mut h) = Harness::new() else { return };
     let (_apps, [_three, _two, one]) = h.three_apps();
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&dock, 1);
     h.key(KEY_SUPER, true);
     h.tap(KEY_TAB);
@@ -1304,8 +1346,8 @@ fn the_panel_goes_to_the_dock_of_the_output_under_the_pointer() {
     .unwrap();
     h.step();
     let (_apps, _) = h.three_apps();
-    let first = DockClient::spawn_on(h.socket_path(), true, 0);
-    let second = DockClient::spawn_on(h.socket_path(), true, 1);
+    let first = DockClient::spawn_on(h.shell_stream(), true, 0);
+    let second = DockClient::spawn_on(h.shell_stream(), true, 1);
     h.wait_for_groups(&first, 1);
     h.wait_for_groups(&second, 1);
     let other = h
@@ -1345,7 +1387,7 @@ fn the_panel_goes_to_the_dock_of_the_output_under_the_pointer() {
 fn an_activation_token_older_than_the_applications_last_activation_only_bounces_its_tile() {
     let Some(mut h) = Harness::new() else { return };
     let ([_one_client, two_client, three_client], [three, two, one]) = h.three_apps();
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&dock, 1);
     let old = h.state.server_activation_token();
     h.advance(1.0);
@@ -1404,7 +1446,7 @@ fn an_activation_token_older_than_the_applications_last_activation_only_bounces_
 fn a_refused_activation_bounces_the_tile_of_an_inactive_application_only() {
     let Some(mut h) = Harness::new() else { return };
     let (_apps, [three, two, _one]) = h.three_apps();
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&dock, 1);
     h.state.command(Command::DemandAttention { window: two });
     h.wait_for_groups(&dock, 2);
@@ -1480,7 +1522,7 @@ impl Harness {
 #[test]
 fn opening_the_overview_sends_the_windows_and_workspaces_and_the_docks_frames_place_them() {
     let Some(mut h) = Harness::new() else { return };
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     let _a = spawn_app(h.socket_path(), "org.example.a");
     let a = h.mapped_window(1);
     let _b = spawn_app(h.socket_path(), "org.example.b");
@@ -1571,7 +1613,7 @@ fn opening_the_overview_sends_the_windows_and_workspaces_and_the_docks_frames_pl
 #[test]
 fn a_dock_that_dies_mid_overview_closes_it_and_the_windows_come_back() {
     let Some(mut h) = Harness::new() else { return };
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     let _a = spawn_app(h.socket_path(), "org.example.a");
     let a = h.mapped_window(1);
     let desktop = h.state.wm.window(a).unwrap().geometry();
@@ -1617,7 +1659,7 @@ fn a_dock_that_dies_mid_overview_closes_it_and_the_windows_come_back() {
 #[test]
 fn workspace_requests_edit_the_list_and_a_switch_leaves_the_overview() {
     let Some(mut h) = Harness::new() else { return };
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&dock, 1);
     let out = h.state.outputs[0].id;
     let first = h.state.wm.current_workspace(out).unwrap();
@@ -1700,7 +1742,7 @@ fn workspace_requests_edit_the_list_and_a_switch_leaves_the_overview() {
 #[test]
 fn named_actions_and_tile_commands_from_the_dock_act_as_their_shortcuts() {
     let Some(mut h) = Harness::new() else { return };
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     let _a = spawn_app(h.socket_path(), "org.example.a");
     let a = h.mapped_window(1);
     h.wait_for_groups(&dock, 1);
@@ -1748,7 +1790,7 @@ fn a_hot_corner_and_a_gesture_reach_the_dock_of_the_output() {
     use cupertino_input::GestureEvent;
 
     let Some(mut h) = Harness::new() else { return };
-    let dock = DockClient::spawn(h.socket_path(), true);
+    let dock = DockClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&dock, 1);
     let groups = dock.groups().len();
     // the default dwell is 0.0 s: the corner fires on arrival

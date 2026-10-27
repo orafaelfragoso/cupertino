@@ -43,6 +43,7 @@ pub mod scroll_v1;
 pub mod session_lock;
 pub mod session_v1;
 pub mod shell;
+pub mod shell_connection;
 pub mod shell_ctl;
 pub mod shell_v1;
 pub mod state;

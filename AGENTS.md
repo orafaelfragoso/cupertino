@@ -21,10 +21,11 @@ CARGO_INCREMENTAL=0 cargo build --workspace
 CARGO_INCREMENTAL=0 cargo nextest run --workspace --all-features   # 2-minute limit per test, see .config/nextest.toml
 cargo test --workspace --all-features --doc
 cargo clippy --workspace --all-targets
-cargo fmt --all -- --check
+cargo fmt --check
 cargo run -p cupertino-layers
 ```
 
+- `cargo fmt` without `--all`, as CI runs it: `--all` also formats the vendored crates in `third-party/`.
 - A test that runs over 2 minutes is killed and fails by name. Plain `cargo test --workspace --all-features` still works but has no per-test limit. Stop any stray test `dbus-daemon` after a killed run; never touch the real session bus.
 - Run the compositor nested: `cargo run -p cupertino-server -- --winit --spawn foot`, with `XDG_DATA_DIRS="$PWD/crates/cupertino-files/data:$PWD/crates/cupertino-settings/data:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"` so the menu bar and dock find the apps' desktop entries (name, icon). Headless screenshots: `crates/cupertino-server/scripts/capture.sh out.png [server flags]` (fixture home and XDG directories, cleared environment, your asset pack kept); never capture with your real `HOME`.
 - Tests run with the built-in font and never depend on a pack installed in your home directory; set `CUPERTINO_ASSET_DIR` only to try another pack.

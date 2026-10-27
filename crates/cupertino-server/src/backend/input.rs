@@ -1534,6 +1534,62 @@ mod tests {
         }))
     }
 
+    #[test]
+    fn a_mouse_being_plugged_or_removed_changes_the_mice_property_and_is_announced() {
+        use crate::quit::{BusOut, MouseEntry};
+        let event_loop: smithay::reexports::calloop::EventLoop<'static, Cupertino> =
+            smithay::reexports::calloop::EventLoop::try_new().unwrap();
+        let mut state = Cupertino::new(
+            smithay::reexports::wayland_server::Display::new().unwrap(),
+            event_loop.handle(),
+            event_loop.get_signal(),
+            crate::config::Config::default(),
+            true,
+            &cupertino_assets::Assets::builtin(),
+        )
+        .unwrap();
+        let (tx, rx) = async_channel::unbounded();
+        state.quit.signals = Some(tx);
+        let mouse = device(InputClass {
+            mouse: true,
+            ..InputClass::default()
+        });
+        let pad = InputDevice(Rc::new(DeviceData {
+            sysname: "event4".into(),
+            name: "pad".into(),
+            syspath: PathBuf::from("/sys/pad"),
+            usb_id: (4, 3),
+            class: InputClass {
+                touchpad: true,
+                ..InputClass::default()
+            },
+        }));
+        let mice = |out: Option<BusOut>| match out {
+            Some(BusOut::Settings(settings)) => settings.mice,
+            other => panic!("expected the settings, got {other:?}"),
+        };
+
+        state.process_input_event::<EvdevBackend>(InputEvent::DeviceAdded {
+            device: mouse.clone(),
+        });
+        assert_eq!(
+            mice(rx.try_recv().ok()),
+            vec![MouseEntry {
+                key: "0001:0002:test".into(),
+                name: "test".into(),
+                dpi: 1000,
+                stored: false
+            }]
+        );
+        state.process_input_event::<EvdevBackend>(InputEvent::DeviceAdded {
+            device: pad.clone(),
+        });
+        assert!(rx.try_recv().is_err(), "a touchpad is not announced");
+        assert_eq!(state.session_settings().mice.len(), 1);
+        state.process_input_event::<EvdevBackend>(InputEvent::DeviceRemoved { device: mouse });
+        assert!(mice(rx.try_recv().ok()).is_empty());
+    }
+
     fn info(abs_axes: Vec<AbsAxis>) -> DeviceInfo {
         DeviceInfo {
             name: "test".into(),

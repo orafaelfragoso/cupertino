@@ -2,6 +2,8 @@
 //! pressed, and a press outside the popup chain dismisses it and never reaches the toplevel. Tests skip (pass) when no
 //! EGL device is available.
 
+mod common;
+
 use std::io::Write;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
@@ -405,4 +407,37 @@ fn a_press_on_a_popup_subsurface_keeps_the_grab_and_an_outside_press_ends_it() {
         "and the toplevel under it never sees the press"
     );
     assert!(h.state.popup_grab.is_none());
+}
+
+#[test]
+fn a_session_lock_ends_the_popup_grab_and_the_first_press_reaches_the_lock_surface() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = TestClient::spawn(h.socket_path());
+    h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
+    h.state.fixed_time = Some(h.state.now() + 5.0);
+    h.state.tick();
+    let window = h.state.windows.iter().find(|w| w.mapped).unwrap();
+    let frame = h.state.wm.window(window.id).unwrap().geometry();
+    h.run_for(Duration::from_millis(100));
+    h.click((frame.x + 300.0, frame.y + 220.0));
+    h.wait_until("a drawn popup", |s| {
+        let window = s.windows.iter().find(|w| w.mapped).unwrap();
+        client.log.lock().unwrap().popup_ready
+            && PopupManager::popups_for_surface(window.surface()).count() == 1
+    });
+    h.run_for(Duration::from_millis(200));
+    assert!(h.state.popup_grab.is_some(), "the popup holds a grab");
+
+    let locker = common::Client::locker(h.socket_path());
+    h.wait_until("the session to be locked", |_| locker.locked());
+    h.run_for(Duration::from_millis(200));
+    assert!(
+        client.log.lock().unwrap().popup_done,
+        "the lock dismisses the popup"
+    );
+    assert!(h.state.popup_grab.is_none());
+
+    // the first press after the lock is the lock surface's, not a dismissal's
+    h.click((f64::from(OUTPUT.0) / 2.0, f64::from(OUTPUT.1) / 2.0));
+    assert_eq!(locker.presses(), 1, "the lock surface got the press");
 }

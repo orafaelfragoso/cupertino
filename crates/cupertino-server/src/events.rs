@@ -70,6 +70,8 @@ enum Accel {
 pub struct MouseIdentity {
     /// `mouse_dpi_key` of the device.
     pub key: Option<String>,
+    /// The device name.
+    pub name: String,
     /// The `MOUSE_DPI` property of the device node.
     pub hwdb_dpi: Option<String>,
 }
@@ -138,6 +140,22 @@ impl PointerDevice {
             scroll_count: cupertino_input::ScrollCounter::default(),
             scrolling: false,
         }
+    }
+
+    /// The `Mice` entry of this device, for a mouse that has a key.
+    pub fn mouse_entry(&self, cfg: &PointerSettings) -> Option<crate::quit::MouseEntry> {
+        if self.touchpad {
+            return None;
+        }
+        let key = self.identity.key.clone()?;
+        let stored = cfg.mouse_dpi.get(&key).copied();
+        let dpi = cupertino_input::resolve_dpi(stored, self.identity.hwdb_dpi.as_deref());
+        Some(crate::quit::MouseEntry {
+            key,
+            name: self.identity.name.clone(),
+            dpi: dpi.round() as u32,
+            stored: stored.is_some(),
+        })
     }
 
     /// Take new tracking settings: the device starts over as [`PointerDevice::new`] made it.
@@ -243,7 +261,11 @@ fn mouse_identity<D: Device>(device: &D) -> MouseIdentity {
         .and_then(|node| node.udev_property("MOUSE_DPI"));
     #[cfg(not(feature = "udev"))]
     let hwdb_dpi = None;
-    MouseIdentity { key, hwdb_dpi }
+    MouseIdentity {
+        key,
+        name: device.name(),
+        hwdb_dpi,
+    }
 }
 
 impl Cupertino {
@@ -276,9 +298,14 @@ impl Cupertino {
                     device.id(),
                     PointerDevice::with_identity(touchpad, &self.config.pointer, identity),
                 );
+                if !touchpad {
+                    self.publish_session_settings();
+                }
             }
             InputEvent::DeviceRemoved { device } => {
-                self.pointer_devices.remove(&device.id());
+                if self.pointer_devices.remove(&device.id()).is_some() {
+                    self.publish_session_settings();
+                }
             }
             InputEvent::Keyboard { event } => self.on_keyboard::<B>(event),
             InputEvent::PointerMotion { event } => self.on_pointer_motion::<B>(event),
@@ -1465,6 +1492,7 @@ mod tests {
         // 1.30798… px per count (design value)
         let at_400 = MouseIdentity {
             key: Some("046d:c077:Mouse".into()),
+            name: "Mouse".into(),
             hwdb_dpi: Some("*400".into()),
         };
         let mut mouse = PointerDevice::with_identity(false, &cfg, at_400.clone());
@@ -1494,6 +1522,7 @@ mod tests {
             &flat,
             MouseIdentity {
                 key: None,
+                name: String::new(),
                 hwdb_dpi: Some("400".into()),
             },
         );

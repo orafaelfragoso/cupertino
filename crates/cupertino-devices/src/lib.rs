@@ -8,6 +8,7 @@
 //! - [`gpu`]: all GPUs and the primary one.
 //! - [`monitor`]: hotplug events from the kernel.
 //! - [`seat`]: seat assignment (always `seat0` without udevd).
+//! - [`udev_db`]: the properties udevd stored for a node (hardware database entries such as `MOUSE_DPI`).
 //!
 //! Every function that reads sysfs takes the sysfs root as a parameter; production passes `/sys`,
 //! tests pass a fixture tree. Parsers take their input as data.
@@ -21,6 +22,7 @@ pub mod input_id;
 pub mod monitor;
 pub mod seat;
 mod sysfs;
+pub mod udev_db;
 pub mod uevent;
 
 pub use capabilities::CapabilityMask;
@@ -31,4 +33,5 @@ pub use gpu::{gpus, primary_gpu, select_primary, Gpu};
 pub use input_id::{classify, classify_device, InputCapabilities, InputClass};
 pub use monitor::{parse_datagram, Action, DeviceEvent, Drained, Monitor};
 pub use seat::{seat_name, SEAT0};
+pub use udev_db::{parse_udev_db, read_udev_properties, UDEV_DATA_DIR};
 pub use uevent::Properties;

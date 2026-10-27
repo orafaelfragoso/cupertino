@@ -159,12 +159,22 @@ fn spawn_serve(
     {
         return false;
     }
-    let serving = Arc::clone(serving);
+    let slot = ServeSlot(Arc::clone(serving));
     std::thread::spawn(move || {
+        // released when the thread ends, also by a panic
+        let _slot = slot;
         serve(fd, text.as_bytes(), Instant::now() + timeout);
-        serving.fetch_sub(1, Ordering::AcqRel);
     });
     true
+}
+
+/// A claimed place among the pastes served at once; dropping it frees it.
+struct ServeSlot(Arc<AtomicUsize>);
+
+impl Drop for ServeSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 /// Write `text` to a pasting client's `fd` without blocking, until done or `deadline`, then close it. A client that
@@ -404,5 +414,17 @@ mod tests {
         let mut got = Vec::new();
         reader.read_to_end(&mut got).unwrap();
         assert_eq!(got.len(), 1 << 20);
+    }
+
+    #[test]
+    fn a_serve_that_panics_still_frees_its_place() {
+        let serving = Arc::new(AtomicUsize::new(1));
+        let slot = ServeSlot(Arc::clone(&serving));
+        let thread = std::thread::spawn(move || {
+            let _slot = slot;
+            panic!("a serve that fails");
+        });
+        assert!(thread.join().is_err());
+        assert_eq!(serving.load(Ordering::Acquire), 0);
     }
 }

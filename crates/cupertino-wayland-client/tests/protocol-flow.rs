@@ -1155,9 +1155,11 @@ fn a_lease_waits_while_the_compositor_holds_three_buffers() {
     let mut stash = Stash::new();
     let w = window(&mut conn, Decorations::Client);
     configured(&mut conn, &mut stash, w);
+    assert!(conn.buffer_free(w.surface()).unwrap());
     for _ in 0..3 {
         present(&mut conn, w.surface(), (64, 64));
     }
+    assert!(!conn.buffer_free(w.surface()).unwrap());
     assert!(matches!(
         conn.lease(w.surface(), (64, 64), BufferFormat::Xrgb8888),
         Err(Error::NoFreeBuffer)
@@ -1411,7 +1413,6 @@ fn a_compositor_that_goes_away_ends_the_wait_with_disconnected() {
 /// transport does not know.
 mod layer {
     use cupertino_wayland_client::{Connection, Error, ExternalRole, State, SurfaceId};
-    use std::sync::{Arc, Mutex};
     use wayland_client::{Connection as WlConnection, Dispatch, QueueHandle};
     use wayland_protocols::xdg::shell::client::xdg_popup::XdgPopup;
     use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{
@@ -1428,20 +1429,12 @@ mod layer {
         pub size: (u32, u32),
     }
 
-    type Inbox = Arc<Mutex<Vec<Configured>>>;
-
     /// User data of the extension's own type: `Dispatch` for the transport's `State` is only allowed with it.
     pub struct ShellData;
 
-    pub struct SurfaceData {
-        surface: SurfaceId,
-        inbox: Inbox,
-    }
+    pub struct SurfaceData(SurfaceId);
 
-    pub struct Layers {
-        shell: ZwlrLayerShellV1,
-        inbox: Inbox,
-    }
+    pub struct Layers(ZwlrLayerShellV1);
 
     struct LayerRole(ZwlrLayerSurfaceV1);
 
@@ -1462,30 +1455,18 @@ mod layer {
 
     impl Layers {
         pub fn bind(conn: &mut Connection) -> Layers {
-            let shell = conn.bind_extension(1..=4, ShellData).unwrap();
-            Layers {
-                shell,
-                inbox: Inbox::default(),
-            }
+            Layers(conn.bind_extension(1..=4, ShellData).unwrap())
         }
 
         pub fn surface(&self, conn: &mut Connection, size: (u32, u32)) -> SurfaceId {
             conn.external_surface(|wl, qh, surface| {
-                let data = SurfaceData {
-                    surface,
-                    inbox: self.inbox.clone(),
-                };
-                let layer =
-                    self.shell
-                        .get_layer_surface(wl, None, Layer::Top, "test".into(), qh, data);
+                let data = SurfaceData(surface);
+                let layer = self
+                    .0
+                    .get_layer_surface(wl, None, Layer::Top, "test".into(), qh, data);
                 layer.set_size(size.0, size.1);
                 LayerRole(layer)
             })
-        }
-
-        /// What the extension received since the last call.
-        pub fn take(&self) -> Vec<Configured> {
-            std::mem::take(&mut self.inbox.lock().unwrap())
         }
     }
 
@@ -1516,9 +1497,9 @@ mod layer {
                 height,
             } = event
             {
-                state.configure_external(data.surface, serial, (width, height));
-                data.inbox.lock().unwrap().push(Configured {
-                    surface: data.surface,
+                state.configure_external(data.0, serial, (width, height));
+                state.emit(Configured {
+                    surface: data.0,
                     serial,
                     size: (width, height),
                 });
@@ -1527,12 +1508,8 @@ mod layer {
     }
 }
 
-/// Wait until the extension received `count` configures, at most 5 s; them and how many waits that took.
-fn layer_configures(
-    conn: &mut Connection,
-    layers: &layer::Layers,
-    count: usize,
-) -> (Vec<layer::Configured>, u32) {
+/// Wait until the extension emitted `count` configures, at most 5 s; them and how many waits that took.
+fn layer_configures(conn: &mut Connection, count: usize) -> (Vec<layer::Configured>, u32) {
     let deadline = Instant::now() + Duration::from_secs(5);
     let (mut got, mut waits) = (Vec::new(), 0);
     while got.len() < count {
@@ -1541,9 +1518,12 @@ fn layer_configures(
             "{} of {count} configures",
             got.len()
         );
-        conn.wait(Some(Duration::from_secs(5))).unwrap();
+        let events = conn.wait(Some(Duration::from_secs(5))).unwrap();
         waits += 1;
-        got.extend(layers.take());
+        got.extend(events.into_iter().filter_map(|e| match e {
+            Event::Extension(e) => e.downcast::<layer::Configured>().ok().map(|c| *c),
+            _ => None,
+        }));
     }
     (got, waits)
 }
@@ -1563,7 +1543,7 @@ fn an_extension_role_draws_through_the_lease_and_acknowledges_through_its_own_pr
             version: 4
         }]
     );
-    let (configures, _) = layer_configures(&mut conn, &layers, 1);
+    let (configures, _) = layer_configures(&mut conn, 1);
     assert_eq!(configures[0].size, (200, 100));
     {
         let lease = conn.lease(surface, (1, 1), BufferFormat::Argb8888).unwrap();
@@ -1617,7 +1597,7 @@ fn a_zero_dimension_of_an_extension_configure_is_left_to_the_client() {
     });
     let layers = layer::Layers::bind(&mut conn);
     let surface = layers.surface(&mut conn, (0, 30));
-    layer_configures(&mut conn, &layers, 1);
+    layer_configures(&mut conn, 1);
     let lease = conn
         .lease(surface, (640, 1), BufferFormat::Argb8888)
         .unwrap();
@@ -1642,9 +1622,9 @@ fn a_burst_of_extension_events_ends_one_wait_not_one_per_event() {
     });
     let layers = layer::Layers::bind(&mut conn);
     let surface = layers.surface(&mut conn, (200, 100));
-    layer_configures(&mut conn, &layers, 1);
+    layer_configures(&mut conn, 1);
     control.send(Control::LayerConfigures(100)).unwrap();
-    let (configures, waits) = layer_configures(&mut conn, &layers, 100);
+    let (configures, waits) = layer_configures(&mut conn, 100);
     // the burst may straddle a socket read; it never takes a wait per event
     assert!(waits <= 3, "{waits} waits for 100 configures");
     assert_eq!(
@@ -1661,7 +1641,7 @@ fn a_burst_of_extension_events_ends_one_wait_not_one_per_event() {
 }
 
 #[test]
-fn an_input_region_is_sent_rounded_outwards_and_none_restores_the_whole_surface() {
+fn an_input_region_is_sent_rounded_outwards_and_saturated_and_none_restores_the_whole_surface() {
     let (mut conn, _control, seen) = connect(Globals::core());
     let mut stash = Stash::new();
     let w = window(&mut conn, Decorations::Client);
@@ -1675,6 +1655,13 @@ fn an_input_region_is_sent_rounded_outwards_and_none_restores_the_whole_surface(
     assert_eq!(
         next_seen(&seen),
         Seen::InputRegion(Some(vec![[0, 1, 11, 5], [20, 0, 5, 5]]))
+    );
+    conn.set_input_region(w.surface(), Some(&[Rect::new(-1e12, 0.0, 2e12, 1.0)]))
+        .unwrap();
+    conn.flush().unwrap();
+    assert_eq!(
+        next_seen(&seen),
+        Seen::InputRegion(Some(vec![[i32::MIN, 0, i32::MAX, 1]]))
     );
     conn.set_input_region(w.surface(), None).unwrap();
     conn.flush().unwrap();

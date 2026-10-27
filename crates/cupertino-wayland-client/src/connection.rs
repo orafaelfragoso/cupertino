@@ -1,5 +1,7 @@
 //! The connection: globals, surfaces with their roles and buffers, seat input and the event loop.
 
+use std::any::Any;
+use std::fmt;
 use std::io::{ErrorKind, Read, Write};
 use std::ops::RangeInclusive;
 use std::os::unix::net::UnixStream;
@@ -54,11 +56,11 @@ use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
 use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_manager_v1::ZxdgOutputManagerV1;
 use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_v1::{self, ZxdgOutputV1};
 
-use crate::buffer::{pick_slot, Slot, SlotChoice, SlotTag};
+use crate::buffer::{pick_slot, Slot, SlotChoice, SlotTag, MAX_SLOTS};
 use crate::capability::REQUIRED;
 use crate::clipboard::Clipboard;
 use crate::configure::{wire_size, Serials};
-use crate::input::{PointerTracker, Repeat, Translator};
+use crate::input::{Modifiers, PointerTracker, Repeat, Translator};
 use crate::output::{OutputBuilder, OutputId};
 use crate::scale::ScaleSources;
 use crate::{
@@ -177,6 +179,32 @@ pub enum Event {
         request: TokenRequest,
         token: String,
     },
+    /// What an extension's `Dispatch` impl queued with [`State::emit`], in order with the events around it.
+    Extension(ExtensionEvent),
+}
+
+/// A value an extension queued with [`State::emit`]; the extension reads it back with [`ExtensionEvent::downcast`].
+/// Equal only to clones of itself.
+#[derive(Clone)]
+pub struct ExtensionEvent(Arc<dyn Any + Send + Sync>);
+
+impl ExtensionEvent {
+    /// The value, when it is a `T`; else the event itself, for another extension.
+    pub fn downcast<T: Any + Send + Sync>(self) -> Result<Arc<T>, ExtensionEvent> {
+        self.0.downcast().map_err(ExtensionEvent)
+    }
+}
+
+impl fmt::Debug for ExtensionEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ExtensionEvent(..)")
+    }
+}
+
+impl PartialEq for ExtensionEvent {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 /// A request for an activation token, matched to its [`Event::ActivationToken`].
@@ -251,6 +279,13 @@ pub trait ExternalRole {
     fn adopt_popup(&self, popup: &XdgPopup) -> Result<(), Error> {
         let _ = popup;
         Err(Error::Protocol("this surface role takes no popups"))
+    }
+
+    /// Whether the surface commits once without a buffer, after the role is assigned, to ask for its first configure.
+    /// Roles the compositor configures unasked, and that forbid a commit before the first acknowledgement, return
+    /// `false`.
+    fn initial_commit(&self) -> bool {
+        true
     }
 }
 
@@ -341,7 +376,7 @@ fn required<I>(global: Option<I>, interface: &'static str) -> Result<I, Error> {
 impl Connection {
     /// Connect to the compositor named by `WAYLAND_DISPLAY` (or the socket in `WAYLAND_SOCKET`).
     pub fn connect() -> Result<Connection, Error> {
-        Self::from_connection(
+        Self::from_wayland(
             WlConnection::connect_to_env()
                 .map_err(|e| Error::Disconnected(Disconnect::Connect(e)))?,
         )
@@ -349,13 +384,14 @@ impl Connection {
 
     /// Connect over an established socket, such as one end of a socket pair.
     pub fn from_stream(stream: UnixStream) -> Result<Connection, Error> {
-        Self::from_connection(
+        Self::from_wayland(
             WlConnection::from_socket(stream)
                 .map_err(|e| Error::Disconnected(Disconnect::Connect(e)))?,
         )
     }
 
-    fn from_connection(conn: WlConnection) -> Result<Connection, Error> {
+    /// Take over an established connection, for a process that runs event queues of its own on it next to this one.
+    pub fn from_wayland(conn: WlConnection) -> Result<Connection, Error> {
         let (globals, mut queue) = registry_queue_init::<State>(&conn)
             .map_err(|e| Error::Disconnected(Disconnect::Registry(e)))?;
         let qh = queue.handle();
@@ -556,12 +592,13 @@ impl Connection {
                 minimum_version: REPOSITION_VERSION,
             });
         }
+        let Role::Popup { popup, .. } = &s.surface(popup.0)?.role else {
+            unreachable!("a Popup handle names a popup");
+        };
+        let popup = popup.clone();
         let positioner = positioner(&s.wm_base, &qh, placement)?;
         s.next_reposition += 1;
-        match &s.surface(popup.0)?.role {
-            Role::Popup { popup, .. } => popup.reposition(&positioner, s.next_reposition),
-            _ => unreachable!("a Popup handle names a popup"),
-        }
+        popup.reposition(&positioner, s.next_reposition);
         positioner.destroy();
         Ok(())
     }
@@ -733,7 +770,12 @@ impl Connection {
         for r in rects {
             let (left, top) = (r.min_x().floor() as i32, r.min_y().floor() as i32);
             let (right, bottom) = (r.max_x().ceil() as i32, r.max_y().ceil() as i32);
-            region.add(left, top, right - left, bottom - top);
+            region.add(
+                left,
+                top,
+                right.saturating_sub(left),
+                bottom.saturating_sub(top),
+            );
         }
         wl.set_input_region(Some(&region));
         region.destroy();
@@ -765,6 +807,36 @@ impl Connection {
         token.set_surface(&wl);
         token.commit();
         Ok(request)
+    }
+
+    /// Hide the cursor over the surface the pointer is on, for an application that draws its own.
+    pub fn hide_cursor(&mut self) -> Result<(), Error> {
+        let (Some(pointer), Some(serial)) = (&self.state.pointer, self.state.pointer_enter_serial)
+        else {
+            return Err(Error::PermissionDenied(
+                "a cursor before the pointer entered",
+            ));
+        };
+        pointer.set_cursor(serial, None, 0, 0);
+        Ok(())
+    }
+
+    /// The modifiers held now, as of the last `wl_keyboard.modifiers`; none before the keymap arrives.
+    pub fn modifiers(&self) -> Modifiers {
+        self.state
+            .translator
+            .as_ref()
+            .map_or(Modifiers::default(), Translator::modifiers)
+    }
+
+    /// The serial of the latest input event, for an extension request that answers one; `None` before any input.
+    pub fn input_serial(&self) -> Option<u32> {
+        self.state.last_serial
+    }
+
+    /// The outputs `surface` is on, in the order it entered them.
+    pub fn surface_outputs(&self, surface: SurfaceId) -> Result<Vec<OutputId>, Error> {
+        Ok(self.state.surface(surface)?.entered.clone())
     }
 
     /// Show the compositor's cursor `shape` over the surface the pointer is on.
@@ -839,6 +911,11 @@ impl Connection {
         self.state.seat.clone()
     }
 
+    /// The seat's `wl_pointer` once it has one, for an extension that follows the pointer.
+    pub fn pointer(&self) -> Option<WlPointer> {
+        self.state.pointer.clone()
+    }
+
     /// The `wl_output` of `output`, for an extension request that names it.
     pub fn wl_output(&self, output: OutputId) -> Option<WlOutput> {
         self.state
@@ -870,6 +947,19 @@ impl Connection {
     pub fn roundtrip(&mut self) -> Result<(), Error> {
         self.queue.roundtrip(&mut self.state)?;
         Ok(())
+    }
+
+    /// Whether [`Connection::lease`] has a buffer for `surface`: `false` while the compositor holds all of them, until
+    /// it releases one.
+    pub fn buffer_free(&self, surface: SurfaceId) -> Result<bool, Error> {
+        let busy = self
+            .state
+            .surface(surface)?
+            .slots
+            .iter()
+            .filter(|s| s.busy)
+            .count();
+        Ok(busy < MAX_SLOTS)
     }
 
     /// A buffer to draw the next frame of `surface` into, at the surface's scale. Its logical size is the configured
@@ -1164,6 +1254,26 @@ impl State {
         }
     }
 
+    /// The output an extension event names, as the application knows it; `None` for one this connection has not bound.
+    pub fn output_id(&self, output: &WlOutput) -> Option<OutputId> {
+        self.outputs
+            .iter()
+            .find(|o| o.wl == *output)
+            .map(|o| o.info.current.id)
+    }
+
+    /// Queue `event` for the application as an [`Event::Extension`], after the events dispatched before it.
+    pub fn emit(&mut self, event: impl Any + Send + Sync) {
+        self.events
+            .push(Event::Extension(ExtensionEvent(Arc::new(event))));
+    }
+
+    /// End the next [`Connection::wait`] with `error`, such as [`Error::Protocol`] for an event the extension cannot
+    /// accept; the first error wins.
+    pub fn fail(&mut self, error: Error) {
+        self.fault.get_or_insert(error);
+    }
+
     fn next_id(&mut self) -> SurfaceId {
         self.next_surface += 1;
         SurfaceId(self.next_surface)
@@ -1177,8 +1287,10 @@ impl State {
             ),
             None => (None, None),
         };
-        // the initial commit without a buffer asks for the first configure
-        wl.commit();
+        if !matches!(&role, Role::External { role, .. } if !role.initial_commit()) {
+            // the initial commit without a buffer asks for the first configure
+            wl.commit();
+        }
         self.surfaces.push(Surface {
             id,
             wl,
@@ -1216,10 +1328,6 @@ impl State {
                 unreachable!("a Toplevel handle names a toplevel")
             }
         }
-    }
-
-    fn fail(&mut self, e: Error) {
-        self.fault.get_or_insert(e);
     }
 
     fn bind_output(

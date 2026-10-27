@@ -95,7 +95,8 @@ use wayland_server::{
 struct Committed {
     buffer_size: (i32, i32),
     stride: i32,
-    offset: i32,
+    /// The protocol id of the committed `wl_buffer`.
+    buffer: u32,
     buffer_scale: i32,
     first_pixel: [u8; 4],
     backdrops: Vec<BackdropState>,
@@ -401,7 +402,7 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
                         .send(Committed {
                             buffer_size: (b.width, b.height),
                             stride: b.stride,
-                            offset: b.offset,
+                            buffer: buffer.id().protocol_id(),
                             buffer_scale: s.scale,
                             first_pixel,
                             backdrops: s
@@ -563,12 +564,17 @@ impl Dispatch<ZxdgOutputManagerV1, ()> for Mock {
         _: &DisplayHandle,
         init: &mut DataInit<'_, Self>,
     ) {
-        if let zxdg_output_manager_v1::Request::GetXdgOutput { id, .. } = request {
+        if let zxdg_output_manager_v1::Request::GetXdgOutput { id, output } = request {
             // the output sits right of a 1920 point wide neighbour
-            let output = init.init(id, ());
-            output.logical_position(1920, 0);
-            output.logical_size(1280, 800);
-            output.done();
+            let xdg = init.init(id, ());
+            xdg.logical_position(1920, 0);
+            xdg.logical_size(1280, 800);
+            // version 3 ends the description with the output's own `done`
+            if xdg.version() >= 3 {
+                output.done();
+            } else {
+                xdg.done();
+            }
         }
     }
 }
@@ -1770,7 +1776,7 @@ fn surface_lifecycle_against_a_protocol_server() {
         Committed {
             buffer_size: (200, 100),
             stride: 800,
-            offset: 0,
+            buffer: first.buffer,
             buffer_scale: 2,
             first_pixel: [30, 20, 10, 40],
             backdrops: vec![BackdropState {
@@ -1795,11 +1801,12 @@ fn surface_lifecycle_against_a_protocol_server() {
         matches!(e, Event::Draw(_)).then_some(())
     });
 
-    // the second frame uses the other buffer of the pool
+    // the second frame uses another buffer while the server holds the first
     client.draw(surface, |_, _| {}).unwrap();
     stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
     let second = committed.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!((second.offset, second.first_pixel), (80_000, [0, 0, 0, 0]));
+    assert_ne!(second.buffer, first.buffer);
+    assert_eq!(second.first_pixel, [0, 0, 0, 0]);
 
     // pointer input arrives in surface-local logical coordinates; a token follows the press serial
     control.send(Control::PointerPress).unwrap();
@@ -1957,7 +1964,7 @@ fn popups_are_placed_grabbed_resized_and_dismissed() {
         .unwrap();
     stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
     assert!(
-        matches!(seen.recv_timeout(Duration::from_secs(5)).unwrap(), Seen::Reposition { token: 0, positioner } if positioner.size == (200, 60))
+        matches!(seen.recv_timeout(Duration::from_secs(5)).unwrap(), Seen::Reposition { token: 1, positioner } if positioner.size == (200, 60))
     );
     let size = wait_for(&mut client, &mut stash, |e| match e {
         Event::Configured { surface, size } if *surface == popup => Some(*size),
@@ -2577,7 +2584,7 @@ fn a_damaged_frame_keeps_the_last_one_repaints_its_rectangles_and_reports_only_t
     );
     // the second buffer was never written: it got the whole frame, red at its corner
     assert_eq!(frames[1].first_pixel, [0, 0, 255, 255]);
-    assert_ne!(frames[0].offset, frames[1].offset, "the other slot");
+    assert_ne!(frames[0].buffer, frames[1].buffer, "the other buffer");
 }
 
 /// A shell process that connected over the `WAYLAND_SOCKET` the server gave it does not pass that connection on: a

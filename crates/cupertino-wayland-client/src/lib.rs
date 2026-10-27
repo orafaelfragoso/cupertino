@@ -23,8 +23,9 @@ pub use capability::{Capability, CapabilitySet, Extension};
 pub use clipboard::ClipboardOffer;
 pub use configure::{Decorations, WindowConfigure, WindowStates};
 pub use connection::{
-    BufferLease, Connection, Event, ExternalRole, FrameCallback, Popup, PopupConfigure,
-    PopupPlacement, State, SurfaceId, TokenRequest, Toplevel, ToplevelConfig, Waker,
+    BufferLease, Connection, Event, ExtensionEvent, ExternalRole, FrameCallback, Popup,
+    PopupConfigure, PopupPlacement, State, SurfaceId, TokenRequest, Toplevel, ToplevelConfig,
+    Waker,
 };
 pub use error::{Disconnect, Error};
 pub use input::{Button, KeyboardEvent, Modifiers, PointerEvent};

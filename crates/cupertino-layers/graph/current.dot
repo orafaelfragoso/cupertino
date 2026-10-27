@@ -89,7 +89,7 @@ digraph "current" {
   "cupertino-client" -> "cupertino-geometry";
   "cupertino-client" -> "cupertino-protocols";
   "cupertino-client" -> "cupertino-protocols" [label="dev"];
-  "cupertino-client" -> "xkbcommon";
+  "cupertino-client" -> "cupertino-wayland-client";
   "cupertino-controlcenter" -> "cupertino-alsa";
   "cupertino-controlcenter" -> "cupertino-assets";
   "cupertino-controlcenter" -> "cupertino-client";

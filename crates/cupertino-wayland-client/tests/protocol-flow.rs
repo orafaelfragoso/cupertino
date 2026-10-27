@@ -1661,7 +1661,7 @@ fn a_burst_of_extension_events_ends_one_wait_not_one_per_event() {
 }
 
 #[test]
-fn an_input_region_is_sent_rounded_outwards_and_none_restores_the_whole_surface() {
+fn an_input_region_is_sent_rounded_outwards_and_saturated_and_none_restores_the_whole_surface() {
     let (mut conn, _control, seen) = connect(Globals::core());
     let mut stash = Stash::new();
     let w = window(&mut conn, Decorations::Client);
@@ -1675,6 +1675,13 @@ fn an_input_region_is_sent_rounded_outwards_and_none_restores_the_whole_surface(
     assert_eq!(
         next_seen(&seen),
         Seen::InputRegion(Some(vec![[0, 1, 11, 5], [20, 0, 5, 5]]))
+    );
+    conn.set_input_region(w.surface(), Some(&[Rect::new(-1e12, 0.0, 2e12, 1.0)]))
+        .unwrap();
+    conn.flush().unwrap();
+    assert_eq!(
+        next_seen(&seen),
+        Seen::InputRegion(Some(vec![[i32::MIN, 0, i32::MAX, 1]]))
     );
     conn.set_input_region(w.surface(), None).unwrap();
     conn.flush().unwrap();

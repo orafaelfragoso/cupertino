@@ -556,12 +556,13 @@ impl Connection {
                 minimum_version: REPOSITION_VERSION,
             });
         }
+        let Role::Popup { popup, .. } = &s.surface(popup.0)?.role else {
+            unreachable!("a Popup handle names a popup");
+        };
+        let popup = popup.clone();
         let positioner = positioner(&s.wm_base, &qh, placement)?;
         s.next_reposition += 1;
-        match &s.surface(popup.0)?.role {
-            Role::Popup { popup, .. } => popup.reposition(&positioner, s.next_reposition),
-            _ => unreachable!("a Popup handle names a popup"),
-        }
+        popup.reposition(&positioner, s.next_reposition);
         positioner.destroy();
         Ok(())
     }
@@ -733,7 +734,12 @@ impl Connection {
         for r in rects {
             let (left, top) = (r.min_x().floor() as i32, r.min_y().floor() as i32);
             let (right, bottom) = (r.max_x().ceil() as i32, r.max_y().ceil() as i32);
-            region.add(left, top, right - left, bottom - top);
+            region.add(
+                left,
+                top,
+                right.saturating_sub(left),
+                bottom.saturating_sub(top),
+            );
         }
         wl.set_input_region(Some(&region));
         region.destroy();

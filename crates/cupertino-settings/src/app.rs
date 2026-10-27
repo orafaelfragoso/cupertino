@@ -858,6 +858,7 @@ impl App {
         match k {
             SearchKey::Type(c) => self.search.type_char(c),
             SearchKey::Backspace => self.search.backspace(),
+            SearchKey::SelectAll => self.search.select_all(),
             SearchKey::Up => self.search.step(-1),
             SearchKey::Down => self.search.step(1),
             SearchKey::Clear => self.search.clear(),

@@ -972,10 +972,10 @@ fn finish(h: &mut Harness, client: JoinHandle<Option<u32>>) -> Option<u32> {
 const TOO_MANY_BACKDROPS: u32 = 2;
 
 #[test]
-fn a_surface_holds_eight_backdrops_and_the_ninth_is_a_protocol_error() {
+fn a_surface_holds_64_backdrops_and_the_next_is_a_protocol_error() {
     let Some(mut h) = Harness::new() else { return };
     let mut steps = vec![Step::Surface];
-    steps.extend((0..8).map(|_| Step::Backdrop(0)));
+    steps.extend((0..64).map(|_| Step::Backdrop(0)));
     let ok = run_steps(h.socket_path(), steps.clone());
     assert_eq!(finish(&mut h, ok), None);
     steps.push(Step::Backdrop(0));
@@ -987,14 +987,14 @@ fn a_surface_holds_eight_backdrops_and_the_ninth_is_a_protocol_error() {
 fn a_client_holds_128_backdrops_over_its_surfaces_and_the_next_is_a_protocol_error() {
     let Some(mut h) = Harness::new() else { return };
     let mut steps = Vec::new();
-    for surface in 0..16 {
+    for surface in 0..2 {
         steps.push(Step::Surface);
-        steps.extend((0..8).map(|_| Step::Backdrop(surface)));
+        steps.extend((0..64).map(|_| Step::Backdrop(surface)));
     }
     let ok = run_steps(h.socket_path(), steps.clone());
     assert_eq!(finish(&mut h, ok), None);
     steps.push(Step::Surface);
-    steps.push(Step::Backdrop(16));
+    steps.push(Step::Backdrop(2));
     let over = run_steps(h.socket_path(), steps);
     assert_eq!(finish(&mut h, over), Some(TOO_MANY_BACKDROPS));
 }
@@ -1003,9 +1003,9 @@ fn a_client_holds_128_backdrops_over_its_surfaces_and_the_next_is_a_protocol_err
 fn a_destroyed_backdrop_frees_its_place() {
     let Some(mut h) = Harness::new() else { return };
     let mut steps = vec![Step::Surface];
-    steps.extend((0..8).map(|_| Step::Backdrop(0)));
-    steps.extend((0..8).map(Step::Destroy));
-    steps.extend((0..8).map(|_| Step::Backdrop(0)));
+    steps.extend((0..64).map(|_| Step::Backdrop(0)));
+    steps.extend((0..64).map(Step::Destroy));
+    steps.extend((0..64).map(|_| Step::Backdrop(0)));
     let client = run_steps(h.socket_path(), steps);
     assert_eq!(finish(&mut h, client), None);
 }
@@ -1014,11 +1014,11 @@ fn a_destroyed_backdrop_frees_its_place() {
 fn a_client_over_its_limit_does_not_take_the_places_of_another() {
     let Some(mut h) = Harness::new() else { return };
     let mut flood = vec![Step::Surface];
-    flood.extend((0..9).map(|_| Step::Backdrop(0)));
+    flood.extend((0..65).map(|_| Step::Backdrop(0)));
     let flooder = run_steps(h.socket_path(), flood);
     assert_eq!(finish(&mut h, flooder), Some(TOO_MANY_BACKDROPS));
     let mut steps = vec![Step::Surface];
-    steps.extend((0..8).map(|_| Step::Backdrop(0)));
+    steps.extend((0..64).map(|_| Step::Backdrop(0)));
     let other = run_steps(h.socket_path(), steps);
     assert_eq!(finish(&mut h, other), None);
 }

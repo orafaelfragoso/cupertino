@@ -16,6 +16,7 @@
 use crate::center::{CenterConfig, DndMode, Event, NotificationCenter};
 use crate::focus::{self, Lifetime, LocalCalendar, SystemCalendar};
 use crate::notification::{Expire, Hints, ImageData, NotifyInput, Urgency};
+use cupertino_peer::{check_call, CallerError, Relation};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -264,6 +265,25 @@ impl Interface {
     ) -> zbus::Result<()>;
 }
 
+/// Who may open the centre or switch do not disturb: any unsandboxed process of the user (the control panel, the menu bar and the settings
+/// app are not this process's parent); a Flatpak, a Snap or a caller the bus cannot name may not.
+const SHELL_CALLERS: &[Relation] = &[Relation::Itself, Relation::Parent, Relation::Other];
+
+async fn guard(
+    connection: &zbus::Connection,
+    header: &zbus::message::Header<'_>,
+    method: &'static str,
+) -> Result<(), CallerError> {
+    check_call(
+        connection,
+        header,
+        "org.cupertino.NotificationCenter1",
+        method,
+        SHELL_CALLERS,
+    )
+    .await
+}
+
 /// `org.cupertino.NotificationCenter1`: lets the menu bar open and close the centre list and the control
 /// panel switch do not disturb.
 struct CentreControl {
@@ -274,29 +294,41 @@ struct CentreControl {
 #[zbus::interface(name = "org.cupertino.NotificationCenter1")]
 impl CentreControl {
     /// Open the notification centre list, or close it when it is open.
-    fn toggle_centre(&self) {
+    async fn toggle_centre(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+    ) -> Result<(), CallerError> {
+        guard(connection, &header, "ToggleCentre").await?;
         (self.on_toggle)();
+        Ok(())
     }
 
     /// Turn do not disturb on (until turned off) or off; banners of suppressed notifications are not shown.
     async fn set_do_not_disturb(
         &self,
         on: bool,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<()> {
+    ) -> Result<(), CallerError> {
+        guard(connection, &header, "SetDoNotDisturb").await?;
         let now = (self.shared.clock)();
         self.shared
             .lock()
             .set_dnd(if on { DndMode::On } else { DndMode::Off }, now);
-        self.announce(&emitter, on).await
+        Ok(self.announce(&emitter, on).await?)
     }
 
     /// Turn do not disturb on for one of the [`Self::focus_lifetimes`] rows, by its identifier; it ends by itself.
     async fn set_do_not_disturb_for(
         &self,
         lifetime: &str,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<()> {
+    ) -> Result<(), CallerError> {
+        guard(connection, &header, "SetDoNotDisturbFor").await?;
         let lifetime = Lifetime::from_id(lifetime).ok_or_else(|| {
             zbus::fdo::Error::InvalidArgs(format!("{lifetime:?} is not an offered duration"))
         })?;
@@ -306,7 +338,7 @@ impl CentreControl {
         self.shared
             .lock()
             .set_dnd(DndMode::Until(now + (ends - unix) as f64), now);
-        self.announce(&emitter, true).await
+        Ok(self.announce(&emitter, true).await?)
     }
 
     /// The duration rows offered now, in menu order: identifier (the argument of `SetDoNotDisturbFor`) and title.
@@ -457,7 +489,58 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cupertino_peer::{Caller, Denial, Identified, ProcessHandle, Sandbox};
     use zbus::zvariant::{Array, StructureBuilder};
+
+    fn caller_of(pid: u32, sandbox: Option<Sandbox>) -> Caller {
+        Caller::Process(Identified {
+            process: ProcessHandle::open(pid).expect("this process"),
+            sandbox,
+            exe: None,
+        })
+    }
+
+    /// SEC-04: a Flatpak, a Snap or a caller the bus cannot name does not switch do not disturb; the other processes
+    /// of the user (the control panel, the menu bar, the settings app) do.
+    #[test]
+    fn only_unsandboxed_callers_may_switch_do_not_disturb() {
+        let own = std::process::id();
+        let allowed = |caller: &Caller, parent| caller.require_relation(own, parent, SHELL_CALLERS);
+        assert_eq!(allowed(&caller_of(own, None), 1), Ok(()));
+        assert_eq!(allowed(&caller_of(own, None), own + 1), Ok(()));
+        assert_eq!(
+            allowed(&caller_of(own, Some(Sandbox::Flatpak)), 1),
+            Err(Denial::Sandboxed(Sandbox::Flatpak))
+        );
+        assert_eq!(
+            allowed(&caller_of(own, Some(Sandbox::Snap)), 1),
+            Err(Denial::Sandboxed(Sandbox::Snap))
+        );
+        assert_eq!(allowed(&Caller::Anonymous, 1), Err(Denial::Anonymous));
+    }
+
+    /// SEC-04: every guarded method goes through `guard`, which refuses a call the bus gave no sender for.
+    #[test]
+    fn a_call_without_a_sender_is_refused() {
+        let message = zbus::Message::method_call("/", "Ping")
+            .unwrap()
+            .build(&())
+            .unwrap();
+        let (ours, theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+        zbus::block_on(async {
+            let client = zbus::connection::Builder::async_io_unix_stream(ours)
+                .p2p()
+                .build();
+            let server = zbus::connection::Builder::async_io_unix_stream(theirs)
+                .server(zbus::Guid::generate())
+                .unwrap()
+                .p2p()
+                .build();
+            let (client, _server) = futures_lite::future::try_zip(client, server).await.unwrap();
+            let refused = guard(&client, &message.header(), "SetDoNotDisturb").await;
+            assert!(matches!(refused, Err(CallerError::AnonymousCaller(_))));
+        });
+    }
 
     fn ov(v: Value<'_>) -> OwnedValue {
         OwnedValue::try_from(v).unwrap()

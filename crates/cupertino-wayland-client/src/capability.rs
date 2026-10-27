@@ -39,16 +39,19 @@ pub enum Capability {
     Activation,
     /// `wp_cursor_shape_manager_v1`: named cursors drawn by the compositor.
     CursorShape,
+    /// `zxdg_output_manager_v1`: where each output sits, in logical points ([`crate::OutputInfo::geometry`]).
+    OutputLayout,
 }
 
 impl Capability {
-    pub const ALL: [Capability; 6] = [
+    pub const ALL: [Capability; 7] = [
         Capability::Seat,
         Capability::Clipboard,
         Capability::FractionalScale,
         Capability::ServerDecoration,
         Capability::Activation,
         Capability::CursorShape,
+        Capability::OutputLayout,
     ];
 
     /// The globals that must all be advertised for the capability.
@@ -60,6 +63,7 @@ impl Capability {
             Capability::ServerDecoration => &["zxdg_decoration_manager_v1"],
             Capability::Activation => &["xdg_activation_v1"],
             Capability::CursorShape => &["wp_cursor_shape_manager_v1"],
+            Capability::OutputLayout => &["zxdg_output_manager_v1"],
         }
     }
 

@@ -108,7 +108,7 @@ recommends = "libgl1-mesa-dri, libwayland-client0, libwayland-egl1, libxkbcommon
 suggests = "foot, iwd"
 maintainer-scripts = "../../packaging/debian/scripts"
 preserve-symlinks = true
-conf-files = ["/etc/cupertino/login.conf", "/etc/cupertino/greeter.json", "/etc/pam.d/cupertino-login", "/etc/pam.d/cupertino-session", "/etc/pam.d/cupertino-greeter", "/etc/pam.d/cupertino-autologin"]
+conf-files = ["/etc/cupertino/login.conf", "/etc/cupertino/greeter.json", "/etc/cupertino/compositor.json", "/etc/pam.d/cupertino-login", "/etc/pam.d/cupertino-session", "/etc/pam.d/cupertino-greeter", "/etc/pam.d/cupertino-autologin"]
 assets = [
   ["target/release/cupertino-server", "usr/bin/cupertino-server", "755"],
   ["target/release/cupertino-dock", "usr/bin/cupertino-dock", "755"],
@@ -136,6 +136,7 @@ assets = [
   ["../../packaging/files/usr/share/dbus-1/system.d/org.cupertino.conf", "usr/share/dbus-1/system.d/org.cupertino.conf", "644"],
   ["../../packaging/files/etc/cupertino/login.conf", "etc/cupertino/login.conf", "644"],
   ["../../packaging/files/etc/cupertino/greeter.json", "etc/cupertino/greeter.json", "644"],
+  ["../../packaging/files/etc/cupertino/compositor.json", "etc/cupertino/compositor.json", "644"],
   ["../../packaging/files/usr/lib/systemd/system/cupertino-login.service", "usr/lib/systemd/system/cupertino-login.service", "644"],
   ["../../packaging/files/usr/lib/systemd/system/cupertino-netd.service", "usr/lib/systemd/system/cupertino-netd.service", "644"],
   ["../../packaging/files/usr/lib/systemd/system/cupertino-btd.service", "usr/lib/systemd/system/cupertino-btd.service", "644"],
@@ -184,6 +185,7 @@ assets = [
   { source = "packaging/files/usr/share/dbus-1/system.d/org.cupertino.conf", dest = "/usr/share/dbus-1/system.d/org.cupertino.conf", mode = "644" },
   { source = "packaging/files/etc/cupertino/login.conf", dest = "/etc/cupertino/login.conf", mode = "644", config = "noreplace" },
   { source = "packaging/files/etc/cupertino/greeter.json", dest = "/etc/cupertino/greeter.json", mode = "644", config = "noreplace" },
+  { source = "packaging/files/etc/cupertino/compositor.json", dest = "/etc/cupertino/compositor.json", mode = "644", config = "noreplace" },
   { source = "packaging/files/usr/lib/systemd/system/cupertino-login.service", dest = "/usr/lib/systemd/system/cupertino-login.service", mode = "644" },
   { source = "packaging/files/usr/lib/systemd/system/cupertino-netd.service", dest = "/usr/lib/systemd/system/cupertino-netd.service", mode = "644" },
   { source = "packaging/files/usr/lib/systemd/system/cupertino-btd.service", dest = "/usr/lib/systemd/system/cupertino-btd.service", mode = "644" },

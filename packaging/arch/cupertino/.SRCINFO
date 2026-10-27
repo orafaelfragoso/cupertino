@@ -35,6 +35,7 @@ pkgname = cupertino
 	optdepends = iwd: wireless backend when cupertino-netd is enabled
 	backup = etc/cupertino/login.conf
 	backup = etc/cupertino/greeter.json
+	backup = etc/cupertino/compositor.json
 	backup = etc/pam.d/cupertino-login
 	backup = etc/pam.d/cupertino-session
 	backup = etc/pam.d/cupertino-greeter

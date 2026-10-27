@@ -90,6 +90,7 @@ def runtime(fmt):
         ('usr/share/dbus-1/system.d/org.cupertino.conf', 0o644, False),
         ('etc/cupertino/login.conf', 0o644, True),
         ('etc/cupertino/greeter.json', 0o644, True),
+        ('etc/cupertino/compositor.json', 0o644, True),
     )]
     # The shipped apps' desktop entries (the menu bar and the dock take an app's name and icon from it) and
     # cupertino-mimeapps.list; applications() refuses anything else.

@@ -1132,9 +1132,9 @@ impl App {
         // read-modify-write: the files as they are now, so the store changes the user's key only and puts back no
         // value another writer changed since the last read
         if let Err(e) = self.settings.reload(&self.paths) {
-            let e = format!("The settings could not be read: {e}.");
-            eprintln!("cupertino-settings: {e}");
-            self.errors.push((id, e));
+            eprintln!("cupertino-settings: the settings could not be read: {e}");
+            self.errors
+                .push((id, "The settings could not be read.".to_string()));
             self.client.request_redraw(self.window)?;
             return Ok(());
         }

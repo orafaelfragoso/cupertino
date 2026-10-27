@@ -1,5 +1,5 @@
 //! Issue #5: the real Settings choice menu must not survive dismissal or navigation.
-//! Run with `cargo test -p cupertino-server --test settings-popup -- --ignored --test-threads=1`.
+//! Run with `cargo test -p cupertino-server --test settings-popup -- --test-threads=1`.
 
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -11,7 +11,7 @@ use cupertino_server::{backend::headless, config::Config, Cupertino};
 use cupertino_theme::Appearance;
 use smithay::backend::input::ButtonState;
 use smithay::backend::renderer::utils::with_renderer_surface_state;
-use smithay::desktop::PopupManager;
+use smithay::desktop::{PopupKind, PopupManager};
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use smithay::wayland::compositor::with_states;
@@ -21,6 +21,8 @@ use smithay::wayland::shm::with_buffer_contents;
 const TIMEOUT: Duration = Duration::from_secs(10);
 // Centres of the Colour filter button and Appearance sidebar row in the 715 × 625 window.
 const COLOUR_FILTER: (f64, f64) = (600.0, 348.0);
+// Centre of the Top Left hot corner's button on the Desktop & Dock pane.
+const TOP_LEFT_CORNER: (f64, f64) = (600.0, 386.0);
 const APPEARANCE_ROW: (f64, f64) = (100.0, 256.0);
 
 struct Process(Child);
@@ -72,6 +74,10 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
+        Self::with_menu("accessibility", "Accessibility", COLOUR_FILTER)
+    }
+
+    fn with_menu(pane: &str, pane_title: &str, button: (f64, f64)) -> Self {
         let binary = settings_binary();
         let home = tempfile::tempdir().unwrap();
         let mut bus = Command::new("dbus-daemon")
@@ -102,7 +108,7 @@ impl Harness {
             .join(state.socket_name.as_ref().unwrap());
         let app = Process(
             Command::new(binary)
-                .args(["--pane", "accessibility"])
+                .args(["--pane", pane])
                 .env_clear()
                 .env("PATH", "/usr/bin:/bin")
                 .env("HOME", home.path())
@@ -125,11 +131,11 @@ impl Harness {
             address,
             home,
         };
-        h.wait_until("Accessibility window", |s| title(s) == "Accessibility");
+        h.wait_until("the pane's window", |s| title(s) == pane_title);
         h.run_for(Duration::from_millis(250));
-        h.click(COLOUR_FILTER);
+        h.click(button);
         h.wait_until("one mapped choice popup", |s| popup_count(s) == 1);
-        assert_eq!(title(&h.state), "Accessibility");
+        assert_eq!(title(&h.state), pane_title);
         h
     }
 
@@ -177,6 +183,7 @@ impl Harness {
         let frame = self.state.wm.window(window.id).unwrap().geometry();
         self.state
             .pointer_moved_to((frame.x + point.0, frame.y + point.1).into(), 0, None);
+        self.step();
         self.state.pointer_button(0x110, ButtonState::Pressed, 0);
         self.step();
         self.state.pointer_button(0x110, ButtonState::Released, 0);
@@ -273,15 +280,43 @@ fn changing_settings_pane_destroys_the_choice_popup() {
 #[test]
 fn appearance_change_does_not_leave_an_orphaned_choice_popup() {
     let mut h = Harness::new();
-    h.show_appearance();
     let light = window_pixels(&h.state);
     h.state.set_appearance(Appearance::Dark);
     h.wait_until("Settings to redraw for Dark appearance", |s| {
         window_pixels(s) != light
     });
+    h.run_for(Duration::from_millis(250));
     assert_eq!(
         popup_count(&h.state),
         0,
         "Dark Appearance must not retain Accessibility's menu"
+    );
+}
+
+#[test]
+#[ignore = "#5: the server delivers a press on a menu row to the parent window"]
+fn pressing_a_row_of_the_open_menu_selects_it() {
+    let mut h = Harness::with_menu("desktop-dock", "Desktop & Dock", TOP_LEFT_CORNER);
+    let window = h.state.windows.iter().find(|w| w.mapped).unwrap();
+    let (popup, _) = PopupManager::popups_for_surface(window.surface())
+        .next()
+        .unwrap();
+    let PopupKind::Xdg(popup) = popup else {
+        panic!("Settings' menu is an xdg popup")
+    };
+    let location = popup.with_pending_state(|state| state.geometry.loc);
+    // the second row ("Overview"): menu padding 5 plus one 22-point row and half a row
+    h.click((
+        f64::from(location.x) + 100.0,
+        f64::from(location.y) + 5.0 + 22.0 + 11.0,
+    ));
+    h.run_for(Duration::from_millis(500));
+    assert_eq!(popup_count(&h.state), 0, "the menu closes on the choice");
+    let stored = std::fs::read_to_string(h.home.path().join("config/cupertino/dock.conf")).unwrap();
+    assert!(
+        stored
+            .lines()
+            .any(|l| l.trim() == "corner_top_left = overview"),
+        "the chosen row is committed: {stored:?}"
     );
 }

@@ -243,7 +243,7 @@ digraph "target" {
   "cupertino-settings" -> "cupertino-typeahead";
   "cupertino-stage" -> "cupertino-animation";
   "cupertino-stage" -> "cupertino-wm";
-  "cupertino-testclient" -> "cupertino-client";
+  "cupertino-testclient" -> "cupertino-wayland-client";
   "cupertino-text-field" -> "cupertino-defaults";
   "cupertino-text-field" -> "cupertino-keyboard" [color=orange, style=dashed];
   "cupertino-theme" -> "cupertino-animation";

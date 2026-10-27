@@ -119,9 +119,9 @@ pub struct LayerSurfaceConfig {
 pub struct LayerShell(ZwlrLayerShellV1);
 
 impl LayerShell {
-    /// Bind the global; `None` when the server does not offer it.
+    /// Bind the global; `None` when the server does not offer version 4, which on-demand keyboard interactivity needs.
     pub fn bind(conn: &mut Connection) -> Option<LayerShell> {
-        conn.bind_extension(1..=4, Quiet).map(LayerShell)
+        conn.bind_extension(4..=4, Quiet).map(LayerShell)
     }
 
     /// Create a layer surface. Its configures arrive as [`ShellEvent::Configure`], acknowledged by the transport;

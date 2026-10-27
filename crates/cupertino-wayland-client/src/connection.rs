@@ -376,7 +376,7 @@ fn required<I>(global: Option<I>, interface: &'static str) -> Result<I, Error> {
 impl Connection {
     /// Connect to the compositor named by `WAYLAND_DISPLAY` (or the socket in `WAYLAND_SOCKET`).
     pub fn connect() -> Result<Connection, Error> {
-        Self::from_connection(
+        Self::from_wayland(
             WlConnection::connect_to_env()
                 .map_err(|e| Error::Disconnected(Disconnect::Connect(e)))?,
         )
@@ -384,13 +384,14 @@ impl Connection {
 
     /// Connect over an established socket, such as one end of a socket pair.
     pub fn from_stream(stream: UnixStream) -> Result<Connection, Error> {
-        Self::from_connection(
+        Self::from_wayland(
             WlConnection::from_socket(stream)
                 .map_err(|e| Error::Disconnected(Disconnect::Connect(e)))?,
         )
     }
 
-    fn from_connection(conn: WlConnection) -> Result<Connection, Error> {
+    /// Take over an established connection, for a process that runs event queues of its own on it next to this one.
+    pub fn from_wayland(conn: WlConnection) -> Result<Connection, Error> {
         let (globals, mut queue) = registry_queue_init::<State>(&conn)
             .map_err(|e| Error::Disconnected(Disconnect::Registry(e)))?;
         let qh = queue.handle();

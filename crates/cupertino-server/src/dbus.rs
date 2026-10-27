@@ -352,8 +352,17 @@ async fn call(
     };
     if let Err(e) = sent {
         if what == Request::LogOut && is_nobody_there(&e) {
-            tracing::warn!("no login process on the bus: the log out shortcut ends the server");
-            login_missing();
+            let trust = *login
+                .lock()
+                .expect("no thread panics while holding the login trust");
+            // a supervised login process that has not taken its name yet (it is starting or restarting) is still the
+            // one to ask: only a session without a login process ends
+            if let LoginTrust::Agent(pid) = trust {
+                tracing::warn!(pid, "the login process has not taken its bus name yet: the log out request is dropped");
+            } else {
+                tracing::warn!("no login process on the bus: the log out shortcut ends the server");
+                login_missing();
+            }
             return;
         }
         tracing::warn!(?what, name, error = %e, "cannot reach the shell process");

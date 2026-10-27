@@ -257,7 +257,17 @@ fn a_log_out_request_without_a_login_process_runs_the_fallback_and_with_one_does
         let counted = fallbacks.clone();
         let handle =
             DbusHandle::start_with(move || *counted.lock().unwrap() += 1).expect("worker thread");
+        // a supervised login process that has not taken its name yet is not a session without one
         handle.set_login(LoginTrust::Agent(std::process::id()));
+        assert!(handle.send(Request::LogOut));
+        async_io::Timer::after(Duration::from_millis(500)).await;
+        assert_eq!(
+            *fallbacks.lock().unwrap(),
+            0,
+            "a supervised login process may still be starting"
+        );
+
+        handle.set_login(LoginTrust::Nobody);
         assert!(handle.send(Request::LogOut));
         for _ in 0..200 {
             if *fallbacks.lock().unwrap() > 0 {
@@ -268,8 +278,9 @@ fn a_log_out_request_without_a_login_process_runs_the_fallback_and_with_one_does
         assert_eq!(
             *fallbacks.lock().unwrap(),
             1,
-            "nobody owns org.cupertino.Login1"
+            "nobody owns org.cupertino.Login1 and no login process is supervised"
         );
+        handle.set_login(LoginTrust::Agent(std::process::id()));
 
         // other requests to a missing process are only logged
         assert!(handle.send(Request::Toggle(Toggle::Launcher)));

@@ -69,6 +69,95 @@ pub fn rgba_to_argb8888(rgba: &[u8], argb: &mut [u8]) {
     }
 }
 
+/// A rectangle of device pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PixelRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl PixelRect {
+    /// The part inside a buffer of `layout`, `None` when nothing is.
+    pub(crate) fn clamp(self, layout: BufferLayout) -> Option<PixelRect> {
+        let (x1, y1) = (
+            self.x.saturating_add(self.width).min(layout.width()),
+            self.y.saturating_add(self.height).min(layout.height()),
+        );
+        (self.x < x1 && self.y < y1).then_some(PixelRect {
+            x: self.x,
+            y: self.y,
+            width: x1 - self.x,
+            height: y1 - self.y,
+        })
+    }
+}
+
+/// What a frame changed: everything, or these rectangles (inside the buffer).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Damage {
+    Full,
+    Rects(Vec<PixelRect>),
+}
+
+/// More pending rectangles than this make a slot take the whole frame.
+const MAX_PENDING: usize = 32;
+
+/// What each slot missed since it was last written: `None` when its content is unknown (never written, or a full frame
+/// passed it by), else the rectangles of the frames that went to the other slot.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SlotDamage {
+    missed: [Option<Vec<PixelRect>>; SLOTS],
+}
+
+impl SlotDamage {
+    /// The regions to copy into `slot` for a frame that changed `damage`, and the record of what the other slots
+    /// now miss.
+    pub(crate) fn take(&mut self, slot: usize, damage: &Damage) -> Damage {
+        let copy = match (damage, self.missed[slot].take()) {
+            (Damage::Rects(rects), Some(mut missed)) => {
+                missed.extend_from_slice(rects);
+                Damage::Rects(missed)
+            }
+            _ => Damage::Full,
+        };
+        self.missed[slot] = Some(Vec::new());
+        for (other, missed) in self.missed.iter_mut().enumerate() {
+            if other == slot {
+                continue;
+            }
+            *missed = match (damage, missed.take()) {
+                (Damage::Rects(rects), Some(mut m)) if m.len() + rects.len() <= MAX_PENDING => {
+                    m.extend_from_slice(rects);
+                    Some(m)
+                }
+                _ => None,
+            };
+        }
+        copy
+    }
+}
+
+/// Convert the `regions` of the premultiplied RGBA frame `rgba` into the ARGB8888 buffer `argb`, both of `layout`.
+pub(crate) fn copy_regions(rgba: &[u8], argb: &mut [u8], layout: BufferLayout, regions: &Damage) {
+    let rects = match regions {
+        Damage::Full => return rgba_to_argb8888(rgba, argb),
+        Damage::Rects(rects) => rects,
+    };
+    let stride = layout.stride();
+    for r in rects {
+        let Some(r) = r.clamp(layout) else {
+            continue;
+        };
+        let (start, len) = (r.x as usize * 4, r.width as usize * 4);
+        for row in r.y..r.y + r.height {
+            let at = row as usize * stride + start;
+            rgba_to_argb8888(&rgba[at..at + len], &mut argb[at..at + len]);
+        }
+    }
+}
+
 /// Identifies a `wl_buffer` in its release event: the surface, the pool generation (a pool is
 /// replaced when the buffer size changes) and the slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +175,7 @@ pub(crate) struct BufferPool {
     map: MmapMut,
     buffers: Vec<WlBuffer>,
     busy: [bool; SLOTS],
+    damage: SlotDamage,
 }
 
 impl BufferPool {
@@ -134,6 +224,7 @@ impl BufferPool {
             map,
             buffers,
             busy: [false; SLOTS],
+            damage: SlotDamage::default(),
         })
     }
 
@@ -153,12 +244,19 @@ impl BufferPool {
         self.busy[slot] = false;
     }
 
-    /// Fill a free slot from premultiplied RGBA pixels and mark it busy until the server
-    /// releases it. `None` when both buffers are still in use.
-    pub(crate) fn fill(&mut self, rgba: &[u8]) -> Option<&WlBuffer> {
+    /// Bring a free slot up to the premultiplied RGBA frame `rgba`, which changed `damage` since the last one: only
+    /// what changed and what the slot missed is converted. The slot is busy until the server releases it; `None` when
+    /// both buffers are still in use.
+    pub(crate) fn fill(&mut self, rgba: &[u8], damage: &Damage) -> Option<&WlBuffer> {
         let slot = self.busy.iter().position(|b| !b)?;
         let start = self.layout.slot_offset(slot);
-        rgba_to_argb8888(rgba, &mut self.map[start..start + self.layout.buffer_len()]);
+        let regions = self.damage.take(slot, damage);
+        copy_regions(
+            rgba,
+            &mut self.map[start..start + self.layout.buffer_len()],
+            self.layout,
+            &regions,
+        );
         self.busy[slot] = true;
         Some(&self.buffers[slot])
     }
@@ -200,5 +298,131 @@ mod tests {
         let mut argb = [0; 8];
         rgba_to_argb8888(&rgba, &mut argb);
         assert_eq!(argb, [30, 20, 10, 40, 3, 2, 1, 255]);
+    }
+
+    /// A frame of `layout` with a value of its own in every byte, changed by `seed` inside `damage`.
+    fn repaint(frame: &mut [u8], layout: BufferLayout, damage: &Damage, seed: u8) {
+        let all = [PixelRect {
+            x: 0,
+            y: 0,
+            width: layout.width(),
+            height: layout.height(),
+        }];
+        let rects = match damage {
+            Damage::Full => &all[..],
+            Damage::Rects(r) => &r[..],
+        };
+        for r in rects.iter().filter_map(|r| r.clamp(layout)) {
+            for y in r.y..r.y + r.height {
+                for x in r.x..r.x + r.width {
+                    let at = (y as usize * layout.width() as usize + x as usize) * 4;
+                    frame[at..at + 4].copy_from_slice(&[seed, x as u8, y as u8, 255 - seed]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_presented_slot_equals_a_full_conversion_of_its_frame() {
+        let layout = BufferLayout::new(40, 30).unwrap();
+        let r = |x, y, width, height| PixelRect {
+            x,
+            y,
+            width,
+            height,
+        };
+        // (damage, slot the free one is): the server sometimes holds a buffer, so a slot is reused twice in a row
+        let frames = [
+            (Damage::Full, 0),
+            (Damage::Rects(vec![r(2, 3, 5, 4)]), 1),
+            (Damage::Rects(vec![r(30, 20, 20, 20)]), 0),
+            (Damage::Rects(vec![r(0, 0, 1, 1), r(10, 10, 3, 3)]), 0),
+            (Damage::Rects(vec![r(5, 25, 30, 2)]), 1),
+            (Damage::Full, 1),
+            (Damage::Rects(vec![r(39, 29, 1, 1)]), 0),
+            (Damage::Rects(vec![r(12, 0, 4, 30)]), 1),
+            (Damage::Rects(vec![]), 0),
+            (Damage::Rects(vec![r(1, 1, 2, 2)]), 1),
+        ];
+        let mut frame = vec![0u8; layout.buffer_len()];
+        let mut slots = vec![vec![0u8; layout.buffer_len()]; SLOTS];
+        let mut tracker = SlotDamage::default();
+        for (i, (damage, slot)) in frames.iter().enumerate() {
+            repaint(&mut frame, layout, damage, i as u8 + 1);
+            let regions = tracker.take(*slot, damage);
+            copy_regions(&frame, &mut slots[*slot], layout, &regions);
+            let mut full = vec![0u8; layout.buffer_len()];
+            rgba_to_argb8888(&frame, &mut full);
+            assert!(slots[*slot] == full, "frame {i} in slot {slot}");
+        }
+    }
+
+    #[test]
+    fn a_slot_that_missed_too_many_rectangles_takes_the_whole_frame() {
+        let mut tracker = SlotDamage::default();
+        tracker.take(0, &Damage::Full);
+        tracker.take(1, &Damage::Full);
+        let one = Damage::Rects(vec![PixelRect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        }]);
+        for _ in 0..MAX_PENDING {
+            tracker.take(0, &one);
+        }
+        assert!(matches!(tracker.take(1, &one), Damage::Rects(r) if r.len() == MAX_PENDING + 1));
+        for _ in 0..=MAX_PENDING {
+            tracker.take(0, &one);
+        }
+        assert_eq!(tracker.take(1, &one), Damage::Full);
+    }
+
+    #[test]
+    fn a_damaged_frame_converts_its_rectangles_whatever_the_buffer_size() {
+        // a caret and a toolbar strip
+        let damage = Damage::Rects(vec![
+            PixelRect {
+                x: 300,
+                y: 20,
+                width: 2,
+                height: 26,
+            },
+            PixelRect {
+                x: 0,
+                y: 0,
+                width: 600,
+                height: 80,
+            },
+        ]);
+        for (w, h) in [(600, 400), (1920, 1080), (3840, 2160)] {
+            let layout = BufferLayout::new(w, h).unwrap();
+            let rgba = vec![7u8; layout.buffer_len()];
+            let mut argb = vec![0u8; layout.buffer_len()];
+            let mut best = |regions: &Damage| {
+                (0..3)
+                    .map(|_| {
+                        let start = std::time::Instant::now();
+                        copy_regions(&rgba, &mut argb, layout, regions);
+                        start.elapsed()
+                    })
+                    .min()
+                    .unwrap()
+            };
+            // the whole buffer first: its pages are touched before the damage is timed
+            let full = best(&Damage::Full);
+            let damaged = best(&damage);
+            eprintln!("{w} x {h}: the damage {damaged:?}, the whole buffer {full:?}");
+            assert!(
+                damaged < std::time::Duration::from_millis(20),
+                "{w} x {h}: {damaged:?}"
+            );
+            if w >= 1920 {
+                assert!(
+                    damaged * 10 < full,
+                    "{w} x {h}: {damaged:?} against {full:?}"
+                );
+            }
+        }
     }
 }

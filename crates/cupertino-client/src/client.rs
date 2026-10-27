@@ -9,7 +9,7 @@ use crate::menu_bar::{GroupBuilder, MenuBar};
 use crate::output::{GeometryBuilder, OutputId, OutputInfo};
 use crate::popup::PopupGeometry;
 use crate::scale::Scale;
-use crate::shm::{BufferLayout, BufferPool, BufferTag};
+use crate::shm::{BufferLayout, BufferPool, BufferTag, Damage, PixelRect};
 use crate::{Anchor, ClientError, KeyboardInteractivity, Layer};
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_geometry::{Point, Rect};
@@ -248,6 +248,8 @@ struct Surface {
     reported_scale: Scale,
     pool: Option<BufferPool>,
     pixmap: Option<Pixmap>,
+    /// The scale the last frame was drawn at: a frame at another one is drawn whole.
+    drawn_scale: Option<Scale>,
     frame_pending: bool,
     wants_redraw: bool,
 }
@@ -1201,6 +1203,28 @@ impl Client {
         id: SurfaceId,
         paint: impl FnOnce(&mut Pixmap, Scale),
     ) -> Result<(), ClientError> {
+        self.draw_frame(id, None, paint)
+    }
+
+    /// Draw one frame that changes only `damage` (rectangles in points) of the last: `paint` receives the last frame's
+    /// pixmap with those rectangles (rounded out to device pixels) cleared, and must repaint them and leave every
+    /// other pixel as it is. Only they are converted into the shm buffer and reported to the server, which uploads
+    /// only them. Without a last frame of the same size and scale it is a whole frame, as [`Client::draw`].
+    pub fn draw_damage(
+        &mut self,
+        id: SurfaceId,
+        damage: &[Rect],
+        paint: impl FnOnce(&mut Pixmap, Scale),
+    ) -> Result<(), ClientError> {
+        self.draw_frame(id, Some(damage), paint)
+    }
+
+    fn draw_frame(
+        &mut self,
+        id: SurfaceId,
+        damage: Option<&[Rect]>,
+        paint: impl FnOnce(&mut Pixmap, Scale),
+    ) -> Result<(), ClientError> {
         let qh = self.queue.handle();
         let st = &mut self.state;
         let scale = {
@@ -1219,6 +1243,9 @@ impl Client {
             width: pw,
             height: ph,
         })?;
+        // the last frame stands only when its pool (size) and its scale are those of this one
+        let kept =
+            s.pool.as_ref().is_some_and(|p| p.layout() == layout) && s.drawn_scale == Some(scale);
         if s.pool.as_ref().is_none_or(|p| p.layout() != layout) {
             s.pool = Some(BufferPool::new(&shm, &qh, id, generation, layout)?);
         }
@@ -1229,10 +1256,28 @@ impl Client {
                 height: ph,
             })?,
         };
-        pixmap.fill(Color::TRANSPARENT);
+        let damage = match damage {
+            Some(rects) if kept => Damage::Rects(
+                rects
+                    .iter()
+                    .filter_map(|r| pixel_rect(r, scale.factor()).clamp(layout))
+                    .collect(),
+            ),
+            _ => Damage::Full,
+        };
+        match &damage {
+            Damage::Full => pixmap.fill(Color::TRANSPARENT),
+            Damage::Rects(rects) => {
+                for r in rects {
+                    clear(&mut pixmap, r);
+                }
+            }
+        }
         paint(&mut pixmap, scale);
         let pool = s.pool.as_mut().expect("pool created above");
-        let buffer = pool.fill(pixmap.data()).ok_or(ClientError::NoFreeBuffer)?;
+        let buffer = pool
+            .fill(pixmap.data(), &damage)
+            .ok_or(ClientError::NoFreeBuffer)?;
         match &s.viewport {
             Some(viewport) => viewport.set_destination(width as i32, height as i32),
             None => {
@@ -1240,11 +1285,19 @@ impl Client {
             }
         }
         s.wl.attach(Some(buffer), 0, 0);
-        s.wl.damage_buffer(0, 0, i32::MAX, i32::MAX);
+        match &damage {
+            Damage::Full => s.wl.damage_buffer(0, 0, i32::MAX, i32::MAX),
+            Damage::Rects(rects) => {
+                for r in rects {
+                    s.wl.damage_buffer(r.x as i32, r.y as i32, r.width as i32, r.height as i32);
+                }
+            }
+        }
         s.wl.frame(&qh, id);
         s.wl.commit();
         s.frame_pending = true;
         s.pixmap = Some(pixmap);
+        s.drawn_scale = Some(scale);
         Ok(())
     }
 
@@ -1336,6 +1389,33 @@ impl Client {
 }
 
 /// Smallest whole-point rectangle `(x, y, width, height)` that contains `r`.
+/// The device pixels `r` (points) touches at `factor` pixels a point.
+fn pixel_rect(r: &Rect, factor: f32) -> PixelRect {
+    let f = f64::from(factor);
+    let (x0, y0) = ((r.x() * f).floor().max(0.0), (r.y() * f).floor().max(0.0));
+    let (x1, y1) = (
+        ((r.x() + r.width()) * f).ceil().max(0.0),
+        ((r.y() + r.height()) * f).ceil().max(0.0),
+    );
+    PixelRect {
+        x: x0 as u32,
+        y: y0 as u32,
+        width: (x1 - x0) as u32,
+        height: (y1 - y0) as u32,
+    }
+}
+
+/// Make the pixels of `r` (inside `pixmap`) transparent.
+fn clear(pixmap: &mut Pixmap, r: &PixelRect) {
+    let stride = pixmap.width() as usize * 4;
+    let (start, len) = (r.x as usize * 4, r.width as usize * 4);
+    let data = pixmap.data_mut();
+    for row in r.y..r.y + r.height {
+        let at = row as usize * stride + start;
+        data[at..at + len].fill(0);
+    }
+}
+
 pub(crate) fn outward_rect(r: &Rect) -> (i32, i32, i32, i32) {
     let (left, top) = (r.min_x().floor() as i32, r.min_y().floor() as i32);
     let (right, bottom) = (r.max_x().ceil() as i32, r.max_y().ceil() as i32);
@@ -1374,6 +1454,7 @@ impl Surface {
             reported_scale: Scale::ONE,
             pool: None,
             pixmap: None,
+            drawn_scale: None,
             frame_pending: false,
             wants_redraw: false,
         }

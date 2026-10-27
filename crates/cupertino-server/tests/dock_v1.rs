@@ -186,6 +186,11 @@ enum DockEvent {
     Launching(String),
     ToggleAutoHide,
     ToggleAppGrid,
+    Unresponsive {
+        app_id: String,
+        unresponsive: bool,
+    },
+    ForceQuitDialog,
     /// `own`: the output named is the one the dock is on.
     SwitcherOutput {
         own: bool,
@@ -312,6 +317,11 @@ impl Dispatch<CupertinoDockV1, ()> for ClientState {
             E::Launching { app_id } => DockEvent::Launching(app_id),
             E::ToggleAutoHide => DockEvent::ToggleAutoHide,
             E::ToggleAppGrid => DockEvent::ToggleAppGrid,
+            E::Unresponsive { app_id, state } => DockEvent::Unresponsive {
+                app_id,
+                unresponsive: state == 1,
+            },
+            E::ForceQuitDialog => DockEvent::ForceQuitDialog,
             E::SwitcherOutput { output } => DockEvent::SwitcherOutput {
                 own: state.status.lock().unwrap().own_output.as_ref() == Some(&output),
             },
@@ -422,6 +432,7 @@ enum Cmd {
     RemoveWorkspace(u32),
     MoveWorkspace(u32, u32),
     RunAction(&'static str),
+    ForceQuitApp(&'static str),
     AppCommand(&'static str, AppCommand),
     /// An application window asks to be activated with an `xdg_activation_v1` token.
     Activate(String),
@@ -501,7 +512,7 @@ impl DockClient {
         DockClient(run_client(socket, move |globals, qh, status| {
             let compositor: wl_compositor::WlCompositor = globals.bind(qh, 4..=6, ()).unwrap();
             let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
-            let shell: CupertinoShellV1 = globals.bind(qh, 1..=1, ()).unwrap();
+            let shell: CupertinoShellV1 = globals.bind(qh, 1..=4, ()).unwrap();
             let global = globals
                 .contents()
                 .clone_list()
@@ -567,6 +578,7 @@ impl DockClient {
                 Cmd::RemoveWorkspace(id) => dock.remove_workspace(id),
                 Cmd::MoveWorkspace(id, index) => dock.move_workspace(id, index),
                 Cmd::RunAction(name) => dock.run_action(name.to_string()),
+                Cmd::ForceQuitApp(app_id) => dock.force_quit_app(app_id.to_string()),
                 Cmd::AppCommand(app_id, command) => dock.app_command(app_id.to_string(), command),
                 Cmd::Activate(_) => panic!("the dock activates through its own requests"),
                 Cmd::Quit => unreachable!("handled by the client loop"),
@@ -943,6 +955,69 @@ fn the_app_grid_action_reaches_the_dock_as_a_toggle() {
         "a second action is forwarded too: the dock decides whether it opens or closes"
     );
     assert_eq!(dock.error(), None);
+}
+
+/// The Force Quit action is a `ShellOp` the server only forwards, like the app grid: the dock draws the dialog.
+#[test]
+fn the_force_quit_action_opens_the_dialog_in_the_dock() {
+    let Some(mut h) = Harness::new() else { return };
+    let dock = DockClient::spawn(h.socket_path(), true);
+    h.wait_for_groups(&dock, 1);
+    h.state.execute_plan(ActionPlan {
+        commands: Vec::new(),
+        ops: vec![ShellOp::OpenForceQuit],
+    });
+    h.wait_for_groups(&dock, 2);
+    assert_eq!(
+        dock.groups()[1],
+        vec![DockEvent::ForceQuitDialog, DockEvent::Done]
+    );
+    assert_eq!(dock.error(), None);
+}
+
+#[test]
+fn an_application_going_unresponsive_is_announced_to_the_dock() {
+    let Some(mut h) = Harness::new() else { return };
+    let dock = DockClient::spawn(h.socket_path(), true);
+    h.wait_for_groups(&dock, 1);
+    h.state.docks.unresponsive("org.example.a", true);
+    h.state.docks.unresponsive("org.example.a", false);
+    h.wait_for_groups(&dock, 3);
+    assert_eq!(
+        dock.groups()[1],
+        vec![
+            DockEvent::Unresponsive {
+                app_id: "org.example.a".into(),
+                unresponsive: true
+            },
+            DockEvent::Done
+        ]
+    );
+    assert_eq!(
+        dock.groups()[2],
+        vec![
+            DockEvent::Unresponsive {
+                app_id: "org.example.a".into(),
+                unresponsive: false
+            },
+            DockEvent::Done
+        ]
+    );
+}
+
+#[test]
+fn force_quit_app_from_the_dock_asks_the_application_to_quit() {
+    let Some(mut h) = Harness::new() else { return };
+    let dock = DockClient::spawn(h.socket_path(), true);
+    let _a = spawn_app(h.socket_path(), "org.example.a");
+    h.mapped_window(1);
+    let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let recorder = sent.clone();
+    h.state.send_signal = Box::new(move |pid, signal| recorder.borrow_mut().push((pid, signal)));
+
+    dock.send(Cmd::ForceQuitApp("org.example.a"));
+    h.wait_until("SIGTERM", |_| !sent.borrow().is_empty());
+    assert_eq!(*sent.borrow(), vec![(std::process::id(), 15)]);
 }
 
 // ---- application switcher ------------------------------------------------------------------

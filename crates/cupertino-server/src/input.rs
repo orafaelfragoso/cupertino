@@ -126,6 +126,8 @@ pub enum Action {
     SwitchVt(i32),
     ShowDesktop,
     AppGrid,
+    /// Open the Force Quit dialog (the dock process draws it).
+    ForceQuit,
     Launcher,
     FocusMenuBar,
     ToggleDockAutoHide,
@@ -211,6 +213,7 @@ const NAMES: &[(&str, Action)] = &[
     ("quit-compositor", Action::QuitCompositor),
     ("show-desktop", Action::ShowDesktop),
     ("app-grid", Action::AppGrid),
+    ("force-quit", Action::ForceQuit),
     ("launcher", Action::Launcher),
     ("focus-menu-bar", Action::FocusMenuBar),
     ("toggle-dock-auto-hide", Action::ToggleDockAutoHide),
@@ -441,6 +444,7 @@ impl KeyBindings {
             I::AppOverview => Action::AppOverview,
             I::ShowDesktop => Action::ShowDesktop,
             I::AppGrid => Action::AppGrid,
+            I::ForceQuit => Action::ForceQuit,
             I::WorkspacePrevious => Action::WorkspaceLeft,
             I::WorkspaceNext => Action::WorkspaceRight,
             I::Workspace(n) => Action::Workspace(u8::try_from(*n).ok()?),
@@ -600,6 +604,7 @@ pub enum ShellOp {
     Quit,
     SwitchVt(i32),
     ToggleShowDesktop,
+    OpenForceQuit,
     /// Open or close the application grid (the dock process draws it).
     ToggleAppGrid,
     /// Open or close the launcher panel.
@@ -794,6 +799,7 @@ pub fn translate_action(action: Action, ctx: &ActionContext) -> ActionPlan {
         Action::SwitchVt(n) => plan.ops.push(ShellOp::SwitchVt(n)),
         Action::ShowDesktop => plan.ops.push(ShellOp::ToggleShowDesktop),
         Action::AppGrid => plan.ops.push(ShellOp::ToggleAppGrid),
+        Action::ForceQuit => plan.ops.push(ShellOp::OpenForceQuit),
         Action::Launcher => plan.ops.push(ShellOp::ToggleLauncher),
         Action::InputSourcePrevious => plan.ops.push(ShellOp::InputSource {
             menu: false,

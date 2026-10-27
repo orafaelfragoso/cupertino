@@ -293,7 +293,7 @@ impl SelectionHandler for Cupertino {
         seat: Seat<Self>,
     ) {
         if self.session_lock.is_active() {
-            self.clipboard_set_while_locked();
+            self.clipboard_refuse_set_while_locked(ty);
             return;
         }
         self.clipboard_selection_changed(ty, source.as_ref(), &seat);

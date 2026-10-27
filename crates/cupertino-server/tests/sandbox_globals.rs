@@ -4,6 +4,7 @@
 //! set none, and display configuration is closed. Tests skip (pass) when no EGL device is available.
 
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::os::fd::AsFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -39,6 +40,8 @@ use wayland_protocols_wlr::output_management::v1::client::{
 mod common;
 
 const OUTPUT: (i32, i32) = (1000, 700);
+const CLIPBOARD: &[u8] = "Grüße, clipboard".as_bytes();
+const PRIMARY: &[u8] = b"primary \x00\xff bytes";
 
 const DATA_CONTROL: [&str; 2] = [
     "zwlr_data_control_manager_v1",
@@ -113,8 +116,11 @@ impl Harness {
 /// A client that does nothing with the events of the objects it is given but keep what the test looks at.
 #[derive(Default)]
 struct Seen {
-    /// The last `selection` event of a data control device: `None` before any, `Some(None)` for no selection.
-    selection: Option<Option<Vec<String>>>,
+    /// The bytes of the clipboard and of the primary selection a data control device was offered.
+    clipboard: Option<Vec<u8>>,
+    primary: Option<Vec<u8>>,
+    /// How many times a selection was withdrawn from a data control device.
+    withdrawn: usize,
     /// The source this client set was cancelled.
     cancelled: bool,
     /// The output manager sent `finished`.
@@ -126,6 +132,9 @@ struct Seen {
 struct Probe {
     seen: Arc<Mutex<Seen>>,
     offers: HashMap<u32, Vec<String>>,
+    /// Read what the device is offered; the client that set the selections is offered them too, and cannot answer
+    /// its own read from inside the event.
+    reads: bool,
 }
 
 impl Probe {
@@ -133,6 +142,7 @@ impl Probe {
         Probe {
             seen,
             offers: HashMap::new(),
+            reads: true,
         }
     }
 }
@@ -170,7 +180,7 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for Probe {
         _: &ZwlrDataControlDeviceV1,
         event: zwlr_data_control_device_v1::Event,
         _: &(),
-        _: &Connection,
+        conn: &Connection,
         _: &QueueHandle<Self>,
     ) {
         match event {
@@ -178,8 +188,22 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for Probe {
                 state.offers.insert(id.id().protocol_id(), Vec::new());
             }
             zwlr_data_control_device_v1::Event::Selection { id } => {
-                let mimes = id.and_then(|o| state.offers.remove(&o.id().protocol_id()));
-                state.seen.lock().unwrap().selection = Some(mimes);
+                if !state.reads {
+                    return;
+                }
+                let bytes = id.map(|offer| read_offer(conn, &offer, "text/plain"));
+                let mut seen = state.seen.lock().unwrap();
+                seen.withdrawn += usize::from(bytes.is_none());
+                seen.clipboard = bytes;
+            }
+            zwlr_data_control_device_v1::Event::PrimarySelection { id } => {
+                if !state.reads {
+                    return;
+                }
+                let bytes = id.map(|offer| read_offer(conn, &offer, "text/x-primary"));
+                let mut seen = state.seen.lock().unwrap();
+                seen.withdrawn += usize::from(bytes.is_none());
+                seen.primary = bytes;
             }
             _ => {}
         }
@@ -188,6 +212,16 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for Probe {
     event_created_child!(Probe, ZwlrDataControlDeviceV1, [
         zwlr_data_control_device_v1::EVT_DATA_OFFER_OPCODE => (ZwlrDataControlOfferV1, ()),
     ]);
+}
+
+fn read_offer(conn: &Connection, offer: &ZwlrDataControlOfferV1, mime: &str) -> Vec<u8> {
+    let (read, write) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
+    offer.receive(mime.to_string(), write.as_fd());
+    drop(write);
+    conn.flush().unwrap();
+    let mut data = Vec::new();
+    std::fs::File::from(read).read_to_end(&mut data).unwrap();
+    data
 }
 
 impl Dispatch<ZwlrDataControlOfferV1, ()> for Probe {
@@ -216,8 +250,19 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for Probe {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let zwlr_data_control_source_v1::Event::Cancelled = event {
-            state.seen.lock().unwrap().cancelled = true;
+        match event {
+            zwlr_data_control_source_v1::Event::Cancelled => {
+                state.seen.lock().unwrap().cancelled = true;
+            }
+            zwlr_data_control_source_v1::Event::Send { mime_type, fd } => {
+                let bytes: &[u8] = if mime_type == "text/plain" {
+                    CLIPBOARD
+                } else {
+                    PRIMARY
+                };
+                let _ = std::fs::File::from(fd).write_all(bytes);
+            }
+            _ => {}
         }
     }
 }
@@ -349,6 +394,7 @@ fn data_control_client(
         let (globals, mut queue) = registry_queue_init::<Probe>(&conn).unwrap();
         let qh = queue.handle();
         let mut probe = Probe::new(seen);
+        probe.reads = !set;
         let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=1, ()).unwrap();
         let manager: ZwlrDataControlManagerV1 = globals.bind(&qh, 1..=2, ()).unwrap();
         let device = manager.get_data_device(&seat, &qh, ());
@@ -356,7 +402,10 @@ fn data_control_client(
             let source = manager.create_data_source(&qh, ());
             source.offer("text/plain".into());
             device.set_selection(Some(&source));
-            source
+            let primary = manager.create_data_source(&qh, ());
+            primary.offer("text/x-primary".into());
+            device.set_primary_selection(Some(&primary));
+            (source, primary)
         });
         while !stop.load(Ordering::SeqCst) {
             queue.roundtrip(&mut probe).unwrap();
@@ -367,7 +416,7 @@ fn data_control_client(
 }
 
 #[test]
-fn while_locked_data_control_has_no_selection_and_sets_none() {
+fn locking_leaves_the_selections_with_their_owner_and_a_set_while_locked_is_cancelled() {
     let Some(mut h) = Harness::new() else { return };
     let stop = Arc::new(AtomicBool::new(false));
 
@@ -385,18 +434,21 @@ fn while_locked_data_control_has_no_selection_and_sets_none() {
         before_seen.clone(),
         stop.clone(),
     );
-    h.wait_until("a clipboard manager to be offered the selection", |_| {
-        before_seen.lock().unwrap().selection == Some(Some(vec!["text/plain".to_string()]))
+    h.wait_until("a clipboard manager to be offered both selections", |_| {
+        let seen = before_seen.lock().unwrap();
+        seen.clipboard.is_some() && seen.primary.is_some()
     });
 
     let locker = common::Client::locker(common::session_agent(&h.state));
     h.wait_until("the session to be locked", |_| locker.locked());
-    h.wait_until("the manager of before the lock to be told", |_| {
-        before_seen.lock().unwrap().selection == Some(None)
-    });
-    h.wait_until("the owner's source to be cancelled", |_| {
-        owner_seen.lock().unwrap().cancelled
-    });
+    for _ in 0..40 {
+        h.step();
+    }
+    locker.unlock();
+    h.wait_until("the unlock", |s| !s.session_lock.is_active());
+    for _ in 0..40 {
+        h.step();
+    }
 
     let late_seen = Arc::new(Mutex::new(Seen::default()));
     let late = data_control_client(
@@ -405,15 +457,23 @@ fn while_locked_data_control_has_no_selection_and_sets_none() {
         late_seen.clone(),
         stop.clone(),
     );
-    h.wait_until("a manager that binds while locked to be told", |_| {
-        late_seen.lock().unwrap().selection.is_some()
-    });
-    assert_eq!(
-        late_seen.lock().unwrap().selection,
-        Some(None),
-        "no selection while locked"
+    h.wait_until(
+        "a manager that binds after the unlock to be offered both",
+        |_| {
+            let seen = late_seen.lock().unwrap();
+            seen.clipboard.is_some() && seen.primary.is_some()
+        },
     );
+    for seen in [&before_seen, &late_seen] {
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.clipboard.as_deref(), Some(CLIPBOARD));
+        assert_eq!(seen.primary.as_deref(), Some(PRIMARY));
+    }
+    assert_eq!(before_seen.lock().unwrap().withdrawn, 0);
+    assert!(!owner_seen.lock().unwrap().cancelled);
 
+    let locker = common::Client::locker(common::session_agent(&h.state));
+    h.wait_until("the session to be locked again", |_| locker.locked());
     let setter_seen = Arc::new(Mutex::new(Seen::default()));
     let setter = data_control_client(
         connect(&h.socket_path()),
@@ -424,16 +484,6 @@ fn while_locked_data_control_has_no_selection_and_sets_none() {
     h.wait_until("a selection set while locked to be cancelled", |_| {
         setter_seen.lock().unwrap().cancelled
     });
-    let end = Instant::now() + Duration::from_millis(300);
-    while Instant::now() < end {
-        h.step();
-    }
-    assert_eq!(
-        before_seen.lock().unwrap().selection,
-        Some(None),
-        "the selection set while locked is not kept"
-    );
-    assert_eq!(late_seen.lock().unwrap().selection, Some(None));
 
     stop.store(true, Ordering::SeqCst);
     for client in [owner, before, late, setter] {

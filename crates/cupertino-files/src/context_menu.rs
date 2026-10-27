@@ -11,6 +11,8 @@
 //! * Two rows are views in the design and are drawn by the window painter from the geometry here: the tag row (a
 //!   row of seven colour dots, `TLabelViewForMenu`) and the row of the four view modes.
 
+use cupertino_typeahead::TypeAhead;
+
 use crate::geom::{Point, Rect};
 use crate::metrics::menu as m;
 use crate::sort::SortKey;
@@ -426,13 +428,15 @@ pub enum Nav {
     Enter,
 }
 
-/// A key of an open menu: a move, or Space (picks the highlighted row as Return does) or the cancel chords.
+/// A key of an open menu: a move, Space (picks the highlighted row as Return does, or is a letter of the text typed so
+/// far), the cancel chords, or a typed character that jumps to the next row whose label starts with the typed text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
     Nav(Nav),
     Space,
     /// Escape or Super+. : the menu closes and nothing runs.
     Cancel,
+    Type(char),
 }
 
 /// What a press or key did.
@@ -463,6 +467,7 @@ pub struct Menu {
     hovered: Vec<Option<usize>>,
     /// A row the pointer rests on whose submenu opens (or whose siblings' submenu closes) at the time: `(level, row, time)`.
     pending: Option<(usize, usize, f64)>,
+    type_ahead: TypeAhead,
 }
 
 fn measure_all(items: &[MenuItem], measure: &dyn Fn(&str) -> f64, into: &mut HashMap<String, f64>) {
@@ -502,6 +507,7 @@ impl Menu {
             layouts,
             hovered: vec![None],
             pending: None,
+            type_ahead: TypeAhead::default(),
         }
     }
 
@@ -674,11 +680,33 @@ impl Menu {
 
     /// A navigation key. Up and Down move the highlight of the deepest level over selectable rows and stop at the ends;
     /// from no highlight they start at the first and the last row.
-    pub fn press_key(&mut self, key: Key) -> Outcome {
+    /// The result of `key` at `now` seconds.
+    pub fn press_key(&mut self, key: Key, now: f64) -> Outcome {
         match key {
             Key::Nav(nav) => self.navigate(nav),
-            Key::Space => self.navigate(Nav::Enter),
+            Key::Space if !self.type_ahead.typing(now) => self.navigate(Nav::Enter),
+            Key::Space => self.type_char(' ', now),
+            Key::Type(c) => self.type_char(c, now),
             Key::Cancel => Outcome::Close,
+        }
+    }
+
+    fn type_char(&mut self, c: char, now: f64) -> Outcome {
+        let level = self.layouts.len() - 1;
+        let owned: Vec<Option<String>> = self
+            .items(level)
+            .iter()
+            .map(|i| i.is_selectable().then(|| i.label.clone()))
+            .collect();
+        let titles: Vec<Option<&str>> = owned.iter().map(Option::as_deref).collect();
+        let from = self.hovered[level].unwrap_or(owned.len().saturating_sub(1));
+        match self.type_ahead.find(c, now, from, &titles) {
+            Some(row) => {
+                self.hovered[level] = Some(row);
+                self.pending = None;
+                Outcome::Changed
+            }
+            None => Outcome::Nothing,
         }
     }
 
@@ -987,18 +1015,53 @@ mod tests {
     fn space_picks_the_highlighted_row_like_return_and_cancel_closes_without_running() {
         let mut menu = open(item_menu(&subject(), &apps()));
         assert_eq!(
-            menu.press_key(Key::Space),
+            menu.press_key(Key::Space, 0.0),
             Outcome::Nothing,
             "nothing is highlighted yet"
         );
         let open_row = row_of(&menu, "Open");
         menu.hover(0, Some(open_row), 0.0);
-        assert_eq!(menu.press_key(Key::Space), Outcome::Run(Command::Open));
+        assert_eq!(menu.press_key(Key::Space, 0.0), Outcome::Run(Command::Open));
         let with = row_of(&menu, "Open With");
         menu.hover(0, Some(with), 0.0);
-        assert_eq!(menu.press_key(Key::Space), Outcome::Changed);
+        assert_eq!(menu.press_key(Key::Space, 0.0), Outcome::Changed);
         assert_eq!(menu.levels(), 2, "Space on a submenu row opens it");
-        assert_eq!(menu.press_key(Key::Cancel), Outcome::Close);
+        assert_eq!(menu.press_key(Key::Cancel, 0.0), Outcome::Close);
+    }
+
+    #[test]
+    fn typing_jumps_to_the_row_that_starts_with_the_text_in_the_open_level() {
+        let mut menu = open(item_menu(&subject(), &apps()));
+        let rows: Vec<(String, bool)> = menu
+            .items(0)
+            .iter()
+            .map(|i| (i.label.to_lowercase(), i.is_selectable()))
+            .collect();
+        let first_with = |prefix: &str| {
+            rows.iter()
+                .position(|(label, selectable)| *selectable && label.starts_with(prefix))
+                .unwrap()
+        };
+        assert_eq!(menu.press_key(Key::Type('o'), 0.0), Outcome::Changed);
+        assert_eq!(menu.hovered(0), Some(first_with("o")));
+        assert_eq!(menu.press_key(Key::Type('p'), 0.2), Outcome::Changed);
+        assert_eq!(menu.hovered(0), Some(first_with("op")));
+        assert_eq!(menu.press_key(Key::Type('q'), 0.4), Outcome::Nothing);
+        assert_eq!(
+            menu.hovered(0),
+            Some(first_with("op")),
+            "no match leaves the highlight"
+        );
+        let with = row_of(&menu, "Open With");
+        menu.hover(0, Some(with), 0.0);
+        assert_eq!(menu.press_key(Key::Type('x'), 5.0), Outcome::Nothing);
+        assert_eq!(menu.hovered(0), Some(with));
+        menu.press_key(Key::Type('o'), 9.0);
+        assert_ne!(
+            menu.press_key(Key::Space, 9.2),
+            Outcome::Run(Command::Open),
+            "Space inside the typed text is a letter, not a pick"
+        );
     }
 
     #[test]

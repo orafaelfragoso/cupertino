@@ -139,6 +139,24 @@ class BypassTest(unittest.TestCase):
         self.assertTrue(all("org.cupertino.Demo1" in p for p in problems), problems)
         self.assertEqual(len(problems), 2, problems)
 
+    def test_a_leading_path_separator_is_read(self):
+        problems = attribute_case('#[::zbus::interface(name = "org.freedesktop.portal.Other")]\nstruct A;\n')
+        self.assertEqual(problems, ["crates/cupertino-demo/src/lib.rs:1: D-Bus interface "
+                                    "org.freedesktop.portal.Other has no entry in docs/architecture/contracts.yaml"])
+
+    def test_a_cfg_attr_with_a_comma_in_its_condition_is_read(self):
+        source = '#[cfg_attr(all(unix, not(test)), zbus::interface(name = "org.freedesktop.portal.Other"))]\nstruct A;\n'
+        self.assertEqual(attribute_case(source), ["crates/cupertino-demo/src/lib.rs:1: D-Bus interface "
+                                                  "org.freedesktop.portal.Other has no entry in "
+                                                  "docs/architecture/contracts.yaml"])
+        unnamed = '#[cfg_attr(all(unix, not(test)), zbus::interface(spawn = false))]\nstruct A;\n'
+        self.assertEqual(attribute_case(unnamed), ["crates/cupertino-demo/src/lib.rs:1: unparsed interface attribute: "
+                                                   "the name must be a string literal"])
+
+    def test_a_proxy_argument_and_a_doc_string_are_not_interface_attributes(self):
+        source = '#[proxy(interface = "org.gtk.Menus")]\ntrait P {}\n#[doc = "the interface"]\nstruct A;\n'
+        self.assertEqual(attribute_case(source), [])
+
     def test_a_commented_out_attribute_is_ignored(self):
         self.assertEqual(attribute_case('// #[zbus::interface(name = INTERFACE)]\n'), [])
 

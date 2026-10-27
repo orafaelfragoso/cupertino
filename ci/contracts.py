@@ -21,8 +21,10 @@ EXTRA = {
     "dbus-interface": {"bus", "bus_name"},
     "binary": {"shipped"},
 }
-OPTIONAL = {"note"}
-ATTRIBUTE = re.compile(r"^[ \t]*#\[\s*(?:cfg_attr\([^,]*,\s*)?(?:zbus\s*::\s*)?interface\b(.*?)\]", re.M | re.S)
+OPTIONAL = {"note", "version_without_render_node"}
+# Any attribute with an `interface` token that is not a `key = value` argument (`proxy(interface = "...")`) and not inside
+# a string: `zbus::interface`, `::zbus::interface`, an imported `interface`, and either inside a `cfg_attr`.
+ATTRIBUTE = re.compile(r'^[ \t]*#\[[^\]"]*?\binterface\b(?!\s*=)(.*?)\]', re.M | re.S)
 LITERAL_NAME = re.compile(r'\(\s*name\s*=\s*"([^"]+)"\s*[,)]')
 # Entries without a test file. It only goes down: give an entry a test_owner and lower this number.
 UNKNOWN_TEST_OWNERS = 32

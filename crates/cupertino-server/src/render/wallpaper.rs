@@ -1,30 +1,46 @@
 //! Image wallpapers: a PNG or JPEG scaled to cover an output (the whole output is filled, the overflow of the longer
-//! side cropped evenly), one per output and appearance. The image is decoded and scaled once per file, output size
-//! and appearance, then drawn as a memory buffer; what cannot be read falls back to the next candidate: the user's
-//! image, the asset pack's, the procedural wallpaper.
+//! side cropped evenly), one per output and appearance. What cannot be read falls back to the next candidate: the
+//! user's image, the asset pack's, the procedural wallpaper.
+//!
+//! The frame loop never touches the file system and never waits: it asks one worker thread for the image of an
+//! output (newest request per output wins, older answers are dropped) and draws what it has until the answer is in.
+//! The worker opens and decodes a file once and keeps the decoded image, so another output size only scales it;
+//! it looks at the file again every few seconds and decodes again only when the file changed.
 
 use std::collections::{HashMap, HashSet};
+use std::io::BufReader;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, Sender};
+use std::sync::Arc;
+use std::time::SystemTime;
 
 use image::imageops::FilterType;
-use image::{ImageFormat, ImageReader, Limits};
+use image::{ImageFormat, ImageReader, Limits, RgbaImage};
+use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
 use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::utils::Transform;
 use tiny_skia::Pixmap;
 
 use cupertino_assets::Assets;
 
-use super::image::{image_element, ImageCache};
+use super::image::image_element;
 use super::CupertinoElement;
 use crate::config::WallpaperSettings;
 
 /// Larger files are not read.
 const MAX_FILE_BYTES: u64 = 256 << 20;
-/// Larger images are not decoded, per side and in memory.
-const MAX_SIDE: u32 = 16_384;
-const MAX_ALLOC: u64 = 1 << 30;
-/// Distinct images kept for their average colour.
-const MAX_TINTS: usize = 16;
+/// Larger images are not decoded, per side (8192 covers an 8K output) and in memory.
+const MAX_SIDE: u32 = 8_192;
+const MAX_ALLOC: u64 = 512 << 20;
+/// Seconds between looks at the file of a shown image, to notice that it was replaced.
+const REVALIDATE_SECONDS: f64 = 5.0;
+/// Seconds after which an output nobody asks about is forgotten.
+const FORGET_SECONDS: f64 = 60.0;
+/// Failed attempts the worker remembers.
+const MAX_FAILED: usize = 64;
 
 /// The area of an image of `src` pixels that covers `dst` pixels at the same aspect ratio, centred: `(x, y, width,
 /// height)`.
@@ -44,17 +60,10 @@ pub fn cover_crop(src: (u32, u32), dst: (u32, u32)) -> (u32, u32, u32, u32) {
     }
 }
 
-/// The image at `path` scaled to cover `dst` pixels, premultiplied, and its average colour.
-pub fn load_cover(path: &Path, dst: (u32, u32)) -> Result<(Pixmap, [f32; 3]), String> {
-    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
-    if !meta.is_file() {
-        return Err("not a regular file".into());
-    }
-    if meta.len() > MAX_FILE_BYTES {
-        return Err(format!("{} bytes is too large", meta.len()));
-    }
-    let mut reader = ImageReader::open(path)
-        .and_then(ImageReader::with_guessed_format)
+/// The image in `file` decoded to RGBA.
+pub fn decode_file(file: std::fs::File) -> Result<RgbaImage, String> {
+    let mut reader = ImageReader::new(BufReader::new(file))
+        .with_guessed_format()
         .map_err(|e| e.to_string())?;
     if !matches!(reader.format(), Some(ImageFormat::Png | ImageFormat::Jpeg)) {
         return Err("only PNG and JPEG images are supported".into());
@@ -64,13 +73,17 @@ pub fn load_cover(path: &Path, dst: (u32, u32)) -> Result<(Pixmap, [f32; 3]), St
     limits.max_image_height = Some(MAX_SIDE);
     limits.max_alloc = Some(MAX_ALLOC);
     reader.limits(limits);
-    let source = reader.decode().map_err(|e| e.to_string())?.into_rgba8();
+    Ok(reader.decode().map_err(|e| e.to_string())?.into_rgba8())
+}
+
+/// `source` scaled to cover `dst` pixels, premultiplied, and its average colour.
+pub fn scale_cover(source: &RgbaImage, dst: (u32, u32)) -> Result<(Pixmap, [f32; 3]), String> {
     let (x, y, w, h) = cover_crop(source.dimensions(), dst);
-    let covered = image::imageops::crop_imm(&source, x, y, w, h).to_image();
+    let covered = image::GenericImageView::view(source, x, y, w, h);
     let scaled = if (w, h) == dst {
-        covered
+        covered.to_image()
     } else {
-        image::imageops::resize(&covered, dst.0, dst.1, FilterType::CatmullRom)
+        image::imageops::resize(&*covered, dst.0, dst.1, FilterType::CatmullRom)
     };
     let mut pixmap = Pixmap::new(dst.0, dst.1).ok_or("the output has no area")?;
     let mut sum = [0u64; 3];
@@ -98,54 +111,253 @@ pub fn load_cover(path: &Path, dst: (u32, u32)) -> Result<(Pixmap, [f32; 3]), St
     ))
 }
 
-/// The result of reading one image.
-type Loaded = Result<(Pixmap, [f32; 3]), String>;
+/// What identifies the contents of a file at a time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct Stamp {
+    len: u64,
+    modified: Option<SystemTime>,
+}
 
-/// What the wallpaper needs besides the buffers of the image cache.
-pub struct Wallpapers {
-    /// The asset pack's default pictures, light and dark.
-    pack: [Option<PathBuf>; 2],
-    /// Images being read on threads of their own, by signature: reading and scaling a large photograph takes a
-    /// noticeable part of a second, which the frame loop must not wait for.
-    jobs: HashMap<u64, std::sync::mpsc::Receiver<Loaded>>,
-    /// Images read and not yet handed to the image cache.
-    done: HashMap<u64, (Pixmap, [f32; 3])>,
-    /// Images that could not be read, by the signature of the attempt: not tried again until the file or the output
-    /// changes.
-    failed: HashSet<u64>,
-    /// Average colour of the loaded images by signature.
-    tints: HashMap<u64, [f32; 3]>,
-    /// What each output shows, kept so that it stays up while the next image loads.
-    shown: HashMap<u64, Shown>,
-    /// Files whose absence was logged.
-    missing: HashSet<PathBuf>,
-    /// Average colour of the image drawn last, for the materials' tint; `None` while the procedural wallpaper shows.
-    pub tint: Option<[f32; 3]>,
+/// The file at `path`, opened without blocking (a pipe or device put there would not hang the worker), checked to be a
+/// regular file through the descriptor itself, then switched to blocking reads for the decoder.
+fn open_checked(path: &Path) -> Result<(std::fs::File, Stamp), String> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    let meta = file.metadata().map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err("not a regular file".into());
+    }
+    if meta.len() > MAX_FILE_BYTES {
+        return Err(format!("{} bytes is too large", meta.len()));
+    }
+    let flags = rustix::fs::fcntl_getfl(&file).map_err(|e| e.to_string())?;
+    rustix::fs::fcntl_setfl(&file, flags - rustix::fs::OFlags::NONBLOCK)
+        .map_err(|e| e.to_string())?;
+    let stamp = Stamp {
+        len: meta.len(),
+        modified: meta.modified().ok(),
+    };
+    Ok((file, stamp))
+}
+
+/// Reads and decodes a file; the worker's, replaceable in tests.
+pub type Decoder = Arc<dyn Fn(std::fs::File) -> Result<RgbaImage, String> + Send + Sync>;
+
+struct Request {
+    output: u64,
+    ticket: u64,
+    /// Files to try, best first.
+    candidates: Vec<PathBuf>,
+    dst: (u32, u32),
+    /// The file and state the output shows, for an answer of "unchanged".
+    known: Option<(PathBuf, Stamp)>,
+}
+
+enum Outcome {
+    /// The file shown is the same.
+    Unchanged,
+    Loaded {
+        pixmap: Pixmap,
+        tint: [f32; 3],
+        path: PathBuf,
+        stamp: Stamp,
+    },
+    /// No candidate could be used.
+    Failed,
+}
+
+struct Reply {
+    output: u64,
+    ticket: u64,
+    outcome: Outcome,
+}
+
+/// What the worker keeps between requests: the decoded image of the last file, bounded by the decoder's limits.
+#[derive(Default)]
+struct WorkerState {
+    source: Option<(PathBuf, Stamp, Arc<RgbaImage>)>,
+    failed: HashSet<(PathBuf, Stamp)>,
+    logged: HashSet<(PathBuf, String)>,
+}
+
+impl WorkerState {
+    fn note(&mut self, path: &Path, what: &str) {
+        if self.logged.len() >= MAX_FAILED {
+            self.logged.clear();
+        }
+        if self.logged.insert((path.to_path_buf(), what.to_string())) {
+            tracing::warn!(path = %path.display(), error = what, "cannot use the wallpaper image: the next one stands in");
+        }
+    }
+
+    fn process(&mut self, request: &Request, decode: &Decoder, decodes: &AtomicUsize) -> Outcome {
+        for path in &request.candidates {
+            let (file, stamp) = match open_checked(path) {
+                Ok(opened) => opened,
+                Err(e) => {
+                    self.note(path, &e);
+                    continue;
+                }
+            };
+            if request
+                .known
+                .as_ref()
+                .is_some_and(|(known, at)| known == path && *at == stamp)
+            {
+                return Outcome::Unchanged;
+            }
+            if self.failed.contains(&(path.clone(), stamp)) {
+                continue;
+            }
+            let source = match &self.source {
+                Some((cached, at, image)) if cached == path && *at == stamp => Arc::clone(image),
+                _ => {
+                    decodes.fetch_add(1, Ordering::SeqCst);
+                    match decode(file) {
+                        Ok(image) => {
+                            let image = Arc::new(image);
+                            self.source = Some((path.clone(), stamp, Arc::clone(&image)));
+                            image
+                        }
+                        Err(e) => {
+                            if self.failed.len() >= MAX_FAILED {
+                                self.failed.clear();
+                            }
+                            self.failed.insert((path.clone(), stamp));
+                            self.note(path, &e);
+                            continue;
+                        }
+                    }
+                }
+            };
+            match scale_cover(&source, request.dst) {
+                Ok((pixmap, tint)) => {
+                    return Outcome::Loaded {
+                        pixmap,
+                        tint,
+                        path: path.clone(),
+                        stamp,
+                    }
+                }
+                Err(e) => self.note(path, &e),
+            }
+        }
+        Outcome::Failed
+    }
+}
+
+/// The worker thread and its queues.
+struct Loader {
+    requests: Sender<Request>,
+    replies: Receiver<Reply>,
+    decodes: Arc<AtomicUsize>,
+}
+
+impl Loader {
+    fn start(decode: Decoder) -> std::io::Result<Self> {
+        let (requests, request_rx) = std::sync::mpsc::channel::<Request>();
+        let (reply_tx, replies) = std::sync::mpsc::channel::<Reply>();
+        let decodes = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&decodes);
+        std::thread::Builder::new()
+            .name("cupertino-wallpaper".into())
+            .spawn(move || {
+                let mut state = WorkerState::default();
+                while let Ok(first) = request_rx.recv() {
+                    // what piled up while the last request ran: only the newest of each output is of interest
+                    let mut newest = vec![first];
+                    while let Ok(next) = request_rx.try_recv() {
+                        match newest.iter_mut().find(|r| r.output == next.output) {
+                            Some(slot) => *slot = next,
+                            None => newest.push(next),
+                        }
+                    }
+                    for request in newest {
+                        let outcome =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                state.process(&request, &decode, &counter)
+                            }))
+                            .unwrap_or(Outcome::Failed);
+                        let reply = Reply {
+                            output: request.output,
+                            ticket: request.ticket,
+                            outcome,
+                        };
+                        if reply_tx.send(reply).is_err() {
+                            return;
+                        }
+                    }
+                }
+            })?;
+        Ok(Self {
+            requests,
+            replies,
+            decodes,
+        })
+    }
+}
+
+/// What the main thread knows of one output's wallpaper.
+#[derive(Default)]
+struct OutputState {
+    /// The candidates and size the last request was for.
+    key: u64,
+    /// The newest request; an answer with another ticket is out of date.
+    ticket: u64,
+    in_flight: bool,
+    checked_at: f64,
+    /// When the output was last asked about; a state nobody asks about any more (an unplugged output) is dropped.
+    seen_at: f64,
+    /// The file and state the shown image was made from.
+    loaded: Option<(PathBuf, Stamp)>,
+    /// An answer not yet turned into a buffer.
+    ready: Option<(Pixmap, [f32; 3])>,
+    shown: Option<Shown>,
 }
 
 struct Shown {
     buffer: MemoryRenderBuffer,
     px: (i32, i32),
-    tint: Option<[f32; 3]>,
+    tint: [f32; 3],
+}
+
+/// The image wallpapers of all outputs.
+pub struct Wallpapers {
+    /// The asset pack's default pictures, light and dark.
+    pack: [Option<PathBuf>; 2],
+    decoder: Decoder,
+    loader: Option<Loader>,
+    outputs: HashMap<u64, OutputState>,
+    next_ticket: u64,
+    /// Average colour of the image drawn last, for the materials' tint; `None` while the procedural wallpaper shows.
+    pub tint: Option<[f32; 3]>,
 }
 
 impl Wallpapers {
     pub fn new(assets: &Assets) -> Self {
+        Self::with_decoder(
+            [assets.wallpaper_path(false), assets.wallpaper_path(true)],
+            Arc::new(decode_file),
+        )
+    }
+
+    fn with_decoder(pack: [Option<PathBuf>; 2], decoder: Decoder) -> Self {
         Self {
-            pack: [assets.wallpaper_path(false), assets.wallpaper_path(true)],
-            jobs: HashMap::new(),
-            done: HashMap::new(),
-            failed: HashSet::new(),
-            tints: HashMap::new(),
-            shown: HashMap::new(),
-            missing: HashSet::new(),
+            pack,
+            decoder,
+            loader: None,
+            outputs: HashMap::new(),
+            next_ticket: 0,
             tint: None,
         }
     }
 
     /// An image is being read: frames are wanted to pick it up.
     pub fn pending(&self) -> bool {
-        !self.jobs.is_empty()
+        self.outputs.values().any(|o| o.in_flight)
     }
 
     /// The images to try for an appearance, best first: the user's, then the pack's.
@@ -158,135 +370,165 @@ impl Wallpapers {
             .collect()
     }
 
-    /// Take in the images the reading threads have finished.
+    /// Take in the answers the worker has.
     fn collect(&mut self) {
-        use std::sync::mpsc::TryRecvError;
-        let mut finished = Vec::new();
-        for (sig, rx) in &self.jobs {
-            match rx.try_recv() {
-                Ok(result) => finished.push((*sig, result)),
-                Err(TryRecvError::Empty) => {}
-                Err(TryRecvError::Disconnected) => {
-                    finished.push((*sig, Err("the reading thread ended".into())));
-                }
+        let Some(loader) = &self.loader else { return };
+        while let Ok(reply) = loader.replies.try_recv() {
+            let Some(state) = self.outputs.get_mut(&reply.output) else {
+                continue;
+            };
+            if reply.ticket != state.ticket {
+                continue;
             }
-        }
-        for (sig, result) in finished {
-            self.jobs.remove(&sig);
-            match result {
-                Ok(loaded) => {
-                    if self.done.len() >= MAX_TINTS {
-                        self.done.clear();
-                    }
-                    self.done.insert(sig, loaded);
+            state.in_flight = false;
+            match reply.outcome {
+                Outcome::Unchanged => {}
+                Outcome::Loaded {
+                    pixmap,
+                    tint,
+                    path,
+                    stamp,
+                } => {
+                    state.ready = Some((pixmap, tint));
+                    state.loaded = Some((path, stamp));
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, "cannot use the wallpaper image: the next one stands in");
-                    self.failed.insert(sig);
+                Outcome::Failed => {
+                    state.loaded = None;
+                    state.ready = None;
+                    state.shown = None;
                 }
             }
         }
     }
 
+    fn request(
+        &mut self,
+        output: u64,
+        candidates: Vec<PathBuf>,
+        dst: (u32, u32),
+        now: f64,
+        known: Option<(PathBuf, Stamp)>,
+    ) {
+        if self.loader.is_none() {
+            match Loader::start(Arc::clone(&self.decoder)) {
+                Ok(loader) => self.loader = Some(loader),
+                Err(e) => {
+                    tracing::warn!(error = %e, "cannot start reading the wallpaper image");
+                    return;
+                }
+            }
+        }
+        self.next_ticket += 1;
+        let ticket = self.next_ticket;
+        let state = self.outputs.entry(output).or_default();
+        state.ticket = ticket;
+        state.in_flight = true;
+        state.checked_at = now;
+        let request = Request {
+            output,
+            ticket,
+            candidates,
+            dst,
+            known,
+        };
+        if self
+            .loader
+            .as_ref()
+            .is_some_and(|l| l.requests.send(request).is_err())
+        {
+            tracing::warn!("the wallpaper worker has stopped");
+            self.loader = None;
+            if let Some(state) = self.outputs.get_mut(&output) {
+                state.in_flight = false;
+            }
+        }
+    }
+
+    /// Bring the output's state up to date with what is wanted: no file system access, no waiting.
+    fn update(&mut self, output: u64, candidates: Vec<PathBuf>, dst: (u32, u32), now: f64) {
+        self.collect();
+        self.outputs
+            .retain(|_, s| s.in_flight || now - s.seen_at < FORGET_SECONDS);
+        let key = key_of(&candidates, dst);
+        let state = self.outputs.entry(output).or_default();
+        state.seen_at = now;
+        if state.key != key || state.ticket == 0 {
+            state.key = key;
+            state.ready = None;
+            state.loaded = None;
+            self.request(output, candidates, dst, now, None);
+        } else if !state.in_flight && now - state.checked_at >= REVALIDATE_SECONDS {
+            let known = state.loaded.clone();
+            self.request(output, candidates, dst, now, known);
+        }
+    }
+
     /// The wallpaper element of an output of `px` device pixels at `scale`, or `None` for the procedural wallpaper.
-    /// An image is read on a thread; until it is in, the output keeps what it showed.
+    /// Until the image is in, the output keeps what it showed.
     #[allow(clippy::too_many_arguments)]
     pub fn element(
         &mut self,
         renderer: &mut GlesRenderer,
-        images: &mut ImageCache,
         output: u64,
         config: &WallpaperSettings,
         dark: bool,
         px: (i32, i32),
         scale: f64,
+        now: f64,
     ) -> Option<CupertinoElement> {
         let dst = (u32::try_from(px.0).ok()?, u32::try_from(px.1).ok()?);
         if dst.0 == 0 || dst.1 == 0 {
             return None;
         }
-        self.collect();
-        for path in self.candidates(config, dark) {
-            let Ok(meta) = std::fs::metadata(&path) else {
-                if self.missing.insert(path.clone()) {
-                    tracing::warn!(path = %path.display(), "the wallpaper image is not there: the next one stands in");
-                }
-                continue;
-            };
-            self.missing.remove(&path);
-            let sig = signature(&path, &meta, dst);
-            if self.failed.contains(&sig) {
-                continue;
-            }
-            let mut fresh = None;
-            let cut = images.get(("wallpaper", output), sig, || {
-                self.done.remove(&sig).map(|(pixmap, tint)| {
-                    fresh = Some(tint);
-                    (pixmap, [0; 4])
-                })
-            });
-            if let Some(tint) = fresh {
-                if self.tints.len() >= MAX_TINTS {
-                    self.tints.clear();
-                }
-                self.tints.insert(sig, tint);
-            }
-            if let Some((buffer, size, _)) = cut {
-                let tint = self.tints.get(&sig).copied();
-                self.tint = tint;
-                let element = image_element(renderer, &buffer, size, 0.0, 0.0, scale, 1.0);
-                self.shown.insert(
-                    output,
-                    Shown {
-                        buffer,
-                        px: size,
-                        tint,
-                    },
-                );
-                return element;
-            }
-            if let std::collections::hash_map::Entry::Vacant(job) = self.jobs.entry(sig) {
-                let (tx, rx) = std::sync::mpsc::channel();
-                let job_path = path.clone();
-                let spawned = std::thread::Builder::new()
-                    .name("cupertino-wallpaper".into())
-                    .spawn(move || drop(tx.send(load_cover(&job_path, dst))));
-                match spawned {
-                    Ok(_) => {
-                        job.insert(rx);
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "cannot start reading the wallpaper image");
-                        self.failed.insert(sig);
-                        continue;
-                    }
-                }
-            }
-            // reading: keep showing what the output showed, if it fits
-            return match self.shown.get(&output).filter(|s| s.px == (px.0, px.1)) {
-                Some(shown) => {
-                    self.tint = shown.tint;
-                    image_element(renderer, &shown.buffer, shown.px, 0.0, 0.0, scale, 1.0)
-                }
-                None => {
-                    self.tint = None;
-                    None
-                }
-            };
+        let candidates = self.candidates(config, dark);
+        if candidates.is_empty() {
+            self.outputs.remove(&output);
+            self.tint = None;
+            return None;
         }
-        self.shown.remove(&output);
-        self.tint = None;
-        None
+        self.update(output, candidates, dst, now);
+        let state = self.outputs.get_mut(&output)?;
+        if let Some((pixmap, tint)) = state.ready.take() {
+            let size = (pixmap.width() as i32, pixmap.height() as i32);
+            let buffer = MemoryRenderBuffer::from_slice(
+                pixmap.data(),
+                Fourcc::Abgr8888,
+                size,
+                1,
+                Transform::Normal,
+                None,
+            );
+            state.shown = Some(Shown {
+                buffer,
+                px: size,
+                tint,
+            });
+        }
+        match state.shown.as_ref().filter(|s| s.px == px) {
+            Some(shown) => {
+                self.tint = Some(shown.tint);
+                image_element(renderer, &shown.buffer, shown.px, 0.0, 0.0, scale, 1.0)
+            }
+            None => {
+                self.tint = None;
+                None
+            }
+        }
+    }
+
+    /// Images the worker has decoded so far (one per file and change of the file).
+    pub fn decodes(&self) -> usize {
+        self.loader
+            .as_ref()
+            .map_or(0, |l| l.decodes.load(Ordering::SeqCst))
     }
 }
 
-/// Identity of one attempt: the file as it is now and the size it is scaled to.
-fn signature(path: &Path, meta: &std::fs::Metadata, dst: (u32, u32)) -> u64 {
+/// What a request is for: the files and the size.
+fn key_of(candidates: &[PathBuf], dst: (u32, u32)) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    path.hash(&mut h);
-    meta.len().hash(&mut h);
-    meta.modified().ok().hash(&mut h);
+    candidates.hash(&mut h);
     dst.hash(&mut h);
     h.finish()
 }
@@ -294,6 +536,14 @@ fn signature(path: &Path, meta: &std::fs::Metadata, dst: (u32, u32)) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    /// The image at `path` scaled to cover `dst`.
+    fn load_cover(path: &Path, dst: (u32, u32)) -> Result<(Pixmap, [f32; 3]), String> {
+        let (file, _) = open_checked(path)?;
+        scale_cover(&decode_file(file)?, dst)
+    }
 
     fn write_png(
         dir: &Path,
@@ -388,16 +638,10 @@ mod tests {
 
     #[test]
     fn the_users_image_comes_before_the_packs_and_the_dark_one_falls_back_to_the_light() {
-        let wallpapers = Wallpapers {
-            pack: [Some("/pack/day.png".into()), Some("/pack/night.png".into())],
-            jobs: HashMap::new(),
-            done: HashMap::new(),
-            failed: HashSet::new(),
-            tints: HashMap::new(),
-            shown: HashMap::new(),
-            missing: HashSet::new(),
-            tint: None,
-        };
+        let wallpapers = Wallpapers::with_decoder(
+            [Some("/pack/day.png".into()), Some("/pack/night.png".into())],
+            Arc::new(decode_file),
+        );
         let paths = |c: &WallpaperSettings, dark| {
             wallpapers
                 .candidates(c, dark)
@@ -424,5 +668,160 @@ mod tests {
             dark: Some("/u/b.png".into()),
         };
         assert_eq!(paths(&dark_only, false), ["/pack/day.png"]);
+    }
+
+    /// A wallpaper pipeline whose decoder counts and can be held up.
+    struct Rig {
+        wallpapers: Wallpapers,
+        gate: Arc<Mutex<()>>,
+    }
+
+    fn rig() -> Rig {
+        let gate = Arc::new(Mutex::new(()));
+        let held = Arc::clone(&gate);
+        let decoder: Decoder = Arc::new(move |file| {
+            drop(held.lock().unwrap());
+            decode_file(file)
+        });
+        Rig {
+            wallpapers: Wallpapers::with_decoder([None, None], decoder),
+            gate,
+        }
+    }
+
+    impl Rig {
+        /// Ask for `path` at `dst` as the frame loop does, until nothing is in flight.
+        fn settle(&mut self, path: &Path, dst: (u32, u32), now: f64) {
+            let end = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                self.wallpapers
+                    .update(1, vec![path.to_path_buf()], dst, now);
+                if !self.wallpapers.pending() {
+                    return;
+                }
+                assert!(std::time::Instant::now() < end, "the worker did not answer");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+
+        fn shown_size(&self) -> Option<(u32, u32)> {
+            self.wallpapers.outputs[&1]
+                .ready
+                .as_ref()
+                .map(|(p, _)| (p.width(), p.height()))
+        }
+    }
+
+    #[test]
+    fn one_file_is_decoded_once_however_the_output_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_png(dir.path(), "w.png", (64, 32), |_, _| [1, 2, 3, 255]);
+        let mut rig = rig();
+        // the decoder is held up while the size changes fifty times
+        let hold = rig.gate.lock().unwrap();
+        for width in 100..150 {
+            rig.wallpapers
+                .update(1, vec![path.clone()], (width, 80), 0.0);
+        }
+        drop(hold);
+        rig.settle(&path, (149, 80), 0.0);
+        assert_eq!(
+            rig.shown_size(),
+            Some((149, 80)),
+            "the newest size is the one that comes out"
+        );
+        assert_eq!(rig.wallpapers.decodes(), 1);
+        // another size of the same file only scales it
+        rig.wallpapers.outputs.get_mut(&1).unwrap().ready = None;
+        rig.settle(&path, (320, 200), 0.0);
+        assert_eq!(rig.shown_size(), Some((320, 200)));
+        assert_eq!(rig.wallpapers.decodes(), 1);
+    }
+
+    #[test]
+    fn the_frame_loop_does_not_wait_for_the_worker() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_png(dir.path(), "w.png", (16, 16), |_, _| [9, 9, 9, 255]);
+        let mut rig = rig();
+        let hold = rig.gate.lock().unwrap();
+        let started = std::time::Instant::now();
+        for frame in 0..100 {
+            rig.wallpapers
+                .update(1, vec![path.clone()], (32, 32), f64::from(frame) / 60.0);
+        }
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "100 frames took {:?} with the decoder held up",
+            started.elapsed()
+        );
+        assert!(rig.wallpapers.pending());
+        assert!(rig.wallpapers.outputs[&1].ready.is_none());
+        drop(hold);
+        rig.settle(&path, (32, 32), 2.0);
+        assert!(rig.shown_size().is_some());
+    }
+
+    #[test]
+    fn a_file_is_looked_at_again_every_few_seconds_and_decoded_again_only_when_it_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_png(dir.path(), "w.png", (16, 16), |_, _| [200, 0, 0, 255]);
+        let mut rig = rig();
+        rig.settle(&path, (8, 8), 0.0);
+        assert_eq!(rig.wallpapers.decodes(), 1);
+        rig.wallpapers.outputs.get_mut(&1).unwrap().ready = None;
+        // not due yet, then due with the file unchanged: nothing is decoded or delivered again
+        rig.settle(&path, (8, 8), 1.0);
+        rig.settle(&path, (8, 8), 6.0);
+        assert_eq!(rig.wallpapers.decodes(), 1);
+        assert!(rig.shown_size().is_none());
+        // the file is replaced by a larger one
+        write_png(dir.path(), "w.png", (32, 32), |_, _| [0, 200, 0, 255]);
+        rig.settle(&path, (8, 8), 12.0);
+        assert_eq!(rig.wallpapers.decodes(), 2);
+        let (pixmap, _) = rig.wallpapers.outputs[&1].ready.as_ref().unwrap();
+        assert_eq!(pixmap.pixel(0, 0).unwrap().green(), 200);
+    }
+
+    #[test]
+    fn a_broken_file_is_decoded_once_and_a_good_candidate_after_it_is_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let broken = dir.path().join("broken.png");
+        std::fs::write(&broken, b"not an image").unwrap();
+        let good = write_png(dir.path(), "good.png", (8, 8), |_, _| [5, 6, 7, 255]);
+        let mut rig = rig();
+        let candidates = vec![broken.clone(), dir.path().join("missing.png"), good];
+        let end = std::time::Instant::now() + Duration::from_secs(10);
+        for now in [0.0, 6.0, 12.0] {
+            loop {
+                rig.wallpapers.update(1, candidates.clone(), (4, 4), now);
+                if !rig.wallpapers.pending() {
+                    break;
+                }
+                assert!(std::time::Instant::now() < end);
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+        // broken once, good once; the revalidations decode nothing
+        assert_eq!(rig.wallpapers.decodes(), 2);
+        assert!(rig.wallpapers.outputs[&1].loaded.is_some());
+    }
+
+    #[test]
+    fn a_pipe_in_place_of_the_file_does_not_block_the_worker() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("w.png");
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            &fifo,
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::from_raw_mode(0o600),
+            0,
+        )
+        .unwrap();
+        assert!(open_checked(&fifo).unwrap_err().contains("regular"));
+        let mut rig = rig();
+        rig.settle(&fifo, (4, 4), 0.0);
+        assert_eq!(rig.wallpapers.decodes(), 0);
+        assert!(rig.wallpapers.outputs[&1].loaded.is_none());
     }
 }

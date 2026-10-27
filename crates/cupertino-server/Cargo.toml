@@ -65,6 +65,7 @@ anyhow = "1"
 bytemuck = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+rustix = { version = "1", features = ["fs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
@@ -89,7 +90,7 @@ cupertino-protocols = { path = "../cupertino-protocols", features = ["client"] }
 cupertino-client = { path = "../cupertino-client" }
 # the asset icons the switcher test compares the dock process's panel with
 cupertino-icons = { path = "../cupertino-icons" }
-rustix = { version = "1", features = ["fs", "shm", "mm"] }
+rustix = { version = "1", features = ["shm", "mm"] }
 
 # Distribution packages. The asset lists are the manifest of packaging/release.py (checked by its check-metadata).
 [package.metadata.deb]

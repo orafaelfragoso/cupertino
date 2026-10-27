@@ -17,7 +17,7 @@ use cupertino_shell_client::{
     Dock, IdleNotifier, IdleWatch, LayerShell, LayerSurface, MenuBar, Session as SessionObserver,
     SessionLockManager, Shell, ShellEvent,
 };
-use cupertino_ui_wayland::{clipboard, popup, Presenter, Ready};
+use cupertino_ui_wayland::{clipboard, popup, Ready, ShmPresenter};
 use cupertino_wayland_client::{
     Capability, ClipboardOffer, Connection, CursorShape, Decorations, Error, KeyboardEvent,
     OutputId, Popup, Toplevel, ToplevelConfig as WindowConfig,
@@ -99,7 +99,7 @@ struct Surface {
     id: SurfaceId,
     role: Role,
     requested_size: (u32, u32),
-    presenter: Presenter,
+    presenter: ShmPresenter,
 }
 
 impl Surface {
@@ -108,7 +108,7 @@ impl Surface {
             id,
             role,
             requested_size,
-            presenter: Presenter::new(id.0),
+            presenter: ShmPresenter::new(id.0),
         }
     }
 }

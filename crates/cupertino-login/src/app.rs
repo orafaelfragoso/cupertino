@@ -170,8 +170,7 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     let mut conn = Connection::connect()?;
     let layer_shell = LayerShell::bind(&mut conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
     let shell = Shell::bind(&mut conn).ok_or("the server lacks cupertino_shell_v1")?;
-    // what arrived before the observer is not a request to this process
-    let (session, _, _) = shell.observe(&mut conn)?;
+    let (session, _, early) = shell.observe(&mut conn)?;
     let lock_manager = SessionLockManager::bind(&mut conn);
     let idle_notifier = IdleNotifier::bind(&mut conn);
     let (sender, messages) = mpsc::channel();
@@ -312,6 +311,9 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
         low_battery: LowBattery::new(),
         session_bus,
     };
+    for event in early {
+        app.handle(event)?;
+    }
     app.refresh_capabilities();
     loop {
         app.present()?;

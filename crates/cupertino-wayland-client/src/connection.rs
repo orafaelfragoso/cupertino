@@ -1028,7 +1028,7 @@ impl State {
         let (Some(surface), Some(t)) = (self.key_focus, &self.translator) else {
             return;
         };
-        for code in self.repeat.due(now) {
+        if let Some(code) = self.repeat.due(now) {
             let k = t.translate(code);
             self.events.push(Event::Keyboard {
                 surface,

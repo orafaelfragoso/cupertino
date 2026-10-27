@@ -236,6 +236,9 @@ impl Translator {
     }
 }
 
+/// Repeat rates above this many keys per second are clamped to it.
+const MAX_REPEAT_RATE: u64 = 1000;
+
 /// Client-side key repeat from `wl_keyboard.repeat_info`: one key repeats at a time, the last one pressed.
 #[derive(Debug, Default)]
 pub(crate) struct Repeat {
@@ -251,7 +254,7 @@ impl Repeat {
         self.timing = u64::try_from(rate).ok().filter(|r| *r > 0).map(|r| {
             (
                 Duration::from_millis(delay.max(0) as u64),
-                Duration::from_micros(1_000_000 / r),
+                Duration::from_micros(1_000_000 / r.min(MAX_REPEAT_RATE)),
             )
         });
         if self.timing.is_none() {
@@ -280,17 +283,16 @@ impl Repeat {
         self.held.map(|(_, at)| at)
     }
 
-    /// The key to repeat once per repeat that came due by `now`.
-    pub(crate) fn due(&mut self, now: Instant) -> Vec<u32> {
+    /// The key to repeat when a repeat came due by `now`; repeats missed while the caller was late are dropped.
+    pub(crate) fn due(&mut self, now: Instant) -> Option<u32> {
         let (Some((_, interval)), Some((code, at))) = (self.timing, self.held.as_mut()) else {
-            return Vec::new();
+            return None;
         };
-        let mut due = Vec::new();
-        while *at <= now {
-            due.push(*code);
-            *at += interval;
+        if *at > now {
+            return None;
         }
-        due
+        *at = now + interval;
+        Some(*code)
     }
 }
 
@@ -397,10 +399,13 @@ mod tests {
         r.set_info(25, 600);
         let t0 = Instant::now();
         r.press(KEY_A, t0);
-        assert_eq!(r.due(t0 + Duration::from_millis(599)), Vec::<u32>::new());
-        // 600 ms, then every 40 ms: 600, 640 and 680 are due at 690
-        assert_eq!(r.due(t0 + Duration::from_millis(690)), vec![KEY_A; 3]);
-        assert_eq!(r.deadline(), Some(t0 + Duration::from_millis(720)));
+        assert_eq!(r.due(t0 + Duration::from_millis(599)), None);
+        assert_eq!(r.due(t0 + Duration::from_millis(600)), Some(KEY_A));
+        assert_eq!(r.deadline(), Some(t0 + Duration::from_millis(640)));
+        // 640 and 680 were missed: one repeat, and the next one interval after it
+        assert_eq!(r.due(t0 + Duration::from_millis(690)), Some(KEY_A));
+        assert_eq!(r.due(t0 + Duration::from_millis(690)), None);
+        assert_eq!(r.deadline(), Some(t0 + Duration::from_millis(730)));
         r.release(KEY_ENTER);
         assert!(r.deadline().is_some());
         r.release(KEY_A);
@@ -408,5 +413,16 @@ mod tests {
         r.set_info(0, 600);
         r.press(KEY_A, t0);
         assert_eq!(r.deadline(), None);
+    }
+
+    #[test]
+    fn a_rate_beyond_the_limit_repeats_once_per_millisecond() {
+        let mut r = Repeat::default();
+        r.set_info(i32::MAX, 0);
+        let t0 = Instant::now();
+        r.press(KEY_A, t0);
+        assert_eq!(r.due(t0 + Duration::from_secs(1)), Some(KEY_A));
+        assert_eq!(r.due(t0 + Duration::from_secs(1)), None);
+        assert_eq!(r.deadline(), Some(t0 + Duration::from_millis(1001)));
     }
 }

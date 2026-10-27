@@ -222,7 +222,7 @@ const FIELD_GLYPH: f64 = 12.0;
 const FIELD_RADIUS: f64 = 6.0;
 const FIELD_TEXT: f64 = 13.0;
 const FIELD_GLYPH_INSET: f64 = 6.0;
-/// Opacity of the accent behind selected text, the value of the file manager's name editor. approximate.
+/// Opacity of the accent behind selected text, the value of the file manager's name editor.
 const TEXT_SELECTION_ALPHA: f32 = 0.35;
 /// Height of the selection band: the text size plus 2 points above and below, as in the name editor.
 const TEXT_SELECTION_HEIGHT: f64 = FIELD_TEXT + 4.0;

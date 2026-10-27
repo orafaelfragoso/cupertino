@@ -791,6 +791,9 @@ impl App {
 
     fn set_focus(&mut self, focus: Focus) -> Result<()> {
         if self.focus != focus {
+            if self.focus == Focus::Search {
+                self.search.deselect();
+            }
             self.focus = focus;
             self.client.request_redraw(self.window)?;
         }

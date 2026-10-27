@@ -35,7 +35,11 @@ docker run --rm \
   cargo test -p cupertino-server --test goldens -- --include-ignored --skip headless_frame_and_memory_report \
   | tee "$log"
 
+# The goldens binary holds exactly this many tests that run here; change it with the tests.
+expected=3
 # A renamed or removed test must not turn into a job that runs nothing and passes.
 for name in pixel_comparison_fails_on_a_change_at_unchanged_geometry desktop_goldens_and_input_replay shell_process_goldens; do
   grep -qx "test $name ... ok" "$log" || { echo "goldens: expected test $name did not run and pass" >&2; exit 1; }
 done
+ran="$(grep -E '^test .* \.\.\. ok$' "$log" | sort -u | wc -l)"
+[ "$ran" -eq "$expected" ] || { echo "goldens: $ran tests passed, expected $expected" >&2; exit 1; }

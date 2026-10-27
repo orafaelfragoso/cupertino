@@ -157,16 +157,20 @@ pub const TARGET_RULES: Rules = &[
 pub const DENIED_PATHS: &[(Layer, &[Layer])] = &[(Ui, &[Core, Shell, Services])];
 
 /// Crates that must not reach these crates through any chain of normal dependencies: the public transport speaks
-/// standard Wayland protocols only, never the desktop's private ones or another compositor's extensions.
-pub const DENIED_CRATES: &[(&str, &[&str])] = &[(
-    "cupertino-wayland-client",
-    &[
-        "cupertino-protocols",
-        "wayland-protocols-wlr",
-        "wayland-protocols-misc",
-        "wayland-protocols-plasma",
-    ],
-)];
+/// standard Wayland protocols only, never the desktop's private ones or another compositor's extensions, and the
+/// public crates that applications link stay off the private protocols and the privileged shell client.
+pub const DENIED_CRATES: &[(&str, &[&str])] = &[
+    (
+        "cupertino-wayland-client",
+        &[
+            "cupertino-protocols",
+            "wayland-protocols-wlr",
+            "wayland-protocols-misc",
+            "wayland-protocols-plasma",
+        ],
+    ),
+    ("cupertino-app-protocols", &["cupertino-protocols"]),
+];
 
 /// Whether `rules` let a crate of layer `from` depend on a crate of layer `to`.
 pub fn allows(rules: Rules, from: Layer, to: Layer) -> bool {
@@ -241,6 +245,7 @@ pub const PENDING: &[Exception] = &[];
 pub const TARGET: &[(&str, Layer)] = &[
     ("cupertino-alsa", Platform),
     ("cupertino-animation", Foundation),
+    ("cupertino-app-protocols", Protocol),
     ("cupertino-apps", Foundation),
     ("cupertino-assets", Foundation),
     ("cupertino-bluetooth", Platform),

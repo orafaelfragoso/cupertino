@@ -1,6 +1,7 @@
 //! The connection: globals, surfaces with their roles and buffers, seat input and the event loop.
 
 use std::io::{ErrorKind, Read, Write};
+use std::ops::RangeInclusive;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -59,7 +60,7 @@ use crate::output::{OutputBuilder, OutputId};
 use crate::scale::ScaleSources;
 use crate::{
     BufferFormat, BufferLayout, Capability, CapabilitySet, ClipboardOffer, Decorations, Disconnect,
-    Error, KeyboardEvent, OutputInfo, PixelRect, PointerEvent, Scale, WindowConfigure,
+    Error, Extension, KeyboardEvent, OutputInfo, PixelRect, PointerEvent, Scale, WindowConfigure,
     WindowStates,
 };
 
@@ -218,8 +219,8 @@ enum Role {
     },
     External {
         role: Box<dyn ExternalRole>,
-        /// The size of the latest [`State::configure_external`]; `None` leaves it to the client.
-        size: Option<(u32, u32)>,
+        /// The size of the latest [`State::configure_external`]; a 0 dimension is left to the client.
+        size: (u32, u32),
     },
 }
 
@@ -407,8 +408,8 @@ impl Connection {
     }
 
     /// The optional protocols the compositor offers.
-    pub fn capabilities(&self) -> CapabilitySet {
-        self.state.capabilities
+    pub fn capabilities(&self) -> &CapabilitySet {
+        &self.state.capabilities
     }
 
     pub fn waker(&self) -> Waker {
@@ -724,9 +725,24 @@ impl Connection {
         self.queue.handle()
     }
 
-    /// The globals the compositor announced at connect, for extensions to bind theirs.
-    pub fn globals(&self) -> &GlobalList {
-        &self.globals
+    /// Bind the global of an extension's protocol at the highest version in `versions` the compositor offers, with
+    /// `data` as user data, and list it in [`Connection::capabilities`]; `None` when it offers none in the range, so the
+    /// application falls back. Binding through here is what makes an extension visible in the capabilities.
+    pub fn bind_extension<I, U>(&mut self, versions: RangeInclusive<u32>, data: U) -> Option<I>
+    where
+        I: Proxy + 'static,
+        U: Send + Sync + 'static,
+        State: Dispatch<I, U>,
+    {
+        let proxy: I = self
+            .globals
+            .bind(&self.queue.handle(), versions, data)
+            .ok()?;
+        self.state.capabilities.add_extension(Extension {
+            interface: I::interface().name,
+            version: proxy.version(),
+        });
+        Some(proxy)
     }
 
     /// The `wl_surface` of `surface`, for an extension request that names it.
@@ -755,14 +771,14 @@ impl Connection {
     pub fn external_surface<R: ExternalRole + 'static>(
         &mut self,
         assign: impl FnOnce(&WlSurface, &QueueHandle<State>, SurfaceId) -> R,
-    ) -> Result<SurfaceId, Error> {
+    ) -> SurfaceId {
         let qh = self.queue.handle();
         let s = &mut self.state;
         let id = s.next_id();
         let wl = s.compositor.create_surface(&qh, id);
         let role = Box::new(assign(&wl, &qh, id));
-        s.add_surface(id, wl, Role::External { role, size: None }, &qh);
-        Ok(id)
+        s.add_surface(id, wl, Role::External { role, size: (0, 0) }, &qh);
+        id
     }
 
     /// Send the queued requests and dispatch every event the compositor sent in answer, keeping the events for the
@@ -791,7 +807,10 @@ impl Connection {
             Role::Popup { current, .. } => current
                 .map(|c| (c.width, c.height))
                 .ok_or(Error::NotConfigured)?,
-            Role::External { size, .. } => size.unwrap_or(preferred),
+            Role::External { size: (w, h), .. } => (
+                if *w == 0 { preferred.0 } else { *w },
+                if *h == 0 { preferred.1 } else { *h },
+            ),
         };
         let scale = surf.scale;
         let layout = scale
@@ -1015,14 +1034,9 @@ fn clamp_i32(v: u32) -> i32 {
 
 impl State {
     /// Record a configure of an [`Connection::external_surface`]: its `serial`, acknowledged with the next present, and
-    /// its logical `size` (`None` leaves it to the client). A serial that does not increase, or a surface that is not
-    /// external, ends the next [`Connection::wait`] with the error.
-    pub fn configure_external(
-        &mut self,
-        surface: SurfaceId,
-        serial: u32,
-        size: Option<(u32, u32)>,
-    ) {
+    /// its logical `size`, where a 0 width or height leaves that dimension to the client. A serial that does not
+    /// increase, or a surface that is not external, ends the next [`Connection::wait`] with the error.
+    pub fn configure_external(&mut self, surface: SurfaceId, serial: u32, size: (u32, u32)) {
         let surf = match self.surface_mut(surface) {
             Ok(surf) => surf,
             // the application destroyed the surface while the configure was on its way
@@ -1417,7 +1431,11 @@ impl Dispatch<XdgSurface, SurfaceId> for State {
                     configure,
                 }
             }
-            Role::External { .. } => unreachable!("an external surface has no xdg_surface"),
+            Role::External { .. } => {
+                return state.fail(Error::Protocol(
+                    "an xdg_surface configure for a surface with an external role",
+                ))
+            }
         };
         state.events.push(event);
     }

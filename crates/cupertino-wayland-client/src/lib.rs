@@ -19,7 +19,7 @@ mod output;
 mod scale;
 
 pub use buffer::{BufferFormat, BufferLayout, PixelRect};
-pub use capability::{Capability, CapabilitySet};
+pub use capability::{Capability, CapabilitySet, Extension};
 pub use clipboard::ClipboardOffer;
 pub use configure::{Decorations, WindowConfigure, WindowStates};
 pub use connection::{

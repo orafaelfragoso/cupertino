@@ -68,9 +68,20 @@ impl Capability {
     }
 }
 
-/// The optional protocols the compositor offers, read once at connect.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct CapabilitySet(u8);
+/// A protocol outside the standard ones that an extension bound through [`crate::Connection::bind_extension`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Extension {
+    pub interface: &'static str,
+    /// The version bound: the lower of the compositor's and the highest the extension supports.
+    pub version: u32,
+}
+
+/// The optional protocols the compositor offers, read once at connect, and the extension protocols bound since.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CapabilitySet {
+    standard: u8,
+    extensions: Vec<Extension>,
+}
 
 impl CapabilitySet {
     /// Check the required globals and collect the optional ones from the registry's `(interface, version)` list.
@@ -96,23 +107,49 @@ impl CapabilitySet {
         Ok(Capability::ALL
             .into_iter()
             .filter(|c| c.interfaces().iter().all(|i| version(i).is_some()))
-            .fold(CapabilitySet::default(), |set, c| {
-                CapabilitySet(set.0 | c.bit())
+            .fold(CapabilitySet::default(), |set, c| CapabilitySet {
+                standard: set.standard | c.bit(),
+                extensions: Vec::new(),
             }))
     }
 
-    pub fn contains(self, capability: Capability) -> bool {
-        self.0 & capability.bit() != 0
+    pub fn contains(&self, capability: Capability) -> bool {
+        self.standard & capability.bit() != 0
     }
 
-    pub fn iter(self) -> impl Iterator<Item = Capability> {
+    pub fn iter(&self) -> impl Iterator<Item = Capability> + '_ {
         Capability::ALL
             .into_iter()
             .filter(move |c| self.contains(*c))
     }
 
+    /// The extension protocols bound so far, in the order they were bound.
+    pub fn extensions(&self) -> &[Extension] {
+        &self.extensions
+    }
+
+    /// The version of `interface` an extension bound; `None` when none did, so the application falls back.
+    pub fn extension(&self, interface: &str) -> Option<u32> {
+        self.extensions
+            .iter()
+            .find(|e| e.interface == interface)
+            .map(|e| e.version)
+    }
+
+    /// Record a bound extension protocol; binding the same interface again keeps one entry, at the newer version.
+    pub(crate) fn add_extension(&mut self, extension: Extension) {
+        match self
+            .extensions
+            .iter_mut()
+            .find(|e| e.interface == extension.interface)
+        {
+            Some(e) => e.version = extension.version,
+            None => self.extensions.push(extension),
+        }
+    }
+
     /// `Ok` when the compositor offers `capability`, else [`Error::Unsupported`].
-    pub(crate) fn require(self, capability: Capability) -> Result<(), Error> {
+    pub(crate) fn require(&self, capability: Capability) -> Result<(), Error> {
         if self.contains(capability) {
             Ok(())
         } else {
@@ -175,5 +212,19 @@ mod tests {
             set.require(Capability::Clipboard),
             Err(Error::Unsupported(Capability::Clipboard))
         ));
+    }
+
+    #[test]
+    fn a_bound_extension_is_listed_once_at_its_latest_version() {
+        let mut set = CapabilitySet::from_globals(MINIMAL).unwrap();
+        assert_eq!(set.extension("zwlr_layer_shell_v1"), None);
+        let layer = |version| Extension {
+            interface: "zwlr_layer_shell_v1",
+            version,
+        };
+        set.add_extension(layer(3));
+        set.add_extension(layer(4));
+        assert_eq!(set.extensions(), [layer(4)]);
+        assert_eq!(set.extension("zwlr_layer_shell_v1"), Some(4));
     }
 }

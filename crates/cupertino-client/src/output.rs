@@ -1,16 +1,7 @@
 //! Outputs of the server and their logical geometry (`zxdg_output_v1`).
 
 /// Handle of an output: the registry name of its `wl_output` global.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct OutputId(pub(crate) u32);
-
-impl OutputId {
-    /// The registry name of the output's `wl_output` global, to bind the same output on another event queue of the
-    /// connection.
-    pub fn registry_name(self) -> u32 {
-        self.0
-    }
-}
+pub use cupertino_wayland_client::OutputId;
 
 /// Position and size of an output in the compositor space, in logical points.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,7 +23,7 @@ pub struct OutputInfo {
 impl From<cupertino_wayland_client::OutputInfo> for OutputInfo {
     fn from(info: cupertino_wayland_client::OutputInfo) -> Self {
         OutputInfo {
-            id: OutputId(info.id.registry_name()),
+            id: info.id,
             geometry: info.geometry.map(|g| OutputGeometry {
                 x: g.x,
                 y: g.y,

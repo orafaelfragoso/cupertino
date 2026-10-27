@@ -147,3 +147,34 @@ impl From<Error> for ClientError {
         }
     }
 }
+
+impl From<cupertino_ui_wayland::Error> for ClientError {
+    fn from(e: cupertino_ui_wayland::Error) -> Self {
+        match e {
+            cupertino_ui_wayland::Error::Transport(e) => e.into(),
+            cupertino_ui_wayland::Error::BufferSize { width, height } => {
+                Self::BufferSize { width, height }
+            }
+            cupertino_ui_wayland::Error::InvalidShape => Self::InvalidShape,
+        }
+    }
+}
+
+impl From<cupertino_protocol_app::Error> for ClientError {
+    fn from(e: cupertino_protocol_app::Error) -> Self {
+        match e {
+            cupertino_protocol_app::Error::InvalidShape => Self::InvalidShape,
+            cupertino_protocol_app::Error::InvalidAlpha => Self::InvalidAlpha,
+        }
+    }
+}
+
+impl From<cupertino_shell_client::Error> for ClientError {
+    fn from(e: cupertino_shell_client::Error) -> Self {
+        match e {
+            cupertino_shell_client::Error::Transport(e) => e.into(),
+            cupertino_shell_client::Error::UnknownOutput => Self::UnknownOutput,
+            cupertino_shell_client::Error::InvalidShape => Self::InvalidShape,
+        }
+    }
+}

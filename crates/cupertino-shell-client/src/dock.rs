@@ -1,10 +1,9 @@
 //! Typed wrapper of `cupertino_dock_v1`: the dock role of a layer surface.
 
-use crate::client::outward_rect;
-use crate::output::OutputId;
-use crate::ClientError;
+use crate::Error;
 use cupertino_geometry::Rect;
 use cupertino_protocols::client::cupertino_dock_v1::{self, CupertinoDockV1, WindowState};
+use cupertino_wayland_client::OutputId;
 use wayland_client::WEnum;
 
 pub use cupertino_protocols::client::cupertino_dock_v1::{AppCommand, Corner, Gesture};
@@ -125,7 +124,7 @@ impl Dock {
 
     /// Restore a minimized window out of the tile `rect` (surface-local logical points, rounded
     /// outwards to whole points); an id that is not a minimized window is ignored by the server.
-    pub fn restore_window(&self, id: u32, rect: &Rect) -> Result<(), ClientError> {
+    pub fn restore_window(&self, id: u32, rect: &Rect) -> Result<(), Error> {
         let (x, y, width, height) = whole_rect(rect)?;
         self.proxy.restore_window(id, x, y, width, height);
         Ok(())
@@ -133,16 +132,16 @@ impl Dock {
 
     /// The pointer picked entry `index` of the open switcher; the server ignores an index outside
     /// the list and answers with [`DockChange::SwitcherChanged`] when the selection moved.
-    pub fn switcher_select(&self, index: usize) -> Result<(), ClientError> {
-        let index = u32::try_from(index).map_err(|_| ClientError::InvalidShape)?;
+    pub fn switcher_select(&self, index: usize) -> Result<(), Error> {
+        let index = u32::try_from(index).map_err(|_| Error::InvalidShape)?;
         self.proxy.switcher_select(index);
         Ok(())
     }
 
     /// The pointer was released on entry `index` of the open switcher: the server selects and
     /// commits it (an index outside the list is ignored).
-    pub fn switcher_activate(&self, index: usize) -> Result<(), ClientError> {
-        let index = u32::try_from(index).map_err(|_| ClientError::InvalidShape)?;
+    pub fn switcher_activate(&self, index: usize) -> Result<(), Error> {
+        let index = u32::try_from(index).map_err(|_| Error::InvalidShape)?;
         self.proxy.switcher_activate(index);
         Ok(())
     }
@@ -153,8 +152,8 @@ impl Dock {
     }
 
     /// The slot a newly minimized window's tile takes (as for [`Dock::restore_window`]); applies
-    /// with the next commit of the surface, i.e. the next [`Client::draw`](crate::Client::draw).
-    pub fn set_minimize_target(&self, rect: &Rect) -> Result<(), ClientError> {
+    /// with the next commit of the surface.
+    pub fn set_minimize_target(&self, rect: &Rect) -> Result<(), Error> {
         let (x, y, width, height) = whole_rect(rect)?;
         self.proxy.set_minimize_target(x, y, width, height);
         Ok(())
@@ -162,7 +161,7 @@ impl Dock {
 
     /// The frame window `id` takes in the open overview (output coordinates, rounded outwards to
     /// whole points); the server animates it there.
-    pub fn overview_frame(&self, id: u32, rect: &Rect) -> Result<(), ClientError> {
+    pub fn overview_frame(&self, id: u32, rect: &Rect) -> Result<(), Error> {
         let (x, y, width, height) = whole_rect(rect)?;
         self.proxy.overview_frame(id, x, y, width, height);
         Ok(())
@@ -195,8 +194,8 @@ impl Dock {
     }
 
     /// Move a workspace to position `index` (0-based, clamped to the end) among the output's.
-    pub fn move_workspace(&self, id: u32, index: usize) -> Result<(), ClientError> {
-        let index = u32::try_from(index).map_err(|_| ClientError::InvalidShape)?;
+    pub fn move_workspace(&self, id: u32, index: usize) -> Result<(), Error> {
+        let index = u32::try_from(index).map_err(|_| Error::InvalidShape)?;
         self.proxy.move_workspace(id, index);
         Ok(())
     }
@@ -219,14 +218,20 @@ impl Drop for Dock {
 }
 
 /// The smallest whole-point rectangle that contains `rect`; an error for a non-finite one.
-fn whole_rect(rect: &Rect) -> Result<(i32, i32, i32, i32), ClientError> {
+fn whole_rect(rect: &Rect) -> Result<(i32, i32, i32, i32), Error> {
     if ![rect.x(), rect.y(), rect.width(), rect.height()]
         .iter()
         .all(|v| v.is_finite())
     {
-        return Err(ClientError::InvalidShape);
+        return Err(Error::InvalidShape);
     }
-    Ok(outward_rect(rect))
+    let r = rect.round_out();
+    Ok((
+        r.x() as i32,
+        r.y() as i32,
+        r.width() as i32,
+        r.height() as i32,
+    ))
 }
 
 /// Collects the events of a group until `done`.
@@ -439,12 +444,12 @@ mod tests {
     #[test]
     fn the_switcher_list_ends_at_its_selection() {
         let mut group = GroupBuilder::default();
-        group.switcher_output(OutputId(3));
+        group.switcher_output(OutputId::from_registry_name(3));
         for app in ["org.example.b", "org.example.a"] {
             push(&mut group, Event::SwitcherEntry { app_id: app.into() });
         }
         push(&mut group, Event::SwitcherChanged { selected: 1 });
-        group.switcher_output(OutputId(5));
+        group.switcher_output(OutputId::from_registry_name(5));
         push(
             &mut group,
             Event::SwitcherEntry {
@@ -471,12 +476,12 @@ mod tests {
             push(&mut group, Event::Done),
             Some(vec![
                 DockChange::SwitcherChanged {
-                    output: OutputId(3),
+                    output: OutputId::from_registry_name(3),
                     apps: vec!["org.example.b".into(), "org.example.a".into()],
                     selected: 1
                 },
                 DockChange::SwitcherChanged {
-                    output: OutputId(5),
+                    output: OutputId::from_registry_name(5),
                     apps: vec!["org.example.c".into()],
                     selected: 0
                 },
@@ -635,7 +640,7 @@ mod tests {
         );
         assert!(matches!(
             whole_rect(&Rect::new(f64::NAN, 0.0, 1.0, 1.0)),
-            Err(ClientError::InvalidShape)
+            Err(Error::InvalidShape)
         ));
     }
 }

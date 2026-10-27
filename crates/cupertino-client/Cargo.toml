@@ -11,12 +11,12 @@ layer = "render"
 [dependencies]
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }
-cupertino-protocols = { path = "../cupertino-protocols", features = ["client"] }
+cupertino-protocol-app = { path = "../cupertino-protocol-app" }
+cupertino-shell-client = { path = "../cupertino-shell-client" }
+cupertino-ui-wayland = { path = "../cupertino-ui-wayland" }
 cupertino-wayland-client = { path = "../cupertino-wayland-client" }
 tiny-skia = "0.11"
 wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
-wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
 # the integration test runs a minimal protocol server in-process
 [dev-dependencies]

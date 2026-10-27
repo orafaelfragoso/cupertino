@@ -15,45 +15,31 @@
 //! adds `cupertino_shell_v1` for the menu-bar and dock roles and the lock state. A missing required global is an error at
 //! connect, never a degraded mode.
 //!
-//! The protocols outside the transport's standard set are extensions on its queue; this API maps onto the transport
-//! and goes away once the shell processes use the transport directly.
+//! The protocols outside the transport's standard set are extensions on its queue: the public ones in
+//! `cupertino-protocol-app`, the privileged ones in `cupertino-shell-client`; surfaces draw through
+//! `cupertino-ui-wayland`. This API maps onto those crates and goes away once the shell processes use them directly.
 
-mod backdrop;
 mod client;
-mod dock;
 mod error;
 mod event;
-mod extensions;
 mod keyboard;
-mod menu_bar;
 mod output;
-mod pixels;
-mod popup;
 mod scale;
 
-pub use backdrop::Backdrop;
-pub use client::{
-    Client, CursorLook, LayerSurfaceConfig, LockState, Margin, SurfaceId, TitlebarStyle,
-    ToplevelConfig, Waker,
-};
+pub use client::{Client, CursorLook, LockState, SurfaceId, TitlebarStyle, ToplevelConfig, Waker};
 /// The session's accessibility display options ([`Client::display_options`], [`Event::DisplayOptions`]).
 pub use cupertino_defaults::accessibility::DisplayOptions;
-pub use dock::{
-    AppCommand, Corner, Dock, DockChange, DockUpdate, DockWindow, Gesture, OverviewMode,
-    OverviewWindow, OverviewWorkspace,
+pub use cupertino_protocol_app::Backdrop;
+pub use cupertino_shell_client::{
+    ActiveApp, Anchor, AppCommand, Corner, Dock, DockChange, DockUpdate, DockWindow, Gesture,
+    GtkMenu, KeyboardInteractivity, Layer, LayerSurfaceConfig, Margin, MenuBar, MenuBarUpdate,
+    OverviewMode, OverviewWindow, OverviewWorkspace, SessionAction, SessionAgent, WindowCommand,
+    WindowMenu, WindowState,
 };
+pub use cupertino_ui_wayland::rgba_to_argb8888;
 pub use error::ClientError;
 pub use event::{key, ActivationRequest, Button, Event, PointerEvent};
 pub use keyboard::Modifiers;
-pub use menu_bar::{
-    ActiveApp, GtkMenu, MenuBar, MenuBarUpdate, SessionAction, SessionAgent, WindowCommand,
-    WindowMenu, WindowState,
-};
 pub use output::{OutputGeometry, OutputId, OutputInfo};
-pub use pixels::rgba_to_argb8888;
 pub use scale::Scale;
 pub use wayland_client::Connection;
-pub use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
-pub use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
-    Anchor, KeyboardInteractivity,
-};

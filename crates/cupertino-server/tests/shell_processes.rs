@@ -224,6 +224,25 @@ fn a_process_that_exits_successfully_is_not_restarted() {
 
 // ---- real shell processes ----------------------------------------------------------------------
 
+/// The packages of the shipped binaries that are not the server's own, each a `[[bin]]` behind its `app` feature.
+const BUILT_PACKAGES: [&str; 15] = [
+    "cupertino-dock",
+    "cupertino-menubar",
+    "cupertino-notifications",
+    "cupertino-windowmanager",
+    "cupertino-screenshot",
+    "cupertino-osd",
+    "cupertino-controlcenter",
+    "cupertino-launcher",
+    "cupertino-login",
+    "cupertino-files",
+    "cupertino-settings",
+    "cupertino-sessiond",
+    "cupertino-netd",
+    "cupertino-btd",
+    "cupertino-powerd",
+];
+
 /// Build the `app` feature of the shell crates once (a no-op when current) and return the directory
 /// of the binaries. They are `[[bin]]`s of other crates behind a feature, so cargo gives this test
 /// no `CARGO_BIN_EXE_*` for them; a failing build or a missing binary fails the test.
@@ -231,18 +250,42 @@ fn shell_bin_dir() -> &'static Path {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
         // <target>/<profile>/deps/<this test> -> <target>/<profile>
-        let profile_dir = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().to_path_buf();
-        let mut cargo = Command::new(std::env::var_os("CARGO").expect("CARGO is set by `cargo test`"));
-        cargo.args(["build", "-p", "cupertino-dock", "-p", "cupertino-menubar", "-p", "cupertino-notifications", "-p", "cupertino-windowmanager", "-p", "cupertino-screenshot", "-p", "cupertino-osd", "-p", "cupertino-controlcenter", "-p", "cupertino-launcher"]);
-        cargo.args(["--features", "cupertino-dock/app,cupertino-menubar/app,cupertino-notifications/app,cupertino-windowmanager/app,cupertino-screenshot/app,cupertino-osd/app,cupertino-controlcenter/app,cupertino-launcher/app"]);
-        cargo.args(["--target-dir", profile_dir.parent().unwrap().to_str().unwrap()]);
+        let profile_dir = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let mut cargo =
+            Command::new(std::env::var_os("CARGO").expect("CARGO is set by `cargo test`"));
+        cargo.arg("build");
+        for package in BUILT_PACKAGES {
+            cargo.args(["-p", package]);
+        }
+        let features: Vec<String> = BUILT_PACKAGES
+            .iter()
+            .map(|package| format!("{package}/app"))
+            .collect();
+        cargo.args(["--features", &features.join(",")]);
+        cargo.args([
+            "--target-dir",
+            profile_dir.parent().unwrap().to_str().unwrap(),
+        ]);
         if profile_dir.file_name().unwrap() == "release" {
             cargo.arg("--release");
         }
         let status = cargo.status().unwrap();
-        assert!(status.success(), "building the shell process binaries: {status}");
-        for name in ["cupertino-dock", "cupertino-menubar", "cupertino-notifications", "cupertino-windowmanager", "cupertino-screenshot", "cupertino-osd", "cupertino-controlcenter", "cupertino-launcher"] {
-            assert!(profile_dir.join(name).is_file(), "missing binary {name} in {}", profile_dir.display());
+        assert!(
+            status.success(),
+            "building the shell process binaries: {status}"
+        );
+        for name in BUILT_PACKAGES {
+            assert!(
+                profile_dir.join(name).is_file(),
+                "missing binary {name} in {}",
+                profile_dir.display()
+            );
         }
         profile_dir
     })
@@ -1326,4 +1369,231 @@ fn the_clipboard_screenshot_offers_a_png_of_the_output() {
     let word = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap());
     assert_eq!(&png[1..4], b"PNG");
     assert_eq!((word(16), word(20)), (OUTPUT.0 as u32, OUTPUT.1 as u32));
+}
+
+/// The file manager and the settings app, started as the supervisor's children, each map a window.
+#[test]
+fn the_file_manager_and_the_settings_app_map_their_windows() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let empty = TempDir::new("apps-no-host-data");
+    let procs = ["cupertino-files", "cupertino-settings"]
+        .map(|b| real_process_without_host_data(b, &bus, &empty.0))
+        .to_vec();
+    let Some(mut server) = Server::start(procs, true) else {
+        return;
+    };
+    server.wait_until("the file manager and the settings app to map", |s| {
+        s.wm.windows().count() == 2
+    });
+}
+
+/// Outside a login session the lock-screen process connects to the server with its roles, finds no session to lock and
+/// exits with that message (the supervisor restarts it after the throttle). The lock and unlock cycle needs logind and
+/// is not run here.
+#[test]
+fn the_login_process_connects_and_exits_outside_a_login_session() {
+    let dir = TempDir::new("login-stderr");
+    let log = dir.file("stderr");
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let mut login = real_process("cupertino-login", &bus);
+    login.command = vec![
+        "sh".into(),
+        "-c".into(),
+        "exec \"$0\" 2>\"$1\"".into(),
+        shell_bin_dir()
+            .join("cupertino-login")
+            .display()
+            .to_string(),
+        log.display().to_string(),
+    ];
+    let Some(mut server) = Server::start(vec![login], true) else {
+        return;
+    };
+    server.wait_until("the login process to say it is in no session", |_| {
+        std::fs::read_to_string(&log)
+            .is_ok_and(|text| text.contains("this process is in no login session"))
+    });
+}
+
+/// A daemon child that is killed on drop.
+struct Daemon(std::process::Child);
+
+impl Drop for Daemon {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// The names `bus` knows now.
+fn bus_names(bus: &PrivateBus) -> Vec<String> {
+    let connection = zbus::block_on(
+        zbus::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .build(),
+    )
+    .unwrap();
+    zbus::block_on(async {
+        zbus::fdo::DBusProxy::new(&connection)
+            .await
+            .unwrap()
+            .list_names()
+            .await
+            .unwrap()
+    })
+    .into_iter()
+    .map(|name| name.to_string())
+    .collect()
+}
+
+/// The network, Bluetooth and power daemons start on a session bus with their authorisation off and own their bus
+/// names; the power daemon reads a sysfs tree without devices, the network daemon needs no supplicant to own its
+/// names. The session manager is not started: it needs root, logind and `/etc/cupertino/login.conf`.
+#[test]
+fn the_network_bluetooth_and_power_daemons_own_their_bus_names() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let sysfs = TempDir::new("powerd-sysfs");
+    for class in ["input", "power_supply", "backlight", "leds"] {
+        std::fs::create_dir_all(sysfs.file(&format!("class/{class}"))).unwrap();
+    }
+    let keys = TempDir::new("btd-keys");
+    let daemon = |binary: &str, args: &[&str]| {
+        Daemon(
+            Command::new(shell_bin_dir().join(binary))
+                .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
+                .args(args)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("the daemon starts"),
+        )
+    };
+    let _daemons = [
+        daemon("cupertino-netd", &["--session-bus", "--no-auth"]),
+        daemon(
+            "cupertino-btd",
+            &[
+                "--session-bus",
+                "--no-auth",
+                "--keys-dir",
+                keys.0.to_str().unwrap(),
+            ],
+        ),
+        daemon(
+            "cupertino-powerd",
+            &[
+                "--session-bus",
+                "--no-auth",
+                "--sysfs-root",
+                sysfs.0.to_str().unwrap(),
+            ],
+        ),
+    ];
+    let wanted = [
+        "org.cupertino.Network1",
+        "org.cupertino.Bluetooth1",
+        "org.cupertino.Power1",
+    ];
+    let end = Instant::now() + TIMEOUT;
+    loop {
+        let names = bus_names(&bus);
+        if wanted.iter().all(|name| names.iter().any(|n| n == name)) {
+            return;
+        }
+        assert!(
+            Instant::now() < end,
+            "the bus names {wanted:?}: only {names:?}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The session manager is a system service: without root, logind and its configuration it starts, says why it cannot
+/// run and exits with a failure instead of hanging; a worker argument it does not know is refused.
+#[test]
+fn the_session_manager_binary_runs_and_refuses_what_it_cannot_serve() {
+    let sessiond = shell_bin_dir().join("cupertino-sessiond");
+    let output = Command::new(&sessiond)
+        .arg("no-such-mode")
+        .output()
+        .expect("the binary starts");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("usage: cupertino-sessiond [worker]"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = Command::new(&sessiond).output().expect("the binary starts");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).starts_with("cupertino-sessiond: "),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The server binary as a nested session in a window of the host compositor: it listens on its own socket and connects
+/// its output. Skipped without a host display or an EGL device.
+#[test]
+fn the_server_starts_as_a_nested_session() {
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none() {
+        eprintln!("skipping: no host display");
+        return;
+    }
+    let config = TempDir::new("nested-config");
+    let mut server = Daemon(
+        Command::new(env!("CARGO_BIN_EXE_cupertino-server"))
+            .args(["--winit", "--size", "800x600"])
+            .env("XDG_CONFIG_HOME", &config.0)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the server starts"),
+    );
+    let stderr = std::io::BufReader::new(server.0.stderr.take().unwrap());
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufRead::lines(stderr).map_while(std::io::Result::ok) {
+            if tx.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    let end = Instant::now() + TIMEOUT;
+    let mut lines = Vec::new();
+    while !lines
+        .iter()
+        .any(|l: &String| l.contains("display connected"))
+    {
+        assert!(
+            server.0.try_wait().unwrap().is_none(),
+            "the nested server ended early:\n{}",
+            lines.join("\n")
+        );
+        match rx.recv_timeout(end.saturating_duration_since(Instant::now())) {
+            Ok(line) => lines.push(line),
+            Err(_)
+                if lines
+                    .iter()
+                    .any(|l| l.contains("EGL") && l.contains("rror")) =>
+            {
+                eprintln!("skipping: no EGL device for the nested window");
+                return;
+            }
+            Err(e) => panic!(
+                "the nested server never connected its output ({e}):\n{}",
+                lines.join("\n")
+            ),
+        }
+    }
+    assert!(lines.iter().any(|l| l.contains("listening")), "{lines:?}");
 }

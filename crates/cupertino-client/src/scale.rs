@@ -38,6 +38,12 @@ impl Scale {
             .then(|| (self.0.get() / Self::DENOMINATOR) as i32)
     }
 
+    /// The transport's scale, which counts in 120ths as well.
+    pub(crate) fn of(scale: cupertino_wayland_client::Scale) -> Scale {
+        let value = (scale.factor() * f64::from(Self::DENOMINATOR)).round() as u32;
+        Scale::from_120ths(value).unwrap_or(Scale::ONE)
+    }
+
     /// Buffer extent for a logical extent, rounded to the nearest pixel with halves up (the
     /// rule of `wp_fractional_scale_v1`).
     pub fn to_physical(self, logical: u32) -> u32 {

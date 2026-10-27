@@ -263,13 +263,6 @@ impl GroupBuilder {
     pub(crate) fn push(
         &mut self,
         event: cupertino_dock_v1::Event,
-    ) -> Result<Option<DockUpdate>, ClientError> {
-        self.push_event(event).map_err(ClientError::Protocol)
-    }
-
-    fn push_event(
-        &mut self,
-        event: cupertino_dock_v1::Event,
     ) -> Result<Option<DockUpdate>, &'static str> {
         use cupertino_dock_v1::Event;
         match event {
@@ -507,10 +500,7 @@ mod tests {
                 app_id: "org.example.a".into(),
             },
         );
-        assert!(matches!(
-            group.push(Event::SwitcherChanged { selected: 0 }),
-            Err(ClientError::Protocol(_))
-        ));
+        assert!(group.push(Event::SwitcherChanged { selected: 0 }).is_err());
     }
 
     #[test]

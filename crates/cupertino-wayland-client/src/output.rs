@@ -6,6 +6,13 @@ use crate::Scale;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct OutputId(pub(crate) u32);
 
+impl OutputId {
+    /// The `wl_registry` name of the output's global, which other connections to the compositor know it by.
+    pub fn registry_name(self) -> u32 {
+        self.0
+    }
+}
+
 /// Where an output sits in the compositor's global space, in logical points (`zxdg_output_v1`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutputGeometry {

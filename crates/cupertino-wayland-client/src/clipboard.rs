@@ -399,4 +399,34 @@ mod tests {
             assert_eq!(got.len(), 1 << 20);
         }
     }
+
+    #[test]
+    fn serving_a_paste_writes_everything_to_a_reading_client() {
+        let (mut reader, writer) = std::io::pipe().unwrap();
+        let text: Vec<u8> = (0..200_000u32).map(|i| i as u8).collect();
+        let expected = text.clone();
+        let server = std::thread::spawn(move || {
+            serve(
+                OwnedFd::from(writer),
+                &text,
+                Instant::now() + Duration::from_secs(5),
+            )
+        });
+        let mut got = Vec::new();
+        reader.read_to_end(&mut got).unwrap();
+        server.join().unwrap();
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn a_serve_that_panics_still_frees_its_place() {
+        let serving = Arc::new(AtomicUsize::new(1));
+        let slot = ServeSlot(Arc::clone(&serving));
+        let thread = std::thread::spawn(move || {
+            let _slot = slot;
+            panic!("a serve that fails");
+        });
+        assert!(thread.join().is_err());
+        assert_eq!(serving.load(Ordering::Acquire), 0);
+    }
 }

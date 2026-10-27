@@ -35,6 +35,22 @@ class ForbiddenFileTest(unittest.TestCase):
         self.assertEqual(len(problems), 1, problems)
 
 
+class HolderTest(unittest.TestCase):
+    holder = "Status " + "Re" + "search & Development GmbH"  # built from parts so that this file passes the gate itself
+    path = "packaging/licenses/THIRD-PARTY-LICENSES"
+
+    def test_the_named_holder_passes_in_the_third_party_file_only(self):
+        self.assertEqual(run({self.path: f"Copyright 2019 {self.holder}.\n"}), [])
+        problems = run({"crates/x/src/lib.rs": f"// {self.holder}\n"})
+        self.assertEqual(len(problems), 1, problems)
+
+    def test_a_provenance_word_in_the_third_party_file_still_fails_beside_the_holder(self):
+        word = "recover" + "ed"
+        problems = run({self.path: f"Copyright 2019 {self.holder}.\nThis was {word} from a binary.\n"})
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn(f"{self.path}:2: provenance wording", problems[0])
+
+
 class IgnoredOutputTest(unittest.TestCase):
     def test_a_gitignored_build_file_is_not_scanned(self):
         word = "Safa" + "ri"  # built from parts so that this file passes the gate itself

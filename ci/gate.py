@@ -39,8 +39,12 @@ GATE = [
 GATE_EXEMPT = {
     "crates/cupertino-files/src/mime.rs": {"evidence class"},
     "crates/cupertino-theme/src/evidence.rs": {"evidence class"},
-    # Copyright holders named in the protocol notices of the generated file.
-    "packaging/licenses/THIRD-PARTY-LICENSES": {"provenance wording"},
+}
+
+# Third-party copyright holders whose names trip a rule; the literal is blanked before matching, the rest of the file is checked.
+GATE_HOLDERS = {
+    # The name is split so that this file passes the gate itself.
+    "packaging/licenses/THIRD-PARTY-LICENSES": ("Status " + "Re" + "search & Development GmbH",),
 }
 
 THIRD_PARTY_EXEMPT = {"private document path", "cleanup remnant"}
@@ -113,6 +117,8 @@ def gate(root: Path) -> tuple[Counter, list[str]]:
                 continue
             if rel == "ci/gate.py":
                 text = policy_text(text)
+            for holder in GATE_HOLDERS.get(rel, ()):
+                text = text.replace(holder, " " * len(holder))
             exempt = GATE_EXEMPT.get(rel, set())
             if path.relative_to(root).parts[0] == "third-party":
                 exempt = exempt | THIRD_PARTY_EXEMPT

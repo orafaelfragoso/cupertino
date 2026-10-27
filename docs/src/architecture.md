@@ -56,7 +56,7 @@ A crate's layer is declared in its manifest (`[package.metadata.cupertino] layer
 | `shell` | cupertino-controlcenter, -dock, -launcher, -login, -menubar, -notifications, -osd, -screenshot, -windowmanager | `foundation`, `models`, `platform`, `render` |
 | `services` | cupertino-btd, -netd, -powerd, -sessiond | as `shell` |
 | `apps` | cupertino-files, -settings | as `shell` |
-| `tools` | cupertino-gtk-theme, -layers, -testclient | as `shell` |
+| `tools` | cupertino-layers, -testclient | as `shell` |
 
 `shell`, `services`, `apps` and `tools` crates never depend on `core` or on each other. Each shell component is one crate: its pure model plus a binary behind an `app` feature. Only `cupertino-server` and `cupertino-seat` (which implements Smithay's session trait) depend on Smithay. The `xkbcommon` package of the workspace is `cupertino-xkbcommon`, a pure-Rust drop-in for the C-binding crate, selected through `[patch.crates-io]`.
 

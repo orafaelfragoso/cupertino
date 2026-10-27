@@ -246,7 +246,6 @@ pub const TARGET: &[(&str, Layer)] = &[
     ("cupertino-files", Apps),
     ("cupertino-geometry", Foundation),
     ("cupertino-glass", Render),
-    ("cupertino-gtk-theme", Tools),
     ("cupertino-icons", Render),
     ("cupertino-input", Models),
     ("cupertino-keyboard", Models),

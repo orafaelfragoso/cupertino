@@ -63,7 +63,7 @@ without the `cupertino-` prefix):
 | `shell` | `foundation`, `models`, `platform`, `protocol`, `transport`, `render`, `ui` | controlcenter, dock, launcher, login, menubar, notifications, osd, screenshot, windowmanager |
 | `services` | `foundation`, `models`, `platform`, `protocol`, `services` | btd, netd, powerd, sessiond |
 | `apps` | `foundation`, `models`, `protocol`, `transport`, `ui` | files, settings |
-| `tools` | all but `core`, `shell`, `services`, `apps` | gtk-theme, layers, testclient |
+| `tools` | all but `core`, `shell`, `services`, `apps` | layers, testclient |
 
 Pure toolkit-facing models (filepicker, text-field, typeahead) are `foundation`, so the toolkit can use them.
 `keyboard` stays in `models`: it is compositor keyboard policy.

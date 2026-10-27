@@ -7,10 +7,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use cupertino_assets::Assets;
-use cupertino_client::{
-    Anchor, Button, Client, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig, Margin,
-    PointerEvent,
-};
 use cupertino_geometry::{Point, Rect};
 use cupertino_screenshot::filename::{self, LocalTime};
 use cupertino_screenshot::image;
@@ -18,10 +14,15 @@ use cupertino_screenshot::render::{self, Painter, Palette};
 use cupertino_screenshot::settings::{parse_user_dirs, Settings};
 use cupertino_screenshot::thumbnail::{self, Phase, Thumbnail};
 use cupertino_screenshot::values::{THUMBNAIL_MARGIN, THUMBNAIL_SHADOW_OUTSET};
-use cupertino_theme::{Appearance, Theme};
+use cupertino_shell_client::{
+    Anchor, KeyboardInteractivity, Layer, LayerSurfaceConfig, Margin, ShellEvent,
+};
+use cupertino_theme::Theme;
+use cupertino_ui_wayland::{Ready, ShmPresenter};
+use cupertino_wayland_client::{Button, Event, PointerEvent};
 use tiny_skia::Pixmap;
 
-use crate::app::{Result, Screen, Shot};
+use crate::app::{Result, Screen, Shot, Wayland};
 use crate::capture::Capturer;
 
 /// Namespaces of the thumbnail and of the surface that takes the keyboard focus the clipboard needs. Neither is the
@@ -86,7 +87,7 @@ fn write_files(dir: &Path, shots: &[Shot]) -> Result<()> {
 
 /// Save the shots: after the thumbnail commits when it is on, else at once.
 pub fn to_files(
-    client: &mut Client,
+    wl: &mut Wayland,
     screens: &[Screen],
     shots: &[Shot],
     settings: &Settings,
@@ -111,28 +112,28 @@ pub fn to_files(
     // outset around it, so the margins are negative by that much. Anchored with an exclusive zone of 0 it stays
     // clear of the dock, which stands in for the design's move above the dock.
     let margin = (THUMBNAIL_MARGIN - outset) as i32;
-    let surface = client.layer_surface(&LayerSurfaceConfig {
-        namespace: THUMBNAIL_NAMESPACE.into(),
-        output: Some(screens[0].id),
-        layer: Layer::Overlay,
-        anchor: Anchor::Bottom | Anchor::Right,
-        size: surface_size,
-        margin: Margin {
-            right: margin,
-            bottom: margin,
-            ..Margin::default()
+    let layer = wl.layer_shell.layer_surface(
+        &mut wl.conn,
+        &LayerSurfaceConfig {
+            namespace: THUMBNAIL_NAMESPACE.into(),
+            output: Some(screens[0].id),
+            layer: Layer::Overlay,
+            anchor: Anchor::Bottom | Anchor::Right,
+            size: surface_size,
+            margin: Margin {
+                right: margin,
+                bottom: margin,
+                ..Margin::default()
+            },
+            exclusive_zone: 0,
+            keyboard: KeyboardInteractivity::None,
         },
-        exclusive_zone: 0,
-        keyboard: KeyboardInteractivity::None,
-    })?;
+    )?;
+    let surface = layer.surface();
+    let mut presenter = ShmPresenter::new(surface);
     let theme = Theme::load()?;
-    let appearance = if client.is_dark() {
-        Appearance::Dark
-    } else {
-        Appearance::Light
-    };
     let mut painter = Painter::new(
-        Palette::from_theme(&theme, appearance)?,
+        Palette::from_theme(&theme, wl.appearance())?,
         theme.tokens.typography().clone(),
         assets,
     )?;
@@ -143,20 +144,20 @@ pub fn to_files(
     let mut written = false;
     let image_rect = Rect::new(outset, outset, size.0, size.1);
     loop {
-        let timeout = model
-            .deadline()
-            .map(|at| Duration::from_secs_f64((at - now()).max(0.0)));
-        for event in client.wait(timeout)? {
-            match event {
-                Event::Draw(s) if s == surface => {
+        loop {
+            match presenter.poll(&wl.conn)? {
+                Ready::Idle => break,
+                // a draw follows every scale change
+                Ready::ScaleChanged(_) => {}
+                Ready::Draw => {
                     let phase = model.phase(now());
                     let look = match phase {
                         Phase::Shown(look) | Phase::Dismissing(look) => look,
                         Phase::Gone => continue,
                     };
-                    client.set_input_region(surface, &[image_rect])?;
-                    client.draw(surface, |pm, scale| {
-                        let s = f64::from(scale.factor());
+                    wl.conn.set_input_region(surface, Some(&[image_rect]))?;
+                    presenter.draw(&mut wl.conn, None, |pm, scale| {
+                        let s = scale.factor();
                         let (w, h) = ((size.0 * s).round() as u32, (size.1 * s).round() as u32);
                         if scaled.as_ref().is_none_or(|(key, _)| *key != w) {
                             scaled = render::downscale(first, w.max(1), h.max(1)).map(|p| (w, p));
@@ -166,9 +167,17 @@ pub fn to_files(
                         }
                     })?;
                     if matches!(phase, Phase::Dismissing(_)) || model.deadline().is_none() {
-                        client.request_redraw(surface)?;
+                        presenter.request_redraw();
                     }
                 }
+            }
+        }
+        let timeout = model
+            .deadline()
+            .map(|at| Duration::from_secs_f64((at - now()).max(0.0)));
+        for event in wl.conn.wait(timeout)? {
+            match event {
+                Event::Frame(frame) if frame.surface == surface => presenter.frame_done(),
                 Event::Pointer { surface: s, event } if s == surface => match event {
                     PointerEvent::Button {
                         button: Button::Left,
@@ -186,9 +195,15 @@ pub fn to_files(
                     | PointerEvent::Button { .. }
                     | PointerEvent::Scroll { .. } => {}
                 },
-                Event::Closed(s) if s == surface => {
-                    return Err("the server closed the thumbnail".into())
-                }
+                Event::Extension(event) => match wl.extension(&event) {
+                    Some(&ShellEvent::Configure { surface: s, size }) if s == surface => {
+                        presenter.configured(layer.configured(size)?)
+                    }
+                    Some(&ShellEvent::Closed(s)) if s == surface => {
+                        return Err("the server closed the thumbnail".into())
+                    }
+                    _ => {}
+                },
                 // the thumbnail takes no keys and has no popups or roles; its look is fixed for its few seconds
                 _ => {}
             }
@@ -200,10 +215,10 @@ pub fn to_files(
         }
         match model.phase(now()) {
             Phase::Gone => {
-                client.destroy_surface(surface)?;
+                wl.conn.destroy(surface)?;
                 return Ok(());
             }
-            Phase::Dismissing(_) => client.request_redraw(surface)?,
+            Phase::Dismissing(_) => presenter.request_redraw(),
             Phase::Shown(_) => {}
         }
     }
@@ -211,34 +226,46 @@ pub fn to_files(
 
 /// Offer the shot on the clipboard and serve it until it is replaced. The server takes a selection only from a client
 /// with the keyboard focus, so a transparent 1 x 1 surface takes it for the moment of the offer.
-pub fn to_clipboard(client: &mut Client, capturer: &mut Capturer, shot: &Shot) -> Result<()> {
+pub fn to_clipboard(wl: &mut Wayland, capturer: &mut Capturer, shot: &Shot) -> Result<()> {
     let png = image::png(&shot.image)?;
-    let before = client.input_serial();
-    let surface = client.layer_surface(&LayerSurfaceConfig {
-        namespace: CLIPBOARD_NAMESPACE.into(),
-        output: None,
-        layer: Layer::Overlay,
-        anchor: Anchor::Top | Anchor::Left,
-        size: (1, 1),
-        margin: Margin::default(),
-        exclusive_zone: -1,
-        keyboard: KeyboardInteractivity::Exclusive,
-    })?;
+    let before = wl.conn.input_serial();
+    let layer = wl.layer_shell.layer_surface(
+        &mut wl.conn,
+        &LayerSurfaceConfig {
+            namespace: CLIPBOARD_NAMESPACE.into(),
+            output: None,
+            layer: Layer::Overlay,
+            anchor: Anchor::Top | Anchor::Left,
+            size: (1, 1),
+            margin: Margin::default(),
+            exclusive_zone: -1,
+            keyboard: KeyboardInteractivity::Exclusive,
+        },
+    )?;
+    let surface = layer.surface();
+    let mut presenter = ShmPresenter::new(surface);
     let deadline = Instant::now() + FOCUS_TIMEOUT;
     // the keyboard enter that follows the first commit brings a new serial
-    while client.input_serial() == before || client.input_serial().is_none() {
+    while wl.conn.input_serial() == before || wl.conn.input_serial().is_none() {
         let left = deadline
             .checked_duration_since(Instant::now())
             .ok_or("the server gave the clipboard surface no keyboard focus")?;
-        for event in client.wait(Some(left))? {
-            if event == Event::Draw(surface) {
-                client.set_input_region(surface, &[])?;
-                client.draw(surface, |_, _| {})?;
+        for event in wl.conn.wait(Some(left))? {
+            if let Event::Extension(event) = event {
+                if let Some(&ShellEvent::Configure { surface: s, size }) = wl.extension(&event) {
+                    if s == surface {
+                        presenter.configured(layer.configured(size)?);
+                    }
+                }
             }
+        }
+        if presenter.poll(&wl.conn)? == Ready::Draw {
+            wl.conn.set_input_region(surface, Some(&[]))?;
+            presenter.draw(&mut wl.conn, None, |_, _| {})?;
         }
         capturer.dispatch()?;
     }
-    capturer.offer_clipboard(png, client.input_serial().expect("checked above"))?;
-    client.destroy_surface(surface)?;
+    capturer.offer_clipboard(png, wl.conn.input_serial().expect("checked above"))?;
+    wl.conn.destroy(surface)?;
     capturer.serve_clipboard()
 }

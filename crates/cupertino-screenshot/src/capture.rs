@@ -13,11 +13,11 @@ use std::fs::File;
 use std::io::Write;
 use std::os::fd::{AsFd, OwnedFd};
 
-use cupertino_client::{Connection, OutputId};
 use cupertino_geometry::Rect;
 use cupertino_protocols::client::screenshot::cupertino_screenshot_v1::{self, CupertinoScreenshotV1};
 use cupertino_screenshot::image::{self, Format};
 use cupertino_screenshot::pick::PickWindow;
+use cupertino_wayland_client::OutputId;
 use memmap2::Mmap;
 use rustix::fs::{memfd_create, MemfdFlags};
 use tiny_skia::Pixmap;
@@ -32,7 +32,9 @@ use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::protocol::wl_shm::{self, WlShm};
 use wayland_client::protocol::wl_shm_pool::WlShmPool;
-use wayland_client::{delegate_noop, event_created_child, Dispatch, EventQueue, Proxy, QueueHandle, WEnum};
+use wayland_client::{
+    delegate_noop, event_created_child, Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
+};
 use wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::{self, ExtForeignToplevelHandleV1};
 use wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_list_v1::{self, ExtForeignToplevelListV1};
 use wayland_protocols::ext::image_capture_source::v1::client::ext_foreign_toplevel_image_capture_source_manager_v1::ExtForeignToplevelImageCaptureSourceManagerV1;

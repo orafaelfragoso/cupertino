@@ -173,7 +173,7 @@ The process that holds the lock screen is also the session agent. It serves `org
 | `SwitchToLoginWindow | Fast user switching: lock the session, and once the server confirms the lock, ask the session manager to give the console to the login screen (`cupertino-login: switching to the login window`). A session that is locked already switches at once. |
 | `PowerKey(pressed: b) | The power key went down or up; the process times the hold. Takes effect on an unlocked session only and never fails. |
 | `Locked` (`b`, read only, `PropertiesChanged`) | True from the request for the lock until the unlock. |
-| `UserName` (`s`, read only) | The account's full name, else its login: the menu's "Log Out <name>…". |
+| `UserName` (`s`, read only) | The account's full name, else its login: the menu's "Log Out <name>…". Cleaned as untrusted text: control and bidirectional-override characters dropped, at most 64 characters. |
 | `Capabilities` (`a{sb}`, read only, `PropertiesChanged`) | `sleep`, `restart`, `shut-down` (logind's `CanSuspend`, `CanReboot`, `CanPowerOff` answer yes or challenge), `log-out` and `lock` (always), `switch-user` (the session manager is on the system bus). Read at start and when the manager's name gets an owner; what is off is logged with the reason (`cupertino-login: menu item off: …`). A manager that goes away later is not noticed until it returns. |
 
 ### Confirmation panel

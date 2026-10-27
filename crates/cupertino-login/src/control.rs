@@ -11,6 +11,21 @@ use std::collections::HashMap;
 use crate::capabilities::Capabilities;
 use crate::panel::Kind;
 
+/// Longest name the menu is given, in characters.
+const MAX_NAME_CHARS: usize = 64;
+
+/// A name for a menu: from the account database, so not trusted. Control characters (newlines, escapes, the bidirectional
+/// overrides) are dropped, the ends trimmed, and the length capped.
+pub fn clean_name(text: &str) -> String {
+    text.chars()
+        .filter(|c| !c.is_control() && !matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(MAX_NAME_CHARS)
+        .collect()
+}
+
 /// Name, path and interface of the control interface (the callers use these strings).
 pub const BUS_NAME: &str = "org.cupertino.Login1";
 pub const OBJECT_PATH: &str = "/org/cupertino/Login1";
@@ -188,7 +203,7 @@ pub fn serve(
                 Control {
                     on_request: Box::new(on_request),
                     locked: false,
-                    user_name,
+                    user_name: clean_name(&user_name),
                     capabilities,
                 },
             )?
@@ -205,4 +220,17 @@ pub fn serve(
             RequestNameReply::Exists | RequestNameReply::InQueue => Err(zbus::Error::NameTaken),
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_name_for_the_menu_has_no_control_characters_and_a_bounded_length() {
+        assert_eq!(clean_name("Rafael Fragoso"), "Rafael Fragoso");
+        assert_eq!(clean_name("  Ra\nfa\x1b[31mel\u{202e}  "), "Rafa[31mel");
+        assert_eq!(clean_name("\t\n"), "");
+        assert_eq!(clean_name(&"é".repeat(200)).chars().count(), MAX_NAME_CHARS);
+    }
 }

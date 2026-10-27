@@ -855,3 +855,66 @@ fn choosing_a_resolution_stores_it_for_that_mouse_and_automatic_forgets_it() {
         "Custom asks in a sheet and changes nothing yet"
     );
 }
+
+// ---- Accessibility held by the server ----------------------------------------------------------------------------
+
+struct FakeAccessibility(HashMap<String, String>);
+
+#[zbus::interface(name = "org.cupertino.Session1")]
+impl FakeAccessibility {
+    #[zbus(property)]
+    fn accessibility(&self) -> HashMap<String, String> {
+        self.0.clone()
+    }
+}
+
+#[test]
+fn the_colour_filter_button_shows_what_the_server_holds_not_the_file() {
+    let Some(bus) = common::bus() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let _session = zbus::blocking::connection::Builder::address(bus.address.as_str())
+        .unwrap()
+        .serve_at(
+            "/org/cupertino/Session1",
+            FakeAccessibility([("color_filter".to_string(), "grayscale".to_string())].into()),
+        )
+        .unwrap()
+        .name("org.cupertino.Session1")
+        .unwrap()
+        .build()
+        .unwrap();
+    let colour_filter = |settings: &Settings| {
+        let s = sections(PaneId::Accessibility, settings, LIGHT, &Live::default());
+        let row = s
+            .iter()
+            .flat_map(|s| &s.rows)
+            .find(|r| r.label == "Colour filter")
+            .expect("the Colour filter row")
+            .clone();
+        let (choices, selected) = popup_of(&row);
+        choices[selected].clone()
+    };
+    let mut settings = settings(dir.path());
+    assert_eq!(colour_filter(&settings), "None", "the file has no filter");
+    let held = match services(&bus).accessibility() {
+        Reading::Ready(held) => held,
+        other => panic!("the session's property, got {other:?}"),
+    };
+    settings.apply_session_accessibility(&held);
+    assert_eq!(colour_filter(&settings), "Grayscale");
+    let paths = Paths {
+        dock: None,
+        compositor: None,
+        menubar: None,
+        keyboard: None,
+        power: None,
+        accessibility: Some(dir.path().join("accessibility.conf")),
+    };
+    settings.reload(&paths).unwrap();
+    settings.apply_session_accessibility(&held);
+    assert_eq!(
+        colour_filter(&settings),
+        "Grayscale",
+        "a re-read of the file does not undo it"
+    );
+}

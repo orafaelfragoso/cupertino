@@ -136,6 +136,9 @@ pub struct Extras {
     pub session: Option<SessionState>,
 }
 
+/// The first item id of the accounts under "Switch User" (above the ids of the top-level rows).
+const SWITCH_USER_BASE: i32 = 1000;
+
 /// What a menu row does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExtraAction {
@@ -394,14 +397,22 @@ impl Extras {
                     Toggle::None,
                     action(SessionAction::SwitchUser),
                 );
-            }
-            for user in &session.users {
-                menu.row(
-                    &user.name,
-                    true,
-                    Toggle::None,
-                    action(SessionAction::SwitchUser),
-                );
+            } else {
+                // the people's names under "Switch User"; choosing one opens the login window (v1)
+                let mut children = Vec::new();
+                for (i, user) in session.users.iter().enumerate() {
+                    let id = ItemId(SWITCH_USER_BASE + i as i32);
+                    children.push(MenuItem {
+                        label: user.name.clone(),
+                        toggle: Toggle::Check(user.logged_in),
+                        ..MenuItem::new(id.0, "")
+                    });
+                    menu.actions
+                        .push((id, ExtraAction::Session(SessionAction::SwitchUser)));
+                }
+                let id = menu.next_id();
+                menu.rows
+                    .push(MenuItem::submenu(id, "Switch User", children));
             }
         }
         Some(menu)
@@ -926,9 +937,24 @@ mod tests {
                 "Shut Down\u{2026}",
                 "Lock Screen",
                 "Log Out\u{2026}",
-                "Ana"
+                "Switch User"
             ],
-            "no name: plain Log Out; a user replaces the login window entry"
+            "no name: plain Log Out; the accounts go under Switch User"
+        );
+        let switch = menu.rows.iter().find(|r| r.label == "Switch User").unwrap();
+        assert!(switch.has_submenu);
+        assert_eq!(
+            switch
+                .children
+                .iter()
+                .map(|c| (c.label.as_str(), c.toggle))
+                .collect::<Vec<_>>(),
+            [("Ana", Toggle::Check(true))],
+            "a person with a session open is ticked"
+        );
+        assert_eq!(
+            menu.action(switch.children[0].id),
+            Some(&ExtraAction::Session(SessionAction::SwitchUser))
         );
         assert!(!menu.rows[0].enabled, "Sleep is greyed");
         assert!(menu.rows[1].enabled);

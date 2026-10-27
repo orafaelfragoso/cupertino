@@ -16,8 +16,8 @@ use crate::source::{
     GtkMenuProps, KdeAppMenu, MenuSource, MenuSourceMap, WindowIdentity, WindowKey,
 };
 use crate::worker::Request;
-use cupertino_client::{GtkMenu, MenuBarUpdate, WindowMenu, WindowState};
 use cupertino_icons::from_argb;
+use cupertino_shell_client::{GtkMenu, MenuBarUpdate, WindowMenu, WindowState};
 use std::collections::HashMap;
 use tiny_skia::{IntSize, Pixmap};
 
@@ -302,7 +302,7 @@ mod tests {
     use super::*;
     use crate::dbus::sni::{IconPixmap, ItemStatus};
     use crate::extras::{BatteryState, WifiState};
-    use cupertino_client::ActiveApp as ReportedApp;
+    use cupertino_shell_client::ActiveApp as ReportedApp;
 
     fn editor() -> AppName {
         AppName {

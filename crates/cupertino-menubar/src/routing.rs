@@ -9,7 +9,8 @@ use crate::item::ItemId;
 use crate::layout::{BarLayout, SlotKey};
 use crate::source::{KdeAppMenu, MenuSource};
 use crate::worker::Request;
-use cupertino_client::{key, WindowCommand};
+use cupertino_shell_client::WindowCommand;
+use cupertino_wayland_client::key;
 
 /// The menu key for an evdev key code; `None` for keys menus ignore. Letters (type-ahead) need
 /// a keymap, which the process does not have.
@@ -188,7 +189,7 @@ mod tests {
     use crate::geom::Rect;
     use crate::layout::{layout_bar, BarMetrics, MonoMeasure};
     use crate::source::GtkMenuProps;
-    use cupertino_client::{ActiveApp, GtkMenu, MenuBarUpdate, WindowMenu};
+    use cupertino_shell_client::{ActiveApp, GtkMenu, MenuBarUpdate, WindowMenu};
 
     struct Fixture {
         feed: BarFeed,

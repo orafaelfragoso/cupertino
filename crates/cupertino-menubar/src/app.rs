@@ -3,10 +3,6 @@
 //! `routing`, `popups`, `raster`); this file only connects them to the toolkit.
 
 use cupertino_assets::Assets;
-use cupertino_client::{
-    Anchor, Backdrop, Button, Client, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig,
-    Margin, MenuBar, OutputGeometry, OutputId, PointerEvent, SurfaceId,
-};
 use cupertino_defaults::menubar::MenuBarSettings;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_geometry::Rect as GRect;
@@ -23,7 +19,17 @@ use cupertino_menubar::popups::{self, PopupOp};
 use cupertino_menubar::raster::{BarText, MenuPalette, Style, POPUP_RADIUS};
 use cupertino_menubar::routing::{self, menu_key, Action, Context};
 use cupertino_menubar::worker::{self, Worker};
+use cupertino_protocol_app::{AppEffects, Backdrop};
+use cupertino_shell_client::{
+    Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
+    MenuBar, Session as SessionObserver, SessionChange, SessionState, Shell, ShellEvent,
+};
 use cupertino_theme::Theme;
+use cupertino_ui_wayland::{popup, Ready, ShmPresenter};
+use cupertino_wayland_client::{
+    Button, Connection, Event, KeyboardEvent, OutputGeometry, OutputId, PointerEvent, Popup,
+    SurfaceId,
+};
 use std::error::Error;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -39,7 +45,8 @@ const NAMESPACE: &str = "cupertino-menubar";
 
 /// The popup surface of one open menu level.
 struct PopupSurface {
-    surface: SurfaceId,
+    popup: Popup,
+    presenter: ShmPresenter,
     backdrop: Backdrop,
     /// On whole points, in the coordinates of the bar surface.
     rect: Rect,
@@ -49,7 +56,8 @@ struct PopupSurface {
 struct Bar {
     output: OutputId,
     geometry: OutputGeometry,
-    surface: SurfaceId,
+    layer: LayerSurface,
+    presenter: ShmPresenter,
     /// Width of the surface from its last configure.
     width: u32,
     menu_bar: MenuBar,
@@ -71,7 +79,13 @@ enum Part {
 }
 
 struct App {
-    client: Client,
+    conn: Connection,
+    layer_shell: LayerShell,
+    effects: AppEffects,
+    shell: Shell,
+    _observer: SessionObserver,
+    /// The session's appearance (for the text palette).
+    observed: SessionState,
     worker: Worker,
     events: Receiver<worker::Event>,
     style: Style,
@@ -120,12 +134,12 @@ fn load_conf(last_good: Option<&MenuBarSettings>) -> Result<MenuBarSettings> {
 
 /// Watch `menubar.conf`; its changes wake the loop. A watch that cannot be set up is reported: the file then applies at
 /// the next start.
-fn watch_conf(client: &Client) -> (Option<ConfigWatcher>, Receiver<WatchEvent>) {
+fn watch_conf(conn: &Connection) -> (Option<ConfigWatcher>, Receiver<WatchEvent>) {
     let (tx, rx) = std::sync::mpsc::channel();
     let Some(path) = MenuBarSettings::path() else {
         return (None, rx);
     };
-    let waker = client.waker();
+    let waker = conn.waker();
     let watch = ConfigWatcher::new(vec![path.clone()], move |event| {
         // the receiver is gone only while the process exits
         if tx.send(event).is_ok() {
@@ -156,21 +170,30 @@ pub fn run() -> Result<std::convert::Infallible> {
     };
     let text = BarText::new(theme.tokens.typography(), &assets)?;
 
-    let client = Client::connect_shell()?;
-    let (conf_watch, conf_changes) = watch_conf(&client);
+    let mut conn = Connection::connect()?;
+    let layer_shell = LayerShell::bind(&mut conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
+    let effects = AppEffects::bind(&mut conn).ok_or("the server lacks cupertino_app_effects_v1")?;
+    let shell = Shell::bind(&mut conn).ok_or("the server lacks cupertino_shell_v1")?;
+    let (observer, observed, early) = shell.observe(&mut conn)?;
+    let (conf_watch, conf_changes) = watch_conf(&conn);
     let style = Style {
-        palette: MenuPalette::new(client.is_dark()),
+        palette: MenuPalette::new(observed.dark),
         bar,
         menu: MenuMetrics::default(),
     };
     let session = zbus::block_on(zbus::Connection::session())
         .map_err(|e| format!("cannot connect to the session bus: {e}"))?;
-    let waker = client.waker();
+    let waker = conn.waker();
     let (worker, events) = Worker::start(session.clone(), move || waker.wake())?;
-    let waker = client.waker();
+    let waker = conn.waker();
     let (extras, extras_events) = ExtrasBus::start(session, move || waker.wake());
     let mut app = App {
-        client,
+        conn,
+        layer_shell,
+        effects,
+        shell,
+        _observer: observer,
+        observed,
         worker,
         events,
         style,
@@ -192,9 +215,13 @@ pub fn run() -> Result<std::convert::Infallible> {
         next_key: 0,
     };
     app.reconcile_outputs()?;
+    for event in early {
+        app.handle(event)?;
+    }
     let mut timeout = app.housekeeping()?;
     loop {
-        for event in app.client.wait(timeout)? {
+        app.present()?;
+        for event in app.conn.wait(timeout)? {
             app.handle(event)?;
         }
         app.drain_worker()?;
@@ -215,12 +242,12 @@ impl App {
 
     fn locate(&self, surface: SurfaceId) -> Option<(usize, Part)> {
         self.bars.iter().enumerate().find_map(|(i, b)| {
-            if b.surface == surface {
+            if b.layer.surface() == surface {
                 Some((i, Part::Bar))
             } else {
                 b.popups
                     .iter()
-                    .position(|p| p.surface == surface)
+                    .position(|p| p.popup.surface() == surface)
                     .map(|level| (i, Part::Popup(level)))
             }
         })
@@ -231,7 +258,7 @@ impl App {
     /// Create the bars of new outputs, drop those of outputs that went away and follow the geometry
     /// of the others.
     fn reconcile_outputs(&mut self) -> Result<()> {
-        let outputs = self.client.outputs();
+        let outputs = self.conn.outputs();
         let mut i = 0;
         while i < self.bars.len() {
             if outputs.iter().any(|o| o.id == self.bars[i].output) {
@@ -260,19 +287,22 @@ impl App {
     }
 
     fn create_bar(&mut self, output: OutputId, geometry: OutputGeometry) -> Result<()> {
-        let surface = self.client.layer_surface(&LayerSurfaceConfig {
-            namespace: NAMESPACE.to_string(),
-            output: Some(output),
-            layer: Layer::Top,
-            anchor: Anchor::Top | Anchor::Left | Anchor::Right,
-            size: (0, self.style.bar.height.ceil() as u32),
-            margin: Margin::default(),
-            // the server reserves the bar's space
-            exclusive_zone: 0,
-            keyboard: KeyboardInteractivity::None,
-        })?;
-        let menu_bar = self.client.menu_bar(surface, output)?;
-        let backdrop = self.client.backdrop(surface)?;
+        let layer = self.layer_shell.layer_surface(
+            &mut self.conn,
+            &LayerSurfaceConfig {
+                namespace: NAMESPACE.to_string(),
+                output: Some(output),
+                layer: Layer::Top,
+                anchor: Anchor::Top | Anchor::Left | Anchor::Right,
+                size: (0, self.style.bar.height.ceil() as u32),
+                margin: Margin::default(),
+                // the server reserves the bar's space
+                exclusive_zone: 0,
+                keyboard: KeyboardInteractivity::None,
+            },
+        )?;
+        let menu_bar = self.shell.menu_bar(&self.conn, layer.surface(), output)?;
+        let backdrop = self.effects.backdrop(&self.conn, layer.surface())?;
         backdrop.set_material("MenuBar");
         let text = self.text.for_output();
         let mut controller = MenuController::new(
@@ -290,7 +320,8 @@ impl App {
         self.bars.push(Bar {
             output,
             geometry,
-            surface,
+            presenter: ShmPresenter::new(layer.surface()),
+            layer,
             width: geometry.width,
             menu_bar,
             backdrop,
@@ -308,11 +339,11 @@ impl App {
         let mut bar = self.bars.remove(i);
         while let Some(popup) = bar.popups.pop() {
             drop(popup.backdrop);
-            self.client.destroy_surface(popup.surface)?;
+            self.conn.destroy(popup.popup.surface())?;
         }
         drop(bar.backdrop);
         drop(bar.menu_bar);
-        self.client.destroy_surface(bar.surface)?;
+        self.conn.destroy(bar.layer.surface())?;
         Ok(())
     }
 
@@ -331,59 +362,47 @@ impl App {
 
     fn handle(&mut self, event: Event) -> Result<()> {
         match event {
-            Event::Configured { surface, size } => {
-                if let Some((i, Part::Bar)) = self.locate(surface) {
-                    self.bars[i].width = size.0;
-                    self.set_screen(i);
-                    self.sync_popups(i)?;
+            Event::Frame(frame) => {
+                if let Some(presenter) =
+                    presenters(&mut self.bars).find(|p| p.surface() == frame.surface)
+                {
+                    presenter.frame_done();
                 }
             }
-            Event::ScaleChanged { surface, scale } => {
-                if let Some((i, Part::Bar)) = self.locate(surface) {
-                    // menus are measured at the scale they are drawn at
-                    self.bars[i].scale = f64::from(scale.factor());
-                    self.bars[i].text.set_scale(self.bars[i].scale);
-                    self.set_screen(i);
-                    self.sync_popups(i)?;
-                    self.reload_icons();
+            Event::PopupConfigure { popup, configure } => {
+                if let Some(presenter) =
+                    presenters(&mut self.bars).find(|p| p.surface() == popup.surface())
+                {
+                    presenter.configured((configure.width, configure.height));
                 }
             }
-            Event::Draw(surface) => self.draw(surface)?,
-            Event::Closed(surface) => {
-                if let Some((i, Part::Bar)) = self.locate(surface) {
-                    let output = self.bars[i].output;
-                    self.destroy_bar(i)?;
-                    if self.client.outputs().iter().any(|o| o.id == output) {
-                        return Err(
-                            "the server closed the menu bar of an output that is still present"
-                                .into(),
-                        );
-                    }
-                }
-            }
-            Event::PopupDone(surface) => {
+            Event::PopupDone(popup) => {
                 // the server dismissed the grab: the menus are over
-                if let Some((i, _)) = self.locate(surface) {
+                if let Some((i, _)) = self.locate(popup.surface()) {
                     let outcome = self.bars[i].controller.close();
                     self.apply(i, outcome)?;
                 }
             }
             Event::Pointer { surface, event } => self.pointer(surface, event)?,
-            Event::Key {
+            Event::Keyboard {
                 surface,
-                key,
-                pressed,
-                ..
+                event:
+                    KeyboardEvent::Key {
+                        code,
+                        pressed: true,
+                        ..
+                    },
             } => {
-                if let (true, Some((i, _)), Some(key)) =
-                    (pressed, self.locate(surface), menu_key(key))
-                {
+                if let (Some((i, _)), Some(key)) = (self.locate(surface), menu_key(code)) {
                     let now = self.now();
                     let outcome = self.bars[i].controller.key(key, now);
                     self.apply(i, outcome)?;
                 }
             }
-            Event::KeyboardLeave(surface) => {
+            Event::Keyboard {
+                surface,
+                event: KeyboardEvent::Leave,
+            } => {
                 // the bar held the keyboard for the shortcut and lost it to something else
                 if let Some((i, Part::Bar)) = self.locate(surface) {
                     if self.bars[i].controller.mode() == Mode::TitleFocus {
@@ -392,55 +411,116 @@ impl App {
                     }
                 }
             }
-            Event::MenuBar { surface, update } => {
-                if let Some((i, Part::Bar)) = self.locate(surface) {
-                    let data_dirs = &self.data_dirs;
-                    self.bars[i]
-                        .feed
-                        .apply(&update, &mut self.shared, |id| app_name(id, data_dirs));
-                    if let Some(agent) = update.session_agent {
-                        self.extras.session_agent(match agent {
-                            cupertino_client::SessionAgent::None => SessionAgent::None,
-                            cupertino_client::SessionAgent::Process(pid) => {
-                                SessionAgent::Process(pid)
-                            }
-                            cupertino_client::SessionAgent::Any => SessionAgent::Any,
-                        })?;
-                    }
-                    if update.engage {
-                        let outcome = self.bars[i].controller.focus_bar();
-                        self.apply(i, outcome)?;
-                    }
-                    self.refresh()?;
-                }
-            }
-            Event::Appearance { dark } => {
-                self.style.palette = MenuPalette::new(dark);
-                self.reload_extra_icons();
-                self.redraw_all()?;
-            }
-            // the bar's and the menus' materials follow the options in the server; the text palette has no recorded
-            // contrast variant
-            Event::DisplayOptions(_) => {}
-            // the server draws the lock screen: only the menus this process owns have to go
-            Event::SessionLock { locked: true } => {
-                for i in 0..self.bars.len() {
-                    let outcome = self.bars[i].controller.close();
-                    self.apply(i, outcome)?;
-                }
-            }
-            Event::SessionLock { locked: false }
-            | Event::LockRequested { .. }
-            | Event::LogOutRequested => {}
             Event::OutputsChanged => self.reconcile_outputs()?,
             Event::ActivationToken { .. } => {
                 return Err("an activation token arrived but this process asked for none".into())
             }
-            Event::Dock { .. } => {
-                return Err("a dock event arrived but this process has no dock".into())
-            }
+            Event::Extension(event) => match self.observed.apply(&event) {
+                Some(SessionChange::Appearance { dark }) => {
+                    self.style.palette = MenuPalette::new(dark);
+                    self.reload_extra_icons();
+                    self.redraw_all();
+                }
+                // the bar's and the menus' materials follow the options in the server; the text palette has no
+                // recorded contrast variant
+                Some(SessionChange::DisplayOptions(_)) => {}
+                // the server draws the lock screen: only the menus this process owns have to go
+                Some(SessionChange::Lock { locked: true }) => {
+                    for i in 0..self.bars.len() {
+                        let outcome = self.bars[i].controller.close();
+                        self.apply(i, outcome)?;
+                    }
+                }
+                Some(SessionChange::Lock { locked: false }) => {}
+                None => match event.downcast_ref::<ShellEvent>() {
+                    Some(&ShellEvent::Configure { surface, size }) => {
+                        if let Some((i, Part::Bar)) = self.locate(surface) {
+                            let bar = &mut self.bars[i];
+                            let size = bar.layer.configured(size)?;
+                            bar.presenter.configured(size);
+                            bar.width = size.0;
+                            self.set_screen(i);
+                            self.sync_popups(i)?;
+                        }
+                    }
+                    Some(&ShellEvent::Closed(surface)) => {
+                        if let Some((i, Part::Bar)) = self.locate(surface) {
+                            let output = self.bars[i].output;
+                            self.destroy_bar(i)?;
+                            if self.conn.outputs().iter().any(|o| o.id == output) {
+                                return Err("the server closed the menu bar of an output that is still present"
+                                    .into());
+                            }
+                        }
+                    }
+                    Some(ShellEvent::MenuBar { surface, update }) => {
+                        if let Some((i, Part::Bar)) = self.locate(*surface) {
+                            let data_dirs = &self.data_dirs;
+                            self.bars[i]
+                                .feed
+                                .apply(update, &mut self.shared, |id| app_name(id, data_dirs));
+                            if let Some(agent) = update.session_agent {
+                                self.extras.session_agent(match agent {
+                                    cupertino_shell_client::SessionAgent::None => {
+                                        SessionAgent::None
+                                    }
+                                    cupertino_shell_client::SessionAgent::Process(pid) => {
+                                        SessionAgent::Process(pid)
+                                    }
+                                    cupertino_shell_client::SessionAgent::Any => SessionAgent::Any,
+                                })?;
+                            }
+                            if update.engage {
+                                let outcome = self.bars[i].controller.focus_bar();
+                                self.apply(i, outcome)?;
+                            }
+                            self.refresh()?;
+                        }
+                    }
+                    Some(ShellEvent::Dock { .. }) => {
+                        return Err("a dock event arrived but this process has no dock".into())
+                    }
+                    // the session's requests are for the session agent
+                    _ => {}
+                },
+            },
+            // the scale is read when polling the presenters; the bar has no window and no clipboard
+            _ => {}
         }
         Ok(())
+    }
+
+    /// Draw every surface that can take a frame, until none can. A bar whose scale changed measures its menus at
+    /// the new one before anything is drawn.
+    fn present(&mut self) -> Result<()> {
+        loop {
+            let (mut scaled, mut ready) = (Vec::new(), Vec::new());
+            for presenter in presenters(&mut self.bars) {
+                loop {
+                    match presenter.poll(&self.conn)? {
+                        Ready::ScaleChanged(scale) => scaled.push((presenter.surface(), scale)),
+                        Ready::Draw => break ready.push(presenter.surface()),
+                        Ready::Idle => break,
+                    }
+                }
+            }
+            if scaled.is_empty() && ready.is_empty() {
+                return Ok(());
+            }
+            for (surface, scale) in scaled {
+                if let Some((i, Part::Bar)) = self.locate(surface) {
+                    // menus are measured at the scale they are drawn at
+                    self.bars[i].scale = scale.factor();
+                    self.bars[i].text.set_scale(self.bars[i].scale);
+                    self.set_screen(i);
+                    self.sync_popups(i)?;
+                    self.reload_icons();
+                }
+            }
+            for surface in ready {
+                self.draw(surface)?;
+            }
+        }
     }
 
     fn pointer(&mut self, surface: SurfaceId, event: PointerEvent) -> Result<()> {
@@ -521,11 +601,11 @@ impl App {
                         icon,
                         menu,
                     });
-                    self.redraw_all()?;
+                    self.redraw_all();
                 }
                 worker::Event::StatusRemoved { id } => {
                     self.shared.remove_status(&id);
-                    self.redraw_all()?;
+                    self.redraw_all();
                 }
             }
         }
@@ -534,7 +614,7 @@ impl App {
                 Ok(extras) => {
                     self.shared.extras = extras;
                     self.reload_extra_icons();
-                    self.redraw_all()?;
+                    self.redraw_all();
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return Err(worker::WorkerGone.into()),
@@ -662,7 +742,7 @@ impl App {
         };
         for action in actions {
             match action {
-                Action::Redraw => self.redraw(i)?,
+                Action::Redraw => self.redraw(i),
                 Action::SetMenuOpen(open) => self.bars[i].menu_bar.set_menu_open(open),
                 Action::Request(request) => self.worker.send(request)?,
                 Action::WindowCommand(command) => self.bars[i].menu_bar.window_command(command),
@@ -679,7 +759,8 @@ impl App {
             }
         }
         self.sync_popups(i)?;
-        self.sync_keyboard(i)
+        self.sync_keyboard(i);
+        Ok(())
     }
 
     /// Make the popup surfaces of bar `i` match the open menu levels.
@@ -700,27 +781,31 @@ impl App {
                         .filter(|_| level == self.bars[i].popups.len())
                         .ok_or("popups are destroyed deepest first")?;
                     drop(popup.backdrop);
-                    self.client.destroy_surface(popup.surface)?;
+                    self.conn.destroy(popup.popup.surface())?;
                 }
                 PopupOp::Create { level, rect } => {
                     let bar = &self.bars[i];
                     let parent = if level == 0 {
-                        bar.surface
+                        bar.layer.surface()
                     } else {
-                        bar.popups[level - 1].surface
+                        bar.popups[level - 1].popup.surface()
                     };
-                    let surface = self.client.popup(parent, &geometry_rect(rect))?;
-                    let backdrop = self.client.backdrop(surface)?;
+                    let popup = self
+                        .conn
+                        .popup(parent, &popup::placement(&geometry_rect(rect), true)?)?;
+                    let backdrop = self.effects.backdrop(&self.conn, popup.surface())?;
                     backdrop.set_material("Menu");
                     self.bars[i].popups.push(PopupSurface {
-                        surface,
+                        popup,
+                        presenter: ShmPresenter::new(popup.surface()),
                         backdrop,
                         rect: desired[level],
                     });
                 }
-                PopupOp::Reposition { level, rect } => self
-                    .client
-                    .reposition_popup(self.bars[i].popups[level].surface, &geometry_rect(rect))?,
+                PopupOp::Reposition { level, rect } => self.conn.reposition_popup(
+                    self.bars[i].popups[level].popup,
+                    &popup::placement(&geometry_rect(rect), true)?,
+                )?,
             }
         }
         for (popup, rect) in self.bars[i].popups.iter_mut().zip(desired) {
@@ -732,7 +817,7 @@ impl App {
     /// The bar takes the keyboard exclusively while a title is focused by the shortcut (the server
     /// gives a layer the keyboard only for exclusive interactivity); open menus get it through
     /// their popup grab.
-    fn sync_keyboard(&mut self, i: usize) -> Result<()> {
+    fn sync_keyboard(&mut self, i: usize) {
         let bar = &mut self.bars[i];
         let wanted = if bar.controller.mode() == Mode::TitleFocus {
             KeyboardInteractivity::Exclusive
@@ -741,43 +826,46 @@ impl App {
         };
         if bar.keyboard != wanted {
             bar.keyboard = wanted;
-            self.client
-                .set_keyboard_interactivity(bar.surface, wanted)?;
+            bar.layer.set_keyboard_interactivity(wanted);
             // the change applies with the next commit
-            self.client.request_redraw(bar.surface)?;
+            bar.presenter.request_redraw();
         }
-        Ok(())
     }
 
     // ---- drawing -------------------------------------------------------------------------
 
-    fn redraw(&mut self, i: usize) -> Result<()> {
-        let bar = &self.bars[i];
-        self.client.request_redraw(bar.surface)?;
-        for popup in &bar.popups {
-            self.client.request_redraw(popup.surface)?;
+    fn redraw(&mut self, i: usize) {
+        let bar = &mut self.bars[i];
+        bar.presenter.request_redraw();
+        for popup in &mut bar.popups {
+            popup.presenter.request_redraw();
         }
-        Ok(())
     }
 
-    fn redraw_all(&mut self) -> Result<()> {
-        (0..self.bars.len()).try_for_each(|i| self.redraw(i))
+    fn redraw_all(&mut self) {
+        (0..self.bars.len()).for_each(|i| self.redraw(i));
     }
 
     fn draw(&mut self, surface: SurfaceId) -> Result<()> {
-        // the surface may be gone since the event was queued
+        // the surface may be gone since it was found ready
         let Some((i, part)) = self.locate(surface) else {
             return Ok(());
         };
-        let bar = &self.bars[i];
-        let (width, height) = self.client.size(surface)?;
+        let bar = &mut self.bars[i];
+        let presenter = match part {
+            Part::Bar => &bar.presenter,
+            Part::Popup(level) => &bar.popups[level].presenter,
+        };
+        let (width, height) = presenter
+            .size()
+            .ok_or("a surface was ready to draw before its first configure")?;
         let size = GRect::new(0.0, 0.0, f64::from(width), f64::from(height));
         match part {
             Part::Bar => {
                 bar.backdrop.set_shape(&size, 0.0)?;
                 let (c, text, style, shared) =
                     (&bar.controller, &bar.text, &self.style, &self.shared);
-                self.client.draw(surface, |pm, scale| {
+                bar.presenter.draw(&mut self.conn, None, |pm, scale| {
                     style.paint_bar(
                         text,
                         pm,
@@ -785,7 +873,7 @@ impl App {
                         c.content(),
                         c.highlighted_slot(),
                         shared,
-                        f64::from(scale.factor()),
+                        scale.factor(),
                     )
                 })?;
             }
@@ -794,17 +882,17 @@ impl App {
                 let Some(open) = bar.controller.levels().get(level) else {
                     return Ok(());
                 };
-                let popup = &bar.popups[level];
+                let popup = &mut bar.popups[level];
                 popup.backdrop.set_shape(&size, POPUP_RADIUS)?;
                 let (text, style, origin) = (&bar.text, &self.style, (popup.rect.x, popup.rect.y));
-                self.client.draw(surface, |pm, scale| {
+                popup.presenter.draw(&mut self.conn, None, |pm, scale| {
                     style.paint_popup(
                         text,
                         pm,
                         &open.layout,
                         open.selected,
                         origin,
-                        f64::from(scale.factor()),
+                        scale.factor(),
                     )
                 })?;
             }
@@ -813,14 +901,26 @@ impl App {
     }
 }
 
-fn client_session_action(action: SessionAction) -> cupertino_client::SessionAction {
+/// Every presenter of the bars: each bar's, then those of its open menu levels.
+fn presenters(bars: &mut [Bar]) -> impl Iterator<Item = &mut ShmPresenter> {
+    bars.iter_mut().flat_map(|bar| {
+        let Bar {
+            presenter, popups, ..
+        } = bar;
+        std::iter::once(presenter).chain(popups.iter_mut().map(|p| &mut p.presenter))
+    })
+}
+
+fn client_session_action(action: SessionAction) -> cupertino_shell_client::SessionAction {
     match action {
-        SessionAction::Sleep => cupertino_client::SessionAction::Sleep,
-        SessionAction::Restart => cupertino_client::SessionAction::Restart,
-        SessionAction::ShutDown => cupertino_client::SessionAction::ShutDown,
-        SessionAction::Lock => cupertino_client::SessionAction::Lock,
-        SessionAction::LogOut => cupertino_client::SessionAction::LogOut,
-        SessionAction::SwitchUser => cupertino_client::SessionAction::SwitchUser,
-        SessionAction::RefreshCapabilities => cupertino_client::SessionAction::RefreshCapabilities,
+        SessionAction::Sleep => cupertino_shell_client::SessionAction::Sleep,
+        SessionAction::Restart => cupertino_shell_client::SessionAction::Restart,
+        SessionAction::ShutDown => cupertino_shell_client::SessionAction::ShutDown,
+        SessionAction::Lock => cupertino_shell_client::SessionAction::Lock,
+        SessionAction::LogOut => cupertino_shell_client::SessionAction::LogOut,
+        SessionAction::SwitchUser => cupertino_shell_client::SessionAction::SwitchUser,
+        SessionAction::RefreshCapabilities => {
+            cupertino_shell_client::SessionAction::RefreshCapabilities
+        }
     }
 }

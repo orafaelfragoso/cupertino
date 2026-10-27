@@ -20,6 +20,8 @@ use crate::layout::{
 
 /// Identifier of the synthetic root item of the app menu.
 pub const APP_MENU_ROOT: ItemId = ItemId(i32::MIN);
+/// The root of the system menu.
+pub const SYSTEM_MENU_ROOT: ItemId = ItemId(i32::MIN + 1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
@@ -280,6 +282,15 @@ impl MenuController {
 
     fn root_item(&self, key: &SlotKey) -> Option<MenuItem> {
         match key {
+            SlotKey::System => Some(MenuItem {
+                id: SYSTEM_MENU_ROOT,
+                has_submenu: true,
+                children: self.content.system_menu.clone(),
+                label: "System".to_string(),
+                enabled: true,
+                visible: true,
+                ..Default::default()
+            }),
             SlotKey::AppMenu => Some(MenuItem {
                 id: APP_MENU_ROOT,
                 has_submenu: true,

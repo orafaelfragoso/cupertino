@@ -37,3 +37,7 @@ tempfile = "3"
 name = "cupertino-menubar"
 path = "src/main.rs"
 required-features = ["app"]
+
+[[example]]
+name = "fake-login"
+required-features = ["dbus"]

@@ -10,6 +10,7 @@ const OUT: Rect = Rect::new(0.0, 0.0, 1920.0, 1080.0);
 fn content() -> BarContent {
     BarContent {
         app_name: "Files".into(),
+        system_menu: vec![],
         app_menu: vec![
             MenuItem::new(100, "About Files"),
             MenuItem::separator(101),

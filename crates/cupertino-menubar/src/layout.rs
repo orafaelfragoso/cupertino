@@ -44,6 +44,8 @@ pub struct BarMetrics {
     pub title_padding: f64,
     /// Horizontal padding around a status item icon (each side).
     pub status_padding: f64,
+    /// Width of the system menu slot.
+    pub system_width: f64,
     /// Width of the control panel slot.
     pub control_panel_width: f64,
     /// Padding of the clock text (each side).
@@ -63,6 +65,7 @@ impl Default for BarMetrics {
             edge_inset: 6.0,
             title_padding: 8.0,
             status_padding: 5.0,
+            system_width: 28.0,
             control_panel_width: 28.0,
             clock_padding: 8.0,
             min_gap: 24.0,
@@ -74,6 +77,8 @@ impl Default for BarMetrics {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SlotKey {
+    /// The system menu at the left end of the bar.
+    System,
     /// The bold app-name menu.
     AppMenu,
     Menu(ItemId),
@@ -95,6 +100,8 @@ pub struct StatusEntry {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BarContent {
     pub app_name: String,
+    /// The entries of the system menu; none leaves the slot out.
+    pub system_menu: Vec<MenuItem>,
     /// Items of the app menu opened by the bold app name.
     pub app_menu: Vec<MenuItem>,
     /// Top-level menus of the focused app: submenu items whose label is the title.
@@ -154,6 +161,14 @@ pub fn layout_bar(
         });
         *x += w;
     };
+    if !content.system_menu.is_empty() {
+        slots.push(Slot {
+            key: SlotKey::System,
+            rect: Rect::new(x, bar.y, metrics.system_width, bar.h),
+            bold: false,
+        });
+        x += metrics.system_width;
+    }
     push_left(
         &mut slots,
         SlotKey::AppMenu,
@@ -208,7 +223,7 @@ pub fn layout_bar(
             ends[count - 1]
         }
     };
-    let app_end = slots[0].rect.right();
+    let app_end = slots[left_menu_start - 1].rect.right();
     let mut menu_count = content.menus.len();
     let mut status_count = status_slots.len();
     let status_start = |n: usize, status: &[Slot]| {
@@ -447,6 +462,7 @@ mod tests {
     fn content() -> BarContent {
         BarContent {
             app_name: "Files".into(),
+            system_menu: vec![],
             app_menu: vec![],
             menus: vec![
                 MenuItem::submenu(1, "File", vec![]),
@@ -736,5 +752,30 @@ mod tests {
             &MonoMeasure::default(),
         );
         assert_eq!(p.rows.len(), 1);
+    }
+
+    #[test]
+    fn the_system_menu_slot_is_the_first_slot_and_leaves_the_app_menu_after_it() {
+        let mut with = content();
+        with.system_menu = vec![MenuItem::new(1, "Sleep")];
+        let metrics = BarMetrics::default();
+        let measure = MonoMeasure::default();
+        let rect = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let plain = layout_bar(rect, &content(), &metrics, &measure);
+        let l = layout_bar(rect, &with, &metrics, &measure);
+        assert_eq!(l.slots[0].key, SlotKey::System);
+        assert_eq!(l.slots[0].rect.x, metrics.edge_inset);
+        assert_eq!(l.slots[0].rect.w, metrics.system_width);
+        assert_eq!(l.slots[1].key, SlotKey::AppMenu);
+        assert_eq!(
+            l.slots[1].rect.x,
+            plain.slots[0].rect.x + metrics.system_width,
+            "the app menu moves right by the mark's width"
+        );
+        assert_eq!(
+            plain.slots[0].key,
+            SlotKey::AppMenu,
+            "without entries no slot"
+        );
     }
 }

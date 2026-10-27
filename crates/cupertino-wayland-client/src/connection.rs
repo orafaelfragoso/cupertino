@@ -216,13 +216,27 @@ enum Role {
         pending: Option<(i32, i32, u32, u32)>,
         current: Option<PopupConfigure>,
     },
+    External {
+        role: Box<dyn ExternalRole>,
+        /// The size of the latest [`State::configure_external`]; `None` leaves it to the client.
+        size: Option<(u32, u32)>,
+    },
 }
 
-impl Role {
-    fn xdg(&self) -> &XdgSurface {
-        match self {
-            Role::Toplevel { xdg, .. } | Role::Popup { xdg, .. } => xdg,
-        }
+/// The role an extension gives a surface of [`Connection::external_surface`] through a protocol of its own, such as
+/// a layer surface. The connection calls it where the role's requests belong in the surface's lifecycle.
+pub trait ExternalRole {
+    /// Acknowledge the configure `serial`, which the frame being presented answers. Called before the commit.
+    fn ack_configure(&self, serial: u32);
+
+    /// Destroy the role's objects. Called before the surface is destroyed.
+    fn destroy(&self);
+
+    /// Make `popup`, created without a parent, a popup of this surface. Called before the popup's first commit. Roles
+    /// without popups keep the default, which refuses.
+    fn adopt_popup(&self, popup: &XdgPopup) -> Result<(), Error> {
+        let _ = popup;
+        Err(Error::Protocol("this surface role takes no popups"))
     }
 }
 
@@ -242,8 +256,9 @@ struct Surface {
     next_slot: u64,
 }
 
-/// Dispatch state of the connection.
-pub(crate) struct State {
+/// Dispatch state of the connection. Extensions implement `Dispatch` for it with user data of their own type, so their
+/// objects share the connection's queue; see the crate README.
+pub struct State {
     capabilities: CapabilitySet,
     compositor: WlCompositor,
     shm: WlShm,
@@ -275,6 +290,7 @@ pub(crate) struct State {
 /// reacts to the returned [`Event`]s.
 pub struct Connection {
     conn: WlConnection,
+    globals: GlobalList,
     queue: EventQueue<State>,
     state: State,
     wake: UnixStream,
@@ -382,6 +398,7 @@ impl Connection {
         writer.set_nonblocking(true).map_err(Error::Io)?;
         Ok(Connection {
             conn,
+            globals,
             queue,
             state,
             wake,
@@ -457,7 +474,10 @@ impl Connection {
     pub fn popup(&mut self, parent: SurfaceId, placement: &PopupPlacement) -> Result<Popup, Error> {
         let qh = self.queue.handle();
         let s = &mut self.state;
-        let parent_xdg = s.surface(parent)?.role.xdg().clone();
+        let parent_xdg = match &s.surface(parent)?.role {
+            Role::Toplevel { xdg, .. } | Role::Popup { xdg, .. } => Some(xdg.clone()),
+            Role::External { .. } => None,
+        };
         let r = placement.anchor_rect;
         if !(r.width() > 0.0 && r.height() > 0.0 && placement.size.0 > 0 && placement.size.1 > 0) {
             return Err(Error::Protocol(
@@ -487,8 +507,16 @@ impl Connection {
         let id = s.next_id();
         let wl = s.compositor.create_surface(&qh, id);
         let xdg = s.wm_base.get_xdg_surface(&wl, &qh, id);
-        let popup = xdg.get_popup(Some(&parent_xdg), &positioner, &qh, id);
+        let popup = xdg.get_popup(parent_xdg.as_ref(), &positioner, &qh, id);
         positioner.destroy();
+        if let Role::External { role, .. } = &s.surface(parent)?.role {
+            if let Err(e) = role.adopt_popup(&popup) {
+                popup.destroy();
+                xdg.destroy();
+                wl.destroy();
+                return Err(e);
+            }
+        }
         if let (Some(serial), Some(seat)) = (grab_serial, s.seat.as_ref()) {
             popup.grab(seat, serial);
         }
@@ -546,6 +574,7 @@ impl Connection {
                 popup.destroy();
                 xdg.destroy();
             }
+            Role::External { role, .. } => role.destroy(),
         }
         if let Some(v) = &s.viewport {
             v.destroy();
@@ -690,6 +719,59 @@ impl Connection {
         self.state.clipboard.receive(&self.conn, offer, mime)
     }
 
+    /// The queue extensions create their objects on.
+    pub fn queue_handle(&self) -> QueueHandle<State> {
+        self.queue.handle()
+    }
+
+    /// The globals the compositor announced at connect, for extensions to bind theirs.
+    pub fn globals(&self) -> &GlobalList {
+        &self.globals
+    }
+
+    /// The `wl_surface` of `surface`, for an extension request that names it.
+    pub fn wl_surface(&self, surface: SurfaceId) -> Result<WlSurface, Error> {
+        Ok(self.state.surface(surface)?.wl.clone())
+    }
+
+    /// The seat, when the compositor offers one.
+    pub fn seat(&self) -> Option<WlSeat> {
+        self.state.seat.clone()
+    }
+
+    /// The `wl_output` of `output`, for an extension request that names it.
+    pub fn wl_output(&self, output: OutputId) -> Option<WlOutput> {
+        self.state
+            .outputs
+            .iter()
+            .find(|o| o.info.current.id == output)
+            .map(|o| o.wl.clone())
+    }
+
+    /// Create a surface whose role an extension gives it: `assign` creates the role's objects for the new `wl_surface`
+    /// (with the [`SurfaceId`] as user data where the protocol reports per surface) before its first commit. The
+    /// extension reports each configure with [`State::configure_external`]; the surface then draws through
+    /// [`Connection::lease`] like any other, with scale, frame callbacks and input.
+    pub fn external_surface<R: ExternalRole + 'static>(
+        &mut self,
+        assign: impl FnOnce(&WlSurface, &QueueHandle<State>, SurfaceId) -> R,
+    ) -> Result<SurfaceId, Error> {
+        let qh = self.queue.handle();
+        let s = &mut self.state;
+        let id = s.next_id();
+        let wl = s.compositor.create_surface(&qh, id);
+        let role = Box::new(assign(&wl, &qh, id));
+        s.add_surface(id, wl, Role::External { role, size: None }, &qh);
+        Ok(id)
+    }
+
+    /// Send the queued requests and dispatch every event the compositor sent in answer, keeping the events for the
+    /// next [`Connection::wait`]; for extensions that read state at setup.
+    pub fn roundtrip(&mut self) -> Result<(), Error> {
+        self.queue.roundtrip(&mut self.state)?;
+        Ok(())
+    }
+
     /// A buffer to draw the next frame of `surface` into, at the surface's scale. Its logical size is the configured
     /// one; `preferred` (logical points) applies when the compositor leaves the size to the client. The pixels are
     /// those of an earlier frame or zero: draw all of them. Dropping the lease without presenting gives it back.
@@ -709,6 +791,7 @@ impl Connection {
             Role::Popup { current, .. } => current
                 .map(|c| (c.width, c.height))
                 .ok_or(Error::NotConfigured)?,
+            Role::External { size, .. } => size.unwrap_or(preferred),
         };
         let scale = surf.scale;
         let layout = scale
@@ -740,7 +823,9 @@ impl Connection {
         })
     }
 
-    /// Wait for events, at most `timeout` (`None` waits until one arrives or a [`Waker`] wakes the loop).
+    /// Wait for events, at most `timeout` (`None` waits until one arrives or a [`Waker`] wakes the loop). It returns
+    /// after each read from the compositor, maybe with no event, once everything read is dispatched, so extensions
+    /// find what their objects received.
     pub fn wait(&mut self, timeout: Option<Duration>) -> Result<Vec<Event>, Error> {
         self.queue.dispatch_pending(&mut self.state)?;
         self.state.repeat_keys(Instant::now());
@@ -892,7 +977,10 @@ impl BufferLease<'_> {
         let qh = self.connection.queue.handle();
         let surf = self.connection.state.surface_mut(self.surface)?;
         if let Some(serial) = surf.serials.present()? {
-            surf.role.xdg().ack_configure(serial);
+            match &surf.role {
+                Role::Toplevel { xdg, .. } | Role::Popup { xdg, .. } => xdg.ack_configure(serial),
+                Role::External { role, .. } => role.ack_configure(serial),
+            }
         }
         let slot = &mut surf.slots[self.slot];
         slot.busy = true;
@@ -926,6 +1014,31 @@ fn clamp_i32(v: u32) -> i32 {
 }
 
 impl State {
+    /// Record a configure of an [`Connection::external_surface`]: its `serial`, acknowledged with the next present, and
+    /// its logical `size` (`None` leaves it to the client). A serial that does not increase, or a surface that is not
+    /// external, ends the next [`Connection::wait`] with the error.
+    pub fn configure_external(
+        &mut self,
+        surface: SurfaceId,
+        serial: u32,
+        size: Option<(u32, u32)>,
+    ) {
+        let surf = match self.surface_mut(surface) {
+            Ok(surf) => surf,
+            // the application destroyed the surface while the configure was on its way
+            Err(_) => return,
+        };
+        let Role::External { size: current, .. } = &mut surf.role else {
+            return self.fail(Error::Protocol(
+                "configure_external on a surface without an external role",
+            ));
+        };
+        *current = size;
+        if let Err(e) = surf.serials.receive(serial) {
+            self.fail(e);
+        }
+    }
+
     fn next_id(&mut self) -> SurfaceId {
         self.next_surface += 1;
         SurfaceId(self.next_surface)
@@ -974,7 +1087,9 @@ impl State {
     fn toplevel(&self, window: Toplevel) -> Result<&XdgToplevel, Error> {
         match &self.surface(window.0)?.role {
             Role::Toplevel { toplevel, .. } => Ok(toplevel),
-            Role::Popup { .. } => unreachable!("a Toplevel handle names a toplevel"),
+            Role::Popup { .. } | Role::External { .. } => {
+                unreachable!("a Toplevel handle names a toplevel")
+            }
         }
     }
 
@@ -1302,6 +1417,7 @@ impl Dispatch<XdgSurface, SurfaceId> for State {
                     configure,
                 }
             }
+            Role::External { .. } => unreachable!("an external surface has no xdg_surface"),
         };
         state.events.push(event);
     }

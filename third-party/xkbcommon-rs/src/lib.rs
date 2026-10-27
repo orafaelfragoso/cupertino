@@ -499,9 +499,6 @@ pub mod keysym {
 }
 
 #[cfg(test)]
-pub(crate) mod test;
-
-#[cfg(test)]
 macro_rules! log_init {
     () => {
         use simplelog::*;

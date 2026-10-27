@@ -13,7 +13,8 @@ items marked or approximate below are authored and replaceable.
 
 ## Running
 
-Feature `app` builds the binary: the card on a layer surface, as a client of `cupertino-server` (`render/cupertino-client`).
+Feature `app` builds the binary: the card on a layer surface, as a client of `cupertino-server` on `cupertino-wayland-client`,
+`cupertino-shell-client`, `cupertino-protocol-app` and a `cupertino-ui-wayland` presenter per surface.
 The server starts and restarts it through the `shell` key of its configuration, and a `control-panel` key binding and hot-corner
 action call `Toggle()`. The entry is `{"name": "controlcenter", "command": ["cupertino-controlcenter"]}` in the list below.
 

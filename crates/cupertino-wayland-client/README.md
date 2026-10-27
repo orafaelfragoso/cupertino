@@ -18,7 +18,7 @@ workspace's pure-Rust `cupertino-xkbcommon`); `cupertino-layers` fails the build
 | `Event::{Frame, ScaleChanged, OutputsChanged}`, `FrameCallback`, `Scale`, `OutputInfo`, `OutputId`, `OutputGeometry` | frame pacing, the surface's scale, outputs; with `zxdg_output_manager_v1` each output's logical position and size |
 | `Connection::set_input_region` | the part of a surface that takes pointer input, rounded outwards; `None` is the whole surface |
 | `Connection::request_activation_token`, `TokenRequest`, `Event::ActivationToken` | a token to hand to an application this one launches (`xdg_activation_v1`) |
-| `PointerEvent`, `KeyboardEvent`, `Button`, `Modifiers`, `CursorShape`, `ResizeEdge` | pointer and key input; the axes of one `wl_pointer.frame` arrive as one scroll; keys carry keysym and text from the compositor's keymap, key repeat runs in the client; `wl_pointer.axis_source`, `axis_stop` and `axis_discrete` are dropped for now. `Connection::{modifiers, input_serial}` read the held modifiers and the serial of the latest input event; `Connection::set_cursor` sets a named cursor (`wp_cursor_shape_v1`), `Connection::hide_cursor` hides it |
+| `PointerEvent`, `KeyboardEvent`, `Button`, `Modifiers`, `key`, `CursorShape`, `ResizeEdge` | pointer and key input (`key` names the evdev codes of common keys); the axes of one `wl_pointer.frame` arrive as one scroll; keys carry keysym and text from the compositor's keymap, key repeat runs in the client; `wl_pointer.axis_source`, `axis_stop` and `axis_discrete` are dropped for now. `Connection::{modifiers, input_serial}` read the held modifiers and the serial of the latest input event; `Connection::set_cursor` sets a named cursor (`wp_cursor_shape_v1`), `Connection::hide_cursor` hides it |
 | `Connection::{set_selection, receive}`, `ClipboardOffer`, `Event::Selection` | the clipboard: offer contents in several MIME types, list and read another client's |
 | `Error`, `Disconnect` | typed errors: a missing required protocol with its minimum version, the disconnect cause, a configure serial that did not increase, an unsupported format or MIME type, a denied or cancelled transfer, no free buffer |
 | `State`, `ExternalRole`, `Event::Extension`, `ExtensionEvent`, `Connection::{bind_extension, queue_handle, external_surface, wl_surface, wl_output, seat, pointer, surface_outputs, roundtrip}`, `OutputId::{registry_name, from_registry_name}` | the extension hook: another crate adds protocols of its own on the same queue (below) |
@@ -48,7 +48,8 @@ names no protocol beyond the standard ones.
   later use `Connection::queue_handle`. Rust allows the extension's `impl Dispatch<TheirInterface, TheirData> for
   State` only with that local type; `()` is refused.
 - Events: the `Dispatch` impl hands what it receives to `State::emit`, which `Connection::wait` returns as
-  `Event::Extension` in order with the transport's own events (`ExtensionEvent::downcast` gets the value back), or puts it
+  `Event::Extension` in order with the transport's own events (`ExtensionEvent::downcast` gets the value back,
+  `downcast_ref` looks at it), or puts it
   where the extension reads it, such as a queue shared through the user data. `State::fail` ends the next wait with an
   error, for a protocol violation the extension found; `State::output_id` names a `wl_output` the extension received. `Connection::wait` returns after each read from the compositor, maybe with no `Event`, once everything read
   is dispatched; the extension then reads its queue. A burst of extension events costs one wait, not one each.

@@ -29,7 +29,7 @@ copyright = "Cupertino contributors; Inter Project Authors; the photographers na
 license-file = ["../../packaging/debian/cupertino-data.copyright", "0"]
 extended-description = """\
 The default asset pack of Cupertino: the Inter UI font (OFL-1.1), the logical-name map to the host icon theme \
-and six photographs from Unsplash (Unsplash License) as wallpapers. The cursor theme is a separate package."""
+and six photographs from Unsplash (Unsplash License) as wallpapers. Cursors are the built-in set."""
 section = "misc"
 priority = "optional"
 depends = "adwaita-icon-theme"

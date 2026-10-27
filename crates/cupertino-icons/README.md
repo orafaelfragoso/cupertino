@@ -3,8 +3,8 @@
 The icons of the system and of applications for the server and the shell processes, and loading of PNG and SVG files into
 premultiplied RGBA pixels. The system's own icons (folders, documents by type, the trash, badges, template symbols) come from
 the asset packs (`cupertino-assets`) by logical name: a pack's raster, SVG or symbol file, or freedesktop names resolved in a
-host icon theme (a pack's `theme` sources and the default map of its `icon_theme`: the theme the pack names, else the
-user's theme from GTK's `settings.ini`, then its `Inherits` chain, then `hicolor`). A name no pack provides is drawn as a
+host icon theme (a pack's `theme` sources and the default map of its `icon_theme`: the theme the pack names, else
+`Adwaita`, then its `Inherits` chain, then `hicolor`). A name no pack provides is drawn as a
 placeholder rounded square. An application's icon comes only from its own `Icon=` entry: a name of the packs'
 `application.` namespace (the session's own applications, `application.file-manager`, `application.settings`), an absolute
 path or the `hicolor` theme. Depends on `cupertino-assets`, `cupertino-defaults` and `cupertino-apps`.

@@ -905,15 +905,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cupertino-gtk-theme"
-version = "0.1.0"
-dependencies = [
- "cupertino-input",
- "cupertino-theme",
- "tempfile",
-]
-
-[[package]]
 name = "cupertino-icons"
 version = "0.1.0"
 dependencies = [

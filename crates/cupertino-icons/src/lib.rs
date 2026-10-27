@@ -159,7 +159,7 @@ pub struct IconLookup {
     cache: HashMap<(String, u32, u32), Option<PathBuf>>,
 }
 
-/// The icon theme searched when neither the pack nor the user's GTK settings name one.
+/// The icon theme searched when the pack names none.
 const DEFAULT_HOST_THEME: &str = "Adwaita";
 
 const EXTENSIONS: [&str; 2] = ["png", "svg"];
@@ -258,15 +258,13 @@ fn search(t: &Theme, name: &str, size: u32, scale: u32) -> Option<PathBuf> {
 struct HostThemes {
     bases: Vec<PathBuf>,
     loaded: HashMap<String, Option<Theme>>,
-    user: Option<String>,
 }
 
 impl HostThemes {
-    fn new(bases: Vec<PathBuf>, user: Option<String>) -> Self {
+    fn new(bases: Vec<PathBuf>) -> Self {
         Self {
             bases,
             loaded: HashMap::new(),
-            user,
         }
     }
 
@@ -278,12 +276,11 @@ impl HostThemes {
             .as_ref()
     }
 
-    /// `theme` (the user's theme when `None`, else [`DEFAULT_HOST_THEME`]), its `Inherits` chain (each theme once), then `hicolor`.
+    /// `theme` (else [`DEFAULT_HOST_THEME`]), its `Inherits` chain (each theme once), then `hicolor`.
     fn chain(&mut self, theme: Option<&str>) -> Vec<String> {
         let mut chain: Vec<String> = Vec::new();
         let mut todo: Vec<String> = theme
             .map(str::to_string)
-            .or_else(|| self.user.clone())
             .or_else(|| Some(DEFAULT_HOST_THEME.to_string()))
             .into_iter()
             .collect();
@@ -313,24 +310,6 @@ impl HostThemes {
                 .find_map(|t| self.theme(t).and_then(|t| search(t, name, size, 1)))
         })
     }
-}
-
-/// The user's icon theme as GTK records it (`gtk-icon-theme-name` of `gtk-4.0/settings.ini`, else of `gtk-3.0/`,
-/// under `$XDG_CONFIG_HOME`); `None` when neither names one.
-fn user_icon_theme() -> Option<String> {
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    ["gtk-4.0", "gtk-3.0"].iter().find_map(|v| {
-        let text = std::fs::read_to_string(config.join(v).join("settings.ini")).ok()?;
-        let (_, groups) = parse_index(&text);
-        groups
-            .get("Settings")
-            .and_then(|g| g.get("gtk-icon-theme-name"))
-            .filter(|n| !n.is_empty())
-            .cloned()
-    })
 }
 
 /// The icon directories of the host: `~/.icons`, `<data dir>/icons` for every XDG data directory, `/usr/share/pixmaps`.
@@ -594,22 +573,22 @@ fn placeholder(px: u32, color: Option<[u8; 4]>) -> tiny_skia::Pixmap {
 
 impl SystemIcons {
     pub fn new(assets: &Assets) -> Self {
-        Self::with_host(assets, host_icon_bases(), user_icon_theme())
+        Self::with_host(assets, host_icon_bases())
     }
 
     /// Icons of `assets` alone: no host icon theme is searched, so a name that only a `theme` source or the default
     /// icon map could provide is drawn as a placeholder. For a process that is started without host data (tests), so that
     /// an expected image can be computed with the same view.
     pub fn without_host(assets: &Assets) -> Self {
-        Self::with_host(assets, Vec::new(), None)
+        Self::with_host(assets, Vec::new())
     }
 
     /// Icons of `assets` whose `theme` sources resolve under the icon directories `bases`, with `user` as the user's
     /// theme (tests).
-    fn with_host(assets: &Assets, bases: Vec<PathBuf>, user: Option<String>) -> Self {
+    fn with_host(assets: &Assets, bases: Vec<PathBuf>) -> Self {
         Self {
             assets: assets.clone(),
-            host: HostThemes::new(bases, user),
+            host: HostThemes::new(bases),
             rasters: HashMap::new(),
             symbols: HashMap::new(),
             placeholders: HashMap::new(),
@@ -906,7 +885,7 @@ mod tests {
     fn system_icons_come_from_the_packs_by_logical_name_else_a_placeholder() {
         let dir = tempfile::tempdir().unwrap();
         let assets = fixture::assets(dir.path(), &["folder"], &["symbol.house"]);
-        let mut icons = SystemIcons::with_host(&assets, Vec::new(), None);
+        let mut icons = SystemIcons::with_host(&assets, Vec::new());
         let folder = icons.raster("folder", 16);
         assert_eq!((folder.width(), folder.height()), (16, 16));
         assert_eq!(folder.pixel(8, 8).unwrap().red(), fixture::red("folder"));
@@ -940,7 +919,7 @@ mod tests {
     fn a_symbol_is_tinted_keeping_its_coverage() {
         let dir = tempfile::tempdir().unwrap();
         let assets = fixture::assets(dir.path(), &[], &["symbol.house"]);
-        let mut icons = SystemIcons::with_host(&assets, Vec::new(), None);
+        let mut icons = SystemIcons::with_host(&assets, Vec::new());
         let blue = icons.symbol("symbol.house", 32, [0.0, 0.0, 1.0, 1.0]);
         // the template fills the middle half of its width
         let inside = blue.pixel(16, 16).unwrap();
@@ -991,7 +970,7 @@ mod tests {
         )
         .unwrap();
         let assets = Assets::open(pack.path()).unwrap();
-        let mut icons = SystemIcons::with_host(&assets, vec![host.path().to_path_buf()], None);
+        let mut icons = SystemIcons::with_host(&assets, vec![host.path().to_path_buf()]);
         let red = |icons: &mut SystemIcons, n: &str| icons.raster(n, 16).pixel(8, 8).unwrap().red();
         assert_eq!(
             red(&mut icons, "folder.documents"),
@@ -1015,7 +994,7 @@ mod tests {
     }
 
     #[test]
-    fn with_no_pack_and_no_user_theme_the_host_adwaita_serves_every_mapped_name() {
+    fn with_no_pack_the_host_adwaita_serves_every_mapped_name() {
         let host = tempfile::tempdir().unwrap();
         let dir = host.path().join("Adwaita");
         std::fs::create_dir_all(dir.join("16x16/places")).unwrap();
@@ -1024,8 +1003,7 @@ mod tests {
         image::RgbaImage::from_pixel(16, 16, image::Rgba([40, 0, 0, 255]))
             .save(dir.join("16x16/places/folder-download.png"))
             .unwrap();
-        let mut icons =
-            SystemIcons::with_host(&Assets::builtin(), vec![host.path().to_path_buf()], None);
+        let mut icons = SystemIcons::with_host(&Assets::builtin(), vec![host.path().to_path_buf()]);
         assert_eq!(
             icons
                 .raster("folder.downloads", 16)
@@ -1137,7 +1115,7 @@ mod tests {
         )
         .unwrap();
         let assets = Assets::open(pack.path()).unwrap();
-        let with = SystemIcons::with_host(&assets, vec![host.path().to_path_buf()], None)
+        let with = SystemIcons::with_host(&assets, vec![host.path().to_path_buf()])
             .raster("folder.documents", 16)
             .clone();
         let without = SystemIcons::without_host(&assets)
@@ -1160,7 +1138,7 @@ mod tests {
     fn icons_no_pack_provides_are_listed() {
         let dir = tempfile::tempdir().unwrap();
         let assets = fixture::assets(dir.path(), &["application.generic"], &["symbol.house"]);
-        let mut icons = SystemIcons::with_host(&assets, Vec::new(), None);
+        let mut icons = SystemIcons::with_host(&assets, Vec::new());
         assert!(icons
             .unprovided(&["application.generic"], &["symbol.house"])
             .is_empty());

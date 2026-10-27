@@ -42,7 +42,7 @@ pub struct Palette {
     pub search_fill: Rgba,
     /// A control's own background and an off switch's track, a slider's track.
     pub control_background: Rgba,
-    /// A form section's box and the lines between its rows: the box 3 levels from the content colour toward the
+    /// A form section's box and the lines between its rows: the box 3 levels from the window background toward the
     /// control background, the line 13 levels from the box toward the text, with no outline (approximate, O4: measured
     /// on a screenshot; the design's fill is unknown).
     pub box_fill: Rgba,

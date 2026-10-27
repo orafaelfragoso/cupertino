@@ -85,6 +85,8 @@
   advertised: always
   test_owner: crates/cupertino-server/tests/layer_input.rs
   source: crates/cupertino-server/src/state.rs:479
+  visible_to: unsandboxed
+  note: hidden from a client connected through a security context
 - name: wl_shm
   kind: wayland-global
   version: 2
@@ -219,6 +221,8 @@
   advertised: always
   test_owner: crates/cupertino-server/tests/capture.rs
   source: crates/cupertino-server/src/state.rs:491
+  visible_to: unsandboxed
+  note: hidden from a client connected through a security context
 - name: ext_idle_notifier_v1
   kind: wayland-global
   version: 2

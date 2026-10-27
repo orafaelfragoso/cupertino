@@ -42,7 +42,7 @@ cargo build --release -p cupertino-dock --features app
 cargo build --release -p cupertino-menubar --features app
 ```
 
-The server starts and restarts the processes listed under the `"shell"` key of `~/.config/cupertino/compositor.json`, for example `[{"name": "dock", "command": ["cupertino-dock"]}]` (the list is empty by default). A process that exits with failure is restarted at most once per second.
+The server starts and restarts the processes listed under the `"shell"` key of `~/.config/cupertino/compositor.json`, for example `[{"name": "dock", "command": ["cupertino-dock"]}]` (empty unless `/etc/cupertino/compositor.json` exists: the packages install one that starts the whole desktop, and the user file is applied over it). A process that exits with failure is restarted at most once per second.
 
 ## Backends
 

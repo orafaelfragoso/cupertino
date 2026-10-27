@@ -66,9 +66,9 @@ The process owns `org.freedesktop.Notifications` on the session bus. It requests
 | `CloseNotification` | Removes the notification from stack and centre (`NotificationClosed`, reason 3; unknown ids are ignored). |
 | `GetCapabilities` | Configurable: `actions body body-markup icon-static persistence`. |
 | `GetServerInformation` | Name `cupertino-notifications`, spec version `1.2`. |
-| `ToggleCentre | Opens the list or closes it. |
-| `SetDoNotDisturb(b) | Turns do not disturb on (until turned off) or off. |
-| `SetDoNotDisturbFor(s) | Turns it on for one of the `FocusLifetimes` rows (`a(ss): identifier and title, in menu order). |
+| `ToggleCentre | Opens the list or closes it. Same caller check as `SetDoNotDisturb`. |
+| `SetDoNotDisturb(b) | Turns do not disturb on (until turned off) or off. The caller is checked (`cupertino-peer`): a Flatpak, a Snap or a caller the bus cannot name is refused with an `org.cupertino.Error.*` name and nothing changes; other processes of the user may call it. |
+| `SetDoNotDisturbFor(s) (same caller check) | Turns it on for one of the `FocusLifetimes` rows (`a(ss): identifier and title, in menu order). |
 | `DoNotDisturb` property | Tells whether it is in effect, with change signals, also when a duration runs out. The menu bar's Focus item shows these rows. |
 
 Close reasons: expired 1, dismissed 2 (swipe, click without default action, clear, action invocation), closed 3, undefined 4

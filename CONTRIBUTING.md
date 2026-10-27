@@ -65,7 +65,11 @@ Include the version or commit, the backend (`--winit`, `--udev`), your composito
 
 ## Licence and contributor licence agreement
 
-The project is licensed under `GPL-3.0-or-later`. Before we can merge your first pull request you sign the contributor licence agreement (CLA) once. A bot (CLA Assistant) comments on the pull request with a link; sign there. The CLA text is at `<PLACEHOLDER: link to the CLA text, to be set by the maintainer before publication>`. A pull request without a signed CLA is not merged.
+The project is licensed under `GPL-3.0-or-later`. Before your first pull request can be merged, agree to the [contributor licence agreement](CLA.md).
+
+To agree, post a one-time public comment on your first pull request: `I have read and agree to the Cupertino Contributor Licence Agreement at <link to the exact CLA revision>. My name is <full name>.` A maintainer records the agreement and checks it before merging later contributions. If an entity owns the contribution, an authorised representative must accept in its name and state their name and title. If you are under eighteen, a parent or guardian must also accept and state their name and relationship. Do not post a private address or other unnecessary personal information.
+
+
 
 ## Conduct
 

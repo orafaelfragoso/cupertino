@@ -31,20 +31,16 @@ Depends on `cupertino-wayland-client`, `cupertino-geometry`, `cupertino-defaults
 
 Drawing is tiny-skia on a `Pixmap` at the surface's device scale, presented through the transport's buffer leases and
 paced by frame callbacks; `Event::Draw` waits for a free buffer. `Client::draw` paints a whole frame;
-`Client::draw_damage` repaints only rectangles of the last one (cleared for the paint, rounded out to device pixels), and
-only they are reported with `damage_buffer`, so the server uploads only them. A frame at another size or scale is drawn whole. A process runs one loop around `Client::wait` and reacts to
+`Client::draw_damage` repaints only rectangles of the last one (cleared for the paint, rounded out to device pixels):
+only they and what the leased buffer missed of the frames shown since it last held one (`BufferLease::missed`) are
+converted into it, and only they are reported with `damage_buffer`, so the server uploads only them. Rectangles that add
+up to the buffer convert it once, whole. A frame at another size or scale is drawn whole. A process runs one loop around `Client::wait` and reacts to
 the returned `Event`s. Other threads wake the loop with a `Waker`.
 
 A missing required global is an error at `Client::connect`, never a degraded mode. The required globals are layer shell,
 `cupertino_app_effects_v1` (`cupertino_shell_v1` too on `Client::connect_shell`), `xdg_activation_v1`, `zxdg_output_manager_v1`, shm and a seat. Fractional scale is used with
 viewporter when offered. `zxdg_decoration_manager_v1` is optional at connect, but `Client::toplevel` errors without it, and
 a server that refuses server-side decorations fails the client with `ClientError::Protocol` (the toolkit draws no title bar).
-
-## Open issues
-
-Each frame converts the whole pixmap into the leased buffer, damaged or not, because a lease does not say what its buffer
-already holds; the buffer's age on the lease would let a damaged frame convert only its rectangles and what the buffer
-missed.
 
 ## Tests
 

@@ -31,6 +31,10 @@ use wayland_protocols::xdg::shell::server::xdg_positioner::{self, XdgPositioner}
 use wayland_protocols::xdg::shell::server::xdg_surface::{self, XdgSurface};
 use wayland_protocols::xdg::shell::server::xdg_toplevel::{self, XdgToplevel};
 use wayland_protocols::xdg::shell::server::xdg_wm_base::{self, XdgWmBase};
+use wayland_protocols_wlr::layer_shell::v1::server::zwlr_layer_shell_v1::{self, ZwlrLayerShellV1};
+use wayland_protocols_wlr::layer_shell::v1::server::zwlr_layer_surface_v1::{
+    self, ZwlrLayerSurfaceV1,
+};
 use wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use wayland_server::protocol::wl_buffer::WlBuffer;
 use wayland_server::protocol::wl_callback::WlCallback;
@@ -68,6 +72,7 @@ struct Globals {
     output_scale: Option<i32>,
     /// Never release a buffer.
     hold_buffers: bool,
+    layer_shell: bool,
 }
 
 impl Globals {
@@ -96,6 +101,8 @@ enum Control {
     },
     TypeKey(u32),
     Offer(Vec<&'static str>),
+    /// Configure the layer surface this many times in a row, each a pixel wider.
+    LayerConfigures(u32),
 }
 
 /// What the compositor saw.
@@ -114,6 +121,9 @@ enum Seen {
         anchor_rect: [i32; 4],
     },
     Receive(String),
+    LayerAck(u32),
+    LayerPopup,
+    LayerDestroyed,
 }
 
 #[derive(Default)]
@@ -157,6 +167,8 @@ struct Mock {
     data_device: Option<WlDataDevice>,
     shown: Option<WlBuffer>,
     frames: Vec<WlCallback>,
+    /// The layer surface with the size it asked for, and whether it was configured.
+    layer: Option<(WlSurface, ZwlrLayerSurfaceV1, (u32, u32), bool)>,
 }
 
 impl Mock {
@@ -194,7 +206,8 @@ plain_global!(
     ZxdgDecorationManagerV1,
     WpFractionalScaleManagerV1,
     WpViewporter,
-    WlDataDeviceManager
+    WlDataDeviceManager,
+    ZwlrLayerShellV1
 );
 
 /// Requests the compositor ignores.
@@ -254,6 +267,17 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
                     }
                     toplevel.configure(0, 0, Vec::new());
                     xdg.configure(serial);
+                }
+                if initial
+                    && state
+                        .layer
+                        .as_ref()
+                        .is_some_and(|l| l.0 == *surface && !l.3)
+                {
+                    let serial = state.serial();
+                    let (_, layer, (width, height), configured) = state.layer.as_mut().unwrap();
+                    *configured = true;
+                    layer.configure(serial, *width, *height);
                 }
                 if initial && state.popup.as_ref().is_some_and(|p| !p.3) {
                     let serial = state.serial();
@@ -631,6 +655,49 @@ impl Dispatch<WlDataOffer, ()> for Mock {
     }
 }
 
+impl Dispatch<ZwlrLayerShellV1, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &ZwlrLayerShellV1,
+        request: zwlr_layer_shell_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        if let zwlr_layer_shell_v1::Request::GetLayerSurface { id, surface, .. } = request {
+            let layer = init.init(id, ());
+            state.layer = Some((surface, layer, (0, 0), false));
+        }
+    }
+}
+
+impl Dispatch<ZwlrLayerSurfaceV1, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &ZwlrLayerSurfaceV1,
+        request: zwlr_layer_surface_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        let seen = match request {
+            zwlr_layer_surface_v1::Request::SetSize { width, height } => {
+                if let Some(layer) = state.layer.as_mut() {
+                    layer.2 = (width, height);
+                }
+                return;
+            }
+            zwlr_layer_surface_v1::Request::AckConfigure { serial } => Seen::LayerAck(serial),
+            zwlr_layer_surface_v1::Request::GetPopup { .. } => Seen::LayerPopup,
+            zwlr_layer_surface_v1::Request::Destroy => Seen::LayerDestroyed,
+            _ => return,
+        };
+        state.seen.send(seen).unwrap();
+    }
+}
+
 /// Run a compositor with `globals` on its own thread for the client at the other end of `stream`.
 fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, Receiver<Seen>) {
     let (control_tx, control_rx) = channel::<Control>();
@@ -659,6 +726,9 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
         if globals.output_scale.is_some() {
             dh.create_global::<Mock, WlOutput, _>(4, ());
         }
+        if globals.layer_shell {
+            dh.create_global::<Mock, ZwlrLayerShellV1, _>(4, ());
+        }
         let mut mock = Mock {
             globals,
             seen: seen_tx,
@@ -674,6 +744,7 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
             data_device: None,
             shown: None,
             frames: Vec::new(),
+            layer: None,
         };
         let mut handle = display.handle();
         handle.insert_client(stream, Arc::new(Data)).unwrap();
@@ -742,6 +813,13 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
                 offer.offer(t.into());
             }
             device.selection(Some(&offer));
+        }
+        Control::LayerConfigures(count) => {
+            for i in 0..count {
+                let serial = mock.serial();
+                let (_, layer, (width, height), _) = mock.layer.as_ref().unwrap();
+                layer.configure(serial, width + i + 1, *height);
+            }
         }
     }
 }
@@ -1149,4 +1227,230 @@ fn a_compositor_that_goes_away_ends_the_wait_with_disconnected() {
             other => panic!("{other:?}"),
         }
     }
+}
+
+/// An extension as a crate above the transport writes one, through the public API only: layer surfaces, a protocol the
+/// transport does not know.
+mod layer {
+    use cupertino_wayland_client::{Connection, Error, ExternalRole, State, SurfaceId};
+    use std::sync::{Arc, Mutex};
+    use wayland_client::{Connection as WlConnection, Dispatch, QueueHandle};
+    use wayland_protocols::xdg::shell::client::xdg_popup::XdgPopup;
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{
+        Layer, ZwlrLayerShellV1,
+    };
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
+        self, ZwlrLayerSurfaceV1,
+    };
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Configured {
+        pub surface: SurfaceId,
+        pub serial: u32,
+        pub size: (u32, u32),
+    }
+
+    type Inbox = Arc<Mutex<Vec<Configured>>>;
+
+    /// User data of the extension's own type: `Dispatch` for the transport's `State` is only allowed with it.
+    pub struct ShellData;
+
+    pub struct SurfaceData {
+        surface: SurfaceId,
+        inbox: Inbox,
+    }
+
+    pub struct Layers {
+        shell: ZwlrLayerShellV1,
+        inbox: Inbox,
+    }
+
+    struct LayerRole(ZwlrLayerSurfaceV1);
+
+    impl ExternalRole for LayerRole {
+        fn ack_configure(&self, serial: u32) {
+            self.0.ack_configure(serial);
+        }
+
+        fn destroy(&self) {
+            self.0.destroy();
+        }
+
+        fn adopt_popup(&self, popup: &XdgPopup) -> Result<(), Error> {
+            self.0.get_popup(popup);
+            Ok(())
+        }
+    }
+
+    impl Layers {
+        pub fn bind(conn: &Connection) -> Layers {
+            let shell = conn
+                .globals()
+                .bind(&conn.queue_handle(), 1..=4, ShellData)
+                .unwrap();
+            Layers {
+                shell,
+                inbox: Inbox::default(),
+            }
+        }
+
+        pub fn surface(&self, conn: &mut Connection, size: (u32, u32)) -> SurfaceId {
+            conn.external_surface(|wl, qh, surface| {
+                let data = SurfaceData {
+                    surface,
+                    inbox: self.inbox.clone(),
+                };
+                let layer =
+                    self.shell
+                        .get_layer_surface(wl, None, Layer::Top, "test".into(), qh, data);
+                layer.set_size(size.0, size.1);
+                LayerRole(layer)
+            })
+            .unwrap()
+        }
+
+        /// What the extension received since the last call.
+        pub fn take(&self) -> Vec<Configured> {
+            std::mem::take(&mut self.inbox.lock().unwrap())
+        }
+    }
+
+    impl Dispatch<ZwlrLayerShellV1, ShellData> for State {
+        fn event(
+            _: &mut State,
+            _: &ZwlrLayerShellV1,
+            _: <ZwlrLayerShellV1 as wayland_client::Proxy>::Event,
+            _: &ShellData,
+            _: &WlConnection,
+            _: &QueueHandle<State>,
+        ) {
+        }
+    }
+
+    impl Dispatch<ZwlrLayerSurfaceV1, SurfaceData> for State {
+        fn event(
+            state: &mut State,
+            _: &ZwlrLayerSurfaceV1,
+            event: zwlr_layer_surface_v1::Event,
+            data: &SurfaceData,
+            _: &WlConnection,
+            _: &QueueHandle<State>,
+        ) {
+            if let zwlr_layer_surface_v1::Event::Configure {
+                serial,
+                width,
+                height,
+            } = event
+            {
+                let size = (width > 0 && height > 0).then_some((width, height));
+                state.configure_external(data.surface, serial, size);
+                data.inbox.lock().unwrap().push(Configured {
+                    surface: data.surface,
+                    serial,
+                    size: (width, height),
+                });
+            }
+        }
+    }
+}
+
+/// Wait until the extension received `count` configures, at most 5 s; them and how many waits that took.
+fn layer_configures(
+    conn: &mut Connection,
+    layers: &layer::Layers,
+    count: usize,
+) -> (Vec<layer::Configured>, u32) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let (mut got, mut waits) = (Vec::new(), 0);
+    while got.len() < count {
+        assert!(
+            Instant::now() < deadline,
+            "{} of {count} configures",
+            got.len()
+        );
+        conn.wait(Some(Duration::from_secs(5))).unwrap();
+        waits += 1;
+        got.extend(layers.take());
+    }
+    (got, waits)
+}
+
+#[test]
+fn an_extension_role_draws_through_the_lease_and_acknowledges_through_its_own_protocol() {
+    let (mut conn, _control, seen) = connect(Globals {
+        layer_shell: true,
+        ..Globals::core()
+    });
+    let layers = layer::Layers::bind(&conn);
+    let surface = layers.surface(&mut conn, (200, 100));
+    let (configures, _) = layer_configures(&mut conn, &layers, 1);
+    assert_eq!(configures[0].size, (200, 100));
+    {
+        let lease = conn.lease(surface, (1, 1), BufferFormat::Argb8888).unwrap();
+        assert_eq!(lease.logical_size(), (200, 100));
+        lease.present().unwrap();
+    }
+    assert_eq!(next_seen(&seen), Seen::LayerAck(configures[0].serial));
+    assert_eq!(
+        next_seen(&seen),
+        Seen::Commit {
+            size: (200, 100),
+            scale: 1,
+            format: wl_shm::Format::Argb8888
+        }
+    );
+    let placement = PopupPlacement {
+        anchor_rect: Rect::new(10.0, 0.0, 20.0, 20.0),
+        size: (80, 40),
+        anchor: Anchor::BottomLeft,
+        gravity: Gravity::BottomRight,
+        constraint_adjustment: ConstraintAdjustment::empty(),
+        grab: false,
+    };
+    let popup = conn.popup(surface, &placement).unwrap();
+    conn.flush().unwrap();
+    assert!(matches!(next_seen(&seen), Seen::Positioner { .. }));
+    assert_eq!(next_seen(&seen), Seen::LayerPopup);
+    let mut stash = Stash::new();
+    let configure = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::PopupConfigure {
+            popup: p,
+            configure,
+        } if *p == popup => Some(*configure),
+        _ => None,
+    });
+    assert_eq!((configure.width, configure.height), (80, 40));
+    conn.destroy(surface).unwrap();
+    conn.flush().unwrap();
+    assert_eq!(next_seen(&seen), Seen::LayerDestroyed);
+    assert!(matches!(
+        conn.lease(popup.surface(), (1, 1), BufferFormat::Argb8888),
+        Err(Error::UnknownSurface)
+    ));
+}
+
+#[test]
+fn a_burst_of_extension_events_ends_one_wait_not_one_per_event() {
+    let (mut conn, control, _seen) = connect(Globals {
+        layer_shell: true,
+        ..Globals::core()
+    });
+    let layers = layer::Layers::bind(&conn);
+    let surface = layers.surface(&mut conn, (200, 100));
+    layer_configures(&mut conn, &layers, 1);
+    control.send(Control::LayerConfigures(100)).unwrap();
+    let (configures, waits) = layer_configures(&mut conn, &layers, 100);
+    // the burst may straddle a socket read; it never takes a wait per event
+    assert!(waits <= 3, "{waits} waits for 100 configures");
+    assert_eq!(
+        configures.iter().map(|c| c.size.0).collect::<Vec<_>>(),
+        (201..=300).collect::<Vec<_>>()
+    );
+    let latest = configures.last().unwrap();
+    assert_eq!(latest.surface, surface);
+    let lease = conn.lease(surface, (1, 1), BufferFormat::Argb8888).unwrap();
+    assert_eq!(
+        (lease.serial(), lease.logical_size()),
+        (latest.serial, (300, 100))
+    );
 }

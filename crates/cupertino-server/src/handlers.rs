@@ -357,6 +357,44 @@ pub struct TokenGrant {
 }
 
 impl Cupertino {
+    /// Whether `serial` is that of a pointer press or touch that is still held, and went to a surface of the window whose
+    /// toplevel is `toplevel`: all a client may start a move or resize with. A serial of a released button, of a key or of
+    /// another window gets nothing, or a request made without a held button would glue the window to the pointer.
+    fn held_press_on(&self, toplevel: &WlSurface, seat: &WlSeat, serial: Serial) -> bool {
+        let Some(seat) = Seat::<Cupertino>::from_resource(seat) else {
+            return false;
+        };
+        let on_window = |focus: Option<WlSurface>| {
+            focus.is_some_and(|mut surface| {
+                while let Some(parent) = get_parent(&surface) {
+                    surface = parent;
+                }
+                &surface == toplevel
+            })
+        };
+        if let Some(pointer) = seat.get_pointer() {
+            if pointer.has_grab(serial) {
+                return on_window(
+                    pointer
+                        .grab_start_data()
+                        .and_then(|data| data.focus)
+                        .map(|(surface, _)| surface),
+                );
+            }
+        }
+        if let Some(touch) = seat.get_touch() {
+            if touch.has_grab(serial) {
+                return on_window(
+                    touch
+                        .grab_start_data()
+                        .and_then(|data| data.focus)
+                        .map(|(surface, _)| surface),
+                );
+            }
+        }
+        false
+    }
+
     /// A token for a program the server starts: valid, made now.
     pub fn server_activation_token(&mut self) -> String {
         let data = XdgActivationTokenData::default();
@@ -554,7 +592,13 @@ impl XdgShellHandler for Cupertino {
         }
     }
 
-    fn move_request(&mut self, surface: ToplevelSurface, _seat: WlSeat, _serial: Serial) {
+    fn move_request(&mut self, surface: ToplevelSurface, seat: WlSeat, serial: Serial) {
+        if !self.held_press_on(surface.wl_surface(), &seat, serial) {
+            tracing::info!(
+                "move request ignored: the serial is not that of a press still held on the window"
+            );
+            return;
+        }
         let Some(id) = self.window_id_for_surface(surface.wl_surface()) else {
             return;
         };
@@ -568,10 +612,14 @@ impl XdgShellHandler for Cupertino {
     fn resize_request(
         &mut self,
         surface: ToplevelSurface,
-        _seat: WlSeat,
-        _serial: Serial,
+        seat: WlSeat,
+        serial: Serial,
         edges: xdg_toplevel::ResizeEdge,
     ) {
+        if !self.held_press_on(surface.wl_surface(), &seat, serial) {
+            tracing::info!("resize request ignored: the serial is not that of a press still held on the window");
+            return;
+        }
         let Some(id) = self.window_id_for_surface(surface.wl_surface()) else {
             return;
         };

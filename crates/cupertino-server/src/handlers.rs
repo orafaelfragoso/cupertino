@@ -43,7 +43,7 @@ use smithay::wayland::shell::wlr_layer::{KeyboardInteractivity, Layer, LayerSurf
 use smithay::wayland::shell::xdg::decoration::XdgDecorationHandler;
 use smithay::wayland::shell::xdg::dialog::XdgDialogHandler;
 use smithay::wayland::shell::xdg::{
-    Configure, PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState, XdgToplevelSurfaceData,
+    Configure, PopupSurface, PositionerState, ShellClient, ToplevelSurface, XdgShellHandler, XdgShellState, XdgToplevelSurfaceData,
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::wayland::xdg_activation::{XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData};
@@ -470,6 +470,13 @@ delegate_xdg_dialog!(Cupertino);
 impl XdgShellHandler for Cupertino {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
         &mut self.xdg_shell_state
+    }
+
+    fn client_pong(&mut self, client: ShellClient) {
+        if self.hung.pong(&client).0 {
+            tracing::info!("an application answers its pings again");
+            self.request_redraw();
+        }
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {

@@ -1480,7 +1480,11 @@ impl Painter {
                 self.label(
                     pm,
                     &list,
-                    "Nothing to show here",
+                    if chooser.0.loading() {
+                        "Loading\u{2026}"
+                    } else {
+                        "Nothing to show here"
+                    },
                     Font {
                         size: 12.0,
                         weight: 400,

@@ -57,8 +57,9 @@ focus moves elsewhere (another window took it), on a press outside the panel, on
 The launch history is written when the panel closes.
 
 **Launching.** `Activation::Run` asks the server for an `xdg-activation` token with the key press or click that chose the
-entry, and starts the command with `XDG_ACTIVATION_TOKEN` / `DESKTOP_STARTUP_ID` when the token arrives. Copy results run
-`wl-copy`. Reveal and web search run `xdg-open`. The other panel commands are logged as not provided.
+entry, and starts the command with `XDG_ACTIVATION_TOKEN` / `DESKTOP_STARTUP_ID` when the token arrives. A copy result (the
+calculator's) goes on the system clipboard through the client (`Client::set_clipboard_text`) with the same input event,
+and the launcher serves it until another selection replaces it. Reveal and web search run `xdg-open`. The other panel commands are logged as not provided.
 
 Screenshot: `cupertino-server/output/launcher-open.png`.
 

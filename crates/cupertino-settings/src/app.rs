@@ -20,6 +20,7 @@ use cupertino_settings::history::History;
 use cupertino_settings::instance;
 use cupertino_settings::keys::{self, Action, Focus, Mods, SearchKey};
 use cupertino_settings::live::Live;
+use cupertino_settings::menu;
 use cupertino_settings::paint::{menu_rows, popup_hit, Painter, Palette, PaneView, WindowState};
 use cupertino_settings::panes::{self, Call, ControlId, Effect, Section, Session};
 use cupertino_settings::search::{popup, SearchField};
@@ -54,6 +55,7 @@ struct ChoiceMenu {
     choices: Vec<String>,
     selected: usize,
     hovered: Option<usize>,
+    type_ahead: menu::TypeAhead,
 }
 
 /// A slider being dragged: its section and row and the value it shows.
@@ -805,6 +807,9 @@ impl App {
     }
 
     fn key(&mut self, code: u32, mods: KeyModifiers, character: Option<char>) -> Result<()> {
+        if self.menu.is_some() {
+            return self.menu_key(code, mods, character);
+        }
         if let Some(sheet) = &mut self.sheet {
             let key = match code {
                 keys::code::ESCAPE => SheetKey::Escape,
@@ -1312,6 +1317,7 @@ impl App {
             choices,
             selected,
             hovered: None,
+            type_ahead: menu::TypeAhead::default(),
         });
         Ok(())
     }
@@ -1345,6 +1351,43 @@ impl App {
                 palette,
             )
         })?;
+        Ok(())
+    }
+
+    /// A key with a menu open: it moves, chooses or cancels, and reaches nothing underneath.
+    fn menu_key(&mut self, code: u32, mods: KeyModifiers, character: Option<char>) -> Result<()> {
+        let now = self.now();
+        let Some(m) = &mut self.menu else {
+            return Ok(());
+        };
+        let mods = Mods {
+            logo: mods.logo,
+            shift: mods.shift,
+            ctrl: mods.ctrl,
+            alt: mods.alt,
+        };
+        let from = m.hovered.unwrap_or(m.selected);
+        match menu::press(
+            &m.choices,
+            from,
+            &mut m.type_ahead,
+            now,
+            code,
+            mods,
+            character,
+        ) {
+            menu::Outcome::Highlight(i) => {
+                m.hovered = Some(i);
+                self.client.request_redraw(m.surface)?;
+            }
+            menu::Outcome::Choose(i) => {
+                let id = m.id;
+                self.close_menu()?;
+                self.commit(id, Value::Index(i))?;
+            }
+            menu::Outcome::Cancel => self.close_menu()?,
+            menu::Outcome::Ignore => {}
+        }
         Ok(())
     }
 

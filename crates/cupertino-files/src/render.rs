@@ -164,13 +164,18 @@ pub(crate) fn paint(c: Rgba) -> Paint<'static> {
 }
 
 fn rounded(r: &Rect, radius: f64, s: f32) -> Option<tiny_skia::Path> {
-    let (x, y, w, h) = (
+    rounded_px(
         r.x as f32 * s,
         r.y as f32 * s,
         r.w as f32 * s,
         r.h as f32 * s,
-    );
-    let rad = (radius as f32 * s).min(w / 2.0).min(h / 2.0);
+        radius as f32 * s,
+    )
+}
+
+/// A rounded rectangle in device pixels.
+fn rounded_px(x: f32, y: f32, w: f32, h: f32, radius: f32) -> Option<tiny_skia::Path> {
+    let rad = radius.min(w / 2.0).min(h / 2.0);
     let mut pb = PathBuilder::new();
     pb.move_to(x + rad, y);
     pb.line_to(x + w - rad, y);
@@ -197,21 +202,72 @@ pub(crate) fn fill_rounded(pm: &mut Pixmap, r: &Rect, radius: f64, s: f32, c: Rg
     }
 }
 
+/// [`fill_rounded`] for the content views, drawn `up` whole device pixels higher: the same pixels wherever the view is
+/// drawn from ([`in_layer`]).
+pub(crate) fn fill_rounded_up(pm: &mut Pixmap, r: &Rect, radius: f64, s: f32, up: f32, c: Rgba) {
+    in_layer(pm, r, s, up, 0.0, |layer, x, y| {
+        if let Some(p) = rounded_px(x, y, r.w as f32 * s, r.h as f32 * s, radius as f32 * s) {
+            layer.fill_path(
+                &p,
+                &paint(c),
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
+        }
+    });
+}
+
+/// Draw a shape covering `r` (points) through a layer placed on whole device pixels, `up` pixels higher: `draw` gets
+/// the layer and the position of `r` in it, which keeps only the fraction of the position. Curves are flattened in
+/// floating point, so a shape drawn in place would change its edge pixels with its distance from the origin; this way a
+/// view drawn in bands or scrolled by whole pixels has the same pixels. `reach` is how far the shape goes past `r`
+/// (half a stroke).
+fn in_layer(
+    pm: &mut Pixmap,
+    r: &Rect,
+    s: f32,
+    up: f32,
+    reach: f32,
+    draw: impl FnOnce(&mut Pixmap, f32, f32),
+) {
+    let margin = reach.ceil() + 1.0;
+    let (x, y) = (r.x as f32 * s, r.y as f32 * s);
+    let (x0, y0) = (x.floor() - margin, y.floor() - margin);
+    let (w, h) = (
+        (x + r.w as f32 * s + margin).ceil() - x0,
+        (y + r.h as f32 * s + margin).ceil() - y0,
+    );
+    let Some(mut layer) = Pixmap::new(w.max(1.0) as u32, h.max(1.0) as u32) else {
+        return;
+    };
+    draw(&mut layer, x - x0, y - y0);
+    pm.draw_pixmap(
+        x0 as i32,
+        (y0 - up) as i32,
+        layer.as_ref(),
+        &tiny_skia::PixmapPaint::default(),
+        Transform::identity(),
+        None,
+    );
+}
+
 /// The bubble behind a selected icon: the icon enlarged by its padding, corner radius equal to the padding, a
 /// quaternary label fill and a white 50 % border (padding = radius = longest side / 16, border
 /// `min(2, trunc(padding)); no shadow). The same in an active and an inactive window.
-pub(crate) fn paint_icon_bubble(pm: &mut Pixmap, icon: &Rect, scale: f32, pal: &Palette) {
+pub(crate) fn paint_icon_bubble(pm: &mut Pixmap, icon: &Rect, scale: f32, up: f32, pal: &Palette) {
     let pad = icon.w.max(icon.h) / sel::BUBBLE_DIVISOR;
     let bubble = icon.inset(-pad, -pad);
-    fill_rounded(pm, &bubble, pad, scale, pal.quaternary_label);
+    fill_rounded_up(pm, &bubble, pad, scale, up, pal.quaternary_label);
     let border = pad.trunc().min(sel::BUBBLE_BORDER_MAX);
     if border >= 1.0 {
-        stroke_rounded(
+        stroke_rounded_up(
             pm,
             &bubble.inset(border / 2.0, border / 2.0),
             (pad - border / 2.0).max(0.0),
             border,
             scale,
+            up,
             [1.0, 1.0, 1.0, sel::BUBBLE_BORDER_ALPHA],
         );
     }
@@ -233,10 +289,35 @@ pub(crate) fn stroke_rounded(pm: &mut Pixmap, r: &Rect, radius: f64, width: f64,
     }
 }
 
+/// [`stroke_rounded`] for the content views, drawn `up` whole device pixels higher ([`in_layer`]).
+fn stroke_rounded_up(pm: &mut Pixmap, r: &Rect, radius: f64, width: f64, s: f32, up: f32, c: Rgba) {
+    let stroke = width as f32 * s;
+    in_layer(pm, r, s, up, stroke / 2.0, |layer, x, y| {
+        if let Some(p) = rounded_px(x, y, r.w as f32 * s, r.h as f32 * s, radius as f32 * s) {
+            layer.stroke_path(
+                &p,
+                &paint(c),
+                &Stroke {
+                    width: stroke,
+                    ..Default::default()
+                },
+                Transform::identity(),
+                None,
+            );
+        }
+    });
+}
+
 pub(crate) fn fill_rect(pm: &mut Pixmap, r: &Rect, s: f32, c: Rgba) {
+    fill_rect_up(pm, r, s, 0.0, c);
+}
+
+/// [`fill_rect`] drawn `up` whole device pixels higher: the pixels of drawing it in place, moved (the position is
+/// scaled first and moved by whole pixels after, so the fraction that decides the edges is the same).
+pub(crate) fn fill_rect_up(pm: &mut Pixmap, r: &Rect, s: f32, up: f32, c: Rgba) {
     if let Some(rr) = SkRect::from_xywh(
         r.x as f32 * s,
-        r.y as f32 * s,
+        r.y as f32 * s - up,
         r.w as f32 * s,
         r.h as f32 * s,
     ) {
@@ -394,6 +475,30 @@ pub const SYMBOL_NAMES: [&str; 21] = [
     "symbol.magnifyingglass",
 ];
 
+/// `scroll` (points) as the whole device pixels a view moves by at `scale`.
+pub(crate) fn scroll_pixels(scroll: f64, scale: f32) -> f32 {
+    (scroll * f64::from(scale)).round() as f32
+}
+
+/// Points around a band that items are still drawn in: their anti-aliased edges reach into it.
+const CULL_MARGIN: f64 = 2.0;
+
+/// A slice of a content view in device pixels: `height` rows from row `top` of the whole view. A view drawn as a band
+/// has the pixels the whole view has there: positions move by whole pixels only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Band {
+    pub top: u32,
+    pub height: u32,
+}
+
+impl Band {
+    /// The band's top and height in points at `scale`.
+    fn points(self, scale: f32) -> (f64, f64) {
+        let s = f64::from(scale);
+        (f64::from(self.top) / s, f64::from(self.height) / s)
+    }
+}
+
 pub struct Renderer {
     pub text: TextRenderer,
     /// Icons of files from the asset directory.
@@ -416,13 +521,9 @@ impl Renderer {
         })
     }
 
-    /// A pixmap for a content view of `size` points at `scale`, filled with the opaque background: the spare one when it
+    /// A pixmap for a content view of `w` x `h` device pixels, filled with the opaque background: the spare one when it
     /// has that size. Every view starts opaque, so it covers what is under it ([`copy_opaque`]).
-    fn view_pixmap(&mut self, size: Size, scale: f32, pal: &Palette) -> Pixmap {
-        let (w, h) = (
-            (size.w as f32 * scale) as u32,
-            (size.h as f32 * scale) as u32,
-        );
+    fn view_pixmap(&mut self, w: u32, h: u32, pal: &Palette) -> Pixmap {
         let mut pm = match self.spare.take() {
             Some(pm) if (pm.width(), pm.height()) == (w, h) => pm,
             _ => Pixmap::new(w, h).unwrap(),
@@ -467,14 +568,16 @@ impl Renderer {
     }
 
     /// Draw the icon of `e` into `r`: its icon from the asset directory with the alias badge on a symbolic link.
-    pub(crate) fn draw_item_icon(&mut self, pm: &mut Pixmap, r: &Rect, e: &Entry, s: f32) {
+    /// Draw the icon of `e` centred in `r`, `up` whole device pixels higher. It lands on whole device pixels, so a
+    /// view drawn in bands or scrolled by whole pixels samples it the same way.
+    pub(crate) fn draw_item_icon(&mut self, pm: &mut Pixmap, r: &Rect, e: &Entry, s: f32, up: f32) {
         let icons = &mut self.icons;
         let side = r.w.min(r.h);
         let px = (side * s as f64).round().max(1.0) as u32;
         let mime = crate::open::file_type(icons.database(), &e.path, e.is_dir).to_string();
         let (x, y) = (
-            (r.x + (r.w - side) / 2.0) as f32 * s,
-            (r.y + (r.h - side) / 2.0) as f32 * s,
+            ((r.x + (r.w - side) / 2.0) as f32 * s).round(),
+            ((r.y + (r.h - side) / 2.0) as f32 * s).round() - up,
         );
         draw_pixmap_fit(pm, icons.document(&e.path, &mime, px), x, y, px);
         if e.kind == Kind::Symlink {
@@ -559,10 +662,17 @@ impl Renderer {
         settings: &IconViewSettings,
         size: Size,
         scroll: f64,
+        band: Option<Band>,
         scale: f32,
         pal: &Palette,
     ) -> Pixmap {
-        let mut pm = self.view_pixmap(size, scale, pal);
+        let (rows, height) = match band {
+            Some(b) => (b.height, b.points(scale).1),
+            None => ((size.h as f32 * scale) as u32, size.h),
+        };
+        let mut pm = self.view_pixmap((size.w as f32 * scale) as u32, rows, pal);
+        // the view moves by whole device pixels: the scroll's and the band's
+        let up = scroll_pixels(scroll, scale) + band.map_or(0, |b| b.top) as f32;
         // sections follow the group order; the display order of items is the concatenation of the groups
         let (order, sections): (Vec<usize>, Vec<icon::SectionSpec>) = match groups {
             Some(gs) => (
@@ -585,39 +695,38 @@ impl Renderer {
         let (params, l) = self.icon_layout(settings, &sections, size.w, scale);
         let font = params.font;
         let px = settings.text_size as f32 * scale;
-        let viewport = Rect::new(0.0, scroll, size.w, size.h);
+        let viewport = Rect::new(
+            0.0,
+            f64::from(up) / f64::from(scale) - CULL_MARGIN,
+            size.w,
+            height + 2.0 * CULL_MARGIN,
+        );
         for (title, r) in l.headers.iter().filter(|(_, r)| r.intersects(&viewport)) {
-            let r = r.offset(0.0, -scroll);
             self.text.draw(
                 &mut pm,
                 title,
                 (r.x as f32 + 12.0) * scale,
-                (r.y as f32 + 21.0) * scale,
+                (r.y as f32 + 21.0) * scale - up,
                 13.0 * scale,
                 600,
                 0.0,
                 pal.text,
             );
-            fill_rect(
+            fill_rect_up(
                 &mut pm,
                 &Rect::new(12.0, r.bottom() - 1.0, r.w - 24.0, 1.0),
                 scale,
+                up,
                 pal.separator,
             );
         }
         for cell in l.cells.iter().filter(|c| c.frame.intersects(&viewport)) {
-            let cell = icon::IconCell {
-                index: cell.index,
-                frame: cell.frame.offset(0.0, -scroll),
-                icon_frame: cell.icon_frame.offset(0.0, -scroll),
-                label_frame: cell.label_frame.offset(0.0, -scroll),
-            };
             let e = &entries[order[cell.index]];
             let is_sel = selected.contains(&order[cell.index]);
             if is_sel {
-                paint_icon_bubble(&mut pm, &cell.icon_frame, scale, pal);
+                paint_icon_bubble(&mut pm, &cell.icon_frame, scale, up, pal);
             }
-            self.draw_item_icon(&mut pm, &cell.icon_frame, e, scale);
+            self.draw_item_icon(&mut pm, &cell.icon_frame, e, scale, up);
             let max_w = cell.label_frame.w as f32 * scale - 6.0 * scale;
             let max_lines = icon::max_title_lines(&params).ceil() as usize;
             let lines = if settings.label_on_bottom {
@@ -647,11 +756,12 @@ impl Renderer {
                         (w + 6.0 * scale) as f64 / scale as f64,
                         font.line_height,
                     );
-                    fill_rounded(
+                    fill_rounded_up(
                         &mut pm,
                         &r,
                         font.line_height / 4.0,
                         scale,
+                        up,
                         if active {
                             pal.accent
                         } else {
@@ -668,7 +778,7 @@ impl Renderer {
                     &mut pm,
                     line,
                     x,
-                    top + i as f32 * lh + lh * 0.78,
+                    top + i as f32 * lh + lh * 0.78 - up,
                     px,
                     400,
                     0.0,
@@ -693,34 +803,35 @@ impl Renderer {
         sort: SortSpec,
         size: Size,
         scroll: f64,
+        band: Option<Band>,
         scale: f32,
         pal: &Palette,
         now: std::time::SystemTime,
     ) -> Pixmap {
         assert_eq!(entries.len(), outline.len(), "one outline row per entry");
-        let mut pm = self.view_pixmap(size, scale, pal);
+        let (rows, (top, height)) = match band {
+            Some(b) => (b.height, b.points(scale)),
+            None => ((size.h as f32 * scale) as u32, (0.0, size.h)),
+        };
+        let mut pm = self.view_pixmap((size.w as f32 * scale) as u32, rows, pal);
         let px = settings.text_size as f32 * scale;
         let l = self.list_layout(outline, settings, size.w, scale);
+        // the rows scroll under the header by whole device pixels; the header stays at the view's top
+        let header_up = band.map_or(0, |b| b.top) as f32;
+        let up = scroll_pixels(scroll, scale) + header_up;
+        let first = f64::from(up) / f64::from(scale);
         // the rows under the header are drawn too: the header covers them
-        for i in l.visible_rows(scroll, scroll + size.h) {
+        for i in l.visible_rows(first - CULL_MARGIN, first + height + CULL_MARGIN) {
             let e = &entries[i];
-            let scrolled = &l.rows[i];
-            let row = &list::RowRect {
-                index: i,
-                frame: scrolled.frame.offset(0.0, -scroll),
-                level: scrolled.level,
-                disclosure: scrolled.disclosure.map(|d| d.offset(0.0, -scroll)),
-                expanded: scrolled.expanded,
-                icon: scrolled.icon.offset(0.0, -scroll),
-                text_x: scrolled.text_x,
-            };
+            let row = &l.rows[i];
             let is_sel = selected.contains(&i);
             let band = Rect::new(0.0, row.frame.y, size.w, row.frame.h);
             if is_sel {
-                fill_rect(
+                fill_rect_up(
                     &mut pm,
                     &band,
                     scale,
+                    up,
                     if active {
                         pal.accent
                     } else {
@@ -728,7 +839,7 @@ impl Renderer {
                     },
                 );
             } else if list::ListLayout::is_alternate(i) {
-                fill_rect(&mut pm, &band, scale, pal.row_alternate);
+                fill_rect_up(&mut pm, &band, scale, up, pal.row_alternate);
             }
             let fg = if is_sel && active {
                 pal.accent_text
@@ -743,7 +854,10 @@ impl Renderer {
             if let Some(d) = row.disclosure {
                 // a chevron pointing right, turned down when the folder is expanded (approximate shape)
                 let mut pb = PathBuilder::new();
-                let (cx, cy) = (d.center().x as f32 * scale, d.center().y as f32 * scale);
+                let (cx, cy) = (
+                    d.center().x as f32 * scale,
+                    d.center().y as f32 * scale - up,
+                );
                 let point = |along: f32, across: f32| {
                     if row.expanded {
                         (cx - across * scale, cy + along * scale)
@@ -774,8 +888,8 @@ impl Renderer {
                     );
                 }
             }
-            self.draw_item_icon(&mut pm, &row.icon, e, scale);
-            let base = (row.frame.y + row.frame.h / 2.0) as f32 * scale + px * 0.36;
+            self.draw_item_icon(&mut pm, &row.icon, e, scale, up);
+            let base = (row.frame.y + row.frame.h / 2.0) as f32 * scale + px * 0.36 - up;
             let mut col_x = 0.0;
             for c in l.columns.iter() {
                 let text = match c.id {
@@ -822,16 +936,37 @@ impl Renderer {
             let _ = col_x;
         }
         // header
-        fill_rect(
-            &mut pm,
-            &Rect::new(0.0, 0.0, size.w, lm::HEADER_HEIGHT),
+        if top < lm::HEADER_HEIGHT {
+            self.paint_list_header(&mut pm, &l, sort, size.w, header_up, scale, pal);
+        }
+        let _ = im::ICON_SIZE_DEFAULT;
+        pm
+    }
+
+    /// The list view's header of `width` points at the top of `pm`, `up` whole device pixels higher.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_list_header(
+        &mut self,
+        pm: &mut Pixmap,
+        l: &list::ListLayout,
+        sort: SortSpec,
+        width: f64,
+        up: f32,
+        scale: f32,
+        pal: &Palette,
+    ) {
+        fill_rect_up(
+            pm,
+            &Rect::new(0.0, 0.0, width, lm::HEADER_HEIGHT),
             scale,
+            up,
             pal.header,
         );
-        fill_rect(
-            &mut pm,
-            &Rect::new(0.0, lm::HEADER_HEIGHT - 1.0, size.w, 1.0),
+        fill_rect_up(
+            pm,
+            &Rect::new(0.0, lm::HEADER_HEIGHT - 1.0, width, 1.0),
             scale,
+            up,
             pal.separator,
         );
         for c in &l.columns {
@@ -851,29 +986,28 @@ impl Renderer {
                 c.frame.x + f64::from(CELL_LEADING)
             };
             self.text.draw(
-                &mut pm,
+                pm,
                 title,
                 x as f32 * scale,
-                (lm::HEADER_HEIGHT as f32 / 2.0) * scale + 4.5 * scale,
+                (lm::HEADER_HEIGHT as f32 / 2.0) * scale + 4.5 * scale - up,
                 12.0 * scale,
                 600,
                 0.0,
                 pal.text,
             );
             if c.id != ColumnId::Name {
-                fill_rect(
-                    &mut pm,
+                fill_rect_up(
+                    pm,
                     &Rect::new(c.frame.x, 6.0, 1.0, lm::HEADER_HEIGHT - 12.0),
                     scale,
+                    up,
                     pal.separator,
                 );
             }
         }
         if let Some(c) = l.columns.iter().find(|c| c.id.sort_key() == sort.key) {
-            paint_sort_caret(&mut pm, &c.frame, sort.ascending, scale, pal.secondary_text);
+            paint_sort_caret(pm, &c.frame, up, sort.ascending, scale, pal.secondary_text);
         }
-        let _ = im::ICON_SIZE_DEFAULT;
-        pm
     }
 }
 
@@ -887,11 +1021,18 @@ const CELL_TRAILING: f32 = 4.0;
 const SORT_CARET: (f32, f32) = (8.0, 4.0);
 const SORT_CARET_INSET: f32 = 14.0;
 
-/// Draw the sort caret into the header cell `column` (header coordinates, points).
-fn paint_sort_caret(pm: &mut Pixmap, column: &Rect, ascending: bool, scale: f32, color: Rgba) {
+/// Draw the sort caret into the header cell `column` (header coordinates, points), `up` whole device pixels higher.
+fn paint_sort_caret(
+    pm: &mut Pixmap,
+    column: &Rect,
+    up: f32,
+    ascending: bool,
+    scale: f32,
+    color: Rgba,
+) {
     let (cx, cy) = (
         (column.right() as f32 - SORT_CARET_INSET) * scale,
-        (lm::HEADER_HEIGHT as f32 / 2.0) * scale,
+        (lm::HEADER_HEIGHT as f32 / 2.0) * scale - up,
     );
     let (hw, hh) = (SORT_CARET.0 / 2.0 * scale, SORT_CARET.1 / 2.0 * scale);
     let tip = if ascending { -hh } else { hh };
@@ -1080,6 +1221,157 @@ mod tests {
         }
     }
 
+    /// Forty entries with names of every length, folders among them, a few selected.
+    fn many_entries() -> (Vec<Entry>, Vec<RowSpec>, Vec<usize>) {
+        let entries: Vec<Entry> = (0..40)
+            .map(|i| {
+                let name = format!("item {i:02} {}.txt", "x".repeat(i % 13));
+                Entry::synthetic(&name, i % 7 == 0, 1000 + i as u64)
+            })
+            .collect();
+        let outline = entries
+            .iter()
+            .map(|e| RowSpec {
+                level: 0,
+                expandable: e.is_dir,
+                expanded: false,
+            })
+            .collect();
+        (entries, outline, vec![3, 4, 17])
+    }
+
+    /// Rows `top..top + rows.height()` of `whole`.
+    fn rows_of(whole: &Pixmap, top: u32, height: u32) -> Vec<u8> {
+        let stride = whole.width() as usize * 4;
+        whole.data()[top as usize * stride..(top + height) as usize * stride].to_vec()
+    }
+
+    #[test]
+    fn a_band_of_a_view_has_the_pixels_of_those_rows_of_the_whole_view() {
+        let (entries, outline, selected) = many_entries();
+        let mut r = renderer();
+        let pal = Palette::builtin(false);
+        let size = Size { w: 640.0, h: 300.0 };
+        for (scale, scroll) in [1.0_f32, 1.5, 2.0]
+            .into_iter()
+            .flat_map(|s| [0.0, 137.0, 61.3, 233.7].map(|scroll| (s, scroll)))
+        {
+            let rows = (size.h as f32 * scale) as u32;
+            for list in [true, false] {
+                let draw = |r: &mut Renderer, band: Option<Band>| {
+                    if list {
+                        r.list_view(
+                            &entries,
+                            &outline,
+                            &selected,
+                            true,
+                            &ListViewSettings::default(),
+                            SortSpec::default(),
+                            size,
+                            scroll,
+                            band,
+                            scale,
+                            &pal,
+                            std::time::UNIX_EPOCH,
+                        )
+                    } else {
+                        r.icon_view(
+                            &entries,
+                            None,
+                            &selected,
+                            true,
+                            &IconViewSettings::default(),
+                            size,
+                            scroll,
+                            band,
+                            scale,
+                            &pal,
+                        )
+                    }
+                };
+                let whole = draw(&mut r, None);
+                // the header and the rows under it, a band through the middle, the bottom rows
+                for (top, height) in [
+                    (0, 40),
+                    (3, 17),
+                    (41, 9),
+                    (rows / 3, 29),
+                    (rows / 2, 61),
+                    (rows - 45, 45),
+                    (rows - 1, 1),
+                ] {
+                    let band = draw(&mut r, Some(Band { top, height }));
+                    assert_eq!((band.width(), band.height()), (whole.width(), height));
+                    let expected = rows_of(&whole, top, height);
+                    if let Some(i) = band.data().iter().zip(&expected).position(|(a, b)| a != b) {
+                        let px = i / 4;
+                        eprintln!(
+                            "first difference at x {}, band row {}: {:?} against {:?}",
+                            px % whole.width() as usize,
+                            px / whole.width() as usize,
+                            &band.data()[px * 4..px * 4 + 4],
+                            &expected[px * 4..px * 4 + 4]
+                        );
+                    }
+                    assert!(
+                        band.data() == expected.as_slice(),
+                        "{} view at {scale}x scrolled {scroll}, rows {top}..{}",
+                        if list { "list" } else { "icon" },
+                        top + height
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_band_costs_its_rows_not_the_view_at_every_height() {
+        let (entries, outline, selected) = many_entries();
+        let mut r = renderer();
+        let pal = Palette::builtin(false);
+        for h in [300.0, 1080.0, 2160.0] {
+            let size = Size { w: 1600.0, h };
+            let draw = |r: &mut Renderer, band: Option<Band>| {
+                (0..3)
+                    .map(|_| {
+                        let start = std::time::Instant::now();
+                        let pm = r.list_view(
+                            &entries,
+                            &outline,
+                            &selected,
+                            true,
+                            &ListViewSettings::default(),
+                            SortSpec::default(),
+                            size,
+                            0.0,
+                            band,
+                            1.0,
+                            &pal,
+                            std::time::UNIX_EPOCH,
+                        );
+                        let took = start.elapsed();
+                        r.recycle(pm);
+                        took
+                    })
+                    .min()
+                    .unwrap()
+            };
+            let whole = draw(&mut r, None);
+            let band = draw(
+                &mut r,
+                Some(Band {
+                    top: (h / 2.0) as u32,
+                    height: 40,
+                }),
+            );
+            eprintln!("{h} pt high: whole view {whole:?}, a 40 px band {band:?}");
+            assert!(
+                band * 4 < whole,
+                "{h}: band {band:?} against whole {whole:?}"
+            );
+        }
+    }
+
     #[test]
     fn sizes_are_decimal() {
         assert_eq!(human_size(1), "1 byte");
@@ -1108,6 +1400,7 @@ mod tests {
             &IconViewSettings::default(),
             Size { w: 420.0, h: 240.0 },
             0.0,
+            None,
             1.0,
             &pal,
         );
@@ -1132,6 +1425,7 @@ mod tests {
             SortSpec::default(),
             Size { w: 640.0, h: 160.0 },
             0.0,
+            None,
             1.0,
             &pal,
             std::time::SystemTime::now(),
@@ -1216,6 +1510,7 @@ mod tests {
                 },
                 size,
                 0.0,
+                None,
                 1.0,
                 &pal,
                 std::time::SystemTime::now(),

@@ -81,6 +81,8 @@ pub struct Overlays {
     pub inputs: InputSources,
     pub accent: AccentUi,
     pub images: ImageCache,
+    /// The image wallpapers (`render/wallpaper.rs`).
+    pub wallpaper: crate::render::wallpaper::Wallpapers,
     pub text: OverlayText,
     /// Scripted input behaves as if the shortcut's modifiers were still held (HUD stays open).
     pub hold_modifiers: bool,
@@ -96,6 +98,7 @@ impl Overlays {
             inputs: InputSources::new(config.keyboard.sources.clone()),
             accent: AccentUi::new(&config.keyboard.accent),
             images: ImageCache::default(),
+            wallpaper: crate::render::wallpaper::Wallpapers::new(assets),
             text: OverlayText::new(typography, assets)?,
             hold_modifiers: false,
         })
@@ -103,7 +106,7 @@ impl Overlays {
 
     /// Any overlay that needs frames at `now`.
     pub fn wants_tick(&self) -> bool {
-        self.inputs.wants_tick() || self.accent.is_open()
+        self.inputs.wants_tick() || self.accent.is_open() || self.wallpaper.pending()
     }
 }
 

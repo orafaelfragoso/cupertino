@@ -5,7 +5,7 @@
 use smithay::reexports::wayland_server::Client;
 use smithay::reexports::wayland_server::Resource;
 
-use crate::state::Cupertino;
+use crate::state::{ClientState, Cupertino};
 
 /// Seconds between SIGTERM and the SIGKILL for a process that is still there.
 pub const KILL_GRACE: f64 = 3.0;
@@ -13,8 +13,17 @@ pub const KILL_GRACE: f64 = 3.0;
 const SIGTERM: i32 = 15;
 const SIGKILL: i32 = 9;
 
+/// Whether a process may be signalled: never init, the process group's `kill(2)` special pids, or the server itself.
+fn signalable(pid: u32, own: u32) -> bool {
+    pid > 1 && pid != own
+}
+
 /// `kill(2)`, logged when it fails.
 pub fn kill_process(pid: u32, signal: i32) {
+    if !signalable(pid, std::process::id()) {
+        tracing::warn!(pid, "force quit: refusing to signal this process");
+        return;
+    }
     // Safety: kill(2) with a pid read from the client's socket credentials.
     if unsafe { libc::kill(pid as libc::pid_t, signal) } != 0 {
         tracing::warn!(pid, signal, error = %std::io::Error::last_os_error(), "force quit: the signal was not delivered");
@@ -54,6 +63,13 @@ impl Cupertino {
                 continue;
             };
             if found.iter().any(|(known, _)| known.id() == client.id()) {
+                continue;
+            }
+            // the server's own connections and its shell processes are not applications
+            if client
+                .get_data::<ClientState>()
+                .is_none_or(|c| c.internal || c.privileged)
+            {
                 continue;
             }
             match client.get_credentials(&self.display_handle) {
@@ -128,5 +144,18 @@ impl Cupertino {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_the_server_and_pid_zero_are_never_signalled() {
+        assert!(!signalable(0, 500));
+        assert!(!signalable(1, 500));
+        assert!(!signalable(500, 500));
+        assert!(signalable(501, 500));
     }
 }

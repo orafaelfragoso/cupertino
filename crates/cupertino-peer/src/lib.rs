@@ -115,6 +115,10 @@ pub enum Relation {
 pub enum Caller {
     /// The daemon gave no usable process descriptor, or the process could not be classified or is already gone.
     Anonymous,
+    /// The process is known (by its descriptor) but `/proc` refused its sandbox check, as it does for a process that is not
+    /// dumpable. It is never taken for unsandboxed: [`Caller::unsandboxed`] and [`Caller::require_relation`] refuse it, and
+    /// only a caller that knows the process by other means (the server's own supervised child) may accept it.
+    Unclassified(ProcessHandle),
     Process(Identified),
 }
 
@@ -186,6 +190,7 @@ impl Caller {
     pub fn pid(&self) -> Option<u32> {
         match self {
             Caller::Anonymous => None,
+            Caller::Unclassified(process) => Some(process.pid),
             Caller::Process(p) => Some(p.process.pid),
         }
     }
@@ -195,12 +200,16 @@ impl Caller {
         let Some(process) = process_of(credentials) else {
             return Caller::Anonymous;
         };
-        let Ok(sandbox) = classify(
+        let sandbox = match classify(
             proc_root,
             process.pid,
             credentials.linux_security_label().map(Vec::as_slice),
-        ) else {
-            return Caller::Anonymous;
+        ) {
+            Ok(sandbox) => sandbox,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && !process.has_exited() => {
+                return Caller::Unclassified(process)
+            }
+            Err(_) => return Caller::Anonymous,
         };
         let exe = std::fs::read_link(proc_root.join(process.pid.to_string()).join("exe")).ok();
         // the answers above describe the process only while it is the one the descriptor names
@@ -216,8 +225,10 @@ impl Caller {
 
     /// The process, when the caller is neither anonymous nor sandboxed.
     pub fn unsandboxed(&self) -> Result<&Identified, Denial> {
-        let Caller::Process(caller) = self else {
-            return Err(Denial::Anonymous);
+        let caller = match self {
+            Caller::Process(caller) => caller,
+            Caller::Unclassified(_) => return Err(Denial::Untrusted),
+            Caller::Anonymous => return Err(Denial::Anonymous),
         };
         match caller.sandbox {
             Some(sandbox) => Err(Denial::Sandboxed(sandbox)),
@@ -443,6 +454,72 @@ mod tests {
             Caller::from_credentials(&credentials, proc_root.path()),
             Caller::Anonymous
         ));
+    }
+
+    #[test]
+    fn a_process_whose_root_cannot_be_read_is_known_but_never_unsandboxed() {
+        use std::os::unix::fs::PermissionsExt;
+        // Safety: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let proc_root = tempfile::tempdir().unwrap();
+        let root = proc_root
+            .path()
+            .join(std::process::id().to_string())
+            .join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let credentials = ConnectionCredentials::default().set_process_fd(own_pidfd().into());
+        let caller = Caller::from_credentials(&credentials, proc_root.path());
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(caller, Caller::Unclassified(_)), "{caller:?}");
+        assert_eq!(caller.pid(), Some(std::process::id()));
+        assert_eq!(caller.unsandboxed().err(), Some(Denial::Untrusted));
+        let me = std::process::id();
+        assert_eq!(
+            caller.require_relation(
+                me,
+                1,
+                &[Relation::Itself, Relation::Parent, Relation::Other]
+            ),
+            Err(Denial::Untrusted)
+        );
+    }
+
+    #[test]
+    fn a_process_that_is_not_dumpable_is_unclassified_by_the_real_proc() {
+        // Safety: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        // Safety: the child calls only prctl, pause and _exit, which are async-signal-safe.
+        let child = unsafe { libc::fork() };
+        if child == 0 {
+            unsafe {
+                libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0);
+                libc::pause();
+                libc::_exit(0);
+            }
+        }
+        assert!(child > 0, "fork failed");
+        let handle = ProcessHandle::open(child as u32).unwrap();
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let caller = loop {
+            let credentials = ConnectionCredentials::default().set_process_id(child as u32);
+            let caller = Caller::from_credentials(&credentials, Path::new("/proc"));
+            // the child may not have made itself undumpable yet
+            if !matches!(caller, Caller::Process(_)) || std::time::Instant::now() > end {
+                break caller;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        handle.send(libc::SIGKILL).unwrap();
+        // Safety: reaps the child forked above.
+        unsafe { libc::waitpid(child, std::ptr::null_mut(), 0) };
+        assert!(matches!(caller, Caller::Unclassified(_)), "{caller:?}");
+        assert_eq!(caller.pid(), Some(child as u32));
+        assert_eq!(caller.unsandboxed().err(), Some(Denial::Untrusted));
     }
 
     #[test]

@@ -8,7 +8,7 @@ nothing; the caller is the process behind its connection.
   that is reused meanwhile is never mistaken for the caller. A daemon older than 1.15 (Ubuntu 24.04 ships 1.14) gives no
   descriptor, so caller identity there is pid-based: the pidfd is opened for its `ProcessID` (logged at debug level each time), which
   leaves a window for a reused process id that a descriptor does not. A caller with no process at all, with a process id that
-  disagrees with the descriptor, that cannot be classified or that has exited is `Caller::Anonymous` and trusted with nothing.
+  disagrees with the descriptor, that cannot be classified or that has exited is `Caller::Anonymous` and trusted with nothing. A process whose `/proc/<pid>/root` the kernel refuses (one that made itself non-dumpable) is `Caller::Unclassified`: its process id is known, but `unsandboxed()` and `require_relation` refuse it, so nothing trusts it by sandbox or relation; only a caller that knows the process by other means may accept it.
 * Sandboxes are told apart the way the desktop portal does it: a process with `/proc/<pid>/root/.flatpak-info` is a Flatpak,
   one whose `LinuxSecurityLabel` starts with `snap.` a Snap. `Caller::unsandboxed` refuses both and the anonymous caller
   (`Denial`).

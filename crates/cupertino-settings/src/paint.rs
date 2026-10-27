@@ -1195,7 +1195,7 @@ impl Painter {
         );
         match &sheet.kind {
             // the default button uses the accent (no pulse in this build)
-            Kind::Passphrase { .. } | Kind::Pairing { .. } => {
+            Kind::Passphrase { .. } | Kind::Resolution { .. } | Kind::Pairing { .. } => {
                 fill_rounded(pm, &l.action, cm::RADIUS, false, s, pal.accent);
                 let w = f64::from(self.text.measure(sheet.action_title(), 13.0 * s, 400, 0.0) / s);
                 self.label(

@@ -12,6 +12,14 @@ pub enum Reading<T> {
 }
 
 impl<T> Reading<T> {
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Reading<U> {
+        match self {
+            Reading::Ready(v) => Reading::Ready(f(v)),
+            Reading::Unknown => Reading::Unknown,
+            Reading::Unavailable(r) => Reading::Unavailable(r),
+        }
+    }
+
     pub fn ready(&self) -> Option<&T> {
         match self {
             Reading::Ready(v) => Some(v),
@@ -35,6 +43,18 @@ pub struct Focus {
     pub on: bool,
     /// `FocusLifetimes`: identifier and title, in menu order.
     pub lifetimes: Vec<(String, String)>,
+}
+
+/// A connected mouse and its resolution, as the server resolved it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Mouse {
+    /// Its key in `mouse_dpi` (`cupertino_defaults::compositor::mouse_dpi_key`).
+    pub key: String,
+    pub name: String,
+    /// The resolution in effect, in dots per inch.
+    pub dpi: u32,
+    /// Whether the user stored it (else the hardware database's or the default).
+    pub stored: bool,
 }
 
 /// The output volume of the mixer's master.
@@ -171,6 +191,8 @@ pub struct Bluetooth {
 /// Every live reading.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Live {
+    /// The connected mice (`org.cupertino.Session1.Mice`), in the server's order.
+    pub mice: Reading<Vec<Mouse>>,
     pub focus: Reading<Focus>,
     pub volume: Reading<Volume>,
     /// The display backlight, 0 to 1 (`org.cupertino.Power1`).
@@ -184,6 +206,7 @@ pub struct Live {
 impl Default for Live {
     fn default() -> Self {
         Live {
+            mice: Reading::Unknown,
             focus: Reading::Unknown,
             volume: Reading::Unknown,
             brightness: Reading::Unknown,

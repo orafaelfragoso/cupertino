@@ -10,7 +10,7 @@ use cupertino_defaults::menubar::{HourCycle, ShowDate};
 use cupertino_defaults::power::Timer;
 
 use crate::controls::{Control, Value, MUTE_BELOW};
-use crate::live::{duration_text, BatteryState, Bluetooth, Live, Reading, Wifi};
+use crate::live::{duration_text, BatteryState, Bluetooth, Live, Mouse, Reading, Wifi};
 use crate::mapping;
 use crate::pane::PaneId;
 use crate::settings::{File, Settings};
@@ -37,6 +37,8 @@ pub enum ControlId {
     RepeatRate,
     RepeatDelay,
     MouseSpeed,
+    /// A mouse of `Live::mice`, by index: its resolution.
+    MouseResolution(usize),
     MouseAcceleration,
     MouseNatural,
     TrackpadSpeed,
@@ -124,6 +126,8 @@ pub enum Effect {
     SetAccessibility { key: &'static str, value: String },
     /// A call on a live service.
     Service(Call),
+    /// Ask for a resolution of the mouse `key` called `name` in a sheet.
+    AskResolution { key: String, name: String },
 }
 
 /// A call on a live service.
@@ -245,6 +249,90 @@ fn row(id: ControlId, label: impl Into<String>, control: Control, backend: Backe
         error: None,
         disabled: None,
     }
+}
+
+/// The resolutions the pop-up offers besides the automatic one and a typed one (dots per inch).
+pub const RESOLUTIONS: [u32; 6] = [400, 800, 1200, 1600, 3200, 6400];
+
+/// A choice of a mouse's resolution pop-up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResolutionChoice {
+    /// Forget the stored resolution: the hardware database's, else 1000.
+    Automatic,
+    Dpi(u32),
+    /// Ask for a number in a sheet.
+    Custom,
+}
+
+/// The items of `mouse`'s resolution pop-up in order: Automatic, the presets, a stored value that is none of them,
+/// Custom.
+pub fn resolution_choices(mouse: &Mouse) -> Vec<ResolutionChoice> {
+    let mut items = vec![ResolutionChoice::Automatic];
+    items.extend(RESOLUTIONS.map(ResolutionChoice::Dpi));
+    if mouse.stored && !RESOLUTIONS.contains(&mouse.dpi) {
+        items.push(ResolutionChoice::Dpi(mouse.dpi));
+    }
+    items.push(ResolutionChoice::Custom);
+    items
+}
+
+fn resolution_control(mouse: &Mouse) -> Control {
+    let items = resolution_choices(mouse);
+    let selected = items
+        .iter()
+        .position(|c| match c {
+            ResolutionChoice::Automatic => !mouse.stored,
+            ResolutionChoice::Dpi(d) => mouse.stored && *d == mouse.dpi,
+            ResolutionChoice::Custom => false,
+        })
+        .expect("the automatic item or the stored value is in the list");
+    let choices = items
+        .iter()
+        .map(|c| match c {
+            ResolutionChoice::Automatic if !mouse.stored => {
+                format!("Automatic ({} dpi)", mouse.dpi)
+            }
+            ResolutionChoice::Automatic => "Automatic".to_string(),
+            ResolutionChoice::Dpi(d) => format!("{d} dpi"),
+            ResolutionChoice::Custom => "Custom\u{2026}".to_string(),
+        })
+        .collect();
+    Control::Popup { choices, selected }
+}
+
+/// The resolution rows of the connected mice: one row "Mouse resolution" for one mouse, else a section header and a
+/// row named after each mouse (a name another mouse has too gets its number).
+fn resolution_section(mice: &[Mouse]) -> Option<Section> {
+    if mice.is_empty() {
+        return None;
+    }
+    let rows = mice
+        .iter()
+        .enumerate()
+        .map(|(i, mouse)| {
+            let label = if mice.len() == 1 {
+                "Mouse resolution".to_string()
+            } else if mice.iter().filter(|m| m.name == mouse.name).count() > 1 {
+                let n = mice[..=i].iter().filter(|m| m.name == mouse.name).count();
+                format!("{} ({n})", mouse.name)
+            } else {
+                mouse.name.clone()
+            };
+            row(
+                ControlId::MouseResolution(i),
+                label,
+                resolution_control(mouse),
+                Backend::Key(File::Compositor, "mouse_dpi"),
+            )
+        })
+        .collect();
+    Some(Section {
+        header: (mice.len() > 1).then(|| "Mouse resolution".to_string()),
+        rows,
+        footer: Some(
+            "Match your mouse's DPI setting so tracking speed feels the same.".to_string(),
+        ),
+    })
 }
 
 fn header(text: &str) -> Option<String> {
@@ -535,7 +623,7 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
         }
         PaneId::Mouse => {
             let key = |k| Backend::Key(File::Compositor, k);
-            vec![Section {
+            let mut sections = vec![Section {
                 header: None,
                 rows: vec![
                     row(
@@ -558,7 +646,9 @@ pub fn sections(pane: PaneId, settings: &Settings, session: Session, live: &Live
                     ),
                 ],
                 footer: file_footer(File::Compositor),
-            }]
+            }];
+            sections.extend(live.mice.ready().and_then(|m| resolution_section(m)));
+            sections
         }
         PaneId::Trackpad => {
             let key = |k| Backend::Key(File::Compositor, k);
@@ -1301,6 +1391,26 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
         ControlId::Appearance => vec![Effect::SetAppearance {
             dark: index_of(value) == 1,
         }],
+        ControlId::MouseResolution(i) => {
+            let Some(mouse) = live.mice.ready().and_then(|m| m.get(i)) else {
+                return Vec::new();
+            };
+            let dpi = match resolution_choices(mouse).get(index_of(value)) {
+                Some(ResolutionChoice::Automatic) => None,
+                Some(ResolutionChoice::Dpi(d)) => Some(*d),
+                Some(ResolutionChoice::Custom) => {
+                    return vec![Effect::AskResolution {
+                        key: mouse.key.clone(),
+                        name: mouse.name.clone(),
+                    }]
+                }
+                None => return Vec::new(),
+            };
+            match settings.compositor.set_mouse_dpi(&mouse.key, dpi) {
+                Ok(()) => store(File::Compositor),
+                Err(_) => Vec::new(),
+            }
+        }
         ControlId::DockSize => {
             settings.dock.tile_size = Some(mapping::dock_px(fraction_of(value)));
             store(File::Dock)
@@ -1698,6 +1808,7 @@ mod tests {
             pairing: false,
         };
         let live = Live {
+            mice: Reading::Unknown,
             focus: Reading::Ready(Focus {
                 on: false,
                 lifetimes: vec![("hour".into(), "For 1 hour".into())],

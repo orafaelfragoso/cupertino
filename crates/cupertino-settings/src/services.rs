@@ -14,7 +14,8 @@ use zbus::zvariant::{ObjectPath, OwnedValue};
 use crate::agent::{Agent, AGENT_PATH};
 
 use crate::live::{
-    Battery, BatteryState, Bluetooth, BtDevice, Device, Focus, Network, Reading, Volume, Wifi,
+    Battery, BatteryState, Bluetooth, BtDevice, Device, Focus, Mouse, Network, Reading, Volume,
+    Wifi,
 };
 use crate::panes::Call;
 
@@ -28,6 +29,8 @@ pub const UPOWER_NAME: &str = "org.freedesktop.UPower";
 pub const UPOWER_DISPLAY_DEVICE: &str = "/org/freedesktop/UPower/devices/DisplayDevice";
 pub const UPOWER_DEVICE: &str = "org.freedesktop.UPower.Device";
 pub const CENTRE_NAME: &str = "org.cupertino.NotificationCenter1";
+pub const SESSION_NAME: &str = "org.cupertino.Session1";
+pub const SESSION_PATH: &str = "/org/cupertino/Session1";
 pub const CENTRE_PATH: &str = "/org/cupertino/NotificationCenter1";
 /// The Bluetooth daemon's refusal to replace another client's live agent.
 const AGENT_EXISTS: &str = "org.cupertino.Bluetooth1.AgentExists";
@@ -178,6 +181,24 @@ impl Services {
     }
 
     // ---- reading ---------------------------------------------------------------------------------------------------
+
+    /// The connected mice, as the server lists them (`org.cupertino.Session1.Mice`: key, name, resolution, stored).
+    pub fn mice(&mut self) -> Reading<Vec<Mouse>> {
+        let result = self
+            .session
+            .proxy(SESSION_NAME, SESSION_PATH, SESSION_NAME)
+            .and_then(|p| p.get_property::<Vec<(String, String, u32, bool)>>("Mice"));
+        reading(self.session.checked(result), "The session is not running").map(|mice| {
+            mice.into_iter()
+                .map(|(key, name, dpi, stored)| Mouse {
+                    key,
+                    name,
+                    dpi,
+                    stored,
+                })
+                .collect()
+        })
+    }
 
     pub fn focus(&mut self) -> Reading<Focus> {
         let result = self

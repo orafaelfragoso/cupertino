@@ -3,13 +3,12 @@
 //! by polling `try_wait` from a timer of the event loop: the server installs no SIGCHLD handler
 //! and the existing spawn code does not either, and a poll adds no thread or fd to the loop.
 
-use std::os::unix::net::UnixStream;
 use std::process::{Child, Command};
 use std::time::Instant;
 
 use crate::config::ShellProcess;
 use crate::restart_policy::{decide, Decision, RESTART_THROTTLE};
-use crate::shell_connection::hand_over;
+use crate::shell_connection::{bind_holder, hand_over, BoundConnection};
 
 enum Phase {
     /// Not running; start at this time.
@@ -52,7 +51,7 @@ impl Supervisor {
         &mut self,
         now: Instant,
         socket: &str,
-        connect: &mut dyn FnMut(&ShellProcess) -> std::io::Result<UnixStream>,
+        connect: &mut dyn FnMut(&ShellProcess) -> std::io::Result<BoundConnection>,
     ) {
         for p in &mut self.procs {
             p.phase = match std::mem::replace(&mut p.phase, Phase::Stopped) {
@@ -103,15 +102,15 @@ impl Supervisor {
 fn start(
     spec: &ShellProcess,
     socket: &str,
-    connect: &mut dyn FnMut(&ShellProcess) -> std::io::Result<UnixStream>,
+    connect: &mut dyn FnMut(&ShellProcess) -> std::io::Result<BoundConnection>,
     now: Instant,
 ) -> Phase {
     let (program, args) = spec
         .command
         .split_first()
         .expect("shell process commands are validated non-empty at load");
-    let stream = match connect(spec) {
-        Ok(stream) => stream,
+    let (stream, state) = match connect(spec) {
+        Ok(connection) => connection,
         Err(e) => {
             tracing::warn!(name = spec.name, error = %e, "creating the shell process's connection failed");
             return Phase::Waiting(now + RESTART_THROTTLE);
@@ -125,6 +124,7 @@ fn start(
     hand_over(&mut command, &stream);
     match command.spawn() {
         Ok(child) => {
+            bind_holder(&state, child.id());
             tracing::info!(name = spec.name, pid = child.id(), "shell process started");
             Phase::Running {
                 child,
@@ -153,9 +153,12 @@ impl Drop for Supervisor {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::net::UnixStream;
+    use std::sync::Arc;
     use std::time::Duration;
 
     use super::*;
+    use crate::state::ClientState;
 
     fn spec(script: &str) -> ShellProcess {
         ShellProcess {
@@ -166,8 +169,8 @@ mod tests {
     }
 
     /// A connection nobody listens on: these tests run plain scripts.
-    fn connect(_: &ShellProcess) -> std::io::Result<UnixStream> {
-        UnixStream::pair().map(|(_, client)| client)
+    fn connect(_: &ShellProcess) -> std::io::Result<BoundConnection> {
+        UnixStream::pair().map(|(_, client)| (client, Arc::new(ClientState::default())))
     }
 
     /// Poll every 20 ms until `done` holds or ten seconds pass.

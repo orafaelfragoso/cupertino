@@ -11,7 +11,7 @@ use cupertino_defaults::compositor::ShellRoleName;
 use cupertino_protocols::server::cupertino_shell_v1::Error as ShellError;
 use smithay::reexports::wayland_server::{Client, Resource};
 
-use crate::state::ClientState;
+use crate::state::{ClientState, Cupertino};
 
 /// A privilege of a shell process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,6 +24,8 @@ pub enum ShellRole {
     Dock,
     /// Arrange the windows of an output.
     WindowManager,
+    /// Take the session lock: the lock screen.
+    SessionLock,
     /// See the capture globals and the window feed of the screenshot process.
     Capture,
 }
@@ -41,6 +43,7 @@ impl From<ShellRoleName> for ShellRole {
             ShellRoleName::MenuBar => ShellRole::MenuBar,
             ShellRoleName::Dock => ShellRole::Dock,
             ShellRoleName::WindowManager => ShellRole::WindowManager,
+            ShellRoleName::SessionLock => ShellRole::SessionLock,
         }
     }
 }
@@ -78,11 +81,32 @@ impl ClientCapabilitySet {
     }
 }
 
-/// The capabilities of `client`; none when its data is not a [`ClientState`].
+impl ClientState {
+    /// The capabilities in force: none once the process the connection was made for has exited.
+    pub fn granted(&self) -> ClientCapabilitySet {
+        if self.holder.get().is_some_and(|h| h.has_exited()) {
+            ClientCapabilitySet::NONE
+        } else {
+            self.capabilities
+        }
+    }
+}
+
+/// The capabilities of `client`; none when its data is not a [`ClientState`] or its holder has exited.
 pub fn capabilities(client: &Client) -> ClientCapabilitySet {
     client
         .get_data::<ClientState>()
-        .map_or(ClientCapabilitySet::NONE, |c| c.capabilities)
+        .map_or(ClientCapabilitySet::NONE, ClientState::granted)
+}
+
+impl Cupertino {
+    /// End the dock, menu bar and window manager roles whose connection no longer holds them. A restarted process asks
+    /// for its role before the server has seen the old connection close; this is what frees it.
+    pub fn release_revoked_roles(&mut self) {
+        self.release_revoked_docks();
+        self.release_revoked_menu_bars();
+        self.release_revoked_window_managers();
+    }
 }
 
 /// Whether `client` holds `role`.

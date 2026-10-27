@@ -309,6 +309,7 @@ fn roles_of(binary: &str) -> Vec<ShellRole> {
         "dock" => vec![ShellRole::Session, ShellRole::Dock],
         "menubar" => vec![ShellRole::Session, ShellRole::MenuBar],
         "windowmanager" => vec![ShellRole::WindowManager],
+        "login" => vec![ShellRole::Session, ShellRole::SessionLock],
         _ => vec![ShellRole::Session],
     }
 }

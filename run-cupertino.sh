@@ -22,13 +22,17 @@ cargo build --release --workspace --all-features --bins --manifest-path "$root/C
 export PATH="$root/target/release:$PATH"
 export XDG_CURRENT_DESKTOP=Cupertino
 export XDG_DATA_DIRS="$root/crates/cupertino-files/data:$root/crates/cupertino-settings/data:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
-# The shell processes are the ones the packages install as /etc/cupertino/compositor.json.
-export CUPERTINO_SERVER_CONFIG="$root/packaging/files/etc/cupertino/compositor.json"
+# The shell processes are the ones the packages install as /etc/cupertino/compositor.json; --dev-shell lets this checkout name
+# programs found on PATH instead of under /usr.
+CUPERTINO_SERVER_CONFIG=$(mktemp)
+sed "s|\"/usr/bin/|\"|" "$root/packaging/files/etc/cupertino/compositor.json" >"$CUPERTINO_SERVER_CONFIG"
+export CUPERTINO_SERVER_CONFIG
+trap 'rm -f "$CUPERTINO_SERVER_CONFIG"' EXIT
 
 # A fresh session bus: the notification centre needs org.freedesktop.Notifications to itself.
 echo "Starting Cupertino; log: $log"
 status=0
-dbus-run-session -- cupertino-server --udev \
+dbus-run-session -- cupertino-server --udev --dev-shell \
     --spawn cupertino-files --spawn cupertino-settings "$@" >"$log" 2>&1 || status=$?
 if [ "$status" -ne 0 ]; then
     echo "Cupertino exited with status $status; last lines of $log:" >&2

@@ -5,7 +5,6 @@
 use std::io::Write;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -83,9 +82,13 @@ impl Harness {
         .unwrap()
     }
 
-    fn socket_path(&self) -> PathBuf {
-        let dir = std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR");
-        PathBuf::from(dir).join(self.state.socket_name.as_ref().unwrap())
+    /// A connection of the lock screen, holding the SessionLock role.
+    fn lock_stream(&mut self) -> UnixStream {
+        cupertino_server::shell_connection::shell_process_connection(
+            &self.state.display_handle,
+            &[ShellRole::SessionLock],
+        )
+        .unwrap()
     }
 }
 
@@ -294,8 +297,7 @@ impl Client {
     }
 
     /// A client that locks the session and covers the output with a lock surface.
-    fn locker(socket: PathBuf) -> Client {
-        let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
+    fn locker(stream: UnixStream) -> Client {
         Self::run(stream, |queue, client, globals| {
             let qh = queue.handle();
             let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
@@ -355,7 +357,7 @@ fn binding_tells_the_current_appearance_display_options_and_lock_state() {
         .set_display_option(DisplayOption::ReduceTransparency, true);
     h.state
         .set_display_option(DisplayOption::DifferentiateWithoutColor, true);
-    let locker = Client::locker(h.socket_path());
+    let locker = Client::locker(h.lock_stream());
     h.wait_until("the session to be locked", |_| locker.locked());
     let after = Client::observer(h.shell_stream(), 2);
     h.wait_until("the second observer to be told", |_| {
@@ -376,7 +378,7 @@ fn appearance_changes_and_the_lock_cycle_reach_an_observer_in_order() {
     h.state.toggle_appearance();
     // the appearance it already has: nothing to tell
     h.state.set_appearance(Appearance::Dark);
-    let locker = Client::locker(h.socket_path());
+    let locker = Client::locker(h.lock_stream());
     h.wait_until("the session to be locked", |_| locker.locked());
     locker.unlock();
     h.wait_until("the unlock to reach the observer", |_| {
@@ -457,13 +459,13 @@ fn a_lock_whose_client_crashes_stays_locked_and_a_takeover_tells_nothing_new() {
     let observer = Client::observer(h.shell_stream(), 2);
     h.wait_until("the observer to be told", |_| observer.told().len() == 3);
 
-    let holder = Client::locker(h.socket_path());
+    let holder = Client::locker(h.lock_stream());
     h.wait_until("the session to be locked", |_| holder.locked());
     holder.kill();
     h.wait_until("the lock to be orphaned", |s| {
         s.surface_under((500.0, 350.0).into()).is_none()
     });
-    let successor = Client::locker(h.socket_path());
+    let successor = Client::locker(h.lock_stream());
     h.wait_until("a new client to take the lock", |_| successor.locked());
     successor.unlock();
     h.wait_until("the unlock to reach the observer", |_| {

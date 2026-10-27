@@ -21,7 +21,7 @@ use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, New, Resource, WEnum,
 };
 
-use crate::authorization::{require, ShellRole};
+use crate::authorization::{authorized, require, ShellRole};
 use crate::state::Cupertino;
 
 /// Opacity lost by the bar of an inactive output. approximate.
@@ -198,6 +198,25 @@ pub struct MenuBarData {
 }
 
 impl Cupertino {
+    /// Drop the bars whose connection no longer holds the MenuBar role.
+    pub(crate) fn release_revoked_menu_bars(&mut self) {
+        let revoked: Vec<_> = self
+            .menu_bars
+            .bars
+            .iter()
+            .filter(|b| {
+                b.resource
+                    .client()
+                    .is_some_and(|c| !authorized(&c, ShellRole::MenuBar))
+            })
+            .map(|b| (b.resource.clone(), b.output))
+            .collect();
+        for (resource, output) in revoked {
+            self.menu_bars.bars.retain(|b| b.resource != resource);
+            self.menu_bar_gone(output);
+        }
+    }
+
     /// `cupertino_shell_v1.get_menu_bar`: validate the role, register the bar and send its first group.
     pub fn create_menu_bar(
         &mut self,

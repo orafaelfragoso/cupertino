@@ -12,13 +12,34 @@ use std::sync::Arc;
 use smithay::reexports::wayland_server::DisplayHandle;
 
 use crate::authorization::{ClientCapabilitySet, ShellRole};
+use crate::force_quit::ProcessHandle;
 use crate::state::ClientState;
+
+/// The client's end of a connection and the state the server keeps for it.
+pub type BoundConnection = (UnixStream, Arc<ClientState>);
 
 /// A new client with `state`: the server end is inserted, the other end is returned.
 pub fn connect_client(display: &DisplayHandle, state: ClientState) -> std::io::Result<UnixStream> {
+    connect_bound_client(display, state).map(|(stream, _)| stream)
+}
+
+/// Like [`connect_client`], and the state the server keeps for the connection, to bind the process to ([`bind_holder`]).
+pub fn connect_bound_client(
+    display: &DisplayHandle,
+    state: ClientState,
+) -> std::io::Result<BoundConnection> {
     let (server, client) = UnixStream::pair()?;
-    display.clone().insert_client(server, Arc::new(state))?;
-    Ok(client)
+    let state = Arc::new(state);
+    display.clone().insert_client(server, state.clone())?;
+    Ok((client, state))
+}
+
+/// The state of a connection for a shell process the server supervises, holding `roles` and no other.
+pub fn shell_process_state(roles: &[ShellRole]) -> ClientState {
+    ClientState {
+        capabilities: ClientCapabilitySet::of(roles.iter().copied()),
+        ..ClientState::default()
+    }
 }
 
 /// A connection for a shell process the server supervises, holding `roles` and no other.
@@ -26,13 +47,20 @@ pub fn shell_process_connection(
     display: &DisplayHandle,
     roles: &[ShellRole],
 ) -> std::io::Result<UnixStream> {
-    connect_client(
-        display,
-        ClientState {
-            capabilities: ClientCapabilitySet::of(roles.iter().copied()),
-            ..ClientState::default()
-        },
-    )
+    connect_client(display, shell_process_state(roles))
+}
+
+/// Bind the connection to the process started for it: its capabilities end when the process exits, so a connection
+/// kept open by anything else (a descriptor passed on, a leftover child) holds nothing. The child has not been waited
+/// for yet, so its pid cannot belong to another process. A process that is already gone is not bound, and its
+/// connection closes with it.
+pub fn bind_holder(state: &ClientState, pid: u32) {
+    match ProcessHandle::open(pid) {
+        Ok(handle) => {
+            let _ = state.holder.set(handle);
+        }
+        Err(e) => tracing::warn!(pid, error = %e, "binding a connection to its process failed"),
+    }
 }
 
 /// Pass `stream` to the process `command` starts as `WAYLAND_SOCKET`.

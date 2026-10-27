@@ -7,12 +7,15 @@
 use std::io::{ErrorKind, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use cupertino_server::authorization::ShellRole;
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
-use cupertino_server::shell_connection::shell_process_connection;
+use cupertino_server::shell_connection::{
+    bind_holder, connect_bound_client, shell_process_connection, shell_process_state,
+};
 use cupertino_server::Cupertino;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
@@ -90,6 +93,14 @@ impl Harness {
     /// A connection the server made for a shell process holding `roles`.
     fn shell(&mut self, roles: &[ShellRole]) -> Wire {
         Wire::new(shell_process_connection(&self.state.display_handle, roles).unwrap())
+    }
+
+    /// A connection made for `process`, the way the supervisor makes one: it holds `roles` until the process exits.
+    fn held_shell(&mut self, roles: &[ShellRole], process: &Child) -> Wire {
+        let (stream, state) =
+            connect_bound_client(&self.state.display_handle, shell_process_state(roles)).unwrap();
+        bind_holder(&state, process.id());
+        Wire::new(stream)
     }
 
     /// Run the server and read what every wire got, long enough for a round trip.
@@ -275,7 +286,11 @@ struct ShellClient {
 
 impl ShellClient {
     fn connect(h: &mut Harness, roles: &[ShellRole]) -> Option<ShellClient> {
-        let mut wire = h.shell(roles);
+        let wire = h.shell(roles);
+        ShellClient::over(h, wire)
+    }
+
+    fn over(h: &mut Harness, mut wire: Wire) -> Option<ShellClient> {
         let registry = wire.get_registry();
         h.settle(&mut [&mut wire]);
         let (shell_name, _) = offered(&wire, registry, "cupertino_shell_v1")?;
@@ -538,4 +553,150 @@ fn an_app_cannot_claim_effects_on_another_clients_surface() {
     h.settle(&mut [&mut owner]);
     assert_eq!(owner.error(), None, "the owner was disturbed");
     assert!(!owner.closed);
+}
+
+/// A process that stays until it is killed.
+fn sleeper() -> Child {
+    Command::new("sleep")
+        .arg("60")
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap()
+}
+
+/// Ends `process` and reaps it, as the supervisor does when it sees the exit.
+fn end(mut process: Child) {
+    process.kill().unwrap();
+    process.wait().unwrap();
+}
+
+/// One holder per role, and a restarted process gets its role as soon as the old process is gone, even when the server
+/// has not yet seen the old connection close (the old connection is kept open here, as a leftover child would).
+#[test]
+fn a_restarted_process_gets_the_role_once_the_old_process_is_gone() {
+    let Some(mut h) = Harness::new() else { return };
+    let roles = [ShellRole::Session, ShellRole::WindowManager];
+
+    let old_process = sleeper();
+    let wire = h.held_shell(&roles, &old_process);
+    let mut old = ShellClient::over(&mut h, wire).unwrap();
+    let old_object = old.wire.new_id();
+    old.wire.send(
+        old.shell,
+        SHELL_GET_WINDOW_MANAGER,
+        &[Arg::Uint(old_object), Arg::Uint(old.output)],
+    );
+    h.settle(&mut [&mut old.wire]);
+    assert_eq!(old.wire.error(), None, "the first holder was refused");
+    assert!(old.wire.events_of(old_object) > 0);
+
+    let early_process = sleeper();
+    let wire = h.held_shell(&roles, &early_process);
+    let mut early = ShellClient::over(&mut h, wire).unwrap();
+    let id = early.wire.new_id();
+    early.wire.send(
+        early.shell,
+        SHELL_GET_WINDOW_MANAGER,
+        &[Arg::Uint(id), Arg::Uint(early.output)],
+    );
+    h.settle(&mut [&mut early.wire]);
+    assert_eq!(
+        early.wire.error().map(|(object, _)| object),
+        Some(early.shell),
+        "a second holder of the role while the first process is alive"
+    );
+    end(early_process);
+
+    end(old_process);
+    let new_process = sleeper();
+    let wire = h.held_shell(&roles, &new_process);
+    let mut new = ShellClient::over(&mut h, wire).unwrap();
+    let new_object = new.wire.new_id();
+    new.wire.send(
+        new.shell,
+        SHELL_GET_WINDOW_MANAGER,
+        &[Arg::Uint(new_object), Arg::Uint(new.output)],
+    );
+    h.settle(&mut [&mut new.wire, &mut old.wire]);
+    assert_eq!(
+        new.wire.error(),
+        None,
+        "the restarted process was refused the role"
+    );
+    assert!(
+        new.wire.events_of(new_object) > 0,
+        "the restarted process got no first group"
+    );
+    end(new_process);
+}
+
+/// SEC-02: the roles of a connection end with the process it was made for. A connection that outlives its process
+/// (a descriptor passed on, a leftover child) is refused every request, also after the role went to a new process.
+#[test]
+fn a_connection_replayed_after_its_process_exited_holds_nothing() {
+    let Some(mut h) = Harness::new() else { return };
+    let roles = [ShellRole::Session, ShellRole::WindowManager];
+
+    let process = sleeper();
+    let wire = h.held_shell(&roles, &process);
+    let mut replayed = ShellClient::over(&mut h, wire).unwrap();
+    end(process);
+
+    let successor = sleeper();
+    let wire = h.held_shell(&roles, &successor);
+    let mut current = ShellClient::over(&mut h, wire).unwrap();
+    let id = current.wire.new_id();
+    current.wire.send(
+        current.shell,
+        SHELL_GET_WINDOW_MANAGER,
+        &[Arg::Uint(id), Arg::Uint(current.output)],
+    );
+    h.settle(&mut [&mut current.wire, &mut replayed.wire]);
+    assert_eq!(current.wire.error(), None);
+
+    let id = replayed.wire.new_id();
+    replayed
+        .wire
+        .send(replayed.shell, SHELL_GET_SESSION, &[Arg::Uint(id)]);
+    h.settle(&mut [&mut replayed.wire, &mut current.wire]);
+    assert_eq!(
+        replayed.wire.error(),
+        Some((replayed.shell, PERMISSION)),
+        "a connection whose process is gone still held the session role"
+    );
+
+    let mut fresh = h.public();
+    let registry = fresh.get_registry();
+    h.settle(&mut [&mut fresh]);
+    assert!(offered(&fresh, registry, "cupertino_shell_v1").is_none());
+    end(successor);
+}
+
+/// Only the lock screen is offered `ext_session_lock_manager_v1`: not a public client, and not a shell process that
+/// holds other roles.
+#[test]
+fn the_session_lock_is_offered_to_the_lock_screen_alone() {
+    let Some(mut h) = Harness::new() else { return };
+    let mut public = h.public();
+    let public_registry = public.get_registry();
+    let mut observer = h.shell(&[
+        ShellRole::Session,
+        ShellRole::Dock,
+        ShellRole::WindowManager,
+    ]);
+    let observer_registry = observer.get_registry();
+    let mut lock_screen = h.shell(&[ShellRole::Session, ShellRole::SessionLock]);
+    let lock_registry = lock_screen.get_registry();
+    h.settle(&mut [&mut public, &mut observer, &mut lock_screen]);
+
+    let lock = "ext_session_lock_manager_v1";
+    assert!(offered(&public, public_registry, lock).is_none());
+    assert!(offered(&observer, observer_registry, lock).is_none());
+    let (name, version) = offered(&lock_screen, lock_registry, lock).expect("the lock screen");
+
+    let guessed = public.bind(public_registry, name, lock, version);
+    h.settle(&mut [&mut public]);
+    assert_eq!(public.error(), Some((DISPLAY, INVALID_OBJECT)));
+    assert!(public.closed);
+    assert_eq!(public.events_of(guessed), 0);
 }

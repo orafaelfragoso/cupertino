@@ -382,6 +382,26 @@ fn read_object(
 }
 
 impl CompositorSettings {
+    /// Store `dpi` for the mouse `key`, or with `None` forget it; the other mice keep theirs. A resolution outside
+    /// [`MOUSE_DPI_RANGE`] is refused and nothing changes. With no mouse left the key leaves the file.
+    pub fn set_mouse_dpi(&mut self, key: &str, dpi: Option<u32>) -> Result<(), String> {
+        let mut map = self.mouse_dpi.take().unwrap_or_default();
+        match dpi {
+            Some(d) if !MOUSE_DPI_RANGE.contains(&d) => {
+                self.mouse_dpi = Some(map).filter(|m| !m.is_empty());
+                return Err(format!(
+                    "{d} dpi is not from {} to {}",
+                    MOUSE_DPI_RANGE.start(),
+                    MOUSE_DPI_RANGE.end()
+                ));
+            }
+            Some(d) => map.insert(key.to_string(), d),
+            None => map.remove(key),
+        };
+        self.mouse_dpi = Some(map).filter(|m| !m.is_empty());
+        Ok(())
+    }
+
     /// Where the file is: `$CUPERTINO_SERVER_CONFIG`, else `compositor.json` in the settings directory.
     pub fn path() -> Option<PathBuf> {
         crate::config_file(COMPOSITOR_CONF_ENV, "compositor.json")
@@ -459,6 +479,46 @@ mod tests {
         );
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(read.mouse_dpi, Some([(key, 1600)].into()));
+    }
+
+    #[test]
+    fn one_mouse_is_set_or_forgotten_and_the_file_keeps_everything_else() {
+        let dir = std::env::temp_dir().join(format!("cupertino-mouse-dpi-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("compositor.json");
+        std::fs::write(
+            &path,
+            r#"{"corner_radius": 10, "future_key": {"kept": true}, "mouse_dpi": {"a:1:First": 800}}"#,
+        )
+        .unwrap();
+        let (mut s, _) = CompositorSettings::load(&path, None).unwrap();
+        s.set_mouse_dpi("b:2:Second", Some(3200)).unwrap();
+        assert!(s.set_mouse_dpi("b:2:Second", Some(49)).is_err());
+        assert!(s.set_mouse_dpi("b:2:Second", Some(32_001)).is_err());
+        s.store(&path).unwrap();
+        let (read, problems) = CompositorSettings::load(&path, None).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            read.mouse_dpi,
+            Some(
+                [
+                    ("a:1:First".to_string(), 800),
+                    ("b:2:Second".to_string(), 3200)
+                ]
+                .into()
+            )
+        );
+        assert_eq!(read.corner_radius, Some(10.0));
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("future_key"));
+        s.set_mouse_dpi("a:1:First", None).unwrap();
+        s.set_mouse_dpi("b:2:Second", None).unwrap();
+        s.store(&path).unwrap();
+        assert!(!std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("mouse_dpi"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

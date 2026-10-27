@@ -11,7 +11,6 @@ layer = "shell"
 [features]
 # the `cupertino-dock` process: the bar on a layer surface as a client of the server
 app = ["dep:cupertino-assets", "dep:cupertino-client", "dep:cupertino-decorations", "dep:cupertino-geometry", "dep:cupertino-icons", "dep:cupertino-theme", "dep:tiny-skia"]
-
 [dependencies]
 cupertino-animation = { path = "../cupertino-animation" }
 cupertino-overview = { path = "../cupertino-overview" }
@@ -27,6 +26,10 @@ tiny-skia = { version = "0.11", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+
+[lints.rust]
+# `--cfg cupertino_capture_fixtures` is set only by `capture.sh` (see the README); no cargo feature enables it
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(cupertino_capture_fixtures)'] }
 
 [[bin]]
 name = "cupertino-dock"

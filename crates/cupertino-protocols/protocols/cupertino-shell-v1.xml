@@ -10,7 +10,7 @@
      ends: interfaces may change without a version bump until then.
   </description>
 
-  <interface name="cupertino_shell_v1" version="6">
+  <interface name="cupertino_shell_v1" version="7">
     <description summary="shell services of the server">
       Global singleton, offered only to the processes the server started for a shell role, on a
       connection of their own. Each request needs the role it creates: a connection that holds
@@ -18,7 +18,7 @@
       session object, version 3 the screen capture state of the menu bar object. Version 5 moves
       the backdrops and the title bar style of application windows to the public
       cupertino_app_effects_v1 protocol, which any client may use, and removes their requests here. Version 6 adds the
-      session_action request of the menu bar object.
+      session_action request of the menu bar object, version 7 the lock_requested event of the session object.
     </description>
 
     <request name="destroy" type="destructor">
@@ -201,7 +201,7 @@
     </enum>
   </interface>
 
-  <interface name="cupertino_session_v1" version="2">
+  <interface name="cupertino_session_v1" version="3">
     <description summary="appearance, display options and lock state of the session">
       The state every shell process follows. Right after the object is created the server sends
       appearance, then display_options (version 2), then locked or unlocked. Later events say
@@ -251,6 +251,17 @@
 
     <event name="unlocked">
       <description summary="the session is unlocked"/>
+    </event>
+
+    <event name="lock_requested" since="3">
+      <description summary="the server asks the lock screen to lock the session">
+        Sent only to the connection that holds the session lock role, for the lock shortcut, the
+        idle lock and the menu: the client locks as if it had been asked on its own control
+        interface. It is the server's private way to the lock screen, which a process on the
+        session bus cannot take over. explicit is 1 when the person asked for it (the lock
+        shortcut) and 0 when the display slept or the machine is going to sleep.
+      </description>
+      <arg name="explicit" type="uint"/>
     </event>
   </interface>
 

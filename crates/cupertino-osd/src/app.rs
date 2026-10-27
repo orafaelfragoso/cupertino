@@ -213,7 +213,7 @@ impl App {
                 self.client.request_redraw(self.surface)?;
             }
             // the surface takes no input and has no popups or menu-bar role; a lock leaves the overlay alone, which the server hides
-            Event::SessionLock { .. }
+            Event::SessionLock { .. } | Event::LockRequested { .. }
             | Event::Pointer { .. }
             | Event::Key { .. }
             | Event::KeyboardLeave(_)

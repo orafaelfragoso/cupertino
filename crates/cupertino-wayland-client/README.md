@@ -51,4 +51,4 @@ cargo nextest run -p cupertino-wayland-client --run-ignored only   # needs westo
 
 `tests/protocol-flow.rs` runs a minimal protocol server in-process: required globals, configure and ack, resize, buffer
 reuse, scale, decorations, popups, input, clipboard and disconnect. `tests/weston.rs` runs `simple-window` on Weston's
-headless backend; `cupertino-server`'s `tests/simple-window.rs` runs it on the real server.
+headless backend; `cupertino-server`'s `tests/standard-clients.rs` runs it and `cupertino-testclient` on the real server.

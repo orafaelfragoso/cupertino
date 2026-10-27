@@ -119,7 +119,7 @@ struct Seen {
     /// The bytes of the clipboard and of the primary selection a data control device was offered.
     clipboard: Option<Vec<u8>>,
     primary: Option<Vec<u8>>,
-    /// How many times a selection was withdrawn from a data control device.
+    /// How many times a selection that had been offered was withdrawn from a data control device.
     withdrawn: usize,
     /// The source this client set was cancelled.
     cancelled: bool,
@@ -193,7 +193,7 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for Probe {
                 }
                 let bytes = id.map(|offer| read_offer(conn, &offer, "text/plain"));
                 let mut seen = state.seen.lock().unwrap();
-                seen.withdrawn += usize::from(bytes.is_none());
+                seen.withdrawn += usize::from(bytes.is_none() && seen.clipboard.is_some());
                 seen.clipboard = bytes;
             }
             zwlr_data_control_device_v1::Event::PrimarySelection { id } => {
@@ -202,7 +202,7 @@ impl Dispatch<ZwlrDataControlDeviceV1, ()> for Probe {
                 }
                 let bytes = id.map(|offer| read_offer(conn, &offer, "text/x-primary"));
                 let mut seen = state.seen.lock().unwrap();
-                seen.withdrawn += usize::from(bytes.is_none());
+                seen.withdrawn += usize::from(bytes.is_none() && seen.primary.is_some());
                 seen.primary = bytes;
             }
             _ => {}

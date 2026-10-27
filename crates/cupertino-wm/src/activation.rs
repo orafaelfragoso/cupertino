@@ -2,14 +2,21 @@
 //!
 //! The design's token store has no expiry; the window server decides at use time,
 //! against the target application's last activation and the last user event: a token
-//! older than the target's last activation is dead, a newer one is honoured, and otherwise (equal,
-//! or the target was never active) a key or button press more than [`USER_EVENT_SLACK`] after
-//! the token denies it. The last user event is the last key-down or mouse-button-down.
+//! older than the target's last activation is dead, and any other is denied by a key or button press more than
+//! [`USER_EVENT_SLACK`] after it: the person has moved on. The last user event is the last key-down or
+//! mouse-button-down.
 //! Tokens are single use; that bookkeeping is the compositor's, which owns the tokens.
 
 /// A user event this long after the token's creation denies it (100 ms,:
 /// 100 000 000 ns on the nanosecond event clock).
 pub const USER_EVENT_SLACK: f64 = 0.1;
+
+/// How long after its token was made a window that is already mapped may still be brought forward by it, in seconds.
+pub const LATE_ACTIVATION: f64 = 2.0;
+
+/// A key or button press this recently means typing is in progress: a program the person did not ask for must not take
+/// the keyboard from it, in seconds.
+pub const TYPING_QUIET: f64 = 1.0;
 
 /// How long an activation grant stays good for a window that maps, in seconds: the person acted, the program started, and its
 /// window came up; a grant older than this belongs to something else.
@@ -23,11 +30,10 @@ pub fn token_accepted(
     last_activation: Option<f64>,
     last_user_event: Option<f64>,
 ) -> bool {
-    match last_activation {
-        Some(latest) if token < latest => false,
-        Some(latest) if token > latest => true,
-        _ => !last_user_event.is_some_and(|event| event > token + USER_EVENT_SLACK),
+    if last_activation.is_some_and(|latest| token < latest) {
+        return false;
     }
+    !last_user_event.is_some_and(|event| event > token + USER_EVENT_SLACK)
 }
 
 #[cfg(test)]
@@ -35,11 +41,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_token_older_than_the_last_activation_is_dead_and_a_newer_one_wins() {
+    fn a_token_older_than_the_last_activation_is_dead_and_a_newer_one_is_judged_by_the_user_events()
+    {
         assert!(!token_accepted(5.0, Some(6.0), None));
+        assert!(token_accepted(7.0, Some(6.0), None));
         assert!(
-            token_accepted(7.0, Some(6.0), Some(100.0)),
-            "newer than the last activation: no user-event test"
+            !token_accepted(7.0, Some(6.0), Some(8.0)),
+            "newer than the last activation, but the person typed since"
         );
     }
 

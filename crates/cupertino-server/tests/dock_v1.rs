@@ -2,6 +2,8 @@
 //! device, a dock client (a bottom-anchored layer surface with the dock role) and application
 //! clients connect through its socket. Tests skip (pass) when no EGL device is available.
 
+mod common;
+
 use std::io::Write;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
@@ -74,6 +76,7 @@ impl Harness {
             &cupertino_assets::Assets::builtin(),
         )
         .ok()?;
+        common::each_connection_a_process(&mut state);
         match headless::init(&mut state, OUTPUT, 1.0) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
@@ -1286,10 +1289,9 @@ fn an_activation_token_older_than_the_applications_last_activation_only_bounces_
     });
     assert_eq!(h.state.wm.key_window(), Some(one));
 
-    // a token newer than the application's last activation, no user event since: accepted, and
-    // no matter how old it is (no expiry)
+    // a token newer than the application's last activation, no user event since: accepted
     let fresh = h.state.server_activation_token();
-    h.advance(30.0);
+    h.advance(1.5);
     three_client
         .commands
         .send(Cmd::Activate(fresh.clone()))
@@ -1307,6 +1309,20 @@ fn an_activation_token_older_than_the_applications_last_activation_only_bounces_
         Some(one),
         "a used token does nothing"
     );
+
+    // a mapped window is not brought forward by a token more than 2 s old
+    let stale = h.state.server_activation_token();
+    h.advance(2.5);
+    two_client.commands.send(Cmd::Activate(stale)).unwrap();
+    h.wait_until("the attention request", |_| {
+        dock.groups()
+            .iter()
+            .flatten()
+            .filter(|e| **e == DockEvent::Attention("org.example.two".into()))
+            .count()
+            == 2
+    });
+    assert_eq!(h.state.wm.key_window(), Some(one));
 }
 
 #[test]

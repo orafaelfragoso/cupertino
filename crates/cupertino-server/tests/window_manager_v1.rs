@@ -2,6 +2,8 @@
 //! offscreen EGL device, a window manager client and application clients connect through its
 //! socket. Tests skip (pass) when no EGL device is available.
 
+mod common;
+
 use std::io::Write;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
@@ -54,6 +56,7 @@ impl Harness {
             &cupertino_assets::Assets::builtin(),
         )
         .ok()?;
+        common::each_connection_a_process(&mut state);
         match headless::init(&mut state, OUTPUT, 1.0) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {

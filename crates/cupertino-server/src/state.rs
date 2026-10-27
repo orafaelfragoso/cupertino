@@ -302,6 +302,11 @@ pub struct Cupertino {
     /// by surface, until the window maps.
     pub pending_activations:
         HashMap<smithay::reexports::wayland_server::backend::ObjectId, crate::handlers::TokenGrant>,
+    /// The processes whose first toplevel has mapped: the first-window rule of the focus policy applies once to a process,
+    /// however often it reconnects.
+    pub mapped_processes: std::collections::HashSet<crate::process::ProcessIdentity>,
+    /// The process behind a client (`crate::process::peer_process`); replaced in tests, whose clients share one process.
+    pub process_of: crate::process::ProcessOf,
     /// A server move or resize waiting for the pointer to leave the drag-start box.
     pub pending_drag: Option<crate::events::PendingDrag>,
     pub cursor_status: CursorImageStatus,
@@ -531,6 +536,8 @@ impl Cupertino {
             last_user_event: None,
             last_input: None,
             pending_activations: HashMap::new(),
+            mapped_processes: std::collections::HashSet::new(),
+            process_of: Box::new(crate::process::peer_process),
             pending_drag: None,
             cursor_status: CursorImageStatus::default_named(),
             cursor_loader,
@@ -977,7 +984,11 @@ impl Cupertino {
             Some(client) => match client.get_data::<ClientState>() {
                 Some(data) => {
                     let id = client.id();
-                    let first = !data.mapped_toplevel.swap(true, Ordering::SeqCst);
+                    let first_of_connection = !data.mapped_toplevel.swap(true, Ordering::SeqCst);
+                    // a process that cannot be named gets no first-window grant
+                    let first_of_process = (self.process_of)(&self.display_handle, &client)
+                        .is_some_and(|process| self.mapped_processes.insert(process));
+                    let first = first_of_connection && first_of_process;
                     let elsewhere = self.last_input.as_ref().is_some_and(|(at, who)| {
                         *at > data.connected_at && who.as_ref() != Some(&id)
                     });

@@ -2,6 +2,8 @@
 //! lock surface, each on a thread of its own that ends, and so disconnects the client, when the handle is dropped.
 #![allow(dead_code)]
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
@@ -10,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use cupertino_server::Cupertino;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
@@ -409,4 +412,14 @@ impl Drop for Client {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
     }
+}
+
+/// The clients of a test are threads of the test process: make each connection stand for a process of its own, as the
+/// first-window rule of the focus policy sees them.
+pub fn each_connection_a_process(state: &mut Cupertino) {
+    state.process_of = Box::new(|_, client| {
+        let mut hasher = DefaultHasher::new();
+        client.id().hash(&mut hasher);
+        Some((0, hasher.finish()))
+    });
 }

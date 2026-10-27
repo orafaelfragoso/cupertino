@@ -13,7 +13,7 @@ shadow, minimize progress).
 |---|---|
 | `lifecycle` | toplevel state machine (`Opening`, `Normal`, `Minimizing`, `Minimized`, `Restoring`, `Zooming`, `Zoomed`, `Unzooming`, `EnterFullScreen`, `FullScreen`, `ExitFullScreen`, `Tiling(k)`, `Tiled(k)`, `Closing`, `Destroyed`); every transient state is interruptible |
 | `focus` | app versus window focus, MRU, hide / hide others, app switcher model (steps, hidden counter, quit and hide of the selection), in-app window cycling, modal blocking, attention for refused activations |
-| `activation` | the activation-token rule (`token_accepted`, `GRANT_LIFETIME`) |
+| `activation` | the activation-token rule (`token_accepted`, `GRANT_LIFETIME`, `LATE_ACTIVATION`, `TYPING_QUIET`) |
 | `pieces` | visible pieces of a window (`visible_pieces`) and the magnetic guides they make (`window_guides`) |
 | `kind` | window kind of a new window from its protocol facts (`window_kind(modal, utility)`), where dialogs open (`sheet_frame`, `modal_panel_frame`, `child_frame`); `Map` turns a modal child into a `Sheet` when `place_modal_children_as_sheets` is on |
 | `interaction` | move, resize, snap hot zones, option-accelerator preview, edge-dwell workspace switching, resize hit zones, size snapping to the screen edges |
@@ -76,7 +76,7 @@ the delay), dock hot-zone avoidance off, tiling animations on, tiled border off,
 
 ### Focus on map
 
-A window that maps (`MapParams.activation`) takes the keyboard when the compositor asks for it unconditionally (`Activation::Always`: shell windows, tests) or, with `Activation::Policy(MapFocus)`, when: nothing is focused, it is a sheet or dialog of the key window, its application is the front one, its client presented a valid grant (`Grant`: made by the compositor or for an input event of the focused client) at most 10 s old that passes `token_accepted`, or it is the first window of a client the person has not left since it connected (`first_of_client` and not `input_elsewhere`). Any other window maps just below the key window and `Effect::AppAttention` bounces its application's tile. Tests: `tests/focus_on_map.rs`.
+A window that maps (`MapParams.activation`) takes the keyboard when the compositor asks for it unconditionally (`Activation::Always`: shell windows, tests) or, with `Activation::Policy(MapFocus)`, when: nothing is focused, it is a sheet or dialog of the key window, its application is the front one, its client presented a valid grant (`Grant`: made by the compositor or for an input event of the focused client) at most 10 s old that passes `token_accepted`, or it is the first window of a client the person has not left since it connected and is not typing (`first_of_client`, not `input_elsewhere`, and no key or button press in the last `TYPING_QUIET` = 1 s). Any other window maps just below the key window and `Effect::AppAttention` bounces its application's tile. Tests: `tests/focus_on_map.rs`.
 
 ### Application switcher and activation
 
@@ -86,7 +86,7 @@ A window that maps (`MapParams.activation`) takes the keyboard when the composit
 | steps | Next / Previous wrap on a fresh press; a key repeat stops at the ends; First / Last jump |
 | hidden counter | for 150 ms after the switch opens (`SWITCHER_SHOW_DELAY`) steps only count; the count picks `min(c, n−1)`, from the end `n + c` (0 past the start), and 0 follows the opening direction |
 | Q / H | Q asks every window of the selected application to close (nothing with a single entry); H toggles its hidden state; the switch stays open |
-| activation token | no expiry; refused when older than the app's last activation; accepted when newer; at a tie refused when a user event came more than 100 ms after it; single use; a refused activation asks for attention (`Effect::AppAttention`) when the app is not in front |
+| activation token | refused when older than the app's last activation, and in every case when a user event came more than 100 ms after it; for a window that is already mapped also refused when more than `LATE_ACTIVATION` = 2 s old; single use; a refused activation asks for attention (`Effect::AppAttention`) when the app is not in front |
 | catch-up after a jump with the pointer outside the window | 0.15 s, ease-out (0, 0, 0.58, 1) |
 | Alt disables snapping | on |
 | resize hit zones | 3 pt inside, 4 pt outside, corners 12 pt, bottom-right 15 pt |

@@ -409,15 +409,29 @@ fn an_activation_token_is_judged_against_the_last_activation_and_user_event() {
     let a = h.map("a");
     let activated = h.now;
     let _b = h.map("b");
+    let now = activated + 1.0;
     assert!(
-        !h.wm.activation_allowed(a, activated - 1.0, None),
+        !h.wm.activation_allowed(a, activated - 1.0, None, activated),
         "older than a's last activation"
     );
+    assert!(h.wm.activation_allowed(a, activated + 0.5, None, now));
     assert!(
-        h.wm.activation_allowed(a, activated + 0.5, Some(activated + 100.0)),
-        "newer: no user-event test"
+        !h.wm
+            .activation_allowed(a, activated + 0.5, Some(activated + 0.8), now),
+        "newer, but the person typed 0.3 s after the token"
     );
-    assert!(!h.wm.activation_allowed(WindowId(99), activated + 0.5, None));
+    assert!(
+        h.wm.activation_allowed(a, activated + 0.5, Some(activated + 0.55), now),
+        "a press within the slack of the token"
+    );
+    assert!(
+        !h.wm
+            .activation_allowed(a, activated + 0.5, None, activated + 2.6),
+        "used 2.1 s after it was made"
+    );
+    assert!(!h
+        .wm
+        .activation_allowed(WindowId(99), activated + 0.5, None, now));
 }
 
 #[test]

@@ -27,7 +27,9 @@ pub mod wm;
 pub mod workspace;
 pub mod zoom;
 
-pub use activation::{token_accepted, GRANT_LIFETIME, USER_EVENT_SLACK};
+pub use activation::{
+    token_accepted, GRANT_LIFETIME, LATE_ACTIVATION, TYPING_QUIET, USER_EVENT_SLACK,
+};
 pub use command::{
     Activation, AnimationKind, Command, Effect, Grant, MapFocus, MapParams, Modifiers,
 };

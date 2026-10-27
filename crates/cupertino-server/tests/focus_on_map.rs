@@ -47,6 +47,7 @@ impl Harness {
             &cupertino_assets::Assets::builtin(),
         )
         .ok()?;
+        common::each_connection_a_process(&mut state);
         match headless::init(&mut state, (1000, 700), 1.0) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
@@ -152,6 +153,50 @@ fn the_first_window_of_a_program_the_person_just_started_comes_to_the_front() {
         h.state.wm.key_window(),
         Some(new),
         "no input went elsewhere since it connected"
+    );
+}
+
+#[test]
+fn a_program_that_connects_and_maps_while_the_person_types_opens_behind_the_key_window() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_a, front) = with_front_window(&mut h);
+    advance(&mut h, 1.0);
+    h.click_on(front);
+    let _intruder = Client::toplevel_after(
+        h.socket_path(),
+        "org.example.intruder",
+        Arc::new(AtomicBool::new(true)),
+        Arc::default(),
+    );
+    h.wait_until("the second window to map", |s| {
+        s.windows.iter().filter(|e| e.mapped).count() == 2
+    });
+    let new = h.newest(&[front]).unwrap();
+    assert_eq!(h.state.wm.key_window(), Some(front), "the keystrokes stay");
+    let order = h.state.wm.stacking_order();
+    let at = |w: WindowId| order.iter().position(|x| *x == w).unwrap();
+    assert!(at(new) < at(front), "behind the key window: {order:?}");
+}
+
+#[test]
+fn a_process_that_reconnects_gets_the_first_window_grant_once() {
+    let Some(mut h) = Harness::new() else { return };
+    h.state.process_of = Box::new(cupertino_server::process::peer_process);
+    let (_a, front) = with_front_window(&mut h);
+    // the test's clients are all this process: its first window was the front one
+    let _again = Client::toplevel_after(
+        h.socket_path(),
+        "org.example.again",
+        Arc::new(AtomicBool::new(true)),
+        Arc::default(),
+    );
+    h.wait_until("the second window to map", |s| {
+        s.windows.iter().filter(|e| e.mapped).count() == 2
+    });
+    assert_eq!(
+        h.state.wm.key_window(),
+        Some(front),
+        "no input went elsewhere, but the process had its grant"
     );
 }
 

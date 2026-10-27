@@ -1,0 +1,29 @@
+{
+  "size": [
+    1000,
+    700
+  ],
+  "milliseconds": 0,
+  "windows": [],
+  "layers": [
+    [
+      "cupertino-launcher",
+      [
+        0,
+        0,
+        1000,
+        700
+      ]
+    ],
+    [
+      "cupertino-launcher",
+      [
+        144,
+        102,
+        712,
+        598
+      ]
+    ]
+  ],
+  "overview": []
+}

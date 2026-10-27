@@ -4,6 +4,7 @@
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::{AsFd, OwnedFd};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -27,6 +28,8 @@ const READ_TIMEOUT: Duration = Duration::from_secs(1);
 const READ_LIMIT: usize = 1 << 20;
 /// How long serving our copy to a pasting client may take before the descriptor is dropped.
 const SERVE_TIMEOUT: Duration = Duration::from_secs(1);
+/// The most pastes served at once; a paste asked for beyond it gets nothing (its descriptor is closed at once).
+const MAX_SERVES: usize = 8;
 
 /// The types an offer announced.
 #[derive(Debug, Default)]
@@ -39,6 +42,8 @@ pub(crate) struct Clipboard {
     selection: Option<WlDataOffer>,
     /// The selection this client set, with its text.
     own: Option<(WlDataSource, Arc<str>)>,
+    /// Pastes being served now.
+    serving: Arc<AtomicUsize>,
 }
 
 impl Clipboard {
@@ -137,6 +142,31 @@ fn text_of(bytes: &[u8]) -> String {
     String::from_utf8_lossy(whole).into_owned()
 }
 
+/// Serve `text` to `fd` on a thread of its own when fewer than `max` serves run (counted in `serving`); else close
+/// `fd` at once. Whether it is served.
+fn spawn_serve(
+    serving: &Arc<AtomicUsize>,
+    max: usize,
+    fd: OwnedFd,
+    text: Arc<str>,
+    timeout: Duration,
+) -> bool {
+    if serving
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            (n < max).then_some(n + 1)
+        })
+        .is_err()
+    {
+        return false;
+    }
+    let serving = Arc::clone(serving);
+    std::thread::spawn(move || {
+        serve(fd, text.as_bytes(), Instant::now() + timeout);
+        serving.fetch_sub(1, Ordering::AcqRel);
+    });
+    true
+}
+
 /// Write `text` to a pasting client's `fd` without blocking, until done or `deadline`, then close it. A client that
 /// does not read gets what fits in the pipe.
 fn serve(fd: OwnedFd, text: &[u8], deadline: Instant) {
@@ -221,10 +251,13 @@ impl Dispatch<WlDataSource, ()> for State {
                 if let Some((_, text)) = state.clipboard.own.as_ref().filter(|(s, _)| s == source) {
                     // off the event loop: a pasting client that reads slowly or not at all never holds up this one; it
                     // reads until the descriptor closes, which the end of `serve` does
-                    let text = Arc::clone(text);
-                    std::thread::spawn(move || {
-                        serve(fd, text.as_bytes(), Instant::now() + SERVE_TIMEOUT)
-                    });
+                    spawn_serve(
+                        &state.clipboard.serving,
+                        MAX_SERVES,
+                        fd,
+                        Arc::clone(text),
+                        SERVE_TIMEOUT,
+                    );
                 }
             }
             wl_data_source::Event::Cancelled => {
@@ -317,5 +350,59 @@ mod tests {
             "{} bytes, then the end",
             got.len()
         );
+    }
+
+    #[test]
+    fn at_most_max_pastes_are_served_at_once_and_the_rest_closed_at_once() {
+        let serving = Arc::new(AtomicUsize::new(0));
+        let text: Arc<str> = "x".repeat(1 << 20).into();
+        let mut readers = Vec::new();
+        for _ in 0..3 {
+            let (reader, writer) = std::io::pipe().unwrap();
+            assert!(spawn_serve(
+                &serving,
+                3,
+                OwnedFd::from(writer),
+                Arc::clone(&text),
+                Duration::from_secs(5)
+            ));
+            readers.push(reader);
+        }
+        let (mut refused, writer) = std::io::pipe().unwrap();
+        assert!(!spawn_serve(
+            &serving,
+            3,
+            OwnedFd::from(writer),
+            Arc::clone(&text),
+            Duration::from_secs(5)
+        ));
+        let mut got = Vec::new();
+        refused.read_to_end(&mut got).unwrap();
+        assert_eq!(got.len(), 0, "the fourth paste is closed at once");
+        assert_eq!(serving.load(Ordering::Acquire), 3);
+        for mut reader in readers {
+            let mut got = Vec::new();
+            reader.read_to_end(&mut got).unwrap();
+            assert_eq!(got.len(), 1 << 20);
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while serving.load(Ordering::Acquire) > 0 {
+            assert!(Instant::now() < deadline, "the serves never ended");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let (mut reader, writer) = std::io::pipe().unwrap();
+        assert!(
+            spawn_serve(
+                &serving,
+                3,
+                OwnedFd::from(writer),
+                text,
+                Duration::from_secs(5)
+            ),
+            "a slot frees when a serve ends"
+        );
+        let mut got = Vec::new();
+        reader.read_to_end(&mut got).unwrap();
+        assert_eq!(got.len(), 1 << 20);
     }
 }

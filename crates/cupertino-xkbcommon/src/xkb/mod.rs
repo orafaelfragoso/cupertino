@@ -314,7 +314,7 @@ impl Keymap {
     /// Wayland keymap file), mapped copy-on-write. `Ok(None)` if the text does not compile.
     ///
     /// # Safety
-    /// No other process may truncate the file while it is mapped.
+    /// No other process may truncate the file while it is mapped. A `size` larger than the file is an error.
     pub unsafe fn new_from_fd(
         context: &Context,
         fd: OwnedFd,
@@ -328,9 +328,14 @@ impl Keymap {
                 "the keymap size is 0, which leaves no room for its terminating NUL",
             ));
         }
-        let map = MmapOptions::new()
-            .len(size)
-            .map_copy_read_only(&std::fs::File::from(fd))?;
+        let file = std::fs::File::from(fd);
+        if size as u64 > file.metadata()?.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "the keymap size is larger than its file",
+            ));
+        }
+        let map = MmapOptions::new().len(size).map_copy_read_only(&file)?;
         let text = &map[..size - 1];
         let Ok(string) = std::str::from_utf8(text) else {
             eprintln!("xkbcommon: the keymap is not valid UTF-8");
@@ -676,6 +681,27 @@ mod tests {
                 &context,
                 fd,
                 0,
+                KEYMAP_FORMAT_TEXT_V1,
+                KEYMAP_COMPILE_NO_FLAGS,
+            )
+        };
+        assert_eq!(
+            result.err().map(|err| err.kind()),
+            Some(io::ErrorKind::InvalidData)
+        );
+    }
+
+    #[test]
+    fn a_keymap_size_beyond_the_file_is_an_error() {
+        let file = std::fs::File::open(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")).unwrap();
+        let size = usize::try_from(file.metadata().unwrap().len()).unwrap() + 1;
+        let context = Context::new(CONTEXT_NO_FLAGS);
+        // SAFETY: the size is rejected before anything is mapped.
+        let result = unsafe {
+            Keymap::new_from_fd(
+                &context,
+                OwnedFd::from(file),
+                size,
                 KEYMAP_FORMAT_TEXT_V1,
                 KEYMAP_COMPILE_NO_FLAGS,
             )

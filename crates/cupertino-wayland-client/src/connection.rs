@@ -1,5 +1,7 @@
 //! The connection: globals, surfaces with their roles and buffers, seat input and the event loop.
 
+use std::any::Any;
+use std::fmt;
 use std::io::{ErrorKind, Read, Write};
 use std::ops::RangeInclusive;
 use std::os::unix::net::UnixStream;
@@ -177,6 +179,32 @@ pub enum Event {
         request: TokenRequest,
         token: String,
     },
+    /// What an extension's `Dispatch` impl queued with [`State::emit`], in order with the events around it.
+    Extension(ExtensionEvent),
+}
+
+/// A value an extension queued with [`State::emit`]; the extension reads it back with [`ExtensionEvent::downcast`].
+/// Equal only to clones of itself.
+#[derive(Clone)]
+pub struct ExtensionEvent(Arc<dyn Any + Send + Sync>);
+
+impl ExtensionEvent {
+    /// The value, when it is a `T`; else the event itself, for another extension.
+    pub fn downcast<T: Any + Send + Sync>(self) -> Result<Arc<T>, ExtensionEvent> {
+        self.0.downcast().map_err(ExtensionEvent)
+    }
+}
+
+impl fmt::Debug for ExtensionEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ExtensionEvent(..)")
+    }
+}
+
+impl PartialEq for ExtensionEvent {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 /// A request for an activation token, matched to its [`Event::ActivationToken`].
@@ -1170,6 +1198,18 @@ impl State {
         }
     }
 
+    /// Queue `event` for the application as an [`Event::Extension`], after the events dispatched before it.
+    pub fn emit(&mut self, event: impl Any + Send + Sync) {
+        self.events
+            .push(Event::Extension(ExtensionEvent(Arc::new(event))));
+    }
+
+    /// End the next [`Connection::wait`] with `error`, such as [`Error::Protocol`] for an event the extension cannot
+    /// accept; the first error wins.
+    pub fn fail(&mut self, error: Error) {
+        self.fault.get_or_insert(error);
+    }
+
     fn next_id(&mut self) -> SurfaceId {
         self.next_surface += 1;
         SurfaceId(self.next_surface)
@@ -1222,10 +1262,6 @@ impl State {
                 unreachable!("a Toplevel handle names a toplevel")
             }
         }
-    }
-
-    fn fail(&mut self, e: Error) {
-        self.fault.get_or_insert(e);
     }
 
     fn bind_output(

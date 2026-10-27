@@ -95,7 +95,8 @@ use wayland_server::{
 struct Committed {
     buffer_size: (i32, i32),
     stride: i32,
-    offset: i32,
+    /// The protocol id of the committed `wl_buffer`.
+    buffer: u32,
     buffer_scale: i32,
     first_pixel: [u8; 4],
     backdrops: Vec<BackdropState>,
@@ -401,7 +402,7 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
                         .send(Committed {
                             buffer_size: (b.width, b.height),
                             stride: b.stride,
-                            offset: b.offset,
+                            buffer: buffer.id().protocol_id(),
                             buffer_scale: s.scale,
                             first_pixel,
                             backdrops: s
@@ -1775,7 +1776,7 @@ fn surface_lifecycle_against_a_protocol_server() {
         Committed {
             buffer_size: (200, 100),
             stride: 800,
-            offset: 0,
+            buffer: first.buffer,
             buffer_scale: 2,
             first_pixel: [30, 20, 10, 40],
             backdrops: vec![BackdropState {
@@ -1800,10 +1801,11 @@ fn surface_lifecycle_against_a_protocol_server() {
         matches!(e, Event::Draw(_)).then_some(())
     });
 
-    // the second frame is drawn on a cleared pixmap
+    // the second frame uses another buffer while the server holds the first
     client.draw(surface, |_, _| {}).unwrap();
     stash.extend(client.wait(Some(Duration::from_millis(50))).unwrap());
     let second = committed.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_ne!(second.buffer, first.buffer);
     assert_eq!(second.first_pixel, [0, 0, 0, 0]);
 
     // pointer input arrives in surface-local logical coordinates; a token follows the press serial
@@ -2582,6 +2584,7 @@ fn a_damaged_frame_keeps_the_last_one_repaints_its_rectangles_and_reports_only_t
     );
     // the second buffer was never written: it got the whole frame, red at its corner
     assert_eq!(frames[1].first_pixel, [0, 0, 255, 255]);
+    assert_ne!(frames[0].buffer, frames[1].buffer, "the other buffer");
 }
 
 /// A shell process that connected over the `WAYLAND_SOCKET` the server gave it does not pass that connection on: a

@@ -134,17 +134,24 @@ fn secret(text: &str) -> Secret {
 #[test]
 fn a_secret_round_trips_and_its_text_never_shows_in_debug_output() {
     let request = Request::Answer {
+        conversation: 7,
         secret: secret("hunter2 \"quoted\" \\ é"),
     };
     let frame = encode_secret(&request, MAX_REQUEST_FRAME).unwrap();
-    let Request::Answer { secret } = decode::<Request>(&frame[4..]).unwrap() else {
+    let Request::Answer { secret, .. } = decode::<Request>(&frame[4..]).unwrap() else {
         panic!("not an answer")
     };
     assert_eq!(secret.expose(), "hunter2 \"quoted\" \\ é");
     assert_eq!(format!("{secret:?}"), "<secret>");
     assert_eq!(
-        format!("{:?}", Request::Answer { secret }),
-        "Answer { secret: <secret> }"
+        format!(
+            "{:?}",
+            Request::Answer {
+                conversation: 7,
+                secret
+            }
+        ),
+        "Answer { conversation: 7, secret: <secret> }"
     );
 }
 
@@ -152,12 +159,16 @@ fn a_secret_round_trips_and_its_text_never_shows_in_debug_output() {
 fn a_secret_on_the_wire_is_hex_so_the_json_parser_never_unescapes_it() {
     let frame = encode_secret(
         &Request::Answer {
+            conversation: 7,
             secret: secret("a\"b"),
         },
         MAX_REQUEST_FRAME,
     )
     .unwrap();
-    assert_eq!(&frame[4..], br#"{"type":"Answer","secret":"612262"}"#);
+    assert_eq!(
+        &frame[4..],
+        br#"{"type":"Answer","conversation":7,"secret":"612262"}"#
+    );
 }
 
 #[test]
@@ -165,6 +176,7 @@ fn the_longest_password_fits_a_request_frame_and_one_byte_more_is_not_a_secret()
     let longest = "x".repeat(MAX_SECRET_BYTES);
     let frame = encode_secret(
         &Request::Answer {
+            conversation: 7,
             secret: secret(&longest),
         },
         MAX_REQUEST_FRAME,
@@ -214,6 +226,7 @@ fn the_state_machine_follows_an_attempt() {
         account: Account::Listed { uid: 1000 },
     };
     let answer = Request::Answer {
+        conversation: 7,
         secret: secret("x"),
     };
     let cancel = Request::Cancel {};

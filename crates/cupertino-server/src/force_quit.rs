@@ -41,6 +41,22 @@ impl ProcessHandle {
         Ok(Self { pid, fd })
     }
 
+    /// Hold the process behind `fd`, a pidfd the bus daemon passed (`ProcessFD`); its pid is the one the kernel names
+    /// for the descriptor. Fails when `fd` is not a pidfd of a process in this pid namespace.
+    pub fn from_pidfd(fd: OwnedFd) -> std::io::Result<Self> {
+        let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", fd.as_raw_fd()))?;
+        let pid = info
+            .lines()
+            .find_map(|l| l.strip_prefix("Pid:"))
+            .and_then(|p| p.trim().parse::<i64>().ok())
+            .filter(|p| *p > 0)
+            .and_then(|p| u32::try_from(p).ok())
+            .ok_or_else(|| {
+                std::io::Error::other("the descriptor is not a pidfd of a visible process")
+            })?;
+        Ok(Self { pid, fd })
+    }
+
     /// Whether the process has exited: its pidfd is readable then.
     pub fn has_exited(&self) -> bool {
         let mut poll = libc::pollfd {

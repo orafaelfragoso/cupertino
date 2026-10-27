@@ -150,11 +150,12 @@ assets = [
   ["../../packaging/pam/deb/cupertino-session", "etc/pam.d/cupertino-session", "644"],
   ["../../packaging/pam/deb/cupertino-greeter", "etc/pam.d/cupertino-greeter", "644"],
   ["../../packaging/pam/deb/cupertino-autologin", "etc/pam.d/cupertino-autologin", "644"],
+  ["../../packaging/licenses/THIRD-PARTY-LICENSES", "usr/share/doc/cupertino/THIRD-PARTY-LICENSES", "644"],
 ]
 
 [package.metadata.generate-rpm]
 name = "cupertino"
-license = "GPL-3.0-or-later AND MPL-2.0 AND MIT AND OFL-1.1"
+license = "GPL-3.0-or-later AND MPL-2.0 AND MIT AND OFL-1.1 AND LGPL-2.1-or-later AND MIT-CMU AND BSD-3-Clause"
 summary = "Cupertino Wayland desktop"
 release = "1"
 url = "https://github.com/orafaelfragoso/cupertino"
@@ -204,6 +205,7 @@ assets = [
   { source = "crates/cupertino-xkbcommon/LICENSE", dest = "/usr/share/licenses/cupertino/MIT", mode = "644" },
   { source = "third-party/xkbcommon-rs/LICENSE", dest = "/usr/share/licenses/cupertino/libxkbcommon", mode = "644" },
   { source = "crates/cupertino-assets/fonts/OFL.txt", dest = "/usr/share/licenses/cupertino/OFL.txt", mode = "644" },
+  { source = "packaging/licenses/THIRD-PARTY-LICENSES", dest = "/usr/share/licenses/cupertino/THIRD-PARTY-LICENSES", mode = "644" },
 ]
 
 [package.metadata.generate-rpm.requires]

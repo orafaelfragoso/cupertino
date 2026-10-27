@@ -88,6 +88,7 @@ fn main() {
             &icons,
             Size { w: 720.0, h: 520.0 },
             0.0,
+            None,
             2.0,
             &pal,
         );
@@ -105,6 +106,7 @@ fn main() {
             },
             Size { w: 720.0, h: 560.0 },
             0.0,
+            None,
             2.0,
             &pal,
         );
@@ -122,6 +124,7 @@ fn main() {
             },
             Size { w: 720.0, h: 420.0 },
             0.0,
+            None,
             2.0,
             &pal,
         );
@@ -144,6 +147,7 @@ fn main() {
             SortSpec::default(),
             Size { w: 760.0, h: 400.0 },
             0.0,
+            None,
             2.0,
             &pal,
             now,

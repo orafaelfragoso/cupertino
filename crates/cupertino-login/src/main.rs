@@ -4,6 +4,7 @@
 
 mod app;
 mod greeter;
+mod harden;
 mod options;
 mod screen;
 
@@ -18,6 +19,10 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if let Err(e) = harden::harden() {
+        eprintln!("cupertino-login: hardening the process: {e}");
+        return ExitCode::FAILURE;
+    }
     let result = match options {
         Options::Session(options) => app::run(&options).map(|ended| match ended {
             // a success exit: the server does not restart the process

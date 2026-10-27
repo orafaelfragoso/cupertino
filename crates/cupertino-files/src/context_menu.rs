@@ -523,6 +523,7 @@ impl Menu {
         self.hovered.truncate(1);
         self.path.clear();
         self.pending = None;
+        self.type_ahead = TypeAhead::default();
         true
     }
 
@@ -611,6 +612,8 @@ impl Menu {
     /// Close the levels below `level`, then open the submenu of `row` if it has an enabled one; `true` when the levels changed.
     fn show_submenu_of(&mut self, level: usize, row: usize) -> bool {
         let before = self.layouts.len();
+        // typed text belongs to the level it was typed in
+        self.type_ahead = TypeAhead::default();
         self.layouts.truncate(level + 1);
         self.hovered.truncate(level + 1);
         self.path.truncate(level);
@@ -743,6 +746,7 @@ impl Menu {
                 self.layouts.truncate(level);
                 self.hovered.truncate(level);
                 self.path.truncate(level - 1);
+                self.type_ahead = TypeAhead::default();
                 Outcome::Changed
             }
             Nav::Left => Outcome::Nothing,
@@ -1061,6 +1065,33 @@ mod tests {
             menu.press_key(Key::Space, 9.2),
             Outcome::Run(Command::Open),
             "Space inside the typed text is a letter, not a pick"
+        );
+    }
+
+    #[test]
+    fn typed_text_does_not_follow_the_menu_into_a_submenu_or_back_out() {
+        let mut menu = open(item_menu(&subject(), &apps()));
+        let with = row_of(&menu, "Open With");
+        for (i, c) in "open".chars().enumerate() {
+            menu.press_key(Key::Type(c), 1.0 + i as f64 * 0.05);
+        }
+        menu.press_key(Key::Space, 1.2);
+        menu.press_key(Key::Type('w'), 1.25);
+        assert_eq!(menu.hovered(0), Some(with), "typed \"open w\"");
+        assert_eq!(menu.press_key(Key::Nav(Nav::Right), 1.3), Outcome::Changed);
+        assert_eq!(menu.levels(), 2);
+        assert_eq!(
+            menu.press_key(Key::Type('v'), 1.4),
+            Outcome::Changed,
+            "a new search in the submenu, not \"opv\""
+        );
+        assert_eq!(menu.hovered(1), Some(0), "Viewer");
+        menu.press_key(Key::Type('e'), 1.5);
+        assert_eq!(menu.press_key(Key::Nav(Nav::Left), 1.6), Outcome::Changed);
+        assert_eq!(
+            menu.press_key(Key::Type('c'), 1.7),
+            Outcome::Nothing,
+            "back in the first level the search starts over: nothing there starts with c"
         );
     }
 

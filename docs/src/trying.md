@@ -13,28 +13,24 @@ Cupertino is early (0.x). This page is for testers: what to expect, what does no
 
 - The compositor starts nested and on a TTY, and starts its shell processes with it.
 - The dock, menu bar, launcher, application switcher, overview, workspaces and hot corners.
-- Notifications, the control panel and the volume and brightness overlays.
+- Notifications, the control panel, and the volume and brightness overlays. The volume keys drive the raw mixer: no device choice, see [#21](https://github.com/orafaelfragoso/cupertino/issues/21).
 - The file manager and the settings app.
-- Window management: move, resize, tile, full screen, minimise, close, switch windows.
+- Window management: move, resize, tile, full screen, minimise, close, switch windows. New windows take focus: see [#20](https://github.com/orafaelfragoso/cupertino/issues/20).
 - Screenshots of the screen or a selection (`Super+Shift+3` and `Super+Shift+4`).
 
 Each has rough edges; the list above means the feature exists, not that it is finished.
 
-## Known problems
+## Selected known problems
 
-These are open defects with priority p0 or p1. The issue has the current state and any workaround:
+A selection of the open p0 and p1 defects a tester hits first. Each issue has the current state and any workaround; the live list is [open p0 and p1 issues](https://github.com/orafaelfragoso/cupertino/issues?q=is%3Aissue+is%3Aopen+label%3A%22priority%3A+p0%22%2Clabel%3A%22priority%3A+p1%22).
 
-- Pointer acceleration with a mouse: [#1](https://github.com/orafaelfragoso/cupertino/issues/1).
-- Mouse wheel scrolling is slow: [#2](https://github.com/orafaelfragoso/cupertino/issues/2).
-- The natural-scrolling setting does not affect a mouse: [#3](https://github.com/orafaelfragoso/cupertino/issues/3).
-- Popup menus are not dismissed when the pane that opened them closes: [#5](https://github.com/orafaelfragoso/cupertino/issues/5).
-- The menu bar shows the app name and Window, not the app's own menus: [#6](https://github.com/orafaelfragoso/cupertino/issues/6).
-- No way to change the wallpaper: [#7](https://github.com/orafaelfragoso/cupertino/issues/7).
-- Text fields have no caret, and clicks do not place one: [#16](https://github.com/orafaelfragoso/cupertino/issues/16).
-- An installed session starts no shell processes: [#17](https://github.com/orafaelfragoso/cupertino/issues/17).
-- Open menus ignore the keyboard: [#18](https://github.com/orafaelfragoso/cupertino/issues/18).
-
-Other open issues are in the [issue list](https://github.com/orafaelfragoso/cupertino/issues).
+- Mouse: [#1](https://github.com/orafaelfragoso/cupertino/issues/1), [#2](https://github.com/orafaelfragoso/cupertino/issues/2), [#3](https://github.com/orafaelfragoso/cupertino/issues/3).
+- Text fields: [#16](https://github.com/orafaelfragoso/cupertino/issues/16).
+- Menus and the keyboard: [#18](https://github.com/orafaelfragoso/cupertino/issues/18).
+- Session menu: [#19](https://github.com/orafaelfragoso/cupertino/issues/19).
+- Focus: [#20](https://github.com/orafaelfragoso/cupertino/issues/20).
+- Audio: [#21](https://github.com/orafaelfragoso/cupertino/issues/21).
+- Multiple monitors: [#22](https://github.com/orafaelfragoso/cupertino/issues/22).
 
 ## Reporting a bug
 

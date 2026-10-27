@@ -243,6 +243,12 @@ impl GlobalDispatch<ZwlrOutputManagerV1, ()> for Cupertino {
         init: &mut DataInit<'_, Self>,
     ) {
         let resource = init.init(resource, ());
+        if state.session_lock.is_active() {
+            // the displays are not for anyone to look at or change while the session is locked; `finished` destroys the
+            // object, which cannot happen inside the bind
+            state.loop_handle.insert_idle(move |_| resource.finished());
+            return;
+        }
         let heads = state
             .displays
             .heads
@@ -251,6 +257,18 @@ impl GlobalDispatch<ZwlrOutputManagerV1, ()> for Cupertino {
             .collect();
         resource.done(state.displays.serial);
         state.displays.managers.push(Manager { resource, heads });
+    }
+
+    fn can_view(client: Client, _: &()) -> bool {
+        crate::authorization::unsandboxed(&client)
+    }
+}
+
+/// The session was locked: every manager is finished, so nothing about the displays reaches a client until it binds
+/// again after the unlock.
+pub(crate) fn session_locked(state: &mut Cupertino) {
+    for manager in state.displays.managers.drain(..) {
+        manager.resource.finished();
     }
 }
 
@@ -399,6 +417,10 @@ impl Dispatch<ZwlrOutputConfigurationV1, ConfigurationData> for Cupertino {
             return;
         }
         config.used = true;
+        if state.session_lock.is_active() {
+            resource.failed();
+            return;
+        }
         if data.serial != state.displays.serial {
             resource.cancelled();
             return;

@@ -21,7 +21,7 @@ EXTRA = {
     "dbus-interface": {"bus", "bus_name"},
     "binary": {"shipped"},
 }
-OPTIONAL = {"note", "version_without_render_node"}
+OPTIONAL = {"note", "version_without_render_node", "visible_to"}
 # Any attribute with an `interface` token that is not a `key = value` argument (`proxy(interface = "...")`) and not inside
 # a string: `zbus::interface`, `::zbus::interface`, an imported `interface`, and either inside a `cfg_attr`.
 ATTRIBUTE = re.compile(r'^[ \t]*#\[[^\]"]*?\binterface\b(?!\s*=)(.*?)\]', re.M | re.S)
@@ -87,6 +87,8 @@ def check_entries(entries, root):
         seen.add((kind, e.get("name")))
         if e.get("owner_area") not in AREAS:
             problems.append(f"{where}: owner_area {e.get('owner_area')!r} is not one of {sorted(AREAS)}")
+        if e.get("visible_to", "unsandboxed") != "unsandboxed":
+            problems.append(f"{where}: visible_to {e.get('visible_to')!r} is not unsandboxed")
         if e.get("scope") not in SCOPES:
             problems.append(f"{where}: scope {e.get('scope')!r} is not one of {sorted(SCOPES)}")
         if e.get("test_owner", "unknown") != "unknown" and not (root / e["test_owner"]).is_file():

@@ -265,6 +265,8 @@ pub struct Cupertino {
     pub dmabuf_state: DmabufState,
     pub dmabuf_global: Option<DmabufGlobal>,
     pub popups: PopupManager,
+    /// Which clients answer their pings (`hung.rs`).
+    pub hung: crate::hung::Pings,
     /// The popup chain that holds the pointer and keyboard, with the toplevel it belongs to (`popup_grab.rs`).
     pub popup_grab: Option<crate::popup_grab::ActivePopupGrab>,
 
@@ -496,6 +498,7 @@ impl Cupertino {
             dmabuf_state: DmabufState::new(),
             dmabuf_global: None,
             popups: PopupManager::default(),
+            hung: crate::hung::Pings::default(),
             popup_grab: None,
             seat,
             pointer,
@@ -1216,6 +1219,7 @@ impl Cupertino {
         self.idle.refresh_inhibition();
         self.tick_display_power();
         self.tick_quit();
+        self.tick_hung(now);
         let fx = self.wm.tick(now);
         self.apply_effects(fx);
         self.fx.tick(now);

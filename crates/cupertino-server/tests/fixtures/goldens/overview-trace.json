@@ -1,0 +1,42 @@
+[
+  {
+    "milliseconds": 1100,
+    "input": {
+      "kind": "Pointer",
+      "x": 500.0,
+      "y": 350.0
+    }
+  },
+  {
+    "milliseconds": 1200,
+    "input": {
+      "kind": "Key",
+      "code": 37,
+      "pressed": true
+    }
+  },
+  {
+    "milliseconds": 1201,
+    "input": {
+      "kind": "Key",
+      "code": 111,
+      "pressed": true
+    }
+  },
+  {
+    "milliseconds": 1202,
+    "input": {
+      "kind": "Key",
+      "code": 111,
+      "pressed": false
+    }
+  },
+  {
+    "milliseconds": 1203,
+    "input": {
+      "kind": "Key",
+      "code": 37,
+      "pressed": false
+    }
+  }
+]

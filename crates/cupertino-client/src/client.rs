@@ -489,9 +489,9 @@ impl Client {
         };
         let effects: CupertinoAppEffectsV1 = bind_required(&globals, &qh, 1..=1)?;
         // version 2 adds the display options of the session object, version 3 the screen capture state of the menu bar,
-        // version 5 moves the backdrops and the title bar style to the app effects
+        // version 5 moves the backdrops and the title bar style to the app effects, version 6 adds the menu bar's session actions
         let (shell, session, appearance) = if shell_roles {
-            let shell: CupertinoShellV1 = bind_required(&globals, &qh, 5..=5)?;
+            let shell: CupertinoShellV1 = bind_required(&globals, &qh, 6..=6)?;
             let session = shell.get_session(&qh, ());
             (Some(shell), Some(session), None)
         } else {

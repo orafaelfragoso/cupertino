@@ -12,7 +12,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use cupertino_protocols::client::cupertino_menu_bar_v1::{
-    self, Command as BarCommand, CupertinoMenuBarV1,
+    self, Command as BarCommand, CupertinoMenuBarV1, SessionAction,
 };
 use cupertino_protocols::client::cupertino_shell_v1::{self, CupertinoShellV1};
 use cupertino_server::authorization::ShellRole;
@@ -341,6 +341,7 @@ enum Cmd {
     SetMenuOpen(bool),
     WindowCommand(BarCommand),
     MoveToWorkspace(u32),
+    SessionAction(SessionAction),
     /// Announce the KDE application menu address of an application window.
     SetAddress(&'static str, &'static str),
     /// Ask for exclusive keyboard interactivity (true) or none (false), and commit.
@@ -474,6 +475,7 @@ impl BarClient {
                 Cmd::SetMenuOpen(open) => bar.set_menu_open(u32::from(open)),
                 Cmd::WindowCommand(c) => bar.window_command(c),
                 Cmd::MoveToWorkspace(n) => bar.move_to_workspace(n),
+                Cmd::SessionAction(a) => bar.session_action(a),
                 Cmd::SetAddress(..) => panic!("a menu bar has no application menu address"),
                 Cmd::SetKeyboard(exclusive) => {
                     let mode = if exclusive {
@@ -958,4 +960,117 @@ fn full_screen_hides_the_bar_and_an_open_menu_or_the_top_edge_reveals_it() {
     h.state.fixed_time = Some(t + 0.3);
     h.state.tick();
     assert_eq!(visible(&h, t + 2.0), 1.0, "revealed by the edge dwell");
+}
+
+/// A private session bus (`dbus-daemon --session`), killed on drop.
+struct PrivateBus {
+    address: String,
+    pid: String,
+}
+
+impl PrivateBus {
+    /// `None` when `dbus-daemon` is not installed.
+    fn start() -> Option<PrivateBus> {
+        let out = std::process::Command::new("dbus-daemon")
+            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        assert!(out.status.success(), "dbus-daemon failed: {}", out.status);
+        let text = String::from_utf8(out.stdout).unwrap();
+        let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
+        Some(PrivateBus {
+            address: lines.next().unwrap().to_string(),
+            pid: lines.next().unwrap().to_string(),
+        })
+    }
+}
+
+impl Drop for PrivateBus {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("kill").arg(&self.pid).status();
+    }
+}
+
+/// The session agent's side: records which methods the server called.
+struct FakeLogin(Arc<Mutex<Vec<&'static str>>>);
+
+#[zbus::interface(name = "org.cupertino.Login1")]
+impl FakeLogin {
+    fn sleep(&self) {
+        self.0.lock().unwrap().push("Sleep");
+    }
+    fn request_restart(&self) {
+        self.0.lock().unwrap().push("RequestRestart");
+    }
+    fn request_shut_down(&self) {
+        self.0.lock().unwrap().push("RequestShutDown");
+    }
+    fn lock_now(&self) {
+        self.0.lock().unwrap().push("LockNow");
+    }
+    fn request_log_out(&self) {
+        self.0.lock().unwrap().push("RequestLogOut");
+    }
+    fn switch_to_login_window(&self) {
+        self.0.lock().unwrap().push("SwitchToLoginWindow");
+    }
+    fn refresh_capabilities(&self) {
+        self.0.lock().unwrap().push("RefreshCapabilities");
+    }
+}
+
+/// The menu bar does not call the session agent itself: it asks the server, which calls as the agent's parent.
+#[test]
+fn the_session_menu_entries_reach_the_session_agent_through_the_server() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: no dbus-daemon");
+        return;
+    };
+    let Some(mut h) = Harness::new() else { return };
+    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
+    let handle = cupertino_server::dbus::DbusHandle::start().expect("worker thread");
+    handle.set_login(cupertino_server::dbus::LoginTrust::Agent(std::process::id()));
+    h.state.dbus = Some(handle);
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let _login = zbus::block_on(
+        zbus::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .name("org.cupertino.Login1")
+            .unwrap()
+            .serve_at("/org/cupertino/Login1", FakeLogin(calls.clone()))
+            .unwrap()
+            .build(),
+    )
+    .expect("the fake agent");
+    let bar = BarClient::spawn_at(h.shell_stream(), true, 6);
+    h.wait_for_groups(&bar, 1);
+    for action in [
+        SessionAction::Sleep,
+        SessionAction::Restart,
+        SessionAction::ShutDown,
+        SessionAction::Lock,
+        SessionAction::LogOut,
+        SessionAction::SwitchUser,
+        SessionAction::RefreshCapabilities,
+    ] {
+        bar.send(Cmd::SessionAction(action));
+    }
+    let end = Instant::now() + Duration::from_secs(10);
+    while calls.lock().unwrap().len() < 7 && Instant::now() < end {
+        h.step();
+    }
+    assert_eq!(
+        *calls.lock().unwrap(),
+        [
+            "Sleep",
+            "RequestRestart",
+            "RequestShutDown",
+            "LockNow",
+            "RequestLogOut",
+            "SwitchToLoginWindow",
+            "RefreshCapabilities"
+        ]
+    );
 }

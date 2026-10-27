@@ -473,3 +473,82 @@ fn a_host_process_that_the_server_did_not_start_is_refused_every_method() {
         .expect("dbus-send");
     assert!(read.status.success(), "the properties stay readable");
 }
+
+const SERVICE_ADDRESS: &str = "CUPERTINO_TEST_LOGIN_ADDRESS";
+
+/// Not a test of its own: the test below starts this binary as a child to run the service in a process of its own, the way
+/// the server starts the login process. Without the address in the environment it does nothing.
+#[test]
+fn login_service_process() {
+    let Ok(address) = std::env::var(SERVICE_ADDRESS) else {
+        return;
+    };
+    let _login = serve(
+        connection::Builder::address(address.as_str()).expect("address"),
+        "Test User".into(),
+        Capabilities::default(),
+        |request| println!("request: {request:?}"),
+    )
+    .expect("claims the name");
+    println!("ready");
+    let _ = std::io::Read::read_to_end(&mut std::io::stdin(), &mut Vec::new());
+}
+
+/// SEC-04: the server also starts the applications, so a process with the same parent as the login process is no
+/// relation: only the parent, the server, may call. A child of the same parent that is an application is refused `Sleep`,
+/// the parent itself is not.
+#[test]
+fn a_process_started_by_the_same_parent_is_refused_and_the_parent_is_not() {
+    if Command::new("dbus-send").arg("--version").output().is_err() {
+        eprintln!("skipping: dbus-send is not available");
+        return;
+    }
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let mut service = Command::new(std::env::current_exe().expect("this test binary"))
+        .args(["--exact", "login_service_process", "--nocapture"])
+        .env(SERVICE_ADDRESS, &bus.address)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("the service process");
+    let (lines_tx, lines_rx) = mpsc::channel();
+    let stdout = service.stdout.take().expect("stdout");
+    std::thread::spawn(move || {
+        for line in std::io::BufRead::lines(std::io::BufReader::new(stdout)).map_while(Result::ok) {
+            let _ = lines_tx.send(line);
+        }
+    });
+    let wait_for = |wanted: &str| loop {
+        let line = lines_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the service process answers");
+        if line.starts_with(wanted) {
+            break line;
+        }
+    };
+    wait_for("ready");
+
+    // an application the server started: same parent as the service
+    let sibling = dbus_send(&bus, "Sleep", &[]);
+    assert!(
+        !sibling.status.success(),
+        "a sibling put the machine to sleep"
+    );
+    assert!(
+        String::from_utf8_lossy(&sibling.stderr).contains("org.cupertino.Error.UntrustedCaller"),
+        "{}",
+        String::from_utf8_lossy(&sibling.stderr)
+    );
+
+    // the parent, the server
+    let parent: Connection = block_on(bus.builder().build()).expect("connect");
+    block_on(parent.call_method(Some(BUS_NAME), OBJECT_PATH, Some(INTERFACE), "Sleep", &()))
+        .expect("the parent may call");
+    assert_eq!(wait_for("request"), "request: Sleep");
+
+    drop(service.stdin.take());
+    let _ = service.wait();
+}

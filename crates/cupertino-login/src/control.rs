@@ -1,11 +1,12 @@
 //! `org.cupertino.Login1`: the control interface of the `cupertino-login` process, which is the session agent. The server
-//! calls `Lock` for the lock shortcut and `PowerKey` for the press and the release of the power key; any client may call
-//! the `Request*` methods, which show the confirmation panel of [`crate::panel`], and read `Locked`, `UserName` and
+//! calls `Lock` for the lock shortcut and `PowerKey` for the press and the release of the power key, and the `Request*`
+//! methods, which show the confirmation panel of [`crate::panel`]; any client may read `Locked`, `UserName` and
 //! `Capabilities` (what the session menu of the menu bar offers).
 //!
-//! Every method checks its caller (`cupertino-peer`): `PowerKey` is for the server, which started this process; the others
-//! are also for the processes the server started (the menu bar) and this process itself. An anonymous, sandboxed or
-//! unrelated caller gets an error of `org.cupertino.Error.*` and nothing happens. The properties are readable by anyone.
+//! Every method checks its caller (`cupertino-peer`): only the server, which started this process, and this process itself
+//! may call. The menu bar asks the server (`cupertino_menu_bar_v1.session_action`), which calls on its behalf. An
+//! anonymous, sandboxed or unrelated caller, an application the server started included, gets an error of
+//! `org.cupertino.Error.*` and nothing happens. The properties are readable by anyone.
 
 use cupertino_peer::{check_call, CallerError, Relation};
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
@@ -35,9 +36,8 @@ pub fn clean_name(text: &str) -> String {
 pub const BUS_NAME: &str = "org.cupertino.Login1";
 pub const OBJECT_PATH: &str = "/org/cupertino/Login1";
 
-/// Who may call the methods other than `PowerKey`.
-const SHELL: &[Relation] = &[Relation::Itself, Relation::Parent, Relation::Sibling];
-/// Who may call `PowerKey`.
+/// Who may call the methods: the server, which started this process, and this process itself. The other shell processes
+/// ask the server to call for them.
 const SERVER: &[Relation] = &[Relation::Itself, Relation::Parent];
 
 /// What a caller of the interface asks for.
@@ -84,7 +84,7 @@ impl Control {
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<(), CallerError> {
-        check_call(connection, &header, "org.cupertino.Login1", "Lock", SHELL).await?;
+        check_call(connection, &header, "org.cupertino.Login1", "Lock", SERVER).await?;
         (self.on_request)(Request::Lock { explicit: false });
         Ok(())
     }
@@ -100,7 +100,7 @@ impl Control {
             &header,
             "org.cupertino.Login1",
             "LockNow",
-            SHELL,
+            SERVER,
         )
         .await?;
         (self.on_request)(Request::Lock { explicit: true });
@@ -118,7 +118,7 @@ impl Control {
             &header,
             "org.cupertino.Login1",
             "RequestLogOut",
-            SHELL,
+            SERVER,
         )
         .await?;
         self.panel(Kind::LogOut)
@@ -135,7 +135,7 @@ impl Control {
             &header,
             "org.cupertino.Login1",
             "RequestRestart",
-            SHELL,
+            SERVER,
         )
         .await?;
         self.panel(Kind::Restart)
@@ -152,7 +152,7 @@ impl Control {
             &header,
             "org.cupertino.Login1",
             "RequestShutDown",
-            SHELL,
+            SERVER,
         )
         .await?;
         self.panel(Kind::ShutDown)
@@ -165,7 +165,7 @@ impl Control {
         #[zbus(header)] header: zbus::message::Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<(), CallerError> {
-        check_call(connection, &header, "org.cupertino.Login1", "Sleep", SHELL).await?;
+        check_call(connection, &header, "org.cupertino.Login1", "Sleep", SERVER).await?;
         if self.locked {
             return Err(zbus::fdo::Error::Failed("the session is locked".into()).into());
         }
@@ -186,7 +186,7 @@ impl Control {
             &header,
             "org.cupertino.Login1",
             "RefreshCapabilities",
-            SHELL,
+            SERVER,
         )
         .await?;
         (self.on_request)(Request::RefreshCapabilities);
@@ -205,7 +205,7 @@ impl Control {
             &header,
             "org.cupertino.Login1",
             "RequestPowerDialog",
-            SHELL,
+            SERVER,
         )
         .await?;
         self.panel(Kind::PowerButton)
@@ -223,7 +223,7 @@ impl Control {
             &header,
             "org.cupertino.Login1",
             "SwitchToLoginWindow",
-            SHELL,
+            SERVER,
         )
         .await?;
         (self.on_request)(Request::SwitchToLoginWindow);

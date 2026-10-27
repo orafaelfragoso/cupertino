@@ -7,9 +7,9 @@
 //! has `/.flatpak-info` in its root, a Snap has an AppArmor label that starts with `snap.`. A sandboxed caller may not
 //! change anything.
 //!
-//! The processes of the shell are children of the server, so a service of the shell judges a caller by its
-//! [`Relation`] to the service's own process: itself, its parent (the server) or a sibling (a process the server
-//! started).
+//! A service of the shell answers only the server, which started it: a caller is judged by its [`Relation`] to the
+//! service's own process, itself or its parent. Other shell processes ask the server to call for them. (The server also
+//! starts the applications, so "started by the server" would let every application in.)
 
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
@@ -98,8 +98,6 @@ pub struct Identified {
     pub sandbox: Option<Sandbox>,
     /// The program the process runs, as `/proc/<pid>/exe` names it.
     pub exe: Option<PathBuf>,
-    /// The parent process, as `/proc/<pid>/status` names it.
-    pub parent: Option<u32>,
 }
 
 /// How a caller is related to the process that serves the call.
@@ -107,8 +105,6 @@ pub struct Identified {
 pub enum Relation {
     Itself,
     Parent,
-    /// A process with the same parent: started by the server like the service itself.
-    Sibling,
     Other,
 }
 
@@ -197,11 +193,7 @@ impl Caller {
         ) else {
             return Caller::Anonymous;
         };
-        let directory = proc_root.join(process.pid.to_string());
-        let exe = std::fs::read_link(directory.join("exe")).ok();
-        let parent = std::fs::read_to_string(directory.join("status"))
-            .ok()
-            .and_then(|status| parent_of(&status));
+        let exe = std::fs::read_link(proc_root.join(process.pid.to_string()).join("exe")).ok();
         // the answers above describe the process only while it is the one the descriptor names
         if process.has_exited() {
             return Caller::Anonymous;
@@ -210,7 +202,6 @@ impl Caller {
             process,
             sandbox,
             exe,
-            parent,
         })
     }
 
@@ -248,20 +239,10 @@ impl Identified {
             Relation::Itself
         } else if pid == own_parent {
             Relation::Parent
-        } else if self.parent == Some(own_parent) {
-            Relation::Sibling
         } else {
             Relation::Other
         }
     }
-}
-
-/// The `PPid` line of a `status` file.
-fn parent_of(status: &str) -> Option<u32> {
-    status
-        .lines()
-        .find_map(|l| l.strip_prefix("PPid:"))
-        .and_then(|p| p.trim().parse().ok())
 }
 
 /// Refuse the caller of a method unless it is unsandboxed and stands in one of `allowed` to this process. A refusal is
@@ -358,7 +339,6 @@ mod tests {
             process: ProcessHandle::from_pidfd(own_pidfd()).unwrap(),
             sandbox,
             exe: Some(exe.into()),
-            parent: Some(1),
         })
     }
 
@@ -451,15 +431,10 @@ mod tests {
         assert_eq!(relation(me, 1, &[Relation::Itself]), Ok(()));
         assert_eq!(relation(1, me, &[Relation::Parent]), Ok(()));
         assert_eq!(
-            relation(1, 1, &[Relation::Sibling]),
-            Ok(()),
-            "the same parent"
-        );
-        assert_eq!(
             relation(1, 1, &[Relation::Itself, Relation::Parent]),
-            Err(Denial::Untrusted)
+            Err(Denial::Untrusted),
+            "a process with the same parent is no relation"
         );
-        assert_eq!(relation(1, 2, &[Relation::Sibling]), Err(Denial::Untrusted));
     }
 
     #[test]
@@ -475,16 +450,5 @@ mod tests {
                 Err(Denial::Sandboxed(sandbox))
             );
         }
-    }
-
-    #[test]
-    fn the_parent_is_read_from_the_status_file() {
-        assert_eq!(parent_of("Name:\tx\nPPid:\t42\nUid:\t1\n"), Some(42));
-        assert_eq!(parent_of("Name:\tx\n"), None);
-        let credentials = ConnectionCredentials::default().set_process_fd(own_pidfd().into());
-        let Caller::Process(me) = Caller::from_credentials(&credentials, Path::new("/proc")) else {
-            panic!("identified");
-        };
-        assert_eq!(me.parent, Some(own_parent()));
     }
 }

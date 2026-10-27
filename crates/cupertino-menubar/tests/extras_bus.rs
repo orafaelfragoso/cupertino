@@ -344,20 +344,13 @@ fn the_extras_follow_the_services_and_act_on_them() {
     let session = first.session.as_ref().expect("the session agent");
     assert_eq!(session.user_name, "Rafael");
     assert!(!session.caps.sleep && session.caps.restart && session.caps.lock);
-    extras
-        .act(ExtraAction::Session(SessionAction::Restart))
-        .unwrap();
-    assert_eq!(
-        login_calls.recv_timeout(Duration::from_secs(5)).unwrap(),
-        "RequestRestart"
-    );
-    extras
-        .act(ExtraAction::Session(SessionAction::RefreshCapabilities))
-        .unwrap();
-    assert_eq!(
-        login_calls.recv_timeout(Duration::from_secs(5)).unwrap(),
-        "RefreshCapabilities"
-    );
+    // the session menu's entries go to the server over the shell protocol: the bus side never calls the agent
+    for action in [SessionAction::Restart, SessionAction::RefreshCapabilities] {
+        extras.act(ExtraAction::Session(action)).unwrap();
+    }
+    assert!(login_calls
+        .recv_timeout(Duration::from_millis(300))
+        .is_err());
 
     // joining an open network calls the service without a passphrase, and the bar reads the result back
     extras.act(ExtraAction::JoinNetwork("cafe".into())).unwrap();

@@ -6,8 +6,9 @@
 
 use std::collections::HashMap;
 
+use crate::dbus::Request as DbusRequest;
 use cupertino_protocols::server::cupertino_menu_bar_v1::{
-    self, Command as BarCommand, CupertinoMenuBarV1, Error as BarError,
+    self, Command as BarCommand, CupertinoMenuBarV1, Error as BarError, SessionAction,
 };
 use cupertino_protocols::server::cupertino_shell_v1::{CupertinoShellV1, Error as ShellError};
 use cupertino_wm::menu_bar::{BarSetConfig, MenuBarSet};
@@ -525,6 +526,27 @@ impl Dispatch<CupertinoMenuBarV1, MenuBarData> for Cupertino {
             }
             cupertino_menu_bar_v1::Request::MoveToWorkspace { workspace } => {
                 state.menu_bar_move_to_workspace(workspace)
+            }
+            cupertino_menu_bar_v1::Request::SessionAction { action } => {
+                let request = match action {
+                    WEnum::Value(SessionAction::Sleep) => Some(DbusRequest::Sleep),
+                    WEnum::Value(SessionAction::Restart) => Some(DbusRequest::Restart),
+                    WEnum::Value(SessionAction::ShutDown) => Some(DbusRequest::ShutDown),
+                    WEnum::Value(SessionAction::Lock) => Some(DbusRequest::LockNow),
+                    WEnum::Value(SessionAction::LogOut) => Some(DbusRequest::LogOut),
+                    WEnum::Value(SessionAction::SwitchUser) => Some(DbusRequest::SwitchUser),
+                    WEnum::Value(SessionAction::RefreshCapabilities) => {
+                        Some(DbusRequest::RefreshCapabilities)
+                    }
+                    WEnum::Value(_) | WEnum::Unknown(_) => None,
+                };
+                match request {
+                    Some(request) => state.menu_bar_session_action(request),
+                    None => resource.post_error(
+                        BarError::InvalidSessionAction,
+                        format!("{action:?} is not a session action"),
+                    ),
+                }
             }
             // `Destroy` is handled in `destroyed`
             _ => {}

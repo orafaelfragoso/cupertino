@@ -59,7 +59,6 @@ mod tests {
             process: ProcessHandle::from_pidfd(own_pidfd()).unwrap(),
             sandbox,
             exe: Some(exe.into()),
-            parent: None,
         })
     }
 

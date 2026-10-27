@@ -36,10 +36,29 @@ pub enum Request {
     LogOut,
     /// Open `cupertino-login`'s power panel.
     PowerDialog,
+    /// The menu bar's entries, forwarded by the server: sleep without a panel, the restart and shut down panels, the
+    /// switch to the login window, and reading what the machine allows again.
+    Sleep,
+    Restart,
+    ShutDown,
+    SwitchUser,
+    RefreshCapabilities,
     /// The power key went down (`true`) or up; `cupertino-login` times the hold.
     PowerKey {
         pressed: bool,
     },
+}
+
+fn login_call(
+    method: &'static str,
+) -> (&'static str, &'static str, &'static str, &'static str, Body) {
+    (
+        "org.cupertino.Login1",
+        "/org/cupertino/Login1",
+        "org.cupertino.Login1",
+        method,
+        Body::Empty,
+    )
 }
 
 /// Arguments of a control method.
@@ -114,6 +133,11 @@ impl Request {
                 "RequestPowerDialog",
                 Body::Empty,
             ),
+            Request::Sleep => login_call("Sleep"),
+            Request::Restart => login_call("RequestRestart"),
+            Request::ShutDown => login_call("RequestShutDown"),
+            Request::SwitchUser => login_call("SwitchToLoginWindow"),
+            Request::RefreshCapabilities => login_call("RefreshCapabilities"),
             Request::PowerKey { pressed } => (
                 "org.cupertino.Login1",
                 "/org/cupertino/Login1",
@@ -370,6 +394,12 @@ impl crate::state::Cupertino {
             tracing::warn!("no login process to ask: the log out shortcut ends the server");
             self.quit_compositor();
         }
+    }
+
+    /// A menu bar entry of the session menu: the server asks the login process on the menu bar's behalf, because the login
+    /// process answers only the server.
+    pub fn menu_bar_session_action(&mut self, action: Request) {
+        self.shell_call(action);
     }
 
     /// Open the login process's power panel.

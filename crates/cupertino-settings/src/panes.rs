@@ -300,9 +300,22 @@ fn resolution_control(mouse: &Mouse) -> Control {
     Control::Popup { choices, selected }
 }
 
+/// The most mice the pane lists, and the longest name of one it shows (characters).
+const MAX_MICE: usize = 32;
+const MAX_NAME: usize = 128;
+
+/// A device name as a label: without control characters, cut to [`MAX_NAME`] characters.
+fn display_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_NAME)
+        .collect()
+}
+
 /// The resolution rows of the connected mice: one row "Mouse resolution" for one mouse, else a section header and a
 /// row named after each mouse (a name another mouse has too gets its number).
 fn resolution_section(mice: &[Mouse]) -> Option<Section> {
+    let mice = &mice[..mice.len().min(MAX_MICE)];
     if mice.is_empty() {
         return None;
     }
@@ -310,14 +323,25 @@ fn resolution_section(mice: &[Mouse]) -> Option<Section> {
         .iter()
         .enumerate()
         .map(|(i, mouse)| {
+            let name = display_name(&mouse.name);
             let label = if mice.len() == 1 {
                 "Mouse resolution".to_string()
-            } else if mice.iter().filter(|m| m.name == mouse.name).count() > 1 {
-                let n = mice[..=i].iter().filter(|m| m.name == mouse.name).count();
-                format!("{} ({n})", mouse.name)
+            } else if mice
+                .iter()
+                .filter(|m| display_name(&m.name) == name)
+                .count()
+                > 1
+            {
+                let n = mice[..=i]
+                    .iter()
+                    .filter(|m| display_name(&m.name) == name)
+                    .count();
+                format!("{name} ({n})")
             } else {
-                mouse.name.clone()
+                name
             };
+            // keyed by the row's index into `Live::mice`; when the server pushes the list as it changes, key it by
+            // `Mouse::key` instead, so a mouse that goes away does not hand its row to another one under the pointer
             row(
                 ControlId::MouseResolution(i),
                 label,
@@ -1401,7 +1425,7 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
                 Some(ResolutionChoice::Custom) => {
                     return vec![Effect::AskResolution {
                         key: mouse.key.clone(),
-                        name: mouse.name.clone(),
+                        name: display_name(&mouse.name),
                     }]
                 }
                 None => return Vec::new(),
@@ -2504,5 +2528,26 @@ mod tests {
             Some("Takes effect when the window server restarts.")
         );
         assert_eq!(restart_footer(File::Dock, true), None);
+    }
+
+    #[test]
+    fn the_resolution_rows_list_at_most_32_mice_with_clean_names_of_at_most_128_characters() {
+        let mice: Vec<Mouse> = (0..40)
+            .map(|i| Mouse {
+                key: format!("1:{i}:Mouse"),
+                name: format!("Mouse\u{1b}[31m\n{}", "x".repeat(200)),
+                dpi: 1000,
+                stored: false,
+            })
+            .collect();
+        let live = Live {
+            mice: Reading::Ready(mice),
+            ..Live::default()
+        };
+        let sections = sections(PaneId::Mouse, &unset(), LIGHT, &live);
+        let rows = &sections[1].rows;
+        assert_eq!(rows.len(), 32);
+        assert!(rows.iter().all(|r| !r.label.chars().any(char::is_control)));
+        assert!(rows.iter().all(|r| r.label.chars().count() <= MAX_NAME + 5));
     }
 }

@@ -146,3 +146,31 @@ fn a_write_that_fails_leaves_the_file_and_names_the_problem() {
         Err(StoreError::NoPath(File::Dock))
     ));
 }
+
+#[test]
+fn a_typed_mouse_resolution_keeps_what_the_server_wrote_since_the_last_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = paths(dir.path());
+    let file = dir.path().join("compositor.json");
+    std::fs::write(&file, r#"{"appearance": "light", "corner_radius": 10}"#).unwrap();
+    let mut s = Settings::load(&p, 1080.0).unwrap();
+    std::fs::write(
+        &file,
+        r#"{"appearance": "dark", "corner_radius": 10, "mouse_dpi": {"1:2:Other": 800}}"#,
+    )
+    .unwrap();
+    s.set_mouse_dpi(&p, "1:1:Mouse", 1600).unwrap();
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains(r#""appearance": "dark""#), "{text}");
+    assert!(text.contains(r#""1:2:Other": 800"#), "{text}");
+    assert!(text.contains(r#""1:1:Mouse": 1600"#), "{text}");
+    assert!(s.set_mouse_dpi(&p, "1:1:Mouse", 49).is_err());
+    assert_eq!(
+        s.compositor
+            .mouse_dpi
+            .as_ref()
+            .and_then(|m| m.get("1:1:Mouse")),
+        Some(&1600),
+        "a refused value leaves the settings as they were"
+    );
+}

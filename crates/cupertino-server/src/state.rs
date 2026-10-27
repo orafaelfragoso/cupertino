@@ -87,6 +87,8 @@ pub struct ClientState {
     /// capabilities end with it, so a connection kept alive by another process holds nothing. Until a holder is
     /// bound the connection holds nothing.
     pub holder: std::sync::OnceLock<crate::authorization::Holder>,
+    /// How many material backdrops the client holds (`cupertino_app_effects_v1.get_backdrop`).
+    pub backdrops: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Default for ClientState {
@@ -98,6 +100,7 @@ impl Default for ClientState {
             internal: false,
             capabilities: ClientCapabilitySet::NONE,
             holder: std::sync::OnceLock::new(),
+            backdrops: std::sync::Arc::default(),
         }
     }
 }

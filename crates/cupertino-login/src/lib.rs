@@ -2,6 +2,7 @@
 //! the login screen, layer surfaces) over a treated wallpaper, and the confirmation panels for log out, restart and shut down.
 //!
 //! * [`model`]: the state machine (field, attempt phases, shake, fades), pure with injected time.
+//! * [`capabilities`]: which session menu actions work on this machine.
 //! * [`autostart`]: the XDG autostart entries (login items) the session agent starts once per session.
 //! * [`hint`]: when failed attempts bring up the password help.
 //! * [`layout`]: where the clock, avatar, name and password field sit, in points.
@@ -29,6 +30,7 @@
 #[cfg(feature = "app")]
 pub mod auth;
 pub mod autostart;
+pub mod capabilities;
 #[cfg(feature = "dbus")]
 pub mod control;
 pub mod hint;

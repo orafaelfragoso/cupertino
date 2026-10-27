@@ -31,6 +31,10 @@ pub enum Request {
     Lock,
     /// Lock the session on the person's request (the lock shortcut; lock request type 8, whose lock screen hides after 5 s).
     LockNow,
+    /// Ask `cupertino-login` whether to log out (its confirmation panel).
+    LogOut,
+    /// Open `cupertino-login`'s power panel.
+    PowerDialog,
     /// The power key went down (`true`) or up; `cupertino-login` times the hold.
     PowerKey {
         pressed: bool,
@@ -93,6 +97,20 @@ impl Request {
                 "/org/cupertino/Login1",
                 "org.cupertino.Login1",
                 "LockNow",
+                Body::Empty,
+            ),
+            Request::LogOut => (
+                "org.cupertino.Login1",
+                "/org/cupertino/Login1",
+                "org.cupertino.Login1",
+                "RequestLogOut",
+                Body::Empty,
+            ),
+            Request::PowerDialog => (
+                "org.cupertino.Login1",
+                "/org/cupertino/Login1",
+                "org.cupertino.Login1",
+                "RequestPowerDialog",
                 Body::Empty,
             ),
             Request::PowerKey { pressed } => (
@@ -228,6 +246,16 @@ impl crate::state::Cupertino {
         self.shell_call(Request::LockNow);
     }
 
+    /// Ask the login process whether to log out.
+    pub fn log_out_session(&mut self) {
+        self.shell_call(Request::LogOut);
+    }
+
+    /// Open the login process's power panel.
+    pub fn power_dialog(&mut self) {
+        self.shell_call(Request::PowerDialog);
+    }
+
     /// Tell the login process the power key went down or up.
     pub fn power_key(&mut self, pressed: bool) {
         self.shell_call(Request::PowerKey { pressed });
@@ -262,6 +290,25 @@ mod tests {
                 Body::Empty
             )
         );
+    }
+
+    #[test]
+    fn the_log_out_and_power_dialog_requests_call_the_panels_of_the_login_process() {
+        for (request, method) in [
+            (Request::LogOut, "RequestLogOut"),
+            (Request::PowerDialog, "RequestPowerDialog"),
+        ] {
+            assert_eq!(
+                request.call(),
+                (
+                    "org.cupertino.Login1",
+                    "/org/cupertino/Login1",
+                    "org.cupertino.Login1",
+                    method,
+                    Body::Empty
+                )
+            );
+        }
     }
 
     #[test]

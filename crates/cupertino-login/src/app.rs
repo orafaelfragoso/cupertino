@@ -13,6 +13,7 @@ use cupertino_client::{
 };
 use cupertino_login::auth::{self, Authenticator};
 use cupertino_login::autostart;
+use cupertino_login::capabilities::{Answer, Capabilities, Inputs};
 use cupertino_login::control::{self, Request};
 use cupertino_login::hint::FailedAttempts;
 use cupertino_login::interrupt::{self, Choice};
@@ -45,6 +46,8 @@ enum Message {
     PowerKey(bool),
     /// `SwitchToLoginWindow` on the control interface: lock, then hand the console to the login screen.
     SwitchToLoginWindow,
+    /// `Sleep` on the control interface: sleep without a panel.
+    Sleep,
     /// The session manager's `Unlock`: the person at the login screen proved this session's password.
     Unlock,
     /// The session manager's bus name has an owner again: it restarted and does not know this session's agent.
@@ -151,14 +154,20 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     let notifier = Notifier::new(sender, client.waker());
 
     let request_notifier = notifier.clone();
-    let control = control::serve(zbus::connection::Builder::session()?, move |request| {
-        request_notifier.send(match request {
-            Request::Lock { explicit } => Message::Lock { explicit },
-            Request::Panel(kind) => Message::Panel(kind),
-            Request::PowerKey { pressed } => Message::PowerKey(pressed),
-            Request::SwitchToLoginWindow => Message::SwitchToLoginWindow,
-        })
-    })
+    let control = control::serve(
+        zbus::connection::Builder::session()?,
+        user.display.clone(),
+        Capabilities::default(),
+        move |request| {
+            request_notifier.send(match request {
+                Request::Lock { explicit } => Message::Lock { explicit },
+                Request::Panel(kind) => Message::Panel(kind),
+                Request::PowerKey { pressed } => Message::PowerKey(pressed),
+                Request::SwitchToLoginWindow => Message::SwitchToLoginWindow,
+                Request::Sleep => Message::Sleep,
+            })
+        },
+    )
     .map_err(|e| match e {
         zbus::Error::NameTaken => "another lock screen owns org.cupertino.Login1".into(),
         e => Box::new(e) as Box<dyn Error>,
@@ -241,6 +250,7 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
         low_battery: LowBattery::new(),
         session_bus,
     };
+    app.publish_capabilities();
     loop {
         let timeout = app.timeout()?;
         for event in app.client.wait(timeout)? {
@@ -475,6 +485,7 @@ impl App {
                     self.switch_pending = true;
                     self.request_lock(now, false)?;
                 }
+                Message::Sleep => self.request_power(Power::Sleep)?,
                 Message::Unlock => match &mut self.lock {
                     Some(lock) => {
                         eprintln!("cupertino-login: unlocked by a fast user switch");
@@ -482,12 +493,15 @@ impl App {
                     }
                     None => eprintln!("cupertino-login: unlock ignored: the session is not locked"),
                 },
-                Message::ManagerRestarted => match self.manager.session_ready() {
-                    Ok(()) => eprintln!(
-                        "cupertino-login: session announced again to the restarted session manager"
-                    ),
-                    Err(e) => eprintln!("cupertino-login: {e}"),
-                },
+                Message::ManagerRestarted => {
+                    self.publish_capabilities();
+                    match self.manager.session_ready() {
+                        Ok(()) => eprintln!(
+                            "cupertino-login: session announced again to the restarted session manager"
+                        ),
+                        Err(e) => eprintln!("cupertino-login: {e}"),
+                    }
+                }
                 Message::Auth(event) => self.handle_auth(now, event)?,
                 Message::Failed(reason) => return Err(reason.into()),
                 Message::Battery(report) => self.battery(report),
@@ -795,9 +809,50 @@ impl App {
                 eprintln!("cupertino-login: {action:?} refused: {e}");
                 self.logging_out = false;
             }
+            // a session another display manager started: logind does it
+            Err(e) if e.manager_absent() => self.power_through_logind(action)?,
             Err(e) => return Err(e.into()),
         }
         Ok(())
+    }
+
+    /// Restart, shut down or sleep through logind, for a session that has no session manager. A refusal (another user's
+    /// session is open, a block inhibitor, the person may not) is reported and the session goes on.
+    fn power_through_logind(&mut self, action: Power) -> Result<()> {
+        eprintln!("cupertino-login: no session manager: asking logind to {action:?}");
+        match self.logind.power(action) {
+            Ok(()) => {}
+            Err(e) if e.is_refusal() => {
+                eprintln!("cupertino-login: {action:?} refused: {e}");
+                self.logging_out = false;
+            }
+            Err(e) => return Err(e.into()),
+        }
+        Ok(())
+    }
+
+    /// Tell the menu which actions work now: logind's answers and whether the session manager is there. What is off is
+    /// logged with the reason.
+    fn publish_capabilities(&self) {
+        let answer = |action: Power| match self.logind.can(action) {
+            Ok(answer) => answer,
+            Err(e) => {
+                eprintln!("cupertino-login: {e}");
+                Answer::NotAvailable
+            }
+        };
+        let inputs = Inputs {
+            can_suspend: answer(Power::Sleep),
+            can_reboot: answer(Power::Restart),
+            can_power_off: answer(Power::ShutDown),
+            session_manager: self.manager.is_present(),
+        };
+        for reason in Capabilities::reasons(&inputs) {
+            eprintln!("cupertino-login: menu item off: {reason}");
+        }
+        if let Err(e) = self.control.set_capabilities(Capabilities::new(&inputs)) {
+            eprintln!("cupertino-login: publishing the capabilities: {e}");
+        }
     }
 
     /// Sleep at once; log out, restart and shut down after the applications have quit.

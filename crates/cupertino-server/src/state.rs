@@ -1497,6 +1497,8 @@ impl Cupertino {
                     }
                 }
                 ShellOp::Lock => self.lock_session_now(),
+                ShellOp::LogOut => self.log_out_session(),
+                ShellOp::PowerDialog => self.power_dialog(),
                 ShellOp::PowerKey { pressed } => self.power_key(pressed),
             }
         }

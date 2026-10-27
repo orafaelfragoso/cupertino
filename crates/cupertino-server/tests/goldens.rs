@@ -1,7 +1,9 @@
 //! Own-design headless baselines. Missing EGL is a failure, never a skipped pass.
 //!
-//! Run with `cargo nextest run -p cupertino-server --test goldens`.
-//! Baselines are rendered by Mesa llvmpipe only (`renderer.txt`). Review updates made explicitly with `CUPERTINO_UPDATE_GOLDENS=1 cargo test -p cupertino-server --test goldens`.
+//! Run with `ci/goldens.sh`.
+//! The scene tests are ignored: their baselines are valid on the renderer in `renderer.txt` only, the pinned image of
+//! `ci/goldens/Dockerfile`. `ci/goldens.sh` runs them there (and in CI), `ci/goldens.sh --update` re-records them.
+//! Run elsewhere with `--include-ignored`, a foreign renderer reports `SKIPPED` unless `CUPERTINO_GOLDENS_REQUIRED=1`.
 //! Geometry is exact, in stacking order. Pixels allow at most 2/255 per RGBA channel at every pixel,
 //! with zero pixels allowed beyond that tolerance. There is no spatial tolerance or ignored region.
 //! `CUPERTINO_GOLDEN_MUTATE_WINDOW=1` moves the front window exactly one logical pixel and must fail comparison.
@@ -282,7 +284,13 @@ impl Scene {
                         .to_string_lossy()
                         .into_owned()
                 };
-                format!("{} / {}", read(ffi::RENDERER), read(ffi::VERSION))
+                let renderer = read(ffi::RENDERER);
+                // llvmpipe appends the host CPU's vector width, which rounds to the same pixels.
+                let renderer = match renderer.rsplit_once(", ") {
+                    Some((name, width)) if width.ends_with(" bits)") => format!("{name})"),
+                    _ => renderer,
+                };
+                format!("{renderer} / {}", read(ffi::VERSION))
             })
             .unwrap()
     }
@@ -323,26 +331,41 @@ fn compare_pixels(expected: &RgbaImage, actual: &RgbaImage) {
 fn baseline(root: &Path, name: &str, scene: &mut Scene, update: bool) {
     let structure = scene.structure();
     let image = scene.image();
-    let identity = scene.renderer_identity();
-    let renderer = root.join("renderer.txt");
     let geometry = root.join(format!("{name}.json"));
     let png = root.join(format!("{name}.png"));
     if update {
         std::fs::create_dir_all(root).unwrap();
         std::fs::write(geometry, serde_json::to_vec_pretty(&structure).unwrap()).unwrap();
         image.save(png).unwrap();
-        std::fs::write(renderer, &identity).unwrap();
+        std::fs::write(root.join("renderer.txt"), scene.renderer_identity()).unwrap();
     } else {
-        let recorded = std::fs::read_to_string(renderer).unwrap();
-        assert_eq!(
-            recorded, identity,
-            "baseline recorded on {recorded}, running on {identity}"
-        );
         let expected: Structure =
             serde_json::from_slice(&std::fs::read(geometry).unwrap()).unwrap();
         assert_eq!(expected, structure, "{name} structural geometry changed");
         compare_pixels(&image::open(png).unwrap().to_rgba8(), &image);
     }
+}
+
+/// Whether the baselines in `root` apply to this renderer. A foreign renderer fails when `CUPERTINO_GOLDENS_REQUIRED=1`
+/// (`ci/goldens.sh`, the CI job) and otherwise reports a skip, which is never a pass of the baselines.
+fn baselines_apply(root: &Path, update: bool) -> bool {
+    if update {
+        return true;
+    }
+    let running = Scene::new(SIZE).renderer_identity();
+    let recorded = std::fs::read_to_string(root.join("renderer.txt")).unwrap();
+    if recorded == running {
+        return true;
+    }
+    let message = format!(
+        "baseline recorded on {recorded}, running on {running}; re-record in the pinned image with ci/goldens.sh --update"
+    );
+    assert!(
+        std::env::var("CUPERTINO_GOLDENS_REQUIRED").as_deref() != Ok("1"),
+        "{message}"
+    );
+    eprintln!("SKIPPED: {message}");
+    false
 }
 
 fn fixture(size: (i32, i32), windows: usize) -> Scene {
@@ -390,6 +413,7 @@ fn isolated(test: &str, shell: bool, work: impl FnOnce(&str)) {
     }
     for key in [
         "CUPERTINO_UPDATE_GOLDENS",
+        "CUPERTINO_GOLDENS_REQUIRED",
         "CUPERTINO_GOLDEN_PERF",
         "CUPERTINO_GOLDEN_PERF_REPORT",
         "CUPERTINO_GOLDEN_MUTATE_WINDOW",
@@ -517,10 +541,14 @@ fn headless_frame_and_memory_report() {
 }
 
 #[test]
+#[ignore = "baselines are valid on the pinned renderer only: ci/goldens.sh"]
 fn desktop_goldens_and_input_replay() {
     isolated("desktop_goldens_and_input_replay", false, |_| {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/goldens");
         let update = std::env::var("CUPERTINO_UPDATE_GOLDENS").as_deref() == Ok("1");
+        if !baselines_apply(&root, update) {
+            return;
+        }
         let mut desktop = fixture(SIZE, 0);
         baseline(&root, "desktop-empty", &mut desktop, update);
         drop(desktop);
@@ -587,10 +615,14 @@ fn desktop_goldens_and_input_replay() {
 }
 
 #[test]
+#[ignore = "baselines are valid on the pinned renderer only: ci/goldens.sh"]
 fn shell_process_goldens() {
     isolated("shell_process_goldens", true, |bus| {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/goldens");
         let update = std::env::var("CUPERTINO_UPDATE_GOLDENS").as_deref() == Ok("1");
+        if !baselines_apply(&root, update) {
+            return;
+        }
         let dock = || common::shell::process("cupertino-dock", bus, &[]);
 
         let mut scene = Scene::with_processes(SIZE, vec![dock()]);
@@ -617,8 +649,10 @@ fn shell_process_goldens() {
 
         let launcher = common::shell::process("cupertino-launcher", bus, &["--no-files"]);
         let mut scene = Scene::with_processes(SIZE, vec![launcher]);
+        let connection =
+            zbus::block_on(zbus::connection::Builder::address(bus).unwrap().build()).unwrap();
         scene.wait_until("the launcher to own its control name", |_| {
-            launcher_is_up(bus)
+            launcher_is_up(&connection)
         });
         scene.state.execute_plan(ActionPlan {
             commands: Vec::new(),
@@ -639,9 +673,7 @@ fn shell_process_goldens() {
     });
 }
 
-fn launcher_is_up(bus: &str) -> bool {
-    let connection =
-        zbus::block_on(zbus::connection::Builder::address(bus).unwrap().build()).unwrap();
+fn launcher_is_up(connection: &zbus::Connection) -> bool {
     zbus::block_on(connection.call_method(
         Some("org.freedesktop.DBus"),
         "/org/freedesktop/DBus",

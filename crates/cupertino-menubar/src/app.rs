@@ -15,7 +15,7 @@ use cupertino_menubar::clock::{clock_text, local_time, next_tick, separators_off
 use cupertino_menubar::controller::{MenuController, Mode, Outcome};
 use cupertino_menubar::desktop::app_name;
 use cupertino_menubar::extras::{self, ExtraAction, ExtraKind, Extras, SessionAction};
-use cupertino_menubar::extras_bus::ExtrasBus;
+use cupertino_menubar::extras_bus::{ExtrasBus, SessionAgent};
 use cupertino_menubar::feed::{status_icon, status_icon_px, BarFeed, Shared, StatusState};
 use cupertino_menubar::geom::{Point, Rect};
 use cupertino_menubar::layout::{BarMetrics, MenuMetrics};
@@ -398,6 +398,15 @@ impl App {
                     self.bars[i]
                         .feed
                         .apply(&update, &mut self.shared, |id| app_name(id, data_dirs));
+                    if let Some(agent) = update.session_agent {
+                        self.extras.session_agent(match agent {
+                            cupertino_client::SessionAgent::None => SessionAgent::None,
+                            cupertino_client::SessionAgent::Process(pid) => {
+                                SessionAgent::Process(pid)
+                            }
+                            cupertino_client::SessionAgent::Any => SessionAgent::Any,
+                        })?;
+                    }
                     if update.engage {
                         let outcome = self.bars[i].controller.focus_bar();
                         self.apply(i, outcome)?;

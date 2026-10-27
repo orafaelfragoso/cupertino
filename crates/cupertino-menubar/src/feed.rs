@@ -242,11 +242,7 @@ impl BarFeed {
             }),
         });
         let status = indicator.into_iter().chain(extras).chain(items).collect();
-        let system_menu = shared
-            .extras
-            .session_menu()
-            .map(|menu| menu.rows)
-            .unwrap_or_default();
+        let system_menu = shared.extras.session_menu().rows;
         BarContent {
             app_name,
             system_menu,
@@ -325,6 +321,7 @@ mod tests {
             window_state: None,
             engage: false,
             screen_capture: None,
+            session_agent: None,
         }
     }
 

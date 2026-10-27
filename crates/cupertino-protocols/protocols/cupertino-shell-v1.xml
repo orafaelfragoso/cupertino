@@ -10,7 +10,7 @@
      ends: interfaces may change without a version bump until then.
   </description>
 
-  <interface name="cupertino_shell_v1" version="7">
+  <interface name="cupertino_shell_v1" version="8">
     <description summary="shell services of the server">
       Global singleton, offered only to the processes the server started for a shell role, on a
       connection of their own. Each request needs the role it creates: a connection that holds
@@ -18,7 +18,8 @@
       session object, version 3 the screen capture state of the menu bar object. Version 5 moves
       the backdrops and the title bar style of application windows to the public
       cupertino_app_effects_v1 protocol, which any client may use, and removes their requests here. Version 6 adds the
-      session_action request of the menu bar object, version 7 the lock_requested event of the session object.
+      session_action request of the menu bar object, version 7 the lock_requested event of the session object, version 8 the session_agent event of the menu bar
+      object.
     </description>
 
     <request name="destroy" type="destructor">
@@ -265,7 +266,7 @@
     </event>
   </interface>
 
-  <interface name="cupertino_menu_bar_v1" version="4">
+  <interface name="cupertino_menu_bar_v1" version="5">
     <description summary="the menu bar of one output">
       Events describe the active application and the menus its active window exports. They
       come in groups ended by a done event; the client applies a group at once. The first group
@@ -336,6 +337,24 @@
         ended by done, after the first group and whenever it changes.
       </description>
       <arg name="active" type="uint"/>
+    </event>
+
+    <enum name="agent_trust" since="5">
+      <entry name="none" value="0" summary="no session agent runs: nothing on the bus is the agent"/>
+      <entry name="process" value="1" summary="the owner of the agent's bus name is the agent when it is the process named by pid"/>
+      <entry name="any" value="2" summary="a development run: whoever owns the agent's bus name is the agent"/>
+    </enum>
+
+    <event name="session_agent" since="5">
+      <description summary="which process is the session agent">
+        Names the process that may answer as the session agent (`org.cupertino.Login1`): the server
+        started it. The bar takes the session menu's state (the user name and what the machine
+        allows) only from the owner of that bus name when it is this process, so a client that
+        took the name first cannot write the menu. pid is 0 unless trust is process. Sent in a
+        group of its own, ended by done, after the first group and whenever it changes.
+      </description>
+      <arg name="trust" type="uint" enum="agent_trust"/>
+      <arg name="pid" type="uint"/>
     </event>
 
     <event name="done">

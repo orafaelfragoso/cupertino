@@ -572,8 +572,8 @@ fn a_lock_request_reaches_the_lock_screen_while_a_squatter_owns_the_login_name()
     .expect("the squatter");
 
     // another shell process with the Session role only is not asked
-    let other = Client::observer(h.shell_stream(), 7);
-    let login = Client::observer(h.login_stream(), 7);
+    let other = Client::observer(h.shell_stream(), 8);
+    let login = Client::observer(h.login_stream(), 8);
     h.wait_until("both observers to be told", |_| {
         other.told().len() == 3 && login.told().len() == 3
     });

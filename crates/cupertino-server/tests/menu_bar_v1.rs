@@ -185,6 +185,7 @@ enum BarEvent {
     },
     Engage,
     ScreenCapture(u32),
+    SessionAgent(u32, u32),
     Done,
 }
 
@@ -283,6 +284,13 @@ impl Dispatch<CupertinoMenuBarV1, ()> for ClientState {
             },
             E::Engage => BarEvent::Engage,
             E::ScreenCapture { active } => BarEvent::ScreenCapture(active),
+            E::SessionAgent { trust, pid } => BarEvent::SessionAgent(
+                match trust {
+                    wayland_client::WEnum::Value(t) => t as u32,
+                    wayland_client::WEnum::Unknown(raw) => raw,
+                },
+                pid,
+            ),
             E::Done => BarEvent::Done,
             other => panic!("unexpected event {other:?}"),
         };
@@ -676,6 +684,34 @@ fn a_version_3_bar_shows_whether_a_capture_session_runs() {
 }
 
 #[test]
+fn a_version_5_bar_is_told_which_process_is_the_session_agent() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = BarClient::spawn_at(h.shell_stream(), true, 5);
+    h.wait_for_groups(&bar, 3);
+    assert_eq!(
+        bar.groups()[2],
+        [BarEvent::SessionAgent(0, 0), BarEvent::Done],
+        "no login process is supervised: nobody is the agent"
+    );
+
+    h.state.config.dev_shell = true;
+    h.state.refresh_session_agent();
+    h.wait_for_groups(&bar, 4);
+    assert_eq!(
+        bar.groups()[3],
+        [BarEvent::SessionAgent(2, 0), BarEvent::Done]
+    );
+    h.state.refresh_session_agent();
+    h.step();
+    assert_eq!(
+        bar.groups().len(),
+        4,
+        "an unchanged answer is not sent again"
+    );
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
 fn a_surface_without_the_layer_role_is_a_role_error() {
     let Some(mut h) = Harness::new() else { return };
     let bar = BarClient::spawn(h.shell_stream(), false);
@@ -1044,7 +1080,7 @@ fn the_session_menu_entries_reach_the_session_agent_through_the_server() {
             .build(),
     )
     .expect("the fake agent");
-    let bar = BarClient::spawn_at(h.shell_stream(), true, 7);
+    let bar = BarClient::spawn_at(h.shell_stream(), true, 8);
     h.wait_for_groups(&bar, 1);
     for action in [
         SessionAction::Sleep,

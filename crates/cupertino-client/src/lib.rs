@@ -43,8 +43,8 @@ pub use error::ClientError;
 pub use event::{key, ActivationRequest, Button, Event, PointerEvent};
 pub use keyboard::Modifiers;
 pub use menu_bar::{
-    ActiveApp, GtkMenu, MenuBar, MenuBarUpdate, SessionAction, WindowCommand, WindowMenu,
-    WindowState,
+    ActiveApp, GtkMenu, MenuBar, MenuBarUpdate, SessionAction, SessionAgent, WindowCommand,
+    WindowMenu, WindowState,
 };
 pub use output::{OutputGeometry, OutputId, OutputInfo};
 pub use scale::Scale;

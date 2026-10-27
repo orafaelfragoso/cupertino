@@ -685,6 +685,14 @@ struct Translator {
 }
 
 impl Translator {
+    /// Applies the natural scrolling setting to the wheel and the touchpad from the next frame on.
+    fn set_natural_scrolling(&mut self, natural_scrolling: bool) {
+        self.natural_scrolling = natural_scrolling;
+        if let Some(pad) = &mut self.pad {
+            pad.model.settings.natural_scrolling = natural_scrolling;
+        }
+    }
+
     /// A touchpad that cannot be modelled (no position axes) still gets its buttons: it is driven
     /// as a plain pointer, and the log says why.
     fn new(device: InputDevice, info: &DeviceInfo, natural_scrolling: bool) -> Self {
@@ -1413,6 +1421,9 @@ fn read_ready(
             .devices
             .get_mut(&devnum)
             .expect("a registered device has an entry");
+        opened
+            .translator
+            .set_natural_scrolling(state.config.pointer.natural_scrolling);
         read(evdev, &mut opened.translator, &mut events)
     };
     match result {
@@ -1704,8 +1715,10 @@ mod tests {
             AxisRelativeDirection::Identical
         );
 
-        // Natural scrolling flips the vertical axis and says so.
-        let events = translate(&mut mouse(true), &wheel);
+        // Natural scrolling flips the vertical axis and says so; it applies to the next frame of a running device.
+        let mut live = mouse(false);
+        live.set_natural_scrolling(true);
+        let events = translate(&mut live, &wheel);
         let [InputEvent::PointerAxis { event }] = events.as_slice() else {
             panic!("{events:?}")
         };
@@ -1720,6 +1733,12 @@ mod tests {
             event.relative_direction(Axis::Vertical),
             AxisRelativeDirection::Inverted
         );
+        live.set_natural_scrolling(false);
+        let events = translate(&mut live, &wheel);
+        let [InputEvent::PointerAxis { event }] = events.as_slice() else {
+            panic!("{events:?}")
+        };
+        assert_eq!(event.amount_v120(Axis::Vertical), Some(-240.0));
     }
 
     #[test]

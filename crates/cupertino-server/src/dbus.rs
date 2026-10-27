@@ -290,7 +290,7 @@ async fn destination(
         (LoginTrust::Agent(_) | LoginTrust::Nobody, _) => false,
     };
     if !trusted {
-        tracing::warn!(
+        tracing::error!(
             name,
             owner = %owner,
             pid = caller.pid(),
@@ -377,14 +377,20 @@ impl crate::state::Cupertino {
         self.shell_call(Request::Toggle(Toggle::ControlPanel));
     }
 
-    /// Ask the login process to lock the session.
+    /// Ask the login process to lock the session. The server's private connection to the lock screen carries the request;
+    /// the session bus is the way only while no lock screen is connected, so a process that took `org.cupertino.Login1`
+    /// before the login process did cannot make the lock go missing.
     pub fn lock_session(&mut self) {
-        self.shell_call(Request::Lock);
+        if !self.sessions.lock_requested(false) {
+            self.shell_call(Request::Lock);
+        }
     }
 
     /// Ask the login process to lock the session because the person asked for it.
     pub fn lock_session_now(&mut self) {
-        self.shell_call(Request::LockNow);
+        if !self.sessions.lock_requested(true) {
+            self.shell_call(Request::LockNow);
+        }
     }
 
     /// Ask the login process whether to log out. A session without one (no session bus, or no login process on it: a

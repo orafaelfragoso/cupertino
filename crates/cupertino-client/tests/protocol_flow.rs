@@ -1518,7 +1518,7 @@ fn spawn_server_reporting(
         dh.create_global::<Mock, WlOutput, _>(4, ());
         dh.create_global::<Mock, WlSeat, _>(7, ());
         dh.create_global::<Mock, ZwlrLayerShellV1, _>(4, ());
-        dh.create_global::<Mock, CupertinoShellV1, _>(6, ());
+        dh.create_global::<Mock, CupertinoShellV1, _>(7, ());
         dh.create_global::<Mock, CupertinoAppEffectsV1, _>(1, ());
         dh.create_global::<Mock, XdgActivationV1, _>(1, ());
         dh.create_global::<Mock, ZxdgOutputManagerV1, _>(3, ());
@@ -1596,6 +1596,7 @@ fn spawn_server_reporting(
                         );
                         session.locked();
                         session.unlocked();
+                        session.lock_requested(1);
                     }
                     if let Some(observer) = mock.appearance.as_ref() {
                         observer.appearance(0);
@@ -2242,9 +2243,10 @@ fn the_session_state_at_connect_is_read_and_changes_arrive_as_events() {
                 o.reduce_motion, o.reduce_transparency, o.increase_contrast
             )),
             Event::SessionLock { locked } => changes.push(format!("locked={locked}")),
+            Event::LockRequested { explicit } => changes.push(format!("lock requested={explicit}")),
             _ => {}
         }
-        (changes.len() == 4).then_some(())
+        (changes.len() == 5).then_some(())
     });
     assert_eq!(
         changes,
@@ -2252,7 +2254,8 @@ fn the_session_state_at_connect_is_read_and_changes_arrive_as_events() {
             "dark=false",
             "motion=false transparency=true contrast=true",
             "locked=true",
-            "locked=false"
+            "locked=false",
+            "lock requested=true"
         ]
     );
     assert!(!client.is_dark());

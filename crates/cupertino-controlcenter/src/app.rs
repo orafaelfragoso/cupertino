@@ -282,7 +282,7 @@ impl App {
             }
             // the server draws the lock screen: only the shown panel has to go
             Event::SessionLock { locked: true } => self.controller.dismiss(self.now()),
-            Event::SessionLock { locked: false } => {}
+            Event::SessionLock { locked: false } | Event::LockRequested { .. } => {}
             // the surfaces have no activation, popups or menu-bar role
             Event::ActivationToken { .. }
             | Event::PopupDone(_)

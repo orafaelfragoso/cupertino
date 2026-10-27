@@ -292,7 +292,9 @@ impl Thumbnailer {
         } else {
             img.resize(edge, edge, FilterType::Triangle).to_rgba8()
         };
-        let mime = crate::mime::detect(path, false);
+        let mime = mime_guess::from_path(path)
+            .first_or_octet_stream()
+            .to_string();
         let chunks = [
             ("Thumb::URI", uri.clone()),
             ("Thumb::MTime", meta.mtime().to_string()),

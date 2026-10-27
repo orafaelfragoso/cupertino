@@ -1,0 +1,19 @@
+[package]
+name = "cupertino-thumbnails"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The freedesktop.org thumbnail cache: look up or create the PNG thumbnail of an image under $XDG_CACHE_HOME/thumbnails"
+
+[package.metadata.cupertino]
+layer = "foundation"
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+png = "0.17"
+percent-encoding = "2"
+md5 = "0.7"
+mime_guess = "2"
+
+[dev-dependencies]
+tempfile = "3"

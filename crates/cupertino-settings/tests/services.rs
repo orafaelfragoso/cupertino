@@ -994,6 +994,12 @@ fn the_bus_daemons_own_errors_never_reach_the_pane_but_a_services_plain_refusal_
         zbus::fdo::Error::AccessDenied(
             "Rejected send message, 0 matched rules; interface=\"org.x\" (uid 1000)".into(),
         ),
+        zbus::fdo::Error::AccessDenied(
+            "Sender is not authorized to send message to destination=:1.7 (interface=org.x)".into(),
+        ),
+        zbus::fdo::Error::AccessDenied(
+            "Receiver is not authorized to receive message from :1.3".into(),
+        ),
         zbus::fdo::Error::TimedOut("Activation timed out".into()),
         zbus::fdo::Error::LimitsExceeded("too many".into()),
     ] {

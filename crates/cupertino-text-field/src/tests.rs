@@ -340,3 +340,75 @@ fn blur_drops_the_selection_and_keeps_the_text() {
     f.typing("s");
     assert_eq!(f.state(), ("Sounds", 6, 6..6));
 }
+
+#[test]
+fn a_paste_or_composition_keeps_only_what_typing_could_produce() {
+    let mut f = TextField::new();
+    f.paste("a\tb\u{0}c\u{1B}[31md\u{202E}e\u{2066}f\r\ng");
+    assert_eq!(f.text(), "a bc[31mdef g");
+    f.set_composition("x\u{7}\u{2069}y");
+    assert_eq!(f.text(), "a bc[31mdef gxy");
+}
+
+#[test]
+fn chords_use_the_latin_letter_of_the_key_on_a_non_latin_layout() {
+    let mut f = Fixture::new("привет");
+    assert_eq!(f.press(A, "m", Some('ф')), Response::Moved);
+    assert_eq!(
+        f.field.selection(),
+        0..12,
+        "Super+A on a Cyrillic layout selects all"
+    );
+    assert_eq!(f.press(C, "m", Some('с')), Response::Copy("привет".into()));
+    assert_eq!(f.press(X, "m", Some('ч')), Response::Cut("привет".into()));
+    assert_eq!(f.press(Z, "m", Some('я')), Response::Edited);
+    assert_eq!(f.field.text(), "привет");
+    assert_eq!(f.press(V, "m", Some('м')), Response::Paste);
+    f.press(E, "c", Some('у'));
+    assert_eq!(
+        f.field.caret(),
+        12,
+        "Ctrl+E on a Cyrillic layout goes to the end"
+    );
+    assert_eq!(
+        f.press(A, "", Some('ф')),
+        Response::Edited,
+        "typing still types the layout's letter"
+    );
+    assert_eq!(f.field.text(), "приветф");
+}
+
+#[test]
+fn a_composition_is_an_undo_step_of_its_own() {
+    let mut f = Fixture::new("");
+    f.typing("ab");
+    f.field.set_composition("k");
+    f.field.set_composition("ka");
+    f.field.commit_composition();
+    f.typing("c");
+    assert_eq!(f.field.text(), "abkac");
+    f.field.undo();
+    assert_eq!(
+        f.field.text(),
+        "abka",
+        "typing after the composition is a step"
+    );
+    f.field.undo();
+    assert_eq!(f.field.text(), "ab", "the composition is a step");
+    f.field.undo();
+    assert_eq!(f.field.text(), "");
+
+    let mut f = Fixture::new("");
+    f.typing("ab");
+    f.field.set_composition("k");
+    f.field.cancel_composition();
+    f.typing("c");
+    f.field.undo();
+    assert_eq!(
+        f.field.text(),
+        "ab",
+        "a cancelled composition ends the typing step and leaves none"
+    );
+    f.field.undo();
+    assert_eq!(f.field.text(), "");
+}

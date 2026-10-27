@@ -29,4 +29,10 @@ manager's rename editor). Pure logic: no drawing and no Wayland. The app feeds k
   starts a new step. Undo brings back the selection an edit replaced.
 - **Caret.** It shows for 0.5 s after every edit, move or press, then blinks 0.5 s off and 0.5 s on (approximated: a
   design value, not measured); it hides while text is selected.
-- **Single line.** Pasted line breaks become spaces.
+- **Single line.** Pasted or composed line breaks and tabs become spaces; other control characters and the bidi
+  embedding, override and isolate controls are dropped, so a paste holds only what typing could.
+- **Other layouts.** With Ctrl or Super held, a key whose layout letter is not Latin is named by the key's Latin letter,
+  so Super+A selects all on a Cyrillic layout.
+- **Composition.** A composition is an undo step of its own; a cancelled one leaves no step.
+
+Out of scope: the arrows move in logical order; visual-order movement for right-to-left text is not done.

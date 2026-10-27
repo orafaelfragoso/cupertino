@@ -820,7 +820,7 @@ impl Cupertino {
     }
 
     /// Move the pointer to `pos`, focused on `under`.
-    fn send_pointer_motion(
+    pub(crate) fn send_pointer_motion(
         &mut self,
         under: Option<(WlSurface, Point<f64, Logical>)>,
         pos: Point<f64, Logical>,
@@ -909,6 +909,10 @@ impl Cupertino {
         if state == ButtonState::Released && self.pointer_mode == PointerMode::Model {
             // a move or resize the client asked for after it got the press: the client still gets the release
             self.end_model_interaction(pos, time);
+        }
+        if state == ButtonState::Pressed && self.dismiss_popup_grab_for_press(pos, serial, time) {
+            self.consumed_buttons.push(button);
+            return;
         }
         if state == ButtonState::Pressed && self.accent_pointer_press(pos) {
             self.consumed_buttons.push(button);

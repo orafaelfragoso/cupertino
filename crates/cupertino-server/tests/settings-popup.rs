@@ -12,8 +12,10 @@ use cupertino_theme::Appearance;
 use smithay::backend::input::ButtonState;
 use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::desktop::{PopupKind, PopupManager};
+use smithay::input::pointer::MotionEvent;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
+use smithay::utils::SERIAL_COUNTER;
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 use smithay::wayland::shm::with_buffer_contents;
@@ -134,7 +136,9 @@ impl Harness {
         h.wait_until("the pane's window", |s| title(s) == pane_title);
         h.run_for(Duration::from_millis(250));
         h.click(button);
-        h.wait_until("one mapped choice popup", |s| popup_count(s) == 1);
+        h.wait_until("one drawn choice popup", |s| {
+            popup_count(s) == 1 && popup_drawn(s)
+        });
         assert_eq!(title(&h.state), pane_title);
         h
     }
@@ -239,6 +243,14 @@ fn popup_count(state: &Cupertino) -> usize {
         .count()
 }
 
+/// Every popup has committed a buffer: until then it cannot be hit, so a press at its place is a press outside it.
+fn popup_drawn(state: &Cupertino) -> bool {
+    let window = state.windows.iter().find(|w| w.mapped).unwrap();
+    PopupManager::popups_for_surface(window.surface()).all(|(popup, _)| {
+        with_renderer_surface_state(popup.wl_surface(), |s| s.buffer().is_some()).unwrap_or(false)
+    })
+}
+
 fn window_pixels(state: &Cupertino) -> Vec<u8> {
     let window = state.windows.iter().find(|w| w.mapped).unwrap();
     let buffer = with_renderer_surface_state(window.surface(), |s| s.buffer().cloned())
@@ -263,6 +275,12 @@ fn outside_click_dismisses_without_activating_the_underlying_pane() {
         (popup_count(&h.state), title(&h.state)),
         (0, "Accessibility".into()),
         "outside click must dismiss the popup and consume the pane activation"
+    );
+    assert!(
+        h.state.popup_grab.is_none()
+            && !h.state.pointer.is_grabbed()
+            && !h.state.seat.get_keyboard().unwrap().is_grabbed(),
+        "the server releases the pointer and keyboard grabs with the press"
     );
 }
 
@@ -294,7 +312,6 @@ fn appearance_change_does_not_leave_an_orphaned_choice_popup() {
 }
 
 #[test]
-#[ignore = "#5: the server delivers a press on a menu row to the parent window"]
 fn pressing_a_row_of_the_open_menu_selects_it() {
     let mut h = Harness::with_menu("desktop-dock", "Desktop & Dock", TOP_LEFT_CORNER);
     let window = h.state.windows.iter().find(|w| w.mapped).unwrap();
@@ -318,5 +335,41 @@ fn pressing_a_row_of_the_open_menu_selects_it() {
             .lines()
             .any(|l| l.trim() == "corner_top_left = overview"),
         "the chosen row is committed: {stored:?}"
+    );
+}
+
+#[test]
+fn a_popup_under_a_stationary_pointer_takes_the_pointer_focus() {
+    let mut h = Harness::with_menu("desktop-dock", "Desktop & Dock", TOP_LEFT_CORNER);
+    let window = h.state.windows.iter().find(|w| w.mapped).unwrap();
+    let parent = window.surface().clone();
+    let frame = h.state.wm.window(window.id).unwrap().geometry();
+    let (popup, _) = PopupManager::popups_for_surface(&parent).next().unwrap();
+    let PopupKind::Xdg(popup) = popup else {
+        panic!("Settings' menu is an xdg popup")
+    };
+    let location = popup.with_pending_state(|state| state.geometry.loc);
+    let at = (
+        frame.x + f64::from(location.x) + 100.0,
+        frame.y + f64::from(location.y) + 30.0,
+    )
+        .into();
+    // the pointer rests on the menu's place with the focus still on the window, as when the menu appears under it
+    let pointer = h.state.pointer.clone();
+    pointer.motion(
+        &mut h.state,
+        Some((parent.clone(), (frame.x, frame.y).into())),
+        &MotionEvent {
+            location: at,
+            serial: SERIAL_COUNTER.next_serial(),
+            time: 0,
+        },
+    );
+    assert_eq!(pointer.current_focus(), Some(parent));
+    h.state.refocus_pointer();
+    assert_eq!(
+        pointer.current_focus().as_ref(),
+        Some(popup.wl_surface()),
+        "the menu takes the pointer without any motion"
     );
 }

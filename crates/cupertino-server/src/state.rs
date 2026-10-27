@@ -265,6 +265,8 @@ pub struct Cupertino {
     pub dmabuf_state: DmabufState,
     pub dmabuf_global: Option<DmabufGlobal>,
     pub popups: PopupManager,
+    /// The popup chain that holds the pointer and keyboard, with the toplevel it belongs to (`popup_grab.rs`).
+    pub popup_grab: Option<crate::popup_grab::ActivePopupGrab>,
 
     pub seat: Seat<Cupertino>,
     pub pointer: PointerHandle<Cupertino>,
@@ -494,6 +496,7 @@ impl Cupertino {
             dmabuf_state: DmabufState::new(),
             dmabuf_global: None,
             popups: PopupManager::default(),
+            popup_grab: None,
             seat,
             pointer,
             pointer_mode: PointerMode::Normal,

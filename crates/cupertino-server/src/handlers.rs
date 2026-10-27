@@ -131,6 +131,9 @@ impl CompositorHandler for Cupertino {
             }
         }
         self.popups.commit(surface);
+        if self.popups.find_popup(surface).is_some() {
+            self.refocus_pointer();
+        }
         if let Some(PopupKind::Xdg(popup)) = self.popups.find_popup(surface) {
             if !popup.is_initial_configure_sent() {
                 let _ = popup.send_configure();
@@ -523,7 +526,7 @@ impl XdgShellHandler for Cupertino {
         let Some(root) = find_popup_root_surface(&kind).ok() else {
             return;
         };
-        if let Ok(mut grab) = self.popups.grab_popup(root, kind, &seat, serial) {
+        if let Ok(mut grab) = self.popups.grab_popup(root.clone(), kind, &seat, serial) {
             if let Some(keyboard) = seat.get_keyboard() {
                 if keyboard.is_grabbed()
                     && !(keyboard.has_grab(serial)
@@ -546,6 +549,8 @@ impl XdgShellHandler for Cupertino {
                 }
                 pointer.set_grab(self, PopupPointerGrab::new(&grab), serial, Focus::Keep);
             }
+            self.popup_grab = Some(crate::popup_grab::ActivePopupGrab::new(grab, root));
+            self.refocus_pointer();
         }
     }
 

@@ -5,6 +5,22 @@
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ItemId(pub i32);
 
+/// The most characters of a shortcut key name a menu shows (the name comes from the app).
+const MAX_KEY_CHARS: usize = 16;
+
+/// Text from outside as menu text: without control characters or the characters that turn the text around, at most
+/// `max_chars` characters, trimmed.
+pub fn plain_text(text: &str, max_chars: usize) -> String {
+    text.chars()
+        .filter(|c| {
+            !c.is_control() && !matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
+        .take(max_chars)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Toggle {
     #[default]
@@ -27,6 +43,13 @@ impl Toggle {
 }
 
 /// A keyboard shortcut as listed in a menu: modifier names and a key name (xkbcommon naming).
+/// A shortcut split for drawing: the modifier glyphs and the key.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ShortcutGlyphs {
+    pub modifiers: String,
+    pub key: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Shortcut {
     pub modifiers: Vec<ShortcutModifier>,
@@ -61,11 +84,43 @@ impl Shortcut {
             }
         }
         modifiers.sort();
-        let key = key.as_ref();
-        (!key.is_empty()).then(|| Shortcut {
-            modifiers,
-            key: key.to_string(),
-        })
+        let key = plain_text(key.as_ref(), MAX_KEY_CHARS);
+        (!key.is_empty()).then_some(Shortcut { modifiers, key })
+    }
+
+    /// The shortcut as a menu draws it: the modifier glyphs in the order control, option, shift, command (the primary
+    /// modifier), and the key, with the names of the common keys as symbols (`Return` as the return arrow). A menu
+    /// shows the modifiers right-aligned and the keys in a column of their own.
+    pub fn glyphs(&self) -> ShortcutGlyphs {
+        let mut modifiers = String::new();
+        let mut order = self.modifiers.clone();
+        order.sort_by_key(|m| match m {
+            ShortcutModifier::Ctrl => 0,
+            ShortcutModifier::Alt => 1,
+            ShortcutModifier::Shift => 2,
+            ShortcutModifier::Primary => 3,
+        });
+        for m in order {
+            modifiers.push(match m {
+                ShortcutModifier::Ctrl => '\u{2303}',
+                ShortcutModifier::Alt => '\u{2325}',
+                ShortcutModifier::Shift => '\u{21e7}',
+                ShortcutModifier::Primary => '\u{2318}',
+            });
+        }
+        let key = match self.key.to_ascii_lowercase().as_str() {
+            "return" | "enter" => "\u{21a9}".to_string(),
+            "backspace" => "\u{232b}".to_string(),
+            "delete" => "\u{2326}".to_string(),
+            "tab" => "\u{21e5}".to_string(),
+            "up" => "\u{2191}".to_string(),
+            "down" => "\u{2193}".to_string(),
+            "left" => "\u{2190}".to_string(),
+            "right" => "\u{2192}".to_string(),
+            _ if self.key.chars().count() == 1 => self.key.to_uppercase(),
+            _ => self.key.clone(),
+        };
+        ShortcutGlyphs { modifiers, key }
     }
 
     /// Display text such as `Ctrl+Shift+Q`.
@@ -256,6 +311,14 @@ mod tests {
     }
 
     #[test]
+    fn an_app_shortcut_key_is_plain_and_short() {
+        let key = |k: &str| Shortcut::from_tokens(&["Control", k]).map(|s| s.key);
+        assert_eq!(key("\u{202e}Q\u{7}"), Some("Q".to_string()));
+        assert_eq!(key(&"X".repeat(200)), Some("X".repeat(16)));
+        assert_eq!(key("\u{202e}\u{7}"), None);
+    }
+
+    #[test]
     fn item_flags() {
         let i = MenuItem::new(1, "_Open");
         assert!(i.is_selectable() && i.mnemonic == Some('O'));
@@ -307,5 +370,35 @@ mod tests {
         assert!(root.find(ItemId(9)).is_none());
         root.find_mut(ItemId(2)).unwrap().enabled = false;
         assert!(!root.find(ItemId(2)).unwrap().enabled);
+    }
+
+    #[test]
+    fn a_shortcut_is_drawn_as_modifier_glyphs_in_a_fixed_order_and_a_key() {
+        let glyphs = |tokens: &[&str]| Shortcut::from_tokens(tokens).unwrap().glyphs();
+        assert_eq!(
+            glyphs(&["Super", "Shift", "Control", "Alt", "q"]),
+            ShortcutGlyphs {
+                modifiers: "\u{2303}\u{2325}\u{21e7}\u{2318}".into(),
+                key: "Q".into()
+            },
+            "control, option, shift, command, whatever order they were given in"
+        );
+        assert_eq!(
+            glyphs(&["Super", "Control", "q"]).modifiers,
+            "\u{2303}\u{2318}"
+        );
+        assert_eq!(
+            glyphs(&["Shift", "Super", "q"]).modifiers,
+            "\u{21e7}\u{2318}"
+        );
+        assert_eq!(glyphs(&["Return"]).key, "\u{21a9}");
+        assert_eq!(glyphs(&["Super", "BackSpace"]).key, "\u{232b}");
+        assert_eq!(glyphs(&["Super", "Left"]).key, "\u{2190}");
+        assert_eq!(
+            glyphs(&["Super", "F5"]).key,
+            "F5",
+            "a key without a symbol keeps its name"
+        );
+        assert_eq!(glyphs(&["Ctrl", "n"]).modifiers, "\u{2303}");
     }
 }

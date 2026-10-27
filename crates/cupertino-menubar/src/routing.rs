@@ -73,6 +73,14 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
             }
             _ => None,
         },
+        // the system menu asks the session agent to read the machine's policy again as it opens: what it allows can have
+        // changed since the bar started (the answer arrives as a change of `Capabilities`)
+        Effect::AboutToShow {
+            slot: SlotKey::System,
+            ..
+        } if cx.shared.extras.session.is_some() => Some(Action::Extra(ExtraAction::Session(
+            crate::extras::SessionAction::RefreshCapabilities,
+        ))),
         Effect::AboutToShow { .. } => None,
         Effect::Activate {
             slot: SlotKey::Status(id),
@@ -119,6 +127,16 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
             item,
         } => fallback_action(item),
         Effect::Activate {
+            slot: SlotKey::System,
+            item,
+        } => cx
+            .shared
+            .extras
+            .session_menu()?
+            .action(item)
+            .cloned()
+            .map(Action::Extra),
+        Effect::Activate {
             slot: SlotKey::ControlPanel | SlotKey::Clock,
             ..
         } => None,
@@ -140,7 +158,7 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
             }
             SlotKey::ControlPanel => Some(Action::Request(Request::TogglePanel)),
             SlotKey::Clock => Some(Action::Request(Request::ToggleCentre)),
-            SlotKey::AppMenu | SlotKey::Menu(_) => None,
+            SlotKey::System | SlotKey::AppMenu | SlotKey::Menu(_) => None,
         },
     }
 }
@@ -457,6 +475,52 @@ mod tests {
                 item: ItemId(99)
             }),
             None
+        );
+    }
+
+    #[test]
+    fn a_system_menu_entry_goes_to_the_session_agent() {
+        let mut f = Fixture::new(WindowMenu::None);
+        f.shared.extras.session = Some(crate::extras::SessionState::default());
+        let menu = f.shared.extras.session_menu().unwrap();
+        let restart = menu
+            .rows
+            .iter()
+            .find(|r| r.label.starts_with("Restart"))
+            .unwrap();
+        assert_eq!(
+            f.resolve(activate(SlotKey::System, restart.id.0)),
+            Some(Action::Extra(ExtraAction::Session(
+                crate::extras::SessionAction::Restart
+            )))
+        );
+        f.shared.extras.session = None;
+        assert_eq!(
+            f.resolve(activate(SlotKey::System, restart.id.0)),
+            None,
+            "no agent, nothing to call"
+        );
+    }
+
+    #[test]
+    fn opening_the_system_menu_asks_the_session_agent_to_read_its_capabilities_again() {
+        let mut f = Fixture::new(WindowMenu::None);
+        let about = |slot| Effect::AboutToShow {
+            slot,
+            item: crate::controller::SYSTEM_MENU_ROOT,
+        };
+        assert_eq!(f.resolve(about(SlotKey::System)), None, "no agent, no call");
+        f.shared.extras.session = Some(crate::extras::SessionState::default());
+        assert_eq!(
+            f.resolve(about(SlotKey::System)),
+            Some(Action::Extra(ExtraAction::Session(
+                crate::extras::SessionAction::RefreshCapabilities
+            )))
+        );
+        assert_eq!(
+            f.resolve(about(SlotKey::AppMenu)),
+            None,
+            "other menus do not ask"
         );
     }
 }

@@ -242,8 +242,14 @@ impl BarFeed {
             }),
         });
         let status = indicator.into_iter().chain(extras).chain(items).collect();
+        let system_menu = shared
+            .extras
+            .session_menu()
+            .map(|menu| menu.rows)
+            .unwrap_or_default();
         BarContent {
             app_name,
+            system_menu,
             app_menu,
             menus,
             status,

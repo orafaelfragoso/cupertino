@@ -141,6 +141,9 @@ pub enum Event {
     /// The server asks this process, the lock screen, to lock the session (`explicit`: the person asked). Only the
     /// process with the session lock role is told.
     LockRequested { explicit: bool },
+    /// The server asks this process, the login process, to ask whether to log out. Only the process with the session
+    /// lock role is told.
+    LogOutRequested,
     /// An output appeared or went away, or its geometry changed: read [`Client::outputs`](crate::Client::outputs) again.
     OutputsChanged,
 }

@@ -398,6 +398,7 @@ impl App {
             Event::OutputsChanged
             | Event::SessionLock { .. }
             | Event::LockRequested { .. }
+            | Event::LogOutRequested
             | Event::ActivationToken { .. } => {}
             Event::MenuBar { .. } | Event::Dock { .. } => {
                 return Err(

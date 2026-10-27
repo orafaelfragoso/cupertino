@@ -51,7 +51,7 @@ Every trigger goes through the same request, which does nothing when the session
 
 | Trigger | How |
 |---|---|
-| `org.cupertino.Login1.Lock | Method on the session bus. The server asks for the lock over its own connection (`cupertino_session_v1.lock_requested`), not by this method. A second process cannot take the name: the lock screen then runs without it and logs an error. |
+| `org.cupertino.Login1.Lock | Method on the session bus. The server asks for the lock over its own connection (`cupertino_session_v1.lock_requested`), not by this method; a log out the server asks for arrives the same way (`log_out_requested`) and shows the same panel as `RequestLogOut`. A second process cannot take the name: the lock screen then runs without it and logs an error. |
 | logind `Lock` | Signal on this process's session: `loginctl lock-session`. |
 | `PrepareForSleep(true) | The process holds a `sleep` **delay** inhibitor while the session is unlocked, drops it when the server confirms the lock, and takes it again after the unlock. |
 | `LockNow | The lock shortcut (a lock the person asked for, request type 8): the same lock, but the interface hides after 5 s without input instead of 30 s. |

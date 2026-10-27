@@ -491,7 +491,7 @@ impl Client {
         // version 2 adds the display options of the session object, version 3 the screen capture state of the menu bar,
         // version 5 moves the backdrops and the title bar style to the app effects, version 6 adds the menu bar's session actions
         let (shell, session, appearance) = if shell_roles {
-            let shell: CupertinoShellV1 = bind_required(&globals, &qh, 8..=8)?;
+            let shell: CupertinoShellV1 = bind_required(&globals, &qh, 9..=9)?;
             let session = shell.get_session(&qh, ());
             (Some(shell), Some(session), None)
         } else {
@@ -1702,6 +1702,7 @@ impl Dispatch<CupertinoSessionV1, ()> for State {
             cupertino_session_v1::Event::LockRequested { explicit } => Event::LockRequested {
                 explicit: explicit != 0,
             },
+            cupertino_session_v1::Event::LogOutRequested => Event::LogOutRequested,
             _ => return,
         };
         state.queue_session_event(queued);

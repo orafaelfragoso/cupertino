@@ -441,3 +441,43 @@ fn a_session_lock_ends_the_popup_grab_and_the_first_press_reaches_the_lock_surfa
     h.click((f64::from(OUTPUT.0) / 2.0, f64::from(OUTPUT.1) / 2.0));
     assert_eq!(locker.presses(), 1, "the lock surface got the press");
 }
+
+#[test]
+fn a_window_that_takes_the_focus_ends_the_popup_grab_of_another_application() {
+    let Some(mut h) = Harness::new() else { return };
+    let client = TestClient::spawn(h.socket_path());
+    h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
+    h.state.fixed_time = Some(h.state.now() + 5.0);
+    h.state.tick();
+    let window = h.state.windows.iter().find(|w| w.mapped).unwrap();
+    let frame = h.state.wm.window(window.id).unwrap().geometry();
+    h.run_for(Duration::from_millis(100));
+    h.click((frame.x + 300.0, frame.y + 220.0));
+    h.wait_until("a drawn popup", |s| {
+        let window = s.windows.iter().find(|w| w.mapped).unwrap();
+        client.log.lock().unwrap().popup_ready
+            && PopupManager::popups_for_surface(window.surface()).count() == 1
+    });
+    h.run_for(Duration::from_millis(200));
+    assert!(h.state.popup_grab.is_some(), "the popup holds a grab");
+
+    // a window the person asked for (a token made by the server) comes up and takes the keyboard
+    let token = std::sync::Arc::new(std::sync::Mutex::new(Some(
+        h.state.server_activation_token(),
+    )));
+    let _launched = common::Client::toplevel_after(
+        h.socket_path(),
+        "org.example.launched",
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        token,
+    );
+    h.wait_until("the second window to map", |s| {
+        s.windows.iter().filter(|w| w.mapped).count() == 2
+    });
+    h.run_for(Duration::from_millis(200));
+    assert!(
+        client.log.lock().unwrap().popup_done,
+        "the menu is dismissed, not left open without its keys"
+    );
+    assert!(h.state.popup_grab.is_none());
+}

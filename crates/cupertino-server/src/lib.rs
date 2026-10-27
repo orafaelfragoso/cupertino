@@ -33,6 +33,7 @@ pub mod overlays;
 pub mod policy;
 pub mod popup_grab;
 pub mod power;
+pub mod process;
 pub mod protocols;
 pub mod quit;
 pub mod render;

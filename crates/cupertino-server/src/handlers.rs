@@ -119,6 +119,10 @@ impl CompositorHandler for Cupertino {
         });
     }
 
+    fn destroyed(&mut self, surface: &WlSurface) {
+        self.pending_activations.remove(&surface.id());
+    }
+
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
         if !is_sync_subsurface(surface) {
@@ -451,18 +455,29 @@ impl XdgActivationHandler for Cupertino {
         data: XdgActivationTokenData,
         surface: WlSurface,
     ) {
-        let Some(id) = self.window_id_for_surface(&surface) else {
-            return;
-        };
         self.xdg_activation_state.remove_token(&token);
         let grant = *data
             .user_data
             .get::<TokenGrant>()
             .expect("every token gets its grant when it is made");
+        let mapped = self
+            .window_id_for_surface(&surface)
+            .filter(|id| self.entry(*id).is_some_and(|e| e.mapped));
+        let Some(id) = mapped else {
+            // a program activates its first surface as it maps, usually before the window is mapped: the window picks
+            // the grant up when it maps
+            if grant.valid {
+                let now = self.now();
+                self.pending_activations
+                    .retain(|_, g| now - g.created <= cupertino_wm::GRANT_LIFETIME);
+                self.pending_activations.insert(surface.id(), grant);
+            }
+            return;
+        };
         if grant.valid
             && self
                 .wm
-                .activation_allowed(id, grant.created, self.last_user_event)
+                .activation_allowed(id, grant.created, self.last_user_event, self.now())
         {
             self.command(Command::FocusWindow { window: id });
         } else {

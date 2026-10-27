@@ -44,7 +44,7 @@ check() {
 }
 
 package_cupertino() {
-  depends=('glibc' 'gcc-libs' 'mesa' 'libglvnd' 'pam' 'systemd' 'dbus' 'xkeyboard-config' 'shared-mime-info' "cupertino-data>=$pkgver")
+  depends=('glibc' 'gcc-libs' 'mesa' 'libglvnd' 'pam' 'systemd' 'dbus' 'xkeyboard-config' 'shared-mime-info' 'adwaita-icon-theme' "cupertino-data>=$pkgver")
   optdepends=('wayland: nested session inside another Wayland desktop'
               'libxkbcommon: nested session'
               'foot: terminal for the nested try-out'
@@ -60,9 +60,7 @@ package_cupertino-data() {
   pkgdesc='Default asset pack of Cupertino: Inter, the icon map and six Unsplash wallpapers'
   arch=('any')
   license=('GPL-3.0-or-later' 'OFL-1.1' 'LicenseRef-Unsplash')
-  depends=()
-  optdepends=('adwaita-icon-theme: the host icons the icon map names'
-              )
+  depends=('adwaita-icon-theme')
   cd "cupertino-$pkgver"
   python3 packaging/release.py install --format arch --package data --destdir "$pkgdir"
 }

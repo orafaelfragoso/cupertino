@@ -189,6 +189,22 @@ impl Default for SessionCaps {
     }
 }
 
+/// The most characters of the person's name the Log Out entry shows.
+const MAX_NAME_CHARS: usize = 64;
+
+/// A person's name as menu text: without control characters or the characters that turn the text around (the name is
+/// the account's own, which its owner can set), at most [`MAX_NAME_CHARS`] characters.
+fn display_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| {
+            !c.is_control() && !matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
+        .take(MAX_NAME_CHARS)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 /// What the system menu is built from.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionState {
@@ -361,10 +377,11 @@ impl Extras {
             },
             ExtraAction::Session(SessionAction::Lock),
         );
-        let log_out = if session.user_name.is_empty() {
+        let name = display_name(&session.user_name);
+        let log_out = if name.is_empty() {
             "Log Out\u{2026}".to_owned()
         } else {
-            format!("Log Out {}\u{2026}", session.user_name)
+            format!("Log Out {name}\u{2026}")
         };
         menu.row_with_shortcut(
             &log_out,
@@ -927,5 +944,33 @@ mod tests {
             .unwrap();
         assert_eq!(log_out.label, "Log Out Ana_&Co\u{2026}");
         assert_eq!(log_out.mnemonic, None);
+    }
+
+    #[test]
+    fn the_name_in_log_out_loses_control_and_direction_characters_and_is_cut_to_64_characters() {
+        let dirty = format!("Ana\u{1b}[31m\n\u{202e}Bob{}", "x".repeat(100));
+        let menu = session(&dirty, SessionCaps::default())
+            .session_menu()
+            .unwrap();
+        let log_out = menu
+            .rows
+            .iter()
+            .find(|r| r.label.starts_with("Log Out"))
+            .unwrap();
+        let name = log_out
+            .label
+            .strip_prefix("Log Out ")
+            .and_then(|l| l.strip_suffix('\u{2026}'))
+            .unwrap();
+        assert!(name.starts_with("Ana[31mBobxxx"), "{name:?}");
+        assert_eq!(name.chars().count(), 64);
+        assert!(!name.chars().any(|c| c.is_control() || c == '\u{202e}'));
+        let blank = session("\u{1b}\u{202e} ", SessionCaps::default())
+            .session_menu()
+            .unwrap();
+        assert!(
+            blank.rows.iter().any(|r| r.label == "Log Out\u{2026}"),
+            "nothing left: plain Log Out"
+        );
     }
 }

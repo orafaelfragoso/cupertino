@@ -13,7 +13,8 @@ install         copies exactly the manifest's files into DIR with explicit modes
 verify          lists a built package (.pkg.tar.zst, .deb, .rpm) and fails unless its files and modes equal the manifest
                 plus the format's own metadata files. It also rejects setuid/setgid bits, wallpapers whose hash differs
                 from packaging/data/wallpapers.json and executables that hold a home-directory or checkout path.
-check-metadata  compares the deb and rpm asset tables in the crates' Cargo.toml files with the manifest.
+check-metadata  compares the deb and rpm asset tables in the crates' Cargo.toml files with the manifest and fails when a licence
+                list (PKGBUILDs, rpm, Debian copyright) misses a licence the package ships.
 source          writes cupertino-<version>-source.tar.xz from the committed HEAD (git archive: file times are the
                 commit time, no untracked files).
 verify-tag      fails unless TAG is v<version>, points at HEAD, and HEAD is reachable from origin/main.
@@ -54,6 +55,13 @@ UNITS = ('cupertino-login', 'cupertino-netd', 'cupertino-btd', 'cupertino-powerd
 THEME_FILES = ('tokens.json', 'materials.json', 'animations.json')
 WALLPAPERS = json.loads((ROOT / 'packaging/data/wallpapers.json').read_text())['files']
 NAMES = {'runtime': 'cupertino', 'data': 'cupertino-data'}
+# Licence texts of the crates linked into the binaries, beside the GPL text (arch and rpm; the deb copyright file holds them).
+LICENSE_TEXTS = (('MPL-2.0', 'crates/cupertino-geometry/LICENSE'), ('MIT', 'crates/cupertino-xkbcommon/LICENSE'),
+                 ('libxkbcommon', 'third-party/xkbcommon-rs/LICENSE'), ('OFL.txt', 'crates/cupertino-assets/fonts/OFL.txt'))
+# What the data package ships besides crate code: the pack's own files, the font and the photographs.
+DATA_LICENSES = {'GPL-3.0-or-later', 'OFL-1.1', 'LicenseRef-Unsplash'}
+# Debian copyright file license names -> SPDX.
+DEB_LICENSES = {'GPL-3+': 'GPL-3.0-or-later', 'MPL-2.0': 'MPL-2.0', 'OFL-1.1': 'OFL-1.1', 'Unsplash': 'LicenseRef-Unsplash'}
 
 
 def applications(root, apps):
@@ -103,8 +111,9 @@ def runtime(fmt):
               for u in UNITS]
     files += [(f'usr/share/cupertino/theme/{n}', f'data/theme/{n}', 0o644, False) for n in THEME_FILES]
     files += [(f'etc/pam.d/{s}', f'packaging/pam/{fmt}/{s}', 0o644, True) for s in PAM_SERVICES]
-    if fmt != 'deb':  # cargo-deb writes usr/share/doc/cupertino/copyright from the same file
-        files.append(('usr/share/licenses/cupertino/LICENSE', 'LICENSE', 0o644, False))
+    if fmt != 'deb':  # cargo-deb writes usr/share/doc/cupertino/copyright (packaging/debian/cupertino.copyright)
+        files += [('usr/share/licenses/cupertino/LICENSE', 'LICENSE', 0o644, False),
+                  *((f'usr/share/licenses/cupertino/{n}', src, 0o644, False) for n, src in LICENSE_TEXTS)]
     return files
 
 
@@ -205,8 +214,59 @@ def cmd_verify(args):
           f'{Path(args.artifact).stat().st_size} bytes packed: ok')
 
 
+def shipped_licenses(package):
+    """SPDX identifiers the package ships: those of the workspace crates in the normal dependency closure of its
+    binaries (they are linked statically), plus the pack's own for the data package."""
+    if package == 'data':
+        return set(DATA_LICENSES)
+    meta = json.loads(subprocess.run(['cargo', 'metadata', '--format-version', '1', '--offline', '--locked'], cwd=ROOT,
+                                     capture_output=True, text=True, check=True).stdout)
+    pkgs = {p['id']: p for p in meta['packages']}
+    nodes = {n['id']: n for n in meta['resolve']['nodes']}
+    todo = [i for i, p in pkgs.items() if p['name'] in BINARIES and i in meta['workspace_members']]
+    seen = set()
+    while todo:
+        i = todo.pop()
+        if i not in seen:
+            seen.add(i)
+            todo += [d['pkg'] for d in nodes[i]['deps'] if any(k['kind'] is None for k in d['dep_kinds'])]
+    found = set()
+    for i in seen & set(meta['workspace_members']):
+        found |= set(re.findall(r'[\w.+-]+', re.sub(r'\b(AND|OR|WITH)\b', ' ', pkgs[i]['license'] or '')))
+    return found
+
+
+def declared_licenses(package):
+    """{place: SPDX identifiers} the package's metadata lists, in the PKGBUILDs, the rpm and the Debian copyright file."""
+    crate = 'cupertino-server' if package == 'runtime' else 'cupertino-assets'
+    meta = tomllib.loads((ROOT / 'crates' / crate / 'Cargo.toml').read_text())['package']['metadata']
+    ids = lambda text: set(re.findall(r'[\w.+-]+', re.sub(r'\b(AND|OR|WITH)\b', ' ', text)))
+    found = {f'{crate} rpm License': ids(meta['generate-rpm']['license'])}
+    copyright = ROOT / meta['deb']['license-file'][0].replace('../../', '', 1)
+    names = re.findall(r'^License: (\S+)', copyright.read_text(), re.M)
+    found[f'{copyright.relative_to(ROOT)}'] = {DEB_LICENSES.get(n, n) for n in names}
+    for pkgbuild in sorted(ROOT.glob('packaging/arch/*/PKGBUILD')):
+        text = pkgbuild.read_text()
+        data_block = re.search(r'^package_cupertino-data\(\).*?^\}', text, re.M | re.S)
+        if package == 'data':
+            if data_block:
+                found[f'{pkgbuild.relative_to(ROOT)} cupertino-data'] = set(re.findall(r"'([^']+)'", re.search(r'license=\(([^)]*)\)', data_block[0])[1]))
+        else:
+            head = text[:data_block.start()] if data_block else text
+            found[f'{pkgbuild.relative_to(ROOT)}'] = set(re.findall(r"'([^']+)'", re.search(r'^license=\(([^)]*)\)', head, re.M)[1]))
+    return found
+
+
+def missing_licenses(shipped, declared):
+    """['<place> lacks <id>, ...'] for each place whose list does not cover every shipped licence."""
+    return [f'{place} lacks {", ".join(sorted(shipped - ids))}' for place, ids in sorted(declared.items()) if shipped - ids]
+
+
 def cmd_check_metadata(_args):
-    problems = []
+    problems = [f'licence text {src} for /usr/share/licenses/cupertino/{n} does not exist'
+                for n, src in LICENSE_TEXTS if not (ROOT / src).is_file()]
+    for package in MANIFESTS:
+        problems += [f'{package} licence: {m}' for m in missing_licenses(shipped_licenses(package), declared_licenses(package))]
     for crate, package in (('cupertino-server', 'runtime'), ('cupertino-assets', 'data')):
         meta = tomllib.loads((ROOT / 'crates' / crate / 'Cargo.toml').read_text())['package']['metadata']
         for fmt, table in (('deb', meta['deb']), ('rpm', meta['generate-rpm'])):

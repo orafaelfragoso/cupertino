@@ -146,7 +146,7 @@
   test_owner: unknown
   source: crates/cupertino-server/src/clipboard.rs:403
   visible_to: unsandboxed
-  note: hidden from a client connected through a security context; while the session is locked a selection set is cancelled and the clipboard put back
+  note: hidden from a client connected through a security context; while the session is locked a selection set is cancelled and the clipboard put back, a clear is honoured
 - name: zwlr_data_control_manager_v1
   kind: wayland-global
   version: 2
@@ -158,7 +158,7 @@
   test_owner: unknown
   source: crates/cupertino-server/src/clipboard.rs:408
   visible_to: unsandboxed
-  note: hidden from a client connected through a security context; while the session is locked a selection set is cancelled and the clipboard put back
+  note: hidden from a client connected through a security context; while the session is locked a selection set is cancelled and the clipboard put back, a clear is honoured
 - name: wp_viewporter
   kind: wayland-global
   version: 1

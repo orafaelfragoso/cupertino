@@ -377,7 +377,10 @@ fn load_power() -> cupertino_defaults::power::PowerSettings {
 /// (`crate::live`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SettingsFiles {
+    /// The user's (or the configured) `compositor.json`.
     pub compositor: CompositorSettings,
+    /// The system file under it (`SYSTEM_CONFIG`); empty when there is none or the file is configured by the person.
+    pub system: CompositorSettings,
     pub keyboard: cupertino_defaults::keyboard::KeyboardSettings,
     pub power: cupertino_defaults::power::PowerSettings,
 }
@@ -390,7 +393,30 @@ fn config_layers(env: Option<OsString>, user: Option<PathBuf>, system: &Path) ->
     system.into_iter().chain(user).collect()
 }
 
+/// The system file to watch: where `SYSTEM_CONFIG` is when the person did not set `env` (`CUPERTINO_SERVER_CONFIG`) and
+/// its directory exists (the watcher would have to create it). The file itself may be created later.
+pub fn system_config_path(env: Option<OsString>) -> Option<PathBuf> {
+    let explicit = env.is_some_and(|p| !p.is_empty());
+    let system = Path::new(SYSTEM_CONFIG);
+    (!explicit && system.parent().is_some_and(Path::is_dir)).then(|| system.to_path_buf())
+}
+
 impl Config {
+    /// What the system file and then the user's file mean on their own: the defaults (with the shortcut file's
+    /// chords), the system file's keys, the user file's keys over them. Returns what the server refuses.
+    pub fn from_layers(
+        system: &CompositorSettings,
+        user: &CompositorSettings,
+    ) -> (Self, Vec<String>) {
+        let mut cfg = Config {
+            keybindings: KeyBindings::from_shortcuts(&shortcut_map()),
+            ..Config::default()
+        };
+        let mut problems = cfg.apply_file(system);
+        problems.extend(cfg.apply_file(user));
+        (cfg, problems)
+    }
+
     /// Path of the configuration file, if one is configured or present.
     pub fn path() -> Option<PathBuf> {
         if let Some(p) = std::env::var_os(CONFIG_ENV).filter(|p| !p.is_empty()) {
@@ -411,6 +437,7 @@ impl Config {
             ..Config::default()
         };
         let mut compositor = CompositorSettings::default();
+        let mut system_file = CompositorSettings::default();
         let user = Self::path();
         for path in config_layers(
             std::env::var_os(CONFIG_ENV),
@@ -423,12 +450,15 @@ impl Config {
             }
             if Some(&path) == user.as_ref() {
                 compositor = file;
+            } else if path == Path::new(SYSTEM_CONFIG) {
+                system_file = file;
             }
         }
         (
             cfg,
             SettingsFiles {
                 compositor,
+                system: system_file,
                 keyboard: keyboard_file,
                 power,
             },

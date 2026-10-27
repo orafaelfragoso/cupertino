@@ -105,7 +105,7 @@ backend (winit | udev | headless)  ──input──▶  events.rs ─▶ input.
 | `display_power.rs` | the idle policy, pure on the model clock: dim, display sleep, lock, system sleep, dim factor and ramps; the fade-in after the session became active |
 | `power.rs` | the idle policy on the compositor state: input activity, effects (overlay, DPMS, lock, suspend), the dim overlay element, system bus watchers (UPower `OnBattery`, logind `BlockInhibited` and `PrepareForSleep`, `Suspend`) |
 | `quit.rs` | `org.cupertino.Session1`: quitting applications one at a time before a log out; the appearance and accessibility setters |
-| `live.rs` | live settings: the watch on `compositor.json`, `keyboard.conf` and `power.conf`, and what a change applies |
+| `live.rs` | live settings: the watch on `compositor.json` (the system file and the user's), `keyboard.conf` and `power.conf`, and what a change applies |
 | `protocols.rs` | KDE appmenu (`org_kde_kwin_appmenu`) and GTK shell (`gtk_shell1`, generated from `protocols/gtk-shell.xml`) globals |
 | `dock.rs` | `cupertino_shell_v1.get_dock` / `cupertino_dock_v1`: window feed, `launching`, activation and restore requests, minimize target, the switcher's events (`switcher_output`, `switcher_entry`, `switcher_changed`, `switcher_closed`, `switcher_select`, `switcher_activate`, `switcher_cancel`), `attention`, `toggle_app_grid` |
 | `window_manager.rs` | `cupertino_shell_v1.get_window_manager` / `cupertino_window_manager_v1`: arranged-window feed, stage placements and animation (`WindowManagers::look`), strip presses, `toggle_stage` |
@@ -298,7 +298,7 @@ Shortcuts are the `cupertino-input` `ShortcutMap` (defaults approximate, `Super`
 | file | override | read by | content |
 |---|---|---|---|
 | `~/.config/cupertino/shortcuts.conf` | `$CUPERTINO_SHORTCUTS` | server | chord to action lines, applied on top of the defaults: `Super+x = exec:foot`, `F5 = show-desktop`, `Super+Tab = none`. `# starts a comment. Invalid lines are reported and skipped. |
-| `~/.config/cupertino/compositor.json` | `$CUPERTINO_SERVER_CONFIG` | server | the keys below. Overrides single chords after `shortcuts.conf`. `/etc/cupertino/compositor.json` (installed by the packages: the `shell` list of the whole desktop) is applied first; the user file overrides its keys. A file named by the variable replaces both. |
+| `~/.config/cupertino/compositor.json` | `$CUPERTINO_SERVER_CONFIG` | server | the keys below. Overrides single chords after `shortcuts.conf`. `/etc/cupertino/compositor.json` (installed by the packages: the `shell` list of the whole desktop) is applied first; the user file overrides its keys. A file named by the variable replaces both. Both files are watched: a change of either applies live on top of the other, and a key removed from the user file goes back to the system file's value (the default when that has none). |
 | `~/.config/cupertino/keyboard.conf` | `$CUPERTINO_KEYBOARD_CONFIG` | server | see *Keyboard* |
 | `~/.config/cupertino/dock.conf` | | dock process | what a corner or gesture does |
 | `~/.local/share/cupertino/launcher.json` | | launcher process | its history |

@@ -3,7 +3,9 @@
 //! good ones (a line or key that is wrong keeps its value and is logged), and applies only the keys whose value differs
 //! from the last read, so a setting changed at run time another way (the `toggle-appearance` key action, the
 //! accessibility shortcuts) stays until its own key changes in the file. A key removed from the file goes back to its
-//! default.
+//! default, or to the value of the system file `/etc/cupertino/compositor.json` under it: that file is watched too, the target
+//! of a change is always the defaults, then the system file, then the user's file, as at start, and a key is applied when
+//! either file changed it.
 //!
 //! | File | Applied at once | At the next start |
 //! |---|---|---|
@@ -20,13 +22,14 @@ use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use smithay::reexports::calloop::channel;
 
 use crate::config::{Config, SettingsFiles};
-use crate::input::KeyBindings;
 use crate::state::Cupertino;
 
 /// Where the watched files are; `None` when neither `XDG_CONFIG_HOME` nor `HOME` names a settings directory.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SettingsPaths {
     pub compositor: Option<PathBuf>,
+    /// The system `compositor.json` under the user's, when there is a place for one ([`crate::config::system_config_path`]).
+    pub system: Option<PathBuf>,
     pub keyboard: Option<PathBuf>,
     pub power: Option<PathBuf>,
 }
@@ -37,6 +40,7 @@ impl SettingsPaths {
     pub fn from_env() -> Self {
         Self {
             compositor: CompositorSettings::path(),
+            system: crate::config::system_config_path(std::env::var_os(crate::config::CONFIG_ENV)),
             keyboard: KeyboardConf::path(),
             power: PowerSettings::path(),
         }
@@ -59,7 +63,7 @@ impl Cupertino {
     pub fn start_settings_watch(&mut self, files: SettingsFiles, paths: SettingsPaths) {
         self.live.files = files;
         self.live.paths = paths.clone();
-        let watched: Vec<PathBuf> = [paths.compositor, paths.keyboard, paths.power]
+        let watched: Vec<PathBuf> = [paths.compositor, paths.system, paths.keyboard, paths.power]
             .into_iter()
             .flatten()
             .collect();
@@ -98,7 +102,9 @@ impl Cupertino {
         };
         for path in paths {
             if self.live.paths.compositor.as_ref() == Some(&path) {
-                self.reload_compositor(&path);
+                self.reload_compositor(&path, false);
+            } else if self.live.paths.system.as_ref() == Some(&path) {
+                self.reload_compositor(&path, true);
             } else if self.live.paths.keyboard.as_ref() == Some(&path) {
                 self.reload_keyboard(&path);
             } else if self.live.paths.power.as_ref() == Some(&path) {
@@ -107,8 +113,16 @@ impl Cupertino {
         }
     }
 
-    fn reload_compositor(&mut self, path: &std::path::Path) {
-        let before = self.live.files.compositor.clone();
+    /// Re-read one layer of `compositor.json`, the system file or the user's, and apply what changed in the result.
+    fn reload_compositor(&mut self, path: &std::path::Path, system: bool) {
+        let layers = |files: &SettingsFiles| {
+            if system {
+                files.system.clone()
+            } else {
+                files.compositor.clone()
+            }
+        };
+        let before = layers(&self.live.files);
         let (after, problems) = match CompositorSettings::load(path, Some(&before)) {
             Ok(read) => read,
             Err(e) => {
@@ -119,28 +133,50 @@ impl Cupertino {
         for p in problems {
             tracing::warn!(path = %path.display(), key = p.key, error = %p.message, "invalid configuration: the key keeps its value");
         }
-        self.live.files.compositor = after.clone();
-        self.apply_compositor_change(&before, &after);
+        let (system_before, user_before) = (
+            self.live.files.system.clone(),
+            self.live.files.compositor.clone(),
+        );
+        if system {
+            self.live.files.system = after;
+        } else {
+            self.live.files.compositor = after;
+        }
+        let (system_after, user_after) = (
+            self.live.files.system.clone(),
+            self.live.files.compositor.clone(),
+        );
+        self.apply_compositor_layers((&system_before, &user_before), (&system_after, &user_after));
         self.live.reloads += 1;
         tracing::info!(path = %path.display(), "configuration reloaded");
     }
 
-    /// Apply the keys whose value differs between `before` and `after`, the values `compositor.json` held.
+    /// Apply the keys whose value differs between `before` and `after`, the values the user's `compositor.json` held
+    /// over the system file's.
     pub fn apply_compositor_change(
         &mut self,
         before: &CompositorSettings,
         after: &CompositorSettings,
     ) {
-        // what the file means on its own: the defaults (with the shortcut file's chords) and the file's keys
-        let mut target = Config {
-            keybindings: KeyBindings::from_shortcuts(&crate::config::shortcut_map()),
-            ..Config::default()
-        };
-        for problem in target.apply_file(after) {
+        let system = self.live.files.system.clone();
+        self.apply_compositor_layers((&system, before), (&system, after));
+    }
+
+    /// Apply the keys whose value differs between `before` and `after`, each the system file and the user's file: a key
+    /// changes when either file changed it, and the new value is what the defaults, the system file and the user's file
+    /// over it make, as at start.
+    pub fn apply_compositor_layers(
+        &mut self,
+        before: (&CompositorSettings, &CompositorSettings),
+        after: (&CompositorSettings, &CompositorSettings),
+    ) {
+        let (mut target, problems) = Config::from_layers(after.0, after.1);
+        for problem in problems {
             tracing::warn!(error = %problem, "invalid configuration: the key keeps its default");
         }
+        let target = &mut target;
         macro_rules! changed {
-            ($($key:ident),+) => { false $(|| before.$key != after.$key)+ };
+            ($($key:ident),+) => { false $(|| before.0.$key != after.0.$key || before.1.$key != after.1.$key)+ };
         }
         if changed!(appearance) {
             self.set_appearance(target.appearance);

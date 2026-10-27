@@ -2294,6 +2294,32 @@ fn the_session_state_at_connect_is_read_and_changes_arrive_as_events() {
 }
 
 #[test]
+fn observe_reads_the_session_state_before_it_returns() {
+    let (client_stream, server_stream) = UnixStream::pair().unwrap();
+    let (_control, _committed, _seen) = spawn_server(server_stream);
+    let mut conn = cupertino_wayland_client::Connection::from_wayland(
+        Connection::from_socket(client_stream).unwrap(),
+    )
+    .unwrap();
+    let shell = cupertino_shell_client::Shell::bind(&mut conn).unwrap();
+    let (_session, state, rest) = shell.observe(&mut conn).unwrap();
+    assert_eq!(
+        state,
+        cupertino_shell_client::SessionState {
+            dark: true,
+            display: DisplayOptions {
+                reduce_motion: true,
+                ..DisplayOptions::default()
+            },
+            locked: false,
+        }
+    );
+    assert!(!rest
+        .iter()
+        .any(|e| matches!(e, cupertino_wayland_client::Event::Extension(_))));
+}
+
+#[test]
 fn the_public_connection_follows_the_appearance_but_not_the_lock_and_binds_no_private_object() {
     let (client_stream, server_stream) = UnixStream::pair().unwrap();
     let (control, _committed, seen) = spawn_server_reporting(server_stream, true);

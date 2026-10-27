@@ -15,7 +15,7 @@ use cupertino_protocol_app::{
 };
 use cupertino_shell_client::{
     Dock, IdleNotifier, IdleWatch, LayerShell, LayerSurface, MenuBar, Session as SessionObserver,
-    SessionLockManager, Shell, ShellEvent,
+    SessionChange, SessionLockManager, SessionState, Shell, ShellEvent,
 };
 use cupertino_ui_wayland::{clipboard, popup, Ready, ShmPresenter};
 use cupertino_wayland_client::{
@@ -124,9 +124,7 @@ struct Session {
     /// Kept alive: the server stops sending when the object is destroyed.
     _session: Option<SessionObserver>,
     _appearance: Option<Appearance>,
-    dark: bool,
-    display: DisplayOptions,
-    locked: bool,
+    state: SessionState,
     /// The state at connect is read; later changes also queue an [`Event`].
     settled: bool,
 }
@@ -205,13 +203,17 @@ impl Client {
         }
         let effects = AppEffects::bind(&mut conn)
             .ok_or(ClientError::MissingGlobal("cupertino_app_effects_v1"))?;
-        let (shell, session, appearance) = if shell_roles {
+        // the session's state at connect is read before the process draws anything
+        let (shell, session, appearance, state, early) = if shell_roles {
             let shell =
                 Shell::bind(&mut conn).ok_or(ClientError::MissingGlobal("cupertino_shell_v1"))?;
-            let session = shell.session(&conn);
-            (Some(shell), Some(session), None)
+            let (session, state, early) = shell.observe(&mut conn)?;
+            (Some(shell), Some(session), None, state, early)
         } else {
-            (None, None, Some(effects.appearance(&conn)))
+            let appearance = effects.appearance(&conn);
+            conn.roundtrip()?;
+            let early = conn.wait(Some(Duration::ZERO))?;
+            (None, None, Some(appearance), SessionState::default(), early)
         };
         let globals = Globals {
             layer_shell: LayerShell::bind(&mut conn)
@@ -228,9 +230,7 @@ impl Client {
             session: Session {
                 _session: session,
                 _appearance: appearance,
-                dark: false,
-                display: DisplayOptions::default(),
-                locked: false,
+                state,
                 settled: false,
             },
             session_lock: None,
@@ -245,9 +245,7 @@ impl Client {
             events: Vec::new(),
             fault: None,
         };
-        // the session's state at connect is read before the process draws anything
-        client.conn.roundtrip()?;
-        for event in client.conn.wait(Some(Duration::ZERO))? {
+        for event in early {
             client.translate(event);
         }
         if let Some(e) = client.fault.take() {
@@ -281,13 +279,14 @@ impl Client {
     /// Create a layer surface. It is mapped and sized by the first [`Event::Configured`], which
     /// is followed by [`Event::Draw`].
     pub fn layer_surface(&mut self, config: &LayerSurfaceConfig) -> Result<SurfaceId, ClientError> {
-        let (id, layer) = self
+        let layer = self
             .globals
             .layer_shell
             .layer_surface(&mut self.conn, config)?;
+        let id = SurfaceId(layer.surface());
         self.surfaces
-            .push(Surface::new(SurfaceId(id), Role::Layer(layer), config.size));
-        Ok(SurfaceId(id))
+            .push(Surface::new(id, Role::Layer(layer), config.size));
+        Ok(id)
     }
 
     /// Create an application window. The server draws its title bar and window control buttons
@@ -512,10 +511,10 @@ impl Client {
         anchor: Anchor,
         size: (u32, u32),
     ) -> Result<(), ClientError> {
-        let layer = self.layer(id)?;
-        layer.set_anchor(anchor);
-        layer.set_size(size.0, size.1);
-        self.surface_mut(id)?.requested_size = size;
+        self.layer(id)?;
+        if let Role::Layer(layer) = &mut self.surface_mut(id)?.role {
+            layer.set_placement(anchor, size);
+        }
         Ok(())
     }
 
@@ -558,19 +557,19 @@ impl Client {
     /// Whether the session is dark, as of the last `cupertino_session_v1.appearance`. The value at connect is read
     /// before [`Client::connect`] returns, so no process starts with a guess; later changes arrive as [`Event::Appearance`].
     pub fn is_dark(&self) -> bool {
-        self.session.dark
+        self.session.state.dark
     }
 
     /// The accessibility display options, as of the last `cupertino_session_v1.display_options`. The value at connect is
     /// read before [`Client::connect`] returns; later changes arrive as [`Event::DisplayOptions`].
     pub fn display_options(&self) -> DisplayOptions {
-        self.session.display
+        self.session.state.display
     }
 
     /// Whether the server holds the session locked, as of the last `locked` or `unlocked` event. The value at connect is
     /// read before [`Client::connect`] returns; later changes arrive as [`Event::SessionLock`].
     pub fn session_locked(&self) -> bool {
-        self.session.locked
+        self.session.state.locked
     }
 
     /// Create the lock surface of `output`. It is sized by the first [`Event::Configured`], which is followed by
@@ -873,14 +872,23 @@ impl Client {
                 request: ActivationRequest(request),
                 token,
             }),
-            T::Extension(event) => match event.downcast::<ShellEvent>() {
-                Ok(event) => self.shell_event(&event),
-                Err(event) => {
-                    if let Ok(event) = event.downcast::<AppEvent>() {
-                        self.app_event(*event);
+            T::Extension(event) => {
+                if let Some(change) = self.session.state.apply(&event) {
+                    return self.session_changed(match change {
+                        SessionChange::Appearance { dark } => Event::Appearance { dark },
+                        SessionChange::DisplayOptions(options) => Event::DisplayOptions(options),
+                        SessionChange::Lock { locked } => Event::SessionLock { locked },
+                    });
+                }
+                match event.downcast::<ShellEvent>() {
+                    Ok(event) => self.shell_event(&event),
+                    Err(event) => {
+                        if let Ok(event) = event.downcast::<AppEvent>() {
+                            self.app_event(*event);
+                        }
                     }
                 }
-            },
+            }
         }
     }
 
@@ -939,12 +947,13 @@ impl Client {
                 let Ok(s) = self.surface(surface) else {
                     return;
                 };
-                let size = configured_size(*size, s.requested_size);
-                if size.0 == 0 || size.1 == 0 {
-                    return self.fault(ClientError::Protocol(
-                        "configure without a size for a surface that requested none",
-                    ));
-                }
+                let size = match &s.role {
+                    Role::Layer(layer) => match layer.configured(*size) {
+                        Ok(size) => size,
+                        Err(e) => return self.fault(e.into()),
+                    },
+                    _ => *size,
+                };
                 self.configured(surface, size);
             }
             ShellEvent::Closed(surface) => self.events.push(Event::Closed(SurfaceId(*surface))),
@@ -963,10 +972,8 @@ impl Client {
                 }
             }
             ShellEvent::Idle(idle) => self.idled = *idle,
-            ShellEvent::SessionLock { locked } => {
-                self.session.locked = *locked;
-                self.session_changed(Event::SessionLock { locked: *locked });
-            }
+            // taken by the session state in `translate`
+            ShellEvent::SessionLock { .. } => {}
             ShellEvent::LockRequested { explicit } => self.session_changed(Event::LockRequested {
                 explicit: *explicit,
             }),
@@ -984,14 +991,8 @@ impl Client {
 
     fn app_event(&mut self, event: AppEvent) {
         match event {
-            AppEvent::Appearance { dark } => {
-                self.session.dark = dark;
-                self.session_changed(Event::Appearance { dark });
-            }
-            AppEvent::DisplayOptions(options) => {
-                self.session.display = options;
-                self.session_changed(Event::DisplayOptions(options));
-            }
+            // taken by the session state in `translate`
+            AppEvent::Appearance { .. } | AppEvent::DisplayOptions(_) => {}
             AppEvent::ScrollCount { vertical, count } => self.scroll.set(vertical, count),
         }
     }

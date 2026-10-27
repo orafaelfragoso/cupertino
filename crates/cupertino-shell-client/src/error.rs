@@ -10,6 +10,8 @@ pub enum Error {
     UnknownOutput,
     /// A rectangle with a non-finite value, or an index beyond the protocol's.
     InvalidShape,
+    /// A layer surface configure left an extent at 0 that the surface did not request.
+    Unsized,
 }
 
 impl fmt::Display for Error {
@@ -18,6 +20,10 @@ impl fmt::Display for Error {
             Self::Transport(e) => e.fmt(f),
             Self::UnknownOutput => write!(f, "unknown output"),
             Self::InvalidShape => write!(f, "rectangle is not finite or index is out of range"),
+            Self::Unsized => write!(
+                f,
+                "configure without a size for a surface that requested none"
+            ),
         }
     }
 }

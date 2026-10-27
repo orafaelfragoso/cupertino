@@ -84,6 +84,7 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   title. Arrows, Return and Escape navigate. Type-ahead needs a keymap and is not available.
 - **Session.** The labels follow the appearance the server announces over `cupertino_session_v1`, read at start and redrawn on
   every change. The material follows it in the server. On `locked` the bars close every open menu and title focus.
+- **Session menu.** The system menu's entries (`SessionAction`) are not D-Bus calls of the bar: the session agent answers only the server, so the bar sends `cupertino_menu_bar_v1.session_action` and the server calls the agent. The bar still reads the agent's `Locked`, `UserName` and `Capabilities` properties itself.
 - **Extras (`extras_bus`).** Wi-Fi, battery and Bluetooth read the system bus. The Focus item reads the do-not-disturb state
   and `FocusLifetimes` of `org.cupertino.NotificationCenter1`. The process reads them again after any signal on those
   objects, when a service's name changes owner, once a minute and after every action. A service that is not running, or has

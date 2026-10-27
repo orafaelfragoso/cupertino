@@ -163,11 +163,12 @@ count towards the account's `pam_faillock` limit, as for a login. `pam_unix` che
 The process that holds the lock screen is also the session agent. It serves `org.cupertino.Login1` on the session bus, at path
 `/org/cupertino/Login1`.
 
-Every method checks its caller (`cupertino-peer`). `PowerKey` is for the server (this process's parent) and this process; the
-other methods are also for the processes the server started (the menu bar). The server's list of supervised processes is not
-passed to this process, so the rule is the parent: the processes that share the server as their parent. An anonymous,
-sandboxed (Flatpak, Snap) or unrelated caller gets `org.cupertino.Error.AnonymousCaller`, `FlatpakCaller`, `SnapCaller` or
-`UntrustedCaller`, one warning is logged and nothing happens. The properties stay readable by every caller.
+Every method checks its caller (`cupertino-peer`): only the server, this process's parent, and this process itself may call.
+The server also starts the applications, so a process with the same parent is refused. The menu bar does not call this
+interface: it sends `cupertino_menu_bar_v1.session_action` and the server calls on its behalf (it needs the menu bar role,
+the least privilege that fits). An anonymous, sandboxed (Flatpak, Snap) or unrelated caller gets
+`org.cupertino.Error.AnonymousCaller`, `FlatpakCaller`, `SnapCaller` or `UntrustedCaller`, one warning is logged and nothing
+happens. The properties stay readable by every caller.
 
 | Member | Meaning |
 |---|---|
@@ -464,7 +465,7 @@ cargo test -p cupertino-login --features app
 | Exhaustive inputs | Every sequence of up to five inputs and failures never reaches `Unlocking` or `Unlocked`. |
 | Panels and power key | Countdown, keys, button frames, clicks, the power-button panel's four buttons, its keys and its lack of a countdown; key timing at 0.2, 0.5 and 1.5 s with and without sleeping. |
 | Options | The session options, and that the greeter takes none. |
-| `org.cupertino.Login1` on a private `dbus-daemon` | `Lock`, a second process cannot take the name, `Request*` refused while locked, `Locked` announced once per change; a host process (`dbus-send`) is refused every method with `UntrustedCaller`. |
+| `org.cupertino.Login1` on a private `dbus-daemon` | `Lock`, a second process cannot take the name, `Request*` refused while locked, `Locked` announced once per change; a host process (`dbus-send`) is refused every method with `UntrustedCaller`, and a process with the login process's parent (a stand-in for an application the server started) is refused `Sleep` while the parent is not. |
 | Quit sequence, low battery, autostart | One application at a time, the 0.1 s pause, the 45 s interrupt, Force Quit, the interrupt panel; the notification posted, replaced and withdrawn; the autostart parser (`Hidden`, `OnlyShowIn`, `NotShowIn`, `X-GNOME-Autostart-enabled`, `TryExec`, `Exec` quoting, shadowing, order, the once-per-session marker). |
 
 Not covered by a test:

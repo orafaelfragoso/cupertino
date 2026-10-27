@@ -30,6 +30,10 @@ cargo run -p cupertino-layers
 - Run the compositor nested: `cargo run -p cupertino-server -- --winit --spawn foot`, with `XDG_DATA_DIRS="$PWD/crates/cupertino-files/data:$PWD/crates/cupertino-settings/data:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"` so the menu bar and dock find the apps' desktop entries (name, icon). Headless screenshots: `crates/cupertino-server/scripts/capture.sh out.png [server flags]` (fixture home and XDG directories, cleared environment, your asset pack kept); never capture with your real `HOME`.
 - Tests run with the built-in font and never depend on a pack installed in your home directory; set `CUPERTINO_ASSET_DIR` only to try another pack.
 
+## Scripted edits
+
+Change files with a script only through `python3 ci/replace.py [--regex] [--count N] OLD NEW FILE...`. It exits 1, names the file and writes nothing when a file does not hold OLD (with `--count`, exactly N times), so an edit whose pattern drifted cannot pass silently. It prints the changed lines; read them back. Its tests: `python3 -I ci/test_replace.py`.
+
 ## Worktrees and disk
 
 - Work in your own git worktree under `~/Development/cupertino-worktrees/<name>`, on its own branch. Do not work in the main checkout. Do not push or merge unless asked.

@@ -41,7 +41,7 @@ From a text console (switch with `Ctrl+Alt+F3`), a checkout can start the full d
 ./run-cupertino.sh
 ```
 
-The script refuses to run inside a desktop session (`WAYLAND_DISPLAY` or `DISPLAY` set). It builds the workspace's release binaries (`cargo build --release --workspace --all-features --bins`), writes a shell process list to `$XDG_RUNTIME_DIR/cupertino-compositor.json`, starts a fresh session bus with `dbus-run-session`, and runs `cupertino-server --udev` with Files and Settings. It changes nothing on the system: the session manager and the login screen are not used. `XDG_RUNTIME_DIR` must be set, which a console login does.
+The script refuses to run inside a desktop session (`WAYLAND_DISPLAY` or `DISPLAY` set). It builds the workspace's release binaries (`cargo build --release --workspace --all-features --bins`), writes a shell process list to `$XDG_RUNTIME_DIR/cupertino-compositor.json`, starts a fresh session bus with `dbus-run-session`, and runs `cupertino-server --udev` with Files and Settings. It installs nothing and enables no service: the session manager and the login screen are not used. `XDG_RUNTIME_DIR` must be set, which a console login does.
 
 - `Ctrl+Alt+Backspace` quits.
 - `Ctrl+Alt+F<n>` returns to the console session you came from.

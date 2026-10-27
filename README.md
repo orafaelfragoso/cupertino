@@ -18,7 +18,7 @@ cargo run --release -p cupertino-server -- --winit --spawn foot
 
 You need a current stable Rust toolchain, OpenGL ES drivers (Mesa) and a terminal such as `foot`. Other terminals work: `Super+Return` starts the first one it finds among `foot`, `alacritty`, `kitty`, `wezterm` and `xterm`. `Ctrl+Alt+Backspace` quits. See [Building and running](docs/src/building.md) for the TTY session and the other options.
 
-Or start the full desktop on a text console (`Ctrl+Alt+F3`) with `./run-cupertino.sh`. It builds the release binaries, starts the compositor and the shell processes with a fresh session bus, and writes `~/cupertino-tty.log`; it changes nothing on the system. `Ctrl+Alt+Backspace` quits and `Ctrl+Alt+F<n>` returns to the console you came from. The TTY backend has run in a virtual machine, not yet on real hardware.
+Or start the full desktop on a text console (`Ctrl+Alt+F3`) with `./run-cupertino.sh`. It builds the release binaries, starts the compositor and the shell processes with a fresh session bus, and writes `~/cupertino-tty.log`; it installs nothing and enables no service. `Ctrl+Alt+Backspace` quits and `Ctrl+Alt+F<n>` returns to the console you came from. The TTY backend has run in a virtual machine, not yet on real hardware.
 
 Known problems and how to report them: [Trying Cupertino](docs/src/trying.md).
 

@@ -4,7 +4,7 @@ Short rules for any agent (and any person) who edits this repository. Details li
 
 ## Rules
 
-1. **Licence.** The project is `GPL-3.0-or-later`. Contributions need a signed CLA.
+1. **Licence.** The project is `GPL-3.0-or-later`; `cupertino-wayland-client` and the crates in its normal dependency closure are `MPL-2.0` (see CONTRIBUTING.md). Contributions need a signed CLA.
 2. **Plain design values.** A constant is a named design value with a comment about what it controls.
 3. **Shader and physics math stays as it is.** Change it only with a maintainer's agreement and a test that shows why.
 4. **Layers.** A crate depends only on layers below it (`cargo run -p cupertino-layers` checks). Only `cupertino-server` and `cupertino-seat` (which implements Smithay's session trait) depend on Smithay. Model crates are pure logic, tested without a display.

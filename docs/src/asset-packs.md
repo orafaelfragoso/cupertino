@@ -81,4 +81,4 @@ A pack uses the logical names the shell looks up: 26 raster icon names (such as 
 
 ## Licences
 
-The pack's content has its own licence; it is separate from the licence of the source code (`GPL-3.0-or-later`). Do not add third-party assets to this repository; distribute them as a pack.
+The pack's content has its own licence; it is separate from the licence of the source code (`GPL-3.0-or-later`, or `MPL-2.0` for the `cupertino-assets` crate). Do not add third-party assets to this repository; distribute them as a pack.

@@ -3,16 +3,17 @@ name = "cupertino-protocols"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Private Wayland protocols between the Cupertino server and its shell processes, with generated client and server bindings"
+description = "Private Wayland protocols between the Cupertino server and its shell processes, with generated client and server bindings; re-exports the public ones"
 
 [package.metadata.cupertino]
 layer = "render"
 
 [features]
-client = ["dep:wayland-client"]
-server = ["dep:wayland-server"]
+client = ["dep:wayland-client", "cupertino-app-protocols/client"]
+server = ["dep:wayland-server", "cupertino-app-protocols/server"]
 
 [dependencies]
+cupertino-app-protocols = { path = "../cupertino-app-protocols" }
 bitflags = "2"
 wayland-backend = "0.3"
 wayland-scanner = "0.31"

@@ -11,6 +11,11 @@ impl OutputId {
     pub fn registry_name(self) -> u32 {
         self.0
     }
+
+    /// The output whose `wl_output` global has the registry name `name`, as another connection reported it.
+    pub fn from_registry_name(name: u32) -> OutputId {
+        OutputId(name)
+    }
 }
 
 /// Where an output sits in the compositor's global space, in logical points (`zxdg_output_v1`).

@@ -1,0 +1,20 @@
+[package]
+name = "cupertino-app-protocols"
+version = "0.1.0"
+edition.workspace = true
+license = "MPL-2.0"
+description = "Public Wayland protocols of the Cupertino server that any client may bind, with generated client and server bindings"
+
+[package.metadata.cupertino]
+layer = "render"
+
+[features]
+client = ["dep:wayland-client"]
+server = ["dep:wayland-server"]
+
+[dependencies]
+bitflags = "2"
+wayland-backend = "0.3"
+wayland-scanner = "0.31"
+wayland-client = { version = "0.31", optional = true }
+wayland-server = { version = "0.31", optional = true }

@@ -1,6 +1,6 @@
 // cupertino-layers --graph current
-// 51 crates, 161 internal dependencies
-// per layer: foundation 10, models 9, platform 7, render 7, core 1, shell 9, services 4, apps 2, tools 2
+// 55 crates, 174 internal dependencies
+// per layer: foundation 10, models 9, platform 7, render 11, core 1, shell 9, services 4, apps 2, tools 2
 // forbidden edges: none
 // denied paths ui -> core, shell, services: none
 digraph "current" {
@@ -41,13 +41,17 @@ digraph "current" {
     "cupertino-seat";
   }
   subgraph "cluster_render" {
-    label="render (7)";
+    label="render (11)";
+    "cupertino-app-protocols";
     "cupertino-client";
     "cupertino-cursor";
     "cupertino-decorations";
     "cupertino-glass";
     "cupertino-icons";
+    "cupertino-protocol-app";
     "cupertino-protocols";
+    "cupertino-shell-client";
+    "cupertino-ui-wayland";
     "cupertino-wayland-client";
   }
   subgraph "cluster_core" {
@@ -87,8 +91,10 @@ digraph "current" {
   "cupertino-btd" -> "cupertino-seat";
   "cupertino-client" -> "cupertino-defaults";
   "cupertino-client" -> "cupertino-geometry";
-  "cupertino-client" -> "cupertino-protocols";
+  "cupertino-client" -> "cupertino-protocol-app";
   "cupertino-client" -> "cupertino-protocols" [label="dev"];
+  "cupertino-client" -> "cupertino-shell-client";
+  "cupertino-client" -> "cupertino-ui-wayland";
   "cupertino-client" -> "cupertino-wayland-client";
   "cupertino-controlcenter" -> "cupertino-alsa";
   "cupertino-controlcenter" -> "cupertino-assets";
@@ -182,6 +188,11 @@ digraph "current" {
   "cupertino-powerd" -> "cupertino-devices";
   "cupertino-powerd" -> "cupertino-evdev";
   "cupertino-powerd" -> "cupertino-seat";
+  "cupertino-protocol-app" -> "cupertino-app-protocols";
+  "cupertino-protocol-app" -> "cupertino-defaults";
+  "cupertino-protocol-app" -> "cupertino-geometry";
+  "cupertino-protocol-app" -> "cupertino-wayland-client";
+  "cupertino-protocols" -> "cupertino-app-protocols";
   "cupertino-screenshot" -> "cupertino-animation";
   "cupertino-screenshot" -> "cupertino-assets";
   "cupertino-screenshot" -> "cupertino-client";
@@ -229,12 +240,18 @@ digraph "current" {
   "cupertino-settings" -> "cupertino-theme";
   "cupertino-settings" -> "cupertino-thumbnails";
   "cupertino-settings" -> "cupertino-typeahead";
+  "cupertino-shell-client" -> "cupertino-geometry";
+  "cupertino-shell-client" -> "cupertino-protocol-app";
+  "cupertino-shell-client" -> "cupertino-protocols";
+  "cupertino-shell-client" -> "cupertino-wayland-client";
   "cupertino-stage" -> "cupertino-animation";
   "cupertino-stage" -> "cupertino-wm";
   "cupertino-testclient" -> "cupertino-wayland-client";
   "cupertino-text-field" -> "cupertino-defaults";
   "cupertino-text-field" -> "cupertino-keyboard";
   "cupertino-theme" -> "cupertino-animation";
+  "cupertino-ui-wayland" -> "cupertino-geometry";
+  "cupertino-ui-wayland" -> "cupertino-wayland-client";
   "cupertino-wayland-client" -> "cupertino-geometry";
   "cupertino-wayland-client" -> "xkbcommon";
   "cupertino-windowmanager" -> "cupertino-defaults";

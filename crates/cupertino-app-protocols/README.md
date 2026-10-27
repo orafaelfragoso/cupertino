@@ -1,0 +1,33 @@
+# cupertino-app-protocols
+
+The public Wayland protocols of the Cupertino server, which any client may bind, with generated bindings:
+`protocols/cupertino-app-effects-v1.xml` and `protocols/cupertino-scroll-v1.xml`. MPL-2.0, so applications and
+toolkits link it without the private protocols; the XML itself is `MIT OR Apache-2.0`. No workspace dependencies.
+
+## Public API
+
+| Interface | Role |
+|---|---|
+| `cupertino_app_effects_v1` | the public protocol (`protocols/cupertino-app-effects-v1.xml`, generated in `client::app_effects` and `server::app_effects`), offered to every client: `get_backdrop(surface)` creates a `cupertino_backdrop_v1`, `set_titlebar_style(surface, standard \| unified)` (error `window` for a surface that is not an unmapped application window), `get_appearance` creates a `cupertino_appearance_v1`. Every request names a surface of the client that sends it |
+| `cupertino_backdrop_v1` | a server-rendered material below a surface: `set_material` (recipe name), `set_shape`, `set_alpha`; a surface holds at most 64 and a client 128, the next `get_backdrop` is the error `too_many_backdrops` of `cupertino_app_effects_v1` (a destroyed backdrop gives its place back) |
+| `cupertino_appearance_v1` | the appearance observer of any client: `appearance` (dark or light) and `display_options` (the bitfield of reduce motion, reduce transparency, increase contrast and differentiate without colour), sent on creation and on every change; no lock state |
+| `cupertino_scroll_v1` | the scroll count (`protocols/cupertino-scroll-v1.xml`): the global's `get_scroll(wl_pointer)` creates a `cupertino_pointer_scroll_v1`, whose `scroll_count(axis, count)` event arrives after the `wl_pointer.axis` of that axis and before the `wl_pointer.frame`. The axis is the `wl_pointer.axis` enum; wheels send no event (a count of 0). Generated in `client::scroll` and `server::scroll` |
+
+## How it works
+
+The crate has no code of its own. `build.rs` reruns when the XML changes, because the scanner macros read it untracked.
+`cupertino-protocols` re-exports both modules, so `cupertino-server` names them as before.
+
+| Feature | Generates |
+|---|---|
+| `client` | `cupertino_app_protocols::client::{app_effects, scroll}`, used by `cupertino-protocol-app` |
+| `server` | `cupertino_app_protocols::server::{app_effects, scroll}`, used by `cupertino-server` through `cupertino-protocols` |
+
+## Tests
+
+The crate has no tests of its own. `tests/app_effects_v1.rs` and `tests/scroll_v1.rs` in `cupertino-server` and
+`tests/protocol_flow.rs` in `cupertino-client` exercise the bindings:
+
+```
+cargo build -p cupertino-app-protocols --features client,server
+```

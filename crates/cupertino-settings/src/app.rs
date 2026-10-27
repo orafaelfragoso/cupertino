@@ -19,7 +19,7 @@ use cupertino_settings::agent::{Agent, AgentEvent};
 use cupertino_settings::controls::{self, Control, Press, Value};
 use cupertino_settings::form::{self, RowSpec, SectionLayout, SectionSpec};
 use cupertino_settings::history::History;
-use cupertino_settings::inflight::InFlight;
+use cupertino_settings::inflight::Reads;
 use cupertino_settings::instance;
 use cupertino_settings::keys::{self, Action, Focus, Mods, SearchKey};
 use cupertino_settings::live::{Live, Pictures, Reading};
@@ -136,10 +136,9 @@ struct App {
     assets: Assets,
     /// The pictures whose thumbnail is asked for, so each is made once.
     thumbnails_asked: std::collections::HashSet<std::path::PathBuf>,
-    /// The listings running on threads: one that is running is not started again.
-    listings: InFlight<ListingKey>,
-    /// The chooser's requests waiting for a running read of their folder to end.
-    queued_requests: std::collections::HashMap<ListingKey, cupertino_filepicker::Request>,
+    /// The listings running on threads: one that is running is not started again, and one asked for meanwhile is read
+    /// after it. The chooser's listings carry their request.
+    listings: Reads<ListingKey, Option<cupertino_filepicker::Request>>,
     /// The open pairing question's answer, sent when its sheet decides.
     agent_answer: Option<(u64, async_channel::Sender<Answer>)>,
     /// Whether this window's pairing agent is registered.
@@ -315,8 +314,7 @@ pub fn run(pane: PaneId) -> Result<()> {
         notify,
         assets,
         thumbnails_asked: std::collections::HashSet::new(),
-        listings: InFlight::default(),
-        queued_requests: std::collections::HashMap::new(),
+        listings: Reads::default(),
         agent_answer: None,
         agent_registered: false,
         _files: files,
@@ -1375,22 +1373,22 @@ impl App {
             .collect();
         self.ask_thumbnails(current);
         // each listing on a thread of its own: a folder on a hung mount shows "Loading…" and holds nothing else up
-        self.start_listing(ListingKey::Packs);
+        self.start_listing(ListingKey::Packs, None);
         for folder in folders {
-            self.start_listing(ListingKey::Pictures(folder));
+            self.start_listing(ListingKey::Pictures(folder), None);
         }
     }
 
     /// Start the read of `key` on a thread unless one is running (a folder on a dead mount keeps one thread, however
-    /// often it is visited); it is read once more when the running one is over if it was asked for meanwhile.
-    fn start_listing(&mut self, key: ListingKey) {
-        if self.listings.start(key.clone()) {
-            self.run_listing(key);
+    /// often it is visited); it is read once more when the running one is answered if it was asked for meanwhile.
+    fn start_listing(&mut self, key: ListingKey, request: Option<cupertino_filepicker::Request>) {
+        if let Some(request) = self.listings.ask(key.clone(), request) {
+            self.run_listing(key, request);
         }
     }
 
     /// Run the read of `key` on a thread; its answer comes back as a [`Background`] event.
-    fn run_listing(&mut self, key: ListingKey) {
+    fn run_listing(&mut self, key: ListingKey, request: Option<cupertino_filepicker::Request>) {
         let notify = self.notify.clone();
         let job: Box<dyn FnOnce() -> Background + Send> = match key.clone() {
             ListingKey::Packs => {
@@ -1405,8 +1403,7 @@ impl App {
                 key,
             }),
             ListingKey::Chooser(..) => {
-                let Some(request) = self.queued_requests.remove(&key) else {
-                    self.listings.finish(&key);
+                let Some(request) = request else {
                     return;
                 };
                 Box::new(move || Background::Listing(request.run()))
@@ -1460,10 +1457,7 @@ impl App {
         };
         let (dir, hidden, mode) = request.key();
         let key = ListingKey::Chooser(dir, hidden, mode);
-        // a folder being read already (a dead mount visited again) is not read twice: the running read's answer serves
-        // this request, and the request waits to be read once more after it
-        self.queued_requests.insert(key.clone(), request);
-        self.start_listing(key);
+        self.start_listing(key, Some(request));
     }
 
     /// Store the typed resolution of the mouse `key`; the server applies the file.
@@ -1494,8 +1488,8 @@ impl App {
                 }
             }
             Background::Pictures { key, files } => {
-                if self.listings.finish(&key) {
-                    self.run_listing(key.clone());
+                if let Some(request) = self.listings.answered(&key) {
+                    self.run_listing(key.clone(), request);
                 }
                 let images: Vec<std::path::PathBuf> =
                     files.iter().map(|f| f.light.clone()).collect();
@@ -1522,8 +1516,10 @@ impl App {
             }
             Background::Listing(listing) => {
                 let (dir, hidden, mode) = listing.key();
-                self.listings
-                    .finish(&ListingKey::Chooser(dir, hidden, mode));
+                let key = ListingKey::Chooser(dir, hidden, mode);
+                if let Some(request) = self.listings.answered(&key) {
+                    self.run_listing(key, request);
+                }
                 if let Some(sheet) = self.sheet.as_mut() {
                     sheet.apply_listing(listing);
                     self.client.request_redraw(self.window)?;

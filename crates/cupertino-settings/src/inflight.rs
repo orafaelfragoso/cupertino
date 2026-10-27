@@ -1,7 +1,7 @@
 //! Reads that are running on threads: a read that is already running is not started again, so a folder on a mount that
 //! never answers costs one blocked thread, not one for every visit.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
 /// The keys of the reads in flight, and those asked for again while one was running.
@@ -44,6 +44,46 @@ impl<K: Eq + Hash + Clone> InFlight<K> {
     }
 }
 
+/// The reads of a set of keys: one runs at a time per key; one asked for meanwhile waits, only the latest of them, and
+/// runs once the first is answered.
+#[derive(Debug)]
+pub struct Reads<K, J> {
+    in_flight: InFlight<K>,
+    waiting: HashMap<K, J>,
+}
+
+impl<K, J> Default for Reads<K, J> {
+    fn default() -> Self {
+        Reads {
+            in_flight: InFlight::default(),
+            waiting: HashMap::new(),
+        }
+    }
+}
+
+impl<K: Eq + Hash + Clone, J> Reads<K, J> {
+    /// A read of `key` is wanted, with `job` to run it. `Some(job)` when it may start now; `None` when one is running
+    /// already: `job` waits for its answer (replacing an earlier waiting one).
+    pub fn ask(&mut self, key: K, job: J) -> Option<J> {
+        if self.in_flight.start(key.clone()) {
+            Some(job)
+        } else {
+            self.waiting.insert(key, job);
+            None
+        }
+    }
+
+    /// The read of `key` was answered. `Some(job)` when another was asked for meanwhile: start it now (the key stays
+    /// in flight for it).
+    pub fn answered(&mut self, key: &K) -> Option<J> {
+        if self.in_flight.finish(key) {
+            self.waiting.remove(key)
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,6 +112,45 @@ mod tests {
         assert!(
             reads.start("/mnt/dead"),
             "after the last answer a new read may start"
+        );
+    }
+
+    #[test]
+    fn a_read_asked_for_while_one_runs_waits_and_only_the_latest_runs_after_the_answer() {
+        let mut reads: Reads<&str, u32> = Reads::default();
+        assert_eq!(
+            reads.ask("/mnt/dead", 1),
+            Some(1),
+            "nothing runs: start at once"
+        );
+        assert_eq!(reads.ask("/mnt/dead", 2), None);
+        assert_eq!(
+            reads.ask("/mnt/dead", 3),
+            None,
+            "the latest request replaces the waiting one"
+        );
+        assert_eq!(
+            reads.ask("/home/u", 10),
+            Some(10),
+            "another folder is its own read"
+        );
+        assert_eq!(reads.answered(&"/home/u"), None, "nobody waited");
+        assert_eq!(
+            reads.answered(&"/mnt/dead"),
+            Some(3),
+            "the waiting job starts"
+        );
+        assert_eq!(reads.ask("/mnt/dead", 4), None, "that read is running now");
+        assert_eq!(reads.answered(&"/mnt/dead"), Some(4));
+        assert_eq!(
+            reads.answered(&"/mnt/dead"),
+            None,
+            "nothing is waiting: it is over"
+        );
+        assert_eq!(
+            reads.ask("/mnt/dead", 5),
+            Some(5),
+            "after the last answer a new read starts"
         );
     }
 }

@@ -31,7 +31,10 @@ jobs:
       - run: python3 -I ci/test_gate.py
       - run: python3 -I ci/test_replace.py
       - run: python3 -I packaging/test_release.py
+      - run: python3 -I ci/test_contracts.py
       - run: python3 -I ci/gate.py .
+      # The Wayland globals are compared with the registry by crates/cupertino-server/tests/contracts.rs (nextest below).
+      - run: python3 -I ci/contracts.py .
 
   # The book must build, and its internal links and anchors must resolve. mdBook and lychee are
   # pinned, and both release archives are checked against the published sha256.
@@ -150,6 +153,9 @@ jobs:
           fallback: none
       # nextest enforces the per-test time limit in .config/nextest.toml; it does not run doctests.
       - name: Tests
+        env:
+          # A runner without an EGL device fails crates/cupertino-server/tests/contracts.rs instead of skipping it.
+          CUPERTINO_EGL_REQUIRED: "1"
         run: cargo nextest run --workspace --all-features --no-fail-fast
       - name: Doctests
         run: cargo test --workspace --all-features --doc

@@ -1527,6 +1527,16 @@ fn spawn_server_reporting(
     stream: UnixStream,
     report_shell_bind: bool,
 ) -> (Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
+    spawn_server_offering(stream, report_shell_bind, true)
+}
+
+/// [`spawn_server_reporting`]; `layer_shell` is whether the server offers `zwlr_layer_shell_v1` (it does not to a
+/// sandboxed application).
+fn spawn_server_offering(
+    stream: UnixStream,
+    report_shell_bind: bool,
+    layer_shell: bool,
+) -> (Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
     let (control_tx, control_rx) = channel::<Control>();
     let (committed_tx, committed_rx) = channel();
     let (seen_tx, seen_rx) = channel();
@@ -1537,7 +1547,9 @@ fn spawn_server_reporting(
         dh.create_global::<Mock, WlShm, _>(1, ());
         dh.create_global::<Mock, WlOutput, _>(4, ());
         dh.create_global::<Mock, WlSeat, _>(7, ());
-        dh.create_global::<Mock, ZwlrLayerShellV1, _>(4, ());
+        if layer_shell {
+            dh.create_global::<Mock, ZwlrLayerShellV1, _>(4, ());
+        }
         dh.create_global::<Mock, CupertinoShellV1, _>(9, ());
         dh.create_global::<Mock, CupertinoAppEffectsV1, _>(1, ());
         dh.create_global::<Mock, XdgActivationV1, _>(1, ());
@@ -2317,6 +2329,42 @@ fn observe_reads_the_session_state_before_it_returns() {
     assert!(!rest
         .iter()
         .any(|e| matches!(e, cupertino_wayland_client::Event::Extension(_))));
+}
+
+/// A server that does not offer the layer shell (it does not to a sandboxed application): an application connects and
+/// draws a window; only a layer surface fails, naming the global.
+#[test]
+fn an_application_connects_without_the_layer_shell() {
+    let (client_stream, server_stream) = UnixStream::pair().unwrap();
+    let (_control, _committed, _seen) = spawn_server_offering(server_stream, false, false);
+    let mut client =
+        Client::from_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
+    let panel = client.layer_surface(&LayerSurfaceConfig {
+        namespace: "panel".into(),
+        output: None,
+        layer: Layer::Top,
+        anchor: Anchor::Top,
+        size: (100, 20),
+        margin: Margin::default(),
+        exclusive_zone: 0,
+        keyboard: KeyboardInteractivity::None,
+    });
+    assert!(
+        matches!(
+            panel,
+            Err(ClientError::MissingGlobal("zwlr_layer_shell_v1"))
+        ),
+        "{panel:?}"
+    );
+    assert!(client
+        .toplevel(&ToplevelConfig {
+            title: "window".into(),
+            app_id: "org.example.App".into(),
+            size: (200, 100),
+            min_size: (0, 0),
+            titlebar: TitlebarStyle::Unified,
+        })
+        .is_ok());
 }
 
 #[test]

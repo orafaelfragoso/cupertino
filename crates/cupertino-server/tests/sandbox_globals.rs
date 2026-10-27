@@ -48,6 +48,7 @@ const DATA_CONTROL: [&str; 2] = [
     "ext_data_control_manager_v1",
 ];
 const DISPLAY: [&str; 2] = ["zwlr_output_manager_v1", "zwlr_output_power_manager_v1"];
+const SHELL_SURFACES: [&str; 2] = ["zwlr_layer_shell_v1", "ext_foreign_toplevel_list_v1"];
 const SECURITY_CONTEXT: &str = "wp_security_context_manager_v1";
 
 struct Harness {
@@ -359,7 +360,9 @@ fn a_plain_client_sees_the_three_globals_and_a_sandboxed_one_none_of_them() {
     });
     let plain = h.finish(plain);
     assert!(
-        has_all(&plain, &DATA_CONTROL) && has_all(&plain, &DISPLAY),
+        has_all(&plain, &DATA_CONTROL)
+            && has_all(&plain, &DISPLAY)
+            && has_all(&plain, &SHELL_SURFACES),
         "a client outside a sandbox sees the clipboard managers and the display globals: {plain:?}"
     );
     assert!(has_all(&plain, &[SECURITY_CONTEXT]));
@@ -368,8 +371,10 @@ fn a_plain_client_sees_the_three_globals_and_a_sandboxed_one_none_of_them() {
     let path = dir.path().to_path_buf();
     let sandboxed = h.finish(std::thread::spawn(move || sandboxed_names(socket, path)));
     assert!(
-        has_none(&sandboxed, &DATA_CONTROL) && has_none(&sandboxed, &DISPLAY),
-        "a sandboxed client sees neither the clipboard managers nor the display globals: {sandboxed:?}"
+        has_none(&sandboxed, &DATA_CONTROL)
+            && has_none(&sandboxed, &DISPLAY)
+            && has_none(&sandboxed, &SHELL_SURFACES),
+        "a sandboxed client sees neither the clipboard managers, the display globals nor the layer shell and the toplevel list: {sandboxed:?}"
     );
     assert!(
         has_none(&sandboxed, &[SECURITY_CONTEXT]),

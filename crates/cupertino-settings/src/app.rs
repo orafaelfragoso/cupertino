@@ -28,7 +28,7 @@ use cupertino_settings::paint::{
 use cupertino_settings::panes::{self, Call, ControlId, Effect, Section, Session};
 use cupertino_settings::search::{popup, SearchField};
 use cupertino_settings::services::{Services, SESSION_NAME, SESSION_PATH};
-use cupertino_settings::settings::{File, Paths, Settings};
+use cupertino_settings::settings::{Paths, Settings};
 use cupertino_settings::sheet::{Answer, Outcome, Sheet, SheetKey};
 use cupertino_settings::sidebar::{self, RowSize};
 use cupertino_settings::window::{self, metrics, Hit, WindowLayout};
@@ -1250,14 +1250,7 @@ impl App {
 
     /// Store the typed resolution of the mouse `key`; the server applies the file.
     fn set_mouse_dpi(&mut self, key: &str, dpi: u32) -> std::result::Result<(), String> {
-        let before = self.settings.clone();
-        self.settings.compositor.set_mouse_dpi(key, Some(dpi))?;
-        self.settings
-            .store(&self.paths, File::Compositor)
-            .map_err(|e| {
-                self.settings = before;
-                e.to_string()
-            })
+        self.settings.set_mouse_dpi(&self.paths, key, dpi)
     }
 
     /// Something from a bus thread: a pane to show, a question of the pairing agent, the end of a pairing.

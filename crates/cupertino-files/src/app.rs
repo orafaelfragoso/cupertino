@@ -1230,7 +1230,7 @@ impl App {
         self.menu_outcome(outcome, changed)
     }
 
-    /// Arrow keys, Return, Space, Escape and Super+. while a menu is open; every other key is swallowed.
+    /// Arrow keys, Return, Space, Escape, Super+. and typed text while a menu is open; every other key is swallowed.
     fn menu_key(&mut self, code: u32, mods: KeyModifiers, character: Option<char>) -> Result<()> {
         let key = match code {
             key::UP => MenuKey::Nav(Nav::Up),
@@ -1242,12 +1242,16 @@ impl App {
             _ if mods.logo && !mods.ctrl && !mods.alt && character == Some('.') => MenuKey::Cancel,
             _ if mods.logo || mods.ctrl || mods.alt => return Ok(()),
             _ if character == Some(' ') => MenuKey::Space,
-            _ => return Ok(()),
+            _ => match character.filter(|c| !c.is_control()) {
+                Some(c) => MenuKey::Type(c),
+                None => return Ok(()),
+            },
         };
+        let now = self.now();
         let outcome = self
             .menu
             .as_mut()
-            .map_or(Outcome::Nothing, |open| open.menu.press_key(key));
+            .map_or(Outcome::Nothing, |open| open.menu.press_key(key, now));
         self.menu_outcome(outcome, false)
     }
 

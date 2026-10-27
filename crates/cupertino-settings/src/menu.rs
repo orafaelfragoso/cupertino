@@ -2,10 +2,9 @@
 //! Return and Space choose, Escape and Super+. close without choosing, and typing jumps to the next item whose title
 //! starts with the typed text. Every other key is swallowed so none reaches the pane underneath.
 
-use crate::keys::{code, Mods};
+pub use cupertino_typeahead::TypeAhead;
 
-/// How long a pause ends the typed text of type-to-select (seconds).
-const TYPE_AHEAD_RESET: f64 = 1.0;
+use crate::keys::{code, Mods};
 
 /// What the window does with a key while a menu is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,27 +17,6 @@ pub enum Outcome {
     Cancel,
     /// The key does nothing, and goes nowhere.
     Ignore,
-}
-
-/// The text typed so far to find an item, and when its last character came.
-#[derive(Debug, Default)]
-pub struct TypeAhead {
-    text: String,
-    at: f64,
-}
-
-impl TypeAhead {
-    fn push(&mut self, c: char, now: f64) {
-        if now - self.at > TYPE_AHEAD_RESET {
-            self.text.clear();
-        }
-        self.at = now;
-        self.text.extend(c.to_lowercase());
-    }
-
-    fn typing(&self, now: f64) -> bool {
-        !self.text.is_empty() && now - self.at <= TYPE_AHEAD_RESET
-    }
 }
 
 /// The result of `key` with `highlighted` (the item the keyboard or pointer is on, else the selected one) among
@@ -76,8 +54,8 @@ pub fn press(
         _ => match character {
             Some(' ') if !type_ahead.typing(now) => Outcome::Choose(highlighted),
             Some(c) if !c.is_control() => {
-                type_ahead.push(c, now);
-                match find(choices, highlighted, &type_ahead.text) {
+                let titles: Vec<Option<&str>> = choices.iter().map(|c| Some(c.as_str())).collect();
+                match type_ahead.find(c, now, highlighted, &titles) {
                     Some(i) => Outcome::Highlight(i),
                     None => Outcome::Ignore,
                 }
@@ -89,19 +67,6 @@ pub fn press(
 
 fn cancels(key: u32, mods: Mods, character: Option<char>) -> bool {
     key == code::ESCAPE || (mods.logo && !mods.ctrl && !mods.alt && character == Some('.'))
-}
-
-/// The first item from `from` on, wrapping, whose title starts with `text`; one typed character looks after the
-/// highlighted item, so repeating it steps through the items that share it.
-fn find(choices: &[String], from: usize, text: &str) -> Option<usize> {
-    let start = if text.chars().count() == 1 {
-        from + 1
-    } else {
-        from
-    };
-    (0..choices.len())
-        .map(|i| (start + i) % choices.len())
-        .find(|i| choices[*i].to_lowercase().starts_with(text))
 }
 
 #[cfg(test)]

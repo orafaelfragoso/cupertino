@@ -135,6 +135,8 @@ struct App {
     assets: Assets,
     /// The pictures whose thumbnail is asked for, so each is made once.
     thumbnails_asked: std::collections::HashSet<std::path::PathBuf>,
+    /// The newest list of the Wallpaper pane's pictures asked for; an older answer is dropped.
+    pictures_generation: u64,
     /// The open pairing question's answer, sent when its sheet decides.
     agent_answer: Option<(u64, async_channel::Sender<Answer>)>,
     /// Whether this window's pairing agent is registered.
@@ -153,6 +155,14 @@ enum Background {
     Paired(std::result::Result<(), String>),
     /// A settings file changed on disk.
     Files(WatchEvent),
+    /// A listing of the Wallpaper pane's pictures: group 0 the packs', then one per added folder.
+    Pictures {
+        generation: u64,
+        group: usize,
+        files: Vec<cupertino_assets::WallpaperFile>,
+    },
+    /// A folder the chooser asked for was read.
+    Listing(cupertino_filepicker::Listing),
     /// The thumbnail of a picture of the Wallpaper pane is made.
     Thumbnail {
         image: std::path::PathBuf,
@@ -295,6 +305,7 @@ pub fn run(pane: PaneId) -> Result<()> {
         notify,
         assets,
         thumbnails_asked: std::collections::HashSet::new(),
+        pictures_generation: 0,
         agent_answer: None,
         agent_registered: false,
         _files: files,
@@ -1227,7 +1238,8 @@ impl App {
                         .or(home)
                         .unwrap_or_else(|| std::path::PathBuf::from("/"));
                     let mode = if folder { Mode::Folder } else { Mode::Photo };
-                    self.sheet = Some(Sheet::picker(&start, mode));
+                    self.sheet = Some(Sheet::picker_pending(&start, mode));
+                    self.drive_picker();
                     Ok(())
                 }
                 Effect::AskResolution { key, name } => {
@@ -1329,43 +1341,65 @@ impl App {
 
     /// List the pictures of the packs and of the added folders, and start the thumbnails of those without one.
     fn load_pictures(&mut self) {
-        let folders = self
+        self.pictures_generation += 1;
+        let generation = self.pictures_generation;
+        let folders: Vec<std::path::PathBuf> = self
             .settings
             .compositor
             .wallpaper_folders
             .iter()
             .flatten()
-            .map(|folder| {
-                let path = std::path::PathBuf::from(folder);
-                let pictures = cupertino_assets::pictures_in(&path);
-                (path, pictures)
-            })
+            .map(std::path::PathBuf::from)
             .collect();
         self.live.pictures = Pictures {
-            bundled: self.assets.wallpaper_files(),
-            folders,
+            bundled: Vec::new(),
+            folders: folders.iter().map(|f| (f.clone(), Vec::new())).collect(),
             default: self.assets.wallpaper_path(false),
+            loading: (0..=folders.len()).collect(),
         };
-        let wanted: Vec<std::path::PathBuf> = self
-            .live
-            .pictures
-            .bundled
+        let current: Vec<std::path::PathBuf> = self
+            .settings
+            .compositor
+            .wallpaper
             .iter()
-            .chain(
-                self.live
-                    .pictures
-                    .folders
-                    .iter()
-                    .flat_map(|(_, files)| files),
-            )
-            .map(|f| f.light.clone())
-            .chain(
-                self.settings
-                    .compositor
-                    .wallpaper
-                    .iter()
-                    .map(std::path::PathBuf::from),
-            )
+            .map(std::path::PathBuf::from)
+            .collect();
+        self.ask_thumbnails(current);
+        // each listing on a thread of its own: a folder on a hung mount shows "Loading…" and holds nothing else up
+        let assets = self.assets.clone();
+        self.list_pictures(generation, 0, move || assets.wallpaper_files());
+        for (i, folder) in folders.into_iter().enumerate() {
+            self.list_pictures(generation, i + 1, move || {
+                cupertino_assets::pictures_in(&folder)
+            });
+        }
+    }
+
+    fn list_pictures(
+        &mut self,
+        generation: u64,
+        group: usize,
+        read: impl FnOnce() -> Vec<cupertino_assets::WallpaperFile> + Send + 'static,
+    ) {
+        let notify = self.notify.clone();
+        let spawned = std::thread::Builder::new()
+            .name("wallpaper-listing".into())
+            .spawn(move || {
+                notify(Background::Pictures {
+                    generation,
+                    group,
+                    files: read(),
+                })
+            });
+        if let Err(e) = spawned {
+            eprintln!("cupertino-settings: cannot list the pictures: {e}");
+        }
+    }
+
+    /// Make the thumbnails of `images` that have none and were not asked for yet, one after the other on a thread.
+    fn ask_thumbnails(&mut self, images: Vec<std::path::PathBuf>) {
+        let wanted: Vec<std::path::PathBuf> = images
+            .into_iter()
             .filter(|image| {
                 !self.painter.has_thumbnail(image) && self.thumbnails_asked.insert(image.clone())
             })
@@ -1395,6 +1429,20 @@ impl App {
         }
     }
 
+    /// Hand the chooser's next listing to a thread; its answer comes back as [`Background::Listing`].
+    fn drive_picker(&mut self) {
+        let Some(request) = self.sheet.as_mut().and_then(Sheet::picker_request) else {
+            return;
+        };
+        let notify = self.notify.clone();
+        let spawned = std::thread::Builder::new()
+            .name("chooser-listing".into())
+            .spawn(move || notify(Background::Listing(request.run())));
+        if let Err(e) = spawned {
+            eprintln!("cupertino-settings: cannot list the folder: {e}");
+        }
+    }
+
     /// Store the typed resolution of the mouse `key`; the server applies the file.
     fn set_mouse_dpi(&mut self, key: &str, dpi: u32) -> std::result::Result<(), String> {
         self.settings.set_mouse_dpi(&self.paths, key, dpi)
@@ -1419,6 +1467,33 @@ impl App {
                 if self.sheet.as_ref().and_then(Sheet::pairing_id) == Some(id) {
                     self.sheet = None;
                     self.agent_answer = None;
+                    self.client.request_redraw(self.window)?;
+                }
+            }
+            Background::Pictures {
+                generation,
+                group,
+                files,
+            } if generation == self.pictures_generation => {
+                let images: Vec<std::path::PathBuf> =
+                    files.iter().map(|f| f.light.clone()).collect();
+                let pictures = &mut self.live.pictures;
+                pictures.loading.remove(&group);
+                match group {
+                    0 => pictures.bundled = files,
+                    n => {
+                        if let Some((_, slot)) = pictures.folders.get_mut(n - 1) {
+                            *slot = files;
+                        }
+                    }
+                }
+                self.ask_thumbnails(images);
+                self.client.request_redraw(self.window)?;
+            }
+            Background::Pictures { .. } => {}
+            Background::Listing(listing) => {
+                if let Some(sheet) = self.sheet.as_mut() {
+                    sheet.apply_listing(listing);
                     self.client.request_redraw(self.window)?;
                 }
             }

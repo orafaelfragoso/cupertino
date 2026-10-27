@@ -48,7 +48,77 @@ pub enum Outcome {
     Ignore,
 }
 
-/// An open chooser.
+/// How a folder is listed: the folder, the mode and whether dotfiles show; `None` when it cannot be read.
+pub type Reader = dyn Fn(&Path, Mode, bool) -> Option<Vec<Entry>>;
+
+/// A folder to list: what a worker is asked to read.
+#[derive(Clone, Debug)]
+pub struct Request {
+    generation: u64,
+    dir: PathBuf,
+    mode: Mode,
+    hidden: bool,
+    /// The folder may not exist (the start of a chooser): list the nearest parent that does.
+    nearest_parent: bool,
+}
+
+/// What a worker read: `None` when the folder could not be read.
+#[derive(Clone, Debug)]
+pub struct Listing {
+    generation: u64,
+    result: Option<(PathBuf, Vec<Entry>)>,
+}
+
+/// The entries of `dir` for `mode`, in the chooser's order; `None` when it cannot be read.
+fn read_entries(dir: &Path, mode: Mode, hidden: bool) -> Option<Vec<Entry>> {
+    let mut entries: Vec<Entry> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|e| {
+            let name = e.file_name().to_str()?.to_string();
+            let is_dir = e.path().is_dir();
+            let listed = (hidden || !name.starts_with('.'))
+                && (is_dir || (mode == Mode::Photo && is_picture(&name)));
+            listed.then(|| Entry {
+                name,
+                path: e.path(),
+                is_dir,
+            })
+        })
+        .collect();
+    entries.sort_by_cached_key(|e| (!e.is_dir, e.name.to_lowercase(), e.name.clone()));
+    Some(entries)
+}
+
+impl Request {
+    /// Read the folder. This is the only place the filesystem is touched: run it on a worker, a folder on a hung
+    /// mount may never answer.
+    pub fn run(&self) -> Listing {
+        self.run_with(&read_entries)
+    }
+
+    /// [`Request::run`] with `read` as the way to list one folder (tests).
+    pub fn run_with(&self, read: &Reader) -> Listing {
+        let mut dir = self.dir.clone();
+        loop {
+            if let Some(entries) = read(&dir, self.mode, self.hidden) {
+                return Listing {
+                    generation: self.generation,
+                    result: Some((dir, entries)),
+                };
+            }
+            if !self.nearest_parent || !dir.pop() {
+                return Listing {
+                    generation: self.generation,
+                    result: None,
+                };
+            }
+        }
+    }
+}
+
+/// An open chooser. It never reads the filesystem itself: a change of folder makes a [`Request`] to run elsewhere
+/// (`take_request`, then `apply` the [`Listing`]), and the picker shows what it has until the answer comes.
 #[derive(Clone, Debug)]
 pub struct Picker {
     mode: Mode,
@@ -58,6 +128,11 @@ pub struct Picker {
     hidden: bool,
     unreadable: bool,
     type_ahead: TypeAhead,
+    generation: u64,
+    pending: Option<Request>,
+    loading: bool,
+    /// The entry to highlight when the listing in flight arrives.
+    then_highlight: Option<PathBuf>,
 }
 
 fn is_picture(name: &str) -> bool {
@@ -66,21 +141,79 @@ fn is_picture(name: &str) -> bool {
 }
 
 impl Picker {
-    /// A chooser showing `start`, or its nearest existing parent folder, in `mode`.
-    pub fn open(start: &Path, mode: Mode) -> Self {
-        let mut dir = start.to_path_buf();
-        while !dir.is_dir() && dir.pop() {}
+    /// A chooser that will show `start`, or its nearest existing parent folder, in `mode`; it lists nothing until its
+    /// first request is answered.
+    pub fn new(start: &Path, mode: Mode) -> Self {
         let mut picker = Picker {
             mode,
-            dir,
+            dir: start.to_path_buf(),
             entries: Vec::new(),
             highlighted: None,
             hidden: false,
             unreadable: false,
             type_ahead: TypeAhead::default(),
+            generation: 0,
+            pending: None,
+            loading: false,
+            then_highlight: None,
         };
-        picker.list();
+        picker.request(start.to_path_buf(), true, None);
         picker
+    }
+
+    /// [`Picker::new`] with the first listing read here, for callers with nothing to keep responsive.
+    pub fn open(start: &Path, mode: Mode) -> Self {
+        let mut picker = Picker::new(start, mode);
+        picker.settle();
+        picker
+    }
+
+    /// Run the requests in flight here, one after the other, until the picker has nothing to wait for.
+    pub fn settle(&mut self) {
+        while let Some(request) = self.take_request() {
+            let listing = request.run();
+            self.apply(listing);
+        }
+    }
+
+    fn request(&mut self, dir: PathBuf, nearest_parent: bool, then_highlight: Option<PathBuf>) {
+        self.generation += 1;
+        self.loading = true;
+        self.then_highlight = then_highlight;
+        self.pending = Some(Request {
+            generation: self.generation,
+            dir,
+            mode: self.mode,
+            hidden: self.hidden,
+            nearest_parent,
+        });
+    }
+
+    /// The folder to list next, once; the answer goes to [`Picker::apply`].
+    pub fn take_request(&mut self) -> Option<Request> {
+        self.pending.take()
+    }
+
+    /// Take a worker's answer; one that is not for the latest request is dropped.
+    pub fn apply(&mut self, listing: Listing) -> Outcome {
+        if listing.generation != self.generation {
+            return Outcome::Ignore;
+        }
+        self.loading = false;
+        match listing.result {
+            Some((dir, entries)) => {
+                self.unreadable = false;
+                self.dir = dir;
+                self.entries = entries;
+                self.highlighted = self
+                    .then_highlight
+                    .take()
+                    .and_then(|p| self.entries.iter().position(|e| e.path == p));
+                self.type_ahead = TypeAhead::default();
+            }
+            None => self.unreadable = true,
+        }
+        Outcome::Changed
     }
 
     pub fn mode(&self) -> Mode {
@@ -100,6 +233,11 @@ impl Picker {
         self.highlighted
     }
 
+    /// A listing is on its way.
+    pub fn loading(&self) -> bool {
+        self.loading
+    }
+
     /// The last folder asked for could not be read; the open one stayed.
     pub fn unreadable(&self) -> bool {
         self.unreadable
@@ -109,58 +247,27 @@ impl Picker {
     pub fn set_hidden(&mut self, shown: bool) {
         if self.hidden != shown {
             self.hidden = shown;
-            self.list();
+            let kept = self
+                .highlighted
+                .and_then(|i| self.entries.get(i))
+                .map(|e| e.path.clone());
+            self.request(self.dir.clone(), false, kept);
         }
     }
 
-    /// Read the open folder again, keeping the highlight when its entry is still there.
-    fn list(&mut self) {
-        let kept = self
-            .highlighted
-            .and_then(|i| self.entries.get(i))
-            .map(|e| e.path.clone());
-        let mut entries: Vec<Entry> = match std::fs::read_dir(&self.dir) {
-            Ok(read) => read
-                .filter_map(Result::ok)
-                .filter_map(|e| {
-                    let name = e.file_name().to_str()?.to_string();
-                    let is_dir = e.path().is_dir();
-                    let listed = (self.hidden || !name.starts_with('.'))
-                        && (is_dir || (self.mode == Mode::Photo && is_picture(&name)));
-                    listed.then(|| Entry {
-                        name,
-                        path: e.path(),
-                        is_dir,
-                    })
-                })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-        entries.sort_by_cached_key(|e| (!e.is_dir, e.name.to_lowercase(), e.name.clone()));
-        self.entries = entries;
-        self.highlighted = kept.and_then(|p| self.entries.iter().position(|e| e.path == p));
-        self.type_ahead = TypeAhead::default();
-    }
-
-    /// Open `dir`; a folder that cannot be read leaves the picker where it was.
-    fn open_dir(&mut self, dir: PathBuf) -> Outcome {
-        if std::fs::read_dir(&dir).is_err() {
-            self.unreadable = true;
-            return Outcome::Changed;
-        }
-        self.unreadable = false;
-        let from = std::mem::replace(&mut self.dir, dir);
-        self.highlighted = None;
-        self.list();
-        // coming back up highlights the folder that was left
-        self.highlighted = self.entries.iter().position(|e| e.path == from);
+    /// Open `dir`; the open folder stays until the listing arrives, and a folder that cannot be read leaves it.
+    fn open_dir(&mut self, dir: PathBuf, then_highlight: Option<PathBuf>) -> Outcome {
+        self.request(dir, false, then_highlight);
         Outcome::Changed
     }
 
-    /// Open the parent folder.
+    /// Open the parent folder, highlighting the folder that was left.
     pub fn parent(&mut self) -> Outcome {
         match self.dir.parent().map(Path::to_path_buf) {
-            Some(parent) => self.open_dir(parent),
+            Some(parent) => {
+                let from = self.dir.clone();
+                self.open_dir(parent, Some(from))
+            }
             None => Outcome::Ignore,
         }
     }
@@ -181,7 +288,7 @@ impl Picker {
             return Outcome::Ignore;
         };
         if entry.is_dir {
-            self.open_dir(entry.path)
+            self.open_dir(entry.path, None)
         } else {
             Outcome::Choose(entry.path)
         }
@@ -270,6 +377,7 @@ mod tests {
         assert_eq!(names(&folder), ["art", "Beach"]);
         let mut shown = Picker::open(d.path(), Mode::Photo);
         shown.set_hidden(true);
+        shown.settle();
         assert_eq!(
             names(&shown),
             [".secret", "art", "Beach", ".hidden.png", "a.jpg", "b.PNG"]
@@ -302,6 +410,7 @@ mod tests {
         );
         p.key(Key::Home, 0.0);
         assert_eq!(p.key(Key::Return, 0.0), Outcome::Changed);
+        p.settle();
         assert_eq!(p.dir(), d.path().join("art"));
         assert_eq!(names(&p), ["deep", "c.jpeg"]);
         assert_eq!(p.highlighted(), None);
@@ -312,6 +421,7 @@ mod tests {
         let d = tree();
         let mut p = Picker::open(&d.path().join("art/deep"), Mode::Photo);
         assert_eq!(p.key(Key::Parent, 0.0), Outcome::Changed);
+        p.settle();
         assert_eq!(p.dir(), d.path().join("art"));
         assert_eq!(p.entries()[p.highlighted().unwrap()].name, "deep");
         let mut root = Picker::open(Path::new("/"), Mode::Folder);
@@ -386,6 +496,7 @@ mod tests {
         let beach = p.entries().iter().position(|e| e.name == "Beach").unwrap();
         let unreadable = fs::read_dir(&locked).is_err();
         let outcome = p.activate(beach);
+        p.settle();
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
         if unreadable {
             assert_eq!(outcome, Outcome::Changed);
@@ -396,5 +507,61 @@ mod tests {
                 "the picker stays in the folder it was in"
             );
         }
+    }
+
+    #[test]
+    fn a_new_picker_and_its_keys_touch_no_folder_and_a_slow_listing_does_not_hold_them_up() {
+        let (release, blocked) = std::sync::mpsc::channel::<()>();
+        let (started_tx, started) = std::sync::mpsc::channel::<()>();
+        let mut p = Picker::new(Path::new("/a/folder/that/is/not/read/here"), Mode::Photo);
+        assert!(p.loading());
+        assert_eq!(p.entries().len(), 0);
+        let request = p.take_request().expect("the first listing is asked for");
+        assert!(p.take_request().is_none(), "a request is handed out once");
+        // the worker: a reader that waits as a hung mount would
+        let worker = std::thread::spawn(move || {
+            request.run_with(&move |_, _, _| {
+                started_tx.send(()).unwrap();
+                blocked.recv().unwrap();
+                Some(vec![Entry {
+                    name: "late.png".into(),
+                    path: "/a/late.png".into(),
+                    is_dir: false,
+                }])
+            })
+        });
+        started
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        // meanwhile the picker answers keys at once
+        assert_eq!(p.key(Key::Escape, 0.0), Outcome::Cancel);
+        assert_eq!(
+            p.key(Key::Down, 0.0),
+            Outcome::Ignore,
+            "nothing to move over yet"
+        );
+        assert!(p.loading(), "still waiting for the listing");
+        release.send(()).unwrap();
+        let listing = worker.join().unwrap();
+        assert_eq!(p.apply(listing), Outcome::Changed);
+        assert!(!p.loading());
+        assert_eq!(p.entries()[0].name, "late.png");
+    }
+
+    #[test]
+    fn an_answer_that_is_not_for_the_latest_request_is_dropped() {
+        let d = tree();
+        let mut p = Picker::new(d.path(), Mode::Folder);
+        let first = p.take_request().unwrap();
+        p.set_hidden(true);
+        let second = p.take_request().unwrap();
+        assert_eq!(
+            p.apply(first.run()),
+            Outcome::Ignore,
+            "the first answer is stale"
+        );
+        assert!(p.loading());
+        assert_eq!(p.apply(second.run()), Outcome::Changed);
+        assert!(p.entries().iter().any(|e| e.name == ".secret"));
     }
 }

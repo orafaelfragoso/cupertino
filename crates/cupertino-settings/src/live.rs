@@ -52,6 +52,8 @@ pub struct Pictures {
     pub folders: Vec<(std::path::PathBuf, Vec<cupertino_assets::WallpaperFile>)>,
     /// The picture the desktop shows when the settings name none (the first pack's default).
     pub default: Option<std::path::PathBuf>,
+    /// The groups (0 the packs', then each folder) whose listing has not come back yet.
+    pub loading: std::collections::BTreeSet<usize>,
 }
 
 /// A connected mouse and its resolution, as the server resolved it.

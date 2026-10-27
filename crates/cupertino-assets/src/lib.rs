@@ -375,6 +375,26 @@ pub struct Credit {
     pub author: String,
 }
 
+/// The most of a credits file that is read (bytes).
+const MAX_CREDITS_BYTES: u64 = 1 << 20;
+
+/// The credits in the file at `path`, reading at most [`MAX_CREDITS_BYTES`] of it; none when it cannot be read.
+fn read_credits(path: &Path) -> std::collections::HashMap<String, Credit> {
+    use std::io::Read;
+    let Ok(file) = std::fs::File::open(path) else {
+        return Default::default();
+    };
+    let mut bytes = Vec::new();
+    if file
+        .take(MAX_CREDITS_BYTES)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return Default::default();
+    }
+    parse_credits(&String::from_utf8_lossy(&bytes))
+}
+
 /// The credits of `text`, by file name: a line `wallpapers/<file>` followed by an indented line
 /// `"<title>" by <author> (<link>)`.
 pub fn parse_credits(text: &str) -> std::collections::HashMap<String, Credit> {
@@ -538,9 +558,7 @@ impl Assets {
         let mut out: Vec<WallpaperFile> = Vec::new();
         for pack in &self.packs {
             let dir = pack.root.join("wallpapers");
-            let credits = std::fs::read_to_string(dir.join("credits.txt"))
-                .map(|text| parse_credits(&text))
-                .unwrap_or_default();
+            let credits = read_credits(&dir.join("credits.txt"));
             for mut file in pictures_in(&dir) {
                 file.credit = file
                     .light

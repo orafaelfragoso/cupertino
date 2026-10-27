@@ -10,7 +10,8 @@
 # $XDG_DATA_HOME (or ~/.local/share), else none (built-in assets only; the system pack is not searched).
 # Environment: AFTER (seconds before the shot, default 5), SIZE (default 1280x800), BIN_DIR (default
 # target/release, else target/debug; build with: cargo build --release --workspace --all-features --bins).
-# FIXTURE_DIR: a folder whose contents are copied into the fixture home first (sample pictures, say).
+# FIXTURE_DIR: a folder whose contents are copied into the fixture home first (sample pictures, say); links are followed,
+# so a link in it is copied as the file it points to, never kept as a link into the caller's files.
 # CONFIG_JSON: a JSON object whose keys are set in the server's compositor.json, where `@HOME@` stands for the fixture
 # home (CONFIG_JSON='{"wallpaper_folders": ["@HOME@/Art"]}').
 # The shell processes are the ones the packages install as /etc/cupertino/compositor.json, found on PATH (BIN_DIR first),
@@ -52,7 +53,7 @@ printf 'Welcome to the sample desktop.\n' >"$FHOME/Desktop/Welcome.txt"
 printf 'Sample download.\n' >"$FHOME/Downloads/Release Notes.txt"
 : >"$FHOME/Pictures/Holiday.png"
 : >"$FHOME/Music/Song.ogg"
-[ -z "${FIXTURE_DIR:-}" ] || cp -a "$FIXTURE_DIR"/. "$FHOME"/
+[ -z "${FIXTURE_DIR:-}" ] || cp -rL "$FIXTURE_DIR"/. "$FHOME"/
 touch -d 2026-01-01T12:00:00 "$FHOME" "$FHOME"/* "$FHOME"/*/* "$FHOME"/*/*/* 2>/dev/null || true
 
 python3 -I - "$ROOT/packaging/files/etc/cupertino/compositor.json" "$SCRATCH/server.json" "$FHOME" "${CONFIG_JSON:-{\}}" <<'EOF'

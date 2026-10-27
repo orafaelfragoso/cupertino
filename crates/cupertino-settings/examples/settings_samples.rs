@@ -203,6 +203,7 @@ fn main() {
             bundled,
             folders: vec![(scratch.join("Trips"), folder)],
             default: Some(current),
+            ..Default::default()
         },
         ..live.clone()
     };

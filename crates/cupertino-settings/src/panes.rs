@@ -278,6 +278,7 @@ fn picture_section(
     group: usize,
     header: Option<String>,
     files: &[WallpaperFile],
+    loading: bool,
     settings: &Settings,
     default: Option<&Path>,
 ) -> Section {
@@ -290,7 +291,12 @@ fn picture_section(
     });
     let control = if files.is_empty() {
         Control::Text {
-            value: "No pictures".to_string(),
+            value: if loading {
+                "Loading\u{2026}"
+            } else {
+                "No pictures"
+            }
+            .to_string(),
         }
     } else {
         Control::Tiles {
@@ -386,14 +392,28 @@ fn wallpaper_sections(settings: &Settings, live: &Live) -> Vec<Section> {
     let default = pictures.default.as_deref();
     let mut sections = vec![
         current_section(settings, live),
-        picture_section(0, header("Pictures"), &pictures.bundled, settings, default),
+        picture_section(
+            0,
+            header("Pictures"),
+            &pictures.bundled,
+            pictures.loading.contains(&0),
+            settings,
+            default,
+        ),
     ];
     for (i, (folder, files)) in pictures.folders.iter().enumerate() {
         let name = folder.file_name().map_or_else(
             || folder.display().to_string(),
             |n| n.to_string_lossy().into_owned(),
         );
-        sections.push(picture_section(i + 1, Some(name), files, settings, None));
+        sections.push(picture_section(
+            i + 1,
+            Some(name),
+            files,
+            pictures.loading.contains(&(i + 1)),
+            settings,
+            None,
+        ));
         sections.push(Section {
             header: None,
             rows: vec![row(
@@ -2776,6 +2796,7 @@ mod tests {
                 bundled: vec![picture("snow-ridge", false), picture("sunrise_bay", true)],
                 folders: vec![("/home/u/Art".into(), vec![picture("mine", false)])],
                 default: Some("/pics/snow-ridge.jpg".into()),
+                ..Default::default()
             },
             ..Live::default()
         }
@@ -2989,5 +3010,35 @@ mod tests {
             &live
         )
         .is_empty());
+    }
+
+    #[test]
+    fn a_group_whose_listing_has_not_come_back_says_loading_and_then_its_pictures() {
+        let mut live = Live {
+            pictures: crate::live::Pictures {
+                folders: vec![("/mnt/slow".into(), vec![])],
+                loading: [0, 1].into(),
+                ..Default::default()
+            },
+            ..Live::default()
+        };
+        let text =
+            |live: &Live, section: usize| match &sections(PaneId::Wallpaper, &unset(), LIGHT, live)
+                [section]
+                .rows[0]
+                .control
+            {
+                Control::Text { value } => value.clone(),
+                other => panic!("a note, got {other:?}"),
+            };
+        assert_eq!(text(&live, 1), "Loading\u{2026}");
+        assert_eq!(text(&live, 2), "Loading\u{2026}");
+        live.pictures.loading.clear();
+        assert_eq!(text(&live, 1), "No pictures");
+        live.pictures.bundled = vec![picture("one", false)];
+        live.pictures.folders[0].1 = vec![picture("two", false)];
+        let sections = sections(PaneId::Wallpaper, &unset(), LIGHT, &live);
+        assert!(matches!(sections[1].rows[0].control, Control::Tiles { .. }));
+        assert!(matches!(sections[2].rows[0].control, Control::Tiles { .. }));
     }
 }

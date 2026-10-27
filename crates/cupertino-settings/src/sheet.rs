@@ -235,6 +235,35 @@ impl Sheet {
         }
     }
 
+    /// [`Sheet::picker`] that lists nothing yet: the window hands [`Sheet::picker_request`] to a thread and the answer
+    /// to [`Sheet::apply_listing`], so a folder that is slow to read never holds the window.
+    pub fn picker_pending(start: &std::path::Path, mode: Mode) -> Self {
+        Sheet {
+            kind: Kind::Picker {
+                chooser: Chooser(Picker::new(start, mode)),
+                top: 0,
+                hovered: None,
+            },
+        }
+    }
+
+    /// The folder the chooser wants listed next, once.
+    pub fn picker_request(&mut self) -> Option<cupertino_filepicker::Request> {
+        match &mut self.kind {
+            Kind::Picker { chooser, .. } => chooser.0.take_request(),
+            _ => None,
+        }
+    }
+
+    /// The listing a thread read for the chooser.
+    pub fn apply_listing(&mut self, listing: cupertino_filepicker::Listing) {
+        if let Kind::Picker { chooser, top, .. } = &mut self.kind {
+            if chooser.0.apply(listing) == PickerOutcome::Changed {
+                picked(chooser, top, PickerOutcome::Changed);
+            }
+        }
+    }
+
     pub fn pairing(id: u64, device: &str, prompt: Prompt) -> Self {
         Sheet {
             kind: Kind::Pairing {
@@ -893,6 +922,13 @@ mod tests {
         d
     }
 
+    /// Answer the chooser's requests here, as the window's threads do.
+    fn settle(sheet: &mut Sheet) {
+        while let Some(request) = sheet.picker_request() {
+            sheet.apply_listing(request.run());
+        }
+    }
+
     fn picked(path: std::path::PathBuf, folder: bool) -> Outcome {
         Outcome::Picked { path, folder }
     }
@@ -920,11 +956,13 @@ mod tests {
             "a folder is not a picture"
         );
         sheet.key(SheetKey::Return);
+        settle(&mut sheet);
         assert_eq!(
             sheet.message(),
             d.path().join("Trips").display().to_string()
         );
         assert_eq!(sheet.key(SheetKey::Parent), Outcome::Stay);
+        settle(&mut sheet);
         assert_eq!(sheet.message(), d.path().display().to_string());
         sheet.key(SheetKey::End);
         assert_eq!(
@@ -948,6 +986,7 @@ mod tests {
         let l = sheet.layout(&content);
         let (list, up) = (l.list.unwrap(), l.up.unwrap());
         assert_eq!(sheet.press(&l, up.center()), Outcome::Stay);
+        settle(&mut sheet);
         assert_eq!(
             sheet.message(),
             d.path().display().to_string(),
@@ -1024,5 +1063,32 @@ mod tests {
             picked(d.path().join("p29.jpg"), false)
         );
         assert!(sheet.hover(&l, None), "the pointer left");
+    }
+
+    #[test]
+    fn a_pending_chooser_shows_loading_until_its_listing_is_applied_and_ignores_a_stale_one() {
+        let d = pictures_dir();
+        let mut sheet = Sheet::picker_pending(d.path(), Mode::Photo);
+        let Kind::Picker { chooser, .. } = &sheet.kind else {
+            panic!("a chooser");
+        };
+        assert!(chooser.0.loading());
+        assert_eq!(
+            chooser.0.entries().len(),
+            0,
+            "the constructor read no folder"
+        );
+        let request = sheet
+            .picker_request()
+            .expect("the first listing is asked for");
+        assert!(sheet.picker_request().is_none());
+        // a key before the answer: the chooser stays responsive
+        assert_eq!(sheet.key(SheetKey::Escape), Outcome::Cancel);
+        sheet.apply_listing(request.run());
+        let Kind::Picker { chooser, .. } = &sheet.kind else {
+            panic!("a chooser");
+        };
+        assert!(!chooser.0.loading());
+        assert_eq!(chooser.0.entries().len(), 3, "Trips, a.jpg, b.png");
     }
 }

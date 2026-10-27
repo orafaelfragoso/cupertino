@@ -49,12 +49,15 @@ impl ShmPresenter {
         self.surface
     }
 
-    /// Logical size from the last configure; `None` before the first.
+    /// The logical size the last configure asked for; `None` before the first.
     pub fn size(&self) -> Option<(u32, u32)> {
         self.size
     }
 
-    /// A configure set the logical size; the next poll draws.
+    /// A configure asked for `size`; the next poll draws. The size is a hint for layout: the buffer [`draw`] fills
+    /// has the size of the latest configure the transport received, which may be newer.
+    ///
+    /// [`draw`]: Self::draw
     pub fn configured(&mut self, size: (u32, u32)) {
         self.size = Some(size);
         self.wants_redraw = true;

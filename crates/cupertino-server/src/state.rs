@@ -1037,15 +1037,23 @@ impl Cupertino {
                 }
             }
             // popups lie above the window and its resize band
-            if let Some((surface, loc)) = entry
-                .window
-                .surface_under(pos - origin, WindowSurfaceType::POPUP)
-            {
-                return Some(WindowTarget::Surface {
-                    id,
-                    surface,
-                    origin: origin + loc.to_f64(),
-                });
+            // (every surface of a popup's tree: `Window::surface_under` with `POPUP` alone finds only the popups' roots)
+            if let Some(root) = entry.window.toplevel().map(|t| t.wl_surface().clone()) {
+                for (popup, location) in PopupManager::popups_for_surface(&root) {
+                    let offset = geo.loc + location - popup.geometry().loc;
+                    if let Some((surface, loc)) = smithay::desktop::utils::under_from_surface_tree(
+                        popup.wl_surface(),
+                        pos - origin,
+                        offset,
+                        WindowSurfaceType::ALL,
+                    ) {
+                        return Some(WindowTarget::Surface {
+                            id,
+                            surface,
+                            origin: origin + loc.to_f64(),
+                        });
+                    }
+                }
             }
             // the resize zones, where the window can resize that way (the cursor follows; dropping the zone with the cursor is)
             let edge = if decorated {

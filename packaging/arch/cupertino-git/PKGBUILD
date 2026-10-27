@@ -6,7 +6,7 @@ pkgrel=1
 pkgdesc='Wayland desktop shell and compositor'
 arch=('x86_64')
 url='https://github.com/orafaelfragoso/cupertino'
-license=('GPL-3.0-or-later')
+license=('GPL-3.0-or-later' 'MPL-2.0' 'MIT' 'OFL-1.1')
 makedepends=('git' 'cargo' 'python' 'mesa' 'libglvnd' 'pam')
 checkdepends=('dbus' 'xkeyboard-config' 'shared-mime-info')
 # makepkg's LTO flags would reach the C code of build dependencies only; the release profile decides for Rust. No

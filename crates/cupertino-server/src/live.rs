@@ -185,6 +185,9 @@ impl Cupertino {
                     device.reconfigure(&self.config.pointer);
                 }
             }
+            if changed!(mouse_dpi) {
+                self.publish_session_settings();
+            }
             self.cursor_loader
                 .set_colors(self.config.pointer.cursor_colors);
         }

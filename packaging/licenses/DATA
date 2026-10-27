@@ -5,5 +5,5 @@ fonts/InterVariable-subset.ttf: Inter, a subset; SIL Open Font License 1.1 (OFL-
 wallpapers/*.jpg: six photographs from Unsplash, Unsplash License (LicenseRef-Unsplash), see
   Unsplash.txt; photographers and sources in wallpapers/credits.txt.
 
-The host icon theme (Adwaita) is a separate package
-and are not included.
+The host icon theme (Adwaita) is a separate package and is not included.
+Cursors are the built-in set of cupertino-cursor.

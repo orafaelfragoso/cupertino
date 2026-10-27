@@ -14,14 +14,6 @@
     "name": "Adwaita",
     "map": "icon-map.toml"
   },
-  "cursors": {
-    "theme": "default",
-    "path": [
-      "$XCURSOR_PATH",
-      "~/.local/share/icons",
-      "/usr/share/icons"
-    ]
-  },
   "wallpapers": {
     "default": {
       "light": "wallpapers/trees-covering-snow-W3V2tQAZxPA.jpg",

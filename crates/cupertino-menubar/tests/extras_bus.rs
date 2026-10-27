@@ -5,7 +5,7 @@
 use cupertino_menubar::extras::{
     BatteryState, BluetoothDevice, ExtraAction, Extras, FocusLifetime, SessionAction, WifiNetwork,
 };
-use cupertino_menubar::extras_bus::ExtrasBus;
+use cupertino_menubar::extras_bus::{ExtrasBus, SessionAgent};
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -340,8 +340,17 @@ fn the_extras_follow_the_services_and_act_on_them() {
         }]
     );
 
+    // nobody was named the session agent, so the owner of its name is not read, however well it answers
+    assert_eq!(first.session, None);
+    // the owner of the name is another process than the one named: still not read
+    let me = std::process::id();
+    extras.session_agent(SessionAgent::Process(me ^ 1)).unwrap();
+    assert!(events.recv_timeout(Duration::from_millis(500)).is_err());
+
     // the system menu's state: the name and a capability the agent says no to
-    let session = first.session.as_ref().expect("the session agent");
+    extras.session_agent(SessionAgent::Process(me)).unwrap();
+    let with_agent = next(&events);
+    let session = with_agent.session.as_ref().expect("the session agent");
     assert_eq!(session.user_name, "Rafael");
     assert!(!session.caps.sleep && session.caps.restart && session.caps.lock);
     // the session menu's entries go to the server over the shell protocol: the bus side never calls the agent

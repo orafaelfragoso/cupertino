@@ -1518,7 +1518,7 @@ fn spawn_server_reporting(
         dh.create_global::<Mock, WlOutput, _>(4, ());
         dh.create_global::<Mock, WlSeat, _>(7, ());
         dh.create_global::<Mock, ZwlrLayerShellV1, _>(4, ());
-        dh.create_global::<Mock, CupertinoShellV1, _>(7, ());
+        dh.create_global::<Mock, CupertinoShellV1, _>(8, ());
         dh.create_global::<Mock, CupertinoAppEffectsV1, _>(1, ());
         dh.create_global::<Mock, XdgActivationV1, _>(1, ());
         dh.create_global::<Mock, ZxdgOutputManagerV1, _>(3, ());
@@ -2019,6 +2019,7 @@ fn menu_bar_groups_arrive_typed_and_requests_reach_the_server() {
             }),
             engage: false,
             screen_capture: None,
+            session_agent: None,
         }
     );
     control.send(Control::Engage).unwrap();

@@ -132,7 +132,7 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
         } => cx
             .shared
             .extras
-            .session_menu()?
+            .session_menu()
             .action(item)
             .cloned()
             .map(Action::Extra),
@@ -210,6 +210,7 @@ mod tests {
                 window_state: None,
                 engage: false,
                 screen_capture: None,
+                session_agent: None,
             };
             feed.apply(&update, &mut shared, |_| AppName {
                 name: "Editor".into(),
@@ -482,7 +483,7 @@ mod tests {
     fn a_system_menu_entry_goes_to_the_session_agent() {
         let mut f = Fixture::new(WindowMenu::None);
         f.shared.extras.session = Some(crate::extras::SessionState::default());
-        let menu = f.shared.extras.session_menu().unwrap();
+        let menu = f.shared.extras.session_menu();
         let restart = menu
             .rows
             .iter()

@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::Arc;
 use zbus::message::Type;
+use zbus::names::UniqueName;
 use zbus::proxy::{Builder, CacheProperties};
 use zbus::zvariant::OwnedValue;
 use zbus::{Connection, MatchRule, MessageStream, Proxy};
@@ -47,6 +48,18 @@ type NetworkRecord = (String, i32, String, bool, bool);
 enum Command {
     Refresh,
     Act(ExtraAction),
+    Agent(SessionAgent),
+}
+
+/// Which process may answer as the session agent, as the server names it. Nothing is trusted until it does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SessionAgent {
+    #[default]
+    None,
+    /// The owner of `org.cupertino.Login1` must be this process.
+    Process(u32),
+    /// A development run: whoever owns the name.
+    Any,
 }
 
 /// Handle on the extras task.
@@ -76,6 +89,13 @@ impl ExtrasBus {
     pub fn refresh(&self) -> Result<(), WorkerGone> {
         self.commands
             .try_send(Command::Refresh)
+            .map_err(|_| WorkerGone)
+    }
+
+    /// Name the process that is the session agent; the system menu is read again.
+    pub fn session_agent(&self, agent: SessionAgent) -> Result<(), WorkerGone> {
+        self.commands
+            .try_send(Command::Agent(agent))
             .map_err(|_| WorkerGone)
     }
 
@@ -140,8 +160,9 @@ async fn run(
 
     let mut reasons = Reasons::default();
     let mut last: Option<Extras> = None;
+    let mut agent = SessionAgent::None;
     loop {
-        let extras = read_all(system.as_ref(), &session, &mut reasons).await;
+        let extras = read_all(system.as_ref(), &session, agent, &mut reasons).await;
         if last.as_ref() != Some(&extras) {
             // a closed channel means the process is shutting down
             if out.send(extras.clone()).is_err() {
@@ -152,6 +173,7 @@ async fn run(
         }
         match rx.recv().await {
             Ok(Command::Refresh) => {}
+            Ok(Command::Agent(named)) => agent = named,
             Ok(Command::Act(action)) => {
                 if let Err(e) = act(system.as_ref(), &session, &action).await {
                     eprintln!("cupertino-menubar: {action:?} failed: {e}");
@@ -161,10 +183,14 @@ async fn run(
         }
         // collapse a burst of signals into one read
         while let Ok(command) = rx.try_recv() {
-            if let Command::Act(action) = command {
-                if let Err(e) = act(system.as_ref(), &session, &action).await {
-                    eprintln!("cupertino-menubar: {action:?} failed: {e}");
+            match command {
+                Command::Act(action) => {
+                    if let Err(e) = act(system.as_ref(), &session, &action).await {
+                        eprintln!("cupertino-menubar: {action:?} failed: {e}");
+                    }
                 }
+                Command::Agent(named) => agent = named,
+                Command::Refresh => {}
             }
         }
     }
@@ -249,6 +275,7 @@ fn absent_if_not_running<T>(result: zbus::Result<Option<T>>) -> zbus::Result<Opt
 async fn read_all(
     system: Option<&Connection>,
     session: &Connection,
+    agent: SessionAgent,
     reasons: &mut Reasons,
 ) -> Extras {
     let mut extras = Extras::default();
@@ -263,15 +290,56 @@ async fn read_all(
     extras.focus = reasons.note("Focus", absent_if_not_running(read_focus(session).await));
     extras.session = reasons.note(
         "system menu",
-        absent_if_not_running(read_session(session).await),
+        absent_if_not_running(read_session(session, agent).await),
     );
     extras
 }
 
+/// The unique name of the session agent: the owner of its bus name when that is the process the server named. A
+/// client that took the name first is not the agent and gets no say in the menu.
+async fn agent_owner(
+    conn: &Connection,
+    agent: SessionAgent,
+) -> zbus::Result<Option<UniqueName<'static>>> {
+    if agent == SessionAgent::None {
+        return Ok(None);
+    }
+    let bus = zbus::fdo::DBusProxy::new(conn).await?;
+    let owner = match bus.get_name_owner(LOGIN_NAME.try_into()?).await {
+        Ok(owner) => owner.into_inner(),
+        Err(zbus::fdo::Error::NameHasNoOwner(_)) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let SessionAgent::Process(expected) = agent else {
+        return Ok(Some(owner));
+    };
+    let caller = cupertino_peer::identify(conn, &owner).await;
+    if caller.pid() == Some(expected) {
+        return Ok(Some(owner));
+    }
+    eprintln!(
+        "cupertino-menubar: the owner of {LOGIN_NAME} ({owner}, process {:?}) is not the session agent (process {expected}): the system menu is not read from it",
+        caller.pid()
+    );
+    Ok(None)
+}
+
 /// The session agent's entries for the system menu; `None` without the agent. Only `Locked` has to be there: the
 /// other properties are newer, and a missing one reads as the default (every entry possible, the name from `$USER`).
-async fn read_session(conn: &Connection) -> zbus::Result<Option<SessionState>> {
-    let login = proxy(conn, LOGIN_NAME, LOGIN_PATH, LOGIN_NAME).await?;
+async fn read_session(
+    conn: &Connection,
+    agent: SessionAgent,
+) -> zbus::Result<Option<SessionState>> {
+    let Some(owner) = agent_owner(conn, agent).await? else {
+        return Ok(None);
+    };
+    let login: Proxy<'static> = Builder::new(conn)
+        .destination(owner)?
+        .path(LOGIN_PATH)?
+        .interface(LOGIN_NAME)?
+        .cache_properties(CacheProperties::No)
+        .build()
+        .await?;
     let _locked: bool = login.get_property("Locked").await?;
     let user_name: String = login
         .get_property("UserName")

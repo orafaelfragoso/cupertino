@@ -2,11 +2,11 @@
 
 Client toolkit of the shell processes (notifications, menu bar, launcher, dock) and of the application windows (file
 manager). One `Client` connects to the server, binds the globals every process needs and owns its surfaces. It runs on the
-transport, `cupertino-wayland-client`: the standard protocols are the transport's, and the ones outside its set (layer
-shell, session lock, idle notify and the desktop's own) are extensions on the transport's queue in `src/extensions.rs`.
-This public API is an adapter onto the transport, to be deleted once the shell processes use the transport directly.
-Depends on `cupertino-wayland-client`, `cupertino-geometry`, `cupertino-defaults` and `cupertino-protocols` (feature
-`client`).
+transport, `cupertino-wayland-client`: the standard protocols are the transport's, the public ones of the desktop are
+`cupertino-protocol-app`'s, the privileged ones (layer shell, session lock, idle notify, the shell roles) are
+`cupertino-shell-client`'s, and every surface draws through a `cupertino-ui-wayland` presenter. This public API is an
+adapter onto those crates, to be deleted once the shell processes use them directly. Depends on them,
+`cupertino-geometry`, `cupertino-defaults` and `tiny-skia`.
 
 ## Public API
 
@@ -30,7 +30,7 @@ Depends on `cupertino-wayland-client`, `cupertino-geometry`, `cupertino-defaults
 ## How it works
 
 Drawing is tiny-skia on a `Pixmap` at the surface's device scale, presented through the transport's buffer leases and
-paced by frame callbacks; `Event::Draw` waits for a free buffer. `Client::draw` paints a whole frame;
+paced by frame callbacks by the surface's `cupertino_ui_wayland::ShmPresenter`; `Event::Draw` waits for a free buffer. `Client::draw` paints a whole frame;
 `Client::draw_damage` repaints only rectangles of the last one (cleared for the paint, rounded out to device pixels):
 only they and what the leased buffer missed of the frames shown since it last held one (`BufferLease::missed`) are
 converted into it, and only they are reported with `damage_buffer`, so the server uploads only them. Rectangles that add

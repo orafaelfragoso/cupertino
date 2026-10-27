@@ -47,7 +47,7 @@ package_cupertino() {
               'libxkbcommon: nested session'
               'foot: terminal for the nested try-out'
               'iwd: wireless backend when cupertino-netd is enabled')
-  backup=('etc/cupertino/login.conf' 'etc/cupertino/greeter.json'
+  backup=('etc/cupertino/login.conf' 'etc/cupertino/greeter.json' 'etc/cupertino/compositor.json'
           'etc/pam.d/cupertino-login' 'etc/pam.d/cupertino-session'
           'etc/pam.d/cupertino-greeter' 'etc/pam.d/cupertino-autologin')
   cd "cupertino-$pkgver"

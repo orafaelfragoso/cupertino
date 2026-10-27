@@ -57,7 +57,7 @@ pub fn run() -> ExitCode {
 
 /// PAM's conversation, relayed to the manager: a prompt becomes a `Prompt` and waits for the `Answer`; the modules' messages
 /// become `Notice`s. A prompt of any other style, a `Cancel` and a broken channel fail the conversation.
-struct Relay {
+pub(crate) struct Relay {
     channel: Channel,
     /// PAM asked the user something.
     prompted: bool,
@@ -66,7 +66,7 @@ struct Relay {
 }
 
 impl Relay {
-    fn new(channel: Channel) -> Self {
+    pub(crate) fn new(channel: Channel) -> Self {
         Relay {
             channel,
             prompted: false,
@@ -95,7 +95,7 @@ impl Relay {
             .send_frame(&frame)
             .map_err(|_| ErrorCode::CONV_ERR)?;
         match self.channel.receive::<ToWorker>() {
-            // `CString::new` copies the text; PAM takes the copy and clears it, and the original is zeroed when dropped
+            // `CString::new` copies the text; PAM takes the copy and clears it, and the allocator zeroes what is freed (`zeroing`)
             Ok(ToWorker::Answer { secret }) => {
                 CString::new(secret.expose()).map_err(|_| ErrorCode::CONV_ERR)
             }

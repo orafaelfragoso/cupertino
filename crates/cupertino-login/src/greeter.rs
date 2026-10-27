@@ -377,7 +377,10 @@ impl App {
             Event::Configured { .. } | Event::ScaleChanged { .. } => {}
             Event::Key { .. } | Event::KeyboardLeave(_) => {}
             // the screens have one fixed look, and this process is the one that holds the lock
-            Event::Appearance { .. } | Event::DisplayOptions(_) | Event::SessionLock { .. } => {}
+            Event::Appearance { .. }
+            | Event::DisplayOptions(_)
+            | Event::SessionLock { .. }
+            | Event::LockRequested { .. } => {}
             Event::PopupDone(_)
             | Event::ActivationToken { .. }
             | Event::MenuBar { .. }

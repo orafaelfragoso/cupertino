@@ -51,7 +51,7 @@ Every trigger goes through the same request, which does nothing when the session
 
 | Trigger | How |
 |---|---|
-| `org.cupertino.Login1.Lock | Method on the session bus. The server calls it for the lock shortcut. A second process cannot take the name and exits with failure. |
+| `org.cupertino.Login1.Lock | Method on the session bus. The server asks for the lock over its own connection (`cupertino_session_v1.lock_requested`), not by this method. A second process cannot take the name: the lock screen then runs without it and logs an error. |
 | logind `Lock` | Signal on this process's session: `loginctl lock-session`. |
 | `PrepareForSleep(true) | The process holds a `sleep` **delay** inhibitor while the session is unlocked, drops it when the server confirms the lock, and takes it again after the unlock. |
 | `LockNow | The lock shortcut (a lock the person asked for, request type 8): the same lock, but the interface hides after 5 s without input instead of 30 s. |
@@ -465,7 +465,7 @@ cargo test -p cupertino-login --features app
 | Exhaustive inputs | Every sequence of up to five inputs and failures never reaches `Unlocking` or `Unlocked`. |
 | Panels and power key | Countdown, keys, button frames, clicks, the power-button panel's four buttons, its keys and its lack of a countdown; key timing at 0.2, 0.5 and 1.5 s with and without sleeping. |
 | Options | The session options, and that the greeter takes none. |
-| `org.cupertino.Login1` on a private `dbus-daemon` | `Lock`, a second process cannot take the name, `Request*` refused while locked, `Locked` announced once per change; a host process (`dbus-send`) is refused every method with `UntrustedCaller`, and a process with the login process's parent (a stand-in for an application the server started) is refused `Sleep` while the parent is not. |
+| `org.cupertino.Login1` on a private `dbus-daemon` | `Lock`, a second process cannot take the name (`serve` fails with `NameTaken`; `serve_unnamed` serves the object on the unique name), `Request*` refused while locked, `Locked` announced once per change; a host process (`dbus-send`) is refused every method with `UntrustedCaller`, and a process with the login process's parent (a stand-in for an application the server started) is refused `Sleep` while the parent is not. |
 | Quit sequence, low battery, autostart | One application at a time, the 0.1 s pause, the 45 s interrupt, Force Quit, the interrupt panel; the notification posted, replaced and withdrawn; the autostart parser (`Hidden`, `OnlyShowIn`, `NotShowIn`, `X-GNOME-Autostart-enabled`, `TryExec`, `Exec` quoting, shadowing, order, the once-per-session marker). |
 
 Not covered by a test:

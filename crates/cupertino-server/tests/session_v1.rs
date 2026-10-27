@@ -82,6 +82,15 @@ impl Harness {
         .unwrap()
     }
 
+    /// A connection of the login process: the session observer and the lock screen.
+    fn login_stream(&mut self) -> UnixStream {
+        cupertino_server::shell_connection::shell_process_connection(
+            &self.state.display_handle,
+            &[ShellRole::Session, ShellRole::SessionLock],
+        )
+        .unwrap()
+    }
+
     /// A connection of the lock screen, holding the SessionLock role.
     fn lock_stream(&mut self) -> UnixStream {
         cupertino_server::shell_connection::shell_process_connection(
@@ -102,6 +111,8 @@ enum Told {
     Options(u32),
     Locked,
     Unlocked,
+    /// `lock_requested`, with `explicit`.
+    LockRequested(bool),
 }
 
 fn solid_buffer(
@@ -173,6 +184,9 @@ impl Dispatch<CupertinoSessionV1, ()> for ClientState {
             ),
             cupertino_session_v1::Event::Locked => Told::Locked,
             cupertino_session_v1::Event::Unlocked => Told::Unlocked,
+            cupertino_session_v1::Event::LockRequested { explicit } => {
+                Told::LockRequested(explicit == 1)
+            }
             _ => return,
         };
         state.told.lock().unwrap().push(told);
@@ -481,5 +495,127 @@ fn a_lock_whose_client_crashes_stays_locked_and_a_takeover_tells_nothing_new() {
             Told::Locked,
             Told::Unlocked
         ]
+    );
+}
+
+/// A private session bus (`dbus-daemon --session`), killed on drop.
+struct PrivateBus {
+    address: String,
+    pid: String,
+}
+
+impl PrivateBus {
+    /// `None` when `dbus-daemon` is not installed.
+    fn start() -> Option<PrivateBus> {
+        let out = std::process::Command::new("dbus-daemon")
+            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        assert!(out.status.success(), "dbus-daemon failed: {}", out.status);
+        let text = String::from_utf8(out.stdout).unwrap();
+        let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
+        Some(PrivateBus {
+            address: lines.next().unwrap().to_string(),
+            pid: lines.next().unwrap().to_string(),
+        })
+    }
+}
+
+impl Drop for PrivateBus {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("kill").arg(&self.pid).status();
+    }
+}
+
+/// A process that took `org.cupertino.Login1`: counts the lock requests it receives.
+struct Squatter(Arc<Mutex<u32>>);
+
+#[zbus::interface(name = "org.cupertino.Login1")]
+impl Squatter {
+    fn lock(&self) {
+        *self.0.lock().unwrap() += 1;
+    }
+    fn lock_now(&self) {
+        *self.0.lock().unwrap() += 1;
+    }
+}
+
+/// SEC-04: the lock goes to the login process over the server's own connection, so a process that owns the session bus name
+/// before the login process does cannot make it go missing, and it receives nothing. Without a login process connected the
+/// request falls back to the session bus, which only the verified owner of the name answers.
+#[test]
+fn a_lock_request_reaches_the_lock_screen_while_a_squatter_owns_the_login_name() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: no dbus-daemon");
+        return;
+    };
+    let Some(mut h) = Harness::new() else { return };
+    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
+    let handle = cupertino_server::dbus::DbusHandle::start().expect("worker thread");
+    // the supervised login process is some other process than the squatter, which is this test
+    handle.set_login(cupertino_server::dbus::LoginTrust::Agent(
+        std::process::id() + 1,
+    ));
+    h.state.dbus = Some(handle);
+    let received = Arc::new(Mutex::new(0));
+    let _squatter = zbus::block_on(
+        zbus::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .name("org.cupertino.Login1")
+            .unwrap()
+            .serve_at("/org/cupertino/Login1", Squatter(received.clone()))
+            .unwrap()
+            .build(),
+    )
+    .expect("the squatter");
+
+    // another shell process with the Session role only is not asked
+    let other = Client::observer(h.shell_stream(), 7);
+    let login = Client::observer(h.login_stream(), 7);
+    h.wait_until("both observers to be told", |_| {
+        other.told().len() == 3 && login.told().len() == 3
+    });
+
+    h.state.lock_session_now();
+    h.state.lock_session();
+    h.wait_until("the login process to be asked twice", |_| {
+        login.told().len() == 5
+    });
+    assert_eq!(
+        login.told()[3..],
+        [Told::LockRequested(true), Told::LockRequested(false)]
+    );
+    assert_eq!(
+        other.told().len(),
+        3,
+        "a process without the lock role is not asked"
+    );
+
+    // the bus path would have been tried by now
+    let end = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < end {
+        h.wait_until("a step", |_| true);
+    }
+    assert_eq!(
+        *received.lock().unwrap(),
+        0,
+        "the squatter got a lock request"
+    );
+
+    // no lock screen connected: the bus is the way, and the squatter is still refused
+    drop(login);
+    drop(other);
+    h.state.sessions = Default::default();
+    h.state.lock_session_now();
+    let end = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < end {
+        h.wait_until("a step", |_| true);
+    }
+    assert_eq!(
+        *received.lock().unwrap(),
+        0,
+        "the squatter got a lock request"
     );
 }

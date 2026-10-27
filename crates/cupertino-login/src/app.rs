@@ -31,7 +31,6 @@ use cupertino_login::render::{PanelView, Renderer};
 use cupertino_login::user::User;
 use cupertino_login::{session, upower};
 use cupertino_theme::Theme;
-use std::error::Error;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
@@ -160,30 +159,45 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     // `RefreshCapabilities` goes to the probe thread, not through the loop: the menu's question must not wait for it
     let (refresh, refresh_requests) = mpsc::channel::<()>();
     let refresh_from_bus = refresh.clone();
-    let control = control::serve(
+    let on_request = std::sync::Arc::new(move |request| {
+        if request == Request::RefreshCapabilities {
+            // the probe thread is gone only while the process ends
+            let _ = refresh_from_bus.send(());
+            return;
+        }
+        request_notifier.send(match request {
+            Request::Lock { explicit } => Message::Lock { explicit },
+            Request::Panel(kind) => Message::Panel(kind),
+            Request::PowerKey { pressed } => Message::PowerKey(pressed),
+            Request::SwitchToLoginWindow => Message::SwitchToLoginWindow,
+            Request::Sleep => Message::Sleep,
+            Request::RefreshCapabilities => unreachable!("handled above"),
+        })
+    });
+    let served = on_request.clone();
+    let control = match control::serve(
         zbus::connection::Builder::session()?,
         user.display.clone(),
         Capabilities::default(),
-        move |request| {
-            if request == Request::RefreshCapabilities {
-                // the probe thread is gone only while the process ends
-                let _ = refresh_from_bus.send(());
-                return;
-            }
-            request_notifier.send(match request {
-                Request::Lock { explicit } => Message::Lock { explicit },
-                Request::Panel(kind) => Message::Panel(kind),
-                Request::PowerKey { pressed } => Message::PowerKey(pressed),
-                Request::SwitchToLoginWindow => Message::SwitchToLoginWindow,
-                Request::Sleep => Message::Sleep,
-                Request::RefreshCapabilities => unreachable!("handled above"),
-            })
-        },
-    )
-    .map_err(|e| match e {
-        zbus::Error::NameTaken => "another lock screen owns org.cupertino.Login1".into(),
-        e => Box::new(e) as Box<dyn Error>,
-    })?;
+        move |request| served(request),
+    ) {
+        Ok(control) => control,
+        // Another process took the name first. Quitting would leave the session with no lock screen at all; instead this
+        // process runs on the server's private connection, which carries the lock request, and on logind's signals.
+        Err(zbus::Error::NameTaken) => {
+            eprintln!(
+                "cupertino-login: error: another process owns org.cupertino.Login1; the menus, the power key and the panels \
+                 that come over the session bus do not reach this process, the lock still does"
+            );
+            control::serve_unnamed(
+                zbus::connection::Builder::session()?,
+                user.display.clone(),
+                Capabilities::default(),
+                move |request| on_request(request),
+            )?
+        }
+        Err(e) => return Err(Box::new(e)),
+    };
 
     let Some(logind) = Logind::connect()? else {
         return Ok(Ended::NoLoginSession);
@@ -520,6 +534,7 @@ impl App {
             Event::Configured { .. } | Event::ScaleChanged { .. } => {}
             Event::Key { .. } | Event::KeyboardLeave(_) | Event::Pointer { .. } => {}
             // the screens have one fixed look, and this process is the one that holds the lock
+            Event::LockRequested { explicit } => self.request_lock(now, explicit)?,
             Event::Appearance { .. } | Event::DisplayOptions(_) | Event::SessionLock { .. } => {}
             Event::PopupDone(_)
             | Event::ActivationToken { .. }

@@ -519,13 +519,25 @@ mod tests {
         assert_eq!(allowed(&Caller::Anonymous, 1), Err(Denial::Anonymous));
     }
 
-    /// SEC-04: every guarded method goes through `guard`, which refuses a call the bus gave no sender for.
+    /// SEC-04: a call the bus gave no sender for is refused by every method of the centre control, and nothing changes.
     #[test]
-    fn a_call_without_a_sender_is_refused() {
-        let message = zbus::Message::method_call("/", "Ping")
-            .unwrap()
-            .build(&())
-            .unwrap();
+    fn an_anonymous_call_changes_nothing_on_the_centre_control() {
+        let shared = Arc::new(Shared {
+            center: Mutex::new(NotificationCenter::new(CenterConfig::default())),
+            clock: Box::new(|| 0.0),
+            wake: Box::new(|| {}),
+            info: ServerInfo::default(),
+            dnd_announced: AtomicBool::new(false),
+        });
+        let toggled = Arc::new(AtomicBool::new(false));
+        let control = CentreControl {
+            on_toggle: Box::new({
+                let toggled = toggled.clone();
+                move || toggled.store(true, Ordering::SeqCst)
+            }),
+            shared: shared.clone(),
+        };
+        const IFACE: Option<&str> = Some("org.cupertino.NotificationCenter1");
         let (ours, theirs) = std::os::unix::net::UnixStream::pair().unwrap();
         zbus::block_on(async {
             let client = zbus::connection::Builder::async_io_unix_stream(ours)
@@ -534,12 +546,44 @@ mod tests {
             let server = zbus::connection::Builder::async_io_unix_stream(theirs)
                 .server(zbus::Guid::generate())
                 .unwrap()
+                .serve_at(CENTRE_OBJECT_PATH, control)
+                .unwrap()
                 .p2p()
                 .build();
             let (client, _server) = futures_lite::future::try_zip(client, server).await.unwrap();
-            let refused = guard(&client, &message.header(), "SetDoNotDisturb").await;
-            assert!(matches!(refused, Err(CallerError::AnonymousCaller(_))));
+            let toggle =
+                client.call_method(None::<&str>, CENTRE_OBJECT_PATH, IFACE, "ToggleCentre", &());
+            let on = client.call_method(
+                None::<&str>,
+                CENTRE_OBJECT_PATH,
+                IFACE,
+                "SetDoNotDisturb",
+                &(true,),
+            );
+            let focus = client.call_method(
+                None::<&str>,
+                CENTRE_OBJECT_PATH,
+                IFACE,
+                "SetDoNotDisturbFor",
+                &("one-hour",),
+            );
+            for (method, reply) in [
+                ("ToggleCentre", toggle.await),
+                ("SetDoNotDisturb", on.await),
+                ("SetDoNotDisturbFor", focus.await),
+            ] {
+                let Err(zbus::Error::MethodError(name, _, _)) = reply else {
+                    panic!("{method} was not refused: {reply:?}");
+                };
+                assert_eq!(
+                    name.as_str(),
+                    "org.cupertino.Error.AnonymousCaller",
+                    "{method}"
+                );
+            }
         });
+        assert!(!toggled.load(Ordering::SeqCst), "the centre was toggled");
+        assert_eq!(shared.lock().dnd(), DndMode::Off);
     }
 
     fn ov(v: Value<'_>) -> OwnedValue {

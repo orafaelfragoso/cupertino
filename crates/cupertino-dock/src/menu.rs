@@ -43,6 +43,8 @@ pub enum MenuCommand {
     ShowAllWindows(String),
     Hide(String),
     Quit(String),
+    /// Open the Force Quit dialog on the confirmation of this application id.
+    ForceQuit(String),
     /// Launch the tile with this key.
     Open(String),
     OpenTrash,
@@ -121,8 +123,30 @@ pub struct TileFacts<'a> {
     pub built_in: bool,
     /// The application id of its windows while it runs.
     pub running_app_id: Option<&'a str>,
+    /// The server reports that the application stopped answering.
+    pub unresponsive: bool,
     /// The desktop entry file, when the key resolves to one.
     pub entry_path: Option<&'a Path>,
+}
+
+/// The disabled status row that heads the menu of an application that stopped answering.
+fn not_responding(f: &TileFacts<'_>, app: &str) -> Vec<MenuItem> {
+    if !f.unresponsive {
+        return Vec::new();
+    }
+    vec![
+        MenuItem::disabled(
+            "Application Not Responding",
+            MenuCommand::ForceQuit(app.to_string()),
+        ),
+        MenuItem::separator(),
+    ]
+}
+
+/// Force Quit for the menu of the file manager, which has no Quit.
+fn force_quit(f: &TileFacts<'_>, app: &str) -> Option<MenuItem> {
+    f.unresponsive
+        .then(|| MenuItem::item("Force Quit", MenuCommand::ForceQuit(app.to_string())))
 }
 
 /// The menu of a tile (running and not running applications, the file manager; the
@@ -135,24 +159,30 @@ pub fn tile_menu(f: &TileFacts<'_>) -> Vec<MenuItem> {
         // running, Show All Windows and Hide; not running, Open. Its Relaunch is not offered
         // (approximate: the dock has no relaunch path)
         TileKind::App if f.built_in => match f.running_app_id {
-            Some(app) => vec![
-                MenuItem::item(
+            Some(app) => {
+                let mut items = not_responding(f, app);
+                items.push(MenuItem::item(
                     "Show All Windows",
                     MenuCommand::ShowAllWindows(app.to_string()),
-                ),
-                MenuItem::item("Hide", MenuCommand::Hide(app.to_string())),
-            ],
+                ));
+                items.push(MenuItem::item("Hide", MenuCommand::Hide(app.to_string())));
+                items.extend(force_quit(f, app));
+                items
+            }
             None => vec![MenuItem::item("Open", MenuCommand::Open(f.key.to_string()))],
         },
         TileKind::App | TileKind::Recent => {
-            let mut items = vec![if f.pinned {
+            let mut items = f
+                .running_app_id
+                .map_or_else(Vec::new, |app| not_responding(f, app));
+            items.push(if f.pinned {
                 MenuItem::item(
                     "Remove from Dock",
                     MenuCommand::RemoveFromDock(f.key.to_string()),
                 )
             } else {
                 MenuItem::item("Keep in Dock", MenuCommand::KeepInDock(f.key.to_string()))
-            }];
+            });
             if let Some(path) = f.entry_path {
                 items.push(MenuItem::item(
                     "Show in File Manager",
@@ -167,7 +197,11 @@ pub fn tile_menu(f: &TileFacts<'_>) -> Vec<MenuItem> {
                         MenuCommand::ShowAllWindows(app.to_string()),
                     ));
                     items.push(MenuItem::item("Hide", MenuCommand::Hide(app.to_string())));
-                    items.push(MenuItem::item("Quit", MenuCommand::Quit(app.to_string())));
+                    items.push(if f.unresponsive {
+                        MenuItem::item("Force Quit", MenuCommand::ForceQuit(app.to_string()))
+                    } else {
+                        MenuItem::item("Quit", MenuCommand::Quit(app.to_string()))
+                    });
                 }
                 None => {
                     items.push(MenuItem::disabled(
@@ -283,6 +317,7 @@ mod tests {
             pinned,
             built_in: false,
             running_app_id: running,
+            unresponsive: false,
             entry_path: path,
         }
     }
@@ -292,6 +327,53 @@ mod tests {
             .iter()
             .map(|i| if i.separator { "-" } else { i.label.as_str() })
             .collect()
+    }
+
+    #[test]
+    fn an_unresponsive_application_is_headed_by_a_disabled_status_and_offers_force_quit() {
+        let mut f = facts(TileKind::App, true, Some("org.example.editor"), None);
+        f.unresponsive = true;
+        let items = tile_menu(&f);
+        assert_eq!(
+            labels(&items),
+            [
+                "Application Not Responding",
+                "-",
+                "Remove from Dock",
+                "-",
+                "Show All Windows",
+                "Hide",
+                "Force Quit"
+            ]
+        );
+        assert!(!items[0].enabled);
+        assert_eq!(
+            items[6].command,
+            Some(MenuCommand::ForceQuit("org.example.editor".into()))
+        );
+    }
+
+    #[test]
+    fn an_unresponsive_file_manager_offers_force_quit_after_hide() {
+        let items = tile_menu(&TileFacts {
+            kind: TileKind::App,
+            key: "cupertino-files",
+            pinned: true,
+            built_in: true,
+            running_app_id: Some("cupertino-files"),
+            unresponsive: true,
+            entry_path: None,
+        });
+        assert_eq!(
+            labels(&items),
+            [
+                "Application Not Responding",
+                "-",
+                "Show All Windows",
+                "Hide",
+                "Force Quit"
+            ]
+        );
     }
 
     #[test]
@@ -353,6 +435,7 @@ mod tests {
             pinned: true,
             built_in: true,
             running_app_id: running,
+            unresponsive: false,
             entry_path: None,
         };
         let running = tile_menu(&file_manager(Some("cupertino-files")));

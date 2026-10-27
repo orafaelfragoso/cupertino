@@ -16,6 +16,8 @@
 # home (CONFIG_JSON='{"wallpaper_folders": ["@HOME@/Art"]}').
 # The shell processes are the ones the packages install as /etc/cupertino/compositor.json, found on PATH (BIN_DIR first),
 # without cupertino-login: it works on the system bus and the caller's logind session, which a capture must not touch.
+# CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE: application ids (comma separated) the dock shows as not responding; the script builds
+# a dock for it into target/capture-fixtures.
 # Needs: dbus-run-session, python3.
 set -eu
 
@@ -32,6 +34,15 @@ PACK=${CUPERTINO_ASSET_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/cupertino/asset
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/cupertino-capture.XXXXXX")
 trap 'fusermount3 -u "$RUNTIME/doc" 2>/dev/null || true; rm -rf "$SCRATCH"' EXIT
+if [ -n "${CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE:-}" ]; then
+    # a dock that marks the listed application ids unresponsive, built apart so no packaged binary can contain it
+    (cd "$ROOT" && RUSTFLAGS="--cfg cupertino_capture_fixtures" cargo build -q --release -p cupertino-dock --features app \
+        --target-dir "$ROOT/target/capture-fixtures")
+    mkdir -p "$SCRATCH/bin"
+    ln -s "$BIN_DIR"/* "$SCRATCH/bin/"
+    ln -sf "$ROOT/target/capture-fixtures/release/cupertino-dock" "$SCRATCH/bin/cupertino-dock"
+    BIN_DIR=$SCRATCH/bin
+fi
 FHOME=$SCRATCH/home
 RUNTIME=$SCRATCH/runtime
 mkdir -p "$FHOME"/{Desktop,Documents/Projects,Downloads,Music,Pictures,Videos} \
@@ -81,6 +92,7 @@ env -i \
     XDG_DATA_DIRS="$ROOT/crates/cupertino-files/data:$ROOT/crates/cupertino-settings/data:/usr/local/share:/usr/share" \
     CUPERTINO_ASSET_SEARCH_PATH="$PACK" \
     CUPERTINO_SERVER_CONFIG="$SCRATCH/server.json" \
+    ${CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE:+CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE="$CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE"} \
     DBUS_SYSTEM_BUS_ADDRESS="unix:path=$SCRATCH/no-system-bus" \
     dbus-run-session -- "$BIN_DIR/cupertino-server" --headless --dbus --size "${SIZE:-1280x800}" \
     --screenshot "$OUT" --screenshot-after "${AFTER:-5}" --exit-after-screenshot "$@"

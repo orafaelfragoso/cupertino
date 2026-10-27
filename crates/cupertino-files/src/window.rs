@@ -3127,13 +3127,13 @@ mod tests {
     }
 
     #[test]
-    fn the_no_results_view_draws_in_time_at_any_window_size_and_scale() {
+    fn the_no_results_view_redraws_from_its_caches_at_any_window_size_and_scale() {
         let (_d, mut browser, places, mut painter, _frame) = search_window(1.0);
         browser.set_filter("zzz-nothing");
         assert!(browser.no_results());
         let mut search = TextField::with_max_len(SEARCH_MAX_LEN);
         search.insert("zzz-nothing");
-        let mut per_pixel: Vec<(f64, f64, String)> = Vec::new();
+        let mut work = Vec::new();
         for (w, h, scale) in [
             (600.0, 400.0, 1.0),
             (920.0, 436.0, 1.0),
@@ -3170,28 +3170,38 @@ mod tests {
                 marquee: None,
                 status: "",
             };
-            // a first frame fills the glyph and view caches; the cost of a frame is the best of the next three
+            // a first frame at a new size allocates its content view and fills the glyph cache; the frames after it
+            // rasterize no glyph, allocate no view and draw no row: what is left is fills and copies of their pixels
+            let views = painter.renderer.views_allocated;
             painter.paint(&mut pm, scale, &frame, &state, &Palette::builtin(false));
-            let took = (0..3)
-                .map(|_| {
-                    let start = std::time::Instant::now();
-                    painter.paint(&mut pm, scale, &frame, &state, &Palette::builtin(false));
-                    start.elapsed().as_secs_f64()
-                })
-                .fold(f64::INFINITY, f64::min);
-            let pixels = f64::from(pm.width()) * f64::from(pm.height());
-            eprintln!("{w} x {h} at {scale}x: {took:.3} s");
-            per_pixel.push((pixels, took / pixels, format!("{w} x {h} at {scale}x")));
-        }
-        // the cost grows no faster than the pixels drawn: no size takes much more per pixel than a smaller one (a
-        // small frame costs more per pixel, its fixed work spread over fewer pixels)
-        for (pixels, cost, what) in &per_pixel {
-            for (smaller, smaller_cost, than) in per_pixel.iter().filter(|(p, _, _)| p <= pixels) {
-                assert!(
-                    *cost < smaller_cost * 2.0,
-                    "{what}: {cost:e} s a pixel against {smaller_cost:e} for {than} ({smaller} pixels)"
-                );
+            let first_views = painter.renderer.views_allocated - views;
+            let (glyphs, views) = (
+                painter.renderer.text.glyphs_rasterized(),
+                painter.renderer.views_allocated,
+            );
+            let mut rows = 0;
+            for _ in 0..3 {
+                painter.paint(&mut pm, scale, &frame, &state, &Palette::builtin(false));
+                rows += painter.renderer.rows_drawn;
             }
+            work.push((
+                format!("{w} x {h} at {scale}x"),
+                first_views,
+                painter.renderer.text.glyphs_rasterized() - glyphs,
+                painter.renderer.views_allocated - views,
+                rows,
+            ));
         }
+        let expected: Vec<(String, usize, u64, usize, usize)> = [
+            "600 x 400 at 1x",
+            "920 x 436 at 1x",
+            "1920 x 1080 at 1x",
+            "1920 x 1080 at 2x",
+            "3840 x 2160 at 1x",
+        ]
+        .into_iter()
+        .map(|what| (what.to_owned(), 1, 0, 0, 0))
+        .collect();
+        assert_eq!(work, expected);
     }
 }

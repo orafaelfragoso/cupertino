@@ -105,10 +105,11 @@ pub fn search(query: &str) -> Vec<Hit> {
     hits
 }
 
-/// The text of the search field, the results it shows and the highlighted one.
+/// The text of the search field, whether all of it is selected, the results it shows and the highlighted one.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SearchField {
     text: String,
+    selected: bool,
     results: Vec<Hit>,
     highlighted: Option<usize>,
 }
@@ -126,6 +127,15 @@ impl SearchField {
         self.highlighted
     }
 
+    /// Whether the whole text is selected (typing or Backspace replaces it).
+    pub fn is_selected(&self) -> bool {
+        self.selected
+    }
+
+    pub fn select_all(&mut self) {
+        self.selected = !self.text.is_empty();
+    }
+
     /// Whether the results popup is open: while the field has text (an empty result shows "No results").
     pub fn is_open(&self) -> bool {
         !self.text.is_empty()
@@ -137,12 +147,19 @@ impl SearchField {
     }
 
     pub fn type_char(&mut self, c: char) {
+        if std::mem::take(&mut self.selected) {
+            self.text.clear();
+        }
         self.text.push(c);
         self.update();
     }
 
     pub fn backspace(&mut self) {
-        self.text.pop();
+        if std::mem::take(&mut self.selected) {
+            self.text.clear();
+        } else {
+            self.text.pop();
+        }
         self.update();
     }
 
@@ -366,6 +383,24 @@ mod tests {
             f.is_open() && f.results().is_empty() && f.choose().is_none(),
             "no results: nothing to choose, the popup stays"
         );
+    }
+
+    #[test]
+    fn select_all_is_replaced_by_typing_and_removed_by_backspace() {
+        let mut f = SearchField::default();
+        f.select_all();
+        assert!(!f.is_selected(), "an empty field has nothing to select");
+        for c in "Sound".chars() {
+            f.type_char(c);
+        }
+        f.select_all();
+        assert!(f.is_selected());
+        f.type_char('M');
+        assert_eq!((f.text(), f.is_selected()), ("M", false));
+        f.type_char('o');
+        f.select_all();
+        f.backspace();
+        assert_eq!((f.text(), f.is_selected(), f.is_open()), ("", false, false));
     }
 
     #[test]

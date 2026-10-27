@@ -222,6 +222,10 @@ const FIELD_GLYPH: f64 = 12.0;
 const FIELD_RADIUS: f64 = 6.0;
 const FIELD_TEXT: f64 = 13.0;
 const FIELD_GLYPH_INSET: f64 = 6.0;
+/// Opacity of the accent behind selected text, the value of the file manager's name editor. approximate.
+const TEXT_SELECTION_ALPHA: f32 = 0.35;
+/// Height of the selection band: the text size plus 2 points above and below, as in the name editor.
+const TEXT_SELECTION_HEIGHT: f64 = FIELD_TEXT + 4.0;
 /// A result row's selection fill radius (approximate, §5).
 const RESULT_RADIUS: f64 = 6.0;
 
@@ -540,6 +544,27 @@ impl Painter {
                 pal.secondary_text,
             );
             text.w = (clear.x - text.x - FIELD_GLYPH_INSET / 2.0).max(0.0);
+            if state.search.is_selected() {
+                let (_, width) =
+                    self.text
+                        .fit(typed, FIELD_TEXT as f32 * s, 400, 0.0, text.w as f32 * s);
+                fill_rect(
+                    pm,
+                    &Rect::new(
+                        text.x,
+                        text.y + (text.h - TEXT_SELECTION_HEIGHT) / 2.0,
+                        f64::from(width / s),
+                        TEXT_SELECTION_HEIGHT,
+                    ),
+                    s,
+                    [
+                        pal.accent[0],
+                        pal.accent[1],
+                        pal.accent[2],
+                        TEXT_SELECTION_ALPHA,
+                    ],
+                );
+            }
             self.label(
                 pm,
                 &text,
@@ -1288,6 +1313,58 @@ mod tests {
         let bytes = light.sidebar_selection.map(|c| (c * 255.0).round() as u8);
         assert_eq!(bytes, [65, 158, 253, 255]);
         assert_eq!(dark.sidebar_selection, dark.accent);
+    }
+
+    #[test]
+    fn selected_search_text_is_drawn_on_the_accent_in_both_appearances() {
+        let theme = Theme::load().expect("the design tokens of the repository");
+        let mut painter = Painter::new(&Assets::builtin()).unwrap();
+        let layout = WindowLayout::new(
+            crate::window::default_size(1.0),
+            1.0,
+            RowSize::Medium,
+            &crate::sidebar::groups(),
+            false,
+        );
+        let history = History::new(PaneId::Appearance);
+        for appearance in [Appearance::Light, Appearance::Dark] {
+            let mut search = SearchField::default();
+            for c in "Mouse".chars() {
+                search.type_char(c);
+            }
+            let pal = Palette::from_theme(&theme, appearance).unwrap();
+            // the row above the glyphs, inside the selection band
+            let f = layout.search;
+            let y = (f.y + f.h / 2.0 - FIELD_TEXT / 2.0) as u32;
+            let mut accent_pixels = |search: &SearchField| {
+                let mut pm =
+                    Pixmap::new(layout.sidebar.w as u32, (f.bottom() + 4.0) as u32).unwrap();
+                let state = WindowState {
+                    selected: PaneId::Appearance,
+                    has_battery: None,
+                    active: true,
+                    history: &history,
+                    search,
+                    search_focused: true,
+                };
+                painter.paint_search_field(&mut pm, 1.0, &layout, &state, &pal);
+                (f.x as u32 + 1..f.right() as u32 - 1)
+                    .map(|x| pm.pixel(x, y).unwrap().demultiply())
+                    .filter(|p| p.alpha() > 64 && p.blue() > p.red().saturating_add(64))
+                    .count()
+            };
+            let plain = accent_pixels(&search);
+            search.select_all();
+            let selected = accent_pixels(&search);
+            assert_eq!(
+                plain, 0,
+                "{appearance:?}: unselected text has no accent band"
+            );
+            assert!(
+                selected > 20,
+                "{appearance:?}: the selection shows ({selected} accent pixels)"
+            );
+        }
     }
 
     #[test]

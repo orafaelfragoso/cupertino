@@ -57,7 +57,7 @@ WALLPAPERS = json.loads((ROOT / 'packaging/data/wallpapers.json').read_text())['
 NAMES = {'runtime': 'cupertino', 'data': 'cupertino-data'}
 # Licence texts of the crates linked into the binaries, beside the GPL text (arch and rpm; the deb copyright file holds them).
 LICENSE_TEXTS = (('MPL-2.0', 'crates/cupertino-geometry/LICENSE'), ('MIT', 'crates/cupertino-xkbcommon/LICENSE'),
-                 ('OFL.txt', 'crates/cupertino-assets/fonts/OFL.txt'))
+                 ('libxkbcommon', 'third-party/xkbcommon-rs/LICENSE'), ('OFL.txt', 'crates/cupertino-assets/fonts/OFL.txt'))
 # What the data package ships besides crate code: the pack's own files, the font and the photographs.
 DATA_LICENSES = {'GPL-3.0-or-later', 'OFL-1.1', 'LicenseRef-Unsplash'}
 # Debian copyright file license names -> SPDX.
@@ -263,7 +263,8 @@ def missing_licenses(shipped, declared):
 
 
 def cmd_check_metadata(_args):
-    problems = []
+    problems = [f'licence text {src} for /usr/share/licenses/cupertino/{n} does not exist'
+                for n, src in LICENSE_TEXTS if not (ROOT / src).is_file()]
     for package in MANIFESTS:
         problems += [f'{package} licence: {m}' for m in missing_licenses(shipped_licenses(package), declared_licenses(package))]
     for crate, package in (('cupertino-server', 'runtime'), ('cupertino-assets', 'data')):

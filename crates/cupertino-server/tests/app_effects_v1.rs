@@ -884,3 +884,141 @@ fn popup_backdrop_draws_under_the_popup() {
         "material outside the popup"
     );
 }
+
+// ---- backdrop limits -----------------------------------------------------------------------
+
+/// What a client does in the limit tests, in order.
+#[derive(Clone, Copy)]
+enum Step {
+    /// A new surface.
+    Surface,
+    /// A backdrop on the surface with this index.
+    Backdrop(usize),
+    /// Destroy the backdrop with this index (in creation order).
+    Destroy(usize),
+}
+
+struct Bare;
+
+macro_rules! ignore_bare_events {
+    ($($t:ty),*) => {$(
+        impl Dispatch<$t, ()> for Bare {
+            fn event(_: &mut Self, _: &$t, _: <$t as wayland_client::Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+        }
+    )*};
+}
+ignore_bare_events!(
+    wl_compositor::WlCompositor,
+    wl_surface::WlSurface,
+    CupertinoAppEffectsV1,
+    CupertinoBackdropV1
+);
+
+impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Bare {
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+/// A client that runs `steps` and then waits one round trip: the code of the protocol error the server posted on the
+/// effects object, or `None` when it stayed connected.
+fn run_steps(socket: PathBuf, steps: Vec<Step>) -> JoinHandle<Option<u32>> {
+    std::thread::spawn(move || {
+        let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
+        let conn = Connection::from_socket(stream).unwrap();
+        let (globals, mut queue) = registry_queue_init::<Bare>(&conn).unwrap();
+        let qh = queue.handle();
+        let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
+        let effects: CupertinoAppEffectsV1 = globals.bind(&qh, 1..=1, ()).unwrap();
+        let mut surfaces = Vec::new();
+        let mut backdrops = Vec::new();
+        for step in steps {
+            match step {
+                Step::Surface => surfaces.push(compositor.create_surface(&qh, ())),
+                Step::Backdrop(surface) => {
+                    backdrops.push(effects.get_backdrop(&surfaces[surface], &qh, ()))
+                }
+                Step::Destroy(backdrop) => backdrops[backdrop].destroy(),
+            }
+        }
+        match queue.roundtrip(&mut Bare) {
+            Ok(_) => None,
+            Err(_) => {
+                let error = conn.protocol_error().expect("a protocol error");
+                assert_eq!(
+                    error.object_interface,
+                    CupertinoAppEffectsV1::interface().name
+                );
+                Some(error.code)
+            }
+        }
+    })
+}
+
+fn finish(h: &mut Harness, client: JoinHandle<Option<u32>>) -> Option<u32> {
+    while !client.is_finished() {
+        h.step();
+    }
+    client.join().unwrap()
+}
+
+/// Protocol error code `too_many_backdrops` of `cupertino_app_effects_v1.error`.
+const TOO_MANY_BACKDROPS: u32 = 2;
+
+#[test]
+fn a_surface_holds_eight_backdrops_and_the_ninth_is_a_protocol_error() {
+    let Some(mut h) = Harness::new() else { return };
+    let mut steps = vec![Step::Surface];
+    steps.extend((0..8).map(|_| Step::Backdrop(0)));
+    let ok = run_steps(h.socket_path(), steps.clone());
+    assert_eq!(finish(&mut h, ok), None);
+    steps.push(Step::Backdrop(0));
+    let over = run_steps(h.socket_path(), steps);
+    assert_eq!(finish(&mut h, over), Some(TOO_MANY_BACKDROPS));
+}
+
+#[test]
+fn a_client_holds_128_backdrops_over_its_surfaces_and_the_next_is_a_protocol_error() {
+    let Some(mut h) = Harness::new() else { return };
+    let mut steps = Vec::new();
+    for surface in 0..16 {
+        steps.push(Step::Surface);
+        steps.extend((0..8).map(|_| Step::Backdrop(surface)));
+    }
+    let ok = run_steps(h.socket_path(), steps.clone());
+    assert_eq!(finish(&mut h, ok), None);
+    steps.push(Step::Surface);
+    steps.push(Step::Backdrop(16));
+    let over = run_steps(h.socket_path(), steps);
+    assert_eq!(finish(&mut h, over), Some(TOO_MANY_BACKDROPS));
+}
+
+#[test]
+fn a_destroyed_backdrop_frees_its_place() {
+    let Some(mut h) = Harness::new() else { return };
+    let mut steps = vec![Step::Surface];
+    steps.extend((0..8).map(|_| Step::Backdrop(0)));
+    steps.extend((0..8).map(Step::Destroy));
+    steps.extend((0..8).map(|_| Step::Backdrop(0)));
+    let client = run_steps(h.socket_path(), steps);
+    assert_eq!(finish(&mut h, client), None);
+}
+
+#[test]
+fn a_client_over_its_limit_does_not_take_the_places_of_another() {
+    let Some(mut h) = Harness::new() else { return };
+    let mut flood = vec![Step::Surface];
+    flood.extend((0..9).map(|_| Step::Backdrop(0)));
+    let flooder = run_steps(h.socket_path(), flood);
+    assert_eq!(finish(&mut h, flooder), Some(TOO_MANY_BACKDROPS));
+    let mut steps = vec![Step::Surface];
+    steps.extend((0..8).map(|_| Step::Backdrop(0)));
+    let other = run_steps(h.socket_path(), steps);
+    assert_eq!(finish(&mut h, other), None);
+}

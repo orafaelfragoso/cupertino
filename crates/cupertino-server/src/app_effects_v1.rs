@@ -4,7 +4,8 @@
 //! Backdrop state lives in the surface's cached state, so it applies atomically with the surface's `wl_surface.commit`;
 //! the scene reads the committed (`current`) side.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use cupertino_decorations::TitlebarStyle;
 use cupertino_protocols::server::app_effects::cupertino_app_effects_v1::{
@@ -23,7 +24,7 @@ use smithay::reexports::wayland_server::{
 use smithay::utils::{Logical, Point, Rectangle};
 use smithay::wayland::compositor::{with_states, Cacheable};
 
-use crate::state::Cupertino;
+use crate::state::{ClientState, Cupertino};
 
 /// Registers the `cupertino_app_effects_v1` global.
 pub struct AppEffectsV1Global {
@@ -37,6 +38,11 @@ impl AppEffectsV1Global {
         }
     }
 }
+
+/// Most backdrops one surface may hold: the dock and the menus use a few per surface.
+const MAX_BACKDROPS_PER_SURFACE: usize = 8;
+/// Most backdrops one client may hold, over all its surfaces.
+const MAX_BACKDROPS_PER_CLIENT: usize = 128;
 
 /// Source of backdrop serials: identity of a backdrop and its creation order across surfaces.
 static NEXT_SERIAL: AtomicU64 = AtomicU64::new(0);
@@ -136,6 +142,8 @@ pub fn layer_backdrops(output: &Output) -> Vec<BackdropArea> {
 pub struct BackdropData {
     surface: Option<WlSurface>,
     serial: u64,
+    /// The client's count of backdrops, given back when this one is destroyed; `None` for an inert backdrop.
+    held: Option<Arc<AtomicUsize>>,
 }
 
 impl BackdropData {
@@ -195,11 +203,45 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Cupertino {
                         BackdropData {
                             surface: None,
                             serial,
+                            held: None,
                         },
                     );
                     effects.post_error(
                         EffectsError::InvalidSurface,
                         "the surface belongs to another client",
+                    );
+                    return;
+                }
+                let held = client
+                    .get_data::<ClientState>()
+                    .map(|data| data.backdrops.clone())
+                    .unwrap_or_default();
+                let on_surface = with_states(&surface, |states| {
+                    states
+                        .cached_state
+                        .get::<BackdropState>()
+                        .pending()
+                        .entries
+                        .len()
+                });
+                // the count is taken before the check, so a refused request cannot leave it raised
+                if held.fetch_add(1, Ordering::SeqCst) >= MAX_BACKDROPS_PER_CLIENT
+                    || on_surface >= MAX_BACKDROPS_PER_SURFACE
+                {
+                    held.fetch_sub(1, Ordering::SeqCst);
+                    init.init(
+                        id,
+                        BackdropData {
+                            surface: None,
+                            serial,
+                            held: None,
+                        },
+                    );
+                    effects.post_error(
+                        EffectsError::TooManyBackdrops,
+                        format!(
+                            "at most {MAX_BACKDROPS_PER_SURFACE} backdrops per surface and {MAX_BACKDROPS_PER_CLIENT} per client"
+                        ),
                     );
                     return;
                 }
@@ -221,6 +263,7 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Cupertino {
                     BackdropData {
                         surface: Some(surface),
                         serial,
+                        held: Some(held),
                     },
                 );
             }
@@ -358,6 +401,9 @@ impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {
 
     /// The backdrop leaves its surface's pending state, so it disappears with the next commit.
     fn destroyed(_: &mut Self, _: ClientId, _: &CupertinoBackdropV1, data: &BackdropData) {
+        if let Some(held) = &data.held {
+            held.fetch_sub(1, Ordering::SeqCst);
+        }
         if let Some(surface) = data.surface.as_ref().filter(|s| s.is_alive()) {
             with_states(surface, |states| {
                 states

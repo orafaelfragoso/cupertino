@@ -20,6 +20,7 @@
     <enum name="error">
       <entry name="invalid_surface" value="0" summary="the surface belongs to another client or is gone"/>
       <entry name="window" value="1" summary="the surface is not an application window, or the window is already mapped"/>
+      <entry name="too_many_backdrops" value="2" summary="the surface or the client holds as many backdrops as the server allows"/>
     </enum>
 
     <enum name="titlebar_style">
@@ -44,7 +45,9 @@
         A surface may have several backdrops; they are drawn in creation order, all below the
         surface. A new backdrop has no material and draws nothing until the material and shape
         are set and the surface is committed.
-        Posts invalid_surface when the surface belongs to another client.
+        Posts invalid_surface when the surface belongs to another client, and too_many_backdrops
+        when the surface already has 8 backdrops or the client has 128 (the limits count the
+        backdrops that are not destroyed yet).
       </description>
       <arg name="id" type="new_id" interface="cupertino_backdrop_v1"/>
       <arg name="surface" type="object" interface="wl_surface"/>

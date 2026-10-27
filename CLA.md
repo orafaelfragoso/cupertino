@@ -14,11 +14,11 @@ This agreement is between Rafael Fragoso ("We" or "Us") and the individual or le
 
 ### 1. Definitions
 
-"Contribution" means a work of authorship that You submit to Us for inclusion in or improvement of Cupertino and in which You own or assert ownership of copyright. If You do not own the copyright in the entire work, identify the parts You do not own and their owners and licences in the pull request. Do not submit those parts under this agreement unless You have authority to grant the rights below.
+"Contribution" means any work of authorship that is Submitted by You to Us in which You own or assert ownership of the Copyright. If You do not own the copyright in the entire work, identify the parts You do not own and their owners and licences in the pull request. Do not submit those parts under this agreement unless You have authority to grant the rights below.
 
 "Copyright" means all rights protecting works of authorship owned or controlled by You, including copyright, moral and neighboring rights, as appropriate, for the full term of their existence including any extensions by You.
 
-"Material" means Cupertino, the work of authorship that We make available to third parties and to which the Contribution is submitted.
+"Material" means Cupertino, the work of authorship that We make available to third parties and to which the Contribution is submitted. After You Submit the Contribution, it may be included in the Material.
 
 "Submit" means any form of electronic, verbal, or written communication sent to Us or our representatives, including but not limited to electronic mailing lists, source code control systems, and issue tracking systems that are managed by, or on behalf of, Us for the purpose of discussing and improving the Material, but excluding communication that is conspicuously marked or otherwise designated in writing by You as "Not a Contribution." "Submission Date" means the date on which You Submit a Contribution to Us.
 

@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_output, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_compositor, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
+    wl_surface,
 };
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::ext::session_lock::v1::client::{
@@ -47,6 +48,8 @@ fn solid_buffer(
 struct LockStatus {
     locked: bool,
     finished: bool,
+    /// Button presses the client's pointer received.
+    presses: u32,
 }
 
 struct ClientState {
@@ -168,6 +171,45 @@ impl Dispatch<ext_session_lock_surface_v1::ExtSessionLockSurfaceV1, wl_surface::
     }
 }
 
+impl Dispatch<wl_seat::WlSeat, ()> for ClientState {
+    fn event(
+        _: &mut Self,
+        seat: &wl_seat::WlSeat,
+        event: wl_seat::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let wl_seat::Event::Capabilities {
+            capabilities: wayland_client::WEnum::Value(caps),
+        } = event
+        {
+            if caps.contains(wl_seat::Capability::Pointer) {
+                seat.get_pointer(qh, ());
+            }
+        }
+    }
+}
+
+impl Dispatch<wl_pointer::WlPointer, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        _: &wl_pointer::WlPointer,
+        event: wl_pointer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_pointer::Event::Button {
+            state: wayland_client::WEnum::Value(wl_pointer::ButtonState::Pressed),
+            ..
+        } = event
+        {
+            state.lock_status.lock().unwrap().presses += 1;
+        }
+    }
+}
+
 /// Keeps a client's protocol objects alive for the life of its thread; the lock object is kept apart because
 /// the thread uses it to unlock.
 struct Setup {
@@ -263,12 +305,13 @@ impl Client {
             let manager: ext_session_lock_manager_v1::ExtSessionLockManagerV1 =
                 globals.bind(&qh, 1..=1, ()).unwrap();
             let output: wl_output::WlOutput = globals.bind(&qh, 1..=4, ()).unwrap();
+            let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=5, ()).unwrap();
             let lock = manager.lock(&qh, ());
             let surface = compositor.create_surface(&qh, ());
             let lock_surface = lock.get_lock_surface(&surface, &output, &qh, surface.clone());
             queue.roundtrip(client).unwrap();
             Setup {
-                objects: Box::new((manager, output, surface, lock_surface)),
+                objects: Box::new((manager, output, seat, surface, lock_surface)),
                 lock: Some(lock),
             }
         })
@@ -276,6 +319,11 @@ impl Client {
 
     pub fn locked(&self) -> bool {
         self.lock_status.lock().unwrap().locked
+    }
+
+    /// Button presses the client's pointer got (the lock surface has the pointer while the session is locked).
+    pub fn presses(&self) -> u32 {
+        self.lock_status.lock().unwrap().presses
     }
 
     pub fn finished(&self) -> bool {

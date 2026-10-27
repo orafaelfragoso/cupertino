@@ -684,9 +684,9 @@ fn a_version_3_bar_shows_whether_a_capture_session_runs() {
 }
 
 #[test]
-fn a_version_5_bar_is_told_which_process_is_the_session_agent() {
+fn a_version_8_bar_is_told_which_process_is_the_session_agent() {
     let Some(mut h) = Harness::new() else { return };
-    let bar = BarClient::spawn_at(h.shell_stream(), true, 5);
+    let bar = BarClient::spawn_at(h.shell_stream(), true, 8);
     h.wait_for_groups(&bar, 3);
     assert_eq!(
         bar.groups()[2],

@@ -342,10 +342,16 @@ fn the_extras_follow_the_services_and_act_on_them() {
 
     // nobody was named the session agent, so the owner of its name is not read, however well it answers
     assert_eq!(first.session, None);
-    // the owner of the name is another process than the one named: still not read
+    assert!(
+        !first.lock_without_agent,
+        "no login process is named: nothing locks"
+    );
+    // the owner of the name is another process than the one named: still not read, and the lock still works
     let me = std::process::id();
     extras.session_agent(SessionAgent::Process(me ^ 1)).unwrap();
-    assert!(events.recv_timeout(Duration::from_millis(500)).is_err());
+    let squatted = next(&events);
+    assert_eq!(squatted.session, None);
+    assert!(squatted.lock_without_agent);
 
     // the system menu's state: the name and a capability the agent says no to
     extras.session_agent(SessionAgent::Process(me)).unwrap();

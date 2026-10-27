@@ -4,7 +4,7 @@ Short rules for any agent (and any person) who edits this repository. Details li
 
 ## Rules
 
-1. **Licence.** The project is `GPL-3.0-or-later`. Contributions need a signed CLA.
+1. **Licence.** The project is `GPL-3.0-or-later`; `cupertino-wayland-client` and the crates in its normal dependency closure are `MPL-2.0` (see CONTRIBUTING.md). Contributions need a signed CLA.
 2. **No outside material.** No files, names, wording, fonts, icons, cursors or wallpapers from proprietary systems or their products, and nothing extracted from their binaries. Asset packs are data loaded from a directory; they are never committed or packaged here.
 3. **Plain design values.** A constant is a named design value with a comment about what it controls. No identifiers of outside catalogues, no notes about where a number came from, no addresses or symbol names from other software.
 4. **No pixel-parity tests** against another system. Test behaviour, geometry and timing of our own model.

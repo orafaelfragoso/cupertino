@@ -18,6 +18,7 @@
 //! | `mouse_dpi` | object: mouse key ([`mouse_dpi_key`]) → resolution in dots per inch, 50 to 32000 |
 //! | `cursor_size` | cursor scale |
 //! | `cursor_fill`, `cursor_outline` | `#rrggbb` or `#rrggbbaa` |
+//! | `wallpaper_folders` | absolute paths of the folders the Settings wallpaper pane lists besides the packs' pictures; the server ignores it |
 //! | `wallpaper`, `wallpaper_dark` | absolute path of a PNG or JPEG: the wallpaper, and the one of the dark appearance (else `wallpaper` is used) |
 //! | `shell` | list of `{"name": …, "command": [program, args…]}`, commands not empty |
 //! | `screenshot` | the screenshot command, not empty |
@@ -113,6 +114,8 @@ pub struct CompositorSettings {
     /// Absolute path of the wallpaper image; the dark appearance uses `wallpaper_dark` when it is set.
     pub wallpaper: Option<String>,
     pub wallpaper_dark: Option<String>,
+    /// Absolute paths of the folders of pictures the user added in Settings (the server does not read them).
+    pub wallpaper_folders: Option<Vec<String>>,
     pub shell: Option<Vec<ShellEntry>>,
     pub screenshot: Option<Vec<String>>,
 }
@@ -212,6 +215,20 @@ macro_rules! json_key {
             keep: |s, g| s.$field = g.$field.clone(),
         }
     };
+}
+
+/// A list of absolute paths.
+fn absolute_paths(v: &Value) -> Result<Vec<String>, String> {
+    strings(v)?
+        .into_iter()
+        .map(|text| {
+            if Path::new(&text).is_absolute() {
+                Ok(text)
+            } else {
+                Err(format!("{text:?} is not an absolute path"))
+            }
+        })
+        .collect()
 }
 
 /// An absolute path as text.
@@ -339,6 +356,9 @@ const KEYS: &[JsonKey] = &[
     json_key!(wallpaper_dark, absolute_path, |s: &String| Value::String(
         s.clone()
     )),
+    json_key!(wallpaper_folders, absolute_paths, |l: &Vec<String>| {
+        strings_value(l)
+    }),
     json_key!(shell, shell_entries, |list: &Vec<ShellEntry>| Value::Array(
         list.iter()
             .map(|e| {
@@ -492,6 +512,23 @@ mod tests {
         assert_eq!(read.wallpaper_dark, None);
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert_eq!(problems[0].key, "wallpaper_dark");
+    }
+
+    #[test]
+    fn the_wallpaper_folders_are_a_list_of_absolute_paths() {
+        let (read, problems) = CompositorSettings::parse(
+            r#"{"wallpaper_folders": ["/home/u/Pictures", "/mnt/art"]}"#,
+            None,
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            read.wallpaper_folders,
+            Some(vec!["/home/u/Pictures".to_string(), "/mnt/art".to_string()])
+        );
+        let (read, problems) =
+            CompositorSettings::parse(r#"{"wallpaper_folders": ["/ok", "relative"]}"#, None);
+        assert_eq!(read.wallpaper_folders, None);
+        assert_eq!(problems[0].key, "wallpaper_folders");
     }
 
     #[test]

@@ -13,7 +13,13 @@ use cupertino_geometry::{CornerStyle, Radii, Rect as GeoRect};
 use cupertino_icons::SystemIcons;
 use cupertino_text_field::TextField;
 use cupertino_theme::{Appearance, SemanticColor, Theme};
-use tiny_skia::{Color, FillRule, Paint, Pixmap, PixmapPaint, Rect as SkRect, Stroke, Transform};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use tiny_skia::{
+    Color, FillRule, FilterQuality, Paint, Pattern, Pixmap, PixmapPaint, Rect as SkRect,
+    SpreadMode, Stroke, Transform,
+};
 
 use crate::controls::{self, metrics as cm, Control};
 use crate::form::{metrics as fm, SectionLayout};
@@ -273,6 +279,36 @@ fn fill_rounded(pm: &mut Pixmap, r: &Rect, radius: f64, continuous: bool, s: f32
     }
 }
 
+/// Fill `r` (rounded) with `image` scaled to cover it, the longer side cropped evenly.
+fn fill_cover(pm: &mut Pixmap, r: &Rect, image: &Pixmap, radius: f64, s: f32) {
+    let (w, h) = (r.w as f32 * s, r.h as f32 * s);
+    let scale = (w / image.width() as f32).max(h / image.height() as f32);
+    let transform = Transform::from_translate(
+        r.x as f32 * s + (w - image.width() as f32 * scale) / 2.0,
+        r.y as f32 * s + (h - image.height() as f32 * scale) / 2.0,
+    )
+    .pre_scale(scale, scale);
+    let fill = Paint {
+        anti_alias: true,
+        shader: Pattern::new(
+            image.as_ref(),
+            SpreadMode::Pad,
+            FilterQuality::Bilinear,
+            1.0,
+            transform,
+        ),
+        ..Paint::default()
+    };
+    if let Some(path) = rounded_path(
+        GeoRect::new(r.x, r.y, r.w, r.h),
+        Radii::uniform(radius),
+        CornerStyle::Circular,
+        f64::from(s),
+    ) {
+        pm.fill_path(&path, &fill, FillRule::Winding, Transform::identity(), None);
+    }
+}
+
 fn stroke_rounded(pm: &mut Pixmap, r: &Rect, radius: f64, width: f64, s: f32, c: Rgba) {
     if let Some(path) = rounded_path(
         GeoRect::new(r.x, r.y, r.w, r.h),
@@ -341,6 +377,8 @@ fn search_style(pal: &Palette) -> FieldStyle {
 pub struct Painter {
     pub text: TextRenderer,
     symbols: SystemIcons,
+    /// The thumbnails of the pictures of a grid, by the image they show.
+    thumbnails: HashMap<PathBuf, Pixmap>,
 }
 
 impl Painter {
@@ -354,7 +392,38 @@ impl Painter {
         Ok(Painter {
             text,
             symbols: SystemIcons::required(assets, &[], &required_symbols()),
+            thumbnails: HashMap::new(),
         })
+    }
+
+    /// Show the PNG `thumbnail` for the picture `image` from now on; `false` when it cannot be read.
+    pub fn set_thumbnail(&mut self, image: &Path, thumbnail: &Path) -> bool {
+        match Pixmap::load_png(thumbnail) {
+            Ok(pixmap) => {
+                self.thumbnails.insert(image.to_path_buf(), pixmap);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Whether the thumbnail of `image` is in.
+    pub fn has_thumbnail(&self, image: &Path) -> bool {
+        self.thumbnails.contains_key(image)
+    }
+
+    /// Draw the raster icon `name` fitted into `r` (a placeholder when no pack or host theme gives it).
+    fn raster_icon(&mut self, pm: &mut Pixmap, r: &Rect, name: &str, s: f32) {
+        let px = (r.w.min(r.h) * f64::from(s)).round().max(1.0) as u32;
+        let icon = self.symbols.raster(name, px);
+        pm.draw_pixmap(
+            (r.x as f32 * s).round() as i32,
+            (r.y as f32 * s).round() as i32,
+            icon.as_ref(),
+            &PixmapPaint::default(),
+            Transform::identity(),
+            None,
+        );
     }
 
     /// Draw the template symbol `name` in `color`, fitted to `fit` points and centred in `r` (a placeholder when no
@@ -744,8 +813,17 @@ impl Painter {
                 );
             }
             let frame = l.frame.offset(0.0, dy);
-            fill_rounded(pm, &frame, fm::BOX_RADIUS, false, s, pal.box_fill);
+            let grid = section.rows.first().is_some_and(|r| {
+                matches!(r.control, Control::Tiles { .. } | Control::Preview { .. })
+            });
+            if !grid {
+                fill_rounded(pm, &frame, fm::BOX_RADIUS, false, s, pal.box_fill);
+            }
             for (ri, (row, rl)) in section.rows.iter().zip(&l.rows).enumerate() {
+                if let Control::Tiles { .. } | Control::Preview { .. } = row.control {
+                    self.paint_control(pm, s, &row.control, &rl.control.offset(0.0, dy), None, pal);
+                    continue;
+                }
                 if ri > 0 {
                     let r = rl.row.offset(0.0, dy);
                     fill_rect(
@@ -1107,6 +1185,112 @@ impl Painter {
                     );
                 }
             }
+            Control::Preview { image, title, note } => {
+                let (pw, ph) = cm::PREVIEW;
+                let picture = Rect::new(frame.x, frame.y, pw.min(frame.w), ph);
+                match image.as_ref().and_then(|i| self.thumbnails.get(i)) {
+                    Some(thumbnail) => fill_cover(pm, &picture, thumbnail, cm::TILE_RADIUS, s),
+                    None => fill_rounded(pm, &picture, cm::TILE_RADIUS, false, s, pal.box_fill),
+                }
+                stroke_rounded(pm, &picture, cm::TILE_RADIUS, 1.0, s, pal.separator);
+                let text_x = picture.right() + cm::PREVIEW_GAP;
+                let text_w = (frame.right() - text_x).max(0.0);
+                let mut y = picture.y + 8.0;
+                self.label(
+                    pm,
+                    &Rect::new(text_x, y, text_w, 18.0),
+                    title,
+                    Font {
+                        size: 13.0,
+                        weight: 600,
+                    },
+                    s,
+                    pal.text,
+                );
+                y += 20.0;
+                if let Some(note) = note {
+                    self.label(
+                        pm,
+                        &Rect::new(text_x, y, text_w, 16.0),
+                        note,
+                        Font {
+                            size: 11.0,
+                            weight: 400,
+                        },
+                        s,
+                        pal.secondary_text,
+                    );
+                }
+            }
+            Control::Tiles { tiles, selected } => {
+                let caption = controls::tile_caption_height(tiles);
+                for (i, (tile, r)) in tiles
+                    .iter()
+                    .zip(controls::tile_rects(frame, tiles.len(), caption))
+                    .enumerate()
+                {
+                    match self.thumbnails.get(&tile.image) {
+                        Some(thumbnail) => fill_cover(pm, &r, thumbnail, cm::TILE_RADIUS, s),
+                        None => fill_rounded(pm, &r, cm::TILE_RADIUS, false, s, pal.box_fill),
+                    }
+                    if tile.pair {
+                        // a light and a dark half: the picture changes with the appearance
+                        let pill = Rect::new(r.right() - 30.0, r.bottom() - 20.0, 24.0, 14.0);
+                        let dark = [0.12, 0.12, 0.14, 1.0];
+                        fill_rounded(pm, &pill, 7.0, false, s, [1.0, 1.0, 1.0, 0.95]);
+                        fill_rect(
+                            pm,
+                            &Rect::new(pill.x + 12.0, pill.y + 2.0, 6.0, 10.0),
+                            s,
+                            dark,
+                        );
+                        fill_rounded(
+                            pm,
+                            &Rect::new(pill.x + 12.0, pill.y, 12.0, 14.0),
+                            7.0,
+                            false,
+                            s,
+                            dark,
+                        );
+                    }
+                    if *selected == Some(i) {
+                        stroke_rounded(
+                            pm,
+                            &r.inset(-2.0, -2.0),
+                            cm::TILE_RADIUS + 2.0,
+                            3.0,
+                            s,
+                            pal.accent,
+                        );
+                    } else {
+                        stroke_rounded(pm, &r, cm::TILE_RADIUS, 1.0, s, pal.separator);
+                    }
+                    self.label(
+                        pm,
+                        &Rect::new(r.x, r.bottom() + 2.0, r.w, cm::TILE_TITLE_HEIGHT - 2.0),
+                        &tile.title,
+                        Font {
+                            size: 12.0,
+                            weight: if *selected == Some(i) { 600 } else { 400 },
+                        },
+                        s,
+                        pal.text,
+                    );
+                    if let Some(author) = &tile.credit {
+                        self.label(
+                            pm,
+                            &Rect::new(r.x, r.bottom() + 17.0, r.w, 14.0),
+                            author,
+                            Font {
+                                size: 11.0,
+                                weight: 400,
+                            },
+                            s,
+                            pal.secondary_text,
+                        );
+                    }
+                }
+            }
             Control::Text { value } => {
                 let w = f64::from(self.text.measure(value, 13.0 * s, 400, 0.0) / s).min(frame.w);
                 self.label(
@@ -1219,7 +1403,10 @@ impl Painter {
         );
         match &sheet.kind {
             // the default button uses the accent (no pulse in this build)
-            Kind::Passphrase { .. } | Kind::Resolution { .. } | Kind::Pairing { .. } => {
+            Kind::Passphrase { .. }
+            | Kind::Resolution { .. }
+            | Kind::Picker { .. }
+            | Kind::Pairing { .. } => {
                 fill_rounded(pm, &l.action, cm::RADIUS, false, s, pal.accent);
                 let w = f64::from(self.text.measure(sheet.action_title(), 13.0 * s, 400, 0.0) / s);
                 self.label(
@@ -1265,6 +1452,83 @@ impl Painter {
                     },
                     s,
                     pal.red,
+                );
+            }
+        }
+        if let (
+            Kind::Picker {
+                chooser,
+                top,
+                hovered,
+            },
+            Some(list),
+            Some(up),
+        ) = (&sheet.kind, l.list, l.up)
+        {
+            self.paint_control(
+                pm,
+                s,
+                &Control::Button { title: "Up".into() },
+                &up,
+                None,
+                pal,
+            );
+            fill_rounded(pm, &list, cm::RADIUS, false, s, pal.control_background);
+            stroke_rounded(pm, &list.inset(0.5, 0.5), cm::RADIUS, 1.0, s, pal.separator);
+            let entries = chooser.0.entries();
+            if entries.is_empty() {
+                self.label(
+                    pm,
+                    &list,
+                    "Nothing to show here",
+                    Font {
+                        size: 12.0,
+                        weight: 400,
+                    },
+                    s,
+                    pal.secondary_text,
+                );
+            }
+            for (k, (i, entry)) in entries
+                .iter()
+                .enumerate()
+                .skip(*top)
+                .take(crate::sheet::metrics::PICKER_ROWS)
+                .enumerate()
+            {
+                let row = Rect::new(
+                    list.x + 4.0,
+                    list.y + k as f64 * crate::sheet::metrics::PICKER_ROW,
+                    list.w - 8.0,
+                    crate::sheet::metrics::PICKER_ROW,
+                );
+                let on = chooser.0.highlighted() == Some(i);
+                if on {
+                    fill_rounded(pm, &row, 5.0, false, s, pal.accent);
+                } else if *hovered == Some(i) {
+                    fill_rounded(pm, &row, 5.0, false, s, pal.box_fill);
+                }
+                self.raster_icon(
+                    pm,
+                    &Rect::new(row.x + 6.0, row.y + 3.0, 16.0, 16.0),
+                    if entry.is_dir {
+                        "folder"
+                    } else {
+                        "document.image"
+                    },
+                    s,
+                );
+                let color = if on { WHITE } else { pal.text };
+                self.label(
+                    pm,
+                    &Rect::new(row.x + 28.0, row.y, row.w - 36.0, row.h),
+                    &entry.name,
+                    Font {
+                        size: 12.0,
+                        weight: 400,
+                    },
+                    s,
+                    color,
                 );
             }
         }

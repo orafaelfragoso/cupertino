@@ -238,6 +238,18 @@ impl Settings {
     /// Store the resolution `dpi` of the mouse `key` in `compositor.json` over the file as it is now, so a key the
     /// server wrote since the last read (the appearance) is not put back; on a failure the settings stay as they were.
     pub fn set_mouse_dpi(&mut self, paths: &Paths, key: &str, dpi: u32) -> Result<(), String> {
+        self.rewrite_compositor(paths, |c| c.set_mouse_dpi(key, Some(dpi)))
+    }
+
+    /// Change `compositor.json` over the file as it is now, so a key another writer set since the last read is not put
+    /// back; on a failure the settings stay as they were.
+    pub fn rewrite_compositor(
+        &mut self,
+        paths: &Paths,
+        change: impl FnOnce(
+            &mut cupertino_defaults::compositor::CompositorSettings,
+        ) -> Result<(), String>,
+    ) -> Result<(), String> {
         let before = self.clone();
         let outcome = self
             .reload(paths)
@@ -245,7 +257,7 @@ impl Settings {
                 eprintln!("cupertino-settings: the settings could not be read: {e}");
                 "The settings could not be read.".to_string()
             })
-            .and_then(|()| self.compositor.set_mouse_dpi(key, Some(dpi)))
+            .and_then(|()| change(&mut self.compositor))
             .and_then(|()| {
                 self.store(paths, File::Compositor)
                     .map_err(|e| e.to_string())
@@ -254,6 +266,36 @@ impl Settings {
             *self = before;
         }
         outcome
+    }
+
+    /// List the folder `folder` in the Wallpaper pane.
+    pub fn add_wallpaper_folder(
+        &mut self,
+        paths: &Paths,
+        folder: &std::path::Path,
+    ) -> Result<(), String> {
+        let folder = folder.to_string_lossy().into_owned();
+        self.rewrite_compositor(paths, |c| {
+            let folders = c.wallpaper_folders.get_or_insert_with(Vec::new);
+            if !folders.contains(&folder) {
+                folders.push(folder);
+            }
+            Ok(())
+        })
+    }
+
+    /// Show the picture `picture` on the desktop in both appearances.
+    pub fn set_wallpaper(
+        &mut self,
+        paths: &Paths,
+        picture: &std::path::Path,
+    ) -> Result<(), String> {
+        let picture = picture.to_string_lossy().into_owned();
+        self.rewrite_compositor(paths, |c| {
+            c.wallpaper = Some(picture);
+            c.wallpaper_dark = None;
+            Ok(())
+        })
     }
 
     /// Write `file` to its path atomically.

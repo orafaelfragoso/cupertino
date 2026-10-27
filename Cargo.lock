@@ -857,6 +857,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-filepicker"
+version = "0.1.0"
+dependencies = [
+ "cupertino-typeahead",
+ "tempfile",
+]
+
+[[package]]
 name = "cupertino-files"
 version = "0.1.0"
 dependencies = [
@@ -869,14 +877,12 @@ dependencies = [
  "cupertino-icons",
  "cupertino-text-field",
  "cupertino-theme",
+ "cupertino-thumbnails",
  "cupertino-typeahead",
- "image",
  "libc",
- "md5",
  "mime_guess",
  "notify",
  "percent-encoding",
- "png 0.17.16",
  "serde",
  "serde_json",
  "tempfile",
@@ -1216,10 +1222,12 @@ dependencies = [
  "cupertino-client",
  "cupertino-decorations",
  "cupertino-defaults",
+ "cupertino-filepicker",
  "cupertino-geometry",
  "cupertino-icons",
  "cupertino-text-field",
  "cupertino-theme",
+ "cupertino-thumbnails",
  "cupertino-typeahead",
  "serde_json",
  "tempfile",
@@ -1260,6 +1268,18 @@ dependencies = [
  "cupertino-animation",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "cupertino-thumbnails"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "md5",
+ "mime_guess",
+ "percent-encoding",
+ "png 0.17.16",
+ "tempfile",
 ]
 
 [[package]]

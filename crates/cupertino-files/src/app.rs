@@ -347,7 +347,10 @@ impl App {
             }
             // the window has no output-bound geometry, and the server hides it while the session is locked; the display
             // options reach its title bar and materials through the server
-            Event::OutputsChanged | Event::SessionLock { .. } | Event::LockRequested { .. } | Event::DisplayOptions(_) => {}
+            Event::OutputsChanged
+            | Event::SessionLock { .. }
+            | Event::LockRequested { .. }
+            | Event::DisplayOptions(_) => {}
             // the server dismissed the menu (a click outside it); popups this process destroyed itself end no menu
             Event::PopupDone(surface) => {
                 if self.menu_level(surface).is_some() {

@@ -210,7 +210,7 @@ impl Cupertino {
         need: Need,
     ) -> Result<(), Denial> {
         let agents = self.supervisor.pids_with_role(ShellRole::SessionLock);
-        let decision = caller.authorize(need, &agents, std::process::id(), |exe| {
+        let decision = crate::caller::authorize(caller, need, &agents, std::process::id(), |exe| {
             self.is_settings_program(exe)
         });
         if let Err(denial) = decision {

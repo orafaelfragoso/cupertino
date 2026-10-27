@@ -152,6 +152,7 @@ fn host_caller(pid: u32) -> Caller {
         process: ProcessHandle::open(pid).unwrap(),
         sandbox: None,
         exe: None,
+        parent: None,
     })
 }
 

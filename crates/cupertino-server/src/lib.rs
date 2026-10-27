@@ -7,6 +7,7 @@ pub mod accessibility;
 pub mod app_effects_v1;
 pub mod authorization;
 pub mod backend;
+pub mod caller;
 pub mod capture;
 pub mod cli;
 pub mod clipboard;

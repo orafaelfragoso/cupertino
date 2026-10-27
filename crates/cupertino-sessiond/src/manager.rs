@@ -131,7 +131,8 @@ struct Attempt {
     worker: Option<u64>,
     /// The user id of the account; `None` for a typed name that no account has.
     uid: Option<u32>,
-    prompt_open: bool,
+    /// The conversation id of the prompt the screen has not answered yet.
+    prompt: Option<u64>,
     /// When the attempt is cancelled if nothing has happened: the screen has not answered a prompt, or the worker has not
     /// answered the screen's answer or opened the session ([`ATTEMPT_TIMEOUT`]).
     deadline: Option<Instant>,
@@ -142,6 +143,13 @@ struct Attempt {
     /// The power action an administrator authenticates for: the attempt only checks the password and, once it is
     /// accepted, the action is carried out.
     power: Option<PowerAction>,
+}
+
+impl Attempt {
+    /// Whether `conversation` is the prompt that is open; it is answered once, so a replay of it is not.
+    fn answered(&mut self, conversation: u64) -> bool {
+        self.prompt.take_if(|open| *open == conversation).is_some()
+    }
 }
 
 /// A switch of the console between sessions that logind has not finished: no second one starts meanwhile
@@ -227,6 +235,8 @@ struct Manager {
     screen: Option<Screen>,
     workers: Vec<Worker>,
     next_worker: u64,
+    /// The id the next prompt gets: unique over the manager's life, so no answer fits a prompt of another attempt.
+    next_conversation: u64,
     logind: Logind,
     /// What the threads that read the system bus queued, and the descriptor that wakes `poll` for it.
     incoming: Receiver<Incoming>,
@@ -316,6 +326,7 @@ impl Manager {
             screen: None,
             workers: Vec::new(),
             next_worker: 0,
+            next_conversation: 0,
             logind,
             incoming,
             wake: mailbox.wake,
@@ -486,18 +497,18 @@ impl Manager {
                 return;
             }
         };
-        // an answer needs a prompt to answer; the state machine does not see the prompts
-        let unasked = matches!(request, Request::Answer { .. })
-            && !self
+        // an answer is for one open prompt of the open attempt; any other is dropped and its secret zeroed with it
+        if let Request::Answer { conversation, .. } = &request {
+            if !self
                 .attempt
-                .as_ref()
-                .is_some_and(|attempt| attempt.prompt_open);
-        let next = if unasked {
-            Err(ProtocolRefusal::State)
-        } else {
-            screen.state.next(&request)
-        };
-        match next {
+                .as_mut()
+                .is_some_and(|attempt| attempt.answered(*conversation))
+            {
+                eprintln!("cupertino-sessiond: dropped an answer to a prompt that is not open");
+                return;
+            }
+        }
+        match screen.state.next(&request) {
             Ok(state) => screen.state = state,
             Err(refusal) => {
                 eprintln!("cupertino-sessiond: closed the login screen: refused ({refusal:?})");
@@ -509,7 +520,7 @@ impl Manager {
             Request::Hello { .. } => self.greet(),
             Request::Authenticate { account } => self.authenticate(account),
             Request::AuthenticatePower { name, action } => self.authenticate_power(&name, action),
-            Request::Answer { secret } => self.answer(secret),
+            Request::Answer { secret, .. } => self.answer(secret),
             Request::Cancel {} => self.cancel(),
             Request::Power { action } => self.screen_power(action),
         }
@@ -700,7 +711,7 @@ impl Manager {
         self.attempt = Some(Attempt {
             worker: None,
             uid: None,
-            prompt_open: false,
+            prompt: None,
             deadline: None,
             decision: None,
             existing: None,
@@ -762,7 +773,7 @@ impl Manager {
         self.attempt = Some(Attempt {
             worker: Some(worker),
             uid,
-            prompt_open: false,
+            prompt: None,
             deadline: Some(Instant::now() + ATTEMPT_TIMEOUT),
             decision: None,
             existing,
@@ -776,7 +787,6 @@ impl Manager {
         let Some(attempt) = &mut self.attempt else {
             return;
         };
-        attempt.prompt_open = false;
         attempt.deadline = Some(Instant::now() + ATTEMPT_TIMEOUT);
         let Some(id) = attempt.worker else { return };
         let sent = encode_secret(&ToWorker::Answer { secret }, MAX_FRAME);
@@ -812,7 +822,7 @@ impl Manager {
     fn abort_attempt(&mut self) {
         let Some(attempt) = &self.attempt else { return };
         let (waited_for, worker) = (
-            if attempt.prompt_open {
+            if attempt.prompt.is_some() {
                 "the screen's answer to a prompt"
             } else {
                 "its worker"
@@ -1086,6 +1096,7 @@ impl Manager {
                 return;
             }
         };
+        let conversation = self.next_conversation;
         let current = self
             .attempt
             .as_ref()
@@ -1093,10 +1104,15 @@ impl Manager {
         match message {
             FromWorker::Prompt { echo, text } if role == Role::Session && current => {
                 if let Some(attempt) = &mut self.attempt {
-                    attempt.prompt_open = true;
+                    attempt.prompt = Some(conversation);
+                    self.next_conversation += 1;
                     attempt.deadline = Some(Instant::now() + ATTEMPT_TIMEOUT);
                 }
-                self.send(&Event::Prompt { echo, text });
+                self.send(&Event::Prompt {
+                    conversation,
+                    echo,
+                    text,
+                });
             }
             // the login screen's own session asks nothing, and an attempt that was dropped has no one to ask
             FromWorker::Prompt { .. } => {
@@ -1786,5 +1802,42 @@ mod tests {
         // a stale socket of an earlier run does not stop the next bind
         drop(_listener);
         bind(&path, uid, gid).unwrap();
+    }
+
+    fn attempt_asking(conversation: u64) -> Attempt {
+        Attempt {
+            worker: Some(1),
+            uid: Some(1000),
+            prompt: Some(conversation),
+            deadline: None,
+            decision: None,
+            existing: None,
+            power: None,
+        }
+    }
+
+    #[test]
+    fn an_answer_is_taken_once_and_only_for_the_prompt_that_is_open() {
+        let mut attempt = attempt_asking(5);
+        assert!(!attempt.answered(4), "an older prompt");
+        assert!(!attempt.answered(6), "a prompt that was never asked");
+        assert_eq!(
+            attempt.prompt,
+            Some(5),
+            "wrong answers leave the prompt open"
+        );
+        assert!(attempt.answered(5));
+        assert!(!attempt.answered(5), "a replay of the answer");
+        assert_eq!(attempt.prompt, None);
+    }
+
+    #[test]
+    fn an_answer_of_a_finished_attempt_does_not_fit_the_next_attempt() {
+        let mut finished = attempt_asking(5);
+        assert!(finished.answered(5));
+        // the greeter died mid-PAM and its successor replays the answer after the next attempt's first prompt
+        let mut next = attempt_asking(6);
+        assert!(!next.answered(5));
+        assert!(next.answered(6));
     }
 }

@@ -350,6 +350,20 @@ pub fn start_shell_supervision(
                     crate::shell_connection::shell_process_state(&spec.roles),
                 )
             });
+            let trust = if state.config.dev_shell {
+                crate::dbus::LoginTrust::Any
+            } else {
+                state
+                    .supervisor
+                    .pids_with_role(crate::authorization::ShellRole::SessionLock)
+                    .first()
+                    .map_or(crate::dbus::LoginTrust::Nobody, |pid| {
+                        crate::dbus::LoginTrust::Agent(*pid)
+                    })
+            };
+            if let Some(dbus) = &state.dbus {
+                dbus.set_login(trust);
+            }
             TimeoutAction::ToDuration(SUPERVISION_INTERVAL)
         })
         .map_err(|e| anyhow::anyhow!("inserting the shell supervision timer: {e}"))?;
@@ -458,6 +472,11 @@ fn start_dbus(state: &mut Cupertino) {
             crate::dbus::DbusHandle::start()
         }
     };
+    if state.config.dev_shell {
+        if let Some(dbus) = &state.dbus {
+            dbus.set_login(crate::dbus::LoginTrust::Any);
+        }
+    }
     crate::power::start_power_bus(state);
     crate::quit::start_session_service(state);
 }

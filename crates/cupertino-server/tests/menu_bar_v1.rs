@@ -332,6 +332,34 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for ClientState {
     }
 }
 
+/// A further toplevel of a client: its surface, which gets its buffer at the first configure.
+struct OtherWindow {
+    surface: wl_surface::WlSurface,
+    size: (i32, i32),
+    attached: std::sync::atomic::AtomicBool,
+}
+
+impl Dispatch<xdg_surface::XdgSurface, OtherWindow> for ClientState {
+    fn event(
+        state: &mut Self,
+        surface: &xdg_surface::XdgSurface,
+        event: xdg_surface::Event,
+        window: &OtherWindow,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let xdg_surface::Event::Configure { serial } = event {
+            surface.ack_configure(serial);
+            if !window
+                .attached
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                attach_and_commit(&state.shm, &window.surface, window.size, qh);
+            }
+        }
+    }
+}
+
 impl Dispatch<xdg_toplevel::XdgToplevel, ()> for ClientState {
     fn event(
         _: &mut Self,
@@ -352,6 +380,10 @@ enum Cmd {
     SessionAction(SessionAction),
     /// Announce the KDE application menu address of an application window.
     SetAddress(&'static str, &'static str),
+    /// Map a second toplevel of the same application client.
+    OpenSecondWindow,
+    /// Announce the KDE application menu address of the second toplevel.
+    SetSecondAddress(&'static str, &'static str),
     /// Ask for exclusive keyboard interactivity (true) or none (false), and commit.
     SetKeyboard(bool),
     /// Destroy the menu bar, its layer surface and the surface, as an exiting bar process does.
@@ -484,7 +516,9 @@ impl BarClient {
                 Cmd::WindowCommand(c) => bar.window_command(c),
                 Cmd::MoveToWorkspace(n) => bar.move_to_workspace(n),
                 Cmd::SessionAction(a) => bar.session_action(a),
-                Cmd::SetAddress(..) => panic!("a menu bar has no application menu address"),
+                Cmd::SetAddress(..) | Cmd::OpenSecondWindow | Cmd::SetSecondAddress(..) => {
+                    panic!("a menu bar has no application windows")
+                }
                 Cmd::SetKeyboard(exclusive) => {
                     let mode = if exclusive {
                         zwlr_layer_surface_v1::KeyboardInteractivity::Exclusive
@@ -602,10 +636,32 @@ impl AppClient {
                 attached: false,
                 toplevel_size: (300, 200),
             };
+            let qh = qh.clone();
+            let mut second = None;
             let apply = Box::new(move |cmd: Cmd| match cmd {
                 Cmd::SetAddress(service, path) => {
                     appmenu.set_address(service.to_string(), path.to_string())
                 }
+                Cmd::OpenSecondWindow => {
+                    let surface = compositor.create_surface(&qh, ());
+                    let window = OtherWindow {
+                        surface: surface.clone(),
+                        size: (200, 150),
+                        attached: Default::default(),
+                    };
+                    let xdg = wm_base.get_xdg_surface(&surface, &qh, window);
+                    let toplevel = xdg.get_toplevel(&qh, ());
+                    toplevel.set_app_id(app_id.to_string());
+                    toplevel.set_title(format!("{app_id} second window"));
+                    let appmenu = manager.create(&surface, &qh, ());
+                    surface.commit();
+                    second = Some((xdg, toplevel, appmenu));
+                }
+                Cmd::SetSecondAddress(service, path) => second
+                    .as_ref()
+                    .expect("the second window is open")
+                    .2
+                    .set_address(service.to_string(), path.to_string()),
                 _ => panic!("an application window takes no menu bar command"),
             });
             (state, apply)
@@ -794,6 +850,69 @@ fn the_active_window_its_menu_and_commands_go_through_the_bar() {
         h.state.wm.window(id).unwrap().state(),
         LifecycleState::Minimizing
     );
+}
+
+/// The title and the menu the bar was told in its latest group, once a window is active.
+fn latest_title_and_menu(bar: &BarClient) -> Option<(String, BarEvent)> {
+    let group = bar.groups().pop()?;
+    let title = group.iter().find_map(|e| match e {
+        BarEvent::ActiveApp { title, .. } => Some(title.clone()),
+        _ => None,
+    })?;
+    let menu = group
+        .into_iter()
+        .find(|e| matches!(e, BarEvent::MenuNone | BarEvent::MenuDbusmenu { .. }))?;
+    Some((title, menu))
+}
+
+/// Two windows of one client each export their own menus: the bar is told the menus of the window with the focus
+/// only, never the other window's, and the focus moving back swaps them back.
+#[test]
+fn the_bar_gets_the_menus_of_the_focused_window_of_a_client_with_two() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = BarClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&bar, 1);
+    let first_menu = BarEvent::MenuDbusmenu {
+        service: ":1.42".into(),
+        path: "/MenuBar/1".into(),
+    };
+    let second_menu = BarEvent::MenuDbusmenu {
+        service: ":1.42".into(),
+        path: "/MenuBar/2".into(),
+    };
+    let first_title = "org.example.office window".to_owned();
+    let second_title = "org.example.office second window".to_owned();
+
+    let app = AppClient::spawn(h.socket_path(), "org.example.office");
+    let first = h.mapped_window(1);
+    app.send(Cmd::SetAddress(":1.42", "/MenuBar/1"));
+    h.wait_until("the first window's menus", |_| {
+        latest_title_and_menu(&bar) == Some((first_title.clone(), first_menu.clone()))
+    });
+
+    // the second window takes the focus with no menus of its own: the first window's are not offered for it
+    app.send(Cmd::OpenSecondWindow);
+    let second = h.mapped_window(2);
+    assert_ne!(second, first);
+    h.wait_until("the second window to be active", |_| {
+        latest_title_and_menu(&bar).is_some_and(|(title, _)| title == second_title)
+    });
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((second_title.clone(), BarEvent::MenuNone))
+    );
+    app.send(Cmd::SetSecondAddress(":1.42", "/MenuBar/2"));
+    h.wait_until("the second window's menus", |_| {
+        latest_title_and_menu(&bar) == Some((second_title.clone(), second_menu.clone()))
+    });
+
+    // the second window goes: the focus and the menus are the first window's again
+    bar.send(Cmd::WindowCommand(BarCommand::Minimize));
+    h.wait_until("the first window's menus again", |s| {
+        s.wm.key_window() == Some(first)
+            && latest_title_and_menu(&bar) == Some((first_title.clone(), first_menu.clone()))
+    });
+    assert_eq!(bar.error(), None);
 }
 
 #[test]

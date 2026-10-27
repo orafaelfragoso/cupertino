@@ -315,20 +315,32 @@ fn the_setters_are_served_on_the_session_bus() {
     let Some(mut h) = Harness::new() else { return };
     // the only test of this binary that reads the variable
     std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
-    cupertino_server::quit::start_session_service(&mut h.state);
+    let (unavailable, first_read) = std::sync::mpsc::channel();
     let address = bus.address.clone();
     let client = std::thread::spawn(move || {
         let conn = zbus::blocking::connection::Builder::address(address.as_str())
             .unwrap()
             .build()
             .unwrap();
-        let proxy = zbus::blocking::Proxy::new(
-            &conn,
-            "org.cupertino.Session1",
-            "/org/cupertino/Session1",
-            "org.cupertino.Session1",
-        )
-        .unwrap();
+        // Startup probes must reach the bus: a failed initial GetAll is cached permanently.
+        let proxy = zbus::blocking::proxy::Builder::<zbus::blocking::Proxy<'_>>::new(&conn)
+            .destination("org.cupertino.Session1")
+            .unwrap()
+            .path("/org/cupertino/Session1")
+            .unwrap()
+            .interface("org.cupertino.Session1")
+            .unwrap()
+            .cache_properties(zbus::proxy::CacheProperties::No)
+            .build()
+            .unwrap();
+        // Make the startup race deterministic: the first read precedes name ownership.
+        let error = proxy.get_property::<String>("Appearance").unwrap_err();
+        assert!(
+            matches!(&error, zbus::Error::FDO(error)
+                if matches!(error.as_ref(), zbus::fdo::Error::ServiceUnknown(_))),
+            "{error}"
+        );
+        unavailable.send(()).unwrap();
         // the name is taken once the service thread is up
         let end = Instant::now() + Duration::from_secs(10);
         while proxy.get_property::<String>("Appearance").is_err() {
@@ -363,6 +375,8 @@ fn the_setters_are_served_on_the_session_bus() {
         }
         (before, auto, bad, appearance, accessibility)
     });
+    first_read.recv_timeout(Duration::from_secs(10)).unwrap();
+    cupertino_server::quit::start_session_service(&mut h.state);
     while !client.is_finished() {
         h.step();
     }

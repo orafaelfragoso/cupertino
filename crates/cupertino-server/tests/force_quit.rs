@@ -5,13 +5,15 @@
 mod common;
 
 use std::cell::RefCell;
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use common::Client;
 use cupertino_server::backend::headless;
-use cupertino_server::config::Config;
+use cupertino_server::config::{Config, ShellProcess};
+use cupertino_server::supervisor::Supervisor;
 use cupertino_server::Cupertino;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
@@ -139,6 +141,44 @@ fn log_out_force_quits_through_the_same_rules() {
         "the server's own process"
     );
     assert_eq!(*sent.borrow(), vec![]);
+}
+
+#[test]
+fn log_out_force_quit_over_the_bus_is_refused_to_a_caller_that_is_not_a_shell_process() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_client, _id) = mapped_window(&mut h);
+    let sent = record_signals(&mut h);
+
+    assert_eq!(
+        h.state
+            .force_quit_application_for(Some(std::process::id()), APP),
+        None
+    );
+    assert_eq!(h.state.force_quit_application_for(None, APP), None);
+    assert_eq!(*sent.borrow(), vec![]);
+}
+
+#[test]
+fn log_out_force_quit_over_the_bus_is_done_for_a_shell_process() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_client, _id) = mapped_window(&mut h);
+    let sent = record_signals(&mut h);
+    let agent = ShellProcess {
+        name: "agent".into(),
+        command: vec!["sleep".into(), "30".into()],
+    };
+    h.state.supervisor = Supervisor::new(&[agent], Instant::now());
+    h.state.supervisor.poll(Instant::now(), "unused", &mut || {
+        UnixStream::pair().map(|(ours, _)| ours)
+    });
+    let pid = h.state.supervisor.pid_of("agent").unwrap();
+
+    let answer = h.state.force_quit_application_for(Some(pid), APP);
+    let _ = std::process::Command::new("kill")
+        .arg(pid.to_string())
+        .status();
+    assert_eq!(answer, Some(1));
+    assert_eq!(*sent.borrow(), vec![(std::process::id(), 9)]);
 }
 
 #[test]

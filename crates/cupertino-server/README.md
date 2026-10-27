@@ -498,7 +498,7 @@ until its own key changes; a key removed from the file goes back to its default.
 | Member | What it does |
 |---|---|
 | `QuitNextApplication -> (s app_id, u windows) | activates the most recently used application that has toplevels and sends `close` to each (`xdg_toplevel.close`); `("", 0) when none has a window |
-| `ForceQuitApplication(s app_id) -> u` | SIGKILL to the processes of the application's toplevels (Wayland socket credentials); returns how many |
+| `ForceQuitApplication(s app_id) -> u` | SIGKILL to the processes of the application's toplevels by the rules of Force Quit (pidfd; never the server, a shell process or a proxy); returns how many. Only a shell process the server started may call it, any other caller gets `AccessDenied` |
 | `ApplicationQuit(s app_id) | signal: the last toplevel of the application being quit went away |
 | `SetAppearance(s appearance) | `light` or `dark`: stored as `appearance` in `compositor.json` (only that key changes), then applied as the `toggle-appearance` action applies it; `auto` is `NotSupported` (no time-of-day or location source), any other value `InvalidArgs`, a failed store, or no settings directory, `Failed` and nothing changes |
 | `SetAccessibility(s key, s value) | one key of `accessibility.conf` with a value as the file writes it (`reduce_motion` `on`, `color_filter` `tint 0.5`): applied and stored like the accessibility shortcuts; an unknown key or bad value is `InvalidArgs` |

@@ -60,7 +60,7 @@ use crate::buffer::{pick_slot, Slot, SlotChoice, SlotTag};
 use crate::capability::REQUIRED;
 use crate::clipboard::Clipboard;
 use crate::configure::{wire_size, Serials};
-use crate::input::{PointerTracker, Repeat, Translator};
+use crate::input::{Modifiers, PointerTracker, Repeat, Translator};
 use crate::output::{OutputBuilder, OutputId};
 use crate::scale::ScaleSources;
 use crate::{
@@ -279,6 +279,13 @@ pub trait ExternalRole {
     fn adopt_popup(&self, popup: &XdgPopup) -> Result<(), Error> {
         let _ = popup;
         Err(Error::Protocol("this surface role takes no popups"))
+    }
+
+    /// Whether the surface commits once without a buffer, after the role is assigned, to ask for its first configure.
+    /// Roles the compositor configures unasked, and that forbid a commit before the first acknowledgement, return
+    /// `false`.
+    fn initial_commit(&self) -> bool {
+        true
     }
 }
 
@@ -801,6 +808,36 @@ impl Connection {
         Ok(request)
     }
 
+    /// Hide the cursor over the surface the pointer is on, for an application that draws its own.
+    pub fn hide_cursor(&mut self) -> Result<(), Error> {
+        let (Some(pointer), Some(serial)) = (&self.state.pointer, self.state.pointer_enter_serial)
+        else {
+            return Err(Error::PermissionDenied(
+                "a cursor before the pointer entered",
+            ));
+        };
+        pointer.set_cursor(serial, None, 0, 0);
+        Ok(())
+    }
+
+    /// The modifiers held now, as of the last `wl_keyboard.modifiers`; none before the keymap arrives.
+    pub fn modifiers(&self) -> Modifiers {
+        self.state
+            .translator
+            .as_ref()
+            .map_or(Modifiers::default(), Translator::modifiers)
+    }
+
+    /// The serial of the latest input event, for an extension request that answers one; `None` before any input.
+    pub fn input_serial(&self) -> Option<u32> {
+        self.state.last_serial
+    }
+
+    /// The outputs `surface` is on, in the order it entered them.
+    pub fn surface_outputs(&self, surface: SurfaceId) -> Result<Vec<OutputId>, Error> {
+        Ok(self.state.surface(surface)?.entered.clone())
+    }
+
     /// Show the compositor's cursor `shape` over the surface the pointer is on.
     pub fn set_cursor(&mut self, shape: wp_cursor_shape_device_v1::Shape) -> Result<(), Error> {
         self.state.capabilities.require(Capability::CursorShape)?;
@@ -1198,6 +1235,14 @@ impl State {
         }
     }
 
+    /// The output an extension event names, as the application knows it; `None` for one this connection has not bound.
+    pub fn output_id(&self, output: &WlOutput) -> Option<OutputId> {
+        self.outputs
+            .iter()
+            .find(|o| o.wl == *output)
+            .map(|o| o.info.current.id)
+    }
+
     /// Queue `event` for the application as an [`Event::Extension`], after the events dispatched before it.
     pub fn emit(&mut self, event: impl Any + Send + Sync) {
         self.events
@@ -1223,8 +1268,10 @@ impl State {
             ),
             None => (None, None),
         };
-        // the initial commit without a buffer asks for the first configure
-        wl.commit();
+        if !matches!(&role, Role::External { role, .. } if !role.initial_commit()) {
+            // the initial commit without a buffer asks for the first configure
+            wl.commit();
+        }
         self.surfaces.push(Surface {
             id,
             wl,

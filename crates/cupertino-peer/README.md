@@ -10,8 +10,9 @@ nothing; the caller is the process behind its connection.
 * Sandboxes are told apart the way the desktop portal does it: a process with `/proc/<pid>/root/.flatpak-info` is a Flatpak,
   one whose `LinuxSecurityLabel` starts with `snap.` a Snap. `Caller::unsandboxed` refuses both and the anonymous caller
   (`Denial`).
-* `Relation` and `Caller::require_relation`: the processes of the shell are children of the server, so a service of the shell
-  allows its own process, its parent (the server) and its siblings (the other processes the server started).
+* `Relation` and `Caller::require_relation`: a service of the shell answers its own process and its parent, the server that
+  started it. Other shell processes ask the server to call for them. A process with the same parent is no relation: the
+  server starts the applications too (`spawn_prepared`), so "started by the server" would let every application in.
 * `check_call`: the one call a method of such a service makes first. A refusal is logged once with the interface, the method
   and the process id, never the arguments, and returns a `CallerError`, whose names are `org.cupertino.Error.AnonymousCaller`,
   `FlatpakCaller`, `SnapCaller` and `UntrustedCaller`.

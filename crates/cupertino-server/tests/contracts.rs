@@ -51,6 +51,8 @@ const ROLES: [ShellRole; 6] = [
     ShellRole::SessionLock,
 ];
 
+const DMABUF: &str = "zwp_linux_dmabuf_v1";
+
 const SIZE: (i32, i32) = (1000, 700);
 
 type Globals = BTreeMap<String, u32>;
@@ -77,8 +79,8 @@ impl Peer<'_> {
 }
 
 /// The `wayland-global` entries of the registry that `peer` is offered; `accent_table` is whether the server was
-/// started with an accent table.
-fn registered(registry: &str, peer: Peer, accent_table: bool) -> Globals {
+/// started with an accent table, `render_node` whether the EGL display has a render node.
+fn registered(registry: &str, peer: Peer, accent_table: bool, render_node: bool) -> Globals {
     let mut globals = Globals::new();
     let mut entry: BTreeMap<&str, &str> = BTreeMap::new();
     let mut flush = |entry: &mut BTreeMap<&str, &str>| {
@@ -94,7 +96,11 @@ fn registered(registry: &str, peer: Peer, accent_table: bool) -> Globals {
                 scope => panic!("{}: scope {scope} for a global", entry["name"]),
             };
             if present && offered {
-                let version = entry["version"].parse().expect("a version number");
+                let version = match entry.get("version_without_render_node") {
+                    Some(version) if !render_node => version,
+                    _ => entry["version"],
+                };
+                let version = version.parse().expect("a version number");
                 globals.insert(entry["name"].to_string(), version);
             }
         }
@@ -229,6 +235,11 @@ fn every_connection_sees_the_registry_entries_of_its_scope() {
         let Some(mut server) = Server::start(config) else {
             return;
         };
+        // The dmabuf global has default feedback (a higher version) only when the EGL display has a render node, which
+        // the machine decides: the registry holds both versions, and the one advertised picks the branch under test.
+        let with_node = registered(&registry, Peer::Ordinary, accent_table, true);
+        let render_node = server.advertised(Peer::Ordinary).get(DMABUF) == with_node.get(DMABUF);
+        eprintln!("render node: {render_node}");
         let mut peers = vec![Peer::Ordinary, Peer::Internal];
         peers.extend(
             ROLES
@@ -238,12 +249,12 @@ fn every_connection_sees_the_registry_entries_of_its_scope() {
         peers.push(Peer::Shell(&ROLES));
         for peer in peers {
             let problems = differences(
-                &registered(&registry, peer, accent_table),
+                &registered(&registry, peer, accent_table, render_node),
                 &server.advertised(peer),
             );
             assert!(
                 problems.is_empty(),
-                "{peer:?}, accent table {accent_table}: {problems:#?}"
+                "{peer:?}, accent table {accent_table}, render node {render_node}: {problems:#?}"
             );
         }
     }
@@ -252,12 +263,19 @@ fn every_connection_sees_the_registry_entries_of_its_scope() {
 #[test]
 fn the_shell_global_is_registered_for_the_roles_of_a_shell_process() {
     let registry = registry();
-    let ordinary = registered(&registry, Peer::Ordinary, false);
-    let session = registered(&registry, Peer::Shell(&[ShellRole::Session]), false);
+    let ordinary = registered(&registry, Peer::Ordinary, false, true);
+    let session = registered(&registry, Peer::Shell(&[ShellRole::Session]), false, true);
     assert!(!ordinary.contains_key("cupertino_shell_v1"));
     assert!(session.contains_key("cupertino_shell_v1"));
     assert!(!session.contains_key("ext_session_lock_manager_v1"));
     assert!(ordinary.contains_key("cupertino_app_effects_v1"));
+}
+
+#[test]
+fn the_dmabuf_version_depends_on_the_render_node() {
+    let registry = registry();
+    let version = |render_node| registered(&registry, Peer::Ordinary, false, render_node)[DMABUF];
+    assert_eq!((version(true), version(false)), (5, 3));
 }
 
 #[test]
@@ -268,13 +286,19 @@ fn a_global_without_an_entry_is_reported() {
         .filter(|entry| !entry.starts_with("name: wl_seat\n"))
         .collect::<Vec<_>>()
         .join("\n- ");
-    let observed = registered(&registry, Peer::Ordinary, false);
+    let observed = registered(&registry, Peer::Ordinary, false, true);
     assert_eq!(
-        differences(&registered(&without, Peer::Ordinary, false), &observed),
+        differences(
+            &registered(&without, Peer::Ordinary, false, true),
+            &observed
+        ),
         ["wl_seat v9 is advertised and has no registry entry"]
     );
     assert_eq!(
-        differences(&observed, &registered(&without, Peer::Ordinary, false)),
+        differences(
+            &observed,
+            &registered(&without, Peer::Ordinary, false, true)
+        ),
         ["wl_seat has a registry entry and is not advertised"]
     );
 }

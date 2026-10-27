@@ -15,6 +15,9 @@
 #               system: system bus, or a root-owned daemon
 #   role        globals only: none, or the shell roles (any one of them) that see it; `internal client` for a
 #               connection the server made for its own process
+#   version_without_render_node
+#               globals only, optional: the version when the EGL display has no render node (the server then builds
+#               the global without default feedback, crates/cupertino-server/src/backend/mod.rs:61-73)
 #   advertised  globals only: always, or accent-table (only when the server is started with an accent table)
 #   bus, bus_name  D-Bus only: session or system; the well-known name its owner claims (none if it claims none)
 #   shipped     binaries only: yes when packaging/release.py installs it
@@ -263,6 +266,7 @@
 - name: zwp_linux_dmabuf_v1
   kind: wayland-global
   version: 5
+  version_without_render_node: 3
   owner_crate: cupertino-server
   owner_area: compositor
   scope: public

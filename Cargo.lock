@@ -1222,6 +1222,7 @@ dependencies = [
  "cupertino-client",
  "cupertino-decorations",
  "cupertino-defaults",
+ "cupertino-filepicker",
  "cupertino-geometry",
  "cupertino-icons",
  "cupertino-text-field",

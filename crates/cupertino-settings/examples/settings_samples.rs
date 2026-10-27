@@ -25,6 +25,56 @@ use tiny_skia::{Color, Pixmap};
 const WIDTH_FACTOR: f64 = 1.0;
 
 /// Example readings: a Wi-Fi device with four networks and the mixer at 60 %.
+/// A generated picture `name` under `scratch` with its thumbnail set on the painter.
+fn picture(
+    painter: &mut Painter,
+    scratch: &std::path::Path,
+    name: &str,
+    (from, to): ([u8; 3], [u8; 3]),
+) -> cupertino_assets::WallpaperFile {
+    let mut pm = Pixmap::new(256, 160).unwrap();
+    for (i, px) in pm.pixels_mut().iter_mut().enumerate() {
+        let t = (i / 256) as f32 / 159.0;
+        let mix = |a: u8, b: u8| (f32::from(a) * (1.0 - t) + f32::from(b) * t) as u8;
+        *px = tiny_skia::ColorU8::from_rgba(
+            mix(from[0], to[0]),
+            mix(from[1], to[1]),
+            mix(from[2], to[2]),
+            255,
+        )
+        .premultiply();
+    }
+    let image = scratch.join(format!("{name}.jpg"));
+    let thumbnail = scratch.join(format!("{name}-thumb.png"));
+    pm.save_png(&thumbnail).unwrap();
+    painter.set_thumbnail(&image, &thumbnail);
+    cupertino_assets::WallpaperFile {
+        name: name.to_string(),
+        light: image,
+        dark: None,
+        credit: None,
+    }
+}
+
+/// [`picture`] with a title and a photographer, and a dark file when `dark`.
+fn credited(
+    painter: &mut Painter,
+    scratch: &std::path::Path,
+    name: &str,
+    title: &str,
+    author: &str,
+    colors: ([u8; 3], [u8; 3]),
+    dark: bool,
+) -> cupertino_assets::WallpaperFile {
+    let mut file = picture(painter, scratch, name, colors);
+    file.dark = dark.then(|| scratch.join(format!("{name}-dark.jpg")));
+    file.credit = Some(cupertino_assets::Credit {
+        title: title.to_string(),
+        author: author.to_string(),
+    });
+    file
+}
+
 fn live() -> Live {
     let network = |ssid: &str, signal, security: &str, saved, connected| Network {
         ssid: ssid.into(),
@@ -100,6 +150,62 @@ fn main() {
         ),
         ..live.clone()
     };
+    // the Wallpaper pane with generated pictures: gradients under a temporary folder, their thumbnails set directly
+    let scratch =
+        std::env::temp_dir().join(format!("cupertino-settings-samples-{}", std::process::id()));
+    std::fs::create_dir_all(scratch.join("Trips")).unwrap();
+    let bundled = vec![
+        credited(
+            &mut painter,
+            &scratch,
+            "dusk",
+            "Dusk",
+            "A. Tester",
+            ([250, 170, 120], [60, 50, 120]),
+            false,
+        ),
+        credited(
+            &mut painter,
+            &scratch,
+            "ridge",
+            "Ridge",
+            "B. Tester",
+            ([235, 235, 240], [120, 130, 150]),
+            true,
+        ),
+        credited(
+            &mut painter,
+            &scratch,
+            "ocean",
+            "Ocean",
+            "C. Tester",
+            ([120, 190, 230], [10, 60, 120]),
+            false,
+        ),
+    ];
+    let folder = vec![
+        picture(
+            &mut painter,
+            &scratch,
+            "meadow",
+            ([170, 220, 170], [40, 110, 90]),
+        ),
+        picture(
+            &mut painter,
+            &scratch,
+            "plum",
+            ([200, 140, 200], [70, 30, 90]),
+        ),
+    ];
+    let current = bundled[1].light.clone();
+    let wallpaper_live = Live {
+        pictures: cupertino_settings::live::Pictures {
+            bundled,
+            folders: vec![(scratch.join("Trips"), folder)],
+            default: Some(current),
+        },
+        ..live.clone()
+    };
     let one_mouse = mice(&[(
         "046d:c077:USB Optical Mouse",
         "USB Optical Mouse",
@@ -148,6 +254,7 @@ fn main() {
             (PaneId::Sound, "", &live),
             (PaneId::Keyboard, "", &live),
             (PaneId::Mouse, "-one-mouse", &one_mouse),
+            (PaneId::Wallpaper, "", &wallpaper_live),
             (PaneId::Mouse, "-two-mice", &two_mice),
         ] {
             let sections = panes::sections(pane, &settings, session, live);
@@ -197,6 +304,68 @@ fn main() {
             pm.save_png(out.join(format!("{}{tag}-{name}.png", pane.key())))
                 .unwrap();
         }
+        // the chooser sheet over the Wallpaper pane
+        {
+            let layout = layout.clone();
+            let picks = scratch.join("Pictures");
+            std::fs::create_dir_all(picks.join("Summer")).unwrap();
+            std::fs::create_dir_all(picks.join("Screenshots")).unwrap();
+            for f in ["beach.jpg", "city.png", "mountain.jpg", "notes.txt"] {
+                std::fs::write(picks.join(f), b"x").unwrap();
+            }
+            let mut sheet =
+                cupertino_settings::sheet::Sheet::picker(&picks, cupertino_filepicker::Mode::Photo);
+            sheet.key(cupertino_settings::sheet::SheetKey::Down);
+            sheet.key(cupertino_settings::sheet::SheetKey::Down);
+            sheet.key(cupertino_settings::sheet::SheetKey::Down);
+            let sheet_layout = sheet.layout(&layout.content);
+            let sections = panes::sections(PaneId::Wallpaper, &settings, session, &wallpaper_live);
+            let history = History::new(PaneId::Wallpaper);
+            let search = SearchField::default();
+            let state = WindowState {
+                selected: PaneId::Wallpaper,
+                has_battery: live.has_battery(),
+                active: true,
+                history: &history,
+                search: &search,
+                search_focused: false,
+            };
+            let specs: Vec<SectionSpec<'_>> = sections
+                .iter()
+                .map(|sec| SectionSpec {
+                    header: sec.header.is_some(),
+                    rows: sec
+                        .rows
+                        .iter()
+                        .map(|r| RowSpec {
+                            control: &r.control,
+                            error: false,
+                        })
+                        .collect(),
+                    footer: sec.footer.is_some(),
+                })
+                .collect();
+            let (form, _) =
+                form::layout(&specs, layout.content.x, layout.content.w, layout.content.y);
+            let mut pm = Pixmap::new(size.w as u32, size.h as u32).unwrap();
+            fill(&mut pm, pal.window_background);
+            painter.paint_window(
+                &mut pm,
+                1.0,
+                &layout,
+                &state,
+                &PaneView {
+                    sections: &sections,
+                    layout: &form,
+                    scroll: 0.0,
+                    dragging: None,
+                },
+                &pal,
+            );
+            painter.paint_sheet(&mut pm, 1.0, &sheet, &sheet_layout, &layout.content, &pal);
+            pm.save_png(out.join(format!("wallpaper-chooser-{name}.png")))
+                .unwrap();
+        }
         // the results window of a search that finds several panes
         let mut search = SearchField::default();
         search.edit(|f| f.insert("scroll"));
@@ -208,5 +377,6 @@ fn main() {
         pm.save_png(out.join(format!("search-results-{name}.png")))
             .unwrap();
     }
+    std::fs::remove_dir_all(&scratch).ok();
     println!("wrote {}", out.display());
 }

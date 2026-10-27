@@ -43,6 +43,10 @@ pub enum ControlId {
     MouseSpeed,
     /// The pictures of group `n` of `Live::pictures`: 0 the packs', then one per added folder.
     Wallpaper(usize),
+    /// Take the added folder `n` of `Live::pictures` off the list.
+    WallpaperRemoveFolder(usize),
+    /// The buttons that add a folder (0) or a picture (1).
+    WallpaperAdd,
     /// A mouse of `Live::mice`, by index: its resolution.
     MouseResolution(usize),
     MouseAcceleration,
@@ -132,6 +136,8 @@ pub enum Effect {
     SetAccessibility { key: &'static str, value: String },
     /// A call on a live service.
     Service(Call),
+    /// Ask for a folder (`folder`) or a picture in the chooser.
+    AskPicture { folder: bool },
     /// Ask for a resolution of the mouse `key` called `name` in a sheet.
     AskResolution { key: String, name: String },
 }
@@ -315,23 +321,95 @@ fn picture_section(
     }
 }
 
+/// The picture the desktop shows now, large, with its name and what is special about it.
+fn current_section(settings: &Settings, live: &Live) -> Section {
+    let pictures = &live.pictures;
+    let stored = settings.compositor.wallpaper.as_deref().map(Path::new);
+    let light = stored.or(pictures.default.as_deref());
+    let known = light.and_then(|light| {
+        pictures
+            .bundled
+            .iter()
+            .chain(pictures.folders.iter().flat_map(|(_, files)| files))
+            .find(|f| f.light == light)
+    });
+    let title = match (known, light) {
+        (Some(file), _) => file
+            .credit
+            .as_ref()
+            .map_or_else(|| picture_title(&file.name), |c| c.title.clone()),
+        (None, Some(path)) => path
+            .file_stem()
+            .map_or_else(String::new, |n| picture_title(&n.to_string_lossy())),
+        (None, None) => "Default".to_string(),
+    };
+    let pair = settings.compositor.wallpaper_dark.is_some()
+        || (stored.is_none() && known.is_some_and(|f| f.dark.is_some()));
+    let note = if pair {
+        Some("Light and dark: follows the appearance.".to_string())
+    } else {
+        known
+            .and_then(|f| f.credit.as_ref())
+            .map(|c| format!("By {}", c.author))
+            .or_else(|| light.is_none().then(|| "The built-in picture.".to_string()))
+    };
+    Section {
+        header: header("Current"),
+        rows: vec![row(
+            ControlId::Reading,
+            "",
+            Control::Preview {
+                image: light.map(Path::to_path_buf),
+                title,
+                note,
+            },
+            Backend::Key(File::Compositor, "wallpaper"),
+        )],
+        footer: None,
+    }
+}
+
 fn wallpaper_sections(settings: &Settings, live: &Live) -> Vec<Section> {
     let pictures = &live.pictures;
     let default = pictures.default.as_deref();
-    let mut sections = vec![picture_section(
-        0,
-        header("Pictures"),
-        &pictures.bundled,
-        settings,
-        default,
-    )];
+    let mut sections = vec![
+        current_section(settings, live),
+        picture_section(0, header("Pictures"), &pictures.bundled, settings, default),
+    ];
     for (i, (folder, files)) in pictures.folders.iter().enumerate() {
         let name = folder.file_name().map_or_else(
             || folder.display().to_string(),
             |n| n.to_string_lossy().into_owned(),
         );
         sections.push(picture_section(i + 1, Some(name), files, settings, None));
+        sections.push(Section {
+            header: None,
+            rows: vec![row(
+                ControlId::WallpaperRemoveFolder(i),
+                folder.display().to_string(),
+                Control::Button {
+                    title: "Remove".to_string(),
+                },
+                Backend::Key(File::Compositor, "wallpaper_folders"),
+            )],
+            footer: None,
+        });
     }
+    sections.push(Section {
+        header: None,
+        rows: vec![row(
+            ControlId::WallpaperAdd,
+            "Add pictures",
+            Control::Buttons {
+                titles: vec![
+                    "Add Folder\u{2026}".to_string(),
+                    "Add Photo\u{2026}".to_string(),
+                ],
+            },
+            Backend::Key(File::Compositor, "wallpaper_folders"),
+        )],
+        footer: None,
+    });
     sections
 }
 
@@ -1533,6 +1611,25 @@ pub fn change(id: ControlId, value: Value, settings: &mut Settings, live: &Live)
                 file.dark.as_ref().map(|d| d.to_string_lossy().into_owned());
             store(File::Compositor)
         }
+        ControlId::WallpaperRemoveFolder(i) => {
+            let Some((folder, _)) = live.pictures.folders.get(i) else {
+                return Vec::new();
+            };
+            let folder = folder.to_string_lossy();
+            let left: Vec<String> = settings
+                .compositor
+                .wallpaper_folders
+                .iter()
+                .flatten()
+                .filter(|f| f.as_str() != folder)
+                .cloned()
+                .collect();
+            settings.compositor.wallpaper_folders = Some(left).filter(|l| !l.is_empty());
+            store(File::Compositor)
+        }
+        ControlId::WallpaperAdd => vec![Effect::AskPicture {
+            folder: index_of(value) == 0,
+        }],
         ControlId::DockSize => {
             settings.dock.tile_size = Some(mapping::dock_px(fraction_of(value)));
             store(File::Dock)
@@ -1974,6 +2071,7 @@ mod tests {
                     }
                     Control::Buttons { titles } => (0..titles.len()).map(Value::Index).collect(),
                     Control::Tiles { tiles, .. } => (0..tiles.len()).map(Value::Index).collect(),
+                    Control::Preview { .. } => Vec::new(),
                     Control::Button { .. } => vec![Value::Index(0)],
                     Control::Slider { stops: Some(n), .. } => (0..*n).map(Value::Index).collect(),
                     Control::Slider { stops: None, .. } | Control::Level { .. } => vec![
@@ -2691,10 +2789,10 @@ mod tests {
                 .iter()
                 .map(|s| s.header.as_deref())
                 .collect::<Vec<_>>(),
-            [Some("Pictures"), Some("Art")]
+            [Some("Current"), Some("Pictures"), Some("Art"), None, None]
         );
         assert_eq!(
-            tiles_of(&sections[0]),
+            tiles_of(&sections[1]),
             (
                 vec![
                     ("Snow ridge".to_string(), false),
@@ -2707,12 +2805,12 @@ mod tests {
         settings.compositor.wallpaper = Some("/pics/sunrise_bay.jpg".into());
         settings.compositor.wallpaper_dark = Some("/pics/sunrise_bay-dark.jpg".into());
         let sections = super::sections(PaneId::Wallpaper, &settings, LIGHT, &live);
-        assert_eq!(tiles_of(&sections[0]).1, Some(1));
-        assert_eq!(tiles_of(&sections[1]).1, None);
+        assert_eq!(tiles_of(&sections[1]).1, Some(1));
+        assert_eq!(tiles_of(&sections[2]).1, None);
         settings.compositor.wallpaper_dark = None;
         let sections = super::sections(PaneId::Wallpaper, &settings, LIGHT, &live);
         assert_eq!(
-            tiles_of(&sections[0]).1,
+            tiles_of(&sections[1]).1,
             None,
             "a pair is shown only while both of its files are stored"
         );
@@ -2786,7 +2884,7 @@ mod tests {
             author: "Ryan Pohanic".into(),
         });
         let sections = sections(PaneId::Wallpaper, &unset(), LIGHT, &live);
-        let Control::Tiles { tiles, .. } = &sections[0].rows[0].control else {
+        let Control::Tiles { tiles, .. } = &sections[1].rows[0].control else {
             panic!("a grid");
         };
         assert_eq!(tiles[0].title, "Trees covering snow");
@@ -2800,5 +2898,84 @@ mod tests {
             crate::controls::tile_caption_height(tiles)
                 > crate::controls::tile_caption_height(&tiles[1..])
         );
+    }
+
+    #[test]
+    fn the_wallpaper_pane_shows_the_current_picture_and_offers_removing_a_folder_and_adding_more() {
+        let live = wallpaper_live();
+        let mut settings = unset();
+        settings.compositor.wallpaper = Some("/pics/sunrise_bay.jpg".into());
+        settings.compositor.wallpaper_dark = Some("/pics/sunrise_bay-dark.jpg".into());
+        settings.compositor.wallpaper_folders = Some(vec!["/home/u/Art".into(), "/mnt/x".into()]);
+        let sections = sections(PaneId::Wallpaper, &settings, LIGHT, &live);
+        assert_eq!(sections[0].header.as_deref(), Some("Current"));
+        let Control::Preview { image, title, note } = &sections[0].rows[0].control else {
+            panic!("the preview");
+        };
+        assert_eq!(image.as_deref(), Some(Path::new("/pics/sunrise_bay.jpg")));
+        assert_eq!(title, "Sunrise bay");
+        assert!(note
+            .as_deref()
+            .is_some_and(|n| n.contains("Light and dark")));
+        let remove = sections
+            .iter()
+            .flat_map(|s| &s.rows)
+            .find(|r| r.id == ControlId::WallpaperRemoveFolder(0))
+            .expect("a remove row for the folder");
+        assert_eq!(remove.label, "/home/u/Art");
+        let add = sections.last().unwrap().rows.last().unwrap();
+        assert_eq!(add.id, ControlId::WallpaperAdd);
+        let Control::Buttons { titles } = &add.control else {
+            panic!("buttons");
+        };
+        assert_eq!(titles, &["Add Folder\u{2026}", "Add Photo\u{2026}"]);
+        let ask = |i| {
+            change(
+                ControlId::WallpaperAdd,
+                Value::Index(i),
+                &mut unset(),
+                &live,
+            )
+        };
+        assert_eq!(ask(0), [Effect::AskPicture { folder: true }]);
+        assert_eq!(ask(1), [Effect::AskPicture { folder: false }]);
+    }
+
+    #[test]
+    fn removing_a_folder_forgets_only_that_one_and_the_last_removal_clears_the_key() {
+        let live = Live {
+            pictures: crate::live::Pictures {
+                folders: vec![("/a".into(), vec![]), ("/b".into(), vec![])],
+                ..Default::default()
+            },
+            ..Live::default()
+        };
+        let mut settings = unset();
+        settings.compositor.wallpaper_folders = Some(vec!["/a".into(), "/b".into()]);
+        let effects = change(
+            ControlId::WallpaperRemoveFolder(0),
+            Value::Index(0),
+            &mut settings,
+            &live,
+        );
+        assert_eq!(effects, [Effect::Store(File::Compositor)]);
+        assert_eq!(
+            settings.compositor.wallpaper_folders,
+            Some(vec!["/b".to_string()])
+        );
+        change(
+            ControlId::WallpaperRemoveFolder(1),
+            Value::Index(0),
+            &mut settings,
+            &live,
+        );
+        assert_eq!(settings.compositor.wallpaper_folders, None);
+        assert!(change(
+            ControlId::WallpaperRemoveFolder(5),
+            Value::Index(0),
+            &mut settings,
+            &live
+        )
+        .is_empty());
     }
 }

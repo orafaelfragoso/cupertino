@@ -13,6 +13,7 @@ use cupertino_client::{
 };
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
+use cupertino_filepicker::Mode;
 use cupertino_geometry::Rect as PopupRect;
 use cupertino_settings::agent::{Agent, AgentEvent};
 use cupertino_settings::controls::{self, Control, Press, Value};
@@ -890,14 +891,21 @@ impl App {
         if let Some(sheet) = &mut self.sheet {
             let key = match code {
                 keys::code::ESCAPE => SheetKey::Escape,
+                keys::code::ENTER | keys::code::KEYPAD_ENTER if mods.logo => SheetKey::Choose,
                 keys::code::ENTER | keys::code::KEYPAD_ENTER => SheetKey::Return,
                 keys::code::BACKSPACE => SheetKey::Backspace,
+                keys::code::UP if mods.logo => SheetKey::Parent,
+                keys::code::UP => SheetKey::Up,
+                keys::code::DOWN => SheetKey::Down,
+                keys::code::HOME => SheetKey::Home,
+                keys::code::END => SheetKey::End,
+                _ if mods.logo => return Ok(()),
                 _ => match character.filter(|c| !c.is_control()) {
                     Some(c) => SheetKey::Type(c),
                     None => return Ok(()),
                 },
             };
-            let outcome = sheet.key(key);
+            let outcome = sheet.key_at(key, self.start.elapsed().as_secs_f64());
             return self.sheet_outcome(outcome);
         }
         let mods = Mods {
@@ -1179,6 +1187,18 @@ impl App {
                     Ok(())
                 }
                 Effect::Service(call) => self.service_call(&call),
+                Effect::AskPicture { folder } => {
+                    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+                    let start = home
+                        .as_ref()
+                        .map(|h| h.join("Pictures"))
+                        .filter(|p| p.is_dir())
+                        .or(home)
+                        .unwrap_or_else(|| std::path::PathBuf::from("/"));
+                    let mode = if folder { Mode::Folder } else { Mode::Photo };
+                    self.sheet = Some(Sheet::picker(&start, mode));
+                    Ok(())
+                }
                 Effect::AskResolution { key, name } => {
                     self.sheet = Some(Sheet::resolution(&key, &name));
                     Ok(())
@@ -1243,6 +1263,18 @@ impl App {
                     eprintln!("cupertino-settings: {e}");
                 }
             }
+            Outcome::Picked { path, folder } => {
+                self.sheet = None;
+                let added = if folder {
+                    self.settings.add_wallpaper_folder(&self.paths, &path)
+                } else {
+                    self.settings.set_wallpaper(&self.paths, &path)
+                };
+                match added {
+                    Ok(()) => self.load_pictures(),
+                    Err(e) => eprintln!("cupertino-settings: {e}"),
+                }
+            }
             Outcome::Do(call) => match self.service_call(&call) {
                 Ok(()) => self.sheet = None,
                 // the passphrase sheet stays with the error (§7.2); a failed removal closes it and shows the error
@@ -1296,6 +1328,13 @@ impl App {
                     .flat_map(|(_, files)| files),
             )
             .map(|f| f.light.clone())
+            .chain(
+                self.settings
+                    .compositor
+                    .wallpaper
+                    .iter()
+                    .map(std::path::PathBuf::from),
+            )
             .filter(|image| {
                 !self.painter.has_thumbnail(image) && self.thumbnails_asked.insert(image.clone())
             })

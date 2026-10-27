@@ -171,7 +171,10 @@ fn a_typed_mouse_resolution_keeps_what_the_server_wrote_since_the_last_read() {
             .and_then(|m| m.get("1:1:Mouse")),
         Some(&1600),
         "a refused value leaves the settings as they were"
+    );
+}
 
+#[test]
 fn adding_a_folder_and_choosing_a_photo_write_over_what_the_server_wrote_meanwhile() {
     let dir = tempfile::tempdir().unwrap();
     let p = paths(dir.path());

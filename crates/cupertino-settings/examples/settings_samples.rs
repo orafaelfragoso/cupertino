@@ -329,6 +329,7 @@ fn main() {
                 history: &history,
                 search: &search,
                 search_focused: false,
+                search_caret: false,
             };
             let specs: Vec<SectionSpec<'_>> = sections
                 .iter()

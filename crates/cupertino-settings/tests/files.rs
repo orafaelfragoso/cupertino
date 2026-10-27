@@ -213,3 +213,17 @@ fn adding_a_folder_and_choosing_a_photo_write_over_what_the_server_wrote_meanwhi
         "a single picture forgets the dark one: {text}"
     );
 }
+
+#[test]
+fn a_relative_folder_or_picture_is_refused_and_nothing_is_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = paths(dir.path());
+    let mut s = Settings::load(&p, 1080.0).unwrap();
+    assert!(s
+        .add_wallpaper_folder(&p, std::path::Path::new("Pictures"))
+        .is_err());
+    assert!(s.set_wallpaper(&p, std::path::Path::new("me.png")).is_err());
+    assert!(!dir.path().join("compositor.json").exists());
+    assert_eq!(s.compositor.wallpaper, None);
+    assert_eq!(s.compositor.wallpaper_folders, None);
+}

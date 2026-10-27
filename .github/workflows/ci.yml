@@ -93,6 +93,13 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The image's Android SDK, .NET, Haskell and CodeQL are never used here and take about 30 GB of the 72 GB disk;
+      # the build and its cache need the room.
+      - name: Free disk space
+        run: |
+          df -h .
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h .
       - name: System packages
         run: |
           sudo apt-get update

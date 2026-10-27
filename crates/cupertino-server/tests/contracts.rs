@@ -61,6 +61,8 @@ type Globals = BTreeMap<String, u32>;
 #[derive(Clone, Copy, Debug)]
 enum Peer<'a> {
     Ordinary,
+    /// A connection made through a security context.
+    Sandboxed,
     Shell(&'a [ShellRole]),
     /// The compositor's own connection (the accent picker's input method).
     Internal,
@@ -69,7 +71,7 @@ enum Peer<'a> {
 impl Peer<'_> {
     fn sees(self, role: &str) -> bool {
         match self {
-            Peer::Ordinary => false,
+            Peer::Ordinary | Peer::Sandboxed => false,
             Peer::Shell(roles) => role
                 .split(' ')
                 .any(|r| roles.iter().any(|held| format!("{held:?}") == r)),
@@ -95,6 +97,9 @@ fn registered(registry: &str, peer: Peer, accent_table: bool, render_node: bool)
                 "shell-private" => peer.sees(entry["role"]),
                 scope => panic!("{}: scope {scope} for a global", entry["name"]),
             };
+            let offered = offered
+                && !(matches!(peer, Peer::Sandboxed)
+                    && entry.get("visible_to") == Some(&"unsandboxed"));
             if present && offered {
                 let version = match entry.get("version_without_render_node") {
                     Some(version) if !render_node => version,
@@ -188,6 +193,13 @@ impl Server {
         let display = &self.state.display_handle;
         let stream = match peer {
             Peer::Ordinary => connect_client(display, ClientState::default()),
+            Peer::Sandboxed => connect_client(
+                display,
+                ClientState {
+                    sandboxed: true,
+                    ..ClientState::default()
+                },
+            ),
             Peer::Internal => connect_client(
                 display,
                 ClientState {
@@ -244,7 +256,7 @@ fn every_connection_sees_the_registry_entries_of_its_scope() {
         // registry holds both versions, and the renderer decides which one this machine must advertise.
         let render_node = server.has_render_node();
         eprintln!("render node: {render_node}");
-        let mut peers = vec![Peer::Ordinary, Peer::Internal];
+        let mut peers = vec![Peer::Ordinary, Peer::Sandboxed, Peer::Internal];
         peers.extend(
             ROLES
                 .iter()
@@ -273,6 +285,24 @@ fn the_shell_global_is_registered_for_the_roles_of_a_shell_process() {
     assert!(session.contains_key("cupertino_shell_v1"));
     assert!(!session.contains_key("ext_session_lock_manager_v1"));
     assert!(ordinary.contains_key("cupertino_app_effects_v1"));
+}
+
+#[test]
+fn a_sandboxed_connection_is_not_offered_the_globals_that_reach_other_clients() {
+    let registry = registry();
+    let ordinary = registered(&registry, Peer::Ordinary, false, true);
+    let sandboxed = registered(&registry, Peer::Sandboxed, false, true);
+    for name in [
+        "ext_data_control_manager_v1",
+        "zwlr_data_control_manager_v1",
+        "zwlr_output_manager_v1",
+        "zwlr_output_power_manager_v1",
+        "wp_security_context_manager_v1",
+    ] {
+        assert!(ordinary.contains_key(name), "{name}");
+        assert!(!sandboxed.contains_key(name), "{name}");
+    }
+    assert!(sandboxed.contains_key("wl_compositor"));
 }
 
 #[test]

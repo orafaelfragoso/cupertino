@@ -332,11 +332,17 @@ impl App {
             keyboard: KeyboardInteractivity::None,
             scale: 1.0,
         });
+        if self.bars.len() == 1 {
+            self.worker.send(worker::Request::AppMenuRegistrar(true))?;
+        }
         Ok(())
     }
 
     fn destroy_bar(&mut self, i: usize) -> Result<()> {
         let mut bar = self.bars.remove(i);
+        if self.bars.is_empty() {
+            self.worker.send(worker::Request::AppMenuRegistrar(false))?;
+        }
         while let Some(popup) = bar.popups.pop() {
             drop(popup.backdrop);
             self.conn.destroy(popup.popup.surface())?;

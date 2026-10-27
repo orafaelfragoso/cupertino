@@ -643,7 +643,7 @@
   scope: public
   test_owner: crates/cupertino-menubar/tests/worker.rs
   source: crates/cupertino-menubar/src/dbus/registrar.rs:13
-  note: registers nothing; owned only when no other process owns the name
+  note: registers nothing; owned while a bar exists and no other process owns the name
 - name: org.kde.StatusNotifierWatcher
   kind: dbus-interface
   version: n/a

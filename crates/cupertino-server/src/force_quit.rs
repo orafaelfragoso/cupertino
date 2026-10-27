@@ -19,7 +19,7 @@ use crate::state::{ClientState, Cupertino};
 pub const KILL_GRACE: f64 = 3.0;
 
 const SIGTERM: i32 = 15;
-const SIGKILL: i32 = 9;
+pub(crate) const SIGKILL: i32 = 9;
 
 /// A process held by a pidfd.
 #[derive(Debug)]
@@ -110,7 +110,7 @@ impl ForceQuits {
 
 impl Cupertino {
     /// The clients behind the toplevels of `app` and their processes, each once, left out when they may not be signalled.
-    fn app_processes(&self, app: AppId, identity: &str) -> Vec<(Client, ProcessHandle)> {
+    pub(crate) fn app_processes(&self, app: AppId, identity: &str) -> Vec<(Client, ProcessHandle)> {
         let shell_pids = self.supervisor.pids();
         let mut found: Vec<(Client, ProcessHandle)> = Vec::new();
         for entry in self

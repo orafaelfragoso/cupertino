@@ -16,7 +16,8 @@ authored and replaceable.
 Layer: `shell`. Depends on:
 
 - `cupertino-animation`, `cupertino-defaults`, `cupertino-geometry`, `cupertino-theme` and `cupertino-decorations`;
-- with `app`, also `cupertino-client` and `cupertino-protocols`.
+- with `app`, also `cupertino-wayland-client`, `cupertino-shell-client`, `cupertino-protocol-app`, `cupertino-ui-wayland` (a
+  presenter per surface) and `cupertino-protocols`.
 
 ## Running
 

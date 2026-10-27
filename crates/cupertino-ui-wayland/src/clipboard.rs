@@ -30,6 +30,37 @@ pub fn text(conn: &mut Connection, offer: &ClipboardOffer) -> Result<Option<Stri
     }
 }
 
+/// The clipboard as one client sees it: the selection the server reported last, or the text this client put there until
+/// the server reports a selection again.
+#[derive(Default)]
+pub struct Clipboard {
+    offer: Option<ClipboardOffer>,
+    own: Option<String>,
+}
+
+impl Clipboard {
+    /// The server reported another selection, or none (`Event::Selection`).
+    pub fn selection_changed(&mut self, offer: Option<ClipboardOffer>) {
+        self.offer = offer;
+        self.own = None;
+    }
+
+    /// Put `text` on the clipboard, as [`set_text`] does.
+    pub fn set_text(&mut self, conn: &mut Connection, text: String) -> Result<(), Error> {
+        set_text(conn, &text)?;
+        self.own = Some(text);
+        Ok(())
+    }
+
+    /// The clipboard's text for a paste, as [`text`] reads it; `None` when it holds none.
+    pub fn text(&self, conn: &mut Connection) -> Result<Option<String>, Error> {
+        match &self.offer {
+            Some(offer) => text(conn, offer),
+            None => Ok(self.own.clone()),
+        }
+    }
+}
+
 /// `bytes` as text: invalid sequences replaced, a character cut by the read limit dropped.
 fn text_of(bytes: &[u8]) -> String {
     let whole = match std::str::from_utf8(bytes) {

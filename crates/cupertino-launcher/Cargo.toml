@@ -12,7 +12,13 @@ layer = "shell"
 default = ["material"]
 material = ["dep:cupertino-glass", "dep:image"]
 # the `cupertino-launcher` process: the panel on a layer surface as a client of the server
-app = ["dep:cupertino-client", "dep:zbus"]
+app = [
+    "dep:cupertino-protocol-app",
+    "dep:cupertino-shell-client",
+    "dep:cupertino-ui-wayland",
+    "dep:cupertino-wayland-client",
+    "dep:zbus",
+]
 
 [dependencies]
 cupertino-assets = { path = "../cupertino-assets" }
@@ -23,7 +29,10 @@ cupertino-animation = { path = "../cupertino-animation" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-decorations = { path = "../cupertino-decorations" }
 cupertino-text-field = { path = "../cupertino-text-field" }
-cupertino-client = { path = "../cupertino-client", optional = true }
+cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
+cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
+cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
+cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 cupertino-glass = { path = "../cupertino-glass", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 serde = { version = "1", features = ["derive"] }

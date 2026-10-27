@@ -233,15 +233,15 @@ fn shell_bin_dir() -> &'static Path {
         // <target>/<profile>/deps/<this test> -> <target>/<profile>
         let profile_dir = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().to_path_buf();
         let mut cargo = Command::new(std::env::var_os("CARGO").expect("CARGO is set by `cargo test`"));
-        cargo.args(["build", "-p", "cupertino-dock", "-p", "cupertino-menubar", "-p", "cupertino-notifications", "-p", "cupertino-windowmanager", "-p", "cupertino-screenshot", "-p", "cupertino-osd", "-p", "cupertino-controlcenter"]);
-        cargo.args(["--features", "cupertino-dock/app,cupertino-menubar/app,cupertino-notifications/app,cupertino-windowmanager/app,cupertino-screenshot/app,cupertino-osd/app,cupertino-controlcenter/app"]);
+        cargo.args(["build", "-p", "cupertino-dock", "-p", "cupertino-menubar", "-p", "cupertino-notifications", "-p", "cupertino-windowmanager", "-p", "cupertino-screenshot", "-p", "cupertino-osd", "-p", "cupertino-controlcenter", "-p", "cupertino-launcher"]);
+        cargo.args(["--features", "cupertino-dock/app,cupertino-menubar/app,cupertino-notifications/app,cupertino-windowmanager/app,cupertino-screenshot/app,cupertino-osd/app,cupertino-controlcenter/app,cupertino-launcher/app"]);
         cargo.args(["--target-dir", profile_dir.parent().unwrap().to_str().unwrap()]);
         if profile_dir.file_name().unwrap() == "release" {
             cargo.arg("--release");
         }
         let status = cargo.status().unwrap();
         assert!(status.success(), "building the shell process binaries: {status}");
-        for name in ["cupertino-dock", "cupertino-menubar", "cupertino-notifications", "cupertino-windowmanager", "cupertino-screenshot", "cupertino-osd", "cupertino-controlcenter"] {
+        for name in ["cupertino-dock", "cupertino-menubar", "cupertino-notifications", "cupertino-windowmanager", "cupertino-screenshot", "cupertino-osd", "cupertino-controlcenter", "cupertino-launcher"] {
             assert!(profile_dir.join(name).is_file(), "missing binary {name} in {}", profile_dir.display());
         }
         profile_dir
@@ -477,7 +477,7 @@ fn the_real_shell_processes_work_with_the_server() {
         eprintln!("skipping: dbus-daemon is not available");
         return;
     };
-    let procs = [
+    let mut procs = [
         "cupertino-dock",
         "cupertino-menubar",
         "cupertino-notifications",
@@ -486,15 +486,30 @@ fn the_real_shell_processes_work_with_the_server() {
     ]
     .map(|b| real_process(b, &bus))
     .to_vec();
+    // the launcher indexes no files and finds no host application
+    let empty = TempDir::new("launcher-no-host-data");
+    let mut launcher = real_process_without_host_data("cupertino-launcher", &bus, &empty.0);
+    launcher.command.push("--no-files".into());
+    procs.push(launcher);
     let Some(mut server) = Server::start(procs, true) else {
         return;
     };
-    // the overlay and the control panel map their surfaces and keep running to the end
-    server.wait_until("the overlay and the control panel to map", |s| {
-        layer_geometry(s, "cupertino-osd").is_some()
-            && layer_geometry(s, "cupertino-controlcenter").is_some()
-    });
-    let panels = ["cupertino-osd", "cupertino-controlcenter"].map(|name| {
+    // the overlay, the control panel and the launcher map their surfaces at start and keep running to the end; the
+    // launcher draws its hidden panel at once
+    server.wait_until(
+        "the overlay, the control panel and the launcher to map",
+        |s| {
+            layer_geometry(s, "cupertino-osd").is_some()
+                && layer_geometry(s, "cupertino-controlcenter").is_some()
+                && committed_buffer(s, "cupertino-launcher").is_some()
+        },
+    );
+    let panels = [
+        "cupertino-osd",
+        "cupertino-controlcenter",
+        "cupertino-launcher",
+    ]
+    .map(|name| {
         server
             .state
             .supervisor
@@ -559,10 +574,10 @@ fn the_real_shell_processes_work_with_the_server() {
         ("cupertino-notifications", "Cupertino")
     );
     assert_eq!(
-        ["cupertino-osd", "cupertino-controlcenter"]
+        ["cupertino-osd", "cupertino-controlcenter", "cupertino-launcher"]
             .map(|name| server.state.supervisor.pid_of(name)),
         panels.map(Some),
-        "the overlay and the control panel kept their connections and were not restarted"
+        "the overlay, the control panel and the launcher kept their connections and were not restarted"
     );
 }
 

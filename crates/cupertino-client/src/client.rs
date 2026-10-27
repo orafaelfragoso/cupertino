@@ -17,10 +17,10 @@ use cupertino_shell_client::{
     Dock, IdleNotifier, IdleWatch, LayerShell, LayerSurface, MenuBar, Session as SessionObserver,
     SessionChange, SessionLockManager, SessionState, Shell, ShellEvent,
 };
-use cupertino_ui_wayland::{clipboard, popup, Ready, ShmPresenter};
+use cupertino_ui_wayland::{clipboard::Clipboard, popup, Ready, ShmPresenter};
 use cupertino_wayland_client::{
-    Capability, ClipboardOffer, Connection, CursorShape, Decorations, Error, KeyboardEvent,
-    OutputId, Popup, Toplevel, ToplevelConfig as WindowConfig,
+    Capability, Connection, CursorShape, Decorations, Error, KeyboardEvent, OutputId, Popup,
+    Toplevel, ToplevelConfig as WindowConfig,
 };
 use std::time::Duration;
 use tiny_skia::Pixmap;
@@ -155,9 +155,7 @@ pub struct Client {
     scroll: ScrollCounts,
     surfaces: Vec<Surface>,
     key_focus: Option<SurfaceId>,
-    selection: Option<ClipboardOffer>,
-    /// This client's text, until the server reports a selection.
-    own_text: Option<String>,
+    clipboard: Clipboard,
     events: Vec<Event>,
     fault: Option<ClientError>,
 }
@@ -240,8 +238,7 @@ impl Client {
             scroll: ScrollCounts::default(),
             surfaces: Vec::new(),
             key_focus: None,
-            selection: None,
-            own_text: None,
+            clipboard: Clipboard::default(),
             events: Vec::new(),
             fault: None,
         };
@@ -389,18 +386,13 @@ impl Client {
     /// Put `text` on the clipboard, as the answer to the latest input event (a copy or cut key). The client serves it
     /// to pasting clients from [`Client::wait`] until another selection replaces it.
     pub fn set_clipboard_text(&mut self, text: String) -> Result<(), ClientError> {
-        clipboard::set_text(&mut self.conn, &text)?;
-        self.own_text = Some(text);
-        Ok(())
+        Ok(self.clipboard.set_text(&mut self.conn, text)?)
     }
 
     /// The clipboard's text for a paste, `None` when it holds no text. Reading another client's selection waits up to
     /// a second for it.
     pub fn clipboard_text(&mut self) -> Result<Option<String>, ClientError> {
-        match &self.selection {
-            Some(offer) => Ok(clipboard::text(&mut self.conn, offer)?),
-            None => Ok(self.own_text.clone()),
-        }
+        Ok(self.clipboard.text(&mut self.conn)?)
     }
 
     /// The modifiers held now, as of the last `wl_keyboard.modifiers` event; none before the keymap arrives. Pointer
@@ -863,10 +855,7 @@ impl Client {
             T::ScaleChanged { .. } => {}
             T::Pointer { surface, event } => self.pointer(SurfaceId(surface), event),
             T::Keyboard { surface, event } => self.keyboard(SurfaceId(surface), event),
-            T::Selection(offer) => {
-                self.selection = offer;
-                self.own_text = None;
-            }
+            T::Selection(offer) => self.clipboard.selection_changed(offer),
             T::OutputsChanged => self.events.push(Event::OutputsChanged),
             T::ActivationToken { request, token } => self.events.push(Event::ActivationToken {
                 request: ActivationRequest(request),

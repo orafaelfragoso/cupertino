@@ -1,5 +1,5 @@
 // cupertino-layers --graph target
-// 55 crates, 184 internal dependencies
+// 55 crates, 190 internal dependencies
 // per layer: foundation 11, models 7, platform 7, protocol 3, transport 3, render 4, ui 2, core 1, shell 9, services 4, apps 2, tools 2
 // forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden normal edge cupertino-files (apps) -> cupertino-icons (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
@@ -160,13 +160,16 @@ digraph "target" {
   "cupertino-launcher" -> "cupertino-animation";
   "cupertino-launcher" -> "cupertino-apps";
   "cupertino-launcher" -> "cupertino-assets";
-  "cupertino-launcher" -> "cupertino-client";
   "cupertino-launcher" -> "cupertino-decorations";
   "cupertino-launcher" -> "cupertino-geometry";
   "cupertino-launcher" -> "cupertino-glass";
   "cupertino-launcher" -> "cupertino-icons";
+  "cupertino-launcher" -> "cupertino-protocol-app";
+  "cupertino-launcher" -> "cupertino-shell-client";
   "cupertino-launcher" -> "cupertino-text-field";
   "cupertino-launcher" -> "cupertino-theme";
+  "cupertino-launcher" -> "cupertino-ui-wayland";
+  "cupertino-launcher" -> "cupertino-wayland-client";
   "cupertino-login" -> "cupertino-assets";
   "cupertino-login" -> "cupertino-client";
   "cupertino-login" -> "cupertino-decorations";
@@ -219,12 +222,15 @@ digraph "target" {
   "cupertino-protocols" -> "cupertino-app-protocols";
   "cupertino-screenshot" -> "cupertino-animation";
   "cupertino-screenshot" -> "cupertino-assets";
-  "cupertino-screenshot" -> "cupertino-client";
   "cupertino-screenshot" -> "cupertino-decorations";
   "cupertino-screenshot" -> "cupertino-defaults";
   "cupertino-screenshot" -> "cupertino-geometry";
+  "cupertino-screenshot" -> "cupertino-protocol-app";
   "cupertino-screenshot" -> "cupertino-protocols";
+  "cupertino-screenshot" -> "cupertino-shell-client";
   "cupertino-screenshot" -> "cupertino-theme";
+  "cupertino-screenshot" -> "cupertino-ui-wayland";
+  "cupertino-screenshot" -> "cupertino-wayland-client";
   "cupertino-seat" -> "cupertino-devices";
   "cupertino-server" -> "cupertino-animation";
   "cupertino-server" -> "cupertino-assets";

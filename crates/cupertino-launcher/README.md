@@ -13,8 +13,8 @@ and the other items marked approximate are authored and configurable. Colours, t
 
 ## Running
 
-Feature `app` builds the `cupertino-launcher` binary: the panel on a layer surface, as a client of `cupertino-server`
-(`render/cupertino-client`). The server starts and restarts it through the `shell` key of its configuration.
+Feature `app` builds the `cupertino-launcher` binary: the panel on a layer surface, as a client of `cupertino-server` on
+`cupertino-wayland-client`, `cupertino-shell-client`, `cupertino-protocol-app` and a `cupertino-ui-wayland` presenter per surface. The server starts and restarts it through the `shell` key of its configuration.
 
 ```json
 {"shell": [{"name": "launcher", "command": ["cupertino-launcher", "--terminal", "foot"]}]}
@@ -38,7 +38,7 @@ catalog.
 
 **Surface.** One overlay layer surface over the whole output. It is created without an output, at start and each time the panel
 opens, so the server puts it on the output under the pointer. The process takes that output from the surface's
-`wl_surface.enter` (`Client::surface_outputs`) when it is configured, replaces the surface on that output when the output needs
+`wl_surface.enter` (`Connection::surface_outputs`) when it is configured, replaces the surface on that output when the output needs
 another surface size, and puts the outside-click catcher there. When the output goes away the server closes the surfaces, and
 they start again on the output the server chooses. Keyboard interactivity is `exclusive` while the panel is shown and `none`
 otherwise. The input region is the whole surface while shown (so a press outside the panel closes it) and empty otherwise.
@@ -58,7 +58,7 @@ The launch history is written when the panel closes.
 
 **Launching.** `Activation::Run` asks the server for an `xdg-activation` token with the key press or click that chose the
 entry, and starts the command with `XDG_ACTIVATION_TOKEN` / `DESKTOP_STARTUP_ID` when the token arrives. A copy result (the
-calculator's) goes on the system clipboard through the client (`Client::set_clipboard_text`) with the same input event,
+calculator's) goes on the system clipboard through `cupertino-ui-wayland`'s `Clipboard` with the same input event,
 and the launcher serves it until another selection replaces it. Reveal and web search run `xdg-open`. The other panel commands are logged as not provided.
 
 Screenshot: `cupertino-server/output/launcher-open.png`.
@@ -230,6 +230,7 @@ cargo bench -p cupertino-launcher
 | Item | Proves or shows |
 |---|---|
 | `tests/control.rs` | The `Toggle` interface against a private `dbus-daemon`, and that a second launcher cannot take the name. |
+| `cupertino-server/tests/shell_processes.rs` | The real process (`--no-files`) connects to the real server, draws its hidden panel at start and keeps running. |
 | `cargo test` | Matching, ranking, frecency, calculator, file search, panel state and rendering, and the `app` process code. |
 | `output/ | Suggestions, applications, acronym, multi-word (dark), calculator and file results (dark), rendered over a procedural wallpaper through the material recipe. |
 | `cargo bench` | Scores 5 000 synthetic applications: about 1–3 ms per query in a release build (14 ms to build the index), calculator 0.6 µs. |

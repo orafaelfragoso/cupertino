@@ -1,7 +1,7 @@
 //! Translation of the toolkit's key events to the keys of the panel.
 
 use crate::panel::{Key, Mods};
-use cupertino_client::{key, Modifiers};
+use cupertino_wayland_client::{key, Modifiers};
 
 /// The panel key and modifiers of a key press, or `None` for keys the panel ignores (modifiers,
 /// function keys). Named keys are recognised by their evdev code, so they work in every layout;

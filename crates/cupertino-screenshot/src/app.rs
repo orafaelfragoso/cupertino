@@ -6,11 +6,8 @@ use std::error::Error;
 use std::time::{Duration, Instant};
 
 use cupertino_assets::Assets;
-use cupertino_client::{
-    key, Anchor, Backdrop, Button, Client, Connection, CursorLook, Event, KeyboardInteractivity,
-    Layer, LayerSurfaceConfig, Margin, OutputId, PointerEvent, SurfaceId,
-};
 use cupertino_geometry::{Point, Rect};
+use cupertino_protocol_app::{AppEffects, Backdrop};
 use cupertino_screenshot::image;
 use cupertino_screenshot::render::{OverlayView, Painter, Palette, ToolbarView};
 use cupertino_screenshot::session::{Key, Outcome, Pointer, Session, Style, Target};
@@ -19,7 +16,16 @@ use cupertino_screenshot::toolbar::{self, Item, MenuRow, MENU_RADIUS, MENU_WIDTH
 use cupertino_screenshot::values::{
     TOOLBAR_BOTTOM, TOOLBAR_MATERIAL, TOOLBAR_RADIUS, TOOLBAR_SIZE,
 };
+use cupertino_shell_client::{
+    Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
+    Session as SessionObserver, SessionState, Shell, ShellEvent,
+};
 use cupertino_theme::{Appearance, Theme};
+use cupertino_ui_wayland::{popup, Ready, ShmPresenter};
+use cupertino_wayland_client::{
+    key, Button, Connection, CursorShape, Event, ExtensionEvent, KeyboardEvent, OutputId,
+    PointerEvent, Popup, SurfaceId,
+};
 use tiny_skia::Pixmap;
 
 use crate::capture::Capturer;
@@ -97,8 +103,53 @@ pub struct Screen {
     pub rect: Rect,
 }
 
-fn screens(client: &Client) -> Result<Vec<Screen>> {
-    let screens: Vec<Screen> = client
+/// The toolkit side of the connection: the transport and the shell protocols the surfaces use.
+pub struct Wayland {
+    pub conn: Connection,
+    pub layer_shell: LayerShell,
+    pub effects: AppEffects,
+    _session: SessionObserver,
+    session: SessionState,
+}
+
+impl Wayland {
+    fn new(conn: wayland_client::Connection) -> Result<Self> {
+        let mut conn = Connection::from_wayland(conn)?;
+        let layer_shell =
+            LayerShell::bind(&mut conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
+        let effects =
+            AppEffects::bind(&mut conn).ok_or("the server lacks cupertino_app_effects_v1")?;
+        let shell = Shell::bind(&mut conn).ok_or("the server lacks cupertino_shell_v1")?;
+        // nothing is mapped yet: the other events are of the outputs, which are read after
+        let (session_observer, session, _) = shell.observe(&mut conn)?;
+        Ok(Self {
+            conn,
+            layer_shell,
+            effects,
+            _session: session_observer,
+            session,
+        })
+    }
+
+    pub fn appearance(&self) -> Appearance {
+        if self.session.dark {
+            Appearance::Dark
+        } else {
+            Appearance::Light
+        }
+    }
+
+    /// Follow the session; the shell event when the extension event is one.
+    pub fn extension<'a>(&mut self, event: &'a ExtensionEvent) -> Option<&'a ShellEvent> {
+        match self.session.apply(event) {
+            Some(_) => None,
+            None => event.downcast_ref::<ShellEvent>(),
+        }
+    }
+}
+
+fn screens(conn: &Connection) -> Result<Vec<Screen>> {
+    let screens: Vec<Screen> = conn
         .outputs()
         .into_iter()
         .filter_map(|o| {
@@ -130,10 +181,10 @@ pub fn run(options: &Options) -> Result<()> {
         eprintln!("cupertino-screenshot: {}: {p}", settings_path.display());
     }
     // the toolkit and the capture share the connection the server started the process with
-    let conn = Connection::connect_to_env()?;
-    let mut client = Client::from_shell_connection(conn.clone())?;
+    let conn = wayland_client::Connection::connect_to_env()?;
+    let mut wl = Wayland::new(conn.clone())?;
     let mut capturer = Capturer::new(&conn)?;
-    let screens = screens(&client)?;
+    let screens = screens(&wl.conn)?;
     let (shots, clipboard) = match options.mode {
         StartMode::Screen => {
             let mut shots = Vec::new();
@@ -146,13 +197,8 @@ pub fn run(options: &Options) -> Result<()> {
         }
         StartMode::Selection | StartMode::Toolbar => {
             let theme = Theme::load()?;
-            let appearance = if client.is_dark() {
-                Appearance::Dark
-            } else {
-                Appearance::Light
-            };
             let painter = Painter::new(
-                Palette::from_theme(&theme, appearance)?,
+                Palette::from_theme(&theme, wl.appearance())?,
                 theme.tokens.typography().clone(),
                 &assets,
             )?;
@@ -161,13 +207,13 @@ pub fn run(options: &Options) -> Result<()> {
             } else {
                 Style::Simple
             };
-            let mut overlay = Overlay::new(&mut client, &screens, style, &settings, painter)?;
-            let outcome = overlay.run(&mut client, &mut capturer, &mut settings, &settings_path)?;
+            let mut overlay = Overlay::new(&mut wl, &screens, style, &settings, painter)?;
+            let outcome = overlay.run(&mut wl, &mut capturer, &mut settings, &settings_path)?;
             if settings.show_pointer && matches!(outcome, Outcome::Capture { .. }) {
                 // with the arrow back the server paints it into the capture
-                overlay.show_arrow(&mut client)?;
+                overlay.show_arrow(&mut wl.conn)?;
             }
-            overlay.close(&mut client)?;
+            overlay.close(&mut wl.conn)?;
             let Outcome::Capture { target, clipboard } = outcome else {
                 return Ok(());
             };
@@ -178,9 +224,9 @@ pub fn run(options: &Options) -> Result<()> {
         }
     };
     if clipboard || settings.location == Location::Clipboard {
-        deliver::to_clipboard(&mut client, &mut capturer, &shots[0])
+        deliver::to_clipboard(&mut wl, &mut capturer, &shots[0])
     } else {
-        deliver::to_files(&mut client, &screens, &shots, &settings, &assets)
+        deliver::to_files(&mut wl, &screens, &shots, &settings, &assets)
     }
 }
 
@@ -223,14 +269,16 @@ fn capture(
 
 /// The toolbar surface and what it shows.
 struct ToolbarSurface {
-    surface: SurfaceId,
+    layer: LayerSurface,
+    presenter: ShmPresenter,
     backdrop: Option<Backdrop>,
     hovered: Option<Item>,
 }
 
 /// The Options menu popup.
 struct Menu {
-    surface: SurfaceId,
+    popup: Popup,
+    presenter: ShmPresenter,
     backdrop: Option<Backdrop>,
     rows: Vec<MenuRow>,
     hovered: Option<usize>,
@@ -239,20 +287,20 @@ struct Menu {
 /// The overlay surfaces, the toolbar and the session running on them.
 struct Overlay {
     /// One full-output surface per screen, by index into `screens`.
-    surfaces: Vec<SurfaceId>,
+    surfaces: Vec<(LayerSurface, ShmPresenter)>,
     screens: Vec<Screen>,
     toolbar: Option<ToolbarSurface>,
     menu: Option<Menu>,
     session: Session,
     painter: Painter,
     start: Instant,
-    /// The pointer look last set, to set it only on change.
-    look: Option<CursorLook>,
+    /// The pointer look last set, to set it only on change; the system pointer is hidden under the crosshair.
+    look: Option<Pointer>,
 }
 
 impl Overlay {
     fn new(
-        client: &mut Client,
+        wl: &mut Wayland,
         screens: &[Screen],
         style: Style,
         settings: &Settings,
@@ -260,21 +308,26 @@ impl Overlay {
     ) -> Result<Self> {
         let mut surfaces = Vec::new();
         for (i, s) in screens.iter().enumerate() {
-            surfaces.push(client.layer_surface(&LayerSurfaceConfig {
-                namespace: OVERLAY_NAMESPACE.into(),
-                output: Some(s.id),
-                layer: Layer::Overlay,
-                anchor: Anchor::Top | Anchor::Right | Anchor::Bottom | Anchor::Left,
-                size: (0, 0),
-                margin: Margin::default(),
-                exclusive_zone: -1,
-                // one surface takes the keys for the whole overlay
-                keyboard: if i == 0 {
-                    KeyboardInteractivity::Exclusive
-                } else {
-                    KeyboardInteractivity::None
+            let layer = wl.layer_shell.layer_surface(
+                &mut wl.conn,
+                &LayerSurfaceConfig {
+                    namespace: OVERLAY_NAMESPACE.into(),
+                    output: Some(s.id),
+                    layer: Layer::Overlay,
+                    anchor: Anchor::Top | Anchor::Right | Anchor::Bottom | Anchor::Left,
+                    size: (0, 0),
+                    margin: Margin::default(),
+                    exclusive_zone: -1,
+                    // one surface takes the keys for the whole overlay
+                    keyboard: if i == 0 {
+                        KeyboardInteractivity::Exclusive
+                    } else {
+                        KeyboardInteractivity::None
+                    },
                 },
-            })?);
+            )?;
+            let presenter = ShmPresenter::new(layer.surface());
+            surfaces.push((layer, presenter));
         }
         let (session, toolbar) = match style {
             Style::Simple => (
@@ -298,23 +351,27 @@ impl Overlay {
                 );
                 // created after the overlays, so it is stacked above them; on the first screen, above the dock's
                 // exclusive zone, which stands in for the design's visible frame
-                let surface = client.layer_surface(&LayerSurfaceConfig {
-                    namespace: OVERLAY_NAMESPACE.into(),
-                    output: Some(screens[0].id),
-                    layer: Layer::Overlay,
-                    anchor: Anchor::Bottom,
-                    size: (TOOLBAR_SIZE.0 as u32, TOOLBAR_SIZE.1 as u32),
-                    margin: Margin {
-                        bottom: TOOLBAR_BOTTOM,
-                        ..Margin::default()
+                let layer = wl.layer_shell.layer_surface(
+                    &mut wl.conn,
+                    &LayerSurfaceConfig {
+                        namespace: OVERLAY_NAMESPACE.into(),
+                        output: Some(screens[0].id),
+                        layer: Layer::Overlay,
+                        anchor: Anchor::Bottom,
+                        size: (TOOLBAR_SIZE.0 as u32, TOOLBAR_SIZE.1 as u32),
+                        margin: Margin {
+                            bottom: TOOLBAR_BOTTOM,
+                            ..Margin::default()
+                        },
+                        exclusive_zone: 0,
+                        keyboard: KeyboardInteractivity::None,
                     },
-                    exclusive_zone: 0,
-                    keyboard: KeyboardInteractivity::None,
-                })?;
+                )?;
                 (
                     session,
                     Some(ToolbarSurface {
-                        surface,
+                        presenter: ShmPresenter::new(layer.surface()),
+                        layer,
                         backdrop: None,
                         hovered: None,
                     }),
@@ -340,25 +397,26 @@ impl Overlay {
     /// Run until the session captures or is cancelled.
     fn run(
         &mut self,
-        client: &mut Client,
+        wl: &mut Wayland,
         capturer: &mut Capturer,
         settings: &mut Settings,
         settings_path: &std::path::Path,
     ) -> Result<Outcome> {
         loop {
+            self.present(wl)?;
             let now = self.now();
             let timeout = self
                 .session
                 .deadline(now)
                 .map(|at| Duration::from_secs_f64((at - now).max(0.0)));
-            let events = client.wait(timeout)?;
+            let events = wl.conn.wait(timeout)?;
             capturer.dispatch()?;
             if let Some(windows) = capturer.take_windows() {
                 self.session.set_windows(windows);
-                self.redraw_overlays(client)?;
+                self.redraw_overlays();
             }
             for event in events {
-                if let Some(outcome) = self.handle(client, event, settings, settings_path)? {
+                if let Some(outcome) = self.handle(wl, event, settings, settings_path)? {
                     return Ok(outcome);
                 }
             }
@@ -368,73 +426,104 @@ impl Overlay {
                 return Ok(outcome);
             }
             if self.session.countdown(now) != before {
-                self.redraw_toolbar(client)?;
+                self.redraw_toolbar();
             }
         }
     }
 
-    fn redraw_overlays(&self, client: &mut Client) -> Result<()> {
-        for s in &self.surfaces {
-            client.request_redraw(*s)?;
+    fn presenters(&mut self) -> impl Iterator<Item = &mut ShmPresenter> {
+        self.surfaces
+            .iter_mut()
+            .map(|(_, p)| p)
+            .chain(self.toolbar.iter_mut().map(|t| &mut t.presenter))
+            .chain(self.menu.iter_mut().map(|m| &mut m.presenter))
+    }
+
+    /// Draw every surface that can take a frame.
+    fn present(&mut self, wl: &mut Wayland) -> Result<()> {
+        let surfaces: Vec<SurfaceId> = self.presenters().map(|p| p.surface()).collect();
+        for surface in surfaces {
+            loop {
+                let ready = match self.presenters().find(|p| p.surface() == surface) {
+                    Some(presenter) => presenter.poll(&wl.conn)?,
+                    None => break,
+                };
+                match ready {
+                    Ready::Idle => break,
+                    // a draw follows every scale change
+                    Ready::ScaleChanged(_) => {}
+                    Ready::Draw => self.draw(wl, surface)?,
+                }
+            }
         }
         Ok(())
     }
 
-    fn redraw_toolbar(&self, client: &mut Client) -> Result<()> {
-        if let Some(t) = &self.toolbar {
-            client.request_redraw(t.surface)?;
+    fn redraw_overlays(&mut self) {
+        for (_, p) in &mut self.surfaces {
+            p.request_redraw();
         }
-        Ok(())
+    }
+
+    fn redraw_toolbar(&mut self) {
+        if let Some(t) = &mut self.toolbar {
+            t.presenter.request_redraw();
+        }
     }
 
     /// Set the pointer look when it changed.
-    fn set_look(&mut self, client: &mut Client, look: CursorLook) -> Result<()> {
+    fn set_look(&mut self, conn: &mut Connection, look: Pointer) -> Result<()> {
         if self.look != Some(look) {
-            client.set_cursor(look)?;
+            match look {
+                Pointer::Crosshair => conn.hide_cursor()?,
+                Pointer::Arrow => conn.set_cursor(CursorShape::Default)?,
+            }
             self.look = Some(look);
         }
         Ok(())
     }
 
     /// Bring the arrow back where the overlay hid the pointer.
-    fn show_arrow(&mut self, client: &mut Client) -> Result<()> {
-        if self.look == Some(CursorLook::Hidden) {
-            self.set_look(client, CursorLook::Arrow)?;
+    fn show_arrow(&mut self, conn: &mut Connection) -> Result<()> {
+        if self.look == Some(Pointer::Crosshair) {
+            self.set_look(conn, Pointer::Arrow)?;
         }
         Ok(())
     }
 
-    fn session_look(&self) -> CursorLook {
-        match self.session.pointer_look() {
-            Pointer::Crosshair => CursorLook::Hidden,
-            Pointer::Arrow => CursorLook::Arrow,
-        }
-    }
-
     fn handle(
         &mut self,
-        client: &mut Client,
+        wl: &mut Wayland,
         event: Event,
         settings: &mut Settings,
         settings_path: &std::path::Path,
     ) -> Result<Option<Outcome>> {
         let now = self.now();
         match event {
-            Event::Configured { .. } | Event::ScaleChanged { .. } => {}
-            Event::Draw(surface) => self.draw(client, surface)?,
-            Event::Closed(_) => return Err("the server closed a screenshot surface".into()),
-            // the description the process connected with also reports as a change; only a real one ends the overlay
-            Event::OutputsChanged if screens(client)? == self.screens => {}
-            Event::OutputsChanged => return Err("the outputs changed during the screenshot".into()),
-            Event::PopupDone(surface)
-                if self.menu.as_ref().is_some_and(|m| m.surface == surface) =>
-            {
-                self.close_menu(client)?
+            Event::Frame(frame) => {
+                if let Some(p) = self.presenters().find(|p| p.surface() == frame.surface) {
+                    p.frame_done();
+                }
             }
-            Event::Key {
-                key: code,
-                pressed: true,
-                mods,
+            Event::PopupConfigure { popup, configure } => {
+                if let Some(m) = self.menu.as_mut().filter(|m| m.popup == popup) {
+                    m.presenter.configured((configure.width, configure.height));
+                }
+            }
+            // the description the process connected with also reports as a change; only a real one ends the overlay
+            Event::OutputsChanged if screens(&wl.conn)? == self.screens => {}
+            Event::OutputsChanged => return Err("the outputs changed during the screenshot".into()),
+            Event::PopupDone(popup) if self.menu.as_ref().is_some_and(|m| m.popup == popup) => {
+                self.close_menu(&mut wl.conn)?
+            }
+            Event::Keyboard {
+                event:
+                    KeyboardEvent::Key {
+                        code,
+                        pressed: true,
+                        mods,
+                        ..
+                    },
                 ..
             } => {
                 let key = match code {
@@ -444,39 +533,54 @@ impl Overlay {
                     _ => return Ok(None),
                 };
                 let outcome = self.session.key(key, mods.ctrl, now);
-                self.redraw_overlays(client)?;
-                self.redraw_toolbar(client)?;
+                self.redraw_overlays();
+                self.redraw_toolbar();
                 return Ok(outcome);
             }
             Event::Pointer { surface, event } => {
-                return self.pointer(client, surface, event, settings, settings_path)
+                return self.pointer(wl, surface, event, settings, settings_path)
             }
-            // the overlay has no menu-bar or dock role, asks for no activation and keeps its look for its short life
-            Event::KeyboardLeave(_)
-            | Event::Key { .. }
-            | Event::PopupDone(_)
-            | Event::ActivationToken { .. }
-            | Event::MenuBar { .. }
-            | Event::Dock { .. }
-            | Event::Appearance { .. }
-            | Event::DisplayOptions(_)
-            | Event::SessionLock { .. }
-            | Event::LockRequested { .. }
-            | Event::LogOutRequested => {}
+            Event::Extension(event) => match wl.extension(&event) {
+                Some(&ShellEvent::Configure { surface, size }) => self.configured(surface, size)?,
+                Some(ShellEvent::Closed(_)) => {
+                    return Err("the server closed a screenshot surface".into())
+                }
+                _ => {}
+            },
+            // the overlay asks for no activation and keeps its look for its short life
+            _ => {}
         }
         Ok(None)
     }
 
+    fn configured(&mut self, surface: SurfaceId, size: (u32, u32)) -> Result<()> {
+        let layers = self.surfaces.iter_mut().map(|(l, p)| (&*l, p)).chain(
+            self.toolbar
+                .iter_mut()
+                .map(|t| (&t.layer, &mut t.presenter)),
+        );
+        for (layer, presenter) in layers {
+            if layer.surface() == surface {
+                presenter.configured(layer.configured(size)?);
+            }
+        }
+        Ok(())
+    }
+
     fn pointer(
         &mut self,
-        client: &mut Client,
+        wl: &mut Wayland,
         surface: SurfaceId,
         event: PointerEvent,
         settings: &mut Settings,
         settings_path: &std::path::Path,
     ) -> Result<Option<Outcome>> {
         let now = self.now();
-        if let Some(i) = self.surfaces.iter().position(|s| *s == surface) {
+        if let Some(i) = self
+            .surfaces
+            .iter()
+            .position(|(l, _)| l.surface() == surface)
+        {
             let origin = self.screens[i].rect.origin;
             let global = |p: Point| Point::new(p.x + origin.x, p.y + origin.y);
             let outcome = match event {
@@ -490,7 +594,7 @@ impl Overlay {
                     position,
                 } => self
                     .session
-                    .button(pressed, global(position), client.modifiers().ctrl, now),
+                    .button(pressed, global(position), wl.conn.modifiers().ctrl, now),
                 PointerEvent::Leave | PointerEvent::Button { .. } | PointerEvent::Scroll { .. } => {
                     None
                 }
@@ -499,23 +603,31 @@ impl Overlay {
                 // a surface entered keeps the look its client set last; set it again
                 self.look = None;
             }
-            let look = self.session_look();
-            self.set_look(client, look)?;
-            self.redraw_overlays(client)?;
+            let look = self.session.pointer_look();
+            self.set_look(&mut wl.conn, look)?;
+            self.redraw_overlays();
             return Ok(outcome);
         }
-        if self.toolbar.as_ref().is_some_and(|t| t.surface == surface) {
-            return self.toolbar_pointer(client, event, settings, settings_path, now);
+        if self
+            .toolbar
+            .as_ref()
+            .is_some_and(|t| t.layer.surface() == surface)
+        {
+            return self.toolbar_pointer(wl, event, settings, settings_path, now);
         }
-        if self.menu.as_ref().is_some_and(|m| m.surface == surface) {
-            self.menu_pointer(client, event, settings, settings_path)?;
+        if self
+            .menu
+            .as_ref()
+            .is_some_and(|m| m.popup.surface() == surface)
+        {
+            self.menu_pointer(&mut wl.conn, event, settings, settings_path)?;
         }
         Ok(None)
     }
 
     fn toolbar_pointer(
         &mut self,
-        client: &mut Client,
+        wl: &mut Wayland,
         event: PointerEvent,
         settings: &mut Settings,
         settings_path: &std::path::Path,
@@ -524,7 +636,7 @@ impl Overlay {
         if matches!(event, PointerEvent::Enter(_)) {
             self.look = None;
         }
-        self.set_look(client, CursorLook::Arrow)?;
+        self.set_look(&mut wl.conn, Pointer::Arrow)?;
         let hovered = match event {
             PointerEvent::Enter(p)
             | PointerEvent::Motion(p)
@@ -537,7 +649,7 @@ impl Overlay {
             .expect("the toolbar received the event");
         if toolbar.hovered != hovered {
             toolbar.hovered = hovered;
-            client.request_redraw(toolbar.surface)?;
+            toolbar.presenter.request_redraw();
         }
         let PointerEvent::Button {
             button: Button::Left,
@@ -556,10 +668,10 @@ impl Overlay {
                 None
             }
             Some(Item::Options) => {
-                self.open_menu(client, settings)?;
+                self.open_menu(&mut wl.conn, settings)?;
                 None
             }
-            Some(Item::Capture) => self.session.capture(client.modifiers().ctrl, now),
+            Some(Item::Capture) => self.session.capture(wl.conn.modifiers().ctrl, now),
             Some(
                 Item::RecordScreen
                 | Item::RecordWindow
@@ -568,14 +680,14 @@ impl Overlay {
             )
             | None => None,
         };
-        self.redraw_overlays(client)?;
-        self.redraw_toolbar(client)?;
+        self.redraw_overlays();
+        self.redraw_toolbar();
         Ok(outcome)
     }
 
     fn menu_pointer(
         &mut self,
-        client: &mut Client,
+        conn: &mut Connection,
         event: PointerEvent,
         settings: &mut Settings,
         settings_path: &std::path::Path,
@@ -589,7 +701,7 @@ impl Overlay {
         };
         if menu.hovered != hovered {
             menu.hovered = hovered;
-            client.request_redraw(menu.surface)?;
+            menu.presenter.request_redraw();
         }
         if let (
             PointerEvent::Button {
@@ -604,14 +716,14 @@ impl Overlay {
                 toolbar::apply(settings, action);
                 settings.store(settings_path)?;
             }
-            self.close_menu(client)?;
+            self.close_menu(conn)?;
         }
         Ok(())
     }
 
-    fn open_menu(&mut self, client: &mut Client, settings: &Settings) -> Result<()> {
+    fn open_menu(&mut self, conn: &mut Connection, settings: &Settings) -> Result<()> {
         if self.menu.is_some() {
-            return self.close_menu(client);
+            return self.close_menu(conn);
         }
         let toolbar = self
             .toolbar
@@ -631,9 +743,10 @@ impl Overlay {
             MENU_WIDTH,
             height,
         );
-        let surface = client.popup(toolbar.surface, &rect)?;
+        let popup = conn.popup(toolbar.layer.surface(), &popup::placement(&rect, true)?)?;
         self.menu = Some(Menu {
-            surface,
+            popup,
+            presenter: ShmPresenter::new(popup.surface()),
             backdrop: None,
             rows,
             hovered: None,
@@ -641,29 +754,33 @@ impl Overlay {
         Ok(())
     }
 
-    fn close_menu(&mut self, client: &mut Client) -> Result<()> {
+    fn close_menu(&mut self, conn: &mut Connection) -> Result<()> {
         if let Some(menu) = self.menu.take() {
             drop(menu.backdrop);
-            client.destroy_surface(menu.surface)?;
+            conn.destroy(menu.popup.surface())?;
         }
         Ok(())
     }
 
     /// Destroy every surface, so the capture that follows does not contain them.
-    fn close(&mut self, client: &mut Client) -> Result<()> {
-        self.close_menu(client)?;
+    fn close(&mut self, conn: &mut Connection) -> Result<()> {
+        self.close_menu(conn)?;
         if let Some(t) = self.toolbar.take() {
             drop(t.backdrop);
-            client.destroy_surface(t.surface)?;
+            conn.destroy(t.layer.surface())?;
         }
-        for s in self.surfaces.drain(..) {
-            client.destroy_surface(s)?;
+        for (layer, _) in self.surfaces.drain(..) {
+            conn.destroy(layer.surface())?;
         }
         Ok(())
     }
 
-    fn draw(&mut self, client: &mut Client, surface: SurfaceId) -> Result<()> {
-        if let Some(i) = self.surfaces.iter().position(|s| *s == surface) {
+    fn draw(&mut self, wl: &mut Wayland, surface: SurfaceId) -> Result<()> {
+        if let Some(i) = self
+            .surfaces
+            .iter()
+            .position(|(l, _)| l.surface() == surface)
+        {
             let s = &self.session;
             let view = OverlayView {
                 bounds: self.screens[i].rect,
@@ -676,42 +793,46 @@ impl Overlay {
                 crosshair: s.pointer_look() == Pointer::Crosshair,
             };
             let painter = &mut self.painter;
-            client.draw(surface, |pm, scale| {
-                painter.overlay(pm, f64::from(scale.factor()), &view)
+            self.surfaces[i].1.draw(&mut wl.conn, None, |pm, scale| {
+                painter.overlay(pm, scale.factor(), &view)
             })?;
             return Ok(());
         }
-        if let Some(t) = self.toolbar.as_mut().filter(|t| t.surface == surface) {
+        if let Some(t) = self
+            .toolbar
+            .as_mut()
+            .filter(|t| t.layer.surface() == surface)
+        {
             if t.backdrop.is_none() {
-                let backdrop = client.backdrop(surface)?;
+                let backdrop = wl.effects.backdrop(&wl.conn, surface)?;
                 backdrop.set_material(TOOLBAR_MATERIAL);
                 backdrop.set_shape(&toolbar::background(), TOOLBAR_RADIUS)?;
                 t.backdrop = Some(backdrop);
             }
-            client.set_input_region(surface, &[toolbar::background()])?;
+            wl.conn
+                .set_input_region(surface, Some(&[toolbar::background()]))?;
             let view = ToolbarView {
                 mode: self.session.mode(),
                 hovered: t.hovered,
                 countdown: self.session.countdown(self.start.elapsed().as_secs_f64()),
             };
             let painter = &mut self.painter;
-            client.draw(surface, |pm, scale| {
-                painter.toolbar(pm, f64::from(scale.factor()), &view)
+            t.presenter.draw(&mut wl.conn, None, |pm, scale| {
+                painter.toolbar(pm, scale.factor(), &view)
             })?;
             return Ok(());
         }
-        if let Some(m) = self.menu.as_mut().filter(|m| m.surface == surface) {
+        if let Some(m) = self.menu.as_mut().filter(|m| m.popup.surface() == surface) {
             if m.backdrop.is_none() {
                 let (_, height) = toolbar::menu_layout(&m.rows);
-                let backdrop = client.backdrop(surface)?;
+                let backdrop = wl.effects.backdrop(&wl.conn, surface)?;
                 backdrop.set_material(MENU_MATERIAL);
                 backdrop.set_shape(&Rect::new(0.0, 0.0, MENU_WIDTH, height), MENU_RADIUS)?;
                 m.backdrop = Some(backdrop);
             }
-            let (rows, hovered) = (m.rows.clone(), m.hovered);
             let painter = &mut self.painter;
-            client.draw(surface, |pm, scale| {
-                painter.menu(pm, f64::from(scale.factor()), &rows, hovered)
+            m.presenter.draw(&mut wl.conn, None, |pm, scale| {
+                painter.menu(pm, scale.factor(), &m.rows, m.hovered)
             })?;
         }
         Ok(())

@@ -3,8 +3,7 @@
 #![cfg(feature = "app")]
 
 use cupertino_menubar::extras::{
-    BatteryState, BluetoothDevice, ExtraAction, Extras, FocusLifetime, SessionAction, SessionUser,
-    WifiNetwork,
+    BatteryState, BluetoothDevice, ExtraAction, Extras, FocusLifetime, SessionAction, WifiNetwork,
 };
 use cupertino_menubar::extras_bus::ExtrasBus;
 use std::collections::HashMap;
@@ -72,11 +71,6 @@ impl FakeLogin {
     #[zbus(property)]
     fn user_name(&self) -> String {
         "Rafael".into()
-    }
-
-    #[zbus(property)]
-    fn users(&self) -> Vec<(String, String, String, bool)> {
-        vec![("ana".into(), "Ana".into(), String::new(), true)]
     }
 
     #[zbus(property)]
@@ -342,17 +336,9 @@ fn the_extras_follow_the_services_and_act_on_them() {
         }]
     );
 
-    // the system menu's state: the name, the other accounts, a capability the agent says no to
+    // the system menu's state: the name and a capability the agent says no to
     let session = first.session.as_ref().expect("the session agent");
     assert_eq!(session.user_name, "Rafael");
-    assert_eq!(
-        session.users,
-        [SessionUser {
-            login: "ana".into(),
-            name: "Ana".into(),
-            logged_in: true
-        }]
-    );
     assert!(!session.caps.sleep && session.caps.restart && session.caps.lock);
     extras
         .act(ExtraAction::Session(SessionAction::Restart))

@@ -136,9 +136,6 @@ pub struct Extras {
     pub session: Option<SessionState>,
 }
 
-/// The first item id of the accounts under "Switch User" (above the ids of the top-level rows).
-const SWITCH_USER_BASE: i32 = 1000;
-
 /// What a menu row does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExtraAction {
@@ -192,21 +189,11 @@ impl Default for SessionCaps {
     }
 }
 
-/// Another account that can be switched to.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SessionUser {
-    pub login: String,
-    pub name: String,
-    /// The person has a session open.
-    pub logged_in: bool,
-}
-
 /// What the system menu is built from.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionState {
     /// The signed-in person's name; the Log Out entry carries it.
     pub user_name: String,
-    pub users: Vec<SessionUser>,
     pub caps: SessionCaps,
 }
 
@@ -340,7 +327,7 @@ impl Extras {
     }
 
     /// The system menu, `None` without the session agent: Sleep, Restart…, Shut Down…, Lock Screen and Log Out <name>…,
-    /// then the other accounts (or a login window entry). The ellipsis entries open the agent's confirmation panel.
+    /// then the login window entry. The ellipsis entries open the agent's confirmation panel.
     pub fn session_menu(&self) -> Option<ExtraMenu> {
         let session = self.session.as_ref()?;
         let caps = session.caps;
@@ -390,30 +377,12 @@ impl Extras {
         );
         if caps.switch_user {
             menu.separator();
-            if session.users.is_empty() {
-                menu.row(
-                    "Login Window\u{2026}",
-                    true,
-                    Toggle::None,
-                    action(SessionAction::SwitchUser),
-                );
-            } else {
-                // the people's names under "Switch User"; choosing one opens the login window (v1)
-                let mut children = Vec::new();
-                for (i, user) in session.users.iter().enumerate() {
-                    let id = ItemId(SWITCH_USER_BASE + i as i32);
-                    children.push(MenuItem {
-                        label: user.name.clone(),
-                        toggle: Toggle::Check(user.logged_in),
-                        ..MenuItem::new(id.0, "")
-                    });
-                    menu.actions
-                        .push((id, ExtraAction::Session(SessionAction::SwitchUser)));
-                }
-                let id = menu.next_id();
-                menu.rows
-                    .push(MenuItem::submenu(id, "Switch User", children));
-            }
+            menu.row(
+                "Login Window\u{2026}",
+                true,
+                Toggle::None,
+                action(SessionAction::SwitchUser),
+            );
         }
         Some(menu)
     }
@@ -850,11 +819,10 @@ mod tests {
         assert_eq!(ExtraKind::from_slot_id(":1.42"), None);
     }
 
-    fn session(user_name: &str, users: Vec<SessionUser>, caps: SessionCaps) -> Extras {
+    fn session(user_name: &str, caps: SessionCaps) -> Extras {
         Extras {
             session: Some(SessionState {
                 user_name: user_name.to_string(),
-                users,
                 caps,
             }),
             ..Extras::default()
@@ -872,7 +840,7 @@ mod tests {
     #[test]
     fn the_system_menu_lists_the_session_entries_with_the_name_the_chords_and_one_action_each() {
         assert_eq!(Extras::default().session_menu(), None, "no agent, no menu");
-        let menu = session("Rafael", Vec::new(), SessionCaps::default())
+        let menu = session("Rafael", SessionCaps::default())
             .session_menu()
             .unwrap();
         assert_eq!(
@@ -918,17 +886,13 @@ mod tests {
     }
 
     #[test]
-    fn the_system_menu_names_the_other_accounts_and_greys_what_the_session_cannot_do() {
+    fn the_system_menu_greys_what_the_session_cannot_do_and_leaves_out_the_login_window_when_it_cannot_switch(
+    ) {
         let caps = SessionCaps {
             sleep: false,
             ..SessionCaps::default()
         };
-        let users = vec![SessionUser {
-            login: "ana".into(),
-            name: "Ana".into(),
-            logged_in: true,
-        }];
-        let menu = session("", users, caps).session_menu().unwrap();
+        let menu = session("", caps).session_menu().unwrap();
         assert_eq!(
             entries(&menu),
             [
@@ -937,24 +901,9 @@ mod tests {
                 "Shut Down\u{2026}",
                 "Lock Screen",
                 "Log Out\u{2026}",
-                "Switch User"
+                "Login Window\u{2026}"
             ],
-            "no name: plain Log Out; the accounts go under Switch User"
-        );
-        let switch = menu.rows.iter().find(|r| r.label == "Switch User").unwrap();
-        assert!(switch.has_submenu);
-        assert_eq!(
-            switch
-                .children
-                .iter()
-                .map(|c| (c.label.as_str(), c.toggle))
-                .collect::<Vec<_>>(),
-            [("Ana", Toggle::Check(true))],
-            "a person with a session open is ticked"
-        );
-        assert_eq!(
-            menu.action(switch.children[0].id),
-            Some(&ExtraAction::Session(SessionAction::SwitchUser))
+            "no name: plain Log Out"
         );
         assert!(!menu.rows[0].enabled, "Sleep is greyed");
         assert!(menu.rows[1].enabled);
@@ -962,7 +911,7 @@ mod tests {
             switch_user: false,
             ..SessionCaps::default()
         };
-        let menu = session("Rafael", Vec::new(), alone).session_menu().unwrap();
+        let menu = session("Rafael", alone).session_menu().unwrap();
         assert!(!entries(&menu).iter().any(|l| l.contains("Login Window")));
     }
 }

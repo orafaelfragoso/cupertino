@@ -1,5 +1,5 @@
 //! A stand-in for the session agent's `org.cupertino.Login1` on the session bus, for captures and manual tries of the
-//! system menu: the properties it reads (`Locked`, `UserName`, `Users`, `Capabilities`) and the calls it takes, which it
+//! system menu: the properties it reads (`Locked`, `UserName`, `Capabilities`) and the calls it takes, which it
 //! only prints. Start it as a client of a capture: `capture.sh out.png --spawn target/release/examples/fake-login`.
 
 use std::collections::HashMap;
@@ -16,14 +16,6 @@ impl FakeLogin {
     #[zbus(property)]
     fn user_name(&self) -> String {
         "Rafael".into()
-    }
-
-    #[zbus(property)]
-    fn users(&self) -> Vec<(String, String, String, bool)> {
-        vec![
-            ("ana".into(), "Ana".into(), String::new(), true),
-            ("guest".into(), "Guest".into(), String::new(), false),
-        ]
     }
 
     #[zbus(property)]

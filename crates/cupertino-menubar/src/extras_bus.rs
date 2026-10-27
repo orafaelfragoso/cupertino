@@ -10,7 +10,7 @@
 
 use crate::extras::{
     BatteryState, BluetoothDevice, BluetoothState, ExtraAction, Extras, FocusLifetime, FocusState,
-    SessionAction, SessionCaps, SessionState, SessionUser, WifiNetwork, WifiState,
+    SessionAction, SessionCaps, SessionState, WifiNetwork, WifiState,
 };
 use futures_util::StreamExt;
 use std::collections::HashMap;
@@ -269,8 +269,7 @@ async fn read_all(
 }
 
 /// The session agent's entries for the system menu; `None` without the agent. Only `Locked` has to be there: the
-/// other properties are newer, and a missing one reads as the default (no other users, every entry possible, the
-/// name from `$USER`).
+/// other properties are newer, and a missing one reads as the default (every entry possible, the name from `$USER`).
 async fn read_session(conn: &Connection) -> zbus::Result<Option<SessionState>> {
     let login = proxy(conn, LOGIN_NAME, LOGIN_PATH, LOGIN_NAME).await?;
     let _locked: bool = login.get_property("Locked").await?;
@@ -281,21 +280,11 @@ async fn read_session(conn: &Connection) -> zbus::Result<Option<SessionState>> {
         .filter(|name: &String| !name.is_empty())
         .or_else(|| std::env::var("USER").ok())
         .unwrap_or_default();
-    let users: Vec<(String, String, String, bool)> =
-        login.get_property("Users").await.unwrap_or_default();
     let capabilities: HashMap<String, bool> =
         login.get_property("Capabilities").await.unwrap_or_default();
     let can = |key: &str| capabilities.get(key).copied().unwrap_or(true);
     Ok(Some(SessionState {
         user_name,
-        users: users
-            .into_iter()
-            .map(|(login, name, _picture, logged_in)| SessionUser {
-                login,
-                name,
-                logged_in,
-            })
-            .collect(),
         caps: SessionCaps {
             sleep: can("sleep"),
             restart: can("restart"),

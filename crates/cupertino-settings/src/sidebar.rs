@@ -98,6 +98,7 @@ pub const GROUPS: [&[PaneId]; 5] = [
         PaneId::ControlPanel,
         PaneId::DesktopDock,
         PaneId::Displays,
+        PaneId::Wallpaper,
     ],
     &[PaneId::Sound, PaneId::Focus],
     &[PaneId::LockScreen],
@@ -190,7 +191,8 @@ mod tests {
                     "Appearance",
                     "Control Panel",
                     "Desktop & Dock",
-                    "Displays"
+                    "Displays",
+                    "Wallpaper"
                 ],
                 vec!["Sound", "Focus"],
                 vec!["Lock Screen"],

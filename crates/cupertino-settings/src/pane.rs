@@ -18,6 +18,7 @@ pub enum PaneId {
     ControlPanel,
     DesktopDock,
     Displays,
+    Wallpaper,
     Sound,
     Focus,
     LockScreen,
@@ -82,7 +83,7 @@ const fn pane(
 }
 
 /// Every pane of the minimum set.
-pub const PANES: [Pane; 15] = [
+pub const PANES: [Pane; 16] = [
     pane(
         PaneId::Wifi,
         "Wi-Fi",
@@ -183,6 +184,23 @@ pub const PANES: [Pane; 15] = [
         &["refresh rate", "rotation", "scale", "monitor"],
     ),
     pane(
+        PaneId::Wallpaper,
+        "Wallpaper",
+        "symbol.photo",
+        Enclosure::Blue,
+        Tier::Live,
+        &["Pictures", "Folders"],
+        &[
+            "background",
+            "desktop",
+            "picture",
+            "photo",
+            "image",
+            "add folder",
+            "add photo",
+        ],
+    ),
+    pane(
         PaneId::Sound,
         "Sound",
         "symbol.speaker.high",
@@ -277,6 +295,7 @@ impl PaneId {
             PaneId::ControlPanel => "control-panel",
             PaneId::DesktopDock => "desktop-dock",
             PaneId::Displays => "displays",
+            PaneId::Wallpaper => "wallpaper",
             PaneId::Sound => "sound",
             PaneId::Focus => "focus",
             PaneId::LockScreen => "lock-screen",

@@ -1218,6 +1218,7 @@ dependencies = [
  "cupertino-icons",
  "cupertino-text-field",
  "cupertino-theme",
+ "cupertino-thumbnails",
  "cupertino-typeahead",
  "serde_json",
  "tempfile",

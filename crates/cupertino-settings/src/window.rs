@@ -278,7 +278,7 @@ mod tests {
             Rect::new(8.5, 52.0, 196.5, 28.0),
             "the large field, 196.5 wide as on the photograph"
         );
-        assert_eq!(l.rows.len(), 15);
+        assert_eq!(l.rows.len(), 16);
         assert_eq!(
             l.row(PaneId::Wifi),
             Some(Rect::new(10.0, 90.0, 195.0, 28.0))

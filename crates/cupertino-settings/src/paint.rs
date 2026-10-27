@@ -13,7 +13,13 @@ use cupertino_geometry::{CornerStyle, Radii, Rect as GeoRect};
 use cupertino_icons::SystemIcons;
 use cupertino_text_field::TextField;
 use cupertino_theme::{Appearance, SemanticColor, Theme};
-use tiny_skia::{Color, FillRule, Paint, Pixmap, PixmapPaint, Rect as SkRect, Stroke, Transform};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use tiny_skia::{
+    Color, FillRule, FilterQuality, Paint, Pattern, Pixmap, PixmapPaint, Rect as SkRect,
+    SpreadMode, Stroke, Transform,
+};
 
 use crate::controls::{self, metrics as cm, Control};
 use crate::form::{metrics as fm, SectionLayout};
@@ -273,6 +279,36 @@ fn fill_rounded(pm: &mut Pixmap, r: &Rect, radius: f64, continuous: bool, s: f32
     }
 }
 
+/// Fill `r` (rounded) with `image` scaled to cover it, the longer side cropped evenly.
+fn fill_cover(pm: &mut Pixmap, r: &Rect, image: &Pixmap, radius: f64, s: f32) {
+    let (w, h) = (r.w as f32 * s, r.h as f32 * s);
+    let scale = (w / image.width() as f32).max(h / image.height() as f32);
+    let transform = Transform::from_translate(
+        r.x as f32 * s + (w - image.width() as f32 * scale) / 2.0,
+        r.y as f32 * s + (h - image.height() as f32 * scale) / 2.0,
+    )
+    .pre_scale(scale, scale);
+    let fill = Paint {
+        anti_alias: true,
+        shader: Pattern::new(
+            image.as_ref(),
+            SpreadMode::Pad,
+            FilterQuality::Bilinear,
+            1.0,
+            transform,
+        ),
+        ..Paint::default()
+    };
+    if let Some(path) = rounded_path(
+        GeoRect::new(r.x, r.y, r.w, r.h),
+        Radii::uniform(radius),
+        CornerStyle::Circular,
+        f64::from(s),
+    ) {
+        pm.fill_path(&path, &fill, FillRule::Winding, Transform::identity(), None);
+    }
+}
+
 fn stroke_rounded(pm: &mut Pixmap, r: &Rect, radius: f64, width: f64, s: f32, c: Rgba) {
     if let Some(path) = rounded_path(
         GeoRect::new(r.x, r.y, r.w, r.h),
@@ -341,6 +377,8 @@ fn search_style(pal: &Palette) -> FieldStyle {
 pub struct Painter {
     pub text: TextRenderer,
     symbols: SystemIcons,
+    /// The thumbnails of the pictures of a grid, by the image they show.
+    thumbnails: HashMap<PathBuf, Pixmap>,
 }
 
 impl Painter {
@@ -354,7 +392,24 @@ impl Painter {
         Ok(Painter {
             text,
             symbols: SystemIcons::required(assets, &[], &required_symbols()),
+            thumbnails: HashMap::new(),
         })
+    }
+
+    /// Show the PNG `thumbnail` for the picture `image` from now on; `false` when it cannot be read.
+    pub fn set_thumbnail(&mut self, image: &Path, thumbnail: &Path) -> bool {
+        match Pixmap::load_png(thumbnail) {
+            Ok(pixmap) => {
+                self.thumbnails.insert(image.to_path_buf(), pixmap);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Whether the thumbnail of `image` is in.
+    pub fn has_thumbnail(&self, image: &Path) -> bool {
+        self.thumbnails.contains_key(image)
     }
 
     /// Draw the template symbol `name` in `color`, fitted to `fit` points and centred in `r` (a placeholder when no
@@ -744,8 +799,18 @@ impl Painter {
                 );
             }
             let frame = l.frame.offset(0.0, dy);
-            fill_rounded(pm, &frame, fm::BOX_RADIUS, false, s, pal.box_fill);
+            let grid = section
+                .rows
+                .first()
+                .is_some_and(|r| matches!(r.control, Control::Tiles { .. }));
+            if !grid {
+                fill_rounded(pm, &frame, fm::BOX_RADIUS, false, s, pal.box_fill);
+            }
             for (ri, (row, rl)) in section.rows.iter().zip(&l.rows).enumerate() {
+                if let Control::Tiles { .. } = row.control {
+                    self.paint_control(pm, s, &row.control, &rl.control.offset(0.0, dy), None, pal);
+                    continue;
+                }
                 if ri > 0 {
                     let r = rl.row.offset(0.0, dy);
                     fill_rect(
@@ -1104,6 +1169,61 @@ impl Painter {
                         &r,
                         None,
                         pal,
+                    );
+                }
+            }
+            Control::Tiles { tiles, selected } => {
+                for (i, (tile, r)) in tiles
+                    .iter()
+                    .zip(controls::tile_rects(frame, tiles.len()))
+                    .enumerate()
+                {
+                    match self.thumbnails.get(&tile.image) {
+                        Some(thumbnail) => fill_cover(pm, &r, thumbnail, cm::TILE_RADIUS, s),
+                        None => fill_rounded(pm, &r, cm::TILE_RADIUS, false, s, pal.box_fill),
+                    }
+                    if tile.pair {
+                        // a light and a dark half: the picture changes with the appearance
+                        let pill = Rect::new(r.right() - 30.0, r.bottom() - 20.0, 24.0, 14.0);
+                        let dark = [0.12, 0.12, 0.14, 1.0];
+                        fill_rounded(pm, &pill, 7.0, false, s, [1.0, 1.0, 1.0, 0.95]);
+                        fill_rect(
+                            pm,
+                            &Rect::new(pill.x + 12.0, pill.y + 2.0, 6.0, 10.0),
+                            s,
+                            dark,
+                        );
+                        fill_rounded(
+                            pm,
+                            &Rect::new(pill.x + 12.0, pill.y, 12.0, 14.0),
+                            7.0,
+                            false,
+                            s,
+                            dark,
+                        );
+                    }
+                    if *selected == Some(i) {
+                        stroke_rounded(
+                            pm,
+                            &r.inset(-2.0, -2.0),
+                            cm::TILE_RADIUS + 2.0,
+                            3.0,
+                            s,
+                            pal.accent,
+                        );
+                    } else {
+                        stroke_rounded(pm, &r, cm::TILE_RADIUS, 1.0, s, pal.separator);
+                    }
+                    self.label(
+                        pm,
+                        &Rect::new(r.x, r.bottom() + 2.0, r.w, cm::TILE_TITLE_HEIGHT - 2.0),
+                        &tile.title,
+                        Font {
+                            size: 12.0,
+                            weight: if *selected == Some(i) { 600 } else { 400 },
+                        },
+                        s,
+                        pal.text,
                     );
                 }
             }

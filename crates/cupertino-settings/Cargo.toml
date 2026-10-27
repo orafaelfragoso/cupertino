@@ -15,6 +15,7 @@ app = ["dep:cupertino-client", "dep:zbus", "dep:cupertino-alsa", "dep:async-chan
 [dependencies]
 cupertino-assets = { path = "../cupertino-assets" }
 cupertino-defaults = { path = "../cupertino-defaults" }
+cupertino-thumbnails = { path = "../cupertino-thumbnails" }
 cupertino-typeahead = { path = "../cupertino-typeahead" }
 cupertino-icons = { path = "../cupertino-icons" }
 cupertino-theme = { path = "../cupertino-theme" }

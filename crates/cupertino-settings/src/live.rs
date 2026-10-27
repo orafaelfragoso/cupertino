@@ -45,6 +45,15 @@ pub struct Focus {
     pub lifetimes: Vec<(String, String)>,
 }
 
+/// The pictures of the Wallpaper pane: those of the asset packs and those of the folders the user added.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Pictures {
+    pub bundled: Vec<cupertino_assets::WallpaperFile>,
+    pub folders: Vec<(std::path::PathBuf, Vec<cupertino_assets::WallpaperFile>)>,
+    /// The picture the desktop shows when the settings name none (the first pack's default).
+    pub default: Option<std::path::PathBuf>,
+}
+
 /// A connected mouse and its resolution, as the server resolved it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mouse {
@@ -191,6 +200,8 @@ pub struct Bluetooth {
 /// Every live reading.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Live {
+    /// The pictures the Wallpaper pane lists.
+    pub pictures: Pictures,
     /// The connected mice (`org.cupertino.Session1.Mice`), in the server's order.
     pub mice: Reading<Vec<Mouse>>,
     pub focus: Reading<Focus>,
@@ -206,6 +217,7 @@ pub struct Live {
 impl Default for Live {
     fn default() -> Self {
         Live {
+            pictures: Pictures::default(),
             mice: Reading::Unknown,
             focus: Reading::Unknown,
             volume: Reading::Unknown,

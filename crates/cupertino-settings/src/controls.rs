@@ -37,6 +37,13 @@ pub mod metrics {
     pub const BUTTON_GAP: f64 = 8.0;
     /// A read-only value's width. approximate.
     pub const TEXT: (f64, f64) = (200.0, 16.0);
+    /// A grid of pictures: the narrowest tile, the gap between tiles, the picture's height over its width (16:10) and
+    /// the title under it. approximate.
+    pub const TILE_MIN_WIDTH: f64 = 150.0;
+    pub const TILE_GAP: f64 = 12.0;
+    pub const TILE_ASPECT: f64 = 0.625;
+    pub const TILE_TITLE_HEIGHT: f64 = 20.0;
+    pub const TILE_RADIUS: f64 = 8.0;
 }
 
 use metrics as m;
@@ -80,6 +87,56 @@ pub enum Control {
     Text {
         value: String,
     },
+    /// A grid of pictures; a press commits the index of the one hit.
+    Tiles {
+        tiles: Vec<Tile>,
+        selected: Option<usize>,
+    },
+}
+
+/// A picture of a [`Control::Tiles`] grid.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Tile {
+    pub title: String,
+    /// The image file the thumbnail is made from.
+    pub image: std::path::PathBuf,
+    /// The tile is a light and a dark picture.
+    pub pair: bool,
+}
+
+/// How many tiles a grid `width` wide has in a row.
+pub fn tile_columns(width: f64) -> usize {
+    (((width + m::TILE_GAP) / (m::TILE_MIN_WIDTH + m::TILE_GAP)) as usize).max(1)
+}
+
+/// The height of a grid of `count` tiles `width` wide.
+pub fn tiles_height(width: f64, count: usize) -> f64 {
+    let columns = tile_columns(width);
+    let tile_w = (width - m::TILE_GAP * (columns - 1) as f64) / columns as f64;
+    let rows = count.div_ceil(columns);
+    if rows == 0 {
+        return 0.0;
+    }
+    rows as f64 * (tile_w * m::TILE_ASPECT + m::TILE_TITLE_HEIGHT) + (rows - 1) as f64 * m::TILE_GAP
+}
+
+/// The picture of each of `count` tiles of the grid in `frame`; the title lies under it, [`metrics::TILE_TITLE_HEIGHT`]
+/// high.
+pub fn tile_rects(frame: &Rect, count: usize) -> Vec<Rect> {
+    let columns = tile_columns(frame.w);
+    let tile_w = (frame.w - m::TILE_GAP * (columns - 1) as f64) / columns as f64;
+    let tile_h = tile_w * m::TILE_ASPECT;
+    (0..count)
+        .map(|i| {
+            let (row, column) = (i / columns, i % columns);
+            Rect::new(
+                frame.x + column as f64 * (tile_w + m::TILE_GAP),
+                frame.y + row as f64 * (tile_h + m::TILE_TITLE_HEIGHT + m::TILE_GAP),
+                tile_w,
+                tile_h,
+            )
+        })
+        .collect()
 }
 
 /// A value a control commits.
@@ -108,6 +165,8 @@ impl Control {
                 m::BUTTON.1,
             ),
             Control::Text { .. } => m::TEXT,
+            // the form sizes a grid by its width
+            Control::Tiles { .. } => (0.0, 0.0),
         }
     }
 
@@ -257,6 +316,12 @@ pub fn press(control: &Control, frame: &Rect, p: Point) -> Option<Press> {
         }
         Control::Level { .. } => unreachable!("handled above"),
         Control::Text { .. } => return None,
+        Control::Tiles { tiles, .. } => {
+            let hit = tile_rects(frame, tiles.len())
+                .iter()
+                .position(|r| r.contains(p))?;
+            Press::Commit(Value::Index(hit))
+        }
     })
 }
 
@@ -374,5 +439,50 @@ mod tests {
         assert_eq!(w.moved(0.45, 0.041), None);
         assert_eq!(w.released(0.50), 0.50, "the release writes the final value");
         assert_eq!(w.due(), None, "and nothing waits after it");
+    }
+
+    #[test]
+    fn a_grid_has_as_many_columns_as_fit_and_a_press_hits_the_picture_under_it() {
+        assert_eq!(tile_columns(600.0), 3);
+        assert_eq!(tile_columns(400.0), 2);
+        assert_eq!(tile_columns(100.0), 1);
+        let frame = Rect::new(20.0, 100.0, 600.0, tiles_height(600.0, 4));
+        let rects = tile_rects(&frame, 4);
+        assert_eq!(rects.len(), 4);
+        assert_eq!(rects[0].x, 20.0);
+        assert!(
+            rects[3].y > rects[0].y,
+            "the fourth tile starts a second row"
+        );
+        let tiles = Control::Tiles {
+            tiles: (0..4)
+                .map(|i| Tile {
+                    title: i.to_string(),
+                    image: format!("/{i}.png").into(),
+                    pair: false,
+                })
+                .collect(),
+            selected: None,
+        };
+        for (i, r) in rects.iter().enumerate() {
+            assert_eq!(
+                press(&tiles, &frame, r.center()),
+                Some(Press::Commit(Value::Index(i)))
+            );
+        }
+        let gap = Point {
+            x: rects[0].right() + 1.0,
+            y: rects[0].y + 1.0,
+        };
+        assert_eq!(
+            press(&tiles, &frame, gap),
+            None,
+            "the gap between two pictures hits neither"
+        );
+        let below = Point {
+            x: rects[0].x + 1.0,
+            y: rects[0].bottom() + 2.0,
+        };
+        assert_eq!(press(&tiles, &frame, below), None, "nor does a title");
     }
 }

@@ -3,7 +3,7 @@
 //! are (roles); the box, row and section values are placeholders of one table
 //! until closes (approximate, O4).
 
-use crate::controls::Control;
+use crate::controls::{self, Control};
 use crate::geom::Rect;
 
 /// Form metrics.
@@ -107,6 +107,19 @@ pub fn layout(
         let box_top = y;
         let mut rows = Vec::new();
         for spec in &s.rows {
+            // a grid of pictures takes the whole width, with no padding and no label
+            if let Control::Tiles { tiles, .. } = spec.control {
+                let h = controls::tiles_height(w, tiles.len());
+                let row = Rect::new(cx, y, w, h);
+                rows.push(RowLayout {
+                    row,
+                    label: Rect::new(cx, y, 0.0, 0.0),
+                    control: row,
+                    error: None,
+                });
+                y += h;
+                continue;
+            }
             let (cw, ch) = spec.control.size();
             let text = m::LABEL_HEIGHT + if spec.error { m::ERROR_HEIGHT } else { 0.0 };
             let h = (ch.max(text) + 2.0 * m::ROW_PADDING_V).max(m::ROW_MIN_HEIGHT);

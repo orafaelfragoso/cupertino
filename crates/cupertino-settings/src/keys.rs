@@ -30,7 +30,7 @@ pub enum Action {
     FocusPrevious,
     /// Escape: back to the sidebar from the pane.
     FocusSidebar,
-    /// A key the search field edits with (characters, Backspace, the result keys).
+    /// A key of the search field: an editing key or a result key.
     Search(SearchKey),
     None,
 }
@@ -38,10 +38,8 @@ pub enum Action {
 /// A key the search field takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchKey {
-    Type(char),
-    Backspace,
-    /// Super+A or Ctrl+A selects the whole text; typing or Backspace replaces it.
-    SelectAll,
+    /// Characters and the editing keys: the text field takes them (`cupertino-text-field`).
+    Edit,
     /// Up and Down move the highlighted result.
     Up,
     Down,
@@ -65,7 +63,6 @@ pub mod code {
     pub const ESCAPE: u32 = 1;
     pub const BACKSPACE: u32 = 14;
     pub const TAB: u32 = 15;
-    pub const A: u32 = 30;
     pub const ENTER: u32 = 28;
     pub const KEYPAD_ENTER: u32 = 96;
     pub const HOME: u32 = 102;
@@ -82,7 +79,7 @@ pub fn route(focus: Focus, code: u32, mods: Mods, character: Option<char>) -> Ac
             Some(']') => Action::Forward,
             Some('f') => Action::FocusSearch,
             Some('l') => Action::ShowAll,
-            Some('a') if focus == Focus::Search => Action::Search(SearchKey::SelectAll),
+            _ if focus == Focus::Search => Action::Search(SearchKey::Edit),
             _ => Action::None,
         };
     }
@@ -96,15 +93,10 @@ pub fn route(focus: Focus, code: u32, mods: Mods, character: Option<char>) -> Ac
     match focus {
         Focus::Search => match code {
             code::ESCAPE => Action::Search(SearchKey::Clear),
-            code::BACKSPACE => Action::Search(SearchKey::Backspace),
             code::UP => Action::Search(SearchKey::Up),
             code::DOWN => Action::Search(SearchKey::Down),
             code::ENTER | code::KEYPAD_ENTER => Action::Search(SearchKey::Choose),
-            code::A if mods.ctrl && !mods.alt => Action::Search(SearchKey::SelectAll),
-            _ => match character.filter(|c| !c.is_control()) {
-                Some(c) if !mods.ctrl && !mods.alt => Action::Search(SearchKey::Type(c)),
-                _ => Action::None,
-            },
+            _ => Action::Search(SearchKey::Edit),
         },
         Focus::Sidebar => match code {
             code::UP => Action::Previous,
@@ -160,7 +152,7 @@ mod tests {
     fn typing_searches_only_while_the_field_has_the_focus() {
         assert_eq!(
             route(Focus::Search, 30, Mods::default(), Some('a')),
-            Action::Search(SearchKey::Type('a'))
+            Action::Search(SearchKey::Edit)
         );
         assert_eq!(
             route(Focus::Search, code::ESCAPE, Mods::default(), None),
@@ -194,22 +186,28 @@ mod tests {
     }
 
     #[test]
-    fn super_a_and_ctrl_a_select_the_search_text_only_in_the_field() {
+    fn editing_chords_reach_the_field_only_while_it_has_the_focus() {
         let ctrl = Mods {
             ctrl: true,
             ..Mods::default()
         };
-        let select = Action::Search(SearchKey::SelectAll);
-        assert_eq!(route(Focus::Search, code::A, SUPER, Some('a')), select);
-        assert_eq!(route(Focus::Search, code::A, ctrl, Some('\u{1}')), select);
+        let edit = Action::Search(SearchKey::Edit);
+        const A: u32 = 30;
+        const LEFT: u32 = 105;
+        assert_eq!(route(Focus::Search, A, SUPER, Some('a')), edit);
+        assert_eq!(route(Focus::Search, LEFT, SUPER, None), edit);
+        assert_eq!(route(Focus::Search, A, ctrl, Some('a')), edit);
         assert_eq!(
-            route(Focus::Sidebar, code::A, SUPER, Some('a')),
-            Action::None
+            route(Focus::Search, code::BACKSPACE, Mods::default(), None),
+            edit
         );
         assert_eq!(
-            route(Focus::Pane, code::A, ctrl, Some('\u{1}')),
-            Action::None
+            route(Focus::Search, 26, SUPER, Some('[')),
+            Action::Back,
+            "window chords first"
         );
+        assert_eq!(route(Focus::Sidebar, A, SUPER, Some('a')), Action::None);
+        assert_eq!(route(Focus::Pane, A, ctrl, Some('a')), Action::None);
     }
 
     #[test]

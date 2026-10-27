@@ -9,6 +9,7 @@
 
 use crate::pane::{Pane, PaneId, PANES};
 use crate::sidebar::{self, fold_width, RowSize};
+use cupertino_text_field::TextField;
 
 /// Why an entry matched, best first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -105,18 +106,21 @@ pub fn search(query: &str) -> Vec<Hit> {
     hits
 }
 
-/// The text of the search field, whether all of it is selected, the results it shows and the highlighted one.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// The search field's text editor, the results it shows and the highlighted one.
+#[derive(Clone, Debug, Default)]
 pub struct SearchField {
-    text: String,
-    selected: bool,
+    field: TextField,
     results: Vec<Hit>,
     highlighted: Option<usize>,
 }
 
 impl SearchField {
     pub fn text(&self) -> &str {
-        &self.text
+        self.field.text()
+    }
+
+    pub fn field(&self) -> &TextField {
+        &self.field
     }
 
     pub fn results(&self) -> &[Hit] {
@@ -127,45 +131,20 @@ impl SearchField {
         self.highlighted
     }
 
-    /// Whether the whole text is selected (typing or Backspace replaces it).
-    pub fn is_selected(&self) -> bool {
-        self.selected
-    }
-
-    pub fn select_all(&mut self) {
-        self.selected = !self.text.is_empty();
-    }
-
-    /// Keep the text and drop the selection (the field lost the keyboard).
-    pub fn deselect(&mut self) {
-        self.selected = false;
-    }
-
     /// Whether the results popup is open: while the field has text (an empty result shows "No results").
     pub fn is_open(&self) -> bool {
-        !self.text.is_empty()
+        !self.field.is_empty()
     }
 
-    fn update(&mut self) {
-        self.results = search(&self.text);
-        self.highlighted = (!self.results.is_empty()).then_some(0);
-    }
-
-    pub fn type_char(&mut self, c: char) {
-        if std::mem::take(&mut self.selected) {
-            self.text.clear();
+    /// Change the field with `f`; when its text changes the search runs again.
+    pub fn edit<R>(&mut self, f: impl FnOnce(&mut TextField) -> R) -> R {
+        let before = self.field.text().to_string();
+        let r = f(&mut self.field);
+        if self.field.text() != before {
+            self.results = search(self.field.text());
+            self.highlighted = (!self.results.is_empty()).then_some(0);
         }
-        self.text.push(c);
-        self.update();
-    }
-
-    pub fn backspace(&mut self) {
-        if std::mem::take(&mut self.selected) {
-            self.text.clear();
-        } else {
-            self.text.pop();
-        }
-        self.update();
+        r
     }
 
     /// Empty the field and close the popup.
@@ -367,9 +346,7 @@ mod tests {
     #[test]
     fn the_field_highlights_the_first_result_and_choosing_clears_it() {
         let mut f = SearchField::default();
-        for c in "track".chars() {
-            f.type_char(c);
-        }
+        f.edit(|t| t.insert("track"));
         assert!(f.is_open());
         assert_eq!(f.highlighted(), Some(0));
         f.step(5);
@@ -383,7 +360,7 @@ mod tests {
         let hit = f.choose().unwrap();
         assert_eq!(hit.pane, PaneId::Trackpad);
         assert_eq!((f.text(), f.is_open(), f.results().len()), ("", false, 0));
-        f.type_char('z');
+        f.edit(|t| t.insert("z"));
         assert!(
             f.is_open() && f.results().is_empty() && f.choose().is_none(),
             "no results: nothing to choose, the popup stays"
@@ -391,32 +368,22 @@ mod tests {
     }
 
     #[test]
-    fn select_all_is_replaced_by_typing_and_removed_by_backspace() {
+    fn the_search_runs_again_only_when_the_text_changes() {
         let mut f = SearchField::default();
-        f.select_all();
-        assert!(!f.is_selected(), "an empty field has nothing to select");
-        for c in "Sound".chars() {
-            f.type_char(c);
-        }
-        f.select_all();
-        assert!(f.is_selected());
-        f.type_char('M');
-        assert_eq!((f.text(), f.is_selected()), ("M", false));
-        f.type_char('o');
-        f.select_all();
-        f.backspace();
-        assert_eq!((f.text(), f.is_selected(), f.is_open()), ("", false, false));
-        for c in "Sound".chars() {
-            f.type_char(c);
-        }
-        f.select_all();
-        f.deselect();
-        f.type_char('s');
+        f.edit(|t| t.insert("s"));
+        assert!(f.results().len() > 1);
+        f.step(1);
+        assert_eq!(f.highlighted(), Some(1));
+        f.edit(TextField::select_all);
         assert_eq!(
-            (f.text(), f.is_selected()),
-            ("Sounds", false),
-            "after the field loses the keyboard, typing appends"
+            f.highlighted(),
+            Some(1),
+            "selecting keeps the results and the highlight"
         );
+        f.edit(|t| t.insert("Mouse"));
+        assert_eq!(f.text(), "Mouse");
+        assert_eq!(f.results()[0].pane, PaneId::Mouse);
+        assert_eq!(f.highlighted(), Some(0));
     }
 
     #[test]

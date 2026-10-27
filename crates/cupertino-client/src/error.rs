@@ -1,5 +1,6 @@
 //! Errors of the client toolkit.
 
+use cupertino_wayland_client::{Capability, Disconnect, Error};
 use std::fmt;
 use wayland_client::globals::GlobalError;
 use wayland_client::{ConnectError, DispatchError};
@@ -21,12 +22,8 @@ pub enum ClientError {
     Dispatch(DispatchError),
     /// Reading from or writing to the connection failed.
     Wayland(wayland_client::backend::WaylandError),
-    /// Creating, sizing or mapping shared memory failed.
-    Shm(std::io::Error),
     /// The wake channel or the poll on the connection failed.
     Io(std::io::Error),
-    /// Mapping the keymap the server sent failed.
-    Keymap(std::io::Error),
     /// The server sent a value the protocol forbids.
     Protocol(&'static str),
     /// No surface with this id.
@@ -77,9 +74,7 @@ impl fmt::Display for ClientError {
             }
             Self::Dispatch(e) => write!(f, "connection error: {e}"),
             Self::Wayland(e) => write!(f, "connection error: {e}"),
-            Self::Shm(e) => write!(f, "shared memory: {e}"),
             Self::Io(e) => write!(f, "event wait: {e}"),
-            Self::Keymap(e) => write!(f, "cannot read the keymap: {e}"),
             Self::Protocol(what) => write!(f, "protocol violation by the server: {what}"),
             Self::UnknownSurface => write!(f, "unknown surface"),
             Self::UnknownOutput => write!(f, "unknown output"),
@@ -113,14 +108,42 @@ impl fmt::Display for ClientError {
 
 impl std::error::Error for ClientError {}
 
-impl From<DispatchError> for ClientError {
-    fn from(e: DispatchError) -> Self {
-        Self::Dispatch(e)
-    }
-}
-
-impl From<wayland_client::backend::WaylandError> for ClientError {
-    fn from(e: wayland_client::backend::WaylandError) -> Self {
-        Self::Wayland(e)
+impl From<Error> for ClientError {
+    fn from(e: Error) -> Self {
+        match e {
+            Error::MissingRequiredProtocol {
+                interface,
+                minimum_version,
+            } => Self::GlobalVersion {
+                interface,
+                minimum: minimum_version,
+            },
+            Error::Disconnected(Disconnect::Connect(e)) => Self::Connect(e),
+            Error::Disconnected(Disconnect::Registry(e)) => Self::Registry(e),
+            Error::Disconnected(Disconnect::Dispatch(e)) => Self::Dispatch(e),
+            Error::Disconnected(Disconnect::Backend(e)) => Self::Wayland(e),
+            Error::InvalidSerial { .. } => {
+                Self::Protocol("a configure serial that did not increase")
+            }
+            Error::UnsupportedFormat(_) => Self::Protocol("the server lacks the argb8888 format"),
+            Error::InvalidScale => Self::Protocol("a scale no buffer fits"),
+            Error::DeviceLost => Self::Protocol("the buffer device was lost"),
+            Error::PermissionDenied(_) => Self::NoInputSerial,
+            Error::Cancelled => Self::Protocol("the transfer was cancelled"),
+            Error::UnknownSurface => Self::UnknownSurface,
+            Error::NotConfigured => Self::NotConfigured,
+            Error::NoFreeBuffer => Self::NoFreeBuffer,
+            Error::Unsupported(capability) => Self::MissingGlobal(match capability {
+                Capability::Seat => "wl_seat",
+                Capability::Clipboard => "wl_data_device_manager",
+                Capability::FractionalScale => "wp_fractional_scale_manager_v1",
+                Capability::ServerDecoration => "zxdg_decoration_manager_v1",
+                Capability::Activation => "xdg_activation_v1",
+                Capability::CursorShape => "wp_cursor_shape_manager_v1",
+                Capability::OutputLayout => "zxdg_output_manager_v1",
+            }),
+            Error::Protocol(what) => Self::Protocol(what),
+            Error::Io(e) => Self::Io(e),
+        }
     }
 }

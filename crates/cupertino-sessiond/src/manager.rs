@@ -152,6 +152,30 @@ impl Attempt {
     }
 }
 
+/// End the open attempt and its worker, unless the attempt was accepted (the session runs on). Returns whether it was not.
+fn cancel_attempt(attempt: &mut Option<Attempt>, workers: &mut [Worker]) -> bool {
+    if attempt
+        .as_ref()
+        .is_some_and(|attempt| attempt.decision == Some(Outcome::Accepted))
+    {
+        return false;
+    }
+    let Some(attempt) = attempt.take() else {
+        return true;
+    };
+    let Some(worker) = attempt
+        .worker
+        .and_then(|id| workers.iter_mut().find(|worker| worker.id == id))
+    else {
+        return true;
+    };
+    // before the session is accepted the worker holds nothing that needs a clean end
+    if let Err(e) = worker.child.kill() {
+        eprintln!("cupertino-sessiond: stopping worker {}: {e}", worker.id);
+    }
+    true
+}
+
 /// A switch of the console between sessions that logind has not finished: no second one starts meanwhile
 /// (the design ignores a switch request while one is under way).
 struct Switch {
@@ -795,26 +819,8 @@ impl Manager {
 
     /// `Cancel` (or the screen's end): stop an attempt that has not been accepted. Once the session starts it runs on.
     fn cancel(&mut self) {
-        if self
-            .attempt
-            .as_ref()
-            .is_some_and(|attempt| attempt.decision == Some(Outcome::Accepted))
-        {
-            return;
-        }
-        self.denial_at = None;
-        let Some(attempt) = self.attempt.take() else {
-            return;
-        };
-        let Some(worker) = attempt
-            .worker
-            .and_then(|id| self.workers.iter_mut().find(|worker| worker.id == id))
-        else {
-            return;
-        };
-        // before the session is accepted the worker holds nothing that needs a clean end
-        if let Err(e) = worker.child.kill() {
-            eprintln!("cupertino-sessiond: stopping worker {}: {e}", worker.id);
+        if cancel_attempt(&mut self.attempt, &mut self.workers) {
+            self.denial_at = None;
         }
     }
 
@@ -1839,5 +1845,58 @@ mod tests {
         let mut next = attempt_asking(6);
         assert!(!next.answered(5));
         assert!(next.answered(6));
+    }
+
+    fn running_worker(id: u64) -> Worker {
+        Worker {
+            id,
+            role: Role::Session,
+            child: std::process::Command::new("sleep")
+                .arg("60")
+                .spawn()
+                .unwrap(),
+            exited: OwnedFd::from(File::open("/dev/null").unwrap()),
+            channel: None,
+            terminal: None,
+        }
+    }
+
+    /// SEC-06: the login screen dies while PAM waits for its answer: the attempt ends, its worker is killed and the
+    /// screen that replaces it cannot answer the dead prompt.
+    #[test]
+    fn a_screen_that_dies_mid_attempt_ends_the_attempt_and_kills_its_worker() {
+        let mut workers = vec![running_worker(1), running_worker(2)];
+        let mut attempt = Some(attempt_asking(5));
+        assert!(cancel_attempt(&mut attempt, &mut workers));
+        assert!(attempt.is_none());
+        let killed = workers[0].child.wait().unwrap();
+        assert!(
+            !killed.success(),
+            "the worker of the attempt kept running: {killed:?}"
+        );
+        assert!(
+            workers[1].child.try_wait().unwrap().is_none(),
+            "another worker was stopped"
+        );
+
+        let mut next = attempt_asking(6);
+        assert!(!next.answered(5), "the dead screen's prompt took an answer");
+        workers[1].child.kill().unwrap();
+        workers[1].child.wait().unwrap();
+    }
+
+    /// Once PAM accepted, the session runs on: the screen going away does not stop it.
+    #[test]
+    fn an_accepted_attempt_survives_its_screen() {
+        let mut workers = vec![running_worker(1)];
+        let mut attempt = Some(Attempt {
+            decision: Some(Outcome::Accepted),
+            ..attempt_asking(5)
+        });
+        assert!(!cancel_attempt(&mut attempt, &mut workers));
+        assert!(attempt.is_some());
+        assert!(workers[0].child.try_wait().unwrap().is_none());
+        workers[0].child.kill().unwrap();
+        workers[0].child.wait().unwrap();
     }
 }

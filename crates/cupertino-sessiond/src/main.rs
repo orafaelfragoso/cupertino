@@ -2,7 +2,12 @@
 
 use std::process::ExitCode;
 
+use cupertino_sessiond::zeroing::ZeroOnFree;
 use cupertino_sessiond::{manager, worker};
+
+/// The manager and the worker handle passwords: nothing they free keeps one.
+#[global_allocator]
+static ALLOCATOR: ZeroOnFree<std::alloc::System> = ZeroOnFree(std::alloc::System);
 
 fn main() -> ExitCode {
     let mut arguments = std::env::args().skip(1);

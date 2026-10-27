@@ -27,3 +27,5 @@ pub mod vt;
 #[cfg(feature = "app")]
 pub mod worker;
 pub mod worker_protocol;
+#[cfg(feature = "app")]
+pub mod zeroing;

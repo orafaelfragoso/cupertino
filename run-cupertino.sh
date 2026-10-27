@@ -14,27 +14,16 @@ if [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]; then
     exit 1
 fi
 
-config="${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set; log in on the console first}/cupertino-compositor.json"
+: "${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set; log in on the console first}"
 log="$HOME/cupertino-tty.log"
 
 cargo build --release --workspace --all-features --bins --manifest-path "$root/Cargo.toml"
 
-cat >"$config" <<'EOF'
-{"shell": [
-  {"name": "dock",          "command": ["cupertino-dock"]},
-  {"name": "menubar",       "command": ["cupertino-menubar"]},
-  {"name": "launcher",      "command": ["cupertino-launcher"]},
-  {"name": "notifications", "command": ["cupertino-notifications"]},
-  {"name": "controlcenter", "command": ["cupertino-controlcenter"]},
-  {"name": "osd",           "command": ["cupertino-osd"]},
-  {"name": "windowmanager", "command": ["cupertino-windowmanager"]}
-]}
-EOF
-
 export PATH="$root/target/release:$PATH"
 export XDG_CURRENT_DESKTOP=Cupertino
 export XDG_DATA_DIRS="$root/crates/cupertino-files/data:$root/crates/cupertino-settings/data:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
-export CUPERTINO_SERVER_CONFIG="$config"
+# The shell processes are the ones the packages install as /etc/cupertino/compositor.json.
+export CUPERTINO_SERVER_CONFIG="$root/packaging/files/etc/cupertino/compositor.json"
 
 # A fresh session bus: the notification centre needs org.freedesktop.Notifications to itself.
 echo "Starting Cupertino; log: $log"

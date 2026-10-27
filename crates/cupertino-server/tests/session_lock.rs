@@ -134,7 +134,7 @@ fn a_lock_covers_the_toplevel_and_gives_the_pointer_and_keyboard_to_the_lock_sur
         "the toplevel shows before the lock"
     );
 
-    let locker = Client::locker(h.socket_path());
+    let locker = Client::locker(common::session_agent(&h.state));
     h.wait_until("the session to be locked", |_| locker.locked());
 
     let under = h
@@ -160,7 +160,7 @@ fn a_lock_covers_the_toplevel_and_gives_the_pointer_and_keyboard_to_the_lock_sur
 fn a_lock_client_that_disconnects_leaves_the_session_locked_and_black() {
     let Some(mut h) = Harness::new() else { return };
     let (_toplevel, center) = mapped_toplevel(&mut h);
-    let locker = Client::locker(h.socket_path());
+    let locker = Client::locker(common::session_agent(&h.state));
     h.wait_until("the session to be locked", |_| locker.locked());
     drop(locker);
 
@@ -181,7 +181,7 @@ fn a_lock_client_that_disconnects_leaves_the_session_locked_and_black() {
         "the output is black"
     );
 
-    let successor = Client::locker(h.socket_path());
+    let successor = Client::locker(common::session_agent(&h.state));
     h.wait_until("a new client to take the lock", |_| successor.locked());
     let under = h
         .surface_under(center)
@@ -193,9 +193,9 @@ fn a_lock_client_that_disconnects_leaves_the_session_locked_and_black() {
 fn a_second_lock_request_is_refused_while_the_session_is_locked() {
     let Some(mut h) = Harness::new() else { return };
     let (_toplevel, _) = mapped_toplevel(&mut h);
-    let holder = Client::locker(h.socket_path());
+    let holder = Client::locker(common::session_agent(&h.state));
     h.wait_until("the session to be locked", |_| holder.locked());
-    let intruder = Client::locker(h.socket_path());
+    let intruder = Client::locker(common::session_agent(&h.state));
     h.wait_until("the second request to be refused", |_| intruder.finished());
     assert!(!intruder.locked());
 }
@@ -204,9 +204,9 @@ fn a_second_lock_request_is_refused_while_the_session_is_locked() {
 fn an_unlock_from_a_refused_lock_does_not_open_a_session_whose_locker_crashed() {
     let Some(mut h) = Harness::new() else { return };
     let (_toplevel, center) = mapped_toplevel(&mut h);
-    let holder = Client::locker(h.socket_path());
+    let holder = Client::locker(common::session_agent(&h.state));
     h.wait_until("the session to be locked", |_| holder.locked());
-    let intruder = Client::locker(h.socket_path());
+    let intruder = Client::locker(common::session_agent(&h.state));
     h.wait_until("the second request to be refused", |_| intruder.finished());
 
     // both reach the compositor in the same dispatch: the intruder's unlock request and the holder's crash
@@ -232,7 +232,7 @@ fn unlocking_gives_the_toplevel_back_the_pointer_the_keyboard_and_the_screen() {
     let Some(mut h) = Harness::new() else { return };
     let (_toplevel, center) = mapped_toplevel(&mut h);
     let toplevel_surface = h.surface_under(center).unwrap();
-    let locker = Client::locker(h.socket_path());
+    let locker = Client::locker(common::session_agent(&h.state));
     h.wait_until("the session to be locked", |_| locker.locked());
 
     locker.unlock();
@@ -253,5 +253,33 @@ fn unlocking_gives_the_toplevel_back_the_pointer_the_keyboard_and_the_screen() {
         h.center_pixel("unlocked")[..3],
         [0, 0, 255][..],
         "the toplevel is drawn again"
+    );
+}
+
+/// While the session is locked an application's layer surface cannot take the keyboard exclusively, neither to read
+/// what is typed at the lock screen nor to be waiting for it at the unlock.
+#[test]
+fn an_application_cannot_take_the_keyboard_exclusively_while_locked() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_toplevel, _) = mapped_toplevel(&mut h);
+    let surface = {
+        let window = h.state.wm.key_window().unwrap();
+        h.state.entry(window).unwrap().surface().clone()
+    };
+
+    h.state.layer_keyboard_exclusivity(&surface, true);
+    assert_eq!(
+        h.state.exclusive_layer.as_ref(),
+        Some(&surface),
+        "outside a lock a layer surface takes the keyboard"
+    );
+    h.state.layer_keyboard_exclusivity(&surface, false);
+
+    let locker = Client::locker(common::session_agent(&h.state));
+    h.wait_until("the session to be locked", |_| locker.locked());
+    h.state.layer_keyboard_exclusivity(&surface, true);
+    assert_eq!(
+        h.state.exclusive_layer, None,
+        "an application took the keyboard at the lock screen"
     );
 }

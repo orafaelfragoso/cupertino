@@ -152,7 +152,7 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     let renderer = Renderer::new(theme.tokens.typography(), &assets)?;
     let user = User::current()?;
 
-    let mut client = Client::connect()?;
+    let mut client = Client::connect_shell()?;
     let (sender, messages) = mpsc::channel();
     let notifier = Notifier::new(sender, client.waker());
 

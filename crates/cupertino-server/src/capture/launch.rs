@@ -16,7 +16,8 @@ use std::process::Command;
 use cupertino_input::ScreenshotRequest;
 use smithay::desktop::layer_map_for_output;
 
-use crate::shell_connection::{connect_client, hand_over};
+use crate::authorization::{ClientCapabilitySet, ShellRole};
+use crate::shell_connection::{bind_holder, connect_bound_client, connect_client, hand_over};
 use crate::state::{ClientState, Cupertino};
 
 /// The layer-shell namespace of the screenshot process's overlay and toolbar (its floating thumbnail uses another).
@@ -33,16 +34,17 @@ pub fn mode_args(request: ScreenshotRequest) -> &'static [&'static str] {
     }
 }
 
+fn capture_capabilities() -> ClientCapabilitySet {
+    ClientCapabilitySet::of([ShellRole::Capture, ShellRole::Session])
+}
+
 impl Cupertino {
     /// A new privileged client: the server inserts one end of a socket pair and returns the other, for a process the
     /// server starts (`WAYLAND_SOCKET`) or, in tests, for a client in the same process.
     pub fn privileged_client(&mut self) -> std::io::Result<UnixStream> {
         connect_client(
             &self.display_handle,
-            ClientState {
-                privileged: true,
-                ..ClientState::default()
-            },
+            ClientState::detached(capture_capabilities()),
         )
     }
 
@@ -67,8 +69,14 @@ impl Cupertino {
             .expect("the screenshot command is validated non-empty at load");
         let mut command = Command::new(program);
         command.args(args).args(mode_args(request));
-        let stream = match self.privileged_client() {
-            Ok(stream) => stream,
+        let (stream, state) = match connect_bound_client(
+            &self.display_handle,
+            ClientState {
+                capabilities: capture_capabilities(),
+                ..ClientState::default()
+            },
+        ) {
+            Ok(connection) => connection,
             Err(e) => {
                 tracing::warn!(error = %e, "creating the screenshot process's connection failed");
                 return;
@@ -80,6 +88,13 @@ impl Cupertino {
         match command.spawn() {
             Ok(mut child) => {
                 let pid = child.id();
+                if let Err(e) = bind_holder(&state, pid) {
+                    tracing::warn!(pid, error = %e, "binding the screenshot process to its connection failed: ending it");
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    drop(stream);
+                    return;
+                }
                 tracing::info!(pid, ?request, "screenshot process started");
                 std::thread::spawn(move || match child.wait() {
                     Ok(status) => tracing::info!(pid, %status, "screenshot process exited"),

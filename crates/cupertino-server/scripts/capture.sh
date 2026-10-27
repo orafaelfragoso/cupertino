@@ -14,7 +14,8 @@
 # so a link in it is copied as the file it points to, never kept as a link into the caller's files.
 # CONFIG_JSON: a JSON object whose keys are set in the server's compositor.json, where `@HOME@` stands for the fixture
 # home (CONFIG_JSON='{"wallpaper_folders": ["@HOME@/Art"]}').
-# The shell processes are the ones the packages install as /etc/cupertino/compositor.json, found on PATH (BIN_DIR first),
+# The shell processes are the ones the packages install as /etc/cupertino/compositor.json, found on PATH (BIN_DIR first; the
+# server runs with --dev-shell, which lets a checkout name programs outside /usr),
 # without cupertino-login: it works on the system bus and the caller's logind session, which a capture must not touch.
 # CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE: application ids (comma separated) the dock shows as not responding; the script builds
 # a dock for it into target/capture-fixtures.
@@ -70,7 +71,7 @@ touch -d 2026-01-01T12:00:00 "$FHOME" "$FHOME"/* "$FHOME"/*/* "$FHOME"/*/*/* 2>/
 python3 -I - "$ROOT/packaging/files/etc/cupertino/compositor.json" "$SCRATCH/server.json" "$FHOME" "${CONFIG_JSON:-{\}}" <<'EOF'
 import json, sys
 config = json.load(open(sys.argv[1]))
-config["shell"] = [p for p in config["shell"] if p["name"] != "login"]
+config["shell"] = [dict(p, command=[c.removeprefix("/usr/bin/") if i == 0 else c for i, c in enumerate(p["command"])]) for p in config["shell"] if p["name"] != "login"]
 config.update(json.loads(sys.argv[4].replace("@HOME@", sys.argv[3])))
 json.dump(config, open(sys.argv[2], "w"))
 EOF
@@ -95,6 +96,6 @@ env -i \
     ${CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE:+CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE="$CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE"} \
     DBUS_SYSTEM_BUS_ADDRESS="unix:path=$SCRATCH/no-system-bus" \
     dbus-run-session -- "$BIN_DIR/cupertino-server" --headless --dbus --size "${SIZE:-1280x800}" \
-    --screenshot "$OUT" --screenshot-after "${AFTER:-5}" --exit-after-screenshot "$@"
+    --dev-shell --screenshot "$OUT" --screenshot-after "${AFTER:-5}" --exit-after-screenshot "$@"
 [ -s "$OUT" ] || { echo "capture.sh: no screenshot written" >&2; exit 1; }
 echo "$OUT"

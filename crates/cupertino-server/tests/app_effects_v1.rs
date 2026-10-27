@@ -1,5 +1,5 @@
-//! `cupertino_shell_v1` backdrops end to end: the compositor runs in-process on an offscreen EGL
-//! device, a shell client binds the global, creates a layer surface with a backdrop, and the test
+//! `cupertino_app_effects_v1` backdrops end to end: the compositor runs in-process on an offscreen EGL
+//! device, a client binds the global, creates a layer surface with a backdrop, and the test
 //! reads the committed backdrops the scene draws. Tests skip (pass) when no EGL device is available.
 
 use std::io::Write;
@@ -12,11 +12,11 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use cupertino_protocols::client::cupertino_backdrop_v1::{self, CupertinoBackdropV1};
-use cupertino_protocols::client::cupertino_shell_v1::CupertinoShellV1;
+use cupertino_protocols::client::app_effects::cupertino_app_effects_v1::CupertinoAppEffectsV1;
+use cupertino_protocols::client::app_effects::cupertino_backdrop_v1::{self, CupertinoBackdropV1};
+use cupertino_server::app_effects_v1::{layer_backdrops, BackdropArea};
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
-use cupertino_server::shell_v1::{layer_backdrops, BackdropArea};
 use cupertino_server::Cupertino;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
@@ -219,7 +219,7 @@ ignore_events!(
     wl_buffer::WlBuffer,
     wl_surface::WlSurface,
     zwlr_layer_shell_v1::ZwlrLayerShellV1,
-    CupertinoShellV1,
+    CupertinoAppEffectsV1,
     CupertinoBackdropV1
 );
 
@@ -268,7 +268,7 @@ impl TestClient {
             let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ()).unwrap();
             let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
                 globals.bind(&qh, 1..=4, ()).unwrap();
-            let shell: CupertinoShellV1 = globals.bind(&qh, 1..=1, ()).unwrap();
+            let effects: CupertinoAppEffectsV1 = globals.bind(&qh, 1..=1, ()).unwrap();
             let surface = compositor.create_surface(&qh, ());
             let layer = layer_shell.get_layer_surface(
                 &surface,
@@ -284,7 +284,7 @@ impl TestClient {
             );
             layer.set_margin(layout.margin_top, 0, 0, layout.margin_left);
             layer.set_exclusive_zone(-1);
-            let backdrop = shell.get_backdrop(&surface, &qh, ());
+            let backdrop = effects.get_backdrop(&surface, &qh, ());
             surface.commit();
             let mut client = ClientState {
                 shm,
@@ -707,7 +707,7 @@ impl PopupClient {
             let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
                 globals.bind(&qh, 1..=4, ()).unwrap();
             let wm_base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 3..=6, ()).unwrap();
-            let shell: CupertinoShellV1 = globals.bind(&qh, 1..=1, ()).unwrap();
+            let effects: CupertinoAppEffectsV1 = globals.bind(&qh, 1..=1, ()).unwrap();
             let layer_surface = compositor.create_surface(&qh, ());
             let layer = layer_shell.get_layer_surface(
                 &layer_surface,
@@ -725,7 +725,7 @@ impl PopupClient {
             layer.set_exclusive_zone(-1);
             layer_surface.commit();
             let popup_surface = compositor.create_surface(&qh, ());
-            let backdrop = shell.get_backdrop(&popup_surface, &qh, ());
+            let backdrop = effects.get_backdrop(&popup_surface, &qh, ());
             let mut client = PopupClient {
                 shm,
                 layer_surface,
@@ -776,7 +776,7 @@ ignore_popup_events!(
     wl_buffer::WlBuffer,
     wl_surface::WlSurface,
     zwlr_layer_shell_v1::ZwlrLayerShellV1,
-    CupertinoShellV1,
+    CupertinoAppEffectsV1,
     CupertinoBackdropV1,
     xdg_positioner::XdgPositioner,
     xdg_popup::XdgPopup

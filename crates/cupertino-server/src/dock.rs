@@ -37,7 +37,8 @@ use smithay::reexports::wayland_server::{
 };
 use smithay::wayland::compositor::{with_states, Cacheable};
 
-use crate::shell_v1::surface_backdrops;
+use crate::app_effects_v1::surface_backdrops;
+use crate::authorization::{authorized, refuse, require, ShellRole};
 use crate::state::Cupertino;
 
 /// Where a minimizing window lands: the dock's `set_minimize_target`, in surface-local logical
@@ -256,6 +257,25 @@ pub struct DockData {
 }
 
 impl Cupertino {
+    /// Drop the docks whose connection no longer holds the Dock role.
+    pub(crate) fn release_revoked_docks(&mut self) {
+        let revoked: Vec<_> = self
+            .docks
+            .docks
+            .iter()
+            .filter(|d| {
+                d.resource
+                    .client()
+                    .is_some_and(|c| !authorized(&c, ShellRole::Dock))
+            })
+            .map(|d| (d.resource.clone(), d.output))
+            .collect();
+        for (resource, output) in revoked {
+            self.docks.docks.retain(|d| d.resource != resource);
+            self.dock_gone(output);
+        }
+    }
+
     /// `cupertino_shell_v1.get_dock`: validate the role, register the dock and send its first group.
     pub fn create_dock(
         &mut self,
@@ -268,10 +288,7 @@ impl Cupertino {
     ) {
         if !permitted {
             init.init(id, DockData { output: None });
-            shell.post_error(
-                ShellError::Permission,
-                "get_dock is for the shell processes the server started",
-            );
+            refuse(shell, ShellRole::Dock);
             return;
         }
         let target = Output::from_resource(output)
@@ -615,14 +632,17 @@ impl Cupertino {
 impl Dispatch<CupertinoDockV1, DockData> for Cupertino {
     fn request(
         state: &mut Self,
-        _: &Client,
-        _: &CupertinoDockV1,
+        client: &Client,
+        dock: &CupertinoDockV1,
         request: cupertino_dock_v1::Request,
         data: &DockData,
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
         let Some(output) = data.output else { return };
+        if !require(client, ShellRole::Dock, dock) {
+            return;
+        }
         match request {
             cupertino_dock_v1::Request::ActivateApp { app_id } => state.dock_activate_app(&app_id),
             cupertino_dock_v1::Request::ForceQuitApp { app_id } => state.force_quit_app(&app_id),

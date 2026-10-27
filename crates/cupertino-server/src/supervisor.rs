@@ -3,13 +3,12 @@
 //! by polling `try_wait` from a timer of the event loop: the server installs no SIGCHLD handler
 //! and the existing spawn code does not either, and a poll adds no thread or fd to the loop.
 
-use std::os::unix::net::UnixStream;
 use std::process::{Child, Command};
 use std::time::Instant;
 
 use crate::config::ShellProcess;
 use crate::restart_policy::{decide, Decision, RESTART_THROTTLE};
-use crate::shell_connection::hand_over;
+use crate::shell_connection::{bind_holder, hand_over, BoundConnection};
 
 enum Phase {
     /// Not running; start at this time.
@@ -47,12 +46,12 @@ impl Supervisor {
     }
 
     /// Start due processes and restart exited ones as the policy says. Children get `WAYLAND_DISPLAY=socket` for the
-    /// programs they start, and their own connection from `connect` as `WAYLAND_SOCKET`.
+    /// programs they start, and their own connection from `connect` (made for the process's roles) as `WAYLAND_SOCKET`.
     pub fn poll(
         &mut self,
         now: Instant,
         socket: &str,
-        connect: &mut dyn FnMut() -> std::io::Result<UnixStream>,
+        connect: &mut dyn FnMut(&ShellProcess) -> std::io::Result<BoundConnection>,
     ) {
         for p in &mut self.procs {
             p.phase = match std::mem::replace(&mut p.phase, Phase::Stopped) {
@@ -103,15 +102,15 @@ impl Supervisor {
 fn start(
     spec: &ShellProcess,
     socket: &str,
-    connect: &mut dyn FnMut() -> std::io::Result<UnixStream>,
+    connect: &mut dyn FnMut(&ShellProcess) -> std::io::Result<BoundConnection>,
     now: Instant,
 ) -> Phase {
     let (program, args) = spec
         .command
         .split_first()
         .expect("shell process commands are validated non-empty at load");
-    let stream = match connect() {
-        Ok(stream) => stream,
+    let (stream, state) = match connect(spec) {
+        Ok(connection) => connection,
         Err(e) => {
             tracing::warn!(name = spec.name, error = %e, "creating the shell process's connection failed");
             return Phase::Waiting(now + RESTART_THROTTLE);
@@ -124,7 +123,13 @@ fn start(
         .env("XDG_CURRENT_DESKTOP", crate::state::CURRENT_DESKTOP);
     hand_over(&mut command, &stream);
     match command.spawn() {
-        Ok(child) => {
+        Ok(mut child) => {
+            if let Err(e) = bind_holder(&state, child.id()) {
+                tracing::warn!(name = spec.name, error = %e, "binding the shell process to its connection failed: ending it");
+                let _ = child.kill();
+                let _ = child.wait();
+                return Phase::Waiting(now + RESTART_THROTTLE);
+            }
             tracing::info!(name = spec.name, pid = child.id(), "shell process started");
             Phase::Running {
                 child,
@@ -153,20 +158,24 @@ impl Drop for Supervisor {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::net::UnixStream;
+    use std::sync::Arc;
     use std::time::Duration;
 
     use super::*;
+    use crate::state::ClientState;
 
     fn spec(script: &str) -> ShellProcess {
         ShellProcess {
             name: "test".into(),
             command: vec!["sh".into(), "-c".into(), script.into()],
+            roles: Vec::new(),
         }
     }
 
     /// A connection nobody listens on: these tests run plain scripts.
-    fn connect() -> std::io::Result<UnixStream> {
-        UnixStream::pair().map(|(_, client)| client)
+    fn connect(_: &ShellProcess) -> std::io::Result<BoundConnection> {
+        UnixStream::pair().map(|(_, client)| (client, Arc::new(ClientState::default())))
     }
 
     /// Poll every 20 ms until `done` holds or ten seconds pass.

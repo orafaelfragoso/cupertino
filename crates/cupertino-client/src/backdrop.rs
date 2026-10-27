@@ -2,7 +2,7 @@
 
 use crate::ClientError;
 use cupertino_geometry::Rect;
-use cupertino_protocols::client::cupertino_backdrop_v1::CupertinoBackdropV1;
+use cupertino_protocols::client::app_effects::cupertino_backdrop_v1::CupertinoBackdropV1;
 
 /// A server-rendered material region below the content of a surface. Every setter takes
 /// effect with the next commit of the surface, i.e. the next [`Client::draw`](crate::Client::draw).

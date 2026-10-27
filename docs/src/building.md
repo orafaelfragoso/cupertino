@@ -70,13 +70,14 @@ cargo build --release -p cupertino-dock --features app
 cargo build --release -p cupertino-menubar --features app
 ```
 
-The server starts and restarts the processes listed under the `"shell"` key of `~/.config/cupertino/compositor.json`, for example `[{"name": "dock", "command": ["cupertino-dock"]}]` (empty unless `/etc/cupertino/compositor.json` exists: the packages install one that starts the whole desktop, and the user file is applied over it). A process that exits with failure is restarted at most once per second.
+The server starts and restarts the processes listed under the `"shell"` key of `/etc/cupertino/compositor.json` (the packages install one that starts the whole desktop), for example `[{"name": "dock", "command": ["/usr/bin/cupertino-dock"], "roles": ["session", "dock"]}]`. A process that has roles must be a program under `/usr`; the user file `~/.config/cupertino/compositor.json` can remove or reorder the entries but not add a process with roles, and a checkout or nested run that needs other programs starts the server with `--dev-shell`. A process that exits with failure is restarted at most once per second. The optional `roles` list is what the server lets the process do on its connection: `session`, `menu_bar`, `dock`, `window_manager`, `session_lock`; the default is `["session"]`, and a process asks for no role it does not hold. The roles end with the process.
 
 ## Backends
 
 | Flag | Backend |
 |---|---|
 | `--winit` | nested window in a Wayland or X session (development) |
+| `--dev-shell` | let any configuration file name the shell processes and the screenshot process, from any path; for checkouts and nested runs only |
 | `--udev` | TTY: logind, DRM/KMS and evdev |
 | `--headless` | no display; use with `--screenshot out.png --exit-after-screenshot` to render one frame |
 

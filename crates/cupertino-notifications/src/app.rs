@@ -148,7 +148,7 @@ fn banner_renderer(
 pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let assets = Assets::discover();
     let theme = Theme::load()?;
-    let mut client = Client::connect()?;
+    let mut client = Client::connect_shell()?;
     let renderer = banner_renderer(&theme, &assets, client.is_dark(), client.display_options())?;
     let mut center_config = CenterConfig::from_theme(&theme);
     // banners fade instead of sliding while the session reduces motion

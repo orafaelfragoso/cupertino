@@ -1,7 +1,7 @@
 //! Connections the server hands to the processes it starts: one end of a socket pair is inserted as a client with the
 //! given [`ClientState`], the other goes to the process as `WAYLAND_SOCKET`. Such a client cannot be told apart from an
-//! application on the public socket by anything but this state, which is why the dock, the window manager and the
-//! screen capture are offered to it alone.
+//! application on the public socket by anything but this state ([`crate::authorization`]), which is why the shell
+//! roles and the screen capture are offered to it alone.
 
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
@@ -11,24 +11,59 @@ use std::sync::Arc;
 
 use smithay::reexports::wayland_server::DisplayHandle;
 
+use crate::authorization::{ClientCapabilitySet, Holder, ShellRole};
+use crate::force_quit::ProcessHandle;
 use crate::state::ClientState;
+
+/// The client's end of a connection and the state the server keeps for it.
+pub type BoundConnection = (UnixStream, Arc<ClientState>);
 
 /// A new client with `state`: the server end is inserted, the other end is returned.
 pub fn connect_client(display: &DisplayHandle, state: ClientState) -> std::io::Result<UnixStream> {
-    let (server, client) = UnixStream::pair()?;
-    display.clone().insert_client(server, Arc::new(state))?;
-    Ok(client)
+    connect_bound_client(display, state).map(|(stream, _)| stream)
 }
 
-/// A connection for a shell process the server supervises.
-pub fn shell_process_connection(display: &DisplayHandle) -> std::io::Result<UnixStream> {
+/// Like [`connect_client`], and the state the server keeps for the connection, to bind the process to ([`bind_holder`]).
+pub fn connect_bound_client(
+    display: &DisplayHandle,
+    state: ClientState,
+) -> std::io::Result<BoundConnection> {
+    let (server, client) = UnixStream::pair()?;
+    let state = Arc::new(state);
+    display.clone().insert_client(server, state.clone())?;
+    Ok((client, state))
+}
+
+/// The state of a connection for a shell process the server supervises, holding `roles` and no other.
+pub fn shell_process_state(roles: &[ShellRole]) -> ClientState {
+    ClientState {
+        capabilities: ClientCapabilitySet::of(roles.iter().copied()),
+        ..ClientState::default()
+    }
+}
+
+/// A connection for a client that runs in the server's own process (tests), holding `roles` and no other for as long
+/// as it is open. A shell process the server starts is bound to its process instead ([`bind_holder`]).
+pub fn shell_process_connection(
+    display: &DisplayHandle,
+    roles: &[ShellRole],
+) -> std::io::Result<UnixStream> {
     connect_client(
         display,
-        ClientState {
-            shell_process: true,
-            ..ClientState::default()
-        },
+        ClientState::detached(ClientCapabilitySet::of(roles.iter().copied())),
     )
+}
+
+/// Bind the connection to the process started for it: its capabilities end when the process exits, so a connection
+/// kept open by anything else (a descriptor passed on, a leftover child) holds nothing. The child has not been waited
+/// for yet, so its pid cannot belong to another process. A connection that is not bound holds nothing; when binding
+/// fails the caller ends the process.
+pub fn bind_holder(state: &ClientState, pid: u32) -> std::io::Result<()> {
+    let handle = ProcessHandle::open(pid)?;
+    state
+        .holder
+        .set(Holder::Process(handle))
+        .map_err(|_| std::io::Error::other("the connection already has a holder"))
 }
 
 /// Pass `stream` to the process `command` starts as `WAYLAND_SOCKET`.

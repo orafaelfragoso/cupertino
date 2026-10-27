@@ -428,7 +428,7 @@ fn a_session_lock_ends_the_popup_grab_and_the_first_press_reaches_the_lock_surfa
     h.run_for(Duration::from_millis(200));
     assert!(h.state.popup_grab.is_some(), "the popup holds a grab");
 
-    let locker = common::Client::locker(h.socket_path());
+    let locker = common::Client::locker(common::session_agent(&h.state));
     h.wait_until("the session to be locked", |_| locker.locked());
     h.run_for(Duration::from_millis(200));
     assert!(

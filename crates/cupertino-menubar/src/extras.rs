@@ -914,4 +914,18 @@ mod tests {
         let menu = session("Rafael", alone).session_menu().unwrap();
         assert!(!entries(&menu).iter().any(|l| l.contains("Login Window")));
     }
+
+    #[test]
+    fn the_name_in_log_out_is_plain_text_so_underscores_and_ampersands_are_not_mnemonics() {
+        let menu = session("Ana_&Co", SessionCaps::default())
+            .session_menu()
+            .unwrap();
+        let log_out = menu
+            .rows
+            .iter()
+            .find(|r| r.label.starts_with("Log Out"))
+            .unwrap();
+        assert_eq!(log_out.label, "Log Out Ana_&Co\u{2026}");
+        assert_eq!(log_out.mnemonic, None);
+    }
 }

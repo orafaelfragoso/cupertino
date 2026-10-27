@@ -1,0 +1,11 @@
+[package]
+name = "cupertino-typeahead"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Type-to-select for the items of a menu or a pop-up: the typed prefix, its pause and the item it finds"
+
+[package.metadata.cupertino]
+layer = "foundation"
+
+[dependencies]

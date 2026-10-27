@@ -1,4 +1,4 @@
-use crate::{allows, exception, Edge, Exception, Kind, Layer, Rules};
+use crate::{allows, exception, Dep, Edge, Exception, Kind, Layer, Rules};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 
@@ -35,6 +35,41 @@ pub fn denied_paths(edges: &[Edge], denied: &[(Layer, &[Layer])]) -> Vec<Vec<Str
                     path.reverse();
                     out.push(path);
                 }
+            }
+        }
+    }
+    out
+}
+
+/// For every source crate in `denied`, the shortest chain of normal dependencies in `deps` to each crate it must not
+/// reach, as crate names from source to target.
+pub fn denied_crate_paths(deps: &BTreeSet<Dep>, denied: &[(&str, &[&str])]) -> Vec<Vec<String>> {
+    let mut out = Vec::new();
+    for &(start, targets) in denied {
+        let mut parent: BTreeMap<&str, &str> = BTreeMap::new();
+        let mut queue = VecDeque::from([start]);
+        while let Some(node) = queue.pop_front() {
+            for (_, to, _) in deps
+                .iter()
+                .filter(|(from, _, kind)| from == node && *kind == Kind::Normal)
+            {
+                if to == start || parent.contains_key(to.as_str()) {
+                    continue;
+                }
+                parent.insert(to, node);
+                if !targets.contains(&to.as_str()) {
+                    queue.push_back(to);
+                    continue;
+                }
+                let mut path = vec![to.clone()];
+                let mut at = node;
+                while at != start {
+                    path.push(at.to_owned());
+                    at = parent[at];
+                }
+                path.push(start.to_owned());
+                path.reverse();
+                out.push(path);
             }
         }
     }
@@ -156,6 +191,25 @@ mod tests {
                 "kit".to_owned(),
                 "net".to_owned(),
                 "server".to_owned()
+            ]]
+        );
+    }
+
+    #[test]
+    fn denied_crate_paths_follow_normal_dependencies_to_external_crates() {
+        let dep = |from: &str, to: &str, kind| (from.to_owned(), to.to_owned(), kind);
+        let deps = BTreeSet::from([
+            dep("transport", "geometry", Kind::Normal),
+            dep("geometry", "wlr", Kind::Normal),
+            dep("transport", "private", Kind::Dev),
+            dep("other", "private", Kind::Normal),
+        ]);
+        assert_eq!(
+            denied_crate_paths(&deps, &[("transport", &["wlr", "private"])]),
+            vec![vec![
+                "transport".to_owned(),
+                "geometry".to_owned(),
+                "wlr".to_owned()
             ]]
         );
     }

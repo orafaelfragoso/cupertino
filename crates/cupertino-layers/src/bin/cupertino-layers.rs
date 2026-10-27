@@ -7,8 +7,8 @@
 //! ```
 
 use cupertino_layers::{
-    check, classify, dot, edges, Dep, Kind, Layer, DENIED_PATHS, PENDING, RULES, TARGET,
-    TARGET_EXCEPTIONS, TARGET_RULES,
+    check, classify, denied_crate_paths, dot, edges, Dep, Kind, Layer, Problem, DENIED_CRATES,
+    DENIED_PATHS, PENDING, RULES, TARGET, TARGET_EXCEPTIONS, TARGET_RULES,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -29,7 +29,12 @@ fn main() -> ExitCode {
     let current_edges = edges(&layers, &deps);
     let (target, mut target_problems) = classify(layers.keys(), TARGET);
     let target_edges = edges(&target, &deps);
-    let problems = check(RULES, &current_edges, PENDING, DENIED_PATHS);
+    let mut problems = check(RULES, &current_edges, PENDING, DENIED_PATHS);
+    problems.extend(
+        denied_crate_paths(&deps, DENIED_CRATES)
+            .into_iter()
+            .map(Problem::DeniedPath),
+    );
     target_problems.extend(check(
         TARGET_RULES,
         &target_edges,

@@ -1,0 +1,1624 @@
+//! The connection: globals, surfaces with their roles and buffers, seat input and the event loop.
+
+use std::io::{ErrorKind, Read, Write};
+use std::os::unix::net::UnixStream;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use cupertino_geometry::{Point, Rect};
+use rustix::event::{poll, PollFd, PollFlags};
+use wayland_client::backend::WaylandError;
+use wayland_client::globals::{registry_queue_init, GlobalList, GlobalListContents};
+use wayland_client::protocol::wl_buffer::{self, WlBuffer};
+use wayland_client::protocol::wl_callback::{self, WlCallback};
+use wayland_client::protocol::wl_compositor::WlCompositor;
+use wayland_client::protocol::wl_data_device_manager::WlDataDeviceManager;
+use wayland_client::protocol::wl_keyboard::{self, KeyState, WlKeyboard};
+use wayland_client::protocol::wl_output::{self, WlOutput};
+use wayland_client::protocol::wl_pointer::{self, Axis, ButtonState, WlPointer};
+use wayland_client::protocol::wl_registry::{self, WlRegistry};
+use wayland_client::protocol::wl_seat::{self, WlSeat};
+use wayland_client::protocol::wl_shm::WlShm;
+use wayland_client::protocol::wl_shm_pool::WlShmPool;
+use wayland_client::protocol::wl_surface::{self, WlSurface};
+use wayland_client::{
+    delegate_noop, Connection as WlConnection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
+};
+use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::{
+    self, WpCursorShapeDeviceV1,
+};
+use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1::WpCursorShapeManagerV1;
+use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1;
+use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::{
+    self, WpFractionalScaleV1,
+};
+use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
+use wayland_protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
+use wayland_protocols::xdg::activation::v1::client::xdg_activation_token_v1::{
+    self, XdgActivationTokenV1,
+};
+use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1::XdgActivationV1;
+use wayland_protocols::xdg::decoration::zv1::client::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1;
+use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1::{
+    self, ZxdgToplevelDecorationV1,
+};
+use wayland_protocols::xdg::shell::client::xdg_popup::{self, XdgPopup};
+use wayland_protocols::xdg::shell::client::xdg_positioner::{
+    Anchor, ConstraintAdjustment, Gravity, XdgPositioner,
+};
+use wayland_protocols::xdg::shell::client::xdg_surface::{self, XdgSurface};
+use wayland_protocols::xdg::shell::client::xdg_toplevel::{self, ResizeEdge, XdgToplevel};
+use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
+
+use crate::buffer::{pick_slot, Slot, SlotChoice, SlotTag};
+use crate::capability::REQUIRED;
+use crate::clipboard::Clipboard;
+use crate::configure::{wire_size, Serials};
+use crate::input::{PointerTracker, Repeat, Translator};
+use crate::output::{OutputBuilder, OutputId};
+use crate::scale::ScaleSources;
+use crate::{
+    BufferFormat, BufferLayout, Capability, CapabilitySet, ClipboardOffer, Decorations, Disconnect,
+    Error, KeyboardEvent, OutputInfo, PixelRect, PointerEvent, Scale, WindowConfigure,
+    WindowStates,
+};
+
+/// A surface of this connection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SurfaceId(pub(crate) u32);
+
+/// An application window (`xdg_toplevel`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Toplevel(SurfaceId);
+
+impl Toplevel {
+    pub fn surface(self) -> SurfaceId {
+        self.0
+    }
+}
+
+/// A popup (`xdg_popup`) of a window or of another popup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Popup(SurfaceId);
+
+impl Popup {
+    pub fn surface(self) -> SurfaceId {
+        self.0
+    }
+}
+
+/// How a new application window starts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToplevelConfig {
+    pub app_id: String,
+    pub title: String,
+    /// The smallest and largest size the window can take, in logical points; `None` for no limit.
+    pub min_size: Option<(u32, u32)>,
+    pub max_size: Option<(u32, u32)>,
+    /// Who should draw the frame. A compositor without the decoration protocol, or one that answers otherwise,
+    /// decides; the outcome is in [`WindowConfigure::decorations`].
+    pub decorations: Decorations,
+}
+
+/// Where a popup goes, relative to its parent's surface (`xdg_positioner`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PopupPlacement {
+    /// The rectangle of the parent the popup is placed against, in logical points.
+    pub anchor_rect: Rect,
+    /// The popup's size in logical points.
+    pub size: (u32, u32),
+    pub anchor: Anchor,
+    pub gravity: Gravity,
+    /// How the compositor may move the popup when it would not fit.
+    pub constraint_adjustment: ConstraintAdjustment,
+    /// Take an explicit grab with the latest input event, so a click outside dismisses the popup.
+    pub grab: bool,
+}
+
+/// Where a popup was placed: relative to its parent, in logical points.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PopupConfigure {
+    pub serial: u32,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// The compositor said a surface may draw its next frame (`wl_surface.frame`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameCallback {
+    pub surface: SurfaceId,
+    /// Milliseconds on the compositor's clock.
+    pub time: u32,
+}
+
+/// Something the application reacts to; returned by [`Connection::wait`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum Event {
+    /// The compositor configured a window; also the first configure that maps it. Draw for it and present.
+    Configure {
+        window: Toplevel,
+        configure: WindowConfigure,
+    },
+    /// The compositor placed a popup. Draw at its size and present.
+    PopupConfigure {
+        popup: Popup,
+        configure: PopupConfigure,
+    },
+    /// The request to close the window: the application decides and destroys it.
+    Close(Toplevel),
+    /// The compositor dismissed the popup; the application destroys it.
+    PopupDone(Popup),
+    Frame(FrameCallback),
+    /// The surface's buffer scale changed: draw again.
+    ScaleChanged {
+        surface: SurfaceId,
+        scale: Scale,
+    },
+    Pointer {
+        surface: SurfaceId,
+        event: PointerEvent,
+    },
+    Keyboard {
+        surface: SurfaceId,
+        event: KeyboardEvent,
+    },
+    /// Another selection was set, or it was cleared.
+    Selection(Option<ClipboardOffer>),
+    /// An output appeared, went away or changed: read [`Connection::outputs`] again.
+    OutputsChanged,
+}
+
+/// Interrupts [`Connection::wait`] from other threads.
+#[derive(Clone, Debug)]
+pub struct Waker(Arc<UnixStream>);
+
+impl Waker {
+    /// Make the next or current [`Connection::wait`] return.
+    pub fn wake(&self) {
+        match (&*self.0).write(&[1]) {
+            // a full channel already holds a pending wake-up
+            Ok(_) => {}
+            Err(e) if e.kind() == ErrorKind::WouldBlock => {}
+            Err(e) => panic!("wake channel broken: {e}"),
+        }
+    }
+}
+
+struct Output {
+    registry_name: u32,
+    wl: WlOutput,
+    info: OutputBuilder,
+}
+
+/// The toplevel configure being assembled until its `xdg_surface.configure`.
+#[derive(Clone, Copy, Debug, Default)]
+struct PendingToplevel {
+    size: Option<(u32, u32)>,
+    bounds: Option<(u32, u32)>,
+    states: WindowStates,
+}
+
+enum Role {
+    Toplevel {
+        xdg: XdgSurface,
+        toplevel: XdgToplevel,
+        decoration: Option<ZxdgToplevelDecorationV1>,
+        decorations: Decorations,
+        pending: PendingToplevel,
+        current: Option<WindowConfigure>,
+    },
+    Popup {
+        xdg: XdgSurface,
+        popup: XdgPopup,
+        parent: SurfaceId,
+        pending: Option<(i32, i32, u32, u32)>,
+        current: Option<PopupConfigure>,
+    },
+}
+
+impl Role {
+    fn xdg(&self) -> &XdgSurface {
+        match self {
+            Role::Toplevel { xdg, .. } | Role::Popup { xdg, .. } => xdg,
+        }
+    }
+}
+
+struct Surface {
+    id: SurfaceId,
+    wl: WlSurface,
+    role: Role,
+    viewport: Option<WpViewport>,
+    fractional: Option<WpFractionalScaleV1>,
+    fractional_scale: Option<Scale>,
+    preferred_scale: Option<Scale>,
+    entered: Vec<OutputId>,
+    /// The scale last reported to the application, which buffers are drawn at.
+    scale: Scale,
+    serials: Serials,
+    slots: Vec<Slot>,
+    next_slot: u64,
+}
+
+/// Dispatch state of the connection.
+pub(crate) struct State {
+    capabilities: CapabilitySet,
+    compositor: WlCompositor,
+    shm: WlShm,
+    wm_base: XdgWmBase,
+    seat: Option<WlSeat>,
+    decoration_manager: Option<ZxdgDecorationManagerV1>,
+    scaling: Option<(WpFractionalScaleManagerV1, WpViewporter)>,
+    activation: Option<XdgActivationV1>,
+    cursor_shape: Option<WpCursorShapeManagerV1>,
+    data_device_manager: Option<WlDataDeviceManager>,
+    pub(crate) clipboard: Clipboard,
+    pointer: Option<WlPointer>,
+    cursor_device: Option<WpCursorShapeDeviceV1>,
+    pointer_enter_serial: Option<u32>,
+    keyboard: Option<WlKeyboard>,
+    outputs: Vec<Output>,
+    surfaces: Vec<Surface>,
+    next_surface: u32,
+    pointer_tracker: PointerTracker,
+    key_focus: Option<SurfaceId>,
+    translator: Option<Translator>,
+    repeat: Repeat,
+    last_serial: Option<u32>,
+    pub(crate) events: Vec<Event>,
+    fault: Option<Error>,
+}
+
+/// A connection to a Wayland compositor using standard protocols only. One loop calls [`Connection::wait`] and
+/// reacts to the returned [`Event`]s.
+pub struct Connection {
+    conn: WlConnection,
+    queue: EventQueue<State>,
+    state: State,
+    wake: UnixStream,
+    waker: Waker,
+}
+
+fn bind<I>(
+    globals: &GlobalList,
+    qh: &QueueHandle<State>,
+    versions: std::ops::RangeInclusive<u32>,
+) -> Option<I>
+where
+    I: Proxy + 'static,
+    State: Dispatch<I, ()>,
+{
+    globals.bind(qh, versions, ()).ok()
+}
+
+/// A global [`CapabilitySet::from_globals`] already found in a usable version.
+fn required<I>(global: Option<I>, interface: &'static str) -> Result<I, Error> {
+    global.ok_or_else(|| Error::MissingRequiredProtocol {
+        interface,
+        minimum_version: REQUIRED
+            .iter()
+            .find(|r| r.interface == interface)
+            .map_or(1, |r| r.minimum_version),
+    })
+}
+
+impl Connection {
+    /// Connect to the compositor named by `WAYLAND_DISPLAY` (or the socket in `WAYLAND_SOCKET`).
+    pub fn connect() -> Result<Connection, Error> {
+        Self::from_connection(
+            WlConnection::connect_to_env()
+                .map_err(|e| Error::Disconnected(Disconnect::Connect(e)))?,
+        )
+    }
+
+    /// Connect over an established socket, such as one end of a socket pair.
+    pub fn from_stream(stream: UnixStream) -> Result<Connection, Error> {
+        Self::from_connection(
+            WlConnection::from_socket(stream)
+                .map_err(|e| Error::Disconnected(Disconnect::Connect(e)))?,
+        )
+    }
+
+    fn from_connection(conn: WlConnection) -> Result<Connection, Error> {
+        let (globals, mut queue) = registry_queue_init::<State>(&conn)
+            .map_err(|e| Error::Disconnected(Disconnect::Registry(e)))?;
+        let qh = queue.handle();
+        let capabilities = CapabilitySet::from_globals(
+            globals
+                .contents()
+                .clone_list()
+                .iter()
+                .map(|g| (g.interface.as_str(), g.version))
+                .collect::<Vec<_>>(),
+        )?;
+        let seat: Option<WlSeat> = bind(&globals, &qh, 1..=7);
+        let data_device_manager = bind(&globals, &qh, 1..=3);
+        let clipboard = Clipboard::new(data_device_manager.as_ref(), seat.as_ref(), &qh);
+        let mut state = State {
+            capabilities,
+            // version 6 adds `preferred_buffer_scale`
+            compositor: required(bind(&globals, &qh, 4..=6), "wl_compositor")?,
+            shm: required(bind(&globals, &qh, 1..=1), "wl_shm")?,
+            // version 4 adds `configure_bounds`, version 6 the suspended state
+            wm_base: required(bind(&globals, &qh, 1..=6), "xdg_wm_base")?,
+            seat,
+            decoration_manager: bind(&globals, &qh, 1..=1),
+            scaling: bind(&globals, &qh, 1..=1).zip(bind(&globals, &qh, 1..=1)),
+            activation: bind(&globals, &qh, 1..=1),
+            cursor_shape: bind(&globals, &qh, 1..=1),
+            data_device_manager,
+            clipboard,
+            pointer: None,
+            cursor_device: None,
+            pointer_enter_serial: None,
+            keyboard: None,
+            outputs: Vec::new(),
+            surfaces: Vec::new(),
+            next_surface: 0,
+            pointer_tracker: PointerTracker::default(),
+            key_focus: None,
+            translator: None,
+            repeat: Repeat::default(),
+            last_serial: None,
+            events: Vec::new(),
+            fault: None,
+        };
+        let registry = globals.registry();
+        for g in globals
+            .contents()
+            .clone_list()
+            .iter()
+            .filter(|g| g.interface == "wl_output")
+        {
+            state.bind_output(registry, &qh, g.name, g.version);
+        }
+        // outputs and seat capabilities report before the first surface exists
+        queue.roundtrip(&mut state)?;
+        state.events.clear();
+        let (wake, writer) = UnixStream::pair().map_err(Error::Io)?;
+        wake.set_nonblocking(true).map_err(Error::Io)?;
+        writer.set_nonblocking(true).map_err(Error::Io)?;
+        Ok(Connection {
+            conn,
+            queue,
+            state,
+            wake,
+            waker: Waker(Arc::new(writer)),
+        })
+    }
+
+    /// The optional protocols the compositor offers.
+    pub fn capabilities(&self) -> CapabilitySet {
+        self.state.capabilities
+    }
+
+    pub fn waker(&self) -> Waker {
+        self.waker.clone()
+    }
+
+    pub fn outputs(&self) -> Vec<OutputInfo> {
+        self.state
+            .outputs
+            .iter()
+            .map(|o| o.info.current.clone())
+            .collect()
+    }
+
+    /// The buffer scale of a surface: what [`Connection::lease`] draws at.
+    pub fn scale(&self, surface: SurfaceId) -> Result<Scale, Error> {
+        Ok(self.state.surface(surface)?.scale)
+    }
+
+    /// Create an application window. It maps with its first presented buffer, after its first
+    /// [`Event::Configure`].
+    pub fn toplevel(&mut self, config: &ToplevelConfig) -> Result<Toplevel, Error> {
+        let qh = self.queue.handle();
+        let s = &mut self.state;
+        let id = s.next_id();
+        let wl = s.compositor.create_surface(&qh, id);
+        let xdg = s.wm_base.get_xdg_surface(&wl, &qh, id);
+        let toplevel = xdg.get_toplevel(&qh, id);
+        toplevel.set_app_id(config.app_id.clone());
+        toplevel.set_title(config.title.clone());
+        if let Some((w, h)) = config.min_size {
+            toplevel.set_min_size(clamp_i32(w), clamp_i32(h));
+        }
+        if let Some((w, h)) = config.max_size {
+            toplevel.set_max_size(clamp_i32(w), clamp_i32(h));
+        }
+        let decoration = s.decoration_manager.as_ref().map(|m| {
+            let d = m.get_toplevel_decoration(&toplevel, &qh, id);
+            d.set_mode(match config.decorations {
+                Decorations::Server => zxdg_toplevel_decoration_v1::Mode::ServerSide,
+                Decorations::Client => zxdg_toplevel_decoration_v1::Mode::ClientSide,
+            });
+            d
+        });
+        s.add_surface(
+            id,
+            wl,
+            Role::Toplevel {
+                xdg,
+                toplevel,
+                decoration,
+                decorations: Decorations::Client,
+                pending: PendingToplevel::default(),
+                current: None,
+            },
+            &qh,
+        );
+        Ok(Toplevel(id))
+    }
+
+    /// Create a popup of `parent` (a window or popup). It maps with its first presented buffer, after its first
+    /// [`Event::PopupConfigure`].
+    pub fn popup(&mut self, parent: SurfaceId, placement: &PopupPlacement) -> Result<Popup, Error> {
+        let qh = self.queue.handle();
+        let s = &mut self.state;
+        let parent_xdg = s.surface(parent)?.role.xdg().clone();
+        let r = placement.anchor_rect;
+        if !(r.width() > 0.0 && r.height() > 0.0 && placement.size.0 > 0 && placement.size.1 > 0) {
+            return Err(Error::Protocol(
+                "a popup needs a non-empty anchor rectangle and size",
+            ));
+        }
+        let grab_serial = if placement.grab {
+            Some(
+                s.last_serial
+                    .ok_or(Error::PermissionDenied("a popup grab"))?,
+            )
+        } else {
+            None
+        };
+        let positioner = s.wm_base.create_positioner(&qh, ());
+        positioner.set_size(clamp_i32(placement.size.0), clamp_i32(placement.size.1));
+        let (x, y) = (r.x().floor() as i32, r.y().floor() as i32);
+        positioner.set_anchor_rect(
+            x,
+            y,
+            ((r.x() + r.width()).ceil() as i32 - x).max(1),
+            ((r.y() + r.height()).ceil() as i32 - y).max(1),
+        );
+        positioner.set_anchor(placement.anchor);
+        positioner.set_gravity(placement.gravity);
+        positioner.set_constraint_adjustment(placement.constraint_adjustment);
+        let id = s.next_id();
+        let wl = s.compositor.create_surface(&qh, id);
+        let xdg = s.wm_base.get_xdg_surface(&wl, &qh, id);
+        let popup = xdg.get_popup(Some(&parent_xdg), &positioner, &qh, id);
+        positioner.destroy();
+        if let (Some(serial), Some(seat)) = (grab_serial, s.seat.as_ref()) {
+            popup.grab(seat, serial);
+        }
+        s.add_surface(
+            id,
+            wl,
+            Role::Popup {
+                xdg,
+                popup,
+                parent,
+                pending: None,
+                current: None,
+            },
+            &qh,
+        );
+        Ok(Popup(id))
+    }
+
+    /// Destroy a surface, with its popups first.
+    pub fn destroy(&mut self, surface: SurfaceId) -> Result<(), Error> {
+        self.state.surface(surface)?;
+        let children: Vec<SurfaceId> = self
+            .state
+            .surfaces
+            .iter()
+            .filter_map(|s| match s.role {
+                Role::Popup { parent, .. } if parent == surface => Some(s.id),
+                _ => None,
+            })
+            .collect();
+        for child in children {
+            self.destroy(child)?;
+        }
+        let i = self
+            .state
+            .surfaces
+            .iter()
+            .position(|s| s.id == surface)
+            .ok_or(Error::UnknownSurface)?;
+        let s = self.state.surfaces.remove(i);
+        match &s.role {
+            Role::Toplevel {
+                xdg,
+                toplevel,
+                decoration,
+                ..
+            } => {
+                if let Some(d) = decoration {
+                    d.destroy();
+                }
+                toplevel.destroy();
+                xdg.destroy();
+            }
+            Role::Popup { xdg, popup, .. } => {
+                popup.destroy();
+                xdg.destroy();
+            }
+        }
+        if let Some(v) = &s.viewport {
+            v.destroy();
+        }
+        if let Some(f) = &s.fractional {
+            f.destroy();
+        }
+        s.wl.destroy();
+        self.state.pointer_tracker.forget(surface);
+        if self.state.key_focus == Some(surface) {
+            self.state.key_focus = None;
+            self.state.repeat.clear();
+        }
+        Ok(())
+    }
+
+    pub fn set_title(&mut self, window: Toplevel, title: &str) -> Result<(), Error> {
+        self.state.toplevel(window)?.set_title(title.to_string());
+        Ok(())
+    }
+
+    /// The smallest and largest size, in logical points; `None` for no limit. Applies with the next present.
+    pub fn set_size_limits(
+        &mut self,
+        window: Toplevel,
+        min: Option<(u32, u32)>,
+        max: Option<(u32, u32)>,
+    ) -> Result<(), Error> {
+        let t = self.state.toplevel(window)?;
+        let (w, h) = min.unwrap_or((0, 0));
+        t.set_min_size(clamp_i32(w), clamp_i32(h));
+        let (w, h) = max.unwrap_or((0, 0));
+        t.set_max_size(clamp_i32(w), clamp_i32(h));
+        Ok(())
+    }
+
+    pub fn set_maximized(&mut self, window: Toplevel, maximized: bool) -> Result<(), Error> {
+        let t = self.state.toplevel(window)?;
+        if maximized {
+            t.set_maximized();
+        } else {
+            t.unset_maximized();
+        }
+        Ok(())
+    }
+
+    pub fn set_fullscreen(&mut self, window: Toplevel, fullscreen: bool) -> Result<(), Error> {
+        let t = self.state.toplevel(window)?;
+        if fullscreen {
+            t.set_fullscreen(None);
+        } else {
+            t.unset_fullscreen();
+        }
+        Ok(())
+    }
+
+    pub fn minimize(&mut self, window: Toplevel) -> Result<(), Error> {
+        self.state.toplevel(window)?.set_minimized();
+        Ok(())
+    }
+
+    /// Start moving the window with the pointer, in answer to the latest button press (a client-drawn title bar).
+    pub fn start_move(&mut self, window: Toplevel) -> Result<(), Error> {
+        let serial = self
+            .state
+            .last_serial
+            .ok_or(Error::PermissionDenied("moving a window"))?;
+        let seat = self
+            .state
+            .seat
+            .clone()
+            .ok_or(Error::Unsupported(Capability::Seat))?;
+        self.state.toplevel(window)?._move(&seat, serial);
+        Ok(())
+    }
+
+    /// Start resizing the window from `edge`, in answer to the latest button press (a client-drawn border).
+    pub fn start_resize(&mut self, window: Toplevel, edge: ResizeEdge) -> Result<(), Error> {
+        let serial = self
+            .state
+            .last_serial
+            .ok_or(Error::PermissionDenied("resizing a window"))?;
+        let seat = self
+            .state
+            .seat
+            .clone()
+            .ok_or(Error::Unsupported(Capability::Seat))?;
+        self.state.toplevel(window)?.resize(&seat, serial, edge);
+        Ok(())
+    }
+
+    /// Ask the compositor to focus the window (`xdg_activation_v1`), with the latest input event as the reason.
+    pub fn activate(&mut self, window: Toplevel) -> Result<(), Error> {
+        self.state.capabilities.require(Capability::Activation)?;
+        let qh = self.queue.handle();
+        let s = &self.state;
+        let surface = s.surface(window.0)?;
+        let activation = s.activation.as_ref().expect("bound with the capability");
+        let token = activation.get_activation_token(&qh, window.0);
+        if let (Some(serial), Some(seat)) = (s.last_serial, s.seat.as_ref()) {
+            token.set_serial(serial, seat);
+        }
+        token.set_surface(&surface.wl);
+        token.commit();
+        Ok(())
+    }
+
+    /// Show the compositor's cursor `shape` over the surface the pointer is on.
+    pub fn set_cursor(&mut self, shape: wp_cursor_shape_device_v1::Shape) -> Result<(), Error> {
+        self.state.capabilities.require(Capability::CursorShape)?;
+        let (Some(device), Some(serial)) =
+            (&self.state.cursor_device, self.state.pointer_enter_serial)
+        else {
+            return Err(Error::PermissionDenied(
+                "a cursor before the pointer entered",
+            ));
+        };
+        device.set_shape(serial, shape);
+        Ok(())
+    }
+
+    /// Set the selection to `contents`, one byte string per MIME type, in answer to the latest input event.
+    pub fn set_selection(&mut self, contents: Vec<(String, Vec<u8>)>) -> Result<(), Error> {
+        self.state.capabilities.require(Capability::Clipboard)?;
+        let serial = self
+            .state
+            .last_serial
+            .ok_or(Error::PermissionDenied("setting the selection"))?;
+        let qh = self.queue.handle();
+        let manager = self
+            .state
+            .data_device_manager
+            .clone()
+            .expect("bound with the capability");
+        self.state.clipboard.set(&manager, contents, serial, &qh);
+        Ok(())
+    }
+
+    /// Read the selection `offer` in `mime`, one of its [`ClipboardOffer::mime_types`]. Blocks for up to one second.
+    pub fn receive(&mut self, offer: &ClipboardOffer, mime: &str) -> Result<Vec<u8>, Error> {
+        self.state.capabilities.require(Capability::Clipboard)?;
+        self.state.clipboard.receive(&self.conn, offer, mime)
+    }
+
+    /// A buffer to draw the next frame of `surface` into, at the surface's scale. Its logical size is the configured
+    /// one; `preferred` (logical points) applies when the compositor leaves the size to the client. The pixels are
+    /// those of an earlier frame or zero: draw all of them. Dropping the lease without presenting gives it back.
+    pub fn lease(
+        &mut self,
+        surface: SurfaceId,
+        preferred: (u32, u32),
+        format: BufferFormat,
+    ) -> Result<BufferLease<'_>, Error> {
+        let qh = self.queue.handle();
+        let s = &mut self.state;
+        let shm = s.shm.clone();
+        let surf = s.surface_mut(surface)?;
+        let serial = surf.serials.latest().ok_or(Error::NotConfigured)?;
+        let logical = match &surf.role {
+            Role::Toplevel { current, .. } => current.and_then(|c| c.size).unwrap_or(preferred),
+            Role::Popup { current, .. } => current
+                .map(|c| (c.width, c.height))
+                .ok_or(Error::NotConfigured)?,
+        };
+        let scale = surf.scale;
+        let layout = scale
+            .to_physical(logical.0)
+            .zip(scale.to_physical(logical.1))
+            .and_then(|(w, h)| BufferLayout::new(w, h, format))
+            .ok_or(Error::InvalidScale)?;
+        let slot = match pick_slot(surf.slots.iter().map(|s| (s.busy, s.layout)), layout) {
+            SlotChoice::Reuse(i) => i,
+            SlotChoice::AllBusy => return Err(Error::NoFreeBuffer),
+            SlotChoice::Create => {
+                surf.slots.retain(|s| s.busy);
+                surf.next_slot += 1;
+                let tag = SlotTag {
+                    surface: surface.0,
+                    slot: surf.next_slot,
+                };
+                surf.slots.push(Slot::new(&shm, &qh, tag, layout)?);
+                surf.slots.len() - 1
+            }
+        };
+        Ok(BufferLease {
+            connection: self,
+            surface,
+            slot,
+            serial,
+            logical,
+            scale,
+        })
+    }
+
+    /// Wait for events, at most `timeout` (`None` waits until one arrives or a [`Waker`] wakes the loop).
+    pub fn wait(&mut self, timeout: Option<Duration>) -> Result<Vec<Event>, Error> {
+        self.queue.dispatch_pending(&mut self.state)?;
+        self.state.repeat_keys(Instant::now());
+        self.state.update_scales();
+        if self.state.events.is_empty() && self.state.fault.is_none() {
+            // a key repeat due earlier than the caller's timeout ends the wait first
+            let until_repeat = self
+                .state
+                .repeat
+                .deadline()
+                .map(|at| at.saturating_duration_since(Instant::now()));
+            self.block(timeout.into_iter().chain(until_repeat).min())?;
+            self.queue.dispatch_pending(&mut self.state)?;
+            self.state.repeat_keys(Instant::now());
+            self.state.update_scales();
+        }
+        match self.state.fault.take() {
+            Some(e) => Err(e),
+            None => Ok(std::mem::take(&mut self.state.events)),
+        }
+    }
+
+    /// Send queued requests now; [`Connection::wait`] also does.
+    pub fn flush(&self) -> Result<(), Error> {
+        match self.conn.flush() {
+            Ok(()) => Ok(()),
+            // the socket is full; the next call flushes again
+            Err(WaylandError::Io(e)) if e.kind() == ErrorKind::WouldBlock => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Poll the connection and the wake channel once and read what is ready.
+    fn block(&mut self, timeout: Option<Duration>) -> Result<(), Error> {
+        let guard = loop {
+            match self.queue.prepare_read() {
+                Some(guard) => break guard,
+                None => {
+                    self.queue.dispatch_pending(&mut self.state)?;
+                }
+            }
+        };
+        self.flush()?;
+        let timespec = timeout.map(|d| rustix::event::Timespec {
+            tv_sec: d.as_secs() as i64,
+            tv_nsec: i64::from(d.subsec_nanos()),
+        });
+        let (connection_ready, wake_ready) = {
+            let connection_fd = guard.connection_fd();
+            let mut fds = [
+                PollFd::new(&connection_fd, PollFlags::IN),
+                PollFd::new(&self.wake, PollFlags::IN),
+            ];
+            match poll(&mut fds, timespec.as_ref()) {
+                Ok(_) => {}
+                // a signal interrupted the wait: report an empty wake-up
+                Err(rustix::io::Errno::INTR) => {}
+                Err(e) => return Err(Error::Io(e.into())),
+            }
+            (
+                fds[0]
+                    .revents()
+                    .intersects(PollFlags::IN | PollFlags::HUP | PollFlags::ERR),
+                fds[1].revents().contains(PollFlags::IN),
+            )
+        };
+        if connection_ready {
+            match guard.read() {
+                Ok(_) => {}
+                // another reader consumed the data
+                Err(WaylandError::Io(e)) if e.kind() == ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e.into()),
+            }
+        } else {
+            drop(guard);
+        }
+        if wake_ready {
+            let mut buf = [0u8; 64];
+            loop {
+                match (&self.wake).read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+                    Err(e) => return Err(Error::Io(e)),
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A buffer of a surface leased for drawing one frame; [`BufferLease::present`] commits it.
+pub struct BufferLease<'a> {
+    connection: &'a mut Connection,
+    surface: SurfaceId,
+    slot: usize,
+    serial: u32,
+    logical: (u32, u32),
+    scale: Scale,
+}
+
+impl BufferLease<'_> {
+    pub fn layout(&self) -> BufferLayout {
+        self.slot_ref().layout
+    }
+
+    /// The size of the frame in logical points.
+    pub fn logical_size(&self) -> (u32, u32) {
+        self.logical
+    }
+
+    pub fn scale(&self) -> Scale {
+        self.scale
+    }
+
+    /// The configure this frame answers.
+    pub fn serial(&self) -> u32 {
+        self.serial
+    }
+
+    pub fn pixels_mut(&mut self) -> &mut [u8] {
+        let (surface, slot) = (self.surface, self.slot);
+        self.connection
+            .state
+            .surface_mut(surface)
+            .expect("a leased surface lives while the lease does")
+            .slots[slot]
+            .pixels_mut()
+    }
+
+    fn slot_ref(&self) -> &Slot {
+        &self
+            .connection
+            .state
+            .surface(self.surface)
+            .expect("a leased surface lives while the lease does")
+            .slots[self.slot]
+    }
+
+    /// Show the whole buffer.
+    pub fn present(self) -> Result<(), Error> {
+        self.present_damage(None)
+    }
+
+    /// Show the buffer, telling the compositor only `damage` changed since the frame before; `None` for all of it. The
+    /// lease holds the connection, so no configure arrives between the lease and the present: the buffer answers the
+    /// latest one, which is acknowledged with it.
+    pub fn present_damage(self, damage: Option<&[PixelRect]>) -> Result<(), Error> {
+        let qh = self.connection.queue.handle();
+        let surf = self.connection.state.surface_mut(self.surface)?;
+        if let Some(serial) = surf.serials.present()? {
+            surf.role.xdg().ack_configure(serial);
+        }
+        let slot = &mut surf.slots[self.slot];
+        slot.busy = true;
+        let layout = slot.layout;
+        surf.wl.attach(Some(&slot.buffer), 0, 0);
+        match (&surf.viewport, self.scale.integer()) {
+            (Some(viewport), _) => {
+                surf.wl.set_buffer_scale(1);
+                viewport.set_destination(clamp_i32(self.logical.0), clamp_i32(self.logical.1));
+            }
+            (None, Some(n)) => surf.wl.set_buffer_scale(n),
+            (None, None) => unreachable!("a surface without a viewport is drawn at a whole scale"),
+        }
+        match damage {
+            None => surf.wl.damage_buffer(0, 0, i32::MAX, i32::MAX),
+            Some(rects) => {
+                for r in rects.iter().filter_map(|r| r.clamp(layout)) {
+                    surf.wl
+                        .damage_buffer(r.x as i32, r.y as i32, r.width as i32, r.height as i32);
+                }
+            }
+        }
+        surf.wl.frame(&qh, self.surface);
+        surf.wl.commit();
+        self.connection.flush()
+    }
+}
+
+fn clamp_i32(v: u32) -> i32 {
+    i32::try_from(v).unwrap_or(i32::MAX)
+}
+
+impl State {
+    fn next_id(&mut self) -> SurfaceId {
+        self.next_surface += 1;
+        SurfaceId(self.next_surface)
+    }
+
+    fn add_surface(&mut self, id: SurfaceId, wl: WlSurface, role: Role, qh: &QueueHandle<State>) {
+        let (viewport, fractional) = match &self.scaling {
+            Some((manager, viewporter)) => (
+                Some(viewporter.get_viewport(&wl, qh, ())),
+                Some(manager.get_fractional_scale(&wl, qh, id)),
+            ),
+            None => (None, None),
+        };
+        // the initial commit without a buffer asks for the first configure
+        wl.commit();
+        self.surfaces.push(Surface {
+            id,
+            wl,
+            role,
+            viewport,
+            fractional,
+            fractional_scale: None,
+            preferred_scale: None,
+            entered: Vec::new(),
+            scale: Scale::ONE,
+            serials: Serials::default(),
+            slots: Vec::new(),
+            next_slot: 0,
+        });
+    }
+
+    fn surface(&self, id: SurfaceId) -> Result<&Surface, Error> {
+        self.surfaces
+            .iter()
+            .find(|s| s.id == id)
+            .ok_or(Error::UnknownSurface)
+    }
+
+    fn surface_mut(&mut self, id: SurfaceId) -> Result<&mut Surface, Error> {
+        self.surfaces
+            .iter_mut()
+            .find(|s| s.id == id)
+            .ok_or(Error::UnknownSurface)
+    }
+
+    fn toplevel(&self, window: Toplevel) -> Result<&XdgToplevel, Error> {
+        match &self.surface(window.0)?.role {
+            Role::Toplevel { toplevel, .. } => Ok(toplevel),
+            Role::Popup { .. } => unreachable!("a Toplevel handle names a toplevel"),
+        }
+    }
+
+    fn fail(&mut self, e: Error) {
+        self.fault.get_or_insert(e);
+    }
+
+    fn bind_output(
+        &mut self,
+        registry: &WlRegistry,
+        qh: &QueueHandle<State>,
+        name: u32,
+        version: u32,
+    ) {
+        let id = OutputId(name);
+        // version 4 adds the name and description
+        let wl = registry.bind::<WlOutput, _, _>(name, version.min(4), qh, id);
+        self.outputs.push(Output {
+            registry_name: name,
+            wl,
+            info: OutputBuilder::new(id),
+        });
+    }
+
+    /// Report surfaces whose scale changed since they were last drawn.
+    fn update_scales(&mut self) {
+        let fractional = self.scaling.is_some();
+        for surf in &mut self.surfaces {
+            let sources = ScaleSources {
+                fractional: surf.fractional_scale,
+                preferred: surf.preferred_scale,
+                entered: surf
+                    .entered
+                    .iter()
+                    .filter_map(|id| self.outputs.iter().find(|o| o.info.current.id == *id))
+                    .map(|o| o.info.current.scale)
+                    .collect(),
+            };
+            let scale = sources.resolve(fractional);
+            if scale != surf.scale {
+                surf.scale = scale;
+                self.events.push(Event::ScaleChanged {
+                    surface: surf.id,
+                    scale,
+                });
+            }
+        }
+    }
+
+    fn repeat_keys(&mut self, now: Instant) {
+        let (Some(surface), Some(t)) = (self.key_focus, &self.translator) else {
+            return;
+        };
+        if let Some(code) = self.repeat.due(now) {
+            let k = t.translate(code);
+            self.events.push(Event::Keyboard {
+                surface,
+                event: KeyboardEvent::Key {
+                    code,
+                    pressed: true,
+                    repeat: true,
+                    keysym: k.keysym,
+                    character: k.character,
+                    mods: k.mods,
+                },
+            });
+        }
+    }
+
+    fn surface_of(&self, wl: &WlSurface) -> Option<SurfaceId> {
+        wl.data::<SurfaceId>().copied()
+    }
+}
+
+delegate_noop!(State: WlCompositor);
+delegate_noop!(State: ignore WlShm);
+delegate_noop!(State: ignore WlShmPool);
+delegate_noop!(State: XdgPositioner);
+delegate_noop!(State: WpFractionalScaleManagerV1);
+delegate_noop!(State: WpViewporter);
+delegate_noop!(State: WpViewport);
+delegate_noop!(State: ZxdgDecorationManagerV1);
+delegate_noop!(State: XdgActivationV1);
+delegate_noop!(State: WpCursorShapeManagerV1);
+delegate_noop!(State: WpCursorShapeDeviceV1);
+
+impl Dispatch<WlRegistry, GlobalListContents> for State {
+    fn event(
+        state: &mut Self,
+        registry: &WlRegistry,
+        event: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &WlConnection,
+        qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_registry::Event::Global {
+                name,
+                interface,
+                version,
+            } if interface == "wl_output" => {
+                state.bind_output(registry, qh, name, version);
+            }
+            wl_registry::Event::GlobalRemove { name } => {
+                if let Some(i) = state.outputs.iter().position(|o| o.registry_name == name) {
+                    let output = state.outputs.remove(i);
+                    if output.wl.version() >= 3 {
+                        output.wl.release();
+                    }
+                    for s in &mut state.surfaces {
+                        s.entered.retain(|id| *id != OutputId(name));
+                    }
+                    state.events.push(Event::OutputsChanged);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WlOutput, OutputId> for State {
+    fn event(
+        state: &mut Self,
+        _: &WlOutput,
+        event: wl_output::Event,
+        id: &OutputId,
+        _: &WlConnection,
+        _: &QueueHandle<Self>,
+    ) {
+        let Some(output) = state.outputs.iter_mut().find(|o| o.info.current.id == *id) else {
+            return;
+        };
+        let pending = output.info.pending();
+        match event {
+            wl_output::Event::Scale { factor } => match Scale::from_integer(factor) {
+                Some(scale) => pending.scale = scale,
+                None => state.fail(Error::InvalidScale),
+            },
+            wl_output::Event::Mode {
+                flags: WEnum::Value(flags),
+                width,
+                height,
+                ..
+            } if flags.contains(wl_output::Mode::Current) => {
+                pending.mode = u32::try_from(width).ok().zip(u32::try_from(height).ok());
+            }
+            wl_output::Event::Name { name } => pending.name = Some(name),
+            wl_output::Event::Description { description } => {
+                pending.description = Some(description)
+            }
+            wl_output::Event::Done if output.info.done() => {
+                state.events.push(Event::OutputsChanged)
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WlSurface, SurfaceId> for State {
+    fn event(
+        state: &mut Self,
+        _: &WlSurface,
+        event: wl_surface::Event,
+        id: &SurfaceId,
+        _: &WlConnection,
+        _: &QueueHandle<Self>,
+    ) {
+        let output_id = |o: &WlOutput| o.data::<OutputId>().copied();
+        let Ok(surf) = state.surface_mut(*id) else {
+            return;
+        };
+        match event {
+            wl_surface::Event::Enter { output } => {
+                if let Some(o) = output_id(&output).filter(|o| !surf.entered.contains(o)) {
+                    surf.entered.push(o);
+                }
+            }
+            wl_surface::Event::Leave { output } => {
+                if let Some(o) = output_id(&output) {
+                    surf.entered.retain(|e| *e != o);
+                }
+            }
+            wl_surface::Event::PreferredBufferScale { factor } => match Scale::from_integer(factor)
+            {
+                Some(scale) => surf.preferred_scale = Some(scale),
+                None => state.fail(Error::InvalidScale),
+            },
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WpFractionalScaleV1, SurfaceId> for State {
+    fn event(
+        state: &mut Self,
+        _: &WpFractionalScaleV1,
+        event: wp_fractional_scale_v1::Event,
+        id: &SurfaceId,
+        _: &WlConnection,
+        _: &QueueHandle<Self>,
+    ) {
+        let wp_fractional_scale_v1::Event::PreferredScale { scale } = event else {
+            return;
+        };
+        match (Scale::from_120ths(scale), state.surface_mut(*id)) {
+            (Some(scale), Ok(surf)) => surf.fractional_scale = Some(scale),
+            (None, _) => state.fail(Error::InvalidScale),
+            (_, Err(_)) => {}
+        }
+    }
+}
+
+impl Dispatch<WlCallback, SurfaceId> for State {
+    fn event(
+        state: &mut Self,
+        _: &WlCallback,
+        event: wl_callback::Event,
+        id: &SurfaceId,
+        _: &WlConnection,
+        _: &QueueHandle<Self>,
+    ) {
+        let wl_callback::Event::Done { callback_data } = event else {
+            return;
+        };
+        if state.surface(*id).is_ok() {
+            state.events.push(Event::Frame(FrameCallback {
+                surface: *id,
+                time: callback_data,
+            }));
+        }
+    }
+}
+
+impl Dispatch<WlBuffer, SlotTag> for State {
+    fn event(
+        state: &mut Self,
+        _: &WlBuffer,
+        event: wl_buffer::Event,
+        tag: &SlotTag,
+        _: &WlConnection,
+        _: &QueueHandle<Self>,
+    ) {
+        let wl_buffer::Event::Release = event else {
+            return;
+        };
+        if let Some(slot) = state
+            .surface_mut(SurfaceId(tag.surface))
+            .ok()
+            .and_then(|surf| surf.slots.iter_mut().find(|s| s.tag == *tag))
+        {
+            slot.busy = false;
+        }
+    }
+}
+
+impl Dispatch<XdgWmBase, ()> for State {
+    fn event(
+        _: &mut Self,
+        wm_base: &XdgWmBase,
+        event: xdg_wm_base::Event,
+        _: &(),
+        _: &WlConnection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let xdg_wm_base::Event::Ping { serial } = event {
+            wm_base.pong(serial);
+        }
+    }
+}
+
+impl Dispatch<XdgSurface, SurfaceId> for State {
+    fn event(
+        state: &mut Self,
+        _: &XdgSurface,
+        event: xdg_surface::Event,
+        id: &SurfaceId,
+        _: &WlConnection,
+        _: &QueueHandle<Self>,
+    ) {
+        let xdg_surface::Event::Configure { serial } = event else {
+            return;
+        };
+        let Ok(surf) = state.surface_mut(*id) else {
+            return;
+        };
+        if let Err(e) = surf.serials.receive(serial) {
+            return state.fail(e);
+        }
+        let event = match &mut surf.role {
+            Role::Toplevel {
+                pending,
+                decorations,
+                current,
+                ..
+            } => {
+                let configure = WindowConfigure {
+                    serial,
+                    size: pending.size,
+                    bounds: pending.bounds,
+                    states: pending.states,
+                    decorations: *decorations,
+                };
+                *current = Some(configure);
+                Event::Configure {
+                    window: Toplevel(*id),
+                    configure,
+                }
+            }
+            Role::Popup {
+                pending, current, ..
+            } => {
+                let Some((x, y, width, height)) = *pending else {
+                    return state.fail(Error::Protocol("popup configured without a placement"));
+                };
+                let configure = PopupConfigure {
+                    serial,
+                    x,
+                    y,
+                    width,
+                    height,
+                };
+                *current = Some(configure);
+                Event::PopupConfigure {
+                    popup: Popup(*id),
+                    configure,
+                }
+            }
+        };
+        state.events.push(event);
+    }
+}
+
+impl Dispatch<XdgToplevel, SurfaceId> for State {
+    fn event(
+        state: &mut Self,
+        _: &XdgToplevel,
+        event: xdg_toplevel::Event,
+        id: &SurfaceId,
+        _: &WlConnection,
+        _: &QueueHandle<Self>,
+    ) {
+        let Ok(Surface {
+            role: Role::Toplevel { pending, .. },
+            ..
+        }) = state.surface_mut(*id)
+        else {
+            return;
+        };
+        match event {
+            xdg_toplevel::Event::Configure {
+                width,
+                height,
+                states,
+            } => match wire_size(width, height) {
+                Ok(size) => {
+                    pending.size = size;
+                    pending.states = WindowStates::from_wire(&states);
+                }
+                Err(e) => state.fail(e),
+            },
+            xdg_toplevel::Event::ConfigureBounds { width, height } => {
+                match wire_size(width, height) {
+                    Ok(bounds) => pending.bounds = bounds,
+                    Err(e) => state.fail(e),
+                }
+            }
+            xdg_toplevel::Event::Close => state.events.push(Event::Close(Toplevel(*id))),
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<ZxdgToplevelDecorationV1, SurfaceId> for State {
+    fn event(
+        state: &mut Self,
+        _: &ZxdgToplevelDecorationV1,
+        event: zxdg_toplevel_decoration_v1::Event,
+        id: &SurfaceId,
+        _: &WlConnection,
+        _: &QueueHandle<Self>,
+    ) {
+        let zxdg_toplevel_decoration_v1::Event::Configure { mode } = event else {
+            return;
+        };
+        if let Ok(Surface {
+            role: Role::Toplevel { decorations, .. },
+            ..
+        }) = state.surface_mut(*id)
+        {
+            *decorations = match mode {
+                WEnum::Value(zxdg_toplevel_decoration_v1::Mode::ServerSide) => Decorations::Server,
+                _ => Decorations::Client,
+            };
+        }
+    }
+}
+
+impl Dispatch<XdgPopup, SurfaceId> for State {
+    fn event(
+        state: &mut Self,
+        _: &XdgPopup,
+        event: xdg_popup::Event,
+        id: &SurfaceId,
+        _: &WlConnection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            xdg_popup::Event::Configure {
+                x,
+                y,
+                width,
+                height,
+            } => {
+                let size = match wire_size(width, height) {
+                    Ok(Some(size)) => size,
+                    Ok(None) => {
+                        return state.fail(Error::Protocol("popup configured with an empty size"))
+                    }
+                    Err(e) => return state.fail(e),
+                };
+                if let Ok(Surface {
+                    role: Role::Popup { pending, .. },
+                    ..
+                }) = state.surface_mut(*id)
+                {
+                    *pending = Some((x, y, size.0, size.1));
+                }
+            }
+            xdg_popup::Event::PopupDone => state.events.push(Event::PopupDone(Popup(*id))),
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<XdgActivationTokenV1, SurfaceId> for State {
+    fn event(
+        state: &mut Self,
+        token: &XdgActivationTokenV1,
+        event: xdg_activation_token_v1::Event,
+        id: &SurfaceId,
+        _: &WlConnection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let xdg_activation_token_v1::Event::Done { token: value } = event {
+            if let (Some(activation), Ok(surf)) = (&state.activation, state.surface(*id)) {
+                activation.activate(value, &surf.wl);
+            }
+            token.destroy();
+        }
+    }
+}
+
+impl Dispatch<WlSeat, ()> for State {
+    fn event(
+        state: &mut Self,
+        seat: &WlSeat,
+        event: wl_seat::Event,
+        _: &(),
+        _: &WlConnection,
+        qh: &QueueHandle<Self>,
+    ) {
+        let wl_seat::Event::Capabilities {
+            capabilities: WEnum::Value(caps),
+        } = event
+        else {
+            return;
+        };
+        let has_pointer = caps.contains(wl_seat::Capability::Pointer);
+        if has_pointer && state.pointer.is_none() {
+            let pointer = seat.get_pointer(qh, ());
+            state.cursor_device = state
+                .cursor_shape
+                .as_ref()
+                .map(|m| m.get_pointer(&pointer, qh, ()));
+            state.pointer = Some(pointer);
+        } else if let Some(pointer) = state.pointer.take_if(|_| !has_pointer) {
+            if let Some(device) = state.cursor_device.take() {
+                device.destroy();
+            }
+            if pointer.version() >= 3 {
+                pointer.release();
+            }
+            if let Some((surface, event)) = state.pointer_tracker.leave() {
+                state.events.push(Event::Pointer { surface, event });
+            }
+        }
+        let has_keyboard = caps.contains(wl_seat::Capability::Keyboard);
+        if has_keyboard && state.keyboard.is_none() {
+            state.keyboard = Some(seat.get_keyboard(qh, ()));
+        } else if let Some(keyboard) = state.keyboard.take_if(|_| !has_keyboard) {
+            if keyboard.version() >= 3 {
+                keyboard.release();
+            }
+            state.repeat.clear();
+            if let Some(surface) = state.key_focus.take() {
+                state.events.push(Event::Keyboard {
+                    surface,
+                    event: KeyboardEvent::Leave,
+                });
+            }
+        }
+    }
+}
+
+impl Dispatch<WlPointer, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &WlPointer,
+        event: wl_pointer::Event,
+        _: &(),
+        _: &WlConnection,
+        _: &QueueHandle<Self>,
+    ) {
+        let found = match event {
+            wl_pointer::Event::Enter {
+                serial,
+                surface,
+                surface_x,
+                surface_y,
+            } => {
+                state.pointer_enter_serial = Some(serial);
+                state.surface_of(&surface).map(|s| {
+                    state
+                        .pointer_tracker
+                        .enter(s, Point::new(surface_x, surface_y))
+                })
+            }
+            wl_pointer::Event::Leave { .. } => state.pointer_tracker.leave(),
+            wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => state
+                .pointer_tracker
+                .motion(Point::new(surface_x, surface_y)),
+            wl_pointer::Event::Button {
+                serial,
+                button,
+                state: WEnum::Value(button_state),
+                ..
+            } => {
+                state.last_serial = Some(serial);
+                state
+                    .pointer_tracker
+                    .button(button, button_state == ButtonState::Pressed)
+            }
+            wl_pointer::Event::Axis {
+                axis: WEnum::Value(axis),
+                value,
+                ..
+            } => state
+                .pointer_tracker
+                .scroll(axis == Axis::VerticalScroll, value),
+            _ => None,
+        };
+        if let Some((surface, event)) = found {
+            state.events.push(Event::Pointer { surface, event });
+        }
+    }
+}
+
+impl Dispatch<WlKeyboard, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &WlConnection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_keyboard::Event::Keymap {
+                format: WEnum::Value(wl_keyboard::KeymapFormat::XkbV1),
+                fd,
+                size,
+            } => match Translator::from_fd(fd, size as usize) {
+                Ok(t) => state.translator = Some(t),
+                Err(e) => state.fail(e),
+            },
+            wl_keyboard::Event::Enter {
+                serial, surface, ..
+            } => {
+                state.last_serial = Some(serial);
+                state.key_focus = state.surface_of(&surface);
+                if let Some(surface) = state.key_focus {
+                    state.events.push(Event::Keyboard {
+                        surface,
+                        event: KeyboardEvent::Enter,
+                    });
+                }
+            }
+            wl_keyboard::Event::Leave { .. } => {
+                state.repeat.clear();
+                if let Some(surface) = state.key_focus.take() {
+                    state.events.push(Event::Keyboard {
+                        surface,
+                        event: KeyboardEvent::Leave,
+                    });
+                }
+            }
+            wl_keyboard::Event::Key {
+                serial,
+                key,
+                state: WEnum::Value(key_state),
+                ..
+            } => {
+                state.last_serial = Some(serial);
+                let pressed = key_state == KeyState::Pressed;
+                let (Some(surface), Some(t)) = (state.key_focus, &state.translator) else {
+                    return;
+                };
+                if pressed {
+                    if t.repeats(key) {
+                        state.repeat.press(key, Instant::now());
+                    }
+                } else {
+                    state.repeat.release(key);
+                }
+                let k = t.translate(key);
+                state.events.push(Event::Keyboard {
+                    surface,
+                    event: KeyboardEvent::Key {
+                        code: key,
+                        pressed,
+                        repeat: false,
+                        keysym: k.keysym,
+                        character: k.character,
+                        mods: k.mods,
+                    },
+                });
+            }
+            wl_keyboard::Event::Modifiers {
+                mods_depressed,
+                mods_latched,
+                mods_locked,
+                group,
+                ..
+            } => {
+                if let Some(t) = state.translator.as_mut() {
+                    t.update_modifiers(mods_depressed, mods_latched, mods_locked, group);
+                }
+            }
+            wl_keyboard::Event::RepeatInfo { rate, delay } => state.repeat.set_info(rate, delay),
+            _ => {}
+        }
+    }
+}

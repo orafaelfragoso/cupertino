@@ -1,14 +1,15 @@
 //! Layer rules of the workspace. A crate declares its layer in its manifest
 //! (`[package.metadata.cupertino] layer = "<layer>"`); [`RULES`] checks those layers. [`TARGET`] classifies every crate
 //! into the twelve target layers and [`TARGET_RULES`] checks that classification, excusing the edges in
-//! [`TARGET_EXCEPTIONS`]. Both views also fail on any chain of dependencies that [`DENIED_PATHS`] forbids.
+//! [`TARGET_EXCEPTIONS`]. Both views also fail on any chain of dependencies that [`DENIED_PATHS`] forbids, and the
+//! check fails on any chain of normal dependencies, external crates included, that [`DENIED_CRATES`] forbids.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 mod graph;
 
-pub use graph::{denied_paths, dot};
+pub use graph::{denied_crate_paths, denied_paths, dot};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Layer {
@@ -155,6 +156,18 @@ pub const TARGET_RULES: Rules = &[
 /// reaches the server, a shell process or a daemon.
 pub const DENIED_PATHS: &[(Layer, &[Layer])] = &[(Ui, &[Core, Shell, Services])];
 
+/// Crates that must not reach these crates through any chain of normal dependencies: the public transport speaks
+/// standard Wayland protocols only, never the desktop's private ones or another compositor's extensions.
+pub const DENIED_CRATES: &[(&str, &[&str])] = &[(
+    "cupertino-wayland-client",
+    &[
+        "cupertino-protocols",
+        "wayland-protocols-wlr",
+        "wayland-protocols-misc",
+        "wayland-protocols-plasma",
+    ],
+)];
+
 /// Whether `rules` let a crate of layer `from` depend on a crate of layer `to`.
 pub fn allows(rules: Rules, from: Layer, to: Layer) -> bool {
     rules
@@ -273,6 +286,7 @@ pub const TARGET: &[(&str, Layer)] = &[
     ("cupertino-theme", Foundation),
     ("cupertino-thumbnails", Foundation),
     ("cupertino-typeahead", Foundation),
+    ("cupertino-wayland-client", Transport),
     ("cupertino-windowmanager", Shell),
     ("cupertino-wm", Models),
     ("xkbcommon", Foundation),

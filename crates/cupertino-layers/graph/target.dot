@@ -1,6 +1,6 @@
 // cupertino-layers --graph target
-// 50 crates, 159 internal dependencies
-// per layer: foundation 11, models 7, platform 7, protocol 2, transport 1, render 4, ui 0, core 1, shell 9, services 4, apps 2, tools 2
+// 51 crates, 161 internal dependencies
+// per layer: foundation 11, models 7, platform 7, protocol 2, transport 2, render 4, ui 0, core 1, shell 9, services 4, apps 2, tools 2
 // forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden normal edge cupertino-files (apps) -> cupertino-icons (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden dev edge cupertino-server (core) -> cupertino-client (transport), permanent exception (compositor): server integration tests connect real shell clients
@@ -51,8 +51,9 @@ digraph "target" {
     "cupertino-protocols";
   }
   subgraph "cluster_transport" {
-    label="transport (1)";
+    label="transport (2)";
     "cupertino-client";
+    "cupertino-wayland-client";
   }
   subgraph "cluster_render" {
     label="render (4)";
@@ -246,6 +247,8 @@ digraph "target" {
   "cupertino-text-field" -> "cupertino-defaults";
   "cupertino-text-field" -> "cupertino-keyboard" [color=orange, style=dashed];
   "cupertino-theme" -> "cupertino-animation";
+  "cupertino-wayland-client" -> "cupertino-geometry";
+  "cupertino-wayland-client" -> "xkbcommon";
   "cupertino-windowmanager" -> "cupertino-defaults";
   "cupertino-windowmanager" -> "cupertino-protocols";
   "cupertino-windowmanager" -> "cupertino-stage";

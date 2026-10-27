@@ -15,6 +15,7 @@
 //! | `show_menu_bar`, `decorations`, `closing_animation`, `mouse_acceleration`, `natural_scrolling`, `shake_to_locate` | boolean |
 //! | `minimize_effect` | `warp`, `funnel`, `scale`, `plain` (also `none`) |
 //! | `mouse_speed`, `trackpad_speed` | tracking speed, 0 to 3 |
+//! | `mouse_dpi` | object: mouse key ([`mouse_dpi_key`]) → resolution in dots per inch, 50 to 32000 |
 //! | `cursor_size` | cursor scale |
 //! | `cursor_fill`, `cursor_outline` | `#rrggbb` or `#rrggbbaa` |
 //! | `shell` | list of `{"name": …, "command": [program, args…]}`, commands not empty |
@@ -99,6 +100,8 @@ pub struct CompositorSettings {
     pub hot_corner_dwell: Option<f64>,
     pub mouse_speed: Option<f64>,
     pub trackpad_speed: Option<f64>,
+    /// Resolution the user stored per mouse, by [`mouse_dpi_key`].
+    pub mouse_dpi: Option<BTreeMap<String, u32>>,
     pub mouse_acceleration: Option<bool>,
     pub natural_scrolling: Option<bool>,
     pub cursor_size: Option<f64>,
@@ -108,6 +111,14 @@ pub struct CompositorSettings {
     pub shake_to_locate: Option<bool>,
     pub shell: Option<Vec<ShellEntry>>,
     pub screenshot: Option<Vec<String>>,
+}
+
+/// Smallest and largest resolution a mouse can be given, in dots per inch.
+pub const MOUSE_DPI_RANGE: std::ops::RangeInclusive<u32> = 50..=32_000;
+
+/// The key of a mouse in `mouse_dpi`: USB vendor and product ids in hex, and the device name.
+pub fn mouse_dpi_key(vendor: u32, product: u32, name: &str) -> String {
+    format!("{vendor:04x}:{product:04x}:{name}")
 }
 
 /// An sRGB colour written `#rrggbb` or `#rrggbbaa`.
@@ -266,6 +277,34 @@ const KEYS: &[JsonKey] = &[
     json_key!(hot_corner_dwell, number, number_value),
     json_key!(mouse_speed, number, number_value),
     json_key!(trackpad_speed, number, number_value),
+    json_key!(
+        mouse_dpi,
+        |v: &Value| {
+            let obj = v
+                .as_object()
+                .ok_or_else(|| format!("expected an object of mouse to dpi, got {v}"))?;
+            obj.iter()
+                .map(|(mouse, dpi)| {
+                    dpi.as_u64()
+                        .and_then(|d| u32::try_from(d).ok())
+                        .filter(|d| MOUSE_DPI_RANGE.contains(d))
+                        .map(|d| (mouse.clone(), d))
+                        .ok_or_else(|| {
+                            format!(
+                                "the dpi of {mouse} is {dpi}, not a whole number from {} to {}",
+                                MOUSE_DPI_RANGE.start(),
+                                MOUSE_DPI_RANGE.end()
+                            )
+                        })
+                })
+                .collect::<Result<BTreeMap<_, _>, _>>()
+        },
+        |m: &BTreeMap<String, u32>| Value::Object(
+            m.iter()
+                .map(|(k, v)| (k.clone(), Value::from(*v)))
+                .collect()
+        )
+    ),
     json_key!(mouse_acceleration, boolean, bool_value),
     json_key!(natural_scrolling, boolean, bool_value),
     json_key!(cursor_size, number, number_value),
@@ -402,6 +441,25 @@ impl CompositorSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_resolution_of_each_mouse_is_stored_by_its_key() {
+        let key = mouse_dpi_key(0x46d, 0xc077, "USB Optical Mouse");
+        assert_eq!(key, "046d:c077:USB Optical Mouse");
+        let (read, problems) = CompositorSettings::parse(
+            r#"{"mouse_dpi": {"046d:c077:USB Optical Mouse": 1600, "1:2:Slow": 49, "1:3:Half": 800.5}}"#,
+            None,
+        );
+        assert_eq!(read.mouse_dpi, None);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].message.contains("1:2:Slow"), "{problems:?}");
+        let (read, problems) = CompositorSettings::parse(
+            r#"{"mouse_dpi": {"046d:c077:USB Optical Mouse": 1600}}"#,
+            None,
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(read.mouse_dpi, Some([(key, 1600)].into()));
+    }
 
     #[test]
     fn keys_are_read_with_their_types() {

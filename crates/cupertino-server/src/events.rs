@@ -28,8 +28,8 @@ use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Point, SERIAL_COUNTER};
 
 use cupertino_input::{
-    Disposition, GestureEvent, GestureKind, GestureOutput, Outcome as GestureOutcome, PointerAccel,
-    ScrollAxisAccel, ScrollPhase,
+    Disposition, GestureEvent, GestureKind, GestureOutput, MouseAccel, Outcome as GestureOutcome,
+    PointerAccel, ScrollAxisAccel, ScrollPhase,
 };
 use cupertino_protocols::server::cupertino_dock_v1::Gesture as DockGesture;
 
@@ -58,11 +58,28 @@ enum KeyRoute {
     Plan(ActionPlan),
 }
 
+/// How a device's motion is accelerated.
+#[derive(Clone, Debug)]
+enum Accel {
+    Pad(PointerAccel),
+    Mouse(MouseAccel),
+}
+
+/// What tells a mouse's resolution: the key of the user's stored value and the hardware database's `MOUSE_DPI`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MouseIdentity {
+    /// `mouse_dpi_key` of the device.
+    pub key: Option<String>,
+    /// The `MOUSE_DPI` property of the device node.
+    pub hwdb_dpi: Option<String>,
+}
+
 /// Acceleration state of one relative pointing device.
 #[derive(Clone, Debug)]
 pub struct PointerDevice {
     touchpad: bool,
-    accel: PointerAccel,
+    identity: MouseIdentity,
+    accel: Accel,
     last_usec: Option<u64>,
     /// Scroll accelerators (horizontal, vertical) of a device with a scroll resolution: only the
     /// touchpad. A wheel has none: the design gives a generic wheel, high-resolution or
@@ -75,38 +92,46 @@ pub struct PointerDevice {
 }
 
 impl PointerDevice {
-    /// Touchpads use the touchpad curve family and report rate; mice the default acceleration table
-    /// that a generic mouse gets. Both take counts at the design's 400 dpi
-    /// fallback: a mouse's raw counts, and the touchpad model's motion (`MM_PER_COUNT` per count).
-    /// Touchpad finger scrolling is accelerated with the trackpad scroll curves.
+    /// Touchpads use the touchpad curve family and report rate, taking the touchpad model's motion
+    /// (`MM_PER_COUNT` per count). Mice use the default acceleration table on the speed of the hand
+    /// in inches per second, from counts, the resolution of the device and the event timestamps. Touchpad
+    /// finger scrolling is accelerated with the trackpad scroll curves.
     pub fn new(touchpad: bool, cfg: &PointerSettings) -> Self {
+        Self::with_identity(touchpad, cfg, MouseIdentity::default())
+    }
+
+    /// Like [`PointerDevice::new`] for a mouse that `identity` tells its resolution of.
+    pub fn with_identity(touchpad: bool, cfg: &PointerSettings, identity: MouseIdentity) -> Self {
         let (accel, scroll) = if touchpad {
             let pad = cupertino_input::TouchpadSettings {
                 tracking_speed: cfg.trackpad_speed,
                 ..cupertino_input::TouchpadSettings::default()
             };
             (
-                pad.pointer_accel(),
+                Accel::Pad(pad.pointer_accel()),
                 pad.scroll_accel().map(|axis| [axis.clone(), axis]),
             )
-        } else if cfg.mouse_acceleration {
-            let curve = cupertino_input::TableCurve::new(
-                &cupertino_input::AccelTable::default_table(),
-                cfg.mouse_speed,
-            );
-            (
-                PointerAccel::with_curve(
-                    curve.map(cupertino_input::AccelCurve::Table),
-                    cupertino_input::pointer::DEFAULT_RESOLUTION_DPI,
-                    0,
-                ),
-                None,
-            )
         } else {
-            (PointerAccel::linear(cfg.mouse_speed), None)
+            let stored = identity
+                .key
+                .as_ref()
+                .and_then(|key| cfg.mouse_dpi.get(key))
+                .copied();
+            let dpi = cupertino_input::resolve_dpi(stored, identity.hwdb_dpi.as_deref());
+            let mouse = if cfg.mouse_acceleration {
+                let curve = cupertino_input::TableCurve::new(
+                    &cupertino_input::AccelTable::default_table(),
+                    cfg.mouse_speed,
+                );
+                MouseAccel::new(curve.map(cupertino_input::AccelCurve::Table), dpi)
+            } else {
+                MouseAccel::linear(cfg.mouse_speed, dpi)
+            };
+            (Accel::Mouse(mouse), None)
         };
         Self {
             touchpad,
+            identity,
             accel,
             last_usec: None,
             scroll,
@@ -117,7 +142,7 @@ impl PointerDevice {
 
     /// Take new tracking settings: the device starts over as [`PointerDevice::new`] made it.
     pub fn reconfigure(&mut self, cfg: &PointerSettings) {
-        *self = Self::new(self.touchpad, cfg);
+        *self = Self::with_identity(self.touchpad, cfg, self.identity.clone());
     }
 
     /// Accelerated delta for unaccelerated `delta` at `usec`.
@@ -126,7 +151,10 @@ impl PointerDevice {
             .last_usec
             .map_or(0.0, |last| usec.saturating_sub(last) as f64 / 1000.0);
         self.last_usec = Some(usec);
-        self.accel.accelerate(delta.x, delta.y, dt_ms).into()
+        match &mut self.accel {
+            Accel::Pad(pad) => pad.accelerate(delta.x, delta.y, dt_ms).into(),
+            Accel::Mouse(mouse) => mouse.accelerate(delta.x, delta.y, usec).into(),
+        }
     }
 
     /// Points to scroll for `counts` raw scroll counts on `axis` at `usec`: the accelerator's
@@ -202,6 +230,22 @@ pub struct PendingDrag {
 pub const BTN_LEFT: u32 = 0x110;
 pub const BTN_RIGHT: u32 = 0x111;
 
+/// The identity of a mouse for its resolution: its key in `mouse_dpi` and the hardware database's `MOUSE_DPI` of its
+/// node, when it has one.
+fn mouse_identity<D: Device>(device: &D) -> MouseIdentity {
+    let key = device.usb_id().map(|(product, vendor)| {
+        cupertino_defaults::compositor::mouse_dpi_key(vendor, product, &device.name())
+    });
+    #[cfg(feature = "udev")]
+    let hwdb_dpi = device
+        .syspath()
+        .and_then(|path| cupertino_devices::Device::from_syspath(&path).ok())
+        .and_then(|node| node.udev_property("MOUSE_DPI"));
+    #[cfg(not(feature = "udev"))]
+    let hwdb_dpi = None;
+    MouseIdentity { key, hwdb_dpi }
+}
+
 impl Cupertino {
     /// Logical modifiers of the keyboard (the primary modifier of the profile is `logo`).
     pub fn current_mods(&self) -> Mods {
@@ -223,9 +267,14 @@ impl Cupertino {
                 if device.has_capability(DeviceCapability::Pointer) =>
             {
                 let touchpad = device.has_capability(DeviceCapability::Gesture);
+                let identity = if touchpad {
+                    MouseIdentity::default()
+                } else {
+                    mouse_identity(&device)
+                };
                 self.pointer_devices.insert(
                     device.id(),
-                    PointerDevice::new(touchpad, &self.config.pointer),
+                    PointerDevice::with_identity(touchpad, &self.config.pointer, identity),
                 );
             }
             InputEvent::DeviceRemoved { device } => {
@@ -1408,20 +1457,44 @@ mod tests {
     #[test]
     fn pointer_devices_follow_the_settings() {
         let cfg = PointerSettings::default();
-        // 60 counts per event, default table at the default speed 0.6875: gain 1.30799… px per
-        // count (reference tool).
-        let mut mouse = PointerDevice::new(false, &cfg);
+        // 60 counts in one nominal period on a 400 dpi mouse, default table at the default speed: gain
+        // 1.30798… px per count (design value)
+        let at_400 = MouseIdentity {
+            key: Some("046d:c077:Mouse".into()),
+            hwdb_dpi: Some("*400".into()),
+        };
+        let mut mouse = PointerDevice::with_identity(false, &cfg, at_400.clone());
         assert!(
             (mouse.accelerate((60.0, 0.0).into(), 1_000).x - 60.0 * 1.3079891292521268).abs()
                 < 1e-9
         );
-        let linear = PointerSettings {
+        // a stored resolution wins over the database's: 1600 dpi moves a quarter of the counts' inches
+        let stored = PointerSettings {
+            mouse_dpi: [("046d:c077:Mouse".to_string(), 1600)].into(),
+            ..cfg.clone()
+        };
+        let mut same_hand = PointerDevice::with_identity(false, &stored, at_400);
+        let at_1600 = same_hand.accelerate((240.0, 0.0).into(), 1_000).x;
+        assert!(
+            (at_1600 - 60.0 * 1.3079891292521268).abs() < 1e-9,
+            "{at_1600}"
+        );
+        // acceleration off: a constant gain per count of a 400 dpi mouse
+        let flat = PointerSettings {
             mouse_acceleration: false,
             mouse_speed: 2.0,
             ..cfg.clone()
         };
+        let mut flat_400 = PointerDevice::with_identity(
+            false,
+            &flat,
+            MouseIdentity {
+                key: None,
+                hwdb_dpi: Some("400".into()),
+            },
+        );
         assert_eq!(
-            PointerDevice::new(false, &linear).accelerate((5.0, -3.0).into(), 0),
+            flat_400.accelerate((5.0, -3.0).into(), 0),
             (10.0, -6.0).into()
         );
         // Touchpads time their events: four report periods late is a quarter of the speed.

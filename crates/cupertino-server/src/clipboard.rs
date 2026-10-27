@@ -127,8 +127,6 @@ pub struct Clipboard {
     reading: Option<(String, RegistrationToken)>,
     captured: Vec<(String, Vec<u8>)>,
     total: usize,
-    /// The clipboard that was current when the session was locked, given back when it is unlocked.
-    kept_over_lock: Option<Arc<Snapshot>>,
 }
 
 impl Clipboard {
@@ -207,7 +205,6 @@ impl Cupertino {
         let generation = self.clipboard.generation + 1;
         self.clipboard = Clipboard {
             generation,
-            kept_over_lock: self.clipboard.kept_over_lock.take(),
             ..Clipboard::default()
         };
     }
@@ -326,55 +323,48 @@ impl Cupertino {
         set_data_device_selection(&self.display_handle, &self.seat, mime_types, snapshot);
     }
 
-    /// The session was locked: clipboard managers (data control) must not see or set the selections while it is, and
-    /// they get every change of a selection, so the selections are cleared. The clipboard is kept when the server
-    /// has a copy of it (its owner's types were all read, or it is the server's own copy) and comes back at the
-    /// unlock; the primary selection and a clipboard without a complete copy do not.
-    pub fn clipboard_session_locked(&mut self) {
-        let kept = match current_data_device_selection_userdata(&self.seat) {
+    /// The server's copy of the current clipboard: the kept snapshot, or the owner's types when all of them were read.
+    fn clipboard_copy(&self) -> Option<Arc<Snapshot>> {
+        match current_data_device_selection_userdata(&self.seat) {
             Some(snapshot) => Some(snapshot.clone()),
             None if self.clipboard.owner.is_some()
                 && self.clipboard.is_complete()
                 && !self.clipboard.captured.is_empty() =>
             {
-                Some(Arc::new(Snapshot::from_captured(std::mem::take(
-                    &mut self.clipboard.captured,
-                ))))
+                Some(Arc::new(Snapshot::from_captured(
+                    self.clipboard.captured.clone(),
+                )))
             }
             None => None,
-        };
-        self.clipboard_forget();
-        self.clipboard.kept_over_lock = kept;
-        self.clipboard_clear_selections();
+        }
     }
 
-    /// The session was unlocked: the clipboard kept over the lock is the clipboard again.
-    pub fn clipboard_session_unlocked(&mut self) {
-        let Some(snapshot) = self.clipboard.kept_over_lock.take() else {
-            return;
-        };
-        set_data_device_selection(
-            &self.display_handle,
-            &self.seat,
-            snapshot.mime_types(),
-            snapshot,
-        );
-    }
-
-    /// Something set a selection while the session is locked: it is cleared again once smithay has made it current,
-    /// which also cancels the source.
-    pub fn clipboard_set_while_locked(&mut self) {
-        self.loop_handle.insert_idle(|state| {
-            if state.session_lock.is_active() {
-                state.clipboard_forget();
-                state.clipboard_clear_selections();
+    /// A selection was set or cleared while the session is locked: nobody may. Once smithay has made it current, the
+    /// clipboard goes back to the server's copy of what it was (which also cancels the refused source); a primary
+    /// selection, which the server does not copy, is cleared.
+    pub fn clipboard_refuse_set_while_locked(&mut self, ty: SelectionTarget) {
+        let kept = (ty == SelectionTarget::Clipboard).then(|| self.clipboard_copy());
+        self.loop_handle.insert_idle(move |state| {
+            if !state.session_lock.is_active() {
+                return;
+            }
+            match kept {
+                Some(Some(snapshot)) => {
+                    state.clipboard_forget();
+                    set_data_device_selection(
+                        &state.display_handle,
+                        &state.seat,
+                        snapshot.mime_types(),
+                        snapshot,
+                    );
+                }
+                Some(None) => {
+                    state.clipboard_forget();
+                    clear_data_device_selection(&state.display_handle, &state.seat);
+                }
+                None => clear_primary_selection(&state.display_handle, &state.seat),
             }
         });
-    }
-
-    fn clipboard_clear_selections(&mut self) {
-        clear_data_device_selection(&self.display_handle, &self.seat);
-        clear_primary_selection(&self.display_handle, &self.seat);
     }
 
     /// Serve a paste of the kept clipboard from its snapshot (the selection's user data).

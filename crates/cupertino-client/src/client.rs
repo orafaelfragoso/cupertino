@@ -181,7 +181,8 @@ impl Client {
 
     /// [`Client::connect`] for a shell process the server started: the connection is the one the server made for the
     /// process (`WAYLAND_SOCKET`, else `WAYLAND_DISPLAY`), and `cupertino_shell_v1` is bound as well, so the session
-    /// observer reports the lock state and the roles the server gave the process can be asked for.
+    /// observer reports the lock state and the roles the server gave the process can be asked for. Unlike
+    /// [`Client::connect`] it requires the layer shell: a shell process fails at start on a server without it.
     pub fn connect_shell() -> Result<Client, ClientError> {
         Self::with(Connection::connect()?, true)
     }
@@ -215,8 +216,12 @@ impl Client {
             let early = conn.wait(Some(Duration::ZERO))?;
             (None, None, Some(appearance), SessionState::default(), early)
         };
+        let layer_shell = LayerShell::bind(&mut conn);
+        if shell_roles && layer_shell.is_none() {
+            return Err(ClientError::MissingGlobal("zwlr_layer_shell_v1"));
+        }
         let globals = Globals {
-            layer_shell: LayerShell::bind(&mut conn),
+            layer_shell,
             effects,
             shell,
             session_lock_manager: SessionLockManager::bind(&mut conn),

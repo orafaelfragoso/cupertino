@@ -102,6 +102,39 @@ impl PixelRect {
     }
 }
 
+/// More rectangles than this make a buffer forget what it missed.
+const MAX_MISSED: usize = 32;
+
+/// What a buffer misses of the frames shown since it last held one: `None` when its pixels are unknown.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Missed(Option<Vec<PixelRect>>);
+
+impl Missed {
+    pub(crate) fn rects(&self) -> Option<&[PixelRect]> {
+        self.0.as_deref()
+    }
+
+    /// The buffer holds the frame just shown.
+    pub(crate) fn shown(&mut self) {
+        self.0 = Some(Vec::new());
+    }
+
+    /// Another buffer of the same layout showed a frame that changed `damage`; `None` for all of it.
+    pub(crate) fn passed(&mut self, damage: Option<&[PixelRect]>) {
+        self.0 = match (self.0.take(), damage) {
+            (Some(mut missed), Some(rects)) if missed.len() + rects.len() <= MAX_MISSED => {
+                missed.extend_from_slice(rects);
+                Some(missed)
+            }
+            _ => None,
+        };
+    }
+
+    pub(crate) fn forget(&mut self) {
+        self.0 = None;
+    }
+}
+
 /// Identifies a `wl_buffer` in its release event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SlotTag {
@@ -114,6 +147,7 @@ pub(crate) struct Slot {
     pub tag: SlotTag,
     pub layout: BufferLayout,
     pub busy: bool,
+    pub missed: Missed,
     map: MmapMut,
     pool: WlShmPool,
     pub buffer: WlBuffer,
@@ -150,6 +184,7 @@ impl Slot {
             tag,
             layout,
             busy: false,
+            missed: Missed::default(),
             map,
             pool,
             buffer,
@@ -242,5 +277,31 @@ mod tests {
         assert_eq!(r(30, 20, 20, 20).clamp(l), Some(r(30, 20, 10, 10)));
         assert_eq!(r(40, 0, 5, 5).clamp(l), None);
         assert_eq!(r(0, 0, 0, 5).clamp(l), None);
+    }
+
+    #[test]
+    fn a_buffer_misses_what_the_frames_shown_elsewhere_changed_until_it_is_shown() {
+        let r = |x| PixelRect {
+            x,
+            y: 0,
+            width: 1,
+            height: 1,
+        };
+        let mut missed = Missed::default();
+        assert_eq!(missed.rects(), None, "a new buffer");
+        missed.passed(Some(&[r(1)]));
+        assert_eq!(missed.rects(), None, "unknown stays unknown");
+        missed.shown();
+        assert_eq!(missed.rects(), Some(&[][..]));
+        missed.passed(Some(&[r(1)]));
+        missed.passed(Some(&[r(2), r(3)]));
+        assert_eq!(missed.rects(), Some(&[r(1), r(2), r(3)][..]));
+        missed.passed(None);
+        assert_eq!(missed.rects(), None, "a whole frame passed it by");
+        missed.shown();
+        missed.passed(Some(&vec![r(0); MAX_MISSED]));
+        assert_eq!(missed.rects().map(<[_]>::len), Some(MAX_MISSED));
+        missed.passed(Some(&[r(0)]));
+        assert_eq!(missed.rects(), None, "too many rectangles");
     }
 }

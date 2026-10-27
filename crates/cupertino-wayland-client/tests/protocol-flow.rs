@@ -1155,9 +1155,11 @@ fn a_lease_waits_while_the_compositor_holds_three_buffers() {
     let mut stash = Stash::new();
     let w = window(&mut conn, Decorations::Client);
     configured(&mut conn, &mut stash, w);
+    assert!(conn.buffer_free(w.surface()).unwrap());
     for _ in 0..3 {
         present(&mut conn, w.surface(), (64, 64));
     }
+    assert!(!conn.buffer_free(w.surface()).unwrap());
     assert!(matches!(
         conn.lease(w.surface(), (64, 64), BufferFormat::Xrgb8888),
         Err(Error::NoFreeBuffer)

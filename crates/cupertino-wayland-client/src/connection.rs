@@ -56,7 +56,7 @@ use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
 use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_manager_v1::ZxdgOutputManagerV1;
 use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_v1::{self, ZxdgOutputV1};
 
-use crate::buffer::{pick_slot, Slot, SlotChoice, SlotTag};
+use crate::buffer::{pick_slot, Slot, SlotChoice, SlotTag, MAX_SLOTS};
 use crate::capability::REQUIRED;
 use crate::clipboard::Clipboard;
 use crate::configure::{wire_size, Serials};
@@ -910,6 +910,11 @@ impl Connection {
         self.state.seat.clone()
     }
 
+    /// The seat's `wl_pointer` once it has one, for an extension that follows the pointer.
+    pub fn pointer(&self) -> Option<WlPointer> {
+        self.state.pointer.clone()
+    }
+
     /// The `wl_output` of `output`, for an extension request that names it.
     pub fn wl_output(&self, output: OutputId) -> Option<WlOutput> {
         self.state
@@ -941,6 +946,19 @@ impl Connection {
     pub fn roundtrip(&mut self) -> Result<(), Error> {
         self.queue.roundtrip(&mut self.state)?;
         Ok(())
+    }
+
+    /// Whether [`Connection::lease`] has a buffer for `surface`: `false` while the compositor holds all of them, until
+    /// it releases one.
+    pub fn buffer_free(&self, surface: SurfaceId) -> Result<bool, Error> {
+        let busy = self
+            .state
+            .surface(surface)?
+            .slots
+            .iter()
+            .filter(|s| s.busy)
+            .count();
+        Ok(busy < MAX_SLOTS)
     }
 
     /// A buffer to draw the next frame of `surface` into, at the surface's scale. Its logical size is the configured

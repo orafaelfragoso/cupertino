@@ -3,10 +3,6 @@
 //! The layout and routing decisions live in `cupertino_notifications::surface`.
 
 use cupertino_assets::{AssetError, Assets};
-use cupertino_client::{
-    key, Anchor, Backdrop, Button, Client, DisplayOptions, Event, KeyboardInteractivity, Layer,
-    LayerSurfaceConfig, Margin, PointerEvent, SurfaceId, Waker,
-};
 use cupertino_geometry::{Point, Rect, Size};
 use cupertino_notifications::dbus::{Server, ServerOptions};
 use cupertino_notifications::render::{
@@ -20,7 +16,16 @@ use cupertino_notifications::surface::{
 use cupertino_notifications::{
     CenterConfig, ClearScope, GroupStack, Notification, Placement, SwipeOutcome, Wakeup,
 };
+use cupertino_protocol_app::{AppEffects, Backdrop};
+use cupertino_shell_client::{
+    Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
+    Session, SessionChange, SessionState, Shell, ShellEvent,
+};
 use cupertino_theme::{Appearance, Theme};
+use cupertino_ui_wayland::{Ready, ShmPresenter};
+use cupertino_wayland_client::{
+    key, Button, Connection, Event, KeyboardEvent, PointerEvent, TokenRequest, Waker,
+};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::process::Command;
@@ -100,10 +105,14 @@ enum Pending {
 type Signature = (u32, u32, bool, u64, u64, u32);
 
 struct App {
-    client: Client,
+    conn: Connection,
+    effects: AppEffects,
+    _session: Session,
+    session: SessionState,
     theme: Theme,
     assets: Assets,
-    surface: SurfaceId,
+    layer: LayerSurface,
+    presenter: ShmPresenter,
     server: Server,
     renderer: BannerRenderer,
     /// Set by the `ToggleCentre` D-Bus call.
@@ -126,7 +135,7 @@ struct App {
     placements: Vec<Placement>,
     backdrops: HashMap<Slot, Backdrop>,
     images: HashMap<Slot, (Signature, BannerImage)>,
-    pending: HashMap<cupertino_client::ActivationRequest, Pending>,
+    pending: HashMap<TokenRequest, Pending>,
     seen_revision: u64,
 }
 
@@ -134,12 +143,11 @@ struct App {
 fn banner_renderer(
     theme: &Theme,
     assets: &Assets,
-    dark: bool,
-    options: DisplayOptions,
+    session: &SessionState,
 ) -> std::result::Result<BannerRenderer, AssetError> {
-    let appearance = Appearance::of_session(dark, options.increase_contrast);
+    let appearance = Appearance::of_session(session.dark, session.display.increase_contrast);
     BannerRenderer::new(
-        BannerStyle::from_theme(theme, appearance, options.reduce_transparency),
+        BannerStyle::from_theme(theme, appearance, session.display.reduce_transparency),
         assets,
     )
 }
@@ -148,11 +156,15 @@ fn banner_renderer(
 pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let assets = Assets::discover();
     let theme = Theme::load()?;
-    let mut client = Client::connect_shell()?;
-    let renderer = banner_renderer(&theme, &assets, client.is_dark(), client.display_options())?;
+    let mut conn = Connection::connect()?;
+    let layer_shell = LayerShell::bind(&mut conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
+    let effects = AppEffects::bind(&mut conn).ok_or("the server lacks cupertino_app_effects_v1")?;
+    let shell = Shell::bind(&mut conn).ok_or("the server lacks cupertino_shell_v1")?;
+    let (session_observer, session, early) = shell.observe(&mut conn)?;
+    let renderer = banner_renderer(&theme, &assets, &session)?;
     let mut center_config = CenterConfig::from_theme(&theme);
     // banners fade instead of sliding while the session reduces motion
-    center_config.motion.reduce_motion = client.display_options().reduce_motion;
+    center_config.motion.reduce_motion = session.display.reduce_motion;
     // the shadow margins do not depend on the appearance, so the surface keeps its width when it changes
     let width = surface_width(
         &center_config.layout,
@@ -160,7 +172,7 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         f64::from(renderer.style.shadow.margins_px(1.0).left),
     );
 
-    let waker = client.waker();
+    let waker = conn.waker();
     let server = start_server(options, center_config, &waker)?;
     let toggle = Arc::new(AtomicBool::new(false));
     let (flag, wake) = (toggle.clone(), waker);
@@ -169,21 +181,28 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         wake.wake();
     })?;
     // full height at the right edge, over the menu bar's zone (the model insets the stack itself)
-    let surface = client.layer_surface(&LayerSurfaceConfig {
-        namespace: NAMESPACE.to_string(),
-        output: None,
-        layer: Layer::Overlay,
-        anchor: Anchor::Top | Anchor::Right | Anchor::Bottom,
-        size: (width as u32, 0),
-        margin: Margin::default(),
-        exclusive_zone: -1,
-        keyboard: KeyboardInteractivity::None,
-    })?;
+    let layer = layer_shell.layer_surface(
+        &mut conn,
+        &LayerSurfaceConfig {
+            namespace: NAMESPACE.to_string(),
+            output: None,
+            layer: Layer::Overlay,
+            anchor: Anchor::Top | Anchor::Right | Anchor::Bottom,
+            size: (width as u32, 0),
+            margin: Margin::default(),
+            exclusive_zone: -1,
+            keyboard: KeyboardInteractivity::None,
+        },
+    )?;
     let mut app = App {
-        client,
+        presenter: ShmPresenter::new(layer.surface()),
+        conn,
+        effects,
+        _session: session_observer,
+        session,
         theme,
         assets,
-        surface,
+        layer,
         server,
         renderer,
         toggle,
@@ -204,9 +223,13 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         pending: HashMap::new(),
         seen_revision: 0,
     };
+    for event in early {
+        app.handle(event)?;
+    }
     let mut timeout = None;
     loop {
-        for event in app.client.wait(timeout)? {
+        app.present()?;
+        for event in app.conn.wait(timeout)? {
             app.handle(event)?;
         }
         timeout = app.housekeeping()?;
@@ -246,57 +269,72 @@ fn open_link(href: &str) {
 impl App {
     fn handle(&mut self, event: Event) -> Result<()> {
         match event {
-            // a draw follows every configure and scale change
-            Event::Configured { .. } | Event::ScaleChanged { .. } => {}
-            Event::Draw(_) => self.draw()?,
-            Event::Closed(_) => return Err("the server closed the notification surface".into()),
+            Event::Frame(_) => self.presenter.frame_done(),
             Event::Pointer { event, .. } => self.pointer(event)?,
-            Event::Key {
-                key: code, pressed, ..
-            } => {
-                if pressed && code == key::ESCAPE && self.centre_open {
-                    if self.menu_open {
-                        self.menu_open = false;
-                        self.client.request_redraw(self.surface)?;
-                    } else {
-                        self.toggle_centre()?;
-                    }
+            Event::Keyboard {
+                event:
+                    KeyboardEvent::Key {
+                        code: key::ESCAPE,
+                        pressed: true,
+                        ..
+                    },
+                ..
+            } if self.centre_open => {
+                if self.menu_open {
+                    self.menu_open = false;
+                    self.presenter.request_redraw();
+                } else {
+                    self.toggle_centre();
                 }
             }
             Event::ActivationToken { request, token } => self.complete(request, token),
-            Event::Appearance { .. } | Event::DisplayOptions(_) => {
-                // layouts and rendered cards belong to the style they were made with
-                let options = self.client.display_options();
-                self.renderer =
-                    banner_renderer(&self.theme, &self.assets, self.client.is_dark(), options)?;
-                self.server.center().config.motion.reduce_motion = options.reduce_motion;
-                self.images.clear();
-                self.client.request_redraw(self.surface)?;
-            }
-            // the server draws the lock screen: only the open list has to go
-            Event::SessionLock { locked: true } => {
-                if self.centre_open {
-                    self.toggle_centre()?;
+            Event::Extension(event) => match self.session.apply(&event) {
+                Some(SessionChange::Appearance { .. } | SessionChange::DisplayOptions(_)) => {
+                    // layouts and rendered cards belong to the style they were made with
+                    self.renderer = banner_renderer(&self.theme, &self.assets, &self.session)?;
+                    self.server.center().config.motion.reduce_motion =
+                        self.session.display.reduce_motion;
+                    self.images.clear();
+                    self.presenter.request_redraw();
                 }
-            }
-            Event::SessionLock { locked: false }
-            | Event::LockRequested { .. }
-            | Event::LogOutRequested => {}
-            // the surface follows the output the server chose for it; it has no popups or menu-bar role
-            Event::OutputsChanged
-            | Event::PopupDone(_)
-            | Event::MenuBar { .. }
-            | Event::Dock { .. }
-            | Event::KeyboardLeave(_) => {}
+                // the server draws the lock screen: only the open list has to go
+                Some(SessionChange::Lock { locked: true }) if self.centre_open => {
+                    self.toggle_centre()
+                }
+                Some(SessionChange::Lock { .. }) => {}
+                None => match event.downcast_ref::<ShellEvent>() {
+                    Some(&ShellEvent::Configure { size, .. }) => {
+                        self.presenter.configured(self.layer.configured(size)?);
+                    }
+                    Some(ShellEvent::Closed(_)) => {
+                        return Err("the server closed the notification surface".into())
+                    }
+                    _ => {}
+                },
+            },
+            // the surface follows the output the server chose for it; it has no popups
+            _ => {}
         }
         Ok(())
+    }
+
+    /// Draw while the presenter can take a frame.
+    fn present(&mut self) -> Result<()> {
+        loop {
+            match self.presenter.poll(&self.conn)? {
+                Ready::Idle => return Ok(()),
+                // a draw follows every scale change
+                Ready::ScaleChanged(_) => {}
+                Ready::Draw => self.draw()?,
+            }
+        }
     }
 
     /// Expire and animate the model, send its signals, handle `ToggleCentre` and ask for a
     /// frame when something changed. Returns how long the loop may sleep.
     fn housekeeping(&mut self) -> Result<Option<Duration>> {
         if self.toggle.swap(false, Ordering::SeqCst) {
-            self.toggle_centre()?;
+            self.toggle_centre();
         }
         let now = self.server.now();
         let (revision, wakeup) = {
@@ -307,7 +345,7 @@ impl App {
         self.server.flush_events()?;
         if revision != self.seen_revision || wakeup == Some(Wakeup::Frame) {
             self.seen_revision = revision;
-            self.client.request_redraw(self.surface)?;
+            self.presenter.request_redraw();
         }
         Ok(match wakeup {
             Some(Wakeup::At(t)) => Some(Duration::from_secs_f64((t - now).max(0.0))),
@@ -317,7 +355,7 @@ impl App {
     }
 
     /// Open or close the list. While it is open the surface takes the keyboard (Escape closes).
-    fn toggle_centre(&mut self) -> Result<()> {
+    fn toggle_centre(&mut self) {
         self.centre_open = !self.centre_open;
         self.centre_hover = None;
         self.menu_open = false;
@@ -330,16 +368,15 @@ impl App {
         } else {
             KeyboardInteractivity::None
         };
-        self.client.set_keyboard_interactivity(self.surface, mode)?;
-        self.client.request_redraw(self.surface)?;
-        Ok(())
+        self.layer.set_keyboard_interactivity(mode);
+        self.presenter.request_redraw();
     }
 
     /// Lay out this frame's banners and cards, sync their backdrops and the input region, and
     /// draw them.
     fn draw(&mut self) -> Result<()> {
         let now = self.server.now();
-        let (width, height) = self.client.size(self.surface)?;
+        let (width, height) = self.presenter.size().ok_or("drawn before its configure")?;
         let surface_size = Size::new(f64::from(width), f64::from(height));
         let mut items = Vec::new();
         {
@@ -407,7 +444,7 @@ impl App {
         let radius = self.renderer.style.corner_radius;
         for item in &items {
             if !self.backdrops.contains_key(&item.slot) {
-                let backdrop = self.client.backdrop(self.surface)?;
+                let backdrop = self.effects.backdrop(&self.conn, self.layer.surface())?;
                 backdrop.set_material(BannerStyle::DEFAULT_MATERIAL);
                 self.backdrops.insert(item.slot, backdrop);
             }
@@ -419,7 +456,7 @@ impl App {
         match &self.menu {
             Some((menu, _)) => {
                 if self.menu_backdrop.is_none() {
-                    let backdrop = self.client.backdrop(self.surface)?;
+                    let backdrop = self.effects.backdrop(&self.conn, self.layer.surface())?;
                     backdrop.set_material(BannerStyle::DEFAULT_MATERIAL);
                     self.menu_backdrop = Some(backdrop);
                 }
@@ -434,16 +471,16 @@ impl App {
             .filter(|i| matches!(i.slot, Slot::Banner(_)))
             .map(|i| i.rect)
             .collect();
-        self.client.set_input_region(
-            self.surface,
-            &input_region(&banners, self.centre_open, surface_size),
+        self.conn.set_input_region(
+            self.layer.surface(),
+            Some(&input_region(&banners, self.centre_open, surface_size)),
         )?;
 
         let (renderer, images) = (&mut self.renderer, &mut self.images);
         let (header, menu, clear_hover, menu_hover) =
             (self.header, &self.menu, self.clear_hover, self.menu_hover);
-        self.client.draw(self.surface, |pixmap, scale| {
-            let factor = scale.factor();
+        self.presenter.draw(&mut self.conn, None, |pixmap, scale| {
+            let factor = scale.factor() as f32;
             if let Some(header) = &header {
                 let image = renderer.render_header(header, clear_hover || menu.is_some(), factor);
                 let (x, y) = (
@@ -534,7 +571,7 @@ impl App {
                     self.server.center().set_hover(None, now);
                 }
                 self.centre_hover = None;
-                self.client.request_redraw(self.surface)?;
+                self.presenter.request_redraw();
             }
             PointerEvent::Button {
                 button: Button::Left,
@@ -562,12 +599,12 @@ impl App {
             if clear_hover != self.clear_hover || menu_hover != self.menu_hover {
                 self.clear_hover = clear_hover;
                 self.menu_hover = menu_hover;
-                self.client.request_redraw(self.surface)?;
+                self.presenter.request_redraw();
             }
             let under = card_at(&self.cards, p).map(|(id, _)| id);
             if under != self.centre_hover {
                 self.centre_hover = under;
-                self.client.request_redraw(self.surface)?;
+                self.presenter.request_redraw();
             }
             if under.is_some() {
                 return Ok(());
@@ -577,14 +614,14 @@ impl App {
             self.server
                 .center()
                 .swipe_update(d.id, p.x - d.start_x, now);
-            self.client.request_redraw(self.surface)?;
+            self.presenter.request_redraw();
             return Ok(());
         }
         let under = self.server.center().banner_at(p);
         if under != self.hovered {
             self.hovered = under;
             self.server.center().set_hover(under, now);
-            self.client.request_redraw(self.surface)?;
+            self.presenter.request_redraw();
         }
         Ok(())
     }
@@ -606,7 +643,7 @@ impl App {
                 HeaderPress::Elsewhere => {}
             }
             if press != HeaderPress::Elsewhere {
-                self.client.request_redraw(self.surface)?;
+                self.presenter.request_redraw();
                 return Ok(());
             }
             if let Some((id, rect)) = card_at(&self.cards, p) {
@@ -618,14 +655,14 @@ impl App {
                     CardPress::OpenLink(href) => open_link(&href),
                     CardPress::Activate => {
                         self.begin_activation(Pending::Activate(id))?;
-                        self.toggle_centre()?;
+                        self.toggle_centre();
                     }
                 }
-                self.client.request_redraw(self.surface)?;
+                self.presenter.request_redraw();
                 return Ok(());
             }
             // a press outside the cards closes the list and is then handled as a press on the banners
-            self.toggle_centre()?;
+            self.toggle_centre();
         }
         let Some(id) = self.server.center().banner_at(p) else {
             return Ok(());
@@ -647,7 +684,7 @@ impl App {
                 self.drag = Some(Drag { id, start_x: p.x });
             }
         }
-        self.client.request_redraw(self.surface)?;
+        self.presenter.request_redraw();
         Ok(())
     }
 
@@ -660,7 +697,7 @@ impl App {
             SwipeOutcome::Click => self.begin_activation(Pending::Activate(d.id))?,
             SwipeOutcome::Dismissed | SwipeOutcome::Cancelled => {}
         }
-        self.client.request_redraw(self.surface)?;
+        self.presenter.request_redraw();
         Ok(())
     }
 
@@ -676,13 +713,15 @@ impl App {
 
     /// Fetch an activation token for the click; the action runs when it arrives.
     fn begin_activation(&mut self, pending: Pending) -> Result<()> {
-        let request = self.client.request_activation_token(self.surface)?;
+        let request = self
+            .conn
+            .request_activation_token(self.layer.surface(), None)?;
         self.pending.insert(request, pending);
         Ok(())
     }
 
     /// Run the action that waited for `token`; the signals carry it to the application.
-    fn complete(&mut self, request: cupertino_client::ActivationRequest, token: String) {
+    fn complete(&mut self, request: TokenRequest, token: String) {
         let pending = self
             .pending
             .remove(&request)

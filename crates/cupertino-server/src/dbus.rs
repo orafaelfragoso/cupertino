@@ -174,6 +174,19 @@ pub enum LoginTrust {
     Any,
 }
 
+impl crate::state::Cupertino {
+    /// Whose ownership of `org.cupertino.Login1` is trusted now: the supervised process of the session-lock role.
+    pub fn login_trust(&self) -> LoginTrust {
+        if self.config.dev_shell {
+            return LoginTrust::Any;
+        }
+        self.supervisor
+            .pids_with_role(crate::authorization::ShellRole::SessionLock)
+            .first()
+            .map_or(LoginTrust::Nobody, |pid| LoginTrust::Agent(*pid))
+    }
+}
+
 /// Handle on the worker thread.
 pub struct DbusHandle {
     tx: async_channel::Sender<Request>,

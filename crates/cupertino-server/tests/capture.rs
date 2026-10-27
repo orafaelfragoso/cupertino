@@ -927,12 +927,9 @@ fn a_session_resumed_while_locked_still_delivers_no_capture_buffer() {
     locker.unlock();
 }
 
-/// SEC-05: a capture session whose connection no longer holds the Capture role (its process exited) is stopped, and a
-/// frame it asks for fails, even though the connection is still open.
-#[test]
-fn a_session_of_a_process_that_exited_is_stopped() {
-    let Some(mut h) = Harness::new() else { return };
-    let mut process = std::process::Command::new("sleep")
+/// A `sleep` process holding a connection with the Capture role.
+fn holder_with_capture_role(h: &Harness) -> (std::process::Child, UnixStream) {
+    let process = std::process::Command::new("sleep")
         .arg("60")
         .stdout(std::process::Stdio::null())
         .spawn()
@@ -945,6 +942,15 @@ fn a_session_of_a_process_that_exited_is_stopped() {
     )
     .unwrap();
     cupertino_server::shell_connection::bind_holder(&state, process.id()).unwrap();
+    (process, stream)
+}
+
+/// SEC-05: a capture session whose connection no longer holds the Capture role (its process exited) is stopped, and a
+/// frame it asks for fails, even though the connection is still open.
+#[test]
+fn a_session_of_a_process_that_exited_is_stopped() {
+    let Some(mut h) = Harness::new() else { return };
+    let (mut process, stream) = holder_with_capture_role(&h);
     let mut c = TestClient::connect(&mut h, stream, Capturer::default());
     let source = c.output_source();
     let capture = c.session(&mut h, &source, true);
@@ -970,5 +976,44 @@ fn a_session_of_a_process_that_exited_is_stopped() {
         Some(ext_image_copy_capture_frame_v1::FailureReason::Stopped)
     );
     assert!(c.state.session.stopped);
+    assert!(!h.state.capture_running());
+}
+
+#[test]
+fn a_frame_already_waiting_when_the_process_exits_is_stopped_at_the_next_render() {
+    let Some(mut h) = Harness::new() else { return };
+    let (mut process, stream) = holder_with_capture_role(&h);
+    let mut c = TestClient::connect(&mut h, stream, Capturer::default());
+    let source = c.output_source();
+    let capture = c.session(&mut h, &source, true);
+    let first = c.request_frame(&capture);
+    h.pump_until(&mut c, "the first frame", |s| {
+        s.frame.ready || s.frame.failed.is_some()
+    });
+    assert!(c.state.frame.ready, "failed: {:?}", c.state.frame.failed);
+    first.destroy();
+
+    let _waiting = c.request_frame(&capture);
+    h.state.request_redraw();
+    h.idle(&mut c, 30);
+    assert!(
+        !c.state.frame.ready && c.state.frame.failed.is_none(),
+        "an unchanged output keeps the frame waiting"
+    );
+
+    process.kill().unwrap();
+    process.wait().unwrap();
+    h.state.pointer_moved_to((300.0, 200.0).into(), 1, None);
+    h.pump_until(&mut c, "the render after the process exited", |s| {
+        s.frame.ready || s.frame.failed.is_some()
+    });
+    assert!(
+        !c.state.frame.ready,
+        "a waiting frame was delivered after the process exited"
+    );
+    assert_eq!(
+        c.state.frame.failed,
+        Some(ext_image_copy_capture_frame_v1::FailureReason::Stopped)
+    );
     assert!(!h.state.capture_running());
 }

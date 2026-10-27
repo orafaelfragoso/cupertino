@@ -34,18 +34,18 @@ pub fn mode_args(request: ScreenshotRequest) -> &'static [&'static str] {
     }
 }
 
-fn capture_client_state() -> ClientState {
-    ClientState {
-        capabilities: ClientCapabilitySet::of([ShellRole::Capture, ShellRole::Session]),
-        ..ClientState::default()
-    }
+fn capture_capabilities() -> ClientCapabilitySet {
+    ClientCapabilitySet::of([ShellRole::Capture, ShellRole::Session])
 }
 
 impl Cupertino {
     /// A new privileged client: the server inserts one end of a socket pair and returns the other, for a process the
     /// server starts (`WAYLAND_SOCKET`) or, in tests, for a client in the same process.
     pub fn privileged_client(&mut self) -> std::io::Result<UnixStream> {
-        connect_client(&self.display_handle, capture_client_state())
+        connect_client(
+            &self.display_handle,
+            ClientState::detached(capture_capabilities()),
+        )
     }
 
     /// Whether a screenshot overlay or toolbar is on an output.
@@ -71,7 +71,10 @@ impl Cupertino {
         command.args(args).args(mode_args(request));
         let (stream, state) = match connect_bound_client(
             &self.display_handle,
-            capture_client_state(),
+            ClientState {
+                capabilities: capture_capabilities(),
+                ..ClientState::default()
+            },
         ) {
             Ok(connection) => connection,
             Err(e) => {
@@ -85,7 +88,13 @@ impl Cupertino {
         match command.spawn() {
             Ok(mut child) => {
                 let pid = child.id();
-                bind_holder(&state, pid);
+                if let Err(e) = bind_holder(&state, pid) {
+                    tracing::warn!(pid, error = %e, "binding the screenshot process to its connection failed: ending it");
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    drop(stream);
+                    return;
+                }
                 tracing::info!(pid, ?request, "screenshot process started");
                 std::thread::spawn(move || match child.wait() {
                     Ok(status) => tracing::info!(pid, %status, "screenshot process exited"),

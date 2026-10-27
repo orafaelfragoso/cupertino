@@ -123,8 +123,13 @@ fn start(
         .env("XDG_CURRENT_DESKTOP", crate::state::CURRENT_DESKTOP);
     hand_over(&mut command, &stream);
     match command.spawn() {
-        Ok(child) => {
-            bind_holder(&state, child.id());
+        Ok(mut child) => {
+            if let Err(e) = bind_holder(&state, child.id()) {
+                tracing::warn!(name = spec.name, error = %e, "binding the shell process to its connection failed: ending it");
+                let _ = child.kill();
+                let _ = child.wait();
+                return Phase::Waiting(now + RESTART_THROTTLE);
+            }
             tracing::info!(name = spec.name, pid = child.id(), "shell process started");
             Phase::Running {
                 child,

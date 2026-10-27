@@ -38,7 +38,7 @@ use smithay::reexports::wayland_server::{
 use smithay::wayland::compositor::{with_states, Cacheable};
 
 use crate::app_effects_v1::surface_backdrops;
-use crate::authorization::{authorized, require, ShellRole};
+use crate::authorization::{authorized, refuse, require, ShellRole};
 use crate::state::Cupertino;
 
 /// Where a minimizing window lands: the dock's `set_minimize_target`, in surface-local logical
@@ -288,10 +288,7 @@ impl Cupertino {
     ) {
         if !permitted {
             init.init(id, DockData { output: None });
-            shell.post_error(
-                ShellError::Permission,
-                "get_dock needs the Dock role, which only a shell process the server started for it holds",
-            );
+            refuse(shell, ShellRole::Dock);
             return;
         }
         let target = Output::from_resource(output)

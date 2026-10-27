@@ -146,6 +146,46 @@ fn a_grant_older_than_the_applications_last_activation_is_dead_and_a_newer_one_l
 }
 
 #[test]
+fn a_grant_is_void_when_the_person_typed_after_it_was_made() {
+    let mut h = H::new();
+    let _a = h.map("a");
+    h.now = 100.0;
+    // the link was clicked at 97, the password typed at 99.5, the window of the clicked link maps at 100
+    let (late, fx) = h.map_with(
+        "b",
+        None,
+        MapFocus {
+            grant: Some(Grant {
+                created: 97.0,
+                valid: true,
+            }),
+            last_user_event: Some(99.5),
+            ..MapFocus::default()
+        },
+    );
+    assert_ne!(h.wm.key_window(), Some(late));
+    assert!(attention(&fx));
+}
+
+#[test]
+fn the_first_window_of_a_client_does_not_take_the_keyboard_while_the_person_types() {
+    let mut h = H::new();
+    let a = h.map("a");
+    h.now = 100.0;
+    let facts = |last: f64| MapFocus {
+        first_of_client: true,
+        last_user_event: Some(last),
+        ..MapFocus::default()
+    };
+    let (typing, fx) = h.map_with("b", None, facts(99.99));
+    assert_eq!(h.wm.key_window(), Some(a), "a key 10 ms ago");
+    assert!(attention(&fx));
+    let (quiet, _) = h.map_with("c", None, facts(98.9));
+    assert_eq!(h.wm.key_window(), Some(quiet), "the last key was 1.1 s ago");
+    let _ = typing;
+}
+
+#[test]
 fn the_first_window_of_a_new_client_comes_to_the_front_unless_the_person_moved_on() {
     let mut h = H::new();
     let a = h.map("a");

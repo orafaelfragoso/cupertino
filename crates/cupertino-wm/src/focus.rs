@@ -2,7 +2,7 @@
 //! app MRU plus per-app window MRU, hide / hide others, the app switcher and in-app window cycling,
 //! modal blocking.
 
-use crate::activation::{token_accepted, GRANT_LIFETIME};
+use crate::activation::{token_accepted, GRANT_LIFETIME, LATE_ACTIVATION, TYPING_QUIET};
 use crate::command::Effect;
 use crate::command::MapFocus;
 use crate::ids::{AppId, WindowId};
@@ -115,13 +115,18 @@ impl Wm {
 
     /// Whether an activation token created at `token` (seconds, the model's clock) may bring
     /// `window` forward, given the last key or button press `last_user_event` ([`token_accepted`]
-    /// against the last time the window's application became active). False for an unknown window.
+    /// against the last time the window's application became active) at `now`. A token more than [`LATE_ACTIVATION`]
+    /// old is too old for a window that is already mapped. False for an unknown window.
     pub fn activation_allowed(
         &self,
         window: WindowId,
         token: f64,
         last_user_event: Option<f64>,
+        now: f64,
     ) -> bool {
+        if now - token > LATE_ACTIVATION {
+            return false;
+        }
         let Some(app) = self
             .windows
             .get(&window)
@@ -135,7 +140,7 @@ impl Wm {
     /// Whether a window of `app` (a sheet or dialog of `parent`) that maps at `now` takes the keyboard. It does when nothing
     /// is focused (there is nothing to take it from), when it belongs to the key window, when its application is the
     /// front one, when its client presented a valid grant that is still fresh, and when it is the first window of a client
-    /// the person has not left since it connected. Otherwise a program that came up on its own would take the keystrokes
+    /// the person has not left since it connected and is not typing at that moment ([`TYPING_QUIET`]). Otherwise a program that came up on its own would take the keystrokes
     /// of the person's work.
     pub(crate) fn takes_focus_on_map(
         &self,
@@ -159,7 +164,10 @@ impl Wm {
                 return true;
             }
         }
-        facts.first_of_client && !facts.input_elsewhere
+        let typing = facts
+            .last_user_event
+            .is_some_and(|event| now - event < TYPING_QUIET);
+        facts.first_of_client && !facts.input_elsewhere && !typing
     }
 
     /// Put a window that maps without the focus just below the key window, so it neither covers it nor takes its place.

@@ -119,6 +119,10 @@ impl CompositorHandler for Cupertino {
         });
     }
 
+    fn destroyed(&mut self, surface: &WlSurface) {
+        self.pending_activations.remove(&surface.id());
+    }
+
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
         if !is_sync_subsurface(surface) {
@@ -462,16 +466,18 @@ impl XdgActivationHandler for Cupertino {
         let Some(id) = mapped else {
             // a program activates its first surface as it maps, usually before the window is mapped: the window picks
             // the grant up when it maps
-            let now = self.now();
-            self.pending_activations
-                .retain(|_, g| now - g.created <= cupertino_wm::GRANT_LIFETIME);
-            self.pending_activations.insert(surface.id(), grant);
+            if grant.valid {
+                let now = self.now();
+                self.pending_activations
+                    .retain(|_, g| now - g.created <= cupertino_wm::GRANT_LIFETIME);
+                self.pending_activations.insert(surface.id(), grant);
+            }
             return;
         };
         if grant.valid
             && self
                 .wm
-                .activation_allowed(id, grant.created, self.last_user_event)
+                .activation_allowed(id, grant.created, self.last_user_event, self.now())
         {
             self.command(Command::FocusWindow { window: id });
         } else {

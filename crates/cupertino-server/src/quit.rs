@@ -45,7 +45,7 @@ struct Quitting {
 pub struct Quit {
     quitting: Option<Quitting>,
     /// What the bus thread is to emit; `None` until it runs.
-    signals: Option<async_channel::Sender<BusOut>>,
+    pub(crate) signals: Option<async_channel::Sender<BusOut>>,
 }
 
 /// What the compositor tells the bus thread.

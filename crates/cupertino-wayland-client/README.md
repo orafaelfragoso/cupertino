@@ -9,19 +9,19 @@ workspace's pure-Rust `cupertino-xkbcommon`); `cupertino-layers` fails the build
 
 | Item | Contents |
 |---|---|
-| `Connection::{connect, from_stream}`, `Waker` | the connection (`WAYLAND_DISPLAY` / `WAYLAND_SOCKET`, or a given socket); `Connection::wait` returns the next `Event`s, a `Waker` wakes it from another thread |
+| `Connection::{connect, from_stream, from_wayland}`, `Waker` | the connection (`WAYLAND_DISPLAY` / `WAYLAND_SOCKET`, a given socket, or an established `wayland_client::Connection` the process also runs event queues of its own on); `Connection::wait` returns the next `Event`s, a `Waker` wakes it from another thread |
 | `Capability`, `CapabilitySet` | the optional protocols the compositor offers: seat, clipboard, fractional scale, server-side decorations, activation, cursor shape, output layout. `Connection::capabilities` lists them, with the extension protocols bound so far (`Extension`, `CapabilitySet::extension`); a call that needs a missing one fails with `Error::Unsupported` |
 | `Connection::toplevel`, `ToplevelConfig`, `Toplevel` | an xdg toplevel: app id, title, size limits, the decorations asked for. `set_title`, `set_size_limits`, `set_maximized`, `set_fullscreen`, `minimize`, `start_move`, `start_resize`, `activate`, `destroy` |
 | `WindowConfigure`, `WindowStates`, `Decorations` | a configure: serial, size (or none: the client picks), bounds, states, and the decorations granted. A compositor without `zxdg_decoration_manager_v1`, or one that answers client-side, gives `Decorations::Client` |
 | `Connection::popup`, `PopupPlacement`, `PopupConfigure`, `Popup`, `Anchor`, `Gravity`, `ConstraintAdjustment` | xdg popups of a toplevel or popup, with an optional grab; `Connection::reposition_popup` moves one (`xdg_wm_base` version 3); `Event::PopupDone` when the compositor dismisses one |
-| `Connection::lease`, `BufferLease`, `BufferLayout`, `BufferFormat`, `PixelRect` | an shm buffer for the next frame at the surface's scale (`Argb8888` or `Xrgb8888`), at most `BufferLayout::MAX_EXTENT` (16384) pixels per side, up to three per surface; `present` or `present_damage` acks the latest configure, attaches, damages, asks for a frame callback and commits |
+| `Connection::lease`, `BufferLease`, `BufferLayout`, `BufferFormat`, `PixelRect` | an shm buffer for the next frame at the surface's scale (`Argb8888` or `Xrgb8888`), at most `BufferLayout::MAX_EXTENT` (16384) pixels per side, up to three per surface; `present` or `present_damage` acks the latest configure, attaches, damages, asks for a frame callback and commits; `Connection::buffer_free` tells whether a lease would get a buffer now |
 | `Event::{Frame, ScaleChanged, OutputsChanged}`, `FrameCallback`, `Scale`, `OutputInfo`, `OutputId`, `OutputGeometry` | frame pacing, the surface's scale, outputs; with `zxdg_output_manager_v1` each output's logical position and size |
 | `Connection::set_input_region` | the part of a surface that takes pointer input, rounded outwards; `None` is the whole surface |
 | `Connection::request_activation_token`, `TokenRequest`, `Event::ActivationToken` | a token to hand to an application this one launches (`xdg_activation_v1`) |
-| `PointerEvent`, `KeyboardEvent`, `Button`, `Modifiers`, `CursorShape`, `ResizeEdge` | pointer and key input; the axes of one `wl_pointer.frame` arrive as one scroll; keys carry keysym and text from the compositor's keymap, key repeat runs in the client. `Connection::set_cursor` sets a named cursor (`wp_cursor_shape_v1`) |
+| `PointerEvent`, `KeyboardEvent`, `Button`, `Modifiers`, `CursorShape`, `ResizeEdge` | pointer and key input; the axes of one `wl_pointer.frame` arrive as one scroll; keys carry keysym and text from the compositor's keymap, key repeat runs in the client; `wl_pointer.axis_source`, `axis_stop` and `axis_discrete` are dropped for now. `Connection::{modifiers, input_serial}` read the held modifiers and the serial of the latest input event; `Connection::set_cursor` sets a named cursor (`wp_cursor_shape_v1`), `Connection::hide_cursor` hides it |
 | `Connection::{set_selection, receive}`, `ClipboardOffer`, `Event::Selection` | the clipboard: offer contents in several MIME types, list and read another client's |
 | `Error`, `Disconnect` | typed errors: a missing required protocol with its minimum version, the disconnect cause, a configure serial that did not increase, an unsupported format or MIME type, a denied or cancelled transfer, no free buffer |
-| `State`, `ExternalRole`, `Connection::{bind_extension, queue_handle, external_surface, wl_surface, wl_output, seat, roundtrip}` | the extension hook: another crate adds protocols of its own on the same queue (below) |
+| `State`, `ExternalRole`, `Event::Extension`, `ExtensionEvent`, `Connection::{bind_extension, queue_handle, external_surface, wl_surface, wl_output, seat, pointer, surface_outputs, roundtrip}`, `OutputId::registry_name` | the extension hook: another crate adds protocols of its own on the same queue (below) |
 
 ## How it works
 
@@ -47,8 +47,10 @@ names no protocol beyond the standard ones.
   compositor offers none in the range, which is where the application takes its fallback. Objects the extension creates
   later use `Connection::queue_handle`. Rust allows the extension's `impl Dispatch<TheirInterface, TheirData> for
   State` only with that local type; `()` is refused.
-- Events: the `Dispatch` impl puts what it receives where the extension reads it, typically a queue shared through the
-  user data. `Connection::wait` returns after each read from the compositor, maybe with no `Event`, once everything read
+- Events: the `Dispatch` impl hands what it receives to `State::emit`, which `Connection::wait` returns as
+  `Event::Extension` in order with the transport's own events (`ExtensionEvent::downcast` gets the value back), or puts it
+  where the extension reads it, such as a queue shared through the user data. `State::fail` ends the next wait with an
+  error, for a protocol violation the extension found; `State::output_id` names a `wl_output` the extension received. `Connection::wait` returns after each read from the compositor, maybe with no `Event`, once everything read
   is dispatched; the extension then reads its queue. A burst of extension events costs one wait, not one each.
 - Surface roles: `Connection::external_surface(assign)` creates a `wl_surface` and calls `assign` with it, the queue
   handle and its `SurfaceId`, before the first commit; `assign` creates the role's objects and returns an
@@ -56,7 +58,8 @@ names no protocol beyond the standard ones.
   extension's `Dispatch` impl (a 0 width or height leaves that dimension to the client, which `lease` fills from its
   `preferred` size; a serial that does not increase ends the next
   wait with `Error::InvalidSerial`). The surface then draws through `Connection::lease` like any other: present calls
-  `ExternalRole::ack_configure` before the commit, once per configure. `Connection::destroy` destroys its popups, calls
+  `ExternalRole::ack_configure` before the commit, once per configure. A role whose protocol forbids a commit before the
+  first configure, such as `ext_session_lock_surface_v1`, returns false from `ExternalRole::initial_commit`. `Connection::destroy` destroys its popups, calls
   `ExternalRole::destroy`, then the surface. `Connection::popup` with it as parent creates the popup without a parent
   and hands it to `ExternalRole::adopt_popup` before its first commit; the default refuses. `adopt_popup` must attach
   the popup to the role of the surface it was called for, never another one: the transport destroys a surface's popups

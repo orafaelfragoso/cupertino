@@ -112,6 +112,11 @@ impl SessionLockHandler for Cupertino {
             tracing::warn!("session lock refused: the session is already locked by another client");
             return;
         }
+        // a popup grab left over would eat the first click on the lock screen as an outside press
+        self.end_popup_grab(
+            smithay::utils::SERIAL_COUNTER.next_serial(),
+            std::time::Duration::from(self.clock.now()).as_millis() as u32,
+        );
         let takeover = matches!(self.session_lock.state, LockState::Orphaned);
         self.begin_session_lock(confirmation, takeover);
     }

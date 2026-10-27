@@ -30,6 +30,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: python3 -I ci/test_gate.py
       - run: python3 -I ci/test_replace.py
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
+        with:
+          toolchain: stable
+      # check-metadata and test_release read the dependency graph with cargo metadata --offline.
+      - run: cargo fetch --locked
       - run: python3 -I packaging/test_release.py
       - run: python3 -I ci/test_contracts.py
       - run: python3 -I ci/gate.py .

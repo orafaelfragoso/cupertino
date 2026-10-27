@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use cupertino_wm::Command;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{
-    Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New,
+    Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
 };
 use wayland_protocols_plasma::appmenu::server::org_kde_kwin_appmenu::{self, OrgKdeKwinAppmenu};
 use wayland_protocols_plasma::appmenu::server::org_kde_kwin_appmenu_manager::{
@@ -54,6 +54,10 @@ pub struct SurfaceData {
 pub struct MenuProtocols {
     _appmenu: smithay::reexports::wayland_server::backend::GlobalId,
     _gtk: smithay::reexports::wayland_server::backend::GlobalId,
+    /// Bound `gtk_shell1` objects.
+    gtk_shells: Vec<GtkShell1>,
+    /// The `gtk_shell1` capabilities last sent.
+    gtk_capabilities: u32,
 }
 
 impl MenuProtocols {
@@ -61,6 +65,8 @@ impl MenuProtocols {
         Self {
             _appmenu: dh.create_global::<Cupertino, OrgKdeKwinAppmenuManager, ()>(2, ()),
             _gtk: dh.create_global::<Cupertino, GtkShell1, ()>(7, ()),
+            gtk_shells: Vec::new(),
+            gtk_capabilities: 0,
         }
     }
 }
@@ -131,14 +137,20 @@ impl Dispatch<OrgKdeKwinAppmenu, SurfaceData> for Cupertino {
 
 impl GlobalDispatch<GtkShell1, ()> for Cupertino {
     fn bind(
-        _: &mut Self,
+        state: &mut Self,
         _: &DisplayHandle,
         _: &Client,
         resource: New<GtkShell1>,
         _: &(),
         init: &mut DataInit<'_, Self>,
     ) {
-        init.init(resource, ());
+        let shell = init.init(resource, ());
+        let protocols = &mut state.menu_protocols;
+        if protocols.gtk_capabilities != 0 {
+            shell.capabilities(protocols.gtk_capabilities);
+        }
+        protocols.gtk_shells.retain(Resource::is_alive);
+        protocols.gtk_shells.push(shell);
     }
 }
 
@@ -212,6 +224,25 @@ impl Dispatch<GtkSurface1, SurfaceData> for Cupertino {
 }
 
 impl Cupertino {
+    /// Tell GTK clients whether a menu bar shows their menus: `global_menu_bar` only while the menu bar process has a
+    /// bar, so a GTK window hides its own menu bar only when ours takes its place. Call after a bar comes or goes.
+    pub fn refresh_gtk_capabilities(&mut self) {
+        let capabilities = if self.menu_bars.is_empty() {
+            0
+        } else {
+            gtk_shell1::Capability::GlobalMenuBar as u32
+        };
+        let protocols = &mut self.menu_protocols;
+        if capabilities == protocols.gtk_capabilities {
+            return;
+        }
+        protocols.gtk_capabilities = capabilities;
+        protocols.gtk_shells.retain(Resource::is_alive);
+        for shell in &protocols.gtk_shells {
+            shell.capabilities(capabilities);
+        }
+    }
+
     /// A client announced (or withdrew) the menu export of `surface`.
     pub fn set_menu_address(&mut self, surface: &WlSurface, address: Option<MenuAddress>) {
         let root = self

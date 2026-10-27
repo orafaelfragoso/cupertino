@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 
 use cupertino_defaults::compositor::CompositorSettings;
 use cupertino_defaults::keyboard::{KeyboardSettings, ModifierProfile};
+use cupertino_protocols::client::app_effects::cupertino_app_effects_v1::CupertinoAppEffectsV1;
+use cupertino_protocols::client::app_effects::cupertino_app_menu_v1::{self, CupertinoAppMenuV1};
 use cupertino_protocols::client::cupertino_dock_v1::{self, CupertinoDockV1};
 use cupertino_protocols::client::cupertino_menu_bar_v1::{
     self, Command as BarCommand, CupertinoMenuBarV1, EditAction, SessionAction,
@@ -236,6 +238,8 @@ enum BarEvent {
         service: String,
         path: String,
     },
+    /// Bus name, application id and the application, window, menu bar and application menu object paths.
+    MenuGtk([String; 6]),
     WindowState {
         can_zoom: u32,
         workspace: u32,
@@ -257,6 +261,8 @@ enum BarEvent {
 #[derive(Default)]
 struct Status {
     events: Vec<BarEvent>,
+    /// The `cupertino_app_menu_v1.menu_bar` events of an application.
+    menu_bar_shown: Vec<u32>,
     /// The protocol error the server posted: object interface and code.
     error: Option<(String, u32)>,
     /// The `gtk_shell1` capabilities received, in order.
@@ -325,6 +331,7 @@ ignore_events!(
     wl_output::WlOutput,
     zwlr_layer_shell_v1::ZwlrLayerShellV1,
     CupertinoShellV1,
+    CupertinoAppEffectsV1,
     org_kde_kwin_appmenu_manager::OrgKdeKwinAppmenuManager,
     org_kde_kwin_appmenu::OrgKdeKwinAppmenu,
     ext_output_image_capture_source_manager_v1::ExtOutputImageCaptureSourceManagerV1,
@@ -409,6 +416,21 @@ impl Dispatch<CupertinoMenuBarV1, ()> for ClientState {
             E::ActiveApp { app_id, title } => BarEvent::ActiveApp { app_id, title },
             E::MenuNone => BarEvent::MenuNone,
             E::MenuDbusmenu { service, path } => BarEvent::MenuDbusmenu { service, path },
+            E::MenuGtk {
+                bus_name,
+                application_id,
+                application_object_path,
+                window_object_path,
+                menubar_object_path,
+                app_menu_object_path,
+            } => BarEvent::MenuGtk([
+                bus_name,
+                application_id,
+                application_object_path,
+                window_object_path,
+                menubar_object_path,
+                app_menu_object_path,
+            ]),
             E::WindowState {
                 can_zoom,
                 workspace,
@@ -454,6 +476,21 @@ impl Dispatch<CupertinoDockV1, ()> for ClientState {
     ) {
         if let cupertino_dock_v1::Event::ForceQuitDialog = event {
             state.status.lock().unwrap().force_quit_dialogs += 1;
+        }
+    }
+}
+
+impl Dispatch<CupertinoAppMenuV1, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        _: &CupertinoAppMenuV1,
+        event: cupertino_app_menu_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let cupertino_app_menu_v1::Event::MenuBar { shown } = event {
+            state.status.lock().unwrap().menu_bar_shown.push(shown);
         }
     }
 }
@@ -544,6 +581,9 @@ enum Cmd {
     OpenSecondWindow,
     /// Announce the KDE application menu address of the second toplevel.
     SetSecondAddress(&'static str, &'static str),
+    /// Announce the exported menus of an application window: bus name, then the application, window, menu bar and
+    /// application menu object paths.
+    AnnounceMenu([&'static str; 5]),
     /// Ask for exclusive keyboard interactivity (true) or none (false), and commit.
     SetKeyboard(bool),
     /// Choose a row of the window list.
@@ -734,7 +774,8 @@ impl BarClient {
                 | Cmd::OpenSecondWindow
                 | Cmd::SetSecondAddress(..)
                 | Cmd::SetTitle(_)
-                | Cmd::CloseSecondWindow => {
+                | Cmd::CloseSecondWindow
+                | Cmd::AnnounceMenu(..) => {
                     panic!("a menu bar has no application windows")
                 }
                 Cmd::SetKeyboard(exclusive) => {
@@ -1031,6 +1072,60 @@ impl AppClient {
     }
 }
 
+/// An application with one 300x200 toplevel that exports its menus on the bus and announces them through
+/// `cupertino_app_effects_v1.get_menu`; `Cmd::Destroy` destroys the menu object.
+struct KitAppClient(TestClient);
+
+impl KitAppClient {
+    fn spawn(socket: PathBuf, app_id: &'static str) -> KitAppClient {
+        let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
+        KitAppClient(run_client(stream, move |globals, qh, status| {
+            let compositor: wl_compositor::WlCompositor = globals.bind(qh, 4..=6, ()).unwrap();
+            let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
+            let wm_base: xdg_wm_base::XdgWmBase = globals.bind(qh, 1..=5, ()).unwrap();
+            let effects: CupertinoAppEffectsV1 = globals.bind(qh, 2..=2, ()).unwrap();
+            let surface = compositor.create_surface(qh, ());
+            let xdg = wm_base.get_xdg_surface(&surface, qh, ());
+            let toplevel = xdg.get_toplevel(qh, ());
+            toplevel.set_app_id(app_id.to_string());
+            toplevel.set_title(format!("{app_id} window"));
+            let menu = effects.get_menu(&surface, qh, ());
+            surface.commit();
+            let state = ClientState {
+                status: status.clone(),
+                shm,
+                surface,
+                attached: false,
+                toplevel_size: (300, 200),
+            };
+            let apply = Box::new(move |cmd: Cmd| match cmd {
+                Cmd::AnnounceMenu([bus, app, window, menubar, app_menu]) => menu.set_address(
+                    bus.into(),
+                    app.into(),
+                    window.into(),
+                    menubar.into(),
+                    app_menu.into(),
+                ),
+                Cmd::Destroy => menu.destroy(),
+                _ => panic!("an application window takes no menu bar command"),
+            });
+            (state, apply)
+        }))
+    }
+
+    fn send(&self, cmd: Cmd) {
+        self.0.send(cmd);
+    }
+
+    fn menu_bar_shown(&self) -> Vec<u32> {
+        self.0.status.lock().unwrap().menu_bar_shown.clone()
+    }
+
+    fn error(&self) -> Option<(String, u32)> {
+        self.0.status.lock().unwrap().error.clone()
+    }
+}
+
 // ---- tests ---------------------------------------------------------------------------------
 
 /// The group sent while no window is active.
@@ -1312,6 +1407,114 @@ fn gtk_clients_are_told_the_bar_is_gone_when_its_output_is() {
     h.wait_until("the client to be told the bar is gone", |_| {
         gtk.capabilities() == [2, 0]
     });
+}
+
+impl Harness {
+    fn wait_for_shown(&mut self, app: &KitAppClient, shown: &[u32]) {
+        let end = Instant::now() + Duration::from_secs(10);
+        while app.menu_bar_shown() != shown && Instant::now() < end {
+            self.step();
+        }
+        assert_eq!(app.menu_bar_shown(), shown);
+    }
+}
+
+#[test]
+fn an_announced_menu_reaches_the_bar_and_the_window_knows_whether_a_bar_shows_it() {
+    let Some(mut h) = Harness::new() else { return };
+    let app = KitAppClient::spawn(h.socket_path(), "org.example.Notes");
+    h.mapped_window(1);
+    h.wait_for_shown(&app, &[0]);
+    app.send(Cmd::AnnounceMenu([
+        ":1.42",
+        "/org/example/Notes",
+        "/org/example/Notes/window/1",
+        "/org/example/Notes/window/1/menus/menubar",
+        "",
+    ]));
+    h.step();
+
+    let bar = BarClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&bar, 1);
+    assert_eq!(
+        bar.groups()[0][1],
+        BarEvent::MenuGtk(
+            [
+                ":1.42",
+                "",
+                "/org/example/Notes",
+                "/org/example/Notes/window/1",
+                "/org/example/Notes/window/1/menus/menubar",
+                "",
+            ]
+            .map(String::from)
+        )
+    );
+    h.wait_for_shown(&app, &[0, 1]);
+
+    // the menu object goes: the window has no menus
+    app.send(Cmd::Destroy);
+    h.wait_for_groups(&bar, 2);
+    assert_eq!(bar.groups()[1][1], BarEvent::MenuNone);
+
+    bar.send(Cmd::Destroy);
+    let out = h.state.outputs[0].id;
+    h.wait_until("the bar to go", |s| !s.menu_bars.has_bar(out));
+    h.step();
+    assert_eq!(
+        app.menu_bar_shown(),
+        [0, 1],
+        "a destroyed menu object is not told"
+    );
+    assert_eq!(app.error(), None);
+}
+
+#[test]
+fn the_window_is_told_when_the_bar_stops() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = BarClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&bar, 1);
+    let app = KitAppClient::spawn(h.socket_path(), "org.example.Notes");
+    h.mapped_window(1);
+    h.wait_for_shown(&app, &[1]);
+    bar.send(Cmd::Destroy);
+    h.wait_for_shown(&app, &[1, 0]);
+}
+
+#[test]
+fn the_window_is_told_when_the_bars_output_goes() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = BarClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&bar, 1);
+    let app = KitAppClient::spawn(h.socket_path(), "org.example.Notes");
+    h.mapped_window(1);
+    h.wait_for_shown(&app, &[1]);
+    let output = h.state.outputs[0].id;
+    h.state.remove_output(output);
+    h.wait_for_shown(&app, &[1, 0]);
+}
+
+#[test]
+fn a_malformed_menu_address_is_a_protocol_error() {
+    let Some(mut h) = Harness::new() else { return };
+    let app = KitAppClient::spawn(h.socket_path(), "org.example.Notes");
+    h.mapped_window(1);
+    app.send(Cmd::AnnounceMenu([
+        "org.example.Notes",
+        "/org/example/Notes",
+        "/org/example/Notes/window/1",
+        "/org/example/Notes/window/1/menus/menubar",
+        "",
+    ]));
+    let end = Instant::now() + Duration::from_secs(10);
+    while app.error().is_none() && Instant::now() < end {
+        h.step();
+    }
+    // error 0 of cupertino_app_menu_v1.error is `invalid_address`
+    assert_eq!(
+        app.error(),
+        Some((CupertinoAppMenuV1::interface().name.to_string(), 0))
+    );
 }
 
 #[test]

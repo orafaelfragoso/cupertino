@@ -11,6 +11,9 @@ use crate::input::{translate_action, Action, Chord};
 use cupertino_input::{KeyCombo, Modifiers};
 use cupertino_keyboard::rewrite::ClientClass;
 use cupertino_keyboard::{ModifierProfile, Mods as LogicalMods, RawMods};
+use cupertino_protocols::server::app_effects::cupertino_app_menu_v1::{
+    self, CupertinoAppMenuV1, Error as AppMenuError,
+};
 use cupertino_protocols::server::cupertino_menu_bar_v1::{
     self, AgentTrust, AppWindowFlags, BoundAction, Command as BarCommand, CupertinoMenuBarV1,
     EditAction, Error as BarError, ModifierKey, SessionAction,
@@ -275,6 +278,14 @@ struct PendingEdit {
     returned: bool,
 }
 
+/// A `cupertino_app_menu_v1` of an application window.
+struct AppMenu {
+    resource: CupertinoAppMenuV1,
+    surface: WlSurface,
+    /// The object announced an address, which its destruction withdraws.
+    announced: bool,
+}
+
 /// Presentation model, the bars of the menu bar process and the menu addresses of windows.
 pub struct MenuBars {
     pub set: MenuBarSet,
@@ -285,6 +296,9 @@ pub struct MenuBars {
     pending: Vec<(WlSurface, MenuAddress)>,
     /// The last `edit` request still to be sent; a newer one replaces it.
     edit: Option<PendingEdit>,
+    app_menus: Vec<AppMenu>,
+    /// Whether the menu objects were last told that a bar shows their menus.
+    menus_shown: bool,
 }
 
 impl MenuBars {
@@ -298,7 +312,23 @@ impl MenuBars {
             addresses: HashMap::new(),
             pending: Vec::new(),
             edit: None,
+            app_menus: Vec::new(),
+            menus_shown: false,
         }
+    }
+
+    pub fn has_app_menu(&self, surface: &WlSurface) -> bool {
+        self.app_menus.iter().any(|m| &m.surface == surface)
+    }
+
+    /// Track a new menu object and tell it whether a bar shows its menus.
+    pub fn add_app_menu(&mut self, resource: CupertinoAppMenuV1, surface: WlSurface) {
+        resource.menu_bar(u32::from(self.menus_shown));
+        self.app_menus.push(AppMenu {
+            resource,
+            surface,
+            announced: false,
+        });
     }
 
     pub fn has_surface(&self, surface: &WlSurface) -> bool {
@@ -445,6 +475,7 @@ impl Cupertino {
         self.refresh_session_agent();
         self.refresh_menu_bar_shortcuts();
         self.refresh_gtk_capabilities();
+        self.refresh_app_menus();
     }
 
     /// The layer surface of a bar went away: the role ends with it.
@@ -469,6 +500,20 @@ impl Cupertino {
         self.menu_bars.set.set_menu_open(output, false, now);
         self.refresh_usable_area(output);
         self.refresh_gtk_capabilities();
+        self.refresh_app_menus();
+    }
+
+    /// Tell the windows' menu objects whether a bar shows their menus, when that changed: while any bar runs it
+    /// reads the address of the active window.
+    pub fn refresh_app_menus(&mut self) {
+        let shown = !self.menu_bars.is_empty();
+        if shown == self.menu_bars.menus_shown {
+            return;
+        }
+        self.menu_bars.menus_shown = shown;
+        for menu in &self.menu_bars.app_menus {
+            menu.resource.menu_bar(u32::from(shown));
+        }
     }
 
     /// The group the bars show now: the key window and the menu it exports.
@@ -1040,6 +1085,109 @@ impl Dispatch<CupertinoMenuBarV1, MenuBarData> for Cupertino {
     }
 }
 
+/// Whether `name` is a unique bus name such as `:1.42`.
+fn is_unique_bus_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix(':') else {
+        return false;
+    };
+    name.len() <= 255
+        && rest.split('.').count() >= 2
+        && rest.split('.').all(|e| {
+            !e.is_empty()
+                && e.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        })
+}
+
+/// Whether `path` is a D-Bus object path.
+fn is_object_path(path: &str) -> bool {
+    path == "/"
+        || path.strip_prefix('/').is_some_and(|rest| {
+            rest.split('/')
+                .all(|e| !e.is_empty() && e.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        })
+}
+
+/// Per-object data of a window's menu object; `surface` is `None` for an object the server rejected with a protocol
+/// error.
+pub struct AppMenuData {
+    pub surface: Option<WlSurface>,
+}
+
+impl Dispatch<CupertinoAppMenuV1, AppMenuData> for Cupertino {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        resource: &CupertinoAppMenuV1,
+        request: cupertino_app_menu_v1::Request,
+        data: &AppMenuData,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        let Some(surface) = &data.surface else { return };
+        if let cupertino_app_menu_v1::Request::SetAddress {
+            bus_name,
+            application_object_path,
+            window_object_path,
+            menubar_object_path,
+            app_menu_object_path,
+        } = request
+        {
+            let paths = [
+                &application_object_path,
+                &window_object_path,
+                &menubar_object_path,
+            ];
+            if !is_unique_bus_name(&bus_name)
+                || !paths.iter().all(|p| is_object_path(p))
+                || !(app_menu_object_path.is_empty() || is_object_path(&app_menu_object_path))
+            {
+                resource.post_error(
+                    AppMenuError::InvalidAddress,
+                    "a bus name or object path is malformed",
+                );
+                return;
+            }
+            let props = GtkMenuProps {
+                bus_name,
+                application_id: None,
+                application_object_path: Some(application_object_path),
+                window_object_path: Some(window_object_path),
+                menubar_object_path: Some(menubar_object_path),
+                app_menu_object_path: (!app_menu_object_path.is_empty())
+                    .then_some(app_menu_object_path),
+            };
+            if let Some(menu) = state
+                .menu_bars
+                .app_menus
+                .iter_mut()
+                .find(|m| &m.resource == resource)
+            {
+                menu.announced = true;
+            }
+            state.set_menu_address(surface, Some(MenuAddress::Gtk(props)));
+        }
+    }
+
+    /// The announcement ends with the object.
+    fn destroyed(state: &mut Self, _: ClientId, resource: &CupertinoAppMenuV1, data: &AppMenuData) {
+        let Some(i) = state
+            .menu_bars
+            .app_menus
+            .iter()
+            .position(|m| &m.resource == resource)
+        else {
+            return;
+        };
+        let menu = state.menu_bars.app_menus.remove(i);
+        if let (true, Some(surface)) = (menu.announced, &data.surface) {
+            if surface.is_alive() {
+                state.set_menu_address(surface, None);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1117,6 +1265,32 @@ mod tests {
                     profile.name
                 );
             }
+        }
+    }
+
+    #[test]
+    fn unique_bus_names_and_object_paths_are_checked() {
+        for name in [":1.42", ":1.0.7", ":a-b.c_d"] {
+            assert!(is_unique_bus_name(name), "{name}");
+        }
+        for name in [
+            "",
+            ":",
+            ":1",
+            ":1.",
+            ":.1",
+            "org.example.App",
+            ":1.4 2",
+            ":1.\u{e9}",
+        ] {
+            assert!(!is_unique_bus_name(name), "{name}");
+        }
+        assert!(!is_unique_bus_name(&format!(":1.{}", "2".repeat(254))));
+        for path in ["/", "/org/example/Notes", "/a/_1/window/2"] {
+            assert!(is_object_path(path), "{path}");
+        }
+        for path in ["", "org", "//", "/a/", "/a//b", "/a-b", "/a.b"] {
+            assert!(!is_object_path(path), "{path}");
         }
     }
 }

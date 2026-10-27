@@ -138,6 +138,8 @@ struct App {
     thumbnails_asked: std::collections::HashSet<std::path::PathBuf>,
     /// The listings running on threads: one that is running is not started again.
     listings: InFlight<ListingKey>,
+    /// The chooser's requests waiting for a running read of their folder to end.
+    queued_requests: std::collections::HashMap<ListingKey, cupertino_filepicker::Request>,
     /// The open pairing question's answer, sent when its sheet decides.
     agent_answer: Option<(u64, async_channel::Sender<Answer>)>,
     /// Whether this window's pairing agent is registered.
@@ -314,6 +316,7 @@ pub fn run(pane: PaneId) -> Result<()> {
         assets,
         thumbnails_asked: std::collections::HashSet::new(),
         listings: InFlight::default(),
+        queued_requests: std::collections::HashMap::new(),
         agent_answer: None,
         agent_registered: false,
         _files: files,
@@ -1372,31 +1375,48 @@ impl App {
             .collect();
         self.ask_thumbnails(current);
         // each listing on a thread of its own: a folder on a hung mount shows "Loading…" and holds nothing else up
-        let assets = self.assets.clone();
-        self.list_pictures(ListingKey::Packs, move || assets.wallpaper_files());
+        self.start_listing(ListingKey::Packs);
         for folder in folders {
-            self.list_pictures(ListingKey::Pictures(folder.clone()), move || {
-                cupertino_assets::pictures_in(&folder)
-            });
+            self.start_listing(ListingKey::Pictures(folder));
         }
     }
 
-    /// Read `key`'s pictures on a thread, unless that read is running already (a folder on a dead mount keeps one thread,
-    /// however often the pane is visited); its answer applies to whatever the pane lists by then.
-    fn list_pictures(
-        &mut self,
-        key: ListingKey,
-        read: impl FnOnce() -> Vec<cupertino_assets::WallpaperFile> + Send + 'static,
-    ) {
-        if !self.listings.start(key.clone()) {
-            return;
+    /// Start the read of `key` on a thread unless one is running (a folder on a dead mount keeps one thread, however
+    /// often it is visited); it is read once more when the running one is over if it was asked for meanwhile.
+    fn start_listing(&mut self, key: ListingKey) {
+        if self.listings.start(key.clone()) {
+            self.run_listing(key);
         }
+    }
+
+    /// Run the read of `key` on a thread; its answer comes back as a [`Background`] event.
+    fn run_listing(&mut self, key: ListingKey) {
         let notify = self.notify.clone();
+        let job: Box<dyn FnOnce() -> Background + Send> = match key.clone() {
+            ListingKey::Packs => {
+                let assets = self.assets.clone();
+                Box::new(move || Background::Pictures {
+                    files: assets.wallpaper_files(),
+                    key,
+                })
+            }
+            ListingKey::Pictures(folder) => Box::new(move || Background::Pictures {
+                files: cupertino_assets::pictures_in(&folder),
+                key,
+            }),
+            ListingKey::Chooser(..) => {
+                let Some(request) = self.queued_requests.remove(&key) else {
+                    self.listings.finish(&key);
+                    return;
+                };
+                Box::new(move || Background::Listing(request.run()))
+            }
+        };
         let spawned = std::thread::Builder::new()
-            .name("wallpaper-listing".into())
-            .spawn(move || notify(Background::Pictures { files: read(), key }));
+            .name("settings-listing".into())
+            .spawn(move || notify(job()));
         if let Err(e) = spawned {
-            eprintln!("cupertino-settings: cannot list the pictures: {e}");
+            eprintln!("cupertino-settings: cannot list a folder: {e}");
         }
     }
 
@@ -1439,17 +1459,11 @@ impl App {
             return;
         };
         let (dir, hidden, mode) = request.key();
-        // a folder being read already (a dead mount visited again) is not read twice: its answer serves this request
-        if !self.listings.start(ListingKey::Chooser(dir, hidden, mode)) {
-            return;
-        }
-        let notify = self.notify.clone();
-        let spawned = std::thread::Builder::new()
-            .name("chooser-listing".into())
-            .spawn(move || notify(Background::Listing(request.run())));
-        if let Err(e) = spawned {
-            eprintln!("cupertino-settings: cannot list the folder: {e}");
-        }
+        let key = ListingKey::Chooser(dir, hidden, mode);
+        // a folder being read already (a dead mount visited again) is not read twice: the running read's answer serves
+        // this request, and the request waits to be read once more after it
+        self.queued_requests.insert(key.clone(), request);
+        self.start_listing(key);
     }
 
     /// Store the typed resolution of the mouse `key`; the server applies the file.
@@ -1480,7 +1494,9 @@ impl App {
                 }
             }
             Background::Pictures { key, files } => {
-                self.listings.finish(&key);
+                if self.listings.finish(&key) {
+                    self.run_listing(key.clone());
+                }
                 let images: Vec<std::path::PathBuf> =
                     files.iter().map(|f| f.light.clone()).collect();
                 let pictures = &mut self.live.pictures;

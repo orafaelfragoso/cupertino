@@ -92,6 +92,7 @@ pub enum KeyboardEvent {
 pub(crate) struct PointerTracker {
     focus: Option<SurfaceId>,
     position: Point,
+    scroll: Option<(f64, f64)>,
 }
 
 impl PointerTracker {
@@ -134,9 +135,19 @@ impl PointerTracker {
         })
     }
 
-    /// One axis of a scroll; `vertical` selects `dy`.
-    pub(crate) fn scroll(&self, vertical: bool, value: f64) -> Option<(SurfaceId, PointerEvent)> {
-        let (dx, dy) = if vertical { (0.0, value) } else { (value, 0.0) };
+    /// Add one axis of a scroll to the pending one; `vertical` selects `dy`.
+    pub(crate) fn axis(&mut self, vertical: bool, value: f64) {
+        let (dx, dy) = self.scroll.get_or_insert((0.0, 0.0));
+        if vertical {
+            *dy += value;
+        } else {
+            *dx += value;
+        }
+    }
+
+    /// End a pointer frame: both axes of the pending scroll become one event.
+    pub(crate) fn frame(&mut self) -> Option<(SurfaceId, PointerEvent)> {
+        let (dx, dy) = self.scroll.take()?;
         self.focus.map(|s| {
             (
                 s,
@@ -330,7 +341,7 @@ mod tests {
     }
 
     #[test]
-    fn buttons_and_scrolls_carry_the_last_position_and_need_focus() {
+    fn buttons_and_scrolls_carry_the_last_position_and_need_focus_and_a_frame_sums_its_axes() {
         let mut t = PointerTracker::default();
         assert_eq!(t.button(BTN_LEFT, true), None);
         let s = SurfaceId(3);
@@ -348,17 +359,22 @@ mod tests {
                 }
             ))
         );
+        assert_eq!(t.frame(), None);
+        t.axis(true, -10.0);
+        t.axis(false, 4.0);
+        t.axis(true, -2.5);
         assert_eq!(
-            t.scroll(true, -10.0),
+            t.frame(),
             Some((
                 s,
                 PointerEvent::Scroll {
-                    dx: 0.0,
-                    dy: -10.0,
+                    dx: 4.0,
+                    dy: -12.5,
                     position
                 }
             ))
         );
+        assert_eq!(t.frame(), None);
         t.forget(s);
         assert_eq!(t.leave(), None);
         assert_eq!(t.motion(Point::ZERO), None);

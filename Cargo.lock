@@ -867,6 +867,7 @@ dependencies = [
  "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-icons",
+ "cupertino-text-field",
  "cupertino-theme",
  "cupertino-typeahead",
  "image",

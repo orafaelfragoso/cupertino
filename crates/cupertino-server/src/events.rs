@@ -436,6 +436,8 @@ impl Cupertino {
         self.execute_plan(mod_plan);
         if pressed && !crate::overlays::is_modifier_sym(okey.sym) {
             self.last_user_event = Some(self.now());
+            let focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
+            self.note_input(focus.as_ref());
         }
         if !ctx.locked {
             self.input_sources_modifiers(okey.mods);
@@ -887,6 +889,8 @@ impl Cupertino {
         let now = self.now();
         if state == ButtonState::Pressed {
             self.last_user_event = Some(now);
+            let focus = pointer.current_focus();
+            self.note_input(focus.as_ref());
         }
         let release_consumed =
             state == ButtonState::Released && self.consumed_buttons.contains(&button);

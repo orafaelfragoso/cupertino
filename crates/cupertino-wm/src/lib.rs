@@ -27,8 +27,10 @@ pub mod wm;
 pub mod workspace;
 pub mod zoom;
 
-pub use activation::{token_accepted, USER_EVENT_SLACK};
-pub use command::{AnimationKind, Command, Effect, MapParams, Modifiers};
+pub use activation::{token_accepted, GRANT_LIFETIME, USER_EVENT_SLACK};
+pub use command::{
+    Activation, AnimationKind, Command, Effect, Grant, MapFocus, MapParams, Modifiers,
+};
 pub use config::{
     AnimationConfig, DesktopPeekConfig, FocusConfig, MagnetConfig, SnapConfig, WmConfig,
     WorkspaceConfig, ZoomConfig,

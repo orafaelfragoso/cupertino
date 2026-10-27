@@ -20,6 +20,7 @@ use smithay::reexports::calloop::{Interest, LoopHandle, LoopSignal, Mode, PostAc
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::{Display, DisplayHandle};
 use smithay::utils::{
     Clock, Logical, Monotonic, Point, Rectangle, Serial, Size as SmSize, Transform, SERIAL_COUNTER,
@@ -68,14 +69,30 @@ use crate::supervisor::Supervisor;
 use crate::window_manager::WindowManagers;
 use cupertino_assets::Assets;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ClientState {
     pub compositor_state: CompositorClientState,
+    /// When the client connected (the state is made as the connection is accepted).
+    pub connected_at: std::time::Instant,
+    /// The client has mapped a toplevel: its next one is not the first.
+    pub mapped_toplevel: std::sync::atomic::AtomicBool,
     /// The compositor's own connection (the accent picker's input method bridge).
     pub internal: bool,
     /// A shell process the server started on a connection of its own (`crate::capture::launch`): only such a client
     /// sees the screen-capture globals.
     pub privileged: bool,
+}
+
+impl Default for ClientState {
+    fn default() -> Self {
+        Self {
+            compositor_state: CompositorClientState::default(),
+            connected_at: std::time::Instant::now(),
+            mapped_toplevel: std::sync::atomic::AtomicBool::new(false),
+            internal: false,
+            privileged: false,
+        }
+    }
 }
 
 impl ClientData for ClientState {
@@ -278,6 +295,13 @@ pub struct Cupertino {
     /// Model time of the last key press (not a modifier) or button press: the user event the
     /// activation-token rule compares tokens with.
     pub last_user_event: Option<f64>,
+    /// The last key or button press and the client that had it (`None`: no client, the desktop or a server decoration),
+    /// for the first-window rule of the focus policy.
+    pub last_input: Option<(std::time::Instant, Option<ClientId>)>,
+    /// Activation tokens presented for surfaces that have no window yet (a program activates its first surface as it maps),
+    /// by surface, until the window maps.
+    pub pending_activations:
+        HashMap<smithay::reexports::wayland_server::backend::ObjectId, crate::handlers::TokenGrant>,
     /// A server move or resize waiting for the pointer to leave the drag-start box.
     pub pending_drag: Option<crate::events::PendingDrag>,
     pub cursor_status: CursorImageStatus,
@@ -505,6 +529,8 @@ impl Cupertino {
             pointer_mode: PointerMode::Normal,
             consumed_buttons: Vec::new(),
             last_user_event: None,
+            last_input: None,
+            pending_activations: HashMap::new(),
             pending_drag: None,
             cursor_status: CursorImageStatus::default_named(),
             cursor_loader,
@@ -930,6 +956,7 @@ impl Cupertino {
         // the model turns a modal child into a sheet and places dialogs
         params.kind = cupertino_wm::window_kind(params.modal, false);
         params.output = Some(output);
+        params.activation = cupertino_wm::Activation::Policy(self.map_focus(&surface));
         self.windows[idx].mapped = true;
         self.apply_pending_menu_addresses(id.0, &surface);
         let handle = self
@@ -939,6 +966,48 @@ impl Cupertino {
         let now = self.now();
         let fx = self.wm.handle(Command::Map(params), now);
         self.apply_effects(fx);
+    }
+
+    /// The facts the focus policy needs about a window that maps (`cupertino_wm::MapFocus`): whether it is its client's
+    /// first toplevel, whether the person has given input elsewhere since the client connected, and the activation token
+    /// it presented. Uses up the pending token.
+    fn map_focus(&mut self, surface: &WlSurface) -> cupertino_wm::MapFocus {
+        use std::sync::atomic::Ordering;
+        let (first_of_client, input_elsewhere) = match surface.client() {
+            Some(client) => match client.get_data::<ClientState>() {
+                Some(data) => {
+                    let id = client.id();
+                    let first = !data.mapped_toplevel.swap(true, Ordering::SeqCst);
+                    let elsewhere = self.last_input.as_ref().is_some_and(|(at, who)| {
+                        *at > data.connected_at && who.as_ref() != Some(&id)
+                    });
+                    (first, elsewhere)
+                }
+                None => (false, false),
+            },
+            None => (false, false),
+        };
+        let grant = self
+            .pending_activations
+            .remove(&surface.id())
+            .map(|g| cupertino_wm::Grant {
+                created: g.created,
+                valid: g.valid,
+            });
+        cupertino_wm::MapFocus {
+            first_of_client,
+            input_elsewhere,
+            grant,
+            last_user_event: self.last_user_event,
+        }
+    }
+
+    /// Note that a key or button press went to `focus` (its client, if any).
+    pub fn note_input(&mut self, focus: Option<&WlSurface>) {
+        self.last_input = Some((
+            std::time::Instant::now(),
+            focus.and_then(|s| s.client()).map(|c| c.id()),
+        ));
     }
 
     /// Insets for a window decorated by the compositor with a title bar of `style`.

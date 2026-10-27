@@ -2,7 +2,7 @@
 
 Cupertino is a Wayland compositor and desktop shell for Linux, written in Rust on [Smithay](https://github.com/Smithay/smithay). It gives you a quiet, consistent desktop: translucent materials, soft shadows, spring animations, a dock, a menu bar, a launcher, notifications, a control panel, a file manager, a settings app, a lock screen and a session manager.
 
-**Status: early release (0.x).** It runs nested inside another Wayland session and on a TTY. The TTY backend has run in a virtual machine, not yet on real hardware; treat it as experimental. Interfaces and configuration files can still change between releases.
+**Status: early release (0.x).** It runs nested inside another Wayland session and on a TTY. The TTY backend has run in a virtual machine, not yet on real hardware; treat it as experimental. Interfaces and configuration files can still change between releases. The [changelog](CHANGELOG.md) lists what changed in the current candidate.
 
 Cupertino serves Wayland clients only. There is no X11 or XWayland support.
 

@@ -191,8 +191,11 @@ pub struct PointerSettings {
     pub mouse_speed: f64,
     /// Touchpad tracking speed, 0…3. default 0.6875.
     pub trackpad_speed: f64,
-    /// Speed-dependent mouse acceleration (default on); off scales mouse motion
-    /// linearly by `mouse_speed`.
+    /// Resolution the user stored per mouse, by `cupertino_defaults::compositor::mouse_dpi_key`; a mouse without an
+    /// entry uses the hardware database's, else 1000.
+    pub mouse_dpi: std::collections::BTreeMap<String, u32>,
+    /// Speed-dependent mouse acceleration (default on); off gives a constant gain by `mouse_speed`, per
+    /// count of a 400 dpi mouse and scaled by the real resolution (a negative speed passes counts through).
     pub mouse_acceleration: bool,
     /// Content follows the fingers (default on).
     pub natural_scrolling: bool,
@@ -215,6 +218,9 @@ impl PointerSettings {
         }
         if let Some(v) = f.trackpad_speed {
             self.trackpad_speed = v;
+        }
+        if let Some(m) = &f.mouse_dpi {
+            self.mouse_dpi = m.clone();
         }
         if let Some(b) = f.mouse_acceleration {
             self.mouse_acceleration = b;
@@ -244,6 +250,7 @@ impl Default for PointerSettings {
         Self {
             mouse_speed: speed,
             trackpad_speed: speed,
+            mouse_dpi: std::collections::BTreeMap::new(),
             mouse_acceleration: cupertino_input::DEFAULT_ACCELERATION,
             natural_scrolling: true,
             cursor_scale: cupertino_input::CURSOR_SCALE_MIN,

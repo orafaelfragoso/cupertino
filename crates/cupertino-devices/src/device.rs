@@ -110,6 +110,13 @@ impl Device {
         self.properties.get(key).map(String::as_str)
     }
 
+    /// A property udevd holds for this device node, such as the hardware database's `MOUSE_DPI`; `None` without udevd
+    /// or without such a property. Sysfs has only the kernel's properties ([`Device::property`]).
+    pub fn udev_property(&self, key: &str) -> Option<String> {
+        crate::udev_db::read_udev_properties(Path::new(crate::udev_db::UDEV_DATA_DIR), self.devnum?)
+            .remove(key)
+    }
+
     /// The seat this device belongs to; always `seat0` here (see [`crate::seat`]).
     pub fn seat(&self) -> &str {
         seat::seat_name(&self.properties)

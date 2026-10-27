@@ -24,6 +24,10 @@ pub const DEFAULT_RESOLUTION_DPI: f64 = 400.0;
 /// Points scrolled per wheel line: the legacy scroll event's point delta is ten times the line
 /// delta.
 pub const POINTS_PER_LINE: f64 = 10.0;
+/// Lines scrolled by one wheel notch.
+pub const WHEEL_LINES_PER_NOTCH: f64 = 3.0;
+/// Height of one scroll line, in points.
+pub const WHEEL_LINE_POINTS: f64 = 16.0;
 /// Smallest speed fed to the curve, `1/65536`.
 pub(crate) const MIN_SPEED: f64 = 1.0 / 65536.0;
 
@@ -42,6 +46,11 @@ pub const DEFAULT_ACCELERATION: bool = true;
 /// (the kernel's legacy path multiplies by the same 10.0).
 pub fn scroll_point_delta(lines: f64) -> i32 {
     (lines * POINTS_PER_LINE).trunc() as i32
+}
+
+/// Points scrolled for `v120` wheel units, 120 to a notch: three lines of 16 points per notch.
+pub fn wheel_points(v120: f64) -> f64 {
+    v120 / 120.0 * WHEEL_LINES_PER_NOTCH * WHEEL_LINE_POINTS
 }
 
 /// One curve of the family; every field is a 16.16 fixed-point value in the source data.
@@ -265,11 +274,15 @@ impl AccelCurve {
     /// and its output is scaled by 96/67.
     pub(crate) fn pixels(&self, counts: f64, resolution: f64, rate: f64) -> f64 {
         let v = counts * rate / resolution;
-        let out = match self {
+        self.output_speed(v) * PIXELS_PER_INCH / NOMINAL_RATE
+    }
+
+    /// The speed the cursor moves at, in inches per second, for a hand at `v` inches per second.
+    pub(crate) fn output_speed(&self, v: f64) -> f64 {
+        match self {
             Self::Parametric(c) => c.speed(v),
             Self::Table(c) => c.speed(v),
-        };
-        out * PIXELS_PER_INCH / NOMINAL_RATE
+        }
     }
 }
 
@@ -510,6 +523,13 @@ mod tests {
     #[test]
     fn fresh_defaults_select_stop_three() {
         assert_eq!(TRACKING_SPEED_STOPS[3], DEFAULT_TRACKING_SPEED);
+    }
+
+    #[test]
+    fn a_wheel_notch_scrolls_three_lines_of_sixteen_points() {
+        assert_eq!(wheel_points(120.0), 48.0);
+        assert_eq!(wheel_points(-120.0), -48.0);
+        assert_eq!(wheel_points(30.0), 12.0);
     }
 
     #[test]

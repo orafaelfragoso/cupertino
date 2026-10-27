@@ -429,7 +429,9 @@ impl App {
                     self.apply(i, outcome)?;
                 }
             }
-            Event::SessionLock { locked: false } | Event::LockRequested { .. } => {}
+            Event::SessionLock { locked: false }
+            | Event::LockRequested { .. }
+            | Event::LogOutRequested => {}
             Event::OutputsChanged => self.reconcile_outputs()?,
             Event::ActivationToken { .. } => {
                 return Err("an activation token arrived but this process asked for none".into())

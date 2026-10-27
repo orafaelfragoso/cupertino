@@ -61,11 +61,25 @@ impl SessionObservers {
     pub fn lock_requested(&self, explicit: bool) -> bool {
         let mut told = false;
         for observer in self.observers.iter().filter(|o| {
-            o.version() >= 3
+            o.version() >= 7
                 && o.client()
                     .is_some_and(|c| authorized(&c, ShellRole::SessionLock))
         }) {
             observer.lock_requested(u32::from(explicit));
+            told = true;
+        }
+        told
+    }
+
+    /// Ask the login process to ask whether to log out, the way [`Self::lock_requested`] asks for the lock.
+    pub fn log_out_requested(&self) -> bool {
+        let mut told = false;
+        for observer in self.observers.iter().filter(|o| {
+            o.version() >= 9
+                && o.client()
+                    .is_some_and(|c| authorized(&c, ShellRole::SessionLock))
+        }) {
+            observer.log_out_requested();
             told = true;
         }
         told

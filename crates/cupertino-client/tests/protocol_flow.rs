@@ -1518,7 +1518,7 @@ fn spawn_server_reporting(
         dh.create_global::<Mock, WlOutput, _>(4, ());
         dh.create_global::<Mock, WlSeat, _>(7, ());
         dh.create_global::<Mock, ZwlrLayerShellV1, _>(4, ());
-        dh.create_global::<Mock, CupertinoShellV1, _>(8, ());
+        dh.create_global::<Mock, CupertinoShellV1, _>(9, ());
         dh.create_global::<Mock, CupertinoAppEffectsV1, _>(1, ());
         dh.create_global::<Mock, XdgActivationV1, _>(1, ());
         dh.create_global::<Mock, ZxdgOutputManagerV1, _>(3, ());

@@ -359,7 +359,7 @@ fn only_the_supervised_login_process_owns_the_login_name() {
     let _ = other.wait();
     assert_eq!(
         results,
-        ((1, 0), (1, 0), (0, 1), (0, 1)),
-        "delivered to the supervised process or in a dev shell; a squatter or no login process runs the fallback"
+        ((1, 0), (1, 0), (0, 0), (0, 0)),
+        "delivered to the supervised process or in a dev shell; an owner that is not the login process gets nothing and does not end the session"
     );
 }

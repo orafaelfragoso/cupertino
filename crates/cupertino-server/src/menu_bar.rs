@@ -101,7 +101,7 @@ struct Bar {
     sent: Option<Feed>,
     /// The screen capture state last sent (version 3); `None` until the first one.
     capture_sent: Option<bool>,
-    /// The session agent last named (version 5); `None` until the first time.
+    /// The session agent last named (version 8); `None` until the first time.
     agent_sent: Option<LoginTrust>,
 }
 
@@ -365,14 +365,14 @@ impl Cupertino {
         }
     }
 
-    /// Tell the bars of version 5 or later which process is the session agent, each one when that changed for it.
+    /// Tell the bars of version 8 or later which process is the session agent, each one when that changed for it.
     pub fn refresh_session_agent(&mut self) {
         let trust = self.login_trust();
         for bar in self
             .menu_bars
             .bars
             .iter_mut()
-            .filter(|b| b.resource.version() >= 5 && b.agent_sent != Some(trust))
+            .filter(|b| b.resource.version() >= 8 && b.agent_sent != Some(trust))
         {
             let (kind, pid) = match trust {
                 LoginTrust::Nobody => (AgentTrust::None, 0),

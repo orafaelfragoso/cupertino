@@ -1,7 +1,9 @@
 //! Who is on the other end of a session bus call. Every client of the bus runs as the same user, so the user id says
 //! nothing; the caller is the process behind its connection, taken from the `ProcessFD` the bus daemon gives
 //! (`GetConnectionCredentials`). The descriptor keeps the process id from being reused for another process while the
-//! call is judged. A caller without one is anonymous and trusted with nothing.
+//! call is judged. A daemon that gives no descriptor (older than 1.15) is asked for the `ProcessID` instead and the
+//! pidfd is opened here: until then the process id could name another process if the caller exited and its connection
+//! lived on in a child. A caller without either is anonymous and trusted with nothing.
 //!
 //! A caller in a sandbox shares the user id as well, so it is told apart the way the desktop portal does it: a Flatpak
 //! has `/.flatpak-info` in its root, a Snap has an AppArmor label that starts with `snap.`. A sandboxed caller may not
@@ -161,6 +163,20 @@ impl From<Denial> for CallerError {
     }
 }
 
+/// The process a daemon names: the `ProcessFD` when it gives one, else a pidfd opened for its `ProcessID` (a daemon
+/// older than 1.15 has no descriptor to give).
+fn process_of(credentials: &ConnectionCredentials) -> Option<ProcessHandle> {
+    if let Some(fd) = credentials.process_fd() {
+        let fd = std::os::fd::AsFd::as_fd(fd).try_clone_to_owned().ok()?;
+        let process = ProcessHandle::from_pidfd(fd).ok()?;
+        let agrees = credentials
+            .process_id()
+            .is_none_or(|pid| pid == process.pid);
+        return agrees.then_some(process);
+    }
+    ProcessHandle::open(credentials.process_id()?).ok()
+}
+
 impl Caller {
     pub fn pid(&self) -> Option<u32> {
         match self {
@@ -171,21 +187,9 @@ impl Caller {
 
     /// Read the credentials the daemon gave for a connection; `proc_root` is `/proc`.
     pub fn from_credentials(credentials: &ConnectionCredentials, proc_root: &Path) -> Caller {
-        let Some(fd) = credentials
-            .process_fd()
-            .and_then(|fd| std::os::fd::AsFd::as_fd(fd).try_clone_to_owned().ok())
-        else {
+        let Some(process) = process_of(credentials) else {
             return Caller::Anonymous;
         };
-        let Ok(process) = ProcessHandle::from_pidfd(fd) else {
-            return Caller::Anonymous;
-        };
-        if credentials
-            .process_id()
-            .is_some_and(|pid| pid != process.pid)
-        {
-            return Caller::Anonymous;
-        }
         let Ok(sandbox) = classify(
             proc_root,
             process.pid,
@@ -343,11 +347,26 @@ mod tests {
     }
 
     #[test]
-    fn a_connection_without_a_process_descriptor_is_anonymous() {
-        let none = ConnectionCredentials::default().set_process_id(std::process::id());
-        let caller = Caller::from_credentials(&none, Path::new("/proc"));
+    fn a_connection_without_any_process_is_anonymous() {
+        let caller =
+            Caller::from_credentials(&ConnectionCredentials::default(), Path::new("/proc"));
         assert!(matches!(caller, Caller::Anonymous));
         assert_eq!(caller.unsandboxed().err(), Some(Denial::Anonymous));
+    }
+
+    #[test]
+    fn a_daemon_without_a_descriptor_is_judged_by_the_process_id() {
+        let credentials = ConnectionCredentials::default().set_process_id(std::process::id());
+        let Caller::Process(host) = Caller::from_credentials(&credentials, Path::new("/proc"))
+        else {
+            panic!("identified");
+        };
+        assert_eq!(host.process.pid, std::process::id());
+        let gone = ConnectionCredentials::default().set_process_id(i32::MAX as u32);
+        assert!(matches!(
+            Caller::from_credentials(&gone, Path::new("/proc")),
+            Caller::Anonymous
+        ));
     }
 
     #[test]

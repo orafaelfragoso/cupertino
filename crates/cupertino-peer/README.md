@@ -5,8 +5,9 @@ nothing; the caller is the process behind its connection.
 
 * `identify(connection, sender) -> Caller`: asks the bus daemon for the connection's credentials and takes the process from
   the `ProcessFD` it gives. The descriptor is held as a `ProcessHandle` (a pidfd) while the call is judged, so a process id
-  that is reused meanwhile is never mistaken for the caller. A caller without a descriptor, with a process id that disagrees
-  with it, that cannot be classified or that has exited is `Caller::Anonymous` and trusted with nothing.
+  that is reused meanwhile is never mistaken for the caller. A daemon older than 1.15 (Ubuntu 24.04 ships 1.14) gives no
+  descriptor; the pidfd is then opened for its `ProcessID`. A caller with no process at all, with a process id that
+  disagrees with the descriptor, that cannot be classified or that has exited is `Caller::Anonymous` and trusted with nothing.
 * Sandboxes are told apart the way the desktop portal does it: a process with `/proc/<pid>/root/.flatpak-info` is a Flatpak,
   one whose `LinuxSecurityLabel` starts with `snap.` a Snap. `Caller::unsandboxed` refuses both and the anonymous caller
   (`Denial`).

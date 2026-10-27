@@ -54,6 +54,10 @@ mod tests {
         let reads = Arc::new(Mutex::new(0u32));
         let published = Arc::new(Mutex::new(Vec::new()));
         let (a, r, p) = (answers.clone(), reads.clone(), published.clone());
+        // a burst queued before the reader runs: one read
+        for _ in 0..5 {
+            tx.send(()).unwrap();
+        }
         let thread = std::thread::spawn(move || {
             run(
                 rx,
@@ -64,10 +68,6 @@ mod tests {
                 move |caps| p.lock().unwrap().push(caps.sleep),
             )
         });
-        // a burst queued before the reader runs: one read
-        for _ in 0..5 {
-            tx.send(()).unwrap();
-        }
         drop(tx);
         thread.join().unwrap();
         assert_eq!(*reads.lock().unwrap(), 1, "five requests, one read");

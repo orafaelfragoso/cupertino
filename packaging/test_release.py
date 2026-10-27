@@ -91,14 +91,19 @@ class LicenceTest(unittest.TestCase):
     def test_a_crate_the_copyright_file_gives_another_licence_is_reported(self):
         text = ('Files: *\nCopyright: x\nLicense: GPL-3+\n\n'
                 'Files: crates/a/*\n crates/b/*\nCopyright: x\nLicense: MPL-2.0\n\n'
-                'Files: crates/*/protocols/*.xml\nCopyright: x\nLicense: MIT or Apache-2.0\n')
+                'Files: crates/*/protocols/*.xml\nCopyright: x\nLicense: MIT or Apache-2.0\n\n'
+                'Files: crates/b/src/*\nCopyright: x\nLicense: GPL-3+\n')
         crates = {'a': 'MPL-2.0', 'b': 'MPL-2.0', 'c': 'MPL-2.0', 'd': 'GPL-3.0-or-later', 'e': 'MPL-2.0 AND OFL-1.1'}
-        self.assertEqual(release.crate_license_problems(text, crates),
-                         ['c is MPL-2.0, the Debian copyright file gives its files GPL-3.0-or-later'])
+        paths = ['crates/a/Cargo.toml', 'crates/a/protocols/x.xml', 'crates/b/Cargo.toml', 'crates/b/src/lib.rs',
+                 'crates/c/Cargo.toml', 'crates/d/src/main.rs', 'crates/e/Cargo.toml', 'README.md']
+        self.assertEqual(release.crate_license_problems(text, crates, paths),
+                         ['crates/b/src/lib.rs is MPL-2.0 as its crate, the Debian copyright file gives it GPL-3.0-or-later',
+                          'crates/c/Cargo.toml is MPL-2.0 as its crate, the Debian copyright file gives it GPL-3.0-or-later'])
 
-    def test_every_workspace_crate_has_its_licence_in_the_copyright_file(self):
+    def test_every_workspace_crate_file_has_its_licence_in_the_copyright_file(self):
         text = (release.ROOT / 'packaging/debian/cupertino.copyright').read_text()
-        self.assertEqual(release.crate_license_problems(text, release.workspace_crate_licenses()), [])
+        problems = release.crate_license_problems(text, release.workspace_crate_licenses(), release.tracked_crate_files())
+        self.assertEqual(problems, [])
 
     def test_the_runtime_ships_the_licences_of_its_crates_and_embedded_notices(self):
         self.assertEqual(release.shipped_licenses('runtime'), {'GPL-3.0-or-later', 'MPL-2.0', 'MIT', 'OFL-1.1', 'LGPL-2.1-or-later', 'MIT-CMU', 'BSD-3-Clause'})

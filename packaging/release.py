@@ -353,9 +353,9 @@ def missing_licenses(shipped, declared):
     return [f'{place} lacks {", ".join(sorted(shipped - ids))}' for place, ids in sorted(declared.items()) if shipped - ids]
 
 
-def crate_license_problems(copyright_text, crates):
-    """['<crate> is <id>, ...'] for each crate {directory: Cargo.toml licence} with one licence whose files the last
-    matching Files paragraph of the Debian copyright file gives another."""
+def crate_license_problems(copyright_text, crates, paths):
+    """['<file> is <id>, ...'] for each of `paths` in a crate {directory: Cargo.toml licence} with one licence that the
+    last matching Files paragraph of the Debian copyright file gives another; protocol XML files keep their own."""
     paragraphs = []
     for block in re.split(r'\n\s*\n', copyright_text):
         files = re.search(r'^Files:(.*(?:\n .*)*)', block, re.M)
@@ -363,14 +363,21 @@ def crate_license_problems(copyright_text, crates):
         if files and lic:
             paragraphs.append((files[1].split(), DEB_LICENSES.get(lic[1].strip(), lic[1].strip())))
     problems = []
-    for name, lic in sorted(crates.items()):
-        if not re.fullmatch(r'[\w.+-]+', lic):
+    for path in sorted(paths):
+        parts = path.split('/')
+        lic = crates.get(parts[1]) if len(parts) > 2 and parts[0] == 'crates' else None
+        if lic is None or not re.fullmatch(r'[\w.+-]+', lic) or fnmatch.fnmatchcase(path, 'crates/*/protocols/*.xml'):
             continue
-        path = f'crates/{name}/Cargo.toml'
         got = next((l for files, l in reversed(paragraphs) if any(fnmatch.fnmatchcase(path, f) for f in files)), None)
         if got != lic:
-            problems.append(f'{name} is {lic}, the Debian copyright file gives its files {got}')
+            problems.append(f'{path} is {lic} as its crate, the Debian copyright file gives it {got}')
     return problems
+
+
+def tracked_crate_files():
+    """The files git tracks under crates/."""
+    out = subprocess.run(['git', 'ls-files', 'crates'], cwd=ROOT, capture_output=True, text=True, check=True).stdout
+    return out.splitlines()
 
 
 def workspace_crate_licenses():
@@ -463,7 +470,8 @@ def cmd_check_metadata(_args):
     problems = third_party_problems()
     problems += [f'licence text {src} for /usr/share/licenses/cupertino/{n} does not exist'
                 for n, src in LICENSE_TEXTS if not (ROOT / src).is_file()]
-    problems += crate_license_problems((ROOT / 'packaging/debian/cupertino.copyright').read_text(), workspace_crate_licenses())
+    problems += crate_license_problems((ROOT / 'packaging/debian/cupertino.copyright').read_text(), workspace_crate_licenses(),
+                                       tracked_crate_files())
     for package in MANIFESTS:
         problems += [f'{package} licence: {m}' for m in missing_licenses(shipped_licenses(package), declared_licenses(package))]
     for crate, package in (('cupertino-server', 'runtime'), ('cupertino-assets', 'data')):

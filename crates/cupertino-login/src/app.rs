@@ -5,12 +5,8 @@
 //! ([`logout`], with the interrupt panel when one does not quit) and then carries out what was confirmed through logind.
 
 use crate::options::SessionOptions;
-use crate::screen::{self, FrameKey, Notifier, Result, Scene};
+use crate::screen::{self, FrameKey, Notifier, OutputSurface, Result, Scene};
 use cupertino_assets::Assets;
-use cupertino_client::{
-    Anchor, Button, Client, Event, KeyboardInteractivity, Layer, LayerSurfaceConfig, LockState,
-    Margin, OutputId, PointerEvent, SurfaceId,
-};
 use cupertino_login::auth::{self, Authenticator};
 use cupertino_login::autostart;
 use cupertino_login::capabilities::{Answer, Capabilities, Inputs};
@@ -30,7 +26,15 @@ use cupertino_login::probe;
 use cupertino_login::render::{PanelView, Renderer};
 use cupertino_login::user::User;
 use cupertino_login::{session, upower};
+use cupertino_shell_client::{
+    Anchor, IdleNotifier, IdleWatch, KeyboardInteractivity, Layer, LayerShell, LayerSurface,
+    LayerSurfaceConfig, Margin, Session, SessionLock, SessionLockManager, Shell, ShellEvent,
+};
 use cupertino_theme::Theme;
+use cupertino_ui_wayland::{Ready, ShmPresenter};
+use cupertino_wayland_client::{
+    Button, Connection, Event, KeyboardEvent, Modifiers, PointerEvent, SurfaceId,
+};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
@@ -65,8 +69,11 @@ enum Message {
 /// The session while it is locked or being locked.
 struct Lock {
     screen: LockScreen,
+    session_lock: SessionLock,
     /// The lock surface of each output.
-    surfaces: Vec<(SurfaceId, OutputId)>,
+    surfaces: Vec<OutputSurface>,
+    /// The server's answer to the lock: confirmed (`true`) or refused or ended.
+    answer: Option<bool>,
     /// The server confirmed the lock.
     confirmed: bool,
     /// The last frame drawn.
@@ -78,7 +85,8 @@ struct PanelState {
     panel: Panel,
     /// Where its parts sit; its size is the surface's.
     frames: Frames,
-    surface: SurfaceId,
+    layer: LayerSurface,
+    presenter: ShmPresenter,
     /// The countdown number the last frame showed (`Some(None)`: a panel without a countdown); `None`: not drawn yet.
     drawn: Option<Option<u32>>,
 }
@@ -95,7 +103,8 @@ struct Quitting {
 struct InterruptState {
     app: String,
     frames: interrupt::Frames,
-    surface: SurfaceId,
+    layer: LayerSurface,
+    presenter: ShmPresenter,
 }
 
 /// Namespace of the panel's layer surface for the server.
@@ -104,7 +113,14 @@ const PANEL_NAMESPACE: &str = "login-panel";
 struct App {
     /// Asks the probe thread to read logind and the session manager again.
     refresh: mpsc::Sender<()>,
-    client: Client,
+    conn: Connection,
+    layer_shell: LayerShell,
+    lock_manager: Option<SessionLockManager>,
+    /// Keeps the lock and log-out requests coming.
+    _session: Session,
+    _idle: Option<IdleWatch>,
+    /// The seat went idle and input has not resumed since.
+    idled: bool,
     user: User,
     renderer: Renderer,
     authenticator: Authenticator,
@@ -151,9 +167,14 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     let renderer = Renderer::new(theme.tokens.typography(), &assets)?;
     let user = User::current()?;
 
-    let mut client = Client::connect_shell()?;
+    let mut conn = Connection::connect()?;
+    let layer_shell = LayerShell::bind(&mut conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
+    let shell = Shell::bind(&mut conn).ok_or("the server lacks cupertino_shell_v1")?;
+    let (session, _, early) = shell.observe(&mut conn)?;
+    let lock_manager = SessionLockManager::bind(&mut conn);
+    let idle_notifier = IdleNotifier::bind(&mut conn);
     let (sender, messages) = mpsc::channel();
-    let notifier = Notifier::new(sender, client.waker());
+    let notifier = Notifier::new(sender, conn.waker());
 
     let request_notifier = notifier.clone();
     // `RefreshCapabilities` goes to the probe thread, not through the loop: the menu's question must not wait for it
@@ -236,9 +257,16 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
         auth_notifier.send(Message::Auth(event))
     })?;
 
-    if let Some(timeout) = options.idle_timeout {
-        client.watch_idle(timeout)?;
-    }
+    let idle = match options.idle_timeout {
+        Some(timeout) => {
+            let notifier = idle_notifier.ok_or("the server lacks ext_idle_notifier_v1")?;
+            let millis = u32::try_from(timeout.as_millis())
+                .map_err(|_| "the idle timeout is longer than the protocol holds")?;
+            let seat = conn.seat().ok_or("the server lacks wl_seat")?;
+            Some(notifier.watch(&conn, &seat, millis))
+        }
+        None => None,
+    };
     let session_bus = control.connection();
     let quit_notifier = notifier;
     session::watch_quit(&session_bus, move |quit| {
@@ -256,7 +284,12 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
     spawn_capability_probe(refresh_requests, &logind, &manager, &control)?;
     let mut app = App {
         refresh,
-        client,
+        conn,
+        layer_shell,
+        lock_manager,
+        _session: session,
+        _idle: idle,
+        idled: false,
         user,
         renderer,
         authenticator,
@@ -278,10 +311,14 @@ pub fn run(options: &SessionOptions) -> Result<Ended> {
         low_battery: LowBattery::new(),
         session_bus,
     };
+    for event in early {
+        app.handle(event)?;
+    }
     app.refresh_capabilities();
     loop {
+        app.present()?;
         let timeout = app.timeout()?;
-        for event in app.client.wait(timeout)? {
+        for event in app.conn.wait(timeout)? {
             app.handle(event)?;
         }
         app.housekeeping()?;
@@ -428,29 +465,123 @@ impl App {
     fn handle(&mut self, event: Event) -> Result<()> {
         let now = self.now();
         match event {
-            Event::Draw(surface) => self.draw(surface)?,
-            Event::Key {
-                surface,
-                pressed: true,
-                key,
-                mods,
-                character,
-            } if self.panel.as_ref().is_some_and(|p| p.surface == surface) => {
-                let decision = screen::typed_key(key, mods, character)
-                    .and_then(|typed| self.panel.as_ref().and_then(|p| p.panel.press(typed)));
-                if let Some(decision) = decision {
-                    self.decide(decision)?;
+            Event::Frame(frame) => {
+                if let Some(presenter) = self.presenter_mut(frame.surface) {
+                    presenter.frame_done();
                 }
             }
-            Event::Pointer {
+            Event::Keyboard {
                 surface,
                 event:
-                    PointerEvent::Button {
-                        button: Button::Left,
+                    KeyboardEvent::Key {
+                        code,
                         pressed: true,
-                        position,
+                        mods,
+                        character,
+                        ..
                     },
-            } if self.panel.as_ref().is_some_and(|p| p.surface == surface) => {
+            } => self.key(now, surface, code, mods, character)?,
+            Event::Pointer { surface, event } => self.pointer(now, surface, event)?,
+            Event::OutputsChanged => self.arrange_surfaces()?,
+            Event::Extension(event) => {
+                if let Some(event) = event.downcast_ref::<ShellEvent>() {
+                    self.shell_event(now, event)?;
+                }
+            }
+            // the screens have one fixed look and no popups
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn shell_event(&mut self, now: f64, event: &ShellEvent) -> Result<()> {
+        match *event {
+            ShellEvent::Configure { surface, size } => self.configured(surface, size)?,
+            ShellEvent::Closed(surface) if self.panel_surface() == Some(surface) => {
+                self.panel = None;
+                eprintln!("cupertino-login: panel cancelled");
+            }
+            ShellEvent::Closed(surface) if self.interrupt_surface() == Some(surface) => {
+                self.quitting
+                    .as_mut()
+                    .expect("the interrupt panel belongs to a quit sequence")
+                    .interrupt = None;
+                self.choose(now, Choice::Cancel)?;
+            }
+            ShellEvent::Closed(_) => {
+                return Err("the server closed a surface of the lock screen".into())
+            }
+            // an answer to a lock replaced since belongs to no one
+            ShellEvent::Lock { generation, locked } => {
+                if let Some(lock) = self
+                    .lock
+                    .as_mut()
+                    .filter(|lock| lock.session_lock.generation() == generation)
+                {
+                    lock.answer = Some(locked);
+                }
+            }
+            ShellEvent::Idle(idle) => self.idled = idle,
+            // this process is the one that holds the lock
+            ShellEvent::LockRequested { explicit } => self.request_lock(now, explicit)?,
+            ShellEvent::LogOutRequested => self.show_panel(now, Kind::LogOut)?,
+            ShellEvent::SessionLock { .. }
+            | ShellEvent::MenuBar { .. }
+            | ShellEvent::Dock { .. } => {}
+        }
+        Ok(())
+    }
+
+    /// A key went down: on the panel, on the interrupt panel, else on the lock screen.
+    fn key(
+        &mut self,
+        now: f64,
+        surface: SurfaceId,
+        code: u32,
+        mods: Modifiers,
+        character: Option<char>,
+    ) -> Result<()> {
+        let typed = screen::typed_key(code, mods, character);
+        if self.panel_surface() == Some(surface) {
+            if let Some(decision) =
+                typed.and_then(|typed| self.panel.as_ref().and_then(|p| p.panel.press(typed)))
+            {
+                self.decide(decision)?;
+            }
+            return Ok(());
+        }
+        if self.interrupt_surface() == Some(surface) {
+            if let Some(choice) = typed.and_then(interrupt::press) {
+                self.choose(now, choice)?;
+            }
+            return Ok(());
+        }
+        let Some(lock) = &mut self.lock else {
+            return Ok(());
+        };
+        match typed {
+            Some(typed) => {
+                if let Some(password) = lock.screen.press(now, typed) {
+                    self.authenticator.attempt(password);
+                }
+            }
+            None => lock.screen.activity(now),
+        }
+        Ok(())
+    }
+
+    /// A click on the panel or the interrupt panel; other motion and clicks are activity on the lock screen.
+    fn pointer(&mut self, now: f64, surface: SurfaceId, event: PointerEvent) -> Result<()> {
+        let left_press = match event {
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: true,
+                position,
+            } => Some(position),
+            _ => None,
+        };
+        if let Some(position) = left_press {
+            if self.panel_surface() == Some(surface) {
                 let decision = self
                     .panel
                     .as_ref()
@@ -458,29 +589,9 @@ impl App {
                 if let Some(decision) = decision {
                     self.decide(decision)?;
                 }
+                return Ok(());
             }
-            Event::Key {
-                surface,
-                pressed: true,
-                key,
-                mods,
-                character,
-            } if self.interrupt_surface() == Some(surface) => {
-                if let Some(choice) =
-                    screen::typed_key(key, mods, character).and_then(interrupt::press)
-                {
-                    self.choose(now, choice)?;
-                }
-            }
-            Event::Pointer {
-                surface,
-                event:
-                    PointerEvent::Button {
-                        button: Button::Left,
-                        pressed: true,
-                        position,
-                    },
-            } if self.interrupt_surface() == Some(surface) => {
+            if self.interrupt_surface() == Some(surface) {
                 let choice = self
                     .quitting
                     .as_ref()
@@ -489,58 +600,90 @@ impl App {
                 if let Some(choice) = choice {
                     self.choose(now, choice)?;
                 }
+                return Ok(());
             }
-            Event::Key {
-                pressed: true,
-                key,
-                mods,
-                character,
-                ..
-            } => {
-                let Some(lock) = &mut self.lock else {
-                    return Ok(());
-                };
-                match screen::typed_key(key, mods, character) {
-                    Some(typed) => {
-                        if let Some(password) = lock.screen.press(now, typed) {
-                            self.authenticator.attempt(password);
-                        }
-                    }
-                    None => lock.screen.activity(now),
-                }
-            }
-            Event::Pointer {
-                event: PointerEvent::Motion(_) | PointerEvent::Button { .. },
-                ..
-            } => {
-                if let Some(lock) = &mut self.lock {
-                    lock.screen.activity(now);
-                }
-            }
-            Event::OutputsChanged => self.arrange_surfaces()?,
-            Event::Closed(surface) if self.panel.as_ref().is_some_and(|p| p.surface == surface) => {
-                self.panel = None;
-                eprintln!("cupertino-login: panel cancelled");
-            }
-            Event::Closed(surface) if self.interrupt_surface() == Some(surface) => {
+        }
+        if let (Some(lock), PointerEvent::Motion(_) | PointerEvent::Button { .. }) =
+            (&mut self.lock, event)
+        {
+            lock.screen.activity(now);
+        }
+        Ok(())
+    }
+
+    /// A configure of the panel, the interrupt panel or a lock surface; one of a surface destroyed since is dropped.
+    fn configured(&mut self, surface: SurfaceId, size: (u32, u32)) -> Result<()> {
+        if let Some(p) = self
+            .panel
+            .as_mut()
+            .filter(|p| p.presenter.surface() == surface)
+        {
+            p.presenter.configured(p.layer.configured(size)?);
+        } else if let Some(i) = self
+            .quitting
+            .as_mut()
+            .and_then(|q| q.interrupt.as_mut())
+            .filter(|i| i.presenter.surface() == surface)
+        {
+            i.presenter.configured(i.layer.configured(size)?);
+        } else if let Some(s) = self
+            .lock
+            .as_mut()
+            .and_then(|lock| lock.surfaces.iter_mut().find(|s| s.surface() == surface))
+        {
+            s.configured(size)?;
+        }
+        Ok(())
+    }
+
+    fn presenter_mut(&mut self, surface: SurfaceId) -> Option<&mut ShmPresenter> {
+        let panel = self.panel.as_mut().map(|p| &mut p.presenter);
+        let interrupt = self
+            .quitting
+            .as_mut()
+            .and_then(|q| q.interrupt.as_mut())
+            .map(|i| &mut i.presenter);
+        let locks = self
+            .lock
+            .as_mut()
+            .into_iter()
+            .flat_map(|lock| lock.surfaces.iter_mut().map(|s| &mut s.presenter));
+        panel
+            .into_iter()
+            .chain(interrupt)
+            .chain(locks)
+            .find(|p| p.surface() == surface)
+    }
+
+    /// Draw every surface that can take a frame.
+    fn present(&mut self) -> Result<()> {
+        let mut ready = Vec::new();
+        for presenter in self
+            .panel
+            .as_mut()
+            .map(|p| &mut p.presenter)
+            .into_iter()
+            .chain(
                 self.quitting
                     .as_mut()
-                    .expect("the interrupt panel belongs to a quit sequence")
-                    .interrupt = None;
-                self.choose(now, Choice::Cancel)?;
+                    .and_then(|q| q.interrupt.as_mut())
+                    .map(|i| &mut i.presenter),
+            )
+        {
+            loop {
+                match presenter.poll(&self.conn)? {
+                    // a draw follows every scale change
+                    Ready::ScaleChanged(_) => {}
+                    Ready::Draw => break ready.push(presenter.surface()),
+                    Ready::Idle => break,
+                }
             }
-            Event::Closed(_) => return Err("the server closed a surface of the lock screen".into()),
-            // the draw that follows a configure or scale change does the work
-            Event::Configured { .. } | Event::ScaleChanged { .. } => {}
-            Event::Key { .. } | Event::KeyboardLeave(_) | Event::Pointer { .. } => {}
-            // the screens have one fixed look, and this process is the one that holds the lock
-            Event::LockRequested { explicit } => self.request_lock(now, explicit)?,
-            Event::LogOutRequested => self.show_panel(now, Kind::LogOut)?,
-            Event::Appearance { .. } | Event::DisplayOptions(_) | Event::SessionLock { .. } => {}
-            Event::PopupDone(_)
-            | Event::ActivationToken { .. }
-            | Event::MenuBar { .. }
-            | Event::Dock { .. } => {}
+        }
+        if let Some(lock) = &mut self.lock {
+            ready.extend(screen::ready(&self.conn, &mut lock.surfaces)?);
+        }
+        for surface in ready {
+            self.draw(surface)?;
         }
         Ok(())
     }
@@ -589,7 +732,7 @@ impl App {
         }
         let step = self.quitting.as_mut().and_then(|q| q.sequence.tick(now));
         self.follow(now, step)?;
-        if self.client.take_idle() {
+        if std::mem::take(&mut self.idled) {
             self.request_lock(now, false)?;
         }
         if let Some(effect) = self.power_button.tick(now) {
@@ -600,17 +743,15 @@ impl App {
         }
         if let Some(panel) = &mut self.panel {
             if panel.drawn != Some(panel.panel.seconds_left(now)) {
-                self.client.request_redraw(panel.surface)?;
+                panel.presenter.request_redraw();
             }
         }
         let Some(lock) = &mut self.lock else {
             return Ok(());
         };
-        match self.client.lock_state() {
-            Some(LockState::Finished) => {
-                return Err("the server refused or ended the session lock".into())
-            }
-            Some(LockState::Locked) if !lock.confirmed => {
+        match lock.answer {
+            Some(false) => return Err("the server refused or ended the session lock".into()),
+            Some(true) if !lock.confirmed => {
                 lock.confirmed = true;
                 // the lock is up: sleep may go on
                 self.inhibitor = None;
@@ -632,7 +773,7 @@ impl App {
         }
         let scene = Scene {
             screen: &lock.screen,
-            caps_lock: self.client.caps_lock(),
+            caps_lock: self.conn.modifiers().caps_lock,
             help: self
                 .failed
                 .help_shown(&self.user.login, self.retries_until_hint),
@@ -640,8 +781,8 @@ impl App {
         };
         let key = FrameKey::new(&scene, now)?;
         if lock.drawn.as_ref() != Some(&key) {
-            for (surface, _) in &lock.surfaces {
-                self.client.request_redraw(*surface)?;
+            for s in &mut lock.surfaces {
+                s.presenter.request_redraw();
             }
         }
         Ok(())
@@ -699,7 +840,11 @@ impl App {
         }
         // the lock screen swallows a key that is down
         self.power_button.reset();
-        self.client.lock_session()?;
+        let session_lock = self
+            .lock_manager
+            .as_mut()
+            .ok_or("the server lacks ext_session_lock_manager_v1")?
+            .lock(&self.conn);
         self.lock = Some(Lock {
             screen: LockScreen::new(
                 now,
@@ -709,7 +854,9 @@ impl App {
                     HIDE_AFTER
                 },
             ),
+            session_lock,
             surfaces: Vec::new(),
+            answer: None,
             confirmed: false,
             drawn: None,
         });
@@ -746,48 +893,57 @@ impl App {
         let Some(lock) = &mut self.lock else {
             return Ok(());
         };
-        screen::arrange_surfaces(&mut self.client, &mut lock.surfaces, |client, output| {
-            Ok(client.lock_surface(output)?)
+        let session_lock = &lock.session_lock;
+        screen::arrange_surfaces(&mut self.conn, &mut lock.surfaces, |conn, output| {
+            Ok((session_lock.lock_surface(conn, output)?, None))
         })
     }
 
     fn draw(&mut self, surface: SurfaceId) -> Result<()> {
         let now = self.now();
-        if let Some(panel) = self.panel.as_mut().filter(|p| p.surface == surface) {
+        if let Some(panel) = self
+            .panel
+            .as_mut()
+            .filter(|p| p.presenter.surface() == surface)
+        {
             let view = PanelView {
                 kind: panel.panel.kind(),
                 seconds_left: panel.panel.seconds_left(now),
                 frames: panel.frames.clone(),
             };
             let renderer = &mut self.renderer;
-            self.client.draw(surface, |pixmap, scale| {
-                renderer.render_panel(&view, pixmap, scale.factor())
-            })?;
+            panel
+                .presenter
+                .draw(&mut self.conn, None, |pixmap, scale| {
+                    renderer.render_panel(&view, pixmap, scale.factor() as f32)
+                })?;
             panel.drawn = Some(view.seconds_left);
             return Ok(());
         }
         if let Some(shown) = self
             .quitting
-            .as_ref()
-            .and_then(|q| q.interrupt.as_ref())
-            .filter(|i| i.surface == surface)
+            .as_mut()
+            .and_then(|q| q.interrupt.as_mut())
+            .filter(|i| i.presenter.surface() == surface)
         {
             let renderer = &mut self.renderer;
-            return Ok(self.client.draw(surface, |pixmap, scale| {
-                renderer.render_interrupt(&shown.app, &shown.frames, pixmap, scale.factor())
-            })?);
+            let (app, frames) = (&shown.app, &shown.frames);
+            return Ok(shown
+                .presenter
+                .draw(&mut self.conn, None, |pixmap, scale| {
+                    renderer.render_interrupt(app, frames, pixmap, scale.factor() as f32)
+                })?);
         }
         // of a surface destroyed since
-        let Some(lock) = self
-            .lock
-            .as_mut()
-            .filter(|lock| lock.surfaces.iter().any(|&(s, _)| s == surface))
-        else {
+        let Some(lock) = self.lock.as_mut() else {
+            return Ok(());
+        };
+        let Some(i) = lock.surfaces.iter().position(|s| s.surface() == surface) else {
             return Ok(());
         };
         let scene = Scene {
             screen: &lock.screen,
-            caps_lock: self.client.caps_lock(),
+            caps_lock: self.conn.modifiers().caps_lock,
             help: self
                 .failed
                 .help_shown(&self.user.login, self.retries_until_hint),
@@ -795,12 +951,12 @@ impl App {
         };
         let key = FrameKey::new(&scene, now)?;
         screen::draw(
-            &mut self.client,
+            &mut self.conn,
+            &mut lock.surfaces[i].presenter,
             &mut self.renderer,
             &key,
             Some(&self.user),
             None,
-            surface,
         )?;
         lock.drawn = Some(key);
         Ok(())
@@ -808,8 +964,16 @@ impl App {
 
     /// End the lock after an accepted attempt and hold sleep back again.
     fn unlock(&mut self) -> Result<()> {
-        self.client.unlock_session()?;
-        self.lock = None;
+        let lock = self.lock.take().expect("only a locked session unlocks");
+        if lock.answer != Some(true) {
+            return Err("the session unlocked before the server confirmed the lock".into());
+        }
+        // the lock surfaces are destroyed before the lock
+        for s in &lock.surfaces {
+            self.conn.destroy(s.surface())?;
+        }
+        lock.session_lock.unlock();
+        self.conn.roundtrip()?;
         self.control.set_locked(false)?;
         eprintln!("cupertino-login: unlocked");
         self.inhibitor = Some(self.logind.inhibit_sleep()?);
@@ -827,28 +991,32 @@ impl App {
             self.decide(Decision::Cancel)?;
         }
         let output = self
-            .client
+            .conn
             .outputs()
             .into_iter()
             .find(|o| o.geometry.is_some())
             .ok_or("the server has no output")?
             .id;
         let frames = self.renderer.panel_frames(kind);
-        let surface = self.client.layer_surface(&LayerSurfaceConfig {
-            namespace: PANEL_NAMESPACE.to_string(),
-            output: Some(output),
-            layer: Layer::Overlay,
-            // no anchor: the server centres the surface on the output
-            anchor: Anchor::empty(),
-            size: (frames.width as u32, frames.height as u32),
-            margin: Margin::default(),
-            exclusive_zone: -1,
-            keyboard: KeyboardInteractivity::Exclusive,
-        })?;
+        let layer = self.layer_shell.layer_surface(
+            &mut self.conn,
+            &LayerSurfaceConfig {
+                namespace: PANEL_NAMESPACE.to_string(),
+                output: Some(output),
+                layer: Layer::Overlay,
+                // no anchor: the server centres the surface on the output
+                anchor: Anchor::empty(),
+                size: (frames.width as u32, frames.height as u32),
+                margin: Margin::default(),
+                exclusive_zone: -1,
+                keyboard: KeyboardInteractivity::Exclusive,
+            },
+        )?;
         self.panel = Some(PanelState {
             panel: Panel::new(kind, now),
             frames,
-            surface,
+            presenter: ShmPresenter::new(layer.surface()),
+            layer,
             drawn: None,
         });
         eprintln!("cupertino-login: panel shown: {}", kind.log_name());
@@ -857,11 +1025,11 @@ impl App {
 
     /// Close the panel with `decision`; an action is carried out through logind.
     fn decide(&mut self, decision: Decision) -> Result<()> {
-        let PanelState { surface, .. } = self
+        let PanelState { layer, .. } = self
             .panel
             .take()
             .expect("a decision is only made on an open panel");
-        self.client.destroy_surface(surface)?;
+        self.conn.destroy(layer.surface())?;
         match decision {
             Decision::Cancel => eprintln!("cupertino-login: panel cancelled"),
             Decision::Do(action) => {
@@ -948,7 +1116,7 @@ impl App {
                         then, interrupt, ..
                     } = self.quitting.take().expect("checked above");
                     if let Some(shown) = interrupt {
-                        self.client.destroy_surface(shown.surface)?;
+                        self.conn.destroy(shown.layer.surface())?;
                     }
                     eprintln!("cupertino-login: no application left: {}", then.log_name());
                     match then {
@@ -961,7 +1129,7 @@ impl App {
                 logout::Do::Interrupt(app) => self.show_interrupt(now, app)?,
                 logout::Do::CloseInterrupt => {
                     if let Some(shown) = quitting.interrupt.take() {
-                        self.client.destroy_surface(shown.surface)?;
+                        self.conn.destroy(shown.layer.surface())?;
                     }
                 }
             }
@@ -973,7 +1141,11 @@ impl App {
         self.quitting
             .as_ref()
             .and_then(|q| q.interrupt.as_ref())
-            .map(|i| i.surface)
+            .map(|i| i.layer.surface())
+    }
+
+    fn panel_surface(&self) -> Option<SurfaceId> {
+        self.panel.as_ref().map(|p| p.layer.surface())
     }
 
     /// Show the interrupt panel for `app` on the first output. On a locked session there is nobody to answer it: the
@@ -984,23 +1156,26 @@ impl App {
             return self.choose(now, Choice::Cancel);
         }
         let output = self
-            .client
+            .conn
             .outputs()
             .into_iter()
             .find(|o| o.geometry.is_some())
             .ok_or("the server has no output")?
             .id;
-        let surface = self.client.layer_surface(&LayerSurfaceConfig {
-            namespace: PANEL_NAMESPACE.to_string(),
-            output: Some(output),
-            layer: Layer::Overlay,
-            // no anchor: the server centres the surface on the output
-            anchor: Anchor::empty(),
-            size: (interrupt::WIDTH as u32, interrupt::HEIGHT as u32),
-            margin: Margin::default(),
-            exclusive_zone: -1,
-            keyboard: KeyboardInteractivity::Exclusive,
-        })?;
+        let layer = self.layer_shell.layer_surface(
+            &mut self.conn,
+            &LayerSurfaceConfig {
+                namespace: PANEL_NAMESPACE.to_string(),
+                output: Some(output),
+                layer: Layer::Overlay,
+                // no anchor: the server centres the surface on the output
+                anchor: Anchor::empty(),
+                size: (interrupt::WIDTH as u32, interrupt::HEIGHT as u32),
+                margin: Margin::default(),
+                exclusive_zone: -1,
+                keyboard: KeyboardInteractivity::Exclusive,
+            },
+        )?;
         let quitting = self
             .quitting
             .as_mut()
@@ -1008,7 +1183,8 @@ impl App {
         quitting.interrupt = Some(InterruptState {
             app,
             frames: interrupt::Frames::new(),
-            surface,
+            presenter: ShmPresenter::new(layer.surface()),
+            layer,
         });
         Ok(())
     }
@@ -1021,7 +1197,7 @@ impl App {
             .as_mut()
             .expect("a choice is only made while the applications are quit");
         if let Some(shown) = quitting.interrupt.take() {
-            self.client.destroy_surface(shown.surface)?;
+            self.conn.destroy(shown.layer.surface())?;
         }
         match choice {
             Choice::Cancel => {

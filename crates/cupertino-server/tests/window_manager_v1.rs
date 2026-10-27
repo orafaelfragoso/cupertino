@@ -86,6 +86,12 @@ impl Harness {
         panic!("timed out waiting for {what}");
     }
 
+    /// A connection of a shell process the server supervises: the only kind that may be a window manager.
+    fn shell_stream(&mut self) -> UnixStream {
+        cupertino_server::shell_connection::shell_process_connection(&self.state.display_handle)
+            .unwrap()
+    }
+
     fn socket_path(&self) -> PathBuf {
         let dir = std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR");
         PathBuf::from(dir).join(self.state.socket_name.as_ref().unwrap())
@@ -254,13 +260,13 @@ struct WmClient {
 }
 
 impl WmClient {
-    fn spawn(socket: PathBuf) -> WmClient {
+    fn spawn(stream: UnixStream) -> WmClient {
         let (commands, inbox): (Sender<Cmd>, Receiver<Cmd>) = channel();
         let status = Arc::new(Mutex::new(Status::default()));
         let st = status.clone();
         // detached: it ends on Disconnect or when the compositor drops its socket
         std::thread::spawn(move || {
-            let conn = Connection::from_socket(UnixStream::connect(&socket).unwrap()).unwrap();
+            let conn = Connection::from_socket(stream).unwrap();
             let (globals, mut queue) = registry_queue_init::<WmState>(&conn).unwrap();
             let qh = queue.handle();
             let shell: CupertinoShellV1 = globals.bind(&qh, 1..=1, ()).unwrap();
@@ -445,11 +451,26 @@ fn uncovered_point(h: &Harness, a: WindowId, b: WindowId) -> (f64, f64) {
 
 // ---- tests ---------------------------------------------------------------------------------
 
+/// An application on the public socket asking to be a window manager is refused.
+#[test]
+fn an_application_that_is_not_a_shell_process_cannot_be_a_window_manager() {
+    let Some(mut h) = Harness::new() else { return };
+    let intruder = WmClient::spawn(
+        UnixStream::connect(h.socket_path()).expect("connecting to the compositor"),
+    );
+    h.wait_until("the permission error", |_| intruder.error().is_some());
+    // error 2 of cupertino_shell_v1.error is `permission`
+    assert_eq!(
+        intruder.error(),
+        Some(("cupertino_shell_v1".to_string(), 2))
+    );
+}
+
 #[test]
 fn the_first_group_has_the_usable_area_and_the_arranged_windows_and_an_output_takes_one_manager() {
     let Some(mut h) = Harness::new() else { return };
     let (a, b, _ca, _cb) = h.two_windows();
-    let wm = WmClient::spawn(h.socket_path());
+    let wm = WmClient::spawn(h.shell_stream());
     h.wait_until("the first group", |_| wm.events().contains(&WmEvent::Done));
     let out = h.state.outputs[0].id;
     let frame = |id: WindowId| whole(h.state.wm.window(id).unwrap().geometry());
@@ -473,7 +494,7 @@ fn the_first_group_has_the_usable_area_and_the_arranged_windows_and_an_output_ta
             WmEvent::Done,
         ]
     );
-    let second = WmClient::spawn(h.socket_path());
+    let second = WmClient::spawn(h.shell_stream());
     h.wait_until("the role error", |_| second.error().is_some());
     // error 0 of cupertino_shell_v1.error is `role`
     assert_eq!(
@@ -487,7 +508,7 @@ fn the_first_group_has_the_usable_area_and_the_arranged_windows_and_an_output_ta
 fn a_strip_placement_animates_into_its_rectangle_takes_no_input_and_reports_presses() {
     let Some(mut h) = Harness::new() else { return };
     let (a, b, _ca, _cb) = h.two_windows();
-    let wm = WmClient::spawn(h.socket_path());
+    let wm = WmClient::spawn(h.shell_stream());
     h.wait_until("the first group", |_| wm.events().contains(&WmEvent::Done));
     let corner = uncovered_point(&h, a, b);
     assert_eq!(
@@ -584,7 +605,7 @@ fn a_strip_placement_animates_into_its_rectangle_takes_no_input_and_reports_pres
 fn a_dead_window_manager_puts_every_window_back_at_once() {
     let Some(mut h) = Harness::new() else { return };
     let (a, b, _ca, _cb) = h.two_windows();
-    let wm = WmClient::spawn(h.socket_path());
+    let wm = WmClient::spawn(h.shell_stream());
     h.wait_until("the first group", |_| wm.events().contains(&WmEvent::Done));
     let corner = uncovered_point(&h, a, b);
     wm.send(Cmd::Place(a.0 as u32, Placement::Strip));
@@ -613,7 +634,7 @@ fn a_dead_window_manager_puts_every_window_back_at_once() {
 #[test]
 fn the_stage_action_reaches_the_window_manager_and_unknown_or_closed_windows_are_ignored() {
     let Some(mut h) = Harness::new() else { return };
-    let wm = WmClient::spawn(h.socket_path());
+    let wm = WmClient::spawn(h.shell_stream());
     h.wait_until("the first group", |_| wm.events().contains(&WmEvent::Done));
     let ctx = h.state.action_context();
     h.state
@@ -636,7 +657,7 @@ fn the_stage_action_reaches_the_window_manager_and_unknown_or_closed_windows_are
 fn a_window_whose_frame_changes_during_the_swap_back_heads_for_the_new_frame() {
     let Some(mut h) = Harness::new() else { return };
     let (a, _b, _ca, _cb) = h.two_windows();
-    let wm = WmClient::spawn(h.socket_path());
+    let wm = WmClient::spawn(h.shell_stream());
     h.wait_until("the first group", |_| wm.events().contains(&WmEvent::Done));
     wm.send(Cmd::Place(a.0 as u32, Placement::Strip));
     wm.send(Cmd::Commit);

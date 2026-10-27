@@ -81,6 +81,9 @@ pub struct ClientState {
     /// A shell process the server started on a connection of its own (`crate::capture::launch`): only such a client
     /// sees the screen-capture globals.
     pub privileged: bool,
+    /// A shell process the server supervises (`crate::supervisor`), on a connection of its own: the only kind of client
+    /// that may be a dock or a window manager.
+    pub shell_process: bool,
 }
 
 impl Default for ClientState {
@@ -91,6 +94,7 @@ impl Default for ClientState {
             mapped_toplevel: std::sync::atomic::AtomicBool::new(false),
             internal: false,
             privileged: false,
+            shell_process: false,
         }
     }
 }
@@ -289,7 +293,7 @@ pub struct Cupertino {
     /// SIGKILLs promised to applications that were asked to quit (`force_quit.rs`).
     pub force_quits: crate::force_quit::ForceQuits,
     /// Send a signal to a process: `kill(2)`; replaced in tests, which run inside the processes they would signal.
-    pub send_signal: Box<dyn FnMut(u32, i32)>,
+    pub send_signal: crate::force_quit::SendSignal,
     /// The popup chain that holds the pointer and keyboard, with the toplevel it belongs to (`popup_grab.rs`).
     pub popup_grab: Option<crate::popup_grab::ActivePopupGrab>,
 
@@ -536,7 +540,7 @@ impl Cupertino {
             hung: crate::hung::Pings::default(),
             hung_announced: Default::default(),
             force_quits: Default::default(),
-            send_signal: Box::new(crate::force_quit::kill_process),
+            send_signal: Box::new(crate::force_quit::signal_process),
             popup_grab: None,
             seat,
             pointer,

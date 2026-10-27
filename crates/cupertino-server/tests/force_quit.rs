@@ -93,10 +93,14 @@ fn mapped_window(h: &mut Harness) -> (Client, cupertino_wm::WindowId) {
 
 const APP: &str = "org.example.locked-out";
 
+/// Record the signals instead of sending them. The test clients are threads of this process, which the server would refuse
+/// to signal, so the server is told its process id is another one.
 fn record_signals(h: &mut Harness) -> Rc<RefCell<Vec<(u32, i32)>>> {
+    h.state.force_quits.own_pid = u32::MAX;
     let sent = Rc::new(RefCell::new(Vec::new()));
     let recorder = sent.clone();
-    h.state.send_signal = Box::new(move |pid, signal| recorder.borrow_mut().push((pid, signal)));
+    h.state.send_signal =
+        Box::new(move |process, signal| recorder.borrow_mut().push((process.pid, signal)));
     sent
 }
 
@@ -141,4 +145,22 @@ fn an_application_that_is_not_running_is_left_alone() {
 
     h.state.force_quit_app("org.example.other");
     assert_eq!(*sent.borrow(), vec![]);
+}
+
+#[test]
+fn the_servers_own_process_is_never_signalled() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_client, _id) = mapped_window(&mut h);
+    let sent = Rc::new(RefCell::new(Vec::new()));
+    let recorder = sent.clone();
+    h.state.send_signal =
+        Box::new(move |process, signal| recorder.borrow_mut().push((process.pid, signal)));
+
+    h.state.force_quit_app(APP);
+    assert_eq!(
+        *sent.borrow(),
+        vec![],
+        "the client is a thread of the server's process"
+    );
+    assert_eq!(h.state.force_quits.pending(), 0);
 }

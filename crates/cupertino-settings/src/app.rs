@@ -1390,6 +1390,7 @@ impl App {
     /// Run the read of `key` on a thread; its answer comes back as a [`Background`] event.
     fn run_listing(&mut self, key: ListingKey, request: Option<cupertino_filepicker::Request>) {
         let notify = self.notify.clone();
+        let spawned_key = key.clone();
         let job: Box<dyn FnOnce() -> Background + Send> = match key.clone() {
             ListingKey::Packs => {
                 let assets = self.assets.clone();
@@ -1404,6 +1405,7 @@ impl App {
             }),
             ListingKey::Chooser(..) => {
                 let Some(request) = request else {
+                    self.listings.abandon(&key);
                     return;
                 };
                 Box::new(move || Background::Listing(request.run()))
@@ -1414,6 +1416,7 @@ impl App {
             .spawn(move || notify(job()));
         if let Err(e) = spawned {
             eprintln!("cupertino-settings: cannot list a folder: {e}");
+            self.listings.abandon(&spawned_key);
         }
     }
 

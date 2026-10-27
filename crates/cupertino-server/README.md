@@ -18,7 +18,7 @@ The server and every process that draws text or icons read the asset packs of `c
 
 The server's text (title bars through `Decorations`, the input-source HUD and the accent popup through `OverlayText`) is drawn with the optical size of the output's scale: both set it from the scale they draw at.
 
-The compositor prints `WAYLAND_DISPLAY=<socket>` once it listens. Start clients with that variable. `Super+Return` starts a terminal (`foot`, `alacritty`, `kitty`, `wezterm` or `xterm`, whichever exists first; configurable with `terminals`).
+The compositor prints `WAYLAND_DISPLAY=<socket>` once it listens. The socket is the first free `wayland-N` of `XDG_RUNTIME_DIR`; when all 32 are taken (other sessions, or other servers started by tests running at the same time) it is `wayland-cupertino-<pid>-<n>`, so a server always finds one. `tests/socket_names.rs` starts 40 at once. Start clients with that variable. `Super+Return` starts a terminal (`foot`, `alacritty`, `kitty`, `wezterm` or `xterm`, whichever exists first; configurable with `terminals`).
 
 ## Command line
 

@@ -12,17 +12,34 @@ layer = "shell"
 default = ["dbus"]
 dbus = ["dep:cupertino-peer", "dep:zbus", "dep:futures-util"]
 # the `cupertino-menubar` process: one bar per output as a client of the server
-app = ["dbus", "dep:async-channel", "dep:cupertino-assets", "dep:cupertino-client", "dep:cupertino-decorations", "dep:cupertino-geometry", "dep:cupertino-icons", "dep:cupertino-theme", "dep:libc", "dep:tiny-skia"]
+app = [
+    "dbus",
+    "dep:async-channel",
+    "dep:cupertino-assets",
+    "dep:cupertino-decorations",
+    "dep:cupertino-geometry",
+    "dep:cupertino-icons",
+    "dep:cupertino-protocol-app",
+    "dep:cupertino-shell-client",
+    "dep:cupertino-theme",
+    "dep:cupertino-ui-wayland",
+    "dep:cupertino-wayland-client",
+    "dep:libc",
+    "dep:tiny-skia",
+]
 
 [dependencies]
 cupertino-assets = { path = "../cupertino-assets", optional = true }
-cupertino-client = { path = "../cupertino-client", optional = true }
 cupertino-decorations = { path = "../cupertino-decorations", optional = true }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry", optional = true }
 cupertino-peer = { path = "../cupertino-peer", optional = true }
 cupertino-icons = { path = "../cupertino-icons", optional = true }
+cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
+cupertino-shell-client = { path = "../cupertino-shell-client", optional = true }
 cupertino-theme = { path = "../cupertino-theme", optional = true }
+cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
+cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 async-channel = { version = "2", optional = true }
 libc = { version = "0.2", optional = true }
 tiny-skia = { version = "0.11", optional = true }

@@ -22,7 +22,7 @@ use cupertino_theme::Appearance;
 use cupertino_wm::Rect;
 use smithay::backend::input::{ButtonState, KeyState};
 use smithay::backend::renderer::utils::with_renderer_surface_state;
-use smithay::desktop::layer_map_for_output;
+use smithay::desktop::{layer_map_for_output, PopupManager};
 use smithay::input::keyboard::Keycode;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
@@ -810,6 +810,15 @@ fn committed_buffer(state: &Cupertino, namespace: &str) -> Option<(Vec<u8>, Buff
     )
 }
 
+/// Width and height of the buffer committed by the first popup of the layer surface `namespace`; `None` without one.
+fn popup_buffer_size(state: &Cupertino, namespace: &str) -> Option<(i32, i32)> {
+    let map = layer_map_for_output(&state.outputs.first()?.output);
+    let layer = map.layers().find(|l| l.namespace() == namespace)?;
+    let (popup, _) = PopupManager::popups_for_surface(layer.wl_surface()).next()?;
+    let buffer = with_renderer_surface_state(popup.wl_surface(), |s| s.buffer().cloned())??;
+    with_buffer_contents(&buffer, |_, _, data| (data.width, data.height)).ok()
+}
+
 /// Position and size of the layer surface with `namespace` in output points; `None` until it is mapped.
 fn layer_geometry(state: &Cupertino, namespace: &str) -> Option<Rectangle<i32, Logical>> {
     let map = layer_map_for_output(&state.outputs.first()?.output);
@@ -845,6 +854,51 @@ fn the_menu_bar_process_draws_its_labels_again_when_the_appearance_changes() {
     server.state.set_appearance(Appearance::Dark);
     server.wait_until("light labels on the dark bar", |s| {
         label_brightness(s).is_some_and(|b| b > 155)
+    });
+}
+
+/// A click on the system menu's slot (the 28 pt after the 6 pt inset) opens its menu as a grabbing popup of the bar,
+/// drawn below it; a click outside ends the grab and the popup goes.
+#[test]
+fn the_menu_bar_process_opens_a_menu_popup_and_a_click_outside_closes_it() {
+    const BTN_LEFT: u32 = 0x110;
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let Some(mut server) = Server::start(vec![real_process("cupertino-menubar", &bus)], true)
+    else {
+        return;
+    };
+    server.wait_until("the bar to be drawn", |s| {
+        committed_buffer(s, "cupertino-menubar").is_some()
+    });
+    let mut time = 0;
+    let mut click = |server: &mut Server, x: f64, y: f64| {
+        time += 10;
+        server.state.pointer_moved_to((x, y).into(), time, None);
+        server.step();
+        server
+            .state
+            .pointer_button(BTN_LEFT, ButtonState::Pressed, time + 1);
+        server.step();
+        server
+            .state
+            .pointer_button(BTN_LEFT, ButtonState::Released, time + 2);
+        server.step();
+    };
+    click(&mut server, 20.0, 12.0);
+    server.wait_until("the system menu's popup to be drawn", |s| {
+        popup_buffer_size(s, "cupertino-menubar").is_some_and(|(w, h)| w > 0 && h > 0)
+    });
+    click(&mut server, 500.0, 400.0);
+    server.wait_until("the popup to go", |s| {
+        popup_buffer_size(s, "cupertino-menubar").is_none()
+    });
+    // the server drops a dismissed popup itself; only a process that closed its menu opens it again on the next click
+    click(&mut server, 20.0, 12.0);
+    server.wait_until("the system menu's popup to be drawn again", |s| {
+        popup_buffer_size(s, "cupertino-menubar").is_some_and(|(w, h)| w > 0 && h > 0)
     });
 }
 

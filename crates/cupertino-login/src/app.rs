@@ -535,6 +535,7 @@ impl App {
             Event::Key { .. } | Event::KeyboardLeave(_) | Event::Pointer { .. } => {}
             // the screens have one fixed look, and this process is the one that holds the lock
             Event::LockRequested { explicit } => self.request_lock(now, explicit)?,
+            Event::LogOutRequested => self.show_panel(now, Kind::LogOut)?,
             Event::Appearance { .. } | Event::DisplayOptions(_) | Event::SessionLock { .. } => {}
             Event::PopupDone(_)
             | Event::ActivationToken { .. }

@@ -461,7 +461,8 @@ impl Overlay {
             | Event::Appearance { .. }
             | Event::DisplayOptions(_)
             | Event::SessionLock { .. }
-            | Event::LockRequested { .. } => {}
+            | Event::LockRequested { .. }
+            | Event::LogOutRequested => {}
         }
         Ok(None)
     }

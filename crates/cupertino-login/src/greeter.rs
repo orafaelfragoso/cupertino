@@ -380,7 +380,8 @@ impl App {
             Event::Appearance { .. }
             | Event::DisplayOptions(_)
             | Event::SessionLock { .. }
-            | Event::LockRequested { .. } => {}
+            | Event::LockRequested { .. }
+            | Event::LogOutRequested => {}
             Event::PopupDone(_)
             | Event::ActivationToken { .. }
             | Event::MenuBar { .. }

@@ -350,6 +350,7 @@ impl App {
             Event::OutputsChanged
             | Event::SessionLock { .. }
             | Event::LockRequested { .. }
+            | Event::LogOutRequested
             | Event::DisplayOptions(_) => {}
             // the server dismissed the menu (a click outside it); popups this process destroyed itself end no menu
             Event::PopupDone(surface) => {

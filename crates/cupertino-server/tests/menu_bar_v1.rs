@@ -1080,7 +1080,7 @@ fn the_session_menu_entries_reach_the_session_agent_through_the_server() {
             .build(),
     )
     .expect("the fake agent");
-    let bar = BarClient::spawn_at(h.shell_stream(), true, 8);
+    let bar = BarClient::spawn_at(h.shell_stream(), true, 9);
     h.wait_for_groups(&bar, 1);
     for action in [
         SessionAction::Sleep,

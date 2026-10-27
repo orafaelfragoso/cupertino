@@ -71,6 +71,20 @@ impl SessionObservers {
         told
     }
 
+    /// Ask the login process to ask whether to log out, the way [`Self::lock_requested`] asks for the lock.
+    pub fn log_out_requested(&self) -> bool {
+        let mut told = false;
+        for observer in self.observers.iter().filter(|o| {
+            o.version() >= 4
+                && o.client()
+                    .is_some_and(|c| authorized(&c, ShellRole::SessionLock))
+        }) {
+            observer.log_out_requested();
+            told = true;
+        }
+        told
+    }
+
     /// Tell every observer the session was locked or unlocked.
     pub fn lock(&self, locked: bool) {
         for observer in self.observers.iter().filter(|o| permitted(o)) {

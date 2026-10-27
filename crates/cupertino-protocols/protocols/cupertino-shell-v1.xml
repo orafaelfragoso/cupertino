@@ -10,7 +10,7 @@
      ends: interfaces may change without a version bump until then.
   </description>
 
-  <interface name="cupertino_shell_v1" version="8">
+  <interface name="cupertino_shell_v1" version="9">
     <description summary="shell services of the server">
       Global singleton, offered only to the processes the server started for a shell role, on a
       connection of their own. Each request needs the role it creates: a connection that holds
@@ -19,7 +19,7 @@
       the backdrops and the title bar style of application windows to the public
       cupertino_app_effects_v1 protocol, which any client may use, and removes their requests here. Version 6 adds the
       session_action request of the menu bar object, version 7 the lock_requested event of the session object, version 8 the session_agent event of the menu bar
-      object.
+      object, version 9 the log_out_requested event of the session object.
     </description>
 
     <request name="destroy" type="destructor">
@@ -202,7 +202,7 @@
     </enum>
   </interface>
 
-  <interface name="cupertino_session_v1" version="3">
+  <interface name="cupertino_session_v1" version="4">
     <description summary="appearance, display options and lock state of the session">
       The state every shell process follows. Right after the object is created the server sends
       appearance, then display_options (version 2), then locked or unlocked. Later events say
@@ -263,6 +263,14 @@
         shortcut) and 0 when the display slept or the machine is going to sleep.
       </description>
       <arg name="explicit" type="uint"/>
+    </event>
+
+    <event name="log_out_requested" since="4">
+      <description summary="the server asks the login process to ask whether to log out">
+        Sent only to the connection that holds the session lock role, for the log out shortcut and
+        the session menu: the client shows its log out confirmation as if it had been asked on
+        its own control interface, which a process on the session bus cannot take over.
+      </description>
     </event>
   </interface>
 

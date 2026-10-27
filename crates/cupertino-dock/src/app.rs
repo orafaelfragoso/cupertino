@@ -631,6 +631,7 @@ impl App {
             // the bar has no transient interface of its own; it takes no keys and has no menu-bar role
             Event::SessionLock { .. }
             | Event::LockRequested { .. }
+            | Event::LogOutRequested
             | Event::Key { .. }
             | Event::KeyboardLeave(_)
             | Event::PopupDone(_)

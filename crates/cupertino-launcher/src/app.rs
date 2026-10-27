@@ -372,7 +372,7 @@ impl App {
             }
             // the server draws the lock screen: only the open panel has to go
             Event::SessionLock { locked: true } if self.panel.is_visible() => self.hide()?,
-            Event::SessionLock { .. } => {}
+            Event::SessionLock { .. } | Event::LockRequested { .. } => {}
             // the surfaces have no popups or menu-bar role
             Event::PopupDone(_) | Event::MenuBar { .. } | Event::Dock { .. } => {}
         }

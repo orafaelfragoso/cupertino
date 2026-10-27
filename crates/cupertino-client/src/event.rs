@@ -138,6 +138,9 @@ pub enum Event {
     /// The server locked or unlocked the session. The state at connect is
     /// [`Client::session_locked`](crate::Client::session_locked) and queues no event.
     SessionLock { locked: bool },
+    /// The server asks this process, the lock screen, to lock the session (`explicit`: the person asked). Only the
+    /// process with the session lock role is told.
+    LockRequested { explicit: bool },
     /// An output appeared or went away, or its geometry changed: read [`Client::outputs`](crate::Client::outputs) again.
     OutputsChanged,
 }

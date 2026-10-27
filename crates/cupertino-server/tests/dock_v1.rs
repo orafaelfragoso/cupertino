@@ -523,7 +523,7 @@ impl DockClient {
         DockClient(run_client(stream, move |globals, qh, status| {
             let compositor: wl_compositor::WlCompositor = globals.bind(qh, 4..=6, ()).unwrap();
             let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
-            let shell: CupertinoShellV1 = globals.bind(qh, 6..=6, ()).unwrap();
+            let shell: CupertinoShellV1 = globals.bind(qh, 7..=7, ()).unwrap();
             let effects: CupertinoAppEffectsV1 = globals.bind(qh, 1..=1, ()).unwrap();
             let global = globals
                 .contents()

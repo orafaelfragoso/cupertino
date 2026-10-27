@@ -328,6 +328,28 @@ pub fn serve(
     capabilities: Capabilities,
     on_request: impl Fn(Request) + Send + Sync + 'static,
 ) -> zbus::Result<Service> {
+    serve_with(builder, user_name, capabilities, on_request, true)
+}
+
+/// Like [`serve`] without claiming [`BUS_NAME`]: for a process whose name another process holds. The server's calls go to
+/// the owner of the name and are refused there; this process then runs on the requests of the server's private
+/// connection and of logind, and `Locked` and `Capabilities` are served on its unique name only.
+pub fn serve_unnamed(
+    builder: connection::Builder<'static>,
+    user_name: String,
+    capabilities: Capabilities,
+    on_request: impl Fn(Request) + Send + Sync + 'static,
+) -> zbus::Result<Service> {
+    serve_with(builder, user_name, capabilities, on_request, false)
+}
+
+fn serve_with(
+    builder: connection::Builder<'static>,
+    user_name: String,
+    capabilities: Capabilities,
+    on_request: impl Fn(Request) + Send + Sync + 'static,
+    claim_name: bool,
+) -> zbus::Result<Service> {
     zbus::block_on(async {
         let connection = builder
             .serve_at(
@@ -341,6 +363,9 @@ pub fn serve(
             )?
             .build()
             .await?;
+        if !claim_name {
+            return Ok(Service { connection });
+        }
         // after the object exists, so no call finds the name without it; never queue behind the owner
         match connection
             .request_name_with_flags(BUS_NAME, RequestNameFlags::DoNotQueue.into())

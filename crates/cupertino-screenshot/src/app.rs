@@ -460,7 +460,7 @@ impl Overlay {
             | Event::Dock { .. }
             | Event::Appearance { .. }
             | Event::DisplayOptions(_)
-            | Event::SessionLock { .. } => {}
+            | Event::SessionLock { .. } | Event::LockRequested { .. } => {}
         }
         Ok(None)
     }

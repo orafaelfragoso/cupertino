@@ -532,7 +532,10 @@ impl Dispatch<CupertinoMenuBarV1, MenuBarData> for Cupertino {
                     WEnum::Value(SessionAction::Sleep) => Some(DbusRequest::Sleep),
                     WEnum::Value(SessionAction::Restart) => Some(DbusRequest::Restart),
                     WEnum::Value(SessionAction::ShutDown) => Some(DbusRequest::ShutDown),
-                    WEnum::Value(SessionAction::Lock) => Some(DbusRequest::LockNow),
+                    WEnum::Value(SessionAction::Lock) => {
+                        state.lock_session_now();
+                        return;
+                    }
                     WEnum::Value(SessionAction::LogOut) => Some(DbusRequest::LogOut),
                     WEnum::Value(SessionAction::SwitchUser) => Some(DbusRequest::SwitchUser),
                     WEnum::Value(SessionAction::RefreshCapabilities) => {

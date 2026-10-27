@@ -629,7 +629,7 @@ impl App {
                 self.drop_menu()?;
             }
             // the bar has no transient interface of its own; it takes no keys and has no menu-bar role
-            Event::SessionLock { .. }
+            Event::SessionLock { .. } | Event::LockRequested { .. }
             | Event::Key { .. }
             | Event::KeyboardLeave(_)
             | Event::PopupDone(_)

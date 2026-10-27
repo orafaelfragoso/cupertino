@@ -56,6 +56,21 @@ impl SessionObservers {
         }
     }
 
+    /// Ask the lock screen to lock the session: only an observer of the connection that holds the session lock role is
+    /// told. False when there is none, so the caller falls back to the session bus.
+    pub fn lock_requested(&self, explicit: bool) -> bool {
+        let mut told = false;
+        for observer in self.observers.iter().filter(|o| {
+            o.version() >= 3
+                && o.client()
+                    .is_some_and(|c| authorized(&c, ShellRole::SessionLock))
+        }) {
+            observer.lock_requested(u32::from(explicit));
+            told = true;
+        }
+        told
+    }
+
     /// Tell every observer the session was locked or unlocked.
     pub fn lock(&self, locked: bool) {
         for observer in self.observers.iter().filter(|o| permitted(o)) {

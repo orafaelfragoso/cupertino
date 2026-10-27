@@ -4,8 +4,10 @@
 //!
 //! Matching: a result matches when every typed word is a prefix of a word of the entry, case- and width-insensitive
 //! with diacritics significant (the collation flags of, the word rule approximate). A hyphenated word
-//! also counts without its hyphens ("wifi" finds Wi-Fi; approximate). Ranking: exact title, title prefix, section
-//! title, index word; ties in sidebar order (approximate).
+//! also counts without its hyphens ("wifi" finds Wi-Fi; approximate). The words of a query may match in different
+//! places of a pane, in any order: its title, its section titles and its index words and row titles together ("mouse
+//! pointer" finds Mouse, by its title and the word "pointer"). Ranking: exact title, title prefix, a title word with
+//! the rest elsewhere in the pane, section title, index word; ties in sidebar order (approximate).
 
 use crate::pane::{Pane, PaneId, PANES};
 use crate::sidebar::{self, fold_width, RowSize};
@@ -16,6 +18,8 @@ use cupertino_text_field::TextField;
 pub enum Rank {
     ExactTitle,
     TitlePrefix,
+    /// A word of the query is a word of the title, the others match elsewhere in the pane.
+    TitleWord,
     Section,
     Word,
 }
@@ -87,8 +91,29 @@ fn matches(pane: &Pane, query: &[String], joined: &str) -> Vec<Hit> {
             out.push(hit(Some(i), Rank::Section));
         }
     }
-    if out.is_empty() && pane.words.iter().any(|w| prefixes(query, w)) {
-        out.push(hit(None, Rank::Word));
+    if out.is_empty() {
+        let title = words(pane.title);
+        let pane_words: Vec<String> = pane
+            .words
+            .iter()
+            .chain(pane.sections)
+            .flat_map(|w| words(w))
+            .chain(title.iter().cloned())
+            .collect();
+        let found = |q: &String| pane_words.iter().any(|w| w.starts_with(q.as_str()));
+        if query.iter().all(found) {
+            let in_title = query
+                .iter()
+                .any(|q| title.iter().any(|w| w.starts_with(q.as_str())));
+            out.push(hit(
+                None,
+                if in_title {
+                    Rank::TitleWord
+                } else {
+                    Rank::Word
+                },
+            ));
+        }
     }
     out
 }
@@ -99,7 +124,8 @@ pub fn search(query: &str) -> Vec<Hit> {
     if q.is_empty() {
         return Vec::new();
     }
-    let joined = q.join(" ");
+    // the typed words as typed (a hyphenated one only once), to tell an exact title
+    let joined = fold(&query.split_whitespace().collect::<Vec<_>>().join(" "));
     let order = sidebar::rows();
     let mut hits: Vec<Hit> = PANES.iter().flat_map(|p| matches(p, &q, &joined)).collect();
     hits.sort_by_key(|h| (h.rank, order.iter().position(|p| *p == h.pane), h.section));
@@ -288,6 +314,41 @@ mod tests {
             .iter()
             .map(|h| (h.pane, h.subtitle(), h.rank))
             .collect()
+    }
+
+    #[test]
+    fn the_words_of_a_query_match_anywhere_in_a_pane_in_any_order_and_the_title_ranks_first() {
+        let both = panes("mouse pointer");
+        assert_eq!(
+            both.iter().map(|(p, ..)| *p).collect::<Vec<_>>(),
+            [PaneId::Mouse, PaneId::Accessibility]
+        );
+        assert_eq!(both[0].2, Rank::TitleWord);
+        assert_eq!(both[1].2, Rank::Word);
+        assert_eq!(
+            panes("pointer mouse"),
+            both,
+            "the order of the words does not matter"
+        );
+        let pointer = panes("pointer");
+        assert_eq!(
+            pointer.iter().map(|(p, ..)| *p).collect::<Vec<_>>(),
+            [PaneId::Accessibility, PaneId::Mouse],
+            "a section title before an index word"
+        );
+        assert_eq!(pointer[0].1, Some("Pointer"));
+        assert_eq!(panes("shake locate")[0].0, PaneId::Accessibility);
+        assert_eq!(panes("size pointer")[0].0, PaneId::Accessibility);
+        assert!(panes("mouse nonsense").is_empty(), "every word must match");
+    }
+
+    #[test]
+    fn dark_finds_appearance_and_wifi_finds_wi_fi_by_its_title() {
+        assert_eq!(panes("dark"), [(PaneId::Appearance, None, Rank::Word)]);
+        for query in ["wifi", "wi-fi"] {
+            assert_eq!(panes(query)[0].0, PaneId::Wifi, "{query}");
+        }
+        assert_eq!(panes("wi-fi")[0].2, Rank::ExactTitle);
     }
 
     #[test]

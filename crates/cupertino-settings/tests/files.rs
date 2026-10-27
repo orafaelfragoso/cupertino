@@ -135,11 +135,10 @@ fn a_write_that_fails_leaves_the_file_and_names_the_problem() {
         matches!(error, StoreError::Io(File::MenuBar, _)),
         "{error:?}"
     );
-    assert!(
-        error
-            .to_string()
-            .starts_with("The change could not be saved"),
-        "{error}"
+    assert_eq!(
+        error.to_string(),
+        "The change could not be saved.",
+        "plain text for the pane; the OS error goes to the log"
     );
     assert!(matches!(
         s.store(&Paths::default(), File::Dock),

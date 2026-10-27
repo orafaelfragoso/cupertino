@@ -27,7 +27,7 @@ use cupertino_settings::paint::{
 };
 use cupertino_settings::panes::{self, Call, ControlId, Effect, Section, Session};
 use cupertino_settings::search::{popup, SearchField};
-use cupertino_settings::services::{Services, SESSION_NAME, SESSION_PATH};
+use cupertino_settings::services::{self, Services, SESSION_NAME, SESSION_PATH};
 use cupertino_settings::settings::{Paths, Settings};
 use cupertino_settings::sheet::{Answer, Outcome, Sheet, SheetKey};
 use cupertino_settings::sidebar::{self, RowSize};
@@ -1132,9 +1132,9 @@ impl App {
         // read-modify-write: the files as they are now, so the store changes the user's key only and puts back no
         // value another writer changed since the last read
         if let Err(e) = self.settings.reload(&self.paths) {
-            let e = format!("The settings could not be read: {e}.");
-            eprintln!("cupertino-settings: {e}");
-            self.errors.push((id, e));
+            eprintln!("cupertino-settings: the settings could not be read: {e}");
+            self.errors
+                .push((id, "The settings could not be read.".to_string()));
             self.client.request_redraw(self.window)?;
             return Ok(());
         }
@@ -1329,7 +1329,12 @@ impl App {
             "SetAppearance",
             &(name,),
         )
-        .map_err(|e| format!("The appearance could not be changed: {e}."))?;
+        .map_err(|e| {
+            format!(
+                "The appearance could not be changed: {}",
+                services::failure(&e)
+            )
+        })?;
         self.dark = dark;
         Ok(())
     }
@@ -1337,10 +1342,10 @@ impl App {
     /// The session bus, connected on first use.
     fn bus(&mut self) -> std::result::Result<&zbus::blocking::Connection, String> {
         if self.bus.is_none() {
-            self.bus = Some(
-                zbus::blocking::Connection::session()
-                    .map_err(|e| format!("The session bus is not available: {e}."))?,
-            );
+            self.bus = Some(zbus::blocking::Connection::session().map_err(|e| {
+                services::log_once(&format!("the session bus: {e}"));
+                "The session is not available.".to_string()
+            })?);
         }
         Ok(self.bus.as_ref().expect("connected above"))
     }
@@ -1356,7 +1361,12 @@ impl App {
             "SetAccessibility",
             &(key, value),
         )
-        .map_err(|e| format!("The setting could not be changed: {e}."))?;
+        .map_err(|e| {
+            format!(
+                "The setting could not be changed: {}",
+                services::failure(&e)
+            )
+        })?;
         self.sync_accessibility();
         Ok(())
     }

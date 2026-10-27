@@ -132,6 +132,8 @@ pub const PANES: [Pane; 15] = [
             "contrast",
             "colour filter",
             "cursor",
+            "pointer size",
+            "shake mouse pointer to locate",
             "sticky keys",
             "slow keys",
             "mouse keys",
@@ -223,7 +225,16 @@ pub const PANES: [Pane; 15] = [
         Enclosure::Gray,
         Tier::Live,
         &["Tracking", "Scrolling"],
-        &["speed", "acceleration", "natural scrolling", "pointer"],
+        &[
+            "speed",
+            "tracking speed",
+            "acceleration",
+            "pointer acceleration",
+            "mouse resolution",
+            "dpi",
+            "natural scrolling",
+            "pointer",
+        ],
     ),
     pane(
         PaneId::Trackpad,
@@ -232,7 +243,7 @@ pub const PANES: [Pane; 15] = [
         Enclosure::Gray,
         Tier::Live,
         &["Tracking", "Scrolling"],
-        &["speed", "natural scrolling", "touchpad"],
+        &["speed", "tracking speed", "natural scrolling", "touchpad"],
     ),
 ];
 

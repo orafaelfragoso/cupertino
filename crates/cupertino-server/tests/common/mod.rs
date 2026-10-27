@@ -19,6 +19,7 @@ use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::ext::session_lock::v1::client::{
     ext_session_lock_manager_v1, ext_session_lock_surface_v1, ext_session_lock_v1,
 };
+use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1;
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
 /// Memory order of an Argb8888 pixel is blue, green, red, alpha.
@@ -87,6 +88,7 @@ ignore_events!(
     wl_surface::WlSurface,
     wl_output::WlOutput,
     xdg_toplevel::XdgToplevel,
+    xdg_activation_v1::XdgActivationV1,
     ext_session_lock_manager_v1::ExtSessionLockManagerV1
 );
 
@@ -320,6 +322,40 @@ impl Client {
             queue.roundtrip(client).unwrap();
             Setup {
                 objects: Box::new((wm_base, xdg, toplevel, surface)),
+                lock: None,
+            }
+        })
+    }
+
+    /// A client that connects at once and maps one toplevel of `app_id` when `gate` is set, after presenting `token` for its
+    /// surface (xdg-activation, before the first commit) when it has one.
+    pub fn toplevel_after(
+        socket: PathBuf,
+        app_id: &'static str,
+        gate: Arc<AtomicBool>,
+        token: Arc<Mutex<Option<String>>>,
+    ) -> Client {
+        Self::run(socket, move |queue, client, globals| {
+            let qh = queue.handle();
+            let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
+            let wm_base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).unwrap();
+            let activation: xdg_activation_v1::XdgActivationV1 =
+                globals.bind(&qh, 1..=1, ()).unwrap();
+            while !gate.load(Ordering::SeqCst) {
+                queue.roundtrip(client).unwrap();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let surface = compositor.create_surface(&qh, ());
+            let xdg = wm_base.get_xdg_surface(&surface, &qh, surface.clone());
+            let toplevel = xdg.get_toplevel(&qh, ());
+            toplevel.set_app_id(app_id.to_string());
+            if let Some(token) = token.lock().unwrap().take() {
+                activation.activate(token, &surface);
+            }
+            surface.commit();
+            queue.roundtrip(client).unwrap();
+            Setup {
+                objects: Box::new((wm_base, xdg, toplevel, surface, activation)),
                 lock: None,
             }
         })

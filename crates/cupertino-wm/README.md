@@ -13,7 +13,7 @@ shadow, minimize progress).
 |---|---|
 | `lifecycle` | toplevel state machine (`Opening`, `Normal`, `Minimizing`, `Minimized`, `Restoring`, `Zooming`, `Zoomed`, `Unzooming`, `EnterFullScreen`, `FullScreen`, `ExitFullScreen`, `Tiling(k)`, `Tiled(k)`, `Closing`, `Destroyed`); every transient state is interruptible |
 | `focus` | app versus window focus, MRU, hide / hide others, app switcher model (steps, hidden counter, quit and hide of the selection), in-app window cycling, modal blocking, attention for refused activations |
-| `activation` | the activation-token rule (`token_accepted`) |
+| `activation` | the activation-token rule (`token_accepted`, `GRANT_LIFETIME`) |
 | `pieces` | visible pieces of a window (`visible_pieces`) and the magnetic guides they make (`window_guides`) |
 | `kind` | window kind of a new window from its protocol facts (`window_kind(modal, utility)`), where dialogs open (`sheet_frame`, `modal_panel_frame`, `child_frame`); `Map` turns a modal child into a `Sheet` when `place_modal_children_as_sheets` is on |
 | `interaction` | move, resize, snap hot zones, option-accelerator preview, edge-dwell workspace switching, resize hit zones, size snapping to the screen edges |
@@ -73,6 +73,10 @@ the delay), dock hot-zone avoidance off, tiling animations on, tiled border off,
 | double click on a resize edge | on (`snap.snap_size_on_double_click`); clicked edges go to the usable edges, Alt adds the opposite ones; size limits kept, not in full screen |
 | window levels | normal 0, floating 3 (utility panels), modal panel 8; a child takes its parent's level; new and raised windows stay inside their level |
 | sheet dimming of the parent | `Wm::sheet_dimming`: how far the sheet is shown, `p` while it opens and `1 − p` while it closes |
+
+### Focus on map
+
+A window that maps (`MapParams.activation`) takes the keyboard when the compositor asks for it unconditionally (`Activation::Always`: shell windows, tests) or, with `Activation::Policy(MapFocus)`, when: nothing is focused, it is a sheet or dialog of the key window, its application is the front one, its client presented a valid grant (`Grant`: made by the compositor or for an input event of the focused client) at most 10 s old that passes `token_accepted`, or it is the first window of a client the person has not left since it connected (`first_of_client` and not `input_elsewhere`). Any other window maps just below the key window and `Effect::AppAttention` bounces its application's tile. Tests: `tests/focus_on_map.rs`.
 
 ### Application switcher and activation
 

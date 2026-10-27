@@ -11,6 +11,10 @@
 /// 100 000 000 ns on the nanosecond event clock).
 pub const USER_EVENT_SLACK: f64 = 0.1;
 
+/// How long an activation grant stays good for a window that maps, in seconds: the person acted, the program started, and its
+/// window came up; a grant older than this belongs to something else.
+pub const GRANT_LIFETIME: f64 = 10.0;
+
 /// Whether a token created at `token` activates an application last activated at
 /// `last_activation`, the last user event having happened at `last_user_event` (all in seconds of
 /// one clock).

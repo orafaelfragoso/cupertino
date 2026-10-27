@@ -2,8 +2,9 @@
 //! app MRU plus per-app window MRU, hide / hide others, the app switcher and in-app window cycling,
 //! modal blocking.
 
-use crate::activation::token_accepted;
+use crate::activation::{token_accepted, GRANT_LIFETIME};
 use crate::command::Effect;
+use crate::command::MapFocus;
 use crate::ids::{AppId, WindowId};
 use crate::wm::Wm;
 
@@ -129,6 +130,54 @@ impl Wm {
             return false;
         };
         token_accepted(token, app.activated_at, last_user_event)
+    }
+
+    /// Whether a window of `app` (a sheet or dialog of `parent`) that maps at `now` takes the keyboard. It does when nothing
+    /// is focused (there is nothing to take it from), when it belongs to the key window, when its application is the
+    /// front one, when its client presented a valid grant that is still fresh, and when it is the first window of a client
+    /// the person has not left since it connected. Otherwise a program that came up on its own would take the keystrokes
+    /// of the person's work.
+    pub(crate) fn takes_focus_on_map(
+        &self,
+        app: AppId,
+        parent: Option<WindowId>,
+        facts: &MapFocus,
+        now: f64,
+    ) -> bool {
+        let Some(key) = self.focus.key_window else {
+            return true;
+        };
+        if parent == Some(key) || self.focus.front_app == Some(app) {
+            return true;
+        }
+        if let Some(grant) = facts.grant {
+            let activated_at = self.apps.get(&app).and_then(|a| a.activated_at);
+            if grant.valid
+                && now - grant.created <= GRANT_LIFETIME
+                && token_accepted(grant.created, activated_at, facts.last_user_event)
+            {
+                return true;
+            }
+        }
+        facts.first_of_client && !facts.input_elsewhere
+    }
+
+    /// Put a window that maps without the focus just below the key window, so it neither covers it nor takes its place.
+    pub(crate) fn place_behind_key_window(&mut self, window: WindowId) {
+        let Some(key) = self.focus.key_window else {
+            return;
+        };
+        let level = self.windows.get(&window).map(|w| w.level);
+        let key_level = self.windows.get(&key).map(|w| w.level);
+        if level.is_none() || level > key_level {
+            return;
+        }
+        let Some(at) = self.stack.iter().position(|w| *w == key) else {
+            return;
+        };
+        self.stack.retain(|w| *w != window);
+        let at = self.stack.iter().position(|w| *w == key).unwrap_or(at);
+        self.stack.insert(at, window);
     }
 
     /// The client of `window` asked for attention (an activation that was refused): its

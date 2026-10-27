@@ -4,6 +4,7 @@
 //! kernel's own properties. The file is written by a privileged daemon but its lines come from rules and hardware
 //! strings, so the reader bounds what it takes and skips what it does not understand.
 
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 use crate::dev_t::DevT;
@@ -31,16 +32,25 @@ pub fn parse_udev_db(text: &str) -> Properties {
 /// The properties udevd holds for the character device `devnum`, read from `dir`; empty when udevd has no record.
 pub fn read_udev_properties(dir: &Path, devnum: DevT) -> Properties {
     let path = dir.join(format!("c{devnum}"));
-    let Ok(file) = std::fs::File::open(path) else {
+    // not through a link, and without blocking on a pipe someone put there
+    let flags = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK;
+    let Ok(file) = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(flags.bits() as i32)
+        .open(path)
+    else {
         return Properties::new();
     };
-    let mut text = String::new();
-    let read =
-        std::io::Read::read_to_string(&mut std::io::Read::take(file, MAX_FILE_BYTES), &mut text);
-    if read.is_err() {
+    if !file.metadata().is_ok_and(|meta| meta.is_file()) {
         return Properties::new();
     }
-    parse_udev_db(&text)
+    let mut bytes = Vec::new();
+    if std::io::Read::read_to_end(&mut std::io::Read::take(file, MAX_FILE_BYTES), &mut bytes)
+        .is_err()
+    {
+        return Properties::new();
+    }
+    parse_udev_db(&String::from_utf8_lossy(&bytes))
 }
 
 #[cfg(test)]
@@ -78,6 +88,35 @@ V:1\n";
         std::fs::write(dir.path().join("c13:67"), DB).unwrap();
         let found = read_udev_properties(dir.path(), DevT::new(13, 67));
         assert_eq!(found.get("ID_INPUT").map(String::as_str), Some("1"));
+        assert!(read_udev_properties(dir.path(), DevT::new(13, 68)).is_empty());
+    }
+
+    #[test]
+    fn a_byte_that_is_not_utf8_costs_only_its_own_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut bytes = b"E:ID_MODEL_ENC=\xff\xfe\nE:MOUSE_DPI=*800\n".to_vec();
+        bytes.extend_from_slice(b"E:ID_INPUT=1\n");
+        std::fs::write(dir.path().join("c13:67"), bytes).unwrap();
+        let found = read_udev_properties(dir.path(), DevT::new(13, 67));
+        assert_eq!(found.get("MOUSE_DPI").map(String::as_str), Some("*800"));
+        assert_eq!(found.get("ID_INPUT").map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn a_link_or_a_pipe_in_place_of_the_file_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::write(&real, DB).unwrap();
+        std::os::unix::fs::symlink(&real, dir.path().join("c13:67")).unwrap();
+        assert!(read_udev_properties(dir.path(), DevT::new(13, 67)).is_empty());
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            dir.path().join("c13:68"),
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::from_raw_mode(0o600),
+            0,
+        )
+        .unwrap();
         assert!(read_udev_properties(dir.path(), DevT::new(13, 68)).is_empty());
     }
 

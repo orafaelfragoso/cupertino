@@ -1,5 +1,4 @@
 """Tests of the source gate: `python3 -I ci/test_gate.py`."""
-import json
 import subprocess
 import sys
 import tempfile

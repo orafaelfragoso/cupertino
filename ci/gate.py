@@ -3,7 +3,6 @@
 import argparse
 import ast
 import hashlib
-import json
 import os
 from pathlib import Path
 import re
@@ -43,7 +42,6 @@ GATE_EXEMPT = {
 }
 
 THIRD_PARTY_EXEMPT = {"private document path", "cleanup remnant"}
-
 
 
 def policy_text(text: str) -> str:

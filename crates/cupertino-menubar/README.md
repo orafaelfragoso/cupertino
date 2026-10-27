@@ -41,7 +41,10 @@ for effect in out.effects {
 ## Running
 
 Feature `app` builds the binary: a client of the display server that shows one menu bar per output and opens its menus as
-popups. The server starts it from its `"shell"` configuration and restarts it after a failure.
+popups. It runs on `cupertino-wayland-client` (popups with a grab), `cupertino-shell-client` (layer surfaces and the menu-bar
+role) and `cupertino-protocol-app` (backdrops), with a `cupertino-ui-wayland` presenter per bar and per open menu level. The
+server starts it from its `"shell"` configuration and restarts it after a failure; `cupertino-server`'s
+`tests/shell_processes.rs` runs the real binary, including a menu popup opened, dismissed by a click outside and opened again.
 
 ```sh
 cargo run -p cupertino-menubar --features app

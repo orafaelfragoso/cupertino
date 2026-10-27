@@ -124,6 +124,44 @@ mod tests {
     }
 
     #[test]
+    fn a_really_non_dumpable_child_is_allowed_only_while_it_is_a_supervised_agent() {
+        // Safety: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        // Safety: the child calls only prctl, pause and _exit, which are async-signal-safe.
+        let child = unsafe { libc::fork() };
+        if child == 0 {
+            unsafe {
+                libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0);
+                libc::pause();
+                libc::_exit(0);
+            }
+        }
+        assert!(child > 0, "fork failed");
+        let pid = child as u32;
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let caller = loop {
+            let credentials = zbus::fdo::ConnectionCredentials::default().set_process_id(pid);
+            let caller = Caller::from_credentials(&credentials, Path::new("/proc"));
+            if !matches!(caller, Caller::Process(_)) || std::time::Instant::now() > end {
+                break caller;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        let allowed = authorize(&caller, Need::SessionAgent, &[pid], 1, |_| false);
+        let refused = authorize(&caller, Need::SessionAgent, &[], 1, |_| false);
+        // Safety: kills and reaps the child forked above.
+        unsafe {
+            libc::kill(child, libc::SIGKILL);
+            libc::waitpid(child, std::ptr::null_mut(), 0);
+        }
+        assert!(matches!(caller, Caller::Unclassified(_)), "{caller:?}");
+        assert_eq!(allowed, Ok(()));
+        assert_eq!(refused, Err(Denial::Untrusted));
+    }
+
+    #[test]
     fn a_sandboxed_caller_is_refused_even_as_the_settings_program_or_the_agent() {
         let me = std::process::id();
         for sandbox in [Sandbox::Flatpak, Sandbox::Snap] {

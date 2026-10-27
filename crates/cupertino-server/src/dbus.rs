@@ -5,7 +5,7 @@
 //! through [`DbusHandle::send`]. Without a session bus the worker ends after logging and the
 //! requests fail with a warning.
 
-use crate::caller::identify;
+use crate::caller::{identify, Caller};
 use crate::input::OsdKey;
 
 /// What the worker asks a shell process to toggle.
@@ -297,12 +297,7 @@ async fn destination(
         return Some(name.to_string());
     };
     let caller = identify(conn, &owner).await;
-    let trusted = match (trust, caller.pid()) {
-        (LoginTrust::Any, _) => true,
-        (LoginTrust::Agent(expected), Some(pid)) => pid == expected,
-        (LoginTrust::Agent(_) | LoginTrust::Nobody, _) => false,
-    };
-    if !trusted {
+    if !trusts(trust, &caller) {
         tracing::error!(
             name,
             owner = %owner,
@@ -315,6 +310,16 @@ async fn destination(
 }
 
 const LOGIN_NAME: &str = "org.cupertino.Login1";
+
+/// Whether the owner of the login process's name is the process `trust` names. Only its process id counts, so a process
+/// that is not dumpable (the login process hardens itself) is judged like any other.
+fn trusts(trust: LoginTrust, owner: &Caller) -> bool {
+    match (trust, owner.pid()) {
+        (LoginTrust::Any, _) => true,
+        (LoginTrust::Agent(expected), Some(pid)) => pid == expected,
+        (LoginTrust::Agent(_) | LoginTrust::Nobody, _) => false,
+    }
+}
 
 /// Make the call of `what` and log a failure.
 async fn call(
@@ -464,6 +469,21 @@ impl crate::state::Cupertino {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cupertino_peer::ProcessHandle;
+
+    fn unclassified_self() -> Caller {
+        Caller::Unclassified(ProcessHandle::open(std::process::id()).unwrap())
+    }
+
+    #[test]
+    fn the_login_name_is_trusted_to_the_supervised_process_even_when_it_is_not_dumpable() {
+        let me = std::process::id();
+        assert!(trusts(LoginTrust::Agent(me), &unclassified_self()));
+        assert!(!trusts(LoginTrust::Agent(me + 1), &unclassified_self()));
+        assert!(!trusts(LoginTrust::Nobody, &unclassified_self()));
+        assert!(!trusts(LoginTrust::Agent(me), &Caller::Anonymous));
+        assert!(trusts(LoginTrust::Any, &Caller::Anonymous));
+    }
 
     #[test]
     fn the_lock_request_calls_the_login_process() {

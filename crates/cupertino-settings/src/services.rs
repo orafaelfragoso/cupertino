@@ -182,6 +182,15 @@ impl Services {
 
     // ---- reading ---------------------------------------------------------------------------------------------------
 
+    /// Every key of `accessibility.conf` as the server holds it (`org.cupertino.Session1.Accessibility`).
+    pub fn accessibility(&mut self) -> Reading<HashMap<String, String>> {
+        let result = self
+            .session
+            .proxy(SESSION_NAME, SESSION_PATH, SESSION_NAME)
+            .and_then(|p| p.get_property::<HashMap<String, String>>("Accessibility"));
+        reading(self.session.checked(result), "The session is not running")
+    }
+
     /// The connected mice, as the server lists them (`org.cupertino.Session1.Mice`: key, name, resolution, stored).
     pub fn mice(&mut self) -> Reading<Vec<Mouse>> {
         let result = self

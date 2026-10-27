@@ -25,6 +25,37 @@ const NAMED_KEYS: [(u32, NamedKey); 15] = [
     (111, NamedKey::Delete),
 ];
 
+/// The Latin letters of the letter keys by evdev code (`KEY_Q` = 16 … `KEY_M` = 50), for chords on a layout whose
+/// letters are not Latin.
+const LATIN_LETTERS: [(u32, char); 26] = [
+    (16, 'q'),
+    (17, 'w'),
+    (18, 'e'),
+    (19, 'r'),
+    (20, 't'),
+    (21, 'y'),
+    (22, 'u'),
+    (23, 'i'),
+    (24, 'o'),
+    (25, 'p'),
+    (30, 'a'),
+    (31, 's'),
+    (32, 'd'),
+    (33, 'f'),
+    (34, 'g'),
+    (35, 'h'),
+    (36, 'j'),
+    (37, 'k'),
+    (38, 'l'),
+    (44, 'z'),
+    (45, 'x'),
+    (46, 'c'),
+    (47, 'v'),
+    (48, 'b'),
+    (49, 'n'),
+    (50, 'm'),
+];
+
 /// A key press as the client reports it: the evdev code, the physical modifiers and the character it types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KeyInput {
@@ -115,8 +146,18 @@ impl Keymap {
             .iter()
             .find(|(code, _)| *code == key.code)
             .map(|(_, k)| *k);
+        let chorded = key.mods.contains(RawMods::CTRL) || key.mods.contains(RawMods::SUPER);
+        let latin = LATIN_LETTERS
+            .iter()
+            .find(|(code, _)| *code == key.code)
+            .map(|(_, c)| *c);
         let chord_key = match (named, key.character) {
             (Some(n), _) => Key::Named(n),
+            // a chord names its letter by the key's Latin letter when the layout's is not Latin (Super+A on a
+            // Cyrillic layout types 'ф')
+            (None, Some(c)) if chorded && !c.is_ascii() && latin.is_some() => {
+                Key::Char(latin.expect("checked by the guard"))
+            }
             (None, Some(c)) => Key::Char(c.to_ascii_lowercase()),
             (None, None) => return Command::Ignored,
         };

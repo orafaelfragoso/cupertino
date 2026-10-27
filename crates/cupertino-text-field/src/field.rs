@@ -45,6 +45,8 @@ struct Snapshot {
 enum Group {
     Typing,
     Deleting,
+    /// The updates of one composition: it undoes as one step of its own.
+    Composing,
 }
 
 /// What a drag extends: characters, words (after a double click) or nothing (a triple click selects all).
@@ -223,27 +225,35 @@ impl TextField {
 
     /// Show `preedit` as the text being composed, in place of the earlier composition or else the selection.
     pub fn set_composition(&mut self, preedit: &str) {
-        if let Some(range) = self.composition.take() {
-            self.anchor = range.start;
-            self.caret = range.end;
+        match self.composition.take() {
+            Some(range) => {
+                self.anchor = range.start;
+                self.caret = range.end;
+            }
+            // a composition starts an undo step of its own
+            None => self.group = None,
         }
         let start = self.selection().start;
-        self.replace_selection(&single_line(preedit), Some(Group::Typing));
+        self.replace_selection(&single_line(preedit), Some(Group::Composing));
         self.composition = (!preedit.is_empty()).then_some(start..self.caret);
     }
 
-    /// Keep the composed text as typed text.
+    /// Keep the composed text as typed text; what is typed next is a new undo step.
     pub fn commit_composition(&mut self) {
         self.composition = None;
+        self.group = None;
     }
 
-    /// Remove the composed text.
+    /// Remove the composed text: the field is as it was before the composition, with no undo step left for it.
     pub fn cancel_composition(&mut self) {
-        if let Some(range) = self.composition.take() {
-            self.text.replace_range(range.clone(), "");
-            self.caret = range.start;
-            self.anchor = range.start;
+        if self.composition.take().is_some() {
+            if let Some(before) = self.undo.pop() {
+                self.text = before.text;
+                self.caret = before.caret;
+                self.anchor = before.anchor;
+            }
         }
+        self.group = None;
     }
 
     pub fn undo(&mut self) -> bool {
@@ -636,7 +646,16 @@ fn edited(changed: bool) -> Response {
     }
 }
 
-/// `s` with its line breaks replaced by spaces.
+/// `s` as typing could have produced it: line breaks and tabs become spaces; other control characters and the bidi
+/// embedding, override and isolate controls are dropped.
 fn single_line(s: &str) -> String {
-    s.replace("\r\n", " ").replace(['\n', '\r'], " ")
+    s.replace("\r\n", " ")
+        .chars()
+        .filter_map(|c| match c {
+            '\n' | '\r' | '\t' => Some(' '),
+            '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' => None,
+            c if c.is_control() => None,
+            c => Some(c),
+        })
+        .collect()
 }

@@ -1,6 +1,8 @@
 //! Typed wrapper of `cupertino_menu_bar_v1`: the menu-bar role of a layer surface.
 
-use cupertino_protocols::client::cupertino_menu_bar_v1::{self, Command, CupertinoMenuBarV1};
+use cupertino_protocols::client::cupertino_menu_bar_v1::{
+    self, Command, CupertinoMenuBarV1, SessionAction as WireSessionAction,
+};
 
 /// Application id (the desktop entry id when known) and title of the active window; both are
 /// empty when no window is active.
@@ -82,6 +84,36 @@ impl From<WindowCommand> for Command {
     }
 }
 
+/// What an entry of the system menu asks of the session agent; the server forwards it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionAction {
+    Sleep,
+    /// The confirmation panel of a restart.
+    Restart,
+    ShutDown,
+    Lock,
+    LogOut,
+    /// Lock the session and show the login window, where another person can log in.
+    SwitchUser,
+    /// The menu is about to open: ask the agent to read what the machine allows again; it answers by changing
+    /// `Capabilities`. Not an entry of the menu.
+    RefreshCapabilities,
+}
+
+impl From<SessionAction> for WireSessionAction {
+    fn from(a: SessionAction) -> Self {
+        match a {
+            SessionAction::Sleep => WireSessionAction::Sleep,
+            SessionAction::Restart => WireSessionAction::Restart,
+            SessionAction::ShutDown => WireSessionAction::ShutDown,
+            SessionAction::Lock => WireSessionAction::Lock,
+            SessionAction::LogOut => WireSessionAction::LogOut,
+            SessionAction::SwitchUser => WireSessionAction::SwitchUser,
+            SessionAction::RefreshCapabilities => WireSessionAction::RefreshCapabilities,
+        }
+    }
+}
+
 /// The menu bar of one output. Dropping it gives up the role.
 pub struct MenuBar {
     proxy: CupertinoMenuBarV1,
@@ -100,6 +132,11 @@ impl MenuBar {
     /// Run a command on the active application or window at the time the server handles it.
     pub fn window_command(&self, command: WindowCommand) {
         self.proxy.window_command(command.into());
+    }
+
+    /// Ask the session agent through the server (it answers only the server).
+    pub fn session_action(&self, action: SessionAction) {
+        self.proxy.session_action(action.into());
     }
 
     /// Move the active window to a workspace of its output (1-based).

@@ -152,7 +152,7 @@ pub enum ExtraAction {
     Session(SessionAction),
 }
 
-/// What an entry of the system menu asks of the session agent (`org.cupertino.Login1`).
+/// What an entry of the system menu asks of the session agent (`org.cupertino.Login1`, through the server).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionAction {
     Sleep,

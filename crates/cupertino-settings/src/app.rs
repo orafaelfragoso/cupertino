@@ -19,6 +19,7 @@ use cupertino_settings::agent::{Agent, AgentEvent};
 use cupertino_settings::controls::{self, Control, Press, Value};
 use cupertino_settings::form::{self, RowSpec, SectionLayout, SectionSpec};
 use cupertino_settings::history::History;
+use cupertino_settings::inflight::Reads;
 use cupertino_settings::instance;
 use cupertino_settings::keys::{self, Action, Focus, Mods, SearchKey};
 use cupertino_settings::live::{Live, Pictures, Reading};
@@ -135,8 +136,9 @@ struct App {
     assets: Assets,
     /// The pictures whose thumbnail is asked for, so each is made once.
     thumbnails_asked: std::collections::HashSet<std::path::PathBuf>,
-    /// The newest list of the Wallpaper pane's pictures asked for; an older answer is dropped.
-    pictures_generation: u64,
+    /// The listings running on threads: one that is running is not started again, and one asked for meanwhile is read
+    /// after it. The chooser's listings carry their request.
+    listings: Reads<ListingKey, Option<cupertino_filepicker::Request>>,
     /// The open pairing question's answer, sent when its sheet decides.
     agent_answer: Option<(u64, async_channel::Sender<Answer>)>,
     /// Whether this window's pairing agent is registered.
@@ -157,8 +159,7 @@ enum Background {
     Files(WatchEvent),
     /// A listing of the Wallpaper pane's pictures: group 0 the packs', then one per added folder.
     Pictures {
-        generation: u64,
-        group: usize,
+        key: ListingKey,
         files: Vec<cupertino_assets::WallpaperFile>,
     },
     /// A folder the chooser asked for was read.
@@ -168,6 +169,14 @@ enum Background {
         image: std::path::PathBuf,
         thumbnail: std::path::PathBuf,
     },
+}
+
+/// What a listing thread reads: the packs' pictures, the pictures of an added folder, or a folder of the chooser.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum ListingKey {
+    Packs,
+    Pictures(std::path::PathBuf),
+    Chooser(std::path::PathBuf, bool, cupertino_filepicker::Mode),
 }
 
 /// Hands a [`Background`] to the window loop and wakes it.
@@ -305,7 +314,7 @@ pub fn run(pane: PaneId) -> Result<()> {
         notify,
         assets,
         thumbnails_asked: std::collections::HashSet::new(),
-        pictures_generation: 0,
+        listings: Reads::default(),
         agent_answer: None,
         agent_registered: false,
         _files: files,
@@ -1341,8 +1350,6 @@ impl App {
 
     /// List the pictures of the packs and of the added folders, and start the thumbnails of those without one.
     fn load_pictures(&mut self) {
-        self.pictures_generation += 1;
-        let generation = self.pictures_generation;
         let folders: Vec<std::path::PathBuf> = self
             .settings
             .compositor
@@ -1366,33 +1373,47 @@ impl App {
             .collect();
         self.ask_thumbnails(current);
         // each listing on a thread of its own: a folder on a hung mount shows "Loading…" and holds nothing else up
-        let assets = self.assets.clone();
-        self.list_pictures(generation, 0, move || assets.wallpaper_files());
-        for (i, folder) in folders.into_iter().enumerate() {
-            self.list_pictures(generation, i + 1, move || {
-                cupertino_assets::pictures_in(&folder)
-            });
+        self.start_listing(ListingKey::Packs, None);
+        for folder in folders {
+            self.start_listing(ListingKey::Pictures(folder), None);
         }
     }
 
-    fn list_pictures(
-        &mut self,
-        generation: u64,
-        group: usize,
-        read: impl FnOnce() -> Vec<cupertino_assets::WallpaperFile> + Send + 'static,
-    ) {
+    /// Start the read of `key` on a thread unless one is running (a folder on a dead mount keeps one thread, however
+    /// often it is visited); it is read once more when the running one is answered if it was asked for meanwhile.
+    fn start_listing(&mut self, key: ListingKey, request: Option<cupertino_filepicker::Request>) {
+        if let Some(request) = self.listings.ask(key.clone(), request) {
+            self.run_listing(key, request);
+        }
+    }
+
+    /// Run the read of `key` on a thread; its answer comes back as a [`Background`] event.
+    fn run_listing(&mut self, key: ListingKey, request: Option<cupertino_filepicker::Request>) {
         let notify = self.notify.clone();
-        let spawned = std::thread::Builder::new()
-            .name("wallpaper-listing".into())
-            .spawn(move || {
-                notify(Background::Pictures {
-                    generation,
-                    group,
-                    files: read(),
+        let job: Box<dyn FnOnce() -> Background + Send> = match key.clone() {
+            ListingKey::Packs => {
+                let assets = self.assets.clone();
+                Box::new(move || Background::Pictures {
+                    files: assets.wallpaper_files(),
+                    key,
                 })
-            });
+            }
+            ListingKey::Pictures(folder) => Box::new(move || Background::Pictures {
+                files: cupertino_assets::pictures_in(&folder),
+                key,
+            }),
+            ListingKey::Chooser(..) => {
+                let Some(request) = request else {
+                    return;
+                };
+                Box::new(move || Background::Listing(request.run()))
+            }
+        };
+        let spawned = std::thread::Builder::new()
+            .name("settings-listing".into())
+            .spawn(move || notify(job()));
         if let Err(e) = spawned {
-            eprintln!("cupertino-settings: cannot list the pictures: {e}");
+            eprintln!("cupertino-settings: cannot list a folder: {e}");
         }
     }
 
@@ -1434,13 +1455,9 @@ impl App {
         let Some(request) = self.sheet.as_mut().and_then(Sheet::picker_request) else {
             return;
         };
-        let notify = self.notify.clone();
-        let spawned = std::thread::Builder::new()
-            .name("chooser-listing".into())
-            .spawn(move || notify(Background::Listing(request.run())));
-        if let Err(e) = spawned {
-            eprintln!("cupertino-settings: cannot list the folder: {e}");
-        }
+        let (dir, hidden, mode) = request.key();
+        let key = ListingKey::Chooser(dir, hidden, mode);
+        self.start_listing(key, Some(request));
     }
 
     /// Store the typed resolution of the mouse `key`; the server applies the file.
@@ -1470,28 +1487,39 @@ impl App {
                     self.client.request_redraw(self.window)?;
                 }
             }
-            Background::Pictures {
-                generation,
-                group,
-                files,
-            } if generation == self.pictures_generation => {
+            Background::Pictures { key, files } => {
+                if let Some(request) = self.listings.answered(&key) {
+                    self.run_listing(key.clone(), request);
+                }
                 let images: Vec<std::path::PathBuf> =
                     files.iter().map(|f| f.light.clone()).collect();
                 let pictures = &mut self.live.pictures;
-                pictures.loading.remove(&group);
-                match group {
-                    0 => pictures.bundled = files,
-                    n => {
-                        if let Some((_, slot)) = pictures.folders.get_mut(n - 1) {
-                            *slot = files;
-                        }
+                // the pane may list other folders by now: the answer goes to the one it is for, if still listed
+                let group = match &key {
+                    ListingKey::Packs => Some(0),
+                    ListingKey::Pictures(folder) => pictures
+                        .folders
+                        .iter()
+                        .position(|(f, _)| f == folder)
+                        .map(|i| i + 1),
+                    ListingKey::Chooser(..) => None,
+                };
+                if let Some(group) = group {
+                    pictures.loading.remove(&group);
+                    match group {
+                        0 => pictures.bundled = files,
+                        n => pictures.folders[n - 1].1 = files,
                     }
+                    self.ask_thumbnails(images);
+                    self.client.request_redraw(self.window)?;
                 }
-                self.ask_thumbnails(images);
-                self.client.request_redraw(self.window)?;
             }
-            Background::Pictures { .. } => {}
             Background::Listing(listing) => {
+                let (dir, hidden, mode) = listing.key();
+                let key = ListingKey::Chooser(dir, hidden, mode);
+                if let Some(request) = self.listings.answered(&key) {
+                    self.run_listing(key, request);
+                }
                 if let Some(sheet) = self.sheet.as_mut() {
                     sheet.apply_listing(listing);
                     self.client.request_redraw(self.window)?;

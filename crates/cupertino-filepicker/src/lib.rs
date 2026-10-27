@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use cupertino_typeahead::TypeAhead;
 
 /// What the picker chooses.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Mode {
     /// A folder: only folders are listed.
     Folder,
@@ -54,7 +54,6 @@ pub type Reader = dyn Fn(&Path, Mode, bool) -> Option<Vec<Entry>>;
 /// A folder to list: what a worker is asked to read.
 #[derive(Clone, Debug)]
 pub struct Request {
-    generation: u64,
     dir: PathBuf,
     mode: Mode,
     hidden: bool,
@@ -65,7 +64,7 @@ pub struct Request {
 /// What a worker read: `None` when the folder could not be read.
 #[derive(Clone, Debug)]
 pub struct Listing {
-    generation: u64,
+    requested: Request,
     result: Option<(PathBuf, Vec<Entry>)>,
 }
 
@@ -90,7 +89,21 @@ fn read_entries(dir: &Path, mode: Mode, hidden: bool) -> Option<Vec<Entry>> {
     Some(entries)
 }
 
+impl Listing {
+    /// The key of the request this answers ([`Request::key`]).
+    pub fn key(&self) -> (PathBuf, bool, Mode) {
+        self.requested.key()
+    }
+}
+
 impl Request {
+    /// What this request asks for: the folder, whether dotfiles show and what is listed. Two requests with one key have one answer, so
+    /// a caller may run the second one's job from the first's answer and need not start another read of a folder that
+    /// is slow to answer.
+    pub fn key(&self) -> (PathBuf, bool, Mode) {
+        (self.dir.clone(), self.hidden, self.mode)
+    }
+
     /// Read the folder. This is the only place the filesystem is touched: run it on a worker, a folder on a hung
     /// mount may never answer.
     pub fn run(&self) -> Listing {
@@ -103,13 +116,13 @@ impl Request {
         loop {
             if let Some(entries) = read(&dir, self.mode, self.hidden) {
                 return Listing {
-                    generation: self.generation,
+                    requested: self.clone(),
                     result: Some((dir, entries)),
                 };
             }
             if !self.nearest_parent || !dir.pop() {
                 return Listing {
-                    generation: self.generation,
+                    requested: self.clone(),
                     result: None,
                 };
             }
@@ -128,8 +141,9 @@ pub struct Picker {
     hidden: bool,
     unreadable: bool,
     type_ahead: TypeAhead,
-    generation: u64,
     pending: Option<Request>,
+    /// The key of the latest request: the only answer taken.
+    wanted: Option<(PathBuf, bool, Mode)>,
     loading: bool,
     /// The entry to highlight when the listing in flight arrives.
     then_highlight: Option<PathBuf>,
@@ -152,8 +166,8 @@ impl Picker {
             hidden: false,
             unreadable: false,
             type_ahead: TypeAhead::default(),
-            generation: 0,
             pending: None,
+            wanted: None,
             loading: false,
             then_highlight: None,
         };
@@ -177,16 +191,16 @@ impl Picker {
     }
 
     fn request(&mut self, dir: PathBuf, nearest_parent: bool, then_highlight: Option<PathBuf>) {
-        self.generation += 1;
         self.loading = true;
         self.then_highlight = then_highlight;
-        self.pending = Some(Request {
-            generation: self.generation,
+        let request = Request {
             dir,
             mode: self.mode,
             hidden: self.hidden,
             nearest_parent,
-        });
+        };
+        self.wanted = Some(request.key());
+        self.pending = Some(request);
     }
 
     /// The folder to list next, once; the answer goes to [`Picker::apply`].
@@ -194,9 +208,9 @@ impl Picker {
         self.pending.take()
     }
 
-    /// Take a worker's answer; one that is not for the latest request is dropped.
+    /// Take a worker's answer; one that is not for the latest request's folder (and dotfile choice) is dropped.
     pub fn apply(&mut self, listing: Listing) -> Outcome {
-        if listing.generation != self.generation {
+        if self.wanted.as_ref() != Some(&listing.requested.key()) {
             return Outcome::Ignore;
         }
         self.loading = false;
@@ -563,5 +577,24 @@ mod tests {
         assert!(p.loading());
         assert_eq!(p.apply(second.run()), Outcome::Changed);
         assert!(p.entries().iter().any(|e| e.name == ".secret"));
+    }
+
+    #[test]
+    fn an_answer_for_a_folder_the_picker_asks_for_again_is_still_taken() {
+        let d = tree();
+        let mut p = Picker::new(d.path(), Mode::Folder);
+        let first = p.take_request().unwrap();
+        // the picker wants the same folder again before the first answer is in: its caller may skip a second read
+        p.set_hidden(true);
+        p.set_hidden(false);
+        let again = p.take_request().unwrap();
+        assert_eq!(first.key(), again.key());
+        assert_eq!(
+            p.apply(first.run()),
+            Outcome::Changed,
+            "one answer serves both"
+        );
+        assert!(!p.loading());
+        assert_eq!(names(&p), ["art", "Beach"]);
     }
 }

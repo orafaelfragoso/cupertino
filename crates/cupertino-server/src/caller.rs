@@ -24,6 +24,14 @@ pub fn authorize(
     own_pid: u32,
     settings_client: impl Fn(&Path) -> bool,
 ) -> Result<(), Denial> {
+    if let Caller::Unclassified(process) = caller {
+        // `/proc` refused the sandbox check: only the agents the server itself supervises are known to be unsandboxed
+        return if agents.contains(&process.pid) && !process.has_exited() {
+            Ok(())
+        } else {
+            Err(Denial::Untrusted)
+        };
+    }
     let caller = caller.unsandboxed()?;
     let pid = caller.process.pid;
     if pid == own_pid || agents.contains(&pid) {
@@ -94,6 +102,25 @@ mod tests {
             Err(Denial::Untrusted),
             "the settings program does not quit applications"
         );
+    }
+
+    #[test]
+    fn a_process_whose_sandbox_cannot_be_checked_is_trusted_only_as_a_supervised_agent() {
+        let me = std::process::id();
+        let unclassified = || Caller::Unclassified(ProcessHandle::from_pidfd(own_pidfd()).unwrap());
+        for need in [Need::SessionAgent, Need::SettingsClient] {
+            assert_eq!(authorize(&unclassified(), need, &[me], 1, |_| true), Ok(()));
+            assert_eq!(
+                authorize(&unclassified(), need, &[], 1, |_| true),
+                Err(Denial::Untrusted),
+                "not a supervised agent"
+            );
+            assert_eq!(
+                authorize(&unclassified(), need, &[], me, |_| true),
+                Err(Denial::Untrusted),
+                "being the server's own pid does not make a non-dumpable process one"
+            );
+        }
     }
 
     #[test]

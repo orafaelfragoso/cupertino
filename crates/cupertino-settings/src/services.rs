@@ -122,12 +122,20 @@ pub const SERVICE_UNAVAILABLE: &str = "The service is not available.";
 
 /// The standard errors a service answers with its own plain text (the Cupertino daemons refuse with these).
 /// The network daemon refuses an unauthorized change with `AccessDenied` and a sentence; the bus daemon's own policy
-/// denial says "Rejected send message ..." and is told apart by that text.
+/// denial says "Rejected send message ..." (dbus-daemon) or "Sender is not authorized to send message" / "Receiver is
+/// not authorized to receive message" (dbus-broker) and is told apart by that text.
 const SERVICE_STANDARD: [&str; 4] = [
     "org.freedesktop.DBus.Error.Failed",
     "org.freedesktop.DBus.Error.InvalidArgs",
     "org.freedesktop.DBus.Error.NotSupported",
     "org.freedesktop.DBus.Error.AccessDenied",
+];
+
+/// How the bus daemons word a policy denial.
+const BUS_POLICY_TEXTS: [&str; 3] = [
+    "Rejected send message",
+    "Sender is not authorized to send message",
+    "Receiver is not authorized to receive message",
 ];
 
 /// The name of the D-Bus error `e` carries, if it came over the bus.
@@ -142,7 +150,8 @@ fn error_name(e: &zbus::Error) -> Option<String> {
 /// Whether a service itself answered with an error whose text is meant for the pane: a name of its own, or one of
 /// [`SERVICE_STANDARD`]. The bus daemon's errors (no reply, access denied, timeout, limits) and the connection's are not.
 fn from_daemon(e: &zbus::Error) -> bool {
-    !e.to_string().contains("Rejected send message")
+    let text = e.to_string();
+    !BUS_POLICY_TEXTS.iter().any(|t| text.contains(t))
         && error_name(e).is_some_and(|name| {
             !name.starts_with("org.freedesktop.DBus.Error.")
                 || SERVICE_STANDARD.contains(&name.as_str())

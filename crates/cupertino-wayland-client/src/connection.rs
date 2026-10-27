@@ -193,6 +193,11 @@ impl ExtensionEvent {
     pub fn downcast<T: Any + Send + Sync>(self) -> Result<Arc<T>, ExtensionEvent> {
         self.0.downcast().map_err(ExtensionEvent)
     }
+
+    /// The value, when it is a `T`.
+    pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
+        self.0.downcast_ref()
+    }
 }
 
 impl fmt::Debug for ExtensionEvent {

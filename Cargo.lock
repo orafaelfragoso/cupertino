@@ -868,6 +868,7 @@ dependencies = [
  "cupertino-geometry",
  "cupertino-icons",
  "cupertino-theme",
+ "cupertino-typeahead",
  "image",
  "libc",
  "md5",
@@ -1216,6 +1217,7 @@ dependencies = [
  "cupertino-geometry",
  "cupertino-icons",
  "cupertino-theme",
+ "cupertino-typeahead",
  "serde_json",
  "tempfile",
  "tiny-skia",
@@ -1247,6 +1249,10 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "cupertino-typeahead"
+version = "0.1.0"
 
 [[package]]
 name = "cupertino-windowmanager"

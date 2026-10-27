@@ -67,25 +67,50 @@ pub struct Logind {
     session_id: String,
 }
 
+/// Whether `e` says that the machine has no system bus or logind has no such session, rather than that a request failed.
+fn is_absent(e: &cupertino_seat::Error) -> bool {
+    let cupertino_seat::Error::Bus { source, .. } = e else {
+        return false;
+    };
+    match &**source {
+        zbus::Error::MethodError(name, ..) => matches!(
+            name.as_str(),
+            "org.freedesktop.login1.NoSessionForPID" | "org.freedesktop.login1.NoSuchSession"
+        ),
+        zbus::Error::InputOutput(io) => matches!(
+            io.kind(),
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+        ),
+        _ => false,
+    }
+}
+
 impl Logind {
     /// Connect to the system bus and find the session of this process (`XDG_SESSION_ID`, else the process id).
-    pub fn connect() -> Result<Self, Error> {
+    /// `None` when there is no session to lock: no system bus, or logind knows no such session.
+    pub fn connect() -> Result<Option<Self>, Error> {
         let what = "finding the login session";
         let wrap = |e: cupertino_seat::Error| Error {
             what,
             source: Box::new(e),
         };
-        let connection = cupertino_seat::connect().map_err(wrap)?;
+        let connection = match cupertino_seat::connect() {
+            Err(e) if is_absent(&e) => return Ok(None),
+            connection => connection.map_err(wrap)?,
+        };
         let lookup = SessionLookup::from_environment().map_err(wrap)?;
-        let session = cupertino_seat::locate(&connection, &lookup).map_err(wrap)?;
+        let session = match cupertino_seat::locate(&connection, &lookup) {
+            Err(e) if is_absent(&e) => return Ok(None),
+            session => session.map_err(wrap)?,
+        };
         let session_id = cupertino_seat::inspect(&connection, &session)
             .map_err(wrap)?
             .id;
-        Ok(Logind {
+        Ok(Some(Logind {
             connection,
             session,
             session_id,
-        })
+        }))
     }
 
     /// The session's `Id`.
@@ -222,4 +247,25 @@ fn decode_lock(message: &Message) -> Result<Option<Signal>, zbus::Error> {
 fn decode_sleep(message: &Message) -> Result<Option<Signal>, zbus::Error> {
     let going_to_sleep: bool = message.body().deserialize()?;
     Ok(going_to_sleep.then_some(Signal::PrepareForSleep))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bus(source: zbus::Error) -> cupertino_seat::Error {
+        cupertino_seat::Error::Bus {
+            what: "test",
+            source: Box::new(source),
+        }
+    }
+
+    #[test]
+    fn a_missing_system_bus_is_no_session_and_other_failures_are_not() {
+        let io = |kind| bus(zbus::Error::InputOutput(std::io::Error::from(kind).into()));
+        assert!(is_absent(&io(std::io::ErrorKind::NotFound)));
+        assert!(is_absent(&io(std::io::ErrorKind::ConnectionRefused)));
+        assert!(!is_absent(&io(std::io::ErrorKind::PermissionDenied)));
+        assert!(!is_absent(&cupertino_seat::Error::SignalsEnded));
+    }
 }

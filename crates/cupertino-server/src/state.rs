@@ -1465,10 +1465,7 @@ impl Cupertino {
                 ShellOp::CloseOverview => self.close_overview(),
                 ShellOp::SpawnTerminal => self.spawn_terminal(),
                 ShellOp::Screenshot(request) => self.start_screenshot(request),
-                ShellOp::Quit => {
-                    self.running = false;
-                    self.loop_signal.stop();
-                }
+                ShellOp::Quit => self.quit_compositor(),
                 ShellOp::SwitchVt(n) => {
                     if let Some(b) = self.backend.as_mut() {
                         b.switch_vt(n);
@@ -1502,6 +1499,12 @@ impl Cupertino {
                 ShellOp::PowerKey { pressed } => self.power_key(pressed),
             }
         }
+    }
+
+    /// End the server: the event loop stops after this iteration.
+    pub fn quit_compositor(&mut self) {
+        self.running = false;
+        self.loop_signal.stop();
     }
 
     pub fn spawn_terminal(&mut self) {

@@ -41,6 +41,9 @@ impl Drop for PrivateBus {
     }
 }
 
+/// The worker finds the bus through the process environment: the tests that start one take turns.
+static SESSION_BUS_ENV: Mutex<()> = Mutex::new(());
+
 /// The shell processes' side of the interfaces: count the toggles.
 struct FakeCentre(Arc<Mutex<u32>>);
 
@@ -97,6 +100,7 @@ fn each_toggle_calls_its_own_process() {
         eprintln!("skipping: dbus-daemon is not available");
         return;
     };
+    let _env = SESSION_BUS_ENV.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
     block_on(async {
         let (centre_toggles, launcher_toggles) = (Arc::new(Mutex::new(0)), Arc::new(Mutex::new(0)));
@@ -225,6 +229,77 @@ fn each_toggle_calls_its_own_process() {
                 power_keys.lock().unwrap().clone()
             ),
             (1, vec![true, false])
+        );
+    });
+}
+
+/// The login process's side for the log out request: counts the calls.
+struct FakeLoginPanel(Arc<Mutex<u32>>);
+
+#[zbus::interface(name = "org.cupertino.Login1")]
+impl FakeLoginPanel {
+    fn request_log_out(&self) {
+        *self.0.lock().unwrap() += 1;
+    }
+}
+
+#[test]
+fn a_log_out_request_without_a_login_process_runs_the_fallback_and_with_one_does_not() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let _env = SESSION_BUS_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
+    block_on(async {
+        let fallbacks = Arc::new(Mutex::new(0u32));
+        let counted = fallbacks.clone();
+        let handle =
+            DbusHandle::start_with(move || *counted.lock().unwrap() += 1).expect("worker thread");
+        assert!(handle.send(Request::LogOut));
+        for _ in 0..200 {
+            if *fallbacks.lock().unwrap() > 0 {
+                break;
+            }
+            async_io::Timer::after(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            *fallbacks.lock().unwrap(),
+            1,
+            "nobody owns org.cupertino.Login1"
+        );
+
+        // other requests to a missing process are only logged
+        assert!(handle.send(Request::Toggle(Toggle::Launcher)));
+        async_io::Timer::after(Duration::from_millis(300)).await;
+        assert_eq!(*fallbacks.lock().unwrap(), 1);
+
+        let asked = Arc::new(Mutex::new(0u32));
+        let _login = connection::Builder::address(bus.address.as_str())
+            .expect("address")
+            .name("org.cupertino.Login1")
+            .expect("name")
+            .serve_at("/org/cupertino/Login1", FakeLoginPanel(asked.clone()))
+            .expect("object")
+            .build()
+            .await
+            .expect("connect");
+        assert!(handle.send(Request::LogOut));
+        for _ in 0..200 {
+            if *asked.lock().unwrap() > 0 {
+                break;
+            }
+            async_io::Timer::after(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            *asked.lock().unwrap(),
+            1,
+            "the login process got the request"
+        );
+        assert_eq!(
+            *fallbacks.lock().unwrap(),
+            1,
+            "and the fallback did not run again"
         );
     });
 }

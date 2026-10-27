@@ -10,6 +10,7 @@ pub mod form;
 pub mod geom;
 pub mod history;
 #[cfg(feature = "app")]
+pub mod inflight;
 pub mod instance;
 pub mod keys;
 pub mod live;

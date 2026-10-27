@@ -355,6 +355,54 @@ pub struct Assets {
     packs: Vec<Pack>,
 }
 
+/// A picture the desktop can show: one image, or a light and a dark one that go together.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WallpaperFile {
+    /// The file name without its extension (without `-dark` for a pair): `sunrise` for `sunrise.jpg` and
+    /// `sunrise-dark.jpg`.
+    pub name: String,
+    pub light: PathBuf,
+    /// The picture of the dark appearance; `None` when the one image serves both.
+    pub dark: Option<PathBuf>,
+}
+
+/// The pictures in `dir` (PNG and JPEG, no hidden files), by name; `<name>-dark.<ext>` next to `<name>.<ext>` makes
+/// them one pair. A directory that cannot be read has none.
+pub fn pictures_in(dir: &Path) -> Vec<WallpaperFile> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<(String, PathBuf)> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .filter_map(|p| {
+            let name = p.file_name()?.to_str()?;
+            let (stem, ext) = name.rsplit_once('.')?;
+            let ext = ext.to_ascii_lowercase();
+            (!name.starts_with('.') && matches!(ext.as_str(), "png" | "jpg" | "jpeg"))
+                .then(|| (stem.to_string(), p.clone()))
+        })
+        .collect();
+    files.sort();
+    let light_names: Vec<String> = files.iter().map(|(stem, _)| stem.clone()).collect();
+    let mut out: Vec<WallpaperFile> = Vec::new();
+    for (stem, path) in &files {
+        match stem.strip_suffix("-dark") {
+            Some(base) if light_names.iter().any(|n| n == base) => {}
+            _ => out.push(WallpaperFile {
+                name: stem.clone(),
+                light: path.clone(),
+                dark: files
+                    .iter()
+                    .find(|(other, _)| other.strip_suffix("-dark") == Some(stem.as_str()))
+                    .map(|(_, dark)| dark.clone()),
+            }),
+        }
+    }
+    out
+}
+
 impl Assets {
     /// The packs of [`search_path`]. Never fails: a directory that does not exist is skipped silently (most systems
     /// have only some of them), one that exists but cannot be used is skipped with a message on stderr.
@@ -449,6 +497,20 @@ impl Assets {
     /// The cursor theme of the first pack whose theme is found; `None` means the built-in cursors.
     pub fn cursor_theme(&self) -> Option<CursorTheme> {
         self.packs.iter().find_map(Pack::cursor_theme)
+    }
+
+    /// The pictures the packs ship in their `wallpapers` directory, the first pack's first; a name an earlier pack has
+    /// is not listed again.
+    pub fn wallpaper_files(&self) -> Vec<WallpaperFile> {
+        let mut out: Vec<WallpaperFile> = Vec::new();
+        for pack in &self.packs {
+            for file in pictures_in(&pack.root.join("wallpapers")) {
+                if !out.iter().any(|f| f.name == file.name) {
+                    out.push(file);
+                }
+            }
+        }
+        out
     }
 
     /// The default desktop picture for the light or `dark` appearance (the light one when a pack has no dark one) of

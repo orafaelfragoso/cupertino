@@ -468,3 +468,75 @@ fn a_pack_source_comes_before_the_builtin_host_names() {
         Some((_, IconSource::Theme { theme: None, .. }))
     ));
 }
+
+#[test]
+fn the_pictures_of_a_directory_pair_light_and_dark_files_and_skip_the_rest() {
+    let d = tempfile::tempdir().unwrap();
+    for rel in [
+        "sunrise.jpg",
+        "sunrise-dark.jpg",
+        "ridge.PNG",
+        "night-dark.png",
+        ".hidden.png",
+        "notes.txt",
+        "photo.jpeg",
+    ] {
+        touch(d.path(), rel);
+    }
+    fs::create_dir(d.path().join("folder.png")).unwrap();
+    let list = pictures_in(d.path());
+    let summary: Vec<(&str, bool)> = list
+        .iter()
+        .map(|f| (f.name.as_str(), f.dark.is_some()))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("night-dark", false),
+            ("photo", false),
+            ("ridge", false),
+            ("sunrise", true)
+        ],
+        "a dark file without a light one stands alone; hidden files, other types and folders are skipped"
+    );
+    assert_eq!(
+        list[3].dark.as_deref(),
+        Some(d.path().join("sunrise-dark.jpg").as_path())
+    );
+    assert!(pictures_in(&d.path().join("missing")).is_empty());
+}
+
+#[test]
+fn the_packs_list_their_wallpapers_and_the_first_pack_wins_a_name() {
+    let first = pack(
+        MANIFEST,
+        &["wallpapers/shared.png", "wallpapers/only-first.jpg"],
+    );
+    let second = pack(
+        MANIFEST,
+        &["wallpapers/shared.jpg", "wallpapers/only-second.png"],
+    );
+    let a = Assets::from_dirs(&[first.path().to_path_buf(), second.path().to_path_buf()]);
+    let names: Vec<(String, PathBuf)> = a
+        .wallpaper_files()
+        .into_iter()
+        .map(|f| (f.name, f.light))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            (
+                "only-first".to_string(),
+                first.path().join("wallpapers/only-first.jpg")
+            ),
+            (
+                "shared".to_string(),
+                first.path().join("wallpapers/shared.png")
+            ),
+            (
+                "only-second".to_string(),
+                second.path().join("wallpapers/only-second.png")
+            ),
+        ]
+    );
+}

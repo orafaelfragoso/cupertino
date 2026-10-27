@@ -507,6 +507,9 @@ pub struct Renderer {
     symbols: SystemIcons,
     /// The content view of the last frame, given back by [`Renderer::recycle`]: the next view of its size reuses it.
     spare: Option<Pixmap>,
+    /// Rows the last list view drew: what a band costs.
+    #[cfg(test)]
+    rows_drawn: usize,
 }
 
 impl Renderer {
@@ -518,6 +521,8 @@ impl Renderer {
             icons,
             symbols: SystemIcons::required(assets, &[], &SYMBOL_NAMES),
             spare: None,
+            #[cfg(test)]
+            rows_drawn: 0,
         })
     }
 
@@ -820,8 +825,16 @@ impl Renderer {
         let header_up = band.map_or(0, |b| b.top) as f32;
         let up = scroll_pixels(scroll, scale) + header_up;
         let first = f64::from(up) / f64::from(scale);
+        #[cfg(test)]
+        {
+            self.rows_drawn = 0;
+        }
         // the rows under the header are drawn too: the header covers them
         for i in l.visible_rows(first - CULL_MARGIN, first + height + CULL_MARGIN) {
+            #[cfg(test)]
+            {
+                self.rows_drawn += 1;
+            }
             let e = &entries[i];
             let row = &l.rows[i];
             let is_sel = selected.contains(&i);
@@ -1223,7 +1236,12 @@ mod tests {
 
     /// Forty entries with names of every length, folders among them, a few selected.
     fn many_entries() -> (Vec<Entry>, Vec<RowSpec>, Vec<usize>) {
-        let entries: Vec<Entry> = (0..40)
+        entries(40)
+    }
+
+    /// `n` entries with names of every length, folders among them, a few selected.
+    fn entries(n: usize) -> (Vec<Entry>, Vec<RowSpec>, Vec<usize>) {
+        let entries: Vec<Entry> = (0..n)
             .map(|i| {
                 let name = format!("item {i:02} {}.txt", "x".repeat(i % 13));
                 Entry::synthetic(&name, i % 7 == 0, 1000 + i as u64)
@@ -1326,50 +1344,41 @@ mod tests {
 
     #[test]
     fn a_band_costs_its_rows_not_the_view_at_every_height() {
-        let (entries, outline, selected) = many_entries();
+        let (entries, outline, selected) = entries(200);
         let mut r = renderer();
         let pal = Palette::builtin(false);
-        for h in [300.0, 1080.0, 2160.0] {
-            let size = Size { w: 1600.0, h };
-            let draw = |r: &mut Renderer, band: Option<Band>| {
-                (0..3)
-                    .map(|_| {
-                        let start = std::time::Instant::now();
-                        let pm = r.list_view(
-                            &entries,
-                            &outline,
-                            &selected,
-                            true,
-                            &ListViewSettings::default(),
-                            SortSpec::default(),
-                            size,
-                            0.0,
-                            band,
-                            1.0,
-                            &pal,
-                            std::time::UNIX_EPOCH,
-                        );
-                        let took = start.elapsed();
-                        r.recycle(pm);
-                        took
-                    })
-                    .min()
-                    .unwrap()
-            };
-            let whole = draw(&mut r, None);
-            let band = draw(
-                &mut r,
-                Some(Band {
-                    top: (h / 2.0) as u32,
-                    height: 40,
-                }),
+        let rows_drawn = |r: &mut Renderer, h: f64, band: Option<Band>| {
+            let pm = r.list_view(
+                &entries,
+                &outline,
+                &selected,
+                true,
+                &ListViewSettings::default(),
+                SortSpec::default(),
+                Size { w: 1600.0, h },
+                0.0,
+                band,
+                1.0,
+                &pal,
+                std::time::UNIX_EPOCH,
             );
-            eprintln!("{h} pt high: whole view {whole:?}, a 40 px band {band:?}");
-            assert!(
-                band * 4 < whole,
-                "{h}: band {band:?} against whole {whole:?}"
-            );
-        }
+            r.recycle(pm);
+            r.rows_drawn
+        };
+        let heights = [300.0, 1080.0, 2160.0];
+        let whole: Vec<usize> = heights
+            .iter()
+            .map(|&h| rows_drawn(&mut r, h, None))
+            .collect();
+        let band: Vec<usize> = heights
+            .iter()
+            .map(|&h| {
+                let top = (h / 2.0) as u32;
+                rows_drawn(&mut r, h, Some(Band { top, height: 40 }))
+            })
+            .collect();
+        assert_eq!(whole, vec![14, 53, 107]);
+        assert_eq!(band, vec![3, 3, 3]);
     }
 
     #[test]

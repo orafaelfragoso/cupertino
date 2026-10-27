@@ -388,6 +388,21 @@ pub(crate) fn rrect(
     rounded_rect(&p.res.programs, p.cache, p.scale, key, &spec)
 }
 
+/// The wallpaper of the output: the image of the user or of the asset pack, else the procedural one.
+fn wallpaper_element(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> CupertinoElement {
+    let dark = p.config.is_dark();
+    let image = p.overlays.wallpaper.element(
+        renderer,
+        p.output_id.0,
+        &p.config.wallpaper,
+        dark,
+        p.output_px,
+        p.scale,
+        p.now,
+    );
+    image.unwrap_or_else(|| wallpaper(p).into())
+}
+
 fn wallpaper(p: &mut SceneParams<'_>) -> ShaderRect {
     let dark = p.config.is_dark();
     let (c0, c1, c2, c3) = if dark {
@@ -1250,7 +1265,10 @@ fn material_element(
         radius,
         true,
         alpha,
-        wallpaper_tint(dark),
+        p.overlays
+            .wallpaper
+            .tint
+            .unwrap_or_else(|| wallpaper_tint(dark)),
         p.output_px,
         p.scale,
     ))
@@ -1431,8 +1449,8 @@ pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<C
         return locked_scene(renderer, p, surface);
     }
 
-    let wp = wallpaper(&mut p);
-    stack.push(SceneLayer::Wallpaper, wp.into());
+    let wp = wallpaper_element(renderer, &mut p);
+    stack.push(SceneLayer::Wallpaper, wp);
 
     let mut captures: Vec<CupertinoElement> = Vec::new();
     for (layer, scene_layer) in [

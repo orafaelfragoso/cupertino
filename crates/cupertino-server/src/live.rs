@@ -191,6 +191,10 @@ impl Cupertino {
             self.cursor_loader
                 .set_colors(self.config.pointer.cursor_colors);
         }
+        if changed!(wallpaper, wallpaper_dark) {
+            self.config.wallpaper = target.wallpaper.clone();
+            self.request_redraw();
+        }
         if changed!(decorations) {
             self.config.window.decorations = target.window.decorations;
             tracing::info!("`decorations` changed: windows that open from now on follow it, open windows keep theirs");

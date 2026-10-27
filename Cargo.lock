@@ -1285,6 +1285,19 @@ name = "cupertino-typeahead"
 version = "0.1.0"
 
 [[package]]
+name = "cupertino-wayland-client"
+version = "0.1.0"
+dependencies = [
+ "cupertino-geometry",
+ "memmap2",
+ "rustix 1.1.5",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-server",
+ "xkbcommon",
+]
+
+[[package]]
 name = "cupertino-windowmanager"
 version = "0.1.0"
 dependencies = [

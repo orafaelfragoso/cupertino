@@ -1,4 +1,4 @@
-use crate::{allows, exception, Edge, Layer, Rules};
+use crate::{allows, exception, Edge, Exception, Kind, Layer, Rules};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 
@@ -42,13 +42,13 @@ pub fn denied_paths(edges: &[Edge], denied: &[(Layer, &[Layer])]) -> Vec<Vec<Str
 }
 
 /// A DOT graph of `edges`, one cluster per layer, preceded by comment lines with the crate count per layer, every
-/// edge `rules` forbid with its exception status, stale exceptions and denied paths.
+/// edge `rules` forbid with its kind and exception status, stale exceptions and denied paths.
 pub fn dot(
     title: &str,
     rules: Rules,
     layers: &BTreeMap<String, Layer>,
     edges: &[Edge],
-    exceptions: &[(&str, &str, &str)],
+    exceptions: &[Exception],
     denied: &[(Layer, &[Layer])],
 ) -> String {
     let mut by_layer: BTreeMap<Layer, Vec<&str>> = BTreeMap::new();
@@ -79,18 +79,18 @@ pub fn dot(
     }
     for e in &forbidden {
         let status = match exception(exceptions, e) {
-            Some(reason) => format!("exception: {reason}"),
+            Some(x) => format!("{} exception ({}): {}", x.tracking, x.area, x.reason),
             None => "violation".to_owned(),
         };
         let _ = writeln!(
             s,
-            "// forbidden edge {} ({}) -> {} ({}), {status}",
-            e.from, e.from_layer, e.to, e.to_layer
+            "// forbidden {} edge {} ({}) -> {} ({}), {status}",
+            e.kind, e.from, e.from_layer, e.to, e.to_layer
         );
     }
-    for (from, to, _) in exceptions {
-        if !edges.iter().any(|e| e.from == *from && e.to == *to) {
-            let _ = writeln!(s, "// stale exception {from} -> {to}");
+    for x in exceptions {
+        if !edges.iter().any(|e| x.matches(e)) {
+            let _ = writeln!(s, "// stale {} exception {} -> {}", x.kind, x.from, x.to);
         }
     }
     for (from, to_layers) in denied {
@@ -102,7 +102,7 @@ pub fn dot(
         }
         s.push('\n');
         for p in paths {
-            let _ = writeln!(s, "//   {}", p.join(" -> "));
+            let _ = writeln!(s, "//   {}, violation", p.join(" -> "));
         }
     }
 
@@ -117,14 +117,22 @@ pub fn dot(
         s.push_str("  }\n");
     }
     for e in edges {
-        let style = if allows(rules, e.from_layer, e.to_layer) {
-            ""
-        } else if exception(exceptions, e).is_some() {
-            " [color=orange, style=dashed]"
+        let mut attrs = Vec::new();
+        if e.kind != Kind::Normal {
+            attrs.push(format!("label=\"{}\"", e.kind));
+        }
+        if !allows(rules, e.from_layer, e.to_layer) {
+            match exception(exceptions, e) {
+                Some(_) => attrs.push("color=orange, style=dashed".to_owned()),
+                None => attrs.push("color=red".to_owned()),
+            }
+        }
+        let attrs = if attrs.is_empty() {
+            String::new()
         } else {
-            " [color=red]"
+            format!(" [{}]", attrs.join(", "))
         };
-        let _ = writeln!(s, "  \"{}\" -> \"{}\"{style};", e.from, e.to);
+        let _ = writeln!(s, "  \"{}\" -> \"{}\"{attrs};", e.from, e.to);
     }
     s.push_str("}\n");
     s
@@ -133,7 +141,7 @@ pub fn dot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{edge, Layer::*};
+    use crate::{edge, Area, Layer::*, Tracking};
 
     #[test]
     fn denied_paths_follow_dependency_chains() {
@@ -163,7 +171,10 @@ mod tests {
         let edges = [
             edge("files", Apps, "glass", Render),
             edge("files", Apps, "theme", Foundation),
-            edge("wm", Models, "glass", Render),
+            Edge {
+                kind: Kind::Dev,
+                ..edge("wm", Models, "glass", Render)
+            },
         ];
         let rules: Rules = &[
             (Foundation, &[Foundation]),
@@ -171,9 +182,17 @@ mod tests {
             (Render, &[Foundation]),
             (Apps, &[Foundation, Models]),
         ];
+        let exception = |to, tracking| Exception {
+            from: "files",
+            to,
+            kind: Kind::Normal,
+            tracking,
+            area: Area::Apps,
+            reason: "until the toolkit",
+        };
         let exceptions = [
-            ("files", "glass", "until the toolkit"),
-            ("files", "wm", "gone"),
+            exception("glass", Tracking::Issue(46)),
+            exception("wm", Tracking::Permanent),
         ];
         assert_eq!(
             dot(
@@ -187,11 +206,11 @@ mod tests {
             r#"// cupertino-layers --graph t
 // 4 crates, 3 internal dependencies
 // per layer: foundation 1, models 1, render 1, apps 1
-// forbidden edge files (apps) -> glass (render), exception: until the toolkit
-// forbidden edge wm (models) -> glass (render), violation
-// stale exception files -> wm
+// forbidden normal edge files (apps) -> glass (render), migration #46 exception (apps): until the toolkit
+// forbidden dev edge wm (models) -> glass (render), violation
+// stale normal exception files -> wm
 // denied paths apps -> render:
-//   files -> glass
+//   files -> glass, violation
 digraph "t" {
   node [shape=box];
   subgraph "cluster_foundation" {
@@ -212,7 +231,7 @@ digraph "t" {
   }
   "files" -> "glass" [color=orange, style=dashed];
   "files" -> "theme";
-  "wm" -> "glass" [color=red];
+  "wm" -> "glass" [label="dev", color=red];
 }
 "#
         );

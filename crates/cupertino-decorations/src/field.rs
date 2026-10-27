@@ -62,9 +62,10 @@ pub fn caret_offsets(
     renderer.set_scale(scale);
     let px = style.size as f32 * scale;
     let spacing = (style.letter_spacing * f64::from(scale)) as f32;
-    boundaries
-        .iter()
-        .map(|b| f64::from(renderer.measure(&text[..*b], px, style.weight, spacing) / scale))
+    renderer
+        .offsets(text, boundaries, px, style.weight, spacing)
+        .into_iter()
+        .map(|x| f64::from(x / scale))
         .collect()
 }
 
@@ -234,5 +235,58 @@ mod tests {
             !(71..200).any(|x| ink(&caret, x)),
             "nothing right of the field"
         );
+    }
+
+    #[test]
+    fn the_offsets_of_one_pass_match_the_width_of_each_prefix() {
+        let mut r = TextRenderer::new(&Assets::builtin(), FontRole::Ui).unwrap();
+        let text = "Office fi ffl, Wörld — 2026 ";
+        let boundaries: Vec<usize> = text
+            .char_indices()
+            .map(|(i, _)| i)
+            .chain([text.len()])
+            .collect();
+        let offsets = caret_offsets(&mut r, text, &boundaries, &STYLE, 2.0);
+        for (b, x) in boundaries.iter().zip(&offsets) {
+            let prefix = f64::from(r.measure(&text[..*b], 26.0, 400, 0.0)) / 2.0;
+            assert!((x - prefix).abs() < 0.75, "at {b}: {x} against {prefix}");
+        }
+    }
+
+    #[test]
+    fn a_ten_thousand_character_line_is_measured_and_drawn_in_one_pass() {
+        let mut r = TextRenderer::new(&Assets::builtin(), FontRole::Ui).unwrap();
+        for n in [1_000, 2_000, 4_000, 10_000] {
+            let text: String = "word ".repeat(n / 5);
+            let boundaries: Vec<usize> = (0..=text.len()).collect();
+            let start = std::time::Instant::now();
+            let offsets = caret_offsets(&mut r, &text, &boundaries, &STYLE, 1.0);
+            let mut pm = Pixmap::new(300, 30).unwrap();
+            let area = Rect::new(0.0, 0.0, 300.0, 30.0);
+            let content = FieldContent {
+                text: &text,
+                boundaries: &boundaries,
+                offsets: &offsets,
+                selection: 0..text.len(),
+                composition: None,
+                caret: None,
+                scroll: offsets[text.len()] - 300.0,
+            };
+            draw_field(
+                &mut r,
+                &mut pm,
+                &area,
+                centred_baseline(&area, 13.0),
+                1.0,
+                &content,
+                &STYLE,
+            );
+            let took = start.elapsed();
+            eprintln!("{n} characters: {took:?}");
+            assert!(
+                took < std::time::Duration::from_secs(2),
+                "{n} characters took {took:?}"
+            );
+        }
     }
 }

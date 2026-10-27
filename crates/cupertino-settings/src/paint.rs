@@ -1427,6 +1427,27 @@ mod tests {
     }
 
     #[test]
+    fn a_ten_thousand_character_paste_is_cut_to_the_field_and_redrawn_quickly() {
+        let theme = Theme::load().expect("the design tokens of the repository");
+        let pal = Palette::from_theme(&theme, Appearance::Light).unwrap();
+        let mut painter = Painter::new(&Assets::builtin()).unwrap();
+        let layout = WindowLayout::new(
+            crate::window::default_size(1.0),
+            1.0,
+            RowSize::Medium,
+            &crate::sidebar::groups(),
+            false,
+        );
+        let mut search = SearchField::default();
+        let start = std::time::Instant::now();
+        search.edit(|f| f.paste(&"word ".repeat(2_000)));
+        assert_eq!(search.text().len(), crate::search::MAX_LEN);
+        paint_field(&mut painter, &layout, &search, true, &pal);
+        let took = start.elapsed();
+        assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+    }
+
+    #[test]
     fn the_window_requires_every_pane_symbol_and_its_chrome() {
         let all = required_symbols();
         for p in &pane::PANES {

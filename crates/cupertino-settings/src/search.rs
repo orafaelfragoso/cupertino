@@ -106,12 +106,25 @@ pub fn search(query: &str) -> Vec<Hit> {
     hits
 }
 
+/// The most bytes the search field holds.
+pub const MAX_LEN: usize = 1024;
+
 /// The search field's text editor, the results it shows and the highlighted one.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct SearchField {
     field: TextField,
     results: Vec<Hit>,
     highlighted: Option<usize>,
+}
+
+impl Default for SearchField {
+    fn default() -> Self {
+        SearchField {
+            field: TextField::with_max_len(MAX_LEN),
+            results: Vec::new(),
+            highlighted: None,
+        }
+    }
 }
 
 impl SearchField {

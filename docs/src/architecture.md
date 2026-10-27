@@ -62,6 +62,20 @@ A crate's layer is declared in its manifest (`[package.metadata.cupertino] layer
 
 The migration moves to twelve layers (adding `protocol`, `transport` and `ui`). `cupertino-layers` also checks every crate's target layer, with each edge that the target forbids today listed as an exception (permanent, or migration debt with its issue), and fails on any dependency chain from `ui` to `core`, `shell` or `services`; its README has the target table, and `crates/cupertino-layers/graph/` holds DOT snapshots of both views, checked by a test (`cargo run -p cupertino-layers -- --graph current|target`).
 
+## Contracts registry
+
+[`docs/architecture/contracts.yaml`](../architecture/contracts.yaml) lists every Wayland global the server advertises, every D-Bus interface a Cupertino process serves and every binary a workspace crate builds. Each entry has its version, owner crate and area, threat scope (`public`, `shell-private` or `system`), test file and the `path:line` that defines it; the file's header defines the fields. `unknown` marks a value that is not measured yet.
+
+Three checks keep it complete:
+
+| Check | Command | Fails when |
+|---|---|---|
+| Wayland globals, at run time | `cargo nextest run -p cupertino-server --test contracts` | the globals that an ordinary client, the compositor's own connection, or a connection for any one shell role sees differ from the entries of that scope, with and without an accent table |
+| D-Bus interfaces and `org.cupertino.*` names | `python3 -I ci/contracts.py .` | a `#[zbus::interface]` (also `#[interface]`, and an attribute that spans lines) or a Cupertino bus name in `crates/*/src` has no entry, an attribute's name is not a string literal, or an entry points at a line that no longer defines it |
+| Binaries | `python3 -I ci/contracts.py .` | a binary target in `cargo metadata` has no entry, or `shipped` differs from `BINARIES` in `packaging/release.py` |
+
+`ci/contracts.py` also fails when the number of entries with `test_owner: unknown` changes from the count it records, so the number can only go down. The checker's own tests run with `python3 -I ci/test_contracts.py`. The run-time test skips with a message when the machine has no EGL device; CI sets `CUPERTINO_EGL_REQUIRED=1`, which makes that a failure. The registry records the state of the code; it does not grant access. The D-Bus scan covers interfaces that Cupertino serves, not the interfaces it calls on other services.
+
 ## Replacing the Linux stack
 
 | Replaces | Component | Kernel interface |

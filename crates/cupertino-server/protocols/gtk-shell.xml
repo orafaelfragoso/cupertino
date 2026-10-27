@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <protocol name="gtk">
   <copyright>
-    SPDX-License-Identifier: MIT OR Apache-2.0
+    Copyright The GTK authors
+    SPDX-License-Identifier: LGPL-2.1-or-later
   </copyright>
-  <!-- Wire description of the GTK shell extension (interface names, opcodes and arguments as used
-       by GTK clients). Only the pieces the compositor uses are implemented; the rest is accepted
-       and ignored. -->
+  <!-- The GTK shell extension as GTK defines it (gdk/wayland/protocol/gtk-shell.xml), with shorter
+       descriptions. Only the pieces the compositor uses are implemented; the rest is accepted and
+       ignored. -->
   <interface name="gtk_shell1" version="7">
     <description summary="GTK specific extensions">Per-surface extras GTK clients announce.</description>
 

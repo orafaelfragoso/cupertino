@@ -4,7 +4,8 @@ Upstream-Contact: Cupertino contributors
 Source: https://github.com/orafaelfragoso/cupertino
 Comment: The desktop, server and applications are GPL-3+. The toolkit library crates (animation, apps, assets,
  app-protocols, defaults, geometry, icons, keyboard, protocol-app, text-field, theme, typeahead, ui-wayland,
- wayland-client) are MPL-2.0, the protocol description files of the workspace are MIT or Apache-2.0, xkbcommon is MIT over the vendored libxkbcommon port (third-party/xkbcommon-rs) and
+ wayland-client) are MPL-2.0, the protocol description files of the workspace are MIT or Apache-2.0 (the GTK shell
+ extension's, from GTK, is LGPL-2.1+), xkbcommon is MIT over the vendored libxkbcommon port (third-party/xkbcommon-rs) and
  the Inter font in the assets crate is OFL-1.1; all are linked into the binaries.
  The licence texts and NOTICE files of the registry crates linked into the binaries are in
  /usr/share/doc/cupertino/THIRD-PARTY-LICENSES.
@@ -25,6 +26,10 @@ License: MPL-2.0
 Files: crates/*/protocols/*.xml
 Copyright: Cupertino contributors
 License: MIT or Apache-2.0
+
+Files: crates/cupertino-server/protocols/gtk-shell.xml
+Copyright: The GTK authors
+License: LGPL-2.1+
 
 Files: crates/cupertino-xkbcommon/*
 Copyright: 2016 Remi Thebault

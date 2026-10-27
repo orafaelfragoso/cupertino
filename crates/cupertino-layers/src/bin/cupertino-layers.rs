@@ -7,8 +7,8 @@
 //! ```
 
 use cupertino_layers::{
-    check, classify, dot, edges, Layer, DENIED_PATHS, PENDING, RULES, TARGET, TARGET_EXCEPTIONS,
-    TARGET_RULES,
+    check, classify, dot, edges, Dep, Kind, Layer, DENIED_PATHS, PENDING, RULES, TARGET,
+    TARGET_EXCEPTIONS, TARGET_RULES,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -29,8 +29,13 @@ fn main() -> ExitCode {
     let current_edges = edges(&layers, &deps);
     let (target, mut target_problems) = classify(layers.keys(), TARGET);
     let target_edges = edges(&target, &deps);
-    let problems = check(RULES, &current_edges, PENDING);
-    target_problems.extend(check(TARGET_RULES, &target_edges, TARGET_EXCEPTIONS));
+    let problems = check(RULES, &current_edges, PENDING, DENIED_PATHS);
+    target_problems.extend(check(
+        TARGET_RULES,
+        &target_edges,
+        TARGET_EXCEPTIONS,
+        DENIED_PATHS,
+    ));
     for p in &problems {
         eprintln!("{p}");
     }
@@ -78,7 +83,7 @@ fn main() -> ExitCode {
 }
 
 /// Each workspace crate's declared layer, and every dependency (normal, build, dev) of a workspace crate.
-fn workspace() -> (BTreeMap<String, Layer>, BTreeSet<(String, String)>) {
+fn workspace() -> (BTreeMap<String, Layer>, BTreeSet<Dep>) {
     let out = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
         .args(["metadata", "--format-version", "1", "--no-deps"])
         .output()
@@ -104,7 +109,9 @@ fn workspace() -> (BTreeMap<String, Layer>, BTreeSet<(String, String)>) {
         layers.insert(name.to_owned(), layer);
         for d in p["dependencies"].as_array().expect("dependencies") {
             let to = d["name"].as_str().expect("dependency name");
-            deps.insert((name.to_owned(), to.to_owned()));
+            let kind = Kind::from_metadata(d["kind"].as_str())
+                .unwrap_or_else(|| panic!("{name} -> {to}: unknown dependency kind {}", d["kind"]));
+            deps.insert((name.to_owned(), to.to_owned(), kind));
         }
     }
     (layers, deps)

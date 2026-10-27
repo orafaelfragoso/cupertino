@@ -1,7 +1,7 @@
 //! Layer rules of the workspace. A crate declares its layer in its manifest
 //! (`[package.metadata.cupertino] layer = "<layer>"`); [`RULES`] checks those layers. [`TARGET`] classifies every crate
 //! into the twelve target layers and [`TARGET_RULES`] checks that classification, excusing the edges in
-//! [`TARGET_EXCEPTIONS`] until the migration removes them.
+//! [`TARGET_EXCEPTIONS`]. Both views also fail on any chain of dependencies that [`DENIED_PATHS`] forbids.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -12,9 +12,9 @@ pub use graph::{denied_paths, dot};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Layer {
-    /// Dependency-free building blocks: geometry, animation, design tokens, settings.
+    /// Dependency-free building blocks: geometry, animation, design tokens, settings, toolkit-facing models.
     Foundation,
-    /// Pure domain logic without I/O.
+    /// Pure desktop policy without I/O.
     Models,
     /// Kernel interfaces: devices, input events, seat.
     Platform,
@@ -75,6 +75,36 @@ impl fmt::Display for Layer {
     }
 }
 
+/// The kind of a dependency, as `cargo metadata` reports it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Kind {
+    Normal,
+    Build,
+    Dev,
+}
+
+impl Kind {
+    /// The `kind` field of a `cargo metadata` dependency (`null` for a normal one).
+    pub fn from_metadata(kind: Option<&str>) -> Option<Kind> {
+        match kind {
+            None => Some(Kind::Normal),
+            Some("build") => Some(Kind::Build),
+            Some("dev") => Some(Kind::Dev),
+            Some(_) => None,
+        }
+    }
+}
+
+impl fmt::Display for Kind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Kind::Normal => "normal",
+            Kind::Build => "build",
+            Kind::Dev => "dev",
+        })
+    }
+}
+
 /// The layers each layer may depend on. A crate may only declare a layer that has a row.
 pub type Rules = &'static [(Layer, &'static [Layer])];
 
@@ -121,8 +151,8 @@ pub const TARGET_RULES: Rules = &[
     ),
 ];
 
-/// Layers that must not reach other layers through any chain of dependencies: the toolkit never reaches the server,
-/// a shell process or a daemon.
+/// Layers that must not reach other layers through any chain of dependencies, exceptions included: the toolkit never
+/// reaches the server, a shell process or a daemon.
 pub const DENIED_PATHS: &[(Layer, &[Layer])] = &[(Ui, &[Core, Shell, Services])];
 
 /// Whether `rules` let a crate of layer `from` depend on a crate of layer `to`.
@@ -132,9 +162,67 @@ pub fn allows(rules: Rules, from: Layer, to: Layer) -> bool {
         .any(|(l, to_layers)| *l == from && to_layers.contains(&to))
 }
 
-/// Known violations of [`RULES`] that a planned phase removes, as `(from, to, reason)`. Each one must still exist: a
-/// stale entry is an error too, so the list only shrinks.
-pub const PENDING: &[(&str, &str, &str)] = &[];
+/// The part of the project that answers for an exception.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Area {
+    Compositor,
+    Rendering,
+    Design,
+    Apps,
+    Services,
+    Packaging,
+}
+
+impl fmt::Display for Area {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Area::Compositor => "compositor",
+            Area::Rendering => "rendering",
+            Area::Design => "design",
+            Area::Apps => "apps",
+            Area::Services => "services",
+            Area::Packaging => "packaging",
+        })
+    }
+}
+
+/// Whether an exception stays or is debt that an issue removes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tracking {
+    /// A reviewed edge that stays: a dev-only edge for tests, or an approved render primitive.
+    Permanent,
+    /// Migration debt, removed by the work of this issue number.
+    Issue(u32),
+}
+
+impl fmt::Display for Tracking {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Tracking::Permanent => f.write_str("permanent"),
+            Tracking::Issue(n) => write!(f, "migration #{n}"),
+        }
+    }
+}
+
+/// A forbidden edge that the check excuses. It matches only an edge of the same kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Exception {
+    pub from: &'static str,
+    pub to: &'static str,
+    pub kind: Kind,
+    pub tracking: Tracking,
+    pub area: Area,
+    pub reason: &'static str,
+}
+
+impl Exception {
+    pub fn matches(&self, edge: &Edge) -> bool {
+        self.from == edge.from && self.to == edge.to && self.kind == edge.kind
+    }
+}
+
+/// Known violations of [`RULES`]. Each one must still exist: a stale entry is an error too, so the list only shrinks.
+pub const PENDING: &[Exception] = &[];
 
 /// The target layer of every workspace crate.
 pub const TARGET: &[(&str, Layer)] = &[
@@ -165,7 +253,7 @@ pub const TARGET: &[(&str, Layer)] = &[
     ("cupertino-launcher", Shell),
     ("cupertino-layers", Tools),
     ("cupertino-login", Shell),
-    ("cupertino-login-ipc", Models),
+    ("cupertino-login-ipc", Protocol),
     ("cupertino-menubar", Shell),
     ("cupertino-netd", Services),
     ("cupertino-netlink", Platform),
@@ -181,7 +269,7 @@ pub const TARGET: &[(&str, Layer)] = &[
     ("cupertino-settings", Apps),
     ("cupertino-stage", Models),
     ("cupertino-testclient", Tools),
-    ("cupertino-text-field", Models),
+    ("cupertino-text-field", Foundation),
     ("cupertino-theme", Foundation),
     ("cupertino-thumbnails", Foundation),
     ("cupertino-typeahead", Foundation),
@@ -190,38 +278,69 @@ pub const TARGET: &[(&str, Layer)] = &[
     ("xkbcommon", Foundation),
 ];
 
-/// Edges that exist today and that [`TARGET_RULES`] forbid, as `(from, to, reason)`. Stale entries are errors.
-pub const TARGET_EXCEPTIONS: &[(&str, &str, &str)] = &[
-    (
-        "cupertino-files",
-        "cupertino-decorations",
-        "apps draw fields, shapes and text with the decoration crate until the toolkit owns them",
-    ),
-    (
-        "cupertino-files",
-        "cupertino-icons",
-        "apps load system icons through the icon crate until the toolkit has an icon adapter",
-    ),
-    (
-        "cupertino-server",
-        "cupertino-client",
-        "dev-dependency: server integration tests connect through the client library",
-    ),
-    (
-        "cupertino-settings",
-        "cupertino-alsa",
-        "the sound pane opens the mixer itself until a daemon serves it",
-    ),
-    (
-        "cupertino-settings",
-        "cupertino-decorations",
-        "apps draw fields, shapes and text with the decoration crate until the toolkit owns them",
-    ),
-    (
-        "cupertino-settings",
-        "cupertino-icons",
-        "apps load system icons through the icon crate until the toolkit has an icon adapter",
-    ),
+const APPS_DRAW: &str =
+    "apps paint fields, shapes, text and system icons with desktop render crates until they draw \
+                         through the toolkit (WP-10)";
+
+/// Edges that exist today and that [`TARGET_RULES`] forbid. Stale entries are errors.
+pub const TARGET_EXCEPTIONS: &[Exception] = &[
+    Exception {
+        from: "cupertino-files",
+        to: "cupertino-decorations",
+        kind: Kind::Normal,
+        tracking: Tracking::Issue(46),
+        area: Area::Apps,
+        reason: APPS_DRAW,
+    },
+    Exception {
+        from: "cupertino-files",
+        to: "cupertino-icons",
+        kind: Kind::Normal,
+        tracking: Tracking::Issue(46),
+        area: Area::Apps,
+        reason: APPS_DRAW,
+    },
+    Exception {
+        from: "cupertino-server",
+        to: "cupertino-client",
+        kind: Kind::Dev,
+        tracking: Tracking::Permanent,
+        area: Area::Compositor,
+        reason: "server integration tests connect real shell clients",
+    },
+    Exception {
+        from: "cupertino-settings",
+        to: "cupertino-alsa",
+        kind: Kind::Normal,
+        tracking: Tracking::Issue(21),
+        area: Area::Services,
+        reason: "the sound pane drives the mixer itself until audio goes through a service",
+    },
+    Exception {
+        from: "cupertino-settings",
+        to: "cupertino-decorations",
+        kind: Kind::Normal,
+        tracking: Tracking::Issue(46),
+        area: Area::Apps,
+        reason: APPS_DRAW,
+    },
+    Exception {
+        from: "cupertino-settings",
+        to: "cupertino-icons",
+        kind: Kind::Normal,
+        tracking: Tracking::Issue(46),
+        area: Area::Apps,
+        reason: APPS_DRAW,
+    },
+    Exception {
+        from: "cupertino-text-field",
+        to: "cupertino-keyboard",
+        kind: Kind::Normal,
+        tracking: Tracking::Issue(47),
+        area: Area::Design,
+        reason: "the text field takes its editing bindings from the compositor keyboard model until the toolkit text \
+                 crate owns them (Phase 3, WP-07)",
+    },
 ];
 
 /// A dependency between two workspace crates.
@@ -231,17 +350,22 @@ pub struct Edge {
     pub from_layer: Layer,
     pub to: String,
     pub to_layer: Layer,
+    pub kind: Kind,
 }
 
+/// A dependency of a workspace crate: `(from, to, kind)`.
+pub type Dep = (String, String, Kind);
+
 /// The dependencies in `deps` whose ends both have a layer in `layers`, in `deps` order.
-pub fn edges(layers: &BTreeMap<String, Layer>, deps: &BTreeSet<(String, String)>) -> Vec<Edge> {
+pub fn edges(layers: &BTreeMap<String, Layer>, deps: &BTreeSet<Dep>) -> Vec<Edge> {
     deps.iter()
-        .filter_map(|(from, to)| {
+        .filter_map(|(from, to, kind)| {
             Some(Edge {
                 from: from.clone(),
                 from_layer: *layers.get(from)?,
                 to: to.clone(),
                 to_layer: *layers.get(to)?,
+                kind: *kind,
             })
         })
         .collect()
@@ -250,10 +374,8 @@ pub fn edges(layers: &BTreeMap<String, Layer>, deps: &BTreeSet<(String, String)>
 #[derive(Debug, PartialEq, Eq)]
 pub enum Problem {
     Forbidden(Edge),
-    StaleException {
-        from: &'static str,
-        to: &'static str,
-    },
+    DeniedPath(Vec<String>),
+    StaleException(Exception),
     Unclassified(String),
     NotACrate(&'static str),
 }
@@ -263,12 +385,17 @@ impl fmt::Display for Problem {
         match self {
             Problem::Forbidden(e) => write!(
                 f,
-                "{} ({}) must not depend on {} ({})",
-                e.from, e.from_layer, e.to, e.to_layer
+                "{} ({}) must not depend on {} ({}), {} dependency",
+                e.from, e.from_layer, e.to, e.to_layer, e.kind
             ),
-            Problem::StaleException { from, to } => {
-                write!(f, "{from} no longer depends on {to}: remove its exception")
+            Problem::DeniedPath(path) => {
+                write!(f, "denied dependency path {}", path.join(" -> "))
             }
+            Problem::StaleException(x) => write!(
+                f,
+                "{} no longer has a {} dependency on {}: remove its exception",
+                x.from, x.kind, x.to
+            ),
             Problem::Unclassified(name) => write!(f, "{name} has no entry in TARGET"),
             Problem::NotACrate(name) => {
                 write!(f, "{name} is in TARGET but is not a workspace crate")
@@ -277,11 +404,13 @@ impl fmt::Display for Problem {
     }
 }
 
-/// Every edge `rules` forbid that `exceptions` do not list, then every exception without a matching edge.
+/// Every edge `rules` forbid that `exceptions` do not excuse, every path `denied` forbids, then every exception
+/// without a matching edge.
 pub fn check(
     rules: Rules,
     edges: &[Edge],
-    exceptions: &[(&'static str, &'static str, &str)],
+    exceptions: &[Exception],
+    denied: &[(Layer, &[Layer])],
 ) -> Vec<Problem> {
     let mut out: Vec<Problem> = edges
         .iter()
@@ -289,20 +418,22 @@ pub fn check(
         .cloned()
         .map(Problem::Forbidden)
         .collect();
-    for &(from, to, _) in exceptions {
-        if !edges.iter().any(|e| e.from == from && e.to == to) {
-            out.push(Problem::StaleException { from, to });
+    out.extend(
+        denied_paths(edges, denied)
+            .into_iter()
+            .map(Problem::DeniedPath),
+    );
+    for x in exceptions {
+        if !edges.iter().any(|e| x.matches(e)) {
+            out.push(Problem::StaleException(*x));
         }
     }
     out
 }
 
-/// The reason `exceptions` give for `edge`.
-pub fn exception<'a>(exceptions: &[(&str, &str, &'a str)], edge: &Edge) -> Option<&'a str> {
-    exceptions
-        .iter()
-        .find(|(f, t, _)| *f == edge.from && *t == edge.to)
-        .map(|&(_, _, reason)| reason)
+/// The exception that excuses `edge`.
+pub fn exception<'a>(exceptions: &'a [Exception], edge: &Edge) -> Option<&'a Exception> {
+    exceptions.iter().find(|x| x.matches(edge))
 }
 
 /// The target layer of each of `crates`, with a problem for each crate `target` misses and each entry that names no
@@ -337,12 +468,24 @@ pub(crate) fn edge(from: &str, from_layer: Layer, to: &str, to_layer: Layer) -> 
         from_layer,
         to: to.into(),
         to_layer,
+        kind: Kind::Normal,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn exc(from: &'static str, to: &'static str, kind: Kind, tracking: Tracking) -> Exception {
+        Exception {
+            from,
+            to,
+            kind,
+            tracking,
+            area: Area::Compositor,
+            reason: "test",
+        }
+    }
 
     #[test]
     fn downward_and_library_sideways_edges_pass() {
@@ -351,7 +494,7 @@ mod tests {
             edge("dock", Shell, "wm", Models),
             edge("glass", Render, "theme", Foundation),
         ];
-        assert_eq!(check(RULES, &edges, &[]), vec![]);
+        assert_eq!(check(RULES, &edges, &[], DENIED_PATHS), vec![]);
     }
 
     #[test]
@@ -359,7 +502,12 @@ mod tests {
         let up = edge("wm", Models, "glass", Render);
         let shell = edge("dock", Shell, "menubar", Shell);
         let core = edge("dock", Shell, "server", Core);
-        let problems = check(RULES, &[up.clone(), shell.clone(), core.clone()], &[]);
+        let problems = check(
+            RULES,
+            &[up.clone(), shell.clone(), core.clone()],
+            &[],
+            DENIED_PATHS,
+        );
         assert_eq!(
             problems,
             vec![
@@ -375,26 +523,66 @@ mod tests {
         let toolkit = edge("dock", Shell, "kit", Ui);
         let renderer = edge("files", Apps, "glass", Render);
         assert_eq!(
-            check(TARGET_RULES, &[toolkit, renderer.clone()], &[]),
+            check(
+                TARGET_RULES,
+                &[toolkit, renderer.clone()],
+                &[],
+                DENIED_PATHS
+            ),
             vec![Problem::Forbidden(renderer.clone())]
         );
         assert_eq!(
             Problem::Forbidden(renderer).to_string(),
-            "files (apps) must not depend on glass (render)"
+            "files (apps) must not depend on glass (render), normal dependency"
         );
     }
 
     #[test]
-    fn exceptions_excuse_an_edge_and_go_stale_once_it_is_gone() {
-        let e = edge("server", Core, "dock", Shell);
-        let exceptions = [("server", "dock", "phase 1")];
-        assert_eq!(check(RULES, std::slice::from_ref(&e), &exceptions), vec![]);
+    fn a_toolkit_chain_to_the_server_fails_even_when_its_edges_are_excused() {
+        let up = edge("net", Transport, "server", Core);
+        let edges = [edge("kit", Ui, "net", Transport), up.clone()];
+        let problems = check(
+            TARGET_RULES,
+            &edges,
+            &[exc("net", "server", Kind::Normal, Tracking::Issue(1))],
+            DENIED_PATHS,
+        );
         assert_eq!(
-            check(RULES, &[], &exceptions),
-            vec![Problem::StaleException {
-                from: "server",
-                to: "dock"
-            }]
+            problems,
+            vec![Problem::DeniedPath(vec![
+                "kit".into(),
+                "net".into(),
+                "server".into()
+            ])]
+        );
+        assert_eq!(
+            problems[0].to_string(),
+            "denied dependency path kit -> net -> server"
+        );
+    }
+
+    #[test]
+    fn an_exception_excuses_only_its_kind_and_goes_stale_once_the_edge_is_gone() {
+        let dev = Edge {
+            kind: Kind::Dev,
+            ..edge("server", Core, "client", Transport)
+        };
+        let normal = edge("server", Core, "client", Transport);
+        let x = exc("server", "client", Kind::Dev, Tracking::Permanent);
+        assert_eq!(
+            check(TARGET_RULES, std::slice::from_ref(&dev), &[x], &[]),
+            vec![]
+        );
+        assert_eq!(
+            check(TARGET_RULES, std::slice::from_ref(&normal), &[x], &[]),
+            vec![
+                Problem::Forbidden(normal.clone()),
+                Problem::StaleException(x)
+            ]
+        );
+        assert_eq!(
+            Problem::StaleException(x).to_string(),
+            "server no longer has a dev dependency on client: remove its exception"
         );
     }
 
@@ -402,12 +590,15 @@ mod tests {
     fn edges_keep_only_dependencies_between_crates_with_a_layer() {
         let layers = BTreeMap::from([("dock".to_owned(), Shell), ("wm".to_owned(), Models)]);
         let deps = BTreeSet::from([
-            ("dock".to_owned(), "serde".to_owned()),
-            ("dock".to_owned(), "wm".to_owned()),
+            ("dock".to_owned(), "serde".to_owned(), Kind::Normal),
+            ("dock".to_owned(), "wm".to_owned(), Kind::Dev),
         ]);
         assert_eq!(
             edges(&layers, &deps),
-            vec![edge("dock", Shell, "wm", Models)]
+            vec![Edge {
+                kind: Kind::Dev,
+                ..edge("dock", Shell, "wm", Models)
+            }]
         );
     }
 
@@ -426,8 +617,11 @@ mod tests {
     }
 
     #[test]
-    fn layer_names_parse() {
+    fn layer_and_kind_names_parse() {
         assert_eq!(Layer::from_name("transport"), Some(Transport));
         assert_eq!(Layer::from_name("widgets"), None);
+        assert_eq!(Kind::from_metadata(None), Some(Kind::Normal));
+        assert_eq!(Kind::from_metadata(Some("dev")), Some(Kind::Dev));
+        assert_eq!(Kind::from_metadata(Some("proc")), None);
     }
 }

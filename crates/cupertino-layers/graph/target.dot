@@ -1,38 +1,38 @@
 // cupertino-layers --graph target
-// 50 crates, 155 internal dependencies
-// per layer: foundation 10, models 9, platform 6, protocol 1, transport 1, render 4, ui 0, core 1, shell 9, services 4, apps 2, tools 3
-// forbidden edge cupertino-files (apps) -> cupertino-decorations (render), exception: apps draw fields, shapes and text with the decoration crate until the toolkit owns them
-// forbidden edge cupertino-files (apps) -> cupertino-icons (render), exception: apps load system icons through the icon crate until the toolkit has an icon adapter
-// forbidden edge cupertino-server (core) -> cupertino-client (transport), exception: dev-dependency: server integration tests connect through the client library
-// forbidden edge cupertino-settings (apps) -> cupertino-alsa (platform), exception: the sound pane opens the mixer itself until a daemon serves it
-// forbidden edge cupertino-settings (apps) -> cupertino-decorations (render), exception: apps draw fields, shapes and text with the decoration crate until the toolkit owns them
-// forbidden edge cupertino-settings (apps) -> cupertino-icons (render), exception: apps load system icons through the icon crate until the toolkit has an icon adapter
+// 50 crates, 157 internal dependencies
+// per layer: foundation 11, models 7, platform 6, protocol 2, transport 1, render 4, ui 0, core 1, shell 9, services 4, apps 2, tools 3
+// forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
+// forbidden normal edge cupertino-files (apps) -> cupertino-icons (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
+// forbidden dev edge cupertino-server (core) -> cupertino-client (transport), permanent exception (compositor): server integration tests connect real shell clients
+// forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the mixer itself until audio goes through a service
+// forbidden normal edge cupertino-settings (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
+// forbidden normal edge cupertino-settings (apps) -> cupertino-icons (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
+// forbidden normal edge cupertino-text-field (foundation) -> cupertino-keyboard (models), migration #47 exception (design): the text field takes its editing bindings from the compositor keyboard model until the toolkit text crate owns them (Phase 3, WP-07)
 // denied paths ui -> core, shell, services: none
 digraph "target" {
   node [shape=box];
   subgraph "cluster_foundation" {
-    label="foundation (10)";
+    label="foundation (11)";
     "cupertino-animation";
     "cupertino-apps";
     "cupertino-assets";
     "cupertino-defaults";
     "cupertino-filepicker";
     "cupertino-geometry";
+    "cupertino-text-field";
     "cupertino-theme";
     "cupertino-thumbnails";
     "cupertino-typeahead";
     "xkbcommon";
   }
   subgraph "cluster_models" {
-    label="models (9)";
+    label="models (7)";
     "cupertino-displays";
     "cupertino-effects";
     "cupertino-input";
     "cupertino-keyboard";
-    "cupertino-login-ipc";
     "cupertino-overview";
     "cupertino-stage";
-    "cupertino-text-field";
     "cupertino-wm";
   }
   subgraph "cluster_platform" {
@@ -45,7 +45,8 @@ digraph "target" {
     "cupertino-seat";
   }
   subgraph "cluster_protocol" {
-    label="protocol (1)";
+    label="protocol (2)";
+    "cupertino-login-ipc";
     "cupertino-protocols";
   }
   subgraph "cluster_transport" {
@@ -98,6 +99,7 @@ digraph "target" {
   "cupertino-client" -> "cupertino-defaults";
   "cupertino-client" -> "cupertino-geometry";
   "cupertino-client" -> "cupertino-protocols";
+  "cupertino-client" -> "cupertino-protocols" [label="dev"];
   "cupertino-client" -> "xkbcommon";
   "cupertino-controlcenter" -> "cupertino-alsa";
   "cupertino-controlcenter" -> "cupertino-assets";
@@ -201,7 +203,7 @@ digraph "target" {
   "cupertino-seat" -> "cupertino-devices";
   "cupertino-server" -> "cupertino-animation";
   "cupertino-server" -> "cupertino-assets";
-  "cupertino-server" -> "cupertino-client" [color=orange, style=dashed];
+  "cupertino-server" -> "cupertino-client" [label="dev", color=orange, style=dashed];
   "cupertino-server" -> "cupertino-cursor";
   "cupertino-server" -> "cupertino-decorations";
   "cupertino-server" -> "cupertino-defaults";
@@ -211,11 +213,12 @@ digraph "target" {
   "cupertino-server" -> "cupertino-evdev";
   "cupertino-server" -> "cupertino-geometry";
   "cupertino-server" -> "cupertino-glass";
-  "cupertino-server" -> "cupertino-icons";
+  "cupertino-server" -> "cupertino-icons" [label="dev"];
   "cupertino-server" -> "cupertino-input";
   "cupertino-server" -> "cupertino-keyboard";
   "cupertino-server" -> "cupertino-overview";
   "cupertino-server" -> "cupertino-protocols";
+  "cupertino-server" -> "cupertino-protocols" [label="dev"];
   "cupertino-server" -> "cupertino-seat";
   "cupertino-server" -> "cupertino-stage";
   "cupertino-server" -> "cupertino-theme";
@@ -239,7 +242,7 @@ digraph "target" {
   "cupertino-stage" -> "cupertino-wm";
   "cupertino-testclient" -> "cupertino-client";
   "cupertino-text-field" -> "cupertino-defaults";
-  "cupertino-text-field" -> "cupertino-keyboard";
+  "cupertino-text-field" -> "cupertino-keyboard" [color=orange, style=dashed];
   "cupertino-theme" -> "cupertino-animation";
   "cupertino-windowmanager" -> "cupertino-defaults";
   "cupertino-windowmanager" -> "cupertino-protocols";

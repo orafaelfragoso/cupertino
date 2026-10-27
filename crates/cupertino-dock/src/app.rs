@@ -12,12 +12,6 @@
 //! `actions`); drawing is in `render`.
 
 use cupertino_assets::Assets;
-use cupertino_client::{
-    key, ActivationRequest, Anchor, AppCommand, Backdrop, Button, Client, Corner, Dock as DockRole,
-    DockChange, DockUpdate, Event, Gesture, KeyboardInteractivity, Layer, LayerSurfaceConfig,
-    Margin, Modifiers, OutputId, OverviewMode, OverviewWindow, OverviewWorkspace, PointerEvent,
-    SurfaceId,
-};
 use cupertino_defaults::dock::DockSettings;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_dock::actions::{ActionMap, ActionTarget, Trigger};
@@ -40,7 +34,19 @@ use cupertino_dock::tiles::TileKind;
 use cupertino_dock::{Dock, DragOutcome};
 use cupertino_geometry::Rect as GRect;
 use cupertino_overview::Key as OverviewKey;
+use cupertino_protocol_app::{AppEffects, Backdrop};
+use cupertino_shell_client::{
+    Anchor, AppCommand, Corner, Dock as DockRole, DockChange, DockUpdate, Gesture,
+    KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
+    OverviewMode, OverviewWindow, OverviewWorkspace, Session as SessionObserver, SessionChange,
+    SessionState, Shell, ShellEvent,
+};
 use cupertino_theme::Typography;
+use cupertino_ui_wayland::{popup, Ready, ShmPresenter};
+use cupertino_wayland_client::{
+    key, Button, Connection, Event, KeyboardEvent, Modifiers, OutputId, PointerEvent, Popup,
+    SurfaceId, TokenRequest,
+};
 use cupertino_wm::geometry::{Point, Rect};
 use std::collections::HashMap;
 use std::error::Error;
@@ -117,7 +123,8 @@ struct Overlay {
     output: OutputId,
     switcher: Switcher,
     layout: SwitcherLayout,
-    surface: SurfaceId,
+    layer: LayerSurface,
+    presenter: ShmPresenter,
     backdrop: Backdrop,
     hover: HoverGate,
     /// Entry the last `switcher_select` asked for, until the server answers.
@@ -131,7 +138,8 @@ struct Overlay {
 /// while it is open. The layout is known once the server sized the surface.
 struct Grid {
     grid: AppGrid,
-    surface: SurfaceId,
+    layer: LayerSurface,
+    presenter: ShmPresenter,
     backdrop: Backdrop,
     layout: Option<GridLayout>,
 }
@@ -140,14 +148,16 @@ struct Grid {
 /// (so surface and output coordinates agree), with the keyboard while it is open.
 struct OverviewSurface {
     ui: OverviewUi,
-    surface: SurfaceId,
+    layer: LayerSurface,
+    presenter: ShmPresenter,
 }
 
 /// An open context menu: a popup of the bar surface with a grab.
 /// The Force Quit Applications dialog on screen.
 struct ForceQuit {
     dialog: Dialog,
-    surface: SurfaceId,
+    layer: LayerSurface,
+    presenter: ShmPresenter,
     layout: force_quit::Layout,
     hover_row: Option<usize>,
     hover_button: Option<FqButton>,
@@ -156,14 +166,21 @@ struct ForceQuit {
 struct Menu {
     items: Vec<MenuItem>,
     layout: MenuLayout,
-    surface: SurfaceId,
+    popup: Popup,
+    presenter: ShmPresenter,
     backdrop: Backdrop,
     hovered: Option<usize>,
 }
 
 struct App {
-    client: Client,
-    surface: SurfaceId,
+    conn: Connection,
+    layer_shell: LayerShell,
+    effects: AppEffects,
+    _observer: SessionObserver,
+    /// The session's appearance (for the indicators and separators) and display options.
+    observed: SessionState,
+    layer: LayerSurface,
+    presenter: ShmPresenter,
     role: DockRole,
     backdrop: Backdrop,
     session: Session,
@@ -190,13 +207,11 @@ struct App {
     poof: Option<Poof>,
     /// The surface over the whole output that draws the tile held by the pointer, settling after a
     /// drop or fading after a removal: it may leave the bar's own surface. It takes no input.
-    drag_surface: Option<SurfaceId>,
+    drag_surface: Option<(LayerSurface, ShmPresenter)>,
     /// Where the pins are stored (`None` when neither `XDG_CONFIG_HOME` nor `HOME` is set).
     pins_path: Option<PathBuf>,
-    /// The session's appearance, for the indicators and separators.
-    dark: bool,
     terminal: Option<String>,
-    pending: HashMap<ActivationRequest, Pending>,
+    pending: HashMap<TokenRequest, Pending>,
     output: OutputId,
     /// `dock.conf` as last read, the last good values of the next read; its path and the watch on it (`None` without one).
     conf: DockSettings,
@@ -220,12 +235,12 @@ fn placement(orientation: Orientation, extent: f64) -> (Anchor, (u32, u32)) {
 /// Watch `dock.conf` at `path`; its changes wake the loop. A watch that cannot be set up is reported: the file then
 /// applies at the next start.
 fn watch_conf(
-    client: &Client,
+    conn: &Connection,
     path: Option<&PathBuf>,
 ) -> (Option<ConfigWatcher>, std::sync::mpsc::Receiver<WatchEvent>) {
     let (tx, rx) = std::sync::mpsc::channel();
     let Some(path) = path else { return (None, rx) };
-    let waker = client.waker();
+    let waker = conn.waker();
     let watch = ConfigWatcher::new(vec![path.clone()], move |event| {
         // the receiver is gone only while the process exits
         if tx.send(event).is_ok() {
@@ -266,8 +281,12 @@ fn load_dock_settings(
 /// Connect, take the dock role of the first output and serve until the connection fails.
 pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let assets = Assets::discover();
-    let mut client = Client::connect_shell()?;
-    let (output, geometry) = client
+    let mut conn = Connection::connect()?;
+    let layer_shell = LayerShell::bind(&mut conn).ok_or("the server lacks zwlr_layer_shell_v1")?;
+    let effects = AppEffects::bind(&mut conn).ok_or("the server lacks cupertino_app_effects_v1")?;
+    let shell = Shell::bind(&mut conn).ok_or("the server lacks cupertino_shell_v1")?;
+    let (observer, observed, early) = shell.observe(&mut conn)?;
+    let (output, geometry) = conn
         .outputs()
         .into_iter()
         .find_map(|o| o.geometry.map(|g| (o.id, g)))
@@ -316,28 +335,35 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
     let session = Session::new(dock, desktop);
 
     let (anchor, size) = placement(session.dock.cfg.orientation, session.dock.surface_extent());
-    let surface = client.layer_surface(&LayerSurfaceConfig {
-        namespace: NAMESPACE.to_string(),
-        output: Some(output),
-        layer: Layer::Top,
-        anchor,
-        size,
-        margin: Margin::default(),
-        // windows keep clear of the bar, not of the room magnified tiles and bounces need
-        exclusive_zone: session.dock.exclusive_zone().ceil() as i32,
-        keyboard: KeyboardInteractivity::None,
-    })?;
-    let role = client.dock(surface, output)?;
-    let backdrop = client.backdrop(surface)?;
+    let layer = layer_shell.layer_surface(
+        &mut conn,
+        &LayerSurfaceConfig {
+            namespace: NAMESPACE.to_string(),
+            output: Some(output),
+            layer: Layer::Top,
+            anchor,
+            size,
+            margin: Margin::default(),
+            // windows keep clear of the bar, not of the room magnified tiles and bounces need
+            exclusive_zone: session.dock.exclusive_zone().ceil() as i32,
+            keyboard: KeyboardInteractivity::None,
+        },
+    )?;
+    let role = shell.dock(&conn, layer.surface(), output)?;
+    let backdrop = effects.backdrop(&conn, layer.surface())?;
     backdrop.set_material(MATERIAL);
-    let dark = client.is_dark();
     let labels = LabelText::new(&Typography::default(), &assets)?;
-    let (conf_watch, conf_changes) = watch_conf(&client, conf_path.as_ref());
+    let (conf_watch, conf_changes) = watch_conf(&conn, conf_path.as_ref());
     let conf = file.unwrap_or_default();
     let display_height = f64::from(geometry.height);
     let mut app = App {
-        client,
-        surface,
+        presenter: ShmPresenter::new(layer.surface()),
+        conn,
+        layer_shell,
+        effects,
+        _observer: observer,
+        observed,
+        layer,
         role,
         backdrop,
         session,
@@ -357,7 +383,6 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         poof: None,
         drag_surface: None,
         pins_path,
-        dark,
         terminal: options.terminal.clone(),
         pending: HashMap::new(),
         output,
@@ -367,9 +392,13 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         _conf_watch: conf_watch,
         display_height,
     };
+    for event in early {
+        app.handle(event)?;
+    }
     loop {
+        app.present()?;
         let timeout = app.until_due();
-        for event in app.client.wait(timeout)? {
+        for event in app.conn.wait(timeout)? {
             app.handle(event)?;
         }
         app.reload_conf()?;
@@ -493,35 +522,27 @@ impl App {
     }
 
     /// The surface as the model's screen.
-    fn screen(&mut self) -> Result<Rect> {
-        let (width, height) = self.client.size(self.surface)?;
+    fn screen(&self) -> Result<Rect> {
+        let (width, height) = self
+            .presenter
+            .size()
+            .ok_or("the dock surface has not been configured yet")?;
         Ok(Rect::new(0.0, 0.0, f64::from(width), f64::from(height)))
     }
 
     fn handle(&mut self, event: Event) -> Result<()> {
         match event {
-            // the server sized the grid's surface to the usable area: that is the grid's layer
-            Event::Configured { surface, size } if self.is_grid(surface) => {
-                let grid = self.grid.as_mut().expect("is_grid saw it");
-                grid.layout = Some(GridLayout::new(f64::from(size.0), f64::from(size.1)));
+            Event::Frame(frame) => {
+                if let Some(presenter) = self.presenters().find(|p| p.surface() == frame.surface) {
+                    presenter.frame_done();
+                }
             }
-            // a draw follows every configure and scale change
-            Event::Configured { .. } | Event::ScaleChanged { .. } => {}
-            Event::Draw(surface) if self.is_drag_surface(surface) => self.draw_dragged()?,
-            Event::Draw(surface) if self.is_overlay(surface) => self.draw_overlay()?,
-            Event::Draw(surface) if self.is_grid(surface) => self.draw_grid()?,
-            Event::Draw(surface) if self.is_force_quit(surface) => self.draw_force_quit()?,
-            Event::Draw(surface) if self.is_overview(surface) => self.draw_overview()?,
-            Event::Draw(surface) if self.is_menu(surface) => self.draw_menu()?,
-            Event::Draw(_) => self.draw()?,
-            // the output went away: the switch goes on in the server, the panel has no place to be
-            Event::Closed(surface) if self.is_drag_surface(surface) => self.drag_surface = None,
-            Event::Closed(surface) if self.is_overlay(surface) => self.lose_overlay()?,
-            Event::Closed(surface) if self.is_grid(surface) => self.drop_grid()?,
-            Event::Closed(surface) if self.is_force_quit(surface) => self.close_force_quit()?,
-            Event::Closed(surface) if self.is_overview(surface) => self.drop_overview()?,
-            Event::Closed(surface) if self.is_menu(surface) => self.drop_menu()?,
-            Event::Closed(_) => return Err("the server closed the dock surface".into()),
+            Event::PopupConfigure { popup, configure } => {
+                if let Some(menu) = self.menu.as_mut().filter(|m| m.popup == popup) {
+                    menu.presenter
+                        .configured((configure.width, configure.height));
+                }
+            }
             // the drag surface takes no input; the bar's surface keeps the pointer until the release
             Event::Pointer { surface, .. } if self.is_drag_surface(surface) => {}
             Event::Pointer { surface, event } if self.is_overlay(surface) => {
@@ -540,38 +561,24 @@ impl App {
                 self.menu_pointer(event)?
             }
             Event::Pointer { event, .. } => self.pointer(event)?,
-            Event::Dock { update, .. } => self.feed(update)?,
-            Event::Appearance { dark } => {
-                self.dark = dark;
-                self.client.request_redraw(self.surface)?;
-                if let Some(overlay) = &self.overlay {
-                    self.client.request_redraw(overlay.surface)?;
-                }
-                if let Some(grid) = &self.grid {
-                    self.client.request_redraw(grid.surface)?;
-                }
-            }
-            // the materials follow the options in the server; the grid's fade follows Reduce Motion
-            Event::DisplayOptions(options) => {
-                if let Some(grid) = &mut self.grid {
-                    grid.grid.set_reduce_motion(options.reduce_motion);
-                    self.client.request_redraw(grid.surface)?;
-                }
-            }
             Event::ActivationToken { request, token } => self.complete(request, &token)?,
             Event::OutputsChanged => {
-                if !self.client.outputs().iter().any(|o| o.id == self.output) {
+                if !self.conn.outputs().iter().any(|o| o.id == self.output) {
                     return Err("the output of the dock went away".into());
                 }
             }
-            Event::Key {
+            Event::Keyboard {
                 surface,
-                key,
-                pressed: true,
-                mods,
-                character,
+                event:
+                    KeyboardEvent::Key {
+                        code,
+                        pressed: true,
+                        mods,
+                        character,
+                        ..
+                    },
             } if self.is_grid(surface) => {
-                if let Some(key) = grid_key(key, mods, character) {
+                if let Some(key) = grid_key(code, mods, character) {
                     let now = self.now();
                     let outcome = self
                         .grid
@@ -582,14 +589,17 @@ impl App {
                     self.grid_outcome(outcome)?;
                 }
             }
-            Event::Key {
+            Event::Keyboard {
                 surface,
-                key,
-                pressed: true,
-                mods,
-                ..
+                event:
+                    KeyboardEvent::Key {
+                        code,
+                        pressed: true,
+                        mods,
+                        ..
+                    },
             } if self.is_overview(surface) => {
-                if let Some(key) = overview_key(key, mods) {
+                if let Some(key) = overview_key(code, mods) {
                     let now = self.now();
                     let action = self
                         .overview
@@ -600,14 +610,17 @@ impl App {
                     self.overview_action(action)?;
                 }
             }
-            Event::Key {
+            Event::Keyboard {
                 surface,
-                key,
-                pressed: true,
-                mods,
-                ..
+                event:
+                    KeyboardEvent::Key {
+                        code,
+                        pressed: true,
+                        mods,
+                        ..
+                    },
             } if self.is_force_quit(surface) => {
-                if let Some(key) = force_quit_key(key) {
+                if let Some(key) = force_quit_key(code) {
                     let outcome = self
                         .force_quit
                         .as_mut()
@@ -618,26 +631,153 @@ impl App {
                 }
             }
             // the keyboard moved elsewhere: the grid loses its reason to stay open
-            Event::KeyboardLeave(surface) if self.is_grid(surface) => self.close_grid()?,
+            Event::Keyboard {
+                surface,
+                event: KeyboardEvent::Leave,
+            } if self.is_grid(surface) => self.close_grid()?,
             // the server dismissed the menu's grab: the menu is over
-            Event::PopupDone(surface) if self.is_menu(surface) => self.drop_menu()?,
-            // the lock screen covers everything: the grid and a menu go at once, without animation;
-            // the overview's chrome waits for the server's `overview_closed`
-            Event::SessionLock { locked: true } => {
-                self.close_force_quit()?;
-                self.drop_grid()?;
-                self.drop_menu()?;
-            }
-            // the bar has no transient interface of its own; it takes no keys and has no menu-bar role
-            Event::SessionLock { .. }
-            | Event::LockRequested { .. }
-            | Event::LogOutRequested
-            | Event::Key { .. }
-            | Event::KeyboardLeave(_)
-            | Event::PopupDone(_)
-            | Event::MenuBar { .. } => {}
+            Event::PopupDone(popup) if self.is_menu(popup.surface()) => self.drop_menu()?,
+            Event::Extension(event) => match self.observed.apply(&event) {
+                Some(SessionChange::Appearance { .. }) => {
+                    self.presenter.request_redraw();
+                    if let Some(overlay) = &mut self.overlay {
+                        overlay.presenter.request_redraw();
+                    }
+                    if let Some(grid) = &mut self.grid {
+                        grid.presenter.request_redraw();
+                    }
+                }
+                // the materials follow the options in the server; the grid's fade follows Reduce Motion
+                Some(SessionChange::DisplayOptions(options)) => {
+                    if let Some(grid) = &mut self.grid {
+                        grid.grid.set_reduce_motion(options.reduce_motion);
+                        grid.presenter.request_redraw();
+                    }
+                }
+                // the lock screen covers everything: the grid and a menu go at once, without animation;
+                // the overview's chrome waits for the server's `overview_closed`
+                Some(SessionChange::Lock { locked: true }) => {
+                    self.close_force_quit()?;
+                    self.drop_grid()?;
+                    self.drop_menu()?;
+                }
+                Some(SessionChange::Lock { .. }) => {}
+                None => match event.downcast_ref::<ShellEvent>() {
+                    Some(&ShellEvent::Configure { surface, size }) => {
+                        self.configured(surface, size)?
+                    }
+                    // the output went away: the switch goes on in the server, the panel has no place to be
+                    Some(&ShellEvent::Closed(surface)) if self.is_drag_surface(surface) => {
+                        self.drag_surface = None
+                    }
+                    Some(&ShellEvent::Closed(surface)) if self.is_overlay(surface) => {
+                        self.lose_overlay()?
+                    }
+                    Some(&ShellEvent::Closed(surface)) if self.is_grid(surface) => {
+                        self.drop_grid()?
+                    }
+                    Some(&ShellEvent::Closed(surface)) if self.is_force_quit(surface) => {
+                        self.close_force_quit()?
+                    }
+                    Some(&ShellEvent::Closed(surface)) if self.is_overview(surface) => {
+                        self.drop_overview()?
+                    }
+                    Some(ShellEvent::Closed(_)) => {
+                        return Err("the server closed the dock surface".into())
+                    }
+                    Some(ShellEvent::Dock { update, .. }) => self.feed(update.clone())?,
+                    // the bar has no menu-bar role and leaves the session's requests to others
+                    _ => {}
+                },
+            },
+            // the bar has no transient interface of its own and takes no keys; the scale is read when drawing
+            _ => {}
         }
         Ok(())
+    }
+
+    /// Every presenter: the bar's, then those of the surfaces that come and go.
+    fn presenters(&mut self) -> impl Iterator<Item = &mut ShmPresenter> {
+        std::iter::once(&mut self.presenter)
+            .chain(self.drag_surface.iter_mut().map(|(_, p)| p))
+            .chain(self.overlay.iter_mut().map(|o| &mut o.presenter))
+            .chain(self.grid.iter_mut().map(|g| &mut g.presenter))
+            .chain(self.force_quit.iter_mut().map(|f| &mut f.presenter))
+            .chain(self.overview.iter_mut().map(|o| &mut o.presenter))
+            .chain(self.menu.iter_mut().map(|m| &mut m.presenter))
+    }
+
+    /// A configure of a layer surface; one of a surface destroyed since is dropped. The server sized the grid's
+    /// surface to the usable area: that is the grid's layout.
+    fn configured(&mut self, surface: SurfaceId, size: (u32, u32)) -> Result<()> {
+        let layers = std::iter::once((&self.layer, &mut self.presenter))
+            .chain(self.drag_surface.iter_mut().map(|(l, p)| (&*l, p)))
+            .chain(
+                self.overlay
+                    .iter_mut()
+                    .map(|o| (&o.layer, &mut o.presenter)),
+            )
+            .chain(self.grid.iter_mut().map(|g| (&g.layer, &mut g.presenter)))
+            .chain(
+                self.force_quit
+                    .iter_mut()
+                    .map(|f| (&f.layer, &mut f.presenter)),
+            )
+            .chain(
+                self.overview
+                    .iter_mut()
+                    .map(|o| (&o.layer, &mut o.presenter)),
+            );
+        for (layer, presenter) in layers {
+            if layer.surface() == surface {
+                presenter.configured(layer.configured(size)?);
+            }
+        }
+        if let Some(grid) = self.grid.as_mut().filter(|g| g.layer.surface() == surface) {
+            let (width, height) = grid.presenter.size().expect("configured above");
+            grid.layout = Some(GridLayout::new(f64::from(width), f64::from(height)));
+        }
+        Ok(())
+    }
+
+    /// Draw every surface that can take a frame, until none can: a frame of the bar asks for one of the drag surface.
+    fn present(&mut self) -> Result<()> {
+        loop {
+            let mut ready = Vec::new();
+            let presenters = std::iter::once(&mut self.presenter)
+                .chain(self.drag_surface.iter_mut().map(|(_, p)| p))
+                .chain(self.overlay.iter_mut().map(|o| &mut o.presenter))
+                .chain(self.grid.iter_mut().map(|g| &mut g.presenter))
+                .chain(self.force_quit.iter_mut().map(|f| &mut f.presenter))
+                .chain(self.overview.iter_mut().map(|o| &mut o.presenter))
+                .chain(self.menu.iter_mut().map(|m| &mut m.presenter));
+            for presenter in presenters {
+                loop {
+                    match presenter.poll(&self.conn)? {
+                        // a draw follows every scale change
+                        Ready::ScaleChanged(_) => {}
+                        Ready::Draw => break ready.push(presenter.surface()),
+                        Ready::Idle => break,
+                    }
+                }
+            }
+            if ready.is_empty() {
+                return Ok(());
+            }
+            for surface in ready {
+                match surface {
+                    s if self.is_drag_surface(s) => self.draw_dragged()?,
+                    s if self.is_overlay(s) => self.draw_overlay()?,
+                    s if self.is_grid(s) => self.draw_grid()?,
+                    s if self.is_force_quit(s) => self.draw_force_quit()?,
+                    s if self.is_overview(s) => self.draw_overview()?,
+                    s if self.is_menu(s) => self.draw_menu()?,
+                    s if s == self.layer.surface() => self.draw()?,
+                    // removed by a frame drawn before it
+                    _ => {}
+                }
+            }
+        }
     }
 
     /// Apply a group of the server's window changes at once.
@@ -653,10 +793,8 @@ impl App {
                 DockChange::Launching(app_id) => self.session.launching(&app_id, now),
                 DockChange::ToggleAutoHide => {
                     self.session.dock.toggle_autohide(now);
-                    self.client.set_exclusive_zone(
-                        self.surface,
-                        self.session.dock.exclusive_zone().ceil() as i32,
-                    )?;
+                    self.layer
+                        .set_exclusive_zone(self.session.dock.exclusive_zone().ceil() as i32);
                 }
                 DockChange::SwitcherChanged {
                     output,
@@ -691,7 +829,7 @@ impl App {
             }
         }
         self.session.list_taken();
-        self.client.request_redraw(self.surface)?;
+        self.presenter.request_redraw();
         Ok(())
     }
 
@@ -702,11 +840,11 @@ impl App {
             PointerEvent::Enter(p) | PointerEvent::Motion(p) => {
                 self.pointer = Some(Point::new(p.x, p.y));
                 self.drag_pointer(Point::new(p.x, p.y))?;
-                self.client.request_redraw(self.surface)?;
+                self.presenter.request_redraw();
             }
             PointerEvent::Leave => {
                 self.pointer = None;
-                self.client.request_redraw(self.surface)?;
+                self.presenter.request_redraw();
             }
             PointerEvent::Button {
                 button: Button::Left,
@@ -805,7 +943,7 @@ impl App {
                 }
             }
         }
-        self.client.request_redraw(self.surface)?;
+        self.presenter.request_redraw();
         Ok(())
     }
 
@@ -818,8 +956,7 @@ impl App {
         );
         if now_placed != placed {
             let (anchor, size) = placement(now_placed.0, now_placed.1);
-            self.client
-                .set_layer_placement(self.surface, anchor, size)?;
+            self.layer.set_placement(anchor, size);
         }
         Ok(())
     }
@@ -882,11 +1019,9 @@ impl App {
             self.actions = after.actions.clone();
         }
         self.sync_placement(placed)?;
-        self.client.set_exclusive_zone(
-            self.surface,
-            self.session.dock.exclusive_zone().ceil() as i32,
-        )?;
-        self.client.request_redraw(self.surface)?;
+        self.layer
+            .set_exclusive_zone(self.session.dock.exclusive_zone().ceil() as i32);
+        self.presenter.request_redraw();
         Ok(())
     }
 
@@ -931,7 +1066,9 @@ impl App {
     fn open_in_file_manager(&mut self, target: &str) -> Result<()> {
         match self.session.file_manager_command(target) {
             Some(argv) => {
-                let request = self.client.request_activation_token(self.surface)?;
+                let request = self
+                    .conn
+                    .request_activation_token(self.layer.surface(), None)?;
                 self.pending.insert(
                     request,
                     Pending {
@@ -969,14 +1106,16 @@ impl App {
             eprintln!("cupertino-dock: {key} has no command");
             return Ok(());
         }
-        let request = self.client.request_activation_token(self.surface)?;
+        let request = self
+            .conn
+            .request_activation_token(self.layer.surface(), None)?;
         self.pending.insert(request, Pending { key, argv });
         Ok(())
     }
 
     /// Start the program that waited for `token` (the application uses it to take the focus) and
     /// bounce its tile.
-    fn complete(&mut self, request: ActivationRequest, token: &str) -> Result<()> {
+    fn complete(&mut self, request: TokenRequest, token: &str) -> Result<()> {
         let Pending { key, argv } = self
             .pending
             .remove(&request)
@@ -990,13 +1129,15 @@ impl App {
         if spawn(command) {
             let now = self.now();
             self.session.dock.app_launching(&key, now);
-            self.client.request_redraw(self.surface)?;
+            self.presenter.request_redraw();
         }
         Ok(())
     }
 
     fn is_overlay(&self, surface: SurfaceId) -> bool {
-        self.overlay.as_ref().is_some_and(|o| o.surface == surface)
+        self.overlay
+            .as_ref()
+            .is_some_and(|o| o.layer.surface() == surface)
     }
 
     /// The server sent the switcher's list and selection: a step of the open switch moves the
@@ -1014,13 +1155,13 @@ impl App {
         {
             overlay.switcher.select(selected)?;
             overlay.requested = None;
-            self.client.request_redraw(overlay.surface)?;
+            overlay.presenter.request_redraw();
             return Ok(());
         }
         let resumed = self.orphan.take().filter(|s| s.continues_with(&apps));
         self.close_overlay()?;
         let geometry = self
-            .client
+            .conn
             .outputs()
             .into_iter()
             .find(|o| o.id == output)
@@ -1038,25 +1179,29 @@ impl App {
             }
             None => Switcher::new(apps, selected, self.now())?,
         };
-        let surface = self.client.layer_surface(&LayerSurfaceConfig {
-            namespace: SWITCHER_NAMESPACE.to_string(),
-            output: Some(output),
-            layer: Layer::Overlay,
-            anchor: Anchor::empty(),
-            size: (layout.panel.w as u32, layout.panel.h as u32),
-            margin: Margin::default(),
-            // -1: the surface ignores the zones of the dock bar and the menu bar and is centred on the output
-            exclusive_zone: -1,
-            // the server keeps the keys of the switch
-            keyboard: KeyboardInteractivity::None,
-        })?;
-        let backdrop = self.client.backdrop(surface)?;
+        let layer = self.layer_shell.layer_surface(
+            &mut self.conn,
+            &LayerSurfaceConfig {
+                namespace: SWITCHER_NAMESPACE.to_string(),
+                output: Some(output),
+                layer: Layer::Overlay,
+                anchor: Anchor::empty(),
+                size: (layout.panel.w as u32, layout.panel.h as u32),
+                margin: Margin::default(),
+                // -1: the surface ignores the zones of the dock bar and the menu bar and is centred on the output
+                exclusive_zone: -1,
+                // the server keeps the keys of the switch
+                keyboard: KeyboardInteractivity::None,
+            },
+        )?;
+        let backdrop = self.effects.backdrop(&self.conn, layer.surface())?;
         backdrop.set_material(switcher::MATERIAL);
         self.overlay = Some(Overlay {
             output,
             switcher,
             layout,
-            surface,
+            presenter: ShmPresenter::new(layer.surface()),
+            layer,
             backdrop,
             hover: HoverGate::default(),
             requested: None,
@@ -1075,7 +1220,7 @@ impl App {
         };
         if committed && overlay.switcher.is_shown(now) {
             overlay.switcher.close(now);
-            self.client.request_redraw(overlay.surface)?;
+            overlay.presenter.request_redraw();
             Ok(())
         } else {
             self.close_overlay()
@@ -1086,13 +1231,13 @@ impl App {
     fn lose_overlay(&mut self) -> Result<()> {
         if let Some(Overlay {
             switcher,
-            surface,
+            layer,
             backdrop,
             ..
         }) = self.overlay.take()
         {
             drop(backdrop);
-            self.client.destroy_surface(surface)?;
+            self.conn.destroy(layer.surface())?;
             self.orphan = Some(switcher);
         }
         Ok(())
@@ -1101,11 +1246,11 @@ impl App {
     /// Remove the overlay surface with its backdrop, if any.
     fn close_overlay(&mut self) -> Result<()> {
         if let Some(Overlay {
-            surface, backdrop, ..
+            layer, backdrop, ..
         }) = self.overlay.take()
         {
             drop(backdrop);
-            self.client.destroy_surface(surface)?;
+            self.conn.destroy(layer.surface())?;
         }
         Ok(())
     }
@@ -1132,7 +1277,7 @@ impl App {
     fn is_force_quit(&self, surface: SurfaceId) -> bool {
         self.force_quit
             .as_ref()
-            .is_some_and(|f| f.surface == surface)
+            .is_some_and(|f| f.layer.surface() == surface)
     }
 
     /// The running applications for the dialog: the dock's running application tiles, with the unresponsive ones marked.
@@ -1182,20 +1327,24 @@ impl App {
         };
         let layout = force_quit::Layout::for_dialog(&dialog);
         let (width, height) = layout.size();
-        let surface = self.client.layer_surface(&LayerSurfaceConfig {
-            namespace: FORCE_QUIT_NAMESPACE.to_string(),
-            output: Some(self.output),
-            layer: Layer::Overlay,
-            // no anchor: the server centres the surface on the output
-            anchor: Anchor::empty(),
-            size: (width as u32, height as u32),
-            margin: Margin::default(),
-            exclusive_zone: -1,
-            keyboard: KeyboardInteractivity::Exclusive,
-        })?;
+        let layer = self.layer_shell.layer_surface(
+            &mut self.conn,
+            &LayerSurfaceConfig {
+                namespace: FORCE_QUIT_NAMESPACE.to_string(),
+                output: Some(self.output),
+                layer: Layer::Overlay,
+                // no anchor: the server centres the surface on the output
+                anchor: Anchor::empty(),
+                size: (width as u32, height as u32),
+                margin: Margin::default(),
+                exclusive_zone: -1,
+                keyboard: KeyboardInteractivity::Exclusive,
+            },
+        )?;
         self.force_quit = Some(ForceQuit {
             dialog,
-            surface,
+            presenter: ShmPresenter::new(layer.surface()),
+            layer,
             layout,
             hover_row: None,
             hover_button: None,
@@ -1205,7 +1354,7 @@ impl App {
 
     fn close_force_quit(&mut self) -> Result<()> {
         if let Some(open) = self.force_quit.take() {
-            self.client.destroy_surface(open.surface)?;
+            self.conn.destroy(open.layer.surface())?;
         }
         Ok(())
     }
@@ -1228,34 +1377,30 @@ impl App {
         let layout = force_quit::Layout::for_dialog(&open.dialog);
         let resized = layout.size() != open.layout.size();
         open.layout = layout;
-        let surface = open.surface;
         if resized {
             let (width, height) = open.layout.size();
-            self.client.set_layer_placement(
-                surface,
-                Anchor::empty(),
-                (width as u32, height as u32),
-            )?;
+            open.layer
+                .set_placement(Anchor::empty(), (width as u32, height as u32));
         }
-        self.client.request_redraw(surface)?;
+        open.presenter.request_redraw();
         Ok(())
     }
 
     fn draw_force_quit(&mut self) -> Result<()> {
-        let Some(open) = self.force_quit.as_ref() else {
+        let Some(open) = self.force_quit.as_mut() else {
             return Ok(());
         };
         let view = ForceQuitView {
             dialog: &open.dialog,
             layout: &open.layout,
             desktop: self.session.desktop(),
-            dark: self.dark,
+            dark: self.observed.dark,
             hover_row: open.hover_row,
             hover_button: open.hover_button,
         };
         let (icons, labels) = (&mut self.icons, &mut self.labels);
-        self.client.draw(open.surface, |pixmap, scale| {
-            render::paint_force_quit(pixmap, scale.factor(), &view, icons, labels)
+        open.presenter.draw(&mut self.conn, None, |pixmap, scale| {
+            render::paint_force_quit(pixmap, scale.factor() as f32, &view, icons, labels)
         })?;
         Ok(())
     }
@@ -1277,7 +1422,7 @@ impl App {
     }
 
     fn force_quit_pointer(&mut self, event: PointerEvent) -> Result<()> {
-        let mods = self.client.modifiers();
+        let mods = self.conn.modifiers();
         let Some(open) = self.force_quit.as_mut() else {
             return Ok(());
         };
@@ -1288,15 +1433,13 @@ impl App {
                 let hover = (open.layout.row_at(p), open.layout.button_at(p));
                 if hover != (open.hover_row, open.hover_button) {
                     (open.hover_row, open.hover_button) = hover;
-                    let surface = open.surface;
-                    self.client.request_redraw(surface)?;
+                    open.presenter.request_redraw();
                 }
                 Ok(())
             }
             PointerEvent::Leave => {
                 if open.hover_row.take().is_some() | open.hover_button.take().is_some() {
-                    let surface = open.surface;
-                    self.client.request_redraw(surface)?;
+                    open.presenter.request_redraw();
                 }
                 Ok(())
             }
@@ -1342,7 +1485,9 @@ impl App {
     }
 
     fn is_grid(&self, surface: SurfaceId) -> bool {
-        self.grid.as_ref().is_some_and(|g| g.surface == surface)
+        self.grid
+            .as_ref()
+            .is_some_and(|g| g.layer.surface() == surface)
     }
 
     /// The app-grid action: open the grid, or start closing it when it is open. An action during
@@ -1358,29 +1503,33 @@ impl App {
     /// Create the grid's surface over the usable area of the dock's output, with the keyboard.
     fn open_grid(&mut self) -> Result<()> {
         let mut grid = AppGrid::from_desktop(self.session.desktop(), self.now());
-        grid.set_reduce_motion(self.client.display_options().reduce_motion);
-        let surface = self.client.layer_surface(&LayerSurfaceConfig {
-            namespace: app_grid::NAMESPACE.to_string(),
-            output: Some(self.output),
-            layer: Layer::Overlay,
-            anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
-            // the server fills both axes within the exclusive zones, so the dock bar stays visible; the top band keeps the
-            // menu bar visible, whose reservation is not a layer zone
-            size: (0, 0),
-            margin: Margin {
-                top: app_grid::TOP_BAND as i32,
-                right: 0,
-                bottom: 0,
-                left: 0,
+        grid.set_reduce_motion(self.observed.display.reduce_motion);
+        let layer = self.layer_shell.layer_surface(
+            &mut self.conn,
+            &LayerSurfaceConfig {
+                namespace: app_grid::NAMESPACE.to_string(),
+                output: Some(self.output),
+                layer: Layer::Overlay,
+                anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
+                // the server fills both axes within the exclusive zones, so the dock bar stays visible; the top band keeps the
+                // menu bar visible, whose reservation is not a layer zone
+                size: (0, 0),
+                margin: Margin {
+                    top: app_grid::TOP_BAND as i32,
+                    right: 0,
+                    bottom: 0,
+                    left: 0,
+                },
+                exclusive_zone: 0,
+                keyboard: KeyboardInteractivity::Exclusive,
             },
-            exclusive_zone: 0,
-            keyboard: KeyboardInteractivity::Exclusive,
-        })?;
-        let backdrop = self.client.backdrop(surface)?;
+        )?;
+        let backdrop = self.effects.backdrop(&self.conn, layer.surface())?;
         backdrop.set_material(app_grid::MATERIAL);
         self.grid = Some(Grid {
             grid,
-            surface,
+            presenter: ShmPresenter::new(layer.surface()),
+            layer,
             backdrop,
             layout: None,
         });
@@ -1394,20 +1543,20 @@ impl App {
             return Ok(());
         };
         grid.grid.close(now);
-        self.client
-            .set_keyboard_interactivity(grid.surface, KeyboardInteractivity::None)?;
-        self.client.request_redraw(grid.surface)?;
+        grid.layer
+            .set_keyboard_interactivity(KeyboardInteractivity::None);
+        grid.presenter.request_redraw();
         Ok(())
     }
 
     /// Remove the grid's surface with its backdrop, if any.
     fn drop_grid(&mut self) -> Result<()> {
         if let Some(Grid {
-            surface, backdrop, ..
+            layer, backdrop, ..
         }) = self.grid.take()
         {
             drop(backdrop);
-            self.client.destroy_surface(surface)?;
+            self.conn.destroy(layer.surface())?;
         }
         Ok(())
     }
@@ -1423,8 +1572,8 @@ impl App {
             Some(Outcome::Close) => self.close_grid()?,
             None => {}
         }
-        if let Some(grid) = &self.grid {
-            self.client.request_redraw(grid.surface)?;
+        if let Some(grid) = &mut self.grid {
+            grid.presenter.request_redraw();
         }
         Ok(())
     }
@@ -1465,7 +1614,7 @@ impl App {
         let now = self.now();
         if let Some(grid) = self.grid.as_mut() {
             if grid.grid.settle(now) {
-                self.client.request_redraw(grid.surface)?;
+                grid.presenter.request_redraw();
             }
         }
         Ok(())
@@ -1494,11 +1643,11 @@ impl App {
             now,
         };
         let (icons, labels) = (&mut self.icons, &mut self.labels);
-        self.client.draw(grid.surface, |pixmap, scale| {
-            render::paint_app_grid(pixmap, scale.factor(), &view, icons, labels)
+        grid.presenter.draw(&mut self.conn, None, |pixmap, scale| {
+            render::paint_app_grid(pixmap, scale.factor() as f32, &view, icons, labels)
         })?;
         if grid.grid.animating(now) {
-            self.client.request_redraw(grid.surface)?;
+            grid.presenter.request_redraw();
         }
         Ok(())
     }
@@ -1512,7 +1661,7 @@ impl App {
             .filter(|o| !o.draw_requested && o.switcher.is_shown(now))
         {
             overlay.draw_requested = true;
-            self.client.request_redraw(overlay.surface)?;
+            overlay.presenter.request_redraw();
         }
         Ok(())
     }
@@ -1590,15 +1739,17 @@ impl App {
             switcher: &overlay.switcher,
             layout: &overlay.layout,
             desktop: self.session.desktop(),
-            dark: self.dark,
+            dark: self.observed.dark,
             alpha,
         };
         let (icons, labels) = (&mut self.icons, &mut self.labels);
-        self.client.draw(overlay.surface, |pixmap, scale| {
-            render::paint_switcher(pixmap, scale.factor(), &panel, icons, labels)
-        })?;
+        overlay
+            .presenter
+            .draw(&mut self.conn, None, |pixmap, scale| {
+                render::paint_switcher(pixmap, scale.factor() as f32, &panel, icons, labels)
+            })?;
         if overlay.switcher.is_fading() {
-            self.client.request_redraw(overlay.surface)?;
+            overlay.presenter.request_redraw();
         }
         Ok(())
     }
@@ -1617,7 +1768,8 @@ impl App {
             .iter()
             .map(geometry_rect)
             .collect();
-        self.client.set_input_region(self.surface, &input)?;
+        self.conn
+            .set_input_region(self.layer.surface(), Some(&input))?;
         self.role
             .set_minimize_target(&geometry_rect(&dock.next_minimized_slot(screen)))?;
         let bar = layout
@@ -1633,41 +1785,45 @@ impl App {
             self.poof = None;
         }
         let wants_frame = dock.wants_tick(now) || poof.is_some();
-        let (session, icons, dark) = (&self.session, &mut self.icons, self.dark);
-        self.client.draw(self.surface, |pixmap, scale| {
-            render::paint(pixmap, scale.factor(), session, &layout, icons, dark);
+        let (session, icons, dark) = (&self.session, &mut self.icons, self.observed.dark);
+        self.presenter.draw(&mut self.conn, None, |pixmap, scale| {
+            render::paint(pixmap, scale.factor() as f32, session, &layout, icons, dark);
         })?;
         let held = layout.dragging.is_some() || poof.is_some();
         self.sync_drag_surface(held)?;
         // frame callbacks pace the animations
         if wants_frame {
-            self.client.request_redraw(self.surface)?;
+            self.presenter.request_redraw();
         }
         Ok(())
     }
 
     /// The surface of the held, settling or fading tile exists exactly while there is one.
     fn sync_drag_surface(&mut self, needed: bool) -> Result<()> {
-        match (needed, self.drag_surface) {
+        match (needed, &mut self.drag_surface) {
             (true, None) => {
-                let surface = self.client.layer_surface(&LayerSurfaceConfig {
-                    namespace: DRAG_NAMESPACE.to_string(),
-                    output: Some(self.output),
-                    layer: Layer::Overlay,
-                    anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
-                    size: (0, 0),
-                    margin: Margin::default(),
-                    // -1: the whole output, so the surface's coordinates are the output's
-                    exclusive_zone: -1,
-                    keyboard: KeyboardInteractivity::None,
-                })?;
-                self.client.set_input_region(surface, &[])?;
-                self.client.request_redraw(surface)?;
-                self.drag_surface = Some(surface);
+                let layer = self.layer_shell.layer_surface(
+                    &mut self.conn,
+                    &LayerSurfaceConfig {
+                        namespace: DRAG_NAMESPACE.to_string(),
+                        output: Some(self.output),
+                        layer: Layer::Overlay,
+                        anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
+                        size: (0, 0),
+                        margin: Margin::default(),
+                        // -1: the whole output, so the surface's coordinates are the output's
+                        exclusive_zone: -1,
+                        keyboard: KeyboardInteractivity::None,
+                    },
+                )?;
+                self.conn.set_input_region(layer.surface(), Some(&[]))?;
+                let mut presenter = ShmPresenter::new(layer.surface());
+                presenter.request_redraw();
+                self.drag_surface = Some((layer, presenter));
             }
-            (true, Some(surface)) => self.client.request_redraw(surface)?,
-            (false, Some(surface)) => {
-                self.client.destroy_surface(surface)?;
+            (true, Some((_, presenter))) => presenter.request_redraw(),
+            (false, Some((layer, _))) => {
+                self.conn.destroy(layer.surface())?;
                 self.drag_surface = None;
             }
             (false, None) => {}
@@ -1676,14 +1832,13 @@ impl App {
     }
 
     fn is_drag_surface(&self, surface: SurfaceId) -> bool {
-        self.drag_surface == Some(surface)
+        self.drag_surface
+            .as_ref()
+            .is_some_and(|(layer, _)| layer.surface() == surface)
     }
 
     /// One frame of the drag surface: the held tile with its label, and the puff of a removal.
     fn draw_dragged(&mut self) -> Result<()> {
-        let Some(surface) = self.drag_surface else {
-            return Ok(());
-        };
         let now = self.now();
         let screen = self.screen()?;
         let in_surface = self.screen_in_surface()?;
@@ -1694,13 +1849,20 @@ impl App {
             .poof
             .and_then(|p| p.progress(now).map(|progress| (p.centre, progress)));
         let tile_size = self.session.dock.cfg.tile_size;
-        let (session, icons, labels, dark) =
-            (&self.session, &mut self.icons, &mut self.labels, self.dark);
-        self.client.draw(surface, |pixmap, scale| {
+        let (session, icons, labels, dark) = (
+            &self.session,
+            &mut self.icons,
+            &mut self.labels,
+            self.observed.dark,
+        );
+        let Some((_, presenter)) = &mut self.drag_surface else {
+            return Ok(());
+        };
+        presenter.draw(&mut self.conn, None, |pixmap, scale| {
             if let Some(dragged) = &layout.dragging {
                 render::paint_dragged(
                     pixmap,
-                    scale.factor(),
+                    scale.factor() as f32,
                     session,
                     icons,
                     labels,
@@ -1712,7 +1874,7 @@ impl App {
             if let Some((centre, progress)) = poof {
                 render::paint_poof(
                     pixmap,
-                    scale.factor(),
+                    scale.factor() as f32,
                     Point::new(centre.x + origin.x, centre.y + origin.y),
                     tile_size,
                     progress,
@@ -1726,7 +1888,9 @@ impl App {
     // ---- overview ----------------------------------------------------------------------------
 
     fn is_overview(&self, surface: SurfaceId) -> bool {
-        self.overview.as_ref().is_some_and(|o| o.surface == surface)
+        self.overview
+            .as_ref()
+            .is_some_and(|o| o.layer.surface() == surface)
     }
 
     /// The window feed's title and minimized state for the overview's windows.
@@ -1780,26 +1944,33 @@ impl App {
                 self.drop_overview()?;
                 let area = Rect::new(area.x(), area.y(), area.width(), area.height());
                 let ui = OverviewUi::new(mode, area, &entries, workspaces, now);
-                let surface = self.client.layer_surface(&LayerSurfaceConfig {
-                    namespace: overview_ui::NAMESPACE.to_string(),
-                    output: Some(self.output),
-                    layer: Layer::Overlay,
-                    anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
-                    size: (0, 0),
-                    margin: Margin::default(),
-                    // -1: the whole output, over the dock bar and the menu bar, so the surface's
-                    // coordinates are the output's (the area the server sent is in them)
-                    exclusive_zone: -1,
-                    keyboard: KeyboardInteractivity::Exclusive,
-                })?;
-                self.overview = Some(OverviewSurface { ui, surface });
+                let layer = self.layer_shell.layer_surface(
+                    &mut self.conn,
+                    &LayerSurfaceConfig {
+                        namespace: overview_ui::NAMESPACE.to_string(),
+                        output: Some(self.output),
+                        layer: Layer::Overlay,
+                        anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
+                        size: (0, 0),
+                        margin: Margin::default(),
+                        // -1: the whole output, over the dock bar and the menu bar, so the surface's
+                        // coordinates are the output's (the area the server sent is in them)
+                        exclusive_zone: -1,
+                        keyboard: KeyboardInteractivity::Exclusive,
+                    },
+                )?;
+                self.overview = Some(OverviewSurface {
+                    ui,
+                    presenter: ShmPresenter::new(layer.surface()),
+                    layer,
+                });
             }
         }
-        let open = self.overview.as_ref().expect("set above");
+        let open = self.overview.as_mut().expect("set above");
         for (id, frame) in open.ui.frames() {
             self.role.overview_frame(id, &geometry_rect(&frame))?;
         }
-        self.client.request_redraw(open.surface)?;
+        open.presenter.request_redraw();
         Ok(())
     }
 
@@ -1810,16 +1981,16 @@ impl App {
             return Ok(());
         };
         open.ui.close(now);
-        self.client
-            .set_keyboard_interactivity(open.surface, KeyboardInteractivity::None)?;
-        self.client.request_redraw(open.surface)?;
+        open.layer
+            .set_keyboard_interactivity(KeyboardInteractivity::None);
+        open.presenter.request_redraw();
         Ok(())
     }
 
     /// Remove the overview's surface, if any.
     fn drop_overview(&mut self) -> Result<()> {
-        if let Some(OverviewSurface { surface, .. }) = self.overview.take() {
-            self.client.destroy_surface(surface)?;
+        if let Some(OverviewSurface { layer, .. }) = self.overview.take() {
+            self.conn.destroy(layer.surface())?;
         }
         Ok(())
     }
@@ -1835,8 +2006,8 @@ impl App {
             UiAction::RemoveWorkspace(id) => self.role.remove_workspace(id),
             UiAction::MoveWorkspace { id, index } => self.role.move_workspace(id, index)?,
         }
-        if let Some(open) = &self.overview {
-            self.client.request_redraw(open.surface)?;
+        if let Some(open) = &mut self.overview {
+            open.presenter.request_redraw();
         }
         Ok(())
     }
@@ -1873,7 +2044,7 @@ impl App {
     /// One frame of the chrome; a finished fade removes the surface.
     fn draw_overview(&mut self) -> Result<()> {
         let now = self.now();
-        let Some(open) = self.overview.as_ref() else {
+        let Some(open) = self.overview.as_mut() else {
             return Ok(());
         };
         if open.ui.is_gone(now) {
@@ -1882,14 +2053,14 @@ impl App {
         let view = OverviewView {
             ui: &open.ui,
             now,
-            dark: self.dark,
+            dark: self.observed.dark,
         };
         let labels = &mut self.labels;
-        self.client.draw(open.surface, |pixmap, scale| {
-            render::paint_overview(pixmap, scale.factor(), &view, labels)
+        open.presenter.draw(&mut self.conn, None, |pixmap, scale| {
+            render::paint_overview(pixmap, scale.factor() as f32, &view, labels)
         })?;
         if open.ui.is_animating(now) {
-            self.client.request_redraw(open.surface)?;
+            open.presenter.request_redraw();
         }
         Ok(())
     }
@@ -1917,14 +2088,17 @@ impl App {
     // ---- context menus ----------------------------------------------------------------------------
 
     fn is_menu(&self, surface: SurfaceId) -> bool {
-        self.menu.as_ref().is_some_and(|m| m.surface == surface)
+        self.menu
+            .as_ref()
+            .is_some_and(|m| m.popup.surface() == surface)
     }
 
     /// The output in the bar surface's coordinates: the popup stays inside it.
-    fn screen_in_surface(&mut self) -> Result<Rect> {
-        let (sw, sh) = self.client.size(self.surface)?;
+    fn screen_in_surface(&self) -> Result<Rect> {
+        let screen = self.screen()?;
+        let (sw, sh) = (screen.w, screen.h);
         let out = self
-            .client
+            .conn
             .outputs()
             .into_iter()
             .find(|o| o.id == self.output)
@@ -1932,9 +2106,9 @@ impl App {
             .ok_or("the output of the dock went away")?;
         let (w, h) = (f64::from(out.width), f64::from(out.height));
         let (x, y) = match self.session.dock.cfg.orientation {
-            Orientation::Bottom => (0.0, f64::from(sh) - h),
+            Orientation::Bottom => (0.0, sh - h),
             Orientation::Left => (0.0, 0.0),
-            Orientation::Right => (f64::from(sw) - w, 0.0),
+            Orientation::Right => (sw - w, 0.0),
         };
         Ok(Rect::new(x, y, w, h))
     }
@@ -1995,10 +2169,11 @@ impl App {
             self.session.dock.cfg.orientation,
             &|label| widths[label],
         );
-        let surface = self
-            .client
-            .popup(self.surface, &geometry_rect(&layout.rect))?;
-        let backdrop = self.client.backdrop(surface)?;
+        let popup = self.conn.popup(
+            self.layer.surface(),
+            &popup::placement(&geometry_rect(&layout.rect), true)?,
+        )?;
+        let backdrop = self.effects.backdrop(&self.conn, popup.surface())?;
         backdrop.set_material(MENU_MATERIAL);
         backdrop.set_shape(
             &GRect::new(0.0, 0.0, layout.rect.w, layout.rect.h),
@@ -2007,7 +2182,8 @@ impl App {
         self.menu = Some(Menu {
             items,
             layout,
-            surface,
+            popup,
+            presenter: ShmPresenter::new(popup.surface()),
             backdrop,
             hovered: None,
         });
@@ -2017,11 +2193,11 @@ impl App {
     /// Remove the menu's popup with its backdrop, if any.
     fn drop_menu(&mut self) -> Result<()> {
         if let Some(Menu {
-            surface, backdrop, ..
+            popup, backdrop, ..
         }) = self.menu.take()
         {
             drop(backdrop);
-            self.client.destroy_surface(surface)?;
+            self.conn.destroy(popup.surface())?;
         }
         Ok(())
     }
@@ -2037,11 +2213,11 @@ impl App {
         match event {
             PointerEvent::Enter(p) | PointerEvent::Motion(p) => {
                 menu.hovered = menu.layout.hit(&menu.items, at(p));
-                self.client.request_redraw(menu.surface)?;
+                menu.presenter.request_redraw();
             }
             PointerEvent::Leave => {
                 menu.hovered = None;
-                self.client.request_redraw(menu.surface)?;
+                menu.presenter.request_redraw();
             }
             PointerEvent::Button {
                 button: Button::Left,
@@ -2086,10 +2262,8 @@ impl App {
             MenuCommand::OpenTrash => self.open_in_file_manager(TRASH_URI)?,
             MenuCommand::ToggleAutoHide => {
                 self.session.dock.toggle_autohide(now);
-                self.client.set_exclusive_zone(
-                    self.surface,
-                    self.session.dock.exclusive_zone().ceil() as i32,
-                )?;
+                self.layer
+                    .set_exclusive_zone(self.session.dock.exclusive_zone().ceil() as i32);
             }
             MenuCommand::ToggleMagnification => {
                 let placed = (
@@ -2103,23 +2277,31 @@ impl App {
             // the items are disabled: the position is the file's
             MenuCommand::Position(_) => {}
         }
-        self.client.request_redraw(self.surface)?;
+        self.presenter.request_redraw();
         Ok(())
     }
 
     fn draw_menu(&mut self) -> Result<()> {
-        let Some(menu) = self.menu.as_ref() else {
+        let Some(menu) = self.menu.as_mut() else {
             return Ok(());
         };
         let (items, layout, hovered, dark, labels) = (
             &menu.items,
             &menu.layout,
             menu.hovered,
-            self.dark,
+            self.observed.dark,
             &mut self.labels,
         );
-        self.client.draw(menu.surface, |pixmap, scale| {
-            render::paint_menu(pixmap, scale.factor(), items, layout, hovered, dark, labels)
+        menu.presenter.draw(&mut self.conn, None, |pixmap, scale| {
+            render::paint_menu(
+                pixmap,
+                scale.factor() as f32,
+                items,
+                layout,
+                hovered,
+                dark,
+                labels,
+            )
         })?;
         Ok(())
     }

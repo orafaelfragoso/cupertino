@@ -1,6 +1,7 @@
 //! The connection: globals, surfaces with their roles and buffers, seat input and the event loop.
 
 use std::io::{ErrorKind, Read, Write};
+use std::ops::RangeInclusive;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -16,6 +17,7 @@ use wayland_client::protocol::wl_data_device_manager::WlDataDeviceManager;
 use wayland_client::protocol::wl_keyboard::{self, KeyState, WlKeyboard};
 use wayland_client::protocol::wl_output::{self, WlOutput};
 use wayland_client::protocol::wl_pointer::{self, Axis, ButtonState, WlPointer};
+use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
 use wayland_client::protocol::wl_seat::{self, WlSeat};
 use wayland_client::protocol::wl_shm::WlShm;
@@ -49,6 +51,8 @@ use wayland_protocols::xdg::shell::client::xdg_positioner::{
 use wayland_protocols::xdg::shell::client::xdg_surface::{self, XdgSurface};
 use wayland_protocols::xdg::shell::client::xdg_toplevel::{self, ResizeEdge, XdgToplevel};
 use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
+use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_manager_v1::ZxdgOutputManagerV1;
+use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_v1::{self, ZxdgOutputV1};
 
 use crate::buffer::{pick_slot, Slot, SlotChoice, SlotTag};
 use crate::capability::REQUIRED;
@@ -59,7 +63,7 @@ use crate::output::{OutputBuilder, OutputId};
 use crate::scale::ScaleSources;
 use crate::{
     BufferFormat, BufferLayout, Capability, CapabilitySet, ClipboardOffer, Decorations, Disconnect,
-    Error, KeyboardEvent, OutputInfo, PixelRect, PointerEvent, Scale, WindowConfigure,
+    Error, Extension, KeyboardEvent, OutputInfo, PixelRect, PointerEvent, Scale, WindowConfigure,
     WindowStates,
 };
 
@@ -168,7 +172,16 @@ pub enum Event {
     Selection(Option<ClipboardOffer>),
     /// An output appeared, went away or changed: read [`Connection::outputs`] again.
     OutputsChanged,
+    /// The token asked for with [`Connection::request_activation_token`].
+    ActivationToken {
+        request: TokenRequest,
+        token: String,
+    },
 }
+
+/// A request for an activation token, matched to its [`Event::ActivationToken`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TokenRequest(u32);
 
 /// Interrupts [`Connection::wait`] from other threads.
 #[derive(Clone, Debug)]
@@ -189,6 +202,7 @@ impl Waker {
 struct Output {
     registry_name: u32,
     wl: WlOutput,
+    xdg: Option<ZxdgOutputV1>,
     info: OutputBuilder,
 }
 
@@ -218,8 +232,8 @@ enum Role {
     },
     External {
         role: Box<dyn ExternalRole>,
-        /// The size of the latest [`State::configure_external`]; `None` leaves it to the client.
-        size: Option<(u32, u32)>,
+        /// The size of the latest [`State::configure_external`]; a 0 dimension is left to the client.
+        size: (u32, u32),
     },
 }
 
@@ -268,6 +282,7 @@ pub struct State {
     scaling: Option<(WpFractionalScaleManagerV1, WpViewporter)>,
     activation: Option<XdgActivationV1>,
     cursor_shape: Option<WpCursorShapeManagerV1>,
+    output_manager: Option<ZxdgOutputManagerV1>,
     data_device_manager: Option<WlDataDeviceManager>,
     pub(crate) clipboard: Clipboard,
     pointer: Option<WlPointer>,
@@ -277,6 +292,9 @@ pub struct State {
     outputs: Vec<Output>,
     surfaces: Vec<Surface>,
     next_surface: u32,
+    /// The token of the latest `xdg_popup.reposition`.
+    next_reposition: u32,
+    next_token: u32,
     pointer_tracker: PointerTracker,
     key_focus: Option<SurfaceId>,
     translator: Option<Translator>,
@@ -364,6 +382,8 @@ impl Connection {
             scaling: bind(&globals, &qh, 1..=1).zip(bind(&globals, &qh, 1..=1)),
             activation: bind(&globals, &qh, 1..=1),
             cursor_shape: bind(&globals, &qh, 1..=1),
+            // version 3 sends the logical geometry before `wl_output.done` instead of a `done` of its own
+            output_manager: bind(&globals, &qh, 1..=3),
             data_device_manager,
             clipboard,
             pointer: None,
@@ -373,6 +393,8 @@ impl Connection {
             outputs: Vec::new(),
             surfaces: Vec::new(),
             next_surface: 0,
+            next_reposition: 0,
+            next_token: 0,
             pointer_tracker: PointerTracker::default(),
             key_focus: None,
             translator: None,
@@ -407,8 +429,8 @@ impl Connection {
     }
 
     /// The optional protocols the compositor offers.
-    pub fn capabilities(&self) -> CapabilitySet {
-        self.state.capabilities
+    pub fn capabilities(&self) -> &CapabilitySet {
+        &self.state.capabilities
     }
 
     pub fn waker(&self) -> Waker {
@@ -478,12 +500,7 @@ impl Connection {
             Role::Toplevel { xdg, .. } | Role::Popup { xdg, .. } => Some(xdg.clone()),
             Role::External { .. } => None,
         };
-        let r = placement.anchor_rect;
-        if !(r.width() > 0.0 && r.height() > 0.0 && placement.size.0 > 0 && placement.size.1 > 0) {
-            return Err(Error::Protocol(
-                "a popup needs a non-empty anchor rectangle and size",
-            ));
-        }
+        let positioner = positioner(&s.wm_base, &qh, placement)?;
         let grab_serial = if placement.grab {
             Some(
                 s.last_serial
@@ -492,18 +509,6 @@ impl Connection {
         } else {
             None
         };
-        let positioner = s.wm_base.create_positioner(&qh, ());
-        positioner.set_size(clamp_i32(placement.size.0), clamp_i32(placement.size.1));
-        let (x, y) = (r.x().floor() as i32, r.y().floor() as i32);
-        positioner.set_anchor_rect(
-            x,
-            y,
-            ((r.x() + r.width()).ceil() as i32 - x).max(1),
-            ((r.y() + r.height()).ceil() as i32 - y).max(1),
-        );
-        positioner.set_anchor(placement.anchor);
-        positioner.set_gravity(placement.gravity);
-        positioner.set_constraint_adjustment(placement.constraint_adjustment);
         let id = s.next_id();
         let wl = s.compositor.create_surface(&qh, id);
         let xdg = s.wm_base.get_xdg_surface(&wl, &qh, id);
@@ -533,6 +538,32 @@ impl Connection {
             &qh,
         );
         Ok(Popup(id))
+    }
+
+    /// Move or resize `popup` to `placement` (its grab and `placement.grab` are left as they are); the compositor answers
+    /// with a new [`Event::PopupConfigure`]. Needs `xdg_wm_base` version 3.
+    pub fn reposition_popup(
+        &mut self,
+        popup: Popup,
+        placement: &PopupPlacement,
+    ) -> Result<(), Error> {
+        const REPOSITION_VERSION: u32 = 3;
+        let qh = self.queue.handle();
+        let s = &mut self.state;
+        if s.wm_base.version() < REPOSITION_VERSION {
+            return Err(Error::MissingRequiredProtocol {
+                interface: "xdg_wm_base",
+                minimum_version: REPOSITION_VERSION,
+            });
+        }
+        let positioner = positioner(&s.wm_base, &qh, placement)?;
+        s.next_reposition += 1;
+        match &s.surface(popup.0)?.role {
+            Role::Popup { popup, .. } => popup.reposition(&positioner, s.next_reposition),
+            _ => unreachable!("a Popup handle names a popup"),
+        }
+        positioner.destroy();
+        Ok(())
     }
 
     /// Destroy a surface, with its popups first.
@@ -673,13 +704,67 @@ impl Connection {
         let s = &self.state;
         let surface = s.surface(window.0)?;
         let activation = s.activation.as_ref().expect("bound with the capability");
-        let token = activation.get_activation_token(&qh, window.0);
+        let token = activation.get_activation_token(&qh, TokenUse::Activate(window.0));
         if let (Some(serial), Some(seat)) = (s.last_serial, s.seat.as_ref()) {
             token.set_serial(serial, seat);
         }
         token.set_surface(&surface.wl);
         token.commit();
         Ok(())
+    }
+
+    /// Take pointer input only inside `rects` (surface-local logical points, rounded outwards), or over the whole surface
+    /// with `None`; input elsewhere reaches the surfaces below, and an empty slice lets all of it through. Applies with
+    /// the next present.
+    pub fn set_input_region(
+        &mut self,
+        surface: SurfaceId,
+        rects: Option<&[Rect]>,
+    ) -> Result<(), Error> {
+        let wl = &self.state.surface(surface)?.wl;
+        let Some(rects) = rects else {
+            wl.set_input_region(None);
+            return Ok(());
+        };
+        let region = self
+            .state
+            .compositor
+            .create_region(&self.queue.handle(), ());
+        for r in rects {
+            let (left, top) = (r.min_x().floor() as i32, r.min_y().floor() as i32);
+            let (right, bottom) = (r.max_x().ceil() as i32, r.max_y().ceil() as i32);
+            region.add(left, top, right - left, bottom - top);
+        }
+        wl.set_input_region(Some(&region));
+        region.destroy();
+        Ok(())
+    }
+
+    /// Ask for an activation token to hand to another client, such as an application this one launches (in
+    /// `XDG_ACTIVATION_TOKEN`), with the latest input event on `surface` as the reason; `app_id` names that application
+    /// when known. The token arrives as [`Event::ActivationToken`].
+    pub fn request_activation_token(
+        &mut self,
+        surface: SurfaceId,
+        app_id: Option<&str>,
+    ) -> Result<TokenRequest, Error> {
+        self.state.capabilities.require(Capability::Activation)?;
+        let qh = self.queue.handle();
+        let s = &mut self.state;
+        let wl = s.surface(surface)?.wl.clone();
+        s.next_token += 1;
+        let request = TokenRequest(s.next_token);
+        let activation = s.activation.as_ref().expect("bound with the capability");
+        let token = activation.get_activation_token(&qh, TokenUse::Hand(request));
+        if let (Some(serial), Some(seat)) = (s.last_serial, s.seat.as_ref()) {
+            token.set_serial(serial, seat);
+        }
+        if let Some(app_id) = app_id {
+            token.set_app_id(app_id.to_owned());
+        }
+        token.set_surface(&wl);
+        token.commit();
+        Ok(request)
     }
 
     /// Show the compositor's cursor `shape` over the surface the pointer is on.
@@ -724,9 +809,24 @@ impl Connection {
         self.queue.handle()
     }
 
-    /// The globals the compositor announced at connect, for extensions to bind theirs.
-    pub fn globals(&self) -> &GlobalList {
-        &self.globals
+    /// Bind the global of an extension's protocol at the highest version in `versions` the compositor offers, with
+    /// `data` as user data, and list it in [`Connection::capabilities`]; `None` when it offers none in the range, so the
+    /// application falls back. Binding through here is what makes an extension visible in the capabilities.
+    pub fn bind_extension<I, U>(&mut self, versions: RangeInclusive<u32>, data: U) -> Option<I>
+    where
+        I: Proxy + 'static,
+        U: Send + Sync + 'static,
+        State: Dispatch<I, U>,
+    {
+        let proxy: I = self
+            .globals
+            .bind(&self.queue.handle(), versions, data)
+            .ok()?;
+        self.state.capabilities.add_extension(Extension {
+            interface: I::interface().name,
+            version: proxy.version(),
+        });
+        Some(proxy)
     }
 
     /// The `wl_surface` of `surface`, for an extension request that names it.
@@ -755,14 +855,14 @@ impl Connection {
     pub fn external_surface<R: ExternalRole + 'static>(
         &mut self,
         assign: impl FnOnce(&WlSurface, &QueueHandle<State>, SurfaceId) -> R,
-    ) -> Result<SurfaceId, Error> {
+    ) -> SurfaceId {
         let qh = self.queue.handle();
         let s = &mut self.state;
         let id = s.next_id();
         let wl = s.compositor.create_surface(&qh, id);
         let role = Box::new(assign(&wl, &qh, id));
-        s.add_surface(id, wl, Role::External { role, size: None }, &qh);
-        Ok(id)
+        s.add_surface(id, wl, Role::External { role, size: (0, 0) }, &qh);
+        id
     }
 
     /// Send the queued requests and dispatch every event the compositor sent in answer, keeping the events for the
@@ -791,7 +891,10 @@ impl Connection {
             Role::Popup { current, .. } => current
                 .map(|c| (c.width, c.height))
                 .ok_or(Error::NotConfigured)?,
-            Role::External { size, .. } => size.unwrap_or(preferred),
+            Role::External { size: (w, h), .. } => (
+                if *w == 0 { preferred.0 } else { *w },
+                if *h == 0 { preferred.1 } else { *h },
+            ),
         };
         let scale = surf.scale;
         let layout = scale
@@ -1009,20 +1112,42 @@ impl BufferLease<'_> {
     }
 }
 
+/// A positioner for `placement`; its anchor rectangle is rounded outwards to whole points.
+fn positioner(
+    wm_base: &XdgWmBase,
+    qh: &QueueHandle<State>,
+    placement: &PopupPlacement,
+) -> Result<XdgPositioner, Error> {
+    let r = placement.anchor_rect;
+    if !(r.width() > 0.0 && r.height() > 0.0 && placement.size.0 > 0 && placement.size.1 > 0) {
+        return Err(Error::Protocol(
+            "a popup needs a non-empty anchor rectangle and size",
+        ));
+    }
+    let positioner = wm_base.create_positioner(qh, ());
+    positioner.set_size(clamp_i32(placement.size.0), clamp_i32(placement.size.1));
+    let (x, y) = (r.x().floor() as i32, r.y().floor() as i32);
+    positioner.set_anchor_rect(
+        x,
+        y,
+        ((r.x() + r.width()).ceil() as i32 - x).max(1),
+        ((r.y() + r.height()).ceil() as i32 - y).max(1),
+    );
+    positioner.set_anchor(placement.anchor);
+    positioner.set_gravity(placement.gravity);
+    positioner.set_constraint_adjustment(placement.constraint_adjustment);
+    Ok(positioner)
+}
+
 fn clamp_i32(v: u32) -> i32 {
     i32::try_from(v).unwrap_or(i32::MAX)
 }
 
 impl State {
     /// Record a configure of an [`Connection::external_surface`]: its `serial`, acknowledged with the next present, and
-    /// its logical `size` (`None` leaves it to the client). A serial that does not increase, or a surface that is not
-    /// external, ends the next [`Connection::wait`] with the error.
-    pub fn configure_external(
-        &mut self,
-        surface: SurfaceId,
-        serial: u32,
-        size: Option<(u32, u32)>,
-    ) {
+    /// its logical `size`, where a 0 width or height leaves that dimension to the client. A serial that does not
+    /// increase, or a surface that is not external, ends the next [`Connection::wait`] with the error.
+    pub fn configure_external(&mut self, surface: SurfaceId, serial: u32, size: (u32, u32)) {
         let surf = match self.surface_mut(surface) {
             Ok(surf) => surf,
             // the application destroyed the surface while the configure was on its way
@@ -1107,9 +1232,14 @@ impl State {
         let id = OutputId(name);
         // version 4 adds the name and description
         let wl = registry.bind::<WlOutput, _, _>(name, version.min(4), qh, id);
+        let xdg = self
+            .output_manager
+            .as_ref()
+            .map(|m| m.get_xdg_output(&wl, qh, id));
         self.outputs.push(Output {
             registry_name: name,
             wl,
+            xdg,
             info: OutputBuilder::new(id),
         });
     }
@@ -1165,6 +1295,7 @@ impl State {
 }
 
 delegate_noop!(State: WlCompositor);
+delegate_noop!(State: WlRegion);
 delegate_noop!(State: ignore WlShm);
 delegate_noop!(State: ignore WlShmPool);
 delegate_noop!(State: XdgPositioner);
@@ -1175,6 +1306,32 @@ delegate_noop!(State: ZxdgDecorationManagerV1);
 delegate_noop!(State: XdgActivationV1);
 delegate_noop!(State: WpCursorShapeManagerV1);
 delegate_noop!(State: WpCursorShapeDeviceV1);
+delegate_noop!(State: ZxdgOutputManagerV1);
+
+impl Dispatch<ZxdgOutputV1, OutputId> for State {
+    fn event(
+        state: &mut Self,
+        xdg: &ZxdgOutputV1,
+        event: zxdg_output_v1::Event,
+        id: &OutputId,
+        _: &WlConnection,
+        _: &QueueHandle<Self>,
+    ) {
+        let Some(output) = state.outputs.iter_mut().find(|o| o.info.current.id == *id) else {
+            return;
+        };
+        match event {
+            zxdg_output_v1::Event::LogicalPosition { x, y } => output.info.set_position(x, y),
+            zxdg_output_v1::Event::LogicalSize { width, height } => {
+                output.info.set_size(width, height)
+            }
+            zxdg_output_v1::Event::Done if xdg.version() < 3 && output.info.done() => {
+                state.events.push(Event::OutputsChanged)
+            }
+            _ => {}
+        }
+    }
+}
 
 impl Dispatch<WlRegistry, GlobalListContents> for State {
     fn event(
@@ -1196,6 +1353,9 @@ impl Dispatch<WlRegistry, GlobalListContents> for State {
             wl_registry::Event::GlobalRemove { name } => {
                 if let Some(i) = state.outputs.iter().position(|o| o.registry_name == name) {
                     let output = state.outputs.remove(i);
+                    if let Some(xdg) = &output.xdg {
+                        xdg.destroy();
+                    }
                     if output.wl.version() >= 3 {
                         output.wl.release();
                     }
@@ -1417,7 +1577,11 @@ impl Dispatch<XdgSurface, SurfaceId> for State {
                     configure,
                 }
             }
-            Role::External { .. } => unreachable!("an external surface has no xdg_surface"),
+            Role::External { .. } => {
+                return state.fail(Error::Protocol(
+                    "an xdg_surface configure for a surface with an external role",
+                ))
+            }
         };
         state.events.push(event);
     }
@@ -1525,21 +1689,38 @@ impl Dispatch<XdgPopup, SurfaceId> for State {
     }
 }
 
-impl Dispatch<XdgActivationTokenV1, SurfaceId> for State {
+/// What an activation token is for.
+enum TokenUse {
+    /// Activate this surface with it.
+    Activate(SurfaceId),
+    /// Hand it to the application.
+    Hand(TokenRequest),
+}
+
+impl Dispatch<XdgActivationTokenV1, TokenUse> for State {
     fn event(
         state: &mut Self,
         token: &XdgActivationTokenV1,
         event: xdg_activation_token_v1::Event,
-        id: &SurfaceId,
+        used: &TokenUse,
         _: &WlConnection,
         _: &QueueHandle<Self>,
     ) {
-        if let xdg_activation_token_v1::Event::Done { token: value } = event {
-            if let (Some(activation), Ok(surf)) = (&state.activation, state.surface(*id)) {
-                activation.activate(value, &surf.wl);
+        let xdg_activation_token_v1::Event::Done { token: value } = event else {
+            return;
+        };
+        match used {
+            TokenUse::Activate(id) => {
+                if let (Some(activation), Ok(surf)) = (&state.activation, state.surface(*id)) {
+                    activation.activate(value, &surf.wl);
+                }
             }
-            token.destroy();
+            TokenUse::Hand(request) => state.events.push(Event::ActivationToken {
+                request: *request,
+                token: value,
+            }),
         }
+        token.destroy();
     }
 }
 
@@ -1598,7 +1779,7 @@ impl Dispatch<WlSeat, ()> for State {
 impl Dispatch<WlPointer, ()> for State {
     fn event(
         state: &mut Self,
-        _: &WlPointer,
+        pointer: &WlPointer,
         event: wl_pointer::Event,
         _: &(),
         _: &WlConnection,
@@ -1641,9 +1822,18 @@ impl Dispatch<WlPointer, ()> for State {
                 axis: WEnum::Value(axis),
                 value,
                 ..
-            } => state
-                .pointer_tracker
-                .scroll(axis == Axis::VerticalScroll, value),
+            } => {
+                state
+                    .pointer_tracker
+                    .axis(axis == Axis::VerticalScroll, value);
+                // before version 5 there is no `frame`, so each axis is a scroll of its own
+                if pointer.version() < 5 {
+                    state.pointer_tracker.frame()
+                } else {
+                    None
+                }
+            }
+            wl_pointer::Event::Frame => state.pointer_tracker.frame(),
             _ => None,
         };
         if let Some((surface, event)) = found {

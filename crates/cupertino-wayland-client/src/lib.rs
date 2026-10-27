@@ -19,16 +19,16 @@ mod output;
 mod scale;
 
 pub use buffer::{BufferFormat, BufferLayout, PixelRect};
-pub use capability::{Capability, CapabilitySet};
+pub use capability::{Capability, CapabilitySet, Extension};
 pub use clipboard::ClipboardOffer;
 pub use configure::{Decorations, WindowConfigure, WindowStates};
 pub use connection::{
     BufferLease, Connection, Event, ExternalRole, FrameCallback, Popup, PopupConfigure,
-    PopupPlacement, State, SurfaceId, Toplevel, ToplevelConfig, Waker,
+    PopupPlacement, State, SurfaceId, TokenRequest, Toplevel, ToplevelConfig, Waker,
 };
 pub use error::{Disconnect, Error};
 pub use input::{Button, KeyboardEvent, Modifiers, PointerEvent};
-pub use output::{OutputId, OutputInfo};
+pub use output::{OutputGeometry, OutputId, OutputInfo};
 pub use scale::Scale;
 pub use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape as CursorShape;
 pub use wayland_protocols::xdg::shell::client::xdg_positioner::{

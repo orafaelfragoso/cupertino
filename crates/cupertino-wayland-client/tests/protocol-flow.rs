@@ -4,8 +4,8 @@
 use cupertino_geometry::Rect;
 use cupertino_wayland_client::{
     Anchor, BufferFormat, Button, Capability, Connection, ConstraintAdjustment, Decorations, Error,
-    Event, Gravity, KeyboardEvent, PointerEvent, PopupPlacement, Scale, SurfaceId, Toplevel,
-    ToplevelConfig, WindowConfigure,
+    Event, Extension, Gravity, KeyboardEvent, OutputGeometry, PointerEvent, PopupPlacement, Scale,
+    SurfaceId, Toplevel, ToplevelConfig, WindowConfigure,
 };
 use std::collections::VecDeque;
 use std::io::Write;
@@ -20,17 +20,25 @@ use wayland_protocols::wp::fractional_scale::v1::server::wp_fractional_scale_man
 use wayland_protocols::wp::fractional_scale::v1::server::wp_fractional_scale_v1::WpFractionalScaleV1;
 use wayland_protocols::wp::viewporter::server::wp_viewport::{self, WpViewport};
 use wayland_protocols::wp::viewporter::server::wp_viewporter::{self, WpViewporter};
+use wayland_protocols::xdg::activation::v1::server::xdg_activation_token_v1::{
+    self, XdgActivationTokenV1,
+};
+use wayland_protocols::xdg::activation::v1::server::xdg_activation_v1::{self, XdgActivationV1};
 use wayland_protocols::xdg::decoration::zv1::server::zxdg_decoration_manager_v1::{
     self, ZxdgDecorationManagerV1,
 };
 use wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::{
     self, Mode, ZxdgToplevelDecorationV1,
 };
-use wayland_protocols::xdg::shell::server::xdg_popup::XdgPopup;
+use wayland_protocols::xdg::shell::server::xdg_popup::{self, XdgPopup};
 use wayland_protocols::xdg::shell::server::xdg_positioner::{self, XdgPositioner};
 use wayland_protocols::xdg::shell::server::xdg_surface::{self, XdgSurface};
 use wayland_protocols::xdg::shell::server::xdg_toplevel::{self, XdgToplevel};
 use wayland_protocols::xdg::shell::server::xdg_wm_base::{self, XdgWmBase};
+use wayland_protocols::xdg::xdg_output::zv1::server::zxdg_output_manager_v1::{
+    self, ZxdgOutputManagerV1,
+};
+use wayland_protocols::xdg::xdg_output::zv1::server::zxdg_output_v1::ZxdgOutputV1;
 use wayland_protocols_wlr::layer_shell::v1::server::zwlr_layer_shell_v1::{self, ZwlrLayerShellV1};
 use wayland_protocols_wlr::layer_shell::v1::server::zwlr_layer_surface_v1::{
     self, ZwlrLayerSurfaceV1,
@@ -46,6 +54,7 @@ use wayland_server::protocol::wl_data_source::WlDataSource;
 use wayland_server::protocol::wl_keyboard::{self, WlKeyboard};
 use wayland_server::protocol::wl_output::WlOutput;
 use wayland_server::protocol::wl_pointer::{self, WlPointer};
+use wayland_server::protocol::wl_region::{self, WlRegion};
 use wayland_server::protocol::wl_seat::{self, WlSeat};
 use wayland_server::protocol::wl_shm::{self, WlShm};
 use wayland_server::protocol::wl_shm_pool::{self, WlShmPool};
@@ -73,6 +82,9 @@ struct Globals {
     /// Never release a buffer.
     hold_buffers: bool,
     layer_shell: bool,
+    activation: bool,
+    /// `zxdg_output_manager_v1`, placing the output at (1920, 0) with a 1280 × 720 logical size.
+    output_layout: bool,
 }
 
 impl Globals {
@@ -103,6 +115,11 @@ enum Control {
     Offer(Vec<&'static str>),
     /// Configure the layer surface this many times in a row, each a pixel wider.
     LayerConfigures(u32),
+    /// Enter the toplevel, then scroll by `(dx, dy)` and `(0, dy)` within one pointer frame.
+    Scroll {
+        dx: f64,
+        dy: f64,
+    },
 }
 
 /// What the compositor saw.
@@ -124,6 +141,14 @@ enum Seen {
     LayerAck(u32),
     LayerPopup,
     LayerDestroyed,
+    /// The rectangles of the input region set, `None` for the whole surface.
+    InputRegion(Option<Vec<[i32; 4]>>),
+    Reposition {
+        token: u32,
+        size: (i32, i32),
+    },
+    /// An activation token committed for this application id.
+    TokenCommit(Option<String>),
 }
 
 #[derive(Default)]
@@ -207,7 +232,9 @@ plain_global!(
     WpFractionalScaleManagerV1,
     WpViewporter,
     WlDataDeviceManager,
-    ZwlrLayerShellV1
+    ZwlrLayerShellV1,
+    XdgActivationV1,
+    ZxdgOutputManagerV1
 );
 
 /// Requests the compositor ignores.
@@ -219,7 +246,7 @@ macro_rules! ignore_requests {
     )*};
 }
 
-ignore_requests!(WlBuffer => BufferData, WlCallback => (), WlPointer => (), WlKeyboard => (), WlOutput => (), WpFractionalScaleV1 => (), WlDataSource => ());
+ignore_requests!(WlBuffer => BufferData, WlCallback => (), WlPointer => (), WlKeyboard => (), WlOutput => (), WpFractionalScaleV1 => (), WlDataSource => (), ZxdgOutputV1 => ());
 
 impl Dispatch<WlCompositor, ()> for Mock {
     fn request(
@@ -231,9 +258,37 @@ impl Dispatch<WlCompositor, ()> for Mock {
         _: &DisplayHandle,
         init: &mut DataInit<'_, Self>,
     ) {
-        if let wl_compositor::Request::CreateSurface { id } = request {
-            let surface = init.init(id, SurfaceData::default());
-            state.surfaces.push(surface);
+        match request {
+            wl_compositor::Request::CreateSurface { id } => {
+                let surface = init.init(id, SurfaceData::default());
+                state.surfaces.push(surface);
+            }
+            wl_compositor::Request::CreateRegion { id } => {
+                init.init(id, Mutex::new(Vec::new()));
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WlRegion, Mutex<Vec<[i32; 4]>>> for Mock {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &WlRegion,
+        request: wl_region::Request,
+        rects: &Mutex<Vec<[i32; 4]>>,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        if let wl_region::Request::Add {
+            x,
+            y,
+            width,
+            height,
+        } = request
+        {
+            rects.lock().unwrap().push([x, y, width, height]);
         }
     }
 }
@@ -253,6 +308,16 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
             wl_surface::Request::Attach { buffer, .. } => s.buffer = buffer,
             wl_surface::Request::SetBufferScale { scale } => s.scale = scale,
             wl_surface::Request::Frame { callback } => s.frames.push(init.init(callback, ())),
+            wl_surface::Request::SetInputRegion { region } => state
+                .seen
+                .send(Seen::InputRegion(region.map(|r| {
+                    r.data::<Mutex<Vec<[i32; 4]>>>()
+                        .unwrap()
+                        .lock()
+                        .unwrap()
+                        .clone()
+                })))
+                .unwrap(),
             wl_surface::Request::Commit => {
                 let initial = s.buffer.is_none();
                 if initial
@@ -447,7 +512,104 @@ impl Dispatch<XdgSurface, WlSurface> for Mock {
     }
 }
 
-ignore_requests!(XdgToplevel => (), XdgPopup => ());
+ignore_requests!(XdgToplevel => ());
+
+impl Dispatch<XdgPopup, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &XdgPopup,
+        request: xdg_popup::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        if let xdg_popup::Request::Reposition { positioner, token } = request {
+            let p = *positioner
+                .data::<Mutex<PositionerState>>()
+                .unwrap()
+                .lock()
+                .unwrap();
+            state
+                .seen
+                .send(Seen::Reposition {
+                    token,
+                    size: p.size,
+                })
+                .unwrap();
+            let serial = state.serial();
+            let (xdg, popup, placed, _) = state.popup.as_mut().unwrap();
+            *placed = p;
+            popup.repositioned(token);
+            popup.configure(
+                p.anchor_rect[0],
+                p.anchor_rect[1] + p.anchor_rect[3],
+                p.size.0,
+                p.size.1,
+            );
+            xdg.configure(serial);
+        }
+    }
+}
+
+impl Dispatch<XdgActivationV1, ()> for Mock {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &XdgActivationV1,
+        request: xdg_activation_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        if let xdg_activation_v1::Request::GetActivationToken { id } = request {
+            init.init(id, Mutex::new(None));
+        }
+    }
+}
+
+impl Dispatch<XdgActivationTokenV1, Mutex<Option<String>>> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        token: &XdgActivationTokenV1,
+        request: xdg_activation_token_v1::Request,
+        app_id: &Mutex<Option<String>>,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        match request {
+            xdg_activation_token_v1::Request::SetAppId { app_id: id } => {
+                *app_id.lock().unwrap() = Some(id)
+            }
+            xdg_activation_token_v1::Request::Commit => {
+                let app_id = app_id.lock().unwrap().clone();
+                token.done(format!("token-{}", app_id.as_deref().unwrap_or("none")));
+                state.seen.send(Seen::TokenCommit(app_id)).unwrap();
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<ZxdgOutputManagerV1, ()> for Mock {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &ZxdgOutputManagerV1,
+        request: zxdg_output_manager_v1::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        if let zxdg_output_manager_v1::Request::GetXdgOutput { id, output } = request {
+            let xdg = init.init(id, ());
+            xdg.logical_position(1920, 0);
+            xdg.logical_size(1280, 720);
+            output.done();
+        }
+    }
+}
 
 impl Dispatch<ZxdgDecorationManagerV1, ()> for Mock {
     fn request(
@@ -729,6 +891,12 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
         if globals.layer_shell {
             dh.create_global::<Mock, ZwlrLayerShellV1, _>(4, ());
         }
+        if globals.activation {
+            dh.create_global::<Mock, XdgActivationV1, _>(1, ());
+        }
+        if globals.output_layout {
+            dh.create_global::<Mock, ZxdgOutputManagerV1, _>(3, ());
+        }
         let mut mock = Mock {
             globals,
             seen: seen_tx,
@@ -820,6 +988,16 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
                 let (_, layer, (width, height), _) = mock.layer.as_ref().unwrap();
                 layer.configure(serial, width + i + 1, *height);
             }
+        }
+        Control::Scroll { dx, dy } => {
+            let (serial, surface) = (mock.serial(), mock.surface().clone());
+            let pointer = mock.pointer.as_ref().unwrap();
+            pointer.enter(serial, &surface, 1.0, 2.0);
+            pointer.frame();
+            pointer.axis(0, wl_pointer::Axis::VerticalScroll, dy);
+            pointer.axis(0, wl_pointer::Axis::HorizontalScroll, dx);
+            pointer.axis(0, wl_pointer::Axis::VerticalScroll, dy);
+            pointer.frame();
         }
     }
 }
@@ -1283,11 +1461,8 @@ mod layer {
     }
 
     impl Layers {
-        pub fn bind(conn: &Connection) -> Layers {
-            let shell = conn
-                .globals()
-                .bind(&conn.queue_handle(), 1..=4, ShellData)
-                .unwrap();
+        pub fn bind(conn: &mut Connection) -> Layers {
+            let shell = conn.bind_extension(1..=4, ShellData).unwrap();
             Layers {
                 shell,
                 inbox: Inbox::default(),
@@ -1306,7 +1481,6 @@ mod layer {
                 layer.set_size(size.0, size.1);
                 LayerRole(layer)
             })
-            .unwrap()
         }
 
         /// What the extension received since the last call.
@@ -1342,8 +1516,7 @@ mod layer {
                 height,
             } = event
             {
-                let size = (width > 0 && height > 0).then_some((width, height));
-                state.configure_external(data.surface, serial, size);
+                state.configure_external(data.surface, serial, (width, height));
                 data.inbox.lock().unwrap().push(Configured {
                     surface: data.surface,
                     serial,
@@ -1381,8 +1554,15 @@ fn an_extension_role_draws_through_the_lease_and_acknowledges_through_its_own_pr
         layer_shell: true,
         ..Globals::core()
     });
-    let layers = layer::Layers::bind(&conn);
+    let layers = layer::Layers::bind(&mut conn);
     let surface = layers.surface(&mut conn, (200, 100));
+    assert_eq!(
+        conn.capabilities().extensions(),
+        [Extension {
+            interface: "zwlr_layer_shell_v1",
+            version: 4
+        }]
+    );
     let (configures, _) = layer_configures(&mut conn, &layers, 1);
     assert_eq!(configures[0].size, (200, 100));
     {
@@ -1430,12 +1610,37 @@ fn an_extension_role_draws_through_the_lease_and_acknowledges_through_its_own_pr
 }
 
 #[test]
+fn a_zero_dimension_of_an_extension_configure_is_left_to_the_client() {
+    let (mut conn, _control, _seen) = connect(Globals {
+        layer_shell: true,
+        ..Globals::core()
+    });
+    let layers = layer::Layers::bind(&mut conn);
+    let surface = layers.surface(&mut conn, (0, 30));
+    layer_configures(&mut conn, &layers, 1);
+    let lease = conn
+        .lease(surface, (640, 1), BufferFormat::Argb8888)
+        .unwrap();
+    assert_eq!(lease.logical_size(), (640, 30));
+}
+
+#[test]
+fn an_extension_the_compositor_does_not_offer_binds_nothing_and_is_not_listed() {
+    let (mut conn, _control, _seen) = connect(Globals::core());
+    let shell: Option<
+        wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1,
+    > = conn.bind_extension(1..=4, layer::ShellData);
+    assert!(shell.is_none());
+    assert_eq!(conn.capabilities().extensions(), []);
+}
+
+#[test]
 fn a_burst_of_extension_events_ends_one_wait_not_one_per_event() {
     let (mut conn, control, _seen) = connect(Globals {
         layer_shell: true,
         ..Globals::core()
     });
-    let layers = layer::Layers::bind(&conn);
+    let layers = layer::Layers::bind(&mut conn);
     let surface = layers.surface(&mut conn, (200, 100));
     layer_configures(&mut conn, &layers, 1);
     control.send(Control::LayerConfigures(100)).unwrap();
@@ -1453,4 +1658,148 @@ fn a_burst_of_extension_events_ends_one_wait_not_one_per_event() {
         (lease.serial(), lease.logical_size()),
         (latest.serial, (300, 100))
     );
+}
+
+#[test]
+fn an_input_region_is_sent_rounded_outwards_and_none_restores_the_whole_surface() {
+    let (mut conn, _control, seen) = connect(Globals::core());
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    let rects = [
+        Rect::new(0.5, 1.5, 10.0, 4.2),
+        Rect::new(20.0, 0.0, 5.0, 5.0),
+    ];
+    conn.set_input_region(w.surface(), Some(&rects)).unwrap();
+    conn.flush().unwrap();
+    assert_eq!(
+        next_seen(&seen),
+        Seen::InputRegion(Some(vec![[0, 1, 11, 5], [20, 0, 5, 5]]))
+    );
+    conn.set_input_region(w.surface(), None).unwrap();
+    conn.flush().unwrap();
+    assert_eq!(next_seen(&seen), Seen::InputRegion(None));
+}
+
+#[test]
+fn a_repositioned_popup_sends_its_new_placement_and_is_configured_again() {
+    let (mut conn, _control, seen) = connect(Globals::core());
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    let placement = |anchor_rect, size| PopupPlacement {
+        anchor_rect,
+        size,
+        anchor: Anchor::BottomLeft,
+        gravity: Gravity::BottomRight,
+        constraint_adjustment: ConstraintAdjustment::FlipY,
+        grab: false,
+    };
+    let popup = conn
+        .popup(
+            w.surface(),
+            &placement(Rect::new(10.0, 20.0, 30.0, 8.0), (120, 90)),
+        )
+        .unwrap();
+    let popup_configure = |stash: &mut Stash, conn: &mut Connection| {
+        wait_for(conn, stash, |e| match e {
+            Event::PopupConfigure {
+                popup: p,
+                configure,
+            } if *p == popup => Some((configure.x, configure.y, configure.width, configure.height)),
+            _ => None,
+        })
+    };
+    assert_eq!(popup_configure(&mut stash, &mut conn), (10, 28, 120, 90));
+    present(&mut conn, popup.surface(), (1, 1));
+    conn.reposition_popup(
+        popup,
+        &placement(Rect::new(50.0, 60.0, 10.0, 10.0), (200, 100)),
+    )
+    .unwrap();
+    conn.flush().unwrap();
+    let reposition = std::iter::repeat_with(|| next_seen(&seen))
+        .find(|s| matches!(s, Seen::Reposition { .. }))
+        .unwrap();
+    assert_eq!(
+        reposition,
+        Seen::Reposition {
+            token: 1,
+            size: (200, 100)
+        }
+    );
+    assert_eq!(popup_configure(&mut stash, &mut conn), (50, 70, 200, 100));
+}
+
+#[test]
+fn a_launch_token_arrives_for_its_request_and_needs_xdg_activation() {
+    let (mut conn, _control, seen) = connect(Globals {
+        activation: true,
+        ..Globals::core()
+    });
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    let request = conn
+        .request_activation_token(w.surface(), Some("org.example.Files"))
+        .unwrap();
+    conn.flush().unwrap();
+    assert_eq!(
+        next_seen(&seen),
+        Seen::TokenCommit(Some("org.example.Files".into()))
+    );
+    let token = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::ActivationToken { request: r, token } if *r == request => Some(token.clone()),
+        _ => None,
+    });
+    assert_eq!(token, "token-org.example.Files");
+
+    let (mut conn, _control, _seen) = connect(Globals::core());
+    let w = window(&mut conn, Decorations::Client);
+    assert!(matches!(
+        conn.request_activation_token(w.surface(), None),
+        Err(Error::Unsupported(Capability::Activation))
+    ));
+}
+
+#[test]
+fn an_output_has_a_logical_geometry_only_with_xdg_output() {
+    let geometry = |output_layout| {
+        let (conn, _control, _seen) = connect(Globals {
+            output_scale: Some(1),
+            output_layout,
+            ..Globals::core()
+        });
+        conn.outputs()[0].geometry
+    };
+    assert_eq!(
+        geometry(true),
+        Some(OutputGeometry {
+            x: 1920,
+            y: 0,
+            width: 1280,
+            height: 720
+        })
+    );
+    assert_eq!(geometry(false), None);
+}
+
+#[test]
+fn the_axes_of_one_pointer_frame_arrive_as_one_scroll() {
+    let (mut conn, control, _seen) = connect(Globals {
+        seat: true,
+        ..Globals::core()
+    });
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    control.send(Control::Scroll { dx: 4.0, dy: -2.5 }).unwrap();
+    let scroll = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::Pointer {
+            event: PointerEvent::Scroll { dx, dy, .. },
+            ..
+        } => Some((*dx, *dy)),
+        _ => None,
+    });
+    assert_eq!(scroll, (4.0, -5.0));
 }

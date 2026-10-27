@@ -12,21 +12,28 @@ use crate::text::TextRenderer;
 
 /// Points the selection band and the caret reach above and below the text size.
 pub const BAND_OVERHANG: f64 = 2.0;
-/// The caret's width in points (at least one device pixel).
-pub const CARET_WIDTH: f64 = 1.0;
-/// The baseline's distance below the field's vertical centre, as a share of the text size.
+/// The baseline's distance below the centre of the text's band, as a share of the text size.
 const BASELINE_SHARE: f64 = 0.36;
 
 /// Text size and colours of a field.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FieldStyle {
-    /// Points.
+    /// The drawn text size in points.
     pub size: f64,
     pub weight: u16,
+    /// Points between glyphs (tracking).
+    pub letter_spacing: f64,
     pub text: Rgba,
     /// The selected text's background (the `selected-text-background` token).
     pub selection: Rgba,
     pub caret: Rgba,
+    /// Points (at least one device pixel).
+    pub caret_width: f64,
+}
+
+/// The baseline (points) that centres text of `size` in `area` vertically.
+pub fn centred_baseline(area: &Rect, size: f64) -> f64 {
+    area.y() + area.height() / 2.0 + size * BASELINE_SHARE
 }
 
 /// What the field shows, in byte offsets of `text`.
@@ -52,22 +59,27 @@ pub fn caret_offsets(
     style: &FieldStyle,
     scale: f32,
 ) -> Vec<f64> {
+    renderer.set_scale(scale);
     let px = style.size as f32 * scale;
+    let spacing = (style.letter_spacing * f64::from(scale)) as f32;
     boundaries
         .iter()
-        .map(|b| f64::from(renderer.measure(&text[..*b], px, style.weight, 0.0) / scale))
+        .map(|b| f64::from(renderer.measure(&text[..*b], px, style.weight, spacing) / scale))
         .collect()
 }
 
-/// Draw `content` into `area` (points) of `pm` (device pixels, `scale` per point), clipped to `area`.
+/// Draw `content` on `baseline` (points) into `area` (points) of `pm` (device pixels, `scale` per point), clipped to
+/// `area`.
 pub fn draw_field(
     renderer: &mut TextRenderer,
     pm: &mut Pixmap,
     area: &Rect,
+    baseline: f64,
     scale: f32,
     content: &FieldContent<'_>,
     style: &FieldStyle,
 ) {
+    renderer.set_scale(scale);
     let s = f64::from(scale);
     let (Some(mut clip), x0, y0) = (
         Pixmap::new(
@@ -87,7 +99,8 @@ pub fn draw_field(
             .map_or(0.0, |i| content.offsets[i])
             - content.scroll
     };
-    let centre = area.height() / 2.0;
+    let baseline = baseline - area.y();
+    let centre = baseline - style.size * BASELINE_SHARE;
     let band_top = centre - style.size / 2.0 - BAND_OVERHANG;
     let band_height = style.size + 2.0 * BAND_OVERHANG;
     if !content.selection.is_empty() {
@@ -102,7 +115,6 @@ pub fn draw_field(
             style.selection,
         );
     }
-    let baseline = centre + style.size * BASELINE_SHARE;
     renderer.draw(
         &mut clip,
         content.text,
@@ -110,7 +122,7 @@ pub fn draw_field(
         (baseline * s) as f32,
         style.size as f32 * scale,
         style.weight,
-        0.0,
+        (style.letter_spacing * s) as f32,
         style.text,
     );
     if let Some(marked) = &content.composition {
@@ -119,7 +131,7 @@ pub fn draw_field(
     }
     if let Some(caret) = content.caret {
         let x = (x_of(caret) * s).round() / s;
-        let width = (CARET_WIDTH * s).round().max(1.0) / s;
+        let width = (style.caret_width * s).round().max(1.0) / s;
         fill(&mut clip, x, band_top, width, band_height, s, style.caret);
     }
     pm.draw_pixmap(
@@ -162,8 +174,10 @@ mod tests {
         size: 13.0,
         weight: 400,
         text: [0.0, 0.0, 0.0, 1.0],
+        letter_spacing: 0.0,
         selection: BLUE,
         caret: RED,
+        caret_width: 1.0,
     };
 
     fn rgb(pm: &Pixmap, x: u32, y: u32) -> [u8; 4] {
@@ -191,7 +205,8 @@ mod tests {
                 caret,
                 scroll: 0.0,
             };
-            draw_field(r, &mut pm, &area, 1.0, &content, &STYLE);
+            let baseline = centred_baseline(&area, STYLE.size);
+            draw_field(r, &mut pm, &area, baseline, 1.0, &content, &STYLE);
             pm
         };
         // the band's top row, above the glyphs: y = 10 + 10 - 6.5 - 2

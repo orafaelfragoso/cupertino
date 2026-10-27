@@ -3,7 +3,9 @@
 //! active appearance (§6.2); a missing token is an error, not a stand-in colour.
 
 use cupertino_assets::{AssetError, Assets, FontRole};
-use cupertino_decorations::field::{caret_offsets, draw_field, FieldContent, FieldStyle};
+use cupertino_decorations::field::{
+    caret_offsets, centred_baseline, draw_field, FieldContent, FieldStyle,
+};
 use cupertino_decorations::palette::Rgba;
 use cupertino_decorations::shape::rounded_path;
 use cupertino_decorations::text::TextRenderer;
@@ -327,9 +329,11 @@ fn search_style(pal: &Palette) -> FieldStyle {
     FieldStyle {
         size: FIELD_TEXT,
         weight: 400,
+        letter_spacing: 0.0,
         text: pal.text,
         selection: pal.text_selection,
         caret: pal.text,
+        caret_width: 1.0,
     }
 }
 
@@ -575,10 +579,12 @@ impl Painter {
             caret: state.search_caret.then_some(field.caret()),
             scroll: field.scroll(),
         };
+        let area = GeoRect::new(text.x, text.y, text.w, text.h);
         draw_field(
             &mut self.text,
             pm,
-            &GeoRect::new(text.x, text.y, text.w, text.h),
+            &area,
+            centred_baseline(&area, FIELD_TEXT),
             s,
             &content,
             &style,

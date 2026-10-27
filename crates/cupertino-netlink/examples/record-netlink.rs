@@ -1,7 +1,7 @@
 //! Records this machine's rtnetlink and nl80211 replies as binary fixtures.
 //!
 //! ```text
-//! cargo run -p cupertino-netlink --example record -- platform/cupertino-netlink/tests/fixtures
+//! cargo run -p cupertino-netlink --example record-netlink -- crates/cupertino-netlink/tests/fixtures
 //! ```
 //!
 //! Only dumps are requested (read-only, no capability needed); no scan is triggered. Before a
@@ -210,7 +210,11 @@ fn patches(scrub: &Scrub, raw: &[u8], family: u16) -> Result<Vec<Patch>, Box<dyn
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let out = PathBuf::from(std::env::args().nth(1).ok_or("usage: record OUT_DIR")?);
+    let out = PathBuf::from(
+        std::env::args()
+            .nth(1)
+            .ok_or("usage: record-netlink OUT_DIR")?,
+    );
     let mut files = Vec::new();
     let mut scrub = Scrub::default();
 

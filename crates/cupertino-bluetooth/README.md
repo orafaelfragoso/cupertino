@@ -42,7 +42,7 @@ kernel's `sockaddr_hci` and `sockaddr_l2` into stack arrays. Everything else is 
 
 ```
 cargo test -p cupertino-bluetooth
-cargo run -p cupertino-bluetooth --example record -- [--listen SECONDS] > capture.txt
+cargo run -p cupertino-bluetooth --example record-bluetooth -- [--listen SECONDS] > capture.txt
 ```
 
 `tests/commands.rs` checks the exact bytes of every command, written field by field from the document, and the decoding of
@@ -53,7 +53,7 @@ commands byte for byte (Read Version, Read Index List, Read Controller Info) and
 The recording comes from the real controller of the development machine, with the address replaced by
 `AA:BB:CC:DD:EE:01` and the name by `cupertino-test` (management version 1.23, one controller, Bluetooth version 12,
 manufacturer 0x5D, class of device `0x7c0104`). Every other fixture (all events, all other commands, the EIR cases) is built by hand from the document. No pairing or
-discovery traffic was recorded, because that needs privilege and a device. `examples/record.rs` is read-only and refuses
+discovery traffic was recorded, because that needs privilege and a device. `examples/record-bluetooth.rs` is read-only and refuses
 to record events that could carry an address or a key. A 3 s listen on the unprivileged socket produced no events.
 
 ## Open issues

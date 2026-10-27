@@ -63,6 +63,7 @@ arch)
     useradd -m builder
     chown -R builder /src/arch-build
     su builder -c 'cd /src/arch-build && makepkg --noconfirm'
+    df -h /src | tee /dist/disk-after-makepkg.log
     namcap arch-build/PKGBUILD arch-build/*.pkg.tar.zst | tee /dist/namcap.log
     cp arch-build/*.pkg.tar.zst arch-build/PKGBUILD /dist/
     python3 packaging/release.py verify --format arch --package runtime /dist/cupertino-0*.pkg.tar.zst

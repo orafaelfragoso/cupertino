@@ -24,7 +24,8 @@ use cupertino_client::{
 };
 use cupertino_files::browser::{Activation, Browser};
 use cupertino_files::context_menu::{
-    common_apps, AppChoice, Command as MenuCommand, Menu, MenuItem, Mods as MenuMods, Nav, Outcome,
+    common_apps, AppChoice, Command as MenuCommand, Key as MenuKey, Menu, MenuItem,
+    Mods as MenuMods, Nav, Outcome,
 };
 use cupertino_files::menu_spec::{self, Background, Subject};
 use cupertino_files::metrics::{
@@ -684,7 +685,7 @@ impl App {
 
     fn key(&mut self, code: u32, mods: KeyModifiers, character: Option<char>) -> Result<()> {
         if self.menu.is_some() {
-            return self.menu_key(code);
+            return self.menu_key(code, mods, character);
         }
         self.rename.cancel();
         if self.edit.is_some() {
@@ -1229,21 +1230,24 @@ impl App {
         self.menu_outcome(outcome, changed)
     }
 
-    /// Arrow keys, Return and Escape while a menu is open.
-    fn menu_key(&mut self, code: u32) -> Result<()> {
-        let nav = match code {
-            key::UP => Nav::Up,
-            key::DOWN => Nav::Down,
-            key::LEFT => Nav::Left,
-            key::RIGHT => Nav::Right,
-            key::ENTER | key::KEYPAD_ENTER => Nav::Enter,
-            key::ESCAPE => return self.close_menu(),
+    /// Arrow keys, Return, Space, Escape and Super+. while a menu is open; every other key is swallowed.
+    fn menu_key(&mut self, code: u32, mods: KeyModifiers, character: Option<char>) -> Result<()> {
+        let key = match code {
+            key::UP => MenuKey::Nav(Nav::Up),
+            key::DOWN => MenuKey::Nav(Nav::Down),
+            key::LEFT => MenuKey::Nav(Nav::Left),
+            key::RIGHT => MenuKey::Nav(Nav::Right),
+            key::ENTER | key::KEYPAD_ENTER => MenuKey::Nav(Nav::Enter),
+            key::ESCAPE => MenuKey::Cancel,
+            _ if mods.logo && !mods.ctrl && !mods.alt && character == Some('.') => MenuKey::Cancel,
+            _ if mods.logo || mods.ctrl || mods.alt => return Ok(()),
+            _ if character == Some(' ') => MenuKey::Space,
             _ => return Ok(()),
         };
         let outcome = self
             .menu
             .as_mut()
-            .map_or(Outcome::Nothing, |open| open.menu.navigate(nav));
+            .map_or(Outcome::Nothing, |open| open.menu.press_key(key));
         self.menu_outcome(outcome, false)
     }
 
@@ -1253,6 +1257,7 @@ impl App {
                 self.close_menu()?;
                 self.run(command)
             }
+            Outcome::Close => self.close_menu(),
             Outcome::Changed => self.sync_menu(),
             Outcome::Nothing if changed => self.sync_menu(),
             Outcome::Nothing => Ok(()),

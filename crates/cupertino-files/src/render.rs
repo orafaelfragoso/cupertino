@@ -400,6 +400,8 @@ pub struct Renderer {
     pub icons: FileIcons,
     /// The template symbols of the sidebar and the toolbar.
     symbols: SystemIcons,
+    /// The content view of the last frame, given back by [`Renderer::recycle`]: the next view of its size reuses it.
+    spare: Option<Pixmap>,
 }
 
 impl Renderer {
@@ -410,7 +412,30 @@ impl Renderer {
             text: TextRenderer::new(assets, FontRole::Ui)?,
             icons,
             symbols: SystemIcons::required(assets, &[], &SYMBOL_NAMES),
+            spare: None,
         })
+    }
+
+    /// A pixmap for a content view of `size` points at `scale`, filled with the opaque background: the spare one when it
+    /// has that size. Every view starts opaque, so it covers what is under it ([`copy_opaque`]).
+    fn view_pixmap(&mut self, size: Size, scale: f32, pal: &Palette) -> Pixmap {
+        let (w, h) = (
+            (size.w as f32 * scale) as u32,
+            (size.h as f32 * scale) as u32,
+        );
+        let mut pm = match self.spare.take() {
+            Some(pm) if (pm.width(), pm.height()) == (w, h) => pm,
+            _ => Pixmap::new(w, h).unwrap(),
+        };
+        pm.fill(
+            Color::from_rgba(pal.background[0], pal.background[1], pal.background[2], 1.0).unwrap(),
+        );
+        pm
+    }
+
+    /// Give back a content view once it is drawn, for the next frame's view.
+    pub fn recycle(&mut self, view: Pixmap) {
+        self.spare = Some(view);
     }
 
     /// Draw the template symbol `name` of the asset packs in `color`, fitted to `fit` points and centred in `r` (a
@@ -537,14 +562,7 @@ impl Renderer {
         scale: f32,
         pal: &Palette,
     ) -> Pixmap {
-        let mut pm = Pixmap::new(
-            (size.w as f32 * scale) as u32,
-            (size.h as f32 * scale) as u32,
-        )
-        .unwrap();
-        pm.fill(
-            Color::from_rgba(pal.background[0], pal.background[1], pal.background[2], 1.0).unwrap(),
-        );
+        let mut pm = self.view_pixmap(size, scale, pal);
         // sections follow the group order; the display order of items is the concatenation of the groups
         let (order, sections): (Vec<usize>, Vec<icon::SectionSpec>) = match groups {
             Some(gs) => (
@@ -680,14 +698,7 @@ impl Renderer {
         now: std::time::SystemTime,
     ) -> Pixmap {
         assert_eq!(entries.len(), outline.len(), "one outline row per entry");
-        let mut pm = Pixmap::new(
-            (size.w as f32 * scale) as u32,
-            (size.h as f32 * scale) as u32,
-        )
-        .unwrap();
-        pm.fill(
-            Color::from_rgba(pal.background[0], pal.background[1], pal.background[2], 1.0).unwrap(),
-        );
+        let mut pm = self.view_pixmap(size, scale, pal);
         let px = settings.text_size as f32 * scale;
         let l = self.list_layout(outline, settings, size.w, scale);
         // the rows under the header are drawn too: the header covers them
@@ -955,6 +966,27 @@ pub fn relative_date(t: std::time::SystemTime, now: std::time::SystemTime) -> St
     }
 }
 
+/// Put the opaque `src` into `dst` with its top left corner at device pixel (`x`, `y`), clipped to `dst`: row copies,
+/// the same pixels as drawing it over, at a fraction of the cost.
+pub(crate) fn copy_opaque(dst: &mut Pixmap, src: &Pixmap, x: i32, y: i32) {
+    let (dw, dh) = (dst.width() as i64, dst.height() as i64);
+    let (sw, sh) = (src.width() as i64, src.height() as i64);
+    let (x, y) = (i64::from(x), i64::from(y));
+    let (x0, x1) = (x.max(0), (x + sw).min(dw));
+    let (y0, y1) = (y.max(0), (y + sh).min(dh));
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let len = ((x1 - x0) * 4) as usize;
+    let (dst_stride, src_stride) = (dw as usize * 4, sw as usize * 4);
+    let (src_data, dst_data) = (src.data(), dst.data_mut());
+    for row in y0..y1 {
+        let d = row as usize * dst_stride + x0 as usize * 4;
+        let s = (row - y) as usize * src_stride + (x0 - x) as usize * 4;
+        dst_data[d..d + len].copy_from_slice(&src_data[s..s + len]);
+    }
+}
+
 /// A renderer for tests. Uses the built-in assets only, so the result does not depend on the packs installed on the machine.
 #[cfg(test)]
 pub(crate) fn renderer() -> Renderer {
@@ -970,6 +1002,83 @@ pub(crate) fn renderer() -> Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An opaque pixmap with a different colour in every pixel.
+    fn opaque(w: u32, h: u32) -> Pixmap {
+        let mut pm = Pixmap::new(w, h).unwrap();
+        for (i, p) in pm.pixels_mut().iter_mut().enumerate() {
+            let i = i as u32;
+            *p = tiny_skia::PremultipliedColorU8::from_rgba(
+                i as u8,
+                (i >> 8) as u8,
+                (i >> 16) as u8,
+                255,
+            )
+            .unwrap();
+        }
+        pm
+    }
+
+    fn drawn_over(dst: &Pixmap, src: &Pixmap, x: i32, y: i32) -> Pixmap {
+        let mut over = dst.clone();
+        over.draw_pixmap(
+            x,
+            y,
+            src.as_ref(),
+            &tiny_skia::PixmapPaint::default(),
+            Transform::identity(),
+            None,
+        );
+        over
+    }
+
+    #[test]
+    fn an_opaque_view_copied_in_by_rows_gives_the_pixels_of_drawing_it_over() {
+        let mut dst = Pixmap::new(64, 48).unwrap();
+        dst.fill(Color::from_rgba8(10, 20, 30, 128));
+        let src = opaque(40, 30);
+        // the window puts its view at a positive position; clipped at the right and bottom, or wholly outside
+        for (x, y) in [(0, 0), (11, 7), (50, 40), (30, 20), (64, 0), (0, 48)] {
+            let mut copied = dst.clone();
+            copy_opaque(&mut copied, &src, x, y);
+            let over = drawn_over(&dst, &src, x, y);
+            let diff = copied
+                .data()
+                .iter()
+                .zip(over.data())
+                .enumerate()
+                .find(|(_, (a, b))| a != b);
+            assert!(diff.is_none(), "at ({x}, {y}): first difference {diff:?}");
+        }
+        // above and left of the window, the part inside is copied and nothing else
+        let mut copied = dst.clone();
+        copy_opaque(&mut copied, &src, -9, -4);
+        let pixel = |pm: &Pixmap, x: u32, y: u32| pm.pixel(x, y).unwrap();
+        assert_eq!(pixel(&copied, 0, 0), pixel(&src, 9, 4));
+        assert_eq!(pixel(&copied, 30, 25), pixel(&src, 39, 29));
+        assert_eq!(pixel(&copied, 31, 0), pixel(&dst, 31, 0));
+        assert_eq!(pixel(&copied, 0, 26), pixel(&dst, 0, 26));
+    }
+
+    #[test]
+    fn copying_a_view_in_costs_a_fraction_of_drawing_it_over_at_every_size() {
+        for (w, h) in [(600, 400), (1920, 1080), (2560, 1440)] {
+            let src = opaque(w, h);
+            let mut dst = Pixmap::new(w, h).unwrap();
+            let start = std::time::Instant::now();
+            copy_opaque(&mut dst, &src, 0, 0);
+            let copied = start.elapsed();
+            let start = std::time::Instant::now();
+            let over = drawn_over(&dst, &src, 0, 0);
+            let drawn = start.elapsed();
+            eprintln!("{w} x {h}: copied {copied:?}, drawn over {drawn:?}");
+            assert!(
+                copied * 3 < drawn,
+                "{w} x {h}: copied {copied:?}, drawn over {drawn:?}"
+            );
+            assert!(over.data() == dst.data());
+        }
+    }
 
     #[test]
     fn sizes_are_decimal() {

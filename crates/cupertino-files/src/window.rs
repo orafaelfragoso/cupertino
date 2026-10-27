@@ -25,8 +25,8 @@ use crate::metrics::{list_view, marquee, menu as menu_metrics, sidebar, window};
 use crate::name_edit::NameEdit;
 use crate::places::{Place, PlaceGroup, PlaceKind};
 use crate::render::{
-    available_size, fill_rect, fill_rounded, paint, stroke_rounded, truncate_middle, truncate_tail,
-    Palette, Renderer,
+    available_size, copy_opaque, fill_rect, fill_rounded, paint, stroke_rounded, truncate_middle,
+    truncate_tail, Palette, Renderer,
 };
 use crate::settings::{ColumnDesc, ColumnId, IconViewSettings, ListViewSettings};
 use crate::tags::TagColor;
@@ -38,7 +38,7 @@ use cupertino_geometry::Rect as GeoRect;
 use cupertino_text_field::TextField;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-use tiny_skia::{PathBuilder, Pixmap, PixmapPaint, Stroke, Transform};
+use tiny_skia::{PathBuilder, Pixmap, Stroke, Transform};
 
 /// Window chrome metrics.
 pub mod metrics {
@@ -999,14 +999,8 @@ impl WindowPainter {
             (w.content.x as f32 * scale).round() as i32,
             (w.content.y as f32 * scale).round() as i32,
         );
-        pm.draw_pixmap(
-            x,
-            y,
-            content.as_ref(),
-            &PixmapPaint::default(),
-            Transform::identity(),
-            None,
-        );
+        copy_opaque(pm, &content, x, y);
+        self.renderer.recycle(content);
         if state.browser.no_results() {
             self.paint_no_results(pm, scale, &w.content, state.mode, pal);
         }
@@ -3119,7 +3113,7 @@ mod tests {
         assert!(browser.no_results());
         let mut search = TextField::with_max_len(SEARCH_MAX_LEN);
         search.insert("zzz-nothing");
-        let mut per_pixel: Vec<(f64, String)> = Vec::new();
+        let mut per_pixel: Vec<(f64, f64, String)> = Vec::new();
         for (w, h, scale) in [
             (600.0, 400.0, 1.0),
             (920.0, 436.0, 1.0),
@@ -3156,23 +3150,28 @@ mod tests {
                 marquee: None,
                 status: "",
             };
-            let start = std::time::Instant::now();
+            // a first frame fills the glyph and view caches; the cost of a frame is the best of the next three
             painter.paint(&mut pm, scale, &frame, &state, &Palette::builtin(false));
-            let took = start.elapsed().as_secs_f64();
+            let took = (0..3)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    painter.paint(&mut pm, scale, &frame, &state, &Palette::builtin(false));
+                    start.elapsed().as_secs_f64()
+                })
+                .fold(f64::INFINITY, f64::min);
             let pixels = f64::from(pm.width()) * f64::from(pm.height());
             eprintln!("{w} x {h} at {scale}x: {took:.3} s");
-            per_pixel.push((took / pixels, format!("{w} x {h} at {scale}x")));
+            per_pixel.push((pixels, took / pixels, format!("{w} x {h} at {scale}x")));
         }
-        // the cost follows the pixels drawn: no size takes much more per pixel than the cheapest
-        let cheapest = per_pixel
-            .iter()
-            .map(|(c, _)| *c)
-            .fold(f64::INFINITY, f64::min);
-        for (cost, what) in &per_pixel {
-            assert!(
-                *cost < cheapest * 6.0,
-                "{what}: {cost:e} s a pixel against {cheapest:e}"
-            );
+        // the cost grows no faster than the pixels drawn: no size takes much more per pixel than a smaller one (a
+        // small frame costs more per pixel, its fixed work spread over fewer pixels)
+        for (pixels, cost, what) in &per_pixel {
+            for (smaller, smaller_cost, than) in per_pixel.iter().filter(|(p, _, _)| p <= pixels) {
+                assert!(
+                    *cost < smaller_cost * 2.0,
+                    "{what}: {cost:e} s a pixel against {smaller_cost:e} for {than} ({smaller} pixels)"
+                );
+            }
         }
     }
 }

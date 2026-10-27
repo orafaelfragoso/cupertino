@@ -141,6 +141,8 @@ from the first are a wrong password. Any other failure is an error: the screen s
 modules (`PAM_TEXT_INFO`, `PAM_ERROR_MSG`: the `pam_faillock` lockout, a password about to expire) shows as the notice under the
 field until the next edit, also after a wrong password. Every prompt but the password one is refused.
 
+The process holds the typed password, so it starts by setting `PR_SET_DUMPABLE=0` and `RLIMIT_CORE=0` (`harden`): it writes no core file and its owner cannot read its memory or environment through `/proc`. Memory the process has freed is not zeroed here, and swap can hold a password (no `mlockall`).
+
 The password lives in a 512-byte buffer (`PAM_MAX_RESP_SIZE`, allocated once so typing never copies it), zeroed when the attempt
 is done. One copy escapes: `pam-client2` takes the prompt answer as a `CString` by value and drops it after copying it for PAM,
 without zeroing it.
@@ -466,6 +468,7 @@ cargo test -p cupertino-login --features app
 | Exhaustive inputs | Every sequence of up to five inputs and failures never reaches `Unlocking` or `Unlocked`. |
 | Panels and power key | Countdown, keys, button frames, clicks, the power-button panel's four buttons, its keys and its lack of a countdown; key timing at 0.2, 0.5 and 1.5 s with and without sleeping. |
 | Options | The session options, and that the greeter takes none. |
+| `tests/harden.rs` | The running greeter (waiting on a compositor that never answers) has core file size 0 and refuses its owner the read of `/proc/<pid>/environ`; each of the two calls removed fails it. The check of the environment is skipped as root. |
 | `org.cupertino.Login1` on a private `dbus-daemon` | `Lock`, a second process cannot take the name (`serve` fails with `NameTaken`; `serve_unnamed` serves the object on the unique name), `Request*` refused while locked, `Locked` announced once per change; a host process (`dbus-send`) is refused every method with `UntrustedCaller`, and a process with the login process's parent (a stand-in for an application the server started) is refused `Sleep` while the parent is not. |
 | Quit sequence, low battery, autostart | One application at a time, the 0.1 s pause, the 45 s interrupt, Force Quit, the interrupt panel; the notification posted, replaced and withdrawn; the autostart parser (`Hidden`, `OnlyShowIn`, `NotShowIn`, `X-GNOME-Autostart-enabled`, `TryExec`, `Exec` quoting, shadowing, order, the once-per-session marker). |
 

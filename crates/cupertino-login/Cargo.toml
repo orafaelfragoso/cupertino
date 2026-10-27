@@ -44,3 +44,7 @@ tempfile = "3"
 name = "cupertino-login"
 path = "src/main.rs"
 required-features = ["app"]
+
+[[test]]
+name = "harden"
+required-features = ["app"]

@@ -4,6 +4,7 @@ Cupertino is a Wayland compositor and desktop shell for Linux, written in Rust o
 
 Cupertino serves Wayland clients only. The project is early (0.x): the compositor runs nested in another Wayland session and on a TTY, and the TTY backend has run in a virtual machine but not yet on real hardware.
 
+- [Trying Cupertino](trying.md): what works, the open p0/p1 defects, and how to report a bug.
 - [Building and running](building.md): get a nested session up in a minute, then the TTY session.
 - [Architecture](architecture.md): processes, layers and the rules between them.
 - [Asset packs](asset-packs.md): swap fonts, icons, cursors and wallpapers, or build your own pack.

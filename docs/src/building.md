@@ -33,6 +33,34 @@ The compositor prints `WAYLAND_DISPLAY=<socket>` once it listens; start more cli
 
 Without a pack of your own, text, icons and cursors come from the built-in fallbacks (see [Asset packs](asset-packs.md)); a missing asset never stops a start.
 
+## The whole desktop on a TTY
+
+From a text console (switch with `Ctrl+Alt+F3`), a checkout can start the full desktop — compositor, dock, menu bar, launcher, notifications, control panel, OSD, window manager, Files and Settings:
+
+```bash
+./run-cupertino.sh
+```
+
+The script refuses to run inside a desktop session (`WAYLAND_DISPLAY` or `DISPLAY` set). It builds the workspace's release binaries (`cargo build --release --workspace --all-features --bins`), writes a shell process list to `$XDG_RUNTIME_DIR/cupertino-compositor.json`, starts a fresh session bus with `dbus-run-session`, and runs `cupertino-server --udev` with Files and Settings. It installs nothing and enables no service: the session manager and the login screen are not used. `XDG_RUNTIME_DIR` must be set, which a console login does.
+
+- `Ctrl+Alt+Backspace` quits.
+- `Ctrl+Alt+F<n>` returns to the console session you came from.
+- The log is `~/cupertino-tty.log`; when the server exits with a non-zero status the script prints the last 20 lines.
+- Server flags pass through: `./run-cupertino.sh --run-for 600` stops by itself after ten minutes.
+
+The TTY backend has run in a virtual machine, not yet on real hardware. Treat it as experimental.
+
+## Headless captures
+
+`crates/cupertino-server/scripts/capture.sh` renders the full desktop once and writes a PNG:
+
+```bash
+crates/cupertino-server/scripts/capture.sh out.png --spawn cupertino-files
+AFTER=6 crates/cupertino-server/scripts/capture.sh switcher.png --spawn cupertino-files --spawn cupertino-settings --hold-modifiers --key 5:Super+Tab
+```
+
+The script uses the release binaries in `target/release`, or `target/debug` when the release build is missing (`BIN_DIR` overrides both), with a temporary sample home folder and cleared environment, so a capture never reads your files and looks the same on every machine. `AFTER` sets the seconds before the shot (default 5), `SIZE` the output size (default `1280x800`), and `dbus-run-session` is required. One asset pack is used: `CUPERTINO_ASSET_DIR`, else the user pack under `$XDG_DATA_HOME` (or `~/.local/share`), else the built-in assets; the system pack is not searched. The script prints the path it wrote.
+
 ## The shell processes
 
 The dock, menu bar, launcher, notifications and the other shell parts are separate processes. Each builds its binary behind an `app` feature:

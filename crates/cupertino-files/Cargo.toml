@@ -46,5 +46,10 @@ required-features = ["app"]
 name = "directory"
 harness = false
 
+[[bench]]
+name = "frame"
+harness = false
+required-features = ["app"]
+
 [[example]]
 name = "files_samples"

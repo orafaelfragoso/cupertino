@@ -25,15 +25,40 @@ pub const HIDDEN_FRAME_THROTTLE: Duration = Duration::from_secs(1);
 pub const SCREENSHOT_CLEAR: smithay::backend::renderer::Color32F =
     smithay::backend::renderer::Color32F::new(0.05, 0.05, 0.07, 1.0);
 
+/// What the pointer shows, before it is drawn.
+#[derive(Clone, Debug)]
+pub enum CursorChoice {
+    Hidden,
+    /// A client's cursor surface.
+    Surface(smithay::reexports::wayland_server::protocol::wl_surface::WlSurface),
+    /// A named cursor of the theme.
+    Icon(smithay::input::pointer::CursorIcon),
+}
+
 impl Cupertino {
+    /// What the pointer shows: the cursor of a server decoration zone (a resize edge) first, then the busy cursor over a
+    /// window whose client does not answer its pings (it cannot change its cursor, and the one it set is stale), else
+    /// what the client under the pointer asked for.
+    pub fn cursor_choice(&self) -> CursorChoice {
+        match (self.decor.cursor, self.cursor_status.clone()) {
+            (Some(icon), _) => CursorChoice::Icon(icon),
+            (None, _) if self.pointer_over_unresponsive() => {
+                CursorChoice::Icon(smithay::input::pointer::CursorIcon::Wait)
+            }
+            (None, CursorImageStatus::Named(icon)) => CursorChoice::Icon(icon),
+            (None, CursorImageStatus::Hidden) => CursorChoice::Hidden,
+            (None, CursorImageStatus::Surface(surface)) => CursorChoice::Surface(surface),
+        }
+    }
+
     /// What to draw for the pointer on an output of `scale`. Server-drawn cursors take the cursor
     /// scale (user size times shake); a client's cursor surface is drawn at the user size already
     /// (`XCURSOR_SIZE`), so it takes only the shake multiplier.
     fn cursor_plan(&mut self, scale: f64) -> CursorPlan {
-        let icon = match (self.decor.cursor, self.cursor_status.clone()) {
-            (Some(icon), _) | (None, CursorImageStatus::Named(icon)) => icon,
-            (None, CursorImageStatus::Hidden) => return CursorPlan::Hidden,
-            (None, CursorImageStatus::Surface(surface)) => {
+        let icon = match self.cursor_choice() {
+            CursorChoice::Icon(icon) => icon,
+            CursorChoice::Hidden => return CursorPlan::Hidden,
+            CursorChoice::Surface(surface) => {
                 let hotspot = with_states(&surface, |s| {
                     s.data_map
                         .get::<CursorImageSurfaceData>()

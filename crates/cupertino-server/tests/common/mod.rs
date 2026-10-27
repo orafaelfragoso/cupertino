@@ -56,6 +56,9 @@ struct ClientState {
     shm: wl_shm::WlShm,
     lock_status: Arc<Mutex<LockStatus>>,
     toplevel_size: (i32, i32),
+    /// The client does not answer pings (it is hung); a ping that arrives meanwhile waits in `held_ping`.
+    silent: Arc<AtomicBool>,
+    held_ping: Option<(xdg_wm_base::XdgWmBase, u32)>,
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for ClientState {
@@ -89,7 +92,7 @@ ignore_events!(
 
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for ClientState {
     fn event(
-        _: &mut Self,
+        state: &mut Self,
         base: &xdg_wm_base::XdgWmBase,
         event: xdg_wm_base::Event,
         _: &(),
@@ -97,7 +100,11 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for ClientState {
         _: &QueueHandle<Self>,
     ) {
         if let xdg_wm_base::Event::Ping { serial } = event {
-            base.pong(serial);
+            if state.silent.load(Ordering::SeqCst) {
+                state.held_ping = Some((base.clone(), serial));
+            } else {
+                base.pong(serial);
+            }
         }
     }
 }
@@ -224,6 +231,7 @@ pub struct Client {
     stop: Arc<AtomicBool>,
     unlock: Arc<AtomicBool>,
     lock_status: Arc<Mutex<LockStatus>>,
+    silent: Arc<AtomicBool>,
 }
 
 impl Client {
@@ -242,7 +250,13 @@ impl Client {
             Arc::new(AtomicBool::new(false)),
         );
         let lock_status = Arc::new(Mutex::new(LockStatus::default()));
-        let (stop2, unlock2, status2) = (stop.clone(), unlock.clone(), lock_status.clone());
+        let silent = Arc::new(AtomicBool::new(false));
+        let (stop2, unlock2, status2, silent2) = (
+            stop.clone(),
+            unlock.clone(),
+            lock_status.clone(),
+            silent.clone(),
+        );
         let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
         let thread_stream = stream.try_clone().unwrap();
         std::thread::spawn(move || {
@@ -253,6 +267,8 @@ impl Client {
                 shm: globals.bind(&qh, 1..=1, ()).unwrap(),
                 lock_status: status2,
                 toplevel_size: (400, 300),
+                silent: silent2.clone(),
+                held_ping: None,
             };
             let Setup {
                 objects: _objects,
@@ -267,6 +283,12 @@ impl Client {
                 if queue.roundtrip(&mut client).is_err() {
                     break;
                 }
+                // a client that gets going again answers the ping it was too busy for
+                if !silent2.load(Ordering::SeqCst) {
+                    if let Some((base, serial)) = client.held_ping.take() {
+                        base.pong(serial);
+                    }
+                }
                 std::thread::sleep(Duration::from_millis(5));
             }
         });
@@ -275,7 +297,13 @@ impl Client {
             stop,
             unlock,
             lock_status,
+            silent,
         }
+    }
+
+    /// Stop answering pings, as a hung program does, or start again (the ping that came meanwhile is answered then).
+    pub fn mute(&self, on: bool) {
+        self.silent.store(on, Ordering::SeqCst);
     }
 
     /// A client with one mapped toplevel.

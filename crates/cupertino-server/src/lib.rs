@@ -20,6 +20,7 @@ pub mod events;
 pub mod frame;
 pub mod fx;
 pub mod handlers;
+pub mod hung;
 pub mod idle;
 pub mod input;
 pub mod input_method;

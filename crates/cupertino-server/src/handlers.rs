@@ -528,6 +528,7 @@ impl XdgShellHandler for Cupertino {
     fn client_pong(&mut self, client: ShellClient) {
         if self.hung.pong(&client).0 {
             tracing::info!("an application answers its pings again");
+            self.announce_responsiveness();
             self.request_redraw();
         }
     }
@@ -616,7 +617,7 @@ impl XdgShellHandler for Cupertino {
 
     fn move_request(&mut self, surface: ToplevelSurface, seat: WlSeat, serial: Serial) {
         if !self.held_press_on(surface.wl_surface(), &seat, serial) {
-            tracing::info!(
+            tracing::debug!(
                 "move request ignored: the serial is not that of a press still held on the window"
             );
             return;
@@ -639,7 +640,7 @@ impl XdgShellHandler for Cupertino {
         edges: xdg_toplevel::ResizeEdge,
     ) {
         if !self.held_press_on(surface.wl_surface(), &seat, serial) {
-            tracing::info!("resize request ignored: the serial is not that of a press still held on the window");
+            tracing::debug!("resize request ignored: the serial is not that of a press still held on the window");
             return;
         }
         let Some(id) = self.window_id_for_surface(surface.wl_surface()) else {

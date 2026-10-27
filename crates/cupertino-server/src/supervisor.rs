@@ -3,11 +3,13 @@
 //! by polling `try_wait` from a timer of the event loop: the server installs no SIGCHLD handler
 //! and the existing spawn code does not either, and a poll adds no thread or fd to the loop.
 
+use std::os::unix::net::UnixStream;
 use std::process::{Child, Command};
 use std::time::Instant;
 
 use crate::config::ShellProcess;
 use crate::restart_policy::{decide, Decision, RESTART_THROTTLE};
+use crate::shell_connection::hand_over;
 
 enum Phase {
     /// Not running; start at this time.
@@ -44,11 +46,17 @@ impl Supervisor {
         }
     }
 
-    /// Start due processes and restart exited ones as the policy says. Children get `WAYLAND_DISPLAY=socket`.
-    pub fn poll(&mut self, now: Instant, socket: &str) {
+    /// Start due processes and restart exited ones as the policy says. Children get `WAYLAND_DISPLAY=socket` for the
+    /// programs they start, and their own connection from `connect` as `WAYLAND_SOCKET`.
+    pub fn poll(
+        &mut self,
+        now: Instant,
+        socket: &str,
+        connect: &mut dyn FnMut() -> std::io::Result<UnixStream>,
+    ) {
         for p in &mut self.procs {
             p.phase = match std::mem::replace(&mut p.phase, Phase::Stopped) {
-                Phase::Waiting(at) if at <= now => start(&p.spec, socket, now),
+                Phase::Waiting(at) if at <= now => start(&p.spec, socket, connect, now),
                 Phase::Running { mut child, started } => match child
                     .try_wait()
                     .expect("waiting on a child the supervisor started")
@@ -57,7 +65,7 @@ impl Supervisor {
                     Some(status) => {
                         tracing::info!(name = p.spec.name, %status, "shell process exited");
                         match decide(status, started, now) {
-                            Decision::RestartNow => start(&p.spec, socket, now),
+                            Decision::RestartNow => start(&p.spec, socket, connect, now),
                             Decision::RestartAt(at) => Phase::Waiting(at),
                             Decision::Stop => Phase::Stopped,
                         }
@@ -66,6 +74,17 @@ impl Supervisor {
                 other => other,
             };
         }
+    }
+
+    /// The pids of the running processes.
+    pub fn pids(&self) -> Vec<u32> {
+        self.procs
+            .iter()
+            .filter_map(|p| match &p.phase {
+                Phase::Running { child, .. } => Some(child.id()),
+                Phase::Waiting(_) | Phase::Stopped => None,
+            })
+            .collect()
     }
 
     /// The pid of the running process named `name`; `None` while it is not running.
@@ -81,17 +100,30 @@ impl Supervisor {
 }
 
 /// Spawn the process; a failed spawn counts as an exit with failure, so it is retried after the throttle.
-fn start(spec: &ShellProcess, socket: &str, now: Instant) -> Phase {
+fn start(
+    spec: &ShellProcess,
+    socket: &str,
+    connect: &mut dyn FnMut() -> std::io::Result<UnixStream>,
+    now: Instant,
+) -> Phase {
     let (program, args) = spec
         .command
         .split_first()
         .expect("shell process commands are validated non-empty at load");
-    match Command::new(program)
+    let stream = match connect() {
+        Ok(stream) => stream,
+        Err(e) => {
+            tracing::warn!(name = spec.name, error = %e, "creating the shell process's connection failed");
+            return Phase::Waiting(now + RESTART_THROTTLE);
+        }
+    };
+    let mut command = Command::new(program);
+    command
         .args(args)
         .env("WAYLAND_DISPLAY", socket)
-        .env("XDG_CURRENT_DESKTOP", crate::state::CURRENT_DESKTOP)
-        .spawn()
-    {
+        .env("XDG_CURRENT_DESKTOP", crate::state::CURRENT_DESKTOP);
+    hand_over(&mut command, &stream);
+    match command.spawn() {
         Ok(child) => {
             tracing::info!(name = spec.name, pid = child.id(), "shell process started");
             Phase::Running {
@@ -132,11 +164,17 @@ mod tests {
         }
     }
 
+    /// A connection nobody listens on: these tests run plain scripts.
+    fn connect() -> std::io::Result<UnixStream> {
+        UnixStream::pair().map(|(_, client)| client)
+    }
+
     /// Poll every 20 ms until `done` holds or ten seconds pass.
     fn poll_until(s: &mut Supervisor, mut done: impl FnMut(&Supervisor) -> bool) {
+        let mut connect = connect;
         let end = Instant::now() + Duration::from_secs(10);
         while Instant::now() < end {
-            s.poll(Instant::now(), "wayland-test");
+            s.poll(Instant::now(), "wayland-test", &mut connect);
             if done(s) {
                 return;
             }
@@ -177,11 +215,12 @@ mod tests {
             &[spec(&format!("echo start >> {}", log.display()))],
             Instant::now(),
         );
+        let mut connect = connect;
         poll_until(&mut s, |s| matches!(s.procs[0].phase, Phase::Stopped));
         // well past the throttle: a restart would have happened by now
         let end = Instant::now() + RESTART_THROTTLE * 2;
         while Instant::now() < end {
-            s.poll(Instant::now(), "wayland-test");
+            s.poll(Instant::now(), "wayland-test", &mut connect);
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(std::fs::read_to_string(&log).unwrap(), "start\n");

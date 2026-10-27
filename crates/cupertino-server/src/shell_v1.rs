@@ -164,10 +164,18 @@ impl GlobalDispatch<CupertinoShellV1, ()> for Cupertino {
     }
 }
 
+/// Whether `client` is a shell process the server supervises: the dock and the window manager are theirs alone, since
+/// the dock can end any application (`force_quit_app`) and the window manager arranges every window.
+fn shell_process(client: &Client) -> bool {
+    client
+        .get_data::<crate::state::ClientState>()
+        .is_some_and(|c| c.shell_process)
+}
+
 impl Dispatch<CupertinoShellV1, ()> for Cupertino {
     fn request(
         state: &mut Self,
-        _: &Client,
+        client: &Client,
         shell: &CupertinoShellV1,
         request: cupertino_shell_v1::Request,
         _: &(),
@@ -204,12 +212,12 @@ impl Dispatch<CupertinoShellV1, ()> for Cupertino {
                 id,
                 surface,
                 output,
-            } => state.create_dock(shell, id, surface, &output, init),
+            } => state.create_dock(shell, shell_process(client), id, surface, &output, init),
             cupertino_shell_v1::Request::GetSession { id } => {
                 state.create_session_observer(id, init)
             }
             cupertino_shell_v1::Request::GetWindowManager { id, output } => {
-                state.create_window_manager(shell, id, &output, init)
+                state.create_window_manager(shell, shell_process(client), id, &output, init)
             }
             // `Destroy` needs nothing: objects created through the global stay valid
             _ => {}

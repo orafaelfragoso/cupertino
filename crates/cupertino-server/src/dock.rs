@@ -116,6 +116,23 @@ impl Docks {
         }
     }
 
+    /// Tell every dock that `app_id` stopped answering its pings (`unresponsive` true) or answers again.
+    pub fn unresponsive(&self, app_id: &str, unresponsive: bool) {
+        for dock in self.docks.iter().filter(|d| d.resource.version() >= 2) {
+            dock.resource
+                .unresponsive(app_id.to_string(), u32::from(unresponsive));
+            dock.resource.done();
+        }
+    }
+
+    /// Tell every dock the Force Quit shortcut was pressed: it opens or closes its dialog.
+    pub fn force_quit_dialog(&self) {
+        for dock in self.docks.iter().filter(|d| d.resource.version() >= 2) {
+            dock.resource.force_quit_dialog();
+            dock.resource.done();
+        }
+    }
+
     /// The output the open switch's panel is drawn on.
     pub fn switcher_output(&self) -> Option<OutputId> {
         self.switcher.as_ref().map(|s| s.output)
@@ -243,11 +260,20 @@ impl Cupertino {
     pub fn create_dock(
         &mut self,
         shell: &CupertinoShellV1,
+        permitted: bool,
         id: New<CupertinoDockV1>,
         surface: WlSurface,
         output: &WlOutput,
         init: &mut DataInit<'_, Self>,
     ) {
+        if !permitted {
+            init.init(id, DockData { output: None });
+            shell.post_error(
+                ShellError::Permission,
+                "get_dock is for the shell processes the server started",
+            );
+            return;
+        }
         let target = Output::from_resource(output)
             .and_then(|o| self.output_by_wl(&o).map(|e| (e.id, e.output.clone())));
         let rejection = match &target {
@@ -283,6 +309,21 @@ impl Cupertino {
         });
         self.refresh_usable_area(out);
         self.refresh_docks();
+        // a dock that binds while an application does not answer learns it at once
+        if let Some(dock) = self
+            .docks
+            .docks
+            .last()
+            .filter(|d| d.resource.version() >= 2)
+        {
+            let unresponsive = self.unresponsive_apps();
+            for app_id in &unresponsive {
+                dock.resource.unresponsive(app_id.clone(), 1);
+            }
+            if !unresponsive.is_empty() {
+                dock.resource.done();
+            }
+        }
         // a dock that restarts mid-switch on the panel's output draws the panel from where the switch stands
         if let Some(state) = self.docks.switcher.clone().filter(|s| s.output == out) {
             self.send_switcher_to_panel_dock(&state);
@@ -584,6 +625,7 @@ impl Dispatch<CupertinoDockV1, DockData> for Cupertino {
         let Some(output) = data.output else { return };
         match request {
             cupertino_dock_v1::Request::ActivateApp { app_id } => state.dock_activate_app(&app_id),
+            cupertino_dock_v1::Request::ForceQuitApp { app_id } => state.force_quit_app(&app_id),
             cupertino_dock_v1::Request::RestoreWindow {
                 id,
                 x,

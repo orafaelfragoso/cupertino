@@ -39,6 +39,7 @@ pub enum Action {
     AppOverview,
     ShowDesktop,
     AppGrid,
+    ForceQuit,
     // workspaces (1-based indices)
     WorkspacePrevious,
     WorkspaceNext,
@@ -131,6 +132,7 @@ impl Action {
             Action::AppOverview => "app-overview".into(),
             Action::ShowDesktop => "show-desktop".into(),
             Action::AppGrid => "app-grid".into(),
+            Action::ForceQuit => "force-quit".into(),
             Action::WorkspacePrevious => "workspace-previous".into(),
             Action::WorkspaceNext => "workspace-next".into(),
             Action::Workspace(n) => format!("workspace:{n}"),
@@ -234,6 +236,7 @@ impl FromStr for Action {
             "app-overview" => Action::AppOverview,
             "show-desktop" => Action::ShowDesktop,
             "app-grid" => Action::AppGrid,
+            "force-quit" => Action::ForceQuit,
             "workspace-previous" => Action::WorkspacePrevious,
             "workspace-next" => Action::WorkspaceNext,
             "move-window-to-workspace-previous" => Action::MoveWindowToWorkspacePrevious,
@@ -472,6 +475,7 @@ Ctrl+Up = overview
 Ctrl+Down = app-overview
 F11 = show-desktop
 F4 = app-grid
+Super+Alt+Escape = force-quit
 Ctrl+Left = workspace-previous
 Ctrl+Right = workspace-next
 Super+Shift+Left = move-window-to-workspace-previous
@@ -659,6 +663,7 @@ mod tests {
             Action::CloseWindow,
             Action::Overview,
             Action::ShowDesktop,
+            Action::ForceQuit,
             Action::Workspace(3),
             Action::MoveWindowToWorkspace(2),
             Action::Launcher,

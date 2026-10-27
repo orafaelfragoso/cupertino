@@ -39,6 +39,7 @@
     <enum name="error">
       <entry name="role" value="0" summary="the surface is not a layer surface or already has a shell role"/>
       <entry name="window" value="1" summary="the surface is not an application window, or the window is already mapped"/>
+      <entry name="permission" value="2" summary="only the shell processes the server started may ask for this object"/>
     </enum>
 
     <enum name="titlebar_style">
@@ -446,7 +447,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_dock_v1" version="1">
+  <interface name="cupertino_dock_v1" version="2">
     <description summary="the dock of one output">
       Events describe the windows of the session and the application switcher. They come in
       groups ended by a done event; the client applies a group at once. The first group, sent
@@ -651,9 +652,40 @@
       <arg name="app_id" type="string"/>
     </event>
 
+    <event name="unresponsive" since="2">
+      <description summary="an application stopped or resumed answering">
+        The server pings every client that owns a window; a client that does not answer for two
+        seconds is unresponsive until it does. State 1 says the application stopped answering,
+        0 that it answers again. The dock marks the application "Not Responding" in its menu and
+        the switcher, and in the Force Quit dialog. Sent to every dock when it changes; right
+        after the object is created, one event per application that is unresponsive then.
+      </description>
+      <arg name="app_id" type="string"/>
+      <arg name="state" type="uint"/>
+    </event>
+
+    <event name="force_quit_dialog" since="2">
+      <description summary="the Force Quit shortcut was pressed">
+        The dock opens its Force Quit Applications dialog, listing the running applications with
+        the unresponsive ones marked, or closes it when it is open. Quitting is force_quit_app,
+        sent only after the person confirmed.
+      </description>
+    </event>
+
     <event name="done">
       <description summary="end of a group of events"/>
     </event>
+
+    <request name="force_quit_app" since="2">
+      <description summary="quit an application at the person's request">
+        Ends the application after the person confirmed in the Force Quit dialog. An application
+        that does not answer its pings is killed at once (SIGKILL). Any other gets a close request
+        for each of its windows and SIGTERM, and SIGKILL three seconds later if a process is still
+        there. Unknown application ids are ignored: the application may have just quit. There is
+        no reply; the application's windows closing is the result.
+      </description>
+      <arg name="app_id" type="string"/>
+    </request>
 
     <request name="activate_app">
       <description summary="bring an application forward">

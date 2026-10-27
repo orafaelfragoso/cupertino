@@ -19,6 +19,7 @@ pub mod config;
 pub mod desktop;
 pub mod dock;
 pub mod ease;
+pub mod force_quit;
 pub mod magnify;
 pub mod menu;
 pub mod overview_ui;

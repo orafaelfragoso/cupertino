@@ -27,9 +27,12 @@ use cupertino_dock::conf::{
 };
 use cupertino_dock::config::Orientation;
 use cupertino_dock::desktop::DesktopIndex;
+use cupertino_dock::force_quit::{self, Button as FqButton, Dialog, Entry as FqEntry, Extend};
 use cupertino_dock::menu::{self, MenuCommand, MenuItem, MenuLayout, TileFacts};
 use cupertino_dock::overview_ui::{self, Mode, OverviewUi, UiAction, WindowEntry, Workspace};
-use cupertino_dock::render::{self, GridView, Icons, LabelText, OverviewView, Panel};
+use cupertino_dock::render::{
+    self, ForceQuitView, GridView, Icons, LabelText, OverviewView, Panel,
+};
 use cupertino_dock::session::{Activation, Session};
 use cupertino_dock::switcher::{self, HoverGate, Switcher, SwitcherLayout};
 use cupertino_dock::tile_drag::{Poof, TilePress};
@@ -49,6 +52,8 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 /// Role of the surface for the server (`wlr-layer-shell` namespace).
 /// Namespace of the surface that draws the tile held by the pointer.
+/// The layer-shell namespace of the Force Quit dialog.
+const FORCE_QUIT_NAMESPACE: &str = "cupertino-force-quit";
 const DRAG_NAMESPACE: &str = "cupertino-dock-drag";
 const NAMESPACE: &str = "cupertino-dock";
 
@@ -139,6 +144,15 @@ struct OverviewSurface {
 }
 
 /// An open context menu: a popup of the bar surface with a grab.
+/// The Force Quit Applications dialog on screen.
+struct ForceQuit {
+    dialog: Dialog,
+    surface: SurfaceId,
+    layout: force_quit::Layout,
+    hover_row: Option<usize>,
+    hover_button: Option<FqButton>,
+}
+
 struct Menu {
     items: Vec<MenuItem>,
     layout: MenuLayout,
@@ -159,6 +173,9 @@ struct App {
     grid: Option<Grid>,
     overview: Option<OverviewSurface>,
     menu: Option<Menu>,
+    /// The applications that stopped answering (their ids), as the server last said.
+    unresponsive: std::collections::HashSet<String>,
+    force_quit: Option<ForceQuit>,
     /// What the hot corners and gestures do.
     actions: ActionMap,
     /// The switch whose overlay surface the server closed mid-switch; the next step of that switch
@@ -328,6 +345,8 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
         labels,
         overlay: None,
         grid: None,
+        unresponsive: fixture_unresponsive(),
+        force_quit: None,
         overview: None,
         menu: None,
         actions,
@@ -362,6 +381,19 @@ pub fn run(options: &Options) -> Result<std::convert::Infallible> {
 
 /// The grid key a toolkit key stands for; a character without a command modifier
 /// types into the search field.
+/// The dialog's key for an evdev `code`.
+fn force_quit_key(code: u32) -> Option<force_quit::Key> {
+    Some(match code {
+        key::ESCAPE => force_quit::Key::Escape,
+        key::ENTER | key::KEYPAD_ENTER => force_quit::Key::Return,
+        key::UP => force_quit::Key::Up,
+        key::DOWN => force_quit::Key::Down,
+        key::HOME => force_quit::Key::Home,
+        key::END => force_quit::Key::End,
+        _ => return None,
+    })
+}
+
 fn grid_key(code: u32, mods: Modifiers, character: Option<char>) -> Option<GridKey> {
     let named = match code {
         key::ESCAPE => Some(GridKey::Escape),
@@ -478,6 +510,7 @@ impl App {
             Event::Draw(surface) if self.is_drag_surface(surface) => self.draw_dragged()?,
             Event::Draw(surface) if self.is_overlay(surface) => self.draw_overlay()?,
             Event::Draw(surface) if self.is_grid(surface) => self.draw_grid()?,
+            Event::Draw(surface) if self.is_force_quit(surface) => self.draw_force_quit()?,
             Event::Draw(surface) if self.is_overview(surface) => self.draw_overview()?,
             Event::Draw(surface) if self.is_menu(surface) => self.draw_menu()?,
             Event::Draw(_) => self.draw()?,
@@ -485,6 +518,7 @@ impl App {
             Event::Closed(surface) if self.is_drag_surface(surface) => self.drag_surface = None,
             Event::Closed(surface) if self.is_overlay(surface) => self.lose_overlay()?,
             Event::Closed(surface) if self.is_grid(surface) => self.drop_grid()?,
+            Event::Closed(surface) if self.is_force_quit(surface) => self.close_force_quit()?,
             Event::Closed(surface) if self.is_overview(surface) => self.drop_overview()?,
             Event::Closed(surface) if self.is_menu(surface) => self.drop_menu()?,
             Event::Closed(_) => return Err("the server closed the dock surface".into()),
@@ -495,6 +529,9 @@ impl App {
             }
             Event::Pointer { surface, event } if self.is_grid(surface) => {
                 self.grid_pointer(event)?
+            }
+            Event::Pointer { surface, event } if self.is_force_quit(surface) => {
+                self.force_quit_pointer(event)?
             }
             Event::Pointer { surface, event } if self.is_overview(surface) => {
                 self.overview_pointer(event)?
@@ -563,6 +600,23 @@ impl App {
                     self.overview_action(action)?;
                 }
             }
+            Event::Key {
+                surface,
+                key,
+                pressed: true,
+                mods,
+                ..
+            } if self.is_force_quit(surface) => {
+                if let Some(key) = force_quit_key(key) {
+                    let outcome = self
+                        .force_quit
+                        .as_mut()
+                        .expect("is_force_quit saw it")
+                        .dialog
+                        .key(key, mods.shift);
+                    self.force_quit_outcome(outcome)?;
+                }
+            }
             // the keyboard moved elsewhere: the grid loses its reason to stay open
             Event::KeyboardLeave(surface) if self.is_grid(surface) => self.close_grid()?,
             // the server dismissed the menu's grab: the menu is over
@@ -570,6 +624,7 @@ impl App {
             // the lock screen covers everything: the grid and a menu go at once, without animation;
             // the overview's chrome waits for the server's `overview_closed`
             Event::SessionLock { locked: true } => {
+                self.close_force_quit()?;
                 self.drop_grid()?;
                 self.drop_menu()?;
             }
@@ -619,6 +674,18 @@ impl App {
                 DockChange::Gesture(gesture) => self.run_trigger(trigger_of_gesture(gesture))?,
                 // a refused activation: the tile hops once (informational attention)
                 DockChange::Attention(app_id) => self.session.attention(&app_id, now),
+                DockChange::Unresponsive {
+                    app_id,
+                    unresponsive,
+                } => {
+                    if unresponsive {
+                        self.unresponsive.insert(app_id);
+                    } else {
+                        self.unresponsive.remove(&app_id);
+                    }
+                    self.refresh_force_quit()?;
+                }
+                DockChange::ForceQuitDialog => self.toggle_force_quit()?,
             }
         }
         self.session.list_taken();
@@ -1058,6 +1125,218 @@ impl App {
             .chain(hold)
             .reduce(f64::min)
             .map(Duration::from_secs_f64)
+    }
+
+    fn is_force_quit(&self, surface: SurfaceId) -> bool {
+        self.force_quit
+            .as_ref()
+            .is_some_and(|f| f.surface == surface)
+    }
+
+    /// The running applications for the dialog: the dock's running application tiles, with the unresponsive ones marked.
+    fn force_quit_entries(&self) -> Vec<FqEntry> {
+        self.session
+            .dock
+            .tiles()
+            .into_iter()
+            .filter(|t| t.kind == TileKind::App && t.running)
+            .map(|t| FqEntry {
+                app_id: t.key.clone(),
+                name: self
+                    .session
+                    .desktop()
+                    .find(&t.key)
+                    .map(|e| e.name.clone())
+                    .unwrap_or_else(|| {
+                        if t.title.is_empty() {
+                            t.key.clone()
+                        } else {
+                            t.title.clone()
+                        }
+                    }),
+                unresponsive: self.unresponsive.contains(&t.key),
+                built_in: t.built_in,
+            })
+            .collect()
+    }
+
+    /// The Force Quit shortcut: open the dialog, or close it when it is open.
+    fn toggle_force_quit(&mut self) -> Result<()> {
+        if self.force_quit.is_some() {
+            return self.close_force_quit();
+        }
+        self.open_force_quit(None)
+    }
+
+    /// Open the dialog, on the second step for `ask_about` (the dock menu's Force Quit) when that is given.
+    fn open_force_quit(&mut self, ask_about: Option<&str>) -> Result<()> {
+        if self.force_quit.is_some() {
+            self.close_force_quit()?;
+        }
+        let entries = self.force_quit_entries();
+        let dialog = match ask_about {
+            Some(app_id) => Dialog::asking_about(entries, app_id),
+            None => Dialog::new(entries),
+        };
+        let layout = force_quit::Layout::for_dialog(&dialog);
+        let (width, height) = layout.size();
+        let surface = self.client.layer_surface(&LayerSurfaceConfig {
+            namespace: FORCE_QUIT_NAMESPACE.to_string(),
+            output: Some(self.output),
+            layer: Layer::Overlay,
+            // no anchor: the server centres the surface on the output
+            anchor: Anchor::empty(),
+            size: (width as u32, height as u32),
+            margin: Margin::default(),
+            exclusive_zone: -1,
+            keyboard: KeyboardInteractivity::Exclusive,
+        })?;
+        self.force_quit = Some(ForceQuit {
+            dialog,
+            surface,
+            layout,
+            hover_row: None,
+            hover_button: None,
+        });
+        Ok(())
+    }
+
+    fn close_force_quit(&mut self) -> Result<()> {
+        if let Some(open) = self.force_quit.take() {
+            self.client.destroy_surface(open.surface)?;
+        }
+        Ok(())
+    }
+
+    /// The applications or their answers changed: the open dialog follows.
+    fn refresh_force_quit(&mut self) -> Result<()> {
+        let entries = self.force_quit_entries();
+        let Some(open) = self.force_quit.as_mut() else {
+            return Ok(());
+        };
+        open.dialog.set_entries(entries);
+        self.relayout_force_quit()
+    }
+
+    /// Lay the open dialog out again for its step and rows, and resize its surface when the size changed.
+    fn relayout_force_quit(&mut self) -> Result<()> {
+        let Some(open) = self.force_quit.as_mut() else {
+            return Ok(());
+        };
+        let layout = force_quit::Layout::for_dialog(&open.dialog);
+        let resized = layout.size() != open.layout.size();
+        open.layout = layout;
+        let surface = open.surface;
+        if resized {
+            let (width, height) = open.layout.size();
+            self.client.set_layer_placement(
+                surface,
+                Anchor::empty(),
+                (width as u32, height as u32),
+            )?;
+        }
+        self.client.request_redraw(surface)?;
+        Ok(())
+    }
+
+    fn draw_force_quit(&mut self) -> Result<()> {
+        let Some(open) = self.force_quit.as_ref() else {
+            return Ok(());
+        };
+        let view = ForceQuitView {
+            dialog: &open.dialog,
+            layout: &open.layout,
+            desktop: self.session.desktop(),
+            dark: self.dark,
+            hover_row: open.hover_row,
+            hover_button: open.hover_button,
+        };
+        let (icons, labels) = (&mut self.icons, &mut self.labels);
+        self.client.draw(open.surface, |pixmap, scale| {
+            render::paint_force_quit(pixmap, scale.factor(), &view, icons, labels)
+        })?;
+        Ok(())
+    }
+
+    /// What a key or a click did to the dialog.
+    fn force_quit_outcome(&mut self, outcome: force_quit::Outcome) -> Result<()> {
+        match outcome {
+            force_quit::Outcome::Nothing => Ok(()),
+            // the second step has another size and other parts
+            force_quit::Outcome::Redraw => self.relayout_force_quit(),
+            force_quit::Outcome::Close => self.close_force_quit(),
+            force_quit::Outcome::Force(app_ids) => {
+                for app_id in &app_ids {
+                    self.role.force_quit_app(app_id);
+                }
+                self.close_force_quit()
+            }
+        }
+    }
+
+    fn force_quit_pointer(&mut self, event: PointerEvent) -> Result<()> {
+        let mods = self.client.modifiers();
+        let Some(open) = self.force_quit.as_mut() else {
+            return Ok(());
+        };
+        let at = |position: cupertino_geometry::Point| Point::new(position.x, position.y);
+        match event {
+            PointerEvent::Motion(position) | PointerEvent::Enter(position) => {
+                let p = at(position);
+                let hover = (open.layout.row_at(p), open.layout.button_at(p));
+                if hover != (open.hover_row, open.hover_button) {
+                    (open.hover_row, open.hover_button) = hover;
+                    let surface = open.surface;
+                    self.client.request_redraw(surface)?;
+                }
+                Ok(())
+            }
+            PointerEvent::Leave => {
+                if open.hover_row.take().is_some() | open.hover_button.take().is_some() {
+                    let surface = open.surface;
+                    self.client.request_redraw(surface)?;
+                }
+                Ok(())
+            }
+            PointerEvent::Button {
+                button: Button::Left,
+                pressed: true,
+                position,
+            } => {
+                let p = at(position);
+                let confirming = open.dialog.confirming().is_some();
+                let outcome = match (open.layout.button_at(p), confirming) {
+                    (Some(FqButton::Cancel), true) => open.dialog.cancel_pressed(),
+                    (Some(FqButton::ForceQuit), true) => open.dialog.confirm_pressed(),
+                    (Some(FqButton::ForceQuit), false) => open.dialog.force_quit_pressed(),
+                    _ => match open.layout.row_at(p) {
+                        Some(i) => open.dialog.select(
+                            i,
+                            if mods.shift {
+                                Extend::Range
+                            } else if mods.ctrl || mods.logo {
+                                Extend::Toggle
+                            } else {
+                                Extend::Replace
+                            },
+                        ),
+                        None => force_quit::Outcome::Nothing,
+                    },
+                };
+                self.force_quit_outcome(outcome)
+            }
+            PointerEvent::Scroll { dy, .. } => {
+                let rows = (dy / force_quit::ROW_HEIGHT).round() as isize;
+                let rows = if rows == 0 {
+                    dy.signum() as isize
+                } else {
+                    rows
+                };
+                let outcome = open.dialog.scroll(rows);
+                self.force_quit_outcome(outcome)
+            }
+            PointerEvent::Button { .. } => Ok(()),
+        }
     }
 
     fn is_grid(&self, surface: SurfaceId) -> bool {
@@ -1676,12 +1955,14 @@ impl App {
                     .desktop()
                     .find(&tile.key)
                     .map(|e| e.path.as_path());
+                let running_app_id = self.session.running_app_id(hit.id);
                 menu::tile_menu(&TileFacts {
                     kind: tile.kind,
                     key: &tile.key,
                     pinned: tile.pinned,
                     built_in: tile.built_in,
-                    running_app_id: self.session.running_app_id(hit.id),
+                    running_app_id,
+                    unresponsive: running_app_id.is_some_and(|app| self.unresponsive.contains(app)),
                     entry_path,
                 })
             }
@@ -1798,6 +2079,7 @@ impl App {
             }
             MenuCommand::Hide(app) => self.role.app_command(&app, AppCommand::Hide),
             MenuCommand::Quit(app) => self.role.app_command(&app, AppCommand::Quit),
+            MenuCommand::ForceQuit(app) => self.open_force_quit(Some(&app))?,
             MenuCommand::Open(key) => self.begin_launch(key)?,
             MenuCommand::OpenTrash => self.open_in_file_manager(TRASH_URI)?,
             MenuCommand::ToggleAutoHide => {
@@ -1839,4 +2121,17 @@ impl App {
         })?;
         Ok(())
     }
+}
+
+/// The application ids that the screenshot fixtures declare unresponsive.
+#[cfg(cupertino_capture_fixtures)]
+fn fixture_unresponsive() -> std::collections::HashSet<String> {
+    std::env::var("CUPERTINO_DOCK_FIXTURE_UNRESPONSIVE")
+        .map(|ids| ids.split(',').map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
+#[cfg(not(cupertino_capture_fixtures))]
+fn fixture_unresponsive() -> std::collections::HashSet<String> {
+    std::collections::HashSet::new()
 }

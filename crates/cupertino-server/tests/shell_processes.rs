@@ -920,6 +920,46 @@ fn the_menu_bar_process_opens_a_menu_popup_and_a_click_outside_closes_it() {
     });
 }
 
+/// Toolkits hide their in-window menu bar while `com.canonical.AppMenu.Registrar` has an owner, so the menu bar process
+/// owns it only while it shows a bar: the name goes with the output of the last bar.
+#[test]
+fn the_menu_bar_process_owns_the_app_menu_registrar_only_while_it_has_a_bar() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let Some(mut server) = Server::start(vec![real_process("cupertino-menubar", &bus)], true)
+    else {
+        return;
+    };
+    let conn = zbus::block_on(
+        zbus::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .build(),
+    )
+    .unwrap();
+    let owned = || -> bool {
+        zbus::block_on(conn.call_method(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            Some("org.freedesktop.DBus"),
+            "NameHasOwner",
+            &("com.canonical.AppMenu.Registrar",),
+        ))
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap()
+    };
+    server.wait_until("the bar to be drawn", |s| {
+        committed_buffer(s, "cupertino-menubar").is_some()
+    });
+    server.wait_until("the registrar to be owned", |_| owned());
+    let output = server.state.outputs[0].id;
+    server.state.remove_output(output);
+    server.wait_until("the registrar to be released", |_| !owned());
+}
+
 /// The switcher's panel is the dock process's: after the show delay it commits a panel-sized
 /// buffer on its overlay surface centred on the output (whatever the dock bar and the menu bar reserve), and a
 /// commit removes the surface after the fade. The application has no desktop entry and no icon of its own, so its tile

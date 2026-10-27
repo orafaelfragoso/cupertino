@@ -9,6 +9,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::keymap::{Command, KeyInput, Keymap};
 
 /// How long the caret shows and hides while it blinks; it shows for a whole period after every edit, move or click.
+/// Both are approximate: design values, not measured.
 pub const CARET_BLINK_ON: Duration = Duration::from_millis(500);
 pub const CARET_BLINK_OFF: Duration = Duration::from_millis(500);
 /// Presses closer together than this at the same place count as a double or triple click.

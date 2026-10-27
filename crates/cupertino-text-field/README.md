@@ -27,6 +27,6 @@ manager's rename editor). Pure logic: no drawing and no Wayland. The app feeds k
   by characters or, after a double press, by words.
 - **Undo.** Consecutive typing undoes as one step, consecutive deletion as another; a move, click, paste or cut
   starts a new step. Undo brings back the selection an edit replaced.
-- **Caret.** It shows for 0.5 s after every edit, move or press, then blinks 0.5 s off and 0.5 s on; it hides while
-  text is selected.
+- **Caret.** It shows for 0.5 s after every edit, move or press, then blinks 0.5 s off and 0.5 s on (approximated: a
+  design value, not measured); it hides while text is selected.
 - **Single line.** Pasted line breaks become spaces.

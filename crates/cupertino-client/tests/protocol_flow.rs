@@ -20,7 +20,10 @@ use cupertino_protocols::server::scroll::cupertino_pointer_scroll_v1::{
 };
 use cupertino_protocols::server::scroll::cupertino_scroll_v1::{self, CupertinoScrollV1};
 use memmap2::Mmap;
+use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use std::collections::VecDeque;
+use std::io::{Read, Write};
+use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -65,6 +68,10 @@ use wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use wayland_server::protocol::wl_buffer::{self, WlBuffer};
 use wayland_server::protocol::wl_callback::WlCallback;
 use wayland_server::protocol::wl_compositor::{self, WlCompositor};
+use wayland_server::protocol::wl_data_device::{self, WlDataDevice};
+use wayland_server::protocol::wl_data_device_manager::{self, WlDataDeviceManager};
+use wayland_server::protocol::wl_data_offer::{self, WlDataOffer};
+use wayland_server::protocol::wl_data_source::{self, WlDataSource};
 use wayland_server::protocol::wl_output::{self, WlOutput};
 use wayland_server::protocol::wl_pointer::{self, WlPointer};
 use wayland_server::protocol::wl_region::{self, WlRegion};
@@ -117,11 +124,20 @@ enum Control {
     ScrollToplevel,
     /// Ask the toplevel to close.
     CloseToplevel,
+    /// Another client's text becomes the selection: offer it to the client's data device.
+    OfferSelection(String),
 }
 
 /// A request the server saw that the commit record does not cover.
 #[derive(Debug, PartialEq)]
 enum Seen {
+    /// The client set the selection with this serial, offering these types.
+    Selection {
+        serial: u32,
+        types: Vec<String>,
+    },
+    /// What the client wrote when the server asked its selection for the first type (a paste elsewhere).
+    Served(String),
     /// A popup was created: the geometry of its positioner, and whether it hangs off the layer
     /// surface or off another popup.
     Popup {
@@ -238,6 +254,9 @@ struct Mock {
     shown: Option<WlBuffer>,
     idle: Option<ExtIdleNotificationV1>,
     toplevel: Option<ToplevelState>,
+    data_device: Option<WlDataDevice>,
+    /// The read end of a paste from the client's selection, and what arrived so far.
+    pasting: Option<(std::io::PipeReader, Vec<u8>)>,
 }
 
 struct Data;
@@ -1316,6 +1335,99 @@ impl Dispatch<ExtIdleNotificationV1, ()> for Mock {
     }
 }
 
+impl GlobalDispatch<WlDataDeviceManager, ()> for Mock {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &ServerClient,
+        r: New<WlDataDeviceManager>,
+        _: &(),
+        init: &mut DataInit<'_, Self>,
+    ) {
+        init.init(r, ());
+    }
+}
+impl Dispatch<WlDataDeviceManager, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &WlDataDeviceManager,
+        request: wl_data_device_manager::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        match request {
+            wl_data_device_manager::Request::CreateDataSource { id } => {
+                init.init(id, Mutex::new(Vec::new()));
+            }
+            wl_data_device_manager::Request::GetDataDevice { id, .. } => {
+                state.data_device = Some(init.init(id, ()));
+            }
+            _ => {}
+        }
+    }
+}
+impl Dispatch<WlDataSource, Mutex<Vec<String>>> for Mock {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &WlDataSource,
+        request: wl_data_source::Request,
+        types: &Mutex<Vec<String>>,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        if let wl_data_source::Request::Offer { mime_type } = request {
+            types.lock().unwrap().push(mime_type);
+        }
+    }
+}
+impl Dispatch<WlDataDevice, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &WlDataDevice,
+        request: wl_data_device::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        if let wl_data_device::Request::SetSelection {
+            source: Some(source),
+            serial,
+        } = request
+        {
+            let types = source
+                .data::<Mutex<Vec<String>>>()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .clone();
+            // paste it at once, as another client would
+            let (reader, writer) = std::io::pipe().unwrap();
+            source.send(types[0].clone(), writer.as_fd());
+            state.pasting = Some((reader, Vec::new()));
+            state.seen.send(Seen::Selection { serial, types }).unwrap();
+        }
+    }
+}
+impl Dispatch<WlDataOffer, String> for Mock {
+    fn request(
+        _: &mut Self,
+        _: &ServerClient,
+        _: &WlDataOffer,
+        request: wl_data_offer::Request,
+        text: &String,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        if let wl_data_offer::Request::Receive { fd, .. } = request {
+            std::fs::File::from(fd).write_all(text.as_bytes()).unwrap();
+        }
+    }
+}
+
 /// Run the server on a thread until the test drops the control channel.
 fn spawn_server(stream: UnixStream) -> (Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
     let (control_tx, control_rx) = channel::<Control>();
@@ -1337,6 +1449,7 @@ fn spawn_server(stream: UnixStream) -> (Sender<Control>, Receiver<Committed>, Re
         dh.create_global::<Mock, ExtIdleNotifierV1, _>(2, ());
         dh.create_global::<Mock, ZxdgDecorationManagerV1, _>(1, ());
         dh.create_global::<Mock, CupertinoScrollV1, _>(1, ());
+        dh.create_global::<Mock, WlDataDeviceManager, _>(3, ());
         let mut mock = Mock {
             committed: committed_tx,
             seen: seen_tx,
@@ -1354,6 +1467,8 @@ fn spawn_server(stream: UnixStream) -> (Sender<Control>, Receiver<Committed>, Re
             shown: None,
             idle: None,
             toplevel: None,
+            data_device: None,
+            pasting: None,
         };
         let mut display_handle = display.handle();
         display_handle
@@ -1429,11 +1544,40 @@ fn spawn_server(stream: UnixStream) -> (Sender<Control>, Receiver<Committed>, Re
                     pointer.frame();
                 }
                 Ok(Control::CloseToplevel) => mock.toplevel.as_ref().unwrap().toplevel.close(),
+                Ok(Control::OfferSelection(text)) => {
+                    let device = mock.data_device.as_ref().unwrap();
+                    let offer = device
+                        .client()
+                        .unwrap()
+                        .create_resource::<WlDataOffer, String, Mock>(
+                            &display_handle,
+                            device.version(),
+                            text,
+                        )
+                        .unwrap();
+                    device.data_offer(&offer);
+                    offer.offer("text/plain;charset=utf-8".into());
+                    device.selection(Some(&offer));
+                }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
             }
             display.dispatch_clients(&mut mock).unwrap();
             display.flush_clients().unwrap();
+            if let Some((reader, bytes)) = mock.pasting.as_mut() {
+                let mut fds = [PollFd::new(&*reader, PollFlags::IN)];
+                if poll(&mut fds, Some(&Timespec::default())).unwrap() > 0 {
+                    let mut chunk = [0u8; 256];
+                    match reader.read(&mut chunk).unwrap() {
+                        0 => {
+                            let text = String::from_utf8(std::mem::take(bytes)).unwrap();
+                            mock.seen.send(Seen::Served(text)).unwrap();
+                            mock.pasting = None;
+                        }
+                        n => bytes.extend_from_slice(&chunk[..n]),
+                    }
+                }
+            }
             std::thread::sleep(Duration::from_millis(1));
         }
     });
@@ -2176,4 +2320,63 @@ fn toplevels_are_decorated_by_the_server_sized_scrolled_and_closed() {
         matches!(e, Event::Closed(s) if *s == window).then_some(())
     });
     client.destroy_surface(window).unwrap();
+}
+
+#[test]
+fn a_paste_reads_another_clients_text_selection() {
+    let (client_stream, server_stream) = UnixStream::pair().unwrap();
+    let (control, _committed, _seen) = spawn_server(server_stream);
+    let mut client =
+        Client::from_connection(Connection::from_socket(client_stream).unwrap()).unwrap();
+    assert_eq!(client.clipboard_text().unwrap(), None);
+    control
+        .send(Control::OfferSelection("from elsewhere".into()))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let text = loop {
+        assert!(Instant::now() < deadline, "the selection never arrived");
+        client.wait(Some(Duration::from_millis(20))).unwrap();
+        if let Some(text) = client.clipboard_text().unwrap() {
+            break text;
+        }
+    };
+    assert_eq!(text, "from elsewhere");
+}
+
+#[test]
+fn copied_text_is_offered_with_the_input_serial_and_served_to_a_paste() {
+    let (mut client, _control, _committed, seen, _surface, _stash) = connected_layer_surface();
+    client.set_clipboard_text("copied text".into()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut events = Vec::new();
+    while !events.iter().any(|e| matches!(e, Seen::Served(_))) {
+        assert!(
+            Instant::now() < deadline,
+            "the paste was never served: {events:?}"
+        );
+        client.wait(Some(Duration::from_millis(20))).unwrap();
+        events.extend(
+            seen.try_iter()
+                .filter(|e| matches!(e, Seen::Selection { .. } | Seen::Served(_))),
+        );
+    }
+    assert_eq!(
+        events,
+        vec![
+            Seen::Selection {
+                serial: 6,
+                types: vec![
+                    "text/plain;charset=utf-8".into(),
+                    "text/plain".into(),
+                    "UTF8_STRING".into()
+                ],
+            },
+            Seen::Served("copied text".into()),
+        ]
+    );
+    assert_eq!(
+        client.clipboard_text().unwrap().as_deref(),
+        Some("copied text"),
+        "a paste in the copying client reads its own text"
+    );
 }

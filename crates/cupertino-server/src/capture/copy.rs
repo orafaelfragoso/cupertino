@@ -34,6 +34,7 @@ use smithay::utils::Rectangle;
 use smithay::wayland::shm::{with_buffer_contents_mut, BufferAccessError};
 
 use super::{privileged, Placement, Source};
+use crate::authorization::{authorized, ShellRole};
 use crate::render::scene::{build_scene, capture_window, CursorPlan};
 use crate::state::Cupertino;
 
@@ -256,10 +257,40 @@ impl Cupertino {
             stopped: false,
         };
         match self.placement(&session.source) {
+            Some(_) if self.session_lock.is_active() => session.stop(),
             Some(p) => session.send_constraints(p.size),
             None => session.stop(),
         }
         self.capture.copy.sessions.push(session);
+        self.refresh_capture_indicator();
+    }
+
+    /// Stop the copy sessions that must not deliver: every one when `all` (the session was locked), else those whose
+    /// connection no longer holds the Capture role (its process exited). Frames waiting on a stopped session fail.
+    pub(crate) fn stop_captures(&mut self, all: bool) {
+        let copy = &mut self.capture.copy;
+        let mut ended = Vec::new();
+        for session in copy.sessions.iter_mut().filter(|s| !s.stopped) {
+            let holds = !all
+                && session
+                    .resource
+                    .client()
+                    .is_some_and(|c| authorized(&c, ShellRole::Capture));
+            if !holds {
+                session.stop();
+                ended.push(session.id);
+            }
+        }
+        if ended.is_empty() {
+            return;
+        }
+        for f in copy
+            .frames
+            .iter_mut()
+            .filter(|f| f.state == FrameState::Waiting && ended.contains(&f.session))
+        {
+            f.fail(FailureReason::Stopped);
+        }
         self.refresh_capture_indicator();
     }
 
@@ -569,7 +600,7 @@ impl Dispatch<ExtImageCopyCaptureSessionV1, SessionId> for Cupertino {
 impl Dispatch<ExtImageCopyCaptureFrameV1, SessionId> for Cupertino {
     fn request(
         state: &mut Self,
-        _: &Client,
+        client: &Client,
         resource: &ExtImageCopyCaptureFrameV1,
         request: frame::Request,
         _: &SessionId,
@@ -578,6 +609,9 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, SessionId> for Cupertino {
     ) {
         if matches!(request, frame::Request::Destroy) {
             return;
+        }
+        if !authorized(client, ShellRole::Capture) {
+            state.stop_captures(false);
         }
         let copy = &mut state.capture.copy;
         let f = copy.frame_mut(resource);

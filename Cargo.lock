@@ -857,6 +857,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-filepicker"
+version = "0.1.0"
+dependencies = [
+ "cupertino-typeahead",
+ "tempfile",
+]
+
+[[package]]
 name = "cupertino-files"
 version = "0.1.0"
 dependencies = [

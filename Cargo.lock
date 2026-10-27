@@ -706,6 +706,17 @@ name = "cupertino-animation"
 version = "0.1.0"
 
 [[package]]
+name = "cupertino-app-protocols"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.13.2",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-scanner",
+ "wayland-server",
+]
+
+[[package]]
 name = "cupertino-apps"
 version = "0.1.0"
 dependencies = [
@@ -1103,6 +1114,7 @@ name = "cupertino-protocols"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.2",
+ "cupertino-app-protocols",
  "wayland-backend",
  "wayland-client",
  "wayland-scanner",

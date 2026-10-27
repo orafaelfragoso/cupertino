@@ -791,9 +791,10 @@ fn a_toplevel_is_captured_at_its_frame_size_and_listed_in_the_window_feed() {
     drop((feed, list));
 }
 
-/// SEC-05: once the session is locked, a capture session gets no new buffer until the unlock.
+/// SEC-05: locking the session ends every capture session: it is told `stopped`, a frame asked for while locked fails,
+/// and the session does not resume at the unlock (a new one does).
 #[test]
-fn a_locked_session_delivers_no_new_capture_buffer_until_it_is_unlocked() {
+fn locking_the_session_stops_the_capture_sessions_for_good() {
     let Some(mut h) = Harness::new() else { return };
     let (mut app, frame) = mapped_app(&mut h);
     h.state
@@ -808,6 +809,9 @@ fn a_locked_session_delivers_no_new_capture_buffer_until_it_is_unlocked() {
     c.state.frame = Default::default();
 
     let locker = common::Client::locker(common::session_agent(&h.state));
+    h.pump_until(&mut c, "the session to be stopped by the lock", |s| {
+        s.session.stopped
+    });
     for _ in 0..200 {
         if locker.locked() {
             break;
@@ -816,25 +820,50 @@ fn a_locked_session_delivers_no_new_capture_buffer_until_it_is_unlocked() {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(locker.locked(), "the session lock was not granted");
+    assert!(
+        !h.state.capture_running(),
+        "a stopped session still shows as running"
+    );
 
-    let _second = c.request_frame(&capture);
+    let second = c.request_frame(&capture);
     h.state
         .pointer_moved_to((frame.x + 300.0, frame.y + 60.0).into(), 1, None);
     h.state.request_redraw();
-    h.idle(&mut c, 40);
+    h.pump_until(&mut c, "the frame asked for while locked", |s| {
+        s.frame.ready || s.frame.failed.is_some()
+    });
     assert!(
-        !c.state.frame.ready && c.state.frame.failed.is_none(),
+        !c.state.frame.ready,
         "a frame was delivered while the session was locked"
     );
+    assert_eq!(
+        c.state.frame.failed,
+        Some(ext_image_copy_capture_frame_v1::FailureReason::Stopped)
+    );
 
+    second.destroy();
     locker.unlock();
+    h.idle(&mut c, 40);
+    let third = c.request_frame(&capture);
     h.pump_until(&mut c, "the frame after the unlock", |s| {
+        s.frame.ready || s.frame.failed.is_some()
+    });
+    assert!(
+        !c.state.frame.ready,
+        "a session stopped by the lock delivered after the unlock"
+    );
+
+    third.destroy();
+    let renewed = c.session(&mut h, &source, true);
+    let _fourth = c.request_frame(&renewed);
+    h.pump_until(&mut c, "a new session after the unlock", |s| {
         s.frame.ready || s.frame.failed.is_some()
     });
     assert!(c.state.frame.ready, "failed: {:?}", c.state.frame.failed);
 }
 
-/// SEC-05: a console switch away and back while the session is locked does not open the screen to capture.
+/// SEC-05: a console switch away and back while the session is locked does not open the screen to capture, and a
+/// session made while locked is stopped at once.
 #[test]
 fn a_session_resumed_while_locked_still_delivers_no_capture_buffer() {
     let Some(mut h) = Harness::new() else { return };
@@ -847,6 +876,9 @@ fn a_session_resumed_while_locked_still_delivers_no_capture_buffer() {
     let capture = c.session(&mut h, &source, true);
 
     let locker = common::Client::locker(common::session_agent(&h.state));
+    h.pump_until(&mut c, "the session to be stopped by the lock", |s| {
+        s.session.stopped
+    });
     for _ in 0..200 {
         if locker.locked() {
             break;
@@ -859,9 +891,11 @@ fn a_session_resumed_while_locked_still_delivers_no_capture_buffer() {
     h.state.session_activated();
     let _frame = c.request_frame(&capture);
     h.state.request_redraw();
-    h.idle(&mut c, 40);
+    h.pump_until(&mut c, "the frame asked for after the resume", |s| {
+        s.frame.ready || s.frame.failed.is_some()
+    });
     assert!(
-        !c.state.frame.ready && c.state.frame.failed.is_none(),
+        !c.state.frame.ready,
         "a frame was delivered after the session resumed while locked"
     );
     assert!(
@@ -869,9 +903,72 @@ fn a_session_resumed_while_locked_still_delivers_no_capture_buffer() {
         "the resume ended the lock"
     );
 
+    c.state.session = SessionSeen::default();
+    let qh = c.qh();
+    let manager: ext_image_copy_capture_manager_v1::ExtImageCopyCaptureManagerV1 =
+        c.globals.bind(&qh, 1..=1, ()).unwrap();
+    let _late = manager.create_session(
+        &source,
+        ext_image_copy_capture_manager_v1::Options::empty(),
+        &qh,
+        (),
+    );
+    h.pump_until(&mut c, "a session made while locked to be stopped", |s| {
+        s.session.stopped || s.session.done
+    });
+    assert!(
+        c.state.session.stopped,
+        "a session made while locked was served"
+    );
+    assert!(
+        c.state.session.size.is_none(),
+        "a session made while locked got constraints"
+    );
     locker.unlock();
-    h.pump_until(&mut c, "the frame after the unlock", |s| {
+}
+
+/// SEC-05: a capture session whose connection no longer holds the Capture role (its process exited) is stopped, and a
+/// frame it asks for fails, even though the connection is still open.
+#[test]
+fn a_session_of_a_process_that_exited_is_stopped() {
+    let Some(mut h) = Harness::new() else { return };
+    let mut process = std::process::Command::new("sleep")
+        .arg("60")
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let (stream, state) = cupertino_server::shell_connection::connect_bound_client(
+        &h.state.display_handle,
+        cupertino_server::shell_connection::shell_process_state(&[
+            cupertino_server::authorization::ShellRole::Capture,
+        ]),
+    )
+    .unwrap();
+    cupertino_server::shell_connection::bind_holder(&state, process.id()).unwrap();
+    let mut c = TestClient::connect(&mut h, stream, Capturer::default());
+    let source = c.output_source();
+    let capture = c.session(&mut h, &source, true);
+    let first = c.request_frame(&capture);
+    h.pump_until(&mut c, "the first frame", |s| {
         s.frame.ready || s.frame.failed.is_some()
     });
     assert!(c.state.frame.ready, "failed: {:?}", c.state.frame.failed);
+    first.destroy();
+
+    process.kill().unwrap();
+    process.wait().unwrap();
+    let _second = c.request_frame(&capture);
+    h.pump_until(&mut c, "the frame of the exited process", |s| {
+        s.frame.ready || s.frame.failed.is_some()
+    });
+    assert!(
+        !c.state.frame.ready,
+        "a frame was delivered after the process exited"
+    );
+    assert_eq!(
+        c.state.frame.failed,
+        Some(ext_image_copy_capture_frame_v1::FailureReason::Stopped)
+    );
+    assert!(c.state.session.stopped);
+    assert!(!h.state.capture_running());
 }

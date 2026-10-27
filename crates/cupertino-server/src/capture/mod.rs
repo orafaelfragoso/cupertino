@@ -93,10 +93,12 @@ impl Capture {
 
 impl Cupertino {
     /// Copy the frames waiting on the sources drawn on output `idx` and refresh the window feeds. Called after the
-    /// output's frame was rendered, by every backend (through [`Cupertino::process_screenshots`]). While the session is
-    /// locked or about to be, nothing is copied and the feeds stay as they were: the requested frames wait for the
-    /// unlock, so a capture session delivers no buffer of a locked screen.
+    /// output's frame was rendered, by every backend (through [`Cupertino::process_screenshots`]). A session whose
+    /// connection lost the Capture role is stopped first. Locking the session stops every copy session
+    /// ([`Cupertino::stop_captures`]) and nothing is copied while it is locked, so a capture session delivers no buffer
+    /// of a locked screen and none resumes at the unlock.
     pub fn process_captures(&mut self, renderer: &mut GlesRenderer, idx: usize) {
+        self.stop_captures(false);
         if self.session_lock.is_active() {
             return;
         }

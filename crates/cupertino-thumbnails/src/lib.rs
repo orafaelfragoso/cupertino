@@ -126,6 +126,32 @@ impl From<png::EncodingError> for ThumbError {
     }
 }
 
+/// The largest file, and the largest side and memory of a picture, that is decoded for a thumbnail.
+const MAX_FILE_BYTES: u64 = 256 << 20;
+const MAX_SIDE: u32 = 8_192;
+const MAX_ALLOC: u64 = 256 << 20;
+
+/// The file at `path`, opened without blocking (a pipe or a device put there would not hang the caller), checked to be
+/// a regular file through the descriptor itself and not too large, then switched to blocking reads for the decoder.
+fn open_checked(path: &Path) -> Result<fs::File, ThumbError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+        .open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(ThumbError::Io(io::Error::other("not a regular file")));
+    }
+    if meta.len() > MAX_FILE_BYTES {
+        return Err(ThumbError::Io(io::Error::other("the file is too large")));
+    }
+    let flags = rustix::fs::fcntl_getfl(&file).map_err(io::Error::from)?;
+    rustix::fs::fcntl_setfl(&file, flags - rustix::fs::OFlags::NONBLOCK)
+        .map_err(io::Error::from)?;
+    Ok(file)
+}
+
 pub struct Thumbnailer {
     root: PathBuf,
     app: String,
@@ -270,12 +296,26 @@ impl Thumbnailer {
         if self.is_known_failure(path) {
             return Err(ThumbError::KnownFailure);
         }
-        let decoded = image::ImageReader::open(path)
-            .and_then(|r| r.with_guessed_format())
-            .map_err(ThumbError::from)
-            .and_then(|r| r.decode().map_err(ThumbError::from));
-        let img = match decoded {
-            Ok(i) => i,
+        let decoded = open_checked(path)
+            .and_then(|file| {
+                let mut reader =
+                    image::ImageReader::new(io::BufReader::new(file)).with_guessed_format()?;
+                let mut limits = image::Limits::default();
+                limits.max_image_width = Some(MAX_SIDE);
+                limits.max_image_height = Some(MAX_SIDE);
+                limits.max_alloc = Some(MAX_ALLOC);
+                reader.limits(limits);
+                let mime = reader.format().map(|f| f.to_mime_type());
+                Ok((reader, mime))
+            })
+            .and_then(|(reader, mime)| {
+                reader
+                    .decode()
+                    .map(|img| (img, mime))
+                    .map_err(ThumbError::from)
+            });
+        let (img, mime) = match decoded {
+            Ok(decoded) => decoded,
             Err(e) => {
                 let chunks = [
                     ("Thumb::URI", uri.clone()),
@@ -292,9 +332,7 @@ impl Thumbnailer {
         } else {
             img.resize(edge, edge, FilterType::Triangle).to_rgba8()
         };
-        let mime = mime_guess::from_path(path)
-            .first_or_octet_stream()
-            .to_string();
+        let mime = mime.unwrap_or("application/octet-stream").to_string();
         let chunks = [
             ("Thumb::URI", uri.clone()),
             ("Thumb::MTime", meta.mtime().to_string()),
@@ -414,5 +452,49 @@ mod tests {
             t.create(&bad, ThumbSize::Normal),
             Err(ThumbError::KnownFailure)
         ));
+    }
+
+    #[test]
+    fn a_pipe_named_like_a_picture_does_not_block_the_thumbnail_thread() {
+        let d = tempfile::tempdir().unwrap();
+        let fifo = d.path().join("trap.png");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success(), "mkfifo is part of coreutils");
+        let (done, result) = std::sync::mpsc::channel();
+        let cache = d.path().join("cache");
+        let path = fifo.clone();
+        std::thread::spawn(move || {
+            let outcome = Thumbnailer::new(cache, "x").create(&path, ThumbSize::Normal);
+            let _ = done.send(outcome.is_err());
+        });
+        let failed = result
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the thumbnail thread must not wait for a writer of the pipe");
+        assert!(failed, "a pipe is not a picture");
+    }
+
+    #[test]
+    fn a_picture_wider_than_the_limit_is_refused_and_the_type_comes_from_the_content() {
+        let d = tempfile::tempdir().unwrap();
+        let t = Thumbnailer::new(d.path().join("cache"), "x");
+        let wide = d.path().join("wide.png");
+        write_image(&wide, MAX_SIDE + 1, 1);
+        assert!(
+            t.create(&wide, ThumbSize::Normal).is_err(),
+            "over the side limit"
+        );
+        // a PNG with a .jpg name is a PNG
+        let named_wrong = d.path().join("really-a-png.jpg");
+        image::RgbaImage::new(64, 64)
+            .save_with_format(&named_wrong, image::ImageFormat::Png)
+            .unwrap();
+        let thumb = t.create(&named_wrong, ThumbSize::Normal).unwrap();
+        let chunks = read_chunks(&thumb).unwrap();
+        assert!(chunks
+            .iter()
+            .any(|(k, v)| k == "Thumb::Mimetype" && v == "image/png"));
     }
 }

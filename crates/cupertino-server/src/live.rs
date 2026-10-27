@@ -126,12 +126,21 @@ impl Cupertino {
         let (after, problems) = match CompositorSettings::load(path, Some(&before)) {
             Ok(read) => read,
             Err(e) => {
-                tracing::warn!(path = %path.display(), error = %e, "cannot read the changed configuration: the running settings stay");
+                // as at start, a system file that is broken is an error: it holds the shell list of the whole desktop
+                if system {
+                    tracing::error!(path = %path.display(), error = %e, "cannot read the changed system configuration: the running settings stay");
+                } else {
+                    tracing::warn!(path = %path.display(), error = %e, "cannot read the changed configuration: the running settings stay");
+                }
                 return;
             }
         };
         for p in problems {
-            tracing::warn!(path = %path.display(), key = p.key, error = %p.message, "invalid configuration: the key keeps its value");
+            if system {
+                tracing::error!(path = %path.display(), key = p.key, error = %p.message, "invalid system configuration: the key keeps its value");
+            } else {
+                tracing::warn!(path = %path.display(), key = p.key, error = %p.message, "invalid configuration: the key keeps its value");
+            }
         }
         let (system_before, user_before) = (
             self.live.files.system.clone(),

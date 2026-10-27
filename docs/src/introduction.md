@@ -9,4 +9,4 @@ Cupertino serves Wayland clients only. The project is early (0.x): the composito
 - [Architecture](architecture.md): processes, layers and the rules between them.
 - [Asset packs](asset-packs.md): swap fonts, icons, cursors and wallpapers, or build your own pack.
 
-Each crate has a README with its API, files and tests. The repository root has the contribution rules (`CONTRIBUTING.md`), the [contributor licence agreement](https://github.com/orafaelfragoso/cupertino/blob/main/CLA.md), the security policy (`SECURITY.md`) and the licence (`LICENSE`, `GPL-3.0-or-later`).
+Each crate has a README with its API, files and tests. The repository root has the contribution rules (`CONTRIBUTING.md`), the [contributor licence agreement](https://github.com/orafaelfragoso/cupertino/blob/main/CLA.md), the security policy (`SECURITY.md`) and the licence (`LICENSE`, `GPL-3.0-or-later`; the library crates listed in the README carry their own `MPL-2.0` `LICENSE`).

@@ -47,7 +47,7 @@ A broken link or anchor in the book fails both commands. CI installs the same tw
 ## What we cannot accept
 
 - Code, text, images, fonts, icons, cursors or wallpapers that are not yours to license. Contribute only work that is yours or that you have the right to license under the terms of the contributor licence agreement below.
-- Third-party assets without a licence compatible with `GPL-3.0-or-later`. Asset packs are loaded from a directory and are not added to the tree.
+- Third-party assets without a licence compatible with `GPL-3.0-or-later` (and with `MPL-2.0` in an MPL-2.0 crate). Asset packs are loaded from a directory and are not added to the tree.
 - Binary blobs. Add the generator, not the output.
 
 Maintainers (and a CI check, once it is enabled) reject files and strings that suggest otherwise; if a check flags your change by mistake, say so in the pull request.
@@ -65,7 +65,7 @@ Include the version or commit, the backend (`--winit`, `--udev`), your composito
 
 ## Licence and contributor licence agreement
 
-The project is licensed under `GPL-3.0-or-later`. Before your first pull request can be merged, agree to the [contributor licence agreement](CLA.md).
+The project is licensed under `GPL-3.0-or-later`, except the library crates that carry `license = "MPL-2.0"` in their manifest and a `LICENSE` file: a change to one of them is under the MPL-2.0. An MPL-2.0 crate may not depend on a GPL crate (`cargo run -p cupertino-layers` fails on it), so a dependency you add to one must be MPL-2.0 or a permissive licence. Before your first pull request can be merged, agree to the [contributor licence agreement](CLA.md).
 
 To agree, post a one-time public comment on your first pull request: `I have read and agree to the Cupertino Contributor Licence Agreement at <link to the exact CLA revision>. My name is <full name>.` A maintainer records the agreement and checks it before merging later contributions. If an entity owns the contribution, an authorised representative must accept in its name and state their name and title. If you are under eighteen, a parent or guardian must also accept and state their name and relationship. Do not post a private address or other unnecessary personal information.
 

@@ -2,7 +2,9 @@
 
 The dock process of the Cupertino desktop. It stands in for the design's dock process, and it also hosts the application
 switcher panel, the application grid and the Overview chrome. The crate holds the model (tiles, layout, magnification, bounce,
-auto-hide, with no compositor dependency) and the `cupertino-dock` process (feature `app`), a client of the server.
+auto-hide, with no compositor dependency) and the `cupertino-dock` process (feature `app`), a client of the server on `cupertino-wayland-client`,
+`cupertino-shell-client` (layer surfaces and the dock role) and `cupertino-protocol-app` (backdrops), with a
+`cupertino-ui-wayland` presenter per surface.
 
 ## Running
 
@@ -225,7 +227,7 @@ the bar surface with a grab (`Menu` material).
 The dock watches `dock.conf` (`cupertino_defaults::watch`) and applies a change at once: the file is read again with the
 current values as the last good ones (a bad line is reported and keeps its value), and only the keys whose value changed
 apply; a key removed from the file goes back to its default. Tile size, magnified size, magnification, position and
-recents change the layout, the surface (`set_layer_placement`; the separator menu's magnification item resizes it the same
+recents change the layout, the surface (`LayerSurface::set_placement`; the separator menu's magnification item resizes it the same
 way) and the exclusive zone; auto-hide switches as the
 separator menu switches it; the corner and gesture actions take effect at the next trigger. The pins of `dock.conf` apply
 at the next start (the dock keeps the pins the user changes in `dock-pins`). A setting the user changed in the separator

@@ -1066,9 +1066,16 @@ impl App {
     fn open_in_file_manager(&mut self, target: &str) -> Result<()> {
         match self.session.file_manager_command(target) {
             Some(argv) => {
-                let request = self
+                let request = match self
                     .conn
-                    .request_activation_token(self.layer.surface(), None)?;
+                    .request_activation_token(self.layer.surface(), None)
+                {
+                    Ok(request) => request,
+                    Err(e) => {
+                        eprintln!("cupertino-dock: cannot open {target}: {e}");
+                        return Ok(());
+                    }
+                };
                 self.pending.insert(
                     request,
                     Pending {
@@ -1106,9 +1113,16 @@ impl App {
             eprintln!("cupertino-dock: {key} has no command");
             return Ok(());
         }
-        let request = self
+        let request = match self
             .conn
-            .request_activation_token(self.layer.surface(), None)?;
+            .request_activation_token(self.layer.surface(), None)
+        {
+            Ok(request) => request,
+            Err(e) => {
+                eprintln!("cupertino-dock: cannot launch {key}: {e}");
+                return Ok(());
+            }
+        };
         self.pending.insert(request, Pending { key, argv });
         Ok(())
     }

@@ -583,8 +583,7 @@ impl SystemIcons {
         Self::with_host(assets, Vec::new())
     }
 
-    /// Icons of `assets` whose `theme` sources resolve under the icon directories `bases`, with `user` as the user's
-    /// theme (tests).
+    /// Icons of `assets` whose `theme` sources resolve under the icon directories `bases` (tests).
     fn with_host(assets: &Assets, bases: Vec<PathBuf>) -> Self {
         Self {
             assets: assets.clone(),

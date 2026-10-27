@@ -134,6 +134,9 @@ pub struct Extras {
     pub focus: Option<FocusState>,
     /// The session agent's menu entries; `None` without the agent (a greeter, another compositor): no system menu.
     pub session: Option<SessionState>,
+    /// Whether Lock Screen works without the agent's entries: the server named a login process (its lock screen locks
+    /// whoever owns the agent's bus name). It names none while no login process runs, and the lock then does nothing.
+    pub lock_without_agent: bool,
 }
 
 /// What a menu row does.
@@ -339,7 +342,8 @@ impl Extras {
 
     /// The system menu: Sleep, Restart…, Shut Down…, Lock Screen and Log Out <name>…, then the login window entry. The
     /// ellipsis entries open the agent's confirmation panel. Without a session agent (none runs, or the owner of its
-    /// name is not the one the server started) only Lock Screen is left: the server locks without the agent.
+    /// name is not the one the server started) only Lock Screen is left, enabled while the server has named a login process: it
+    /// locks without the agent.
     pub fn session_menu(&self) -> ExtraMenu {
         let mut menu = ExtraMenu::default();
         let lock = |caps: &SessionCaps, menu: &mut ExtraMenu| {
@@ -354,7 +358,11 @@ impl Extras {
             );
         };
         let Some(session) = self.session.as_ref() else {
-            lock(&SessionCaps::default(), &mut menu);
+            let caps = SessionCaps {
+                lock: self.lock_without_agent,
+                ..SessionCaps::default()
+            };
+            lock(&caps, &mut menu);
             return menu;
         };
         let caps = session.caps;
@@ -700,6 +708,7 @@ mod tests {
                 lifetimes: Vec::new(),
             }),
             session: None,
+            lock_without_agent: false,
         };
         for kind in ExtraKind::ORDER {
             let glyph = extras.glyph(kind).expect("every item is shown");
@@ -933,12 +942,22 @@ mod tests {
 
     #[test]
     fn without_a_session_agent_the_system_menu_still_locks() {
-        let menu = Extras::default().session_menu();
+        let named = Extras {
+            lock_without_agent: true,
+            ..Extras::default()
+        };
+        let menu = named.session_menu();
         assert_eq!(entries(&menu), ["Lock Screen"]);
         assert!(menu.rows[0].enabled);
         assert_eq!(
             menu.action(menu.rows[0].id),
             Some(&ExtraAction::Session(SessionAction::Lock))
+        );
+        let nobody = Extras::default().session_menu();
+        assert_eq!(entries(&nobody), ["Lock Screen"]);
+        assert!(
+            !nobody.rows[0].enabled,
+            "no login process, so nothing locks"
         );
     }
 

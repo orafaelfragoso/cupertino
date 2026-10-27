@@ -278,7 +278,10 @@ async fn read_all(
     agent: SessionAgent,
     reasons: &mut Reasons,
 ) -> Extras {
-    let mut extras = Extras::default();
+    let mut extras = Extras {
+        lock_without_agent: agent != SessionAgent::None,
+        ..Extras::default()
+    };
     if let Some(system) = system {
         extras.wifi = reasons.note("Wi-Fi", absent_if_not_running(read_wifi(system).await));
         extras.battery = reasons.note("battery", absent_if_not_running(read_battery(system).await));

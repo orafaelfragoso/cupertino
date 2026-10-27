@@ -19,7 +19,9 @@
       the backdrops and the title bar style of application windows to the public
       cupertino_app_effects_v1 protocol, which any client may use, and removes their requests here. Version 6 adds the
       session_action request of the menu bar object, version 7 the lock_requested event of the session object, version 8 the session_agent event of the menu bar
-      object, version 9 the log_out_requested event of the session object.
+      object, version 9 the log_out_requested event of the session object. An object this global
+      creates has the version the global was bound at, so the since of each message of those
+      objects is the shell version that added it.
     </description>
 
     <request name="destroy" type="destructor">
@@ -202,7 +204,7 @@
     </enum>
   </interface>
 
-  <interface name="cupertino_session_v1" version="4">
+  <interface name="cupertino_session_v1" version="9">
     <description summary="appearance, display options and lock state of the session">
       The state every shell process follows. Right after the object is created the server sends
       appearance, then display_options (version 2), then locked or unlocked. Later events say
@@ -254,7 +256,7 @@
       <description summary="the session is unlocked"/>
     </event>
 
-    <event name="lock_requested" since="3">
+    <event name="lock_requested" since="7">
       <description summary="the server asks the lock screen to lock the session">
         Sent only to the connection that holds the session lock role, for the lock shortcut, the
         idle lock and the menu: the client locks as if it had been asked on its own control
@@ -265,7 +267,7 @@
       <arg name="explicit" type="uint"/>
     </event>
 
-    <event name="log_out_requested" since="4">
+    <event name="log_out_requested" since="9">
       <description summary="the server asks the login process to ask whether to log out">
         Sent only to the connection that holds the session lock role, for the log out shortcut and
         the session menu: the client shows its log out confirmation as if it had been asked on
@@ -274,7 +276,7 @@
     </event>
   </interface>
 
-  <interface name="cupertino_menu_bar_v1" version="5">
+  <interface name="cupertino_menu_bar_v1" version="8">
     <description summary="the menu bar of one output">
       Events describe the active application and the menus its active window exports. They
       come in groups ended by a done event; the client applies a group at once. The first group
@@ -347,13 +349,13 @@
       <arg name="active" type="uint"/>
     </event>
 
-    <enum name="agent_trust" since="5">
+    <enum name="agent_trust" since="8">
       <entry name="none" value="0" summary="no session agent runs: nothing on the bus is the agent"/>
       <entry name="process" value="1" summary="the owner of the agent's bus name is the agent when it is the process named by pid"/>
       <entry name="any" value="2" summary="a development run: whoever owns the agent's bus name is the agent"/>
     </enum>
 
-    <event name="session_agent" since="5">
+    <event name="session_agent" since="8">
       <description summary="which process is the session agent">
         Names the process that may answer as the session agent (`org.cupertino.Login1`): the server
         started it. The bar takes the session menu's state (the user name and what the machine
@@ -405,7 +407,7 @@
       <arg name="workspace" type="uint"/>
     </request>
 
-    <enum name="session_action" since="4">
+    <enum name="session_action" since="6">
       <entry name="sleep" value="0" summary="put the computer to sleep without asking"/>
       <entry name="restart" value="1" summary="ask whether to restart"/>
       <entry name="shut_down" value="2" summary="ask whether to shut down"/>
@@ -415,7 +417,7 @@
       <entry name="refresh_capabilities" value="6" summary="read again what the session menu may offer"/>
     </enum>
 
-    <request name="session_action" since="4">
+    <request name="session_action" since="6">
       <description summary="an entry of the session menu was chosen">
         The server asks the session agent on the menu bar's behalf: the agent answers only the
         server and the process itself, so a shell process cannot reach it directly. The result

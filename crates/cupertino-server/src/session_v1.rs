@@ -61,7 +61,7 @@ impl SessionObservers {
     pub fn lock_requested(&self, explicit: bool) -> bool {
         let mut told = false;
         for observer in self.observers.iter().filter(|o| {
-            o.version() >= 3
+            o.version() >= 7
                 && o.client()
                     .is_some_and(|c| authorized(&c, ShellRole::SessionLock))
         }) {
@@ -75,7 +75,7 @@ impl SessionObservers {
     pub fn log_out_requested(&self) -> bool {
         let mut told = false;
         for observer in self.observers.iter().filter(|o| {
-            o.version() >= 4
+            o.version() >= 9
                 && o.client()
                     .is_some_and(|c| authorized(&c, ShellRole::SessionLock))
         }) {

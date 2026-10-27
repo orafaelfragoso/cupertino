@@ -283,3 +283,28 @@ fn a_token_made_before_the_person_moved_on_does_not() {
         "a click followed the token"
     );
 }
+
+#[test]
+fn a_program_that_maps_while_the_session_is_locked_does_not_take_the_keyboard_at_unlock() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_a, front) = with_front_window(&mut h);
+    let locker = Client::locker(h.socket_path());
+    h.wait_until("the session to be locked", |_| locker.locked());
+    let _intruder = Client::toplevel_after(
+        h.socket_path(),
+        "org.example.during-lock",
+        Arc::new(AtomicBool::new(true)),
+        Arc::default(),
+    );
+    h.wait_until("the second window to map", |s| {
+        s.windows.iter().filter(|e| e.mapped).count() == 2
+    });
+    locker.unlock();
+    h.wait_until("the session to unlock", |s| !s.session_lock.is_active());
+    h.run_for(Duration::from_millis(100));
+    assert_eq!(
+        h.state.wm.key_window(),
+        Some(front),
+        "the keyboard goes back to the window that had it"
+    );
+}

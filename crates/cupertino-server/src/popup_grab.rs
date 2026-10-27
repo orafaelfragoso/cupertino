@@ -89,6 +89,21 @@ impl Cupertino {
         true
     }
 
+    /// The keyboard is about to go to `surface`: a popup grab of another toplevel ends first, as a press elsewhere would end
+    /// it, so that the menu does not stay open without its keys.
+    pub fn end_popup_grab_for_focus(&mut self, surface: Option<&WlSurface>) {
+        let Some(root) = self.live_popup_grab().map(|active| active.root.clone()) else {
+            return;
+        };
+        if surface == Some(&root) {
+            return;
+        }
+        self.end_popup_grab(
+            SERIAL_COUNTER.next_serial(),
+            std::time::Duration::from(self.clock.now()).as_millis() as u32,
+        );
+    }
+
     /// End the popup grab, if any: the popups of its chain are dismissed, the keyboard goes back to the toplevel and the
     /// pointer grab is released.
     pub fn end_popup_grab(&mut self, serial: Serial, time: u32) {

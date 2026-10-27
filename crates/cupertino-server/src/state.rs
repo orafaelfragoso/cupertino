@@ -988,7 +988,9 @@ impl Cupertino {
                     // a process that cannot be named gets no first-window grant
                     let first_of_process = (self.process_of)(&self.display_handle, &client)
                         .is_some_and(|process| self.mapped_processes.insert(process));
-                    let first = first_of_connection && first_of_process;
+                    // nobody is at the screen while the session is locked: what comes up then waits behind
+                    let first =
+                        first_of_connection && first_of_process && !self.session_lock.is_active();
                     let elsewhere = self.last_input.as_ref().is_some_and(|(at, who)| {
                         *at > data.connected_at && who.as_ref() != Some(&id)
                     });
@@ -1381,6 +1383,7 @@ impl Cupertino {
                         let surface = window
                             .and_then(|w| self.entry(w))
                             .map(|e| e.surface().clone());
+                        self.end_popup_grab_for_focus(surface.as_ref());
                         self.set_keyboard_focus(surface);
                     }
                     // focus moved elsewhere: the accent popup loses its reason to stay open

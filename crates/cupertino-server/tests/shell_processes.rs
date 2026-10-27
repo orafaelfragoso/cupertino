@@ -26,7 +26,7 @@ use smithay::desktop::{layer_map_for_output, PopupManager};
 use smithay::input::keyboard::Keycode;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
-use smithay::utils::{Logical, Rectangle};
+use smithay::utils::{Logical, Point, Rectangle};
 use smithay::wayland::selection::data_device::request_data_device_client_selection;
 use smithay::wayland::shm::{with_buffer_contents, BufferData};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
@@ -819,6 +819,15 @@ fn popup_buffer_size(state: &Cupertino, namespace: &str) -> Option<(i32, i32)> {
     with_buffer_contents(&buffer, |_, _, data| (data.width, data.height)).ok()
 }
 
+/// Where the first popup of the layer surface with `namespace` sits, in output points.
+fn popup_location(state: &Cupertino, namespace: &str) -> Option<Point<i32, Logical>> {
+    let parent = layer_geometry(state, namespace)?;
+    let map = layer_map_for_output(&state.outputs.first()?.output);
+    let layer = map.layers().find(|l| l.namespace() == namespace)?;
+    let (_, offset) = PopupManager::popups_for_surface(layer.wl_surface()).next()?;
+    Some(parent.loc + offset)
+}
+
 /// Position and size of the layer surface with `namespace` in output points; `None` until it is mapped.
 fn layer_geometry(state: &Cupertino, namespace: &str) -> Option<Rectangle<i32, Logical>> {
     let map = layer_map_for_output(&state.outputs.first()?.output);
@@ -891,6 +900,15 @@ fn the_menu_bar_process_opens_a_menu_popup_and_a_click_outside_closes_it() {
     server.wait_until("the system menu's popup to be drawn", |s| {
         popup_buffer_size(s, "cupertino-menubar").is_some_and(|(w, h)| w > 0 && h > 0)
     });
+    // it hangs from the bar's bottom edge, under the slot that was clicked
+    let bar = layer_geometry(&server.state, "cupertino-menubar").unwrap();
+    let at = popup_location(&server.state, "cupertino-menubar").unwrap();
+    let (width, _) = popup_buffer_size(&server.state, "cupertino-menubar").unwrap();
+    assert_eq!(at.y, bar.loc.y + bar.size.h);
+    assert!(
+        at.x <= 20 && at.x + width > 20,
+        "the popup at {at:?}, {width} wide, is under x 20"
+    );
     click(&mut server, 500.0, 400.0);
     server.wait_until("the popup to go", |s| {
         popup_buffer_size(s, "cupertino-menubar").is_none()

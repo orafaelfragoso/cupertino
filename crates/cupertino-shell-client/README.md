@@ -8,14 +8,15 @@ GPL-3.0-or-later. Depends on `cupertino-wayland-client`, `cupertino-protocol-app
 
 | Item | Contents |
 |---|---|
-| `LayerShell`, `LayerSurfaceConfig`, `Margin`, `LayerSurface`, `Layer`, `Anchor`, `KeyboardInteractivity` | `zwlr_layer_shell_v1`: `bind`, `layer_surface(config)` returns the transport's surface and its layer surface; popups of it work through the transport |
+| `LayerShell`, `LayerSurfaceConfig`, `Margin`, `LayerSurface`, `Layer`, `Anchor`, `KeyboardInteractivity` | `zwlr_layer_shell_v1`: `bind`, `layer_surface(config)` returns a `LayerSurface` with the transport's surface (`surface`). `LayerSurface::configured(sent)` is the size to draw at: an extent the server left at 0 is the requested one, and 0 on both sides fails (`Error::Unsized`). `set_placement`, `set_exclusive_zone` and `set_keyboard_interactivity` apply with the next commit; popups of it work through the transport |
 | `SessionLockManager`, `SessionLock` | `ext_session_lock_v1`: `lock` numbers each lock (`generation`), `lock_surface(output)`, `unlock` once confirmed, else `destroy` |
 | `IdleNotifier`, `IdleWatch` | `ext_idle_notify_v1`: `watch(seat, millis)`; dropping it stops the events |
-| `Shell`, `Session` | `cupertino_shell_v1` (version 9): `session` observes the session, `menu_bar` and `dock` give a layer surface the role of an output |
+| `Shell`, `Session` | `cupertino_shell_v1` (version 9): `session` observes the session, `observe` does so and reads its state before it returns (with the other events that arrived meanwhile, for the caller's loop), `menu_bar` and `dock` give a layer surface the role of an output |
+| `SessionState`, `SessionChange` | dark, display options and locked as of the observer's last event; `apply(&ExtensionEvent)` takes one of them and says which changed, `None` for any other event. An application's `cupertino_protocol_app::Appearance` counts as well |
 | `MenuBar`, `MenuBarUpdate`, `ActiveApp`, `WindowCommand`, `WindowMenu`, `WindowState`, `GtkMenu`, `SessionAction`, `SessionAgent` | the menu-bar role, with `done`-grouped updates |
 | `Dock`, `DockUpdate`, `DockChange`, `DockWindow`, `OverviewMode`, `OverviewWindow`, `OverviewWorkspace`, `Corner`, `Gesture`, `AppCommand` | the dock role, with `done`-grouped updates; the switcher's output arrives as the transport's `OutputId` |
 | `ShellEvent` | what the objects receive, inside the transport's `Event::Extension` and in order with its events: configures of layer and lock surfaces (acknowledged by the transport), `Closed`, `Lock`, `Idle`, `SessionLock`, `LockRequested`, `LogOutRequested`, `MenuBar`, `Dock`. The session's appearance and display options arrive as `cupertino_protocol_app::AppEvent` |
-| `Error` | `Transport`, `UnknownOutput`, `InvalidShape` |
+| `Error` | `Transport`, `UnknownOutput`, `InvalidShape`, `Unsized` |
 
 ## Tests
 
@@ -23,5 +24,5 @@ GPL-3.0-or-later. Depends on `cupertino-wayland-client`, `cupertino-protocol-app
 cargo test -p cupertino-shell-client
 ```
 
-Unit tests cover the menu-bar and dock groups. `tests/protocol_flow.rs` in `cupertino-client` runs every role against
-an in-process server.
+Unit tests cover the menu-bar and dock groups, the configured size of a layer surface and the session state.
+`tests/protocol_flow.rs` in `cupertino-client` runs every role and `Shell::observe` against an in-process server.

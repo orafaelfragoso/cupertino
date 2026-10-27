@@ -8,6 +8,7 @@
 //! * [`shortcuts`] and [`keysym`]: configurable key combinations → [`Action`]s.
 //! * [`pointer`]: pointer acceleration curves (curve family and formula)
 //!   and the fresh-account defaults.
+//! * [`mouse_accel`]: mouse acceleration on physical speed (device resolution, event timestamps).
 //! * [`table`]: table acceleration and the embedded default table.
 //! * [`scroll_accel`]: per-axis scroll acceleration.
 //! * [`scroll_count`]: the scroll count of repeated flicks.
@@ -29,6 +30,7 @@ pub mod geom;
 pub mod gesture;
 pub mod hotcorner;
 pub mod keysym;
+pub mod mouse_accel;
 pub mod pointer;
 pub mod scroll;
 pub mod scroll_accel;
@@ -51,11 +53,12 @@ pub use gesture::{
 pub use hotcorner::{
     Corner, CornerAction, CornerBinding, CornerEvent, HotCornerConfig, HotCorners,
 };
+pub use mouse_accel::{parse_mouse_dpi, resolve_dpi, MouseAccel, DEFAULT_MOUSE_DPI};
 pub use pointer::{
-    double_click_space, scroll_point_delta, AccelCurve, CurveParams, ParametricCurve, PointerAccel,
-    DEFAULT_ACCELERATION, DEFAULT_DOUBLE_CLICK_TIME, DEFAULT_SCROLLING_SPEED,
+    double_click_space, scroll_point_delta, wheel_points, AccelCurve, CurveParams, ParametricCurve,
+    PointerAccel, DEFAULT_ACCELERATION, DEFAULT_DOUBLE_CLICK_TIME, DEFAULT_SCROLLING_SPEED,
     DEFAULT_TRACKING_SPEED, MOUSE_CURVES, POINTS_PER_LINE, TRACKING_SPEED_STOPS, TRACKPAD_CURVES,
-    TRACKPAD_REPORT_RATE_HZ, TRACKPAD_SCROLL_CURVES,
+    TRACKPAD_REPORT_RATE_HZ, TRACKPAD_SCROLL_CURVES, WHEEL_LINES_PER_NOTCH, WHEEL_LINE_POINTS,
 };
 pub use scroll::{KineticScroller, MomentumKind, ScrollConfig};
 pub use scroll_accel::{

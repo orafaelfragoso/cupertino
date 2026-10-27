@@ -27,9 +27,12 @@ use smithay::reexports::rustix;
 use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::{DisplayHandle, Resource};
 use smithay::wayland::selection::data_device::{
+    clear_data_device_selection, current_data_device_selection_userdata,
     request_data_device_client_selection, set_data_device_selection,
 };
-use smithay::wayland::selection::primary_selection::PrimarySelectionState;
+use smithay::wayland::selection::primary_selection::{
+    clear_primary_selection, PrimarySelectionState,
+};
 use smithay::wayland::selection::{ext_data_control, wlr_data_control};
 use smithay::wayland::selection::{SelectionSource, SelectionTarget};
 use smithay::{delegate_data_control, delegate_ext_data_control};
@@ -124,6 +127,8 @@ pub struct Clipboard {
     reading: Option<(String, RegistrationToken)>,
     captured: Vec<(String, Vec<u8>)>,
     total: usize,
+    /// The clipboard that was current when the session was locked, given back when it is unlocked.
+    kept_over_lock: Option<Arc<Snapshot>>,
 }
 
 impl Clipboard {
@@ -202,6 +207,7 @@ impl Cupertino {
         let generation = self.clipboard.generation + 1;
         self.clipboard = Clipboard {
             generation,
+            kept_over_lock: self.clipboard.kept_over_lock.take(),
             ..Clipboard::default()
         };
     }
@@ -320,6 +326,57 @@ impl Cupertino {
         set_data_device_selection(&self.display_handle, &self.seat, mime_types, snapshot);
     }
 
+    /// The session was locked: clipboard managers (data control) must not see or set the selections while it is, and
+    /// they get every change of a selection, so the selections are cleared. The clipboard is kept when the server
+    /// has a copy of it (its owner's types were all read, or it is the server's own copy) and comes back at the
+    /// unlock; the primary selection and a clipboard without a complete copy do not.
+    pub fn clipboard_session_locked(&mut self) {
+        let kept = match current_data_device_selection_userdata(&self.seat) {
+            Some(snapshot) => Some(snapshot.clone()),
+            None if self.clipboard.owner.is_some()
+                && self.clipboard.is_complete()
+                && !self.clipboard.captured.is_empty() =>
+            {
+                Some(Arc::new(Snapshot::from_captured(std::mem::take(
+                    &mut self.clipboard.captured,
+                ))))
+            }
+            None => None,
+        };
+        self.clipboard_forget();
+        self.clipboard.kept_over_lock = kept;
+        self.clipboard_clear_selections();
+    }
+
+    /// The session was unlocked: the clipboard kept over the lock is the clipboard again.
+    pub fn clipboard_session_unlocked(&mut self) {
+        let Some(snapshot) = self.clipboard.kept_over_lock.take() else {
+            return;
+        };
+        set_data_device_selection(
+            &self.display_handle,
+            &self.seat,
+            snapshot.mime_types(),
+            snapshot,
+        );
+    }
+
+    /// Something set a selection while the session is locked: it is cleared again once smithay has made it current,
+    /// which also cancels the source.
+    pub fn clipboard_set_while_locked(&mut self) {
+        self.loop_handle.insert_idle(|state| {
+            if state.session_lock.is_active() {
+                state.clipboard_forget();
+                state.clipboard_clear_selections();
+            }
+        });
+    }
+
+    fn clipboard_clear_selections(&mut self) {
+        clear_data_device_selection(&self.display_handle, &self.seat);
+        clear_primary_selection(&self.display_handle, &self.seat);
+    }
+
     /// Serve a paste of the kept clipboard from its snapshot (the selection's user data).
     pub fn clipboard_serve_snapshot(&mut self, snapshot: &Snapshot, mime: &str, fd: OwnedFd) {
         match snapshot.get(mime) {
@@ -333,8 +390,8 @@ impl Cupertino {
 }
 
 /// The data control globals of clipboard managers, `ext-data-control-v1` and its predecessor
-/// `zwlr-data-control-v1`, both with the primary selection. Every client may bind them, as every client may
-/// bind the layer shell: the server has no sandbox identity (security-context) to deny them to.
+/// `zwlr-data-control-v1`, both with the primary selection. Every client outside a sandbox may bind them (clipboard
+/// managers need no focus); a client that connected through a security context does not see them.
 pub fn data_control_states(
     dh: &DisplayHandle,
     primary: &PrimarySelectionState,
@@ -343,8 +400,16 @@ pub fn data_control_states(
     wlr_data_control::DataControlState,
 ) {
     (
-        ext_data_control::DataControlState::new::<Cupertino, _>(dh, Some(primary), |_| true),
-        wlr_data_control::DataControlState::new::<Cupertino, _>(dh, Some(primary), |_| true),
+        ext_data_control::DataControlState::new::<Cupertino, _>(
+            dh,
+            Some(primary),
+            crate::authorization::unsandboxed,
+        ),
+        wlr_data_control::DataControlState::new::<Cupertino, _>(
+            dh,
+            Some(primary),
+            crate::authorization::unsandboxed,
+        ),
     )
 }
 

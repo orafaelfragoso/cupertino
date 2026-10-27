@@ -63,6 +63,10 @@ impl GlobalDispatch<ZwlrOutputPowerManagerV1, ()> for Cupertino {
     ) {
         init.init(resource, ());
     }
+
+    fn can_view(client: Client, _: &()) -> bool {
+        crate::authorization::unsandboxed(&client)
+    }
 }
 
 impl Dispatch<ZwlrOutputPowerManagerV1, ()> for Cupertino {

@@ -1126,6 +1126,18 @@ mod window_system {
         committed.recv_timeout(Duration::from_secs(5)).unwrap();
         kit.pump();
 
+        // a frame callback nobody asked for wakes nothing
+        control.send(Control::FrameDone).unwrap();
+        kit.pump();
+        kit.pump();
+        assert!(!kit.stash.iter().any(|e| matches!(
+            e,
+            PlatformEvent::Window {
+                event: WindowEvent::Frame(_),
+                ..
+            }
+        )));
+
         // a frame drawn at a stale size is not shown, and its damage is carried
         let stale = frame_sized(3, (100, 50), [0; 4], &[rect(40, 30, 5, 5)]);
         assert_eq!(
@@ -1191,7 +1203,10 @@ mod window_system {
             _ => None,
         });
         assert_eq!(data.map(|d| d.bytes), Some(b"hello".to_vec()));
-        let primary = kit.ws.read_clipboard(ClipboardKind::Primary, "text/plain");
+        // the primary selection is not offered here, whatever the clipboard holds
+        let primary = kit
+            .ws
+            .read_clipboard(ClipboardKind::Primary, "text/plain;charset=utf-8");
         let nothing = kit.wait_for(|e| match e {
             PlatformEvent::Clipboard { token: t, data } if *t == primary => Some(data.clone()),
             _ => None,

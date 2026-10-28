@@ -37,8 +37,9 @@ largest scale of the outputs the surface entered; without the viewporter it is r
 An input method gets the focused field's state only while its surface has the text-input focus: it is sent again
 after each enter, only when it changed, and a value once sent (surrounding text, cursor rectangle) is withdrawn by
 enabling afresh. Surrounding text is cut to the protocol's 4000 bytes around the selection, or around the cursor when
-the selection alone is longer, at character boundaries. A password or PIN purpose never sends its text and always adds
-the `sensitive_data` hint, whatever the caller set. A preedit cursor that is off a character boundary is hidden, and a
+the selection alone is longer, at character boundaries. A password or PIN purpose, or the `hidden_text` or
+`sensitive_data` hint, never sends its text and always adds the `sensitive_data` hint, whatever the caller set; a
+`Debug` print of the text-input types shows the length of typed text, never the text. A preedit cursor that is off a character boundary is hidden, and a
 batch cut short by a focus change is dropped. Applying the batch to the field (clamping deletes to characters, the
 order in `TextInputDone`) is the caller's.
 

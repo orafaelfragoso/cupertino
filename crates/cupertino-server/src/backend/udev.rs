@@ -677,31 +677,37 @@ fn render_outputs(state: &mut Cupertino) {
 }
 
 fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle, idx: usize) {
-    let Some(composed) = state.compose_for_present(&mut u.renderer, idx) else {
-        return;
+    // without a scene (no render resources or no mode yet) nothing is drawn or queued, but the tail still runs
+    let rendered = match state.compose_for_present(&mut u.renderer, idx) {
+        None => false,
+        Some(composed) => {
+            let Some(surface) = u.surfaces.get_mut(&crtc) else {
+                return;
+            };
+            let Some((res, cache, _)) = state.gles_parts(idx) else {
+                return;
+            };
+            let mut resources = GlesResources::new(res, cache, composed.resources);
+            let result = Gles.render(
+                &composed.frame,
+                &mut resources,
+                GlesTarget::Drm {
+                    renderer: &mut u.renderer,
+                    output: &mut surface.drm_output,
+                    clear: CLEAR,
+                },
+            );
+            match result {
+                Ok(completion) => completion.status() == RenderStatus::Rendered,
+                Err(e) => {
+                    tracing::warn!(error = %e, "rendering the frame failed");
+                    return;
+                }
+            }
+        }
     };
     let Some(surface) = u.surfaces.get_mut(&crtc) else {
         return;
-    };
-    let Some((res, cache, _)) = state.gles_parts(idx) else {
-        return;
-    };
-    let mut resources = GlesResources::new(res, cache, composed.resources);
-    let result = Gles.render(
-        &composed.frame,
-        &mut resources,
-        GlesTarget::Drm {
-            renderer: &mut u.renderer,
-            output: &mut surface.drm_output,
-            clear: CLEAR,
-        },
-    );
-    let rendered = match result {
-        Ok(completion) => completion.status() == RenderStatus::Rendered,
-        Err(e) => {
-            tracing::warn!(error = %e, "rendering the frame failed");
-            return;
-        }
     };
     let time = Duration::from(state.clock.now());
     if rendered {

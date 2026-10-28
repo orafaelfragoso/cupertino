@@ -140,6 +140,10 @@ fn render_inner(state: &mut Cupertino, w: &mut WinitBackend) {
         return;
     }
     let Some(composed) = state.compose_for_present(w.graphics.renderer(), idx) else {
+        // without a scene (no render resources or no mode yet) nothing is drawn, but callbacks still go out
+        let time = Duration::from(state.clock.now());
+        state.process_screenshots(w.graphics.renderer(), idx);
+        state.post_repaint(idx, time, Some(Duration::from_micros(16_667)), false);
         return;
     };
     w.full_redraw = w.full_redraw.saturating_sub(1);

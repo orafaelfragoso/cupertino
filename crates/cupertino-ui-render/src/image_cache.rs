@@ -69,6 +69,7 @@ impl ImageCache {
         }
     }
 
+    /// Drops the least recently used images until the cache fits its budget. Between frames, like the glyph cache.
     pub(crate) fn trim(&mut self) {
         if self.bytes <= self.budget {
             return;

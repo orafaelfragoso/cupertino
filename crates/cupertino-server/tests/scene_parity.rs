@@ -403,3 +403,60 @@ fn a_closing_ghost_matches_while_it_fades() {
         }
     }
 }
+
+/// The window capture both screenshots of a toplevel and the closing ghosts take: a frame of its own, composed and
+/// lowered like the output's, drawn to a texture.
+#[test]
+fn a_window_capture_is_pixel_for_pixel_what_the_old_builder_captured() {
+    use cupertino_server::render::scene::capture_window;
+    use smithay::backend::allocator::Fourcc;
+    use smithay::backend::renderer::{ExportMem, Texture};
+    use smithay::utils::Rectangle;
+
+    for (scale, shadow) in [(1.0, false), (1.5, true), (2.0, true)] {
+        let mut d = Desktop::new(scale);
+        d.window();
+        d.at(3000);
+        let id = d.state.wm.key_window().expect("a window");
+        let frame = d.state.wm.window(id).unwrap().geometry();
+        let mut backend = d.state.backend.take().unwrap();
+        let Backend::Headless(ref mut h) = backend else {
+            panic!("headless backend required")
+        };
+        let mut shoot = |old: bool| {
+            let readback =
+                |renderer: &mut smithay::backend::renderer::gles::GlesRenderer,
+                 texture: smithay::backend::renderer::gles::GlesTexture| {
+                    let size = texture.size();
+                    let mapping = renderer
+                        .copy_texture(&texture, Rectangle::from_size(size), Fourcc::Abgr8888)
+                        .unwrap();
+                    renderer.map_texture(&mapping).unwrap().to_vec()
+                };
+            d.state
+                .with_scene(&mut h.renderer, 0, |r, mut p| {
+                    let windows = p.windows;
+                    let entry = windows.iter().find(|w| w.id == id)?;
+                    let geo = entry.window.geometry();
+                    let natural = cupertino_wm::Rect::new(
+                        frame.x,
+                        frame.y,
+                        f64::from(geo.size.w) + entry.insets.horizontal(),
+                        f64::from(geo.size.h) + entry.insets.vertical(),
+                    );
+                    let captured = if old {
+                        legacy_scene::capture_window(r, &mut p, entry, natural, true, 12.0, shadow)
+                    } else {
+                        capture_window(r, &mut p, entry, natural, true, 12.0, shadow)
+                    }?;
+                    Some((readback(r, captured.0), captured.1))
+                })
+                .flatten()
+                .expect("the window is captured")
+        };
+        let (old, old_area) = shoot(true);
+        let (new, new_area) = shoot(false);
+        assert_eq!(old_area, new_area, "captured area at {scale}x");
+        assert!(old == new, "captured pixels at {scale}x, shadow {shadow}");
+    }
+}

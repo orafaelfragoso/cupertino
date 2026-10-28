@@ -13,8 +13,7 @@ use std::time::Duration;
 use zbus::block_on;
 use zbus::zvariant::{OwnedValue, Value};
 
-mod common;
-use common::PrivateBus;
+use cupertino_test_bus::PrivateBus;
 
 /// Stands in for the session agent of `cupertino-login`: the properties of the system menu and the calls it records.
 struct FakeLogin {
@@ -199,7 +198,7 @@ fn the_extras_follow_the_services_and_act_on_them() {
     };
     let (calls_tx, calls) = mpsc::channel();
     let (login_tx, login_calls) = mpsc::channel();
-    let services = bus.connect();
+    let services = zbus::block_on(bus.connect_async());
     block_on(async {
         let server = services.object_server();
         server
@@ -248,7 +247,7 @@ fn the_extras_follow_the_services_and_act_on_them() {
 
     // the only test of this binary, so no other thread reads the environment
     std::env::set_var("DBUS_SYSTEM_BUS_ADDRESS", &bus.address);
-    let (extras, events) = ExtrasBus::start(bus.connect(), || {});
+    let (extras, events) = ExtrasBus::start(zbus::block_on(bus.connect_async()), || {});
     let first = next(&events);
     let wifi = first.wifi.as_ref().expect("a Wi-Fi device");
     assert!(wifi.enabled);

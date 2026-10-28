@@ -1,11 +1,8 @@
 //! Real shell binaries for the golden scenes: built once with cargo, started with a cleared environment, and a private
 //! session bus so no process sees the host's.
-use std::io::{BufRead, BufReader};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::{mpsc, OnceLock};
-use std::time::Duration;
+use std::process::Command;
+use std::sync::OnceLock;
 
 use cupertino_server::authorization::ShellRole;
 use cupertino_server::config::ShellProcess;
@@ -68,57 +65,14 @@ const BUS_CONFIG: &str = r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bu
 </busconfig>
 "#;
 
-/// A private session bus without service activation, a child of the test that is killed on drop and dies with the
-/// test's thread if the test is killed first.
-pub struct PrivateBus {
-    pub address: String,
-    daemon: Child,
-}
-
-impl PrivateBus {
-    pub fn start() -> PrivateBus {
-        let config = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(config.path(), BUS_CONFIG).unwrap();
-        let mut command = Command::new("dbus-daemon");
-        command
-            .arg(format!("--config-file={}", config.path().display()))
-            .args(["--nofork", "--print-address=1"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        // The death signal follows the thread that spawns the daemon, so the test's own thread starts the bus.
-        // Safety: the closure runs in the child between fork and exec and calls only prctl, which is
-        // async-signal-safe.
-        unsafe {
-            command.pre_exec(|| {
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let mut daemon = command.spawn().expect("goldens need dbus-daemon");
-        let stdout = daemon.stdout.take().expect("piped stdout");
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let mut line = String::new();
-            let _ = BufReader::new(stdout).read_line(&mut line);
-            let _ = tx.send(line);
-        });
-        let address = rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("dbus-daemon printed no address within 5 s");
-        let address = address.trim().to_owned();
-        assert!(!address.is_empty(), "dbus-daemon exited before it listened");
-        PrivateBus { address, daemon }
-    }
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        let _ = self.daemon.kill();
-        let _ = self.daemon.wait();
-    }
+/// A private session bus without service activation: a child of the test that dies with it
+/// ([`cupertino_test_bus::PrivateBus`]).
+pub fn private_bus() -> cupertino_test_bus::PrivateBus {
+    let config = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(config.path(), BUS_CONFIG).unwrap();
+    // the daemon has read its configuration once it prints its address
+    cupertino_test_bus::PrivateBus::start_with_config(config.path())
+        .expect("goldens need dbus-daemon")
 }
 
 /// The shell binary `binary` on the private bus with the built-in assets, no host application data, and `args`. The

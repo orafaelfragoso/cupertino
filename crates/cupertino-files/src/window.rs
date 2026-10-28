@@ -648,6 +648,34 @@ fn paint_marquee(pm: &mut Pixmap, scale: f32, band: &Rect, content: &Rect, pal: 
     }
 }
 
+/// Points around an item that the name editor's field and its focus ring reach.
+const EDIT_REACH: f64 = 8.0;
+
+/// Where item `index` of `frame` is drawn once selected or focused, with the ring around it. `None` when the item
+/// is not in the frame.
+pub fn item_area(frame: &Frame, index: usize) -> Option<GeoRect> {
+    let item = frame.item_frame(index)?;
+    // a list row is highlighted across the whole content, so the strip of the item's height is damaged with it
+    let content = frame.window.content;
+    let row = GeoRect::new(content.x, item.y, content.w, item.h);
+    Some(
+        GeoRect::new(item.x, item.y, item.w, item.h)
+            .union(&row)
+            .outset(EDIT_REACH),
+    )
+}
+
+/// Where a caret blink changes `frame`: the toolbar, where the search field is, and the item whose name is edited.
+/// `None` when the item is not in the frame.
+pub fn caret_areas(frame: &Frame, edit: Option<usize>) -> Option<Vec<GeoRect>> {
+    let toolbar = frame.window.toolbar;
+    let mut areas = vec![GeoRect::new(toolbar.x, toolbar.y, toolbar.w, toolbar.h)];
+    if let Some(index) = edit {
+        areas.push(item_area(frame, index)?);
+    }
+    Some(areas)
+}
+
 /// One frame of the window: its layout, the content layout and the scroll position.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Frame {
@@ -3211,8 +3239,9 @@ mod tests {
         .map(|what| (what.to_owned(), 1, 0, 0, 0))
         .collect();
         assert_eq!(work, expected);
-        // the work grows with the pixels: the window is filled once and the content view copied over it, plus fixed
-        // shapes that are a smaller share of a larger window; any frame work that outgrows the pixels moves a ratio
+        // the work grows with the pixels: the window is filled once and the content view copied over it, and the
+        // copy covers a larger share of the window as the fixed-width sidebar and bars shrink against it, so the
+        // ratio rises with the size; any frame work that outgrows the pixels moves a ratio
         let expected = [
             ("600 x 400 at 1x", 1.30),
             ("920 x 436 at 1x", 1.56),
@@ -3225,6 +3254,280 @@ mod tests {
             assert!(
                 (ratio - want).abs() <= 0.05,
                 "{what}: {ratio:.3} pixels written per frame pixel, expected {want} +- 0.05"
+            );
+        }
+    }
+
+    /// The device pixels `areas` (points) touch at `scale`, as (left, top, right, bottom) rounded out to whole pixels,
+    /// the way the presenter converts and reports them.
+    fn device_rects(areas: &[GeoRect], scale: f32) -> Vec<(u32, u32, u32, u32)> {
+        let f = f64::from(scale);
+        areas
+            .iter()
+            .map(|r| {
+                (
+                    (r.x() * f).floor() as u32,
+                    (r.y() * f).floor() as u32,
+                    ((r.x() + r.width()) * f).ceil() as u32,
+                    ((r.y() + r.height()) * f).ceil() as u32,
+                )
+            })
+            .collect()
+    }
+
+    /// The pixels in which `a` and `b` differ outside `areas` (points).
+    fn differing_outside(a: &Pixmap, b: &Pixmap, areas: &[GeoRect], scale: f32) -> Vec<(u32, u32)> {
+        let rects = device_rects(areas, scale);
+        let width = a.width();
+        a.pixels()
+            .iter()
+            .zip(b.pixels())
+            .enumerate()
+            .filter(|(_, (p, q))| p != q)
+            .map(|(i, _)| (i as u32 % width, i as u32 / width))
+            .filter(|&(x, y)| {
+                !rects
+                    .iter()
+                    .any(|r| x >= r.0 && x < r.2 && y >= r.1 && y < r.3)
+            })
+            .collect()
+    }
+
+    /// The device pixels the presenter converts and reports for `areas`.
+    fn damaged_pixels(areas: &[GeoRect], scale: f32) -> u64 {
+        device_rects(areas, scale)
+            .iter()
+            .map(|r| u64::from(r.2 - r.0) * u64::from(r.3 - r.1))
+            .sum()
+    }
+
+    #[test]
+    fn a_caret_blink_changes_pixels_only_inside_the_areas_it_reports() {
+        for scale in [1.0, 1.5] {
+            let (_d, browser, places, mut painter, frame) = search_window(scale);
+            let mut search = TextField::with_max_len(SEARCH_MAX_LEN);
+            search.insert("notes");
+            let mut paint = |edit: Option<&NameEdit>, search_caret: bool, edit_caret: bool| {
+                let mut pm = Pixmap::new((920.0 * scale) as u32, (436.0 * scale) as u32).unwrap();
+                let state = WindowState {
+                    browser: &browser,
+                    places: &places,
+                    mode: ViewMode::List,
+                    active: true,
+                    search: &search,
+                    search_focused: edit.is_none(),
+                    search_caret,
+                    title: "Here",
+                    now: SystemTime::now(),
+                    edit,
+                    edit_caret,
+                    drop_target: None,
+                    marquee: None,
+                    status: "",
+                };
+                painter.paint(&mut pm, scale, &frame, &state, &Palette::builtin(false));
+                pm
+            };
+            let (on, off) = (paint(None, true, false), paint(None, false, false));
+            assert_ne!(on.data(), off.data(), "the search caret shows at {scale}x");
+            let areas = caret_areas(&frame, None).unwrap();
+            // what the presenter converts and reports for the blink, of the 920 x 436 points of the window
+            let (pixels, bytes) = if scale == 1.0 {
+                (37_388, 149_552)
+            } else {
+                (84_162, 336_648)
+            };
+            assert_eq!(
+                damaged_pixels(&areas, scale),
+                pixels,
+                "search caret pixels at {scale}x"
+            );
+            assert_eq!(
+                damaged_pixels(&areas, scale) * 4,
+                bytes,
+                "search caret bytes at {scale}x"
+            );
+            assert_eq!(
+                differing_outside(&on, &off, &areas, scale),
+                vec![],
+                "search caret at {scale}x"
+            );
+
+            let edit = NameEdit::new(0, "editor.txt", false);
+            let (on, off) = (
+                paint(Some(&edit), false, true),
+                paint(Some(&edit), false, false),
+            );
+            assert_ne!(on.data(), off.data(), "the name caret shows at {scale}x");
+            let areas = caret_areas(&frame, Some(0)).unwrap();
+            let (pixels, bytes) = if scale == 1.0 {
+                (63_848, 255_392)
+            } else {
+                (144_827, 579_308)
+            };
+            assert_eq!(
+                damaged_pixels(&areas, scale),
+                pixels,
+                "name caret pixels at {scale}x"
+            );
+            assert_eq!(
+                damaged_pixels(&areas, scale) * 4,
+                bytes,
+                "name caret bytes at {scale}x"
+            );
+            assert_eq!(
+                differing_outside(&on, &off, &areas, scale),
+                vec![],
+                "name editor caret at {scale}x"
+            );
+            assert_eq!(
+                caret_areas(&frame, Some(99)),
+                None,
+                "an item that is not there"
+            );
+        }
+    }
+
+    /// A window of 920 x 436 points on a folder of `n` files, listed.
+    fn listing(
+        scale: f32,
+        n: usize,
+        scroll: f64,
+    ) -> (tempfile::TempDir, Browser, Vec<Place>, WindowPainter, Frame) {
+        let d = tempfile::tempdir().unwrap();
+        for i in 0..n {
+            std::fs::write(d.path().join(format!("file-{i:03}.txt")), b"x").unwrap();
+        }
+        let mut browser = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            PathBuf::from("/nonexistent/recently-used.xbel"),
+            None,
+            Arc::new(|| {}),
+        )
+        .unwrap();
+        while browser.entries().len() < n {
+            browser.poll();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let places = places();
+        let mut painter = WindowPainter::new(crate::render::renderer());
+        let frame = painter.frame(
+            Size { w: 920.0, h: 436.0 },
+            &places,
+            Bars::HIDDEN,
+            window::TOOLBAR_SEARCH_FIELD.0,
+            d.path(),
+            ViewMode::List,
+            browser.outline(),
+            scroll,
+            scale,
+        );
+        (d, browser, places, painter, frame)
+    }
+
+    fn paint_listing(
+        painter: &mut WindowPainter,
+        frame: &Frame,
+        browser: &Browser,
+        places: &[Place],
+        scale: f32,
+    ) -> Pixmap {
+        let mut pm = Pixmap::new((920.0 * scale) as u32, (436.0 * scale) as u32).unwrap();
+        let state = WindowState {
+            browser,
+            places,
+            mode: ViewMode::List,
+            active: true,
+            search: &TextField::new(),
+            search_focused: false,
+            search_caret: false,
+            title: "Here",
+            now: SystemTime::now(),
+            edit: None,
+            edit_caret: false,
+            drop_target: None,
+            marquee: None,
+            status: "",
+        };
+        painter.paint(&mut pm, scale, frame, &state, &Palette::builtin(false));
+        pm
+    }
+
+    #[test]
+    fn a_selection_change_changes_pixels_only_inside_the_areas_of_the_items_it_changes() {
+        for scale in [1.0_f32, 1.5] {
+            let (_d, mut browser, places, mut painter, frame) = listing(scale, 6, 0.0);
+            browser.press(0, crate::selection::Modifiers::default());
+            let first = paint_listing(&mut painter, &frame, &browser, &places, scale);
+            browser.press(1, crate::selection::Modifiers::default());
+            let second = paint_listing(&mut painter, &frame, &browser, &places, scale);
+            assert_ne!(
+                first.data(),
+                second.data(),
+                "the selection shows at {scale}x"
+            );
+            let areas: Vec<GeoRect> = [0, 1]
+                .into_iter()
+                .map(|i| item_area(&frame, i).unwrap())
+                .collect();
+            assert_eq!(
+                differing_outside(&first, &second, &areas, scale),
+                vec![],
+                "selection change at {scale}x"
+            );
+            let (pixels, bytes) = if scale == 1.0 {
+                (52_920, 211_680)
+            } else {
+                (121_330, 485_320)
+            };
+            assert_eq!(damaged_pixels(&areas, scale), pixels, "pixels at {scale}x");
+            assert_eq!(
+                damaged_pixels(&areas, scale) * 4,
+                bytes,
+                "bytes at {scale}x"
+            );
+        }
+    }
+
+    #[test]
+    fn a_scroll_changes_pixels_only_inside_the_content() {
+        for scale in [1.0_f32, 1.5] {
+            let (_d, browser, places, mut painter, top) = listing(scale, 60, 0.0);
+            let scrolled = painter.frame(
+                Size { w: 920.0, h: 436.0 },
+                &places,
+                Bars::HIDDEN,
+                window::TOOLBAR_SEARCH_FIELD.0,
+                browser.dir(),
+                ViewMode::List,
+                browser.outline(),
+                48.0,
+                scale,
+            );
+            assert!(scrolled.scroll > 0.0, "the folder scrolls");
+            let (a, b) = (
+                paint_listing(&mut painter, &top, &browser, &places, scale),
+                paint_listing(&mut painter, &scrolled, &browser, &places, scale),
+            );
+            assert_ne!(a.data(), b.data(), "the content moves at {scale}x");
+            let c = top.window.content;
+            let areas = [GeoRect::new(c.x, c.y, c.w, c.h)];
+            assert_eq!(
+                differing_outside(&a, &b, &areas, scale),
+                vec![],
+                "scroll at {scale}x"
+            );
+            let (pixels, bytes) = if scale == 1.0 {
+                (275_377, 1_101_508)
+            } else {
+                (620_425, 2_481_700)
+            };
+            assert_eq!(damaged_pixels(&areas, scale), pixels, "pixels at {scale}x");
+            assert_eq!(
+                damaged_pixels(&areas, scale) * 4,
+                bytes,
+                "bytes at {scale}x"
             );
         }
     }

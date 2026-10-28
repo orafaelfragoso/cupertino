@@ -125,13 +125,12 @@ pub fn run(activation_token: String) -> Result<()> {
                         && !mods.logo
                         && !mods.alt
                         && matches!(code, key::ENTER | key::KEYPAD_ENTER | key::SPACE)
+                        && info_request.is_none()
                     {
-                        if info_request.is_none() {
-                            info_request = Some(conn.request_activation_token(
-                                window.surface(),
-                                Some("cupertino-settings"),
-                            )?);
-                        }
+                        info_request = Some(conn.request_activation_token(
+                            window.surface(),
+                            Some("cupertino-settings"),
+                        )?);
                     }
                 }
                 Event::Pointer {
@@ -150,13 +149,11 @@ pub fn run(activation_token: String) -> Result<()> {
                     let activate = !down && pressed && inside;
                     pressed = down && inside;
                     presenter.request_redraw();
-                    if activate {
-                        if info_request.is_none() {
-                            info_request = Some(conn.request_activation_token(
-                                window.surface(),
-                                Some("cupertino-settings"),
-                            )?);
-                        }
+                    if activate && info_request.is_none() {
+                        info_request = Some(conn.request_activation_token(
+                            window.surface(),
+                            Some("cupertino-settings"),
+                        )?);
                     }
                 }
                 Event::Pointer {
@@ -227,6 +224,18 @@ fn primary_is_ctrl(path: Option<&Path>) -> bool {
     }
 }
 
+fn more_info(token: &str) -> Result<()> {
+    let mut child = std::process::Command::new(std::env::current_exe()?)
+        .env("XDG_ACTIVATION_TOKEN", token)
+        .spawn()?;
+    std::thread::spawn(move || match child.wait() {
+        Ok(status) if status.success() => {}
+        Ok(status) => eprintln!("cupertino-settings: More Info exited with {status}"),
+        Err(e) => eprintln!("cupertino-settings: cannot wait for More Info: {e}"),
+    });
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,16 +251,4 @@ mod tests {
         assert!(!primary_is_ctrl(Some(&path)));
         assert!(!primary_is_ctrl(None));
     }
-}
-
-fn more_info(token: &str) -> Result<()> {
-    let mut child = std::process::Command::new(std::env::current_exe()?)
-        .env("XDG_ACTIVATION_TOKEN", token)
-        .spawn()?;
-    std::thread::spawn(move || match child.wait() {
-        Ok(status) if status.success() => {}
-        Ok(status) => eprintln!("cupertino-settings: More Info exited with {status}"),
-        Err(e) => eprintln!("cupertino-settings: cannot wait for More Info: {e}"),
-    });
-    Ok(())
 }

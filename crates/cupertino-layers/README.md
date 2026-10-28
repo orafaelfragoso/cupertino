@@ -72,10 +72,10 @@ when the apps move to Kit controls (Phase 4, row 177).
 `DENIED_PATHS` forbids any chain of dependencies from `ui` to `core`, `shell` or `services`; a denied path fails the
 check even when exceptions excuse its edges. The licence check requires a crate whose `license` starts with `MPL-2.0`
 to have a `LICENSE` file with the MPL-2.0 text, and rejects normal dependencies on workspace crates under GPL or AGPL.
-It also follows resolved normal dependencies through external crates and requires an accepted SPDX licence expression.
+It also follows resolved normal and build dependencies through external crates and requires an accepted SPDX licence expression.
 An `OR` expression passes if at least one option is accepted; every term of an `AND` expression must be accepted.
 Missing or unrecognised external licences fail, except for the vendored xkbcommon licence text identified by its hash.
-Build and dev dependencies do not count in these checks.
+Dev dependencies do not count in these checks. Required toolkit and transport roots must be present and licensed under MPL-2.0.
 
 `DENIED_CRATES` forbids any chain of normal dependencies, external crates
 included, from `cupertino-wayland-client` to `cupertino-protocols` or another compositor's protocol crates: the public

@@ -19,6 +19,7 @@ use cupertino_bluetooth::{AddressType, ClassOfDevice, Command, DeviceId, Eir, Ei
 use cupertino_btd::auth::{Authorizer, Decision};
 use cupertino_btd::daemon::{Bus, Config, Daemon};
 use cupertino_btd::error::{Error, Result};
+use cupertino_btd::transport::NoBluetooth;
 use tempfile::TempDir;
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::{ObjectPath, OwnedValue};
@@ -312,6 +313,32 @@ fn register_agent(client: &Connection, accept: bool) -> Arc<Mutex<Vec<String>>> 
         )
         .unwrap();
     calls
+}
+
+#[test]
+fn a_kernel_without_bluetooth_leaves_the_name_owned_with_no_adapter() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let keys = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(Config {
+        bus: Bus::Address(bus.address.clone()),
+        keys_dir: keys.path().join("bluetooth"),
+        read_only: false,
+        authorizer: Box::new(Scripted {
+            decision: Decision::Allowed,
+            asked: Arc::new(Mutex::new(Vec::new())),
+        }),
+        transport: Arc::new(NoBluetooth),
+    })
+    .unwrap();
+    std::thread::spawn(move || daemon.run());
+    let client = bus.connect();
+    let proxy = proxy_on(&client);
+    assert!(!proxy.get_property::<bool>("Available").unwrap());
+    assert!(!proxy.get_property::<bool>("Powered").unwrap());
+    assert!(proxy.set_property("Powered", true).is_err());
 }
 
 #[test]

@@ -23,7 +23,7 @@ devices, pairing with a dialog the shell draws, connecting, and forgetting. It t
 | `model` | `Model`: adapters and devices as a pure model that takes packets, requests and time and returns `Effect`s (send, open a link, load or save keys, answer a caller, announce a change, ask the agent) |
 | `request` | `Request`, `RequestError`, `Effect`, `Change`, `Ticket` |
 | `keys` | `KeySet`, `KeyStore`: link keys and long term keys, one file per adapter |
-| `transport` | `Transport` (what the daemon needs from the kernel), `KernelTransport` (the real management socket) |
+| `transport` | `Transport` (what the daemon needs from the kernel), `KernelTransport` (the real management socket), `NoBluetooth` (the stand-in for a kernel without Bluetooth) |
 | `auth`, `daemon`, `interfaces` (feature `dbus`) | `Authorizer`, `LogindAuthorizer`, `AllowAll`; `Daemon::start(Config)`, `run`; the D-Bus object, `DeviceView`, `BluetoothError` |
 
 Features: `dbus` (default; zbus, `cupertino-seat`), `app` (the `cupertino-btd` binary, implies `dbus`).
@@ -35,6 +35,7 @@ cargo run -p cupertino-btd --features app -- [--session-bus [--no-auth]] [--keys
 ```
 
 - **System bus by default**, as root (or with `CAP_NET_ADMIN`), because the kernel refuses every changing command without it.
+- **A kernel without Bluetooth** (`socket(BTPROTO_HCI)` fails with `EAFNOSUPPORT` or `EPROTONOSUPPORT`, in either bus mode) is a normal machine, not an error: the daemon warns on stderr, keeps `org.cupertino.Bluetooth1` and reports no adapter (`Available` false). Any other failure to open the socket still stops it.
 - **`--keys-dir`** is where the keys live; default `/var/lib/cupertino/bluetooth/`.
 - **`--read-only`** sends only the read commands and refuses every request with `ReadOnly`. It works unprivileged and has
   no device list.

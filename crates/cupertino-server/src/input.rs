@@ -134,6 +134,8 @@ pub enum Action {
     LogOut,
     /// Open the login process's power panel.
     PowerDialog,
+    /// Give the keys and the pointer back to the system while an application holds them.
+    ReleaseShortcuts,
     SwitchVt(i32),
     ShowDesktop,
     AppGrid,
@@ -256,6 +258,7 @@ const NAMES: &[(&str, Action)] = &[
     ("power-key", Action::PowerKey),
     ("log-out", Action::LogOut),
     ("power-dialog", Action::PowerDialog),
+    ("release-shortcuts", Action::ReleaseShortcuts),
     ("input-source-previous", Action::InputSourcePrevious),
     ("input-source-next", Action::InputSourceNext),
     (
@@ -352,6 +355,63 @@ const NAMES: &[(&str, Action)] = &[
 ];
 
 impl Action {
+    /// Whether the compositor acts on the action whatever an application holds: the keys that leave the session, lock
+    /// it, power the machine or release what an application holds are never given away. Every action is listed, so a
+    /// new one is decided on when it is added.
+    pub fn is_reserved(&self) -> bool {
+        match self {
+            Action::SwitchVt(_)
+            | Action::Lock
+            | Action::PowerKey
+            | Action::PowerDialog
+            | Action::QuitCompositor
+            | Action::ReleaseShortcuts => true,
+            Action::SwitcherNext
+            | Action::SwitcherPrev
+            | Action::CycleWindowsNext
+            | Action::CycleWindowsPrev
+            | Action::QuitApp
+            | Action::CloseWindow
+            | Action::Minimize
+            | Action::MinimizeOrRestore
+            | Action::HideApp
+            | Action::HideOthers
+            | Action::ToggleZoom
+            | Action::ToggleFullscreen
+            | Action::TileLeft
+            | Action::TileRight
+            | Action::TileFill
+            | Action::Overview
+            | Action::AppOverview
+            | Action::WorkspaceLeft
+            | Action::WorkspaceRight
+            | Action::MoveToWorkspaceLeft
+            | Action::MoveToWorkspaceRight
+            | Action::AddWorkspace
+            | Action::SpawnTerminal
+            | Action::Screenshot(_)
+            | Action::LogOut
+            | Action::ShowDesktop
+            | Action::AppGrid
+            | Action::ForceQuit
+            | Action::Launcher
+            | Action::FocusMenuBar
+            | Action::ToggleDockAutoHide
+            | Action::HelpSearch
+            | Action::NotificationCenter
+            | Action::ControlPanel
+            | Action::ToggleAppearance
+            | Action::ToggleDisplayOption(_)
+            | Action::ToggleStage
+            | Action::InputSourcePrevious
+            | Action::InputSourceNext
+            | Action::Workspace(_)
+            | Action::MoveToWorkspace(_)
+            | Action::Exec(_)
+            | Action::Osd { .. } => false,
+        }
+    }
+
     pub fn from_name(name: &str) -> Option<Action> {
         if let Some(n) = name.strip_prefix("workspace:").and_then(|n| n.parse().ok()) {
             return Some(Action::Workspace(n));
@@ -491,6 +551,7 @@ impl KeyBindings {
             I::InputSourceNext => Action::InputSourceNext,
             I::Logout => Action::LogOut,
             I::PowerDialog => Action::PowerDialog,
+            I::ReleaseShortcuts => Action::ReleaseShortcuts,
             I::Screenshot(r) => Action::Screenshot(*r),
             I::Exec(cmd) => {
                 self.exec.push(cmd.clone());
@@ -500,14 +561,38 @@ impl KeyBindings {
         })
     }
 
-    pub fn bind(&mut self, chord: Chord, action: Action) {
+    /// Bind `chord` to `action`. Whatever the source of the binding, the person keeps a chord that releases the
+    /// shortcuts: a release chord without Ctrl, Alt or Super is refused, and so is a binding that would take the last
+    /// release chord away. Returns whether it was bound.
+    pub fn bind(&mut self, chord: Chord, action: Action) -> bool {
+        let weak = !(chord.mods.ctrl || chord.mods.alt || chord.mods.logo);
+        let last_release = action != Action::ReleaseShortcuts
+            && self
+                .entries
+                .iter()
+                .any(|(c, a)| *c == chord && *a == Action::ReleaseShortcuts)
+            && !self
+                .entries
+                .iter()
+                .any(|(c, a)| *c != chord && *a == Action::ReleaseShortcuts);
+        if (action == Action::ReleaseShortcuts && weak) || last_release {
+            return false;
+        }
         self.entries.retain(|(c, _)| *c != chord);
         self.entries.push((chord, action));
+        true
     }
 
     pub fn bind_str(&mut self, chord: &str, action: Action) -> Result<(), String> {
-        self.bind(parse_chord(chord)?, action);
-        Ok(())
+        self.bind_checked(parse_chord(chord)?, action)
+    }
+
+    fn bind_checked(&mut self, chord: Chord, action: Action) -> Result<(), String> {
+        if self.bind(chord, action) {
+            Ok(())
+        } else {
+            Err("the chord that releases the shortcuts an application holds stays bound, and takes Ctrl, Alt or Super".into())
+        }
     }
 
     /// [`KeyBindings::bind_str`] for the modifier profile `profile`.
@@ -517,8 +602,7 @@ impl KeyBindings {
         action: Action,
         profile: &str,
     ) -> Result<(), String> {
-        self.bind(parse_chord_for(chord, profile)?, action);
-        Ok(())
+        self.bind_checked(parse_chord_for(chord, profile)?, action)
     }
 
     pub fn lookup(&self, sym: u32, mods: Mods) -> Option<Action> {
@@ -680,6 +764,8 @@ pub enum ShellOp {
     LogOut,
     /// Open the login process's power panel.
     PowerDialog,
+    /// End what an application holds of the keys and the pointer.
+    ReleaseShortcuts,
     /// Tell the login process the power key went down (`true`) or up. It times the hold.
     PowerKey {
         pressed: bool,
@@ -736,6 +822,9 @@ pub struct ActionContext {
     pub current_workspace: usize,
     /// The session is locked: only VT switching stays bound.
     pub locked: bool,
+    /// An application holds the keys or the pointer of the focused window: the chord that releases them acts only
+    /// then, and is the application's key otherwise.
+    pub input_held: bool,
 }
 
 /// Translate an action into commands and operations.
@@ -864,6 +953,7 @@ pub fn translate_action(action: Action, ctx: &ActionContext) -> ActionPlan {
         Action::PowerKey => plan.ops.push(ShellOp::PowerKey { pressed: true }),
         Action::LogOut => plan.ops.push(ShellOp::LogOut),
         Action::PowerDialog => plan.ops.push(ShellOp::PowerDialog),
+        Action::ReleaseShortcuts => plan.ops.push(ShellOp::ReleaseShortcuts),
         Action::Exec(i) => plan.ops.push(ShellOp::Exec(i)),
         Action::Osd { key, fine } => plan.ops.push(ShellOp::Osd { key, fine }),
         Action::Workspace(n) => {
@@ -1021,7 +1111,11 @@ impl KeyRouter {
             self.suppressed.insert(sym, None);
             return KeyOutcome::Consumed(switcher_key(sym, ev.mods, ev.repeat).unwrap_or_default());
         }
-        match self.bindings.lookup(ev.sym, ev.mods) {
+        match self
+            .bindings
+            .lookup(ev.sym, ev.mods)
+            .filter(|action| ctx.input_held || *action != Action::ReleaseShortcuts)
+        {
             Some(action) => {
                 if matches!(action, Action::SwitcherNext | Action::SwitcherPrev) {
                     self.switcher_hold = Some(Mods {
@@ -1976,5 +2070,65 @@ mod tests {
             assert_eq!(a.name(), *n);
         }
         assert_eq!(Action::from_name("zzz"), None);
+    }
+
+    #[test]
+    fn only_the_keys_that_leave_lock_or_power_the_session_and_the_release_are_reserved() {
+        let mut reserved: Vec<String> = NAMES
+            .iter()
+            .map(|(_, a)| *a)
+            .chain([Action::SwitchVt(3)])
+            .filter(Action::is_reserved)
+            .map(|a| a.name())
+            .collect();
+        reserved.sort();
+        assert_eq!(
+            reserved,
+            [
+                "lock",
+                "power-dialog",
+                "power-key",
+                "quit-compositor",
+                "release-shortcuts",
+                "switch-vt-3",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_last_release_chord_stays_and_another_usable_one_may_replace_it() {
+        let mut b = KeyBindings::default();
+        let release = parse_chord("Super+Escape").unwrap();
+        let other = parse_chord("Super+F9").unwrap();
+        assert!(
+            b.bind(release, Action::Lock),
+            "no release chord yet to lose"
+        );
+        b.bind(release, Action::ReleaseShortcuts);
+        assert!(!b.bind(release, Action::Lock));
+        assert!(!b.bind(parse_chord("Escape").unwrap(), Action::ReleaseShortcuts));
+        assert!(b.bind(other, Action::ReleaseShortcuts));
+        assert!(
+            b.bind(release, Action::Lock),
+            "another release chord is bound"
+        );
+        assert!(!b.bind(other, Action::Lock), "now the last one");
+    }
+
+    #[test]
+    fn the_release_chord_acts_only_while_an_application_holds_the_input() {
+        let mut r = KeyRouter::new(Config::default().keybindings);
+        let held = ActionContext {
+            input_held: true,
+            ..ctx()
+        };
+        assert!(
+            matches!(press(&mut r, "Super+Escape", &ctx()), KeyOutcome::Forward),
+            "nothing is held: the application gets the key"
+        );
+        let KeyOutcome::Consumed(plan) = press(&mut r, "Super+Escape", &held) else {
+            panic!("the release chord is consumed while the input is held");
+        };
+        assert_eq!(plan.ops, [ShellOp::ReleaseShortcuts]);
     }
 }

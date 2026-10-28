@@ -15,7 +15,7 @@ use std::sync::Arc;
 use cupertino_menu_model::{ActionName, MenuBar, ModifierMap, Scope};
 use objects::{action_changes, Actions, Menus, OnActivate};
 use wire::WireMenus;
-use zbus::blocking::Connection;
+use zbus::blocking::{connection, Connection};
 use zbus::zvariant::OwnedValue;
 
 /// A window of the application, numbered by the application.
@@ -70,10 +70,13 @@ fn app_path(app_id: &str) -> String {
 }
 
 impl Exporter {
-    /// `on_activate` runs on the bus connection's thread for each chosen item; it passes the activation on to the
-    /// application's own thread.
+    /// Connect with `builder` (`connection::Builder::session()` for the desktop's bus). The connection serves the
+    /// application object from the start: zbus then listens for method calls before it reads the socket, so no call
+    /// that arrives once an address is announced can be dropped unanswered, as one sent to an object server started
+    /// on an open connection can be. `on_activate` runs on the bus connection's thread for each chosen item; it passes
+    /// the activation on to the application's own thread.
     pub fn new(
-        conn: Connection,
+        builder: connection::Builder<'_>,
         app_id: &str,
         map: Box<dyn ModifierMap + Send + Sync>,
         on_activate: impl Fn(Activation) + Send + Sync + 'static,
@@ -83,12 +86,21 @@ impl Exporter {
                 "an application id is required".to_string(),
             ));
         }
+        let app_path = app_path(app_id);
+        let on_activate: OnActivate = Arc::new(on_activate);
+        let app_actions = Actions {
+            scope: Scope::App,
+            window: None,
+            enabled: BTreeMap::new(),
+            on_activate: on_activate.clone(),
+        };
+        let conn = builder.serve_at(app_path.as_str(), app_actions)?.build()?;
         Ok(Exporter {
             conn,
             app_id: app_id.to_string(),
-            app_path: app_path(app_id),
+            app_path,
             map,
-            on_activate: Arc::new(on_activate),
+            on_activate,
             windows: BTreeMap::new(),
         })
     }

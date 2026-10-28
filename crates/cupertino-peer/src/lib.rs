@@ -765,6 +765,20 @@ mod tests {
     }
 
     #[test]
+    fn a_flatpak_process_that_exited_is_not_the_instance_its_info_file_names() {
+        let mut proxy = Other::start();
+        let me = std::process::id();
+        let proc_root = tempfile::tempdir().unwrap();
+        write_flatpak_info(proc_root.path(), me, "org.example.App", "1234");
+        write_flatpak_info(proc_root.path(), proxy.pid(), "org.example.App", "1234");
+        let flatpak = Some(Sandbox::Flatpak);
+        let gone = held(proxy.pid(), flatpak);
+        proxy.0.kill().unwrap();
+        proxy.0.wait().unwrap();
+        assert!(!same_instance(&held(me, flatpak), &gone, proc_root.path()));
+    }
+
+    #[test]
     fn another_flatpak_instance_or_application_is_not_the_same_instance() {
         let other = Other::start();
         let me = std::process::id();

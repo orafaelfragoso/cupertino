@@ -639,6 +639,8 @@ enum Cmd {
     Edit(EditAction),
     /// Send `edit` with a raw value.
     EditRaw(u32),
+    /// Choose Force Quit <app> with Alt held: `force_quit_app` with this application id.
+    ForceQuitApp(String),
     /// Destroy the menu bar, its layer surface and the surface, as an exiting bar process does.
     Destroy,
 }
@@ -839,6 +841,7 @@ impl BarClient {
                     surface.destroy();
                 }
                 Cmd::Edit(action) => bar.edit(action),
+                Cmd::ForceQuitApp(app_id) => bar.force_quit_app(app_id),
                 Cmd::EditRaw(value) => {
                     let _ = bar.send_request(cupertino_menu_bar_v1::Request::Edit {
                         action: wayland_client::WEnum::Unknown(value),
@@ -3949,4 +3952,129 @@ fn the_shortcut_group_carries_the_help_search_chord_under_both_profiles() {
     let before = engage_help_events(&bar);
     h.help_search_chord();
     h.wait_until("engage_help", |_| engage_help_events(&bar) == before + 1);
+}
+
+// ---- Force Quit <app> with Alt held (version 13) -----------------------------------------------
+
+const SIGTERM: i32 = 15;
+const SIGKILL: i32 = 9;
+
+/// Record the signals instead of sending them. The test clients are threads of this process, which the server would refuse
+/// to signal, so the server is told its process id is another one.
+fn record_signals(h: &mut Harness) -> Arc<Mutex<Vec<(u32, i32)>>> {
+    h.state.force_quits.own_pid = u32::MAX;
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let recorder = sent.clone();
+    h.state.send_signal =
+        Box::new(move |process, signal| recorder.lock().unwrap().push((process.pid, signal)));
+    sent
+}
+
+fn signals(sent: &Arc<Mutex<Vec<(u32, i32)>>>) -> Vec<(u32, i32)> {
+    sent.lock().unwrap().clone()
+}
+
+#[test]
+fn force_quit_app_ends_the_active_application_that_answers_as_the_dialog_does() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_at(&mut h, 13);
+    let (_app, _window) = key_app(&mut h, "org.example.editor");
+    let sent = record_signals(&mut h);
+    let pid = std::process::id();
+
+    bar.send(Cmd::ForceQuitApp("org.example.editor".into()));
+    h.settle_requests(&bar);
+    assert_eq!(signals(&sent), vec![(pid, SIGTERM)]);
+    assert_eq!(h.state.force_quits.pending(), 1);
+    h.advance(3.5);
+    assert_eq!(signals(&sent), vec![(pid, SIGTERM), (pid, SIGKILL)]);
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn force_quit_app_kills_an_active_application_that_does_not_answer_at_once() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_at(&mut h, 13);
+    let client = common::Client::toplevel(h.socket_path());
+    let window = h.mapped_window(1);
+    let sent = record_signals(&mut h);
+    client.mute(true);
+    h.advance(1.1);
+    h.advance(2.5);
+    assert!(h.state.window_is_unresponsive(window));
+
+    bar.send(Cmd::ForceQuitApp("org.example.locked-out".into()));
+    h.settle_requests(&bar);
+    assert_eq!(signals(&sent), vec![(std::process::id(), SIGKILL)]);
+    assert_eq!(h.state.force_quits.pending(), 0);
+}
+
+#[test]
+fn force_quit_app_ends_nothing_once_another_application_is_active() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_at(&mut h, 13);
+    // the bar built its label for the editor; the viewer became active before the request arrived
+    let (_editor, _) = key_app(&mut h, "org.example.editor");
+    let (_viewer, _) = key_app(&mut h, "org.example.viewer");
+    let sent = record_signals(&mut h);
+
+    bar.send(Cmd::ForceQuitApp("org.example.editor".into()));
+    bar.send(Cmd::ForceQuitApp(String::new()));
+    h.settle_requests(&bar);
+    h.advance(3.5);
+    assert_eq!(signals(&sent), vec![]);
+    assert_eq!(h.state.force_quits.pending(), 0);
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn force_quit_app_is_ignored_while_a_lock_is_pending_or_the_session_is_locked() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_at(&mut h, 13);
+    let (_app, _) = key_app(&mut h, "org.example.editor");
+    let sent = record_signals(&mut h);
+    let locker = common::Client::locker(common::session_agent(&h.state));
+    // only requests are handled, no tick: the lock stays pending
+    h.dispatch_until("the lock to begin", |s| s.session_lock.is_active());
+    let from = bar.roundtrips();
+    bar.send(Cmd::ForceQuitApp("org.example.editor".into()));
+    h.dispatch_until("the request to be handled", |_| {
+        bar.roundtrips() >= from + 2
+    });
+    assert!(!locker.locked(), "the lock is still pending");
+    assert_eq!(signals(&sent), vec![], "nothing while the lock is pending");
+
+    h.wait_until("the session to be locked", |_| locker.locked());
+    bar.send(Cmd::ForceQuitApp("org.example.editor".into()));
+    h.settle_requests(&bar);
+    assert_eq!(signals(&sent), vec![], "nothing while locked");
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn force_quit_app_with_an_id_over_255_bytes_is_ignored() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_at(&mut h, 13);
+    let long: &'static str = "a".repeat(MAX_APPLICATION_ID_BYTES + 1).leak();
+    let (_app, _) = key_app(&mut h, long);
+    let sent = record_signals(&mut h);
+
+    bar.send(Cmd::ForceQuitApp(long.to_owned()));
+    h.settle_requests(&bar);
+    assert_eq!(signals(&sent), vec![]);
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn force_quit_app_needs_version_13() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_app, _) = key_app(&mut h, "org.example.editor");
+    let sent = record_signals(&mut h);
+    let old = bar_at(&mut h, 12);
+    old.send(Cmd::ForceQuitApp("org.example.editor".into()));
+    // wl_display.invalid_method: the request is newer than the object, and the server ends the connection
+    h.wait_until("the version 12 bar to be disconnected", |s| {
+        s.menu_bars.is_empty()
+    });
+    assert_eq!(signals(&sent), vec![]);
 }

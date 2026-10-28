@@ -13,7 +13,7 @@ use cupertino_geometry::{Insets, Point, Rect, Size};
 use std::collections::HashMap;
 use std::hash::Hash;
 
-pub use engine::layout;
+pub use engine::{layout, layout_cached, LayoutCache};
 pub use virtual_list::VirtualList;
 
 /// The range one axis may take: `0 <= min <= ideal <= max`, where only `max` may be infinite.
@@ -212,6 +212,26 @@ pub enum ContainerKind {
     },
 }
 
+/// How many grid tracks a cell covers. Zero counts as one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GridSpan {
+    pub columns: usize,
+    pub rows: usize,
+}
+
+impl GridSpan {
+    pub const ONE: GridSpan = GridSpan {
+        columns: 1,
+        rows: 1,
+    };
+}
+
+impl Default for GridSpan {
+    fn default() -> Self {
+        Self::ONE
+    }
+}
+
 /// How one node takes part in layout.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutSpec {
@@ -222,6 +242,10 @@ pub struct LayoutSpec {
     pub flex: Flex,
     pub align_self: Option<Align>,
     pub overflow: Overflow,
+    /// The tracks this node covers when its parent is a grid.
+    pub span: GridSpan,
+    /// Where this node's top-leading corner sits in an absolute container, from the container's own corner.
+    pub position: Point,
 }
 
 impl LayoutSpec {
@@ -235,6 +259,8 @@ impl LayoutSpec {
             flex: Flex::NONE,
             align_self: None,
             overflow: Overflow::Visible,
+            span: GridSpan::ONE,
+            position: Point::ZERO,
         }
     }
 }
@@ -257,7 +283,8 @@ pub trait LayoutTree {
 
     fn children(&self, id: Self::Id) -> &[Self::Id];
     fn spec(&self, id: Self::Id) -> &LayoutSpec;
-    /// Changes whenever the node's spec, children or leaf content change; cached measurements key on it.
+    /// Changes whenever the node's spec, its list of children or its leaf content change. It need not change when a
+    /// descendant does: [`layout_cached`] invalidates the ancestors itself.
     fn generation(&self, id: Self::Id) -> Generation;
     /// The size of a leaf (text, image, icon) under `constraints`.
     fn measure_leaf(&self, id: Self::Id, constraints: Constraints) -> Measured;

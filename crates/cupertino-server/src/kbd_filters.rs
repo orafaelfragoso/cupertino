@@ -172,7 +172,7 @@ fn rewrite_masks(
 
 /// The key that types `sym` at the first level of the layout `state` gives it; else, the way the shortcut matcher reads
 /// a key whose own symbol is not ASCII (`raw_latin_sym_or_raw_current_sym`), the key whose first ASCII symbol in another
-/// layout is `sym`: the key a Latin user presses for it.
+/// layout is `sym`: the key a Latin user presses for it. `sym` is a first-level symbol, so a letter is its lower case.
 fn key_for_sym(keymap: &xkb::Keymap, state: &xkb::State, sym: u32) -> Option<Keycode> {
     let first = |code: Keycode, layout: u32| {
         keymap

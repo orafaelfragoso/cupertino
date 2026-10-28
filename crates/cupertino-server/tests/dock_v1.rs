@@ -1173,6 +1173,22 @@ impl Harness {
         self.step();
     }
 
+    /// One key through the filters of the keyboard path (sticky keys), as a device would deliver it.
+    fn device_key(&mut self, code: u32, pressed: bool) {
+        let state = if pressed {
+            KeyState::Pressed
+        } else {
+            KeyState::Released
+        };
+        self.state.key_after_delays(Keycode::new(code), state, 0);
+        self.step();
+    }
+
+    fn device_tap(&mut self, code: u32) {
+        self.device_key(code, true);
+        self.device_key(code, false);
+    }
+
     /// Tap Tab: opens the switcher while Super is held, or steps it when it is open.
     fn tap(&mut self, code: u32) {
         self.key(code, true);
@@ -1278,6 +1294,33 @@ fn under_classic_pc_alt_tab_switches_and_releasing_alt_commits() {
     h.key(KEY_ALT, false);
     assert!(h.state.wm.switcher().is_none());
     assert_eq!(h.state.wm.key_window(), Some(one));
+}
+
+/// The shortcut match comes after sticky keys: a latched modifier counts as held for the system chords, under either
+/// profile. The latch is freed with the release of the key that used it, so the switcher the chord opened commits at
+/// once: a latched Alt and Tab switch to the previous application.
+#[test]
+fn a_latched_modifier_takes_part_in_the_system_chords() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_apps, [three, two, _one]) = h.three_apps();
+    let settings = |profile| cupertino_defaults::keyboard::KeyboardSettings {
+        modifier_profile: Some(profile),
+        sticky_keys: Some(true),
+        ..Default::default()
+    };
+    h.state.apply_keyboard_change(
+        &cupertino_defaults::keyboard::KeyboardSettings::default(),
+        &settings(cupertino_defaults::keyboard::ModifierProfile::ClassicPc),
+    );
+    // Tab alone does nothing
+    h.device_tap(KEY_TAB);
+    assert!(h.state.wm.switcher().is_none());
+    assert_eq!(h.state.wm.key_window(), Some(three));
+    // Alt tapped and released, then Tab: the Alt is latched, so this is Alt+Tab
+    h.device_tap(KEY_ALT);
+    h.device_tap(KEY_TAB);
+    assert!(h.state.wm.switcher().is_none());
+    assert_eq!(h.state.wm.key_window(), Some(two));
 }
 
 #[test]

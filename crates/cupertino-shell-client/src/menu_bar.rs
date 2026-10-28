@@ -2,13 +2,16 @@
 
 use cupertino_protocols::client::cupertino_menu_bar_v1::{
     self, AgentTrust, AppWindowFlags, BoundAction as WireBoundAction, Command, CupertinoMenuBarV1,
-    ModifierKey, SessionAction as WireSessionAction,
+    EditAction as WireEditAction, ModifierKey, SessionAction as WireSessionAction,
 };
 use std::collections::BTreeMap;
 use wayland_client::{Proxy, WEnum};
 
 /// The version that adds the window list, the shortcuts and the commands of the default menus.
 const DEFAULT_MENUS_VERSION: u32 = 10;
+
+/// The version that adds the edit request.
+const EDIT_VERSION: u32 = 11;
 
 /// Application id (the desktop entry id when known) and title of the active window; both are
 /// empty when no window is active.
@@ -255,6 +258,30 @@ impl From<SessionAction> for WireSessionAction {
     }
 }
 
+/// An item of the Edit menu, for the server to send as a key chord to the key window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditAction {
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+}
+
+impl From<EditAction> for WireEditAction {
+    fn from(a: EditAction) -> Self {
+        match a {
+            EditAction::Undo => WireEditAction::Undo,
+            EditAction::Redo => WireEditAction::Redo,
+            EditAction::Cut => WireEditAction::Cut,
+            EditAction::Copy => WireEditAction::Copy,
+            EditAction::Paste => WireEditAction::Paste,
+            EditAction::SelectAll => WireEditAction::SelectAll,
+        }
+    }
+}
+
 /// The menu bar of one output. Dropping it gives up the role.
 pub struct MenuBar {
     proxy: CupertinoMenuBarV1,
@@ -293,6 +320,19 @@ impl MenuBar {
     /// Move the active window to a workspace of its output (1-based).
     pub fn move_to_workspace(&self, workspace: u32) {
         self.proxy.move_to_workspace(workspace);
+    }
+
+    /// An item of the Edit menu was chosen: the server types its chord into the key window once the keyboard is back
+    /// there. Send it before the menu closes, while its popup still holds the grab. Not sent before version 11.
+    pub fn edit(&self, action: EditAction) {
+        if self.can_edit() {
+            self.proxy.edit(action.into());
+        }
+    }
+
+    /// Whether the server takes [`Self::edit`] (version 11).
+    pub fn can_edit(&self) -> bool {
+        self.proxy.version() >= EDIT_VERSION
     }
 }
 

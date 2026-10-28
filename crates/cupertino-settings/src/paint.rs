@@ -373,6 +373,20 @@ fn search_style(pal: &Palette) -> FieldStyle {
     }
 }
 
+/// Points around the search field that its focus ring and caret reach.
+const SEARCH_REACH: f64 = 6.0;
+
+/// Where a blink of the search field's caret changes the window.
+pub fn caret_area(layout: &WindowLayout) -> Rect {
+    let r = layout.search;
+    Rect::new(
+        r.x - SEARCH_REACH,
+        r.y - SEARCH_REACH,
+        r.w + 2.0 * SEARCH_REACH,
+        r.h + 2.0 * SEARCH_REACH,
+    )
+}
+
 /// Text, symbols and the drawing of the window and the results popup.
 pub struct Painter {
     pub text: TextRenderer,
@@ -1874,6 +1888,74 @@ mod tests {
                     "{name} in {appearance:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_caret_blink_changes_pixels_only_inside_the_area_it_reports() {
+        let theme = Theme::load().expect("the design tokens of the repository");
+        let mut painter = Painter::new(&Assets::builtin()).expect("the painter");
+        let pal = Palette::from_theme(&theme, Appearance::Light).unwrap();
+        for scale in [1.0_f32, 1.5] {
+            let size = crate::window::default_size(f64::from(scale));
+            let layout = WindowLayout::new(
+                size,
+                f64::from(scale),
+                RowSize::default(),
+                &crate::sidebar::groups(),
+                false,
+            );
+            let history = History::new(PaneId::Wifi);
+            let mut search = SearchField::default();
+            search.edit(|f| f.insert("wifi"));
+            let view = PaneView {
+                sections: &[],
+                layout: &[],
+                scroll: 0.0,
+                dragging: None,
+            };
+            let mut paint = |caret: bool| {
+                let state = WindowState {
+                    selected: PaneId::Wifi,
+                    has_battery: None,
+                    active: true,
+                    history: &history,
+                    search: &search,
+                    search_focused: true,
+                    search_caret: caret,
+                };
+                let mut pm = Pixmap::new(
+                    (size.w * f64::from(scale)) as u32,
+                    (size.h * f64::from(scale)) as u32,
+                )
+                .unwrap();
+                painter.paint_window(&mut pm, scale, &layout, &state, &view, &pal);
+                pm
+            };
+            let (on, off) = (paint(true), paint(false));
+            assert_ne!(on.data(), off.data(), "the caret shows at {scale}x");
+            // the area in whole device pixels, the way the presenter converts and reports it
+            let a = caret_area(&layout);
+            let f = f64::from(scale);
+            let (x0, y0) = ((a.x * f).floor() as u32, (a.y * f).floor() as u32);
+            let (x1, y1) = (
+                ((a.x + a.w) * f).ceil() as u32,
+                ((a.y + a.h) * f).ceil() as u32,
+            );
+            let outside: Vec<(u32, u32)> = (0..on.height())
+                .flat_map(|y| (0..on.width()).map(move |x| (x, y)))
+                .filter(|&(x, y)| on.pixel(x, y) != off.pixel(x, y))
+                .filter(|&(x, y)| !(x >= x0 && x < x1 && y >= y0 && y < y1))
+                .collect();
+            assert_eq!(outside, vec![], "caret blink at {scale}x");
+            let pixels = u64::from(x1 - x0) * u64::from(y1 - y0);
+            let (want_pixels, want_bytes) = if scale == 1.0 {
+                (8_360, 33_440)
+            } else {
+                (28_500, 114_000)
+            };
+            assert_eq!(pixels, want_pixels, "pixels converted at {scale}x");
+            assert_eq!(pixels * 4, want_bytes, "bytes converted at {scale}x");
         }
     }
 }

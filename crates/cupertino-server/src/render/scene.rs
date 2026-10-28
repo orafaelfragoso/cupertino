@@ -26,15 +26,15 @@ use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::shell::wlr_layer::Layer;
 
 use super::compose::{
-    corner_style, item, output_rect, Composed, Composition, Picture, Piece, Tree,
+    corner_style, image_piece, item, output_rect, Composed, Composition, Material, MeshPiece,
+    Picture, Piece, Tree,
 };
 use super::lower::{id_hash, lower, Lowering};
-use super::material::{GpuRecipe, MaterialElement, MaterialStage, SharedMaterial};
-use super::mesh::{capture, MeshElement, MeshGl, SharedMesh};
+use super::material::{GpuRecipe, MaterialStage, SharedMaterial};
+use super::mesh::{capture, MeshGl, SharedMesh};
 use super::motion::{cross_fade_opacity, skips_frame_animation, WorkspaceTransition};
 use super::programs::Programs;
-use super::shader_rect::{to_physical_rect, ElementCache, ElementKey, ShaderRect, Sig};
-use super::ui::{rounded_rect, RoundedRectSpec};
+use super::shader_rect::{to_physical_rect, ElementCache, Sig};
 use super::{CupertinoElement, SceneLayer};
 use crate::app_effects_v1::{surface_backdrops, BackdropArea};
 use crate::config::Config;
@@ -219,6 +219,8 @@ pub struct RenderResources {
     pub material: Option<SharedMaterial>,
     pub material_error: Option<String>,
     pub mesh: Option<SharedMesh>,
+    /// The retained window snapshots (closing ghosts).
+    pub snapshots: super::snapshots::Snapshots,
     theme: Option<Theme>,
     recipes: RefCell<RecipeCache>,
 }
@@ -253,6 +255,7 @@ impl RenderResources {
             material,
             material_error,
             mesh,
+            snapshots: super::snapshots::Snapshots::default(),
             theme,
             recipes: RefCell::new(HashMap::new()),
         })
@@ -400,29 +403,6 @@ fn local(r: Rect, origin: &Rect) -> smithay::utils::Rectangle<f64, Logical> {
     smithay::utils::Rectangle::new((r.x - origin.x, r.y - origin.y).into(), (r.w, r.h).into())
 }
 
-/// Rounded rectangle element helper.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn rrect(
-    p: &mut SceneParams<'_>,
-    key: ElementKey,
-    rect: smithay::utils::Rectangle<f64, Logical>,
-    radius: f64,
-    continuous: bool,
-    fill: [f32; 4],
-    border: Option<(f64, [f32; 4])>,
-    alpha: f32,
-) -> ShaderRect {
-    let spec = RoundedRectSpec {
-        rect,
-        radius,
-        continuous,
-        fill,
-        border,
-        alpha,
-    };
-    rounded_rect(&p.res.programs, p.cache, p.scale, key, &spec)
-}
-
 /// Rounded rectangle as a scene item, drawn like [`rrect`].
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn rrect_item(
@@ -469,18 +449,24 @@ fn standalone(
 }
 
 /// The wallpaper of the output: the image of the user or of the asset pack, else the procedural one.
-fn wallpaper_element(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> Piece {
+fn wallpaper_element(p: &mut SceneParams<'_>) -> Piece {
     let dark = p.config.is_dark();
-    let image = p.overlays.wallpaper.element(
-        renderer,
-        p.output_id.0,
-        &p.config.wallpaper,
-        dark,
-        p.output_px,
-        p.scale,
-        p.now,
-    );
-    image.map_or_else(|| Piece::item(wallpaper(p)), Piece::from)
+    let image =
+        p.overlays
+            .wallpaper
+            .shown(p.output_id.0, &p.config.wallpaper, dark, p.output_px, p.now);
+    match image {
+        Some((buffer, px)) => image_piece(
+            &buffer,
+            SceneKind::WallpaperImage,
+            px,
+            0.0,
+            0.0,
+            p.scale,
+            1.0,
+        ),
+        None => Piece::item(wallpaper(p)),
+    }
 }
 
 fn wallpaper(p: &SceneParams<'_>) -> SceneItem {
@@ -706,11 +692,7 @@ fn window_elements(
         visual_local.loc,
         plan,
     );
-    out.extend(
-        backdrop_elements(p, &backdrops, alpha)
-            .into_iter()
-            .map(Piece::from),
-    );
+    out.extend(backdrop_elements(p, &backdrops, alpha));
     if shadow && styled {
         out.extend(shadow_piece(p, entry.id, plan, active, plan.opacity));
     }
@@ -959,9 +941,9 @@ fn minimize_elements(
     pres: &Presentation,
     slide: f64,
     active: bool,
-) -> Option<Vec<CupertinoElement>> {
+) -> Option<Vec<Piece>> {
     let kind = p.fx.cfg.minimize?;
-    let shared = p.res.mesh.clone()?;
+    p.res.mesh.as_ref()?;
     let geo = entry.window.geometry();
     let ins = entry.insets;
     let natural = Rect::new(
@@ -994,34 +976,22 @@ fn minimize_elements(
             .collect(),
     );
     tracing::trace!(progress = pres.minimize_progress, triangles = mesh.cell_count() * 2, ?natural, target = ?pres.minimize_target, "minimize mesh");
-    let sig = Sig::new()
-        .f(pres.minimize_progress)
-        .f(natural.x)
-        .f(natural.y)
-        .f(natural.w)
-        .f(pres.opacity)
-        .u(kind as u64)
-        .finish();
-    let (id, commit) = p
-        .cache
-        .slot(ElementKey::new("minimize-mesh", entry.id.0), sig);
-    Some(vec![MeshElement::new(
-        id,
-        commit,
+    Some(vec![Piece::Mesh(Box::new(MeshPiece {
+        kind: SceneKind::MinimizeMesh,
+        index: entry.id.0,
         texture,
-        shared,
-        &local_mesh,
-        p.scale,
-        pres.opacity as f32,
-    )
-    .into()])
+        lease: None,
+        mesh: local_mesh,
+        opacity: pres.opacity as f32,
+        revision: Sig::new().f(pres.minimize_progress).u(kind as u64).finish(),
+    }))])
 }
 
 /// Closing ghosts of this output: the last frame of a window fading out.
-fn closing_elements(p: &mut SceneParams<'_>) -> Vec<CupertinoElement> {
-    let Some(shared) = p.res.mesh.clone() else {
+fn closing_elements(p: &mut SceneParams<'_>) -> Vec<Piece> {
+    if p.res.mesh.is_none() {
         return Vec::new();
-    };
+    }
     let mut out = Vec::new();
     for c in
         p.fx.closing
@@ -1029,39 +999,35 @@ fn closing_elements(p: &mut SceneParams<'_>) -> Vec<CupertinoElement> {
             .rev()
             .filter(|c| c.output == p.output_id)
     {
-        let progress = c.progress(p.now);
         let (rect, alpha) = c.placement(p.now);
         let alpha = alpha as f32;
         if alpha <= 0.0 {
             continue;
         }
         let r = Rect::new(rect.x - p.rect.x, rect.y - p.rect.y, rect.w, rect.h);
-        let mesh = Mesh::quad(r.into_geom());
-        let sig = Sig::new().f(progress).f(r.x).f(r.y).finish();
-        let (id, commit) = p.cache.slot(ElementKey::new("closing-ghost", c.id.0), sig);
-        out.push(
-            MeshElement::new(
-                id,
-                commit,
-                c.texture.clone(),
-                shared.clone(),
-                &mesh,
-                p.scale,
-                alpha,
-            )
-            .into(),
-        );
+        let (texture, lease) = match p.res.snapshots.lease(c.snapshot.id()) {
+            Ok(leased) => leased,
+            Err(error) => {
+                tracing::error!(%error, window = c.id.0, "closing ghost without its snapshot");
+                continue;
+            }
+        };
+        out.push(Piece::Mesh(Box::new(MeshPiece {
+            kind: SceneKind::ClosingGhost,
+            index: c.id.0,
+            texture,
+            lease: Some(lease),
+            mesh: Mesh::quad(r.into_geom()),
+            opacity: alpha,
+            revision: Sig::new().f(c.progress(p.now)).finish(),
+        })));
     }
     out
 }
 
 /// Elements of the layer-shell `layer`, front to back. The backdrop captures of menu bars are
 /// appended to `captures`: they belong below the windows (see [`bar_backdrop_elements`]).
-fn layer_elements(
-    p: &mut SceneParams<'_>,
-    layer: Layer,
-    captures: &mut Vec<CupertinoElement>,
-) -> Vec<Piece> {
+fn layer_elements(p: &mut SceneParams<'_>, layer: Layer, captures: &mut Vec<Piece>) -> Vec<Piece> {
     let map = layer_map_for_output(p.output);
     let scale = Scale::from(p.scale);
     let mut out: Vec<Piece> = Vec::new();
@@ -1098,17 +1064,9 @@ fn layer_elements(
         ));
         let backdrops = surface_backdrops(surface.wl_surface(), origin);
         if look.is_some() {
-            out.extend(
-                bar_backdrop_elements(p, &backdrops, opacity, captures)
-                    .into_iter()
-                    .map(Piece::from),
-            );
+            out.extend(bar_backdrop_elements(p, &backdrops, opacity, captures));
         } else {
-            out.extend(
-                backdrop_elements(p, &backdrops, opacity)
-                    .into_iter()
-                    .map(Piece::from),
-            );
+            out.extend(backdrop_elements(p, &backdrops, opacity));
         }
     }
     out
@@ -1138,18 +1096,15 @@ fn popup_backdrop_elements(
             Some((1.0 / p.scale, rim)),
             alpha,
         ));
-        out.extend(
-            material_layer(
-                p,
-                ElementKey::new("backdrop", b.key),
-                &b.material,
-                b.area,
-                b.radius,
-                alpha,
-            )
-            .into_iter()
-            .map(Piece::from),
-        );
+        out.extend(material_layer(
+            p,
+            SceneKind::Backdrop,
+            b.key,
+            &b.material,
+            b.area,
+            b.radius,
+            alpha,
+        ));
         let visual = cupertino_wm::Rect::new(
             p.rect.x + b.area.loc.x,
             p.rect.y + b.area.loc.y,
@@ -1178,19 +1133,19 @@ fn popup_backdrop_elements(
     out
 }
 
-/// Material elements of committed backdrops, to go directly below the owning surface's elements
+/// Material pieces of committed backdrops, to go directly below the owning surface's pieces
 /// (the list is front to back, so later backdrops come first).
 fn backdrop_elements(
     p: &mut SceneParams<'_>,
     backdrops: &[BackdropArea],
     opacity: f32,
-) -> Vec<CupertinoElement> {
+) -> Vec<Piece> {
     let mut out = Vec::new();
     for b in backdrops.iter().rev() {
-        let key = ElementKey::new("backdrop", b.key);
         out.extend(material_layer(
             p,
-            key,
+            SceneKind::Backdrop,
+            b.key,
             &b.material,
             b.area,
             b.radius,
@@ -1200,17 +1155,17 @@ fn backdrop_elements(
     out
 }
 
-/// Backdrops of a menu bar, to go directly below the bar's elements. A bar reserves its strip,
+/// Backdrops of a menu bar, to go directly below the bar's pieces. A bar reserves its strip,
 /// so no window lies under it; the only window pixels there would be shadows, and they must not
 /// tint the material. The material therefore samples what lies below the window stack: its
-/// capture element is added to `captures` (for [`SceneLayer::BackdropCapture`]) and only the
+/// capture piece is added to `captures` (for [`SceneLayer::BackdropCapture`]) and only the
 /// composite stays with the bar. Without the material pass the fallback fill is drawn instead.
 fn bar_backdrop_elements(
     p: &mut SceneParams<'_>,
     backdrops: &[BackdropArea],
     opacity: f32,
-    captures: &mut Vec<CupertinoElement>,
-) -> Vec<CupertinoElement> {
+    captures: &mut Vec<Piece>,
+) -> Vec<Piece> {
     let mut out = Vec::new();
     let output = smithay::utils::Rectangle::<f64, Logical>::new(
         (0.0, 0.0).into(),
@@ -1219,9 +1174,10 @@ fn bar_backdrop_elements(
     for b in backdrops.iter().rev() {
         let alpha = b.alpha as f32 * opacity;
         let owner = b.key;
-        let composite = material_element(
+        let composite = material_piece(
             p,
-            ElementKey::new("backdrop", b.key),
+            SceneKind::Backdrop,
+            b.key,
             &b.material,
             b.area,
             b.radius,
@@ -1229,30 +1185,28 @@ fn bar_backdrop_elements(
             MaterialStage::Composite { owner },
         );
         let Some(composite) = composite else {
-            out.push(
-                fallback_fill(
-                    p,
-                    ElementKey::new("backdrop", b.key),
-                    b.area,
-                    b.radius,
-                    alpha,
-                )
-                .into(),
-            );
+            out.push(fallback_fill(
+                p,
+                SceneKind::Backdrop,
+                b.key,
+                b.area,
+                b.radius,
+                alpha,
+            ));
             continue;
         };
         // the capture covers the whole output: it is only redrawn together with a full repaint
-        let capture = material_element(
+        captures.extend(material_piece(
             p,
-            ElementKey::new("backdrop-capture", b.key),
+            SceneKind::BackdropCapture,
+            b.key,
             &b.material,
             output,
             0.0,
             alpha,
             MaterialStage::Capture { owner },
-        );
-        captures.extend(capture.map(CupertinoElement::from));
-        out.push(composite.into());
+        ));
+        out.push(composite);
     }
     out
 }
@@ -1260,28 +1214,40 @@ fn bar_backdrop_elements(
 /// Material pass (or the translucent fallback fill without one) behind `area`, drawn at `alpha`.
 pub(crate) fn material_layer(
     p: &mut SceneParams<'_>,
-    key: ElementKey,
+    kind: SceneKind,
+    index: u64,
     material: &str,
     area: smithay::utils::Rectangle<f64, Logical>,
     radius: f64,
     alpha: f32,
-) -> Vec<CupertinoElement> {
-    match material_element(p, key, material, area, radius, alpha, MaterialStage::Full) {
-        Some(m) => vec![m.into()],
-        None => vec![fallback_fill(p, key, area, radius, alpha).into()],
+) -> Vec<Piece> {
+    match material_piece(
+        p,
+        kind,
+        index,
+        material,
+        area,
+        radius,
+        alpha,
+        MaterialStage::Full,
+    ) {
+        Some(m) => vec![m],
+        None => vec![fallback_fill(p, kind, index, area, radius, alpha)],
     }
 }
 
-/// Material element for `material`; `None` while the material pass is unavailable.
-fn material_element(
-    p: &mut SceneParams<'_>,
-    key: ElementKey,
+/// Material piece for `material`; `None` while the material pass is unavailable.
+#[allow(clippy::too_many_arguments)]
+fn material_piece(
+    p: &SceneParams<'_>,
+    kind: SceneKind,
+    index: u64,
     material: &str,
     area: smithay::utils::Rectangle<f64, Logical>,
     radius: f64,
     alpha: f32,
     stage: MaterialStage,
-) -> Option<MaterialElement> {
+) -> Option<Piece> {
     let dark = p.config.is_dark();
     let appearance = p
         .config
@@ -1295,39 +1261,38 @@ fn material_element(
     if !shared.borrow().is_ready() {
         return None;
     }
-    Some(MaterialElement::new(
-        key,
-        stage,
-        p.cache,
-        area,
+    Some(Piece::Material(Box::new(Material {
         recipe,
-        shared,
+        kind,
+        index,
+        rect: area,
         radius,
-        true,
-        alpha,
-        p.overlays
+        style: corner_style(true),
+        stage,
+        tint: p
+            .overlays
             .wallpaper
             .tint
             .unwrap_or_else(|| wallpaper_tint(dark)),
-        p.output_px,
-        p.scale,
-    ))
+        opacity: alpha,
+    })))
 }
 
 /// Translucent fill standing in for a material.
 fn fallback_fill(
-    p: &mut SceneParams<'_>,
-    key: ElementKey,
+    p: &SceneParams<'_>,
+    kind: SceneKind,
+    index: u64,
     area: smithay::utils::Rectangle<f64, Logical>,
     radius: f64,
     alpha: f32,
-) -> ShaderRect {
+) -> Piece {
     let fill = if p.config.is_dark() {
         [0.12, 0.12, 0.14, 0.78]
     } else {
         [0.96, 0.96, 0.98, 0.78]
     };
-    rrect(p, key, area, radius, true, fill, None, alpha)
+    rrect_item(kind, index, area, radius, true, fill, None, alpha)
 }
 
 fn snap_preview(p: &mut SceneParams<'_>, stack: &mut Composition) {
@@ -1504,10 +1469,10 @@ pub fn compose_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> Co
 }
 
 fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &mut Composition) {
-    let wp = wallpaper_element(renderer, p);
+    let wp = wallpaper_element(p);
     stack.push(SceneLayer::Wallpaper, wp);
 
-    let mut captures: Vec<CupertinoElement> = Vec::new();
+    let mut captures: Vec<Piece> = Vec::new();
     for (layer, scene_layer) in [
         (Layer::Background, SceneLayer::LayerBackground),
         (Layer::Bottom, SceneLayer::LayerBottom),
@@ -1573,7 +1538,7 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
             }
             if pres.minimize_progress > 1e-6 {
                 if let Some(els) = minimize_elements(renderer, p, entry, &pres, slide, active) {
-                    front_to_back.extend(els.into_iter().map(Piece::from));
+                    front_to_back.extend(els);
                     continue;
                 }
             }
@@ -1584,23 +1549,20 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
             if dimming > 0.0 {
                 let area = local(plan.visual, &p.rect);
                 let radius = p.config.window.corner_radius;
-                front_to_back.extend(
-                    material_layer(
-                        p,
-                        ElementKey::new("sheet-dimming", id.0),
-                        SHEET_DIMMING_MATERIAL,
-                        area,
-                        radius,
-                        (dimming * plan.opacity) as f32,
-                    )
-                    .into_iter()
-                    .map(Piece::from),
-                );
+                front_to_back.extend(material_layer(
+                    p,
+                    SceneKind::SheetDimming,
+                    id.0,
+                    SHEET_DIMMING_MATERIAL,
+                    area,
+                    radius,
+                    (dimming * plan.opacity) as f32,
+                ));
             }
             let deco = window_decorations(p, entry, &plan, active);
             front_to_back.extend(window_elements(p, entry, &plan, active, true, deco));
         }
-        let mut ghosts: Vec<Piece> = closing_elements(p).into_iter().map(Piece::from).collect();
+        let mut ghosts: Vec<Piece> = closing_elements(p);
         ghosts.append(&mut front_to_back);
         ghosts.append(&mut strip);
         stack.extend(SceneLayer::Windows, ghosts);
@@ -1632,6 +1594,8 @@ fn lower_composed(
     let mut ctx = Lowering {
         renderer,
         programs: &p.res.programs,
+        material: p.res.material.clone(),
+        mesh: p.res.mesh.clone(),
         cache: p.cache,
         scale: p.scale,
     };
@@ -1665,21 +1629,20 @@ fn display_filter(p: &mut SceneParams<'_>, stack: &mut Composition) {
         (0.0, 0.0).into(),
         (p.rect.w, p.rect.h).into(),
     );
-    let e = MaterialElement::new(
-        ElementKey::new("display-filter", 0),
-        MaterialStage::Full,
-        p.cache,
-        area,
-        recipe,
-        shared,
-        0.0,
-        false,
-        1.0,
-        [0.0; 3],
-        p.output_px,
-        p.scale,
+    stack.push(
+        SceneLayer::DisplayFilter,
+        Piece::Material(Box::new(Material {
+            recipe,
+            kind: SceneKind::DisplayFilter,
+            index: 0,
+            rect: area,
+            radius: 0.0,
+            style: corner_style(false),
+            stage: MaterialStage::Full,
+            tint: [0.0; 3],
+            opacity: 1.0,
+        })),
     );
-    stack.push(SceneLayer::DisplayFilter, e);
 }
 
 /// Assign each material element the signature of everything below it (bottom to top). A
@@ -1728,7 +1691,8 @@ pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: 
 
 #[cfg(test)]
 mod tests {
-    use super::super::material::MaterialGl;
+    use super::super::material::{MaterialElement, MaterialGl};
+    use super::super::shader_rect::ElementKey;
     use super::*;
     use cupertino_wm::{Command, MapParams, WmConfig};
 
@@ -1992,6 +1956,17 @@ mod tests {
         stage: MaterialStage,
         area: Rect,
     ) -> CupertinoElement {
+        material_with(cache, key, stage, area, 0.0, 1.0)
+    }
+
+    fn material_with(
+        cache: &mut ElementCache,
+        key: ElementKey,
+        stage: MaterialStage,
+        area: Rect,
+        radius: f64,
+        opacity: f32,
+    ) -> CupertinoElement {
         let recipe = Theme::load()
             .unwrap()
             .recipe(Appearance::Light, "MenuBar", &MaterialOptions::default())
@@ -2007,9 +1982,9 @@ mod tests {
             area,
             Rc::new(GpuRecipe::new(&recipe)),
             MaterialGl::detached(),
-            0.0,
+            radius,
             true,
-            1.0,
+            opacity,
             [0.0; 3],
             (1280, 800),
             1.0,
@@ -2071,6 +2046,58 @@ mod tests {
             moved[0], before[0],
             "a full material above the window does see it move"
         );
+    }
+
+    /// A material over everything and, below it, the lowered item whose look is `(area, radius, opacity)`; the
+    /// generation the upper one gets is the signature of what lies below it.
+    fn backdrop_over(cache: &mut ElementCache, item: (Rect, f64, f32)) -> u64 {
+        let top = Rect::new(0.0, 0.0, 1280.0, 800.0);
+        let (area, radius, opacity) = item;
+        let mut els = vec![
+            material(cache, ElementKey::new("top", 0), MaterialStage::Full, top),
+            material_with(
+                cache,
+                ElementKey::new("item", 0),
+                MaterialStage::Full,
+                area,
+                radius,
+                opacity,
+            ),
+        ];
+        finalize_materials(&mut els, 1.0, cache);
+        generation(&els[0])
+    }
+
+    #[test]
+    fn unchanged_lower_item_preserves_backdrop_signature() {
+        let mut cache = ElementCache::default();
+        let item = (Rect::new(100.0, 40.0, 300.0, 200.0), 10.0, 0.5);
+        let first = backdrop_over(&mut cache, item);
+        assert_eq!(backdrop_over(&mut cache, item), first);
+        cache.end_frame();
+        assert_eq!(backdrop_over(&mut cache, item), first, "also across frames");
+    }
+
+    #[test]
+    fn lower_item_move_clip_or_alpha_invalidates_backdrop() {
+        let mut cache = ElementCache::default();
+        let (area, radius, opacity) = (Rect::new(100.0, 40.0, 300.0, 200.0), 10.0, 0.5);
+        let base = backdrop_over(&mut cache, (area, radius, opacity));
+        let moved = backdrop_over(
+            &mut cache,
+            (Rect::new(101.0, 40.0, 300.0, 200.0), radius, opacity),
+        );
+        let clipped = backdrop_over(&mut cache, (area, radius + 1.0, opacity));
+        let faded = backdrop_over(&mut cache, (area, radius, 0.4));
+        let all = [base, moved, clipped, faded];
+        for (at, a) in all.iter().enumerate() {
+            for b in &all[at + 1..] {
+                assert_ne!(
+                    a, b,
+                    "each change alone gives the backdrop another signature"
+                );
+            }
+        }
     }
 
     #[test]

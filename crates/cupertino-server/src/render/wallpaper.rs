@@ -381,6 +381,8 @@ pub struct Wallpapers {
     next_ticket: u64,
     /// Average colour of the image drawn last, for the materials' tint; `None` while the procedural wallpaper shows.
     pub tint: Option<[f32; 3]>,
+    #[cfg(scene_oracle)]
+    held: bool,
 }
 
 impl Wallpapers {
@@ -399,7 +401,17 @@ impl Wallpapers {
             outputs: HashMap::new(),
             next_ticket: 0,
             tint: None,
+            #[cfg(scene_oracle)]
+            held: false,
         }
+    }
+
+    /// Take in the worker's answers now and keep later ones until released, so two builders see one state.
+    #[cfg(scene_oracle)]
+    pub fn hold_replies(&mut self, hold: bool) {
+        self.held = false;
+        self.collect();
+        self.held = hold;
     }
 
     /// An image is being read: frames are wanted to pick it up.
@@ -429,6 +441,10 @@ impl Wallpapers {
 
     /// Take in the answers the worker has.
     fn collect(&mut self) {
+        #[cfg(scene_oracle)]
+        if self.held {
+            return;
+        }
         let Some(loader) = &self.loader else { return };
         while let Ok(reply) = loader.replies.try_recv() {
             let Some(state) = self.outputs.get_mut(&reply.output) else {
@@ -540,6 +556,20 @@ impl Wallpapers {
         scale: f64,
         now: f64,
     ) -> Option<CupertinoElement> {
+        let (buffer, px) = self.shown(output, config, dark, px, now)?;
+        image_element(renderer, &buffer, px, 0.0, 0.0, scale, 1.0)
+    }
+
+    /// The pixels the wallpaper of an output of `px` device pixels shows, or `None` for the procedural wallpaper.
+    /// Until the image is in, the output keeps what it showed.
+    pub fn shown(
+        &mut self,
+        output: u64,
+        config: &WallpaperSettings,
+        dark: bool,
+        px: (i32, i32),
+        now: f64,
+    ) -> Option<(MemoryRenderBuffer, (i32, i32))> {
         let dst = (u32::try_from(px.0).ok()?, u32::try_from(px.1).ok()?);
         if dst.0 == 0 || dst.1 == 0 {
             return None;
@@ -571,7 +601,7 @@ impl Wallpapers {
         match state.shown.as_ref().filter(|s| s.px == px) {
             Some(shown) => {
                 self.tint = Some(shown.tint);
-                image_element(renderer, &shown.buffer, shown.px, 0.0, 0.0, scale, 1.0)
+                Some((shown.buffer.clone(), shown.px))
             }
             None => {
                 self.tint = None;

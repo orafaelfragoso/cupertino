@@ -20,6 +20,7 @@ use smithay::backend::renderer::utils::{CommitCounter, OpaqueRegions};
 use smithay::backend::renderer::{Bind, Color32F, Offscreen};
 use smithay::utils::{Buffer, Physical, Rectangle, Scale, Size, Transform};
 
+use super::snapshots::SnapshotLease;
 use super::CupertinoElement;
 
 const VERT: &str = "#version 100
@@ -143,6 +144,8 @@ pub struct MeshElement {
     triangles: Vec<[f32; 4]>,
     bounds: Rectangle<i32, Physical>,
     alpha: f32,
+    /// Keeps a retained snapshot until the element is gone.
+    _lease: Option<SnapshotLease>,
 }
 
 impl std::fmt::Debug for MeshElement {
@@ -157,6 +160,7 @@ impl std::fmt::Debug for MeshElement {
 impl MeshElement {
     /// `texture_uv` maps mesh texture coordinates (0..1 over the captured area, top-left origin)
     /// to the texture; `scale` converts points to pixels.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: Id,
         commit: CommitCounter,
@@ -165,6 +169,7 @@ impl MeshElement {
         mesh: &Mesh,
         scale: f64,
         alpha: f32,
+        lease: Option<SnapshotLease>,
     ) -> Self {
         let s = scale as f32;
         let mut triangles = Vec::with_capacity(mesh.cell_count() * 6);
@@ -205,6 +210,7 @@ impl MeshElement {
             triangles,
             bounds,
             alpha,
+            _lease: lease,
         }
     }
 

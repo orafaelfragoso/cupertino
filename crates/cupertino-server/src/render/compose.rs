@@ -1,25 +1,29 @@
 //! Composition of one output's scene into a [`SceneFrame`]. Everything that has a typed source is a scene item;
 //! what the renderer still builds itself is kept in a frame-local list and referenced by position.
 
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use cupertino_effects::Mesh;
 use cupertino_geometry::{CornerStyle, Point, Rect};
 use cupertino_scene::{
     AlphaMode, BufferCrop, Clip, ContentDamage, FrameId, GlobalRect, ImageId, ImageMapping,
-    ImageRole, LayerStack, Output, OutputId, OutputInvalidation, OutputPoint, OutputRect,
-    PhysicalSize, Placement, ResourceKey, SceneFrame, SceneId, SceneItem, SceneKind, SceneLayer,
-    Source, SurfaceId, SurfaceRole,
+    ImageRole, LayerStack, MaterialPass, MaterialStage, Output, OutputId, OutputInvalidation,
+    OutputPoint, OutputRect, PhysicalSize, Placement, RecipeId, ResourceKey, SceneFrame, SceneId,
+    SceneItem, SceneKind, SceneLayer, SnapshotId, Source, SurfaceId, SurfaceRole,
 };
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
+use smithay::backend::renderer::gles::GlesTexture;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Physical, Rectangle};
 
 type DevicePoint = smithay::utils::Point<i32, Physical>;
 
+use super::material::GpuRecipe;
 use super::scene::SceneParams;
-use super::CupertinoElement;
+use super::snapshots::SnapshotLease;
 
 /// Straight opaque black; the render target clears with its own colour.
 const UNSPECIFIED_CLEAR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
@@ -55,24 +59,51 @@ pub struct Picture {
     pub clip: Clip,
 }
 
+/// A material pass over what lies below it. Its recipe gets a handle in the frame's registry once it is pushed.
+pub struct Material {
+    pub recipe: Rc<GpuRecipe>,
+    pub kind: SceneKind,
+    pub index: u64,
+    pub rect: Rectangle<f64, Logical>,
+    pub radius: f64,
+    pub style: CornerStyle,
+    pub stage: MaterialStage,
+    pub tint: [f32; 3],
+    pub opacity: f32,
+}
+
+/// A window snapshot drawn through a mesh in output-local points. A retained snapshot comes with the lease that
+/// keeps it until the frame's elements are gone.
+pub struct MeshPiece {
+    pub kind: SceneKind,
+    pub index: u64,
+    pub texture: GlesTexture,
+    pub lease: Option<SnapshotLease>,
+    pub mesh: Mesh,
+    pub opacity: f32,
+    /// What besides the mesh and the opacity changes the look: the animation state that made the mesh.
+    pub revision: u64,
+}
+
+/// The pixels a frame's mesh items draw, and what keeps them alive.
+pub struct FrameSnapshot {
+    pub texture: GlesTexture,
+    pub lease: Option<SnapshotLease>,
+}
+
 /// One drawable of a layer: a typed scene item, a surface tree, a picture, or an element the renderer still
 /// builds itself.
 pub enum Piece {
     Item(Box<SceneItem>),
     Tree(Box<Tree>),
     Image(Box<Picture>),
-    Local(Box<CupertinoElement>),
+    Material(Box<Material>),
+    Mesh(Box<MeshPiece>),
 }
 
 impl Piece {
     pub fn item(item: SceneItem) -> Self {
         Self::Item(Box::new(item))
-    }
-}
-
-impl<T: Into<CupertinoElement>> From<T> for Piece {
-    fn from(element: T) -> Self {
-        Self::Local(Box::new(element.into()))
     }
 }
 
@@ -83,16 +114,17 @@ pub struct Composition {
     items: LayerStack<SceneItem>,
     surfaces: Vec<WlSurface>,
     images: Vec<MemoryRenderBuffer>,
-    locals: Vec<Option<CupertinoElement>>,
+    recipes: Vec<Rc<GpuRecipe>>,
+    snapshots: Vec<Option<FrameSnapshot>>,
 }
 
-/// A composed frame and the resources its items refer to: surface trees by [`SurfaceId`], and the
-/// frame-local elements of its [`Source::LocalPass`] items.
+/// A composed frame and the resources its items refer to: surface trees, images, recipes and snapshots by handle.
 pub struct Composed {
     pub frame: SceneFrame,
     pub surfaces: Vec<WlSurface>,
     pub images: Vec<MemoryRenderBuffer>,
-    pub locals: Vec<Option<CupertinoElement>>,
+    pub recipes: Vec<Rc<GpuRecipe>>,
+    pub snapshots: Vec<Option<FrameSnapshot>>,
 }
 
 impl Composition {
@@ -104,13 +136,71 @@ impl Composition {
             items: LayerStack::new(),
             surfaces: Vec::new(),
             images: Vec::new(),
-            locals: Vec::new(),
+            recipes: Vec::new(),
+            snapshots: Vec::new(),
         }
     }
 
     pub fn push(&mut self, layer: SceneLayer, piece: impl Into<Piece>) {
         match piece.into() {
             Piece::Item(item) => self.items.push(layer, *item),
+            Piece::Mesh(mesh) => {
+                let snapshot = SnapshotId(ResourceKey {
+                    slot: self.snapshots.len() as u64,
+                    generation: self.id.0,
+                });
+                self.snapshots.push(Some(FrameSnapshot {
+                    texture: mesh.texture,
+                    lease: mesh.lease,
+                }));
+                self.items.push(
+                    layer,
+                    SceneItem {
+                        id: SceneId {
+                            kind: mesh.kind,
+                            index: mesh.index,
+                        },
+                        revision: mesh.revision,
+                        source: Source::TexturedMesh {
+                            snapshot,
+                            mesh: mesh.mesh,
+                        },
+                        placement: Placement::IDENTITY,
+                        opacity: f64::from(mesh.opacity),
+                        clip: Clip::None,
+                        damage: ContentDamage::Full,
+                    },
+                );
+            }
+            Piece::Material(material) => {
+                let recipe = RecipeId(ResourceKey {
+                    slot: self.recipes.len() as u64,
+                    generation: self.id.0,
+                });
+                self.recipes.push(material.recipe);
+                self.items.push(
+                    layer,
+                    SceneItem {
+                        id: SceneId {
+                            kind: material.kind,
+                            index: material.index,
+                        },
+                        revision: 0,
+                        source: Source::Material(MaterialPass {
+                            recipe,
+                            rect: output_rect(material.rect),
+                            radius: material.radius,
+                            style: material.style,
+                            stage: material.stage,
+                            tint: material.tint,
+                        }),
+                        placement: Placement::IDENTITY,
+                        opacity: f64::from(material.opacity),
+                        clip: Clip::None,
+                        damage: ContentDamage::Full,
+                    },
+                );
+            }
             Piece::Image(picture) => {
                 let id = ImageId(ResourceKey {
                     slot: self.images.len() as u64,
@@ -186,19 +276,6 @@ impl Composition {
                     },
                 );
             }
-            Piece::Local(element) => {
-                let index = self.locals.len();
-                self.locals.push(Some(*element));
-                self.items.push(
-                    layer,
-                    item(
-                        SceneKind::LocalPass,
-                        index as u64,
-                        Source::LocalPass { index },
-                        1.0,
-                    ),
-                );
-            }
         }
     }
 
@@ -241,7 +318,8 @@ impl Composition {
             frame,
             surfaces: self.surfaces,
             images: self.images,
-            locals: self.locals,
+            recipes: self.recipes,
+            snapshots: self.snapshots,
         }
     }
 }

@@ -334,3 +334,129 @@ fn the_power_dim_matches_while_it_ramps_and_when_asleep() {
         }
     }
 }
+
+fn one_display() -> [headless::HeadlessDisplay; 1] {
+    [headless::HeadlessDisplay {
+        name: "headless-1".into(),
+        size: (1000, 700),
+        physical_mm: (0, 0),
+    }]
+}
+
+#[test]
+fn minimize_and_restore_match_by_pixels_for_every_effect() {
+    use cupertino_effects::MinimizeKind;
+    use cupertino_wm::{Command, Rect};
+    for kind in [
+        MinimizeKind::Warp,
+        MinimizeKind::Funnel,
+        MinimizeKind::Scale,
+    ] {
+        let mut config = cupertino_server::config::Config::default();
+        config.effects.minimize = Some(kind);
+        let mut d = Desktop::configured(config, &one_display(), 1.5);
+        d.window();
+        d.at(2000);
+        let id = d.state.wm.key_window().expect("a window");
+        let dock = Rect::new(440.0, 640.0, 64.0, 64.0);
+        d.state.command(Command::Minimize {
+            window: id,
+            target: Some(dock),
+        });
+        let duration = kind.duration_s(false);
+        let t0 = d.state.now();
+        for fraction in [0.05, 0.3, 0.6, 0.9, 1.3] {
+            d.state.fixed_time = Some(t0 + duration * fraction);
+            d.state.tick();
+            d.pump();
+            compare(&mut d, &format!("{kind:?} minimize at {fraction}"));
+        }
+        d.state.command(Command::Restore { window: id });
+        let t1 = d.state.now();
+        for fraction in [0.1, 0.5, 0.9, 1.3] {
+            d.state.fixed_time = Some(t1 + duration * fraction);
+            d.state.tick();
+            d.pump();
+            compare(&mut d, &format!("{kind:?} restore at {fraction}"));
+        }
+    }
+}
+
+#[test]
+fn a_closing_ghost_matches_while_it_fades() {
+    for scale in [1.0, 1.5] {
+        let mut d = Desktop::new(scale);
+        d.state.fx.cfg.closing = true;
+        d.window();
+        d.at(2000);
+        d.clients.clear();
+        wait_until(&mut d, "the window to close", |d| {
+            d.state.wm.windows().count() == 0
+        });
+        assert_eq!(d.state.fx.closing.len(), 1, "a ghost of the closed window");
+        let t0 = d.state.now();
+        for dt in [0.0, 0.05, 0.12, 0.2, 0.3] {
+            d.state.fixed_time = Some(t0 + dt);
+            d.state.tick();
+            d.pump();
+            compare(&mut d, &format!("ghost at +{dt} s, {scale}x"));
+        }
+    }
+}
+
+/// The window capture both screenshots of a toplevel and the closing ghosts take: a frame of its own, composed and
+/// lowered like the output's, drawn to a texture.
+#[test]
+fn a_window_capture_is_pixel_for_pixel_what_the_old_builder_captured() {
+    use cupertino_server::render::scene::capture_window;
+    use smithay::backend::allocator::Fourcc;
+    use smithay::backend::renderer::{ExportMem, Texture};
+    use smithay::utils::Rectangle;
+
+    for (scale, shadow) in [(1.0, false), (1.5, true), (2.0, true)] {
+        let mut d = Desktop::new(scale);
+        d.window();
+        d.at(3000);
+        let id = d.state.wm.key_window().expect("a window");
+        let frame = d.state.wm.window(id).unwrap().geometry();
+        let mut backend = d.state.backend.take().unwrap();
+        let Backend::Headless(ref mut h) = backend else {
+            panic!("headless backend required")
+        };
+        let mut shoot = |old: bool| {
+            let readback =
+                |renderer: &mut smithay::backend::renderer::gles::GlesRenderer,
+                 texture: smithay::backend::renderer::gles::GlesTexture| {
+                    let size = texture.size();
+                    let mapping = renderer
+                        .copy_texture(&texture, Rectangle::from_size(size), Fourcc::Abgr8888)
+                        .unwrap();
+                    renderer.map_texture(&mapping).unwrap().to_vec()
+                };
+            d.state
+                .with_scene(&mut h.renderer, 0, |r, mut p| {
+                    let windows = p.windows;
+                    let entry = windows.iter().find(|w| w.id == id)?;
+                    let geo = entry.window.geometry();
+                    let natural = cupertino_wm::Rect::new(
+                        frame.x,
+                        frame.y,
+                        f64::from(geo.size.w) + entry.insets.horizontal(),
+                        f64::from(geo.size.h) + entry.insets.vertical(),
+                    );
+                    let captured = if old {
+                        legacy_scene::capture_window(r, &mut p, entry, natural, true, 12.0, shadow)
+                    } else {
+                        capture_window(r, &mut p, entry, natural, true, 12.0, shadow)
+                    }?;
+                    Some((readback(r, captured.0), captured.1))
+                })
+                .flatten()
+                .expect("the window is captured")
+        };
+        let (old, old_area) = shoot(true);
+        let (new, new_area) = shoot(false);
+        assert_eq!(old_area, new_area, "captured area at {scale}x");
+        assert!(old == new, "captured pixels at {scale}x, shadow {shadow}");
+    }
+}

@@ -87,6 +87,21 @@ pub fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
     write_new_with(path, bytes, &Publish::SYSTEM)
 }
 
+/// Create `path` (never replacing a file) and fill it with `write`. A file this call created and could not fill is
+/// removed, so no partial file stays under the name.
+fn create_and_write(
+    path: &Path,
+    write: impl FnOnce(&mut std::fs::File) -> io::Result<()>,
+) -> io::Result<()> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    let result = write(&mut file);
+    if result.is_err() {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+    }
+    result
+}
+
 /// How the hidden file reaches its name, apart so that a test can stand in for a file system that lacks one.
 struct Publish {
     link: fn(&Path, &Path) -> io::Result<()>,
@@ -143,11 +158,7 @@ fn write_new_with(path: &Path, bytes: &[u8], publish: &Publish) -> io::Result<()
             Err(e) if no_hard_links(&e) => match (publish.rename_noreplace)(&part, path) {
                 Err(e) if no_rename_flags(&e) => {
                     let _ = std::fs::remove_file(&part);
-                    OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .open(path)
-                        .and_then(|mut direct| direct.write_all(bytes))
+                    create_and_write(path, |file| file.write_all(bytes))
                 }
                 other => other,
             },
@@ -370,6 +381,25 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(std::fs::read(&stale).unwrap(), b"left by a crashed run");
         assert!(!path.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_direct_write_that_fails_leaves_no_partial_file() {
+        let dir = temp_dir("write-new-partial");
+        let path = dir.join("a.png");
+        let error = create_and_write(&path, |file| {
+            file.write_all(b"half")?;
+            Err(io::Error::from(io::ErrorKind::StorageFull))
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::StorageFull);
+        assert!(!path.exists());
+        // a file that was there is not this call's to remove
+        std::fs::write(&path, b"first").unwrap();
+        let error = create_and_write(&path, |_| Ok(())).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&path).unwrap(), b"first");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

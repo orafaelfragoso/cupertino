@@ -3,14 +3,14 @@
 
 mod common;
 
-use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use common::spawn;
 use cupertino_server::{backend::headless, config::Config, Cupertino};
+use cupertino_test_bus::PrivateBus;
 use cupertino_theme::Appearance;
 use smithay::backend::input::{ButtonState, KeyState};
 use smithay::backend::renderer::utils::with_renderer_surface_state;
@@ -73,7 +73,7 @@ struct Harness {
     state: Cupertino,
     event_loop: EventLoop<'static, Cupertino>,
     app: Process,
-    bus: Process,
+    bus: PrivateBus,
     address: String,
     home: tempfile::TempDir,
 }
@@ -86,18 +86,8 @@ impl Harness {
     fn with_menu(pane: &str, pane_title: &str, button: (f64, f64)) -> Self {
         let binary = settings_binary();
         let home = tempfile::tempdir().unwrap();
-        let mut bus = Command::new("dbus-daemon")
-            .args(["--session", "--nofork", "--print-address=1"])
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut address = String::new();
-        BufReader::new(bus.stdout.take().unwrap())
-            .read_line(&mut address)
-            .unwrap();
-        let address = address.trim().to_owned();
-        assert!(!address.is_empty(), "the private bus published its address");
-        let bus = Process(bus);
+        let bus = PrivateBus::start().expect("this regression needs dbus-daemon");
+        let address = bus.address.clone();
         let event_loop = EventLoop::try_new().unwrap();
         let mut state = Cupertino::new(
             Display::new().unwrap(),
@@ -155,10 +145,7 @@ impl Harness {
             self.app.0.try_wait().unwrap().is_none(),
             "Settings exited unexpectedly"
         );
-        assert!(
-            self.bus.0.try_wait().unwrap().is_none(),
-            "private bus exited unexpectedly"
-        );
+        assert!(!self.bus.has_exited(), "private bus exited unexpectedly");
     }
 
     fn wait_until(&mut self, what: &str, condition: impl Fn(&Cupertino) -> bool) {

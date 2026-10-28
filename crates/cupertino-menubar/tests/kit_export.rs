@@ -10,8 +10,7 @@ use cupertino_modifiers::Profile;
 use cupertino_ui_menus::{Exporter, WindowId};
 use zbus::block_on;
 
-mod common;
-use common::PrivateBus;
+use cupertino_test_bus::PrivateBus;
 
 fn find<'a>(items: &'a [MenuItem], label: &str) -> Option<&'a MenuItem> {
     items.iter().find_map(|item| {
@@ -98,7 +97,7 @@ fn the_bar_loads_the_menus_of_an_application_told_its_reader_after_the_first_loa
             &standard::menu_bar("Notes", &Features::default()),
         )
         .unwrap();
-    let bar = bus.connect();
+    let bar = zbus::block_on(bus.connect_async());
     let bar_name = bar.unique_name().unwrap().to_string();
     let (worker, events) = Worker::start(bar, || {}).unwrap();
 
@@ -157,7 +156,7 @@ fn a_load_refused_past_the_retries_is_reported_as_failed() {
             &standard::menu_bar("Notes", &Features::default()),
         )
         .unwrap();
-    let (worker, events) = Worker::start(bus.connect(), || {}).unwrap();
+    let (worker, events) = Worker::start(zbus::block_on(bus.connect_async()), || {}).unwrap();
     let props = GtkMenuProps {
         bus_name: exported.unique_bus_name,
         application_id: Some(exported.application_id),
@@ -211,7 +210,7 @@ impl Followed {
         exporter
             .set_enabled(WindowId(1), &ActionName::parse("app.new").unwrap(), false)
             .unwrap();
-        let bar = bus.connect();
+        let bar = zbus::block_on(bus.connect_async());
         exporter
             .set_reader(Some(bar.unique_name().unwrap().as_str()))
             .unwrap();

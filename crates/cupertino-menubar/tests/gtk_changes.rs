@@ -13,8 +13,7 @@ use cupertino_menubar::worker::{Event, Request, Worker};
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{OwnedValue, Str};
 
-mod common;
-use common::PrivateBus;
+use cupertino_test_bus::PrivateBus;
 
 type Items = Vec<HashMap<String, OwnedValue>>;
 
@@ -115,7 +114,7 @@ fn changes_that_flood_the_load_neither_stop_the_bar_nor_leave_it_behind() {
         .build()
         .unwrap();
     let name = exporter.unique_name().unwrap().to_string();
-    let (worker, events) = Worker::start(bus.connect(), || {}).unwrap();
+    let (worker, events) = Worker::start(zbus::block_on(bus.connect_async()), || {}).unwrap();
 
     worker
         .send(Request::FetchGtk(props(&name, "/flood")))

@@ -1,5 +1,5 @@
 // cupertino-layers --graph target
-// 58 crates, 232 internal dependencies
+// 58 crates, 235 internal dependencies
 // per layer: foundation 14, models 7, platform 7, protocol 3, transport 3, render 4, ui 2, core 1, shell 9, services 4, apps 2, tools 2
 // forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden normal edge cupertino-files (apps) -> cupertino-icons (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
@@ -205,6 +205,7 @@ digraph "target" {
   "cupertino-menubar" -> "cupertino-peer";
   "cupertino-menubar" -> "cupertino-protocol-app";
   "cupertino-menubar" -> "cupertino-shell-client";
+  "cupertino-menubar" -> "cupertino-test-bus" [label="dev"];
   "cupertino-menubar" -> "cupertino-text-field";
   "cupertino-menubar" -> "cupertino-theme";
   "cupertino-menubar" -> "cupertino-ui-menus" [label="dev"];
@@ -222,6 +223,7 @@ digraph "target" {
   "cupertino-notifications" -> "cupertino-peer";
   "cupertino-notifications" -> "cupertino-protocol-app";
   "cupertino-notifications" -> "cupertino-shell-client";
+  "cupertino-notifications" -> "cupertino-test-bus" [label="dev"];
   "cupertino-notifications" -> "cupertino-theme";
   "cupertino-notifications" -> "cupertino-ui-wayland";
   "cupertino-notifications" -> "cupertino-wayland-client";
@@ -324,6 +326,7 @@ digraph "target" {
   "cupertino-ui-menus" -> "cupertino-menu-model";
   "cupertino-ui-menus" -> "cupertino-modifiers";
   "cupertino-ui-menus" -> "cupertino-protocol-app";
+  "cupertino-ui-menus" -> "cupertino-test-bus" [label="dev"];
   "cupertino-ui-menus" -> "cupertino-wayland-client";
   "cupertino-ui-wayland" -> "cupertino-geometry";
   "cupertino-ui-wayland" -> "cupertino-wayland-client";

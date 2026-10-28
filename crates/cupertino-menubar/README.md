@@ -234,5 +234,5 @@ cargo clippy -p cupertino-menubar --all-targets
 
 | Test | Proves |
 |---|---|
-| `tests/dbus_integration.rs` | Fake DBusMenu, StatusNotifier and GMenuModel peers work against the clients and services, on a private bus started with `dbus-daemon --session --print-address=1 --print-pid=1 --fork`. It skips with a message when `dbus-daemon` is not installed. |
+| `tests/dbus_integration.rs` | Fake DBusMenu, StatusNotifier and GMenuModel peers work against the clients and services, on a private bus from `cupertino-test-bus` (a `dbus-daemon` child that dies with its test). It skips with a message when `dbus-daemon` is not installed. |
 | `tests/extras_bus.rs` (feature `app`) | Stand-ins for the network, power, Bluetooth and notification services, served on one bus used as both system and session bus. Checks what the extras read, that joining an open network calls `Connect` without a passphrase and is read back, and that a service leaving the bus hides its item. |

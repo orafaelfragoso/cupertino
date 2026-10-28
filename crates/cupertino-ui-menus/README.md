@@ -8,7 +8,7 @@ and `cupertino-shell-client`).
 
 | Item | Contents |
 |---|---|
-| `Exporter` | one per application and bus connection. `export(window, &MenuBar)` publishes `MenuBar::exported` and returns the window's `DbusProperties`; `set_enabled(window, action, enabled)`; `set_modifier_map` rewrites every accelerator for another profile; `remove(window)` withdraws a closed window's objects |
+| `Exporter` | one per application and bus connection. `new(builder, app_id, map, on_activate)` builds the connection from a `zbus::blocking::connection::Builder` (`Builder::session()` on the desktop) with the application object already served, so zbus listens for method calls before it reads the socket: a call made right after an address is announced is never dropped unanswered. `export(window, &MenuBar)` publishes `MenuBar::exported` and returns the window's `DbusProperties`; `set_enabled(window, action, enabled)`; `set_modifier_map` rewrites every accelerator for another profile; `remove(window)` withdraws a closed window's objects |
 | `DbusProperties` | where a window's menus are, which it passes to `cupertino_app_menu_v1.set_address` |
 | `Activation`, `WindowId` | a chosen item: the action, and the window for a `win.` action |
 
@@ -31,6 +31,7 @@ cargo test -p cupertino-ui-menus
 ```
 
 Unit tests cover the menu encoding, the change records and the object paths. `tests/bus.rs` starts a private
-`dbus-daemon` (skipped when it is not installed) and reads the menus as the menu bar does: the published objects and
+`dbus-daemon` (skipped when it is not installed; a child of the test, with a deadline on its address, every call and every
+signal) and reads the menus as the menu bar does: the published objects and
 paths, activation, a disabled action, a profile change and a closed window. `cupertino-menubar`'s `tests/kit_export.rs`
 reads an export through the bar's own `GtkMenuClient`.

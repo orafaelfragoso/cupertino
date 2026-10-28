@@ -1,55 +1,92 @@
 //! The exporter on a private bus: a private `dbus-daemon` is started for each test (skipped when the binary is not
-//! installed); one connection exports, a second reads the menus as the menu bar does.
+//! installed); one connection exports, a second reads the menus as the menu bar does. Every wait has a deadline: the
+//! daemon's address, each method call and each signal.
 
 use std::collections::HashMap;
-use std::process::{Command, Stdio};
+use std::io::{BufRead, BufReader};
+use std::os::unix::process::CommandExt;
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
 use cupertino_menu_model::standard::{self, Features};
 use cupertino_menu_model::{ActionName, Modifier, ModifierMap, PhysicalModifier};
 use cupertino_ui_menus::{Activation, DbusProperties, Exporter, WindowId};
-use zbus::blocking::{Connection, Proxy};
+use zbus::blocking::proxy::SignalIterator;
+use zbus::blocking::{connection, Connection, Proxy};
+use zbus::message::Message;
 use zbus::zvariant::{OwnedValue, Signature, Value};
 
 const WAIT: Duration = Duration::from_secs(5);
 
-/// A private `dbus-daemon`, killed on drop.
+/// A private `dbus-daemon`, a child of the test that is killed on drop and dies with the test's thread if the test is
+/// killed first.
 struct PrivateBus {
     address: String,
-    pid: String,
+    daemon: Child,
 }
 
 impl PrivateBus {
     fn start() -> Option<PrivateBus> {
-        let out = Command::new("dbus-daemon")
-            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
+        let mut command = Command::new("dbus-daemon");
+        command
+            .args(["--session", "--nofork", "--print-address=1"])
             .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        let text = String::from_utf8(out.stdout)
-            .ok()
-            .filter(|_| out.status.success())?;
-        let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
-        Some(PrivateBus {
-            address: lines.next()?.to_owned(),
-            pid: lines.next()?.to_owned(),
-        })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        // Safety: the closure runs in the child between fork and exec and calls only prctl, which is
+        // async-signal-safe.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut daemon = command.spawn().ok()?;
+        let stdout = daemon.stdout.take().expect("piped stdout");
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let _ = BufReader::new(stdout).read_line(&mut line);
+            let _ = tx.send(line);
+        });
+        let address = rx
+            .recv_timeout(WAIT)
+            .expect("dbus-daemon printed no address within 5 s");
+        let address = address.trim().to_owned();
+        assert!(!address.is_empty(), "dbus-daemon exited before it listened");
+        Some(PrivateBus { address, daemon })
+    }
+
+    fn builder(&self) -> connection::Builder<'_> {
+        connection::Builder::address(self.address.as_str())
+            .unwrap()
+            .method_timeout(WAIT)
     }
 
     fn connect(&self) -> Connection {
-        zbus::blocking::connection::Builder::address(self.address.as_str())
-            .unwrap()
-            .build()
-            .unwrap()
+        self.builder().build().unwrap()
     }
 }
 
 impl Drop for PrivateBus {
     fn drop(&mut self) {
-        let _ = Command::new("kill").arg(&self.pid).status();
+        let _ = self.daemon.kill();
+        let _ = self.daemon.wait();
     }
+}
+
+/// The first message of `signals`, or a panic after [`WAIT`].
+fn next_signal(mut signals: SignalIterator<'static>) -> Message {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        if let Some(message) = signals.next() {
+            let _ = tx.send(message);
+        }
+    });
+    rx.recv_timeout(WAIT).expect("no signal within 5 s")
 }
 
 macro_rules! private_bus {
@@ -119,7 +156,7 @@ fn fixture(bus: PrivateBus) -> Fixture {
     let (tx, activations) = mpsc::channel();
     let tx = std::sync::Mutex::new(tx);
     let mut exporter = Exporter::new(
-        bus.connect(),
+        bus.builder(),
         "org.example.Notes",
         Box::new(Profile::Cupertino),
         move |a| {
@@ -331,11 +368,11 @@ fn chosen_items_reach_the_application() {
 fn a_disabled_action_is_announced_and_does_nothing() {
     let f = fixture(private_bus!());
     let actions = proxy(&f, &f.props.window_object_path, "org.gtk.Actions");
-    let mut changed = actions.receive_signal("Changed").unwrap();
+    let changed = actions.receive_signal("Changed").unwrap();
     f.exporter
         .set_enabled(WindowId(1), &ActionName::parse("win.undo").unwrap(), false)
         .unwrap();
-    let signal = changed.next().unwrap();
+    let signal = next_signal(changed);
     let (removed, enabled, _, added): (
         Vec<String>,
         HashMap<String, bool>,
@@ -358,11 +395,11 @@ fn a_disabled_action_is_announced_and_does_nothing() {
 fn a_profile_change_rewrites_the_accelerators() {
     let mut f = fixture(private_bus!());
     let menus = proxy(&f, &f.props.menubar_path, "org.gtk.Menus");
-    let mut changed = menus.receive_signal("Changed").unwrap();
+    let changed = menus.receive_signal("Changed").unwrap();
     f.exporter
         .set_modifier_map(Box::new(Profile::ClassicPc))
         .unwrap();
-    changed.next().unwrap();
+    next_signal(changed);
     let bar = read_menus(&f, &f.props.menubar_path);
     assert!(
         bar.contains(&"  New Note app.new <Control>n".to_string()),

@@ -495,7 +495,7 @@ impl Wm {
         true
     }
 
-    fn descendants(&self, id: WindowId) -> Vec<WindowId> {
+    pub(crate) fn descendants(&self, id: WindowId) -> Vec<WindowId> {
         let mut result = Vec::new();
         let mut frontier = vec![id];
         while let Some(p) = frontier.pop() {

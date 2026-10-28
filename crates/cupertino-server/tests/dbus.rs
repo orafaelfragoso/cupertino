@@ -343,3 +343,110 @@ fn only_the_supervised_login_process_owns_the_login_name() {
         "delivered to the supervised process or in a dev shell; an owner that is not the login process gets nothing and does not end the session"
     );
 }
+
+/// The notification service's side: record the banners.
+struct FakeNotifications(Arc<Mutex<Vec<(String, String)>>>);
+
+#[zbus::interface(name = "org.freedesktop.Notifications")]
+impl FakeNotifications {
+    #[allow(clippy::too_many_arguments)]
+    fn notify(
+        &self,
+        _app_name: String,
+        _replaces_id: u32,
+        _app_icon: String,
+        summary: String,
+        body: String,
+        _actions: Vec<String>,
+        _hints: std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+        _expire_timeout: i32,
+    ) -> u32 {
+        self.0.lock().unwrap().push((summary, body));
+        1
+    }
+}
+
+/// Send a log out request while `trust` is set, with the login service up or not, and report the banners shown.
+fn log_out_banners(bus: &PrivateBus, trust: LoginTrust, login_up: bool) -> Vec<(String, String)> {
+    let _env = SESSION_BUS_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
+    block_on(async {
+        let shown = Arc::new(Mutex::new(Vec::new()));
+        let _notifications = connection::Builder::address(bus.address.as_str())
+            .expect("address")
+            .name("org.freedesktop.Notifications")
+            .expect("name")
+            .serve_at(
+                "/org/freedesktop/Notifications",
+                FakeNotifications(shown.clone()),
+            )
+            .expect("object")
+            .build()
+            .await
+            .expect("connect");
+        let _login = if login_up {
+            Some(
+                connection::Builder::address(bus.address.as_str())
+                    .expect("address")
+                    .name("org.cupertino.Login1")
+                    .expect("name")
+                    .serve_at(
+                        "/org/cupertino/Login1",
+                        FakeLoginPanel(Arc::new(Mutex::new(0))),
+                    )
+                    .expect("object")
+                    .build()
+                    .await
+                    .expect("connect"),
+            )
+        } else {
+            None
+        };
+        let handle = DbusHandle::start_with(|| ()).expect("worker thread");
+        handle.set_login(trust);
+        assert!(handle.send(Request::LogOut));
+        for _ in 0..100 {
+            if !shown.lock().unwrap().is_empty() {
+                break;
+            }
+            async_io::Timer::after(Duration::from_millis(20)).await;
+        }
+        async_io::Timer::after(Duration::from_millis(100)).await;
+        let banners = shown.lock().unwrap().clone();
+        banners
+    })
+}
+
+#[test]
+fn a_log_out_that_reaches_nobody_shows_a_banner_and_one_that_is_delivered_or_ends_the_server_does_not(
+) {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let mut other = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("sleep");
+    let other_pid = other.id();
+    let banner = |dropped: cupertino_server::dbus::LogOutDropped| {
+        let (summary, body) = dropped.text();
+        vec![(summary.to_string(), body.to_string())]
+    };
+    let squatted = log_out_banners(&bus, LoginTrust::Agent(other_pid), true);
+    let not_ready = log_out_banners(&bus, LoginTrust::Agent(std::process::id()), false);
+    let delivered = log_out_banners(&bus, LoginTrust::Agent(std::process::id()), true);
+    let fallback = log_out_banners(&bus, LoginTrust::Nobody, false);
+    let _ = other.kill();
+    let _ = other.wait();
+    assert_eq!(
+        squatted,
+        banner(cupertino_server::dbus::LogOutDropped::OwnerNotTheLoginProcess)
+    );
+    assert_eq!(
+        not_ready,
+        banner(cupertino_server::dbus::LogOutDropped::LoginProcessNotReady)
+    );
+    assert!(delivered.is_empty(), "{delivered:?}");
+    assert!(fallback.is_empty(), "{fallback:?}");
+}

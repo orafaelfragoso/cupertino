@@ -606,6 +606,9 @@ async fn call(
     // an owner that is not the login process gets nothing, and a log out is not the end of the session then: the name
     // being taken is not the same as nobody to ask
     let Some(destination) = destination(conn, name, login).await else {
+        if what == Request::LogOut {
+            post_notice(conn, LogOutDropped::OwnerNotTheLoginProcess).await;
+        }
         return;
     };
     let destination = Some(destination.as_str());
@@ -638,6 +641,7 @@ async fn call(
             // one to ask: only a session without a login process ends
             if let LoginTrust::Agent(pid) = trust {
                 tracing::warn!(pid, "the login process has not taken its bus name yet: the log out request is dropped");
+                post_notice(conn, LogOutDropped::LoginProcessNotReady).await;
             } else {
                 tracing::warn!("no login process on the bus: the log out shortcut ends the server");
                 login_missing();
@@ -645,6 +649,55 @@ async fn call(
             return;
         }
         tracing::warn!(?what, name, error = %e, "cannot reach the shell process");
+    }
+}
+
+/// Why a log out request reached nobody and the session goes on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogOutDropped {
+    /// A process other than the login process owns `org.cupertino.Login1`.
+    OwnerNotTheLoginProcess,
+    /// The login process is supervised but has not taken its name yet (it is starting or restarting).
+    LoginProcessNotReady,
+}
+
+impl LogOutDropped {
+    /// The summary and the body of the notice that tells the person.
+    pub fn text(self) -> (&'static str, &'static str) {
+        match self {
+            LogOutDropped::OwnerNotTheLoginProcess => (
+                "Log out did not start",
+                "Another program has taken the name of the login service, so the request was not sent. The session goes on.",
+            ),
+            LogOutDropped::LoginProcessNotReady => (
+                "Log out did not start",
+                "The login service is not ready yet. Try again in a moment.",
+            ),
+        }
+    }
+}
+
+/// Tell the person a log out request was dropped: a banner from the notification service. Nothing else shows it, and a
+/// shortcut that does nothing looks like a broken one. A session without a notification service only has the log.
+async fn post_notice(conn: &zbus::Connection, dropped: LogOutDropped) {
+    let (summary, body) = dropped.text();
+    // urgency 1 is normal; the banner is not kept in the centre
+    let hints = std::collections::HashMap::from([
+        ("urgency", zbus::zvariant::Value::U8(1)),
+        ("transient", zbus::zvariant::Value::Bool(true)),
+    ]);
+    let actions: Vec<&str> = Vec::new();
+    let sent = conn
+        .call_method(
+            Some("org.freedesktop.Notifications"),
+            "/org/freedesktop/Notifications",
+            Some("org.freedesktop.Notifications"),
+            "Notify",
+            &("Cupertino", 0u32, "", summary, body, actions, hints, -1i32),
+        )
+        .await;
+    if let Err(e) = sent {
+        tracing::warn!(error = %e, "cannot show that the log out request was dropped");
     }
 }
 

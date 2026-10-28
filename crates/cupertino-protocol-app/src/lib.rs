@@ -3,10 +3,11 @@
 //!
 //! [`AppEffects`] (`cupertino_app_effects_v1`) observes the session's appearance and display options
 //! ([`AppEffects::appearance`]), creates server-rendered [`Backdrop`]s, sets the title bar style of an
-//! application window and announces where a window's menus are on the session bus ([`AppEffects::menu`]), for the
-//! desktop's menu bar. [`ScrollCounts`] (`cupertino_scroll_v1`) reports how many scroll steps each pointer frame
-//! carries. What the objects receive arrives as an [`AppEvent`] inside the transport's `Event::Extension`, in order
-//! with the transport's own events.
+//! application window, announces where a window's menus are on the session bus ([`AppEffects::menu`]), for the
+//! desktop's menu bar, and disables a window's minimize and zoom controls ([`AppEffects::set_disabled_controls`]).
+//! [`ScrollCounts`] (`cupertino_scroll_v1`) reports how many scroll steps each pointer frame carries. What the objects
+//! receive arrives as an [`AppEvent`] inside the transport's `Event::Extension`, in order with the transport's own
+//! events.
 
 mod backdrop;
 mod effects;
@@ -16,7 +17,7 @@ mod scroll;
 pub use backdrop::Backdrop;
 pub use effects::{
     report_appearance, report_display_options, AppEffects, AppEvent, AppMenu, Appearance,
-    MenuAddress,
+    MenuAddress, WindowControls,
 };
 pub use error::Error;
 pub use scroll::{PointerScroll, ScrollCounts};

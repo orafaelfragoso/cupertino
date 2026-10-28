@@ -1,8 +1,9 @@
-//! `cupertino_app_effects_v1`: the appearance observer, backdrops, the title bar style and the menu announcement.
+//! `cupertino_app_effects_v1`: the appearance observer, backdrops, the title bar style, the menu announcement and the
+//! disabled window controls.
 
 use crate::{Backdrop, Quiet};
 use cupertino_app_protocols::client::app_effects::cupertino_app_effects_v1::{
-    CupertinoAppEffectsV1, TitlebarStyle,
+    CupertinoAppEffectsV1, TitlebarStyle, WindowControl,
 };
 use cupertino_app_protocols::client::app_effects::cupertino_app_menu_v1::{
     self, CupertinoAppMenuV1,
@@ -65,7 +66,7 @@ pub struct AppEffects(CupertinoAppEffectsV1);
 impl AppEffects {
     /// Bind the global; `None` when the server does not offer it.
     pub fn bind(conn: &mut Connection) -> Option<AppEffects> {
-        conn.bind_extension(1..=3, Quiet).map(AppEffects)
+        conn.bind_extension(1..=4, Quiet).map(AppEffects)
     }
 
     /// Observe the session's appearance and display options: [`AppEvent::Appearance`] and
@@ -105,6 +106,43 @@ impl AppEffects {
             MenuSurface(surface),
         ))))
     }
+
+    /// Disable controls of the window of `surface`, replacing those it disabled before; they apply with the surface's
+    /// next commit and may change at any time. The close button can't be disabled. Not sent to a server that predates
+    /// it (below version 4): the window keeps every control.
+    pub fn set_disabled_controls(
+        &self,
+        conn: &Connection,
+        surface: SurfaceId,
+        disabled: WindowControls,
+    ) -> Result<(), Error> {
+        if !self.can_set_disabled_controls() {
+            return Ok(());
+        }
+        let mut bits = WindowControl::empty();
+        bits.set(WindowControl::Minimize, disabled.minimize);
+        bits.set(WindowControl::Zoom, disabled.zoom);
+        self.0
+            .set_disabled_controls(&conn.wl_surface(surface)?, bits);
+        Ok(())
+    }
+
+    /// Whether the server takes [`Self::set_disabled_controls`] (version 4).
+    pub fn can_set_disabled_controls(&self) -> bool {
+        self.0.version() >= DISABLED_CONTROLS_VERSION
+    }
+}
+
+/// The version that adds `set_disabled_controls`.
+const DISABLED_CONTROLS_VERSION: u32 = 4;
+
+/// Window controls, each `true` when it is in the set.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WindowControls {
+    /// The minimize button, the minimize shortcut and the Window menu's Minimize.
+    pub minimize: bool,
+    /// The zoom button, the zoom shortcut, the Window menu's Zoom and the title bar's double click.
+    pub zoom: bool,
 }
 
 /// Where a window's menus are on the session bus: its unique bus name and the object paths of the application's

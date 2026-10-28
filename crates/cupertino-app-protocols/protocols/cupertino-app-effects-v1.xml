@@ -12,10 +12,11 @@
     arrangement or the session; those roles are in the private cupertino_shell_v1.
   </description>
 
-  <interface name="cupertino_app_effects_v1" version="3">
+  <interface name="cupertino_app_effects_v1" version="4">
     <description summary="effects for the client's own surfaces">
       Global singleton, offered to every client. Version 2 adds get_menu, version 3 the menu_reader
-      event of cupertino_app_menu_v1; the other interfaces of the protocol are unchanged in either.
+      event of cupertino_app_menu_v1, version 4 set_disabled_controls; the other interfaces of the
+      protocol are unchanged in each.
     </description>
 
     <enum name="error">
@@ -23,6 +24,7 @@
       <entry name="window" value="1" summary="the surface is not an application window, or the window is already mapped"/>
       <entry name="too_many_backdrops" value="2" summary="the surface or the client holds as many backdrops as the server allows"/>
       <entry name="menu_exists" value="3" summary="the surface already has a menu announcement" since="2"/>
+      <entry name="invalid_controls" value="4" summary="a bit not defined at the object's version" since="4"/>
     </enum>
 
     <enum name="titlebar_style">
@@ -31,6 +33,14 @@
       </description>
       <entry name="standard" value="0" summary="a title bar above the surface, drawn by the server with the window's title"/>
       <entry name="unified" value="1" summary="the surface fills the whole window and the title bar lies over its top; the server draws only the window control buttons"/>
+    </enum>
+
+    <enum name="window_control" bitfield="true" since="4">
+      <description summary="the window controls a client may disable">
+        The close button is not among them: a window can always be closed.
+      </description>
+      <entry name="minimize" value="1" summary="the minimize button, the minimize shortcut and the Window menu's Minimize"/>
+      <entry name="zoom" value="2" summary="the zoom button, the zoom shortcut, the Window menu's Zoom and the title bar's double click"/>
     </enum>
 
     <request name="destroy" type="destructor">
@@ -89,6 +99,28 @@
       </description>
       <arg name="id" type="new_id" interface="cupertino_app_menu_v1"/>
       <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+
+    <request name="set_disabled_controls" since="4">
+      <description summary="disable window controls of an application window">
+        Disables the controls of the xdg toplevel of the surface. A disabled button is drawn dimmed
+        and takes no click, and the matching shortcut and Window menu items do nothing on this
+        window, nor, for zoom, does a double click on the title bar. The client's own
+        xdg_toplevel.set_minimized and xdg_toplevel.set_maximized are refused too. Unzooming a
+        window that is already zoomed and restoring a minimized one stay possible, so a window is
+        never kept zoomed or minimized by this request.
+        The state is double-buffered: it applies at the surface's next wl_surface.commit. It may
+        change at any time, also after the window is mapped. The default is none.
+        The close button can't be disabled. Hide, the application switcher, the overview, the
+        moves between workspaces and Force Quit act on the window as on any other. A window that
+        isn't resizable (its minimum size equals its maximum size) has zoom disabled whatever this
+        says.
+        Posts invalid_surface when the surface belongs to another client, window when it is not an
+        xdg toplevel, and invalid_controls when disabled has a bit the object's version does not
+        define.
+      </description>
+      <arg name="surface" type="object" interface="wl_surface"/>
+      <arg name="disabled" type="uint" enum="window_control"/>
     </request>
   </interface>
 

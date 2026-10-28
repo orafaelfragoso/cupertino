@@ -1,15 +1,15 @@
 //! `cupertino_app_effects_v1` (any client → server): the global, the material backdrops of `get_backdrop`, the title bar
-//! style of `set_titlebar_style` and the appearance observer of `get_appearance` ([`crate::session_v1`]). The global is
-//! public, so every request is about the client's own surfaces: a surface of another client is a protocol error.
-//! Backdrop state lives in the surface's cached state, so it applies atomically with the surface's `wl_surface.commit`;
-//! the scene reads the committed (`current`) side.
+//! style of `set_titlebar_style`, the appearance observer of `get_appearance` ([`crate::session_v1`]) and the disabled
+//! window controls of `set_disabled_controls`. The global is public: a surface of another client is a protocol error.
+//! Backdrops and disabled controls live in the surface's cached state, so they apply atomically with the surface's
+//! `wl_surface.commit`; the scene reads the committed (`current`) side.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use cupertino_decorations::TitlebarStyle;
 use cupertino_protocols::server::app_effects::cupertino_app_effects_v1::{
-    self, CupertinoAppEffectsV1, Error as EffectsError,
+    self, CupertinoAppEffectsV1, Error as EffectsError, WindowControl,
 };
 use cupertino_protocols::server::app_effects::cupertino_backdrop_v1::{
     self, CupertinoBackdropV1, Error,
@@ -35,7 +35,7 @@ pub struct AppEffectsV1Global {
 impl AppEffectsV1Global {
     pub fn new(dh: &DisplayHandle) -> Self {
         Self {
-            _global: dh.create_global::<Cupertino, CupertinoAppEffectsV1, ()>(3, ()),
+            _global: dh.create_global::<Cupertino, CupertinoAppEffectsV1, ()>(4, ()),
         }
     }
 }
@@ -310,6 +310,16 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Cupertino {
                 );
                 state.menu_bars.add_app_menu(menu, surface);
             }
+            cupertino_app_effects_v1::Request::SetDisabledControls { surface, disabled } => {
+                if owned_by(&surface, client) {
+                    state.set_disabled_controls(effects, &surface, disabled.into())
+                } else {
+                    effects.post_error(
+                        EffectsError::InvalidSurface,
+                        "the surface belongs to another client",
+                    );
+                }
+            }
             // `Destroy` needs nothing: objects created through the global stay valid
             _ => {}
         }
@@ -359,6 +369,80 @@ impl Cupertino {
             e.insets = insets;
         }
     }
+
+    /// `set_disabled_controls`: keep the controls an application window disables in its surface's pending state, for
+    /// the surface's next commit.
+    fn set_disabled_controls(
+        &self,
+        effects: &CupertinoAppEffectsV1,
+        surface: &WlSurface,
+        bits: u32,
+    ) {
+        if !self.windows.iter().any(|w| w.has_surface(surface)) {
+            effects.post_error(
+                EffectsError::Window,
+                "the surface is not an application window",
+            );
+            return;
+        }
+        let undefined = bits & !defined_controls(effects.version()).bits();
+        if undefined != 0 {
+            effects.post_error(
+                EffectsError::InvalidControls,
+                format!(
+                    "{undefined:#x} names no window control of version {}",
+                    effects.version()
+                ),
+            );
+            return;
+        }
+        let disabled = WindowControl::from_bits_truncate(bits);
+        with_states(surface, |states| {
+            *states.cached_state.get::<DisabledControls>().pending() = DisabledControls {
+                minimize: disabled.contains(WindowControl::Minimize),
+                zoom: disabled.contains(WindowControl::Zoom),
+            };
+        });
+    }
+}
+
+/// Each window control with the version of the global that defines it.
+const WINDOW_CONTROLS: [(WindowControl, u32); 2] =
+    [(WindowControl::Minimize, 4), (WindowControl::Zoom, 4)];
+
+/// The window controls a `cupertino_app_effects_v1` of `version` may name.
+fn defined_controls(version: u32) -> WindowControl {
+    WINDOW_CONTROLS
+        .iter()
+        .filter(|(_, since)| version >= *since)
+        .fold(WindowControl::empty(), |defined, (control, _)| {
+            defined | *control
+        })
+}
+
+/// The window controls a client disabled with `set_disabled_controls`, double-buffered with its surface. The commit
+/// that applies them to the window reads them with [`disabled_controls`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DisabledControls {
+    pub minimize: bool,
+    pub zoom: bool,
+}
+
+impl Cacheable for DisabledControls {
+    fn commit(&mut self, _: &DisplayHandle) -> Self {
+        *self
+    }
+
+    fn merge_into(self, into: &mut Self, _: &DisplayHandle) {
+        *into = self;
+    }
+}
+
+/// The disabled controls `surface` has committed; none for a surface that never set them.
+pub fn disabled_controls(surface: &WlSurface) -> DisabledControls {
+    with_states(surface, |states| {
+        *states.cached_state.get::<DisabledControls>().current()
+    })
 }
 
 impl Dispatch<CupertinoBackdropV1, BackdropData> for Cupertino {

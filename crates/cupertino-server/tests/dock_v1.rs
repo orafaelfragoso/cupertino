@@ -750,6 +750,32 @@ fn the_first_group_lists_the_windows_and_the_bar_backdrop_is_the_docks_rectangle
 }
 
 #[test]
+fn an_application_id_and_a_title_longer_than_the_limit_are_cut_at_a_character_boundary() {
+    let Some(mut h) = Harness::new() else { return };
+    // 4000 bytes, and a two-byte character spans byte 1024; the title appends " window"
+    let long_id: &'static str =
+        Box::leak(format!("{}é{}", "a".repeat(1023), "b".repeat(4000 - 1025)).into_boxed_str());
+    let _app = spawn_app(h.socket_path(), long_id);
+    let id = h.mapped_window(1);
+    let dock = DockClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&dock, 1);
+    assert_eq!(
+        dock.groups(),
+        vec![vec![
+            DockEvent::Window {
+                id: id.0 as u32,
+                app_id: "a".repeat(1023),
+                title: "a".repeat(1023),
+                minimized: false,
+                active: true
+            },
+            DockEvent::Done
+        ]]
+    );
+    assert_eq!(dock.error(), None, "the dock stays connected");
+}
+
+#[test]
 fn minimizing_sends_the_state_and_animates_toward_the_committed_target() {
     let Some(mut h) = Harness::new() else { return };
     let dock = DockClient::spawn(h.shell_stream(), true);

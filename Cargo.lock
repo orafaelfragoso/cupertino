@@ -1033,6 +1033,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-modifiers"
+version = "0.1.0"
+
+[[package]]
 name = "cupertino-netd"
 version = "0.1.0"
 dependencies = [

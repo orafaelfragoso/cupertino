@@ -7,6 +7,7 @@ mod clock;
 mod command;
 mod cx;
 mod focus;
+mod paint;
 mod pointer;
 mod route;
 mod semantics;

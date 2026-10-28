@@ -3,53 +3,13 @@
 #![cfg(feature = "app")]
 
 use cupertino_menubar::worker::{Request, StartError, Worker};
-use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath};
-use zbus::{block_on, connection, Connection};
+use zbus::{block_on, Connection};
 
-struct PrivateBus {
-    address: String,
-    pid: String,
-}
-
-impl PrivateBus {
-    fn start() -> Option<PrivateBus> {
-        let out = Command::new("dbus-daemon")
-            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        let text = String::from_utf8(out.stdout)
-            .ok()
-            .filter(|_| out.status.success())?;
-        let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-        Some(PrivateBus {
-            address: lines.next()?.to_string(),
-            pid: lines.next()?.to_string(),
-        })
-    }
-
-    fn connect(&self) -> Connection {
-        block_on(
-            connection::Builder::address(self.address.as_str())
-                .expect("address")
-                .build(),
-        )
-        .expect("connect")
-    }
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        Command::new("kill")
-            .arg(&self.pid)
-            .status()
-            .expect("kill the private bus");
-    }
-}
+mod common;
+use common::PrivateBus;
 
 /// Stands in for the notification process.
 struct FakeCentre(mpsc::Sender<()>);

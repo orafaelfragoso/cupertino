@@ -7,54 +7,14 @@ use cupertino_menubar::extras::{
 };
 use cupertino_menubar::extras_bus::{ExtrasBus, SessionAgent};
 use std::collections::HashMap;
-use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use zbus::block_on;
 use zbus::zvariant::{OwnedValue, Value};
-use zbus::{block_on, connection, Connection};
 
-struct PrivateBus {
-    address: String,
-    pid: String,
-}
-
-impl PrivateBus {
-    fn start() -> Option<PrivateBus> {
-        let out = Command::new("dbus-daemon")
-            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        let text = String::from_utf8(out.stdout)
-            .ok()
-            .filter(|_| out.status.success())?;
-        let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-        Some(PrivateBus {
-            address: lines.next()?.to_string(),
-            pid: lines.next()?.to_string(),
-        })
-    }
-
-    fn connect(&self) -> Connection {
-        block_on(
-            connection::Builder::address(self.address.as_str())
-                .expect("address")
-                .build(),
-        )
-        .expect("connect")
-    }
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        Command::new("kill")
-            .arg(&self.pid)
-            .status()
-            .expect("kill the private bus");
-    }
-}
+mod common;
+use common::PrivateBus;
 
 /// Stands in for the session agent of `cupertino-login`: the properties of the system menu and the calls it records.
 struct FakeLogin {

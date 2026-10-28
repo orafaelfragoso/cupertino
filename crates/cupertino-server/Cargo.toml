@@ -37,6 +37,7 @@ cupertino-displays = { path = "../cupertino-displays" }
 cupertino-protocols = { path = "../cupertino-protocols", features = ["server"] }
 cupertino-wm = { path = "../cupertino-wm" }
 cupertino-scene = { path = "../cupertino-scene" }
+cupertino-render-api = { path = "../cupertino-render-api" }
 cupertino-animation = { path = "../cupertino-animation" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-geometry = { path = "../cupertino-geometry" }

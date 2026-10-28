@@ -637,8 +637,7 @@ impl Cupertino {
                 let chord = entries
                     .iter()
                     .rev()
-                    .filter(|(_, a)| a == action)
-                    .next()
+                    .find(|(_, a)| a == action)
                     .map(|(c, _)| physical_chord(*c))
                     .unwrap_or_default();
                 (*bound, chord)

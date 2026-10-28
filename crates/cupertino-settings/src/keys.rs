@@ -58,7 +58,7 @@ pub struct Mods {
     pub alt: bool,
 }
 
-/// Evdev codes of the keys the router reads (as `cupertino-client::key`).
+/// Evdev codes of the keys the router reads (as `cupertino_wayland_client::key`).
 pub mod code {
     pub const ESCAPE: u32 = 1;
     pub const BACKSPACE: u32 = 14;

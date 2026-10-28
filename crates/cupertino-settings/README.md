@@ -45,8 +45,8 @@ sidebar row (approximate). The desktop entry is `data/applications/cupertino-set
   restart footer. The live panes are read again every second (approximate) and the Wi-Fi pane scans on open and every
   10 s (approximate); property change signals are not subscribed to, so a change by another client shows within a
   second.
-- Displays shows the backlight only: `cupertino-client` has no output-management client, so modes, scale and rotation
-  are not built.
+- Displays shows the backlight only: `cupertino-wayland-client` has no output-management client, so modes, scale and
+  rotation are not built.
 - The pane open and close hooks (scan, discovery, agent registration and unregistration) run in the window process and are
   not covered by a test; `tests/services.rs` drives the `Services` calls they make.
 - `ShowPane` switches the pane of the running window but does not raise it: raising needs an activation token from the

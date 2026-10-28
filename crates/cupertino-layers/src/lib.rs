@@ -260,7 +260,6 @@ pub const TARGET: &[(&str, Layer)] = &[
     ("cupertino-assets", Foundation),
     ("cupertino-bluetooth", Platform),
     ("cupertino-btd", Services),
-    ("cupertino-client", Ui),
     ("cupertino-controlcenter", Shell),
     ("cupertino-cursor", Render),
     ("cupertino-decorations", Render),
@@ -331,14 +330,6 @@ pub const TARGET_EXCEPTIONS: &[Exception] = &[
         tracking: Tracking::Issue(46),
         area: Area::Apps,
         reason: APPS_DRAW,
-    },
-    Exception {
-        from: "cupertino-server",
-        to: "cupertino-client",
-        kind: Kind::Dev,
-        tracking: Tracking::Permanent,
-        area: Area::Compositor,
-        reason: "server integration tests connect real shell clients",
     },
     Exception {
         from: "cupertino-settings",

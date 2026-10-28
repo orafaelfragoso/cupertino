@@ -11,5 +11,5 @@ pub use clock::{ManualClock, TimeWentBackwards};
 pub use headless::{HeadlessWindowSystem, PresentedFrame};
 pub use inspector::Inspector;
 pub use trace::{
-    ProtectedKind, RecordedInput, SecureInputs, Trace, TraceError, TraceEvent, TRACE_VERSION,
+    ProtectedInput, RecordedInput, SecureInputs, Trace, TraceError, TraceEvent, TRACE_VERSION,
 };

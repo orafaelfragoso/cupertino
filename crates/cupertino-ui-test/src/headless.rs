@@ -265,10 +265,22 @@ impl WindowSystem for HeadlessWindowSystem {
         Ok(self.open(window, Some(parent)))
     }
 
+    /// Destroying a window destroys its popups, as a compositor does, and drops their queued events.
     fn destroy(&mut self, window: WindowId) {
-        self.windows.remove(&window);
+        let mut gone = vec![window];
+        while let Some(next) = self
+            .windows
+            .iter()
+            .find(|(id, w)| !gone.contains(id) && w.parent.is_some_and(|p| gone.contains(&p)))
+            .map(|(id, _)| *id)
+        {
+            gone.push(next);
+        }
+        for id in &gone {
+            self.windows.remove(id);
+        }
         self.queue.retain(
-            |event| !matches!(event, PlatformEvent::Window { window: w, .. } if *w == window),
+            |event| !matches!(event, PlatformEvent::Window { window: w, .. } if gone.contains(w)),
         );
     }
 
@@ -527,6 +539,34 @@ mod tests {
             Err(PlatformError::UnknownWindow(window))
         );
         assert_eq!(ws.windows(), vec![]);
+    }
+
+    #[test]
+    fn destroying_a_window_destroys_its_popups() {
+        let mut ws = HeadlessWindowSystem::default();
+        let parent = ws.create_window(&spec()).unwrap();
+        let other = ws.create_window(&spec()).unwrap();
+        let popup_spec = PopupSpec {
+            anchor_rect: cupertino_geometry::Rect::ZERO,
+            anchor: Default::default(),
+            gravity: Default::default(),
+            offset: cupertino_geometry::Point { x: 0.0, y: 0.0 },
+            size: Size {
+                width: 50.0,
+                height: 20.0,
+            },
+            constraint: Default::default(),
+            reactive: false,
+            grab: true,
+        };
+        let popup = ws.create_popup(parent, &popup_spec).unwrap();
+        let nested = ws.create_popup(popup, &popup_spec).unwrap();
+        let sibling = ws.create_popup(other, &popup_spec).unwrap();
+        ws.enqueue_window(nested, WindowEvent::PopupDone).unwrap();
+        ws.destroy(parent);
+        assert_eq!(ws.windows(), vec![other, sibling]);
+        assert_eq!(drain(&mut ws), vec![]);
+        assert_eq!(ws.parent(sibling), Ok(Some(other)));
     }
 
     #[test]

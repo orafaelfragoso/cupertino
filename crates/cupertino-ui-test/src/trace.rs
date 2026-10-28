@@ -1,13 +1,16 @@
-use cupertino_ui_platform::{PlatformEvent, Timestamp, WindowEvent, WindowId};
+use cupertino_ui_platform::{ClipboardToken, PlatformEvent, Timestamp, WindowEvent, WindowId};
 use cupertino_ui_text::ImeEvent;
 use std::collections::HashMap;
 
 pub const TRACE_VERSION: u32 = 1;
 
+/// The kind and address of input that went to a protected field. A pasted value arrives as a clipboard read, which
+/// belongs to no window, so it is addressed by its token.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProtectedKind {
-    Key,
-    ImeBatch,
+pub enum ProtectedInput {
+    Key(WindowId),
+    ImeBatch(WindowId),
+    Clipboard(ClipboardToken),
 }
 
 /// What a trace keeps of one input. Input that went to a protected field is never kept: only the window and the kind
@@ -15,10 +18,7 @@ pub enum ProtectedKind {
 #[derive(Clone, Debug, PartialEq)]
 pub enum RecordedInput {
     Event(PlatformEvent),
-    Protected {
-        window: WindowId,
-        kind: ProtectedKind,
-    },
+    Protected(ProtectedInput),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -73,23 +73,27 @@ impl SecureInputs {
     }
 }
 
-fn protected_kind(event: &PlatformEvent) -> Option<(WindowId, ProtectedKind)> {
+fn protected_input(event: &PlatformEvent) -> Option<ProtectedInput> {
     match event {
         PlatformEvent::Window {
             window,
             event: WindowEvent::Key(..),
-        } => Some((*window, ProtectedKind::Key)),
+        } => Some(ProtectedInput::Key(*window)),
         PlatformEvent::Window {
             window,
             event: WindowEvent::Ime(ImeEvent::Done(_)),
-        } => Some((*window, ProtectedKind::ImeBatch)),
+        } => Some(ProtectedInput::ImeBatch(*window)),
+        PlatformEvent::Clipboard {
+            token,
+            data: Some(_),
+        } => Some(ProtectedInput::Clipboard(*token)),
         _ => None,
     }
 }
 
 impl Trace {
-    /// Appends an event. With `protected_focus`, keys and input-method batches are recorded as
-    /// [`RecordedInput::Protected`] without their content.
+    /// Appends an event. With `protected_focus`, keys, input-method batches and clipboard data
+    /// (a paste) are recorded as [`RecordedInput::Protected`] without their content.
     pub fn record(
         &mut self,
         at: Timestamp,
@@ -101,8 +105,8 @@ impl Trace {
                 index: self.events.len(),
             });
         }
-        let input = match protected_kind(&event) {
-            Some((window, kind)) if protected_focus => RecordedInput::Protected { window, kind },
+        let input = match protected_input(&event) {
+            Some(protected) if protected_focus => RecordedInput::Protected(protected),
             _ => RecordedInput::Event(event),
         };
         self.events.push(TraceEvent { at, input });
@@ -127,12 +131,12 @@ impl Trace {
             previous = recorded.at;
             let event = match &recorded.input {
                 RecordedInput::Event(event) => event.clone(),
-                RecordedInput::Protected { window, kind } => {
+                RecordedInput::Protected(protected) => {
                     let event = secure
                         .events
                         .get(&index)
                         .ok_or(TraceError::MissingSecureInput { index })?;
-                    if protected_kind(event) != Some((*window, *kind)) {
+                    if protected_input(event) != Some(*protected) {
                         return Err(TraceError::SecureInputMismatch { index });
                     }
                     event.clone()
@@ -147,7 +151,7 @@ impl Trace {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cupertino_ui_platform::{KeyEvent, Keysym, Mods};
+    use cupertino_ui_platform::{ClipboardData, KeyEvent, Keysym, Mods};
     use cupertino_ui_text::ImeBatch;
 
     fn key(window: u32, text: char) -> PlatformEvent {
@@ -164,6 +168,16 @@ mod tests {
                 },
                 Timestamp(0),
             ),
+        }
+    }
+
+    fn paste(token: u64, text: &str) -> PlatformEvent {
+        PlatformEvent::Clipboard {
+            token: ClipboardToken(token),
+            data: Some(ClipboardData {
+                mime: "text/plain".into(),
+                bytes: text.as_bytes().to_vec(),
+            }),
         }
     }
 
@@ -246,30 +260,33 @@ mod tests {
             .record(Timestamp(2), commit(1, "hunter2"), true)
             .unwrap();
         trace
-            .record(Timestamp(3), PlatformEvent::Wake, true)
+            .record(Timestamp(3), paste(7, "s3cret-paste"), true)
+            .unwrap();
+        trace
+            .record(Timestamp(4), PlatformEvent::Wake, true)
             .unwrap();
 
         assert_eq!(
             trace.events[0].input,
-            RecordedInput::Protected {
-                window: WindowId(1),
-                kind: ProtectedKind::Key
-            }
+            RecordedInput::Protected(ProtectedInput::Key(WindowId(1)))
         );
         assert_eq!(
             trace.events[1].input,
-            RecordedInput::Protected {
-                window: WindowId(1),
-                kind: ProtectedKind::ImeBatch
-            }
+            RecordedInput::Protected(ProtectedInput::ImeBatch(WindowId(1)))
         );
         assert_eq!(
             trace.events[2].input,
+            RecordedInput::Protected(ProtectedInput::Clipboard(ClipboardToken(7)))
+        );
+        assert_eq!(
+            trace.events[3].input,
             RecordedInput::Event(PlatformEvent::Wake)
         );
         let dump = format!("{trace:?}");
         assert!(!dump.contains("hunter2"), "{dump}");
         assert!(!dump.contains("'h'"), "{dump}");
+        assert!(!dump.contains("s3cret"), "{dump}");
+        assert!(!dump.contains("115, 51"), "{dump}");
 
         assert_eq!(
             trace.replay(&SecureInputs::default()),
@@ -289,16 +306,38 @@ mod tests {
             Err(TraceError::SecureInputMismatch { index: 0 })
         );
 
+        let mut wrong_token = SecureInputs::default();
+        wrong_token.insert(0, key(1, 'h'));
+        wrong_token.insert(1, commit(1, "hunter2"));
+        wrong_token.insert(2, paste(8, "s3cret-paste"));
+        assert_eq!(
+            trace.replay(&wrong_token),
+            Err(TraceError::SecureInputMismatch { index: 2 })
+        );
+
         let mut secure = SecureInputs::default();
         secure.insert(0, key(1, 'h'));
         secure.insert(1, commit(1, "hunter2"));
+        secure.insert(2, paste(7, "s3cret-paste"));
         assert_eq!(
             trace.replay(&secure).unwrap(),
             vec![
                 (Timestamp(1), key(1, 'h')),
                 (Timestamp(2), commit(1, "hunter2")),
-                (Timestamp(3), PlatformEvent::Wake),
+                (Timestamp(3), paste(7, "s3cret-paste")),
+                (Timestamp(4), PlatformEvent::Wake),
             ]
         );
+    }
+
+    #[test]
+    fn a_clipboard_read_with_no_data_is_kept_under_protected_focus() {
+        let miss = PlatformEvent::Clipboard {
+            token: ClipboardToken(3),
+            data: None,
+        };
+        let mut trace = Trace::default();
+        trace.record(Timestamp(1), miss.clone(), true).unwrap();
+        assert_eq!(trace.events[0].input, RecordedInput::Event(miss));
     }
 }

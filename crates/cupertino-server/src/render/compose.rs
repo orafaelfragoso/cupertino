@@ -6,10 +6,12 @@ use std::time::Duration;
 
 use cupertino_geometry::{CornerStyle, Point, Rect};
 use cupertino_scene::{
-    Clip, ContentDamage, FrameId, GlobalRect, LayerStack, Output, OutputId, OutputInvalidation,
-    OutputPoint, OutputRect, PhysicalSize, Placement, ResourceKey, SceneFrame, SceneId, SceneItem,
-    SceneKind, SceneLayer, Source, SurfaceId, SurfaceRole,
+    AlphaMode, BufferCrop, Clip, ContentDamage, FrameId, GlobalRect, ImageId, ImageMapping,
+    ImageRole, LayerStack, Output, OutputId, OutputInvalidation, OutputPoint, OutputRect,
+    PhysicalSize, Placement, ResourceKey, SceneFrame, SceneId, SceneItem, SceneKind, SceneLayer,
+    Source, SurfaceId, SurfaceRole,
 };
+use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Physical, Rectangle};
@@ -39,10 +41,26 @@ pub struct Tree {
     pub clip: Clip,
 }
 
-/// One drawable of a layer: a typed scene item, a surface tree, or an element the renderer still builds itself.
+/// CPU pixels to draw, shown through `src` (buffer pixels) at `size` logical points.
+pub struct Picture {
+    pub buffer: MemoryRenderBuffer,
+    pub kind: SceneKind,
+    pub index: u64,
+    pub role: ImageRole,
+    pub buffer_px: (i32, i32),
+    pub src: Rectangle<f64, Logical>,
+    pub size: (i32, i32),
+    pub placement: Placement,
+    pub opacity: f32,
+    pub clip: Clip,
+}
+
+/// One drawable of a layer: a typed scene item, a surface tree, a picture, or an element the renderer still
+/// builds itself.
 pub enum Piece {
     Item(SceneItem),
     Tree(Box<Tree>),
+    Image(Box<Picture>),
     Local(CupertinoElement),
 }
 
@@ -58,6 +76,7 @@ pub struct Composition {
     scale: f64,
     items: LayerStack<SceneItem>,
     surfaces: Vec<WlSurface>,
+    images: Vec<MemoryRenderBuffer>,
     locals: Vec<Option<CupertinoElement>>,
 }
 
@@ -66,6 +85,7 @@ pub struct Composition {
 pub struct Composed {
     pub frame: SceneFrame,
     pub surfaces: Vec<WlSurface>,
+    pub images: Vec<MemoryRenderBuffer>,
     pub locals: Vec<Option<CupertinoElement>>,
 }
 
@@ -77,6 +97,7 @@ impl Composition {
             scale,
             items: LayerStack::new(),
             surfaces: Vec::new(),
+            images: Vec::new(),
             locals: Vec::new(),
         }
     }
@@ -84,6 +105,44 @@ impl Composition {
     pub fn push(&mut self, layer: SceneLayer, piece: impl Into<Piece>) {
         match piece.into() {
             Piece::Item(item) => self.items.push(layer, item),
+            Piece::Image(picture) => {
+                let id = ImageId(ResourceKey {
+                    slot: self.images.len() as u64,
+                    generation: self.id.0,
+                });
+                self.images.push(picture.buffer);
+                self.items.push(
+                    layer,
+                    SceneItem {
+                        id: SceneId {
+                            kind: picture.kind,
+                            index: picture.index,
+                        },
+                        revision: 0,
+                        source: Source::Image {
+                            id,
+                            mapping: ImageMapping {
+                                buffer_size: picture.buffer_px,
+                                buffer_scale: 1.0,
+                                transform: cupertino_scene::Transform::Normal,
+                                crop: Some(BufferCrop(Rect::new(
+                                    picture.src.loc.x,
+                                    picture.src.loc.y,
+                                    picture.src.size.w,
+                                    picture.src.size.h,
+                                ))),
+                                alpha: AlphaMode::Premultiplied,
+                            },
+                            role: picture.role,
+                            size: picture.size,
+                        },
+                        placement: picture.placement,
+                        opacity: f64::from(picture.opacity),
+                        clip: picture.clip,
+                        damage: ContentDamage::Full,
+                    },
+                );
+            }
             Piece::Tree(tree) => {
                 let index = tree.surface.id().protocol_id() as u64;
                 let id = SurfaceId(ResourceKey {
@@ -170,6 +229,7 @@ impl Composition {
         Composed {
             frame,
             surfaces: self.surfaces,
+            images: self.images,
             locals: self.locals,
         }
     }

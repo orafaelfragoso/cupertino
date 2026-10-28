@@ -136,8 +136,12 @@ pub enum SurfaceRole {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImageRole {
+    /// Drawn at its placement as it is.
     Standalone,
+    /// Rescaled about the placement pivot with its window, masked when the item has a clip.
     Decoration,
+    /// The pointer image, eligible for the cursor plane.
+    Cursor,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -151,6 +155,8 @@ pub enum Source {
         id: ImageId,
         mapping: ImageMapping,
         role: ImageRole,
+        /// Size on the output in logical points; `mapping.crop` selects what of the buffer is shown in it.
+        size: (i32, i32),
     },
     Snapshot {
         id: SnapshotId,

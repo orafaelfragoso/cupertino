@@ -1453,17 +1453,23 @@ impl Harness {
 #[test]
 fn an_announced_menu_reaches_the_bar_and_the_window_knows_whether_a_bar_shows_it() {
     let Some(mut h) = Harness::new() else { return };
+    let Some((_bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let own: &'static str = own.unique_name().unwrap().to_string().leak();
     let app = KitAppClient::spawn(h.socket_path(), "org.example.Notes");
     h.mapped_window(1);
     h.wait_for_shown(&app, &[0]);
-    app.send(Cmd::AnnounceMenu([
-        ":1.42",
-        "/org/example/Notes",
-        "/org/example/Notes/window/1",
-        "/org/example/Notes/window/1/menus/menubar",
-        "",
-    ]));
-    h.step();
+    h.checked(
+        &app.0,
+        Cmd::AnnounceMenu([
+            own,
+            "/org/example/Notes",
+            "/org/example/Notes/window/1",
+            "/org/example/Notes/window/1/menus/menubar",
+            "",
+        ]),
+    );
 
     let bar = BarClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&bar, 1);
@@ -1471,7 +1477,7 @@ fn an_announced_menu_reaches_the_bar_and_the_window_knows_whether_a_bar_shows_it
         bar.groups()[0][1],
         BarEvent::MenuGtk(
             [
-                ":1.42",
+                own,
                 "",
                 "/org/example/Notes",
                 "/org/example/Notes/window/1",
@@ -1551,17 +1557,30 @@ fn a_malformed_menu_address_is_a_protocol_error() {
 #[test]
 fn the_longest_menu_address_reaches_the_bar_and_a_longer_one_is_refused() {
     let Some(mut h) = Harness::new() else { return };
+    let Some((_bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let own: &'static str = own.unique_name().unwrap().to_string().leak();
     let bar = BarClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&bar, 1);
     let bus: &'static str = format!(":1.{}", "2".repeat(252)).leak();
     let path: &'static str = format!("/{}", "a".repeat(511)).leak();
     let app = KitAppClient::spawn(h.socket_path(), "org.example.Notes");
     h.mapped_window(1);
-    app.send(Cmd::AnnounceMenu([bus, path, path, path, path]));
-    let expected = BarEvent::MenuGtk([bus, "", path, path, path, path].map(String::from));
+    app.send(Cmd::AnnounceMenu([own, path, path, path, path]));
+    let expected = BarEvent::MenuGtk([own, "", path, path, path, path].map(String::from));
     h.wait_until("the bar to get the address", |_| {
         bar.groups().iter().any(|g| g.contains(&expected))
     });
+
+    // the longest unique name the syntax allows is no protocol error, but no connection on the bus has it: no menus
+    h.checked(&app.0, Cmd::AnnounceMenu([bus, path, path, path, path]));
+    h.settle_requests(&bar);
+    assert_eq!(app.error(), None);
+    assert_eq!(
+        latest_title_and_menu(&bar).map(|(_, menu)| menu),
+        Some(BarEvent::MenuNone)
+    );
 
     // four paths that fill a 4096-byte request: the menu_gtk event would not fit one
     let near_limit: &'static str = format!("/{}", "b".repeat(950)).leak();
@@ -2015,15 +2034,21 @@ impl Harness {
     /// Send `cmd` to `app` and step until the server handled it, every owner check it started has returned, and the
     /// bar has seen what followed.
     fn announce(&mut self, app: &AppClient, bar: &BarClient, cmd: Cmd) {
-        let from = app.roundtrips();
-        app.send(cmd);
+        self.checked(&app.0, cmd);
+        self.settle_requests(bar);
+    }
+
+    /// Send `cmd` to `client` and step until the server handled it and every owner check it started has returned.
+    fn checked(&mut self, client: &TestClient, cmd: Cmd) {
+        let roundtrips = || client.status.lock().unwrap().roundtrips;
+        let from = roundtrips();
+        client.send(cmd);
         self.wait_until("the announcement to be handled", |_| {
-            app.roundtrips() >= from + 2
+            roundtrips() >= from + 2
         });
         self.wait_until("the owner checks to return", |s| {
             s.owner_checks.in_flight() == 0
         });
-        self.settle_requests(bar);
     }
 }
 
@@ -2224,6 +2249,50 @@ fn the_result_of_an_announcement_superseded_while_it_was_checked_is_dropped() {
         .filter(|e| matches!(e, BarEvent::MenuDbusmenu { .. }))
         .collect();
     assert_eq!(menus, [dbusmenu(&own, "/MenuBar/own")]);
+}
+
+/// A name owned by another process, announced through `cupertino_app_menu_v1`, gives no menus and is never called.
+#[test]
+fn a_kit_window_announcing_a_bus_name_of_another_process_gets_no_menus() {
+    let Some(mut h) = Harness::new() else { return };
+    let Some((bus, _own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let foreign = Foreign::start(&bus);
+    let foreign_name: &'static str = foreign.unique.clone().leak();
+    let bar = BarClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&bar, 1);
+    let app = KitAppClient::spawn(h.socket_path(), "org.example.Notes");
+    h.mapped_window(1);
+
+    h.checked(
+        &app.0,
+        Cmd::AnnounceMenu([
+            foreign_name,
+            "/org/example/Notes",
+            "/org/example/Notes/window/1",
+            "/org/example/Notes/window/1/menus/menubar",
+            "",
+        ]),
+    );
+    h.settle_requests(&bar);
+    assert_eq!(app.error(), None);
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some(("org.example.Notes window".into(), BarEvent::MenuNone))
+    );
+    assert!(
+        !bar.groups()
+            .iter()
+            .flatten()
+            .any(|e| matches!(e, BarEvent::MenuGtk { .. })),
+        "{:?}",
+        bar.groups()
+    );
+    assert_eq!(
+        foreign.calls_within(Duration::from_millis(300)),
+        Vec::<String>::new()
+    );
 }
 
 // ---- version 10: window list, shortcuts, the commands of the fallback menus --------------------

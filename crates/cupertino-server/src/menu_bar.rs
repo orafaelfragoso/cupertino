@@ -1205,7 +1205,7 @@ impl Dispatch<CupertinoAppMenuV1, AppMenuData> for Cupertino {
             {
                 menu.announced = true;
             }
-            state.set_menu_address(surface, Some(MenuAddress::Gtk(props)));
+            state.announce_menu_address(surface, MenuAddress::Gtk(props));
         }
     }
 
@@ -1222,7 +1222,7 @@ impl Dispatch<CupertinoAppMenuV1, AppMenuData> for Cupertino {
         let menu = state.menu_bars.app_menus.remove(i);
         if let (true, Some(surface)) = (menu.announced, &data.surface) {
             if surface.is_alive() {
-                state.set_menu_address(surface, None);
+                state.withdraw_menu_address(surface);
             }
         }
     }

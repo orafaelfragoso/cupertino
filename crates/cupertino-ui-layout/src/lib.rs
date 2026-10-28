@@ -2,9 +2,19 @@
 //! node tree in through [`LayoutTree`] and reads back a [`LayoutResult`]. Leaves (text, images, icons) are measured by
 //! the tree, so this crate never sees a font. Values are logical points; the scale factor never reaches layout.
 
+mod engine;
+mod grid;
+mod layers;
+mod scroll;
+mod stack;
+mod virtual_list;
+
 use cupertino_geometry::{Insets, Point, Rect, Size};
 use std::collections::HashMap;
 use std::hash::Hash;
+
+pub use engine::layout;
+pub use virtual_list::VirtualList;
 
 /// The range one axis may take: `0 <= min <= ideal <= max`, where only `max` may be infinite.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -25,6 +35,21 @@ impl AxisConstraint {
         Ok(Self { min, ideal, max })
     }
 
+    /// Exactly `value`.
+    pub fn tight(value: f64) -> Result<Self, LayoutError> {
+        Self::new(value, value, value)
+    }
+
+    /// Anything from zero up to `max`.
+    pub fn loose(max: f64) -> Result<Self, LayoutError> {
+        Self::new(0.0, 0.0, max)
+    }
+
+    /// `value` moved into `min..=max`.
+    pub fn clamp(self, value: f64) -> f64 {
+        value.max(self.min).min(self.max)
+    }
+
     pub fn min(self) -> f64 {
         self.min
     }
@@ -42,6 +67,28 @@ impl AxisConstraint {
 pub struct Constraints {
     pub width: AxisConstraint,
     pub height: AxisConstraint,
+}
+
+impl Constraints {
+    pub fn new(width: AxisConstraint, height: AxisConstraint) -> Self {
+        Self { width, height }
+    }
+
+    /// Exactly `size`.
+    pub fn tight(size: Size) -> Result<Self, LayoutError> {
+        Ok(Self::new(
+            AxisConstraint::tight(size.width)?,
+            AxisConstraint::tight(size.height)?,
+        ))
+    }
+
+    /// Anything from zero up to `max`.
+    pub fn loose(max: Size) -> Result<Self, LayoutError> {
+        Ok(Self::new(
+            AxisConstraint::loose(max.width)?,
+            AxisConstraint::loose(max.height)?,
+        ))
+    }
 }
 
 /// A measured node: its size and the distance from its top to its first baseline, when it has text.
@@ -110,6 +157,24 @@ pub struct Flex {
     pub basis: Option<f64>,
 }
 
+impl Flex {
+    /// Keeps its natural size.
+    pub const NONE: Flex = Flex {
+        grow: 0.0,
+        shrink: 0.0,
+        basis: None,
+    };
+
+    /// Shares the leftover space in proportion to `grow`, starting from nothing.
+    pub const fn grow(grow: f64) -> Flex {
+        Flex {
+            grow,
+            shrink: 1.0,
+            basis: Some(0.0),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Overflow {
     #[default]
@@ -159,13 +224,30 @@ pub struct LayoutSpec {
     pub overflow: Overflow,
 }
 
+impl LayoutSpec {
+    /// Fits its content, keeps its natural size, no insets, no clipping.
+    pub fn new(kind: ContainerKind) -> Self {
+        Self {
+            kind,
+            insets: Insets::ZERO,
+            width: SizeSpec::Fit,
+            height: SizeSpec::Fit,
+            flex: Flex::NONE,
+            align_self: None,
+            overflow: Overflow::Visible,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutError {
     /// Flexible space did not settle within 32 redistribution passes.
     NoConvergence,
     InvalidConstraint,
     NonFiniteValue,
+    /// More nodes than [`LayoutOptions::node_limit`], or a tree deeper than 256 levels.
     NodeLimit,
+    /// A node reachable twice, which includes a cycle.
     CycleOrMissingNode,
 }
 
@@ -195,7 +277,7 @@ pub struct LayoutOptions {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NodeLayout {
     pub rect: Rect,
-    /// Set when the node clips its children; it limits painting and hit-testing alike.
+    /// Set when the node clips its children, in the node's own coordinates; it limits painting and hit-testing alike.
     pub clip: Option<Rect>,
     pub baseline: Option<f64>,
 }

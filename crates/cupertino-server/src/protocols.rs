@@ -3,8 +3,11 @@
 //! `protocols/gtk-shell.xml`), both used to learn where a client exports its menus.
 
 use std::sync::Mutex;
+use std::time::Duration;
 
-use cupertino_wm::Command;
+use cupertino_wm::{Command, WindowId};
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+use smithay::reexports::calloop::RegistrationToken;
 use smithay::reexports::wayland_server::backend::ObjectId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{
@@ -15,7 +18,7 @@ use wayland_protocols_plasma::appmenu::server::org_kde_kwin_appmenu_manager::{
     self, OrgKdeKwinAppmenuManager,
 };
 
-use crate::menu_bar::{GtkMenuProps, MenuAddress, MenuKind};
+use crate::menu_bar::{retryable, Announced, GtkMenuProps, MenuAddress, MenuKind, Refused};
 use crate::owner_check::{OwnerCheck, OwnerKey, OwnerRefusal};
 use crate::state::Cupertino;
 
@@ -257,13 +260,26 @@ impl Cupertino {
     pub fn announce_menu_address(&mut self, surface: &WlSurface, address: MenuAddress) {
         let kind = address.kind();
         self.set_menu_address(surface, kind, None);
-        let Some(client) = surface.client() else {
+        if surface.client().is_none() {
+            return;
+        }
+        if let Some(replaced) = self.menu_bars.announce(surface, address) {
+            self.drop_menu_retry(replaced.timer);
+        }
+        self.check_menu_owner(&surface.id(), kind);
+    }
+
+    /// Check the owner of the bus name of the address of kind `kind` `surface` announced.
+    fn check_menu_owner(&mut self, surface: &ObjectId, kind: MenuKind) {
+        let Some(announced) = self.menu_bars.announced(surface, kind) else {
             return;
         };
-        let name = address.bus_name().to_owned();
-        self.menu_bars.announce(surface, address);
+        let Some(client) = announced.surface.client() else {
+            return;
+        };
+        let name = announced.address.bus_name().to_owned();
         self.check_owner(OwnerCheck {
-            key: OwnerKey::MenuAddress(surface.id(), kind),
+            key: OwnerKey::MenuAddress(surface.clone(), kind),
             name,
             client,
         });
@@ -281,20 +297,120 @@ impl Cupertino {
         self.cancel_menu_check(surface, MenuKind::DbusMenu);
     }
 
+    /// `window` became the key window: each announcement of its surfaces whose owner checks ran out of retries is
+    /// checked once more, with its retries counted afresh.
+    pub fn recheck_menu_owners(&mut self, window: WindowId) {
+        let Some(root) = self.entry(window).map(|e| e.surface().clone()) else {
+            return;
+        };
+        let announced: Vec<_> = self
+            .menu_bars
+            .announced_surfaces()
+            .filter(|(surface, _)| {
+                self.root_window_surface(surface)
+                    .as_ref()
+                    .unwrap_or(surface)
+                    == &root
+            })
+            .map(|(surface, kind)| (surface.id(), kind))
+            .collect();
+        for (surface, kind) in announced {
+            let recheck = self
+                .menu_bars
+                .announced_mut(&surface, kind)
+                .is_some_and(|a| a.retry.recheck());
+            if recheck {
+                self.check_menu_owner(&surface, kind);
+            }
+        }
+    }
+
     fn cancel_menu_check(&mut self, surface: &WlSurface, kind: MenuKind) {
-        self.menu_bars.take_announced(&surface.id(), kind);
+        if let Some(announced) = self.menu_bars.take_announced(&surface.id(), kind) {
+            self.drop_menu_retry(announced.timer);
+        }
         self.cancel_owner_check(&OwnerKey::MenuAddress(surface.id(), kind));
     }
 
+    fn drop_menu_retry(&mut self, timer: Option<RegistrationToken>) {
+        if let Some(token) = timer {
+            self.loop_handle.remove(token);
+        }
+    }
+
+    /// Retry the owner check of announcement `announcement` of kind `kind` of `surface` after `after`.
+    fn arm_menu_retry(
+        &mut self,
+        surface: ObjectId,
+        kind: MenuKind,
+        announcement: u64,
+        after: Duration,
+    ) {
+        let timer_surface = surface.clone();
+        let armed =
+            self.loop_handle
+                .insert_source(Timer::from_duration(after), move |_, _, state| {
+                    state.menu_retry_due(&timer_surface, kind, announcement);
+                    TimeoutAction::Drop
+                });
+        match armed {
+            Ok(token) => match self.menu_bars.announced_mut(&surface, kind) {
+                Some(announced) => announced.timer = Some(token),
+                None => self.loop_handle.remove(token),
+            },
+            Err(e) => tracing::warn!(error = %e, "cannot time a retry of a menu owner check"),
+        }
+    }
+
+    /// The retry of announcement `announcement` of kind `kind` of `surface` is due: its check is sent again unless a
+    /// newer announcement replaced it, it was withdrawn, or the surface is gone.
+    fn menu_retry_due(&mut self, surface: &ObjectId, kind: MenuKind, announcement: u64) {
+        let Some(announced) = self.menu_bars.announced_mut(surface, kind) else {
+            return;
+        };
+        announced.timer = None;
+        if announced.surface.is_alive() && announced.retry.due(announcement) {
+            self.check_menu_owner(surface, kind);
+        }
+    }
+
     /// The check of the latest announcement of kind `kind` of `surface` returned: on a match the address is read from
-    /// the owner's unique name; else the surface has no menus of that kind.
+    /// the owner's unique name; a refusal that may pass is retried, up to [`crate::menu_bar::OWNER_RETRY_DELAYS`], and
+    /// then checked again when the window becomes the key window; else the surface has no menus of that kind.
     pub(crate) fn menu_owner_checked(
         &mut self,
         surface: ObjectId,
         kind: MenuKind,
         verdict: Result<String, OwnerRefusal>,
     ) {
-        let Some((surface, address)) = self.menu_bars.take_announced(&surface, kind) else {
+        let Some(announced) = self.menu_bars.announced_mut(&surface, kind) else {
+            return;
+        };
+        if let (true, Err(refusal)) = (announced.surface.is_alive(), &verdict) {
+            let announcement = announced.retry.announcement();
+            match announced.retry.refused(retryable(refusal)) {
+                Refused::Final => {}
+                Refused::RetryAfter(after) => {
+                    self.arm_menu_retry(surface, kind, announcement, after);
+                    return;
+                }
+                Refused::RanOut { warn } => {
+                    if warn {
+                        tracing::warn!(
+                            name = ?announced.address.bus_name(),
+                            ?refusal,
+                            "the owner of the bus name a window announced for its menus could not be checked, \
+                             retries included: it is checked again when the window becomes the key window"
+                        );
+                    }
+                    return;
+                }
+            }
+        }
+        let Some(Announced {
+            surface, address, ..
+        }) = self.menu_bars.take_announced(&surface, kind)
+        else {
             return;
         };
         if !surface.is_alive() {

@@ -3520,6 +3520,11 @@ fn the_bar_process_owning_the_menu_bar_name_is_the_reader_of_the_windows_menus()
     h.wait_until("the bar's connection to be the reader", |_| {
         app.menu_readers() == ["", own.as_str()]
     });
+    // the bar is sent its group again, unchanged, so a load the application refused before it had the reader is made
+    // again
+    h.wait_for_groups(&bar, 2);
+    let groups = bar.groups();
+    assert_eq!(groups[1], groups[0]);
 
     assert_eq!(app.menu_bar_shown(), [0, 1]);
 

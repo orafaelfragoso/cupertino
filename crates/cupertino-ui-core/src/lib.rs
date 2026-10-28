@@ -7,6 +7,7 @@ mod clock;
 mod command;
 mod cx;
 mod focus;
+mod layout_view;
 mod paint;
 mod pointer;
 mod route;

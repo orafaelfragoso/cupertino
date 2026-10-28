@@ -203,6 +203,9 @@ impl<K: Clone + Eq + Hash, C: Eq, R> Scheduler<K, C, R> {
     }
 }
 
+/// The strikes of a client ([`ClientState::owner_strikes`]).
+type Strikes = Arc<AtomicUsize>;
+
 /// A request to send: the name, and the client's process and strikes from its connection.
 struct Request {
     name: String,
@@ -221,7 +224,7 @@ struct Reply {
 pub struct OwnerChecks {
     scheduler: Scheduler<OwnerKey, ClientId, Request>,
     /// The deadline of each running check, and the strikes of its client.
-    deadlines: HashMap<(OwnerKey, u64), (RegistrationToken, Option<Arc<AtomicUsize>>)>,
+    deadlines: HashMap<(OwnerKey, u64), (RegistrationToken, Option<Strikes>)>,
     replies: Sender<Reply>,
 }
 

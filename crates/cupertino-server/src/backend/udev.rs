@@ -14,11 +14,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use cupertino_devices::{Action, Monitor, Subsystem, SEAT0};
+use cupertino_render_api::{Completion as _, RenderStatus, Renderer};
 use cupertino_seat::LogindSession;
 use cupertino_wm::OutputId;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::Fourcc;
-use smithay::backend::drm::compositor::{FrameError, FrameFlags};
+use smithay::backend::drm::compositor::FrameError;
 use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
 use smithay::backend::drm::output::{DrmOutput, DrmOutputManager, DrmOutputRenderElements};
 use smithay::backend::drm::{
@@ -45,13 +46,15 @@ use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
 use super::input;
 use super::Backend;
 use crate::displays::{edid, HeadCaps, HeadId, HeadInfo, HeadMode, HeadOp};
+use crate::render::gles::{Gles, GlesResources, GlesTarget};
 use crate::render::scene::RenderResources;
 use crate::state::Cupertino;
 
 const CLEAR: Color32F = Color32F::new(0.05, 0.05, 0.07, 1.0);
 const COLOR_FORMATS: [Fourcc; 2] = [Fourcc::Abgr8888, Fourcc::Argb8888];
 
-type Output_ = DrmOutput<
+/// The DRM output of one display, as the renderer draws to it.
+pub(crate) type DrmSurfaceOutput = DrmOutput<
     GbmAllocator<DrmDeviceFd>,
     GbmFramebufferExporter<DrmDeviceFd>,
     Option<OutputPresentationFeedback>,
@@ -66,7 +69,7 @@ type Manager = DrmOutputManager<
 
 struct Surface {
     output: OutputId,
-    drm_output: Output_,
+    drm_output: DrmSurfaceOutput,
     /// A frame was queued and its vblank has not arrived yet.
     pending: bool,
     refresh: Duration,
@@ -673,21 +676,49 @@ fn render_outputs(state: &mut Cupertino) {
     state.backend = Some(backend);
 }
 
+/// Whether the frame already on the screen is what this frame would show, so it may be reported as shown: only when a
+/// scene was composed and drawn and nothing differed from it. Without a scene nothing says what the screen shows, and
+/// the session lock must not be confirmed by it.
+fn already_shown(scene: bool, rendered: bool) -> bool {
+    scene && !rendered
+}
+
 fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle, idx: usize) {
-    let elements = state.build_output_elements(&mut u.renderer, idx);
+    // without a scene (no render resources or no mode yet) nothing is drawn or queued, but the tail still runs
+    let mut scene = true;
+    let rendered = match state.compose_for_present(&mut u.renderer, idx) {
+        None => {
+            scene = false;
+            false
+        }
+        Some(composed) => {
+            let Some(surface) = u.surfaces.get_mut(&crtc) else {
+                return;
+            };
+            let Some((res, cache, _)) = state.gles_parts(idx) else {
+                return;
+            };
+            let mut resources = GlesResources::new(res, cache, composed.resources);
+            let result = Gles.render(
+                &composed.frame,
+                &mut resources,
+                GlesTarget::Drm {
+                    renderer: &mut u.renderer,
+                    output: &mut surface.drm_output,
+                    clear: CLEAR,
+                },
+            );
+            match result {
+                Ok(completion) => completion.status() == RenderStatus::Rendered,
+                Err(e) => {
+                    tracing::warn!(error = %e, "rendering the frame failed");
+                    return;
+                }
+            }
+        }
+    };
     let Some(surface) = u.surfaces.get_mut(&crtc) else {
         return;
-    };
-    let result =
-        surface
-            .drm_output
-            .render_frame(&mut u.renderer, &elements, CLEAR, FrameFlags::DEFAULT);
-    let rendered = match result {
-        Ok(r) => !r.is_empty,
-        Err(e) => {
-            tracing::warn!(error = %e, "rendering the frame failed");
-            return;
-        }
     };
     let time = Duration::from(state.clock.now());
     if rendered {
@@ -703,8 +734,7 @@ fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle
             Err(e) => tracing::warn!(error = %e, "queueing the frame failed"),
         }
     }
-    if !rendered {
-        // nothing differs from the frame already on the screen
+    if already_shown(scene, rendered) {
         state.note_frame_shown(idx);
     }
     state.process_screenshots(&mut u.renderer, idx);
@@ -750,7 +780,23 @@ fn frame_finish(
 
 #[cfg(test)]
 mod tests {
-    use super::frame_due;
+    use super::{already_shown, frame_due};
+
+    #[test]
+    fn only_a_drawn_scene_that_changed_nothing_is_reported_as_shown() {
+        assert!(
+            already_shown(true, false),
+            "nothing differs from the screen"
+        );
+        assert!(
+            !already_shown(true, true),
+            "a new frame is queued, not shown yet"
+        );
+        assert!(
+            !already_shown(false, false),
+            "without a scene nothing says what the screen shows, so a lock is not confirmed by it"
+        );
+    }
 
     #[test]
     fn a_paused_session_renders_nothing_however_much_is_wanted() {

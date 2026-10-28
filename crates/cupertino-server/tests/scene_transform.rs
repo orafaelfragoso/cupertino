@@ -54,7 +54,9 @@ fn frame(mode: (i32, i32), transform: Transform, scale: f64) -> RgbaImage {
     d.at(3000);
     d.at(3016);
     let mut backend = d.state.backend.take().unwrap();
-    let Backend::Headless(ref mut h) = backend else {
+    #[allow(irrefutable_let_patterns)]
+    let Backend::Headless(ref mut h) = backend
+    else {
         panic!("headless backend required")
     };
     let elements = d.state.build_output_elements(&mut h.renderer, 0);

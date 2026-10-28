@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
+use cupertino_render_api::Renderer;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::Color32F;
 use smithay::backend::winit::{self, WinitEvent, WinitEventLoop, WinitGraphicsBackend};
@@ -15,6 +16,7 @@ use smithay::utils::Transform;
 
 use super::Backend;
 use crate::displays::{HeadCaps, HeadId, HeadInfo, HeadMode, HeadOp};
+use crate::render::gles::{Gles, GlesResources, GlesTarget, RenderError};
 use crate::render::scene::RenderResources;
 use crate::state::Cupertino;
 
@@ -137,30 +139,44 @@ fn render_inner(state: &mut Cupertino, w: &mut WinitBackend) {
     if state.outputs.is_empty() || !state.displays.powered(state.outputs[idx].id) {
         return;
     }
-    let elements = state.build_output_elements(w.graphics.renderer(), idx);
+    let Some(composed) = state.compose_for_present(w.graphics.renderer(), idx) else {
+        // without a scene (no render resources or no mode yet) nothing is drawn, but callbacks still go out
+        let time = Duration::from(state.clock.now());
+        state.process_screenshots(w.graphics.renderer(), idx);
+        state.post_repaint(idx, time, Some(Duration::from_micros(16_667)), false);
+        return;
+    };
     w.full_redraw = w.full_redraw.saturating_sub(1);
     let age = if w.full_redraw > 0 {
         0
     } else {
         w.graphics.buffer_age().unwrap_or(0)
     };
-    let tracker = &mut state.outputs[idx].tracker;
-    let res = w.graphics.bind().and_then(|(renderer, mut fb)| {
-        tracker
-            .render_output(renderer, &mut fb, age, &elements, CLEAR)
-            .map(|r| r.damage.cloned())
-            .map_err(|e| match e {
-                smithay::backend::renderer::damage::Error::Rendering(e) => {
-                    SwapBuffersError::from(e)
-                }
-                other => SwapBuffersError::TemporaryFailure(Box::new(std::io::Error::other(
-                    format!("{other:?}"),
-                ))),
-            })
+    let Some((res, cache, tracker)) = state.gles_parts(idx) else {
+        return;
+    };
+    let mut resources = GlesResources::new(res, cache, composed.resources);
+    let result = Gles.render(
+        &composed.frame,
+        &mut resources,
+        GlesTarget::Window {
+            graphics: &mut w.graphics,
+            tracker,
+            age,
+            clear: CLEAR,
+        },
+    );
+    let result = result.map_err(|e| match e {
+        RenderError::Rendering(e) => SwapBuffersError::from(e),
+        other => {
+            SwapBuffersError::TemporaryFailure(Box::new(std::io::Error::other(other.to_string())))
+        }
     });
     let time = Duration::from(state.clock.now());
-    match res {
-        Ok(damage) => {
+    match result {
+        Ok(completion) => {
+            // nothing differs from the buffer: nothing to submit or to report as presented
+            let damage = completion.damage().map(<[_]>::to_vec);
             let presented = damage.is_some();
             if let Some(d) = damage {
                 if let Err(e) = w.graphics.submit(Some(&d)) {

@@ -1,6 +1,6 @@
 // cupertino-layers --graph target
-// 59 crates, 238 internal dependencies
-// per layer: foundation 14, models 8, platform 7, protocol 3, transport 3, render 4, ui 2, core 1, shell 9, services 4, apps 2, tools 2
+// 60 crates, 241 internal dependencies
+// per layer: foundation 14, models 9, platform 7, protocol 3, transport 3, render 4, ui 2, core 1, shell 9, services 4, apps 2, tools 2
 // forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden normal edge cupertino-files (apps) -> cupertino-icons (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the mixer itself until audio goes through a service
@@ -28,12 +28,13 @@ digraph "target" {
     "xkbcommon";
   }
   subgraph "cluster_models" {
-    label="models (8)";
+    label="models (9)";
     "cupertino-displays";
     "cupertino-effects";
     "cupertino-input";
     "cupertino-keyboard";
     "cupertino-overview";
+    "cupertino-render-api";
     "cupertino-scene";
     "cupertino-stage";
     "cupertino-wm";
@@ -252,6 +253,8 @@ digraph "target" {
   "cupertino-protocol-app" -> "cupertino-geometry";
   "cupertino-protocol-app" -> "cupertino-wayland-client";
   "cupertino-protocols" -> "cupertino-app-protocols";
+  "cupertino-render-api" -> "cupertino-geometry" [label="dev"];
+  "cupertino-render-api" -> "cupertino-scene";
   "cupertino-scene" -> "cupertino-effects";
   "cupertino-scene" -> "cupertino-geometry";
   "cupertino-screenshot" -> "cupertino-animation";
@@ -286,6 +289,7 @@ digraph "target" {
   "cupertino-server" -> "cupertino-peer";
   "cupertino-server" -> "cupertino-protocols";
   "cupertino-server" -> "cupertino-protocols" [label="dev"];
+  "cupertino-server" -> "cupertino-render-api";
   "cupertino-server" -> "cupertino-scene";
   "cupertino-server" -> "cupertino-seat";
   "cupertino-server" -> "cupertino-stage";

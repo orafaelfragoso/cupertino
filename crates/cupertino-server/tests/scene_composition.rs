@@ -121,7 +121,9 @@ fn a_capture_of_a_locked_output_holds_only_the_lock_surface_and_black() {
     let _locker = d.lock();
     d.at(3100);
     let mut backend = d.state.backend.take().unwrap();
-    let Backend::Headless(ref mut h) = backend else {
+    #[allow(irrefutable_let_patterns)]
+    let Backend::Headless(ref mut h) = backend
+    else {
         panic!("headless backend required")
     };
     for paint_cursor in [true, false] {

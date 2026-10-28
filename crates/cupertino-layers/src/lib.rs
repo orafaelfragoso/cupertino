@@ -297,6 +297,7 @@ pub const TARGET: &[(&str, Layer)] = &[
     ("cupertino-powerd", Services),
     ("cupertino-protocol-app", Transport),
     ("cupertino-protocols", Protocol),
+    ("cupertino-render-api", Models),
     ("cupertino-scene", Models),
     ("cupertino-screenshot", Shell),
     ("cupertino-seat", Platform),

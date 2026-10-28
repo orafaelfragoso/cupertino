@@ -1,6 +1,6 @@
 // cupertino-layers --graph current
-// 59 crates, 238 internal dependencies
-// per layer: foundation 13, models 10, platform 7, render 11, core 1, shell 9, services 4, apps 2, tools 2
+// 60 crates, 241 internal dependencies
+// per layer: foundation 13, models 11, platform 7, render 11, core 1, shell 9, services 4, apps 2, tools 2
 // forbidden edges: none
 // denied paths ui -> core, shell, services: none
 digraph "current" {
@@ -22,13 +22,14 @@ digraph "current" {
     "xkbcommon";
   }
   subgraph "cluster_models" {
-    label="models (10)";
+    label="models (11)";
     "cupertino-displays";
     "cupertino-effects";
     "cupertino-input";
     "cupertino-keyboard";
     "cupertino-login-ipc";
     "cupertino-overview";
+    "cupertino-render-api";
     "cupertino-scene";
     "cupertino-stage";
     "cupertino-text-field";
@@ -238,6 +239,8 @@ digraph "current" {
   "cupertino-protocol-app" -> "cupertino-geometry";
   "cupertino-protocol-app" -> "cupertino-wayland-client";
   "cupertino-protocols" -> "cupertino-app-protocols";
+  "cupertino-render-api" -> "cupertino-geometry" [label="dev"];
+  "cupertino-render-api" -> "cupertino-scene";
   "cupertino-scene" -> "cupertino-effects";
   "cupertino-scene" -> "cupertino-geometry";
   "cupertino-screenshot" -> "cupertino-animation";
@@ -272,6 +275,7 @@ digraph "current" {
   "cupertino-server" -> "cupertino-peer";
   "cupertino-server" -> "cupertino-protocols";
   "cupertino-server" -> "cupertino-protocols" [label="dev"];
+  "cupertino-server" -> "cupertino-render-api";
   "cupertino-server" -> "cupertino-scene";
   "cupertino-server" -> "cupertino-seat";
   "cupertino-server" -> "cupertino-stage";

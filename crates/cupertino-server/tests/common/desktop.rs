@@ -21,6 +21,10 @@ pub struct Desktop {
 
 impl Desktop {
     pub fn new(scale: f64) -> Self {
+        Self::sized(SIZE, scale)
+    }
+
+    pub fn sized(size: (i32, i32), scale: f64) -> Self {
         let event_loop = EventLoop::try_new().unwrap();
         let mut state = Cupertino::new(
             Display::new().unwrap(),
@@ -32,7 +36,7 @@ impl Desktop {
         )
         .unwrap();
         state.fixed_time = Some(0.0);
-        headless::init(&mut state, SIZE, scale)
+        headless::init(&mut state, size, scale)
             .expect("these tests require an offscreen EGL renderer");
         Self {
             state,

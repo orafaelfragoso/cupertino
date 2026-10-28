@@ -54,6 +54,44 @@ fn evdev(code: Keycode) -> u32 {
     code.raw().saturating_sub(XKB_OFFSET)
 }
 
+/// evdev `KEY_LEFTMETA` and `KEY_RIGHTMETA`, the Super keys.
+const SUPER_KEYS: [u32; 2] = [125, 126];
+
+/// How long the Super key may stay down alone and still be a tap, in ms. approximate.
+const SUPER_TAP_MAX_MS: u64 = 750;
+
+/// The Super key pressed and released alone: no other key and no pointer button between, and not held long.
+#[derive(Debug, Default)]
+pub struct SuperTap {
+    /// When the Super key went down with nothing else down; `None` once anything else happened.
+    down: Option<u64>,
+}
+
+impl SuperTap {
+    /// A key event. `others_held`: another key was held when this one went down. True when it is the release that
+    /// completes a tap.
+    pub fn key(&mut self, evdev: u32, pressed: bool, now_ms: u64, others_held: bool) -> bool {
+        if !SUPER_KEYS.contains(&evdev) {
+            if pressed {
+                self.down = None;
+            }
+            return false;
+        }
+        if pressed {
+            self.down = (!others_held).then_some(now_ms);
+            return false;
+        }
+        self.down
+            .take()
+            .is_some_and(|down| now_ms.saturating_sub(down) <= SUPER_TAP_MAX_MS)
+    }
+
+    /// A pointer button or a scroll: the Super key is a modifier of it, not a tap.
+    pub fn disturb(&mut self) {
+        self.down = None;
+    }
+}
+
 /// What a compositor key repeat acts on.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RepeatTarget {
@@ -70,6 +108,7 @@ pub struct KeyFilters {
     pub sticky: StickyKeys,
     pub mouse: MouseKeys,
     pub globe: GlobeTap,
+    pub super_tap: SuperTap,
     pub fn_usage: FnUsage,
     /// The compositor's repeating key (xkb keycode) and what it repeats.
     pub repeat: KeyRepeater,
@@ -220,6 +259,7 @@ impl KeyFilters {
                 a.mouse_keys_max_speed,
             ),
             globe: GlobeTap::new(globe_ms),
+            super_tap: SuperTap::default(),
             fn_usage: settings.fn_action(),
             repeat: KeyRepeater::new(repeat),
             repeat_target: None,
@@ -461,7 +501,21 @@ impl Cupertino {
             }
         }
         self.globe_key(code, pressed);
+        let others_held = self
+            .seat
+            .get_keyboard()
+            .is_some_and(|k| !k.pressed_keys().is_empty());
+        let tapped =
+            self.key_filters
+                .super_tap
+                .key(evdev(code), pressed, self.now_ms(), others_held);
         self.keyboard_event_now(code, state, time);
+        if tapped {
+            let ctx = self.action_context();
+            if let Some(plan) = self.key_router.tap_plan(&ctx) {
+                self.execute_plan(plan);
+            }
+        }
     }
 
     /// The globe / fn key: a quick tap runs the configured action.
@@ -581,6 +635,52 @@ impl Cupertino {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SUPER: u32 = 125;
+    const TAB: u32 = 15;
+
+    #[test]
+    fn the_super_key_alone_is_a_tap() {
+        let mut tap = SuperTap::default();
+        assert!(!tap.key(SUPER, true, 1000, false));
+        assert!(tap.key(SUPER, false, 1100, false));
+        // the right Super key too
+        assert!(!tap.key(126, true, 2000, false));
+        assert!(tap.key(126, false, 2100, false));
+    }
+
+    #[test]
+    fn a_key_a_click_or_a_long_hold_cancels_the_tap() {
+        let mut tap = SuperTap::default();
+        tap.key(SUPER, true, 0, false);
+        tap.key(TAB, true, 10, false);
+        tap.key(TAB, false, 20, false);
+        assert!(!tap.key(SUPER, false, 30, false), "Super+Tab");
+
+        tap.key(SUPER, true, 100, false);
+        tap.disturb();
+        assert!(
+            !tap.key(SUPER, false, 110, false),
+            "Super and a pointer button"
+        );
+
+        tap.key(SUPER, true, 200, false);
+        assert!(
+            !tap.key(SUPER, false, 200 + SUPER_TAP_MAX_MS + 1, false),
+            "held too long"
+        );
+        tap.key(SUPER, true, 2000, false);
+        assert!(
+            tap.key(SUPER, false, 2000 + SUPER_TAP_MAX_MS, false),
+            "held for the limit"
+        );
+
+        // pressed while another key was down: a chord already
+        assert!(!tap.key(SUPER, true, 3000, true));
+        assert!(!tap.key(SUPER, false, 3010, false));
+        // a release of Super that was not preceded by its press
+        assert!(!tap.key(SUPER, false, 4000, false));
+    }
 
     /// The keymap of a generated layout with both Alt keys as the third-level shift, as the decoded input sources use.
     fn keymap() -> xkb::Keymap {

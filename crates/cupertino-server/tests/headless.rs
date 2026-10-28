@@ -2,6 +2,8 @@
 //! client (shm buffer + xdg toplevel) connects through its socket, and the rendered output is
 //! checked pixel-wise. Tests skip (pass) when no EGL device is available.
 
+mod common;
+
 use std::io::Write;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
@@ -464,7 +466,8 @@ fn client_window_is_mapped_styled_and_closed() {
 
     // finish the opening animation deterministically, then render
     let frame = {
-        h.state.fixed_time = Some(h.state.now() + 5.0);
+        let time = h.state.now() + 5.0;
+        common::set_time(&mut h.state, &mut h.event_loop, time);
         h.state.tick();
         h.state.wm.window(id).unwrap().geometry()
     };
@@ -530,7 +533,8 @@ fn element_order_is_wallpaper_windows_shell_cursor() {
         [255, 255, 255, 255],
     );
     h.wait_until("the window to be mapped", |s| s.wm.windows().count() == 1);
-    h.state.fixed_time = Some(h.state.now() + 5.0);
+    let time = h.state.now() + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     for _ in 0..10 {
         h.step();
@@ -576,7 +580,8 @@ fn workspace_switch_slides_windows_and_overview_toggles() {
         [0, 255, 0, 255],
     );
     h.wait_until("the window to be mapped", |s| s.wm.windows().count() == 1);
-    h.state.fixed_time = Some(h.state.now() + 5.0);
+    let time = h.state.now() + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     let out = h.state.outputs[0].id;
     h.state.command(Command::AddWorkspace { output: out });
@@ -585,7 +590,8 @@ fn workspace_switch_slides_windows_and_overview_toggles() {
         .execute_plan(translate_action(Action::WorkspaceRight, &ctx));
     // half way through the slide the first workspace is partially off screen
     let t0 = h.state.now();
-    h.state.fixed_time = Some(t0 + 0.15);
+    let time = t0 + 0.15;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     let pos = h.state.wm.workspace_position(out, h.state.now());
     assert!(pos > 0.0 && pos < 1.0, "slide position {pos}");
@@ -598,7 +604,8 @@ fn workspace_switch_slides_windows_and_overview_toggles() {
     );
     assert_eq!(list.len(), 1);
     assert!(list[0].1 < 0.0, "window offset {:?}", list[0]);
-    h.state.fixed_time = Some(t0 + 5.0);
+    let time = t0 + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     assert!(cupertino_server::render::scene::windows_on_output(
         &h.state.wm,
@@ -614,20 +621,23 @@ fn workspace_switch_slides_windows_and_overview_toggles() {
         Action::WorkspaceLeft,
         &h.state.action_context(),
     ));
-    h.state.fixed_time = Some(t0 + 10.0);
+    let time = t0 + 10.0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     h.state.execute_plan(translate_action(
         Action::Overview,
         &h.state.action_context(),
     ));
     assert!(h.state.shell.overview_open());
-    h.state.fixed_time = Some(t0 + 12.0);
+    let time = t0 + 12.0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.execute_plan(translate_action(
         Action::Overview,
         &h.state.action_context(),
     ));
     assert!(!h.state.shell.overview_open());
-    h.state.fixed_time = Some(t0 + 20.0);
+    let time = t0 + 20.0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     assert!(h.state.shell.overview.is_none());
     drop(client);
@@ -650,7 +660,8 @@ fn insets_reserve_space_around_the_surface() {
         [0, 0, 255, 255],
     );
     h.wait_until("the window to be mapped", |s| s.wm.windows().count() == 1);
-    h.state.fixed_time = Some(h.state.now() + 5.0);
+    let time = h.state.now() + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     for _ in 0..20 {
         h.step();
@@ -693,7 +704,8 @@ fn minimize_collapses_the_window_towards_its_target() {
     );
     h.wait_until("the window to be mapped", |s| s.wm.windows().count() == 1);
     let t0 = h.state.now() + 5.0;
-    h.state.fixed_time = Some(t0);
+    let time = t0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     for _ in 0..10 {
         h.step();
@@ -705,7 +717,8 @@ fn minimize_collapses_the_window_towards_its_target() {
         window: id,
         target: Some(DOCK_SLOT),
     });
-    h.state.fixed_time = Some(t0 + 0.25);
+    let time = t0 + 0.25;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     let entry = h.state.entry(id).unwrap();
     let (plan, pres) = plan_for(
@@ -733,7 +746,8 @@ fn minimize_collapses_the_window_towards_its_target() {
         h.step();
     }
     artifact(&h.screenshot("min-mid"), "min-1-mid.png");
-    h.state.fixed_time = Some(t0 + 3.0);
+    let time = t0 + 3.0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     assert!(h.state.wm.window(id).unwrap().state().is_minimized());
     assert!(
@@ -762,14 +776,16 @@ fn under_reduce_motion_full_screen_draws_the_new_frame_at_once() {
     );
     h.wait_until("the window to be mapped", |s| s.wm.windows().count() == 1);
     let t0 = h.state.now() + 5.0;
-    h.state.fixed_time = Some(t0);
+    let time = t0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     let id = h.state.wm.key_window().unwrap();
     h.state.command(Command::Fullscreen {
         window: id,
         output: None,
     });
-    h.state.fixed_time = Some(t0 + 0.1);
+    let time = t0 + 0.1;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     let w = h.state.wm.window(id).unwrap();
     assert_eq!(w.state(), LifecycleState::EnterFullScreen);
@@ -818,7 +834,8 @@ fn the_display_filter_recolours_the_whole_output() {
         [0, 0, 255, 255],
     );
     h.wait_until("the window to be mapped", |s| s.wm.windows().count() == 1);
-    h.state.fixed_time = Some(h.state.now() + 5.0);
+    let time = h.state.now() + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     let id = h.state.wm.key_window().unwrap();
     let f = h.state.wm.window(id).unwrap().geometry();
@@ -1000,7 +1017,8 @@ impl Harness {
     /// Advance model time by `dt` seconds and run the compositor a few iterations.
     fn advance(&mut self, dt: f64) {
         let t = self.state.now() + dt;
-        self.state.fixed_time = Some(t);
+        let time = t;
+        common::set_time(&mut self.state, &mut self.event_loop, time);
         self.state.tick();
         for _ in 0..3 {
             self.step();
@@ -1036,7 +1054,8 @@ impl Harness {
             s.wm.windows().count() == client_count
         });
         let t = self.state.now() + 5.0;
-        self.state.fixed_time = Some(t);
+        let time = t;
+        common::set_time(&mut self.state, &mut self.event_loop, time);
         self.state.tick();
         for _ in 0..10 {
             self.step();
@@ -1247,7 +1266,8 @@ fn plain_windows_close_at_once_unless_the_fade_is_enabled() {
         "the ghost still shows the cyan content, got {px:?}"
     );
     let t = h.state.now() + 5.0;
-    h.state.fixed_time = Some(t);
+    let time = t;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     assert!(
         h.state.fx.closing.is_empty(),
@@ -1406,7 +1426,8 @@ fn every_minimize_effect_draws_a_mesh_and_restore_runs_it_backwards() {
         });
         let duration = kind.duration_s(false);
         let t0 = h.state.now();
-        h.state.fixed_time = Some(t0 + duration * 0.5);
+        let time = t0 + duration * 0.5;
+        common::set_time(&mut h.state, &mut h.event_loop, time);
         h.state.tick();
         for _ in 0..3 {
             h.step();
@@ -1424,14 +1445,16 @@ fn every_minimize_effect_draws_a_mesh_and_restore_runs_it_backwards() {
             !green(corner),
             "{kind:?}: the window left its rest rectangle"
         );
-        h.state.fixed_time = Some(t0 + duration + 1.0);
+        let time = t0 + duration + 1.0;
+        common::set_time(&mut h.state, &mut h.event_loop, time);
         h.state.tick();
         assert!(h.state.wm.window(id).unwrap().state().is_minimized());
 
         // restore: the reverse run starts at the tile and shows the mesh again
         h.state.command(Command::Restore { window: id });
         let t1 = h.state.now();
-        h.state.fixed_time = Some(t1 + duration * 0.5);
+        let time = t1 + duration * 0.5;
+        common::set_time(&mut h.state, &mut h.event_loop, time);
         h.state.tick();
         for _ in 0..3 {
             h.step();
@@ -1441,7 +1464,8 @@ fn every_minimize_effect_draws_a_mesh_and_restore_runs_it_backwards() {
             back.pixels().filter(|p| green(p)).count() > 300,
             "{kind:?}: restore draws the mesh"
         );
-        h.state.fixed_time = Some(t1 + duration + 1.0);
+        let time = t1 + duration + 1.0;
+        common::set_time(&mut h.state, &mut h.event_loop, time);
         h.state.tick();
         assert_eq!(
             h.state.wm.window(id).unwrap().geometry(),

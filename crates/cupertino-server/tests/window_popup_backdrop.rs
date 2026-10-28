@@ -2,6 +2,8 @@
 //! context menu's backdrop), against a headless compositor. The client opens its window and popup
 //! the way the shell processes do. Tests skip (pass) when no EGL device is available.
 
+mod common;
+
 use std::io::Write;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
@@ -351,7 +353,8 @@ fn a_window_popup_draws_its_material_over_the_window_and_only_there() {
     let _app = App::spawn(h.socket_path());
     h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
     let t = h.state.now() + 5.0;
-    h.state.fixed_time = Some(t);
+    let time = t;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     let id = h
         .state

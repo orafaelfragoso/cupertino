@@ -2,6 +2,8 @@
 //! device, a menu bar client (a top-anchored layer surface with the menu-bar role) and application
 //! clients connect through its socket. Tests skip (pass) when no EGL device is available.
 
+mod common;
+
 use std::io::Write;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
@@ -189,7 +191,8 @@ impl Harness {
 
     /// Move the model clock forward and settle the animations.
     fn advance(&mut self, dt: f64) {
-        self.state.fixed_time = Some(self.state.now() + dt);
+        let time = self.state.now() + dt;
+        common::set_time(&mut self.state, &mut self.event_loop, time);
         self.state.tick();
         for _ in 0..3 {
             self.step();
@@ -2029,7 +2032,8 @@ fn full_screen_hides_the_bar_and_an_open_menu_or_the_top_edge_reveals_it() {
     // the edge dwell reveals it
     let t = h.state.now();
     h.state.pointer_moved_to((500.0, 0.0).into(), 0, None);
-    h.state.fixed_time = Some(t + 0.3);
+    let time = t + 0.3;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     assert_eq!(visible(&h, t + 2.0), 1.0, "revealed by the edge dwell");
 }

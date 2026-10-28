@@ -1,6 +1,8 @@
 //! A client may start a move or resize of its window only with the serial of a pointer press that is still held on it.
 //! Tests skip (pass) when no EGL device is available.
 
+mod common;
+
 use std::io::Write;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
@@ -309,7 +311,8 @@ impl Harness {
 fn mapped_client(h: &mut Harness) -> TestClient {
     let client = TestClient::spawn(h.socket_path());
     h.wait_until("the window to map", |s| s.windows.iter().any(|e| e.mapped));
-    h.state.fixed_time = Some(h.state.now() + 5.0);
+    let time = h.state.now() + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     h.wait_until("the window to draw", |_| client.log.lock().unwrap().drawn);
     h.run_for(Duration::from_millis(100));

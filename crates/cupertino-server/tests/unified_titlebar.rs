@@ -5,6 +5,8 @@
 //! for server-side decorations the way the shell processes do. Tests skip (pass) when no EGL device
 //! is available.
 
+mod common;
+
 use std::io::Write;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
@@ -263,7 +265,8 @@ fn a_unified_window_fills_its_frame_and_only_its_buttons_take_the_pointer_over_t
     });
     // let the open transforms end, so the frames are where they will stay
     let t = h.state.now() + 5.0;
-    h.state.fixed_time = Some(t);
+    let time = t;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
 
     let entry_of = |style: ServerStyle| {

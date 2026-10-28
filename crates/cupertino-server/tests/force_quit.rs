@@ -78,6 +78,12 @@ impl Harness {
 
     /// Move the model clock on by `seconds`, a few steps so that every tick sees it.
     fn advance(&mut self, seconds: f64) {
+        common::set_time(&mut self.state, &mut self.event_loop, self.now);
+        self.advance_without_pong(seconds);
+    }
+
+    /// Deliberately let unanswered pings time out when exercising an unresponsive client.
+    fn advance_without_pong(&mut self, seconds: f64) {
         self.now += seconds;
         self.settle();
     }

@@ -361,7 +361,8 @@ fn a_press_on_a_popup_subsurface_keeps_the_grab_and_an_outside_press_ends_it() {
     let Some(mut h) = Harness::new() else { return };
     let client = TestClient::spawn(h.socket_path());
     h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
-    h.state.fixed_time = Some(h.state.now() + 5.0);
+    let time = h.state.now() + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     let window = h.state.windows.iter().find(|w| w.mapped).unwrap();
     let frame = h.state.wm.window(window.id).unwrap().geometry();
@@ -414,7 +415,8 @@ fn a_session_lock_ends_the_popup_grab_and_the_first_press_reaches_the_lock_surfa
     let Some(mut h) = Harness::new() else { return };
     let client = TestClient::spawn(h.socket_path());
     h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
-    h.state.fixed_time = Some(h.state.now() + 5.0);
+    let time = h.state.now() + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     let window = h.state.windows.iter().find(|w| w.mapped).unwrap();
     let frame = h.state.wm.window(window.id).unwrap().geometry();
@@ -447,7 +449,8 @@ fn a_window_that_takes_the_focus_ends_the_popup_grab_of_another_application() {
     let Some(mut h) = Harness::new() else { return };
     let client = TestClient::spawn(h.socket_path());
     h.wait_until("the window to map", |s| s.windows.iter().any(|w| w.mapped));
-    h.state.fixed_time = Some(h.state.now() + 5.0);
+    let time = h.state.now() + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     let window = h.state.windows.iter().find(|w| w.mapped).unwrap();
     let frame = h.state.wm.window(window.id).unwrap().geometry();

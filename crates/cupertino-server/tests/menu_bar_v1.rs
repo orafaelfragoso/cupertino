@@ -32,7 +32,7 @@ use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_keyboard, wl_output, wl_registry, wl_seat, wl_shm, wl_shm_pool,
     wl_surface,
 };
-use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
+use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
 use wayland_protocols::ext::image_capture_source::v1::client::{
     ext_image_capture_source_v1, ext_output_image_capture_source_manager_v1,
 };
@@ -572,6 +572,10 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for ClientState {
 
 /// Requests a test sends to a client thread.
 enum Cmd {
+    /// Send a request the server refuses with a protocol error, then only read until the error arrives: a request
+    /// that fills the client's 4096-byte buffer is written on its own, and a `sync` written after the server closed
+    /// the connection fails before the client reads the error that is already waiting.
+    Refused(Box<Cmd>),
     SetMenuOpen(bool),
     WindowCommand(BarCommand),
     MoveToWorkspace(u32),
@@ -663,6 +667,35 @@ fn run_client(
 }
 
 /// A client thread on a connected stream (a privileged client's stream comes from the server itself).
+/// Flush, then read without writing until the server ends the connection: its protocol error, `None` after 10 s or
+/// on an end without one.
+fn read_until_error(
+    conn: &Connection,
+    queue: &mut EventQueue<ClientState>,
+    client: &mut ClientState,
+) -> Option<(String, u32)> {
+    let end = Instant::now() + Duration::from_secs(10);
+    let _ = conn.flush();
+    while Instant::now() < end {
+        if let Some(guard) = queue.prepare_read() {
+            match guard.read() {
+                Ok(_) => {}
+                Err(wayland_client::backend::WaylandError::Io(e))
+                    if e.kind() == std::io::ErrorKind::WouldBlock =>
+                {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => break,
+            }
+        }
+        if queue.dispatch_pending(client).is_err() {
+            break;
+        }
+    }
+    conn.protocol_error()
+        .map(|error| (error.object_interface, error.code))
+}
+
 fn run_client_on(stream: UnixStream, setup: Setup) -> TestClient {
     let (commands, inbox): (Sender<Cmd>, Receiver<Cmd>) = channel();
     let status = Arc::new(Mutex::new(Status::default()));
@@ -674,6 +707,11 @@ fn run_client_on(stream: UnixStream, setup: Setup) -> TestClient {
         let (mut client, mut apply) = setup(&globals, &qh, &st);
         loop {
             while let Ok(cmd) = inbox.try_recv() {
+                if let Cmd::Refused(cmd) = cmd {
+                    apply(*cmd);
+                    st.lock().unwrap().error = read_until_error(&conn, &mut queue, &mut client);
+                    return;
+                }
                 apply(cmd);
             }
             if queue.roundtrip(&mut client).is_err() {
@@ -746,6 +784,7 @@ impl BarClient {
             let qh = qh.clone();
             let mut menu = None;
             let apply = Box::new(move |cmd: Cmd| match cmd {
+                Cmd::Refused(_) => unreachable!("the client loop sends a refused request itself"),
                 Cmd::SetMenuOpen(open) => bar.set_menu_open(u32::from(open)),
                 Cmd::WindowCommand(c) => bar.window_command(c),
                 Cmd::MoveToWorkspace(n) => bar.move_to_workspace(n),
@@ -1586,17 +1625,14 @@ fn a_malformed_menu_address_is_a_protocol_error() {
     let Some(mut h) = Harness::new() else { return };
     let app = KitAppClient::spawn(h.socket_path(), "org.example.Notes");
     h.mapped_window(1);
-    app.send(Cmd::AnnounceMenu([
+    app.send(Cmd::Refused(Box::new(Cmd::AnnounceMenu([
         "org.example.Notes",
         "/org/example/Notes",
         "/org/example/Notes/window/1",
         "/org/example/Notes/window/1/menus/menubar",
         "",
-    ]));
-    let end = Instant::now() + Duration::from_secs(10);
-    while app.error().is_none() && Instant::now() < end {
-        h.step();
-    }
+    ]))));
+    h.wait_until("the client to be refused", |_| app.error().is_some());
     // error 0 of cupertino_app_menu_v1.error is `invalid_address`
     assert_eq!(
         app.error(),
@@ -1636,13 +1672,10 @@ fn the_longest_menu_address_reaches_the_bar_and_a_longer_one_is_refused() {
     let near_limit: &'static str = format!("/{}", "b".repeat(950)).leak();
     let other = KitAppClient::spawn(h.socket_path(), "org.example.Other");
     h.mapped_window(2);
-    other.send(Cmd::AnnounceMenu([
+    other.send(Cmd::Refused(Box::new(Cmd::AnnounceMenu([
         bus, near_limit, near_limit, near_limit, near_limit,
-    ]));
-    let end = Instant::now() + Duration::from_secs(10);
-    while other.error().is_none() && Instant::now() < end {
-        h.step();
-    }
+    ]))));
+    h.wait_until("the client to be refused", |_| other.error().is_some());
     assert_eq!(
         other.error(),
         Some((CupertinoAppMenuV1::interface().name.to_string(), 0))

@@ -1,7 +1,7 @@
 //! Typed resource references and paint data. Resource storage and leases belong to the server.
 
 use cupertino_effects::Mesh;
-use cupertino_geometry::CornerStyle;
+use cupertino_geometry::{CornerStyle, Point};
 
 use crate::{BufferCrop, OutputPoint, OutputRect, Transform};
 
@@ -53,6 +53,16 @@ pub struct Placement {
     pub pivot: OutputPoint,
     pub scale_x: f64,
     pub scale_y: f64,
+}
+
+impl Placement {
+    /// Drawn where its source says, at its own size.
+    pub const IDENTITY: Self = Self {
+        origin: OutputPoint(Point::ZERO),
+        pivot: OutputPoint(Point::ZERO),
+        scale_x: 1.0,
+        scale_y: 1.0,
+    };
 }
 
 /// Masks are evaluated before the item's rescale, in output-local logical coordinates.

@@ -11,9 +11,11 @@ use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::backend::renderer::gles::GlesRenderer;
 
 pub mod clip;
+pub mod compose;
 pub mod image;
 #[cfg(feature = "scene-oracle")]
 pub mod legacy_scene;
+pub mod lower;
 pub mod material;
 pub mod mesh;
 pub mod motion;

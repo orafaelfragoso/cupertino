@@ -41,7 +41,7 @@ use crate::overlays::OverlayKey;
 use crate::render::image::{debug_sig, image_element};
 use crate::render::scene::{material_layer, rrect, shadow_with, SceneParams, WindowPlan};
 use crate::render::shader_rect::ElementKey;
-use crate::render::{CupertinoElement, LayerStack, SceneLayer};
+use crate::render::CupertinoElement;
 use crate::state::Cupertino;
 
 /// Font size of HUD rows and accent cells in points (approximate).
@@ -867,20 +867,16 @@ fn render_hud(
 }
 
 /// The input-source HUD (centre of the primary output while it is open or fading).
-pub fn input_hud(
-    renderer: &mut GlesRenderer,
-    p: &mut SceneParams<'_>,
-    stack: &mut LayerStack<CupertinoElement>,
-) {
+pub fn input_hud(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> Vec<CupertinoElement> {
     if p.wm.outputs().first().map(|o| o.id) != Some(p.output_id) {
-        return;
+        return Vec::new();
     }
     let Some(view) = p.overlays.inputs.hud.clone() else {
-        return;
+        return Vec::new();
     };
     let alpha = view.alpha(p.now) as f32;
     if alpha <= 0.002 || view.labels.is_empty() {
-        return;
+        return Vec::new();
     }
     let (scale, dark) = (p.scale, p.config.is_dark());
     let px = FONT_PT * scale as f32;
@@ -955,7 +951,7 @@ pub fn input_hud(
     ) {
         els.push(s.into());
     }
-    stack.extend(SceneLayer::InputHud, els);
+    els
 }
 
 /// Popup geometry for the open picker on an output (output-local logical coordinates).
@@ -1042,13 +1038,9 @@ fn render_accent(
 }
 
 /// The accent popup next to its anchor.
-pub fn accent_popup(
-    renderer: &mut GlesRenderer,
-    p: &mut SceneParams<'_>,
-    stack: &mut LayerStack<CupertinoElement>,
-) {
+pub fn accent_popup(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> Vec<CupertinoElement> {
     let Some(popup) = p.overlays.accent.popup.clone() else {
-        return;
+        return Vec::new();
     };
     let anchor_center = (
         popup.anchor.x() + popup.anchor.width() / 2.0,
@@ -1059,7 +1051,7 @@ pub fn accent_popup(
         anchor_center.0,
         anchor_center.1,
     )) {
-        return;
+        return Vec::new();
     }
     let layout = accent_layout(
         &popup,
@@ -1124,7 +1116,7 @@ pub fn accent_popup(
     ) {
         els.push(s.into());
     }
-    stack.extend(SceneLayer::AccentPopup, els);
+    els
 }
 
 /// Does `bindings` bind the input-source pair? (diagnostics)

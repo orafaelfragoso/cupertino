@@ -173,9 +173,13 @@ impl ShmPresenter {
                     < u64::from(pw) * u64::from(ph)
             });
         match regions {
-            Some(rects) => {
-                convert_rects(pixmap.data(), lease.pixels_mut(), layout.stride(), &rects)
-            }
+            Some(rects) => convert_rects(
+                pixmap.data(),
+                pixmap.width() as usize * 4,
+                lease.pixels_mut(),
+                layout.stride(),
+                &rects,
+            ),
             None => rgba_to_argb8888(pixmap.data(), lease.pixels_mut()),
         }
         lease.present_damage(damage.as_deref())?;

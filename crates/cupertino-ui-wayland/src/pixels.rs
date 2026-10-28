@@ -13,13 +13,19 @@ pub fn rgba_to_argb8888(rgba: &[u8], argb: &mut [u8]) {
     }
 }
 
-/// [`rgba_to_argb8888`] of only `rects` (inside both buffers), rows `stride` bytes apart.
-pub(crate) fn convert_rects(rgba: &[u8], argb: &mut [u8], stride: usize, rects: &[PixelRect]) {
+/// [`rgba_to_argb8888`] of only `rects` (inside both buffers), with rows `rgba_stride` and `argb_stride` bytes apart.
+pub(crate) fn convert_rects(
+    rgba: &[u8],
+    rgba_stride: usize,
+    argb: &mut [u8],
+    argb_stride: usize,
+    rects: &[PixelRect],
+) {
     for r in rects {
         let (start, len) = (r.x as usize * 4, r.width as usize * 4);
-        for row in r.y..r.y + r.height {
-            let at = row as usize * stride + start;
-            rgba_to_argb8888(&rgba[at..at + len], &mut argb[at..at + len]);
+        for row in r.y as usize..(r.y + r.height) as usize {
+            let (from, to) = (row * rgba_stride + start, row * argb_stride + start);
+            rgba_to_argb8888(&rgba[from..from + len], &mut argb[to..to + len]);
         }
     }
 }
@@ -48,7 +54,7 @@ mod tests {
             width: 4,
             height: 24,
         };
-        convert_rects(&rgba, &mut argb, stride, &[caret]);
+        convert_rects(&rgba, stride, &mut argb, stride, &[caret]);
         for y in 0..height {
             for x in 0..width {
                 let inside = (300..304).contains(&x) && (20..44).contains(&y);

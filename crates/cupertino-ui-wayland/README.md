@@ -1,13 +1,16 @@
 # cupertino-ui-wayland
 
-Draws a surface of the transport (`cupertino-wayland-client`) with tiny-skia. MPL-2.0. It binds no protocol beyond the
+CupertinoKit's window system on the transport (`cupertino-wayland-client`), and drawing a surface of it with tiny-skia.
+MPL-2.0. It binds no protocol beyond the
 transport's standard set and never reaches the private protocols (`cupertino-layers` denies `cupertino-protocols` and
-`cupertino-shell-client`). Depends on `cupertino-wayland-client`, `cupertino-geometry` and `tiny-skia`.
+`cupertino-shell-client`). Depends on `cupertino-wayland-client`, `cupertino-geometry`, `cupertino-modifiers`,
+`cupertino-ui-platform`, `cupertino-ui-render`, `cupertino-ui-text` and `tiny-skia`.
 
 ## Public API
 
 | Item | Contents |
 |---|---|
+| `WaylandWindowSystem` | `cupertino-ui-platform`'s `WindowSystem` on one transport `Connection` (`connect(profile)`, `new(connection, profile)`); `connection` and `surface(window)` reach the transport for an extension protocol |
 | `ShmPresenter`, `Ready` | one per surface, owned by the application, holding no protocol object: `configured(size)` after a configure, `frame_done` on the surface's `Event::Frame`, `request_redraw`; `poll(&Connection)` until `Ready::Idle` reports a new scale (`Ready::ScaleChanged`) first and then `Ready::Draw` once the surface is configured, a frame is asked for, none is in flight and the transport has a free buffer; `draw(&mut Connection, damage, paint)` paints and presents a frame |
 | `popup::placement` | the `PopupPlacement` of a popup covering a parent-local rectangle, rounded outwards to whole points, its top-left corner at the rectangle's; an empty or non-finite rectangle is `Error::InvalidShape` |
 | `clipboard::{TEXT_TYPES, set_text, text}`, `clipboard::Clipboard` | the text clipboard: a copy offers `text/plain;charset=utf-8`, `text/plain` and `UTF8_STRING`; a paste reads the first of them an offer has, drops a character cut by the transport's read limit and is `None` when the offer was replaced or its client did not answer in time. `Clipboard` keeps the latest selection (`selection_changed`) and the text this client set, which a paste reads while no selection is known |
@@ -32,11 +35,36 @@ and acknowledges exactly that serial with the commit. The lease holds the connec
 configure is dispatched while `paint` runs, and a configure overtaken before the draw is never acknowledged. The frame
 callback's time, for an animation clock, is `FrameCallback::time` of the transport's `Event::Frame`.
 
+## The window system
+
+Windows and popups map one to one onto the transport's toplevels and popups; destroying a window destroys its popups.
+Configures, close, popup dismissal, scale, pointer, keys, keyboard focus and the input method arrive as `WindowEvent`s
+of the window whose surface they name. Key modifiers are logical (`Mods`), through the `Profile` the window system was
+made with. Input times are the compositor's milliseconds mapped onto the window system's clock (nanoseconds since it
+was made): the first one, and any that would land in the future or more than a second in the past, anchors the mapping
+at the time it was read, and the ones after keep the compositor's spacing. A button's serial is the transport's latest
+input serial.
+
+`present` copies the renderer's frame (premultiplied RGBA) into a leased buffer as ARGB8888: its damage, the damage of
+frames that were not presented, and what the buffer missed, or all of it when the buffer's pixels are unknown. The
+compositor is told only the frame's damage and the carried damage, or all of the window when the frame changed size.
+No free buffer, no configure yet, or a frame at another size than the latest configure asks for is `NotReady`, and the
+damage is carried (more than 64 rectangles become the whole frame). The transport acknowledges the latest configure
+with every frame. `request_frame` answers at once when no frame callback is outstanding, else with the callback; a
+callback nobody asked for is not reported.
+
+A clipboard read finishes before `read_clipboard` returns (the transport's one-second limit) and its data arrives with
+the next `dispatch`. Not offered yet, so their flags are false: presentation times, touch, the primary selection, drag
+and drop, and the desktop's effects protocol, which an extension binds through `connection`. A popup's `offset` moves
+its anchor rectangle; `reactive` is not sent.
+
 ## Tests
 
 ```
 cargo test -p cupertino-ui-wayland
 ```
 
-Unit tests cover the pixel conversion, the damage cut, popup placement and the clipboard text. `tests/protocol-flow.rs`
-drives the presenter and the clipboard against an in-process server.
+Unit tests cover the pixel conversion, the damage cut, popup placement, the clipboard text, and the window system's
+conversions, input timeline and carried-damage bound. `tests/protocol-flow.rs` drives the presenter, the clipboard and
+the window system (frame pacing, carried and missed damage, a click, the clipboard, the waker, refused requests)
+against an in-process server.

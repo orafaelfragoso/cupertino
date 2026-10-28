@@ -122,6 +122,7 @@ impl CompositorHandler for Cupertino {
 
     fn destroyed(&mut self, surface: &WlSurface) {
         self.pending_activations.remove(&surface.id());
+        self.menu_surface_destroyed(surface);
     }
 
     fn commit(&mut self, surface: &WlSurface) {
@@ -191,6 +192,7 @@ impl smithay::wayland::security_context::SecurityContextHandler for Cupertino {
         let inserted = self.loop_handle.insert_source(source, |stream, _, state| {
             let data = std::sync::Arc::new(crate::state::ClientState {
                 sandboxed: true,
+                peer: crate::state::client_process(&stream),
                 ..crate::state::ClientState::default()
             });
             if let Err(e) = state.display_handle.insert_client(stream, data) {

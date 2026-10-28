@@ -4,6 +4,14 @@
 //! Everything runs on one background thread that drives `zbus` futures; the compositor talks to it
 //! through [`DbusHandle::send`]. Without a session bus the worker ends after logging and the
 //! requests fail with a warning.
+//!
+//! The worker also checks who owns a bus name for `crate::owner_check` ([`OwnerQuery`]). It asks only the bus daemon,
+//! never the name itself.
+
+use std::path::Path;
+
+use cupertino_peer::{same_instance, ProcessHandle};
+use zbus::names::{BusName, OwnedUniqueName};
 
 use crate::caller::{identify, Caller};
 use crate::input::OsdKey;
@@ -187,9 +195,46 @@ impl crate::state::Cupertino {
     }
 }
 
+/// A check of the owner of a bus name. The worker asks the bus daemon who owns the name (`GetNameOwner` for a
+/// well-known name) and for the owner's credentials, and answers the owner's unique name when it is one sandbox instance
+/// with `client` ([`cupertino_peer::same_instance`]).
+pub struct OwnerQuery {
+    pub name: String,
+    /// The Wayland client to match, held from its connection.
+    pub client: ProcessHandle,
+    pub reply: Box<dyn FnOnce(Result<String, OwnerRefusal>) + Send>,
+}
+
+/// Why the owner of a bus name is not taken for the Wayland client.
+#[derive(Debug)]
+pub enum OwnerRefusal {
+    /// No session bus to ask.
+    NoBus,
+    /// The client's connection named no process of its own (a connection the server made, or a kernel without
+    /// `SO_PEERPIDFD`).
+    NoClientProcess,
+    NotABusName,
+    /// The daemon named no owner: nobody owns the name, or the connection is gone.
+    NoOwner(String),
+    /// The daemon gave no process descriptor for the owner, or the owner or the client could not be classified or is
+    /// gone.
+    Unidentified,
+    /// The owner is a process outside the client's sandbox instance.
+    OtherInstance {
+        owner: u32,
+        client: u32,
+    },
+}
+
+/// What the worker is asked to do.
+enum Job {
+    Call(Request),
+    Owner(OwnerQuery),
+}
+
 /// Handle on the worker thread.
 pub struct DbusHandle {
-    tx: async_channel::Sender<Request>,
+    tx: async_channel::Sender<Job>,
     login: std::sync::Arc<std::sync::Mutex<LoginTrust>>,
 }
 
@@ -205,7 +250,7 @@ impl DbusHandle {
     /// Start the worker; `login_missing` runs on it when a log out request finds nobody to ask (no `org.cupertino.Login1`
     /// on the bus), so the caller can do what a session without a login process does.
     pub fn start_with(login_missing: impl Fn() + Send + Sync + 'static) -> Option<DbusHandle> {
-        let (tx, rx) = async_channel::unbounded::<Request>();
+        let (tx, rx) = async_channel::unbounded::<Job>();
         let login_missing: LoginMissing = std::sync::Arc::new(login_missing);
         let login = std::sync::Arc::new(std::sync::Mutex::new(LoginTrust::Nobody));
         let worker_login = login.clone();
@@ -231,18 +276,24 @@ impl DbusHandle {
 
     /// Queue a call on a shell process; false when the worker is gone (no session bus).
     pub fn send(&self, what: Request) -> bool {
-        let queued = self.tx.try_send(what).is_ok();
+        let queued = self.tx.try_send(Job::Call(what)).is_ok();
         if !queued {
             tracing::warn!(?what, "no session bus: cannot reach the shell process");
         }
         queued
+    }
+
+    /// Queue a check of who owns a bus name; false when the worker is gone (no session bus), and the reply is then
+    /// never made.
+    pub fn check_owner(&self, query: OwnerQuery) -> bool {
+        self.tx.try_send(Job::Owner(query)).is_ok()
     }
 }
 
 type SharedLoginTrust = std::sync::Arc<std::sync::Mutex<LoginTrust>>;
 
 async fn worker(
-    rx: async_channel::Receiver<Request>,
+    rx: async_channel::Receiver<Job>,
     login_missing: LoginMissing,
     login: SharedLoginTrust,
 ) {
@@ -253,8 +304,25 @@ async fn worker(
             return;
         }
     };
-    while let Ok(what) = rx.recv().await {
+    while let Ok(job) = rx.recv().await {
         let conn = conn.clone();
+        let what = match job {
+            Job::Call(what) => what,
+            Job::Owner(OwnerQuery {
+                name,
+                client,
+                reply,
+            }) => {
+                conn.executor()
+                    .clone()
+                    .spawn(
+                        async move { reply(owner_of(&conn, &name, client).await) },
+                        "cupertino-owner-check",
+                    )
+                    .detach();
+                continue;
+            }
+        };
         // a key's press and release must arrive in the order they happened, so those calls are awaited in turn
         if matches!(what, Request::PowerKey { .. }) {
             call(&conn, what, &login_missing, &login).await;
@@ -310,6 +378,41 @@ async fn destination(
 }
 
 const LOGIN_NAME: &str = "org.cupertino.Login1";
+
+/// The unique name of the owner of `name` when it is one sandbox instance with `client`. Only the bus daemon is asked:
+/// the owner of a well-known name, then the owner's credentials, whose `ProcessFD` alone names its process.
+async fn owner_of(
+    conn: &zbus::Connection,
+    name: &str,
+    client: ProcessHandle,
+) -> Result<String, OwnerRefusal> {
+    let name = BusName::try_from(name).map_err(|_| OwnerRefusal::NotABusName)?;
+    let no_owner = |e: zbus::fdo::Error| OwnerRefusal::NoOwner(e.to_string());
+    let proxy = zbus::fdo::DBusProxy::new(conn)
+        .await
+        .map_err(|e| OwnerRefusal::NoOwner(e.to_string()))?;
+    let unique: OwnedUniqueName = match name {
+        BusName::Unique(unique) => unique.into(),
+        BusName::WellKnown(_) => proxy.get_name_owner(name).await.map_err(no_owner)?,
+    };
+    let credentials = proxy
+        .get_connection_credentials(BusName::from(unique.as_ref()))
+        .await
+        .map_err(no_owner)?;
+    let proc_root = Path::new("/proc");
+    let owner = Caller::from_process_fd(&credentials, proc_root);
+    let client = Caller::of_process(client, proc_root);
+    let (Caller::Process(owner), Caller::Process(client)) = (&owner, &client) else {
+        return Err(OwnerRefusal::Unidentified);
+    };
+    if !same_instance(owner, client, proc_root) {
+        return Err(OwnerRefusal::OtherInstance {
+            owner: owner.process.pid,
+            client: client.process.pid,
+        });
+    }
+    Ok(unique.to_string())
+}
 
 /// Whether the owner of the login process's name is the process `trust` names. Only its process id counts, so a process
 /// that is not dumpable (the login process hardens itself) is judged like any other.

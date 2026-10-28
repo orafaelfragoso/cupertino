@@ -14,6 +14,7 @@ use cupertino_server::backend::{headless, Backend};
 use cupertino_server::config::Config;
 use cupertino_server::render::CupertinoElement;
 use cupertino_server::Cupertino;
+use smithay::backend::input::KeyState;
 use smithay::backend::renderer::element::{Element, Id, Kind};
 use smithay::backend::renderer::utils::CommitCounter;
 use smithay::reexports::calloop::EventLoop;
@@ -186,5 +187,66 @@ fn a_window_matches_while_it_opens() {
     for ms in [0u32, 40, 80, 160, 320, 640] {
         d.at(ms);
         d.compare(&format!("opening at {ms} ms"));
+    }
+}
+
+#[test]
+fn a_locked_session_matches() {
+    let mut d = Desktop::new(1.0);
+    d.window();
+    d.at(2000);
+    d.compare("before the lock");
+    let locker = common::Client::locker(common::session_agent(&d.state));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !locker.locked() {
+        d.pump();
+        assert!(Instant::now() < deadline, "the session did not lock");
+    }
+    d.at(2100);
+    d.compare("locked");
+    d.at(2200);
+    d.compare("locked, next frame");
+}
+
+#[test]
+fn the_overview_matches_while_it_opens_and_at_rest() {
+    let mut d = Desktop::new(1.0);
+    d.window();
+    d.window();
+    d.at(2000);
+    d.state.pointer_moved_to((500.0, 350.0).into(), 2000, None);
+    // XKB keycodes are evdev + 8: Ctrl+Up enters the overview through the key router.
+    for (code, pressed) in [(37u32, true), (111, true), (111, false), (37, false)] {
+        d.state.keyboard_event_now(
+            code.into(),
+            if pressed {
+                KeyState::Pressed
+            } else {
+                KeyState::Released
+            },
+            2100,
+        );
+    }
+    assert!(
+        d.state.shell.overview_open(),
+        "the key sequence opens the overview"
+    );
+    for ms in [2100u32, 2160, 2260, 2460, 3200] {
+        d.at(ms);
+        d.compare(&format!("overview at {ms} ms"));
+    }
+}
+
+#[test]
+fn the_pointer_matches_wherever_it_is() {
+    for scale in [1.0, 1.5] {
+        let mut d = Desktop::new(scale);
+        d.window();
+        d.at(2000);
+        for (x, y) in [(10.0, 10.0), (500.0, 350.0), (999.0, 699.0)] {
+            d.state.pointer_moved_to((x, y).into(), 2000, None);
+            d.at(2016);
+            d.compare(&format!("pointer at {x},{y}"));
+        }
     }
 }

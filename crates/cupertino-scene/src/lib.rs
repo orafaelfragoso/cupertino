@@ -32,6 +32,12 @@ pub enum SceneKind {
     Shadow,
     PopupRim,
     PopupShadow,
+    WindowContent,
+    PopupContent,
+    LayerContent,
+    DragIcon,
+    LockContent,
+    CursorContent,
     /// Content the renderer still builds itself; removed with the effect migration.
     LocalPass,
     #[cfg(test)]
@@ -48,6 +54,12 @@ impl SceneKind {
             Self::Shadow => "shadow",
             Self::PopupRim => "popup-rim",
             Self::PopupShadow => "popup-shadow",
+            Self::WindowContent => "window-content",
+            Self::PopupContent => "popup-content",
+            Self::LayerContent => "layer-content",
+            Self::DragIcon => "drag-icon",
+            Self::LockContent => "lock-content",
+            Self::CursorContent => "cursor-content",
             Self::LocalPass => "local-pass",
             #[cfg(test)]
             Self::Test => "test",

@@ -1,83 +1,12 @@
 //! Logical modifiers, keys and chords.
 //!
-//! A [`Chord`] is expressed with *logical* modifiers: [`Mods::PRIMARY`] is the modifier that carries
+//! A [`Chord`] is expressed with *logical* modifiers: [`cupertino_modifiers::Mods::PRIMARY`] is the modifier that carries
 //! application shortcuts. Which physical key produces it is decided by a
 //! [`crate::modifiers::ModifierProfile`].
 
 use std::fmt;
 
-/// Logical modifier set.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Mods(pub u8);
-
-impl Mods {
-    pub const NONE: Mods = Mods(0);
-    pub const SHIFT: Mods = Mods(1);
-    pub const CTRL: Mods = Mods(2);
-    pub const ALT: Mods = Mods(4);
-    pub const PRIMARY: Mods = Mods(8);
-    pub const FN: Mods = Mods(16);
-
-    pub const fn bits(self) -> u8 {
-        self.0
-    }
-    pub const fn contains(self, other: Mods) -> bool {
-        self.0 & other.0 == other.0
-    }
-    pub const fn is_empty(self) -> bool {
-        self.0 == 0
-    }
-    pub const fn union(self, other: Mods) -> Mods {
-        Mods(self.0 | other.0)
-    }
-    pub const fn without(self, other: Mods) -> Mods {
-        Mods(self.0 & !other.0)
-    }
-}
-
-impl std::ops::BitOr for Mods {
-    type Output = Mods;
-    fn bitor(self, rhs: Mods) -> Mods {
-        Mods(self.0 | rhs.0)
-    }
-}
-
-impl std::ops::BitOrAssign for Mods {
-    fn bitor_assign(&mut self, rhs: Mods) {
-        self.0 |= rhs.0;
-    }
-}
-
-impl fmt::Debug for Mods {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Mods({})", self)
-    }
-}
-
-impl fmt::Display for Mods {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut first = true;
-        for (m, n) in [
-            (Mods::PRIMARY, "Primary"),
-            (Mods::CTRL, "Ctrl"),
-            (Mods::ALT, "Alt"),
-            (Mods::SHIFT, "Shift"),
-            (Mods::FN, "Fn"),
-        ] {
-            if self.contains(m) {
-                if !first {
-                    f.write_str("+")?;
-                }
-                f.write_str(n)?;
-                first = false;
-            }
-        }
-        if first {
-            f.write_str("none")?;
-        }
-        Ok(())
-    }
-}
+use cupertino_modifiers::Mods;
 
 /// Keys that have no character of their own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

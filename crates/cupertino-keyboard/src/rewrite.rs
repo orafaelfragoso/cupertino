@@ -9,7 +9,8 @@
 //! text bindings and the documented chords; the terminal copy and paste mapping and
 //! the guards are approximate and configurable in the compositor.
 
-use crate::modifiers::{ModifierProfile, RawMods};
+use crate::modifiers::ModifierProfile;
+use cupertino_modifiers::RawMods;
 
 /// evdev codes of the keys the table names (`linux/input-event-codes.h`).
 pub const KEY_HOME: u32 = 102;

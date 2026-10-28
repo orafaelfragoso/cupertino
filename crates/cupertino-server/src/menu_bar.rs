@@ -10,7 +10,8 @@ use crate::dbus::{LoginTrust, Request as DbusRequest};
 use crate::input::{translate_action, Action, Chord};
 use cupertino_input::{KeyCombo, Modifiers};
 use cupertino_keyboard::rewrite::ClientClass;
-use cupertino_keyboard::{ModifierProfile, Mods as LogicalMods, RawMods};
+use cupertino_keyboard::ModifierProfile;
+use cupertino_modifiers::{Mods as LogicalMods, RawMods};
 use cupertino_protocols::server::app_effects::cupertino_app_menu_v1::{
     self, CupertinoAppMenuV1, Error as AppMenuError,
 };

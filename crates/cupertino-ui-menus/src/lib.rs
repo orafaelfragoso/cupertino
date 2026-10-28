@@ -12,7 +12,8 @@ mod wire;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use cupertino_menu_model::{ActionName, MenuBar, ModifierMap, Scope};
+use cupertino_menu_model::{ActionName, MenuBar, Scope};
+use cupertino_modifiers::ModifierMap;
 use objects::{action_changes, Actions, Menus, OnActivate};
 use wire::WireMenus;
 use zbus::blocking::{connection, Connection};

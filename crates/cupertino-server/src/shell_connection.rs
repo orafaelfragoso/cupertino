@@ -81,3 +81,23 @@ pub fn hand_over(command: &mut Command, stream: &UnixStream) {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_shell_connection_names_the_process_started_for_it() {
+        let state = shell_process_state(&[ShellRole::MenuBar]);
+        assert!(
+            state.process().is_none(),
+            "no process before one is started"
+        );
+        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+        bind_holder(&state, child.id()).unwrap();
+        let pid = state.process().map(|process| process.pid);
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(pid, Some(child.id()));
+    }
+}

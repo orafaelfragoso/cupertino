@@ -9,6 +9,8 @@ description = "CupertinoKit test harness: a headless window system, event-trace 
 layer = "render"
 
 [dependencies]
+cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-ui-core = { path = "../cupertino-ui-core" }
 cupertino-ui-platform = { path = "../cupertino-ui-platform" }
 cupertino-ui-render = { path = "../cupertino-ui-render" }
+cupertino-ui-text = { path = "../cupertino-ui-text" }

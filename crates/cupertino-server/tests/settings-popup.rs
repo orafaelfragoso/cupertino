@@ -396,7 +396,8 @@ const KEY_DOWN: u32 = 108;
 const KEY_TAB: u32 = 15;
 
 /// A pane with its menu open, the `keys` tapped (the last closes the menu), and its pixels once the client has had its
-/// time: a key that reached the pane moves its focus ring.
+/// time: a key that reached the pane moves its focus ring. The pixels are compared between two runs, so a pane that draws
+/// live data (a clock, a battery in the sidebar or the Accessibility pane) would need that region masked.
 fn pane_after(keys: &[u32]) -> Vec<u8> {
     let mut h = Harness::new();
     for key in keys {

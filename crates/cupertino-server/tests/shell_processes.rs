@@ -1673,10 +1673,10 @@ fn start_server_binary(mode: &str) -> Option<Daemon> {
             Err(RecvTimeoutError::Timeout) => {}
             // the server closed its stderr: it has ended
             Err(RecvTimeoutError::Disconnected) => {
-                if has(&lines, "display connected") {
+                if has(&lines, "listening") && has(&lines, "display connected") {
                     break;
                 }
-                let no_egl = lines.iter().any(|l| l.to_lowercase().contains("egl"));
+                let no_egl = has(&lines, headless::NO_USABLE_DEVICE);
                 let required = std::env::var("CUPERTINO_EGL_REQUIRED").as_deref() == Ok("1");
                 assert!(
                     no_egl && !required,

@@ -1,7 +1,9 @@
 use cupertino_menubar::controller::{
     point_in_triangle, Effect, Key, MenuController, Mode, APP_MENU_ROOT,
 };
-use cupertino_menubar::fallback::{HELP_MENU, HELP_SEARCH};
+use cupertino_menubar::fallback::{
+    self, Chords, FallbackAction, HELP_MENU, HELP_SEARCH, WINDOW_MENU,
+};
 use cupertino_menubar::geom::{Point, Rect};
 use cupertino_menubar::item::{ItemId, MenuItem, Shortcut, Toggle};
 use cupertino_menubar::layout::{BarContent, MonoMeasure, SlotKey, StatusEntry};
@@ -963,4 +965,135 @@ fn without_a_help_menu_the_help_search_shortcut_does_nothing() {
     let mut c = controller();
     assert!(!c.focus_help_search(false).consumed);
     assert_eq!(c.mode(), Mode::Idle);
+}
+
+fn window() -> SlotKey {
+    SlotKey::Menu(WINDOW_MENU)
+}
+
+/// The bar's Window menu with an exporter's item below its own.
+fn with_window() -> MenuController {
+    let mut content = content();
+    let mut menu = fallback::window_menu(1, Some(1), true, &[], &Chords::default());
+    menu.children
+        .push(MenuItem::new(90, "Split View").exported());
+    content.menus.push(menu);
+    let mut c = controller();
+    c.set_content(content);
+    let p = slot_center(&c, &window());
+    c.pointer_press(p, 0.0);
+    c.pointer_release(p, 0.05);
+    c
+}
+
+fn row_labels(c: &MenuController) -> Vec<String> {
+    c.levels()[0]
+        .layout
+        .rows
+        .iter()
+        .filter(|r| !r.item.separator)
+        .map(|r| r.item.label.clone())
+        .collect()
+}
+
+#[test]
+fn alt_shows_the_alternates_of_the_open_menu_until_it_goes_up() {
+    let mut c = with_window();
+    let id = |a: FallbackAction| a.item_id().0;
+    c.pointer_move(row_center(&c, 0, id(FallbackAction::Minimize)), 0.2);
+    let width = c.levels()[0].layout.rect;
+    let o = c.set_alt(true);
+    assert!(has(&o, &Effect::Redraw));
+    assert_eq!(
+        row_labels(&c),
+        [
+            "Minimize All",
+            "Zoom All",
+            "Tile Window",
+            "Arrange in Front",
+            "Close All",
+            "Split View"
+        ]
+    );
+    assert_eq!(
+        row_ids(&c)[..2],
+        [id(FallbackAction::MinimizeAll), id(FallbackAction::ZoomAll)]
+    );
+    assert!(row_ids(&c).contains(&id(FallbackAction::CascadeAll)));
+    assert!(row_ids(&c).contains(&90), "an exporter's item stays");
+    assert_eq!(
+        selected_id(&c, 0),
+        Some(id(FallbackAction::MinimizeAll)),
+        "the highlight stays on the row"
+    );
+    assert_eq!(c.levels()[0].layout.rect, width, "the menu keeps its size");
+    assert!(c.set_alt(true).effects.is_empty(), "nothing changed");
+    c.set_alt(false);
+    assert_eq!(
+        row_labels(&c),
+        [
+            "Minimize",
+            "Zoom",
+            "Tile Window",
+            "Bring All to Front",
+            "Close Window",
+            "Split View"
+        ]
+    );
+    assert_eq!(selected_id(&c, 0), Some(id(FallbackAction::Minimize)));
+    assert_eq!(c.levels()[0].layout.rect, width);
+}
+
+#[test]
+fn a_menu_opened_with_alt_held_shows_the_alternates_and_closed_menus_are_not_redrawn() {
+    let mut c = controller();
+    let mut content = content();
+    content.menus.push(fallback::window_menu(
+        1,
+        Some(1),
+        true,
+        &[],
+        &Chords::default(),
+    ));
+    c.set_content(content);
+    assert!(c.set_alt(true).effects.is_empty());
+    let p = slot_center(&c, &window());
+    c.pointer_press(p, 0.0);
+    assert_eq!(row_labels(&c)[0], "Minimize All");
+}
+
+#[test]
+fn activation_chooses_what_the_row_shows_at_that_moment() {
+    let id = |a: FallbackAction| a.item_id().0;
+    let activate = |a: FallbackAction| Effect::Activate {
+        slot: window(),
+        item: a.item_id(),
+    };
+    for (alt, chosen) in [
+        (false, FallbackAction::CloseWindow),
+        (true, FallbackAction::CloseAll),
+    ] {
+        let mut c = with_window();
+        c.set_alt(alt);
+        let row = row_center(&c, 0, id(chosen));
+        c.pointer_move(row, 0.2);
+        c.pointer_press(row, 0.3);
+        assert!(has(&c.pointer_release(row, 0.35), &activate(chosen)));
+    }
+    let mut c = with_window();
+    c.key(Key::Down, 0.2);
+    assert_eq!(selected_id(&c, 0), Some(id(FallbackAction::Minimize)));
+    c.set_alt(true);
+    assert!(has(
+        &c.key(Key::Enter, 0.3),
+        &activate(FallbackAction::MinimizeAll)
+    ));
+    let mut c = with_window();
+    c.set_alt(true);
+    c.key(Key::Down, 0.2);
+    c.set_alt(false);
+    assert!(has(
+        &c.key(Key::Enter, 0.3),
+        &activate(FallbackAction::Minimize)
+    ));
 }

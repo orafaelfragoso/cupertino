@@ -18,6 +18,7 @@ pub struct Node {
 #[derive(Default)]
 pub struct TestTree {
     pub nodes: Vec<Node>,
+    pub leaf_measures: std::cell::Cell<usize>,
 }
 
 impl LayoutTree for TestTree {
@@ -36,6 +37,7 @@ impl LayoutTree for TestTree {
     }
 
     fn measure_leaf(&self, id: usize, c: Constraints) -> Measured {
+        self.leaf_measures.set(self.leaf_measures.get() + 1);
         let node = &self.nodes[id];
         let size = match node.area {
             Some(area) => {

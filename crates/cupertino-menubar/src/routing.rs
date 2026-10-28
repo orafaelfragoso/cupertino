@@ -299,6 +299,7 @@ mod tests {
                 menu: Some(menu),
                 window_state: None,
                 engage: false,
+                engage_help: false,
                 screen_capture: None,
                 session_agent: None,
                 windows: None,

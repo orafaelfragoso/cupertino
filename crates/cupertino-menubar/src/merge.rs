@@ -16,7 +16,7 @@
 //! activated item is routed by its [`crate::item::Origin`], which the readers set, never by its id.
 
 use crate::fallback::{self, FallbackAction};
-use crate::item::{split_mnemonic, ItemId, MenuItem, Shortcut, ShortcutModifier};
+use crate::item::{key_char, split_mnemonic, ItemId, MenuItem, Shortcut, ShortcutModifier};
 use cupertino_keyboard::rewrite::{
     is_printable, pressed_for, ClientClass, KeyPress, SYM_KP_ENTER, SYM_RETURN,
 };
@@ -382,33 +382,6 @@ pub fn client_class(app_id: &str) -> ClientClass {
     } else {
         ClientClass::Other
     }
-}
-
-/// The character a keysym name types, for the punctuation names chords use.
-fn key_char(name: &str) -> Option<char> {
-    let mut chars = name.chars();
-    if let (Some(c), None) = (chars.next(), chars.next()) {
-        return Some(c);
-    }
-    Some(match name {
-        "comma" => ',',
-        "period" => '.',
-        "slash" => '/',
-        "backslash" => '\\',
-        "semicolon" => ';',
-        "colon" => ':',
-        "apostrophe" => '\'',
-        "quotedbl" => '"',
-        "grave" => '`',
-        "minus" => '-',
-        "equal" => '=',
-        "plus" => '+',
-        "bracketleft" => '[',
-        "bracketright" => ']',
-        "question" => '?',
-        "exclam" => '!',
-        _ => return None,
-    })
 }
 
 /// The shortcut a GMenuModel accelerator of a `class` client shows: the keys the person presses under the profile

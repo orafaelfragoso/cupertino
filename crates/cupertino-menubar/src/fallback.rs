@@ -65,6 +65,8 @@ const TILE_MENU: i32 = -1018;
 const FILE_CLOSE_WINDOW: i32 = -1019;
 /// The search field, the first row of the Help menu.
 pub const HELP_SEARCH: ItemId = ItemId(-1030);
+/// The label of the search row, which its empty field shows dimmed.
+pub const SEARCH_PLACEHOLDER: &str = "Search";
 /// The row the Help menu shows when a search finds nothing.
 pub const NO_SEARCH_RESULTS: ItemId = ItemId(-1031);
 /// Result `n` of a Help search is `SEARCH_RESULTS_BASE - n`.
@@ -183,6 +185,8 @@ pub struct Chords {
     pub bound: HashMap<FallbackAction, Shortcut>,
     /// The chord the server binds to the action of a row of the system menu; a row without one shows none.
     pub system: HashMap<SystemRow, Shortcut>,
+    /// The chord the server binds to the Help search shortcut, shown on the search row; none while it sent none.
+    pub help_search: Option<Shortcut>,
     /// What the primary modifier of the app's convention chords is shown as: [`ShortcutModifier::Primary`] when
     /// Super is the command key, [`ShortcutModifier::Ctrl`] when Ctrl is.
     pub primary: ShortcutModifier,
@@ -193,6 +197,7 @@ impl Default for Chords {
         Self {
             bound: HashMap::new(),
             system: HashMap::new(),
+            help_search: None,
             primary: ShortcutModifier::Primary,
         }
     }
@@ -385,7 +390,10 @@ pub fn menus(
         MenuItem::submenu(
             HELP_MENU.0,
             "Help",
-            vec![MenuItem::new(HELP_SEARCH.0, "Search").disabled()],
+            vec![MenuItem {
+                shortcut: chords.help_search.clone(),
+                ..MenuItem::new(HELP_SEARCH.0, SEARCH_PLACEHOLDER).disabled()
+            }],
         ),
     ]
 }

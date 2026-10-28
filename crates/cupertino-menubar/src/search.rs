@@ -1,12 +1,15 @@
 //! The Help menu's search: which items of the bar match the text of its field, and the Help menu that shows them.
 //!
 //! The search runs over the enabled leaf items of the system menu, the App menu and the application's menus as the bar
-//! shows them (merged), never over the Help menu itself. A label matches when it holds the text, case ignored; the
-//! labels that start with it come first, then menu order, and at most [`MAX_SEARCH_RESULTS`] show. Each result keeps
-//! the slot of the menu it is in and its id, so activating it is activating the item itself, routed by its origin.
+//! shows them (merged), the Help menu's own items included; only the bar's search row and result rows are left out. An
+//! item matches when its label holds the text, case ignored, or the title of a submenu on its way does ("Export" finds
+//! "File ▸ Export ▸ PDF"). Labels that start with the text come first, then labels that hold it, then the items found
+//! by their submenu alone, each group in menu order, and at most [`MAX_SEARCH_RESULTS`] show. Each result keeps the
+//! slot of the menu it is in, its id and its check or radio state, so activating it is activating the item itself,
+//! routed by its origin.
 
-use crate::fallback::{self, HELP_MENU, HELP_SEARCH, MAX_SEARCH_RESULTS, NO_SEARCH_RESULTS};
-use crate::item::{ItemId, MenuItem, Shortcut};
+use crate::fallback::{self, HELP_SEARCH, MAX_SEARCH_RESULTS, NO_SEARCH_RESULTS};
+use crate::item::{ItemId, MenuItem, Origin, Shortcut, Toggle};
 use crate::layout::{BarContent, SlotKey};
 
 /// What a result's path calls the system menu, whose title is a mark.
@@ -24,9 +27,20 @@ pub struct Match {
     /// The titles of the menus that lead to the item ("File ▸ Export").
     pub path: String,
     pub shortcut: Option<Shortcut>,
+    /// The item's check or radio state.
+    pub toggle: Toggle,
 }
 
-/// The items of `content` whose label holds `text`, case ignored; none for a blank text.
+/// How well an item matches, best first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Rank {
+    LabelStarts,
+    LabelHolds,
+    SubmenuHolds,
+}
+
+/// The items of `content` whose label, or the title of a submenu on whose way they are, holds `text`, case ignored;
+/// none for a blank text.
 pub fn search(content: &BarContent, text: &str) -> Vec<Match> {
     let needle = text.trim().to_lowercase();
     if needle.is_empty() {
@@ -34,37 +48,82 @@ pub fn search(content: &BarContent, text: &str) -> Vec<Match> {
     }
     let mut hits = Vec::new();
     let mut collect = |slot: SlotKey, title: &str, items: &[MenuItem]| {
-        walk(items, &slot, title, &needle, &mut hits)
+        let walk = Walk {
+            slot: &slot,
+            needle: &needle,
+        };
+        walk.items(items, title, false, &mut hits)
     };
     collect(SlotKey::System, SYSTEM_MENU_TITLE, &content.system_menu);
     collect(SlotKey::AppMenu, &content.app_name, &content.app_menu);
-    for menu in content.menus.iter().filter(|m| m.id != HELP_MENU) {
+    for menu in &content.menus {
         collect(SlotKey::Menu(menu.id), &menu.label, &menu.children);
     }
     // a stable sort keeps the menu order within each group
-    hits.sort_by_key(|hit| !hit.label.to_lowercase().starts_with(&needle));
-    hits.truncate(MAX_SEARCH_RESULTS);
-    hits
+    hits.sort_by_key(|(rank, _)| *rank);
+    hits.into_iter()
+        .map(|(_, hit)| hit)
+        .take(MAX_SEARCH_RESULTS)
+        .collect()
 }
 
-fn walk(items: &[MenuItem], slot: &SlotKey, path: &str, needle: &str, hits: &mut Vec<Match>) {
-    for item in items
-        .iter()
-        .filter(|i| i.visible && i.enabled && !i.separator)
-    {
-        if item.has_submenu {
-            let path = format!("{path}{PATH_SEPARATOR}{}", item.label);
-            walk(&item.children, slot, &path, needle, hits);
-        } else if item.label.to_lowercase().contains(needle) {
-            hits.push(Match {
-                slot: slot.clone(),
-                item: item.id,
-                label: item.label.clone(),
-                path: path.to_owned(),
-                shortcut: item.shortcut.clone(),
-            });
+/// The search through the menu of one slot.
+struct Walk<'a> {
+    slot: &'a SlotKey,
+    needle: &'a str,
+}
+
+impl Walk<'_> {
+    /// Collect the matches among `items`, whose menu titles lead along `path`; `in_found_submenu`: a submenu on the
+    /// way matches the text.
+    fn items(
+        &self,
+        items: &[MenuItem],
+        path: &str,
+        in_found_submenu: bool,
+        hits: &mut Vec<(Rank, Match)>,
+    ) {
+        for item in items
+            .iter()
+            .filter(|i| i.visible && i.enabled && !i.separator && !is_search_row(i))
+        {
+            let label = item.label.to_lowercase();
+            if item.has_submenu {
+                let path = format!("{path}{PATH_SEPARATOR}{}", item.label);
+                let found = in_found_submenu || label.contains(self.needle);
+                self.items(&item.children, &path, found, hits);
+                continue;
+            }
+            let rank = if label.starts_with(self.needle) {
+                Rank::LabelStarts
+            } else if label.contains(self.needle) {
+                Rank::LabelHolds
+            } else if in_found_submenu {
+                Rank::SubmenuHolds
+            } else {
+                continue;
+            };
+            hits.push((
+                rank,
+                Match {
+                    slot: self.slot.clone(),
+                    item: item.id,
+                    label: item.label.clone(),
+                    path: path.to_owned(),
+                    shortcut: item.shortcut.clone(),
+                    toggle: item.toggle,
+                },
+            ));
         }
     }
+}
+
+/// The bar's own rows of the Help search: the field, the "No Results" row and the result rows.
+fn is_search_row(item: &MenuItem) -> bool {
+    item.origin == Origin::Bar
+        && (item.id == HELP_SEARCH
+            || item.id == NO_SEARCH_RESULTS
+            || fallback::search_result_row(item.id).is_some())
 }
 
 /// The Help menu `help` with the results of a search for `text` below its field: a row per hit, or a disabled "No
@@ -84,6 +143,7 @@ pub fn help_menu(help: &MenuItem, text: &str, hits: &[Match]) -> MenuItem {
             .enumerate()
             .map(|(n, hit)| MenuItem {
                 shortcut: hit.shortcut.clone(),
+                toggle: hit.toggle,
                 detail: Some(hit.path.clone()),
                 ..MenuItem::new(fallback::search_result(n).0, &hit.label)
             })
@@ -96,7 +156,7 @@ pub fn help_menu(help: &MenuItem, text: &str, hits: &[Match]) -> MenuItem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::item::Origin;
+    use crate::fallback::HELP_MENU;
 
     fn content() -> BarContent {
         BarContent {
@@ -161,10 +221,14 @@ mod tests {
     }
 
     #[test]
-    fn matches_come_from_the_system_menu_the_app_menu_and_the_apps_menus_but_not_help() {
+    fn matches_come_from_the_system_menu_the_app_menu_and_every_menu_of_the_app_help_included() {
         assert_eq!(
             found("settings"),
-            [(SlotKey::System, -4001), (SlotKey::Menu(ItemId(10)), 11)]
+            [
+                (SlotKey::System, -4001),
+                (SlotKey::Menu(ItemId(10)), 11),
+                (SlotKey::Menu(HELP_MENU), 61)
+            ]
         );
         assert_eq!(
             found("about"),
@@ -199,10 +263,78 @@ mod tests {
         // "Save As…" is disabled, "Export" and "Recent" are submenus (the second disabled, so its rows are out of reach),
         // "Hidden Settings" is hidden
         assert_eq!(found("save"), [(SlotKey::Menu(ItemId(1)), 2)]);
-        assert!(found("export").is_empty());
+        assert!(!found("export").contains(&(SlotKey::Menu(ItemId(1)), 5)));
         assert!(found("notes").is_empty() && found("recent").is_empty());
         assert!(found("hidden").is_empty());
         assert!(!found("settings").contains(&(SlotKey::AppMenu, -1005)));
+    }
+
+    #[test]
+    fn a_submenu_title_finds_its_items_after_the_labels_that_hold_the_text() {
+        let file = SlotKey::Menu(ItemId(1));
+        assert_eq!(found("export"), [(file.clone(), 6), (file.clone(), 7)]);
+        let mut c = content();
+        c.menus[1]
+            .children
+            .push(MenuItem::new(13, "Export Selection"));
+        c.menus[1].children.push(MenuItem::new(14, "Quick Export"));
+        let hits: Vec<(SlotKey, i32)> = search(&c, "export")
+            .into_iter()
+            .map(|h| (h.slot, h.item.0))
+            .collect();
+        let view = SlotKey::Menu(ItemId(10));
+        assert_eq!(
+            hits,
+            [(view.clone(), 13), (view, 14), (file.clone(), 6), (file, 7)],
+            "label starts, label holds, then the submenu's items"
+        );
+        assert!(
+            found("file").is_empty(),
+            "a menu title of the bar is no submenu on the way"
+        );
+    }
+
+    #[test]
+    fn a_result_keeps_the_check_or_radio_state_of_its_item() {
+        let mut c = content();
+        c.menus[1].children[0].toggle = Toggle::Check(true);
+        c.menus[0].children[3].children[1].toggle = Toggle::Radio(true);
+        let hits = search(&c, "settings panel");
+        let help = help_menu(&c.menus[2], "settings panel", &hits);
+        assert_eq!(help.children[1].toggle, Toggle::Check(true));
+        let hits = search(&c, "image");
+        let help = help_menu(&c.menus[2], "image", &hits);
+        assert_eq!(help.children[1].toggle, Toggle::Radio(true));
+        let hits = search(&c, "pdf");
+        assert_eq!(
+            help_menu(&c.menus[2], "pdf", &hits).children[1].toggle,
+            Toggle::None
+        );
+    }
+
+    #[test]
+    fn the_bars_search_rows_are_never_results_but_the_help_menus_items_are() {
+        let mut c = content();
+        // the field, the "No Results" row and the result rows, even enabled and labelled like an item
+        c.menus[2].children.extend([
+            MenuItem::new(NO_SEARCH_RESULTS.0, "Guide"),
+            MenuItem::new(fallback::search_result(0).0, "Guide"),
+        ]);
+        c.menus[2].children[0].enabled = true;
+        c.menus[2].children[0].label = "Guide".into();
+        // an application's own Help item, and an item of the bar's Help menu
+        c.menus[2]
+            .children
+            .push(MenuItem::new(62, "User Guide").exported());
+        c.menus[2].children.push(MenuItem::new(-1200, "Guide Tour"));
+        let help = SlotKey::Menu(HELP_MENU);
+        assert_eq!(
+            search(&c, "guide")
+                .into_iter()
+                .map(|h| (h.slot, h.item.0))
+                .collect::<Vec<_>>(),
+            [(help.clone(), -1200), (help.clone(), 61), (help, 62)]
+        );
     }
 
     #[test]

@@ -366,6 +366,9 @@ fn chords(shortcuts: &Shortcuts) -> Chords {
     Chords {
         bound: parsed(shortcuts, fallback_action),
         system: parsed(shortcuts, system_row),
+        help_search: shortcuts
+            .chord(BoundAction::HelpSearch)
+            .and_then(Shortcut::from_chord),
         primary: match shortcuts.primary {
             PrimaryModifier::Super => ShortcutModifier::Primary,
             PrimaryModifier::Ctrl => ShortcutModifier::Ctrl,
@@ -398,7 +401,10 @@ fn fallback_action(action: BoundAction) -> Option<FallbackAction> {
         BoundAction::TileLeft => FallbackAction::TileLeft,
         BoundAction::TileRight => FallbackAction::TileRight,
         BoundAction::TileFill => FallbackAction::TileFill,
-        BoundAction::ForceQuit | BoundAction::Lock | BoundAction::LogOut => return None,
+        BoundAction::ForceQuit
+        | BoundAction::Lock
+        | BoundAction::LogOut
+        | BoundAction::HelpSearch => return None,
     })
 }
 
@@ -428,6 +434,7 @@ mod tests {
     use super::*;
     use crate::dbus::sni::{IconPixmap, ItemStatus};
     use crate::extras::{BatteryState, WifiState};
+    use crate::fallback::{HELP_MENU, HELP_SEARCH, SEARCH_PLACEHOLDER};
     use cupertino_shell_client::ActiveApp;
 
     fn editor() -> AppName {
@@ -446,6 +453,7 @@ mod tests {
             menu,
             window_state: None,
             engage: false,
+            engage_help: false,
             screen_capture: None,
             session_agent: None,
             windows: None,
@@ -822,6 +830,37 @@ mod tests {
         let content = feed.content(&shared);
         assert_eq!(quit(&content).as_deref(), Some("Ctrl+q"));
         assert_eq!(settings(&content).as_deref(), Some("Ctrl+,"));
+    }
+
+    #[test]
+    fn the_search_row_shows_the_help_search_chord_and_its_placeholder() {
+        let (mut feed, mut shared) = ready(Some(WindowMenu::None));
+        let search_row = |feed: &BarFeed, shared: &Shared| {
+            let content = feed.content(shared);
+            let help = content.menus.iter().find(|m| m.id == HELP_MENU).cloned();
+            help.and_then(|h| h.children.into_iter().find(|i| i.id == HELP_SEARCH))
+                .unwrap()
+        };
+        let row = search_row(&feed, &shared);
+        assert_eq!(row.label, SEARCH_PLACEHOLDER);
+        assert!(!row.enabled, "the placeholder is drawn dimmed");
+        assert_eq!(row.shortcut, None, "nothing sent yet");
+        feed.apply(
+            &MenuBarUpdate {
+                shortcuts: Some(Shortcuts {
+                    chords: [(BoundAction::HelpSearch, "Shift+Super+slash".to_string())]
+                        .into_iter()
+                        .collect(),
+                    primary: PrimaryModifier::Super,
+                }),
+                ..MenuBarUpdate::default()
+            },
+            &mut shared,
+            |_| unreachable!("the application did not change"),
+        );
+        let chord = search_row(&feed, &shared).shortcut.unwrap();
+        assert_eq!(chord.display(), "Shift+Super+slash");
+        assert_eq!(chord.glyphs().key, "/");
     }
 
     #[test]

@@ -172,14 +172,13 @@ pub struct PaintNode {
     pub revision: PaintRevision,
     /// Applies to `clip` and `ops`, which are in the node's own coordinates.
     pub transform: Transform,
-    /// Clips this node's ops and every descendant's; descendants intersect it with their own.
+    /// The clip this node puts on its descendants, in node coordinates; the node's own ops are not cut by it.
     pub clip: Option<Shape>,
-    /// Paints this node and its subtree into one layer, composited once, under `clip`.
+    /// Paints this node and its subtree into one layer, composited once, under the ancestors' clips.
     pub group: Option<Group>,
-    /// Everything this node's own operations may touch, effects included, in window points with `transform` applied.
+    /// Everything the node and its descendants may touch, effects included, in window points. The renderer skips a
+    /// subtree that misses the damage and sizes a group's layer from it; it works out the node's own extent itself.
     pub bounds: Rect,
-    /// Everything the node and its descendants may touch, `group` effects included, in window points.
-    pub subtree_bounds: Rect,
     /// Where the node takes pointer input, in window points; never its shadow or focus ring.
     pub hit: Rect,
     pub ops: Vec<PaintOp>,

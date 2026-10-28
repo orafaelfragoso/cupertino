@@ -48,12 +48,7 @@ fn node_ok(node: &PaintNode, resources: &PaintResources) -> Result<(), RenderErr
             Err(RenderError::NonFiniteValue(id))
         }
     };
-    finite(
-        transform_ok(&node.transform)
-            && rect_ok(&node.bounds)
-            && rect_ok(&node.subtree_bounds)
-            && rect_ok(&node.hit),
-    )?;
+    finite(transform_ok(&node.transform) && rect_ok(&node.bounds) && rect_ok(&node.hit))?;
     if let Some(group) = &node.group {
         finite(
             group.opacity.is_finite()

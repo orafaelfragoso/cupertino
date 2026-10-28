@@ -202,3 +202,46 @@ pub(crate) fn clip_bounds(shape: &Shape, node: &Transform, scale: f64) -> Bounds
         y1: b.bottom().ceil() as i32 + 1,
     }
 }
+
+/// The pixels a node's own operations can reach, before effects; empty for a node with no ops that paint.
+pub(crate) fn own_extent(node: &crate::PaintNode, scale: f64) -> Bounds {
+    use crate::PaintOp;
+    let none = Bounds {
+        x0: 0,
+        y0: 0,
+        x1: 0,
+        y1: 0,
+    };
+    let [a, b, c, d, e, f] = node.transform.0;
+    let stretch = a.abs().max(b.abs()).max(c.abs()).max(d.abs());
+    let mut extent: Option<Bounds> = None;
+    let mut add = |bounds: Bounds| {
+        extent = Some(extent.map_or(bounds, |old| old.union(&bounds)));
+    };
+    for op in &node.ops {
+        match op {
+            PaintOp::Fill { shape, .. } => add(clip_bounds(shape, &node.transform, scale)),
+            PaintOp::Stroke { shape, width, .. } => add(clip_bounds(shape, &node.transform, scale)
+                .outset((width * scale * stretch / 2.0).ceil() as i32)),
+            PaintOp::Image { dst, .. } => {
+                add(clip_bounds(&Shape::Rect(*dst), &node.transform, scale))
+            }
+            PaintOp::Glyphs { origin, run, .. } => {
+                let em = (f64::from(run.size) * scale * stretch).ceil() as i32;
+                for g in &run.glyphs {
+                    let (lx, ly) = (origin.x + f64::from(g.x), origin.y + f64::from(g.y));
+                    let px = ((a * lx + c * ly + e) * scale).floor() as i32;
+                    let py = ((b * lx + d * ly + f) * scale).floor() as i32;
+                    add(Bounds {
+                        x0: px - em,
+                        y0: py - 2 * em,
+                        x1: px + 2 * em,
+                        y1: py + em,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    extent.unwrap_or(none)
+}

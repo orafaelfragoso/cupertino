@@ -582,6 +582,10 @@ enum Cmd {
     SetAddresses(Vec<(String, &'static str)>),
     /// Announce the GTK menus of an application window on the bus name.
     SetGtkAddress(String),
+    /// Announce only a GTK application menu of an application window on the bus name.
+    SetGtkAppMenu(String),
+    /// Clear the GTK menu properties of an application window.
+    ClearGtkAddress,
     /// Make this many surfaces, each announcing a KDE application menu address on the bus name, in one flush.
     AnnounceMany(String, usize),
     /// Map a second toplevel of the same application client.
@@ -780,6 +784,8 @@ impl BarClient {
                 Cmd::SetAddress(..)
                 | Cmd::SetAddresses(_)
                 | Cmd::SetGtkAddress(_)
+                | Cmd::SetGtkAppMenu(_)
+                | Cmd::ClearGtkAddress
                 | Cmd::AnnounceMany(..)
                 | Cmd::OpenSecondWindow
                 | Cmd::SetSecondAddress(..)
@@ -1037,6 +1043,17 @@ impl AppClient {
                     Some("/org/example".into()),
                     Some(bus_name),
                 ),
+                Cmd::SetGtkAppMenu(bus_name) => gtk_surface.set_dbus_properties(
+                    Some(app_id.to_string()),
+                    Some("/org/example/menus/appmenu".into()),
+                    None,
+                    Some("/org/example/window/1".into()),
+                    Some("/org/example".into()),
+                    Some(bus_name),
+                ),
+                Cmd::ClearGtkAddress => {
+                    gtk_surface.set_dbus_properties(None, None, None, None, None, None)
+                }
                 Cmd::OpenSecondWindow => {
                     let surface = compositor.create_surface(&qh, ());
                     let window = OtherWindow {
@@ -1816,34 +1833,58 @@ fn full_screen_hides_the_bar_and_an_open_menu_or_the_top_edge_reveals_it() {
     assert_eq!(visible(&h, t + 2.0), 1.0, "revealed by the edge dwell");
 }
 
-/// A private session bus (`dbus-daemon --session`), killed on drop.
+/// A private session bus (`dbus-daemon --session`), a child of the test that is killed on drop and dies with the test's
+/// thread if the test is killed first.
 struct PrivateBus {
     address: String,
-    pid: String,
+    daemon: std::process::Child,
 }
 
 impl PrivateBus {
     /// `None` when `dbus-daemon` is not installed.
     fn start() -> Option<PrivateBus> {
-        let out = std::process::Command::new("dbus-daemon")
-            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
+        use std::os::unix::process::CommandExt;
+        let mut command = std::process::Command::new("dbus-daemon");
+        command
+            .args(["--session", "--nofork", "--print-address=1"])
             .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output()
-            .ok()?;
-        assert!(out.status.success(), "dbus-daemon failed: {}", out.status);
-        let text = String::from_utf8(out.stdout).unwrap();
-        let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-        Some(PrivateBus {
-            address: lines.next().unwrap().to_string(),
-            pid: lines.next().unwrap().to_string(),
-        })
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        // Safety: the closure runs in the child between fork and exec and calls only prctl, which is
+        // async-signal-safe.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut daemon = command.spawn().ok()?;
+        let stdout = daemon.stdout.take().expect("piped stdout");
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let _ = std::io::BufRead::read_line(&mut std::io::BufReader::new(stdout), &mut line);
+            let _ = tx.send(line);
+        });
+        let address = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("dbus-daemon printed no address within 5 s");
+        let address = address.trim().to_owned();
+        assert!(!address.is_empty(), "dbus-daemon exited before it listened");
+        Some(PrivateBus { address, daemon })
+    }
+
+    fn pid(&self) -> String {
+        self.daemon.id().to_string()
     }
 }
 
 impl Drop for PrivateBus {
     fn drop(&mut self) {
-        let _ = std::process::Command::new("kill").arg(&self.pid).status();
+        let _ = self.daemon.kill();
+        let _ = self.daemon.wait();
     }
 }
 
@@ -2084,36 +2125,53 @@ fn dbusmenu(service: &str, path: &str) -> BarEvent {
     }
 }
 
-/// The client and the owner of the name are one process: the bar is told the GTK menus on that name, and the KDE
-/// address too.
+fn gtk_menus(bus_name: &str, menubar: &str, app_menu: &str) -> BarEvent {
+    BarEvent::MenuGtk([
+        bus_name.into(),
+        "org.example.editor".into(),
+        "/org/example".into(),
+        "/org/example/window/1".into(),
+        menubar.into(),
+        app_menu.into(),
+    ])
+}
+
+/// The client and the owner of the name are one process: the bar is told the menus on that name. A window that
+/// announces both, GTK and KDE, gives the bar the GTK menus whatever the order, and the KDE ones once the GTK ones are
+/// withdrawn.
 #[test]
-fn a_window_announcing_its_own_unique_name_gets_its_menus() {
+fn a_window_announcing_its_own_unique_name_gets_its_menus_gtk_first() {
     let Some(mut h) = Harness::new() else { return };
     let Some((_bus, own)) = menu_bus(&mut h) else {
         return;
     };
     let own = own.unique_name().unwrap().to_string();
     let (bar, app, title) = menu_app(&mut h);
+    let gtk = Some((
+        title.clone(),
+        gtk_menus(&own, "/org/example/menus/menubar", ""),
+    ));
 
-    h.announce(&app, &bar, Cmd::SetGtkAddress(own.clone()));
-    assert_eq!(
-        latest_title_and_menu(&bar),
-        Some((
-            title.clone(),
-            BarEvent::MenuGtk([
-                own.clone(),
-                "org.example.editor".into(),
-                "/org/example".into(),
-                "/org/example/window/1".into(),
-                "/org/example/menus/menubar".into(),
-                String::new(),
-            ])
-        ))
-    );
     h.announce(&app, &bar, Cmd::SetAddress(own.clone(), "/MenuBar/1"));
     assert_eq!(
         latest_title_and_menu(&bar),
-        Some((title, dbusmenu(&own, "/MenuBar/1")))
+        Some((title.clone(), dbusmenu(&own, "/MenuBar/1")))
+    );
+    h.announce(&app, &bar, Cmd::SetGtkAddress(own.clone()));
+    assert_eq!(latest_title_and_menu(&bar), gtk, "KDE, then GTK");
+    h.announce(&app, &bar, Cmd::SetAddress(own.clone(), "/MenuBar/2"));
+    assert_eq!(latest_title_and_menu(&bar), gtk, "GTK, then KDE");
+    h.announce(&app, &bar, Cmd::ClearGtkAddress);
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((title.clone(), dbusmenu(&own, "/MenuBar/2"))),
+        "GTK withdrawn"
+    );
+    h.announce(&app, &bar, Cmd::SetGtkAppMenu(own.clone()));
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((title, gtk_menus(&own, "", "/org/example/menus/appmenu"))),
+        "an application menu alone is announced"
     );
 }
 
@@ -2359,7 +2417,7 @@ struct Stopped<'a>(&'a PrivateBus);
 impl<'a> Stopped<'a> {
     fn new(bus: &'a PrivateBus) -> Self {
         let stopped = std::process::Command::new("kill")
-            .args(["-STOP", &bus.pid])
+            .args(["-STOP", &bus.pid()])
             .status()
             .unwrap();
         assert!(stopped.success(), "stopping the private bus");
@@ -2370,7 +2428,7 @@ impl<'a> Stopped<'a> {
 impl Drop for Stopped<'_> {
     fn drop(&mut self) {
         let _ = std::process::Command::new("kill")
-            .args(["-CONT", &self.0.pid])
+            .args(["-CONT", &self.0.pid()])
             .status();
     }
 }

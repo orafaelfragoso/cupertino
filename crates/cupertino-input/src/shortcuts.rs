@@ -1,8 +1,12 @@
 //! Configurable shortcut map: key combinations → compositor [`Action`]s.
 //!
 //! Combination strings look like `Super+Tab`, `Ctrl+Alt+Left`, `Super+Shift+grave` or the GTK style
-//! `<Super>Tab`; the key is an xkbcommon keysym name (see [`crate::keysym`]). `Super` is the
-//! primary modifier (`Primary` and `Logo` are aliases).
+//! `<Super>Tab`; the key is an xkbcommon keysym name (see [`crate::keysym`]). The modifiers are the physical keys
+//! (`Logo`, `Win` and `Mod4` are other names of `Super`); `Primary` is the command key of the profile, which is Super
+//! under `cupertino` and Ctrl under `classic-pc`.
+//!
+//! A shortcut file may have sections, `[cupertino]` and `[classic-pc]`: the lines before the first section apply to
+//! both profiles, the lines of a section only to its profile.
 //!
 //! Matching is exact on the four modifiers (lock modifiers are not part of [`Modifiers`]).
 //! `ISO_Left_Tab` (what Shift+Tab produces) is folded into `Shift+Tab`, and ASCII letters are
@@ -12,6 +16,8 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
+
+use cupertino_modifiers::{Modifier, Physical, Profile};
 
 use crate::geom::Modifiers;
 use crate::keysym;
@@ -174,6 +180,7 @@ pub enum ParseError {
     UnknownAction(String),
     BadNumber(String),
     MissingSeparator(String),
+    UnknownSection(String),
 }
 
 impl fmt::Display for ParseError {
@@ -185,6 +192,7 @@ impl fmt::Display for ParseError {
             ParseError::MissingKey => write!(f, "no key in combination"),
             ParseError::UnknownAction(a) => write!(f, "unknown action `{a}`"),
             ParseError::BadNumber(n) => write!(f, "bad number `{n}`"),
+            ParseError::UnknownSection(s) => write!(f, "unknown section `[{s}]`"),
             ParseError::MissingSeparator(l) => {
                 write!(f, "expected `combination = action` in `{l}`")
             }
@@ -289,21 +297,35 @@ impl KeyCombo {
     }
 }
 
-fn modifier(name: &str, m: &mut Modifiers) -> bool {
-    match name.to_ascii_lowercase().as_str() {
-        "shift" => m.shift = true,
-        "ctrl" | "control" | "ctl" => m.ctrl = true,
-        "alt" | "option" | "opt" | "mod1" => m.alt = true,
-        "super" | "logo" | "win" | "windows" | "mod4" | "primary" => m.super_key = true,
+/// The names of the Super key in a combination.
+const SUPER_NAMES: [&str; 5] = ["super", "logo", "win", "windows", "mod4"];
+
+/// The physical key `Primary` stands for.
+type Primary = Physical;
+
+fn modifier(name: &str, m: &mut Modifiers, primary: Primary) -> bool {
+    let name = name.to_ascii_lowercase();
+    let key = match name.as_str() {
+        "shift" => Physical::Shift,
+        "ctrl" | "control" | "ctl" => Physical::Ctrl,
+        "alt" | "option" | "opt" | "mod1" => Physical::Alt,
+        "primary" => primary,
+        n if SUPER_NAMES.contains(&n) => Physical::Super,
         _ => return false,
+    };
+    match key {
+        Physical::Shift => m.shift = true,
+        Physical::Ctrl => m.ctrl = true,
+        Physical::Alt => m.alt = true,
+        Physical::Super => m.super_key = true,
+        Physical::Fn => return false,
     }
     true
 }
 
-impl FromStr for KeyCombo {
-    type Err = ParseError;
-
-    fn from_str(s: &str) -> Result<Self, ParseError> {
+impl KeyCombo {
+    /// Parse a combination whose `Primary` is the physical key `primary`.
+    pub fn parse_with(s: &str, primary: Physical) -> Result<KeyCombo, ParseError> {
         let mut rest = s.trim();
         if rest.is_empty() {
             return Err(ParseError::Empty);
@@ -313,7 +335,7 @@ impl FromStr for KeyCombo {
             let end = r
                 .find('>')
                 .ok_or_else(|| ParseError::UnknownModifier(rest.to_string()))?;
-            if !modifier(&r[..end], &mut mods) {
+            if !modifier(&r[..end], &mut mods, primary) {
                 return Err(ParseError::UnknownModifier(r[..end].to_string()));
             }
             rest = &r[end + 1..];
@@ -333,7 +355,7 @@ impl FromStr for KeyCombo {
             }
             let last = parts.pop().unwrap_or("");
             for p in parts {
-                if !modifier(p, &mut mods) {
+                if !modifier(p, &mut mods, primary) {
                     return Err(ParseError::UnknownModifier(p.to_string()));
                 }
             }
@@ -344,6 +366,15 @@ impl FromStr for KeyCombo {
             .ok_or(ParseError::MissingKey)?;
         let sym = keysym::from_name(key).ok_or_else(|| ParseError::UnknownKey(key.to_string()))?;
         Ok(KeyCombo::new(mods, sym))
+    }
+}
+
+impl FromStr for KeyCombo {
+    type Err = ParseError;
+
+    /// `Primary` is the Super key, as under `cupertino`.
+    fn from_str(s: &str) -> Result<Self, ParseError> {
+        KeyCombo::parse_with(s, Physical::Super)
     }
 }
 
@@ -365,6 +396,21 @@ impl fmt::Display for KeyCombo {
             None => write!(f, "0x{:x}", self.keysym),
         }
     }
+}
+
+/// What reading a shortcut file found.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConfigReport {
+    /// Lines that did not apply, with their 1-based line numbers.
+    pub errors: Vec<(usize, ParseError)>,
+    /// Lines outside every section that name Super, read for `classic-pc` (line number and text).
+    pub retargeted: Vec<(usize, String)>,
+}
+
+/// Whether the combination `lhs` names the Super key (and not `Primary`).
+fn names_super(lhs: &str) -> bool {
+    lhs.split(['+', '<', '>'])
+        .any(|part| SUPER_NAMES.contains(&part.trim().to_ascii_lowercase().as_str()))
 }
 
 #[derive(Clone, Debug, Default)]
@@ -422,36 +468,140 @@ impl ShortcutMap {
     }
 
     /// Parse `combination = action` lines; `#` starts a comment. Every line that parses is applied;
-    /// the errors of the others are returned with their 1-based line numbers.
+    /// the errors of the others are returned with their 1-based line numbers. `Primary` is Super, as under
+    /// `cupertino`, and sections are read for that profile ([`ShortcutMap::apply_config_for`]).
     pub fn apply_config(&mut self, text: &str) -> Vec<(usize, ParseError)> {
-        let mut errors = Vec::new();
+        self.apply_config_for(text, "cupertino").errors
+    }
+
+    /// [`ShortcutMap::apply_config`] for the profile named `profile`: `Primary` is its command key, the lines of a
+    /// `[section]` apply when it names the profile, and the lines before any section apply always. The report also
+    /// lists the lines outside every section that name Super, when the profile is `classic-pc`: they were written
+    /// when Super was the command key and now need the physical Super key.
+    pub fn apply_config_for(&mut self, text: &str, profile: &str) -> ConfigReport {
+        let primary = Profile::by_name(profile)
+            .map(|p| p.physical_for(Modifier::Primary))
+            .unwrap_or(Physical::Super);
+        let mut report = ConfigReport::default();
+        // `None` before the first section, then whether the current section is this profile's
+        let mut section: Option<bool> = None;
         for (i, raw) in text.lines().enumerate() {
             let line = raw.split('#').next().unwrap_or("").trim();
             if line.is_empty() {
                 continue;
             }
+            if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+                let name = name.trim();
+                section = Some(name == profile);
+                if Profile::by_name(name).is_none() {
+                    report
+                        .errors
+                        .push((i + 1, ParseError::UnknownSection(name.to_string())));
+                }
+                continue;
+            }
+            if section == Some(false) {
+                continue;
+            }
             let Some((lhs, rhs)) = line.split_once('=') else {
-                errors.push((i + 1, ParseError::MissingSeparator(line.to_string())));
+                report
+                    .errors
+                    .push((i + 1, ParseError::MissingSeparator(line.to_string())));
                 continue;
             };
             let rhs = rhs.trim();
+            let combo = KeyCombo::parse_with(lhs, primary);
+            if section.is_none() && profile == "classic-pc" && names_super(lhs) && combo.is_ok() {
+                report.retargeted.push((i + 1, line.to_string()));
+            }
             if rhs == "none" {
-                match lhs.parse::<KeyCombo>() {
+                match combo {
                     Ok(c) => {
                         self.unbind(c);
                     }
-                    Err(e) => errors.push((i + 1, e)),
+                    Err(e) => report.errors.push((i + 1, e)),
                 }
                 continue;
             }
-            match (lhs.parse::<KeyCombo>(), rhs.parse::<Action>()) {
+            match (combo, rhs.parse::<Action>()) {
                 (Ok(c), Ok(a)) => {
                     self.bind(c, a);
                 }
-                (Err(e), _) | (_, Err(e)) => errors.push((i + 1, e)),
+                (Err(e), _) | (_, Err(e)) => report.errors.push((i + 1, e)),
             }
         }
-        errors
+        report
+    }
+
+    /// The default map of the profile named `profile` (`cupertino` for a name no profile has).
+    pub fn defaults_for(profile: &str) -> Self {
+        match profile {
+            "classic-pc" => Self::classic_pc_defaults(),
+            _ => Self::defaults(),
+        }
+    }
+
+    /// The `classic-pc` map: the system follows Windows and Linux habits, and the chords of the applications (Ctrl+W,
+    /// Ctrl+Q, Ctrl+Tab, Ctrl+Space, Ctrl+Shift+arrows, F11) stay with them. The modifiers are the physical keys.
+    pub fn classic_pc_defaults() -> Self {
+        let mut m = Self::new();
+        let text = "\
+Alt+Tab = switch-app
+Alt+Shift+Tab = switch-app-reverse
+Super+grave = cycle-windows
+Super+Shift+grave = cycle-windows-reverse
+Alt+F4 = close-window
+Super+Down = minimize-window
+Super+h = hide-app
+Super+Home = hide-other-apps
+Super+q = quit-app
+Super+f = toggle-fullscreen
+Super+Left = tile-left
+Super+Right = tile-right
+Super+Up = tile-fill
+Super+Tab = overview
+Super+F10 = app-overview
+Super+d = show-desktop
+Super+a = app-grid
+Ctrl+Shift+Escape = force-quit
+Super+Page_Up = workspace-previous
+Super+Page_Down = workspace-next
+Super+Shift+Page_Up = move-window-to-workspace-previous
+Super+Shift+Page_Down = move-window-to-workspace-next
+Super+s = launcher
+Super+space = input-source-next
+Super+Shift+space = input-source-previous
+Super+F2 = focus-menu-bar
+Super+F3 = focus-dock
+Super+Alt+d = toggle-dock-auto-hide
+Super+l = lock
+Super+Shift+q = logout
+XF86PowerOff = power-key
+Ctrl+XF86PowerOff = power-dialog
+Ctrl+XF86Eject = power-dialog
+Ctrl+Alt+Delete = power-dialog
+Print = screenshot-toolbar
+Shift+Print = screenshot
+Super+Shift+s = screenshot-area
+Ctrl+Print = screenshot-clipboard
+Ctrl+Shift+Print = screenshot-area-clipboard
+";
+        m.apply_config(text);
+        for n in 1..=9u32 {
+            let sym = keysym::from_name(&n.to_string()).unwrap_or(0x30 + n);
+            m.bind(
+                KeyCombo::new(
+                    Modifiers {
+                        alt: true,
+                        super_key: true,
+                        ..Default::default()
+                    },
+                    sym,
+                ),
+                Action::Workspace(n),
+            );
+        }
+        m
     }
 
     /// The default map (approximate conventions, primary modifier = Super).
@@ -827,5 +977,153 @@ mod tests {
             "the power key"
         );
         assert!(m.bindings().count() >= 35);
+    }
+
+    fn combo(text: &str) -> KeyCombo {
+        text.parse().unwrap()
+    }
+
+    #[test]
+    fn primary_is_the_command_key_of_the_profile() {
+        let mut cupertino = ShortcutMap::new();
+        let mut classic = ShortcutMap::new();
+        let text = "Primary+j = launcher\nSuper+k = lock\n";
+        assert!(cupertino
+            .apply_config_for(text, "cupertino")
+            .errors
+            .is_empty());
+        assert!(classic
+            .apply_config_for(text, "classic-pc")
+            .errors
+            .is_empty());
+        assert_eq!(
+            cupertino.lookup(combo("Super+j").modifiers, combo("j").keysym),
+            Some(&Action::Launcher)
+        );
+        assert_eq!(
+            classic.lookup(combo("Ctrl+j").modifiers, combo("j").keysym),
+            Some(&Action::Launcher)
+        );
+        // Super is the Super key in both
+        assert_eq!(
+            cupertino.lookup(combo("Super+k").modifiers, combo("k").keysym),
+            Some(&Action::Lock)
+        );
+        assert_eq!(
+            classic.lookup(combo("Super+k").modifiers, combo("k").keysym),
+            Some(&Action::Lock)
+        );
+    }
+
+    #[test]
+    fn a_section_applies_to_its_profile_only_and_lines_before_any_section_to_both() {
+        let text =
+            "Super+a = launcher\n[cupertino]\nSuper+b = lock\n[classic-pc]\nSuper+c = lock\n";
+        for (profile, bound, unbound) in [("cupertino", "b", "c"), ("classic-pc", "c", "b")] {
+            let mut map = ShortcutMap::new();
+            let report = map.apply_config_for(text, profile);
+            assert!(report.errors.is_empty(), "{profile}: {:?}", report.errors);
+            let at = |k: &str| {
+                map.lookup(combo(&format!("Super+{k}")).modifiers, combo(k).keysym)
+                    .cloned()
+            };
+            assert_eq!(at("a"), Some(Action::Launcher), "{profile}");
+            assert_eq!(at(bound), Some(Action::Lock), "{profile}");
+            assert_eq!(at(unbound), None, "{profile}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_section_is_reported_and_its_lines_do_not_apply() {
+        let mut map = ShortcutMap::new();
+        let report = map.apply_config_for("[windows]\nSuper+a = launcher\n", "cupertino");
+        assert_eq!(
+            report.errors,
+            [(1, ParseError::UnknownSection("windows".into()))]
+        );
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn super_lines_outside_a_section_are_reported_as_retargeted_under_classic_pc_only() {
+        let text =
+            "Super+a = launcher\nPrimary+b = lock\nAlt+c = lock\n[classic-pc]\nSuper+d = lock\n";
+        let report = ShortcutMap::new().apply_config_for(text, "classic-pc");
+        assert_eq!(report.retargeted, [(1, "Super+a = launcher".to_string())]);
+        assert!(ShortcutMap::new()
+            .apply_config_for(text, "cupertino")
+            .retargeted
+            .is_empty());
+    }
+
+    /// The chords of applications that the system does not take under `classic-pc`.
+    const RESERVED: [&str; 9] = [
+        "Ctrl+w",
+        "Ctrl+q",
+        "Ctrl+Tab",
+        "Ctrl+space",
+        "Ctrl+Shift+Left",
+        "Ctrl+Shift+Right",
+        "Ctrl+Shift+Up",
+        "Ctrl+Shift+Down",
+        "F11",
+    ];
+
+    #[test]
+    fn the_classic_pc_table_never_takes_a_chord_of_the_applications() {
+        let map = ShortcutMap::classic_pc_defaults();
+        for chord in RESERVED {
+            let c = combo(chord);
+            assert_eq!(map.lookup(c.modifiers, c.keysym), None, "{chord}");
+        }
+        // AltGr is often typed as Ctrl+Alt: no Ctrl+Alt+character is taken
+        for (c, a) in map.bindings() {
+            let character = keysym::name_of(c.keysym).is_some_and(|n| n.chars().count() == 1);
+            assert!(
+                !(c.modifiers.ctrl && c.modifiers.alt && character),
+                "{c} = {a}"
+            );
+        }
+    }
+
+    #[test]
+    fn each_profile_binds_its_chords_once() {
+        for (profile, text_lines) in [
+            ("cupertino", ShortcutMap::defaults()),
+            ("classic-pc", ShortcutMap::classic_pc_defaults()),
+        ] {
+            let mut seen = std::collections::HashSet::new();
+            for (c, a) in text_lines.bindings() {
+                assert!(seen.insert(*c), "{profile}: {c} bound twice (last {a})");
+            }
+        }
+    }
+
+    #[test]
+    fn every_action_of_cupertino_has_a_chord_under_classic_pc() {
+        let classic = ShortcutMap::classic_pc_defaults();
+        let bound: Vec<&Action> = classic.bindings().map(|(_, a)| a).collect();
+        for (c, a) in ShortcutMap::defaults().bindings() {
+            assert!(
+                bound.contains(&a),
+                "{a} (cupertino {c}) has no chord under classic-pc"
+            );
+        }
+    }
+
+    #[test]
+    fn defaults_for_picks_the_table_of_the_profile() {
+        assert_eq!(
+            ShortcutMap::defaults_for("classic-pc").len(),
+            ShortcutMap::classic_pc_defaults().len()
+        );
+        assert_eq!(
+            ShortcutMap::defaults_for("cupertino").len(),
+            ShortcutMap::defaults().len()
+        );
+        assert_eq!(
+            ShortcutMap::defaults_for("nope").len(),
+            ShortcutMap::defaults().len()
+        );
     }
 }

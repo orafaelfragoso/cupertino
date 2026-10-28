@@ -249,6 +249,9 @@ impl Wm {
             }
             Command::HideOthers { app } => self.hide_others(app, now, o),
             Command::ShowAll => self.show_all(o),
+            Command::BringAllToFront { app, cascade } => {
+                self.bring_all_to_front(app, cascade, now, o)
+            }
             Command::SwitcherOpen { backward } => self.switcher_open(backward, now, o),
             Command::SwitcherStep { step, repeat } => self.switcher_step(step, repeat, now, o),
             Command::SwitcherSelect { index } => self.switcher_select(index, o),

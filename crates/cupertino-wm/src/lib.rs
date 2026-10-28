@@ -38,7 +38,7 @@ pub use config::{
     WorkspaceConfig, ZoomConfig,
 };
 pub use cupertino_effects::{TransformKind, WindowKind};
-pub use focus::{hidden_index, Switcher, SwitcherStep, SWITCHER_SHOW_DELAY};
+pub use focus::{hidden_index, Switcher, SwitcherStep, CASCADE_STEP, SWITCHER_SHOW_DELAY};
 pub use geometry::{Edges, Point, Rect, Size};
 pub use ids::{AppId, OutputId, WindowId, WorkspaceId};
 pub use interaction::PreviewPresentation;

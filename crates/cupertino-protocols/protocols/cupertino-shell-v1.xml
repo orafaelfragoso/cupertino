@@ -10,7 +10,7 @@
      ends: interfaces may change without a version bump until then.
   </description>
 
-  <interface name="cupertino_shell_v1" version="9">
+  <interface name="cupertino_shell_v1" version="10">
     <description summary="shell services of the server">
       Global singleton, offered only to the processes the server started for a shell role, on a
       connection of their own. Each request needs the role it creates: a connection that holds
@@ -276,12 +276,12 @@
     </event>
   </interface>
 
-  <interface name="cupertino_menu_bar_v1" version="8">
+  <interface name="cupertino_menu_bar_v1" version="10">
     <description summary="the menu bar of one output">
       Events describe the active application and the menus its active window exports. They
       come in groups ended by a done event; the client applies a group at once. The first group
       is sent right after the object is created; from version 3 a group with screen_capture
-      follows it.
+      follows it, and from version 10 a group with the shortcuts.
     </description>
 
     <request name="destroy" type="destructor">
@@ -332,6 +332,24 @@
       <arg name="workspaces" type="uint"/>
     </event>
 
+    <enum name="app_window_flags" bitfield="true" since="10">
+      <entry name="active" value="1" summary="the active window"/>
+      <entry name="minimized" value="2" summary="minimized"/>
+    </enum>
+
+    <event name="app_window" since="10">
+      <description summary="a window of the active application, for the window list">
+        One event per toplevel of the active application, in stacking order from the top, at
+        most 1000, in every group that has window_state. The list is complete in each such group
+        and replaces the last one; no event means the application has no window. id is the
+        server's window id (the dock's), stable for the window's lifetime and never reused within
+        a session. title is cut to at most 1024 bytes at a UTF-8 character boundary.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="title" type="string"/>
+      <arg name="flags" type="uint" enum="app_window_flags"/>
+    </event>
+
     <event name="engage">
       <description summary="the menu-bar shortcut was pressed">
         Focus the first menu title of this bar for keyboard navigation. The bar takes the
@@ -367,6 +385,46 @@
       <arg name="pid" type="uint"/>
     </event>
 
+    <enum name="bound_action" since="10">
+      <entry name="close_window" value="0"/>
+      <entry name="minimize" value="1"/>
+      <entry name="zoom" value="2"/>
+      <entry name="toggle_fullscreen" value="3"/>
+      <entry name="hide_app" value="4"/>
+      <entry name="hide_others" value="5"/>
+      <entry name="quit_app" value="6"/>
+      <entry name="tile_left" value="7"/>
+      <entry name="tile_right" value="8"/>
+      <entry name="tile_fill" value="9"/>
+      <entry name="force_quit" value="10"/>
+      <entry name="lock" value="11"/>
+      <entry name="log_out" value="12"/>
+    </enum>
+
+    <event name="shortcut" since="10">
+      <description summary="the chord the server binds to an action">
+        The physical chord that runs the action, in the shortcut file's syntax (modifiers in the
+        order Ctrl, Alt, Shift, Super, then the key name, joined by "+"); empty when nothing is
+        bound. One event per bound_action entry, in a group of its own ended by done, after the
+        first group and whenever the bindings or the modifier profile change.
+      </description>
+      <arg name="action" type="uint" enum="bound_action"/>
+      <arg name="chord" type="string"/>
+    </event>
+
+    <enum name="modifier_key" since="10">
+      <entry name="super" value="0" summary="the cupertino profile: Super is the command key"/>
+      <entry name="ctrl" value="1" summary="the classic-pc profile: Ctrl is the command key"/>
+    </enum>
+
+    <event name="primary_modifier" since="10">
+      <description summary="the physical key of the primary modifier">
+        Which key the active modifier profile makes the primary modifier, for the chords the bar
+        shows for applications' own items. Sent in the shortcut group.
+      </description>
+      <arg name="key" type="uint" enum="modifier_key"/>
+    </event>
+
     <event name="done">
       <description summary="end of a group of events"/>
     </event>
@@ -386,6 +444,15 @@
       <entry name="minimize" value="4" summary="minimize the active window"/>
       <entry name="zoom" value="5" summary="zoom the active window"/>
       <entry name="close" value="6" summary="close the active window"/>
+      <entry name="toggle_fullscreen" value="7" summary="enter or leave full screen with the active window" since="10"/>
+      <entry name="tile_left" value="8" summary="tile the active window to the left half of its output" since="10"/>
+      <entry name="tile_right" value="9" summary="tile the active window to the right half of its output" since="10"/>
+      <entry name="tile_fill" value="10" summary="make the active window fill its output's usable area" since="10"/>
+      <entry name="bring_all_to_front" value="11" summary="raise every window of the active application, keeping their order and the focus" since="10"/>
+      <entry name="cascade_all" value="12" summary="bring_all_to_front, and cascade the windows 24 pt apart from the active one" since="10"/>
+      <entry name="minimize_all" value="13" summary="minimize every window of the active application" since="10"/>
+      <entry name="zoom_all" value="14" summary="zoom every window of the active application that can zoom" since="10"/>
+      <entry name="force_quit_dialog" value="15" summary="open the force quit dialog" since="10"/>
     </enum>
 
     <request name="window_command">
@@ -424,6 +491,15 @@
         shows in the agent's properties.
       </description>
       <arg name="action" type="uint" enum="session_action"/>
+    </request>
+
+    <request name="activate_window" since="10">
+      <description summary="a row of the window list was chosen">
+        Show the window: unminimize it, switch to its workspace, raise and focus it. An id that
+        names no window of the active application when the request arrives is ignored, since the
+        list can change in the meantime. The request is also ignored while the session is locked.
+      </description>
+      <arg name="id" type="uint"/>
     </request>
   </interface>
 

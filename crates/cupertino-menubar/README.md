@@ -13,7 +13,7 @@ computes, and feeds the crate pointer, key and timer events with absolute timest
 | `clock` | The clock text (`clock_text`: weekday, day and short month, 12 / 24-hour time, seconds, day period, flashing separators) and its ticks (`next_tick`, `tick_interval`) from `ClockSettings`, which `cupertino_defaults::menubar` reads from and writes to `menubar.conf` (the `clock.* keys, bad lines reported with their numbers). |
 | `extras` | The bar's own status items (Wi-Fi, battery, Bluetooth, Focus): which show, their icons, menus (`ExtraMenu`) and row actions (`ExtraAction`), from an `Extras` snapshot of the services. |
 | `item` | `MenuItem`: label, mnemonic, separator, enabled, visible, `Toggle`, `Shortcut`, icon name / data, children. |
-| `fallback` | Synthetic app menu (About, Hide, Hide Others, Show All, Quit) and Window menu (Minimize, Zoom, Move to Workspace, Close Window). `action_for` maps activated ids back to `FallbackAction`. |
+| `fallback` | Synthetic menus of an app that exports none: the app menu (About, Settings…, Hide, Hide Others, Show All, Quit; Settings… and Show All on the desktop), File (Close Window), Edit (Undo, Redo, Cut, Copy, Paste, Select All, disabled until the server can deliver them), View (Enter Full Screen), Window (Minimize, Zoom, Move to Workspace, Tile Window, Bring All to Front, the window list of at most 1000 rows with the active window checked and minimized ones marked, Close Window) and Help (the search row, disabled). Items of server actions show the chord the server binds (`Chords`), none while it sent none; the app's own convention chords use the primary modifier the server names. Ids are negative and stable; `action_for` maps activated ids back to `FallbackAction`. |
 | `source` | `MenuSourceMap`: window → `MenuSource::{Kde, Gtk, Synthetic}`. A window gets only the menus it exported, never another window of its application. |
 | `dbus::dbusmenu` | `DBusMenuClient`: `GetLayout` parsing (`parse_layout`), `Event`, `AboutToShow`, and `LayoutUpdated` / `ItemsPropertiesUpdated` / `ItemActivationRequested` as a `MenuUpdate` stream, property update helpers. |
 | `dbus::sni` | `WatcherService` serving `org.kde.StatusNotifierWatcher` (the compositor is the host), `WatcherClient`, `fetch_item` (icons including ARGB pixmaps, status, tooltip, menu path), `load_menu` through DBusMenu, `activate_item` / `secondary_activate_item` / `context_menu_item` / `scroll_item`, `best_pixmap`. |
@@ -83,8 +83,10 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   draws the strip's material, so Reduce Transparency and Increase Contrast reach it there. The process keeps its palette
   under the display options (no recorded contrast palette for the menu bar text and status items).
 - **Menus.** The server's `cupertino_menu_bar_v1` feed names the active application and how its window exports menus:
-  DBusMenu or GMenuModel. A window without menus gets the synthetic app and
-  Window menus, whose actions go back as `window_command` / `move_to_workspace`. The `engage` event focuses the bar's first
+  DBusMenu or GMenuModel. A window without menus gets the synthetic menus, whose actions go back as `window_command` /
+  `move_to_workspace` / `activate_window`. From version 10 the feed also lists the application's windows and sends the
+  chords the server binds and its primary modifier; the synthetic menus are rebuilt when they change. A version 9 server
+  sends neither, so the system items show no chord, and the bar does not send the commands it lacks. The `engage` event focuses the bar's first
   title. Arrows, Return and Escape navigate. Type-ahead needs a keymap and is not available.
 - **Session.** The labels follow the appearance the server announces over `cupertino_session_v1`, read at start and redrawn on
   every change. The material follows it in the server. On `locked` the bars close every open menu and title focus.

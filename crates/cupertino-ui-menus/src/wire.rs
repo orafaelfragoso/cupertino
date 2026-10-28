@@ -27,8 +27,10 @@ impl WireItem {
     pub fn to_dict(&self) -> HashMap<String, OwnedValue> {
         let text = |s: &str| OwnedValue::from(Str::from(s.to_string()));
         let mut dict = HashMap::new();
+        // a label has no mnemonic: each `_` doubled stays a literal underscore
+        let label = self.label.as_ref().map(|l| l.replace('_', "__"));
         for (key, value) in [
-            ("label", &self.label),
+            ("label", &label),
             ("action", &self.action),
             ("accel", &self.accel),
         ] {
@@ -92,7 +94,7 @@ impl Encoder<'_> {
                     Command::System(_) => None,
                 };
                 WireItem {
-                    label: Some(item.label.clone()),
+                    label: Some(item.label.replace('_', "__")),
                     action,
                     accel: item.chord.as_ref().and_then(|c| c.to_accel(self.map)),
                     link: None,
@@ -291,6 +293,8 @@ mod tests {
         keys.sort_unstable();
         assert_eq!(keys, ["accel", "action", "label"]);
         assert_eq!(<&str>::try_from(&dict["accel"]).unwrap(), "<Super>q");
+        let dict = action("my_notes.txt", "win.open-recent", None).to_dict();
+        assert_eq!(<&str>::try_from(&dict["label"]).unwrap(), "my__notes.txt");
         let link = section(4).to_dict();
         assert_eq!(
             <(u32, u32)>::try_from(link[":section"].try_clone().unwrap()).unwrap(),

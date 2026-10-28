@@ -1,5 +1,5 @@
 // cupertino-layers --graph current
-// 56 crates, 200 internal dependencies
+// 56 crates, 202 internal dependencies
 // per layer: foundation 11, models 9, platform 7, render 11, core 1, shell 9, services 4, apps 2, tools 2
 // forbidden edges: none
 // denied paths ui -> core, shell, services: none
@@ -171,10 +171,12 @@ digraph "current" {
   "cupertino-menubar" -> "cupertino-defaults";
   "cupertino-menubar" -> "cupertino-geometry";
   "cupertino-menubar" -> "cupertino-icons";
+  "cupertino-menubar" -> "cupertino-menu-model" [label="dev"];
   "cupertino-menubar" -> "cupertino-peer";
   "cupertino-menubar" -> "cupertino-protocol-app";
   "cupertino-menubar" -> "cupertino-shell-client";
   "cupertino-menubar" -> "cupertino-theme";
+  "cupertino-menubar" -> "cupertino-ui-menus" [label="dev"];
   "cupertino-menubar" -> "cupertino-ui-wayland";
   "cupertino-menubar" -> "cupertino-wayland-client";
   "cupertino-netd" -> "cupertino-netlink";

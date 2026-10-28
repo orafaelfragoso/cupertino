@@ -1,6 +1,6 @@
 // cupertino-layers --graph target
-// 54 crates, 199 internal dependencies
-// per layer: foundation 11, models 7, platform 7, protocol 3, transport 3, render 4, ui 1, core 1, shell 9, services 4, apps 2, tools 2
+// 56 crates, 202 internal dependencies
+// per layer: foundation 12, models 7, platform 7, protocol 3, transport 3, render 4, ui 2, core 1, shell 9, services 4, apps 2, tools 2
 // forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden normal edge cupertino-files (apps) -> cupertino-icons (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden normal edge cupertino-settings (apps) -> cupertino-alsa (platform), migration #21 exception (services): the sound pane drives the mixer itself until audio goes through a service
@@ -11,13 +11,14 @@
 digraph "target" {
   node [shape=box];
   subgraph "cluster_foundation" {
-    label="foundation (11)";
+    label="foundation (12)";
     "cupertino-animation";
     "cupertino-apps";
     "cupertino-assets";
     "cupertino-defaults";
     "cupertino-filepicker";
     "cupertino-geometry";
+    "cupertino-menu-model";
     "cupertino-text-field";
     "cupertino-theme";
     "cupertino-thumbnails";
@@ -64,7 +65,8 @@ digraph "target" {
     "cupertino-icons";
   }
   subgraph "cluster_ui" {
-    label="ui (1)";
+    label="ui (2)";
+    "cupertino-ui-menus";
     "cupertino-ui-wayland";
   }
   subgraph "cluster_core" {
@@ -183,10 +185,12 @@ digraph "target" {
   "cupertino-menubar" -> "cupertino-defaults";
   "cupertino-menubar" -> "cupertino-geometry";
   "cupertino-menubar" -> "cupertino-icons";
+  "cupertino-menubar" -> "cupertino-menu-model" [label="dev"];
   "cupertino-menubar" -> "cupertino-peer";
   "cupertino-menubar" -> "cupertino-protocol-app";
   "cupertino-menubar" -> "cupertino-shell-client";
   "cupertino-menubar" -> "cupertino-theme";
+  "cupertino-menubar" -> "cupertino-ui-menus" [label="dev"];
   "cupertino-menubar" -> "cupertino-ui-wayland";
   "cupertino-menubar" -> "cupertino-wayland-client";
   "cupertino-netd" -> "cupertino-netlink";
@@ -288,6 +292,7 @@ digraph "target" {
   "cupertino-text-field" -> "cupertino-defaults";
   "cupertino-text-field" -> "cupertino-keyboard" [color=orange, style=dashed];
   "cupertino-theme" -> "cupertino-animation";
+  "cupertino-ui-menus" -> "cupertino-menu-model";
   "cupertino-ui-wayland" -> "cupertino-geometry";
   "cupertino-ui-wayland" -> "cupertino-wayland-client";
   "cupertino-wayland-client" -> "cupertino-geometry";

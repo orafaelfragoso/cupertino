@@ -175,6 +175,10 @@ pub const DENIED_CRATES: &[(&str, &[&str])] = &[
         &["cupertino-protocols", "cupertino-shell-client"],
     ),
     (
+        "cupertino-ui-menus",
+        &["cupertino-protocols", "cupertino-shell-client"],
+    ),
+    (
         "cupertino-ui-wayland",
         &["cupertino-protocols", "cupertino-shell-client"],
     ),
@@ -280,6 +284,7 @@ pub const TARGET: &[(&str, Layer)] = &[
     ("cupertino-layers", Tools),
     ("cupertino-login", Shell),
     ("cupertino-login-ipc", Protocol),
+    ("cupertino-menu-model", Foundation),
     ("cupertino-menubar", Shell),
     ("cupertino-netd", Services),
     ("cupertino-netlink", Platform),
@@ -302,6 +307,7 @@ pub const TARGET: &[(&str, Layer)] = &[
     ("cupertino-theme", Foundation),
     ("cupertino-thumbnails", Foundation),
     ("cupertino-typeahead", Foundation),
+    ("cupertino-ui-menus", Ui),
     ("cupertino-ui-wayland", Ui),
     ("cupertino-wayland-client", Transport),
     ("cupertino-windowmanager", Shell),

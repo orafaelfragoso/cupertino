@@ -491,9 +491,12 @@ impl Wm {
             return;
         }
         let key = self.focus.key_window.filter(|k| windows.contains(k));
-        let Some(anchor) = key.or_else(|| windows.last().copied()) else {
+        let Some(mut anchor) = key.or_else(|| windows.last().copied()) else {
             return;
         };
+        while let Some(parent) = self.windows.get(&anchor).and_then(|w| w.parent) {
+            anchor = parent;
+        }
         let (origin, output) = {
             let a = &self.windows[&anchor];
             (a.geometry(), a.output)

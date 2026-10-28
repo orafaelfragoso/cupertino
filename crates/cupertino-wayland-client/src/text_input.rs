@@ -377,6 +377,8 @@ mod tests {
     fn a_preedit_cursor_off_a_character_boundary_is_hidden() {
         assert_eq!(preedit_cursor("añb", 1, 3), Some((1, 3)));
         assert_eq!(preedit_cursor("añb", 2, 2), None);
+        assert_eq!(preedit_cursor("añb", 2, 3), None);
+        assert_eq!(preedit_cursor("añb", 1, 2), None);
         assert_eq!(preedit_cursor("ab", -1, -1), None);
         assert_eq!(preedit_cursor("ab", 2, 1), None);
         assert_eq!(preedit_cursor("ab", 0, 3), None);

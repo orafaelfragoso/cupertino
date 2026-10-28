@@ -891,6 +891,7 @@ impl Cupertino {
     /// is consumed too; every other press and release goes to `pointer.button`, whose implicit grab keeps a client's
     /// release with the client that got the press.
     pub fn pointer_button(&mut self, button: u32, state: ButtonState, time: u32) {
+        self.key_filters.super_tap.disturb();
         let serial = SERIAL_COUNTER.next_serial();
         let pos = self.pointer.current_location();
         let pointer = self.pointer.clone();
@@ -1191,6 +1192,7 @@ impl Cupertino {
     /// A pointer axis event (also used by scripted input): the scroll goes to the focused client as one
     /// `wl_pointer.frame`, with the scroll count of a touchpad scroll before the frame.
     pub fn pointer_axis(&mut self, input: &AxisInput) {
+        self.key_filters.super_tap.disturb();
         // A wheel notch (120 v120 units) scrolls three lines. Finger scrolling of a
         // device with a scroll resolution (the touchpad's counts) is accelerated; other sources,
         // and finger scrolling of other devices, keep the backend's value.

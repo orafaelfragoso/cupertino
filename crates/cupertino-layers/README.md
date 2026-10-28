@@ -2,7 +2,7 @@
 
 Checks that dependencies between workspace crates follow the layer rules below, today's and the target's. A crate's
 layer is declared in its manifest, `[package.metadata.cupertino] layer = "<layer>"`; in this tree crates live in
-`crates/<crate>`. Layer: `tools`; the only dependency is `serde_json`.
+`crates/<crate>`. Layer: `tools`.
 
 ## Usage
 
@@ -12,7 +12,7 @@ cargo run -p cupertino-layers -- --graph current       # DOT graph of the declar
 cargo run -p cupertino-layers -- --graph target        # DOT graph of the target layers
 ```
 
-The binary runs `cargo metadata --no-deps`, collects every dependency between workspace crates (normal, build and
+The binary runs `cargo metadata`, collects every dependency between workspace crates (normal, build and
 dev, one edge per kind), and prints one line per problem to stderr; target problems start with `target:`. Without `--graph` the last line
 is a summary:
 
@@ -70,7 +70,12 @@ Pure toolkit-facing models (filepicker, typeahead, keyboard bindings) and the ic
 when the apps move to Kit controls (Phase 4, row 177).
 
 `DENIED_PATHS` forbids any chain of dependencies from `ui` to `core`, `shell` or `services`; a denied path fails the
-check even when exceptions excuse its edges. `licence_problems` checks the licence split: a crate whose `license` starts with `MPL-2.0` may not have a normal dependency on a workspace crate under a GPL or AGPL licence (build and dev dependencies do not count), and needs a `LICENSE` file with the MPL-2.0 text next to its manifest. Both fail the check.
+check even when exceptions excuse its edges. The licence check requires a crate whose `license` starts with `MPL-2.0`
+to have a `LICENSE` file with the MPL-2.0 text, and rejects normal dependencies on workspace crates under GPL or AGPL.
+It also follows resolved normal and build dependencies through external crates and requires an accepted SPDX licence expression.
+An `OR` expression passes if at least one option is accepted; every term of an `AND` expression must be accepted.
+Missing or unrecognised external licences fail, except for the vendored xkbcommon licence text identified by its hash.
+Dev dependencies do not count in these checks. Required toolkit and transport roots must be present and licensed under MPL-2.0.
 
 `DENIED_CRATES` forbids any chain of normal dependencies, external crates
 included, from `cupertino-wayland-client` to `cupertino-protocols` or another compositor's protocol crates: the public

@@ -248,8 +248,6 @@ impl Dispatch<ZwpTextInputV3, ()> for State {
         let found = match event {
             zwp_text_input_v3::Event::Enter { .. } => {
                 input.focus = entered;
-                input.sent = None;
-                input.pending = TextInputDone::default();
                 input.sync();
                 input.focus.map(|s| (s, TextInputEvent::Enter))
             }

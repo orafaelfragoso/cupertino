@@ -13,7 +13,7 @@ computes, and feeds the crate pointer, key and timer events with absolute timest
 | `clock` | The clock text (`clock_text`: weekday, day and short month, 12 / 24-hour time, seconds, day period, flashing separators) and its ticks (`next_tick`, `tick_interval`) from `ClockSettings`, which `cupertino_defaults::menubar` reads from and writes to `menubar.conf` (the `clock.* keys, bad lines reported with their numbers). |
 | `extras` | The bar's own status items (Wi-Fi, battery, Bluetooth, Focus): which show, their icons, menus (`ExtraMenu`) and row actions (`ExtraAction`), from an `Extras` snapshot of the services; the system menu (`system_menu`, rows at fixed ids `SystemRow`) and its Recent Items submenu (`recent_items`). |
 | `recent` | What Recent Items lists (`RecentItems`): `RecentSources::read` takes the launcher's applications in its order (`cupertino_apps::frecency`, ids without an installed visible desktop entry skipped) and the documents of `recently-used.xbel` newest first (`cupertino_apps::recent`, missing files skipped), at most 10 of each, leaving out what was used at or before the last Clear Menu (`RecentSources::clear`, the bar's own `$XDG_DATA_HOME/cupertino/menubar-recent-items-cleared`). It never writes the launcher's or the applications' files. |
-| `item` | `MenuItem`: label, mnemonic, separator, enabled, visible, `Toggle`, `Shortcut`, icon name / data, children, the GMenuModel action and accelerator. |
+| `item` | `MenuItem`: label, mnemonic, separator, enabled, visible, `Toggle`, `Shortcut`, icon name / data, children, the GMenuModel action and accelerator, and its `Origin` (the bar's or an exporter's), by which an activated item is routed. |
 | `fallback` | Synthetic menus of an app that exports none: the app menu (About, Settings…, Hide, Hide Others, Show All, Quit; Settings… and Show All on the desktop), File (Close Window), Edit (Undo, Redo, Cut, Copy, Paste, Select All; enabled on a bar whose server takes `edit`, version 11, and disabled below), View (Enter Full Screen), Window (Minimize, Zoom, Move to Workspace, Tile Window, Bring All to Front, the window list of at most 1000 rows with the active window checked and minimized ones marked, Close Window) and Help (the search row, disabled). Items of server actions show the chord the server binds (`Chords`), none while it sent none; the app's own convention chords use the primary modifier the server names. Ids are negative and stable; `action_for` maps activated ids back to `FallbackAction`. |
 | `merge` | `Export::merge`: an exporter's tree merged with the bar's App, Window and Help menus (roles, rebinding to the exporter's items, order, ids; see *Merged menus*); `Export::roles` for the routing, `label_role`, `accel_shortcut`. |
 | `source` | `MenuSourceMap`: window → `MenuSource::{Kde, Gtk, Synthetic}`. A window gets only the menus it exported, never another window of its application. |
@@ -114,8 +114,12 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
     File, Edit, View, the others, Window, Help; an application that exports only a GMenuModel application menu gets
     Window and Help.
   - Ids: the bar's items keep their fixed ids, all at most -1000 (-1107…-1110 for the separators the merge adds);
-    the exporter's keep theirs, so a layout update leaves an open menu in place. An activated id at most -1000 is the
-    bar's (rebound About, Settings… and Quit activate the exporter's item); any other goes to the exporter. The bar's
+    the exporter's keep theirs, so a layout update leaves an open menu in place. Each item carries its origin
+    (`item::Origin`, set to the exporter by the DBusMenu and GMenuModel readers), and an activated item is routed by the
+    origin of the item shown in the menu that was open, never by its id: the bar's own items act through the server
+    (rebound About, Settings… and Quit activate the exporter's item), the exporter's go to the exporter. The DBusMenu
+    reader also leaves out an exporter's item whose id is in the bar's range (at most -1000), so ids never repeat in
+    one menu; the GMenuModel reader numbers its items from 1. The bar's
     Window and Help menus send the exporter no `AboutToShow`, so items an exporter fills in lazily there do not show.
   - Accelerators: a GMenuModel item's `accel` names the physical keys the application receives; it is read with
     `cupertino_menu_model::Chord::from_accel` and the modifier map of the server's profile (the primary modifier of the

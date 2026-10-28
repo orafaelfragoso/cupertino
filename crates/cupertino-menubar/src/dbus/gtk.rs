@@ -297,13 +297,14 @@ pub fn build_menu(
     };
     let items = b.build(root, "");
     GtkBuild {
-        items,
+        items: items.into_iter().map(MenuItem::exported).collect(),
         actions: b.refs,
     }
 }
 
 /// The tree of an exporter: the menus of its menu bar, led by the application menu under [`GTK_APP_MENU`] when that
-/// has items. Ids are numbered across both, the menu bar's first, so they do not depend on the application menu.
+/// has items. Ids are numbered across both from 1, the menu bar's first, so they do not depend on the application
+/// menu and never reach the bar's own ids (all negative).
 pub fn build_menus(
     menubar: &GtkMenus,
     app_menu: &GtkMenus,
@@ -323,7 +324,7 @@ pub fn build_menus(
         items.insert(0, MenuItem::submenu(GTK_APP_MENU.0, "", app));
     }
     GtkBuild {
-        items,
+        items: items.into_iter().map(MenuItem::exported).collect(),
         actions: b.refs,
     }
 }

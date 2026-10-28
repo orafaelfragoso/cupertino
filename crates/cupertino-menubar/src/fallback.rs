@@ -115,8 +115,9 @@ impl FallbackAction {
     }
 }
 
-/// Whether `id` is one of the bar's own items (every one is at most -1000: the synthetic menus, their separators,
-/// the workspace targets, the window list and the system menu) rather than an item of an exporter.
+/// Whether `id` is in the range of the bar's own items (every one is at most -1000: the synthetic menus, their
+/// separators, the workspace targets, the window list and the system menu). The DBusMenu reader leaves out an
+/// exporter's item with such an id; routing goes by [`crate::item::Origin`], not by this range.
 pub fn is_system(id: ItemId) -> bool {
     id.0 <= ABOUT
 }

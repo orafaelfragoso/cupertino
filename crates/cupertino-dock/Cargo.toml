@@ -11,6 +11,7 @@ layer = "shell"
 [features]
 # the `cupertino-dock` process: the bar on a layer surface as a client of the server
 app = [
+    "dep:cupertino-apps",
     "dep:cupertino-assets",
     "dep:cupertino-decorations",
     "dep:cupertino-geometry",
@@ -27,6 +28,7 @@ app = [
 cupertino-animation = { path = "../cupertino-animation" }
 cupertino-overview = { path = "../cupertino-overview" }
 cupertino-wm = { path = "../cupertino-wm" }
+cupertino-apps = { path = "../cupertino-apps", optional = true }
 cupertino-assets = { path = "../cupertino-assets", optional = true }
 cupertino-decorations = { path = "../cupertino-decorations", optional = true }
 cupertino-defaults = { path = "../cupertino-defaults" }

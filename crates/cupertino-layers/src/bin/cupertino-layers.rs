@@ -15,6 +15,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::{Command, ExitCode};
 
+#[path = "cupertino-layers/mpl-closure.rs"]
+mod mpl_closure;
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let graph = match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
@@ -31,6 +34,7 @@ fn main() -> ExitCode {
     let (target, mut target_problems) = classify(layers.keys(), TARGET);
     let target_edges = edges(&target, &deps);
     let mut problems = check(RULES, &current_edges, PENDING, DENIED_PATHS);
+    let external_licence_problems = mpl_closure::check();
     problems.extend(
         denied_crate_paths(&deps, DENIED_CRATES)
             .into_iter()
@@ -46,6 +50,9 @@ fn main() -> ExitCode {
         DENIED_PATHS,
     ));
     for p in &problems {
+        eprintln!("{p}");
+    }
+    for p in &external_licence_problems {
         eprintln!("{p}");
     }
     for p in &target_problems {
@@ -81,10 +88,10 @@ fn main() -> ExitCode {
             current_edges.len(),
             PENDING.len(),
             TARGET_EXCEPTIONS.len(),
-            problems.len() + target_problems.len()
+            problems.len() + target_problems.len() + external_licence_problems.len()
         ),
     }
-    if problems.is_empty() && target_problems.is_empty() {
+    if problems.is_empty() && target_problems.is_empty() && external_licence_problems.is_empty() {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE

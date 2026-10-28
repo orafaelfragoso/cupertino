@@ -229,6 +229,11 @@ impl InputClock {
         self.0 = Some((time, at));
     }
 
+    /// The latest timestamp as it arrived.
+    pub(crate) fn latest(&self) -> Option<u32> {
+        self.0.map(|(time, _)| time)
+    }
+
     /// The input time at `now`: the latest timestamp advanced by the milliseconds since it arrived (wrapping); 0
     /// before any.
     pub(crate) fn at(&self, now: Instant) -> u32 {
@@ -508,8 +513,9 @@ mod tests {
     fn the_input_clock_advances_from_the_latest_timestamp_and_wraps() {
         let mut clock = InputClock::default();
         let start = Instant::now();
-        assert_eq!(clock.at(start), 0);
+        assert_eq!((clock.at(start), clock.latest()), (0, None));
         clock.note(u32::MAX - 1, start);
+        assert_eq!(clock.latest(), Some(u32::MAX - 1));
         assert_eq!(clock.at(start), u32::MAX - 1);
         assert_eq!(clock.at(start + Duration::from_millis(5)), 3);
         assert_eq!(clock.at(start - Duration::from_millis(5)), u32::MAX - 1);

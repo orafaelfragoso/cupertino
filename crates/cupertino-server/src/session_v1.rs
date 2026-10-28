@@ -18,7 +18,7 @@ use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, New, Resource,
 };
 
-use crate::authorization::{authorized, refuse, ShellRole};
+use crate::authorization::{authorized, refuse, role, Permit, ShellRole};
 use crate::state::Cupertino;
 
 /// The session observers of every client, in creation order.
@@ -143,12 +143,12 @@ impl Cupertino {
     pub fn create_session_observer(
         &mut self,
         shell: &CupertinoShellV1,
-        permitted: bool,
+        permit: Option<Permit<role::Session>>,
         id: New<CupertinoSessionV1>,
         init: &mut DataInit<'_, Self>,
     ) {
         let observer = init.init(id, ());
-        if !permitted {
+        if permit.is_none() {
             refuse(shell, ShellRole::Session);
             return;
         }

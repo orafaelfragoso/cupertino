@@ -38,7 +38,7 @@ use smithay::reexports::wayland_server::{
 use smithay::wayland::compositor::{with_states, Cacheable};
 
 use crate::app_effects_v1::surface_backdrops;
-use crate::authorization::{authorized, refuse, require, ShellRole};
+use crate::authorization::{authorized, refuse, require, role, Permit, ShellRole};
 use crate::menu_bar::cut_text;
 use crate::state::Cupertino;
 
@@ -288,13 +288,13 @@ impl Cupertino {
     pub fn create_dock(
         &mut self,
         shell: &CupertinoShellV1,
-        permitted: bool,
+        permit: Option<Permit<role::Dock>>,
         id: New<CupertinoDockV1>,
         surface: WlSurface,
         output: &WlOutput,
         init: &mut DataInit<'_, Self>,
     ) {
-        if !permitted {
+        if permit.is_none() {
             init.init(id, DockData { output: None });
             refuse(shell, ShellRole::Dock);
             return;

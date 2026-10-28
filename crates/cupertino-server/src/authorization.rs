@@ -7,6 +7,8 @@
 //! request checks the role again in its handler, so a request on an object id the client guessed is a protocol error
 //! of its own.
 
+use std::time::{Duration, Instant};
+
 use cupertino_defaults::compositor::ShellRoleName;
 use cupertino_protocols::server::cupertino_shell_v1::Error as ShellError;
 use smithay::reexports::wayland_server::{Client, Resource};
@@ -87,15 +89,19 @@ impl ClientCapabilitySet {
 pub enum Holder {
     /// The process the server started for the connection: the capabilities end when it exits.
     Process(ProcessHandle),
-    /// A client in the server's own process (tests, the accent bridge): nothing ends the capabilities.
-    Detached,
+    /// A client in the server's own process (tests): the capabilities end at a deadline, so a connection nothing
+    /// closes does not hold them for good.
+    Detached(Instant),
 }
+
+/// How long a connection made for a client in the server's own process holds its capabilities.
+pub const DETACHED_LIFETIME: Duration = Duration::from_secs(3600);
 
 impl Holder {
     fn has_exited(&self) -> bool {
         match self {
             Holder::Process(process) => process.has_exited(),
-            Holder::Detached => false,
+            Holder::Detached(until) => Instant::now() >= *until,
         }
     }
 }
@@ -110,15 +116,22 @@ impl ClientState {
         }
     }
 
-    /// A state for a client that runs inside the server's process: `capabilities` hold for the life of the connection.
-    /// Its holder is set here, so it is never bound to a process ([`crate::shell_connection::bind_holder`] fails on it),
+    /// A state for a client that runs inside the server's process: `capabilities` hold for [`DETACHED_LIFETIME`]. Its
+    /// holder is set here, so it is never bound to a process ([`crate::shell_connection::bind_holder`] fails on it),
     /// and its process is the server's own ([`ClientState::process`]).
     pub fn detached(capabilities: ClientCapabilitySet) -> Self {
+        Self::detached_for(capabilities, DETACHED_LIFETIME)
+    }
+
+    /// [`ClientState::detached`] for `lifetime`.
+    pub fn detached_for(capabilities: ClientCapabilitySet, lifetime: Duration) -> Self {
         let state = ClientState {
             capabilities,
             ..ClientState::default()
         };
-        let _ = state.holder.set(Holder::Detached);
+        let _ = state
+            .holder
+            .set(Holder::Detached(Instant::now() + lifetime));
         state
     }
 }
@@ -147,6 +160,39 @@ impl Cupertino {
         self.release_revoked_menu_bars();
         self.release_revoked_window_managers();
     }
+}
+
+/// The roles as types, so a function that needs one asks for the [`Permit`] of exactly that role.
+pub mod role {
+    use super::ShellRole;
+
+    /// A role of the shell protocol, named by a type.
+    pub trait Role {
+        const ROLE: ShellRole;
+    }
+
+    macro_rules! roles {
+        ($($name:ident),+ $(,)?) => {$(
+            #[derive(Clone, Copy, Debug)]
+            pub struct $name;
+            impl Role for $name {
+                const ROLE: ShellRole = ShellRole::$name;
+            }
+        )+};
+    }
+
+    roles!(Session, MenuBar, Dock, WindowManager);
+}
+
+/// The proof that a connection held role `R` when its request came in. Only [`permit`] makes one, so a function that
+/// takes a `Permit<role::Dock>` cannot be handed the outcome of a check for another role, and a boolean cannot stand
+/// in for it.
+#[derive(Debug)]
+pub struct Permit<R: role::Role>(std::marker::PhantomData<R>);
+
+/// The permit of `client` for role `R`; `None` when its connection does not hold the role.
+pub fn permit<R: role::Role>(client: &Client) -> Option<Permit<R>> {
+    authorized(client, R::ROLE).then_some(Permit(std::marker::PhantomData))
 }
 
 /// Whether `client` holds `role`.
@@ -197,5 +243,16 @@ mod tests {
     fn capture_alone_does_not_make_the_shell_global_visible() {
         assert!(!ClientCapabilitySet::of([ShellRole::Capture]).holds_shell_role());
         assert!(ClientCapabilitySet::of([ShellRole::MenuBar]).holds_shell_role());
+    }
+
+    #[test]
+    fn the_capabilities_of_a_connection_in_the_servers_process_end_at_its_deadline() {
+        let roles = ClientCapabilitySet::of([ShellRole::Dock]);
+        let live = ClientState::detached_for(roles, Duration::from_secs(60));
+        assert_eq!(live.granted(), roles);
+        let expired = ClientState::detached_for(roles, Duration::ZERO);
+        assert_eq!(expired.granted(), ClientCapabilitySet::NONE);
+        // the connection the tests use is good for as long as a test lasts
+        assert_eq!(ClientState::detached(roles).granted(), roles);
     }
 }

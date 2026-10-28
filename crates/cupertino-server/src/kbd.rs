@@ -495,6 +495,7 @@ pub fn system_action_to_input(a: SystemAction) -> Option<InputAction> {
         S::WindowMinimize => InputAction::MinimizeWindow,
         S::DockAutoHideToggle => InputAction::ToggleDockAutoHide,
         S::FocusMenuBar => InputAction::FocusMenuBar,
+        S::HelpSearch => InputAction::HelpSearch,
         S::FocusDock => InputAction::FocusDock,
         S::WorkspaceGoTo1 => InputAction::Workspace(1),
         S::WorkspaceGoTo2 => InputAction::Workspace(2),

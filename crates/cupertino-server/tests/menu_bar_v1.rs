@@ -29,6 +29,8 @@ use cupertino_server::menu_bar::{
 };
 use cupertino_server::Cupertino;
 use cupertino_wm::{Command, LifecycleState, Rect, TileKind, WindowId};
+use smithay::backend::input::KeyState;
+use smithay::input::keyboard::Keycode;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
@@ -251,6 +253,7 @@ enum BarEvent {
         workspaces: u32,
     },
     Engage,
+    EngageHelp,
     ScreenCapture(u32),
     SessionAgent(u32, u32),
     AppWindow {
@@ -449,6 +452,7 @@ impl Dispatch<CupertinoMenuBarV1, ()> for ClientState {
                 workspaces,
             },
             E::Engage => BarEvent::Engage,
+            E::EngageHelp => BarEvent::EngageHelp,
             E::ScreenCapture { active } => BarEvent::ScreenCapture(active),
             E::SessionAgent { trust, pid } => BarEvent::SessionAgent(raw(trust), pid),
             E::AppWindow { id, title, flags } => BarEvent::AppWindow {
@@ -3812,4 +3816,137 @@ fn a_timed_out_check_of_the_reader_is_made_again() {
     h.wait_until("the check made again to name the reader", |_| {
         app.menu_readers() == ["", own_name.as_str()]
     });
+}
+
+// ---- the Help search shortcut (version 12) ------------------------------------------------
+
+/// Keycodes (evdev + 8) of the Help search chord's keys.
+const KEYCODE_SHIFT: u32 = 42 + 8;
+const KEYCODE_SUPER: u32 = 125 + 8;
+const KEYCODE_SLASH: u32 = 53 + 8;
+
+/// The value of `help_search` in the bound_action enum.
+const HELP_SEARCH: u32 = 13;
+
+impl Harness {
+    /// One key through the compositor's keyboard path, as a device would deliver it.
+    fn key(&mut self, code: u32, pressed: bool) {
+        let state = if pressed {
+            KeyState::Pressed
+        } else {
+            KeyState::Released
+        };
+        self.state.keyboard_event_now(Keycode::new(code), state, 0);
+        self.step();
+    }
+
+    /// Press and release Shift+Super+/.
+    fn help_search_chord(&mut self) {
+        self.key(KEYCODE_SUPER, true);
+        self.key(KEYCODE_SHIFT, true);
+        self.key(KEYCODE_SLASH, true);
+        self.key(KEYCODE_SLASH, false);
+        self.key(KEYCODE_SHIFT, false);
+        self.key(KEYCODE_SUPER, false);
+    }
+}
+
+/// A bar on a shell global of `version`, with its first groups received.
+fn bar_at(h: &mut Harness, version: u32) -> BarClient {
+    let bar = BarClient::spawn_at(h.shell_stream(), true, version);
+    h.wait_for_groups(&bar, 4);
+    bar
+}
+
+/// The `engage_help` events the bar got.
+fn engage_help_events(bar: &BarClient) -> usize {
+    bar.groups()
+        .iter()
+        .flatten()
+        .filter(|e| **e == BarEvent::EngageHelp)
+        .count()
+}
+
+#[test]
+fn the_help_search_chord_sends_engage_help_in_a_group_of_its_own_to_a_version_12_bar() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_at(&mut h, 12);
+    let before = bar.groups().len();
+    h.help_search_chord();
+    h.wait_for_groups(&bar, before + 1);
+    assert_eq!(
+        bar.groups()[before],
+        vec![BarEvent::EngageHelp, BarEvent::Done]
+    );
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn a_version_11_bar_never_gets_engage_help() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_at(&mut h, 11);
+    h.help_search_chord();
+    h.state.focus_help_search();
+    h.settle_requests(&bar);
+    assert_eq!(engage_help_events(&bar), 0);
+    let (chords, _) = shortcuts(&bar).unwrap();
+    assert!(
+        chords.iter().all(|(action, _)| *action != HELP_SEARCH),
+        "no help_search chord below version 12"
+    );
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn engage_help_is_never_sent_while_a_lock_is_pending_or_the_session_is_locked() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_at(&mut h, 12);
+    let locker = common::Client::locker(common::session_agent(&h.state));
+    // only requests are handled, no tick: the lock stays pending
+    h.dispatch_until("the lock to begin", |s| s.session_lock.is_active());
+    assert!(!locker.locked(), "the lock is still pending");
+    // the sender refuses itself, whatever asks for it
+    h.state.focus_help_search();
+    h.settle_requests(&bar);
+    assert_eq!(
+        engage_help_events(&bar),
+        0,
+        "nothing while the lock is pending"
+    );
+
+    h.wait_until("the session to be locked", |_| locker.locked());
+    h.help_search_chord();
+    h.state.focus_help_search();
+    h.settle_requests(&bar);
+    assert_eq!(engage_help_events(&bar), 0, "nothing while locked");
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn the_shortcut_group_carries_the_help_search_chord_under_both_profiles() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_at(&mut h, 12);
+    let help_chord = |bar: &BarClient| {
+        let (chords, _) = shortcuts(bar).unwrap();
+        assert_eq!(
+            chords.iter().map(|(a, _)| *a).collect::<Vec<_>>(),
+            (0..=HELP_SEARCH).collect::<Vec<_>>(),
+            "one event per bound action of version 12, in order"
+        );
+        chords[HELP_SEARCH as usize].1.clone()
+    };
+    assert_eq!(help_chord(&bar), "Shift+Super+slash", "cupertino");
+    h.state.apply_keyboard_change(
+        &KeyboardSettings::default(),
+        &KeyboardSettings {
+            modifier_profile: Some(ModifierProfile::ClassicPc),
+            ..KeyboardSettings::default()
+        },
+    );
+    h.wait_for_groups(&bar, 5);
+    assert_eq!(help_chord(&bar), "Shift+Super+slash", "classic-pc");
+    // the chord runs it under classic-pc too
+    let before = engage_help_events(&bar);
+    h.help_search_chord();
+    h.wait_until("engage_help", |_| engage_help_events(&bar) == before + 1);
 }

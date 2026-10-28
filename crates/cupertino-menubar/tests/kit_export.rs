@@ -2,8 +2,6 @@
 //! (`dbus-daemon --session`); skipped when the daemon is not available.
 #![cfg(feature = "dbus")]
 
-use std::process::{Command, Stdio};
-
 use cupertino_menu_model::standard::{self, Features};
 use cupertino_menubar::dbus::gtk::GtkMenuClient;
 use cupertino_menubar::item::MenuItem;
@@ -12,35 +10,8 @@ use cupertino_modifiers::Profile;
 use cupertino_ui_menus::{Exporter, WindowId};
 use zbus::block_on;
 
-struct PrivateBus {
-    address: String,
-    pid: String,
-}
-
-impl PrivateBus {
-    fn start() -> Option<PrivateBus> {
-        let out = Command::new("dbus-daemon")
-            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        let text = String::from_utf8(out.stdout).ok()?;
-        let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-        let address = lines.next()?.to_string();
-        let pid = lines.next()?.to_string();
-        Some(PrivateBus { address, pid })
-    }
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        let _ = Command::new("kill").arg(&self.pid).status();
-    }
-}
+mod common;
+use common::PrivateBus;
 
 fn find<'a>(items: &'a [MenuItem], label: &str) -> Option<&'a MenuItem> {
     items.iter().find_map(|item| {
@@ -74,11 +45,7 @@ fn the_bar_reads_the_labels_a_kit_application_exports() {
         .unwrap();
 
     block_on(async {
-        let reader = zbus::connection::Builder::address(bus.address.as_str())
-            .unwrap()
-            .build()
-            .await
-            .unwrap();
+        let reader = bus.connect_async().await;
         let props = GtkMenuProps {
             bus_name: exported.unique_bus_name,
             application_id: Some(exported.application_id),

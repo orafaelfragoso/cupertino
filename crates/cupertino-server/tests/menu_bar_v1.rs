@@ -1589,20 +1589,24 @@ fn the_window_list_follows_the_windows_of_the_active_application() {
 }
 
 #[test]
-fn a_title_longer_than_the_limit_is_cut_at_a_character_boundary() {
+fn a_title_and_an_application_id_longer_than_the_limit_are_cut_at_a_character_boundary() {
     let Some(mut h) = Harness::new() else { return };
     let bar = bar_v10(&mut h);
-    let app = AppClient::spawn(h.socket_path(), "org.example.long");
+    // the application id is 4000 bytes, and a two-byte character spans byte 1024 of it
+    let long_id: &'static str =
+        Box::leak(format!("{}é{}", "a".repeat(1023), "b".repeat(4000 - 1025)).into_boxed_str());
+    assert_eq!(long_id.len(), 4000);
+    let app = AppClient::spawn(h.socket_path(), long_id);
     h.mapped_window(1);
     // a two-byte character spans byte 1024: the cut keeps none of it
     let title = format!("{}é{}", "a".repeat(1023), "b".repeat(4000 - 1025));
     assert_eq!(title.len(), 4000);
     app.send(Cmd::SetTitle(title.clone()));
-    h.wait_until("the new title in the active app", |_| {
+    h.wait_until("the cut title in the active app", |_| {
         bar.groups().last().is_some_and(|g| {
             g.contains(&BarEvent::ActiveApp {
-                app_id: "org.example.long".into(),
-                title: title.clone(),
+                app_id: "a".repeat(1023),
+                title: "a".repeat(1023),
             })
         })
     });

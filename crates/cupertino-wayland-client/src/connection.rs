@@ -755,6 +755,19 @@ impl Connection {
         Ok(())
     }
 
+    /// Activate an existing window with a token forwarded by its launcher or a second instance.
+    /// The compositor validates and consumes the token; this does not mint an input grant.
+    pub fn activate_with_token(&mut self, window: Toplevel, token: &str) -> Result<(), Error> {
+        self.state.capabilities.require(Capability::Activation)?;
+        let surface = self.state.surface(window.0)?;
+        self.state
+            .activation
+            .as_ref()
+            .expect("bound with the capability")
+            .activate(token.to_owned(), &surface.wl);
+        Ok(())
+    }
+
     /// Take pointer input only inside `rects` (surface-local logical points, rounded outwards), or over the whole surface
     /// with `None`; input elsewhere reaches the surfaces below, and an empty slice lets all of it through. Applies with
     /// the next present.

@@ -1,7 +1,12 @@
 //! Lowering of a composed [`SceneFrame`] to the elements of the GLES damage tracker: one element per item,
 //! front to back, with the cache slots and commit counters the renderer has always used.
 
-use cupertino_scene::{Clip, OutputPoint, RoundedRect, SceneItem, Shadow, Source, SurfaceRole};
+use cupertino_scene::{
+    Clip, ImageRole, OutputPoint, RoundedRect, SceneItem, Shadow, Source, SurfaceRole,
+};
+use smithay::backend::renderer::element::memory::{
+    MemoryRenderBuffer, MemoryRenderBufferRenderElement,
+};
 use smithay::backend::renderer::element::surface::{
     render_elements_from_surface_tree, WaylandSurfaceRenderElement,
 };
@@ -9,7 +14,7 @@ use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::backend::renderer::element::{Element, Kind};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Logical, Physical, Point, Scale};
+use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size};
 
 use super::clip::{ClipElement, ClipShape};
 use super::compose::{logical_rect, Composed};
@@ -31,6 +36,7 @@ pub fn lower(composed: Composed, ctx: &mut Lowering<'_>) -> Vec<CupertinoElement
     let Composed {
         frame,
         surfaces,
+        images,
         mut locals,
     } = composed;
     let viewport = (
@@ -52,6 +58,38 @@ pub fn lower(composed: Composed, ctx: &mut Lowering<'_>) -> Vec<CupertinoElement
                     None => {
                         debug_assert!(false, "surface handle {id:?} does not belong to the frame");
                         tracing::error!(?id, "scene surface handle unknown, item skipped");
+                    }
+                }
+            }
+            Source::Image {
+                id,
+                mapping,
+                role,
+                size,
+            } => {
+                let buffer = images
+                    .get(id.0.slot as usize)
+                    .filter(|_| id.0.generation == frame.id.0);
+                match (buffer, mapping.crop) {
+                    (Some(buffer), Some(crop)) => {
+                        let src = Rectangle::<f64, Logical>::new(
+                            (crop.0.x(), crop.0.y()).into(),
+                            (crop.0.width(), crop.0.height()).into(),
+                        );
+                        picture(
+                            ctx,
+                            buffer,
+                            *role,
+                            item,
+                            src,
+                            *size,
+                            viewport,
+                            &mut elements,
+                        );
+                    }
+                    _ => {
+                        debug_assert!(false, "image {id:?} is unknown to the frame or has no crop");
+                        tracing::error!(?id, "scene image unknown, item skipped");
                     }
                 }
             }
@@ -235,26 +273,8 @@ fn surface_tree(
             let els = surface_elements(ctx, surface, origin, scale, alpha, Kind::Unspecified);
             let pivot = physical(place.pivot, ctx.scale);
             let rescale = Scale::from((place.scale_x, place.scale_y));
-            let shape = match (role, item.clip) {
-                (
-                    SurfaceRole::WindowContent,
-                    Clip::Rounded {
-                        rect,
-                        radius,
-                        style,
-                        exact,
-                    },
-                ) => {
-                    let (extent, exponent) =
-                        corner_uniforms(radius, !style.is_circular(), ctx.scale);
-                    Some(ClipShape {
-                        rect: to_physical_rect(logical_rect(rect), scale),
-                        extent,
-                        exponent,
-                        viewport,
-                        exact,
-                    })
-                }
+            let shape = match role {
+                SurfaceRole::WindowContent => mask(ctx, item.clip, viewport),
                 _ => None,
             };
             for e in els {
@@ -293,4 +313,72 @@ pub(super) fn id_hash(id: &smithay::backend::renderer::element::Id) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     id.hash(&mut h);
     h.finish()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn picture(
+    ctx: &mut Lowering<'_>,
+    buffer: &MemoryRenderBuffer,
+    role: ImageRole,
+    item: &SceneItem,
+    src: Rectangle<f64, Logical>,
+    size: (i32, i32),
+    viewport: (i32, i32),
+    out: &mut Vec<CupertinoElement>,
+) {
+    let place = item.placement;
+    let loc =
+        Point::<f64, Physical>::from((place.origin.0.x * ctx.scale, place.origin.0.y * ctx.scale));
+    let kind = match role {
+        ImageRole::Cursor => Kind::Cursor,
+        ImageRole::Standalone | ImageRole::Decoration => Kind::Unspecified,
+    };
+    let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
+        ctx.renderer,
+        loc,
+        buffer,
+        Some(item.opacity as f32),
+        Some(src),
+        Some(Size::from(size)),
+        kind,
+    ) else {
+        return;
+    };
+    match role {
+        ImageRole::Standalone | ImageRole::Cursor => out.push(element.into()),
+        ImageRole::Decoration => {
+            let pivot = physical(place.pivot, ctx.scale);
+            let rescale = Scale::from((place.scale_x, place.scale_y));
+            match mask(ctx, item.clip, viewport) {
+                Some(shape) => {
+                    let clip = clipped(ctx, element, shape);
+                    out.push(RescaleRenderElement::from_element(clip, pivot, rescale).into());
+                }
+                None => {
+                    out.push(RescaleRenderElement::from_element(element, pivot, rescale).into())
+                }
+            }
+        }
+    }
+}
+
+/// The device-pixel mask of a rounded clip.
+fn mask(ctx: &Lowering<'_>, clip: Clip, viewport: (i32, i32)) -> Option<ClipShape> {
+    let Clip::Rounded {
+        rect,
+        radius,
+        style,
+        exact,
+    } = clip
+    else {
+        return None;
+    };
+    let (extent, exponent) = corner_uniforms(radius, !style.is_circular(), ctx.scale);
+    Some(ClipShape {
+        rect: to_physical_rect(logical_rect(rect), Scale::from(ctx.scale)),
+        extent,
+        exponent,
+        viewport,
+        exact,
+    })
 }

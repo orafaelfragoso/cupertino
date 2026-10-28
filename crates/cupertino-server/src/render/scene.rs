@@ -9,28 +9,28 @@ use std::rc::Rc;
 use cupertino_decorations::TitlebarStyle;
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_effects::{DockEdge, Mesh, MinimizeEffect, Vertex, WorkspaceSlide};
-use cupertino_scene::{Clip, RoundedRect, SceneItem, SceneKind, Shadow, Source, SurfaceRole};
+use cupertino_scene::{
+    Clip, ImageRole, OutputPoint, Placement, RoundedRect, SceneItem, SceneKind, Shadow, Source,
+    SurfaceRole,
+};
 use cupertino_theme::{Appearance, MaterialOptions, Theme};
 use cupertino_wm::{OutputId, Presentation, Rect, WindowId, Wm};
-use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
-use smithay::backend::renderer::element::utils::RescaleRenderElement;
-use smithay::backend::renderer::element::{Element, Kind};
+use smithay::backend::renderer::element::Element;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::CommitCounter;
 use smithay::desktop::{layer_map_for_output, PopupManager};
 use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Logical, Physical, Point, Scale, Size};
+use smithay::utils::{Logical, Physical, Point, Scale};
 use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::shell::wlr_layer::Layer;
 
-use super::clip::{ClipElement, ClipShape};
-use super::compose::{corner_style, item, output_rect, Composition, Piece, Tree};
+use super::compose::{corner_style, item, output_rect, Composition, Picture, Piece, Tree};
 use super::lower::{id_hash, lower, Lowering};
 use super::material::{GpuRecipe, MaterialElement, MaterialStage, SharedMaterial};
 use super::mesh::{capture, MeshElement, MeshGl, SharedMesh};
 use super::motion::{cross_fade_opacity, skips_frame_animation, WorkspaceTransition};
-use super::programs::{corner_uniforms, Programs};
+use super::programs::Programs;
 use super::shader_rect::{to_physical_rect, ElementCache, ElementKey, ShaderRect, Sig};
 use super::ui::{rounded_rect, RoundedRectSpec};
 use super::{CupertinoElement, SceneLayer};
@@ -515,35 +515,6 @@ fn shadow_scale(plan: &WindowPlan) -> f64 {
     plan.scale_x.min(plan.scale_y).max(0.0).max(0.25)
 }
 
-/// `e` masked by `shape`. The shape's generation comes from the element cache, so a change of the
-/// mask alone (an animated corner radius) damages the element.
-fn clipped<E: Element>(p: &mut SceneParams<'_>, e: E, shape: ClipShape) -> ClipElement<E> {
-    let r = shape.rect;
-    let sig = Sig::new()
-        .f(f64::from(shape.extent))
-        .f(f64::from(shape.exponent))
-        .f(f64::from(r.loc.x))
-        .f(f64::from(r.loc.y))
-        .f(f64::from(r.size.w))
-        .f(f64::from(r.size.h))
-        .finish();
-    let (_, generation) = p.cache.slot(ElementKey::new("clip", id_hash(e.id())), sig);
-    ClipElement::new(e, p.res.programs.clip.clone(), shape, generation)
-}
-
-/// Rounded mask of `plan.visual` with a visual corner radius of `radius` points.
-fn corner_clip(p: &SceneParams<'_>, plan: &WindowPlan, radius: f64) -> ClipShape {
-    let rect = to_physical_rect(local(plan.visual, &p.rect), Scale::from(p.scale));
-    let (extent, exponent) = corner_uniforms(radius, p.config.window.continuous_corners, p.scale);
-    ClipShape {
-        rect,
-        extent,
-        exponent,
-        viewport: p.output_px,
-        exact: plan.exact,
-    }
-}
-
 /// Shadow behind `plan.visual` from the verified parameter table; the shader receives the
 /// device-pixel values of `ShadowParams::gpu` converted back to points.
 fn shadow_data(
@@ -634,7 +605,7 @@ fn window_elements(
     plan: &WindowPlan,
     active: bool,
     shadow: bool,
-    decorations: Vec<CupertinoElement>,
+    decorations: Vec<Piece>,
 ) -> Vec<Piece> {
     let mut out: Vec<Piece> = Vec::new();
     let scale = Scale::from(p.scale);
@@ -679,7 +650,7 @@ fn window_elements(
         out.extend(popup_backdrop_elements(p, &backdrops, alpha));
     }
 
-    out.extend(decorations.into_iter().map(Piece::from));
+    out.extend(decorations);
     let styled = style.style_client_decorated || entry.server_side;
     let radius = plan
         .corner
@@ -753,12 +724,11 @@ fn rescaled_backdrops(
 /// Title bar and rim of a server-side decorated window (front to back), rescaled with the window
 /// and, for a stage placement ([`WindowPlan::corner`]), masked to its animated corners.
 fn builtin_decorations(
-    renderer: &mut GlesRenderer,
     p: &mut SceneParams<'_>,
     entry: &WindowEntry,
     plan: &WindowPlan,
     active: bool,
-) -> Vec<CupertinoElement> {
+) -> Vec<Piece> {
     let geo = entry.window.geometry();
     let ins = entry.insets;
     let (fw, fh) = (
@@ -788,19 +758,45 @@ fn builtin_decorations(
     });
     let scale = Scale::from(p.scale);
     let v_phys = to_physical_rect(local(plan.visual, &p.rect), scale);
-    let rescale = Scale::from((plan.scale_x, plan.scale_y));
-    let alpha = Some(plan.opacity as f32);
+    let alpha = plan.opacity as f32;
     let loc = v_phys.loc.to_f64();
-    let clip = plan.corner.map(|r| corner_clip(p, plan, r));
-    let element = |p: &mut SceneParams<'_>,
-                   e: MemoryRenderBufferRenderElement<GlesRenderer>|
-     -> CupertinoElement {
-        match clip {
-            Some(shape) => {
-                RescaleRenderElement::from_element(clipped(p, e, shape), v_phys.loc, rescale).into()
-            }
-            None => RescaleRenderElement::from_element(e, v_phys.loc, rescale).into(),
-        }
+    let clip = plan.corner.map_or(Clip::None, |radius| Clip::Rounded {
+        rect: output_rect(local(plan.visual, &p.rect)),
+        radius,
+        style: corner_style(p.config.window.continuous_corners),
+        exact: plan.exact,
+    });
+    let grid = |point: Point<f64, Physical>| {
+        OutputPoint(cupertino_geometry::Point::new(
+            point.x / p.scale,
+            point.y / p.scale,
+        ))
+    };
+    let pivot = grid(v_phys.loc.to_f64());
+    let placement = |at: Point<f64, Physical>| Placement {
+        origin: grid(at),
+        pivot,
+        scale_x: plan.scale_x,
+        scale_y: plan.scale_y,
+    };
+    let picture = |buffer: &smithay::backend::renderer::element::memory::MemoryRenderBuffer,
+                   kind: SceneKind,
+                   buffer_px: (i32, i32),
+                   src: smithay::utils::Rectangle<f64, Logical>,
+                   size: smithay::utils::Size<i32, Logical>,
+                   at: Point<f64, Physical>| {
+        Piece::Image(Box::new(Picture {
+            buffer: buffer.clone(),
+            kind,
+            index: entry.id.0,
+            role: ImageRole::Decoration,
+            buffer_px,
+            src,
+            size: (size.w, size.h),
+            placement: placement(at),
+            opacity: alpha,
+            clip,
+        }))
     };
     let mut out = Vec::new();
     // the strip of a unified bar lies over the surface; the rim below a standard bar starts under it
@@ -813,17 +809,14 @@ fn builtin_decorations(
         (0.0, 0.0).into(),
         (f64::from(bufs.titlebar_px.0), f64::from(bufs.titlebar_px.1)).into(),
     );
-    if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(
-        renderer,
-        loc,
+    out.push(picture(
         &bufs.titlebar,
-        alpha,
-        Some(tb_src),
-        Some(size),
-        Kind::Unspecified,
-    ) {
-        out.push(element(p, e));
-    }
+        SceneKind::TitleBar,
+        bufs.titlebar_px,
+        tb_src,
+        size,
+        loc,
+    ));
     let tb_px = if entry.titlebar == TitlebarStyle::Standard {
         bufs.titlebar_px.1
     } else {
@@ -838,31 +831,30 @@ fn builtin_decorations(
         fh.round() as i32 - reserved,
     ));
     let rim_loc = loc + Point::<f64, Physical>::from((0.0, f64::from(tb_px)));
-    if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(
-        renderer,
-        rim_loc,
-        &bufs.rim,
-        alpha,
-        Some(src),
-        Some(rim_size),
-        Kind::Unspecified,
-    ) {
-        out.insert(0, element(p, e));
-    }
+    out.insert(
+        0,
+        picture(
+            &bufs.rim,
+            SceneKind::Rim,
+            bufs.rim_px,
+            src,
+            rim_size,
+            rim_loc,
+        ),
+    );
     out
 }
 
-/// Per-window elements of the decorations, front to back.
+/// Per-window pieces of the decorations, front to back.
 fn window_decorations(
-    renderer: &mut GlesRenderer,
     p: &mut SceneParams<'_>,
     entry: &WindowEntry,
     plan: &WindowPlan,
     active: bool,
-) -> Vec<CupertinoElement> {
+) -> Vec<Piece> {
     let mut out = Vec::new();
     if entry.server_side && p.config.window.decorations {
-        out.extend(builtin_decorations(renderer, p, entry, plan, active));
+        out.extend(builtin_decorations(p, entry, plan, active));
     }
     out
 }
@@ -903,7 +895,7 @@ pub fn capture_window(
         exact: true,
         corner: None,
     };
-    let deco = window_decorations(renderer, p, entry, &plan, active);
+    let deco = window_decorations(p, entry, &plan, active);
     let pieces = window_elements(p, entry, &plan, active, shadow, deco);
     let mut stack = Composition::new(p.scale);
     stack.extend(SceneLayer::Windows, pieces);
@@ -1338,7 +1330,7 @@ fn snap_preview(p: &mut SceneParams<'_>, stack: &mut Composition) {
     stack.push(SceneLayer::SnapPreview, e);
 }
 
-fn cursor(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &mut Composition) {
+fn cursor(p: &mut SceneParams<'_>, stack: &mut Composition) {
     let scale = Scale::from(p.scale);
     let pos = p.pointer - Point::from((p.rect.x, p.rect.y));
     match std::mem::replace(&mut p.cursor, CursorPlan::Hidden) {
@@ -1350,27 +1342,34 @@ fn cursor(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &mut Comp
                 f64::from(frame.hotspot.x) * k,
                 f64::from(frame.hotspot.y) * k,
             ));
-            let loc = (pos - hotspot).to_physical(scale);
+            let top_left = pos - hotspot;
             let (w, h) = frame.pixels;
-            let drawn = Size::<i32, Logical>::from((
+            let drawn = (
                 (f64::from(w) * k).round() as i32,
                 (f64::from(h) * k).round() as i32,
-            ));
+            );
             // the whole image: without `src` the element samples a `drawn`-sized corner of it
             let src = smithay::utils::Rectangle::<f64, Logical>::from_size(
                 (f64::from(w), f64::from(h)).into(),
             );
-            if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(
-                renderer,
-                loc,
-                &frame.buffer,
-                None,
-                Some(src),
-                Some(drawn),
-                Kind::Cursor,
-            ) {
-                stack.push(SceneLayer::Cursor, e);
-            }
+            stack.push(
+                SceneLayer::Cursor,
+                Piece::Image(Box::new(Picture {
+                    buffer: frame.buffer.clone(),
+                    kind: SceneKind::CursorImage,
+                    index: 0,
+                    role: ImageRole::Cursor,
+                    buffer_px: (w as i32, h as i32),
+                    src,
+                    size: drawn,
+                    placement: Placement {
+                        origin: OutputPoint(cupertino_geometry::Point::new(top_left.x, top_left.y)),
+                        ..Placement::IDENTITY
+                    },
+                    opacity: 1.0,
+                    clip: Clip::None,
+                })),
+            );
         }
         CursorPlan::Surface {
             surface,
@@ -1397,7 +1396,7 @@ fn cursor(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &mut Comp
     }
 }
 
-fn overview(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &mut Composition) -> bool {
+fn overview(p: &mut SceneParams<'_>, stack: &mut Composition) -> bool {
     let Some(session) = p
         .shell
         .overview
@@ -1452,7 +1451,7 @@ fn overview(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &mut Co
             corner: None,
         };
         let active = key == Some(*id);
-        let deco = window_decorations(renderer, p, entry, &plan, active);
+        let deco = window_decorations(p, entry, &plan, active);
         let els = window_elements(p, entry, &plan, active, true, deco);
         windows_front_to_back.extend(els);
     }
@@ -1482,7 +1481,7 @@ pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<C
     }
     stack.extend(SceneLayer::BackdropCapture, captures);
 
-    let in_overview = overview(renderer, &mut p, &mut stack);
+    let in_overview = overview(&mut p, &mut stack);
     if !in_overview {
         let width = p.rect.w;
         let list = windows_on_output(
@@ -1530,7 +1529,7 @@ pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<C
             }
             let active = key == Some(id);
             if in_strip {
-                let deco = window_decorations(renderer, &mut p, entry, &plan, active);
+                let deco = window_decorations(&mut p, entry, &plan, active);
                 strip.extend(window_elements(&mut p, entry, &plan, active, true, deco));
                 continue;
             }
@@ -1561,7 +1560,7 @@ pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<C
                     .map(Piece::from),
                 );
             }
-            let deco = window_decorations(renderer, &mut p, entry, &plan, active);
+            let deco = window_decorations(&mut p, entry, &plan, active);
             front_to_back.extend(window_elements(&mut p, entry, &plan, active, true, deco));
         }
         let mut ghosts: Vec<Piece> = closing_elements(&mut p)
@@ -1593,7 +1592,7 @@ pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<C
         );
     }
     display_filter(&mut p, &mut stack);
-    cursor(renderer, &mut p, &mut stack);
+    cursor(&mut p, &mut stack);
 
     let mut ordered = lower_stack(stack, renderer, &mut p);
     finalize_materials(&mut ordered, p.scale, p.cache);
@@ -1634,7 +1633,7 @@ fn locked_scene(
         );
     }
     display_filter(&mut p, &mut stack);
-    cursor(renderer, &mut p, &mut stack);
+    cursor(&mut p, &mut stack);
     let mut ordered = lower_stack(stack, renderer, &mut p);
     finalize_materials(&mut ordered, p.scale, p.cache);
     p.cache.end_frame();

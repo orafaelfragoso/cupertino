@@ -38,6 +38,13 @@ pub enum SceneKind {
     DragIcon,
     LockContent,
     CursorContent,
+    TitleBar,
+    Rim,
+    CursorImage,
+    InputHud,
+    AccentPopup,
+    InputHudShadow,
+    AccentShadow,
     /// Content the renderer still builds itself; removed with the effect migration.
     LocalPass,
     #[cfg(test)]
@@ -60,6 +67,13 @@ impl SceneKind {
             Self::DragIcon => "drag-icon",
             Self::LockContent => "lock-content",
             Self::CursorContent => "cursor-content",
+            Self::TitleBar => "title-bar",
+            Self::Rim => "rim",
+            Self::CursorImage => "cursor-image",
+            Self::InputHud => "input-hud",
+            Self::AccentPopup => "accent-popup",
+            Self::InputHudShadow => "input-hud-shadow",
+            Self::AccentShadow => "accent-shadow",
             Self::LocalPass => "local-pass",
             #[cfg(test)]
             Self::Test => "test",
@@ -236,6 +250,7 @@ mod tests {
                 alpha: AlphaMode::Premultiplied,
             },
             role: ImageRole::Standalone,
+            size: (90, 90),
         };
         items.push(SceneLayer::Windows, image);
         items.push(

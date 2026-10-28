@@ -148,6 +148,9 @@ pub struct MenuBarUpdate {
     pub screen_capture: Option<bool>,
     /// Which process may answer as the session agent.
     pub session_agent: Option<SessionAgent>,
+    /// The lightness of the wallpaper under the bar (CIE L*/100 in thousandths, at most 1000), from version 14 once
+    /// the server has measured it.
+    pub backdrop_lightness: Option<u16>,
     /// The windows of the active application, in stacking order from the top; a group with `window_state` carries
     /// the complete list from version 10.
     pub windows: Option<Vec<AppWindow>>,
@@ -430,6 +433,9 @@ impl GroupBuilder {
                     WEnum::Value(_) | WEnum::Unknown(_) => SessionAgent::None,
                 })
             }
+            Event::BackdropLuminance { luminance } => {
+                self.update.backdrop_lightness = Some(luminance.min(1000) as u16)
+            }
             Event::AppWindow { id, title, flags } => {
                 let flags = match flags {
                     WEnum::Value(flags) => flags,
@@ -524,6 +530,7 @@ mod tests {
                 engage_help: false,
                 screen_capture: None,
                 session_agent: None,
+                backdrop_lightness: None,
                 windows: None,
                 shortcuts: None,
             }]
@@ -706,6 +713,29 @@ mod tests {
                 .as_ref()
                 .and_then(|s| s.chord(BoundAction::HelpSearch)),
             Some("Shift+Super+slash")
+        );
+    }
+
+    #[test]
+    fn the_backdrop_lightness_arrives_in_its_group_capped_at_white() {
+        let updates = feed(vec![
+            Event::BackdropLuminance { luminance: 620 },
+            Event::Done,
+            Event::BackdropLuminance { luminance: 70_000 },
+            Event::Done,
+        ]);
+        assert_eq!(
+            updates,
+            [
+                MenuBarUpdate {
+                    backdrop_lightness: Some(620),
+                    ..MenuBarUpdate::default()
+                },
+                MenuBarUpdate {
+                    backdrop_lightness: Some(1000),
+                    ..MenuBarUpdate::default()
+                }
+            ]
         );
     }
 

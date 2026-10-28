@@ -256,6 +256,7 @@ enum BarEvent {
     EngageHelp,
     ScreenCapture(u32),
     SessionAgent(u32, u32),
+    BackdropLuminance(u32),
     AppWindow {
         id: u32,
         title: String,
@@ -455,6 +456,7 @@ impl Dispatch<CupertinoMenuBarV1, ()> for ClientState {
             E::EngageHelp => BarEvent::EngageHelp,
             E::ScreenCapture { active } => BarEvent::ScreenCapture(active),
             E::SessionAgent { trust, pid } => BarEvent::SessionAgent(raw(trust), pid),
+            E::BackdropLuminance { luminance } => BarEvent::BackdropLuminance(luminance),
             E::AppWindow { id, title, flags } => BarEvent::AppWindow {
                 id,
                 title,
@@ -1365,6 +1367,81 @@ fn a_version_8_bar_is_told_which_process_is_the_session_agent() {
         4,
         "an unchanged answer is not sent again"
     );
+    assert_eq!(bar.error(), None);
+}
+
+/// The `backdrop_luminance` values the bar got, in order.
+fn backdrop_values(bar: &BarClient) -> Vec<u32> {
+    bar.groups()
+        .iter()
+        .flatten()
+        .filter_map(|e| match e {
+            BarEvent::BackdropLuminance(l) => Some(*l),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Name a new session agent, so the bar's next group shows that everything sent before it has arrived.
+fn session_agent_group(h: &mut Harness, bar: &BarClient) {
+    let before = bar.groups().len();
+    h.state.config.dev_shell = !h.state.config.dev_shell;
+    h.state.refresh_session_agent();
+    h.wait_for_groups(bar, before + 1);
+}
+
+#[test]
+fn a_version_14_bar_is_told_the_backdrop_lightness_in_a_group_of_its_own_when_it_moves_by_more_than_10(
+) {
+    let Some(mut h) = Harness::new() else { return };
+    let out = h.state.outputs[0].id;
+    let bar = bar_at(&mut h, 14);
+    h.state.set_backdrop_lightness(out, None);
+    session_agent_group(&mut h, &bar);
+    assert!(backdrop_values(&bar).is_empty(), "no measure, no event");
+
+    h.state.set_backdrop_lightness(out, Some(620));
+    h.wait_for_groups(&bar, 6);
+    assert_eq!(
+        bar.groups()[5],
+        [BarEvent::BackdropLuminance(620), BarEvent::Done]
+    );
+    h.state.set_backdrop_lightness(out, Some(630));
+    h.state.set_backdrop_lightness(out, Some(610));
+    h.state.set_backdrop_lightness(out, Some(631));
+    h.state.set_backdrop_lightness(out, Some(1200));
+    h.wait_for_groups(&bar, 8);
+    assert_eq!(
+        backdrop_values(&bar),
+        [620, 631, 1000],
+        "a move of 10 is not sent, and the value is clamped to white"
+    );
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn a_version_14_bar_gets_the_known_backdrop_lightness_after_its_first_groups() {
+    let Some(mut h) = Harness::new() else { return };
+    let out = h.state.outputs[0].id;
+    h.state.set_backdrop_lightness(out, Some(300));
+    let bar = bar_at(&mut h, 14);
+    h.wait_for_groups(&bar, 5);
+    assert_eq!(
+        bar.groups()[4],
+        [BarEvent::BackdropLuminance(300), BarEvent::Done]
+    );
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn a_version_13_bar_never_gets_the_backdrop_lightness() {
+    let Some(mut h) = Harness::new() else { return };
+    let out = h.state.outputs[0].id;
+    h.state.set_backdrop_lightness(out, Some(300));
+    let bar = bar_at(&mut h, 13);
+    h.state.set_backdrop_lightness(out, Some(800));
+    session_agent_group(&mut h, &bar);
+    assert!(backdrop_values(&bar).is_empty());
     assert_eq!(bar.error(), None);
 }
 

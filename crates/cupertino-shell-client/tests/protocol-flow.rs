@@ -1135,7 +1135,10 @@ fn surface_lifecycle_against_a_protocol_server() {
     control.send(Control::PointerPress).unwrap();
     let mut seen = Vec::new();
     wait_for(&mut conn, &mut stash, |e| {
-        if let Event::Pointer { surface: s, event } = e {
+        if let Event::Pointer {
+            surface: s, event, ..
+        } = e
+        {
             assert_eq!(*s, surface);
             seen.push(*event);
         }

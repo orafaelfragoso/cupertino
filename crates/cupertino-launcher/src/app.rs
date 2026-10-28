@@ -345,12 +345,13 @@ impl App {
                     presenter.frame_done();
                 }
             }
-            Event::Pointer { surface, event } if surface == self.layer.surface() => {
+            Event::Pointer { surface, event, .. } if surface == self.layer.surface() => {
                 self.pointer(event)?
             }
             Event::Pointer {
                 surface,
                 event: PointerEvent::Button { pressed: true, .. },
+                ..
             } if Some(surface) == catcher => self.hide()?,
             Event::Keyboard {
                 event:

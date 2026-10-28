@@ -537,7 +537,7 @@ impl Overlay {
                 self.redraw_toolbar();
                 return Ok(outcome);
             }
-            Event::Pointer { surface, event } => {
+            Event::Pointer { surface, event, .. } => {
                 return self.pointer(wl, surface, event, settings, settings_path)
             }
             Event::Extension(event) => match wl.extension(&event) {

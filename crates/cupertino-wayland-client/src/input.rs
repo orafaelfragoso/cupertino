@@ -5,6 +5,7 @@ use crate::{Error, SurfaceId};
 use cupertino_geometry::Point;
 use std::os::fd::OwnedFd;
 use std::time::{Duration, Instant};
+use wayland_client::protocol::wl_pointer::AxisSource;
 use xkbcommon::xkb;
 
 /// Linux input event codes (`linux/input-event-codes.h`).
@@ -72,6 +73,13 @@ pub enum PointerEvent {
         dx: f64,
         dy: f64,
         position: Point,
+        /// What scrolled, when the compositor said (`wl_pointer` version 5 and later).
+        source: Option<AxisSource>,
+        /// Wheel detents in 120ths of a notch, `(x, y)`, for a wheel that has them; high-resolution wheels send
+        /// fractions of 120.
+        value120: Option<(i32, i32)>,
+        /// The finger left the touchpad (or a continuous scroll ended): kinetic scrolling may start from here.
+        stop: bool,
     },
 }
 
@@ -111,7 +119,16 @@ pub enum KeyboardEvent {
 pub(crate) struct PointerTracker {
     focus: Option<SurfaceId>,
     position: Point,
-    scroll: Option<(f64, f64)>,
+    scroll: Option<Scroll>,
+}
+
+/// A scroll collected over one pointer frame.
+#[derive(Debug, Default)]
+struct Scroll {
+    delta: (f64, f64),
+    source: Option<AxisSource>,
+    value120: Option<(i32, i32)>,
+    stop: bool,
 }
 
 impl PointerTracker {
@@ -156,17 +173,37 @@ impl PointerTracker {
 
     /// Add one axis of a scroll to the pending one; `vertical` selects `dy`.
     pub(crate) fn axis(&mut self, vertical: bool, value: f64) {
-        let (dx, dy) = self.scroll.get_or_insert((0.0, 0.0));
-        if vertical {
-            *dy += value;
-        } else {
-            *dx += value;
-        }
+        let (dx, dy) = &mut self.scroll.get_or_insert_default().delta;
+        *if vertical { dy } else { dx } += value;
     }
 
-    /// End a pointer frame: both axes of the pending scroll become one event.
+    pub(crate) fn axis_source(&mut self, source: AxisSource) {
+        self.scroll.get_or_insert_default().source = Some(source);
+    }
+
+    /// Wheel detents in 120ths of a notch on one axis (`axis_value120`, or `axis_discrete` times 120 before version 8).
+    pub(crate) fn axis_value120(&mut self, vertical: bool, value120: i32) {
+        let (x, y) = self
+            .scroll
+            .get_or_insert_default()
+            .value120
+            .get_or_insert((0, 0));
+        let axis = if vertical { y } else { x };
+        *axis = axis.saturating_add(value120);
+    }
+
+    pub(crate) fn axis_stop(&mut self) {
+        self.scroll.get_or_insert_default().stop = true;
+    }
+
+    /// End a pointer frame: both axes of the pending scroll, and a stop without movement, become one event.
     pub(crate) fn frame(&mut self) -> Option<(SurfaceId, PointerEvent)> {
-        let (dx, dy) = self.scroll.take()?;
+        let Scroll {
+            delta: (dx, dy),
+            source,
+            value120,
+            stop,
+        } = self.scroll.take()?;
         self.focus.map(|s| {
             (
                 s,
@@ -174,8 +211,29 @@ impl PointerTracker {
                     dx,
                     dy,
                     position: self.position,
+                    source,
+                    value120,
+                    stop,
                 },
             )
+        })
+    }
+}
+
+/// The compositor's input clock as last seen: its latest timestamp and when that arrived.
+#[derive(Debug, Default)]
+pub(crate) struct InputClock(Option<(u32, Instant)>);
+
+impl InputClock {
+    pub(crate) fn note(&mut self, time: u32, at: Instant) {
+        self.0 = Some((time, at));
+    }
+
+    /// The input time at `now`: the latest timestamp advanced by the milliseconds since it arrived (wrapping); 0
+    /// before any.
+    pub(crate) fn at(&self, now: Instant) -> u32 {
+        self.0.map_or(0, |(time, at)| {
+            time.wrapping_add(now.saturating_duration_since(at).as_millis() as u32)
         })
     }
 }
@@ -389,7 +447,10 @@ mod tests {
                 PointerEvent::Scroll {
                     dx: 4.0,
                     dy: -12.5,
-                    position
+                    position,
+                    source: None,
+                    value120: None,
+                    stop: false,
                 }
             ))
         );
@@ -397,6 +458,61 @@ mod tests {
         t.forget(s);
         assert_eq!(t.leave(), None);
         assert_eq!(t.motion(Point::ZERO), None);
+    }
+
+    #[test]
+    fn a_wheel_frame_carries_its_source_and_detents_and_a_lift_alone_is_a_stop() {
+        let mut t = PointerTracker::default();
+        let s = SurfaceId(1);
+        t.enter(s, Point::ZERO);
+        t.axis_source(AxisSource::Wheel);
+        t.axis(true, 15.0);
+        t.axis_value120(true, 120);
+        t.axis_value120(false, -60);
+        t.axis_value120(true, 60);
+        let Some((
+            _,
+            PointerEvent::Scroll {
+                source,
+                value120,
+                stop,
+                ..
+            },
+        )) = t.frame()
+        else {
+            panic!("a scroll");
+        };
+        assert_eq!(
+            (source, value120, stop),
+            (Some(AxisSource::Wheel), Some((-60, 180)), false)
+        );
+        t.axis_source(AxisSource::Finger);
+        t.axis_stop();
+        assert_eq!(
+            t.frame(),
+            Some((
+                s,
+                PointerEvent::Scroll {
+                    dx: 0.0,
+                    dy: 0.0,
+                    position: Point::ZERO,
+                    source: Some(AxisSource::Finger),
+                    value120: None,
+                    stop: true,
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn the_input_clock_advances_from_the_latest_timestamp_and_wraps() {
+        let mut clock = InputClock::default();
+        let start = Instant::now();
+        assert_eq!(clock.at(start), 0);
+        clock.note(u32::MAX - 1, start);
+        assert_eq!(clock.at(start), u32::MAX - 1);
+        assert_eq!(clock.at(start + Duration::from_millis(5)), 3);
+        assert_eq!(clock.at(start - Duration::from_millis(5)), u32::MAX - 1);
     }
 
     #[test]

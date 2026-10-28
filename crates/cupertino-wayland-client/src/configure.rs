@@ -14,6 +14,41 @@ pub enum Decorations {
     Client,
 }
 
+/// What the compositor can do with a window (`xdg_toplevel.wm_capabilities`); a client-drawn title bar leaves out the
+/// buttons for what it cannot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WmCapabilities {
+    pub window_menu: bool,
+    pub maximize: bool,
+    pub fullscreen: bool,
+    pub minimize: bool,
+}
+
+impl WmCapabilities {
+    /// The capabilities of the array the event carries (native-endian `u32` values); unknown values are skipped.
+    pub(crate) fn from_wire(bytes: &[u8]) -> WmCapabilities {
+        let (words, _) = bytes.as_chunks::<4>();
+        words.iter().map(|w| u32::from_ne_bytes(*w)).fold(
+            WmCapabilities {
+                window_menu: false,
+                maximize: false,
+                fullscreen: false,
+                minimize: false,
+            },
+            |mut c, value| {
+                match xdg_toplevel::WmCapabilities::try_from(value) {
+                    Ok(xdg_toplevel::WmCapabilities::WindowMenu) => c.window_menu = true,
+                    Ok(xdg_toplevel::WmCapabilities::Maximize) => c.maximize = true,
+                    Ok(xdg_toplevel::WmCapabilities::Fullscreen) => c.fullscreen = true,
+                    Ok(xdg_toplevel::WmCapabilities::Minimize) => c.minimize = true,
+                    _ => {}
+                }
+                c
+            },
+        )
+    }
+}
+
 /// The `xdg_toplevel` states of a configure.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WindowStates {
@@ -76,6 +111,8 @@ pub struct WindowConfigure {
     pub bounds: Option<(u32, u32)>,
     pub states: WindowStates,
     pub decorations: Decorations,
+    /// What the compositor supports, when it said (`xdg_wm_base` version 5 and later); `None` means all of it.
+    pub capabilities: Option<WmCapabilities>,
 }
 
 /// A width and height from the wire: `None` when either is zero (the client chooses), negative extents rejected.
@@ -151,6 +188,27 @@ mod tests {
         );
         assert!(s.size_is_fixed());
         assert!(!WindowStates::from_wire(&wire(&[xdg_toplevel::State::Activated])).size_is_fixed());
+    }
+
+    #[test]
+    fn wm_capabilities_are_read_from_the_wire_and_unknown_ones_skipped() {
+        let bytes: Vec<u8> = [
+            xdg_toplevel::WmCapabilities::Maximize as u32,
+            99,
+            xdg_toplevel::WmCapabilities::Minimize as u32,
+        ]
+        .iter()
+        .flat_map(|v| v.to_ne_bytes())
+        .collect();
+        assert_eq!(
+            WmCapabilities::from_wire(&bytes),
+            WmCapabilities {
+                window_menu: false,
+                maximize: true,
+                fullscreen: false,
+                minimize: true,
+            }
+        );
     }
 
     #[test]

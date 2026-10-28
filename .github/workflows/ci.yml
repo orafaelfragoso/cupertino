@@ -136,6 +136,12 @@ jobs:
       - name: Clippy
         if: "!matrix.package-env"
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # The scene oracle (build.rs) compiles one crate more code; lint it too until wp04-seam-gates removes it.
+      - name: Clippy with the scene oracle
+        if: "!matrix.package-env"
+        env:
+          CUPERTINO_SCENE_ORACLE: "1"
+        run: cargo clippy -p cupertino-server --all-targets --all-features -- -D warnings
       - name: Layer rules
         if: "!matrix.package-env"
         run: cargo run -p cupertino-layers

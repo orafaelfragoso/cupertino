@@ -381,6 +381,8 @@ pub struct Wallpapers {
     next_ticket: u64,
     /// Average colour of the image drawn last, for the materials' tint; `None` while the procedural wallpaper shows.
     pub tint: Option<[f32; 3]>,
+    #[cfg(scene_oracle)]
+    held: bool,
 }
 
 impl Wallpapers {
@@ -399,7 +401,17 @@ impl Wallpapers {
             outputs: HashMap::new(),
             next_ticket: 0,
             tint: None,
+            #[cfg(scene_oracle)]
+            held: false,
         }
+    }
+
+    /// Take in the worker's answers now and keep later ones until released, so two builders see one state.
+    #[cfg(scene_oracle)]
+    pub fn hold_replies(&mut self, hold: bool) {
+        self.held = false;
+        self.collect();
+        self.held = hold;
     }
 
     /// An image is being read: frames are wanted to pick it up.
@@ -429,6 +441,10 @@ impl Wallpapers {
 
     /// Take in the answers the worker has.
     fn collect(&mut self) {
+        #[cfg(scene_oracle)]
+        if self.held {
+            return;
+        }
         let Some(loader) = &self.loader else { return };
         while let Ok(reply) = loader.replies.try_recv() {
             let Some(state) = self.outputs.get_mut(&reply.output) else {

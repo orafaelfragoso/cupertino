@@ -141,6 +141,8 @@ pub enum Action {
     ForceQuit,
     Launcher,
     FocusMenuBar,
+    /// Open the menu bar's Help menu with its search field focused.
+    HelpSearch,
     ToggleDockAutoHide,
     NotificationCenter,
     ControlPanel,
@@ -228,6 +230,7 @@ const NAMES: &[(&str, Action)] = &[
     ("force-quit", Action::ForceQuit),
     ("launcher", Action::Launcher),
     ("focus-menu-bar", Action::FocusMenuBar),
+    ("help-search", Action::HelpSearch),
     ("toggle-dock-auto-hide", Action::ToggleDockAutoHide),
     ("notification-center", Action::NotificationCenter),
     ("control-panel", Action::ControlPanel),
@@ -478,6 +481,7 @@ impl KeyBindings {
             I::ControlPanel => Action::ControlPanel,
             I::NotificationCenter => Action::NotificationCenter,
             I::FocusMenuBar => Action::FocusMenuBar,
+            I::HelpSearch => Action::HelpSearch,
             I::ToggleDockAutoHide => Action::ToggleDockAutoHide,
             I::Lock => Action::Lock,
             I::ToggleAppearance => Action::ToggleAppearance,
@@ -657,6 +661,8 @@ pub enum ShellOp {
         step: cupertino_keyboard::Step,
     },
     FocusMenuBar,
+    /// Open the Help menu of the active output's bar with its search field focused.
+    HelpSearch,
     /// Turn the docks' auto-hide on or off.
     ToggleDockAutoHide,
     /// Tell the window managers the stage shortcut was pressed.
@@ -847,6 +853,7 @@ pub fn translate_action(action: Action, ctx: &ActionContext) -> ActionPlan {
             step: cupertino_keyboard::Step::Next,
         }),
         Action::FocusMenuBar => plan.ops.push(ShellOp::FocusMenuBar),
+        Action::HelpSearch => plan.ops.push(ShellOp::HelpSearch),
         Action::ToggleDockAutoHide => plan.ops.push(ShellOp::ToggleDockAutoHide),
         Action::NotificationCenter => plan.ops.push(ShellOp::ToggleNotificationCenter),
         Action::ControlPanel => plan.ops.push(ShellOp::ToggleControlPanel),

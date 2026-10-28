@@ -77,6 +77,8 @@ struct Bar {
     /// One per open menu level, the first a popup of the bar.
     popups: Vec<PopupSurface>,
     keyboard: KeyboardInteractivity,
+    /// A surface of this bar (the bar or one of its menus) has the keyboard.
+    has_keyboard: bool,
     scale: f64,
 }
 
@@ -361,6 +363,7 @@ impl App {
             feed: BarFeed::new(key, edits),
             popups: Vec::new(),
             keyboard: KeyboardInteractivity::None,
+            has_keyboard: false,
             scale: 1.0,
         });
         if self.bars.len() == 1 {
@@ -450,8 +453,23 @@ impl App {
             }
             Event::Keyboard {
                 surface,
+                event: KeyboardEvent::Enter,
+            } => {
+                if let Some((i, part)) = self.locate(surface) {
+                    self.bars[i].has_keyboard = true;
+                    if matches!(part, Part::Bar) {
+                        let outcome = self.bars[i].controller.keyboard_arrived();
+                        self.apply(i, outcome)?;
+                    }
+                }
+            }
+            Event::Keyboard {
+                surface,
                 event: KeyboardEvent::Leave,
             } => {
+                if let Some((i, _)) = self.locate(surface) {
+                    self.bars[i].has_keyboard = false;
+                }
                 // the bar held the keyboard for the shortcut and lost it to something else
                 if let Some((i, Part::Bar)) = self.locate(surface) {
                     if self.bars[i].controller.mode() == Mode::TitleFocus {
@@ -525,6 +543,11 @@ impl App {
                             }
                             if update.engage {
                                 let outcome = self.bars[i].controller.focus_bar();
+                                self.apply(i, outcome)?;
+                            }
+                            if update.engage_help {
+                                let bar = &mut self.bars[i];
+                                let outcome = bar.controller.focus_help_search(bar.has_keyboard);
                                 self.apply(i, outcome)?;
                             }
                             self.refresh()?;
@@ -947,6 +970,11 @@ impl App {
                     &popup::placement(&geometry_rect(rect), true)?,
                 )?,
             }
+        }
+        // the grab ended with the last menu, and a destroyed surface is told no leave: the keyboard comes back to the
+        // bar only with a new enter
+        if self.bars[i].popups.is_empty() && !current.is_empty() {
+            self.bars[i].has_keyboard = false;
         }
         for (popup, rect) in self.bars[i].popups.iter_mut().zip(desired) {
             popup.rect = rect;

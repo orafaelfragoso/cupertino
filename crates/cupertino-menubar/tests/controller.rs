@@ -699,8 +699,8 @@ fn help() -> SlotKey {
     SlotKey::Menu(HELP_MENU)
 }
 
-/// The bar of [`content`] with a Help menu, the Help menu open from a click.
-fn help_open() -> MenuController {
+/// The bar of [`content`] with a Help menu, every menu closed.
+fn with_help() -> MenuController {
     let mut content = content();
     content.menus.push(MenuItem::submenu(
         HELP_MENU.0,
@@ -713,6 +713,12 @@ fn help_open() -> MenuController {
     ));
     let mut c = MenuController::new(OUT, Box::new(MonoMeasure::default()));
     c.set_content(content);
+    c
+}
+
+/// The bar of [`content`] with a Help menu, the Help menu open from a click.
+fn help_open() -> MenuController {
+    let mut c = with_help();
     let p = slot_center(&c, &help());
     c.pointer_press(p, 0.0);
     c.pointer_release(p, 0.05);
@@ -789,8 +795,9 @@ fn typing_in_the_help_menu_lists_results_and_up_down_and_return_choose_one() {
 fn a_click_on_a_result_chooses_the_item_in_its_own_menu() {
     let mut c = help_open();
     type_text(&mut c, "files");
+    // Files Guide (Help), About Files, Hide Files
     assert_eq!(row_ids(&c)[..4], [-1030, -1050, -1051, -1052]);
-    let p = row_center(&c, 0, -1051);
+    let p = row_center(&c, 0, -1052);
     c.pointer_move(p, 1.0);
     c.pointer_press(p, 1.1);
     let o = c.pointer_release(p, 1.2);
@@ -875,4 +882,85 @@ fn other_menus_have_no_search_field() {
     c.pointer_release(p, 0.05);
     assert!(c.search_field().is_none());
     assert!(!field_key(&mut c, None, 0, Some('n')));
+}
+
+#[test]
+fn the_help_search_shortcut_takes_the_keyboard_then_opens_help_with_the_field_taking_typing() {
+    let mut c = with_help();
+    let o = c.focus_help_search(false);
+    assert!(o.consumed);
+    // as for the menu-bar shortcut: the Help title has keyboard focus, which asks for the keyboard
+    assert_eq!(c.mode(), Mode::TitleFocus);
+    assert_eq!(c.highlighted_slot(), Some(&help()));
+    assert!(!c.is_open(), "no menu before the keyboard is the bar's");
+
+    let o = c.keyboard_arrived();
+    assert!(has(&o, &Effect::Opened { slot: help() }));
+    assert_eq!(c.mode(), Mode::Keyboard);
+    assert_eq!(c.search_field().map(|f| f.text()), Some(""));
+    assert_eq!(selected_id(&c, 0), None, "the field has the focus");
+    type_text(&mut c, "zoom");
+    assert_eq!(row_ids(&c)[..3], [-1030, -1050, -1051]);
+    assert_eq!(selected_id(&c, 0), Some(-1050));
+
+    // Esc clears the field, then closes the menu: nothing holds the keyboard any more
+    c.key(Key::Escape, 1.0);
+    assert_eq!(c.search_field().map(|f| f.text()), Some(""));
+    let o = c.key(Key::Escape, 1.1);
+    assert!(has(&o, &Effect::Closed));
+    assert_eq!(c.mode(), Mode::Idle);
+    assert!(!c.is_open() && c.highlighted_slot().is_none());
+    assert!(
+        !c.keyboard_arrived().consumed,
+        "a later keyboard focus opens nothing"
+    );
+}
+
+#[test]
+fn esc_before_the_keyboard_arrives_gives_it_back_and_nothing_opens() {
+    let mut c = with_help();
+    c.focus_help_search(false);
+    let o = c.key(Key::Escape, 0.5);
+    assert!(has(&o, &Effect::Closed));
+    assert_eq!(c.mode(), Mode::Idle);
+    assert!(!c.keyboard_arrived().consumed);
+    assert!(!c.is_open());
+}
+
+#[test]
+fn with_the_keyboard_held_or_a_menu_open_the_help_search_shortcut_opens_help_at_once() {
+    // the menu-bar shortcut gave the bar the keyboard
+    let mut c = with_help();
+    c.focus_bar();
+    let o = c.focus_help_search(true);
+    assert!(has(&o, &Effect::Opened { slot: help() }));
+    assert!(c.search_field().is_some());
+
+    // another menu is open: Help takes its place
+    let mut c = with_help();
+    let p = slot_center(&c, &file());
+    c.pointer_press(p, 0.0);
+    c.pointer_release(p, 0.05);
+    c.focus_help_search(true);
+    assert_eq!(c.open_slot(), Some(&help()));
+    type_text(&mut c, "zoom");
+    assert_eq!(c.search_field().map(|f| f.text()), Some("zoom"));
+}
+
+#[test]
+fn with_help_open_the_help_search_shortcut_keeps_the_field_and_its_text() {
+    let mut c = help_open();
+    type_text(&mut c, "zo");
+    let o = c.focus_help_search(true);
+    assert!(o.consumed && !has(&o, &Effect::Closed));
+    assert_eq!(c.search_field().map(|f| f.text()), Some("zo"));
+    type_text(&mut c, "om");
+    assert_eq!(c.search_field().map(|f| f.text()), Some("zoom"));
+}
+
+#[test]
+fn without_a_help_menu_the_help_search_shortcut_does_nothing() {
+    let mut c = controller();
+    assert!(!c.focus_help_search(false).consumed);
+    assert_eq!(c.mode(), Mode::Idle);
 }

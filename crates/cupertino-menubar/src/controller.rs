@@ -175,6 +175,9 @@ pub struct MenuController {
     /// The Help menu's search field and what its text finds.
     search: TextField,
     hits: Vec<Match>,
+    /// The Help search shortcut focused the Help title and asked for the keyboard: the Help menu opens with its field
+    /// focused once the keyboard is the bar's ([`MenuController::keyboard_arrived`]).
+    help_awaits_keyboard: bool,
 }
 
 impl MenuController {
@@ -205,6 +208,7 @@ impl MenuController {
             keyboard_origin: false,
             search: TextField::new(),
             hits: Vec::new(),
+            help_awaits_keyboard: false,
         };
         c.relayout();
         c
@@ -477,6 +481,7 @@ impl MenuController {
         self.title_focus = None;
         self.mode = Mode::Idle;
         self.keyboard_origin = false;
+        self.help_awaits_keyboard = false;
         self.clear_search();
         if had {
             out.effects.push(Effect::Closed);
@@ -802,6 +807,7 @@ impl MenuController {
         let Some(cur) = self.title_focus.clone() else {
             return out;
         };
+        self.help_awaits_keyboard = false;
         match key {
             Key::Left => self.title_focus = self.step_title(&cur, -1),
             Key::Right => self.title_focus = self.step_title(&cur, 1),
@@ -1039,6 +1045,58 @@ impl MenuController {
     }
 
     // ---- Help search ---------------------------------------------------------------------
+
+    /// The Help search shortcut: open the Help menu with the keyboard in its search field. `has_keyboard` says whether
+    /// the bar holds the keyboard already; without it the Help title takes keyboard focus as for the menu-bar shortcut,
+    /// which asks for the keyboard, and the menu opens when it arrives ([`MenuController::keyboard_arrived`]). With the
+    /// Help menu open already, only its submenus close. Not consumed when the bar shows no Help menu.
+    pub fn focus_help_search(&mut self, has_keyboard: bool) -> Outcome {
+        let mut out = Outcome {
+            consumed: true,
+            ..Default::default()
+        };
+        let help = SlotKey::Menu(HELP_MENU);
+        if !self.menu_slots().contains(&help) {
+            out.consumed = false;
+            return out;
+        }
+        if self.is_open() || has_keyboard {
+            self.open_help_field(&mut out);
+        } else {
+            self.title_focus = Some(help);
+            self.mode = Mode::TitleFocus;
+            self.help_awaits_keyboard = true;
+            out.effects.push(Effect::Redraw);
+        }
+        out
+    }
+
+    /// The keyboard came to the bar: the Help menu the Help search shortcut asked for opens.
+    pub fn keyboard_arrived(&mut self) -> Outcome {
+        let mut out = Outcome::default();
+        if std::mem::take(&mut self.help_awaits_keyboard) && self.mode == Mode::TitleFocus {
+            out.consumed = true;
+            self.open_help_field(&mut out);
+        }
+        out
+    }
+
+    /// Open the Help menu, or keep it open with its submenus closed, driven by the keyboard with its field taking what
+    /// is typed. Esc clears the field, then closes the menu.
+    fn open_help_field(&mut self, out: &mut Outcome) {
+        let help = SlotKey::Menu(HELP_MENU);
+        if self.open_slot.as_ref() == Some(&help) {
+            self.levels.truncate(1);
+            out.effects.push(Effect::Redraw);
+        } else {
+            self.open_title(help, out);
+        }
+        self.help_awaits_keyboard = false;
+        self.keyboard_origin = false;
+        if self.mode != Mode::Tracking {
+            self.mode = Mode::Keyboard;
+        }
+    }
 
     /// The Help menu is open, so its search field shows.
     fn searching(&self) -> bool {

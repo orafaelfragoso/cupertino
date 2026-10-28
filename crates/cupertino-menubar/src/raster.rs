@@ -7,7 +7,7 @@
 use crate::fallback::HELP_SEARCH;
 use crate::feed::{Shared, SCREEN_CAPTURE_SLOT};
 use crate::geom::Rect;
-use crate::item::Toggle;
+use crate::item::{ShortcutGlyphs, Toggle};
 use crate::layout::{
     BarContent, BarLayout, BarMetrics, MenuMetrics, PopupLayout, SlotKey, TextMeasure,
 };
@@ -38,6 +38,8 @@ const FIELD_INSET_Y: f64 = 2.0;
 const FIELD_RADIUS: f64 = 5.0;
 /// Space between the search field's box and its text in points. approximate.
 const FIELD_TEXT_INSET: f64 = 6.0;
+/// Space between the search field's box and the chord after it in points. approximate.
+const FIELD_CHORD_GAP: f64 = 8.0;
 /// Width of the search field's caret in points. approximate.
 const CARET_WIDTH: f64 = 1.0;
 /// Opacity factor of the row highlight colour behind the field's selected text. approximate.
@@ -357,7 +359,18 @@ impl Style {
             );
             let item = &row.item;
             if let Some(field) = field.filter(|_| item.id == HELP_SEARCH) {
-                self.paint_field(text, pm, rr, field, &item.label, scale);
+                let chord_left = row.shortcut.as_ref().map(|sc| {
+                    self.paint_shortcut(
+                        text,
+                        pm,
+                        rr,
+                        sc,
+                        layout.shortcut_key_width,
+                        self.color(FADED_ALPHA),
+                        scale,
+                    )
+                });
+                self.paint_field(text, pm, rr, field, &item.label, chord_left, scale);
                 continue;
             }
             if item.separator {
@@ -432,24 +445,13 @@ impl Style {
                 );
             }
             if let Some(sc) = &row.shortcut {
-                let right = rr.x() + rr.width()
-                    - m.padding_x
-                    - if item.has_submenu { m.arrow_width } else { 0.0 };
+                let rr = if item.has_submenu {
+                    GRect::new(rr.x(), rr.y(), rr.width() - m.arrow_width, rr.height())
+                } else {
+                    rr
+                };
                 let faded = [color[0], color[1], color[2], color[3] * FADED_ALPHA];
-                // the keys in a column of their own, the modifier glyphs right-aligned just before it
-                let key_x = right - layout.shortcut_key_width;
-                text.draw(pm, &sc.key, key_x, rr.y(), rr.height(), scale, false, faded);
-                let modifiers_w = text.width(&sc.modifiers, false);
-                text.draw(
-                    pm,
-                    &sc.modifiers,
-                    key_x - modifiers_w,
-                    rr.y(),
-                    rr.height(),
-                    scale,
-                    false,
-                    faded,
-                );
+                self.paint_shortcut(text, pm, rr, sc, layout.shortcut_key_width, faded, scale);
             }
             if item.has_submenu {
                 draw_chevron(
@@ -463,8 +465,38 @@ impl Style {
         }
     }
 
+    /// The shortcut `sc` at the right end of the row `rr`: the keys in a column `key_width` wide, the modifier glyphs
+    /// right-aligned just before it. Returns where the modifier glyphs begin.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_shortcut(
+        &self,
+        text: &BarText,
+        pm: &mut Pixmap,
+        rr: GRect,
+        sc: &ShortcutGlyphs,
+        key_width: f64,
+        color: Rgba,
+        scale: f64,
+    ) -> f64 {
+        let key_x = rr.x() + rr.width() - self.menu.padding_x - key_width;
+        text.draw(pm, &sc.key, key_x, rr.y(), rr.height(), scale, false, color);
+        let modifiers_x = key_x - text.width(&sc.modifiers, false);
+        text.draw(
+            pm,
+            &sc.modifiers,
+            modifiers_x,
+            rr.y(),
+            rr.height(),
+            scale,
+            false,
+            color,
+        );
+        modifiers_x
+    }
+
     /// The search field in its row `rr`: a box with the text, its selection and a steady caret, or the dimmed
-    /// `placeholder` while it is empty.
+    /// `placeholder` while it is empty. The box ends before `chord_left`, where the row's chord begins.
+    #[allow(clippy::too_many_arguments)]
     fn paint_field(
         &self,
         text: &BarText,
@@ -472,13 +504,16 @@ impl Style {
         rr: GRect,
         field: &TextField,
         placeholder: &str,
+        chord_left: Option<f64>,
         scale: f64,
     ) {
         let m = &self.menu;
+        let left = rr.x() + m.padding_x;
+        let right = chord_left.map_or(rr.x() + rr.width() - m.padding_x, |x| x - FIELD_CHORD_GAP);
         let frame = GRect::new(
-            rr.x() + m.padding_x,
+            left,
             rr.y() + FIELD_INSET_Y,
-            rr.width() - 2.0 * m.padding_x,
+            right - left,
             rr.height() - 2.0 * FIELD_INSET_Y,
         );
         fill_rounded(pm, frame, FIELD_RADIUS, scale, self.palette.separator);

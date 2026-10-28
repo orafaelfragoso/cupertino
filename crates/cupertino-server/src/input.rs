@@ -110,6 +110,8 @@ pub enum Action {
     QuitApp,
     CloseWindow,
     Minimize,
+    /// A tiled, filled or zoomed window goes back to its frame; any other is minimized.
+    MinimizeOrRestore,
     HideApp,
     HideOthers,
     ToggleZoom,
@@ -187,6 +189,7 @@ const NAMES: &[(&str, Action)] = &[
     ("quit-app", Action::QuitApp),
     ("close-window", Action::CloseWindow),
     ("minimize", Action::Minimize),
+    ("minimize-or-restore", Action::MinimizeOrRestore),
     ("hide-app", Action::HideApp),
     ("hide-others", Action::HideOthers),
     ("toggle-zoom", Action::ToggleZoom),
@@ -443,6 +446,7 @@ impl KeyBindings {
         Some(match action {
             I::CloseWindow => Action::CloseWindow,
             I::MinimizeWindow => Action::Minimize,
+            I::MinimizeOrRestoreWindow => Action::MinimizeOrRestore,
             I::ZoomWindow => Action::ToggleZoom,
             I::ToggleFullscreen => Action::ToggleFullscreen,
             I::HideApp => Action::HideApp,
@@ -752,6 +756,9 @@ pub fn translate_action(action: Action, ctx: &ActionContext) -> ActionPlan {
             window,
             target: None,
         })),
+        Action::MinimizeOrRestore => plan
+            .commands
+            .extend(window.map(|window| Command::MinimizeOrRestore { window })),
         Action::HideApp => plan
             .commands
             .extend(app.map(|app| Command::HideApp { app })),
@@ -1252,6 +1259,80 @@ mod tests {
                 "{chord:?} = {action:?}"
             );
         }
+    }
+
+    fn cupertino_bindings() -> KeyBindings {
+        KeyBindings::from_shortcuts(&cupertino_input::ShortcutMap::defaults(), "cupertino")
+    }
+
+    #[test]
+    fn a_profile_switch_while_the_switcher_is_open_keeps_its_hold_and_the_swallowed_releases() {
+        let mut c = ctx();
+        let alt = Mods {
+            alt: true,
+            ..Mods::NONE
+        };
+        let mut r = classic_router();
+        assert!(matches!(
+            press(&mut r, "Alt+Tab", &c),
+            KeyOutcome::Consumed(_)
+        ));
+        assert!(matches!(
+            press(&mut r, "Alt+F4", &c),
+            KeyOutcome::Consumed(_)
+        ));
+        c.switcher_open = true;
+        // the live switch of the profile replaces the bindings and nothing else
+        r.bindings = cupertino_bindings();
+        assert!(r.modifiers_changed(alt, &c).is_empty());
+        assert_eq!(
+            dbg(&r.modifiers_changed(Mods::NONE, &c).commands),
+            dbg(&vec![Command::SwitcherCommit])
+        );
+        // the release of a key consumed under the old table is still swallowed
+        let release = KeyEvent {
+            sym: parse_chord("F4").unwrap().sym,
+            pressed: false,
+            mods: alt,
+            repeat: false,
+        };
+        assert!(matches!(r.key(release, &c), KeyOutcome::Consumed(_)));
+    }
+
+    #[test]
+    fn a_profile_switch_with_a_modifier_held_binds_the_chord_by_the_new_table() {
+        let c = ctx();
+        let mut r = classic_router();
+        // Alt is held; the profile switches to cupertino: Alt+Tab is not a chord there, so it reaches the client
+        r.bindings = cupertino_bindings();
+        assert!(matches!(press(&mut r, "Alt+Tab", &c), KeyOutcome::Forward));
+        r.bindings = KeyBindings::from_shortcuts(
+            &cupertino_input::ShortcutMap::classic_pc_defaults(),
+            "classic-pc",
+        );
+        assert!(matches!(
+            press(&mut r, "Alt+Tab", &c),
+            KeyOutcome::Consumed(_)
+        ));
+    }
+
+    #[test]
+    fn a_locked_session_under_classic_pc_keeps_only_virtual_terminal_switching() {
+        let mut r = classic_router();
+        let locked = ActionContext {
+            locked: true,
+            ..ctx()
+        };
+        for chord in ["Alt+Tab", "Super+l", "Alt+F4", "Super+Left", "Print"] {
+            assert!(
+                matches!(press(&mut r, chord, &locked), KeyOutcome::Forward),
+                "{chord}"
+            );
+        }
+        assert!(matches!(
+            press(&mut r, "Ctrl+Alt+F3", &locked),
+            KeyOutcome::Consumed(_)
+        ));
     }
 
     #[test]

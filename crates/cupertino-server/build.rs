@@ -4,7 +4,9 @@
 //! This is a build script and not a `RUSTFLAGS` cfg like `cupertino_capture_fixtures` for one reason: `RUSTFLAGS`
 //! changes the fingerprint of every dependency, so the oracle step would need a second full set of dependency
 //! artifacts, while a build script recompiles this crate alone. It is never a cargo feature, so `--all-features`
-//! builds cannot contain it, and a release build refuses to set it.
+//! builds cannot contain it, and a release build refuses to set it. The guard looks at `PROFILE`, which is `release`
+//! for every profile that inherits from release, so custom release profiles are covered too. Packaging must not export
+//! `CUPERTINO_SCENE_ORACLE`: a debug build with it set compiles the oracle in.
 
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(scene_oracle)");

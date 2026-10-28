@@ -45,9 +45,20 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // Consume the launch grant before the bus or display starts threads, so children cannot inherit a spent token.
+    let token = std::env::var("XDG_ACTIVATION_TOKEN");
+    std::env::remove_var("XDG_ACTIVATION_TOKEN");
+    let token = match token {
+        Ok(token) => token,
+        Err(std::env::VarError::NotPresent) => String::new(),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            eprintln!("cupertino-settings: activation token is not valid UTF-8");
+            return ExitCode::FAILURE;
+        }
+    };
     let result = match pane {
-        Launch::About => about_app::run(),
-        Launch::Pane(pane) => app::run(pane),
+        Launch::About => about_app::run(token),
+        Launch::Pane(pane) => app::run(pane, token),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

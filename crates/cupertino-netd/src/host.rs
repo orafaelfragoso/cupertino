@@ -23,7 +23,9 @@ pub struct SystemHost {
 
 impl SystemHost {
     /// Opens the sockets. `rfkill_path` is `/dev/rfkill` outside tests. A kernel or machine
-    /// without nl80211 or rfkill is a machine without Wi-Fi, not an error; any other failure is.
+    /// without nl80211 or rfkill is a machine without Wi-Fi, not an error; so is an rfkill device this user may not
+    /// open (an unprivileged session daemon), which is reported and leaves the radio switch unavailable. Any other
+    /// failure is an error.
     pub fn open(rfkill_path: &Path) -> Result<Self> {
         let wireless = match Nl80211::open() {
             Ok(wireless) => Some(wireless),
@@ -36,6 +38,15 @@ impl SystemHost {
                 source: Errno::NOENT,
                 ..
             }) => None,
+            Err(
+                error @ cupertino_netlink::Error::Device {
+                    source: Errno::ACCESS,
+                    ..
+                },
+            ) => {
+                eprintln!("cupertino-netd: {error}; the radio switch is unavailable");
+                None
+            }
             Err(error) => return Err(Error::Netlink(error)),
         };
         Ok(Self {
@@ -112,5 +123,28 @@ impl Host for SystemHost {
         let mut bytes = [0u8; 4];
         getrandom(&mut bytes, GetRandomFlags::empty()).map_err(Error::syscall("getrandom"))?;
         Ok(u32::from_ne_bytes(bytes))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    #[test]
+    fn an_rfkill_device_the_user_may_not_open_leaves_the_radio_switch_unavailable() {
+        let path =
+            std::env::temp_dir().join(format!("cupertino-netd-rfkill-{}", std::process::id()));
+        std::fs::write(&path, []).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let denied = std::fs::File::open(&path).is_err();
+        let host = SystemHost::open(&path);
+        std::fs::remove_file(&path).unwrap();
+        if !denied {
+            eprintln!("skipping: root may open any file");
+            return;
+        }
+        assert!(host.unwrap().rfkill().is_none());
     }
 }

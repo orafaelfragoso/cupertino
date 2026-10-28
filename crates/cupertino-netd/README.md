@@ -39,7 +39,7 @@ cargo run -p cupertino-netd --features app -- [--session-bus [--no-auth]] [--res
 ```
 
 - **System bus by default**, as root (or with `CAP_NET_ADMIN` and `CAP_NET_RAW`): it changes addresses and routes, opens
-  packet sockets and writes `/dev/rfkill`. It needs an `iwd` service. `/etc/resolv.conf` is not touched: link it to the
+  packet sockets and writes `/dev/rfkill` (without access to that device it still serves, with the radio switch unavailable). It needs an `iwd` service. `/etc/resolv.conf` is not touched: link it to the
   file named by `--resolv-conf` yourself.
 - **`--session-bus`** serves on the bus named by `DBUS_SESSION_BUS_ADDRESS`. Unprivileged, it reads the real kernel state
   and reports the failures of the writes it cannot make. **`--no-auth`** skips the session check and needs `--session-bus`.

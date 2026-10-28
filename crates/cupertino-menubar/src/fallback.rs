@@ -63,7 +63,14 @@ const TILE_FILL: i32 = -1017;
 const TILE_MENU: i32 = -1018;
 /// Close Window of the File menu; it acts as the Window menu's.
 const FILE_CLOSE_WINDOW: i32 = -1019;
-const HELP_SEARCH: i32 = -1030;
+/// The search field, the first row of the Help menu.
+pub const HELP_SEARCH: ItemId = ItemId(-1030);
+/// The row the Help menu shows when a search finds nothing.
+pub const NO_SEARCH_RESULTS: ItemId = ItemId(-1031);
+/// Result `n` of a Help search is `SEARCH_RESULTS_BASE - n`.
+const SEARCH_RESULTS_BASE: i32 = -1050;
+/// Results a Help search shows at most.
+pub const MAX_SEARCH_RESULTS: usize = 12;
 const UNDO: i32 = -1040;
 const REDO: i32 = -1041;
 const CUT: i32 = -1042;
@@ -120,6 +127,19 @@ impl FallbackAction {
 /// exporter's item with such an id; routing goes by [`crate::item::Origin`], not by this range.
 pub fn is_system(id: ItemId) -> bool {
     id.0 <= ABOUT
+}
+
+/// The id of the row of the `n`th result of a Help search.
+pub fn search_result(n: usize) -> ItemId {
+    ItemId(SEARCH_RESULTS_BASE - n as i32)
+}
+
+/// The position among the results of a Help search of the row `id`; `None` for any other id.
+pub fn search_result_row(id: ItemId) -> Option<usize> {
+    let row = SEARCH_RESULTS_BASE.checked_sub(id.0)?;
+    (0..MAX_SEARCH_RESULTS as i32)
+        .contains(&row)
+        .then_some(row as usize)
 }
 
 /// The action a synthetic item stands for.
@@ -356,7 +376,7 @@ pub fn menus(
         MenuItem::submenu(
             HELP_MENU.0,
             "Help",
-            vec![MenuItem::new(HELP_SEARCH, "Search").disabled()],
+            vec![MenuItem::new(HELP_SEARCH.0, "Search").disabled()],
         ),
     ]
 }
@@ -685,7 +705,7 @@ mod tests {
             assert_eq!(action_for(menu), None);
         }
         assert_eq!(action_for(ItemId(TILE_MENU)), None);
-        assert_eq!(action_for(ItemId(HELP_SEARCH)), None);
+        assert_eq!(action_for(HELP_SEARCH), None);
         assert_eq!(action_for(ItemId(-1100)), None, "separators");
         assert_eq!(action_for(ItemId(-4000)), None, "past the window list");
     }

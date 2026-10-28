@@ -181,6 +181,8 @@ pub struct MenuItem {
     pub action: Option<String>,
     /// The GMenuModel accelerator (`<Primary>q`), shown through the bar's modifier map; `None` from other sources.
     pub accel: Option<String>,
+    /// Secondary text drawn dimmed after the label (the menu path of a Help search result); `None` for others.
+    pub detail: Option<String>,
 }
 
 impl MenuItem {

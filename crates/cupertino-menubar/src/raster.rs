@@ -4,6 +4,7 @@
 //! on them (labels, marks, highlights) into transparent pixmaps. Colours and metrics not given
 //! by the material recipes are approximate.
 
+use crate::fallback::HELP_SEARCH;
 use crate::feed::{Shared, SCREEN_CAPTURE_SLOT};
 use crate::geom::Rect;
 use crate::item::Toggle;
@@ -14,6 +15,7 @@ use cupertino_assets::{AssetError, Assets, FontRole};
 use cupertino_decorations::palette::Rgba;
 use cupertino_decorations::text::TextRenderer;
 use cupertino_geometry::{CornerStyle, Radii, Rect as GRect};
+use cupertino_text_field::TextField;
 use cupertino_theme::Typography;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -28,6 +30,18 @@ pub const POPUP_RADIUS: f64 = 8.0;
 pub const STATUS_ICON_PT: f64 = 16.0;
 /// Edge of the system menu's mark in points: the grid it is drawn on, so its strokes fall on whole pixels.
 const SYSTEM_MARK_PT: f64 = 16.0;
+/// Opacity factor of a row's shortcut and of its secondary text. approximate.
+const FADED_ALPHA: f32 = 0.65;
+/// Inset of the search field's box in its row, vertically, in points. approximate.
+const FIELD_INSET_Y: f64 = 2.0;
+/// Corner radius of the search field's box in points. approximate.
+const FIELD_RADIUS: f64 = 5.0;
+/// Space between the search field's box and its text in points. approximate.
+const FIELD_TEXT_INSET: f64 = 6.0;
+/// Width of the search field's caret in points. approximate.
+const CARET_WIDTH: f64 = 1.0;
+/// Opacity factor of the row highlight colour behind the field's selected text. approximate.
+const FIELD_SELECTION_ALPHA: f32 = 0.35;
 
 /// Colours of the bar and popup contents. approximate.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -316,13 +330,15 @@ impl Style {
     }
 
     /// Draw one popup level into `pm`, which covers the popup surface whose top-left corner is
-    /// `origin` in the coordinates of `layout`.
+    /// `origin` in the coordinates of `layout`. `field` is the Help menu's search field, drawn in its row.
+    #[allow(clippy::too_many_arguments)]
     pub fn paint_popup(
         &self,
         text: &BarText,
         pm: &mut Pixmap,
         layout: &PopupLayout,
         selected: Option<usize>,
+        field: Option<&TextField>,
         origin: (f64, f64),
         scale: f64,
     ) {
@@ -340,6 +356,10 @@ impl Style {
                 row.rect.h,
             );
             let item = &row.item;
+            if let Some(field) = field.filter(|_| item.id == HELP_SEARCH) {
+                self.paint_field(text, pm, rr, field, &item.label, scale);
+                continue;
+            }
             if item.separator {
                 let y = rr.y() + rr.height() / 2.0;
                 let sep = GRect::new(
@@ -399,11 +419,23 @@ impl Style {
                 false,
                 color,
             );
+            if let Some(detail) = &row.detail {
+                text.draw(
+                    pm,
+                    detail,
+                    text_x + text.width(&item.label, false) + m.detail_gap,
+                    rr.y(),
+                    rr.height(),
+                    scale,
+                    false,
+                    [color[0], color[1], color[2], color[3] * FADED_ALPHA],
+                );
+            }
             if let Some(sc) = &row.shortcut {
                 let right = rr.x() + rr.width()
                     - m.padding_x
                     - if item.has_submenu { m.arrow_width } else { 0.0 };
-                let faded = [color[0], color[1], color[2], color[3] * 0.65];
+                let faded = [color[0], color[1], color[2], color[3] * FADED_ALPHA];
                 // the keys in a column of their own, the modifier glyphs right-aligned just before it
                 let key_x = right - layout.shortcut_key_width;
                 text.draw(pm, &sc.key, key_x, rr.y(), rr.height(), scale, false, faded);
@@ -429,6 +461,71 @@ impl Style {
                 );
             }
         }
+    }
+
+    /// The search field in its row `rr`: a box with the text, its selection and a steady caret, or the dimmed
+    /// `placeholder` while it is empty.
+    fn paint_field(
+        &self,
+        text: &BarText,
+        pm: &mut Pixmap,
+        rr: GRect,
+        field: &TextField,
+        placeholder: &str,
+        scale: f64,
+    ) {
+        let m = &self.menu;
+        let frame = GRect::new(
+            rr.x() + m.padding_x,
+            rr.y() + FIELD_INSET_Y,
+            rr.width() - 2.0 * m.padding_x,
+            rr.height() - 2.0 * FIELD_INSET_Y,
+        );
+        fill_rounded(pm, frame, FIELD_RADIUS, scale, self.palette.separator);
+        let x = frame.x() + FIELD_TEXT_INSET;
+        if field.is_empty() {
+            let dimmed = self.color(self.palette.disabled_alpha);
+            text.draw(
+                pm,
+                placeholder,
+                x,
+                rr.y(),
+                rr.height(),
+                scale,
+                false,
+                dimmed,
+            );
+        }
+        let offset = |at: usize| x + text.width(&field.text()[..at], false);
+        let selection = field.selection();
+        let (y, h) = (
+            frame.y() + FIELD_INSET_Y,
+            frame.height() - 2.0 * FIELD_INSET_Y,
+        );
+        if selection.is_empty() {
+            let caret = GRect::new(offset(field.caret()), y, CARET_WIDTH, h);
+            fill_rounded(pm, caret, 0.0, scale, self.color(1.0));
+        } else {
+            let (start, end) = (offset(selection.start), offset(selection.end));
+            let h_color = self.palette.row_highlight;
+            let tint = [
+                h_color[0],
+                h_color[1],
+                h_color[2],
+                h_color[3] * FIELD_SELECTION_ALPHA,
+            ];
+            fill_rounded(pm, GRect::new(start, y, end - start, h), 0.0, scale, tint);
+        }
+        text.draw(
+            pm,
+            field.text(),
+            x,
+            rr.y(),
+            rr.height(),
+            scale,
+            false,
+            self.color(1.0),
+        );
     }
 }
 

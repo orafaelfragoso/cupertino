@@ -132,6 +132,16 @@ def gate(root: Path) -> tuple[Counter, list[str]]:
     return hits, problems
 
 
+def metadata_problems(root: Path) -> list[str]:
+    release = root / "packaging" / "release.py"
+    if not release.is_file():
+        return []
+    result = subprocess.run([sys.executable, "-I", str(release), "check-metadata"], cwd=root, capture_output=True, text=True)
+    if result.returncode == 0:
+        return []
+    return [f"packaging: check-metadata: {line}" for line in (result.stderr or result.stdout).splitlines() if line.strip()]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
@@ -140,6 +150,7 @@ def main() -> int:
     if not root.is_dir():
         parser.error("root must be a directory")
     hits, problems = gate(root)
+    problems += metadata_problems(root)
     for problem in problems:
         print(problem, file=sys.stderr)
     print(f"gate: {len(problems)} problems ({dict(hits)})")

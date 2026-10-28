@@ -39,6 +39,17 @@ sidebar row (approximate). The desktop entry is `data/applications/cupertino-set
 | `agent` (feature `app`) | The pairing agent `org.cupertino.Bluetooth1.Agent` at `/org/cupertino/Settings1/Agent`, registered while the Bluetooth pane is shown; each question waits for its sheet; a call from anyone but the current owner of `org.cupertino.Bluetooth1` is `Rejected` |
 | `instance` (feature `app`) | `org.cupertino.Settings1`: claim the name, or hand the pane to the owner; any session client may call `ShowPane` (the launchers of §8 are several processes), and it only switches the pane |
 
+## Damage
+
+The window keeps the rectangles that changed since its last frame (`cupertino_ui_wayland::Damage`) and the presenter
+converts and reports only those. The painter still draws the whole frame, into a scratch pixmap, and the damaged
+rectangles of it are copied into the presenter's pixmap, so the pixels equal those of a whole redraw; a painter that
+clips to the rectangles is a separate piece of work. Three changes say where they are: a blink of the search field's
+caret (`paint::caret_area`), a scroll of the pane (the content and the title region it scrolls under,
+`paint::scroll_areas`) and a drag of a slider (its row, `paint::row_area`). Every other change redraws the whole
+window; the window has no hover state. The unit tests paint each classified change with and without it and require
+the frames to differ only inside the reported areas.
+
 ## Open issues
 
 - Every pane has content. Every file the panes write is applied at once by its process, so no pane shows the

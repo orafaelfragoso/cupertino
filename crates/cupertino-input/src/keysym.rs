@@ -81,6 +81,12 @@ const NAMED: &[(&str, u32)] = &[
     ("XF86Sleep", 0x1008ff2f),
 ];
 
+/// The names the table gives keysyms, as `name_of` returns them: the key names a printed chord can hold besides the
+/// function keys (`F1` to `F35`), the keypad digits (`KP_0` to `KP_9`) and hexadecimal values.
+pub fn names() -> impl Iterator<Item = &'static str> {
+    NAMED.iter().map(|(name, _)| *name)
+}
+
 /// Keysym for a name such as `Tab`, `grave`, `a`, `5`, `F11`, `KP_3`, `U00e9` or `0xff09`.
 /// Single ASCII letters are case-sensitive as in xkbcommon (`A` is a different keysym from `a`).
 pub fn from_name(name: &str) -> Option<u32> {

@@ -14,9 +14,10 @@ use smithay::utils::{Logical, Point};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::presentation::Refresh;
 
-use crate::render::scene::{build_scene, CursorPlan, SceneParams};
+use crate::render::scene::{build_scene, CursorPlan, SceneParams, SessionOverlay};
 use crate::render::CupertinoElement;
 use crate::state::Cupertino;
+use cupertino_scene::SceneKind;
 
 /// Frame callbacks are throttled to this interval for surfaces that are not on screen.
 pub const HIDDEN_FRAME_THROTTLE: Duration = Duration::from_secs(1);
@@ -93,6 +94,16 @@ impl Cupertino {
         let now = self.now();
         let drag_icon = self.drag_icon.clone();
         let lock = self.lock_view(idx);
+        let session_overlays = [
+            self.activation_overlay_alpha().map(|alpha| SessionOverlay {
+                kind: SceneKind::ActivationFade,
+                alpha,
+            }),
+            self.power_overlay_alpha().map(|alpha| SessionOverlay {
+                kind: SceneKind::PowerOverlay,
+                alpha,
+            }),
+        ];
         let res = self.render.as_ref()?;
         let out = &mut self.outputs[idx];
         let mode = out
@@ -124,6 +135,7 @@ impl Cupertino {
             pointer,
             drag_icon,
             lock,
+            session_overlays,
         };
         Some(f(renderer, params))
     }
@@ -134,28 +146,17 @@ impl Cupertino {
         renderer: &mut GlesRenderer,
         idx: usize,
     ) -> Vec<CupertinoElement> {
-        let elements = self.build_elements_with(renderer, idx, build_scene);
+        self.note_scene_built(idx);
+        let elements = self
+            .with_scene(renderer, idx, build_scene)
+            .unwrap_or_default();
         #[cfg(feature = "scene-oracle")]
         {
-            let legacy =
-                self.build_elements_with(renderer, idx, crate::render::legacy_scene::build_scene);
+            let legacy = self
+                .with_scene(renderer, idx, crate::render::legacy_scene::build_scene)
+                .unwrap_or_default();
             crate::render::legacy_scene::record(legacy);
         }
-        elements
-    }
-
-    fn build_elements_with(
-        &mut self,
-        renderer: &mut GlesRenderer,
-        idx: usize,
-        build: fn(&mut GlesRenderer, SceneParams<'_>) -> Vec<CupertinoElement>,
-    ) -> Vec<CupertinoElement> {
-        self.note_scene_built(idx);
-        let overlays = [self.activation_overlay(idx), self.power_overlay(idx)];
-        let mut elements = self.with_scene(renderer, idx, build).unwrap_or_default();
-        // front to back: the fade-in from black after the session became active and the dim and sleep overlay cover everything,
-        // the cursor too
-        elements.splice(0..0, overlays.into_iter().flatten());
         elements
     }
 

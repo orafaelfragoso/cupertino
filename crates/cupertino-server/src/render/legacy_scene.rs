@@ -28,8 +28,8 @@ use super::mesh::{capture, MeshElement};
 use super::motion::WorkspaceTransition;
 use super::programs::{corner_uniforms, u4};
 use super::scene::{
-    placed_plan, plan_for, windows_on_output, CursorPlan, LockView, SceneParams, WindowPlan,
-    SHEET_DIMMING_MATERIAL,
+    placed_plan, plan_for, windows_on_output, CursorPlan, LockView, SceneParams, SessionOverlay,
+    WindowPlan, SHEET_DIMMING_MATERIAL,
 };
 use super::shader_rect::{to_physical_rect, ElementCache, ElementKey, ShaderRect, Sig};
 use super::ui::{rounded_rect, RoundedRectSpec};
@@ -1154,10 +1154,44 @@ pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<C
         .with(|c| c.borrow_mut().remove(&id))
         .unwrap_or_default();
     std::mem::swap(p.cache, &mut own);
-    let elements = build(renderer, &mut p);
+    let mut elements = build(renderer, &mut p);
+    // front to back: the fade-in from black after the session became active and the dim and sleep overlay cover
+    // everything, the cursor too
+    let overlays: Vec<CupertinoElement> = p
+        .session_overlays
+        .into_iter()
+        .flatten()
+        .map(|overlay| session_overlay(&mut p, overlay))
+        .collect();
+    elements.splice(0..0, overlays);
     std::mem::swap(p.cache, &mut own);
     CACHES.with(|c| c.borrow_mut().insert(id, own));
     elements
+}
+
+/// The black overlay over the whole output, as the power module built it.
+fn session_overlay(p: &mut SceneParams<'_>, overlay: SessionOverlay) -> CupertinoElement {
+    const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+    let alpha = overlay.alpha;
+    let area = smithay::utils::Rectangle::new((0.0, 0.0).into(), (p.rect.w, p.rect.h).into());
+    let (id, commit) = p.cache.slot(
+        ElementKey::new(overlay.kind.key(), 0),
+        Sig::new().rect(area).f(alpha).finish(),
+    );
+    CupertinoElement::Shader(ShaderRect::new(
+        p.res.programs.wallpaper.clone(),
+        id,
+        commit,
+        area,
+        alpha as f32,
+        vec![
+            u4("c0", BLACK),
+            u4("c1", BLACK),
+            u4("c2", BLACK),
+            u4("c3", BLACK),
+        ],
+        alpha >= 1.0,
+    ))
 }
 
 /// Build the element list of one output, front to back.

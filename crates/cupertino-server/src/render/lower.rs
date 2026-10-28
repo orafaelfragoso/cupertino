@@ -117,7 +117,8 @@ pub fn lower(composed: Composed, ctx: &mut Lowering<'_>) -> Vec<CupertinoElement
                 );
             }
             Source::Wallpaper { rect, colours } => {
-                elements.push(wallpaper(ctx, key, logical_rect(*rect), colours).into());
+                elements
+                    .push(wallpaper(ctx, key, logical_rect(*rect), colours, item.opacity).into());
             }
             other => {
                 debug_assert!(false, "composition does not emit {other:?}");
@@ -204,8 +205,9 @@ fn wallpaper(
     key: ElementKey,
     area: smithay::utils::Rectangle<f64, smithay::utils::Logical>,
     colours: &[[f32; 4]; 4],
+    opacity: f64,
 ) -> ShaderRect {
-    let mut sig = Sig::new().rect(area);
+    let mut sig = Sig::new().rect(area).f(opacity);
     for v in colours.iter().flatten() {
         sig = sig.f(f64::from(*v));
     }
@@ -215,14 +217,14 @@ fn wallpaper(
         id,
         commit,
         area,
-        1.0,
+        opacity as f32,
         vec![
             u4("c0", colours[0]),
             u4("c1", colours[1]),
             u4("c2", colours[2]),
             u4("c3", colours[3]),
         ],
-        true,
+        opacity >= 1.0,
     )
 }
 

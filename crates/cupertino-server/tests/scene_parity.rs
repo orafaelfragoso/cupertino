@@ -7,21 +7,14 @@
 mod common;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
 
-use cupertino_server::backend::{headless, Backend};
-use cupertino_server::config::Config;
+use common::desktop::Desktop;
+use cupertino_server::backend::Backend;
 use cupertino_server::render::CupertinoElement;
-use cupertino_server::Cupertino;
 use smithay::backend::input::KeyState;
 use smithay::backend::renderer::element::{Element, Id, Kind};
 use smithay::backend::renderer::utils::CommitCounter;
-use smithay::reexports::calloop::EventLoop;
-use smithay::reexports::wayland_server::Display;
 use smithay::utils::{Physical, Rectangle, Scale};
-
-const SIZE: (i32, i32) = (1000, 700);
 
 #[derive(Debug, PartialEq)]
 struct Shape {
@@ -74,64 +67,31 @@ impl Identities {
     }
 }
 
-struct Desktop {
-    state: Cupertino,
-    event_loop: EventLoop<'static, Cupertino>,
-    clients: Vec<common::Client>,
-    scale: f64,
+struct Parity {
+    desktop: Desktop,
     identities: Identities,
 }
 
-impl Desktop {
+impl std::ops::Deref for Parity {
+    type Target = Desktop;
+    fn deref(&self) -> &Desktop {
+        &self.desktop
+    }
+}
+
+impl std::ops::DerefMut for Parity {
+    fn deref_mut(&mut self) -> &mut Desktop {
+        &mut self.desktop
+    }
+}
+
+impl Parity {
     fn new(scale: f64) -> Self {
         cupertino_server::render::legacy_scene::reset();
-        let event_loop = EventLoop::try_new().unwrap();
-        let mut state = Cupertino::new(
-            Display::new().unwrap(),
-            event_loop.handle(),
-            event_loop.get_signal(),
-            Config::default(),
-            true,
-            &cupertino_assets::Assets::builtin(),
-        )
-        .unwrap();
-        state.fixed_time = Some(0.0);
-        headless::init(&mut state, SIZE, scale)
-            .expect("the parity tests require an offscreen EGL renderer");
         Self {
-            state,
-            event_loop,
-            clients: Vec::new(),
-            scale,
+            desktop: Desktop::new(scale),
             identities: Identities::default(),
         }
-    }
-
-    fn pump(&mut self) {
-        headless::step(
-            &mut self.state,
-            &mut self.event_loop,
-            Duration::from_millis(2),
-        )
-        .unwrap();
-    }
-
-    fn window(&mut self) {
-        let expected = self.clients.len() + 1;
-        let socket = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap())
-            .join(self.state.socket_name.as_ref().unwrap());
-        self.clients.push(common::Client::toplevel(socket));
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while self.state.wm.windows().count() != expected {
-            self.pump();
-            assert!(Instant::now() < deadline, "the test client did not map");
-        }
-    }
-
-    fn at(&mut self, milliseconds: u32) {
-        self.state.fixed_time = Some(f64::from(milliseconds) / 1000.0);
-        self.state.tick();
-        self.pump();
     }
 
     /// Build the frame; with the oracle feature the compositor also runs the old builder on every frame, so both
@@ -157,7 +117,7 @@ impl Desktop {
 #[test]
 fn an_empty_desktop_matches() {
     for scale in [1.0, 1.5] {
-        let mut d = Desktop::new(scale);
+        let mut d = Parity::new(scale);
         d.at(1000);
         assert!(d.compare("empty desktop") > 0);
         d.at(1016);
@@ -168,7 +128,7 @@ fn an_empty_desktop_matches() {
 #[test]
 fn windows_at_rest_match_at_integer_and_fractional_scale() {
     for scale in [1.0, 1.25, 2.0] {
-        let mut d = Desktop::new(scale);
+        let mut d = Parity::new(scale);
         d.window();
         d.window();
         d.at(1000);
@@ -182,7 +142,7 @@ fn windows_at_rest_match_at_integer_and_fractional_scale() {
 
 #[test]
 fn a_window_matches_while_it_opens() {
-    let mut d = Desktop::new(1.0);
+    let mut d = Parity::new(1.0);
     d.window();
     for ms in [0u32, 40, 80, 160, 320, 640] {
         d.at(ms);
@@ -192,16 +152,11 @@ fn a_window_matches_while_it_opens() {
 
 #[test]
 fn a_locked_session_matches() {
-    let mut d = Desktop::new(1.0);
+    let mut d = Parity::new(1.0);
     d.window();
     d.at(2000);
     d.compare("before the lock");
-    let locker = common::Client::locker(common::session_agent(&d.state));
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !locker.locked() {
-        d.pump();
-        assert!(Instant::now() < deadline, "the session did not lock");
-    }
+    let _locker = d.lock();
     d.at(2100);
     d.compare("locked");
     d.at(2200);
@@ -210,7 +165,7 @@ fn a_locked_session_matches() {
 
 #[test]
 fn the_overview_matches_while_it_opens_and_at_rest() {
-    let mut d = Desktop::new(1.0);
+    let mut d = Parity::new(1.0);
     d.window();
     d.window();
     d.at(2000);
@@ -240,7 +195,7 @@ fn the_overview_matches_while_it_opens_and_at_rest() {
 #[test]
 fn the_pointer_matches_wherever_it_is() {
     for scale in [1.0, 1.5] {
-        let mut d = Desktop::new(scale);
+        let mut d = Parity::new(scale);
         d.window();
         d.at(2000);
         for (x, y) in [(10.0, 10.0), (500.0, 350.0), (999.0, 699.0)] {
@@ -254,7 +209,7 @@ fn the_pointer_matches_wherever_it_is() {
 #[test]
 fn the_input_source_hud_matches_while_it_shows_and_fades() {
     for scale in [1.0, 1.5] {
-        let mut d = Desktop::new(scale);
+        let mut d = Parity::new(scale);
         d.window();
         d.at(2000);
         d.state.overlays.inputs.hud = Some(cupertino_server::kbd::HudView {
@@ -272,5 +227,23 @@ fn the_input_source_hud_matches_while_it_shows_and_fades() {
             d.at(ms);
             d.compare(&format!("hud fading at {ms} ms"));
         }
+    }
+}
+
+#[test]
+fn the_activation_fade_matches_over_the_desktop_and_over_a_lock() {
+    let mut d = Parity::new(1.0);
+    d.window();
+    d.at(2000);
+    d.state.session_activated();
+    for ms in [2000u32, 2100, 2300] {
+        d.at(ms);
+        d.compare(&format!("fade over the desktop at {ms} ms"));
+    }
+    let _locker = d.lock();
+    d.state.session_activated();
+    for ms in [3000u32, 3100, 3300] {
+        d.at(ms);
+        d.compare(&format!("fade over the lock at {ms} ms"));
     }
 }

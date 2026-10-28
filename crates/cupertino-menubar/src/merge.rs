@@ -17,8 +17,12 @@
 
 use crate::fallback::{self, FallbackAction};
 use crate::item::{split_mnemonic, ItemId, MenuItem, Shortcut, ShortcutModifier};
+use cupertino_keyboard::modifiers::ModifierProfile;
+use cupertino_keyboard::rewrite::{
+    is_printable, pressed_for, ClientClass, KeyPress, SYM_KP_ENTER, SYM_RETURN,
+};
 use cupertino_menu_model::{ActionName, Chord, Role};
-use cupertino_modifiers::{ModifierMap, Physical, Profile};
+use cupertino_modifiers::{ModifierMap, Profile, RawMods};
 
 /// The top-level item of a GMenuModel tree that holds its application menu (`app_menu_object_path`).
 pub const GTK_APP_MENU: ItemId = ItemId(-1);
@@ -61,6 +65,8 @@ pub struct Export<'a> {
     /// The application's names: its desktop entry's `Name` and the last component of its id. A DBusMenu menu titled
     /// with either is the application's own menu, and "Configure <name>" its preferences.
     pub names: [&'a str; 2],
+    /// How the server treats the application's keys ([`client_class`]); its accelerators show the keys pressed.
+    pub class: ClientClass,
 }
 
 /// The exporter's items the App menu's About, Settings… and Quit invoke.
@@ -146,7 +152,7 @@ impl Export<'_> {
         .flatten()
         .chain(&mut parts.others)
         {
-            show_accels(menu, primary);
+            show_accels(menu, primary, self.class);
         }
         let roles = roles(self, &parts);
         for slot in [&mut parts.app, &mut parts.file, &mut parts.edit] {
@@ -361,31 +367,92 @@ pub fn label_role(label: &str, names: &[&str]) -> Option<Role> {
 
 /// The server's modifier profile, named by the key its convention chords show as primary
 /// ([`fallback::Chords::primary`]): Super under `cupertino`, Ctrl under `classic-pc`.
-fn profile(primary: ShortcutModifier) -> Profile {
+fn profile(primary: ShortcutModifier) -> (Profile, ModifierProfile) {
     match primary {
-        ShortcutModifier::Ctrl => Profile::classic_pc(),
-        _ => Profile::cupertino(),
+        ShortcutModifier::Ctrl => (Profile::classic_pc(), ModifierProfile::classic_pc()),
+        _ => (Profile::cupertino(), ModifierProfile::cupertino()),
     }
 }
 
-/// The shortcut a GMenuModel accelerator shows: the chord it types under the profile `primary` names, in that
-/// profile's keys. `None` for a malformed accelerator.
-pub fn accel_shortcut(accel: &str, primary: ShortcutModifier) -> Option<Shortcut> {
-    let profile = profile(primary);
+/// How the server treats an exporter's keys: [`ClientClass::FirstParty`] for a `cupertino-*` application id, as the
+/// server decides, else [`ClientClass::Other`] (the bar knows neither the terminals nor the applications whose keys
+/// the server leaves alone).
+pub fn client_class(app_id: &str) -> ClientClass {
+    if app_id.starts_with("cupertino-") {
+        ClientClass::FirstParty
+    } else {
+        ClientClass::Other
+    }
+}
+
+/// The character a keysym name types, for the punctuation names chords use.
+fn key_char(name: &str) -> Option<char> {
+    let mut chars = name.chars();
+    if let (Some(c), None) = (chars.next(), chars.next()) {
+        return Some(c);
+    }
+    Some(match name {
+        "comma" => ',',
+        "period" => '.',
+        "slash" => '/',
+        "backslash" => '\\',
+        "semicolon" => ';',
+        "colon" => ':',
+        "apostrophe" => '\'',
+        "quotedbl" => '"',
+        "grave" => '`',
+        "minus" => '-',
+        "equal" => '=',
+        "plus" => '+',
+        "bracketleft" => '[',
+        "bracketright" => ']',
+        "question" => '?',
+        "exclam" => '!',
+        _ => return None,
+    })
+}
+
+/// The shortcut a GMenuModel accelerator of a `class` client shows: the keys the person presses under the profile
+/// `primary` names. The accelerator names the keys the application receives; for a third-party application the
+/// server makes Ctrl chords of Super chords ([`pressed_for`]), so the bar shows the Super chord. `None` for a
+/// malformed accelerator.
+pub fn accel_shortcut(
+    accel: &str,
+    primary: ShortcutModifier,
+    class: ClientClass,
+) -> Option<Shortcut> {
+    let (profile, rewrite_profile) = profile(primary);
     let chord = Chord::from_accel(accel, &profile)?;
-    let mut modifiers = chord
+    let raw = chord
         .modifiers
         .iter()
-        .map(|m| {
-            Some(match profile.physical(m)? {
-                Physical::Super => ShortcutModifier::Primary,
-                Physical::Ctrl => ShortcutModifier::Ctrl,
-                Physical::Alt => ShortcutModifier::Alt,
-                Physical::Shift => ShortcutModifier::Shift,
-                Physical::Fn => return None,
-            })
-        })
-        .collect::<Option<Vec<_>>>()?;
+        .try_fold(RawMods::default(), |raw, m| {
+            Some(raw | profile.physical(m)?.into())
+        })?;
+    let name = chord.key.name();
+    let ch = key_char(name);
+    let received = KeyPress {
+        evdev: 0,
+        sym: match name {
+            "Return" => SYM_RETURN,
+            "KP_Enter" => SYM_KP_ENTER,
+            _ => ch.map_or(0, u32::from),
+        },
+        printable: is_printable(ch),
+        is_modifier: false,
+        raw,
+    };
+    let pressed = pressed_for(&rewrite_profile, class, &received).raw;
+    let mut modifiers: Vec<ShortcutModifier> = [
+        (RawMods::CTRL, ShortcutModifier::Ctrl),
+        (RawMods::ALT, ShortcutModifier::Alt),
+        (RawMods::SHIFT, ShortcutModifier::Shift),
+        (RawMods::SUPER, ShortcutModifier::Primary),
+    ]
+    .into_iter()
+    .filter(|(bit, _)| pressed.contains(*bit))
+    .map(|(_, m)| m)
+    .collect();
     modifiers.sort();
     Some(Shortcut {
         modifiers,
@@ -394,12 +461,12 @@ pub fn accel_shortcut(accel: &str, primary: ShortcutModifier) -> Option<Shortcut
 }
 
 /// Show the accelerators of `menu`'s items.
-fn show_accels(menu: &mut MenuItem, primary: ShortcutModifier) {
+fn show_accels(menu: &mut MenuItem, primary: ShortcutModifier, class: ClientClass) {
     if let Some(accel) = &menu.accel {
-        menu.shortcut = accel_shortcut(accel, primary);
+        menu.shortcut = accel_shortcut(accel, primary, class);
     }
     for child in &mut menu.children {
-        show_accels(child, primary);
+        show_accels(child, primary, class);
     }
 }
 
@@ -532,6 +599,7 @@ mod tests {
             tree,
             exporter,
             names: ["Editor", "editor"],
+            class: ClientClass::Other,
         }
     }
 
@@ -865,44 +933,70 @@ mod tests {
         assert!(new.contains(&(31, "Zoom In Further".into())));
     }
 
+    fn shown(accel: &str, primary: ShortcutModifier, class: ClientClass) -> Option<String> {
+        accel_shortcut(accel, primary, class).map(|s| s.display())
+    }
+
     #[test]
-    fn gtk_accelerators_show_in_the_keys_of_either_profile() {
-        let tree = gtk_tree();
-        let e = export(&tree, Exporter::Gtk);
-        for primary in [ShortcutModifier::Primary, ShortcutModifier::Ctrl] {
-            let chords = Chords {
-                primary,
-                ..Chords::default()
-            };
-            let (_, menus) = e.merge(
-                fallback::app_menu("Editor", &chords),
-                fallback::menus(1, Some(1), true, &[], &chords, true),
-                primary,
-            );
-            let new = &menu(&menus, "File").children[0];
+    fn a_third_party_apps_accelerators_show_the_keys_pressed() {
+        use ShortcutModifier::{Ctrl, Primary};
+        let other = ClientClass::Other;
+        let cases = [
+            ("<Primary>q", "Super+Q", "Ctrl+Q"),
+            ("<Control><Shift>s", "Shift+Super+S", "Ctrl+Shift+S"),
+            ("<Primary>Return", "Super+Return", "Ctrl+Return"),
+            ("<Primary>comma", "Super+,", "Ctrl+,"),
+            ("<Primary>F5", "Ctrl+F5", "Ctrl+F5"),
+            ("<Primary>Escape", "Ctrl+Esc", "Ctrl+Esc"),
+            ("<Alt>F4", "Alt+F4", "Alt+F4"),
+            ("<Super>q", "Super+Q", "Super+Q"),
+        ];
+        for (accel, cupertino, classic) in cases {
             assert_eq!(
-                new.shortcut.as_ref().map(Shortcut::display).as_deref(),
-                Some("Ctrl+N"),
-                "GTK's <Primary> is the Control key under {primary:?}"
+                shown(accel, Primary, other).as_deref(),
+                Some(cupertino),
+                "{accel}"
+            );
+            assert_eq!(
+                shown(accel, Ctrl, other).as_deref(),
+                Some(classic),
+                "{accel}"
             );
         }
-        for (accel, shown) in [
-            ("<Super>q", "Super+Q"),
-            ("<Shift><Primary>comma", "Ctrl+Shift+,"),
-            ("<Alt>F4", "Alt+F4"),
-        ] {
-            for primary in [ShortcutModifier::Primary, ShortcutModifier::Ctrl] {
-                assert_eq!(
-                    accel_shortcut(accel, primary)
-                        .map(|s| s.display())
-                        .as_deref(),
-                    Some(shown),
-                    "{accel} under {primary:?}"
-                );
-            }
+        assert_eq!(shown("<Hyper>x", Primary, other), None);
+        assert_eq!(shown("<Primary>", Primary, other), None);
+        assert_eq!(shown("<Primary", Ctrl, other), None);
+
+        let tree = gtk_tree();
+        let chords = Chords::default();
+        let (_, menus) = export(&tree, Exporter::Gtk).merge(
+            fallback::app_menu("Editor", &chords),
+            fallback::menus(1, Some(1), true, &[], &chords, true),
+            Primary,
+        );
+        let new = &menu(&menus, "File").children[0];
+        assert_eq!(
+            new.shortcut.as_ref().map(Shortcut::display).as_deref(),
+            Some("Super+N"),
+            "the merge shows the keys pressed"
+        );
+    }
+
+    #[test]
+    fn a_first_party_apps_accelerators_show_as_they_are() {
+        use ShortcutModifier::{Ctrl, Primary};
+        assert_eq!(client_class("cupertino-files"), ClientClass::FirstParty);
+        assert_eq!(client_class("org.example.editor"), ClientClass::Other);
+        let first = ClientClass::FirstParty;
+        for primary in [Primary, Ctrl] {
+            assert_eq!(
+                shown("<Super>q", primary, first).as_deref(),
+                Some("Super+Q")
+            );
+            assert_eq!(
+                shown("<Primary>q", primary, first).as_deref(),
+                Some("Ctrl+Q")
+            );
         }
-        assert_eq!(accel_shortcut("<Hyper>x", ShortcutModifier::Primary), None);
-        assert_eq!(accel_shortcut("<Primary>", ShortcutModifier::Primary), None);
-        assert_eq!(accel_shortcut("<Primary", ShortcutModifier::Ctrl), None);
     }
 }

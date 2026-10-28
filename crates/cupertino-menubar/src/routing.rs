@@ -2,7 +2,7 @@
 //! controller effect stands for, given what the bar shows.
 
 use crate::controller::{Effect, Key};
-use crate::extras::{ExtraAction, ExtraKind};
+use crate::extras::{ExtraAction, ExtraKind, SystemAction};
 use crate::fallback::{self, FallbackAction};
 use crate::feed::{BarFeed, Shared};
 use crate::item::ItemId;
@@ -11,6 +11,9 @@ use crate::source::{KdeAppMenu, MenuSource};
 use crate::worker::Request;
 use cupertino_shell_client::WindowCommand;
 use cupertino_wayland_client::key;
+
+/// The control panel, which Settings… of the system menu starts.
+const SETTINGS_PROGRAM: &str = "cupertino-settings";
 
 /// The menu key for an evdev key code; `None` for keys menus ignore. Letters (type-ahead) need
 /// a keymap, which the process does not have.
@@ -44,6 +47,8 @@ pub enum Action {
     /// Show a window of the window list by its server id.
     ActivateWindow(u32),
     ShowAbout,
+    /// Start a program (found on `PATH`) with its arguments, handing it an activation token.
+    Launch(Vec<String>),
     /// A row of one of the bar's own items.
     Extra(ExtraAction),
 }
@@ -132,13 +137,22 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
         Effect::Activate {
             slot: SlotKey::System,
             item,
-        } => cx
-            .shared
-            .extras
-            .session_menu()
-            .action(item)
-            .cloned()
-            .map(Action::Extra),
+        } => Some(
+            match cx
+                .shared
+                .extras
+                .system_menu(&cx.shared.chords)
+                .action(item)?
+            {
+                ExtraAction::System(SystemAction::Settings) => {
+                    Action::Launch(vec![SETTINGS_PROGRAM.to_owned()])
+                }
+                ExtraAction::System(SystemAction::ForceQuit) => {
+                    Action::WindowCommand(WindowCommand::ForceQuitDialog)
+                }
+                action => Action::Extra(action.clone()),
+            },
+        ),
         Effect::Activate {
             slot: SlotKey::ControlPanel | SlotKey::Clock,
             ..
@@ -194,7 +208,7 @@ mod tests {
     use super::*;
     use crate::dbus::sni::{ItemStatus, StatusItem};
     use crate::desktop::AppName;
-    use crate::extras::BluetoothState;
+    use crate::extras::{BluetoothState, SystemRow};
     use crate::feed::StatusState;
     use crate::geom::Rect;
     use crate::layout::{layout_bar, BarMetrics, MonoMeasure};
@@ -545,7 +559,7 @@ mod tests {
     fn a_system_menu_entry_goes_to_the_session_agent() {
         let mut f = Fixture::new(WindowMenu::None);
         f.shared.extras.session = Some(crate::extras::SessionState::default());
-        let menu = f.shared.extras.session_menu();
+        let menu = f.shared.extras.system_menu(&f.shared.chords);
         let restart = menu
             .rows
             .iter()
@@ -562,6 +576,26 @@ mod tests {
             f.resolve(activate(SlotKey::System, restart.id.0)),
             None,
             "no agent, nothing to call"
+        );
+    }
+
+    #[test]
+    fn settings_starts_the_control_panel_and_force_quit_opens_the_servers_dialog_without_an_agent()
+    {
+        let f = Fixture::new(WindowMenu::None);
+        assert_eq!(
+            f.resolve(activate(SlotKey::System, SystemRow::Settings.id().0)),
+            Some(Action::Launch(vec!["cupertino-settings".to_owned()]))
+        );
+        assert_eq!(
+            f.resolve(activate(SlotKey::System, SystemRow::ForceQuit.id().0)),
+            Some(Action::WindowCommand(WindowCommand::ForceQuitDialog))
+        );
+        assert_eq!(
+            f.resolve(activate(SlotKey::System, SystemRow::Lock.id().0)),
+            Some(Action::Extra(ExtraAction::Session(
+                crate::extras::SessionAction::Lock
+            )))
         );
     }
 

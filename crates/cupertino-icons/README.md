@@ -17,6 +17,7 @@ path or the `hicolor` theme. Depends on `cupertino-assets`, `cupertino-defaults`
 | `IconLookup` | an application's icon file: an `application.` name from the asset directory, an absolute path as it is, else the `hicolor` theme (`index.theme` size matching), then the flat `~/.icons` and pixmaps directories. `new(assets)` searches the asset directory, `~/.icons`, `<data dir>/icons` for every XDG data directory and `/usr/share/pixmaps`; `with_roots(assets, bases)` takes explicit roots; `find(name, size, scale) |
 | `ThemeIcons` | the icons of applications, not of the system: `load(name, px)` gives a `tiny_skia::Pixmap` for an application icon name, path or `file://` URI (through `IconLookup`); `load_for_entry(entry, px)` the `Icon=` of the installed desktop entry with that id (hidden entries and stock names give `None`) |
 | `load_icon(path, px) | decodes a PNG or renders an SVG (resvg) to an `IconImage` of `px` × `px` pixels |
+| `system_mark(px, color)` | the system menu's mark (`data/system-menu-mark.svg`, built in, the project's own drawing) rendered to fit `px` × `px` pixels and tinted like a template symbol |
 | `IconImage` | `width`, `height` and premultiplied RGBA bytes |
 | `from_argb(width, height, argb) | converts the ARGB pixmaps of StatusNotifier items to an `IconImage` |
 | `document` | file icons: `document_icon_name(db, mime)`, `corner_badge`, `Badge`, `badge_rect`, and `FileIcons` (document, folder and badge pixmaps by path, type and size) |

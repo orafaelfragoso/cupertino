@@ -434,6 +434,9 @@ pub fn shortcut_map(profile: &str) -> cupertino_input::ShortcutMap {
             }
         }
     }
+    if let Some(chord) = map.keep_release_chord() {
+        tracing::warn!(%chord, "no usable chord releases the shortcuts an application holds: the default is bound again");
+    }
     map
 }
 

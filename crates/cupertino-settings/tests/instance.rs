@@ -10,24 +10,71 @@ use cupertino_settings::instance::{serve, show};
 use cupertino_settings::PaneId;
 
 #[test]
+fn about_has_an_independent_owner_and_repeat_launches_reach_it() {
+    let bus = common::bus().expect("dbus-daemon is needed to test About instance handling");
+    let (tx, rx) = mpsc::channel();
+    let tx = std::sync::Mutex::new(tx);
+    let _settings = serve(bus.builder(), |_, _| {
+        panic!("About must not forward to a Settings pane")
+    })
+    .unwrap();
+    let _about = cupertino_settings::instance::serve_about(bus.builder(), move |token| {
+        tx.lock().unwrap().send(token).unwrap()
+    })
+    .unwrap();
+    assert!(matches!(
+        cupertino_settings::instance::serve_about(bus.builder(), |_| {}),
+        Err(zbus::Error::NameTaken)
+    ));
+    cupertino_settings::instance::show_about(bus.builder(), "example-token").unwrap();
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(5)),
+        Ok("example-token".into())
+    );
+    assert!(cupertino_settings::instance::show_about(bus.builder(), &"x".repeat(4097)).is_err());
+    assert!(rx.try_recv().is_err());
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_cupertino-settings"))
+        .arg("--about")
+        .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("WAYLAND_SOCKET")
+        .env_remove("XDG_ACTIVATION_TOKEN")
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "the second launch must reach About without opening a display"
+    );
+    assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(String::new()));
+    drop(_about);
+    let _replacement = cupertino_settings::instance::serve_about(bus.builder(), |_| {}).unwrap();
+}
+
+#[test]
 fn show_pane_reaches_the_owner_and_rejects_an_unknown_id() {
     let Some(bus) = common::bus() else { return };
     let (tx, rx) = mpsc::channel();
     let tx = std::sync::Mutex::new(tx);
-    let _owner = serve(bus.builder(), move |pane| {
-        tx.lock().unwrap().send(pane).unwrap()
+    let _owner = serve(bus.builder(), move |pane, token| {
+        tx.lock().unwrap().send((pane, token)).unwrap()
     })
     .expect("claims the name");
     assert!(
-        matches!(serve(bus.builder(), |_| {}), Err(zbus::Error::NameTaken)),
+        matches!(serve(bus.builder(), |_, _| {}), Err(zbus::Error::NameTaken)),
         "a second owner is refused"
     );
-    show(bus.builder(), "keyboard").expect("a known pane");
+    show(bus.builder(), "keyboard", "").expect("a known pane");
     assert_eq!(
         rx.recv_timeout(Duration::from_secs(5)),
-        Ok(PaneId::Keyboard)
+        Ok((PaneId::Keyboard, String::new()))
     );
-    match show(bus.builder(), "general") {
+    show(bus.builder(), "wifi", "fresh-token").unwrap();
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(5)),
+        Ok((PaneId::Wifi, "fresh-token".into()))
+    );
+    assert!(show(bus.builder(), "wifi", &"x".repeat(4097)).is_err());
+    match show(bus.builder(), "general", "") {
         Err(zbus::Error::MethodError(name, _, _)) => {
             assert_eq!(name.as_str(), "org.freedesktop.DBus.Error.InvalidArgs")
         }
@@ -41,17 +88,21 @@ fn a_second_start_hands_its_pane_to_the_first_and_exits_0() {
     let Some(bus) = common::bus() else { return };
     let (tx, rx) = mpsc::channel();
     let tx = std::sync::Mutex::new(tx);
-    let _first = serve(bus.builder(), move |pane| {
-        tx.lock().unwrap().send(pane).unwrap()
+    let _first = serve(bus.builder(), move |pane, token| {
+        tx.lock().unwrap().send((pane, token)).unwrap()
     })
     .expect("claims the name");
     // no display: the second start must not need one
     let status = std::process::Command::new(env!("CARGO_BIN_EXE_cupertino-settings"))
         .args(["--pane", "sound"])
         .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
+        .env("XDG_ACTIVATION_TOKEN", "fresh-second-launch-token")
         .env_remove("WAYLAND_DISPLAY")
         .status()
         .expect("the binary runs");
     assert!(status.success(), "{status}");
-    assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(PaneId::Sound));
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(5)),
+        Ok((PaneId::Sound, "fresh-second-launch-token".into()))
+    );
 }

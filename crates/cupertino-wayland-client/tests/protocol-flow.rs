@@ -149,6 +149,10 @@ enum Seen {
     },
     /// An activation token committed for this application id.
     TokenCommit(Option<String>),
+    Activate {
+        token: String,
+        surface: u32,
+    },
 }
 
 #[derive(Default)]
@@ -554,7 +558,7 @@ impl Dispatch<XdgPopup, ()> for Mock {
 
 impl Dispatch<XdgActivationV1, ()> for Mock {
     fn request(
-        _: &mut Self,
+        state: &mut Self,
         _: &ServerClient,
         _: &XdgActivationV1,
         request: xdg_activation_v1::Request,
@@ -562,8 +566,20 @@ impl Dispatch<XdgActivationV1, ()> for Mock {
         _: &DisplayHandle,
         init: &mut DataInit<'_, Self>,
     ) {
-        if let xdg_activation_v1::Request::GetActivationToken { id } = request {
-            init.init(id, Mutex::new(None));
+        match request {
+            xdg_activation_v1::Request::GetActivationToken { id } => {
+                init.init(id, Mutex::new(None));
+            }
+            xdg_activation_v1::Request::Activate { token, surface } => {
+                state
+                    .seen
+                    .send(Seen::Activate {
+                        token,
+                        surface: surface.id().protocol_id(),
+                    })
+                    .unwrap();
+            }
+            _ => {}
         }
     }
 }
@@ -1872,6 +1888,37 @@ fn a_launch_token_arrives_for_its_request_and_needs_xdg_activation() {
     let w = window(&mut conn, Decorations::Client);
     assert!(matches!(
         conn.request_activation_token(w.surface(), None),
+        Err(Error::Unsupported(Capability::Activation))
+    ));
+}
+
+#[test]
+fn a_forwarded_activation_token_reaches_its_window_and_needs_xdg_activation() {
+    use wayland_client::Proxy;
+
+    let (mut conn, _control, seen) = connect(Globals {
+        activation: true,
+        ..Globals::core()
+    });
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    let surface = conn.wl_surface(w.surface()).unwrap().id().protocol_id();
+    conn.activate_with_token(w, "forwarded-launch-token")
+        .unwrap();
+    conn.flush().unwrap();
+    assert_eq!(
+        next_seen(&seen),
+        Seen::Activate {
+            token: "forwarded-launch-token".into(),
+            surface
+        }
+    );
+
+    let (mut conn, _control, _seen) = connect(Globals::core());
+    let w = window(&mut conn, Decorations::Client);
+    assert!(matches!(
+        conn.activate_with_token(w, "forwarded-launch-token"),
         Err(Error::Unsupported(Capability::Activation))
     ));
 }

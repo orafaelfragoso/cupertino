@@ -139,12 +139,15 @@ pub struct BarFeed {
     window: WindowState,
     /// The active application's windows, for the window list.
     windows: Vec<AppWindow>,
+    /// The bar's server sends the chords of the Edit items (`MenuBar::can_edit`).
+    edits: bool,
 }
 
 impl BarFeed {
-    pub fn new(key: WindowKey) -> Self {
+    pub fn new(key: WindowKey, edits: bool) -> Self {
         Self {
             key,
+            edits,
             app: None,
             window: WindowState {
                 can_zoom: true,
@@ -235,6 +238,7 @@ impl BarFeed {
                         self.window.can_zoom,
                         &windows,
                         &shared.chords,
+                        self.edits,
                     )
                 };
                 (
@@ -453,7 +457,7 @@ mod tests {
     }
 
     fn ready(menu: Option<WindowMenu>) -> (BarFeed, Shared) {
-        let mut feed = BarFeed::new(1);
+        let mut feed = BarFeed::new(1, true);
         let mut shared = Shared {
             clock: "Wed Oct 21  10:42".into(),
             ..Shared::default()
@@ -489,7 +493,7 @@ mod tests {
 
     #[test]
     fn without_an_active_window_the_desktop_menu_shows() {
-        let mut feed = BarFeed::new(1);
+        let mut feed = BarFeed::new(1, true);
         let mut shared = Shared::default();
         feed.apply(&update("", None), &mut shared, |_| {
             unreachable!("an empty id is no application")

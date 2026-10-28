@@ -11,8 +11,8 @@ use cupertino_protocols::server::cupertino_menu_bar_v1::{self, CupertinoMenuBarV
 use cupertino_protocols::server::cupertino_session_v1::{CupertinoSessionV1, DisplayOption};
 use cupertino_protocols::server::cupertino_shell_v1::{self, CupertinoShellV1};
 use cupertino_shell_client::{
-    ActiveApp, Anchor, DockChange, DockWindow, IdleNotifier, KeyboardInteractivity, Layer,
-    LayerShell, LayerSurface, LayerSurfaceConfig, Margin, MenuBarUpdate, SessionChange,
+    ActiveApp, Anchor, DockChange, DockWindow, EditAction, IdleNotifier, KeyboardInteractivity,
+    Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin, MenuBarUpdate, SessionChange,
     SessionLockManager, SessionState, Shell, ShellEvent, WindowCommand, WindowMenu, WindowState,
 };
 use cupertino_wayland_client::{
@@ -1274,9 +1274,11 @@ fn menu_bar_groups_arrive_typed_and_requests_reach_the_server() {
 
     bar.set_menu_open(true);
     bar.window_command(WindowCommand::Minimize);
-    // a version 9 server has neither request: they are not sent
+    // a version 9 server has none of these requests: they are not sent
+    assert!(!bar.can_edit());
     bar.window_command(WindowCommand::TileLeft);
     bar.activate_window(7);
+    bar.edit(EditAction::Copy);
     bar.move_to_workspace(3);
     bar.set_menu_open(false);
     flush(&mut conn, &mut stash);

@@ -263,6 +263,7 @@ impl SeatHandler for Cupertino {
             ti.enter();
         }
         self.text_cursor = None;
+        self.menu_bar_edit_focus(focused);
     }
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
@@ -588,6 +589,10 @@ impl XdgShellHandler for Cupertino {
         if let Err(e) = self.popups.track_popup(PopupKind::from(surface)) {
             tracing::warn!(error = %e, "tracking popup failed");
         }
+    }
+
+    fn popup_destroyed(&mut self, _surface: PopupSurface) {
+        self.popup_dismissed_by_client();
     }
 
     fn reposition_request(

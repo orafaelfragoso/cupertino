@@ -1956,6 +1956,17 @@ mod tests {
         stage: MaterialStage,
         area: Rect,
     ) -> CupertinoElement {
+        material_with(cache, key, stage, area, 0.0, 1.0)
+    }
+
+    fn material_with(
+        cache: &mut ElementCache,
+        key: ElementKey,
+        stage: MaterialStage,
+        area: Rect,
+        radius: f64,
+        opacity: f32,
+    ) -> CupertinoElement {
         let recipe = Theme::load()
             .unwrap()
             .recipe(Appearance::Light, "MenuBar", &MaterialOptions::default())
@@ -1971,9 +1982,9 @@ mod tests {
             area,
             Rc::new(GpuRecipe::new(&recipe)),
             MaterialGl::detached(),
-            0.0,
+            radius,
             true,
-            1.0,
+            opacity,
             [0.0; 3],
             (1280, 800),
             1.0,
@@ -2035,6 +2046,58 @@ mod tests {
             moved[0], before[0],
             "a full material above the window does see it move"
         );
+    }
+
+    /// A material over everything and, below it, the lowered item whose look is `(area, radius, opacity)`; the
+    /// generation the upper one gets is the signature of what lies below it.
+    fn backdrop_over(cache: &mut ElementCache, item: (Rect, f64, f32)) -> u64 {
+        let top = Rect::new(0.0, 0.0, 1280.0, 800.0);
+        let (area, radius, opacity) = item;
+        let mut els = vec![
+            material(cache, ElementKey::new("top", 0), MaterialStage::Full, top),
+            material_with(
+                cache,
+                ElementKey::new("item", 0),
+                MaterialStage::Full,
+                area,
+                radius,
+                opacity,
+            ),
+        ];
+        finalize_materials(&mut els, 1.0, cache);
+        generation(&els[0])
+    }
+
+    #[test]
+    fn unchanged_lower_item_preserves_backdrop_signature() {
+        let mut cache = ElementCache::default();
+        let item = (Rect::new(100.0, 40.0, 300.0, 200.0), 10.0, 0.5);
+        let first = backdrop_over(&mut cache, item);
+        assert_eq!(backdrop_over(&mut cache, item), first);
+        cache.end_frame();
+        assert_eq!(backdrop_over(&mut cache, item), first, "also across frames");
+    }
+
+    #[test]
+    fn lower_item_move_clip_or_alpha_invalidates_backdrop() {
+        let mut cache = ElementCache::default();
+        let (area, radius, opacity) = (Rect::new(100.0, 40.0, 300.0, 200.0), 10.0, 0.5);
+        let base = backdrop_over(&mut cache, (area, radius, opacity));
+        let moved = backdrop_over(
+            &mut cache,
+            (Rect::new(101.0, 40.0, 300.0, 200.0), radius, opacity),
+        );
+        let clipped = backdrop_over(&mut cache, (area, radius + 1.0, opacity));
+        let faded = backdrop_over(&mut cache, (area, radius, 0.4));
+        let all = [base, moved, clipped, faded];
+        for (at, a) in all.iter().enumerate() {
+            for b in &all[at + 1..] {
+                assert_ne!(
+                    a, b,
+                    "each change alone gives the backdrop another signature"
+                );
+            }
+        }
     }
 
     #[test]

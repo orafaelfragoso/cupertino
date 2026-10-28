@@ -12,7 +12,7 @@ layer = "shell"
 default = []
 # the `cupertino-screenshot` process: the overlay, toolbar and thumbnail on layer surfaces and the capture through
 # ext-image-copy-capture, as a client the server starts on a connection of its own
-app = ["dep:cupertino-protocol-app", "dep:cupertino-shell-client", "dep:cupertino-ui-wayland", "dep:cupertino-wayland-client", "dep:cupertino-protocols", "dep:wayland-client", "dep:wayland-protocols", "dep:rustix", "dep:memmap2", "dep:libc"]
+app = ["dep:cupertino-protocol-app", "dep:cupertino-shell-client", "dep:cupertino-ui-wayland", "dep:cupertino-wayland-client", "dep:cupertino-protocols", "dep:wayland-client", "dep:wayland-protocols", "dep:memmap2", "dep:libc"]
 
 [dependencies]
 cupertino-assets = { path = "../cupertino-assets" }
@@ -29,7 +29,7 @@ cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 libc = { version = "0.2", optional = true }
 memmap2 = { version = "0.9", optional = true }
-rustix = { version = "1", features = ["fs"], optional = true }
+rustix = { version = "1", features = ["fs"] }
 wayland-client = { version = "0.31", optional = true }
 wayland-protocols = { version = "0.32", features = ["client", "staging"], optional = true }
 

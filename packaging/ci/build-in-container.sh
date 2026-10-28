@@ -88,6 +88,11 @@ export RUSTFLAGS="--remap-path-prefix=/src=/usr/src/cupertino --remap-path-prefi
 cargo build --locked --release --workspace --all-features --bins
 mkdir -p /dist
 case $distro in
+debian|fedora)
+    strip --strip-unneeded \$(python3 -c 'import sys; sys.path.insert(0, "packaging"); import release; print(" ".join("target/release/" + b for b in release.BINARIES))')
+    ;;
+esac
+case $distro in
 debian)
     cargo deb -p cupertino-server --no-build --output /dist
     cargo deb -p cupertino-assets --no-build --output /dist
@@ -96,7 +101,6 @@ debian)
     for p in /dist/*.deb; do dpkg-deb --info "\$p" > "\$p.info"; dpkg-deb --contents "\$p" > "\$p.contents"; done
     ;;
 fedora)
-    strip --strip-unneeded \$(python3 -c 'import sys; sys.path.insert(0, "packaging"); import release; print(" ".join("target/release/" + b for b in release.BINARIES))')
     cargo generate-rpm -p crates/cupertino-server -o /dist
     cargo generate-rpm -p crates/cupertino-assets -o /dist
     python3 packaging/release.py verify --format rpm --package runtime /dist/cupertino-0*.rpm

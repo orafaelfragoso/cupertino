@@ -316,6 +316,8 @@ struct Bar {
     agent_sent: Option<LoginTrust>,
     /// The shortcut group last sent (version 10); `None` until the first one.
     shortcuts_sent: Option<Shortcuts>,
+    /// The backdrop lightness last sent (version 14); `None` until the first one.
+    backdrop_sent: Option<u16>,
 }
 
 /// Where the bar of a surface is drawn: offset from its layout position and opacity.
@@ -346,6 +348,10 @@ pub const MENU_BAR_BUS_NAME: &str = "com.canonical.AppMenu.Registrar";
 /// [`READER_RETRY_MAX`].
 const READER_RETRY_FIRST: Duration = Duration::from_secs(1);
 const READER_RETRY_MAX: Duration = Duration::from_secs(30);
+/// White, the top of the backdrop lightness scale (CIE L*/100 in thousandths).
+pub const BACKDROP_LIGHTNESS_MAX: u16 = 1000;
+/// How far the backdrop lightness moves, in thousandths, before a bar is told again: more than this.
+pub const BACKDROP_LIGHTNESS_STEP: u16 = 10;
 
 /// The `menu_bar` value of a menu object of `version`: 1 while a bar runs, and from version 3 only while the reader is
 /// verified too, so a window hides its own menus only while the bar can read them.
@@ -481,6 +487,8 @@ pub struct Announced {
 pub struct MenuBars {
     pub set: MenuBarSet,
     bars: Vec<Bar>,
+    /// The lightness of the wallpaper under the bar of each output whose wallpaper the server has measured.
+    backdrops: HashMap<OutputId, u16>,
     /// Addresses announced by windows, by window id and kind.
     addresses: HashMap<(u64, MenuKind), MenuAddress>,
     /// Addresses announced before the window mapped.
@@ -509,6 +517,7 @@ impl MenuBars {
                 ..BarSetConfig::default()
             }),
             bars: Vec::new(),
+            backdrops: HashMap::new(),
             addresses: HashMap::new(),
             pending: Vec::new(),
             announced: HashMap::new(),
@@ -602,6 +611,7 @@ impl MenuBars {
     pub fn remove_output(&mut self, output: OutputId, now: f64) {
         self.set.remove_output(output, now);
         self.bars.retain(|b| b.output != output);
+        self.backdrops.remove(&output);
     }
 
     /// Announce (or withdraw with `None`) the address of kind `kind` of window `key`.
@@ -771,12 +781,14 @@ impl Cupertino {
             capture_sent: None,
             agent_sent: None,
             shortcuts_sent: None,
+            backdrop_sent: None,
         });
         self.refresh_usable_area(out);
         self.refresh_menu_bars();
         self.refresh_capture_indicator();
         self.refresh_session_agent();
         self.refresh_menu_bar_shortcuts();
+        self.refresh_backdrop_lightness();
         self.refresh_gtk_capabilities();
         self.refresh_app_menus();
         if self.menu_bars.bars.len() == 1 {
@@ -1093,6 +1105,44 @@ impl Cupertino {
             bar.resource.session_agent(kind, pid);
             bar.resource.done();
             bar.agent_sent = Some(trust);
+        }
+    }
+
+    /// The lightness of the wallpaper under the bar of `output` (CIE L*/100 in thousandths, clamped to
+    /// [`BACKDROP_LIGHTNESS_MAX`]). A value equal to the stored one does nothing. `None` forgets the output's measure
+    /// when the output goes and sends nothing: a value sent to a bar is never withdrawn.
+    pub fn set_backdrop_lightness(&mut self, output: OutputId, lightness: Option<u16>) {
+        let Some(lightness) = lightness.map(|l| l.min(BACKDROP_LIGHTNESS_MAX)) else {
+            self.menu_bars.backdrops.remove(&output);
+            return;
+        };
+        if self.menu_bars.backdrops.insert(output, lightness) != Some(lightness) {
+            self.refresh_backdrop_lightness();
+        }
+    }
+
+    /// Tell the bars of version 14 or later the lightness of the wallpaper under them, each one the first time and
+    /// when it moved by more than [`BACKDROP_LIGHTNESS_STEP`] since.
+    fn refresh_backdrop_lightness(&mut self) {
+        let backdrops = &self.menu_bars.backdrops;
+        for bar in self
+            .menu_bars
+            .bars
+            .iter_mut()
+            .filter(|b| b.resource.version() >= 14)
+        {
+            let Some(&lightness) = backdrops.get(&bar.output) else {
+                continue;
+            };
+            if bar
+                .backdrop_sent
+                .is_some_and(|sent| sent.abs_diff(lightness) <= BACKDROP_LIGHTNESS_STEP)
+            {
+                continue;
+            }
+            bar.resource.backdrop_luminance(u32::from(lightness));
+            bar.resource.done();
+            bar.backdrop_sent = Some(lightness);
         }
     }
 

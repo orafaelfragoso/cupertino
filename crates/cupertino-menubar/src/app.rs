@@ -14,11 +14,13 @@ use cupertino_menubar::controller::{MenuController, Mode, Outcome};
 use cupertino_menubar::desktop::app_name;
 use cupertino_menubar::extras::{self, ExtraAction, ExtraKind, Extras, SessionAction};
 use cupertino_menubar::extras_bus::{ExtrasBus, SessionAgent};
-use cupertino_menubar::feed::{status_icon, status_icon_px, BarFeed, Shared, StatusState};
+use cupertino_menubar::feed::{
+    status_icon, status_icon_px, BarFeed, Shared, StatusState, TintedIcon,
+};
 use cupertino_menubar::geom::{Point, Rect};
 use cupertino_menubar::layout::{BarMetrics, MenuMetrics};
 use cupertino_menubar::popups::{self, PopupOp};
-use cupertino_menubar::raster::{BarText, MenuPalette, Style, POPUP_RADIUS};
+use cupertino_menubar::raster::{BarText, BarTone, MenuPalette, Style, POPUP_RADIUS};
 use cupertino_menubar::recent::RecentSources;
 use cupertino_menubar::routing::{self, menu_key, Action, Context};
 use cupertino_menubar::worker::{self, Worker};
@@ -80,6 +82,10 @@ struct Bar {
     /// A surface of this bar (the bar or one of its menus) has the keyboard.
     has_keyboard: bool,
     scale: f64,
+    /// The lightness of the wallpaper under the bar, from the server; `None` before it is known.
+    backdrop_lightness: Option<u16>,
+    /// The palette of the bar's strip.
+    tone: BarTone,
 }
 
 /// What a surface of the process is.
@@ -367,6 +373,8 @@ impl App {
             keyboard: KeyboardInteractivity::None,
             has_keyboard: false,
             scale: 1.0,
+            backdrop_lightness: None,
+            tone: BarTone::Appearance,
         });
         if self.bars.len() == 1 {
             self.worker.send(worker::Request::AppMenuRegistrar(true))?;
@@ -485,12 +493,23 @@ impl App {
             Event::Extension(event) => match self.observed.apply(&event) {
                 Some(SessionChange::Appearance { dark }) => {
                     self.style.palette = MenuPalette::new(dark);
-                    self.reload_extra_icons();
+                    let display = self.observed.display;
+                    for bar in &mut self.bars {
+                        bar.tone = BarTone::fresh(bar.backdrop_lightness, display);
+                    }
                     self.redraw_all();
                 }
                 // the bar's and the menus' materials follow the options in the server; the text palette has no
-                // recorded contrast variant
-                Some(SessionChange::DisplayOptions(_)) => {}
+                // recorded contrast variant, and a solid bar keeps the appearance's
+                Some(SessionChange::DisplayOptions(display)) => {
+                    for bar in &mut self.bars {
+                        let tone = BarTone::fresh(bar.backdrop_lightness, display);
+                        if tone != bar.tone {
+                            bar.tone = tone;
+                            bar.presenter.request_redraw();
+                        }
+                    }
+                }
                 // the server draws the lock screen: only the menus this process owns have to go
                 Some(SessionChange::Lock { locked: true }) => {
                     for i in 0..self.bars.len() {
@@ -526,6 +545,15 @@ impl App {
                             self.bars[i]
                                 .feed
                                 .apply(update, &mut self.shared, |id| app_name(id, data_dirs));
+                            if let Some(lightness) = update.backdrop_lightness {
+                                let bar = &mut self.bars[i];
+                                bar.backdrop_lightness = Some(lightness);
+                                let tone = bar.tone.next(Some(lightness), self.observed.display);
+                                if tone != bar.tone {
+                                    bar.tone = tone;
+                                    bar.presenter.request_redraw();
+                                }
+                            }
                             if let Some(agent) = update.session_agent {
                                 self.extras.session_agent(match agent {
                                     cupertino_shell_client::SessionAgent::None => {
@@ -702,27 +730,35 @@ impl App {
         self.refresh()
     }
 
-    /// Draw the extras' symbols in the bar's text colour (dimmed ones at [`DIMMED_ALPHA`]).
+    /// Draw the extras' symbols in the light and the dark palette's text colour (dimmed ones at [`DIMMED_ALPHA`]); each
+    /// bar draws the one of its tone.
     fn reload_extra_icons(&mut self) {
         let px = self.icon_px();
-        let text = self.style.palette.text;
         let symbols = &mut self.symbols;
         let extras = &self.shared.extras;
         self.shared.extra_icons = ExtraKind::ORDER
             .into_iter()
             .filter_map(|kind| {
                 let glyph = extras.glyph(kind)?;
-                let color = [
-                    text[0],
-                    text[1],
-                    text[2],
-                    if glyph.dimmed {
-                        text[3] * DIMMED_ALPHA
-                    } else {
-                        text[3]
-                    },
-                ];
-                Some((kind, Some(symbols.symbol(glyph.symbol, px, color).clone())))
+                let mut tint = |dark: bool| {
+                    let text = MenuPalette::new(dark).text;
+                    let color = [
+                        text[0],
+                        text[1],
+                        text[2],
+                        if glyph.dimmed {
+                            text[3] * DIMMED_ALPHA
+                        } else {
+                            text[3]
+                        },
+                    ];
+                    symbols.symbol(glyph.symbol, px, color).clone()
+                };
+                let icon = TintedIcon {
+                    light_text: tint(true),
+                    dark_text: tint(false),
+                };
+                Some((kind, Some(icon)))
             })
             .collect();
     }
@@ -1048,8 +1084,13 @@ impl App {
         match part {
             Part::Bar => {
                 bar.backdrop.set_shape(&size, 0.0)?;
-                let (c, text, style, shared) =
-                    (&bar.controller, &bar.text, &self.style, &self.shared);
+                let (c, text, tone, style, shared) = (
+                    &bar.controller,
+                    &bar.text,
+                    bar.tone,
+                    &self.style,
+                    &self.shared,
+                );
                 bar.presenter.draw(&mut self.conn, None, |pm, scale| {
                     style.paint_bar(
                         text,
@@ -1057,6 +1098,7 @@ impl App {
                         c.layout(),
                         c.content(),
                         c.highlighted_slot(),
+                        tone,
                         shared,
                         scale.factor(),
                     )

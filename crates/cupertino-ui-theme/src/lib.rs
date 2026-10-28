@@ -16,12 +16,17 @@ pub enum ColorRole {
     ControlFill,
     ControlBorder,
     ControlText,
+    DisabledControlFill,
+    DisabledControlBorder,
+    DisabledControlText,
     DefaultButtonFill,
     DefaultButtonText,
+    DestructiveFill,
     DestructiveText,
     SwitchTrack,
     SwitchThumb,
     TextBackground,
+    TextFieldBorder,
     SelectedTextBackground,
     SelectedText,
     SelectedControlFill,
@@ -35,17 +40,30 @@ pub enum ColorRole {
     ToolTipText,
 }
 
-/// The state a colour is resolved for. Disabled wins over everything; pressed wins over hover.
+/// The pointer and enabled state a colour is resolved for. Disabled wins over everything; pressed wins over hover.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum StateVariant {
+pub enum InteractionVariant {
     #[default]
     Normal,
     Hover,
     Pressed,
     Disabled,
-    Selected,
-    /// Selected in a window that is not active.
-    SelectedInactive,
+}
+
+/// The state a colour is resolved for. Keyboard focus is not part of it: the focus ring is drawn on its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StateVariant {
+    pub interaction: InteractionVariant,
+    pub selected: bool,
+    pub window_active: bool,
+}
+
+impl StateVariant {
+    pub const NORMAL: StateVariant = StateVariant {
+        interaction: InteractionVariant::Normal,
+        selected: false,
+        window_active: true,
+    };
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -64,7 +82,7 @@ impl ColorTokens {
     pub fn get(&self, role: ColorRole, state: StateVariant) -> Option<Color> {
         self.map
             .get(&(role, state))
-            .or_else(|| self.map.get(&(role, StateVariant::Normal)))
+            .or_else(|| self.map.get(&(role, StateVariant::NORMAL)))
             .copied()
     }
 }
@@ -143,18 +161,25 @@ mod tests {
     fn a_state_without_its_own_colour_falls_back_to_normal() {
         let normal = Color::new(0.0, 0.0, 0.0, 1.0);
         let pressed = Color::new(1.0, 1.0, 1.0, 1.0);
+        let state = |interaction| StateVariant {
+            interaction,
+            ..StateVariant::NORMAL
+        };
         let colors = ColorTokens::new([
-            ((ColorRole::ControlFill, StateVariant::Normal), normal),
-            ((ColorRole::ControlFill, StateVariant::Pressed), pressed),
+            ((ColorRole::ControlFill, StateVariant::NORMAL), normal),
+            (
+                (ColorRole::ControlFill, state(InteractionVariant::Pressed)),
+                pressed,
+            ),
         ]);
         assert_eq!(
-            colors.get(ColorRole::ControlFill, StateVariant::Pressed),
+            colors.get(ColorRole::ControlFill, state(InteractionVariant::Pressed)),
             Some(pressed)
         );
         assert_eq!(
-            colors.get(ColorRole::ControlFill, StateVariant::Hover),
+            colors.get(ColorRole::ControlFill, state(InteractionVariant::Hover)),
             Some(normal)
         );
-        assert_eq!(colors.get(ColorRole::Text, StateVariant::Normal), None);
+        assert_eq!(colors.get(ColorRole::Text, StateVariant::NORMAL), None);
     }
 }

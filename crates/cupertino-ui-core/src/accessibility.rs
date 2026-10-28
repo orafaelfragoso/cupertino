@@ -60,7 +60,11 @@ pub enum Checked {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AccessibleValue {
-    Text(String),
+    Text {
+        value: String,
+        /// Set for editable text.
+        editing: Option<TextSemantics>,
+    },
     Number {
         value: f64,
         min: f64,
@@ -68,7 +72,7 @@ pub enum AccessibleValue {
         step: Option<f64>,
     },
     Toggle(Checked),
-    /// A secret: assistive technology learns that there is a value, never what it is.
+    /// A secret: assistive technology learns that there is a value, never what it is or where the caret sits in it.
     Protected,
 }
 
@@ -109,7 +113,7 @@ pub enum Relation {
     FlowsTo(NodeId),
 }
 
-/// The caret and selection of an editable node, in bytes of its value. Protected nodes have none.
+/// The caret and selection of an editable node, in bytes of its value. A protected value has none, by type.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TextSemantics {
     pub caret: usize,
@@ -127,8 +131,8 @@ pub struct AccessibilityNode {
     pub bounds: Rect,
     pub actions: Vec<Action>,
     pub relations: Vec<Relation>,
+    /// In reading order.
     pub children: Vec<NodeId>,
-    pub text: Option<TextSemantics>,
 }
 
 /// What changed in one window's tree since the previous update.
@@ -156,8 +160,12 @@ pub struct ActionRequest {
     pub data: Option<ActionData>,
 }
 
-/// Publishes the tree to assistive technology and hands back its requests.
+/// Publishes the tree to assistive technology and hands back its requests. An adapter wakes the window system's
+/// waker when a request arrives.
 pub trait AccessibilityAdapter {
+    /// Whether an assistive technology is listening; core builds updates only while it is.
+    fn is_active(&self) -> bool;
+    fn window_focus(&mut self, window: WindowId, focused: bool);
     fn update(&mut self, update: &AccessibilityUpdate);
     fn drain_actions(&mut self, out: &mut Vec<ActionRequest>);
 }

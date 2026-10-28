@@ -52,9 +52,12 @@ pub struct WindowSpec {
     pub decorations: DecorationMode,
 }
 
-/// Where a popup goes relative to its anchor rectangle, as `xdg_positioner` takes it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Gravity {
+/// An edge or corner of a popup's anchor rectangle, or the direction the popup extends from it, as
+/// `xdg_positioner` takes them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PopupEdge {
+    #[default]
+    None,
     Top,
     Bottom,
     Left,
@@ -76,10 +79,14 @@ pub struct ConstraintAdjust {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PopupSpec {
     /// In the parent's coordinates.
-    pub anchor: Rect,
-    pub gravity: Gravity,
+    pub anchor_rect: Rect,
+    pub anchor: PopupEdge,
+    pub gravity: PopupEdge,
+    pub offset: Point,
     pub size: Size,
     pub constraint: ConstraintAdjust,
+    /// Lets the compositor move the popup again when its parent moves or resizes.
+    pub reactive: bool,
     /// Takes the keyboard and dismisses on a click outside (menus); a tooltip does not.
     pub grab: bool,
 }
@@ -110,6 +117,8 @@ pub enum WindowRequest {
     Minimize,
     /// Raise and focus, with an activation token when the request came from another client.
     Activate(Option<String>),
+    /// Moves an open popup.
+    Reposition(PopupSpec),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -162,11 +171,19 @@ pub enum PresentOutcome {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct TiledEdges {
+    pub top: bool,
+    pub bottom: bool,
+    pub left: bool,
+    pub right: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct WindowStates {
     pub activated: bool,
     pub maximized: bool,
     pub fullscreen: bool,
-    pub tiled: bool,
+    pub tiled: TiledEdges,
     pub resizing: bool,
     pub suspended: bool,
 }
@@ -184,6 +201,16 @@ pub struct Configure {
     pub bounds: Option<Size>,
     /// Whether the compositor draws the title bar.
     pub server_decorations: bool,
+    pub wm_capabilities: WmCapabilities,
+}
+
+/// The window-management requests the compositor supports for this window; a title bar shows only those.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct WmCapabilities {
+    pub window_menu: bool,
+    pub maximize: bool,
+    pub fullscreen: bool,
+    pub minimize: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -226,6 +253,8 @@ pub enum PointerEvent {
         /// Wheel detents in 1/120 steps, when the device reports them.
         value120: Option<(i32, i32)>,
         source: ScrollSource,
+        /// The fingers left the surface: kinetic scrolling may start.
+        stop: bool,
     },
 }
 
@@ -286,6 +315,11 @@ pub enum PlatformEvent {
         token: ClipboardToken,
         data: Option<ClipboardData>,
     },
+    /// What the clipboard now offers, by MIME type; `None` when it was cleared.
+    ClipboardOffered {
+        kind: ClipboardKind,
+        mimes: Option<Vec<String>>,
+    },
     /// A token to hand to another client so it may take the focus.
     ActivationToken {
         request: ActivationRequest,
@@ -317,7 +351,8 @@ pub trait WindowSystem {
     fn request(&mut self, window: WindowId, request: WindowRequest) -> Result<(), PlatformError>;
     /// Enables the input method for `window` with this state, or disables it with `None`.
     fn set_text_input(&mut self, window: WindowId, state: Option<&TextInputState>);
-    fn set_cursor(&mut self, window: WindowId, shape: CursorShape);
+    /// `None` hides the pointer over the window.
+    fn set_cursor(&mut self, window: WindowId, shape: Option<CursorShape>);
     fn set_clipboard(&mut self, kind: ClipboardKind, data: ClipboardData);
     fn read_clipboard(&mut self, kind: ClipboardKind, mime: &str) -> ClipboardToken;
     fn request_activation_token(&mut self, window: WindowId) -> ActivationRequest;

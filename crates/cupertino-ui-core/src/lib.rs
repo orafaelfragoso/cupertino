@@ -288,6 +288,17 @@ pub struct Pending {
     pub animating: bool,
 }
 
+/// What a bounded runtime step ended with. Steps never advance time on their own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StepStatus {
+    /// Nothing is left to do at the current time.
+    Idle,
+    /// Work waits for time, a task, a frame or a buffer release.
+    Waiting(Pending),
+    /// The turn budget ran out with work still ready.
+    BudgetExhausted(Pending),
+}
+
 /// A read-only view of one node after a frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NodeSnapshot {

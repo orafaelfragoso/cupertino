@@ -1,12 +1,13 @@
 //! Runs the transport against a minimal in-process compositor that offers the core globals and, per test, some optional
 //! ones, and checks what the compositor receives and what the client reports back.
 
-use cupertino_geometry::Rect;
+use cupertino_geometry::{Point, Rect};
 use cupertino_wayland_client::{
     Anchor, BufferFormat, Button, Capability, Connection, ConstraintAdjustment, Decorations, Error,
     Event, Extension, Gravity, KeyboardEvent, OutputGeometry, OutputTransform, PixelRect,
-    PointerEvent, PopupPlacement, Preedit, Scale, SurfaceId, SurroundingText, TextInputDone,
-    TextInputEvent, TextInputState, Toplevel, ToplevelConfig, WindowConfigure,
+    PointerEvent, PopupPlacement, Preedit, Scale, ScrollSource, SurfaceId, SurroundingText,
+    TextInputDone, TextInputEvent, TextInputState, Toplevel, ToplevelConfig, WindowConfigure,
+    WmCapabilities,
 };
 use std::collections::VecDeque;
 use std::io::Write;
@@ -91,6 +92,8 @@ struct Globals {
     /// `zxdg_output_manager_v1`, placing the output at (1920, 0) with a 1280 × 720 logical size.
     output_layout: bool,
     text_input: bool,
+    /// Offer `wl_seat` version 8, whose wheels report half notches in 120ths, instead of 7.
+    high_resolution_wheel: bool,
 }
 
 impl Globals {
@@ -110,6 +113,8 @@ enum Control {
         states: Vec<xdg_toplevel::State>,
     },
     EnterOutput,
+    /// Announce what the compositor supports, then configure the toplevel.
+    WmCapabilities(Vec<xdg_toplevel::WmCapabilities>),
     PreferredBufferScale(i32),
     FractionalScale(u32),
     DismissPopup,
@@ -121,7 +126,8 @@ enum Control {
     Offer(Vec<&'static str>),
     /// Configure the layer surface this many times in a row, each a pixel wider.
     LayerConfigures(u32),
-    /// Enter the toplevel, then scroll by `(dx, dy)` and `(0, dy)` within one pointer frame.
+    /// Enter the toplevel, then scroll a wheel by `(dx, dy)` and `(0, dy)`, one notch each, within one pointer frame;
+    /// then lift a finger in a frame of its own.
     Scroll {
         dx: f64,
         dy: f64,
@@ -187,6 +193,11 @@ enum Seen {
         surface: u32,
     },
     TextInput(TextInputRequest),
+    WindowMenu {
+        serial: u32,
+        x: i32,
+        y: i32,
+    },
 }
 
 #[derive(Default)]
@@ -553,7 +564,21 @@ impl Dispatch<XdgSurface, WlSurface> for Mock {
     }
 }
 
-ignore_requests!(XdgToplevel => ());
+impl Dispatch<XdgToplevel, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &XdgToplevel,
+        request: xdg_toplevel::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        if let xdg_toplevel::Request::ShowWindowMenu { serial, x, y, .. } = request {
+            state.seen.send(Seen::WindowMenu { serial, x, y }).unwrap();
+        }
+    }
+}
 
 impl Dispatch<XdgPopup, ()> for Mock {
     fn request(
@@ -996,7 +1021,10 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
             dh.create_global::<Mock, XdgWmBase, _>(6, ());
         }
         if globals.seat {
-            dh.create_global::<Mock, WlSeat, _>(7, ());
+            dh.create_global::<Mock, WlSeat, _>(
+                if globals.high_resolution_wheel { 8 } else { 7 },
+                (),
+            );
         }
         if globals.clipboard {
             dh.create_global::<Mock, WlDataDeviceManager, _>(3, ());
@@ -1080,6 +1108,18 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
             xdg.configure(serial);
         }
         Control::EnterOutput => mock.surface().enter(mock.output.as_ref().unwrap()),
+        Control::WmCapabilities(capabilities) => {
+            let serial = mock.serial();
+            let (_, xdg, toplevel, _) = mock.toplevel.as_ref().unwrap();
+            toplevel.wm_capabilities(
+                capabilities
+                    .iter()
+                    .flat_map(|c| (*c as u32).to_ne_bytes())
+                    .collect(),
+            );
+            toplevel.configure(0, 0, Vec::new());
+            xdg.configure(serial);
+        }
         Control::PreferredBufferScale(factor) => mock.surface().preferred_buffer_scale(factor),
         Control::FractionalScale(value) => mock.fractional.as_ref().unwrap().preferred_scale(value),
         Control::DismissPopup => mock.popup.as_ref().unwrap().1.popup_done(),
@@ -1087,14 +1127,15 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
             let (serial, surface) = (mock.serial(), mock.surface().clone());
             let pointer = mock.pointer.as_ref().unwrap();
             pointer.enter(serial, &surface, x, y);
-            pointer.button(serial + 1, 0, BTN_LEFT, wl_pointer::ButtonState::Pressed);
+            pointer.motion(4000, x, y);
+            pointer.button(serial + 1, 4242, BTN_LEFT, wl_pointer::ButtonState::Pressed);
             pointer.frame();
         }
         Control::TypeKey(code) => {
             let (serial, surface) = (mock.serial(), mock.surface().clone());
             let keyboard = mock.keyboard.as_ref().unwrap();
             keyboard.enter(serial, &surface, Vec::new());
-            keyboard.key(serial + 1, 0, code, wl_keyboard::KeyState::Pressed);
+            keyboard.key(serial + 1, 777, code, wl_keyboard::KeyState::Pressed);
         }
         Control::Offer(types) => {
             let device = mock.data_device.as_ref().unwrap();
@@ -1121,9 +1162,22 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
             let pointer = mock.pointer.as_ref().unwrap();
             pointer.enter(serial, &surface, 1.0, 2.0);
             pointer.frame();
-            pointer.axis(0, wl_pointer::Axis::VerticalScroll, dy);
-            pointer.axis(0, wl_pointer::Axis::HorizontalScroll, dx);
-            pointer.axis(0, wl_pointer::Axis::VerticalScroll, dy);
+            pointer.axis_source(wl_pointer::AxisSource::Wheel);
+            for (axis, value, notches) in [
+                (wl_pointer::Axis::VerticalScroll, dy, -1),
+                (wl_pointer::Axis::HorizontalScroll, dx, 1),
+                (wl_pointer::Axis::VerticalScroll, dy, -1),
+            ] {
+                if pointer.version() >= 8 {
+                    pointer.axis_value120(axis, notches * 60);
+                } else {
+                    pointer.axis_discrete(axis, notches);
+                }
+                pointer.axis(900, axis, value);
+            }
+            pointer.frame();
+            pointer.axis_source(wl_pointer::AxisSource::Finger);
+            pointer.axis_stop(950, wl_pointer::Axis::VerticalScroll);
             pointer.frame();
         }
         Control::TextInputEnter => {
@@ -1524,6 +1578,75 @@ fn decorations_are_the_compositors_when_granted_and_the_clients_when_refused() {
 }
 
 #[test]
+fn decorations_can_be_asked_again_and_only_a_compositor_with_the_protocol_draws_them() {
+    let (mut conn, _control, seen) = connect(Globals {
+        decoration: Some(Mode::ServerSide),
+        ..Globals::core()
+    });
+    let w = window(&mut conn, Decorations::Server);
+    conn.set_decorations(w, Decorations::Client).unwrap();
+    conn.flush().unwrap();
+    assert_eq!(next_seen(&seen), Seen::DecorationMode(Mode::ServerSide));
+    assert_eq!(next_seen(&seen), Seen::DecorationMode(Mode::ClientSide));
+
+    let (mut conn, _control, _seen) = connect(Globals::core());
+    let w = window(&mut conn, Decorations::Client);
+    assert!(conn.set_decorations(w, Decorations::Client).is_ok());
+    assert!(matches!(
+        conn.set_decorations(w, Decorations::Server),
+        Err(Error::Unsupported(Capability::ServerDecoration))
+    ));
+}
+
+#[test]
+fn the_window_menu_answers_the_latest_click_and_capabilities_arrive_with_the_configure() {
+    let (mut conn, control, seen) = connect(Globals {
+        seat: true,
+        ..Globals::core()
+    });
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    assert_eq!(configured(&mut conn, &mut stash, w).capabilities, None);
+    assert!(matches!(
+        conn.show_window_menu(w, Point::new(1.0, 2.0)),
+        Err(Error::PermissionDenied(_))
+    ));
+    control.send(Control::Click { x: 3.0, y: 4.0 }).unwrap();
+    wait_for(&mut conn, &mut stash, |e| match e {
+        Event::Pointer {
+            event: PointerEvent::Button { .. },
+            ..
+        } => Some(()),
+        _ => None,
+    });
+    let click_serial = conn.input_serial().unwrap();
+    conn.show_window_menu(w, Point::new(10.6, 20.4)).unwrap();
+    conn.flush().unwrap();
+    let menu = loop {
+        if let Seen::WindowMenu { serial, x, y } = next_seen(&seen) {
+            break (serial, x, y);
+        }
+    };
+    assert_eq!(menu, (click_serial, 11, 20));
+
+    control
+        .send(Control::WmCapabilities(vec![
+            xdg_toplevel::WmCapabilities::WindowMenu,
+            xdg_toplevel::WmCapabilities::Minimize,
+        ]))
+        .unwrap();
+    assert_eq!(
+        configured(&mut conn, &mut stash, w).capabilities,
+        Some(WmCapabilities {
+            window_menu: true,
+            maximize: false,
+            fullscreen: false,
+            minimize: true,
+        })
+    );
+}
+
+#[test]
 fn a_popup_is_drawn_where_and_as_large_as_the_compositor_placed_it() {
     let (mut conn, control, seen) = connect(Globals::core());
     let mut stash = Stash::new();
@@ -1595,22 +1718,33 @@ fn pointer_and_key_input_arrive_typed_on_the_focused_window() {
     let w = window(&mut conn, Decorations::Client);
     configured(&mut conn, &mut stash, w);
     control.send(Control::Click { x: 12.5, y: 7.25 }).unwrap();
+    let motion = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::Pointer {
+            time,
+            event: PointerEvent::Motion(_),
+            ..
+        } => Some(*time),
+        _ => None,
+    });
+    assert_eq!(motion, 4000);
     let button = wait_for(&mut conn, &mut stash, |e| match e {
         Event::Pointer {
             surface,
+            time,
             event:
                 PointerEvent::Button {
                     button,
                     pressed,
                     position,
                 },
-        } if *surface == w.surface() => Some((*button, *pressed, position.x, position.y)),
+        } if *surface == w.surface() => Some((*button, *pressed, position.x, position.y, *time)),
         _ => None,
     });
-    assert_eq!(button, (Button::Left, true, 12.5, 7.25));
+    assert_eq!(button, (Button::Left, true, 12.5, 7.25, 4242));
     control.send(Control::TypeKey(KEY_A)).unwrap();
     let key = wait_for(&mut conn, &mut stash, |e| match e {
         Event::Keyboard {
+            time,
             event:
                 KeyboardEvent::Key {
                     code,
@@ -1619,10 +1753,21 @@ fn pointer_and_key_input_arrive_typed_on_the_focused_window() {
                     ..
                 },
             ..
-        } => Some((*code, *character, *repeat)),
+        } => Some((*code, *character, *repeat, *time)),
         _ => None,
     });
-    assert_eq!(key, (KEY_A, Some('a'), false));
+    assert_eq!(key, (KEY_A, Some('a'), false, 777));
+    // an enter carries no time of its own: it takes the key's, advanced by the wait since
+    control.send(Control::Scroll { dx: 0.0, dy: 1.0 }).unwrap();
+    let enter = wait_for(&mut conn, &mut stash, |e| match e {
+        Event::Pointer {
+            time,
+            event: PointerEvent::Enter(_),
+            ..
+        } => Some(*time),
+        _ => None,
+    });
+    assert!((777..1777).contains(&enter), "{enter}");
 }
 
 #[test]
@@ -2115,22 +2260,50 @@ fn an_output_reports_its_identification_size_and_effective_scale() {
 
 #[test]
 fn the_axes_of_one_pointer_frame_arrive_as_one_scroll() {
-    let (mut conn, control, _seen) = connect(Globals {
-        seat: true,
-        ..Globals::core()
-    });
-    let mut stash = Stash::new();
-    let w = window(&mut conn, Decorations::Client);
-    configured(&mut conn, &mut stash, w);
-    control.send(Control::Scroll { dx: 4.0, dy: -2.5 }).unwrap();
-    let scroll = wait_for(&mut conn, &mut stash, |e| match e {
-        Event::Pointer {
-            event: PointerEvent::Scroll { dx, dy, .. },
-            ..
-        } => Some((*dx, *dy)),
-        _ => None,
-    });
-    assert_eq!(scroll, (4.0, -5.0));
+    for (high_resolution_wheel, detents) in [(false, (120, -240)), (true, (60, -120))] {
+        let (mut conn, control, _seen) = connect(Globals {
+            seat: true,
+            high_resolution_wheel,
+            ..Globals::core()
+        });
+        let mut stash = Stash::new();
+        let w = window(&mut conn, Decorations::Client);
+        configured(&mut conn, &mut stash, w);
+        control.send(Control::Scroll { dx: 4.0, dy: -2.5 }).unwrap();
+        let mut scroll = || {
+            wait_for(&mut conn, &mut stash, |e| match e {
+                Event::Pointer {
+                    time,
+                    event:
+                        PointerEvent::Scroll {
+                            dx,
+                            dy,
+                            source,
+                            value120,
+                            stop,
+                            ..
+                        },
+                    ..
+                } => Some((*time, *dx, *dy, *source, *value120, *stop)),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            scroll(),
+            (
+                900,
+                4.0,
+                -5.0,
+                Some(ScrollSource::Wheel),
+                Some(detents),
+                false
+            )
+        );
+        assert_eq!(
+            scroll(),
+            (950, 0.0, 0.0, Some(ScrollSource::Finger), None, true)
+        );
+    }
 }
 
 fn text_input_window() -> (

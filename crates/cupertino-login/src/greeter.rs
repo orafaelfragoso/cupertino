@@ -385,7 +385,7 @@ impl App {
                     },
                 ..
             } => self.press(now, code, mods, character)?,
-            Event::Pointer { surface, event } => self.pointer(now, surface, event)?,
+            Event::Pointer { surface, event, .. } => self.pointer(now, surface, event)?,
             Event::OutputsChanged => self.arrange_surfaces()?,
             Event::Extension(event) => match event.downcast_ref::<ShellEvent>() {
                 Some(&ShellEvent::Configure { surface, size }) => {

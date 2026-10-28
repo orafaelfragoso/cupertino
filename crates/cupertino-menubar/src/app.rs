@@ -433,7 +433,7 @@ impl App {
                     self.apply(i, outcome)?;
                 }
             }
-            Event::Pointer { surface, event } => self.pointer(surface, event)?,
+            Event::Pointer { surface, event, .. } => self.pointer(surface, event)?,
             Event::Keyboard {
                 surface,
                 event:
@@ -444,6 +444,7 @@ impl App {
                         mods,
                         ..
                     },
+                ..
             } => {
                 if let Some((i, _)) = self.locate(surface) {
                     let now = self.now();
@@ -464,6 +465,7 @@ impl App {
             Event::Keyboard {
                 surface,
                 event: KeyboardEvent::Enter,
+                ..
             } => {
                 if let Some((i, part)) = self.locate(surface) {
                     self.bars[i].has_keyboard = true;
@@ -476,6 +478,7 @@ impl App {
             Event::Keyboard {
                 surface,
                 event: KeyboardEvent::Leave,
+                ..
             } => {
                 if let Some((i, _)) = self.locate(surface) {
                     self.bars[i].has_keyboard = false;

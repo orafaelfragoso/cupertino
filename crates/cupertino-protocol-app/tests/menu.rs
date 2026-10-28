@@ -12,7 +12,7 @@ use cupertino_app_protocols::server::app_effects::cupertino_app_menu_v1::{
     self, CupertinoAppMenuV1,
 };
 use cupertino_protocol_app::{AppEffects, AppEvent, MenuAddress};
-use cupertino_wayland_client::{Connection, Event, ExternalRole, SurfaceId};
+use cupertino_wayland_client::{Connection, Error, Event, ExternalRole, SurfaceId};
 use wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase;
 use wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use wayland_server::protocol::wl_compositor::{self, WlCompositor};
@@ -31,6 +31,10 @@ enum Seen {
 
 struct Mock {
     seen: Sender<Seen>,
+    /// The `menu_bar` value sent when the menu object is made.
+    shown: u32,
+    /// A `menu_bar` value sent in answer to `set_address`.
+    shown_on_address: Option<u32>,
 }
 
 struct Data;
@@ -79,7 +83,7 @@ impl Dispatch<WlCompositor, ()> for Mock {
 
 impl Dispatch<CupertinoAppEffectsV1, ()> for Mock {
     fn request(
-        _: &mut Self,
+        state: &mut Self,
         _: &Client,
         _: &CupertinoAppEffectsV1,
         request: cupertino_app_effects_v1::Request,
@@ -88,8 +92,7 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Mock {
         init: &mut DataInit<'_, Self>,
     ) {
         if let cupertino_app_effects_v1::Request::GetMenu { id, .. } = request {
-            // a menu bar runs
-            init.init(id, ()).menu_bar(1);
+            init.init(id, ()).menu_bar(state.shown);
         }
     }
 }
@@ -98,7 +101,7 @@ impl Dispatch<CupertinoAppMenuV1, ()> for Mock {
     fn request(
         state: &mut Self,
         _: &Client,
-        _: &CupertinoAppMenuV1,
+        resource: &CupertinoAppMenuV1,
         request: cupertino_app_menu_v1::Request,
         _: &(),
         _: &DisplayHandle,
@@ -111,13 +114,18 @@ impl Dispatch<CupertinoAppMenuV1, ()> for Mock {
                 window_object_path,
                 menubar_object_path,
                 app_menu_object_path,
-            } => Seen::Address([
-                bus_name,
-                application_object_path,
-                window_object_path,
-                menubar_object_path,
-                app_menu_object_path,
-            ]),
+            } => {
+                if let Some(shown) = state.shown_on_address {
+                    resource.menu_bar(shown);
+                }
+                Seen::Address([
+                    bus_name,
+                    application_object_path,
+                    window_object_path,
+                    menubar_object_path,
+                    app_menu_object_path,
+                ])
+            }
             cupertino_app_menu_v1::Request::Destroy => Seen::Destroyed,
             _ => return,
         };
@@ -125,7 +133,11 @@ impl Dispatch<CupertinoAppMenuV1, ()> for Mock {
     }
 }
 
-fn connect(effects_version: u32) -> (Connection, Receiver<Seen>) {
+fn connect(
+    effects_version: u32,
+    shown: u32,
+    shown_on_address: Option<u32>,
+) -> (Connection, Receiver<Seen>) {
     let (client, server) = UnixStream::pair().unwrap();
     let (seen, received) = channel();
     std::thread::spawn(move || {
@@ -136,7 +148,11 @@ fn connect(effects_version: u32) -> (Connection, Receiver<Seen>) {
         dh.create_global::<Mock, XdgWmBase, _>(6, ());
         dh.create_global::<Mock, CupertinoAppEffectsV1, _>(effects_version, ());
         dh.insert_client(server, Arc::new(Data)).unwrap();
-        let mut mock = Mock { seen };
+        let mut mock = Mock {
+            seen,
+            shown,
+            shown_on_address,
+        };
         loop {
             if display.dispatch_clients(&mut mock).is_err() {
                 return;
@@ -180,7 +196,7 @@ fn menu_events(conn: &mut Connection) -> Vec<AppEvent> {
 
 #[test]
 fn a_window_announces_its_menus_and_hears_whether_the_bar_shows_them() {
-    let (mut conn, seen) = connect(2);
+    let (mut conn, seen) = connect(2, 1, None);
     let effects = AppEffects::bind(&mut conn).unwrap();
     let window = surface(&mut conn);
     let menu = effects.menu(&conn, window).unwrap().expect("version 2");
@@ -220,8 +236,44 @@ fn a_window_announces_its_menus_and_hears_whether_the_bar_shows_them() {
 
 #[test]
 fn a_version_1_server_takes_no_menu_announcement() {
-    let (mut conn, _seen) = connect(1);
+    let (mut conn, _seen) = connect(1, 1, None);
     let effects = AppEffects::bind(&mut conn).unwrap();
     let window = surface(&mut conn);
     assert!(effects.menu(&conn, window).unwrap().is_none());
+}
+
+#[test]
+fn a_shown_value_other_than_0_or_1_fails_the_connection() {
+    let (mut conn, seen) = connect(2, 0, Some(2));
+    let effects = AppEffects::bind(&mut conn).unwrap();
+    let window = surface(&mut conn);
+    let menu = effects.menu(&conn, window).unwrap().expect("version 2");
+    assert_eq!(
+        menu_events(&mut conn),
+        [AppEvent::MenuBar {
+            surface: window,
+            shown: false
+        }]
+    );
+
+    menu.set_address(&MenuAddress {
+        bus_name: ":1.42".into(),
+        application_object_path: "/org/example/Notes".into(),
+        window_object_path: "/org/example/Notes/window/1".into(),
+        menubar_object_path: "/org/example/Notes/window/1/menus/menubar".into(),
+        app_menu_object_path: None,
+    });
+    conn.flush().unwrap();
+    assert!(matches!(
+        seen.recv_timeout(Duration::from_secs(5)).unwrap(),
+        Seen::Address(_)
+    ));
+    let end = Instant::now() + Duration::from_secs(5);
+    let error = loop {
+        match conn.wait(Some(Duration::from_millis(50))) {
+            Err(error) => break error,
+            Ok(_) => assert!(Instant::now() < end, "the connection did not fail"),
+        }
+    };
+    assert!(matches!(error, Error::Protocol(_)), "{error}");
 }

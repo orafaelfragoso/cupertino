@@ -344,6 +344,7 @@ impl Cupertino {
         let info = self.config.keyboard.repeat_info();
         keyboard.change_repeat_info(info.rate, info.delay);
         self.set_system_keymap();
+        self.keep_release_chord_typeable();
         let (kb, level3) = (
             self.config.keyboard.layout_keyboard,
             self.config.keyboard.layout_level3,
@@ -492,6 +493,7 @@ impl Cupertino {
             match keyboard.set_keymap_from_string(self, keymap) {
                 Ok(()) => {
                     self.overlays.inputs.decoded_active = true;
+                    self.keep_release_chord_typeable();
                     tracing::info!(source = id, "input source (decoded layout)");
                 }
                 Err(e) => {
@@ -512,6 +514,7 @@ impl Cupertino {
             self.overlays.inputs.decoded_active = false;
         }
         keyboard.with_xkb_state(self, |mut ctx| ctx.set_layout(Layout(idx as u32)));
+        self.keep_release_chord_typeable();
         tracing::info!(source = id, group = idx, "input source");
     }
 

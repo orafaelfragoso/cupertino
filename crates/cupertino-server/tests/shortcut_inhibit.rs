@@ -247,3 +247,39 @@ fn a_released_surface_is_armed_again_only_by_focus_from_the_persons_input() {
         vm.inhibitor_events() == [true, false, true, false, true]
     });
 }
+
+#[test]
+fn a_release_chord_the_keymap_cannot_type_gets_the_default_beside_it() {
+    use cupertino_server::input::{parse_chord, Action, KeyBindings};
+
+    let Some(mut h) = Harness::new() else { return };
+    let super_escape = parse_chord("Super+Escape").unwrap();
+    let mut bindings = KeyBindings::default();
+    // XF86Launch... is not a key of the US layout the tests run with: a chord on it cannot be pressed
+    let untypeable = parse_chord("Super+0x1008ff40").unwrap();
+    bindings.bind(untypeable, Action::ReleaseShortcuts);
+    h.state.key_router.bindings = bindings;
+    h.state.keep_release_chord_typeable();
+    assert_eq!(
+        h.state
+            .key_router
+            .bindings
+            .lookup(super_escape.sym, super_escape.mods),
+        Some(Action::ReleaseShortcuts),
+        "the default is bound beside it"
+    );
+
+    let typeable = parse_chord("Super+x").unwrap();
+    let mut bindings = KeyBindings::default();
+    bindings.bind(typeable, Action::ReleaseShortcuts);
+    h.state.key_router.bindings = bindings;
+    h.state.keep_release_chord_typeable();
+    assert_eq!(
+        h.state
+            .key_router
+            .bindings
+            .lookup(super_escape.sym, super_escape.mods),
+        None,
+        "a chord the keymap can type is left alone"
+    );
+}

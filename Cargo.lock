@@ -1559,9 +1559,11 @@ dependencies = [
 name = "cupertino-ui-test"
 version = "0.1.0"
 dependencies = [
+ "cupertino-geometry",
  "cupertino-ui-core",
  "cupertino-ui-platform",
  "cupertino-ui-render",
+ "cupertino-ui-text",
 ]
 
 [[package]]

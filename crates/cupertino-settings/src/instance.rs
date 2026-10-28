@@ -10,6 +10,71 @@ pub const BUS_NAME: &str = "org.cupertino.Settings1";
 pub const OBJECT_PATH: &str = "/org/cupertino/Settings1";
 pub const INTERFACE: &str = "org.cupertino.Settings1";
 
+pub const ABOUT_BUS_NAME: &str = "org.cupertino.Settings.About1";
+const ABOUT_PATH: &str = "/org/cupertino/Settings/About1";
+
+struct AboutInstance {
+    on_show: Box<dyn Fn(String) + Send + Sync>,
+}
+
+#[zbus::interface(name = "org.cupertino.Settings.About1")]
+impl AboutInstance {
+    fn show(&self, activation_token: String) -> fdo::Result<()> {
+        if activation_token.len() > 4096 {
+            return Err(fdo::Error::InvalidArgs(
+                "activation token exceeds 4096 bytes".into(),
+            ));
+        }
+        (self.on_show)(activation_token);
+        Ok(())
+    }
+}
+
+/// About has a separate owner, so its lifetime and repeat launches never change the Settings pane.
+pub fn serve_about(
+    builder: connection::Builder<'static>,
+    on_show: impl Fn(String) + Send + Sync + 'static,
+) -> zbus::Result<Connection> {
+    zbus::block_on(async {
+        let connection = builder
+            .serve_at(
+                ABOUT_PATH,
+                AboutInstance {
+                    on_show: Box::new(on_show),
+                },
+            )?
+            .build()
+            .await?;
+        match connection
+            .request_name_with_flags(ABOUT_BUS_NAME, RequestNameFlags::DoNotQueue.into())
+            .await?
+        {
+            RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => Ok(connection),
+            RequestNameReply::Exists | RequestNameReply::InQueue => Err(zbus::Error::NameTaken),
+        }
+    })
+}
+
+pub fn show_about(
+    builder: connection::Builder<'static>,
+    activation_token: &str,
+) -> zbus::Result<()> {
+    zbus::block_on(async {
+        builder
+            .build()
+            .await?
+            .call_method(
+                Some(ABOUT_BUS_NAME),
+                ABOUT_PATH,
+                Some(ABOUT_BUS_NAME),
+                "Show",
+                &(activation_token,),
+            )
+            .await
+            .map(drop)
+    })
+}
+
 struct Instance {
     on_show: Box<dyn Fn(PaneId) + Send + Sync>,
 }

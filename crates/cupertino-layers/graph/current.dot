@@ -1,5 +1,5 @@
 // cupertino-layers --graph current
-// 69 crates, 271 internal dependencies
+// 69 crates, 275 internal dependencies
 // per layer: foundation 14, models 11, platform 7, render 19, core 1, shell 9, services 4, apps 2, tools 2
 // forbidden edges: none
 // denied paths ui -> core, shell, services: none
@@ -362,6 +362,10 @@ digraph "current" {
   "cupertino-ui-theme" -> "cupertino-geometry";
   "cupertino-ui-theme" -> "cupertino-theme";
   "cupertino-ui-wayland" -> "cupertino-geometry";
+  "cupertino-ui-wayland" -> "cupertino-modifiers";
+  "cupertino-ui-wayland" -> "cupertino-ui-platform";
+  "cupertino-ui-wayland" -> "cupertino-ui-render";
+  "cupertino-ui-wayland" -> "cupertino-ui-text";
   "cupertino-ui-wayland" -> "cupertino-wayland-client";
   "cupertino-wayland-client" -> "cupertino-geometry";
   "cupertino-wayland-client" -> "xkbcommon";

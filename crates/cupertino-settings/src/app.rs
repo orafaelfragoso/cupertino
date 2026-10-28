@@ -892,13 +892,10 @@ impl App {
                 let factor = scale.factor() as f32;
                 // the frame is drawn whole; where only rectangles of the pixmap were cleared, those replace what it holds,
                 // which makes the pixels the same as those of a whole redraw
-                let mut whole = match cleared {
-                    None => None,
-                    Some(_) => Some(match scratch.take() {
-                        Some(p) if (p.width(), p.height()) == (pm.width(), pm.height()) => p,
-                        _ => Pixmap::new(pm.width(), pm.height()).expect("the pixmap has a size"),
-                    }),
-                };
+                let mut whole = cleared.map(|_| match scratch.take() {
+                    Some(p) if (p.width(), p.height()) == (pm.width(), pm.height()) => p,
+                    _ => Pixmap::new(pm.width(), pm.height()).expect("the pixmap has a size"),
+                });
                 if let Some(whole) = whole.as_mut() {
                     whole.fill(Color::TRANSPARENT);
                 }
@@ -1124,7 +1121,7 @@ impl App {
             {
                 self.scroll =
                     (self.scroll + dy).clamp(0.0, (self.form_height - layout.content.h).max(0.0));
-                for a in scroll_areas(&layout) {
+                for a in scroll_areas(layout) {
                     self.window.redraw_rect(PopupRect::new(a.x, a.y, a.w, a.h));
                 }
             }

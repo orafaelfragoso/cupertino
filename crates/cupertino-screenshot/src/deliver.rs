@@ -172,7 +172,9 @@ pub fn to_files(
         for event in wl.conn.wait(timeout)? {
             match event {
                 Event::Frame(frame) if frame.surface == surface => presenter.frame_done(),
-                Event::Pointer { surface: s, event } if s == surface => match event {
+                Event::Pointer {
+                    surface: s, event, ..
+                } if s == surface => match event {
                     PointerEvent::Button {
                         button: Button::Left,
                         pressed: true,

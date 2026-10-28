@@ -534,10 +534,10 @@ impl App {
                 }
             }
             Event::Close(_) => return Ok(false),
-            Event::Pointer { surface, event } if Some(surface) == self.results_surface() => {
+            Event::Pointer { surface, event, .. } if Some(surface) == self.results_surface() => {
                 self.results_pointer(event)?
             }
-            Event::Pointer { surface, event } if Some(surface) == self.menu_surface() => {
+            Event::Pointer { surface, event, .. } if Some(surface) == self.menu_surface() => {
                 self.menu_pointer(event)?
             }
             Event::Pointer { event, .. } => self.pointer(event)?,

@@ -480,8 +480,9 @@ impl App {
                         character,
                         ..
                     },
+                ..
             } => self.key(now, surface, code, mods, character)?,
-            Event::Pointer { surface, event } => self.pointer(now, surface, event)?,
+            Event::Pointer { surface, event, .. } => self.pointer(now, surface, event)?,
             Event::OutputsChanged => self.arrange_surfaces()?,
             Event::Extension(event) => {
                 if let Some(event) = event.downcast_ref::<ShellEvent>() {

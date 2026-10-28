@@ -61,14 +61,14 @@ use crate::buffer::{pick_slot, Slot, SlotChoice, SlotTag, MAX_SLOTS};
 use crate::capability::REQUIRED;
 use crate::clipboard::Clipboard;
 use crate::configure::{wire_size, Serials};
-use crate::input::{Modifiers, PointerTracker, Repeat, Translator};
+use crate::input::{InputClock, Modifiers, PointerTracker, Repeat, Translator};
 use crate::output::{identification, physical_size, OutputBuilder, OutputId, OutputTransform};
 use crate::scale::ScaleSources;
 use crate::text_input::TextInput;
 use crate::{
     BufferFormat, BufferLayout, Capability, CapabilitySet, ClipboardOffer, Decorations, Disconnect,
     Error, Extension, KeyboardEvent, OutputInfo, PixelRect, PointerEvent, Scale, TextInputEvent,
-    TextInputState, WindowConfigure, WindowStates,
+    TextInputState, WindowConfigure, WindowStates, WmCapabilities,
 };
 
 /// A surface of this connection.
@@ -164,12 +164,16 @@ pub enum Event {
         surface: SurfaceId,
         scale: Scale,
     },
+    /// `time` is the compositor's input timestamp in milliseconds (an arbitrary base, wrapping): the event's own, or
+    /// for one that carries none (enter, leave, a repeated key) the latest one advanced by the time since.
     Pointer {
         surface: SurfaceId,
+        time: u32,
         event: PointerEvent,
     },
     Keyboard {
         surface: SurfaceId,
+        time: u32,
         event: KeyboardEvent,
     },
     /// The input method on a surface; see [`Connection::set_text_input`].
@@ -252,6 +256,7 @@ struct PendingToplevel {
     size: Option<(u32, u32)>,
     bounds: Option<(u32, u32)>,
     states: WindowStates,
+    capabilities: Option<WmCapabilities>,
 }
 
 enum Role {
@@ -348,6 +353,7 @@ pub struct State {
     translator: Option<Translator>,
     repeat: Repeat,
     last_serial: Option<u32>,
+    input_clock: InputClock,
     pub(crate) events: Vec<Event>,
     fault: Option<Error>,
 }
@@ -416,7 +422,8 @@ impl Connection {
                 .map(|g| (g.interface.as_str(), g.version))
                 .collect::<Vec<_>>(),
         )?;
-        let seat: Option<WlSeat> = bind(&globals, &qh, 1..=7);
+        // version 8 adds `axis_value120`
+        let seat: Option<WlSeat> = bind(&globals, &qh, 1..=8);
         let data_device_manager = bind(&globals, &qh, 1..=3);
         let clipboard = Clipboard::new(data_device_manager.as_ref(), seat.as_ref(), &qh);
         let text_input_manager: Option<ZwpTextInputManagerV3> = bind(&globals, &qh, 1..=1);
@@ -452,6 +459,7 @@ impl Connection {
             translator: None,
             repeat: Repeat::default(),
             last_serial: None,
+            input_clock: InputClock::default(),
             events: Vec::new(),
             fault: None,
         };
@@ -521,10 +529,7 @@ impl Connection {
         }
         let decoration = s.decoration_manager.as_ref().map(|m| {
             let d = m.get_toplevel_decoration(&toplevel, &qh, id);
-            d.set_mode(match config.decorations {
-                Decorations::Server => zxdg_toplevel_decoration_v1::Mode::ServerSide,
-                Decorations::Client => zxdg_toplevel_decoration_v1::Mode::ClientSide,
-            });
+            d.set_mode(decoration_mode(config.decorations));
             d
         });
         s.add_surface(
@@ -733,6 +738,47 @@ impl Connection {
             .clone()
             .ok_or(Error::Unsupported(Capability::Seat))?;
         self.state.toplevel(window)?._move(&seat, serial);
+        Ok(())
+    }
+
+    /// Show the compositor's window menu at `position` (window-local logical points), in answer to the latest button
+    /// press (a right click on a client-drawn title bar).
+    pub fn show_window_menu(&mut self, window: Toplevel, position: Point) -> Result<(), Error> {
+        let serial = self
+            .state
+            .last_serial
+            .ok_or(Error::PermissionDenied("a window menu"))?;
+        let seat = self
+            .state
+            .seat
+            .clone()
+            .ok_or(Error::Unsupported(Capability::Seat))?;
+        self.state.toplevel(window)?.show_window_menu(
+            &seat,
+            serial,
+            position.x.round() as i32,
+            position.y.round() as i32,
+        );
+        Ok(())
+    }
+
+    /// Ask again who draws the frame; the answer arrives with the next [`Event::Configure`]. Without the decoration
+    /// protocol the client always does, so asking the compositor is [`Error::Unsupported`].
+    pub fn set_decorations(
+        &mut self,
+        window: Toplevel,
+        decorations: Decorations,
+    ) -> Result<(), Error> {
+        let Role::Toplevel { decoration, .. } = &self.state.surface(window.0)?.role else {
+            unreachable!("a Toplevel handle names a toplevel");
+        };
+        match (decoration, decorations) {
+            (Some(d), _) => d.set_mode(decoration_mode(decorations)),
+            (None, Decorations::Client) => {}
+            (None, Decorations::Server) => {
+                return Err(Error::Unsupported(Capability::ServerDecoration))
+            }
+        }
         Ok(())
     }
 
@@ -1293,6 +1339,13 @@ fn positioner(
     Ok(positioner)
 }
 
+fn decoration_mode(decorations: Decorations) -> zxdg_toplevel_decoration_v1::Mode {
+    match decorations {
+        Decorations::Server => zxdg_toplevel_decoration_v1::Mode::ServerSide,
+        Decorations::Client => zxdg_toplevel_decoration_v1::Mode::ClientSide,
+    }
+}
+
 fn clamp_i32(v: u32) -> i32 {
     i32::try_from(v).unwrap_or(i32::MAX)
 }
@@ -1459,8 +1512,10 @@ impl State {
         };
         if let Some(code) = self.repeat.due(now) {
             let k = t.translate(code);
+            let time = self.input_time(now);
             self.events.push(Event::Keyboard {
                 surface,
+                time,
                 event: KeyboardEvent::Key {
                     code,
                     pressed: true,
@@ -1471,6 +1526,14 @@ impl State {
                 },
             });
         }
+    }
+
+    fn note_time(&mut self, time: u32) {
+        self.input_clock.note(time, Instant::now());
+    }
+
+    fn input_time(&self, now: Instant) -> u32 {
+        self.input_clock.at(now)
     }
 
     pub(crate) fn surface_of(&self, wl: &WlSurface) -> Option<SurfaceId> {
@@ -1757,6 +1820,7 @@ impl Dispatch<XdgSurface, SurfaceId> for State {
                     bounds: pending.bounds,
                     states: pending.states,
                     decorations: *decorations,
+                    capabilities: pending.capabilities,
                 };
                 *current = Some(configure);
                 Event::Configure {
@@ -1826,6 +1890,9 @@ impl Dispatch<XdgToplevel, SurfaceId> for State {
                     Ok(bounds) => pending.bounds = bounds,
                     Err(e) => state.fail(e),
                 }
+            }
+            xdg_toplevel::Event::WmCapabilities { capabilities } => {
+                pending.capabilities = Some(WmCapabilities::from_wire(&capabilities));
             }
             xdg_toplevel::Event::Close => state.events.push(Event::Close(Toplevel(*id))),
             _ => {}
@@ -1961,7 +2028,12 @@ impl Dispatch<WlSeat, ()> for State {
                 pointer.release();
             }
             if let Some((surface, event)) = state.pointer_tracker.leave() {
-                state.events.push(Event::Pointer { surface, event });
+                let time = state.input_time(Instant::now());
+                state.events.push(Event::Pointer {
+                    surface,
+                    time,
+                    event,
+                });
             }
         }
         let has_keyboard = caps.contains(wl_seat::Capability::Keyboard);
@@ -1973,8 +2045,10 @@ impl Dispatch<WlSeat, ()> for State {
             }
             state.repeat.clear();
             if let Some(surface) = state.key_focus.take() {
+                let time = state.input_time(Instant::now());
                 state.events.push(Event::Keyboard {
                     surface,
+                    time,
                     event: KeyboardEvent::Leave,
                 });
             }
@@ -2007,28 +2081,33 @@ impl Dispatch<WlPointer, ()> for State {
             }
             wl_pointer::Event::Leave { .. } => state.pointer_tracker.leave(),
             wl_pointer::Event::Motion {
+                time,
                 surface_x,
                 surface_y,
-                ..
-            } => state
-                .pointer_tracker
-                .motion(Point::new(surface_x, surface_y)),
+            } => {
+                state.note_time(time);
+                state
+                    .pointer_tracker
+                    .motion(Point::new(surface_x, surface_y))
+            }
             wl_pointer::Event::Button {
                 serial,
+                time,
                 button,
                 state: WEnum::Value(button_state),
-                ..
             } => {
+                state.note_time(time);
                 state.last_serial = Some(serial);
                 state
                     .pointer_tracker
                     .button(button, button_state == ButtonState::Pressed)
             }
             wl_pointer::Event::Axis {
+                time,
                 axis: WEnum::Value(axis),
                 value,
-                ..
             } => {
+                state.note_time(time);
                 state
                     .pointer_tracker
                     .axis(axis == Axis::VerticalScroll, value);
@@ -2039,11 +2118,49 @@ impl Dispatch<WlPointer, ()> for State {
                     None
                 }
             }
+            wl_pointer::Event::AxisSource {
+                axis_source: WEnum::Value(source),
+            } => {
+                state.pointer_tracker.axis_source(source);
+                None
+            }
+            wl_pointer::Event::AxisStop {
+                time,
+                axis: WEnum::Value(_),
+            } => {
+                state.note_time(time);
+                state.pointer_tracker.axis_stop();
+                None
+            }
+            // before version 8 a wheel reports whole notches
+            wl_pointer::Event::AxisDiscrete {
+                axis: WEnum::Value(axis),
+                discrete,
+            } => {
+                state
+                    .pointer_tracker
+                    .axis_value120(axis == Axis::VerticalScroll, discrete.saturating_mul(120));
+                None
+            }
+            wl_pointer::Event::AxisValue120 {
+                axis: WEnum::Value(axis),
+                value120,
+            } => {
+                state
+                    .pointer_tracker
+                    .axis_value120(axis == Axis::VerticalScroll, value120);
+                None
+            }
             wl_pointer::Event::Frame => state.pointer_tracker.frame(),
             _ => None,
         };
         if let Some((surface, event)) = found {
-            state.events.push(Event::Pointer { surface, event });
+            let time = state.input_time(Instant::now());
+            state.events.push(Event::Pointer {
+                surface,
+                time,
+                event,
+            });
         }
     }
 }
@@ -2072,8 +2189,10 @@ impl Dispatch<WlKeyboard, ()> for State {
                 state.last_serial = Some(serial);
                 state.key_focus = state.surface_of(&surface);
                 if let Some(surface) = state.key_focus {
+                    let time = state.input_time(Instant::now());
                     state.events.push(Event::Keyboard {
                         surface,
+                        time,
                         event: KeyboardEvent::Enter,
                     });
                 }
@@ -2081,18 +2200,21 @@ impl Dispatch<WlKeyboard, ()> for State {
             wl_keyboard::Event::Leave { .. } => {
                 state.repeat.clear();
                 if let Some(surface) = state.key_focus.take() {
+                    let time = state.input_time(Instant::now());
                     state.events.push(Event::Keyboard {
                         surface,
+                        time,
                         event: KeyboardEvent::Leave,
                     });
                 }
             }
             wl_keyboard::Event::Key {
                 serial,
+                time,
                 key,
                 state: WEnum::Value(key_state),
-                ..
             } => {
+                state.note_time(time);
                 state.last_serial = Some(serial);
                 let pressed = key_state == KeyState::Pressed;
                 let (Some(surface), Some(t)) = (state.key_focus, &state.translator) else {
@@ -2108,6 +2230,7 @@ impl Dispatch<WlKeyboard, ()> for State {
                 let k = t.translate(key);
                 state.events.push(Event::Keyboard {
                     surface,
+                    time,
                     event: KeyboardEvent::Key {
                         code: key,
                         pressed,

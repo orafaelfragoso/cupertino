@@ -790,6 +790,7 @@ fn toplevels_are_decorated_by_the_server_sized_scrolled_and_closed() {
             Event::Pointer {
                 surface,
                 event: PointerEvent::Scroll { dx, dy, .. },
+                ..
             } if *surface == window.surface() => scrolls.push(format!("scroll {dx} {dy}")),
             e => {
                 if let Some(AppEvent::ScrollCount { vertical, count }) = app_event(e) {

@@ -138,7 +138,7 @@ fn a_moving_window_repaints_to_the_full_picture() {
     d.state.command(Command::ToggleZoom { window: id });
     let t0 = d.state.now();
     for step in 1..=8 {
-        d.state.fixed_time = Some(t0 + f64::from(step) * 0.04);
+        common::set_time(&mut d.state, &mut d.event_loop, t0 + f64::from(step) * 0.04);
         d.state.tick();
         d.pump();
         both_ways(&mut d, &mut b, 0, &format!("zoom step {step}"));
@@ -192,7 +192,7 @@ fn a_material_over_changing_content_repaints_to_the_full_picture() {
     d.state.command(Command::ToggleZoom { window: id });
     let t0 = d.state.now();
     for step in 1..=6 {
-        d.state.fixed_time = Some(t0 + f64::from(step) * 0.05);
+        common::set_time(&mut d.state, &mut d.event_loop, t0 + f64::from(step) * 0.05);
         d.state.tick();
         d.pump();
         both_ways(&mut d, &mut b, 0, &format!("filter over zoom step {step}"));

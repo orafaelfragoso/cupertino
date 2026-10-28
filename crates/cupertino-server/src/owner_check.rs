@@ -11,9 +11,19 @@
 //! The queue is first in, first out. At most [`RUNNING_LIMIT`] checks run at once, and at most [`CLIENT_RUNNING_LIMIT`]
 //! of one client, so a client with many surfaces waits behind its own checks while other clients' run. A check that has
 //! not returned after [`DEADLINE`] is answered [`OwnerRefusal::TimedOut`] and its key goes on; its late answer is dropped.
+//!
+//! Each identification of an owner reads `/proc` on a thread of its own, which a process whose root stalls reading
+//! keeps for good; at most `crate::dbus::IDENTIFY_LIMIT` are alive, and with that many a check is refused
+//! [`OwnerRefusal::Busy`]. A client whose checks timed out or were busy [`STRIKE_LIMIT`] times has its later checks
+//! refused at once ([`OwnerRefusal::Stalled`]), so one client leaves few threads behind. What is left: only an
+//! unsandboxed process of the same user can make a root that stalls (a Flatpak or Snap sandbox allows no user
+//! namespace), and by opening many clients it can still use up the threads and stop the menus for the session. A
+//! process with that access can end the menu bar process anyway, so it gains nothing new.
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use cupertino_peer::ProcessHandle;
@@ -33,6 +43,18 @@ pub const RUNNING_LIMIT: usize = 8;
 pub const CLIENT_RUNNING_LIMIT: usize = 2;
 /// How long a check may run before it is answered as timed out.
 pub const DEADLINE: Duration = Duration::from_secs(3);
+/// How many checks of a client may time out or be refused as busy before its checks are refused at once.
+pub const STRIKE_LIMIT: usize = 3;
+
+/// Count a check of a client that timed out or was busy; true when it is the one that reaches [`STRIKE_LIMIT`].
+fn strike(strikes: &AtomicUsize) -> bool {
+    strikes.fetch_add(1, Ordering::SeqCst) + 1 == STRIKE_LIMIT
+}
+
+/// Whether a client has reached [`STRIKE_LIMIT`].
+fn struck(strikes: &AtomicUsize) -> bool {
+    strikes.load(Ordering::SeqCst) >= STRIKE_LIMIT
+}
 
 /// What a check is for; the latest check of a key wins.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -181,10 +203,11 @@ impl<K: Clone + Eq + Hash, C: Eq, R> Scheduler<K, C, R> {
     }
 }
 
-/// A request to send: the name, and the client's process from its connection.
+/// A request to send: the name, and the client's process and strikes from its connection.
 struct Request {
     name: String,
     client: Option<ProcessHandle>,
+    strikes: Option<Arc<AtomicUsize>>,
 }
 
 /// The answer the worker sends back to the loop.
@@ -197,8 +220,8 @@ struct Reply {
 /// The checks of the server's clients.
 pub struct OwnerChecks {
     scheduler: Scheduler<OwnerKey, ClientId, Request>,
-    /// The deadline of each running check.
-    deadlines: HashMap<(OwnerKey, u64), RegistrationToken>,
+    /// The deadline of each running check, and the strikes of its client.
+    deadlines: HashMap<(OwnerKey, u64), (RegistrationToken, Option<Arc<AtomicUsize>>)>,
     replies: Sender<Reply>,
 }
 
@@ -235,11 +258,11 @@ impl Cupertino {
     /// the key or its cancellation comes first.
     pub fn check_owner(&mut self, check: OwnerCheck) {
         let OwnerCheck { key, name, client } = check;
+        let data = client.get_data::<ClientState>();
         let request = Request {
             name,
-            client: client
-                .get_data::<ClientState>()
-                .and_then(|data| data.peer.as_ref()?.try_clone().ok()),
+            client: data.and_then(|data| data.peer.as_ref()?.try_clone().ok()),
+            strikes: data.map(|data| data.owner_strikes.clone()),
         };
         let starts = self
             .owner_checks
@@ -256,8 +279,9 @@ impl Cupertino {
     fn send_owner_checks(&mut self, starts: Vec<Start<OwnerKey, Request>>) {
         let mut refused = Vec::new();
         for (key, generation, request) in starts {
+            let strikes = request.strikes.clone();
             match self.send_owner_check(&key, generation, request) {
-                Ok(()) => self.arm_owner_deadline(key, generation),
+                Ok(()) => self.arm_owner_deadline(key, generation, strikes),
                 Err(refusal) => refused.push((key, generation, refusal)),
             }
         }
@@ -272,6 +296,9 @@ impl Cupertino {
         generation: u64,
         request: Request,
     ) -> Result<(), OwnerRefusal> {
+        if request.strikes.as_deref().is_some_and(struck) {
+            return Err(OwnerRefusal::Stalled);
+        }
         let client = request.client.ok_or(OwnerRefusal::NoClientProcess)?;
         let dbus = self.dbus.as_ref().ok_or(OwnerRefusal::NoBus)?;
         let replies = self.owner_checks.replies.clone();
@@ -292,7 +319,12 @@ impl Cupertino {
         queued.then_some(()).ok_or(OwnerRefusal::NoBus)
     }
 
-    fn arm_owner_deadline(&mut self, key: OwnerKey, generation: u64) {
+    fn arm_owner_deadline(
+        &mut self,
+        key: OwnerKey,
+        generation: u64,
+        strikes: Option<Arc<AtomicUsize>>,
+    ) {
         let timer_key = key.clone();
         let armed =
             self.loop_handle
@@ -302,7 +334,9 @@ impl Cupertino {
                 });
         match armed {
             Ok(token) => {
-                self.owner_checks.deadlines.insert((key, generation), token);
+                self.owner_checks
+                    .deadlines
+                    .insert((key, generation), (token, strikes));
             }
             Err(e) => tracing::warn!(error = %e, "cannot time an owner check"),
         }
@@ -316,12 +350,19 @@ impl Cupertino {
         generation: u64,
         verdict: Result<String, OwnerRefusal>,
     ) {
-        if let Some(token) = self
+        if let Some((token, strikes)) = self
             .owner_checks
             .deadlines
             .remove(&(key.clone(), generation))
         {
             self.loop_handle.remove(token);
+            let stalled = matches!(verdict, Err(OwnerRefusal::TimedOut | OwnerRefusal::Busy));
+            if stalled && strikes.as_deref().is_some_and(strike) {
+                tracing::warn!(
+                    strikes = STRIKE_LIMIT,
+                    "a client's owner checks timed out or were busy too often: its later bus names are refused"
+                );
+            }
         }
         let (deliver, starts) = self.owner_checks.scheduler.finished(&key, generation);
         if deliver {
@@ -427,6 +468,16 @@ mod tests {
         checks.request(0, 1, ());
         assert_eq!(checks.finished(&0, first[0].1), (false, Vec::new()));
         assert_eq!(checks.pending(), 3);
+    }
+
+    #[test]
+    fn a_client_is_struck_once_at_the_strike_limit() {
+        let strikes = AtomicUsize::new(0);
+        let reached: Vec<bool> = (0..STRIKE_LIMIT + 2).map(|_| strike(&strikes)).collect();
+        assert_eq!(reached.iter().filter(|r| **r).count(), 1, "one warning");
+        assert!(reached[STRIKE_LIMIT - 1]);
+        assert!(struck(&strikes));
+        assert!(!struck(&AtomicUsize::new(STRIKE_LIMIT - 1)));
     }
 
     #[test]

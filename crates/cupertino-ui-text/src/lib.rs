@@ -241,14 +241,19 @@ pub enum ChangeCause {
     Other,
 }
 
+/// A bounded window of the text around the caret, with the caret and anchor as byte offsets into it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Surrounding {
+    pub text: String,
+    pub cursor: usize,
+    pub anchor: usize,
+}
+
 /// What the window system sends to the compositor's input method.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextInputState {
-    /// A bounded window of the text around the caret; `None` for a protected field.
-    pub surrounding: Option<String>,
-    /// Byte offsets into `surrounding`.
-    pub cursor: usize,
-    pub anchor: usize,
+    /// `None` for a protected field, so the input method learns neither its text nor where the caret is.
+    pub surrounding: Option<Surrounding>,
     pub purpose: ContentPurpose,
     pub hints: ContentHints,
     pub cause: ChangeCause,

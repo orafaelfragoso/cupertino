@@ -214,8 +214,8 @@ pub struct OwnerQuery {
 pub enum OwnerRefusal {
     /// No session bus to ask.
     NoBus,
-    /// The client's connection named no process of its own (a connection the server made, or a kernel without
-    /// `SO_PEERPIDFD`).
+    /// No process is known for the client: a kernel without `SO_PEERPIDFD`, or a connection the server made for a
+    /// shell process that has not started (`crate::state::ClientState::process`).
     NoClientProcess,
     NotABusName,
     /// The daemon named no owner: nobody owns the name, or the connection is gone.
@@ -241,7 +241,11 @@ pub enum OwnerRefusal {
 enum Job {
     Call(Request),
     Owner(OwnerQuery),
+    WatchOwner(&'static str, OwnerChanged),
 }
+
+/// Runs on a watch thread each time the owner of a watched name may have changed.
+pub type OwnerChanged = Box<dyn Fn() + Send>;
 
 /// Handle on the worker thread.
 pub struct DbusHandle {
@@ -300,6 +304,37 @@ impl DbusHandle {
     pub fn check_owner(&self, query: OwnerQuery) -> bool {
         self.tx.try_send(Job::Owner(query)).is_ok()
     }
+
+    /// Call `changed` once the watch is up and then on every `NameOwnerChanged` of `name`, so no change is missed between
+    /// a caller's first check and the watch; false when the worker is gone (no session bus).
+    pub fn watch_owner(&self, name: &'static str, changed: OwnerChanged) -> bool {
+        self.tx.try_send(Job::WatchOwner(name, changed)).is_ok()
+    }
+}
+
+/// Follow the owner of `name` on a thread of its own, for as long as the connection lives.
+fn watch_owner(conn: &zbus::Connection, name: &'static str, changed: OwnerChanged) {
+    let conn = zbus::blocking::Connection::from(conn.clone());
+    let spawned = std::thread::Builder::new()
+        .name("cupertino-owner-watch".into())
+        .spawn(move || {
+            let changes = zbus::blocking::fdo::DBusProxy::new(&conn)
+                .and_then(|proxy| proxy.receive_name_owner_changed_with_args(&[(0, name)]));
+            let changes = match changes {
+                Ok(changes) => changes,
+                Err(e) => {
+                    tracing::warn!(name, error = %e, "cannot follow the owner of a bus name");
+                    return;
+                }
+            };
+            changed();
+            for _ in changes {
+                changed();
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::warn!(name, error = %e, "cannot start the watch of a bus name");
+    }
 }
 
 type SharedLoginTrust = std::sync::Arc<std::sync::Mutex<LoginTrust>>;
@@ -321,6 +356,10 @@ async fn worker(
         let conn = conn.clone();
         let what = match job {
             Job::Call(what) => what,
+            Job::WatchOwner(name, changed) => {
+                watch_owner(&conn, name, changed);
+                continue;
+            }
             Job::Owner(OwnerQuery {
                 name,
                 client,

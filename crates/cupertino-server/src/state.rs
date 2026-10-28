@@ -47,7 +47,7 @@ use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::xdg_activation::XdgActivationState;
 
 use crate::app_effects_v1::AppEffectsV1Global;
-use crate::authorization::ClientCapabilitySet;
+use crate::authorization::{ClientCapabilitySet, Holder};
 use crate::backend::Backend;
 use crate::config::Config;
 use crate::cursor::CursorLoader;
@@ -94,8 +94,8 @@ pub struct ClientState {
     /// offered the globals that read or change what other clients own ([`crate::authorization::unsandboxed`]).
     pub sandboxed: bool,
     /// The process that connected, from the socket (`SO_PEERPIDFD`) as the connection is accepted; `None` for a
-    /// connection the server made itself. The owner of a bus name the client hands the server is checked against it
-    /// (`crate::owner_check`).
+    /// connection the server made itself, whose process is its holder instead ([`ClientState::process`]). The owner of a
+    /// bus name the client hands the server is checked against that process (`crate::owner_check`).
     pub peer: Option<cupertino_peer::ProcessHandle>,
     /// How many of the client's owner identification threads are alive (`crate::dbus::CLIENT_IDENTIFY_LIMIT`).
     pub owner_identifying: crate::dbus::Identifying,
@@ -114,6 +114,21 @@ impl Default for ClientState {
             sandboxed: false,
             peer: None,
             owner_identifying: std::sync::Arc::default(),
+        }
+    }
+}
+
+impl ClientState {
+    /// The process behind the connection: the one that connected to the socket, else the shell process the server
+    /// started for it ([`crate::shell_connection::bind_holder`]), or the server itself for a client in its own process.
+    /// `None` when none is known, as for a shell connection whose process has not started.
+    pub fn process(&self) -> Option<cupertino_peer::ProcessHandle> {
+        if let Some(peer) = &self.peer {
+            return peer.try_clone().ok();
+        }
+        match self.holder.get()? {
+            Holder::Process(process) => process.try_clone().ok(),
+            Holder::Detached => cupertino_peer::ProcessHandle::open(std::process::id()).ok(),
         }
     }
 }

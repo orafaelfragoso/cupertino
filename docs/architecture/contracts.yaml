@@ -352,7 +352,7 @@
   source: crates/cupertino-server/src/scroll_v1.rs:27
 - name: cupertino_app_effects_v1
   kind: wayland-global
-  version: 2
+  version: 3
   owner_crate: cupertino-server
   owner_area: compositor
   scope: public

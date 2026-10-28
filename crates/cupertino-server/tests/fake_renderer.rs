@@ -182,7 +182,7 @@ fn a_material_pass_and_a_minimizing_window_resolve_without_a_gpu() {
         target: Some(cupertino_wm::Rect::new(440.0, 640.0, 64.0, 64.0)),
     });
     let t0 = d.state.now();
-    d.state.fixed_time = Some(t0 + 0.25);
+    common::set_time(&mut d.state, &mut d.event_loop, t0 + 0.25);
     d.state.tick();
     d.pump();
     let seen = consume(&mut d);

@@ -2,6 +2,8 @@
 //! connected mice (not the touchpads) with the resolution in use and whether it was stored, and the change signal when
 //! `mouse_dpi` changes in `compositor.json`. Skipped when no EGL device or no `dbus-daemon` is available.
 
+mod common;
+
 use std::time::{Duration, Instant};
 
 use cupertino_defaults::atomic::write_atomic;
@@ -48,7 +50,7 @@ fn the_mice_property_lists_the_mice_with_their_resolution_and_follows_the_config
         return;
     };
     if let Err(e) = headless::init(&mut state, (800, 600), 1.0) {
-        eprintln!("skipping: no EGL device ({e:#})");
+        common::egl_unavailable(format!("{e:#}"));
         return;
     }
     let dir = tempfile::tempdir().unwrap();

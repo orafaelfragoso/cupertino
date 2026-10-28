@@ -4,6 +4,8 @@
 //! again gets its stored arrangement back. Tests skip (pass) when no
 //! EGL device is available.
 
+mod common;
+
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,8 +41,9 @@ struct Harness {
 impl Harness {
     /// A compositor with `headless-1` (`LEFT` pixels) and `headless-2` (`RIGHT` pixels), unscaled.
     fn new() -> Option<Harness> {
-        let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().ok()?;
-        let display: Display<Cupertino> = Display::new().ok()?;
+        let event_loop: EventLoop<'static, Cupertino> =
+            EventLoop::try_new().expect("create test event loop");
+        let display: Display<Cupertino> = Display::new().expect("create test display");
         let mut state = Cupertino::new(
             display,
             event_loop.handle(),
@@ -49,7 +52,7 @@ impl Harness {
             true,
             &cupertino_assets::Assets::builtin(),
         )
-        .ok()?;
+        .expect("create test compositor");
         let displays = [
             display_of("headless-1", LEFT),
             display_of("headless-2", RIGHT),
@@ -57,7 +60,7 @@ impl Harness {
         match headless::init_displays(&mut state, &displays, Some(1.0)) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
-                eprintln!("skipping: no EGL device ({e:#})");
+                common::egl_unavailable(format!("{e:#}"));
                 None
             }
         }

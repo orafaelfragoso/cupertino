@@ -61,7 +61,7 @@ impl Server {
         )
         .unwrap();
         if let Err(e) = headless::init(&mut state, OUTPUT, 1.0) {
-            eprintln!("skipping: no EGL device ({e:#})");
+            common::egl_unavailable(format!("{e:#}"));
             return None;
         }
         Some(Server { state, event_loop })

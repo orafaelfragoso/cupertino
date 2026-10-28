@@ -3,6 +3,8 @@
 //! and the session interface's setters store and apply the appearance and the accessibility settings. Tests skip (pass)
 //! when no EGL device is available; the bus test also when `dbus-daemon` is missing.
 
+mod common;
+
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -26,8 +28,9 @@ struct Harness {
 impl Harness {
     /// A headless compositor watching the three files in a fresh directory, which starts empty.
     fn new() -> Option<Harness> {
-        let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().ok()?;
-        let display: Display<Cupertino> = Display::new().ok()?;
+        let event_loop: EventLoop<'static, Cupertino> =
+            EventLoop::try_new().expect("create test event loop");
+        let display: Display<Cupertino> = Display::new().expect("create test display");
         let mut state = Cupertino::new(
             display,
             event_loop.handle(),
@@ -36,9 +39,9 @@ impl Harness {
             true,
             &cupertino_assets::Assets::builtin(),
         )
-        .ok()?;
+        .expect("create test compositor");
         if let Err(e) = headless::init(&mut state, (800, 600), 1.0) {
-            eprintln!("skipping: no EGL device ({e:#})");
+            common::egl_unavailable(format!("{e:#}"));
             return None;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -402,12 +405,16 @@ fn the_setters_are_served_on_the_session_bus() {
 /// session, whatever it calls; the refusal has its own error name, and the properties stay readable.
 #[test]
 fn the_session_interface_refuses_a_host_process_that_is_not_the_agent() {
-    if std::process::Command::new("dbus-send")
+    if let Err(error) = std::process::Command::new("dbus-send")
         .arg("--version")
         .output()
-        .is_err()
     {
-        eprintln!("skipping: no dbus-send");
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::NotFound,
+            "run dbus-send: {error}"
+        );
+        cupertino_test_bus::missing_tool("dbus-send");
         return;
     }
     let Some(bus) = PrivateBus::start() else {

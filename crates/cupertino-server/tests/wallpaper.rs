@@ -2,6 +2,8 @@
 //! a change of `wallpaper` in `compositor.json` applies live, and an image that is not there leaves the procedural
 //! wallpaper. Tests skip (pass) when no EGL device is available.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -23,21 +25,22 @@ struct Harness {
 
 impl Harness {
     fn new(tweak: impl FnOnce(&mut Config, &Path)) -> Option<Harness> {
-        let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().ok()?;
+        let event_loop: EventLoop<'static, Cupertino> =
+            EventLoop::try_new().expect("create test event loop");
         let dir = tempfile::tempdir().unwrap();
         let mut config = Config::default();
         tweak(&mut config, dir.path());
         let mut state = Cupertino::new(
-            Display::new().ok()?,
+            Display::new().expect("create test display"),
             event_loop.handle(),
             event_loop.get_signal(),
             config,
             true,
             &cupertino_assets::Assets::builtin(),
         )
-        .ok()?;
+        .expect("create test compositor");
         if let Err(e) = headless::init(&mut state, OUTPUT, 1.0) {
-            eprintln!("skipping: no EGL device ({e:#})");
+            common::egl_unavailable(format!("{e:#}"));
             return None;
         }
         Some(Harness {

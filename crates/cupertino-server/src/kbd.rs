@@ -7,9 +7,10 @@
 //!
 //! 1. `compositor.json` `keybindings` (single chords, applied last by `Config::apply_file`),
 //! 2. `shortcuts.conf` lines (`Super+x = exec:foot`, `Ctrl+Space = none` ...),
-//! 3. the `cupertino-input` default map (approximate conventions, `Super` = primary modifier),
-//! 4. the `cupertino-keyboard` reference assignment table (chords, the enabled subset is
-//!    approximate): [`merge_reference_shortcuts`] adds a row only when its chord is still free
+//! 3. the `cupertino-input` default map of the modifier profile (the modifiers are the physical keys; `classic-pc` has its
+//!    own table and takes nothing from 4),
+//! 4. under `cupertino`, the `cupertino-keyboard` reference assignment table (chords, the enabled subset is
+//!    approximate, written for Super as the command key): [`merge_reference_shortcuts`] adds a row only when its chord is still free
 //!    and its action has a counterpart here. The merge runs before `shortcuts.conf` is applied so that
 //!    `chord = none` removes table rows as well. A chord that is taken by the map is a *conflict*: the map
 //!    wins and the row is reported (and listed in the compositor log), never silently doubled.
@@ -388,6 +389,16 @@ impl KeyboardSettings {
         }
     }
 
+    /// The physical modifier keys of a keyboard state: the keys the system shortcuts are matched on (Super is `logo`).
+    pub fn physical(m: &ModifiersState) -> Mods {
+        Mods {
+            ctrl: m.ctrl,
+            alt: m.alt,
+            shift: m.shift,
+            logo: m.logo,
+        }
+    }
+
     /// Comma separated xkb layout and variant lists for `XkbConfig` of the system layouts among the sources (empty
     /// without configured system layouts).
     pub fn xkb_names(&self) -> (String, String) {
@@ -554,9 +565,14 @@ pub fn merge_reference_shortcuts(map: &mut ShortcutMap, set: &ShortcutSet) -> Me
     report
 }
 
-/// Default shortcut map: the `cupertino-input` defaults plus the free rows of the design table.
-pub fn default_shortcut_map() -> (ShortcutMap, MergeReport) {
-    let mut map = ShortcutMap::defaults();
+/// Default shortcut map of the modifier profile `profile`: under `cupertino` the `cupertino-input` defaults plus the free
+/// rows of the design table (its chords are written for the Super key as the command key), under `classic-pc` its own
+/// table alone.
+pub fn default_shortcut_map(profile: &str) -> (ShortcutMap, MergeReport) {
+    let mut map = ShortcutMap::defaults_for(profile);
+    if profile == "classic-pc" {
+        return (map, MergeReport::default());
+    }
     let report = merge_reference_shortcuts(&mut map, &ShortcutSet::reference_defaults());
     (map, report)
 }
@@ -977,7 +993,7 @@ mod tests {
 
     #[test]
     fn reference_table_merges_without_conflicts() {
-        let (map, report) = default_shortcut_map();
+        let (map, report) = default_shortcut_map("cupertino");
         assert!(
             report.conflicts.is_empty(),
             "conflicts: {:?}",
@@ -1024,7 +1040,7 @@ mod tests {
 
     #[test]
     fn user_config_can_remove_table_rows() {
-        let (mut map, _) = default_shortcut_map();
+        let (mut map, _) = default_shortcut_map("cupertino");
         assert!(map
             .apply_config("Ctrl+space = none\nCtrl+Alt+space = launcher\n")
             .is_empty());

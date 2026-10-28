@@ -11,7 +11,7 @@ use crate::input::{translate_action, Action, Chord};
 use cupertino_input::{KeyCombo, Modifiers};
 use cupertino_keyboard::rewrite::ClientClass;
 use cupertino_keyboard::ModifierProfile;
-use cupertino_modifiers::{Mods as LogicalMods, RawMods};
+use cupertino_modifiers::RawMods;
 use cupertino_protocols::server::app_effects::cupertino_app_menu_v1::{
     self, CupertinoAppMenuV1, Error as AppMenuError,
 };
@@ -196,32 +196,16 @@ pub(crate) fn cut_text(text: &str) -> &str {
     &text[..text.floor_char_boundary(MAX_TEXT_BYTES)]
 }
 
-/// The physical keys that make the logical `chord` under `profile`, in the shortcut file's syntax; `None` when no
-/// physical modifiers make its modifiers (Ctrl under `classic-pc`, which makes Ctrl the primary modifier).
-fn physical_chord(chord: Chord, profile: &ModifierProfile) -> Option<String> {
+/// The chord in the shortcut file's syntax. The bindings hold the physical keys, so this is the text of the chord itself.
+fn physical_chord(chord: Chord) -> String {
     let m = chord.mods;
-    let mut logical = LogicalMods::NONE;
-    for (on, bit) in [
-        (m.shift, LogicalMods::SHIFT),
-        (m.ctrl, LogicalMods::CTRL),
-        (m.alt, LogicalMods::ALT),
-        (m.logo, LogicalMods::PRIMARY),
-    ] {
-        if on {
-            logical |= bit;
-        }
-    }
-    let all = RawMods::SHIFT | RawMods::CTRL | RawMods::ALT | RawMods::SUPER;
-    let raw = (0..=all.0)
-        .map(RawMods)
-        .find(|r| profile.translate(*r) == logical)?;
     let modifiers = Modifiers {
-        shift: raw.contains(RawMods::SHIFT),
-        ctrl: raw.contains(RawMods::CTRL),
-        alt: raw.contains(RawMods::ALT),
-        super_key: raw.contains(RawMods::SUPER),
+        shift: m.shift,
+        ctrl: m.ctrl,
+        alt: m.alt,
+        super_key: m.logo,
     };
-    Some(KeyCombo::new(modifiers, chord.sym).to_string())
+    KeyCombo::new(modifiers, chord.sym).to_string()
 }
 
 /// The physical chord the Edit item `action` sends to a client of `class` under `profile` (`opted_out`: the keyboard
@@ -641,9 +625,9 @@ impl Cupertino {
         }
     }
 
-    /// The chords of the bound actions as the bindings and the modifier profile make them now. An action bound to
-    /// several chords shows the one bound last that the profile can make: a `keybindings` entry of the
-    /// configuration over the shortcut tables.
+    /// The chords of the bound actions as the bindings hold them now, in the physical keys of the person. An action
+    /// bound to several chords shows the one bound last: a `keybindings` entry of the configuration over the shortcut
+    /// tables of the profile.
     fn menu_bar_shortcuts(&self) -> Shortcuts {
         let profile = self.config.keyboard.modifier_profile();
         let entries = self.key_router.bindings.entries();
@@ -653,8 +637,8 @@ impl Cupertino {
                 let chord = entries
                     .iter()
                     .rev()
-                    .filter(|(_, a)| a == action)
-                    .find_map(|(c, _)| physical_chord(*c, &profile))
+                    .find(|(_, a)| a == action)
+                    .map(|(c, _)| physical_chord(*c))
                     .unwrap_or_default();
                 (*bound, chord)
             })
@@ -1245,22 +1229,13 @@ mod tests {
     }
 
     #[test]
-    fn a_chord_is_named_by_the_physical_keys_of_the_profile() {
-        let cupertino = ModifierProfile::cupertino();
-        let classic = ModifierProfile::classic_pc();
-        let quit = parse_chord("Super+q").unwrap();
-        assert_eq!(physical_chord(quit, &cupertino).as_deref(), Some("Super+q"));
-        assert_eq!(physical_chord(quit, &classic).as_deref(), Some("Ctrl+q"));
-        let fullscreen = parse_chord("Super+Ctrl+f").unwrap();
+    fn a_chord_is_the_text_of_its_physical_keys() {
+        assert_eq!(physical_chord(parse_chord("Super+q").unwrap()), "Super+q");
         assert_eq!(
-            physical_chord(fullscreen, &cupertino).as_deref(),
-            Some("Ctrl+Super+f")
+            physical_chord(parse_chord("Super+Ctrl+f").unwrap()),
+            "Ctrl+Super+f"
         );
-        assert_eq!(
-            physical_chord(fullscreen, &classic),
-            None,
-            "no physical key makes Ctrl under classic-pc"
-        );
+        assert_eq!(physical_chord(parse_chord("Alt+F4").unwrap()), "Alt+F4");
     }
 
     #[test]

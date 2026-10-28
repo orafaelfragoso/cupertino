@@ -384,7 +384,10 @@ impl Default for Config {
             window: WindowStyle::default(),
             shell: ShellConfig::default(),
             shell_processes: Vec::new(),
-            keybindings: KeyBindings::from_shortcuts(&crate::kbd::default_shortcut_map().0),
+            keybindings: KeyBindings::from_shortcuts(
+                &crate::kbd::default_shortcut_map("cupertino").0,
+                "cupertino",
+            ),
             effects: crate::fx::EffectsConfig::default(),
             hot_corners: default_hot_corners(),
             terminals: ["foot", "alacritty", "kitty", "wezterm", "xterm"]
@@ -408,10 +411,10 @@ pub fn shortcuts_path() -> Option<PathBuf> {
     cupertino_defaults::config_file("CUPERTINO_SHORTCUTS", "shortcuts.conf")
 }
 
-/// The default shortcut map with the lines of the shortcut file applied; invalid lines are
-/// reported and skipped.
-pub fn shortcut_map() -> cupertino_input::ShortcutMap {
-    let (mut map, report) = crate::kbd::default_shortcut_map();
+/// The default shortcut map of the modifier profile `profile` with the lines of the shortcut file applied; invalid
+/// lines are reported and skipped.
+pub fn shortcut_map(profile: &str) -> cupertino_input::ShortcutMap {
+    let (mut map, report) = crate::kbd::default_shortcut_map(profile);
     for (chord, table, kept) in &report.conflicts {
         tracing::warn!(
             chord,
@@ -422,8 +425,12 @@ pub fn shortcut_map() -> cupertino_input::ShortcutMap {
     }
     if let Some(path) = shortcuts_path() {
         if let Ok(text) = std::fs::read_to_string(&path) {
-            for (line, err) in map.apply_config(&text) {
+            let report = map.apply_config_for(&text, profile);
+            for (line, err) in report.errors {
                 tracing::warn!(path = %path.display(), line, error = %err, "ignoring invalid shortcut");
+            }
+            for (line, text) in report.retargeted {
+                tracing::info!(path = %path.display(), line, shortcut = %text, "under classic-pc a Super line names the Super key, not the command key (use Primary for that)");
             }
         }
     }
@@ -503,9 +510,10 @@ impl Config {
     pub fn from_layers(
         system: &CompositorSettings,
         user: &CompositorSettings,
+        profile: &str,
     ) -> (Self, Vec<String>) {
         let mut cfg = Config {
-            keybindings: KeyBindings::from_shortcuts(&shortcut_map()),
+            keybindings: KeyBindings::from_shortcuts(&shortcut_map(profile), profile),
             ..Config::default()
         };
         let mut problems = cfg.apply_file(system);
@@ -527,7 +535,10 @@ impl Config {
         let (keyboard, keyboard_file) = crate::kbd::KeyboardSettings::load();
         let power = load_power();
         let mut cfg = Config {
-            keybindings: KeyBindings::from_shortcuts(&shortcut_map()),
+            keybindings: KeyBindings::from_shortcuts(
+                &shortcut_map(&keyboard.profile),
+                &keyboard.profile,
+            ),
             keyboard,
             power,
             dev_shell,
@@ -657,7 +668,8 @@ impl Config {
         for (chord, action) in f.keybindings.iter().flatten() {
             match Action::from_name(action) {
                 Some(a) => {
-                    if let Err(e) = self.keybindings.bind_str(chord, a) {
+                    let profile = self.keyboard.profile.clone();
+                    if let Err(e) = self.keybindings.bind_str_for(chord, a, &profile) {
                         problems.push(format!("keybindings: {chord}: {e}"));
                     }
                 }

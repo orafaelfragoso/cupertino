@@ -928,6 +928,7 @@ name = "cupertino-input"
 version = "0.1.0"
 dependencies = [
  "cupertino-animation",
+ "cupertino-modifiers",
 ]
 
 [[package]]

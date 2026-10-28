@@ -46,6 +46,9 @@ fn the_bar_reads_the_labels_a_kit_application_exports() {
 
     block_on(async {
         let reader = bus.connect_async().await;
+        exporter
+            .set_reader(Some(reader.unique_name().unwrap().as_str()))
+            .unwrap();
         let props = GtkMenuProps {
             bus_name: exported.unique_bus_name,
             application_id: Some(exported.application_id),

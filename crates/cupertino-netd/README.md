@@ -40,7 +40,8 @@ cargo run -p cupertino-netd --features app -- [--session-bus [--no-auth]] [--res
 
 - **System bus by default**, as root (or with `CAP_NET_ADMIN` and `CAP_NET_RAW`): it changes addresses and routes, opens
   packet sockets and writes `/dev/rfkill` (the system daemon refuses to start without access to that device; with `--session-bus` it serves with the radio switch unavailable). It needs an `iwd` service. `/etc/resolv.conf` is not touched: link it to the
-  file named by `--resolv-conf` yourself.
+  file named by `--resolv-conf` yourself. A link whose DHCP client cannot start (no `CAP_NET_RAW`: `socket(AF_PACKET)` is refused) is
+  reported on stderr and gets no address from the daemon; the other links and the bus names are not affected.
 - **`--session-bus`** serves on the bus named by `DBUS_SESSION_BUS_ADDRESS`. Unprivileged, it reads the real kernel state
   and reports the failures of the writes it cannot make. **`--no-auth`** skips the session check and needs `--session-bus`.
 - **Events.** One `poll` over the rtnetlink and `nl80211` monitors, `/dev/rfkill`, the supplicant, the bus and one packet

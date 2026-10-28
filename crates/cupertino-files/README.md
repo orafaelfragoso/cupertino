@@ -1,8 +1,9 @@
 # cupertino-files
 
 File-manager core with no window-system or toolkit dependency, plus the file manager itself: the `cupertino-files`
-binary (feature `app`) runs it as an application window on `cupertino-client`. The library implements the data,
-interaction logic and layout metrics a native file manager (and a desktop-icon layer) needs.
+binary (feature `app`) runs it as an application window on `cupertino-wayland-client` and `cupertino-protocol-app`,
+drawn with `cupertino-ui-wayland`. The library implements the data, interaction logic and layout metrics a native file
+manager (and a desktop-icon layer) needs.
 
 ## Usage
 
@@ -114,7 +115,7 @@ which the dock tile, the switcher and the launcher draw (`cupertino-icons`).
 | `history`, `places`, `recents` | navigation state | `History::{visit, back, forward}`; `standard_places` (Recents, Applications, Desktop, Documents, Downloads, the computer, Trash), `folder_icons`, `session_places` (`SessionPlaces`), `computer_name`, `applications_folder`; `recents::{parse_xbel, recent_entries} |
 | `browser` | one window's folder | `Browser::{open, go, back, forward, parent, poll, sort_by, press, release, move_focus, select_all, type_text, tab, activation, outline, expand, collapse, toggle_expanded, disclose_focus, collapse_all, available_space}: model, history, the list's outline of expanded folders, selection by path across reloads, nearest-ancestor fallback for a deleted folder |
 | `window` | window layout and painting | `WindowLayout` (toolbar, sidebar, browser, path and status bars), `Bars`, `path_chain`, `path_segments`, `status_text`, `Frame::{hit, reveal, scroll_by}`, `WindowPainter`, `ViewMode`, `metrics` |
-| `app`, `main` (feature `app`) | the binary | toplevel, input, `open` (default application, one activation token per file), asset file icons (`cupertino-icons::document`), inotify wake-ups through the client's `Waker`, session appearance |
+| `app`, `main` (feature `app`) | the binary | toplevel, input, `open` (default application, one activation token per file), asset file icons (`cupertino-icons::document`), inotify wake-ups through the connection's `Waker`, session appearance |
 
 ### Measured defaults
 

@@ -27,7 +27,7 @@ use smithay::reexports::wayland_server::{
 use smithay::utils::{Logical, Point};
 use smithay::wayland::shell::wlr_layer::Layer;
 
-use crate::authorization::{authorized, refuse, require, ShellRole};
+use crate::authorization::{authorized, refuse, require, role, Permit, ShellRole};
 use crate::menu_bar::cut_text;
 use crate::state::{Cupertino, WindowEntry};
 
@@ -374,12 +374,12 @@ impl Cupertino {
     pub fn create_window_manager(
         &mut self,
         shell: &CupertinoShellV1,
-        permitted: bool,
+        permit: Option<Permit<role::WindowManager>>,
         id: New<CupertinoWindowManagerV1>,
         output: &WlOutput,
         init: &mut DataInit<'_, Self>,
     ) {
-        if !permitted {
+        if permit.is_none() {
             init.init(id, WindowManagerData { output: None });
             refuse(shell, ShellRole::WindowManager);
             return;

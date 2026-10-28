@@ -36,7 +36,7 @@ use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, New, Resource, WEnum,
 };
 
-use crate::authorization::{authorized, capabilities, refuse, require, ShellRole};
+use crate::authorization::{authorized, capabilities, refuse, require, role, Permit, ShellRole};
 use crate::state::{Cupertino, PointerMode};
 
 /// Opacity lost by the bar of an inactive output. approximate.
@@ -538,13 +538,13 @@ impl Cupertino {
     pub fn create_menu_bar(
         &mut self,
         shell: &CupertinoShellV1,
-        permitted: bool,
+        permit: Option<Permit<role::MenuBar>>,
         id: New<CupertinoMenuBarV1>,
         surface: WlSurface,
         output: &WlOutput,
         init: &mut DataInit<'_, Self>,
     ) {
-        if !permitted {
+        if permit.is_none() {
             init.init(id, MenuBarData { output: None });
             refuse(shell, ShellRole::MenuBar);
             return;

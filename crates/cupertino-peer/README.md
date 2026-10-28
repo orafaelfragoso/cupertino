@@ -47,6 +47,6 @@ a Wayland client announces), `cupertino-login`
 
 `cargo test -p cupertino-peer`: anonymous (no descriptor, a disagreeing process id, an unclassifiable root), host, Flatpak
 (a scratch `/proc`) and Snap (the label), the relations, the parent from `status`; `same_instance` (one process, a
-process that exited, the same Flatpak instance through a proxy, another instance or application id, a missing or
+process that exited, a Flatpak process that exited with its info file still matching, the same Flatpak instance through a proxy, another instance or application id, a missing or
 incomplete `.flatpak-info`, sandboxed against unsandboxed both ways, two Snap processes), credentials without a
 `ProcessFD`, the peer of a socket, and a Wayland client classified by its label and root.

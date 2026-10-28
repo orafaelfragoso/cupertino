@@ -200,14 +200,7 @@ impl WaylandWindowSystem {
     ) -> Result<(), PlatformError> {
         let w = self.window_mut(window)?;
         w.carried.extend(damage);
-        if w.carried.len() > MAX_CARRIED {
-            w.carried = vec![PixelRect {
-                x: 0,
-                y: 0,
-                width: frame.width,
-                height: frame.height,
-            }];
-        }
+        bound(&mut w.carried, frame.width, frame.height);
         Ok(())
     }
 
@@ -650,6 +643,18 @@ fn copy_and_present(
     Ok(true)
 }
 
+/// Replace more than [`MAX_CARRIED`] rectangles by one for the whole `width` × `height` frame.
+fn bound(carried: &mut Vec<PixelRect>, width: u32, height: u32) {
+    if carried.len() > MAX_CARRIED {
+        *carried = vec![PixelRect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }];
+    }
+}
+
 /// `r` cut to a `width` × `height` buffer; `None` when nothing is left.
 fn clip(r: PixelRect, width: u32, height: u32) -> Option<PixelRect> {
     let (x1, y1) = (
@@ -662,4 +667,56 @@ fn clip(r: PixelRect, width: u32, height: u32) -> Option<PixelRect> {
         width: x1 - r.x,
         height: y1 - r.y,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn r(x: u32) -> PixelRect {
+        PixelRect {
+            x,
+            y: 0,
+            width: 1,
+            height: 1,
+        }
+    }
+
+    #[test]
+    fn carried_damage_beyond_the_limit_becomes_the_whole_frame() {
+        let mut carried: Vec<PixelRect> = (0..MAX_CARRIED as u32).map(r).collect();
+        bound(&mut carried, 200, 100);
+        assert_eq!(carried.len(), MAX_CARRIED);
+        carried.push(r(99));
+        bound(&mut carried, 200, 100);
+        assert_eq!(
+            carried,
+            [PixelRect {
+                x: 0,
+                y: 0,
+                width: 200,
+                height: 100
+            }]
+        );
+    }
+
+    #[test]
+    fn damage_is_cut_to_the_frame() {
+        let wide = PixelRect {
+            x: 190,
+            y: 95,
+            width: 50,
+            height: 50,
+        };
+        assert_eq!(
+            clip(wide, 200, 100),
+            Some(PixelRect {
+                x: 190,
+                y: 95,
+                width: 10,
+                height: 5
+            })
+        );
+        assert_eq!(clip(r(200), 200, 100), None);
+    }
 }

@@ -2,8 +2,9 @@
 //! (`cupertino-wayland-client`), for any application.
 //!
 //! [`AppEffects`] (`cupertino_app_effects_v1`) observes the session's appearance and display options
-//! ([`AppEffects::appearance`]), creates server-rendered [`Backdrop`]s and sets the title bar style of an
-//! application window. [`ScrollCounts`] (`cupertino_scroll_v1`) reports how many scroll steps each pointer frame
+//! ([`AppEffects::appearance`]), creates server-rendered [`Backdrop`]s, sets the title bar style of an
+//! application window and announces where a window's menus are on the session bus ([`AppEffects::menu`]), for the
+//! desktop's menu bar. [`ScrollCounts`] (`cupertino_scroll_v1`) reports how many scroll steps each pointer frame
 //! carries. What the objects receive arrives as an [`AppEvent`] inside the transport's `Event::Extension`, in order
 //! with the transport's own events.
 
@@ -13,7 +14,10 @@ mod error;
 mod scroll;
 
 pub use backdrop::Backdrop;
-pub use effects::{report_appearance, report_display_options, AppEffects, AppEvent, Appearance};
+pub use effects::{
+    report_appearance, report_display_options, AppEffects, AppEvent, AppMenu, Appearance,
+    MenuAddress,
+};
 pub use error::Error;
 pub use scroll::{PointerScroll, ScrollCounts};
 

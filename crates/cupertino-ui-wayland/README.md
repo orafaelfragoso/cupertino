@@ -32,5 +32,5 @@ callback's time, for an animation clock, is `FrameCallback::time` of the transpo
 cargo test -p cupertino-ui-wayland
 ```
 
-Unit tests cover the pixel conversion, the damage cut, popup placement and the clipboard text. `tests/protocol_flow.rs`
-in `cupertino-client` drives the presenter against an in-process server.
+Unit tests cover the pixel conversion, the damage cut, popup placement and the clipboard text. `tests/protocol-flow.rs`
+drives the presenter and the clipboard against an in-process server.

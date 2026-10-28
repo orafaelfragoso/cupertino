@@ -25,4 +25,4 @@ cargo test -p cupertino-shell-client
 ```
 
 Unit tests cover the menu-bar and dock groups, the configured size of a layer surface and the session state.
-`tests/protocol_flow.rs` in `cupertino-client` runs every role and `Shell::observe` against an in-process server.
+`tests/protocol-flow.rs` runs every role and `Shell::observe` against an in-process server.

@@ -10,7 +10,7 @@ animates the windows to the placements this process commits and draws the strip.
 | `cupertino-windowmanager` (feature `app`) | The process: one `cupertino_window_manager_v1` per output of `cupertino-shell-v1`, a `Controller` each. |
 
 Layer: `shell`. Depends on `cupertino-stage` and `cupertino-wm`. The process also depends on `cupertino-defaults`,
-`cupertino-protocols` and `wayland-client`. It has no surface, so it does not use the `cupertino-client` toolkit.
+`cupertino-protocols` and `wayland-client`. It has no surface, so it does not use `cupertino-ui-wayland`.
 
 ## Running
 

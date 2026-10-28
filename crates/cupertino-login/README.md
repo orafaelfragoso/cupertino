@@ -480,8 +480,8 @@ Not covered by a test:
   A real `Lock` signal would lock the developer's session. The manager's side of `RequestPower` and `SessionReady` is tested in
   `cupertino-sessiond` (`tests/service.rs`) and by the QEMU checks `28` and `29`.
 - The drawing of the panel and of the greeter, and the PAM success path (it needs the user's password).
-- The lock and unlock cycle against a server with `ext-session-lock`: the phase 5 QEMU check, and `cupertino-client`'s
-  `tests/protocol_flow.rs` for the `cupertino-shell-client` lock it uses.
+- The lock and unlock cycle against a server with `ext-session-lock`: the phase 5 QEMU check, and `cupertino-shell-client`'s
+  `tests/protocol-flow.rs` for the lock it uses.
 
 On the development host a wrong password through the real PAM stack (`pam_unix`, service `vlock`) returned `Denied`, and the sleep
 inhibitor showed up in `systemd-inhibit --list`.

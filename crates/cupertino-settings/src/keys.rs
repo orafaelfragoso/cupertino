@@ -269,7 +269,7 @@ mod tests {
         );
         assert_eq!(only(&classic, true, false), SUPER, "Ctrl under classic-pc");
         // the other key keeps the Ctrl role
-        assert_eq!(only(&cupertino, true, false).ctrl, true);
-        assert_eq!(only(&classic, false, true).ctrl, true);
+        assert!(only(&cupertino, true, false).ctrl);
+        assert!(only(&classic, false, true).ctrl);
     }
 }

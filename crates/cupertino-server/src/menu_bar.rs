@@ -317,12 +317,20 @@ pub const MENU_BAR_BUS_NAME: &str = "com.canonical.AppMenu.Registrar";
 const READER_RETRY_FIRST: Duration = Duration::from_secs(1);
 const READER_RETRY_MAX: Duration = Duration::from_secs(30);
 
+/// The `menu_bar` value of a menu object of `version`: 1 while a bar runs, and from version 3 only while the reader is
+/// verified too, so a window hides its own menus only while the bar can read them.
+fn shown(bars: bool, reader: bool, version: u32) -> u32 {
+    u32::from(bars && (version < 3 || reader))
+}
+
 /// A `cupertino_app_menu_v1` of an application window.
 struct AppMenu {
     resource: CupertinoAppMenuV1,
     surface: WlSurface,
     /// The object announced an address, which its destruction withdraws.
     announced: bool,
+    /// The `menu_bar` value last sent.
+    shown: u32,
 }
 
 /// Presentation model, the bars of the menu bar process and the menu addresses of windows.
@@ -338,8 +346,6 @@ pub struct MenuBars {
     /// The last `edit` request still to be sent; a newer one replaces it.
     edit: Option<PendingEdit>,
     app_menus: Vec<AppMenu>,
-    /// Whether the menu objects were last told that a bar shows their menus.
-    menus_shown: bool,
     /// The unique bus name of the menu bar's connection, checked to be the bar's process; `None` while there is none.
     reader: Option<String>,
     /// The timer of the next check of the reader after a refusal for a passing reason, and the wait after it.
@@ -360,7 +366,6 @@ impl MenuBars {
             announced: HashMap::new(),
             edit: None,
             app_menus: Vec::new(),
-            menus_shown: false,
             reader: None,
             reader_retry: None,
             reader_backoff: READER_RETRY_FIRST,
@@ -371,18 +376,36 @@ impl MenuBars {
         self.app_menus.iter().any(|m| &m.surface == surface)
     }
 
-    /// Track a new menu object and tell it whether a bar shows its menus and, from version 3, which connection reads
+    /// Track a new menu object and tell it, from version 3, which connection reads its menus and whether a bar shows
     /// them.
     pub fn add_app_menu(&mut self, resource: CupertinoAppMenuV1, surface: WlSurface) {
-        resource.menu_bar(u32::from(self.menus_shown));
         if resource.version() >= 3 {
             resource.menu_reader(self.reader.clone().unwrap_or_default());
         }
+        let shown = shown(
+            !self.bars.is_empty(),
+            self.reader.is_some(),
+            resource.version(),
+        );
+        resource.menu_bar(shown);
         self.app_menus.push(AppMenu {
             resource,
             surface,
             announced: false,
+            shown,
         });
+    }
+
+    /// Send `menu_bar` to every menu object whose value changed.
+    fn send_shown(&mut self) {
+        let (bars, reader) = (!self.bars.is_empty(), self.reader.is_some());
+        for menu in &mut self.app_menus {
+            let shown = shown(bars, reader, menu.resource.version());
+            if shown != menu.shown {
+                menu.shown = shown;
+                menu.resource.menu_bar(shown);
+            }
+        }
     }
 
     pub fn has_surface(&self, surface: &WlSurface) -> bool {
@@ -605,14 +628,7 @@ impl Cupertino {
         if self.menu_bars.is_empty() {
             self.check_menu_reader();
         }
-        let shown = !self.menu_bars.is_empty();
-        if shown == self.menu_bars.menus_shown {
-            return;
-        }
-        self.menu_bars.menus_shown = shown;
-        for menu in &self.menu_bars.app_menus {
-            menu.resource.menu_bar(u32::from(shown));
-        }
+        self.menu_bars.send_shown();
     }
 
     /// Follow the owner of [`MENU_BAR_BUS_NAME`] on the D-Bus worker: every change checks the reader again. Call once,
@@ -697,17 +713,25 @@ impl Cupertino {
         }
     }
 
-    /// Tell the version 3 menu objects the reader, when it changed.
+    /// Tell the version 3 menu objects the reader, when it changed: a new reader before `menu_bar(1)`, so a window
+    /// hides its own menus only once its menus answer the bar, and `menu_bar(0)` before the reader goes.
     fn set_menu_reader(&mut self, reader: Option<String>) {
         if reader == self.menu_bars.reader {
             return;
         }
-        self.menu_bars.reader = reader;
-        let name = self.menu_bars.reader.clone().unwrap_or_default();
+        if reader.is_none() {
+            self.menu_bars.reader = None;
+            self.menu_bars.send_shown();
+        }
+        let name = reader.clone().unwrap_or_default();
         for menu in &self.menu_bars.app_menus {
             if menu.resource.version() >= 3 {
                 menu.resource.menu_reader(name.clone());
             }
+        }
+        if reader.is_some() {
+            self.menu_bars.reader = reader;
+            self.menu_bars.send_shown();
         }
     }
 

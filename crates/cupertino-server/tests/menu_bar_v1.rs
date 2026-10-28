@@ -3498,7 +3498,8 @@ fn settle_kit_app(h: &mut Harness, app: &KitAppClient) {
 }
 
 /// The bar process owning the menu bar's bus name is the reader a version 3 menu object is told, from the bar's start to
-/// its end; a version 2 menu object is told nothing.
+/// its end, and the object is told the bar shows its menus only while it has the reader; a version 2 menu object is
+/// told nothing of the reader.
 #[test]
 fn the_bar_process_owning_the_menu_bar_name_is_the_reader_of_the_windows_menus() {
     let Some(mut h) = Harness::new() else { return };
@@ -3520,10 +3521,13 @@ fn the_bar_process_owning_the_menu_bar_name_is_the_reader_of_the_windows_menus()
         app.menu_readers() == ["", own.as_str()]
     });
 
+    assert_eq!(app.menu_bar_shown(), [0, 1]);
+
     bar.send(Cmd::Destroy);
     h.wait_until("no reader once the bar stops", |_| {
         app.menu_readers() == ["", own.as_str(), ""]
     });
+    assert_eq!(app.menu_bar_shown(), [0, 1, 0]);
     settle_kit_app(&mut h, &old);
     assert!(old.menu_readers().is_empty());
     assert_eq!(old.error(), None);
@@ -3539,14 +3543,19 @@ fn a_menu_bar_name_held_by_another_process_names_no_reader() {
     };
     let _foreign = Foreign::start_named(&bus, MENU_BAR_BUS_NAME);
     let app = KitAppClient::spawn_at(h.socket_path(), "org.example.Notes", 3);
-    h.mapped_window(1);
+    let old = KitAppClient::spawn(h.socket_path(), "org.example.Old");
+    h.mapped_window(2);
     let bar = BarClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&bar, 1);
     h.wait_until("the reader's check to return", |s| {
         s.owner_checks.pending() == 0
     });
     settle_kit_app(&mut h, &app);
+    settle_kit_app(&mut h, &old);
     assert_eq!(app.menu_readers(), [""]);
+    // a bar that cannot read the menus does not stand in for them; a version 2 object knows nothing of readers
+    assert_eq!(app.menu_bar_shown(), [0]);
+    assert_eq!(old.menu_bar_shown(), [0, 1]);
 }
 
 /// The reader follows the owner of the menu bar's bus name: the bar's connection letting it go, and another process

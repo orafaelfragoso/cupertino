@@ -648,6 +648,21 @@ fn paint_marquee(pm: &mut Pixmap, scale: f32, band: &Rect, content: &Rect, pal: 
     }
 }
 
+/// Points around an item that the name editor's field and its focus ring reach.
+const EDIT_REACH: f64 = 8.0;
+
+/// Where a caret blink changes `frame`: the toolbar, where the search field is, and the item whose name is edited.
+/// `None` when the item is not in the frame.
+pub fn caret_areas(frame: &Frame, edit: Option<usize>) -> Option<Vec<GeoRect>> {
+    let toolbar = frame.window.toolbar;
+    let mut areas = vec![GeoRect::new(toolbar.x, toolbar.y, toolbar.w, toolbar.h)];
+    if let Some(index) = edit {
+        let item = frame.item_frame(index)?;
+        areas.push(GeoRect::new(item.x, item.y, item.w, item.h).outset(EDIT_REACH));
+    }
+    Some(areas)
+}
+
 /// One frame of the window: its layout, the content layout and the scroll position.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Frame {
@@ -3211,8 +3226,9 @@ mod tests {
         .map(|what| (what.to_owned(), 1, 0, 0, 0))
         .collect();
         assert_eq!(work, expected);
-        // the work grows with the pixels: the window is filled once and the content view copied over it, plus fixed
-        // shapes that are a smaller share of a larger window; any frame work that outgrows the pixels moves a ratio
+        // the work grows with the pixels: the window is filled once and the content view copied over it, and the
+        // copy covers a larger share of the window as the fixed-width sidebar and bars shrink against it, so the
+        // ratio rises with the size; any frame work that outgrows the pixels moves a ratio
         let expected = [
             ("600 x 400 at 1x", 1.30),
             ("920 x 436 at 1x", 1.56),
@@ -3225,6 +3241,85 @@ mod tests {
             assert!(
                 (ratio - want).abs() <= 0.05,
                 "{what}: {ratio:.3} pixels written per frame pixel, expected {want} +- 0.05"
+            );
+        }
+    }
+
+    /// The pixels in which `a` and `b` differ outside `areas` (points), the areas rounded out to whole device pixels
+    /// as the presenter does.
+    fn differing_outside(a: &Pixmap, b: &Pixmap, areas: &[GeoRect], scale: f32) -> Vec<(u32, u32)> {
+        let f = f64::from(scale);
+        let inside = |x: u32, y: u32| {
+            areas.iter().any(|r| {
+                (f64::from(x)) >= (r.x() * f).floor()
+                    && f64::from(x) < ((r.x() + r.width()) * f).ceil()
+                    && f64::from(y) >= (r.y() * f).floor()
+                    && f64::from(y) < ((r.y() + r.height()) * f).ceil()
+            })
+        };
+        let width = a.width();
+        a.pixels()
+            .iter()
+            .zip(b.pixels())
+            .enumerate()
+            .filter(|(_, (p, q))| p != q)
+            .map(|(i, _)| (i as u32 % width, i as u32 / width))
+            .filter(|&(x, y)| !inside(x, y))
+            .collect()
+    }
+
+    #[test]
+    fn a_caret_blink_changes_pixels_only_inside_the_areas_it_reports() {
+        for scale in [1.0, 1.5] {
+            let (_d, browser, places, mut painter, frame) = search_window(scale);
+            let mut search = TextField::with_max_len(SEARCH_MAX_LEN);
+            search.insert("notes");
+            let mut paint = |edit: Option<&NameEdit>, search_caret: bool, edit_caret: bool| {
+                let mut pm = Pixmap::new((920.0 * scale) as u32, (436.0 * scale) as u32).unwrap();
+                let state = WindowState {
+                    browser: &browser,
+                    places: &places,
+                    mode: ViewMode::List,
+                    active: true,
+                    search: &search,
+                    search_focused: edit.is_none(),
+                    search_caret,
+                    title: "Here",
+                    now: SystemTime::now(),
+                    edit,
+                    edit_caret,
+                    drop_target: None,
+                    marquee: None,
+                    status: "",
+                };
+                painter.paint(&mut pm, scale, &frame, &state, &Palette::builtin(false));
+                pm
+            };
+            let (on, off) = (paint(None, true, false), paint(None, false, false));
+            assert_ne!(on.data(), off.data(), "the search caret shows at {scale}x");
+            let areas = caret_areas(&frame, None).unwrap();
+            assert_eq!(
+                differing_outside(&on, &off, &areas, scale),
+                vec![],
+                "search caret at {scale}x"
+            );
+
+            let edit = NameEdit::new(0, "editor.txt", false);
+            let (on, off) = (
+                paint(Some(&edit), false, true),
+                paint(Some(&edit), false, false),
+            );
+            assert_ne!(on.data(), off.data(), "the name caret shows at {scale}x");
+            let areas = caret_areas(&frame, Some(0)).unwrap();
+            assert_eq!(
+                differing_outside(&on, &off, &areas, scale),
+                vec![],
+                "name editor caret at {scale}x"
+            );
+            assert_eq!(
+                caret_areas(&frame, Some(99)),
+                None,
+                "an item that is not there"
             );
         }
     }

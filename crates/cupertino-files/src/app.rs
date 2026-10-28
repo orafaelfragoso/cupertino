@@ -51,7 +51,7 @@ use cupertino_text_field::{KeyInput, Keymap, Response, TextField};
 use cupertino_theme::{Appearance, Theme, WindowCornerSize};
 use cupertino_ui_menus::WindowMenus;
 use cupertino_ui_wayland::clipboard::Clipboard;
-use cupertino_ui_wayland::{popup, Ready, ShmPresenter};
+use cupertino_ui_wayland::{copy_rects, popup, Damage, Ready, ShmPresenter};
 use cupertino_wayland_client::{
     key, Button, Connection, Decorations, Event, KeyboardEvent, Modifiers as KeyModifiers,
     PointerEvent, Popup, SurfaceId, TokenRequest, Toplevel, ToplevelConfig, WindowConfigure,
@@ -64,6 +64,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
+use tiny_skia::{Color, Pixmap};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -175,6 +176,10 @@ struct MenuLevel {
 struct Window {
     toplevel: Toplevel,
     presenter: ShmPresenter,
+    /// What changed since the last frame; a frame draws all of the window unless every change said where.
+    damage: Damage,
+    /// The whole frame, drawn before the damaged rectangles of it are copied into the presenter's pixmap.
+    scratch: Option<Pixmap>,
     /// The size asked for, kept until a configure sets one.
     requested: (u32, u32),
     activated: bool,
@@ -202,11 +207,25 @@ impl Window {
         Ok(Window {
             toplevel,
             presenter: ShmPresenter::new(toplevel.surface()),
+            damage: Damage::new(),
+            scratch: None,
             requested: size,
             activated: false,
             maximized: false,
             fullscreen: false,
         })
+    }
+
+    /// Draw all of the window again as soon as the surface can take a frame.
+    fn redraw(&mut self) {
+        self.damage.add_whole();
+        self.presenter.request_redraw();
+    }
+
+    /// Draw `rect` (points) of the window again as soon as the surface can take a frame.
+    fn redraw_rect(&mut self, rect: PopupRect) {
+        self.damage.add(rect);
+        self.presenter.request_redraw();
     }
 
     /// Take a configure: its states, and its size where it sets one.
@@ -514,7 +533,7 @@ impl App {
             Event::Extension(_) => match app_event(&event) {
                 Some(AppEvent::Appearance { dark }) => {
                     self.palette = palette(&self.theme, dark);
-                    self.window.presenter.request_redraw();
+                    self.window.redraw();
                 }
                 // the display options reach the title bar and materials through the server
                 Some(AppEvent::DisplayOptions(options)) => self.display = options,
@@ -576,7 +595,7 @@ impl App {
         } else if polled.changed {
             self.update_available();
             self.follow_edit();
-            self.window.presenter.request_redraw();
+            self.window.redraw();
         }
         Ok(())
     }
@@ -631,17 +650,22 @@ impl App {
 
     /// Run the timers that are due.
     fn tick(&mut self) -> Result<()> {
-        if self.caret_shown() != self.caret_drawn || self.search_width.animating(self.now()) {
-            self.window.presenter.request_redraw();
-        }
         let now = self.now();
+        if self.search_width.animating(now) {
+            self.window.redraw();
+        } else if self.caret_shown() != self.caret_drawn {
+            match self.caret_area() {
+                Some(areas) => areas.into_iter().for_each(|a| self.window.redraw_rect(a)),
+                None => self.window.redraw(),
+            }
+        }
         if self.menu.as_mut().is_some_and(|open| open.menu.poll(now)) {
             self.sync_menu()?;
         }
         self.marquee_autoscroll(now)?;
         if let Some(RenameEvent::Begin(index)) = self.rename.poll(now) {
             self.begin_edit(index);
-            self.window.presenter.request_redraw();
+            self.window.redraw();
         }
         Ok(())
     }
@@ -710,37 +734,59 @@ impl App {
         };
         let mut drawn = None;
         let mut shaped = Ok(());
-        window.presenter.draw(conn, None, |pm, scale| {
-            let mut frame = painter.frame(
-                size,
-                state.places,
-                *bars,
-                search_width,
-                state.browser.dir(),
-                state.mode,
-                state.browser.outline(),
-                *scroll + dy,
-                scale.factor() as f32,
-            );
-            if let Some(index) = reveal {
-                frame.reveal(index);
-            }
-            // the material follows the sidebar, which gives way when the window narrows. A shape has one radius: the
-            // window's, so the outer corners match the window; the inner ones lie under the opaque content
-            let radius = WindowCornerSize::Regular.radius_pt();
-            let area = frame.window.sidebar;
-            shaped = sidebar.set_shape(
-                &popup_rect(&cupertino_files::Rect::new(
-                    area.x,
-                    area.y,
-                    area.w + radius,
-                    area.h,
-                )),
-                radius,
-            );
-            painter.paint(pm, scale.factor() as f32, &frame, &state, palette);
-            drawn = Some(frame);
-        })?;
+        let damage = window.damage.take();
+        let scratch = &mut window.scratch;
+        window
+            .presenter
+            .draw_with(conn, damage.as_deref(), |pm, scale, cleared| {
+                let mut frame = painter.frame(
+                    size,
+                    state.places,
+                    *bars,
+                    search_width,
+                    state.browser.dir(),
+                    state.mode,
+                    state.browser.outline(),
+                    *scroll + dy,
+                    scale.factor() as f32,
+                );
+                if let Some(index) = reveal {
+                    frame.reveal(index);
+                }
+                // the material follows the sidebar, which gives way when the window narrows. A shape has one radius: the
+                // window's, so the outer corners match the window; the inner ones lie under the opaque content
+                let radius = WindowCornerSize::Regular.radius_pt();
+                let area = frame.window.sidebar;
+                shaped = sidebar.set_shape(
+                    &popup_rect(&cupertino_files::Rect::new(
+                        area.x,
+                        area.y,
+                        area.w + radius,
+                        area.h,
+                    )),
+                    radius,
+                );
+                let factor = scale.factor() as f32;
+                match cleared {
+                    None => painter.paint(pm, factor, &frame, &state, palette),
+                    // the frame is drawn whole and only the damaged rectangles of it replace what the pixmap holds, which
+                    // makes the pixels the same as those of a whole redraw
+                    Some(rects) => {
+                        let whole = match scratch.take() {
+                            Some(p) if (p.width(), p.height()) == (pm.width(), pm.height()) => p,
+                            _ => {
+                                Pixmap::new(pm.width(), pm.height()).expect("the pixmap has a size")
+                            }
+                        };
+                        let mut whole = whole;
+                        whole.fill(Color::TRANSPARENT);
+                        painter.paint(&mut whole, factor, &frame, &state, palette);
+                        copy_rects(pm, &whole, rects);
+                        *scratch = Some(whole);
+                    }
+                }
+                drawn = Some(frame);
+            })?;
         shaped?;
         let frame = drawn.expect("draw runs the paint closure");
         self.scroll = frame.scroll;
@@ -748,7 +794,7 @@ impl App {
         self.painter.follow_search_caret(&mut self.search);
         // a scroll or a resize moves the content under a band that the pointer is not moving
         if self.marquee_apply() {
-            self.window.presenter.request_redraw();
+            self.window.redraw();
         }
         Ok(())
     }
@@ -793,7 +839,7 @@ impl App {
             PointerEvent::Scroll { dy, .. } => {
                 self.rename.cancel();
                 self.pending_scroll += dy;
-                self.window.presenter.request_redraw();
+                self.window.redraw();
                 Ok(())
             }
             PointerEvent::Enter(_) | PointerEvent::Leave | PointerEvent::Button { .. } => Ok(()),
@@ -829,7 +875,7 @@ impl App {
         if self.search_focused {
             self.search_focused = false;
             self.search.blur();
-            self.window.presenter.request_redraw();
+            self.window.redraw();
         }
         match hit {
             Hit::Back => {
@@ -867,7 +913,7 @@ impl App {
                     .find(|c| c.id == id)
                     .ok_or("a header of a column that is not shown")?;
                 self.browser.sort_by(id.sort_key(), column.ascending);
-                self.window.presenter.request_redraw();
+                self.window.redraw();
                 Ok(())
             }
             Hit::Disclosure(index) => {
@@ -875,7 +921,7 @@ impl App {
                     Ok(_) => {}
                     Err(e) => eprintln!("cupertino-files: cannot list the folder: {e}"),
                 }
-                self.window.presenter.request_redraw();
+                self.window.redraw();
                 Ok(())
             }
             Hit::Item(index) => {
@@ -899,7 +945,7 @@ impl App {
                     target: None,
                 });
                 if self.browser.press(index, mods) {
-                    self.window.presenter.request_redraw();
+                    self.window.redraw();
                 }
                 Ok(())
             }
@@ -911,7 +957,7 @@ impl App {
                         + marquee_metrics::AUTOSCROLL_INTERVAL,
                 });
                 self.browser.rubber_band_begin(mods);
-                self.window.presenter.request_redraw();
+                self.window.redraw();
                 Ok(())
             }
             Hit::Titlebar => self.press_titlebar(),
@@ -948,7 +994,7 @@ impl App {
         }
         if code == key::ESCAPE && self.drag.as_ref().is_some_and(|d| d.started) {
             self.drag = None;
-            self.window.presenter.request_redraw();
+            self.window.redraw();
             return Ok(());
         }
         let changed = if mods.logo && !mods.ctrl && !mods.alt {
@@ -1024,7 +1070,7 @@ impl App {
             }
         };
         if changed {
-            self.window.presenter.request_redraw();
+            self.window.redraw();
         }
         Ok(())
     }
@@ -1054,7 +1100,7 @@ impl App {
             if mode != ViewMode::List {
                 self.browser.collapse_all();
             }
-            self.window.presenter.request_redraw();
+            self.window.redraw();
         }
         Ok(())
     }
@@ -1095,7 +1141,7 @@ impl App {
         self.search.set_text("");
         self.search_focused = false;
         self.update_available();
-        self.window.presenter.request_redraw();
+        self.window.redraw();
         Ok(())
     }
 
@@ -1120,7 +1166,7 @@ impl App {
         } else {
             self.bars.status = !self.bars.status;
         }
-        self.window.presenter.request_redraw();
+        self.window.redraw();
         Ok(())
     }
 
@@ -1281,7 +1327,7 @@ impl App {
             }
             _ => return Ok(()),
         };
-        self.window.presenter.request_redraw();
+        self.window.redraw();
         self.open_menu(items, at)
     }
 
@@ -1359,7 +1405,7 @@ impl App {
             self.scroll = 0.0;
             self.update_available();
         }
-        self.window.presenter.request_redraw();
+        self.window.redraw();
         Ok(())
     }
 
@@ -1371,7 +1417,7 @@ impl App {
             let extend = self.conn.modifiers().shift;
             self.search.press(index, extend, Instant::now());
         }
-        self.window.presenter.request_redraw();
+        self.window.redraw();
         Ok(())
     }
 
@@ -1615,7 +1661,7 @@ impl App {
                     .filter(|_| self.browser.selection().len() == 1);
                 if let Some(index) = only {
                     self.begin_edit(index);
-                    self.window.presenter.request_redraw();
+                    self.window.redraw();
                 }
                 Ok(())
             }
@@ -1662,12 +1708,12 @@ impl App {
             }
             MenuCommand::SortBy(key, ascending) => {
                 self.browser.set_sort(key, ascending);
-                self.window.presenter.request_redraw();
+                self.window.redraw();
                 Ok(())
             }
             MenuCommand::ToggleTag(color) => {
                 self.toggle_tag(color);
-                self.window.presenter.request_redraw();
+                self.window.redraw();
                 Ok(())
             }
             MenuCommand::SetView(mode) => self.set_mode(mode),
@@ -1795,7 +1841,7 @@ impl App {
             MenuAction::ShowOriginal => self.run(MenuCommand::ShowOriginal)?,
             MenuAction::SelectAll => {
                 self.browser.select_all();
-                self.window.presenter.request_redraw();
+                self.window.redraw();
             }
             MenuAction::View(mode) => self.set_mode(mode)?,
             MenuAction::SortBy(key, ascending) => self.run(MenuCommand::SortBy(key, ascending))?,
@@ -1922,7 +1968,7 @@ impl App {
         let Some((edit, path)) = self.edit.take() else {
             return Ok(true);
         };
-        self.window.presenter.request_redraw();
+        self.window.redraw();
         match edit.commit() {
             Ok(None) => {}
             Ok(Some(name)) => match operations::rename_item(&path, &name) {
@@ -1973,7 +2019,7 @@ impl App {
                 }
             }
         }
-        self.window.presenter.request_redraw();
+        self.window.redraw();
         Ok(())
     }
 
@@ -1984,7 +2030,7 @@ impl App {
         if let Some((edit, _)) = self.edit.as_mut() {
             if let Some(index) = self.painter.editor_index(edit.field(), at) {
                 edit.field_mut().press(index, extend, Instant::now());
-                self.window.presenter.request_redraw();
+                self.window.redraw();
             }
         }
         Ok(())
@@ -2001,6 +2047,14 @@ impl App {
         self.edit_caret() || self.search_caret()
     }
 
+    /// Where a caret blink changes the window, `None` when that is not known.
+    fn caret_area(&self) -> Option<Vec<PopupRect>> {
+        cupertino_files::window::caret_areas(
+            self.frame.as_ref()?,
+            self.edit.as_ref().map(|(e, _)| e.index()),
+        )
+    }
+
     /// Whether the name editor's caret shows now (nothing selected, the blink on).
     fn edit_caret(&self) -> bool {
         self.edit
@@ -2014,21 +2068,21 @@ impl App {
         if self.search.is_dragging() {
             if let Some(index) = self.painter.search_index(&self.search, at) {
                 self.search.drag_to(index);
-                self.window.presenter.request_redraw();
+                self.window.redraw();
             }
             return Ok(());
         }
         if let Some((edit, _)) = self.edit.as_mut().filter(|(e, _)| e.field().is_dragging()) {
             if let Some(index) = self.painter.editor_index(edit.field(), at) {
                 edit.field_mut().drag_to(index);
-                self.window.presenter.request_redraw();
+                self.window.redraw();
             }
             return Ok(());
         }
         if let Some(marquee) = self.marquee.as_mut() {
             marquee.at = at;
             self.marquee_apply();
-            self.window.presenter.request_redraw();
+            self.window.redraw();
             return Ok(());
         }
         let Some(drag) = &self.drag else {
@@ -2051,7 +2105,7 @@ impl App {
             let moved = drag.target != target;
             (drag.started, drag.sources, drag.target) = (true, sources, target);
             if moved {
-                self.window.presenter.request_redraw();
+                self.window.redraw();
             }
         }
         Ok(())
@@ -2103,7 +2157,7 @@ impl App {
                 || (step > 0.0 && frame.scroll < frame.max_scroll()))
         {
             self.pending_scroll += step;
-            self.window.presenter.request_redraw();
+            self.window.redraw();
         }
         Ok(())
     }
@@ -2132,18 +2186,18 @@ impl App {
         }
         if self.marquee.take().is_some() {
             self.browser.rubber_band_end();
-            self.window.presenter.request_redraw();
+            self.window.redraw();
             return Ok(());
         }
         match self.drag.take() {
             Some(drag) if drag.started => {
                 self.browser.end_drag();
-                self.window.presenter.request_redraw();
+                self.window.redraw();
                 self.drop_items(drag)
             }
             _ => {
                 if self.browser.release() {
-                    self.window.presenter.request_redraw();
+                    self.window.redraw();
                 }
                 Ok(())
             }

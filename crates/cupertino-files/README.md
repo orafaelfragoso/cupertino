@@ -132,6 +132,18 @@ Values live in `metrics.rs`.
 | Context menu | item 22 pt, separator 11 pt, 5 pt edge padding, 6 pt corner radius, 4 pt highlight inset 5 pt, 13 pt text; title at 15 pt, 14 pt trailing padding; submenu 5 pt over its parent, first row level with the parent's, after 0.2 s; arrow keys stop at the ends. Entry order from the design's descriptor table |
 | Names | compare case-insensitively, numerically, width-insensitively, diacritics significant |
 
+### Damage
+
+The window keeps the rectangles that changed since its last frame (`cupertino_ui_wayland::Damage`) and the presenter
+converts and reports only those. The painter still draws the whole frame, into a scratch pixmap, and the damaged
+rectangles of it are copied into the presenter's pixmap, so the pixels equal those of a whole redraw; a painter that
+clips to the rectangles is a separate piece of work. Three changes say where they are: a blink of the search or name
+caret (the toolbar, and the edited item with its row, `window::caret_areas`), a change of the selection (the items
+that were and are selected, `window::item_area`) and a scroll (the content view). Every other change, hover has no
+state in this window, a rubber band, a drag target, a filter, the status text, a resize or a new folder, redraws the
+whole window, which is correct without further work. The unit tests paint each classified change with and without it
+and require the frames to differ only inside the reported areas.
+
 ### Policies
 
 * The context menus are the design's descriptor table walked in order: New Folder with Selection, Open

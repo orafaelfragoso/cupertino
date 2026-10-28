@@ -137,15 +137,18 @@ impl Cupertino {
                     .and_then(|id| self.wm.window(id))
                     .map(|w| w.output)
                 {
-                    let text = match &chord {
-                        // the way out comes first: it must not be pushed out of sight by a long name
-                        Some(chord) => format!(
-                            "Press {chord} to get your shortcuts back. {app} is receiving them."
-                        ),
+                    // the way out comes first: it must not be pushed out of sight by a long name
+                    let clause = match &chord {
+                        Some(chord) => format!("Press {chord} to get your shortcuts back."),
                         None => format!("{app} is receiving your shortcuts."),
                     };
+                    let text = match &chord {
+                        Some(_) => format!("{clause} {app} is receiving them."),
+                        None => clause.clone(),
+                    };
                     self.overlays.shortcut_notice = Some(ShortcutNotice {
-                        short: chord.unwrap_or_else(|| text.clone()),
+                        short: chord.unwrap_or_else(|| clause.clone()),
+                        clause,
                         text,
                         output,
                         owner: Some(surface.id()),

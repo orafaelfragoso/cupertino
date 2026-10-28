@@ -6,11 +6,13 @@
 //! [`clipboard`] reads and writes the text clipboard. It binds no protocol beyond the transport's standard set.
 
 pub mod clipboard;
+mod damage;
 mod error;
 mod pixels;
 pub mod popup;
 mod presenter;
 
+pub use damage::Damage;
 pub use error::Error;
 pub use pixels::rgba_to_argb8888;
 pub use presenter::{Ready, ShmPresenter};

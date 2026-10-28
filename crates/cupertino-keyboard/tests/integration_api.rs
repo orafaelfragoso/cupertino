@@ -1,7 +1,7 @@
 //! Mirrors the integration snippet of the README.
 
 use cupertino_keyboard::*;
-use cupertino_modifiers::{Mods, RawMods};
+use cupertino_modifiers::{Mods, Profile, RawMods};
 
 #[test]
 fn compositor_flow() {
@@ -20,7 +20,7 @@ fn compositor_flow() {
     .unwrap();
     assert!(out.keymap.starts_with("xkb_keymap"));
 
-    let profile = ModifierProfile::cupertino();
+    let profile = Profile::cupertino();
     let mods = profile.translate(RawMods::SUPER | RawMods::SHIFT);
     assert_eq!(mods, Mods::PRIMARY | Mods::SHIFT);
     let shortcuts = ShortcutSet::reference_defaults();

@@ -32,7 +32,7 @@ pub mod xkb;
 pub use accent::{AccentConfig, AccentEvent, AccentPicker, AccentTable};
 pub use binding::{BindingTable, Resolution, Resolver, TextAction};
 pub use keys::{Chord, ChordError, Key, NamedKey};
-pub use modifiers::{FnUsage, GlobeTap, ModifierProfile};
+pub use modifiers::{FnUsage, GlobeTap};
 pub use mouse_keys::{MouseKeys, PointerAction};
 pub use repeat::{CapsLockDelay, KeyRepeater, RepeatConfig, RepeatInfo};
 pub use rewrite::{decide, is_printable, ClientClass, ClientTarget, KeyPress, Rewrite};

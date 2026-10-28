@@ -1,5 +1,6 @@
 //! The window's keyboard: the navigation chords (names,: Cmd-[ back, Cmd-] forward, Cmd-L Show All,
-//! Cmd-F search; Super is the primary modifier here) and the keys of the focused part (§7.1). There is no in-window
+//! Cmd-F search; `logo` is the command key, which is Super under `cupertino` and Ctrl under `classic-pc`: see
+//! [`command_mods`]) and the keys of the focused part (§7.1). There is no in-window
 //! menu, so the chords are read from key events (gap G9).
 
 /// Where the keyboard input goes.
@@ -56,6 +57,25 @@ pub struct Mods {
     pub shift: bool,
     pub ctrl: bool,
     pub alt: bool,
+}
+
+/// The physical modifiers held, as the window's chords read them: `logo` is the command key of the user's profile, `ctrl`
+/// the key that has the Ctrl role (Super under `classic-pc`).
+pub fn command_mods(
+    keymap: &cupertino_text_field::Keymap,
+    shift: bool,
+    ctrl: bool,
+    alt: bool,
+    logo: bool,
+) -> Mods {
+    use cupertino_modifiers::Mods as Role;
+    let m = keymap.logical(shift, ctrl, alt, logo);
+    Mods {
+        logo: m.contains(Role::PRIMARY),
+        shift: m.contains(Role::SHIFT),
+        ctrl: m.contains(Role::CTRL),
+        alt: m.contains(Role::ALT),
+    }
 }
 
 /// Evdev codes of the keys the router reads (as `cupertino_wayland_client::key`).
@@ -231,5 +251,25 @@ mod tests {
         assert_eq!(cycle(Focus::Search, true), Focus::Sidebar);
         assert_eq!(cycle(Focus::Pane, true), Focus::Search);
         assert_eq!(cycle(Focus::Search, false), Focus::Pane);
+    }
+
+    #[test]
+    fn the_command_key_is_logo_whatever_key_the_profile_makes_it() {
+        use cupertino_modifiers::Profile;
+        use cupertino_text_field::Keymap;
+        let cupertino = Keymap::standard_for(Profile::cupertino());
+        let classic = Keymap::standard_for(Profile::classic_pc());
+        let only = |keymap: &Keymap, ctrl: bool, logo: bool| {
+            command_mods(keymap, false, ctrl, false, logo)
+        };
+        assert_eq!(
+            only(&cupertino, false, true),
+            SUPER,
+            "Super under cupertino"
+        );
+        assert_eq!(only(&classic, true, false), SUPER, "Ctrl under classic-pc");
+        // the other key keeps the Ctrl role
+        assert_eq!(only(&cupertino, true, false).ctrl, true);
+        assert_eq!(only(&classic, false, true).ctrl, true);
     }
 }

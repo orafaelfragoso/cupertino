@@ -1,10 +1,8 @@
 //! Keys to field commands: physical modifiers through the user's modifier profile, then the standard editing chords.
 
 use cupertino_defaults::keyboard::KeyboardSettings;
-use cupertino_keyboard::{
-    BindingTable, Chord, Key, ModifierProfile, NamedKey, Resolution, Resolver, TextAction,
-};
-use cupertino_modifiers::{Mods, RawMods};
+use cupertino_keyboard::{BindingTable, Chord, Key, NamedKey, Resolution, Resolver, TextAction};
+use cupertino_modifiers::{Mods, Profile, RawMods};
 
 /// Evdev codes of the named keys a field reads (`linux/input-event-codes.h`).
 const NAMED_KEYS: [(u32, NamedKey); 15] = [
@@ -112,21 +110,26 @@ pub(crate) enum Command {
 /// The user's modifier profile and editing chords.
 #[derive(Clone, Debug)]
 pub struct Keymap {
-    profile: ModifierProfile,
+    profile: Profile,
     resolver: Resolver,
 }
 
 impl Keymap {
-    pub fn new(profile: ModifierProfile, bindings: BindingTable) -> Self {
+    pub fn new(profile: Profile, bindings: BindingTable) -> Self {
         Keymap {
             profile,
             resolver: Resolver::new(bindings),
         }
     }
 
+    /// The standard chords under `profile`.
+    pub fn standard_for(profile: Profile) -> Self {
+        Keymap::new(profile, BindingTable::standard())
+    }
+
     /// The design's profile (Super is the primary modifier) with the standard chords.
     pub fn standard() -> Self {
-        Keymap::new(ModifierProfile::cupertino(), BindingTable::standard())
+        Keymap::new(Profile::cupertino(), BindingTable::standard())
     }
 
     /// The profile of `keyboard.conf` and the standard chords with the user's overrides; what cannot be read keeps the
@@ -135,9 +138,26 @@ impl Keymap {
         let profile = KeyboardSettings::path()
             .and_then(|path| KeyboardSettings::load(&path, None).ok())
             .and_then(|(settings, _)| settings.modifier_profile)
-            .and_then(|p| ModifierProfile::by_name(p.name()))
-            .unwrap_or_else(ModifierProfile::cupertino);
+            .and_then(|p| Profile::by_name(p.name()))
+            .unwrap_or_else(Profile::cupertino);
         Keymap::new(profile, BindingTable::load_default().0)
+    }
+
+    /// The logical modifiers the user's profile makes of the physical ones held: for the chords of a window, which
+    /// name the command key by its role.
+    pub fn logical(&self, shift: bool, ctrl: bool, alt: bool, logo: bool) -> Mods {
+        let mut raw = RawMods::default();
+        for (held, key) in [
+            (shift, RawMods::SHIFT),
+            (ctrl, RawMods::CTRL),
+            (alt, RawMods::ALT),
+            (logo, RawMods::SUPER),
+        ] {
+            if held {
+                raw = raw | key;
+            }
+        }
+        self.profile.translate(raw)
     }
 
     pub(crate) fn command(&mut self, key: KeyInput) -> Command {

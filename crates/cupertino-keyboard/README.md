@@ -10,7 +10,7 @@ Keyboard model for the Cupertino compositor. Pure logic, with no Smithay, Waylan
 |---|---|
 | `repeat` | `RepeatConfig` (initial delay / interval; from preference units of 1/60 s or from nanoseconds with the filter's clamp), `RepeatInfo` for `wl_keyboard.repeat_info`, `SliderTable`, `KeyRepeater` (single repeating key), `hid_usage_repeats` / `evdev_repeats`, `CapsLockDelay`, caps-lock hold limits |
 | `rewrite` | `decide`: the pure table that turns a Super or Alt chord into the Ctrl chord (or Home / End) for a third-party client, given the client class, `text_input_active` and the physical modifiers; never touches Ctrl. `pressed_for` is its inverse outside a text input: the chord the person presses for the chord a client of a class receives (Super+key for a third-party Ctrl chord of a printable key or Return, Super+C / V for a terminal's Shift+Ctrl+C / V; anything else, a first-party client and `classic-pc` unchanged), which the menu bar shows for an application's accelerators; a test runs every chord of a representative set through both |
-| `modifiers` | `ModifierProfile` (`cupertino`: super = primary, alt = alternate/symbol modifier, ctrl = editing chords; `classic-pc`), `symbol_selectors`, `FnUsage`, `GlobeTap` (a tap is a release within the threshold with no other key in between: `other_key`) |
+| `modifiers` | `symbol_selectors` (the profile that maps physical keys to roles is `cupertino_modifiers::Profile`), `FnUsage`, `GlobeTap` (a tap is a release within the threshold with no other key in between: `other_key`) |
 | `keys` | `Key`, `NamedKey`, `Chord` with parser (`Ctrl+Alt+Left`); the logical `Mods` and physical `RawMods` are `cupertino-modifiers`' |
 | `binding` | `BindingTable::standard` (100 rows, 75 `TextAction`s: emacs-style control chords, alt+arrow word moves, primary+arrow line / document moves, shift = extend selection), chord sequences, user file `~/.config/cupertino/keybindings.conf`, `Resolver` |
 | `shortcuts` | `ShortcutSet` over the 80 built-in desktop assignments (app switcher, window cycling, screenshots, launcher, input-source switching, overview, workspaces, window tiling …) with neutral `SystemAction` names, enable / rebind / override text |
@@ -37,7 +37,7 @@ let out = generate(&layout, &GenOptions { keyboard: Keyboard::Iso, ..Default::de
 // out.keymap → memfd for wl_keyboard.keymap; out.compose → compose table for clients
 
 // 3. shortcuts: translate the physical modifier state, then look the chord up
-let profile = ModifierProfile::cupertino();
+let profile = cupertino_modifiers::Profile::cupertino();
 let mods = profile.translate(RawMods::SUPER | RawMods::SHIFT);          // Primary+Shift
 let shortcuts = ShortcutSet::reference_defaults();
 if let Some(action) = shortcuts.lookup(&Chord::new(mods, Key::Char('4'))) { /* run the action */ }
@@ -73,7 +73,6 @@ Decoded layouts are proprietary and are not part of the crate.
 | Crate item | Used for |
 |---|---|
 | `RepeatConfig` | `wl_keyboard.repeat_info` (500 ms / 83 ms → 12 Hz, `keyboard.conf` overrides) |
-| `ModifierProfile` | Super as the primary modifier |
 | `ShortcutSet::reference_defaults | merged into the `cupertino-input` shortcut map (the map wins on a taken chord, conflicts are reported) |
 | `Switcher` + HUD | input sources (`Ctrl+Space`, `Ctrl+Alt+Space`) switching XKB groups |
 | `CapsLockDelay` | a compositor-level 75 ms debounce, or the hold that switches the input source |

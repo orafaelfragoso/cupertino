@@ -10,6 +10,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 
 use cupertino_peer::{same_instance, ProcessHandle};
 use zbus::fdo::ConnectionCredentials;
@@ -206,6 +207,9 @@ pub struct OwnerQuery {
     pub client: ProcessHandle,
     /// How many identification threads of the client are alive (`crate::state::ClientState::owner_identifying`).
     pub client_identifying: Identifying,
+    /// When the loop answers the check as timed out and drops its answer: a bus that answers after that starts no
+    /// identification thread, so a client is not refused as stalled by its own checks the loop gave up on.
+    pub expires: Instant,
     pub reply: Box<dyn FnOnce(Result<String, OwnerRefusal>) + Send>,
 }
 
@@ -364,6 +368,7 @@ async fn worker(
                 name,
                 client,
                 client_identifying,
+                expires,
                 reply,
             }) => {
                 let identifying = identifying.clone();
@@ -372,7 +377,7 @@ async fn worker(
                     .spawn(
                         async move {
                             let threads = (&identifying, &client_identifying);
-                            reply(owner_of(&conn, &name, client, threads).await)
+                            reply(owner_of(&conn, &name, client, threads, expires).await)
                         },
                         "cupertino-owner-check",
                     )
@@ -537,6 +542,7 @@ async fn owner_of(
     name: &str,
     client: ProcessHandle,
     threads: (&Identifying, &Identifying),
+    expires: Instant,
 ) -> Result<String, OwnerRefusal> {
     let name = BusName::try_from(name).map_err(|_| OwnerRefusal::NotABusName)?;
     let no_owner = |e: zbus::fdo::Error| OwnerRefusal::NoOwner(e.to_string());
@@ -551,6 +557,9 @@ async fn owner_of(
         .get_connection_credentials(BusName::from(unique.as_ref()))
         .await
         .map_err(no_owner)?;
+    if Instant::now() >= expires {
+        return Err(OwnerRefusal::TimedOut);
+    }
     identify_owner(threads, PathBuf::from("/proc"), credentials, client)?
         .recv()
         .await

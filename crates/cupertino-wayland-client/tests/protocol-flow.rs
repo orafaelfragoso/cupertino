@@ -129,6 +129,8 @@ enum Control {
     /// Give the toplevel the text-input focus.
     TextInputEnter,
     TextInputLeave,
+    /// A preedit the input method never finishes with a `done`.
+    PreeditOnly(&'static str),
     /// One input method batch, done with `serial` or else the number of commits so far.
     Compose {
         preedit: Option<(&'static str, i32, i32)>,
@@ -1131,6 +1133,10 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
         Control::TextInputLeave => {
             let surface = mock.surface().clone();
             mock.text_input.as_ref().unwrap().0.leave(&surface);
+        }
+        Control::PreeditOnly(text) => {
+            let input = &mock.text_input.as_ref().unwrap().0;
+            input.preedit_string(Some(text.into()), 0, 0);
         }
         Control::Compose {
             preedit,
@@ -2293,10 +2299,32 @@ fn an_input_method_batch_arrives_at_done_and_is_current_only_for_the_latest_comm
             ..TextInputDone::default()
         })
     );
+    // a batch cut short by a focus change is dropped, not carried into the next one
+    control.send(Control::PreeditOnly("lost")).unwrap();
     control.send(Control::TextInputLeave).unwrap();
     assert_eq!(
         text_input_event(&mut conn, &mut stash),
         TextInputEvent::Leave
+    );
+    control.send(Control::TextInputEnter).unwrap();
+    text_input_event(&mut conn, &mut stash);
+    conn.flush().unwrap();
+    while next_text_input(&seen) != TextInputRequest::Commit {}
+    control
+        .send(Control::Compose {
+            preedit: None,
+            commit: Some("z"),
+            delete: (0, 0),
+            serial: None,
+        })
+        .unwrap();
+    assert_eq!(
+        text_input_event(&mut conn, &mut stash),
+        TextInputEvent::Done(TextInputDone {
+            commit: Some("z".into()),
+            current: true,
+            ..TextInputDone::default()
+        })
     );
 }
 

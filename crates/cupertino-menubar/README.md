@@ -98,7 +98,7 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   place: in the Window menu Minimize becomes Minimize All (`minimize_all`), Zoom becomes Zoom All (`zoom_all`, enabled
   even when the active window cannot zoom), Close Window becomes Close All (`quit_app`, every window of the application)
   and Bring All to Front becomes Arrange in Front, which cascades the windows (`cascade_all`; a Cupertino label, as the
-  design names none). The bar holds the keyboard while its
+  design names none); in the system menu Force Quit… becomes Force Quit <app name> (see *System menu*). The bar holds the keyboard while its
   menus are open and reads Alt from the modifiers it was last sent, once per batch of events, so an Alt press and a
   click that arrive in the same batch choose what the menu showed before the swap; a menu opened with Alt held shows
   the alternates at once. A click or Return chooses the item the row shows at that moment, and the
@@ -189,7 +189,13 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   Out <name>… and, when the session agent can switch, Login Window…, with separators between the groups. Every row and
   separator has a fixed id in -4000…-4099 (`SystemRow`), so an open menu survives a rebuild. About This Computer starts
   `cupertino-settings --about` and Settings… starts `cupertino-settings`, both from `PATH` with an activation token (`XDG_ACTIVATION_TOKEN`, `DESKTOP_STARTUP_ID`); Force Quit…
-  sends the `force_quit_dialog` command, which a version 9 server does not get. Force Quit…, Lock Screen and Log Out show
+  sends the `force_quit_dialog` command, which a version 9 server does not get. With Alt held and an active application,
+  Force Quit… shows its alternate Force Quit <app name> (-4013, `SystemRow::ForceQuitApp`), with the name the bold App menu
+  title shows, no ellipsis and no chord; a name over 64 characters (`MAX_FORCE_QUIT_NAME_CHARS`, the cap of the other
+  names in the system menu) is cut at its end with an ellipsis. It sends `force_quit_app` with the app id the label was
+  built for, and the server ends that application only while it is still the active one. Unlike Force Quit…, it asks for
+  no confirmation: choosing the item that names the application with Alt held is the confirmation. It is disabled below version 13
+  (`MenuBar::can_force_quit_app`) and absent on the desktop. Force Quit…, Lock Screen and Log Out show
   the chord the server binds to them, none while it sent none. Without a session agent the menu is About This Computer, Settings…, Recent
   Items, Force Quit… and Lock Screen.
 - **Recent Items.** The submenu is read (`recent` module) each time the system menu opens, never on a timer: a disabled

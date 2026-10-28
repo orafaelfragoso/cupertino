@@ -1,12 +1,14 @@
 use cupertino_menubar::controller::{
     point_in_triangle, Effect, Key, MenuController, Mode, APP_MENU_ROOT,
 };
+use cupertino_menubar::extras::{Extras, FrontApp, SystemRow};
 use cupertino_menubar::fallback::{
     self, Chords, FallbackAction, HELP_MENU, HELP_SEARCH, WINDOW_MENU,
 };
 use cupertino_menubar::geom::{Point, Rect};
 use cupertino_menubar::item::{ItemId, MenuItem, Shortcut, Toggle};
 use cupertino_menubar::layout::{BarContent, MonoMeasure, SlotKey, StatusEntry};
+use cupertino_menubar::recent::RecentItems;
 use cupertino_text_field::{KeyInput, Keymap};
 use std::time::Instant;
 
@@ -1096,4 +1098,63 @@ fn activation_chooses_what_the_row_shows_at_that_moment() {
         &c.key(Key::Enter, 0.3),
         &activate(FallbackAction::Minimize)
     ));
+}
+
+const FILES: FrontApp<'static> = FrontApp {
+    app_id: "org.example.files",
+    name: "Files",
+    can_force_quit: true,
+};
+
+/// A bar whose System menu is open, built for `front`, with Alt held.
+fn system_menu_with_alt(front: Option<FrontApp<'_>>) -> MenuController {
+    let mut content = content();
+    content.system_menu = Extras::default()
+        .system_menu(&Chords::default(), &RecentItems::default(), front)
+        .rows;
+    let mut c = controller();
+    c.set_content(content);
+    let p = slot_center(&c, &SlotKey::System);
+    c.pointer_press(p, 0.0);
+    c.pointer_release(p, 0.05);
+    c.set_alt(true);
+    c
+}
+
+/// Click the row `id` of the open menu; whether that chose it.
+fn choose(c: &mut MenuController, id: ItemId) -> bool {
+    let row = row_center(c, 0, id.0);
+    c.pointer_move(row, 0.2);
+    c.pointer_press(row, 0.3);
+    has(
+        &c.pointer_release(row, 0.35),
+        &Effect::Activate {
+            slot: SlotKey::System,
+            item: id,
+        },
+    )
+}
+
+#[test]
+fn with_alt_held_the_system_menu_shows_force_quit_with_the_app_name_and_chooses_it() {
+    let mut c = system_menu_with_alt(Some(FILES));
+    let labels = row_labels(&c);
+    assert!(
+        labels.contains(&"Force Quit Files".to_owned()),
+        "{labels:?}"
+    );
+    assert!(!labels.contains(&"Force Quit\u{2026}".to_owned()));
+    assert!(choose(&mut c, SystemRow::ForceQuitApp.id()));
+}
+
+#[test]
+fn the_system_menu_keeps_force_quit_on_the_desktop_and_greys_the_alternate_below_version_13() {
+    let desktop = system_menu_with_alt(None);
+    assert!(row_labels(&desktop).contains(&"Force Quit\u{2026}".to_owned()));
+    let mut c = system_menu_with_alt(Some(FrontApp {
+        can_force_quit: false,
+        ..FILES
+    }));
+    assert!(row_labels(&c).contains(&"Force Quit Files".to_owned()));
+    assert!(!choose(&mut c, SystemRow::ForceQuitApp.id()));
 }

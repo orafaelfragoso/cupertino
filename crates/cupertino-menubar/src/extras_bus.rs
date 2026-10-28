@@ -481,6 +481,9 @@ async fn act(
         ExtraAction::Session(_) => Err(zbus::Error::Failure(
             "session actions go through the server".to_owned(),
         )),
+        ExtraAction::System(_) => Err(zbus::Error::Failure(
+            "system menu actions are carried out by the bar".to_owned(),
+        )),
         ExtraAction::SetDoNotDisturb(on) => {
             proxy(session, CENTRE_NAME, CENTRE_PATH, CENTRE_NAME)
                 .await?

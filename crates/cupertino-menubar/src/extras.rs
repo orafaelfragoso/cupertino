@@ -9,7 +9,8 @@
 //! * the battery and Bluetooth row layouts are not mapped: their rows here are approximate, as are every
 //!   icon name (freedesktop symbolic names) and the signal and charge bounds between icons.
 
-use crate::item::{plain_text, ItemId, MenuItem, Shortcut, ShortcutModifier, Toggle};
+use crate::fallback::Chords;
+use crate::item::{plain_text, ItemId, MenuItem, Toggle};
 
 /// Security name of a network that needs no passphrase in `org.cupertino.Network1.GetNetworks`.
 const OPEN: &str = "open";
@@ -151,9 +152,46 @@ pub enum ExtraAction {
     SetDoNotDisturb(bool),
     /// Do not disturb for the duration row with this identifier.
     DoNotDisturbFor(String),
-    /// An entry of the system menu.
+    /// An entry of the system menu the session agent carries out.
     Session(SessionAction),
+    /// An entry of the system menu the bar carries out itself.
+    System(SystemAction),
 }
+
+/// What an entry of the system menu that needs no session agent does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SystemAction {
+    /// Start the control panel.
+    Settings,
+    /// Show the server's Force Quit dialog.
+    ForceQuit,
+}
+
+/// A row of the system menu. Each has a fixed id in -4000…-4099, so an open menu survives a rebuild; -4000 and the
+/// separator id -4050 are kept for About This Computer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SystemRow {
+    Settings = -4001,
+    ForceQuit = -4002,
+    Sleep = -4003,
+    Restart = -4004,
+    ShutDown = -4005,
+    Lock = -4006,
+    LogOut = -4007,
+    LoginWindow = -4008,
+}
+
+impl SystemRow {
+    pub fn id(self) -> ItemId {
+        ItemId(self as i32)
+    }
+}
+
+/// Separators of the system menu, each named by the row above it.
+const SEPARATOR_AFTER_SETTINGS: i32 = -4051;
+const SEPARATOR_AFTER_FORCE_QUIT: i32 = -4052;
+const SEPARATOR_AFTER_SHUT_DOWN: i32 = -4053;
+const SEPARATOR_AFTER_LOG_OUT: i32 = -4054;
 
 /// What an entry of the system menu asks of the session agent (`org.cupertino.Login1`, through the server).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -230,32 +268,43 @@ impl ExtraMenu {
         self.rows.len() as i32 + 1
     }
 
-    /// A row whose label is shown as given (network and device names keep their underscores).
-    fn row(&mut self, label: &str, enabled: bool, toggle: Toggle, action: Option<ExtraAction>) {
-        let id = ItemId(self.next_id());
+    /// A row with the id `id` whose label is shown as given (network, device and person names keep their underscores).
+    fn push(
+        &mut self,
+        id: ItemId,
+        label: &str,
+        enabled: bool,
+        toggle: Toggle,
+        action: Option<ExtraAction>,
+    ) -> &mut MenuItem {
+        if let Some(action) = action {
+            self.actions.push((id, action));
+        }
         self.rows.push(MenuItem {
             label: label.to_owned(),
             enabled,
             toggle,
             ..MenuItem::new(id.0, "")
         });
-        if let Some(action) = action {
-            self.actions.push((id, action));
-        }
+        self.rows.last_mut().expect("a row was just pushed")
     }
 
-    /// A row that lists the keys that do the same (`Shortcut` text of a menu row).
-    fn row_with_shortcut(
+    /// A row with the next positional id.
+    fn row(&mut self, label: &str, enabled: bool, toggle: Toggle, action: Option<ExtraAction>) {
+        self.push(ItemId(self.next_id()), label, enabled, toggle, action);
+    }
+
+    /// A row of the system menu at its fixed id, with the chord `chords` binds to it.
+    fn system_row(
         &mut self,
+        row: SystemRow,
         label: &str,
         enabled: bool,
-        shortcut: Shortcut,
+        chords: &Chords,
         action: ExtraAction,
     ) {
-        self.row(label, enabled, Toggle::None, Some(action));
-        if let Some(row) = self.rows.last_mut() {
-            row.shortcut = Some(shortcut);
-        }
+        let item = self.push(row.id(), label, enabled, Toggle::None, Some(action));
+        item.shortcut = chords.system.get(&row).cloned();
     }
 
     fn header(&mut self, label: &str) {
@@ -340,75 +389,94 @@ impl Extras {
         menu
     }
 
-    /// The system menu: Sleep, Restart…, Shut Down…, Lock Screen and Log Out <name>…, then the login window entry. The
-    /// ellipsis entries open the agent's confirmation panel. Without a session agent (none runs, or the owner of its
-    /// name is not the one the server started) only Lock Screen is left, enabled while the server has named a login process: it
-    /// locks without the agent.
-    pub fn session_menu(&self) -> ExtraMenu {
+    /// The system menu: Settings…, Force Quit…, then the session agent's Sleep, Restart…, Shut Down…, Lock Screen and
+    /// Log Out <name>…, then the login window entry. The session's ellipsis entries open the agent's confirmation panel.
+    /// Without a session agent (none runs, or the owner of its name is not the one the server started) Settings… and
+    /// Force Quit… are followed only by Lock Screen, enabled while the server has named a login process: it locks without
+    /// the agent. Force Quit…, Lock Screen and Log Out show the chord the server binds to them in `chords`.
+    pub fn system_menu(&self, chords: &Chords) -> ExtraMenu {
         let mut menu = ExtraMenu::default();
-        let lock = |caps: &SessionCaps, menu: &mut ExtraMenu| {
-            menu.row_with_shortcut(
+        let session = |a| ExtraAction::Session(a);
+        menu.system_row(
+            SystemRow::Settings,
+            "Settings\u{2026}",
+            true,
+            chords,
+            ExtraAction::System(SystemAction::Settings),
+        );
+        menu.rows
+            .push(MenuItem::separator(SEPARATOR_AFTER_SETTINGS));
+        menu.system_row(
+            SystemRow::ForceQuit,
+            "Force Quit\u{2026}",
+            true,
+            chords,
+            ExtraAction::System(SystemAction::ForceQuit),
+        );
+        menu.rows
+            .push(MenuItem::separator(SEPARATOR_AFTER_FORCE_QUIT));
+        let Some(state) = self.session.as_ref() else {
+            menu.system_row(
+                SystemRow::Lock,
                 "Lock Screen",
-                caps.lock,
-                Shortcut {
-                    modifiers: vec![ShortcutModifier::Ctrl, ShortcutModifier::Primary],
-                    key: "Q".to_owned(),
-                },
-                ExtraAction::Session(SessionAction::Lock),
+                self.lock_without_agent,
+                chords,
+                session(SessionAction::Lock),
             );
-        };
-        let Some(session) = self.session.as_ref() else {
-            let caps = SessionCaps {
-                lock: self.lock_without_agent,
-                ..SessionCaps::default()
-            };
-            lock(&caps, &mut menu);
             return menu;
         };
-        let caps = session.caps;
-        let action = |a| Some(ExtraAction::Session(a));
-        menu.row(
+        let caps = state.caps;
+        menu.system_row(
+            SystemRow::Sleep,
             "Sleep",
             caps.sleep,
-            Toggle::None,
-            action(SessionAction::Sleep),
+            chords,
+            session(SessionAction::Sleep),
         );
-        menu.row(
+        menu.system_row(
+            SystemRow::Restart,
             "Restart\u{2026}",
             caps.restart,
-            Toggle::None,
-            action(SessionAction::Restart),
+            chords,
+            session(SessionAction::Restart),
         );
-        menu.row(
+        menu.system_row(
+            SystemRow::ShutDown,
             "Shut Down\u{2026}",
             caps.shut_down,
-            Toggle::None,
-            action(SessionAction::ShutDown),
+            chords,
+            session(SessionAction::ShutDown),
         );
-        menu.separator();
-        lock(&caps, &mut menu);
-        let name = display_name(&session.user_name);
+        menu.rows
+            .push(MenuItem::separator(SEPARATOR_AFTER_SHUT_DOWN));
+        menu.system_row(
+            SystemRow::Lock,
+            "Lock Screen",
+            caps.lock,
+            chords,
+            session(SessionAction::Lock),
+        );
+        let name = display_name(&state.user_name);
         let log_out = if name.is_empty() {
             "Log Out\u{2026}".to_owned()
         } else {
             format!("Log Out {name}\u{2026}")
         };
-        menu.row_with_shortcut(
+        menu.system_row(
+            SystemRow::LogOut,
             &log_out,
             caps.log_out,
-            Shortcut {
-                modifiers: vec![ShortcutModifier::Shift, ShortcutModifier::Primary],
-                key: "Q".to_owned(),
-            },
-            ExtraAction::Session(SessionAction::LogOut),
+            chords,
+            session(SessionAction::LogOut),
         );
         if caps.switch_user {
-            menu.separator();
-            menu.row(
+            menu.rows.push(MenuItem::separator(SEPARATOR_AFTER_LOG_OUT));
+            menu.system_row(
+                SystemRow::LoginWindow,
                 "Login Window\u{2026}",
                 true,
-                Toggle::None,
-                action(SessionAction::SwitchUser),
+                chords,
+                session(SessionAction::SwitchUser),
             );
         }
         menu
@@ -536,6 +604,7 @@ fn focus_menu(menu: &mut ExtraMenu, focus: &FocusState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::item::Shortcut;
 
     fn network(ssid: &str, security: &str, known: bool, connected: bool) -> WifiNetwork {
         WifiNetwork {
@@ -865,105 +934,231 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn the_system_menu_lists_the_session_entries_with_the_name_the_chords_and_one_action_each() {
-        let menu = session("Rafael", SessionCaps::default()).session_menu();
-        assert_eq!(
-            entries(&menu),
-            [
-                "Sleep",
-                "Restart\u{2026}",
-                "Shut Down\u{2026}",
-                "Lock Screen",
-                "Log Out Rafael\u{2026}",
-                "Login Window\u{2026}"
-            ]
-        );
-        let row = |label: &str| menu.rows.iter().find(|r| r.label == label).unwrap();
-        assert_eq!(
-            row("Lock Screen").shortcut.as_ref().map(Shortcut::display),
-            Some("Ctrl+Super+Q".to_string())
-        );
-        assert_eq!(
-            row("Log Out Rafael\u{2026}")
-                .shortcut
-                .as_ref()
-                .map(Shortcut::display),
-            Some("Shift+Super+Q".to_string())
-        );
-        for (label, action) in [
-            ("Sleep", SessionAction::Sleep),
-            ("Restart\u{2026}", SessionAction::Restart),
-            ("Shut Down\u{2026}", SessionAction::ShutDown),
-            ("Lock Screen", SessionAction::Lock),
-            ("Log Out Rafael\u{2026}", SessionAction::LogOut),
-            ("Login Window\u{2026}", SessionAction::SwitchUser),
-        ] {
-            assert_eq!(
-                menu.action(row(label).id),
-                Some(&ExtraAction::Session(action)),
-                "{label}"
-            );
-        }
-        assert!(menu
-            .action(menu.rows.iter().find(|r| r.separator).unwrap().id)
-            .is_none());
+    /// Each row's label (`---` for a separator) and id.
+    fn rows_and_ids(menu: &ExtraMenu) -> Vec<(String, i32)> {
+        labels(menu)
+            .into_iter()
+            .zip(menu.rows.iter().map(|r| r.id.0))
+            .collect()
+    }
+
+    fn system_menu(extras: &Extras) -> ExtraMenu {
+        extras.system_menu(&Chords::default())
     }
 
     #[test]
-    fn the_system_menu_greys_what_the_session_cannot_do_and_leaves_out_the_login_window_when_it_cannot_switch(
-    ) {
-        let caps = SessionCaps {
-            sleep: false,
-            ..SessionCaps::default()
-        };
-        let menu = session("", caps).session_menu();
-        assert_eq!(
-            entries(&menu),
-            [
-                "Sleep",
+    fn the_system_menu_lists_its_rows_in_order_at_fixed_ids_with_one_action_each() {
+        let menu = system_menu(&session("Rafael", SessionCaps::default()));
+        let expected = [
+            ("Settings\u{2026}", -4001),
+            ("---", -4051),
+            ("Force Quit\u{2026}", -4002),
+            ("---", -4052),
+            ("Sleep", -4003),
+            ("Restart\u{2026}", -4004),
+            ("Shut Down\u{2026}", -4005),
+            ("---", -4053),
+            ("Lock Screen", -4006),
+            ("Log Out Rafael\u{2026}", -4007),
+            ("---", -4054),
+            ("Login Window\u{2026}", -4008),
+        ]
+        .map(|(label, id)| (label.to_owned(), id));
+        assert_eq!(rows_and_ids(&menu), expected);
+        let row = |label: &str| menu.rows.iter().find(|r| r.label == label).unwrap();
+        for (label, action) in [
+            (
+                "Settings\u{2026}",
+                ExtraAction::System(SystemAction::Settings),
+            ),
+            (
+                "Force Quit\u{2026}",
+                ExtraAction::System(SystemAction::ForceQuit),
+            ),
+            ("Sleep", ExtraAction::Session(SessionAction::Sleep)),
+            (
                 "Restart\u{2026}",
+                ExtraAction::Session(SessionAction::Restart),
+            ),
+            (
                 "Shut Down\u{2026}",
-                "Lock Screen",
-                "Log Out\u{2026}",
-                "Login Window\u{2026}"
-            ],
-            "no name: plain Log Out"
-        );
-        assert!(!menu.rows[0].enabled, "Sleep is greyed");
-        assert!(menu.rows[1].enabled);
+                ExtraAction::Session(SessionAction::ShutDown),
+            ),
+            ("Lock Screen", ExtraAction::Session(SessionAction::Lock)),
+            (
+                "Log Out Rafael\u{2026}",
+                ExtraAction::Session(SessionAction::LogOut),
+            ),
+            (
+                "Login Window\u{2026}",
+                ExtraAction::Session(SessionAction::SwitchUser),
+            ),
+        ] {
+            assert!(row(label).enabled, "{label}");
+            assert_eq!(menu.action(row(label).id), Some(&action), "{label}");
+        }
+        assert!(menu
+            .rows
+            .iter()
+            .filter(|r| r.separator)
+            .all(|r| menu.action(r.id).is_none()));
+
         let alone = SessionCaps {
             switch_user: false,
             ..SessionCaps::default()
         };
-        let menu = session("Rafael", alone).session_menu();
-        assert!(!entries(&menu).iter().any(|l| l.contains("Login Window")));
+        let menu = system_menu(&session("Rafael", alone));
+        assert_eq!(
+            rows_and_ids(&menu),
+            expected[..10],
+            "no login window and no separator before it"
+        );
     }
 
     #[test]
-    fn without_a_session_agent_the_system_menu_still_locks() {
+    fn the_system_menu_greys_what_the_session_cannot_do() {
+        let caps = SessionCaps {
+            sleep: false,
+            lock: false,
+            ..SessionCaps::default()
+        };
+        let menu = system_menu(&session("", caps));
+        let enabled: Vec<(&str, bool)> = menu
+            .rows
+            .iter()
+            .filter(|r| !r.separator)
+            .map(|r| (r.label.as_str(), r.enabled))
+            .collect();
+        assert_eq!(
+            enabled,
+            [
+                ("Settings\u{2026}", true),
+                ("Force Quit\u{2026}", true),
+                ("Sleep", false),
+                ("Restart\u{2026}", true),
+                ("Shut Down\u{2026}", true),
+                ("Lock Screen", false),
+                ("Log Out\u{2026}", true),
+                ("Login Window\u{2026}", true),
+            ],
+            "no name: plain Log Out"
+        );
+    }
+
+    #[test]
+    fn without_a_session_agent_the_system_menu_offers_settings_force_quit_and_lock() {
         let named = Extras {
             lock_without_agent: true,
             ..Extras::default()
         };
-        let menu = named.session_menu();
-        assert_eq!(entries(&menu), ["Lock Screen"]);
-        assert!(menu.rows[0].enabled);
+        let menu = system_menu(&named);
         assert_eq!(
-            menu.action(menu.rows[0].id),
+            rows_and_ids(&menu),
+            [
+                ("Settings\u{2026}", -4001),
+                ("---", -4051),
+                ("Force Quit\u{2026}", -4002),
+                ("---", -4052),
+                ("Lock Screen", -4006),
+            ]
+            .map(|(label, id)| (label.to_owned(), id))
+        );
+        assert!(menu.rows.iter().filter(|r| !r.separator).all(|r| r.enabled));
+        assert_eq!(
+            menu.action(SystemRow::Lock.id()),
             Some(&ExtraAction::Session(SessionAction::Lock))
         );
-        let nobody = Extras::default().session_menu();
-        assert_eq!(entries(&nobody), ["Lock Screen"]);
-        assert!(
-            !nobody.rows[0].enabled,
-            "no login process, so nothing locks"
+        assert_eq!(
+            menu.action(SystemRow::ForceQuit.id()),
+            Some(&ExtraAction::System(SystemAction::ForceQuit))
         );
+        let nobody = system_menu(&Extras::default());
+        assert_eq!(
+            entries(&nobody),
+            ["Settings\u{2026}", "Force Quit\u{2026}", "Lock Screen"]
+        );
+        let lock = nobody.rows.last().unwrap();
+        assert!(!lock.enabled, "no login process, so nothing locks");
+        assert!(nobody.rows[0].enabled && nobody.rows[2].enabled);
+    }
+
+    #[test]
+    fn the_system_menu_shows_the_chords_the_server_binds_and_none_for_the_rest() {
+        let extras = session("Rafael", SessionCaps::default());
+        let shown = |chords: &Chords| -> Vec<(String, String)> {
+            extras
+                .system_menu(chords)
+                .rows
+                .iter()
+                .filter_map(|r| Some((r.label.clone(), r.shortcut.as_ref()?.display())))
+                .collect()
+        };
+        assert_eq!(shown(&Chords::default()), [], "nothing sent yet");
+        let chords = Chords {
+            system: [
+                (SystemRow::ForceQuit, "Alt+Super+Escape"),
+                (SystemRow::Lock, "Ctrl+Super+q"),
+            ]
+            .into_iter()
+            .map(|(row, chord)| (row, Shortcut::from_chord(chord).unwrap()))
+            .collect(),
+            ..Chords::default()
+        };
+        assert_eq!(
+            shown(&chords),
+            [
+                (
+                    "Force Quit\u{2026}".to_owned(),
+                    "Alt+Super+Escape".to_owned()
+                ),
+                ("Lock Screen".to_owned(), "Ctrl+Super+q".to_owned()),
+            ],
+            "Log Out is unbound"
+        );
+        let without_agent = Extras::default().system_menu(&chords);
+        assert!(without_agent
+            .rows
+            .iter()
+            .find(|r| r.id == SystemRow::Lock.id())
+            .is_some_and(|r| r.shortcut.is_some()));
+    }
+
+    #[test]
+    fn system_menu_ids_stay_when_the_name_or_the_capabilities_change() {
+        let ids = |extras: &Extras| -> Vec<i32> {
+            system_menu(extras).rows.iter().map(|r| r.id.0).collect()
+        };
+        let before = ids(&session("Rafael", SessionCaps::default()));
+        let renamed = ids(&session("Ana", SessionCaps::default()));
+        let greyed = ids(&session(
+            "Rafael",
+            SessionCaps {
+                sleep: false,
+                restart: false,
+                log_out: false,
+                ..SessionCaps::default()
+            },
+        ));
+        assert_eq!(before, renamed);
+        assert_eq!(before, greyed);
+        let alone = ids(&session(
+            "Rafael",
+            SessionCaps {
+                switch_user: false,
+                ..SessionCaps::default()
+            },
+        ));
+        assert_eq!(
+            alone,
+            before[..alone.len()],
+            "rows that stay keep their ids"
+        );
+        assert!(before.iter().all(|id| (-4099..=-4000).contains(id)));
     }
 
     #[test]
     fn the_name_in_log_out_is_plain_text_so_underscores_and_ampersands_are_not_mnemonics() {
-        let menu = session("Ana_&Co", SessionCaps::default()).session_menu();
+        let menu = system_menu(&session("Ana_&Co", SessionCaps::default()));
         let log_out = menu
             .rows
             .iter()
@@ -976,7 +1171,7 @@ mod tests {
     #[test]
     fn the_name_in_log_out_loses_control_and_direction_characters_and_is_cut_to_64_characters() {
         let dirty = format!("Ana\u{1b}[31m\n\u{202e}Bob{}", "x".repeat(100));
-        let menu = session(&dirty, SessionCaps::default()).session_menu();
+        let menu = system_menu(&session(&dirty, SessionCaps::default()));
         let log_out = menu
             .rows
             .iter()
@@ -990,7 +1185,7 @@ mod tests {
         assert!(name.starts_with("Ana[31mBobxxx"), "{name:?}");
         assert_eq!(name.chars().count(), 64);
         assert!(!name.chars().any(|c| c.is_control() || c == '\u{202e}'));
-        let blank = session("\u{1b}\u{202e} ", SessionCaps::default()).session_menu();
+        let blank = system_menu(&session("\u{1b}\u{202e} ", SessionCaps::default()));
         assert!(
             blank.rows.iter().any(|r| r.label == "Log Out\u{2026}"),
             "nothing left: plain Log Out"

@@ -931,6 +931,11 @@ struct AppClient(TestClient);
 impl AppClient {
     fn spawn(socket: PathBuf, app_id: &'static str) -> AppClient {
         let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
+        Self::spawn_on(stream, app_id)
+    }
+
+    /// An application on a connected stream (a shell process's comes from the server).
+    fn spawn_on(stream: UnixStream, app_id: &'static str) -> AppClient {
         AppClient(run_client(stream, move |globals, qh, status| {
             let compositor: wl_compositor::WlCompositor = globals.bind(qh, 4..=6, ()).unwrap();
             let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
@@ -2098,8 +2103,14 @@ fn bar_v11(h: &mut Harness) -> BarClient {
 
 /// An application of `app_id` whose new window is the key window and has the keyboard.
 fn key_app(h: &mut Harness, app_id: &'static str) -> (AppClient, WindowId) {
+    let stream = UnixStream::connect(h.socket_path()).expect("connecting to the compositor");
+    key_app_on(h, stream, app_id)
+}
+
+/// [`key_app`] on a connected stream.
+fn key_app_on(h: &mut Harness, stream: UnixStream, app_id: &'static str) -> (AppClient, WindowId) {
     let before: Vec<WindowId> = h.state.wm.windows().map(|w| w.id).collect();
-    let app = AppClient::spawn(h.socket_path(), app_id);
+    let app = AppClient::spawn_on(stream, app_id);
     h.mapped_window(before.len() + 1);
     let window = h
         .state
@@ -2397,4 +2408,88 @@ fn edit_needs_version_11_and_an_edit_action() {
             2 // invalid_edit_action
         ))
     );
+}
+
+/// Choose Copy in a menu of `bar` and let the keyboard come back to `window` without the tick that sends the edit,
+/// then make `condition` hold before that tick runs; returns the key presses and releases the application got.
+fn copy_with_condition_before_delivery(
+    h: &mut Harness,
+    bar: &BarClient,
+    app: &AppClient,
+    window: WindowId,
+    condition: impl FnOnce(&mut Harness),
+) -> Vec<KeyEvent> {
+    let surface = h.state.entry(window).unwrap().surface().clone();
+    open_menu(h, bar, app);
+    let from = app.keys().len();
+    bar.send(Cmd::Edit(EditAction::Copy));
+    bar.send(Cmd::CloseMenu);
+    h.dispatch_until("the keyboard back on the window", |s| {
+        s.seat.get_keyboard().unwrap().current_focus().as_ref() == Some(&surface)
+    });
+    condition(h);
+    h.step();
+    settle_app(h, app);
+    app.presses_since(from)
+}
+
+#[test]
+fn an_edit_never_goes_to_a_window_of_a_shell_process() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let stream = cupertino_server::shell_connection::shell_process_connection(
+        &h.state.display_handle,
+        &[ShellRole::Session],
+    )
+    .unwrap();
+    let (app, _) = key_app_on(&mut h, stream, "org.example.shell-window");
+    open_menu(&mut h, &bar, &app);
+    let from = app.keys().len();
+    choose_edit(&mut h, &bar, &app, EditAction::Copy);
+    assert_eq!(app.presses_since(from), []);
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn an_edit_is_not_sent_while_the_overview_is_open() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let (app, window) = key_app(&mut h, "org.example.editor");
+    let presses = copy_with_condition_before_delivery(&mut h, &bar, &app, window, |h| {
+        h.state.toggle_overview(false);
+        assert!(h.state.shell.overview.is_some());
+    });
+    assert_eq!(presses, []);
+}
+
+#[test]
+fn an_edit_is_not_sent_while_the_application_switcher_is_open() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let _other = key_app(&mut h, "org.example.other");
+    let (app, window) = key_app(&mut h, "org.example.editor");
+    let presses = copy_with_condition_before_delivery(&mut h, &bar, &app, window, |h| {
+        h.state.command(Command::SwitcherOpen { backward: false });
+        assert!(h.state.wm.switcher().is_some());
+    });
+    assert_eq!(presses, []);
+}
+
+#[test]
+fn an_edit_is_not_sent_during_a_move_of_the_window() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let (app, window) = key_app(&mut h, "org.example.editor");
+    let presses = copy_with_condition_before_delivery(&mut h, &bar, &app, window, |h| {
+        let frame = h.state.wm.window(window).unwrap().geometry();
+        h.state.begin_model_interaction(Command::BeginMove {
+            window,
+            pointer: cupertino_wm::Point::new(frame.x + 10.0, frame.y + 10.0),
+        });
+        assert_eq!(
+            h.state.pointer_mode,
+            cupertino_server::state::PointerMode::Model
+        );
+    });
+    assert_eq!(presses, []);
 }

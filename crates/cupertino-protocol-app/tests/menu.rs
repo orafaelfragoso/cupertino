@@ -35,6 +35,8 @@ struct Mock {
     shown: u32,
     /// A `menu_bar` value sent in answer to `set_address`.
     shown_on_address: Option<u32>,
+    /// The `menu_reader` value sent when a version 3 menu object is made.
+    reader: &'static str,
 }
 
 struct Data;
@@ -92,7 +94,11 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Mock {
         init: &mut DataInit<'_, Self>,
     ) {
         if let cupertino_app_effects_v1::Request::GetMenu { id, .. } = request {
-            init.init(id, ()).menu_bar(state.shown);
+            let menu = init.init(id, ());
+            menu.menu_bar(state.shown);
+            if menu.version() >= 3 {
+                menu.menu_reader(state.reader.to_string());
+            }
         }
     }
 }
@@ -137,6 +143,7 @@ fn connect(
     effects_version: u32,
     shown: u32,
     shown_on_address: Option<u32>,
+    reader: &'static str,
 ) -> (Connection, Receiver<Seen>) {
     let (client, server) = UnixStream::pair().unwrap();
     let (seen, received) = channel();
@@ -152,6 +159,7 @@ fn connect(
             seen,
             shown,
             shown_on_address,
+            reader,
         };
         loop {
             if display.dispatch_clients(&mut mock).is_err() {
@@ -183,7 +191,7 @@ fn menu_events(conn: &mut Connection) -> Vec<AppEvent> {
             .unwrap()
             .into_iter()
             .filter_map(|e| match e {
-                Event::Extension(e) => e.downcast::<AppEvent>().ok().map(|e| *e),
+                Event::Extension(e) => e.downcast::<AppEvent>().ok().map(|e| (*e).clone()),
                 _ => None,
             })
             .collect();
@@ -196,7 +204,7 @@ fn menu_events(conn: &mut Connection) -> Vec<AppEvent> {
 
 #[test]
 fn a_window_announces_its_menus_and_hears_whether_the_bar_shows_them() {
-    let (mut conn, seen) = connect(2, 1, None);
+    let (mut conn, seen) = connect(2, 1, None, ":1.7");
     let effects = AppEffects::bind(&mut conn).unwrap();
     let window = surface(&mut conn);
     let menu = effects.menu(&conn, window).unwrap().expect("version 2");
@@ -236,7 +244,7 @@ fn a_window_announces_its_menus_and_hears_whether_the_bar_shows_them() {
 
 #[test]
 fn a_version_1_server_takes_no_menu_announcement() {
-    let (mut conn, _seen) = connect(1, 1, None);
+    let (mut conn, _seen) = connect(1, 1, None, ":1.7");
     let effects = AppEffects::bind(&mut conn).unwrap();
     let window = surface(&mut conn);
     assert!(effects.menu(&conn, window).unwrap().is_none());
@@ -244,7 +252,7 @@ fn a_version_1_server_takes_no_menu_announcement() {
 
 #[test]
 fn a_shown_value_other_than_0_or_1_fails_the_connection() {
-    let (mut conn, seen) = connect(2, 0, Some(2));
+    let (mut conn, seen) = connect(2, 0, Some(2), ":1.7");
     let effects = AppEffects::bind(&mut conn).unwrap();
     let window = surface(&mut conn);
     let menu = effects.menu(&conn, window).unwrap().expect("version 2");
@@ -268,6 +276,56 @@ fn a_shown_value_other_than_0_or_1_fails_the_connection() {
         seen.recv_timeout(Duration::from_secs(5)).unwrap(),
         Seen::Address(_)
     ));
+    let end = Instant::now() + Duration::from_secs(5);
+    let error = loop {
+        match conn.wait(Some(Duration::from_millis(50))) {
+            Err(error) => break error,
+            Ok(_) => assert!(Instant::now() < end, "the connection did not fail"),
+        }
+    };
+    assert!(matches!(error, Error::Protocol(_)), "{error}");
+}
+
+/// The menu events until `count` have arrived.
+fn menu_events_until(conn: &mut Connection, count: usize) -> Vec<AppEvent> {
+    let mut events = Vec::new();
+    while events.len() < count {
+        let batch = menu_events(conn);
+        assert!(!batch.is_empty(), "only {events:?} arrived");
+        events.extend(batch);
+    }
+    events
+}
+
+#[test]
+fn a_version_3_window_is_told_which_connection_reads_its_menus() {
+    for (reader, told) in [(":1.7", Some(":1.7".to_string())), ("", None)] {
+        let (mut conn, _seen) = connect(3, 1, None, reader);
+        let effects = AppEffects::bind(&mut conn).unwrap();
+        let window = surface(&mut conn);
+        let _menu = effects.menu(&conn, window).unwrap().expect("version 3");
+        assert_eq!(
+            menu_events_until(&mut conn, 2),
+            [
+                AppEvent::MenuBar {
+                    surface: window,
+                    shown: true
+                },
+                AppEvent::MenuReader {
+                    surface: window,
+                    bus_name: told
+                },
+            ]
+        );
+    }
+}
+
+#[test]
+fn a_reader_that_is_not_a_unique_name_fails_the_connection() {
+    let (mut conn, _seen) = connect(3, 1, None, "org.example.Bar");
+    let effects = AppEffects::bind(&mut conn).unwrap();
+    let window = surface(&mut conn);
+    let _menu = effects.menu(&conn, window).unwrap().expect("version 3");
     let end = Instant::now() + Duration::from_secs(5);
     let error = loop {
         match conn.wait(Some(Duration::from_millis(50))) {

@@ -170,7 +170,7 @@ fn presenters<'a>(
 /// The value an extension event of the public protocols carries.
 fn app_event(event: &Event) -> Option<AppEvent> {
     match event {
-        Event::Extension(event) => event.downcast_ref::<AppEvent>().copied(),
+        Event::Extension(event) => event.downcast_ref::<AppEvent>().cloned(),
         _ => None,
     }
 }
@@ -527,7 +527,12 @@ impl App {
                     self.palette = palette(&self.theme, self.session_dark, options)?;
                     self.redraw();
                 }
-                Some(AppEvent::ScrollCount { .. } | AppEvent::MenuBar { .. }) | None => {}
+                Some(
+                    AppEvent::ScrollCount { .. }
+                    | AppEvent::MenuBar { .. }
+                    | AppEvent::MenuReader { .. },
+                )
+                | None => {}
             },
             // the server dismissed the popup (a click outside it): the field keeps its text
             Event::PopupDone(popup) => {

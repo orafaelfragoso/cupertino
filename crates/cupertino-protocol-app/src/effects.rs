@@ -39,7 +39,7 @@ quiet!(
 );
 
 /// What an object of the public protocols received, in the order it arrived.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AppEvent {
     /// The session's appearance; also sent once when the observer is created.
     Appearance { dark: bool },
@@ -50,6 +50,13 @@ pub enum AppEvent {
     /// Whether the desktop's menu bar shows the menus `surface` announced; also sent once when its [`AppMenu`] is
     /// created.
     MenuBar { surface: SurfaceId, shown: bool },
+    /// The unique bus name of the menu bar connection the server verified, the only peer that may use the menus
+    /// `surface` announced (`Exporter::set_reader` of `cupertino-ui-menus`); `None` while there is none. Sent with
+    /// [`AppEvent::MenuBar`] from version 3.
+    MenuReader {
+        surface: SurfaceId,
+        bus_name: Option<String>,
+    },
 }
 
 /// The app effects global (`cupertino_app_effects_v1`).
@@ -58,7 +65,7 @@ pub struct AppEffects(CupertinoAppEffectsV1);
 impl AppEffects {
     /// Bind the global; `None` when the server does not offer it.
     pub fn bind(conn: &mut Connection) -> Option<AppEffects> {
-        conn.bind_extension(1..=2, Quiet).map(AppEffects)
+        conn.bind_extension(1..=3, Quiet).map(AppEffects)
     }
 
     /// Observe the session's appearance and display options: [`AppEvent::Appearance`] and
@@ -174,14 +181,27 @@ impl Dispatch<CupertinoAppMenuV1, MenuSurface> for State {
         _: &WlConnection,
         _: &QueueHandle<State>,
     ) {
-        if let cupertino_app_menu_v1::Event::MenuBar { shown } = event {
-            if shown > 1 {
-                return state.fail(Error::Protocol("menu bar shown other than 0 or 1"));
+        match event {
+            cupertino_app_menu_v1::Event::MenuBar { shown } => {
+                if shown > 1 {
+                    return state.fail(Error::Protocol("menu bar shown other than 0 or 1"));
+                }
+                state.emit(AppEvent::MenuBar {
+                    surface: surface.0,
+                    shown: shown == 1,
+                });
             }
-            state.emit(AppEvent::MenuBar {
-                surface: surface.0,
-                shown: shown == 1,
-            });
+            cupertino_app_menu_v1::Event::MenuReader { bus_name } => {
+                if !(bus_name.is_empty() || bus_name.starts_with(':')) {
+                    return state
+                        .fail(Error::Protocol("menu reader that is not a unique bus name"));
+                }
+                state.emit(AppEvent::MenuReader {
+                    surface: surface.0,
+                    bus_name: (!bus_name.is_empty()).then_some(bus_name),
+                });
+            }
+            _ => {}
         }
     }
 }

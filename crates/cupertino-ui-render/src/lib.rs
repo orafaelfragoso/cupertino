@@ -153,20 +153,33 @@ pub enum PaintOp {
     PopLayer,
 }
 
+/// Composites a node and its whole subtree as one isolated layer: `opacity` applies once to the result, after
+/// `effects`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Group {
+    pub opacity: f32,
+    pub effects: Vec<Effect>,
+}
+
 /// What one core node painted.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaintNode {
     pub id: PaintNodeId,
-    /// The node whose subtree this one belongs to; a parent comes before its children in the list. The renderer paints
-    /// each node on its own and does not read this: a clip other than a rectangle, group opacity or an effect over
-    /// several nodes is emitted by core as one node whose ops nest the descendants' ops.
+    /// The node whose subtree this one belongs to. A parent comes before its children in the list, so the list is a
+    /// preorder walk of the forest; a parent that is not an earlier node of the list is an error. The renderer
+    /// paints a node, then its children, and applies each ancestor's `clip` and `group` to the subtree.
     pub parent: Option<PaintNodeId>,
     pub revision: PaintRevision,
     /// Applies to `clip` and `ops`, which are in the node's own coordinates.
     pub transform: Transform,
+    /// Clips this node's ops and every descendant's; descendants intersect it with their own.
     pub clip: Option<Shape>,
-    /// Everything the node's operations may touch, effects included, in window points with `transform` applied.
+    /// Paints this node and its subtree into one layer, composited once, under `clip`.
+    pub group: Option<Group>,
+    /// Everything this node's own operations may touch, effects included, in window points with `transform` applied.
     pub bounds: Rect,
+    /// Everything the node and its descendants may touch, `group` effects included, in window points.
+    pub subtree_bounds: Rect,
     /// Where the node takes pointer input, in window points; never its shadow or focus ring.
     pub hit: Rect,
     pub ops: Vec<PaintOp>,
@@ -256,6 +269,8 @@ pub enum RenderError {
     InvalidScale,
     /// A target with no pixels.
     InvalidSize,
+    /// A parent that is not an earlier node of the list.
+    UnknownParent(PaintNodeId),
     /// An image buffer shorter than its stride and height, or a stride shorter than a row.
     InvalidImage(ResourceId),
     Glyph(TextError),

@@ -4,12 +4,13 @@ use crate::glyph_cache::GlyphCache;
 use crate::image_cache::ImageCache;
 use crate::validate;
 use crate::{
-    CpuFrame, DamageRegion, Paint, PaintNode, PaintOp, PixelFormat, PixelRect, RenderError,
-    RenderFrameId, RenderRequest, Sampling, Shape, UiRenderer,
+    CpuFrame, DamageRegion, Paint, PaintNode, PaintNodeId, PaintOp, PixelFormat, PixelRect,
+    RenderError, RenderFrameId, RenderRequest, Sampling, Shape, UiRenderer,
 };
 use cupertino_geometry::Rect;
 use cupertino_theme::Color;
 use cupertino_ui_text::{GlyphFormat, GlyphKey, GlyphRasterizer, RasterGlyph};
+use std::collections::HashMap;
 use tiny_skia::{
     FilterQuality, GradientStop, LinearGradient, Mask, Pattern, Pixmap, PixmapMut, PixmapPaint,
     Point, RadialGradient, SpreadMode, Stroke,
@@ -121,6 +122,7 @@ impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
         {
             let mut base = PixmapMut::from_bytes(&mut self.frame.pixels, width, height)
                 .ok_or(RenderError::InvalidSize)?;
+            let tree = Tree::new(&request.list.nodes);
             let mut painter = Painter {
                 config: &self.config,
                 scale,
@@ -131,10 +133,15 @@ impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
             };
             for d in &dirty {
                 clear(&mut base, d);
-                for node in &request.list.nodes {
-                    if Bounds::of_rect(&node.bounds, scale).touches(d) {
-                        painter.node(&mut base, d, node)?;
-                    }
+                let mut target = Target {
+                    pixmap: &mut base,
+                    origin: (0, 0),
+                    rect: whole,
+                    limit: *d,
+                    clips: Vec::new(),
+                };
+                for &root in &tree.roots {
+                    painter.subtree(&mut target, &tree, root, &mut Vec::new())?;
                 }
             }
         }
@@ -189,6 +196,33 @@ impl Target<'_, '_> {
     }
 }
 
+/// The forest of a display list: each node's children and the roots, in list order.
+struct Tree<'n> {
+    nodes: &'n [PaintNode],
+    children: Vec<Vec<usize>>,
+    roots: Vec<usize>,
+}
+
+impl<'n> Tree<'n> {
+    fn new(nodes: &'n [PaintNode]) -> Tree<'n> {
+        let index: HashMap<PaintNodeId, usize> =
+            nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
+        let mut children = vec![Vec::new(); nodes.len()];
+        let mut roots = Vec::new();
+        for (i, node) in nodes.iter().enumerate() {
+            match node.parent.and_then(|p| index.get(&p)) {
+                Some(&parent) => children[parent].push(i),
+                None => roots.push(i),
+            }
+        }
+        Tree {
+            nodes,
+            children,
+            roots,
+        }
+    }
+}
+
 struct Painter<'a, R> {
     config: &'a CpuConfig,
     scale: f64,
@@ -199,45 +233,169 @@ struct Painter<'a, R> {
 }
 
 impl<R: GlyphRasterizer> Painter<'_, R> {
-    /// Paints one node into a scratch image of just the pixels it touches, then lays that over the frame, so a
-    /// node costs in proportion to its own size and no mask spans the window.
-    fn node(
+    fn subtree<'n>(
         &mut self,
-        base: &mut PixmapMut<'_>,
-        dirty: &Bounds,
-        node: &PaintNode,
+        t: &mut Target<'_, '_>,
+        tree: &Tree<'n>,
+        i: usize,
+        chain: &mut Vec<&'n PaintNode>,
     ) -> Result<(), RenderError> {
-        let halo = node_support(node, self.scale);
-        let area = Bounds::of_rect(&node.bounds, self.scale).intersect(&dirty.outset(halo));
+        let node = &tree.nodes[i];
+        if !Bounds::of_rect(&node.subtree_bounds, self.scale).touches(&t.limit) {
+            return Ok(());
+        }
+        let clipped = node.clip.is_some();
+        if clipped {
+            chain.push(node);
+        }
+        let done = match &node.group {
+            Some(group) => self.group(t, tree, i, group, chain),
+            None => self.own(t, node, chain).and_then(|()| {
+                tree.children[i]
+                    .iter()
+                    .try_for_each(|&child| self.subtree(t, tree, child, chain))
+            }),
+        };
+        if clipped {
+            chain.pop();
+        }
+        done
+    }
+
+    /// Paints a node and its subtree into a layer of the subtree's size, applies the effects, clips the result by
+    /// the ancestors' clips and composites it once.
+    fn group<'n>(
+        &mut self,
+        t: &mut Target<'_, '_>,
+        tree: &Tree<'n>,
+        i: usize,
+        group: &crate::Group,
+        chain: &[&'n PaintNode],
+    ) -> Result<(), RenderError> {
+        let node = &tree.nodes[i];
+        let halo = effects::support(&group.effects, self.scale)
+            .saturating_add(node_support(node, self.scale));
+        let area = Bounds::of_rect(&node.subtree_bounds, self.scale)
+            .intersect(&t.limit.outset(halo))
+            .intersect(&t.rect);
         if area.is_empty() {
             return Ok(());
         }
-        if u64::from(area.width()) * u64::from(area.height()) > self.config.max_pixels {
-            return Err(RenderError::ResourceLimit);
-        }
-        let mut scratch =
-            Pixmap::new(area.width(), area.height()).ok_or(RenderError::ResourceLimit)?;
+        let mut layer = self.scratch(&area)?;
         {
-            let mut pm = scratch.as_mut();
-            let mut target = Target {
+            let mut pm = layer.as_mut();
+            let mut inner = Target {
                 pixmap: &mut pm,
                 origin: (area.x0, area.y0),
                 rect: area,
                 limit: area,
                 clips: Vec::new(),
             };
-            if let Some(clip) = &node.clip {
-                self.push_clip(&mut target, node, clip)?;
+            self.own(&mut inner, node, &[])?;
+            for &child in &tree.children[i] {
+                self.subtree(&mut inner, tree, child, &mut Vec::new())?;
             }
-            let mut pos = 0;
-            self.run(&mut target, node, &mut pos, halo)?;
         }
-        let visible = area.intersect(dirty);
+        for effect in &group.effects {
+            effects::apply(&mut layer, effect, self.scale);
+        }
+        if let Some(mask) = self.chain_mask(chain, &area)? {
+            for (px, m) in layer
+                .data_mut()
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(mask.data())
+            {
+                for c in px.iter_mut() {
+                    *c = div255(u32::from(*c) * u32::from(*m)) as u8;
+                }
+            }
+        }
+        self.lay_over(t, layer, &area, group.opacity)
+    }
+
+    /// Paints one node's own operations into a scratch image of just the pixels they can reach, under the clips of
+    /// the node and its ancestors, and lays that over the target.
+    fn own(
+        &mut self,
+        t: &mut Target<'_, '_>,
+        node: &PaintNode,
+        chain: &[&PaintNode],
+    ) -> Result<(), RenderError> {
+        let halo = node_support(node, self.scale);
+        let mut area = Bounds::of_rect(&node.bounds, self.scale)
+            .intersect(&t.limit.outset(halo))
+            .intersect(&t.rect);
+        for owner in chain {
+            if let Some(clip) = &owner.clip {
+                area = area.intersect(&geometry::clip_bounds(clip, &owner.transform, self.scale));
+            }
+        }
+        if area.is_empty() {
+            return Ok(());
+        }
+        let mut scratch = self.scratch(&area)?;
+        {
+            let mut pm = scratch.as_mut();
+            let mut inner = Target {
+                pixmap: &mut pm,
+                origin: (area.x0, area.y0),
+                rect: area,
+                limit: area,
+                clips: self.chain_mask(chain, &area)?.into_iter().collect(),
+            };
+            let mut pos = 0;
+            self.run(&mut inner, node, &mut pos, halo)?;
+        }
+        self.lay_over(t, scratch, &area, 1.0)
+    }
+
+    fn scratch(&self, area: &Bounds) -> Result<Pixmap, RenderError> {
+        if u64::from(area.width()) * u64::from(area.height()) > self.config.max_pixels {
+            return Err(RenderError::ResourceLimit);
+        }
+        Pixmap::new(area.width(), area.height()).ok_or(RenderError::ResourceLimit)
+    }
+
+    /// The coverage of every clip on the chain, as a mask of just `area`; `None` when nothing is clipped.
+    fn chain_mask(&self, chain: &[&PaintNode], area: &Bounds) -> Result<Option<Mask>, RenderError> {
+        let mut mask: Option<Mask> = None;
+        for owner in chain {
+            let Some(clip) = &owner.clip else { continue };
+            let ts = geometry::to_target(&owner.transform, self.scale, (area.x0, area.y0));
+            let path = geometry::path(clip);
+            let rule = geometry::fill_rule(clip);
+            match (mask.as_mut(), path) {
+                (None, path) => {
+                    let mut m =
+                        Mask::new(area.width(), area.height()).ok_or(RenderError::ResourceLimit)?;
+                    if let Some(path) = path {
+                        m.fill_path(&path, rule, true, ts);
+                    }
+                    mask = Some(m);
+                }
+                (Some(m), Some(path)) => m.intersect_path(&path, rule, true, ts),
+                (Some(m), None) => m.clear(),
+            }
+        }
+        Ok(mask)
+    }
+
+    /// Composites `image`, which covers `area`, onto the part of the target whose result is needed.
+    fn lay_over(
+        &self,
+        t: &mut Target<'_, '_>,
+        image: Pixmap,
+        area: &Bounds,
+        opacity: f32,
+    ) -> Result<(), RenderError> {
+        let visible = area.intersect(&t.limit);
         if visible.is_empty() {
             return Ok(());
         }
-        let shown = if visible == area {
-            scratch
+        let shown = if visible == *area {
+            image
         } else {
             let crop = tiny_skia::IntRect::from_xywh(
                 visible.x0 - area.x0,
@@ -246,13 +404,16 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
                 visible.height(),
             )
             .ok_or(RenderError::ResourceLimit)?;
-            scratch.clone_rect(crop).ok_or(RenderError::ResourceLimit)?
+            image.clone_rect(crop).ok_or(RenderError::ResourceLimit)?
         };
-        base.draw_pixmap(
-            visible.x0,
-            visible.y0,
+        t.pixmap.draw_pixmap(
+            visible.x0 - t.origin.0,
+            visible.y0 - t.origin.1,
             shown.as_ref(),
-            &PixmapPaint::default(),
+            &PixmapPaint {
+                opacity,
+                ..PixmapPaint::default()
+            },
             tiny_skia::Transform::identity(),
             None,
         );

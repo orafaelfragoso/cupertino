@@ -1,15 +1,16 @@
 //! Composition of one output's scene into a [`SceneFrame`]. Everything that has a typed source is a scene item;
 //! what the renderer still builds itself is kept in a frame-local list and referenced by position.
 
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use cupertino_geometry::{CornerStyle, Point, Rect};
 use cupertino_scene::{
     AlphaMode, BufferCrop, Clip, ContentDamage, FrameId, GlobalRect, ImageId, ImageMapping,
-    ImageRole, LayerStack, Output, OutputId, OutputInvalidation, OutputPoint, OutputRect,
-    PhysicalSize, Placement, ResourceKey, SceneFrame, SceneId, SceneItem, SceneKind, SceneLayer,
-    Source, SurfaceId, SurfaceRole,
+    ImageRole, LayerStack, MaterialPass, MaterialStage, Output, OutputId, OutputInvalidation,
+    OutputPoint, OutputRect, PhysicalSize, Placement, RecipeId, ResourceKey, SceneFrame, SceneId,
+    SceneItem, SceneKind, SceneLayer, Source, SurfaceId, SurfaceRole,
 };
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -18,6 +19,7 @@ use smithay::utils::{Logical, Physical, Rectangle};
 
 type DevicePoint = smithay::utils::Point<i32, Physical>;
 
+use super::material::GpuRecipe;
 use super::scene::SceneParams;
 use super::CupertinoElement;
 
@@ -55,12 +57,26 @@ pub struct Picture {
     pub clip: Clip,
 }
 
+/// A material pass over what lies below it. Its recipe gets a handle in the frame's registry once it is pushed.
+pub struct Material {
+    pub recipe: Rc<GpuRecipe>,
+    pub kind: SceneKind,
+    pub index: u64,
+    pub rect: Rectangle<f64, Logical>,
+    pub radius: f64,
+    pub style: CornerStyle,
+    pub stage: MaterialStage,
+    pub tint: [f32; 3],
+    pub opacity: f32,
+}
+
 /// One drawable of a layer: a typed scene item, a surface tree, a picture, or an element the renderer still
 /// builds itself.
 pub enum Piece {
     Item(Box<SceneItem>),
     Tree(Box<Tree>),
     Image(Box<Picture>),
+    Material(Box<Material>),
     Local(Box<CupertinoElement>),
 }
 
@@ -83,6 +99,7 @@ pub struct Composition {
     items: LayerStack<SceneItem>,
     surfaces: Vec<WlSurface>,
     images: Vec<MemoryRenderBuffer>,
+    recipes: Vec<Rc<GpuRecipe>>,
     locals: Vec<Option<CupertinoElement>>,
 }
 
@@ -92,6 +109,7 @@ pub struct Composed {
     pub frame: SceneFrame,
     pub surfaces: Vec<WlSurface>,
     pub images: Vec<MemoryRenderBuffer>,
+    pub recipes: Vec<Rc<GpuRecipe>>,
     pub locals: Vec<Option<CupertinoElement>>,
 }
 
@@ -104,6 +122,7 @@ impl Composition {
             items: LayerStack::new(),
             surfaces: Vec::new(),
             images: Vec::new(),
+            recipes: Vec::new(),
             locals: Vec::new(),
         }
     }
@@ -111,6 +130,35 @@ impl Composition {
     pub fn push(&mut self, layer: SceneLayer, piece: impl Into<Piece>) {
         match piece.into() {
             Piece::Item(item) => self.items.push(layer, *item),
+            Piece::Material(material) => {
+                let recipe = RecipeId(ResourceKey {
+                    slot: self.recipes.len() as u64,
+                    generation: self.id.0,
+                });
+                self.recipes.push(material.recipe);
+                self.items.push(
+                    layer,
+                    SceneItem {
+                        id: SceneId {
+                            kind: material.kind,
+                            index: material.index,
+                        },
+                        revision: 0,
+                        source: Source::Material(MaterialPass {
+                            recipe,
+                            rect: output_rect(material.rect),
+                            radius: material.radius,
+                            style: material.style,
+                            stage: material.stage,
+                            tint: material.tint,
+                        }),
+                        placement: Placement::IDENTITY,
+                        opacity: f64::from(material.opacity),
+                        clip: Clip::None,
+                        damage: ContentDamage::Full,
+                    },
+                );
+            }
             Piece::Image(picture) => {
                 let id = ImageId(ResourceKey {
                     slot: self.images.len() as u64,
@@ -241,6 +289,7 @@ impl Composition {
             frame,
             surfaces: self.surfaces,
             images: self.images,
+            recipes: self.recipes,
             locals: self.locals,
         }
     }

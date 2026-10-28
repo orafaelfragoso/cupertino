@@ -46,6 +46,7 @@ use cupertino_scene::SceneKind;
 
 use crate::render::compose::{image_piece, Piece};
 use crate::render::scene::{material_layer, rrect_item, shadow_item, SceneParams, WindowPlan};
+#[cfg(scene_oracle)]
 use crate::render::shader_rect::ElementKey;
 #[cfg(scene_oracle)]
 use crate::render::CupertinoElement;
@@ -933,18 +934,15 @@ pub fn input_hud(p: &mut SceneParams<'_>) -> Vec<Piece> {
         None,
         alpha,
     ));
-    els.extend(
-        material_layer(
-            p,
-            ElementKey::new("input-hud-material", 0),
-            MATERIAL,
-            area,
-            switcher::HUD_CORNER_RADIUS,
-            alpha,
-        )
-        .into_iter()
-        .map(Piece::from),
-    );
+    els.extend(material_layer(
+        p,
+        SceneKind::InputHudMaterial,
+        0,
+        MATERIAL,
+        area,
+        switcher::HUD_CORNER_RADIUS,
+        alpha,
+    ));
     let params = p.decor.popup_shadow_params();
     let plan = WindowPlan {
         visual: cupertino_wm::Rect::new(p.rect.x + x, p.rect.y + y, w, h),
@@ -1107,18 +1105,15 @@ pub fn accent_popup(p: &mut SceneParams<'_>) -> Vec<Piece> {
         ));
     }
     let area = Rectangle::<f64, Logical>::new((r.x, r.y).into(), (r.w, r.h).into());
-    els.extend(
-        material_layer(
-            p,
-            ElementKey::new("accent-material", 0),
-            MATERIAL,
-            area,
-            12.0,
-            1.0,
-        )
-        .into_iter()
-        .map(Piece::from),
-    );
+    els.extend(material_layer(
+        p,
+        SceneKind::AccentMaterial,
+        0,
+        MATERIAL,
+        area,
+        12.0,
+        1.0,
+    ));
     let params = p.decor.popup_shadow_params();
     let plan = WindowPlan {
         visual: cupertino_wm::Rect::new(p.rect.x + r.x, p.rect.y + r.y, r.w, r.h),

@@ -18,6 +18,7 @@ use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size};
 
 use super::clip::{ClipElement, ClipShape};
 use super::compose::{logical_rect, Composed};
+use super::material::{MaterialElement, SharedMaterial};
 use super::programs::{corner_uniforms, u4, Programs};
 use super::shader_rect::{to_physical_rect, ElementCache, ElementKey, ShaderRect, Sig};
 use super::ui::{rounded_rect, RoundedRectSpec};
@@ -27,6 +28,7 @@ use super::CupertinoElement;
 pub struct Lowering<'a> {
     pub renderer: &'a mut GlesRenderer,
     pub programs: &'a Programs,
+    pub material: Option<SharedMaterial>,
     pub cache: &'a mut ElementCache,
     pub scale: f64,
 }
@@ -37,6 +39,7 @@ pub fn lower(composed: Composed, ctx: &mut Lowering<'_>) -> Vec<CupertinoElement
         frame,
         surfaces,
         images,
+        recipes,
         mut locals,
     } = composed;
     let viewport = (
@@ -90,6 +93,39 @@ pub fn lower(composed: Composed, ctx: &mut Lowering<'_>) -> Vec<CupertinoElement
                     _ => {
                         debug_assert!(false, "image {id:?} is unknown to the frame or has no crop");
                         tracing::error!(?id, "scene image unknown, item skipped");
+                    }
+                }
+            }
+            Source::Material(pass) => {
+                let recipe = recipes
+                    .get(pass.recipe.0.slot as usize)
+                    .filter(|_| pass.recipe.0.generation == frame.id.0);
+                match (recipe, ctx.material.clone()) {
+                    (Some(recipe), Some(shared)) => {
+                        elements.push(
+                            MaterialElement::new(
+                                key,
+                                pass.stage,
+                                ctx.cache,
+                                logical_rect(pass.rect),
+                                recipe.clone(),
+                                shared,
+                                pass.radius,
+                                !pass.style.is_circular(),
+                                item.opacity as f32,
+                                pass.tint,
+                                viewport,
+                                ctx.scale,
+                            )
+                            .into(),
+                        );
+                    }
+                    _ => {
+                        debug_assert!(
+                            false,
+                            "material recipe unknown or material pass unavailable"
+                        );
+                        tracing::error!(recipe = ?pass.recipe, "scene material unavailable, item skipped");
                     }
                 }
             }

@@ -75,6 +75,9 @@ pub enum Action {
     Logout,
     /// Open the power panel of the login process: Restart, Sleep, Cancel, Shut Down.
     PowerDialog,
+    /// Give the keys and the pointer back to the system while an application holds them (see `is_reserved` in the
+    /// server): the one chord an application cannot take away.
+    ReleaseShortcuts,
     /// Step to the previously used input source (HUD while the modifiers are held).
     InputSourcePrevious,
     /// Step to the next input source in menu order.
@@ -163,6 +166,7 @@ impl Action {
             Action::PowerKey => "power-key".into(),
             Action::Logout => "logout".into(),
             Action::PowerDialog => "power-dialog".into(),
+            Action::ReleaseShortcuts => "release-shortcuts".into(),
             Action::InputSourcePrevious => "input-source-previous".into(),
             Action::InputSourceNext => "input-source-next".into(),
             Action::Screenshot(r) => r.name().into(),
@@ -274,6 +278,7 @@ impl FromStr for Action {
             "power-key" => Action::PowerKey,
             "logout" => Action::Logout,
             "power-dialog" => Action::PowerDialog,
+            "release-shortcuts" => Action::ReleaseShortcuts,
             "input-source-previous" => Action::InputSourcePrevious,
             "input-source-next" => Action::InputSourceNext,
             other => match ScreenshotRequest::ALL
@@ -604,6 +609,41 @@ impl ShortcutMap {
         report
     }
 
+    /// The chord that releases the keys and the pointer an application holds, when no other is bound.
+    pub fn release_chord() -> KeyCombo {
+        KeyCombo::new(
+            Modifiers {
+                super_key: true,
+                ..Modifiers::NONE
+            },
+            keysym::ESCAPE,
+        )
+    }
+
+    /// Keep a way to get the keys back: some chord must be bound to [`Action::ReleaseShortcuts`], and every such chord
+    /// holds Ctrl, Alt or Super (a bare key would be taken from the application that is meant to get it). A binding
+    /// without one is dropped; when no chord is left, [`ShortcutMap::release_chord`] is bound, replacing whatever the
+    /// file bound it to or freeing it from a `none`. Returns that chord when it had to be restored.
+    pub fn keep_release_chord(&mut self) -> Option<KeyCombo> {
+        let weak: Vec<KeyCombo> = self
+            .bindings()
+            .filter(|(c, a)| {
+                **a == Action::ReleaseShortcuts
+                    && !(c.modifiers.ctrl || c.modifiers.alt || c.modifiers.super_key)
+            })
+            .map(|(c, _)| *c)
+            .collect();
+        for chord in weak {
+            self.unbind(chord);
+        }
+        if self.combo_for(&Action::ReleaseShortcuts).is_some() {
+            return None;
+        }
+        let chord = Self::release_chord();
+        self.bind(chord, Action::ReleaseShortcuts);
+        Some(chord)
+    }
+
     /// The default map of the profile named `profile` (`cupertino` for a name no profile has).
     pub fn defaults_for(profile: &str) -> Self {
         match profile {
@@ -653,6 +693,7 @@ XF86PowerOff = power-key
 Ctrl+XF86PowerOff = power-dialog
 Ctrl+XF86Eject = power-dialog
 Ctrl+Alt+Delete = power-dialog
+Super+Escape = release-shortcuts
 Print = screenshot-toolbar
 Shift+Print = screenshot
 Super+Shift+s = screenshot-area
@@ -713,6 +754,7 @@ Super+Shift+q = logout
 XF86PowerOff = power-key
 Ctrl+XF86PowerOff = power-dialog
 Ctrl+XF86Eject = power-dialog
+Super+Escape = release-shortcuts
 Super+Shift+3 = screenshot
 Super+Shift+4 = screenshot-area
 Super+Shift+5 = screenshot-toolbar
@@ -1286,5 +1328,58 @@ mod tests {
         assert!(report.retargeted.is_empty(), "a section names its profile");
         let report = ShortcutMap::new().apply_config_for("Super = lock\n", "classic-pc");
         assert_eq!(report.retargeted, [(1, "Super = lock".to_string())]);
+    }
+
+    #[test]
+    fn both_default_tables_release_the_shortcuts_on_super_escape() {
+        for map in [ShortcutMap::defaults(), ShortcutMap::classic_pc_defaults()] {
+            assert_eq!(
+                map.lookup(combo("Super+Escape").modifiers, combo("Escape").keysym),
+                Some(&Action::ReleaseShortcuts)
+            );
+            assert_eq!(
+                map.combo_for(&Action::ReleaseShortcuts),
+                Some(ShortcutMap::release_chord())
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_cannot_leave_the_shortcuts_without_a_chord_to_release_them() {
+        for (text, restored) in [
+            ("Super+Escape = none\n", true),
+            ("Super+Escape = lock\n", true),
+            ("Escape = release-shortcuts\nSuper+Escape = none\n", true),
+            (
+                "Shift+Escape = release-shortcuts\nSuper+Escape = none\n",
+                true,
+            ),
+            (
+                "Ctrl+Alt+r = release-shortcuts\nSuper+Escape = none\n",
+                false,
+            ),
+            ("Super+x = none\n", false),
+        ] {
+            let mut map = ShortcutMap::defaults();
+            map.apply_config(text);
+            assert_eq!(map.keep_release_chord().is_some(), restored, "{text:?}");
+            let chord = map.combo_for(&Action::ReleaseShortcuts).expect(text);
+            assert!(
+                chord.modifiers.ctrl || chord.modifiers.alt || chord.modifiers.super_key,
+                "{text:?}: {chord}"
+            );
+            assert_eq!(
+                map.lookup(chord.modifiers, chord.keysym),
+                Some(&Action::ReleaseShortcuts)
+            );
+        }
+    }
+
+    #[test]
+    fn a_chord_without_ctrl_alt_or_super_is_dropped_not_kept_beside_the_default() {
+        let mut map = ShortcutMap::defaults();
+        map.apply_config("Escape = release-shortcuts\n");
+        assert_eq!(map.keep_release_chord(), None);
+        assert_eq!(map.lookup(Modifiers::NONE, combo("Escape").keysym), None);
     }
 }

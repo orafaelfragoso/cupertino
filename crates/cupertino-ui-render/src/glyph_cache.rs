@@ -53,8 +53,6 @@ impl GlyphCache {
         Ok(glyph)
     }
 
-    /// Drops the least recently used glyphs until the cache fits its budget. Called between frames, so no glyph of the
-    /// frame being painted is dropped.
     pub(crate) fn take_filled(&mut self) -> Tally {
         std::mem::take(&mut self.filled)
     }
@@ -66,6 +64,8 @@ impl GlyphCache {
         }
     }
 
+    /// Drops the least recently used glyphs until the cache fits its budget. Called between frames, so no glyph of the
+    /// frame being painted is dropped.
     pub(crate) fn trim(&mut self) {
         if self.bytes <= self.budget {
             return;

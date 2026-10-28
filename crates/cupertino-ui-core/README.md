@@ -39,10 +39,9 @@ all on one thread.
   compositor is ready: before the first configure nothing is drawn, the first frame acknowledges it, and later frames
   wait for the frame callback. A node repaints only when it, its size, its focus or the window's active state changed;
   damage is where changed nodes were and are, and a frame with no damage sends no buffer. A window that cannot be
-  laid out, rendered or presented goes to `on_window_error` and later draws whole; other windows go on, and only a
-  lost connection ends `step`. When the size, the scale or the window system failed it (a configure larger than the
-  renderer's pixel limit, say), the window waits for its next configure; when its content failed, it tries again on
-  its next change.
+  laid out, rendered or presented goes to `on_window_error` and tries again, whole, on its next change or configure,
+  whatever the cause: the renderer reports a target and content too large to draw with the same error. Other windows
+  go on, and only a lost connection ends `step`.
 - **Scrolling.** A scroll container's offset is model state, counted from the start edge; core moves the content
   by it when placing nodes, so painting and hit-testing agree. In right-to-left layout, where layout mirrors the
   content, a horizontal offset moves the content right.

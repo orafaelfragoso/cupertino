@@ -646,7 +646,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     }
 
     /// Lays out, rebuilds semantics and focus, and paints and presents every window that is due. A window that fails
-    /// is reported and waits for its next configure; only a lost connection ends the application.
+    /// is reported and tries again whole on its next change or configure, whatever failed it: the renderer gives the same
+    /// error for a target and for content too large to draw. Only a lost connection ends the application.
     fn frame(&mut self) -> Result<(), UiError> {
         let relayout = self.tree.take_layout_dirty();
         let paint_dirty = self.tree.take_paint_dirty();
@@ -659,8 +660,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                 }
                 Err(error) => {
                     let w = &mut self.windows[i];
-                    w.frame_ready = false;
                     w.invalidate();
+                    w.dirty = false;
                     w.damage.invalidate();
                     if let Some(report) = &mut self.options.on_window_error {
                         report(w.id, &error);
@@ -727,6 +728,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                             focus: w.focus.node(),
                             nodes: changed,
                             removed,
+                            full: false,
                         });
                     }
                 }
@@ -817,6 +819,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     .map(|(&id, node)| (id, node.clone()))
                     .collect(),
                 removed: Vec::new(),
+                full: true,
             });
             w.accessible = true;
         }

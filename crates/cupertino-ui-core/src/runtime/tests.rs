@@ -1,10 +1,12 @@
 use super::*;
-use crate::test_support::{leaf, options, row, FakeAdapter, FakeSystem, Leaf, MAX_PIXELS};
+use crate::test_support::{
+    leaf, options, options_with, row, FakeAdapter, FakeSystem, Leaf, MAX_PIXELS,
+};
 use crate::{Role, Shortcut};
 use cupertino_ui_platform::{
     Configure, DecorationMode, Mods, MouseButton, PointerEvent, WindowStates, WmCapabilities,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// Two buttons; pressing `plus` (or Primary+=) counts up, and a `wait` message starts a task.
@@ -340,18 +342,72 @@ fn an_assistive_technology_that_starts_after_the_app_gets_the_whole_tree_and_the
             focus: None,
             nodes: snapshot.accessibility.clone(),
             removed: Vec::new(),
+            full: true,
         }]
     );
 
     key(&mut rt, window, 0xff09, Mods::NONE);
     let plus = rt.find(window, &Key::from("plus")).unwrap();
+    {
+        let updates = adapter.updates.borrow();
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[1].focus, Some(plus));
+        assert!(!updates[1].full);
+        assert!(
+            updates[1].nodes.len() < snapshot.accessibility.len(),
+            "a diff, not the tree again"
+        );
+    }
+
+    adapter.active.set(false);
+    rt.step(steps()).unwrap();
+    adapter.active.set(true);
+    rt.step(steps()).unwrap();
     let updates = adapter.updates.borrow();
-    assert_eq!(updates.len(), 2);
-    assert_eq!(updates[1].focus, Some(plus));
+    assert_eq!(updates.len(), 3);
     assert!(
-        updates[1].nodes.len() < snapshot.accessibility.len(),
-        "a diff, not the tree again"
+        updates[2].full,
+        "an adapter back from inactive replaces its tree"
     );
+    assert_eq!(updates[2].nodes, rt.snapshot(window).unwrap().accessibility);
+}
+
+#[test]
+fn a_window_whose_content_was_too_large_to_draw_draws_again_on_its_next_change_without_a_configure()
+{
+    let damage = Rc::default();
+    let broken = Rc::new(Cell::new(false));
+    let errors = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&errors);
+    let mut options = options_with(&damage, &broken);
+    options.on_window_error = Some(Box::new(move |w, e| seen.borrow_mut().push((w, e.clone()))));
+    let mut rt = Rt::new(FakeSystem::default(), options);
+    rt.step(steps()).unwrap();
+    let window = rt.windows()[0].1;
+    configure(&mut rt, window, 1);
+    rt.window_system_mut()
+        .send(window, WindowEvent::Frame(Timestamp(1)));
+    rt.step(steps()).unwrap();
+
+    broken.set(true);
+    key(&mut rt, window, 0xff09, Mods::NONE);
+    assert_eq!(
+        *errors.borrow(),
+        [(
+            window,
+            UiError::Render(cupertino_ui_render::RenderError::ResourceLimit)
+        )]
+    );
+    assert_eq!(
+        rt.step(steps()).unwrap(),
+        StepStatus::Idle,
+        "no retry until something changes"
+    );
+
+    broken.set(false);
+    key(&mut rt, window, 0xff09, Mods::NONE);
+    assert_eq!(rt.window_system().presented.len(), 2);
+    assert_eq!(damage.borrow().last(), Some(&DamageRegion::Full));
 }
 
 #[test]
@@ -376,12 +432,12 @@ fn a_window_the_renderer_cannot_draw_is_reported_and_draws_again_after_a_drawabl
     );
     assert_eq!(
         rt.step(steps()).unwrap(),
-        StepStatus::Waiting(Pending {
-            frames: 1,
-            ..Pending::default()
-        }),
-        "no retry until the compositor configures again"
+        StepStatus::Idle,
+        "no retry until something changes"
     );
+    key(&mut rt, window, 0xff09, Mods::NONE);
+    assert_eq!(errors.borrow().len(), 2, "a change tries again");
+    assert!(!rt.exited());
 
     configure(&mut rt, window, 3);
     assert_eq!(
@@ -392,7 +448,7 @@ fn a_window_the_renderer_cannot_draw_is_reported_and_draws_again_after_a_drawabl
         ]
     );
     assert_eq!(damage.borrow().last(), Some(&DamageRegion::Full));
-    assert_eq!(errors.borrow().len(), 1);
+    assert_eq!(errors.borrow().len(), 2);
 }
 
 #[test]

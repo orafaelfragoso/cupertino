@@ -1,0 +1,13 @@
+[package]
+name = "cupertino-scene"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Renderer-neutral per-output scene commands and desktop drawing order"
+
+[package.metadata.cupertino]
+layer = "models"
+
+[dependencies]
+cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-effects = { path = "../cupertino-effects" }

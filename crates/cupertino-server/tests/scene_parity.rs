@@ -2,29 +2,42 @@
 //! element variants in the same order, with the same kind, geometry, source rectangle, opacity and commit
 //! progression, and a consistent correspondence between element identities. Pixels are the goldens' business; this
 //! catches what a settled headless frame cannot, such as a live surface becoming a texture. The comparison runs
-//! inside the compositor (`legacy_scene::assert_parity`), so every other test under the feature checks it too.
-#![cfg(feature = "scene-oracle")]
+//! inside the compositor (`legacy_scene::assert_parity`), so every other test of a build with that cfg checks it too. Mesh, minimize and closing-ghost parity arrive with
+//! `wp03-scene-effects`: until then those frames are built by the renderer and are not migrated.
+#![cfg(scene_oracle)]
 
 mod common;
 
 use common::desktop::Desktop;
+use common::overlays;
 use cupertino_server::backend::{headless, Backend};
 use cupertino_server::render::legacy_scene;
 use cupertino_server::render::screenshot::render_to_image;
 use smithay::backend::input::KeyState;
 
-/// Every frame's elements are compared inside the compositor while the `scene-oracle` feature is on. `compare`
+/// Every frame's elements are compared inside the compositor when built with `--cfg scene_oracle`. `compare`
 /// also draws the frame by both builders and requires identical pixels; it returns how many elements there are.
 fn compare(d: &mut Desktop, what: &str) -> usize {
+    compare_on(d, what, 0)
+}
+
+fn compare_on(d: &mut Desktop, what: &str, output: usize) -> usize {
     let mut backend = d.state.backend.take().unwrap();
     let Backend::Headless(ref mut h) = backend else {
         panic!("headless backend required")
     };
-    let migrated = d.state.build_output_elements(&mut h.renderer, 0);
+    let migrated = d.state.build_output_elements(&mut h.renderer, output);
     let legacy = legacy_scene::take_recorded();
-    let size = d.state.outputs[0].output.current_mode().unwrap().size;
+    let size = d.state.outputs[output].output.current_mode().unwrap().size;
     let draw = |renderer: &mut _, elements: &[_]| {
-        render_to_image(renderer, elements, size, d.scale, headless::CLEAR).unwrap()
+        render_to_image(
+            renderer,
+            elements,
+            size,
+            d.state.outputs[output].scale,
+            headless::CLEAR,
+        )
+        .unwrap()
     };
     let (old, new) = (
         draw(&mut h.renderer, &legacy),
@@ -166,5 +179,107 @@ fn the_activation_fade_matches_over_the_desktop_and_over_a_lock() {
     for ms in [3000u32, 3100, 3300] {
         d.at(ms);
         compare(&mut d, &format!("fade over the lock at {ms} ms"));
+    }
+}
+
+fn wait_until(d: &mut Desktop, what: &str, mut ready: impl FnMut(&Desktop) -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !ready(d) {
+        d.pump();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
+    }
+}
+
+#[test]
+fn a_popup_over_a_window_matches_at_integer_and_fractional_scale() {
+    for scale in [1.0, 1.5] {
+        let mut d = Desktop::new(scale);
+        let _client = overlays::popup_window(d.socket());
+        wait_until(&mut d, "the popup", |d| {
+            d.state.wm.key_window().is_some_and(|id| {
+                d.state.entry(id).is_some_and(|e| {
+                    smithay::desktop::PopupManager::popups_for_surface(e.surface()).count() > 0
+                })
+            })
+        });
+        for ms in [1000u32, 1100, 3000] {
+            d.at(ms);
+            // cursor, popup, window and wallpaper at least
+            assert!(compare(&mut d, &format!("popup at {ms} ms")) >= 4);
+        }
+    }
+}
+
+#[test]
+fn a_layer_surface_matches_at_integer_and_fractional_scale() {
+    for scale in [1.0, 1.5] {
+        let mut d = Desktop::new(scale);
+        let _client = overlays::layer_surface(d.socket(), (200, 100), 30);
+        wait_until(&mut d, "the layer surface", |d| {
+            let map = smithay::desktop::layer_map_for_output(&d.state.outputs[0].output);
+            let shown = map.layers().any(|l| !l.bbox_with_popups().is_empty());
+            shown
+        });
+        for ms in [1000u32, 1100] {
+            d.at(ms);
+            compare(&mut d, &format!("layer surface at {ms} ms"));
+        }
+    }
+}
+
+#[test]
+fn a_drag_icon_matches_at_integer_and_fractional_scale() {
+    for scale in [1.0, 1.5] {
+        let mut d = Desktop::new(scale);
+        let _client = overlays::layer_surface(d.socket(), (64, 64), 0);
+        wait_until(&mut d, "the icon surface", |d| {
+            let map = smithay::desktop::layer_map_for_output(&d.state.outputs[0].output);
+            let shown = map.layers().any(|l| !l.bbox_with_popups().is_empty());
+            shown
+        });
+        let icon = {
+            let map = smithay::desktop::layer_map_for_output(&d.state.outputs[0].output);
+            let surface = map.layers().next().unwrap().wl_surface().clone();
+            surface
+        };
+        d.state.drag_icon = Some((icon, (4, 6).into()));
+        d.state.pointer_moved_to((300.5, 200.25).into(), 1000, None);
+        for ms in [1000u32, 1100] {
+            d.at(ms);
+            compare(&mut d, &format!("drag icon at {ms} ms"));
+        }
+    }
+}
+
+#[test]
+fn two_outputs_match_with_the_second_off_the_device_pixel_grid() {
+    let display = |name: &str, size| headless::HeadlessDisplay {
+        name: name.into(),
+        size,
+        physical_mm: (0, 0),
+    };
+    let mut d = Desktop::with_displays(
+        &[
+            display("headless-1", (1001, 700)),
+            display("headless-2", (800, 600)),
+        ],
+        1.5,
+    );
+    assert_eq!(d.state.outputs.len(), 2);
+    let origin = d.state.outputs[1].rect.x;
+    assert!(
+        (origin * 1.5).fract() != 0.0,
+        "the second output starts at {origin} points, on whole device pixels"
+    );
+    d.window();
+    d.state
+        .pointer_moved_to((origin + 100.0, 100.0).into(), 1000, None);
+    for ms in [1000u32, 1100, 3000] {
+        d.at(ms);
+        compare_on(&mut d, &format!("first output at {ms} ms"), 0);
+        compare_on(&mut d, &format!("second output at {ms} ms"), 1);
     }
 }

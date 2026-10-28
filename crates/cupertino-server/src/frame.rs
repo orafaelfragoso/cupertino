@@ -162,7 +162,7 @@ impl Cupertino {
     }
 
     /// The element list (front to back) of output `idx`, the pointer left out with `paint_cursor` false;
-    /// `None` while the render resources are not loaded. With the `scene-oracle` feature every list is
+    /// `None` while the render resources are not loaded. With `--cfg scene_oracle` every list is
     /// compared with the one the previous builder gives.
     pub fn scene_elements(
         &mut self,
@@ -176,9 +176,9 @@ impl Cupertino {
             }
             build_scene(r, p)
         };
-        #[cfg(not(feature = "scene-oracle"))]
+        #[cfg(not(scene_oracle))]
         let elements = self.with_scene(renderer, idx, build)?;
-        #[cfg(feature = "scene-oracle")]
+        #[cfg(scene_oracle)]
         let elements = {
             use crate::render::legacy_scene;
             // both builders see the same instant and the same cursor frame

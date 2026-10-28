@@ -30,7 +30,7 @@ use cupertino_keyboard::accent::{
 use cupertino_keyboard::switcher::{self, Step};
 use cupertino_modifiers::Mods as KMods;
 use smithay::backend::input::KeyState;
-#[cfg(feature = "scene-oracle")]
+#[cfg(scene_oracle)]
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::input::keyboard::{keysyms, Keycode, Layout, XkbConfig};
 use smithay::utils::{Logical, Rectangle};
@@ -40,14 +40,14 @@ use crate::input::{Action, KeyBindings, Mods};
 use crate::kbd::{hud_size, AccentSettings, CapsStep, HudView};
 use crate::overlays::OverlayKey;
 use crate::render::image::debug_sig;
-#[cfg(feature = "scene-oracle")]
+#[cfg(scene_oracle)]
 use crate::render::image::image_element;
 use cupertino_scene::SceneKind;
 
 use crate::render::compose::{image_piece, Piece};
 use crate::render::scene::{material_layer, rrect_item, shadow_item, SceneParams, WindowPlan};
 use crate::render::shader_rect::ElementKey;
-#[cfg(feature = "scene-oracle")]
+#[cfg(scene_oracle)]
 use crate::render::CupertinoElement;
 use crate::state::Cupertino;
 
@@ -1141,7 +1141,7 @@ pub fn accent_popup(p: &mut SceneParams<'_>) -> Vec<Piece> {
     els
 }
 
-#[cfg(feature = "scene-oracle")]
+#[cfg(scene_oracle)]
 /// The input-source HUD (centre of the primary output while it is open or fading).
 pub fn input_hud_legacy(
     renderer: &mut GlesRenderer,
@@ -1233,7 +1233,7 @@ pub fn input_hud_legacy(
     els
 }
 
-#[cfg(feature = "scene-oracle")]
+#[cfg(scene_oracle)]
 /// The accent popup next to its anchor.
 pub fn accent_popup_legacy(
     renderer: &mut GlesRenderer,

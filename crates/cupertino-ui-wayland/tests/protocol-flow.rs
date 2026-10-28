@@ -72,6 +72,10 @@ enum Control {
     PointerPress,
     /// Another client's text becomes the selection: offer it to the client's data device.
     OfferSelection(String),
+    /// Keep every buffer the next commits replace.
+    HoldBuffers,
+    /// Release the held buffers and release replaced ones again.
+    ReleaseBuffers,
 }
 
 /// A request the server saw that the commit record does not cover.
@@ -118,6 +122,8 @@ struct Mock {
     pointer: Option<WlPointer>,
     pending_frames: Vec<WlCallback>,
     shown: Option<WlBuffer>,
+    /// Replaced buffers kept unreleased, while holding.
+    held: Option<Vec<WlBuffer>>,
     toplevel: Option<ToplevelState>,
     data_device: Option<WlDataDevice>,
     /// The read end of a paste from the client's selection, and what arrived so far.
@@ -229,7 +235,10 @@ impl Dispatch<WlSurface, SurfaceData> for Mock {
                         .unwrap();
                     // like a compositor that keeps the current buffer until the next one replaces it
                     if let Some(previous) = state.shown.replace(buffer) {
-                        previous.release();
+                        match &mut state.held {
+                            Some(held) => held.push(previous),
+                            None => previous.release(),
+                        }
                     }
                     state.pending_frames.append(&mut s.frames);
                 }
@@ -486,6 +495,7 @@ fn spawn_server(stream: UnixStream) -> (Sender<Control>, Receiver<Committed>, Re
             pointer: None,
             pending_frames: Vec::new(),
             shown: None,
+            held: None,
             toplevel: None,
             data_device: None,
             pasting: None,
@@ -497,6 +507,13 @@ fn spawn_server(stream: UnixStream) -> (Sender<Control>, Receiver<Committed>, Re
         loop {
             match control_rx.try_recv() {
                 Ok(Control::FrameDone) => mock.pending_frames.drain(..).for_each(|cb| cb.done(0)),
+                Ok(Control::HoldBuffers) => mock.held = Some(Vec::new()),
+                Ok(Control::ReleaseBuffers) => mock
+                    .held
+                    .take()
+                    .into_iter()
+                    .flatten()
+                    .for_each(|b| b.release()),
                 Ok(Control::PointerPress) => {
                     let (pointer, t) = (
                         mock.pointer.as_ref().unwrap(),
@@ -1006,10 +1023,44 @@ mod window_system {
                 .unwrap();
             self.stash.extend(events);
         }
+
+        /// Whether the stashed events hold a frame for the window; empties the stash.
+        fn took_frame(&mut self) -> bool {
+            std::mem::take(&mut self.stash).iter().any(|e| {
+                matches!(
+                    e,
+                    PlatformEvent::Window {
+                        event: WindowEvent::Frame(_),
+                        ..
+                    }
+                )
+            })
+        }
     }
 
     /// A window mapped at the output's scale 2, so its frames are 200 × 100.
     fn mapped() -> (Kit, Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
+        let (mut kit, control, committed, seen) = created();
+        let configure = kit.window_event(|e| match e {
+            WindowEvent::Configure(c) => Some(*c),
+            _ => None,
+        });
+        assert_eq!(
+            (configure.size, configure.server_decorations),
+            (None, false)
+        );
+        assert_eq!(
+            kit.window_event(|e| match e {
+                WindowEvent::Scale(s) => Some(*s),
+                _ => None,
+            }),
+            2.0
+        );
+        (kit, control, committed, seen)
+    }
+
+    /// A window created but not yet configured.
+    fn created() -> (Kit, Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
         let (control, committed, seen) = spawn_server(server_stream);
         let mut ws = WaylandWindowSystem::new(
@@ -1026,26 +1077,11 @@ mod window_system {
                 decorations: DecorationMode::Client,
             })
             .unwrap();
-        let mut kit = Kit {
+        let kit = Kit {
             ws,
             window,
             stash: VecDeque::new(),
         };
-        let configure = kit.window_event(|e| match e {
-            WindowEvent::Configure(c) => Some(*c),
-            _ => None,
-        });
-        assert_eq!(
-            (configure.size, configure.server_decorations),
-            (None, false)
-        );
-        assert_eq!(
-            kit.window_event(|e| match e {
-                WindowEvent::Scale(s) => Some(*s),
-                _ => None,
-            }),
-            2.0
-        );
         (kit, control, committed, seen)
     }
 
@@ -1156,6 +1192,81 @@ mod window_system {
         assert_eq!(reused.buffer, shown.buffer);
         assert_eq!(reused.damage, vec![[40, 30, 5, 5], [10, 10, 2, 2]]);
         assert_eq!(reused.first_pixel, [1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn a_frame_presented_before_the_first_configure_is_due_again_with_the_configure() {
+        let (mut kit, _control, committed, _seen) = created();
+        let w = kit.window;
+        assert_eq!(
+            kit.ws.present(w, &frame(1, [0; 4], &[]), None).unwrap(),
+            PresentOutcome::NotReady
+        );
+        kit.ws.request_frame(w);
+        let configured_first = kit.window_event(|e| match e {
+            WindowEvent::Configure(_) => Some(true),
+            WindowEvent::Frame(_) => Some(false),
+            _ => None,
+        });
+        assert!(configured_first);
+        let (mut framed, mut scaled) = (false, false);
+        while !(framed && scaled) {
+            let is_frame = kit.window_event(|e| match e {
+                WindowEvent::Frame(_) => Some(true),
+                WindowEvent::Scale(_) => Some(false),
+                _ => None,
+            });
+            framed |= is_frame;
+            scaled |= !is_frame;
+        }
+        assert_eq!(
+            kit.ws.present(w, &frame(2, [0; 4], &[]), None).unwrap(),
+            PresentOutcome::Presented
+        );
+        kit.pump();
+        committed.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn a_frame_with_no_free_buffer_is_due_again_once_the_compositor_releases_one() {
+        let (mut kit, control, committed, _seen) = mapped();
+        let w = kit.window;
+        control.send(Control::HoldBuffers).unwrap();
+        let mut presented = 0;
+        while kit
+            .ws
+            .present(w, &frame(presented, [0; 4], &[]), None)
+            .unwrap()
+            == PresentOutcome::Presented
+        {
+            presented += 1;
+            assert!(presented < 8, "the transport never ran out of buffers");
+        }
+        // the frame callbacks are done, so only the held buffers keep the next frame back
+        kit.pump();
+        for _ in 0..presented {
+            committed.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        control.send(Control::FrameDone).unwrap();
+        kit.pump();
+        kit.pump();
+        assert_eq!(
+            kit.ws.present(w, &frame(8, [0; 4], &[]), None).unwrap(),
+            PresentOutcome::NotReady
+        );
+        kit.stash.clear();
+
+        kit.ws.request_frame(w);
+        kit.pump();
+        kit.pump();
+        assert!(!kit.took_frame());
+
+        control.send(Control::ReleaseBuffers).unwrap();
+        kit.window_event(|e| matches!(e, WindowEvent::Frame(_)).then_some(()));
+        assert_eq!(
+            kit.ws.present(w, &frame(9, [0; 4], &[]), None).unwrap(),
+            PresentOutcome::Presented
+        );
     }
 
     #[test]

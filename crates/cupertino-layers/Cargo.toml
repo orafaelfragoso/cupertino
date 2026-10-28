@@ -17,3 +17,5 @@ path = "src/bin/cupertino-layers.rs"
 
 [dependencies]
 serde_json = "1"
+sha2 = "0.10"
+spdx = "0.13.6"

@@ -1,0 +1,13 @@
+[package]
+name = "cupertino-ui-menus"
+version = "0.1.0"
+edition.workspace = true
+license = "MPL-2.0"
+description = "Publishes a CupertinoKit application's menus to the desktop menu bar as org.gtk.Menus and org.gtk.Actions on the session bus"
+
+[package.metadata.cupertino]
+layer = "render"
+
+[dependencies]
+cupertino-menu-model = { path = "../cupertino-menu-model" }
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }

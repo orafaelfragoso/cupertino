@@ -1002,6 +1002,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-menu-model"
+version = "0.1.0"
+
+[[package]]
 name = "cupertino-menubar"
 version = "0.1.0"
 dependencies = [
@@ -1013,10 +1017,12 @@ dependencies = [
  "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-icons",
+ "cupertino-menu-model",
  "cupertino-peer",
  "cupertino-protocol-app",
  "cupertino-shell-client",
  "cupertino-theme",
+ "cupertino-ui-menus",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "futures-util",
@@ -1338,6 +1344,14 @@ dependencies = [
 [[package]]
 name = "cupertino-typeahead"
 version = "0.1.0"
+
+[[package]]
+name = "cupertino-ui-menus"
+version = "0.1.0"
+dependencies = [
+ "cupertino-menu-model",
+ "zbus",
+]
 
 [[package]]
 name = "cupertino-ui-wayland"

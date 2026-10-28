@@ -24,6 +24,7 @@ use smithay::reexports::wayland_server::{
 use smithay::utils::{Logical, Point, Rectangle};
 use smithay::wayland::compositor::{with_states, Cacheable};
 
+use crate::menu_bar::AppMenuData;
 use crate::state::{ClientState, Cupertino};
 
 /// Registers the `cupertino_app_effects_v1` global.
@@ -34,7 +35,7 @@ pub struct AppEffectsV1Global {
 impl AppEffectsV1Global {
     pub fn new(dh: &DisplayHandle) -> Self {
         Self {
-            _global: dh.create_global::<Cupertino, CupertinoAppEffectsV1, ()>(1, ()),
+            _global: dh.create_global::<Cupertino, CupertinoAppEffectsV1, ()>(2, ()),
         }
     }
 }
@@ -281,6 +282,33 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Cupertino {
             }
             cupertino_app_effects_v1::Request::GetAppearance { id } => {
                 state.create_appearance_observer(id, init)
+            }
+            cupertino_app_effects_v1::Request::GetMenu { id, surface } => {
+                let refusal = if !owned_by(&surface, client) {
+                    Some((
+                        EffectsError::InvalidSurface,
+                        "the surface belongs to another client",
+                    ))
+                } else if state.menu_bars.has_app_menu(&surface) {
+                    Some((
+                        EffectsError::MenuExists,
+                        "the surface already has a menu object",
+                    ))
+                } else {
+                    None
+                };
+                if let Some((error, message)) = refusal {
+                    init.init(id, AppMenuData { surface: None });
+                    effects.post_error(error, message);
+                    return;
+                }
+                let menu = init.init(
+                    id,
+                    AppMenuData {
+                        surface: Some(surface.clone()),
+                    },
+                );
+                state.menu_bars.add_app_menu(menu, surface);
             }
             // `Destroy` needs nothing: objects created through the global stay valid
             _ => {}

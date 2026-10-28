@@ -750,6 +750,7 @@ impl Cupertino {
         let now = self.now();
         self.menu_bars.remove_output(id, now);
         self.refresh_gtk_capabilities();
+        self.refresh_app_menus();
         self.docks.remove_output(id);
         self.window_managers.remove_output(id);
         if let Some(g) = entry.global {

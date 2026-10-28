@@ -6,21 +6,23 @@
 
   <description summary="effects any client may ask the server to draw for its own windows">
     Public protocol: the material backdrops and the title bar style of a client's own surfaces,
-    and the appearance of the session. A request names surfaces of the client that sends it; the
-    server never lets a client change the look of another client's surface. Nothing here gives
-    control over other clients, the windows' arrangement or the session; those roles are in the
-    private cupertino_shell_v1.
+    the appearance of the session and the address of the menus its windows export. A request
+    names surfaces of the client that sends it; the server never lets a client change the look of
+    another client's surface. Nothing here gives control over other clients, the windows'
+    arrangement or the session; those roles are in the private cupertino_shell_v1.
   </description>
 
-  <interface name="cupertino_app_effects_v1" version="1">
+  <interface name="cupertino_app_effects_v1" version="2">
     <description summary="effects for the client's own surfaces">
-      Global singleton, offered to every client.
+      Global singleton, offered to every client. Version 2 adds get_menu; the other interfaces of
+      the protocol are unchanged in version 2.
     </description>
 
     <enum name="error">
       <entry name="invalid_surface" value="0" summary="the surface belongs to another client or is gone"/>
       <entry name="window" value="1" summary="the surface is not an application window, or the window is already mapped"/>
       <entry name="too_many_backdrops" value="2" summary="the surface or the client holds as many backdrops as the server allows"/>
+      <entry name="menu_exists" value="3" summary="the surface already has a menu announcement" since="2"/>
     </enum>
 
     <enum name="titlebar_style">
@@ -77,9 +79,20 @@
       </description>
       <arg name="id" type="new_id" interface="cupertino_appearance_v1"/>
     </request>
+
+    <request name="get_menu" since="2">
+      <description summary="announce the menus of an application window">
+        Creates the object through which the client announces where the menus of the window of
+        the surface are exported on the session bus, and learns whether the desktop's menu bar
+        shows them. Posts invalid_surface when the surface belongs to another client, and
+        menu_exists when the surface already has a cupertino_app_menu_v1 that is not destroyed.
+      </description>
+      <arg name="id" type="new_id" interface="cupertino_app_menu_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
   </interface>
 
-  <interface name="cupertino_backdrop_v1" version="1">
+  <interface name="cupertino_backdrop_v1" version="2">
     <description summary="a material region below a surface">
       All state is double-buffered: it applies on the next wl_surface.commit of the surface the
       backdrop was created for, together with that commit's buffer, so the backdrop and the content
@@ -126,7 +139,7 @@
     </request>
   </interface>
 
-  <interface name="cupertino_appearance_v1" version="1">
+  <interface name="cupertino_appearance_v1" version="2">
     <description summary="appearance and display options of the session">
       Right after the object is created the server sends appearance, then display_options. Later
       events say what changed; an event is complete by itself and is not part of a group.
@@ -161,6 +174,49 @@
         are reserved and stay 0.
       </description>
       <arg name="options" type="uint" enum="display_option"/>
+    </event>
+  </interface>
+
+  <interface name="cupertino_app_menu_v1" version="2">
+    <description summary="the menus of an application window">
+      The window's menus are exported on the session bus as org.gtk.Menus objects and their actions
+      as org.gtk.Actions objects. The server hands the address to the desktop's menu bar while the
+      window is active; it reads nothing on the bus itself. Right after the object is created the
+      server sends menu_bar, and again whenever its value changes.
+    </description>
+
+    <enum name="error">
+      <entry name="invalid_address" value="0" summary="a bus name or object path is malformed or too long"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="withdraw the announcement">
+        The menu bar stops showing the window's exported menus.
+      </description>
+    </request>
+
+    <request name="set_address">
+      <description summary="where the window's menus are exported">
+        bus_name is the unique name (":1.42") of the client's connection that serves the objects.
+        application_object_path serves the app actions, window_object_path the win actions,
+        menubar_object_path the window's menus, and app_menu_object_path the application menu, or
+        is empty when the client exports none. A later request replaces the address. Posts
+        invalid_address when bus_name is not a unique bus name, a path is not an object path, or a
+        path is longer than 512 bytes.
+      </description>
+      <arg name="bus_name" type="string"/>
+      <arg name="application_object_path" type="string"/>
+      <arg name="window_object_path" type="string"/>
+      <arg name="menubar_object_path" type="string"/>
+      <arg name="app_menu_object_path" type="string"/>
+    </request>
+
+    <event name="menu_bar">
+      <description summary="whether the desktop's menu bar shows the window's menus">
+        1 while a menu bar runs and shows the menus the client announces; the client then draws
+        no menu bar inside the window. 0 while none runs; the client shows its menus itself.
+      </description>
+      <arg name="shown" type="uint"/>
     </event>
   </interface>
 </protocol>

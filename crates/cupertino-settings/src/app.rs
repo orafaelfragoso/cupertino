@@ -527,7 +527,7 @@ impl App {
                     self.palette = palette(&self.theme, self.session_dark, options)?;
                     self.redraw();
                 }
-                Some(AppEvent::ScrollCount { .. }) | None => {}
+                Some(AppEvent::ScrollCount { .. } | AppEvent::MenuBar { .. }) | None => {}
             },
             // the server dismissed the popup (a click outside it): the field keeps its text
             Event::PopupDone(popup) => {

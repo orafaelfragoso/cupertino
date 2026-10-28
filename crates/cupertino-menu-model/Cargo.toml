@@ -1,0 +1,9 @@
+[package]
+name = "cupertino-menu-model"
+version = "0.1.0"
+edition.workspace = true
+license = "MPL-2.0"
+description = "Typed application menus shared by CupertinoKit and the menu bar: logical chords and their accelerator text, command roles and action names, the menu tree and the standard menus"
+
+[package.metadata.cupertino]
+layer = "foundation"

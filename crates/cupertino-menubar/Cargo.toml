@@ -49,6 +49,8 @@ futures-util = { version = "0.3", default-features = false, features = ["std"], 
 
 [dev-dependencies]
 async-io = "2"
+cupertino-menu-model = { path = "../cupertino-menu-model" }
+cupertino-ui-menus = { path = "../cupertino-ui-menus" }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 tempfile = "3"
 

@@ -4,7 +4,38 @@
 mod common;
 
 use common::desktop::Desktop;
+use cupertino_render_api::Renderer;
 use cupertino_server::backend::Backend;
+use cupertino_server::render::gles::{Gles, GlesResources, GlesTarget, RenderError};
+
+#[test]
+fn gles_refuses_another_frames_resources_without_consuming_them() {
+    let mut d = Desktop::new(1.0);
+    d.window();
+    d.at(3000);
+    let mut backend = d.state.backend.take().unwrap();
+    #[allow(irrefutable_let_patterns)]
+    let Backend::Headless(ref mut h) = backend
+    else {
+        panic!("headless backend required")
+    };
+    let first = d.state.compose_output(&mut h.renderer, 0, true).unwrap();
+    let second = d.state.compose_output(&mut h.renderer, 0, true).unwrap();
+    let (res, cache, _) = d.state.gles_parts(0).unwrap();
+    let mut resources = GlesResources::new(res, cache, first.resources);
+    // Exercise the production entry point; this assertion also runs with debug assertions disabled.
+    let result = Gles.render(
+        &second.frame,
+        &mut resources,
+        GlesTarget::Image {
+            renderer: &mut h.renderer,
+            clear: cupertino_server::backend::headless::CLEAR,
+        },
+    );
+    assert!(matches!(result, Err(RenderError::Resources(_))));
+    // Rejection must leave the original frame usable, before any cache finalization or resource take.
+    assert!(Gles::lower(&mut h.renderer, &first.frame, &mut resources).is_ok());
+}
 
 fn live(d: &Desktop) -> usize {
     d.state

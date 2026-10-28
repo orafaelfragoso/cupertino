@@ -976,7 +976,7 @@ fn window() -> SlotKey {
 /// The bar's Window menu with an exporter's item below its own.
 fn with_window() -> MenuController {
     let mut content = content();
-    let mut menu = fallback::window_menu(1, Some(1), true, &[], &Chords::default());
+    let mut menu = fallback::window_menu(1, Some(1), true, true, &[], &Chords::default());
     menu.children
         .push(MenuItem::new(90, "Split View").exported());
     content.menus.push(menu);
@@ -1053,6 +1053,7 @@ fn a_menu_opened_with_alt_held_shows_the_alternates_and_closed_menus_are_not_red
     content.menus.push(fallback::window_menu(
         1,
         Some(1),
+        true,
         true,
         &[],
         &Chords::default(),

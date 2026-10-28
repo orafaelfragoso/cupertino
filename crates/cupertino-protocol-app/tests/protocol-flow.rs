@@ -15,7 +15,7 @@ use cupertino_app_protocols::server::scroll::cupertino_pointer_scroll_v1::Cupert
 use cupertino_app_protocols::server::scroll::cupertino_scroll_v1::{self, CupertinoScrollV1};
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_geometry::Rect;
-use cupertino_protocol_app::{AppEffects, AppEvent, ScrollCounts};
+use cupertino_protocol_app::{AppEffects, AppEvent, ScrollCounts, WindowControls};
 use cupertino_wayland_client::{
     BufferFormat, Connection, Decorations, Error, Event, PointerEvent, SurfaceId, Toplevel,
     ToplevelConfig, WindowConfigure,
@@ -79,6 +79,8 @@ enum Control {
 enum Seen {
     /// The title bar style of a window, chosen with `set_titlebar_style`.
     TitlebarStyle(cupertino_app_effects_v1::TitlebarStyle),
+    /// The controls a window disabled with `set_disabled_controls`.
+    DisabledControls(cupertino_app_effects_v1::WindowControl),
     /// `xdg_toplevel.set_maximized` (true) or `unset_maximized`.
     Maximize(bool),
     AppId(String),
@@ -437,6 +439,10 @@ impl Dispatch<CupertinoAppEffectsV1, ()> for Mock {
                 .seen
                 .send(Seen::TitlebarStyle(style.into_result().unwrap()))
                 .unwrap(),
+            cupertino_app_effects_v1::Request::SetDisabledControls { disabled, .. } => state
+                .seen
+                .send(Seen::DisabledControls(disabled.into_result().unwrap()))
+                .unwrap(),
             cupertino_app_effects_v1::Request::GetAppearance { id } => {
                 let observer = init.init(id, ());
                 // the session starts dark and with reduce motion
@@ -482,8 +488,12 @@ impl Dispatch<CupertinoBackdropV1, Arc<Mutex<BackdropState>>> for Mock {
     }
 }
 
-/// Run the server on a thread until the test drops the control channel.
-fn spawn_server(stream: UnixStream) -> (Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
+/// Run the server, with the app effects global at `effects_version`, on a thread until the test drops the control
+/// channel.
+fn spawn_server(
+    stream: UnixStream,
+    effects_version: u32,
+) -> (Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
     let (control_tx, control_rx) = channel::<Control>();
     let (committed_tx, committed_rx) = channel();
     let (seen_tx, seen_rx) = channel();
@@ -496,7 +506,7 @@ fn spawn_server(stream: UnixStream) -> (Sender<Control>, Receiver<Committed>, Re
         dh.create_global::<Mock, WlSeat, _>(7, ());
         dh.create_global::<Mock, XdgWmBase, _>(6, ());
         dh.create_global::<Mock, ZxdgDecorationManagerV1, _>(1, ());
-        dh.create_global::<Mock, CupertinoAppEffectsV1, _>(1, ());
+        dh.create_global::<Mock, CupertinoAppEffectsV1, _>(effects_version, ());
         dh.create_global::<Mock, CupertinoScrollV1, _>(1, ());
         let mut mock = Mock {
             committed: committed_tx,
@@ -566,8 +576,20 @@ fn connect() -> (
     Receiver<Committed>,
     Receiver<Seen>,
 ) {
+    connect_at(1)
+}
+
+/// [`connect`] to a server that offers `cupertino_app_effects_v1` at `effects_version`.
+fn connect_at(
+    effects_version: u32,
+) -> (
+    Connection,
+    Sender<Control>,
+    Receiver<Committed>,
+    Receiver<Seen>,
+) {
     let (client_stream, server_stream) = UnixStream::pair().unwrap();
-    let (control, committed, seen) = spawn_server(server_stream);
+    let (control, committed, seen) = spawn_server(server_stream, effects_version);
     (
         Connection::from_stream(client_stream).unwrap(),
         control,
@@ -724,6 +746,41 @@ fn a_unified_toplevel_asks_for_its_title_bar_style_and_moves_and_zooms_itself() 
         conn.start_move(window),
         Err(Error::PermissionDenied(_))
     ));
+}
+
+#[test]
+fn disabled_controls_reach_a_version_4_server_and_are_not_sent_below() {
+    for (version, sent) in [(4, true), (3, false)] {
+        let (mut conn, _control, _committed, seen) = connect_at(version);
+        let effects = AppEffects::bind(&mut conn).unwrap();
+        assert_eq!(effects.can_set_disabled_controls(), sent);
+        let window = window(&mut conn);
+        effects
+            .set_disabled_controls(
+                &conn,
+                window.surface(),
+                WindowControls {
+                    minimize: true,
+                    zoom: false,
+                },
+            )
+            .unwrap();
+        // a request after it, so the server's order shows whether it went out
+        effects.unify_titlebar(&conn, window.surface()).unwrap();
+        conn.roundtrip().unwrap();
+        let unified = Seen::TitlebarStyle(cupertino_app_effects_v1::TitlebarStyle::Unified);
+        let mut requests = Vec::new();
+        while requests.last() != Some(&unified) {
+            requests.push(seen.recv_timeout(Duration::from_secs(5)).unwrap());
+        }
+        assert_eq!(
+            requests.contains(&Seen::DisabledControls(
+                cupertino_app_effects_v1::WindowControl::Minimize
+            )),
+            sent,
+            "version {version}: {requests:?}"
+        );
+    }
 }
 
 #[test]

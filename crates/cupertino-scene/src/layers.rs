@@ -16,7 +16,6 @@ pub enum SceneLayer {
     SnapPreview,
     /// Layer-shell `top` surfaces.
     LayerTop,
-    /// Workspaces bar of the overview.
     /// Notification banners (above windows).
     Banners,
     /// Input-source switcher HUD.
@@ -30,8 +29,11 @@ pub enum SceneLayer {
     DisplayFilter,
     Cursor,
     /// Compositor notices above all desktop content, including fullscreen windows and the cursor.
+    /// Above the display filter, so notices are not inverted or tinted.
     /// Composition must omit this layer from lock-only frames.
     CompositorOverlay,
+    /// Activation fade and power dimming: covers every frame, lock-only frames included.
+    SessionOverlay,
 }
 
 /// Collects elements per layer and flattens them front to back.
@@ -131,6 +133,7 @@ mod tests {
             DisplayFilter,
             Cursor,
             CompositorOverlay,
+            SessionOverlay,
         ];
         for w in order.windows(2) {
             assert!(w[0] < w[1], "{:?} must be below {:?}", w[0], w[1]);
@@ -161,5 +164,14 @@ mod tests {
             s.flatten(),
             vec!["notice", "cursor", "client-overlay", "fullscreen"]
         );
+    }
+
+    #[test]
+    fn session_overlay_covers_compositor_notices_and_the_cursor() {
+        let mut s = LayerStack::new();
+        s.push(SceneLayer::Cursor, "cursor");
+        s.push(SceneLayer::SessionOverlay, "fade");
+        s.push(SceneLayer::CompositorOverlay, "notice");
+        assert_eq!(s.flatten(), vec!["fade", "notice", "cursor"]);
     }
 }

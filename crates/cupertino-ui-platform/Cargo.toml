@@ -1,0 +1,15 @@
+[package]
+name = "cupertino-ui-platform"
+version = "0.1.0"
+edition.workspace = true
+license = "MPL-2.0"
+description = "CupertinoKit's window-system interface: windows and popups, input and input-method events, presentation, cursors and the clipboard, independent of the backend"
+
+[package.metadata.cupertino]
+layer = "render"
+
+[dependencies]
+cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-modifiers = { path = "../cupertino-modifiers" }
+cupertino-ui-render = { path = "../cupertino-ui-render" }
+cupertino-ui-text = { path = "../cupertino-ui-text" }

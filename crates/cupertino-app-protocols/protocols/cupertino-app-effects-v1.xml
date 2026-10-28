@@ -12,10 +12,10 @@
     arrangement or the session; those roles are in the private cupertino_shell_v1.
   </description>
 
-  <interface name="cupertino_app_effects_v1" version="2">
+  <interface name="cupertino_app_effects_v1" version="3">
     <description summary="effects for the client's own surfaces">
-      Global singleton, offered to every client. Version 2 adds get_menu; the other interfaces of
-      the protocol are unchanged in version 2.
+      Global singleton, offered to every client. Version 2 adds get_menu, version 3 the menu_reader
+      event of cupertino_app_menu_v1; the other interfaces of the protocol are unchanged in either.
     </description>
 
     <enum name="error">
@@ -177,12 +177,13 @@
     </event>
   </interface>
 
-  <interface name="cupertino_app_menu_v1" version="2">
+  <interface name="cupertino_app_menu_v1" version="3">
     <description summary="the menus of an application window">
       The window's menus are exported on the session bus as org.gtk.Menus objects and their actions
       as org.gtk.Actions objects. The server hands the address to the desktop's menu bar while the
       window is active; it reads nothing on the bus itself. Right after the object is created the
-      server sends menu_bar, and again whenever its value changes.
+      server sends menu_bar, and from version 3 menu_reader, and each again whenever its value
+      changes.
     </description>
 
     <enum name="error">
@@ -217,6 +218,16 @@
         no menu bar inside the window. 0 while none runs; the client shows its menus itself.
       </description>
       <arg name="shown" type="uint"/>
+    </event>
+
+    <event name="menu_reader" since="3">
+      <description summary="the only bus connection that may use the window's menus">
+        The unique name (":1.42") of the menu bar's bus connection, after the server checked that
+        the connection belongs to the menu bar process; empty while there is none. The client
+        answers no other peer: not its org.gtk.Menus reads, not its org.gtk.Actions calls, and
+        sends its Changed signals to this connection alone.
+      </description>
+      <arg name="bus_name" type="string"/>
     </event>
   </interface>
 </protocol>

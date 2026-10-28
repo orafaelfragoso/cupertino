@@ -106,3 +106,52 @@ fn a_locked_output_without_a_lock_surface_shows_only_black_and_the_pointer() {
         .iter()
         .all(|(layer, _)| matches!(layer, SceneLayer::Wallpaper | SceneLayer::Cursor)));
 }
+
+/// What a screen capture of a locked output holds: the pixels of the entry point the capture copy uses, with and
+/// without the pointer. No pixel of a window may be in them, only the lock surface and black.
+#[test]
+fn a_capture_of_a_locked_output_holds_only_the_lock_surface_and_black() {
+    use common::{LOCK_GREEN, TOPLEVEL_BLUE};
+    use cupertino_server::backend::Backend;
+    use cupertino_server::render::screenshot::render_to_image;
+
+    let mut d = Desktop::new(1.0);
+    d.window();
+    d.at(3000);
+    let _locker = d.lock();
+    d.at(3100);
+    let mut backend = d.state.backend.take().unwrap();
+    let Backend::Headless(ref mut h) = backend else {
+        panic!("headless backend required")
+    };
+    for paint_cursor in [true, false] {
+        let elements = d
+            .state
+            .scene_elements(&mut h.renderer, 0, paint_cursor)
+            .expect("render resources");
+        let image = render_to_image(
+            &mut h.renderer,
+            &elements,
+            (1000, 700).into(),
+            1.0,
+            cupertino_server::backend::headless::CLEAR,
+        )
+        .unwrap();
+        let count = |colour: [u8; 4]| {
+            image
+                .pixels()
+                .filter(|p| p.0[0] == colour[2] && p.0[1] == colour[1] && p.0[2] == colour[0])
+                .count()
+        };
+        assert_eq!(
+            count(TOPLEVEL_BLUE),
+            0,
+            "no window pixel, cursor {paint_cursor}"
+        );
+        assert!(
+            count(LOCK_GREEN) > 500_000,
+            "the lock surface covers the output"
+        );
+    }
+    d.state.backend = Some(backend);
+}

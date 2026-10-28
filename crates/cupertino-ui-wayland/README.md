@@ -21,6 +21,11 @@ transport's standard set and never reaches the private protocols (`cupertino-lay
 (`BufferLease::missed`) are converted into it, and only they are reported with `damage_buffer`. Rectangles that add up
 to the buffer convert it once, whole. A frame at another size or scale is drawn whole.
 
+`draw_with` hands `paint` the device-pixel rectangles that were cleared (`None` when the frame is whole), for a painter
+that draws a whole frame elsewhere and copies those rectangles in (`copy_rects`). `Damage` collects what changed between
+frames in points: it is the whole surface when new, merges overlapping rectangles and keeps at most eight apart; `take`
+gives the rectangles for the next frame, or `None` for all of it.
+
 The configure serial needs no handling here: the transport sizes the leased buffer from the surface's latest configure
 and acknowledges exactly that serial with the commit. The lease holds the connection from `lease` to `present`, so no
 configure is dispatched while `paint` runs, and a configure overtaken before the draw is never acknowledged. The frame

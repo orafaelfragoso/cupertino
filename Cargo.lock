@@ -874,11 +874,14 @@ dependencies = [
  "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-icons",
+ "cupertino-menu-model",
+ "cupertino-modifiers",
  "cupertino-protocol-app",
  "cupertino-text-field",
  "cupertino-theme",
  "cupertino-thumbnails",
  "cupertino-typeahead",
+ "cupertino-ui-menus",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "libc",
@@ -930,6 +933,7 @@ name = "cupertino-input"
 version = "0.1.0"
 dependencies = [
  "cupertino-animation",
+ "cupertino-menu-model",
  "cupertino-modifiers",
 ]
 
@@ -1290,6 +1294,7 @@ dependencies = [
  "cupertino-filepicker",
  "cupertino-geometry",
  "cupertino-icons",
+ "cupertino-menu-model",
  "cupertino-modifiers",
  "cupertino-protocol-app",
  "cupertino-test-bus",
@@ -1297,6 +1302,7 @@ dependencies = [
  "cupertino-theme",
  "cupertino-thumbnails",
  "cupertino-typeahead",
+ "cupertino-ui-menus",
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "serde_json",
@@ -1385,7 +1391,10 @@ version = "0.1.0"
 dependencies = [
  "cupertino-menu-model",
  "cupertino-modifiers",
+ "cupertino-protocol-app",
+ "cupertino-wayland-client",
  "libc",
+ "tracing",
  "zbus",
 ]
 

@@ -18,6 +18,7 @@ pub mod keys;
 pub mod live;
 pub mod mapping;
 pub mod menu;
+pub mod menu_bar;
 pub mod paint;
 pub mod pane;
 pub mod panes;

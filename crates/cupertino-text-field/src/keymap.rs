@@ -139,6 +139,11 @@ impl Keymap {
         }
     }
 
+    /// The user's modifier profile.
+    pub fn profile(&self) -> &Profile {
+        &self.profile
+    }
+
     /// The standard chords under `profile`.
     pub fn standard_for(profile: Profile) -> Self {
         Keymap::new(profile, BindingTable::standard())

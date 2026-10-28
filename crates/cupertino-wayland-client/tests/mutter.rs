@@ -17,13 +17,14 @@ const TERM_GRACE: Duration = Duration::from_secs(5);
 // would otherwise stay held for as long as the compositor lives.
 const CLOSE_FDS_THEN_EXEC: &str = r#"for fd in /proc/self/fd/*; do n=${fd##*/}; [ "$n" -gt 2 ] 2>/dev/null && eval "exec $n>&-"; done; exec "$@""#;
 
-// Kills the group when the test process is gone, which no Drop can do after a SIGKILL from the runner's timeout.
-const KILL_GROUP_WHEN_ORPHANED: &str =
-    r#"while kill -0 "$1" 2>/dev/null; do sleep 1; done; kill -KILL -- "-$2""#;
+// Removes the runtime directory and kills the group when the test process is gone, which no Drop can do after a
+// SIGKILL from the runner's timeout. The directory goes first: the kill ends this shell too.
+const CLEAN_UP_WHEN_ORPHANED: &str =
+    r#"while kill -0 "$1" 2>/dev/null; do sleep 1; done; rm -rf -- "$3"; kill -KILL -- "-$2""#;
 
 struct Compositor {
     wrapper: Child,
-    watchdog: Child,
+    watchdog: Option<Child>,
 }
 
 impl Compositor {
@@ -51,7 +52,9 @@ impl Compositor {
     fn wait_for_group(&mut self, limit: Duration) -> bool {
         let deadline = Instant::now() + limit;
         loop {
-            let _ = self.watchdog.try_wait();
+            if let Some(watchdog) = &mut self.watchdog {
+                let _ = watchdog.try_wait();
+            }
             let _ = self.wrapper.try_wait();
             if !self.group_alive() {
                 return true;
@@ -157,6 +160,10 @@ fn start(runtime: &Path) -> Compositor {
         .spawn()
         .expect("start private bus and compositor");
     let group = wrapper.id().to_string();
+    let mut running = Compositor {
+        wrapper,
+        watchdog: None,
+    };
     let watchdog = Command::new("bash")
         .args([
             "-c",
@@ -164,20 +171,18 @@ fn start(runtime: &Path) -> Compositor {
             "watchdog",
             "bash",
             "-c",
-            KILL_GROUP_WHEN_ORPHANED,
+            CLEAN_UP_WHEN_ORPHANED,
             "watchdog",
             &std::process::id().to_string(),
             &group,
+            &runtime.to_string_lossy(),
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .process_group(wrapper.id() as i32)
+        .process_group(running.wrapper.id() as i32)
         .spawn();
-    let mut running = Compositor {
-        wrapper,
-        watchdog: watchdog.expect("start compositor watchdog"),
-    };
+    running.watchdog = Some(watchdog.expect("start compositor watchdog"));
     let deadline = Instant::now() + TIMEOUT;
     while !runtime.join(SOCKET).exists() {
         let status = running.wrapper.try_wait().unwrap();

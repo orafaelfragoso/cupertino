@@ -11,6 +11,9 @@ layer = "render"
 [dependencies]
 cupertino-menu-model = { path = "../cupertino-menu-model" }
 cupertino-modifiers = { path = "../cupertino-modifiers" }
+cupertino-protocol-app = { path = "../cupertino-protocol-app" }
+cupertino-wayland-client = { path = "../cupertino-wayland-client" }
+tracing = "0.1"
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 [dev-dependencies]

@@ -2315,3 +2315,35 @@ fn a_text_field_needs_a_compositor_with_text_input() {
     ));
     assert!(conn.set_text_input(w.surface(), None).is_ok());
 }
+
+#[test]
+fn a_field_is_sent_again_after_each_enter_and_disabled_when_its_window_goes() {
+    use TextInputRequest::*;
+    let (mut conn, control, seen, surface, mut stash) = text_input_window();
+    conn.set_text_input(surface, Some(&field("ab", 2))).unwrap();
+    for _ in 0..2 {
+        control.send(Control::TextInputEnter).unwrap();
+        assert_eq!(
+            text_input_event(&mut conn, &mut stash),
+            TextInputEvent::Enter
+        );
+        conn.flush().unwrap();
+        assert_eq!(next_text_input(&seen), Enable);
+        while next_text_input(&seen) != Commit {}
+        control.send(Control::TextInputLeave).unwrap();
+        assert_eq!(
+            text_input_event(&mut conn, &mut stash),
+            TextInputEvent::Leave
+        );
+    }
+    control.send(Control::TextInputEnter).unwrap();
+    text_input_event(&mut conn, &mut stash);
+    conn.flush().unwrap();
+    while next_text_input(&seen) != Commit {}
+    conn.destroy(surface).unwrap();
+    conn.flush().unwrap();
+    assert_eq!(
+        (next_text_input(&seen), next_text_input(&seen)),
+        (Disable, Commit)
+    );
+}

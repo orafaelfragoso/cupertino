@@ -555,7 +555,7 @@ impl Cupertino {
                     self.accent_trigger(ch);
                 }
                 RepeatTarget::Compositor(key) => {
-                    let mods = self.current_mods();
+                    let mods = self.current_physical_mods();
                     // Shift pressed or released while Tab repeats in the switcher turns the repeat
                     // round; any other modifier change ends the repeat
                     let flipped = self.wm.switcher().is_some()

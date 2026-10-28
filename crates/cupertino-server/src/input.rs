@@ -66,12 +66,21 @@ pub fn normalize_sym(sym: u32) -> u32 {
 }
 
 /// Parse `"Super+Shift+Tab"`. Modifier names: `Super`/`Logo`/`Mod4`, `Ctrl`/`Control`, `Alt`/`Mod1`,
-/// `Shift`; the last token is an xkb keysym name (case-insensitive).
+/// `Shift`; the last token is an xkb keysym name (case-insensitive). The modifiers are the physical keys, and `Primary`
+/// is Super, the command key of the `cupertino` profile.
 pub fn parse_chord(text: &str) -> Result<Chord, String> {
+    parse_chord_for(text, "cupertino")
+}
+
+/// [`parse_chord`] for the modifier profile `profile`, whose command key is what `Primary` names (Ctrl under
+/// `classic-pc`).
+pub fn parse_chord_for(text: &str, profile: &str) -> Result<Chord, String> {
+    let primary_is_ctrl = profile == "classic-pc";
     let mut mods = Mods::NONE;
     let mut sym = None;
     for tok in text.split('+').map(str::trim).filter(|t| !t.is_empty()) {
         match tok.to_ascii_lowercase().as_str() {
+            "primary" if primary_is_ctrl => mods.ctrl = true,
             "super" | "logo" | "mod4" | "primary" => mods.logo = true,
             "ctrl" | "control" => mods.ctrl = true,
             "alt" | "mod1" | "option" => mods.alt = true,
@@ -388,7 +397,7 @@ impl KeyBindings {
     /// Bindings of an input-crate shortcut map (`cupertino-input`): its actions are translated into
     /// the compositor's actions, the ones without a counterpart (focus dock, dock auto-hide, move to next output)
     /// are skipped. Compositor-only defaults are added unless the chord is taken.
-    pub fn from_shortcuts(map: &cupertino_input::ShortcutMap) -> Self {
+    pub fn from_shortcuts(map: &cupertino_input::ShortcutMap, profile: &str) -> Self {
         let mut k = KeyBindings::empty();
         for (combo, action) in map.bindings() {
             let Some(a) = k.convert(action) else { continue };
@@ -406,10 +415,16 @@ impl KeyBindings {
                 a,
             );
         }
+        // under `classic-pc` no chord of Ctrl+Alt and a character is taken: AltGr is often typed that way
+        let add_workspace = if profile == "classic-pc" {
+            "Super+Alt+n"
+        } else {
+            "Ctrl+Alt+n"
+        };
         let extras: &[(&str, Action)] = &[
             ("Super+Return", Action::SpawnTerminal),
             ("Super+Ctrl+z", Action::ToggleZoom),
-            ("Ctrl+Alt+n", Action::AddWorkspace),
+            (add_workspace, Action::AddWorkspace),
             ("Ctrl+Alt+BackSpace", Action::QuitCompositor),
         ];
         for (c, a) in extras {
@@ -480,6 +495,17 @@ impl KeyBindings {
 
     pub fn bind_str(&mut self, chord: &str, action: Action) -> Result<(), String> {
         self.bind(parse_chord(chord)?, action);
+        Ok(())
+    }
+
+    /// [`KeyBindings::bind_str`] for the modifier profile `profile`.
+    pub fn bind_str_for(
+        &mut self,
+        chord: &str,
+        action: Action,
+        profile: &str,
+    ) -> Result<(), String> {
+        self.bind(parse_chord_for(chord, profile)?, action);
         Ok(())
     }
 
@@ -917,6 +943,8 @@ pub enum KeyOutcome {
 #[derive(Debug, Default)]
 pub struct KeyRouter {
     pub bindings: KeyBindings,
+    /// The modifiers of the chord that opened the switcher: releasing them commits it.
+    switcher_hold: Option<Mods>,
     /// Keys the compositor consumed and has not seen released, each with the operation its release runs.
     suppressed: HashMap<u32, Option<ShellOp>>,
 }
@@ -925,6 +953,7 @@ impl KeyRouter {
     pub fn new(bindings: KeyBindings) -> Self {
         Self {
             bindings,
+            switcher_hold: None,
             suppressed: HashMap::new(),
         }
     }
@@ -976,6 +1005,12 @@ impl KeyRouter {
         }
         match self.bindings.lookup(ev.sym, ev.mods) {
             Some(action) => {
+                if matches!(action, Action::SwitcherNext | Action::SwitcherPrev) {
+                    self.switcher_hold = Some(Mods {
+                        shift: false,
+                        ..ev.mods
+                    });
+                }
                 let release =
                     (action == Action::PowerKey).then_some(ShellOp::PowerKey { pressed: false });
                 self.suppressed.insert(sym, release);
@@ -985,10 +1020,21 @@ impl KeyRouter {
         }
     }
 
-    /// Modifier state changed: releasing the primary modifier commits an open switcher.
+    /// Modifier state changed: releasing the modifiers of the chord that opened the switcher (Super for the Super+Tab
+    /// of `cupertino`, Alt for the Alt+Tab of `classic-pc`) commits it.
     pub fn modifiers_changed(&mut self, mods: Mods, ctx: &ActionContext) -> ActionPlan {
         let mut plan = ActionPlan::default();
-        if ctx.switcher_open && !mods.logo && !ctx.locked {
+        if !ctx.switcher_open {
+            self.switcher_hold = None;
+            return plan;
+        }
+        // a switcher opened without a chord is held by the Super key
+        let hold = self.switcher_hold.unwrap_or(Mods {
+            logo: true,
+            ..Mods::NONE
+        });
+        let held = (hold.ctrl && mods.ctrl) || (hold.alt && mods.alt) || (hold.logo && mods.logo);
+        if !held && !ctx.locked {
             plan.commands.push(Command::SwitcherCommit);
         }
         plan
@@ -1075,6 +1121,137 @@ mod tests {
             ),
             Some(Action::SwitchVt(3))
         );
+    }
+
+    #[test]
+    fn primary_in_a_chord_is_the_command_key_of_the_profile() {
+        let mods = |text, profile| parse_chord_for(text, profile).unwrap().mods;
+        assert_eq!(
+            mods("Primary+q", "cupertino"),
+            parse_chord("Super+q").unwrap().mods
+        );
+        assert_eq!(
+            mods("Primary+q", "classic-pc"),
+            parse_chord("Ctrl+q").unwrap().mods
+        );
+        // Super is the Super key in both
+        assert_eq!(
+            mods("Super+q", "classic-pc"),
+            parse_chord("Super+q").unwrap().mods
+        );
+    }
+
+    fn classic_router() -> KeyRouter {
+        KeyRouter::new(KeyBindings::from_shortcuts(
+            &cupertino_input::ShortcutMap::classic_pc_defaults(),
+            "classic-pc",
+        ))
+    }
+
+    #[test]
+    fn under_classic_pc_the_system_follows_windows_and_linux_habits() {
+        let c = ctx();
+        let mut r = classic_router();
+        let commands = |r: &mut KeyRouter, chord: &str| match press(r, chord, &c) {
+            KeyOutcome::Consumed(p) => dbg(&p.commands),
+            KeyOutcome::Forward => "forwarded".to_string(),
+        };
+        assert_eq!(
+            commands(&mut r, "Alt+F4"),
+            dbg(&vec![Command::RequestClose {
+                window: WindowId(7)
+            }])
+        );
+        assert_eq!(
+            commands(&mut r, "Super+Left"),
+            dbg(&vec![Command::Tile {
+                window: WindowId(7),
+                kind: TileKind::Left
+            }])
+        );
+        assert_eq!(
+            commands(&mut r, "Alt+Tab"),
+            dbg(&vec![Command::SwitcherOpen { backward: false }])
+        );
+        // the chords of the applications stay with them
+        for chord in [
+            "Ctrl+w",
+            "Ctrl+q",
+            "Ctrl+Tab",
+            "Ctrl+space",
+            "Ctrl+Shift+Left",
+            "F11",
+        ] {
+            assert_eq!(commands(&mut r, chord), "forwarded", "{chord}");
+        }
+        // under cupertino the old chords act and the new ones do not
+        let mut cupertino = KeyRouter::new(KeyBindings::from_shortcuts(
+            &cupertino_input::ShortcutMap::defaults(),
+            "cupertino",
+        ));
+        assert_eq!(commands(&mut cupertino, "Alt+F4"), "forwarded");
+        assert_eq!(commands(&mut cupertino, "Alt+Tab"), "forwarded");
+        assert_ne!(commands(&mut cupertino, "Super+w"), "forwarded");
+    }
+
+    #[test]
+    fn the_switcher_is_held_by_the_modifier_that_opened_it() {
+        let mut c = ctx();
+        let alt = Mods {
+            alt: true,
+            ..Mods::NONE
+        };
+        let sup = Mods {
+            logo: true,
+            ..Mods::NONE
+        };
+        let mut r = classic_router();
+        assert!(matches!(
+            press(&mut r, "Alt+Tab", &c),
+            KeyOutcome::Consumed(_)
+        ));
+        c.switcher_open = true;
+        assert!(r.modifiers_changed(alt, &c).is_empty());
+        assert_eq!(
+            dbg(&r.modifiers_changed(Mods::NONE, &c).commands),
+            dbg(&vec![Command::SwitcherCommit])
+        );
+        // another modifier held does not hold it
+        assert_eq!(
+            dbg(&r.modifiers_changed(sup, &c).commands),
+            dbg(&vec![Command::SwitcherCommit])
+        );
+        // under cupertino it is Super that holds it
+        let mut cupertino = KeyRouter::new(KeyBindings::from_shortcuts(
+            &cupertino_input::ShortcutMap::defaults(),
+            "cupertino",
+        ));
+        c.switcher_open = false;
+        assert!(matches!(
+            press(&mut cupertino, "Super+Tab", &c),
+            KeyOutcome::Consumed(_)
+        ));
+        c.switcher_open = true;
+        assert!(cupertino.modifiers_changed(sup, &c).is_empty());
+        assert_eq!(
+            dbg(&cupertino.modifiers_changed(alt, &c).commands),
+            dbg(&vec![Command::SwitcherCommit])
+        );
+    }
+
+    #[test]
+    fn no_chord_of_ctrl_alt_and_a_character_is_bound_under_classic_pc() {
+        let b = KeyBindings::from_shortcuts(
+            &cupertino_input::ShortcutMap::classic_pc_defaults(),
+            "classic-pc",
+        );
+        for (chord, action) in b.entries() {
+            let character = char::from_u32(chord.sym).is_some_and(|c| c.is_ascii_graphic());
+            assert!(
+                !(chord.mods.ctrl && chord.mods.alt && !chord.mods.logo && character),
+                "{chord:?} = {action:?}"
+            );
+        }
     }
 
     #[test]
@@ -1409,7 +1586,7 @@ mod tests {
                 "Super+x = exec:foot --title scratch\nF5 = show-desktop\nSuper+Tab = none\n"
             )
             .is_empty());
-        let b = KeyBindings::from_shortcuts(&map);
+        let b = KeyBindings::from_shortcuts(&map, "cupertino");
         let look = |s: &str| {
             let c = parse_chord(s).unwrap();
             b.lookup(c.sym, c.mods)

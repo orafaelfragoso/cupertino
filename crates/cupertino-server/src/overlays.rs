@@ -15,7 +15,7 @@ use crate::kbd_ui::AccentUi;
 use crate::render::image::ImageCache;
 
 /// A key press the overlays interpret: the keysym of the key without modifiers (letters lower case),
-/// the character the modifiers produce, and the logical modifiers.
+/// the character the modifiers produce, and the physical modifiers (Super is `logo`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OverlayKey {
     /// Raw xkb keycode (identifies the key for repeat and release).

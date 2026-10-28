@@ -11,6 +11,7 @@
 //! library modules (`session`, `dock`, `conf`, `switcher`, `app_grid`, `overview_ui`, `menu`,
 //! `actions`); drawing is in `render`.
 
+use cupertino_apps::launch::{spawn, Launch, OPEN_COMMAND};
 use cupertino_assets::Assets;
 use cupertino_defaults::dock::DockSettings;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
@@ -72,13 +73,11 @@ const MATERIAL: &str = "Menu";
 /// Corner radius of the bar as a fraction of the tile size. approximate.
 const BAR_RADIUS: f64 = 0.3;
 
-/// Environment variables that hand the activation token to a started application.
-const ACTIVATION_TOKEN_ENV: &str = "XDG_ACTIVATION_TOKEN";
-const STARTUP_ID_ENV: &str = "DESKTOP_STARTUP_ID";
+/// The name the process reports problems under.
+const PROCESS: &str = "cupertino-dock";
 
-/// What opens the trash and a directory when the session's file manager is not installed: the
-/// session's default handler of `x-scheme-handler/trash` and `inode/directory`.
-const OPEN_COMMAND: &str = "xdg-open";
+/// The trash, which opens in the session's file manager, or when it is not installed through [`OPEN_COMMAND`] (the
+/// session's default handler of `x-scheme-handler/trash`; a directory opens with that of `inode/directory`).
 const TRASH_URI: &str = "trash:///";
 
 /// Material of a context menu's popup, the menu bar's.
@@ -494,25 +493,6 @@ fn installed(program: &str) -> bool {
     }
     std::env::var_os("PATH")
         .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
-}
-
-/// Run a command detached from the loop; its exit is reaped on a thread. False when it did not start.
-fn spawn(mut command: Command) -> bool {
-    let program = command.get_program().to_string_lossy().into_owned();
-    match command.spawn() {
-        Ok(mut child) => {
-            std::thread::spawn(move || {
-                if let Err(e) = child.wait() {
-                    eprintln!("cupertino-dock: {program}: {e}");
-                }
-            });
-            true
-        }
-        Err(e) => {
-            eprintln!("cupertino-dock: cannot run {program}: {e}");
-            false
-        }
-    }
 }
 
 impl App {
@@ -1087,7 +1067,7 @@ impl App {
             None => {
                 let mut command = Command::new(OPEN_COMMAND);
                 command.arg(target);
-                spawn(command);
+                spawn(PROCESS, command);
             }
         }
         Ok(())
@@ -1134,13 +1114,10 @@ impl App {
             .pending
             .remove(&request)
             .expect("token for a request this process made");
-        let (program, args) = argv.split_first().expect("a pending launch has a program");
-        let mut command = Command::new(program);
-        command
-            .args(args)
-            .env(ACTIVATION_TOKEN_ENV, token)
-            .env(STARTUP_ID_ENV, token);
-        if spawn(command) {
+        let command = Launch::Program(argv)
+            .command(token)
+            .expect("a pending launch has a program");
+        if spawn(PROCESS, command.to_command()) {
             let now = self.now();
             self.session.dock.app_launching(&key, now);
             self.presenter.request_redraw();
@@ -2089,7 +2066,7 @@ impl App {
             ActionTarget::Exec(command_line) => {
                 let mut command = Command::new("sh");
                 command.args(["-c", &command_line]);
-                spawn(command);
+                spawn(PROCESS, command);
                 Ok(())
             }
             ActionTarget::Server(name) => {

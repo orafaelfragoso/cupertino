@@ -4,81 +4,25 @@
 //! layout and order is not known, so the folder is listed in the window's sort order (approximate).
 
 use crate::entry::Entry;
-use percent_encoding::percent_decode_str;
-use std::collections::HashSet;
-use std::ffi::OsString;
+use cupertino_apps::recent::read_recent_files;
+pub use cupertino_apps::recent::{parse_xbel, XBEL_NAME};
 use std::io;
-use std::os::unix::ffi::OsStringExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Where the Recents place points: not a directory, the browser opens it from the bookmark file.
 pub const RECENTS: &str = "recent:///";
-
-/// The name of the bookmark file in the data home.
-pub const XBEL_NAME: &str = "recently-used.xbel";
 
 /// [`RECENTS`] as a path.
 pub fn location() -> &'static Path {
     Path::new(RECENTS)
 }
 
-/// The five predefined XML entities, the only ones a bookmark file's attribute values use.
-fn unescape_xml(text: &str) -> String {
-    text.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
-}
-
-/// The local files a bookmark file lists, in file order and each once: the `file://` `href` of every `<bookmark>`
-/// element, entities resolved and percent-decoded. Other schemes and remote hosts are left out.
-pub fn parse_xbel(text: &str) -> Vec<PathBuf> {
-    let (mut out, mut seen): (Vec<PathBuf>, HashSet<PathBuf>) = (Vec::new(), HashSet::new());
-    for element in text.split("<bookmark ").skip(1) {
-        let Some(tag) = element.split('>').next() else {
-            continue;
-        };
-        let Some(href) = tag
-            .split("href=\"")
-            .nth(1)
-            .and_then(|rest| rest.split('"').next())
-        else {
-            continue;
-        };
-        let href = unescape_xml(href);
-        let Some(rest) = href.strip_prefix("file://") else {
-            continue;
-        };
-        let Some(path) = rest
-            .strip_prefix("localhost")
-            .unwrap_or(rest)
-            .strip_prefix('/')
-        else {
-            continue;
-        };
-        // a path is bytes: a name that is not UTF-8 decodes to its own bytes, not to replacement characters
-        let mut bytes = vec![b'/'];
-        bytes.extend(percent_decode_str(path));
-        let path = PathBuf::from(OsString::from_vec(bytes));
-        if seen.insert(path.clone()) {
-            out.push(path);
-        }
-    }
-    out
-}
-
 /// The listed files that still exist, as entries, in file order. No bookmark file yet means nothing was used.
 pub fn recent_entries(xbel: &Path) -> io::Result<Vec<Entry>> {
-    let text = match std::fs::read_to_string(xbel) {
-        Ok(text) => text,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e),
-    };
     // a file removed since it was used drops out of the list
-    Ok(parse_xbel(&text)
+    Ok(read_recent_files(xbel)?
         .into_iter()
-        .filter_map(|path| Entry::from_path(path).ok())
+        .filter_map(|file| Entry::from_path(file.path).ok())
         .collect())
 }
 
@@ -87,35 +31,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bookmarks_give_their_local_files_once_in_file_order() {
-        let text = r#"<?xml version="1.0" encoding="UTF-8"?>
-<xbel version="1.0" xmlns:bookmark="http://www.freedesktop.org/standards/desktop-bookmarks">
-  <bookmark href="file:///home/ada/Notes%20%26%20Plans.md" added="2026-10-01T09:00:00Z" modified="2026-10-01T09:00:00Z" visited="2026-10-01T09:00:00Z">
-    <info/>
-  </bookmark>
-  <bookmark href="https://example.org/page" added="2026-10-01T09:00:00Z"/>
-  <bookmark href="file://server/share/x.txt" added="2026-10-01T09:00:00Z"/>
-  <bookmark href="file://localhost/tmp/a&amp;b.txt" added="2026-10-02T09:00:00Z"/>
-  <bookmark href="file:///home/ada/Notes%20%26%20Plans.md" added="2026-10-03T09:00:00Z"/>
-</xbel>"#;
-        assert_eq!(
-            parse_xbel(text),
-            [
-                PathBuf::from("/home/ada/Notes & Plans.md"),
-                PathBuf::from("/tmp/a&b.txt")
-            ]
-        );
-    }
-
-    #[test]
-    fn a_name_that_is_not_utf8_keeps_its_bytes() {
+    fn a_name_that_is_not_utf8_is_found() {
         use std::os::unix::ffi::OsStrExt;
         // "café" in Latin-1: the 0xE9 byte alone is not UTF-8
-        let paths = parse_xbel(
-            r#"<xbel><bookmark href="file:///tmp/caf%E9.txt" added="2026-10-01T09:00:00Z"/></xbel>"#,
-        );
-        assert_eq!(paths.len(), 1);
-        assert_eq!(paths[0].as_os_str().as_bytes(), b"/tmp/caf\xe9.txt");
         let d = tempfile::tempdir().unwrap();
         let name = std::ffi::OsStr::from_bytes(b"caf\xe9.txt");
         std::fs::write(d.path().join(name), b"x").unwrap();

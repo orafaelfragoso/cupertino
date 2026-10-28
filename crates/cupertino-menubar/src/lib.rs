@@ -7,7 +7,9 @@
 //! * [`fallback`]: synthetic app and Window menus for apps that export none.
 //! * [`clock`]: the clock text and its ticks; its options are `menubar.conf`, read and written by
 //!   `cupertino_defaults::menubar`.
-//! * [`extras`]: the bar's own status items (Wi-Fi, battery, Bluetooth, Focus) and their menus.
+//! * [`extras`]: the bar's own status items (Wi-Fi, battery, Bluetooth, Focus) and their menus, and the system menu.
+//! * [`recent`]: what Recent Items of the system menu lists (the launcher's applications, the recently-used documents)
+//!   and its Clear Menu time.
 //! * [`source`]: window / app identity → menu source (KDE appmenu service + path, GTK bus name and
 //!   object paths).
 //! * `dbus` (feature `dbus`, on by default): DBusMenu client, StatusNotifier watcher / item client,
@@ -33,6 +35,7 @@ pub mod fallback;
 pub mod geom;
 pub mod item;
 pub mod layout;
+pub mod recent;
 pub mod source;
 
 #[cfg(feature = "app")]

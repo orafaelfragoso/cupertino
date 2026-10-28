@@ -13,7 +13,8 @@ const MAX_KEY_CHARS: usize = 16;
 pub fn plain_text(text: &str, max_chars: usize) -> String {
     text.chars()
         .filter(|c| {
-            !c.is_control() && !matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+            !c.is_control()
+                && !matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
         })
         .take(max_chars)
         .collect::<String>()
@@ -335,6 +336,12 @@ mod tests {
         assert_eq!(key("\u{202e}Q\u{7}"), Some("Q".to_string()));
         assert_eq!(key(&"X".repeat(200)), Some("X".repeat(16)));
         assert_eq!(key("\u{202e}\u{7}"), None);
+    }
+
+    #[test]
+    fn a_file_name_cannot_turn_its_extension_around() {
+        assert_eq!(plain_text("photo\u{202e}gpj.sh", 64), "photogpj.sh");
+        assert_eq!(plain_text("a\u{061c}\u{2067}b\u{2069}\u{200f}", 64), "ab");
     }
 
     #[test]

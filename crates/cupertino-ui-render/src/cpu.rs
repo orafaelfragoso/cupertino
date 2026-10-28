@@ -199,28 +199,64 @@ struct Painter<'a, R> {
 }
 
 impl<R: GlyphRasterizer> Painter<'_, R> {
+    /// Paints one node into a scratch image of just the pixels it touches, then lays that over the frame, so a
+    /// node costs in proportion to its own size and no mask spans the window.
     fn node(
         &mut self,
         base: &mut PixmapMut<'_>,
         dirty: &Bounds,
         node: &PaintNode,
     ) -> Result<(), RenderError> {
-        let rect = Bounds::of_size(base.width(), base.height());
-        let mut target = Target {
-            pixmap: base,
-            origin: (0, 0),
-            rect,
-            limit: *dirty,
-            clips: Vec::new(),
-        };
-        let first = rect_mask(&target, dirty)?;
-        target.clips.push(first);
-        if let Some(clip) = &node.clip {
-            self.push_clip(&mut target, node, clip)?;
-        }
         let halo = node_support(node, self.scale);
-        let mut pos = 0;
-        self.run(&mut target, node, &mut pos, halo)
+        let area = Bounds::of_rect(&node.bounds, self.scale).intersect(&dirty.outset(halo));
+        if area.is_empty() {
+            return Ok(());
+        }
+        if u64::from(area.width()) * u64::from(area.height()) > self.config.max_pixels {
+            return Err(RenderError::ResourceLimit);
+        }
+        let mut scratch =
+            Pixmap::new(area.width(), area.height()).ok_or(RenderError::ResourceLimit)?;
+        {
+            let mut pm = scratch.as_mut();
+            let mut target = Target {
+                pixmap: &mut pm,
+                origin: (area.x0, area.y0),
+                rect: area,
+                limit: area,
+                clips: Vec::new(),
+            };
+            if let Some(clip) = &node.clip {
+                self.push_clip(&mut target, node, clip)?;
+            }
+            let mut pos = 0;
+            self.run(&mut target, node, &mut pos, halo)?;
+        }
+        let visible = area.intersect(dirty);
+        if visible.is_empty() {
+            return Ok(());
+        }
+        let shown = if visible == area {
+            scratch
+        } else {
+            let crop = tiny_skia::IntRect::from_xywh(
+                visible.x0 - area.x0,
+                visible.y0 - area.y0,
+                visible.width(),
+                visible.height(),
+            )
+            .ok_or(RenderError::ResourceLimit)?;
+            scratch.clone_rect(crop).ok_or(RenderError::ResourceLimit)?
+        };
+        base.draw_pixmap(
+            visible.x0,
+            visible.y0,
+            shown.as_ref(),
+            &PixmapPaint::default(),
+            tiny_skia::Transform::identity(),
+            None,
+        );
+        Ok(())
     }
 
     fn run(
@@ -291,9 +327,13 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             return;
         };
         let ts = self.ts(t, node);
-        let mask = t.clips.last().cloned();
-        t.pixmap
-            .fill_path(&path, &paint, geometry::fill_rule(shape), ts, mask.as_ref());
+        t.pixmap.fill_path(
+            &path,
+            &paint,
+            geometry::fill_rule(shape),
+            ts,
+            t.clips.last(),
+        );
     }
 
     fn stroke(
@@ -312,9 +352,8 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             ..Stroke::default()
         };
         let ts = self.ts(t, node);
-        let mask = t.clips.last().cloned();
         t.pixmap
-            .stroke_path(&path, &paint, &stroke, ts, mask.as_ref());
+            .stroke_path(&path, &paint, &stroke, ts, t.clips.last());
     }
 
     fn image(
@@ -327,7 +366,7 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
         sampling: Sampling,
     ) -> Result<(), RenderError> {
         let image = &self.resources.images[&id];
-        let whole = self.images.get(id, image)?;
+        let whole = self.images.get(id, image, self.config.max_pixels)?;
         if src.width() <= 0.0 || src.height() <= 0.0 || dst.width() <= 0.0 || dst.height() <= 0.0 {
             return Ok(());
         }
@@ -365,13 +404,12 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             return Ok(());
         };
         let ts = self.ts(t, node);
-        let mask = t.clips.last().cloned();
         t.pixmap.fill_path(
             &path,
             &paint,
             tiny_skia::FillRule::Winding,
             ts,
-            mask.as_ref(),
+            t.clips.last(),
         );
         Ok(())
     }
@@ -407,8 +445,14 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             };
             let x = ix as i32 + glyph.bearing_x - t.origin.0;
             let y = py.round() as i32 - glyph.bearing_y - t.origin.1;
-            let mask = t.clips.last().map(|m| m.data().to_vec());
-            blend_glyph(t.pixmap, mask.as_deref(), x, y, &glyph, color);
+            blend_glyph(
+                t.pixmap,
+                t.clips.last().map(Mask::data),
+                x,
+                y,
+                &glyph,
+                color,
+            );
         }
         Ok(())
     }
@@ -452,14 +496,13 @@ impl<R: GlyphRasterizer> Painter<'_, R> {
             opacity,
             ..PixmapPaint::default()
         };
-        let mask = t.clips.last().cloned();
         t.pixmap.draw_pixmap(
             area.x0 - t.origin.0,
             area.y0 - t.origin.1,
             layer.as_ref(),
             &paint,
             tiny_skia::Transform::identity(),
-            mask.as_ref(),
+            t.clips.last(),
         );
         Ok(())
     }
@@ -496,22 +539,6 @@ fn skip_layer(node: &PaintNode, pos: &mut usize) {
 fn full_mask(w: u32, h: u32) -> Result<Mask, RenderError> {
     let mut mask = Mask::new(w, h).ok_or(RenderError::ResourceLimit)?;
     mask.data_mut().fill(255);
-    Ok(mask)
-}
-
-/// A mask that lets through only `area` (window pixels) of the target.
-fn rect_mask(t: &Target<'_, '_>, area: &Bounds) -> Result<Mask, RenderError> {
-    let (w, h) = (t.pixmap.width(), t.pixmap.height());
-    let mut mask = Mask::new(w, h).ok_or(RenderError::ResourceLimit)?;
-    let inside = area.intersect(&t.rect);
-    for y in inside.y0..inside.y1 {
-        let row = (y - t.origin.1) as usize * w as usize;
-        let (x0, x1) = (
-            (inside.x0 - t.origin.0) as usize,
-            (inside.x1 - t.origin.0) as usize,
-        );
-        mask.data_mut()[row + x0..row + x1].fill(255);
-    }
     Ok(mask)
 }
 

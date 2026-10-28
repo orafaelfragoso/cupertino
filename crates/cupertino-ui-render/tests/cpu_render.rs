@@ -381,3 +381,130 @@ fn oversized_targets_hit_the_resource_limit() {
         Err(RenderError::ResourceLimit)
     );
 }
+
+#[test]
+fn absurd_effect_extents_are_refused_not_overflowed() {
+    for effect in [
+        Effect::Blur { radius: 1e9 },
+        Effect::DropShadow {
+            offset: Point { x: 1e12, y: 0.0 },
+            blur: 1.0,
+            color: Color::new(0.0, 0.0, 0.0, 1.0),
+        },
+    ] {
+        let list = DisplayList {
+            nodes: vec![node(
+                1,
+                rect(0.0, 0.0, 8.0, 8.0),
+                vec![
+                    PaintOp::PushLayer {
+                        opacity: 1.0,
+                        effects: vec![effect],
+                    },
+                    PaintOp::PopLayer,
+                ],
+            )],
+        };
+        assert_eq!(
+            render(
+                &mut renderer(),
+                &list,
+                &PaintResources::default(),
+                1.0,
+                &DamageRegion::Full
+            ),
+            Err(RenderError::ResourceLimit)
+        );
+    }
+}
+
+fn glyph_node(count: u32) -> PaintNode {
+    let run = GlyphRun {
+        font: FontId(1),
+        size: 8.0,
+        glyphs: (0..count)
+            .map(|i| PositionedGlyph {
+                id: GlyphId(i % 40),
+                x: (i % 100) as f32 * 4.0,
+                y: (i / 100) as f32 * 6.0,
+                cluster: 0,
+            })
+            .collect(),
+    };
+    node(
+        1,
+        rect(0.0, 0.0, 400.0, 130.0),
+        vec![
+            PaintOp::PushClip(Shape::RoundedRect {
+                rect: rect(0.0, 0.0, 400.0, 130.0),
+                radius: 8.0,
+            }),
+            PaintOp::Glyphs {
+                origin: Point { x: 0.0, y: 8.0 },
+                run,
+                color: Color::new(0.0, 0.0, 0.0, 1.0),
+            },
+            PaintOp::PopClip,
+        ],
+    )
+}
+
+fn best_of_three(
+    width: u32,
+    height: u32,
+    list: &DisplayList,
+    damage: &DamageRegion,
+) -> std::time::Duration {
+    let mut r = renderer_with(1 << 26);
+    let request = RenderRequest {
+        list,
+        resources: &PaintResources::default(),
+        scale: 1.0,
+        width,
+        height,
+        damage,
+    };
+    r.render(&RenderRequest {
+        damage: &DamageRegion::Full,
+        ..request
+    })
+    .unwrap();
+    (0..3)
+        .map(|_| {
+            let start = std::time::Instant::now();
+            r.render(&request).unwrap();
+            start.elapsed()
+        })
+        .min()
+        .unwrap()
+}
+
+fn renderer_with(max_pixels: u64) -> CpuRenderer<Boxes> {
+    CpuRenderer::new(
+        CpuConfig {
+            max_pixels,
+            ..config()
+        },
+        Boxes { fail: false },
+    )
+}
+
+#[test]
+fn cost_follows_damage_and_content_not_target_area() {
+    let list = DisplayList {
+        nodes: vec![glyph_node(2000)],
+    };
+    let full = DamageRegion::Full;
+    let small = best_of_three(512, 288, &list, &full);
+    let large = best_of_three(3840, 2160, &list, &full);
+    assert!(
+        large < small * 6 + std::time::Duration::from_millis(20),
+        "full repaint {large:?} on 4K vs {small:?} on 512x288"
+    );
+    let corner = DamageRegion::Rects(vec![rect(0.0, 0.0, 16.0, 16.0)]);
+    let partial = best_of_three(3840, 2160, &list, &corner);
+    assert!(
+        partial * 5 < large,
+        "a 16x16 damage {partial:?} vs full {large:?}"
+    );
+}

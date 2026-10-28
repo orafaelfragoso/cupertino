@@ -4,6 +4,11 @@ use crate::{
 };
 use cupertino_geometry::{Point, Rect};
 
+/// Physical pixels per logical point beyond which a request is refused.
+const MAX_SCALE: f64 = 64.0;
+/// Largest effect radius or offset, in logical points.
+const MAX_EFFECT_EXTENT: f64 = 4096.0;
+
 pub(crate) fn check(
     list: &DisplayList,
     resources: &PaintResources,
@@ -11,7 +16,7 @@ pub(crate) fn check(
     width: u32,
     height: u32,
 ) -> Result<(), RenderError> {
-    if !(scale.is_finite() && scale > 0.0) {
+    if !(scale.is_finite() && scale > 0.0 && scale <= MAX_SCALE) {
         return Err(RenderError::InvalidScale);
     }
     if width == 0 || height == 0 {
@@ -86,6 +91,9 @@ fn node_ok(node: &PaintNode, resources: &PaintResources) -> Result<(), RenderErr
                         && (0.0..=1.0).contains(opacity)
                         && effects.iter().all(effect_ok),
                 )?;
+                if !effects.iter().all(effect_bounded) {
+                    return Err(RenderError::ResourceLimit);
+                }
                 scopes.push(Scope::Layer);
             }
             PaintOp::PopLayer => pop(&mut scopes, Scope::Layer, id)?,
@@ -153,6 +161,17 @@ fn effect_ok(effect: &Effect) -> bool {
         Effect::Blur { radius } => radius.is_finite() && *radius >= 0.0,
         Effect::DropShadow { offset, blur, .. } | Effect::InnerShadow { offset, blur, .. } => {
             point_ok(offset) && blur.is_finite() && *blur >= 0.0
+        }
+    }
+}
+
+fn effect_bounded(effect: &Effect) -> bool {
+    match effect {
+        Effect::Blur { radius } => *radius <= MAX_EFFECT_EXTENT,
+        Effect::DropShadow { offset, blur, .. } | Effect::InnerShadow { offset, blur, .. } => {
+            *blur <= MAX_EFFECT_EXTENT
+                && offset.x.abs() <= MAX_EFFECT_EXTENT
+                && offset.y.abs() <= MAX_EFFECT_EXTENT
         }
     }
 }

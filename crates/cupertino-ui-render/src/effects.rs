@@ -6,9 +6,12 @@ pub(crate) fn div255(v: u32) -> u32 {
     (v + (v >> 8)) >> 8
 }
 
+/// Largest box radius, in pixels, a blur may have.
+const MAX_BOX_RADIUS: usize = 1 << 12;
+
 /// Box radius of the three passes that approximate a Gaussian whose standard deviation is half of `radius` points.
 fn box_radius(radius: f64, scale: f64) -> usize {
-    (radius * scale / 2.0).round() as usize
+    ((radius * scale / 2.0).round() as usize).min(MAX_BOX_RADIUS)
 }
 
 /// How far, in pixels, an effect reaches beyond the content it is computed from.
@@ -18,7 +21,9 @@ pub(crate) fn support(effects: &[Effect], scale: f64) -> i32 {
         .map(|effect| match *effect {
             Effect::Blur { radius } => 3 * box_radius(radius, scale) as i32,
             Effect::DropShadow { offset, blur, .. } | Effect::InnerShadow { offset, blur, .. } => {
-                let shift = (offset.x.abs().max(offset.y.abs()) * scale).ceil() as i32;
+                let shift = (offset.x.abs().max(offset.y.abs()) * scale)
+                    .ceil()
+                    .min(f64::from(1 << 20)) as i32;
                 shift + 3 * box_radius(blur, scale) as i32
             }
         })
@@ -69,8 +74,8 @@ fn silhouette(
     scale: f64,
     invert: bool,
 ) -> Vec<u8> {
-    let dx = (offset.x * scale).round() as i64;
-    let dy = (offset.y * scale).round() as i64;
+    let dx = (offset.x * scale).round().clamp(-1e9, 1e9) as i64;
+    let dy = (offset.y * scale).round().clamp(-1e9, 1e9) as i64;
     let mut out = vec![0u8; data.len()];
     for y in 0..h {
         for x in 0..w {

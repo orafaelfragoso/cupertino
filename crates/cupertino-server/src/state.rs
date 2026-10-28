@@ -97,8 +97,8 @@ pub struct ClientState {
     /// connection the server made itself. The owner of a bus name the client hands the server is checked against it
     /// (`crate::owner_check`).
     pub peer: Option<cupertino_peer::ProcessHandle>,
-    /// How many of the client's owner checks timed out or were refused as busy (`crate::owner_check::STRIKE_LIMIT`).
-    pub owner_strikes: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// The client's owner checks whose identification stalled (`crate::owner_check::STRIKE_LIMIT`).
+    pub owner_strikes: crate::owner_check::ClientStrikes,
 }
 
 impl Default for ClientState {

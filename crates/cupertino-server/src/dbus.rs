@@ -9,7 +9,7 @@
 //! never the name itself.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use cupertino_peer::{same_instance, ProcessHandle};
 use zbus::fdo::ConnectionCredentials;
@@ -204,6 +204,9 @@ pub struct OwnerQuery {
     pub name: String,
     /// The Wayland client to match, held from its connection.
     pub client: ProcessHandle,
+    /// Set while the identification of the owner reads `/proc` (`crate::owner_check` strikes the client when it still
+    /// is at the deadline).
+    pub identifying: std::sync::Arc<AtomicBool>,
     pub reply: Box<dyn FnOnce(Result<String, OwnerRefusal>) + Send>,
 }
 
@@ -230,8 +233,8 @@ pub enum OwnerRefusal {
     Busy,
     /// The check did not return in time (`crate::owner_check::DEADLINE`).
     TimedOut,
-    /// The client's checks timed out or were busy `crate::owner_check::STRIKE_LIMIT` times: its later checks are
-    /// refused at once.
+    /// The identification of the client's checks stalled `crate::owner_check::STRIKE_LIMIT` times lately: its later
+    /// checks are refused at once.
     Stalled,
 }
 
@@ -322,13 +325,16 @@ async fn worker(
             Job::Owner(OwnerQuery {
                 name,
                 client,
+                identifying: reading,
                 reply,
             }) => {
                 let identifying = identifying.clone();
                 conn.executor()
                     .clone()
                     .spawn(
-                        async move { reply(owner_of(&conn, &name, client, &identifying).await) },
+                        async move {
+                            reply(owner_of(&conn, &name, client, &identifying, reading).await)
+                        },
                         "cupertino-owner-check",
                     )
                     .detach();
@@ -397,11 +403,12 @@ type Identifying = std::sync::Arc<AtomicUsize>;
 /// How many identification threads may be alive at once, counting those still reading after their check timed out.
 pub const IDENTIFY_LIMIT: usize = 16;
 
-/// One alive identification thread, counted while it lives.
-struct Alive(Identifying);
+/// One alive identification thread, counted while it lives, and the flag of its check set while it lives.
+struct Alive(Identifying, std::sync::Arc<AtomicBool>);
 
 impl Drop for Alive {
     fn drop(&mut self) {
+        self.1.store(false, Ordering::SeqCst);
         self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
@@ -418,12 +425,14 @@ fn identify_owner(
     proc_root: PathBuf,
     credentials: ConnectionCredentials,
     client: ProcessHandle,
+    reading: std::sync::Arc<AtomicBool>,
 ) -> Result<Identified, OwnerRefusal> {
     if identifying.fetch_add(1, Ordering::SeqCst) >= IDENTIFY_LIMIT {
         identifying.fetch_sub(1, Ordering::SeqCst);
         return Err(OwnerRefusal::Busy);
     }
-    let alive = Alive(identifying.clone());
+    reading.store(true, Ordering::SeqCst);
+    let alive = Alive(identifying.clone(), reading);
     let (answer, answered) = async_channel::bounded(1);
     std::thread::Builder::new()
         .name("cupertino-identify".into())
@@ -462,6 +471,7 @@ async fn owner_of(
     name: &str,
     client: ProcessHandle,
     identifying: &Identifying,
+    reading: std::sync::Arc<AtomicBool>,
 ) -> Result<String, OwnerRefusal> {
     let name = BusName::try_from(name).map_err(|_| OwnerRefusal::NotABusName)?;
     let no_owner = |e: zbus::fdo::Error| OwnerRefusal::NoOwner(e.to_string());
@@ -476,10 +486,16 @@ async fn owner_of(
         .get_connection_credentials(BusName::from(unique.as_ref()))
         .await
         .map_err(no_owner)?;
-    identify_owner(identifying, PathBuf::from("/proc"), credentials, client)?
-        .recv()
-        .await
-        .map_err(|_| OwnerRefusal::Unidentified)??;
+    identify_owner(
+        identifying,
+        PathBuf::from("/proc"),
+        credentials,
+        client,
+        reading,
+    )?
+    .recv()
+    .await
+    .map_err(|_| OwnerRefusal::Unidentified)??;
     Ok(unique.to_string())
 }
 
@@ -704,11 +720,20 @@ mod tests {
         identifying: &Identifying,
         proc_root: &Path,
     ) -> Result<Identified, OwnerRefusal> {
+        identify_watched(identifying, proc_root, std::sync::Arc::default())
+    }
+
+    fn identify_watched(
+        identifying: &Identifying,
+        proc_root: &Path,
+        reading: std::sync::Arc<AtomicBool>,
+    ) -> Result<Identified, OwnerRefusal> {
         identify_owner(
             identifying,
             proc_root.to_path_buf(),
             own_credentials(),
             ProcessHandle::open(std::process::id()).unwrap(),
+            reading,
         )
     }
 
@@ -720,15 +745,28 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let worker_identifying = identifying.clone();
         let (stalled_root, fine_root) = (stalled.path().to_path_buf(), fine.path().to_path_buf());
+        let (stuck_reading, fine_reading) = (
+            std::sync::Arc::new(AtomicBool::new(false)),
+            std::sync::Arc::new(AtomicBool::new(false)),
+        );
+        let (worker_stuck, worker_fine) = (stuck_reading.clone(), fine_reading.clone());
         std::thread::spawn(move || {
-            let stuck = identify_self(&worker_identifying, &stalled_root).unwrap();
-            let answered = identify_self(&worker_identifying, &fine_root).unwrap();
+            let stuck = identify_watched(&worker_identifying, &stalled_root, worker_stuck).unwrap();
+            let answered = identify_watched(&worker_identifying, &fine_root, worker_fine).unwrap();
             let _ = tx.send(answered.recv_blocking());
             drop(stuck);
         });
         let answer = rx.recv_timeout(std::time::Duration::from_secs(5));
+        // the stalled check is still reading: at its deadline that is a strike against its client
+        let stuck_was_reading = stuck_reading.load(Ordering::SeqCst);
         release(stalled.path(), &identifying);
         assert!(matches!(answer, Ok(Ok(Ok(())))), "{answer:?}");
+        assert!(stuck_was_reading);
+        assert!(
+            !stuck_reading.load(Ordering::SeqCst),
+            "the flag ends with the thread"
+        );
+        assert!(!fine_reading.load(Ordering::SeqCst));
     }
 
     #[test]

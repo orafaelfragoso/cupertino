@@ -2,6 +2,8 @@
 //! the dim factor, sleep turns it black, and input brings the picture back. Tests skip (pass) when no EGL device is
 //! available.
 
+mod common;
+
 use std::time::{Duration, Instant};
 
 use cupertino_defaults::power::{PowerSettings, SourceTimers, Timer};
@@ -24,8 +26,9 @@ struct Harness {
 
 impl Harness {
     fn new(power: PowerSettings) -> Option<Harness> {
-        let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().ok()?;
-        let display: Display<Cupertino> = Display::new().ok()?;
+        let event_loop: EventLoop<'static, Cupertino> =
+            EventLoop::try_new().expect("create test event loop");
+        let display: Display<Cupertino> = Display::new().expect("create test display");
         let config = Config {
             power,
             ..Config::default()
@@ -38,9 +41,9 @@ impl Harness {
             false,
             &cupertino_assets::Assets::builtin(),
         )
-        .ok()?;
+        .expect("create test compositor");
         if let Err(e) = headless::init(&mut state, OUTPUT, 1.0) {
-            eprintln!("skipping: no EGL device ({e:#})");
+            common::egl_unavailable(format!("{e:#}"));
             return None;
         }
         state.fixed_time = Some(T0);

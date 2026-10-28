@@ -382,8 +382,13 @@ fn dbus_send(bus: &PrivateBus, member: &str, arguments: &[&str]) -> std::process
 /// key; each refusal has its own error name, and the properties stay readable.
 #[test]
 fn a_host_process_that_the_server_did_not_start_is_refused_every_method() {
-    if Command::new("dbus-send").arg("--version").output().is_err() {
-        eprintln!("skipping: dbus-send is not available");
+    if let Err(error) = Command::new("dbus-send").arg("--version").output() {
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::NotFound,
+            "run dbus-send: {error}"
+        );
+        cupertino_test_bus::missing_tool("dbus-send");
         return;
     }
     let Some(bus) = PrivateBus::start() else {
@@ -463,8 +468,13 @@ fn login_service_process() {
 /// the parent itself is not.
 #[test]
 fn a_process_started_by_the_same_parent_is_refused_and_the_parent_is_not() {
-    if Command::new("dbus-send").arg("--version").output().is_err() {
-        eprintln!("skipping: dbus-send is not available");
+    if let Err(error) = Command::new("dbus-send").arg("--version").output() {
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::NotFound,
+            "run dbus-send: {error}"
+        );
+        cupertino_test_bus::missing_tool("dbus-send");
         return;
     }
     let Some(bus) = PrivateBus::start() else {

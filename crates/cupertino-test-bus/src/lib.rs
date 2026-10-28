@@ -15,6 +15,15 @@ use std::time::Duration;
 /// How long the daemon's address, a connection's handshake and each method call may take.
 pub const WAIT: Duration = Duration::from_secs(5);
 
+/// Report a missing D-Bus executable; required-backend runs must fail instead of skipping.
+pub fn missing_tool(tool: &str) {
+    assert!(
+        std::env::var("CUPERTINO_DBUS_REQUIRED").as_deref() != Ok("1"),
+        "{tool} missing and CUPERTINO_DBUS_REQUIRED=1"
+    );
+    eprintln!("SKIPPED: {tool} missing; set CUPERTINO_DBUS_REQUIRED=1 to fail instead");
+}
+
 pub struct PrivateBus {
     pub address: String,
     daemon: Child,
@@ -53,7 +62,14 @@ impl PrivateBus {
                 Ok(())
             });
         }
-        let mut daemon = command.spawn().ok()?;
+        let mut daemon = match command.spawn() {
+            Ok(daemon) => daemon,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing_tool("dbus-daemon");
+                return None;
+            }
+            Err(error) => panic!("starting private dbus-daemon: {error}"),
+        };
         let stdout = daemon.stdout.take().expect("piped stdout");
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {

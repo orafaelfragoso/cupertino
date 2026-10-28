@@ -28,6 +28,9 @@ pub struct ShmPresenter {
     pixmap: Option<Pixmap>,
     /// The scale the last frame was drawn at: a frame at another one is drawn whole.
     drawn_scale: Option<Scale>,
+    /// A configure came since the last frame: the window's states (activation, maximized) may have changed what the
+    /// frame shows, so the next one is drawn whole whatever its damage says.
+    reconfigured: bool,
     frame_pending: bool,
     wants_redraw: bool,
 }
@@ -40,6 +43,7 @@ impl ShmPresenter {
             reported_scale: Scale::ONE,
             pixmap: None,
             drawn_scale: None,
+            reconfigured: false,
             frame_pending: false,
             wants_redraw: false,
         }
@@ -60,6 +64,7 @@ impl ShmPresenter {
     /// [`draw`]: Self::draw
     pub fn configured(&mut self, size: (u32, u32)) {
         self.size = Some(size);
+        self.reconfigured = true;
         self.wants_redraw = true;
     }
 
@@ -127,7 +132,8 @@ impl ShmPresenter {
             .pixmap
             .as_ref()
             .is_some_and(|p| p.width() == pw && p.height() == ph)
-            && self.drawn_scale == Some(scale);
+            && self.drawn_scale == Some(scale)
+            && !self.reconfigured;
         let mut pixmap = match self.pixmap.take() {
             Some(p) if p.width() == pw && p.height() == ph => p,
             _ => Pixmap::new(pw, ph).ok_or(Error::BufferSize {
@@ -176,6 +182,7 @@ impl ShmPresenter {
         self.frame_pending = true;
         self.pixmap = Some(pixmap);
         self.drawn_scale = Some(scale);
+        self.reconfigured = false;
         Ok(())
     }
 }

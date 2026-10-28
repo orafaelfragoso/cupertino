@@ -828,6 +828,56 @@ fn a_damaged_frame_keeps_the_last_one_repaints_its_rectangles_and_reports_only_t
     assert_ne!(frames[0].buffer, frames[1].buffer, "the other buffer");
 }
 
+/// A configure can change what a frame shows without changing its size (activation, maximized), so the frame after one
+/// is whole even when the caller's damage is empty or partial.
+#[test]
+fn a_configure_makes_the_next_frame_whole_whatever_its_damage() {
+    let (mut app, control, committed, _seen) = connected_window();
+    while committed.try_recv().is_ok() {}
+    let red = tiny_skia::Color::from_rgba8(255, 0, 0, 255);
+    app.presenter
+        .draw(&mut app.conn, None, |pixmap, _| pixmap.fill(red))
+        .unwrap();
+    app.flush();
+    committed.recv_timeout(Duration::from_secs(5)).unwrap();
+    for damage in [vec![], vec![Rect::new(10.0, 5.25, 4.0, 3.0)]] {
+        let size = app.presenter.size().unwrap();
+        app.presenter.configured(size);
+        control.send(Control::FrameDone).unwrap();
+        app.wait_for_draw();
+        let mut cleared = None;
+        app.presenter
+            .draw_with(&mut app.conn, Some(&damage), |pixmap, _, rects| {
+                cleared = Some(rects.map(<[_]>::len));
+                assert_eq!(
+                    pixmap.pixel(0, 0).unwrap().alpha(),
+                    0,
+                    "the frame is cleared"
+                );
+            })
+            .unwrap();
+        assert_eq!(
+            cleared,
+            Some(None),
+            "a whole frame after a configure: {damage:?}"
+        );
+        app.flush();
+        let frame = committed.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(frame.damage, vec![[0, 0, i32::MAX, i32::MAX]]);
+    }
+    // the configure is answered once: the next damaged frame is damaged again
+    app.presenter.request_redraw();
+    control.send(Control::FrameDone).unwrap();
+    app.wait_for_draw();
+    let mut cleared = None;
+    app.presenter
+        .draw_with(&mut app.conn, Some(&[]), |_, _, rects| {
+            cleared = Some(rects.map(<[_]>::len));
+        })
+        .unwrap();
+    assert_eq!(cleared, Some(Some(0)));
+}
+
 /// The server holds the buffer on screen, so frames take turns between two buffers. A damaged frame converts only its
 /// rectangles and what its buffer missed of the frame before, and every committed buffer equals the whole frame.
 #[test]

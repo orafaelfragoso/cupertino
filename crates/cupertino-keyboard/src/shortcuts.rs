@@ -2,7 +2,7 @@
 //!
 //! [`ASSIGNMENTS`] is the built-in assignment table of the design: 80 rows keyed by the
 //! numbering of the source table, expressed with logical modifiers ([`cupertino_modifiers::Mods::PRIMARY`] is the
-//! shortcut modifier of the active [`crate::modifiers::ModifierProfile`]). Whether an assignment is *enabled*
+//! shortcut modifier of the active [`cupertino_modifiers::Profile`]). Whether an assignment is *enabled*
 //! out of the box is not stored in the table and could not be (unknown);
 //! [`ShortcutSet::reference_defaults`] enables the commonly used subset (approximate).
 

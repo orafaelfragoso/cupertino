@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
-use cupertino_keyboard::{BindingTable, ModifierProfile};
+use cupertino_keyboard::BindingTable;
+use cupertino_modifiers::Profile;
 
 use crate::{KeyInput, Keymap, Response, TextField};
 
@@ -143,7 +144,7 @@ fn the_primary_modifier_follows_the_users_profile() {
     f.press(E, "c", Some('e'));
     f.press(A, "c", Some('a'));
     assert_eq!(f.state(), ("abc", 0, 0..0), "Ctrl+A goes to the start");
-    let pc = Keymap::new(ModifierProfile::classic_pc(), BindingTable::standard());
+    let pc = Keymap::new(Profile::classic_pc(), BindingTable::standard());
     let mut f = Fixture::with_keymap("abc", pc);
     f.press(A, "c", Some('a'));
     assert_eq!(
@@ -151,7 +152,10 @@ fn the_primary_modifier_follows_the_users_profile() {
         0..3,
         "with Ctrl as the command key, Ctrl+A selects all"
     );
-    assert_eq!(f.press(A, "m", Some('a')), Response::Ignored);
+    // physical Super is the Ctrl role under classic-pc: Super+A goes to the start of the line, as Ctrl+A does under cupertino
+    f.press(E, "m", Some('e'));
+    f.press(A, "m", Some('a'));
+    assert_eq!(f.state(), ("abc", 0, 0..0));
 }
 
 #[test]

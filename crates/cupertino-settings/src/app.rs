@@ -1123,7 +1123,22 @@ impl App {
         Ok(())
     }
 
+    /// The modifiers of a key as the window's chords read them: the command key is `logo` whatever key the profile
+    /// makes it (Ctrl under `classic-pc`).
+    fn window_mods(&self, mods: KeyModifiers) -> KeyModifiers {
+        let m = keys::command_mods(&self.keymap, mods.shift, mods.ctrl, mods.alt, mods.logo);
+        KeyModifiers {
+            logo: m.logo,
+            ctrl: m.ctrl,
+            alt: m.alt,
+            shift: m.shift,
+            ..mods
+        }
+    }
+
     fn key(&mut self, code: u32, mods: KeyModifiers, character: Option<char>) -> Result<()> {
+        let physical = mods;
+        let mods = self.window_mods(mods);
         if self.menu.is_some() {
             return self.menu_key(code, mods, character);
         }
@@ -1175,7 +1190,14 @@ impl App {
             Action::FocusSidebar => self.set_focus(Focus::Sidebar)?,
             Action::Search(k) => self.search_key(
                 k,
-                KeyInput::new(code, mods.shift, mods.ctrl, mods.alt, mods.logo, character),
+                KeyInput::new(
+                    code,
+                    physical.shift,
+                    physical.ctrl,
+                    physical.alt,
+                    physical.logo,
+                    character,
+                ),
             )?,
             Action::None => {}
         }

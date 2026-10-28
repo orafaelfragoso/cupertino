@@ -1,115 +1,11 @@
-//! Modifier semantics: physical → logical mapping profiles, shortcut symbol selection, the fn / globe key.
+//! Modifier semantics: shortcut symbol selection and the fn / globe key. The profile that maps physical keys to logical
+//! roles is `cupertino_modifiers::Profile`.
 //!
 //! the design layouts select symbols from eight tables addressed by shift, caps lock and
 //! alt; shortcut matching ignores shift when the primary modifier is down;
 //! the fn / globe key usage values and the tap debounce come from.
 
-use cupertino_modifiers::{Mods, RawMods};
-
-/// Mapping of physical modifier keys to logical roles.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ModifierProfile {
-    pub name: &'static str,
-    shift: Mods,
-    ctrl: Mods,
-    alt: Mods,
-    sup: Mods,
-    fnk: Mods,
-    /// Whether the alt keys also select the third symbol level of the keymap (character composition).
-    pub alt_selects_symbols: bool,
-}
-
-impl ModifierProfile {
-    /// Design: Super carries shortcuts (logical primary), Alt is the alternate / symbol modifier,
-    /// Ctrl keeps its own role for the text-editing commands.
-    pub fn cupertino() -> ModifierProfile {
-        ModifierProfile {
-            name: "cupertino",
-            shift: Mods::SHIFT,
-            ctrl: Mods::CTRL,
-            alt: Mods::ALT,
-            sup: Mods::PRIMARY,
-            fnk: Mods::FN,
-            alt_selects_symbols: true,
-        }
-    }
-
-    /// Conventional PC behaviour: Ctrl carries shortcuts, Super is unused by shortcut matching.
-    pub fn classic_pc() -> ModifierProfile {
-        ModifierProfile {
-            name: "classic-pc",
-            shift: Mods::SHIFT,
-            ctrl: Mods::PRIMARY,
-            alt: Mods::ALT,
-            sup: Mods::NONE,
-            fnk: Mods::FN,
-            alt_selects_symbols: false,
-        }
-    }
-
-    /// Custom mapping, one logical modifier set per physical modifier.
-    pub fn custom(
-        name: &'static str,
-        shift: Mods,
-        ctrl: Mods,
-        alt: Mods,
-        sup: Mods,
-        fnk: Mods,
-        alt_selects_symbols: bool,
-    ) -> ModifierProfile {
-        ModifierProfile {
-            name,
-            shift,
-            ctrl,
-            alt,
-            sup,
-            fnk,
-            alt_selects_symbols,
-        }
-    }
-
-    pub fn by_name(name: &str) -> Option<ModifierProfile> {
-        match name {
-            "cupertino" => Some(Self::cupertino()),
-            "classic-pc" => Some(Self::classic_pc()),
-            _ => None,
-        }
-    }
-
-    /// Logical modifiers for a physical state.
-    pub fn translate(&self, raw: RawMods) -> Mods {
-        let mut m = Mods::NONE;
-        if raw.contains(RawMods::SHIFT) {
-            m |= self.shift;
-        }
-        if raw.contains(RawMods::CTRL) {
-            m |= self.ctrl;
-        }
-        if raw.contains(RawMods::ALT) {
-            m |= self.alt;
-        }
-        if raw.contains(RawMods::SUPER) {
-            m |= self.sup;
-        }
-        if raw.contains(RawMods::FN) {
-            m |= self.fnk;
-        }
-        m
-    }
-
-    /// Physical modifier that produces the logical primary modifier.
-    pub fn primary_physical(&self) -> Option<RawMods> {
-        [
-            (RawMods::SHIFT, self.shift),
-            (RawMods::CTRL, self.ctrl),
-            (RawMods::ALT, self.alt),
-            (RawMods::SUPER, self.sup),
-        ]
-        .into_iter()
-        .find(|(_, l)| l.contains(Mods::PRIMARY))
-        .map(|(p, _)| p)
-    }
-}
+use cupertino_modifiers::Mods;
 
 /// Which symbol-selecting modifiers apply when matching the symbol of a shortcut (on the design
 /// layouts): with the primary modifier alone the unshifted symbol is used even if shift is down; primary+alt keeps
@@ -230,24 +126,6 @@ impl GlobeTap {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn reference_profile_maps_super_to_primary() {
-        let p = ModifierProfile::cupertino();
-        let m = p.translate(RawMods::SUPER | RawMods::SHIFT);
-        assert_eq!(m, Mods::PRIMARY | Mods::SHIFT);
-        assert_eq!(p.translate(RawMods::CTRL), Mods::CTRL);
-        assert_eq!(p.primary_physical(), Some(RawMods::SUPER));
-        assert!(p.alt_selects_symbols);
-    }
-
-    #[test]
-    fn classic_profile_maps_ctrl_to_primary() {
-        let p = ModifierProfile::classic_pc();
-        assert_eq!(p.translate(RawMods::CTRL | RawMods::SUPER), Mods::PRIMARY);
-        assert_eq!(p.primary_physical(), Some(RawMods::CTRL));
-        assert!(ModifierProfile::by_name("nope").is_none());
-    }
 
     #[test]
     fn symbol_selection_with_primary() {

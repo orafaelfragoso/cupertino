@@ -1,5 +1,5 @@
 //! The keyboard of an open choice menu: Up and Down move the highlight (no wrap), Home and End jump to the ends,
-//! Return and Space choose, Escape and Super+. close without choosing, and typing jumps to the next item whose title
+//! Return and Space choose, Escape and the command key with . close without choosing, and typing jumps to the next item whose title
 //! starts with the typed text. Every other key is swallowed so none reaches the pane underneath.
 
 pub use cupertino_typeahead::TypeAhead;
@@ -178,6 +178,34 @@ mod tests {
         assert_eq!(
             press(&it, 1, &mut ta, 0.0, 26, logo, Some('[')),
             Outcome::Ignore
+        );
+    }
+
+    #[test]
+    fn the_command_key_with_a_period_cancels_whichever_key_that_is() {
+        use cupertino_modifiers::Profile;
+        use cupertino_text_field::Keymap;
+        let it = items();
+        let cancels_with = |profile: Profile, ctrl: bool, logo: bool| {
+            let keymap = Keymap::standard_for(profile);
+            let mods = crate::keys::command_mods(&keymap, false, ctrl, false, logo);
+            press(&it, 2, &mut TypeAhead::default(), 0.0, 52, mods, Some('.')) == Outcome::Cancel
+        };
+        assert!(
+            cancels_with(Profile::cupertino(), false, true),
+            "Super+. under cupertino"
+        );
+        assert!(
+            !cancels_with(Profile::cupertino(), true, false),
+            "Ctrl+. under cupertino"
+        );
+        assert!(
+            cancels_with(Profile::classic_pc(), true, false),
+            "Ctrl+. under classic-pc"
+        );
+        assert!(
+            !cancels_with(Profile::classic_pc(), false, true),
+            "Super+. under classic-pc"
         );
     }
 }

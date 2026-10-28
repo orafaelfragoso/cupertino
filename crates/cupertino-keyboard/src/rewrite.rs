@@ -9,8 +9,7 @@
 //! text bindings and the documented chords; the terminal copy and paste mapping and
 //! the guards are approximate and configurable in the compositor.
 
-use crate::modifiers::ModifierProfile;
-use cupertino_modifiers::RawMods;
+use cupertino_modifiers::{Physical, Profile, RawMods};
 
 /// evdev codes of the keys the table names (`linux/input-event-codes.h`).
 pub const KEY_HOME: u32 = 102;
@@ -88,12 +87,9 @@ pub fn is_printable(ch: Option<char>) -> bool {
 }
 
 /// The rewrite for `k` going to `t`, first matching row of the table §10.4.
-pub fn decide(profile: &ModifierProfile, t: &ClientTarget, k: &KeyPress) -> Rewrite {
+pub fn decide(profile: &Profile, t: &ClientTarget, k: &KeyPress) -> Rewrite {
     // 1 and 2: only the design profile (Super is the primary modifier) and only third-party clients
-    if profile.primary_physical() != Some(RawMods::SUPER)
-        || t.opted_out
-        || t.class == ClientClass::FirstParty
-    {
+    if profile.primary() != Physical::Super || t.opted_out || t.class == ClientClass::FirstParty {
         return Rewrite::Pass;
     }
     // 3 and 4: modifier keys, and every chord with Ctrl down (third-party Ctrl shortcuts, Ctrl+Super combinations)
@@ -164,11 +160,9 @@ pub fn decide(profile: &ModifierProfile, t: &ClientTarget, k: &KeyPress) -> Rewr
 /// any other third-party client, a Ctrl chord without Super on a printable key or Return comes from the Super chord of
 /// the same key with Shift and Alt kept (9). Every other chord, every chord of a first-party client and every chord
 /// under a profile whose primary modifier is not Super is pressed as it is received.
-pub fn pressed_for(profile: &ModifierProfile, class: ClientClass, received: &KeyPress) -> KeyPress {
+pub fn pressed_for(profile: &Profile, class: ClientClass, received: &KeyPress) -> KeyPress {
     let raw = received.raw;
-    if profile.primary_physical() != Some(RawMods::SUPER)
-        || received.is_modifier
-        || raw.contains(RawMods::SUPER)
+    if profile.primary() != Physical::Super || received.is_modifier || raw.contains(RawMods::SUPER)
     {
         return *received;
     }
@@ -233,7 +227,7 @@ mod tests {
     }
 
     fn reference(t: &ClientTarget, k: &KeyPress) -> Rewrite {
-        decide(&ModifierProfile::cupertino(), t, k)
+        decide(&Profile::cupertino(), t, k)
     }
 
     fn to_ctrl(remove: RawMods) -> Rewrite {
@@ -414,11 +408,7 @@ mod tests {
             Rewrite::Pass
         );
         assert_eq!(
-            decide(
-                &ModifierProfile::classic_pc(),
-                &target(ClientClass::Other),
-                &copy
-            ),
+            decide(&Profile::classic_pc(), &target(ClientClass::Other), &copy),
             Rewrite::Pass
         );
     }
@@ -481,7 +471,7 @@ mod tests {
 
     #[test]
     fn pressed_for_inverts_decide_for_every_class_and_profile() {
-        for profile in [ModifierProfile::cupertino(), ModifierProfile::classic_pc()] {
+        for profile in [Profile::cupertino(), Profile::classic_pc()] {
             for class in [
                 ClientClass::FirstParty,
                 ClientClass::Terminal,
@@ -524,7 +514,7 @@ mod tests {
 
     #[test]
     fn a_ctrl_chord_of_a_third_party_client_is_pressed_with_super() {
-        let cupertino = ModifierProfile::cupertino();
+        let cupertino = Profile::cupertino();
         let q = letter(16, 0x71, CTRL);
         assert_eq!(pressed_for(&cupertino, ClientClass::Other, &q).raw, SUP);
         let f5 = named(KEY_F5, SYM_F5, CTRL);
@@ -541,7 +531,7 @@ mod tests {
             SUP
         );
         assert_eq!(
-            pressed_for(&ModifierProfile::classic_pc(), ClientClass::Other, &q),
+            pressed_for(&Profile::classic_pc(), ClientClass::Other, &q),
             q
         );
     }

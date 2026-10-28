@@ -77,8 +77,9 @@ pub struct Context<'a> {
 
 /// The action for `effect`, `None` when nothing is to be done.
 ///
-/// The application menu and the synthetic Window menu act through the server; the menus of an
-/// exporter and of status items go to their exporter. A status item's menu is read once when the
+/// The bar's own items (the App menu, the synthetic menus and what the bar adds to an exporter's) act through the
+/// server; the exporter's items, and the bar's items rebound to them, go to the exporter, as do the items of status
+/// menus. A status item's menu is read once when the
 /// item is announced, so it is not refreshed before it opens.
 pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
     match effect {
@@ -88,7 +89,7 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
         Effect::AboutToShow {
             slot: SlotKey::Menu(_),
             item,
-        } => match cx.feed.source(cx.shared) {
+        } if !fallback::is_system(item) => match cx.feed.source(cx.shared) {
             MenuSource::Kde(menu) => {
                 Some(Action::Request(Request::AboutToShow { menu, item: item.0 }))
             }
@@ -130,23 +131,9 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
             }))
         }
         Effect::Activate {
-            slot: SlotKey::Menu(_),
+            slot: SlotKey::Menu(_) | SlotKey::AppMenu,
             item,
-        } => match cx.feed.source(cx.shared) {
-            MenuSource::Kde(menu) => Some(Action::Request(Request::ActivateDbusMenu {
-                menu,
-                item: item.0,
-            })),
-            MenuSource::Gtk(props) => Some(Action::Request(Request::ActivateGtk {
-                props,
-                item: item.0,
-            })),
-            MenuSource::Synthetic => fallback_action(item, cx.feed),
-        },
-        Effect::Activate {
-            slot: SlotKey::AppMenu,
-            item,
-        } => fallback_action(item, cx.feed),
+        } => menu_action(item, cx),
         Effect::Activate {
             slot: SlotKey::System,
             item,
@@ -204,6 +191,31 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
     }
 }
 
+/// The action of an item of the App menu or of the application's menus: the bar's own items act through the server,
+/// unless About, Settings… or Quit is rebound to the exporter's item of its role; the exporter's items go to the
+/// exporter.
+fn menu_action(item: ItemId, cx: &Context) -> Option<Action> {
+    let target = if fallback::is_system(item) {
+        match fallback::action_for(item).and_then(|a| cx.feed.rebound(cx.shared, a)) {
+            Some(target) => target,
+            None => return fallback_action(item, cx.feed),
+        }
+    } else {
+        item
+    };
+    match cx.feed.source(cx.shared) {
+        MenuSource::Kde(menu) => Some(Action::Request(Request::ActivateDbusMenu {
+            menu,
+            item: target.0,
+        })),
+        MenuSource::Gtk(props) => Some(Action::Request(Request::ActivateGtk {
+            props,
+            item: target.0,
+        })),
+        MenuSource::Synthetic => None,
+    }
+}
+
 /// The action of an item of the synthetic menus.
 fn fallback_action(item: ItemId, feed: &BarFeed) -> Option<Action> {
     Some(match fallback::action_for(item)? {
@@ -243,6 +255,7 @@ mod tests {
     use crate::extras::{BluetoothState, SystemRow};
     use crate::feed::StatusState;
     use crate::geom::Rect;
+    use crate::item::MenuItem;
     use crate::layout::{layout_bar, BarMetrics, MonoMeasure};
     use crate::source::GtkMenuProps;
     use cupertino_shell_client::{ActiveApp, AppWindow, GtkMenu, MenuBarUpdate, WindowMenu};
@@ -416,6 +429,70 @@ mod tests {
         assert_eq!(
             f.resolve(activate(SlotKey::Menu(ItemId(1)), 5)),
             Some(Action::Request(Request::ActivateGtk { props, item: 5 }))
+        );
+    }
+
+    #[test]
+    fn merged_menus_tell_the_bars_items_from_the_exporters() {
+        let mut f = Fixture::new(kde_menu());
+        f.feed.request_layout(&mut f.shared);
+        let tree = MenuItem::submenu(
+            0,
+            "",
+            vec![
+                MenuItem::submenu(
+                    1,
+                    "Editor",
+                    vec![
+                        MenuItem::new(2, "About Editor"),
+                        MenuItem::new(3, "Check for Updates"),
+                    ],
+                ),
+                MenuItem::submenu(
+                    10,
+                    "File",
+                    vec![MenuItem::new(11, "New"), MenuItem::new(12, "Quit")],
+                ),
+                MenuItem::submenu(20, "Window", vec![MenuItem::new(21, "Split View")]),
+            ],
+        );
+        f.shared.apply_layout(&MenuSource::Kde(kde()), tree);
+        let to_exporter = |item| {
+            Some(Action::Request(Request::ActivateDbusMenu {
+                menu: kde(),
+                item,
+            }))
+        };
+        let app =
+            |action: FallbackAction| f.resolve(activate(SlotKey::AppMenu, action.item_id().0));
+        assert_eq!(app(FallbackAction::About), to_exporter(2), "rebound");
+        assert_eq!(app(FallbackAction::Quit), to_exporter(12), "rebound");
+        assert_eq!(app(FallbackAction::Settings), None, "nothing to bind");
+        assert_eq!(
+            app(FallbackAction::Hide),
+            Some(Action::WindowCommand(WindowCommand::HideApp))
+        );
+        assert_eq!(
+            f.resolve(activate(SlotKey::AppMenu, 3)),
+            to_exporter(3),
+            "the application's own item moved into the App menu"
+        );
+        let window = SlotKey::Menu(fallback::WINDOW_MENU);
+        assert_eq!(
+            f.resolve(activate(
+                window.clone(),
+                FallbackAction::Minimize.item_id().0
+            )),
+            Some(Action::WindowCommand(WindowCommand::Minimize))
+        );
+        assert_eq!(f.resolve(activate(window.clone(), 21)), to_exporter(21));
+        assert_eq!(
+            f.resolve(Effect::AboutToShow {
+                slot: window,
+                item: fallback::WINDOW_MENU
+            }),
+            None,
+            "the bar's own menus load nothing from the exporter"
         );
     }
 

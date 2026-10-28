@@ -674,10 +674,7 @@ fn gtk_menu_model_is_read_and_activated() {
         assert_eq!(file.label, "File");
         let labels: Vec<&str> = file.children.iter().map(|c| c.label.as_str()).collect();
         assert_eq!(labels, vec!["New", "", "Mode"]);
-        assert_eq!(
-            file.children[0].shortcut.as_ref().unwrap().display(),
-            "Ctrl+n"
-        );
+        assert_eq!(file.children[0].accel.as_deref(), Some("<Primary>n"));
         assert_eq!(
             file.children[2].toggle,
             Toggle::Radio(true),

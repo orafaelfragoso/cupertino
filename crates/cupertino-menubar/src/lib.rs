@@ -5,6 +5,7 @@
 //! * [`controller`]: the interaction state machine (press-drag-release, click-sticky menus, hover
 //!   switching, keyboard navigation, type-ahead, submenus with a safe triangle).
 //! * [`fallback`]: synthetic app and Window menus for apps that export none.
+//! * [`merge`]: an exporter's menus merged with the bar's App, Window and Help menus (roles, rebinding, order).
 //! * [`clock`]: the clock text and its ticks; its options are `menubar.conf`, read and written by
 //!   `cupertino_defaults::menubar`.
 //! * [`extras`]: the bar's own status items (Wi-Fi, battery, Bluetooth, Focus) and their menus, and the system menu.
@@ -35,6 +36,7 @@ pub mod fallback;
 pub mod geom;
 pub mod item;
 pub mod layout;
+pub mod merge;
 pub mod recent;
 pub mod source;
 

@@ -609,6 +609,8 @@ enum Cmd {
     SetGtkAppMenu(String),
     /// Clear the GTK menu properties of an application window.
     ClearGtkAddress,
+    /// `gtk_surface1.present` of the application's first window.
+    GtkPresentFirst,
     /// Set the GTK menu properties of an application window as given: application id, application menu, menu bar,
     /// window and application object paths, bus name.
     SetGtkProperties([Option<String>; 6]),
@@ -854,6 +856,7 @@ impl BarClient {
                 | Cmd::SetGtkAddress(_)
                 | Cmd::SetGtkAppMenu(_)
                 | Cmd::ClearGtkAddress
+                | Cmd::GtkPresentFirst
                 | Cmd::SetGtkProperties(_)
                 | Cmd::ReleaseAddress
                 | Cmd::DestroySecondWindow
@@ -1125,6 +1128,7 @@ impl AppClient {
                 Cmd::ClearGtkAddress => {
                     gtk_surface.set_dbus_properties(None, None, None, None, None, None)
                 }
+                Cmd::GtkPresentFirst => gtk_surface.present(0),
                 Cmd::SetGtkProperties([id, app_menu, menubar, window, application, bus_name]) => {
                     gtk_surface.set_dbus_properties(
                         id,
@@ -1614,6 +1618,25 @@ fn the_bar_gets_the_menus_of_the_focused_window_of_a_client_with_two() {
 
 /// GTK hides a window's own menu bar on `global_menu_bar` (2): the server announces it only while a menu bar shows
 /// the menus, to clients already connected and to new ones, and withdraws it (0) when the bar goes.
+/// A window of the client that has the keyboard focus is brought forward by `gtk_surface1.present`, and the focus stays
+/// with that client; the same request from a client with no input behind it is refused
+/// (`dock_v1::a_gtk_present_or_focus_request_from_a_background_client_only_bounces_its_tile`).
+#[test]
+fn a_focused_clients_gtk_present_brings_its_other_window_forward() {
+    let Some(mut h) = Harness::new() else { return };
+    let app = AppClient::spawn(h.socket_path(), "org.example.office");
+    let first = h.mapped_window(1);
+    app.send(Cmd::OpenSecondWindow);
+    let second = h.mapped_window(2);
+    assert_ne!(second, first);
+    assert_eq!(h.state.wm.key_window(), Some(second));
+
+    app.send(Cmd::GtkPresentFirst);
+    h.wait_until("the first window to come forward", |s| {
+        s.wm.key_window() == Some(first)
+    });
+}
+
 #[test]
 fn gtk_clients_are_told_of_a_global_menu_bar_only_while_a_bar_exists() {
     let Some(mut h) = Harness::new() else { return };

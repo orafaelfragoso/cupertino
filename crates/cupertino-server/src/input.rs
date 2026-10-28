@@ -380,6 +380,8 @@ impl Action {
 #[derive(Clone, Debug)]
 pub struct KeyBindings {
     entries: Vec<(Chord, Action)>,
+    /// What the Super key runs when it is pressed and released alone.
+    tap: Option<Action>,
     /// Commands of `exec:` bindings, indexed by [`Action::Exec`].
     exec: Vec<String>,
 }
@@ -388,6 +390,7 @@ impl KeyBindings {
     pub fn empty() -> Self {
         Self {
             entries: Vec::new(),
+            tap: None,
             exec: Vec::new(),
         }
     }
@@ -424,6 +427,7 @@ impl KeyBindings {
         } else {
             "Ctrl+Alt+n"
         };
+        k.tap = map.tap().and_then(|a| k.convert(a));
         let extras: &[(&str, Action)] = &[
             ("Super+Return", Action::SpawnTerminal),
             ("Super+Ctrl+z", Action::ToggleZoom),
@@ -1027,6 +1031,16 @@ impl KeyRouter {
         }
     }
 
+    /// The plan of the Super key tapped alone, when one is bound and the session is not locked.
+    pub fn tap_plan(&self, ctx: &ActionContext) -> Option<ActionPlan> {
+        if ctx.locked {
+            return None;
+        }
+        self.bindings
+            .tap
+            .map(|action| translate_action(action, ctx))
+    }
+
     /// Modifier state changed: releasing the modifiers of the chord that opened the switcher (Super for the Super+Tab
     /// of `cupertino`, Alt for the Alt+Tab of `classic-pc`) commits it.
     pub fn modifiers_changed(&mut self, mods: Mods, ctx: &ActionContext) -> ActionPlan {
@@ -1146,6 +1160,24 @@ mod tests {
             mods("Super+q", "classic-pc"),
             parse_chord("Super+q").unwrap().mods
         );
+    }
+
+    #[test]
+    fn the_super_tap_runs_its_action_unless_the_session_is_locked() {
+        let c = ctx();
+        let classic = classic_router();
+        assert_eq!(
+            dbg(&classic.tap_plan(&c).unwrap().ops),
+            dbg(&vec![ShellOp::ToggleLauncher])
+        );
+        let locked = ActionContext {
+            locked: true,
+            ..ctx()
+        };
+        assert!(classic.tap_plan(&locked).is_none());
+        // cupertino binds no tap
+        let cupertino = KeyRouter::new(cupertino_bindings());
+        assert!(cupertino.tap_plan(&c).is_none());
     }
 
     fn classic_router() -> KeyRouter {

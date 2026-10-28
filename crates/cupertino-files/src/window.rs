@@ -3127,8 +3127,8 @@ mod tests {
     }
 
     #[test]
-    fn the_no_results_view_redraws_from_its_caches_and_writes_at_most_twice_its_pixels_at_any_size()
-    {
+    fn the_no_results_view_redraws_from_its_caches_and_writes_its_expected_share_of_its_pixels_at_any_size(
+    ) {
         let (_d, mut browser, places, mut painter, _frame) = search_window(1.0);
         browser.set_filter("zzz-nothing");
         assert!(browser.no_results());
@@ -3211,12 +3211,21 @@ mod tests {
         .map(|what| (what.to_owned(), 1, 0, 0, 0))
         .collect();
         assert_eq!(work, expected);
-        // the work grows with the pixels: each pixel of the window is filled once and the content view copied over
-        // once, so a frame writes at most twice its pixels
-        let over: Vec<_> = written.iter().filter(|(_, ratio)| *ratio > 2.0).collect();
-        assert!(
-            over.is_empty(),
-            "pixels written per frame pixel: {written:?}"
-        );
+        // the work grows with the pixels: the window is filled once and the content view copied over it, plus fixed
+        // shapes that are a smaller share of a larger window; any frame work that outgrows the pixels moves a ratio
+        let expected = [
+            ("600 x 400 at 1x", 1.30),
+            ("920 x 436 at 1x", 1.56),
+            ("1920 x 1080 at 1x", 1.78),
+            ("1920 x 1080 at 2x", 1.78),
+            ("3840 x 2160 at 1x", 1.89),
+        ];
+        for ((what, ratio), (name, want)) in written.iter().zip(expected) {
+            assert_eq!(what, name);
+            assert!(
+                (ratio - want).abs() <= 0.05,
+                "{what}: {ratio:.3} pixels written per frame pixel, expected {want} +- 0.05"
+            );
+        }
     }
 }

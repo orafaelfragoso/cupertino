@@ -84,6 +84,18 @@ class IgnoredOutputTest(unittest.TestCase):
         self.assertEqual(len(problems), 1, problems)
         self.assertIn("docs/book/forced.js", problems[0])
 
+    def test_a_failing_metadata_check_is_a_problem(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "packaging").mkdir()
+            (root / "packaging" / "release.py").write_text("import sys\nprint('stale', file=sys.stderr)\nsys.exit(1)\n")
+            problems = gate.metadata_problems(root.resolve())
+        self.assertEqual(problems, ["packaging: check-metadata: stale"])
+
+    def test_a_tree_without_a_release_script_has_no_metadata_problems(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(gate.metadata_problems(Path(tmp).resolve()), [])
+
 
 if __name__ == "__main__":
     unittest.main()

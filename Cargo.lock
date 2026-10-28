@@ -720,6 +720,9 @@ dependencies = [
 name = "cupertino-apps"
 version = "0.1.0"
 dependencies = [
+ "percent-encoding",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 
@@ -818,6 +821,7 @@ name = "cupertino-dock"
 version = "0.1.0"
 dependencies = [
  "cupertino-animation",
+ "cupertino-apps",
  "cupertino-assets",
  "cupertino-decorations",
  "cupertino-defaults",
@@ -953,7 +957,6 @@ dependencies = [
  "cupertino-ui-wayland",
  "cupertino-wayland-client",
  "image",
- "serde",
  "serde_json",
  "tempfile",
  "tiny-skia",
@@ -1004,6 +1007,7 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "async-io",
+ "cupertino-apps",
  "cupertino-assets",
  "cupertino-decorations",
  "cupertino-defaults",

@@ -2,6 +2,8 @@
 //! popups, input routing and timers. The decisions live in the library modules (`feed`,
 //! `routing`, `popups`, `raster`); this file only connects them to the toolkit.
 
+use cupertino_apps::launch::{self, Launch, OPEN_COMMAND};
+use cupertino_apps::{Locale, MimeApps, MimeDatabase, Visibility, XdgDirs};
 use cupertino_assets::Assets;
 use cupertino_defaults::menubar::MenuBarSettings;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
@@ -17,6 +19,7 @@ use cupertino_menubar::geom::{Point, Rect};
 use cupertino_menubar::layout::{BarMetrics, MenuMetrics};
 use cupertino_menubar::popups::{self, PopupOp};
 use cupertino_menubar::raster::{BarText, MenuPalette, Style, POPUP_RADIUS};
+use cupertino_menubar::recent::RecentSources;
 use cupertino_menubar::routing::{self, menu_key, Action, Context};
 use cupertino_menubar::worker::{self, Worker};
 use cupertino_protocol_app::{AppEffects, Backdrop};
@@ -32,7 +35,7 @@ use cupertino_wayland_client::{
 };
 use std::collections::HashMap;
 use std::error::Error;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -45,9 +48,8 @@ const DIMMED_ALPHA: f32 = 0.4;
 
 const NAMESPACE: &str = "cupertino-menubar";
 
-/// Environment variables that hand the activation token to a started program.
-const ACTIVATION_TOKEN_ENV: &str = "XDG_ACTIVATION_TOKEN";
-const STARTUP_ID_ENV: &str = "DESKTOP_STARTUP_ID";
+/// The name the process reports problems under.
+const PROCESS: &str = "cupertino-menubar";
 
 /// The popup surface of one open menu level.
 struct PopupSurface {
@@ -117,8 +119,10 @@ struct App {
     extras_events: Receiver<Extras>,
     /// Identifies the next bar's menu in the shared sources.
     next_key: u64,
-    /// Programs waiting for their activation token, by request.
-    pending: HashMap<TokenRequest, Vec<String>>,
+    /// Launches waiting for their activation token, by request.
+    pending: HashMap<TokenRequest, Launch>,
+    /// Where Recent Items is read from; `None` when the session's directories are not known.
+    recent: Option<RecentSources>,
 }
 
 /// `menubar.conf` from the configuration directory (`CUPERTINO_MENUBAR_CONFIG` overrides the path); every key unset
@@ -195,6 +199,17 @@ pub fn run() -> Result<std::convert::Infallible> {
     let (worker, events) = Worker::start(session.clone(), move || waker.wake())?;
     let waker = conn.waker();
     let (extras, extras_events) = ExtrasBus::start(session, move || waker.wake());
+    let recent = match XdgDirs::from_env() {
+        Ok(dirs) => Some(RecentSources::new(
+            &dirs,
+            Locale::from_env(),
+            Visibility::from_env(),
+        )),
+        Err(e) => {
+            eprintln!("{PROCESS}: no Recent Items: {e}");
+            None
+        }
+    };
     let mut app = App {
         conn,
         layer_shell,
@@ -222,6 +237,7 @@ pub fn run() -> Result<std::convert::Infallible> {
         extras_events,
         next_key: 0,
         pending: HashMap::new(),
+        recent,
     };
     app.reconcile_outputs()?;
     for event in early {
@@ -737,34 +753,73 @@ impl App {
 
     // ---- launches ------------------------------------------------------------------------
 
-    /// Fetch an activation token for a program started from bar `i`; it starts when the token arrives.
-    fn begin_launch(&mut self, i: usize, argv: Vec<String>) {
+    /// Fetch an activation token for a launch from bar `i`; it starts when the token arrives.
+    fn begin_launch(&mut self, i: usize, launch: Launch) {
         match self
             .conn
             .request_activation_token(self.bars[i].layer.surface(), None)
         {
             Ok(request) => {
-                self.pending.insert(request, argv);
+                self.pending.insert(request, launch);
             }
-            Err(e) => eprintln!("cupertino-menubar: cannot launch {}: {e}", argv.join(" ")),
+            Err(e) => eprintln!("{PROCESS}: cannot launch {}: {e}", launch_name(&launch)),
         }
     }
 
-    /// Start the program that waited for `token` (it uses the token to take the focus).
+    /// Start the launch that waited for `token` (it uses the token to take the focus).
     fn complete_launch(&mut self, request: TokenRequest, token: &str) {
-        let Some(argv) = self.pending.remove(&request) else {
-            eprintln!("cupertino-menubar: an activation token arrived for no launch");
+        let Some(launch) = self.pending.remove(&request) else {
+            eprintln!("{PROCESS}: an activation token arrived for no launch");
             return;
         };
-        let Some((program, args)) = argv.split_first() else {
-            return;
-        };
-        let mut command = Command::new(program);
-        command
-            .args(args)
-            .env(ACTIVATION_TOKEN_ENV, token)
-            .env(STARTUP_ID_ENV, token);
-        spawn(command);
+        match launch.command(token) {
+            Some(spec) if spec.terminal => eprintln!(
+                "{PROCESS}: {} runs in a terminal, and the menu bar has none",
+                launch_name(&launch)
+            ),
+            Some(spec) => {
+                launch::spawn(PROCESS, spec.to_command());
+            }
+            None => eprintln!("{PROCESS}: {} has no command", launch_name(&launch)),
+        }
+    }
+
+    /// Open `file` from bar `i` with the default application of its type, or through [`OPEN_COMMAND`] when no
+    /// installed application handles it. The associations are read at each open, so changed defaults apply at once.
+    fn open_document(&mut self, i: usize, file: &Path) {
+        let apps = XdgDirs::from_env().and_then(|dirs| {
+            let db = MimeDatabase::load(&dirs.all_data_dirs()).map_err(|e| e.to_string())?;
+            MimeApps::load(&dirs, db, &Locale::from_env(), &Visibility::from_env())
+                .map_err(|e| e.to_string())
+        });
+        match apps.map(|apps| launch::open_with_default(&apps, file)) {
+            Ok(Some(launch)) => self.begin_launch(i, launch),
+            Ok(None) => {
+                let mut command = Command::new(OPEN_COMMAND);
+                command.arg(file);
+                launch::spawn(PROCESS, command);
+            }
+            Err(e) => eprintln!("{PROCESS}: cannot open {}: {e}", file.display()),
+        }
+    }
+
+    /// Read Recent Items for the system menu that is opening; the bars show it at their next refresh.
+    fn read_recent_items(&mut self) {
+        if let Some(sources) = &self.recent {
+            let now = unix_now();
+            self.shared.recent = sources.read(now);
+        }
+    }
+
+    /// Clear Menu: Recent Items lists only what is used from now on.
+    fn clear_recent_items(&mut self) {
+        if let Some(sources) = &self.recent {
+            let now = unix_now();
+            if let Err(e) = sources.clear(now) {
+                eprintln!("{PROCESS}: cannot write {}: {e}", sources.cleared.display());
+            }
+            self.shared.recent = Default::default();
+        }
     }
 
     // ---- effects -------------------------------------------------------------------------
@@ -795,7 +850,19 @@ impl App {
                     self.bars[i].menu_bar.move_to_workspace(workspace)
                 }
                 Action::ActivateWindow(id) => self.bars[i].menu_bar.activate_window(id),
-                Action::Launch(argv) => self.begin_launch(i, argv),
+                Action::Launch(launch) => self.begin_launch(i, launch),
+                Action::OpenDocument(file) => self.open_document(i, &file),
+                Action::SystemMenuOpening {
+                    refresh_capabilities,
+                } => {
+                    self.read_recent_items();
+                    if refresh_capabilities {
+                        self.bars[i].menu_bar.session_action(client_session_action(
+                            SessionAction::RefreshCapabilities,
+                        ));
+                    }
+                }
+                Action::ClearRecentItems => self.clear_recent_items(),
                 Action::ShowAbout => {
                     eprintln!("cupertino-menubar: about requested (there is no about panel yet)")
                 }
@@ -948,18 +1015,19 @@ impl App {
     }
 }
 
-/// Run a command detached from the loop; its exit is reaped on a thread.
-fn spawn(mut command: Command) {
-    let program = command.get_program().to_string_lossy().into_owned();
-    match command.spawn() {
-        Ok(mut child) => {
-            std::thread::spawn(move || {
-                if let Err(e) = child.wait() {
-                    eprintln!("cupertino-menubar: {program}: {e}");
-                }
-            });
-        }
-        Err(e) => eprintln!("cupertino-menubar: cannot run {program}: {e}"),
+/// Seconds since the Unix epoch (0 for a clock set before it).
+fn unix_now() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64())
+}
+
+/// What a launch starts, for messages.
+fn launch_name(launch: &Launch) -> String {
+    match launch {
+        Launch::Program(argv) => argv.join(" "),
+        Launch::App(app) => app.id.clone(),
+        Launch::Open { app, file } => format!("{} with {}", file.display(), app.id),
     }
 }
 

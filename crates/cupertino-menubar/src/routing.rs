@@ -1,7 +1,7 @@
 //! From input and controller effects to what the process does: key mapping and the action a
 //! controller effect stands for, given what the bar shows.
 
-use crate::controller::{Effect, Key};
+use crate::controller::{Effect, Key, SYSTEM_MENU_ROOT};
 use crate::extras::{ExtraAction, ExtraKind, SystemAction};
 use crate::fallback::{self, FallbackAction};
 use crate::feed::{BarFeed, Shared};
@@ -9,8 +9,10 @@ use crate::item::ItemId;
 use crate::layout::{BarLayout, SlotKey};
 use crate::source::{KdeAppMenu, MenuSource};
 use crate::worker::Request;
+use cupertino_apps::Launch;
 use cupertino_shell_client::WindowCommand;
 use cupertino_wayland_client::key;
+use std::path::PathBuf;
 
 /// The control panel, which Settings… of the system menu starts.
 const SETTINGS_PROGRAM: &str = "cupertino-settings";
@@ -47,8 +49,17 @@ pub enum Action {
     /// Show a window of the window list by its server id.
     ActivateWindow(u32),
     ShowAbout,
-    /// Start a program (found on `PATH`) with its arguments, handing it an activation token.
-    Launch(Vec<String>),
+    /// Start a program or an application, handing it an activation token.
+    Launch(Launch),
+    /// Open a file with the default application of its type.
+    OpenDocument(PathBuf),
+    /// The system menu is about to open: read Recent Items again and, with a session agent, ask it to read what the
+    /// machine allows again.
+    SystemMenuOpening {
+        refresh_capabilities: bool,
+    },
+    /// Clear Menu of Recent Items.
+    ClearRecentItems,
     /// A row of one of the bar's own items.
     Extra(ExtraAction),
 }
@@ -82,13 +93,13 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
             _ => None,
         },
         // the system menu asks the session agent to read the machine's policy again as it opens: what it allows can have
-        // changed since the bar started (the answer arrives as a change of `Capabilities`)
+        // changed since the bar started (the answer arrives as a change of `Capabilities`); Recent Items is read then too
         Effect::AboutToShow {
             slot: SlotKey::System,
-            ..
-        } if cx.shared.extras.session.is_some() => Some(Action::Extra(ExtraAction::Session(
-            crate::extras::SessionAction::RefreshCapabilities,
-        ))),
+            item: SYSTEM_MENU_ROOT,
+        } => Some(Action::SystemMenuOpening {
+            refresh_capabilities: cx.shared.extras.session.is_some(),
+        }),
         Effect::AboutToShow { .. } => None,
         Effect::Activate {
             slot: SlotKey::Status(id),
@@ -141,15 +152,26 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
             match cx
                 .shared
                 .extras
-                .system_menu(&cx.shared.chords)
+                .system_menu(&cx.shared.chords, &cx.shared.recent)
                 .action(item)?
             {
+                ExtraAction::System(SystemAction::About) => Action::Launch(Launch::Program(vec![
+                    SETTINGS_PROGRAM.to_owned(),
+                    "--about".to_owned(),
+                ])),
                 ExtraAction::System(SystemAction::Settings) => {
-                    Action::Launch(vec![SETTINGS_PROGRAM.to_owned()])
+                    Action::Launch(Launch::Program(vec![SETTINGS_PROGRAM.to_owned()]))
                 }
                 ExtraAction::System(SystemAction::ForceQuit) => {
                     Action::WindowCommand(WindowCommand::ForceQuitDialog)
                 }
+                ExtraAction::System(SystemAction::OpenRecentApp(row)) => {
+                    Action::Launch(Launch::App(cx.shared.recent.apps.get(*row)?.entry.clone()))
+                }
+                ExtraAction::System(SystemAction::OpenRecentDocument(row)) => {
+                    Action::OpenDocument(cx.shared.recent.documents.get(*row)?.path.clone())
+                }
+                ExtraAction::System(SystemAction::ClearRecentItems) => Action::ClearRecentItems,
                 action => Action::Extra(action.clone()),
             },
         ),
@@ -559,7 +581,10 @@ mod tests {
     fn a_system_menu_entry_goes_to_the_session_agent() {
         let mut f = Fixture::new(WindowMenu::None);
         f.shared.extras.session = Some(crate::extras::SessionState::default());
-        let menu = f.shared.extras.system_menu(&f.shared.chords);
+        let menu = f
+            .shared
+            .extras
+            .system_menu(&f.shared.chords, &f.shared.recent);
         let restart = menu
             .rows
             .iter()
@@ -584,8 +609,17 @@ mod tests {
     {
         let f = Fixture::new(WindowMenu::None);
         assert_eq!(
+            f.resolve(activate(SlotKey::System, SystemRow::About.id().0)),
+            Some(Action::Launch(Launch::Program(vec![
+                "cupertino-settings".to_owned(),
+                "--about".to_owned()
+            ])))
+        );
+        assert_eq!(
             f.resolve(activate(SlotKey::System, SystemRow::Settings.id().0)),
-            Some(Action::Launch(vec!["cupertino-settings".to_owned()]))
+            Some(Action::Launch(Launch::Program(vec![
+                "cupertino-settings".to_owned()
+            ])))
         );
         assert_eq!(
             f.resolve(activate(SlotKey::System, SystemRow::ForceQuit.id().0)),
@@ -606,18 +640,88 @@ mod tests {
             slot,
             item: crate::controller::SYSTEM_MENU_ROOT,
         };
-        assert_eq!(f.resolve(about(SlotKey::System)), None, "no agent, no call");
+        assert_eq!(
+            f.resolve(about(SlotKey::System)),
+            Some(Action::SystemMenuOpening {
+                refresh_capabilities: false
+            }),
+            "no agent, no call"
+        );
         f.shared.extras.session = Some(crate::extras::SessionState::default());
         assert_eq!(
             f.resolve(about(SlotKey::System)),
-            Some(Action::Extra(ExtraAction::Session(
-                crate::extras::SessionAction::RefreshCapabilities
-            )))
+            Some(Action::SystemMenuOpening {
+                refresh_capabilities: true
+            })
+        );
+        assert_eq!(
+            f.resolve(Effect::AboutToShow {
+                slot: SlotKey::System,
+                item: SystemRow::RecentItems.id(),
+            }),
+            None,
+            "a submenu opening reads nothing"
         );
         assert_eq!(
             f.resolve(about(SlotKey::AppMenu)),
             None,
             "other menus do not ask"
+        );
+    }
+
+    #[test]
+    fn a_recent_item_is_resolved_by_its_position_when_clicked() {
+        use crate::extras::{CLEAR_RECENT_ITEMS, RECENT_APP_ROWS, RECENT_DOCUMENT_ROWS};
+        use crate::recent::{RecentApp, RecentDocument, RecentItems};
+        let mut f = Fixture::new(WindowMenu::None);
+        let entry = cupertino_apps::DesktopEntry {
+            id: "editor.desktop".into(),
+            name: "Editor".into(),
+            generic_name: String::new(),
+            comment: String::new(),
+            keywords: vec![],
+            categories: vec![],
+            icon: None,
+            exec: "editor".into(),
+            try_exec: None,
+            terminal: false,
+            path: None,
+            startup_wm_class: None,
+            actions: vec![],
+            source: None,
+        };
+        f.shared.recent = RecentItems {
+            apps: vec![RecentApp {
+                entry: entry.clone(),
+                last_used: 0.0,
+            }],
+            documents: vec![RecentDocument {
+                path: "/home/ada/notes.md".into(),
+                used: None,
+            }],
+        };
+        assert_eq!(
+            f.resolve(activate(SlotKey::System, RECENT_APP_ROWS)),
+            Some(Action::Launch(Launch::App(entry)))
+        );
+        assert_eq!(
+            f.resolve(activate(SlotKey::System, RECENT_DOCUMENT_ROWS)),
+            Some(Action::OpenDocument("/home/ada/notes.md".into()))
+        );
+        assert_eq!(
+            f.resolve(activate(SlotKey::System, CLEAR_RECENT_ITEMS)),
+            Some(Action::ClearRecentItems)
+        );
+        assert_eq!(
+            f.resolve(activate(SlotKey::System, RECENT_APP_ROWS - 1)),
+            None,
+            "no second application"
+        );
+        f.shared.recent = RecentItems::default();
+        assert_eq!(
+            f.resolve(activate(SlotKey::System, RECENT_APP_ROWS)),
+            None,
+            "the menu was cleared"
         );
     }
 }

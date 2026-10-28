@@ -11,7 +11,8 @@ computes, and feeds the crate pointer, key and timer events with absolute timest
 | `layout` | `BarContent` → `BarLayout`: bold app-name menu, menus, status items nearest the control panel first, control panel slot, clock. Items that do not fit are reported hidden. `layout_popup` lays out rows, separators, check / radio column, icon column, shortcut text, submenu arrows, flipping, clipping and scrolling. `TextMeasure` abstracts text measurement; `MonoMeasure` is a deterministic stand-in. |
 | `controller` | `MenuController`: press-drag-release, click-sticky menus, hover switching between open menus, focus-bar shortcut, arrow / Home / End / Enter / Esc keys, type-ahead, submenus with open / close delays and a safe triangle, disabled / checked / separator / shortcut items, `AboutToShow` and `Activate` effects. |
 | `clock` | The clock text (`clock_text`: weekday, day and short month, 12 / 24-hour time, seconds, day period, flashing separators) and its ticks (`next_tick`, `tick_interval`) from `ClockSettings`, which `cupertino_defaults::menubar` reads from and writes to `menubar.conf` (the `clock.* keys, bad lines reported with their numbers). |
-| `extras` | The bar's own status items (Wi-Fi, battery, Bluetooth, Focus): which show, their icons, menus (`ExtraMenu`) and row actions (`ExtraAction`), from an `Extras` snapshot of the services; the system menu (`system_menu`, rows at fixed ids `SystemRow`). |
+| `extras` | The bar's own status items (Wi-Fi, battery, Bluetooth, Focus): which show, their icons, menus (`ExtraMenu`) and row actions (`ExtraAction`), from an `Extras` snapshot of the services; the system menu (`system_menu`, rows at fixed ids `SystemRow`) and its Recent Items submenu (`recent_items`). |
+| `recent` | What Recent Items lists (`RecentItems`): `RecentSources::read` takes the launcher's applications in its order (`cupertino_apps::frecency`, ids without an installed visible desktop entry skipped) and the documents of `recently-used.xbel` newest first (`cupertino_apps::recent`, missing files skipped), at most 10 of each, leaving out what was used at or before the last Clear Menu (`RecentSources::clear`, the bar's own `$XDG_DATA_HOME/cupertino/menubar-recent-items-cleared`). It never writes the launcher's or the applications' files. |
 | `item` | `MenuItem`: label, mnemonic, separator, enabled, visible, `Toggle`, `Shortcut`, icon name / data, children. |
 | `fallback` | Synthetic menus of an app that exports none: the app menu (About, Settings…, Hide, Hide Others, Show All, Quit; Settings… and Show All on the desktop), File (Close Window), Edit (Undo, Redo, Cut, Copy, Paste, Select All, disabled until the server can deliver them), View (Enter Full Screen), Window (Minimize, Zoom, Move to Workspace, Tile Window, Bring All to Front, the window list of at most 1000 rows with the active window checked and minimized ones marked, Close Window) and Help (the search row, disabled). Items of server actions show the chord the server binds (`Chords`), none while it sent none; the app's own convention chords use the primary modifier the server names. Ids are negative and stable; `action_for` maps activated ids back to `FallbackAction`. |
 | `source` | `MenuSourceMap`: window → `MenuSource::{Kde, Gtk, Synthetic}`. A window gets only the menus it exported, never another window of its application. |
@@ -91,13 +92,23 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
 - **Session.** The labels follow the appearance the server announces over `cupertino_session_v1`, read at start and redrawn on
   every change. The material follows it in the server. On `locked` the bars close every open menu and title focus.
 - **System menu.** The first slot draws the system mark (`cupertino_icons::system_mark`, tinted with the label colour) and
-  opens `Extras::system_menu`: Settings…, Force Quit…, then Sleep, Restart…, Shut Down…, Lock Screen, Log Out <name>…
-  and, when the session agent can switch, Login Window…, with separators between the groups. Every row and separator has
-  a fixed id in -4000…-4099 (`SystemRow`), so an open menu survives a rebuild. Settings… starts `cupertino-settings`
-  from `PATH` with an activation token (`XDG_ACTIVATION_TOKEN`, `DESKTOP_STARTUP_ID`); Force Quit… sends the
-  `force_quit_dialog` command, which a version 9 server does not get. Force Quit…, Lock Screen and Log Out show
-  the chord the server binds to them, none while it sent none. Without a session agent the menu is Settings…, Force
-  Quit… and Lock Screen.
+  opens `Extras::system_menu`: About This Computer, Settings…, Recent Items, Force Quit…, then Sleep, Restart…, Shut Down…, Lock Screen, Log
+  Out <name>… and, when the session agent can switch, Login Window…, with separators between the groups. Every row and
+  separator has a fixed id in -4000…-4099 (`SystemRow`), so an open menu survives a rebuild. About This Computer starts
+  `cupertino-settings --about` and Settings… starts `cupertino-settings`, both from `PATH` with an activation token (`XDG_ACTIVATION_TOKEN`, `DESKTOP_STARTUP_ID`); Force Quit…
+  sends the `force_quit_dialog` command, which a version 9 server does not get. Force Quit…, Lock Screen and Log Out show
+  the chord the server binds to them, none while it sent none. Without a session agent the menu is About This Computer, Settings…, Recent
+  Items, Force Quit… and Lock Screen.
+- **Recent Items.** The submenu is read (`recent` module) each time the system menu opens, never on a timer: a disabled
+  Applications header and up to 10 applications by desktop entry name, a disabled Documents header and up to 10 documents by
+  file name, a separator and Clear Menu. A section without rows keeps its header; with nothing to list the submenu is a
+  disabled Clear Menu alone. Ids: the submenu -4009, the headers -4010 and -4011, Clear Menu -4012, its separators -4055
+  and -4056, the application rows -4060…-4069 and the document rows -4070…-4079 by position; a click is resolved against
+  the rows read when the menu opened. An application starts from its desktop entry with no files; a document opens with
+  the default application of its type (`mimeapps.list`), its file in the `%f %F %u %U` codes; both get an activation
+  token, through `cupertino_apps::launch` like Settings… and the dock. A document no installed application opens goes to
+  `xdg-open` without a token, as the dock's folders do. An entry with `Terminal=true` is not started (the bar has no
+  terminal). Clear Menu stores the time and hides what was used until then; problems are reported on standard error.
 - **Session menu.** The system menu's session entries (`SessionAction`) are not D-Bus calls of the bar: the session agent answers only the server, so the bar sends `cupertino_menu_bar_v1.session_action` and the server calls the agent. The bar still reads the agent's `Locked`, `UserName` and `Capabilities` properties itself, but only from the owner of `org.cupertino.Login1` that is the process the server names in `cupertino_menu_bar_v1.session_agent` (checked with `cupertino-peer`; any owner in a development run); a client that took the name first is not read, and until the server names a process nothing is. Without a session agent Lock Screen still works: the server locks without the agent while it has named a login process.
 - **Extras (`extras_bus`).** Wi-Fi, battery and Bluetooth read the system bus. The Focus item reads the do-not-disturb state
   and `FocusLifetimes` of `org.cupertino.NotificationCenter1`. The process reads them again after any signal on those

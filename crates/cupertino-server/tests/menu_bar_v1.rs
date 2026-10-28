@@ -189,7 +189,8 @@ impl Harness {
 
     /// Move the model clock forward and settle the animations.
     fn advance(&mut self, dt: f64) {
-        self.state.fixed_time = Some(self.state.now() + dt);
+        let time = self.state.now() + dt;
+        common::set_time(&mut self.state, &mut self.event_loop, time);
         self.state.tick();
         for _ in 0..3 {
             self.step();
@@ -2029,7 +2030,8 @@ fn full_screen_hides_the_bar_and_an_open_menu_or_the_top_edge_reveals_it() {
     // the edge dwell reveals it
     let t = h.state.now();
     h.state.pointer_moved_to((500.0, 0.0).into(), 0, None);
-    h.state.fixed_time = Some(t + 0.3);
+    let time = t + 0.3;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     assert_eq!(visible(&h, t + 2.0), 1.0, "revealed by the edge dwell");
 }
@@ -4099,8 +4101,14 @@ fn force_quit_app_kills_an_active_application_that_does_not_answer_at_once() {
     let window = h.mapped_window(1);
     let sent = record_signals(&mut h);
     client.mute(true);
-    h.advance(1.1);
-    h.advance(2.5);
+    // Deliberately time out the muted client without waiting for its pong.
+    for dt in [1.1, 2.5] {
+        h.state.fixed_time = Some(h.state.now() + dt);
+        h.state.tick();
+        for _ in 0..3 {
+            h.step();
+        }
+    }
     assert!(h.state.window_is_unresponsive(window));
 
     bar.send(Cmd::ForceQuitApp("org.example.locked-out".into()));

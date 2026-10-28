@@ -78,6 +78,12 @@ impl Harness {
 
     /// Move the model clock on by `seconds`, a few steps so that every tick sees it.
     fn advance(&mut self, seconds: f64) {
+        common::set_time(&mut self.state, &mut self.event_loop, self.now);
+        self.advance_without_pong(seconds);
+    }
+
+    /// Deliberately let unanswered pings time out when exercising an unresponsive client.
+    fn advance_without_pong(&mut self, seconds: f64) {
         self.now += seconds;
         self.settle();
     }
@@ -218,8 +224,8 @@ fn an_application_that_does_not_answer_is_killed_at_once() {
     let (client, id) = mapped_window(&mut h);
     let sent = record_signals(&mut h);
     client.mute(true);
-    h.advance(1.1);
-    h.advance(2.5);
+    h.advance_without_pong(1.1);
+    h.advance_without_pong(2.5);
     assert!(h.state.window_is_unresponsive(id));
 
     h.state.force_quit_app(APP);

@@ -10,9 +10,10 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cupertino_server::Cupertino;
+use smithay::reexports::calloop::EventLoop;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
@@ -33,6 +34,32 @@ pub mod spawn;
 
 pub const TOPLEVEL_BLUE: [u8; 4] = [255, 0, 0, 255];
 pub const LOCK_GREEN: [u8; 4] = [0, 255, 0, 255];
+
+/// Drain pings at the current model time before jumping to an absolute timestamp. Tests of
+/// deliberately unresponsive clients must move `fixed_time` directly instead.
+pub fn set_time(state: &mut Cupertino, event_loop: &mut EventLoop<'static, Cupertino>, time: f64) {
+    set_time_with(state, time, |state| {
+        cupertino_server::backend::headless::step(state, event_loop, Duration::from_millis(5))
+            .expect("dispatching clients before advancing model time");
+    });
+}
+
+/// The same clock barrier for clients whose queues the test must dispatch itself.
+pub fn set_time_with(state: &mut Cupertino, time: f64, mut dispatch: impl FnMut(&mut Cupertino)) {
+    state.fixed_time = Some(state.now());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        dispatch(state);
+        if !state.hung.awaiting_pong() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for pongs before advancing model time"
+        );
+    }
+    state.fixed_time = Some(time);
+}
 
 fn solid_buffer(
     shm: &wl_shm::WlShm,

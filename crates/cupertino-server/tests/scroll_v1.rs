@@ -3,6 +3,8 @@
 //! device and scrolls are injected as a touchpad or a wheel would send them. Tests skip (pass) when no EGL device is
 //! available.
 
+mod common;
+
 use std::io::Write;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
@@ -126,7 +128,8 @@ impl Harness {
     fn mapped(&mut self) {
         self.wait_until("the window to be mapped", |s| s.wm.windows().count() == 1);
         let t = self.state.now() + 5.0;
-        self.state.fixed_time = Some(t);
+        let time = t;
+        common::set_time(&mut self.state, &mut self.event_loop, time);
         self.state.tick();
         self.settle();
     }

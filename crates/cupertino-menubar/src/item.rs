@@ -51,6 +51,15 @@ pub struct ShortcutGlyphs {
     pub key: String,
 }
 
+/// How a menu draws a shortcut: the modifier glyphs and key symbols of the Mac layout, or the key names of the PC
+/// layout (`Ctrl+Alt+` and `F4`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ShortcutStyle {
+    #[default]
+    Glyphs,
+    Names,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Shortcut {
     pub modifiers: Vec<ShortcutModifier>,
@@ -124,6 +133,45 @@ impl Shortcut {
             "down" => "\u{2193}".to_string(),
             "left" => "\u{2190}".to_string(),
             "right" => "\u{2192}".to_string(),
+            _ if self.key.chars().count() == 1 => self.key.to_uppercase(),
+            _ => self.key.clone(),
+        };
+        ShortcutGlyphs { modifiers, key }
+    }
+
+    /// The shortcut as `style` draws it.
+    pub fn shown(&self, style: ShortcutStyle) -> ShortcutGlyphs {
+        match style {
+            ShortcutStyle::Glyphs => self.glyphs(),
+            ShortcutStyle::Names => self.names(),
+        }
+    }
+
+    /// The shortcut as the PC layout names its keys: `Ctrl+`, `Alt+`, `Shift+`, `Super+` in that order and the key by
+    /// its usual name (`Enter`, `Esc`, `Left`, `,`).
+    pub fn names(&self) -> ShortcutGlyphs {
+        let display = self.display();
+        let modifiers = display[..display.len() - self.key.len()].to_string();
+        let key = match self.key.to_ascii_lowercase().as_str() {
+            "return" | "enter" | "kp_enter" => "Enter".to_string(),
+            "backspace" => "Backspace".to_string(),
+            "delete" => "Del".to_string(),
+            "escape" => "Esc".to_string(),
+            "space" => "Space".to_string(),
+            "page_up" | "prior" => "PgUp".to_string(),
+            "page_down" | "next" => "PgDn".to_string(),
+            "comma" => ",".to_string(),
+            "period" => ".".to_string(),
+            "slash" => "/".to_string(),
+            "backslash" => "\\".to_string(),
+            "grave" => "`".to_string(),
+            "minus" => "-".to_string(),
+            "plus" => "+".to_string(),
+            "equal" => "=".to_string(),
+            "semicolon" => ";".to_string(),
+            "apostrophe" => "'".to_string(),
+            "bracketleft" => "[".to_string(),
+            "bracketright" => "]".to_string(),
             _ if self.key.chars().count() == 1 => self.key.to_uppercase(),
             _ => self.key.clone(),
         };
@@ -440,6 +488,39 @@ mod tests {
         assert!(root.find(ItemId(9)).is_none());
         root.find_mut(ItemId(2)).unwrap().enabled = false;
         assert!(!root.find(ItemId(2)).unwrap().enabled);
+    }
+
+    #[test]
+    fn a_shortcut_is_drawn_by_key_names_in_the_pc_order_under_the_names_style() {
+        let names = |tokens: &[&str]| {
+            let s = Shortcut::from_tokens(tokens)
+                .unwrap()
+                .shown(ShortcutStyle::Names);
+            (s.modifiers, s.key)
+        };
+        let pair = |m: &str, k: &str| (m.to_string(), k.to_string());
+        assert_eq!(names(&["Alt", "F4"]), pair("Alt+", "F4"));
+        assert_eq!(names(&["Super", "Control", "z"]), pair("Ctrl+Super+", "Z"));
+        assert_eq!(names(&["Super", "Down"]), pair("Super+", "Down"));
+        assert_eq!(
+            names(&["Super", "Shift", "Control", "Alt", "q"]),
+            pair("Ctrl+Alt+Shift+Super+", "Q"),
+            "whatever order they were given in"
+        );
+        assert_eq!(names(&["Return"]), pair("", "Enter"));
+        assert_eq!(names(&["Super", "comma"]), pair("Super+", ","));
+        assert_eq!(
+            names(&["Shift", "Super", "slash"]),
+            pair("Shift+Super+", "/")
+        );
+        assert_eq!(names(&["Control", "Escape"]), pair("Ctrl+", "Esc"));
+        // the glyph style is unchanged
+        assert_eq!(
+            Shortcut::from_tokens(&["Alt", "F4"])
+                .unwrap()
+                .shown(ShortcutStyle::Glyphs),
+            Shortcut::from_tokens(&["Alt", "F4"]).unwrap().glyphs()
+        );
     }
 
     #[test]

@@ -345,6 +345,7 @@ impl App {
             Box::new(text.clone()),
         );
         controller.bar_metrics = self.style.bar.clone();
+        controller.menu_metrics.shortcut_style = self.shared.chords.style();
         let key = self.next_key;
         self.next_key += 1;
         self.bars.push(Bar {
@@ -515,6 +516,12 @@ impl App {
                                     }
                                     cupertino_shell_client::SessionAgent::Any => SessionAgent::Any,
                                 })?;
+                            }
+                            if update.shortcuts.is_some() {
+                                let style = self.shared.chords.style();
+                                for bar in &mut self.bars {
+                                    bar.controller.menu_metrics.shortcut_style = style;
+                                }
                             }
                             if update.engage {
                                 let outcome = self.bars[i].controller.focus_bar();

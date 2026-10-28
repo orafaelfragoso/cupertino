@@ -8,7 +8,7 @@
 //! are written with the primary modifier the server names.
 
 use crate::extras::SystemRow;
-use crate::item::{ItemId, MenuItem, Shortcut, ShortcutModifier, Toggle};
+use crate::item::{ItemId, MenuItem, Shortcut, ShortcutModifier, ShortcutStyle, Toggle};
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -199,6 +199,15 @@ impl Default for Chords {
 }
 
 impl Chords {
+    /// How the menus draw shortcuts: with the Mac glyphs while Super is the command key, with the PC key names while
+    /// Ctrl is (the `classic-pc` profile).
+    pub fn style(&self) -> ShortcutStyle {
+        match self.primary {
+            ShortcutModifier::Ctrl => ShortcutStyle::Names,
+            _ => ShortcutStyle::Glyphs,
+        }
+    }
+
     /// An item of a system action, with the chord the server binds to it.
     fn item(&self, action: FallbackAction, label: &str) -> MenuItem {
         let item = MenuItem::new(action.item_id().0, label);
@@ -708,5 +717,18 @@ mod tests {
         assert_eq!(action_for(HELP_SEARCH), None);
         assert_eq!(action_for(ItemId(-1100)), None, "separators");
         assert_eq!(action_for(ItemId(-4000)), None, "past the window list");
+    }
+
+    #[test]
+    fn the_menus_draw_pc_names_while_ctrl_is_the_command_key() {
+        let chords = |primary| Chords {
+            primary,
+            ..Chords::default()
+        };
+        assert_eq!(
+            chords(ShortcutModifier::Primary).style(),
+            ShortcutStyle::Glyphs
+        );
+        assert_eq!(chords(ShortcutModifier::Ctrl).style(), ShortcutStyle::Names);
     }
 }

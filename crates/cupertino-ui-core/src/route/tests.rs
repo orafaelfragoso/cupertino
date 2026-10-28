@@ -84,7 +84,14 @@ fn a_handler_that_stops_the_event_ends_its_route() {
 }
 
 fn place(geometry: &mut Geometry, id: NodeId, rect: Rect, clip: Option<Rect>) {
-    geometry.insert(id, Placement { rect, clip });
+    geometry.insert(
+        id,
+        Placement {
+            rect,
+            clip,
+            own_clip: None,
+        },
+    );
 }
 
 #[test]

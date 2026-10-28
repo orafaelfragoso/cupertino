@@ -86,7 +86,14 @@ impl Fixture {
 
     fn frame(&mut self, rect: Rect, clip: Option<Rect>, focus: bool) -> PaintNode {
         let env = env();
-        let geometry = Geometry::from([(self.root, Placement { rect, clip })]);
+        let geometry = Geometry::from([(
+            self.root,
+            Placement {
+                rect,
+                clip,
+                own_clip: None,
+            },
+        )]);
         let mut list = self.painter.paint(
             &self.tree,
             self.root,
@@ -132,19 +139,76 @@ fn a_node_paints_again_only_when_it_changed_its_size_changed_or_its_focus_did() 
 }
 
 #[test]
-fn the_clip_is_in_the_node_coordinates_and_cuts_the_hit_area() {
+fn an_ancestor_clip_cuts_the_hit_area_and_the_bounds() {
     let mut f = Fixture::new();
     let node = f.frame(
         Rect::new(10.0, 10.0, 100.0, 100.0),
         Some(Rect::new(0.0, 0.0, 60.0, 60.0)),
         false,
     );
-    assert_eq!(
-        node.clip,
-        Some(Shape::Rect(Rect::new(-10.0, -10.0, 60.0, 60.0)))
-    );
+    assert_eq!(node.clip, None, "the node clips no descendants of its own");
     assert_eq!(node.hit, Rect::new(10.0, 10.0, 50.0, 50.0));
     assert_eq!(node.bounds, Rect::new(10.0, 10.0, 50.0, 50.0));
+}
+
+#[test]
+fn a_node_carries_the_clip_it_puts_on_its_children_and_bounds_that_cover_its_subtree() {
+    let paints = Rc::default();
+    let mut tree = Tree::<M>::new(4);
+    let root = tree
+        .reconcile(
+            None,
+            Element::new(crate::test_support::group(vec![Fixture::view(
+                &paints, "child",
+            )])),
+        )
+        .unwrap();
+    let child = tree.get(root).unwrap().children[0];
+    let viewport = Rect::new(10.0, 10.0, 50.0, 50.0);
+    let geometry = Geometry::from([
+        (
+            root,
+            Placement {
+                rect: viewport,
+                clip: None,
+                own_clip: Some(viewport),
+            },
+        ),
+        (
+            child,
+            Placement {
+                rect: Rect::new(10.0, -20.0, 50.0, 200.0),
+                clip: Some(viewport),
+                own_clip: None,
+            },
+        ),
+    ]);
+    let env = env();
+    let list = Painter::default().paint(
+        &tree,
+        root,
+        &geometry,
+        &PaintInput {
+            env: &env,
+            focus: None,
+            focus_visible: false,
+            window_active: true,
+            now: Timestamp(0),
+        },
+    );
+    let [scroller, content] = &list.nodes[..] else {
+        unreachable!()
+    };
+    assert_eq!(content.parent, Some(scroller.id));
+    assert_eq!(
+        scroller.clip,
+        Some(Shape::Rect(Rect::new(0.0, 0.0, 50.0, 50.0)))
+    );
+    assert_eq!(
+        content.bounds, viewport,
+        "the content is cut to the viewport"
+    );
+    assert_eq!(scroller.bounds, viewport);
 }
 
 #[test]

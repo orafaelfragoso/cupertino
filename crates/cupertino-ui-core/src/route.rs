@@ -12,8 +12,10 @@ use std::collections::HashMap;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Placement {
     pub(crate) rect: Rect,
-    /// The intersection of every clip above and including this node.
+    /// The intersection of every ancestor's clip; it limits this node and its subtree.
     pub(crate) clip: Option<Rect>,
+    /// The clip this node puts on its descendants.
+    pub(crate) own_clip: Option<Rect>,
 }
 
 pub(crate) type Geometry = HashMap<NodeId, Placement>;

@@ -65,20 +65,25 @@ pub(crate) fn placements<M: 'static>(
             continue;
         };
         let rect = node.rect.translate(parent_origin.x, parent_origin.y);
-        geometry.insert(id, Placement { rect, clip });
-        let inner = match node.clip {
-            Some(own) => {
-                let own = own.translate(rect.origin.x, rect.origin.y);
-                Some(match clip {
-                    Some(outer) => outer.intersection(&own).unwrap_or(Rect::new(
-                        own.origin.x,
-                        own.origin.y,
-                        0.0,
-                        0.0,
-                    )),
-                    None => own,
-                })
-            }
+        let own_clip = node.clip.map(|c| c.translate(rect.origin.x, rect.origin.y));
+        geometry.insert(
+            id,
+            Placement {
+                rect,
+                clip,
+                own_clip,
+            },
+        );
+        let inner = match own_clip {
+            Some(own) => Some(match clip {
+                Some(outer) => outer.intersection(&own).unwrap_or(Rect::new(
+                    own.origin.x,
+                    own.origin.y,
+                    0.0,
+                    0.0,
+                )),
+                None => own,
+            }),
             None => clip,
         };
         if let Some(n) = tree.get(id) {

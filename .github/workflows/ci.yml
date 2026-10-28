@@ -139,6 +139,23 @@ jobs:
       - name: Layer rules
         if: "!matrix.package-env"
         run: cargo run -p cupertino-layers
+      # The lint build and the tests enable every feature of every crate at once, so a crate that only builds with
+      # another crate's features (or its own optional ones) passes them. Each package is checked on its own here, with
+      # its default features and only the dependencies it names.
+      - name: Default features, one package at a time
+        if: "!matrix.package-env"
+        shell: bash
+        run: |
+          packages=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
+          [ -n "$packages" ] || { echo "::error::cargo metadata listed no packages"; exit 1; }
+          failed=()
+          for package in $packages; do
+            cargo check -p "$package" || failed+=("$package")
+          done
+          if [ "${#failed[@]}" -ne 0 ]; then
+            echo "::error::does not build with its default features: ${failed[*]}"
+            exit 1
+          fi
       - name: Disk after the lint build
         run: df -h .
       # The keymap oracle's recordings are only valid for the xkeyboard-config release they were made with

@@ -94,7 +94,7 @@ impl Encoder<'_> {
                     Command::System(_) => None,
                 };
                 WireItem {
-                    label: Some(item.label.replace('_', "__")),
+                    label: Some(item.label.clone()),
                     action,
                     accel: item.chord.as_ref().and_then(|c| c.to_accel(self.map)),
                     link: None,

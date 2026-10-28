@@ -8,9 +8,11 @@ mod effects;
 mod geometry;
 mod glyph_cache;
 mod image_cache;
+mod stats;
 mod validate;
 
 pub use cpu::{CpuConfig, CpuRenderer};
+pub use stats::{RenderStats, Tally};
 
 use cupertino_geometry::{Point, Rect};
 use cupertino_theme::Color;

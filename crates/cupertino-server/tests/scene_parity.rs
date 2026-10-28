@@ -15,7 +15,7 @@ use cupertino_server::render::legacy_scene;
 use cupertino_server::render::screenshot::render_to_image;
 use smithay::backend::input::KeyState;
 
-/// Every frame's elements are compared inside the compositor when built with `--cfg scene_oracle`. `compare`
+/// Every frame's elements are compared inside the compositor when built with `CUPERTINO_SCENE_ORACLE=1`. `compare`
 /// also draws the frame by both builders and requires identical pixels; it returns how many elements there are.
 fn compare(d: &mut Desktop, what: &str) -> usize {
     compare_on(d, what, 0)

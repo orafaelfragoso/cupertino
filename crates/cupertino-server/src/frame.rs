@@ -162,7 +162,7 @@ impl Cupertino {
     }
 
     /// The element list (front to back) of output `idx`, the pointer left out with `paint_cursor` false;
-    /// `None` while the render resources are not loaded. With `--cfg scene_oracle` every list is
+    /// `None` while the render resources are not loaded. With `CUPERTINO_SCENE_ORACLE=1` at build time every list is
     /// compared with the one the previous builder gives.
     pub fn scene_elements(
         &mut self,

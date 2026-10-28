@@ -150,7 +150,7 @@ fn a_steady_frame_makes_no_more_pixel_sized_allocations_than_the_old_builder() {
 }
 
 #[test]
-#[ignore = "opt-in measurement for Probe: RUSTFLAGS=\"--cfg scene_oracle\" cargo test -p cupertino-server --test scene_cost -- --ignored --nocapture"]
+#[ignore = "opt-in measurement for Probe: CUPERTINO_SCENE_ORACLE=1 cargo test -p cupertino-server --test scene_cost -- --ignored --nocapture"]
 fn scene_cost_report() {
     for size in [(1920, 1080), (3840, 2160)] {
         for scale in [1.0, 2.0] {

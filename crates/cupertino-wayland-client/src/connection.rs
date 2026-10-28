@@ -2065,6 +2065,14 @@ impl Dispatch<WlPointer, ()> for State {
         _: &WlConnection,
         _: &QueueHandle<Self>,
     ) {
+        // a frame's scroll takes the time of its last axis event
+        let own_time = match &event {
+            wl_pointer::Event::Motion { time, .. }
+            | wl_pointer::Event::Button { time, .. }
+            | wl_pointer::Event::Axis { time, .. } => Some(*time),
+            wl_pointer::Event::Frame => state.input_clock.latest(),
+            _ => None,
+        };
         let found = match event {
             wl_pointer::Event::Enter {
                 serial,
@@ -2155,7 +2163,7 @@ impl Dispatch<WlPointer, ()> for State {
             _ => None,
         };
         if let Some((surface, event)) = found {
-            let time = state.input_time(Instant::now());
+            let time = own_time.unwrap_or_else(|| state.input_time(Instant::now()));
             state.events.push(Event::Pointer {
                 surface,
                 time,

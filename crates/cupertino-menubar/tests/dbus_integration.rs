@@ -21,8 +21,7 @@ use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Signature, Value};
 use zbus::{block_on, fdo};
 
-mod common;
-use common::PrivateBus;
+use cupertino_test_bus::PrivateBus;
 
 macro_rules! bus_or_skip {
     () => {

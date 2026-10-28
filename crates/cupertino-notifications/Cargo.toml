@@ -40,6 +40,7 @@ tiny-skia = "0.11"
 zbus = { version = "5", optional = true }
 
 [dev-dependencies]
+cupertino-test-bus = { path = "../cupertino-test-bus" }
 tempfile = "3"
 futures-lite = "2"
 zbus = { version = "5", features = ["p2p"] }

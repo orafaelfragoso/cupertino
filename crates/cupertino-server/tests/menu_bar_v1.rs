@@ -70,6 +70,7 @@ mod gtk_shell {
     wayland_scanner::generate_client_code!("protocols/gtk-shell.xml");
 }
 
+use cupertino_test_bus::PrivateBus;
 use gtk_shell::gtk_shell1::{self, GtkShell1};
 
 const OUTPUT: (i32, i32) = (1000, 700);
@@ -1909,62 +1910,6 @@ fn full_screen_hides_the_bar_and_an_open_menu_or_the_top_edge_reveals_it() {
     assert_eq!(visible(&h, t + 2.0), 1.0, "revealed by the edge dwell");
 }
 
-/// A private session bus (`dbus-daemon --session`), a child of the test that is killed on drop and dies with the test's
-/// thread if the test is killed first.
-struct PrivateBus {
-    address: String,
-    daemon: std::process::Child,
-}
-
-impl PrivateBus {
-    /// `None` when `dbus-daemon` is not installed.
-    fn start() -> Option<PrivateBus> {
-        use std::os::unix::process::CommandExt;
-        let mut command = std::process::Command::new("dbus-daemon");
-        command
-            .args(["--session", "--nofork", "--print-address=1"])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null());
-        // The death signal follows the thread that spawns the daemon, so the test's own thread starts the bus.
-        // Safety: the closure runs in the child between fork and exec and calls only prctl, which is
-        // async-signal-safe.
-        unsafe {
-            command.pre_exec(|| {
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let mut daemon = command.spawn().ok()?;
-        let stdout = daemon.stdout.take().expect("piped stdout");
-        let (tx, rx) = channel();
-        std::thread::spawn(move || {
-            let mut line = String::new();
-            let _ = std::io::BufRead::read_line(&mut std::io::BufReader::new(stdout), &mut line);
-            let _ = tx.send(line);
-        });
-        let address = rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("dbus-daemon printed no address within 5 s");
-        let address = address.trim().to_owned();
-        assert!(!address.is_empty(), "dbus-daemon exited before it listened");
-        Some(PrivateBus { address, daemon })
-    }
-
-    fn pid(&self) -> String {
-        self.daemon.id().to_string()
-    }
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        let _ = self.daemon.kill();
-        let _ = self.daemon.wait();
-    }
-}
-
 /// The session agent's side: records which methods the server called.
 struct FakeLogin(Arc<Mutex<Vec<&'static str>>>);
 
@@ -2509,7 +2454,7 @@ struct Stopped<'a>(&'a PrivateBus);
 impl<'a> Stopped<'a> {
     fn new(bus: &'a PrivateBus) -> Self {
         let stopped = std::process::Command::new("kill")
-            .args(["-STOP", &bus.pid()])
+            .args(["-STOP", &bus.pid().to_string()])
             .status()
             .unwrap();
         assert!(stopped.success(), "stopping the private bus");
@@ -2520,7 +2465,7 @@ impl<'a> Stopped<'a> {
 impl Drop for Stopped<'_> {
     fn drop(&mut self) {
         let _ = std::process::Command::new("kill")
-            .args(["-CONT", &self.0.pid()])
+            .args(["-CONT", &self.0.pid().to_string()])
             .status();
     }
 }

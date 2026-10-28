@@ -4,8 +4,10 @@
 //! the daemon's address, and each method call of a connection made here. A test is skipped when `dbus-daemon` is not
 //! installed ([`PrivateBus::start`] gives `None`).
 
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader};
 use std::os::unix::process::CommandExt;
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -19,12 +21,25 @@ pub struct PrivateBus {
 }
 
 impl PrivateBus {
-    /// Start a daemon; `None` when `dbus-daemon` cannot be run. Call it on the test's own thread: the daemon dies with
-    /// the thread that started it.
+    /// Start a daemon with the session bus's configuration; `None` when `dbus-daemon` cannot be run. Call it on the
+    /// test's own thread: the daemon dies with the thread that started it.
     pub fn start() -> Option<PrivateBus> {
+        Self::start_with("--session".into())
+    }
+
+    /// Start a daemon with the configuration file `config` (a policy or a listening address of the test's own), which
+    /// the caller keeps until the bus is dropped.
+    pub fn start_with_config(config: &Path) -> Option<PrivateBus> {
+        let mut arg = OsString::from("--config-file=");
+        arg.push(config);
+        Self::start_with(arg)
+    }
+
+    fn start_with(config: OsString) -> Option<PrivateBus> {
         let mut command = Command::new("dbus-daemon");
         command
-            .args(["--session", "--nofork", "--print-address=1"])
+            .arg(config)
+            .args(["--nofork", "--print-address=1"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -52,6 +67,11 @@ impl PrivateBus {
         let address = address.trim().to_owned();
         assert!(!address.is_empty(), "dbus-daemon exited before it listened");
         Some(PrivateBus { address, daemon })
+    }
+
+    /// Whether the daemon has exited.
+    pub fn has_exited(&mut self) -> bool {
+        !matches!(self.daemon.try_wait(), Ok(None))
     }
 
     /// The daemon's process id, to stop and continue it (`kill -STOP`).
@@ -92,6 +112,44 @@ impl Drop for PrivateBus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bus_takes_the_configuration_it_is_given() {
+        let dir = std::env::temp_dir().join(format!("cupertino-test-bus-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("bus.conf");
+        std::fs::write(
+            &config,
+            format!(
+                r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:dir={}</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*"/>
+    <allow receive_sender="*"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>"#,
+                dir.display()
+            ),
+        )
+        .unwrap();
+        let Some(bus) = PrivateBus::start_with_config(&config) else {
+            eprintln!("skipping: dbus-daemon is not available");
+            return;
+        };
+        assert!(
+            bus.address.contains(&*dir.to_string_lossy()),
+            "{}",
+            bus.address
+        );
+        assert!(bus.connect().unique_name().is_some());
+        drop(bus);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn the_daemon_ends_with_the_bus() {

@@ -8,8 +8,7 @@ use std::time::Duration;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath};
 use zbus::{block_on, Connection};
 
-mod common;
-use common::PrivateBus;
+use cupertino_test_bus::PrivateBus;
 
 /// Stands in for the notification process.
 struct FakeCentre(mpsc::Sender<()>);
@@ -27,11 +26,11 @@ fn the_worker_owns_the_watcher_and_relays_the_centre_toggle() {
         eprintln!("skipping: dbus-daemon is not available");
         return;
     };
-    let (worker, _events) = Worker::start(bus.connect(), || {}).unwrap();
+    let (worker, _events) = Worker::start(zbus::block_on(bus.connect_async()), || {}).unwrap();
 
     // the clock click reaches the notification process
     let (toggled_tx, toggled_rx) = mpsc::channel();
-    let centre = bus.connect();
+    let centre = zbus::block_on(bus.connect_async());
     block_on(async {
         centre
             .object_server()
@@ -47,7 +46,7 @@ fn the_worker_owns_the_watcher_and_relays_the_centre_toggle() {
     toggled_rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     // a second process cannot take the watcher's name
-    let second = Worker::start(bus.connect(), || {});
+    let second = Worker::start(zbus::block_on(bus.connect_async()), || {});
     assert!(
         matches!(second, Err(StartError::Watcher(zbus::Error::NameTaken))),
         "{:?}",
@@ -64,7 +63,7 @@ struct Settled {
 impl Settled {
     fn on(bus: &PrivateBus) -> Settled {
         let (tx, toggled) = mpsc::channel();
-        let centre = bus.connect();
+        let centre = zbus::block_on(bus.connect_async());
         block_on(async {
             centre
                 .object_server()
@@ -106,9 +105,9 @@ fn the_worker_owns_the_app_menu_registrar_only_while_asked_and_unless_another_pr
         eprintln!("skipping: dbus-daemon is not available");
         return;
     };
-    let other = bus.connect();
+    let other = zbus::block_on(bus.connect_async());
     let settled = Settled::on(&bus);
-    let worker_conn = bus.connect();
+    let worker_conn = zbus::block_on(bus.connect_async());
     let worker_name = worker_conn.unique_name().unwrap().to_string();
     let (worker, _events) = Worker::start(worker_conn, || {}).unwrap();
     assert_eq!(registrar_owner(&other), None, "no bar yet");
@@ -157,11 +156,12 @@ fn the_worker_owns_the_app_menu_registrar_only_while_asked_and_unless_another_pr
 
     // a registrar of another desktop keeps its name, also when the worker gives the name up
     let second_bus = PrivateBus::start().unwrap();
-    let foreign = second_bus.connect();
+    let foreign = zbus::block_on(second_bus.connect_async());
     block_on(foreign.request_name("com.canonical.AppMenu.Registrar")).unwrap();
     let foreign_name = foreign.unique_name().unwrap().to_string();
     let second_settled = Settled::on(&second_bus);
-    let (second, _events) = Worker::start(second_bus.connect(), || {}).unwrap();
+    let (second, _events) =
+        Worker::start(zbus::block_on(second_bus.connect_async()), || {}).unwrap();
     for owned in [true, false] {
         second.send(Request::AppMenuRegistrar(owned)).unwrap();
         second_settled.wait(&second);

@@ -383,7 +383,7 @@ fn isolated(test: &str, shell: bool, work: impl FnOnce(&str)) {
         work(&std::env::var("DBUS_SESSION_BUS_ADDRESS").expect("the parent starts the bus"));
         return;
     }
-    let bus = common::shell::PrivateBus::start();
+    let bus = common::shell::private_bus();
     let scratch = tempfile::tempdir().unwrap();
     let home = scratch.path().join("home");
     let runtime = scratch.path().join("runtime");

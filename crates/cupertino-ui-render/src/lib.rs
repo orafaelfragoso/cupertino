@@ -270,6 +270,10 @@ pub enum RenderError {
     InvalidSize,
     /// A parent that is not an earlier node of the list.
     UnknownParent(PaintNodeId),
+    /// Two nodes with the same id.
+    DuplicateNode(PaintNodeId),
+    /// A node deeper than 256 levels.
+    TooDeep(PaintNodeId),
     /// An image buffer shorter than its stride and height, or a stride shorter than a row.
     InvalidImage(ResourceId),
     Glyph(TextError),

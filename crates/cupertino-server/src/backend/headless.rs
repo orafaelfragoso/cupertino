@@ -23,6 +23,9 @@ use crate::displays::{HeadCaps, HeadId, HeadInfo, HeadMode, HeadOp};
 use crate::render::scene::RenderResources;
 use crate::state::Cupertino;
 
+/// What the error says when no EGL device can render the output.
+pub const NO_USABLE_DEVICE: &str = "no usable EGL device";
+
 pub const CLEAR: Color32F = Color32F::new(0.05, 0.05, 0.07, 1.0);
 
 /// One offscreen output: the texture it is drawn into.
@@ -98,7 +101,7 @@ pub fn create_renderer() -> Result<GlesRenderer> {
         Ok(r) => Ok(r),
         Err(e) => {
             errors.push(format!("renderD128: {e:#}"));
-            Err(anyhow!("no usable EGL device: {}", errors.join("; ")))
+            Err(anyhow!("{NO_USABLE_DEVICE}: {}", errors.join("; ")))
         }
     }
 }

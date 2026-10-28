@@ -50,7 +50,13 @@ fn the_greeter_is_undumpable_and_has_no_core_file() {
     // after the connect it still runs for a moment, then blocks on the compositor: a loaded machine stretches that
     let end = Instant::now() + Duration::from_secs(20);
     loop {
-        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
+        let status = match std::fs::read_to_string(format!("/proc/{pid}/status")) {
+            Ok(status) => status,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                panic!("the greeter exited before it blocked on the compositor")
+            }
+            Err(e) => panic!("cannot read the greeter's state: {e}"),
+        };
         if field(&status, "State:").starts_with('S') {
             break;
         }

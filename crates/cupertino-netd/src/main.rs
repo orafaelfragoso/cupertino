@@ -112,7 +112,7 @@ fn run(options: &Options) -> Result<Infallible> {
         Err(error) if is_unsupported(&error) => None,
         Err(error) => return Err(Error::Netlink(error)),
     };
-    let host = SystemHost::open(Path::new(RFKILL_DEVICE))?;
+    let host = SystemHost::open(Path::new(RFKILL_DEVICE), options.session_bus)?;
     let bus = if options.session_bus {
         Bus::Session
     } else {

@@ -32,6 +32,7 @@ cupertino-icons = { path = "../cupertino-icons" }
 cupertino-theme = { path = "../cupertino-theme" }
 cupertino-decorations = { path = "../cupertino-decorations" }
 cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-keyboard = { path = "../cupertino-keyboard" }
 cupertino-text-field = { path = "../cupertino-text-field" }
 cupertino-modifiers = { path = "../cupertino-modifiers" }
 cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }

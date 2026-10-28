@@ -1066,6 +1066,7 @@ dependencies = [
  "cupertino-geometry",
  "cupertino-glass",
  "cupertino-icons",
+ "cupertino-keyboard",
  "cupertino-protocol-app",
  "cupertino-shell-client",
  "cupertino-test-bus",
@@ -1426,6 +1427,7 @@ dependencies = [
  "cupertino-filepicker",
  "cupertino-geometry",
  "cupertino-icons",
+ "cupertino-keyboard",
  "cupertino-menu-model",
  "cupertino-modifiers",
  "cupertino-protocol-app",
@@ -1489,8 +1491,6 @@ dependencies = [
 name = "cupertino-text-field"
 version = "0.1.0"
 dependencies = [
- "cupertino-key-bindings",
- "cupertino-modifiers",
  "cupertino-ui-text",
 ]
 
@@ -1524,7 +1524,6 @@ name = "cupertino-ui-controls"
 version = "0.1.0"
 dependencies = [
  "cupertino-geometry",
- "cupertino-text-field",
  "cupertino-ui-core",
  "cupertino-ui-layout",
  "cupertino-ui-platform",
@@ -1607,6 +1606,8 @@ name = "cupertino-ui-text"
 version = "0.1.0"
 dependencies = [
  "cupertino-geometry",
+ "cupertino-key-bindings",
+ "cupertino-modifiers",
  "harfrust",
  "icu_segmenter",
  "unicode-segmentation",

@@ -5,7 +5,6 @@
 use crate::look::{self, paint_focus_ring};
 use crate::{SecureField, TextChange, TextField};
 use cupertino_geometry::{Rect, Size};
-use cupertino_text_field::{Keymap, Response, TextFieldKeys};
 use cupertino_ui_core::{
     AccessibleStates, AccessibleValue, Action, ActionData, Change, ControlState, Event, EventCx,
     MeasureCx, PaintCx, Propagation, Role, SemanticsCx, TextSemantics, Widget,
@@ -13,8 +12,9 @@ use cupertino_ui_core::{
 use cupertino_ui_layout::{Constraints, ContainerKind, LayoutSpec, Measured, SizeSpec};
 use cupertino_ui_platform::{KeyEvent, Keysym, MouseButton, PointerEvent};
 use cupertino_ui_text::{
-    Affinity, ChangeCause, ContentHints, ContentPurpose, ImeBatch, ImeEvent, SecureBuffer,
-    Selection, Surrounding, TextBuffer, TextInputSession, TextPosition, SURROUNDING_MAX_BYTES,
+    Affinity, ChangeCause, ContentHints, ContentPurpose, ImeBatch, ImeEvent, Keymap, Response,
+    SecureBuffer, Selection, Surrounding, TextBuffer, TextFieldKeys, TextInputSession,
+    TextPosition, SURROUNDING_MAX_BYTES,
 };
 use cupertino_ui_theme::{ColorRole, ThemeTokens};
 

@@ -2,8 +2,8 @@
 
 use std::time::Instant;
 
+use crate::TextBuffer;
 use cupertino_key_bindings::TextAction;
-use cupertino_ui_text::TextBuffer;
 
 use crate::keymap::{Command, KeyInput, Keymap};
 use cupertino_modifiers::Mods;
@@ -24,9 +24,6 @@ pub enum Response {
     /// Read the clipboard and pass its text to [`TextBuffer::paste`].
     Paste,
 }
-
-/// The editing model of a field. The toolkit's buffer is the field; this crate adds the keys ([`TextFieldKeys`]).
-pub type TextField = TextBuffer;
 
 /// A field that takes key presses.
 pub trait TextFieldKeys {
@@ -190,3 +187,6 @@ fn edited(changed: bool) -> Response {
         Response::Moved
     }
 }
+
+#[cfg(test)]
+mod tests;

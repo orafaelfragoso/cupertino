@@ -3,7 +3,6 @@
 #![cfg(feature = "dbus")]
 
 use std::collections::HashMap;
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -20,45 +19,10 @@ use cupertino_menubar::source::GtkMenuProps;
 use futures_util::{Stream, StreamExt};
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Signature, Value};
-use zbus::{block_on, connection, fdo, Connection};
+use zbus::{block_on, fdo};
 
-struct PrivateBus {
-    address: String,
-    pid: String,
-}
-
-impl PrivateBus {
-    fn start() -> Option<PrivateBus> {
-        let out = Command::new("dbus-daemon")
-            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        let text = String::from_utf8(out.stdout).ok()?;
-        let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-        let address = lines.next()?.to_string();
-        let pid = lines.next()?.to_string();
-        Some(PrivateBus { address, pid })
-    }
-
-    async fn connect(&self) -> Connection {
-        connection::Builder::address(self.address.as_str())
-            .expect("address")
-            .build()
-            .await
-            .expect("connect")
-    }
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        let _ = Command::new("kill").arg(&self.pid).status();
-    }
-}
+mod common;
+use common::PrivateBus;
 
 macro_rules! bus_or_skip {
     () => {
@@ -194,8 +158,8 @@ fn dbusmenu_client_fetches_activates_and_follows_updates() {
     let bus = bus_or_skip!();
     block_on(async {
         let rec = Arc::new(Mutex::new(Recorded::default()));
-        let server = connection::Builder::address(bus.address.as_str())
-            .unwrap()
+        let server = bus
+            .builder()
             .serve_at("/MenuBar/1", FakeDBusMenu { rec: rec.clone() })
             .unwrap()
             .build()
@@ -203,7 +167,7 @@ fn dbusmenu_client_fetches_activates_and_follows_updates() {
             .unwrap();
         let service = server.unique_name().unwrap().to_string();
 
-        let client_conn = bus.connect().await;
+        let client_conn = bus.connect_async().await;
         let client = DBusMenuClient::connect(&client_conn, &service, "/MenuBar/1")
             .await
             .unwrap();
@@ -275,14 +239,14 @@ fn controller_drives_a_dbusmenu_session_end_to_end() {
     let bus = bus_or_skip!();
     block_on(async {
         let rec = Arc::new(Mutex::new(Recorded::default()));
-        let server = connection::Builder::address(bus.address.as_str())
-            .unwrap()
+        let server = bus
+            .builder()
             .serve_at("/MenuBar/1", FakeDBusMenu { rec: rec.clone() })
             .unwrap()
             .build()
             .await
             .unwrap();
-        let client_conn = bus.connect().await;
+        let client_conn = bus.connect_async().await;
         let client = DBusMenuClient::connect(
             &client_conn,
             server.unique_name().unwrap().as_str(),
@@ -427,13 +391,13 @@ impl FakeItem {
 fn status_notifier_watcher_host_and_item_roundtrip() {
     let bus = bus_or_skip!();
     block_on(async {
-        let shell = bus.connect().await;
+        let shell = bus.connect_async().await;
         let (watcher, events) = WatcherService::start(&shell).await.unwrap();
 
         let activations = Arc::new(Mutex::new(Vec::new()));
         let rec = Arc::new(Mutex::new(Recorded::default()));
-        let app = connection::Builder::address(bus.address.as_str())
-            .unwrap()
+        let app = bus
+            .builder()
             .serve_at(
                 "/StatusNotifierItem",
                 FakeItem {
@@ -509,7 +473,7 @@ fn status_notifier_watcher_host_and_item_roundtrip() {
             ]
         );
 
-        let other = bus.connect().await;
+        let other = bus.connect_async().await;
         let other_client = WatcherClient::connect(&other).await.unwrap();
         let mut watcher_events = other_client.events().await.unwrap();
         other_client
@@ -636,8 +600,8 @@ fn gtk_menu_model_is_read_and_activated() {
     let bus = bus_or_skip!();
     block_on(async {
         let log = Arc::new(Mutex::new(Vec::new()));
-        let app = connection::Builder::address(bus.address.as_str())
-            .unwrap()
+        let app = bus
+            .builder()
             .serve_at("/org/example/menus/menubar", FakeGtkMenus)
             .unwrap()
             .serve_at(
@@ -660,7 +624,7 @@ fn gtk_menu_model_is_read_and_activated() {
             .await
             .unwrap();
 
-        let shell = bus.connect().await;
+        let shell = bus.connect_async().await;
         let props = GtkMenuProps {
             bus_name: app.unique_name().unwrap().to_string(),
             application_object_path: Some("/org/example".into()),

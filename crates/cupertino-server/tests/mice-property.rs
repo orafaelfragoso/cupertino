@@ -2,7 +2,6 @@
 //! connected mice (not the touchpads) with the resolution in use and whether it was stored, and the change signal when
 //! `mouse_dpi` changes in `compositor.json`. Skipped when no EGL device or no `dbus-daemon` is available.
 
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use cupertino_defaults::atomic::write_atomic;
@@ -11,38 +10,9 @@ use cupertino_server::config::{Config, SettingsFiles};
 use cupertino_server::events::{MouseIdentity, PointerDevice};
 use cupertino_server::live::SettingsPaths;
 use cupertino_server::Cupertino;
+use cupertino_test_bus::PrivateBus;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
-
-/// A private session bus (`dbus-daemon --session`), killed on drop.
-struct PrivateBus {
-    address: String,
-    pid: String,
-}
-
-impl PrivateBus {
-    fn start() -> Option<PrivateBus> {
-        let out = Command::new("dbus-daemon")
-            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        assert!(out.status.success(), "dbus-daemon failed: {}", out.status);
-        let text = String::from_utf8(out.stdout).unwrap();
-        let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-        Some(PrivateBus {
-            address: lines.next().unwrap().to_string(),
-            pid: lines.next().unwrap().to_string(),
-        })
-    }
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        let _ = Command::new("kill").arg(&self.pid).status();
-    }
-}
 
 type Mice = Vec<(String, String, u32, bool)>;
 

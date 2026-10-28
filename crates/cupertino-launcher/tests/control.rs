@@ -3,47 +3,10 @@
 #![cfg(feature = "app")]
 
 use cupertino_launcher::control::{serve, BUS_NAME, OBJECT_PATH};
-use std::process::{Command, Stdio};
+use cupertino_test_bus::PrivateBus;
 use std::sync::mpsc;
 use std::time::Duration;
-use zbus::{block_on, connection, Connection};
-
-struct PrivateBus {
-    address: String,
-    pid: String,
-}
-
-impl PrivateBus {
-    fn start() -> Option<PrivateBus> {
-        let out = Command::new("dbus-daemon")
-            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        let text = String::from_utf8(out.stdout)
-            .ok()
-            .filter(|_| out.status.success())?;
-        let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-        Some(PrivateBus {
-            address: lines.next()?.to_string(),
-            pid: lines.next()?.to_string(),
-        })
-    }
-
-    fn builder(&self) -> connection::Builder<'static> {
-        connection::Builder::address(self.address.as_str()).expect("address")
-    }
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        Command::new("kill")
-            .arg(&self.pid)
-            .status()
-            .expect("kill the private bus");
-    }
-}
+use zbus::{block_on, Connection};
 
 #[test]
 fn toggle_reaches_the_launcher_and_a_second_launcher_cannot_take_the_name() {

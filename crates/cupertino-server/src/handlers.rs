@@ -535,7 +535,7 @@ impl Cupertino {
     /// attention. A grant for a window that is not mapped yet is kept until it maps.
     fn activate_surface(&mut self, surface: &WlSurface, grant: TokenGrant) {
         let mapped = self
-            .window_id_for_surface(&surface)
+            .window_id_for_surface(surface)
             .filter(|id| self.entry(*id).is_some_and(|e| e.mapped));
         let Some(id) = mapped else {
             // a program activates its first surface as it maps, usually before the window is mapped: the window picks

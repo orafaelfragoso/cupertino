@@ -1028,6 +1028,7 @@ dependencies = [
  "cupertino-peer",
  "cupertino-protocol-app",
  "cupertino-shell-client",
+ "cupertino-text-field",
  "cupertino-theme",
  "cupertino-ui-menus",
  "cupertino-ui-wayland",

@@ -27,6 +27,7 @@ use cupertino_shell_client::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
     MenuBar, Session as SessionObserver, SessionChange, SessionState, Shell, ShellEvent,
 };
+use cupertino_text_field::{KeyInput, Keymap};
 use cupertino_theme::Theme;
 use cupertino_ui_wayland::{popup, Ready, ShmPresenter};
 use cupertino_wayland_client::{
@@ -123,6 +124,8 @@ struct App {
     pending: HashMap<TokenRequest, Launch>,
     /// Where Recent Items is read from; `None` when the session's directories are not known.
     recent: Option<RecentSources>,
+    /// The editing chords of the Help menu's search field.
+    keymap: Keymap,
 }
 
 /// `menubar.conf` from the configuration directory (`CUPERTINO_MENUBAR_CONFIG` overrides the path); every key unset
@@ -238,6 +241,7 @@ pub fn run() -> Result<std::convert::Infallible> {
         next_key: 0,
         pending: HashMap::new(),
         recent,
+        keymap: Keymap::load(),
     };
     app.reconcile_outputs()?;
     for event in early {
@@ -422,13 +426,25 @@ impl App {
                     KeyboardEvent::Key {
                         code,
                         pressed: true,
+                        character,
+                        mods,
                         ..
                     },
             } => {
-                if let (Some((i, _)), Some(key)) = (self.locate(surface), menu_key(code)) {
+                if let Some((i, _)) = self.locate(surface) {
                     let now = self.now();
-                    let outcome = self.bars[i].controller.key(key, now);
-                    self.apply(i, outcome)?;
+                    let key = menu_key(code);
+                    let input =
+                        KeyInput::new(code, mods.shift, mods.ctrl, mods.alt, mods.logo, character);
+                    let controller = &mut self.bars[i].controller;
+                    let outcome =
+                        match controller.search_key(key, &mut self.keymap, input, Instant::now()) {
+                            Some(outcome) => Some(outcome),
+                            None => key.map(|key| controller.key(key, now)),
+                        };
+                    if let Some(outcome) = outcome {
+                        self.apply(i, outcome)?;
+                    }
                 }
             }
             Event::Keyboard {
@@ -1001,12 +1017,14 @@ impl App {
                 let popup = &mut bar.popups[level];
                 popup.backdrop.set_shape(&size, POPUP_RADIUS)?;
                 let (text, style, origin) = (&bar.text, &self.style, (popup.rect.x, popup.rect.y));
+                let field = bar.controller.search_field();
                 popup.presenter.draw(&mut self.conn, None, |pm, scale| {
                     style.paint_popup(
                         text,
                         pm,
                         &open.layout,
                         open.selected,
+                        field,
                         origin,
                         scale.factor(),
                     )

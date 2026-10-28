@@ -264,10 +264,12 @@ fn fallback_action(item: ItemId, feed: &BarFeed) -> Option<Action> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::controller::MenuController;
     use crate::dbus::sni::{ItemStatus, StatusItem};
     use crate::desktop::AppName;
     use crate::extras::{BluetoothState, SystemRow};
     use crate::feed::StatusState;
+    use crate::geom::Point;
     use crate::geom::Rect;
     use crate::item::MenuItem;
     use crate::layout::{layout_bar, BarMetrics, MonoMeasure};
@@ -275,6 +277,8 @@ mod tests {
     use cupertino_shell_client::{
         ActiveApp, AppWindow, GtkMenu, MenuBarUpdate, WindowMenu, WindowState,
     };
+    use cupertino_text_field::{KeyInput, Keymap};
+    use std::time::Instant;
 
     struct Fixture {
         feed: BarFeed,
@@ -912,6 +916,55 @@ mod tests {
             f.resolve(activate(SlotKey::System, RECENT_APP_ROWS)),
             None,
             "the menu was cleared"
+        );
+    }
+
+    /// Search for `text` in the Help menu of the bar `f` shows and choose the first result with Return.
+    fn choose_first_result(f: &Fixture, text: &str) -> Option<Action> {
+        let output = Rect::new(0.0, 0.0, 1000.0, 800.0);
+        let mut c = MenuController::new(output, Box::new(MonoMeasure::default()));
+        c.set_content(f.feed.content(&f.shared));
+        let help = c.layout().slot(&SlotKey::Menu(fallback::HELP_MENU))?.rect;
+        let p = Point::new(help.x + help.w / 2.0, help.y + help.h / 2.0);
+        c.pointer_press(p, 0.0);
+        c.pointer_release(p, 0.05);
+        let mut keymap = Keymap::standard();
+        for ch in text.chars() {
+            let input = KeyInput::new(0, false, false, false, false, Some(ch));
+            c.search_key(None, &mut keymap, input, Instant::now())?;
+        }
+        let effect = c
+            .key(Key::Enter, 1.0)
+            .effects
+            .into_iter()
+            .find(|e| matches!(e, Effect::Activate { .. }))?;
+        f.resolve(effect)
+    }
+
+    #[test]
+    fn a_help_search_result_goes_where_the_item_it_found_goes_by_its_origin() {
+        let mut f = Fixture::new(kde_menu());
+        f.load(MenuItem::submenu(
+            0,
+            "",
+            vec![MenuItem::submenu(
+                1,
+                "File",
+                vec![MenuItem::new(2, "New"), MenuItem::new(5, "Open Document")],
+            )],
+        ));
+        assert_eq!(
+            choose_first_result(&f, "open doc"),
+            Some(Action::Request(Request::ActivateDbusMenu {
+                menu: kde(),
+                item: 5
+            })),
+            "the exporter's item goes to the exporter"
+        );
+        assert_eq!(
+            choose_first_result(&f, "minimize"),
+            Some(Action::WindowCommand(WindowCommand::Minimize)),
+            "the bar's item acts through the server"
         );
     }
 }

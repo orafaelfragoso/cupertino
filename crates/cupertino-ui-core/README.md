@@ -39,14 +39,16 @@ all on one thread.
   compositor is ready: before the first configure nothing is drawn, the first frame acknowledges it, and later frames
   wait for the frame callback. A node repaints only when it, its size, its focus or the window's active state changed;
   damage is where changed nodes were and are, and a frame with no damage sends no buffer. A window that cannot be
-  laid out, rendered or presented (a configure larger than the renderer's pixel limit, say) goes to `on_window_error`
-  and waits for its next configure, then draws whole; other windows go on, and only a lost connection ends `step`.
+  laid out, rendered or presented goes to `on_window_error` and tries again, whole, on its next change or configure,
+  whatever the cause: the renderer reports a target and content too large to draw with the same error. Other windows
+  go on, and only a lost connection ends `step`.
 - **Scrolling.** A scroll container's offset is model state, counted from the start edge; core moves the content
   by it when placing nodes, so painting and hit-testing agree. In right-to-left layout, where layout mirrors the
   content, a horizontal offset moves the content right.
 - **Accessibility.** A node without a role stays out of the tree and its children move up. A protected node's value
   becomes `AccessibleValue::Protected`, here, before any adapter, snapshot or test sees it. An adapter gets each
-  window's whole tree when it becomes active or the window opens, then only diffs while `is_active`. A protected
+  window's whole tree, marked `full`, when it becomes active or the window opens, then only diffs while
+  `is_active`. An adapter wakes the runtime's waker when it becomes active, since `run` may be blocked. A protected
   field's input-method state goes out without its surrounding text.
 
 ## Not yet

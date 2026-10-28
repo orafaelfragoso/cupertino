@@ -8,7 +8,6 @@ mod common;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::os::unix::fs::PermissionsExt;
-use std::process::{Command as Process, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -20,6 +19,7 @@ use cupertino_btd::auth::{Authorizer, Decision};
 use cupertino_btd::daemon::{Bus, Config, Daemon};
 use cupertino_btd::error::{Error, Result};
 use cupertino_btd::transport::NoBluetooth;
+use cupertino_test_bus::PrivateBus;
 use tempfile::TempDir;
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::{ObjectPath, OwnedValue};
@@ -30,47 +30,6 @@ const AGENT_PATH: &str = "/test/agent";
 const WAIT: Duration = Duration::from_secs(5);
 
 type Dict = HashMap<String, OwnedValue>;
-
-/// A private `dbus-daemon`, killed on drop.
-struct PrivateBus {
-    address: String,
-    pid: String,
-}
-
-impl PrivateBus {
-    fn start() -> Option<PrivateBus> {
-        let out = Process::new("dbus-daemon")
-            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        let text = String::from_utf8(out.stdout)
-            .ok()
-            .filter(|_| out.status.success())?;
-        let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
-        Some(PrivateBus {
-            address: lines.next()?.to_owned(),
-            pid: lines.next()?.to_owned(),
-        })
-    }
-
-    fn connect(&self) -> Connection {
-        zbus::blocking::connection::Builder::address(self.address.as_str())
-            .unwrap()
-            .build()
-            .unwrap()
-    }
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        Process::new("kill")
-            .arg(&self.pid)
-            .status()
-            .expect("kill the private bus");
-    }
-}
 
 /// Answers with a fixed decision and records the pids it was asked about.
 struct Scripted {

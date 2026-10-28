@@ -874,8 +874,16 @@ const NOTICE_PADDING: (f64, f64) = (18.0, 11.0);
 /// Distance of that notice from the top of the output, in points.
 const NOTICE_TOP: f64 = 48.0;
 
+/// How the notice is set: the text, its size in points, and the padding at its left and right in points.
+#[derive(Clone, Debug, PartialEq)]
+struct NoticeSetting {
+    text: String,
+    pt: f32,
+    pad: f64,
+}
+
 fn render_notice(
-    text: &str,
+    setting: &NoticeSetting,
     size: (f64, f64),
     scale: f64,
     dark: bool,
@@ -899,51 +907,78 @@ fn render_notice(
         scale,
         fill,
     );
-    let px = FONT_PT * scale as f32;
     renderer.draw_centered(
         &mut pm,
-        text,
-        (NOTICE_PADDING.0 * scale) as f32,
+        &setting.text,
+        (setting.pad * scale) as f32,
         (size.1 / 2.0 * scale) as f32,
-        px,
+        setting.pt * scale as f32,
         400,
         pal.text,
     );
     Some((pm, [0; 4]))
 }
 
-/// The narrowest output (in points) the notice is made for: the chord and its padding fit in it. A narrower output shows
-/// the chord cut at the right.
-pub const NOTICE_MIN_OUTPUT_WIDTH: f64 = 160.0;
+/// The narrowest output (in logical points) the notice is made for. No display is narrower. From this width up the
+/// sentence that names the release chord ("Press <chord> to get your shortcuts back.") fits whole inside the pill, at
+/// any scale, in a slightly smaller type when the output is narrow; the rest of the text (the application's name) goes
+/// when it does not fit. Below this width nothing is guaranteed: the notice shows the chord alone, cut at the output's
+/// edge.
+pub const NOTICE_MIN_OUTPUT_WIDTH: f64 = 320.0;
 /// The least room, in points, the text of the notice gets, whatever the output: a narrower output cuts the notice at its edge.
 const NOTICE_MIN_TEXT_ROOM: f64 = 40.0;
 /// Distance of the notice from each side of the output, in points.
-const NOTICE_SIDE_MARGIN: f64 = 12.0;
+const NOTICE_SIDE_MARGIN: f64 = 8.0;
+/// The type size and the horizontal padding of the notice on a narrow output, in points.
+const NOTICE_COMPACT: (f32, f64) = (11.5, 12.0);
 
-/// What the notice says on an output `output_width` points wide at `scale`: the whole text when it fits between the
-/// margins, else the release chord alone, cut at the right when even that does not fit. The chord is the start of both.
-fn notice_text(
+/// How the notice is set on an output `output_width` points wide at `scale`: the whole text when it fits between the
+/// margins, else the sentence that names the release chord, in the normal type and then in the compact one, else the
+/// chord alone, cut at the right when even that does not fit. The chord is in all of them.
+fn notice_setting(
     notice: &crate::overlays::ShortcutNotice,
     output_width: f64,
     scale: f64,
     text: &mut crate::overlays::OverlayText,
-) -> String {
-    let px = FONT_PT * scale as f32;
-    let room = (output_width - 2.0 * NOTICE_SIDE_MARGIN - 2.0 * NOTICE_PADDING.0)
-        .max(NOTICE_MIN_TEXT_ROOM);
-    for candidate in [&notice.text, &notice.short] {
-        if f64::from(text.width(candidate, px, 400)) / scale <= room {
-            return candidate.clone();
+) -> NoticeSetting {
+    let (compact_pt, compact_pad) = NOTICE_COMPACT;
+    let room =
+        |pad: f64| (output_width - 2.0 * NOTICE_SIDE_MARGIN - 2.0 * pad).max(NOTICE_MIN_TEXT_ROOM);
+    for (candidate, pt, pad) in [
+        (&notice.text, FONT_PT, NOTICE_PADDING.0),
+        (&notice.clause, FONT_PT, NOTICE_PADDING.0),
+        (&notice.clause, compact_pt, compact_pad),
+        (&notice.short, FONT_PT, compact_pad),
+    ] {
+        if f64::from(text.width(candidate, pt * scale as f32, 400)) / scale <= room(pad) {
+            return NoticeSetting {
+                text: candidate.clone(),
+                pt,
+                pad,
+            };
         }
     }
-    text.fit(&notice.short, px, 400, (room * scale) as f32)
+    NoticeSetting {
+        text: text.fit(
+            &notice.short,
+            FONT_PT * scale as f32,
+            400,
+            (room(compact_pad) * scale) as f32,
+        ),
+        pt: FONT_PT,
+        pad: compact_pad,
+    }
 }
 
-/// The size and the position of the notice (in points) for a text of `text_width` on an output `output_width` wide: as wide
-/// as the text needs, never wider than the output less a margin on each side, centred. The text starts at the left
-/// padding.
-fn notice_layout(text_width: f64, output_width: f64) -> ((f64, f64), (f64, f64)) {
-    let wanted = text_width + 2.0 * NOTICE_PADDING.0;
+/// The size and the position of the notice (in points) for a text `text_width` wide set with `setting` on an output
+/// `output_width` wide: as wide as the text needs, never wider than the output less a margin on each side, centred. The
+/// text starts at the left padding.
+fn notice_layout(
+    text_width: f64,
+    setting: &NoticeSetting,
+    output_width: f64,
+) -> ((f64, f64), (f64, f64)) {
+    let wanted = text_width + 2.0 * setting.pad;
     // an output narrower than the supported minimum is cut by its own edge: the pill keeps its size and its left edge
     let width = if output_width >= NOTICE_MIN_OUTPUT_WIDTH {
         wanted.min(output_width - 2.0 * NOTICE_SIDE_MARGIN)
@@ -951,7 +986,7 @@ fn notice_layout(text_width: f64, output_width: f64) -> ((f64, f64), (f64, f64))
         wanted
     }
     .max(1.0);
-    let size = (width, f64::from(FONT_PT) + 2.0 * NOTICE_PADDING.1);
+    let size = (width, f64::from(setting.pt) + 2.0 * NOTICE_PADDING.1);
     let x = ((output_width - width) / 2.0).round().max(0.0);
     (size, (x, NOTICE_TOP))
 }
@@ -966,21 +1001,20 @@ pub fn shortcut_notice(p: &mut SceneParams<'_>) -> Vec<Piece> {
         return Vec::new();
     }
     let (scale, dark) = (p.scale, p.config.is_dark());
-    let px = FONT_PT * scale as f32;
     let overlays = &mut *p.overlays;
     let text = &mut overlays.text;
     text.set_scale(scale as f32);
-    let shown = notice_text(&notice, p.rect.w, scale, text);
-    let text_width = f64::from(text.width(&shown, px, 400)) / scale;
-    let (size, (x, y)) = notice_layout(text_width, p.rect.w);
+    let setting = notice_setting(&notice, p.rect.w, scale, text);
+    let text_width = f64::from(text.width(&setting.text, setting.pt * scale as f32, 400)) / scale;
+    let (size, (x, y)) = notice_layout(text_width, &setting, p.rect.w);
     let sig = debug_sig(&(
-        &shown,
+        &setting,
         (size.0.to_bits(), size.1.to_bits()),
         scale.to_bits(),
         dark,
     ));
     let cut = overlays.images.get(("shortcut-notice", 0), sig, || {
-        render_notice(&shown, size, scale, dark, text)
+        render_notice(&setting, size, scale, dark, text)
     });
     cut.map(|(buf, px, _)| {
         vec![image_piece(
@@ -1436,8 +1470,10 @@ mod tests {
     }
 
     fn notice_for(chord: &str, app: &str) -> crate::overlays::ShortcutNotice {
+        let clause = format!("Press {chord} to get your shortcuts back.");
         crate::overlays::ShortcutNotice {
-            text: format!("Press {chord} to get your shortcuts back. {app} is receiving them."),
+            text: format!("{clause} {app} is receiving them."),
+            clause,
             short: chord.to_owned(),
             output: cupertino_wm::OutputId(1),
             owner: None,
@@ -1445,10 +1481,11 @@ mod tests {
         }
     }
 
-    /// The chord is in the text the notice draws, and that text, measured with the real font at the output's scale,
-    /// fits inside the pill, on every output from the narrowest supported one up, at integer and fractional scales.
+    /// From the narrowest supported output up, the sentence that names the release chord is in the text the notice
+    /// draws, whole, and that text, measured with the real font at its size and the output's scale, fits inside the
+    /// pill, at integer and fractional scales, with the longest name and a long chord.
     #[test]
-    fn the_notice_shows_the_chord_whole_inside_its_pill_on_every_supported_output() {
+    fn the_notice_shows_the_chord_sentence_whole_inside_its_pill_on_every_supported_output() {
         let assets = cupertino_assets::Assets::builtin();
         let mut renderer =
             crate::overlays::OverlayText::new(&cupertino_theme::Typography::default(), &assets)
@@ -1456,27 +1493,26 @@ mod tests {
         let long_name = "x".repeat(48);
         for scale in [1.0, 1.25, 1.5, 2.0] {
             renderer.set_scale(scale as f32);
-            let px = FONT_PT * scale as f32;
-            for output_width in [1920.0, 1000.5, 400.0, 250.0, NOTICE_MIN_OUTPUT_WIDTH] {
-                for app in ["org.example.vm", long_name.as_str()] {
-                    let notice = notice_for("Super+Escape", app);
-                    let shown = notice_text(&notice, output_width, scale, &mut renderer);
-                    assert!(
-                        shown.contains("Super+Escape"),
-                        "{output_width} at {scale}: {shown:?}"
-                    );
-                    let text_width = f64::from(renderer.width(&shown, px, 400)) / scale;
-                    let ((w, h), (x, y)) = notice_layout(text_width, output_width);
-                    assert!(
-                        text_width + 2.0 * NOTICE_PADDING.0 <= w + 1e-9,
-                        "{output_width} at {scale}: the text ({text_width}) overflows its pill ({w})"
-                    );
-                    assert!(w <= output_width - 2.0 * NOTICE_SIDE_MARGIN + 1e-9);
-                    assert!(
-                        x >= NOTICE_SIDE_MARGIN - 1.0 && x + w <= output_width,
-                        "{x} {w}"
-                    );
-                    assert!(h > 0.0 && y >= 0.0);
+            for output_width in [NOTICE_MIN_OUTPUT_WIDTH, 400.0, 1000.5, 1920.0] {
+                for chord in ["Super+Escape", "Ctrl+Alt+Escape"] {
+                    for app in ["org.example.vm", long_name.as_str()] {
+                        let notice = notice_for(chord, app);
+                        let set = notice_setting(&notice, output_width, scale, &mut renderer);
+                        assert!(
+                            set.text.starts_with(&notice.clause),
+                            "{output_width} at {scale}, {chord}: the chord sentence is cut: {set:?}"
+                        );
+                        let text_width =
+                            f64::from(renderer.width(&set.text, set.pt * scale as f32, 400))
+                                / scale;
+                        let ((w, h), (x, y)) = notice_layout(text_width, &set, output_width);
+                        assert!(
+                            text_width + 2.0 * set.pad <= w + 1e-9,
+                            "{output_width} at {scale}: the text ({text_width}) overflows its pill ({w})"
+                        );
+                        assert!(x >= 0.0 && x + w <= output_width, "{x} {w}");
+                        assert!(h > 0.0 && y >= 0.0);
+                    }
                 }
             }
         }
@@ -1490,14 +1526,16 @@ mod tests {
                 .expect("the built-in font");
         renderer.set_scale(1.0);
         let notice = notice_for("Super+Escape", "org.example.vm");
-        for output_width in [100.0, 60.0, 20.0] {
-            let shown = notice_text(&notice, output_width, 1.0, &mut renderer);
+        for output_width in [200.0, 100.0, 60.0, 20.0] {
+            let set = notice_setting(&notice, output_width, 1.0, &mut renderer);
             assert!(
-                !shown.is_empty() && "Super+Escape".starts_with(shown.trim_end_matches('…')),
-                "{output_width}: {shown:?} is the start of the chord"
+                !set.text.is_empty() && "Super+Escape".starts_with(set.text.trim_end_matches('…')),
+                "{output_width}: {:?} is the start of the chord",
+                set.text
             );
             let ((w, _), (x, _)) = notice_layout(
-                f64::from(renderer.width(&shown, FONT_PT, 400)),
+                f64::from(renderer.width(&set.text, set.pt, 400)),
+                &set,
                 output_width,
             );
             assert!(

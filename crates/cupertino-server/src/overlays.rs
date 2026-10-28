@@ -94,7 +94,9 @@ pub struct Overlays {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShortcutNotice {
     pub text: String,
-    /// What shows instead of `text` on an output too narrow for it: the release chord.
+    /// What shows instead of `text` on an output too narrow for it: the sentence that names the release chord.
+    pub clause: String,
+    /// What shows instead of `clause` below the supported output width: the release chord alone.
     pub short: String,
     pub output: cupertino_wm::OutputId,
     /// The surface whose inhibitor the notice is for; `None` for a notice no deactivation takes down.

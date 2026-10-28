@@ -278,6 +278,8 @@ pub struct MenuItem {
     pub accel: Option<String>,
     /// Secondary text drawn dimmed after the label (the menu path of a Help search result); `None` for others.
     pub detail: Option<String>,
+    /// The item shown in this one's place while Alt is held, with its own id; only the bar's own items have one.
+    pub alternate: Option<Box<MenuItem>>,
 }
 
 impl MenuItem {
@@ -326,6 +328,24 @@ impl MenuItem {
         self
     }
 
+    pub fn with_alternate(mut self, alternate: MenuItem) -> Self {
+        self.alternate = Some(Box::new(alternate));
+        self
+    }
+
+    /// The menu as it shows while Alt is held: each child with an alternate is swapped for it, and the alternate keeps
+    /// the child as its own alternate, so the row is measured for both and Alt going up swaps it back.
+    pub fn alternates_shown(&self) -> MenuItem {
+        let mut menu = self.clone();
+        for child in &mut menu.children {
+            if let Some(mut alternate) = child.alternate.take() {
+                std::mem::swap(child, &mut alternate);
+                child.alternate = Some(alternate);
+            }
+        }
+        menu
+    }
+
     /// An item that can be highlighted and activated.
     pub fn is_selectable(&self) -> bool {
         self.visible && !self.separator && self.enabled
@@ -347,12 +367,18 @@ impl MenuItem {
         if self.id == id {
             return Some(self);
         }
+        if let Some(alternate) = self.alternate.as_deref().filter(|a| a.id == id) {
+            return Some(alternate);
+        }
         self.children.iter().find_map(|c| c.find(id))
     }
 
     pub fn find_mut(&mut self, id: ItemId) -> Option<&mut MenuItem> {
         if self.id == id {
             return Some(self);
+        }
+        if let Some(alternate) = self.alternate.as_deref_mut().filter(|a| a.id == id) {
+            return Some(alternate);
         }
         self.children.iter_mut().find_map(|c| c.find_mut(id))
     }

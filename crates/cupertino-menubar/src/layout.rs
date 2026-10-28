@@ -345,8 +345,11 @@ impl PopupLayout {
             .position(|r| r.rect.contains(p) && self.rect.contains(Point::new(p.x, p.y)))
     }
 
+    /// The row that shows item `id`, or that shows its alternate in its place.
     pub fn index_of(&self, id: ItemId) -> Option<usize> {
-        self.rows.iter().position(|r| r.item.id == id)
+        self.rows
+            .iter()
+            .position(|r| r.item.id == id || r.item.alternate.as_ref().is_some_and(|a| a.id == id))
     }
 }
 
@@ -381,7 +384,11 @@ pub fn layout_popup(
     let mut modifiers_w: f64 = 0.0;
     let mut key_w: f64 = 0.0;
     let mut any_arrow = false;
-    for c in &children {
+    // a row is as wide as the wider of its item and the alternate shown in its place while Alt is held
+    for c in children
+        .iter()
+        .flat_map(|c| std::iter::once(*c).chain(c.alternate.as_deref()))
+    {
         if c.separator {
             continue;
         }
@@ -698,6 +705,37 @@ mod tests {
         assert_eq!(p.row_at(Point::new(70.0, p.rows[2].rect.y + 1.0)), Some(2));
         assert_eq!(p.row_at(Point::new(5.0, 30.0)), None);
         assert_eq!(p.index_of(ItemId(13)), Some(3));
+    }
+
+    #[test]
+    fn a_row_is_sized_for_the_wider_of_its_item_and_its_alternate() {
+        let menu = MenuItem::submenu(
+            1,
+            "Window",
+            vec![
+                MenuItem::new(10, "Zoom").with_alternate(
+                    MenuItem::new(11, "Zoom Every Window There Is")
+                        .with_shortcut(Shortcut::from_tokens(&["Alt", "Super", "Z"]).unwrap()),
+                ),
+                MenuItem::new(12, "Close"),
+            ],
+        );
+        let slot = Anchor::BelowSlot(Rect::new(60.0, 0.0, 40.0, 24.0));
+        let (m, measure) = (MenuMetrics::default(), MonoMeasure::default());
+        let plain = layout_popup(&menu, slot, OUT, 0.0, &m, &measure);
+        let alt = layout_popup(&menu.alternates_shown(), slot, OUT, 0.0, &m, &measure);
+        assert_eq!(plain.rows[0].item.id, ItemId(10));
+        assert_eq!(alt.rows[0].item.id, ItemId(11));
+        assert_eq!(alt.rows[1].item.id, ItemId(12));
+        assert_eq!(
+            plain.rect, alt.rect,
+            "Alt swaps a row without resizing the menu"
+        );
+        assert_eq!(plain.shortcut_key_width, alt.shortcut_key_width);
+        let alternate = m.padding_x + 26.0 * 7.0 + m.padding_x + m.shortcut_gap + 3.0 * 7.0;
+        assert!((plain.rect.w - alternate).abs() < 1e-9);
+        assert_eq!(plain.index_of(ItemId(11)), Some(0));
+        assert_eq!(alt.index_of(ItemId(10)), Some(0));
     }
 
     #[test]

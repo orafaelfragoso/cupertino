@@ -170,6 +170,37 @@ fn rewrite_masks(
     }
 }
 
+/// The key that types `sym` at the first level of the layout `state` gives it; else, the way the shortcut matcher reads
+/// a key whose own symbol is not ASCII (`raw_latin_sym_or_raw_current_sym`), the key whose first ASCII symbol in another
+/// layout is `sym`: the key a Latin user presses for it.
+fn key_for_sym(keymap: &xkb::Keymap, state: &xkb::State, sym: u32) -> Option<Keycode> {
+    let first = |code: Keycode, layout: u32| {
+        keymap
+            .key_get_syms_by_level(code, layout, 0)
+            .first()
+            .copied()
+    };
+    let latin = |code: Keycode, own: u32| {
+        (0..keymap.num_layouts())
+            .filter(|l| *l != own)
+            .filter_map(|l| first(code, l))
+            .find(|s| {
+                s.key_char()
+                    .is_some_and(|c| c.is_ascii() && !c.is_ascii_control())
+            })
+    };
+    let keys = || (keymap.min_keycode().raw()..=keymap.max_keycode().raw()).map(Keycode::new);
+    let typed = |code: Keycode| first(code, state.key_get_layout(code));
+    keys()
+        .find(|&code| typed(code).is_some_and(|s| s.raw() == sym))
+        .or_else(|| {
+            keys().find(|&code| {
+                typed(code).is_some_and(|s| s.key_char().is_some_and(|c| !c.is_ascii()))
+                    && latin(code, state.key_get_layout(code)).is_some_and(|s| s.raw() == sym)
+            })
+        })
+}
+
 impl KeyFilters {
     pub fn new(settings: &KeyboardSettings) -> Self {
         let a = &settings.access;
@@ -310,6 +341,35 @@ impl Cupertino {
             },
         );
         self.key_filters.override_active = true;
+    }
+
+    /// Type the chord `mods` + `sym` into the focused client for the compositor (the menu bar's Edit items): the client
+    /// is told only `mods`, then the key that types `sym` in the active layout ([`key_for_sym`]) goes down and at once
+    /// up through [`Self::forward_rewritten`], which puts the real modifiers back. The chord passes neither the shortcuts
+    /// nor the rewrite, and no repeat is armed. Nothing is sent while a rewritten key is held (it keeps the modifiers
+    /// it was given) or while the key itself is held.
+    pub(crate) fn forward_chord(&mut self, sym: u32, mods: RawMods) {
+        if !self.key_filters.rewritten.is_empty() {
+            return;
+        }
+        let keyboard = self.seat.get_keyboard().unwrap();
+        // SAFETY: the keymap and state references only live for this lookup, inside the lock
+        let code = keyboard.with_xkb_state(self, |ctx| {
+            let xkb = ctx.xkb().lock().unwrap();
+            key_for_sym(unsafe { xkb.keymap() }, unsafe { xkb.state() }, sym)
+        });
+        let Some(code) = code.filter(|c| !keyboard.pressed_keys().contains(c)) else {
+            return;
+        };
+        let rewrite = Rewrite::Key {
+            evdev: evdev(code),
+            remove: RawMods::SHIFT | RawMods::CTRL | RawMods::ALT | RawMods::SUPER,
+            add: mods,
+        };
+        let time = self.now_ms() as u32;
+        for state in [KeyState::Pressed, KeyState::Released] {
+            self.forward_rewritten(code, state, rewrite, SERIAL_COUNTER.next_serial(), time);
+        }
     }
 
     /// Tell the focused client the keyboard's real modifiers again, when a rewrite replaced them.
@@ -538,6 +598,45 @@ mod tests {
             xkb::KEYMAP_COMPILE_NO_FLAGS,
         )
         .expect("the generated keymap compiles")
+    }
+
+    fn system_keymap(layout: &str) -> xkb::Keymap {
+        let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        xkb::Keymap::new_from_names(
+            &context,
+            "",
+            "",
+            layout,
+            "",
+            None,
+            xkb::KEYMAP_COMPILE_NO_FLAGS,
+        )
+        .expect("the system layout compiles")
+    }
+
+    #[test]
+    fn a_chord_takes_the_key_that_types_its_letter_in_the_active_layout() {
+        use smithay::input::keyboard::keysyms::{KEY_a, KEY_c, KEY_z};
+        // evdev KEY_Z, KEY_W and KEY_C, as xkb keycodes
+        let (z, w, c) = (44 + XKB_OFFSET, 17 + XKB_OFFSET, 46 + XKB_OFFSET);
+        let us = system_keymap("us");
+        let key = |keymap: &xkb::Keymap, state: &xkb::State, sym| {
+            key_for_sym(keymap, state, sym).map(|k| k.raw())
+        };
+        assert_eq!(key(&us, &xkb::State::new(&us), KEY_z), Some(z));
+        // AZERTY types z with the key of the QWERTY w, and a with that of q
+        let fr = system_keymap("fr");
+        assert_eq!(key(&fr, &xkb::State::new(&fr), KEY_z), Some(w));
+        assert_eq!(
+            key(&fr, &xkb::State::new(&fr), KEY_a),
+            Some(16 + XKB_OFFSET)
+        );
+        // no key of the Russian group types c: the shortcuts' Latin fallback names the key of the first group
+        let both = system_keymap("us,ru");
+        let mut russian = xkb::State::new(&both);
+        russian.update_mask(0, 0, 0, 0, 0, 1);
+        assert_eq!(key(&both, &russian, KEY_c), Some(c));
+        assert_eq!(key(&both, &xkb::State::new(&both), KEY_c), Some(c));
     }
 
     #[test]

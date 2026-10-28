@@ -3,12 +3,15 @@ name = "cupertino-apps"
 version = "0.1.0"
 edition.workspace = true
 license = "MPL-2.0"
-description = "Application registry shared by the Cupertino processes: desktop entries and their Exec lines, the shared MIME database (globs, aliases, subclasses, icon names) and default applications from mimeapps.list"
+description = "Application registry shared by the Cupertino processes: desktop entries and their Exec lines, launching with an activation token, the shared MIME database (globs, aliases, subclasses, icon names), default applications from mimeapps.list, and the recently-used files and the launcher's usage store"
 
 [package.metadata.cupertino]
 layer = "foundation"
 
 [dependencies]
+percent-encoding = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"

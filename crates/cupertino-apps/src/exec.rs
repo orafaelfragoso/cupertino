@@ -38,6 +38,16 @@ impl CommandSpec {
         }
     }
 
+    /// The command of an argument list, the program first; `None` for an empty list.
+    pub fn from_argv(argv: Vec<String>) -> Option<Self> {
+        let mut it = argv.into_iter();
+        Some(Self {
+            program: it.next()?,
+            args: it.collect(),
+            ..Default::default()
+        })
+    }
+
     pub fn argv(&self) -> Vec<&str> {
         std::iter::once(self.program.as_str())
             .chain(self.args.iter().map(String::as_str))

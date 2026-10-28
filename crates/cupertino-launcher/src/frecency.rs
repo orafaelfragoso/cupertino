@@ -9,13 +9,12 @@
 //!
 //! The default location is `$XDG_DATA_HOME/cupertino/launcher.json`
 //! (`~/.local/share/cupertino/launcher.json`). A missing or corrupt file starts an empty store; saves
-//! are atomic (temporary file and rename).
+//! are atomic (temporary file and rename). The file format, its location and the ranking are
+//! `cupertino_apps::frecency`, which other processes read the store with.
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use cupertino_apps::frecency::{self as store, Store};
+pub use cupertino_apps::frecency::{default_path, ItemRecord, FILE_VERSION};
 use std::path::{Path, PathBuf};
-
-pub const FILE_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrecencyConfig {
@@ -31,7 +30,7 @@ pub struct FrecencyConfig {
 impl Default for FrecencyConfig {
     fn default() -> Self {
         Self {
-            half_life_secs: 14.0 * 86400.0,
+            half_life_secs: store::HALF_LIFE_SECS,
             max_bonus: 120.0,
             bonus_scale: 45.0,
             query_max_bonus: 80.0,
@@ -42,37 +41,12 @@ impl Default for FrecencyConfig {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct ItemRecord {
-    pub score: f64,
-    pub last_used: f64,
-    pub launches: u32,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-struct Data {
-    #[serde(default)]
-    version: u32,
-    #[serde(default)]
-    items: HashMap<String, ItemRecord>,
-    #[serde(default)]
-    queries: HashMap<String, HashMap<String, u32>>,
-}
-
 #[derive(Clone, Debug)]
 pub struct Frecency {
     pub config: FrecencyConfig,
-    data: Data,
+    data: Store,
     path: Option<PathBuf>,
     dirty: bool,
-}
-
-pub fn default_path() -> Option<PathBuf> {
-    let base = match std::env::var_os("XDG_DATA_HOME") {
-        Some(d) if !d.is_empty() => PathBuf::from(d),
-        _ => PathBuf::from(std::env::var_os("HOME")?).join(".local/share"),
-    };
-    Some(base.join("cupertino/launcher.json"))
 }
 
 /// Seconds since the Unix epoch.
@@ -93,10 +67,7 @@ impl Frecency {
     pub fn in_memory() -> Self {
         Self {
             config: FrecencyConfig::default(),
-            data: Data {
-                version: FILE_VERSION,
-                ..Default::default()
-            },
+            data: Store::empty(),
             path: None,
             dirty: false,
         }
@@ -105,14 +76,7 @@ impl Frecency {
     /// Load from `path`; the store remembers the path for [`Self::save`].
     pub fn load(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
-        let data = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|t| serde_json::from_str::<Data>(&t).ok())
-            .filter(|d| d.version == FILE_VERSION)
-            .unwrap_or(Data {
-                version: FILE_VERSION,
-                ..Default::default()
-            });
+        let data = Store::read(&path);
         Self {
             config: FrecencyConfig::default(),
             data,
@@ -145,8 +109,7 @@ impl Frecency {
     }
 
     fn decay(&self, rec: &ItemRecord, now: f64) -> f64 {
-        let dt = (now - rec.last_used).max(0.0);
-        rec.score * 0.5f64.powf(dt / self.config.half_life_secs)
+        store::decayed(rec, now, self.config.half_life_secs)
     }
 
     /// Decayed score of an item.
@@ -179,13 +142,7 @@ impl Frecency {
 
     /// Items with the highest decayed score, best first.
     pub fn top(&self, n: usize, now: f64) -> Vec<(String, f64)> {
-        let mut v: Vec<(String, f64)> = self
-            .data
-            .items
-            .iter()
-            .map(|(k, r)| (k.clone(), self.decay(r, now)))
-            .collect();
-        v.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let mut v = store::ranked(&self.data.items, now, self.config.half_life_secs);
         v.truncate(n);
         v
     }
@@ -350,21 +307,6 @@ mod tests {
         assert!((g.score("app:x", 100.0) - 1.0).abs() < 1e-12);
         assert!(g.bonus("app:x", "x", 100.0) > g.bonus("app:x", "", 100.0));
         assert!(!dir.path().join("nested/launcher.json.tmp").exists());
-    }
-
-    #[test]
-    fn corrupt_or_foreign_files_start_empty() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("l.json");
-        std::fs::write(&path, "{ not json").unwrap();
-        assert!(Frecency::load(&path).is_empty());
-        std::fs::write(&path, "{\"version\": 99, \"items\": {\"a\": {\"score\": 1.0, \"last_used\": 0.0, \"launches\": 1}}}").unwrap();
-        assert!(
-            Frecency::load(&path).is_empty(),
-            "unknown version is ignored"
-        );
-        std::fs::write(&path, "").unwrap();
-        assert!(Frecency::load(&path).is_empty());
     }
 
     #[test]

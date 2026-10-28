@@ -9,7 +9,7 @@ use std::sync::Arc;
 use cupertino_btd::auth::{AllowAll, Authorizer, LogindAuthorizer};
 use cupertino_btd::daemon::{Bus, Config, Daemon};
 use cupertino_btd::error::Error;
-use cupertino_btd::transport::KernelTransport;
+use cupertino_btd::transport::{KernelTransport, NoBluetooth, Transport};
 
 const USAGE: &str =
     "usage: cupertino-btd [--session-bus [--no-auth]] [--keys-dir PATH] [--read-only]";
@@ -78,7 +78,16 @@ fn run(options: Options) -> Result<Infallible, Error> {
             cupertino_seat::connect().map_err(Error::Seat)?,
         ))
     };
-    let transport = Arc::new(KernelTransport::open()?);
+    let transport: Arc<dyn Transport> = match KernelTransport::open() {
+        Ok(transport) => Arc::new(transport),
+        Err(error) if NoBluetooth::is_missing(&error) => {
+            eprintln!(
+                "cupertino-btd: {error}; this kernel has no Bluetooth, so there is no adapter"
+            );
+            Arc::new(NoBluetooth)
+        }
+        Err(error) => return Err(error.into()),
+    };
     let bus = if options.session_bus {
         Bus::Session
     } else {

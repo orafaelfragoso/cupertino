@@ -755,6 +755,7 @@ impl App {
                 Action::MoveToWorkspace(workspace) => {
                     self.bars[i].menu_bar.move_to_workspace(workspace)
                 }
+                Action::ActivateWindow(id) => self.bars[i].menu_bar.activate_window(id),
                 Action::ShowAbout => {
                     eprintln!("cupertino-menubar: about requested (there is no about panel yet)")
                 }

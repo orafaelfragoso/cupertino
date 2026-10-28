@@ -8,14 +8,17 @@
 use crate::dbus::sni::{self, StatusItem};
 use crate::desktop::AppName;
 use crate::extras::{ExtraKind, Extras};
-use crate::fallback;
-use crate::item::MenuItem;
+use crate::fallback::{self, Chords, FallbackAction, WindowRow};
+use crate::item::{MenuItem, Shortcut, ShortcutModifier};
 use crate::layout::{BarContent, StatusEntry};
 use crate::raster::{PRIVACY_DOT_PT, STATUS_ICON_PT};
 use crate::source::{GtkMenuProps, KdeAppMenu, MenuSource, MenuSourceMap, WindowKey};
 use crate::worker::Request;
 use cupertino_icons::from_argb;
-use cupertino_shell_client::{GtkMenu, MenuBarUpdate, WindowMenu, WindowState};
+use cupertino_shell_client::{
+    AppWindow, BoundAction, GtkMenu, MenuBarUpdate, PrimaryModifier, Shortcuts, WindowMenu,
+    WindowState,
+};
 use std::collections::HashMap;
 use tiny_skia::{IntSize, Pixmap};
 
@@ -44,6 +47,8 @@ pub struct Shared {
     pub extra_icons: HashMap<ExtraKind, Option<Pixmap>>,
     /// The server reports a screen or window capture: the indicator shows next to the control panel.
     pub screen_capture: bool,
+    /// The chords of the synthetic menus, from the server's shortcuts.
+    pub chords: Chords,
     pub clock: String,
     /// Menu trees of the exporters in use. A source is present from the moment its tree is
     /// requested, with an empty tree until the exporter answers.
@@ -128,6 +133,8 @@ pub struct BarFeed {
     key: WindowKey,
     app: Option<AppName>,
     window: WindowState,
+    /// The active application's windows, for the window list.
+    windows: Vec<AppWindow>,
 }
 
 impl BarFeed {
@@ -140,6 +147,7 @@ impl BarFeed {
                 workspace: 0,
                 workspaces: 1,
             },
+            windows: Vec::new(),
         }
     }
 
@@ -171,10 +179,21 @@ impl BarFeed {
         if let Some(state) = update.window_state {
             self.window = state;
         }
+        if let Some(windows) = &update.windows {
+            self.windows.clone_from(windows);
+        }
         // every bar reports the same server-wide state
         if let Some(active) = update.screen_capture {
             shared.screen_capture = active;
         }
+        if let Some(shortcuts) = &update.shortcuts {
+            shared.chords = chords(shortcuts);
+        }
+    }
+
+    /// The window of row `row` of the window list.
+    pub fn listed_window(&self, row: usize) -> Option<&AppWindow> {
+        self.windows.get(row)
     }
 
     /// Where the active window's menus come from.
@@ -197,15 +216,34 @@ impl BarFeed {
                         .unwrap_or_default()
                 } else {
                     let current = Some(self.window.workspace).filter(|w| *w > 0);
-                    fallback::menus(self.window.workspaces, current, self.window.can_zoom)
+                    let windows: Vec<WindowRow> = self
+                        .windows
+                        .iter()
+                        .map(|w| WindowRow {
+                            title: &w.title,
+                            active: w.active,
+                            minimized: w.minimized,
+                        })
+                        .collect();
+                    fallback::menus(
+                        self.window.workspaces,
+                        current,
+                        self.window.can_zoom,
+                        &windows,
+                        &shared.chords,
+                    )
                 };
                 (
                     app.name.clone(),
-                    fallback::app_menu(&app.name, app.has_entry),
+                    fallback::app_menu(&app.name, &shared.chords),
                     menus,
                 )
             }
-            None => ("Desktop".to_string(), fallback::desktop_menu(), Vec::new()),
+            None => (
+                "Desktop".to_string(),
+                fallback::desktop_menu(&shared.chords),
+                Vec::new(),
+            ),
         };
         let indicator = shared.screen_capture.then(|| StatusEntry {
             id: SCREEN_CAPTURE_SLOT.to_owned(),
@@ -258,6 +296,37 @@ impl BarFeed {
     }
 }
 
+/// The chords of the synthetic menus: the server's binding of each system item, and its primary modifier.
+fn chords(shortcuts: &Shortcuts) -> Chords {
+    let bound = shortcuts
+        .chords
+        .iter()
+        .filter_map(|(action, chord)| {
+            let action = match action {
+                BoundAction::CloseWindow => FallbackAction::CloseWindow,
+                BoundAction::Minimize => FallbackAction::Minimize,
+                BoundAction::Zoom => FallbackAction::Zoom,
+                BoundAction::ToggleFullscreen => FallbackAction::ToggleFullscreen,
+                BoundAction::HideApp => FallbackAction::Hide,
+                BoundAction::HideOthers => FallbackAction::HideOthers,
+                BoundAction::QuitApp => FallbackAction::Quit,
+                BoundAction::TileLeft => FallbackAction::TileLeft,
+                BoundAction::TileRight => FallbackAction::TileRight,
+                BoundAction::TileFill => FallbackAction::TileFill,
+                BoundAction::ForceQuit | BoundAction::Lock | BoundAction::LogOut => return None,
+            };
+            Some((action, Shortcut::from_chord(chord)?))
+        })
+        .collect();
+    Chords {
+        bound,
+        primary: match shortcuts.primary {
+            PrimaryModifier::Super => ShortcutModifier::Primary,
+            PrimaryModifier::Ctrl => ShortcutModifier::Ctrl,
+        },
+    }
+}
+
 fn gtk_props(gtk: &GtkMenu) -> GtkMenuProps {
     GtkMenuProps {
         bus_name: gtk.bus_name.clone(),
@@ -307,6 +376,8 @@ mod tests {
             engage: false,
             screen_capture: None,
             session_agent: None,
+            windows: None,
+            shortcuts: None,
         }
     }
 
@@ -365,6 +436,8 @@ mod tests {
         (feed, shared)
     }
 
+    const SYNTHETIC_MENUS: [&str; 5] = ["File", "Edit", "View", "Window", "Help"];
+
     #[test]
     fn an_app_without_exported_menus_gets_the_synthetic_ones() {
         let (feed, shared) = ready(Some(WindowMenu::None));
@@ -380,7 +453,7 @@ mod tests {
                 .iter()
                 .map(|m| m.label.as_str())
                 .collect::<Vec<_>>(),
-            ["Window"]
+            SYNTHETIC_MENUS
         );
         assert_eq!(content.clock, "Wed Oct 21  10:42");
         assert!(content.control_panel);
@@ -401,7 +474,7 @@ mod tests {
                 .iter()
                 .map(|i| i.label.as_str())
                 .collect::<Vec<_>>(),
-            ["Show All"]
+            ["Settings…", "", "Show All"]
         );
         assert!(content.menus.is_empty());
     }
@@ -495,7 +568,7 @@ mod tests {
             Vec::<String>::new(),
             "its own tree is not loaded yet"
         );
-        assert_eq!(focus(WindowMenu::None), ["Window"]);
+        assert_eq!(focus(WindowMenu::None), SYNTHETIC_MENUS);
         assert_eq!(focus(dbusmenu()), ["File", "Edit"]);
     }
 
@@ -513,7 +586,12 @@ mod tests {
         feed.apply(&state, &mut shared, |_| {
             unreachable!("the application did not change")
         });
-        let window = &feed.content(&shared).menus[0];
+        let content = feed.content(&shared);
+        let window = content
+            .menus
+            .iter()
+            .find(|m| m.id == fallback::WINDOW_MENU)
+            .unwrap();
         let zoom = window.children.iter().find(|i| i.label == "Zoom").unwrap();
         let workspaces = window
             .children
@@ -533,6 +611,102 @@ mod tests {
                 ("Workspace 3", true)
             ]
         );
+    }
+
+    fn window_menu(feed: &BarFeed, shared: &Shared) -> MenuItem {
+        feed.content(shared)
+            .menus
+            .into_iter()
+            .find(|m| m.id == fallback::WINDOW_MENU)
+            .unwrap()
+    }
+
+    #[test]
+    fn the_window_list_follows_the_server() {
+        let (mut feed, mut shared) = ready(Some(WindowMenu::None));
+        let list = |windows: Vec<AppWindow>| MenuBarUpdate {
+            windows: Some(windows),
+            ..MenuBarUpdate::default()
+        };
+        let window = |id, title: &str, active| AppWindow {
+            id,
+            title: title.into(),
+            active,
+            minimized: false,
+        };
+        feed.apply(
+            &list(vec![
+                window(7, "notes.txt", true),
+                window(3, "draft.txt", false),
+            ]),
+            &mut shared,
+            |_| unreachable!("the application did not change"),
+        );
+        let menu = window_menu(&feed, &shared);
+        assert!(menu.children.iter().any(|i| i.label == "draft.txt"));
+        assert_eq!(feed.listed_window(1).map(|w| w.id), Some(3));
+        feed.apply(
+            &list(vec![window(3, "draft.txt", true)]),
+            &mut shared,
+            |_| unreachable!("the application did not change"),
+        );
+        let menu = window_menu(&feed, &shared);
+        let row = menu
+            .children
+            .iter()
+            .find(|i| i.label == "draft.txt")
+            .unwrap();
+        assert!(row.toggle.is_marked());
+        assert!(menu.children.iter().all(|i| i.label != "notes.txt"));
+        assert_eq!(feed.listed_window(1), None);
+    }
+
+    #[test]
+    fn the_servers_shortcuts_become_the_menus_chords() {
+        let (mut feed, mut shared) = ready(Some(WindowMenu::None));
+        let shortcuts = |primary, quit: &str| MenuBarUpdate {
+            shortcuts: Some(Shortcuts {
+                chords: [
+                    (BoundAction::QuitApp, quit.to_string()),
+                    (BoundAction::Minimize, "Super+m".to_string()),
+                    (BoundAction::Lock, "Ctrl+Super+q".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+                primary,
+            }),
+            ..MenuBarUpdate::default()
+        };
+        let chord = |item: Option<&MenuItem>| item?.shortcut.as_ref().map(Shortcut::display);
+        let quit = |content: &BarContent| {
+            chord(content.app_menu.iter().find(|i| i.label == "Quit Editor"))
+        };
+        let settings =
+            |content: &BarContent| chord(content.app_menu.iter().find(|i| i.label == "Settings…"));
+        assert_eq!(quit(&feed.content(&shared)), None, "nothing sent yet");
+
+        feed.apply(
+            &shortcuts(PrimaryModifier::Super, "Super+q"),
+            &mut shared,
+            |_| unreachable!("the application did not change"),
+        );
+        let content = feed.content(&shared);
+        assert_eq!(quit(&content).as_deref(), Some("Super+q"));
+        assert_eq!(settings(&content).as_deref(), Some("Super+,"));
+        let minimize = window_menu(&feed, &shared);
+        assert_eq!(
+            chord(minimize.children.iter().find(|i| i.label == "Minimize")).as_deref(),
+            Some("Super+m")
+        );
+
+        feed.apply(
+            &shortcuts(PrimaryModifier::Ctrl, "Ctrl+q"),
+            &mut shared,
+            |_| unreachable!("the application did not change"),
+        );
+        let content = feed.content(&shared);
+        assert_eq!(quit(&content).as_deref(), Some("Ctrl+q"));
+        assert_eq!(settings(&content).as_deref(), Some("Ctrl+,"));
     }
 
     #[test]

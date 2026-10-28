@@ -1712,6 +1712,27 @@ fn activate_window_is_ignored_while_the_session_is_locked() {
 }
 
 #[test]
+fn window_commands_are_ignored_while_the_session_is_locked() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v10(&mut h);
+    let (_app, first, second) = two_windows(&mut h, "org.example.locked");
+    h.wait_until("both windows listed", |_| {
+        window_list(&bar).is_some_and(|l| l.len() == 2)
+    });
+    let locker = common::Client::locker(common::session_agent(&h.state));
+    h.wait_until("the session to be locked", |_| locker.locked());
+
+    bar.send(Cmd::WindowCommand(BarCommand::Minimize));
+    bar.send(Cmd::WindowCommand(BarCommand::MinimizeAll));
+    h.settle_requests(&bar);
+    h.advance(0.5);
+    for w in [first, second] {
+        assert!(!h.state.wm.window(w).unwrap().state().is_minimized());
+    }
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
 fn the_bar_is_told_the_chords_of_the_bindings_and_the_primary_modifier() {
     let Some(mut h) = Harness::new() else { return };
     let bar = bar_v10(&mut h);

@@ -647,12 +647,15 @@ impl Cupertino {
         }) || self.bar_edge.next_deadline().is_some()
     }
 
-    /// Run a window-management command of the fallback menus on the active application or window.
-    /// False when the server does not know the command, or the bar's `version` does not have it.
+    /// Run a window-management command of the fallback menus on the active application or window; ignored while
+    /// the session is locked. False when the server does not know the command, or the bar's `version` does not have it.
     fn menu_bar_window_command(&mut self, command: BarCommand, version: u32) -> bool {
         // the entries from toggle_fullscreen on came with version 10
         if version < 10 && u32::from(command) >= u32::from(BarCommand::ToggleFullscreen) {
             return false;
+        }
+        if self.session_lock.is_active() {
+            return true;
         }
         let ctx = self.action_context();
         let window = ctx.key_window;
@@ -764,8 +767,12 @@ impl Cupertino {
         }
     }
 
-    /// Move the key window to workspace `n` (1-based) of its output and switch there.
+    /// Move the key window to workspace `n` (1-based) of its output and switch there; ignored while the session is
+    /// locked.
     fn menu_bar_move_to_workspace(&mut self, n: u32) {
+        if self.session_lock.is_active() {
+            return;
+        }
         let Some(window) = self.wm.key_window() else {
             return;
         };

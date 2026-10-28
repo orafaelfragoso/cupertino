@@ -5,12 +5,16 @@
 use crate::activation::{token_accepted, GRANT_LIFETIME, LATE_ACTIVATION, TYPING_QUIET};
 use crate::command::Effect;
 use crate::command::MapFocus;
+use crate::geometry::Rect;
 use crate::ids::{AppId, WindowId};
 use crate::wm::Wm;
 
 /// Delay between the switcher opening and its panel appearing (150 ms). Until
 /// then the Tab steps only move a counter ([`hidden_index`]).
 pub const SWITCHER_SHOW_DELAY: f64 = 0.15;
+
+/// Offset in logical points between two cascaded windows of an application, on each axis.
+pub const CASCADE_STEP: f64 = 24.0;
 
 /// How a switcher key moves the selection: Tab and the right arrow step forward, Shift-Tab,
 /// backtick and the left arrow back, Home and Page Up go to the first entry, End and Page Down to
@@ -464,6 +468,56 @@ impl Wm {
             .collect();
         for a in hidden {
             self.unhide_app(a, out);
+        }
+    }
+
+    pub(crate) fn bring_all_to_front(
+        &mut self,
+        app: AppId,
+        cascade: bool,
+        now: f64,
+        out: &mut Vec<Effect>,
+    ) {
+        let windows: Vec<WindowId> = self
+            .stack
+            .iter()
+            .copied()
+            .filter(|w| self.windows.get(w).is_some_and(|x| x.app == app) && self.focusable(*w))
+            .collect();
+        for w in &windows {
+            self.raise(*w, out);
+        }
+        if !cascade {
+            return;
+        }
+        let key = self.focus.key_window.filter(|k| windows.contains(k));
+        let Some(anchor) = key.or_else(|| windows.last().copied()) else {
+            return;
+        };
+        let origin = self.windows[&anchor].geometry();
+        let behind = windows.iter().rev().copied().filter(|w| *w != anchor);
+        for (step, id) in (1..).zip(behind) {
+            let w = &self.windows[&id];
+            let Some(usable) = self.output(w.output).map(|o| o.usable) else {
+                continue;
+            };
+            let offset = CASCADE_STEP * f64::from(step);
+            let frame = w.lifecycle.normal_frame();
+            let f = Rect::new(origin.x - offset, origin.y - offset, frame.w, frame.h)
+                .clamp_into(&usable);
+            if self
+                .windows
+                .get_mut(&id)
+                .is_some_and(|w| w.lifecycle.animate_normal_frame(f, now))
+            {
+                out.push(Effect::Place {
+                    window: id,
+                    rect: f,
+                });
+                if let Some(c) = self.configure_effect(id, false) {
+                    out.push(c);
+                }
+            }
         }
     }
 

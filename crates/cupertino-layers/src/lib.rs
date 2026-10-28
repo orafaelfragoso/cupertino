@@ -178,6 +178,8 @@ pub const DENIED_CRATES: &[(&str, &[&str])] = &[
         "cupertino-ui-wayland",
         &["cupertino-protocols", "cupertino-shell-client"],
     ),
+    ("cupertino-files", &["cupertino-shell-client"]),
+    ("cupertino-settings", &["cupertino-shell-client"]),
 ];
 
 /// Whether `rules` let a crate of layer `from` depend on a crate of layer `to`.

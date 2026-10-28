@@ -9,6 +9,7 @@ mod cx;
 mod focus;
 mod pointer;
 mod route;
+mod semantics;
 mod task;
 #[cfg(test)]
 mod test_support;

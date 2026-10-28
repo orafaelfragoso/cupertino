@@ -90,7 +90,7 @@ time-stamped name.
   ease-in-ease-out. After a swipe it moves faster, by the release velocity.
 
 **The file** appears whole: the PNG is written to a hidden `.<name>.<pid>.part` in the same directory and linked to its name (`image::write_new`),
-so a watcher that sees `Screenshot … .png` reads all of it, and a file of that name that appeared meanwhile is never replaced.
+so a watcher that sees `Screenshot … .png` reads all of it, and a file of that name that appeared meanwhile is never replaced. Without hard links (FAT, exFAT) the hidden file is renamed with `RENAME_NOREPLACE`; where that is missing too the PNG is written to the name directly (`create_new`), which is not atomic but never replaces a file.
 
 **Clipboard.** The capture is offered as `image/png`. Wayland needs a focused surface to set the selection, so a transparent
 1 x 1 surface takes the keyboard for the moment of the offer. The process then serves pastes until another selection replaces

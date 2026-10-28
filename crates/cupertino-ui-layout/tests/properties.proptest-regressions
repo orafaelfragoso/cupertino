@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc fc6b35cc46b080543021ddfac0b80e8df3d7a1b637e6b5c58242787f0b538fa3 # shrinks to shape = Stack { vertical: false, spacing: 0.0, align: 0, justify: 0, children: [(Stack { vertical: false, spacing: 0.0, align: 0, justify: 0, children: [(Leaf { width: 0.0, height: 0.0 }, 0.0, 0)] }, 0.0, 0)] }, width = 1.0, height = 1.0

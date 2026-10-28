@@ -675,8 +675,8 @@
   owner_area: design
   scope: public
   test_owner: crates/cupertino-ui-menus/tests/bus.rs
-  source: crates/cupertino-ui-menus/src/objects.rs:25
-  note: served by each CupertinoKit application on its own connection; the menu bar reads it
+  source: crates/cupertino-ui-menus/src/objects.rs:42
+  note: served by each CupertinoKit application on its own connection; only the menu bar connection the compositor names (cupertino_app_menu_v1.menu_reader) is answered
 - name: org.gtk.Actions
   kind: dbus-interface
   version: n/a
@@ -686,8 +686,8 @@
   owner_area: design
   scope: public
   test_owner: crates/cupertino-ui-menus/tests/bus.rs
-  source: crates/cupertino-ui-menus/src/objects.rs:61
-  note: any session-bus peer may activate an enabled action, as for every GTK application
+  source: crates/cupertino-ui-menus/src/objects.rs:87
+  note: only the menu bar connection the compositor names (cupertino_app_menu_v1.menu_reader) may list or activate actions; any other peer is AccessDenied
 - name: cupertino-assets
   kind: binary
   version: 0.1.0

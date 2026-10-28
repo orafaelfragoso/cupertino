@@ -7,6 +7,7 @@
 //! action show the chord the server binds to it ([`Chords`]), none while it sent none; the app's own convention chords
 //! are written with the primary modifier the server names.
 
+use crate::extras::SystemRow;
 use crate::item::{ItemId, MenuItem, Shortcut, ShortcutModifier, Toggle};
 use std::collections::HashMap;
 
@@ -153,6 +154,8 @@ pub fn action_for(id: ItemId) -> Option<FallbackAction> {
 pub struct Chords {
     /// The chord the server binds to the action of a system item; an item without one shows none.
     pub bound: HashMap<FallbackAction, Shortcut>,
+    /// The chord the server binds to the action of a row of the system menu; a row without one shows none.
+    pub system: HashMap<SystemRow, Shortcut>,
     /// What the primary modifier of the app's convention chords is shown as: [`ShortcutModifier::Primary`] when
     /// Super is the command key, [`ShortcutModifier::Ctrl`] when Ctrl is.
     pub primary: ShortcutModifier,
@@ -162,6 +165,7 @@ impl Default for Chords {
     fn default() -> Self {
         Self {
             bound: HashMap::new(),
+            system: HashMap::new(),
             primary: ShortcutModifier::Primary,
         }
     }
@@ -383,6 +387,7 @@ mod tests {
         Chords {
             bound,
             primary: ShortcutModifier::Primary,
+            ..Chords::default()
         }
     }
 

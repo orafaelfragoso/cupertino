@@ -26,6 +26,8 @@ use tiny_skia::{
 pub const POPUP_RADIUS: f64 = 8.0;
 /// Edge of a status item icon in points. approximate.
 pub const STATUS_ICON_PT: f64 = 16.0;
+/// Edge of the system menu's mark in points: the grid it is drawn on, so its strokes fall on whole pixels.
+const SYSTEM_MARK_PT: f64 = 16.0;
 
 /// Colours of the bar and popup contents. approximate.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -551,35 +553,20 @@ fn draw_control_panel(pm: &mut Pixmap, r: GRect, scale: f64, color: Rgba) {
     }
 }
 
-/// The system menu's mark: a ring open at the top with a stem through the gap (a power mark, drawn as paths).
+/// The system menu's mark, centred in the slot on whole device pixels so its strokes stay sharp.
 fn draw_system_mark(pm: &mut Pixmap, r: GRect, scale: f64, color: Rgba) {
-    let (cx, cy) = (r.x() + r.width() / 2.0, r.y() + r.height() / 2.0);
-    let radius = 5.2;
-    let mut ring = PathBuilder::new();
-    let (from, sweep) = (-90.0_f64 + 38.0, 360.0_f64 - 76.0);
-    for step in 0..=32 {
-        let angle = (from + sweep * f64::from(step) / 32.0).to_radians();
-        let point = (
-            ((cx + radius * angle.cos()) * scale) as f32,
-            ((cy + 0.6 + radius * angle.sin()) * scale) as f32,
-        );
-        if step == 0 {
-            ring.move_to(point.0, point.1);
-        } else {
-            ring.line_to(point.0, point.1);
-        }
-    }
-    let mut stem = PathBuilder::new();
-    stem.move_to((cx * scale) as f32, ((cy - 5.8) * scale) as f32);
-    stem.line_to((cx * scale) as f32, ((cy - 0.6) * scale) as f32);
-    let stroke = Stroke {
-        width: (1.5 * scale) as f32,
-        line_cap: tiny_skia::LineCap::Round,
-        ..Stroke::default()
-    };
-    for path in [ring.finish(), stem.finish()].into_iter().flatten() {
-        pm.stroke_path(&path, &paint(color), &stroke, Transform::identity(), None);
-    }
+    let px = (SYSTEM_MARK_PT * scale).round() as u32;
+    let mark = cupertino_icons::system_mark(px, color);
+    let x = ((r.x() + r.width() / 2.0) * scale - f64::from(mark.width()) / 2.0).round() as i32;
+    let y = ((r.y() + r.height() / 2.0) * scale - f64::from(mark.height()) / 2.0).round() as i32;
+    pm.draw_pixmap(
+        x,
+        y,
+        mark.as_ref(),
+        &PixmapPaint::default(),
+        Transform::identity(),
+        None,
+    );
 }
 
 /// `Rect` of the geometry module in the units of the drawing code.

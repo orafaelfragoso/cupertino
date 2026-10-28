@@ -513,6 +513,18 @@ fn tint(pixmap: &mut tiny_skia::Pixmap, color: Rgba) {
     }
 }
 
+/// The system menu's mark: a single-colour template on a 16 × 16 grid, the project's own drawing.
+const SYSTEM_MARK_SVG: &[u8] = include_bytes!("../data/system-menu-mark.svg");
+
+/// The system menu's mark drawn to fit `px` × `px` pixels in `color`.
+pub fn system_mark(px: u32, color: Rgba) -> tiny_skia::Pixmap {
+    let img = render_svg(SYSTEM_MARK_SVG, px.max(1)).expect("the built-in mark is a valid SVG");
+    let size = tiny_skia::IntSize::from_wh(img.width, img.height).expect("a non-empty mark");
+    let mut pixmap = tiny_skia::Pixmap::from_vec(img.rgba, size).expect("pixels of its size");
+    tint(&mut pixmap, color);
+    pixmap
+}
+
 fn quantise(color: Rgba) -> [u8; 4] {
     color.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
@@ -912,6 +924,27 @@ mod tests {
             (0, 255),
             "a raster has no symbol: the outline placeholder"
         );
+    }
+
+    #[test]
+    fn the_system_mark_is_drawn_at_the_requested_size_in_the_given_colour() {
+        for px in [16, 32] {
+            let mark = system_mark(px, [0.0, 0.0, 1.0, 1.0]);
+            assert_eq!((mark.width(), mark.height()), (px, px));
+            let drawn: Vec<_> = mark.pixels().iter().filter(|p| p.alpha() > 0).collect();
+            assert!(!drawn.is_empty(), "the mark covers pixels at {px} px");
+            assert!(
+                drawn
+                    .iter()
+                    .all(|p| p.red() == 0 && p.green() == 0 && p.blue() == p.alpha()),
+                "every drawn pixel is the colour, premultiplied by its coverage"
+            );
+            assert_eq!(
+                mark.pixel(px / 2, px / 2).unwrap().alpha(),
+                0,
+                "the ring is open in the middle"
+            );
+        }
     }
 
     #[test]

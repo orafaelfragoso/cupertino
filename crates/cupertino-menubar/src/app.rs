@@ -28,10 +28,12 @@ use cupertino_theme::Theme;
 use cupertino_ui_wayland::{popup, Ready, ShmPresenter};
 use cupertino_wayland_client::{
     Button, Connection, Event, KeyboardEvent, OutputGeometry, OutputId, PointerEvent, Popup,
-    SurfaceId,
+    SurfaceId, TokenRequest,
 };
+use std::collections::HashMap;
 use std::error::Error;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -42,6 +44,10 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const DIMMED_ALPHA: f32 = 0.4;
 
 const NAMESPACE: &str = "cupertino-menubar";
+
+/// Environment variables that hand the activation token to a started program.
+const ACTIVATION_TOKEN_ENV: &str = "XDG_ACTIVATION_TOKEN";
+const STARTUP_ID_ENV: &str = "DESKTOP_STARTUP_ID";
 
 /// The popup surface of one open menu level.
 struct PopupSurface {
@@ -111,6 +117,8 @@ struct App {
     extras_events: Receiver<Extras>,
     /// Identifies the next bar's menu in the shared sources.
     next_key: u64,
+    /// Programs waiting for their activation token, by request.
+    pending: HashMap<TokenRequest, Vec<String>>,
 }
 
 /// `menubar.conf` from the configuration directory (`CUPERTINO_MENUBAR_CONFIG` overrides the path); every key unset
@@ -213,6 +221,7 @@ pub fn run() -> Result<std::convert::Infallible> {
         extras,
         extras_events,
         next_key: 0,
+        pending: HashMap::new(),
     };
     app.reconcile_outputs()?;
     for event in early {
@@ -418,9 +427,7 @@ impl App {
                 }
             }
             Event::OutputsChanged => self.reconcile_outputs()?,
-            Event::ActivationToken { .. } => {
-                return Err("an activation token arrived but this process asked for none".into())
-            }
+            Event::ActivationToken { request, token } => self.complete_launch(request, &token),
             Event::Extension(event) => match self.observed.apply(&event) {
                 Some(SessionChange::Appearance { dark }) => {
                     self.style.palette = MenuPalette::new(dark);
@@ -728,6 +735,38 @@ impl App {
         Ok(Some(next))
     }
 
+    // ---- launches ------------------------------------------------------------------------
+
+    /// Fetch an activation token for a program started from bar `i`; it starts when the token arrives.
+    fn begin_launch(&mut self, i: usize, argv: Vec<String>) {
+        match self
+            .conn
+            .request_activation_token(self.bars[i].layer.surface(), None)
+        {
+            Ok(request) => {
+                self.pending.insert(request, argv);
+            }
+            Err(e) => eprintln!("cupertino-menubar: cannot launch {}: {e}", argv.join(" ")),
+        }
+    }
+
+    /// Start the program that waited for `token` (it uses the token to take the focus).
+    fn complete_launch(&mut self, request: TokenRequest, token: &str) {
+        let Some(argv) = self.pending.remove(&request) else {
+            eprintln!("cupertino-menubar: an activation token arrived for no launch");
+            return;
+        };
+        let Some((program, args)) = argv.split_first() else {
+            return;
+        };
+        let mut command = Command::new(program);
+        command
+            .args(args)
+            .env(ACTIVATION_TOKEN_ENV, token)
+            .env(STARTUP_ID_ENV, token);
+        spawn(command);
+    }
+
     // ---- effects -------------------------------------------------------------------------
 
     /// Carry out what the controller of bar `i` asked for, then bring popups and keyboard in line.
@@ -756,6 +795,7 @@ impl App {
                     self.bars[i].menu_bar.move_to_workspace(workspace)
                 }
                 Action::ActivateWindow(id) => self.bars[i].menu_bar.activate_window(id),
+                Action::Launch(argv) => self.begin_launch(i, argv),
                 Action::ShowAbout => {
                     eprintln!("cupertino-menubar: about requested (there is no about panel yet)")
                 }
@@ -905,6 +945,21 @@ impl App {
             }
         }
         Ok(())
+    }
+}
+
+/// Run a command detached from the loop; its exit is reaped on a thread.
+fn spawn(mut command: Command) {
+    let program = command.get_program().to_string_lossy().into_owned();
+    match command.spawn() {
+        Ok(mut child) => {
+            std::thread::spawn(move || {
+                if let Err(e) = child.wait() {
+                    eprintln!("cupertino-menubar: {program}: {e}");
+                }
+            });
+        }
+        Err(e) => eprintln!("cupertino-menubar: cannot run {program}: {e}"),
     }
 }
 

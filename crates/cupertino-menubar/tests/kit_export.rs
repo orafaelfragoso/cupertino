@@ -70,3 +70,62 @@ fn the_bar_reads_the_labels_a_kit_application_exports() {
         );
     });
 }
+
+/// A load the exporter refuses because the application does not know yet that the bar reads its menus (it learns that
+/// over its own Wayland connection, which can come after the bar's first load) is made again, and the menus arrive
+/// once the application is told.
+#[cfg(feature = "app")]
+#[test]
+fn the_bar_loads_the_menus_of_an_application_told_its_reader_after_the_first_load() {
+    use cupertino_menubar::worker::{Event, Request, Worker};
+    use std::time::{Duration, Instant};
+
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    let exporting = zbus::blocking::connection::Builder::address(bus.address.as_str()).unwrap();
+    let mut exporter = Exporter::new(
+        exporting,
+        "org.example.Notes",
+        Box::new(Profile::cupertino()),
+        |_| {},
+    )
+    .unwrap();
+    let exported = exporter
+        .export(
+            WindowId(1),
+            &standard::menu_bar("Notes", &Features::default()),
+        )
+        .unwrap();
+    let bar = bus.connect();
+    let bar_name = bar.unique_name().unwrap().to_string();
+    let (worker, events) = Worker::start(bar, || {}).unwrap();
+
+    worker
+        .send(Request::FetchGtk(GtkMenuProps {
+            bus_name: exported.unique_bus_name,
+            application_id: Some(exported.application_id),
+            application_object_path: Some(exported.application_object_path),
+            window_object_path: Some(exported.window_object_path),
+            menubar_object_path: Some(exported.menubar_path),
+            app_menu_object_path: Some(exported.app_menu_path),
+        }))
+        .unwrap();
+    // the first load, and the first one made again, are refused
+    std::thread::sleep(Duration::from_millis(150));
+    exporter.set_reader(Some(&bar_name)).unwrap();
+
+    let end = Instant::now() + Duration::from_secs(5);
+    let root = loop {
+        let wait = end.saturating_duration_since(Instant::now());
+        match events
+            .recv_timeout(wait)
+            .expect("the menus once the reader is known")
+        {
+            Event::Layout { root, .. } => break root,
+            _ => continue,
+        }
+    };
+    assert!(find(&root.children, "File").is_some());
+}

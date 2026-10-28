@@ -28,6 +28,13 @@ enum Kind {
     Popup(Popup),
 }
 
+/// What a window whose present was not ready waits for before its next frame is due.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Stall {
+    Configure,
+    Buffer,
+}
+
 /// More rectangles than this carried between presents become one for the whole frame.
 const MAX_CARRIED: usize = 64;
 
@@ -46,6 +53,8 @@ struct Window {
     shown: Option<(u32, u32)>,
     /// A frame callback is outstanding: the compositor will say when to draw.
     frame_pending: bool,
+    /// The last present was not ready; the next frame waits for this.
+    stalled: Option<Stall>,
     /// The runtime asked for a frame.
     frame_wanted: bool,
 }
@@ -176,9 +185,17 @@ impl WaylandWindowSystem {
             carried: Vec::new(),
             shown: None,
             frame_pending: false,
+            stalled: None,
             frame_wanted: false,
         });
         id
+    }
+
+    /// The window at `i` may draw again; whether the frame it asked for meanwhile is due now.
+    fn resume(&mut self, i: usize) -> bool {
+        let w = &mut self.windows[i];
+        w.stalled = None;
+        !w.frame_pending && std::mem::take(&mut w.frame_wanted)
     }
 
     fn send_size_limits(&mut self, window: WindowId) -> Result<Result<(), Error>, PlatformError> {
@@ -214,6 +231,7 @@ impl WaylandWindowSystem {
         let on = |windows: &[Window], surface: SurfaceId| {
             windows.iter().position(|w| w.surface == surface)
         };
+        let mut due = false;
         let (i, event) = match event {
             Event::Configure { window, configure } => {
                 let Some(i) = on(&self.windows, window.surface()) else {
@@ -222,6 +240,7 @@ impl WaylandWindowSystem {
                 if let Some(size) = configure.size {
                     self.windows[i].size = size;
                 }
+                due = self.resume(i);
                 (i, WindowEvent::Configure(convert::configure(&configure)))
             }
             Event::PopupConfigure { popup, configure } => {
@@ -229,6 +248,7 @@ impl WaylandWindowSystem {
                     return;
                 };
                 self.windows[i].size = (configure.width, configure.height);
+                due = self.resume(i);
                 (
                     i,
                     WindowEvent::Configure(convert::popup_configure(&configure)),
@@ -246,9 +266,8 @@ impl WaylandWindowSystem {
                 let Some(i) = on(&self.windows, callback.surface) else {
                     return;
                 };
-                let w = &mut self.windows[i];
-                w.frame_pending = false;
-                if !std::mem::take(&mut w.frame_wanted) {
+                self.windows[i].frame_pending = false;
+                if !self.resume(i) {
                     return;
                 }
                 (i, WindowEvent::Frame(self.now()))
@@ -326,10 +345,14 @@ impl WaylandWindowSystem {
             }
             Event::OutputsChanged | Event::Extension(_) => return,
         };
-        out.push(PlatformEvent::Window {
-            window: self.windows[i].id,
-            event,
-        });
+        let window = self.windows[i].id;
+        out.push(PlatformEvent::Window { window, event });
+        if due {
+            out.push(PlatformEvent::Window {
+                window,
+                event: WindowEvent::Frame(self.now()),
+            });
+        }
     }
 }
 
@@ -520,13 +543,14 @@ impl WindowSystem for WaylandWindowSystem {
         request
     }
 
-    /// With no frame callback outstanding nothing paces the window, so the frame is due at once.
+    /// With no frame callback outstanding and no present waiting for a configure or a free buffer nothing paces the
+    /// window, so the frame is due at once.
     fn request_frame(&mut self, window: WindowId) {
         let now = self.now();
         let Ok(w) = self.window_mut(window) else {
             return;
         };
-        if w.frame_pending {
+        if w.frame_pending || w.stalled.is_some() {
             w.frame_wanted = true;
         } else {
             let id = w.id;
@@ -555,14 +579,18 @@ impl WindowSystem for WaylandWindowSystem {
             width: r.width,
             height: r.height,
         }));
-        if copy_and_present(&mut self.conn, surface, size, frame, &damage, resized)? {
-            let w = self.window_mut(window)?;
-            w.frame_pending = true;
-            w.shown = Some((frame.width, frame.height));
-            Ok(PresentOutcome::Presented)
-        } else {
-            self.carry(window, damage, frame)?;
-            Ok(PresentOutcome::NotReady)
+        match copy_and_present(&mut self.conn, surface, size, frame, &damage, resized)? {
+            Ok(()) => {
+                let w = self.window_mut(window)?;
+                w.frame_pending = true;
+                w.shown = Some((frame.width, frame.height));
+                Ok(PresentOutcome::Presented)
+            }
+            Err(stall) => {
+                self.carry(window, damage, frame)?;
+                self.window_mut(window)?.stalled = stall;
+                Ok(PresentOutcome::NotReady)
+            }
         }
     }
 
@@ -580,6 +608,18 @@ impl WindowSystem for WaylandWindowSystem {
         for event in wire {
             self.translate(event, events);
         }
+        for i in 0..self.windows.len() {
+            let w = &self.windows[i];
+            if w.stalled == Some(Stall::Buffer)
+                && matches!(self.conn.buffer_free(w.surface), Ok(true))
+                && self.resume(i)
+            {
+                events.push(PlatformEvent::Window {
+                    window: self.windows[i].id,
+                    event: WindowEvent::Frame(self.now()),
+                });
+            }
+        }
         if self.woken.swap(false, Ordering::AcqRel) {
             events.push(PlatformEvent::Wake);
         }
@@ -595,9 +635,9 @@ impl WindowSystem for WaylandWindowSystem {
 }
 
 /// Copy `damage` of `frame`, and whatever the buffer missed (all of it when that is unknown), into a buffer of `surface`
-/// and present it, telling the compositor that `damage` changed, or everything when the window was `resized`. `false`
-/// when no buffer is free, the surface awaits its first configure, or the frame was drawn at another size than it asks
-/// for.
+/// and present it, telling the compositor that `damage` changed, or everything when the window was `resized`. When it
+/// is not presented, what the window waits for: a free buffer or its first configure; nothing for a frame drawn at
+/// another size than the surface asks for, which a frame at that size replaces.
 fn copy_and_present(
     conn: &mut Connection,
     surface: SurfaceId,
@@ -605,15 +645,16 @@ fn copy_and_present(
     frame: &CpuFrame,
     damage: &[PixelRect],
     resized: bool,
-) -> Result<bool, PlatformError> {
+) -> Result<Result<(), Option<Stall>>, PlatformError> {
     let mut lease = match conn.lease(surface, size, BufferFormat::Argb8888) {
         Ok(lease) => lease,
-        Err(Error::NoFreeBuffer | Error::NotConfigured) => return Ok(false),
+        Err(Error::NoFreeBuffer) => return Ok(Err(Some(Stall::Buffer))),
+        Err(Error::NotConfigured) => return Ok(Err(Some(Stall::Configure))),
         Err(e) => return Err(platform_error(e)),
     };
     let layout = lease.layout();
     if (layout.width(), layout.height()) != (frame.width, frame.height) {
-        return Ok(false);
+        return Ok(Err(None));
     }
     let inside = |rects: &mut dyn Iterator<Item = &PixelRect>| -> Vec<PixelRect> {
         rects
@@ -640,7 +681,7 @@ fn copy_and_present(
     lease
         .present_damage((!resized).then_some(&changed[..]))
         .map_err(platform_error)?;
-    Ok(true)
+    Ok(Ok(()))
 }
 
 /// Replace more than [`MAX_CARRIED`] rectangles by one for the whole `width` × `height` frame.

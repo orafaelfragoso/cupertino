@@ -184,6 +184,28 @@ pub const DENIED_CRATES: &[(&str, &[&str])] = &[
     ),
     ("cupertino-files", &["cupertino-shell-client"]),
     ("cupertino-settings", &["cupertino-shell-client"]),
+    ("cupertino-scene", RENDERER_AND_PROTOCOL),
+    ("cupertino-render-api", RENDERER_AND_PROTOCOL),
+    ("cupertino-effects", RENDERER_AND_PROTOCOL),
+    ("cupertino-wm", RENDERER_AND_PROTOCOL),
+    ("cupertino-stage", RENDERER_AND_PROTOCOL),
+];
+
+/// What the scene, the renderer seam and the policy models that feed them must never reach: a graphics API, the
+/// compositor library, a window-system protocol, the desktop's private protocols, or the server that implements the
+/// renderer. Keeping them out of the dependency closure is what lets another GPU backend replace the GLES one.
+const RENDERER_AND_PROTOCOL: &[&str] = &[
+    "smithay",
+    "wgpu",
+    "wgpu-core",
+    "wgpu-hal",
+    "wayland-server",
+    "wayland-client",
+    "wayland-backend",
+    "wayland-protocols",
+    "cupertino-glass",
+    "cupertino-protocols",
+    "cupertino-server",
 ];
 
 /// Whether `rules` let a crate of layer `from` depend on a crate of layer `to`.
@@ -783,5 +805,31 @@ mod tests {
         assert!(is_gpl("(GPL-3.0-or-later)"));
         assert!(is_gpl("AGPL-3.0-only"));
         assert!(!is_gpl("LGPL-2.1-or-later"));
+    }
+
+    #[test]
+    fn the_scene_the_seam_and_their_policy_models_stay_off_the_renderer_and_the_protocols() {
+        for krate in [
+            "cupertino-scene",
+            "cupertino-render-api",
+            "cupertino-effects",
+            "cupertino-wm",
+            "cupertino-stage",
+        ] {
+            let denied = DENIED_CRATES
+                .iter()
+                .find(|(c, _)| *c == krate)
+                .unwrap_or_else(|| panic!("{krate} has no denied crates"))
+                .1;
+            for forbidden in [
+                "smithay",
+                "wgpu",
+                "wayland-server",
+                "cupertino-glass",
+                "cupertino-server",
+            ] {
+                assert!(denied.contains(&forbidden), "{krate} may reach {forbidden}");
+            }
+        }
     }
 }

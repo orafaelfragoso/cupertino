@@ -868,6 +868,7 @@ version = "0.1.0"
 dependencies = [
  "cupertino-assets",
  "cupertino-geometry",
+ "cupertino-glyph",
  "cupertino-theme",
  "swash",
  "tempfile",
@@ -991,6 +992,13 @@ dependencies = [
  "naga",
  "pollster",
  "wgpu",
+]
+
+[[package]]
+name = "cupertino-glyph"
+version = "0.1.0"
+dependencies = [
+ "swash",
 ]
 
 [[package]]

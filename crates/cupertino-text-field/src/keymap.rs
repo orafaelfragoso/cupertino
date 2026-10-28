@@ -2,7 +2,7 @@
 
 use cupertino_defaults::keyboard::KeyboardSettings;
 use cupertino_keyboard::{BindingTable, Chord, Key, NamedKey, Resolution, Resolver, TextAction};
-use cupertino_modifiers::{Mods, Profile, RawMods};
+use cupertino_modifiers::{Mods, Physical, Profile, RawMods};
 
 /// Evdev codes of the named keys a field reads (`linux/input-event-codes.h`).
 const NAMED_KEYS: [(u32, NamedKey); 15] = [
@@ -115,7 +115,24 @@ pub struct Keymap {
 }
 
 impl Keymap {
-    pub fn new(profile: Profile, bindings: BindingTable) -> Self {
+    pub fn new(profile: Profile, mut bindings: BindingTable) -> Self {
+        // where the Ctrl role is not on the Ctrl key (`classic-pc`) the system keeps Super+Tab for the overview, so
+        // the standard Ctrl+Tab of the key views is out of reach: they are on the command key's Tab, which is the
+        // physical Ctrl+Tab. A binding of the user's on that chord stays.
+        if profile.primary() != Physical::Super {
+            for (mods, action) in [
+                (Mods::PRIMARY, TextAction::SelectNextKeyView),
+                (
+                    Mods::PRIMARY | Mods::SHIFT,
+                    TextAction::SelectPreviousKeyView,
+                ),
+            ] {
+                let chord = Chord::new(mods, Key::Named(NamedKey::Tab));
+                if bindings.get(&[chord]).is_none() {
+                    bindings.bind(vec![chord], vec![action]);
+                }
+            }
+        }
         Keymap {
             profile,
             resolver: Resolver::new(bindings),

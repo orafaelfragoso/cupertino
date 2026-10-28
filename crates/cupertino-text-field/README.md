@@ -15,7 +15,7 @@ manager's rename editor). Pure logic: no drawing and no Wayland. The app feeds k
 
 ## Behaviour
 
-- **Keys.** The primary modifier is Super with the `cupertino` profile and Ctrl with `classic-pc`, where Super has the role Ctrl has under `cupertino` (so Super+A goes to the start of the line there). Primary+A selects
+- **Keys.** The primary modifier is Super with the `cupertino` profile and Ctrl with `classic-pc`, where Super has the role Ctrl has under `cupertino` (so Super+A goes to the start of the line there). Under `classic-pc` the system keeps Super+Tab for the overview, so the next and previous key views (Ctrl+Tab and Ctrl+Shift+Tab under `cupertino`) are on the command key's Tab, the physical Ctrl+Tab and Ctrl+Shift+Tab; a binding of the user on that chord stays. Primary+A selects
   all, Primary+C / X / V copy, cut and paste, Primary+Z undoes and Primary+Shift+Z redoes. Every other chord goes
   through the standard binding table: Left / Right by grapheme, Alt+Left / Right by word, Primary+Left / Right and
   Home / End to the line ends, Shift extends, Backspace / Delete with Alt (word) and Primary (to the line start),

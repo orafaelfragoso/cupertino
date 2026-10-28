@@ -266,6 +266,7 @@ impl SeatHandler for Cupertino {
         }
         self.text_cursor = None;
         self.menu_bar_edit_focus(focused);
+        self.shortcut_inhibit_focus(focused);
     }
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {

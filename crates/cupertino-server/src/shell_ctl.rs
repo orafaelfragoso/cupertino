@@ -90,10 +90,12 @@ impl Cupertino {
             .window(window)
             .is_some_and(|w| w.state().is_minimized());
         self.close_overview();
-        self.command(if minimized {
-            Command::Restore { window }
-        } else {
-            Command::FocusWindow { window }
+        self.as_input(|s| {
+            s.command(if minimized {
+                Command::Restore { window }
+            } else {
+                Command::FocusWindow { window }
+            })
         });
         true
     }

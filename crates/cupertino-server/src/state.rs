@@ -319,6 +319,10 @@ pub struct Cupertino {
     pub fractional_scale_state: FractionalScaleManagerState,
     pub presentation_state: PresentationState,
     pub xdg_activation_state: XdgActivationState,
+    /// Keyboard shortcuts inhibitors and the releases of the person.
+    pub shortcut_inhibit: crate::shortcut_inhibit::ShortcutInhibit,
+    /// The keyboard focus being given now follows the person's own input (`Cupertino::as_input`).
+    pub input_focus: bool,
     pub cursor_shape_state: CursorShapeManagerState,
     pub foreign_toplevel_state: ForeignToplevelListState,
     pub session_lock: crate::session_lock::SessionLock,
@@ -534,6 +538,11 @@ impl Cupertino {
         let fractional_scale_state = FractionalScaleManagerState::new::<Self>(&dh);
         let presentation_state = PresentationState::new::<Self>(&dh, clock.id() as u32);
         let xdg_activation_state = XdgActivationState::new::<Self>(&dh);
+        let shortcut_inhibit = crate::shortcut_inhibit::ShortcutInhibit::new(
+            smithay::wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitState::new::<Self>(
+                &dh,
+            ),
+        );
         let cursor_shape_state = CursorShapeManagerState::new::<Self>(&dh);
         let foreign_toplevel_state = ForeignToplevelListState::new_with_filter::<Self>(
             &dh,
@@ -614,6 +623,8 @@ impl Cupertino {
             fractional_scale_state,
             presentation_state,
             xdg_activation_state,
+            shortcut_inhibit,
+            input_focus: false,
             cursor_shape_state,
             foreign_toplevel_state,
             session_lock,
@@ -1414,6 +1425,8 @@ impl Cupertino {
         self.tick_menu_bars(now);
         self.tick_input_timers(now);
         self.tick_overlays(now);
+        let focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
+        self.refresh_shortcut_inhibitors(focus.as_ref());
         // windows without a close transform are skipped by `refresh_snapshot`
         let missing: Vec<WindowId> = self
             .windows
@@ -1656,11 +1669,16 @@ impl Cupertino {
             workspaces,
             current_workspace: current,
             locked: self.session_lock.is_active(),
-            input_held: false,
+            input_held: self.shortcut_inhibit.holding(),
         }
     }
 
+    /// Run what a key, a gesture or a menu asked for: the keyboard focus it gives is the person's own input.
     pub fn execute_plan(&mut self, plan: ActionPlan) {
+        self.as_input(|s| s.run_plan(plan));
+    }
+
+    fn run_plan(&mut self, plan: ActionPlan) {
         self.commands(plan.commands);
         for op in plan.ops {
             match op {
@@ -1702,7 +1720,9 @@ impl Cupertino {
                 ShellOp::Lock => self.lock_session_now(),
                 ShellOp::LogOut => self.log_out_session(),
                 ShellOp::PowerDialog => self.power_dialog(),
-                ShellOp::ReleaseShortcuts => {}
+                ShellOp::ReleaseShortcuts => {
+                    self.release_shortcuts();
+                }
                 ShellOp::PowerKey { pressed } => self.power_key(pressed),
             }
         }

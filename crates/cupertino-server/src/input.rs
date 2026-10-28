@@ -1096,6 +1096,21 @@ impl KeyRouter {
                 _ => KeyOutcome::Forward,
             };
         }
+        // an application holds the shortcuts: only the reserved actions stay the compositor's, matched on the physical
+        // chord before anything else looks at the key
+        if ctx.input_held {
+            return match self
+                .bindings
+                .lookup(ev.sym, ev.mods)
+                .filter(Action::is_reserved)
+            {
+                Some(action) => {
+                    self.suppressed.insert(sym, None);
+                    KeyOutcome::Consumed(translate_action(action, ctx))
+                }
+                None => KeyOutcome::Forward,
+            };
+        }
         // the overview's navigation keys reach the dock's keyboard-exclusive layer; Escape stays
         // here so the overview leaves without a dock too
         if ctx.overview_open && sym == keysyms::KEY_Escape && ev.mods == Mods::NONE {

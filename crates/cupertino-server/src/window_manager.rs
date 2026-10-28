@@ -650,7 +650,7 @@ impl Dispatch<CupertinoWindowManagerV1, WindowManagerData> for Cupertino {
             cupertino_window_manager_v1::Request::ActivateWindow { id } => {
                 let window = WindowId(u64::from(id));
                 if state.wm.window(window).is_some() {
-                    state.command(cupertino_wm::Command::FocusWindow { window });
+                    state.focus_window_by_input(window);
                 }
             }
             // `Destroy` is handled in `destroyed`

@@ -4,7 +4,6 @@
 //! `cargo bench -p cupertino-files --features app --bench frame`
 
 use cupertino_assets::Assets;
-use cupertino_client::rgba_to_argb8888;
 use cupertino_files::browser::Browser;
 use cupertino_files::places::{Place, PlaceGroup, PlaceKind};
 use cupertino_files::render::{Palette, Renderer};
@@ -12,6 +11,7 @@ use cupertino_files::window::{Bars, ViewMode, WindowPainter, WindowState};
 use cupertino_files::{Size, SortSpec};
 use cupertino_icons::document::FileIcons;
 use cupertino_text_field::TextField;
+use cupertino_ui_wayland::rgba_to_argb8888;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};

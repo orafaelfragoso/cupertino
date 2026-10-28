@@ -246,6 +246,10 @@ fn fallback_action(item: ItemId, feed: &BarFeed) -> Option<Action> {
         FallbackAction::TileRight => Action::WindowCommand(WindowCommand::TileRight),
         FallbackAction::TileFill => Action::WindowCommand(WindowCommand::TileFill),
         FallbackAction::BringAllToFront => Action::WindowCommand(WindowCommand::BringAllToFront),
+        FallbackAction::MinimizeAll => Action::WindowCommand(WindowCommand::MinimizeAll),
+        FallbackAction::ZoomAll => Action::WindowCommand(WindowCommand::ZoomAll),
+        FallbackAction::CloseAll => Action::WindowCommand(WindowCommand::QuitApp),
+        FallbackAction::CascadeAll => Action::WindowCommand(WindowCommand::CascadeAll),
         FallbackAction::ShowWindow(row) => Action::ActivateWindow(feed.listed_window(row)?.id),
         FallbackAction::MoveToWorkspace(n) => Action::MoveToWorkspace(n),
         FallbackAction::Edit(action) => Action::Edit(match action {
@@ -699,6 +703,41 @@ mod tests {
             act(FallbackAction::Edit(fallback::EditAction::SelectAll)),
             Some(Action::Edit(EditAction::SelectAll))
         );
+    }
+
+    #[test]
+    fn the_alternates_of_the_window_menu_act_through_the_server_beside_an_exporters_items() {
+        let mut f = Fixture::new(kde_menu());
+        f.load(MenuItem::submenu(
+            0,
+            "",
+            vec![MenuItem::submenu(
+                20,
+                "Window",
+                vec![MenuItem::new(21, "Split View")],
+            )],
+        ));
+        for (action, command) in [
+            (FallbackAction::MinimizeAll, WindowCommand::MinimizeAll),
+            (FallbackAction::ZoomAll, WindowCommand::ZoomAll),
+            (FallbackAction::CloseAll, WindowCommand::QuitApp),
+            (FallbackAction::CascadeAll, WindowCommand::CascadeAll),
+        ] {
+            assert_eq!(
+                f.click(action.item_id()),
+                Some(Action::WindowCommand(command)),
+                "{action:?}"
+            );
+        }
+        let content = f.feed.content(&f.shared);
+        let window = content
+            .menus
+            .iter()
+            .find(|m| m.id == fallback::WINDOW_MENU)
+            .unwrap();
+        let split = window.find(ItemId(21)).unwrap();
+        assert_eq!(split.origin, Origin::Exporter);
+        assert_eq!(split.alternate, None, "an exporter's item has no alternate");
     }
 
     #[test]

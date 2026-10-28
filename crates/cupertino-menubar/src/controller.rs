@@ -178,6 +178,8 @@ pub struct MenuController {
     /// The Help search shortcut focused the Help title and asked for the keyboard: the Help menu opens with its field
     /// focused once the keyboard is the bar's ([`MenuController::keyboard_arrived`]).
     help_awaits_keyboard: bool,
+    /// Alt is held: the open menus show the alternates of their items.
+    alt: bool,
 }
 
 impl MenuController {
@@ -209,6 +211,7 @@ impl MenuController {
             search: TextField::new(),
             hits: Vec::new(),
             help_awaits_keyboard: false,
+            alt: false,
         };
         c.relayout();
         c
@@ -350,6 +353,38 @@ impl MenuController {
             .collect()
     }
 
+    /// Alt went down or up: the open menus show their items' alternates while it is held.
+    pub fn set_alt(&mut self, held: bool) -> Outcome {
+        let mut out = Outcome::default();
+        if self.alt != held {
+            self.alt = held;
+            if self.is_open() {
+                self.rebuild_levels();
+                out.effects.push(Effect::Redraw);
+            }
+        }
+        out
+    }
+
+    /// The popup of `menu`, with its items' alternates in their place while Alt is held.
+    fn popup(&self, menu: &MenuItem, anchor: Anchor, scroll: f64) -> PopupLayout {
+        let shown;
+        let menu = if self.alt {
+            shown = menu.alternates_shown();
+            &shown
+        } else {
+            menu
+        };
+        layout_popup(
+            menu,
+            anchor,
+            self.output,
+            scroll,
+            &self.menu_metrics,
+            self.measure.as_ref(),
+        )
+    }
+
     fn rebuild_levels(&mut self) {
         let Some(key) = self.open_slot.clone() else {
             return;
@@ -392,14 +427,7 @@ impl MenuController {
                     parent: p.layout.rect,
                 }
             };
-            let layout = layout_popup(
-                &menu,
-                anchor,
-                self.output,
-                *scroll,
-                &self.menu_metrics,
-                self.measure.as_ref(),
-            );
+            let layout = self.popup(&menu, anchor, *scroll);
             let selected = sel.and_then(|id| layout.index_of(id));
             new_levels.push(Level {
                 menu,
@@ -449,14 +477,7 @@ impl MenuController {
         let Some(slot_rect) = self.layout.slot(&key).map(|s| s.rect) else {
             return;
         };
-        let layout = layout_popup(
-            &root,
-            Anchor::BelowSlot(slot_rect),
-            self.output,
-            0.0,
-            &self.menu_metrics,
-            self.measure.as_ref(),
-        );
+        let layout = self.popup(&root, Anchor::BelowSlot(slot_rect), 0.0);
         out.effects.push(Effect::AboutToShow {
             slot: key.clone(),
             item: root.id,
@@ -507,16 +528,13 @@ impl MenuController {
             (child, row.rect, l.layout.rect)
         };
         self.levels.truncate(level + 1);
-        let layout = layout_popup(
+        let layout = self.popup(
             &child,
             Anchor::BesideRow {
                 row: row_rect,
                 parent: parent_rect,
             },
-            self.output,
             0.0,
-            &self.menu_metrics,
-            self.measure.as_ref(),
         );
         let selected = if select_first {
             layout.rows.iter().position(|r| r.item.is_selectable())
@@ -882,14 +900,7 @@ impl MenuController {
         }
         let menu = l.menu.clone();
         let anchor = self.level_anchor(level);
-        let layout = layout_popup(
-            &menu,
-            anchor,
-            self.output,
-            scroll,
-            &self.menu_metrics,
-            self.measure.as_ref(),
-        );
+        let layout = self.popup(&menu, anchor, scroll);
         self.levels[level].layout = layout;
     }
 

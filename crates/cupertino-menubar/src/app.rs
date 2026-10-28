@@ -255,6 +255,7 @@ pub fn run() -> Result<std::convert::Infallible> {
         for event in app.conn.wait(timeout)? {
             app.handle(event)?;
         }
+        app.sync_alt()?;
         app.drain_worker()?;
         app.reload_conf();
         timeout = app.housekeeping()?;
@@ -923,6 +924,20 @@ impl App {
         }
         self.sync_popups(i)?;
         self.sync_keyboard(i);
+        Ok(())
+    }
+
+    /// Show the alternates of the open menus' items while Alt is held on a surface of their bar: the bar has the keyboard
+    /// while its menus are open, so the modifiers it was last sent are the ones held.
+    fn sync_alt(&mut self) -> Result<()> {
+        let alt = self.conn.modifiers().alt;
+        for i in 0..self.bars.len() {
+            let held = alt && self.bars[i].has_keyboard;
+            let outcome = self.bars[i].controller.set_alt(held);
+            if !outcome.effects.is_empty() {
+                self.apply(i, outcome)?;
+            }
+        }
         Ok(())
     }
 

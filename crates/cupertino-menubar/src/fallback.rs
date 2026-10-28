@@ -1,6 +1,8 @@
 //! Synthetic menus for apps that export none: the app menu (About, Settings, Hide, Hide Others, Show All, Quit), File
 //! (Close Window), Edit (Undo, Redo, Cut, Copy, Paste, Select All), View (Enter Full Screen), Window (Minimize, Zoom,
-//! Move to Workspace, Tile Window, Bring All to Front, the window list, Close Window) and Help (search).
+//! Move to Workspace, Tile Window, Bring All to Front, the window list, Close Window) and Help (search). While Alt is
+//! held, Minimize, Zoom, Close Window and Bring All to Front show their alternates: Minimize All, Zoom All, Close All and
+//! Bring All to Front with the windows cascaded.
 //!
 //! Item ids are negative and stable so the compositor can map an `Activate` effect back to a
 //! [`FallbackAction`] with [`action_for`], and an open menu survives a rebuild. The items that stand for a server
@@ -27,6 +29,11 @@ pub enum FallbackAction {
     TileRight,
     TileFill,
     BringAllToFront,
+    /// The alternates of Minimize, Zoom, Close Window and Bring All to Front, shown while Alt is held.
+    MinimizeAll,
+    ZoomAll,
+    CloseAll,
+    CascadeAll,
     Edit(EditAction),
     /// 0-based row of the window list.
     ShowWindow(usize),
@@ -63,6 +70,11 @@ const TILE_FILL: i32 = -1017;
 const TILE_MENU: i32 = -1018;
 /// Close Window of the File menu; it acts as the Window menu's.
 const FILE_CLOSE_WINDOW: i32 = -1019;
+/// The alternates of Window menu items.
+const MINIMIZE_ALL: i32 = -1025;
+const ZOOM_ALL: i32 = -1026;
+const CLOSE_ALL: i32 = -1027;
+const CASCADE_ALL: i32 = -1028;
 /// The search field, the first row of the Help menu.
 pub const HELP_SEARCH: ItemId = ItemId(-1030);
 /// The label of the search row, which its empty field shows dimmed.
@@ -112,6 +124,10 @@ impl FallbackAction {
             FallbackAction::TileRight => TILE_RIGHT,
             FallbackAction::TileFill => TILE_FILL,
             FallbackAction::BringAllToFront => BRING_ALL_TO_FRONT,
+            FallbackAction::MinimizeAll => MINIMIZE_ALL,
+            FallbackAction::ZoomAll => ZOOM_ALL,
+            FallbackAction::CloseAll => CLOSE_ALL,
+            FallbackAction::CascadeAll => CASCADE_ALL,
             FallbackAction::Edit(EditAction::Undo) => UNDO,
             FallbackAction::Edit(EditAction::Redo) => REDO,
             FallbackAction::Edit(EditAction::Cut) => CUT,
@@ -162,6 +178,10 @@ pub fn action_for(id: ItemId) -> Option<FallbackAction> {
         TILE_RIGHT => FallbackAction::TileRight,
         TILE_FILL => FallbackAction::TileFill,
         BRING_ALL_TO_FRONT => FallbackAction::BringAllToFront,
+        MINIMIZE_ALL => FallbackAction::MinimizeAll,
+        ZOOM_ALL => FallbackAction::ZoomAll,
+        CLOSE_ALL => FallbackAction::CloseAll,
+        CASCADE_ALL => FallbackAction::CascadeAll,
         UNDO => FallbackAction::Edit(EditAction::Undo),
         REDO => FallbackAction::Edit(EditAction::Redo),
         CUT => FallbackAction::Edit(EditAction::Cut),
@@ -289,11 +309,14 @@ pub fn window_menu(
     chords: &Chords,
 ) -> MenuItem {
     let mut children = vec![
-        chords.item(FallbackAction::Minimize, "Minimize"),
+        chords
+            .item(FallbackAction::Minimize, "Minimize")
+            .with_alternate(chords.item(FallbackAction::MinimizeAll, "Minimize All")),
         MenuItem {
             enabled: can_zoom,
             ..chords.item(FallbackAction::Zoom, "Zoom")
-        },
+        }
+        .with_alternate(chords.item(FallbackAction::ZoomAll, "Zoom All")),
     ];
     if workspaces > 1 {
         let targets: Vec<MenuItem> = (1..=workspaces)
@@ -324,7 +347,11 @@ pub fn window_menu(
         ],
     ));
     children.push(MenuItem::separator(-1102));
-    children.push(MenuItem::new(BRING_ALL_TO_FRONT, "Bring All to Front"));
+    // with Alt held the windows also cascade; the row reads the same
+    children.push(
+        MenuItem::new(BRING_ALL_TO_FRONT, "Bring All to Front")
+            .with_alternate(MenuItem::new(CASCADE_ALL, "Bring All to Front")),
+    );
     children.push(MenuItem::separator(-1103));
     children.extend(
         windows
@@ -342,7 +369,11 @@ pub fn window_menu(
             }),
     );
     children.push(MenuItem::separator(-1105));
-    children.push(chords.item(FallbackAction::CloseWindow, "Close Window"));
+    children.push(
+        chords
+            .item(FallbackAction::CloseWindow, "Close Window")
+            .with_alternate(chords.item(FallbackAction::CloseAll, "Close All")),
+    );
     MenuItem::submenu(WINDOW_MENU.0, "Window", children)
 }
 
@@ -700,6 +731,10 @@ mod tests {
             FallbackAction::TileRight,
             FallbackAction::TileFill,
             FallbackAction::BringAllToFront,
+            FallbackAction::MinimizeAll,
+            FallbackAction::ZoomAll,
+            FallbackAction::CloseAll,
+            FallbackAction::CascadeAll,
             FallbackAction::Edit(Undo),
             FallbackAction::Edit(Redo),
             FallbackAction::Edit(Cut),
@@ -725,6 +760,56 @@ mod tests {
         assert_eq!(action_for(HELP_SEARCH), None);
         assert_eq!(action_for(ItemId(-1100)), None, "separators");
         assert_eq!(action_for(ItemId(-4000)), None, "past the window list");
+    }
+
+    #[test]
+    fn window_items_have_alternates_with_fixed_ids_of_their_own() {
+        let w = window_menu(3, Some(2), false, &[], &super_chords());
+        let alternates: Vec<(&str, &MenuItem)> = w
+            .children
+            .iter()
+            .filter_map(|c| Some((c.label.as_str(), c.alternate.as_deref()?)))
+            .collect();
+        assert_eq!(
+            alternates
+                .iter()
+                .map(|(primary, alternate)| (*primary, alternate.label.as_str(), alternate.id.0))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Minimize", "Minimize All", -1025),
+                ("Zoom", "Zoom All", -1026),
+                ("Bring All to Front", "Bring All to Front", -1028),
+                ("Close Window", "Close All", -1027),
+            ]
+        );
+        assert!(
+            alternates.iter().all(|(_, a)| a.enabled && a.shortcut.is_none()),
+            "the server binds no chord to an alternate's action, and Zoom All acts on the windows that can zoom"
+        );
+        fn collect(item: &MenuItem, ids: &mut Vec<i32>) {
+            ids.push(item.id.0);
+            ids.extend(item.alternate.as_ref().map(|a| a.id.0));
+            item.children.iter().for_each(|c| collect(c, ids));
+        }
+        let mut every = Vec::new();
+        let rows = [WindowRow {
+            title: "notes.txt",
+            active: true,
+            minimized: false,
+        }];
+        menus(3, Some(2), true, &rows, &super_chords(), true)
+            .iter()
+            .chain(&app_menu("Editor", &super_chords()))
+            .for_each(|m| collect(m, &mut every));
+        let count = every.len();
+        every.sort();
+        every.dedup();
+        assert_eq!(
+            every.len(),
+            count,
+            "every id of the bar's menus is distinct"
+        );
+        assert!(alternates.iter().all(|(_, a)| is_system(a.id)));
     }
 
     #[test]

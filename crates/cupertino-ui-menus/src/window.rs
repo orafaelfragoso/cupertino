@@ -110,7 +110,8 @@ impl WindowMenus {
         }
     }
 
-    /// Whether the desktop's menu bar shows the menus: the window then draws no menu bar of its own.
+    /// Whether the desktop's menu bar shows the menus: the window then draws no menu bar of its own. Files and Settings
+    /// draw none either way.
     pub fn shown(&self) -> bool {
         self.shown
     }

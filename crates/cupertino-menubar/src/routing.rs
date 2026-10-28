@@ -10,7 +10,7 @@ use crate::layout::{BarLayout, SlotKey};
 use crate::source::{KdeAppMenu, MenuSource};
 use crate::worker::Request;
 use cupertino_apps::Launch;
-use cupertino_shell_client::WindowCommand;
+use cupertino_shell_client::{EditAction, WindowCommand};
 use cupertino_wayland_client::key;
 use std::path::PathBuf;
 
@@ -48,6 +48,8 @@ pub enum Action {
     MoveToWorkspace(u32),
     /// Show a window of the window list by its server id.
     ActivateWindow(u32),
+    /// Have the server type the chord of an Edit item into the key window.
+    Edit(EditAction),
     ShowAbout,
     /// Start a program or an application, handing it an activation token.
     Launch(Launch),
@@ -220,8 +222,16 @@ fn fallback_action(item: ItemId, feed: &BarFeed) -> Option<Action> {
         FallbackAction::BringAllToFront => Action::WindowCommand(WindowCommand::BringAllToFront),
         FallbackAction::ShowWindow(row) => Action::ActivateWindow(feed.listed_window(row)?.id),
         FallbackAction::MoveToWorkspace(n) => Action::MoveToWorkspace(n),
-        // disabled until the app's preferences action and the server's edit request exist
-        FallbackAction::Settings | FallbackAction::Edit(_) => return None,
+        FallbackAction::Edit(action) => Action::Edit(match action {
+            fallback::EditAction::Undo => EditAction::Undo,
+            fallback::EditAction::Redo => EditAction::Redo,
+            fallback::EditAction::Cut => EditAction::Cut,
+            fallback::EditAction::Copy => EditAction::Copy,
+            fallback::EditAction::Paste => EditAction::Paste,
+            fallback::EditAction::SelectAll => EditAction::SelectAll,
+        }),
+        // disabled until the app's preferences action exists
+        FallbackAction::Settings => return None,
     })
 }
 
@@ -246,7 +256,7 @@ mod tests {
     impl Fixture {
         /// A bar of an application whose window announces `menu`, with one status item that has a menu.
         fn new(menu: WindowMenu) -> Self {
-            let mut feed = BarFeed::new(1);
+            let mut feed = BarFeed::new(1, true);
             let mut shared = Shared::default();
             let update = MenuBarUpdate {
                 active_app: Some(ActiveApp {
@@ -503,7 +513,14 @@ mod tests {
             "no window at the row"
         );
         assert_eq!(act(FallbackAction::Settings), None);
-        assert_eq!(act(FallbackAction::Edit(fallback::EditAction::Copy)), None);
+        assert_eq!(
+            act(FallbackAction::Edit(fallback::EditAction::Copy)),
+            Some(Action::Edit(EditAction::Copy))
+        );
+        assert_eq!(
+            act(FallbackAction::Edit(fallback::EditAction::SelectAll)),
+            Some(Action::Edit(EditAction::SelectAll))
+        );
     }
 
     #[test]

@@ -9,15 +9,17 @@ use std::collections::HashMap;
 use crate::dbus::{LoginTrust, Request as DbusRequest};
 use crate::input::{translate_action, Action, Chord};
 use cupertino_input::{KeyCombo, Modifiers};
+use cupertino_keyboard::rewrite::ClientClass;
 use cupertino_keyboard::{ModifierProfile, Mods as LogicalMods, RawMods};
 use cupertino_protocols::server::cupertino_menu_bar_v1::{
     self, AgentTrust, AppWindowFlags, BoundAction, Command as BarCommand, CupertinoMenuBarV1,
-    Error as BarError, ModifierKey, SessionAction,
+    EditAction, Error as BarError, ModifierKey, SessionAction,
 };
 use cupertino_protocols::server::cupertino_shell_v1::{CupertinoShellV1, Error as ShellError};
 use cupertino_wm::menu_bar::{BarSetConfig, MenuBarSet};
 use cupertino_wm::{AppId, Command, LifecycleState, OutputId, Window, WindowId};
 use smithay::desktop::{layer_map_for_output, WindowSurfaceType};
+use smithay::input::keyboard::keysyms;
 use smithay::output::Output;
 use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
@@ -26,8 +28,8 @@ use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, New, Resource, WEnum,
 };
 
-use crate::authorization::{authorized, refuse, require, ShellRole};
-use crate::state::Cupertino;
+use crate::authorization::{authorized, capabilities, refuse, require, ShellRole};
+use crate::state::{Cupertino, PointerMode};
 
 /// Opacity lost by the bar of an inactive output. approximate.
 const INACTIVE_DIM: f64 = 0.4;
@@ -38,6 +40,9 @@ const MAX_APP_WINDOWS: usize = 1000;
 /// Longest window title or application id, in bytes, an event to a shell client carries: a client sets both to any
 /// length, and one message must stay under the 4096 bytes the Wayland wire allows.
 pub(crate) const MAX_TEXT_BYTES: usize = 1024;
+
+/// Longest time, in seconds from its arrival, an `edit` request waits for the keyboard to come back to its window.
+const EDIT_WAIT: f64 = 0.5;
 
 /// The actions a bar shows the chord of, each with the binding action that runs it.
 const BOUND_ACTIONS: [(BoundAction, Action); 13] = [
@@ -196,6 +201,45 @@ fn physical_chord(chord: Chord, profile: &ModifierProfile) -> Option<String> {
     Some(KeyCombo::new(modifiers, chord.sym).to_string())
 }
 
+/// The physical chord the Edit item `action` sends to a client of `class` under `profile` (`opted_out`: the keyboard
+/// rewrite is off for it): modifiers and Latin keysym. A terminal gets only copy and paste, as Ctrl+Shift, so the menu
+/// never sends it a control character; a client that reads the raw modifiers (first-party, or opted out) gets the
+/// profile's primary modifier, as the person would press it; any other gets the Ctrl chord it expects. `None` sends
+/// nothing.
+fn edit_chord(
+    action: EditAction,
+    class: ClientClass,
+    opted_out: bool,
+    profile: &ModifierProfile,
+) -> Option<(RawMods, u32)> {
+    let (sym, shift) = match action {
+        EditAction::Undo => (keysyms::KEY_z, false),
+        EditAction::Redo => (keysyms::KEY_z, true),
+        EditAction::Cut => (keysyms::KEY_x, false),
+        EditAction::Copy => (keysyms::KEY_c, false),
+        EditAction::Paste => (keysyms::KEY_v, false),
+        EditAction::SelectAll => (keysyms::KEY_a, false),
+        _ => return None,
+    };
+    let primary = match class {
+        ClientClass::Terminal => {
+            return matches!(action, EditAction::Copy | EditAction::Paste)
+                .then_some((RawMods::SHIFT | RawMods::CTRL, sym));
+        }
+        ClientClass::FirstParty => profile.primary_physical()?,
+        ClientClass::Other if opted_out => profile.primary_physical()?,
+        ClientClass::Other => RawMods::CTRL,
+    };
+    Some((
+        if shift {
+            primary | RawMods::SHIFT
+        } else {
+            primary
+        },
+        sym,
+    ))
+}
+
 struct Bar {
     resource: CupertinoMenuBarV1,
     surface: WlSurface,
@@ -218,6 +262,19 @@ pub struct BarLook {
     pub alpha: f32,
 }
 
+/// An `edit` request waiting for the keyboard to come back to its window once the menu has closed.
+struct PendingEdit {
+    action: EditAction,
+    /// The surface of the bar whose popup grab was active when the request arrived.
+    bar: WlSurface,
+    /// The key window when the request arrived.
+    window: WindowId,
+    /// Model time of the arrival.
+    since: f64,
+    /// The first keyboard focus change after the grab ended gave the keyboard to `window`.
+    returned: bool,
+}
+
 /// Presentation model, the bars of the menu bar process and the menu addresses of windows.
 pub struct MenuBars {
     pub set: MenuBarSet,
@@ -226,6 +283,8 @@ pub struct MenuBars {
     addresses: HashMap<u64, MenuAddress>,
     /// Addresses announced before the window mapped.
     pending: Vec<(WlSurface, MenuAddress)>,
+    /// The last `edit` request still to be sent; a newer one replaces it.
+    edit: Option<PendingEdit>,
 }
 
 impl MenuBars {
@@ -238,6 +297,7 @@ impl MenuBars {
             bars: Vec::new(),
             addresses: HashMap::new(),
             pending: Vec::new(),
+            edit: None,
         }
     }
 
@@ -628,6 +688,7 @@ impl Cupertino {
         if let Some(ev) = self.bar_edge.tick(now) {
             self.apply_bar_edge(ev, now);
         }
+        self.tick_menu_bar_edit(now);
     }
 
     /// Reveal or hide the auto-hidden bar after the pointer dwelled at (or left) the top edge.
@@ -792,6 +853,99 @@ impl Cupertino {
             self.command(Command::SwitchWorkspace { output, workspace });
         }
     }
+
+    /// The key window when an edit may go to it: the xdg toplevel of a client of the public socket, while no lock
+    /// (active or pending), overview, application switcher or move or resize is under way. The server runs no
+    /// Xwayland: every window it manages is an xdg toplevel (`WindowEntry`), so no X11 window is ever returned, nor a
+    /// layer, lock or shell surface.
+    fn edit_target(&self) -> Option<WindowId> {
+        if self.session_lock.is_active()
+            || self.shell.overview.is_some()
+            || self.wm.switcher().is_some()
+            || self.pointer_mode != PointerMode::Normal
+        {
+            return None;
+        }
+        let window = self.wm.key_window()?;
+        let client = self.entry(window)?.surface().client()?;
+        capabilities(&client).is_empty().then_some(window)
+    }
+
+    /// `edit` of the bar on `bar`: kept for the key window when the request comes from a choice in the bar's open
+    /// menu (its popup grab is active); ignored otherwise. A newer request replaces a pending one.
+    fn menu_bar_edit(&mut self, bar: &WlSurface, action: EditAction) {
+        if self.popup_grab_root() != Some(bar) {
+            return;
+        }
+        let Some(window) = self.edit_target() else {
+            return;
+        };
+        self.menu_bars.edit = Some(PendingEdit {
+            action,
+            bar: bar.clone(),
+            window,
+            since: self.now(),
+            returned: false,
+        });
+    }
+
+    /// The keyboard focus moved to `focused`. The first move after the bar's popup grab ended decides on the pending
+    /// edit: it goes out at the next tick when the keyboard came back to its window, and is dropped when it went
+    /// anywhere else, so it never reaches whatever has the keyboard later.
+    pub(crate) fn menu_bar_edit_focus(&mut self, focused: Option<&WlSurface>) {
+        let Some(edit) = &self.menu_bars.edit else {
+            return;
+        };
+        if edit.returned || self.popup_grab_root() == Some(&edit.bar) {
+            return;
+        }
+        let back =
+            focused.is_some_and(|s| self.entry(edit.window).is_some_and(|e| e.has_surface(s)));
+        match self.menu_bars.edit.as_mut() {
+            Some(edit) if back => edit.returned = true,
+            _ => self.menu_bars.edit = None,
+        }
+    }
+
+    /// Send the pending edit once the keyboard is back on its window, checking every guard again; drop it
+    /// [`EDIT_WAIT`] after its arrival.
+    fn tick_menu_bar_edit(&mut self, now: f64) {
+        let Some(edit) = &self.menu_bars.edit else {
+            return;
+        };
+        if now - edit.since > EDIT_WAIT {
+            self.menu_bars.edit = None;
+            return;
+        }
+        if !edit.returned {
+            return;
+        }
+        let Some(edit) = self.menu_bars.edit.take() else {
+            return;
+        };
+        let keyboard = self.seat.get_keyboard().unwrap();
+        let on_window = keyboard
+            .current_focus()
+            .is_some_and(|f| self.entry(edit.window).is_some_and(|e| e.has_surface(&f)));
+        if !on_window
+            || self.edit_target() != Some(edit.window)
+            || self.popup_grab_root().is_some()
+            || keyboard.is_grabbed()
+            || self.pointer.is_grabbed()
+        {
+            return;
+        }
+        let kb = &self.config.keyboard;
+        let app = self.key_app_id();
+        if let Some((mods, sym)) = edit_chord(
+            edit.action,
+            kb.client_class(&app),
+            kb.rewrite_opted_out(&app),
+            &kb.modifier_profile(),
+        ) {
+            self.forward_chord(sym, mods);
+        }
+    }
 }
 
 impl Dispatch<CupertinoMenuBarV1, MenuBarData> for Cupertino {
@@ -831,6 +985,24 @@ impl Dispatch<CupertinoMenuBarV1, MenuBarData> for Cupertino {
             cupertino_menu_bar_v1::Request::ActivateWindow { id } => {
                 state.menu_bar_activate_window(id)
             }
+            // a bar below version 11 cannot send it: the wire rejects a request newer than the object
+            cupertino_menu_bar_v1::Request::Edit { action } => match action {
+                WEnum::Value(action) => {
+                    let bar = state
+                        .menu_bars
+                        .bars
+                        .iter()
+                        .find(|b| &b.resource == resource)
+                        .map(|b| b.surface.clone());
+                    if let Some(bar) = bar {
+                        state.menu_bar_edit(&bar, action);
+                    }
+                }
+                WEnum::Unknown(_) => resource.post_error(
+                    BarError::InvalidEditAction,
+                    format!("{action:?} is not an edit action"),
+                ),
+            },
             cupertino_menu_bar_v1::Request::SessionAction { action } => {
                 let request = match action {
                     WEnum::Value(SessionAction::Sleep) => Some(DbusRequest::Sleep),
@@ -900,5 +1072,51 @@ mod tests {
             None,
             "no physical key makes Ctrl under classic-pc"
         );
+    }
+
+    #[test]
+    fn every_edit_chord_follows_the_client_class_and_the_profile() {
+        use keysyms::{KEY_a as A, KEY_c as C, KEY_v as V, KEY_x as X, KEY_z as Z};
+        use EditAction::*;
+        let (shift, ctrl, sup) = (RawMods::SHIFT, RawMods::CTRL, RawMods::SUPER);
+        let actions = [Undo, Redo, Cut, Copy, Paste, SelectAll];
+        let row = |primary: RawMods| {
+            [
+                Some((primary, Z)),
+                Some((primary | shift, Z)),
+                Some((primary, X)),
+                Some((primary, C)),
+                Some((primary, V)),
+                Some((primary, A)),
+            ]
+        };
+        let terminal = [
+            None,
+            None,
+            None,
+            Some((shift | ctrl, C)),
+            Some((shift | ctrl, V)),
+            None,
+        ];
+        for (profile, primary) in [
+            (ModifierProfile::cupertino(), sup),
+            (ModifierProfile::classic_pc(), ctrl),
+        ] {
+            for (class, opted_out, want) in [
+                (ClientClass::Other, false, row(ctrl)),
+                (ClientClass::Other, true, row(primary)),
+                (ClientClass::FirstParty, false, row(primary)),
+                (ClientClass::FirstParty, true, row(primary)),
+                (ClientClass::Terminal, false, terminal),
+                (ClientClass::Terminal, true, terminal),
+            ] {
+                let got = actions.map(|a| edit_chord(a, class, opted_out, &profile));
+                assert_eq!(
+                    got, want,
+                    "{} {class:?} opted out {opted_out}",
+                    profile.name
+                );
+            }
+        }
     }
 }

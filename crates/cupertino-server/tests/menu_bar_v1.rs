@@ -15,7 +15,7 @@ use cupertino_defaults::compositor::CompositorSettings;
 use cupertino_defaults::keyboard::{KeyboardSettings, ModifierProfile};
 use cupertino_protocols::client::cupertino_dock_v1::{self, CupertinoDockV1};
 use cupertino_protocols::client::cupertino_menu_bar_v1::{
-    self, Command as BarCommand, CupertinoMenuBarV1, SessionAction,
+    self, Command as BarCommand, CupertinoMenuBarV1, EditAction, SessionAction,
 };
 use cupertino_protocols::client::cupertino_shell_v1::{self, CupertinoShellV1};
 use cupertino_server::authorization::ShellRole;
@@ -27,7 +27,8 @@ use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_output, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_compositor, wl_keyboard, wl_output, wl_registry, wl_seat, wl_shm, wl_shm_pool,
+    wl_surface,
 };
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::ext::image_capture_source::v1::client::{
@@ -36,7 +37,9 @@ use wayland_protocols::ext::image_capture_source::v1::client::{
 use wayland_protocols::ext::image_copy_capture::v1::client::{
     ext_image_copy_capture_manager_v1, ext_image_copy_capture_session_v1,
 };
-use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
+use wayland_protocols::xdg::shell::client::{
+    xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
+};
 use wayland_protocols_plasma::appmenu::client::{
     org_kde_kwin_appmenu, org_kde_kwin_appmenu_manager,
 };
@@ -77,9 +80,14 @@ struct Harness {
 
 impl Harness {
     fn new() -> Option<Harness> {
+        Self::with_config(|_| {})
+    }
+
+    fn with_config(configure: impl FnOnce(&mut Config)) -> Option<Harness> {
         let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().ok()?;
         let display: Display<Cupertino> = Display::new().ok()?;
-        let cfg = Config::default();
+        let mut cfg = Config::default();
+        configure(&mut cfg);
         let mut state = Cupertino::new(
             display,
             event_loop.handle(),
@@ -105,6 +113,21 @@ impl Harness {
             Duration::from_millis(5),
         )
         .unwrap();
+    }
+
+    /// Handle the clients' requests without the model tick, which is where a pending edit is sent.
+    fn dispatch_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
+        let end = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < end {
+            self.event_loop
+                .dispatch(Some(Duration::from_millis(5)), &mut self.state)
+                .unwrap();
+            let _ = self.state.display_handle.flush_clients();
+            if cond(&self.state) {
+                return;
+            }
+        }
+        panic!("timed out waiting for {what}");
     }
 
     fn wait_until(&mut self, what: &str, mut cond: impl FnMut(&Cupertino) -> bool) {
@@ -242,7 +265,29 @@ struct Status {
     roundtrips: usize,
     /// `force_quit_dialog` events a dock received.
     force_quit_dialogs: usize,
+    /// What an application's keyboard received, in order.
+    keys: Vec<KeyEvent>,
 }
+
+/// A `wl_keyboard` event of an application.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum KeyEvent {
+    Enter,
+    Leave,
+    /// The depressed modifier mask.
+    Modifiers(u32),
+    /// evdev code, pressed.
+    Key(u32, bool),
+}
+
+/// Depressed-modifier masks of the default keymaps: Shift, Control and Mod4 (Super).
+const SHIFT: u32 = 1;
+const CTRL: u32 = 1 << 2;
+const SUPER: u32 = 1 << 6;
+/// evdev codes of the keys the Edit chords use on QWERTY, and the key of z on AZERTY.
+const KEY_C: u32 = 46;
+const KEY_V: u32 = 47;
+const KEY_W: u32 = 17;
 
 struct ClientState {
     status: Arc<Mutex<Status>>,
@@ -285,8 +330,36 @@ ignore_events!(
     ext_output_image_capture_source_manager_v1::ExtOutputImageCaptureSourceManagerV1,
     ext_image_capture_source_v1::ExtImageCaptureSourceV1,
     ext_image_copy_capture_manager_v1::ExtImageCopyCaptureManagerV1,
-    ext_image_copy_capture_session_v1::ExtImageCopyCaptureSessionV1
+    ext_image_copy_capture_session_v1::ExtImageCopyCaptureSessionV1,
+    wl_seat::WlSeat,
+    xdg_positioner::XdgPositioner,
+    xdg_popup::XdgPopup
 );
+
+impl Dispatch<wl_keyboard::WlKeyboard, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        _: &wl_keyboard::WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let event = match event {
+            wl_keyboard::Event::Enter { .. } => KeyEvent::Enter,
+            wl_keyboard::Event::Leave { .. } => KeyEvent::Leave,
+            wl_keyboard::Event::Modifiers { mods_depressed, .. } => {
+                KeyEvent::Modifiers(mods_depressed)
+            }
+            wl_keyboard::Event::Key { key, state: s, .. } => KeyEvent::Key(
+                key,
+                s == wayland_client::WEnum::Value(wl_keyboard::KeyState::Pressed),
+            ),
+            _ => return,
+        };
+        state.status.lock().unwrap().keys.push(event);
+    }
+}
 
 impl Dispatch<GtkShell1, ()> for ClientState {
     fn event(
@@ -479,6 +552,14 @@ enum Cmd {
     SetTitle(String),
     /// Close the second toplevel of an application client.
     CloseSecondWindow,
+    /// Open a menu of the bar: a popup of its layer surface that takes the popup grab.
+    OpenMenu,
+    /// Destroy the open menu, as the bar does once an item is chosen.
+    CloseMenu,
+    /// Choose an item of the Edit menu.
+    Edit(EditAction),
+    /// Send `edit` with a raw value.
+    EditRaw(u32),
     /// Destroy the menu bar, its layer surface and the surface, as an exiting bar process does.
     Destroy,
 }
@@ -541,10 +622,10 @@ fn run_client_on(stream: UnixStream, setup: Setup) -> TestClient {
                 apply(cmd);
             }
             if queue.roundtrip(&mut client).is_err() {
-                let error = conn
-                    .protocol_error()
-                    .expect("the roundtrip failed with a protocol error");
-                st.lock().unwrap().error = Some((error.object_interface, error.code));
+                // an error of wl_display itself reaches the client as the end of the connection
+                if let Some(error) = conn.protocol_error() {
+                    st.lock().unwrap().error = Some((error.object_interface, error.code));
+                }
                 return;
             }
             st.lock().unwrap().roundtrips += 1;
@@ -574,6 +655,8 @@ impl BarClient {
             let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
             let shell: CupertinoShellV1 = globals.bind(qh, version..=version, ()).unwrap();
             let output: wl_output::WlOutput = globals.bind(qh, 1..=4, ()).unwrap();
+            let wm_base: xdg_wm_base::XdgWmBase = globals.bind(qh, 1..=5, ()).unwrap();
+            let seat: wl_seat::WlSeat = globals.bind(qh, 1..=7, ()).unwrap();
             let surface = compositor.create_surface(qh, ());
             let layer_surface = layer.then(|| {
                 let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
@@ -605,12 +688,48 @@ impl BarClient {
                 attached: false,
                 toplevel_size: (0, 0),
             };
+            let qh = qh.clone();
+            let mut menu = None;
             let apply = Box::new(move |cmd: Cmd| match cmd {
                 Cmd::SetMenuOpen(open) => bar.set_menu_open(u32::from(open)),
                 Cmd::WindowCommand(c) => bar.window_command(c),
                 Cmd::MoveToWorkspace(n) => bar.move_to_workspace(n),
                 Cmd::SessionAction(a) => bar.session_action(a),
                 Cmd::ActivateWindow(id) => bar.activate_window(id),
+                Cmd::OpenMenu => {
+                    let positioner = wm_base.create_positioner(&qh, ());
+                    positioner.set_size(200, 150);
+                    positioner.set_anchor_rect(10, 0, 40, BAR_HEIGHT);
+                    positioner.set_anchor(xdg_positioner::Anchor::BottomLeft);
+                    positioner.set_gravity(xdg_positioner::Gravity::BottomRight);
+                    let surface = compositor.create_surface(&qh, ());
+                    let window = OtherWindow {
+                        surface: surface.clone(),
+                        size: (200, 150),
+                        attached: Default::default(),
+                    };
+                    let xdg = wm_base.get_xdg_surface(&surface, &qh, window);
+                    let popup = xdg.get_popup(None, &positioner, &qh, ());
+                    layer_surface
+                        .as_ref()
+                        .expect("a layer surface")
+                        .get_popup(&popup);
+                    popup.grab(&seat, 0);
+                    surface.commit();
+                    menu = Some((popup, xdg, surface));
+                }
+                Cmd::CloseMenu => {
+                    let (popup, xdg, surface) = menu.take().expect("a menu is open");
+                    popup.destroy();
+                    xdg.destroy();
+                    surface.destroy();
+                }
+                Cmd::Edit(action) => bar.edit(action),
+                Cmd::EditRaw(value) => {
+                    let _ = bar.send_request(cupertino_menu_bar_v1::Request::Edit {
+                        action: wayland_client::WEnum::Unknown(value),
+                    });
+                }
                 Cmd::SetAddress(..)
                 | Cmd::OpenSecondWindow
                 | Cmd::SetSecondAddress(..)
@@ -812,12 +931,19 @@ struct AppClient(TestClient);
 impl AppClient {
     fn spawn(socket: PathBuf, app_id: &'static str) -> AppClient {
         let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
+        Self::spawn_on(stream, app_id)
+    }
+
+    /// An application on a connected stream (a shell process's comes from the server).
+    fn spawn_on(stream: UnixStream, app_id: &'static str) -> AppClient {
         AppClient(run_client(stream, move |globals, qh, status| {
             let compositor: wl_compositor::WlCompositor = globals.bind(qh, 4..=6, ()).unwrap();
             let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
             let wm_base: xdg_wm_base::XdgWmBase = globals.bind(qh, 1..=5, ()).unwrap();
             let manager: org_kde_kwin_appmenu_manager::OrgKdeKwinAppmenuManager =
                 globals.bind(qh, 1..=2, ()).unwrap();
+            let seat: wl_seat::WlSeat = globals.bind(qh, 1..=7, ()).unwrap();
+            seat.get_keyboard(qh, ());
             let surface = compositor.create_surface(qh, ());
             let xdg = wm_base.get_xdg_surface(&surface, qh, ());
             let toplevel = xdg.get_toplevel(qh, ());
@@ -875,6 +1001,33 @@ impl AppClient {
 
     fn send(&self, cmd: Cmd) {
         self.0.send(cmd);
+    }
+
+    fn roundtrips(&self) -> usize {
+        self.0.status.lock().unwrap().roundtrips
+    }
+
+    /// What the application's keyboard received so far.
+    fn keys(&self) -> Vec<KeyEvent> {
+        self.0.status.lock().unwrap().keys.clone()
+    }
+
+    /// The application has the keyboard: its last enter or leave is an enter.
+    fn has_keyboard(&self) -> bool {
+        self.keys()
+            .iter()
+            .rev()
+            .find(|e| matches!(e, KeyEvent::Enter | KeyEvent::Leave))
+            == Some(&KeyEvent::Enter)
+    }
+
+    /// The key presses and releases received after the first `from` events.
+    fn presses_since(&self, from: usize) -> Vec<KeyEvent> {
+        self.keys()[from..]
+            .iter()
+            .filter(|e| matches!(e, KeyEvent::Key(..)))
+            .copied()
+            .collect()
     }
 }
 
@@ -1937,4 +2090,406 @@ fn the_force_quit_command_opens_the_dialog_in_the_dock() {
     bar.send(Cmd::WindowCommand(BarCommand::ForceQuitDialog));
     h.wait_until("the dialog", |_| dock.force_quit_dialogs() == 1);
     assert_eq!(bar.error(), None);
+}
+
+// ---- the Edit menu (version 11) ------------------------------------------------------------
+
+/// A bar on a shell global of version 11, with its first groups received.
+fn bar_v11(h: &mut Harness) -> BarClient {
+    let bar = BarClient::spawn_at(h.shell_stream(), true, 11);
+    h.wait_for_groups(&bar, 4);
+    bar
+}
+
+/// An application of `app_id` whose new window is the key window and has the keyboard.
+fn key_app(h: &mut Harness, app_id: &'static str) -> (AppClient, WindowId) {
+    let stream = UnixStream::connect(h.socket_path()).expect("connecting to the compositor");
+    key_app_on(h, stream, app_id)
+}
+
+/// [`key_app`] on a connected stream.
+fn key_app_on(h: &mut Harness, stream: UnixStream, app_id: &'static str) -> (AppClient, WindowId) {
+    let before: Vec<WindowId> = h.state.wm.windows().map(|w| w.id).collect();
+    let app = AppClient::spawn_on(stream, app_id);
+    h.mapped_window(before.len() + 1);
+    let window = h
+        .state
+        .wm
+        .windows()
+        .find(|w| !before.contains(&w.id))
+        .unwrap()
+        .id;
+    h.state.command(Command::FocusWindow { window });
+    h.wait_until("the application to have the keyboard", |_| {
+        app.has_keyboard()
+    });
+    (app, window)
+}
+
+/// Step until `app` has received everything the server sent it so far.
+fn settle_app(h: &mut Harness, app: &AppClient) {
+    let from = app.roundtrips();
+    h.wait_until("the application's round trips", |_| {
+        app.roundtrips() >= from + 2
+    });
+}
+
+/// The bar opens a menu: its popup takes the grab, and the keyboard leaves the application.
+fn open_menu(h: &mut Harness, bar: &BarClient, app: &AppClient) {
+    bar.send(Cmd::OpenMenu);
+    h.wait_until("the menu to hold the grab", |s| {
+        s.popup_grab.is_some() && !app.has_keyboard()
+    });
+}
+
+/// Choose `action` in the open menu as the bar does (the request, then the menu goes) and return what the application's
+/// keyboard got from then on, once the keyboard is back on it.
+fn choose_edit(
+    h: &mut Harness,
+    bar: &BarClient,
+    app: &AppClient,
+    action: EditAction,
+) -> Vec<KeyEvent> {
+    let from = app.keys().len();
+    bar.send(Cmd::Edit(action));
+    bar.send(Cmd::CloseMenu);
+    h.wait_until("the keyboard back on the application", |_| {
+        app.has_keyboard()
+    });
+    settle_app(h, app);
+    app.keys()[from..].to_vec()
+}
+
+/// What the application gets for a chord: the keyboard back with the real modifiers, the chord's modifiers, the key's
+/// press and release, the real modifiers again.
+fn chord(mods: u32, key: u32) -> Vec<KeyEvent> {
+    vec![
+        KeyEvent::Enter,
+        KeyEvent::Modifiers(0),
+        KeyEvent::Modifiers(mods),
+        KeyEvent::Key(key, true),
+        KeyEvent::Key(key, false),
+        KeyEvent::Modifiers(0),
+    ]
+}
+
+#[test]
+fn an_edit_reaches_the_key_window_as_its_ctrl_chord_and_no_other_client() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let (other, _) = key_app(&mut h, "org.example.other");
+    let (app, _) = key_app(&mut h, "org.example.editor");
+    let other_from = other.keys().len();
+    open_menu(&mut h, &bar, &app);
+    assert_eq!(
+        choose_edit(&mut h, &bar, &app, EditAction::Copy),
+        chord(CTRL, KEY_C)
+    );
+    settle_app(&mut h, &other);
+    assert_eq!(other.presses_since(other_from), []);
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn an_edit_never_repeats() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let (app, _) = key_app(&mut h, "org.example.editor");
+    open_menu(&mut h, &bar, &app);
+    assert_eq!(
+        choose_edit(&mut h, &bar, &app, EditAction::Paste),
+        chord(CTRL, KEY_V)
+    );
+    let from = app.keys().len();
+    for _ in 0..4 {
+        h.advance(0.5);
+    }
+    settle_app(&mut h, &app);
+    assert_eq!(app.keys()[from..], [], "no repeat and nothing else");
+}
+
+#[test]
+fn a_terminal_gets_only_copy_and_paste_as_ctrl_shift() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let (app, _) = key_app(&mut h, "foot");
+    open_menu(&mut h, &bar, &app);
+    assert_eq!(
+        choose_edit(&mut h, &bar, &app, EditAction::Copy),
+        chord(SHIFT | CTRL, KEY_C)
+    );
+    open_menu(&mut h, &bar, &app);
+    let from = app.keys().len();
+    choose_edit(&mut h, &bar, &app, EditAction::Undo);
+    assert_eq!(app.presses_since(from), [], "no Ctrl+z for a terminal");
+}
+
+#[test]
+fn a_first_party_client_gets_the_primary_modifier_of_the_profile() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let (app, _) = key_app(&mut h, "cupertino-test-editor");
+    open_menu(&mut h, &bar, &app);
+    assert_eq!(
+        choose_edit(&mut h, &bar, &app, EditAction::Copy),
+        chord(SUPER, KEY_C)
+    );
+    h.state.apply_keyboard_change(
+        &KeyboardSettings::default(),
+        &KeyboardSettings {
+            modifier_profile: Some(ModifierProfile::ClassicPc),
+            ..KeyboardSettings::default()
+        },
+    );
+    open_menu(&mut h, &bar, &app);
+    assert_eq!(
+        choose_edit(&mut h, &bar, &app, EditAction::Copy),
+        chord(CTRL, KEY_C)
+    );
+}
+
+#[test]
+fn undo_takes_the_key_of_z_in_the_active_layout() {
+    let Some(mut h) = Harness::with_config(|c| {
+        c.keyboard.sources = vec![cupertino_server::kbd::SourceSpec::parse("fr").unwrap()];
+    }) else {
+        return;
+    };
+    let bar = bar_v11(&mut h);
+    let (app, _) = key_app(&mut h, "org.example.editor");
+    open_menu(&mut h, &bar, &app);
+    assert_eq!(
+        choose_edit(&mut h, &bar, &app, EditAction::Undo),
+        chord(CTRL, KEY_W),
+        "z is on the key of the QWERTY w"
+    );
+}
+
+#[test]
+fn an_edit_without_the_bars_open_menu_is_ignored() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let (app, _) = key_app(&mut h, "org.example.editor");
+    // the bar holds the keyboard without a menu (title navigation) and asks for an edit
+    bar.send(Cmd::SetKeyboard(true));
+    h.wait_until("the bar to take the keyboard", |_| !app.has_keyboard());
+    let from = app.keys().len();
+    bar.send(Cmd::Edit(EditAction::Copy));
+    h.settle_requests(&bar);
+    bar.send(Cmd::SetKeyboard(false));
+    h.wait_until("the keyboard back on the application", |_| {
+        app.has_keyboard()
+    });
+    settle_app(&mut h, &app);
+    assert_eq!(app.presses_since(from), []);
+    assert_eq!(bar.error(), None, "ignored, not an error");
+}
+
+#[test]
+fn a_lock_that_begins_before_the_keyboard_returns_drops_the_edit() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let (app, _) = key_app(&mut h, "org.example.editor");
+    open_menu(&mut h, &bar, &app);
+    let from = app.keys().len();
+    bar.send(Cmd::Edit(EditAction::Copy));
+    h.settle_requests(&bar);
+    let locker = common::Client::locker(common::session_agent(&h.state));
+    h.wait_until("the session to be locked", |_| locker.locked());
+    bar.send(Cmd::CloseMenu);
+    h.settle_requests(&bar);
+    settle_app(&mut h, &app);
+    assert_eq!(app.presses_since(from), []);
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn a_lock_after_the_keyboard_returned_stops_the_edit_at_delivery() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let (app, window) = key_app(&mut h, "org.example.editor");
+    let surface = h.state.entry(window).unwrap().surface().clone();
+    let on_window =
+        |s: &Cupertino| s.seat.get_keyboard().unwrap().current_focus().as_ref() == Some(&surface);
+    open_menu(&mut h, &bar, &app);
+    let from = app.keys().len();
+    bar.send(Cmd::Edit(EditAction::Copy));
+    bar.send(Cmd::CloseMenu);
+    // the keyboard is back, the edit waits for the tick, and a lock begins first
+    h.dispatch_until("the keyboard back on the window", on_window);
+    let _locker = common::Client::locker(common::session_agent(&h.state));
+    h.dispatch_until("the lock to begin", |s| s.session_lock.is_active());
+    // even with the keyboard forced back onto the window, nothing is sent while the session is locked
+    let keyboard = h.state.seat.get_keyboard().unwrap();
+    keyboard.set_focus(
+        &mut h.state,
+        Some(surface.clone()),
+        smithay::utils::SERIAL_COUNTER.next_serial(),
+    );
+    h.step();
+    settle_app(&mut h, &app);
+    assert_eq!(app.presses_since(from), []);
+}
+
+#[test]
+fn an_edit_is_dropped_when_the_keyboard_goes_to_another_window_first() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let (other, other_window) = key_app(&mut h, "org.example.other");
+    let (app, window) = key_app(&mut h, "org.example.editor");
+    open_menu(&mut h, &bar, &app);
+    let (from, other_from) = (app.keys().len(), other.keys().len());
+    bar.send(Cmd::Edit(EditAction::Copy));
+    h.settle_requests(&bar);
+    h.state.command(Command::FocusWindow {
+        window: other_window,
+    });
+    h.state.command(Command::FocusWindow { window });
+    h.wait_until("the keyboard back on the application", |_| {
+        app.has_keyboard()
+    });
+    settle_app(&mut h, &app);
+    settle_app(&mut h, &other);
+    assert_eq!(app.presses_since(from), []);
+    assert_eq!(other.presses_since(other_from), []);
+}
+
+#[test]
+fn an_edit_is_dropped_500_ms_after_it_arrived() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let (app, _) = key_app(&mut h, "org.example.editor");
+    open_menu(&mut h, &bar, &app);
+    let from = app.keys().len();
+    bar.send(Cmd::Edit(EditAction::Copy));
+    h.settle_requests(&bar);
+    h.advance(0.4);
+    bar.send(Cmd::CloseMenu);
+    h.wait_until("the keyboard back on the application", |_| {
+        app.has_keyboard()
+    });
+    settle_app(&mut h, &app);
+    assert_eq!(
+        app.presses_since(from),
+        [KeyEvent::Key(KEY_C, true), KeyEvent::Key(KEY_C, false)],
+        "within 500 ms the edit goes out"
+    );
+
+    open_menu(&mut h, &bar, &app);
+    let from = app.keys().len();
+    bar.send(Cmd::Edit(EditAction::Copy));
+    h.settle_requests(&bar);
+    h.advance(0.6);
+    bar.send(Cmd::CloseMenu);
+    h.wait_until("the keyboard back on the application", |_| {
+        app.has_keyboard()
+    });
+    settle_app(&mut h, &app);
+    assert_eq!(app.presses_since(from), []);
+}
+
+#[test]
+fn edit_needs_version_11_and_an_edit_action() {
+    let Some(mut h) = Harness::new() else { return };
+    let old = bar_v10(&mut h);
+    old.send(Cmd::Edit(EditAction::Copy));
+    // wl_display.invalid_method: the request is newer than the object, and the server ends the connection
+    h.wait_until("the version 10 bar to be disconnected", |s| {
+        s.menu_bars.is_empty()
+    });
+
+    let bar = bar_v11(&mut h);
+    bar.send(Cmd::EditRaw(6));
+    h.wait_until("the version 11 bar's error", |_| bar.error().is_some());
+    assert_eq!(
+        bar.error(),
+        Some((
+            CupertinoMenuBarV1::interface().name.to_string(),
+            2 // invalid_edit_action
+        ))
+    );
+}
+
+/// Choose Copy in a menu of `bar` and let the keyboard come back to `window` without the tick that sends the edit,
+/// then make `condition` hold before that tick runs; returns the key presses and releases the application got.
+fn copy_with_condition_before_delivery(
+    h: &mut Harness,
+    bar: &BarClient,
+    app: &AppClient,
+    window: WindowId,
+    condition: impl FnOnce(&mut Harness),
+) -> Vec<KeyEvent> {
+    let surface = h.state.entry(window).unwrap().surface().clone();
+    open_menu(h, bar, app);
+    let from = app.keys().len();
+    bar.send(Cmd::Edit(EditAction::Copy));
+    bar.send(Cmd::CloseMenu);
+    h.dispatch_until("the keyboard back on the window", |s| {
+        s.seat.get_keyboard().unwrap().current_focus().as_ref() == Some(&surface)
+    });
+    condition(h);
+    h.step();
+    settle_app(h, app);
+    app.presses_since(from)
+}
+
+#[test]
+fn an_edit_never_goes_to_a_window_of_a_shell_process() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let stream = cupertino_server::shell_connection::shell_process_connection(
+        &h.state.display_handle,
+        &[ShellRole::Session],
+    )
+    .unwrap();
+    let (app, _) = key_app_on(&mut h, stream, "org.example.shell-window");
+    open_menu(&mut h, &bar, &app);
+    let from = app.keys().len();
+    choose_edit(&mut h, &bar, &app, EditAction::Copy);
+    assert_eq!(app.presses_since(from), []);
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn an_edit_is_not_sent_while_the_overview_is_open() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let (app, window) = key_app(&mut h, "org.example.editor");
+    let presses = copy_with_condition_before_delivery(&mut h, &bar, &app, window, |h| {
+        h.state.toggle_overview(false);
+        assert!(h.state.shell.overview.is_some());
+    });
+    assert_eq!(presses, []);
+}
+
+#[test]
+fn an_edit_is_not_sent_while_the_application_switcher_is_open() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let _other = key_app(&mut h, "org.example.other");
+    let (app, window) = key_app(&mut h, "org.example.editor");
+    let presses = copy_with_condition_before_delivery(&mut h, &bar, &app, window, |h| {
+        h.state.command(Command::SwitcherOpen { backward: false });
+        assert!(h.state.wm.switcher().is_some());
+    });
+    assert_eq!(presses, []);
+}
+
+#[test]
+fn an_edit_is_not_sent_during_a_move_of_the_window() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v11(&mut h);
+    let (app, window) = key_app(&mut h, "org.example.editor");
+    let presses = copy_with_condition_before_delivery(&mut h, &bar, &app, window, |h| {
+        let frame = h.state.wm.window(window).unwrap().geometry();
+        h.state.begin_model_interaction(Command::BeginMove {
+            window,
+            pointer: cupertino_wm::Point::new(frame.x + 10.0, frame.y + 10.0),
+        });
+        assert_eq!(
+            h.state.pointer_mode,
+            cupertino_server::state::PointerMode::Model
+        );
+    });
+    assert_eq!(presses, []);
 }

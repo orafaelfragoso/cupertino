@@ -837,6 +837,26 @@ mod tests {
     }
 
     #[test]
+    fn compositor_json_cannot_take_the_release_chord_away() {
+        for json in [
+            r#"{"keybindings":{"Super+Escape":"lock"}}"#,
+            r#"{"keybindings":{"Escape":"release-shortcuts"}}"#,
+            r#"{"keybindings":{"Shift+F5":"release-shortcuts","Super+Escape":"lock"}}"#,
+        ] {
+            let mut c = Config::default();
+            let problems = apply(&mut c, json);
+            let release = crate::input::parse_chord("Super+Escape").unwrap();
+            let held = |c: &Config| c.keybindings.lookup(release.sym, release.mods);
+            assert!(!problems.is_empty(), "{json}");
+            let still = held(&c);
+            assert!(
+                still == Some(Action::ReleaseShortcuts),
+                "{json}: Super+Escape is {still:?}"
+            );
+        }
+    }
+
+    #[test]
     fn json_overrides_apply() {
         let mut c = Config::default();
         assert_eq!(

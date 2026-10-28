@@ -43,6 +43,46 @@ impl KernelTransport {
     }
 }
 
+/// The stand-in for a kernel without Bluetooth: no controller ever appears, so the daemon keeps its bus name and
+/// reports no adapter.
+pub struct NoBluetooth;
+
+impl NoBluetooth {
+    /// Whether `error` from [`KernelTransport::open`] says the kernel has no Bluetooth (no `AF_BLUETOOTH`, or no HCI
+    /// protocol in it), which is not a failure to start.
+    pub fn is_missing(error: &Error) -> bool {
+        matches!(
+            error,
+            Error::Syscall {
+                source: Errno::AFNOSUPPORT | Errno::PROTONOSUPPORT,
+                ..
+            }
+        )
+    }
+}
+
+impl Transport for NoBluetooth {
+    /// There is no kernel to answer: the one command the daemon sends without an adapter, reading the index list, goes
+    /// nowhere, and the list stays empty.
+    fn send(&self, _index: ControllerIndex, _command: &Command) -> Result<()> {
+        Ok(())
+    }
+
+    fn receive(&self, timeout: Option<Duration>) -> Result<Drained> {
+        std::thread::sleep(timeout.unwrap_or(Duration::from_secs(3600)));
+        Ok(Drained::default())
+    }
+
+    fn open_link(&self, _adapter: Address, _device: DeviceId) -> Result<()> {
+        Err(Error::Syscall {
+            call: "socket(BTPROTO_L2CAP)",
+            source: Errno::AFNOSUPPORT,
+        })
+    }
+
+    fn close_link(&self, _adapter: Address, _device: DeviceId) {}
+}
+
 impl Transport for KernelTransport {
     fn send(&self, index: ControllerIndex, command: &Command) -> Result<()> {
         self.socket.send(index, command)
@@ -83,5 +123,22 @@ impl Transport for KernelTransport {
             .lock()
             .expect("no thread panics while holding the links")
             .remove(&(adapter, device));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_kernel_without_bluetooth_counts_as_missing() {
+        let error = |source| Error::Syscall {
+            call: "socket(BTPROTO_HCI)",
+            source,
+        };
+        assert!(NoBluetooth::is_missing(&error(Errno::AFNOSUPPORT)));
+        assert!(NoBluetooth::is_missing(&error(Errno::PROTONOSUPPORT)));
+        assert!(!NoBluetooth::is_missing(&error(Errno::ACCESS)));
+        assert!(!NoBluetooth::is_missing(&error(Errno::PERM)));
     }
 }

@@ -21,7 +21,7 @@ use cupertino_shell_client::{
     AppWindow, BoundAction, GtkMenu, MenuBarUpdate, PrimaryModifier, Shortcuts, WindowMenu,
     WindowState,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use tiny_skia::{IntSize, Pixmap};
 
@@ -58,6 +58,9 @@ pub struct Shared {
     /// Menu trees of the exporters in use. A source is present from the moment its tree is
     /// requested, with an empty tree until the exporter answers.
     layouts: HashMap<MenuSource, MenuItem>,
+    /// Sources whose load failed: their empty tree stays, so they are not asked for again until the server announces
+    /// them again ([`Shared::layout_failed`]).
+    failed: HashSet<MenuSource>,
 }
 
 impl Shared {
@@ -104,6 +107,27 @@ impl Shared {
     /// Forget the trees of sources no bar uses: the next visit loads them afresh.
     pub fn prune_layouts(&mut self, in_use: &[MenuSource]) {
         self.layouts.retain(|source, _| in_use.contains(source));
+        self.failed.retain(|source| in_use.contains(source));
+    }
+
+    /// The load of `source` failed. It is made again when a group announces the source again, not at once, so an
+    /// exporter that keeps failing is asked once per group: a CupertinoKit application refuses the bar until it is told
+    /// the bar reads its menus, which the server follows with a group.
+    pub fn layout_failed(&mut self, source: &MenuSource) {
+        if self
+            .layouts
+            .get(source)
+            .is_some_and(|tree| tree.children.is_empty())
+        {
+            self.failed.insert(source.clone());
+        }
+    }
+
+    /// A group announced `source`: a load of it that failed is made again.
+    fn announced(&mut self, source: &MenuSource) {
+        if self.failed.remove(source) {
+            self.layouts.remove(source);
+        }
     }
 }
 
@@ -174,18 +198,20 @@ impl BarFeed {
             self.app_id.clone_from(&active.app_id);
         }
         if let Some(menu) = &update.menu {
-            match menu {
-                WindowMenu::None => shared.sources.clear_window(self.key),
-                WindowMenu::DbusMenu { service, path } => shared.sources.set_window_source(
-                    self.key,
-                    MenuSource::Kde(KdeAppMenu {
-                        service: service.clone(),
-                        path: path.clone(),
-                    }),
-                ),
-                WindowMenu::Gtk(gtk) => shared
-                    .sources
-                    .set_window_source(self.key, MenuSource::Gtk(gtk_props(gtk))),
+            let source = match menu {
+                WindowMenu::None => None,
+                WindowMenu::DbusMenu { service, path } => Some(MenuSource::Kde(KdeAppMenu {
+                    service: service.clone(),
+                    path: path.clone(),
+                })),
+                WindowMenu::Gtk(gtk) => Some(MenuSource::Gtk(gtk_props(gtk))),
+            };
+            match source {
+                None => shared.sources.clear_window(self.key),
+                Some(source) => {
+                    shared.announced(&source);
+                    shared.sources.set_window_source(self.key, source);
+                }
             }
         }
         if let Some(state) = update.window_state {
@@ -577,6 +603,40 @@ mod tests {
             Some(Request::FetchDbusMenu(kde_menu()))
         );
         shared.prune_layouts(&[kde()]);
+        assert_eq!(feed.request_layout(&mut shared), None);
+    }
+
+    #[test]
+    fn a_failed_load_is_made_again_only_when_a_group_announces_the_menu_again() {
+        let (mut feed, mut shared) = ready(Some(dbusmenu()));
+        assert_eq!(
+            feed.request_layout(&mut shared),
+            Some(Request::FetchDbusMenu(kde_menu()))
+        );
+        shared.layout_failed(&kde());
+        assert_eq!(
+            feed.request_layout(&mut shared),
+            None,
+            "not at once: an exporter that keeps failing is not asked in a loop"
+        );
+        feed.apply(
+            &update("org.example.editor", Some(dbusmenu())),
+            &mut shared,
+            |_| editor(),
+        );
+        assert_eq!(
+            feed.request_layout(&mut shared),
+            Some(Request::FetchDbusMenu(kde_menu()))
+        );
+
+        // a tree that arrived is kept when the group announces it again
+        shared.apply_layout(&kde(), exporter_tree());
+        shared.layout_failed(&kde());
+        feed.apply(
+            &update("org.example.editor", Some(dbusmenu())),
+            &mut shared,
+            |_| editor(),
+        );
         assert_eq!(feed.request_layout(&mut shared), None);
     }
 

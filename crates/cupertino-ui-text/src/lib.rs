@@ -1,5 +1,5 @@
 //! CupertinoKit text. Paragraphs are laid out from [`AttributedText`] into lines of [`GlyphRun`]s, positions are UTF-8
-//! byte offsets on grapheme boundaries, and editing goes through an [`EditBuffer`] or, for passwords, a
+//! byte offsets on grapheme boundaries, and editing goes through an [`TextBuffer`] or, for passwords, a
 //! [`SecureBuffer`]. A [`TextInputSession`] keeps the input method's composition consistent with the buffer by
 //! revision.
 
@@ -8,8 +8,17 @@ use std::fmt;
 use std::ops::Range;
 use std::sync::Arc;
 
+/// A font family in the font index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FontId(pub u32);
+
+/// One face of a family: its file, collection index and named instance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FaceId(pub u32);
+
+/// A hash of a face's variation coordinates; part of every glyph's raster identity.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct VariationKey(pub u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GlyphId(pub u32);
@@ -38,6 +47,13 @@ pub struct FontFeature {
     pub value: u32,
 }
 
+/// A variable-font axis setting, such as `wght` = 650.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FontVariation {
+    pub tag: [u8; 4],
+    pub value: f32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextStyle {
     /// `None` uses the theme's font.
@@ -46,13 +62,21 @@ pub struct TextStyle {
     pub weight: FontWeight,
     pub style: FontStyle,
     pub features: Vec<FontFeature>,
+    pub variations: Vec<FontVariation>,
+    /// A BCP 47 language tag; it picks fallback fonts and localized glyph forms.
+    pub lang: Option<Arc<str>>,
+    pub letter_spacing: f32,
 }
+
+/// A range of UTF-8 bytes in a text, on grapheme boundaries.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct TextRange(pub Range<usize>);
 
 /// Text with styled byte ranges.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AttributedText {
     pub text: String,
-    pub runs: Vec<(Range<usize>, TextStyle)>,
+    pub runs: Vec<(TextRange, TextStyle)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -66,7 +90,7 @@ pub enum TextAlign {
 
 /// The paragraph's base direction; `None` takes it from the first strong character.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum TextDirection {
+pub enum Direction {
     Ltr,
     Rtl,
 }
@@ -81,14 +105,20 @@ pub enum Wrap {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ParagraphStyle {
     pub align: TextAlign,
-    pub direction: Option<TextDirection>,
+    pub direction: Option<Direction>,
     pub max_lines: Option<u32>,
     pub wrap: Wrap,
 }
 
-/// A laid-out paragraph.
+/// Shaped text ready to lay out at any width.
 #[derive(Clone, Debug)]
 pub struct Paragraph {
+    _private: (),
+}
+
+/// A paragraph broken into lines at one width: line boxes, caret and selection geometry, hit testing.
+#[derive(Clone, Debug)]
+pub struct ParagraphLayout {
     _private: (),
 }
 
@@ -101,10 +131,11 @@ pub struct PositionedGlyph {
     pub cluster: usize,
 }
 
-/// Glyphs of one face at one size, positioned relative to the run's origin on the baseline.
+/// Glyphs of one face instance at one size, positioned relative to the run's origin on the baseline.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GlyphRun {
-    pub font: FontId,
+    pub face: FaceId,
+    pub variation: VariationKey,
     pub size: f32,
     pub glyphs: Vec<PositionedGlyph>,
 }
@@ -133,7 +164,7 @@ pub struct Selection {
 
 /// The editable text of a field, with its selection and undo history.
 #[derive(Clone, Debug)]
-pub struct EditBuffer {
+pub struct TextBuffer {
     _private: (),
 }
 
@@ -234,8 +265,48 @@ pub enum ImeEvent {
     },
 }
 
+/// The raster identity of one glyph: everything that changes its pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GlyphKey {
+    pub face: FaceId,
+    pub glyph: GlyphId,
+    pub variation: VariationKey,
+    /// Physical pixels per em, in 1/64 steps.
+    pub size_q: u32,
+    /// Horizontal subpixel phase, in 1/4 pixel steps.
+    pub subpixel_x: u8,
+    pub hinted: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum GlyphFormat {
+    /// One coverage byte per pixel, tinted by the run's colour.
+    Coverage,
+    /// Premultiplied RGBA, drawn as is (colour emoji, bitmap glyphs).
+    ColorPremultiplied,
+}
+
+/// A rasterized glyph; immutable once made, so caches can share it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GlyphImage {
+    pub format: GlyphFormat,
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+    /// From the pen position on the baseline to the image's top-left corner, in physical pixels.
+    pub left: i32,
+    pub top: i32,
+    pub pixels: Arc<[u8]>,
+}
+
+pub trait GlyphRasterizer {
+    /// `Ok(None)` for a glyph with no pixels, such as a space.
+    fn rasterize(&mut self, key: &GlyphKey) -> Result<Option<GlyphImage>, TextError>;
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TextError {
     NoFont,
+    UnknownFace(FaceId),
     NotACharBoundary(usize),
 }

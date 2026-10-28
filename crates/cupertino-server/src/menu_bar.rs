@@ -65,6 +65,12 @@ const BOUND_ACTIONS: [(BoundAction, Action); 13] = [
     (BoundAction::LogOut, Action::LogOut),
 ];
 
+/// Whether the binding `bound` shows as the chord of the bar's item for `item`: the item that minimizes also takes the
+/// chord that restores a tiled window before it minimizes.
+fn runs_as(item: Action, bound: Action) -> bool {
+    item == Action::Minimize && bound == Action::MinimizeOrRestore
+}
+
 /// Properties a GTK client announced for one window (`org.gtk.Menus` / `org.gtk.Actions` objects).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GtkMenuProps {
@@ -680,7 +686,7 @@ impl Cupertino {
                 let chord = entries
                     .iter()
                     .rev()
-                    .find(|(_, a)| a == action)
+                    .find(|(_, a)| a == action || runs_as(*action, *a))
                     .map(|(c, _)| physical_chord(*c))
                     .unwrap_or_default();
                 (*bound, chord)

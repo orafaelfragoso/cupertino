@@ -1158,6 +1158,8 @@ const KEY_ESCAPE: u32 = 1 + 8;
 const KEY_H: u32 = 35 + 8;
 const KEY_HOME: u32 = 102 + 8;
 const KEY_LEFT: u32 = 105 + 8;
+const KEY_UP: u32 = 103 + 8;
+const KEY_DOWN: u32 = 108 + 8;
 const KEY_RIGHT: u32 = 106 + 8;
 const KEY_END: u32 = 107 + 8;
 
@@ -1294,6 +1296,34 @@ fn under_classic_pc_alt_tab_switches_and_releasing_alt_commits() {
     h.key(KEY_ALT, false);
     assert!(h.state.wm.switcher().is_none());
     assert_eq!(h.state.wm.key_window(), Some(one));
+}
+
+#[test]
+fn under_classic_pc_super_down_restores_a_filled_window_and_then_minimizes_it() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_apps, [three, _two, _one]) = h.three_apps();
+    h.state.apply_keyboard_change(
+        &cupertino_defaults::keyboard::KeyboardSettings::default(),
+        &cupertino_defaults::keyboard::KeyboardSettings {
+            modifier_profile: Some(cupertino_defaults::keyboard::ModifierProfile::ClassicPc),
+            ..Default::default()
+        },
+    );
+    let state = |h: &Harness| h.state.wm.window(three).map(|w| w.state());
+    h.key(KEY_SUPER, true);
+    h.tap(KEY_UP);
+    assert!(matches!(
+        state(&h),
+        Some(LifecycleState::Tiling(_) | LifecycleState::Tiled(_))
+    ));
+    h.advance(1.0);
+    h.tap(KEY_DOWN);
+    h.advance(1.0);
+    assert_eq!(state(&h), Some(LifecycleState::Normal));
+    h.tap(KEY_DOWN);
+    h.advance(1.0);
+    assert_eq!(state(&h), Some(LifecycleState::Minimized));
+    h.key(KEY_SUPER, false);
 }
 
 /// The shortcut match comes after sticky keys: a latched modifier counts as held for the system chords, under either

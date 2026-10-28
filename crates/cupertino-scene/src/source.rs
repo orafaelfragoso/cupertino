@@ -47,6 +47,8 @@ pub struct ImageMapping {
 }
 
 /// Translation and rescale are kept separate; the renderer retains its existing operation order.
+/// Positions that the renderer places on whole device pixels are given already on that grid, as
+/// device pixels divided by the output scale, so converting back reproduces them exactly.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Placement {
     pub origin: OutputPoint,
@@ -74,6 +76,8 @@ pub enum Clip {
         rect: OutputRect,
         radius: f64,
         style: CornerStyle,
+        /// The item is drawn unscaled, so the mask's interior can be reported as opaque.
+        exact: bool,
     },
 }
 
@@ -120,9 +124,14 @@ pub struct MaterialPass {
 /// Preserve live-surface import and scanout eligibility when choosing the renderer element.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SurfaceRole {
+    /// Rescaled about the placement pivot, masked when the item has a clip.
     WindowContent,
+    /// Rescaled about the placement pivot with its window, never masked.
     Popup,
+    /// Drawn at its placement as it is: layer-shell surfaces, drag icon, lock surface.
     Standalone,
+    /// A client's pointer image, enlarged by the placement scale and eligible for the cursor plane.
+    Cursor,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

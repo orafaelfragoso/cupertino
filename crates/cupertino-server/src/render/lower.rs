@@ -1,31 +1,60 @@
 //! Lowering of a composed [`SceneFrame`] to the elements of the GLES damage tracker: one element per item,
 //! front to back, with the cache slots and commit counters the renderer has always used.
 
-use cupertino_scene::{RoundedRect, SceneFrame, Shadow, Source};
+use cupertino_scene::{Clip, OutputPoint, RoundedRect, SceneItem, Shadow, Source, SurfaceRole};
+use smithay::backend::renderer::element::surface::{
+    render_elements_from_surface_tree, WaylandSurfaceRenderElement,
+};
+use smithay::backend::renderer::element::utils::RescaleRenderElement;
+use smithay::backend::renderer::element::{Element, Kind};
+use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::utils::{Logical, Physical, Point, Scale};
 
-use super::compose::logical_rect;
-use super::programs::{u4, Programs};
-use super::shader_rect::{ElementCache, ElementKey, ShaderRect, Sig};
+use super::clip::{ClipElement, ClipShape};
+use super::compose::{logical_rect, Composed};
+use super::programs::{corner_uniforms, u4, Programs};
+use super::shader_rect::{to_physical_rect, ElementCache, ElementKey, ShaderRect, Sig};
 use super::ui::{rounded_rect, RoundedRectSpec};
 use super::CupertinoElement;
 
-/// What lowering draws with: shader programs, the element cache of the output and its scale.
+/// What lowering draws with: the renderer, shader programs, the element cache of the output and its scale.
 pub struct Lowering<'a> {
+    pub renderer: &'a mut GlesRenderer,
     pub programs: &'a Programs,
     pub cache: &'a mut ElementCache,
     pub scale: f64,
 }
 
-/// The elements of `frame` front to back; `locals` holds what its [`Source::LocalPass`] items refer to.
-pub fn lower(
-    frame: &SceneFrame,
-    mut locals: Vec<Option<CupertinoElement>>,
-    ctx: &mut Lowering<'_>,
-) -> Vec<CupertinoElement> {
+/// The elements of a composed frame front to back.
+pub fn lower(composed: Composed, ctx: &mut Lowering<'_>) -> Vec<CupertinoElement> {
+    let Composed {
+        frame,
+        surfaces,
+        mut locals,
+    } = composed;
+    let viewport = (
+        frame.output.physical_size.width,
+        frame.output.physical_size.height,
+    );
     let mut elements = Vec::with_capacity(frame.items().len());
     for (_, item) in frame.items() {
         let key = ElementKey::new(item.id.kind.key(), item.id.index);
         match &item.source {
+            Source::SurfaceTree { id, role } => {
+                let surface = surfaces
+                    .get(id.0.slot as usize)
+                    .filter(|_| id.0.generation == frame.id.0);
+                match surface {
+                    Some(surface) => {
+                        surface_tree(ctx, surface, *role, item, viewport, &mut elements)
+                    }
+                    None => {
+                        debug_assert!(false, "surface handle {id:?} does not belong to the frame");
+                        tracing::error!(?id, "scene surface handle unknown, item skipped");
+                    }
+                }
+            }
             Source::LocalPass { index } => match locals.get_mut(*index).and_then(Option::take) {
                 Some(element) => elements.push(element),
                 None => {
@@ -37,7 +66,17 @@ pub fn lower(
                 elements.push(rounded(ctx, key, rect, item.opacity as f32).into());
             }
             Source::Shadow(shadow) => {
-                elements.push(shadow_rect(ctx, key, shadow, item.opacity).into());
+                elements.push(
+                    shadow_rect(
+                        ctx.programs,
+                        ctx.cache,
+                        ctx.scale,
+                        key,
+                        shadow,
+                        item.opacity,
+                    )
+                    .into(),
+                );
             }
             Source::Wallpaper { rect, colours } => {
                 elements.push(wallpaper(ctx, key, logical_rect(*rect), colours).into());
@@ -64,7 +103,9 @@ fn rounded(ctx: &mut Lowering<'_>, key: ElementKey, rect: &RoundedRect, alpha: f
 }
 
 pub fn shadow_rect(
-    ctx: &mut Lowering<'_>,
+    programs: &Programs,
+    cache: &mut ElementCache,
+    scale: f64,
     key: ElementKey,
     shadow: &Shadow,
     alpha: f64,
@@ -93,7 +134,7 @@ pub fn shadow_rect(
             [
                 shadow.cutout as u8 as f32,
                 shadow.style.exponent() as f32,
-                ctx.scale as f32,
+                scale as f32,
                 extent as f32,
             ],
         ),
@@ -105,12 +146,12 @@ pub fn shadow_rect(
         .f(shadow.density)
         .f(shadow.offset_y)
         .f(alpha)
-        .f(ctx.scale)
+        .f(scale)
         .u(shadow.cutout as u64)
         .finish();
-    let (id, commit) = ctx.cache.slot(key, sig);
+    let (id, commit) = cache.slot(key, sig);
     ShaderRect::new(
-        ctx.programs.shadow.clone(),
+        programs.shadow.clone(),
         id,
         commit,
         area,
@@ -145,4 +186,111 @@ fn wallpaper(
         ],
         true,
     )
+}
+
+fn physical(point: OutputPoint, scale: f64) -> Point<i32, Physical> {
+    Point::<f64, Logical>::from((point.0.x, point.0.y)).to_physical_precise_round(scale)
+}
+
+fn surface_elements(
+    ctx: &mut Lowering<'_>,
+    surface: &WlSurface,
+    origin: Point<i32, Physical>,
+    scale: Scale<f64>,
+    alpha: f32,
+    kind: Kind,
+) -> Vec<WaylandSurfaceRenderElement<GlesRenderer>> {
+    render_elements_from_surface_tree(ctx.renderer, surface, origin, scale, alpha, kind)
+}
+
+fn surface_tree(
+    ctx: &mut Lowering<'_>,
+    surface: &WlSurface,
+    role: SurfaceRole,
+    item: &SceneItem,
+    viewport: (i32, i32),
+    out: &mut Vec<CupertinoElement>,
+) {
+    let place = item.placement;
+    let origin = physical(place.origin, ctx.scale);
+    let alpha = item.opacity as f32;
+    let scale = Scale::from(ctx.scale);
+    match role {
+        SurfaceRole::Standalone => {
+            let els = surface_elements(ctx, surface, origin, scale, alpha, Kind::Unspecified);
+            out.extend(els.into_iter().map(CupertinoElement::from));
+        }
+        SurfaceRole::Cursor => {
+            let els = surface_elements(
+                ctx,
+                surface,
+                origin,
+                scale * place.scale_x,
+                alpha,
+                Kind::Cursor,
+            );
+            out.extend(els.into_iter().map(CupertinoElement::from));
+        }
+        SurfaceRole::WindowContent | SurfaceRole::Popup => {
+            let els = surface_elements(ctx, surface, origin, scale, alpha, Kind::Unspecified);
+            let pivot = physical(place.pivot, ctx.scale);
+            let rescale = Scale::from((place.scale_x, place.scale_y));
+            let shape = match (role, item.clip) {
+                (
+                    SurfaceRole::WindowContent,
+                    Clip::Rounded {
+                        rect,
+                        radius,
+                        style,
+                        exact,
+                    },
+                ) => {
+                    let (extent, exponent) =
+                        corner_uniforms(radius, !style.is_circular(), ctx.scale);
+                    Some(ClipShape {
+                        rect: to_physical_rect(logical_rect(rect), scale),
+                        extent,
+                        exponent,
+                        viewport,
+                        exact,
+                    })
+                }
+                _ => None,
+            };
+            for e in els {
+                match shape {
+                    Some(shape) => {
+                        let clip = clipped(ctx, e, shape);
+                        out.push(RescaleRenderElement::from_element(clip, pivot, rescale).into());
+                    }
+                    None => out.push(RescaleRenderElement::from_element(e, pivot, rescale).into()),
+                }
+            }
+        }
+    }
+}
+
+/// `e` masked by `shape`. The shape's generation comes from the element cache, so a change of the
+/// mask alone (an animated corner radius) damages the element.
+pub fn clipped<E: Element>(ctx: &mut Lowering<'_>, e: E, shape: ClipShape) -> ClipElement<E> {
+    let r = shape.rect;
+    let sig = Sig::new()
+        .f(f64::from(shape.extent))
+        .f(f64::from(shape.exponent))
+        .f(f64::from(r.loc.x))
+        .f(f64::from(r.loc.y))
+        .f(f64::from(r.size.w))
+        .f(f64::from(r.size.h))
+        .finish();
+    let (_, generation) = ctx
+        .cache
+        .slot(ElementKey::new("clip", id_hash(e.id())), sig);
+    ClipElement::new(e, ctx.programs.clip.clone(), shape, generation)
+}
+
+pub(super) fn id_hash(id: &smithay::backend::renderer::element::Id) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut h);
+    h.finish()
 }

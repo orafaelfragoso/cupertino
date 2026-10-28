@@ -22,7 +22,7 @@ use tiny_skia::{
 };
 
 use crate::controls::{self, metrics as cm, Control};
-use crate::form::{metrics as fm, SectionLayout};
+use crate::form::{metrics as fm, RowLayout, SectionLayout};
 use crate::geom::Rect;
 use crate::history::History;
 use crate::pane::{self, Enclosure, PaneId};
@@ -375,6 +375,22 @@ fn search_style(pal: &Palette) -> FieldStyle {
 
 /// Points around the search field that its focus ring and caret reach.
 const SEARCH_REACH: f64 = 6.0;
+
+/// Where scrolling the pane changes the window: the content, and the title region it scrolls under.
+pub fn scroll_areas(layout: &WindowLayout) -> [Rect; 2] {
+    [layout.content, layout.toolbar]
+}
+
+/// Where dragging the slider of `row` changes the window: the row, `scroll` points up, with the knob's reach.
+pub fn row_area(row: &RowLayout, scroll: f64) -> Rect {
+    let r = row.row.offset(0.0, -scroll);
+    Rect::new(
+        r.x - SEARCH_REACH,
+        r.y - SEARCH_REACH,
+        r.w + 2.0 * SEARCH_REACH,
+        r.h + 2.0 * SEARCH_REACH,
+    )
+}
 
 /// Where a blink of the search field's caret changes the window.
 pub fn caret_area(layout: &WindowLayout) -> Rect {
@@ -1956,6 +1972,184 @@ mod tests {
             };
             assert_eq!(pixels, want_pixels, "pixels converted at {scale}x");
             assert_eq!(pixels * 4, want_bytes, "bytes converted at {scale}x");
+        }
+    }
+
+    /// The window of the Desktop & Dock pane at `scale`, which has sliders in its first section; `with` paints it with
+    /// the pane scrolled `scroll` points and the slider of the first row dragged to `dragging`.
+    fn dock_pane_window(
+        scale: f32,
+        painter: &mut Painter,
+        pal: &Palette,
+        scroll: f64,
+        dragging: Option<f64>,
+    ) -> (Pixmap, WindowLayout, Vec<crate::form::SectionLayout>) {
+        use crate::form::{RowSpec, SectionSpec};
+        use crate::panes::Session;
+        use cupertino_defaults::accessibility::{AccessibilitySettings, DisplayOptions};
+        use cupertino_defaults::compositor::CompositorSettings;
+        use cupertino_defaults::dock::DockSettings;
+        use cupertino_defaults::keyboard::KeyboardSettings;
+        use cupertino_defaults::menubar::{ClockSettings, MenuBarSettings};
+        let settings = crate::settings::Settings {
+            dock: DockSettings::default(),
+            compositor: CompositorSettings::default(),
+            menubar: MenuBarSettings {
+                clock: ClockSettings::UNSET,
+            },
+            keyboard: KeyboardSettings::default(),
+            power: cupertino_defaults::power::PowerSettings::default(),
+            accessibility: AccessibilitySettings::default(),
+            display_height: 1080.0,
+        };
+        let session = Session {
+            dark: false,
+            display: DisplayOptions {
+                reduce_motion: false,
+                reduce_transparency: false,
+                increase_contrast: false,
+                differentiate_without_color: false,
+            },
+        };
+        let sections = crate::panes::sections(
+            PaneId::DesktopDock,
+            &settings,
+            session,
+            &crate::live::Live::default(),
+        );
+        let size = crate::window::default_size(f64::from(scale));
+        let layout = WindowLayout::new(
+            size,
+            f64::from(scale),
+            RowSize::default(),
+            &crate::sidebar::groups(),
+            false,
+        );
+        let specs: Vec<SectionSpec<'_>> = sections
+            .iter()
+            .map(|sec| SectionSpec {
+                header: sec.header.is_some(),
+                rows: sec
+                    .rows
+                    .iter()
+                    .map(|r| RowSpec {
+                        control: &r.control,
+                        error: r.error.is_some() || r.disabled.is_some(),
+                    })
+                    .collect(),
+                footer: sec.footer.is_some(),
+            })
+            .collect();
+        let (form, _) =
+            crate::form::layout(&specs, layout.content.x, layout.content.w, layout.content.y);
+        let history = History::new(PaneId::DesktopDock);
+        let search = SearchField::default();
+        let state = WindowState {
+            selected: PaneId::DesktopDock,
+            has_battery: None,
+            active: true,
+            history: &history,
+            search: &search,
+            search_focused: false,
+            search_caret: false,
+        };
+        let view = PaneView {
+            sections: &sections,
+            layout: &form,
+            scroll,
+            dragging: dragging.map(|v| (0, 0, v)),
+        };
+        let mut pm = Pixmap::new(
+            (size.w * f64::from(scale)) as u32,
+            (size.h * f64::from(scale)) as u32,
+        )
+        .unwrap();
+        painter.paint_window(&mut pm, scale, &layout, &state, &view, pal);
+        (pm, layout, form)
+    }
+
+    /// The pixels in which `a` and `b` differ outside `areas` (points), rounded out to whole device pixels as the
+    /// presenter does, and the pixels and bytes those areas come to.
+    fn outside_and_cost(
+        a: &Pixmap,
+        b: &Pixmap,
+        areas: &[Rect],
+        scale: f32,
+    ) -> (Vec<(u32, u32)>, u64, u64) {
+        let f = f64::from(scale);
+        let rects: Vec<(u32, u32, u32, u32)> = areas
+            .iter()
+            .map(|r| {
+                (
+                    (r.x * f).floor() as u32,
+                    (r.y * f).floor() as u32,
+                    ((r.x + r.w) * f).ceil() as u32,
+                    ((r.y + r.h) * f).ceil() as u32,
+                )
+            })
+            .collect();
+        let width = a.width();
+        let outside = a
+            .pixels()
+            .iter()
+            .zip(b.pixels())
+            .enumerate()
+            .filter(|(_, (p, q))| p != q)
+            .map(|(i, _)| (i as u32 % width, i as u32 / width))
+            .filter(|&(x, y)| {
+                !rects
+                    .iter()
+                    .any(|r| x >= r.0 && x < r.2 && y >= r.1 && y < r.3)
+            })
+            .take(8)
+            .collect();
+        let pixels = rects
+            .iter()
+            .map(|r| u64::from(r.2 - r.0) * u64::from(r.3 - r.1))
+            .sum();
+        (outside, pixels, pixels * 4)
+    }
+
+    #[test]
+    fn a_scroll_changes_pixels_only_inside_the_areas_it_reports() {
+        let theme = Theme::load().expect("the design tokens of the repository");
+        let mut painter = Painter::new(&Assets::builtin()).expect("the painter");
+        let pal = Palette::from_theme(&theme, Appearance::Light).unwrap();
+        for scale in [1.0_f32, 1.5] {
+            let (a, layout, _) = dock_pane_window(scale, &mut painter, &pal, 0.0, None);
+            let (b, _, _) = dock_pane_window(scale, &mut painter, &pal, 40.0, None);
+            assert_ne!(a.data(), b.data(), "the pane moves at {scale}x");
+            let (outside, pixels, bytes) = outside_and_cost(&a, &b, &scroll_areas(&layout), scale);
+            assert_eq!(outside, vec![], "scroll at {scale}x");
+            let (want_pixels, want_bytes) = if scale == 1.0 {
+                (311_875, 1_247_500)
+            } else {
+                (1_055_250, 4_221_000)
+            };
+            assert_eq!(pixels, want_pixels, "pixels converted at {scale}x");
+            assert_eq!(bytes, want_bytes, "bytes converted at {scale}x");
+        }
+    }
+
+    #[test]
+    fn dragging_a_slider_changes_pixels_only_inside_its_row() {
+        let theme = Theme::load().expect("the design tokens of the repository");
+        let mut painter = Painter::new(&Assets::builtin()).expect("the painter");
+        let pal = Palette::from_theme(&theme, Appearance::Light).unwrap();
+        for scale in [1.0_f32, 1.5] {
+            let (a, _, form) = dock_pane_window(scale, &mut painter, &pal, 0.0, Some(0.2));
+            let (b, _, _) = dock_pane_window(scale, &mut painter, &pal, 0.0, Some(0.8));
+            assert_ne!(a.data(), b.data(), "the knob moves at {scale}x");
+            let (outside, pixels, bytes) =
+                outside_and_cost(&a, &b, &[row_area(&form[0].rows[0], 0.0)], scale);
+            assert_eq!(outside, vec![], "slider drag at {scale}x");
+            let (want_pixels, want_bytes) = if scale == 1.0 {
+                (28_731, 114_924)
+            } else {
+                (84_548, 338_192)
+            };
+            assert_eq!(pixels, want_pixels, "pixels converted at {scale}x");
+            assert_eq!(bytes, want_bytes, "bytes converted at {scale}x");
         }
     }
 }

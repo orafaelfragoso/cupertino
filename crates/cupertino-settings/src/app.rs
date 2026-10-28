@@ -23,7 +23,8 @@ use cupertino_settings::live::{Live, Pictures, Reading};
 use cupertino_settings::menu;
 use cupertino_settings::menu_bar::{self, MenuAction, MenuState};
 use cupertino_settings::paint::{
-    caret_area, menu_rows, popup_hit, search_text_area, Painter, Palette, PaneView, WindowState,
+    caret_area, menu_rows, popup_hit, row_area, scroll_areas, search_text_area, Painter, Palette,
+    PaneView, WindowState,
 };
 use cupertino_settings::panes::{self, Call, ControlId, Effect, Section, Session};
 use cupertino_settings::search::{popup, SearchField};
@@ -1110,7 +1111,9 @@ impl App {
                     };
                     d.shown = controls::drag(stops, &frame, position.x);
                     self.drag = Some(d);
-                    self.window.redraw();
+                    let area = row_area(&self.form[d.section].rows[d.row], self.scroll);
+                    self.window
+                        .redraw_rect(PopupRect::new(area.x, area.y, area.w, area.h));
                 }
             }
             PointerEvent::Scroll { dy, position, .. }
@@ -1121,7 +1124,9 @@ impl App {
             {
                 self.scroll =
                     (self.scroll + dy).clamp(0.0, (self.form_height - layout.content.h).max(0.0));
-                self.window.redraw();
+                for a in scroll_areas(&layout) {
+                    self.window.redraw_rect(PopupRect::new(a.x, a.y, a.w, a.h));
+                }
             }
             PointerEvent::Button {
                 button: Button::Left,

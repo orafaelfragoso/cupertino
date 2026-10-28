@@ -87,8 +87,6 @@ wayland-protocols = { version = "0.32", features = ["client", "staging", "unstab
 wayland-protocols-plasma = { version = "0.3", features = ["client"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 cupertino-protocols = { path = "../cupertino-protocols", features = ["client"] }
-# the toolkit the shell processes are written in, for tests that act as one of them
-cupertino-client = { path = "../cupertino-client" }
 # the asset icons the switcher test compares the dock process's panel with
 cupertino-icons = { path = "../cupertino-icons" }
 rustix = { version = "1", features = ["shm", "mm"] }

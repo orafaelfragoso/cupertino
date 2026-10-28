@@ -115,7 +115,7 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-client/tests/protocol_flow.rs
+  test_owner: crates/cupertino-wayland-client/tests/protocol-flow.rs
   source: crates/cupertino-server/src/state.rs:481
 - name: wl_data_device_manager
   kind: wayland-global
@@ -231,7 +231,7 @@
   scope: public
   role: none
   advertised: always
-  test_owner: crates/cupertino-client/tests/protocol_flow.rs
+  test_owner: crates/cupertino-shell-client/tests/protocol-flow.rs
   source: crates/cupertino-server/src/state.rs:494
 - name: zwp_idle_inhibit_manager_v1
   kind: wayland-global

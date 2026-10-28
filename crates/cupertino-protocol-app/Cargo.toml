@@ -14,3 +14,9 @@ cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-wayland-client = { path = "../cupertino-wayland-client" }
 wayland-client = "0.31"
+
+# the integration test runs a minimal protocol server in-process
+[dev-dependencies]
+cupertino-app-protocols = { path = "../cupertino-app-protocols", features = ["client", "server"] }
+wayland-protocols = { version = "0.32", features = ["server", "unstable"] }
+wayland-server = "0.31"

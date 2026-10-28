@@ -330,6 +330,7 @@
   advertised: always
   test_owner: crates/cupertino-server/tests/menu_bar_v1.rs
   source: crates/cupertino-server/src/protocols.rs:62
+  note: a service name over 255 bytes or not a bus name, or an object path over 512 bytes or malformed, gives no menus; not a protocol error
 - name: gtk_shell1
   kind: wayland-global
   version: 7
@@ -340,6 +341,7 @@
   advertised: always
   test_owner: unknown
   source: crates/cupertino-server/src/protocols.rs:63
+  note: set_dbus_properties with a bus name over 255 bytes or not a bus name, an application id over 255 bytes, or an object path over 512 bytes or malformed gives no menus; not a protocol error
 - name: cupertino_scroll_v1
   kind: wayland-global
   version: 1

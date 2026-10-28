@@ -120,7 +120,7 @@ mod tests {
     use crate::route::hit_test;
     use crate::test_support::{group, leaf, Scroller};
     use crate::Element;
-    use cupertino_ui_layout::NodeLayout;
+    use cupertino_ui_layout::{LayoutStats, NodeLayout};
 
     #[test]
     fn placements_add_up_parent_origins_and_a_clip_limits_only_the_descendants() {
@@ -152,6 +152,7 @@ mod tests {
                 (content, at(0.0, -30.0, 100.0, 300.0, None)),
             ]
             .into(),
+            stats: LayoutStats::default(),
         };
 
         let g = placements(&tree, root, &layout, LayoutDirection::Ltr);
@@ -198,6 +199,7 @@ mod tests {
                 (last, at(last_x, 10.0, None)),
             ]
             .into(),
+            stats: LayoutStats::default(),
         };
         let geometry = placements(&tree, root, &layout, direction);
         (tree, root, geometry)

@@ -1108,8 +1108,14 @@ mod tests {
         let classic = ShortcutMap::classic_pc_defaults();
         let bound: Vec<&Action> = classic.bindings().map(|(_, a)| a).collect();
         for (c, a) in ShortcutMap::defaults().bindings() {
+            // classic-pc restores a tiled window before it minimizes
+            let stands_in = if *a == Action::MinimizeWindow {
+                &Action::MinimizeOrRestoreWindow
+            } else {
+                a
+            };
             assert!(
-                bound.contains(&a),
+                bound.contains(&stands_in),
                 "{a} (cupertino {c}) has no chord under classic-pc"
             );
         }

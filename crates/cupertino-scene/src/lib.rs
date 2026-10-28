@@ -46,6 +46,12 @@ pub enum SceneKind {
     InputHud,
     AccentPopup,
     InputHudTint,
+    InputHudMaterial,
+    AccentMaterial,
+    Backdrop,
+    BackdropCapture,
+    SheetDimming,
+    DisplayFilter,
     InputHudShadow,
     AccentShadow,
     /// Content the renderer still builds itself; removed with the effect migration.
@@ -78,6 +84,12 @@ impl SceneKind {
             Self::InputHud => "input-hud",
             Self::AccentPopup => "accent-popup",
             Self::InputHudTint => "input-hud-tint",
+            Self::InputHudMaterial => "input-hud-material",
+            Self::AccentMaterial => "accent-material",
+            Self::Backdrop => "backdrop",
+            Self::BackdropCapture => "backdrop-capture",
+            Self::SheetDimming => "sheet-dimming",
+            Self::DisplayFilter => "display-filter",
             Self::InputHudShadow => "input-hud-shadow",
             Self::AccentShadow => "accent-shadow",
             Self::LocalPass => "local-pass",
@@ -308,6 +320,7 @@ mod tests {
             radius: 0.0,
             style: cupertino_geometry::CornerStyle::Circular,
             stage,
+            tint: [0.0; 3],
         });
         i
     }

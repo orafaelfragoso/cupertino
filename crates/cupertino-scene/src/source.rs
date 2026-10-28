@@ -119,6 +119,8 @@ pub struct MaterialPass {
     pub radius: f64,
     pub style: CornerStyle,
     pub stage: MaterialStage,
+    /// Average colour of the wallpaper below, which tints the material.
+    pub tint: [f32; 3],
 }
 
 /// Preserve live-surface import and scanout eligibility when choosing the renderer element.

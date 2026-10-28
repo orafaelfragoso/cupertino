@@ -275,24 +275,13 @@ impl SavedState {
     }
 }
 
-/// When a material element captures its backdrop, relative to where it composites.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MaterialStage {
-    /// Capture everything drawn below the element and composite it in place.
-    Full,
-    /// Capture only, for the [`MaterialStage::Composite`] element of the same `owner`. It sits lower
-    /// in the scene than its composite, so the backdrop leaves out what is drawn in between.
-    Capture { owner: u64 },
-    /// Composite the backdrop that the [`MaterialStage::Capture`] element of the same `owner` stored.
-    Composite { owner: u64 },
-}
+pub use cupertino_scene::MaterialStage;
 
-impl MaterialStage {
-    fn owner(self) -> Option<u64> {
-        match self {
-            Self::Full => None,
-            Self::Capture { owner } | Self::Composite { owner } => Some(owner),
-        }
+/// The owner a capture and its composite share.
+fn stage_owner(stage: MaterialStage) -> Option<u64> {
+    match stage {
+        MaterialStage::Full => None,
+        MaterialStage::Capture { owner } | MaterialStage::Composite { owner } => Some(owner),
     }
 }
 
@@ -647,7 +636,7 @@ impl MaterialGl {
             p.output_px.0,
             p.output_px.1,
             p.scale.to_bits(),
-            p.stage.owner(),
+            stage_owner(p.stage),
         );
         let hit = self
             .cache

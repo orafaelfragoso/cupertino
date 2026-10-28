@@ -44,7 +44,11 @@ struct Press {
     count: u8,
 }
 
-/// The editable text of a field, with its selection and undo history.
+/// The editable text of a single-line field, with its selection and undo history.
+///
+/// Its `Debug` output shows the text, the undo snapshots and the kill buffer, so protected input never enters a
+/// `TextBuffer`: a password field uses [`SecureBuffer`](crate::SecureBuffer) only. It strips line breaks; a
+/// multi-line editor needs a different model or a flag.
 #[derive(Clone, Debug, Default)]
 pub struct TextBuffer {
     text: String,

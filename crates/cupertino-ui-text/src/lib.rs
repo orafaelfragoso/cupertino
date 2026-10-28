@@ -8,12 +8,16 @@ use std::ops::Range;
 use std::sync::Arc;
 
 mod buffer;
+mod font;
 mod input;
 mod secure;
+mod shape;
 
 pub use buffer::{TextBuffer, CARET_BLINK_OFF, CARET_BLINK_ON, MULTI_CLICK_INTERVAL};
+pub use font::{FontIndex, FontMetrics};
 pub use input::SURROUNDING_MAX_BYTES;
 pub use secure::SecureBuffer;
+pub use shape::{ShapeRequest, ShapedGlyph, ShapedRun};
 
 /// One face of a font file: its file and collection index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -313,6 +317,9 @@ pub trait GlyphRasterizer {
 pub enum TextError {
     NoFont,
     UnknownFont(FontId),
+    /// Font data that is not a font, or has no face at the requested index; names the family.
+    InvalidFont(Box<str>),
+    ShapeFailed,
     NotACharBoundary(usize),
     /// Text with control characters where a password field takes none.
     InvalidText,

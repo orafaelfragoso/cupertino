@@ -11,31 +11,75 @@ const TIMEOUT: Duration = Duration::from_secs(20);
 const SOCKET: &str = "wayland-compat-test";
 const FRAMES: u32 = 30;
 
-struct Compositor(Child);
+const TERM_GRACE: Duration = Duration::from_secs(5);
 
-impl Drop for Compositor {
-    fn drop(&mut self) {
-        // The private bus and compositor share only this test's process group.
-        let result = Command::new("/usr/bin/kill")
-            .args(["-TERM", "--", &format!("-{}", self.0.id())])
-            .status();
-        match result {
-            Ok(status) if status.success() => {}
-            other => eprintln!("terminating test compositor group: {other:?}"),
-        }
-        self.0.wait().expect("reap test compositor wrapper");
-        // The bus wrapper can exit before its compositor finishes writing fixture data.
-        let deadline = Instant::now() + TIMEOUT;
-        while Command::new("/usr/bin/kill")
-            .args(["-0", "--", &format!("-{}", self.0.id())])
+// Starts the compositor with only stdio open: a descriptor inherited from the test runner, such as a gate lock,
+// would otherwise stay held for as long as the compositor lives.
+const CLOSE_FDS_THEN_EXEC: &str = r#"for fd in /proc/self/fd/*; do n=${fd##*/}; [ "$n" -gt 2 ] 2>/dev/null && eval "exec $n>&-"; done; exec "$@""#;
+
+// Removes the runtime directory and kills the group when the test process is gone, which no Drop can do after a
+// SIGKILL from the runner's timeout. The directory goes first: the kill ends this shell too.
+const CLEAN_UP_WHEN_ORPHANED: &str =
+    r#"while kill -0 "$1" 2>/dev/null; do sleep 1; done; rm -rf -- "$3"; kill -KILL -- "-$2""#;
+
+struct Compositor {
+    wrapper: Child,
+    watchdog: Option<Child>,
+}
+
+impl Compositor {
+    fn group_alive(&self) -> bool {
+        Command::new("/usr/bin/kill")
+            .args(["-0", "--", &format!("-{}", self.wrapper.id())])
             .stderr(Stdio::null())
             .status()
             .expect("inspect compositor group")
             .success()
-        {
-            assert!(Instant::now() < deadline, "compositor group did not exit");
+    }
+
+    fn signal_group(&self, signal: &str) {
+        let result = Command::new("/usr/bin/kill")
+            .args([signal, "--", &format!("-{}", self.wrapper.id())])
+            .status();
+        match result {
+            Ok(status) if status.success() => {}
+            other => eprintln!("signalling test compositor group with {signal}: {other:?}"),
+        }
+    }
+
+    // A member that exited is a zombie until reaped and still counts as alive, so the two children we own are
+    // reaped on the way.
+    fn wait_for_group(&mut self, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        loop {
+            if let Some(watchdog) = &mut self.watchdog {
+                let _ = watchdog.try_wait();
+            }
+            let _ = self.wrapper.try_wait();
+            if !self.group_alive() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+}
+
+impl Drop for Compositor {
+    fn drop(&mut self) {
+        // The private bus and compositor share only this test's process group.
+        self.signal_group("-TERM");
+        // The bus wrapper can exit before its compositor finishes writing fixture data.
+        if !self.wait_for_group(TERM_GRACE) {
+            eprintln!("test compositor group ignored SIGTERM");
+            self.signal_group("-KILL");
+        }
+        assert!(
+            self.wait_for_group(TIMEOUT),
+            "compositor group did not exit"
+        );
     }
 }
 
@@ -84,8 +128,12 @@ fn simple_window_binary() -> PathBuf {
 
 fn start(runtime: &Path) -> Compositor {
     let log = std::fs::File::create(runtime.join("compositor.log")).unwrap();
-    let process = Command::new("dbus-run-session")
+    let wrapper = Command::new("bash")
         .args([
+            "-c",
+            CLOSE_FDS_THEN_EXEC,
+            "compositor",
+            "dbus-run-session",
             "--",
             "mutter",
             "--headless",
@@ -111,10 +159,33 @@ fn start(runtime: &Path) -> Compositor {
         .process_group(0)
         .spawn()
         .expect("start private bus and compositor");
-    let mut running = Compositor(process);
+    let group = wrapper.id().to_string();
+    let mut running = Compositor {
+        wrapper,
+        watchdog: None,
+    };
+    let watchdog = Command::new("bash")
+        .args([
+            "-c",
+            CLOSE_FDS_THEN_EXEC,
+            "watchdog",
+            "bash",
+            "-c",
+            CLEAN_UP_WHEN_ORPHANED,
+            "watchdog",
+            &std::process::id().to_string(),
+            &group,
+            &runtime.to_string_lossy(),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(running.wrapper.id() as i32)
+        .spawn();
+    running.watchdog = Some(watchdog.expect("start compositor watchdog"));
     let deadline = Instant::now() + TIMEOUT;
     while !runtime.join(SOCKET).exists() {
-        let status = running.0.try_wait().unwrap();
+        let status = running.wrapper.try_wait().unwrap();
         assert!(
             status.is_none() && Instant::now() < deadline,
             "compositor did not listen: {status:?}\n{}",

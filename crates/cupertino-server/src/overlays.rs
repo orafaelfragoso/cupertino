@@ -95,6 +95,8 @@ pub struct Overlays {
 pub struct ShortcutNotice {
     pub text: String,
     pub output: cupertino_wm::OutputId,
+    /// The surface whose inhibitor the notice is for.
+    pub owner: smithay::reexports::wayland_server::backend::ObjectId,
     pub until: f64,
 }
 

@@ -335,3 +335,67 @@ fn a_layer_surface_never_holds_the_shortcuts() {
     assert_eq!(layer.inhibitor_events(), Vec::<bool>::new());
     assert!(h.state.overlays.shortcut_notice.is_none());
 }
+
+#[test]
+fn the_notice_of_the_window_that_has_the_focus_survives_the_deactivation_of_another() {
+    let Some(mut h) = Harness::new() else { return };
+    let a = Client::inhibiting(h.socket_path(), "org.example.first");
+    h.wait_until("the first inhibitor to be active", |_| {
+        a.inhibitor_events().last() == Some(&true)
+    });
+    let b = Client::inhibiting(h.socket_path(), "org.example.second");
+    h.wait_until("both windows", |s| s.wm.windows().count() == 2);
+    h.advance(1.0);
+    let (first, second) = (
+        h.window_of("org.example.first"),
+        h.window_of("org.example.second"),
+    );
+
+    // the inhibitors were created in the order first, second; focus the second, then the first: the second's
+    // deactivation comes after the first's activation in the same pass
+    h.state.focus_window_by_input(second);
+    h.advance(0.1);
+    h.wait_until("the second is active", |_| {
+        b.inhibitor_events().last() == Some(&true)
+    });
+    h.state.focus_window_by_input(first);
+    h.wait_until("the first is active again", |_| {
+        a.inhibitor_events().last() == Some(&true)
+    });
+    let notice = h
+        .state
+        .overlays
+        .shortcut_notice
+        .clone()
+        .expect("the notice of the first");
+    assert!(notice.text.contains("org.example.first"), "{}", notice.text);
+}
+
+#[test]
+fn the_notice_ends_at_its_time_and_not_before() {
+    let Some(mut h) = Harness::new() else { return };
+    let vm = Client::inhibiting(h.socket_path(), "org.example.vm");
+    h.wait_until("the inhibitor to be active", |_| {
+        vm.inhibitor_events() == [true]
+    });
+    let until = h
+        .state
+        .overlays
+        .shortcut_notice
+        .clone()
+        .expect("the notice")
+        .until;
+    let focus = h.state.seat.get_keyboard().and_then(|k| k.current_focus());
+    h.state.fixed_time = Some(until - 0.001);
+    h.state.refresh_shortcut_inhibitors(focus.as_ref());
+    assert!(
+        h.state.overlays.shortcut_notice.is_some(),
+        "still shown just before"
+    );
+    h.state.fixed_time = Some(until);
+    h.state.refresh_shortcut_inhibitors(focus.as_ref());
+    assert!(
+        h.state.overlays.shortcut_notice.is_none(),
+        "gone at its time"
+    );
+}

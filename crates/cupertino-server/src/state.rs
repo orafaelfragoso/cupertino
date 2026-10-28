@@ -128,7 +128,7 @@ impl ClientState {
         }
         match self.holder.get()? {
             Holder::Process(process) => process.try_clone().ok(),
-            Holder::Detached => cupertino_peer::ProcessHandle::open(std::process::id()).ok(),
+            Holder::Detached(_) => cupertino_peer::ProcessHandle::open(std::process::id()).ok(),
         }
     }
 }

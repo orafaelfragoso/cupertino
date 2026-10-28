@@ -10,7 +10,7 @@ use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New,
 };
 
-use crate::authorization::{capabilities, ShellRole};
+use crate::authorization::{capabilities, permit, role};
 use crate::state::Cupertino;
 
 /// Registers the `cupertino_shell_v1` global.
@@ -54,7 +54,6 @@ impl Dispatch<CupertinoShellV1, ()> for Cupertino {
         init: &mut DataInit<'_, Self>,
     ) {
         state.release_revoked_roles();
-        let caps = capabilities(client);
         match request {
             cupertino_shell_v1::Request::GetMenuBar {
                 id,
@@ -62,7 +61,7 @@ impl Dispatch<CupertinoShellV1, ()> for Cupertino {
                 output,
             } => state.create_menu_bar(
                 shell,
-                caps.contains(ShellRole::MenuBar),
+                permit::<role::MenuBar>(client),
                 id,
                 surface,
                 &output,
@@ -74,19 +73,19 @@ impl Dispatch<CupertinoShellV1, ()> for Cupertino {
                 output,
             } => state.create_dock(
                 shell,
-                caps.contains(ShellRole::Dock),
+                permit::<role::Dock>(client),
                 id,
                 surface,
                 &output,
                 init,
             ),
             cupertino_shell_v1::Request::GetSession { id } => {
-                state.create_session_observer(shell, caps.contains(ShellRole::Session), id, init)
+                state.create_session_observer(shell, permit::<role::Session>(client), id, init)
             }
             cupertino_shell_v1::Request::GetWindowManager { id, output } => state
                 .create_window_manager(
                     shell,
-                    caps.contains(ShellRole::WindowManager),
+                    permit::<role::WindowManager>(client),
                     id,
                     &output,
                     init,

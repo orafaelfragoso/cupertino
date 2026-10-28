@@ -25,6 +25,7 @@ use smithay::utils::{Logical, Physical, Point, Scale};
 use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::shell::wlr_layer::Layer;
 
+use super::compose::SnapshotKeep;
 use super::compose::{
     corner_style, image_piece, item, output_rect, Composed, Composition, Material, MeshPiece,
     Picture, Piece, Tree,
@@ -962,6 +963,7 @@ fn minimize_elements(
         return None;
     }
     let (texture, _) = capture_window(renderer, p, entry, natural, active, 0.0, false)?;
+    let owner = p.res.snapshots.insert(texture);
     let effect = MinimizeEffect::new(
         kind,
         natural.into_geom(),
@@ -985,8 +987,8 @@ fn minimize_elements(
     Some(vec![Piece::Mesh(Box::new(MeshPiece {
         kind: SceneKind::MinimizeMesh,
         index: entry.id.0,
-        texture,
-        lease: None,
+        snapshot: owner.id(),
+        keep: SnapshotKeep::Owned(owner),
         mesh: local_mesh,
         opacity: pres.opacity as f32,
         revision: Sig::new().f(pres.minimize_progress).u(kind as u64).finish(),
@@ -1011,8 +1013,8 @@ fn closing_elements(p: &mut SceneParams<'_>) -> Vec<Piece> {
             continue;
         }
         let r = Rect::new(rect.x - p.rect.x, rect.y - p.rect.y, rect.w, rect.h);
-        let (texture, lease) = match p.res.snapshots.lease(c.snapshot.id()) {
-            Ok(leased) => leased,
+        let lease = match p.res.snapshots.pin(c.snapshot.id()) {
+            Ok(lease) => lease,
             Err(error) => {
                 tracing::error!(%error, window = c.id.0, "closing ghost without its snapshot");
                 continue;
@@ -1021,8 +1023,8 @@ fn closing_elements(p: &mut SceneParams<'_>) -> Vec<Piece> {
         out.push(Piece::Mesh(Box::new(MeshPiece {
             kind: SceneKind::ClosingGhost,
             index: c.id.0,
-            texture,
-            lease: Some(lease),
+            snapshot: lease.id(),
+            keep: SnapshotKeep::Pinned(lease),
             mesh: Mesh::quad(r.into_geom()),
             opacity: alpha,
             revision: Sig::new().f(c.progress(p.now)).finish(),

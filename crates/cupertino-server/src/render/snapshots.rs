@@ -126,6 +126,11 @@ impl<T: Clone> Snapshots<T> {
         ))
     }
 
+    /// Pin the snapshot `id` without taking its texture: a lease that keeps it until the lease ends.
+    pub fn pin(&self, id: SnapshotId) -> Result<SnapshotLease<T>, SnapshotError> {
+        self.lease(id).map(|(_, lease)| lease)
+    }
+
     /// How many snapshots are stored (not yet retired).
     pub fn live(&self) -> usize {
         self.0
@@ -134,6 +139,12 @@ impl<T: Clone> Snapshots<T> {
             .iter()
             .filter(|s| s.texture.is_some())
             .count()
+    }
+}
+
+impl<T> SnapshotLease<T> {
+    pub fn id(&self) -> SnapshotId {
+        self.id
     }
 }
 

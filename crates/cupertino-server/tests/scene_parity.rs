@@ -23,7 +23,9 @@ fn compare(d: &mut Desktop, what: &str) -> usize {
 
 fn compare_on(d: &mut Desktop, what: &str, output: usize) -> usize {
     let mut backend = d.state.backend.take().unwrap();
-    let Backend::Headless(ref mut h) = backend else {
+    #[allow(irrefutable_let_patterns)]
+    let Backend::Headless(ref mut h) = backend
+    else {
         panic!("headless backend required")
     };
     let migrated = d.state.build_output_elements(&mut h.renderer, output);
@@ -420,7 +422,9 @@ fn a_window_capture_is_pixel_for_pixel_what_the_old_builder_captured() {
         let id = d.state.wm.key_window().expect("a window");
         let frame = d.state.wm.window(id).unwrap().geometry();
         let mut backend = d.state.backend.take().unwrap();
-        let Backend::Headless(ref mut h) = backend else {
+        #[allow(irrefutable_let_patterns)]
+        let Backend::Headless(ref mut h) = backend
+        else {
             panic!("headless backend required")
         };
         let mut shoot = |old: bool| {

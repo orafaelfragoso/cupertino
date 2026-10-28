@@ -261,15 +261,14 @@ impl Cupertino {
         idx: usize,
     ) -> Option<Composed> {
         self.note_scene_built(idx);
+        let composed = self.compose_output(renderer, idx, true)?;
         #[cfg(scene_oracle)]
-        {
-            let elements = self.scene_elements(renderer, idx, true)?;
-            let mut composed = self.compose_output(renderer, idx, true)?;
-            composed.resources.prelowered = Some(elements);
-            return Some(composed);
-        }
-        #[cfg(not(scene_oracle))]
-        self.compose_output(renderer, idx, true)
+        let composed = {
+            let mut composed = composed;
+            composed.resources.prelowered = Some(self.scene_elements(renderer, idx, true)?);
+            composed
+        };
+        Some(composed)
     }
 
     /// Draw output `idx` to a fresh image, the pointer left out with `paint_cursor` false. The built-frame mark of the
@@ -286,13 +285,15 @@ impl Cupertino {
         if note_built {
             self.note_scene_built(idx);
         }
-        let mut composed = self
+        let composed = self
             .compose_output(renderer, idx, paint_cursor)
             .context("the render resources are not loaded")?;
         #[cfg(scene_oracle)]
-        {
+        let composed = {
+            let mut composed = composed;
             composed.resources.prelowered = self.scene_elements(renderer, idx, paint_cursor);
-        }
+            composed
+        };
         let (res, cache, _) = self.gles_parts(idx).context("the output is gone")?;
         let mut resources = GlesResources::new(res, cache, composed.resources);
         match Gles.render(

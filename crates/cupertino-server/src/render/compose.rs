@@ -14,7 +14,6 @@ use cupertino_scene::{
     SceneItem, SceneKind, SceneLayer, SnapshotId, Source, SurfaceId, SurfaceRole,
 };
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
-use smithay::backend::renderer::gles::GlesTexture;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Physical, Rectangle};
@@ -23,7 +22,7 @@ type DevicePoint = smithay::utils::Point<i32, Physical>;
 
 use super::material::GpuRecipe;
 use super::scene::SceneParams;
-use super::snapshots::SnapshotLease;
+use super::snapshots::{SnapshotLease, SnapshotOwner};
 
 /// Straight opaque black; the render target clears with its own colour.
 const UNSPECIFIED_CLEAR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
@@ -72,23 +71,30 @@ pub struct Material {
     pub opacity: f32,
 }
 
-/// A window snapshot drawn through a mesh in output-local points. A retained snapshot comes with the lease that
-/// keeps it until the frame's elements are gone.
+/// What keeps a stored snapshot alive for a frame: a lease on one that effect state owns, or the ownership of one the
+/// frame captured for itself.
+pub enum SnapshotKeep {
+    Pinned(SnapshotLease),
+    Owned(SnapshotOwner),
+}
+
+/// A window snapshot drawn through a mesh in output-local points. The pixels stay in the snapshot store; the piece
+/// names them by handle and holds what keeps them alive for the frame.
 pub struct MeshPiece {
     pub kind: SceneKind,
     pub index: u64,
-    pub texture: GlesTexture,
-    pub lease: Option<SnapshotLease>,
+    pub snapshot: SnapshotId,
+    pub keep: SnapshotKeep,
     pub mesh: Mesh,
     pub opacity: f32,
     /// What besides the mesh and the opacity changes the look: the animation state that made the mesh.
     pub revision: u64,
 }
 
-/// The pixels a frame's mesh items draw, and what keeps them alive.
+/// The snapshot a frame's mesh item draws: the handle in the snapshot store, and what keeps it there.
 pub struct FrameSnapshot {
-    pub texture: GlesTexture,
-    pub lease: Option<SnapshotLease>,
+    pub id: SnapshotId,
+    pub keep: SnapshotKeep,
 }
 
 /// One drawable of a layer: a typed scene item, a surface tree, a picture, or an element the renderer still
@@ -156,8 +162,8 @@ impl Composition {
                     generation: self.id.0,
                 });
                 self.resources.snapshots.push(Some(FrameSnapshot {
-                    texture: mesh.texture,
-                    lease: mesh.lease,
+                    id: mesh.snapshot,
+                    keep: mesh.keep,
                 }));
                 self.items.push(
                     layer,

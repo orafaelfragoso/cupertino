@@ -22,6 +22,7 @@ use super::programs::Programs;
 use super::scene::{finalize_materials, RenderResources};
 use super::screenshot::render_to_image;
 use super::shader_rect::ElementCache;
+use super::snapshots::Snapshots;
 use super::CupertinoElement;
 
 /// The GLES renderer. It holds nothing: the device is in the target, the programs and caches in the resources.
@@ -47,6 +48,7 @@ impl Gles {
             programs: resources.programs,
             material: resources.material.clone(),
             mesh: resources.mesh.clone(),
+            snapshots: resources.snapshots.clone(),
             cache: resources.cache,
             scale: scene.output.scale,
         };
@@ -64,6 +66,7 @@ pub struct GlesResources<'a> {
     programs: &'a Programs,
     material: Option<SharedMaterial>,
     mesh: Option<SharedMesh>,
+    snapshots: Snapshots,
     cache: &'a mut ElementCache,
     frame: Option<FrameResources>,
 }
@@ -78,6 +81,7 @@ impl<'a> GlesResources<'a> {
             programs: &res.programs,
             material: res.material.clone(),
             mesh: res.mesh.clone(),
+            snapshots: res.snapshots.clone(),
             cache,
             frame: Some(frame),
         }
@@ -265,5 +269,59 @@ impl Renderer for Gles {
                     .map_err(|e| RenderError::Target(format!("{e:#}")))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_completion_says_whether_there_is_anything_to_present() {
+        let drawn = |damage| GlesCompletion::Drawn { damage };
+        assert_eq!(drawn(None).status(), RenderStatus::Empty);
+        assert_eq!(
+            drawn(Some(vec![Rectangle::from_size((4, 4).into())])).status(),
+            RenderStatus::Rendered
+        );
+        assert_eq!(
+            GlesCompletion::Direct { empty: true }.status(),
+            RenderStatus::Empty
+        );
+        assert_eq!(
+            GlesCompletion::Direct { empty: false }.status(),
+            RenderStatus::Rendered
+        );
+        assert_eq!(
+            GlesCompletion::Image(RgbaImage::new(1, 1)).status(),
+            RenderStatus::Rendered
+        );
+    }
+
+    #[test]
+    fn only_a_tracker_that_drew_hands_out_damage_to_submit() {
+        let damage = vec![Rectangle::from_size((4, 4).into())];
+        assert_eq!(
+            GlesCompletion::Drawn {
+                damage: Some(damage.clone())
+            }
+            .damage(),
+            Some(damage.as_slice())
+        );
+        assert_eq!(GlesCompletion::Drawn { damage: None }.damage(), None);
+        assert_eq!(GlesCompletion::Direct { empty: false }.damage(), None);
+    }
+
+    #[test]
+    fn a_failed_render_says_why_and_is_not_an_empty_success() {
+        let failed: Result<GlesCompletion, RenderError> =
+            Err(RenderError::Target("no framebuffer".into()));
+        assert!(failed.is_err());
+        let text = failed.err().unwrap().to_string();
+        assert!(text.contains("no framebuffer"), "{text}");
+        assert_eq!(
+            RenderError::Resources("used twice").to_string(),
+            "used twice"
+        );
     }
 }

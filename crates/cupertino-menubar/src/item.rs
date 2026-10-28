@@ -134,7 +134,7 @@ impl Shortcut {
             "left" => "\u{2190}".to_string(),
             "right" => "\u{2192}".to_string(),
             _ if self.key.chars().count() == 1 => self.key.to_uppercase(),
-            _ => self.key.clone(),
+            name => key_char(name).map_or_else(|| self.key.clone(), String::from),
         };
         ShortcutGlyphs { modifiers, key }
     }
@@ -192,6 +192,33 @@ impl Shortcut {
         s.push_str(&self.key);
         s
     }
+}
+
+/// The character a keysym name types, for the punctuation names chords use.
+pub(crate) fn key_char(name: &str) -> Option<char> {
+    let mut chars = name.chars();
+    if let (Some(c), None) = (chars.next(), chars.next()) {
+        return Some(c);
+    }
+    Some(match name {
+        "comma" => ',',
+        "period" => '.',
+        "slash" => '/',
+        "backslash" => '\\',
+        "semicolon" => ';',
+        "colon" => ':',
+        "apostrophe" => '\'',
+        "quotedbl" => '"',
+        "grave" => '`',
+        "minus" => '-',
+        "equal" => '=',
+        "plus" => '+',
+        "bracketleft" => '[',
+        "bracketright" => ']',
+        "question" => '?',
+        "exclam" => '!',
+        _ => return None,
+    })
 }
 
 /// Whose item a [`MenuItem`] is. An activated item is routed by its origin, never by its id: an exporter chooses its

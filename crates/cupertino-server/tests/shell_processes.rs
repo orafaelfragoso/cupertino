@@ -18,6 +18,7 @@ use cupertino_server::cli::start_shell_supervision;
 use cupertino_server::config::{Config, ShellProcess};
 use cupertino_server::input::{ActionPlan, ShellOp};
 use cupertino_server::Cupertino;
+use cupertino_test_bus::PrivateBus;
 use cupertino_theme::Appearance;
 use cupertino_wm::Rect;
 use smithay::backend::input::{ButtonState, KeyState};
@@ -289,44 +290,6 @@ fn shell_bin_dir() -> &'static Path {
         }
         profile_dir
     })
-}
-
-/// A private session bus (`dbus-daemon --session`), killed on drop.
-struct PrivateBus {
-    address: String,
-    pid: String,
-}
-
-impl PrivateBus {
-    /// `None` when `dbus-daemon` is not installed.
-    fn start() -> Option<PrivateBus> {
-        let out = Command::new("dbus-daemon")
-            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        assert!(out.status.success(), "dbus-daemon failed: {}", out.status);
-        let text = String::from_utf8(out.stdout).unwrap();
-        let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-        Some(PrivateBus {
-            address: lines.next().unwrap().to_string(),
-            pid: lines.next().unwrap().to_string(),
-        })
-    }
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        assert!(
-            Command::new("kill")
-                .arg(&self.pid)
-                .status()
-                .unwrap()
-                .success(),
-            "killing the private bus"
-        );
-    }
 }
 
 /// A real shell process on the private bus: `env` puts the bus address in its environment, which

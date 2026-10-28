@@ -287,6 +287,7 @@ pub const TARGET: &[(&str, Layer)] = &[
     ("cupertino-menu-model", Foundation),
     ("cupertino-menubar", Shell),
     ("cupertino-modifiers", Foundation),
+    ("cupertino-test-bus", Foundation),
     ("cupertino-netd", Services),
     ("cupertino-netlink", Platform),
     ("cupertino-notifications", Shell),

@@ -40,6 +40,7 @@ tiny-skia = "0.11"
 zbus = { version = "5", default-features = false, features = ["async-io"], optional = true }
 
 [dev-dependencies]
+cupertino-test-bus = { path = "../cupertino-test-bus" }
 tempfile = "3"
 
 [[bin]]

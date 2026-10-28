@@ -7,7 +7,6 @@ mod common;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
@@ -17,53 +16,13 @@ use cupertino_powerd::auth::{Authorizer, Decision, LogindAuthorizer};
 use cupertino_powerd::daemon::{Bus, Config, Daemon};
 use cupertino_powerd::error::Result;
 use cupertino_powerd::sysfs::Lid;
+use cupertino_test_bus::PrivateBus;
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
 
 const UPOWER: &str = "org.freedesktop.UPower";
 const POWER: &str = "org.cupertino.Power1";
 const WAIT: Duration = Duration::from_secs(5);
-
-/// A private `dbus-daemon`, killed on drop.
-struct PrivateBus {
-    address: String,
-    pid: String,
-}
-
-impl PrivateBus {
-    fn start() -> Option<PrivateBus> {
-        let out = Command::new("dbus-daemon")
-            .args(["--session", "--print-address=1", "--print-pid=1", "--fork"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        let text = String::from_utf8(out.stdout)
-            .ok()
-            .filter(|_| out.status.success())?;
-        let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
-        Some(PrivateBus {
-            address: lines.next()?.to_owned(),
-            pid: lines.next()?.to_owned(),
-        })
-    }
-
-    fn connect(&self) -> Connection {
-        zbus::blocking::connection::Builder::address(self.address.as_str())
-            .unwrap()
-            .build()
-            .unwrap()
-    }
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        Command::new("kill")
-            .arg(&self.pid)
-            .status()
-            .expect("kill the private bus");
-    }
-}
 
 /// Answers with a fixed decision and records the pids it was asked about.
 struct Scripted {

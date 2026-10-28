@@ -3,7 +3,7 @@ use crate::widget::Change;
 use crate::{Environment, NodeId, Phase};
 use cupertino_geometry::Size;
 use cupertino_ui_platform::{CursorShape, Timestamp};
-use cupertino_ui_render::PaintOp;
+use cupertino_ui_render::{Effect, Group, PaintOp};
 use cupertino_ui_text::TextInputState;
 use std::collections::BTreeSet;
 
@@ -164,6 +164,7 @@ pub struct PaintCx<'a> {
     pub(crate) window_active: bool,
     pub(crate) now: Timestamp,
     pub(crate) ops: &'a mut Vec<PaintOp>,
+    pub(crate) group: &'a mut Option<Group>,
 }
 
 impl PaintCx<'_> {
@@ -198,6 +199,12 @@ impl PaintCx<'_> {
 
     pub fn push(&mut self, op: PaintOp) {
         self.ops.push(op);
+    }
+
+    /// Paints this node and its whole subtree as one layer, with `opacity` applied once and `effects` (a fade, or a
+    /// shadow or blur of the subtree) on the result.
+    pub fn set_group(&mut self, opacity: f32, effects: Vec<Effect>) {
+        *self.group = Some(Group { opacity, effects });
     }
 }
 

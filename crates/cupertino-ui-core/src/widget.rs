@@ -1,5 +1,6 @@
 use crate::cx::{EventCx, MeasureCx, PaintCx, SemanticsCx};
 use crate::{Event, Key};
+use cupertino_geometry::Point;
 use cupertino_ui_layout::{Constraints, LayoutSpec, Measured};
 use std::any::{type_name, Any, TypeId};
 use std::fmt;
@@ -42,6 +43,11 @@ pub trait Widget<M>: 'static {
         -> Propagation;
     fn paint(&self, state: &Self::State, cx: &mut PaintCx<'_>);
     fn semantics(&self, state: &Self::State, cx: &mut SemanticsCx<'_>);
+    /// How far a scroll container's content is scrolled, from the start edge: `x` grows toward the end of a line in
+    /// either direction. Other widgets keep the default.
+    fn scroll_offset(&self, _state: &Self::State) -> Point {
+        Point::new(0.0, 0.0)
+    }
 }
 
 /// An immutable description of one widget and its children.
@@ -92,6 +98,7 @@ pub(crate) trait AnyWidget<M> {
     fn event(&self, state: &mut dyn Any, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation;
     fn paint(&self, state: &dyn Any, cx: &mut PaintCx<'_>);
     fn semantics(&self, state: &dyn Any, cx: &mut SemanticsCx<'_>);
+    fn scroll_offset(&self, state: &dyn Any) -> Point;
 }
 
 const STATE: &str = "a node's state is the one its widget type created";
@@ -148,5 +155,9 @@ impl<M, W: Widget<M>> AnyWidget<M> for W {
 
     fn semantics(&self, state: &dyn Any, cx: &mut SemanticsCx<'_>) {
         Widget::semantics(self, state.downcast_ref().expect(STATE), cx)
+    }
+
+    fn scroll_offset(&self, state: &dyn Any) -> Point {
+        Widget::scroll_offset(self, state.downcast_ref().expect(STATE))
     }
 }

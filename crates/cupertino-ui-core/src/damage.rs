@@ -79,6 +79,7 @@ mod tests {
             revision: PaintRevision(revision),
             transform: Transform([1.0, 0.0, 0.0, 1.0, x, 0.0]),
             clip: None,
+            group: None,
             bounds: Rect::new(x, 0.0, 10.0, 10.0),
             hit: Rect::new(x, 0.0, 10.0, 10.0),
             ops: Vec::new(),

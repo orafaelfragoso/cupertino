@@ -46,6 +46,14 @@ impl Cupertino {
         self.popup_grab.as_mut()
     }
 
+    /// The surface whose popups hold the grab, while the grab is active.
+    pub(crate) fn popup_grab_root(&self) -> Option<&WlSurface> {
+        self.popup_grab
+            .as_ref()
+            .filter(|active| !active.grab.has_ended())
+            .map(|active| &active.root)
+    }
+
     /// While a popup grab is active, give the pointer focus to what is under it now. Focus otherwise only changes on
     /// motion, so a popup that maps or commits under a pointer that does not move would stay unfocused and take its
     /// first press as one on the window below.
@@ -104,9 +112,45 @@ impl Cupertino {
         );
     }
 
+    /// A client destroyed a popup. When that was the last one of the grab of a layer surface (a menu of the menu bar
+    /// was closed on a choice), the grab ends now and the keyboard goes back to the exclusive layer, else the key
+    /// window: a layer surface holds the keyboard only while it asks for it, and smithay would hand it to the grab's
+    /// root at the next key. A window's grab is left to smithay, which gives the keyboard back to the window.
+    pub fn popup_dismissed_by_client(&mut self) {
+        self.popups.cleanup();
+        let Some(root) = self
+            .popup_grab
+            .as_ref()
+            .filter(|active| active.grab.has_ended())
+            .map(|active| active.root.clone())
+        else {
+            return;
+        };
+        if self.entry_for_surface(&root).is_some() {
+            return;
+        }
+        let back = self.exclusive_layer.clone().or_else(|| {
+            self.wm
+                .key_window()
+                .and_then(|w| self.entry(w))
+                .map(|e| e.surface().clone())
+        });
+        self.release_popup_grab(
+            SERIAL_COUNTER.next_serial(),
+            std::time::Duration::from(self.clock.now()).as_millis() as u32,
+            back,
+        );
+    }
+
     /// End the popup grab, if any: the popups of its chain are dismissed, the keyboard goes back to the toplevel and the
     /// pointer grab is released.
     pub fn end_popup_grab(&mut self, serial: Serial, time: u32) {
+        let root = self.popup_grab.as_ref().map(|active| active.root.clone());
+        self.release_popup_grab(serial, time, root);
+    }
+
+    /// End the popup grab, if any, giving the keyboard to `focus`.
+    fn release_popup_grab(&mut self, serial: Serial, time: u32, focus: Option<WlSurface>) {
         let Some(mut active) = self.popup_grab.take() else {
             return;
         };
@@ -123,11 +167,7 @@ impl Cupertino {
                         ))
                 {
                     keyboard.unset_grab(self);
-                    keyboard.set_focus(
-                        self,
-                        Some(active.root.clone()),
-                        SERIAL_COUNTER.next_serial(),
-                    );
+                    keyboard.set_focus(self, focus, SERIAL_COUNTER.next_serial());
                 }
             }
         }

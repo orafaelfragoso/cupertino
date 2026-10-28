@@ -5,18 +5,23 @@
 //! announces the objects with [`DbusProperties`] (`cupertino_app_menu_v1.set_address`). Only what
 //! [`MenuBar::exported`] keeps is published; the menu bar adds the desktop's own items. Accelerators name the keys of
 //! the active modifier profile, so the menus are exported again when it changes ([`Exporter::set_modifier_map`]).
+//! The objects answer only the menu bar the compositor names (`cupertino_app_menu_v1.menu_reader`,
+//! [`Exporter::set_reader`]), and their signals go to it alone: any other peer is refused with `AccessDenied`, as is
+//! every peer while there is no reader.
 
 mod objects;
 mod wire;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use cupertino_menu_model::{ActionName, MenuBar, Scope};
 use cupertino_modifiers::ModifierMap;
-use objects::{action_changes, Actions, Menus, OnActivate};
+use objects::{action_changes, Actions, Menus, OnActivate, Reader};
 use wire::WireMenus;
 use zbus::blocking::{connection, Connection};
+use zbus::names::{OwnedUniqueName, UniqueName};
+use zbus::object_server::SignalEmitter;
 use zbus::zvariant::OwnedValue;
 
 /// A window of the application, numbered by the application.
@@ -48,6 +53,7 @@ pub struct Exporter {
     app_path: String,
     map: Box<dyn ModifierMap + Send + Sync>,
     on_activate: OnActivate,
+    reader: Reader,
     /// The exported menus of each window.
     windows: BTreeMap<WindowId, MenuBar>,
 }
@@ -89,11 +95,13 @@ impl Exporter {
         }
         let app_path = app_path(app_id);
         let on_activate: OnActivate = Arc::new(on_activate);
+        let reader: Reader = Arc::new(Mutex::new(None));
         let app_actions = Actions {
             scope: Scope::App,
             window: None,
             enabled: BTreeMap::new(),
             on_activate: on_activate.clone(),
+            reader: reader.clone(),
         };
         let conn = builder.serve_at(app_path.as_str(), app_actions)?.build()?;
         Ok(Exporter {
@@ -102,8 +110,29 @@ impl Exporter {
             app_path,
             map,
             on_activate,
+            reader,
             windows: BTreeMap::new(),
         })
+    }
+
+    /// The unique bus name of the menu bar the compositor verified, `None` while there is none. Only that connection
+    /// may read the menus and choose their items.
+    pub fn set_reader(&self, reader: Option<&str>) -> zbus::Result<()> {
+        let reader = reader
+            .map(|name| UniqueName::try_from(name).map(OwnedUniqueName::from))
+            .transpose()?;
+        *self.reader.lock().unwrap() = reader;
+        Ok(())
+    }
+
+    /// `emitter` addressed to the reader alone; `None` while there is no reader.
+    fn to_reader(&self, emitter: &SignalEmitter<'_>) -> Option<SignalEmitter<'static>> {
+        let reader = self.reader.lock().unwrap().clone()?;
+        Some(
+            emitter
+                .to_owned()
+                .set_destination(reader.into_inner().into()),
+        )
     }
 
     fn app_menu_path(&self) -> String {
@@ -179,10 +208,10 @@ impl Exporter {
                 }
             }
         };
-        if changed {
+        if let (true, Some(emitter)) = (changed, self.to_reader(iface.signal_emitter())) {
             let enabled_changed = [(action.name().to_string(), enabled)].into_iter().collect();
             zbus::block_on(Actions::changed(
-                iface.signal_emitter(),
+                &emitter,
                 Vec::new(),
                 enabled_changed,
                 Default::default(),
@@ -245,7 +274,8 @@ impl Exporter {
         let iface = match server.interface::<_, Menus>(path) {
             Ok(iface) => iface,
             Err(zbus::Error::InterfaceNotFound) => {
-                server.at(path, Menus { menus })?;
+                let reader = self.reader.clone();
+                server.at(path, Menus { menus, reader })?;
                 return Ok(());
             }
             Err(e) => return Err(e),
@@ -255,6 +285,9 @@ impl Exporter {
             let changes = wire::changes(&current.menus, &menus);
             current.menus = menus;
             changes
+        };
+        let Some(emitter) = self.to_reader(iface.signal_emitter()) else {
+            return Ok(());
         };
         if changes.is_empty() {
             return Ok(());
@@ -271,7 +304,7 @@ impl Exporter {
                 )
             })
             .collect();
-        zbus::block_on(Menus::changed(iface.signal_emitter(), changes))
+        zbus::block_on(Menus::changed(&emitter, changes))
     }
 
     /// Export exactly `names` in `scope` at `path`, keeping the enabled state of the actions already there.
@@ -291,6 +324,7 @@ impl Exporter {
                     window,
                     enabled: names.into_iter().map(|n| (n, true)).collect(),
                     on_activate: self.on_activate.clone(),
+                    reader: self.reader.clone(),
                 };
                 server.at(path, actions)?;
                 return Ok(());
@@ -313,8 +347,11 @@ impl Exporter {
         if removed.is_empty() && enabled_changed.is_empty() && added.is_empty() {
             return Ok(());
         }
+        let Some(emitter) = self.to_reader(iface.signal_emitter()) else {
+            return Ok(());
+        };
         zbus::block_on(Actions::changed(
-            iface.signal_emitter(),
+            &emitter,
             removed,
             enabled_changed,
             std::collections::HashMap::<String, OwnedValue>::new(),

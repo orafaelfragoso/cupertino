@@ -15,6 +15,7 @@ dbus = ["dep:cupertino-peer", "dep:zbus", "dep:futures-util"]
 app = [
     "dbus",
     "dep:async-channel",
+    "dep:async-io",
     "dep:cupertino-assets",
     "dep:cupertino-decorations",
     "dep:cupertino-geometry",
@@ -46,6 +47,7 @@ cupertino-theme = { path = "../cupertino-theme", optional = true }
 cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
 cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 async-channel = { version = "2", optional = true }
+async-io = { version = "2", optional = true }
 libc = { version = "0.2", optional = true }
 tiny-skia = { version = "0.11", optional = true }
 zbus = { version = "5", default-features = false, features = ["async-io"], optional = true }

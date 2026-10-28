@@ -599,7 +599,7 @@ fn wait_for<T>(
 
 fn app_event(event: &Event) -> Option<AppEvent> {
     match event {
-        Event::Extension(e) => e.downcast_ref::<AppEvent>().copied(),
+        Event::Extension(e) => e.downcast_ref::<AppEvent>().cloned(),
         _ => None,
     }
 }

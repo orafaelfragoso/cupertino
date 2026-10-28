@@ -51,6 +51,8 @@ pub const DEADLINE: Duration = Duration::from_secs(3);
 pub enum OwnerKey {
     /// The menus of one kind a surface announced (`crate::protocols`), by the surface and the kind.
     MenuAddress(ObjectId, MenuKind),
+    /// The owner of the menu bar's bus name, checked against the menu bar process (`crate::menu_bar`).
+    MenuReader,
 }
 
 /// A request: is `name` (unique or well-known) owned by `client`, or by a process of its sandbox instance?
@@ -251,7 +253,7 @@ impl Cupertino {
         let data = client.get_data::<ClientState>();
         let request = Request {
             name,
-            client: data.and_then(|data| data.peer.as_ref()?.try_clone().ok()),
+            client: data.and_then(ClientState::process),
             identifying: data.map(|data| data.owner_identifying.clone()),
         };
         let starts = self
@@ -351,6 +353,7 @@ impl Cupertino {
             OwnerKey::MenuAddress(surface, kind) => {
                 self.menu_owner_checked(surface, kind, checked.verdict)
             }
+            OwnerKey::MenuReader => self.menu_reader_checked(checked.verdict),
         }
     }
 }

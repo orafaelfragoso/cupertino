@@ -23,6 +23,7 @@ use cupertino_protocols::client::cupertino_shell_v1::{self, CupertinoShellV1};
 use cupertino_server::authorization::ShellRole;
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
+use cupertino_server::menu_bar::MENU_BAR_BUS_NAME;
 use cupertino_server::Cupertino;
 use cupertino_wm::{Command, LifecycleState, Rect, TileKind, WindowId};
 use smithay::reexports::calloop::EventLoop;
@@ -263,6 +264,8 @@ struct Status {
     events: Vec<BarEvent>,
     /// The `cupertino_app_menu_v1.menu_bar` events of an application.
     menu_bar_shown: Vec<u32>,
+    /// The `cupertino_app_menu_v1.menu_reader` events of an application.
+    menu_readers: Vec<String>,
     /// The protocol error the server posted: object interface and code.
     error: Option<(String, u32)>,
     /// The `gtk_shell1` capabilities received, in order.
@@ -490,8 +493,14 @@ impl Dispatch<CupertinoAppMenuV1, ()> for ClientState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let cupertino_app_menu_v1::Event::MenuBar { shown } = event {
-            state.status.lock().unwrap().menu_bar_shown.push(shown);
+        match event {
+            cupertino_app_menu_v1::Event::MenuBar { shown } => {
+                state.status.lock().unwrap().menu_bar_shown.push(shown);
+            }
+            cupertino_app_menu_v1::Event::MenuReader { bus_name } => {
+                state.status.lock().unwrap().menu_readers.push(bus_name);
+            }
+            _ => {}
         }
     }
 }
@@ -1179,12 +1188,17 @@ struct KitAppClient(TestClient);
 
 impl KitAppClient {
     fn spawn(socket: PathBuf, app_id: &'static str) -> KitAppClient {
+        Self::spawn_at(socket, app_id, 2)
+    }
+
+    /// An application on `cupertino_app_effects_v1` bound at `version`.
+    fn spawn_at(socket: PathBuf, app_id: &'static str, version: u32) -> KitAppClient {
         let stream = UnixStream::connect(&socket).expect("connecting to the compositor");
         KitAppClient(run_client(stream, move |globals, qh, status| {
             let compositor: wl_compositor::WlCompositor = globals.bind(qh, 4..=6, ()).unwrap();
             let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
             let wm_base: xdg_wm_base::XdgWmBase = globals.bind(qh, 1..=5, ()).unwrap();
-            let effects: CupertinoAppEffectsV1 = globals.bind(qh, 2..=2, ()).unwrap();
+            let effects: CupertinoAppEffectsV1 = globals.bind(qh, version..=version, ()).unwrap();
             let surface = compositor.create_surface(qh, ());
             let xdg = wm_base.get_xdg_surface(&surface, qh, ());
             let toplevel = xdg.get_toplevel(qh, ());
@@ -1220,6 +1234,14 @@ impl KitAppClient {
 
     fn menu_bar_shown(&self) -> Vec<u32> {
         self.0.status.lock().unwrap().menu_bar_shown.clone()
+    }
+
+    fn menu_readers(&self) -> Vec<String> {
+        self.0.status.lock().unwrap().menu_readers.clone()
+    }
+
+    fn roundtrips(&self) -> usize {
+        self.0.status.lock().unwrap().roundtrips
     }
 
     fn error(&self) -> Option<(String, u32)> {
@@ -2036,6 +2058,7 @@ fn menu_bus(h: &mut Harness) -> Option<(PrivateBus, zbus::blocking::Connection)>
     };
     std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
     h.state.dbus = Some(cupertino_server::dbus::DbusHandle::start().expect("worker thread"));
+    h.state.watch_menu_reader();
     let own = zbus::blocking::connection::Builder::address(bus.address.as_str())
         .unwrap()
         .build()
@@ -2045,8 +2068,9 @@ fn menu_bus(h: &mut Harness) -> Option<(PrivateBus, zbus::blocking::Connection)>
 
 /// Where the foreign process finds the bus.
 const FOREIGN_BUS: &str = "CUPERTINO_TEST_FOREIGN_BUS";
-/// The well-known name the foreign process owns.
+/// The well-known name the foreign process owns unless `FOREIGN_NAME_VAR` names another.
 const FOREIGN_NAME: &str = "org.example.Foreign";
+const FOREIGN_NAME_VAR: &str = "CUPERTINO_TEST_FOREIGN_NAME";
 
 /// Not a test of its own: the foreign process of the owner tests, this binary run again as a child. It owns
 /// `FOREIGN_NAME`, prints its unique name, then a line for each method call made on its connection, until its stdin
@@ -2056,9 +2080,10 @@ fn foreign_menu_owner_process() {
     let Ok(address) = std::env::var(FOREIGN_BUS) else {
         return;
     };
+    let name = std::env::var(FOREIGN_NAME_VAR).unwrap_or_else(|_| FOREIGN_NAME.to_owned());
     let conn = zbus::blocking::connection::Builder::address(address.as_str())
         .unwrap()
-        .name(FOREIGN_NAME)
+        .name(name)
         .unwrap()
         .build()
         .unwrap();
@@ -2084,9 +2109,15 @@ struct Foreign {
 
 impl Foreign {
     fn start(bus: &PrivateBus) -> Foreign {
+        Self::start_named(bus, FOREIGN_NAME)
+    }
+
+    /// Another process on the bus, owning `name`.
+    fn start_named(bus: &PrivateBus, name: &str) -> Foreign {
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "foreign_menu_owner_process", "--nocapture"])
             .env(FOREIGN_BUS, &bus.address)
+            .env(FOREIGN_NAME_VAR, name)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .spawn()
@@ -3456,4 +3487,129 @@ fn an_edit_is_not_sent_during_a_move_of_the_window() {
         );
     });
     assert_eq!(presses, []);
+}
+
+/// Wait until `app` has completed two round trips: every event the server sent it before has arrived.
+fn settle_kit_app(h: &mut Harness, app: &KitAppClient) {
+    let from = app.roundtrips();
+    h.wait_until("the application's round trips", |_| {
+        app.roundtrips() >= from + 2
+    });
+}
+
+/// The bar process owning the menu bar's bus name is the reader a version 3 menu object is told, from the bar's start to
+/// its end, and the object is told the bar shows its menus only while it has the reader; a version 2 menu object is
+/// told nothing of the reader.
+#[test]
+fn the_bar_process_owning_the_menu_bar_name_is_the_reader_of_the_windows_menus() {
+    let Some(mut h) = Harness::new() else { return };
+    let Some((_bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    own.request_name(MENU_BAR_BUS_NAME).unwrap();
+    let own = own.unique_name().unwrap().to_string();
+    let app = KitAppClient::spawn_at(h.socket_path(), "org.example.Notes", 3);
+    let old = KitAppClient::spawn(h.socket_path(), "org.example.Old");
+    h.mapped_window(2);
+    h.wait_until("the menu object to be told no reader", |_| {
+        app.menu_readers() == [""]
+    });
+
+    let bar = BarClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&bar, 1);
+    h.wait_until("the bar's connection to be the reader", |_| {
+        app.menu_readers() == ["", own.as_str()]
+    });
+
+    assert_eq!(app.menu_bar_shown(), [0, 1]);
+
+    bar.send(Cmd::Destroy);
+    h.wait_until("no reader once the bar stops", |_| {
+        app.menu_readers() == ["", own.as_str(), ""]
+    });
+    assert_eq!(app.menu_bar_shown(), [0, 1, 0]);
+    settle_kit_app(&mut h, &old);
+    assert!(old.menu_readers().is_empty());
+    assert_eq!(old.error(), None);
+    assert_eq!(app.error(), None);
+}
+
+/// Another process holding the menu bar's bus name is no reader: the windows' menus answer no one.
+#[test]
+fn a_menu_bar_name_held_by_another_process_names_no_reader() {
+    let Some(mut h) = Harness::new() else { return };
+    let Some((bus, _own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let _foreign = Foreign::start_named(&bus, MENU_BAR_BUS_NAME);
+    let app = KitAppClient::spawn_at(h.socket_path(), "org.example.Notes", 3);
+    let old = KitAppClient::spawn(h.socket_path(), "org.example.Old");
+    h.mapped_window(2);
+    let bar = BarClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&bar, 1);
+    h.wait_until("the reader's check to return", |s| {
+        s.owner_checks.pending() == 0
+    });
+    settle_kit_app(&mut h, &app);
+    settle_kit_app(&mut h, &old);
+    assert_eq!(app.menu_readers(), [""]);
+    // a bar that cannot read the menus does not stand in for them; a version 2 object knows nothing of readers
+    assert_eq!(app.menu_bar_shown(), [0]);
+    assert_eq!(old.menu_bar_shown(), [0, 1]);
+}
+
+/// The reader follows the owner of the menu bar's bus name: the bar's connection letting it go, and another process
+/// taking it, leave no reader.
+#[test]
+fn the_reader_follows_the_owner_of_the_menu_bar_name() {
+    let Some(mut h) = Harness::new() else { return };
+    let Some((bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    own.request_name(MENU_BAR_BUS_NAME).unwrap();
+    let own_name = own.unique_name().unwrap().to_string();
+    let app = KitAppClient::spawn_at(h.socket_path(), "org.example.Notes", 3);
+    h.mapped_window(1);
+    let bar = BarClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&bar, 1);
+    h.wait_until("the bar's connection to be the reader", |_| {
+        app.menu_readers() == ["", own_name.as_str()]
+    });
+
+    own.release_name(MENU_BAR_BUS_NAME).unwrap();
+    let _foreign = Foreign::start_named(&bus, MENU_BAR_BUS_NAME);
+    h.wait_until("no reader once the name changes hands", |_| {
+        app.menu_readers() == ["", own_name.as_str(), ""]
+    });
+    h.wait_until("the checks to return", |s| s.owner_checks.pending() == 0);
+    settle_kit_app(&mut h, &app);
+    assert_eq!(app.menu_readers(), ["", own_name.as_str(), ""]);
+}
+
+/// A check of the reader the bus never answers times out and is made again after a wait, with no change of owner or
+/// bar to start it.
+#[test]
+fn a_timed_out_check_of_the_reader_is_made_again() {
+    let Some(mut h) = Harness::new() else { return };
+    let Some((bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    own.request_name(MENU_BAR_BUS_NAME).unwrap();
+    let own_name = own.unique_name().unwrap().to_string();
+    let app = KitAppClient::spawn_at(h.socket_path(), "org.example.Notes", 3);
+    h.mapped_window(1);
+    h.wait_until("the menu object to be told no reader", |_| {
+        app.menu_readers() == [""]
+    });
+
+    let stopped = Stopped::new(&bus);
+    let bar = BarClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&bar, 1);
+    h.wait_until("the reader's check to time out", |s| {
+        s.owner_checks.pending() == 0
+    });
+    drop(stopped);
+    h.wait_until("the check made again to name the reader", |_| {
+        app.menu_readers() == ["", own_name.as_str()]
+    });
 }

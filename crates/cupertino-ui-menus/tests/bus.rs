@@ -103,7 +103,7 @@ macro_rules! private_bus {
 }
 
 struct Fixture {
-    _bus: PrivateBus,
+    bus: PrivateBus,
     exporter: Exporter,
     reader: Connection,
     activations: mpsc::Receiver<Activation>,
@@ -135,9 +135,13 @@ fn fixture(bus: PrivateBus) -> Fixture {
     let props = exporter
         .export(WindowId(1), &standard::menu_bar("Notes", &features()))
         .unwrap();
+    let reader = bus.connect();
+    exporter
+        .set_reader(Some(reader.unique_name().unwrap().as_str()))
+        .unwrap();
     Fixture {
-        reader: bus.connect(),
-        _bus: bus,
+        reader,
+        bus,
         exporter,
         activations,
         props,
@@ -145,8 +149,12 @@ fn fixture(bus: PrivateBus) -> Fixture {
 }
 
 fn proxy(f: &Fixture, path: &str, interface: &str) -> Proxy<'static> {
+    proxy_on(&f.reader, f, path, interface)
+}
+
+fn proxy_on(conn: &Connection, f: &Fixture, path: &str, interface: &str) -> Proxy<'static> {
     Proxy::new(
-        &f.reader,
+        conn,
         f.props.unique_bus_name.clone(),
         path.to_string(),
         interface.to_string(),
@@ -403,4 +411,94 @@ fn a_closed_window_withdraws_its_menus() {
         describe_all(&f, &second.application_object_path),
         [("quit".to_string(), true)]
     );
+}
+
+/// The calls a reader makes, each from `conn`: whether every one was refused with `AccessDenied`.
+fn all_refused(conn: &Connection, f: &Fixture) -> bool {
+    let denied = |r: zbus::Error| matches!(r, zbus::Error::MethodError(ref name, _, _) if name.as_str() == "org.freedesktop.DBus.Error.AccessDenied");
+    let menus = proxy_on(conn, f, &f.props.menubar_path, "org.gtk.Menus");
+    let actions = proxy_on(conn, f, &f.props.window_object_path, "org.gtk.Actions");
+    let platform_data: HashMap<&str, Value<'_>> = HashMap::new();
+    [
+        menus.call::<_, _, RawMenus>("Start", &(vec![0u32],)).err(),
+        menus.call::<_, _, ()>("End", &(vec![0u32],)).err(),
+        actions.call::<_, _, Vec<String>>("List", &()).err(),
+        actions
+            .call::<_, _, (bool, Signature, Vec<OwnedValue>)>("Describe", &("save",))
+            .err(),
+        actions.call::<_, _, Described>("DescribeAll", &()).err(),
+        actions
+            .call::<_, _, ()>(
+                "Activate",
+                &("save", Vec::<Value<'_>>::new(), &platform_data),
+            )
+            .err(),
+        actions
+            .call::<_, _, ()>("SetState", &("save", Value::from(true), &platform_data))
+            .err(),
+    ]
+    .into_iter()
+    .all(|e| e.is_some_and(denied))
+}
+
+#[test]
+fn only_the_menu_bar_the_compositor_named_is_answered() {
+    let f = fixture(private_bus!());
+    let other = f.bus.connect();
+    assert!(all_refused(&other, &f));
+    assert!(f.activations.try_recv().is_err());
+    // the reader is still answered
+    activate(&f, &f.props.window_object_path, "save", vec![]).unwrap();
+    assert!(f.activations.recv_timeout(WAIT).is_ok());
+}
+
+#[test]
+fn without_a_reader_every_call_is_refused() {
+    let f = fixture(private_bus!());
+    f.exporter.set_reader(None).unwrap();
+    assert!(all_refused(&f.reader, &f));
+    assert!(f.activations.try_recv().is_err());
+}
+
+#[test]
+fn a_new_reader_takes_the_right_over() {
+    let f = fixture(private_bus!());
+    let next = f.bus.connect();
+    f.exporter
+        .set_reader(Some(next.unique_name().unwrap().as_str()))
+        .unwrap();
+    assert!(all_refused(&f.reader, &f));
+    let platform_data: HashMap<&str, Value<'_>> = HashMap::new();
+    proxy_on(&next, &f, &f.props.window_object_path, "org.gtk.Actions")
+        .call::<_, _, ()>(
+            "Activate",
+            &("save", Vec::<Value<'_>>::new(), platform_data),
+        )
+        .unwrap();
+    assert!(f.activations.recv_timeout(WAIT).is_ok());
+    assert!(f
+        .exporter
+        .set_reader(Some("org.example.NotAUniqueName"))
+        .is_err());
+}
+
+#[test]
+fn changes_are_signalled_to_the_reader_alone() {
+    let f = fixture(private_bus!());
+    let other = f.bus.connect();
+    let theirs = proxy_on(&other, &f, &f.props.window_object_path, "org.gtk.Actions");
+    let ours = proxy(&f, &f.props.window_object_path, "org.gtk.Actions");
+    let (tx, overheard) = mpsc::channel();
+    let mut their_changes = theirs.receive_signal("Changed").unwrap();
+    std::thread::spawn(move || {
+        if their_changes.next().is_some() {
+            let _ = tx.send(());
+        }
+    });
+    let mut our_changes = ours.receive_signal("Changed").unwrap();
+    f.exporter
+        .set_enabled(WindowId(1), &ActionName::parse("win.undo").unwrap(), false)
+        .unwrap();
+    our_changes.next().unwrap();
+    assert!(overheard.recv_timeout(Duration::from_millis(300)).is_err());
 }

@@ -468,6 +468,7 @@ fn start_dbus(state: &mut Cupertino) {
             dbus.set_login(crate::dbus::LoginTrust::Any);
         }
     }
+    state.watch_menu_reader();
     crate::power::start_power_bus(state);
     crate::quit::start_session_service(state);
 }

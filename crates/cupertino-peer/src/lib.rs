@@ -12,8 +12,14 @@
 //! A service of the shell answers only the server, which started it: a caller is judged by its [`Relation`] to the
 //! service's own process, itself or its parent. Other shell processes ask the server to call for them. (The server also
 //! starts the applications, so "started by the server" would let every application in.)
+//!
+//! Two processes are one sandbox instance ([`same_instance`]) when they are the same process, or two processes of one
+//! Flatpak instance (a Flatpak's bus connection is made by its `xdg-dbus-proxy`, another process with the same
+//! `/.flatpak-info`). An unsandboxed process could make a `/.flatpak-info` of its own in a user namespace and pass for a
+//! Flatpak instance, but it can reach every name on the bus directly already, so this gains it nothing.
 
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::io::Read;
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
 use zbus::fdo::ConnectionCredentials;
@@ -53,6 +59,44 @@ impl ProcessHandle {
                 std::io::Error::other("the descriptor is not a pidfd of a visible process")
             })?;
         Ok(Self { pid, fd })
+    }
+
+    /// Hold the process that connected the other end of `socket`, as the kernel names it (`SO_PEERPIDFD`, Linux 6.5).
+    pub fn of_peer(socket: &impl AsFd) -> std::io::Result<Self> {
+        let mut fd: libc::c_int = -1;
+        let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+        // Safety: getsockopt writes at most `len` bytes into the int it is given.
+        let result = unsafe {
+            libc::getsockopt(
+                socket.as_fd().as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERPIDFD,
+                (&mut fd as *mut libc::c_int).cast(),
+                &mut len,
+            )
+        };
+        if result < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if fd < 0 {
+            return Err(std::io::Error::other("the socket has no peer process"));
+        }
+        // Safety: the kernel just made the descriptor for this call and nothing else owns it.
+        Self::from_pidfd(unsafe { OwnedFd::from_raw_fd(fd) })
+    }
+
+    /// Another handle on the same process.
+    pub fn try_clone(&self) -> std::io::Result<Self> {
+        Ok(Self {
+            pid: self.pid,
+            fd: self.fd.try_clone()?,
+        })
+    }
+
+    /// Whether both handles hold one process: the same pid, and neither has exited (a pidfd of a process that exited
+    /// is readable, so a pid reused since is never taken for it).
+    pub fn is(&self, other: &ProcessHandle) -> bool {
+        self.pid == other.pid && !self.has_exited() && !other.has_exited()
     }
 
     /// Whether the process has exited: its pidfd is readable then.
@@ -200,11 +244,37 @@ impl Caller {
         let Some(process) = process_of(credentials) else {
             return Caller::Anonymous;
         };
-        let sandbox = match classify(
+        Self::of_labelled(
+            process,
+            Ok(credentials.linux_security_label().cloned()),
             proc_root,
-            process.pid,
-            credentials.linux_security_label().map(Vec::as_slice),
-        ) {
+        )
+    }
+
+    /// Like [`Caller::from_credentials`], but only the `ProcessFD` the daemon passed names the process: a daemon that
+    /// gives a bare `ProcessID` gives an anonymous caller.
+    pub fn from_process_fd(credentials: &ConnectionCredentials, proc_root: &Path) -> Caller {
+        if credentials.process_fd().is_none() {
+            return Caller::Anonymous;
+        }
+        Self::from_credentials(credentials, proc_root)
+    }
+
+    /// The process `process` holds, classified by its own AppArmor label and root (a Wayland client, from its
+    /// [`ProcessHandle::of_peer`]).
+    pub fn of_process(process: ProcessHandle, proc_root: &Path) -> Caller {
+        let label = security_label(proc_root, process.pid);
+        Self::of_labelled(process, label, proc_root)
+    }
+
+    fn of_labelled(
+        process: ProcessHandle,
+        label: std::io::Result<Option<Vec<u8>>>,
+        proc_root: &Path,
+    ) -> Caller {
+        let sandbox = match label
+            .and_then(|label| classify(proc_root, process.pid, label.as_deref()))
+        {
             Ok(sandbox) => sandbox,
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && !process.has_exited() => {
                 return Caller::Unclassified(process)
@@ -313,6 +383,77 @@ fn classify(proc_root: &Path, pid: u32, label: Option<&[u8]>) -> std::io::Result
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e),
     }
+}
+
+/// The AppArmor label of process `pid`: AppArmor's own entry, else the one of the first security module. `None` when no
+/// module that keeps a label is active (the kernel answers `EINVAL`).
+fn security_label(proc_root: &Path, pid: u32) -> std::io::Result<Option<Vec<u8>>> {
+    let attr = proc_root.join(pid.to_string()).join("attr");
+    let read = match std::fs::read(attr.join("apparmor").join("current")) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => std::fs::read(attr.join("current")),
+        read => read,
+    };
+    match read {
+        Ok(label) => Ok(Some(label)),
+        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// The most of a `/.flatpak-info` that is read; the file is a few hundred bytes.
+const FLATPAK_INFO_LIMIT: u64 = 64 * 1024;
+
+/// The application id and the instance id of the Flatpak process `pid`, from its `/.flatpak-info`; `None` when the file
+/// cannot be read or lacks either.
+fn flatpak_instance(proc_root: &Path, pid: u32) -> Option<(String, String)> {
+    let path = proc_root
+        .join(pid.to_string())
+        .join("root")
+        .join(".flatpak-info");
+    let mut text = String::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(FLATPAK_INFO_LIMIT)
+        .read_to_string(&mut text)
+        .ok()?;
+    let (mut section, mut app, mut instance) = ("", None, None);
+    for line in text.lines().map(str::trim) {
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            section = name;
+        } else if let Some((key, value)) = line.split_once('=') {
+            match (section, key.trim()) {
+                ("Application", "name") => app = Some(value.trim().to_owned()),
+                ("Instance", "instance-id") => instance = Some(value.trim().to_owned()),
+                _ => {}
+            }
+        }
+    }
+    let present = |v: Option<String>| v.filter(|v| !v.is_empty());
+    Some((present(app)?, present(instance)?))
+}
+
+/// Whether `a` and `b` are one sandbox instance: the same process, or two processes of one Flatpak instance (the same
+/// application id and instance id in both `/.flatpak-info` files). A Snap has no instance to compare, so it matches
+/// only itself, and so does an unsandboxed process; a sandboxed and an unsandboxed process never match. Anything that
+/// cannot be read is no match.
+pub fn same_instance(a: &Identified, b: &Identified, proc_root: &Path) -> bool {
+    if a.sandbox != b.sandbox {
+        return false;
+    }
+    if a.process.is(&b.process) {
+        return true;
+    }
+    if a.sandbox != Some(Sandbox::Flatpak) {
+        return false;
+    }
+    let (Some(first), Some(second)) = (
+        flatpak_instance(proc_root, a.process.pid),
+        flatpak_instance(proc_root, b.process.pid),
+    ) else {
+        return false;
+    };
+    // the files describe the processes only while they are the ones the descriptors name
+    first == second && !a.process.has_exited() && !b.process.has_exited()
 }
 
 /// The caller behind `sender` on `connection`.
@@ -536,6 +677,258 @@ mod tests {
             Err(Denial::Untrusted),
             "a process with the same parent is no relation"
         );
+    }
+
+    /// Another live process, killed and reaped on drop.
+    struct Other(std::process::Child);
+
+    impl Other {
+        fn start() -> Other {
+            Other(
+                std::process::Command::new("sleep")
+                    .arg("60")
+                    .spawn()
+                    .expect("sleep"),
+            )
+        }
+
+        fn pid(&self) -> u32 {
+            self.0.id()
+        }
+    }
+
+    impl Drop for Other {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    fn held(pid: u32, sandbox: Option<Sandbox>) -> Identified {
+        Identified {
+            process: ProcessHandle::open(pid).unwrap(),
+            sandbox,
+            exe: None,
+        }
+    }
+
+    fn write_flatpak_info(proc_root: &Path, pid: u32, app: &str, instance: &str) {
+        let dir = proc_root.join(pid.to_string()).join("root");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(".flatpak-info"),
+            format!("[Application]\nname={app}\nruntime=runtime/x\n\n[Instance]\ninstance-id={instance}\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_process_is_its_own_instance_and_another_unsandboxed_process_is_not() {
+        let other = Other::start();
+        let me = std::process::id();
+        let proc_root = tempfile::tempdir().unwrap();
+        assert!(same_instance(
+            &held(me, None),
+            &held(me, None),
+            proc_root.path()
+        ));
+        assert!(!same_instance(
+            &held(me, None),
+            &held(other.pid(), None),
+            proc_root.path()
+        ));
+    }
+
+    #[test]
+    fn a_process_that_exited_is_not_the_same_process_any_more() {
+        let mut other = Other::start();
+        let first = held(other.pid(), None);
+        let second = held(other.pid(), None);
+        other.0.kill().unwrap();
+        other.0.wait().unwrap();
+        assert!(!same_instance(&first, &second, Path::new("/proc")));
+    }
+
+    #[test]
+    fn the_proxy_of_a_flatpak_is_the_same_instance_as_the_application() {
+        let proxy = Other::start();
+        let me = std::process::id();
+        let proc_root = tempfile::tempdir().unwrap();
+        write_flatpak_info(proc_root.path(), me, "org.example.App", "1234");
+        write_flatpak_info(proc_root.path(), proxy.pid(), "org.example.App", "1234");
+        let flatpak = Some(Sandbox::Flatpak);
+        assert!(same_instance(
+            &held(me, flatpak),
+            &held(proxy.pid(), flatpak),
+            proc_root.path()
+        ));
+    }
+
+    #[test]
+    fn a_flatpak_process_that_exited_is_not_the_instance_its_info_file_names() {
+        let mut proxy = Other::start();
+        let me = std::process::id();
+        let proc_root = tempfile::tempdir().unwrap();
+        write_flatpak_info(proc_root.path(), me, "org.example.App", "1234");
+        write_flatpak_info(proc_root.path(), proxy.pid(), "org.example.App", "1234");
+        let flatpak = Some(Sandbox::Flatpak);
+        let gone = held(proxy.pid(), flatpak);
+        proxy.0.kill().unwrap();
+        proxy.0.wait().unwrap();
+        assert!(!same_instance(&held(me, flatpak), &gone, proc_root.path()));
+    }
+
+    #[test]
+    fn another_flatpak_instance_or_application_is_not_the_same_instance() {
+        let other = Other::start();
+        let me = std::process::id();
+        let flatpak = Some(Sandbox::Flatpak);
+        for (app, instance) in [("org.example.App", "5678"), ("org.example.Other", "1234")] {
+            let proc_root = tempfile::tempdir().unwrap();
+            write_flatpak_info(proc_root.path(), me, "org.example.App", "1234");
+            write_flatpak_info(proc_root.path(), other.pid(), app, instance);
+            assert!(
+                !same_instance(
+                    &held(me, flatpak),
+                    &held(other.pid(), flatpak),
+                    proc_root.path()
+                ),
+                "{app} {instance}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_flatpak_info_that_cannot_be_read_or_lacks_the_instance_is_no_match() {
+        let other = Other::start();
+        let me = std::process::id();
+        let flatpak = Some(Sandbox::Flatpak);
+        let proc_root = tempfile::tempdir().unwrap();
+        write_flatpak_info(proc_root.path(), me, "org.example.App", "1234");
+        assert!(!same_instance(
+            &held(me, flatpak),
+            &held(other.pid(), flatpak),
+            proc_root.path()
+        ));
+        let dir = proc_root.path().join(other.pid().to_string()).join("root");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(".flatpak-info"),
+            "[Application]\nname=org.example.App\n",
+        )
+        .unwrap();
+        assert!(!same_instance(
+            &held(me, flatpak),
+            &held(other.pid(), flatpak),
+            proc_root.path()
+        ));
+    }
+
+    #[test]
+    fn a_sandboxed_and_an_unsandboxed_process_are_never_one_instance() {
+        let other = Other::start();
+        let me = std::process::id();
+        let proc_root = tempfile::tempdir().unwrap();
+        write_flatpak_info(proc_root.path(), me, "org.example.App", "1234");
+        write_flatpak_info(proc_root.path(), other.pid(), "org.example.App", "1234");
+        for sandbox in [Sandbox::Flatpak, Sandbox::Snap] {
+            let (sandboxed, host) = (held(me, Some(sandbox)), held(other.pid(), None));
+            assert!(!same_instance(&sandboxed, &host, proc_root.path()));
+            assert!(!same_instance(&host, &sandboxed, proc_root.path()));
+            // one process taken for sandboxed on one side only is no match either
+            assert!(!same_instance(
+                &sandboxed,
+                &held(me, None),
+                proc_root.path()
+            ));
+        }
+    }
+
+    #[test]
+    fn two_processes_of_a_snap_are_not_one_instance() {
+        let other = Other::start();
+        let me = std::process::id();
+        let snap = Some(Sandbox::Snap);
+        let proc_root = tempfile::tempdir().unwrap();
+        assert!(same_instance(
+            &held(me, snap),
+            &held(me, snap),
+            proc_root.path()
+        ));
+        assert!(!same_instance(
+            &held(me, snap),
+            &held(other.pid(), snap),
+            proc_root.path()
+        ));
+    }
+
+    #[test]
+    fn credentials_without_a_process_descriptor_name_no_owner() {
+        let credentials = ConnectionCredentials::default().set_process_id(std::process::id());
+        assert!(matches!(
+            Caller::from_process_fd(&credentials, Path::new("/proc")),
+            Caller::Anonymous
+        ));
+        let credentials = ConnectionCredentials::default().set_process_fd(own_pidfd().into());
+        assert!(matches!(
+            Caller::from_process_fd(&credentials, Path::new("/proc")),
+            Caller::Process(_)
+        ));
+    }
+
+    #[test]
+    fn the_peer_of_a_socket_is_the_process_that_connected() {
+        let (ours, _theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+        let peer = ProcessHandle::of_peer(&ours).unwrap();
+        assert_eq!(peer.pid, std::process::id());
+        assert!(peer.is(&ProcessHandle::open(std::process::id()).unwrap()));
+    }
+
+    #[test]
+    fn a_wayland_client_is_classified_by_its_own_label_and_root() {
+        let me = std::process::id();
+        let classified = |label: &str, flatpak: bool| {
+            let proc_root = tempfile::tempdir().unwrap();
+            let pid = proc_root.path().join(me.to_string());
+            std::fs::create_dir_all(pid.join("attr").join("apparmor")).unwrap();
+            std::fs::create_dir_all(pid.join("root")).unwrap();
+            std::fs::write(pid.join("attr").join("apparmor").join("current"), label).unwrap();
+            if flatpak {
+                write_flatpak_info(proc_root.path(), me, "org.example.App", "1");
+            }
+            match Caller::of_process(ProcessHandle::open(me).unwrap(), proc_root.path()) {
+                Caller::Process(p) => p.sandbox,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(classified("unconfined\n", false), None);
+        assert_eq!(
+            classified("snap.firefox.firefox (enforce)\n", false),
+            Some(Sandbox::Snap)
+        );
+        assert_eq!(classified("unconfined\n", true), Some(Sandbox::Flatpak));
+        // the real /proc of a kernel without AppArmor: no label, unsandboxed
+        assert!(matches!(
+            Caller::of_process(ProcessHandle::open(me).unwrap(), Path::new("/proc")),
+            Caller::Process(Identified { sandbox: None, .. })
+        ));
+    }
+
+    #[test]
+    fn a_wayland_client_whose_label_cannot_be_read_is_anonymous() {
+        let proc_root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(
+            proc_root
+                .path()
+                .join(std::process::id().to_string())
+                .join("root"),
+        )
+        .unwrap();
+        let process = ProcessHandle::open(std::process::id()).unwrap();
+        assert!(matches!(
+            Caller::of_process(process, proc_root.path()),
+            Caller::Anonymous
+        ));
     }
 
     #[test]

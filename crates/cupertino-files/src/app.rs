@@ -708,6 +708,7 @@ impl App {
             edit,
             drag,
             marquee,
+            frame: prev_frame,
             ..
         } = self;
         let drop_target = drag
@@ -734,6 +735,13 @@ impl App {
         };
         let mut drawn = None;
         let mut shaped = Ok(());
+        // a scroll moves the whole content view
+        if dy != 0.0 || reveal.is_some() {
+            match prev_frame {
+                Some(f) => window.damage.add(popup_rect(&f.window.content)),
+                None => window.damage.add_whole(),
+            }
+        }
         let damage = window.damage.take();
         let scratch = &mut window.scratch;
         window
@@ -839,7 +847,7 @@ impl App {
             PointerEvent::Scroll { dy, .. } => {
                 self.rename.cancel();
                 self.pending_scroll += dy;
-                self.window.redraw();
+                self.window.presenter.request_redraw();
                 Ok(())
             }
             PointerEvent::Enter(_) | PointerEvent::Leave | PointerEvent::Button { .. } => Ok(()),
@@ -944,8 +952,9 @@ impl App {
                     started: false,
                     target: None,
                 });
+                let before = self.selected_indices();
                 if self.browser.press(index, mods) {
-                    self.window.redraw();
+                    self.redraw_items(&before);
                 }
                 Ok(())
             }
@@ -1075,7 +1084,8 @@ impl App {
         Ok(())
     }
 
-    /// Move the focus by a key in the frame drawn last; `true` when it moved.
+    /// Move the focus by a key in the frame drawn last. The items it changes are drawn here, so a caller has nothing
+    /// more to draw: the result is always `false`.
     fn step(&mut self, key: Move, extend: bool) -> bool {
         let Some(frame) = &self.frame else {
             return false;
@@ -1086,10 +1096,40 @@ impl App {
             key,
         ) {
             Some(index) => {
+                let before = self.selected_indices();
                 self.browser.move_focus(index, extend);
-                true
+                self.redraw_items(&before);
+                false
             }
             None => false,
+        }
+    }
+
+    /// The indices of the selected items.
+    fn selected_indices(&self) -> Vec<usize> {
+        self.browser.selection().indices().collect()
+    }
+
+    /// The selection changed from `before`: draw the items that were selected and those that are now. A scroll to the
+    /// focus is added when the frame is drawn.
+    fn redraw_items(&mut self, before: &[usize]) {
+        let Some(frame) = &self.frame else {
+            self.window.redraw();
+            return;
+        };
+        let mut items = before.to_vec();
+        items.extend(self.browser.selection().indices());
+        items.sort_unstable();
+        items.dedup();
+        let areas: Vec<PopupRect> = items
+            .into_iter()
+            .filter_map(|i| cupertino_files::window::item_area(frame, i))
+            .collect();
+        if areas.is_empty() {
+            self.window.redraw();
+        }
+        for area in areas {
+            self.window.redraw_rect(area);
         }
     }
 

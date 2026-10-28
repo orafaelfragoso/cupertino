@@ -47,12 +47,19 @@ fn the_greeter_is_undumpable_and_has_no_core_file() {
         std::thread::sleep(Duration::from_millis(20));
     }
     let pid = process.0.id();
-    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
-    assert_eq!(
-        field(&status, "State:").chars().next(),
-        Some('S'),
-        "{status}"
-    );
+    // after the connect it still runs for a moment, then blocks on the compositor: a loaded machine stretches that
+    let end = Instant::now() + Duration::from_secs(20);
+    loop {
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
+        if field(&status, "State:").starts_with('S') {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "the greeter never blocked on the compositor\n{status}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
     let limits = std::fs::read_to_string(format!("/proc/{pid}/limits")).unwrap();
     let core = field(&limits, "Max core file size");
     assert_eq!(

@@ -9,32 +9,33 @@ use std::rc::Rc;
 use cupertino_decorations::TitlebarStyle;
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_effects::{DockEdge, Mesh, MinimizeEffect, Vertex, WorkspaceSlide};
-use cupertino_geometry::CornerStyle;
+use cupertino_scene::{
+    Clip, ImageRole, OutputPoint, Placement, RoundedRect, SceneItem, SceneKind, Shadow, Source,
+    SurfaceRole,
+};
 use cupertino_theme::{Appearance, MaterialOptions, Theme};
 use cupertino_wm::{OutputId, Presentation, Rect, WindowId, Wm};
-use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
-use smithay::backend::renderer::element::surface::{
-    render_elements_from_surface_tree, WaylandSurfaceRenderElement,
-};
-use smithay::backend::renderer::element::utils::RescaleRenderElement;
-use smithay::backend::renderer::element::{Element, Kind};
+use smithay::backend::renderer::element::Element;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::CommitCounter;
 use smithay::desktop::{layer_map_for_output, PopupManager};
 use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Logical, Physical, Point, Scale, Size};
+use smithay::utils::{Logical, Physical, Point, Scale};
 use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::shell::wlr_layer::Layer;
 
-use super::clip::{ClipElement, ClipShape};
+use super::compose::{
+    corner_style, item, output_rect, Composed, Composition, Picture, Piece, Tree,
+};
+use super::lower::{id_hash, lower, Lowering};
 use super::material::{GpuRecipe, MaterialElement, MaterialStage, SharedMaterial};
 use super::mesh::{capture, MeshElement, MeshGl, SharedMesh};
 use super::motion::{cross_fade_opacity, skips_frame_animation, WorkspaceTransition};
-use super::programs::{corner_uniforms, u4, Programs};
+use super::programs::Programs;
 use super::shader_rect::{to_physical_rect, ElementCache, ElementKey, ShaderRect, Sig};
 use super::ui::{rounded_rect, RoundedRectSpec};
-use super::{CupertinoElement, LayerStack, SceneLayer};
+use super::{CupertinoElement, SceneLayer};
 use crate::app_effects_v1::{surface_backdrops, BackdropArea};
 use crate::config::Config;
 use crate::cursor::CursorFrame;
@@ -45,7 +46,7 @@ use crate::state::WindowEntry;
 use crate::window_manager::Look;
 
 /// Material over a window while a sheet hangs from it (material 30).
-const SHEET_DIMMING_MATERIAL: &str = "SheetUnderlay";
+pub(super) const SHEET_DIMMING_MATERIAL: &str = "SheetUnderlay";
 
 /// Geometry of one window for one frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -301,6 +302,7 @@ impl RenderResources {
 }
 
 /// What to draw for the pointer.
+#[derive(Clone)]
 pub enum CursorPlan {
     Hidden,
     /// A themed cursor drawn `size` points tall (its nominal size times the cursor scale).
@@ -355,14 +357,47 @@ pub struct SceneParams<'a> {
     pub pointer: Point<f64, Logical>,
     pub drag_icon: Option<(WlSurface, Point<i32, Logical>)>,
     pub lock: LockView,
+    /// Black overlays over everything, front to back: the activation fade, then the power dimming.
+    pub session_overlays: [Option<SessionOverlay>; 2],
+}
+
+/// A black overlay of the session over the whole output.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SessionOverlay {
+    pub kind: SceneKind,
+    pub alpha: f64,
+}
+
+/// Put the session overlays on top of `stack`, whatever else the frame shows.
+fn session_overlays(p: &SceneParams<'_>, stack: &mut Composition) {
+    push_session_overlays((p.rect.w, p.rect.h), &p.session_overlays, stack);
+}
+
+fn push_session_overlays(
+    size: (f64, f64),
+    overlays: &[Option<SessionOverlay>; 2],
+    stack: &mut Composition,
+) {
+    const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+    let area = smithay::utils::Rectangle::new((0.0, 0.0).into(), size.into());
+    for overlay in overlays.iter().flatten() {
+        stack.push(
+            SceneLayer::SessionOverlay,
+            Piece::item(item(
+                overlay.kind,
+                0,
+                Source::Wallpaper {
+                    rect: output_rect(area),
+                    colours: [BLACK; 4],
+                },
+                overlay.alpha,
+            )),
+        );
+    }
 }
 
 fn local(r: Rect, origin: &Rect) -> smithay::utils::Rectangle<f64, Logical> {
     smithay::utils::Rectangle::new((r.x - origin.x, r.y - origin.y).into(), (r.w, r.h).into())
-}
-
-fn sig_rect(r: smithay::utils::Rectangle<f64, Logical>) -> Sig {
-    Sig::new().rect(r)
 }
 
 /// Rounded rectangle element helper.
@@ -388,8 +423,53 @@ pub(crate) fn rrect(
     rounded_rect(&p.res.programs, p.cache, p.scale, key, &spec)
 }
 
+/// Rounded rectangle as a scene item, drawn like [`rrect`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rrect_item(
+    kind: SceneKind,
+    index: u64,
+    rect: smithay::utils::Rectangle<f64, Logical>,
+    radius: f64,
+    continuous: bool,
+    fill: [f32; 4],
+    border: Option<(f64, [f32; 4])>,
+    alpha: f32,
+) -> Piece {
+    Piece::item(item(
+        kind,
+        index,
+        Source::RoundedRect(RoundedRect {
+            rect: output_rect(rect),
+            radius,
+            style: corner_style(continuous),
+            fill,
+            border,
+        }),
+        f64::from(alpha),
+    ))
+}
+
+/// A surface tree drawn at `origin` as it is, without a window's rescale or mask.
+fn standalone(
+    surface: &WlSurface,
+    kind: SceneKind,
+    origin: Point<i32, Physical>,
+    opacity: f32,
+) -> Piece {
+    Piece::Tree(Box::new(Tree {
+        surface: surface.clone(),
+        kind,
+        role: SurfaceRole::Standalone,
+        origin,
+        pivot: origin,
+        scale: (1.0, 1.0),
+        opacity,
+        clip: Clip::None,
+    }))
+}
+
 /// The wallpaper of the output: the image of the user or of the asset pack, else the procedural one.
-fn wallpaper_element(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> CupertinoElement {
+fn wallpaper_element(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> Piece {
     let dark = p.config.is_dark();
     let image = p.overlays.wallpaper.element(
         renderer,
@@ -400,62 +480,49 @@ fn wallpaper_element(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> Cu
         p.scale,
         p.now,
     );
-    image.unwrap_or_else(|| wallpaper(p).into())
+    image.map_or_else(|| Piece::item(wallpaper(p)), Piece::from)
 }
 
-fn wallpaper(p: &mut SceneParams<'_>) -> ShaderRect {
+fn wallpaper(p: &SceneParams<'_>) -> SceneItem {
     let dark = p.config.is_dark();
-    let (c0, c1, c2, c3) = if dark {
-        (
+    let colours = if dark {
+        [
             [0.07, 0.09, 0.20, 1.0],
             [0.20, 0.09, 0.27, 1.0],
             [0.10, 0.30, 0.58, 1.0],
             [0.50, 0.16, 0.42, 1.0],
-        )
+        ]
     } else {
-        (
+        [
             [0.72, 0.82, 0.97, 1.0],
             [0.96, 0.78, 0.86, 1.0],
             [0.45, 0.68, 0.99, 1.0],
             [0.99, 0.66, 0.50, 1.0],
-        )
+        ]
     };
-    let area = smithay::utils::Rectangle::new((0.0, 0.0).into(), (p.rect.w, p.rect.h).into());
-    let (id, commit) = p.cache.slot(
-        ElementKey::new("wallpaper", 0),
-        sig_rect(area).u(dark as u64).finish(),
-    );
-    ShaderRect::new(
-        p.res.programs.wallpaper.clone(),
-        id,
-        commit,
-        area,
-        1.0,
-        vec![u4("c0", c0), u4("c1", c1), u4("c2", c2), u4("c3", c3)],
-        true,
-    )
+    full_output_wallpaper(p, SceneKind::Wallpaper, colours)
 }
 
 /// Solid black over the whole output: all that is visible of the session besides the lock surface.
-fn lock_backdrop(p: &mut SceneParams<'_>) -> ShaderRect {
+fn lock_backdrop(p: &SceneParams<'_>) -> SceneItem {
     const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+    full_output_wallpaper(p, SceneKind::LockBackdrop, [BLACK; 4])
+}
+
+fn full_output_wallpaper(
+    p: &SceneParams<'_>,
+    kind: SceneKind,
+    colours: [[f32; 4]; 4],
+) -> SceneItem {
     let area = smithay::utils::Rectangle::new((0.0, 0.0).into(), (p.rect.w, p.rect.h).into());
-    let (id, commit) = p
-        .cache
-        .slot(ElementKey::new("lock-backdrop", 0), sig_rect(area).finish());
-    ShaderRect::new(
-        p.res.programs.wallpaper.clone(),
-        id,
-        commit,
-        area,
+    item(
+        kind,
+        0,
+        Source::Wallpaper {
+            rect: output_rect(area),
+            colours,
+        },
         1.0,
-        vec![
-            u4("c0", BLACK),
-            u4("c1", BLACK),
-            u4("c2", BLACK),
-            u4("c3", BLACK),
-        ],
-        true,
     )
 }
 
@@ -469,25 +536,18 @@ pub fn wallpaper_tint(dark: bool) -> [f32; 3] {
 }
 
 /// Shadow of window `id`, with the plan's corner radius ([`WindowPlan::corner`]).
-fn shadow_element(
+fn shadow_piece(
     p: &mut SceneParams<'_>,
     id: WindowId,
     plan: &WindowPlan,
     active: bool,
     alpha: f64,
-) -> Option<ShaderRect> {
+) -> Option<Piece> {
     let params = p.decor.shadow_params(active);
     let radius = plan
         .corner
         .map_or(p.config.window.corner_radius, |r| r / shadow_scale(plan));
-    shadow_with(
-        p,
-        ElementKey::new("shadow", id.0),
-        &params,
-        plan,
-        radius,
-        alpha,
-    )
+    shadow_item(p, SceneKind::Shadow, id.0, &params, plan, radius, alpha)
 }
 
 /// Factor the shadow's blur, offset and corner follow a scaled window by (at least 1/4).
@@ -495,45 +555,15 @@ fn shadow_scale(plan: &WindowPlan) -> f64 {
     plan.scale_x.min(plan.scale_y).max(0.0).max(0.25)
 }
 
-/// `e` masked by `shape`. The shape's generation comes from the element cache, so a change of the
-/// mask alone (an animated corner radius) damages the element.
-fn clipped<E: Element>(p: &mut SceneParams<'_>, e: E, shape: ClipShape) -> ClipElement<E> {
-    let r = shape.rect;
-    let sig = Sig::new()
-        .f(f64::from(shape.extent))
-        .f(f64::from(shape.exponent))
-        .f(f64::from(r.loc.x))
-        .f(f64::from(r.loc.y))
-        .f(f64::from(r.size.w))
-        .f(f64::from(r.size.h))
-        .finish();
-    let (_, generation) = p.cache.slot(ElementKey::new("clip", id_hash(e.id())), sig);
-    ClipElement::new(e, p.res.programs.clip.clone(), shape, generation)
-}
-
-/// Rounded mask of `plan.visual` with a visual corner radius of `radius` points.
-fn corner_clip(p: &SceneParams<'_>, plan: &WindowPlan, radius: f64) -> ClipShape {
-    let rect = to_physical_rect(local(plan.visual, &p.rect), Scale::from(p.scale));
-    let (extent, exponent) = corner_uniforms(radius, p.config.window.continuous_corners, p.scale);
-    ClipShape {
-        rect,
-        extent,
-        exponent,
-        viewport: p.output_px,
-        exact: plan.exact,
-    }
-}
-
-/// Shadow shader rectangle behind `plan.visual` from the verified parameter table; the shader
-/// receives the device-pixel values of `ShadowParams::gpu` converted back to points.
-pub(crate) fn shadow_with(
-    p: &mut SceneParams<'_>,
-    key: ElementKey,
+/// Shadow behind `plan.visual` from the verified parameter table; the shader receives the
+/// device-pixel values of `ShadowParams::gpu` converted back to points.
+fn shadow_data(
+    p: &SceneParams<'_>,
     params: &cupertino_decorations::ShadowParams,
     plan: &WindowPlan,
     corner: f64,
     alpha: f64,
-) -> Option<ShaderRect> {
+) -> Option<Shadow> {
     let style = &p.config.window;
     let v = plan.visual;
     let s = shadow_scale(plan);
@@ -555,68 +585,50 @@ pub(crate) fn shadow_with(
             .into(),
         (v.w + 2.0 * reach, v.h + 2.0 * reach + off.abs()).into(),
     );
-    let caster = [
-        (v.x - origin.x - area.loc.x) as f32,
-        (v.y - origin.y - area.loc.y) as f32,
-        v.w as f32,
-        v.h as f32,
-    ];
-    let radius = corner * s;
-    let cs = if style.continuous_corners {
-        CornerStyle::continuous()
-    } else {
-        CornerStyle::Circular
-    };
-    let extent = radius * cs.expansion();
-    let uniforms = vec![
-        u4("caster", caster),
-        u4(
-            "params",
-            [radius as f32, sigma as f32, density as f32, off as f32],
-        ),
-        u4(
-            "flags",
-            [
-                style.shadow.cutout as u8 as f32,
-                cs.exponent() as f32,
-                p.scale as f32,
-                extent as f32,
-            ],
-        ),
-    ];
-    let sig = sig_rect(area)
-        .f(radius)
-        .f(sigma)
-        .f(density)
-        .f(off)
-        .f(alpha)
-        .f(p.scale)
-        .u(style.shadow.cutout as u64)
-        .finish();
-    let (eid, commit) = p.cache.slot(key, sig);
-    Some(ShaderRect::new(
-        p.res.programs.shadow.clone(),
-        eid,
-        commit,
-        area,
-        alpha as f32,
-        uniforms,
-        false,
-    ))
+    Some(Shadow {
+        area: output_rect(area),
+        caster: output_rect(smithay::utils::Rectangle::new(
+            (v.x - origin.x, v.y - origin.y).into(),
+            (v.w, v.h).into(),
+        )),
+        radius: corner * s,
+        sigma,
+        density,
+        offset_y: off,
+        style: corner_style(style.continuous_corners),
+        cutout: style.shadow.cutout,
+    })
+}
+
+pub(crate) fn shadow_item(
+    p: &SceneParams<'_>,
+    kind: SceneKind,
+    index: u64,
+    params: &cupertino_decorations::ShadowParams,
+    plan: &WindowPlan,
+    corner: f64,
+    alpha: f64,
+) -> Option<Piece> {
+    let shadow = shadow_data(p, params, plan, corner, alpha)?;
+    Some(Piece::item(item(
+        kind,
+        index,
+        Source::Shadow(shadow),
+        alpha,
+    )))
 }
 
 /// Elements of one window, front to back: popups, content (masked to the plan's corner radius,
 /// rescaled), shadow.
 fn window_elements(
-    renderer: &mut GlesRenderer,
     p: &mut SceneParams<'_>,
     entry: &WindowEntry,
     plan: &WindowPlan,
     active: bool,
     shadow: bool,
-    decorations: Vec<CupertinoElement>,
-) -> Vec<CupertinoElement> {
-    let mut out: Vec<CupertinoElement> = Vec::new();
+    decorations: Vec<Piece>,
+) -> Vec<Piece> {
+    let mut out: Vec<Piece> = Vec::new();
     let scale = Scale::from(p.scale);
     let geo = entry.window.geometry();
     let ins = entry.insets;
@@ -631,23 +643,21 @@ fn window_elements(
     let Some(surface) = entry.window.wl_surface().map(|s| s.into_owned()) else {
         return out;
     };
-    let rescale = Scale::from((plan.scale_x, plan.scale_y));
     let alpha = plan.opacity as f32;
 
     for (popup, popup_offset) in PopupManager::popups_for_surface(&surface) {
         let offset: Point<i32, Physical> =
             (geo.loc + popup_offset - popup.geometry().loc).to_physical_precise_round(scale);
-        let els: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = render_elements_from_surface_tree(
-            renderer,
-            popup.wl_surface(),
-            origin + offset,
-            scale,
-            alpha,
-            Kind::Unspecified,
-        );
-        out.extend(els.into_iter().map(|e| {
-            CupertinoElement::from(RescaleRenderElement::from_element(e, v_phys.loc, rescale))
-        }));
+        out.push(Piece::Tree(Box::new(Tree {
+            surface: popup.wl_surface().clone(),
+            kind: SceneKind::PopupContent,
+            role: SurfaceRole::Popup,
+            origin: origin + offset,
+            pivot: v_phys.loc,
+            scale: (plan.scale_x, plan.scale_y),
+            opacity: alpha,
+            clip: Clip::None,
+        })));
         // the popup's own backdrop (a menu's material) lies directly below it, above the window
         let popup_origin = Point::<f64, Logical>::from((
             visual_local.loc.x + ins.left + f64::from(popup_offset.x - popup.geometry().loc.x),
@@ -663,26 +673,29 @@ fn window_elements(
 
     out.extend(decorations);
     let styled = style.style_client_decorated || entry.server_side;
-    let els: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = render_elements_from_surface_tree(
-        renderer,
-        &surface,
-        origin,
-        scale,
-        alpha,
-        Kind::Unspecified,
-    );
     let radius = plan
         .corner
         .unwrap_or(style.corner_radius * plan.scale_x.min(plan.scale_y));
-    let shape = corner_clip(p, plan, radius);
-    for e in els {
-        if styled && radius > 0.0 {
-            let clip = clipped(p, e, shape);
-            out.push(RescaleRenderElement::from_element(clip, v_phys.loc, rescale).into());
-        } else {
-            out.push(RescaleRenderElement::from_element(e, v_phys.loc, rescale).into());
+    let clip = if styled && radius > 0.0 {
+        Clip::Rounded {
+            rect: output_rect(visual_local),
+            radius,
+            style: corner_style(style.continuous_corners),
+            exact: plan.exact,
         }
-    }
+    } else {
+        Clip::None
+    };
+    out.push(Piece::Tree(Box::new(Tree {
+        surface: surface.clone(),
+        kind: SceneKind::WindowContent,
+        role: SurfaceRole::WindowContent,
+        origin,
+        pivot: v_phys.loc,
+        scale: (plan.scale_x, plan.scale_y),
+        opacity: alpha,
+        clip,
+    })));
     // backdrops follow the window's rescale about its visual origin
     let origin_local = Point::<f64, Logical>::from((
         visual_local.loc.x + ins.left - f64::from(geo.loc.x),
@@ -693,11 +706,13 @@ fn window_elements(
         visual_local.loc,
         plan,
     );
-    out.extend(backdrop_elements(p, &backdrops, alpha));
+    out.extend(
+        backdrop_elements(p, &backdrops, alpha)
+            .into_iter()
+            .map(Piece::from),
+    );
     if shadow && styled {
-        if let Some(s) = shadow_element(p, entry.id, plan, active, plan.opacity) {
-            out.push(s.into());
-        }
+        out.extend(shadow_piece(p, entry.id, plan, active, plan.opacity));
     }
     out
 }
@@ -730,12 +745,11 @@ fn rescaled_backdrops(
 /// Title bar and rim of a server-side decorated window (front to back), rescaled with the window
 /// and, for a stage placement ([`WindowPlan::corner`]), masked to its animated corners.
 fn builtin_decorations(
-    renderer: &mut GlesRenderer,
     p: &mut SceneParams<'_>,
     entry: &WindowEntry,
     plan: &WindowPlan,
     active: bool,
-) -> Vec<CupertinoElement> {
+) -> Vec<Piece> {
     let geo = entry.window.geometry();
     let ins = entry.insets;
     let (fw, fh) = (
@@ -765,19 +779,45 @@ fn builtin_decorations(
     });
     let scale = Scale::from(p.scale);
     let v_phys = to_physical_rect(local(plan.visual, &p.rect), scale);
-    let rescale = Scale::from((plan.scale_x, plan.scale_y));
-    let alpha = Some(plan.opacity as f32);
+    let alpha = plan.opacity as f32;
     let loc = v_phys.loc.to_f64();
-    let clip = plan.corner.map(|r| corner_clip(p, plan, r));
-    let element = |p: &mut SceneParams<'_>,
-                   e: MemoryRenderBufferRenderElement<GlesRenderer>|
-     -> CupertinoElement {
-        match clip {
-            Some(shape) => {
-                RescaleRenderElement::from_element(clipped(p, e, shape), v_phys.loc, rescale).into()
-            }
-            None => RescaleRenderElement::from_element(e, v_phys.loc, rescale).into(),
-        }
+    let clip = plan.corner.map_or(Clip::None, |radius| Clip::Rounded {
+        rect: output_rect(local(plan.visual, &p.rect)),
+        radius,
+        style: corner_style(p.config.window.continuous_corners),
+        exact: plan.exact,
+    });
+    let grid = |point: Point<f64, Physical>| {
+        OutputPoint(cupertino_geometry::Point::new(
+            point.x / p.scale,
+            point.y / p.scale,
+        ))
+    };
+    let pivot = grid(v_phys.loc.to_f64());
+    let placement = |at: Point<f64, Physical>| Placement {
+        origin: grid(at),
+        pivot,
+        scale_x: plan.scale_x,
+        scale_y: plan.scale_y,
+    };
+    let picture = |buffer: &smithay::backend::renderer::element::memory::MemoryRenderBuffer,
+                   kind: SceneKind,
+                   buffer_px: (i32, i32),
+                   src: smithay::utils::Rectangle<f64, Logical>,
+                   size: smithay::utils::Size<i32, Logical>,
+                   at: Point<f64, Physical>| {
+        Piece::Image(Box::new(Picture {
+            buffer: buffer.clone(),
+            kind,
+            index: entry.id.0,
+            role: ImageRole::Decoration,
+            buffer_px,
+            src,
+            size: (size.w, size.h),
+            placement: placement(at),
+            opacity: alpha,
+            clip,
+        }))
     };
     let mut out = Vec::new();
     // the strip of a unified bar lies over the surface; the rim below a standard bar starts under it
@@ -790,17 +830,14 @@ fn builtin_decorations(
         (0.0, 0.0).into(),
         (f64::from(bufs.titlebar_px.0), f64::from(bufs.titlebar_px.1)).into(),
     );
-    if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(
-        renderer,
-        loc,
+    out.push(picture(
         &bufs.titlebar,
-        alpha,
-        Some(tb_src),
-        Some(size),
-        Kind::Unspecified,
-    ) {
-        out.push(element(p, e));
-    }
+        SceneKind::TitleBar,
+        bufs.titlebar_px,
+        tb_src,
+        size,
+        loc,
+    ));
     let tb_px = if entry.titlebar == TitlebarStyle::Standard {
         bufs.titlebar_px.1
     } else {
@@ -815,31 +852,30 @@ fn builtin_decorations(
         fh.round() as i32 - reserved,
     ));
     let rim_loc = loc + Point::<f64, Physical>::from((0.0, f64::from(tb_px)));
-    if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(
-        renderer,
-        rim_loc,
-        &bufs.rim,
-        alpha,
-        Some(src),
-        Some(rim_size),
-        Kind::Unspecified,
-    ) {
-        out.insert(0, element(p, e));
-    }
+    out.insert(
+        0,
+        picture(
+            &bufs.rim,
+            SceneKind::Rim,
+            bufs.rim_px,
+            src,
+            rim_size,
+            rim_loc,
+        ),
+    );
     out
 }
 
-/// Per-window elements of the decorations, front to back.
+/// Per-window pieces of the decorations, front to back.
 fn window_decorations(
-    renderer: &mut GlesRenderer,
     p: &mut SceneParams<'_>,
     entry: &WindowEntry,
     plan: &WindowPlan,
     active: bool,
-) -> Vec<CupertinoElement> {
+) -> Vec<Piece> {
     let mut out = Vec::new();
     if entry.server_side && p.config.window.decorations {
-        out.extend(builtin_decorations(renderer, p, entry, plan, active));
+        out.extend(builtin_decorations(p, entry, plan, active));
     }
     out
 }
@@ -880,8 +916,12 @@ pub fn capture_window(
         exact: true,
         corner: None,
     };
-    let deco = window_decorations(renderer, p, entry, &plan, active);
-    let els = window_elements(renderer, p, entry, &plan, active, shadow, deco);
+    let deco = window_decorations(p, entry, &plan, active);
+    let pieces = window_elements(p, entry, &plan, active, shadow, deco);
+    let mut stack = Composition::new(p.scale);
+    stack.extend(SceneLayer::Windows, pieces);
+    let composed = stack.finish(p);
+    let els = lower_composed(composed, renderer, p);
     std::mem::swap(p.cache, &mut tmp);
     p.rect = saved.0;
     p.output_px = saved.1;
@@ -1018,14 +1058,13 @@ fn closing_elements(p: &mut SceneParams<'_>) -> Vec<CupertinoElement> {
 /// Elements of the layer-shell `layer`, front to back. The backdrop captures of menu bars are
 /// appended to `captures`: they belong below the windows (see [`bar_backdrop_elements`]).
 fn layer_elements(
-    renderer: &mut GlesRenderer,
     p: &mut SceneParams<'_>,
     layer: Layer,
     captures: &mut Vec<CupertinoElement>,
-) -> Vec<CupertinoElement> {
+) -> Vec<Piece> {
     let map = layer_map_for_output(p.output);
     let scale = Scale::from(p.scale);
-    let mut out = Vec::new();
+    let mut out: Vec<Piece> = Vec::new();
     // later surfaces are drawn on top of earlier ones
     for surface in map.layers_on(layer).rev() {
         let Some(geo) = map.layer_geometry(surface) else {
@@ -1042,33 +1081,34 @@ fn layer_elements(
         // popups above their parent, each with its own backdrop directly below it
         for (popup, popup_offset) in PopupManager::popups_for_surface(surface.wl_surface()) {
             let popup_origin = origin + (popup_offset - popup.geometry().loc).to_f64();
-            let els: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-                render_elements_from_surface_tree(
-                    renderer,
-                    popup.wl_surface(),
-                    popup_origin.to_physical_precise_round(scale),
-                    scale,
-                    opacity,
-                    Kind::Unspecified,
-                );
-            out.extend(els.into_iter().map(CupertinoElement::from));
+            out.push(standalone(
+                popup.wl_surface(),
+                SceneKind::LayerContent,
+                popup_origin.to_physical_precise_round(scale),
+                opacity,
+            ));
             let backdrops = surface_backdrops(popup.wl_surface(), popup_origin);
             out.extend(popup_backdrop_elements(p, &backdrops, opacity));
         }
-        let els: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = render_elements_from_surface_tree(
-            renderer,
+        out.push(standalone(
             surface.wl_surface(),
+            SceneKind::LayerContent,
             loc,
-            scale,
             opacity,
-            Kind::Unspecified,
-        );
-        out.extend(els.into_iter().map(CupertinoElement::from));
+        ));
         let backdrops = surface_backdrops(surface.wl_surface(), origin);
         if look.is_some() {
-            out.extend(bar_backdrop_elements(p, &backdrops, opacity, captures));
+            out.extend(
+                bar_backdrop_elements(p, &backdrops, opacity, captures)
+                    .into_iter()
+                    .map(Piece::from),
+            );
         } else {
-            out.extend(backdrop_elements(p, &backdrops, opacity));
+            out.extend(
+                backdrop_elements(p, &backdrops, opacity)
+                    .into_iter()
+                    .map(Piece::from),
+            );
         }
     }
     out
@@ -1082,33 +1122,34 @@ fn popup_backdrop_elements(
     p: &mut SceneParams<'_>,
     backdrops: &[BackdropArea],
     opacity: f32,
-) -> Vec<CupertinoElement> {
-    let mut out = Vec::new();
+) -> Vec<Piece> {
+    let mut out: Vec<Piece> = Vec::new();
     let params = p.decor.popup_shadow_params();
     let rim = p.decor.rim_color(p.scale);
     for b in backdrops.iter().rev() {
         let alpha = b.alpha as f32 * opacity;
-        out.push(
-            rrect(
-                p,
-                ElementKey::new("popup-rim", b.key),
-                b.area,
-                b.radius,
-                true,
-                [0.0; 4],
-                Some((1.0 / p.scale, rim)),
-                alpha,
-            )
-            .into(),
-        );
-        out.extend(material_layer(
-            p,
-            ElementKey::new("backdrop", b.key),
-            &b.material,
+        out.push(rrect_item(
+            SceneKind::PopupRim,
+            b.key,
             b.area,
             b.radius,
+            true,
+            [0.0; 4],
+            Some((1.0 / p.scale, rim)),
             alpha,
         ));
+        out.extend(
+            material_layer(
+                p,
+                ElementKey::new("backdrop", b.key),
+                &b.material,
+                b.area,
+                b.radius,
+                alpha,
+            )
+            .into_iter()
+            .map(Piece::from),
+        );
         let visual = cupertino_wm::Rect::new(
             p.rect.x + b.area.loc.x,
             p.rect.y + b.area.loc.y,
@@ -1124,16 +1165,15 @@ fn popup_backdrop_elements(
             exact: true,
             corner: None,
         };
-        if let Some(s) = shadow_with(
+        out.extend(shadow_item(
             p,
-            ElementKey::new("popup-shadow", b.key),
+            SceneKind::PopupShadow,
+            b.key,
             &params,
             &plan,
             b.radius,
             f64::from(alpha),
-        ) {
-            out.push(s.into());
-        }
+        ));
     }
     out
 }
@@ -1290,7 +1330,7 @@ fn fallback_fill(
     rrect(p, key, area, radius, true, fill, None, alpha)
 }
 
-fn snap_preview(p: &mut SceneParams<'_>, stack: &mut LayerStack<CupertinoElement>) {
+fn snap_preview(p: &mut SceneParams<'_>, stack: &mut Composition) {
     let Some(prev) = p.wm.snap_preview(p.now) else {
         return;
     };
@@ -1299,9 +1339,9 @@ fn snap_preview(p: &mut SceneParams<'_>, stack: &mut LayerStack<CupertinoElement
     }
     let r = prev.rect;
     let rect = local(r, &p.rect);
-    let e = rrect(
-        p,
-        ElementKey::new("snap-preview", 0),
+    let e = rrect_item(
+        SceneKind::SnapPreview,
+        0,
         rect,
         12.0,
         true,
@@ -1309,14 +1349,10 @@ fn snap_preview(p: &mut SceneParams<'_>, stack: &mut LayerStack<CupertinoElement
         Some((2.0, [0.45, 0.65, 1.0, 0.7])),
         prev.opacity as f32,
     );
-    stack.push(SceneLayer::SnapPreview, e.into());
+    stack.push(SceneLayer::SnapPreview, e);
 }
 
-fn cursor(
-    renderer: &mut GlesRenderer,
-    p: &mut SceneParams<'_>,
-    stack: &mut LayerStack<CupertinoElement>,
-) {
+fn cursor(p: &mut SceneParams<'_>, stack: &mut Composition) {
     let scale = Scale::from(p.scale);
     let pos = p.pointer - Point::from((p.rect.x, p.rect.y));
     match std::mem::replace(&mut p.cursor, CursorPlan::Hidden) {
@@ -1328,27 +1364,34 @@ fn cursor(
                 f64::from(frame.hotspot.x) * k,
                 f64::from(frame.hotspot.y) * k,
             ));
-            let loc = (pos - hotspot).to_physical(scale);
+            let top_left = pos - hotspot;
             let (w, h) = frame.pixels;
-            let drawn = Size::<i32, Logical>::from((
+            let drawn = (
                 (f64::from(w) * k).round() as i32,
                 (f64::from(h) * k).round() as i32,
-            ));
+            );
             // the whole image: without `src` the element samples a `drawn`-sized corner of it
             let src = smithay::utils::Rectangle::<f64, Logical>::from_size(
                 (f64::from(w), f64::from(h)).into(),
             );
-            if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(
-                renderer,
-                loc,
-                &frame.buffer,
-                None,
-                Some(src),
-                Some(drawn),
-                Kind::Cursor,
-            ) {
-                stack.push(SceneLayer::Cursor, e.into());
-            }
+            stack.push(
+                SceneLayer::Cursor,
+                Piece::Image(Box::new(Picture {
+                    buffer: frame.buffer.clone(),
+                    kind: SceneKind::CursorImage,
+                    index: 0,
+                    role: ImageRole::Cursor,
+                    buffer_px: (w as i32, h as i32),
+                    src,
+                    size: drawn,
+                    placement: Placement {
+                        origin: OutputPoint(cupertino_geometry::Point::new(top_left.x, top_left.y)),
+                        ..Placement::IDENTITY
+                    },
+                    opacity: 1.0,
+                    clip: Clip::None,
+                })),
+            );
         }
         CursorPlan::Surface {
             surface,
@@ -1358,28 +1401,24 @@ fn cursor(
             let loc: Point<i32, Physical> = (pos - hotspot.to_f64().upscale(grow))
                 .to_physical(scale)
                 .to_i32_round();
-            let els: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-                render_elements_from_surface_tree(
-                    renderer,
-                    &surface,
-                    loc,
-                    scale * grow,
-                    1.0,
-                    Kind::Cursor,
-                );
-            stack.extend(
+            stack.push(
                 SceneLayer::Cursor,
-                els.into_iter().map(CupertinoElement::from),
+                Piece::Tree(Box::new(Tree {
+                    surface,
+                    kind: SceneKind::CursorContent,
+                    role: SurfaceRole::Cursor,
+                    origin: loc,
+                    pivot: loc,
+                    scale: (grow, grow),
+                    opacity: 1.0,
+                    clip: Clip::None,
+                })),
             );
         }
     }
 }
 
-fn overview(
-    renderer: &mut GlesRenderer,
-    p: &mut SceneParams<'_>,
-    stack: &mut LayerStack<CupertinoElement>,
-) -> bool {
+fn overview(p: &mut SceneParams<'_>, stack: &mut Composition) -> bool {
     let Some(session) = p
         .shell
         .overview
@@ -1397,9 +1436,9 @@ fn overview(
         (0.0, 0.0).into(),
         (p.rect.w, p.rect.h).into(),
     );
-    let e = rrect(
-        p,
-        ElementKey::new("overview-dim", 0),
+    let e = rrect_item(
+        SceneKind::OverviewDim,
+        0,
         full,
         0.0,
         false,
@@ -1407,13 +1446,13 @@ fn overview(
         None,
         1.0,
     );
-    stack.push(SceneLayer::OverviewBackdrop, e.into());
+    stack.push(SceneLayer::OverviewBackdrop, e);
 
     // windows, back to front in stacking order, drawn at their frames; the workspaces bar, the
     // highlight and the titles are the dock's layer surface
     let order: Vec<WindowId> = p.wm.stacking_order().to_vec();
     let key = p.wm.key_window();
-    let mut windows_front_to_back: Vec<CupertinoElement> = Vec::new();
+    let mut windows_front_to_back: Vec<Piece> = Vec::new();
     for id in order.iter().rev() {
         let Some(pw) = placed.iter().find(|w| w.id == *id) else {
             continue;
@@ -1434,8 +1473,8 @@ fn overview(
             corner: None,
         };
         let active = key == Some(*id);
-        let deco = window_decorations(renderer, p, entry, &plan, active);
-        let els = window_elements(renderer, p, entry, &plan, active, true, deco);
+        let deco = window_decorations(p, entry, &plan, active);
+        let els = window_elements(p, entry, &plan, active, true, deco);
         windows_front_to_back.extend(els);
     }
     stack.extend(SceneLayer::Windows, windows_front_to_back);
@@ -1444,12 +1483,28 @@ fn overview(
 
 /// Build the element list of one output, front to back.
 pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<CupertinoElement> {
-    let mut stack: LayerStack<CupertinoElement> = LayerStack::new();
-    if let LockView::Locked { surface } = std::mem::replace(&mut p.lock, LockView::Unlocked) {
-        return locked_scene(renderer, p, surface);
-    }
+    let composed = compose_scene(renderer, &mut p);
+    let mut ordered = lower_composed(composed, renderer, &mut p);
+    finalize_materials(&mut ordered, p.scale, p.cache);
+    p.cache.end_frame();
+    p.decor.end_frame();
+    p.overlays.images.end_frame();
+    ordered
+}
 
-    let wp = wallpaper_element(renderer, &mut p);
+/// The neutral frame of one output, with the elements the renderer still builds itself.
+pub fn compose_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> Composed {
+    let mut stack = Composition::new(p.scale);
+    match std::mem::replace(&mut p.lock, LockView::Unlocked) {
+        LockView::Locked { surface } => locked_scene(p, &mut stack, surface),
+        LockView::Unlocked => desktop_scene(renderer, p, &mut stack),
+    }
+    session_overlays(p, &mut stack);
+    stack.finish(p)
+}
+
+fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &mut Composition) {
+    let wp = wallpaper_element(renderer, p);
     stack.push(SceneLayer::Wallpaper, wp);
 
     let mut captures: Vec<CupertinoElement> = Vec::new();
@@ -1459,12 +1514,12 @@ pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<C
         (Layer::Top, SceneLayer::LayerTop),
         (Layer::Overlay, SceneLayer::LayerOverlay),
     ] {
-        let els = layer_elements(renderer, &mut p, layer, &mut captures);
+        let els = layer_elements(p, layer, &mut captures);
         stack.extend(scene_layer, els);
     }
     stack.extend(SceneLayer::BackdropCapture, captures);
 
-    let in_overview = overview(renderer, &mut p, &mut stack);
+    let in_overview = overview(p, stack);
     if !in_overview {
         let width = p.rect.w;
         let list = windows_on_output(
@@ -1475,9 +1530,9 @@ pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<C
             p.now,
         );
         let key = p.wm.key_window();
-        let mut front_to_back: Vec<CupertinoElement> = Vec::new();
+        let mut front_to_back: Vec<Piece> = Vec::new();
         // strip thumbnails, drawn below every window on the stage
-        let mut strip: Vec<CupertinoElement> = Vec::new();
+        let mut strip: Vec<Piece> = Vec::new();
         for (id, slide, workspace_opacity) in list.into_iter().rev() {
             let Some(entry) = p.windows.iter().find(|w| w.id == id) else {
                 continue;
@@ -1512,16 +1567,13 @@ pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<C
             }
             let active = key == Some(id);
             if in_strip {
-                let deco = window_decorations(renderer, &mut p, entry, &plan, active);
-                strip.extend(window_elements(
-                    renderer, &mut p, entry, &plan, active, true, deco,
-                ));
+                let deco = window_decorations(p, entry, &plan, active);
+                strip.extend(window_elements(p, entry, &plan, active, true, deco));
                 continue;
             }
             if pres.minimize_progress > 1e-6 {
-                if let Some(els) = minimize_elements(renderer, &mut p, entry, &pres, slide, active)
-                {
-                    front_to_back.extend(els);
+                if let Some(els) = minimize_elements(renderer, p, entry, &pres, slide, active) {
+                    front_to_back.extend(els.into_iter().map(Piece::from));
                     continue;
                 }
             }
@@ -1532,95 +1584,77 @@ pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<C
             if dimming > 0.0 {
                 let area = local(plan.visual, &p.rect);
                 let radius = p.config.window.corner_radius;
-                front_to_back.extend(material_layer(
-                    &mut p,
-                    ElementKey::new("sheet-dimming", id.0),
-                    SHEET_DIMMING_MATERIAL,
-                    area,
-                    radius,
-                    (dimming * plan.opacity) as f32,
-                ));
+                front_to_back.extend(
+                    material_layer(
+                        p,
+                        ElementKey::new("sheet-dimming", id.0),
+                        SHEET_DIMMING_MATERIAL,
+                        area,
+                        radius,
+                        (dimming * plan.opacity) as f32,
+                    )
+                    .into_iter()
+                    .map(Piece::from),
+                );
             }
-            let deco = window_decorations(renderer, &mut p, entry, &plan, active);
-            front_to_back.extend(window_elements(
-                renderer, &mut p, entry, &plan, active, true, deco,
-            ));
+            let deco = window_decorations(p, entry, &plan, active);
+            front_to_back.extend(window_elements(p, entry, &plan, active, true, deco));
         }
-        let mut ghosts = closing_elements(&mut p);
+        let mut ghosts: Vec<Piece> = closing_elements(p).into_iter().map(Piece::from).collect();
         ghosts.append(&mut front_to_back);
         ghosts.append(&mut strip);
         stack.extend(SceneLayer::Windows, ghosts);
     }
 
-    snap_preview(&mut p, &mut stack);
-    crate::kbd_ui::input_hud(renderer, &mut p, &mut stack);
-    crate::kbd_ui::accent_popup(renderer, &mut p, &mut stack);
+    snap_preview(p, stack);
+    stack.extend(SceneLayer::InputHud, crate::kbd_ui::input_hud(p));
+    stack.extend(SceneLayer::AccentPopup, crate::kbd_ui::accent_popup(p));
 
     if let Some((surface, offset)) = p.drag_icon.clone() {
         let scale = Scale::from(p.scale);
         let pos = p.pointer - Point::from((p.rect.x, p.rect.y)) + offset.to_f64();
         let loc: Point<i32, Physical> = pos.to_physical(scale).to_i32_round();
-        let els: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = render_elements_from_surface_tree(
-            renderer,
-            &surface,
-            loc,
-            scale,
-            1.0,
-            Kind::Unspecified,
-        );
-        stack.extend(
+        stack.push(
             SceneLayer::DragIcon,
-            els.into_iter().map(CupertinoElement::from),
+            standalone(&surface, SceneKind::DragIcon, loc, 1.0),
         );
     }
-    display_filter(&mut p, &mut stack);
-    cursor(renderer, &mut p, &mut stack);
+    display_filter(p, stack);
+    cursor(p, stack);
+}
 
-    let mut ordered = stack.flatten();
-    finalize_materials(&mut ordered, p.scale, p.cache);
-    p.cache.end_frame();
-    p.decor.end_frame();
-    p.overlays.images.end_frame();
-    ordered
+/// Lower a composed frame to renderer elements.
+fn lower_composed(
+    composed: Composed,
+    renderer: &mut GlesRenderer,
+    p: &mut SceneParams<'_>,
+) -> Vec<CupertinoElement> {
+    let mut ctx = Lowering {
+        renderer,
+        programs: &p.res.programs,
+        cache: p.cache,
+        scale: p.scale,
+    };
+    lower(composed, &mut ctx)
 }
 
 /// The scene while the session is locked: black, the lock surface and the pointer; nothing else may show.
-fn locked_scene(
-    renderer: &mut GlesRenderer,
-    mut p: SceneParams<'_>,
-    surface: Option<WlSurface>,
-) -> Vec<CupertinoElement> {
-    let mut stack: LayerStack<CupertinoElement> = LayerStack::new();
-    let backdrop = lock_backdrop(&mut p);
-    stack.push(SceneLayer::Wallpaper, backdrop.into());
+fn locked_scene(p: &mut SceneParams<'_>, stack: &mut Composition, surface: Option<WlSurface>) {
+    stack.push(SceneLayer::Wallpaper, Piece::item(lock_backdrop(p)));
     if let Some(surface) = surface {
-        let els: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = render_elements_from_surface_tree(
-            renderer,
-            &surface,
-            (0, 0),
-            Scale::from(p.scale),
-            1.0,
-            Kind::Unspecified,
-        );
-        stack.extend(
+        stack.push(
             SceneLayer::LayerOverlay,
-            els.into_iter().map(CupertinoElement::from),
+            standalone(&surface, SceneKind::LockContent, (0, 0).into(), 1.0),
         );
     }
-    display_filter(&mut p, &mut stack);
-    cursor(renderer, &mut p, &mut stack);
-    let mut ordered = stack.flatten();
-    finalize_materials(&mut ordered, p.scale, p.cache);
-    p.cache.end_frame();
-    p.decor.end_frame();
-    p.overlays.images.end_frame();
-    ordered
+    display_filter(p, stack);
+    cursor(p, stack);
 }
 
 /// The display filter pass: everything below the pointer, captured and passed through the colour
 /// chain of the accessibility settings. The design filters the pointer too (the whole display,
 /// ); it stays above here so that pointer motion does not repaint the output.
-fn display_filter(p: &mut SceneParams<'_>, stack: &mut LayerStack<CupertinoElement>) {
+fn display_filter(p: &mut SceneParams<'_>, stack: &mut Composition) {
     let (Some(recipe), Some(shared)) = (p.display_filter.clone(), p.res.material.clone()) else {
         return;
     };
@@ -1645,7 +1679,7 @@ fn display_filter(p: &mut SceneParams<'_>, stack: &mut LayerStack<CupertinoEleme
         p.output_px,
         p.scale,
     );
-    stack.push(SceneLayer::DisplayFilter, e.into());
+    stack.push(SceneLayer::DisplayFilter, e);
 }
 
 /// Assign each material element the signature of everything below it (bottom to top). A
@@ -1692,18 +1726,87 @@ pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: 
     }
 }
 
-fn id_hash(id: &smithay::backend::renderer::element::Id) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    id.hash(&mut h);
-    h.finish()
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::material::MaterialGl;
     use super::*;
     use cupertino_wm::{Command, MapParams, WmConfig};
+
+    fn output(w: f64, h: f64) -> cupertino_scene::Output {
+        cupertino_scene::Output {
+            id: cupertino_scene::OutputId(1),
+            rect: cupertino_scene::GlobalRect(cupertino_geometry::Rect::new(0.0, 0.0, w, h)),
+            physical_size: cupertino_scene::PhysicalSize {
+                width: w as i32,
+                height: h as i32,
+            },
+            scale: 1.0,
+            transform: cupertino_scene::Transform::Normal,
+        }
+    }
+
+    fn marker(kind: SceneKind) -> Piece {
+        rrect_item(
+            kind,
+            0,
+            smithay::utils::Rectangle::new((0.0, 0.0).into(), (1.0, 1.0).into()),
+            0.0,
+            false,
+            [0.0; 4],
+            None,
+            1.0,
+        )
+    }
+
+    #[test]
+    fn session_overlays_cover_everything_activation_fade_first() {
+        let mut stack = Composition::new(1.0);
+        stack.push(SceneLayer::Windows, marker(SceneKind::Shadow));
+        stack.push(SceneLayer::Cursor, marker(SceneKind::CursorImage));
+        stack.push(
+            SceneLayer::CompositorOverlay,
+            marker(SceneKind::SnapPreview),
+        );
+        push_session_overlays(
+            (100.0, 80.0),
+            &[
+                Some(SessionOverlay {
+                    kind: SceneKind::ActivationFade,
+                    alpha: 0.5,
+                }),
+                Some(SessionOverlay {
+                    kind: SceneKind::PowerOverlay,
+                    alpha: 0.25,
+                }),
+            ],
+            &mut stack,
+        );
+        let composed = stack.finish_with(output(100.0, 80.0), std::time::Duration::ZERO);
+        let kinds: Vec<_> = composed
+            .frame
+            .items()
+            .iter()
+            .map(|(_, item)| item.id.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                SceneKind::ActivationFade,
+                SceneKind::PowerOverlay,
+                SceneKind::SnapPreview,
+                SceneKind::CursorImage,
+                SceneKind::Shadow,
+            ]
+        );
+    }
+
+    #[test]
+    fn an_idle_session_adds_no_overlay() {
+        let mut stack = Composition::new(1.0);
+        push_session_overlays((100.0, 80.0), &[None, None], &mut stack);
+        let composed = stack.finish_with(output(100.0, 80.0), std::time::Duration::ZERO);
+        assert!(composed.frame.items().is_empty());
+    }
 
     fn pres(frame: Rect) -> Presentation {
         Presentation {

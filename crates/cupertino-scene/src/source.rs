@@ -1,7 +1,7 @@
 //! Typed resource references and paint data. Resource storage and leases belong to the server.
 
 use cupertino_effects::Mesh;
-use cupertino_geometry::CornerStyle;
+use cupertino_geometry::{CornerStyle, Point};
 
 use crate::{BufferCrop, OutputPoint, OutputRect, Transform};
 
@@ -47,12 +47,24 @@ pub struct ImageMapping {
 }
 
 /// Translation and rescale are kept separate; the renderer retains its existing operation order.
+/// Positions that the renderer places on whole device pixels are given already on that grid, as
+/// device pixels divided by the output scale, so converting back reproduces them exactly.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Placement {
     pub origin: OutputPoint,
     pub pivot: OutputPoint,
     pub scale_x: f64,
     pub scale_y: f64,
+}
+
+impl Placement {
+    /// Drawn where its source says, at its own size.
+    pub const IDENTITY: Self = Self {
+        origin: OutputPoint(Point::ZERO),
+        pivot: OutputPoint(Point::ZERO),
+        scale_x: 1.0,
+        scale_y: 1.0,
+    };
 }
 
 /// Masks are evaluated before the item's rescale, in output-local logical coordinates.
@@ -64,6 +76,8 @@ pub enum Clip {
         rect: OutputRect,
         radius: f64,
         style: CornerStyle,
+        /// The item is drawn unscaled, so the mask's interior can be reported as opaque.
+        exact: bool,
     },
 }
 
@@ -110,15 +124,24 @@ pub struct MaterialPass {
 /// Preserve live-surface import and scanout eligibility when choosing the renderer element.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SurfaceRole {
+    /// Rescaled about the placement pivot, masked when the item has a clip.
     WindowContent,
+    /// Rescaled about the placement pivot with its window, never masked.
     Popup,
+    /// Drawn at its placement as it is: layer-shell surfaces, drag icon, lock surface.
     Standalone,
+    /// A client's pointer image, enlarged by the placement scale and eligible for the cursor plane.
+    Cursor,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImageRole {
+    /// Drawn at its placement as it is.
     Standalone,
+    /// Rescaled about the placement pivot with its window, masked when the item has a clip.
     Decoration,
+    /// The pointer image, eligible for the cursor plane.
+    Cursor,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -132,6 +155,8 @@ pub enum Source {
         id: ImageId,
         mapping: ImageMapping,
         role: ImageRole,
+        /// Size on the output in logical points; `mapping.crop` selects what of the buffer is shown in it.
+        size: (i32, i32),
     },
     Snapshot {
         id: SnapshotId,
@@ -139,7 +164,8 @@ pub enum Source {
     },
     RoundedRect(RoundedRect),
     Shadow(Shadow),
-    /// The four existing procedural-wallpaper colours, as straight RGBA.
+    /// A field of four straight RGBA colours: the procedural wallpaper's, or equal colours for a solid fill.
+    /// Opaque when the item's opacity is 1.
     Wallpaper {
         rect: OutputRect,
         colours: [[f32; 4]; 4],
@@ -149,6 +175,11 @@ pub enum Source {
     TexturedMesh {
         snapshot: SnapshotId,
         mesh: Mesh,
+    },
+    /// Content the renderer still builds itself, by position in its frame-local list. Temporary:
+    /// removed in `wp03-scene-effects`, when materials and effect meshes become typed commands.
+    LocalPass {
+        index: usize,
     },
 }
 

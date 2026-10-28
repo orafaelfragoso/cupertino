@@ -12,7 +12,8 @@ mod pixels;
 pub mod popup;
 mod presenter;
 
+pub use cupertino_wayland_client::PixelRect;
 pub use damage::Damage;
 pub use error::Error;
 pub use pixels::rgba_to_argb8888;
-pub use presenter::{Ready, ShmPresenter};
+pub use presenter::{copy_rects, Ready, ShmPresenter};

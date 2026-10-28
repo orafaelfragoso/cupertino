@@ -103,6 +103,19 @@ impl ShmPresenter {
         damage: Option<&[Rect]>,
         paint: impl FnOnce(&mut Pixmap, Scale),
     ) -> Result<(), Error> {
+        self.draw_with(conn, damage, |pixmap, scale, _| paint(pixmap, scale))
+    }
+
+    /// [`draw`] with the device-pixel rectangles that were cleared given to `paint` too: `None` when the frame is whole
+    /// (the pixmap was cleared all over), also when `damage` was given but could not be kept.
+    ///
+    /// [`draw`]: Self::draw
+    pub fn draw_with(
+        &mut self,
+        conn: &mut Connection,
+        damage: Option<&[Rect]>,
+        paint: impl FnOnce(&mut Pixmap, Scale, Option<&[PixelRect]>),
+    ) -> Result<(), Error> {
         let size = self
             .size
             .ok_or(cupertino_wayland_client::Error::NotConfigured)?;
@@ -139,7 +152,7 @@ impl ShmPresenter {
                 }
             }
         }
-        paint(&mut pixmap, scale);
+        paint(&mut pixmap, scale, damage.as_deref());
         // the buffer needs what this frame changed and what it missed of the frames shown since it last held one
         let regions: Option<Vec<PixelRect>> = damage
             .as_ref()
@@ -199,6 +212,24 @@ fn clamp(r: PixelRect, width: u32, height: u32) -> Option<PixelRect> {
     })
 }
 
+/// Copy the pixels of `rects` (device pixels inside both) from `src` to `dst`, leaving the rest of `dst` as it is.
+pub fn copy_rects(dst: &mut Pixmap, src: &Pixmap, rects: &[PixelRect]) {
+    debug_assert_eq!(
+        (dst.width(), dst.height()),
+        (src.width(), src.height()),
+        "copy_rects takes pixmaps of one size"
+    );
+    let stride = dst.width() as usize * 4;
+    let (src_data, dst_data) = (src.data(), dst.data_mut());
+    for r in rects {
+        let (start, len) = (r.x as usize * 4, r.width as usize * 4);
+        for row in r.y..r.y + r.height {
+            let at = row as usize * stride + start;
+            dst_data[at..at + len].copy_from_slice(&src_data[at..at + len]);
+        }
+    }
+}
+
 /// Make the pixels of `r` (inside `pixmap`) transparent.
 fn clear(pixmap: &mut Pixmap, r: &PixelRect) {
     let stride = pixmap.width() as usize * 4;
@@ -245,5 +276,28 @@ mod tests {
                 height: 2
             }
         );
+    }
+
+    #[test]
+    fn copying_rects_changes_only_those_pixels() {
+        let mut dst = Pixmap::new(4, 3).unwrap();
+        dst.fill(Color::from_rgba8(1, 2, 3, 255));
+        let mut src = Pixmap::new(4, 3).unwrap();
+        src.fill(Color::from_rgba8(9, 9, 9, 255));
+        copy_rects(
+            &mut dst,
+            &src,
+            &[PixelRect {
+                x: 1,
+                y: 1,
+                width: 2,
+                height: 1,
+            }],
+        );
+        let changed: Vec<(u32, u32)> = (0..3)
+            .flat_map(|y| (0..4).map(move |x| (x, y)))
+            .filter(|&(x, y)| dst.pixel(x, y).unwrap().red() == 9)
+            .collect();
+        assert_eq!(changed, vec![(1, 1), (2, 1)]);
     }
 }

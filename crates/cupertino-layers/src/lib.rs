@@ -176,47 +176,91 @@ pub const DENIED_CRATES: &[(&str, &[&str])] = &[
     ),
     (
         "cupertino-ui-menus",
-        &["cupertino-protocols", "cupertino-shell-client"],
+        &[
+            "cupertino-protocols",
+            "cupertino-shell-client",
+            "cupertino-text-field",
+        ],
     ),
     (
         "cupertino-ui-wayland",
-        &["cupertino-protocols", "cupertino-shell-client"],
+        &[
+            "cupertino-protocols",
+            "cupertino-shell-client",
+            "cupertino-text-field",
+        ],
     ),
     (
         "cupertino-kit",
-        &["cupertino-protocols", "cupertino-shell-client"],
+        &[
+            "cupertino-protocols",
+            "cupertino-shell-client",
+            "cupertino-text-field",
+        ],
     ),
     (
         "cupertino-ui-controls",
-        &["cupertino-protocols", "cupertino-shell-client"],
+        &[
+            "cupertino-protocols",
+            "cupertino-shell-client",
+            "cupertino-text-field",
+        ],
     ),
     (
         "cupertino-ui-core",
-        &["cupertino-protocols", "cupertino-shell-client"],
+        &[
+            "cupertino-protocols",
+            "cupertino-shell-client",
+            "cupertino-text-field",
+        ],
     ),
     (
         "cupertino-ui-layout",
-        &["cupertino-protocols", "cupertino-shell-client"],
+        &[
+            "cupertino-protocols",
+            "cupertino-shell-client",
+            "cupertino-text-field",
+        ],
     ),
     (
         "cupertino-ui-platform",
-        &["cupertino-protocols", "cupertino-shell-client"],
+        &[
+            "cupertino-protocols",
+            "cupertino-shell-client",
+            "cupertino-text-field",
+        ],
     ),
     (
         "cupertino-ui-render",
-        &["cupertino-protocols", "cupertino-shell-client"],
+        &[
+            "cupertino-protocols",
+            "cupertino-shell-client",
+            "cupertino-text-field",
+        ],
     ),
     (
         "cupertino-ui-test",
-        &["cupertino-protocols", "cupertino-shell-client"],
+        &[
+            "cupertino-protocols",
+            "cupertino-shell-client",
+            "cupertino-text-field",
+        ],
     ),
     (
         "cupertino-ui-text",
-        &["cupertino-protocols", "cupertino-shell-client"],
+        &[
+            "cupertino-protocols",
+            "cupertino-shell-client",
+            "cupertino-text-field",
+        ],
     ),
     (
         "cupertino-ui-theme",
-        &["cupertino-protocols", "cupertino-shell-client"],
+        &[
+            "cupertino-protocols",
+            "cupertino-shell-client",
+            "cupertino-text-field",
+        ],
     ),
     ("cupertino-files", &["cupertino-shell-client"]),
     ("cupertino-settings", &["cupertino-shell-client"]),
@@ -337,7 +381,7 @@ pub const TARGET: &[(&str, Layer)] = &[
     ("cupertino-glass", Render),
     ("cupertino-icons", Foundation),
     ("cupertino-input", Models),
-    ("cupertino-keyboard", Models),
+    ("cupertino-keyboard", Foundation),
     ("cupertino-kit", Ui),
     ("cupertino-launcher", Shell),
     ("cupertino-layers", Tools),
@@ -366,7 +410,7 @@ pub const TARGET: &[(&str, Layer)] = &[
     ("cupertino-shell-client", Transport),
     ("cupertino-stage", Models),
     ("cupertino-testclient", Tools),
-    ("cupertino-text-field", Foundation),
+    ("cupertino-text-field", Ui),
     ("cupertino-theme", Foundation),
     ("cupertino-thumbnails", Foundation),
     ("cupertino-typeahead", Foundation),
@@ -415,15 +459,6 @@ pub const TARGET_EXCEPTIONS: &[Exception] = &[
         tracking: Tracking::Issue(46),
         area: Area::Apps,
         reason: APPS_DRAW,
-    },
-    Exception {
-        from: "cupertino-text-field",
-        to: "cupertino-keyboard",
-        kind: Kind::Normal,
-        tracking: Tracking::Issue(47),
-        area: Area::Design,
-        reason: "the text field takes its editing bindings from the compositor keyboard model until the toolkit text \
-                 crate owns them (Phase 3, WP-07)",
     },
 ];
 

@@ -7,9 +7,11 @@ use cupertino_geometry::Rect;
 use std::ops::Range;
 use std::sync::Arc;
 
+mod buffer;
 mod input;
 mod secure;
 
+pub use buffer::{TextBuffer, CARET_BLINK_OFF, CARET_BLINK_ON, MULTI_CLICK_INTERVAL};
 pub use input::SURROUNDING_MAX_BYTES;
 pub use secure::SecureBuffer;
 
@@ -163,12 +165,6 @@ pub struct TextPosition {
 pub struct Selection {
     pub anchor: TextPosition,
     pub focus: TextPosition,
-}
-
-/// The editable text of a field, with its selection and undo history.
-#[derive(Clone, Debug)]
-pub struct TextBuffer {
-    _private: (),
 }
 
 /// What a field holds, as the input method is told.

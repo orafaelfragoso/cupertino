@@ -1,7 +1,7 @@
 use super::*;
 use crate::engine::tests_support::{app, test_launcher};
 use crate::frecency::Frecency;
-use cupertino_text_field::{KeyInput, Keymap, Response};
+use cupertino_text_field::{KeyInput, Keymap, Response, TextFieldKeys};
 use std::time::Instant;
 
 fn now(t: f64) -> Now {

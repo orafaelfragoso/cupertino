@@ -18,7 +18,7 @@ use cupertino_shell_client::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface, LayerSurfaceConfig, Margin,
     Session, SessionChange, SessionState, Shell, ShellEvent,
 };
-use cupertino_text_field::{KeyInput, Keymap, Response, TextField};
+use cupertino_text_field::{KeyInput, Keymap, Response, TextField, TextFieldKeys};
 use cupertino_theme::{Appearance, Theme};
 use cupertino_ui_wayland::clipboard::Clipboard;
 use cupertino_ui_wayland::{Ready, ShmPresenter};

@@ -11,6 +11,7 @@
 
 use crate::fallback::Chords;
 use crate::item::{plain_text, ItemId, MenuItem, Toggle};
+use crate::recent::{RecentItems, RECENT_LIMIT};
 
 /// Security name of a network that needs no passphrase in `org.cupertino.Network1.GetNetworks`.
 const OPEN: &str = "open";
@@ -165,6 +166,12 @@ pub enum SystemAction {
     Settings,
     /// Show the server's Force Quit dialog.
     ForceQuit,
+    /// Start the application of Recent Items at this position.
+    OpenRecentApp(usize),
+    /// Open the document of Recent Items at this position with its default application.
+    OpenRecentDocument(usize),
+    /// Clear Menu of Recent Items.
+    ClearRecentItems,
 }
 
 /// A row of the system menu. Each has a fixed id in -4000…-4099, so an open menu survives a rebuild; -4000 and the
@@ -179,6 +186,7 @@ pub enum SystemRow {
     Lock = -4006,
     LogOut = -4007,
     LoginWindow = -4008,
+    RecentItems = -4009,
 }
 
 impl SystemRow {
@@ -192,6 +200,19 @@ const SEPARATOR_AFTER_SETTINGS: i32 = -4051;
 const SEPARATOR_AFTER_FORCE_QUIT: i32 = -4052;
 const SEPARATOR_AFTER_SHUT_DOWN: i32 = -4053;
 const SEPARATOR_AFTER_LOG_OUT: i32 = -4054;
+const SEPARATOR_AFTER_RECENT_ITEMS: i32 = -4055;
+
+/// Rows of the Recent Items submenu. The application and document rows take the ids of their block by position
+/// (-4060…-4069 and -4070…-4079); a click is resolved against the rows read when the menu opened.
+pub const RECENT_APPS_HEADER: i32 = -4010;
+pub const RECENT_DOCUMENTS_HEADER: i32 = -4011;
+pub const CLEAR_RECENT_ITEMS: i32 = -4012;
+const SEPARATOR_ABOVE_CLEAR_MENU: i32 = -4056;
+pub const RECENT_APP_ROWS: i32 = -4060;
+pub const RECENT_DOCUMENT_ROWS: i32 = -4070;
+
+/// The most characters of an application or file name a Recent Items row shows.
+const MAX_RECENT_LABEL_CHARS: usize = 64;
 
 /// What an entry of the system menu asks of the session agent (`org.cupertino.Login1`, through the server).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -389,12 +410,13 @@ impl Extras {
         menu
     }
 
-    /// The system menu: Settings…, Force Quit…, then the session agent's Sleep, Restart…, Shut Down…, Lock Screen and
-    /// Log Out <name>…, then the login window entry. The session's ellipsis entries open the agent's confirmation panel.
-    /// Without a session agent (none runs, or the owner of its name is not the one the server started) Settings… and
-    /// Force Quit… are followed only by Lock Screen, enabled while the server has named a login process: it locks without
-    /// the agent. Force Quit…, Lock Screen and Log Out show the chord the server binds to them in `chords`.
-    pub fn system_menu(&self, chords: &Chords) -> ExtraMenu {
+    /// The system menu: Settings…, Recent Items (the submenu of `recent`, see [`recent_items`]), Force Quit…, then the
+    /// session agent's Sleep, Restart…, Shut Down…, Lock Screen and Log Out <name>…, then the login window entry. The
+    /// session's ellipsis entries open the agent's confirmation panel. Without a session agent (none runs, or the owner
+    /// of its name is not the one the server started) Settings…, Recent Items and Force Quit… are followed only by Lock
+    /// Screen, enabled while the server has named a login process: it locks without the agent. Force Quit…, Lock Screen
+    /// and Log Out show the chord the server binds to them in `chords`.
+    pub fn system_menu(&self, chords: &Chords, recent: &RecentItems) -> ExtraMenu {
         let mut menu = ExtraMenu::default();
         let session = |a| ExtraAction::Session(a);
         menu.system_row(
@@ -406,6 +428,15 @@ impl Extras {
         );
         menu.rows
             .push(MenuItem::separator(SEPARATOR_AFTER_SETTINGS));
+        let items = recent_items(recent);
+        menu.actions.extend(items.actions);
+        menu.rows.push(MenuItem::submenu(
+            SystemRow::RecentItems.id().0,
+            "Recent Items",
+            items.rows,
+        ));
+        menu.rows
+            .push(MenuItem::separator(SEPARATOR_AFTER_RECENT_ITEMS));
         menu.system_row(
             SystemRow::ForceQuit,
             "Force Quit\u{2026}",
@@ -486,6 +517,66 @@ impl Extras {
     pub fn status_menu(&self, kind: ExtraKind) -> MenuItem {
         MenuItem::submenu(0, kind.title(), self.menu(kind).rows)
     }
+}
+
+/// The Recent Items submenu: a disabled Applications header and the applications, a disabled Documents header and the
+/// documents, then Clear Menu. A section without rows keeps its header; with no rows at all the menu is a disabled
+/// Clear Menu alone.
+pub fn recent_items(recent: &RecentItems) -> ExtraMenu {
+    let mut menu = ExtraMenu::default();
+    let system = |a| Some(ExtraAction::System(a));
+    if recent.is_empty() {
+        menu.push(
+            ItemId(CLEAR_RECENT_ITEMS),
+            "Clear Menu",
+            false,
+            Toggle::None,
+            None,
+        );
+        return menu;
+    }
+    menu.push(
+        ItemId(RECENT_APPS_HEADER),
+        "Applications",
+        false,
+        Toggle::None,
+        None,
+    );
+    for (i, app) in recent.apps.iter().take(RECENT_LIMIT).enumerate() {
+        menu.push(
+            ItemId(RECENT_APP_ROWS - i as i32),
+            &plain_text(&app.entry.name, MAX_RECENT_LABEL_CHARS),
+            true,
+            Toggle::None,
+            system(SystemAction::OpenRecentApp(i)),
+        );
+    }
+    menu.push(
+        ItemId(RECENT_DOCUMENTS_HEADER),
+        "Documents",
+        false,
+        Toggle::None,
+        None,
+    );
+    for (i, document) in recent.documents.iter().take(RECENT_LIMIT).enumerate() {
+        menu.push(
+            ItemId(RECENT_DOCUMENT_ROWS - i as i32),
+            &plain_text(&document.label(), MAX_RECENT_LABEL_CHARS),
+            true,
+            Toggle::None,
+            system(SystemAction::OpenRecentDocument(i)),
+        );
+    }
+    menu.rows
+        .push(MenuItem::separator(SEPARATOR_ABOVE_CLEAR_MENU));
+    menu.push(
+        ItemId(CLEAR_RECENT_ITEMS),
+        "Clear Menu",
+        true,
+        Toggle::None,
+        system(SystemAction::ClearRecentItems),
+    );
+    menu
 }
 
 fn wifi_menu(menu: &mut ExtraMenu, wifi: &WifiState) {
@@ -943,7 +1034,7 @@ mod tests {
     }
 
     fn system_menu(extras: &Extras) -> ExtraMenu {
-        extras.system_menu(&Chords::default())
+        extras.system_menu(&Chords::default(), &RecentItems::default())
     }
 
     #[test]
@@ -952,6 +1043,8 @@ mod tests {
         let expected = [
             ("Settings\u{2026}", -4001),
             ("---", -4051),
+            ("Recent Items", -4009),
+            ("---", -4055),
             ("Force Quit\u{2026}", -4002),
             ("---", -4052),
             ("Sleep", -4003),
@@ -1010,7 +1103,7 @@ mod tests {
         let menu = system_menu(&session("Rafael", alone));
         assert_eq!(
             rows_and_ids(&menu),
-            expected[..10],
+            expected[..12],
             "no login window and no separator before it"
         );
     }
@@ -1033,6 +1126,7 @@ mod tests {
             enabled,
             [
                 ("Settings\u{2026}", true),
+                ("Recent Items", true),
                 ("Force Quit\u{2026}", true),
                 ("Sleep", false),
                 ("Restart\u{2026}", true),
@@ -1057,6 +1151,8 @@ mod tests {
             [
                 ("Settings\u{2026}", -4001),
                 ("---", -4051),
+                ("Recent Items", -4009),
+                ("---", -4055),
                 ("Force Quit\u{2026}", -4002),
                 ("---", -4052),
                 ("Lock Screen", -4006),
@@ -1075,11 +1171,16 @@ mod tests {
         let nobody = system_menu(&Extras::default());
         assert_eq!(
             entries(&nobody),
-            ["Settings\u{2026}", "Force Quit\u{2026}", "Lock Screen"]
+            [
+                "Settings\u{2026}",
+                "Recent Items",
+                "Force Quit\u{2026}",
+                "Lock Screen"
+            ]
         );
         let lock = nobody.rows.last().unwrap();
         assert!(!lock.enabled, "no login process, so nothing locks");
-        assert!(nobody.rows[0].enabled && nobody.rows[2].enabled);
+        assert!(nobody.rows[0].enabled && nobody.rows[2].enabled && nobody.rows[4].enabled);
     }
 
     #[test]
@@ -1087,7 +1188,7 @@ mod tests {
         let extras = session("Rafael", SessionCaps::default());
         let shown = |chords: &Chords| -> Vec<(String, String)> {
             extras
-                .system_menu(chords)
+                .system_menu(chords, &RecentItems::default())
                 .rows
                 .iter()
                 .filter_map(|r| Some((r.label.clone(), r.shortcut.as_ref()?.display())))
@@ -1115,7 +1216,7 @@ mod tests {
             ],
             "Log Out is unbound"
         );
-        let without_agent = Extras::default().system_menu(&chords);
+        let without_agent = Extras::default().system_menu(&chords, &RecentItems::default());
         assert!(without_agent
             .rows
             .iter()
@@ -1190,5 +1291,144 @@ mod tests {
             blank.rows.iter().any(|r| r.label == "Log Out\u{2026}"),
             "nothing left: plain Log Out"
         );
+    }
+
+    fn recent(apps: &[&str], documents: &[&str]) -> RecentItems {
+        use crate::recent::{RecentApp, RecentDocument};
+        let app = |name: &str| RecentApp {
+            entry: cupertino_apps::DesktopEntry {
+                id: format!("{name}.desktop"),
+                name: name.into(),
+                generic_name: String::new(),
+                comment: String::new(),
+                keywords: vec![],
+                categories: vec![],
+                icon: None,
+                exec: name.into(),
+                try_exec: None,
+                terminal: false,
+                path: None,
+                startup_wm_class: None,
+                actions: vec![],
+                source: None,
+            },
+            last_used: 0.0,
+        };
+        RecentItems {
+            apps: apps.iter().map(|name| app(name)).collect(),
+            documents: documents
+                .iter()
+                .map(|name| RecentDocument {
+                    path: std::path::Path::new("/home/ada").join(name),
+                    used: None,
+                })
+                .collect(),
+        }
+    }
+
+    fn recent_submenu(menu: &ExtraMenu) -> &MenuItem {
+        menu.rows
+            .iter()
+            .find(|r| r.id == SystemRow::RecentItems.id())
+            .expect("Recent Items is in the system menu")
+    }
+
+    #[test]
+    fn recent_items_lists_applications_then_documents_at_their_ids_then_clear_menu() {
+        let items = recent(
+            &["Editor", "Web_Browser"],
+            &["notes.md", "plan\u{202e}.txt"],
+        );
+        let extras = session("Rafael", SessionCaps::default());
+        let menu = extras.system_menu(&Chords::default(), &items);
+        let submenu = recent_submenu(&menu);
+        assert!(submenu.has_submenu && submenu.enabled);
+        let rows: Vec<(String, i32, bool)> = submenu
+            .children
+            .iter()
+            .map(|r| {
+                let label = if r.separator {
+                    "---".into()
+                } else {
+                    r.label.clone()
+                };
+                (label, r.id.0, r.enabled)
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("Applications", -4010, false),
+                ("Editor", -4060, true),
+                ("Web_Browser", -4061, true),
+                ("Documents", -4011, false),
+                ("notes.md", -4070, true),
+                ("plan.txt", -4071, true),
+                ("---", -4056, false),
+                ("Clear Menu", -4012, true),
+            ]
+            .map(|(label, id, enabled)| (label.to_owned(), id, enabled))
+        );
+        let action = |id: i32| menu.action(ItemId(id)).cloned();
+        let system = |a| Some(ExtraAction::System(a));
+        assert_eq!(action(-4061), system(SystemAction::OpenRecentApp(1)));
+        assert_eq!(action(-4070), system(SystemAction::OpenRecentDocument(0)));
+        assert_eq!(action(-4012), system(SystemAction::ClearRecentItems));
+        assert_eq!(action(-4010), None, "headers do nothing");
+    }
+
+    #[test]
+    fn an_empty_section_keeps_its_header_and_nothing_at_all_is_a_disabled_clear_menu() {
+        let labels = |items: &RecentItems| -> Vec<(String, bool)> {
+            recent_items(items)
+                .rows
+                .iter()
+                .filter(|r| !r.separator)
+                .map(|r| (r.label.clone(), r.enabled))
+                .collect()
+        };
+        let owned = |rows: &[(&str, bool)]| -> Vec<(String, bool)> {
+            rows.iter().map(|(l, e)| (l.to_string(), *e)).collect()
+        };
+        assert_eq!(
+            labels(&recent(&[], &["a.txt"])),
+            owned(&[
+                ("Applications", false),
+                ("Documents", false),
+                ("a.txt", true),
+                ("Clear Menu", true)
+            ])
+        );
+        assert_eq!(
+            labels(&recent(&["Editor"], &[])),
+            owned(&[
+                ("Applications", false),
+                ("Editor", true),
+                ("Documents", false),
+                ("Clear Menu", true)
+            ])
+        );
+        let empty = recent_items(&RecentItems::default());
+        assert_eq!(
+            labels(&RecentItems::default()),
+            owned(&[("Clear Menu", false)])
+        );
+        assert_eq!(empty.rows[0].id.0, CLEAR_RECENT_ITEMS);
+        assert_eq!(empty.action(ItemId(CLEAR_RECENT_ITEMS)), None);
+    }
+
+    #[test]
+    fn recent_items_shows_at_most_ten_of_each_inside_the_system_menu_range() {
+        let names: Vec<String> = (0..12).map(|i| format!("n{i}")).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let menu = recent_items(&recent(&names, &names));
+        let ids: Vec<i32> = menu.rows.iter().map(|r| r.id.0).collect();
+        assert_eq!(menu.rows.len(), 2 + 10 + 10 + 2);
+        assert!(ids.contains(&-4069) && ids.contains(&-4079));
+        assert!(ids.iter().all(|id| (-4099..=-4000).contains(id)));
+        let mut unique = ids.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), ids.len(), "every id once");
     }
 }

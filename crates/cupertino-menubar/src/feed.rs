@@ -12,6 +12,7 @@ use crate::fallback::{self, Chords, FallbackAction, WindowRow};
 use crate::item::{MenuItem, Shortcut, ShortcutModifier};
 use crate::layout::{BarContent, StatusEntry};
 use crate::raster::{PRIVACY_DOT_PT, STATUS_ICON_PT};
+use crate::recent::RecentItems;
 use crate::source::{GtkMenuProps, KdeAppMenu, MenuSource, MenuSourceMap, WindowKey};
 use crate::worker::Request;
 use cupertino_icons::from_argb;
@@ -50,6 +51,8 @@ pub struct Shared {
     pub screen_capture: bool,
     /// The chords of the synthetic menus, from the server's shortcuts.
     pub chords: Chords,
+    /// The rows of Recent Items in the system menu, read when it last opened.
+    pub recent: RecentItems,
     pub clock: String,
     /// Menu trees of the exporters in use. A source is present from the moment its tree is
     /// requested, with an empty tree until the exporter answers.
@@ -266,7 +269,10 @@ impl BarFeed {
             }),
         });
         let status = indicator.into_iter().chain(extras).chain(items).collect();
-        let system_menu = shared.extras.system_menu(&shared.chords).rows;
+        let system_menu = shared
+            .extras
+            .system_menu(&shared.chords, &shared.recent)
+            .rows;
         BarContent {
             app_name,
             system_menu,

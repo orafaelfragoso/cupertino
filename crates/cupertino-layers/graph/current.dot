@@ -1,5 +1,5 @@
 // cupertino-layers --graph current
-// 57 crates, 209 internal dependencies
+// 57 crates, 210 internal dependencies
 // per layer: foundation 12, models 9, platform 7, render 11, core 1, shell 9, services 4, apps 2, tools 2
 // forbidden edges: none
 // denied paths ui -> core, shell, services: none

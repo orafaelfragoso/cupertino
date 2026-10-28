@@ -335,6 +335,7 @@ impl App {
         )?;
         let menu_bar = self.shell.menu_bar(&self.conn, layer.surface(), output)?;
         let edits = menu_bar.can_edit();
+        let force_quits = menu_bar.can_force_quit_app();
         let backdrop = self.effects.backdrop(&self.conn, layer.surface())?;
         backdrop.set_material("MenuBar");
         let text = self.text.for_output();
@@ -361,7 +362,7 @@ impl App {
             backdrop,
             controller,
             text,
-            feed: BarFeed::new(key, edits),
+            feed: BarFeed::new(key, edits, force_quits),
             popups: Vec::new(),
             keyboard: KeyboardInteractivity::None,
             has_keyboard: false,
@@ -900,6 +901,7 @@ impl App {
                 }
                 Action::ActivateWindow(id) => self.bars[i].menu_bar.activate_window(id),
                 Action::Edit(action) => self.bars[i].menu_bar.edit(action),
+                Action::ForceQuitApp(app_id) => self.bars[i].menu_bar.force_quit_app(&app_id),
                 Action::Launch(launch) => self.begin_launch(i, launch),
                 Action::OpenDocument(file) => self.open_document(i, &file),
                 Action::SystemMenuOpening {

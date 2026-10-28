@@ -8,6 +8,7 @@ use cupertino_geometry::{Insets, Size};
 use cupertino_ui_layout::{
     Constraints, ContainerKind, Flex, LayoutDirection, LayoutSpec, Measured, Overflow, SizeSpec,
 };
+use cupertino_ui_platform::PointerEvent;
 use cupertino_ui_theme::{
     Appearance, ColorTokens, ControlMetrics, ControlSize, FocusRing, Motion, ThemePreferences,
     ThemeTokens, TypeRole, TypeScale,
@@ -84,6 +85,8 @@ pub(crate) struct Leaf {
     pub(crate) role: Option<Role>,
     pub(crate) focusable: bool,
     pub(crate) stop: bool,
+    /// Captures the pointer while a button is down.
+    pub(crate) capture: bool,
 }
 
 pub(crate) fn leaf(label: &'static str) -> Leaf {
@@ -92,6 +95,7 @@ pub(crate) fn leaf(label: &'static str) -> Leaf {
         role: Some(Role::Button),
         focusable: true,
         stop: false,
+        capture: false,
     }
 }
 
@@ -125,7 +129,22 @@ impl<M: From<String> + 'static> Widget<M> for Leaf {
 
     fn event(&self, _: &mut u32, event: &Event, cx: &mut EventCx<'_, M>) -> Propagation {
         let name = match event {
-            Event::Pointer(..) => "pointer",
+            Event::Pointer(PointerEvent::Enter { .. }, _) => "enter",
+            Event::Pointer(PointerEvent::Leave, _) => "leave",
+            Event::Pointer(PointerEvent::Motion { .. }, _) => "motion",
+            Event::Pointer(PointerEvent::Button { pressed, .. }, _) => {
+                if self.capture && *pressed {
+                    cx.capture_pointer();
+                } else if self.capture {
+                    cx.release_pointer();
+                }
+                if *pressed {
+                    "press"
+                } else {
+                    "release"
+                }
+            }
+            Event::Pointer(PointerEvent::Scroll { .. }, _) => "scroll",
             Event::Key(..) => "key",
             Event::Focus { gained: true, .. } => "focus",
             Event::Focus { .. } => "blur",

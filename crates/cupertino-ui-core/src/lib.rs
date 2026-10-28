@@ -4,6 +4,9 @@
 
 mod accessibility;
 mod cx;
+mod focus;
+mod pointer;
+mod route;
 #[cfg(test)]
 mod test_support;
 mod tree;

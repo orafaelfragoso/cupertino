@@ -248,25 +248,24 @@ pub fn render(state: &mut Cupertino) {
             if !state.displays.powered(target.output) {
                 continue;
             }
-            let Some(composed) = state.compose_for_present(&mut h.renderer, idx) else {
-                continue;
-            };
-            let Some((res, cache, tracker)) = state.gles_parts(idx) else {
-                continue;
-            };
-            let mut resources = GlesResources::new(res, cache, composed.resources);
-            let result = Gles.render(
-                &composed.frame,
-                &mut resources,
-                GlesTarget::Texture {
-                    renderer: &mut h.renderer,
-                    texture: &mut target.texture,
-                    tracker,
-                    clear: CLEAR,
-                },
-            );
-            if let Err(e) = result {
-                tracing::warn!(error = %e, "headless render failed");
+            // without a scene (no render resources or no mode yet) nothing is drawn, but callbacks still go out
+            if let Some(composed) = state.compose_for_present(&mut h.renderer, idx) {
+                if let Some((res, cache, tracker)) = state.gles_parts(idx) {
+                    let mut resources = GlesResources::new(res, cache, composed.resources);
+                    let result = Gles.render(
+                        &composed.frame,
+                        &mut resources,
+                        GlesTarget::Texture {
+                            renderer: &mut h.renderer,
+                            texture: &mut target.texture,
+                            tracker,
+                            clear: CLEAR,
+                        },
+                    );
+                    if let Err(e) = result {
+                        tracing::warn!(error = %e, "headless render failed");
+                    }
+                }
             }
             state.process_screenshots(&mut h.renderer, idx);
             let time = Duration::from(state.clock.now());

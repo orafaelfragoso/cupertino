@@ -50,7 +50,8 @@ mod tests {
 
     use cupertino_geometry::Rect;
     use cupertino_scene::{
-        FrameId, GlobalRect, LayerStack, Output, OutputId, OutputInvalidation, PhysicalSize,
+        Clip, ContentDamage, FrameId, GlobalRect, LayerStack, Output, OutputId, OutputInvalidation,
+        OutputRect, PhysicalSize, Placement, SceneId, SceneItem, SceneKind, SceneLayer, Source,
         Transform,
     };
 
@@ -97,6 +98,33 @@ mod tests {
     }
 
     fn frame() -> SceneFrame {
+        frame_with(LayerStack::new())
+    }
+
+    fn one_item() -> SceneFrame {
+        let mut items = LayerStack::new();
+        items.push(
+            SceneLayer::Wallpaper,
+            SceneItem {
+                id: SceneId {
+                    kind: SceneKind::Wallpaper,
+                    index: 0,
+                },
+                revision: 0,
+                source: Source::Wallpaper {
+                    rect: OutputRect(Rect::new(0.0, 0.0, 10.0, 10.0)),
+                    colours: [[0.0, 0.0, 0.0, 1.0]; 4],
+                },
+                placement: Placement::IDENTITY,
+                opacity: 1.0,
+                clip: Clip::None,
+                damage: ContentDamage::Full,
+            },
+        );
+        frame_with(items)
+    }
+
+    fn frame_with(items: LayerStack<SceneItem>) -> SceneFrame {
         SceneFrame::new(
             Output {
                 id: OutputId(1),
@@ -112,7 +140,7 @@ mod tests {
             Duration::ZERO,
             [0.0; 4],
             OutputInvalidation::Incremental,
-            LayerStack::new(),
+            items,
         )
     }
 
@@ -121,6 +149,8 @@ mod tests {
         let mut renderer = Counting;
         let empty = renderer.render(&frame(), &mut (), false).unwrap();
         assert_eq!(empty.status(), RenderStatus::Empty);
+        let drawn = renderer.render(&one_item(), &mut (), false).unwrap();
+        assert_eq!(drawn.status(), RenderStatus::Rendered);
         assert_eq!(
             renderer.render(&frame(), &mut (), true).err(),
             Some(Refused)

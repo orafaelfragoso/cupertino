@@ -228,9 +228,3 @@ libxkbcommon = "*"
 [package.metadata.generate-rpm.suggests]
 foot = "*"
 iwd = "*"
-
-[lints.rust]
-# `--cfg scene_oracle` keeps the pre-scene-frame builder to compare the composition against (removed with
-# wp04-seam-gates). It is a RUSTFLAGS cfg, never a cargo feature, so `--all-features` and release builds never
-# contain it; the gate runs it as a step of its own.
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(scene_oracle)'] }

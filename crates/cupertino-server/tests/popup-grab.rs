@@ -299,8 +299,9 @@ struct Harness {
 
 impl Harness {
     fn new() -> Option<Harness> {
-        let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().ok()?;
-        let display: Display<Cupertino> = Display::new().ok()?;
+        let event_loop: EventLoop<'static, Cupertino> =
+            EventLoop::try_new().expect("creating the event loop");
+        let display: Display<Cupertino> = Display::new().expect("creating the Wayland display");
         let mut state = Cupertino::new(
             display,
             event_loop.handle(),
@@ -309,11 +310,11 @@ impl Harness {
             true,
             &cupertino_assets::Assets::builtin(),
         )
-        .ok()?;
+        .expect("creating the compositor");
         match headless::init(&mut state, OUTPUT, 1.0) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
-                eprintln!("skipping: no EGL device ({e:#})");
+                common::egl_unavailable(format!("{e:#}"));
                 None
             }
         }

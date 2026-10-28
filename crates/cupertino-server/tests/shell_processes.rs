@@ -4,6 +4,8 @@
 //! in-process server. The server runs on an offscreen EGL device; tests that need it skip (pass)
 //! when there is none, and the tests that need a session bus skip when `dbus-daemon` is missing.
 
+mod common;
+
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -70,7 +72,7 @@ impl Server {
         .unwrap();
         if offscreen {
             if let Err(e) = headless::init(&mut state, OUTPUT, 1.0) {
-                eprintln!("skipping: no EGL device ({e:#})");
+                common::egl_unavailable(format!("{e:#}"));
                 return None;
             }
         }

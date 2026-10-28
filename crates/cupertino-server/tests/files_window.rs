@@ -4,6 +4,8 @@
 //! closes it. The server runs on
 //! an offscreen EGL device; the test skips (passes) when there is none.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -56,7 +58,7 @@ impl Server {
         )
         .unwrap();
         if let Err(e) = headless::init(&mut state, OUTPUT, 1.0) {
-            eprintln!("skipping: no EGL device ({e:#})");
+            common::egl_unavailable(format!("{e:#}"));
             return None;
         }
         start_shell_supervision(&state, &event_loop).expect("the supervision timer is inserted");

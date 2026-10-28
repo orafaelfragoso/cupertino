@@ -340,7 +340,8 @@ ignore_events!(
     ext_image_copy_capture_session_v1::ExtImageCopyCaptureSessionV1,
     wl_seat::WlSeat,
     xdg_positioner::XdgPositioner,
-    xdg_popup::XdgPopup
+    xdg_popup::XdgPopup,
+    gtk_shell::gtk_surface1::GtkSurface1
 );
 
 impl Dispatch<wl_keyboard::WlKeyboard, ()> for ClientState {
@@ -576,11 +577,17 @@ enum Cmd {
     MoveToWorkspace(u32),
     SessionAction(SessionAction),
     /// Announce the KDE application menu address of an application window.
-    SetAddress(&'static str, &'static str),
+    SetAddress(String, &'static str),
+    /// Announce several KDE application menu addresses of an application window, in order, in one flush.
+    SetAddresses(Vec<(String, &'static str)>),
+    /// Announce the GTK menus of an application window on the bus name.
+    SetGtkAddress(String),
+    /// Make this many surfaces, each announcing a KDE application menu address on the bus name, in one flush.
+    AnnounceMany(String, usize),
     /// Map a second toplevel of the same application client.
     OpenSecondWindow,
     /// Announce the KDE application menu address of the second toplevel.
-    SetSecondAddress(&'static str, &'static str),
+    SetSecondAddress(String, &'static str),
     /// Announce the exported menus of an application window: bus name, then the application, window, menu bar and
     /// application menu object paths.
     AnnounceMenu([&'static str; 5]),
@@ -771,6 +778,9 @@ impl BarClient {
                     });
                 }
                 Cmd::SetAddress(..)
+                | Cmd::SetAddresses(_)
+                | Cmd::SetGtkAddress(_)
+                | Cmd::AnnounceMany(..)
                 | Cmd::OpenSecondWindow
                 | Cmd::SetSecondAddress(..)
                 | Cmd::SetTitle(_)
@@ -991,6 +1001,8 @@ impl AppClient {
             toplevel.set_app_id(app_id.to_string());
             toplevel.set_title(format!("{app_id} window"));
             let appmenu = manager.create(&surface, qh, ());
+            let gtk: GtkShell1 = globals.bind(qh, 1..=7, ()).unwrap();
+            let gtk_surface = gtk.get_gtk_surface(&surface, qh, ());
             surface.commit();
             let state = ClientState {
                 status: status.clone(),
@@ -1001,10 +1013,30 @@ impl AppClient {
             };
             let qh = qh.clone();
             let mut second = None;
+            let mut many = Vec::new();
             let apply = Box::new(move |cmd: Cmd| match cmd {
-                Cmd::SetAddress(service, path) => {
-                    appmenu.set_address(service.to_string(), path.to_string())
+                Cmd::AnnounceMany(service, count) => {
+                    for _ in 0..count {
+                        let surface = compositor.create_surface(&qh, ());
+                        let appmenu = manager.create(&surface, &qh, ());
+                        appmenu.set_address(service.clone(), "/MenuBar/1".into());
+                        many.push((appmenu, surface));
+                    }
                 }
+                Cmd::SetAddress(service, path) => appmenu.set_address(service, path.to_string()),
+                Cmd::SetAddresses(addresses) => {
+                    for (service, path) in addresses {
+                        appmenu.set_address(service, path.to_string());
+                    }
+                }
+                Cmd::SetGtkAddress(bus_name) => gtk_surface.set_dbus_properties(
+                    Some(app_id.to_string()),
+                    None,
+                    Some("/org/example/menus/menubar".into()),
+                    Some("/org/example/window/1".into()),
+                    Some("/org/example".into()),
+                    Some(bus_name),
+                ),
                 Cmd::OpenSecondWindow => {
                     let surface = compositor.create_surface(&qh, ());
                     let window = OtherWindow {
@@ -1024,7 +1056,7 @@ impl AppClient {
                     .as_ref()
                     .expect("the second window is open")
                     .2
-                    .set_address(service.to_string(), path.to_string()),
+                    .set_address(service, path.to_string()),
                 Cmd::SetTitle(title) => toplevel.set_title(title),
                 Cmd::CloseSecondWindow => {
                     let (xdg, toplevel, appmenu, surface) =
@@ -1247,6 +1279,10 @@ fn a_surface_without_the_layer_role_is_a_role_error() {
 #[test]
 fn the_active_window_its_menu_and_commands_go_through_the_bar() {
     let Some(mut h) = Harness::new() else { return };
+    let Some((_bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let own = own.unique_name().unwrap().to_string();
     let bar = BarClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&bar, 1);
 
@@ -1272,7 +1308,7 @@ fn the_active_window_its_menu_and_commands_go_through_the_bar() {
     );
 
     // the window announces a DBusMenu address: the next group names it
-    app.send(Cmd::SetAddress(":1.99", "/MenuBar/1"));
+    app.send(Cmd::SetAddress(own.clone(), "/MenuBar/1"));
     h.wait_for_groups(&bar, 3);
     assert_eq!(
         bar.groups()[2],
@@ -1282,7 +1318,7 @@ fn the_active_window_its_menu_and_commands_go_through_the_bar() {
                 title: "org.example.editor window".into()
             },
             BarEvent::MenuDbusmenu {
-                service: ":1.99".into(),
+                service: own.clone(),
                 path: "/MenuBar/1".into()
             },
             BarEvent::WindowState {
@@ -1312,9 +1348,12 @@ fn latest_title_and_menu(bar: &BarClient) -> Option<(String, BarEvent)> {
         BarEvent::ActiveApp { title, .. } => Some(title.clone()),
         _ => None,
     })?;
-    let menu = group
-        .into_iter()
-        .find(|e| matches!(e, BarEvent::MenuNone | BarEvent::MenuDbusmenu { .. }))?;
+    let menu = group.into_iter().find(|e| {
+        matches!(
+            e,
+            BarEvent::MenuNone | BarEvent::MenuDbusmenu { .. } | BarEvent::MenuGtk { .. }
+        )
+    })?;
     Some((title, menu))
 }
 
@@ -1323,14 +1362,18 @@ fn latest_title_and_menu(bar: &BarClient) -> Option<(String, BarEvent)> {
 #[test]
 fn the_bar_gets_the_menus_of_the_focused_window_of_a_client_with_two() {
     let Some(mut h) = Harness::new() else { return };
+    let Some((_bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let own = own.unique_name().unwrap().to_string();
     let bar = BarClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&bar, 1);
     let first_menu = BarEvent::MenuDbusmenu {
-        service: ":1.42".into(),
+        service: own.clone(),
         path: "/MenuBar/1".into(),
     };
     let second_menu = BarEvent::MenuDbusmenu {
-        service: ":1.42".into(),
+        service: own.clone(),
         path: "/MenuBar/2".into(),
     };
     let first_title = "org.example.office window".to_owned();
@@ -1338,7 +1381,7 @@ fn the_bar_gets_the_menus_of_the_focused_window_of_a_client_with_two() {
 
     let app = AppClient::spawn(h.socket_path(), "org.example.office");
     let first = h.mapped_window(1);
-    app.send(Cmd::SetAddress(":1.42", "/MenuBar/1"));
+    app.send(Cmd::SetAddress(own.clone(), "/MenuBar/1"));
     h.wait_until("the first window's menus", |_| {
         latest_title_and_menu(&bar) == Some((first_title.clone(), first_menu.clone()))
     });
@@ -1354,7 +1397,7 @@ fn the_bar_gets_the_menus_of_the_focused_window_of_a_client_with_two() {
         latest_title_and_menu(&bar),
         Some((second_title.clone(), BarEvent::MenuNone))
     );
-    app.send(Cmd::SetSecondAddress(":1.42", "/MenuBar/2"));
+    app.send(Cmd::SetSecondAddress(own.clone(), "/MenuBar/2"));
     h.wait_until("the second window's menus", |_| {
         latest_title_and_menu(&bar) == Some((second_title.clone(), second_menu.clone()))
     });
@@ -1422,17 +1465,23 @@ impl Harness {
 #[test]
 fn an_announced_menu_reaches_the_bar_and_the_window_knows_whether_a_bar_shows_it() {
     let Some(mut h) = Harness::new() else { return };
+    let Some((_bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let own: &'static str = own.unique_name().unwrap().to_string().leak();
     let app = KitAppClient::spawn(h.socket_path(), "org.example.Notes");
     h.mapped_window(1);
     h.wait_for_shown(&app, &[0]);
-    app.send(Cmd::AnnounceMenu([
-        ":1.42",
-        "/org/example/Notes",
-        "/org/example/Notes/window/1",
-        "/org/example/Notes/window/1/menus/menubar",
-        "",
-    ]));
-    h.step();
+    h.checked(
+        &app.0,
+        Cmd::AnnounceMenu([
+            own,
+            "/org/example/Notes",
+            "/org/example/Notes/window/1",
+            "/org/example/Notes/window/1/menus/menubar",
+            "",
+        ]),
+    );
 
     let bar = BarClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&bar, 1);
@@ -1440,7 +1489,7 @@ fn an_announced_menu_reaches_the_bar_and_the_window_knows_whether_a_bar_shows_it
         bar.groups()[0][1],
         BarEvent::MenuGtk(
             [
-                ":1.42",
+                own,
                 "",
                 "/org/example/Notes",
                 "/org/example/Notes/window/1",
@@ -1520,17 +1569,30 @@ fn a_malformed_menu_address_is_a_protocol_error() {
 #[test]
 fn the_longest_menu_address_reaches_the_bar_and_a_longer_one_is_refused() {
     let Some(mut h) = Harness::new() else { return };
+    let Some((_bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let own: &'static str = own.unique_name().unwrap().to_string().leak();
     let bar = BarClient::spawn(h.shell_stream(), true);
     h.wait_for_groups(&bar, 1);
     let bus: &'static str = format!(":1.{}", "2".repeat(252)).leak();
     let path: &'static str = format!("/{}", "a".repeat(511)).leak();
     let app = KitAppClient::spawn(h.socket_path(), "org.example.Notes");
     h.mapped_window(1);
-    app.send(Cmd::AnnounceMenu([bus, path, path, path, path]));
-    let expected = BarEvent::MenuGtk([bus, "", path, path, path, path].map(String::from));
+    app.send(Cmd::AnnounceMenu([own, path, path, path, path]));
+    let expected = BarEvent::MenuGtk([own, "", path, path, path, path].map(String::from));
     h.wait_until("the bar to get the address", |_| {
         bar.groups().iter().any(|g| g.contains(&expected))
     });
+
+    // the longest unique name the syntax allows is no protocol error, but no connection on the bus has it: no menus
+    h.checked(&app.0, Cmd::AnnounceMenu([bus, path, path, path, path]));
+    h.settle_requests(&bar);
+    assert_eq!(app.error(), None);
+    assert_eq!(
+        latest_title_and_menu(&bar).map(|(_, menu)| menu),
+        Some(BarEvent::MenuNone)
+    );
 
     // four paths that fill a 4096-byte request: the menu_gtk event would not fit one
     let near_limit: &'static str = format!("/{}", "b".repeat(950)).leak();
@@ -1865,6 +1927,545 @@ fn the_session_menu_entries_reach_the_session_agent_through_the_server() {
             "RefreshCapabilities"
         ]
     );
+}
+
+// ---- the owner of an announced menu bus name ---------------------------------------------------
+
+/// The server's D-Bus worker on a private bus, and a connection of this process on it. The test's clients run in this
+/// process too, so the connection's names are their own.
+fn menu_bus(h: &mut Harness) -> Option<(PrivateBus, zbus::blocking::Connection)> {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: no dbus-daemon");
+        return None;
+    };
+    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address);
+    h.state.dbus = Some(cupertino_server::dbus::DbusHandle::start().expect("worker thread"));
+    let own = zbus::blocking::connection::Builder::address(bus.address.as_str())
+        .unwrap()
+        .build()
+        .expect("a connection of this process");
+    Some((bus, own))
+}
+
+/// Where the foreign process finds the bus.
+const FOREIGN_BUS: &str = "CUPERTINO_TEST_FOREIGN_BUS";
+/// The well-known name the foreign process owns.
+const FOREIGN_NAME: &str = "org.example.Foreign";
+
+/// Not a test of its own: the foreign process of the owner tests, this binary run again as a child. It owns
+/// `FOREIGN_NAME`, prints its unique name, then a line for each method call made on its connection, until its stdin
+/// closes.
+#[test]
+fn foreign_menu_owner_process() {
+    let Ok(address) = std::env::var(FOREIGN_BUS) else {
+        return;
+    };
+    let conn = zbus::blocking::connection::Builder::address(address.as_str())
+        .unwrap()
+        .name(FOREIGN_NAME)
+        .unwrap()
+        .build()
+        .unwrap();
+    println!("ready {}", conn.unique_name().unwrap());
+    std::thread::spawn(|| {
+        let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+        std::process::exit(0);
+    });
+    for message in zbus::blocking::MessageIterator::from(&conn) {
+        let Ok(message) = message else { break };
+        if message.message_type() == zbus::message::Type::MethodCall {
+            println!("call {:?}", message.header().member());
+        }
+    }
+}
+
+/// Another process on the bus, owning `FOREIGN_NAME`.
+struct Foreign {
+    child: std::process::Child,
+    unique: String,
+    lines: Receiver<String>,
+}
+
+impl Foreign {
+    fn start(bus: &PrivateBus) -> Foreign {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "foreign_menu_owner_process", "--nocapture"])
+            .env(FOREIGN_BUS, &bus.address)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("the foreign process");
+        let stdout = child.stdout.take().unwrap();
+        let (tx, lines) = channel();
+        std::thread::spawn(move || {
+            for line in
+                std::io::BufRead::lines(std::io::BufReader::new(stdout)).map_while(Result::ok)
+            {
+                let _ = tx.send(line);
+            }
+        });
+        let unique = loop {
+            let line = lines
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the foreign process is ready");
+            if let Some(unique) = line.strip_prefix("ready ") {
+                break unique.to_owned();
+            }
+        };
+        Foreign {
+            child,
+            unique,
+            lines,
+        }
+    }
+
+    /// The method calls made on the foreign connection that it reported within `wait`.
+    fn calls_within(&self, wait: Duration) -> Vec<String> {
+        let end = Instant::now() + wait;
+        let mut calls = Vec::new();
+        while let Ok(line) = self
+            .lines
+            .recv_timeout(end.saturating_duration_since(Instant::now()))
+        {
+            if line.starts_with("call ") {
+                calls.push(line);
+            }
+        }
+        calls
+    }
+}
+
+impl Drop for Foreign {
+    fn drop(&mut self) {
+        drop(self.child.stdin.take());
+        let _ = self.child.wait();
+    }
+}
+
+impl Harness {
+    /// Send `cmd` to `app` and step until the server handled it, every owner check it started has returned, and the
+    /// bar has seen what followed.
+    fn announce(&mut self, app: &AppClient, bar: &BarClient, cmd: Cmd) {
+        self.checked(&app.0, cmd);
+        self.settle_requests(bar);
+    }
+
+    /// Send `cmd` to `client` and step until the server handled it and every owner check it started has returned.
+    fn checked(&mut self, client: &TestClient, cmd: Cmd) {
+        let roundtrips = || client.status.lock().unwrap().roundtrips;
+        let from = roundtrips();
+        client.send(cmd);
+        self.wait_until("the announcement to be handled", |_| {
+            roundtrips() >= from + 2
+        });
+        self.wait_until("the owner checks to return", |s| {
+            s.owner_checks.pending() == 0
+        });
+    }
+}
+
+/// A bar with the active window of an application client: the bar, the client and the window's title.
+fn menu_app(h: &mut Harness) -> (BarClient, AppClient, String) {
+    let bar = BarClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&bar, 1);
+    let app = AppClient::spawn(h.socket_path(), "org.example.editor");
+    h.mapped_window(1);
+    let title = "org.example.editor window".to_owned();
+    h.wait_until("the window to be active", |_| {
+        latest_title_and_menu(&bar).is_some_and(|(t, _)| t == title)
+    });
+    (bar, app, title)
+}
+
+fn dbusmenu(service: &str, path: &str) -> BarEvent {
+    BarEvent::MenuDbusmenu {
+        service: service.into(),
+        path: path.into(),
+    }
+}
+
+/// The client and the owner of the name are one process: the bar is told the GTK menus on that name, and the KDE
+/// address too.
+#[test]
+fn a_window_announcing_its_own_unique_name_gets_its_menus() {
+    let Some(mut h) = Harness::new() else { return };
+    let Some((_bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let own = own.unique_name().unwrap().to_string();
+    let (bar, app, title) = menu_app(&mut h);
+
+    h.announce(&app, &bar, Cmd::SetGtkAddress(own.clone()));
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((
+            title.clone(),
+            BarEvent::MenuGtk([
+                own.clone(),
+                "org.example.editor".into(),
+                "/org/example".into(),
+                "/org/example/window/1".into(),
+                "/org/example/menus/menubar".into(),
+                String::new(),
+            ])
+        ))
+    );
+    h.announce(&app, &bar, Cmd::SetAddress(own.clone(), "/MenuBar/1"));
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((title, dbusmenu(&own, "/MenuBar/1")))
+    );
+}
+
+/// A name owned by another process gives no menus, through either protocol and by its unique or its well-known name,
+/// and the server never calls it: only the bus daemon is asked.
+#[test]
+fn a_bus_name_of_another_process_gives_no_menus_and_is_never_called() {
+    let Some(mut h) = Harness::new() else { return };
+    let Some((bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let foreign = Foreign::start(&bus);
+    let (bar, app, title) = menu_app(&mut h);
+    let none = Some((title, BarEvent::MenuNone));
+
+    h.announce(
+        &app,
+        &bar,
+        Cmd::SetAddress(foreign.unique.clone(), "/MenuBar/1"),
+    );
+    assert_eq!(latest_title_and_menu(&bar), none);
+    h.announce(
+        &app,
+        &bar,
+        Cmd::SetAddress(FOREIGN_NAME.into(), "/MenuBar/1"),
+    );
+    assert_eq!(latest_title_and_menu(&bar), none);
+    h.announce(&app, &bar, Cmd::SetGtkAddress(foreign.unique.clone()));
+    assert_eq!(latest_title_and_menu(&bar), none);
+    assert!(
+        !bar.groups()
+            .iter()
+            .flatten()
+            .any(|e| matches!(e, BarEvent::MenuDbusmenu { .. } | BarEvent::MenuGtk { .. })),
+        "{:?}",
+        bar.groups()
+    );
+    assert_eq!(
+        foreign.calls_within(Duration::from_millis(300)),
+        Vec::<String>::new()
+    );
+
+    // the foreign process does report a call made on its name
+    let ping = zbus::message::Message::method_call("/", "Ping")
+        .unwrap()
+        .destination(foreign.unique.as_str())
+        .unwrap()
+        .interface("org.freedesktop.DBus.Peer")
+        .unwrap()
+        .build(&())
+        .unwrap();
+    own.send(&ping).unwrap();
+    assert_eq!(foreign.calls_within(Duration::from_secs(2)).len(), 1);
+}
+
+/// A well-known name is resolved to its owner's unique name, which is checked, and the bar is sent the unique name.
+#[test]
+fn a_well_known_name_is_resolved_to_its_owner_and_the_bar_gets_the_unique_name() {
+    let Some(mut h) = Harness::new() else { return };
+    let Some((_bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    own.request_name("org.example.Editor").unwrap();
+    let unique = own.unique_name().unwrap().to_string();
+    let (bar, app, title) = menu_app(&mut h);
+
+    h.announce(
+        &app,
+        &bar,
+        Cmd::SetAddress("org.example.Editor".into(), "/MenuBar/1"),
+    );
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((title, dbusmenu(&unique, "/MenuBar/1")))
+    );
+}
+
+/// A connection that closed before its name is checked, or a well-known name nobody owns, gives no menus.
+#[test]
+fn a_name_that_is_gone_before_the_check_gives_no_menus() {
+    let Some(mut h) = Harness::new() else { return };
+    let Some((bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let gone = zbus::blocking::connection::Builder::address(bus.address.as_str())
+        .unwrap()
+        .build()
+        .unwrap();
+    let gone_name = gone.unique_name().unwrap().to_owned();
+    drop(gone);
+    let daemon = zbus::blocking::fdo::DBusProxy::new(&own).unwrap();
+    let end = Instant::now() + Duration::from_secs(10);
+    while daemon.name_has_owner(gone_name.as_ref().into()).unwrap() {
+        assert!(
+            Instant::now() < end,
+            "the closed connection stays on the bus"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let (bar, app, title) = menu_app(&mut h);
+    let none = Some((title, BarEvent::MenuNone));
+
+    h.announce(
+        &app,
+        &bar,
+        Cmd::SetAddress(gone_name.to_string(), "/MenuBar/1"),
+    );
+    assert_eq!(latest_title_and_menu(&bar), none);
+    h.announce(
+        &app,
+        &bar,
+        Cmd::SetAddress("org.example.Nobody".into(), "/MenuBar/1"),
+    );
+    assert_eq!(latest_title_and_menu(&bar), none);
+}
+
+/// Two announcements in one flush: the first is still being checked when the second comes, so its result is dropped
+/// and the second is checked once it returns. The bar ends with the second's menus and never sees the first's.
+#[test]
+fn the_result_of_an_announcement_superseded_while_it_was_checked_is_dropped() {
+    let Some(mut h) = Harness::new() else { return };
+    let Some((bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let foreign = Foreign::start(&bus);
+    let own = own.unique_name().unwrap().to_string();
+    let (bar, app, title) = menu_app(&mut h);
+
+    h.announce(
+        &app,
+        &bar,
+        Cmd::SetAddresses(vec![
+            (foreign.unique.clone(), "/MenuBar/foreign"),
+            (own.clone(), "/MenuBar/own"),
+        ]),
+    );
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((title, dbusmenu(&own, "/MenuBar/own")))
+    );
+    let menus: Vec<_> = bar
+        .groups()
+        .into_iter()
+        .flatten()
+        .filter(|e| matches!(e, BarEvent::MenuDbusmenu { .. }))
+        .collect();
+    assert_eq!(menus, [dbusmenu(&own, "/MenuBar/own")]);
+}
+
+/// A name owned by another process, announced through `cupertino_app_menu_v1`, gives no menus and is never called.
+#[test]
+fn a_kit_window_announcing_a_bus_name_of_another_process_gets_no_menus() {
+    let Some(mut h) = Harness::new() else { return };
+    let Some((bus, _own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let foreign = Foreign::start(&bus);
+    let foreign_name: &'static str = foreign.unique.clone().leak();
+    let bar = BarClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&bar, 1);
+    let app = KitAppClient::spawn(h.socket_path(), "org.example.Notes");
+    h.mapped_window(1);
+
+    h.checked(
+        &app.0,
+        Cmd::AnnounceMenu([
+            foreign_name,
+            "/org/example/Notes",
+            "/org/example/Notes/window/1",
+            "/org/example/Notes/window/1/menus/menubar",
+            "",
+        ]),
+    );
+    h.settle_requests(&bar);
+    assert_eq!(app.error(), None);
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some(("org.example.Notes window".into(), BarEvent::MenuNone))
+    );
+    assert!(
+        !bar.groups()
+            .iter()
+            .flatten()
+            .any(|e| matches!(e, BarEvent::MenuGtk { .. })),
+        "{:?}",
+        bar.groups()
+    );
+    assert_eq!(
+        foreign.calls_within(Duration::from_millis(300)),
+        Vec::<String>::new()
+    );
+}
+
+/// A client announcing the menus of 100 surfaces at once has at most its own limit of checks on the worker, and a
+/// window of another client announcing after it still gets its menus.
+#[test]
+fn a_client_with_many_announcements_runs_at_most_its_limit_and_another_still_gets_its_menus() {
+    use cupertino_server::owner_check::CLIENT_RUNNING_LIMIT;
+    let Some(mut h) = Harness::new() else { return };
+    let Some((_bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let own = own.unique_name().unwrap().to_string();
+    let (bar, app, title) = menu_app(&mut h);
+    let many = AppClient::spawn(h.socket_path(), "org.example.many");
+    h.wait_until("the other client's window", |s| s.wm.windows().count() == 2);
+    h.wait_until("the window to stay active", |_| {
+        latest_title_and_menu(&bar).is_some_and(|(t, _)| t == title)
+    });
+
+    let mut most = 0;
+    let from = many.roundtrips();
+    many.send(Cmd::AnnounceMany(own.clone(), 100));
+    h.wait_until("the announcements to be handled", |s| {
+        most = most.max(s.owner_checks.in_flight());
+        many.roundtrips() >= from + 2
+    });
+    assert!(most >= 1, "no check was seen on the worker");
+    assert!(
+        most <= CLIENT_RUNNING_LIMIT,
+        "{most} checks of one client ran at once"
+    );
+
+    app.send(Cmd::SetAddress(own.clone(), "/MenuBar/editor"));
+    let menus = Some((title, dbusmenu(&own, "/MenuBar/editor")));
+    h.wait_until("the other client's menus", |s| {
+        most = most.max(s.owner_checks.in_flight());
+        latest_title_and_menu(&bar) == menus
+    });
+    h.wait_until("every check to return", |s| {
+        most = most.max(s.owner_checks.in_flight());
+        s.owner_checks.pending() == 0
+    });
+    assert!(
+        most <= 2 * CLIENT_RUNNING_LIMIT,
+        "{most} checks of two clients ran at once"
+    );
+}
+
+/// The private bus stopped (`SIGSTOP`) until this is dropped, so a test that fails meanwhile leaves no stopped daemon.
+struct Stopped<'a>(&'a PrivateBus);
+
+impl<'a> Stopped<'a> {
+    fn new(bus: &'a PrivateBus) -> Self {
+        let stopped = std::process::Command::new("kill")
+            .args(["-STOP", &bus.pid])
+            .status()
+            .unwrap();
+        assert!(stopped.success(), "stopping the private bus");
+        Stopped(bus)
+    }
+}
+
+impl Drop for Stopped<'_> {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("kill")
+            .args(["-CONT", &self.0.pid])
+            .status();
+    }
+}
+
+/// A check the bus never answers (its daemon stopped) is answered as timed out: the window has no menus, and its next
+/// announcement goes out once the bus answers again.
+#[test]
+fn a_check_the_bus_never_answers_times_out_to_no_menus_and_the_next_one_goes_out() {
+    use cupertino_server::owner_check::DEADLINE;
+    let Some(mut h) = Harness::new() else { return };
+    let Some((bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let own = own.unique_name().unwrap().to_string();
+    let (bar, app, title) = menu_app(&mut h);
+    h.announce(&app, &bar, Cmd::SetAddress(own.clone(), "/MenuBar/1"));
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((title.clone(), dbusmenu(&own, "/MenuBar/1")))
+    );
+
+    let stopped = Stopped::new(&bus);
+    let start = Instant::now();
+    h.announce(&app, &bar, Cmd::SetAddress(own.clone(), "/MenuBar/2"));
+    let waited = start.elapsed();
+    drop(stopped);
+    assert!(waited >= DEADLINE, "answered after {waited:?}");
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((title.clone(), BarEvent::MenuNone))
+    );
+
+    h.announce(&app, &bar, Cmd::SetAddress(own.clone(), "/MenuBar/3"));
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((title, dbusmenu(&own, "/MenuBar/3")))
+    );
+}
+
+/// Checks that time out because the bus does not answer (its daemon stopped) start no identification thread and cost
+/// the client nothing: once the bus answers again, the same window's next announcement gets its menus.
+#[test]
+fn checks_timed_out_by_a_slow_bus_cost_the_client_nothing() {
+    use cupertino_server::dbus::CLIENT_IDENTIFY_LIMIT;
+    let Some(mut h) = Harness::new() else { return };
+    let Some((bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let own = own.unique_name().unwrap().to_string();
+    let (bar, app, title) = menu_app(&mut h);
+
+    let stopped = Stopped::new(&bus);
+    for _ in 0..=CLIENT_IDENTIFY_LIMIT {
+        h.announce(&app, &bar, Cmd::SetAddress(own.clone(), "/MenuBar/1"));
+    }
+    drop(stopped);
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((title.clone(), BarEvent::MenuNone))
+    );
+
+    h.announce(&app, &bar, Cmd::SetAddress(own.clone(), "/MenuBar/2"));
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((title, dbusmenu(&own, "/MenuBar/2")))
+    );
+}
+
+/// Without a D-Bus worker, or with one that found no bus and ended, an announcement is refused in the loop: the
+/// window has no menus and the address is never applied.
+#[test]
+fn without_a_worker_an_announcement_gives_no_menus() {
+    let Some(mut h) = Harness::new() else { return };
+    let (bar, app, title) = menu_app(&mut h);
+    let none = Some((title, BarEvent::MenuNone));
+    assert!(h.state.dbus.is_none());
+    h.announce(&app, &bar, Cmd::SetAddress(":1.5".into(), "/MenuBar/1"));
+    assert_eq!(latest_title_and_menu(&bar), none);
+
+    std::env::set_var(
+        "DBUS_SESSION_BUS_ADDRESS",
+        "unix:path=/nonexistent/cupertino-test-bus",
+    );
+    h.state.dbus = cupertino_server::dbus::DbusHandle::start();
+    h.announce(&app, &bar, Cmd::SetGtkAddress(":1.5".into()));
+    assert_eq!(latest_title_and_menu(&bar), none);
+    assert!(
+        !bar.groups()
+            .iter()
+            .flatten()
+            .any(|e| matches!(e, BarEvent::MenuDbusmenu { .. } | BarEvent::MenuGtk { .. })),
+        "{:?}",
+        bar.groups()
+    );
+    assert_eq!(bar.error(), None);
 }
 
 // ---- version 10: window list, shortcuts, the commands of the fallback menus --------------------

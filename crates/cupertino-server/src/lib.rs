@@ -34,6 +34,7 @@ pub mod kbd_ui;
 pub mod live;
 pub mod menu_bar;
 pub mod overlays;
+pub mod owner_check;
 pub mod policy;
 pub mod popup_grab;
 pub mod power;

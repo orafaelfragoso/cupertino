@@ -93,6 +93,12 @@ pub struct ClientState {
     /// The client connected through a security context (`wp_security_context_v1`): a sandboxed application. It is not
     /// offered the globals that read or change what other clients own ([`crate::authorization::unsandboxed`]).
     pub sandboxed: bool,
+    /// The process that connected, from the socket (`SO_PEERPIDFD`) as the connection is accepted; `None` for a
+    /// connection the server made itself. The owner of a bus name the client hands the server is checked against it
+    /// (`crate::owner_check`).
+    pub peer: Option<cupertino_peer::ProcessHandle>,
+    /// How many of the client's owner identification threads are alive (`crate::dbus::CLIENT_IDENTIFY_LIMIT`).
+    pub owner_identifying: crate::dbus::Identifying,
 }
 
 impl Default for ClientState {
@@ -106,8 +112,21 @@ impl Default for ClientState {
             holder: std::sync::OnceLock::new(),
             backdrops: std::sync::Arc::default(),
             sandboxed: false,
+            peer: None,
+            owner_identifying: std::sync::Arc::default(),
         }
     }
+}
+
+/// The process that connected `stream`, held by the pidfd the kernel names for the socket.
+pub fn client_process(
+    stream: &std::os::unix::net::UnixStream,
+) -> Option<cupertino_peer::ProcessHandle> {
+    cupertino_peer::ProcessHandle::of_peer(stream)
+        .inspect_err(
+            |e| tracing::debug!(error = %e, "no process for the connection: no bus name it gives is taken for its own"),
+        )
+        .ok()
 }
 
 impl ClientData for ClientState {
@@ -361,6 +380,8 @@ pub struct Cupertino {
     pub bar_edge: cupertino_input::EdgeReveal,
     pub desktop: DesktopIndex,
     pub menu_bars: MenuBars,
+    /// Checks of who owns a bus name a client handed the server (`crate::owner_check`).
+    pub owner_checks: crate::owner_check::OwnerChecks,
     pub docks: Docks,
     pub sessions: SessionObservers,
     /// `cupertino_scroll_v1`: the scroll objects of the clients.
@@ -447,10 +468,11 @@ impl Cupertino {
             let name = source.socket_name().to_string_lossy().into_owned();
             loop_handle
                 .insert_source(source, |stream, _, state| {
-                    if let Err(e) = state
-                        .display_handle
-                        .insert_client(stream, Arc::new(ClientState::default()))
-                    {
+                    let data = ClientState {
+                        peer: client_process(&stream),
+                        ..ClientState::default()
+                    };
+                    if let Err(e) = state.display_handle.insert_client(stream, Arc::new(data)) {
                         tracing::warn!(error = %e, "adding wayland client failed");
                     }
                 })
@@ -530,6 +552,7 @@ impl Cupertino {
         let hot_corner_config = config.hot_corners.clone();
         let shell = Shell::default();
         let menu_protocols = MenuProtocols::new(&dh);
+        let owner_checks = crate::owner_check::OwnerChecks::new(&loop_handle)?;
         let displays = crate::displays::Displays::new(&dh);
         let shell_v1 = ShellV1Global::new(&dh);
         let app_effects_v1 = AppEffectsV1Global::new(&dh);
@@ -625,6 +648,7 @@ impl Cupertino {
             bar_edge: cupertino_input::EdgeReveal::new(cupertino_input::EdgeConfig::menu_bar()),
             desktop: DesktopIndex::load(),
             menu_bars,
+            owner_checks,
             docks: Docks::default(),
             sessions: SessionObservers::default(),
             scroll_counts,

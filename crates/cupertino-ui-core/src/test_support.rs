@@ -271,6 +271,10 @@ pub(crate) struct FakeSystem {
     pub(crate) requests: Vec<(WindowId, WindowRequest)>,
     pub(crate) presented: Vec<(WindowId, Option<ConfigureId>)>,
     pub(crate) frames_requested: usize,
+    /// The next present is refused, as when no buffer is free; the window then waits like the Wayland system's does.
+    pub(crate) refuse_next: bool,
+    stalled: Option<WindowId>,
+    frame_wanted: bool,
     pub(crate) text_input: Vec<Option<TextInputState>>,
     pub(crate) clipboard: Option<ClipboardData>,
 }
@@ -279,6 +283,13 @@ impl FakeSystem {
     pub(crate) fn send(&mut self, window: WindowId, event: WindowEvent) {
         self.queue
             .push_back(PlatformEvent::Window { window, event });
+    }
+
+    /// A buffer comes free: a stalled window gets a frame only if the runtime asked for one while it waited.
+    pub(crate) fn release(&mut self, window: WindowId) {
+        if self.stalled.take() == Some(window) && std::mem::take(&mut self.frame_wanted) {
+            self.send(window, WindowEvent::Frame(Timestamp(0)));
+        }
     }
 }
 
@@ -324,8 +335,11 @@ impl WindowSystem for FakeSystem {
         ActivationRequest(0)
     }
 
-    fn request_frame(&mut self, _: WindowId) {
+    fn request_frame(&mut self, window: WindowId) {
         self.frames_requested += 1;
+        if self.stalled == Some(window) {
+            self.frame_wanted = true;
+        }
     }
 
     fn present(
@@ -334,6 +348,10 @@ impl WindowSystem for FakeSystem {
         _: &CpuFrame,
         configure: Option<ConfigureId>,
     ) -> Result<PresentOutcome, PlatformError> {
+        if std::mem::take(&mut self.refuse_next) {
+            self.stalled = Some(window);
+            return Ok(PresentOutcome::NotReady);
+        }
         self.presented.push((window, configure));
         Ok(PresentOutcome::Presented)
     }

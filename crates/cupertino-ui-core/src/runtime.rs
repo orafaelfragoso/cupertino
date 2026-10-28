@@ -727,6 +727,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     w.frame_ready = false;
                     w.dirty = true;
                     w.damage.invalidate();
+                    self.system.request_frame(w.id);
                 }
             }
         }

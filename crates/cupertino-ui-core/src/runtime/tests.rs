@@ -161,6 +161,36 @@ fn a_window_is_drawn_only_after_its_first_configure_which_the_frame_acknowledges
 }
 
 #[test]
+fn a_refused_frame_waits_for_the_window_system_and_is_drawn_whole_when_it_resumes() {
+    let (mut rt, window, damage) = start();
+    rt.window_system_mut().refuse_next = true;
+    configure(&mut rt, window, 3);
+
+    assert!(rt.window_system().presented.is_empty());
+    assert_eq!(
+        rt.step(steps()).unwrap(),
+        StepStatus::Waiting(Pending {
+            frames: 1,
+            ..Pending::default()
+        }),
+        "no retry until the window system says the window may draw"
+    );
+
+    rt.window_system_mut().release(window);
+    rt.step(steps()).unwrap();
+
+    assert_eq!(
+        rt.window_system().presented,
+        vec![(window, Some(ConfigureId(3)))]
+    );
+    assert_eq!(
+        damage.borrow().as_slice(),
+        [DamageRegion::Full, DamageRegion::Full]
+    );
+    assert_eq!(rt.step(steps()).unwrap(), StepStatus::Idle);
+}
+
+#[test]
 fn a_click_updates_the_model_and_the_view_and_a_frame_with_no_damage_sends_nothing() {
     let (mut rt, window, _) = start();
     configure(&mut rt, window, 1);

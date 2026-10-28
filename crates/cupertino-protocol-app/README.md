@@ -25,5 +25,4 @@ connection with a protocol error.
 cargo test -p cupertino-protocol-app
 ```
 
-Unit tests cover the backdrop shape. `tests/protocol_flow.rs` in `cupertino-client` runs every object against an
-in-process server.
+Unit tests cover the backdrop shape. `tests/protocol-flow.rs` runs every object against an in-process server.

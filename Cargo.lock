@@ -1528,6 +1528,7 @@ dependencies = [
  "cupertino-ui-layout",
  "cupertino-ui-platform",
  "cupertino-ui-render",
+ "cupertino-ui-test",
  "cupertino-ui-text",
  "cupertino-ui-theme",
 ]

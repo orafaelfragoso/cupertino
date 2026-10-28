@@ -10,14 +10,22 @@ const RETURN: Keysym = Keysym(0xff0d);
 const KP_ENTER: Keysym = Keysym(0xff8d);
 const ESCAPE: Keysym = Keysym(0xff1b);
 
+/// The node state of a button or switch: hover and how it is armed. Opaque.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Press {
+pub struct Press {
     hovered: bool,
     pointer: bool,
     touch: Option<i32>,
     key: bool,
     /// The armed pointer or touch is over the control.
     inside: bool,
+}
+
+/// The keys that activate: a button takes Return too, a switch only Space.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Keys {
+    SpaceAndReturn,
+    Space,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +68,7 @@ impl Press {
         &mut self,
         event: &Event,
         enabled: bool,
+        keys: Keys,
         cx: &mut EventCx<'_, M>,
     ) -> Outcome {
         if cx.phase() == Phase::Capture {
@@ -154,7 +163,13 @@ impl Press {
                         Outcome::Changed
                     }
                 }
-                RETURN | KP_ENTER if key.pressed && !key.repeat && enabled && !self.armed() => {
+                RETURN | KP_ENTER
+                    if keys == Keys::SpaceAndReturn
+                        && key.pressed
+                        && !key.repeat
+                        && enabled
+                        && !self.armed() =>
+                {
                     Outcome::Activated(ActivationSource::Keyboard)
                 }
                 ESCAPE if key.pressed && self.key => self.disarm(),

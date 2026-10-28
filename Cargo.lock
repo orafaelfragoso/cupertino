@@ -1524,6 +1524,7 @@ name = "cupertino-ui-controls"
 version = "0.1.0"
 dependencies = [
  "cupertino-geometry",
+ "cupertino-text-field",
  "cupertino-ui-core",
  "cupertino-ui-layout",
  "cupertino-ui-platform",

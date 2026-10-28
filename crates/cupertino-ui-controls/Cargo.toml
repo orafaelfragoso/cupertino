@@ -10,6 +10,7 @@ layer = "render"
 
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
+cupertino-text-field = { path = "../cupertino-text-field" }
 cupertino-ui-core = { path = "../cupertino-ui-core" }
 cupertino-ui-layout = { path = "../cupertino-ui-layout" }
 cupertino-ui-platform = { path = "../cupertino-ui-platform" }

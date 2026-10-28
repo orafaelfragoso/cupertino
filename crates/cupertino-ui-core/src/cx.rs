@@ -38,6 +38,7 @@ pub(crate) struct Effects<M> {
     pub(crate) cursor: Option<Option<CursorShape>>,
     pub(crate) animate: BTreeSet<NodeId>,
     pub(crate) text_input: Option<(NodeId, Option<TextInputState>)>,
+    pub(crate) clipboard: Option<String>,
 }
 
 impl<M> Default for Effects<M> {
@@ -50,6 +51,7 @@ impl<M> Default for Effects<M> {
             cursor: None,
             animate: BTreeSet::new(),
             text_input: None,
+            clipboard: None,
         }
     }
 }
@@ -65,6 +67,9 @@ impl<M> Effects<M> {
         self.animate.extend(other.animate);
         if other.text_input.is_some() {
             self.text_input = other.text_input;
+        }
+        if other.clipboard.is_some() {
+            self.clipboard = other.clipboard;
         }
     }
 }
@@ -170,6 +175,11 @@ impl<M> EventCx<'_, M> {
     /// node loses the focus.
     pub fn set_text_input(&mut self, state: Option<TextInputState>) {
         self.effects.text_input = Some((self.node, state));
+    }
+
+    /// Puts `text` on the clipboard, as a field's copy or cut does.
+    pub fn set_clipboard(&mut self, text: String) {
+        self.effects.clipboard = Some(text);
     }
 
     /// Delivers [`Event::AnimationFrame`](crate::Event::AnimationFrame) to this node on the next frame.

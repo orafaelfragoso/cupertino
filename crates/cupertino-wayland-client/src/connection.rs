@@ -61,7 +61,7 @@ use crate::capability::REQUIRED;
 use crate::clipboard::Clipboard;
 use crate::configure::{wire_size, Serials};
 use crate::input::{Modifiers, PointerTracker, Repeat, Translator};
-use crate::output::{OutputBuilder, OutputId};
+use crate::output::{identification, physical_size, OutputBuilder, OutputId, OutputTransform};
 use crate::scale::ScaleSources;
 use crate::{
     BufferFormat, BufferLayout, Capability, CapabilitySet, ClipboardOffer, Decorations, Disconnect,
@@ -1544,6 +1544,28 @@ impl Dispatch<WlOutput, OutputId> for State {
                 ..
             } if flags.contains(wl_output::Mode::Current) => {
                 pending.mode = u32::try_from(width).ok().zip(u32::try_from(height).ok());
+            }
+            wl_output::Event::Geometry {
+                physical_width,
+                physical_height,
+                make,
+                model,
+                transform,
+                ..
+            } => {
+                pending.make = identification(make);
+                pending.model = identification(model);
+                pending.physical_size_mm = physical_size(physical_width, physical_height);
+                pending.transform = match transform {
+                    WEnum::Value(wl_output::Transform::_90) => OutputTransform::Rotated90,
+                    WEnum::Value(wl_output::Transform::_180) => OutputTransform::Rotated180,
+                    WEnum::Value(wl_output::Transform::_270) => OutputTransform::Rotated270,
+                    WEnum::Value(wl_output::Transform::Flipped) => OutputTransform::Flipped,
+                    WEnum::Value(wl_output::Transform::Flipped90) => OutputTransform::Flipped90,
+                    WEnum::Value(wl_output::Transform::Flipped180) => OutputTransform::Flipped180,
+                    WEnum::Value(wl_output::Transform::Flipped270) => OutputTransform::Flipped270,
+                    _ => OutputTransform::Normal,
+                };
             }
             wl_output::Event::Name { name } => pending.name = Some(name),
             wl_output::Event::Description { description } => {

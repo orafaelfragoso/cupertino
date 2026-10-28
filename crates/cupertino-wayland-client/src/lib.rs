@@ -29,7 +29,7 @@ pub use connection::{
 };
 pub use error::{Disconnect, Error};
 pub use input::{key, Button, KeyboardEvent, Modifiers, PointerEvent};
-pub use output::{OutputGeometry, OutputId, OutputInfo};
+pub use output::{OutputGeometry, OutputId, OutputInfo, OutputTransform};
 pub use scale::Scale;
 pub use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape as CursorShape;
 pub use wayland_protocols::xdg::shell::client::xdg_positioner::{

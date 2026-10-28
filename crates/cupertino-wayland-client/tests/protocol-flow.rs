@@ -4,8 +4,8 @@
 use cupertino_geometry::Rect;
 use cupertino_wayland_client::{
     Anchor, BufferFormat, Button, Capability, Connection, ConstraintAdjustment, Decorations, Error,
-    Event, Extension, Gravity, KeyboardEvent, OutputGeometry, PixelRect, PointerEvent,
-    PopupPlacement, Scale, SurfaceId, Toplevel, ToplevelConfig, WindowConfigure,
+    Event, Extension, Gravity, KeyboardEvent, OutputGeometry, OutputTransform, PixelRect,
+    PointerEvent, PopupPlacement, Scale, SurfaceId, Toplevel, ToplevelConfig, WindowConfigure,
 };
 use std::collections::VecDeque;
 use std::io::Write;
@@ -52,7 +52,7 @@ use wayland_server::protocol::wl_data_device_manager::{self, WlDataDeviceManager
 use wayland_server::protocol::wl_data_offer::{self, WlDataOffer};
 use wayland_server::protocol::wl_data_source::WlDataSource;
 use wayland_server::protocol::wl_keyboard::{self, WlKeyboard};
-use wayland_server::protocol::wl_output::WlOutput;
+use wayland_server::protocol::wl_output::{self, WlOutput};
 use wayland_server::protocol::wl_pointer::{self, WlPointer};
 use wayland_server::protocol::wl_region::{self, WlRegion};
 use wayland_server::protocol::wl_seat::{self, WlSeat};
@@ -721,6 +721,17 @@ impl GlobalDispatch<WlOutput, ()> for Mock {
         init: &mut DataInit<'_, Self>,
     ) {
         let output = init.init(r, ());
+        output.geometry(
+            0,
+            0,
+            344,
+            194,
+            wl_output::Subpixel::Unknown,
+            "Example".into(),
+            "Unknown".into(),
+            wl_output::Transform::Normal,
+        );
+        output.mode(wl_output::Mode::Current, 1920, 1080, 60_000);
         output.scale(state.globals.output_scale.unwrap_or(1));
         output.name("TEST-1".into());
         output.done();
@@ -1943,6 +1954,35 @@ fn an_output_has_a_logical_geometry_only_with_xdg_output() {
         })
     );
     assert_eq!(geometry(false), None);
+}
+
+#[test]
+fn an_output_reports_its_identification_size_and_effective_scale() {
+    let output = |output_layout| {
+        let (conn, _control, _seen) = connect(Globals {
+            output_scale: Some(1),
+            output_layout,
+            ..Globals::core()
+        });
+        conn.outputs()[0].clone()
+    };
+    let laid_out = output(true);
+    assert_eq!(
+        (
+            laid_out.make.as_deref(),
+            laid_out.model.as_deref(),
+            laid_out.physical_size_mm,
+            laid_out.transform,
+        ),
+        (
+            Some("Example"),
+            None,
+            Some((344, 194)),
+            OutputTransform::Normal
+        )
+    );
+    assert_eq!(laid_out.effective_scale(), Some(1.5));
+    assert_eq!(output(false).effective_scale(), None);
 }
 
 #[test]

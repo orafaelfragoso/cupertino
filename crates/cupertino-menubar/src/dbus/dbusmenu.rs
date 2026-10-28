@@ -15,7 +15,8 @@ use zbus::proxy;
 use zbus::zvariant::{OwnedValue, Value};
 use zbus::Connection;
 
-use crate::item::{ItemId, MenuItem, Shortcut, Toggle};
+use crate::fallback;
+use crate::item::{ItemId, MenuItem, Origin, Shortcut, Toggle};
 
 /// One node of the wire layout: id, properties, children (variants holding nested nodes).
 pub type RawNode = (i32, HashMap<String, OwnedValue>, Vec<OwnedValue>);
@@ -236,6 +237,7 @@ fn parse_node(node: &RawNode, depth: usize) -> Result<MenuItem, ParseError> {
     let (id, props, children) = node;
     let mut item = MenuItem {
         id: ItemId(*id),
+        origin: Origin::Exporter,
         enabled: true,
         visible: true,
         ..Default::default()
@@ -246,6 +248,10 @@ fn parse_node(node: &RawNode, depth: usize) -> Result<MenuItem, ParseError> {
     }
     for c in children {
         let raw = node_from_value(c)?;
+        // the bar's own items use those ids; an exporter's item with one is left out
+        if fallback::is_system(ItemId(raw.0)) {
+            continue;
+        }
         item.children.push(parse_node(&raw, depth + 1)?);
     }
     if !item.children.is_empty() {
@@ -540,6 +546,29 @@ mod tests {
             5,
             "the hidden item is skipped"
         );
+    }
+
+    #[test]
+    fn items_are_the_exporters_and_ids_of_the_bars_own_items_are_left_out() {
+        let item = |id: i32| make_node(id, props(vec![("label", "x".into())]), vec![]).unwrap();
+        let reserved = [
+            crate::fallback::FallbackAction::HideOthers.item_id().0,
+            crate::fallback::FallbackAction::ShowWindow(0).item_id().0,
+        ];
+        let root = make_node(
+            0,
+            HashMap::new(),
+            vec![item(7), item(reserved[0]), item(reserved[1]), item(-1)],
+        )
+        .unwrap();
+        let root = parse_layout(&root).unwrap();
+        assert_eq!(
+            root.children.iter().map(|c| c.id.0).collect::<Vec<_>>(),
+            [7, -1]
+        );
+        assert!([&root, &root.children[0]]
+            .iter()
+            .all(|i| i.origin == Origin::Exporter));
     }
 
     #[test]

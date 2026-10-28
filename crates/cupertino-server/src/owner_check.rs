@@ -36,6 +36,7 @@ use smithay::reexports::wayland_server::Client;
 
 pub use crate::dbus::OwnerRefusal;
 use crate::dbus::{Identifying, OwnerQuery};
+use crate::menu_bar::MenuKind;
 use crate::state::{ClientState, Cupertino};
 
 /// How many checks run on the D-Bus worker at once.
@@ -48,8 +49,8 @@ pub const DEADLINE: Duration = Duration::from_secs(3);
 /// What a check is for; the latest check of a key wins.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum OwnerKey {
-    /// The menus a surface announced (`crate::protocols`), by the surface.
-    MenuAddress(ObjectId),
+    /// The menus of one kind a surface announced (`crate::protocols`), by the surface and the kind.
+    MenuAddress(ObjectId, MenuKind),
 }
 
 /// A request: is `name` (unique or well-known) owned by `client`, or by a process of its sandbox instance?
@@ -347,7 +348,9 @@ impl Cupertino {
     /// Hand an answer to the caller of its key.
     fn owner_checked(&mut self, checked: OwnerChecked) {
         match checked.key {
-            OwnerKey::MenuAddress(surface) => self.menu_owner_checked(surface, checked.verdict),
+            OwnerKey::MenuAddress(surface, kind) => {
+                self.menu_owner_checked(surface, kind, checked.verdict)
+            }
         }
     }
 }

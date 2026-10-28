@@ -23,8 +23,8 @@ pub const KEY_BACKSPACE: u32 = 14;
 pub const KEY_DELETE: u32 = 111;
 
 /// Latin keysyms of the keys the table names (`xkbcommon-keysyms.h`).
-const SYM_RETURN: u32 = 0xff0d;
-const SYM_KP_ENTER: u32 = 0xff8d;
+pub const SYM_RETURN: u32 = 0xff0d;
+pub const SYM_KP_ENTER: u32 = 0xff8d;
 const SYM_C: u32 = 0x63;
 const SYM_V: u32 = 0x76;
 /// The upper-case forms, which a Shift or Caps Lock chord reports.
@@ -157,6 +157,34 @@ pub fn decide(profile: &ModifierProfile, t: &ClientTarget, k: &KeyPress) -> Rewr
     }
     // 12
     Rewrite::Pass
+}
+
+/// The chord the person presses so that a client of class `class` receives `received`, outside a text input: the
+/// inverse of the Super rows of [`decide`]. For a terminal, Shift+Ctrl+C or V comes from Super+C or V (5 and 6); for
+/// any other third-party client, a Ctrl chord without Super on a printable key or Return comes from the Super chord of
+/// the same key with Shift and Alt kept (9). Every other chord, every chord of a first-party client and every chord
+/// under a profile whose primary modifier is not Super is pressed as it is received.
+pub fn pressed_for(profile: &ModifierProfile, class: ClientClass, received: &KeyPress) -> KeyPress {
+    let raw = received.raw;
+    if profile.primary_physical() != Some(RawMods::SUPER)
+        || received.is_modifier
+        || raw.contains(RawMods::SUPER)
+    {
+        return *received;
+    }
+    let pressed = match class {
+        ClientClass::FirstParty => None,
+        ClientClass::Terminal => (raw == RawMods::CTRL | RawMods::SHIFT
+            && matches!(received.sym, SYM_C | SYM_V | SYM_UPPER_C | SYM_UPPER_V))
+        .then_some(RawMods::SUPER),
+        ClientClass::Other => (raw.contains(RawMods::CTRL)
+            && (received.printable || matches!(received.sym, SYM_RETURN | SYM_KP_ENTER)))
+        .then_some(RawMods((raw.0 & !RawMods::CTRL.0) | RawMods::SUPER.0)),
+    };
+    match pressed {
+        Some(raw) => KeyPress { raw, ..*received },
+        None => *received,
+    }
 }
 
 #[cfg(test)]
@@ -403,5 +431,118 @@ mod tests {
         assert!(![None, Some(' '), Some('\r'), Some('\u{1b}')]
             .into_iter()
             .any(is_printable));
+    }
+
+    /// What the client is told for `k` under `r`, outside a text input.
+    fn received(k: &KeyPress, r: Rewrite) -> KeyPress {
+        match r {
+            Rewrite::Pass => *k,
+            Rewrite::Mods { remove, add } => KeyPress {
+                raw: RawMods((k.raw.0 & !remove.0) | add.0),
+                ..*k
+            },
+            Rewrite::Key { .. } => unreachable!("only a text input changes the key"),
+        }
+    }
+
+    /// Letters, a digit, punctuation, Return, keys no row rewrites and a modifier key, with every set of Shift, Ctrl,
+    /// Alt and Super.
+    fn chords() -> Vec<KeyPress> {
+        let keys = [
+            letter(KEY_C, SYM_C, RawMods::default()),
+            letter(47, SYM_V, RawMods::default()),
+            letter(16, 0x71, RawMods::default()),
+            letter(KEY_C, SYM_UPPER_C, RawMods::default()),
+            letter(2, 0x31, RawMods::default()),
+            letter(51, 0x2c, RawMods::default()),
+            named(28, SYM_RETURN, RawMods::default()),
+            named(96, SYM_KP_ENTER, RawMods::default()),
+            named(KEY_F5, SYM_F5, RawMods::default()),
+            named(KEY_TAB, SYM_TAB, RawMods::default()),
+            named(KEY_SPACE, 0x20, RawMods::default()),
+            named(1, 0xff1b, RawMods::default()),
+            named(KEY_DELETE, 0xffff, RawMods::default()),
+            named(KEY_BACKSPACE, 0xff08, RawMods::default()),
+            named(KEY_LEFT, SYM_ARROW, RawMods::default()),
+            KeyPress {
+                is_modifier: true,
+                ..named(29, 0xffe3, RawMods::default())
+            },
+        ];
+        keys.into_iter()
+            .flat_map(|k| {
+                (0..16).map(move |raw| KeyPress {
+                    raw: RawMods(raw),
+                    ..k
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn pressed_for_inverts_decide_for_every_class_and_profile() {
+        for profile in [ModifierProfile::cupertino(), ModifierProfile::classic_pc()] {
+            for class in [
+                ClientClass::FirstParty,
+                ClientClass::Terminal,
+                ClientClass::Other,
+            ] {
+                let t = target(class);
+                let all = chords();
+                let rewritten: Vec<KeyPress> = all
+                    .iter()
+                    .filter_map(|p| {
+                        let r = decide(&profile, &t, p);
+                        (r != Rewrite::Pass).then(|| received(p, r))
+                    })
+                    .collect();
+                for p in &all {
+                    let r = decide(&profile, &t, p);
+                    let got = received(p, r);
+                    let back = pressed_for(&profile, class, &got);
+                    assert_eq!(
+                        received(&back, decide(&profile, &t, &back)),
+                        got,
+                        "{} {class:?}: {back:?} must give {got:?}",
+                        profile.name
+                    );
+                    if r != Rewrite::Pass {
+                        assert_eq!(back, *p, "{} {class:?}: {got:?}", profile.name);
+                    }
+                    if !rewritten.contains(p) {
+                        assert_eq!(
+                            pressed_for(&profile, class, p),
+                            *p,
+                            "{} {class:?}: no row gives {p:?}",
+                            profile.name
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_ctrl_chord_of_a_third_party_client_is_pressed_with_super() {
+        let cupertino = ModifierProfile::cupertino();
+        let q = letter(16, 0x71, CTRL);
+        assert_eq!(pressed_for(&cupertino, ClientClass::Other, &q).raw, SUP);
+        let f5 = named(KEY_F5, SYM_F5, CTRL);
+        assert_eq!(pressed_for(&cupertino, ClientClass::Other, &f5), f5);
+        assert_eq!(pressed_for(&cupertino, ClientClass::FirstParty, &q), q);
+        assert_eq!(pressed_for(&cupertino, ClientClass::Terminal, &q), q);
+        assert_eq!(
+            pressed_for(
+                &cupertino,
+                ClientClass::Terminal,
+                &letter(KEY_C, SYM_C, CTRL | SHIFT)
+            )
+            .raw,
+            SUP
+        );
+        assert_eq!(
+            pressed_for(&ModifierProfile::classic_pc(), ClientClass::Other, &q),
+            q
+        );
     }
 }

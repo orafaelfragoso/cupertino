@@ -17,6 +17,7 @@ mod error;
 mod input;
 mod output;
 mod scale;
+mod text_input;
 
 pub use buffer::{BufferFormat, BufferLayout, PixelRect};
 pub use capability::{Capability, CapabilitySet, Extension};
@@ -31,7 +32,13 @@ pub use error::{Disconnect, Error};
 pub use input::{key, Button, KeyboardEvent, Modifiers, PointerEvent};
 pub use output::{OutputGeometry, OutputId, OutputInfo, OutputTransform};
 pub use scale::Scale;
+pub use text_input::{
+    Preedit, SurroundingText, TextInputDone, TextInputEvent, TextInputState, MAX_SURROUNDING,
+};
 pub use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape as CursorShape;
+pub use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::{
+    ChangeCause, ContentHint, ContentPurpose,
+};
 pub use wayland_protocols::xdg::shell::client::xdg_positioner::{
     Anchor, ConstraintAdjustment, Gravity,
 };

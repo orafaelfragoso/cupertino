@@ -41,10 +41,12 @@ pub enum Capability {
     CursorShape,
     /// `zxdg_output_manager_v1`: where each output sits, in logical points ([`crate::OutputInfo::geometry`]).
     OutputLayout,
+    /// `zwp_text_input_manager_v3` with a seat: input methods ([`crate::Connection::set_text_input`]).
+    TextInput,
 }
 
 impl Capability {
-    pub const ALL: [Capability; 7] = [
+    pub const ALL: [Capability; 8] = [
         Capability::Seat,
         Capability::Clipboard,
         Capability::FractionalScale,
@@ -52,6 +54,7 @@ impl Capability {
         Capability::Activation,
         Capability::CursorShape,
         Capability::OutputLayout,
+        Capability::TextInput,
     ];
 
     /// The globals that must all be advertised for the capability.
@@ -64,6 +67,7 @@ impl Capability {
             Capability::Activation => &["xdg_activation_v1"],
             Capability::CursorShape => &["wp_cursor_shape_manager_v1"],
             Capability::OutputLayout => &["zxdg_output_manager_v1"],
+            Capability::TextInput => &["zwp_text_input_manager_v3", "wl_seat"],
         }
     }
 

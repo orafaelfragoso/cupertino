@@ -412,12 +412,18 @@ pub struct Painter {
 }
 
 impl Painter {
+    /// Measure the About data at its logical font size before the window is created.
+    pub fn about_layout(&mut self, about: &crate::about::About) -> crate::about::Layout {
+        about.layout(|text| f64::from(self.text.measure(text, 13.0, 400, 0.0)))
+    }
+
     /// Paint the approved About layout with the same text, semantic colours and button geometry as Settings.
     pub fn paint_about(
         &mut self,
         pm: &mut Pixmap,
         s: f32,
         about: &crate::about::About,
+        layout: &crate::about::Layout,
         pal: &Palette,
     ) {
         use crate::about::metrics::*;
@@ -464,13 +470,9 @@ impl Painter {
         }
         let centre = f64::from(WIDTH) / 2.0;
         let column_width = centre - COLUMN_GAP / 2.0 - PADDING;
-        for (i, row) in about.rows.iter().enumerate() {
-            let y = ROWS_Y + i as f64 * (ROW_HEIGHT + ROW_GAP);
-            let label = if i > 0 && about.rows[i - 1].label == row.label {
-                ""
-            } else {
-                row.label
-            };
+        for row in &layout.rows {
+            let y = row.y;
+            let label = row.label;
             let width =
                 f64::from(self.text.measure(label, 13.0 * s, 400, 0.0) / s).min(column_width);
             self.label(
@@ -484,19 +486,20 @@ impl Painter {
                 s,
                 pal.secondary_text,
             );
-            self.label(
-                pm,
-                &Rect::new(centre + COLUMN_GAP / 2.0, y, column_width, ROW_HEIGHT),
-                &row.value,
-                Font {
-                    size: 13.0,
-                    weight: 400,
-                },
-                s,
-                pal.text,
-            );
+            for (i, line) in row.lines.iter().enumerate() {
+                self.text.draw(
+                    pm,
+                    line,
+                    (centre + COLUMN_GAP / 2.0) as f32 * s,
+                    (y + i as f64 * ROW_HEIGHT + ROW_HEIGHT / 2.0) as f32 * s + 13.0 * s * 0.36,
+                    13.0 * s,
+                    400,
+                    0.0,
+                    pal.text,
+                );
+            }
         }
-        let button = about.button();
+        let button = layout.button;
         fill_rounded(pm, &button, cm::RADIUS, false, s, pal.accent);
         let title = "More Info…";
         let width = f64::from(self.text.measure(title, 13.0 * s, 400, 0.0) / s);

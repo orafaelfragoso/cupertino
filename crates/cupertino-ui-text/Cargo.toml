@@ -10,3 +10,5 @@ layer = "render"
 
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
+unicode-segmentation = "1.13"
+zeroize = { version = "1.9", features = ["derive"] }

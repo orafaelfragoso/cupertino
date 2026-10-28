@@ -1,0 +1,445 @@
+//! Unprivileged, one-shot readings for About This Computer. Unavailable values have no row.
+
+use std::fs::File;
+use std::io::{self, Read};
+use std::path::Path;
+
+/// Maximum bytes accepted from one system description file, including the optional PCI name database.
+const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Approved About layout in logical points: content padding, mark and typography, then compact data rows.
+pub mod metrics {
+    pub const WIDTH: u32 = 280;
+    pub const PADDING: f64 = 24.0;
+    pub const TOP: f64 = 20.0;
+    pub const MARK: f64 = 64.0;
+    pub const NAME_Y: f64 = TOP + MARK + 12.0;
+    pub const NAME_HEIGHT: f64 = 28.0;
+    pub const VERSION_Y: f64 = NAME_Y + NAME_HEIGHT + 4.0;
+    pub const VERSION_HEIGHT: f64 = 16.0;
+    pub const ROWS_Y: f64 = VERSION_Y + VERSION_HEIGHT + 16.0;
+    pub const ROW_HEIGHT: f64 = 16.0;
+    pub const ROW_GAP: f64 = 6.0;
+    pub const COLUMN_GAP: f64 = 12.0;
+    pub const BUTTON_GAP: f64 = 20.0;
+    pub const BUTTON_WIDTH: f64 = 96.0;
+    pub const BUTTON_HEIGHT: f64 = 20.0;
+    pub const BOTTOM: f64 = 20.0;
+}
+
+impl About {
+    pub fn button(&self) -> crate::Rect {
+        use metrics::*;
+        let rows_height = self.rows.len() as f64 * (ROW_HEIGHT + ROW_GAP)
+            - if self.rows.is_empty() { 0.0 } else { ROW_GAP };
+        crate::Rect::new(
+            (f64::from(WIDTH) - BUTTON_WIDTH) / 2.0,
+            ROWS_Y + rows_height + BUTTON_GAP,
+            BUTTON_WIDTH,
+            BUTTON_HEIGHT,
+        )
+    }
+
+    pub fn size(&self) -> (u32, u32) {
+        (
+            metrics::WIDTH,
+            (self.button().bottom() + metrics::BOTTOM).ceil() as u32,
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Row {
+    pub label: &'static str,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct About {
+    pub version: String,
+    pub os: Option<String>,
+    pub rows: Vec<Row>,
+}
+
+impl About {
+    /// `root` is `/` in production; tests supply a fixture tree. No commands or privileged APIs are used.
+    pub fn read(root: &Path) -> Self {
+        let read = |path: &str| read_text(&root.join(path));
+        let computer = read("etc/machine-info")
+            .and_then(|s| assignment(&s, "PRETTY_HOSTNAME"))
+            .or_else(|| read("etc/hostname").and_then(|s| single_line(&s)));
+        let processor = read("proc/cpuinfo").and_then(|s| processor(&s));
+        let processor = processor.or_else(|| {
+            read("proc/device-tree/model").and_then(|s| single_line(s.trim_end_matches('\0')))
+        });
+        let memory = read("proc/meminfo").and_then(|s| memory(&s));
+        let kernel = read("proc/sys/kernel/osrelease").and_then(|s| single_line(&s));
+        let os = read("etc/os-release").and_then(|s| assignment(&s, "PRETTY_NAME"));
+        let mut rows = Vec::new();
+        for (label, value) in [
+            ("Computer", computer),
+            ("Processor", processor),
+            ("Memory", memory),
+        ] {
+            if let Some(value) = value {
+                rows.push(Row { label, value });
+            }
+        }
+        let ids = read("usr/share/hwdata/pci.ids").or_else(|| read("usr/share/misc/pci.ids"));
+        let drm = root.join("sys/class/drm");
+        match std::fs::read_dir(&drm) {
+            Ok(entries) => {
+                let mut cards = Vec::new();
+                for entry in entries {
+                    match entry {
+                        Ok(entry) if card_name(&entry.file_name().to_string_lossy()) => {
+                            cards.push(entry.path())
+                        }
+                        Ok(_) => {}
+                        Err(e) => eprintln!("cupertino-settings: {}: {e}", drm.display()),
+                    }
+                }
+                cards.sort();
+                for card in cards {
+                    let device = card.join("device");
+                    let vendor = read_text(&device.join("vendor")).and_then(|s| pci_id(&s));
+                    let product = read_text(&device.join("device")).and_then(|s| pci_id(&s));
+                    if let Some((vendor, product)) = vendor.zip(product) {
+                        let mut value = ids
+                            .as_deref()
+                            .and_then(|s| pci_name(s, vendor, product))
+                            .unwrap_or_else(|| format!("PCI {vendor:04x}:{product:04x}"));
+                        match std::fs::read_link(device.join("driver")) {
+                            Ok(path) => {
+                                if let Some(driver) = path
+                                    .file_name()
+                                    .and_then(|s| s.to_str())
+                                    .and_then(single_line)
+                                {
+                                    value.push_str(&format!(" ({driver})"));
+                                }
+                            }
+                            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                            Err(e) => eprintln!(
+                                "cupertino-settings: {}: {e}",
+                                device.join("driver").display()
+                            ),
+                        }
+                        rows.push(Row {
+                            label: "Graphics",
+                            value,
+                        });
+                    }
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => eprintln!("cupertino-settings: {}: {e}", drm.display()),
+        }
+        if let Some(value) = kernel {
+            rows.push(Row {
+                label: "Kernel",
+                value,
+            });
+        }
+        Self {
+            version: version(
+                env!("CARGO_PKG_VERSION"),
+                option_env!("CUPERTINO_BUILD_COMMIT"),
+            ),
+            os,
+            rows,
+        }
+    }
+}
+
+fn version(package: &str, commit: Option<&str>) -> String {
+    match commit.filter(|s| !s.is_empty()) {
+        Some(commit) => format!("Version {package} (build {commit})"),
+        None => format!("Version {package}"),
+    }
+}
+
+fn read_text(path: &Path) -> Option<String> {
+    let result = (|| {
+        let mut text = String::new();
+        File::open(path)?
+            .take(MAX_FILE_BYTES + 1)
+            .read_to_string(&mut text)?;
+        if text.len() as u64 > MAX_FILE_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "system description exceeds size limit",
+            ));
+        }
+        Ok(text)
+    })();
+    match result {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+        Err(e) => {
+            eprintln!("cupertino-settings: {}: {e}", path.display());
+            None
+        }
+    }
+}
+
+fn single_line(text: &str) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty() && !text.chars().any(char::is_control)).then(|| text.to_owned())
+}
+
+/// Parse a literal shell-style assignment without evaluating expansions or commands.
+fn assignment(text: &str, key: &str) -> Option<String> {
+    let value = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(key)?.strip_prefix('='))?
+        .trim();
+    let value = if let Some(value) = value.strip_prefix('"') {
+        value.strip_suffix('"')?
+    } else if let Some(value) = value.strip_prefix('\'') {
+        value.strip_suffix('\'')?
+    } else {
+        if value
+            .chars()
+            .any(|c| c.is_whitespace() || c == '"' || c == '\'')
+        {
+            return None;
+        }
+        value
+    };
+    single_line(value)
+}
+
+fn processor(text: &str) -> Option<String> {
+    let fields: Vec<_> = text
+        .lines()
+        .filter_map(|s| s.split_once(':'))
+        .map(|(k, v)| (k.trim(), v.trim()))
+        .collect();
+    let name = fields
+        .iter()
+        .find(|(k, _)| *k == "model name")
+        .or_else(|| fields.iter().find(|(k, _)| *k == "Model"))?
+        .1;
+    let name = single_line(name)?;
+    let threads = fields
+        .iter()
+        .filter(|(k, v)| *k == "processor" && v.parse::<u32>().is_ok())
+        .count();
+    Some(if threads == 0 {
+        name
+    } else if threads == 1 {
+        format!("{name} · 1 thread")
+    } else {
+        format!("{name} · {threads} threads")
+    })
+}
+
+fn memory(text: &str) -> Option<String> {
+    let value = text.lines().find_map(|s| s.strip_prefix("MemTotal:"))?;
+    let mut fields = value.split_whitespace();
+    let kb = fields.next()?.parse::<u64>().ok()?;
+    if fields.next()? != "kB" || fields.next().is_some() || kb == 0 {
+        return None;
+    }
+    let gb = kb.checked_add(512 * 1024)? / (1024 * 1024);
+    Some(format!("{gb} GB"))
+}
+
+fn card_name(name: &str) -> bool {
+    name.strip_prefix("card")
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))
+}
+
+fn pci_id(text: &str) -> Option<u16> {
+    let text = text.trim().strip_prefix("0x")?;
+    (text.len() == 4)
+        .then(|| u16::from_str_radix(text, 16).ok())
+        .flatten()
+}
+
+fn pci_name(text: &str, vendor: u16, product: u16) -> Option<String> {
+    let mut in_vendor = false;
+    for line in text
+        .lines()
+        .filter(|s| !s.is_empty() && !s.starts_with('#'))
+    {
+        if !line.starts_with('\t') {
+            in_vendor = line.get(..4).and_then(|s| u16::from_str_radix(s, 16).ok()) == Some(vendor);
+        } else if in_vendor && !line.starts_with("\t\t") {
+            let (id, name) = line[1..].split_once(char::is_whitespace)?;
+            if u16::from_str_radix(id, 16).ok() == Some(product) {
+                return single_line(name);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absent_files_hide_all_rows() {
+        let root = tempfile::tempdir().unwrap();
+        let about = About::read(root.path());
+        assert!(about.rows.is_empty());
+        assert_eq!(about.os, None);
+    }
+
+    #[test]
+    fn malformed_files_hide_their_rows_and_optional_pci_names_do_not_hide_valid_devices() {
+        let root = tempfile::tempdir().unwrap();
+        for (path, value) in [
+            ("etc/machine-info", "PRETTY_HOSTNAME=\"unfinished"),
+            ("etc/hostname", "bad\nhost"),
+            ("etc/os-release", "PRETTY_NAME=\"unfinished"),
+            ("proc/cpuinfo", "processor: 0\nmodel name:"),
+            ("proc/device-tree/model", "bad\0model"),
+            ("proc/meminfo", "MemTotal: invalid kB"),
+            ("proc/sys/kernel/osrelease", "bad\nkernel"),
+            ("sys/class/drm/card0/device/vendor", "invalid"),
+            ("sys/class/drm/card0/device/device", "0x5678"),
+        ] {
+            let path = root.path().join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, value).unwrap();
+        }
+        let about = About::read(root.path());
+        assert!(about.rows.is_empty());
+        assert_eq!(about.os, None);
+        std::fs::write(
+            root.path().join("sys/class/drm/card0/device/vendor"),
+            "0x1234",
+        )
+        .unwrap();
+        assert_eq!(
+            About::read(root.path()).rows,
+            vec![Row {
+                label: "Graphics",
+                value: "PCI 1234:5678".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn system_files_produce_the_expected_visible_rows() {
+        let root = tempfile::tempdir().unwrap();
+        for (path, value) in [
+            (
+                "etc/machine-info",
+                "PRETTY_HOSTNAME=\"Example workstation\"",
+            ),
+            ("etc/os-release", "PRETTY_NAME=\"Example Linux 1\""),
+            ("proc/cpuinfo", "processor: 0\nmodel name: Example CPU"),
+            ("proc/meminfo", "MemTotal: 33554432 kB"),
+            ("proc/sys/kernel/osrelease", "6.1-example\n"),
+        ] {
+            let path = root.path().join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, value).unwrap();
+        }
+        let about = About::read(root.path());
+        assert_eq!(
+            about
+                .rows
+                .iter()
+                .map(|r| (r.label, r.value.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Computer", "Example workstation"),
+                ("Processor", "Example CPU · 1 thread"),
+                ("Memory", "32 GB"),
+                ("Kernel", "6.1-example"),
+            ]
+        );
+        assert_eq!(about.os.as_deref(), Some("Example Linux 1"));
+        assert_eq!(about.size().0, 280);
+        assert_eq!(
+            about.size().1 as f64,
+            about.button().bottom() + metrics::BOTTOM
+        );
+    }
+
+    #[test]
+    fn assignment_parser_rejects_missing_malformed_and_empty_values() {
+        for key in ["PRETTY_HOSTNAME", "PRETTY_NAME"] {
+            for text in [
+                "",
+                "garbage",
+                &format!("{key}=\"unfinished"),
+                &format!("{key}=\"\""),
+            ] {
+                assert_eq!(assignment(text, key), None);
+            }
+            assert_eq!(
+                assignment(&format!("{key}=\"Example Linux 1\""), key),
+                Some("Example Linux 1".into())
+            );
+        }
+    }
+
+    #[test]
+    fn processor_parser_counts_threads_and_hides_malformed_or_missing_models() {
+        assert_eq!(
+            processor("processor: 0\nmodel name: Example CPU\nprocessor: 1"),
+            Some("Example CPU · 2 threads".into())
+        );
+        for text in ["", "garbage", "model name:", "processor: 0"] {
+            assert_eq!(processor(text), None);
+        }
+        assert_eq!(
+            processor("Model: Example Board"),
+            Some("Example Board".into())
+        );
+    }
+
+    #[test]
+    fn memory_parser_requires_positive_kibibytes() {
+        assert_eq!(memory("MemTotal: 33554432 kB"), Some("32 GB".into()));
+        for text in [
+            "",
+            "MemTotal: no kB",
+            "MemTotal: 0 kB",
+            "MemTotal: 1 GB",
+            "MemTotal: 18446744073709551615 kB",
+        ] {
+            assert_eq!(memory(text), None);
+        }
+    }
+
+    #[test]
+    fn line_parser_hides_missing_or_multiline_hostname_kernel_and_device_tree_values() {
+        for text in ["", " \n", "bad\nvalue", "bad\0value"] {
+            assert_eq!(single_line(text), None);
+        }
+        assert_eq!(single_line("6.1-test\n"), Some("6.1-test".into()));
+    }
+
+    #[test]
+    fn graphics_ids_and_optional_database_are_validated() {
+        for text in ["", "0xzzzz", "garbage", "0x12345"] {
+            assert_eq!(pci_id(text), None);
+        }
+        assert_eq!(pci_id("0x1234\n"), Some(0x1234));
+        assert_eq!(pci_name("", 0x1234, 0x5678), None);
+        assert_eq!(pci_name("garbage", 0x1234, 0x5678), None);
+        assert_eq!(
+            pci_name(
+                "1234  Vendor\n\t5678  Example GPU\n\t\t0000 subsystem",
+                0x1234,
+                0x5678
+            ),
+            Some("Example GPU".into())
+        );
+        assert!(card_name("card10"));
+        assert!(!card_name("card0-DP-1"));
+    }
+
+    #[test]
+    fn build_commit_is_optional() {
+        assert_eq!(version("1.0", None), "Version 1.0");
+        assert_eq!(version("1.0", Some("abc123")), "Version 1.0 (build abc123)");
+    }
+}

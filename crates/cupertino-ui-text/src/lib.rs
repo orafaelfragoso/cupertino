@@ -10,14 +10,18 @@ use std::sync::Arc;
 mod buffer;
 mod font;
 mod input;
+mod paragraph;
 mod secure;
 mod shape;
+mod system;
 
 pub use buffer::{TextBuffer, CARET_BLINK_OFF, CARET_BLINK_ON, MULTI_CLICK_INTERVAL};
 pub use font::{FontIndex, FontMetrics};
 pub use input::SURROUNDING_MAX_BYTES;
+pub use paragraph::{Line, LineRun, Paragraph, ParagraphLayout, CARET_WIDTH};
 pub use secure::SecureBuffer;
 pub use shape::{ShapeRequest, ShapedGlyph, ShapedRun};
+pub use system::TextSystem;
 
 /// One face of a font file: its file and collection index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -116,18 +120,6 @@ pub struct ParagraphStyle {
     pub direction: Option<Direction>,
     pub max_lines: Option<u32>,
     pub wrap: Wrap,
-}
-
-/// Shaped text ready to lay out at any width.
-#[derive(Clone, Debug)]
-pub struct Paragraph {
-    _private: (),
-}
-
-/// A paragraph broken into lines at one width: line boxes, caret and selection geometry, hit testing.
-#[derive(Clone, Debug)]
-pub struct ParagraphLayout {
-    _private: (),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

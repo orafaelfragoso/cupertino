@@ -186,7 +186,7 @@
     </description>
 
     <enum name="error">
-      <entry name="invalid_address" value="0" summary="a bus name or object path is malformed"/>
+      <entry name="invalid_address" value="0" summary="a bus name or object path is malformed or too long"/>
     </enum>
 
     <request name="destroy" type="destructor">
@@ -201,7 +201,8 @@
         application_object_path serves the app actions, window_object_path the win actions,
         menubar_object_path the window's menus, and app_menu_object_path the application menu, or
         is empty when the client exports none. A later request replaces the address. Posts
-        invalid_address when bus_name is not a unique bus name or a path is not an object path.
+        invalid_address when bus_name is not a unique bus name, a path is not an object path, or a
+        path is longer than 512 bytes.
       </description>
       <arg name="bus_name" type="string"/>
       <arg name="application_object_path" type="string"/>

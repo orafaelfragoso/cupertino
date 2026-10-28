@@ -1099,13 +1099,19 @@ fn is_unique_bus_name(name: &str) -> bool {
         })
 }
 
-/// Whether `path` is a D-Bus object path.
+/// The longest object path a window's menu announcement may carry: the server forwards the four paths, the bus name and
+/// an application id in one `menu_gtk` event, and four paths of this length still fit the 4096-byte message limit.
+const MAX_OBJECT_PATH_BYTES: usize = 512;
+
+/// Whether `path` is a D-Bus object path no longer than [`MAX_OBJECT_PATH_BYTES`].
 fn is_object_path(path: &str) -> bool {
-    path == "/"
-        || path.strip_prefix('/').is_some_and(|rest| {
-            rest.split('/')
-                .all(|e| !e.is_empty() && e.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-        })
+    path.len() <= MAX_OBJECT_PATH_BYTES
+        && (path == "/"
+            || path.strip_prefix('/').is_some_and(|rest| {
+                rest.split('/').all(|e| {
+                    !e.is_empty() && e.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                })
+            }))
 }
 
 /// Per-object data of a window's menu object; `surface` is `None` for an object the server rejected with a protocol
@@ -1292,5 +1298,8 @@ mod tests {
         for path in ["", "org", "//", "/a/", "/a//b", "/a-b", "/a.b"] {
             assert!(!is_object_path(path), "{path}");
         }
+        let longest = format!("/{}", "a".repeat(MAX_OBJECT_PATH_BYTES - 1));
+        assert!(is_object_path(&longest));
+        assert!(!is_object_path(&format!("{longest}a")));
     }
 }

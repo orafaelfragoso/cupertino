@@ -5,7 +5,7 @@ use crate::controller::{Effect, Key, SYSTEM_MENU_ROOT};
 use crate::extras::{ExtraAction, ExtraKind, SystemAction};
 use crate::fallback::{self, FallbackAction};
 use crate::feed::{BarFeed, Shared};
-use crate::item::ItemId;
+use crate::item::{ItemId, Origin};
 use crate::layout::{BarLayout, SlotKey};
 use crate::source::{KdeAppMenu, MenuSource};
 use crate::worker::Request;
@@ -87,14 +87,16 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
         Effect::Opened { .. } => Some(Action::SetMenuOpen(true)),
         Effect::Closed => Some(Action::SetMenuOpen(false)),
         Effect::AboutToShow {
-            slot: SlotKey::Menu(_),
+            slot: slot @ SlotKey::Menu(_),
             item,
-        } if !fallback::is_system(item) => match cx.feed.source(cx.shared) {
-            MenuSource::Kde(menu) => {
-                Some(Action::Request(Request::AboutToShow { menu, item: item.0 }))
+        } if shown_origin(&slot, item, cx) == Some(Origin::Exporter) => {
+            match cx.feed.source(cx.shared) {
+                MenuSource::Kde(menu) => {
+                    Some(Action::Request(Request::AboutToShow { menu, item: item.0 }))
+                }
+                _ => None,
             }
-            _ => None,
-        },
+        }
         // the system menu asks the session agent to read the machine's policy again as it opens: what it allows can have
         // changed since the bar started (the answer arrives as a change of `Capabilities`); Recent Items is read then too
         Effect::AboutToShow {
@@ -131,9 +133,9 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
             }))
         }
         Effect::Activate {
-            slot: SlotKey::Menu(_) | SlotKey::AppMenu,
+            slot: slot @ (SlotKey::Menu(_) | SlotKey::AppMenu),
             item,
-        } => menu_action(item, cx),
+        } => menu_action(&slot, item, cx),
         Effect::Activate {
             slot: SlotKey::System,
             item,
@@ -191,17 +193,29 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
     }
 }
 
-/// The action of an item of the App menu or of the application's menus: the bar's own items act through the server,
-/// unless About, Settings… or Quit is rebound to the exporter's item of its role; the exporter's items go to the
-/// exporter.
-fn menu_action(item: ItemId, cx: &Context) -> Option<Action> {
-    let target = if fallback::is_system(item) {
-        match fallback::action_for(item).and_then(|a| cx.feed.rebound(cx.shared, a)) {
-            Some(target) => target,
-            None => return fallback_action(item, cx.feed),
+/// The origin of `item` as the bar shows it in the menu of `slot`; `None` when it does not show there.
+fn shown_origin(slot: &SlotKey, item: ItemId, cx: &Context) -> Option<Origin> {
+    let content = cx.feed.content(cx.shared);
+    let menus = match slot {
+        SlotKey::AppMenu => content.app_menu,
+        SlotKey::Menu(id) => content.menus.into_iter().filter(|m| m.id == *id).collect(),
+        _ => return None,
+    };
+    menus.iter().find_map(|m| m.find(item)).map(|i| i.origin)
+}
+
+/// The action of an item of the App menu or of the application's menus, by the item's origin: the bar's own items act
+/// through the server, unless About, Settings… or Quit is rebound to the exporter's item of its role; the exporter's
+/// items go to the exporter.
+fn menu_action(slot: &SlotKey, item: ItemId, cx: &Context) -> Option<Action> {
+    let target = match shown_origin(slot, item, cx)? {
+        Origin::Exporter => item,
+        Origin::Bar => {
+            match fallback::action_for(item).and_then(|a| cx.feed.rebound(cx.shared, a)) {
+                Some(target) => target,
+                None => return fallback_action(item, cx.feed),
+            }
         }
-    } else {
-        item
     };
     match cx.feed.source(cx.shared) {
         MenuSource::Kde(menu) => Some(Action::Request(Request::ActivateDbusMenu {
@@ -258,7 +272,9 @@ mod tests {
     use crate::item::MenuItem;
     use crate::layout::{layout_bar, BarMetrics, MonoMeasure};
     use crate::source::GtkMenuProps;
-    use cupertino_shell_client::{ActiveApp, AppWindow, GtkMenu, MenuBarUpdate, WindowMenu};
+    use cupertino_shell_client::{
+        ActiveApp, AppWindow, GtkMenu, MenuBarUpdate, WindowMenu, WindowState,
+    };
 
     struct Fixture {
         feed: BarFeed,
@@ -326,6 +342,24 @@ mod tests {
                 },
             )
         }
+
+        /// The exporter's tree arrived, as a reader gives it.
+        fn load(&mut self, tree: MenuItem) {
+            self.feed.request_layout(&mut self.shared);
+            let source = self.feed.source(&self.shared);
+            self.shared.apply_layout(&source, tree.exported());
+        }
+
+        /// Activate `item` in the menu that shows it.
+        fn click(&self, item: ItemId) -> Option<Action> {
+            let content = self.feed.content(&self.shared);
+            let slot = content
+                .menus
+                .iter()
+                .find(|m| m.find(item).is_some())
+                .map_or(SlotKey::AppMenu, |m| SlotKey::Menu(m.id));
+            self.resolve(activate(slot, item.0))
+        }
     }
 
     fn kde_menu() -> WindowMenu {
@@ -374,7 +408,12 @@ mod tests {
 
     #[test]
     fn exporter_menus_are_refreshed_before_they_show_but_the_app_menu_is_not() {
-        let f = Fixture::new(kde_menu());
+        let mut f = Fixture::new(kde_menu());
+        f.load(MenuItem::submenu(
+            0,
+            "",
+            vec![MenuItem::submenu(1, "File", vec![])],
+        ));
         let file = SlotKey::Menu(ItemId(1));
         assert_eq!(
             f.resolve(Effect::AboutToShow {
@@ -404,7 +443,19 @@ mod tests {
 
     #[test]
     fn items_of_an_exporter_go_to_the_exporter() {
-        let f = Fixture::new(kde_menu());
+        let file = || {
+            MenuItem::submenu(
+                0,
+                "",
+                vec![MenuItem::submenu(
+                    1,
+                    "File",
+                    vec![MenuItem::new(2, "New"), MenuItem::new(5, "Open")],
+                )],
+            )
+        };
+        let mut f = Fixture::new(kde_menu());
+        f.load(file());
         assert_eq!(
             f.resolve(activate(SlotKey::Menu(ItemId(1)), 2)),
             Some(Action::Request(Request::ActivateDbusMenu {
@@ -425,7 +476,8 @@ mod tests {
             menubar_object_path: Some("/menubar".into()),
             app_menu_object_path: None,
         });
-        let f = Fixture::new(gtk);
+        let mut f = Fixture::new(gtk);
+        f.load(file());
         assert_eq!(
             f.resolve(activate(SlotKey::Menu(ItemId(1)), 5)),
             Some(Action::Request(Request::ActivateGtk { props, item: 5 }))
@@ -435,7 +487,6 @@ mod tests {
     #[test]
     fn merged_menus_tell_the_bars_items_from_the_exporters() {
         let mut f = Fixture::new(kde_menu());
-        f.feed.request_layout(&mut f.shared);
         let tree = MenuItem::submenu(
             0,
             "",
@@ -456,7 +507,7 @@ mod tests {
                 MenuItem::submenu(20, "Window", vec![MenuItem::new(21, "Split View")]),
             ],
         );
-        f.shared.apply_layout(&MenuSource::Kde(kde()), tree);
+        f.load(tree);
         let to_exporter = |item| {
             Some(Action::Request(Request::ActivateDbusMenu {
                 menu: kde(),
@@ -497,6 +548,41 @@ mod tests {
     }
 
     #[test]
+    fn an_exporters_item_with_an_id_of_the_bars_goes_to_the_exporter() {
+        let hide_others = FallbackAction::HideOthers.item_id();
+        let first_row = FallbackAction::ShowWindow(0).item_id();
+        let mut f = Fixture::new(kde_menu());
+        f.load(MenuItem::submenu(
+            0,
+            "",
+            vec![MenuItem::submenu(
+                10,
+                "File",
+                vec![
+                    MenuItem::new(hide_others.0, "Hide Others"),
+                    MenuItem::new(first_row.0, "Row"),
+                ],
+            )],
+        ));
+        let file = SlotKey::Menu(ItemId(10));
+        for id in [hide_others, first_row] {
+            assert_eq!(
+                f.resolve(activate(file.clone(), id.0)),
+                Some(Action::Request(Request::ActivateDbusMenu {
+                    menu: kde(),
+                    item: id.0
+                })),
+                "{id:?}"
+            );
+        }
+        assert_eq!(
+            f.resolve(activate(SlotKey::AppMenu, hide_others.0)),
+            Some(Action::WindowCommand(WindowCommand::HideOthers)),
+            "the bar's own item of that id still acts through the server"
+        );
+    }
+
+    #[test]
     fn the_app_menu_and_the_window_menu_act_through_the_server() {
         // the app menu is synthetic even when the window exports its own menus
         let f = Fixture::new(kde_menu());
@@ -515,7 +601,18 @@ mod tests {
             )),
             Some(Action::ShowAbout)
         );
-        let f = Fixture::new(WindowMenu::None);
+        let mut f = Fixture::new(WindowMenu::None);
+        let state = MenuBarUpdate {
+            window_state: Some(WindowState {
+                can_zoom: true,
+                workspace: 1,
+                workspaces: 3,
+            }),
+            ..MenuBarUpdate::default()
+        };
+        f.feed.apply(&state, &mut f.shared, |_| {
+            unreachable!("the application did not change")
+        });
         let window = SlotKey::Menu(fallback::WINDOW_MENU);
         assert_eq!(
             f.resolve(activate(
@@ -559,8 +656,7 @@ mod tests {
         f.feed.apply(&update, &mut f.shared, |_| {
             unreachable!("the application did not change")
         });
-        let window = SlotKey::Menu(fallback::WINDOW_MENU);
-        let act = |action: FallbackAction| f.resolve(activate(window.clone(), action.item_id().0));
+        let act = |action: FallbackAction| f.click(action.item_id());
         for (action, command) in [
             (
                 FallbackAction::ToggleFullscreen,

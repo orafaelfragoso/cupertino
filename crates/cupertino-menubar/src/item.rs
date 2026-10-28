@@ -146,9 +146,21 @@ impl Shortcut {
     }
 }
 
+/// Whose item a [`MenuItem`] is. An activated item is routed by its origin, never by its id: an exporter chooses its
+/// ids freely, so an id says nothing about whose item it is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Origin {
+    /// The bar's own item: the system, App and synthetic menus and what the bar adds to an exporter's menus.
+    #[default]
+    Bar,
+    /// An item of a DBusMenu or GMenuModel exporter, set by the reader.
+    Exporter,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MenuItem {
     pub id: ItemId,
+    pub origin: Origin,
     pub label: String,
     /// Character after the mnemonic marker (`_` or `&`), if the source used one. Mnemonics are
     /// stripped from `label`.
@@ -225,6 +237,13 @@ impl MenuItem {
     /// A submenu whose children are not loaded yet and need an `AboutToShow` round trip.
     pub fn needs_load(&self) -> bool {
         self.has_submenu && self.children.is_empty()
+    }
+
+    /// Mark the item and everything below it as an exporter's.
+    pub fn exported(mut self) -> Self {
+        self.origin = Origin::Exporter;
+        self.children = self.children.into_iter().map(MenuItem::exported).collect();
+        self
     }
 
     pub fn find(&self, id: ItemId) -> Option<&MenuItem> {

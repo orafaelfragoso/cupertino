@@ -12,8 +12,8 @@
 //!   screen item. Window is the bar's, with the exporter's items that are no duplicates below; Help is the bar's,
 //!   with the exporter's items below the search row. The order is File, Edit, View, the others, Window, Help.
 //!
-//! The bar's items keep their stable ids and the exporter's keep theirs, so an open menu survives a layout update and
-//! an activated id tells whose item it is ([`fallback::is_system`]).
+//! The bar's items keep their stable ids and the exporter's keep theirs, so an open menu survives a layout update; an
+//! activated item is routed by its [`crate::item::Origin`], which the readers set, never by its id.
 
 use crate::fallback::{self, FallbackAction};
 use crate::item::{split_mnemonic, ItemId, MenuItem, Shortcut, ShortcutModifier};

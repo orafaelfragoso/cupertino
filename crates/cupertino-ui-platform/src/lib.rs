@@ -3,7 +3,7 @@
 //! the runtime checks, so a missing protocol degrades a feature instead of failing.
 
 use cupertino_geometry::{Point, Rect, Size};
-use cupertino_ui_render::{Damage, PixelTarget};
+use cupertino_ui_render::CpuFrame;
 use cupertino_ui_text::{ImeEvent, TextInputState};
 use std::task::Waker;
 use std::time::Duration;
@@ -285,13 +285,9 @@ pub trait WindowSystem {
     fn read_clipboard(&mut self, mime: &str) -> ClipboardToken;
     /// Asks for a [`WindowEvent::Frame`] when the compositor wants the next frame.
     fn request_frame(&mut self, window: WindowId);
-    /// Presents a frame: the window system picks a buffer and calls `draw` with it, then commits `damage`.
-    fn present(
-        &mut self,
-        window: WindowId,
-        damage: &Damage,
-        draw: &mut dyn FnMut(&mut PixelTarget<'_>),
-    ) -> Result<(), PlatformError>;
+    /// Copies the frame's damage, plus whatever the chosen buffer missed since it was last used, into a buffer and
+    /// commits it. After a failure the next successful present also covers this frame's damage.
+    fn present(&mut self, window: WindowId, frame: &CpuFrame) -> Result<(), PlatformError>;
     /// Waits up to `timeout` (`None`: until something happens) and appends what happened to `events`.
     fn dispatch(
         &mut self,

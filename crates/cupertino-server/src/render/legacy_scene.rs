@@ -1270,8 +1270,11 @@ fn build(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> Vec<CupertinoE
     }
 
     snap_preview(p, &mut stack);
-    crate::kbd_ui::input_hud(renderer, p, &mut stack);
-    crate::kbd_ui::accent_popup(renderer, p, &mut stack);
+    stack.extend(SceneLayer::InputHud, crate::kbd_ui::input_hud(renderer, p));
+    stack.extend(
+        SceneLayer::AccentPopup,
+        crate::kbd_ui::accent_popup(renderer, p),
+    );
 
     if let Some((surface, offset)) = p.drag_icon.clone() {
         let scale = Scale::from(p.scale);

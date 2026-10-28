@@ -4,7 +4,6 @@ use crate::engine::{align_offset, has_own_size, is_fixed, Arranged, Engine, Solv
 use crate::{Align, Axis, AxisConstraint, Constraints, Justify, LayoutError, LayoutTree, SizeSpec};
 use std::rc::Rc;
 
-const MAX_PASSES: usize = 32;
 const EPSILON: f64 = 1e-9;
 
 struct Item<Id> {
@@ -160,7 +159,8 @@ pub(crate) fn arrange<T: LayoutTree>(
 }
 
 /// Shares `room` among the items: leftover space by `grow`, a shortfall by `shrink` times basis. An item that would
-/// leave its bounds is frozen at the bound and the rest is shared again, until nothing violates.
+/// leave its bounds is frozen at the bound and the rest is shared again, until nothing violates. Every pass but the
+/// last freezes at least one item, so `items.len() + 1` passes always settle; the error guards that invariant.
 fn distribute<Id>(items: &[Item<Id>], room: f64) -> Result<Vec<f64>, LayoutError> {
     let mut sizes: Vec<f64> = items.iter().map(|i| i.basis).collect();
     let growing = room - sizes.iter().sum::<f64>() > 0.0;
@@ -169,7 +169,7 @@ fn distribute<Id>(items: &[Item<Id>], room: f64) -> Result<Vec<f64>, LayoutError
         .iter()
         .map(|i| weight(i) <= 0.0 || i.lower == i.upper)
         .collect();
-    for _ in 0..MAX_PASSES {
+    for _ in 0..=items.len() {
         let used: f64 = sizes.iter().sum();
         let free = room - used;
         let weights: f64 = items

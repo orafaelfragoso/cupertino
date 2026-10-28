@@ -1584,18 +1584,19 @@ fn the_network_bluetooth_and_power_daemons_own_their_bus_names() {
         std::fs::create_dir_all(sysfs.file(&format!("class/{class}"))).unwrap();
     }
     let keys = TempDir::new("btd-keys");
+    let logs = TempDir::new("daemon-logs");
     let daemon = |binary: &str, args: &[&str]| {
         Daemon(
             Command::new(shell_bin_dir().join(binary))
                 .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
                 .args(args)
                 .stdout(Stdio::null())
-                .stderr(Stdio::null())
+                .stderr(std::fs::File::create(logs.file(binary)).unwrap())
                 .spawn()
                 .expect("the daemon starts"),
         )
     };
-    let _daemons = [
+    let mut daemons = [
         daemon("cupertino-netd", &["--session-bus", "--no-auth"]),
         daemon(
             "cupertino-btd",
@@ -1627,10 +1628,21 @@ fn the_network_bluetooth_and_power_daemons_own_their_bus_names() {
         if wanted.iter().all(|name| names.iter().any(|n| n == name)) {
             return;
         }
-        assert!(
-            Instant::now() < end,
-            "the bus names {wanted:?}: only {names:?}"
-        );
+        if Instant::now() >= end {
+            let report: Vec<String> = ["cupertino-netd", "cupertino-btd", "cupertino-powerd"]
+                .into_iter()
+                .zip(daemons.iter_mut())
+                .map(|(binary, daemon)| {
+                    let status = daemon.0.try_wait().unwrap();
+                    let log = std::fs::read_to_string(logs.file(binary)).unwrap_or_default();
+                    format!("{binary}: exit {status:?}, stderr {log:?}")
+                })
+                .collect();
+            panic!(
+                "the bus names {wanted:?}: only {names:?}\n{}",
+                report.join("\n")
+            );
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
 }

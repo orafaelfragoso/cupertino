@@ -269,6 +269,14 @@ fn mouse_identity<D: Device>(device: &D) -> MouseIdentity {
 }
 
 impl Cupertino {
+    /// The physical modifier keys of the keyboard (Super is `logo`): what the system shortcuts are matched on.
+    pub fn current_physical_mods(&self) -> Mods {
+        self.seat
+            .get_keyboard()
+            .map(|k| crate::kbd::KeyboardSettings::physical(&k.modifier_state()))
+            .unwrap_or_default()
+    }
+
     /// Logical modifiers of the keyboard (the primary modifier of the profile is `logo`).
     pub fn current_mods(&self) -> Mods {
         self.seat
@@ -397,7 +405,7 @@ impl Cupertino {
         let rewritten_release = !pressed && self.is_rewritten(code);
         let mut rewrite = Rewrite::Pass;
         keyboard.input::<(), _>(self, code, state, serial, time, |st, modifiers, handle| {
-            let mods = st.config.keyboard.translate(modifiers);
+            let mods = crate::kbd::KeyboardSettings::physical(modifiers);
             mod_plan = st.key_router.modifiers_changed(mods, &ctx);
             let sym = handle
                 .raw_latin_sym_or_raw_current_sym()

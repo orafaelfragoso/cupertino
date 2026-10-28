@@ -179,7 +179,8 @@ impl Cupertino {
         before: (&CompositorSettings, &CompositorSettings),
         after: (&CompositorSettings, &CompositorSettings),
     ) {
-        let (mut target, problems) = Config::from_layers(after.0, after.1);
+        let (mut target, problems) =
+            Config::from_layers(after.0, after.1, &self.config.keyboard.profile);
         for problem in problems {
             tracing::warn!(error = %problem, "invalid configuration: the key keeps its default");
         }
@@ -309,6 +310,14 @@ impl Cupertino {
         take!(accent_keyboards => accent.keyboards);
         take!(accent_disabled_apps => accent.disabled_apps);
         if changed!(modifier_profile) {
+            // the profile has its own shortcut table: build the bindings again, as at start
+            let (rebuilt, _) = Config::from_layers(
+                &self.live.files.system,
+                &self.live.files.compositor,
+                &self.config.keyboard.profile,
+            );
+            self.config.keybindings = rebuilt.keybindings.clone();
+            self.key_router.bindings = rebuilt.keybindings;
             self.refresh_menu_bar_shortcuts();
         }
         if changed!(

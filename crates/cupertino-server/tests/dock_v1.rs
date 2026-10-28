@@ -1152,10 +1152,12 @@ fn force_quit_app_from_the_dock_asks_the_application_to_quit() {
 
 /// xkb keycodes (evdev code + 8) of the keys the switcher is driven with.
 const KEY_SUPER: u32 = 125 + 8;
+const KEY_ALT: u32 = 56 + 8;
 const KEY_TAB: u32 = 15 + 8;
 const KEY_ESCAPE: u32 = 1 + 8;
 const KEY_H: u32 = 35 + 8;
 const KEY_HOME: u32 = 102 + 8;
+const KEY_LEFT: u32 = 105 + 8;
 const KEY_RIGHT: u32 = 106 + 8;
 const KEY_END: u32 = 107 + 8;
 
@@ -1169,6 +1171,22 @@ impl Harness {
         };
         self.state.keyboard_event_now(Keycode::new(code), state, 0);
         self.step();
+    }
+
+    /// One key through the filters of the keyboard path (sticky keys), as a device would deliver it.
+    fn device_key(&mut self, code: u32, pressed: bool) {
+        let state = if pressed {
+            KeyState::Pressed
+        } else {
+            KeyState::Released
+        };
+        self.state.key_after_delays(Keycode::new(code), state, 0);
+        self.step();
+    }
+
+    fn device_tap(&mut self, code: u32) {
+        self.device_key(code, true);
+        self.device_key(code, false);
     }
 
     /// Tap Tab: opens the switcher while Super is held, or steps it when it is open.
@@ -1230,6 +1248,79 @@ fn the_switcher_opens_steps_and_commits_without_a_dock() {
     h.key(KEY_SUPER, false);
     assert!(h.state.wm.switcher().is_none());
     assert_eq!(h.state.wm.key_window(), Some(one));
+}
+
+#[test]
+fn under_classic_pc_alt_tab_switches_and_releasing_alt_commits() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_apps, [three, _two, one]) = h.three_apps();
+    let tiled = |h: &Harness| {
+        matches!(
+            h.state.wm.window(three).map(|w| w.state()),
+            Some(LifecycleState::Tiling(_) | LifecycleState::Tiled(_))
+        )
+    };
+    // under cupertino Super+Left is not a tile
+    h.key(KEY_SUPER, true);
+    h.tap(KEY_LEFT);
+    h.key(KEY_SUPER, false);
+    assert!(!tiled(&h));
+    h.state.apply_keyboard_change(
+        &cupertino_defaults::keyboard::KeyboardSettings::default(),
+        &cupertino_defaults::keyboard::KeyboardSettings {
+            modifier_profile: Some(cupertino_defaults::keyboard::ModifierProfile::ClassicPc),
+            ..Default::default()
+        },
+    );
+    // Super+Left tiles the window
+    h.key(KEY_SUPER, true);
+    h.tap(KEY_LEFT);
+    h.key(KEY_SUPER, false);
+    assert!(tiled(&h));
+    // Super+Tab is the overview here, not the switcher
+    h.key(KEY_SUPER, true);
+    h.tap(KEY_TAB);
+    assert!(h.state.wm.switcher().is_none());
+    h.key(KEY_SUPER, false);
+    h.key(KEY_ESCAPE, true);
+    h.key(KEY_ESCAPE, false);
+
+    h.key(KEY_ALT, true);
+    h.tap(KEY_TAB);
+    assert_eq!(h.state.wm.switcher().map(|s| s.selected), Some(1));
+    h.tap(KEY_TAB);
+    assert_eq!(h.state.wm.switcher().map(|s| s.selected), Some(2));
+    assert_eq!(h.state.wm.key_window(), Some(three));
+    h.key(KEY_ALT, false);
+    assert!(h.state.wm.switcher().is_none());
+    assert_eq!(h.state.wm.key_window(), Some(one));
+}
+
+/// The shortcut match comes after sticky keys: a latched modifier counts as held for the system chords, under either
+/// profile. The latch is freed with the release of the key that used it, so the switcher the chord opened commits at
+/// once: a latched Alt and Tab switch to the previous application.
+#[test]
+fn a_latched_modifier_takes_part_in_the_system_chords() {
+    let Some(mut h) = Harness::new() else { return };
+    let (_apps, [three, two, _one]) = h.three_apps();
+    let settings = |profile| cupertino_defaults::keyboard::KeyboardSettings {
+        modifier_profile: Some(profile),
+        sticky_keys: Some(true),
+        ..Default::default()
+    };
+    h.state.apply_keyboard_change(
+        &cupertino_defaults::keyboard::KeyboardSettings::default(),
+        &settings(cupertino_defaults::keyboard::ModifierProfile::ClassicPc),
+    );
+    // Tab alone does nothing
+    h.device_tap(KEY_TAB);
+    assert!(h.state.wm.switcher().is_none());
+    assert_eq!(h.state.wm.key_window(), Some(three));
+    // Alt tapped and released, then Tab: the Alt is latched, so this is Alt+Tab
+    h.device_tap(KEY_ALT);
+    h.device_tap(KEY_TAB);
+    assert!(h.state.wm.switcher().is_none());
+    assert_eq!(h.state.wm.key_window(), Some(two));
 }
 
 #[test]

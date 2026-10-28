@@ -32,6 +32,7 @@ fn show_notice(d: &mut Desktop) {
         text: "org.example.vm is receiving your shortcuts. Press Super+Escape to get them back."
             .to_owned(),
         output,
+        owner: None,
         until: f64::MAX,
     });
 }

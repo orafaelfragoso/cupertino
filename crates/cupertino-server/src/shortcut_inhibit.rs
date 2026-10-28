@@ -146,7 +146,7 @@ impl Cupertino {
                             None => format!("{app} is receiving your shortcuts."),
                         },
                         output,
-                        owner: surface.id(),
+                        owner: Some(surface.id()),
                         until: now + NOTICE_SECONDS,
                     });
                 }
@@ -158,7 +158,7 @@ impl Cupertino {
                     .overlays
                     .shortcut_notice
                     .as_ref()
-                    .is_some_and(|n| n.owner == surface.id())
+                    .is_some_and(|n| n.owner.as_ref() == Some(&surface.id()))
                 {
                     self.overlays.shortcut_notice = None;
                 }

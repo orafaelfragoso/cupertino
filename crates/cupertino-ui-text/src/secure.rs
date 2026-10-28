@@ -83,11 +83,11 @@ impl SecureBuffer {
 
     /// Insert typed text in place of the selection. Control characters are dropped, line breaks and tabs included.
     pub fn insert(&mut self, s: &str) {
-        let typed: String = s.chars().filter(|c| !c.is_control()).collect();
+        let mut typed = String::with_capacity(s.len());
+        typed.extend(s.chars().filter(|c| !c.is_control()));
         let kept = self.len - self.selection().len();
         let fitted = self.fit(&typed, kept);
         self.replace_selection(fitted);
-        let mut typed = typed;
         typed.zeroize();
     }
 
@@ -263,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn growing_zeroes_the_old_block_and_keeps_the_text() {
+    fn growing_keeps_the_text_and_leaves_the_unused_block_zeroed() {
         let mut buffer = SecureBuffer::new();
         let long = "p".repeat(MIN_CAPACITY * 3);
         buffer.insert(&long);

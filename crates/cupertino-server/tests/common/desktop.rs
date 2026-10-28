@@ -25,6 +25,17 @@ impl Desktop {
     }
 
     pub fn sized(size: (i32, i32), scale: f64) -> Self {
+        Self::with_displays(
+            &[headless::HeadlessDisplay {
+                name: "headless-1".into(),
+                size,
+                physical_mm: (0, 0),
+            }],
+            scale,
+        )
+    }
+
+    pub fn with_displays(displays: &[headless::HeadlessDisplay], scale: f64) -> Self {
         let event_loop = EventLoop::try_new().unwrap();
         let mut state = Cupertino::new(
             Display::new().unwrap(),
@@ -36,7 +47,7 @@ impl Desktop {
         )
         .unwrap();
         state.fixed_time = Some(0.0);
-        headless::init(&mut state, size, scale)
+        headless::init_displays(&mut state, displays, Some(scale))
             .expect("these tests require an offscreen EGL renderer");
         Self {
             state,
@@ -44,6 +55,11 @@ impl Desktop {
             clients: Vec::new(),
             scale,
         }
+    }
+
+    pub fn socket(&self) -> PathBuf {
+        PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap())
+            .join(self.state.socket_name.as_ref().unwrap())
     }
 
     pub fn pump(&mut self) {

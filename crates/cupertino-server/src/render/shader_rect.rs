@@ -62,11 +62,11 @@ struct Slot {
 pub struct ElementCache {
     slots: HashMap<ElementKey, Slot>,
     /// The slots and identity correspondence of the previous scene builder, kept beside the real ones.
-    #[cfg(feature = "scene-oracle")]
+    #[cfg(scene_oracle)]
     oracle: Oracle,
 }
 
-#[cfg(feature = "scene-oracle")]
+#[cfg(scene_oracle)]
 #[derive(Debug, Default)]
 struct Oracle {
     slots: HashMap<ElementKey, Slot>,
@@ -92,14 +92,14 @@ impl ElementCache {
     }
 
     /// Exchange the slots with the previous builder's, around its run.
-    #[cfg(feature = "scene-oracle")]
+    #[cfg(scene_oracle)]
     pub(super) fn swap_oracle_slots(&mut self) {
         std::mem::swap(&mut self.slots, &mut self.oracle.slots);
     }
 
     /// Record that the previous builder's element `legacy` is the migrated builder's `migrated`; `false` when
     /// either already stands for another element.
-    #[cfg(feature = "scene-oracle")]
+    #[cfg(scene_oracle)]
     pub(super) fn pair_identities(&mut self, legacy: &Id, migrated: &Id) -> bool {
         let forward = self
             .oracle

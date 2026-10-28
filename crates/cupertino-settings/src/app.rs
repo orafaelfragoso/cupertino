@@ -23,7 +23,8 @@ use cupertino_settings::live::{Live, Pictures, Reading};
 use cupertino_settings::menu;
 use cupertino_settings::menu_bar::{self, MenuAction, MenuState};
 use cupertino_settings::paint::{
-    menu_rows, popup_hit, search_text_area, Painter, Palette, PaneView, WindowState,
+    caret_area, menu_rows, popup_hit, row_area, scroll_areas, search_text_area, Painter, Palette,
+    PaneView, WindowState,
 };
 use cupertino_settings::panes::{self, Call, ControlId, Effect, Section, Session};
 use cupertino_settings::search::{popup, SearchField};
@@ -38,11 +39,12 @@ use cupertino_theme::{Appearance, Theme, WindowCornerSize};
 use cupertino_ui_menus::WindowMenus;
 use cupertino_ui_wayland::clipboard::Clipboard;
 use cupertino_ui_wayland::popup::placement;
-use cupertino_ui_wayland::{Ready, ShmPresenter};
+use cupertino_ui_wayland::{copy_rects, Damage, Ready, ShmPresenter};
 use cupertino_wayland_client::{
     Button, Connection, Decorations, Event, KeyboardEvent, Modifiers as KeyModifiers, PointerEvent,
     Popup, SurfaceId, Toplevel, ToplevelConfig, WindowConfigure,
 };
+use tiny_skia::{Color, Pixmap};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -93,6 +95,10 @@ struct Results {
 struct Window {
     toplevel: Toplevel,
     presenter: ShmPresenter,
+    /// What changed since the last frame; a frame draws all of the window unless every change said where.
+    damage: Damage,
+    /// The whole frame, drawn before the damaged rectangles of it are copied into the presenter's pixmap.
+    scratch: Option<Pixmap>,
     /// The size asked for, kept until a configure sets one.
     requested: (u32, u32),
     activated: bool,
@@ -120,11 +126,25 @@ impl Window {
         Ok(Window {
             toplevel,
             presenter: ShmPresenter::new(toplevel.surface()),
+            damage: Damage::new(),
+            scratch: None,
             requested: size,
             activated: false,
             maximized: false,
             fullscreen: false,
         })
+    }
+
+    /// Draw all of the window again as soon as the surface can take a frame.
+    fn redraw(&mut self) {
+        self.damage.add_whole();
+        self.presenter.request_redraw();
+    }
+
+    /// Draw `rect` (points) of the window again as soon as the surface can take a frame.
+    fn redraw_rect(&mut self, rect: PopupRect) {
+        self.damage.add(rect);
+        self.presenter.request_redraw();
     }
 
     /// Take a configure: its states, and its size where it sets one.
@@ -562,7 +582,7 @@ impl App {
                 if self.results.as_ref().is_some_and(|r| r.popup == popup) {
                     self.search.clear();
                     self.close_results()?;
-                    self.window.presenter.request_redraw();
+                    self.window.redraw();
                 }
                 if self.menu.as_ref().is_some_and(|m| m.popup == popup) {
                     self.close_menu()?;
@@ -638,7 +658,10 @@ impl App {
         if self.focus == Focus::Search
             && self.search.field().caret_visible(Instant::now()) != self.caret_drawn
         {
-            self.window.presenter.request_redraw();
+            match self.layout.as_ref().map(caret_area) {
+                Some(a) => self.window.redraw_rect(PopupRect::new(a.x, a.y, a.w, a.h)),
+                None => self.window.redraw(),
+            }
         }
         let now = self.now();
         if let Some((section, row, _, mut writer)) = self.level.take() {
@@ -703,7 +726,7 @@ impl App {
             _ => {}
         }
         if self.live != before {
-            self.window.presenter.request_redraw();
+            self.window.redraw();
         }
         Ok(())
     }
@@ -740,7 +763,7 @@ impl App {
                     eprintln!("cupertino-settings: Bluetooth discovery: {e}");
                 }
             }
-            self.window.presenter.request_redraw();
+            self.window.redraw();
         }
         Ok(())
     }
@@ -760,7 +783,7 @@ impl App {
     }
 
     fn redraw(&mut self) {
-        self.window.presenter.request_redraw();
+        self.window.redraw();
         if let Some(r) = &mut self.results {
             r.presenter.request_redraw();
         }
@@ -845,34 +868,54 @@ impl App {
             dragging,
         };
         let content = layout.content;
-        window.presenter.draw(conn, None, |pm, scale| {
-            let offsets = painter.search_offsets(search.field(), scale.factor() as f32, palette);
-            let area = search_text_area(&layout.search, !search.text().is_empty());
-            let caret_x = caret_x(search.field(), &offsets);
-            let text_width = offsets.last().copied().unwrap_or(0.0);
-            search.edit(|f| f.follow_caret(caret_x, text_width, area.w));
-            *search_offsets = offsets;
-            let state = WindowState {
-                selected: *showing,
-                has_battery,
-                active,
-                history,
-                search,
-                search_focused,
-                search_caret: caret,
-            };
-            painter.paint_window(pm, scale.factor() as f32, &layout, &state, &view, palette);
-            if let Some(sheet) = sheet.as_ref() {
-                painter.paint_sheet(
-                    pm,
-                    scale.factor() as f32,
-                    sheet,
-                    &sheet.layout(&content),
-                    &content,
-                    palette,
-                );
-            }
-        })?;
+        let damage = window.damage.take();
+        let scratch = &mut window.scratch;
+        window
+            .presenter
+            .draw_with(conn, damage.as_deref(), |pm, scale, cleared| {
+                let offsets =
+                    painter.search_offsets(search.field(), scale.factor() as f32, palette);
+                let area = search_text_area(&layout.search, !search.text().is_empty());
+                let caret_x = caret_x(search.field(), &offsets);
+                let text_width = offsets.last().copied().unwrap_or(0.0);
+                search.edit(|f| f.follow_caret(caret_x, text_width, area.w));
+                *search_offsets = offsets;
+                let state = WindowState {
+                    selected: *showing,
+                    has_battery,
+                    active,
+                    history,
+                    search,
+                    search_focused,
+                    search_caret: caret,
+                };
+                let factor = scale.factor() as f32;
+                // the frame is drawn whole; where only rectangles of the pixmap were cleared, those replace what it holds,
+                // which makes the pixels the same as those of a whole redraw
+                let mut whole = cleared.map(|_| match scratch.take() {
+                    Some(p) if (p.width(), p.height()) == (pm.width(), pm.height()) => p,
+                    _ => Pixmap::new(pm.width(), pm.height()).expect("the pixmap has a size"),
+                });
+                if let Some(whole) = whole.as_mut() {
+                    whole.fill(Color::TRANSPARENT);
+                }
+                let target = whole.as_mut().unwrap_or(pm);
+                painter.paint_window(target, factor, &layout, &state, &view, palette);
+                if let Some(sheet) = sheet.as_ref() {
+                    painter.paint_sheet(
+                        target,
+                        factor,
+                        sheet,
+                        &sheet.layout(&content),
+                        &content,
+                        palette,
+                    );
+                }
+                if let (Some(whole), Some(rects)) = (whole, cleared) {
+                    copy_rects(pm, &whole, rects);
+                    *scratch = Some(whole);
+                }
+            })?;
         self.layout = Some(layout);
         self.caret_drawn = caret;
         self.form = form;
@@ -914,7 +957,7 @@ impl App {
         self.showing = pane;
         self.conn
             .set_title(self.window.toplevel, pane.title(self.live.has_battery()))?;
-        self.window.presenter.request_redraw();
+        self.window.redraw();
         Ok(())
     }
 
@@ -972,7 +1015,7 @@ impl App {
                         );
                         let extend = self.conn.modifiers().shift;
                         self.search.edit(|f| f.press(index, extend, Instant::now()));
-                        self.window.presenter.request_redraw();
+                        self.window.redraw();
                     }
                     Hit::Row(pane) => {
                         // the selection fill shows on the press; the history push waits for the release (approximate)
@@ -998,14 +1041,14 @@ impl App {
                     y: position.y,
                 };
                 if sheet.hover(&l, Some(p)) {
-                    self.window.presenter.request_redraw();
+                    self.window.redraw();
                 }
             }
             PointerEvent::Leave if self.sheet.is_some() => {
                 let sheet = self.sheet.as_mut().expect("checked by the guard");
                 let l = sheet.layout(&layout.content);
                 if sheet.hover(&l, None) {
-                    self.window.presenter.request_redraw();
+                    self.window.redraw();
                 }
             }
             PointerEvent::Scroll { dy, position, .. } if self.sheet.is_some() => {
@@ -1016,7 +1059,7 @@ impl App {
                     y: position.y,
                 };
                 if sheet.scroll(&l, p, dy) {
-                    self.window.presenter.request_redraw();
+                    self.window.redraw();
                 }
             }
             PointerEvent::Motion(position) if self.search.field().is_dragging() => {
@@ -1026,7 +1069,7 @@ impl App {
                     position.x - area.x + self.search.field().scroll(),
                 );
                 self.search.edit(|f| f.drag_to(index));
-                self.window.presenter.request_redraw();
+                self.window.redraw();
             }
             PointerEvent::Button {
                 button: Button::Left,
@@ -1045,7 +1088,7 @@ impl App {
                 if let Some(v) = write {
                     self.level_write(section, row, v)?;
                 }
-                self.window.presenter.request_redraw();
+                self.window.redraw();
             }
             PointerEvent::Button {
                 button: Button::Left,
@@ -1065,7 +1108,9 @@ impl App {
                     };
                     d.shown = controls::drag(stops, &frame, position.x);
                     self.drag = Some(d);
-                    self.window.presenter.request_redraw();
+                    let area = row_area(&self.form[d.section].rows[d.row], self.scroll);
+                    self.window
+                        .redraw_rect(PopupRect::new(area.x, area.y, area.w, area.h));
                 }
             }
             PointerEvent::Scroll { dy, position, .. }
@@ -1076,7 +1121,9 @@ impl App {
             {
                 self.scroll =
                     (self.scroll + dy).clamp(0.0, (self.form_height - layout.content.h).max(0.0));
-                self.window.presenter.request_redraw();
+                for a in scroll_areas(layout) {
+                    self.window.redraw_rect(PopupRect::new(a.x, a.y, a.w, a.h));
+                }
             }
             PointerEvent::Button {
                 button: Button::Left,
@@ -1138,7 +1185,7 @@ impl App {
                 self.search.edit(TextField::select_all);
             }
             self.focus = focus;
-            self.window.presenter.request_redraw();
+            self.window.redraw();
         }
         Ok(())
     }
@@ -1336,7 +1383,7 @@ impl App {
                     _ => {}
                 }
                 self.sync_results()?;
-                self.window.presenter.request_redraw();
+                self.window.redraw();
             }
         }
         Ok(())
@@ -1372,7 +1419,7 @@ impl App {
             }
         }
         self.sync_results()?;
-        self.window.presenter.request_redraw();
+        self.window.redraw();
         Ok(())
     }
 
@@ -1513,7 +1560,7 @@ impl App {
                         if let Some(v) = write {
                             self.level_write(si, ri, v)?;
                         }
-                        self.window.presenter.request_redraw();
+                        self.window.redraw();
                         return Ok(());
                     }
                     Some(Press::Commit(value)) => return self.commit(row.id, value),
@@ -1523,7 +1570,7 @@ impl App {
                             row: ri,
                             shown,
                         });
-                        self.window.presenter.request_redraw();
+                        self.window.redraw();
                         return Ok(());
                     }
                     Some(Press::OpenMenu) => {
@@ -1548,7 +1595,7 @@ impl App {
             eprintln!("cupertino-settings: the settings could not be read: {e}");
             self.errors
                 .push((id, "The settings could not be read.".to_string()));
-            self.window.presenter.request_redraw();
+            self.window.redraw();
             return Ok(());
         }
         self.sync_accessibility();
@@ -1610,7 +1657,7 @@ impl App {
                 break;
             }
         }
-        self.window.presenter.request_redraw();
+        self.window.redraw();
         Ok(())
     }
 
@@ -1685,7 +1732,7 @@ impl App {
                 },
             },
         }
-        self.window.presenter.request_redraw();
+        self.window.redraw();
         Ok(())
     }
 
@@ -1828,13 +1875,13 @@ impl App {
                 // a new question replaces an open one: its pairing is over (the daemon pairs one device at a time)
                 self.sheet = Some(Sheet::pairing(id, &device, prompt));
                 self.agent_answer = answer.map(|a| (id, a));
-                self.window.presenter.request_redraw();
+                self.window.redraw();
             }
             Background::Agent(AgentEvent::Cancel(id)) => {
                 if self.sheet.as_ref().and_then(Sheet::pairing_id) == Some(id) {
                     self.sheet = None;
                     self.agent_answer = None;
-                    self.window.presenter.request_redraw();
+                    self.window.redraw();
                 }
             }
             Background::Pictures { key, files } => {
@@ -1861,7 +1908,7 @@ impl App {
                         n => pictures.folders[n - 1].1 = files,
                     }
                     self.ask_thumbnails(images);
-                    self.window.presenter.request_redraw();
+                    self.window.redraw();
                 }
             }
             Background::Listing(listing) => {
@@ -1872,12 +1919,12 @@ impl App {
                 }
                 if let Some(sheet) = self.sheet.as_mut() {
                     sheet.apply_listing(listing);
-                    self.window.presenter.request_redraw();
+                    self.window.redraw();
                 }
             }
             Background::Thumbnail { image, thumbnail } => {
                 if self.painter.set_thumbnail(&image, &thumbnail) {
-                    self.window.presenter.request_redraw();
+                    self.window.redraw();
                 }
             }
             Background::Files(WatchEvent::Changed(_)) => {
@@ -1885,7 +1932,7 @@ impl App {
                     eprintln!("cupertino-settings: the settings could not be read again: {e}");
                 }
                 self.sync_accessibility();
-                self.window.presenter.request_redraw();
+                self.window.redraw();
             }
             Background::Files(WatchEvent::Error(e)) => {
                 eprintln!("cupertino-settings: watching the settings files: {e}")
@@ -1898,7 +1945,7 @@ impl App {
                 }
                 let now = self.now();
                 self.refresh(now)?;
-                self.window.presenter.request_redraw();
+                self.window.redraw();
             }
         }
         Ok(())

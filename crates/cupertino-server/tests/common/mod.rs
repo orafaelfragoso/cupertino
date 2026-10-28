@@ -28,6 +28,7 @@ use wayland_protocols::wp::keyboard_shortcuts_inhibit::zv1::client::{
 };
 use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1;
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
+use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 /// Memory order of an Argb8888 pixel is blue, green, red, alpha.
 pub mod desktop;
@@ -141,7 +142,8 @@ ignore_events!(
     xdg_toplevel::XdgToplevel,
     xdg_activation_v1::XdgActivationV1,
     ext_session_lock_manager_v1::ExtSessionLockManagerV1,
-    zwp_keyboard_shortcuts_inhibit_manager_v1::ZwpKeyboardShortcutsInhibitManagerV1
+    zwp_keyboard_shortcuts_inhibit_manager_v1::ZwpKeyboardShortcutsInhibitManagerV1,
+    zwlr_layer_shell_v1::ZwlrLayerShellV1
 );
 
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for ClientState {
@@ -270,6 +272,30 @@ impl Dispatch<wl_pointer::WlPointer, ()> for ClientState {
         } = event
         {
             state.lock_status.lock().unwrap().presses += 1;
+        }
+    }
+}
+
+/// The surface is the user data, so the configure can attach a buffer.
+impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, wl_surface::WlSurface> for ClientState {
+    fn event(
+        state: &mut Self,
+        layer: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        surface: &wl_surface::WlSurface,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let zwlr_layer_surface_v1::Event::Configure { serial, .. } = event {
+            layer.ack_configure(serial);
+            let size = (120, 80);
+            surface.attach(
+                Some(&solid_buffer(&state.shm, size, TOPLEVEL_BLUE, qh)),
+                0,
+                0,
+            );
+            surface.damage_buffer(0, 0, size.0, size.1);
+            surface.commit();
         }
     }
 }
@@ -461,6 +487,40 @@ impl Client {
             queue.roundtrip(client).unwrap();
             Setup {
                 objects: Box::new((wm_base, xdg, toplevel, surface, seat, manager, inhibitor)),
+                lock: None,
+            }
+        })
+    }
+
+    /// A client whose only surface is a layer surface (overlay, exclusive keyboard) that asks to inhibit the
+    /// compositor's keyboard shortcuts for it.
+    pub fn inhibiting_layer(socket: PathBuf) -> Client {
+        Self::run(socket, move |queue, client, globals| {
+            let qh = queue.handle();
+            let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
+            let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
+                globals.bind(&qh, 1..=4, ()).unwrap();
+            let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=7, ()).unwrap();
+            let manager: zwp_keyboard_shortcuts_inhibit_manager_v1::ZwpKeyboardShortcutsInhibitManagerV1 =
+                globals.bind(&qh, 1..=1, ()).unwrap();
+            let surface = compositor.create_surface(&qh, ());
+            let layer = layer_shell.get_layer_surface(
+                &surface,
+                None,
+                zwlr_layer_shell_v1::Layer::Overlay,
+                "inhibiting".to_string(),
+                &qh,
+                surface.clone(),
+            );
+            layer.set_size(120, 80);
+            layer.set_keyboard_interactivity(
+                zwlr_layer_surface_v1::KeyboardInteractivity::Exclusive,
+            );
+            let inhibitor = manager.inhibit_shortcuts(&surface, &seat, &qh, ());
+            surface.commit();
+            queue.roundtrip(client).unwrap();
+            Setup {
+                objects: Box::new((layer_shell, layer, surface, seat, manager, inhibitor)),
                 lock: None,
             }
         })

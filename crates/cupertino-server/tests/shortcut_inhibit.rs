@@ -283,3 +283,55 @@ fn a_release_chord_the_keymap_cannot_type_gets_the_default_beside_it() {
         "a chord the keymap can type is left alone"
     );
 }
+
+#[test]
+fn the_notice_keeps_the_way_out_whatever_the_application_is_called() {
+    // 2000 characters, with a control character and characters that turn the text around
+    let long: &'static str =
+        Box::leak(format!("org.example.\u{202e}\u{7}{}", "x".repeat(2000)).into_boxed_str());
+    let Some(mut h) = Harness::new() else { return };
+    let vm = Client::inhibiting(h.socket_path(), long);
+    h.wait_until("the inhibitor to be active", |_| {
+        vm.inhibitor_events() == [true]
+    });
+    let notice = h
+        .state
+        .overlays
+        .shortcut_notice
+        .clone()
+        .expect("the notice");
+    assert!(
+        notice.text.starts_with("Press Super+Escape"),
+        "{}",
+        notice.text
+    );
+    assert!(
+        notice.text.chars().count() < 120,
+        "{}",
+        notice.text.chars().count()
+    );
+    assert!(
+        !notice
+            .text
+            .chars()
+            .any(|c| c.is_control() || c == '\u{202e}'),
+        "no control or bidi characters"
+    );
+}
+
+#[test]
+fn a_layer_surface_never_holds_the_shortcuts() {
+    let Some(mut h) = Harness::new() else { return };
+    let layer = Client::inhibiting_layer(h.socket_path());
+    // the layer surface maps and takes the keyboard (exclusive); an inhibitor on it must stay inactive
+    let end = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < end {
+        h.settle();
+    }
+    assert!(
+        h.state.exclusive_layer.is_some(),
+        "the layer surface has the keyboard"
+    );
+    assert_eq!(layer.inhibitor_events(), Vec::<bool>::new());
+    assert!(h.state.overlays.shortcut_notice.is_none());
+}

@@ -24,6 +24,33 @@ use crate::input::{Action, Chord};
 use crate::overlays::ShortcutNotice;
 use crate::state::{ClientState, Cupertino};
 
+/// The most characters of an application's name the notice shows.
+const NOTICE_NAME_CHARS: usize = 48;
+
+/// The name of an application as notice text: the name comes from the client, so it is shown without control
+/// characters or the characters that turn the text around, and at most [`NOTICE_NAME_CHARS`] long.
+pub fn notice_name(name: &str) -> String {
+    let clean: Vec<char> = name
+        .chars()
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
+        .collect();
+    let shown: String = if clean.len() > NOTICE_NAME_CHARS {
+        clean[..NOTICE_NAME_CHARS - 1]
+            .iter()
+            .chain(&['…'])
+            .collect()
+    } else {
+        clean.into_iter().collect()
+    };
+    match shown.trim() {
+        "" => "An application".to_owned(),
+        name => name.to_owned(),
+    }
+}
+
 /// Seconds the notice stays when an inhibitor becomes active.
 pub const NOTICE_SECONDS: f64 = 3.0;
 
@@ -71,9 +98,10 @@ pub fn chord_label(chord: &Chord) -> String {
 }
 
 impl Cupertino {
-    /// Whether `surface` may hold the shortcuts: a toplevel of an application client, with the session unlocked.
+    /// Whether `surface` may hold the shortcuts: the toplevel of an application client, with the session unlocked. A
+    /// layer surface, a popup or a lock surface never holds them, whoever owns it.
     fn may_hold_shortcuts(&self, surface: &WlSurface) -> bool {
-        if self.session_lock.is_active() {
+        if self.session_lock.is_active() || self.window_id_for_surface(surface).is_none() {
             return false;
         }
         surface
@@ -103,16 +131,17 @@ impl Cupertino {
                     .iter()
                     .find(|(_, a)| *a == Action::ReleaseShortcuts)
                     .map(|(c, _)| chord_label(c));
-                let app = self.application_name(surface);
+                let app = notice_name(&self.application_name(surface));
                 if let Some(output) = self
                     .window_id_for_surface(surface)
                     .and_then(|id| self.wm.window(id))
                     .map(|w| w.output)
                 {
                     self.overlays.shortcut_notice = Some(ShortcutNotice {
+                        // the way out comes first: it must not be pushed out of sight by a long name
                         text: match chord {
                             Some(chord) => format!(
-                                "{app} is receiving your shortcuts. Press {chord} to get them back."
+                                "Press {chord} to get your shortcuts back. {app} is receiving them."
                             ),
                             None => format!("{app} is receiving your shortcuts."),
                         },

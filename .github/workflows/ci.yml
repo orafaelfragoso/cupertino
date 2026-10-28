@@ -144,9 +144,12 @@ jobs:
       # its default features and only the dependencies it names.
       - name: Default features, one package at a time
         if: "!matrix.package-env"
+        shell: bash
         run: |
+          packages=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
+          [ -n "$packages" ] || { echo "::error::cargo metadata listed no packages"; exit 1; }
           failed=()
-          for package in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name'); do
+          for package in $packages; do
             cargo check -p "$package" || failed+=("$package")
           done
           if [ "${#failed[@]}" -ne 0 ]; then

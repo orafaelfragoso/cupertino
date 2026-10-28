@@ -250,9 +250,14 @@ impl<A: Application> Harness<A> {
     }
 
     pub fn key_event(&mut self, keysym: u32, pressed: bool, repeat: bool, mods: Mods) {
+        self.press_key(0, keysym, pressed, repeat, mods);
+    }
+
+    /// A key with its evdev `code`, which the editing chords match on.
+    pub fn press_key(&mut self, code: u32, keysym: u32, pressed: bool, repeat: bool, mods: Mods) {
         self.send(WindowEvent::Key(
             KeyEvent {
-                code: 0,
+                code,
                 keysym: Keysym(keysym),
                 text: char::from_u32(keysym).filter(|c| !c.is_control() && keysym < 0x100),
                 pressed,
@@ -261,6 +266,23 @@ impl<A: Application> Harness<A> {
             },
             Timestamp(0),
         ));
+    }
+
+    /// Types `text`, one key per character.
+    pub fn type_text(&mut self, text: &str) {
+        for c in text.chars() {
+            self.send(WindowEvent::Key(
+                KeyEvent {
+                    code: 0,
+                    keysym: Keysym(c as u32),
+                    text: Some(c),
+                    pressed: true,
+                    repeat: false,
+                    mods: Mods::NONE,
+                },
+                Timestamp(0),
+            ));
+        }
     }
 
     /// Presses and releases a key.

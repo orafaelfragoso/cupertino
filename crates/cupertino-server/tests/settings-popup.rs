@@ -395,12 +395,13 @@ const KEY_ENTER: u32 = 28;
 const KEY_DOWN: u32 = 108;
 const KEY_TAB: u32 = 15;
 
-#[test]
-fn escape_closes_the_open_menu_and_tab_does_not_reach_the_pane() {
+/// A pane with its menu open, the `keys` tapped (the last closes the menu), and its pixels once the client has had its
+/// time: a key that reached the pane moves its focus ring.
+fn pane_after(keys: &[u32]) -> Vec<u8> {
     let mut h = Harness::new();
-    h.tap(KEY_TAB);
-    assert_eq!(popup_count(&h.state), 1, "Tab does not close the menu");
-    h.tap(KEY_ESC);
+    for key in keys {
+        h.tap(*key);
+    }
     h.wait_for_menu_to_close();
     // a key that reached the pane would act on the client's time, after the menu is gone
     h.run_for(Duration::from_millis(500));
@@ -408,6 +409,20 @@ fn escape_closes_the_open_menu_and_tab_does_not_reach_the_pane() {
         (popup_count(&h.state), title(&h.state)),
         (0, "Accessibility".into()),
         "Escape closes the menu and leaves the pane as it was"
+    );
+    window_pixels(&h.state)
+}
+
+#[test]
+fn escape_closes_the_open_menu_and_tab_does_not_reach_the_pane() {
+    let mut h = Harness::new();
+    h.tap(KEY_TAB);
+    assert_eq!(popup_count(&h.state), 1, "Tab does not close the menu");
+    drop(h);
+    // Tab only moves the pane's focus, so the title cannot show it: the pane must look as if only Escape was pressed
+    assert!(
+        pane_after(&[KEY_TAB, KEY_ESC]) == pane_after(&[KEY_ESC]),
+        "Tab reached the pane behind the menu and moved its focus"
     );
 }
 

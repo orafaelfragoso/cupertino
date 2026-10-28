@@ -162,6 +162,8 @@ pub enum ExtraAction {
 /// What an entry of the system menu that needs no session agent does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SystemAction {
+    /// Open the About This Computer window of the control panel.
+    About,
     /// Start the control panel.
     Settings,
     /// Show the server's Force Quit dialog.
@@ -174,10 +176,10 @@ pub enum SystemAction {
     ClearRecentItems,
 }
 
-/// A row of the system menu. Each has a fixed id in -4000…-4099, so an open menu survives a rebuild; -4000 and the
-/// separator id -4050 are kept for About This Computer.
+/// A row of the system menu. Each has a fixed id in -4000…-4099, so an open menu survives a rebuild.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SystemRow {
+    About = -4000,
     Settings = -4001,
     ForceQuit = -4002,
     Sleep = -4003,
@@ -196,6 +198,7 @@ impl SystemRow {
 }
 
 /// Separators of the system menu, each named by the row above it.
+const SEPARATOR_AFTER_ABOUT: i32 = -4050;
 const SEPARATOR_AFTER_SETTINGS: i32 = -4051;
 const SEPARATOR_AFTER_FORCE_QUIT: i32 = -4052;
 const SEPARATOR_AFTER_SHUT_DOWN: i32 = -4053;
@@ -410,15 +413,23 @@ impl Extras {
         menu
     }
 
-    /// The system menu: Settings…, Recent Items (the submenu of `recent`, see [`recent_items`]), Force Quit…, then the
-    /// session agent's Sleep, Restart…, Shut Down…, Lock Screen and Log Out <name>…, then the login window entry. The
-    /// session's ellipsis entries open the agent's confirmation panel. Without a session agent (none runs, or the owner
-    /// of its name is not the one the server started) Settings…, Recent Items and Force Quit… are followed only by Lock
-    /// Screen, enabled while the server has named a login process: it locks without the agent. Force Quit…, Lock Screen
-    /// and Log Out show the chord the server binds to them in `chords`.
+    /// The system menu: About This Computer, Settings…, Recent Items (the submenu of `recent`, see [`recent_items`]),
+    /// Force Quit…, then the session agent's Sleep, Restart…, Shut Down…, Lock Screen and Log Out <name>…, then the login
+    /// window entry. The session's ellipsis entries open the agent's confirmation panel. Without a session agent (none
+    /// runs, or the owner of its name is not the one the server started) the rows up to Force Quit… are followed only by
+    /// Lock Screen, enabled while the server has named a login process: it locks without the agent. Force Quit…, Lock
+    /// Screen and Log Out show the chord the server binds to them in `chords`.
     pub fn system_menu(&self, chords: &Chords, recent: &RecentItems) -> ExtraMenu {
         let mut menu = ExtraMenu::default();
         let session = |a| ExtraAction::Session(a);
+        menu.system_row(
+            SystemRow::About,
+            "About This Computer",
+            true,
+            chords,
+            ExtraAction::System(SystemAction::About),
+        );
+        menu.rows.push(MenuItem::separator(SEPARATOR_AFTER_ABOUT));
         menu.system_row(
             SystemRow::Settings,
             "Settings\u{2026}",
@@ -1041,6 +1052,8 @@ mod tests {
     fn the_system_menu_lists_its_rows_in_order_at_fixed_ids_with_one_action_each() {
         let menu = system_menu(&session("Rafael", SessionCaps::default()));
         let expected = [
+            ("About This Computer", -4000),
+            ("---", -4050),
             ("Settings\u{2026}", -4001),
             ("---", -4051),
             ("Recent Items", -4009),
@@ -1060,6 +1073,10 @@ mod tests {
         assert_eq!(rows_and_ids(&menu), expected);
         let row = |label: &str| menu.rows.iter().find(|r| r.label == label).unwrap();
         for (label, action) in [
+            (
+                "About This Computer",
+                ExtraAction::System(SystemAction::About),
+            ),
             (
                 "Settings\u{2026}",
                 ExtraAction::System(SystemAction::Settings),
@@ -1103,7 +1120,7 @@ mod tests {
         let menu = system_menu(&session("Rafael", alone));
         assert_eq!(
             rows_and_ids(&menu),
-            expected[..12],
+            expected[..14],
             "no login window and no separator before it"
         );
     }
@@ -1125,6 +1142,7 @@ mod tests {
         assert_eq!(
             enabled,
             [
+                ("About This Computer", true),
                 ("Settings\u{2026}", true),
                 ("Recent Items", true),
                 ("Force Quit\u{2026}", true),
@@ -1140,7 +1158,7 @@ mod tests {
     }
 
     #[test]
-    fn without_a_session_agent_the_system_menu_offers_settings_force_quit_and_lock() {
+    fn without_a_session_agent_the_system_menu_offers_about_settings_force_quit_and_lock() {
         let named = Extras {
             lock_without_agent: true,
             ..Extras::default()
@@ -1149,6 +1167,8 @@ mod tests {
         assert_eq!(
             rows_and_ids(&menu),
             [
+                ("About This Computer", -4000),
+                ("---", -4050),
                 ("Settings\u{2026}", -4001),
                 ("---", -4051),
                 ("Recent Items", -4009),
@@ -1172,6 +1192,7 @@ mod tests {
         assert_eq!(
             entries(&nobody),
             [
+                "About This Computer",
                 "Settings\u{2026}",
                 "Recent Items",
                 "Force Quit\u{2026}",

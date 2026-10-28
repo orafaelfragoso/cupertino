@@ -136,10 +136,13 @@ def metadata_problems(root: Path) -> list[str]:
     release = root / "packaging" / "release.py"
     if not release.is_file():
         return []
-    result = subprocess.run([sys.executable, "-I", str(release), "check-metadata"], cwd=root, capture_output=True, text=True)
+    result = subprocess.run([sys.executable, "-I", str(release), "check-metadata"], cwd=root, capture_output=True, text=True, timeout=300)
     if result.returncode == 0:
         return []
-    return [f"packaging: check-metadata: {line}" for line in (result.stderr or result.stdout).splitlines() if line.strip()]
+    lines = [line for line in (result.stderr or result.stdout).splitlines() if line.strip()]
+    if not lines:
+        return [f"packaging: check-metadata: exit {result.returncode} with no output"]
+    return [f"packaging: check-metadata: {line}" for line in lines]
 
 
 def main() -> int:

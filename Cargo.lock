@@ -1505,12 +1505,15 @@ dependencies = [
 name = "cupertino-ui-core"
 version = "0.1.0"
 dependencies = [
+ "async-task",
  "cupertino-geometry",
  "cupertino-ui-layout",
  "cupertino-ui-platform",
  "cupertino-ui-render",
  "cupertino-ui-text",
  "cupertino-ui-theme",
+ "proptest",
+ "rustix 1.1.5",
 ]
 
 [[package]]

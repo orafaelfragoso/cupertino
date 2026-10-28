@@ -3,9 +3,18 @@
 //! a frame it owns and the window system presents that frame. Effects such as blur sample only the window's own
 //! layers, never a capture of the screen.
 
+mod cpu;
+mod effects;
+mod geometry;
+mod glyph_cache;
+mod image_cache;
+mod validate;
+
+pub use cpu::{CpuConfig, CpuRenderer};
+
 use cupertino_geometry::{Point, Rect};
 use cupertino_theme::Color;
-use cupertino_ui_text::GlyphRun;
+use cupertino_ui_text::{GlyphRun, TextError};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -70,7 +79,7 @@ pub struct GradientStop {
     pub color: Color,
 }
 
-/// Source colour; gradients interpolate premultiplied, in encoded sRGB.
+/// Source colour; gradients interpolate straight-alpha stops in encoded sRGB and premultiply the result.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Paint {
     Solid(Color),
@@ -144,18 +153,33 @@ pub enum PaintOp {
     PopLayer,
 }
 
+/// Composites a node and its whole subtree as one isolated layer: `opacity` applies once to the result, after
+/// `effects`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Group {
+    pub opacity: f32,
+    pub effects: Vec<Effect>,
+}
+
 /// What one core node painted.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaintNode {
     pub id: PaintNodeId,
-    /// The node whose subtree this one belongs to; a parent comes before its children in the list.
+    /// The node whose subtree this one belongs to. A parent comes before its children in the list, so the list is a
+    /// preorder walk of the forest; a parent that is not an earlier node of the list is an error. The renderer
+    /// paints a node, then its children, and applies each ancestor's `clip` and `group` to the subtree.
     pub parent: Option<PaintNodeId>,
     pub revision: PaintRevision,
+    /// Applies to `clip` and `ops`, which are in the node's own coordinates.
     pub transform: Transform,
+    /// The clip this node puts on its descendants, in node coordinates; the node's own ops are not cut by it.
     pub clip: Option<Shape>,
-    /// Everything the node's operations may touch, effects included.
+    /// Paints this node and its subtree into one layer, composited once, under the ancestors' clips.
+    pub group: Option<Group>,
+    /// Everything the node and its descendants may touch, effects included, in window points. The renderer skips a
+    /// subtree that misses the damage and sizes a group's layer from it; it works out the node's own extent itself.
     pub bounds: Rect,
-    /// Where the node takes pointer input; never its shadow or focus ring.
+    /// Where the node takes pointer input, in window points; never its shadow or focus ring.
     pub hit: Rect,
     pub ops: Vec<PaintOp>,
 }
@@ -242,6 +266,13 @@ pub enum RenderError {
     UnbalancedScope(PaintNodeId),
     NonFiniteValue(PaintNodeId),
     InvalidScale,
+    /// A target with no pixels.
+    InvalidSize,
+    /// A parent that is not an earlier node of the list.
+    UnknownParent(PaintNodeId),
+    /// An image buffer shorter than its stride and height, or a stride shorter than a row.
+    InvalidImage(ResourceId),
+    Glyph(TextError),
     /// An image, layer or target exceeds the renderer's allocation limits.
     ResourceLimit,
     UnknownFrame(RenderFrameId),

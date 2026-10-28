@@ -143,6 +143,9 @@ pub struct AccessibilityUpdate {
     pub focus: Option<NodeId>,
     pub nodes: Vec<(NodeId, AccessibilityNode)>,
     pub removed: Vec<NodeId>,
+    /// `nodes` is the window's whole tree: the adapter replaces what it holds for the window, dropping any node not
+    /// listed. Sent when a window opens and when the adapter becomes active again.
+    pub full: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -161,7 +164,8 @@ pub struct ActionRequest {
 }
 
 /// Publishes the tree to assistive technology and hands back its requests. An adapter wakes the window system's
-/// waker when a request arrives.
+/// waker when a request arrives and when it becomes active, because a running application may be blocked waiting for
+/// the window system and would otherwise not send the tree until its next event.
 pub trait AccessibilityAdapter {
     /// Whether an assistive technology is listening; core builds updates only while it is.
     fn is_active(&self) -> bool;

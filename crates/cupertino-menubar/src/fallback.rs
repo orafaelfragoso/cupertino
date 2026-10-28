@@ -350,7 +350,7 @@ pub fn window_menu(
     // with Alt held the windows also cascade; the row reads the same
     children.push(
         MenuItem::new(BRING_ALL_TO_FRONT, "Bring All to Front")
-            .with_alternate(MenuItem::new(CASCADE_ALL, "Bring All to Front")),
+            .with_alternate(MenuItem::new(CASCADE_ALL, "Arrange in Front")),
     );
     children.push(MenuItem::separator(-1103));
     children.extend(
@@ -778,7 +778,7 @@ mod tests {
             vec![
                 ("Minimize", "Minimize All", -1025),
                 ("Zoom", "Zoom All", -1026),
-                ("Bring All to Front", "Bring All to Front", -1028),
+                ("Bring All to Front", "Arrange in Front", -1028),
                 ("Close Window", "Close All", -1027),
             ]
         );

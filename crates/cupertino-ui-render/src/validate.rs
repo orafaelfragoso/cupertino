@@ -22,9 +22,15 @@ pub(crate) fn check(
     if width == 0 || height == 0 {
         return Err(RenderError::InvalidSize);
     }
-    list.nodes
-        .iter()
-        .try_for_each(|node| node_ok(node, resources))
+    let mut seen = std::collections::HashSet::new();
+    for node in &list.nodes {
+        if node.parent.is_some_and(|parent| !seen.contains(&parent)) {
+            return Err(RenderError::UnknownParent(node.id));
+        }
+        seen.insert(node.id);
+        node_ok(node, resources)?;
+    }
+    Ok(())
 }
 
 #[derive(PartialEq)]
@@ -42,7 +48,22 @@ fn node_ok(node: &PaintNode, resources: &PaintResources) -> Result<(), RenderErr
             Err(RenderError::NonFiniteValue(id))
         }
     };
-    finite(transform_ok(&node.transform) && rect_ok(&node.bounds) && rect_ok(&node.hit))?;
+    finite(
+        transform_ok(&node.transform)
+            && rect_ok(&node.bounds)
+            && rect_ok(&node.subtree_bounds)
+            && rect_ok(&node.hit),
+    )?;
+    if let Some(group) = &node.group {
+        finite(
+            group.opacity.is_finite()
+                && (0.0..=1.0).contains(&group.opacity)
+                && group.effects.iter().all(effect_ok),
+        )?;
+        if !group.effects.iter().all(effect_bounded) {
+            return Err(RenderError::ResourceLimit);
+        }
+    }
     if let Some(clip) = &node.clip {
         finite(shape_ok(clip))?;
     }

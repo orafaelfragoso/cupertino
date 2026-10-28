@@ -179,3 +179,26 @@ fn cubic(b: &mut PathBuilder, c1: Point, c2: Point, to: Point) {
         to.y as f32,
     );
 }
+
+/// The pixels a clip shape under `node` can let through; empty for a shape with no area.
+pub(crate) fn clip_bounds(shape: &Shape, node: &Transform, scale: f64) -> Bounds {
+    let empty = Bounds {
+        x0: 0,
+        y0: 0,
+        x1: 0,
+        y1: 0,
+    };
+    let Some(path) = path(shape) else {
+        return empty;
+    };
+    let Some(moved) = path.transform(to_target(node, scale, (0, 0))) else {
+        return empty;
+    };
+    let b = moved.bounds();
+    Bounds {
+        x0: b.left().floor() as i32 - 1,
+        y0: b.top().floor() as i32 - 1,
+        x1: b.right().ceil() as i32 + 1,
+        y1: b.bottom().ceil() as i32 + 1,
+    }
+}

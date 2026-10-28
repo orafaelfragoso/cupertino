@@ -64,7 +64,9 @@ fn node(id: u64, bounds: Rect, ops: Vec<PaintOp>) -> PaintNode {
         revision: PaintRevision(0),
         transform: Transform::IDENTITY,
         clip: None,
+        group: None,
         bounds,
+        subtree_bounds: bounds,
         hit: bounds,
         ops,
     }
@@ -506,5 +508,143 @@ fn cost_follows_damage_and_content_not_target_area() {
     assert!(
         partial * 5 < large,
         "a 16x16 damage {partial:?} vs full {large:?}"
+    );
+}
+
+fn child(id: u64, parent: u64, bounds: Rect, ops: Vec<PaintOp>) -> PaintNode {
+    PaintNode {
+        parent: Some(PaintNodeId(parent)),
+        ..node(id, bounds, ops)
+    }
+}
+
+fn red_square(x: f64) -> PaintOp {
+    fill(
+        Shape::Rect(rect(x, 8.0, 20.0, 20.0)),
+        solid(1.0, 0.0, 0.0, 1.0),
+    )
+}
+
+fn faded_sheet(shift: f64) -> DisplayList {
+    let all = rect(0.0, 0.0, 96.0, 64.0);
+    let sheet = PaintNode {
+        group: Some(cupertino_ui_render::Group {
+            opacity: 0.5,
+            effects: vec![Effect::DropShadow {
+                offset: Point { x: 2.0, y: 2.0 },
+                blur: 4.0,
+                color: Color::new(0.0, 0.0, 0.0, 0.6),
+            }],
+        }),
+        clip: Some(Shape::RoundedRect {
+            rect: rect(4.0, 4.0, 80.0, 50.0),
+            radius: 14.0,
+        }),
+        ..node(1, all, vec![])
+    };
+    DisplayList {
+        nodes: vec![
+            sheet,
+            child(2, 1, all, vec![red_square(8.0 + shift)]),
+            child(3, 1, all, vec![red_square(18.0 + shift)]),
+        ],
+    }
+}
+
+#[test]
+fn a_parents_group_opacity_applies_once_to_its_subtree() {
+    let px = render(
+        &mut renderer(),
+        &faded_sheet(0.0),
+        &PaintResources::default(),
+        1.0,
+        &DamageRegion::Full,
+    )
+    .unwrap();
+    let at = |x: usize, y: usize| px[(y * 96 + x) * 4..][..4].to_vec();
+    assert_eq!(at(10, 15), at(26, 15));
+    assert_eq!(
+        at(20, 15),
+        at(10, 15),
+        "the overlap of two children is not darker"
+    );
+    assert_ne!(at(10, 15)[3], 255, "the group is faded");
+}
+
+#[test]
+fn a_parents_rounded_clip_clips_its_descendants() {
+    let list = DisplayList {
+        nodes: vec![
+            PaintNode {
+                clip: Some(Shape::RoundedRect {
+                    rect: rect(0.0, 0.0, 40.0, 40.0),
+                    radius: 20.0,
+                }),
+                ..node(1, rect(0.0, 0.0, 40.0, 40.0), vec![])
+            },
+            child(
+                2,
+                1,
+                rect(0.0, 0.0, 40.0, 40.0),
+                vec![fill(
+                    Shape::Rect(rect(0.0, 0.0, 40.0, 40.0)),
+                    solid(0.0, 0.0, 1.0, 1.0),
+                )],
+            ),
+        ],
+    };
+    let px = render(
+        &mut renderer(),
+        &list,
+        &PaintResources::default(),
+        1.0,
+        &DamageRegion::Full,
+    )
+    .unwrap();
+    assert_eq!(px[(20 * 96 + 20) * 4 + 3], 255, "the middle is painted");
+    assert_eq!(px[3], 0, "the corner outside the circle is not");
+}
+
+#[test]
+fn subtree_incremental_repaint_equals_fresh_repaint() {
+    for scale in [1.0, 1.5] {
+        let none = PaintResources::default();
+        let mut inc = renderer();
+        render(
+            &mut inc,
+            &faded_sheet(0.0),
+            &none,
+            scale,
+            &DamageRegion::Full,
+        )
+        .unwrap();
+        let damage = DamageRegion::Rects(vec![rect(0.0, 0.0, 60.0, 40.0)]);
+        let moved = render(&mut inc, &faded_sheet(6.0), &none, scale, &damage).unwrap();
+        let fresh = render(
+            &mut renderer(),
+            &faded_sheet(6.0),
+            &none,
+            scale,
+            &DamageRegion::Full,
+        )
+        .unwrap();
+        assert_eq!(moved, fresh, "scale {scale}");
+    }
+}
+
+#[test]
+fn a_parent_that_is_not_an_earlier_node_is_refused() {
+    let list = DisplayList {
+        nodes: vec![child(2, 9, rect(0.0, 0.0, 8.0, 8.0), vec![])],
+    };
+    assert_eq!(
+        render(
+            &mut renderer(),
+            &list,
+            &PaintResources::default(),
+            1.0,
+            &DamageRegion::Full
+        ),
+        Err(RenderError::UnknownParent(PaintNodeId(2)))
     );
 }

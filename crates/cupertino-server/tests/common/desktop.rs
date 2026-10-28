@@ -36,12 +36,16 @@ impl Desktop {
     }
 
     pub fn with_displays(displays: &[headless::HeadlessDisplay], scale: f64) -> Self {
+        Self::configured(Config::default(), displays, scale)
+    }
+
+    pub fn configured(config: Config, displays: &[headless::HeadlessDisplay], scale: f64) -> Self {
         let event_loop = EventLoop::try_new().unwrap();
         let mut state = Cupertino::new(
             Display::new().unwrap(),
             event_loop.handle(),
             event_loop.get_signal(),
-            Config::default(),
+            config,
             true,
             &cupertino_assets::Assets::builtin(),
         )

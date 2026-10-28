@@ -920,6 +920,7 @@ fn route<'a, M: 'static>(
 ) -> Route<'a, M> {
     Route {
         tree,
+        geometry: &w.geometry,
         env: &w.env,
         status: Status {
             focus: w.focus.node(),

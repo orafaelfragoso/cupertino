@@ -18,10 +18,18 @@ pub(crate) struct Placement {
     pub(crate) own_clip: Option<Rect>,
 }
 
+impl Placement {
+    /// Whether `point` lands on the node: inside its rect and every clip above it.
+    pub(crate) fn hit(&self, point: Point) -> bool {
+        self.rect.contains(point) && self.clip.is_none_or(|clip| clip.contains(point))
+    }
+}
+
 pub(crate) type Geometry = HashMap<NodeId, Placement>;
 
 pub(crate) struct Route<'a, M> {
     pub(crate) tree: &'a mut Tree<M>,
+    pub(crate) geometry: &'a Geometry,
     pub(crate) env: &'a Environment,
     pub(crate) status: Status,
     pub(crate) effects: &'a mut Effects<M>,
@@ -65,6 +73,7 @@ impl<M: 'static> Route<'_, M> {
             node,
             target,
             phase,
+            placement: self.geometry.get(&node).copied(),
             env: self.env,
             status: self.status,
             effects: self.effects,

@@ -676,10 +676,21 @@ fn render_outputs(state: &mut Cupertino) {
     state.backend = Some(backend);
 }
 
+/// Whether the frame already on the screen is what this frame would show, so it may be reported as shown: only when a
+/// scene was composed and drawn and nothing differed from it. Without a scene nothing says what the screen shows, and
+/// the session lock must not be confirmed by it.
+fn already_shown(scene: bool, rendered: bool) -> bool {
+    scene && !rendered
+}
+
 fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle, idx: usize) {
     // without a scene (no render resources or no mode yet) nothing is drawn or queued, but the tail still runs
+    let mut scene = true;
     let rendered = match state.compose_for_present(&mut u.renderer, idx) {
-        None => false,
+        None => {
+            scene = false;
+            false
+        }
         Some(composed) => {
             let Some(surface) = u.surfaces.get_mut(&crtc) else {
                 return;
@@ -723,8 +734,7 @@ fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle
             Err(e) => tracing::warn!(error = %e, "queueing the frame failed"),
         }
     }
-    if !rendered {
-        // nothing differs from the frame already on the screen
+    if already_shown(scene, rendered) {
         state.note_frame_shown(idx);
     }
     state.process_screenshots(&mut u.renderer, idx);
@@ -770,7 +780,23 @@ fn frame_finish(
 
 #[cfg(test)]
 mod tests {
-    use super::frame_due;
+    use super::{already_shown, frame_due};
+
+    #[test]
+    fn only_a_drawn_scene_that_changed_nothing_is_reported_as_shown() {
+        assert!(
+            already_shown(true, false),
+            "nothing differs from the screen"
+        );
+        assert!(
+            !already_shown(true, true),
+            "a new frame is queued, not shown yet"
+        );
+        assert!(
+            !already_shown(false, false),
+            "without a scene nothing says what the screen shows, so a lock is not confirmed by it"
+        );
+    }
 
     #[test]
     fn a_paused_session_renders_nothing_however_much_is_wanted() {

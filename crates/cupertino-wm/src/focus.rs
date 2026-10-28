@@ -494,31 +494,54 @@ impl Wm {
         let Some(anchor) = key.or_else(|| windows.last().copied()) else {
             return;
         };
-        let origin = self.windows[&anchor].geometry();
-        let behind = windows.iter().rev().copied().filter(|w| *w != anchor);
-        for (step, id) in (1..).zip(behind) {
-            let w = &self.windows[&id];
-            let Some(usable) = self.output(w.output).map(|o| o.usable) else {
-                continue;
-            };
+        let (origin, output) = {
+            let a = &self.windows[&anchor];
+            (a.geometry(), a.output)
+        };
+        let Some(usable) = self.output(output).map(|o| o.usable) else {
+            return;
+        };
+        // children are placed from their parent, so they follow it rather than cascade
+        let others: Vec<WindowId> = windows
+            .iter()
+            .rev()
+            .copied()
+            .filter(|w| *w != anchor)
+            .filter(|w| self.windows[w].parent.is_none() && self.windows[w].output == output)
+            .collect();
+        for (step, id) in (1..).zip(others) {
             let offset = CASCADE_STEP * f64::from(step);
-            let frame = w.lifecycle.normal_frame();
+            let frame = self.windows[&id].lifecycle.normal_frame();
             let f = Rect::new(origin.x - offset, origin.y - offset, frame.w, frame.h)
                 .clamp_into(&usable);
-            if self
-                .windows
-                .get_mut(&id)
-                .is_some_and(|w| w.lifecycle.animate_normal_frame(f, now))
-            {
-                out.push(Effect::Place {
-                    window: id,
-                    rect: f,
-                });
-                if let Some(c) = self.configure_effect(id, false) {
-                    out.push(c);
+            if self.animate_to(id, f, now, out) {
+                for c in self.descendants(id) {
+                    let cf = self.windows[&c]
+                        .lifecycle
+                        .normal_frame()
+                        .translate(f.x - frame.x, f.y - frame.y);
+                    self.animate_to(c, cf, now, out);
                 }
             }
         }
+    }
+
+    fn animate_to(&mut self, id: WindowId, f: Rect, now: f64, out: &mut Vec<Effect>) -> bool {
+        if !self
+            .windows
+            .get_mut(&id)
+            .is_some_and(|w| w.lifecycle.animate_normal_frame(f, now))
+        {
+            return false;
+        }
+        out.push(Effect::Place {
+            window: id,
+            rect: f,
+        });
+        if let Some(c) = self.configure_effect(id, false) {
+            out.push(c);
+        }
+        true
     }
 
     /// Open the switcher: the applications that have a window, most recently used

@@ -1109,16 +1109,16 @@ impl Cupertino {
     }
 
     /// The lightness of the wallpaper under the bar of `output` (CIE L*/100 in thousandths, clamped to
-    /// [`BACKDROP_LIGHTNESS_MAX`]); `None` while the server has no measure of it.
+    /// [`BACKDROP_LIGHTNESS_MAX`]). A value equal to the stored one does nothing. `None` forgets the output's measure
+    /// when the output goes and sends nothing: a value sent to a bar is never withdrawn.
     pub fn set_backdrop_lightness(&mut self, output: OutputId, lightness: Option<u16>) {
-        match lightness {
-            Some(l) => self
-                .menu_bars
-                .backdrops
-                .insert(output, l.min(BACKDROP_LIGHTNESS_MAX)),
-            None => self.menu_bars.backdrops.remove(&output),
+        let Some(lightness) = lightness.map(|l| l.min(BACKDROP_LIGHTNESS_MAX)) else {
+            self.menu_bars.backdrops.remove(&output);
+            return;
         };
-        self.refresh_backdrop_lightness();
+        if self.menu_bars.backdrops.insert(output, lightness) != Some(lightness) {
+            self.refresh_backdrop_lightness();
+        }
     }
 
     /// Tell the bars of version 14 or later the lightness of the wallpaper under them, each one the first time and

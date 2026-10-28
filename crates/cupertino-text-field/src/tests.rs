@@ -1,8 +1,9 @@
 use std::time::{Duration, Instant};
 
-use cupertino_keyboard::BindingTable;
+use cupertino_keyboard::{BindingTable, TextAction};
 use cupertino_modifiers::Profile;
 
+use crate::keymap::Command;
 use crate::{KeyInput, Keymap, Response, TextField};
 
 const A: u32 = 30;
@@ -445,4 +446,36 @@ fn a_field_with_a_maximum_length_cuts_typing_pastes_and_compositions_at_a_graphe
     let mut big = TextField::with_max_len(1024);
     big.paste(&"x".repeat(10_000));
     assert_eq!(big.text().len(), 1024);
+}
+
+#[test]
+fn the_key_views_are_on_physical_ctrl_tab_under_classic_pc() {
+    const TAB: u32 = 15;
+    let next = Command::Actions(vec![TextAction::SelectNextKeyView]);
+    let previous = Command::Actions(vec![TextAction::SelectPreviousKeyView]);
+    // the Ctrl role is on Super there, and the system keeps Super+Tab for the overview: the key is Ctrl+Tab
+    let mut pc = Keymap::standard_for(Profile::classic_pc());
+    assert_eq!(pc.command(key(TAB, "c", None)), next);
+    assert_eq!(pc.command(key(TAB, "cs", None)), previous);
+    // under cupertino it is Ctrl+Tab too, and Super+Tab is the system's, not a key view
+    let mut mac = Keymap::standard();
+    assert_eq!(mac.command(key(TAB, "c", None)), next);
+    assert_eq!(mac.command(key(TAB, "cs", None)), previous);
+    assert_eq!(mac.command(key(TAB, "m", None)), Command::Ignored);
+}
+
+#[test]
+fn a_binding_of_the_user_on_the_key_view_chord_stays_under_classic_pc() {
+    use cupertino_keyboard::{Chord, Key, NamedKey};
+    use cupertino_modifiers::Mods;
+    let mut table = BindingTable::standard();
+    table.bind(
+        vec![Chord::new(Mods::PRIMARY, Key::Named(NamedKey::Tab))],
+        vec![TextAction::InsertTab],
+    );
+    let mut pc = Keymap::new(Profile::classic_pc(), table);
+    assert_eq!(
+        pc.command(key(15, "c", None)),
+        Command::Actions(vec![TextAction::InsertTab])
+    );
 }

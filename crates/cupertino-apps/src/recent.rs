@@ -4,12 +4,30 @@
 use percent_encoding::percent_decode_str;
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::io;
+use std::io::{self, Read};
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
 /// The name of the bookmark file in the data home.
 pub const XBEL_NAME: &str = "recently-used.xbel";
+
+/// The most bytes read of a file another process writes; any application of the session can grow the bookmark file.
+pub const MAX_READ_BYTES: u64 = 8 * 1024 * 1024;
+
+/// The text of `path`, or `InvalidData` when it is longer than `max` bytes.
+pub(crate) fn read_capped(path: &Path, max: u64) -> io::Result<String> {
+    let mut text = String::new();
+    std::fs::File::open(path)?
+        .take(max + 1)
+        .read_to_string(&mut text)?;
+    if text.len() as u64 > max {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} is larger than {max} bytes", path.display()),
+        ));
+    }
+    Ok(text)
+}
 
 /// The bookmark file of the data home `data_home`.
 pub fn xbel_path(data_home: &Path) -> PathBuf {
@@ -161,9 +179,9 @@ pub fn parse_xbel(text: &str) -> Vec<PathBuf> {
 }
 
 /// The files of the bookmark file `xbel` as [`parse_recent_files`] gives them, whether or not they still exist. No
-/// bookmark file yet means nothing was used.
+/// bookmark file yet means nothing was used; one larger than [`MAX_READ_BYTES`] is an `InvalidData` error.
 pub fn read_recent_files(xbel: &Path) -> io::Result<Vec<RecentFile>> {
-    match std::fs::read_to_string(xbel) {
+    match read_capped(xbel, MAX_READ_BYTES) {
         Ok(text) => Ok(parse_recent_files(&text)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(e) => Err(e),
@@ -258,6 +276,16 @@ mod tests {
         );
         assert_eq!(parse_time("10000-01-01T00:00:00Z"), None);
         assert_eq!(parse_time("2026-10-01T09:00:00+15:00"), None);
+    }
+
+    #[test]
+    fn a_bookmark_file_over_the_limit_is_an_error() {
+        let d = tempfile::tempdir().unwrap();
+        let xbel = xbel_path(d.path());
+        std::fs::write(&xbel, r#"<bookmark href="file:///tmp/a"/>"#).unwrap();
+        assert_eq!(read_capped(&xbel, 64).unwrap().len(), 32);
+        let error = read_capped(&xbel, 16).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
 
     #[test]

@@ -45,9 +45,9 @@ impl Store {
         }
     }
 
-    /// The store at `path`; a missing, corrupt or foreign (another version) file reads as [`Store::empty`].
+    /// The store at `path`; a missing, corrupt, foreign (another version) or oversized file reads as [`Store::empty`].
     pub fn read(path: &Path) -> Self {
-        std::fs::read_to_string(path)
+        crate::recent::read_capped(path, crate::recent::MAX_READ_BYTES)
             .ok()
             .and_then(|t| serde_json::from_str::<Store>(&t).ok())
             .filter(|d| d.version == FILE_VERSION)

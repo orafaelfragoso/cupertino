@@ -129,7 +129,10 @@ impl RecentSources {
             })
             .take(RECENT_LIMIT)
             .collect();
-        let mut files = read_recent_files(&self.bookmarks).unwrap_or_default();
+        let mut files = read_recent_files(&self.bookmarks).unwrap_or_else(|e| {
+            eprintln!("cupertino-menubar: cannot read the recent documents: {e}");
+            Vec::new()
+        });
         // newest first; a file without a time after those with one, each group in list order
         files.sort_by(|a, b| match (a.used, b.used) {
             (Some(x), Some(y)) => y.total_cmp(&x),

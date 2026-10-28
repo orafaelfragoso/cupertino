@@ -1356,7 +1356,7 @@ impl Cupertino {
         let window = WindowId(u64::from(id));
         if self.listed_windows(app).any(|w| w.id == window) {
             // unminimizes it, switches to its workspace, raises and focuses it
-            self.command(Command::FocusWindow { window });
+            self.focus_window_by_input(window);
         }
     }
 

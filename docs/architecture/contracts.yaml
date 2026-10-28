@@ -252,6 +252,16 @@
   advertised: always
   test_owner: unknown
   source: crates/cupertino-server/src/state.rs:495
+- name: zwp_keyboard_shortcuts_inhibit_manager_v1
+  kind: wayland-global
+  version: 1
+  owner_crate: cupertino-server
+  owner_area: compositor
+  scope: public
+  role: none
+  advertised: always
+  test_owner: crates/cupertino-server/tests/shortcut_inhibit.rs
+  source: crates/cupertino-server/src/state.rs:542
 - name: zwp_pointer_gestures_v1
   kind: wayland-global
   version: 3

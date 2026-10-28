@@ -183,6 +183,20 @@ impl Harness {
         }
     }
 
+    /// Steps until the open menu is gone: the client closes it on its own time, which a loaded machine stretches.
+    fn wait_for_menu_to_close(&mut self) {
+        self.wait_until("the menu to close", |s| popup_count(s) == 0);
+    }
+
+    /// Steps until `dock.conf` holds the line `expected`.
+    fn wait_for_dock_setting(&mut self, expected: &str) {
+        let path = self.home.path().join("config/cupertino/dock.conf");
+        self.wait_until("the choice to be stored", |_| {
+            std::fs::read_to_string(&path)
+                .is_ok_and(|stored| stored.lines().any(|l| l.trim() == expected))
+        });
+    }
+
     fn click(&mut self, point: (f64, f64)) {
         let window = self.state.windows.iter().find(|w| w.mapped).unwrap();
         let frame = self.state.wm.window(window.id).unwrap().geometry();
@@ -277,7 +291,7 @@ fn window_pixels(state: &Cupertino) -> Vec<u8> {
 fn outside_click_dismisses_without_activating_the_underlying_pane() {
     let mut h = Harness::new();
     h.click(APPEARANCE_ROW);
-    h.run_for(Duration::from_millis(500));
+    h.wait_for_menu_to_close();
     assert_eq!(
         (popup_count(&h.state), title(&h.state)),
         (0, "Accessibility".into()),
@@ -334,15 +348,8 @@ fn pressing_a_row_of_the_open_menu_selects_it() {
         f64::from(location.x) + 100.0,
         f64::from(location.y) + 5.0 + 22.0 + 11.0,
     ));
-    h.run_for(Duration::from_millis(500));
-    assert_eq!(popup_count(&h.state), 0, "the menu closes on the choice");
-    let stored = std::fs::read_to_string(h.home.path().join("config/cupertino/dock.conf")).unwrap();
-    assert!(
-        stored
-            .lines()
-            .any(|l| l.trim() == "corner_top_left = overview"),
-        "the chosen row is committed: {stored:?}"
-    );
+    h.wait_for_menu_to_close();
+    h.wait_for_dock_setting("corner_top_left = overview");
 }
 
 #[test]
@@ -392,7 +399,7 @@ fn escape_closes_the_open_menu_and_tab_does_not_reach_the_pane() {
     h.tap(KEY_TAB);
     assert_eq!(popup_count(&h.state), 1, "Tab does not close the menu");
     h.tap(KEY_ESC);
-    h.run_for(Duration::from_millis(250));
+    h.wait_for_menu_to_close();
     assert_eq!(
         (popup_count(&h.state), title(&h.state)),
         (0, "Accessibility".into()),
@@ -406,13 +413,6 @@ fn down_and_return_choose_the_next_item_of_the_open_menu() {
     h.tap(KEY_DOWN);
     assert_eq!(popup_count(&h.state), 1, "Down only moves the highlight");
     h.tap(KEY_ENTER);
-    h.run_for(Duration::from_millis(500));
-    assert_eq!(popup_count(&h.state), 0, "the menu closes on the choice");
-    let stored = std::fs::read_to_string(h.home.path().join("config/cupertino/dock.conf")).unwrap();
-    assert!(
-        stored
-            .lines()
-            .any(|l| l.trim() == "corner_top_left = overview"),
-        "the next item is committed: {stored:?}"
-    );
+    h.wait_for_menu_to_close();
+    h.wait_for_dock_setting("corner_top_left = overview");
 }

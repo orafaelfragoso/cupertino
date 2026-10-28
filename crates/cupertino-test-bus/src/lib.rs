@@ -1,8 +1,8 @@
 //! A private session bus for integration tests (`dbus-daemon --session`). The daemon is a child of the test, started
 //! with `PR_SET_PDEATHSIG`: it is killed when the bus is dropped, and with the thread that started it when the test is
-//! killed first, so a test that times out or is killed leaves no daemon behind. Every wait has a deadline of [`WAIT`]:
-//! the daemon's address, and each method call of a connection made here. A test is skipped when `dbus-daemon` is not
-//! installed ([`PrivateBus::start`] gives `None`).
+//! killed first, so a test that times out or is killed leaves no daemon behind. The daemon's address, the handshake of
+//! [`PrivateBus::connect`] and [`PrivateBus::connect_async`], and each method call of a connection made here have a
+//! deadline of [`WAIT`]. A test is skipped when `dbus-daemon` is not installed ([`PrivateBus::start`] gives `None`).
 
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader};
@@ -12,7 +12,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
-/// How long the daemon's address and each method call may take.
+/// How long the daemon's address, a connection's handshake and each method call may take.
 pub const WAIT: Duration = Duration::from_secs(5);
 
 pub struct PrivateBus {
@@ -79,7 +79,7 @@ impl PrivateBus {
         self.daemon.id()
     }
 
-    /// A connection builder for the bus whose method calls time out after [`WAIT`].
+    /// A connection builder for the bus whose method calls time out after [`WAIT`]; its handshake has no deadline.
     pub fn builder(&self) -> zbus::connection::Builder<'static> {
         zbus::connection::Builder::address(self.address.as_str())
             .expect("the daemon's address")
@@ -93,12 +93,22 @@ impl PrivateBus {
             .method_timeout(WAIT)
     }
 
+    /// A blocking connection; panics when the handshake takes longer than [`WAIT`].
     pub fn connect(&self) -> zbus::blocking::Connection {
-        self.blocking_builder().build().expect("connect")
+        zbus::block_on(self.connect_async()).into()
     }
 
+    /// A connection; panics when the handshake takes longer than [`WAIT`].
     pub async fn connect_async(&self) -> zbus::Connection {
-        self.builder().build().await.expect("connect")
+        let build = async { Some(self.builder().build().await) };
+        let deadline = async {
+            async_io::Timer::after(WAIT).await;
+            None
+        };
+        futures_lite::future::or(build, deadline)
+            .await
+            .expect("the bus handshake did not finish within 5 s: does the configuration allow receive_sender?")
+            .expect("connect")
     }
 }
 
@@ -112,11 +122,9 @@ impl Drop for PrivateBus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
-    #[test]
-    fn a_bus_takes_the_configuration_it_is_given() {
-        let dir = std::env::temp_dir().join(format!("cupertino-test-bus-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+    fn config(dir: &Path, policy: &str) -> std::path::PathBuf {
         let config = dir.join("bus.conf");
         std::fs::write(
             &config,
@@ -128,27 +136,49 @@ mod tests {
   <listen>unix:dir={}</listen>
   <auth>EXTERNAL</auth>
   <policy context="default">
-    <allow send_destination="*"/>
-    <allow receive_sender="*"/>
-    <allow own="*"/>
+{policy}
   </policy>
 </busconfig>"#,
                 dir.display()
             ),
         )
         .unwrap();
-        let Some(bus) = PrivateBus::start_with_config(&config) else {
+        config
+    }
+
+    #[test]
+    fn a_bus_takes_the_configuration_it_is_given() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = r#"    <allow send_destination="*"/>
+    <allow receive_sender="*"/>
+    <allow own="*"/>"#;
+        let Some(bus) = PrivateBus::start_with_config(&config(dir.path(), policy)) else {
             eprintln!("skipping: dbus-daemon is not available");
             return;
         };
         assert!(
-            bus.address.contains(&*dir.to_string_lossy()),
+            bus.address.contains(&*dir.path().to_string_lossy()),
             "{}",
             bus.address
         );
         assert!(bus.connect().unique_name().is_some());
-        drop(bus);
-        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_handshake_without_a_reply_fails_within_the_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = r#"    <allow send_destination="*"/>
+    <deny receive_sender="*"/>"#;
+        let Some(bus) = PrivateBus::start_with_config(&config(dir.path(), policy)) else {
+            eprintln!("skipping: dbus-daemon is not available");
+            return;
+        };
+        let started = Instant::now();
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| bus.connect()))
+            .expect_err("a bus that withholds the reply to Hello cannot connect");
+        assert!(started.elapsed() < WAIT + Duration::from_secs(2));
+        let message = failure.downcast_ref::<String>().unwrap();
+        assert!(message.contains("handshake did not finish"), "{message}");
     }
 
     #[test]

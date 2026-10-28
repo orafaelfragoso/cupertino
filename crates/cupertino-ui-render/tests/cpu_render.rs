@@ -456,12 +456,22 @@ fn glyph_node_in(id: u64, font: FontId, count: u32) -> PaintNode {
     )
 }
 
-fn best_of_three(
+fn renderer_with(max_pixels: u64) -> CpuRenderer<Boxes> {
+    CpuRenderer::new(
+        CpuConfig {
+            max_pixels,
+            ..config()
+        },
+        Boxes { fail: false },
+    )
+}
+
+fn cost_of(
     width: u32,
     height: u32,
     list: &DisplayList,
     damage: &DamageRegion,
-) -> std::time::Duration {
+) -> cupertino_ui_render::RenderStats {
     let mut r = renderer_with(1 << 26);
     let request = RenderRequest {
         list,
@@ -476,24 +486,8 @@ fn best_of_three(
         ..request
     })
     .unwrap();
-    (0..3)
-        .map(|_| {
-            let start = std::time::Instant::now();
-            r.render(&request).unwrap();
-            start.elapsed()
-        })
-        .min()
-        .unwrap()
-}
-
-fn renderer_with(max_pixels: u64) -> CpuRenderer<Boxes> {
-    CpuRenderer::new(
-        CpuConfig {
-            max_pixels,
-            ..config()
-        },
-        Boxes { fail: false },
-    )
+    r.render(&request).unwrap();
+    *r.stats()
 }
 
 #[test]
@@ -502,18 +496,27 @@ fn cost_follows_damage_and_content_not_target_area() {
         nodes: vec![glyph_node(2000)],
     };
     let full = DamageRegion::Full;
-    let small = best_of_three(512, 288, &list, &full);
-    let large = best_of_three(3840, 2160, &list, &full);
-    assert!(
-        large < small * 8,
-        "full repaint {large:?} on 4K vs {small:?} on 512x288"
+    let small = cost_of(512, 288, &list, &full);
+    let large = cost_of(3840, 2160, &list, &full);
+    assert_eq!(small.dirty_pixels, 512 * 288);
+    assert_eq!(large.dirty_pixels, 3840 * 2160);
+    assert_eq!(large.clear.bytes, large.dirty_pixels * 4);
+    assert_eq!(
+        (large.nodes_painted, large.glyphs, large.masks),
+        (small.nodes_painted, small.glyphs, small.masks)
     );
+    assert_eq!(large.scratch_images, small.scratch_images);
+    assert_eq!(large.node_composite, small.node_composite);
+    assert_eq!(large.mask_apply, small.mask_apply);
+
     let corner = DamageRegion::Rects(vec![rect(0.0, 0.0, 16.0, 16.0)]);
-    let partial = best_of_three(3840, 2160, &list, &corner);
-    assert!(
-        partial * 5 < large,
-        "a 16x16 damage {partial:?} vs full {large:?}"
-    );
+    let partial = cost_of(3840, 2160, &list, &corner);
+    assert!(partial.dirty_pixels <= 17 * 17);
+    assert_eq!(partial.clear.bytes, partial.dirty_pixels * 4);
+    assert!(large.scratch_images.bytes * 100 < large.clear.bytes);
+    assert_eq!(partial.scratch_images.bytes, partial.dirty_pixels * 4);
+    assert_eq!(partial.node_composite.bytes, partial.dirty_pixels * 4);
+    assert_eq!(partial.masks.bytes, partial.dirty_pixels);
 }
 
 fn child(id: u64, parent: u64, bounds: Rect, ops: Vec<PaintOp>) -> PaintNode {

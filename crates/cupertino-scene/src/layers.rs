@@ -29,6 +29,9 @@ pub enum SceneLayer {
     /// Colour filter, invert and contrast of the whole output (a material pass over everything below).
     DisplayFilter,
     Cursor,
+    /// Compositor notices above all desktop content, including fullscreen windows and the cursor.
+    /// Composition must omit this layer from lock-only frames.
+    CompositorOverlay,
 }
 
 /// Collects elements per layer and flattens them front to back.
@@ -127,6 +130,7 @@ mod tests {
             DragIcon,
             DisplayFilter,
             Cursor,
+            CompositorOverlay,
         ];
         for w in order.windows(2) {
             assert!(w[0] < w[1], "{:?} must be below {:?}", w[0], w[1]);
@@ -143,6 +147,19 @@ mod tests {
         assert_eq!(
             s.flatten_with_layer(),
             vec![(SceneLayer::Banners, 1), (SceneLayer::Wallpaper, 2)]
+        );
+    }
+
+    #[test]
+    fn compositor_notice_is_above_fullscreen_and_other_desktop_layers() {
+        let mut s = LayerStack::new();
+        s.push(SceneLayer::Windows, "fullscreen");
+        s.push(SceneLayer::CompositorOverlay, "notice");
+        s.push(SceneLayer::Cursor, "cursor");
+        s.push(SceneLayer::LayerOverlay, "client-overlay");
+        assert_eq!(
+            s.flatten(),
+            vec!["notice", "cursor", "client-overlay", "fullscreen"]
         );
     }
 }

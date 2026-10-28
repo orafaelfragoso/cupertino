@@ -327,6 +327,7 @@ impl App {
             },
         )?;
         let menu_bar = self.shell.menu_bar(&self.conn, layer.surface(), output)?;
+        let edits = menu_bar.can_edit();
         let backdrop = self.effects.backdrop(&self.conn, layer.surface())?;
         backdrop.set_material("MenuBar");
         let text = self.text.for_output();
@@ -352,7 +353,7 @@ impl App {
             backdrop,
             controller,
             text,
-            feed: BarFeed::new(key),
+            feed: BarFeed::new(key, edits),
             popups: Vec::new(),
             keyboard: KeyboardInteractivity::None,
             scale: 1.0,
@@ -850,6 +851,7 @@ impl App {
                     self.bars[i].menu_bar.move_to_workspace(workspace)
                 }
                 Action::ActivateWindow(id) => self.bars[i].menu_bar.activate_window(id),
+                Action::Edit(action) => self.bars[i].menu_bar.edit(action),
                 Action::Launch(launch) => self.begin_launch(i, launch),
                 Action::OpenDocument(file) => self.open_document(i, &file),
                 Action::SystemMenuOpening {

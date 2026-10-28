@@ -305,13 +305,15 @@ pub fn window_menu(
     MenuItem::submenu(WINDOW_MENU.0, "Window", children)
 }
 
-/// The menus shown for an app without exported menus, after the app menu.
+/// The menus shown for an app without exported menus, after the app menu. `edits`: the server sends the Edit items'
+/// chords to the key window (version 11); without it they are disabled.
 pub fn menus(
     workspaces: u32,
     current: Option<u32>,
     can_zoom: bool,
     windows: &[WindowRow],
     chords: &Chords,
+    edits: bool,
 ) -> Vec<MenuItem> {
     use ShortcutModifier::{Primary, Shift};
     let close = chords.bound.get(&FallbackAction::CloseWindow).cloned();
@@ -319,11 +321,9 @@ pub fn menus(
         shortcut: close,
         ..MenuItem::new(FILE_CLOSE_WINDOW, "Close Window")
     };
-    let edit = |id: i32, label: &str, modifiers: &[ShortcutModifier], key: &str| {
-        // the Edit items need the server to deliver the chord to the focused window, which it does not yet
-        MenuItem::new(id, label)
-            .with_shortcut(chords.convention(modifiers, key))
-            .disabled()
+    let edit = |id: i32, label: &str, modifiers: &[ShortcutModifier], key: &str| MenuItem {
+        enabled: edits,
+        ..MenuItem::new(id, label).with_shortcut(chords.convention(modifiers, key))
     };
     vec![
         MenuItem::submenu(FILE_MENU.0, "File", vec![file_close]),
@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn the_menus_of_an_app_without_its_own() {
-        let ms = menus(1, Some(1), true, &[], &Chords::default());
+        let ms = menus(1, Some(1), true, &[], &Chords::default(), false);
         assert_eq!(labels(&ms), vec!["File", "Edit", "View", "Window", "Help"]);
         assert_eq!(
             ids(&ms),
@@ -449,7 +449,12 @@ mod tests {
         );
         assert!(
             ms[1].children.iter().all(|i| !i.enabled),
-            "Edit is disabled"
+            "Edit is disabled while the server cannot send its chords"
+        );
+        let ms = menus(1, Some(1), true, &[], &Chords::default(), true);
+        assert!(
+            ms[1].children.iter().all(|i| i.enabled != i.separator),
+            "every Edit item but the separator is enabled once it can"
         );
         assert_eq!(labels(&ms[2].children), vec!["Enter Full Screen"]);
         assert_eq!(ids(&ms[4].children), vec![-1030]);
@@ -554,7 +559,7 @@ mod tests {
         assert_eq!(chord(&app[4]).as_deref(), Some("Super+h"));
         assert_eq!(chord(&app[5]).as_deref(), Some("Alt+Super+h"));
         assert_eq!(chord(&app[8]).as_deref(), Some("Super+q"));
-        let ms = menus(1, Some(1), true, &[], &chords);
+        let ms = menus(1, Some(1), true, &[], &chords, true);
         assert_eq!(chord(&ms[0].children[0]).as_deref(), Some("Super+w"));
         assert_eq!(chord(&ms[2].children[0]).as_deref(), Some("Ctrl+Super+f"));
         let window = &ms[3];
@@ -577,7 +582,7 @@ mod tests {
             .iter()
             .filter(|i| i.id.0 != SETTINGS)
             .all(|i| i.shortcut.is_none()));
-        let ms = menus(2, Some(1), true, &[], &chords);
+        let ms = menus(2, Some(1), true, &[], &chords, true);
         assert!(ms[0].children[0].shortcut.is_none());
         assert!(ms[2].children[0].shortcut.is_none());
         assert!(ms[3].children.iter().all(|i| i.shortcut.is_none()));
@@ -590,7 +595,7 @@ mod tests {
                 primary,
                 ..Chords::default()
             };
-            let ms = menus(1, Some(1), true, &[], &chords);
+            let ms = menus(1, Some(1), true, &[], &chords, true);
             let settings = desktop_menu(&chords).remove(0);
             (
                 chord(&settings).unwrap(),

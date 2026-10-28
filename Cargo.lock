@@ -754,26 +754,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cupertino-client"
-version = "0.1.0"
-dependencies = [
- "cupertino-defaults",
- "cupertino-geometry",
- "cupertino-protocol-app",
- "cupertino-protocols",
- "cupertino-shell-client",
- "cupertino-ui-wayland",
- "cupertino-wayland-client",
- "memmap2",
- "rustix 1.1.5",
- "tiny-skia",
- "wayland-client",
- "wayland-protocols",
- "wayland-protocols-wlr",
- "wayland-server",
-]
-
-[[package]]
 name = "cupertino-controlcenter"
 version = "0.1.0"
 dependencies = [
@@ -1145,6 +1125,8 @@ dependencies = [
  "cupertino-geometry",
  "cupertino-wayland-client",
  "wayland-client",
+ "wayland-protocols",
+ "wayland-server",
 ]
 
 [[package]]
@@ -1204,7 +1186,6 @@ dependencies = [
  "clap",
  "cupertino-animation",
  "cupertino-assets",
- "cupertino-client",
  "cupertino-cursor",
  "cupertino-decorations",
  "cupertino-defaults",
@@ -1302,6 +1283,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
+ "wayland-server",
 ]
 
 [[package]]
@@ -1359,7 +1341,11 @@ version = "0.1.0"
 dependencies = [
  "cupertino-geometry",
  "cupertino-wayland-client",
+ "memmap2",
+ "rustix 1.1.5",
  "tiny-skia",
+ "wayland-protocols",
+ "wayland-server",
 ]
 
 [[package]]

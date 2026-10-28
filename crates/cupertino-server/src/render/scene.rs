@@ -25,7 +25,9 @@ use smithay::utils::{Logical, Physical, Point, Scale};
 use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::shell::wlr_layer::Layer;
 
-use super::compose::{corner_style, item, output_rect, Composition, Picture, Piece, Tree};
+use super::compose::{
+    corner_style, item, output_rect, Composed, Composition, Picture, Piece, Tree,
+};
 use super::lower::{id_hash, lower, Lowering};
 use super::material::{GpuRecipe, MaterialElement, MaterialStage, SharedMaterial};
 use super::mesh::{capture, MeshElement, MeshGl, SharedMesh};
@@ -354,6 +356,43 @@ pub struct SceneParams<'a> {
     pub pointer: Point<f64, Logical>,
     pub drag_icon: Option<(WlSurface, Point<i32, Logical>)>,
     pub lock: LockView,
+    /// Black overlays over everything, front to back: the activation fade, then the power dimming.
+    pub session_overlays: [Option<SessionOverlay>; 2],
+}
+
+/// A black overlay of the session over the whole output.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SessionOverlay {
+    pub kind: SceneKind,
+    pub alpha: f64,
+}
+
+/// Put the session overlays on top of `stack`, whatever else the frame shows.
+fn session_overlays(p: &SceneParams<'_>, stack: &mut Composition) {
+    push_session_overlays((p.rect.w, p.rect.h), &p.session_overlays, stack);
+}
+
+fn push_session_overlays(
+    size: (f64, f64),
+    overlays: &[Option<SessionOverlay>; 2],
+    stack: &mut Composition,
+) {
+    const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+    let area = smithay::utils::Rectangle::new((0.0, 0.0).into(), size.into());
+    for overlay in overlays.iter().flatten() {
+        stack.push(
+            SceneLayer::SessionOverlay,
+            Piece::Item(item(
+                overlay.kind,
+                0,
+                Source::Wallpaper {
+                    rect: output_rect(area),
+                    colours: [BLACK; 4],
+                },
+                overlay.alpha,
+            )),
+        );
+    }
 }
 
 fn local(r: Rect, origin: &Rect) -> smithay::utils::Rectangle<f64, Logical> {
@@ -880,7 +919,8 @@ pub fn capture_window(
     let pieces = window_elements(p, entry, &plan, active, shadow, deco);
     let mut stack = Composition::new(p.scale);
     stack.extend(SceneLayer::Windows, pieces);
-    let els = lower_stack(stack, renderer, p);
+    let composed = stack.finish(p);
+    let els = lower_composed(composed, renderer, p);
     std::mem::swap(p.cache, &mut tmp);
     p.rect = saved.0;
     p.output_px = saved.1;
@@ -1442,12 +1482,28 @@ fn overview(p: &mut SceneParams<'_>, stack: &mut Composition) -> bool {
 
 /// Build the element list of one output, front to back.
 pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<CupertinoElement> {
-    let mut stack = Composition::new(p.scale);
-    if let LockView::Locked { surface } = std::mem::replace(&mut p.lock, LockView::Unlocked) {
-        return locked_scene(renderer, p, surface);
-    }
+    let composed = compose_scene(renderer, &mut p);
+    let mut ordered = lower_composed(composed, renderer, &mut p);
+    finalize_materials(&mut ordered, p.scale, p.cache);
+    p.cache.end_frame();
+    p.decor.end_frame();
+    p.overlays.images.end_frame();
+    ordered
+}
 
-    let wp = wallpaper_element(renderer, &mut p);
+/// The neutral frame of one output, with the elements the renderer still builds itself.
+pub fn compose_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> Composed {
+    let mut stack = Composition::new(p.scale);
+    match std::mem::replace(&mut p.lock, LockView::Unlocked) {
+        LockView::Locked { surface } => locked_scene(p, &mut stack, surface),
+        LockView::Unlocked => desktop_scene(renderer, p, &mut stack),
+    }
+    session_overlays(p, &mut stack);
+    stack.finish(p)
+}
+
+fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &mut Composition) {
+    let wp = wallpaper_element(renderer, p);
     stack.push(SceneLayer::Wallpaper, wp);
 
     let mut captures: Vec<CupertinoElement> = Vec::new();
@@ -1457,12 +1513,12 @@ pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<C
         (Layer::Top, SceneLayer::LayerTop),
         (Layer::Overlay, SceneLayer::LayerOverlay),
     ] {
-        let els = layer_elements(&mut p, layer, &mut captures);
+        let els = layer_elements(p, layer, &mut captures);
         stack.extend(scene_layer, els);
     }
     stack.extend(SceneLayer::BackdropCapture, captures);
 
-    let in_overview = overview(&mut p, &mut stack);
+    let in_overview = overview(p, stack);
     if !in_overview {
         let width = p.rect.w;
         let list = windows_on_output(
@@ -1510,13 +1566,12 @@ pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<C
             }
             let active = key == Some(id);
             if in_strip {
-                let deco = window_decorations(&mut p, entry, &plan, active);
-                strip.extend(window_elements(&mut p, entry, &plan, active, true, deco));
+                let deco = window_decorations(p, entry, &plan, active);
+                strip.extend(window_elements(p, entry, &plan, active, true, deco));
                 continue;
             }
             if pres.minimize_progress > 1e-6 {
-                if let Some(els) = minimize_elements(renderer, &mut p, entry, &pres, slide, active)
-                {
+                if let Some(els) = minimize_elements(renderer, p, entry, &pres, slide, active) {
                     front_to_back.extend(els.into_iter().map(Piece::from));
                     continue;
                 }
@@ -1530,7 +1585,7 @@ pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<C
                 let radius = p.config.window.corner_radius;
                 front_to_back.extend(
                     material_layer(
-                        &mut p,
+                        p,
                         ElementKey::new("sheet-dimming", id.0),
                         SHEET_DIMMING_MATERIAL,
                         area,
@@ -1541,21 +1596,18 @@ pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<C
                     .map(Piece::from),
                 );
             }
-            let deco = window_decorations(&mut p, entry, &plan, active);
-            front_to_back.extend(window_elements(&mut p, entry, &plan, active, true, deco));
+            let deco = window_decorations(p, entry, &plan, active);
+            front_to_back.extend(window_elements(p, entry, &plan, active, true, deco));
         }
-        let mut ghosts: Vec<Piece> = closing_elements(&mut p)
-            .into_iter()
-            .map(Piece::from)
-            .collect();
+        let mut ghosts: Vec<Piece> = closing_elements(p).into_iter().map(Piece::from).collect();
         ghosts.append(&mut front_to_back);
         ghosts.append(&mut strip);
         stack.extend(SceneLayer::Windows, ghosts);
     }
 
-    snap_preview(&mut p, &mut stack);
-    stack.extend(SceneLayer::InputHud, crate::kbd_ui::input_hud(&mut p));
-    stack.extend(SceneLayer::AccentPopup, crate::kbd_ui::accent_popup(&mut p));
+    snap_preview(p, stack);
+    stack.extend(SceneLayer::InputHud, crate::kbd_ui::input_hud(p));
+    stack.extend(SceneLayer::AccentPopup, crate::kbd_ui::accent_popup(p));
 
     if let Some((surface, offset)) = p.drag_icon.clone() {
         let scale = Scale::from(p.scale);
@@ -1566,24 +1618,16 @@ pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<C
             standalone(&surface, SceneKind::DragIcon, loc, 1.0),
         );
     }
-    display_filter(&mut p, &mut stack);
-    cursor(&mut p, &mut stack);
-
-    let mut ordered = lower_stack(stack, renderer, &mut p);
-    finalize_materials(&mut ordered, p.scale, p.cache);
-    p.cache.end_frame();
-    p.decor.end_frame();
-    p.overlays.images.end_frame();
-    ordered
+    display_filter(p, stack);
+    cursor(p, stack);
 }
 
-/// Flatten `stack` into the frame of the output and lower it to renderer elements.
-fn lower_stack(
-    stack: Composition,
+/// Lower a composed frame to renderer elements.
+fn lower_composed(
+    composed: Composed,
     renderer: &mut GlesRenderer,
     p: &mut SceneParams<'_>,
 ) -> Vec<CupertinoElement> {
-    let composed = stack.finish(p);
     let mut ctx = Lowering {
         renderer,
         programs: &p.res.programs,
@@ -1594,27 +1638,16 @@ fn lower_stack(
 }
 
 /// The scene while the session is locked: black, the lock surface and the pointer; nothing else may show.
-fn locked_scene(
-    renderer: &mut GlesRenderer,
-    mut p: SceneParams<'_>,
-    surface: Option<WlSurface>,
-) -> Vec<CupertinoElement> {
-    let mut stack = Composition::new(p.scale);
-    stack.push(SceneLayer::Wallpaper, Piece::Item(lock_backdrop(&p)));
+fn locked_scene(p: &mut SceneParams<'_>, stack: &mut Composition, surface: Option<WlSurface>) {
+    stack.push(SceneLayer::Wallpaper, Piece::Item(lock_backdrop(p)));
     if let Some(surface) = surface {
         stack.push(
             SceneLayer::LayerOverlay,
             standalone(&surface, SceneKind::LockContent, (0, 0).into(), 1.0),
         );
     }
-    display_filter(&mut p, &mut stack);
-    cursor(&mut p, &mut stack);
-    let mut ordered = lower_stack(stack, renderer, &mut p);
-    finalize_materials(&mut ordered, p.scale, p.cache);
-    p.cache.end_frame();
-    p.decor.end_frame();
-    p.overlays.images.end_frame();
-    ordered
+    display_filter(p, stack);
+    cursor(p, stack);
 }
 
 /// The display filter pass: everything below the pointer, captured and passed through the colour
@@ -1697,6 +1730,82 @@ mod tests {
     use super::super::material::MaterialGl;
     use super::*;
     use cupertino_wm::{Command, MapParams, WmConfig};
+
+    fn output(w: f64, h: f64) -> cupertino_scene::Output {
+        cupertino_scene::Output {
+            id: cupertino_scene::OutputId(1),
+            rect: cupertino_scene::GlobalRect(cupertino_geometry::Rect::new(0.0, 0.0, w, h)),
+            physical_size: cupertino_scene::PhysicalSize {
+                width: w as i32,
+                height: h as i32,
+            },
+            scale: 1.0,
+            transform: cupertino_scene::Transform::Normal,
+        }
+    }
+
+    fn marker(kind: SceneKind) -> Piece {
+        rrect_item(
+            kind,
+            0,
+            smithay::utils::Rectangle::new((0.0, 0.0).into(), (1.0, 1.0).into()),
+            0.0,
+            false,
+            [0.0; 4],
+            None,
+            1.0,
+        )
+    }
+
+    #[test]
+    fn session_overlays_cover_everything_activation_fade_first() {
+        let mut stack = Composition::new(1.0);
+        stack.push(SceneLayer::Windows, marker(SceneKind::Shadow));
+        stack.push(SceneLayer::Cursor, marker(SceneKind::CursorImage));
+        stack.push(
+            SceneLayer::CompositorOverlay,
+            marker(SceneKind::SnapPreview),
+        );
+        push_session_overlays(
+            (100.0, 80.0),
+            &[
+                Some(SessionOverlay {
+                    kind: SceneKind::ActivationFade,
+                    alpha: 0.5,
+                }),
+                Some(SessionOverlay {
+                    kind: SceneKind::PowerOverlay,
+                    alpha: 0.25,
+                }),
+            ],
+            &mut stack,
+        );
+        let composed = stack.finish_with(output(100.0, 80.0), std::time::Duration::ZERO);
+        let kinds: Vec<_> = composed
+            .frame
+            .items()
+            .iter()
+            .map(|(_, item)| item.id.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                SceneKind::ActivationFade,
+                SceneKind::PowerOverlay,
+                SceneKind::SnapPreview,
+                SceneKind::CursorImage,
+                SceneKind::Shadow,
+            ]
+        );
+    }
+
+    #[test]
+    fn an_idle_session_adds_no_overlay() {
+        let mut stack = Composition::new(1.0);
+        push_session_overlays((100.0, 80.0), &[None, None], &mut stack);
+        let composed = stack.finish_with(output(100.0, 80.0), std::time::Duration::ZERO);
+        assert!(composed.frame.items().is_empty());
+    }
 
     fn pres(frame: Rect) -> Presentation {
         Presentation {

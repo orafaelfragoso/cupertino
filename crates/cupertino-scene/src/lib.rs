@@ -27,6 +27,8 @@ pub struct FrameId(pub u64);
 pub enum SceneKind {
     Wallpaper,
     LockBackdrop,
+    ActivationFade,
+    PowerOverlay,
     OverviewDim,
     SnapPreview,
     Shadow,
@@ -57,6 +59,8 @@ impl SceneKind {
         match self {
             Self::Wallpaper => "wallpaper",
             Self::LockBackdrop => "lock-backdrop",
+            Self::ActivationFade => "activation-fade",
+            Self::PowerOverlay => "power-overlay",
             Self::OverviewDim => "overview-dim",
             Self::SnapPreview => "snap-preview",
             Self::Shadow => "shadow",

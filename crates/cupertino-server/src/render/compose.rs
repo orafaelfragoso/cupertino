@@ -209,19 +209,24 @@ impl Composition {
 
     /// Flatten into the frame of the output described by `p`.
     pub fn finish(self, p: &SceneParams<'_>) -> Composed {
-        let frame = SceneFrame::new(
-            Output {
-                id: OutputId(p.output_id.0),
-                rect: GlobalRect(from_rect(p.rect)),
-                physical_size: PhysicalSize {
-                    width: p.output_px.0,
-                    height: p.output_px.1,
-                },
-                scale: p.scale,
-                transform: transform(p.output.current_transform()),
+        let output = Output {
+            id: OutputId(p.output_id.0),
+            rect: GlobalRect(from_rect(p.rect)),
+            physical_size: PhysicalSize {
+                width: p.output_px.0,
+                height: p.output_px.1,
             },
+            scale: p.scale,
+            transform: transform(p.output.current_transform()),
+        };
+        self.finish_with(output, Duration::from_secs_f64(p.now.max(0.0)))
+    }
+
+    pub fn finish_with(self, output: Output, timestamp: Duration) -> Composed {
+        let frame = SceneFrame::new(
+            output,
             self.id,
-            Duration::from_secs_f64(p.now.max(0.0)),
+            timestamp,
             UNSPECIFIED_CLEAR,
             OutputInvalidation::Incremental,
             self.items,

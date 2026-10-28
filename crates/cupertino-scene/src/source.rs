@@ -164,7 +164,8 @@ pub enum Source {
     },
     RoundedRect(RoundedRect),
     Shadow(Shadow),
-    /// The four existing procedural-wallpaper colours, as straight RGBA.
+    /// A field of four straight RGBA colours: the procedural wallpaper's, or equal colours for a solid fill.
+    /// Opaque when the item's opacity is 1.
     Wallpaper {
         rect: OutputRect,
         colours: [[f32; 4]; 4],

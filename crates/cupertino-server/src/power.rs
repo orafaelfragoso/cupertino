@@ -18,9 +18,6 @@ use smithay::reexports::calloop::channel::{self, Event};
 use crate::display_power::{
     overlay_alpha, ActivationFade, DisplayState, Effect, Facts, IdlePolicy,
 };
-use crate::render::programs::u4;
-use crate::render::shader_rect::{ElementKey, ShaderRect, Sig};
-use crate::render::CupertinoElement;
 use crate::state::Cupertino;
 
 /// The idle policy and the facts it is fed.
@@ -155,68 +152,17 @@ impl Cupertino {
         let _ = asleep;
     }
 
-    /// The black overlay over output `idx` while the display is dimmed, asleep or ramping; front-most element.
-    pub fn power_overlay(&mut self, idx: usize) -> Option<CupertinoElement> {
+    /// Opacity of the black overlay while the display is dimmed, asleep or ramping.
+    pub fn power_overlay_alpha(&self) -> Option<f64> {
         let alpha = overlay_alpha(self.power.policy.factor(self.now()));
         // the sRGB curve leaves a rounding residue at factor 1
-        if alpha < 1e-6 {
-            return None;
-        }
-        const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
-        let program = self.render.as_ref()?.programs.wallpaper.clone();
-        let out = &mut self.outputs[idx];
-        let area =
-            smithay::utils::Rectangle::new((0.0, 0.0).into(), (out.rect.w, out.rect.h).into());
-        let (id, commit) = out.cache.slot(
-            ElementKey::new("power-overlay", 0),
-            Sig::new().rect(area).f(alpha).finish(),
-        );
-        let opaque = alpha >= 1.0;
-        Some(CupertinoElement::Shader(ShaderRect::new(
-            program,
-            id,
-            commit,
-            area,
-            alpha as f32,
-            vec![
-                u4("c0", BLACK),
-                u4("c1", BLACK),
-                u4("c2", BLACK),
-                u4("c3", BLACK),
-            ],
-            opaque,
-        )))
+        (alpha >= 1e-6).then_some(alpha)
     }
 
-    /// The black overlay over output `idx` while the screen fades in after the session became active; front-most element.
-    pub fn activation_overlay(&mut self, idx: usize) -> Option<CupertinoElement> {
+    /// Opacity of the black overlay while the screen fades in after the session became active.
+    pub fn activation_overlay_alpha(&self) -> Option<f64> {
         let alpha = self.power.fade.alpha(self.now());
-        if alpha < 1e-6 {
-            return None;
-        }
-        const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
-        let program = self.render.as_ref()?.programs.wallpaper.clone();
-        let out = &mut self.outputs[idx];
-        let area =
-            smithay::utils::Rectangle::new((0.0, 0.0).into(), (out.rect.w, out.rect.h).into());
-        let (id, commit) = out.cache.slot(
-            ElementKey::new("activation-fade", 0),
-            Sig::new().rect(area).f(alpha).finish(),
-        );
-        Some(CupertinoElement::Shader(ShaderRect::new(
-            program,
-            id,
-            commit,
-            area,
-            alpha as f32,
-            vec![
-                u4("c0", BLACK),
-                u4("c1", BLACK),
-                u4("c2", BLACK),
-                u4("c3", BLACK),
-            ],
-            alpha >= 1.0,
-        )))
+        (alpha >= 1e-6).then_some(alpha)
     }
 
     fn on_power_bus(&mut self, event: BusEvent) {

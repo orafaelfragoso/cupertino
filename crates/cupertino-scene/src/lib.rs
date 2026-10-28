@@ -148,21 +148,24 @@ impl SceneFrame {
 
 /// `items` is front to back, so a composite's capture must come after it.
 fn captures_below_composites(items: &[(SceneLayer, SceneItem)]) -> bool {
-    items.iter().enumerate().all(|(at, (_, item))| match &item.source {
-        Source::Material(MaterialPass {
-            stage: MaterialStage::Composite { owner },
-            ..
-        }) => items[at + 1..].iter().any(|(_, below)| {
-            matches!(
-                &below.source,
-                Source::Material(MaterialPass {
-                    stage: MaterialStage::Capture { owner: o },
-                    ..
-                }) if o == owner
-            )
-        }),
-        _ => true,
-    })
+    items
+        .iter()
+        .enumerate()
+        .all(|(at, (_, item))| match &item.source {
+            Source::Material(MaterialPass {
+                stage: MaterialStage::Composite { owner },
+                ..
+            }) => items[at + 1..].iter().any(|(_, below)| {
+                matches!(
+                    &below.source,
+                    Source::Material(MaterialPass {
+                        stage: MaterialStage::Capture { owner: o },
+                        ..
+                    }) if o == owner
+                )
+            }),
+            _ => true,
+        })
 }
 
 #[cfg(test)]

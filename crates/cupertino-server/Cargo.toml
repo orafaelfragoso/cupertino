@@ -29,6 +29,8 @@ udev = [
 ]
 # session bus worker: notification centre toggle
 dbus = []
+# keeps the pre-scene-frame builder to compare the composition against; removed with wp04-seam-gates
+scene-oracle = []
 
 [dependencies]
 cupertino-assets = { path = "../cupertino-assets" }

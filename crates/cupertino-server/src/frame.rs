@@ -134,11 +134,25 @@ impl Cupertino {
         renderer: &mut GlesRenderer,
         idx: usize,
     ) -> Vec<CupertinoElement> {
+        let elements = self.build_elements_with(renderer, idx, build_scene);
+        #[cfg(feature = "scene-oracle")]
+        {
+            let legacy =
+                self.build_elements_with(renderer, idx, crate::render::legacy_scene::build_scene);
+            crate::render::legacy_scene::record(legacy);
+        }
+        elements
+    }
+
+    fn build_elements_with(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        idx: usize,
+        build: fn(&mut GlesRenderer, SceneParams<'_>) -> Vec<CupertinoElement>,
+    ) -> Vec<CupertinoElement> {
         self.note_scene_built(idx);
         let overlays = [self.activation_overlay(idx), self.power_overlay(idx)];
-        let mut elements = self
-            .with_scene(renderer, idx, build_scene)
-            .unwrap_or_default();
+        let mut elements = self.with_scene(renderer, idx, build).unwrap_or_default();
         // front to back: the fade-in from black after the session became active and the dim and sleep overlay cover everything,
         // the cursor too
         elements.splice(0..0, overlays.into_iter().flatten());

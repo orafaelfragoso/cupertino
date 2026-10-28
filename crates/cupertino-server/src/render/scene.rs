@@ -45,7 +45,7 @@ use crate::state::WindowEntry;
 use crate::window_manager::Look;
 
 /// Material over a window while a sheet hangs from it (material 30).
-const SHEET_DIMMING_MATERIAL: &str = "SheetUnderlay";
+pub(super) const SHEET_DIMMING_MATERIAL: &str = "SheetUnderlay";
 
 /// Geometry of one window for one frame.
 #[derive(Clone, Copy, Debug, PartialEq)]

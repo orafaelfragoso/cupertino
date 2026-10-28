@@ -12,6 +12,8 @@ use smithay::backend::renderer::gles::GlesRenderer;
 
 pub mod clip;
 pub mod image;
+#[cfg(feature = "scene-oracle")]
+pub mod legacy_scene;
 pub mod material;
 pub mod mesh;
 pub mod motion;

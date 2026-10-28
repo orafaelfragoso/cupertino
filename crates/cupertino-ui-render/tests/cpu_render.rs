@@ -726,3 +726,32 @@ fn duplicate_ids_and_runaway_depth_are_refused() {
         Err(RenderError::TooDeep(PaintNodeId(257)))
     );
 }
+
+fn stats_of(damage: &DamageRegion) -> cupertino_ui_render::RenderStats {
+    let none = PaintResources::default();
+    let mut r = renderer();
+    render(&mut r, &scene(0.0), &none, 1.0, &DamageRegion::Full).unwrap();
+    render(&mut r, &scene(0.0), &none, 1.0, damage).unwrap();
+    *r.stats()
+}
+
+#[test]
+fn counters_are_deterministic_and_follow_the_damage() {
+    let corner = DamageRegion::Rects(vec![rect(0.0, 0.0, 12.0, 12.0)]);
+    let (a, b) = (stats_of(&corner), stats_of(&corner));
+    assert_eq!(a, b, "two runs count the same");
+    let full = stats_of(&DamageRegion::Full);
+    assert!(a.dirty_pixels < full.dirty_pixels);
+    assert!(a.node_composite.bytes < full.node_composite.bytes);
+    assert_eq!(a.clear.bytes, a.dirty_pixels * 4);
+    assert_eq!(full.dirty_pixels, 96 * 64);
+    assert_eq!(full.frame_bytes, 96 * 64 * 4);
+    assert_eq!(full.groups_painted, 0);
+    assert_eq!(full.layers.count, 1, "the shadowed layer");
+    assert_eq!(full.glyphs, 4);
+    assert_eq!(
+        a.glyph_rasterize.count, 0,
+        "the glyphs were cached by the first frame"
+    );
+    assert!(full.retained_glyphs.count > 0);
+}

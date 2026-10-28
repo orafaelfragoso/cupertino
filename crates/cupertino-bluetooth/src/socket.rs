@@ -24,6 +24,9 @@ use crate::error::{Error, ParseError, Result};
 use crate::event::{decode_packet, Packet};
 use crate::sockaddr::SocketAddrControl;
 
+/// The call [`ControlSocket::open`] names in the error when the socket cannot be created.
+pub const OPEN_CALL: &str = "socket(BTPROTO_HCI)";
+
 /// `BTPROTO_HCI` (`include/net/bluetooth/bluetooth.h`).
 const BTPROTO_HCI: u32 = 1;
 
@@ -57,7 +60,7 @@ impl ControlSocket {
             SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
             Some(protocol),
         )
-        .map_err(syscall("socket(BTPROTO_HCI)"))?;
+        .map_err(syscall(OPEN_CALL))?;
         bind(&fd, &SocketAddrControl).map_err(syscall("bind(HCI_CHANNEL_CONTROL)"))?;
         Ok(Self { fd })
     }

@@ -714,7 +714,9 @@ impl Cupertino {
     }
 
     /// Tell the version 3 menu objects the reader, when it changed: a new reader before `menu_bar(1)`, so a window
-    /// hides its own menus only once its menus answer the bar, and `menu_bar(0)` before the reader goes.
+    /// hides its own menus only once its menus answer the bar, and `menu_bar(0)` before the reader goes. A new reader
+    /// also sends every bar its group again, unchanged: a bar whose load an application refused while it had no reader
+    /// loads again once the group announces the menus again.
     fn set_menu_reader(&mut self, reader: Option<String>) {
         if reader == self.menu_bars.reader {
             return;
@@ -732,6 +734,10 @@ impl Cupertino {
         if reader.is_some() {
             self.menu_bars.reader = reader;
             self.menu_bars.send_shown();
+            for bar in &mut self.menu_bars.bars {
+                bar.sent = None;
+            }
+            self.refresh_menu_bars();
         }
     }
 

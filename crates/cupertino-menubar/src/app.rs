@@ -645,6 +645,7 @@ impl App {
             };
             match event {
                 worker::Event::Layout { source, root } => self.shared.apply_layout(&source, root),
+                worker::Event::LayoutFailed { source } => self.shared.layout_failed(&source),
                 worker::Event::StatusUpdated { item, menu } => {
                     let px = self.icon_px();
                     let icons = &mut self.icons;

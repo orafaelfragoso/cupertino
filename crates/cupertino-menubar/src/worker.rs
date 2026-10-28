@@ -19,13 +19,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use zbus::Connection;
 
-/// The interface of the notification process (`cupertino-notifications`, its `dbus` module).
 /// The first wait before a GTK menu load refused with `AccessDenied` is made again; it doubles up to
 /// [`GTK_RETRY_LAST`], then the refusal is reported. A CupertinoKit application learns that the bar's connection reads
 /// its menus over its own Wayland connection, which can come after the bar's first load.
 const GTK_RETRY_FIRST: Duration = Duration::from_millis(100);
 const GTK_RETRY_LAST: Duration = Duration::from_millis(1600);
 
+/// The interface of the notification process (`cupertino-notifications`, its `dbus` module).
 const CENTRE_NAME: &str = "org.cupertino.NotificationCenter1";
 const CENTRE_PATH: &str = "/org/cupertino/NotificationCenter1";
 /// The interface of the control panel process (`cupertino-controlcenter`, its `control` module).
@@ -82,6 +82,10 @@ pub enum Event {
     },
     StatusRemoved {
         id: String,
+    },
+    /// A menu tree could not be loaded (reported on stderr); it is asked for again when the server announces it again.
+    LayoutFailed {
+        source: MenuSource,
     },
 }
 
@@ -340,10 +344,15 @@ fn handle(
                         source: MenuSource::Kde(menu),
                         root,
                     }),
-                    Err(e) => report(
-                        &format!("cannot load the menu of {}{}", menu.service, menu.path),
-                        e,
-                    ),
+                    Err(e) => {
+                        report(
+                            &format!("cannot load the menu of {}{}", menu.service, menu.path),
+                            e,
+                        );
+                        out.emit(Event::LayoutFailed {
+                            source: MenuSource::Kde(menu),
+                        });
+                    }
                 }
             },
             "cupertino-fetch-menu",
@@ -395,7 +404,12 @@ fn handle(
                                 );
                             }
                         }
-                        Err(e) => report(&format!("cannot load the menu of {}", props.bus_name), e),
+                        Err(e) => {
+                            report(&format!("cannot load the menu of {}", props.bus_name), e);
+                            out.emit(Event::LayoutFailed {
+                                source: MenuSource::Gtk(props),
+                            });
+                        }
                     }
                 },
                 "cupertino-fetch-gtk",

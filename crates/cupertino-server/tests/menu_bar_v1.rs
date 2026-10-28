@@ -23,7 +23,7 @@ use cupertino_protocols::client::cupertino_shell_v1::{self, CupertinoShellV1};
 use cupertino_server::authorization::ShellRole;
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
-use cupertino_server::menu_bar::MENU_BAR_BUS_NAME;
+use cupertino_server::menu_bar::{MENU_BAR_BUS_NAME, OWNER_RETRY_DELAYS};
 use cupertino_server::Cupertino;
 use cupertino_wm::{Command, LifecycleState, Rect, TileKind, WindowId};
 use smithay::reexports::calloop::EventLoop;
@@ -2560,6 +2560,128 @@ fn a_check_the_bus_never_answers_times_out_to_no_menus_and_the_next_one_goes_out
     );
 }
 
+/// One announcement made while the bus is stopped longer than the deadline, and never repeated, gets its menus through a
+/// retry once the bus answers again.
+#[test]
+fn an_announcement_timed_out_by_a_stopped_bus_gets_its_menus_through_a_retry() {
+    use cupertino_server::owner_check::DEADLINE;
+    let Some(mut h) = Harness::new() else { return };
+    let Some((bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let own = own.unique_name().unwrap().to_string();
+    let (bar, app, title) = menu_app(&mut h);
+
+    let stopped = Stopped::new(&bus);
+    let start = Instant::now();
+    h.announce(&app, &bar, Cmd::SetAddress(own.clone(), "/MenuBar/1"));
+    let waited = start.elapsed();
+    assert!(waited >= DEADLINE, "answered after {waited:?}");
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((title.clone(), BarEvent::MenuNone))
+    );
+    assert_eq!(h.state.menu_bars.owner_retries_due(), 1);
+    drop(stopped);
+
+    let menus = Some((title, dbusmenu(&own, "/MenuBar/1")));
+    h.wait_until("the menus through a retry", |_| {
+        latest_title_and_menu(&bar) == menus
+    });
+}
+
+/// An announcement withdrawn while its retry is due is not checked again: the window stays without menus.
+#[test]
+fn a_withdrawn_announcement_is_not_retried() {
+    let Some(mut h) = Harness::new() else { return };
+    let Some((bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let own = own.unique_name().unwrap().to_string();
+    let (bar, app, title) = menu_app(&mut h);
+
+    let stopped = Stopped::new(&bus);
+    h.announce(&app, &bar, Cmd::SetAddress(own.clone(), "/MenuBar/1"));
+    assert_eq!(h.state.menu_bars.owner_retries_due(), 1);
+    h.announce(&app, &bar, Cmd::ReleaseAddress);
+    assert_eq!(h.state.menu_bars.owner_retries_due(), 0);
+    drop(stopped);
+
+    let end = Instant::now() + OWNER_RETRY_DELAYS[0] * 2;
+    while Instant::now() < end {
+        h.step();
+        assert_eq!(
+            h.state.owner_checks.pending(),
+            0,
+            "a withdrawn announcement was checked"
+        );
+    }
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((title, BarEvent::MenuNone))
+    );
+}
+
+/// An announcement whose checks ran out of retries while the bus stayed stopped is checked again when its window
+/// becomes the key window again, and gets its menus once the bus answers.
+#[test]
+fn after_its_retries_run_out_a_window_is_checked_again_when_it_becomes_key() {
+    let Some(mut h) = Harness::new() else { return };
+    let Some((bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let own = own.unique_name().unwrap().to_string();
+    let (bar, app, title) = menu_app(&mut h);
+    let window = h.state.wm.key_window().expect("the editor window is key");
+    let _other = AppClient::spawn(h.socket_path(), "org.example.other");
+    h.mapped_window(2);
+    let other = h
+        .state
+        .wm
+        .windows()
+        .map(|w| w.id)
+        .find(|id| *id != window)
+        .expect("the other window");
+    h.state.command(Command::FocusWindow { window });
+    h.wait_until("the editor window to be key again", |_| {
+        latest_title_and_menu(&bar).is_some_and(|(t, _)| t == title)
+    });
+
+    let stopped = Stopped::new(&bus);
+    h.announce(&app, &bar, Cmd::SetAddress(own.clone(), "/MenuBar/1"));
+    let deadline = cupertino_server::owner_check::DEADLINE;
+    let all = OWNER_RETRY_DELAYS.iter().sum::<Duration>() + deadline * 4 + Duration::from_secs(10);
+    let end = Instant::now() + all;
+    while h.state.menu_bars.owner_retries_due() > 0 || h.state.owner_checks.pending() > 0 {
+        assert!(
+            Instant::now() < end,
+            "the retries did not run out within {all:?}"
+        );
+        h.step();
+    }
+    drop(stopped);
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((title.clone(), BarEvent::MenuNone))
+    );
+
+    // the bus answers again, but nothing checks the announcement until its window becomes key
+    let end = Instant::now() + OWNER_RETRY_DELAYS[0];
+    while Instant::now() < end {
+        h.step();
+        assert_eq!(h.state.owner_checks.pending(), 0);
+    }
+    h.state.command(Command::FocusWindow { window: other });
+    h.wait_until("the other window to be key", |_| {
+        latest_title_and_menu(&bar).is_some_and(|(t, _)| t != title)
+    });
+    h.state.command(Command::FocusWindow { window });
+    let menus = Some((title, dbusmenu(&own, "/MenuBar/1")));
+    h.wait_until("the menus through the re-check", |_| {
+        latest_title_and_menu(&bar) == menus
+    });
+}
+
 /// Checks that time out because the bus does not answer (its daemon stopped) start no identification thread and cost
 /// the client nothing: once the bus answers again, the same window's next announcement gets its menus.
 #[test]
@@ -2582,11 +2704,10 @@ fn checks_timed_out_by_a_slow_bus_cost_the_client_nothing() {
         Some((title.clone(), BarEvent::MenuNone))
     );
 
+    // a resumed bus still answering the timed-out calls may time this check out too: it is retried
     h.announce(&app, &bar, Cmd::SetAddress(own.clone(), "/MenuBar/2"));
-    assert_eq!(
-        latest_title_and_menu(&bar),
-        Some((title, dbusmenu(&own, "/MenuBar/2")))
-    );
+    let menus = Some((title, dbusmenu(&own, "/MenuBar/2")));
+    h.wait_until("the menus", |_| latest_title_and_menu(&bar) == menus);
 }
 
 /// Without a D-Bus worker, or with one that found no bus and ended, an announcement is refused in the loop: the

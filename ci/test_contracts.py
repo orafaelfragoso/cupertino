@@ -42,7 +42,8 @@ def run(registry, files=None, built=BUILT, shipped=frozenset({"cupertino-demo"})
         for rel, text in files.items():
             (root / rel).parent.mkdir(parents=True, exist_ok=True)
             (root / rel).write_text(text)
-        with mock.patch.object(contracts, "UNKNOWN_TEST_OWNERS", unknown):
+        with mock.patch.object(contracts, "UNKNOWN_TEST_OWNERS", unknown), \
+                mock.patch.object(contracts, "UNKNOWN_SCOPES", 0):
             return contracts.check(root.resolve(), built, set(shipped))
 
 
@@ -162,6 +163,19 @@ class BypassTest(unittest.TestCase):
 
 
 class RatchetTest(unittest.TestCase):
+    def test_a_new_unknown_scope_fails(self):
+        entry = INTERFACE_ENTRY.replace("scope: public", "scope: unknown")
+        problems = run(entry + BINARY_ENTRY)
+        self.assertEqual(problems, ["docs/architecture/contracts.yaml: 1 entries have scope unknown, at most 0 "
+                                    "are allowed"])
+
+    def test_fewer_unknown_scopes_ask_to_lower_the_limit(self):
+        entries = contracts.parse(INTERFACE_ENTRY)
+        with mock.patch.object(contracts, "UNKNOWN_SCOPES", 1), \
+                mock.patch.object(contracts, "UNKNOWN_TEST_OWNERS", 1):
+            self.assertEqual(contracts.check_ratchet(entries),
+                             ["ci/contracts.py: only 0 entries have scope unknown, lower UNKNOWN_SCOPES from 1"])
+
     def test_more_unknown_test_owners_than_the_limit_fail(self):
         problems = run(INTERFACE_ENTRY + BINARY_ENTRY, unknown=1)
         self.assertEqual(problems, ["docs/architecture/contracts.yaml: 2 entries have test_owner unknown, at most 1 "

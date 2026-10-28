@@ -190,6 +190,7 @@ mod tests {
                     revision: PaintRevision(2),
                     transform: Transform::IDENTITY,
                     clip: None,
+                    group: None,
                     bounds: r(0.0, 0.0, 200.0, 24.0),
                     hit: r(0.0, 0.0, 200.0, 24.0),
                     ops: vec![PaintOp::PopClip],

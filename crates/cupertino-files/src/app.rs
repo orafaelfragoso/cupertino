@@ -496,7 +496,7 @@ impl App {
                 }
                 // the display options reach the title bar and materials through the server
                 Some(AppEvent::DisplayOptions(options)) => self.display = options,
-                Some(AppEvent::ScrollCount { .. }) | None => {}
+                Some(AppEvent::ScrollCount { .. } | AppEvent::MenuBar { .. }) | None => {}
             },
             // the server dismissed the menu (a click outside it); popups this process destroyed itself end no menu
             Event::PopupDone(popup) => {

@@ -1,8 +1,11 @@
-//! `cupertino_app_effects_v1`: the appearance observer, backdrops and the title bar style.
+//! `cupertino_app_effects_v1`: the appearance observer, backdrops, the title bar style and the menu announcement.
 
 use crate::{Backdrop, Quiet};
 use cupertino_app_protocols::client::app_effects::cupertino_app_effects_v1::{
     CupertinoAppEffectsV1, TitlebarStyle,
+};
+use cupertino_app_protocols::client::app_effects::cupertino_app_menu_v1::{
+    self, CupertinoAppMenuV1,
 };
 use cupertino_app_protocols::client::app_effects::cupertino_appearance_v1::{
     self, CupertinoAppearanceV1, DisplayOption,
@@ -11,7 +14,7 @@ use cupertino_app_protocols::client::app_effects::cupertino_backdrop_v1::Cuperti
 use cupertino_app_protocols::client::scroll::cupertino_scroll_v1::CupertinoScrollV1;
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_wayland_client::{Connection, Error, State, SurfaceId};
-use wayland_client::{Connection as WlConnection, Dispatch, QueueHandle};
+use wayland_client::{Connection as WlConnection, Dispatch, Proxy, QueueHandle};
 
 macro_rules! quiet {
     ($($interface:ty),*) => {$(
@@ -44,6 +47,9 @@ pub enum AppEvent {
     DisplayOptions(DisplayOptions),
     /// The scroll count of one axis of the pointer frame being received; the frame's scroll follows.
     ScrollCount { vertical: bool, count: u32 },
+    /// Whether the desktop's menu bar shows the menus `surface` announced; also sent once when its [`AppMenu`] is
+    /// created.
+    MenuBar { surface: SurfaceId, shown: bool },
 }
 
 /// The app effects global (`cupertino_app_effects_v1`).
@@ -52,7 +58,7 @@ pub struct AppEffects(CupertinoAppEffectsV1);
 impl AppEffects {
     /// Bind the global; `None` when the server does not offer it.
     pub fn bind(conn: &mut Connection) -> Option<AppEffects> {
-        conn.bind_extension(1..=1, Quiet).map(AppEffects)
+        conn.bind_extension(1..=2, Quiet).map(AppEffects)
     }
 
     /// Observe the session's appearance and display options: [`AppEvent::Appearance`] and
@@ -77,6 +83,56 @@ impl AppEffects {
         self.0
             .set_titlebar_style(&conn.wl_surface(surface)?, TitlebarStyle::Unified);
         Ok(())
+    }
+
+    /// The menu announcement of the window of `surface`, one per surface; `None` when the server predates it (version
+    /// 1), so the window keeps its menus. [`AppEvent::MenuBar`] tells whether a menu bar shows them.
+    pub fn menu(&self, conn: &Connection, surface: SurfaceId) -> Result<Option<AppMenu>, Error> {
+        if self.0.version() < 2 {
+            return Ok(None);
+        }
+        let wl = conn.wl_surface(surface)?;
+        Ok(Some(AppMenu(self.0.get_menu(
+            &wl,
+            &conn.queue_handle(),
+            MenuSurface(surface),
+        ))))
+    }
+}
+
+/// Where a window's menus are on the session bus: its unique bus name and the object paths of the application's
+/// actions, the window's actions, its menu bar and the application menu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MenuAddress {
+    pub bus_name: String,
+    pub application_object_path: String,
+    pub window_object_path: String,
+    pub menubar_object_path: String,
+    pub app_menu_object_path: Option<String>,
+}
+
+/// The menu announcement of a window; dropping it withdraws the menus from the menu bar.
+pub struct AppMenu(CupertinoAppMenuV1);
+
+/// User data of a menu announcement: the surface its events name.
+pub(crate) struct MenuSurface(SurfaceId);
+
+impl AppMenu {
+    /// Announce (or replace) where the window's menus are. A malformed bus name or object path fails the connection.
+    pub fn set_address(&self, address: &MenuAddress) {
+        self.0.set_address(
+            address.bus_name.clone(),
+            address.application_object_path.clone(),
+            address.window_object_path.clone(),
+            address.menubar_object_path.clone(),
+            address.app_menu_object_path.clone().unwrap_or_default(),
+        );
+    }
+}
+
+impl Drop for AppMenu {
+    fn drop(&mut self) {
+        self.0.destroy();
     }
 }
 
@@ -107,6 +163,27 @@ pub fn report_display_options(state: &mut State, bits: u32) {
         increase_contrast: bits.contains(DisplayOption::IncreaseContrast),
         differentiate_without_color: bits.contains(DisplayOption::DifferentiateWithoutColor),
     }));
+}
+
+impl Dispatch<CupertinoAppMenuV1, MenuSurface> for State {
+    fn event(
+        state: &mut State,
+        _: &CupertinoAppMenuV1,
+        event: cupertino_app_menu_v1::Event,
+        surface: &MenuSurface,
+        _: &WlConnection,
+        _: &QueueHandle<State>,
+    ) {
+        if let cupertino_app_menu_v1::Event::MenuBar { shown } = event {
+            if shown > 1 {
+                return state.fail(Error::Protocol("menu bar shown other than 0 or 1"));
+            }
+            state.emit(AppEvent::MenuBar {
+                surface: surface.0,
+                shown: shown == 1,
+            });
+        }
+    }
 }
 
 impl Dispatch<CupertinoAppearanceV1, Quiet> for State {

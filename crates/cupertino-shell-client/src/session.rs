@@ -27,7 +27,7 @@ impl SessionChange {
         match *event {
             AppEvent::Appearance { dark } => Some(SessionChange::Appearance { dark }),
             AppEvent::DisplayOptions(options) => Some(SessionChange::DisplayOptions(options)),
-            AppEvent::ScrollCount { .. } => None,
+            AppEvent::ScrollCount { .. } | AppEvent::MenuBar { .. } => None,
         }
     }
 

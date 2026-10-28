@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use cupertino_bluetooth::{
     Address, Command, ControlSocket, ControllerIndex, DeviceId, Drained, Error, Link, Result,
+    OPEN_CALL,
 };
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use rustix::io::Errno;
@@ -48,14 +49,14 @@ impl KernelTransport {
 pub struct NoBluetooth;
 
 impl NoBluetooth {
-    /// Whether `error` from [`KernelTransport::open`] says the kernel has no Bluetooth (no `AF_BLUETOOTH`, or no HCI
-    /// protocol in it), which is not a failure to start.
+    /// Whether `error` from [`KernelTransport::open`] says the kernel has no Bluetooth (the creation of the socket failed
+    /// with no `AF_BLUETOOTH`, or no HCI protocol in it), which is not a failure to start.
     pub fn is_missing(error: &Error) -> bool {
         matches!(
             error,
             Error::Syscall {
+                call: OPEN_CALL,
                 source: Errno::AFNOSUPPORT | Errno::PROTONOSUPPORT,
-                ..
             }
         )
     }
@@ -133,12 +134,17 @@ mod tests {
     #[test]
     fn only_a_kernel_without_bluetooth_counts_as_missing() {
         let error = |source| Error::Syscall {
-            call: "socket(BTPROTO_HCI)",
+            call: OPEN_CALL,
             source,
         };
         assert!(NoBluetooth::is_missing(&error(Errno::AFNOSUPPORT)));
         assert!(NoBluetooth::is_missing(&error(Errno::PROTONOSUPPORT)));
         assert!(!NoBluetooth::is_missing(&error(Errno::ACCESS)));
         assert!(!NoBluetooth::is_missing(&error(Errno::PERM)));
+        // the same errno from another call is that call's failure
+        assert!(!NoBluetooth::is_missing(&Error::Syscall {
+            call: "bind",
+            source: Errno::AFNOSUPPORT,
+        }));
     }
 }

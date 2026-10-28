@@ -513,6 +513,28 @@ fn the_first_group_has_the_usable_area_and_the_arranged_windows_and_an_output_ta
 }
 
 #[test]
+fn an_application_id_longer_than_the_limit_is_cut_and_the_manager_stays_connected() {
+    let Some(mut h) = Harness::new() else { return };
+    // 4080 bytes overflow the wire with the window's other arguments; a two-byte character spans byte 1024
+    let long: &'static str =
+        Box::leak(format!("{}é{}", "a".repeat(1023), "b".repeat(4080 - 1025)).into_boxed_str());
+    let _app = AppClient::spawn(h.socket_path(), long, (400, 300));
+    h.wait_until("the window to map", |s| s.wm.windows().count() == 1);
+    h.advance(5.0);
+    let wm = WmClient::spawn(h.shell_stream());
+    h.wait_until("the first group", |_| wm.events().contains(&WmEvent::Done));
+    assert!(
+        wm.events().iter().any(|e| matches!(
+            e,
+            WmEvent::Window { app_id, .. } if *app_id == "a".repeat(1023)
+        )),
+        "{:?}",
+        wm.events()
+    );
+    assert_eq!(wm.error(), None, "the manager stays connected");
+}
+
+#[test]
 fn a_strip_placement_animates_into_its_rectangle_takes_no_input_and_reports_presses() {
     let Some(mut h) = Harness::new() else { return };
     let (a, b, _ca, _cb) = h.two_windows();

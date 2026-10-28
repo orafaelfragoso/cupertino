@@ -35,5 +35,5 @@ pub use error::{Error, ParseError, Result};
 pub use event::{decode_packet, DisconnectReason, Event, FoundFlags, Packet};
 pub use key::{KeyValue, LinkKey, LinkKeyType, LongTermKey, LongTermKeyType};
 pub use link::Link;
-pub use socket::{ControlSocket, Drained};
+pub use socket::{ControlSocket, Drained, OPEN_CALL};
 pub use status::{ClassOfDevice, MajorClass, Settings, Status};

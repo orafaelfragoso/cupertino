@@ -1,7 +1,8 @@
 use crate::accessibility::{AccessibleStates, AccessibleValue, Action, Relation, Role};
+use crate::route::Placement;
 use crate::widget::Change;
 use crate::{Environment, NodeId, Phase};
-use cupertino_geometry::Size;
+use cupertino_geometry::{Point, Size};
 use cupertino_ui_platform::{CursorShape, Timestamp};
 use cupertino_ui_render::{Effect, Group, PaintOp};
 use cupertino_ui_text::TextInputState;
@@ -82,6 +83,7 @@ pub struct EventCx<'a, M> {
     pub(crate) node: NodeId,
     pub(crate) target: NodeId,
     pub(crate) phase: Phase,
+    pub(crate) placement: Option<Placement>,
     pub(crate) env: &'a Environment,
     pub(crate) status: Status,
     pub(crate) effects: &'a mut Effects<M>,
@@ -103,6 +105,12 @@ impl<M> EventCx<'_, M> {
 
     pub fn env(&self) -> &Environment {
         self.env
+    }
+
+    /// Whether a pointer or touch position, in window coordinates as events carry them, lands on this node and inside
+    /// every clip above it; false before the node's first layout.
+    pub fn hit(&self, position: Point) -> bool {
+        self.placement.is_some_and(|p| p.hit(position))
     }
 
     pub fn now(&self) -> Timestamp {

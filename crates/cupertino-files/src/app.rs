@@ -244,7 +244,7 @@ fn presenters<'a>(
 /// The value an extension event of the public protocols carries.
 fn app_event(event: &Event) -> Option<AppEvent> {
     match event {
-        Event::Extension(event) => event.downcast_ref::<AppEvent>().copied(),
+        Event::Extension(event) => event.downcast_ref::<AppEvent>().cloned(),
         _ => None,
     }
 }
@@ -496,7 +496,12 @@ impl App {
                 }
                 // the display options reach the title bar and materials through the server
                 Some(AppEvent::DisplayOptions(options)) => self.display = options,
-                Some(AppEvent::ScrollCount { .. } | AppEvent::MenuBar { .. }) | None => {}
+                Some(
+                    AppEvent::ScrollCount { .. }
+                    | AppEvent::MenuBar { .. }
+                    | AppEvent::MenuReader { .. },
+                )
+                | None => {}
             },
             // the server dismissed the menu (a click outside it); popups this process destroyed itself end no menu
             Event::PopupDone(popup) => {

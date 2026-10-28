@@ -1,11 +1,13 @@
 //! The `org.gtk.Menus` and `org.gtk.Actions` objects on the bus.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use cupertino_menu_model::{ActionName, Scope};
 use zbus::fdo;
 use zbus::interface;
+use zbus::message::Header;
+use zbus::names::OwnedUniqueName;
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{OwnedValue, Signature};
 
@@ -18,24 +20,47 @@ type Description = (bool, Signature, Vec<OwnedValue>);
 
 pub(crate) type OnActivate = Arc<dyn Fn(Activation) + Send + Sync>;
 
+/// The bus connection of the menu bar the compositor verified, the only peer the objects answer.
+pub(crate) type Reader = Arc<Mutex<Option<OwnedUniqueName>>>;
+
+/// Refuse a call from any connection but the reader; with no reader, every call.
+fn check_reader(reader: &Reader, header: &Header<'_>) -> fdo::Result<()> {
+    let reader = reader.lock().unwrap();
+    match (reader.as_ref(), header.sender()) {
+        (Some(reader), Some(sender)) if reader.as_str() == sender.as_str() => Ok(()),
+        _ => Err(fdo::Error::AccessDenied(
+            "only the desktop's menu bar reads these menus".to_string(),
+        )),
+    }
+}
+
 pub(crate) struct Menus {
     pub menus: WireMenus,
+    pub reader: Reader,
 }
 
 #[interface(name = "org.gtk.Menus")]
 impl Menus {
     /// Every menu of the subscribed groups; the object has the one group.
-    fn start(&self, groups: Vec<u32>) -> Vec<(u32, u32, Vec<Dict>)> {
+    fn start(
+        &self,
+        groups: Vec<u32>,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<Vec<(u32, u32, Vec<Dict>)>> {
+        check_reader(&self.reader, &header)?;
         if !groups.contains(&GROUP) {
-            return Vec::new();
+            return Ok(Vec::new());
         }
-        self.menus
+        Ok(self
+            .menus
             .iter()
             .map(|(id, items)| (GROUP, *id, items.iter().map(|i| i.to_dict()).collect()))
-            .collect()
+            .collect())
     }
 
-    fn end(&self, _groups: Vec<u32>) {}
+    fn end(&self, _groups: Vec<u32>, #[zbus(header)] header: Header<'_>) -> fdo::Result<()> {
+        check_reader(&self.reader, &header)
+    }
 
     #[zbus(signal)]
     pub(crate) async fn changed(
@@ -50,6 +75,7 @@ pub(crate) struct Actions {
     pub window: Option<WindowId>,
     pub enabled: BTreeMap<String, bool>,
     pub on_activate: OnActivate,
+    pub reader: Reader,
 }
 
 impl Actions {
@@ -60,22 +86,33 @@ impl Actions {
 
 #[interface(name = "org.gtk.Actions")]
 impl Actions {
-    fn list(&self) -> Vec<String> {
-        self.enabled.keys().cloned().collect()
+    fn list(&self, #[zbus(header)] header: Header<'_>) -> fdo::Result<Vec<String>> {
+        check_reader(&self.reader, &header)?;
+        Ok(self.enabled.keys().cloned().collect())
     }
 
-    fn describe(&self, action_name: &str) -> fdo::Result<Description> {
+    fn describe(
+        &self,
+        action_name: &str,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<Description> {
+        check_reader(&self.reader, &header)?;
         self.enabled
             .get(action_name)
             .map(|e| Actions::description(*e))
             .ok_or_else(|| fdo::Error::InvalidArgs(format!("no action {action_name:?}")))
     }
 
-    fn describe_all(&self) -> HashMap<String, Description> {
-        self.enabled
+    fn describe_all(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<HashMap<String, Description>> {
+        check_reader(&self.reader, &header)?;
+        Ok(self
+            .enabled
             .iter()
             .map(|(name, e)| (name.clone(), Actions::description(*e)))
-            .collect()
+            .collect())
     }
 
     /// Run an enabled action; a disabled one is ignored, as a disabled menu item does nothing.
@@ -84,7 +121,9 @@ impl Actions {
         action_name: &str,
         parameter: Vec<OwnedValue>,
         _platform_data: Dict,
+        #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<()> {
+        check_reader(&self.reader, &header)?;
         let enabled = *self
             .enabled
             .get(action_name)
@@ -110,7 +149,9 @@ impl Actions {
         action_name: &str,
         _value: OwnedValue,
         _platform_data: Dict,
+        #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<()> {
+        check_reader(&self.reader, &header)?;
         Err(fdo::Error::NotSupported(format!(
             "{action_name:?} has no state"
         )))

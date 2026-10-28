@@ -111,6 +111,8 @@ impl ClientState {
     }
 
     /// A state for a client that runs inside the server's process: `capabilities` hold for the life of the connection.
+    /// Its holder is set here, so it is never bound to a process ([`crate::shell_connection::bind_holder`] fails on it),
+    /// and its process is the server's own ([`ClientState::process`]).
     pub fn detached(capabilities: ClientCapabilitySet) -> Self {
         let state = ClientState {
             capabilities,

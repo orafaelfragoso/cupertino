@@ -5,9 +5,11 @@
 //! address its active window exports and the window state. The bar process owns everything else.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
-use crate::dbus::{LoginTrust, Request as DbusRequest};
+use crate::dbus::{LoginTrust, OwnerRefusal, Request as DbusRequest};
 use crate::input::{translate_action, Action, Chord};
+use crate::owner_check::{OwnerCheck, OwnerKey};
 use cupertino_input::{KeyCombo, Modifiers};
 use cupertino_keyboard::rewrite::ClientClass;
 use cupertino_keyboard::ModifierProfile;
@@ -25,6 +27,9 @@ use cupertino_wm::{AppId, Command, LifecycleState, OutputId, Window, WindowId};
 use smithay::desktop::{layer_map_for_output, WindowSurfaceType};
 use smithay::input::keyboard::keysyms;
 use smithay::output::Output;
+use smithay::reexports::calloop::channel::{self, Event as ChannelEvent};
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+use smithay::reexports::calloop::RegistrationToken;
 use smithay::reexports::wayland_server::backend::{ClientId, ObjectId};
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -304,12 +309,28 @@ struct PendingEdit {
     returned: bool,
 }
 
+/// The well-known name the menu bar process owns while it reads menus (the registrar `cupertino-menubar` claims); the
+/// owner, once checked to be the bar's process, is the reader the windows' menus answer (`menu_reader`).
+pub const MENU_BAR_BUS_NAME: &str = "com.canonical.AppMenu.Registrar";
+/// The first wait before a check of the reader refused for a passing reason is made again; it doubles up to
+/// [`READER_RETRY_MAX`].
+const READER_RETRY_FIRST: Duration = Duration::from_secs(1);
+const READER_RETRY_MAX: Duration = Duration::from_secs(30);
+
+/// The `menu_bar` value of a menu object of `version`: 1 while a bar runs, and from version 3 only while the reader is
+/// verified too, so a window hides its own menus only while the bar can read them.
+fn shown(bars: bool, reader: bool, version: u32) -> u32 {
+    u32::from(bars && (version < 3 || reader))
+}
+
 /// A `cupertino_app_menu_v1` of an application window.
 struct AppMenu {
     resource: CupertinoAppMenuV1,
     surface: WlSurface,
     /// The object announced an address, which its destruction withdraws.
     announced: bool,
+    /// The `menu_bar` value last sent.
+    shown: u32,
 }
 
 /// Presentation model, the bars of the menu bar process and the menu addresses of windows.
@@ -325,8 +346,11 @@ pub struct MenuBars {
     /// The last `edit` request still to be sent; a newer one replaces it.
     edit: Option<PendingEdit>,
     app_menus: Vec<AppMenu>,
-    /// Whether the menu objects were last told that a bar shows their menus.
-    menus_shown: bool,
+    /// The unique bus name of the menu bar's connection, checked to be the bar's process; `None` while there is none.
+    reader: Option<String>,
+    /// The timer of the next check of the reader after a refusal for a passing reason, and the wait after it.
+    reader_retry: Option<RegistrationToken>,
+    reader_backoff: Duration,
 }
 
 impl MenuBars {
@@ -342,7 +366,9 @@ impl MenuBars {
             announced: HashMap::new(),
             edit: None,
             app_menus: Vec::new(),
-            menus_shown: false,
+            reader: None,
+            reader_retry: None,
+            reader_backoff: READER_RETRY_FIRST,
         }
     }
 
@@ -350,14 +376,36 @@ impl MenuBars {
         self.app_menus.iter().any(|m| &m.surface == surface)
     }
 
-    /// Track a new menu object and tell it whether a bar shows its menus.
+    /// Track a new menu object and tell it, from version 3, which connection reads its menus and whether a bar shows
+    /// them.
     pub fn add_app_menu(&mut self, resource: CupertinoAppMenuV1, surface: WlSurface) {
-        resource.menu_bar(u32::from(self.menus_shown));
+        if resource.version() >= 3 {
+            resource.menu_reader(self.reader.clone().unwrap_or_default());
+        }
+        let shown = shown(
+            !self.bars.is_empty(),
+            self.reader.is_some(),
+            resource.version(),
+        );
+        resource.menu_bar(shown);
         self.app_menus.push(AppMenu {
             resource,
             surface,
             announced: false,
+            shown,
         });
+    }
+
+    /// Send `menu_bar` to every menu object whose value changed.
+    fn send_shown(&mut self) {
+        let (bars, reader) = (!self.bars.is_empty(), self.reader.is_some());
+        for menu in &mut self.app_menus {
+            let shown = shown(bars, reader, menu.resource.version());
+            if shown != menu.shown {
+                menu.shown = shown;
+                menu.resource.menu_bar(shown);
+            }
+        }
     }
 
     pub fn has_surface(&self, surface: &WlSurface) -> bool {
@@ -544,6 +592,9 @@ impl Cupertino {
         self.refresh_menu_bar_shortcuts();
         self.refresh_gtk_capabilities();
         self.refresh_app_menus();
+        if self.menu_bars.bars.len() == 1 {
+            self.check_menu_reader();
+        }
     }
 
     /// The layer surface of a bar went away: the role ends with it.
@@ -574,13 +625,113 @@ impl Cupertino {
     /// Tell the windows' menu objects whether a bar shows their menus, when that changed: while any bar runs it
     /// reads the address of the active window.
     pub fn refresh_app_menus(&mut self) {
-        let shown = !self.menu_bars.is_empty();
-        if shown == self.menu_bars.menus_shown {
+        if self.menu_bars.is_empty() {
+            self.check_menu_reader();
+        }
+        self.menu_bars.send_shown();
+    }
+
+    /// Follow the owner of [`MENU_BAR_BUS_NAME`] on the D-Bus worker: every change checks the reader again. Call once,
+    /// when the worker starts.
+    pub fn watch_menu_reader(&mut self) {
+        let Some(dbus) = &self.dbus else { return };
+        let (changed, rx) = channel::channel::<()>();
+        let inserted = self.loop_handle.insert_source(rx, |event, _, state| {
+            if let ChannelEvent::Msg(()) = event {
+                state.check_menu_reader();
+            }
+        });
+        if let Err(e) = inserted {
+            tracing::warn!(error = %e, "cannot follow the menu bar's bus name");
             return;
         }
-        self.menu_bars.menus_shown = shown;
+        // the loop is gone only while the server shuts down
+        dbus.watch_owner(
+            MENU_BAR_BUS_NAME,
+            Box::new(move || {
+                let _ = changed.send(());
+            }),
+        );
+    }
+
+    /// Check that the menu bar process owns [`MENU_BAR_BUS_NAME`]; with no bar there is no reader.
+    fn check_menu_reader(&mut self) {
+        if let Some(token) = self.menu_bars.reader_retry.take() {
+            self.loop_handle.remove(token);
+        }
+        let client = self.menu_bars.bars.first().and_then(|b| b.surface.client());
+        match client {
+            Some(client) => self.check_owner(OwnerCheck {
+                key: OwnerKey::MenuReader,
+                name: MENU_BAR_BUS_NAME.to_owned(),
+                client,
+            }),
+            None => {
+                self.cancel_owner_check(&OwnerKey::MenuReader);
+                self.menu_bars.reader_backoff = READER_RETRY_FIRST;
+                self.set_menu_reader(None);
+            }
+        }
+    }
+
+    /// The answer to the check of the reader. A refusal for a passing reason (the identification threads are in use, or
+    /// the bus is slow) keeps the reader so far and asks again after a wait that doubles; any other names no reader.
+    pub(crate) fn menu_reader_checked(&mut self, verdict: Result<String, OwnerRefusal>) {
+        match verdict {
+            Ok(reader) => {
+                self.menu_bars.reader_backoff = READER_RETRY_FIRST;
+                self.set_menu_reader(Some(reader));
+            }
+            Err(
+                refusal @ (OwnerRefusal::Busy | OwnerRefusal::TimedOut | OwnerRefusal::Stalled),
+            ) => {
+                let wait = self.menu_bars.reader_backoff;
+                self.menu_bars.reader_backoff = (wait * 2).min(READER_RETRY_MAX);
+                tracing::debug!(
+                    ?refusal,
+                    ?wait,
+                    "the menu bar's bus name is checked again later"
+                );
+                let timer =
+                    self.loop_handle
+                        .insert_source(Timer::from_duration(wait), |_, _, state| {
+                            state.menu_bars.reader_retry = None;
+                            state.check_menu_reader();
+                            TimeoutAction::Drop
+                        });
+                match timer {
+                    Ok(token) => self.menu_bars.reader_retry = Some(token),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "cannot time the next check of the menu bar's bus name")
+                    }
+                }
+            }
+            Err(refusal) => {
+                tracing::info!(?refusal, "the menu bar's bus name is not the menu bar process's: the windows' menus answer no one");
+                self.set_menu_reader(None);
+            }
+        }
+    }
+
+    /// Tell the version 3 menu objects the reader, when it changed: a new reader before `menu_bar(1)`, so a window
+    /// hides its own menus only once its menus answer the bar, and `menu_bar(0)` before the reader goes.
+    fn set_menu_reader(&mut self, reader: Option<String>) {
+        if reader == self.menu_bars.reader {
+            return;
+        }
+        if reader.is_none() {
+            self.menu_bars.reader = None;
+            self.menu_bars.send_shown();
+        }
+        let name = reader.clone().unwrap_or_default();
         for menu in &self.menu_bars.app_menus {
-            menu.resource.menu_bar(u32::from(shown));
+            if menu.resource.version() >= 3 {
+                menu.resource.menu_reader(name.clone());
+            }
+        }
+        if reader.is_some() {
+            self.menu_bars.reader = reader;
+            self.menu_bars.send_shown();
         }
     }
 

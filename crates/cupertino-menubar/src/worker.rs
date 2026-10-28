@@ -16,9 +16,16 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::time::Duration;
 use zbus::Connection;
 
 /// The interface of the notification process (`cupertino-notifications`, its `dbus` module).
+/// The first wait before a GTK menu load refused with `AccessDenied` is made again; it doubles up to
+/// [`GTK_RETRY_LAST`], then the refusal is reported. A CupertinoKit application learns that the bar's connection reads
+/// its menus over its own Wayland connection, which can come after the bar's first load.
+const GTK_RETRY_FIRST: Duration = Duration::from_millis(100);
+const GTK_RETRY_LAST: Duration = Duration::from_millis(1600);
+
 const CENTRE_NAME: &str = "org.cupertino.NotificationCenter1";
 const CENTRE_PATH: &str = "/org/cupertino/NotificationCenter1";
 /// The interface of the control panel process (`cupertino-controlcenter`, its `control` module).
@@ -135,6 +142,17 @@ impl Out {
         if self.events.send(event).is_ok() {
             (self.wake)();
         }
+    }
+}
+
+/// Whether the exporter refused this connection, as a CupertinoKit application does until it knows the bar reads its
+/// menus.
+fn is_access_denied(e: &zbus::Error) -> bool {
+    const ACCESS_DENIED: &str = "org.freedesktop.DBus.Error.AccessDenied";
+    match e {
+        zbus::Error::MethodError(name, _, _) => name.as_str() == ACCESS_DENIED,
+        zbus::Error::FDO(e) => matches!(**e, zbus::fdo::Error::AccessDenied(_)),
+        _ => false,
     }
 }
 
@@ -349,7 +367,17 @@ fn handle(
             let tx = tx.clone();
             executor.spawn(
                 async move {
-                    match GtkMenuClient::load(&conn, &props).await {
+                    let mut wait = GTK_RETRY_FIRST;
+                    let loaded = loop {
+                        match GtkMenuClient::load(&conn, &props).await {
+                            Err(e) if is_access_denied(&e) && wait <= GTK_RETRY_LAST => {
+                                async_io::Timer::after(wait).await;
+                                wait *= 2;
+                            }
+                            loaded => break loaded,
+                        }
+                    };
+                    match loaded {
                         Ok((client, items)) => {
                             out.emit(Event::Layout {
                                 source: MenuSource::Gtk(props.clone()),

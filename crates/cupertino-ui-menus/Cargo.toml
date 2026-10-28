@@ -10,6 +10,7 @@ layer = "render"
 
 [dependencies]
 cupertino-menu-model = { path = "../cupertino-menu-model" }
+cupertino-modifiers = { path = "../cupertino-modifiers" }
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 [dev-dependencies]

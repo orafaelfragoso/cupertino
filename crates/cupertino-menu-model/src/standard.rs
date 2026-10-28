@@ -2,8 +2,9 @@
 //!
 //! The Window and Help menus are the desktop's own and are not part of an application's menus.
 
-use crate::chord::{Chord, Modifier};
+use crate::chord::Chord;
 use crate::menu::{ActionName, Command, Entry, Item, Menu, MenuBar, Scope, SystemCommand};
+use cupertino_modifiers::Modifier;
 use Modifier::{Alt, Ctrl, Primary, Shift};
 
 /// What the application handles beyond the commands every application has. Items for anything left out are omitted,
@@ -190,8 +191,8 @@ pub fn menu_bar(app_name: &str, features: &Features) -> MenuBar {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chord::tests::Profile;
     use crate::menu::Role;
+    use cupertino_modifiers::Profile;
 
     /// Each menu as its groups of `label [action] chord` lines, submenus indented.
     fn outline(menu: &Menu) -> Vec<Vec<String>> {
@@ -209,7 +210,7 @@ mod tests {
                             let chord = item
                                 .chord
                                 .as_ref()
-                                .and_then(|c| c.display(&Profile::Cupertino))
+                                .and_then(|c| c.display(&Profile::cupertino()))
                                 .unwrap_or_default();
                             vec![format!("{} [{command}] {chord}", item.label)
                                 .trim_end()

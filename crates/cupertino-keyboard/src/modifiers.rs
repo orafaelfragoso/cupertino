@@ -4,30 +4,7 @@
 //! alt; shortcut matching ignores shift when the primary modifier is down;
 //! the fn / globe key usage values and the tap debounce come from.
 
-use crate::keys::Mods;
-
-/// Physical modifier state as reported by xkb (Shift, Control, Mod1, Mod4) plus fn.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub struct RawMods(pub u8);
-
-impl RawMods {
-    pub const SHIFT: RawMods = RawMods(1);
-    pub const CTRL: RawMods = RawMods(2);
-    pub const ALT: RawMods = RawMods(4);
-    pub const SUPER: RawMods = RawMods(8);
-    pub const FN: RawMods = RawMods(16);
-
-    pub fn contains(self, o: RawMods) -> bool {
-        self.0 & o.0 == o.0
-    }
-}
-
-impl std::ops::BitOr for RawMods {
-    type Output = RawMods;
-    fn bitor(self, rhs: RawMods) -> RawMods {
-        RawMods(self.0 | rhs.0)
-    }
-}
+use cupertino_modifiers::{Mods, RawMods};
 
 /// Mapping of physical modifier keys to logical roles.
 #[derive(Clone, Debug, PartialEq, Eq)]

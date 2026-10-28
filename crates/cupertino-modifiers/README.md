@@ -7,6 +7,10 @@ A shortcut is written once, in logical modifiers (`Primary+Q`); the keyboard rep
 translates. Every profile is a permutation, so each role has exactly one key and every chord can be typed under every
 profile.
 
+Used by `cupertino-keyboard` (its chords and the physical state it reads), `cupertino-text-field`, the server, and
+`cupertino-menu-model` and `cupertino-ui-menus` (the chords of the menus). `cupertino-keyboard` keeps its own
+`ModifierProfile` until the system chords of `classic-pc` are settled; it is built on this crate's `Mods` and `RawMods`.
+
 ## Public API
 
 | Item | Contents |

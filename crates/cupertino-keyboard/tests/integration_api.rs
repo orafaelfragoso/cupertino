@@ -1,6 +1,7 @@
 //! Mirrors the integration snippet of the README.
 
 use cupertino_keyboard::*;
+use cupertino_modifiers::{Mods, RawMods};
 
 #[test]
 fn compositor_flow() {

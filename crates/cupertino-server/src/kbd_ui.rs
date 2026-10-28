@@ -27,8 +27,8 @@ use cupertino_keyboard::accent::{
     layout_popup, AccentEvent, AccentPicker, AccentTable, KeyDown, PickerKey, PopupMetrics,
     Rect as KRect,
 };
-use cupertino_keyboard::keys::Mods as KMods;
 use cupertino_keyboard::switcher::{self, Step};
+use cupertino_modifiers::Mods as KMods;
 use smithay::backend::input::KeyState;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::input::keyboard::{keysyms, Keycode, Layout, XkbConfig};

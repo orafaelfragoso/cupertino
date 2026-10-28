@@ -2,7 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use cupertino_menu_model::{ActionName, Command, Entry, Menu, ModifierMap};
+use cupertino_menu_model::{ActionName, Command, Entry, Menu};
+use cupertino_modifiers::ModifierMap;
 use zbus::zvariant::{OwnedValue, Str, Value};
 
 /// The group every menu of an object is in; a client subscribes to it once.
@@ -178,20 +179,21 @@ pub(crate) fn changes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cupertino_menu_model::{Chord, Item, Modifier, PhysicalModifier, Scope};
+    use cupertino_menu_model::{Chord, Item, Scope};
+    use cupertino_modifiers::{Modifier, Physical};
 
     struct SuperIsPrimary;
 
     impl ModifierMap for SuperIsPrimary {
-        fn physical(&self, m: Modifier) -> Option<PhysicalModifier> {
+        fn physical(&self, m: Modifier) -> Option<Physical> {
             match m {
-                Modifier::Primary => Some(PhysicalModifier::Super),
-                Modifier::Shift => Some(PhysicalModifier::Shift),
+                Modifier::Primary => Some(Physical::Super),
+                Modifier::Shift => Some(Physical::Shift),
                 _ => None,
             }
         }
 
-        fn logical(&self, _: PhysicalModifier) -> Option<Modifier> {
+        fn logical(&self, _: Physical) -> Option<Modifier> {
             None
         }
     }

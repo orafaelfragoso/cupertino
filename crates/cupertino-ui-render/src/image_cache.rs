@@ -30,12 +30,16 @@ impl ImageCache {
         &mut self,
         id: ResourceId,
         image: &ImageResource,
+        max_pixels: u64,
     ) -> Result<Arc<Pixmap>, RenderError> {
         self.tick += 1;
         let key = (id, image.revision);
         if let Some(entry) = self.entries.get_mut(&key) {
             entry.used = self.tick;
             return Ok(Arc::clone(&entry.pixmap));
+        }
+        if u64::from(image.width) * u64::from(image.height) > max_pixels {
+            return Err(RenderError::ResourceLimit);
         }
         let pixmap = Arc::new(premultiplied(image).ok_or(RenderError::ResourceLimit)?);
         self.bytes += pixmap.data().len();

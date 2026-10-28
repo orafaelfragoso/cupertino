@@ -157,7 +157,9 @@ pub enum PaintOp {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaintNode {
     pub id: PaintNodeId,
-    /// The node whose subtree this one belongs to; a parent comes before its children in the list.
+    /// The node whose subtree this one belongs to; a parent comes before its children in the list. The renderer paints
+    /// each node on its own and does not read this: a clip other than a rectangle, group opacity or an effect over
+    /// several nodes is emitted by core as one node whose ops nest the descendants' ops.
     pub parent: Option<PaintNodeId>,
     pub revision: PaintRevision,
     /// Applies to `clip` and `ops`, which are in the node's own coordinates.

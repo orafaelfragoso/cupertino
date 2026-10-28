@@ -146,7 +146,7 @@ struct App {
     menu_state: Option<MenuState>,
     /// The folder of the trash's items, where Put Back applies.
     trash_files: PathBuf,
-    /// Close Window or Quit was chosen.
+    /// Close Window was chosen.
     closing: bool,
 }
 
@@ -974,7 +974,6 @@ impl App {
                 (_, Some('d')) => return self.menu_action(MenuAction::Duplicate),
                 (_, Some('r')) => return self.menu_action(MenuAction::ShowOriginal),
                 (_, Some('w')) => return self.menu_action(MenuAction::CloseWindow),
-                (_, Some('q')) => return self.menu_action(MenuAction::Quit),
                 // the design's View menu shortcut for the status bar
                 (_, Some('/')) => return self.toggle_bar(false),
                 (_, Some('1')) => return self.set_mode(ViewMode::Icons),
@@ -1782,7 +1781,7 @@ impl App {
     /// Carry out an item of the menu bar, or its key.
     fn menu_action(&mut self, action: MenuAction) -> Result<()> {
         match action {
-            MenuAction::Quit | MenuAction::CloseWindow => self.closing = true,
+            MenuAction::CloseWindow => self.closing = true,
             MenuAction::NewWindow => self.open_windows(vec![self.browser.dir().to_path_buf()]),
             MenuAction::NewFolder => self.run(MenuCommand::NewFolder)?,
             MenuAction::NewFolderWithSelection => self.run(MenuCommand::NewFolderWithSelection)?,

@@ -1,5 +1,6 @@
-//! The menus Files publishes to the desktop's menu bar (menu bar spec §8): only what the window can do, the App menu by
-//! role (Quit), and no Window or Help menu, which the bar adds. Each item's chord is the window's own key for it.
+//! The menus Files publishes to the desktop's menu bar (menu bar spec §8): only what the window can do, and no Window
+//! or Help menu, which the bar adds. Each item's chord is the window's own key for it. Files exports no Quit: each
+//! window is a process of its own, so the bar's Quit, which closes every window of the application, quits Files.
 
 use cupertino_menu_model::standard::{self, Features};
 use cupertino_menu_model::{ActionName, Chord, Entry, Item, Menu, MenuBar, Scope};
@@ -12,7 +13,6 @@ use crate::window::ViewMode;
 /// What a menu item asks of the window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {
-    Quit,
     NewWindow,
     NewFolder,
     NewFolderWithSelection,
@@ -80,7 +80,6 @@ impl MenuAction {
     pub fn name(self) -> ActionName {
         use MenuAction::*;
         let (scope, name) = match self {
-            Quit => (Scope::App, "quit"),
             NewWindow => (Scope::App, "new"),
             NewFolder => (Scope::Win, "new-folder"),
             NewFolderWithSelection => (Scope::Win, "new-folder-with-selection"),
@@ -111,7 +110,6 @@ impl MenuAction {
     pub fn from_name(name: &ActionName) -> Option<MenuAction> {
         use MenuAction::*;
         let fixed = [
-            Quit,
             NewWindow,
             NewFolder,
             NewFolderWithSelection,
@@ -251,7 +249,7 @@ pub fn menu_bar(state: &MenuState) -> MenuBar {
         ]],
     );
     MenuBar {
-        app: standard.app,
+        app: Menu::new(&standard.app.title, Vec::new()),
         menus: vec![file, edit, view, go],
     }
 }
@@ -345,18 +343,12 @@ mod tests {
                 "  Enclosing Folder win.go-enclosing-folder",
             ]
         );
-        // the App menu exports Quit by role only; About and Settings… have no handler
-        let app: Vec<String> = bar
-            .app
-            .sections
-            .iter()
-            .flatten()
-            .filter_map(|e| match e {
-                Entry::Item(item) => Some(item.label.clone()),
-                Entry::Submenu(_) => None,
-            })
-            .collect();
-        assert_eq!(app, ["Quit Files"]);
+        // the App menu exports nothing: About and Settings… have no handler, and the bar's Quit closes every window
+        assert!(bar.app.sections.is_empty());
+        assert_eq!(
+            MenuAction::from_name(&ActionName::parse("app.quit").unwrap()),
+            None
+        );
     }
 
     #[test]

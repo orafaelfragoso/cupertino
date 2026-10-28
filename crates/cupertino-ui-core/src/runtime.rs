@@ -795,8 +795,10 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
     }
 }
 
+/// The buffer size of a logical length, rounded to the nearest pixel with halves up, as the window system sizes the
+/// buffer it accepts for a configure at a fractional scale.
 fn physical(logical: f64, scale: f64) -> u32 {
-    (logical * scale).ceil().clamp(0.0, f64::from(u32::MAX)) as u32
+    (logical * scale).round().clamp(0.0, f64::from(u32::MAX)) as u32
 }
 
 fn route<'a, M: 'static>(

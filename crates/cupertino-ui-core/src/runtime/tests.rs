@@ -264,3 +264,13 @@ fn the_snapshot_lists_the_nodes_in_reading_order_with_their_window_rects() {
         vec![snapshot.nodes[1].id, snapshot.nodes[2].id]
     );
 }
+
+#[test]
+fn a_buffer_is_sized_as_the_window_system_rounds_a_fractional_scale() {
+    assert_eq!(
+        [3.0, 2.0, 1.0].map(|n| physical(n, 1.25)),
+        [4, 3, 1],
+        "3.75 and 2.5 round up, 1.25 down"
+    );
+    assert_eq!(physical(100.0, 1.5), 150);
+}

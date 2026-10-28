@@ -18,7 +18,9 @@ use wayland_protocols_plasma::appmenu::server::org_kde_kwin_appmenu_manager::{
     self, OrgKdeKwinAppmenuManager,
 };
 
-use crate::menu_bar::{retryable, Announced, GtkMenuProps, MenuAddress, MenuKind, Refused};
+use crate::menu_bar::{
+    is_unique_bus_name, retryable, Announced, GtkMenuProps, MenuAddress, MenuKind, Refused,
+};
 use crate::owner_check::{OwnerCheck, OwnerKey, OwnerRefusal};
 use crate::state::Cupertino;
 
@@ -257,8 +259,20 @@ impl Cupertino {
     /// A client announced where `surface` exports its menus. The surface has no menus of the address's kind until the
     /// owner of the bus name is checked to be the client or its sandbox instance (`crate::owner_check`); an address of
     /// the other kind stays meanwhile.
+    /// An address with a malformed or overlong name or path gives no menus.
     pub fn announce_menu_address(&mut self, surface: &WlSurface, address: MenuAddress) {
         let kind = address.kind();
+        if !address.within_limits() {
+            if self.menu_bars.over_limits(surface.id()) {
+                tracing::warn!(
+                    ?kind,
+                    "a window announced its menus with a malformed or overlong bus name, object path or application \
+                     id: the menu bar is not told of it, and later such announcements of this surface are not logged"
+                );
+            }
+            self.withdraw_menu_address(surface, kind);
+            return;
+        }
         self.set_menu_address(surface, kind, None);
         if surface.client().is_none() {
             return;
@@ -293,6 +307,7 @@ impl Cupertino {
 
     /// `surface` is gone: the checks of its announcements are cancelled.
     pub fn menu_surface_destroyed(&mut self, surface: &WlSurface) {
+        self.menu_bars.forget_over_limits(&surface.id());
         self.cancel_menu_check(surface, MenuKind::Gtk);
         self.cancel_menu_check(surface, MenuKind::DbusMenu);
     }
@@ -423,7 +438,14 @@ impl Cupertino {
             return;
         }
         match verdict {
-            Ok(owner) => self.set_menu_address(&surface, kind, Some(address.with_bus_name(owner))),
+            Ok(owner) if is_unique_bus_name(&owner) => {
+                self.set_menu_address(&surface, kind, Some(address.with_bus_name(owner)))
+            }
+            Ok(owner) => tracing::warn!(
+                ?owner,
+                "the owner of the bus name a window announced for its menus is not a unique bus name: the menu bar is \
+                 not told of it"
+            ),
             Err(refusal) => tracing::warn!(
                 name = ?address.bus_name(),
                 ?refusal,

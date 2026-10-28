@@ -23,7 +23,10 @@ use cupertino_protocols::client::cupertino_shell_v1::{self, CupertinoShellV1};
 use cupertino_server::authorization::ShellRole;
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
-use cupertino_server::menu_bar::{MENU_BAR_BUS_NAME, OWNER_RETRY_DELAYS};
+use cupertino_server::menu_bar::{
+    MAX_APPLICATION_ID_BYTES, MAX_BUS_NAME_BYTES, MAX_OBJECT_PATH_BYTES, MENU_BAR_BUS_NAME,
+    OWNER_RETRY_DELAYS,
+};
 use cupertino_server::Cupertino;
 use cupertino_wm::{Command, LifecycleState, Rect, TileKind, WindowId};
 use smithay::reexports::calloop::EventLoop;
@@ -599,6 +602,9 @@ enum Cmd {
     SetGtkAppMenu(String),
     /// Clear the GTK menu properties of an application window.
     ClearGtkAddress,
+    /// Set the GTK menu properties of an application window as given: application id, application menu, menu bar,
+    /// window and application object paths, bus name.
+    SetGtkProperties([Option<String>; 6]),
     /// Release the KDE application menu object of an application window.
     ReleaseAddress,
     /// Destroy the second toplevel without releasing its KDE application menu object first.
@@ -838,6 +844,7 @@ impl BarClient {
                 | Cmd::SetGtkAddress(_)
                 | Cmd::SetGtkAppMenu(_)
                 | Cmd::ClearGtkAddress
+                | Cmd::SetGtkProperties(_)
                 | Cmd::ReleaseAddress
                 | Cmd::DestroySecondWindow
                 | Cmd::AnnounceMany(..)
@@ -1107,6 +1114,16 @@ impl AppClient {
                 ),
                 Cmd::ClearGtkAddress => {
                     gtk_surface.set_dbus_properties(None, None, None, None, None, None)
+                }
+                Cmd::SetGtkProperties([id, app_menu, menubar, window, application, bus_name]) => {
+                    gtk_surface.set_dbus_properties(
+                        id,
+                        app_menu,
+                        menubar,
+                        window,
+                        application,
+                        bus_name,
+                    )
                 }
                 Cmd::OpenSecondWindow => {
                     let surface = compositor.create_surface(&qh, ());
@@ -2339,6 +2356,118 @@ fn a_well_known_name_is_resolved_to_its_owner_and_the_bar_gets_the_unique_name()
         latest_title_and_menu(&bar),
         Some((title, dbusmenu(&unique, "/MenuBar/1")))
     );
+}
+
+/// The bytes a string of `len` bytes takes on the wire: its length, then the string, its NUL and padding to 4.
+fn wire_string(len: usize) -> usize {
+    4 + (len + 1).next_multiple_of(4)
+}
+
+/// A D-Bus object path of `len` bytes.
+fn object_path(len: usize) -> String {
+    format!("/{}", "a".repeat(len - 1))
+}
+
+/// A GTK announcement with a name or path one byte over its limit, or with a menu bar path that fills the request
+/// while the absent strings, sent to the bar as empty ones, would take its `menu_gtk` past the wire's 4096 bytes,
+/// gives no menus and leaves the bar connected; with every path and the application id at its limit the bar gets them.
+#[test]
+fn a_gtk_announcement_over_the_limits_gives_no_menus_and_the_bar_stays_connected() {
+    let Some(mut h) = Harness::new() else { return };
+    let Some((_bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let own = own.unique_name().unwrap().to_string();
+    let (bar, app, title) = menu_app(&mut h);
+    let none = Some((title.clone(), BarEvent::MenuNone));
+    let id = "a".repeat(MAX_APPLICATION_ID_BYTES);
+    let path = object_path(MAX_OBJECT_PATH_BYTES);
+    let at_limits = [&id, &path, &path, &path, &path, &own].map(|s| Some(s.clone()));
+
+    // header, four null strings, the path and the bus name: exactly the 4096 bytes a request may take
+    let fill = 4096 - 8 - 4 * 4 - wire_string(own.len()) - 4 - 1;
+    assert_eq!(8 + 4 * 4 + wire_string(fill) + wire_string(own.len()), 4096);
+    assert!(8 + wire_string(own.len()) + 4 * wire_string(0) + wire_string(fill) > 4096);
+    let mut refused = vec![[
+        None,
+        None,
+        Some(object_path(fill)),
+        None,
+        None,
+        Some(own.clone()),
+    ]];
+    for i in 0..5 {
+        let mut over = at_limits.clone();
+        over[i] = over[i].take().map(|s| s + "a");
+        refused.push(over);
+    }
+    for properties in refused.clone() {
+        h.announce(&app, &bar, Cmd::SetGtkProperties(properties));
+        assert_eq!(latest_title_and_menu(&bar), none);
+    }
+
+    h.announce(&app, &bar, Cmd::SetGtkProperties(at_limits));
+    let menus = BarEvent::MenuGtk([&own, &id, &path, &path, &path, &path].map(|s| s.clone()));
+    assert_eq!(latest_title_and_menu(&bar), Some((title, menus)));
+    h.announce(&app, &bar, Cmd::SetGtkProperties(refused.swap_remove(0)));
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        none,
+        "the address is withdrawn"
+    );
+    assert_eq!(bar.error(), None);
+}
+
+/// A KDE announcement with a path one byte over its limit, or with a short well-known name and a path that fills the
+/// request, which the owner's longer unique name would take past the wire's 4096 bytes in `menu_dbusmenu`, gives no
+/// menus and leaves the bar connected; a well-known name and a path at their limits reach the bar.
+#[test]
+fn a_kde_announcement_over_the_limits_gives_no_menus_and_the_bar_stays_connected() {
+    let Some(mut h) = Harness::new() else { return };
+    let Some((_bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let longest_name = format!("a.{}", "b".repeat(MAX_BUS_NAME_BYTES - 2));
+    own.request_name("a.b").unwrap();
+    own.request_name(longest_name.as_str()).unwrap();
+    let unique = own.unique_name().unwrap().to_string();
+    let (bar, app, title) = menu_app(&mut h);
+    let none = Some((title.clone(), BarEvent::MenuNone));
+    let path = object_path(MAX_OBJECT_PATH_BYTES);
+
+    // header, the name and the path: exactly the 4096 bytes a request may take
+    let fill = 4096 - 8 - wire_string("a.b".len()) - 4 - 1;
+    assert_eq!(8 + wire_string("a.b".len()) + wire_string(fill), 4096);
+    assert!(8 + wire_string(unique.len()) + wire_string(fill) > 4096);
+    for (service, path) in [
+        ("a.b".to_owned(), object_path(fill)),
+        (unique.clone(), format!("{path}a")),
+        (longest_name.clone(), format!("{path}a")),
+    ] {
+        h.announce(&app, &bar, Cmd::SetAddress(service, path.leak()));
+        assert_eq!(latest_title_and_menu(&bar), none);
+    }
+
+    h.announce(
+        &app,
+        &bar,
+        Cmd::SetAddress(longest_name, path.clone().leak()),
+    );
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((title, dbusmenu(&unique, &path)))
+    );
+    h.announce(
+        &app,
+        &bar,
+        Cmd::SetAddress("a.b".into(), object_path(fill).leak()),
+    );
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        none,
+        "the address is withdrawn"
+    );
+    assert_eq!(bar.error(), None);
 }
 
 /// A connection that closed before its name is checked, or a well-known name nobody owns, gives no menus.

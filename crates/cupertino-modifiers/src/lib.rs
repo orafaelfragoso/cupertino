@@ -279,6 +279,11 @@ impl Profile {
             .collect()
     }
 
+    /// The key that carries the command role: Super under `cupertino`, Ctrl under `classic-pc`.
+    pub fn primary(&self) -> Physical {
+        self.physical_for(Modifier::Primary)
+    }
+
     /// The key that carries `m`.
     pub fn physical_for(&self, m: Modifier) -> Physical {
         Physical::ALL

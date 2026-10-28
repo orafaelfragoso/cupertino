@@ -12,8 +12,7 @@ use crate::input::{translate_action, Action, Chord};
 use crate::owner_check::{OwnerCheck, OwnerKey};
 use cupertino_input::{KeyCombo, Modifiers};
 use cupertino_keyboard::rewrite::ClientClass;
-use cupertino_keyboard::ModifierProfile;
-use cupertino_modifiers::RawMods;
+use cupertino_modifiers::{Physical, Profile, RawMods};
 use cupertino_protocols::server::app_effects::cupertino_app_menu_v1::{
     self, CupertinoAppMenuV1, Error as AppMenuError,
 };
@@ -244,7 +243,7 @@ fn edit_chord(
     action: EditAction,
     class: ClientClass,
     opted_out: bool,
-    profile: &ModifierProfile,
+    profile: &Profile,
 ) -> Option<(RawMods, u32)> {
     let (sym, shift) = match action {
         EditAction::Undo => (keysyms::KEY_z, false),
@@ -260,8 +259,8 @@ fn edit_chord(
             return matches!(action, EditAction::Copy | EditAction::Paste)
                 .then_some((RawMods::SHIFT | RawMods::CTRL, sym));
         }
-        ClientClass::FirstParty => profile.primary_physical()?,
-        ClientClass::Other if opted_out => profile.primary_physical()?,
+        ClientClass::FirstParty => profile.primary().into(),
+        ClientClass::Other if opted_out => profile.primary().into(),
         ClientClass::Other => RawMods::CTRL,
     };
     Some((
@@ -843,7 +842,7 @@ impl Cupertino {
                 (*bound, chord)
             })
             .collect();
-        let primary = if profile.primary_physical() == Some(RawMods::CTRL) {
+        let primary = if profile.primary() == Physical::Ctrl {
             ModifierKey::Ctrl
         } else {
             ModifierKey::Super
@@ -1462,10 +1461,7 @@ mod tests {
             Some((shift | ctrl, V)),
             None,
         ];
-        for (profile, primary) in [
-            (ModifierProfile::cupertino(), sup),
-            (ModifierProfile::classic_pc(), ctrl),
-        ] {
+        for (profile, primary) in [(Profile::cupertino(), sup), (Profile::classic_pc(), ctrl)] {
             for (class, opted_out, want) in [
                 (ClientClass::Other, false, row(ctrl)),
                 (ClientClass::Other, true, row(primary)),

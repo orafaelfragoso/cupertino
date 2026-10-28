@@ -653,6 +653,7 @@ fn minimize_elements(
         &local_mesh,
         p.scale,
         pres.opacity as f32,
+        None,
     )
     .into()])
 }
@@ -679,15 +680,20 @@ fn closing_elements(p: &mut SceneParams<'_>) -> Vec<CupertinoElement> {
         let mesh = Mesh::quad(r.into_geom());
         let sig = Sig::new().f(progress).f(r.x).f(r.y).finish();
         let (id, commit) = p.cache.slot(ElementKey::new("closing-ghost", c.id.0), sig);
+        // the texture now lives in the snapshot store
+        let Ok((texture, lease)) = p.res.snapshots.lease(c.snapshot.id()) else {
+            continue;
+        };
         out.push(
             MeshElement::new(
                 id,
                 commit,
-                c.texture.clone(),
+                texture,
                 shared.clone(),
                 &mesh,
                 p.scale,
                 alpha,
+                Some(lease),
             )
             .into(),
         );

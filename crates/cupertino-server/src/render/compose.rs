@@ -5,14 +5,16 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use cupertino_effects::Mesh;
 use cupertino_geometry::{CornerStyle, Point, Rect};
 use cupertino_scene::{
     AlphaMode, BufferCrop, Clip, ContentDamage, FrameId, GlobalRect, ImageId, ImageMapping,
     ImageRole, LayerStack, MaterialPass, MaterialStage, Output, OutputId, OutputInvalidation,
     OutputPoint, OutputRect, PhysicalSize, Placement, RecipeId, ResourceKey, SceneFrame, SceneId,
-    SceneItem, SceneKind, SceneLayer, Source, SurfaceId, SurfaceRole,
+    SceneItem, SceneKind, SceneLayer, SnapshotId, Source, SurfaceId, SurfaceRole,
 };
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
+use smithay::backend::renderer::gles::GlesTexture;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Physical, Rectangle};
@@ -21,6 +23,7 @@ type DevicePoint = smithay::utils::Point<i32, Physical>;
 
 use super::material::GpuRecipe;
 use super::scene::SceneParams;
+use super::snapshots::SnapshotLease;
 use super::CupertinoElement;
 
 /// Straight opaque black; the render target clears with its own colour.
@@ -70,6 +73,25 @@ pub struct Material {
     pub opacity: f32,
 }
 
+/// A window snapshot drawn through a mesh in output-local points. A retained snapshot comes with the lease that
+/// keeps it until the frame's elements are gone.
+pub struct MeshPiece {
+    pub kind: SceneKind,
+    pub index: u64,
+    pub texture: GlesTexture,
+    pub lease: Option<SnapshotLease>,
+    pub mesh: Mesh,
+    pub opacity: f32,
+    /// What besides the mesh and the opacity changes the look: the animation state that made the mesh.
+    pub revision: u64,
+}
+
+/// The pixels a frame's mesh items draw, and what keeps them alive.
+pub struct FrameSnapshot {
+    pub texture: GlesTexture,
+    pub lease: Option<SnapshotLease>,
+}
+
 /// One drawable of a layer: a typed scene item, a surface tree, a picture, or an element the renderer still
 /// builds itself.
 pub enum Piece {
@@ -77,6 +99,7 @@ pub enum Piece {
     Tree(Box<Tree>),
     Image(Box<Picture>),
     Material(Box<Material>),
+    Mesh(Box<MeshPiece>),
     Local(Box<CupertinoElement>),
 }
 
@@ -100,6 +123,7 @@ pub struct Composition {
     surfaces: Vec<WlSurface>,
     images: Vec<MemoryRenderBuffer>,
     recipes: Vec<Rc<GpuRecipe>>,
+    snapshots: Vec<Option<FrameSnapshot>>,
     locals: Vec<Option<CupertinoElement>>,
 }
 
@@ -110,6 +134,7 @@ pub struct Composed {
     pub surfaces: Vec<WlSurface>,
     pub images: Vec<MemoryRenderBuffer>,
     pub recipes: Vec<Rc<GpuRecipe>>,
+    pub snapshots: Vec<Option<FrameSnapshot>>,
     pub locals: Vec<Option<CupertinoElement>>,
 }
 
@@ -123,6 +148,7 @@ impl Composition {
             surfaces: Vec::new(),
             images: Vec::new(),
             recipes: Vec::new(),
+            snapshots: Vec::new(),
             locals: Vec::new(),
         }
     }
@@ -130,6 +156,34 @@ impl Composition {
     pub fn push(&mut self, layer: SceneLayer, piece: impl Into<Piece>) {
         match piece.into() {
             Piece::Item(item) => self.items.push(layer, *item),
+            Piece::Mesh(mesh) => {
+                let snapshot = SnapshotId(ResourceKey {
+                    slot: self.snapshots.len() as u64,
+                    generation: self.id.0,
+                });
+                self.snapshots.push(Some(FrameSnapshot {
+                    texture: mesh.texture,
+                    lease: mesh.lease,
+                }));
+                self.items.push(
+                    layer,
+                    SceneItem {
+                        id: SceneId {
+                            kind: mesh.kind,
+                            index: mesh.index,
+                        },
+                        revision: mesh.revision,
+                        source: Source::TexturedMesh {
+                            snapshot,
+                            mesh: mesh.mesh,
+                        },
+                        placement: Placement::IDENTITY,
+                        opacity: f64::from(mesh.opacity),
+                        clip: Clip::None,
+                        damage: ContentDamage::Full,
+                    },
+                );
+            }
             Piece::Material(material) => {
                 let recipe = RecipeId(ResourceKey {
                     slot: self.recipes.len() as u64,
@@ -290,6 +344,7 @@ impl Composition {
             surfaces: self.surfaces,
             images: self.images,
             recipes: self.recipes,
+            snapshots: self.snapshots,
             locals: self.locals,
         }
     }

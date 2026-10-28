@@ -26,14 +26,15 @@ use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::shell::wlr_layer::Layer;
 
 use super::compose::{
-    corner_style, item, output_rect, Composed, Composition, Material, Picture, Piece, Tree,
+    corner_style, item, output_rect, Composed, Composition, Material, MeshPiece, Picture, Piece,
+    Tree,
 };
 use super::lower::{id_hash, lower, Lowering};
 use super::material::{GpuRecipe, MaterialStage, SharedMaterial};
-use super::mesh::{capture, MeshElement, MeshGl, SharedMesh};
+use super::mesh::{capture, MeshGl, SharedMesh};
 use super::motion::{cross_fade_opacity, skips_frame_animation, WorkspaceTransition};
 use super::programs::Programs;
-use super::shader_rect::{to_physical_rect, ElementCache, ElementKey, Sig};
+use super::shader_rect::{to_physical_rect, ElementCache, Sig};
 use super::{CupertinoElement, SceneLayer};
 use crate::app_effects_v1::{surface_backdrops, BackdropArea};
 use crate::config::Config;
@@ -218,6 +219,8 @@ pub struct RenderResources {
     pub material: Option<SharedMaterial>,
     pub material_error: Option<String>,
     pub mesh: Option<SharedMesh>,
+    /// The retained window snapshots (closing ghosts).
+    pub snapshots: super::snapshots::Snapshots,
     theme: Option<Theme>,
     recipes: RefCell<RecipeCache>,
 }
@@ -252,6 +255,7 @@ impl RenderResources {
             material,
             material_error,
             mesh,
+            snapshots: super::snapshots::Snapshots::default(),
             theme,
             recipes: RefCell::new(HashMap::new()),
         })
@@ -931,9 +935,9 @@ fn minimize_elements(
     pres: &Presentation,
     slide: f64,
     active: bool,
-) -> Option<Vec<CupertinoElement>> {
+) -> Option<Vec<Piece>> {
     let kind = p.fx.cfg.minimize?;
-    let shared = p.res.mesh.clone()?;
+    p.res.mesh.as_ref()?;
     let geo = entry.window.geometry();
     let ins = entry.insets;
     let natural = Rect::new(
@@ -966,34 +970,22 @@ fn minimize_elements(
             .collect(),
     );
     tracing::trace!(progress = pres.minimize_progress, triangles = mesh.cell_count() * 2, ?natural, target = ?pres.minimize_target, "minimize mesh");
-    let sig = Sig::new()
-        .f(pres.minimize_progress)
-        .f(natural.x)
-        .f(natural.y)
-        .f(natural.w)
-        .f(pres.opacity)
-        .u(kind as u64)
-        .finish();
-    let (id, commit) = p
-        .cache
-        .slot(ElementKey::new("minimize-mesh", entry.id.0), sig);
-    Some(vec![MeshElement::new(
-        id,
-        commit,
+    Some(vec![Piece::Mesh(Box::new(MeshPiece {
+        kind: SceneKind::MinimizeMesh,
+        index: entry.id.0,
         texture,
-        shared,
-        &local_mesh,
-        p.scale,
-        pres.opacity as f32,
-    )
-    .into()])
+        lease: None,
+        mesh: local_mesh,
+        opacity: pres.opacity as f32,
+        revision: Sig::new().f(pres.minimize_progress).u(kind as u64).finish(),
+    }))])
 }
 
 /// Closing ghosts of this output: the last frame of a window fading out.
-fn closing_elements(p: &mut SceneParams<'_>) -> Vec<CupertinoElement> {
-    let Some(shared) = p.res.mesh.clone() else {
+fn closing_elements(p: &mut SceneParams<'_>) -> Vec<Piece> {
+    if p.res.mesh.is_none() {
         return Vec::new();
-    };
+    }
     let mut out = Vec::new();
     for c in
         p.fx.closing
@@ -1001,28 +993,28 @@ fn closing_elements(p: &mut SceneParams<'_>) -> Vec<CupertinoElement> {
             .rev()
             .filter(|c| c.output == p.output_id)
     {
-        let progress = c.progress(p.now);
         let (rect, alpha) = c.placement(p.now);
         let alpha = alpha as f32;
         if alpha <= 0.0 {
             continue;
         }
         let r = Rect::new(rect.x - p.rect.x, rect.y - p.rect.y, rect.w, rect.h);
-        let mesh = Mesh::quad(r.into_geom());
-        let sig = Sig::new().f(progress).f(r.x).f(r.y).finish();
-        let (id, commit) = p.cache.slot(ElementKey::new("closing-ghost", c.id.0), sig);
-        out.push(
-            MeshElement::new(
-                id,
-                commit,
-                c.texture.clone(),
-                shared.clone(),
-                &mesh,
-                p.scale,
-                alpha,
-            )
-            .into(),
-        );
+        let (texture, lease) = match p.res.snapshots.lease(c.snapshot.id()) {
+            Ok(leased) => leased,
+            Err(error) => {
+                tracing::error!(%error, window = c.id.0, "closing ghost without its snapshot");
+                continue;
+            }
+        };
+        out.push(Piece::Mesh(Box::new(MeshPiece {
+            kind: SceneKind::ClosingGhost,
+            index: c.id.0,
+            texture,
+            lease: Some(lease),
+            mesh: Mesh::quad(r.into_geom()),
+            opacity: alpha,
+            revision: Sig::new().f(c.progress(p.now)).finish(),
+        })));
     }
     out
 }
@@ -1564,7 +1556,7 @@ fn desktop_scene(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>, stack: &m
             let deco = window_decorations(p, entry, &plan, active);
             front_to_back.extend(window_elements(p, entry, &plan, active, true, deco));
         }
-        let mut ghosts: Vec<Piece> = closing_elements(p).into_iter().map(Piece::from).collect();
+        let mut ghosts: Vec<Piece> = closing_elements(p);
         ghosts.append(&mut front_to_back);
         ghosts.append(&mut strip);
         stack.extend(SceneLayer::Windows, ghosts);
@@ -1597,6 +1589,7 @@ fn lower_composed(
         renderer,
         programs: &p.res.programs,
         material: p.res.material.clone(),
+        mesh: p.res.mesh.clone(),
         cache: p.cache,
         scale: p.scale,
     };
@@ -1693,6 +1686,7 @@ pub fn finalize_materials(elements: &mut [CupertinoElement], scale: f64, cache: 
 #[cfg(test)]
 mod tests {
     use super::super::material::{MaterialElement, MaterialGl};
+    use super::super::shader_rect::ElementKey;
     use super::*;
     use cupertino_wm::{Command, MapParams, WmConfig};
 

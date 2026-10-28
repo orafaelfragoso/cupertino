@@ -19,6 +19,7 @@ use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size};
 use super::clip::{ClipElement, ClipShape};
 use super::compose::{logical_rect, Composed};
 use super::material::{MaterialElement, SharedMaterial};
+use super::mesh::{MeshElement, SharedMesh};
 use super::programs::{corner_uniforms, u4, Programs};
 use super::shader_rect::{to_physical_rect, ElementCache, ElementKey, ShaderRect, Sig};
 use super::ui::{rounded_rect, RoundedRectSpec};
@@ -29,6 +30,7 @@ pub struct Lowering<'a> {
     pub renderer: &'a mut GlesRenderer,
     pub programs: &'a Programs,
     pub material: Option<SharedMaterial>,
+    pub mesh: Option<SharedMesh>,
     pub cache: &'a mut ElementCache,
     pub scale: f64,
 }
@@ -40,6 +42,7 @@ pub fn lower(composed: Composed, ctx: &mut Lowering<'_>) -> Vec<CupertinoElement
         surfaces,
         images,
         recipes,
+        mut snapshots,
         mut locals,
     } = composed;
     let viewport = (
@@ -126,6 +129,36 @@ pub fn lower(composed: Composed, ctx: &mut Lowering<'_>) -> Vec<CupertinoElement
                             "material recipe unknown or material pass unavailable"
                         );
                         tracing::error!(recipe = ?pass.recipe, "scene material unavailable, item skipped");
+                    }
+                }
+            }
+            Source::TexturedMesh { snapshot, mesh } => {
+                let taken = snapshots
+                    .get_mut(snapshot.0.slot as usize)
+                    .filter(|_| snapshot.0.generation == frame.id.0)
+                    .and_then(Option::take);
+                match (taken, ctx.mesh.clone()) {
+                    (Some(taken), Some(shared)) => {
+                        let (id, commit) = ctx
+                            .cache
+                            .slot(key, mesh_signature(mesh, item.opacity, item.revision));
+                        elements.push(
+                            MeshElement::new(
+                                id,
+                                commit,
+                                taken.texture,
+                                shared,
+                                mesh,
+                                ctx.scale,
+                                item.opacity as f32,
+                                taken.lease,
+                            )
+                            .into(),
+                        );
+                    }
+                    _ => {
+                        debug_assert!(false, "snapshot {snapshot:?} is unknown, drawn twice or the mesh pass is unavailable");
+                        tracing::error!(?snapshot, "scene snapshot unavailable, item skipped");
                     }
                 }
             }
@@ -419,4 +452,18 @@ fn mask(ctx: &Lowering<'_>, clip: Clip, viewport: (i32, i32)) -> Option<ClipShap
         viewport,
         exact,
     })
+}
+
+/// A signature of the mesh, its opacity and revision: the commit advances whenever any changes.
+fn mesh_signature(mesh: &cupertino_effects::Mesh, opacity: f64, revision: u64) -> u64 {
+    let mut sig = Sig::new()
+        .f(opacity)
+        .u(revision)
+        .u(mesh.vertices.len() as u64);
+    for v in &mesh.vertices {
+        for c in v.position.iter().chain(v.uv.iter()) {
+            sig = sig.f(f64::from(*c));
+        }
+    }
+    sig.finish()
 }

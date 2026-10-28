@@ -127,6 +127,12 @@ pub(crate) struct Painter {
     revision: u64,
 }
 
+pub(crate) struct Painting {
+    pub(crate) list: DisplayList,
+    /// What each node itself draws, in window coordinates, in the list's order; damage is tracked per node.
+    pub(crate) own: Vec<Rect>,
+}
+
 pub(crate) struct PaintInput<'a> {
     pub(crate) env: &'a Environment,
     pub(crate) focus: Option<NodeId>,
@@ -146,7 +152,7 @@ impl Painter {
         root: NodeId,
         geometry: &Geometry,
         input: &PaintInput<'_>,
-    ) -> DisplayList {
+    ) -> Painting {
         let mut list = DisplayList::default();
         let mut seen = HashSet::with_capacity(self.nodes.len());
         for id in tree.preorder(root) {
@@ -211,6 +217,7 @@ impl Painter {
             seen.insert(id);
         }
         self.nodes.retain(|id, _| seen.contains(id));
+        let own = list.nodes.iter().map(|n| n.bounds).collect();
         // Children come after their parent, so walking backwards widens each parent by its finished children.
         let index: HashMap<PaintNodeId, usize> = list
             .nodes
@@ -224,7 +231,7 @@ impl Painter {
                 list.nodes[p].bounds = list.nodes[p].bounds.union(&bounds);
             }
         }
-        list
+        Painting { list, own }
     }
 }
 

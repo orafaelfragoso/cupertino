@@ -4,16 +4,33 @@ use crate::{
     Change, Element, Environment, Event, EventCx, MeasureCx, PaintCx, Propagation, Role,
     SemanticsCx, Widget,
 };
+use crate::{Clock, RuntimeOptions};
 use cupertino_geometry::{Insets, Size};
 use cupertino_ui_layout::{
-    Constraints, ContainerKind, Flex, LayoutDirection, LayoutSpec, Measured, Overflow, SizeSpec,
+    Align, Axis, Constraints, ContainerKind, Flex, Justify, LayoutDirection, LayoutSpec, Measured,
+    Overflow, SizeSpec,
 };
 use cupertino_ui_platform::PointerEvent;
+use cupertino_ui_platform::{
+    ActivationRequest, Capabilities, ClipboardData, ClipboardKind, ClipboardToken, ConfigureId,
+    CursorShape, PlatformError, PlatformEvent, PopupSpec, PresentOutcome, Timestamp, WindowEvent,
+    WindowId, WindowRequest, WindowSpec, WindowSystem,
+};
+use cupertino_ui_render::{
+    CpuFrame, DamageRegion, PixelFormat, RenderError, RenderFrameId, RenderRequest, UiRenderer,
+};
+use cupertino_ui_text::TextInputState;
 use cupertino_ui_theme::{
     Appearance, ColorTokens, ControlMetrics, ControlSize, FocusRing, Motion, ThemePreferences,
     ThemeTokens, TypeRole, TypeScale,
 };
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::task::Waker;
+use std::time::Duration;
 
 pub(crate) fn env() -> Environment {
     let role = TypeRole {
@@ -176,12 +193,22 @@ impl<M: From<String> + 'static> Widget<M> for Leaf {
 pub(crate) struct Group<M> {
     pub(crate) children: Vec<Element<M>>,
     pub(crate) scope: bool,
+    pub(crate) row: bool,
 }
 
 pub(crate) fn group<M>(children: Vec<Element<M>>) -> Group<M> {
     Group {
         children,
         scope: false,
+        row: false,
+    }
+}
+
+/// Children side by side, each at its measured size.
+pub(crate) fn row<M>(children: Vec<Element<M>>) -> Group<M> {
+    Group {
+        row: true,
+        ..group(children)
     }
 }
 
@@ -189,7 +216,16 @@ impl<M: From<String> + 'static> Widget<M> for Group<M> {
     type State = ();
 
     fn layout(&self) -> LayoutSpec {
-        spec(ContainerKind::Overlay)
+        if self.row {
+            spec(ContainerKind::Stack {
+                axis: Axis::Horizontal,
+                spacing: 0.0,
+                align: Align::Start,
+                justify: Justify::Start,
+            })
+        } else {
+            spec(ContainerKind::Overlay)
+        }
     }
 
     fn take_children(&mut self) -> Vec<Element<M>> {
@@ -223,5 +259,155 @@ impl<M: From<String> + 'static> Widget<M> for Group<M> {
             cx.role(Role::Dialog);
             cx.focus_scope();
         }
+    }
+}
+
+/// A window system in memory: tests queue its events and read what the runtime asked of it.
+#[derive(Default)]
+pub(crate) struct FakeSystem {
+    pub(crate) queue: VecDeque<PlatformEvent>,
+    pub(crate) created: Vec<(WindowId, WindowSpec)>,
+    pub(crate) destroyed: Vec<WindowId>,
+    pub(crate) requests: Vec<(WindowId, WindowRequest)>,
+    pub(crate) presented: Vec<(WindowId, Option<ConfigureId>)>,
+    pub(crate) frames_requested: usize,
+    pub(crate) text_input: Vec<Option<TextInputState>>,
+    pub(crate) clipboard: Option<ClipboardData>,
+}
+
+impl FakeSystem {
+    pub(crate) fn send(&mut self, window: WindowId, event: WindowEvent) {
+        self.queue
+            .push_back(PlatformEvent::Window { window, event });
+    }
+}
+
+impl WindowSystem for FakeSystem {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn create_window(&mut self, spec: &WindowSpec) -> Result<WindowId, PlatformError> {
+        let id = WindowId(self.created.len() as u32 + 1);
+        self.created.push((id, spec.clone()));
+        Ok(id)
+    }
+
+    fn create_popup(&mut self, _: WindowId, _: &PopupSpec) -> Result<WindowId, PlatformError> {
+        Err(PlatformError::Unsupported)
+    }
+
+    fn destroy(&mut self, window: WindowId) {
+        self.destroyed.push(window);
+    }
+
+    fn request(&mut self, window: WindowId, request: WindowRequest) -> Result<(), PlatformError> {
+        self.requests.push((window, request));
+        Ok(())
+    }
+
+    fn set_text_input(&mut self, _: WindowId, state: Option<&TextInputState>) {
+        self.text_input.push(state.cloned());
+    }
+
+    fn set_cursor(&mut self, _: WindowId, _: Option<CursorShape>) {}
+
+    fn set_clipboard(&mut self, _: ClipboardKind, data: ClipboardData) {
+        self.clipboard = Some(data);
+    }
+
+    fn read_clipboard(&mut self, _: ClipboardKind, _: &str) -> ClipboardToken {
+        ClipboardToken(0)
+    }
+
+    fn request_activation_token(&mut self, _: WindowId) -> ActivationRequest {
+        ActivationRequest(0)
+    }
+
+    fn request_frame(&mut self, _: WindowId) {
+        self.frames_requested += 1;
+    }
+
+    fn present(
+        &mut self,
+        window: WindowId,
+        _: &CpuFrame,
+        configure: Option<ConfigureId>,
+    ) -> Result<PresentOutcome, PlatformError> {
+        self.presented.push((window, configure));
+        Ok(PresentOutcome::Presented)
+    }
+
+    fn dispatch(
+        &mut self,
+        _: Option<Duration>,
+        events: &mut Vec<PlatformEvent>,
+    ) -> Result<(), PlatformError> {
+        events.extend(self.queue.drain(..));
+        Ok(())
+    }
+
+    fn waker(&self) -> Waker {
+        Waker::noop().clone()
+    }
+}
+
+/// A renderer that keeps a blank frame and records the damage of every request.
+pub(crate) struct FakeRenderer {
+    pub(crate) damage: Rc<RefCell<Vec<DamageRegion>>>,
+    frame: CpuFrame,
+}
+
+impl UiRenderer for FakeRenderer {
+    type Frame = CpuFrame;
+
+    fn render(&mut self, request: &RenderRequest<'_>) -> Result<RenderFrameId, RenderError> {
+        self.damage.borrow_mut().push(request.damage.clone());
+        self.frame.id = RenderFrameId(self.frame.id.0 + 1);
+        self.frame.width = request.width;
+        self.frame.height = request.height;
+        Ok(self.frame.id)
+    }
+
+    fn frame(&self, id: RenderFrameId) -> Result<&CpuFrame, RenderError> {
+        if id == self.frame.id {
+            Ok(&self.frame)
+        } else {
+            Err(RenderError::UnknownFrame(id))
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct FakeClock(pub(crate) AtomicU64);
+
+impl Clock for FakeClock {
+    fn now(&self) -> Timestamp {
+        Timestamp(self.0.load(Ordering::SeqCst))
+    }
+}
+
+pub(crate) fn options(damage: &Rc<RefCell<Vec<DamageRegion>>>) -> RuntimeOptions {
+    let damage = Rc::clone(damage);
+    RuntimeOptions {
+        theme: env().theme,
+        direction: LayoutDirection::Ltr,
+        node_limit: 1000,
+        renderers: Box::new(move || {
+            Box::new(FakeRenderer {
+                damage: Rc::clone(&damage),
+                frame: CpuFrame {
+                    id: RenderFrameId(0),
+                    width: 0,
+                    height: 0,
+                    stride: 0,
+                    format: PixelFormat::Rgba8Premultiplied,
+                    pixels: Vec::new(),
+                    damage: Vec::new(),
+                },
+            })
+        }),
+        accessibility: None,
+        clock: Arc::new(FakeClock::default()),
     }
 }

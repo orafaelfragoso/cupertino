@@ -52,6 +52,7 @@ impl<M: 'static> Tree<M> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.live
     }

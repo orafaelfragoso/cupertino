@@ -106,7 +106,7 @@ impl Fixture {
                 now: Timestamp(0),
             },
         );
-        list.nodes.remove(0)
+        list.list.nodes.remove(0)
     }
 }
 
@@ -196,7 +196,7 @@ fn a_node_carries_the_clip_it_puts_on_its_children_and_bounds_that_cover_its_sub
             now: Timestamp(0),
         },
     );
-    let [scroller, content] = &list.nodes[..] else {
+    let [scroller, content] = &list.list.nodes[..] else {
         unreachable!()
     };
     assert_eq!(content.parent, Some(scroller.id));

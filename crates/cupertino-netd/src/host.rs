@@ -17,35 +17,36 @@ pub struct SystemHost {
     routes: RouteSocket,
     /// `None` on a kernel without nl80211: there is no Wi-Fi to manage.
     wireless: Option<Nl80211>,
-    /// `None` when there is no rfkill device: nothing can switch the radio.
-    rfkill: Option<Rfkill>,
+    /// The errno that left the radio without a switch (no device, or one this user may not open).
+    rfkill: std::result::Result<Rfkill, Errno>,
 }
 
 impl SystemHost {
     /// Opens the sockets. `rfkill_path` is `/dev/rfkill` outside tests. A kernel or machine
-    /// without nl80211 or rfkill is a machine without Wi-Fi, not an error; so is an rfkill device this user may not
-    /// open (an unprivileged session daemon), which is reported and leaves the radio switch unavailable. Any other
-    /// failure is an error.
-    pub fn open(rfkill_path: &Path) -> Result<Self> {
+    /// without nl80211 or rfkill is a machine without Wi-Fi, not an error. With `tolerate_denied` (the unprivileged
+    /// session daemon) so is an rfkill device this user may not open: it is reported and leaves the radio switch
+    /// unavailable. The system daemon fails on it, so a unit without access to the device is not left half working. Any
+    /// other failure is an error.
+    pub fn open(rfkill_path: &Path, tolerate_denied: bool) -> Result<Self> {
         let wireless = match Nl80211::open() {
             Ok(wireless) => Some(wireless),
             Err(error) if is_unsupported(&error) => None,
             Err(error) => return Err(Error::Netlink(error)),
         };
         let rfkill = match Rfkill::open(rfkill_path) {
-            Ok(rfkill) => Some(rfkill),
+            Ok(rfkill) => Ok(rfkill),
             Err(cupertino_netlink::Error::Device {
                 source: Errno::NOENT,
                 ..
-            }) => None,
+            }) => Err(Errno::NOENT),
             Err(
                 error @ cupertino_netlink::Error::Device {
                     source: Errno::ACCESS,
                     ..
                 },
-            ) => {
+            ) if tolerate_denied => {
                 eprintln!("cupertino-netd: {error}; the radio switch is unavailable");
-                None
+                Err(Errno::ACCESS)
             }
             Err(error) => return Err(Error::Netlink(error)),
         };
@@ -57,7 +58,7 @@ impl SystemHost {
     }
 
     pub fn rfkill(&self) -> Option<&Rfkill> {
-        self.rfkill.as_ref()
+        self.rfkill.as_ref().ok()
     }
 }
 
@@ -106,11 +107,11 @@ impl Host for SystemHost {
 
     fn set_wireless_blocked(&mut self, blocked: bool) -> Result<()> {
         match &self.rfkill {
-            Some(rfkill) => Ok(rfkill.set_soft_block(Kind::Wlan, blocked)?),
-            None => Err(Error::Netlink(cupertino_netlink::Error::Device {
+            Ok(rfkill) => Ok(rfkill.set_soft_block(Kind::Wlan, blocked)?),
+            Err(source) => Err(Error::Netlink(cupertino_netlink::Error::Device {
                 path: cupertino_netlink::rfkill::DEVICE.into(),
                 call: "open",
-                source: Errno::NOENT,
+                source: *source,
             })),
         }
     }
@@ -132,19 +133,48 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn an_rfkill_device_the_user_may_not_open_leaves_the_radio_switch_unavailable() {
+    /// A device file this user may not open, or `None` when this user is root and may open anything.
+    fn denied_device() -> Option<std::path::PathBuf> {
         let path =
             std::env::temp_dir().join(format!("cupertino-netd-rfkill-{}", std::process::id()));
         std::fs::write(&path, []).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
-        let denied = std::fs::File::open(&path).is_err();
-        let host = SystemHost::open(&path);
-        std::fs::remove_file(&path).unwrap();
-        if !denied {
+        if std::fs::File::open(&path).is_ok() {
+            std::fs::remove_file(&path).unwrap();
             eprintln!("skipping: root may open any file");
-            return;
+            return None;
         }
-        assert!(host.unwrap().rfkill().is_none());
+        Some(path)
+    }
+
+    #[test]
+    fn a_session_daemon_serves_without_an_rfkill_device_it_may_not_open_and_says_why_the_switch_fails(
+    ) {
+        let Some(path) = denied_device() else { return };
+        let host = SystemHost::open(&path, true);
+        std::fs::remove_file(&path).unwrap();
+        let mut host = host.unwrap();
+        assert!(host.rfkill().is_none());
+        assert!(matches!(
+            host.set_wireless_blocked(true),
+            Err(Error::Netlink(cupertino_netlink::Error::Device {
+                source: Errno::ACCESS,
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn the_system_daemon_fails_on_an_rfkill_device_it_may_not_open() {
+        let Some(path) = denied_device() else { return };
+        let host = SystemHost::open(&path, false);
+        std::fs::remove_file(&path).unwrap();
+        assert!(matches!(
+            host,
+            Err(Error::Netlink(cupertino_netlink::Error::Device {
+                source: Errno::ACCESS,
+                ..
+            }))
+        ));
     }
 }

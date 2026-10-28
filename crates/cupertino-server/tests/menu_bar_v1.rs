@@ -2762,7 +2762,7 @@ fn the_bar_is_told_the_chords_of_the_bindings_and_the_primary_modifier() {
     assert_eq!(chord(&chords, 6), "Super+t");
     assert_eq!(primary, 0);
 
-    // the classic-pc profile: Ctrl makes the primary modifier
+    // the classic-pc profile: Ctrl makes the primary modifier, and its own table binds the system chords
     let classic = KeyboardSettings {
         modifier_profile: Some(ModifierProfile::ClassicPc),
         ..KeyboardSettings::default()
@@ -2772,7 +2772,13 @@ fn the_bar_is_told_the_chords_of_the_bindings_and_the_primary_modifier() {
     h.wait_for_groups(&bar, 6);
     let (chords, primary) = shortcuts(&bar).unwrap();
     assert_eq!(primary, 1, "ctrl under the classic-pc profile");
-    assert_eq!(chord(&chords, 6), "Ctrl+t");
+    assert_eq!(
+        chord(&chords, 6),
+        "Super+q",
+        "quit_app of the classic-pc table"
+    );
+    assert_eq!(chord(&chords, 0), "Alt+F4", "close_window");
+    assert_eq!(chord(&chords, 1), "Super+Down", "minimize");
     assert_eq!(bar.error(), None);
 }
 

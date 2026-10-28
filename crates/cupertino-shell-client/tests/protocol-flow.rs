@@ -1260,6 +1260,7 @@ fn menu_bar_groups_arrive_typed_and_requests_reach_the_server() {
                 workspaces: 4
             }),
             engage: false,
+            engage_help: false,
             screen_capture: None,
             session_agent: None,
             windows: None,

@@ -80,6 +80,8 @@ pub enum BoundAction {
     ForceQuit,
     Lock,
     LogOut,
+    /// The Help search shortcut (version 12).
+    HelpSearch,
 }
 
 impl BoundAction {
@@ -98,6 +100,7 @@ impl BoundAction {
             WEnum::Value(WireBoundAction::ForceQuit) => BoundAction::ForceQuit,
             WEnum::Value(WireBoundAction::Lock) => BoundAction::Lock,
             WEnum::Value(WireBoundAction::LogOut) => BoundAction::LogOut,
+            WEnum::Value(WireBoundAction::HelpSearch) => BoundAction::HelpSearch,
             WEnum::Value(_) | WEnum::Unknown(_) => return None,
         })
     }
@@ -136,6 +139,8 @@ pub struct MenuBarUpdate {
     pub window_state: Option<WindowState>,
     /// The menu-bar shortcut was pressed.
     pub engage: bool,
+    /// The Help search shortcut was pressed (version 12): open the Help menu with its search field focused.
+    pub engage_help: bool,
     /// Whether a screen or window capture runs (the screen capture indicator).
     pub screen_capture: Option<bool>,
     /// Which process may answer as the session agent.
@@ -400,6 +405,7 @@ impl GroupBuilder {
                 })
             }
             Event::Engage => self.update.engage = true,
+            Event::EngageHelp => self.update.engage_help = true,
             Event::ScreenCapture { active } => self.update.screen_capture = Some(active != 0),
             Event::SessionAgent { trust, pid } => {
                 self.update.session_agent = Some(match trust {
@@ -499,6 +505,7 @@ mod tests {
                     workspaces: 4
                 }),
                 engage: false,
+                engage_help: false,
                 screen_capture: None,
                 session_agent: None,
                 windows: None,
@@ -653,6 +660,36 @@ mod tests {
                 screen_capture: Some(true),
                 ..MenuBarUpdate::default()
             }
+        );
+    }
+
+    #[test]
+    fn engage_help_and_the_help_search_chord_arrive_in_their_groups() {
+        let updates = feed_version_10(vec![
+            Event::EngageHelp,
+            Event::Done,
+            Event::Shortcut {
+                action: WEnum::Value(WireBoundAction::HelpSearch),
+                chord: "Shift+Super+slash".into(),
+            },
+            Event::PrimaryModifier {
+                key: WEnum::Value(ModifierKey::Super),
+            },
+            Event::Done,
+        ]);
+        assert_eq!(
+            updates[0],
+            MenuBarUpdate {
+                engage_help: true,
+                ..MenuBarUpdate::default()
+            }
+        );
+        assert_eq!(
+            updates[1]
+                .shortcuts
+                .as_ref()
+                .and_then(|s| s.chord(BoundAction::HelpSearch)),
+            Some("Shift+Super+slash")
         );
     }
 

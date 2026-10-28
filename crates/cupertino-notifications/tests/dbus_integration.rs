@@ -7,25 +7,18 @@ use cupertino_notifications::dbus::{
 };
 use cupertino_notifications::{CloseReason, DndMode};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, Command, Stdio};
+use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::Value;
 
+/// The test's bus, with the folder of its configuration and socket, which outlives the daemon.
 struct PrivateBus {
-    child: Child,
     address: String,
+    _bus: cupertino_test_bus::PrivateBus,
     _dir: tempfile::TempDir,
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
 }
 
 fn start_bus() -> Option<PrivateBus> {
@@ -49,25 +42,10 @@ fn start_bus() -> Option<PrivateBus> {
 </busconfig>"#
     )
     .ok()?;
-    let mut child = Command::new("dbus-daemon")
-        .arg(format!("--config-file={}", config.display()))
-        .args(["--nofork", "--print-address=1"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let mut line = String::new();
-    BufReader::new(child.stdout.take()?)
-        .read_line(&mut line)
-        .ok()?;
-    let address = line.trim().to_string();
-    if address.is_empty() {
-        let _ = child.kill();
-        return None;
-    }
+    let bus = cupertino_test_bus::PrivateBus::start_with_config(&config)?;
     Some(PrivateBus {
-        child,
-        address,
+        address: bus.address.clone(),
+        _bus: bus,
         _dir: dir,
     })
 }

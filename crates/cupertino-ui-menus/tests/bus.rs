@@ -3,81 +3,20 @@
 //! daemon's address, each method call and each signal.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
-use std::os::unix::process::CommandExt;
-use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
 use cupertino_menu_model::standard::{self, Features};
 use cupertino_menu_model::ActionName;
 use cupertino_modifiers::Profile;
+use cupertino_test_bus::PrivateBus;
 use cupertino_ui_menus::{Activation, DbusProperties, Exporter, WindowId};
 use zbus::blocking::proxy::SignalIterator;
-use zbus::blocking::{connection, Connection, Proxy};
+use zbus::blocking::{Connection, Proxy};
 use zbus::message::Message;
 use zbus::zvariant::{OwnedValue, Signature, Value};
 
 const WAIT: Duration = Duration::from_secs(5);
-
-/// A private `dbus-daemon`, a child of the test that is killed on drop and dies with the test's thread if the test is
-/// killed first.
-struct PrivateBus {
-    address: String,
-    daemon: Child,
-}
-
-impl PrivateBus {
-    fn start() -> Option<PrivateBus> {
-        let mut command = Command::new("dbus-daemon");
-        command
-            .args(["--session", "--nofork", "--print-address=1"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        // Safety: the closure runs in the child between fork and exec and calls only prctl, which is
-        // async-signal-safe.
-        unsafe {
-            command.pre_exec(|| {
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let mut daemon = command.spawn().ok()?;
-        let stdout = daemon.stdout.take().expect("piped stdout");
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let mut line = String::new();
-            let _ = BufReader::new(stdout).read_line(&mut line);
-            let _ = tx.send(line);
-        });
-        let address = rx
-            .recv_timeout(WAIT)
-            .expect("dbus-daemon printed no address within 5 s");
-        let address = address.trim().to_owned();
-        assert!(!address.is_empty(), "dbus-daemon exited before it listened");
-        Some(PrivateBus { address, daemon })
-    }
-
-    fn builder(&self) -> connection::Builder<'_> {
-        connection::Builder::address(self.address.as_str())
-            .unwrap()
-            .method_timeout(WAIT)
-    }
-
-    fn connect(&self) -> Connection {
-        self.builder().build().unwrap()
-    }
-}
-
-impl Drop for PrivateBus {
-    fn drop(&mut self) {
-        let _ = self.daemon.kill();
-        let _ = self.daemon.wait();
-    }
-}
 
 /// The first message of `signals`, or a panic after [`WAIT`].
 fn next_signal(mut signals: SignalIterator<'static>) -> Message {
@@ -124,7 +63,7 @@ fn fixture(bus: PrivateBus) -> Fixture {
     let (tx, activations) = mpsc::channel();
     let tx = std::sync::Mutex::new(tx);
     let mut exporter = Exporter::new(
-        bus.builder(),
+        bus.blocking_builder(),
         "org.example.Notes",
         Box::new(Profile::cupertino()),
         move |a| {

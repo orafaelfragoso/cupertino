@@ -144,5 +144,66 @@ fn the_clip_is_in_the_node_coordinates_and_cuts_the_hit_area() {
         Some(Shape::Rect(Rect::new(-10.0, -10.0, 60.0, 60.0)))
     );
     assert_eq!(node.hit, Rect::new(10.0, 10.0, 50.0, 50.0));
-    assert_eq!(node.bounds, Rect::new(10.0, 10.0, 100.0, 100.0));
+    assert_eq!(node.bounds, Rect::new(10.0, 10.0, 50.0, 50.0));
+}
+
+#[test]
+fn the_extent_covers_stroke_edges_and_effects_but_an_inner_shadow_stays_inside() {
+    let square = Shape::Rect(Rect::new(0.0, 0.0, 10.0, 10.0));
+    let fill = PaintOp::Fill {
+        shape: square.clone(),
+        paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, 1.0)),
+    };
+    let stroke = PaintOp::Stroke {
+        shape: square.clone(),
+        width: 4.0,
+        paint: Paint::Solid(Color::new(0.0, 0.0, 0.0, 1.0)),
+    };
+    assert_eq!(extent(&[stroke]), Some(Rect::new(-2.0, -2.0, 14.0, 14.0)));
+
+    let layer = |effects| {
+        [
+            PaintOp::PushLayer {
+                opacity: 1.0,
+                effects,
+            },
+            fill.clone(),
+            PaintOp::PopLayer,
+        ]
+    };
+    let shadow = Effect::DropShadow {
+        offset: Point::new(0.0, 5.0),
+        blur: 2.0,
+        color: Color::new(0.0, 0.0, 0.0, 0.5),
+    };
+    assert_eq!(
+        extent(&layer(vec![shadow])),
+        Some(Rect::from_ltrb(-6.0, -1.0, 16.0, 21.0))
+    );
+    assert_eq!(
+        extent(&layer(vec![Effect::Blur { radius: 1.0 }])),
+        Some(Rect::new(-3.0, -3.0, 16.0, 16.0))
+    );
+    let inner = Effect::InnerShadow {
+        offset: Point::new(1.0, 1.0),
+        blur: 3.0,
+        color: Color::new(0.0, 0.0, 0.0, 0.5),
+    };
+    assert_eq!(
+        extent(&layer(vec![inner])),
+        Some(Rect::new(0.0, 0.0, 10.0, 10.0))
+    );
+    assert_eq!(extent(&[]), None);
+}
+
+#[test]
+fn bounds_reach_past_the_layout_rect_to_what_the_node_draws_and_stop_at_its_clip() {
+    let rect = Rect::new(100.0, 100.0, 10.0, 10.0);
+    let ring = Some(Rect::new(-4.0, -4.0, 18.0, 18.0));
+    assert_eq!(bounds(rect, ring, None), Rect::new(96.0, 96.0, 18.0, 18.0));
+    assert_eq!(
+        bounds(rect, ring, Some(Rect::new(98.0, 98.0, 100.0, 100.0))),
+        Rect::new(98.0, 98.0, 16.0, 16.0)
+    );
+    assert_eq!(bounds(rect, None, None), rect);
 }

@@ -241,7 +241,7 @@ impl LayoutSpec {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutError {
-    /// Flexible space did not settle within 32 redistribution passes.
+    /// Flexible space did not settle within one pass per child plus one; unreachable for finite specs.
     NoConvergence,
     InvalidConstraint,
     NonFiniteValue,
@@ -285,6 +285,16 @@ pub struct NodeLayout {
 #[derive(Clone, Debug)]
 pub struct LayoutResult<Id> {
     pub nodes: HashMap<Id, NodeLayout>,
+    pub stats: LayoutStats,
+}
+
+/// How much work one `layout` call did: a node sized under one set of constraints counts once however often it is asked.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LayoutStats {
+    /// Cache misses of the sizing step.
+    pub solves: usize,
+    /// Calls to `LayoutTree::measure_leaf`.
+    pub leaf_measures: usize,
 }
 
 /// A scroll view's position, kept in the application's model.

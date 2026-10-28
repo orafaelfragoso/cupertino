@@ -1237,7 +1237,9 @@ fn menu_bar_groups_arrive_typed_and_requests_reach_the_server() {
     );
 
     let menu_bar_update = |e: &Event| match shell_event(e) {
-        Some(ShellEvent::MenuBar { surface, update }) if *surface == layer => Some(update.clone()),
+        Some(ShellEvent::MenuBar { surface, update }) if *surface == layer => {
+            Some((**update).clone())
+        }
         _ => None,
     };
     let first = wait_for(&mut conn, &mut stash, menu_bar_update);
@@ -1260,6 +1262,8 @@ fn menu_bar_groups_arrive_typed_and_requests_reach_the_server() {
             engage: false,
             screen_capture: None,
             session_agent: None,
+            windows: None,
+            shortcuts: None,
         }
     );
     control.send(Control::Engage).unwrap();
@@ -1270,6 +1274,9 @@ fn menu_bar_groups_arrive_typed_and_requests_reach_the_server() {
 
     bar.set_menu_open(true);
     bar.window_command(WindowCommand::Minimize);
+    // a version 9 server has neither request: they are not sent
+    bar.window_command(WindowCommand::TileLeft);
+    bar.activate_window(7);
     bar.move_to_workspace(3);
     bar.set_menu_open(false);
     flush(&mut conn, &mut stash);

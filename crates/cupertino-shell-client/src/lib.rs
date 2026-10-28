@@ -19,8 +19,8 @@ pub use dock::{
 };
 pub use error::Error;
 pub use menu_bar::{
-    ActiveApp, GtkMenu, MenuBar, MenuBarUpdate, SessionAction, SessionAgent, WindowCommand,
-    WindowMenu, WindowState,
+    ActiveApp, AppWindow, BoundAction, GtkMenu, MenuBar, MenuBarUpdate, PrimaryModifier,
+    SessionAction, SessionAgent, Shortcuts, WindowCommand, WindowMenu, WindowState,
 };
 pub use roles::{
     IdleNotifier, IdleWatch, LayerShell, LayerSurface, LayerSurfaceConfig, Margin, Session,

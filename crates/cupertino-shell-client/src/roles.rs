@@ -11,7 +11,7 @@ use cupertino_protocols::client::cupertino_shell_v1::CupertinoShellV1;
 use cupertino_wayland_client::{Connection, ExternalRole, OutputId, State, SurfaceId};
 use std::sync::Mutex;
 use wayland_client::protocol::wl_seat::WlSeat;
-use wayland_client::{Connection as WlConnection, Dispatch, QueueHandle};
+use wayland_client::{Connection as WlConnection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::ext::idle_notify::v1::client::ext_idle_notification_v1::{
     self, ExtIdleNotificationV1,
 };
@@ -80,7 +80,7 @@ pub enum ShellEvent {
     LogOutRequested,
     MenuBar {
         surface: SurfaceId,
-        update: MenuBarUpdate,
+        update: Box<MenuBarUpdate>,
     },
     Dock {
         surface: SurfaceId,
@@ -449,8 +449,9 @@ impl Shell {
     /// Bind the global; `None` when the server does not offer it to this client.
     pub fn bind(conn: &mut Connection) -> Option<Shell> {
         // version 2 adds the display options of the session object, version 3 the screen capture state of the menu bar,
-        // version 5 moves the backdrops and the title bar style to the app effects, version 6 adds the menu bar's session actions
-        conn.bind_extension(9..=9, Quiet).map(Shell)
+        // version 5 moves the backdrops and the title bar style to the app effects, version 6 adds the menu bar's session actions,
+        // version 10 the menu bar's window list, shortcuts and default-menu commands
+        conn.bind_extension(9..=10, Quiet).map(Shell)
     }
 
     /// Observe the session: its appearance and display options arrive as
@@ -472,7 +473,7 @@ impl Shell {
         let output = conn.wl_output(output).ok_or(Error::UnknownOutput)?;
         let data = RoleData {
             surface,
-            group: Mutex::default(),
+            group: Mutex::new(MenuBarGroup::new(self.0.version())),
         };
         Ok(MenuBar::new(self.0.get_menu_bar(
             &wl,
@@ -566,7 +567,7 @@ impl Dispatch<CupertinoMenuBarV1, RoleData<MenuBarGroup>> for State {
         if let Some(update) = update {
             state.emit(ShellEvent::MenuBar {
                 surface: data.surface,
-                update,
+                update: Box::new(update),
             });
         }
     }

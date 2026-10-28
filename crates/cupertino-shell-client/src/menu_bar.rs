@@ -1,9 +1,14 @@
 //! Typed wrapper of `cupertino_menu_bar_v1`: the menu-bar role of a layer surface.
 
 use cupertino_protocols::client::cupertino_menu_bar_v1::{
-    self, AgentTrust, Command, CupertinoMenuBarV1, SessionAction as WireSessionAction,
+    self, AgentTrust, AppWindowFlags, BoundAction as WireBoundAction, Command, CupertinoMenuBarV1,
+    ModifierKey, SessionAction as WireSessionAction,
 };
-use wayland_client::WEnum;
+use std::collections::BTreeMap;
+use wayland_client::{Proxy, WEnum};
+
+/// The version that adds the window list, the shortcuts and the commands of the default menus.
+const DEFAULT_MENUS_VERSION: u32 = 10;
 
 /// Application id (the desktop entry id when known) and title of the active window; both are
 /// empty when no window is active.
@@ -46,6 +51,79 @@ pub struct WindowState {
     pub workspaces: u32,
 }
 
+/// A window of the active application, for the window list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppWindow {
+    /// The server's window id, stable for the window's lifetime.
+    pub id: u32,
+    pub title: String,
+    pub active: bool,
+    pub minimized: bool,
+}
+
+/// A server action whose chord the menus show.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BoundAction {
+    CloseWindow,
+    Minimize,
+    Zoom,
+    ToggleFullscreen,
+    HideApp,
+    HideOthers,
+    QuitApp,
+    TileLeft,
+    TileRight,
+    TileFill,
+    ForceQuit,
+    Lock,
+    LogOut,
+}
+
+impl BoundAction {
+    fn from_wire(action: WEnum<WireBoundAction>) -> Option<Self> {
+        Some(match action {
+            WEnum::Value(WireBoundAction::CloseWindow) => BoundAction::CloseWindow,
+            WEnum::Value(WireBoundAction::Minimize) => BoundAction::Minimize,
+            WEnum::Value(WireBoundAction::Zoom) => BoundAction::Zoom,
+            WEnum::Value(WireBoundAction::ToggleFullscreen) => BoundAction::ToggleFullscreen,
+            WEnum::Value(WireBoundAction::HideApp) => BoundAction::HideApp,
+            WEnum::Value(WireBoundAction::HideOthers) => BoundAction::HideOthers,
+            WEnum::Value(WireBoundAction::QuitApp) => BoundAction::QuitApp,
+            WEnum::Value(WireBoundAction::TileLeft) => BoundAction::TileLeft,
+            WEnum::Value(WireBoundAction::TileRight) => BoundAction::TileRight,
+            WEnum::Value(WireBoundAction::TileFill) => BoundAction::TileFill,
+            WEnum::Value(WireBoundAction::ForceQuit) => BoundAction::ForceQuit,
+            WEnum::Value(WireBoundAction::Lock) => BoundAction::Lock,
+            WEnum::Value(WireBoundAction::LogOut) => BoundAction::LogOut,
+            WEnum::Value(_) | WEnum::Unknown(_) => return None,
+        })
+    }
+}
+
+/// The physical key the modifier profile makes the primary modifier.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PrimaryModifier {
+    #[default]
+    Super,
+    Ctrl,
+}
+
+/// The chords the server binds to its actions, and the primary modifier of the profile.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Shortcuts {
+    /// The physical chord of each bound action in the shortcut file's syntax (`Ctrl+Alt+Shift+Super+key`); an
+    /// unbound action has no entry.
+    pub chords: BTreeMap<BoundAction, String>,
+    pub primary: PrimaryModifier,
+}
+
+impl Shortcuts {
+    /// The chord bound to `action`, `None` when it is unbound.
+    pub fn chord(&self, action: BoundAction) -> Option<&str> {
+        self.chords.get(&action).map(String::as_str)
+    }
+}
+
 /// One group of events, applied at once. A field is `None` when the group does not mention it;
 /// the first group after the object is created mentions everything.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -59,6 +137,11 @@ pub struct MenuBarUpdate {
     pub screen_capture: Option<bool>,
     /// Which process may answer as the session agent.
     pub session_agent: Option<SessionAgent>,
+    /// The windows of the active application, in stacking order from the top; a group with `window_state` carries
+    /// the complete list from version 10.
+    pub windows: Option<Vec<AppWindow>>,
+    /// The chords of the server's actions, from version 10.
+    pub shortcuts: Option<Shortcuts>,
 }
 
 /// The process whose ownership of the session agent's bus name is trusted.
@@ -82,6 +165,41 @@ pub enum WindowCommand {
     Minimize,
     Zoom,
     Close,
+    ToggleFullscreen,
+    TileLeft,
+    TileRight,
+    TileFill,
+    /// Raise every window of the active application, keeping their order and the focus.
+    BringAllToFront,
+    /// Bring all to front and cascade the windows from the active one.
+    CascadeAll,
+    MinimizeAll,
+    ZoomAll,
+    ForceQuitDialog,
+}
+
+impl WindowCommand {
+    /// The version of `cupertino_menu_bar_v1` that adds the command.
+    fn since(self) -> u32 {
+        match self {
+            WindowCommand::HideApp
+            | WindowCommand::HideOthers
+            | WindowCommand::ShowAll
+            | WindowCommand::QuitApp
+            | WindowCommand::Minimize
+            | WindowCommand::Zoom
+            | WindowCommand::Close => 1,
+            WindowCommand::ToggleFullscreen
+            | WindowCommand::TileLeft
+            | WindowCommand::TileRight
+            | WindowCommand::TileFill
+            | WindowCommand::BringAllToFront
+            | WindowCommand::CascadeAll
+            | WindowCommand::MinimizeAll
+            | WindowCommand::ZoomAll
+            | WindowCommand::ForceQuitDialog => DEFAULT_MENUS_VERSION,
+        }
+    }
 }
 
 impl From<WindowCommand> for Command {
@@ -94,6 +212,15 @@ impl From<WindowCommand> for Command {
             WindowCommand::Minimize => Command::Minimize,
             WindowCommand::Zoom => Command::Zoom,
             WindowCommand::Close => Command::Close,
+            WindowCommand::ToggleFullscreen => Command::ToggleFullscreen,
+            WindowCommand::TileLeft => Command::TileLeft,
+            WindowCommand::TileRight => Command::TileRight,
+            WindowCommand::TileFill => Command::TileFill,
+            WindowCommand::BringAllToFront => Command::BringAllToFront,
+            WindowCommand::CascadeAll => Command::CascadeAll,
+            WindowCommand::MinimizeAll => Command::MinimizeAll,
+            WindowCommand::ZoomAll => Command::ZoomAll,
+            WindowCommand::ForceQuitDialog => Command::ForceQuitDialog,
         }
     }
 }
@@ -143,9 +270,19 @@ impl MenuBar {
         self.proxy.set_menu_open(u32::from(open));
     }
 
-    /// Run a command on the active application or window at the time the server handles it.
+    /// Run a command on the active application or window at the time the server handles it. A command the
+    /// server's version lacks is not sent.
     pub fn window_command(&self, command: WindowCommand) {
-        self.proxy.window_command(command.into());
+        if self.proxy.version() >= command.since() {
+            self.proxy.window_command(command.into());
+        }
+    }
+
+    /// Show a window of the window list: unminimize, raise and focus it. Not sent before version 10.
+    pub fn activate_window(&self, id: u32) {
+        if self.proxy.version() >= DEFAULT_MENUS_VERSION {
+            self.proxy.activate_window(id);
+        }
     }
 
     /// Ask the session agent through the server (it answers only the server).
@@ -169,9 +306,19 @@ impl Drop for MenuBar {
 #[derive(Debug, Default)]
 pub(crate) struct GroupBuilder {
     update: MenuBarUpdate,
+    /// The server lists the windows in every group with `window_state`.
+    lists_windows: bool,
 }
 
 impl GroupBuilder {
+    /// The builder of a menu-bar object of `version`.
+    pub(crate) fn new(version: u32) -> Self {
+        Self {
+            update: MenuBarUpdate::default(),
+            lists_windows: version >= DEFAULT_MENUS_VERSION,
+        }
+    }
+
     /// Add an event; the finished group when it was a `done`. An empty group yields nothing.
     pub(crate) fn push(&mut self, event: cupertino_menu_bar_v1::Event) -> Option<MenuBarUpdate> {
         use cupertino_menu_bar_v1::Event;
@@ -221,7 +368,43 @@ impl GroupBuilder {
                     WEnum::Value(_) | WEnum::Unknown(_) => SessionAgent::None,
                 })
             }
+            Event::AppWindow { id, title, flags } => {
+                let flags = match flags {
+                    WEnum::Value(flags) => flags,
+                    WEnum::Unknown(bits) => AppWindowFlags::from_bits_truncate(bits),
+                };
+                self.update
+                    .windows
+                    .get_or_insert_with(Vec::new)
+                    .push(AppWindow {
+                        id,
+                        title,
+                        active: flags.contains(AppWindowFlags::Active),
+                        minimized: flags.contains(AppWindowFlags::Minimized),
+                    })
+            }
+            Event::Shortcut { action, chord } => {
+                let shortcuts = self.update.shortcuts.get_or_insert_with(Shortcuts::default);
+                if let Some(action) = BoundAction::from_wire(action) {
+                    if chord.is_empty() {
+                        shortcuts.chords.remove(&action);
+                    } else {
+                        shortcuts.chords.insert(action, chord);
+                    }
+                }
+            }
+            Event::PrimaryModifier { key } => {
+                let shortcuts = self.update.shortcuts.get_or_insert_with(Shortcuts::default);
+                match key {
+                    WEnum::Value(ModifierKey::Super) => shortcuts.primary = PrimaryModifier::Super,
+                    WEnum::Value(ModifierKey::Ctrl) => shortcuts.primary = PrimaryModifier::Ctrl,
+                    WEnum::Value(_) | WEnum::Unknown(_) => {}
+                }
+            }
             Event::Done => {
+                if self.lists_windows && self.update.window_state.is_some() {
+                    self.update.windows.get_or_insert_with(Vec::new);
+                }
                 let update = std::mem::take(&mut self.update);
                 return (update != MenuBarUpdate::default()).then_some(update);
             }
@@ -278,7 +461,131 @@ mod tests {
                 engage: false,
                 screen_capture: None,
                 session_agent: None,
+                windows: None,
+                shortcuts: None,
             }]
+        );
+    }
+
+    fn feed_version_10(events: Vec<Event>) -> Vec<MenuBarUpdate> {
+        let mut group = GroupBuilder::new(10);
+        events.into_iter().filter_map(|e| group.push(e)).collect()
+    }
+
+    fn window_state() -> Event {
+        Event::WindowState {
+            can_zoom: 1,
+            workspace: 1,
+            workspaces: 1,
+        }
+    }
+
+    #[test]
+    fn the_window_list_comes_with_the_window_state() {
+        let updates = feed_version_10(vec![
+            window_state(),
+            Event::AppWindow {
+                id: 7,
+                title: "notes.txt".into(),
+                flags: WEnum::Value(AppWindowFlags::Active),
+            },
+            Event::AppWindow {
+                id: 3,
+                title: "draft.txt".into(),
+                flags: WEnum::Value(AppWindowFlags::Minimized),
+            },
+            Event::Done,
+            window_state(),
+            Event::Done,
+            Event::Engage,
+            Event::Done,
+        ]);
+        assert_eq!(
+            updates[0].windows,
+            Some(vec![
+                AppWindow {
+                    id: 7,
+                    title: "notes.txt".into(),
+                    active: true,
+                    minimized: false,
+                },
+                AppWindow {
+                    id: 3,
+                    title: "draft.txt".into(),
+                    active: false,
+                    minimized: true,
+                },
+            ])
+        );
+        assert_eq!(updates[1].windows, Some(vec![]), "the app has no window");
+        assert_eq!(updates[2].windows, None, "no window state, no list");
+        assert_eq!(
+            feed(vec![window_state(), Event::Done])[0].windows,
+            None,
+            "a version 9 server lists no windows"
+        );
+    }
+
+    #[test]
+    fn the_shortcut_group_names_the_chords_and_the_primary_modifier() {
+        let updates = feed_version_10(vec![
+            Event::Shortcut {
+                action: WEnum::Value(WireBoundAction::QuitApp),
+                chord: "Ctrl+q".into(),
+            },
+            Event::Shortcut {
+                action: WEnum::Value(WireBoundAction::TileLeft),
+                chord: "Ctrl+Super+Left".into(),
+            },
+            Event::Shortcut {
+                action: WEnum::Value(WireBoundAction::Zoom),
+                chord: String::new(),
+            },
+            Event::PrimaryModifier {
+                key: WEnum::Value(ModifierKey::Ctrl),
+            },
+            Event::Done,
+        ]);
+        let shortcuts = updates[0].shortcuts.as_ref().unwrap();
+        assert_eq!(shortcuts.chord(BoundAction::QuitApp), Some("Ctrl+q"));
+        assert_eq!(
+            shortcuts.chord(BoundAction::TileLeft),
+            Some("Ctrl+Super+Left")
+        );
+        assert_eq!(shortcuts.chord(BoundAction::Zoom), None, "unbound");
+        assert_eq!(shortcuts.chord(BoundAction::Minimize), None, "not sent");
+        assert_eq!(shortcuts.primary, PrimaryModifier::Ctrl);
+        assert_eq!(updates[0].windows, None);
+    }
+
+    #[test]
+    fn unknown_enum_values_are_ignored() {
+        let updates = feed_version_10(vec![
+            Event::Shortcut {
+                action: WEnum::Unknown(99),
+                chord: "Super+x".into(),
+            },
+            Event::PrimaryModifier {
+                key: WEnum::Unknown(7),
+            },
+            window_state(),
+            Event::AppWindow {
+                id: 1,
+                title: "a".into(),
+                flags: WEnum::Unknown(0b101),
+            },
+            Event::Done,
+        ]);
+        assert_eq!(updates[0].shortcuts, Some(Shortcuts::default()));
+        assert_eq!(
+            updates[0].windows,
+            Some(vec![AppWindow {
+                id: 1,
+                title: "a".into(),
+                active: true,
+                minimized: false,
+            }]),
+            "unknown flag bits are dropped"
         );
     }
 

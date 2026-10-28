@@ -1,12 +1,12 @@
 // cupertino-layers --graph current
-// 69 crates, 271 internal dependencies
-// per layer: foundation 14, models 11, platform 7, render 19, core 1, shell 9, services 4, apps 2, tools 2
+// 69 crates, 272 internal dependencies
+// per layer: foundation 15, models 9, platform 7, render 20, core 1, shell 9, services 4, apps 2, tools 2
 // forbidden edges: none
 // denied paths ui -> core, shell, services: none
 digraph "current" {
   node [shape=box];
   subgraph "cluster_foundation" {
-    label="foundation (14)";
+    label="foundation (15)";
     "cupertino-animation";
     "cupertino-apps";
     "cupertino-assets";
@@ -14,6 +14,7 @@ digraph "current" {
     "cupertino-filepicker";
     "cupertino-geometry";
     "cupertino-icons";
+    "cupertino-keyboard";
     "cupertino-menu-model";
     "cupertino-modifiers";
     "cupertino-test-bus";
@@ -23,17 +24,15 @@ digraph "current" {
     "xkbcommon";
   }
   subgraph "cluster_models" {
-    label="models (11)";
+    label="models (9)";
     "cupertino-displays";
     "cupertino-effects";
     "cupertino-input";
-    "cupertino-keyboard";
     "cupertino-login-ipc";
     "cupertino-overview";
     "cupertino-render-api";
     "cupertino-scene";
     "cupertino-stage";
-    "cupertino-text-field";
     "cupertino-wm";
   }
   subgraph "cluster_platform" {
@@ -47,7 +46,7 @@ digraph "current" {
     "cupertino-seat";
   }
   subgraph "cluster_render" {
-    label="render (19)";
+    label="render (20)";
     "cupertino-app-protocols";
     "cupertino-cursor";
     "cupertino-decorations";
@@ -56,6 +55,7 @@ digraph "current" {
     "cupertino-protocol-app";
     "cupertino-protocols";
     "cupertino-shell-client";
+    "cupertino-text-field";
     "cupertino-ui-controls";
     "cupertino-ui-core";
     "cupertino-ui-layout";
@@ -332,6 +332,7 @@ digraph "current" {
   "cupertino-text-field" -> "cupertino-defaults";
   "cupertino-text-field" -> "cupertino-keyboard";
   "cupertino-text-field" -> "cupertino-modifiers";
+  "cupertino-text-field" -> "cupertino-ui-text";
   "cupertino-theme" -> "cupertino-animation";
   "cupertino-ui-controls" -> "cupertino-ui-core";
   "cupertino-ui-controls" -> "cupertino-ui-layout";

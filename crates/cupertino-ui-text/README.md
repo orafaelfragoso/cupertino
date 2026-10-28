@@ -11,3 +11,8 @@ buffer follow.
 - `Preedit`, `ImeBatch` and `Surrounding` print lengths in `Debug`, never the text.
 - `TextInputSession::state` sends a protected field's own rectangle and no text; `Surrounding::around` cuts the
   bounded window around the caret on grapheme boundaries.
+- `TextBuffer` is the single-line editing model that used to be `cupertino-text-field`'s: grapheme caret and selection,
+  undo, kill buffer, composition range, click counting, caret blink and scroll. It takes no key codes; the apps' adapter
+  maps keys onto its methods.
+- `Surrounding::around` costs the window, not the document; a text that is one huge run of regional indicators (flags)
+  is the exception, because the boundary rule scans back over the run.

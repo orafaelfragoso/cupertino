@@ -4,7 +4,7 @@ use cupertino_keyboard::{BindingTable, TextAction};
 use cupertino_modifiers::Profile;
 
 use crate::keymap::Command;
-use crate::{KeyInput, Keymap, Response, TextField};
+use crate::{KeyInput, Keymap, Response, TextField, TextFieldKeys};
 
 const A: u32 = 30;
 const C: u32 = 46;

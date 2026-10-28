@@ -48,10 +48,10 @@ A crate's layer is declared in its manifest (`[package.metadata.cupertino] layer
 
 | Layer | Crates | May depend on |
 |---|---|---|
-| `foundation` | cupertino-animation, -apps, -assets, -defaults, -filepicker, -geometry, -icons, -menu-model, -modifiers, -theme, -thumbnails, -typeahead, -xkbcommon | `foundation` |
-| `models` (pure logic, no I/O) | cupertino-displays, -effects, -input, -keyboard, -login-ipc, -overview, -stage, -text-field, -wm | `foundation`, `models` |
+| `foundation` | cupertino-animation, -apps, -assets, -defaults, -filepicker, -geometry, -icons, -keyboard, -menu-model, -modifiers, -theme, -thumbnails, -typeahead, -xkbcommon | `foundation` |
+| `models` (pure logic, no I/O) | cupertino-displays, -effects, -input, -login-ipc, -overview, -stage, -wm | `foundation`, `models` |
 | `platform` (kernel interfaces only) | cupertino-alsa, -bluetooth, -devices, -evdev, -netlink, -peer, -seat | `foundation`, `platform` |
-| `render` | cupertino-app-protocols, -client, -cursor, -decorations, -glass, -kit, -protocol-app, -protocols, -shell-client, -ui-controls, -ui-core, -ui-layout, -ui-menus, -ui-platform, -ui-render, -ui-test, -ui-text, -ui-theme, -ui-wayland, -wayland-client | `foundation`, `platform`, `render` |
+| `render` | cupertino-app-protocols, -client, -cursor, -decorations, -glass, -kit, -protocol-app, -protocols, -shell-client, -text-field, -ui-controls, -ui-core, -ui-layout, -ui-menus, -ui-platform, -ui-render, -ui-test, -ui-text, -ui-theme, -ui-wayland, -wayland-client | `foundation`, `platform`, `render` |
 | `core` | cupertino-server | `foundation`, `models`, `platform`, `render` |
 | `shell` | cupertino-controlcenter, -dock, -launcher, -login, -menubar, -notifications, -osd, -screenshot, -windowmanager | `foundation`, `models`, `platform`, `render` |
 | `services` | cupertino-btd, -netd, -powerd, -sessiond | as `shell` |

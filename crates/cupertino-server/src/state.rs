@@ -58,7 +58,7 @@ use crate::dock::Docks;
 use crate::fx::Effects;
 use crate::input::{ActionContext, ActionPlan, KeyRouter, ShellOp};
 use crate::kbd::CapsDebounce;
-use crate::menu_bar::MenuBars;
+use crate::menu_bar::{cut_text, MenuBars};
 use crate::overlays::Overlays;
 use crate::policy;
 use crate::protocols::MenuProtocols;
@@ -1032,7 +1032,7 @@ impl Cupertino {
         self.apply_pending_menu_addresses(id.0, &surface);
         let handle = self
             .foreign_toplevel_state
-            .new_toplevel::<Self>(&params.title, &identity);
+            .new_toplevel::<Self>(cut_text(&params.title), cut_text(&identity));
         self.windows[idx].foreign = Some(handle);
         let now = self.now();
         let fx = self.wm.handle(Command::Map(params), now);

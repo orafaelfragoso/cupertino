@@ -89,6 +89,14 @@ struct Dock {
     sent: Option<BTreeMap<u32, WindowInfo>>,
 }
 
+impl Dock {
+    /// The `unresponsive` event for `app_id`: the one place the application id is cut for it.
+    fn send_unresponsive(&self, app_id: &str, unresponsive: bool) {
+        self.resource
+            .unresponsive(cut_text(app_id).to_owned(), u32::from(unresponsive));
+    }
+}
+
 /// The docks of the dock process, at most one per output.
 #[derive(Default)]
 pub struct Docks {
@@ -113,7 +121,7 @@ impl Docks {
     /// Tell every dock the server started a program.
     pub fn launching(&self, app_id: &str) {
         for dock in &self.docks {
-            dock.resource.launching(app_id.to_string());
+            dock.resource.launching(cut_text(app_id).to_owned());
             dock.resource.done();
         }
     }
@@ -121,8 +129,7 @@ impl Docks {
     /// Tell every dock that `app_id` stopped answering its pings (`unresponsive` true) or answers again.
     pub fn unresponsive(&self, app_id: &str, unresponsive: bool) {
         for dock in self.docks.iter().filter(|d| d.resource.version() >= 4) {
-            dock.resource
-                .unresponsive(app_id.to_string(), u32::from(unresponsive));
+            dock.send_unresponsive(app_id, unresponsive);
             dock.resource.done();
         }
     }
@@ -148,7 +155,7 @@ impl Docks {
     /// Tell every dock that `app_id` asked for attention.
     pub fn attention(&self, app_id: &str) {
         for dock in &self.docks {
-            dock.resource.attention(app_id.to_string());
+            dock.resource.attention(cut_text(app_id).to_owned());
             dock.resource.done();
         }
     }
@@ -232,7 +239,7 @@ fn send_overview(resource: &CupertinoDockV1, g: &OverviewGroup) {
     let a = g.area;
     resource.overview_changed(
         g.mode,
-        g.app_id.clone(),
+        cut_text(&g.app_id).to_owned(),
         a.x.round() as i32,
         a.y.round() as i32,
         a.w.round() as i32,
@@ -245,7 +252,7 @@ fn send_overview(resource: &CupertinoDockV1, g: &OverviewGroup) {
 fn send_switcher(resource: &CupertinoDockV1, output: &WlOutput, state: &SwitcherState) {
     resource.switcher_output(output);
     for app in &state.apps {
-        resource.switcher_entry(app.clone());
+        resource.switcher_entry(cut_text(app).to_owned());
     }
     resource.switcher_changed(state.selected as u32);
     resource.done();
@@ -336,7 +343,7 @@ impl Cupertino {
         {
             let unresponsive = self.unresponsive_apps();
             for app_id in &unresponsive {
-                dock.resource.unresponsive(app_id.clone(), 1);
+                dock.send_unresponsive(app_id, true);
             }
             if !unresponsive.is_empty() {
                 dock.resource.done();

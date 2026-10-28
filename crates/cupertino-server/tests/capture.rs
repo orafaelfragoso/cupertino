@@ -199,6 +199,15 @@ impl Dispatch<xdg_surface::XdgSurface, wl_surface::WlSurface> for App {
 
 /// Map the application's toplevel and let its opening animation settle; returns the client and the window frame.
 fn mapped_app(h: &mut Harness) -> (TestClient<App>, cupertino_wm::Rect) {
+    mapped_app_named(h, APP_ID, None)
+}
+
+/// [`mapped_app`] with another application id, and a title when one is given.
+fn mapped_app_named(
+    h: &mut Harness,
+    app_id: &str,
+    title: Option<&str>,
+) -> (TestClient<App>, cupertino_wm::Rect) {
     let stream = UnixStream::connect(h.socket_path()).unwrap();
     let mut app = TestClient::connect(h, stream, App::default());
     let qh = app.qh();
@@ -208,7 +217,10 @@ fn mapped_app(h: &mut Harness) -> (TestClient<App>, cupertino_wm::Rect) {
     let surface = compositor.create_surface(&qh, ());
     let xdg = wm_base.get_xdg_surface(&surface, &qh, surface.clone());
     let toplevel = xdg.get_toplevel(&qh, ());
-    toplevel.set_app_id(APP_ID.to_string());
+    toplevel.set_app_id(app_id.to_string());
+    if let Some(title) = title {
+        toplevel.set_title(title.to_string());
+    }
     surface.commit();
     app.state._window = Some((wm_base, xdg, toplevel));
     h.clients_until(&mut [&mut app], "the toplevel to be mapped", |s| {
@@ -252,6 +264,8 @@ struct Capturer {
         String,
         String,
     )>,
+    /// Every title the handles were sent, in order.
+    titles: Vec<String>,
     session: SessionSeen,
     frame: FrameSeen,
     /// The window feed's last complete group, and the group being received.
@@ -321,6 +335,7 @@ impl Dispatch<ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1, ()> fo
             ext_foreign_toplevel_handle_v1::Event::Identifier { identifier } => {
                 entry.2 = identifier
             }
+            ext_foreign_toplevel_handle_v1::Event::Title { title } => state.titles.push(title),
             _ => {}
         }
     }
@@ -738,6 +753,39 @@ fn a_second_frame_waits_for_a_change_and_reports_only_the_changed_area() {
         "the damage covers both cursor places: {damage:?}"
     );
     assert_eq!(capture.pixel(moved.0 as i32 - 40, moved.1 as i32), RED);
+}
+
+#[test]
+fn a_foreign_toplevel_title_and_application_id_longer_than_the_limit_are_cut_at_a_character_boundary(
+) {
+    let Some(mut h) = Harness::new() else { return };
+    // 4000 bytes, and a two-byte character spans byte 1024
+    let long = format!("{}é{}", "a".repeat(1023), "b".repeat(4000 - 1025));
+    let (mut app, _) = mapped_app_named(&mut h, &long, Some(&long));
+    let mut c = TestClient::privileged(&mut h);
+    let qh = c.qh();
+    let _list: ext_foreign_toplevel_list_v1::ExtForeignToplevelListV1 =
+        c.globals.bind(&qh, 1..=1, ()).unwrap();
+    let cut = "a".repeat(1023);
+    h.pump_until(&mut c, "the cut identity of the toplevel", |s| {
+        s.toplevels.iter().any(|t| t.1 == cut) && s.titles.contains(&cut)
+    });
+    // a later change is cut the same way
+    let changed = format!("{}é{}", "c".repeat(1023), "d".repeat(2000));
+    app.state._window.as_ref().unwrap().2.set_title(changed);
+    app.pump();
+    let cut_changed = "c".repeat(1023);
+    h.pump_until(&mut c, "the changed title", |s| {
+        s.titles.contains(&cut_changed)
+    });
+    assert!(c.state.titles.iter().all(|t| t.len() <= 1024));
+    // so is a later change of the application id
+    let changed_id = format!("{}é{}", "e".repeat(1023), "f".repeat(2000));
+    app.state._window.as_ref().unwrap().2.set_app_id(changed_id);
+    app.pump();
+    h.pump_until(&mut c, "the changed application id", |s| {
+        s.toplevels.iter().any(|t| t.1 == "e".repeat(1023))
+    });
 }
 
 #[test]

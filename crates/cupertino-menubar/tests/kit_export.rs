@@ -5,10 +5,10 @@
 use std::process::{Command, Stdio};
 
 use cupertino_menu_model::standard::{self, Features};
-use cupertino_menu_model::{Modifier, ModifierMap, PhysicalModifier};
 use cupertino_menubar::dbus::gtk::GtkMenuClient;
 use cupertino_menubar::item::MenuItem;
 use cupertino_menubar::source::GtkMenuProps;
+use cupertino_modifiers::Profile;
 use cupertino_ui_menus::{Exporter, WindowId};
 use zbus::block_on;
 
@@ -42,31 +42,6 @@ impl Drop for PrivateBus {
     }
 }
 
-/// The cupertino profile: Primary is Super.
-struct Cupertino;
-
-impl ModifierMap for Cupertino {
-    fn physical(&self, m: Modifier) -> Option<PhysicalModifier> {
-        Some(match m {
-            Modifier::Primary => PhysicalModifier::Super,
-            Modifier::Ctrl => PhysicalModifier::Control,
-            Modifier::Alt => PhysicalModifier::Alt,
-            Modifier::Shift => PhysicalModifier::Shift,
-        })
-    }
-
-    fn logical(&self, p: PhysicalModifier) -> Option<Modifier> {
-        [
-            Modifier::Primary,
-            Modifier::Ctrl,
-            Modifier::Alt,
-            Modifier::Shift,
-        ]
-        .into_iter()
-        .find(|m| self.physical(*m) == Some(p))
-    }
-}
-
 fn find<'a>(items: &'a [MenuItem], label: &str) -> Option<&'a MenuItem> {
     items.iter().find_map(|item| {
         (item.label == label)
@@ -82,8 +57,13 @@ fn the_bar_reads_the_labels_a_kit_application_exports() {
         return;
     };
     let exporting = zbus::blocking::connection::Builder::address(bus.address.as_str()).unwrap();
-    let mut exporter =
-        Exporter::new(exporting, "org.example.Notes", Box::new(Cupertino), |_| {}).unwrap();
+    let mut exporter = Exporter::new(
+        exporting,
+        "org.example.Notes",
+        Box::new(Profile::cupertino()),
+        |_| {},
+    )
+    .unwrap();
     let features = Features {
         about: true,
         new: Some("New my_note".to_string()),

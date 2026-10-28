@@ -28,15 +28,14 @@
 
 use std::collections::{HashMap, HashSet};
 
-use cupertino_keyboard::modifiers::{
-    FnUsage, GlobeOutcome, GlobeTap, RawMods, GLOBE_DEFAULT_REPEAT_MS,
-};
+use cupertino_keyboard::modifiers::{FnUsage, GlobeOutcome, GlobeTap, GLOBE_DEFAULT_REPEAT_MS};
 use cupertino_keyboard::mouse_keys::{MouseKeys, PointerAction};
 use cupertino_keyboard::repeat::KeyRepeater;
 use cupertino_keyboard::rewrite::{decide, is_printable, ClientTarget, KeyPress, Rewrite};
 use cupertino_keyboard::slow_keys::{SlowKeys, SlowStep};
 use cupertino_keyboard::sticky_keys::StickyKeys;
 use cupertino_keyboard::switcher::Step;
+use cupertino_modifiers::RawMods;
 use smithay::backend::input::{ButtonState, KeyState};
 use smithay::input::keyboard::{xkb, KeyboardTarget, Keycode, ModifiersState, SerializedMods};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;

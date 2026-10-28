@@ -7,3 +7,6 @@ description = "Typed application menus shared by CupertinoKit and the menu bar: 
 
 [package.metadata.cupertino]
 layer = "foundation"
+
+[dependencies]
+cupertino-modifiers = { path = "../cupertino-modifiers" }

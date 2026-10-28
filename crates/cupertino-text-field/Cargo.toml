@@ -11,4 +11,5 @@ layer = "models"
 [dependencies]
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-keyboard = { path = "../cupertino-keyboard" }
+cupertino-modifiers = { path = "../cupertino-modifiers" }
 unicode-segmentation = "1.13"

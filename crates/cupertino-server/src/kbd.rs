@@ -53,13 +53,14 @@ use cupertino_defaults::keyboard::{
 };
 use cupertino_input::{Action as InputAction, KeyCombo, Modifiers, ScreenshotRequest, ShortcutMap};
 use cupertino_keyboard::keys::{Key, NamedKey};
-use cupertino_keyboard::modifiers::{FnUsage, ModifierProfile, RawMods};
+use cupertino_keyboard::modifiers::{FnUsage, ModifierProfile};
 use cupertino_keyboard::repeat::{CapsLockDelay, RepeatConfig, RepeatInfo, CAPS_HOLD_DEFAULT_MS};
 use cupertino_keyboard::rewrite::ClientClass;
 use cupertino_keyboard::shortcuts::{ShortcutSet, SystemAction};
 use cupertino_keyboard::switcher::{self, Step, SwitchEvent, Switcher};
 use cupertino_keyboard::xkb::{Keyboard, Level3Keys};
 use cupertino_keyboard::{mouse_keys, slow_keys};
+use cupertino_modifiers::RawMods;
 use smithay::input::keyboard::{keysyms, xkb, ModifiersState};
 
 use crate::input::Mods;
@@ -378,7 +379,7 @@ impl KeyboardSettings {
             }
         }
         let l = self.modifier_profile().translate(RawMods(raw));
-        use cupertino_keyboard::keys::Mods as L;
+        use cupertino_modifiers::Mods as L;
         Mods {
             ctrl: l.contains(L::CTRL),
             alt: l.contains(L::ALT),
@@ -528,7 +529,7 @@ pub fn merge_reference_shortcuts(map: &mut ShortcutMap, set: &ShortcutSet) -> Me
             report.unsupported.push(*a);
             continue;
         };
-        use cupertino_keyboard::keys::Mods as L;
+        use cupertino_modifiers::Mods as L;
         // the table's logical primary modifier is Super in this compositor (`ModifierProfile` translates the rest)
         let mods = Modifiers::new(
             chord.mods.contains(L::SHIFT),

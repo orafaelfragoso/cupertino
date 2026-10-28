@@ -30,8 +30,6 @@ use cupertino_keyboard::accent::{
 use cupertino_keyboard::switcher::{self, Step};
 use cupertino_modifiers::Mods as KMods;
 use smithay::backend::input::KeyState;
-#[cfg(scene_oracle)]
-use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::input::keyboard::{keysyms, Keycode, Layout, XkbConfig};
 use smithay::utils::{Logical, Rectangle};
 use tiny_skia::{FillRule, Paint, Pixmap, Transform};
@@ -40,16 +38,10 @@ use crate::input::{Action, KeyBindings, Mods};
 use crate::kbd::{hud_size, AccentSettings, CapsStep, HudView};
 use crate::overlays::OverlayKey;
 use crate::render::image::debug_sig;
-#[cfg(scene_oracle)]
-use crate::render::image::image_element;
 use cupertino_scene::SceneKind;
 
 use crate::render::compose::{image_piece, Piece};
 use crate::render::scene::{material_layer, rrect_item, shadow_item, SceneParams, WindowPlan};
-#[cfg(scene_oracle)]
-use crate::render::shader_rect::ElementKey;
-#[cfg(scene_oracle)]
-use crate::render::CupertinoElement;
 use crate::state::Cupertino;
 
 /// Font size of HUD rows and accent cells in points (approximate).
@@ -1133,184 +1125,6 @@ pub fn accent_popup(p: &mut SceneParams<'_>) -> Vec<Piece> {
         12.0,
         1.0,
     ));
-    els
-}
-
-#[cfg(scene_oracle)]
-/// The input-source HUD (centre of the primary output while it is open or fading).
-pub fn input_hud_legacy(
-    renderer: &mut GlesRenderer,
-    p: &mut SceneParams<'_>,
-) -> Vec<CupertinoElement> {
-    if p.wm.outputs().first().map(|o| o.id) != Some(p.output_id) {
-        return Vec::new();
-    }
-    let Some(view) = p.overlays.inputs.hud.clone() else {
-        return Vec::new();
-    };
-    let alpha = view.alpha(p.now) as f32;
-    if alpha <= 0.002 || view.labels.is_empty() {
-        return Vec::new();
-    }
-    let (scale, dark) = (p.scale, p.config.is_dark());
-    let px = FONT_PT * scale as f32;
-    let overlays = &mut *p.overlays;
-    let text = &mut overlays.text;
-    text.set_scale(scale as f32);
-    let (w, h) = hud_size(&view.labels, |l| f64::from(text.width(l, px, 400)) / scale);
-    // the placement is unknown: centred
-    let (x, y) = (
-        ((p.rect.w - w) / 2.0).round(),
-        ((p.rect.h - h) / 2.0).round(),
-    );
-    let sig = debug_sig(&(
-        &view.order,
-        &view.labels,
-        view.selection,
-        (w.to_bits(), h.to_bits()),
-        scale.to_bits(),
-        dark,
-    ));
-    let cut = overlays.images.get(("input-hud", 0), sig, || {
-        render_hud(&view, (w, h), scale, dark, text)
-    });
-    let mut els: Vec<CupertinoElement> = Vec::new();
-    if let Some((buf, px, _)) = cut {
-        if let Some(e) = image_element(renderer, &buf, px, x, y, scale, alpha) {
-            els.push(e);
-        }
-    }
-    let area = Rectangle::<f64, Logical>::new((x, y).into(), (w, h).into());
-    // white tint of the panel (white at 0.35) over the material
-    let (white, tint_alpha) = switcher::HUD_TINT_WHITE_ALPHA;
-    let tint = [white as f32, white as f32, white as f32, tint_alpha as f32];
-    els.push(
-        crate::render::legacy_scene::rrect(
-            p,
-            ElementKey::new("input-hud-tint", 0),
-            area,
-            switcher::HUD_CORNER_RADIUS,
-            true,
-            tint,
-            None,
-            alpha,
-        )
-        .into(),
-    );
-    els.extend(crate::render::legacy_scene::material_layer(
-        p,
-        ElementKey::new("input-hud-material", 0),
-        MATERIAL,
-        area,
-        switcher::HUD_CORNER_RADIUS,
-        alpha,
-    ));
-    let params = p.decor.popup_shadow_params();
-    let plan = WindowPlan {
-        visual: cupertino_wm::Rect::new(p.rect.x + x, p.rect.y + y, w, h),
-        scale_x: 1.0,
-        scale_y: 1.0,
-        opacity: 1.0,
-        shadow: 1.0,
-        exact: true,
-        corner: None,
-    };
-    if let Some(s) = crate::render::legacy_scene::shadow_with(
-        p,
-        ElementKey::new("input-hud-shadow", 0),
-        &params,
-        &plan,
-        switcher::HUD_CORNER_RADIUS,
-        f64::from(alpha),
-    ) {
-        els.push(s.into());
-    }
-    els
-}
-
-#[cfg(scene_oracle)]
-/// The accent popup next to its anchor.
-pub fn accent_popup_legacy(
-    renderer: &mut GlesRenderer,
-    p: &mut SceneParams<'_>,
-) -> Vec<CupertinoElement> {
-    let Some(popup) = p.overlays.accent.popup.clone() else {
-        return Vec::new();
-    };
-    let anchor_center = (
-        popup.anchor.x() + popup.anchor.width() / 2.0,
-        popup.anchor.y() + popup.anchor.height() / 2.0,
-    );
-    let rect = GRect::new(p.rect.x, p.rect.y, p.rect.w, p.rect.h);
-    if !rect.contains(cupertino_geometry::Point::new(
-        anchor_center.0,
-        anchor_center.1,
-    )) {
-        return Vec::new();
-    }
-    let layout = accent_layout(
-        &popup,
-        rect,
-        if p.config.shell.show_menu_bar {
-            p.config.shell.menu_bar_height
-        } else {
-            0.0
-        },
-    );
-    let (scale, dark) = (p.scale, p.config.is_dark());
-    let overlays = &mut *p.overlays;
-    let text = &mut overlays.text;
-    text.set_scale(scale as f32);
-    let sig = debug_sig(&(
-        &popup.candidates,
-        popup.focused,
-        (
-            layout.rect.x.to_bits(),
-            layout.rect.y.to_bits(),
-            layout.rect.w.to_bits(),
-        ),
-        scale.to_bits(),
-        dark,
-    ));
-    let cut = overlays.images.get(("accent", 0), sig, || {
-        render_accent(&popup, &layout, scale, dark, text)
-    });
-    let r = layout.rect;
-    let mut els: Vec<CupertinoElement> = Vec::new();
-    if let Some((buf, px, _)) = cut {
-        if let Some(e) = image_element(renderer, &buf, px, r.x, r.y, scale, 1.0) {
-            els.push(e);
-        }
-    }
-    let area = Rectangle::<f64, Logical>::new((r.x, r.y).into(), (r.w, r.h).into());
-    els.extend(crate::render::legacy_scene::material_layer(
-        p,
-        ElementKey::new("accent-material", 0),
-        MATERIAL,
-        area,
-        12.0,
-        1.0,
-    ));
-    let params = p.decor.popup_shadow_params();
-    let plan = WindowPlan {
-        visual: cupertino_wm::Rect::new(p.rect.x + r.x, p.rect.y + r.y, r.w, r.h),
-        scale_x: 1.0,
-        scale_y: 1.0,
-        opacity: 1.0,
-        shadow: 1.0,
-        exact: true,
-        corner: None,
-    };
-    if let Some(s) = crate::render::legacy_scene::shadow_with(
-        p,
-        ElementKey::new("accent-shadow", 0),
-        &params,
-        &plan,
-        12.0,
-        1.0,
-    ) {
-        els.push(s.into());
-    }
     els
 }
 

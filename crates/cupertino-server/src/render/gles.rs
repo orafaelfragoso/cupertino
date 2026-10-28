@@ -39,10 +39,6 @@ impl Gles {
         let frame = resources.frame.take().ok_or(RenderError::Resources(
             "the frame's resources were used by an earlier render",
         ))?;
-        #[cfg(scene_oracle)]
-        if let Some(elements) = frame.prelowered {
-            return Ok(elements);
-        }
         let mut ctx = Lowering {
             renderer,
             programs: resources.programs,

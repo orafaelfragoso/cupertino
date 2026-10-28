@@ -216,6 +216,9 @@
       <description summary="whether the desktop's menu bar shows the window's menus">
         1 while a menu bar runs and shows the menus the client announces; the client then draws
         no menu bar inside the window. 0 while none runs; the client shows its menus itself.
+        From version 3 it is 1 only while menu_reader names a connection too: a menu bar that
+        cannot read the menus does not stand in for them. menu_reader comes before menu_bar 1,
+        and menu_bar 0 before menu_reader is emptied.
       </description>
       <arg name="shown" type="uint"/>
     </event>

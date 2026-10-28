@@ -48,7 +48,7 @@ pub enum AppEvent {
     /// The scroll count of one axis of the pointer frame being received; the frame's scroll follows.
     ScrollCount { vertical: bool, count: u32 },
     /// Whether the desktop's menu bar shows the menus `surface` announced; also sent once when its [`AppMenu`] is
-    /// created.
+    /// created. From version 3 it is true only while [`AppEvent::MenuReader`] names a connection, which arrives first.
     MenuBar { surface: SurfaceId, shown: bool },
     /// The unique bus name of the menu bar connection the server verified, the only peer that may use the menus
     /// `surface` announced (`Exporter::set_reader` of `cupertino-ui-menus`); `None` while there is none. Sent with

@@ -84,7 +84,8 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
 - **Surfaces.** A top-anchored layer surface per output (exclusive zone 0) with a `MenuBar` backdrop. The server reserves the
   space and owns hiding, revealing and dimming. Each open menu level is an `xdg_popup` with a `Menu` backdrop. The server
   draws the strip's material, so Reduce Transparency and Increase Contrast reach it there. The process keeps its palette
-  under the display options (no recorded contrast palette for the menu bar text and status items).
+  under the display options (no recorded contrast palette for the menu bar text and status items); either option makes
+  the bar solid, so its text stops following the wallpaper (*Backdrop* below).
 - **Menus.** The server's `cupertino_menu_bar_v1` feed names the active application and how its window exports menus:
   DBusMenu or GMenuModel. A window without menus gets the synthetic menus, whose actions go back as `window_command` /
   `move_to_workspace` / `activate_window`. From version 10 the feed also lists the application's windows and sends the
@@ -184,6 +185,16 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
     it). There is no input method in the bar.
 - **Session.** The labels follow the appearance the server announces over `cupertino_session_v1`, read at start and redrawn on
   every change. The material follows it in the server. On `locked` the bars close every open menu and title focus.
+- **Backdrop.** From shell version 14 the server sends each bar the lightness of its output's wallpaper under the strip
+  (`backdrop_luminance`, CIE L*/100 in thousandths), and each bar picks its own tone (`raster::BarTone`): dark text at
+  550 and above, light text at 450 and below, the last tone held in between. The first value, and the first after the
+  appearance or the display options changed, is decided afresh, splitting the band at 500. What follows the tone: the
+  labels, the application name, the clock, the system mark, the control panel glyph, the extras' symbols (each tinted
+  in both text colours when the icons load, and drawn in the one of the bar's tone), the dot of a status item without
+  an icon and the open title's highlight. What keeps the appearance: the menus and the screen capture indicator's
+  indigo. Third-party status items keep their own icons. Before the first value, below version 14, and while Increase
+  Contrast or Reduce Transparency makes the bar solid, the whole bar keeps the appearance's palette. A bar redraws only
+  when its tone changes.
 - **System menu.** The first slot draws the system mark (`cupertino_icons::system_mark`, tinted with the label colour) and
   opens `Extras::system_menu`: About This Computer, Settings…, Recent Items, Force Quit…, then Sleep, Restart…, Shut Down…, Lock Screen, Log
   Out <name>… and, when the session agent can switch, Login Window…, with separators between the groups. Every row and
@@ -251,7 +262,7 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   colour, dimmed to 0.4 when the radio is off or has no link; no signal-strength or charge-level variants) are approximate.
   Third-party status items keep their own icons (ARGB pixmap, absolute path or `hicolor`).
 - **approximate.** Bar height (24 pt), paddings, popup metrics, submenu open / close delays, the safe triangle, the
-  type-ahead timeout.
+  type-ahead timeout, the backdrop thresholds (550 and 450, split at 500 when decided afresh) and what the tone covers.
 
 **Text.** The `ui` font is a variable font whose optical size follows the point size, so every `TextRenderer` owner calls `set_scale` with the output scale before it draws and measures (`BarText` sets it from the output's scale on every measure and draw): text is laid out in points at the same optical size it is drawn with, at every output scale.
 

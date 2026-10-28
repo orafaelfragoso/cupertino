@@ -37,6 +37,13 @@ pub struct StatusState {
     pub menu: Option<MenuItem>,
 }
 
+/// A symbol of the bar's own items in the light and in the dark palette's text colour.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TintedIcon {
+    pub light_text: Pixmap,
+    pub dark_text: Pixmap,
+}
+
 /// State shared by the bars of all outputs.
 #[derive(Default)]
 pub struct Shared {
@@ -47,7 +54,7 @@ pub struct Shared {
     /// The bar's own items; they sit between the control panel and the other status items.
     pub extras: Extras,
     /// Icons of the bar's own items at the size the bars draw; `None` for a name the theme lacks.
-    pub extra_icons: HashMap<ExtraKind, Option<Pixmap>>,
+    pub extra_icons: HashMap<ExtraKind, Option<TintedIcon>>,
     /// The server reports a screen or window capture: the indicator shows next to the control panel.
     pub screen_capture: bool,
     /// The chords of the synthetic menus, from the server's shortcuts.
@@ -81,14 +88,22 @@ impl Shared {
         self.status.retain(|s| s.item.id != id);
     }
 
-    /// The icon of the status slot `id`: `None` when no item has the id, `Some(None)` for an item without an icon.
-    pub fn status_icon(&self, id: &str) -> Option<Option<&Pixmap>> {
+    /// The icon of the status slot `id`, a symbol of the bar's own items in the light text colour when `light_text`:
+    /// `None` when no item has the id, `Some(None)` for an item without an icon.
+    pub fn status_icon(&self, id: &str, light_text: bool) -> Option<Option<&Pixmap>> {
         if let Some(kind) = ExtraKind::from_slot_id(id) {
-            return self
-                .extras
-                .shown()
-                .contains(&kind)
-                .then(|| self.extra_icons.get(&kind).and_then(Option::as_ref));
+            return self.extras.shown().contains(&kind).then(|| {
+                self.extra_icons
+                    .get(&kind)
+                    .and_then(Option::as_ref)
+                    .map(|icon| {
+                        if light_text {
+                            &icon.light_text
+                        } else {
+                            &icon.dark_text
+                        }
+                    })
+            });
         }
         self.status
             .iter()
@@ -468,6 +483,7 @@ mod tests {
             engage_help: false,
             screen_capture: None,
             session_agent: None,
+            backdrop_lightness: None,
             windows: None,
             shortcuts: None,
         }
@@ -951,8 +967,8 @@ mod tests {
             ("Battery", "Battery 90%")
         );
         // an item without a themed icon is drawn as a dot, one that is not shown not at all
-        assert_eq!(shared.status_icon("extra:battery"), Some(None));
-        assert_eq!(shared.status_icon("extra:bluetooth"), None);
+        assert_eq!(shared.status_icon("extra:battery", false), Some(None));
+        assert_eq!(shared.status_icon("extra:bluetooth", false), None);
     }
 
     #[test]

@@ -311,6 +311,7 @@ mod tests {
                 engage_help: false,
                 screen_capture: None,
                 session_agent: None,
+                backdrop_lightness: None,
                 windows: None,
                 shortcuts: None,
             };
@@ -907,6 +908,7 @@ mod tests {
                 engage_help: false,
                 screen_capture: None,
                 session_agent: None,
+                backdrop_lightness: None,
                 windows: None,
                 shortcuts: None,
             },

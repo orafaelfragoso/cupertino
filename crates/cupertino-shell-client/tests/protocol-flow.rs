@@ -656,6 +656,10 @@ impl Dispatch<CupertinoShellV1, ()> for Mock {
                 bar.menu_dbusmenu(":1.42".into(), "/MenuBar".into());
                 bar.window_state(1, 2, 4);
                 bar.done();
+                if bar.version() >= 14 {
+                    bar.backdrop_luminance(620);
+                    bar.done();
+                }
                 state.menu_bar = Some(bar);
             }
             cupertino_shell_v1::Request::GetDock { id, surface, .. } => {
@@ -840,10 +844,11 @@ impl Dispatch<ExtIdleNotifierV1, ()> for Mock {
 }
 
 /// Run the server on a thread until the test drops the control channel; `layer_shell` is whether it offers
-/// `zwlr_layer_shell_v1`.
+/// `zwlr_layer_shell_v1`, `shell_version` the version of `cupertino_shell_v1` it offers.
 fn spawn_server(
     stream: UnixStream,
     layer_shell: bool,
+    shell_version: u32,
 ) -> (Sender<Control>, Receiver<Committed>, Receiver<Seen>) {
     let (control_tx, control_rx) = channel::<Control>();
     let (committed_tx, committed_rx) = channel();
@@ -858,7 +863,7 @@ fn spawn_server(
         if layer_shell {
             dh.create_global::<Mock, ZwlrLayerShellV1, _>(4, ());
         }
-        dh.create_global::<Mock, CupertinoShellV1, _>(9, ());
+        dh.create_global::<Mock, CupertinoShellV1, _>(shell_version, ());
         dh.create_global::<Mock, XdgActivationV1, _>(1, ());
         dh.create_global::<Mock, XdgWmBase, _>(6, ());
         dh.create_global::<Mock, ExtSessionLockManagerV1, _>(1, ());
@@ -944,8 +949,21 @@ fn connect(
     Receiver<Committed>,
     Receiver<Seen>,
 ) {
+    connect_at(layer_shell, 9)
+}
+
+/// [`connect`] to a server that offers `cupertino_shell_v1` at `shell_version`.
+fn connect_at(
+    layer_shell: bool,
+    shell_version: u32,
+) -> (
+    Connection,
+    Sender<Control>,
+    Receiver<Committed>,
+    Receiver<Seen>,
+) {
     let (client_stream, server_stream) = UnixStream::pair().unwrap();
-    let (control, committed, seen) = spawn_server(server_stream, layer_shell);
+    let (control, committed, seen) = spawn_server(server_stream, layer_shell, shell_version);
     (
         Connection::from_stream(client_stream).unwrap(),
         control,
@@ -1033,7 +1051,21 @@ fn connected_layer_surface() -> (
     SurfaceId,
     Stash,
 ) {
-    let (mut conn, control, committed, seen) = connect(true);
+    connected_layer_surface_at(9)
+}
+
+/// [`connected_layer_surface`] on a server that offers `cupertino_shell_v1` at `shell_version`.
+fn connected_layer_surface_at(
+    shell_version: u32,
+) -> (
+    Connection,
+    Sender<Control>,
+    Receiver<Committed>,
+    Receiver<Seen>,
+    SurfaceId,
+    Stash,
+) {
+    let (mut conn, control, committed, seen) = connect_at(true, shell_version);
     let layer = layer_surface(&mut conn).surface();
     let mut stash = Stash::new();
     configured(&mut conn, &mut stash, layer);
@@ -1263,6 +1295,7 @@ fn menu_bar_groups_arrive_typed_and_requests_reach_the_server() {
             engage_help: false,
             screen_capture: None,
             session_agent: None,
+            backdrop_lightness: None,
             windows: None,
             shortcuts: None,
         }
@@ -1297,6 +1330,21 @@ fn menu_bar_groups_arrive_typed_and_requests_reach_the_server() {
             Seen::MenuOpen(false)
         ]
     );
+}
+
+#[test]
+fn a_version_14_server_tells_the_bar_the_backdrop_lightness() {
+    let (mut conn, _control, _committed, _seen, layer, mut stash) = connected_layer_surface_at(14);
+    let shell = Shell::bind(&mut conn).unwrap();
+    let _bar = shell.menu_bar(&conn, layer, conn.outputs()[0].id).unwrap();
+    flush(&mut conn, &mut stash);
+    let lightness = wait_for(&mut conn, &mut stash, |e| match shell_event(e) {
+        Some(ShellEvent::MenuBar { surface, update }) if *surface == layer => {
+            update.backdrop_lightness
+        }
+        _ => None,
+    });
+    assert_eq!(lightness, 620);
 }
 
 #[test]

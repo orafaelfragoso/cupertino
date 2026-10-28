@@ -450,3 +450,69 @@ fn a_log_out_that_reaches_nobody_shows_a_banner_and_one_that_is_delivered_or_end
     assert!(delivered.is_empty(), "{delivered:?}");
     assert!(fallback.is_empty(), "{fallback:?}");
 }
+
+#[test]
+fn the_notice_does_not_wait_for_the_notification_service() {
+    struct Silent;
+    #[zbus::interface(name = "org.freedesktop.Notifications")]
+    impl Silent {
+        #[allow(clippy::too_many_arguments)]
+        async fn notify(
+            &self,
+            _app_name: String,
+            _replaces_id: u32,
+            _app_icon: String,
+            _summary: String,
+            _body: String,
+            _actions: Vec<String>,
+            _hints: std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+            _expire_timeout: i32,
+        ) -> u32 {
+            std::future::pending().await
+        }
+    }
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: dbus-daemon is not available");
+        return;
+    };
+    zbus::block_on(async {
+        let _service = zbus::connection::Builder::address(bus.address.as_str())
+            .expect("address")
+            .name("org.freedesktop.Notifications")
+            .expect("name")
+            .serve_at("/org/freedesktop/Notifications", Silent)
+            .expect("object")
+            .build()
+            .await
+            .expect("connect");
+        let conn = zbus::connection::Builder::address(bus.address.as_str())
+            .expect("address")
+            .build()
+            .await
+            .expect("connect");
+        let (done, posted) = async_channel::bounded(1);
+        let task_conn = conn.clone();
+        conn.executor()
+            .spawn(
+                async move {
+                    cupertino_server::dbus::post_notice(
+                        &task_conn,
+                        cupertino_server::dbus::LogOutDropped::LoginProcessNotReady,
+                    )
+                    .await;
+                    let _ = done.send(()).await;
+                },
+                "notice",
+            )
+            .detach();
+        let mut waited = 0;
+        while posted.try_recv().is_err() {
+            assert!(
+                waited < 100,
+                "posting the notice waited for a service that never answers"
+            );
+            async_io::Timer::after(std::time::Duration::from_millis(20)).await;
+            waited += 1;
+        }
+    });
+}

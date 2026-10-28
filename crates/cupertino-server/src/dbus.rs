@@ -557,14 +557,32 @@ async fn owner_of(
         .get_connection_credentials(BusName::from(unique.as_ref()))
         .await
         .map_err(no_owner)?;
+    identify_before(
+        threads,
+        PathBuf::from("/proc"),
+        credentials,
+        client,
+        expires,
+    )?
+    .recv()
+    .await
+    .map_err(|_| OwnerRefusal::Unidentified)??;
+    Ok(unique.to_string())
+}
+
+/// [`identify_owner`], unless the check is past `expires`: its answer would be dropped, and a thread started for it would
+/// count against the client's limit after a slow bus.
+fn identify_before(
+    threads: (&Identifying, &Identifying),
+    proc_root: PathBuf,
+    credentials: ConnectionCredentials,
+    client: ProcessHandle,
+    expires: Instant,
+) -> Result<Identified, OwnerRefusal> {
     if Instant::now() >= expires {
         return Err(OwnerRefusal::TimedOut);
     }
-    identify_owner(threads, PathBuf::from("/proc"), credentials, client)?
-        .recv()
-        .await
-        .map_err(|_| OwnerRefusal::Unidentified)??;
-    Ok(unique.to_string())
+    identify_owner(threads, proc_root, credentials, client)
 }
 
 /// Whether the owner of the login process's name is the process `trust` names. Only its process id counts, so a process
@@ -803,6 +821,33 @@ mod tests {
             assert!(std::time::Instant::now() < end, "{alive} threads alive");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn a_check_past_its_deadline_starts_no_identification() {
+        let (all, client) = (Identifying::default(), Identifying::default());
+        let fine = scratch_proc(false);
+        let identify = |expires| {
+            identify_before(
+                (&all, &client),
+                fine.path().to_path_buf(),
+                own_credentials(),
+                ProcessHandle::open(std::process::id()).unwrap(),
+                expires,
+            )
+        };
+        let past = Instant::now() - std::time::Duration::from_millis(1);
+        assert!(matches!(identify(past), Err(OwnerRefusal::TimedOut)));
+        assert_eq!(all.load(Ordering::SeqCst), 0, "no thread started");
+        assert_eq!(
+            client.load(Ordering::SeqCst),
+            0,
+            "nothing counted for the client"
+        );
+
+        let ahead = Instant::now() + std::time::Duration::from_secs(10);
+        let answer = identify(ahead).unwrap().recv_blocking();
+        assert!(matches!(answer, Ok(Ok(()))), "{answer:?}");
     }
 
     #[test]

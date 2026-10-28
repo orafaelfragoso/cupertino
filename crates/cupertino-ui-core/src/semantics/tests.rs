@@ -64,6 +64,7 @@ fn pass(view: Element<M>) -> (Tree<M>, SemanticsPass) {
                 Placement {
                     rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                     clip: None,
+                    own_clip: None,
                 },
             )
         })

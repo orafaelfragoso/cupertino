@@ -1,6 +1,7 @@
-//! The paint pass. Each node paints in its own coordinates into its own [`PaintNode`]; the transform places it in
-//! the window and the clip is every clipping ancestor's, intersected, in the node's coordinates. A node repaints
-//! only when it changed or its size did, and keeps its paint revision otherwise, so the renderer can skip it.
+//! The paint pass. Each node paints in its own coordinates into its own [`PaintNode`], whose transform places it in
+//! the window. A node's clip is the one it puts on its descendants, in its coordinates; the renderer intersects the
+//! clips along the parent chain. Bounds cover what the node and its whole subtree draw, in window coordinates. A
+//! node repaints only when it changed or its size did, and keeps its paint revision otherwise.
 
 use crate::cx::PaintCx;
 use crate::route::Geometry;
@@ -198,7 +199,7 @@ impl Painter {
                 revision: painted.revision,
                 transform: Transform([1.0, 0.0, 0.0, 1.0, origin.x, origin.y]),
                 clip: placement
-                    .clip
+                    .own_clip
                     .map(|c| Shape::Rect(c.translate(-origin.x, -origin.y))),
                 bounds: bounds(placement.rect, painted.extent, placement.clip),
                 hit: placement
@@ -210,6 +211,19 @@ impl Painter {
             seen.insert(id);
         }
         self.nodes.retain(|id, _| seen.contains(id));
+        // Children come after their parent, so walking backwards widens each parent by its finished children.
+        let index: HashMap<PaintNodeId, usize> = list
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.id, i))
+            .collect();
+        for i in (0..list.nodes.len()).rev() {
+            let (bounds, parent) = (list.nodes[i].bounds, list.nodes[i].parent);
+            if let Some(&p) = parent.and_then(|p| index.get(&p)) {
+                list.nodes[p].bounds = list.nodes[p].bounds.union(&bounds);
+            }
+        }
         list
     }
 }

@@ -36,7 +36,14 @@ fn fixture() -> Fixture {
         (a, Rect::new(0.0, 0.0, 50.0, 50.0)),
         (b, Rect::new(50.0, 0.0, 50.0, 50.0)),
     ] {
-        geometry.insert(id, Placement { rect, clip: None });
+        geometry.insert(
+            id,
+            Placement {
+                rect,
+                clip: None,
+                own_clip: None,
+            },
+        );
     }
     Fixture {
         tree,

@@ -2,9 +2,9 @@
 
 use cupertino_defaults::keyboard::KeyboardSettings;
 use cupertino_keyboard::{
-    BindingTable, Chord, Key, ModifierProfile, Mods, NamedKey, RawMods, Resolution, Resolver,
-    TextAction,
+    BindingTable, Chord, Key, ModifierProfile, NamedKey, Resolution, Resolver, TextAction,
 };
+use cupertino_modifiers::{Mods, RawMods};
 
 /// Evdev codes of the named keys a field reads (`linux/input-event-codes.h`).
 const NAMED_KEYS: [(u32, NamedKey); 15] = [

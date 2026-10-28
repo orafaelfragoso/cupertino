@@ -10,7 +10,8 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use cupertino_menu_model::standard::{self, Features};
-use cupertino_menu_model::{ActionName, Modifier, ModifierMap, PhysicalModifier};
+use cupertino_menu_model::ActionName;
+use cupertino_modifiers::Profile;
 use cupertino_ui_menus::{Activation, DbusProperties, Exporter, WindowId};
 use zbus::blocking::proxy::SignalIterator;
 use zbus::blocking::{connection, Connection, Proxy};
@@ -101,39 +102,6 @@ macro_rules! private_bus {
     };
 }
 
-/// The two profiles of the menu bar spec.
-#[derive(Clone, Copy)]
-enum Profile {
-    Cupertino,
-    ClassicPc,
-}
-
-impl ModifierMap for Profile {
-    fn physical(&self, m: Modifier) -> Option<PhysicalModifier> {
-        Some(match (self, m) {
-            (_, Modifier::Shift) => PhysicalModifier::Shift,
-            (_, Modifier::Alt) => PhysicalModifier::Alt,
-            (Profile::Cupertino, Modifier::Primary) | (Profile::ClassicPc, Modifier::Ctrl) => {
-                PhysicalModifier::Super
-            }
-            (Profile::Cupertino, Modifier::Ctrl) | (Profile::ClassicPc, Modifier::Primary) => {
-                PhysicalModifier::Control
-            }
-        })
-    }
-
-    fn logical(&self, p: PhysicalModifier) -> Option<Modifier> {
-        [
-            Modifier::Shift,
-            Modifier::Primary,
-            Modifier::Ctrl,
-            Modifier::Alt,
-        ]
-        .into_iter()
-        .find(|m| self.physical(*m) == Some(p))
-    }
-}
-
 struct Fixture {
     _bus: PrivateBus,
     exporter: Exporter,
@@ -158,7 +126,7 @@ fn fixture(bus: PrivateBus) -> Fixture {
     let mut exporter = Exporter::new(
         bus.builder(),
         "org.example.Notes",
-        Box::new(Profile::Cupertino),
+        Box::new(Profile::cupertino()),
         move |a| {
             tx.lock().unwrap().send(a).unwrap();
         },
@@ -397,7 +365,7 @@ fn a_profile_change_rewrites_the_accelerators() {
     let menus = proxy(&f, &f.props.menubar_path, "org.gtk.Menus");
     let changed = menus.receive_signal("Changed").unwrap();
     f.exporter
-        .set_modifier_map(Box::new(Profile::ClassicPc))
+        .set_modifier_map(Box::new(Profile::classic_pc()))
         .unwrap();
     next_signal(changed);
     let bar = read_menus(&f, &f.props.menubar_path);

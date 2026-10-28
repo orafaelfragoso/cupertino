@@ -47,6 +47,7 @@ cupertino-cursor = { path = "../cupertino-cursor" }
 cupertino-effects = { path = "../cupertino-effects" }
 cupertino-input = { path = "../cupertino-input" }
 cupertino-keyboard = { path = "../cupertino-keyboard" }
+cupertino-modifiers = { path = "../cupertino-modifiers" }
 cupertino-devices = { path = "../cupertino-devices", optional = true }
 cupertino-evdev = { path = "../cupertino-evdev", optional = true }
 cupertino-peer = { path = "../cupertino-peer" }

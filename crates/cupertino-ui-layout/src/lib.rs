@@ -175,6 +175,8 @@ pub trait LayoutTree {
 
     fn children(&self, id: Self::Id) -> &[Self::Id];
     fn spec(&self, id: Self::Id) -> &LayoutSpec;
+    /// Changes whenever the node's spec, children or leaf content change; cached measurements key on it.
+    fn generation(&self, id: Self::Id) -> Generation;
     /// The size of a leaf (text, image, icon) under `constraints`.
     fn measure_leaf(&self, id: Self::Id, constraints: Constraints) -> Measured;
 }

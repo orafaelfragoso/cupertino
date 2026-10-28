@@ -148,6 +148,8 @@ pub enum PaintOp {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaintNode {
     pub id: PaintNodeId,
+    /// The node whose subtree this one belongs to; a parent comes before its children in the list.
+    pub parent: Option<PaintNodeId>,
     pub revision: PaintRevision,
     pub transform: Transform,
     pub clip: Option<Shape>,

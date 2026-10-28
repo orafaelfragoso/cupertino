@@ -417,6 +417,14 @@ impl OwnerRetry {
         due
     }
 
+    /// The retry could not be timed: the check waits for the window to become the key window, as when the retries ran
+    /// out.
+    pub fn untimed(&mut self) {
+        if self.parked == Some(Parked::Retry) {
+            self.parked = Some(Parked::Recheck);
+        }
+    }
+
     /// The window became the key window: whether to check again, only if the retries ran out, which are then counted
     /// afresh.
     pub fn recheck(&mut self) -> bool {
@@ -1731,5 +1739,17 @@ mod tests {
             "the newer announcement's retry is due, not the older one's"
         );
         assert!(newer.due(2));
+    }
+
+    #[test]
+    fn a_retry_that_cannot_be_timed_waits_for_a_recheck() {
+        let mut retry = OwnerRetry::new(1);
+        assert_eq!(
+            retry.refused(true),
+            Refused::RetryAfter(OWNER_RETRY_DELAYS[0])
+        );
+        retry.untimed();
+        assert!(!retry.due(1), "no timer will fire for it");
+        assert!(retry.recheck(), "the window becoming key checks it again");
     }
 }

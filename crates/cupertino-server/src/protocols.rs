@@ -358,7 +358,12 @@ impl Cupertino {
                 Some(announced) => announced.timer = Some(token),
                 None => self.loop_handle.remove(token),
             },
-            Err(e) => tracing::warn!(error = %e, "cannot time a retry of a menu owner check"),
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot time a retry of a menu owner check: it waits for the window to be key");
+                if let Some(announced) = self.menu_bars.announced_mut(&surface, kind) {
+                    announced.retry.untimed();
+                }
+            }
         }
     }
 
@@ -389,7 +394,8 @@ impl Cupertino {
         if let (true, Err(refusal)) = (announced.surface.is_alive(), &verdict) {
             let announcement = announced.retry.announcement();
             match announced.retry.refused(retryable(refusal)) {
-                Refused::Final => {}
+                // a refusal comes only for a check that went out, and a check goes out with its timer gone
+                Refused::Final => debug_assert!(announced.timer.is_none()),
                 Refused::RetryAfter(after) => {
                     self.arm_menu_retry(surface, kind, announcement, after);
                     return;

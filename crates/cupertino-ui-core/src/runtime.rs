@@ -96,6 +96,8 @@ struct WindowState<M> {
     damage: DamageTracker,
     display_list: DisplayList,
     renderer: Box<dyn UiRenderer<Frame = CpuFrame>>,
+    /// The error of the last frame, until one renders and presents; animations wait for that.
+    failed: Option<UiError>,
 }
 
 /// Runs an application on a window system.
@@ -395,6 +397,7 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             damage: DamageTracker::default(),
             display_list: DisplayList::default(),
             renderer: (self.options.renderers)(),
+            failed: None,
         }
     }
 
@@ -579,7 +582,9 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
         if !effects.animate.is_empty() {
             w.animate.extend(effects.animate);
             w.invalidate();
-            self.system.request_frame(w.id);
+            if w.failed.is_none() {
+                self.system.request_frame(w.id);
+            }
         }
         if let Some((node, mut state)) = effects.text_input {
             if let Some(state) = &mut state {
@@ -647,7 +652,8 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
 
     /// Lays out, rebuilds semantics and focus, and paints and presents every window that is due. A window that fails
     /// is reported and tries again whole on its next change or configure, whatever failed it: the renderer gives the same
-    /// error for a target and for content too large to draw. Only a lost connection ends the application.
+    /// error for a target and for content too large to draw. The same error again is not reported again, and the
+    /// window's animations ask for no frames until a frame presents. Only a lost connection ends the application.
     fn frame(&mut self) -> Result<(), UiError> {
         let relayout = self.tree.take_layout_dirty();
         let paint_dirty = self.tree.take_paint_dirty();
@@ -663,9 +669,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
                     w.invalidate();
                     w.dirty = false;
                     w.damage.invalidate();
-                    if let Some(report) = &mut self.options.on_window_error {
-                        report(w.id, &error);
+                    if w.failed.as_ref() != Some(&error) {
+                        if let Some(report) = &mut self.options.on_window_error {
+                            report(w.id, &error);
+                        }
                     }
+                    w.failed = Some(error);
                 }
             }
         }
@@ -773,11 +782,12 @@ impl<A: Application, W: WindowSystem> Runtime<A, W> {
             })
             .map_err(UiError::Render)?;
         let frame = w.renderer.frame(id).map_err(UiError::Render)?;
-        match self
+        let outcome = self
             .system
             .present(w.id, frame, w.ack)
-            .map_err(UiError::Platform)?
-        {
+            .map_err(UiError::Platform)?;
+        w.failed = None;
+        match outcome {
             PresentOutcome::Presented => {
                 w.ack = None;
                 w.frame_ready = false;

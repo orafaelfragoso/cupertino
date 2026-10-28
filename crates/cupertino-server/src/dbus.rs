@@ -10,6 +10,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 
 use cupertino_peer::{same_instance, ProcessHandle};
 use zbus::fdo::ConnectionCredentials;
@@ -206,6 +207,9 @@ pub struct OwnerQuery {
     pub client: ProcessHandle,
     /// How many identification threads of the client are alive (`crate::state::ClientState::owner_identifying`).
     pub client_identifying: Identifying,
+    /// When the loop answers the check as timed out and drops its answer: a bus that answers after that starts no
+    /// identification thread, so a client is not refused as stalled by its own checks the loop gave up on.
+    pub expires: Instant,
     pub reply: Box<dyn FnOnce(Result<String, OwnerRefusal>) + Send>,
 }
 
@@ -364,6 +368,7 @@ async fn worker(
                 name,
                 client,
                 client_identifying,
+                expires,
                 reply,
             }) => {
                 let identifying = identifying.clone();
@@ -372,7 +377,7 @@ async fn worker(
                     .spawn(
                         async move {
                             let threads = (&identifying, &client_identifying);
-                            reply(owner_of(&conn, &name, client, threads).await)
+                            reply(owner_of(&conn, &name, client, threads, expires).await)
                         },
                         "cupertino-owner-check",
                     )
@@ -537,6 +542,7 @@ async fn owner_of(
     name: &str,
     client: ProcessHandle,
     threads: (&Identifying, &Identifying),
+    expires: Instant,
 ) -> Result<String, OwnerRefusal> {
     let name = BusName::try_from(name).map_err(|_| OwnerRefusal::NotABusName)?;
     let no_owner = |e: zbus::fdo::Error| OwnerRefusal::NoOwner(e.to_string());
@@ -551,11 +557,32 @@ async fn owner_of(
         .get_connection_credentials(BusName::from(unique.as_ref()))
         .await
         .map_err(no_owner)?;
-    identify_owner(threads, PathBuf::from("/proc"), credentials, client)?
-        .recv()
-        .await
-        .map_err(|_| OwnerRefusal::Unidentified)??;
+    identify_before(
+        threads,
+        PathBuf::from("/proc"),
+        credentials,
+        client,
+        expires,
+    )?
+    .recv()
+    .await
+    .map_err(|_| OwnerRefusal::Unidentified)??;
     Ok(unique.to_string())
+}
+
+/// [`identify_owner`], unless the check is past `expires`: its answer would be dropped, and a thread started for it would
+/// count against the client's limit after a slow bus.
+fn identify_before(
+    threads: (&Identifying, &Identifying),
+    proc_root: PathBuf,
+    credentials: ConnectionCredentials,
+    client: ProcessHandle,
+    expires: Instant,
+) -> Result<Identified, OwnerRefusal> {
+    if Instant::now() >= expires {
+        return Err(OwnerRefusal::TimedOut);
+    }
+    identify_owner(threads, proc_root, credentials, client)
 }
 
 /// Whether the owner of the login process's name is the process `trust` names. Only its process id counts, so a process
@@ -794,6 +821,33 @@ mod tests {
             assert!(std::time::Instant::now() < end, "{alive} threads alive");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn a_check_past_its_deadline_starts_no_identification() {
+        let (all, client) = (Identifying::default(), Identifying::default());
+        let fine = scratch_proc(false);
+        let identify = |expires| {
+            identify_before(
+                (&all, &client),
+                fine.path().to_path_buf(),
+                own_credentials(),
+                ProcessHandle::open(std::process::id()).unwrap(),
+                expires,
+            )
+        };
+        let past = Instant::now() - std::time::Duration::from_millis(1);
+        assert!(matches!(identify(past), Err(OwnerRefusal::TimedOut)));
+        assert_eq!(all.load(Ordering::SeqCst), 0, "no thread started");
+        assert_eq!(
+            client.load(Ordering::SeqCst),
+            0,
+            "nothing counted for the client"
+        );
+
+        let ahead = Instant::now() + std::time::Duration::from_secs(10);
+        let answer = identify(ahead).unwrap().recv_blocking();
+        assert!(matches!(answer, Ok(Ok(()))), "{answer:?}");
     }
 
     #[test]

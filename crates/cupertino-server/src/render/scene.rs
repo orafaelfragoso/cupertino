@@ -383,7 +383,7 @@ fn push_session_overlays(
     for overlay in overlays.iter().flatten() {
         stack.push(
             SceneLayer::SessionOverlay,
-            Piece::Item(item(
+            Piece::item(item(
                 overlay.kind,
                 0,
                 Source::Wallpaper {
@@ -435,7 +435,7 @@ pub(crate) fn rrect_item(
     border: Option<(f64, [f32; 4])>,
     alpha: f32,
 ) -> Piece {
-    Piece::Item(item(
+    Piece::item(item(
         kind,
         index,
         Source::RoundedRect(RoundedRect {
@@ -480,7 +480,7 @@ fn wallpaper_element(renderer: &mut GlesRenderer, p: &mut SceneParams<'_>) -> Pi
         p.scale,
         p.now,
     );
-    image.map_or_else(|| Piece::Item(wallpaper(p)), Piece::from)
+    image.map_or_else(|| Piece::item(wallpaper(p)), Piece::from)
 }
 
 fn wallpaper(p: &SceneParams<'_>) -> SceneItem {
@@ -610,7 +610,7 @@ pub(crate) fn shadow_item(
     alpha: f64,
 ) -> Option<Piece> {
     let shadow = shadow_data(p, params, plan, corner, alpha)?;
-    Some(Piece::Item(item(
+    Some(Piece::item(item(
         kind,
         index,
         Source::Shadow(shadow),
@@ -1640,7 +1640,7 @@ fn lower_composed(
 
 /// The scene while the session is locked: black, the lock surface and the pointer; nothing else may show.
 fn locked_scene(p: &mut SceneParams<'_>, stack: &mut Composition, surface: Option<WlSurface>) {
-    stack.push(SceneLayer::Wallpaper, Piece::Item(lock_backdrop(p)));
+    stack.push(SceneLayer::Wallpaper, Piece::item(lock_backdrop(p)));
     if let Some(surface) = surface {
         stack.push(
             SceneLayer::LayerOverlay,

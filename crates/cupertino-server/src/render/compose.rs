@@ -58,15 +58,21 @@ pub struct Picture {
 /// One drawable of a layer: a typed scene item, a surface tree, a picture, or an element the renderer still
 /// builds itself.
 pub enum Piece {
-    Item(SceneItem),
+    Item(Box<SceneItem>),
     Tree(Box<Tree>),
     Image(Box<Picture>),
-    Local(CupertinoElement),
+    Local(Box<CupertinoElement>),
+}
+
+impl Piece {
+    pub fn item(item: SceneItem) -> Self {
+        Self::Item(Box::new(item))
+    }
 }
 
 impl<T: Into<CupertinoElement>> From<T> for Piece {
     fn from(element: T) -> Self {
-        Self::Local(element.into())
+        Self::Local(Box::new(element.into()))
     }
 }
 
@@ -104,7 +110,7 @@ impl Composition {
 
     pub fn push(&mut self, layer: SceneLayer, piece: impl Into<Piece>) {
         match piece.into() {
-            Piece::Item(item) => self.items.push(layer, item),
+            Piece::Item(item) => self.items.push(layer, *item),
             Piece::Image(picture) => {
                 let id = ImageId(ResourceKey {
                     slot: self.images.len() as u64,
@@ -182,7 +188,7 @@ impl Composition {
             }
             Piece::Local(element) => {
                 let index = self.locals.len();
-                self.locals.push(Some(element));
+                self.locals.push(Some(*element));
                 self.items.push(
                     layer,
                     item(

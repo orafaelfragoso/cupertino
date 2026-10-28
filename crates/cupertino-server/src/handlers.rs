@@ -491,8 +491,51 @@ impl XdgActivationHandler for Cupertino {
             .user_data
             .get::<TokenGrant>()
             .expect("every token gets its grant when it is made");
+        self.activate_surface(&surface, grant);
+    }
+}
+
+impl Cupertino {
+    /// `gtk_surface1.present` or `request_focus` for `surface`, whose `startup_id` is an activation token. A window of
+    /// the client that has the keyboard focus already is brought forward; any other request is judged as an
+    /// `xdg_activation` request is, by the token it names (`present` names none), so a client that has no input behind
+    /// it cannot take the keyboard from another: its window asks for attention instead.
+    pub fn gtk_focus_request(&mut self, surface: &WlSurface, startup_id: Option<&str>) {
+        let Some(id) = self.window_id_for_surface(surface) else {
+            return;
+        };
+        let focused = self
+            .seat
+            .get_keyboard()
+            .and_then(|k| k.current_focus())
+            .and_then(|focus| focus.client())
+            .zip(surface.client())
+            .is_some_and(|(focused, asking)| focused.id() == asking.id());
+        if focused {
+            self.command(Command::FocusWindow { window: id });
+            return;
+        }
+        let token = startup_id.map(|id| XdgActivationToken::from(id.to_string()));
+        let grant = token
+            .as_ref()
+            .and_then(|t| self.xdg_activation_state.data_for_token(t))
+            .and_then(|d| d.user_data.get::<TokenGrant>().copied());
+        if let Some(token) = &token {
+            self.xdg_activation_state.remove_token(token);
+        }
+        let grant = grant.unwrap_or(TokenGrant {
+            created: self.now(),
+            valid: false,
+        });
+        self.activate_surface(surface, grant);
+    }
+
+    /// A request to bring the window of `surface` forward with `grant`: a valid grant newer than the application's last
+    /// activation, and not followed by a user event within 100 ms, brings the window forward; any other asks for
+    /// attention. A grant for a window that is not mapped yet is kept until it maps.
+    fn activate_surface(&mut self, surface: &WlSurface, grant: TokenGrant) {
         let mapped = self
-            .window_id_for_surface(&surface)
+            .window_id_for_surface(surface)
             .filter(|id| self.entry(*id).is_some_and(|e| e.mapped));
         let Some(id) = mapped else {
             // a program activates its first surface as it maps, usually before the window is mapped: the window picks

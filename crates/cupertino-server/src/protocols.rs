@@ -5,7 +5,7 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use cupertino_wm::{Command, WindowId};
+use cupertino_wm::WindowId;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::RegistrationToken;
 use smithay::reexports::wayland_server::backend::ObjectId;
@@ -223,10 +223,9 @@ impl Dispatch<GtkSurface1, SurfaceData> for Cupertino {
                     state.withdraw_menu_address(&data.surface, MenuKind::Gtk);
                 }
             }
-            gtk_surface1::Request::Present { .. } | gtk_surface1::Request::RequestFocus { .. } => {
-                if let Some(id) = state.window_id_for_surface(&data.surface) {
-                    state.command(Command::FocusWindow { window: id });
-                }
+            gtk_surface1::Request::Present { .. } => state.gtk_focus_request(&data.surface, None),
+            gtk_surface1::Request::RequestFocus { startup_id } => {
+                state.gtk_focus_request(&data.surface, startup_id.as_deref())
             }
             gtk_surface1::Request::Release => {
                 state.withdraw_menu_address(&data.surface, MenuKind::Gtk)

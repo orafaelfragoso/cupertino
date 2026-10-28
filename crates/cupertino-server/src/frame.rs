@@ -94,19 +94,8 @@ impl Cupertino {
         idx: usize,
         f: impl FnOnce(&mut GlesRenderer, SceneParams<'_>) -> R,
     ) -> Option<R> {
-        let cursor = self.cursor_plan(self.outputs[idx].scale);
-        self.with_scene_and_cursor(renderer, idx, cursor, f)
-    }
-
-    /// [`Cupertino::with_scene`] with the pointer drawn as `cursor`.
-    fn with_scene_and_cursor<R>(
-        &mut self,
-        renderer: &mut GlesRenderer,
-        idx: usize,
-        cursor: CursorPlan,
-        f: impl FnOnce(&mut GlesRenderer, SceneParams<'_>) -> R,
-    ) -> Option<R> {
         let scale = self.outputs[idx].scale;
+        let cursor = self.cursor_plan(scale);
         let pointer: Point<f64, Logical> = self.pointer.current_location();
         let now = self.now();
         let drag_icon = self.drag_icon.clone();
@@ -167,48 +156,20 @@ impl Cupertino {
         self.scene_elements(renderer, idx, true).unwrap_or_default()
     }
 
-    /// The element list (front to back) of output `idx`, the pointer left out with `paint_cursor` false;
-    /// `None` while the render resources are not loaded. With `CUPERTINO_SCENE_ORACLE=1` at build time every list is
-    /// compared with the one the previous builder gives.
+    /// The element list (front to back) of output `idx`, the pointer left out with `paint_cursor` false; `None` while
+    /// the render resources are not loaded. The lowering alone, for tests and tools that look at the elements.
     pub fn scene_elements(
         &mut self,
         renderer: &mut GlesRenderer,
         idx: usize,
         paint_cursor: bool,
     ) -> Option<Vec<CupertinoElement>> {
-        #[cfg(not(scene_oracle))]
-        let elements = {
-            let cursor = self.cursor_plan(self.outputs[idx].scale);
-            self.lowered_elements(renderer, idx, cursor, paint_cursor)?
-        };
-        #[cfg(scene_oracle)]
-        let elements = {
-            use crate::render::legacy_scene;
-            // both builders see the same instant and the same cursor frame
-            let pinned = self.fixed_time.is_none().then(|| self.now());
-            self.fixed_time = self.fixed_time.or(pinned);
-            let cursor = self.cursor_plan(self.outputs[idx].scale);
-            self.overlays.wallpaper.hold_replies(true);
-            let elements = self.lowered_elements(renderer, idx, cursor.clone(), paint_cursor);
-            let legacy = elements.as_ref().and_then(|_| {
-                self.with_scene_and_cursor(renderer, idx, cursor, |r, mut p| {
-                    if !paint_cursor {
-                        p.cursor = CursorPlan::Hidden;
-                    }
-                    legacy_scene::build_scene(r, p)
-                })
-            });
-            self.overlays.wallpaper.hold_replies(false);
-            if pinned.is_some() {
-                self.fixed_time = None;
-            }
-            let (elements, legacy) = (elements?, legacy?);
-            let out = &mut self.outputs[idx];
-            legacy_scene::assert_parity(&mut out.cache, &legacy, &elements, out.scale);
-            legacy_scene::record(legacy);
-            elements
-        };
-        Some(elements)
+        let composed = self.compose_output(renderer, idx, paint_cursor)?;
+        let (res, cache, _) = self.gles_parts(idx)?;
+        let mut resources = GlesResources::new(res, cache, composed.resources);
+        Gles::lower(renderer, &composed.frame, &mut resources)
+            .map_err(|e| tracing::warn!(error = %e, "lowering the scene failed"))
+            .ok()
     }
 
     /// Compose output `idx` into its scene frame, the pointer left out with `paint_cursor` false; `None` while the
@@ -219,18 +180,7 @@ impl Cupertino {
         idx: usize,
         paint_cursor: bool,
     ) -> Option<Composed> {
-        let cursor = self.cursor_plan(self.outputs[idx].scale);
-        self.compose_output_with(renderer, idx, cursor, paint_cursor)
-    }
-
-    fn compose_output_with(
-        &mut self,
-        renderer: &mut GlesRenderer,
-        idx: usize,
-        cursor: CursorPlan,
-        paint_cursor: bool,
-    ) -> Option<Composed> {
-        self.with_scene_and_cursor(renderer, idx, cursor, |r, mut p| {
+        self.with_scene(renderer, idx, |r, mut p| {
             if !paint_cursor {
                 p.cursor = CursorPlan::Hidden;
             }
@@ -238,37 +188,15 @@ impl Cupertino {
         })
     }
 
-    fn lowered_elements(
-        &mut self,
-        renderer: &mut GlesRenderer,
-        idx: usize,
-        cursor: CursorPlan,
-        paint_cursor: bool,
-    ) -> Option<Vec<CupertinoElement>> {
-        let composed = self.compose_output_with(renderer, idx, cursor, paint_cursor)?;
-        let (res, cache, _) = self.gles_parts(idx)?;
-        let mut resources = GlesResources::new(res, cache, composed.resources);
-        Gles::lower(renderer, &composed.frame, &mut resources)
-            .map_err(|e| tracing::warn!(error = %e, "lowering the scene failed"))
-            .ok()
-    }
-
     /// The frame of output `idx` for presentation: the session lock's built-frame mark is set as for every frame
-    /// shown, and under the oracle the lowered elements are compared with the previous builder's first.
+    /// shown.
     pub fn compose_for_present(
         &mut self,
         renderer: &mut GlesRenderer,
         idx: usize,
     ) -> Option<Composed> {
         self.note_scene_built(idx);
-        let composed = self.compose_output(renderer, idx, true)?;
-        #[cfg(scene_oracle)]
-        let composed = {
-            let mut composed = composed;
-            composed.resources.prelowered = Some(self.scene_elements(renderer, idx, true)?);
-            composed
-        };
-        Some(composed)
+        self.compose_output(renderer, idx, true)
     }
 
     /// Draw output `idx` to a fresh image, the pointer left out with `paint_cursor` false. The built-frame mark of the
@@ -288,12 +216,6 @@ impl Cupertino {
         let composed = self
             .compose_output(renderer, idx, paint_cursor)
             .context("the render resources are not loaded")?;
-        #[cfg(scene_oracle)]
-        let composed = {
-            let mut composed = composed;
-            composed.resources.prelowered = self.scene_elements(renderer, idx, paint_cursor);
-            composed
-        };
         let (res, cache, _) = self.gles_parts(idx).context("the output is gone")?;
         let mut resources = GlesResources::new(res, cache, composed.resources);
         match Gles.render(

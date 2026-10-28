@@ -124,16 +124,13 @@ pub struct Composition {
 /// What the typed handles of a frame's items resolve to: surface trees, images, recipes and snapshots, each by the
 /// slot and generation the composition gave it. Owned by the renderer's adapter from the frame's composition until
 /// the frame's elements are gone.
-#[derive(Default)]
 pub struct FrameResources {
+    /// The frame these resources belong to: handles name slots of this frame's registries only.
+    pub frame: FrameId,
     pub surfaces: Vec<WlSurface>,
     pub images: Vec<MemoryRenderBuffer>,
     pub recipes: Vec<Rc<GpuRecipe>>,
     pub snapshots: Vec<Option<FrameSnapshot>>,
-    /// The elements the comparison with the previous builder already lowered for this frame: lowering moves commit
-    /// counters, so the frame is lowered once and the renderer draws this list.
-    #[cfg(scene_oracle)]
-    pub prelowered: Option<Vec<super::CupertinoElement>>,
 }
 
 /// A composed frame and the resources its items refer to.
@@ -145,11 +142,18 @@ pub struct Composed {
 impl Composition {
     /// A new frame for an output drawn at `scale`.
     pub fn new(scale: f64) -> Self {
+        let id = FrameId(FRAMES.fetch_add(1, Ordering::Relaxed));
         Self {
-            id: FrameId(FRAMES.fetch_add(1, Ordering::Relaxed)),
+            id,
             scale,
             items: LayerStack::new(),
-            resources: FrameResources::default(),
+            resources: FrameResources {
+                frame: id,
+                surfaces: Vec::new(),
+                images: Vec::new(),
+                recipes: Vec::new(),
+                snapshots: Vec::new(),
+            },
         }
     }
 

@@ -13,7 +13,8 @@
 mod field;
 mod keymap;
 
-pub use field::{Response, TextField, CARET_BLINK_OFF, CARET_BLINK_ON, MULTI_CLICK_INTERVAL};
+pub use cupertino_ui_text::{CARET_BLINK_OFF, CARET_BLINK_ON, MULTI_CLICK_INTERVAL};
+pub use field::{Response, TextField, TextFieldKeys};
 pub use keymap::{KeyInput, Keymap};
 
 #[cfg(test)]

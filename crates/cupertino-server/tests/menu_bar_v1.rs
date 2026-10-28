@@ -4101,8 +4101,14 @@ fn force_quit_app_kills_an_active_application_that_does_not_answer_at_once() {
     let window = h.mapped_window(1);
     let sent = record_signals(&mut h);
     client.mute(true);
-    h.advance(1.1);
-    h.advance(2.5);
+    // Deliberately time out the muted client without waiting for its pong.
+    for dt in [1.1, 2.5] {
+        h.state.fixed_time = Some(h.state.now() + dt);
+        h.state.tick();
+        for _ in 0..3 {
+            h.step();
+        }
+    }
     assert!(h.state.window_is_unresponsive(window));
 
     bar.send(Cmd::ForceQuitApp("org.example.locked-out".into()));

@@ -651,14 +651,27 @@ fn paint_marquee(pm: &mut Pixmap, scale: f32, band: &Rect, content: &Rect, pal: 
 /// Points around an item that the name editor's field and its focus ring reach.
 const EDIT_REACH: f64 = 8.0;
 
+/// Where item `index` of `frame` is drawn once selected or focused, with the ring around it. `None` when the item
+/// is not in the frame.
+pub fn item_area(frame: &Frame, index: usize) -> Option<GeoRect> {
+    let item = frame.item_frame(index)?;
+    // a list row is highlighted across the whole content, so the strip of the item's height is damaged with it
+    let content = frame.window.content;
+    let row = GeoRect::new(content.x, item.y, content.w, item.h);
+    Some(
+        GeoRect::new(item.x, item.y, item.w, item.h)
+            .union(&row)
+            .outset(EDIT_REACH),
+    )
+}
+
 /// Where a caret blink changes `frame`: the toolbar, where the search field is, and the item whose name is edited.
 /// `None` when the item is not in the frame.
 pub fn caret_areas(frame: &Frame, edit: Option<usize>) -> Option<Vec<GeoRect>> {
     let toolbar = frame.window.toolbar;
     let mut areas = vec![GeoRect::new(toolbar.x, toolbar.y, toolbar.w, toolbar.h)];
     if let Some(index) = edit {
-        let item = frame.item_frame(index)?;
-        areas.push(GeoRect::new(item.x, item.y, item.w, item.h).outset(EDIT_REACH));
+        areas.push(item_area(frame, index)?);
     }
     Some(areas)
 }
@@ -3348,9 +3361,9 @@ mod tests {
             assert_ne!(on.data(), off.data(), "the name caret shows at {scale}x");
             let areas = caret_areas(&frame, Some(0)).unwrap();
             let (pixels, bytes) = if scale == 1.0 {
-                (62_912, 251_648)
+                (63_848, 255_392)
             } else {
-                (142_682, 570_728)
+                (144_827, 579_308)
             };
             assert_eq!(
                 damaged_pixels(&areas, scale),
@@ -3371,6 +3384,150 @@ mod tests {
                 caret_areas(&frame, Some(99)),
                 None,
                 "an item that is not there"
+            );
+        }
+    }
+
+    /// A window of 920 x 436 points on a folder of `n` files, listed.
+    fn listing(
+        scale: f32,
+        n: usize,
+        scroll: f64,
+    ) -> (tempfile::TempDir, Browser, Vec<Place>, WindowPainter, Frame) {
+        let d = tempfile::tempdir().unwrap();
+        for i in 0..n {
+            std::fs::write(d.path().join(format!("file-{i:03}.txt")), b"x").unwrap();
+        }
+        let mut browser = Browser::open(
+            d.path().to_path_buf(),
+            SortSpec::default(),
+            PathBuf::from("/nonexistent/recently-used.xbel"),
+            None,
+            Arc::new(|| {}),
+        )
+        .unwrap();
+        while browser.entries().len() < n {
+            browser.poll();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let places = places();
+        let mut painter = WindowPainter::new(crate::render::renderer());
+        let frame = painter.frame(
+            Size { w: 920.0, h: 436.0 },
+            &places,
+            Bars::HIDDEN,
+            window::TOOLBAR_SEARCH_FIELD.0,
+            d.path(),
+            ViewMode::List,
+            browser.outline(),
+            scroll,
+            scale,
+        );
+        (d, browser, places, painter, frame)
+    }
+
+    fn paint_listing(
+        painter: &mut WindowPainter,
+        frame: &Frame,
+        browser: &Browser,
+        places: &[Place],
+        scale: f32,
+    ) -> Pixmap {
+        let mut pm = Pixmap::new((920.0 * scale) as u32, (436.0 * scale) as u32).unwrap();
+        let state = WindowState {
+            browser,
+            places,
+            mode: ViewMode::List,
+            active: true,
+            search: &TextField::new(),
+            search_focused: false,
+            search_caret: false,
+            title: "Here",
+            now: SystemTime::now(),
+            edit: None,
+            edit_caret: false,
+            drop_target: None,
+            marquee: None,
+            status: "",
+        };
+        painter.paint(&mut pm, scale, frame, &state, &Palette::builtin(false));
+        pm
+    }
+
+    #[test]
+    fn a_selection_change_changes_pixels_only_inside_the_areas_of_the_items_it_changes() {
+        for scale in [1.0_f32, 1.5] {
+            let (_d, mut browser, places, mut painter, frame) = listing(scale, 6, 0.0);
+            browser.press(0, crate::selection::Modifiers::default());
+            let first = paint_listing(&mut painter, &frame, &browser, &places, scale);
+            browser.press(1, crate::selection::Modifiers::default());
+            let second = paint_listing(&mut painter, &frame, &browser, &places, scale);
+            assert_ne!(
+                first.data(),
+                second.data(),
+                "the selection shows at {scale}x"
+            );
+            let areas: Vec<GeoRect> = [0, 1]
+                .into_iter()
+                .map(|i| item_area(&frame, i).unwrap())
+                .collect();
+            assert_eq!(
+                differing_outside(&first, &second, &areas, scale),
+                vec![],
+                "selection change at {scale}x"
+            );
+            let (pixels, bytes) = if scale == 1.0 {
+                (52_920, 211_680)
+            } else {
+                (121_330, 485_320)
+            };
+            assert_eq!(damaged_pixels(&areas, scale), pixels, "pixels at {scale}x");
+            assert_eq!(
+                damaged_pixels(&areas, scale) * 4,
+                bytes,
+                "bytes at {scale}x"
+            );
+        }
+    }
+
+    #[test]
+    fn a_scroll_changes_pixels_only_inside_the_content() {
+        for scale in [1.0_f32, 1.5] {
+            let (_d, browser, places, mut painter, top) = listing(scale, 60, 0.0);
+            let scrolled = painter.frame(
+                Size { w: 920.0, h: 436.0 },
+                &places,
+                Bars::HIDDEN,
+                window::TOOLBAR_SEARCH_FIELD.0,
+                browser.dir(),
+                ViewMode::List,
+                browser.outline(),
+                48.0,
+                scale,
+            );
+            assert!(scrolled.scroll > 0.0, "the folder scrolls");
+            let (a, b) = (
+                paint_listing(&mut painter, &top, &browser, &places, scale),
+                paint_listing(&mut painter, &scrolled, &browser, &places, scale),
+            );
+            assert_ne!(a.data(), b.data(), "the content moves at {scale}x");
+            let c = top.window.content;
+            let areas = [GeoRect::new(c.x, c.y, c.w, c.h)];
+            assert_eq!(
+                differing_outside(&a, &b, &areas, scale),
+                vec![],
+                "scroll at {scale}x"
+            );
+            let (pixels, bytes) = if scale == 1.0 {
+                (275_377, 1_101_508)
+            } else {
+                (620_425, 2_481_700)
+            };
+            assert_eq!(damaged_pixels(&areas, scale), pixels, "pixels at {scale}x");
+            assert_eq!(
+                damaged_pixels(&areas, scale) * 4,
+                bytes,
+                "bytes at {scale}x"
             );
         }
     }

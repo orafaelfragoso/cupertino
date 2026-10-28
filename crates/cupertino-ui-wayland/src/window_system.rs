@@ -42,6 +42,8 @@ struct Window {
     max_size: Option<Size>,
     /// Damage of frames that were not presented, carried into the next present.
     carried: Vec<PixelRect>,
+    /// The pixel size of the frame shown last; a frame of another size changes all of the window.
+    shown: Option<(u32, u32)>,
     /// A frame callback is outstanding: the compositor will say when to draw.
     frame_pending: bool,
     /// The runtime asked for a frame.
@@ -172,6 +174,7 @@ impl WaylandWindowSystem {
             min_size: None,
             max_size: None,
             carried: Vec::new(),
+            shown: None,
             frame_pending: false,
             frame_wanted: false,
         });
@@ -551,6 +554,7 @@ impl WindowSystem for WaylandWindowSystem {
     ) -> Result<PresentOutcome, PlatformError> {
         let w = self.window_mut(window)?;
         let (surface, size) = (w.surface, w.size);
+        let resized = w.shown != Some((frame.width, frame.height));
         let mut damage = std::mem::take(&mut w.carried);
         damage.extend(frame.damage.iter().map(|r| PixelRect {
             x: r.x,
@@ -558,8 +562,10 @@ impl WindowSystem for WaylandWindowSystem {
             width: r.width,
             height: r.height,
         }));
-        if copy_and_present(&mut self.conn, surface, size, frame, &damage)? {
-            self.window_mut(window)?.frame_pending = true;
+        if copy_and_present(&mut self.conn, surface, size, frame, &damage, resized)? {
+            let w = self.window_mut(window)?;
+            w.frame_pending = true;
+            w.shown = Some((frame.width, frame.height));
             Ok(PresentOutcome::Presented)
         } else {
             self.carry(window, damage, frame)?;
@@ -595,14 +601,17 @@ impl WindowSystem for WaylandWindowSystem {
     }
 }
 
-/// Copy `damage` of `frame`, and whatever the buffer missed, into a buffer of `surface` and present it; `false` when no
-/// buffer is free, the surface awaits its first configure, or the frame was drawn at another size than it asks for.
+/// Copy `damage` of `frame`, and whatever the buffer missed (all of it when that is unknown), into a buffer of `surface`
+/// and present it, telling the compositor that `damage` changed, or everything when the window was `resized`. `false`
+/// when no buffer is free, the surface awaits its first configure, or the frame was drawn at another size than it asks
+/// for.
 fn copy_and_present(
     conn: &mut Connection,
     surface: SurfaceId,
     size: (u32, u32),
     frame: &CpuFrame,
     damage: &[PixelRect],
+    resized: bool,
 ) -> Result<bool, PlatformError> {
     let mut lease = match conn.lease(surface, size, BufferFormat::Argb8888) {
         Ok(lease) => lease,
@@ -613,13 +622,15 @@ fn copy_and_present(
     if (layout.width(), layout.height()) != (frame.width, frame.height) {
         return Ok(false);
     }
-    let rects: Option<Vec<PixelRect>> = lease.missed().map(|missed| {
-        damage
-            .iter()
-            .chain(missed)
+    let inside = |rects: &mut dyn Iterator<Item = &PixelRect>| -> Vec<PixelRect> {
+        rects
             .filter_map(|r| clip(*r, frame.width, frame.height))
             .collect()
-    });
+    };
+    let changed = inside(&mut damage.iter());
+    let copy = lease
+        .missed()
+        .map(|missed| inside(&mut changed.iter().chain(missed)));
     let whole = [PixelRect {
         x: 0,
         y: 0,
@@ -631,10 +642,10 @@ fn copy_and_present(
         frame.stride as usize,
         lease.pixels_mut(),
         layout.stride(),
-        rects.as_deref().unwrap_or(&whole),
+        copy.as_deref().unwrap_or(&whole),
     );
     lease
-        .present_damage(rects.as_deref())
+        .present_damage((!resized).then_some(&changed[..]))
         .map_err(platform_error)?;
     Ok(true)
 }

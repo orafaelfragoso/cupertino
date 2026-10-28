@@ -185,6 +185,7 @@ impl Cupertino {
             let pinned = self.fixed_time.is_none().then(|| self.now());
             self.fixed_time = self.fixed_time.or(pinned);
             let cursor = self.cursor_plan(self.outputs[idx].scale);
+            self.overlays.wallpaper.hold_replies(true);
             let elements = self.with_scene_and_cursor(renderer, idx, cursor.clone(), build);
             let legacy = elements.as_ref().and_then(|_| {
                 self.with_scene_and_cursor(renderer, idx, cursor, |r, mut p| {
@@ -194,6 +195,7 @@ impl Cupertino {
                     legacy_scene::build_scene(r, p)
                 })
             });
+            self.overlays.wallpaper.hold_replies(false);
             if pinned.is_some() {
                 self.fixed_time = None;
             }

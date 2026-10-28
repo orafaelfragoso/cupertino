@@ -364,7 +364,7 @@
   source: crates/cupertino-server/src/app_effects_v1.rs:37
 - name: cupertino_shell_v1
   kind: wayland-global
-  version: 11
+  version: 12
   owner_crate: cupertino-server
   owner_area: compositor
   scope: shell-private

@@ -50,6 +50,8 @@ pub enum Action {
     ActivateWindow(u32),
     /// Have the server type the chord of an Edit item into the key window.
     Edit(EditAction),
+    /// Have the server force quit the active application when this id still names it.
+    ForceQuitApp(String),
     ShowAbout,
     /// Start a program or an application, handing it an activation token.
     Launch(Launch),
@@ -143,7 +145,7 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
             match cx
                 .shared
                 .extras
-                .system_menu(&cx.shared.chords, &cx.shared.recent)
+                .system_menu(&cx.shared.chords, &cx.shared.recent, cx.feed.front_app())
                 .action(item)?
             {
                 ExtraAction::System(SystemAction::About) => Action::Launch(Launch::Program(vec![
@@ -155,6 +157,9 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
                 }
                 ExtraAction::System(SystemAction::ForceQuit) => {
                     Action::WindowCommand(WindowCommand::ForceQuitDialog)
+                }
+                ExtraAction::System(SystemAction::ForceQuitApp(app_id)) => {
+                    Action::ForceQuitApp(app_id.clone())
                 }
                 ExtraAction::System(SystemAction::OpenRecentApp(row)) => {
                     Action::Launch(Launch::App(cx.shared.recent.apps.get(*row)?.entry.clone()))
@@ -293,7 +298,7 @@ mod tests {
     impl Fixture {
         /// A bar of an application whose window announces `menu`, with one status item that has a menu.
         fn new(menu: WindowMenu) -> Self {
-            let mut feed = BarFeed::new(1, true);
+            let mut feed = BarFeed::new(1, true, true);
             let mut shared = Shared::default();
             let update = MenuBarUpdate {
                 active_app: Some(ActiveApp {
@@ -818,7 +823,7 @@ mod tests {
         let menu = f
             .shared
             .extras
-            .system_menu(&f.shared.chords, &f.shared.recent);
+            .system_menu(&f.shared.chords, &f.shared.recent, None);
         let restart = menu
             .rows
             .iter()
@@ -864,6 +869,57 @@ mod tests {
             Some(Action::Extra(ExtraAction::Session(
                 crate::extras::SessionAction::Lock
             )))
+        );
+    }
+
+    #[test]
+    fn the_force_quit_alternate_names_the_active_app_to_the_server_from_version_13_only() {
+        let f = Fixture::new(WindowMenu::None);
+        let force_quit_app = activate(SlotKey::System, SystemRow::ForceQuitApp.id().0);
+        assert_eq!(
+            f.resolve(force_quit_app.clone()),
+            Some(Action::ForceQuitApp("org.example.editor".into()))
+        );
+        let resolve_with = |feed: &BarFeed| {
+            resolve(
+                force_quit_app.clone(),
+                &Context {
+                    feed,
+                    shared: &f.shared,
+                    layout: &f.layout,
+                    origin: (0, 0),
+                },
+            )
+        };
+        let desktop = BarFeed::new(2, true, true);
+        assert_eq!(resolve_with(&desktop), None, "no alternate on the desktop");
+        let mut below_13 = BarFeed::new(3, true, false);
+        let mut shared = Shared::default();
+        below_13.apply(
+            &MenuBarUpdate {
+                active_app: Some(ActiveApp {
+                    app_id: "org.example.editor".into(),
+                    title: String::new(),
+                }),
+                menu: None,
+                window_state: None,
+                engage: false,
+                engage_help: false,
+                screen_capture: None,
+                session_agent: None,
+                windows: None,
+                shortcuts: None,
+            },
+            &mut shared,
+            |_| AppName {
+                name: "Editor".into(),
+                has_entry: true,
+            },
+        );
+        assert_eq!(
+            resolve_with(&below_13),
+            None,
+            "a disabled alternate sends nothing"
         );
     }
 

@@ -160,7 +160,7 @@ pub enum ExtraAction {
 }
 
 /// What an entry of the system menu that needs no session agent does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SystemAction {
     /// Open the About This Computer window of the control panel.
     About,
@@ -168,6 +168,8 @@ pub enum SystemAction {
     Settings,
     /// Show the server's Force Quit dialog.
     ForceQuit,
+    /// Force quit the application with this id, the one the Alt alternate of Force Quit… names, without the dialog.
+    ForceQuitApp(String),
     /// Start the application of Recent Items at this position.
     OpenRecentApp(usize),
     /// Open the document of Recent Items at this position with its default application.
@@ -189,6 +191,8 @@ pub enum SystemRow {
     LogOut = -4007,
     LoginWindow = -4008,
     RecentItems = -4009,
+    /// The Alt alternate of Force Quit…: Force Quit <app name>.
+    ForceQuitApp = -4013,
 }
 
 impl SystemRow {
@@ -255,6 +259,34 @@ impl Default for SessionCaps {
             lock: true,
         }
     }
+}
+
+/// The most characters of the application name the Force Quit alternate shows, the ellipsis included: the cap of the
+/// person's name in Log Out <name>… and of the Recent Items names, so the row's width stays bounded.
+const MAX_FORCE_QUIT_NAME_CHARS: usize = 64;
+
+/// The active application as the Force Quit alternate names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrontApp<'a> {
+    pub app_id: &'a str,
+    /// The name the bold App menu title shows.
+    pub name: &'a str,
+    /// The server takes `force_quit_app` (`MenuBar::can_force_quit_app`).
+    pub can_force_quit: bool,
+}
+
+/// Force Quit <name>, the name cut at its end with an ellipsis past [`MAX_FORCE_QUIT_NAME_CHARS`]; `None` for a name
+/// with nothing to show.
+fn force_quit_label(name: &str) -> Option<String> {
+    let name = plain_text(name, usize::MAX);
+    if name.is_empty() {
+        return None;
+    }
+    if name.chars().count() <= MAX_FORCE_QUIT_NAME_CHARS {
+        return Some(format!("Force Quit {name}"));
+    }
+    let head: String = name.chars().take(MAX_FORCE_QUIT_NAME_CHARS - 1).collect();
+    Some(format!("Force Quit {}\u{2026}", head.trim_end()))
 }
 
 /// The most characters of the person's name the Log Out entry shows.
@@ -418,8 +450,15 @@ impl Extras {
     /// window entry. The session's ellipsis entries open the agent's confirmation panel. Without a session agent (none
     /// runs, or the owner of its name is not the one the server started) the rows up to Force Quit… are followed only by
     /// Lock Screen, enabled while the server has named a login process: it locks without the agent. Force Quit…, Lock
-    /// Screen and Log Out show the chord the server binds to them in `chords`.
-    pub fn system_menu(&self, chords: &Chords, recent: &RecentItems) -> ExtraMenu {
+    /// Screen and Log Out show the chord the server binds to them in `chords`. With an active application (`front`),
+    /// Force Quit… has the Alt alternate Force Quit <name>, which force-quits it without the dialog: disabled when the
+    /// server does not take the request, absent on the desktop. It shows no chord: none is bound.
+    pub fn system_menu(
+        &self,
+        chords: &Chords,
+        recent: &RecentItems,
+        front: Option<FrontApp<'_>>,
+    ) -> ExtraMenu {
         let mut menu = ExtraMenu::default();
         let session = |a| ExtraAction::Session(a);
         menu.system_row(
@@ -455,6 +494,21 @@ impl Extras {
             chords,
             ExtraAction::System(SystemAction::ForceQuit),
         );
+        if let Some((front, label)) = front.and_then(|f| Some((f, force_quit_label(f.name)?))) {
+            let id = SystemRow::ForceQuitApp.id();
+            if front.can_force_quit {
+                let action = SystemAction::ForceQuitApp(front.app_id.to_owned());
+                menu.actions.push((id, ExtraAction::System(action)));
+            }
+            let alternate = MenuItem {
+                label,
+                enabled: front.can_force_quit,
+                ..MenuItem::new(id.0, "")
+            };
+            if let Some(force_quit) = menu.rows.last_mut() {
+                force_quit.alternate = Some(Box::new(alternate));
+            }
+        }
         menu.rows
             .push(MenuItem::separator(SEPARATOR_AFTER_FORCE_QUIT));
         let Some(state) = self.session.as_ref() else {
@@ -1045,7 +1099,7 @@ mod tests {
     }
 
     fn system_menu(extras: &Extras) -> ExtraMenu {
-        extras.system_menu(&Chords::default(), &RecentItems::default())
+        extras.system_menu(&Chords::default(), &RecentItems::default(), None)
     }
 
     #[test]
@@ -1209,7 +1263,7 @@ mod tests {
         let extras = session("Rafael", SessionCaps::default());
         let shown = |chords: &Chords| -> Vec<(String, String)> {
             extras
-                .system_menu(chords, &RecentItems::default())
+                .system_menu(chords, &RecentItems::default(), None)
                 .rows
                 .iter()
                 .filter_map(|r| Some((r.label.clone(), r.shortcut.as_ref()?.display())))
@@ -1237,7 +1291,7 @@ mod tests {
             ],
             "Log Out is unbound"
         );
-        let without_agent = Extras::default().system_menu(&chords, &RecentItems::default());
+        let without_agent = Extras::default().system_menu(&chords, &RecentItems::default(), None);
         assert!(without_agent
             .rows
             .iter()
@@ -1314,6 +1368,84 @@ mod tests {
         );
     }
 
+    fn force_quit_row(front: Option<FrontApp<'_>>) -> (ExtraMenu, MenuItem) {
+        let menu =
+            Extras::default().system_menu(&Chords::default(), &RecentItems::default(), front);
+        let row = menu
+            .rows
+            .iter()
+            .find(|r| r.id == SystemRow::ForceQuit.id())
+            .cloned()
+            .unwrap();
+        (menu, row)
+    }
+
+    const EDITOR: FrontApp<'static> = FrontApp {
+        app_id: "org.example.editor",
+        name: "Editor",
+        can_force_quit: true,
+    };
+
+    #[test]
+    fn force_quit_has_the_alt_alternate_force_quit_app_that_names_the_active_app() {
+        let (menu, row) = force_quit_row(Some(EDITOR));
+        let alternate = row.alternate.as_deref().unwrap();
+        assert_eq!(
+            (alternate.id, alternate.label.as_str()),
+            (SystemRow::ForceQuitApp.id(), "Force Quit Editor")
+        );
+        assert!(alternate.enabled && alternate.shortcut.is_none());
+        assert_eq!(
+            menu.action(alternate.id),
+            Some(&ExtraAction::System(SystemAction::ForceQuitApp(
+                "org.example.editor".into()
+            )))
+        );
+        assert_eq!(
+            menu.action(row.id),
+            Some(&ExtraAction::System(SystemAction::ForceQuit)),
+            "Force Quit… still opens the dialog"
+        );
+        let shown = MenuItem::submenu(0, "", menu.rows.clone()).alternates_shown();
+        assert!(shown
+            .children
+            .iter()
+            .any(|r| r.label == "Force Quit Editor"));
+    }
+
+    #[test]
+    fn the_force_quit_alternate_is_absent_on_the_desktop_and_disabled_below_version_13() {
+        let (menu, row) = force_quit_row(None);
+        assert!(row.alternate.is_none());
+        assert_eq!(menu.action(SystemRow::ForceQuitApp.id()), None);
+        let old_server = FrontApp {
+            can_force_quit: false,
+            ..EDITOR
+        };
+        let (menu, row) = force_quit_row(Some(old_server));
+        assert!(!row.alternate.as_deref().unwrap().enabled);
+        assert_eq!(menu.action(SystemRow::ForceQuitApp.id()), None);
+    }
+
+    #[test]
+    fn a_long_app_name_is_cut_with_an_ellipsis_inside_the_force_quit_label() {
+        let long = format!("Very{}", "Long".repeat(40));
+        let (_, row) = force_quit_row(Some(FrontApp {
+            name: &long,
+            ..EDITOR
+        }));
+        let label = row.alternate.unwrap().label;
+        let name = label.strip_prefix("Force Quit ").unwrap();
+        assert_eq!(name.chars().count(), MAX_FORCE_QUIT_NAME_CHARS);
+        assert!(name.ends_with('\u{2026}') && long.starts_with(name.trim_end_matches('\u{2026}')));
+        let exact = "a".repeat(MAX_FORCE_QUIT_NAME_CHARS);
+        let (_, row) = force_quit_row(Some(FrontApp {
+            name: &exact,
+            ..EDITOR
+        }));
+        assert_eq!(row.alternate.unwrap().label, format!("Force Quit {exact}"));
+    }
+
     fn recent(apps: &[&str], documents: &[&str]) -> RecentItems {
         use crate::recent::{RecentApp, RecentDocument};
         let app = |name: &str| RecentApp {
@@ -1361,7 +1493,7 @@ mod tests {
             &["notes.md", "plan\u{202e}.txt"],
         );
         let extras = session("Rafael", SessionCaps::default());
-        let menu = extras.system_menu(&Chords::default(), &items);
+        let menu = extras.system_menu(&Chords::default(), &items, None);
         let submenu = recent_submenu(&menu);
         assert!(submenu.has_submenu && submenu.enabled);
         let rows: Vec<(String, i32, bool)> = submenu

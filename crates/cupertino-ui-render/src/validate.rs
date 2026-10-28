@@ -3,11 +3,15 @@ use crate::{
     RenderError, Shape, Transform,
 };
 use cupertino_geometry::{Point, Rect};
+use std::collections::HashMap;
 
 /// Physical pixels per logical point beyond which a request is refused.
 const MAX_SCALE: f64 = 64.0;
 /// Largest effect radius or offset, in logical points.
 const MAX_EFFECT_EXTENT: f64 = 4096.0;
+
+/// The deepest tree the renderer paints, as many levels as layout allows.
+const MAX_DEPTH: usize = 256;
 
 pub(crate) fn check(
     list: &DisplayList,
@@ -22,12 +26,23 @@ pub(crate) fn check(
     if width == 0 || height == 0 {
         return Err(RenderError::InvalidSize);
     }
-    let mut seen = std::collections::HashSet::new();
+    let mut depths: HashMap<PaintNodeId, usize> = HashMap::new();
     for node in &list.nodes {
-        if node.parent.is_some_and(|parent| !seen.contains(&parent)) {
-            return Err(RenderError::UnknownParent(node.id));
+        let depth = match node.parent {
+            None => 0,
+            Some(parent) => {
+                depths
+                    .get(&parent)
+                    .ok_or(RenderError::UnknownParent(node.id))?
+                    + 1
+            }
+        };
+        if depth > MAX_DEPTH {
+            return Err(RenderError::TooDeep(node.id));
         }
-        seen.insert(node.id);
+        if depths.insert(node.id, depth).is_some() {
+            return Err(RenderError::DuplicateNode(node.id));
+        }
         node_ok(node, resources)?;
     }
     Ok(())

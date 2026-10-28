@@ -41,8 +41,10 @@ all on one thread.
   damage is where changed nodes were and are, and a frame with no damage sends no buffer. A window that cannot be
   laid out, rendered or presented goes to `on_window_error` and tries again, whole, on its next change or configure,
   whatever the cause: the renderer reports a target and content too large to draw with the same error. The same error
-  again is not reported again, and the window's animations ask for no frames until a frame presents. Other windows
-  go on, and only a lost connection ends `step`.
+  again is not reported again, and the window's animations ask for no frames until a frame presents. An animation
+  whose current value is what fails (a blur animating down from over the renderer's limit, say) therefore stays at
+  that value until the application changes something or the compositor configures. Other windows go on, and only a
+  lost connection ends `step`.
 - **Scrolling.** A scroll container's offset is model state, counted from the start edge; core moves the content
   by it when placing nodes, so painting and hit-testing agree. In right-to-left layout, where layout mirrors the
   content, a horizontal offset moves the content right.

@@ -14,7 +14,6 @@ use cupertino_scene::{
     SceneItem, SceneKind, SceneLayer, SnapshotId, Source, SurfaceId, SurfaceRole,
 };
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
-use smithay::backend::renderer::gles::GlesTexture;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Physical, Rectangle};
@@ -23,7 +22,7 @@ type DevicePoint = smithay::utils::Point<i32, Physical>;
 
 use super::material::GpuRecipe;
 use super::scene::SceneParams;
-use super::snapshots::SnapshotLease;
+use super::snapshots::{SnapshotLease, SnapshotOwner};
 
 /// Straight opaque black; the render target clears with its own colour.
 const UNSPECIFIED_CLEAR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
@@ -72,23 +71,30 @@ pub struct Material {
     pub opacity: f32,
 }
 
-/// A window snapshot drawn through a mesh in output-local points. A retained snapshot comes with the lease that
-/// keeps it until the frame's elements are gone.
+/// What keeps a stored snapshot alive for a frame: a lease on one that effect state owns, or the ownership of one the
+/// frame captured for itself.
+pub enum SnapshotKeep {
+    Pinned(SnapshotLease),
+    Owned(SnapshotOwner),
+}
+
+/// A window snapshot drawn through a mesh in output-local points. The pixels stay in the snapshot store; the piece
+/// names them by handle and holds what keeps them alive for the frame.
 pub struct MeshPiece {
     pub kind: SceneKind,
     pub index: u64,
-    pub texture: GlesTexture,
-    pub lease: Option<SnapshotLease>,
+    pub snapshot: SnapshotId,
+    pub keep: SnapshotKeep,
     pub mesh: Mesh,
     pub opacity: f32,
     /// What besides the mesh and the opacity changes the look: the animation state that made the mesh.
     pub revision: u64,
 }
 
-/// The pixels a frame's mesh items draw, and what keeps them alive.
+/// The snapshot a frame's mesh item draws: the handle in the snapshot store, and what keeps it there.
 pub struct FrameSnapshot {
-    pub texture: GlesTexture,
-    pub lease: Option<SnapshotLease>,
+    pub id: SnapshotId,
+    pub keep: SnapshotKeep,
 }
 
 /// One drawable of a layer: a typed scene item, a surface tree, a picture, or an element the renderer still
@@ -112,19 +118,28 @@ pub struct Composition {
     id: FrameId,
     scale: f64,
     items: LayerStack<SceneItem>,
-    surfaces: Vec<WlSurface>,
-    images: Vec<MemoryRenderBuffer>,
-    recipes: Vec<Rc<GpuRecipe>>,
-    snapshots: Vec<Option<FrameSnapshot>>,
+    resources: FrameResources,
 }
 
-/// A composed frame and the resources its items refer to: surface trees, images, recipes and snapshots by handle.
-pub struct Composed {
-    pub frame: SceneFrame,
+/// What the typed handles of a frame's items resolve to: surface trees, images, recipes and snapshots, each by the
+/// slot and generation the composition gave it. Owned by the renderer's adapter from the frame's composition until
+/// the frame's elements are gone.
+#[derive(Default)]
+pub struct FrameResources {
     pub surfaces: Vec<WlSurface>,
     pub images: Vec<MemoryRenderBuffer>,
     pub recipes: Vec<Rc<GpuRecipe>>,
     pub snapshots: Vec<Option<FrameSnapshot>>,
+    /// The elements the comparison with the previous builder already lowered for this frame: lowering moves commit
+    /// counters, so the frame is lowered once and the renderer draws this list.
+    #[cfg(scene_oracle)]
+    pub prelowered: Option<Vec<super::CupertinoElement>>,
+}
+
+/// A composed frame and the resources its items refer to.
+pub struct Composed {
+    pub frame: SceneFrame,
+    pub resources: FrameResources,
 }
 
 impl Composition {
@@ -134,10 +149,7 @@ impl Composition {
             id: FrameId(FRAMES.fetch_add(1, Ordering::Relaxed)),
             scale,
             items: LayerStack::new(),
-            surfaces: Vec::new(),
-            images: Vec::new(),
-            recipes: Vec::new(),
-            snapshots: Vec::new(),
+            resources: FrameResources::default(),
         }
     }
 
@@ -146,12 +158,12 @@ impl Composition {
             Piece::Item(item) => self.items.push(layer, *item),
             Piece::Mesh(mesh) => {
                 let snapshot = SnapshotId(ResourceKey {
-                    slot: self.snapshots.len() as u64,
+                    slot: self.resources.snapshots.len() as u64,
                     generation: self.id.0,
                 });
-                self.snapshots.push(Some(FrameSnapshot {
-                    texture: mesh.texture,
-                    lease: mesh.lease,
+                self.resources.snapshots.push(Some(FrameSnapshot {
+                    id: mesh.snapshot,
+                    keep: mesh.keep,
                 }));
                 self.items.push(
                     layer,
@@ -174,10 +186,10 @@ impl Composition {
             }
             Piece::Material(material) => {
                 let recipe = RecipeId(ResourceKey {
-                    slot: self.recipes.len() as u64,
+                    slot: self.resources.recipes.len() as u64,
                     generation: self.id.0,
                 });
-                self.recipes.push(material.recipe);
+                self.resources.recipes.push(material.recipe);
                 self.items.push(
                     layer,
                     SceneItem {
@@ -203,10 +215,10 @@ impl Composition {
             }
             Piece::Image(picture) => {
                 let id = ImageId(ResourceKey {
-                    slot: self.images.len() as u64,
+                    slot: self.resources.images.len() as u64,
                     generation: self.id.0,
                 });
-                self.images.push(picture.buffer);
+                self.resources.images.push(picture.buffer);
                 self.items.push(
                     layer,
                     SceneItem {
@@ -242,10 +254,10 @@ impl Composition {
             Piece::Tree(tree) => {
                 let index = tree.surface.id().protocol_id() as u64;
                 let id = SurfaceId(ResourceKey {
-                    slot: self.surfaces.len() as u64,
+                    slot: self.resources.surfaces.len() as u64,
                     generation: self.id.0,
                 });
-                self.surfaces.push(tree.surface);
+                self.resources.surfaces.push(tree.surface);
                 let device = |p: DevicePoint| {
                     OutputPoint(Point::new(
                         f64::from(p.x) / self.scale,
@@ -316,10 +328,7 @@ impl Composition {
         );
         Composed {
             frame,
-            surfaces: self.surfaces,
-            images: self.images,
-            recipes: self.recipes,
-            snapshots: self.snapshots,
+            resources: self.resources,
         }
     }
 }

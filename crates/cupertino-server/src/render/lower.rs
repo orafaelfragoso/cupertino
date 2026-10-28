@@ -2,7 +2,7 @@
 //! front to back, with the cache slots and commit counters the renderer has always used.
 
 use cupertino_scene::{
-    Clip, ImageRole, OutputPoint, RoundedRect, SceneItem, Shadow, Source, SurfaceRole,
+    Clip, ImageRole, OutputPoint, RoundedRect, SceneFrame, SceneItem, Shadow, Source, SurfaceRole,
 };
 use smithay::backend::renderer::element::memory::{
     MemoryRenderBuffer, MemoryRenderBufferRenderElement,
@@ -17,11 +17,12 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size};
 
 use super::clip::{ClipElement, ClipShape};
-use super::compose::{logical_rect, Composed};
+use super::compose::{logical_rect, FrameResources};
 use super::material::{MaterialElement, SharedMaterial};
 use super::mesh::{MeshElement, SharedMesh};
 use super::programs::{corner_uniforms, u4, Programs};
 use super::shader_rect::{to_physical_rect, ElementCache, ElementKey, ShaderRect, Sig};
+use super::snapshots::Snapshots;
 use super::ui::{rounded_rect, RoundedRectSpec};
 use super::CupertinoElement;
 
@@ -31,19 +32,24 @@ pub struct Lowering<'a> {
     pub programs: &'a Programs,
     pub material: Option<SharedMaterial>,
     pub mesh: Option<SharedMesh>,
+    pub snapshots: Snapshots,
     pub cache: &'a mut ElementCache,
     pub scale: f64,
 }
 
 /// The elements of a composed frame front to back.
-pub fn lower(composed: Composed, ctx: &mut Lowering<'_>) -> Vec<CupertinoElement> {
-    let Composed {
-        frame,
+pub fn lower(
+    frame: &SceneFrame,
+    resources: FrameResources,
+    ctx: &mut Lowering<'_>,
+) -> Vec<CupertinoElement> {
+    let FrameResources {
         surfaces,
         images,
         recipes,
         mut snapshots,
-    } = composed;
+        ..
+    } = resources;
     let viewport = (
         frame.output.physical_size.width,
         frame.output.physical_size.height,
@@ -136,8 +142,9 @@ pub fn lower(composed: Composed, ctx: &mut Lowering<'_>) -> Vec<CupertinoElement
                     .get_mut(snapshot.0.slot as usize)
                     .filter(|_| snapshot.0.generation == frame.id.0)
                     .and_then(Option::take);
-                match (taken, ctx.mesh.clone()) {
-                    (Some(taken), Some(shared)) => {
+                let leased = taken.map(|t| ctx.snapshots.lease(t.id));
+                match (leased, ctx.mesh.clone()) {
+                    (Some(Ok((texture, lease))), Some(shared)) => {
                         let (id, commit) = ctx
                             .cache
                             .slot(key, mesh_signature(mesh, item.opacity, item.revision));
@@ -145,15 +152,18 @@ pub fn lower(composed: Composed, ctx: &mut Lowering<'_>) -> Vec<CupertinoElement
                             MeshElement::new(
                                 id,
                                 commit,
-                                taken.texture,
+                                texture,
                                 shared,
                                 mesh,
                                 ctx.scale,
                                 item.opacity as f32,
-                                taken.lease,
+                                Some(lease),
                             )
                             .into(),
                         );
+                    }
+                    (Some(Err(error)), _) => {
+                        tracing::error!(%error, ?snapshot, "scene snapshot is retired, item skipped");
                     }
                     _ => {
                         debug_assert!(false, "snapshot {snapshot:?} is unknown, drawn twice or the mesh pass is unavailable");

@@ -415,22 +415,12 @@ impl Cupertino {
         idx: usize,
         paint_cursors: bool,
     ) -> Result<Image> {
-        let elements = self
-            .scene_elements(renderer, idx, paint_cursors)
-            .context("the render resources are not loaded")?;
-        let out = &self.outputs[idx];
-        let size = out
+        let image = self.draw_output_image(renderer, idx, paint_cursors, false)?;
+        let size = self.outputs[idx]
             .output
             .current_mode()
             .context("the output has no mode")?
             .size;
-        let image = crate::render::screenshot::render_to_image(
-            renderer,
-            &elements,
-            size,
-            out.scale,
-            crate::frame::SCREENSHOT_CLEAR,
-        )?;
         Image::new(size.w, size.h, image.into_raw())
     }
 

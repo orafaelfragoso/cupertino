@@ -13,8 +13,8 @@ use std::time::Instant;
 
 use common::desktop::Desktop;
 use cupertino_server::backend::Backend;
+use cupertino_server::render::gles::{Gles, GlesResources};
 use cupertino_server::render::legacy_scene;
-use cupertino_server::render::scene::build_scene;
 
 /// Allocations of at least this many bytes count as pixel-buffer sized.
 const LARGE: usize = 64 * 1024;
@@ -81,7 +81,9 @@ fn measure(work: impl FnOnce()) -> Cost {
 /// The cost of one frame by the old and by the migrated builder, alternating, after warming both.
 fn frame_costs(d: &mut Desktop, rounds: usize) -> (Vec<Cost>, Vec<Cost>) {
     let mut backend = d.state.backend.take().unwrap();
-    let Backend::Headless(ref mut h) = backend else {
+    #[allow(irrefutable_let_patterns)]
+    let Backend::Headless(ref mut h) = backend
+    else {
         panic!("headless backend required")
     };
     let (mut old, mut new) = (Vec::new(), Vec::new());
@@ -93,8 +95,11 @@ fn frame_costs(d: &mut Desktop, rounds: usize) -> (Vec<Cost>, Vec<Cost>) {
             assert!(built.is_some());
         });
         let migrated = measure(|| {
-            let built = d.state.with_scene(&mut h.renderer, 0, build_scene);
-            assert!(built.is_some());
+            let composed = d.state.compose_output(&mut h.renderer, 0, true).unwrap();
+            let (res, cache, _) = d.state.gles_parts(0).unwrap();
+            let mut resources = GlesResources::new(res, cache, composed.resources);
+            let built = Gles::lower(&mut h.renderer, &composed.frame, &mut resources);
+            assert!(built.is_ok());
         });
         // the first rounds fill the caches of both builders
         if round >= 3 {

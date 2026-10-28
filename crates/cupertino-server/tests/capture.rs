@@ -545,8 +545,8 @@ impl<S> Pump for TestClient<S> {
 
 impl Harness {
     fn new() -> Option<Harness> {
-        let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().ok()?;
-        let display: Display<Cupertino> = Display::new().ok()?;
+        let event_loop: EventLoop<'static, Cupertino> = EventLoop::try_new().unwrap();
+        let display: Display<Cupertino> = Display::new().unwrap();
         let mut state = Cupertino::new(
             display,
             event_loop.handle(),
@@ -555,11 +555,11 @@ impl Harness {
             true,
             &cupertino_assets::Assets::builtin(),
         )
-        .ok()?;
+        .unwrap();
         match headless::init(&mut state, OUTPUT, 1.0) {
             Ok(()) => Some(Harness { state, event_loop }),
             Err(e) => {
-                eprintln!("skipping: no EGL device ({e:#})");
+                common::egl_unavailable(format_args!("{e:#}"));
                 None
             }
         }

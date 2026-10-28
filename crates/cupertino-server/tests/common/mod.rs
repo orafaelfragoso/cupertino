@@ -61,6 +61,15 @@ pub fn set_time_with(state: &mut Cupertino, time: f64, mut dispatch: impl FnMut(
     state.fixed_time = Some(time);
 }
 
+/// A headless test may skip without EGL locally, but CI requires a working renderer.
+pub fn egl_unavailable(error: impl std::fmt::Display) {
+    assert!(
+        std::env::var("CUPERTINO_EGL_REQUIRED").as_deref() != Ok("1"),
+        "no EGL device and CUPERTINO_EGL_REQUIRED=1: {error}"
+    );
+    eprintln!("SKIPPED: no EGL device ({error}); set CUPERTINO_EGL_REQUIRED=1 to fail instead");
+}
+
 fn solid_buffer(
     shm: &wl_shm::WlShm,
     size: (i32, i32),

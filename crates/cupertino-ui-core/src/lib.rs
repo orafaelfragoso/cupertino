@@ -27,7 +27,7 @@ pub use accessibility::{
 pub use clock::MonotonicClock;
 pub use command::CommandRegistry;
 pub use cx::{EventCx, MeasureCx, PaintCx, SemanticsCx};
-pub use runtime::{RendererFactory, Runtime, RuntimeOptions};
+pub use runtime::{RendererFactory, Runtime, RuntimeOptions, WindowErrorHandler};
 pub use widget::{Change, Element, Propagation, Widget};
 
 use cupertino_geometry::Rect;

@@ -18,7 +18,7 @@ all on one thread.
 | `PaintCx`, `SemanticsCx`, `MeasureCx` | painting into the node's `PaintOp`s in its own coordinates, and `set_group` to fade or shadow the whole subtree as one layer; role, name, value, states, actions, `focusable`, `focus_scope`, `protected` |
 | `Command` | `Perform(future)`, `Focus(key)`, `CloseWindow`, `Window(key, request)`, `SetClipboard`, `Exit` |
 | `Runtime` | `new(window system, RuntimeOptions)`, `step(max_turns)` (non-blocking, never moves time, returns `StepStatus`), `run`, `snapshot(window)`, `find`, `node_at` |
-| `RuntimeOptions` | theme, layout direction, node ceiling, a renderer factory (one renderer per window), an optional `AccessibilityAdapter`, the `Clock` |
+| `RuntimeOptions` | theme, layout direction, node ceiling, a renderer factory (one renderer per window), an optional `AccessibilityAdapter`, the `Clock`, an optional `on_window_error` handler |
 | `MonotonicClock` | `CLOCK_MONOTONIC`, the clock the window system stamps events with |
 
 ## How it works
@@ -38,13 +38,16 @@ all on one thread.
 - **Frames.** A step lays out every changed window, rebuilds its accessibility tree and focus, and paints when the
   compositor is ready: before the first configure nothing is drawn, the first frame acknowledges it, and later frames
   wait for the frame callback. A node repaints only when it, its size, its focus or the window's active state changed;
-  damage is where changed nodes were and are, and a frame with no damage sends no buffer.
+  damage is where changed nodes were and are, and a frame with no damage sends no buffer. A window that cannot be
+  laid out, rendered or presented (a configure larger than the renderer's pixel limit, say) goes to `on_window_error`
+  and waits for its next configure, then draws whole; other windows go on, and only a lost connection ends `step`.
 - **Scrolling.** A scroll container's offset is model state, counted from the start edge; core moves the content
   by it when placing nodes, so painting and hit-testing agree. In right-to-left layout, where layout mirrors the
   content, a horizontal offset moves the content right.
 - **Accessibility.** A node without a role stays out of the tree and its children move up. A protected node's value
-  becomes `AccessibleValue::Protected`, here, before any adapter, snapshot or test sees it. Adapters get diffs only
-  while `is_active`.
+  becomes `AccessibleValue::Protected`, here, before any adapter, snapshot or test sees it. An adapter gets each
+  window's whole tree when it becomes active or the window opens, then only diffs while `is_active`. A protected
+  field's input-method state goes out without its surrounding text.
 
 ## Not yet
 

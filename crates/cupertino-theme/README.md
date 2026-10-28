@@ -77,6 +77,49 @@ size and track, and line metrics. A test checks the built-in table against the o
 
 ## Tests
 
+### M1 control colour data
+
+The ordinary `light` and `dark` catalogs include explicit M1 chrome state colours. Existing entries are unchanged.
+The following table records the design basis of every added value. All new state assignments and literals are
+APPROXIMATED. They await the control fixture review. RGBA values are straight 8-bit sRGB.
+
+| Tokens | Light | Dark | Design basis |
+|---|---|---|---|
+| `control-fill`, `control-fill-hover` | `control` | `control` | Existing fill, retained on hover |
+| `control-fill-pressed` | `secondary-selected-control` | `secondary-selected-control` | Neutral momentary press, paired with `control-text` |
+| `control-fill-disabled`, `default-button-fill-disabled`, `destructive-fill-disabled`, `text-background-disabled` | [242,242,242,255] | [62,62,62,255] | APPROXIMATED dedicated disabled fill without subtree opacity |
+| `control-border` | `container-border` | `container-border` | Existing border |
+| `control-border-emphasized` | [0,0,0,96] | [255,255,255,96] | APPROXIMATED hover and pressed border |
+| `control-border-disabled` | [0,0,0,32] | [255,255,255,32] | APPROXIMATED dedicated disabled border |
+| `default-button-fill`, `default-button-fill-hover`, `selected-control`, `switch-track-selected`, `switch-track-selected-hover` | `control-accent-blue` | `control-accent-blue` | Existing accent, retained on hover |
+| `default-button-fill-pressed`, `switch-track-selected-pressed` | [0,104,218,255] | [0,104,218,255] | APPROXIMATED explicit pressed accent |
+| `default-button-text`, `destructive-text`, `selected-control-text` | [255,255,255,255] | [255,255,255,255] | Light uses existing alternate selection foreground; dark completion APPROXIMATED |
+| `alternate-selected-control-text` (dark only) | Existing entry | [255,255,255,255] | APPROXIMATED missing dark selection foreground |
+| `default-button-text-disabled`, `destructive-text-disabled` | `disabled-control-text` | `disabled-control-text` | Existing disabled foreground |
+| `destructive-fill`, `destructive-fill-hover` | `system-red` | `system-red` | Existing destructive colour, retained on hover |
+| `destructive-fill-pressed` | [215,45,38,255] | [220,55,46,255] | APPROXIMATED explicit destructive press |
+| `switch-track`, `switch-track-hover` | `system-fill` | `system-fill` | Existing off treatment |
+| `switch-track-pressed` | [0,0,0,51] | [255,255,255,51] | APPROXIMATED off press |
+| `switch-track-disabled` | [220,220,220,255] | [70,70,70,255] | Existing secondary selection RGB, opaque disabled off |
+| `switch-track-selected-disabled` | [166,198,232,255] | [54,82,112,255] | APPROXIMATED disabled on treatment; thumb position also conveys state |
+| `switch-thumb`, `switch-thumb-hover`, `switch-thumb-pressed` | [255,255,255,255] | [255,255,255,255] | APPROXIMATED opaque thumb; dark `control` is translucent and unsuitable |
+| `switch-thumb-disabled` | [248,248,248,255] | [180,180,180,255] | APPROXIMATED dedicated disabled thumb |
+| `secondary-selected-control-text` | `control-text` | `control-text` | Existing foreground for neutral selection |
+| `selected-text` | `text` | `text` | Existing foreground over translucent text selection |
+| `control-focus-indicator` | `keyboard-focus-indicator` | [37,173,255,255] | Existing focus RGB with full alpha for control rings; dark alpha APPROXIMATED |
+| `tool-tip` (dark only) | Existing entry | [40,40,40,255] | APPROXIMATED opaque completion of the dark tooltip pair |
+
+Names in the Light and Dark columns mean exact copies of that appearance's existing values, not runtime aliases.
+Disabled overrides pressed and hover. Selection is independent of interaction. Active selected controls use
+`selected-control` with `selected-control-text`; inactive selected controls use `secondary-selected-control` with
+`secondary-selected-control-text`. Switch selection retains its on colour when the window is inactive. Keyboard
+focus paints a separate ring. No runtime colour darkening or whole-control opacity is needed.
+
+These additions provide ordinary appearance data for the chrome fixture. They do not implement the Kit adapter or
+the neutral built-in theme, and do not complete the high-contrast catalogs. White text on the inherited accent and
+red, disabled foregrounds, and faint boundaries still require resolved-pair contrast review. A label-free chrome
+capture cannot establish text contrast or complete accessibility acceptance.
+
 ```
 cargo test -p cupertino-theme
 ```

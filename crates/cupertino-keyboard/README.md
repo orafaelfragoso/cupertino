@@ -43,7 +43,7 @@ let shortcuts = ShortcutSet::reference_defaults();
 if let Some(action) = shortcuts.lookup(&Chord::new(mods, Key::Char('4'))) { /* run the action */ }
 
 // 3b. text editing: standard table + ~/.config/cupertino/keybindings.conf
-let (bindings, _errors) = BindingTable::load_default();
+let (bindings, _errors) = cupertino_keyboard::binding::load_default();
 let mut resolver = Resolver::new(bindings);
 let _ = resolver.feed(Chord::parse("Alt+Left").unwrap());      // Actions([MoveWordLeft])
 

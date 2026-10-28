@@ -12,7 +12,7 @@ import subprocess
 import sys
 
 REGISTRY = "docs/architecture/contracts.yaml"
-KINDS = {"wayland-global", "dbus-interface", "binary"}
+KINDS = {"wayland-global", "dbus-interface", "binary", "socket-protocol"}
 AREAS = {"compositor", "rendering", "design", "apps", "services", "packaging"}
 SCOPES = {"public", "shell-private", "system", "unknown"}
 COMMON = {"name", "kind", "version", "owner_crate", "owner_area", "scope", "test_owner", "source"}
@@ -20,6 +20,7 @@ EXTRA = {
     "wayland-global": {"role", "advertised"},
     "dbus-interface": {"bus", "bus_name"},
     "binary": {"shipped"},
+    "socket-protocol": set(),
 }
 OPTIONAL = {"note", "version_without_render_node", "visible_to"}
 # Any attribute with an `interface` token that is not a `key = value` argument (`proxy(interface = "...")`) and not inside
@@ -27,7 +28,8 @@ OPTIONAL = {"note", "version_without_render_node", "visible_to"}
 ATTRIBUTE = re.compile(r'^[ \t]*#\[[^\]"]*?\binterface\b(?!\s*=)(.*?)\]', re.M | re.S)
 LITERAL_NAME = re.compile(r'\(\s*name\s*=\s*"([^"]+)"\s*[,)]')
 # Entries without a test file. It only goes down: give an entry a test_owner and lower this number.
-UNKNOWN_TEST_OWNERS = 32
+UNKNOWN_TEST_OWNERS = 16
+UNKNOWN_SCOPES = 1
 NAME = re.compile(r'"(org\.cupertino\.[A-Za-z0-9.]+)"')
 
 
@@ -110,13 +112,20 @@ def interfaces(text):
 
 
 def check_ratchet(entries):
+    scopes = sum(e.get("scope") == "unknown" for e in entries)
+    problems = []
+    if scopes > UNKNOWN_SCOPES:
+        problems.append(f"{REGISTRY}: {scopes} entries have scope unknown, at most {UNKNOWN_SCOPES} are allowed")
+    if scopes < UNKNOWN_SCOPES:
+        problems.append(f"ci/contracts.py: only {scopes} entries have scope unknown, lower UNKNOWN_SCOPES from "
+                        f"{UNKNOWN_SCOPES}")
     unknown = sum(e.get("test_owner") == "unknown" for e in entries)
     if unknown > UNKNOWN_TEST_OWNERS:
-        return [f"{REGISTRY}: {unknown} entries have test_owner unknown, at most {UNKNOWN_TEST_OWNERS} are allowed"]
+        problems.append(f"{REGISTRY}: {unknown} entries have test_owner unknown, at most {UNKNOWN_TEST_OWNERS} are allowed")
     if unknown < UNKNOWN_TEST_OWNERS:
-        return [f"ci/contracts.py: only {unknown} entries have test_owner unknown, lower UNKNOWN_TEST_OWNERS from "
-                f"{UNKNOWN_TEST_OWNERS}"]
-    return []
+        problems.append(f"ci/contracts.py: only {unknown} entries have test_owner unknown, lower UNKNOWN_TEST_OWNERS from "
+                        f"{UNKNOWN_TEST_OWNERS}")
+    return problems
 
 
 def check_dbus(entries, root):

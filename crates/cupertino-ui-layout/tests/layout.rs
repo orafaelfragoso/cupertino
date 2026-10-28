@@ -463,3 +463,56 @@ fn layout_work_grows_linearly_with_depth_on_mixed_nested_stacks() {
         );
     }
 }
+
+#[test]
+fn a_horizontal_scroll_view_starts_at_its_right_edge_in_right_to_left() {
+    let mut t = TestTree::default();
+    let content = t.leaf(500.0, 20.0);
+    let scroll = t.container(
+        ContainerKind::Scroll {
+            horizontal: true,
+            vertical: false,
+        },
+        vec![content],
+    );
+    t.size(scroll, SizeSpec::Fill, SizeSpec::Fill);
+    let r = t.run_tight(scroll, Size::new(200.0, 20.0), LayoutDirection::Rtl);
+    assert_eq!(r.nodes[&content].rect, Rect::new(-300.0, 0.0, 500.0, 20.0));
+    let r = t.run_tight(scroll, Size::new(200.0, 20.0), LayoutDirection::Ltr);
+    assert_eq!(r.nodes[&content].rect, Rect::new(0.0, 0.0, 500.0, 20.0));
+}
+
+#[test]
+fn many_children_that_each_hit_a_bound_still_settle() {
+    let mut t = TestTree::default();
+    let kids: Vec<usize> = (0..60)
+        .map(|i| {
+            let leaf = t.leaf(1.0 + i as f64, 5.0);
+            t.flex(
+                leaf,
+                Flex {
+                    grow: 0.0,
+                    shrink: 1.0 + (i % 7) as f64,
+                    basis: None,
+                },
+            )
+        })
+        .collect();
+    for i in (0..60).step_by(2) {
+        t.size(kids[i], SizeSpec::Fixed(40.0), SizeSpec::Fit);
+    }
+    let root = t.stack(Axis::Horizontal, 0.0, kids.clone());
+    let r = t.run_tight(root, Size::new(300.0, 10.0), LayoutDirection::Ltr);
+    let total: f64 = kids.iter().map(|k| r.nodes[k].rect.size.width).sum();
+    assert!(total.is_finite() && r.nodes.len() == 61);
+}
+
+#[test]
+fn the_result_reports_the_work_it_did() {
+    let mut t = TestTree::default();
+    let (a, b) = (t.leaf(10.0, 10.0), t.leaf(20.0, 10.0));
+    let root = t.stack(Axis::Horizontal, 0.0, vec![a, b]);
+    let r = t.run(root, OPEN);
+    assert_eq!(r.stats.leaf_measures, t.leaf_measures.get());
+    assert!(r.stats.solves >= 3);
+}

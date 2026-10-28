@@ -2,8 +2,8 @@
 
 use crate::{
     grid, layers, stack, Align, Axis, AxisConstraint, Constraints, ContainerKind, LayoutDirection,
-    LayoutError, LayoutOptions, LayoutResult, LayoutSpec, LayoutTree, NodeLayout, Overflow,
-    SizeSpec, Track,
+    LayoutError, LayoutOptions, LayoutResult, LayoutSpec, LayoutStats, LayoutTree, NodeLayout,
+    Overflow, SizeSpec, Track,
 };
 use cupertino_geometry::{Point, Rect, Size};
 use std::collections::{HashMap, HashSet};
@@ -32,6 +32,7 @@ pub(crate) struct Engine<'a, T: LayoutTree> {
     pub tree: &'a T,
     direction: LayoutDirection,
     cache: HashMap<Key<T::Id>, Rc<Solved<T::Id>>>,
+    stats: LayoutStats,
 }
 
 /// Lays out the tree under `root` within `available`. The root sits at the origin; every other node is in its parent's
@@ -47,6 +48,7 @@ pub fn layout<T: LayoutTree>(
         tree,
         direction: options.direction,
         cache: HashMap::new(),
+        stats: LayoutStats::default(),
     };
     let size = engine.solve(root, available)?.size;
     let mut nodes = HashMap::new();
@@ -65,7 +67,10 @@ pub fn layout<T: LayoutTree>(
             pending.push((*child, rect.origin, rect.size));
         }
     }
-    Ok(LayoutResult { nodes })
+    Ok(LayoutResult {
+        nodes,
+        stats: engine.stats,
+    })
 }
 
 fn validate_tree<T: LayoutTree>(
@@ -140,6 +145,7 @@ impl<T: LayoutTree> Engine<'_, T> {
         if let Some(solved) = self.cache.get(&key) {
             return Ok(Rc::clone(solved));
         }
+        self.stats.solves += 1;
         let solved = Rc::new(self.compute(id, constraints)?);
         self.cache.insert(key, Rc::clone(&solved));
         Ok(solved)
@@ -159,6 +165,7 @@ impl<T: LayoutTree> Engine<'_, T> {
         let kids = tree.children(id);
         let mut arranged = match &spec.kind {
             ContainerKind::Leaf => {
+                self.stats.leaf_measures += 1;
                 let measured = tree.measure_leaf(id, inner);
                 let (w, h) = (measured.size.width, measured.size.height);
                 if !w.is_finite()
@@ -202,7 +209,7 @@ impl<T: LayoutTree> Engine<'_, T> {
             )?,
         };
         let scrolls = matches!(spec.kind, ContainerKind::Scroll { .. });
-        if self.direction == LayoutDirection::Rtl && !scrolls {
+        if self.direction == LayoutDirection::Rtl {
             for (_, rect) in &mut arranged.children {
                 rect.origin.x = arranged.size.width - rect.max_x();
             }

@@ -22,6 +22,7 @@ use super::material::{MaterialElement, SharedMaterial};
 use super::mesh::{MeshElement, SharedMesh};
 use super::programs::{corner_uniforms, u4, Programs};
 use super::shader_rect::{to_physical_rect, ElementCache, ElementKey, ShaderRect, Sig};
+use super::snapshots::Snapshots;
 use super::ui::{rounded_rect, RoundedRectSpec};
 use super::CupertinoElement;
 
@@ -31,6 +32,7 @@ pub struct Lowering<'a> {
     pub programs: &'a Programs,
     pub material: Option<SharedMaterial>,
     pub mesh: Option<SharedMesh>,
+    pub snapshots: Snapshots,
     pub cache: &'a mut ElementCache,
     pub scale: f64,
 }
@@ -140,8 +142,9 @@ pub fn lower(
                     .get_mut(snapshot.0.slot as usize)
                     .filter(|_| snapshot.0.generation == frame.id.0)
                     .and_then(Option::take);
-                match (taken, ctx.mesh.clone()) {
-                    (Some(taken), Some(shared)) => {
+                let leased = taken.map(|t| ctx.snapshots.lease(t.id));
+                match (leased, ctx.mesh.clone()) {
+                    (Some(Ok((texture, lease))), Some(shared)) => {
                         let (id, commit) = ctx
                             .cache
                             .slot(key, mesh_signature(mesh, item.opacity, item.revision));
@@ -149,15 +152,18 @@ pub fn lower(
                             MeshElement::new(
                                 id,
                                 commit,
-                                taken.texture,
+                                texture,
                                 shared,
                                 mesh,
                                 ctx.scale,
                                 item.opacity as f32,
-                                taken.lease,
+                                Some(lease),
                             )
                             .into(),
                         );
+                    }
+                    (Some(Err(error)), _) => {
+                        tracing::error!(%error, ?snapshot, "scene snapshot is retired, item skipped");
                     }
                     _ => {
                         debug_assert!(false, "snapshot {snapshot:?} is unknown, drawn twice or the mesh pass is unavailable");

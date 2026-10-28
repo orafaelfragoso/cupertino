@@ -81,7 +81,9 @@ fn measure(work: impl FnOnce()) -> Cost {
 /// The cost of one frame by the old and by the migrated builder, alternating, after warming both.
 fn frame_costs(d: &mut Desktop, rounds: usize) -> (Vec<Cost>, Vec<Cost>) {
     let mut backend = d.state.backend.take().unwrap();
-    let Backend::Headless(ref mut h) = backend else {
+    #[allow(irrefutable_let_patterns)]
+    let Backend::Headless(ref mut h) = backend
+    else {
         panic!("headless backend required")
     };
     let (mut old, mut new) = (Vec::new(), Vec::new());

@@ -1354,6 +1354,7 @@ name = "cupertino-ui-menus"
 version = "0.1.0"
 dependencies = [
  "cupertino-menu-model",
+ "libc",
  "zbus",
 ]
 

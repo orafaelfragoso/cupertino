@@ -81,10 +81,7 @@ fn the_bar_reads_the_labels_a_kit_application_exports() {
         eprintln!("skipping: dbus-daemon is not available");
         return;
     };
-    let exporting = zbus::blocking::connection::Builder::address(bus.address.as_str())
-        .unwrap()
-        .build()
-        .unwrap();
+    let exporting = zbus::blocking::connection::Builder::address(bus.address.as_str()).unwrap();
     let mut exporter =
         Exporter::new(exporting, "org.example.Notes", Box::new(Cupertino), |_| {}).unwrap();
     let features = Features {

@@ -397,6 +397,8 @@ pub(crate) const MAX_PIXELS: u64 = 4096 * 4096;
 /// A renderer that keeps a blank frame and records the damage of every request.
 pub(crate) struct FakeRenderer {
     pub(crate) damage: Rc<RefCell<Vec<DamageRegion>>>,
+    /// While set, every request fails as content the renderer cannot draw would.
+    broken: Rc<Cell<bool>>,
     frame: CpuFrame,
 }
 
@@ -406,6 +408,9 @@ impl UiRenderer for FakeRenderer {
     fn render(&mut self, request: &RenderRequest<'_>) -> Result<RenderFrameId, RenderError> {
         if u64::from(request.width) * u64::from(request.height) > MAX_PIXELS {
             return Err(RenderError::ResourceLimit);
+        }
+        if self.broken.get() {
+            return Err(RenderError::UnknownFrame(RenderFrameId(0)));
         }
         self.damage.borrow_mut().push(request.damage.clone());
         self.frame.id = RenderFrameId(self.frame.id.0 + 1);
@@ -454,7 +459,16 @@ impl Clock for FakeClock {
 }
 
 pub(crate) fn options(damage: &Rc<RefCell<Vec<DamageRegion>>>) -> RuntimeOptions {
+    options_with(damage, &Rc::default())
+}
+
+/// Options whose renderers fail while `broken` is set.
+pub(crate) fn options_with(
+    damage: &Rc<RefCell<Vec<DamageRegion>>>,
+    broken: &Rc<Cell<bool>>,
+) -> RuntimeOptions {
     let damage = Rc::clone(damage);
+    let broken = Rc::clone(broken);
     RuntimeOptions {
         theme: env().theme,
         direction: LayoutDirection::Ltr,
@@ -462,6 +476,7 @@ pub(crate) fn options(damage: &Rc<RefCell<Vec<DamageRegion>>>) -> RuntimeOptions
         renderers: Box::new(move || {
             Box::new(FakeRenderer {
                 damage: Rc::clone(&damage),
+                broken: Rc::clone(&broken),
                 frame: CpuFrame {
                     id: RenderFrameId(0),
                     width: 0,

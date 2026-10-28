@@ -922,11 +922,16 @@ fn render_notice(
 /// The narrowest output (in logical points) the notice is made for. No display is narrower. From this width up, at any
 /// scale: (a) the sentence that names the release chord ("Press <chord> to get your shortcuts back.") is shown whole
 /// for chords up to the tested length (`Super+Escape`, `Ctrl+Alt+Escape`), in a slightly smaller type when the output is
-/// narrow, and the application's name goes when it does not fit; (b) for any longer chord the chord itself is shown
-/// whole, alone, up to the longest real one (`Ctrl+Alt+Shift+Super+` and a key name of the keymap). The chord is what
-/// matters, the sentence around it is a courtesy, and it is the person's own configuration, not the client's, that
-/// makes it long. Below this width nothing is guaranteed: the notice shows the chord alone, cut at the output's edge.
+/// narrow, and the application's name goes when it does not fit; (b) for a longer chord the chord itself is shown whole,
+/// alone, as long as its rendered label is at most [`NOTICE_CHORD_BUDGET`] points wide. A chord wider than that can
+/// only come from the person's own configuration, not from the client, and may be cut: `Ctrl+Alt+Shift+Super+` and
+/// the key name `XF86MonBrightnessDown` (296 points) is an example. The chord is what matters, the sentence around it is
+/// a courtesy. Below this width nothing is guaranteed: the notice shows the chord alone, cut at the output's edge.
 pub const NOTICE_MIN_OUTPUT_WIDTH: f64 = 320.0;
+/// The widest rendered chord label (in points, in the type size of the chord alone) that the notice shows whole at the
+/// narrowest supported output: the output less a side margin and the compact padding on each side.
+pub const NOTICE_CHORD_BUDGET: f64 =
+    NOTICE_MIN_OUTPUT_WIDTH - 2.0 * NOTICE_SIDE_MARGIN - 2.0 * NOTICE_COMPACT.1;
 /// The least room, in points, the text of the notice gets, whatever the output: a narrower output cuts the notice at its edge.
 const NOTICE_MIN_TEXT_ROOM: f64 = 40.0;
 /// Distance of the notice from each side of the output, in points.
@@ -975,8 +980,8 @@ fn notice_setting(
 /// The size and the position of the notice (in points) for a text `text_width` wide set with `setting` on an output
 /// `output_width` wide: as wide as the text needs, never wider than the output less a margin on each side, centred. The
 /// text starts at the left padding. From [`NOTICE_MIN_OUTPUT_WIDTH`] up what is shown fits the pill: (a) the chord
-/// sentence whole for chords up to the tested length, (b) the chord itself whole for a longer one; below it nothing is
-/// guaranteed.
+/// sentence whole for chords up to the tested length, (b) the chord itself whole for a longer one whose label is at most
+/// [`NOTICE_CHORD_BUDGET`] wide; below it nothing is guaranteed.
 fn notice_layout(
     text_width: f64,
     setting: &NoticeSetting,
@@ -1522,32 +1527,68 @@ mod tests {
         }
     }
 
-    /// A chord longer than the tested ones is the person's own configuration: the sentence around it may go, the chord
-    /// itself is shown whole, alone, at the narrowest output and the largest scale.
+    /// The width of the chord `Ctrl+Alt+Shift+Super+<key>` as the notice draws it alone, in points.
+    fn chord_width(renderer: &mut crate::overlays::OverlayText, key: &str, scale: f64) -> f64 {
+        let chord = format!("Ctrl+Alt+Shift+Super+{key}");
+        f64::from(renderer.width(&chord, FONT_PT * scale as f32, 400)) / scale
+    }
+
+    /// A chord longer than the tested ones is the person's own configuration. One whose label is within the budget is
+    /// shown whole, alone, at the narrowest output; one just over it may be cut. Both are real key names of the table
+    /// (the keys a printed chord can name), the widest of those that fit and the narrowest of those that do not,
+    /// measured with the real font, at scales 1 and 2.
     #[test]
-    fn a_long_configured_chord_is_shown_whole_on_the_narrowest_supported_output() {
+    fn a_long_configured_chord_is_shown_whole_up_to_the_budget_and_may_be_cut_beyond_it() {
         let assets = cupertino_assets::Assets::builtin();
         let mut renderer =
             crate::overlays::OverlayText::new(&cupertino_theme::Typography::default(), &assets)
                 .expect("the built-in font");
-        let chord = "Ctrl+Alt+Shift+Super+Escape";
-        let notice = notice_for(chord, "org.example.vm");
+        assert_eq!(NOTICE_CHORD_BUDGET, 280.0);
         for scale in [1.0, 2.0] {
             renderer.set_scale(scale as f32);
-            let set = notice_setting(&notice, NOTICE_MIN_OUTPUT_WIDTH, scale, &mut renderer);
-            assert!(
-                set.text == notice.clause || set.text == chord,
-                "{scale}: the chord is shown whole, as the sentence or alone: {set:?}"
-            );
-            let text_width =
-                f64::from(renderer.width(&set.text, set.pt * scale as f32, 400)) / scale;
-            let ((w, _), (x, _)) = notice_layout(text_width, &set, NOTICE_MIN_OUTPUT_WIDTH);
-            assert!(
-                text_width + 2.0 * set.pad <= w + 1e-9
-                    && x >= 0.0
-                    && x + w <= NOTICE_MIN_OUTPUT_WIDTH,
-                "{scale}: it fits inside the pill and the output"
-            );
+            let mut keys: Vec<String> = cupertino_input::keysym::names()
+                .map(str::to_owned)
+                .collect();
+            keys.extend((1..=35).map(|n| format!("F{n}")));
+            keys.extend((0..=9).map(|n| format!("KP_{n}")));
+            let mut measured: Vec<(f64, String)> = keys
+                .into_iter()
+                .map(|key| (chord_width(&mut renderer, &key, scale), key))
+                .collect();
+            measured.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let (_, under) = measured
+                .iter()
+                .rfind(|(w, _)| *w <= NOTICE_CHORD_BUDGET)
+                .expect("a key name within the budget");
+            let (_, over) = measured
+                .iter()
+                .find(|(w, _)| *w > NOTICE_CHORD_BUDGET)
+                .expect("a key name beyond the budget");
+            for (key, whole) in [(under, true), (over, false)] {
+                let chord = format!("Ctrl+Alt+Shift+Super+{key}");
+                let notice = notice_for(&chord, "org.example.vm");
+                let set = notice_setting(&notice, NOTICE_MIN_OUTPUT_WIDTH, scale, &mut renderer);
+                if whole {
+                    assert!(
+                        set.text == notice.clause || set.text == chord,
+                        "{scale}: {chord} is within the budget and is shown whole: {set:?}"
+                    );
+                    let text_width =
+                        f64::from(renderer.width(&set.text, set.pt * scale as f32, 400)) / scale;
+                    let ((w, _), (x, _)) = notice_layout(text_width, &set, NOTICE_MIN_OUTPUT_WIDTH);
+                    assert!(
+                        text_width + 2.0 * set.pad <= w + 1e-9
+                            && x >= 0.0
+                            && x + w <= NOTICE_MIN_OUTPUT_WIDTH,
+                        "{scale}: {chord} fits inside the pill and the output"
+                    );
+                } else {
+                    assert!(
+                        set.text != notice.clause && set.text != chord,
+                        "{scale}: {chord} is beyond the budget, so it is cut: {set:?}"
+                    );
+                }
+            }
         }
     }
 

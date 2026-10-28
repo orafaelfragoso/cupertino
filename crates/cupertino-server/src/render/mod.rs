@@ -14,8 +14,6 @@ pub mod clip;
 pub mod compose;
 pub mod gles;
 pub mod image;
-#[cfg(scene_oracle)]
-pub mod legacy_scene;
 pub mod lower;
 pub mod material;
 pub mod mesh;

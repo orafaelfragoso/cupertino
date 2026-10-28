@@ -43,6 +43,7 @@ pub fn lower(
     resources: FrameResources,
     ctx: &mut Lowering<'_>,
 ) -> Vec<CupertinoElement> {
+    assert_eq!(resources.frame, frame.id, "resources of another frame");
     let FrameResources {
         surfaces,
         images,

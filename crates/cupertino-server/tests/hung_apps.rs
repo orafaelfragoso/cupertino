@@ -93,6 +93,33 @@ fn mapped_window(h: &mut Harness) -> (Client, cupertino_wm::WindowId) {
 }
 
 #[test]
+fn advancing_model_time_waits_for_a_delayed_responsive_client() {
+    let mut h = Harness::new().expect("EGL is required for the clock barrier proof");
+    let (client, id) = mapped_window(&mut h);
+    client.mute(true);
+    h.advance(1.1);
+    assert!(
+        h.state.hung.awaiting_pong(),
+        "client must hold an outstanding ping"
+    );
+
+    let started = Instant::now();
+    let target = h.now + 5.0;
+    common::set_time_with(&mut h.state, target, |state| {
+        if started.elapsed() >= Duration::from_millis(300) {
+            client.mute(false);
+        }
+        headless::step(state, &mut h.event_loop, Duration::from_millis(5)).unwrap();
+    });
+    h.state.tick();
+    assert_eq!(h.state.now(), target);
+    assert!(
+        !h.state.window_is_unresponsive(id),
+        "a delayed responsive client must remain responsive across a model clock jump"
+    );
+}
+
+#[test]
 fn a_client_that_stops_answering_is_unresponsive_two_seconds_after_the_ping_and_recovers() {
     let Some(mut h) = Harness::new() else { return };
     let (client, id) = mapped_window(&mut h);

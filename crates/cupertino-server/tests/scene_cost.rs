@@ -1,9 +1,8 @@
-//! What composing and lowering a frame costs compared with the builder it replaces. The deterministic part is
-//! enforced: in a steady scene the migrated path makes no more large (pixel-buffer sized) allocations than the old
-//! one, so a copy of window or image pixels per frame fails the test whatever the machine is doing. Timings and small
-//! allocation counts are only reported; `scene_cost_report` prints them for the size matrix when run with
-//! `--ignored --nocapture`, for Probe to validate.
-#![cfg(scene_oracle)]
+//! What composing and lowering a frame costs. The deterministic part is enforced: in a steady scene a frame makes no
+//! large (pixel-buffer sized) allocation, so a copy of window or image pixels per frame fails the test whatever the
+//! machine is doing. Timings and small allocation counts are only reported; `scene_cost_report` prints them for the
+//! size matrix when run with `--ignored --nocapture`, for Probe to validate. (The comparison with the builder the scene
+//! frame replaced was made while it existed, in the work packages that migrated it.)
 
 mod common;
 
@@ -14,7 +13,6 @@ use std::time::Instant;
 use common::desktop::Desktop;
 use cupertino_server::backend::Backend;
 use cupertino_server::render::gles::{Gles, GlesResources};
-use cupertino_server::render::legacy_scene;
 
 /// Allocations of at least this many bytes count as pixel-buffer sized.
 const LARGE: usize = 64 * 1024;
@@ -78,37 +76,30 @@ fn measure(work: impl FnOnce()) -> Cost {
     }
 }
 
-/// The cost of one frame by the old and by the migrated builder, alternating, after warming both.
-fn frame_costs(d: &mut Desktop, rounds: usize) -> (Vec<Cost>, Vec<Cost>) {
+/// The cost of composing and lowering one frame, after warming the caches.
+fn frame_costs(d: &mut Desktop, rounds: usize) -> Vec<Cost> {
     let mut backend = d.state.backend.take().unwrap();
     #[allow(irrefutable_let_patterns)]
     let Backend::Headless(ref mut h) = backend
     else {
         panic!("headless backend required")
     };
-    let (mut old, mut new) = (Vec::new(), Vec::new());
+    let mut costs = Vec::new();
     for round in 0..rounds + 3 {
         let cost = measure(|| {
-            let built = d
-                .state
-                .with_scene(&mut h.renderer, 0, legacy_scene::build_scene);
-            assert!(built.is_some());
-        });
-        let migrated = measure(|| {
             let composed = d.state.compose_output(&mut h.renderer, 0, true).unwrap();
             let (res, cache, _) = d.state.gles_parts(0).unwrap();
             let mut resources = GlesResources::new(res, cache, composed.resources);
             let built = Gles::lower(&mut h.renderer, &composed.frame, &mut resources);
             assert!(built.is_ok());
         });
-        // the first rounds fill the caches of both builders
+        // the first rounds fill the caches
         if round >= 3 {
-            old.push(cost);
-            new.push(migrated);
+            costs.push(cost);
         }
     }
     d.state.backend = Some(backend);
-    (old, new)
+    costs
 }
 
 fn median<T: Copy + Ord>(mut values: Vec<T>) -> T {
@@ -123,7 +114,7 @@ fn the_counter_sees_a_pixel_sized_allocation() {
 }
 
 #[test]
-fn a_steady_frame_makes_no_more_pixel_sized_allocations_than_the_old_builder() {
+fn a_steady_frame_makes_no_pixel_sized_allocation() {
     for (windows, scale) in [(1, 1.0), (10, 1.0), (10, 2.0)] {
         let mut d = Desktop::new(scale);
         for _ in 0..windows {
@@ -131,31 +122,19 @@ fn a_steady_frame_makes_no_more_pixel_sized_allocations_than_the_old_builder() {
         }
         d.at(5000);
         d.at(5016);
-        let (old, new) = frame_costs(&mut d, 5);
-        let large = |costs: &[Cost]| median(costs.iter().map(|c| c.large).collect());
-        let bytes = |costs: &[Cost]| median(costs.iter().map(|c| c.large_bytes).collect());
-        eprintln!(
-            "{windows} windows at {scale}x: migrated {} large / {} bytes / {} small, old {} / {} / {}",
-            large(&new),
-            bytes(&new),
-            median(new.iter().map(|c| c.small).collect()),
-            large(&old),
-            bytes(&old),
-            median(old.iter().map(|c| c.small).collect()),
-        );
-        assert!(
-            large(&new) <= large(&old) && bytes(&new) <= bytes(&old),
-            "{windows} windows at {scale}x: {} large allocations of {} bytes, the old builder {} of {}",
-            large(&new),
-            bytes(&new),
-            large(&old),
-            bytes(&old)
+        let costs = frame_costs(&mut d, 5);
+        let large = median(costs.iter().map(|c| c.large).collect());
+        let bytes = median(costs.iter().map(|c| c.large_bytes).collect());
+        assert_eq!(
+            (large, bytes),
+            (0, 0),
+            "{windows} windows at {scale}x: a frame allocated pixel-buffer sized memory"
         );
     }
 }
 
 #[test]
-#[ignore = "opt-in measurement for Probe: CUPERTINO_SCENE_ORACLE=1 cargo test -p cupertino-server --test scene_cost -- --ignored --nocapture"]
+#[ignore = "opt-in measurement for Probe: cargo test -p cupertino-server --test scene_cost -- --ignored --nocapture"]
 fn scene_cost_report() {
     for size in [(1920, 1080), (3840, 2160)] {
         for scale in [1.0, 2.0] {
@@ -166,20 +145,13 @@ fn scene_cost_report() {
                 }
                 d.at(5000);
                 d.at(5016);
-                let (old, new) = frame_costs(&mut d, 41);
-                let micros = |costs: &[Cost]| median(costs.iter().map(|c| c.micros).collect());
-                let small = |costs: &[Cost]| median(costs.iter().map(|c| c.small).collect());
-                let large = |costs: &[Cost]| median(costs.iter().map(|c| c.large).collect());
+                let costs = frame_costs(&mut d, 41);
+                let micros = median(costs.iter().map(|c| c.micros).collect());
+                let small = median(costs.iter().map(|c| c.small).collect());
+                let large = median(costs.iter().map(|c| c.large).collect());
                 println!(
-                    "{}x{} scale {scale} windows {windows}: old {} us ({} small, {} large), migrated {} us ({} small, {} large)",
-                    size.0,
-                    size.1,
-                    micros(&old),
-                    small(&old),
-                    large(&old),
-                    micros(&new),
-                    small(&new),
-                    large(&new),
+                    "{}x{} scale {scale} windows {windows}: {micros} us, {small} small and {large} large allocations",
+                    size.0, size.1,
                 );
             }
         }

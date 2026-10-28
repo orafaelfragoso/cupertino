@@ -130,10 +130,6 @@ pub struct FrameResources {
     pub images: Vec<MemoryRenderBuffer>,
     pub recipes: Vec<Rc<GpuRecipe>>,
     pub snapshots: Vec<Option<FrameSnapshot>>,
-    /// The elements the comparison with the previous builder already lowered for this frame: lowering moves commit
-    /// counters, so the frame is lowered once and the renderer draws this list.
-    #[cfg(scene_oracle)]
-    pub prelowered: Option<Vec<super::CupertinoElement>>,
 }
 
 /// A composed frame and the resources its items refer to.

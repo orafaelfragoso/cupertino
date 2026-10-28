@@ -111,7 +111,8 @@ fn mapped_toplevel(h: &mut Harness) -> (Client, (f64, f64)) {
                 .is_some_and(|w| s.entry(w).is_some_and(|e| e.mapped))
     });
     // the opening animation settles
-    h.state.fixed_time = Some(h.state.now() + 5.0);
+    let time = h.state.now() + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     let center = h.toplevel_center();
     let under = h

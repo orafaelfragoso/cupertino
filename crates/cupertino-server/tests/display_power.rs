@@ -51,6 +51,7 @@ impl Harness {
 
     /// Move the model clock to `t` and let the policy and the renderer catch up.
     fn at(&mut self, t: f64) {
+        // This harness has no live clients; power deadlines advance without a pong barrier.
         self.state.fixed_time = Some(t);
         for _ in 0..3 {
             headless::step(

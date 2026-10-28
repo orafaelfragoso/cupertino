@@ -2,6 +2,8 @@
 //! it five times until the shaking stops. The compositor runs in-process on an
 //! offscreen EGL device; tests skip (pass) when no EGL device is available.
 
+mod common;
+
 use std::time::Duration;
 
 use cupertino_server::backend::headless;
@@ -56,7 +58,8 @@ impl Harness {
     /// Move the pointer to `x`, 10 ms of model time after the previous motion.
     fn move_to(&mut self, x: f64) {
         let t = self.state.now() + 0.01;
-        self.state.fixed_time = Some(t);
+        let time = t;
+        common::set_time(&mut self.state, &mut self.event_loop, time);
         self.state
             .pointer_moved_to((x, 300.0).into(), (t * 1000.0) as u32, None);
     }
@@ -118,7 +121,8 @@ fn shaking_the_pointer_grows_the_cursor_five_times_and_it_shrinks_back_once_stil
     );
 
     // still: from 0.1 s after the last reversal every evaluation shrinks the cursor a step
-    h.state.fixed_time = Some(h.state.now() + 0.15);
+    let time = h.state.now() + 0.15;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     let mut steps = 0;
     while h.state.evaluate_cursor_shake() {
         steps += 1;

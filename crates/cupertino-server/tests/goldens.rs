@@ -162,7 +162,8 @@ impl Scene {
             "trace time moved backwards"
         );
         self.milliseconds = milliseconds;
-        self.state.fixed_time = Some(f64::from(milliseconds) / 1000.0);
+        let time = f64::from(milliseconds) / 1000.0;
+        common::set_time(&mut self.state, &mut self.event_loop, time);
         self.state.tick();
     }
 

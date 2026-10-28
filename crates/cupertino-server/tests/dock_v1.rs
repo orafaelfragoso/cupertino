@@ -1326,6 +1326,50 @@ fn under_classic_pc_super_down_restores_a_filled_window_and_then_minimizes_it() 
     h.key(KEY_SUPER, false);
 }
 
+#[test]
+fn under_classic_pc_the_super_key_alone_runs_its_tap_and_a_chord_or_a_click_does_not() {
+    use cupertino_input::{Action, ShortcutMap};
+    let Some(mut h) = Harness::new() else { return };
+    let (_apps, [three, _two, _one]) = h.three_apps();
+    h.state.apply_keyboard_change(
+        &cupertino_defaults::keyboard::KeyboardSettings::default(),
+        &cupertino_defaults::keyboard::KeyboardSettings {
+            modifier_profile: Some(cupertino_defaults::keyboard::ModifierProfile::ClassicPc),
+            ..Default::default()
+        },
+    );
+    // a tap that is visible: the key window minimizes
+    let mut map = ShortcutMap::classic_pc_defaults();
+    map.bind_tap(Action::MinimizeWindow);
+    h.state.key_router.bindings =
+        cupertino_server::input::KeyBindings::from_shortcuts(&map, "classic-pc");
+    let state = |h: &Harness| h.state.wm.window(three).map(|w| w.state());
+    let minimized = |h: &Harness| {
+        matches!(
+            state(h),
+            Some(LifecycleState::Minimized | LifecycleState::Minimizing)
+        )
+    };
+
+    // Super+Left is a chord
+    h.device_key(KEY_SUPER, true);
+    h.device_tap(KEY_LEFT);
+    h.device_key(KEY_SUPER, false);
+    h.advance(1.0);
+    assert!(!minimized(&h));
+    // Super and a click
+    h.device_key(KEY_SUPER, true);
+    h.state.pointer_button(0x110, ButtonState::Pressed, 0);
+    h.state.pointer_button(0x110, ButtonState::Released, 0);
+    h.device_key(KEY_SUPER, false);
+    h.advance(1.0);
+    assert!(!minimized(&h));
+    // Super alone
+    h.device_tap(KEY_SUPER);
+    h.advance(1.0);
+    assert!(minimized(&h));
+}
+
 /// The shortcut match comes after sticky keys: a latched modifier counts as held for the system chords, under either
 /// profile. The latch is freed with the release of the key that used it, so the switcher the chord opened commits at
 /// once: a latched Alt and Tab switch to the previous application.

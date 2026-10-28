@@ -184,6 +184,8 @@ pub enum ParseError {
     BadNumber(String),
     MissingSeparator(String),
     UnknownSection(String),
+    /// A modifier alone names a tap, and only the Super key can be tapped.
+    TapNotSuper(String),
 }
 
 impl fmt::Display for ParseError {
@@ -196,6 +198,9 @@ impl fmt::Display for ParseError {
             ParseError::UnknownAction(a) => write!(f, "unknown action `{a}`"),
             ParseError::BadNumber(n) => write!(f, "bad number `{n}`"),
             ParseError::UnknownSection(s) => write!(f, "unknown section `[{s}]`"),
+            ParseError::TapNotSuper(m) => {
+                write!(f, "`{m}` alone: only the Super key can be tapped")
+            }
             ParseError::MissingSeparator(l) => {
                 write!(f, "expected `combination = action` in `{l}`")
             }
@@ -411,6 +416,27 @@ pub struct ConfigReport {
     pub retargeted: Vec<(usize, String)>,
 }
 
+/// The physical key when `lhs` is a modifier name and nothing else (a tap), whatever the key.
+fn lone_modifier(lhs: &str, primary: Physical) -> Option<Physical> {
+    let lhs = lhs.trim().trim_start_matches('<').trim_end_matches('>');
+    if lhs.contains(['+', '<', '>']) || lhs.is_empty() {
+        return None;
+    }
+    let mut m = Modifiers::NONE;
+    if !modifier(lhs, &mut m, primary) {
+        return None;
+    }
+    Some(if m.super_key {
+        Physical::Super
+    } else if m.ctrl {
+        Physical::Ctrl
+    } else if m.alt {
+        Physical::Alt
+    } else {
+        Physical::Shift
+    })
+}
+
 /// Whether the combination `lhs` names the Super key (and not `Primary`).
 pub fn names_super(lhs: &str) -> bool {
     lhs.split(['+', '<', '>'])
@@ -421,6 +447,8 @@ pub fn names_super(lhs: &str) -> bool {
 pub struct ShortcutMap {
     bindings: HashMap<KeyCombo, Action>,
     order: Vec<KeyCombo>,
+    /// What the Super key runs when it is pressed and released alone (`Super = launcher`).
+    tap: Option<Action>,
 }
 
 impl ShortcutMap {
@@ -434,6 +462,19 @@ impl ShortcutMap {
             self.order.push(combo);
         }
         self.bindings.insert(combo, action)
+    }
+
+    /// The action of the Super key tapped alone.
+    pub fn tap(&self) -> Option<&Action> {
+        self.tap.as_ref()
+    }
+
+    pub fn bind_tap(&mut self, action: Action) -> Option<Action> {
+        self.tap.replace(action)
+    }
+
+    pub fn unbind_tap(&mut self) -> Option<Action> {
+        self.tap.take()
     }
 
     pub fn bind_str(&mut self, combo: &str, action: Action) -> Result<Option<Action>, ParseError> {
@@ -514,6 +555,28 @@ impl ShortcutMap {
                 continue;
             };
             let rhs = rhs.trim();
+            if let Some(modifier) = lone_modifier(lhs, primary) {
+                let tap = match modifier {
+                    Physical::Super => Ok(()),
+                    _ => Err(ParseError::TapNotSuper(lhs.trim().to_string())),
+                };
+                match (tap, rhs) {
+                    (Err(e), _) => report.errors.push((i + 1, e)),
+                    (Ok(()), "none") => {
+                        self.unbind_tap();
+                    }
+                    (Ok(()), rhs) => match rhs.parse::<Action>() {
+                        Ok(a) => {
+                            self.bind_tap(a);
+                            if section.is_none() && profile == "classic-pc" && names_super(lhs) {
+                                report.retargeted.push((i + 1, line.to_string()));
+                            }
+                        }
+                        Err(e) => report.errors.push((i + 1, e)),
+                    },
+                }
+                continue;
+            }
             let combo = KeyCombo::parse_with(lhs, primary);
             if section.is_none() && profile == "classic-pc" && names_super(lhs) && combo.is_ok() {
                 report.retargeted.push((i + 1, line.to_string()));
@@ -591,6 +654,7 @@ Ctrl+Print = screenshot-clipboard
 Ctrl+Shift+Print = screenshot-area-clipboard
 ";
         m.apply_config(text);
+        m.bind_tap(Action::Launcher);
         for n in 1..=9u32 {
             let sym = keysym::from_name(&n.to_string()).unwrap_or(0x30 + n);
             m.bind(
@@ -1151,5 +1215,59 @@ mod tests {
         for no in ["Primary+a", "Ctrl+Alt+a", "Shift+Super_L", "a"] {
             assert!(!names_super(no), "{no}");
         }
+    }
+
+    #[test]
+    fn the_super_key_alone_names_a_tap() {
+        let mut map = ShortcutMap::new();
+        let report = map.apply_config_for("Super = launcher\n", "cupertino");
+        assert!(report.errors.is_empty());
+        assert_eq!(map.tap(), Some(&Action::Launcher));
+        assert!(map.is_empty(), "a tap is not a chord");
+        map.apply_config_for("Super = none\n", "cupertino");
+        assert_eq!(map.tap(), None);
+        // Primary is the Super key under cupertino and the Ctrl key, which cannot be tapped, under classic-pc
+        let mut cupertino = ShortcutMap::new();
+        cupertino.apply_config_for("Primary = lock\n", "cupertino");
+        assert_eq!(cupertino.tap(), Some(&Action::Lock));
+        let mut classic = ShortcutMap::new();
+        let report = classic.apply_config_for("Primary = lock\n", "classic-pc");
+        assert_eq!(
+            report.errors,
+            [(1, ParseError::TapNotSuper("Primary".into()))]
+        );
+        assert_eq!(classic.tap(), None);
+        for other in ["Ctrl", "Alt", "Shift"] {
+            let report =
+                ShortcutMap::new().apply_config_for(&format!("{other} = lock\n"), "cupertino");
+            assert_eq!(
+                report.errors,
+                [(1, ParseError::TapNotSuper(other.into()))],
+                "{other}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_classic_pc_taps_super_by_default() {
+        assert_eq!(
+            ShortcutMap::classic_pc_defaults().tap(),
+            Some(&Action::Launcher)
+        );
+        assert_eq!(ShortcutMap::defaults().tap(), None);
+    }
+
+    #[test]
+    fn a_tap_line_follows_the_sections_and_the_retarget_report() {
+        let text = "[cupertino]\nSuper = lock\n[classic-pc]\nSuper = launcher\n";
+        let mut cupertino = ShortcutMap::new();
+        cupertino.apply_config_for(text, "cupertino");
+        assert_eq!(cupertino.tap(), Some(&Action::Lock));
+        let mut classic = ShortcutMap::new();
+        let report = classic.apply_config_for(text, "classic-pc");
+        assert_eq!(classic.tap(), Some(&Action::Launcher));
+        assert!(report.retargeted.is_empty(), "a section names its profile");
+        let report = ShortcutMap::new().apply_config_for("Super = lock\n", "classic-pc");
+        assert_eq!(report.retargeted, [(1, "Super = lock".to_string())]);
     }
 }

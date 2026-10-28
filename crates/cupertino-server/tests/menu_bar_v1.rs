@@ -2,8 +2,6 @@
 //! device, a menu bar client (a top-anchored layer surface with the menu-bar role) and application
 //! clients connect through its socket. Tests skip (pass) when no EGL device is available.
 
-mod common;
-
 use std::io::Write;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;

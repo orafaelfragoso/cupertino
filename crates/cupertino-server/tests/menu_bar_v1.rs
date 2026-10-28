@@ -2410,37 +2410,32 @@ fn a_check_the_bus_never_answers_times_out_to_no_menus_and_the_next_one_goes_out
     );
 }
 
-/// A client whose checks keep stalling (the bus stopped) is refused at once from its third, without waiting for the
-/// deadline, while a window of another client still gets its menus once the bus answers.
+/// Checks that time out because the bus does not answer (its daemon stopped) strike no client: once the bus answers
+/// again, the same window's next announcement gets its menus.
 #[test]
-fn a_client_whose_checks_keep_stalling_is_refused_at_once_and_another_still_gets_its_menus() {
-    use cupertino_server::owner_check::{DEADLINE, STRIKE_LIMIT};
+fn checks_timed_out_by_a_slow_bus_strike_no_client() {
+    use cupertino_server::owner_check::STRIKE_LIMIT;
     let Some(mut h) = Harness::new() else { return };
     let Some((bus, own)) = menu_bus(&mut h) else {
         return;
     };
     let own = own.unique_name().unwrap().to_string();
     let (bar, app, title) = menu_app(&mut h);
-    let stalling = AppClient::spawn(h.socket_path(), "org.example.stalling");
-    h.wait_until("the other client's window", |s| s.wm.windows().count() == 2);
 
     let stopped = Stopped::new(&bus);
     for _ in 0..STRIKE_LIMIT {
-        h.checked(&stalling.0, Cmd::SetAddress(own.clone(), "/MenuBar/1"));
+        h.announce(&app, &bar, Cmd::SetAddress(own.clone(), "/MenuBar/1"));
     }
-    let start = Instant::now();
-    h.checked(&stalling.0, Cmd::SetAddress(own.clone(), "/MenuBar/1"));
-    let refused_after = start.elapsed();
     drop(stopped);
-    assert!(
-        refused_after < DEADLINE / 2,
-        "a struck client waited {refused_after:?}"
-    );
-
-    h.announce(&app, &bar, Cmd::SetAddress(own.clone(), "/MenuBar/editor"));
     assert_eq!(
         latest_title_and_menu(&bar),
-        Some((title, dbusmenu(&own, "/MenuBar/editor")))
+        Some((title.clone(), BarEvent::MenuNone))
+    );
+
+    h.announce(&app, &bar, Cmd::SetAddress(own.clone(), "/MenuBar/2"));
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((title, dbusmenu(&own, "/MenuBar/2")))
     );
 }
 

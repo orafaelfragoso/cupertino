@@ -13,8 +13,9 @@ computes, and feeds the crate pointer, key and timer events with absolute timest
 | `clock` | The clock text (`clock_text`: weekday, day and short month, 12 / 24-hour time, seconds, day period, flashing separators) and its ticks (`next_tick`, `tick_interval`) from `ClockSettings`, which `cupertino_defaults::menubar` reads from and writes to `menubar.conf` (the `clock.* keys, bad lines reported with their numbers). |
 | `extras` | The bar's own status items (Wi-Fi, battery, Bluetooth, Focus): which show, their icons, menus (`ExtraMenu`) and row actions (`ExtraAction`), from an `Extras` snapshot of the services; the system menu (`system_menu`, rows at fixed ids `SystemRow`) and its Recent Items submenu (`recent_items`). |
 | `recent` | What Recent Items lists (`RecentItems`): `RecentSources::read` takes the launcher's applications in its order (`cupertino_apps::frecency`, ids without an installed visible desktop entry skipped) and the documents of `recently-used.xbel` newest first (`cupertino_apps::recent`, missing files skipped), at most 10 of each, leaving out what was used at or before the last Clear Menu (`RecentSources::clear`, the bar's own `$XDG_DATA_HOME/cupertino/menubar-recent-items-cleared`). It never writes the launcher's or the applications' files. |
-| `item` | `MenuItem`: label, mnemonic, separator, enabled, visible, `Toggle`, `Shortcut`, icon name / data, children, the GMenuModel action and accelerator, and its `Origin` (the bar's or an exporter's), by which an activated item is routed. |
-| `fallback` | Synthetic menus of an app that exports none: the app menu (About, Settings…, Hide, Hide Others, Show All, Quit; Settings… and Show All on the desktop), File (Close Window), Edit (Undo, Redo, Cut, Copy, Paste, Select All; enabled on a bar whose server takes `edit`, version 11, and disabled below), View (Enter Full Screen), Window (Minimize, Zoom, Move to Workspace, Tile Window, Bring All to Front, the window list of at most 1000 rows with the active window checked and minimized ones marked, Close Window) and Help (the search row, disabled). Items of server actions show the chord the server binds (`Chords`), none while it sent none; the app's own convention chords use the primary modifier the server names. Ids are negative and stable; `action_for` maps activated ids back to `FallbackAction`. |
+| `item` | `MenuItem`: label, mnemonic, separator, enabled, visible, `Toggle`, `Shortcut`, icon name / data, children, the GMenuModel action and accelerator, and its `Origin` (the bar's or an exporter's), by which an activated item is routed, and a `detail`: secondary text drawn dimmed after the label (a search result's path). |
+| `fallback` | Synthetic menus of an app that exports none: the app menu (About, Settings…, Hide, Hide Others, Show All, Quit; Settings… and Show All on the desktop), File (Close Window), Edit (Undo, Redo, Cut, Copy, Paste, Select All; enabled on a bar whose server takes `edit`, version 11, and disabled below), View (Enter Full Screen), Window (Minimize, Zoom, Move to Workspace, Tile Window, Bring All to Front, the window list of at most 1000 rows with the active window checked and minimized ones marked, Close Window) and Help (the search field, see *Help search*). Items of server actions show the chord the server binds (`Chords`), none while it sent none; the app's own convention chords use the primary modifier the server names. Ids are negative and stable; `action_for` maps activated ids back to `FallbackAction`. |
+| `search` | The Help menu's search (`search`, `help_menu`): the enabled leaf items of the system menu, the App menu and the application's menus whose label holds the field's text, and the Help menu with them as rows (see *Help search*). |
 | `merge` | `Export::merge`: an exporter's tree merged with the bar's App, Window and Help menus (roles, rebinding to the exporter's items, order, ids; see *Merged menus*); `Export::roles` for the routing, `label_role`, `accel_shortcut`. |
 | `source` | `MenuSourceMap`: window → `MenuSource::{Kde, Gtk, Synthetic}`. A window gets only the menus it exported, never another window of its application. |
 | `dbus::dbusmenu` | `DBusMenuClient`: `GetLayout` parsing (`parse_layout`), `Event`, `AboutToShow`, and `LayoutUpdated` / `ItemsPropertiesUpdated` / `ItemActivationRequested` as a `MenuUpdate` stream, property update helpers. |
@@ -131,6 +132,26 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
     Ctrl+Q, `<Super>q` Super+Q). Accepted gaps: the bar does not know `rewrite_off`, so an application opted out of the
     rewrite shows Super+Q where only Ctrl+Q works; and it does not know `rewrite_terminals`, so a terminal is shown as
     an ordinary application.
+- **Help search (`search`).** The Help menu's first row is a search field (`cupertino-text-field`, the editing chords of
+  `keyboard.conf`). It takes the typing keys while the Help menu is open, through the popup's keyboard grab: Space, and the
+  arrows, Home and End while it holds text (with no text Left and Right switch menus as elsewhere). Up and Down move
+  through the rows, Return or a click chooses the selected one, and Esc clears the text first, then closes the menu.
+  - Matching: a label holds the text, case ignored, the text trimmed. Only enabled leaf items count: separators,
+    disabled items (headers among them), submenus themselves and hidden items are never results. The items searched are
+    the system menu's, the App menu's and the application's menus as the bar shows them (merged), never the Help menu's;
+    an exporter's submenu that has not been loaded yet is not searched.
+  - Results: labels that start with the text first, then menu order, at most 12 (`fallback::MAX_SEARCH_RESULTS`), as rows
+    below the field, the first selected. A row shows the label, the path to the item ("File ▸ Export", the system
+    menu as "System") dimmed after it, and the item's chord. The path is cut at its end with an ellipsis to the room
+    left before the chord; the label is never cut (a long one widens the menu). With nothing found the field has a
+    disabled "No Results" row below it. A menu with the field is at least `MenuMetrics::search_width` wide.
+  - Ids: the field is -1030, No Results -1031, and result `n` is -1050 - `n` (`fallback::search_result`), by position,
+    so the ids stay while typing. Choosing a result is choosing the item it found in its own menu: the controller
+    sends `Activate` with that menu's slot and the item's id, and routing goes by the item's origin as for a click on
+    it (an exporter's item goes to the exporter, the bar's acts through the server).
+  - Not yet: highlighting the found item in its real menu on hover, and a chord that focuses the field. The bar has no
+    clipboard, so copy, cut and paste in the field only change its text where they edit it. The caret does not blink,
+    and a text wider than the field is not scrolled.
 - **Session.** The labels follow the appearance the server announces over `cupertino_session_v1`, read at start and redrawn on
   every change. The material follows it in the server. On `locked` the bars close every open menu and title focus.
 - **System menu.** The first slot draws the system mark (`cupertino_icons::system_mark`, tinted with the label colour) and

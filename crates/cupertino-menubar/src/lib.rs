@@ -6,6 +6,7 @@
 //!   switching, keyboard navigation, type-ahead, submenus with a safe triangle).
 //! * [`fallback`]: synthetic app and Window menus for apps that export none.
 //! * [`merge`]: an exporter's menus merged with the bar's App, Window and Help menus (roles, rebinding, order).
+//! * [`search`]: the Help menu's search over the items of the bar and the Help menu that shows its results.
 //! * [`clock`]: the clock text and its ticks; its options are `menubar.conf`, read and written by
 //!   `cupertino_defaults::menubar`.
 //! * [`extras`]: the bar's own status items (Wi-Fi, battery, Bluetooth, Focus) and their menus, and the system menu.
@@ -38,6 +39,7 @@ pub mod item;
 pub mod layout;
 pub mod merge;
 pub mod recent;
+pub mod search;
 pub mod source;
 
 #[cfg(feature = "app")]

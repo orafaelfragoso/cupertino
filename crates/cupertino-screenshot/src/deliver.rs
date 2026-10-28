@@ -1,8 +1,6 @@
 //! Where a capture goes: PNG files named after the local time, committed by the floating thumbnail when it is on; or
 //! the clipboard, served until another selection replaces it.
 
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -75,11 +73,7 @@ fn write_files(dir: &Path, shots: &[Shot]) -> Result<()> {
         let path = filename::free_path(dir, &base, |p| p.exists());
         let png = image::png(&shot.image)?;
         // a file that appeared since the name was chosen is not overwritten
-        OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)?
-            .write_all(&png)?;
+        image::write_new(&path, &png)?;
         println!("{}", path.display());
     }
     Ok(())

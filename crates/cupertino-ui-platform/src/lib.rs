@@ -3,7 +3,7 @@
 //! the runtime checks, so a missing protocol degrades a feature instead of failing.
 
 use cupertino_geometry::{Point, Rect, Size};
-use cupertino_ui_render::CpuFrame;
+use cupertino_ui_render::{CpuFrame, RenderFrameId};
 use cupertino_ui_text::{ImeEvent, TextInputState};
 use std::task::Waker;
 use std::time::Duration;
@@ -149,8 +149,13 @@ pub struct WindowStates {
     pub suspended: bool,
 }
 
+/// Names one configure; the window acknowledges it with the first frame drawn for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConfigureId(pub u32);
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Configure {
+    pub id: ConfigureId,
     /// `None` lets the window pick its size.
     pub size: Option<Size>,
     pub states: WindowStates,
@@ -242,6 +247,11 @@ pub enum WindowEvent {
     Ime(ImeEvent),
     /// The compositor closed a popup.
     PopupDone,
+    /// The compositor showed a presented frame at `time`.
+    Presented {
+        frame: RenderFrameId,
+        time: Timestamp,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -287,7 +297,13 @@ pub trait WindowSystem {
     fn request_frame(&mut self, window: WindowId);
     /// Copies the frame's damage, plus whatever the chosen buffer missed since it was last used, into a buffer and
     /// commits it. After a failure the next successful present also covers this frame's damage.
-    fn present(&mut self, window: WindowId, frame: &CpuFrame) -> Result<(), PlatformError>;
+    /// `configure`, when set, is acknowledged with this frame.
+    fn present(
+        &mut self,
+        window: WindowId,
+        frame: &CpuFrame,
+        configure: Option<ConfigureId>,
+    ) -> Result<(), PlatformError>;
     /// Waits up to `timeout` (`None`: until something happens) and appends what happened to `events`.
     fn dispatch(
         &mut self,

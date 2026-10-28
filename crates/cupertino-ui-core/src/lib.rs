@@ -9,12 +9,13 @@ pub use accessibility::{
     AccessibleValue, Action, ActionData, ActionRequest, Checked, Relation, Role, TextSemantics,
 };
 
+use cupertino_geometry::Rect;
 use cupertino_ui_layout::{Constraints, LayoutDirection, LayoutError, LayoutSpec, Measured};
 use cupertino_ui_platform::{
-    KeyEvent, Keysym, Mods, PlatformError, PointerEvent, Timestamp, TouchEvent, WindowRequest,
-    WindowSpec, WindowSystem,
+    KeyEvent, Keysym, Mods, PlatformError, PointerEvent, Timestamp, TouchEvent, WindowId,
+    WindowRequest, WindowSpec, WindowSystem,
 };
-use cupertino_ui_render::RenderError;
+use cupertino_ui_render::{DisplayList, RenderError};
 use cupertino_ui_text::ImeEvent;
 use cupertino_ui_theme::ThemeTokens;
 use std::any::type_name;
@@ -276,6 +277,41 @@ pub struct Shortcut {
 #[derive(Debug, Default)]
 pub struct CommandRegistry {
     _private: (),
+}
+
+/// Work a runtime step left for later, so a test can tell a settled runtime from one that is waiting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Pending {
+    pub messages: usize,
+    pub tasks: usize,
+    pub frames: usize,
+    pub animating: bool,
+}
+
+/// A read-only view of one node after a frame.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NodeSnapshot {
+    pub id: NodeId,
+    pub parent: Option<NodeId>,
+    pub children: Vec<NodeId>,
+    pub widget: &'static str,
+    pub key: Option<Key>,
+    /// In window coordinates.
+    pub rect: Rect,
+    pub clip: Option<Rect>,
+}
+
+/// A read-only view of one window after a frame: the input of every inspector and test snapshot.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameSnapshot {
+    pub window: WindowId,
+    pub nodes: Vec<NodeSnapshot>,
+    pub focus: Option<NodeId>,
+    pub pointer_capture: Option<NodeId>,
+    pub text_input: Option<NodeId>,
+    pub accessibility: Vec<(NodeId, AccessibilityNode)>,
+    pub display_list: DisplayList,
+    pub pending: Pending,
 }
 
 /// Runs an application on a window system.

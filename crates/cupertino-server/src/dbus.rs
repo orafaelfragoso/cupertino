@@ -11,6 +11,7 @@
 use std::path::Path;
 
 use cupertino_peer::{same_instance, ProcessHandle};
+use zbus::fdo::ConnectionCredentials;
 use zbus::names::{BusName, OwnedUniqueName};
 
 use crate::caller::{identify, Caller};
@@ -224,6 +225,10 @@ pub enum OwnerRefusal {
         owner: u32,
         client: u32,
     },
+    /// The identification of processes is backed up (a process whose `/proc` entries stall reading).
+    Busy,
+    /// The check did not return in time (`crate::owner_check::DEADLINE`).
+    TimedOut,
 }
 
 /// What the worker is asked to do.
@@ -254,9 +259,16 @@ impl DbusHandle {
         let login_missing: LoginMissing = std::sync::Arc::new(login_missing);
         let login = std::sync::Arc::new(std::sync::Mutex::new(LoginTrust::Nobody));
         let worker_login = login.clone();
+        let (identify, identifications) = std::sync::mpsc::sync_channel(IDENTIFICATION_QUEUE);
+        if let Err(e) = std::thread::Builder::new()
+            .name("cupertino-identify".into())
+            .spawn(move || identify_owners(identifications))
+        {
+            tracing::warn!(error = %e, "cannot start the owner identification: no bus name is taken for a client's own");
+        }
         let spawned = std::thread::Builder::new()
             .name("cupertino-dbus".into())
-            .spawn(move || zbus::block_on(worker(rx, login_missing, worker_login)));
+            .spawn(move || zbus::block_on(worker(rx, login_missing, worker_login, identify)));
         match spawned {
             Ok(_) => Some(DbusHandle { tx, login }),
             Err(e) => {
@@ -296,6 +308,7 @@ async fn worker(
     rx: async_channel::Receiver<Job>,
     login_missing: LoginMissing,
     login: SharedLoginTrust,
+    identify: Identify,
 ) {
     let conn = match zbus::Connection::session().await {
         Ok(c) => c,
@@ -313,10 +326,11 @@ async fn worker(
                 client,
                 reply,
             }) => {
+                let identify = identify.clone();
                 conn.executor()
                     .clone()
                     .spawn(
-                        async move { reply(owner_of(&conn, &name, client).await) },
+                        async move { reply(owner_of(&conn, &name, client, &identify).await) },
                         "cupertino-owner-check",
                     )
                     .detach();
@@ -379,12 +393,55 @@ async fn destination(
 
 const LOGIN_NAME: &str = "org.cupertino.Login1";
 
+/// An owner to identify against the client, on the identification thread.
+struct Identification {
+    credentials: ConnectionCredentials,
+    client: ProcessHandle,
+    answer: async_channel::Sender<Result<(), OwnerRefusal>>,
+}
+
+type Identify = std::sync::mpsc::SyncSender<Identification>;
+
+/// How many identifications may wait for the identification thread; more are refused as busy.
+const IDENTIFICATION_QUEUE: usize = 8;
+
+/// Identify owners one after the other. Reading `/proc` of a process the client chose can stall (a FUSE root), so it
+/// is done here and never on the worker that makes the shell calls.
+fn identify_owners(identifications: std::sync::mpsc::Receiver<Identification>) {
+    for job in identifications {
+        let _ = job
+            .answer
+            .try_send(identified(&job.credentials, job.client));
+    }
+}
+
+/// Whether the owner the daemon named in `credentials` is one sandbox instance with `client`.
+fn identified(
+    credentials: &ConnectionCredentials,
+    client: ProcessHandle,
+) -> Result<(), OwnerRefusal> {
+    let proc_root = Path::new("/proc");
+    let owner = Caller::from_process_fd(credentials, proc_root);
+    let client = Caller::of_process(client, proc_root);
+    let (Caller::Process(owner), Caller::Process(client)) = (&owner, &client) else {
+        return Err(OwnerRefusal::Unidentified);
+    };
+    if !same_instance(owner, client, proc_root) {
+        return Err(OwnerRefusal::OtherInstance {
+            owner: owner.process.pid,
+            client: client.process.pid,
+        });
+    }
+    Ok(())
+}
+
 /// The unique name of the owner of `name` when it is one sandbox instance with `client`. Only the bus daemon is asked:
 /// the owner of a well-known name, then the owner's credentials, whose `ProcessFD` alone names its process.
 async fn owner_of(
     conn: &zbus::Connection,
     name: &str,
     client: ProcessHandle,
+    identify: &Identify,
 ) -> Result<String, OwnerRefusal> {
     let name = BusName::try_from(name).map_err(|_| OwnerRefusal::NotABusName)?;
     let no_owner = |e: zbus::fdo::Error| OwnerRefusal::NoOwner(e.to_string());
@@ -399,18 +456,18 @@ async fn owner_of(
         .get_connection_credentials(BusName::from(unique.as_ref()))
         .await
         .map_err(no_owner)?;
-    let proc_root = Path::new("/proc");
-    let owner = Caller::from_process_fd(&credentials, proc_root);
-    let client = Caller::of_process(client, proc_root);
-    let (Caller::Process(owner), Caller::Process(client)) = (&owner, &client) else {
-        return Err(OwnerRefusal::Unidentified);
-    };
-    if !same_instance(owner, client, proc_root) {
-        return Err(OwnerRefusal::OtherInstance {
-            owner: owner.process.pid,
-            client: client.process.pid,
-        });
-    }
+    let (answer, answered) = async_channel::bounded(1);
+    identify
+        .try_send(Identification {
+            credentials,
+            client,
+            answer,
+        })
+        .map_err(|_| OwnerRefusal::Busy)?;
+    answered
+        .recv()
+        .await
+        .map_err(|_| OwnerRefusal::Unidentified)??;
     Ok(unique.to_string())
 }
 

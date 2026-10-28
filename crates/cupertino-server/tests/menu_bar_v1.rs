@@ -582,6 +582,8 @@ enum Cmd {
     SetAddresses(Vec<(String, &'static str)>),
     /// Announce the GTK menus of an application window on the bus name.
     SetGtkAddress(String),
+    /// Make this many surfaces, each announcing a KDE application menu address on the bus name, in one flush.
+    AnnounceMany(String, usize),
     /// Map a second toplevel of the same application client.
     OpenSecondWindow,
     /// Announce the KDE application menu address of the second toplevel.
@@ -778,6 +780,7 @@ impl BarClient {
                 Cmd::SetAddress(..)
                 | Cmd::SetAddresses(_)
                 | Cmd::SetGtkAddress(_)
+                | Cmd::AnnounceMany(..)
                 | Cmd::OpenSecondWindow
                 | Cmd::SetSecondAddress(..)
                 | Cmd::SetTitle(_)
@@ -1010,7 +1013,16 @@ impl AppClient {
             };
             let qh = qh.clone();
             let mut second = None;
+            let mut many = Vec::new();
             let apply = Box::new(move |cmd: Cmd| match cmd {
+                Cmd::AnnounceMany(service, count) => {
+                    for _ in 0..count {
+                        let surface = compositor.create_surface(&qh, ());
+                        let appmenu = manager.create(&surface, &qh, ());
+                        appmenu.set_address(service.clone(), "/MenuBar/1".into());
+                        many.push((appmenu, surface));
+                    }
+                }
                 Cmd::SetAddress(service, path) => appmenu.set_address(service, path.to_string()),
                 Cmd::SetAddresses(addresses) => {
                     for (service, path) in addresses {
@@ -2047,7 +2059,7 @@ impl Harness {
             roundtrips() >= from + 2
         });
         self.wait_until("the owner checks to return", |s| {
-            s.owner_checks.in_flight() == 0
+            s.owner_checks.pending() == 0
         });
     }
 }
@@ -2293,6 +2305,138 @@ fn a_kit_window_announcing_a_bus_name_of_another_process_gets_no_menus() {
         foreign.calls_within(Duration::from_millis(300)),
         Vec::<String>::new()
     );
+}
+
+/// A client announcing the menus of 100 surfaces at once has at most its own limit of checks on the worker, and a
+/// window of another client announcing after it still gets its menus.
+#[test]
+fn a_client_with_many_announcements_runs_at_most_its_limit_and_another_still_gets_its_menus() {
+    use cupertino_server::owner_check::CLIENT_RUNNING_LIMIT;
+    let Some(mut h) = Harness::new() else { return };
+    let Some((_bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let own = own.unique_name().unwrap().to_string();
+    let (bar, app, title) = menu_app(&mut h);
+    let many = AppClient::spawn(h.socket_path(), "org.example.many");
+    h.wait_until("the other client's window", |s| s.wm.windows().count() == 2);
+    h.wait_until("the window to stay active", |_| {
+        latest_title_and_menu(&bar).is_some_and(|(t, _)| t == title)
+    });
+
+    let mut most = 0;
+    let from = many.roundtrips();
+    many.send(Cmd::AnnounceMany(own.clone(), 100));
+    h.wait_until("the announcements to be handled", |s| {
+        most = most.max(s.owner_checks.in_flight());
+        many.roundtrips() >= from + 2
+    });
+    assert!(most >= 1, "no check was seen on the worker");
+    assert!(
+        most <= CLIENT_RUNNING_LIMIT,
+        "{most} checks of one client ran at once"
+    );
+
+    app.send(Cmd::SetAddress(own.clone(), "/MenuBar/editor"));
+    let menus = Some((title, dbusmenu(&own, "/MenuBar/editor")));
+    h.wait_until("the other client's menus", |s| {
+        most = most.max(s.owner_checks.in_flight());
+        latest_title_and_menu(&bar) == menus
+    });
+    h.wait_until("every check to return", |s| {
+        most = most.max(s.owner_checks.in_flight());
+        s.owner_checks.pending() == 0
+    });
+    assert!(
+        most <= 2 * CLIENT_RUNNING_LIMIT,
+        "{most} checks of two clients ran at once"
+    );
+}
+
+/// The private bus stopped (`SIGSTOP`) until this is dropped, so a test that fails meanwhile leaves no stopped daemon.
+struct Stopped<'a>(&'a PrivateBus);
+
+impl<'a> Stopped<'a> {
+    fn new(bus: &'a PrivateBus) -> Self {
+        let stopped = std::process::Command::new("kill")
+            .args(["-STOP", &bus.pid])
+            .status()
+            .unwrap();
+        assert!(stopped.success(), "stopping the private bus");
+        Stopped(bus)
+    }
+}
+
+impl Drop for Stopped<'_> {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("kill")
+            .args(["-CONT", &self.0.pid])
+            .status();
+    }
+}
+
+/// A check the bus never answers (its daemon stopped) is answered as timed out: the window has no menus, and its next
+/// announcement goes out once the bus answers again.
+#[test]
+fn a_check_the_bus_never_answers_times_out_to_no_menus_and_the_next_one_goes_out() {
+    use cupertino_server::owner_check::DEADLINE;
+    let Some(mut h) = Harness::new() else { return };
+    let Some((bus, own)) = menu_bus(&mut h) else {
+        return;
+    };
+    let own = own.unique_name().unwrap().to_string();
+    let (bar, app, title) = menu_app(&mut h);
+    h.announce(&app, &bar, Cmd::SetAddress(own.clone(), "/MenuBar/1"));
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((title.clone(), dbusmenu(&own, "/MenuBar/1")))
+    );
+
+    let stopped = Stopped::new(&bus);
+    let start = Instant::now();
+    h.announce(&app, &bar, Cmd::SetAddress(own.clone(), "/MenuBar/2"));
+    let waited = start.elapsed();
+    drop(stopped);
+    assert!(waited >= DEADLINE, "answered after {waited:?}");
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((title.clone(), BarEvent::MenuNone))
+    );
+
+    h.announce(&app, &bar, Cmd::SetAddress(own.clone(), "/MenuBar/3"));
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((title, dbusmenu(&own, "/MenuBar/3")))
+    );
+}
+
+/// Without a D-Bus worker, or with one that found no bus and ended, an announcement is refused in the loop: the
+/// window has no menus and the address is never applied.
+#[test]
+fn without_a_worker_an_announcement_gives_no_menus() {
+    let Some(mut h) = Harness::new() else { return };
+    let (bar, app, title) = menu_app(&mut h);
+    let none = Some((title, BarEvent::MenuNone));
+    assert!(h.state.dbus.is_none());
+    h.announce(&app, &bar, Cmd::SetAddress(":1.5".into(), "/MenuBar/1"));
+    assert_eq!(latest_title_and_menu(&bar), none);
+
+    std::env::set_var(
+        "DBUS_SESSION_BUS_ADDRESS",
+        "unix:path=/nonexistent/cupertino-test-bus",
+    );
+    h.state.dbus = cupertino_server::dbus::DbusHandle::start();
+    h.announce(&app, &bar, Cmd::SetGtkAddress(":1.5".into()));
+    assert_eq!(latest_title_and_menu(&bar), none);
+    assert!(
+        !bar.groups()
+            .iter()
+            .flatten()
+            .any(|e| matches!(e, BarEvent::MenuDbusmenu { .. } | BarEvent::MenuGtk { .. })),
+        "{:?}",
+        bar.groups()
+    );
+    assert_eq!(bar.error(), None);
 }
 
 // ---- version 10: window list, shortcuts, the commands of the fallback menus --------------------

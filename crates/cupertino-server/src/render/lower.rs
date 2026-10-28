@@ -2,7 +2,7 @@
 //! front to back, with the cache slots and commit counters the renderer has always used.
 
 use cupertino_scene::{
-    Clip, ImageRole, OutputPoint, RoundedRect, SceneItem, Shadow, Source, SurfaceRole,
+    Clip, ImageRole, OutputPoint, RoundedRect, SceneFrame, SceneItem, Shadow, Source, SurfaceRole,
 };
 use smithay::backend::renderer::element::memory::{
     MemoryRenderBuffer, MemoryRenderBufferRenderElement,
@@ -17,7 +17,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size};
 
 use super::clip::{ClipElement, ClipShape};
-use super::compose::{logical_rect, Composed};
+use super::compose::{logical_rect, FrameResources};
 use super::material::{MaterialElement, SharedMaterial};
 use super::mesh::{MeshElement, SharedMesh};
 use super::programs::{corner_uniforms, u4, Programs};
@@ -36,14 +36,18 @@ pub struct Lowering<'a> {
 }
 
 /// The elements of a composed frame front to back.
-pub fn lower(composed: Composed, ctx: &mut Lowering<'_>) -> Vec<CupertinoElement> {
-    let Composed {
-        frame,
+pub fn lower(
+    frame: &SceneFrame,
+    resources: FrameResources,
+    ctx: &mut Lowering<'_>,
+) -> Vec<CupertinoElement> {
+    let FrameResources {
         surfaces,
         images,
         recipes,
         mut snapshots,
-    } = composed;
+        ..
+    } = resources;
     let viewport = (
         frame.output.physical_size.width,
         frame.output.physical_size.height,

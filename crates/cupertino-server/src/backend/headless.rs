@@ -8,18 +8,20 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
+use cupertino_render_api::Renderer;
 use cupertino_wm::OutputId;
 use smithay::backend::allocator::gbm::GbmDevice;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::egl::native::EGLSurfacelessDisplay;
 use smithay::backend::egl::{EGLContext, EGLDevice, EGLDisplay};
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
-use smithay::backend::renderer::{Bind, Color32F, Offscreen};
+use smithay::backend::renderer::{Color32F, Offscreen};
 use smithay::reexports::calloop::EventLoop;
 use smithay::utils::{Buffer, Size, Transform};
 
 use super::Backend;
 use crate::displays::{HeadCaps, HeadId, HeadInfo, HeadMode, HeadOp};
+use crate::render::gles::{Gles, GlesResources, GlesTarget};
 use crate::render::scene::RenderResources;
 use crate::state::Cupertino;
 
@@ -246,19 +248,24 @@ pub fn render(state: &mut Cupertino) {
             if !state.displays.powered(target.output) {
                 continue;
             }
-            let elements = state.build_output_elements(&mut h.renderer, idx);
-            let tracker = &mut state.outputs[idx].tracker;
-            let res = h
-                .renderer
-                .bind(&mut target.texture)
-                .map_err(|e| anyhow!("{e}"))
-                .and_then(|mut fb| {
-                    tracker
-                        .render_output(&mut h.renderer, &mut fb, 0, &elements, CLEAR)
-                        .map(|_| ())
-                        .map_err(|e| anyhow!("{e:?}"))
-                });
-            if let Err(e) = res {
+            let Some(composed) = state.compose_for_present(&mut h.renderer, idx) else {
+                continue;
+            };
+            let Some((res, cache, tracker)) = state.gles_parts(idx) else {
+                continue;
+            };
+            let mut resources = GlesResources::new(res, cache, composed.resources);
+            let result = Gles.render(
+                &composed.frame,
+                &mut resources,
+                GlesTarget::Texture {
+                    renderer: &mut h.renderer,
+                    texture: &mut target.texture,
+                    tracker,
+                    clear: CLEAR,
+                },
+            );
+            if let Err(e) = result {
                 tracing::warn!(error = %e, "headless render failed");
             }
             state.process_screenshots(&mut h.renderer, idx);

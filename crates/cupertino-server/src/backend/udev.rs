@@ -14,11 +14,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use cupertino_devices::{Action, Monitor, Subsystem, SEAT0};
+use cupertino_render_api::{Completion as _, RenderStatus, Renderer};
 use cupertino_seat::LogindSession;
 use cupertino_wm::OutputId;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::Fourcc;
-use smithay::backend::drm::compositor::{FrameError, FrameFlags};
+use smithay::backend::drm::compositor::FrameError;
 use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
 use smithay::backend::drm::output::{DrmOutput, DrmOutputManager, DrmOutputRenderElements};
 use smithay::backend::drm::{
@@ -45,13 +46,15 @@ use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
 use super::input;
 use super::Backend;
 use crate::displays::{edid, HeadCaps, HeadId, HeadInfo, HeadMode, HeadOp};
+use crate::render::gles::{Gles, GlesResources, GlesTarget};
 use crate::render::scene::RenderResources;
 use crate::state::Cupertino;
 
 const CLEAR: Color32F = Color32F::new(0.05, 0.05, 0.07, 1.0);
 const COLOR_FORMATS: [Fourcc; 2] = [Fourcc::Abgr8888, Fourcc::Argb8888];
 
-type Output_ = DrmOutput<
+/// The DRM output of one display, as the renderer draws to it.
+pub(crate) type DrmSurfaceOutput = DrmOutput<
     GbmAllocator<DrmDeviceFd>,
     GbmFramebufferExporter<DrmDeviceFd>,
     Option<OutputPresentationFeedback>,
@@ -66,7 +69,7 @@ type Manager = DrmOutputManager<
 
 struct Surface {
     output: OutputId,
-    drm_output: Output_,
+    drm_output: DrmSurfaceOutput,
     /// A frame was queued and its vblank has not arrived yet.
     pending: bool,
     refresh: Duration,
@@ -674,16 +677,27 @@ fn render_outputs(state: &mut Cupertino) {
 }
 
 fn render_surface(state: &mut Cupertino, u: &mut UdevBackend, crtc: crtc::Handle, idx: usize) {
-    let elements = state.build_output_elements(&mut u.renderer, idx);
+    let Some(composed) = state.compose_for_present(&mut u.renderer, idx) else {
+        return;
+    };
     let Some(surface) = u.surfaces.get_mut(&crtc) else {
         return;
     };
-    let result =
-        surface
-            .drm_output
-            .render_frame(&mut u.renderer, &elements, CLEAR, FrameFlags::DEFAULT);
+    let Some((res, cache, _)) = state.gles_parts(idx) else {
+        return;
+    };
+    let mut resources = GlesResources::new(res, cache, composed.resources);
+    let result = Gles.render(
+        &composed.frame,
+        &mut resources,
+        GlesTarget::Drm {
+            renderer: &mut u.renderer,
+            output: &mut surface.drm_output,
+            clear: CLEAR,
+        },
+    );
     let rendered = match result {
-        Ok(r) => !r.is_empty,
+        Ok(completion) => completion.status() == RenderStatus::Rendered,
         Err(e) => {
             tracing::warn!(error = %e, "rendering the frame failed");
             return;

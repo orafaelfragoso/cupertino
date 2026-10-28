@@ -10,7 +10,7 @@
      ends: interfaces may change without a version bump until then.
   </description>
 
-  <interface name="cupertino_shell_v1" version="12">
+  <interface name="cupertino_shell_v1" version="13">
     <description summary="shell services of the server">
       Global singleton, offered only to the processes the server started for a shell role, on a
       connection of their own. Each request needs the role it creates: a connection that holds
@@ -20,7 +20,7 @@
       cupertino_app_effects_v1 protocol, which any client may use, and removes their requests here. Version 6 adds the
       session_action request of the menu bar object, version 7 the lock_requested event of the session object, version 8 the session_agent event of the menu bar
       object, version 9 the log_out_requested event of the session object, version 10 the window list, the shortcuts and the further
-      window commands of the menu bar object, version 11 its edit request, version 12 its engage_help event. An object this global
+      window commands of the menu bar object, version 11 its edit request, version 12 its engage_help event, version 13 its force_quit_app request. An object this global
       creates has the version the global was bound at, so the since of each message of those
       objects is the shell version that added it.
     </description>
@@ -277,7 +277,7 @@
     </event>
   </interface>
 
-  <interface name="cupertino_menu_bar_v1" version="12">
+  <interface name="cupertino_menu_bar_v1" version="13">
     <description summary="the menu bar of one output">
       Events describe the active application and the menus its active window exports. They
       come in groups ended by a done event; the client applies a group at once. The first group
@@ -558,6 +558,24 @@
         invalid_edit_action.
       </description>
       <arg name="action" type="uint" enum="edit_action"/>
+    </request>
+
+    <request name="force_quit_app" since="13">
+      <description summary="force quit the active application, named as the bar's label shows it">
+        The alternate of the Force Quit item, chosen with Alt held: the choice that names the
+        application is the confirmation. app_id is the active application's id as the bar last
+        got it in active_app. The server ends the application only if app_id equals the id of the
+        active application when it handles the request, the same way as the dock's force_quit_app:
+        an application that does not answer its pings is killed at once (SIGKILL); any other gets
+        a close request for each of its windows and SIGTERM, and SIGKILL three seconds later if a
+        process is still there.
+
+        Any other app_id (the active application changed in the meantime, or there is none), an
+        app_id longer than 255 bytes, and every request while the session is locked or a lock is
+        pending, is ignored without an error. There is no reply; the application's windows
+        closing is the result.
+      </description>
+      <arg name="app_id" type="string"/>
     </request>
   </interface>
 

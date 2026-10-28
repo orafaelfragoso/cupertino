@@ -7,7 +7,7 @@
 
 use crate::dbus::sni::{self, StatusItem};
 use crate::desktop::AppName;
-use crate::extras::{ExtraKind, Extras, SystemRow};
+use crate::extras::{ExtraKind, Extras, FrontApp, SystemRow};
 use crate::fallback::{self, Chords, FallbackAction, WindowRow};
 use crate::item::{ItemId, MenuItem, Shortcut, ShortcutModifier};
 use crate::layout::{BarContent, StatusEntry};
@@ -168,13 +168,16 @@ pub struct BarFeed {
     windows: Vec<AppWindow>,
     /// The bar's server sends the chords of the Edit items (`MenuBar::can_edit`).
     edits: bool,
+    /// The bar's server force-quits the active application (`MenuBar::can_force_quit_app`).
+    force_quits: bool,
 }
 
 impl BarFeed {
-    pub fn new(key: WindowKey, edits: bool) -> Self {
+    pub fn new(key: WindowKey, edits: bool, force_quits: bool) -> Self {
         Self {
             key,
             edits,
+            force_quits,
             app: None,
             app_id: String::new(),
             window: WindowState {
@@ -227,6 +230,15 @@ impl BarFeed {
         if let Some(shortcuts) = &update.shortcuts {
             shared.chords = chords(shortcuts);
         }
+    }
+
+    /// The active application as the system menu's Force Quit alternate names it; `None` on the desktop.
+    pub fn front_app(&self) -> Option<FrontApp<'_>> {
+        self.app.as_ref().map(|app| FrontApp {
+            app_id: &self.app_id,
+            name: &app.name,
+            can_force_quit: self.force_quits,
+        })
     }
 
     /// The window of row `row` of the window list.
@@ -300,7 +312,7 @@ impl BarFeed {
         let status = indicator.into_iter().chain(extras).chain(items).collect();
         let system_menu = shared
             .extras
-            .system_menu(&shared.chords, &shared.recent)
+            .system_menu(&shared.chords, &shared.recent, self.front_app())
             .rows;
         BarContent {
             app_name,
@@ -505,7 +517,7 @@ mod tests {
     }
 
     fn ready(menu: Option<WindowMenu>) -> (BarFeed, Shared) {
-        let mut feed = BarFeed::new(1, true);
+        let mut feed = BarFeed::new(1, true, true);
         let mut shared = Shared {
             clock: "Wed Oct 21  10:42".into(),
             ..Shared::default()
@@ -541,7 +553,7 @@ mod tests {
 
     #[test]
     fn without_an_active_window_the_desktop_menu_shows() {
-        let mut feed = BarFeed::new(1, true);
+        let mut feed = BarFeed::new(1, true, true);
         let mut shared = Shared::default();
         feed.apply(&update("", None), &mut shared, |_| {
             unreachable!("an empty id is no application")

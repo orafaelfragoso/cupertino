@@ -1277,9 +1277,11 @@ fn menu_bar_groups_arrive_typed_and_requests_reach_the_server() {
     bar.window_command(WindowCommand::Minimize);
     // a version 9 server has none of these requests: they are not sent
     assert!(!bar.can_edit());
+    assert!(!bar.can_force_quit_app());
     bar.window_command(WindowCommand::TileLeft);
     bar.activate_window(7);
     bar.edit(EditAction::Copy);
+    bar.force_quit_app("org.example.app");
     bar.move_to_workspace(3);
     bar.set_menu_open(false);
     flush(&mut conn, &mut stash);

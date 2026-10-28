@@ -14,6 +14,7 @@ use crate::layout::{
 use cupertino_assets::{AssetError, Assets, FontRole};
 use cupertino_decorations::palette::Rgba;
 use cupertino_decorations::text::TextRenderer;
+use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_geometry::{CornerStyle, Radii, Rect as GRect};
 use cupertino_text_field::TextField;
 use cupertino_theme::Typography;
@@ -86,6 +87,74 @@ impl MenuPalette {
                 screen_capture: [84.0 / 255.0, 82.0 / 255.0, 204.0 / 255.0, 1.0],
             }
         }
+    }
+}
+
+/// Lightness of the wallpaper under the bar (CIE L*/100 in thousandths) at and above which the bar's text is dark.
+/// approximate.
+pub const DARK_TEXT_FROM: u16 = 550;
+/// Lightness of the wallpaper under the bar at and below which the bar's text is light. approximate.
+pub const LIGHT_TEXT_UNTIL: u16 = 450;
+/// Where a tone chosen afresh splits the band between [`LIGHT_TEXT_UNTIL`] and [`DARK_TEXT_FROM`]. approximate.
+const FRESH_SPLIT: u16 = 500;
+
+/// The text of a bar's strip: the appearance's, or dark or light for the wallpaper under the bar.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BarTone {
+    /// The palette of the appearance: before the server sent the wallpaper's lightness (always below shell version
+    /// 14), and while Increase Contrast or Reduce Transparency makes the bar solid.
+    #[default]
+    Appearance,
+    DarkText,
+    LightText,
+}
+
+impl BarTone {
+    /// The tone after `self` for the wallpaper's `lightness`. Inside the band between [`LIGHT_TEXT_UNTIL`] and
+    /// [`DARK_TEXT_FROM`] a dark or light tone holds; from [`BarTone::Appearance`] the band splits at its middle.
+    pub fn next(self, lightness: Option<u16>, display: DisplayOptions) -> BarTone {
+        let Some(lightness) = lightness else {
+            return BarTone::Appearance;
+        };
+        if display.increase_contrast || display.reduce_transparency {
+            return BarTone::Appearance;
+        }
+        let dark_from = match self {
+            BarTone::Appearance => FRESH_SPLIT,
+            BarTone::DarkText => LIGHT_TEXT_UNTIL + 1,
+            BarTone::LightText => DARK_TEXT_FROM,
+        };
+        if lightness >= dark_from {
+            BarTone::DarkText
+        } else {
+            BarTone::LightText
+        }
+    }
+
+    /// The tone chosen with nothing held over: for the first lightness, and after the appearance or the display
+    /// options changed.
+    pub fn fresh(lightness: Option<u16>, display: DisplayOptions) -> BarTone {
+        BarTone::Appearance.next(lightness, display)
+    }
+
+    /// The palette of the bar's strip over the palette of the appearance: its text, and the highlight of the open
+    /// title with it, dark or light; the screen capture indicator keeps the appearance's indigo.
+    pub fn palette(self, appearance: MenuPalette) -> MenuPalette {
+        let text = match self {
+            BarTone::Appearance => return appearance,
+            BarTone::DarkText => MenuPalette::new(false),
+            BarTone::LightText => MenuPalette::new(true),
+        };
+        MenuPalette {
+            screen_capture: appearance.screen_capture,
+            ..text
+        }
+    }
+
+    /// Whether the bar's strip has the light palette's text over the palette of the appearance, so it draws the
+    /// light symbols of the extras.
+    pub fn light_text(self, appearance: MenuPalette) -> bool {
+        self.palette(appearance).text == MenuPalette::new(true).text
     }
 }
 
@@ -196,7 +265,7 @@ impl Style {
 
     /// Draw the bar into `pm` (the bar surface at `scale` device pixels per point): the highlight
     /// of the open or keyboard-focused title, the labels, the status icons, the control panel
-    /// glyph and the clock.
+    /// glyph and the clock, in the palette of the bar's `tone`.
     #[allow(clippy::too_many_arguments)]
     pub fn paint_bar(
         &self,
@@ -205,9 +274,11 @@ impl Style {
         layout: &BarLayout,
         content: &BarContent,
         highlight: Option<&SlotKey>,
+        tone: BarTone,
         shared: &Shared,
         scale: f64,
     ) {
+        let palette = tone.palette(self.palette);
         for slot in &layout.slots {
             let r = GRect::new(slot.rect.x, slot.rect.y, slot.rect.w, slot.rect.h);
             if highlight == Some(&slot.key) {
@@ -223,11 +294,11 @@ impl Style {
                     hl,
                     m.selection_corner_radius,
                     scale,
-                    self.palette.bar_highlight,
+                    palette.bar_highlight,
                 );
             }
             match &slot.key {
-                SlotKey::System => draw_system_mark(pm, r, scale, self.color(1.0)),
+                SlotKey::System => draw_system_mark(pm, r, scale, palette.text),
                 SlotKey::AppMenu => text.draw(
                     pm,
                     &content.app_name,
@@ -236,7 +307,7 @@ impl Style {
                     r.height(),
                     scale,
                     true,
-                    self.color(1.0),
+                    palette.text,
                 ),
                 SlotKey::Menu(id) => {
                     if let Some(m) = content.menus.iter().find(|m| m.id == *id) {
@@ -248,7 +319,7 @@ impl Style {
                             r.height(),
                             scale,
                             false,
-                            self.color(1.0),
+                            palette.text,
                         );
                     }
                 }
@@ -261,7 +332,7 @@ impl Style {
                     ) {
                         pm.fill_path(
                             &path,
-                            &paint(self.palette.screen_capture),
+                            &paint(palette.screen_capture),
                             FillRule::Winding,
                             Transform::identity(),
                             None,
@@ -269,11 +340,12 @@ impl Style {
                     }
                 }
                 SlotKey::Status(id) => {
-                    if let Some(icon) = shared.status_icon(id) {
-                        self.draw_status(pm, icon, r, scale);
+                    if let Some(icon) = shared.status_icon(id, tone.light_text(self.palette)) {
+                        let t = palette.text;
+                        self.draw_status(pm, icon, r, scale, [t[0], t[1], t[2], t[3] * 0.7]);
                     }
                 }
-                SlotKey::ControlPanel => draw_control_panel(pm, r, scale, self.color(1.0)),
+                SlotKey::ControlPanel => draw_control_panel(pm, r, scale, palette.text),
                 SlotKey::Clock => text.draw(
                     pm,
                     &content.clock,
@@ -282,14 +354,14 @@ impl Style {
                     r.height(),
                     scale,
                     false,
-                    self.color(1.0),
+                    palette.text,
                 ),
             }
         }
     }
 
-    /// The icon centred in the slot, scaled down to [`STATUS_ICON_PT`]; a dot when the item has none.
-    fn draw_status(&self, pm: &mut Pixmap, icon: Option<&Pixmap>, r: GRect, scale: f64) {
+    /// The icon centred in the slot, scaled down to [`STATUS_ICON_PT`]; a dot of `dot` when the item has none.
+    fn draw_status(&self, pm: &mut Pixmap, icon: Option<&Pixmap>, r: GRect, scale: f64, dot: Rgba) {
         let side = STATUS_ICON_PT;
         let (cx, cy) = (r.x() + r.width() / 2.0, r.y() + r.height() / 2.0);
         match icon {
@@ -321,7 +393,7 @@ impl Style {
                 {
                     pm.fill_path(
                         &path,
-                        &paint(self.color(0.7)),
+                        &paint(dot),
                         FillRule::Winding,
                         Transform::identity(),
                         None,
@@ -704,4 +776,112 @@ fn draw_system_mark(pm: &mut Pixmap, r: GRect, scale: f64, color: Rgba) {
 /// `Rect` of the geometry module in the units of the drawing code.
 pub fn to_geometry(r: Rect) -> GRect {
     GRect::new(r.x, r.y, r.w, r.h)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TRANSLUCENT: DisplayOptions = DisplayOptions {
+        reduce_motion: false,
+        reduce_transparency: false,
+        increase_contrast: false,
+        differentiate_without_color: false,
+    };
+
+    /// The tones of a bar told `values` in turn, from the appearance's.
+    fn tones(values: &[u16]) -> Vec<BarTone> {
+        values
+            .iter()
+            .scan(BarTone::Appearance, |tone, &l| {
+                *tone = tone.next(Some(l), TRANSLUCENT);
+                Some(*tone)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_tone_holds_inside_the_band_and_switches_beyond_either_end() {
+        assert_eq!(
+            tones(&[600, 451, 549, 450, 451, 549, 550]),
+            [
+                BarTone::DarkText,
+                BarTone::DarkText,
+                BarTone::DarkText,
+                BarTone::LightText,
+                BarTone::LightText,
+                BarTone::LightText,
+                BarTone::DarkText,
+            ]
+        );
+    }
+
+    #[test]
+    fn the_text_follows_the_backdrop_in_either_appearance() {
+        for dark in [false, true] {
+            let appearance = MenuPalette::new(dark);
+            let over_dark = BarTone::fresh(Some(120), TRANSLUCENT).palette(appearance);
+            let over_bright = BarTone::fresh(Some(900), TRANSLUCENT).palette(appearance);
+            assert_eq!(over_dark.text, MenuPalette::new(true).text, "dark {dark}");
+            assert_eq!(
+                over_bright.text,
+                MenuPalette::new(false).text,
+                "dark {dark}"
+            );
+            assert_eq!(
+                over_bright.bar_highlight,
+                MenuPalette::new(false).bar_highlight,
+                "the open title's pill flips with the text"
+            );
+            for palette in [over_dark, over_bright] {
+                assert_eq!(palette.screen_capture, appearance.screen_capture);
+            }
+        }
+    }
+
+    #[test]
+    fn without_a_lightness_or_on_a_solid_bar_the_bar_keeps_the_appearance() {
+        assert_eq!(BarTone::fresh(None, TRANSLUCENT), BarTone::Appearance);
+        assert_eq!(
+            BarTone::DarkText.next(None, TRANSLUCENT),
+            BarTone::Appearance
+        );
+        for display in [
+            DisplayOptions {
+                increase_contrast: true,
+                ..TRANSLUCENT
+            },
+            DisplayOptions {
+                reduce_transparency: true,
+                ..TRANSLUCENT
+            },
+        ] {
+            assert_eq!(BarTone::fresh(Some(900), display), BarTone::Appearance);
+            assert_eq!(
+                BarTone::LightText.next(Some(100), display),
+                BarTone::Appearance
+            );
+        }
+        let light = MenuPalette::new(false);
+        assert_eq!(BarTone::Appearance.palette(light), light);
+    }
+
+    #[test]
+    fn the_extras_symbols_follow_the_tone_not_the_appearance() {
+        for dark in [false, true] {
+            let appearance = MenuPalette::new(dark);
+            assert!(BarTone::LightText.light_text(appearance), "dark {dark}");
+            assert!(!BarTone::DarkText.light_text(appearance), "dark {dark}");
+            assert_eq!(BarTone::Appearance.light_text(appearance), dark);
+        }
+    }
+
+    #[test]
+    fn a_fresh_tone_splits_the_band_at_its_middle_with_nothing_held_over() {
+        assert_eq!(tones(&[300, 520]).last(), Some(&BarTone::LightText));
+        assert_eq!(BarTone::fresh(Some(520), TRANSLUCENT), BarTone::DarkText);
+        assert_eq!(tones(&[700, 480]).last(), Some(&BarTone::DarkText));
+        assert_eq!(BarTone::fresh(Some(480), TRANSLUCENT), BarTone::LightText);
+        assert_eq!(BarTone::fresh(Some(500), TRANSLUCENT), BarTone::DarkText);
+    }
 }

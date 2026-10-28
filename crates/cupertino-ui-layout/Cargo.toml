@@ -10,3 +10,6 @@ layer = "render"
 
 [dependencies]
 cupertino-geometry = { path = "../cupertino-geometry" }
+
+[dev-dependencies]
+proptest = "1.12"

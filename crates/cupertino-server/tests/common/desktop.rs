@@ -88,7 +88,11 @@ impl Desktop {
     }
 
     pub fn at(&mut self, milliseconds: u32) {
-        self.state.fixed_time = Some(f64::from(milliseconds) / 1000.0);
+        super::set_time(
+            &mut self.state,
+            &mut self.event_loop,
+            f64::from(milliseconds) / 1000.0,
+        );
         self.state.tick();
         self.pump();
     }

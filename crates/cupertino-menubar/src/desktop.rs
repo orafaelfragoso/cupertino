@@ -7,7 +7,7 @@ use std::path::PathBuf;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppName {
     pub name: String,
-    /// A desktop entry exists for the id: the app menu offers About.
+    /// A desktop entry exists for the id: the About panel can show what it names.
     pub has_entry: bool,
 }
 

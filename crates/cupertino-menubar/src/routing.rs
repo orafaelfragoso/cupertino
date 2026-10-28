@@ -41,6 +41,8 @@ pub enum Action {
     WindowCommand(WindowCommand),
     /// Move the active window to a workspace (1-based).
     MoveToWorkspace(u32),
+    /// Show a window of the window list by its server id.
+    ActivateWindow(u32),
     ShowAbout,
     /// A row of one of the bar's own items.
     Extra(ExtraAction),
@@ -121,12 +123,12 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
                 props,
                 item: item.0,
             })),
-            MenuSource::Synthetic => fallback_action(item),
+            MenuSource::Synthetic => fallback_action(item, cx.feed),
         },
         Effect::Activate {
             slot: SlotKey::AppMenu,
             item,
-        } => fallback_action(item),
+        } => fallback_action(item, cx.feed),
         Effect::Activate {
             slot: SlotKey::System,
             item,
@@ -165,7 +167,7 @@ pub fn resolve(effect: Effect, cx: &Context) -> Option<Action> {
 }
 
 /// The action of an item of the synthetic menus.
-fn fallback_action(item: ItemId) -> Option<Action> {
+fn fallback_action(item: ItemId, feed: &BarFeed) -> Option<Action> {
     Some(match fallback::action_for(item)? {
         FallbackAction::About => Action::ShowAbout,
         FallbackAction::Hide => Action::WindowCommand(WindowCommand::HideApp),
@@ -175,7 +177,15 @@ fn fallback_action(item: ItemId) -> Option<Action> {
         FallbackAction::Minimize => Action::WindowCommand(WindowCommand::Minimize),
         FallbackAction::Zoom => Action::WindowCommand(WindowCommand::Zoom),
         FallbackAction::CloseWindow => Action::WindowCommand(WindowCommand::Close),
+        FallbackAction::ToggleFullscreen => Action::WindowCommand(WindowCommand::ToggleFullscreen),
+        FallbackAction::TileLeft => Action::WindowCommand(WindowCommand::TileLeft),
+        FallbackAction::TileRight => Action::WindowCommand(WindowCommand::TileRight),
+        FallbackAction::TileFill => Action::WindowCommand(WindowCommand::TileFill),
+        FallbackAction::BringAllToFront => Action::WindowCommand(WindowCommand::BringAllToFront),
+        FallbackAction::ShowWindow(row) => Action::ActivateWindow(feed.listed_window(row)?.id),
         FallbackAction::MoveToWorkspace(n) => Action::MoveToWorkspace(n),
+        // disabled until the app's preferences action and the server's edit request exist
+        FallbackAction::Settings | FallbackAction::Edit(_) => return None,
     })
 }
 
@@ -189,7 +199,7 @@ mod tests {
     use crate::geom::Rect;
     use crate::layout::{layout_bar, BarMetrics, MonoMeasure};
     use crate::source::GtkMenuProps;
-    use cupertino_shell_client::{ActiveApp, GtkMenu, MenuBarUpdate, WindowMenu};
+    use cupertino_shell_client::{ActiveApp, AppWindow, GtkMenu, MenuBarUpdate, WindowMenu};
 
     struct Fixture {
         feed: BarFeed,
@@ -212,6 +222,8 @@ mod tests {
                 engage: false,
                 screen_capture: None,
                 session_agent: None,
+                windows: None,
+                shortcuts: None,
             };
             feed.apply(&update, &mut shared, |_| AppName {
                 name: "Editor".into(),
@@ -407,6 +419,55 @@ mod tests {
             )),
             Some(Action::MoveToWorkspace(3))
         );
+    }
+
+    #[test]
+    fn the_new_items_of_the_synthetic_menus_act_through_the_server() {
+        let mut f = Fixture::new(WindowMenu::None);
+        let update = MenuBarUpdate {
+            windows: Some(vec![AppWindow {
+                id: 42,
+                title: "notes.txt".into(),
+                active: true,
+                minimized: false,
+            }]),
+            ..MenuBarUpdate::default()
+        };
+        f.feed.apply(&update, &mut f.shared, |_| {
+            unreachable!("the application did not change")
+        });
+        let window = SlotKey::Menu(fallback::WINDOW_MENU);
+        let act = |action: FallbackAction| f.resolve(activate(window.clone(), action.item_id().0));
+        for (action, command) in [
+            (
+                FallbackAction::ToggleFullscreen,
+                WindowCommand::ToggleFullscreen,
+            ),
+            (FallbackAction::TileLeft, WindowCommand::TileLeft),
+            (FallbackAction::TileRight, WindowCommand::TileRight),
+            (FallbackAction::TileFill, WindowCommand::TileFill),
+            (
+                FallbackAction::BringAllToFront,
+                WindowCommand::BringAllToFront,
+            ),
+        ] {
+            assert_eq!(
+                act(action),
+                Some(Action::WindowCommand(command)),
+                "{action:?}"
+            );
+        }
+        assert_eq!(
+            act(FallbackAction::ShowWindow(0)),
+            Some(Action::ActivateWindow(42))
+        );
+        assert_eq!(
+            act(FallbackAction::ShowWindow(1)),
+            None,
+            "no window at the row"
+        );
+        assert_eq!(act(FallbackAction::Settings), None);
+        assert_eq!(act(FallbackAction::Edit(fallback::EditAction::Copy)), None);
     }
 
     #[test]

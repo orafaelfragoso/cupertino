@@ -11,6 +11,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use cupertino_defaults::compositor::CompositorSettings;
+use cupertino_defaults::keyboard::{KeyboardSettings, ModifierProfile};
+use cupertino_protocols::client::cupertino_dock_v1::{self, CupertinoDockV1};
 use cupertino_protocols::client::cupertino_menu_bar_v1::{
     self, Command as BarCommand, CupertinoMenuBarV1, SessionAction,
 };
@@ -19,7 +22,7 @@ use cupertino_server::authorization::ShellRole;
 use cupertino_server::backend::headless;
 use cupertino_server::config::Config;
 use cupertino_server::Cupertino;
-use cupertino_wm::{Command, LifecycleState, Rect};
+use cupertino_wm::{Command, LifecycleState, Rect, TileKind, WindowId};
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
@@ -38,6 +41,7 @@ use wayland_protocols_plasma::appmenu::client::{
     org_kde_kwin_appmenu, org_kde_kwin_appmenu_manager,
 };
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
+mod common;
 
 mod gtk_shell {
     #![allow(
@@ -112,6 +116,14 @@ impl Harness {
             }
         }
         panic!("timed out waiting for {what}");
+    }
+
+    /// Step until the server has handled every request `bar` sent so far, or posted it an error.
+    fn settle_requests(&mut self, bar: &BarClient) {
+        let from = bar.roundtrips();
+        self.wait_until("the requests to be handled", |_| {
+            bar.roundtrips() >= from + 2 || bar.error().is_some()
+        });
     }
 
     /// Step until the bar client has seen `count` groups.
@@ -209,6 +221,13 @@ enum BarEvent {
     Engage,
     ScreenCapture(u32),
     SessionAgent(u32, u32),
+    AppWindow {
+        id: u32,
+        title: String,
+        flags: u32,
+    },
+    Shortcut(u32, String),
+    PrimaryModifier(u32),
     Done,
 }
 
@@ -221,6 +240,8 @@ struct Status {
     gtk_capabilities: Vec<u32>,
     /// Round trips completed: the events of every request sent before the last one have arrived.
     roundtrips: usize,
+    /// `force_quit_dialog` events a dock received.
+    force_quit_dialogs: usize,
 }
 
 struct ClientState {
@@ -326,17 +347,41 @@ impl Dispatch<CupertinoMenuBarV1, ()> for ClientState {
             },
             E::Engage => BarEvent::Engage,
             E::ScreenCapture { active } => BarEvent::ScreenCapture(active),
-            E::SessionAgent { trust, pid } => BarEvent::SessionAgent(
-                match trust {
-                    wayland_client::WEnum::Value(t) => t as u32,
-                    wayland_client::WEnum::Unknown(raw) => raw,
-                },
-                pid,
-            ),
+            E::SessionAgent { trust, pid } => BarEvent::SessionAgent(raw(trust), pid),
+            E::AppWindow { id, title, flags } => BarEvent::AppWindow {
+                id,
+                title,
+                flags: raw(flags),
+            },
+            E::Shortcut { action, chord } => BarEvent::Shortcut(raw(action), chord),
+            E::PrimaryModifier { key } => BarEvent::PrimaryModifier(raw(key)),
             E::Done => BarEvent::Done,
             other => panic!("unexpected event {other:?}"),
         };
         state.status.lock().unwrap().events.push(event);
+    }
+}
+
+/// The raw value of an enum or bitfield argument.
+fn raw<T: Into<u32>>(value: wayland_client::WEnum<T>) -> u32 {
+    match value {
+        wayland_client::WEnum::Value(v) => v.into(),
+        wayland_client::WEnum::Unknown(raw) => raw,
+    }
+}
+
+impl Dispatch<CupertinoDockV1, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        _: &CupertinoDockV1,
+        event: cupertino_dock_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let cupertino_dock_v1::Event::ForceQuitDialog = event {
+            state.status.lock().unwrap().force_quit_dialogs += 1;
+        }
     }
 }
 
@@ -428,6 +473,12 @@ enum Cmd {
     SetSecondAddress(&'static str, &'static str),
     /// Ask for exclusive keyboard interactivity (true) or none (false), and commit.
     SetKeyboard(bool),
+    /// Choose a row of the window list.
+    ActivateWindow(u32),
+    /// Retitle the first toplevel of an application client.
+    SetTitle(String),
+    /// Close the second toplevel of an application client.
+    CloseSecondWindow,
     /// Destroy the menu bar, its layer surface and the surface, as an exiting bar process does.
     Destroy,
 }
@@ -559,7 +610,12 @@ impl BarClient {
                 Cmd::WindowCommand(c) => bar.window_command(c),
                 Cmd::MoveToWorkspace(n) => bar.move_to_workspace(n),
                 Cmd::SessionAction(a) => bar.session_action(a),
-                Cmd::SetAddress(..) | Cmd::OpenSecondWindow | Cmd::SetSecondAddress(..) => {
+                Cmd::ActivateWindow(id) => bar.activate_window(id),
+                Cmd::SetAddress(..)
+                | Cmd::OpenSecondWindow
+                | Cmd::SetSecondAddress(..)
+                | Cmd::SetTitle(_)
+                | Cmd::CloseSecondWindow => {
                     panic!("a menu bar has no application windows")
                 }
                 Cmd::SetKeyboard(exclusive) => {
@@ -607,6 +663,69 @@ impl BarClient {
 
     fn error(&self) -> Option<(String, u32)> {
         self.0.status.lock().unwrap().error.clone()
+    }
+
+    fn roundtrips(&self) -> usize {
+        self.0.status.lock().unwrap().roundtrips
+    }
+}
+
+/// The dock process, as far as the menu bar tests need it: a layer surface at the bottom edge with the dock role that counts the
+/// `force_quit_dialog` events.
+struct DockClient(TestClient);
+
+impl DockClient {
+    fn spawn(h: &mut Harness) -> DockClient {
+        let stream = cupertino_server::shell_connection::shell_process_connection(
+            &h.state.display_handle,
+            &[ShellRole::Session, ShellRole::Dock],
+        )
+        .unwrap();
+        DockClient(run_client(stream, move |globals, qh, status| {
+            let compositor: wl_compositor::WlCompositor = globals.bind(qh, 4..=6, ()).unwrap();
+            let shm: wl_shm::WlShm = globals.bind(qh, 1..=1, ()).unwrap();
+            let shell: CupertinoShellV1 = globals.bind(qh, 10..=10, ()).unwrap();
+            let output: wl_output::WlOutput = globals.bind(qh, 1..=4, ()).unwrap();
+            let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
+                globals.bind(qh, 1..=4, ()).unwrap();
+            let surface = compositor.create_surface(qh, ());
+            let layer = layer_shell.get_layer_surface(
+                &surface,
+                Some(&output),
+                zwlr_layer_shell_v1::Layer::Top,
+                "dock-test".into(),
+                qh,
+                (),
+            );
+            layer.set_size(0, BAR_HEIGHT as u32);
+            layer.set_anchor(
+                zwlr_layer_surface_v1::Anchor::Bottom
+                    | zwlr_layer_surface_v1::Anchor::Left
+                    | zwlr_layer_surface_v1::Anchor::Right,
+            );
+            let dock = shell.get_dock(&surface, &output, qh, ());
+            surface.commit();
+            let state = ClientState {
+                status: status.clone(),
+                shm,
+                surface,
+                attached: false,
+                toplevel_size: (0, 0),
+            };
+            let apply = Box::new(move |_: Cmd| {
+                let _ = (&dock, &layer);
+                panic!("the dock takes no command")
+            });
+            (state, apply)
+        }))
+    }
+
+    fn force_quit_dialogs(&self) -> usize {
+        self.0.status.lock().unwrap().force_quit_dialogs
+    }
+
+    fn roundtrips(&self) -> usize {
+        self.0.status.lock().unwrap().roundtrips
     }
 }
 
@@ -732,13 +851,22 @@ impl AppClient {
                     toplevel.set_title(format!("{app_id} second window"));
                     let appmenu = manager.create(&surface, &qh, ());
                     surface.commit();
-                    second = Some((xdg, toplevel, appmenu));
+                    second = Some((xdg, toplevel, appmenu, surface));
                 }
                 Cmd::SetSecondAddress(service, path) => second
                     .as_ref()
                     .expect("the second window is open")
                     .2
                     .set_address(service.to_string(), path.to_string()),
+                Cmd::SetTitle(title) => toplevel.set_title(title),
+                Cmd::CloseSecondWindow => {
+                    let (xdg, toplevel, appmenu, surface) =
+                        second.take().expect("the second window is open");
+                    appmenu.release();
+                    toplevel.destroy();
+                    xdg.destroy();
+                    surface.destroy();
+                }
                 _ => panic!("an application window takes no menu bar command"),
             });
             (state, apply)
@@ -1346,4 +1474,463 @@ fn the_session_menu_entries_reach_the_session_agent_through_the_server() {
             "RefreshCapabilities"
         ]
     );
+}
+
+// ---- version 10: window list, shortcuts, the commands of the fallback menus --------------------
+
+/// `app_window_flags`.
+const ACTIVE: u32 = 1;
+const MINIMIZED: u32 = 2;
+
+/// A bar on a shell global of version 10, with its first groups (window state, screen capture, session agent and
+/// shortcuts) received.
+fn bar_v10(h: &mut Harness) -> BarClient {
+    let bar = BarClient::spawn_at(h.shell_stream(), true, 10);
+    h.wait_for_groups(&bar, 4);
+    bar
+}
+
+fn list_id(window: WindowId) -> u32 {
+    window.0 as u32
+}
+
+/// The window list of the latest group with `window_state`: id, title and flags per row.
+fn window_list(bar: &BarClient) -> Option<Vec<(u32, String, u32)>> {
+    let group = bar
+        .groups()
+        .into_iter()
+        .rev()
+        .find(|g| g.iter().any(|e| matches!(e, BarEvent::WindowState { .. })))?;
+    Some(
+        group
+            .into_iter()
+            .filter_map(|e| match e {
+                BarEvent::AppWindow { id, title, flags } => Some((id, title, flags)),
+                _ => None,
+            })
+            .collect(),
+    )
+}
+
+/// The chords and the primary modifier of the latest shortcut group.
+fn shortcuts(bar: &BarClient) -> Option<(Vec<(u32, String)>, u32)> {
+    let group = bar
+        .groups()
+        .into_iter()
+        .rev()
+        .find(|g| g.iter().any(|e| matches!(e, BarEvent::PrimaryModifier(_))))?;
+    let chords = group
+        .iter()
+        .filter_map(|e| match e {
+            BarEvent::Shortcut(action, chord) => Some((*action, chord.clone())),
+            _ => None,
+        })
+        .collect();
+    let primary = group.iter().find_map(|e| match e {
+        BarEvent::PrimaryModifier(key) => Some(*key),
+        _ => None,
+    })?;
+    Some((chords, primary))
+}
+
+/// One application client with two toplevels, the second one key: (client, first, second).
+fn two_windows(h: &mut Harness, app_id: &'static str) -> (AppClient, WindowId, WindowId) {
+    let app = AppClient::spawn(h.socket_path(), app_id);
+    let first = h.mapped_window(1);
+    app.send(Cmd::OpenSecondWindow);
+    let second = h.mapped_window(2);
+    assert_ne!(first, second);
+    (app, first, second)
+}
+
+#[test]
+fn the_window_list_follows_the_windows_of_the_active_application() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v10(&mut h);
+    let (app, first, second) = two_windows(&mut h, "org.example.list");
+    let row = |w: WindowId, title: &str, flags: u32| (list_id(w), title.to_string(), flags);
+    let first_title = "org.example.list window";
+    let second_title = "org.example.list second window";
+    h.wait_until("both windows to be listed, the key one on top", |_| {
+        window_list(&bar)
+            == Some(vec![
+                row(second, second_title, ACTIVE),
+                row(first, first_title, 0),
+            ])
+    });
+
+    h.state.command(Command::Minimize {
+        window: first,
+        target: None,
+    });
+    h.wait_until("the minimized flag", |_| {
+        window_list(&bar)
+            == Some(vec![
+                row(second, second_title, ACTIVE),
+                row(first, first_title, MINIMIZED),
+            ])
+    });
+
+    h.state.command(Command::FocusWindow { window: first });
+    app.send(Cmd::SetTitle("Renamed".into()));
+    h.wait_until("the restored window on top with its new title", |_| {
+        window_list(&bar)
+            == Some(vec![
+                row(first, "Renamed", ACTIVE),
+                row(second, second_title, 0),
+            ])
+    });
+
+    app.send(Cmd::CloseSecondWindow);
+    h.wait_until("the closed window's row to go", |_| {
+        window_list(&bar) == Some(vec![row(first, "Renamed", ACTIVE)])
+    });
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn a_title_longer_than_the_limit_is_cut_at_a_character_boundary() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v10(&mut h);
+    let app = AppClient::spawn(h.socket_path(), "org.example.long");
+    h.mapped_window(1);
+    // a two-byte character spans byte 1024: the cut keeps none of it
+    let title = format!("{}é{}", "a".repeat(1023), "b".repeat(4000 - 1025));
+    assert_eq!(title.len(), 4000);
+    app.send(Cmd::SetTitle(title.clone()));
+    h.wait_until("the new title in the active app", |_| {
+        bar.groups().last().is_some_and(|g| {
+            g.contains(&BarEvent::ActiveApp {
+                app_id: "org.example.long".into(),
+                title: title.clone(),
+            })
+        })
+    });
+    let list = window_list(&bar).unwrap();
+    assert_eq!(list.len(), 1);
+    assert!(list[0].1.len() <= 1024, "{} bytes", list[0].1.len());
+    assert_eq!(list[0].1, "a".repeat(1023));
+    h.settle_requests(&bar);
+    assert_eq!(bar.error(), None, "the bar stays connected");
+}
+
+#[test]
+fn activate_window_shows_a_window_of_the_active_application() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v10(&mut h);
+    let (_app, first, second) = two_windows(&mut h, "org.example.activate");
+    h.wait_until("both windows listed", |_| {
+        window_list(&bar).is_some_and(|l| l.len() == 2)
+    });
+
+    bar.send(Cmd::ActivateWindow(list_id(first)));
+    h.wait_until("the first window to be key", |s| {
+        s.wm.key_window() == Some(first)
+    });
+    assert_eq!(h.state.wm.stacking_order().last(), Some(&first));
+
+    h.state.command(Command::Minimize {
+        window: first,
+        target: None,
+    });
+    h.wait_until("the minimized row", |_| {
+        window_list(&bar).is_some_and(|l| {
+            l.contains(&(
+                list_id(first),
+                "org.example.activate window".into(),
+                MINIMIZED,
+            ))
+        })
+    });
+    assert_eq!(h.state.wm.key_window(), Some(second));
+    bar.send(Cmd::ActivateWindow(list_id(first)));
+    h.wait_until("the minimized window to be restored and key", |s| {
+        s.wm.key_window() == Some(first)
+            && s.wm
+                .window(first)
+                .is_some_and(|w| !w.state().is_minimized())
+    });
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn activate_window_ignores_a_window_of_another_application() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v10(&mut h);
+    let _a = AppClient::spawn(h.socket_path(), "org.example.first");
+    let a = h.mapped_window(1);
+    let _b = AppClient::spawn(h.socket_path(), "org.example.second");
+    h.mapped_window(2);
+    let b = h.state.wm.windows().find(|w| w.id != a).unwrap().id;
+    h.state.command(Command::FocusWindow { window: b });
+    h.wait_until("the second application's list", |_| {
+        window_list(&bar).is_some_and(|l| l.len() == 1 && l[0].0 == list_id(b))
+    });
+
+    bar.send(Cmd::ActivateWindow(list_id(a)));
+    h.settle_requests(&bar);
+    h.advance(0.5);
+    assert_eq!(h.state.wm.key_window(), Some(b));
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn activate_window_ignores_the_id_of_a_window_that_closed_since_the_list() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v10(&mut h);
+    let (app, first, second) = two_windows(&mut h, "org.example.stale");
+    h.wait_until("both windows listed", |_| {
+        window_list(&bar).is_some_and(|l| l.len() == 2)
+    });
+    app.send(Cmd::CloseSecondWindow);
+    h.wait_until("the second window to go", |s| s.wm.window(second).is_none());
+
+    bar.send(Cmd::ActivateWindow(list_id(second)));
+    h.settle_requests(&bar);
+    h.advance(0.5);
+    assert_eq!(h.state.wm.key_window(), Some(first));
+    assert_eq!(bar.error(), None, "a stale id is not a protocol error");
+}
+
+#[test]
+fn activate_window_is_ignored_while_the_session_is_locked() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v10(&mut h);
+    let (_app, first, second) = two_windows(&mut h, "org.example.locked");
+    h.wait_until("both windows listed", |_| {
+        window_list(&bar).is_some_and(|l| l.len() == 2)
+    });
+    let locker = common::Client::locker(common::session_agent(&h.state));
+    h.wait_until("the session to be locked", |_| locker.locked());
+
+    bar.send(Cmd::ActivateWindow(list_id(first)));
+    h.settle_requests(&bar);
+    h.advance(0.5);
+    assert_eq!(h.state.wm.key_window(), Some(second));
+    assert_eq!(h.state.wm.stacking_order().last(), Some(&second));
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn window_commands_are_ignored_while_the_session_is_locked() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v10(&mut h);
+    let (_app, first, second) = two_windows(&mut h, "org.example.locked");
+    h.wait_until("both windows listed", |_| {
+        window_list(&bar).is_some_and(|l| l.len() == 2)
+    });
+    let locker = common::Client::locker(common::session_agent(&h.state));
+    h.wait_until("the session to be locked", |_| locker.locked());
+
+    bar.send(Cmd::WindowCommand(BarCommand::Minimize));
+    bar.send(Cmd::WindowCommand(BarCommand::MinimizeAll));
+    h.settle_requests(&bar);
+    h.advance(0.5);
+    for w in [first, second] {
+        assert!(!h.state.wm.window(w).unwrap().state().is_minimized());
+    }
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn the_bar_is_told_the_chords_of_the_bindings_and_the_primary_modifier() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v10(&mut h);
+    let groups = bar.groups();
+    assert!(
+        matches!(groups[3].last(), Some(BarEvent::Done)),
+        "the fourth group is the shortcut group: {:?}",
+        groups[3]
+    );
+    let (chords, primary) = shortcuts(&bar).unwrap();
+    assert_eq!(primary, 0, "super under the cupertino profile");
+    assert_eq!(
+        chords.iter().map(|(a, _)| *a).collect::<Vec<_>>(),
+        (0..13).collect::<Vec<_>>(),
+        "one event per bound action, in order"
+    );
+    let chord = |chords: &[(u32, String)], action: u32| chords[action as usize].1.clone();
+    assert_eq!(chord(&chords, 6), "Super+q", "quit_app");
+    assert_eq!(chord(&chords, 0), "Super+w", "close_window");
+    assert_eq!(chord(&chords, 1), "Super+m", "minimize");
+
+    // a binding of config.json: the bar is told the new chord
+    let rebound = CompositorSettings {
+        keybindings: Some([("Super+t".to_string(), "quit-app".to_string())].into()),
+        ..CompositorSettings::default()
+    };
+    h.state
+        .apply_compositor_change(&CompositorSettings::default(), &rebound);
+    h.wait_for_groups(&bar, 5);
+    let (chords, primary) = shortcuts(&bar).unwrap();
+    assert_eq!(chord(&chords, 6), "Super+t");
+    assert_eq!(primary, 0);
+
+    // the classic-pc profile: Ctrl makes the primary modifier
+    let classic = KeyboardSettings {
+        modifier_profile: Some(ModifierProfile::ClassicPc),
+        ..KeyboardSettings::default()
+    };
+    h.state
+        .apply_keyboard_change(&KeyboardSettings::default(), &classic);
+    h.wait_for_groups(&bar, 6);
+    let (chords, primary) = shortcuts(&bar).unwrap();
+    assert_eq!(primary, 1, "ctrl under the classic-pc profile");
+    assert_eq!(chord(&chords, 6), "Ctrl+t");
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn a_version_9_bar_gets_none_of_the_version_10_events_or_commands() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = BarClient::spawn_at(h.shell_stream(), true, 9);
+    h.wait_for_groups(&bar, 3);
+    let (_app, first, _second) = two_windows(&mut h, "org.example.old");
+    h.state.command(Command::Minimize {
+        window: first,
+        target: None,
+    });
+    h.state.apply_keyboard_change(
+        &KeyboardSettings::default(),
+        &KeyboardSettings {
+            modifier_profile: Some(ModifierProfile::ClassicPc),
+            ..KeyboardSettings::default()
+        },
+    );
+    h.advance(1.0);
+    h.settle_requests(&bar);
+    let new = bar.groups().into_iter().flatten().find(|e| {
+        matches!(
+            e,
+            BarEvent::AppWindow { .. } | BarEvent::Shortcut(..) | BarEvent::PrimaryModifier(_)
+        )
+    });
+    assert_eq!(new, None);
+
+    bar.send(Cmd::WindowCommand(BarCommand::TileLeft));
+    let end = Instant::now() + Duration::from_secs(10);
+    while bar.error().is_none() && Instant::now() < end {
+        h.step();
+    }
+    assert_eq!(
+        bar.error(),
+        Some((
+            CupertinoMenuBarV1::interface().name.to_string(),
+            0 // invalid_command
+        ))
+    );
+}
+
+#[test]
+fn full_screen_and_tiling_commands_act_on_the_active_window() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v10(&mut h);
+    let _app = AppClient::spawn(h.socket_path(), "org.example.tiles");
+    let id = h.mapped_window(1);
+    let state = |h: &Harness| h.state.wm.window(id).unwrap().state();
+
+    bar.send(Cmd::WindowCommand(BarCommand::ToggleFullscreen));
+    h.wait_until("full screen", |s| {
+        s.wm.window(id).unwrap().state().is_fullscreen()
+    });
+    h.advance(5.0);
+    bar.send(Cmd::WindowCommand(BarCommand::ToggleFullscreen));
+    h.wait_until("out of full screen", |s| {
+        !s.wm.window(id).unwrap().state().is_fullscreen()
+    });
+    h.advance(5.0);
+    assert_eq!(state(&h), LifecycleState::Normal);
+
+    let out = h.state.outputs[0].id;
+    let margin = h.state.wm.config().snap.tiled_margin;
+    for (command, kind) in [
+        (BarCommand::TileLeft, TileKind::Left),
+        (BarCommand::TileRight, TileKind::Right),
+        (BarCommand::TileFill, TileKind::Fill),
+    ] {
+        bar.send(Cmd::WindowCommand(command));
+        h.wait_until("the tile", |s| {
+            s.wm.window(id).unwrap().state() == LifecycleState::Tiled(kind)
+                || s.wm.window(id).unwrap().state() == LifecycleState::Tiling(kind)
+        });
+        h.advance(5.0);
+        let usable = h.state.usable_area(out);
+        assert_eq!(
+            h.state.wm.window(id).unwrap().geometry(),
+            cupertino_wm::tile_rect(kind, usable, margin),
+            "{kind:?}"
+        );
+    }
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn the_all_windows_commands_act_on_every_window_of_the_active_application() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v10(&mut h);
+    let (_a, a1, a2) = two_windows(&mut h, "org.example.all");
+    let _b = AppClient::spawn(h.socket_path(), "org.example.other");
+    h.mapped_window(3);
+    let b = h
+        .state
+        .wm
+        .windows()
+        .find(|w| ![a1, a2].contains(&w.id))
+        .unwrap()
+        .id;
+    h.state.command(Command::FocusWindow { window: b });
+    h.state.command(Command::FocusWindow { window: a1 });
+    h.advance(1.0);
+    assert_eq!(h.state.wm.stacking_order(), &[a2, b, a1]);
+
+    bar.send(Cmd::WindowCommand(BarCommand::BringAllToFront));
+    h.wait_until("the application's windows in front", |s| {
+        s.wm.stacking_order() == [b, a2, a1]
+    });
+    assert_eq!(h.state.wm.key_window(), Some(a1), "the focus stays");
+
+    let origin = h.state.wm.window(a1).unwrap().geometry();
+    bar.send(Cmd::WindowCommand(BarCommand::CascadeAll));
+    let behind = Rect::new(origin.x - 24.0, origin.y - 24.0, 200.0, 150.0);
+    h.wait_until("the window behind to step up and left", |s| {
+        s.wm.window(a2).unwrap().geometry() == behind
+    });
+    h.advance(5.0);
+    assert_eq!(h.state.wm.window(a1).unwrap().geometry(), origin);
+    assert_eq!(h.state.wm.stacking_order(), &[b, a2, a1]);
+
+    bar.send(Cmd::WindowCommand(BarCommand::ZoomAll));
+    h.wait_until("both windows to zoom", |s| {
+        [a1, a2].iter().all(|w| {
+            matches!(
+                s.wm.window(*w).unwrap().state(),
+                LifecycleState::Zooming | LifecycleState::Zoomed
+            )
+        })
+    });
+    assert_eq!(
+        h.state.wm.window(b).unwrap().state(),
+        LifecycleState::Normal
+    );
+    h.advance(5.0);
+
+    bar.send(Cmd::WindowCommand(BarCommand::MinimizeAll));
+    h.wait_until("both windows to minimize", |s| {
+        [a1, a2]
+            .iter()
+            .all(|w| s.wm.window(*w).unwrap().state().is_minimized())
+    });
+    assert!(!h.state.wm.window(b).unwrap().state().is_minimized());
+    assert_eq!(bar.error(), None);
+}
+
+#[test]
+fn the_force_quit_command_opens_the_dialog_in_the_dock() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = bar_v10(&mut h);
+    let dock = DockClient::spawn(&mut h);
+    h.wait_until("the dock to be created", |_| dock.roundtrips() >= 2);
+    bar.send(Cmd::WindowCommand(BarCommand::ForceQuitDialog));
+    h.wait_until("the dialog", |_| dock.force_quit_dialogs() == 1);
+    assert_eq!(bar.error(), None);
 }

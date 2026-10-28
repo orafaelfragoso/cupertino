@@ -846,3 +846,105 @@ fn title_and_hints_update_and_close_request() {
     let fx = h.cmd(Command::RequestClose { window: a });
     assert_eq!(fx, vec![Effect::RequestClose { window: a }]);
 }
+
+#[test]
+fn the_bring_all_to_front_command_keeps_the_order_and_the_focus_and_can_cascade() {
+    let mut h = H::new();
+    let a1 = h.map_at("a", Rect::new(400.0, 300.0, 600.0, 400.0));
+    let a2 = h.map("a");
+    let a3 = h.map("a");
+    let b = h.map("b");
+    h.cmd(Command::FocusWindow { window: a1 });
+    assert_eq!(h.wm.stacking_order(), &[a2, a3, b, a1]);
+
+    let app = h.app("a");
+    h.cmd(Command::BringAllToFront {
+        app,
+        cascade: false,
+    });
+    assert_eq!(h.wm.stacking_order(), &[b, a2, a3, a1]);
+    assert_eq!(h.wm.key_window(), Some(a1));
+
+    let origin = h.wm.window(a1).unwrap().geometry();
+    h.cmd(Command::BringAllToFront { app, cascade: true });
+    h.settle();
+    assert_eq!(h.wm.stacking_order(), &[b, a2, a3, a1]);
+    assert_eq!(h.wm.key_window(), Some(a1));
+    assert!(rect_eq(h.frame(a1), origin), "the key window stays");
+    let behind = |n: f64| {
+        Rect::new(
+            origin.x - CASCADE_STEP * n,
+            origin.y - CASCADE_STEP * n,
+            600.0,
+            400.0,
+        )
+    };
+    assert!(rect_eq(h.frame(a3), behind(1.0)), "{:?}", h.frame(a3));
+    assert!(rect_eq(h.frame(a2), behind(2.0)), "{:?}", h.frame(a2));
+}
+
+#[test]
+fn a_cascade_moves_a_sheet_with_its_parent_instead_of_cascading_it() {
+    let mut h = H::new();
+    let a1 = h.map_at("a", Rect::new(400.0, 300.0, 600.0, 400.0));
+    let a2 = h.map("a");
+    let sheet = map_modal(&mut h, 50, a2);
+    h.cmd(Command::FocusWindow { window: a1 });
+    h.settle();
+    let (parent, child) = (h.frame(a2), h.frame(sheet));
+
+    let app = h.app("a");
+    h.cmd(Command::BringAllToFront { app, cascade: true });
+    h.settle();
+    let origin = h.frame(a1);
+    let moved = h.frame(a2);
+    assert!(
+        rect_eq(
+            moved,
+            Rect::new(
+                origin.x - CASCADE_STEP,
+                origin.y - CASCADE_STEP,
+                600.0,
+                400.0
+            )
+        ),
+        "the only other top-level window takes the first step: {moved:?}"
+    );
+    assert!(
+        rect_eq(
+            h.frame(sheet),
+            child.translate(moved.x - parent.x, moved.y - parent.y)
+        ),
+        "the sheet keeps its place on the parent: {:?}",
+        h.frame(sheet)
+    );
+}
+
+#[test]
+fn a_cascade_from_a_key_sheet_starts_at_its_parent_which_stays() {
+    let mut h = H::new();
+    let a1 = h.map_at("a", Rect::new(400.0, 300.0, 600.0, 400.0));
+    let a2 = h.map("a");
+    let sheet = map_modal(&mut h, 50, a1);
+    assert_eq!(h.wm.key_window(), Some(sheet));
+    let (parent, child) = (h.frame(a1), h.frame(sheet));
+
+    let app = h.app("a");
+    h.cmd(Command::BringAllToFront { app, cascade: true });
+    h.settle();
+    assert!(rect_eq(h.frame(a1), parent), "the key sheet's parent stays");
+    assert!(rect_eq(h.frame(sheet), child), "and so does the sheet");
+    assert!(
+        rect_eq(
+            h.frame(a2),
+            Rect::new(
+                parent.x - CASCADE_STEP,
+                parent.y - CASCADE_STEP,
+                600.0,
+                400.0
+            )
+        ),
+        "{:?}",
+        h.frame(a2)
+    );
+}

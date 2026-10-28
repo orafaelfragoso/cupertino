@@ -22,10 +22,75 @@ pub struct OutputId(pub u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FrameId(pub u64);
 
+/// What a composed item is, for stable identity. `key` is the renderer's cache-slot name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SceneKind {
+    Wallpaper,
+    LockBackdrop,
+    ActivationFade,
+    PowerOverlay,
+    OverviewDim,
+    SnapPreview,
+    Shadow,
+    PopupRim,
+    PopupShadow,
+    WindowContent,
+    PopupContent,
+    LayerContent,
+    DragIcon,
+    LockContent,
+    CursorContent,
+    TitleBar,
+    Rim,
+    CursorImage,
+    InputHud,
+    AccentPopup,
+    InputHudTint,
+    InputHudShadow,
+    AccentShadow,
+    /// Content the renderer still builds itself; removed with the effect migration.
+    LocalPass,
+    #[cfg(test)]
+    Test,
+}
+
+impl SceneKind {
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Wallpaper => "wallpaper",
+            Self::LockBackdrop => "lock-backdrop",
+            Self::ActivationFade => "activation-fade",
+            Self::PowerOverlay => "power-overlay",
+            Self::OverviewDim => "overview-dim",
+            Self::SnapPreview => "snap-preview",
+            Self::Shadow => "shadow",
+            Self::PopupRim => "popup-rim",
+            Self::PopupShadow => "popup-shadow",
+            Self::WindowContent => "window-content",
+            Self::PopupContent => "popup-content",
+            Self::LayerContent => "layer-content",
+            Self::DragIcon => "drag-icon",
+            Self::LockContent => "lock-content",
+            Self::CursorContent => "cursor-content",
+            Self::TitleBar => "title-bar",
+            Self::Rim => "rim",
+            Self::CursorImage => "cursor-image",
+            Self::InputHud => "input-hud",
+            Self::AccentPopup => "accent-popup",
+            Self::InputHudTint => "input-hud-tint",
+            Self::InputHudShadow => "input-hud-shadow",
+            Self::AccentShadow => "accent-shadow",
+            Self::LocalPass => "local-pass",
+            #[cfg(test)]
+            Self::Test => "test",
+        }
+    }
+}
+
 /// Stable identity of a composed item, independent of the frame sequence and source revision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SceneId {
-    pub kind: &'static str,
+    pub kind: SceneKind,
     pub index: u64,
 }
 
@@ -93,19 +158,46 @@ impl SceneFrame {
         invalidation: OutputInvalidation,
         items: LayerStack<SceneItem>,
     ) -> Self {
+        let items = items.flatten_with_layer();
+        debug_assert!(
+            captures_below_composites(&items),
+            "a material composite needs its capture below it in the scene"
+        );
         Self {
             output,
             id,
             timestamp,
             clear,
             invalidation,
-            items: items.flatten_with_layer(),
+            items,
         }
     }
 
     pub fn items(&self) -> &[(SceneLayer, SceneItem)] {
         &self.items
     }
+}
+
+/// `items` is front to back, so a composite's capture must come after it.
+fn captures_below_composites(items: &[(SceneLayer, SceneItem)]) -> bool {
+    items
+        .iter()
+        .enumerate()
+        .all(|(at, (_, item))| match &item.source {
+            Source::Material(MaterialPass {
+                stage: MaterialStage::Composite { owner },
+                ..
+            }) => items[at + 1..].iter().any(|(_, below)| {
+                matches!(
+                    &below.source,
+                    Source::Material(MaterialPass {
+                        stage: MaterialStage::Capture { owner: o },
+                        ..
+                    }) if o == owner
+                )
+            }),
+            _ => true,
+        })
 }
 
 #[cfg(test)]
@@ -116,7 +208,7 @@ mod tests {
     fn item(index: u64, damage: ContentDamage) -> SceneItem {
         SceneItem {
             id: SceneId {
-                kind: "test",
+                kind: SceneKind::Test,
                 index,
             },
             revision: 3,
@@ -164,6 +256,7 @@ mod tests {
                 alpha: AlphaMode::Premultiplied,
             },
             role: ImageRole::Standalone,
+            size: (90, 90),
         };
         items.push(SceneLayer::Windows, image);
         items.push(
@@ -203,5 +296,68 @@ mod tests {
         assert_eq!(frame.items()[3].1.damage, ContentDamage::Full);
         assert_eq!(frame.items()[1].1.revision, 3);
         assert_eq!(frame.invalidation, OutputInvalidation::Incremental);
+    }
+    fn material(index: u64, stage: MaterialStage) -> SceneItem {
+        let mut i = item(index, ContentDamage::Full);
+        i.source = Source::Material(MaterialPass {
+            recipe: RecipeId(ResourceKey {
+                slot: 0,
+                generation: 1,
+            }),
+            rect: OutputRect(Rect::new(0.0, 0.0, 10.0, 10.0)),
+            radius: 0.0,
+            style: cupertino_geometry::CornerStyle::Circular,
+            stage,
+        });
+        i
+    }
+
+    fn frame_with(items: LayerStack<SceneItem>) -> SceneFrame {
+        SceneFrame::new(
+            Output {
+                id: OutputId(1),
+                rect: GlobalRect(Rect::new(0.0, 0.0, 800.0, 600.0)),
+                physical_size: PhysicalSize {
+                    width: 800,
+                    height: 600,
+                },
+                scale: 1.0,
+                transform: Transform::Normal,
+            },
+            FrameId(1),
+            Duration::ZERO,
+            [0.0; 4],
+            OutputInvalidation::Incremental,
+            items,
+        )
+    }
+
+    #[test]
+    fn composite_with_its_capture_below_is_accepted() {
+        let mut items = LayerStack::new();
+        items.push(
+            SceneLayer::BackdropCapture,
+            material(1, MaterialStage::Capture { owner: 7 }),
+        );
+        items.push(
+            SceneLayer::LayerTop,
+            material(2, MaterialStage::Composite { owner: 7 }),
+        );
+        assert_eq!(frame_with(items).items().len(), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "needs its capture below")]
+    fn composite_above_nothing_is_rejected() {
+        let mut items = LayerStack::new();
+        items.push(
+            SceneLayer::LayerTop,
+            material(2, MaterialStage::Composite { owner: 7 }),
+        );
+        items.push(
+            SceneLayer::BackdropCapture,
+            material(1, MaterialStage::Capture { owner: 8 }),
+        );
+        frame_with(items);
     }
 }

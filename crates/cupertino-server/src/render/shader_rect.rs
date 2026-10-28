@@ -61,6 +61,17 @@ struct Slot {
 #[derive(Debug, Default)]
 pub struct ElementCache {
     slots: HashMap<ElementKey, Slot>,
+    /// The slots and identity correspondence of the previous scene builder, kept beside the real ones.
+    #[cfg(scene_oracle)]
+    oracle: Oracle,
+}
+
+#[cfg(scene_oracle)]
+#[derive(Debug, Default)]
+struct Oracle {
+    slots: HashMap<ElementKey, Slot>,
+    forward: HashMap<Id, Id>,
+    backward: HashMap<Id, Id>,
 }
 
 impl ElementCache {
@@ -78,6 +89,31 @@ impl ElementCache {
         }
         s.used = true;
         (s.id.clone(), s.commit)
+    }
+
+    /// Exchange the slots with the previous builder's, around its run.
+    #[cfg(scene_oracle)]
+    pub(super) fn swap_oracle_slots(&mut self) {
+        std::mem::swap(&mut self.slots, &mut self.oracle.slots);
+    }
+
+    /// Record that the previous builder's element `legacy` is the migrated builder's `migrated`; `false` when
+    /// either already stands for another element.
+    #[cfg(scene_oracle)]
+    pub(super) fn pair_identities(&mut self, legacy: &Id, migrated: &Id) -> bool {
+        let forward = self
+            .oracle
+            .forward
+            .entry(legacy.clone())
+            .or_insert_with(|| migrated.clone())
+            == migrated;
+        let backward = self
+            .oracle
+            .backward
+            .entry(migrated.clone())
+            .or_insert_with(|| legacy.clone())
+            == legacy;
+        forward && backward
     }
 
     /// Forget every key that was not requested since the previous call.

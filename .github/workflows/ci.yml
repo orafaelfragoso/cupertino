@@ -179,6 +179,13 @@ jobs:
           # A runner without an EGL device fails crates/cupertino-server/tests/contracts.rs instead of skipping it.
           CUPERTINO_EGL_REQUIRED: "1"
         run: cargo nextest run --workspace --all-features --no-fail-fast
+      # The scene parity tests compile only with the oracle (build.rs); build.rs recompiles this one crate. Removed
+      # with wp04-seam-gates, together with the oracle.
+      - name: Scene oracle
+        env:
+          CUPERTINO_EGL_REQUIRED: "1"
+          CUPERTINO_SCENE_ORACLE: "1"
+        run: cargo nextest run -p cupertino-server --all-features --no-fail-fast
       - name: Doctests
         run: cargo test --workspace --all-features --doc
       - name: Disk after the tests

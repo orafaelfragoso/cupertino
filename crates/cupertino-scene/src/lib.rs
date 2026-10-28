@@ -43,6 +43,7 @@ pub enum SceneKind {
     CursorImage,
     InputHud,
     AccentPopup,
+    InputHudTint,
     InputHudShadow,
     AccentShadow,
     /// Content the renderer still builds itself; removed with the effect migration.
@@ -72,6 +73,7 @@ impl SceneKind {
             Self::CursorImage => "cursor-image",
             Self::InputHud => "input-hud",
             Self::AccentPopup => "accent-popup",
+            Self::InputHudTint => "input-hud-tint",
             Self::InputHudShadow => "input-hud-shadow",
             Self::AccentShadow => "accent-shadow",
             Self::LocalPass => "local-pass",

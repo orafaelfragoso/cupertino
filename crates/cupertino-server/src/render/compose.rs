@@ -248,6 +248,37 @@ pub fn item(kind: SceneKind, index: u64, source: Source, opacity: f64) -> SceneI
     }
 }
 
+/// `buffer` of `px` device pixels with its top-left corner at output-local logical `(x, y)`; its logical size
+/// is the pixel size divided by `scale`.
+pub fn image_piece(
+    buffer: &MemoryRenderBuffer,
+    kind: SceneKind,
+    px: (i32, i32),
+    x: f64,
+    y: f64,
+    scale: f64,
+    alpha: f32,
+) -> Piece {
+    Piece::Image(Box::new(Picture {
+        buffer: buffer.clone(),
+        kind,
+        index: 0,
+        role: ImageRole::Standalone,
+        buffer_px: px,
+        src: Rectangle::new((0.0, 0.0).into(), (f64::from(px.0), f64::from(px.1)).into()),
+        size: (
+            (f64::from(px.0) / scale).round() as i32,
+            (f64::from(px.1) / scale).round() as i32,
+        ),
+        placement: Placement {
+            origin: OutputPoint(Point::new(x, y)),
+            ..Placement::IDENTITY
+        },
+        opacity: alpha,
+        clip: Clip::None,
+    }))
+}
+
 pub fn from_rect(r: cupertino_wm::Rect) -> Rect {
     Rect::new(r.x, r.y, r.w, r.h)
 }

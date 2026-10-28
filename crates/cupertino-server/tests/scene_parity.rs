@@ -250,3 +250,27 @@ fn the_pointer_matches_wherever_it_is() {
         }
     }
 }
+
+#[test]
+fn the_input_source_hud_matches_while_it_shows_and_fades() {
+    for scale in [1.0, 1.5] {
+        let mut d = Desktop::new(scale);
+        d.window();
+        d.at(2000);
+        d.state.overlays.inputs.hud = Some(cupertino_server::kbd::HudView {
+            order: vec!["us".into(), "de".into()],
+            labels: vec!["ABC".into(), "Deutsch".into()],
+            selection: 1,
+            fading_since: None,
+        });
+        d.at(2016);
+        assert!(d.compare("hud shown") > 6);
+        if let Some(hud) = d.state.overlays.inputs.hud.as_mut() {
+            hud.fading_since = Some(2.016);
+        }
+        for ms in [2100u32, 2200] {
+            d.at(ms);
+            d.compare(&format!("hud fading at {ms} ms"));
+        }
+    }
+}

@@ -385,7 +385,7 @@ pub(crate) fn rrect(
 
 /// Rounded rectangle as a scene item, drawn like [`rrect`].
 #[allow(clippy::too_many_arguments)]
-fn rrect_item(
+pub(crate) fn rrect_item(
     kind: SceneKind,
     index: u64,
     rect: smithay::utils::Rectangle<f64, Logical>,
@@ -576,25 +576,6 @@ pub(crate) fn shadow_item(
         Source::Shadow(shadow),
         alpha,
     )))
-}
-
-pub(crate) fn shadow_with(
-    p: &mut SceneParams<'_>,
-    key: ElementKey,
-    params: &cupertino_decorations::ShadowParams,
-    plan: &WindowPlan,
-    corner: f64,
-    alpha: f64,
-) -> Option<ShaderRect> {
-    let shadow = shadow_data(p, params, plan, corner, alpha)?;
-    Some(super::lower::shadow_rect(
-        &p.res.programs,
-        p.cache,
-        p.scale,
-        key,
-        &shadow,
-        alpha,
-    ))
 }
 
 /// Elements of one window, front to back: popups, content (masked to the plan's corner radius,
@@ -1573,14 +1554,8 @@ pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<C
     }
 
     snap_preview(&mut p, &mut stack);
-    stack.extend(
-        SceneLayer::InputHud,
-        crate::kbd_ui::input_hud(renderer, &mut p),
-    );
-    stack.extend(
-        SceneLayer::AccentPopup,
-        crate::kbd_ui::accent_popup(renderer, &mut p),
-    );
+    stack.extend(SceneLayer::InputHud, crate::kbd_ui::input_hud(&mut p));
+    stack.extend(SceneLayer::AccentPopup, crate::kbd_ui::accent_popup(&mut p));
 
     if let Some((surface, offset)) = p.drag_icon.clone() {
         let scale = Scale::from(p.scale);

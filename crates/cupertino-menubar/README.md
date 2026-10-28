@@ -193,7 +193,8 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   Force Quit… shows its alternate Force Quit <app name> (-4013, `SystemRow::ForceQuitApp`), with the name the bold App menu
   title shows, no ellipsis and no chord; a name over 64 characters (`MAX_FORCE_QUIT_NAME_CHARS`, the cap of the other
   names in the system menu) is cut at its end with an ellipsis. It sends `force_quit_app` with the app id the label was
-  built for, and the server ends that application only while it is still the active one; it is disabled below version 13
+  built for, and the server ends that application only while it is still the active one. Unlike Force Quit…, it asks for
+  no confirmation: choosing the item that names the application with Alt held is the confirmation. It is disabled below version 13
   (`MenuBar::can_force_quit_app`) and absent on the desktop. Force Quit…, Lock Screen and Log Out show
   the chord the server binds to them, none while it sent none. Without a session agent the menu is About This Computer, Settings…, Recent
   Items, Force Quit… and Lock Screen.

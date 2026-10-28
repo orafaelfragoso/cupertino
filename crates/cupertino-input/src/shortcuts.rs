@@ -27,6 +27,8 @@ pub enum Action {
     // windows and apps
     CloseWindow,
     MinimizeWindow,
+    /// Restore a tiled, filled or zoomed window, else minimize it (the Windows habit of Super+Down).
+    MinimizeOrRestoreWindow,
     ZoomWindow,
     ToggleFullscreen,
     HideApp,
@@ -121,6 +123,7 @@ impl Action {
         match self {
             Action::CloseWindow => "close-window".into(),
             Action::MinimizeWindow => "minimize-window".into(),
+            Action::MinimizeOrRestoreWindow => "minimize-or-restore-window".into(),
             Action::ZoomWindow => "zoom-window".into(),
             Action::ToggleFullscreen => "toggle-fullscreen".into(),
             Action::HideApp => "hide-app".into(),
@@ -227,6 +230,7 @@ impl FromStr for Action {
         let a = match s {
             "close-window" => Action::CloseWindow,
             "minimize-window" => Action::MinimizeWindow,
+            "minimize-or-restore-window" => Action::MinimizeOrRestoreWindow,
             "zoom-window" => Action::ZoomWindow,
             "toggle-fullscreen" => Action::ToggleFullscreen,
             "hide-app" => Action::HideApp,
@@ -408,7 +412,7 @@ pub struct ConfigReport {
 }
 
 /// Whether the combination `lhs` names the Super key (and not `Primary`).
-fn names_super(lhs: &str) -> bool {
+pub fn names_super(lhs: &str) -> bool {
     lhs.split(['+', '<', '>'])
         .any(|part| SUPER_NAMES.contains(&part.trim().to_ascii_lowercase().as_str()))
 }
@@ -551,7 +555,7 @@ Alt+Shift+Tab = switch-app-reverse
 Super+grave = cycle-windows
 Super+Shift+grave = cycle-windows-reverse
 Alt+F4 = close-window
-Super+Down = minimize-window
+Super+Down = minimize-or-restore-window
 Super+h = hide-app
 Super+Home = hide-other-apps
 Super+q = quit-app
@@ -1125,5 +1129,21 @@ mod tests {
             ShortcutMap::defaults_for("nope").len(),
             ShortcutMap::defaults().len()
         );
+    }
+
+    #[test]
+    fn names_super_finds_the_super_key_but_not_primary() {
+        for yes in [
+            "Super+a",
+            "super+Shift+a",
+            "<Super>a",
+            "Win+a",
+            "Ctrl+Mod4+a",
+        ] {
+            assert!(names_super(yes), "{yes}");
+        }
+        for no in ["Primary+a", "Ctrl+Alt+a", "Shift+Super_L", "a"] {
+            assert!(!names_super(no), "{no}");
+        }
     }
 }

@@ -669,6 +669,9 @@ impl Config {
             match Action::from_name(action) {
                 Some(a) => {
                     let profile = self.keyboard.profile.clone();
+                    if profile == "classic-pc" && cupertino_input::names_super(chord) {
+                        tracing::info!(chord, "under classic-pc a Super chord names the Super key, not the command key (use Primary for that)");
+                    }
                     if let Err(e) = self.keybindings.bind_str_for(chord, a, &profile) {
                         problems.push(format!("keybindings: {chord}: {e}"));
                     }

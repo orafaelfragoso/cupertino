@@ -66,7 +66,9 @@ pub use scroll_accel::{
     TRACKPAD_SCROLL_RESOLUTION,
 };
 pub use scroll_count::{ScrollCounter, ScrollPhase};
-pub use shortcuts::{Action, KeyCombo, ParseError, ScreenshotRequest, ShortcutMap};
+pub use shortcuts::{
+    names_super, Action, ConfigReport, KeyCombo, ParseError, ScreenshotRequest, ShortcutMap,
+};
 pub use table::{AccelTable, TableCurve, TableEntry, TableError, DEFAULT_TABLE};
 pub use touchpad::{
     ClickPressure, CornerClick, SwipeAxis, TouchContact, Touchpad, TouchpadButton, TouchpadEvent,

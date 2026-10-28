@@ -2,7 +2,7 @@
 //!
 //! A [`Chord`] is expressed with *logical* modifiers: [`cupertino_modifiers::Mods::PRIMARY`] is the modifier that carries
 //! application shortcuts. Which physical key produces it is decided by a
-//! [`crate::modifiers::ModifierProfile`].
+//! [`cupertino_modifiers::Profile`].
 
 use std::fmt;
 

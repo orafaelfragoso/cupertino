@@ -1,5 +1,5 @@
 // cupertino-layers --graph target
-// 57 crates, 211 internal dependencies
+// 57 crates, 212 internal dependencies
 // per layer: foundation 13, models 7, platform 7, protocol 3, transport 3, render 4, ui 2, core 1, shell 9, services 4, apps 2, tools 2
 // forbidden normal edge cupertino-files (apps) -> cupertino-decorations (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
 // forbidden normal edge cupertino-files (apps) -> cupertino-icons (render), migration #46 exception (apps): apps paint fields, shapes, text and system icons with desktop render crates until they draw through the toolkit (WP-10)
@@ -281,6 +281,7 @@ digraph "target" {
   "cupertino-settings" -> "cupertino-filepicker";
   "cupertino-settings" -> "cupertino-geometry";
   "cupertino-settings" -> "cupertino-icons" [color=orange, style=dashed];
+  "cupertino-settings" -> "cupertino-modifiers";
   "cupertino-settings" -> "cupertino-protocol-app";
   "cupertino-settings" -> "cupertino-text-field";
   "cupertino-settings" -> "cupertino-theme";

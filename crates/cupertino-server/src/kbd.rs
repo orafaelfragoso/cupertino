@@ -54,14 +54,14 @@ use cupertino_defaults::keyboard::{
 };
 use cupertino_input::{Action as InputAction, KeyCombo, Modifiers, ScreenshotRequest, ShortcutMap};
 use cupertino_keyboard::keys::{Key, NamedKey};
-use cupertino_keyboard::modifiers::{FnUsage, ModifierProfile};
+use cupertino_keyboard::modifiers::FnUsage;
 use cupertino_keyboard::repeat::{CapsLockDelay, RepeatConfig, RepeatInfo, CAPS_HOLD_DEFAULT_MS};
 use cupertino_keyboard::rewrite::ClientClass;
 use cupertino_keyboard::shortcuts::{ShortcutSet, SystemAction};
 use cupertino_keyboard::switcher::{self, Step, SwitchEvent, Switcher};
 use cupertino_keyboard::xkb::{Keyboard, Level3Keys};
 use cupertino_keyboard::{mouse_keys, slow_keys};
-use cupertino_modifiers::RawMods;
+use cupertino_modifiers::{Profile, RawMods};
 use smithay::input::keyboard::{keysyms, xkb, ModifiersState};
 
 use crate::input::Mods;
@@ -362,8 +362,8 @@ impl KeyboardSettings {
         ids.iter().any(|id| id.eq_ignore_ascii_case(app))
     }
 
-    pub fn modifier_profile(&self) -> ModifierProfile {
-        ModifierProfile::by_name(&self.profile).unwrap_or_else(ModifierProfile::cupertino)
+    pub fn modifier_profile(&self) -> Profile {
+        Profile::by_name(&self.profile).unwrap_or_else(Profile::cupertino)
     }
 
     /// Logical modifiers (`logo` = the primary modifier of the profile) of a physical modifier state.
@@ -541,7 +541,7 @@ pub fn merge_reference_shortcuts(map: &mut ShortcutMap, set: &ShortcutSet) -> Me
             continue;
         };
         use cupertino_modifiers::Mods as L;
-        // the table's logical primary modifier is Super in this compositor (`ModifierProfile` translates the rest)
+        // the table's logical primary modifier is Super in this compositor (`Profile` translates the rest)
         let mods = Modifiers::new(
             chord.mods.contains(L::SHIFT),
             chord.mods.contains(L::CTRL),
@@ -974,7 +974,7 @@ mod tests {
             }
         );
         s.profile = "classic-pc".into();
-        // Ctrl carries the shortcuts, Super is not a modifier of shortcut matching
+        // Ctrl carries the shortcuts, and Super takes the role Ctrl has under cupertino
         assert_eq!(
             s.translate(&ctrl),
             Mods {
@@ -985,6 +985,7 @@ mod tests {
         assert_eq!(
             s.translate(&m),
             Mods {
+                ctrl: true,
                 shift: true,
                 ..Mods::NONE
             }

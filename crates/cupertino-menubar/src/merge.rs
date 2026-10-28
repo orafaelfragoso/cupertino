@@ -17,7 +17,6 @@
 
 use crate::fallback::{self, FallbackAction};
 use crate::item::{split_mnemonic, ItemId, MenuItem, Shortcut, ShortcutModifier};
-use cupertino_keyboard::modifiers::ModifierProfile;
 use cupertino_keyboard::rewrite::{
     is_printable, pressed_for, ClientClass, KeyPress, SYM_KP_ENTER, SYM_RETURN,
 };
@@ -367,10 +366,10 @@ pub fn label_role(label: &str, names: &[&str]) -> Option<Role> {
 
 /// The server's modifier profile, named by the key its convention chords show as primary
 /// ([`fallback::Chords::primary`]): Super under `cupertino`, Ctrl under `classic-pc`.
-fn profile(primary: ShortcutModifier) -> (Profile, ModifierProfile) {
+fn profile(primary: ShortcutModifier) -> Profile {
     match primary {
-        ShortcutModifier::Ctrl => (Profile::classic_pc(), ModifierProfile::classic_pc()),
-        _ => (Profile::cupertino(), ModifierProfile::cupertino()),
+        ShortcutModifier::Ctrl => Profile::classic_pc(),
+        _ => Profile::cupertino(),
     }
 }
 
@@ -421,7 +420,7 @@ pub fn accel_shortcut(
     primary: ShortcutModifier,
     class: ClientClass,
 ) -> Option<Shortcut> {
-    let (profile, rewrite_profile) = profile(primary);
+    let profile = profile(primary);
     let chord = Chord::from_accel(accel, &profile)?;
     let raw = chord
         .modifiers
@@ -442,7 +441,7 @@ pub fn accel_shortcut(
         is_modifier: false,
         raw,
     };
-    let pressed = pressed_for(&rewrite_profile, class, &received).raw;
+    let pressed = pressed_for(&profile, class, &received).raw;
     let mut modifiers: Vec<ShortcutModifier> = [
         (RawMods::CTRL, ShortcutModifier::Ctrl),
         (RawMods::ALT, ShortcutModifier::Alt),

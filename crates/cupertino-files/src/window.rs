@@ -3245,18 +3245,26 @@ mod tests {
         }
     }
 
-    /// The pixels in which `a` and `b` differ outside `areas` (points), the areas rounded out to whole device pixels
-    /// as the presenter does.
-    fn differing_outside(a: &Pixmap, b: &Pixmap, areas: &[GeoRect], scale: f32) -> Vec<(u32, u32)> {
+    /// The device pixels `areas` (points) touch at `scale`, as (left, top, right, bottom) rounded out to whole pixels,
+    /// the way the presenter converts and reports them.
+    fn device_rects(areas: &[GeoRect], scale: f32) -> Vec<(u32, u32, u32, u32)> {
         let f = f64::from(scale);
-        let inside = |x: u32, y: u32| {
-            areas.iter().any(|r| {
-                (f64::from(x)) >= (r.x() * f).floor()
-                    && f64::from(x) < ((r.x() + r.width()) * f).ceil()
-                    && f64::from(y) >= (r.y() * f).floor()
-                    && f64::from(y) < ((r.y() + r.height()) * f).ceil()
+        areas
+            .iter()
+            .map(|r| {
+                (
+                    (r.x() * f).floor() as u32,
+                    (r.y() * f).floor() as u32,
+                    ((r.x() + r.width()) * f).ceil() as u32,
+                    ((r.y() + r.height()) * f).ceil() as u32,
+                )
             })
-        };
+            .collect()
+    }
+
+    /// The pixels in which `a` and `b` differ outside `areas` (points).
+    fn differing_outside(a: &Pixmap, b: &Pixmap, areas: &[GeoRect], scale: f32) -> Vec<(u32, u32)> {
+        let rects = device_rects(areas, scale);
         let width = a.width();
         a.pixels()
             .iter()
@@ -3264,8 +3272,20 @@ mod tests {
             .enumerate()
             .filter(|(_, (p, q))| p != q)
             .map(|(i, _)| (i as u32 % width, i as u32 / width))
-            .filter(|&(x, y)| !inside(x, y))
+            .filter(|&(x, y)| {
+                !rects
+                    .iter()
+                    .any(|r| x >= r.0 && x < r.2 && y >= r.1 && y < r.3)
+            })
             .collect()
+    }
+
+    /// The device pixels the presenter converts and reports for `areas`.
+    fn damaged_pixels(areas: &[GeoRect], scale: f32) -> u64 {
+        device_rects(areas, scale)
+            .iter()
+            .map(|r| u64::from(r.2 - r.0) * u64::from(r.3 - r.1))
+            .sum()
     }
 
     #[test]
@@ -3298,6 +3318,22 @@ mod tests {
             let (on, off) = (paint(None, true, false), paint(None, false, false));
             assert_ne!(on.data(), off.data(), "the search caret shows at {scale}x");
             let areas = caret_areas(&frame, None).unwrap();
+            // what the presenter converts and reports for the blink, of the 920 x 436 points of the window
+            let (pixels, bytes) = if scale == 1.0 {
+                (37_388, 149_552)
+            } else {
+                (84_162, 336_648)
+            };
+            assert_eq!(
+                damaged_pixels(&areas, scale),
+                pixels,
+                "search caret pixels at {scale}x"
+            );
+            assert_eq!(
+                damaged_pixels(&areas, scale) * 4,
+                bytes,
+                "search caret bytes at {scale}x"
+            );
             assert_eq!(
                 differing_outside(&on, &off, &areas, scale),
                 vec![],
@@ -3311,6 +3347,21 @@ mod tests {
             );
             assert_ne!(on.data(), off.data(), "the name caret shows at {scale}x");
             let areas = caret_areas(&frame, Some(0)).unwrap();
+            let (pixels, bytes) = if scale == 1.0 {
+                (62_912, 251_648)
+            } else {
+                (142_682, 570_728)
+            };
+            assert_eq!(
+                damaged_pixels(&areas, scale),
+                pixels,
+                "name caret pixels at {scale}x"
+            );
+            assert_eq!(
+                damaged_pixels(&areas, scale) * 4,
+                bytes,
+                "name caret bytes at {scale}x"
+            );
             assert_eq!(
                 differing_outside(&on, &off, &areas, scale),
                 vec![],

@@ -43,6 +43,11 @@ pub fn lower(
     resources: FrameResources,
     ctx: &mut Lowering<'_>,
 ) -> Vec<CupertinoElement> {
+    if resources.frame != frame.id {
+        debug_assert!(false, "resources of another frame");
+        tracing::error!("scene resources belong to another frame, nothing lowered");
+        return Vec::new();
+    }
     let FrameResources {
         surfaces,
         images,

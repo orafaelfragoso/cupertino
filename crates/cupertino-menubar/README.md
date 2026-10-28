@@ -92,12 +92,12 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
 - **Session.** The labels follow the appearance the server announces over `cupertino_session_v1`, read at start and redrawn on
   every change. The material follows it in the server. On `locked` the bars close every open menu and title focus.
 - **System menu.** The first slot draws the system mark (`cupertino_icons::system_mark`, tinted with the label colour) and
-  opens `Extras::system_menu`: Settings…, Recent Items, Force Quit…, then Sleep, Restart…, Shut Down…, Lock Screen, Log
+  opens `Extras::system_menu`: About This Computer, Settings…, Recent Items, Force Quit…, then Sleep, Restart…, Shut Down…, Lock Screen, Log
   Out <name>… and, when the session agent can switch, Login Window…, with separators between the groups. Every row and
-  separator has a fixed id in -4000…-4099 (`SystemRow`), so an open menu survives a rebuild. Settings… starts
-  `cupertino-settings` from `PATH` with an activation token (`XDG_ACTIVATION_TOKEN`, `DESKTOP_STARTUP_ID`); Force Quit…
+  separator has a fixed id in -4000…-4099 (`SystemRow`), so an open menu survives a rebuild. About This Computer starts
+  `cupertino-settings --about` and Settings… starts `cupertino-settings`, both from `PATH` with an activation token (`XDG_ACTIVATION_TOKEN`, `DESKTOP_STARTUP_ID`); Force Quit…
   sends the `force_quit_dialog` command, which a version 9 server does not get. Force Quit…, Lock Screen and Log Out show
-  the chord the server binds to them, none while it sent none. Without a session agent the menu is Settings…, Recent
+  the chord the server binds to them, none while it sent none. Without a session agent the menu is About This Computer, Settings…, Recent
   Items, Force Quit… and Lock Screen.
 - **Recent Items.** The submenu is read (`recent` module) each time the system menu opens, never on a timer: a disabled
   Applications header and up to 10 applications by desktop entry name, a disabled Documents header and up to 10 documents by

@@ -55,6 +55,7 @@ use smithay::{
 };
 
 use crate::clipboard::Snapshot;
+use crate::menu_bar::cut_text;
 use crate::policy;
 use crate::state::{ClientState, Cupertino, PointerMode, WindowEntry};
 
@@ -748,7 +749,7 @@ impl XdgShellHandler for Cupertino {
         });
         if let Some(e) = self.windows.iter().find(|w| w.toplevel == surface) {
             if let (Some(h), Some(t)) = (&e.foreign, &title) {
-                h.send_title(t);
+                h.send_title(cut_text(t));
                 h.send_done();
             }
             if e.mapped {
@@ -775,7 +776,7 @@ impl XdgShellHandler for Cupertino {
         });
         if let (Some(e), Some(a)) = (self.windows.iter().find(|w| w.toplevel == surface), app_id) {
             if let Some(h) = &e.foreign {
-                h.send_app_id(&a);
+                h.send_app_id(cut_text(&a));
                 h.send_done();
             }
         }

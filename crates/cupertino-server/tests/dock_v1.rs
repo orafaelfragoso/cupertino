@@ -776,6 +776,52 @@ fn an_application_id_and_a_title_longer_than_the_limit_are_cut_at_a_character_bo
 }
 
 #[test]
+fn the_application_ids_of_launch_unresponsive_attention_and_switcher_events_are_cut() {
+    let Some(mut h) = Harness::new() else { return };
+    let dock = DockClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&dock, 1);
+    // 4080 bytes would push `unresponsive` past the wire's 4096; a two-byte character spans byte 1024
+    let long = format!("{}é{}", "a".repeat(1023), "b".repeat(4080 - 1025));
+    let cut = "a".repeat(1023);
+    let named = XdgActivationTokenData {
+        app_id: Some(long.clone()),
+        ..XdgActivationTokenData::default()
+    };
+    assert!(h
+        .state
+        .token_created(XdgActivationToken::from("long".to_string()), named));
+    h.state.docks.unresponsive(&long, true);
+    h.state.docks.attention(&long);
+    h.state.switcher_changed(vec![long.clone()], 0);
+    h.wait_for_groups(&dock, 5);
+    let groups = dock.groups();
+    assert_eq!(
+        groups[1],
+        vec![DockEvent::Launching(cut.clone()), DockEvent::Done]
+    );
+    assert_eq!(
+        groups[2],
+        vec![
+            DockEvent::Unresponsive {
+                app_id: cut.clone(),
+                unresponsive: true
+            },
+            DockEvent::Done
+        ]
+    );
+    assert_eq!(
+        groups[3],
+        vec![DockEvent::Attention(cut.clone()), DockEvent::Done]
+    );
+    assert!(
+        groups[4].contains(&DockEvent::SwitcherEntry(cut)),
+        "{:?}",
+        groups[4]
+    );
+    assert_eq!(dock.error(), None, "the dock stays connected");
+}
+
+#[test]
 fn minimizing_sends_the_state_and_animates_toward_the_committed_target() {
     let Some(mut h) = Harness::new() else { return };
     let dock = DockClient::spawn(h.shell_stream(), true);

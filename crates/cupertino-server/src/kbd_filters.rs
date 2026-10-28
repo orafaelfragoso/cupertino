@@ -41,6 +41,7 @@ use smithay::input::keyboard::{xkb, KeyboardTarget, Keycode, ModifiersState, Ser
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Point, SERIAL_COUNTER};
 
+use crate::input::{Action, Chord, Mods};
 use crate::kbd::KeyboardSettings;
 use crate::overlays::OverlayKey;
 use crate::state::Cupertino;
@@ -409,6 +410,45 @@ impl Cupertino {
         for state in [KeyState::Pressed, KeyState::Released] {
             self.forward_rewritten(code, state, rewrite, SERIAL_COUNTER.next_serial(), time);
         }
+    }
+
+    /// Keep a release chord (`release-shortcuts`) the active keymap can type: when no chord bound to it has a key in the
+    /// layout, the default is bound as well, so the person always has a way to get the shortcuts back. Called when the
+    /// keymap or the layout changes.
+    pub fn keep_release_chord_typeable(&mut self) {
+        let Some(keyboard) = self.seat.get_keyboard() else {
+            return;
+        };
+        let syms: Vec<u32> = self
+            .key_router
+            .bindings
+            .entries()
+            .iter()
+            .filter(|(_, action)| *action == Action::ReleaseShortcuts)
+            .map(|(chord, _)| chord.sym)
+            .collect();
+        // SAFETY: the keymap and state references only live for this lookup, inside the lock
+        let typeable = keyboard.with_xkb_state(self, |ctx| {
+            let xkb = ctx.xkb().lock().unwrap();
+            let (keymap, state) = (unsafe { xkb.keymap() }, unsafe { xkb.state() });
+            syms.iter()
+                .any(|sym| key_for_sym(keymap, state, *sym).is_some())
+        });
+        if typeable {
+            return;
+        }
+        let default = cupertino_input::ShortcutMap::release_chord();
+        let chord = Chord {
+            mods: Mods {
+                logo: true,
+                ..Mods::NONE
+            },
+            sym: default.keysym,
+        };
+        tracing::warn!("no chord that releases the shortcuts can be typed on the active keymap: Super+Escape is bound");
+        self.key_router
+            .bindings
+            .bind(chord, Action::ReleaseShortcuts);
     }
 
     /// Tell the focused client the keyboard's real modifiers again, when a rewrite replaced them.

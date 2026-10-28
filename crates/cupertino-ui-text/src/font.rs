@@ -134,7 +134,7 @@ impl FontIndex {
         coords.extend(
             variations
                 .iter()
-                .map(|variation| (variation.tag, variation.value)),
+                .map(|variation| (variation.tag, quantize(variation.value))),
         );
         coords.sort_by_key(|(tag, _)| *tag);
         coords.dedup_by_key(|(tag, _)| *tag);
@@ -191,6 +191,11 @@ impl FontIndex {
             .get(font.0 as usize)
             .ok_or(TextError::UnknownFont(font))
     }
+}
+
+/// Coordinates are kept in quarter units, so an animated axis shares instances instead of making one per frame.
+fn quantize(value: f32) -> f32 {
+    (value * 4.0).round() / 4.0
 }
 
 fn metrics_of(font: &Font) -> FontMetrics {

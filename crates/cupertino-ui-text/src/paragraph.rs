@@ -9,6 +9,27 @@ use std::ops::Range;
 use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
 
+#[cfg(test)]
+mod work {
+    use std::cell::Cell;
+
+    thread_local!(static STEPS: Cell<usize> = const { Cell::new(0) });
+
+    pub fn step() {
+        STEPS.with(|steps| steps.set(steps.get() + 1));
+    }
+
+    pub fn take() -> usize {
+        STEPS.with(|steps| steps.replace(0))
+    }
+}
+
+#[cfg(not(test))]
+mod work {
+    #[inline(always)]
+    pub fn step() {}
+}
+
 /// Width of the rectangle `caret_rect` returns, in points.
 pub const CARET_WIDTH: f64 = 1.0;
 
@@ -88,7 +109,8 @@ impl Paragraph {
         &self.shaped.text
     }
 
-    /// Breaks the paragraph into lines no wider than `max_width` (`None` for no limit). It reuses the shaping.
+    /// Breaks the paragraph into lines no wider than `max_width` (`None`, or a width that is not finite, for no limit).
+    /// It reuses the shaping. `max_lines` of zero keeps one line.
     pub fn layout(&self, max_width: Option<f32>) -> ParagraphLayout {
         layout(&self.shaped, max_width)
     }
@@ -116,6 +138,11 @@ struct LineSpec {
 }
 
 fn layout(shaped: &Shaped, max_width: Option<f32>) -> ParagraphLayout {
+    let line_limit = shaped
+        .style
+        .max_lines
+        .map_or(usize::MAX, |limit| (limit as usize).max(1));
+    let max_width = max_width.filter(|width| width.is_finite());
     let wrap_width = match shaped.style.wrap {
         Wrap::Word => max_width,
         Wrap::None => None,
@@ -146,11 +173,7 @@ fn layout(shaped: &Shaped, max_width: Option<f32>) -> ParagraphLayout {
             lines,
             items: group,
         });
-        if shaped
-            .style
-            .max_lines
-            .is_some_and(|limit| line_count >= limit as usize)
-        {
+        if line_count >= line_limit {
             break;
         }
     }
@@ -169,11 +192,7 @@ fn layout(shaped: &Shaped, max_width: Option<f32>) -> ParagraphLayout {
     let mut top = 0.0_f64;
     'build: for hard in &hard_lines {
         for spec in &hard.lines {
-            if shaped
-                .style
-                .max_lines
-                .is_some_and(|limit| lines.len() >= limit as usize)
-            {
+            if lines.len() >= line_limit {
                 break 'build;
             }
             let line = build_line(
@@ -203,6 +222,7 @@ fn clusters_of(shaped: &Shaped, items: Range<usize>) -> Vec<Cluster> {
         let item = &shaped.items[index];
         let first_of_item = clusters.len();
         for (glyph_index, glyph) in item.run.glyphs.iter().enumerate() {
+            work::step();
             match clusters.last_mut() {
                 Some(last) if last.item == index && last.start == glyph.cluster => {
                     last.width += glyph.advance;
@@ -244,6 +264,7 @@ fn break_lines(shaped: &Shaped, clusters: &[Cluster], max_width: Option<f32>) ->
     let mut last_opportunity: Option<usize> = None;
     let mut i = 0;
     while i < clusters.len() {
+        work::step();
         let cluster = &clusters[i];
         if i > start && shaped.breaks.binary_search(&cluster.start).is_ok() {
             last_opportunity = Some(i);
@@ -336,6 +357,7 @@ fn build_line(
         let mut glyphs = Vec::new();
         let mut pen = 0.0_f32;
         for cluster in &line_clusters[piece_start..piece_end] {
+            work::step();
             stops.push((cluster.start, x));
             for glyph in &item.run.glyphs[cluster.glyphs.clone()] {
                 glyphs.push(PositionedGlyph {
@@ -820,6 +842,101 @@ mod tests {
                 .paragraph(&text, &ParagraphStyle::default())
                 .unwrap_err(),
             crate::TextError::NotACharBoundary(1)
+        );
+    }
+
+    #[test]
+    fn zero_max_lines_and_empty_text_still_answer_every_query() {
+        for (text, max_lines) in [
+            ("abc def", Some(0)),
+            ("", None),
+            ("", Some(0)),
+            ("a\nb", Some(0)),
+        ] {
+            let style = ParagraphStyle {
+                max_lines,
+                ..ParagraphStyle::default()
+            };
+            let layout = layout_with(text, style, Some(20.0));
+            assert_eq!(layout.lines().len(), 1, "{text:?} {max_lines:?}");
+            let caret = layout.caret_rect(position(0));
+            assert!(caret.height() > 0.0);
+            let found = layout.index_at(Point::new(100.0, 100.0));
+            assert!(found.byte <= text.len());
+            layout.selection_rects(0..text.len());
+            layout.caret_rect(position(text.len() + 5));
+        }
+    }
+
+    #[test]
+    fn a_width_that_is_not_finite_means_no_limit() {
+        let text = "alpha beta gamma";
+        assert_eq!(layout(text, Some(f32::NAN)).lines().len(), 1);
+        assert_eq!(layout(text, Some(f32::INFINITY)).lines().len(), 1);
+    }
+
+    #[test]
+    fn sizes_and_spacing_that_are_not_finite_numbers_are_rejected() {
+        let system = system();
+        for style in [
+            TextStyle::new(f32::NAN),
+            TextStyle::new(0.0),
+            TextStyle::new(-4.0),
+            TextStyle {
+                letter_spacing: f32::INFINITY,
+                ..TextStyle::new(16.0)
+            },
+        ] {
+            let text = crate::AttributedText::plain("x", style);
+            assert_eq!(
+                system
+                    .paragraph(&text, &ParagraphStyle::default())
+                    .unwrap_err(),
+                crate::TextError::InvalidValue
+            );
+        }
+    }
+
+    #[test]
+    fn a_view_of_more_paragraphs_than_one_cache_generation_still_hits() {
+        let system = system();
+        let style = ParagraphStyle::default();
+        let texts: Vec<_> = (0..600)
+            .map(|index| crate::AttributedText::plain(format!("row {index}"), TextStyle::new(16.0)))
+            .collect();
+        let first: Vec<_> = texts
+            .iter()
+            .map(|text| system.paragraph(text, &style).unwrap())
+            .collect();
+        for (text, before) in texts.iter().zip(&first) {
+            let again = system.paragraph(text, &style).unwrap();
+            assert!(Arc::ptr_eq(&before.shaped, &again.shaped));
+        }
+    }
+
+    /// Steps of layout work (glyphs grouped, clusters visited by the line breaker, clusters placed) to lay out
+    /// `length` characters at two widths.
+    fn steps_for(length: usize) -> usize {
+        let sentence = "The quick brown fox jumps over the lazy dog and keeps running far away. ";
+        let text: String = sentence.chars().cycle().take(length).collect();
+        let attributed = crate::AttributedText::plain(text, TextStyle::new(16.0));
+        let paragraph = system()
+            .paragraph(&attributed, &ParagraphStyle::default())
+            .unwrap();
+        work::take();
+        paragraph.layout(Some(300.0));
+        paragraph.layout(Some(420.0));
+        work::take()
+    }
+
+    #[test]
+    fn the_work_of_layout_grows_linearly_with_the_text() {
+        let small = steps_for(200);
+        let large = steps_for(5000);
+        assert!(small > 200, "{small}");
+        assert!(
+            large <= small * 25 * 2,
+            "5000 chars took {large} steps against {small} for 200"
         );
     }
 

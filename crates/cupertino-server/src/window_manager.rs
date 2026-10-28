@@ -28,6 +28,7 @@ use smithay::utils::{Logical, Point};
 use smithay::wayland::shell::wlr_layer::Layer;
 
 use crate::authorization::{authorized, refuse, require, ShellRole};
+use crate::menu_bar::cut_text;
 use crate::state::{Cupertino, WindowEntry};
 
 /// Where a placed window is headed. A window on the stage has no entry once its animation ended.
@@ -329,7 +330,7 @@ fn send_feed(resource: &CupertinoWindowManagerV1, known: Option<&Feed>, feed: &F
             } else {
                 WindowState::empty()
             };
-            resource.window(*id, info.app_id.clone(), x, y, w, h, state);
+            resource.window(*id, cut_text(&info.app_id).to_owned(), x, y, w, h, state);
             changed = true;
         }
     }

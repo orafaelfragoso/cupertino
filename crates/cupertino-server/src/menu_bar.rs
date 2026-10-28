@@ -53,7 +53,7 @@ pub const MAX_TEXT_BYTES: usize = 1024;
 const EDIT_WAIT: f64 = 0.5;
 
 /// The actions a bar shows the chord of, each with the binding action that runs it.
-const BOUND_ACTIONS: [(BoundAction, Action); 13] = [
+const BOUND_ACTIONS: [(BoundAction, Action); 14] = [
     (BoundAction::CloseWindow, Action::CloseWindow),
     (BoundAction::Minimize, Action::Minimize),
     (BoundAction::Zoom, Action::ToggleZoom),
@@ -67,6 +67,7 @@ const BOUND_ACTIONS: [(BoundAction, Action); 13] = [
     (BoundAction::ForceQuit, Action::ForceQuit),
     (BoundAction::Lock, Action::Lock),
     (BoundAction::LogOut, Action::LogOut),
+    (BoundAction::HelpSearch, Action::HelpSearch),
 ];
 
 /// Whether the binding `bound` shows as the chord of the bar's item for `item`: the item that minimizes also takes the
@@ -226,7 +227,12 @@ struct Shortcuts {
 
 impl Shortcuts {
     fn send(&self, bar: &CupertinoMenuBarV1) {
-        for (action, chord) in &self.chords {
+        // help_search came with version 12
+        for (action, chord) in self
+            .chords
+            .iter()
+            .filter(|(action, _)| *action != BoundAction::HelpSearch || bar.version() >= 12)
+        {
             bar.shortcut(*action, chord.clone());
         }
         bar.primary_modifier(self.primary);
@@ -1099,6 +1105,27 @@ impl Cupertino {
         // keyboard on its next commit (`layer_keyboard_exclusivity`)
         for bar in self.menu_bars.bars.iter().filter(|b| b.output == active) {
             bar.resource.engage();
+            bar.resource.done();
+        }
+    }
+
+    /// The Help search shortcut: the bar of the active output opens its Help menu with the search field focused, taking
+    /// the keyboard as for `engage`. Bars below version 12 are not told; nothing is sent while the session is locked or
+    /// a lock is pending, whatever asks for it.
+    pub fn focus_help_search(&mut self) {
+        if self.session_lock.is_active() {
+            return;
+        }
+        let Some(active) = self.menu_bars.set.active_output() else {
+            return;
+        };
+        for bar in self
+            .menu_bars
+            .bars
+            .iter()
+            .filter(|b| b.output == active && b.resource.version() >= 12)
+        {
+            bar.resource.engage_help();
             bar.resource.done();
         }
     }

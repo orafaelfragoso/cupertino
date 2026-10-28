@@ -60,6 +60,8 @@ pub enum Action {
     ControlPanel,
     NotificationCenter,
     FocusMenuBar,
+    /// Open the Help menu of the menu bar with its search field focused.
+    HelpSearch,
     FocusDock,
     ToggleDockAutoHide,
     Lock,
@@ -152,6 +154,7 @@ impl Action {
             Action::ControlPanel => "control-panel".into(),
             Action::NotificationCenter => "notification-center".into(),
             Action::FocusMenuBar => "focus-menu-bar".into(),
+            Action::HelpSearch => "help-search".into(),
             Action::FocusDock => "focus-dock".into(),
             Action::ToggleDockAutoHide => "toggle-dock-auto-hide".into(),
             Action::Lock => "lock".into(),
@@ -262,6 +265,7 @@ impl FromStr for Action {
             "control-panel" => Action::ControlPanel,
             "notification-center" => Action::NotificationCenter,
             "focus-menu-bar" => Action::FocusMenuBar,
+            "help-search" => Action::HelpSearch,
             "focus-dock" => Action::FocusDock,
             "toggle-dock-auto-hide" => Action::ToggleDockAutoHide,
             "lock" => Action::Lock,
@@ -639,6 +643,8 @@ Super+s = launcher
 Super+space = input-source-next
 Super+Shift+space = input-source-previous
 Super+F2 = focus-menu-bar
+# a proposal: no known desktop habit uses Super+? (Ctrl+Shift+/ stays with the applications)
+Super+Shift+slash = help-search
 Super+F3 = focus-dock
 Super+Alt+d = toggle-dock-auto-hide
 Super+l = lock
@@ -1183,6 +1189,17 @@ mod tests {
                 "{a} (cupertino {c}) has no chord under classic-pc"
             );
         }
+    }
+
+    #[test]
+    fn help_search_round_trips_by_name_and_has_a_super_chord_under_classic_pc() {
+        assert_eq!("help-search".parse::<Action>(), Ok(Action::HelpSearch));
+        assert_eq!(Action::HelpSearch.name(), "help-search");
+        let combo: KeyCombo = "Super+Shift+slash".parse().unwrap();
+        assert_eq!(
+            ShortcutMap::classic_pc_defaults().lookup(combo.modifiers, combo.keysym),
+            Some(&Action::HelpSearch)
+        );
     }
 
     #[test]

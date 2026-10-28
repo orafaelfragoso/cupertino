@@ -4,8 +4,13 @@
 //! revision.
 
 use cupertino_geometry::Rect;
-use std::fmt;
 use std::ops::Range;
+
+mod input;
+mod secure;
+
+pub use input::SURROUNDING_MAX_BYTES;
+pub use secure::SecureBuffer;
 use std::sync::Arc;
 
 /// One face of a font file: its file and collection index.
@@ -166,17 +171,6 @@ pub struct TextBuffer {
     _private: (),
 }
 
-/// The editable text of a password field: zeroed when dropped, never printed, copied or exposed to accessibility.
-pub struct SecureBuffer {
-    _private: (),
-}
-
-impl fmt::Debug for SecureBuffer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("SecureBuffer(..)")
-    }
-}
-
 /// What a field holds, as the input method is told.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ContentPurpose {
@@ -213,7 +207,7 @@ pub struct ContentHints {
 }
 
 /// Text the input method is composing, not yet part of the buffer.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Preedit {
     pub text: String,
     pub cursor: Option<Range<usize>>,
@@ -242,7 +236,7 @@ pub enum ChangeCause {
 }
 
 /// A bounded window of the text around the caret, with the caret and anchor as byte offsets into it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Surrounding {
     pub text: String,
     pub cursor: usize,
@@ -263,7 +257,7 @@ pub struct TextInputState {
 
 /// One batch from the input method, applied whole and in this order: delete around the caret, insert `commit`,
 /// then show `preedit`.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct ImeBatch {
     pub preedit: Option<Preedit>,
     pub commit: Option<String>,
@@ -324,4 +318,6 @@ pub enum TextError {
     NoFont,
     UnknownFont(FontId),
     NotACharBoundary(usize),
+    /// Text with control characters where a password field takes none.
+    InvalidText,
 }

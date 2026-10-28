@@ -1010,7 +1010,7 @@ fn alt_shows_the_alternates_of_the_open_menu_until_it_goes_up() {
             "Minimize All",
             "Zoom All",
             "Tile Window",
-            "Bring All to Front",
+            "Arrange in Front",
             "Close All",
             "Split View"
         ]

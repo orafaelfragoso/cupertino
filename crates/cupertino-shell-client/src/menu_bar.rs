@@ -13,6 +13,9 @@ const DEFAULT_MENUS_VERSION: u32 = 10;
 /// The version that adds the edit request.
 const EDIT_VERSION: u32 = 11;
 
+/// The version that adds the force_quit_app request.
+const FORCE_QUIT_APP_VERSION: u32 = 13;
+
 /// Application id (the desktop entry id when known) and title of the active window; both are
 /// empty when no window is active.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -338,6 +341,19 @@ impl MenuBar {
     /// Whether the server takes [`Self::edit`] (version 11).
     pub fn can_edit(&self) -> bool {
         self.proxy.version() >= EDIT_VERSION
+    }
+
+    /// Force quit the active application without the dialog, naming it by the id the bar shows: the server ends it only
+    /// if it is still the active application. Not sent before version 13.
+    pub fn force_quit_app(&self, app_id: &str) {
+        if self.can_force_quit_app() {
+            self.proxy.force_quit_app(app_id.to_owned());
+        }
+    }
+
+    /// Whether the server takes [`Self::force_quit_app`] (version 13).
+    pub fn can_force_quit_app(&self) -> bool {
+        self.proxy.version() >= FORCE_QUIT_APP_VERSION
     }
 }
 

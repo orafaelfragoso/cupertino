@@ -15,7 +15,7 @@ computes, and feeds the crate pointer, key and timer events with absolute timest
 | `recent` | What Recent Items lists (`RecentItems`): `RecentSources::read` takes the launcher's applications in its order (`cupertino_apps::frecency`, ids without an installed visible desktop entry skipped) and the documents of `recently-used.xbel` newest first (`cupertino_apps::recent`, missing files skipped), at most 10 of each, leaving out what was used at or before the last Clear Menu (`RecentSources::clear`, the bar's own `$XDG_DATA_HOME/cupertino/menubar-recent-items-cleared`). It never writes the launcher's or the applications' files. |
 | `item` | `MenuItem`: label, mnemonic, separator, enabled, visible, `Toggle`, `Shortcut`, icon name / data, children, the GMenuModel action and accelerator, and its `Origin` (the bar's or an exporter's), by which an activated item is routed, and a `detail`: secondary text drawn dimmed after the label (a search result's path). |
 | `fallback` | Synthetic menus of an app that exports none: the app menu (About, Settings…, Hide, Hide Others, Show All, Quit; Settings… and Show All on the desktop), File (Close Window), Edit (Undo, Redo, Cut, Copy, Paste, Select All; enabled on a bar whose server takes `edit`, version 11, and disabled below), View (Enter Full Screen), Window (Minimize, Zoom, Move to Workspace, Tile Window, Bring All to Front, the window list of at most 1000 rows with the active window checked and minimized ones marked, Close Window) and Help (the search field, see *Help search*). Items of server actions show the chord the server binds (`Chords`), none while it sent none; the app's own convention chords use the primary modifier the server names. Ids are negative and stable; `action_for` maps activated ids back to `FallbackAction`. |
-| `search` | The Help menu's search (`search`, `help_menu`): the enabled leaf items of the system menu, the App menu and the application's menus whose label holds the field's text, and the Help menu with them as rows (see *Help search*). |
+| `search` | The Help menu's search (`search`, `help_menu`): the enabled leaf items of the system menu, the App menu and the application's menus, Help included, whose label or submenu title holds the field's text, and the Help menu with them as rows (see *Help search*). |
 | `merge` | `Export::merge`: an exporter's tree merged with the bar's App, Window and Help menus (roles, rebinding to the exporter's items, order, ids; see *Merged menus*); `Export::roles` for the routing, `label_role`, `accel_shortcut`. |
 | `source` | `MenuSourceMap`: window → `MenuSource::{Kde, Gtk, Synthetic}`. A window gets only the menus it exported, never another window of its application. |
 | `dbus::dbusmenu` | `DBusMenuClient`: `GetLayout` parsing (`parse_layout`), `Event`, `AboutToShow`, and `LayoutUpdated` / `ItemsPropertiesUpdated` / `ItemActivationRequested` as a `MenuUpdate` stream, property update helpers. |
@@ -92,7 +92,8 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   sends neither, so the system items show no chord, and the bar does not send the commands it lacks. From version 11 the
   Edit items send `edit` before their menu closes, and the server types the chord into the key window once the keyboard
   is back there; below version 11 they stay disabled. The `engage` event focuses the bar's first
-  title. Arrows, Return and Escape navigate. Type-ahead needs a keymap and is not available.
+  title; from version 12 `engage_help` opens the Help menu with its search field focused (see *Help search*). Arrows,
+  Return and Escape navigate. Type-ahead needs a keymap and is not available.
 - **Merged menus (`merge`).** An exporter's tree is merged with the bar's own menus once it has arrived; nothing shows
   before. The server reports one address per window, the GMenuModel one when the window announced both.
   - Roles: about, preferences, quit, close and full screen. A GMenuModel item has the role of its action (`app.about`;
@@ -136,12 +137,16 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
   `keyboard.conf`). It takes the typing keys while the Help menu is open, through the popup's keyboard grab: Space, and the
   arrows, Home and End while it holds text (with no text Left and Right switch menus as elsewhere). Up and Down move
   through the rows, Return or a click chooses the selected one, and Esc clears the text first, then closes the menu.
-  - Matching: a label holds the text, case ignored, the text trimmed. Only enabled leaf items count: separators,
-    disabled items (headers among them), submenus themselves and hidden items are never results. The items searched are
-    the system menu's, the App menu's and the application's menus as the bar shows them (merged), never the Help menu's;
-    an exporter's submenu that has not been loaded yet is not searched.
-  - Results: labels that start with the text first, then menu order, at most 12 (`fallback::MAX_SEARCH_RESULTS`), as rows
-    below the field, the first selected. A row shows the label, the path to the item ("File ▸ Export", the system
+  - Matching: a label holds the text, case ignored, the text trimmed, or the title of a submenu on the item's way does
+    ("Export" finds "File ▸ Export ▸ PDF"; the menu titles of the bar themselves do not count, so "File" does not list
+    the whole File menu). Only enabled leaf items count: separators, disabled items (headers among them), submenus
+    themselves and hidden items are never results. The items searched are the system menu's, the App menu's and every
+    menu of the application as the bar shows them (merged), the Help menu's own items included (the application's and
+    the bar's); only the bar's search row, No Results row and result rows are left out. An exporter's submenu that has
+    not been loaded yet is not searched.
+  - Results: labels that start with the text first, then labels that hold it, then items found by a submenu title
+    alone, each group in menu order, at most 12 (`fallback::MAX_SEARCH_RESULTS`), as rows below the field, the first
+    selected. A row shows the item's check or radio mark, the label, the path to the item ("File ▸ Export", the system
     menu as "System") dimmed after it, and the item's chord. The path is cut at its end with an ellipsis to the room
     left before the chord; the label is never cut (a long one widens the menu). With nothing found the field has a
     disabled "No Results" row below it. A menu with the field is at least `MenuMetrics::search_width` wide.
@@ -149,9 +154,23 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
     so the ids stay while typing. Choosing a result is choosing the item it found in its own menu: the controller
     sends `Activate` with that menu's slot and the item's id, and routing goes by the item's origin as for a click on
     it (an exporter's item goes to the exporter, the bar's acts through the server).
-  - Not yet: highlighting the found item in its real menu on hover, and a chord that focuses the field. The bar has no
-    clipboard, so copy, cut and paste in the field only change its text where they edit it. The caret does not blink,
-    and a text wider than the field is not scrolled.
+  - The empty field shows "Search" (`fallback::SEARCH_PLACEHOLDER`, the row's label) dimmed. The row shows the chord
+    of the server's `help_search` binding (version 12) right of the field, none while the server sent none.
+  - The Help search shortcut: on `engage_help` (version 12) the bar opens the Help menu with the keyboard in the field
+    (`MenuController::focus_help_search`). It takes the keyboard through `engage`'s path: the Help title takes keyboard
+    focus, the bar asks for exclusive keyboard interactivity, and the menu opens when the keyboard arrives
+    (`keyboard_arrived`), its popup grab holding it from then on; there is no second keyboard-interactivity switch.
+    With the keyboard on the bar already (title focus) or a menu open, Help opens at once; with Help open, its submenus
+    close and the field keeps its text. Esc clears the field, then closes the menu and the keyboard goes back; a lock
+    closes it as every menu. A version 11 server never sends the event, so the chord does nothing there.
+  - Not yet: highlighting the found item in its real menu on hover. The bar has no clipboard, so copy, cut and paste in
+    the field only change its text where they edit it. The caret does not blink, and a text wider than the field is not
+    scrolled.
+  - Known limit: dead keys and the Compose key do not compose in the field. The field gets the character of each key
+    press as the bar's keymap translates it (`cupertino-wayland-client`), and the keyboard library of the project
+    (`cupertino-xkbcommon`, pure Rust) has no compose support: a dead key types nothing and the next letter comes
+    unaccented, so "é" cannot be typed through a dead key (a layout that has the character on a key of its own types
+    it). There is no input method in the bar.
 - **Session.** The labels follow the appearance the server announces over `cupertino_session_v1`, read at start and redrawn on
   every change. The material follows it in the server. On `locked` the bars close every open menu and title focus.
 - **System menu.** The first slot draws the system mark (`cupertino_icons::system_mark`, tinted with the label colour) and

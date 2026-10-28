@@ -586,6 +586,10 @@ enum Cmd {
     SetGtkAppMenu(String),
     /// Clear the GTK menu properties of an application window.
     ClearGtkAddress,
+    /// Release the KDE application menu object of an application window.
+    ReleaseAddress,
+    /// Destroy the second toplevel without releasing its KDE application menu object first.
+    DestroySecondWindow,
     /// Make this many surfaces, each announcing a KDE application menu address on the bus name, in one flush.
     AnnounceMany(String, usize),
     /// Map a second toplevel of the same application client.
@@ -786,6 +790,8 @@ impl BarClient {
                 | Cmd::SetGtkAddress(_)
                 | Cmd::SetGtkAppMenu(_)
                 | Cmd::ClearGtkAddress
+                | Cmd::ReleaseAddress
+                | Cmd::DestroySecondWindow
                 | Cmd::AnnounceMany(..)
                 | Cmd::OpenSecondWindow
                 | Cmd::SetSecondAddress(..)
@@ -1083,6 +1089,13 @@ impl AppClient {
                     xdg.destroy();
                     surface.destroy();
                 }
+                Cmd::DestroySecondWindow => {
+                    let (xdg, toplevel, _appmenu, _surface) =
+                        second.take().expect("the second window is open");
+                    toplevel.destroy();
+                    xdg.destroy();
+                }
+                Cmd::ReleaseAddress => appmenu.release(),
                 _ => panic!("an application window takes no menu bar command"),
             });
             (state, apply)
@@ -1426,6 +1439,14 @@ fn the_bar_gets_the_menus_of_the_focused_window_of_a_client_with_two() {
             && latest_title_and_menu(&bar) == Some((first_title.clone(), first_menu.clone()))
     });
     assert_eq!(bar.error(), None);
+
+    // the second window is destroyed with its menu object still alive: its address goes with the window
+    assert!(h.state.menu_bars.address(second.0).is_some());
+    app.send(Cmd::DestroySecondWindow);
+    h.wait_until("the second window's address to go", |s| {
+        s.wm.windows().count() == 1 && s.menu_bars.address(second.0).is_none()
+    });
+    assert!(h.state.menu_bars.address(first.0).is_some());
 }
 
 /// GTK hides a window's own menu bar on `global_menu_bar` (2): the server announces it only while a menu bar shows
@@ -1850,6 +1871,7 @@ impl PrivateBus {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null());
+        // The death signal follows the thread that spawns the daemon, so the test's own thread starts the bus.
         // Safety: the closure runs in the child between fork and exec and calls only prctl, which is
         // async-signal-safe.
         unsafe {
@@ -2168,6 +2190,12 @@ fn a_window_announcing_its_own_unique_name_gets_its_menus_gtk_first() {
         "GTK withdrawn"
     );
     h.announce(&app, &bar, Cmd::SetGtkAppMenu(own.clone()));
+    assert_eq!(
+        latest_title_and_menu(&bar),
+        Some((title.clone(), dbusmenu(&own, "/MenuBar/2"))),
+        "a GTK application menu alone does not hide a KDE menu bar"
+    );
+    h.announce(&app, &bar, Cmd::ReleaseAddress);
     assert_eq!(
         latest_title_and_menu(&bar),
         Some((title, gtk_menus(&own, "", "/org/example/menus/appmenu"))),

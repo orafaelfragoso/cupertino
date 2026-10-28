@@ -414,11 +414,21 @@ impl MenuBars {
         };
     }
 
-    /// The address the bar is told for window `key`: the GMenuModel one first.
+    /// The address the bar is told for window `key`: the GMenuModel one when it has a menu bar, else the DBusMenu one,
+    /// else a GMenuModel application menu alone (which must not hide a whole DBusMenu menu bar).
     pub fn address(&self, key: u64) -> Option<&MenuAddress> {
-        [MenuKind::Gtk, MenuKind::DbusMenu]
-            .iter()
-            .find_map(|kind| self.addresses.get(&(key, *kind)))
+        let gtk = self.addresses.get(&(key, MenuKind::Gtk));
+        let has_menu_bar =
+            |a: &&MenuAddress| matches!(a, MenuAddress::Gtk(p) if p.menubar_object_path.is_some());
+        gtk.filter(has_menu_bar)
+            .or_else(|| self.addresses.get(&(key, MenuKind::DbusMenu)))
+            .or(gtk)
+    }
+
+    /// Window `key`, whose root surface is `root`, is gone: its addresses go with it.
+    pub fn forget_window(&mut self, key: u64, root: &WlSurface) {
+        self.addresses.retain(|(window, _), _| *window != key);
+        self.pending.retain(|(surface, _)| surface != root);
     }
 
     /// Keep an address of kind `kind` announced before its window mapped (`None` withdraws).

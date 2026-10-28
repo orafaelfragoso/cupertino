@@ -86,6 +86,7 @@ impl PrivateBus {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
+        // The death signal follows the thread that spawns the daemon, so the test's own thread starts the bus.
         // Safety: the closure runs in the child between fork and exec and calls only prctl, which is
         // async-signal-safe.
         unsafe {

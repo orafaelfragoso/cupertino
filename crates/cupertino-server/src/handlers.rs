@@ -817,6 +817,9 @@ impl XdgShellHandler for Cupertino {
         let entry = self.windows.remove(idx);
         self.decor.forget(entry.id);
         self.fx.forget_snapshot(entry.id);
+        let root = entry.toplevel.wl_surface();
+        self.menu_surface_destroyed(root);
+        self.menu_bars.forget_window(entry.id.0, root);
         if entry.mapped {
             if let Some(h) = &entry.foreign {
                 h.send_closed();

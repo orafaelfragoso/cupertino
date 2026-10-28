@@ -5,7 +5,7 @@
 #
 # Format: a list of flat entries, one `key: value` per line, no quoting, no nesting. Both checkers read exactly this.
 #   name        interface name, or binary name
-#   kind        wayland-global | dbus-interface | binary
+#   kind        wayland-global | dbus-interface | binary | socket-protocol
 #   version     advertised version (globals), interface generation (D-Bus: the number in the name, n/a if none), crate
 #               version (binaries); `unknown` where it cannot be measured
 #   owner_crate workspace crate that defines it
@@ -25,6 +25,15 @@
 #   shipped     binaries only: yes when packaging/release.py installs it
 #   test_owner  test file that exercises it, or `unknown`
 #   source      path:line that defines it
+- name: /run/cupertino-login/greeter.sock
+  kind: socket-protocol
+  version: 5
+  owner_crate: cupertino-login-ipc
+  owner_area: services
+  scope: system
+  test_owner: crates/cupertino-login-ipc/tests/protocol.rs
+  source: crates/cupertino-login-ipc/src/message.rs:13
+  note: Carries authentication secrets between the greeter and the root session manager; socket access is restricted to the greeter user.
 - name: wl_compositor
   kind: wayland-global
   version: 5
@@ -706,7 +715,7 @@
   owner_crate: cupertino-btd
   owner_area: services
   scope: system
-  test_owner: unknown
+  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-btd/src/main.rs:59
 - name: cupertino-controlcenter
   kind: binary
@@ -715,7 +724,7 @@
   owner_crate: cupertino-controlcenter
   owner_area: apps
   scope: shell-private
-  test_owner: unknown
+  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-controlcenter/src/main.rs:10
 - name: cupertino-cursor
   kind: binary
@@ -733,7 +742,7 @@
   owner_crate: cupertino-dock
   owner_area: apps
   scope: shell-private
-  test_owner: unknown
+  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-dock/src/main.rs:10
 - name: cupertino-files
   kind: binary
@@ -742,7 +751,7 @@
   owner_crate: cupertino-files
   owner_area: apps
   scope: shell-private
-  test_owner: unknown
+  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-files/src/main.rs:87
 - name: cupertino-launcher
   kind: binary
@@ -751,7 +760,7 @@
   owner_crate: cupertino-launcher
   owner_area: apps
   scope: shell-private
-  test_owner: unknown
+  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-launcher/src/main.rs:10
 - name: cupertino-layers
   kind: binary
@@ -760,7 +769,7 @@
   owner_crate: cupertino-layers
   owner_area: packaging
   scope: public
-  test_owner: unknown
+  test_owner: crates/cupertino-layers/tests/graph-snapshots.rs
   source: crates/cupertino-layers/src/bin/cupertino-layers.rs:17
 - name: cupertino-login
   kind: binary
@@ -769,7 +778,7 @@
   owner_crate: cupertino-login
   owner_area: services
   scope: unknown
-  test_owner: unknown
+  test_owner: crates/cupertino-login/tests/harden.rs
   source: crates/cupertino-login/src/main.rs:13
 - name: cupertino-menubar
   kind: binary
@@ -778,7 +787,7 @@
   owner_crate: cupertino-menubar
   owner_area: apps
   scope: shell-private
-  test_owner: unknown
+  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-menubar/src/main.rs:11
 - name: cupertino-netd
   kind: binary
@@ -787,7 +796,7 @@
   owner_crate: cupertino-netd
   owner_area: services
   scope: system
-  test_owner: unknown
+  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-netd/src/main.rs:67
 - name: cupertino-notifications
   kind: binary
@@ -796,7 +805,7 @@
   owner_crate: cupertino-notifications
   owner_area: apps
   scope: shell-private
-  test_owner: unknown
+  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-notifications/src/main.rs:11
 - name: cupertino-osd
   kind: binary
@@ -805,7 +814,7 @@
   owner_crate: cupertino-osd
   owner_area: apps
   scope: shell-private
-  test_owner: unknown
+  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-osd/src/main.rs:10
 - name: cupertino-powerd
   kind: binary
@@ -814,7 +823,7 @@
   owner_crate: cupertino-powerd
   owner_area: services
   scope: system
-  test_owner: unknown
+  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-powerd/src/main.rs:64
 - name: cupertino-screenshot
   kind: binary
@@ -823,7 +832,7 @@
   owner_crate: cupertino-screenshot
   owner_area: apps
   scope: shell-private
-  test_owner: unknown
+  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-screenshot/src/main.rs:12
 - name: cupertino-server
   kind: binary
@@ -841,7 +850,7 @@
   owner_crate: cupertino-sessiond
   owner_area: services
   scope: system
-  test_owner: unknown
+  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-sessiond/src/main.rs:7
 - name: cupertino-settings
   kind: binary
@@ -850,7 +859,7 @@
   owner_crate: cupertino-settings
   owner_area: apps
   scope: shell-private
-  test_owner: unknown
+  test_owner: crates/cupertino-settings/tests/start-process.rs
   source: crates/cupertino-settings/src/main.rs:27
 - name: cupertino-testclient
   kind: binary
@@ -868,7 +877,7 @@
   owner_crate: cupertino-windowmanager
   owner_area: apps
   scope: shell-private
-  test_owner: unknown
+  test_owner: crates/cupertino-server/tests/shell_processes.rs
   source: crates/cupertino-windowmanager/src/main.rs:8
 - name: glass-renderer
   kind: binary

@@ -3,9 +3,18 @@
 //! a frame it owns and the window system presents that frame. Effects such as blur sample only the window's own
 //! layers, never a capture of the screen.
 
+mod cpu;
+mod effects;
+mod geometry;
+mod glyph_cache;
+mod image_cache;
+mod validate;
+
+pub use cpu::{CpuConfig, CpuRenderer};
+
 use cupertino_geometry::{Point, Rect};
 use cupertino_theme::Color;
-use cupertino_ui_text::GlyphRun;
+use cupertino_ui_text::{GlyphRun, TextError};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -70,7 +79,7 @@ pub struct GradientStop {
     pub color: Color,
 }
 
-/// Source colour; gradients interpolate premultiplied, in encoded sRGB.
+/// Source colour; gradients interpolate straight-alpha stops in encoded sRGB and premultiply the result.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Paint {
     Solid(Color),
@@ -151,11 +160,12 @@ pub struct PaintNode {
     /// The node whose subtree this one belongs to; a parent comes before its children in the list.
     pub parent: Option<PaintNodeId>,
     pub revision: PaintRevision,
+    /// Applies to `clip` and `ops`, which are in the node's own coordinates.
     pub transform: Transform,
     pub clip: Option<Shape>,
-    /// Everything the node's operations may touch, effects included.
+    /// Everything the node's operations may touch, effects included, in window points with `transform` applied.
     pub bounds: Rect,
-    /// Where the node takes pointer input; never its shadow or focus ring.
+    /// Where the node takes pointer input, in window points; never its shadow or focus ring.
     pub hit: Rect,
     pub ops: Vec<PaintOp>,
 }
@@ -242,6 +252,11 @@ pub enum RenderError {
     UnbalancedScope(PaintNodeId),
     NonFiniteValue(PaintNodeId),
     InvalidScale,
+    /// A target with no pixels.
+    InvalidSize,
+    /// An image buffer shorter than its stride and height, or a stride shorter than a row.
+    InvalidImage(ResourceId),
+    Glyph(TextError),
     /// An image, layer or target exceeds the renderer's allocation limits.
     ResourceLimit,
     UnknownFrame(RenderFrameId),

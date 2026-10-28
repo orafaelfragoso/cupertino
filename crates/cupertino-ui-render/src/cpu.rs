@@ -67,7 +67,7 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
         }
     }
 
-    /// What the last successful or failed [`render`](UiRenderer::render) did, counted.
+    /// What the last [`render`](UiRenderer::render) call did, counted; empty when the request was refused before painting.
     pub fn stats(&self) -> &RenderStats {
         &self.stats
     }
@@ -109,12 +109,48 @@ impl<R: GlyphRasterizer> CpuRenderer<R> {
         }
         Ok(full)
     }
+
+    fn paint(&mut self, request: &RenderRequest<'_>, dirty: &[Bounds]) -> Result<(), RenderError> {
+        let (width, height, scale) = (request.width, request.height, request.scale);
+        let whole = Bounds::of_size(width, height);
+        let mut base = PixmapMut::from_bytes(&mut self.frame.pixels, width, height)
+            .ok_or(RenderError::InvalidSize)?;
+        let tree = Tree::new(&request.list.nodes, scale);
+        let mut painter = Painter {
+            stats: &mut self.stats,
+            config: &self.config,
+            scale,
+            resources: request.resources,
+            glyphs: &mut self.glyphs,
+            images: &mut self.images,
+            rasterizer: &mut self.rasterizer,
+        };
+        for d in dirty {
+            clear(&mut base, d);
+            painter
+                .stats
+                .clear
+                .add(u64::from(d.width()) * u64::from(d.height()) * 4);
+            let mut target = Target {
+                pixmap: &mut base,
+                origin: (0, 0),
+                rect: whole,
+                limit: *d,
+                clips: Vec::new(),
+            };
+            for &root in &tree.roots {
+                painter.subtree(&mut target, &tree, root, &mut Vec::new())?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
     type Frame = CpuFrame;
 
     fn render(&mut self, request: &RenderRequest<'_>) -> Result<RenderFrameId, RenderError> {
+        self.stats = RenderStats::default();
         let full = self.prepare(request)?;
         let (width, height, scale) = (request.width, request.height, request.scale);
         let whole = Bounds::of_size(width, height);
@@ -136,39 +172,10 @@ impl<R: GlyphRasterizer> UiRenderer for CpuRenderer<R> {
             frame_bytes: self.frame.pixels.len() as u64,
             ..RenderStats::default()
         };
-        {
-            let mut base = PixmapMut::from_bytes(&mut self.frame.pixels, width, height)
-                .ok_or(RenderError::InvalidSize)?;
-            let tree = Tree::new(&request.list.nodes, scale);
-            let mut painter = Painter {
-                stats: &mut self.stats,
-                config: &self.config,
-                scale,
-                resources: request.resources,
-                glyphs: &mut self.glyphs,
-                images: &mut self.images,
-                rasterizer: &mut self.rasterizer,
-            };
-            for d in &dirty {
-                clear(&mut base, d);
-                painter
-                    .stats
-                    .clear
-                    .add(u64::from(d.width()) * u64::from(d.height()) * 4);
-                let mut target = Target {
-                    pixmap: &mut base,
-                    origin: (0, 0),
-                    rect: whole,
-                    limit: *d,
-                    clips: Vec::new(),
-                };
-                for &root in &tree.roots {
-                    painter.subtree(&mut target, &tree, root, &mut Vec::new())?;
-                }
-            }
-        }
+        let painted = self.paint(request, &dirty);
         self.stats.glyph_rasterize = self.glyphs.take_filled();
         self.stats.image_decode = self.images.take_filled();
+        painted?;
         self.glyphs.trim();
         self.images.trim();
         self.stats.retained_glyphs = self.glyphs.retained();

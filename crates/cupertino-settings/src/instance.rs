@@ -76,7 +76,7 @@ pub fn show_about(
 }
 
 struct Instance {
-    on_show: Box<dyn Fn(PaneId) + Send + Sync>,
+    on_show: Box<dyn Fn(PaneId, String) + Send + Sync>,
 }
 
 #[zbus::interface(name = "org.cupertino.Settings1")]
@@ -85,7 +85,20 @@ impl Instance {
     fn show_pane(&self, pane_id: &str) -> fdo::Result<()> {
         let pane = PaneId::from_key(pane_id)
             .ok_or_else(|| fdo::Error::InvalidArgs(format!("unknown pane {pane_id:?}")))?;
-        (self.on_show)(pane);
+        (self.on_show)(pane, String::new());
+        Ok(())
+    }
+
+    /// Show and activate Settings with the caller's grant; the compositor validates and consumes it.
+    fn show_pane_with_token(&self, pane_id: &str, activation_token: String) -> fdo::Result<()> {
+        if activation_token.len() > 4096 {
+            return Err(fdo::Error::InvalidArgs(
+                "activation token exceeds 4096 bytes".into(),
+            ));
+        }
+        let pane = PaneId::from_key(pane_id)
+            .ok_or_else(|| fdo::Error::InvalidArgs(format!("unknown pane {pane_id:?}")))?;
+        (self.on_show)(pane, activation_token);
         Ok(())
     }
 }
@@ -95,7 +108,7 @@ impl Instance {
 /// settings process owns the name.
 pub fn serve(
     builder: connection::Builder<'static>,
-    on_show: impl Fn(PaneId) + Send + Sync + 'static,
+    on_show: impl Fn(PaneId, String) + Send + Sync + 'static,
 ) -> zbus::Result<Connection> {
     zbus::block_on(async {
         let connection = builder
@@ -119,18 +132,35 @@ pub fn serve(
 }
 
 /// Ask the running settings process on the bus `builder` connects to to show the pane with the id `pane_id`.
-pub fn show(builder: connection::Builder<'static>, pane_id: &str) -> zbus::Result<()> {
+pub fn show(
+    builder: connection::Builder<'static>,
+    pane_id: &str,
+    activation_token: &str,
+) -> zbus::Result<()> {
     zbus::block_on(async {
         let connection = builder.build().await?;
-        connection
-            .call_method(
-                Some(BUS_NAME),
-                OBJECT_PATH,
-                Some(INTERFACE),
-                "ShowPane",
-                &(pane_id,),
-            )
-            .await
-            .map(drop)
+        if activation_token.is_empty() {
+            connection
+                .call_method(
+                    Some(BUS_NAME),
+                    OBJECT_PATH,
+                    Some(INTERFACE),
+                    "ShowPane",
+                    &(pane_id,),
+                )
+                .await
+                .map(drop)
+        } else {
+            connection
+                .call_method(
+                    Some(BUS_NAME),
+                    OBJECT_PATH,
+                    Some(INTERFACE),
+                    "ShowPaneWithToken",
+                    &(pane_id, activation_token),
+                )
+                .await
+                .map(drop)
+        }
     })
 }

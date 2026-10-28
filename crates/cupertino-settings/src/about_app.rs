@@ -18,7 +18,7 @@ use cupertino_wayland_client::{
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-pub fn run() -> Result<()> {
+pub fn run(activation_token: String) -> Result<()> {
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     let waker = std::sync::Arc::new(std::sync::OnceLock::<cupertino_wayland_client::Waker>::new());
     let wake = waker.clone();
@@ -33,14 +33,9 @@ pub fn run() -> Result<()> {
         }) {
             Ok(connection) => connection,
             Err(zbus::Error::NameTaken) => {
-                let token = match std::env::var("XDG_ACTIVATION_TOKEN") {
-                    Ok(token) => token,
-                    Err(std::env::VarError::NotPresent) => String::new(),
-                    Err(e) => return Err(e.into()),
-                };
                 return Ok(instance::show_about(
                     zbus::connection::Builder::session()?,
-                    &token,
+                    &activation_token,
                 )?);
             }
             Err(e) => return Err(e.into()),
@@ -85,7 +80,11 @@ pub fn run() -> Result<()> {
         decorations: Decorations::Server,
     })?;
     let mut presenter = ShmPresenter::new(window.surface());
+    if !activation_token.is_empty() {
+        conn.activate_with_token(window, &activation_token)?;
+    }
     let mut pressed = false;
+    let mut info_request = None;
     loop {
         for event in events {
             match event {
@@ -111,7 +110,8 @@ pub fn run() -> Result<()> {
                     if code == key::ESCAPE {
                         return Ok(());
                     }
-                    let primary = primary_is_ctrl()?;
+                    let path = KeyboardSettings::path();
+                    let primary = primary_is_ctrl(path.as_deref());
                     let command = if primary {
                         mods.ctrl && !mods.logo
                     } else {
@@ -126,7 +126,12 @@ pub fn run() -> Result<()> {
                         && !mods.alt
                         && matches!(code, key::ENTER | key::KEYPAD_ENTER | key::SPACE)
                     {
-                        more_info()?;
+                        if info_request.is_none() {
+                            info_request = Some(conn.request_activation_token(
+                                window.surface(),
+                                Some("cupertino-settings"),
+                            )?);
+                        }
                     }
                 }
                 Event::Pointer {
@@ -146,7 +151,12 @@ pub fn run() -> Result<()> {
                     pressed = down && inside;
                     presenter.request_redraw();
                     if activate {
-                        more_info()?;
+                        if info_request.is_none() {
+                            info_request = Some(conn.request_activation_token(
+                                window.surface(),
+                                Some("cupertino-settings"),
+                            )?);
+                        }
                     }
                 }
                 Event::Pointer {
@@ -155,6 +165,10 @@ pub fn run() -> Result<()> {
                 } => {
                     pressed = false;
                     presenter.request_redraw();
+                }
+                Event::ActivationToken { request, token } if info_request == Some(request) => {
+                    info_request = None;
+                    more_info(&token)?;
                 }
                 Event::Extension(event) => match event.downcast_ref::<AppEvent>() {
                     Some(AppEvent::Appearance { dark: value }) => {
@@ -198,19 +212,42 @@ pub fn run() -> Result<()> {
 }
 
 /// Read the command-key choice on input so changing profiles also updates the close chord live.
-fn primary_is_ctrl() -> Result<bool> {
-    let Some(path) = KeyboardSettings::path() else {
-        return Ok(false);
+fn primary_is_ctrl(path: Option<&Path>) -> bool {
+    let Some(path) = path else {
+        return false;
     };
-    let (settings, problems) = KeyboardSettings::load(&path, None)?;
-    if !problems.is_empty() {
-        return Err(format!("invalid keyboard settings: {problems:?}").into());
+    match KeyboardSettings::load(path, None) {
+        Ok((settings, problems)) if problems.is_empty() => {
+            settings.modifier_profile == Some(ModifierProfile::ClassicPc)
+        }
+        result => {
+            eprintln!("cupertino-settings: cannot read command-key choice from {}: {result:?}; using Super", path.display());
+            false
+        }
     }
-    Ok(settings.modifier_profile == Some(ModifierProfile::ClassicPc))
 }
 
-fn more_info() -> Result<()> {
-    let mut child = std::process::Command::new(std::env::current_exe()?).spawn()?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_keyboard_settings_keep_about_usable_with_the_standard_command_key() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("keyboard.conf");
+        assert!(!primary_is_ctrl(Some(&path)));
+        std::fs::write(&path, "modifier_profile = classic-pc\n").unwrap();
+        assert!(primary_is_ctrl(Some(&path)));
+        std::fs::write(&path, "modifier_profile = invalid\n").unwrap();
+        assert!(!primary_is_ctrl(Some(&path)));
+        assert!(!primary_is_ctrl(None));
+    }
+}
+
+fn more_info(token: &str) -> Result<()> {
+    let mut child = std::process::Command::new(std::env::current_exe()?)
+        .env("XDG_ACTIVATION_TOKEN", token)
+        .spawn()?;
     std::thread::spawn(move || match child.wait() {
         Ok(status) if status.success() => {}
         Ok(status) => eprintln!("cupertino-settings: More Info exited with {status}"),

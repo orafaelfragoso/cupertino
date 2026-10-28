@@ -43,7 +43,6 @@ pub fn lower(composed: Composed, ctx: &mut Lowering<'_>) -> Vec<CupertinoElement
         images,
         recipes,
         mut snapshots,
-        mut locals,
     } = composed;
     let viewport = (
         frame.output.physical_size.width,
@@ -162,13 +161,6 @@ pub fn lower(composed: Composed, ctx: &mut Lowering<'_>) -> Vec<CupertinoElement
                     }
                 }
             }
-            Source::LocalPass { index } => match locals.get_mut(*index).and_then(Option::take) {
-                Some(element) => elements.push(element),
-                None => {
-                    debug_assert!(false, "local pass {index} is missing or drawn twice");
-                    tracing::error!(index, "scene local pass missing, item skipped");
-                }
-            },
             Source::RoundedRect(rect) => {
                 elements.push(rounded(ctx, key, rect, item.opacity as f32).into());
             }

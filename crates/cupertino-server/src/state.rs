@@ -1494,6 +1494,9 @@ impl Cupertino {
                     // focus moved elsewhere: the accent popup loses its reason to stay open
                     self.accent_dismiss();
                     self.refresh_activation();
+                    if let Some(window) = window {
+                        self.recheck_menu_owners(window);
+                    }
                 }
                 Effect::WindowDestroyed { window } => {
                     if let Some(h) = self.entry(window).and_then(|e| e.foreign.clone()) {

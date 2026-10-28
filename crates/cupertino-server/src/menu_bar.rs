@@ -332,6 +332,120 @@ struct AppMenu {
     shown: u32,
 }
 
+/// The pauses before the retries of the owner check of an announcement refused for a reason that may pass
+/// ([`retryable`]), each counted from the refusal; their number is the most retries an announcement gets.
+pub const OWNER_RETRY_DELAYS: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+];
+
+/// Whether an owner check refused with `refusal` may pass when asked again: the bus did not answer in time, or the
+/// identification threads were all taken. Every other refusal is final.
+pub fn retryable(refusal: &OwnerRefusal) -> bool {
+    matches!(refusal, OwnerRefusal::TimedOut | OwnerRefusal::Busy)
+}
+
+/// Why an announcement refused for a reason that may pass has no check.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Parked {
+    /// A retry is due.
+    Retry,
+    /// The retries ran out: a check waits for the window to become the key window.
+    Recheck,
+}
+
+/// What follows a refused owner check of an announcement.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Refused {
+    /// The refusal stands.
+    Final,
+    /// Retried after the pause.
+    RetryAfter(Duration),
+    /// No retry left: checked again when the window becomes the key window; `warn` only the first time.
+    RanOut { warn: bool },
+}
+
+/// The retries of the owner check of one announcement.
+#[derive(Debug)]
+pub struct OwnerRetry {
+    /// Which announcement, of all the server's.
+    announcement: u64,
+    /// The retries since the announcement or its last re-check.
+    retries: usize,
+    parked: Option<Parked>,
+    warned: bool,
+}
+
+impl OwnerRetry {
+    pub fn new(announcement: u64) -> Self {
+        Self {
+            announcement,
+            retries: 0,
+            parked: None,
+            warned: false,
+        }
+    }
+
+    pub fn announcement(&self) -> u64 {
+        self.announcement
+    }
+
+    /// The check was refused, for a reason that may pass when `retryable`.
+    pub fn refused(&mut self, retryable: bool) -> Refused {
+        if !retryable {
+            return Refused::Final;
+        }
+        if let Some(&after) = OWNER_RETRY_DELAYS.get(self.retries) {
+            self.retries += 1;
+            self.parked = Some(Parked::Retry);
+            return Refused::RetryAfter(after);
+        }
+        self.parked = Some(Parked::Recheck);
+        Refused::RanOut {
+            warn: !std::mem::replace(&mut self.warned, true),
+        }
+    }
+
+    /// The retry timer of announcement `announcement` fired: whether to check again, only if this is that
+    /// announcement and its retry is due.
+    pub fn due(&mut self, announcement: u64) -> bool {
+        let due = self.announcement == announcement && self.parked == Some(Parked::Retry);
+        if due {
+            self.parked = None;
+        }
+        due
+    }
+
+    /// The retry could not be timed: the check waits for the window to become the key window, as when the retries ran
+    /// out.
+    pub fn untimed(&mut self) {
+        if self.parked == Some(Parked::Retry) {
+            self.parked = Some(Parked::Recheck);
+        }
+    }
+
+    /// The window became the key window: whether to check again, only if the retries ran out, which are then counted
+    /// afresh.
+    pub fn recheck(&mut self) -> bool {
+        let recheck = self.parked == Some(Parked::Recheck);
+        if recheck {
+            self.parked = None;
+            self.retries = 0;
+        }
+        recheck
+    }
+}
+
+/// An address announced and waiting for the check of its owner.
+pub struct Announced {
+    pub surface: WlSurface,
+    pub address: MenuAddress,
+    pub retry: OwnerRetry,
+    /// The timer of the retry that is due.
+    pub timer: Option<RegistrationToken>,
+}
+
 /// Presentation model, the bars of the menu bar process and the menu addresses of windows.
 pub struct MenuBars {
     pub set: MenuBarSet,
@@ -341,7 +455,9 @@ pub struct MenuBars {
     /// Addresses announced before the window mapped.
     pending: Vec<(WlSurface, MenuAddress)>,
     /// Addresses announced and waiting for the check of their owner, by announcing surface and kind.
-    announced: HashMap<(ObjectId, MenuKind), (WlSurface, MenuAddress)>,
+    announced: HashMap<(ObjectId, MenuKind), Announced>,
+    /// How many announcements were made.
+    announcements: u64,
     /// The last `edit` request still to be sent; a newer one replaces it.
     edit: Option<PendingEdit>,
     app_menus: Vec<AppMenu>,
@@ -363,6 +479,7 @@ impl MenuBars {
             addresses: HashMap::new(),
             pending: Vec::new(),
             announced: HashMap::new(),
+            announcements: 0,
             edit: None,
             app_menus: Vec::new(),
             reader: None,
@@ -492,19 +609,46 @@ impl MenuBars {
     }
 
     /// Keep `address` of `surface` until the owner of its bus name is checked (`crate::owner_check`); a newer
-    /// announcement of the same kind replaces it.
-    pub fn announce(&mut self, surface: &WlSurface, address: MenuAddress) {
+    /// announcement of the same kind replaces it, and is returned.
+    pub fn announce(&mut self, surface: &WlSurface, address: MenuAddress) -> Option<Announced> {
+        self.announcements += 1;
+        let announced = Announced {
+            surface: surface.clone(),
+            address,
+            retry: OwnerRetry::new(self.announcements),
+            timer: None,
+        };
         self.announced
-            .insert((surface.id(), address.kind()), (surface.clone(), address));
+            .insert((surface.id(), announced.address.kind()), announced)
     }
 
     /// The address of kind `kind` `surface` announced and is being checked, taken: withdrawn, or the check returned.
-    pub fn take_announced(
-        &mut self,
-        surface: &ObjectId,
-        kind: MenuKind,
-    ) -> Option<(WlSurface, MenuAddress)> {
+    pub fn take_announced(&mut self, surface: &ObjectId, kind: MenuKind) -> Option<Announced> {
         self.announced.remove(&(surface.clone(), kind))
+    }
+
+    /// The address of kind `kind` `surface` announced and is being checked.
+    pub fn announced(&self, surface: &ObjectId, kind: MenuKind) -> Option<&Announced> {
+        self.announced.get(&(surface.clone(), kind))
+    }
+
+    pub fn announced_mut(&mut self, surface: &ObjectId, kind: MenuKind) -> Option<&mut Announced> {
+        self.announced.get_mut(&(surface.clone(), kind))
+    }
+
+    /// The surfaces with an address announced and not checked yet, with its kind.
+    pub fn announced_surfaces(&self) -> impl Iterator<Item = (&WlSurface, MenuKind)> {
+        self.announced
+            .iter()
+            .map(|((_, kind), announced)| (&announced.surface, *kind))
+    }
+
+    /// How many announcements wait for a retry of their owner check.
+    pub fn owner_retries_due(&self) -> usize {
+        self.announced
+            .values()
+            .filter(|a| a.timer.is_some())
+            .count()
     }
 }
 
@@ -1513,5 +1657,99 @@ mod tests {
         let longest = format!("/{}", "a".repeat(MAX_OBJECT_PATH_BYTES - 1));
         assert!(is_object_path(&longest));
         assert!(!is_object_path(&format!("{longest}a")));
+    }
+
+    #[test]
+    fn only_a_timed_out_or_busy_owner_check_is_retried() {
+        for refusal in [OwnerRefusal::TimedOut, OwnerRefusal::Busy] {
+            let mut retry = OwnerRetry::new(1);
+            assert_eq!(
+                retry.refused(retryable(&refusal)),
+                Refused::RetryAfter(OWNER_RETRY_DELAYS[0]),
+                "{refusal:?}"
+            );
+        }
+        for refusal in [
+            OwnerRefusal::NoBus,
+            OwnerRefusal::NoClientProcess,
+            OwnerRefusal::NotABusName,
+            OwnerRefusal::NoOwner("org.example.Editor".into()),
+            OwnerRefusal::Unidentified,
+            OwnerRefusal::OtherInstance {
+                owner: 1,
+                client: 2,
+            },
+            OwnerRefusal::Stalled,
+        ] {
+            let mut retry = OwnerRetry::new(1);
+            assert_eq!(
+                retry.refused(retryable(&refusal)),
+                Refused::Final,
+                "{refusal:?}"
+            );
+            assert!(!retry.due(1), "{refusal:?}");
+            assert!(!retry.recheck(), "{refusal:?}");
+        }
+    }
+
+    #[test]
+    fn an_announcement_is_retried_at_most_three_times_then_warns_once_and_waits_for_a_recheck() {
+        let mut retry = OwnerRetry::new(1);
+        let mut delays = Vec::new();
+        loop {
+            match retry.refused(true) {
+                Refused::RetryAfter(after) => {
+                    delays.push(after);
+                    assert!(!retry.recheck(), "no re-check while a retry is due");
+                    assert!(retry.due(1));
+                    assert!(!retry.due(1), "one check per retry");
+                }
+                Refused::RanOut { warn } => {
+                    assert!(warn);
+                    break;
+                }
+                Refused::Final => panic!("a refusal that may pass is final"),
+            }
+            assert!(delays.len() <= OWNER_RETRY_DELAYS.len(), "{delays:?}");
+        }
+        assert_eq!(delays, OWNER_RETRY_DELAYS);
+        assert!(!retry.due(1), "no retry left");
+
+        // one re-check per activation, with its retries counted afresh and no second warning
+        assert!(retry.recheck());
+        assert!(!retry.recheck(), "the re-check runs");
+        for after in OWNER_RETRY_DELAYS {
+            assert_eq!(retry.refused(true), Refused::RetryAfter(after));
+            assert!(retry.due(1));
+        }
+        assert_eq!(retry.refused(true), Refused::RanOut { warn: false });
+        assert!(retry.recheck());
+    }
+
+    #[test]
+    fn a_retry_of_an_older_announcement_does_nothing() {
+        let mut newer = OwnerRetry::new(2);
+        assert!(!newer.due(1), "the newer announcement is being checked");
+        assert_eq!(
+            newer.refused(true),
+            Refused::RetryAfter(OWNER_RETRY_DELAYS[0])
+        );
+        assert!(
+            !newer.due(1),
+            "the newer announcement's retry is due, not the older one's"
+        );
+        assert!(newer.due(2));
+    }
+
+    #[test]
+    fn a_retry_that_cannot_be_timed_waits_for_a_recheck() {
+        let mut retry = OwnerRetry::new(1);
+        assert_eq!(
+            retry.refused(true),
+            Refused::RetryAfter(OWNER_RETRY_DELAYS[0])
+        );
+        retry.untimed();
+        assert!(!retry.due(1), "no timer will fire for it");
+        assert!(retry.recheck(), "the window becoming key checks it again");
     }
 }

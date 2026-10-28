@@ -12,13 +12,21 @@
 //! of one client, so a client with many surfaces waits behind its own checks while other clients' run. A check that has
 //! not returned after [`DEADLINE`] is answered [`OwnerRefusal::TimedOut`] and its key goes on; its late answer is dropped.
 //!
+//! The checks are never retried here: each caller decides what a refusal means for its key. The menus a window announces
+//! (`crate::protocols`) retry a refusal that may pass, [`OwnerRefusal::TimedOut`] or [`OwnerRefusal::Busy`], at most
+//! three times, 1, 2 and 4 s after each refusal (`crate::menu_bar::OWNER_RETRY_DELAYS`), as a new request of the same
+//! key, so each retry keeps the bounds above; a newer announcement, a withdrawal or the surface's destruction drops a
+//! retry that is due, and a retry timer that fires anyway checks first that its announcement is still the latest. When
+//! the retries run out, one warning is logged and the announcement waits: when its window next becomes the key window it
+//! is checked once more, with its retries counted afresh. Every other refusal is final.
+//!
 //! Each identification of an owner reads `/proc` on a thread of its own, which a process whose root stalls reading
 //! keeps for good; at most `crate::dbus::IDENTIFY_LIMIT` are alive, and with that many a check is refused
 //! [`OwnerRefusal::Busy`]. At most `crate::dbus::CLIENT_IDENTIFY_LIMIT` of them belong to one client: while that many of
 //! a client's identifications are alive, its checks are refused at once ([`OwnerRefusal::Stalled`]) and it gets checks
 //! again exactly when one ends. The bound is on live threads, so a client that stalls its identifications holds that
 //! many at most, however it spaces them or mixes in checks that verify; a slow bus starts no thread and costs a client
-//! nothing. What is left: only an
+//! nothing: a check the bus answers after its deadline starts no identification. What is left: only an
 //! unsandboxed process of the same user can make a root that stalls (a Flatpak or Snap sandbox allows no user
 //! namespace), and by opening many clients it can still use up the threads and stop the menus for the session. A
 //! process with that access can end the menu bar process anyway, so it gains nothing new.
@@ -304,6 +312,7 @@ impl Cupertino {
             name: request.name,
             client,
             client_identifying,
+            expires: std::time::Instant::now() + DEADLINE,
             reply,
         });
         queued.then_some(()).ok_or(OwnerRefusal::NoBus)

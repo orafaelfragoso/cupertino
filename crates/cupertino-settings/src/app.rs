@@ -589,7 +589,10 @@ impl App {
                 }
             }
             // the scale is read when polling the presenters
-            Event::ScaleChanged { .. } | Event::OutputsChanged | Event::ActivationToken { .. } => {}
+            Event::ScaleChanged { .. }
+            | Event::OutputsChanged
+            | Event::ActivationToken { .. }
+            | Event::TextInput { .. } => {}
         }
         Ok(true)
     }

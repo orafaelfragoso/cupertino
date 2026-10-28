@@ -953,6 +953,7 @@ dependencies = [
  "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-icons",
+ "cupertino-keyboard",
  "cupertino-menu-model",
  "cupertino-modifiers",
  "cupertino-protocol-app",
@@ -1488,8 +1489,7 @@ dependencies = [
 name = "cupertino-text-field"
 version = "0.1.0"
 dependencies = [
- "cupertino-defaults",
- "cupertino-keyboard",
+ "cupertino-key-bindings",
  "cupertino-modifiers",
  "cupertino-ui-text",
 ]

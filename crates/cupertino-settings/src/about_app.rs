@@ -71,7 +71,8 @@ pub fn run(activation_token: String) -> Result<()> {
             }
         }
     }
-    let size = about.size();
+    let layout = painter.about_layout(&about);
+    let size = layout.size();
     let window = conn.toplevel(&ToplevelConfig {
         app_id: "cupertino-settings".into(),
         title: "About This Computer".into(),
@@ -142,7 +143,7 @@ pub fn run(activation_token: String) -> Result<()> {
                         },
                     ..
                 } => {
-                    let inside = about.button().contains(cupertino_settings::Point {
+                    let inside = layout.button.contains(cupertino_settings::Point {
                         x: position.x,
                         y: position.y,
                     });
@@ -200,7 +201,7 @@ pub fn run(activation_token: String) -> Result<()> {
                 Ready::ScaleChanged(_) => {}
                 Ready::Idle => break,
                 Ready::Draw => presenter.draw(&mut conn, None, |pm, scale| {
-                    painter.paint_about(pm, scale.factor() as f32, &about, &palette)
+                    painter.paint_about(pm, scale.factor() as f32, &about, &layout, &palette)
                 })?,
             }
         }

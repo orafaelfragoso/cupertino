@@ -88,8 +88,19 @@ impl Cupertino {
         idx: usize,
         f: impl FnOnce(&mut GlesRenderer, SceneParams<'_>) -> R,
     ) -> Option<R> {
+        let cursor = self.cursor_plan(self.outputs[idx].scale);
+        self.with_scene_and_cursor(renderer, idx, cursor, f)
+    }
+
+    /// [`Cupertino::with_scene`] with the pointer drawn as `cursor`.
+    fn with_scene_and_cursor<R>(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        idx: usize,
+        cursor: CursorPlan,
+        f: impl FnOnce(&mut GlesRenderer, SceneParams<'_>) -> R,
+    ) -> Option<R> {
         let scale = self.outputs[idx].scale;
-        let cursor = self.cursor_plan(scale);
         let pointer: Point<f64, Logical> = self.pointer.current_location();
         let now = self.now();
         let drag_icon = self.drag_icon.clone();
@@ -147,17 +158,51 @@ impl Cupertino {
         idx: usize,
     ) -> Vec<CupertinoElement> {
         self.note_scene_built(idx);
-        let elements = self
-            .with_scene(renderer, idx, build_scene)
-            .unwrap_or_default();
+        self.scene_elements(renderer, idx, true).unwrap_or_default()
+    }
+
+    /// The element list (front to back) of output `idx`, the pointer left out with `paint_cursor` false;
+    /// `None` while the render resources are not loaded. With the `scene-oracle` feature every list is
+    /// compared with the one the previous builder gives.
+    pub fn scene_elements(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        idx: usize,
+        paint_cursor: bool,
+    ) -> Option<Vec<CupertinoElement>> {
+        let build = |r: &mut GlesRenderer, mut p: SceneParams<'_>| {
+            if !paint_cursor {
+                p.cursor = CursorPlan::Hidden;
+            }
+            build_scene(r, p)
+        };
+        #[cfg(not(feature = "scene-oracle"))]
+        let elements = self.with_scene(renderer, idx, build)?;
         #[cfg(feature = "scene-oracle")]
-        {
-            let legacy = self
-                .with_scene(renderer, idx, crate::render::legacy_scene::build_scene)
-                .unwrap_or_default();
-            crate::render::legacy_scene::record(legacy);
-        }
-        elements
+        let elements = {
+            use crate::render::legacy_scene;
+            // both builders see the same instant and the same cursor frame
+            let pinned = self.fixed_time.is_none().then(|| self.now());
+            self.fixed_time = self.fixed_time.or(pinned);
+            let cursor = self.cursor_plan(self.outputs[idx].scale);
+            let elements = self.with_scene_and_cursor(renderer, idx, cursor.clone(), build);
+            let legacy = elements.as_ref().and_then(|_| {
+                self.with_scene_and_cursor(renderer, idx, cursor, |r, mut p| {
+                    if !paint_cursor {
+                        p.cursor = CursorPlan::Hidden;
+                    }
+                    legacy_scene::build_scene(r, p)
+                })
+            });
+            if pinned.is_some() {
+                self.fixed_time = None;
+            }
+            let (elements, legacy) = (elements?, legacy?);
+            let out = &mut self.outputs[idx];
+            legacy_scene::assert_parity(&mut out.cache, &legacy, &elements, out.scale);
+            elements
+        };
+        Some(elements)
     }
 
     /// Render window `id` at its natural size with its shadow into a texture (`None` when it is not

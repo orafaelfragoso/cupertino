@@ -912,6 +912,18 @@ fn render_notice(
     Some((pm, [0; 4]))
 }
 
+/// The size and the position of the notice (in points) for a text of `text_width` on an output `output_width` wide: as wide
+/// as the text needs, never wider than the output less a margin on each side, centred. The text starts at the left
+/// padding, so what does not fit is cut at the right and the start of the line (the chord) is always visible.
+fn notice_layout(text_width: f64, output_width: f64) -> ((f64, f64), (f64, f64)) {
+    let width = (text_width + 2.0 * NOTICE_PADDING.0)
+        .min(output_width - 2.0 * NOTICE_TOP)
+        .max(1.0);
+    let size = (width, f64::from(FONT_PT) + 2.0 * NOTICE_PADDING.1);
+    let x = ((output_width - width) / 2.0).round().max(0.0);
+    (size, (x, NOTICE_TOP))
+}
+
 /// The notice that an application holds the shortcuts: a pill at the top of the output of its window, above everything
 /// but the session overlays. It is drawn on the compositor-overlay layer, which a lock-only frame omits.
 pub fn shortcut_notice(p: &mut SceneParams<'_>) -> Vec<Piece> {
@@ -926,12 +938,8 @@ pub fn shortcut_notice(p: &mut SceneParams<'_>) -> Vec<Piece> {
     let overlays = &mut *p.overlays;
     let text = &mut overlays.text;
     text.set_scale(scale as f32);
-    let width = f64::from(text.width(&notice.text, px, 400)) / scale + 2.0 * NOTICE_PADDING.0;
-    let size = (
-        width.min(p.rect.w - 2.0 * NOTICE_TOP).max(1.0),
-        f64::from(FONT_PT) + 2.0 * NOTICE_PADDING.1,
-    );
-    let (x, y) = (((p.rect.w - size.0) / 2.0).round(), NOTICE_TOP);
+    let text_width = f64::from(text.width(&notice.text, px, 400)) / scale;
+    let (size, (x, y)) = notice_layout(text_width, p.rect.w);
     let sig = debug_sig(&(
         &notice.text,
         (size.0.to_bits(), size.1.to_bits()),
@@ -1392,5 +1400,23 @@ mod tests {
     fn source_codes() {
         assert_eq!(source_code("fr(nodeadkeys)"), "FR");
         assert_eq!(source_code("us"), "US");
+    }
+
+    #[test]
+    fn the_notice_fits_any_output_and_starts_at_its_left_padding() {
+        for output_width in [1920.0, 1000.5, 400.0, 250.0, 100.0, 60.0] {
+            let ((w, h), (x, y)) = notice_layout(5000.0, output_width);
+            assert!(w >= 1.0 && h > 0.0, "{output_width}: {w}x{h}");
+            assert!(x >= 0.0, "{output_width}: x {x}");
+            assert!(y >= 0.0);
+            assert!(
+                w <= (output_width - 2.0 * NOTICE_TOP).max(1.0),
+                "{output_width}: {w} is wider than the output less its margins"
+            );
+        }
+        // a short text takes only the room it needs, centred
+        let ((w, _), (x, _)) = notice_layout(200.0, 1000.0);
+        assert_eq!(w, 200.0 + 2.0 * NOTICE_PADDING.0);
+        assert_eq!(x, ((1000.0 - w) / 2.0).round());
     }
 }

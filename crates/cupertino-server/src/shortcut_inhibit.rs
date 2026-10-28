@@ -146,13 +146,22 @@ impl Cupertino {
                             None => format!("{app} is receiving your shortcuts."),
                         },
                         output,
+                        owner: surface.id(),
                         until: now + NOTICE_SECONDS,
                     });
                 }
                 self.request_redraw();
             } else if !want && inhibitor.is_active() {
                 inhibitor.inactivate();
-                self.overlays.shortcut_notice = None;
+                // only the notice of this inhibitor: another one may have been activated in this same pass
+                if self
+                    .overlays
+                    .shortcut_notice
+                    .as_ref()
+                    .is_some_and(|n| n.owner == surface.id())
+                {
+                    self.overlays.shortcut_notice = None;
+                }
                 self.request_redraw();
             }
         }

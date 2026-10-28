@@ -118,23 +118,20 @@ impl Shortcut {
         });
         for m in order {
             modifiers.push(match m {
-                ShortcutModifier::Ctrl => '\u{2303}',
-                ShortcutModifier::Alt => '\u{2325}',
-                ShortcutModifier::Shift => '\u{21e7}',
-                ShortcutModifier::Primary => '\u{2318}',
+                ShortcutModifier::Ctrl => MODIFIER_GLYPHS[0],
+                ShortcutModifier::Alt => MODIFIER_GLYPHS[1],
+                ShortcutModifier::Shift => MODIFIER_GLYPHS[2],
+                ShortcutModifier::Primary => MODIFIER_GLYPHS[3],
             });
         }
-        let key = match self.key.to_ascii_lowercase().as_str() {
-            "return" | "enter" => "\u{21a9}".to_string(),
-            "backspace" => "\u{232b}".to_string(),
-            "delete" => "\u{2326}".to_string(),
-            "tab" => "\u{21e5}".to_string(),
-            "up" => "\u{2191}".to_string(),
-            "down" => "\u{2193}".to_string(),
-            "left" => "\u{2190}".to_string(),
-            "right" => "\u{2192}".to_string(),
-            _ if self.key.chars().count() == 1 => self.key.to_uppercase(),
-            name => key_char(name).map_or_else(|| self.key.clone(), String::from),
+        let lower = self.key.to_ascii_lowercase();
+        let key = match KEY_GLYPHS
+            .iter()
+            .find(|(names, _)| names.contains(&lower.as_str()))
+        {
+            Some((_, glyph)) => glyph.to_string(),
+            None if self.key.chars().count() == 1 => self.key.to_uppercase(),
+            None => key_char(&lower).map_or_else(|| self.key.clone(), String::from),
         };
         ShortcutGlyphs { modifiers, key }
     }
@@ -166,7 +163,7 @@ impl Shortcut {
             "backslash" => "\\".to_string(),
             "grave" => "`".to_string(),
             "minus" => "-".to_string(),
-            "plus" => "+".to_string(),
+            "plus" => "Plus".to_string(),
             "equal" => "=".to_string(),
             "semicolon" => ";".to_string(),
             "apostrophe" => "'".to_string(),
@@ -193,6 +190,29 @@ impl Shortcut {
         s
     }
 }
+
+/// The modifier glyphs of the glyph style: control, option, shift, command.
+const MODIFIER_GLYPHS: [char; 4] = ['\u{2303}', '\u{2325}', '\u{21e7}', '\u{2318}'];
+
+/// The keys the glyph style draws as a symbol or a short word, by their lower-case keysym names. Every symbol here must be
+/// in the embedded font (a test checks it): the Escape and keypad Enter symbols are not, so those keys are words.
+const KEY_GLYPHS: &[(&[&str], &str)] = &[
+    (&["return", "enter"], "\u{21a9}"),
+    (&["kp_enter"], "Enter"),
+    (&["backspace"], "\u{232b}"),
+    (&["delete"], "\u{2326}"),
+    (&["tab"], "\u{21e5}"),
+    (&["escape"], "Esc"),
+    (&["space"], "Space"),
+    (&["page_up", "prior"], "\u{21de}"),
+    (&["page_down", "next"], "\u{21df}"),
+    (&["home"], "\u{2196}"),
+    (&["end"], "\u{2198}"),
+    (&["up"], "\u{2191}"),
+    (&["down"], "\u{2193}"),
+    (&["left"], "\u{2190}"),
+    (&["right"], "\u{2192}"),
+];
 
 /// The character a keysym name types, for the punctuation names chords use.
 pub(crate) fn key_char(name: &str) -> Option<char> {
@@ -541,6 +561,11 @@ mod tests {
             pair("Shift+Super+", "/")
         );
         assert_eq!(names(&["Control", "Escape"]), pair("Ctrl+", "Esc"));
+        assert_eq!(
+            names(&["Control", "plus"]),
+            pair("Ctrl+", "Plus"),
+            "not Ctrl++"
+        );
         // the glyph style is unchanged
         assert_eq!(
             Shortcut::from_tokens(&["Alt", "F4"])
@@ -578,5 +603,61 @@ mod tests {
             "a key without a symbol keeps its name"
         );
         assert_eq!(glyphs(&["Ctrl", "n"]).modifiers, "\u{2303}");
+        for (key, glyph) in [
+            ("comma", ","),
+            ("slash", "/"),
+            ("grave", "`"),
+            ("Escape", "Esc"),
+            ("space", "Space"),
+            ("Page_Up", "\u{21de}"),
+            ("Prior", "\u{21de}"),
+            ("Page_Down", "\u{21df}"),
+            ("Next", "\u{21df}"),
+            ("Home", "\u{2196}"),
+            ("End", "\u{2198}"),
+            ("KP_Enter", "Enter"),
+        ] {
+            assert_eq!(glyphs(&["Super", key]).key, glyph, "{key}");
+        }
+    }
+
+    /// The bar draws with the embedded font when no asset pack is installed, and it has no fallback: a glyph it lacks
+    /// is a box.
+    #[cfg(feature = "app")]
+    #[test]
+    fn every_glyph_the_glyph_style_draws_is_in_the_embedded_font() {
+        let font = swash::FontRef::from_index(cupertino_assets::BUILTIN_FONT, 0).unwrap();
+        let charmap = font.charmap();
+        let punctuation = [
+            "comma",
+            "period",
+            "slash",
+            "backslash",
+            "semicolon",
+            "colon",
+            "apostrophe",
+            "quotedbl",
+            "grave",
+            "minus",
+            "equal",
+            "plus",
+            "bracketleft",
+            "bracketright",
+            "question",
+            "exclam",
+        ]
+        .map(|name| key_char(name).unwrap());
+        let drawn = MODIFIER_GLYPHS
+            .into_iter()
+            .chain(KEY_GLYPHS.iter().flat_map(|(_, glyph)| glyph.chars()))
+            .chain(punctuation);
+        for c in drawn {
+            assert_ne!(
+                charmap.map(c),
+                0,
+                "{c:?} (U+{:04X}) is not in the embedded font",
+                c as u32
+            );
+        }
     }
 }

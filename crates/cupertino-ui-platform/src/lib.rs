@@ -23,8 +23,10 @@ pub struct Capabilities {
     pub fractional_scale: bool,
     pub presentation_time: bool,
     pub text_input: bool,
+    pub touch: bool,
     pub cursor_shape: bool,
     pub primary_selection: bool,
+    pub drag_and_drop: bool,
     pub server_decorations: bool,
     pub activation: bool,
     /// The desktop's optional public effects protocol (materials, blur); without it materials use their fallback.
@@ -138,6 +140,26 @@ pub struct ClipboardData {
 /// Names one clipboard read; its data arrives as [`PlatformEvent::Clipboard`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ClipboardToken(pub u64);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ClipboardKind {
+    #[default]
+    Clipboard,
+    /// The selection pasted with the middle button, when the compositor has one.
+    Primary,
+}
+
+/// Names one activation-token request; the token arrives as [`PlatformEvent::ActivationToken`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ActivationRequest(pub u64);
+
+/// Whether [`WindowSystem::present`] submitted the frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PresentOutcome {
+    Presented,
+    /// No buffer is free or the compositor has not asked for a frame; the damage carries over to the next present.
+    NotReady,
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct WindowStates {
@@ -264,6 +286,11 @@ pub enum PlatformEvent {
         token: ClipboardToken,
         data: Option<ClipboardData>,
     },
+    /// A token to hand to another client so it may take the focus.
+    ActivationToken {
+        request: ActivationRequest,
+        token: String,
+    },
     /// The waker was woken.
     Wake,
 }
@@ -291,8 +318,9 @@ pub trait WindowSystem {
     /// Enables the input method for `window` with this state, or disables it with `None`.
     fn set_text_input(&mut self, window: WindowId, state: Option<&TextInputState>);
     fn set_cursor(&mut self, window: WindowId, shape: CursorShape);
-    fn set_clipboard(&mut self, data: ClipboardData);
-    fn read_clipboard(&mut self, mime: &str) -> ClipboardToken;
+    fn set_clipboard(&mut self, kind: ClipboardKind, data: ClipboardData);
+    fn read_clipboard(&mut self, kind: ClipboardKind, mime: &str) -> ClipboardToken;
+    fn request_activation_token(&mut self, window: WindowId) -> ActivationRequest;
     /// Asks for a [`WindowEvent::Frame`] when the compositor wants the next frame.
     fn request_frame(&mut self, window: WindowId);
     /// Copies the frame's damage, plus whatever the chosen buffer missed since it was last used, into a buffer and
@@ -303,7 +331,7 @@ pub trait WindowSystem {
         window: WindowId,
         frame: &CpuFrame,
         configure: Option<ConfigureId>,
-    ) -> Result<(), PlatformError>;
+    ) -> Result<PresentOutcome, PlatformError>;
     /// Waits up to `timeout` (`None`: until something happens) and appends what happened to `events`.
     fn dispatch(
         &mut self,

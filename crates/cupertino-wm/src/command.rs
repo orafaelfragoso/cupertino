@@ -193,6 +193,11 @@ pub enum Command {
     DemandAttention {
         window: WindowId,
     },
+    /// The Windows habit of Super+Down: a tiled, filled or zoomed window goes back to the frame it had; any other
+    /// window is minimized.
+    MinimizeOrRestore {
+        window: WindowId,
+    },
     ActivateApp {
         app: AppId,
     },

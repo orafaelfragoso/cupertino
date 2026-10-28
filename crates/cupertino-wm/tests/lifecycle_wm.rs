@@ -316,3 +316,37 @@ fn output_resize_refits_fullscreen_zoomed_tiled_and_normal_windows() {
         })
         .is_empty());
 }
+
+#[test]
+fn minimize_or_restore_restores_a_tiled_window_first_and_minimizes_a_normal_one() {
+    let mut h = H::new();
+    let g = Rect::new(250.0, 150.0, 640.0, 420.0);
+    let w = h.map_at("a", g);
+    h.cmd(Command::Tile {
+        window: w,
+        kind: TileKind::Fill,
+    });
+    h.settle();
+    assert_eq!(h.state(w), LifecycleState::Tiled(TileKind::Fill));
+    h.cmd(Command::MinimizeOrRestore { window: w });
+    h.settle();
+    assert_eq!(h.state(w), LifecycleState::Normal);
+    assert!(rect_eq(h.frame(w), g));
+    h.cmd(Command::MinimizeOrRestore { window: w });
+    h.settle();
+    assert_eq!(h.state(w), LifecycleState::Minimized);
+}
+
+#[test]
+fn minimize_or_restore_unzooms_a_zoomed_window() {
+    let mut h = H::new();
+    let g = Rect::new(250.0, 150.0, 640.0, 420.0);
+    let w = h.map_at("a", g);
+    h.cmd(Command::ToggleZoom { window: w });
+    h.settle();
+    assert_eq!(h.state(w), LifecycleState::Zoomed);
+    h.cmd(Command::MinimizeOrRestore { window: w });
+    h.settle();
+    assert_eq!(h.state(w), LifecycleState::Normal);
+    assert!(rect_eq(h.frame(w), g));
+}

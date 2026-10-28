@@ -237,6 +237,7 @@ impl Wm {
                 self.fullscreen_window(window, output, now, o)
             }
             Command::ExitFullscreen { window } => self.exit_fullscreen_window(window, now, o),
+            Command::MinimizeOrRestore { window } => self.minimize_or_restore(window, now, o),
             Command::Tile { window, kind } => self.tile_window(window, kind, now, o),
             Command::Untile { window } => self.untile_window(window, now, o),
             Command::FocusWindow { window } => self.focus_window(window, now, o),
@@ -753,6 +754,20 @@ impl Wm {
                 window: id,
                 kind: AnimationKind::Restore,
             });
+        }
+    }
+
+    /// A tiled, filled or zoomed window goes back to its frame; any other window is minimized.
+    fn minimize_or_restore(&mut self, id: WindowId, now: f64, out: &mut Vec<Effect>) {
+        let Some(w) = self.windows.get(&id) else {
+            return;
+        };
+        match w.state() {
+            LifecycleState::Tiling(_) | LifecycleState::Tiled(_) => {
+                self.untile_window(id, now, out)
+            }
+            LifecycleState::Zooming | LifecycleState::Zoomed => self.toggle_zoom(id, now, out),
+            _ => self.minimize_window(id, None, now, out),
         }
     }
 

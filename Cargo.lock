@@ -1342,7 +1342,10 @@ dependencies = [
 name = "cupertino-test-bus"
 version = "0.1.0"
 dependencies = [
+ "async-io",
+ "futures-lite",
  "libc",
+ "tempfile",
  "zbus",
 ]
 

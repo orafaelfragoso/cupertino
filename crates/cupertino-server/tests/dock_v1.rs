@@ -262,6 +262,27 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for ClientState {
     ) {
     }
 }
+mod gtk_shell {
+    #![allow(
+        dead_code,
+        non_camel_case_types,
+        non_upper_case_globals,
+        unused_imports,
+        missing_docs,
+        clippy::all
+    )]
+    use wayland_client;
+    use wayland_client::protocol::*;
+
+    pub mod __interfaces {
+        use wayland_client::protocol::__interfaces::*;
+        wayland_scanner::generate_interfaces!("protocols/gtk-shell.xml");
+    }
+    use self::__interfaces::*;
+
+    wayland_scanner::generate_client_code!("protocols/gtk-shell.xml");
+}
+
 macro_rules! ignore_events {
     ($($t:ty),*) => {$(
         impl Dispatch<$t, ()> for ClientState {
@@ -280,7 +301,9 @@ ignore_events!(
     CupertinoShellV1,
     CupertinoAppEffectsV1,
     CupertinoBackdropV1,
-    xdg_activation_v1::XdgActivationV1
+    xdg_activation_v1::XdgActivationV1,
+    gtk_shell::gtk_shell1::GtkShell1,
+    gtk_shell::gtk_surface1::GtkSurface1
 );
 
 impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for ClientState {
@@ -451,6 +474,10 @@ enum Cmd {
     AppCommand(&'static str, AppCommand),
     /// An application window asks to be activated with an `xdg_activation_v1` token.
     Activate(String),
+    /// An application window calls `gtk_surface1.present`.
+    GtkPresent,
+    /// An application window calls `gtk_surface1.request_focus` with the given startup id.
+    GtkRequestFocus(Option<String>),
     /// Drop the connection: the dock process died.
     Quit,
 }
@@ -595,7 +622,9 @@ impl DockClient {
                 Cmd::RunAction(name) => dock.run_action(name.to_string()),
                 Cmd::ForceQuitApp(app_id) => dock.force_quit_app(app_id.to_string()),
                 Cmd::AppCommand(app_id, command) => dock.app_command(app_id.to_string(), command),
-                Cmd::Activate(_) => panic!("the dock activates through its own requests"),
+                Cmd::Activate(_) | Cmd::GtkPresent | Cmd::GtkRequestFocus(_) => {
+                    panic!("the dock does not act as an application window")
+                }
                 Cmd::Quit => unreachable!("handled by the client loop"),
             });
             (state, apply)
@@ -641,6 +670,8 @@ fn spawn_app(socket: PathBuf, app_id: &'static str) -> TestClient {
         surface.commit();
         let activation: xdg_activation_v1::XdgActivationV1 = globals.bind(qh, 1..=1, ()).unwrap();
         let window = surface.clone();
+        let gtk: gtk_shell::gtk_shell1::GtkShell1 = globals.bind(qh, 1..=7, ()).unwrap();
+        let gtk_surface = gtk.get_gtk_surface(&surface, qh, ());
         let state = ClientState {
             status: status.clone(),
             shm,
@@ -650,6 +681,8 @@ fn spawn_app(socket: PathBuf, app_id: &'static str) -> TestClient {
         };
         let apply = Box::new(move |cmd: Cmd| match cmd {
             Cmd::Activate(token) => activation.activate(token, &window),
+            Cmd::GtkPresent => gtk_surface.present(0),
+            Cmd::GtkRequestFocus(startup_id) => gtk_surface.request_focus(startup_id),
             _ => panic!("an application window takes no dock request"),
         });
         (state, apply)
@@ -1676,6 +1709,56 @@ fn the_panel_goes_to_the_dock_of_the_output_under_the_pointer() {
         )),
         "the other dock only hears the end"
     );
+}
+
+/// `gtk_surface1.present` and `request_focus` are activation requests: a client with no input behind it cannot take the
+/// keyboard from another, and its tile bounces instead.
+#[test]
+fn a_gtk_present_or_focus_request_from_a_background_client_only_bounces_its_tile() {
+    let Some(mut h) = Harness::new() else { return };
+    let ([_one_client, two_client, _three_client], [_three, _two, one]) = h.three_apps();
+    let dock = DockClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&dock, 1);
+    h.state.command(Command::FocusWindow { window: one });
+    h.advance(1.0);
+    assert_eq!(h.state.wm.key_window(), Some(one));
+
+    two_client.commands.send(Cmd::GtkPresent).unwrap();
+    h.wait_until("the attention request", |_| {
+        dock.groups()
+            .iter()
+            .flatten()
+            .any(|e| *e == DockEvent::Attention("org.example.two".into()))
+    });
+    assert_eq!(h.state.wm.key_window(), Some(one), "present");
+
+    let attention = |dock: &DockClient| {
+        dock.groups()
+            .iter()
+            .flatten()
+            .filter(|e| **e == DockEvent::Attention("org.example.two".into()))
+            .count()
+    };
+    let before = attention(&dock);
+    two_client
+        .commands
+        .send(Cmd::GtkRequestFocus(None))
+        .unwrap();
+    h.wait_until("the second attention request", |_| {
+        attention(&dock) > before
+    });
+    assert_eq!(h.state.wm.key_window(), Some(one), "request_focus");
+
+    // a token the server made for a program it started is a grant, as for xdg_activation
+    let fresh = h.state.server_activation_token();
+    h.advance(1.5);
+    two_client
+        .commands
+        .send(Cmd::GtkRequestFocus(Some(fresh)))
+        .unwrap();
+    h.wait_until("the focus request with a token", |s| {
+        s.wm.key_window() != Some(one)
+    });
 }
 
 #[test]

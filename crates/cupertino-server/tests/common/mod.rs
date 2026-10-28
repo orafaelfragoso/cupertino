@@ -16,15 +16,19 @@ use cupertino_server::Cupertino;
 use smithay::reexports::calloop::EventLoop;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
-    wl_surface,
+    wl_buffer, wl_compositor, wl_keyboard, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm,
+    wl_shm_pool, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::ext::session_lock::v1::client::{
     ext_session_lock_manager_v1, ext_session_lock_surface_v1, ext_session_lock_v1,
 };
+use wayland_protocols::wp::keyboard_shortcuts_inhibit::zv1::client::{
+    zwp_keyboard_shortcuts_inhibit_manager_v1, zwp_keyboard_shortcuts_inhibitor_v1,
+};
 use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1;
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
+use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 /// Memory order of an Argb8888 pixel is blue, green, red, alpha.
 pub mod desktop;
@@ -95,6 +99,10 @@ struct LockStatus {
     finished: bool,
     /// Button presses the client's pointer received.
     presses: u32,
+    /// The `active` (true) and `inactive` (false) events of the client's keyboard shortcuts inhibitor, in order.
+    inhibitor: Vec<bool>,
+    /// The keys (evdev codes) the client's keyboard received, with whether they were pressed.
+    keys: Vec<(u32, bool)>,
 }
 
 struct ClientState {
@@ -133,7 +141,9 @@ ignore_events!(
     wl_output::WlOutput,
     xdg_toplevel::XdgToplevel,
     xdg_activation_v1::XdgActivationV1,
-    ext_session_lock_manager_v1::ExtSessionLockManagerV1
+    ext_session_lock_manager_v1::ExtSessionLockManagerV1,
+    zwp_keyboard_shortcuts_inhibit_manager_v1::ZwpKeyboardShortcutsInhibitManagerV1,
+    zwlr_layer_shell_v1::ZwlrLayerShellV1
 );
 
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for ClientState {
@@ -240,6 +250,9 @@ impl Dispatch<wl_seat::WlSeat, ()> for ClientState {
             if caps.contains(wl_seat::Capability::Pointer) {
                 seat.get_pointer(qh, ());
             }
+            if caps.contains(wl_seat::Capability::Keyboard) {
+                seat.get_keyboard(qh, ());
+            }
         }
     }
 }
@@ -259,6 +272,75 @@ impl Dispatch<wl_pointer::WlPointer, ()> for ClientState {
         } = event
         {
             state.lock_status.lock().unwrap().presses += 1;
+        }
+    }
+}
+
+/// The surface is the user data, so the configure can attach a buffer.
+impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, wl_surface::WlSurface> for ClientState {
+    fn event(
+        state: &mut Self,
+        layer: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        surface: &wl_surface::WlSurface,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let zwlr_layer_surface_v1::Event::Configure { serial, .. } = event {
+            layer.ack_configure(serial);
+            let size = (120, 80);
+            surface.attach(
+                Some(&solid_buffer(&state.shm, size, TOPLEVEL_BLUE, qh)),
+                0,
+                0,
+            );
+            surface.damage_buffer(0, 0, size.0, size.1);
+            surface.commit();
+        }
+    }
+}
+
+impl Dispatch<wl_keyboard::WlKeyboard, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        _: &wl_keyboard::WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_keyboard::Event::Key {
+            key,
+            state: wayland_client::WEnum::Value(key_state),
+            ..
+        } = event
+        {
+            state
+                .lock_status
+                .lock()
+                .unwrap()
+                .keys
+                .push((key, key_state == wl_keyboard::KeyState::Pressed));
+        }
+    }
+}
+
+impl Dispatch<zwp_keyboard_shortcuts_inhibitor_v1::ZwpKeyboardShortcutsInhibitorV1, ()>
+    for ClientState
+{
+    fn event(
+        state: &mut Self,
+        _: &zwp_keyboard_shortcuts_inhibitor_v1::ZwpKeyboardShortcutsInhibitorV1,
+        event: zwp_keyboard_shortcuts_inhibitor_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let mut status = state.lock_status.lock().unwrap();
+        match event {
+            zwp_keyboard_shortcuts_inhibitor_v1::Event::Active => status.inhibitor.push(true),
+            zwp_keyboard_shortcuts_inhibitor_v1::Event::Inactive => status.inhibitor.push(false),
+            _ => {}
         }
     }
 }
@@ -384,6 +466,74 @@ impl Client {
                 lock: None,
             }
         })
+    }
+
+    /// A client with one mapped toplevel that asks to inhibit the compositor's keyboard shortcuts for it, and records
+    /// the `active` / `inactive` events and the keys its keyboard receives.
+    pub fn inhibiting(socket: PathBuf, app_id: &'static str) -> Client {
+        Self::run(socket, move |queue, client, globals| {
+            let qh = queue.handle();
+            let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
+            let wm_base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=5, ()).unwrap();
+            let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=7, ()).unwrap();
+            let manager: zwp_keyboard_shortcuts_inhibit_manager_v1::ZwpKeyboardShortcutsInhibitManagerV1 =
+                globals.bind(&qh, 1..=1, ()).unwrap();
+            let surface = compositor.create_surface(&qh, ());
+            let xdg = wm_base.get_xdg_surface(&surface, &qh, surface.clone());
+            let toplevel = xdg.get_toplevel(&qh, ());
+            toplevel.set_app_id(app_id.to_string());
+            let inhibitor = manager.inhibit_shortcuts(&surface, &seat, &qh, ());
+            surface.commit();
+            queue.roundtrip(client).unwrap();
+            Setup {
+                objects: Box::new((wm_base, xdg, toplevel, surface, seat, manager, inhibitor)),
+                lock: None,
+            }
+        })
+    }
+
+    /// A client whose only surface is a layer surface (overlay, exclusive keyboard) that asks to inhibit the
+    /// compositor's keyboard shortcuts for it.
+    pub fn inhibiting_layer(socket: PathBuf) -> Client {
+        Self::run(socket, move |queue, client, globals| {
+            let qh = queue.handle();
+            let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
+            let layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1 =
+                globals.bind(&qh, 1..=4, ()).unwrap();
+            let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=7, ()).unwrap();
+            let manager: zwp_keyboard_shortcuts_inhibit_manager_v1::ZwpKeyboardShortcutsInhibitManagerV1 =
+                globals.bind(&qh, 1..=1, ()).unwrap();
+            let surface = compositor.create_surface(&qh, ());
+            let layer = layer_shell.get_layer_surface(
+                &surface,
+                None,
+                zwlr_layer_shell_v1::Layer::Overlay,
+                "inhibiting".to_string(),
+                &qh,
+                surface.clone(),
+            );
+            layer.set_size(120, 80);
+            layer.set_keyboard_interactivity(
+                zwlr_layer_surface_v1::KeyboardInteractivity::Exclusive,
+            );
+            let inhibitor = manager.inhibit_shortcuts(&surface, &seat, &qh, ());
+            surface.commit();
+            queue.roundtrip(client).unwrap();
+            Setup {
+                objects: Box::new((layer_shell, layer, surface, seat, manager, inhibitor)),
+                lock: None,
+            }
+        })
+    }
+
+    /// The `active` (true) and `inactive` (false) events of the shortcuts inhibitor so far.
+    pub fn inhibitor_events(&self) -> Vec<bool> {
+        self.lock_status.lock().unwrap().inhibitor.clone()
+    }
+
+    /// The keys (evdev codes) the keyboard received so far, with whether each was pressed.
+    pub fn keys(&self) -> Vec<(u32, bool)> {
+        self.lock_status.lock().unwrap().keys.clone()
     }
 
     /// A client that connects at once and maps one toplevel of `app_id` when `gate` is set, after presenting `token` for its

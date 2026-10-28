@@ -86,6 +86,22 @@ pub struct Overlays {
     pub text: OverlayText,
     /// Scripted input behaves as if the shortcut's modifiers were still held (HUD stays open).
     pub hold_modifiers: bool,
+    /// The notice that an application holds the shortcuts (`crate::shortcut_inhibit`).
+    pub shortcut_notice: Option<ShortcutNotice>,
+}
+
+/// What the notice that an application holds the shortcuts says, and where and until when it shows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShortcutNotice {
+    pub text: String,
+    /// What shows instead of `text` on an output too narrow for it: the sentence that names the release chord.
+    pub clause: String,
+    /// What shows instead of `clause` below the supported output width: the release chord alone.
+    pub short: String,
+    pub output: cupertino_wm::OutputId,
+    /// The surface whose inhibitor the notice is for; `None` for a notice no deactivation takes down.
+    pub owner: Option<smithay::reexports::wayland_server::backend::ObjectId>,
+    pub until: f64,
 }
 
 impl Overlays {
@@ -101,12 +117,16 @@ impl Overlays {
             wallpaper: crate::render::wallpaper::Wallpapers::new(assets),
             text: OverlayText::new(typography, assets)?,
             hold_modifiers: false,
+            shortcut_notice: None,
         })
     }
 
     /// Any overlay that needs frames at `now`.
     pub fn wants_tick(&self) -> bool {
-        self.inputs.wants_tick() || self.accent.is_open() || self.wallpaper.pending()
+        self.inputs.wants_tick()
+            || self.accent.is_open()
+            || self.wallpaper.pending()
+            || self.shortcut_notice.is_some()
     }
 }
 

@@ -4,7 +4,7 @@
 use std::fmt;
 
 use cupertino_geometry::Rect;
-use unicode_segmentation::UnicodeSegmentation;
+use unicode_segmentation::GraphemeCursor;
 
 use crate::{
     ChangeCause, ImeBatch, Preedit, Selection, Surrounding, TextInputSession, TextInputState,
@@ -57,18 +57,43 @@ impl Surrounding {
         };
         let last = (first + max_bytes).min(text.len());
         let first = last.saturating_sub(max_bytes).min(first);
-        let boundaries: Vec<usize> = text
-            .grapheme_indices(true)
-            .map(|(i, _)| i)
-            .chain([text.len()])
-            .collect();
-        let start = boundaries[boundaries.partition_point(|b| *b < first)];
-        let end = boundaries[boundaries.partition_point(|b| *b <= last) - 1].max(start);
+        let start = boundary_at_or_after(text, first);
+        let end = boundary_at_or_before(text, last).max(start);
         Surrounding {
             text: text[start..end].to_string(),
             cursor: cursor.clamp(start, end) - start,
             anchor: anchor.clamp(start, end) - start,
         }
+    }
+}
+
+/// The first grapheme boundary at or after `at`, found from `at` alone: the cost does not grow with the text.
+fn boundary_at_or_after(text: &str, at: usize) -> usize {
+    let mut at = at.min(text.len());
+    while !text.is_char_boundary(at) {
+        at += 1;
+    }
+    let mut cursor = GraphemeCursor::new(at, text.len(), true);
+    match cursor.is_boundary(text, 0) {
+        Ok(true) => at,
+        _ => cursor
+            .next_boundary(text, 0)
+            .ok()
+            .flatten()
+            .unwrap_or(text.len()),
+    }
+}
+
+/// The last grapheme boundary at or before `at`, found from `at` alone.
+fn boundary_at_or_before(text: &str, at: usize) -> usize {
+    let mut at = at.min(text.len());
+    while !text.is_char_boundary(at) {
+        at -= 1;
+    }
+    let mut cursor = GraphemeCursor::new(at, text.len(), true);
+    match cursor.is_boundary(text, 0) {
+        Ok(true) => at,
+        _ => cursor.prev_boundary(text, 0).ok().flatten().unwrap_or(0),
     }
 }
 
@@ -217,6 +242,42 @@ mod tests {
         assert_eq!((first.text.len(), first.cursor), (100, 0));
         let last = Surrounding::around(&text, 1000, 1000, 100);
         assert_eq!((last.text.len(), last.cursor), (100, 100));
+    }
+
+    #[test]
+    fn the_cost_of_a_window_does_not_grow_with_the_text() {
+        use std::time::Instant;
+        let small = "ab👍🏽 ".repeat(900);
+        let large = "ab👍🏽 ".repeat(120_000);
+        assert!(small.len() < 11_000 && large.len() > 1_000_000);
+        let best = |text: &str| {
+            let at = text.len() / 2 / 4 * 4;
+            let at = (0..=at).rev().find(|i| text.is_char_boundary(*i)).unwrap();
+            (0..15)
+                .map(|_| {
+                    let started = Instant::now();
+                    for _ in 0..200 {
+                        std::hint::black_box(Surrounding::around(text, at, at, 4000));
+                    }
+                    started.elapsed()
+                })
+                .min()
+                .unwrap()
+        };
+        let (small_cost, large_cost) = (best(&small), best(&large));
+        assert!(
+            large_cost < small_cost * 4,
+            "10 KB took {small_cost:?}, 1 MB took {large_cost:?}"
+        );
+    }
+
+    #[test]
+    fn a_window_cut_never_splits_a_regional_indicator_pair() {
+        let text = "🇳🇱".repeat(300);
+        let cursor = 8 * 150;
+        let around = Surrounding::around(&text, cursor, cursor, 100);
+        assert!(around.text.len().is_multiple_of(8), "{}", around.text.len());
+        assert!(text.contains(&around.text));
     }
 
     #[test]

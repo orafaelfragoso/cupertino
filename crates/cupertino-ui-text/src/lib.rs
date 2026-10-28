@@ -5,13 +5,13 @@
 
 use cupertino_geometry::Rect;
 use std::ops::Range;
+use std::sync::Arc;
 
 mod input;
 mod secure;
 
 pub use input::SURROUNDING_MAX_BYTES;
 pub use secure::SecureBuffer;
-use std::sync::Arc;
 
 /// One face of a font file: its file and collection index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -213,7 +213,7 @@ pub struct Preedit {
     pub cursor: Option<Range<usize>>,
 }
 
-/// One focused field's conversation with the input method. Every buffer change bumps `revision`; an input method
+/// One focused field's conversation with the input method. The field's owner bumps `revision` on every buffer change ([`TextInputSession::select`] does it for a selection change); an input method
 /// event that answers an older revision resets the composition instead of applying.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextInputSession {

@@ -560,14 +560,38 @@ impl KeyBindings {
         })
     }
 
-    pub fn bind(&mut self, chord: Chord, action: Action) {
+    /// Bind `chord` to `action`. Whatever the source of the binding, the person keeps a chord that releases the
+    /// shortcuts: a release chord without Ctrl, Alt or Super is refused, and so is a binding that would take the last
+    /// release chord away. Returns whether it was bound.
+    pub fn bind(&mut self, chord: Chord, action: Action) -> bool {
+        let weak = !(chord.mods.ctrl || chord.mods.alt || chord.mods.logo);
+        let last_release = action != Action::ReleaseShortcuts
+            && self
+                .entries
+                .iter()
+                .any(|(c, a)| *c == chord && *a == Action::ReleaseShortcuts)
+            && !self
+                .entries
+                .iter()
+                .any(|(c, a)| *c != chord && *a == Action::ReleaseShortcuts);
+        if (action == Action::ReleaseShortcuts && weak) || last_release {
+            return false;
+        }
         self.entries.retain(|(c, _)| *c != chord);
         self.entries.push((chord, action));
+        true
     }
 
     pub fn bind_str(&mut self, chord: &str, action: Action) -> Result<(), String> {
-        self.bind(parse_chord(chord)?, action);
-        Ok(())
+        self.bind_checked(parse_chord(chord)?, action)
+    }
+
+    fn bind_checked(&mut self, chord: Chord, action: Action) -> Result<(), String> {
+        if self.bind(chord, action) {
+            Ok(())
+        } else {
+            Err("the chord that releases the shortcuts an application holds stays bound, and takes Ctrl, Alt or Super".into())
+        }
     }
 
     /// [`KeyBindings::bind_str`] for the modifier profile `profile`.
@@ -577,8 +601,7 @@ impl KeyBindings {
         action: Action,
         profile: &str,
     ) -> Result<(), String> {
-        self.bind(parse_chord_for(chord, profile)?, action);
-        Ok(())
+        self.bind_checked(parse_chord_for(chord, profile)?, action)
     }
 
     pub fn lookup(&self, sym: u32, mods: Mods) -> Option<Action> {
@@ -2069,6 +2092,26 @@ mod tests {
                 "switch-vt-3",
             ]
         );
+    }
+
+    #[test]
+    fn the_last_release_chord_stays_and_another_usable_one_may_replace_it() {
+        let mut b = KeyBindings::default();
+        let release = parse_chord("Super+Escape").unwrap();
+        let other = parse_chord("Super+F9").unwrap();
+        assert!(
+            b.bind(release, Action::Lock),
+            "no release chord yet to lose"
+        );
+        b.bind(release, Action::ReleaseShortcuts);
+        assert!(!b.bind(release, Action::Lock));
+        assert!(!b.bind(parse_chord("Escape").unwrap(), Action::ReleaseShortcuts));
+        assert!(b.bind(other, Action::ReleaseShortcuts));
+        assert!(
+            b.bind(release, Action::Lock),
+            "another release chord is bound"
+        );
+        assert!(!b.bind(other, Action::Lock), "now the last one");
     }
 
     #[test]

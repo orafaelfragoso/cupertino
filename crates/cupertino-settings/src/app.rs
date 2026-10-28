@@ -4,17 +4,14 @@
 //! their controls commit on the moments of §7.2 and write through `cupertino-defaults` or call `org.cupertino.Session1`.
 
 use std::error::Error;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use cupertino_assets::Assets;
-use cupertino_client::{
-    Backdrop, Button, Client, Event, Modifiers as KeyModifiers, PointerEvent, SurfaceId,
-    TitlebarStyle, ToplevelConfig,
-};
 use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_defaults::watch::{ConfigWatcher, WatchEvent};
 use cupertino_filepicker::Mode;
 use cupertino_geometry::Rect as PopupRect;
+use cupertino_protocol_app::{AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop};
 use cupertino_settings::agent::{Agent, AgentEvent};
 use cupertino_settings::controls::{self, Control, Press, Value};
 use cupertino_settings::form::{self, RowSpec, SectionLayout, SectionSpec};
@@ -37,6 +34,13 @@ use cupertino_settings::window::{self, metrics, Hit, WindowLayout};
 use cupertino_settings::{PaneId, Point, Size};
 use cupertino_text_field::{KeyInput, Keymap, Response, TextField};
 use cupertino_theme::{Appearance, Theme, WindowCornerSize};
+use cupertino_ui_wayland::clipboard::Clipboard;
+use cupertino_ui_wayland::popup::placement;
+use cupertino_ui_wayland::{Ready, ShmPresenter};
+use cupertino_wayland_client::{
+    Button, Connection, Decorations, Event, KeyboardEvent, Modifiers as KeyModifiers, PointerEvent,
+    Popup, SurfaceId, Toplevel, ToplevelConfig, WindowConfigure,
+};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -55,7 +59,8 @@ const WIDTH_FACTOR: f64 = 1.0;
 
 /// A pop-up button's open menu of choices.
 struct ChoiceMenu {
-    surface: SurfaceId,
+    popup: Popup,
+    presenter: ShmPresenter,
     backdrop: Backdrop,
     id: ControlId,
     choices: Vec<String>,
@@ -74,16 +79,112 @@ struct SliderDrag {
 
 /// The open results popup.
 struct Results {
-    surface: SurfaceId,
+    popup: Popup,
+    presenter: ShmPresenter,
     backdrop: Backdrop,
     /// The size it was created or last moved with.
     size: (f64, f64),
     hovered: Option<usize>,
 }
 
+/// The application window: its role, its frames and the states of its last configure.
+struct Window {
+    toplevel: Toplevel,
+    presenter: ShmPresenter,
+    /// The size asked for, kept until a configure sets one.
+    requested: (u32, u32),
+    activated: bool,
+    maximized: bool,
+}
+
+impl Window {
+    /// Open a window with the server's title bar in the unified style; `size` and `min_size` in points.
+    fn open(
+        conn: &mut Connection,
+        effects: &AppEffects,
+        title: String,
+        size: (u32, u32),
+        min_size: (u32, u32),
+    ) -> Result<Window> {
+        let toplevel = conn.toplevel(&ToplevelConfig {
+            app_id: APP_ID.into(),
+            title,
+            min_size: Some(min_size),
+            max_size: None,
+            decorations: Decorations::Server,
+        })?;
+        effects.unify_titlebar(conn, toplevel.surface())?;
+        Ok(Window {
+            toplevel,
+            presenter: ShmPresenter::new(toplevel.surface()),
+            requested: size,
+            activated: false,
+            maximized: false,
+        })
+    }
+
+    /// Take a configure: its states, and its size where it sets one.
+    fn configure(&mut self, configure: &WindowConfigure) -> Result<()> {
+        // the toolkit draws no title bar of its own: an undecorated window could not be moved or closed
+        if configure.decorations != Decorations::Server {
+            return Err("the server refused server-side decorations".into());
+        }
+        self.activated = configure.states.activated;
+        self.maximized = configure.states.maximized;
+        let current = self.presenter.size().unwrap_or(self.requested);
+        self.presenter
+            .configured(configured_size(configure.size, current));
+        Ok(())
+    }
+
+    /// The logical size of the last configure.
+    fn size(&self) -> Result<(u32, u32)> {
+        Ok(self
+            .presenter
+            .size()
+            .ok_or("the window has no size before its first configure")?)
+    }
+}
+
+/// The size a window takes from its configure: a zero or missing extent leaves it to the client, which keeps the
+/// `current` one.
+fn configured_size(asked: Option<(u32, u32)>, current: (u32, u32)) -> (u32, u32) {
+    let (width, height) = asked.unwrap_or((0, 0));
+    (
+        if width == 0 { current.0 } else { width },
+        if height == 0 { current.1 } else { height },
+    )
+}
+
+/// The presenters of the window, the results popup and the open menu.
+fn presenters<'a>(
+    window: &'a mut Window,
+    results: &'a mut Option<Results>,
+    menu: &'a mut Option<ChoiceMenu>,
+) -> impl Iterator<Item = &'a mut ShmPresenter> {
+    std::iter::once(&mut window.presenter)
+        .chain(results.iter_mut().map(|r| &mut r.presenter))
+        .chain(menu.iter_mut().map(|m| &mut m.presenter))
+}
+
+/// The value an extension event of the public protocols carries.
+fn app_event(event: &Event) -> Option<AppEvent> {
+    match event {
+        Event::Extension(event) => event.downcast_ref::<AppEvent>().copied(),
+        _ => None,
+    }
+}
+
 struct App {
-    client: Client,
-    window: SurfaceId,
+    conn: Connection,
+    effects: AppEffects,
+    /// Reports the session's appearance and display options while it lives.
+    _appearance: AppearanceObserver,
+    /// The session's appearance and display options, as last reported.
+    session_dark: bool,
+    display: DisplayOptions,
+    clipboard: Clipboard,
+    window: Window,
     sidebar: Backdrop,
     theme: Theme,
     palette: Palette,
@@ -203,7 +304,7 @@ pub fn run(pane: PaneId) -> Result<()> {
     // one process per session: a second start hands its pane to the first and ends (§8); before the window, so it
     // needs no display
     let (sender, background) = std::sync::mpsc::channel();
-    let waker = std::sync::Arc::new(std::sync::OnceLock::<cupertino_client::Waker>::new());
+    let waker = std::sync::Arc::new(std::sync::OnceLock::<cupertino_wayland_client::Waker>::new());
     let wake = waker.clone();
     let notify: Notify = std::sync::Arc::new(move |event| {
         // the window loop owns the receiver until it ends; what arrives after that has no window. What arrives before
@@ -230,21 +331,42 @@ pub fn run(pane: PaneId) -> Result<()> {
     let assets = Assets::discover();
     let theme = Theme::load()?;
     let painter = Painter::new(&assets)?;
-    let mut client = Client::connect()?;
-    assert!(waker.set(client.waker()).is_ok(), "the waker is set once");
+    let mut conn =
+        Connection::connect().map_err(|e| format!("cannot connect to the display server: {e}"))?;
+    assert!(waker.set(conn.waker()).is_ok(), "the waker is set once");
+    let effects = AppEffects::bind(&mut conn).ok_or("the server lacks cupertino_app_effects_v1")?;
+    // the session's appearance at connect is read before the window draws
+    let appearance = effects.appearance(&conn);
+    conn.roundtrip()?;
+    let (mut dark, mut display) = (false, DisplayOptions::default());
+    let early: Vec<Event> = conn
+        .wait(Some(Duration::ZERO))?
+        .into_iter()
+        .filter(|event| match app_event(event) {
+            Some(AppEvent::Appearance { dark: d }) => {
+                dark = d;
+                false
+            }
+            Some(AppEvent::DisplayOptions(options)) => {
+                display = options;
+                false
+            }
+            _ => true,
+        })
+        .collect();
     let size = window::default_size(WIDTH_FACTOR);
-    let window = client.toplevel(&ToplevelConfig {
-        app_id: APP_ID.into(),
-        title: pane.pane().title.into(),
-        size: (size.w as u32, size.h as u32),
+    let window = Window::open(
+        &mut conn,
+        &effects,
+        pane.pane().title.into(),
+        (size.w as u32, size.h as u32),
         // the width is fixed by the content; the height's minimum is approximate (O6)
-        min_size: (size.w as u32, metrics::MIN_HEIGHT as u32),
-        titlebar: TitlebarStyle::Unified,
-    })?;
-    let sidebar = client.backdrop(window)?;
+        (size.w as u32, metrics::MIN_HEIGHT as u32),
+    )?;
+    let sidebar = effects.backdrop(&conn, window.toplevel.surface())?;
     sidebar.set_material(SIDEBAR_MATERIAL);
     // the dock's default tile size depends on the height of the display it sits on
-    let display_height = client
+    let display_height = conn
         .outputs()
         .into_iter()
         .find_map(|o| o.geometry.map(|g| f64::from(g.height)))
@@ -273,8 +395,13 @@ pub fn run(pane: PaneId) -> Result<()> {
         }
     };
     let mut app = App {
-        palette: palette(&theme, client.is_dark(), client.display_options())?,
-        client,
+        palette: palette(&theme, dark, display)?,
+        conn,
+        effects,
+        _appearance: appearance,
+        session_dark: dark,
+        display,
+        clipboard: Clipboard::default(),
         window,
         sidebar,
         theme,
@@ -301,7 +428,7 @@ pub fn run(pane: PaneId) -> Result<()> {
         form_height: 0.0,
         drag: None,
         menu: None,
-        dark: false,
+        dark,
         bus: None,
         services: Services::new(),
         live: Live::default(),
@@ -320,12 +447,11 @@ pub fn run(pane: PaneId) -> Result<()> {
         _files: files,
         _instance: instance,
     };
-    app.dark = app.client.is_dark();
     app.sync_accessibility();
     app.enter_pane(None, pane)?;
+    let mut events = early;
     loop {
-        let timeout = app.timeout();
-        for event in app.client.wait(Some(timeout))? {
+        for event in events {
             if !app.handle(event)? {
                 app.leave_pane(app.content_pane);
                 return Ok(());
@@ -335,6 +461,8 @@ pub fn run(pane: PaneId) -> Result<()> {
             app.background_event(event)?;
         }
         app.tick()?;
+        app.present()?;
+        events = app.conn.wait(Some(app.timeout()))?;
     }
 }
 
@@ -342,71 +470,115 @@ impl App {
     /// React to one event; `false` once the window is to close.
     fn handle(&mut self, event: Event) -> Result<bool> {
         match event {
-            // a draw follows every configure and scale change
-            Event::Configured { .. } | Event::ScaleChanged { .. } => {}
-            Event::Draw(surface) if Some(surface) == self.results.as_ref().map(|r| r.surface) => {
-                self.draw_results()?
+            Event::Configure { configure, .. } => self.window.configure(&configure)?,
+            Event::PopupConfigure { popup, configure } => {
+                let size = (configure.width, configure.height);
+                if let Some(r) = self.results.as_mut().filter(|r| r.popup == popup) {
+                    r.presenter.configured(size);
+                }
+                if let Some(m) = self.menu.as_mut().filter(|m| m.popup == popup) {
+                    m.presenter.configured(size);
+                }
             }
-            Event::Draw(surface) if Some(surface) == self.menu.as_ref().map(|m| m.surface) => {
-                self.draw_menu()?
+            Event::Frame(frame) => {
+                if let Some(presenter) =
+                    presenters(&mut self.window, &mut self.results, &mut self.menu)
+                        .find(|p| p.surface() == frame.surface)
+                {
+                    presenter.frame_done();
+                }
             }
-            Event::Draw(_) => self.draw()?,
-            Event::Closed(_) => return Ok(false),
-            Event::Pointer { surface, event }
-                if Some(surface) == self.results.as_ref().map(|r| r.surface) =>
-            {
+            Event::Close(_) => return Ok(false),
+            Event::Pointer { surface, event } if Some(surface) == self.results_surface() => {
                 self.results_pointer(event)?
             }
-            Event::Pointer { surface, event }
-                if Some(surface) == self.menu.as_ref().map(|m| m.surface) =>
-            {
+            Event::Pointer { surface, event } if Some(surface) == self.menu_surface() => {
                 self.menu_pointer(event)?
             }
             Event::Pointer { event, .. } => self.pointer(event)?,
-            Event::Key {
-                key,
-                pressed: true,
-                mods,
-                character,
+            Event::Keyboard {
+                event:
+                    KeyboardEvent::Key {
+                        code,
+                        pressed: true,
+                        mods,
+                        character,
+                        ..
+                    },
                 ..
-            } => self.key(key, mods, character)?,
-            Event::Key { .. } | Event::KeyboardLeave(_) => {}
-            Event::Appearance { dark } => {
-                self.dark = dark;
-                self.palette = palette(&self.theme, dark, self.client.display_options())?;
-                self.close_menu()?;
-                self.redraw()?;
-            }
-            Event::DisplayOptions(options) => {
-                self.palette = palette(&self.theme, self.client.is_dark(), options)?;
-                self.redraw()?;
-            }
+            } => self.key(code, mods, character)?,
+            Event::Keyboard { .. } => {}
+            Event::Selection(offer) => self.clipboard.selection_changed(offer),
+            Event::Extension(_) => match app_event(&event) {
+                Some(AppEvent::Appearance { dark }) => {
+                    self.session_dark = dark;
+                    self.dark = dark;
+                    self.palette = palette(&self.theme, dark, self.display)?;
+                    self.close_menu()?;
+                    self.redraw();
+                }
+                Some(AppEvent::DisplayOptions(options)) => {
+                    self.display = options;
+                    self.palette = palette(&self.theme, self.session_dark, options)?;
+                    self.redraw();
+                }
+                Some(AppEvent::ScrollCount { .. }) | None => {}
+            },
             // the server dismissed the popup (a click outside it): the field keeps its text
-            Event::PopupDone(surface) => {
+            Event::PopupDone(popup) => {
                 // a click on another client or the desktop ends the search, so the field is never open without its
                 // popup. The click itself reaches what it hit (the grab forwards it); a click in this window keeps the
                 // grab and reaches the window directly.
-                if self.results.as_ref().is_some_and(|r| r.surface == surface) {
+                if self.results.as_ref().is_some_and(|r| r.popup == popup) {
                     self.search.clear();
                     self.close_results()?;
-                    self.client.request_redraw(self.window)?;
+                    self.window.presenter.request_redraw();
                 }
-                if self.menu.as_ref().is_some_and(|m| m.surface == surface) {
+                if self.menu.as_ref().is_some_and(|m| m.popup == popup) {
                     self.close_menu()?;
                 }
             }
-            Event::OutputsChanged
-            | Event::SessionLock { .. }
-            | Event::LockRequested { .. }
-            | Event::LogOutRequested
-            | Event::ActivationToken { .. } => {}
-            Event::MenuBar { .. } | Event::Dock { .. } => {
-                return Err(
-                    "an event for a menu bar or dock arrived, and this process has none".into(),
-                )
-            }
+            // the scale is read when polling the presenters
+            Event::ScaleChanged { .. } | Event::OutputsChanged | Event::ActivationToken { .. } => {}
         }
         Ok(true)
+    }
+
+    fn results_surface(&self) -> Option<SurfaceId> {
+        self.results.as_ref().map(|r| r.popup.surface())
+    }
+
+    fn menu_surface(&self) -> Option<SurfaceId> {
+        self.menu.as_ref().map(|m| m.popup.surface())
+    }
+
+    /// Draw every surface that can take a frame, until none can.
+    fn present(&mut self) -> Result<()> {
+        loop {
+            let mut ready = Vec::new();
+            for presenter in presenters(&mut self.window, &mut self.results, &mut self.menu) {
+                loop {
+                    match presenter.poll(&self.conn)? {
+                        // a draw follows every scale change
+                        Ready::ScaleChanged(_) => {}
+                        Ready::Draw => break ready.push(presenter.surface()),
+                        Ready::Idle => break,
+                    }
+                }
+            }
+            if ready.is_empty() {
+                return Ok(());
+            }
+            for surface in ready {
+                if surface == self.window.toplevel.surface() {
+                    self.draw()?;
+                } else if Some(surface) == self.results_surface() {
+                    self.draw_results()?;
+                } else if Some(surface) == self.menu_surface() {
+                    self.draw_menu()?;
+                }
+            }
+        }
     }
 
     fn now(&self) -> f64 {
@@ -436,7 +608,7 @@ impl App {
         if self.focus == Focus::Search
             && self.search.field().caret_visible(Instant::now()) != self.caret_drawn
         {
-            self.client.request_redraw(self.window)?;
+            self.window.presenter.request_redraw();
         }
         let now = self.now();
         if let Some((section, row, _, mut writer)) = self.level.take() {
@@ -501,7 +673,7 @@ impl App {
             _ => {}
         }
         if self.live != before {
-            self.client.request_redraw(self.window)?;
+            self.window.presenter.request_redraw();
         }
         Ok(())
     }
@@ -538,7 +710,7 @@ impl App {
                     eprintln!("cupertino-settings: Bluetooth discovery: {e}");
                 }
             }
-            self.client.request_redraw(self.window)?;
+            self.window.presenter.request_redraw();
         }
         Ok(())
     }
@@ -557,17 +729,16 @@ impl App {
         }
     }
 
-    fn redraw(&mut self) -> Result<()> {
-        self.client.request_redraw(self.window)?;
-        if let Some(r) = &self.results {
-            self.client.request_redraw(r.surface)?;
+    fn redraw(&mut self) {
+        self.window.presenter.request_redraw();
+        if let Some(r) = &mut self.results {
+            r.presenter.request_redraw();
         }
-        Ok(())
     }
 
     fn draw(&mut self) -> Result<()> {
-        let (width, height) = self.client.size(self.window)?;
-        let active = self.client.toplevel_activated(self.window)?;
+        let (width, height) = self.window.size()?;
+        let active = self.window.activated;
         let layout = WindowLayout::new(
             Size {
                 w: f64::from(width),
@@ -625,7 +796,7 @@ impl App {
         let search_focused = self.focus == Focus::Search;
         let caret = search_focused && active && self.search.field().caret_visible(Instant::now());
         let App {
-            client,
+            conn,
             window,
             painter,
             palette,
@@ -644,8 +815,8 @@ impl App {
             dragging,
         };
         let content = layout.content;
-        client.draw(*window, |pm, scale| {
-            let offsets = painter.search_offsets(search.field(), scale.factor(), palette);
+        window.presenter.draw(conn, None, |pm, scale| {
+            let offsets = painter.search_offsets(search.field(), scale.factor() as f32, palette);
             let area = search_text_area(&layout.search, !search.text().is_empty());
             let caret_x = caret_x(search.field(), &offsets);
             let text_width = offsets.last().copied().unwrap_or(0.0);
@@ -660,11 +831,11 @@ impl App {
                 search_focused,
                 search_caret: caret,
             };
-            painter.paint_window(pm, scale.factor(), &layout, &state, &view, palette);
+            painter.paint_window(pm, scale.factor() as f32, &layout, &state, &view, palette);
             if let Some(sheet) = sheet.as_ref() {
                 painter.paint_sheet(
                     pm,
-                    scale.factor(),
+                    scale.factor() as f32,
                     sheet,
                     &sheet.layout(&content),
                     &content,
@@ -685,16 +856,18 @@ impl App {
         };
         let rows = popup::rows(self.search.results().len(), r.size.0, RowSize::default());
         let App {
-            client,
+            conn,
             painter,
             palette,
             search,
             results,
             ..
         } = self;
-        let r = results.as_ref().expect("checked above");
-        client.draw(r.surface, |pm, scale| {
-            painter.paint_popup(pm, scale.factor(), search, &rows, r.hovered, palette)
+        let Results {
+            presenter, hovered, ..
+        } = results.as_mut().expect("checked above");
+        presenter.draw(conn, None, |pm, scale| {
+            painter.paint_popup(pm, scale.factor() as f32, search, &rows, *hovered, palette)
         })?;
         Ok(())
     }
@@ -709,9 +882,9 @@ impl App {
         self.close_menu()?;
         let pane = self.history.current();
         self.showing = pane;
-        self.client
-            .set_title(self.window, pane.title(self.live.has_battery()))?;
-        self.client.request_redraw(self.window)?;
+        self.conn
+            .set_title(self.window.toplevel, pane.title(self.live.has_battery()))?;
+        self.window.presenter.request_redraw();
         Ok(())
     }
 
@@ -767,9 +940,9 @@ impl App {
                             &self.search_offsets,
                             p.x - area.x + self.search.field().scroll(),
                         );
-                        let extend = self.client.modifiers().shift;
+                        let extend = self.conn.modifiers().shift;
                         self.search.edit(|f| f.press(index, extend, Instant::now()));
-                        self.client.request_redraw(self.window)?;
+                        self.window.presenter.request_redraw();
                     }
                     Hit::Row(pane) => {
                         // the selection fill shows on the press; the history push waits for the release (approximate)
@@ -795,14 +968,14 @@ impl App {
                     y: position.y,
                 };
                 if sheet.hover(&l, Some(p)) {
-                    self.client.request_redraw(self.window)?;
+                    self.window.presenter.request_redraw();
                 }
             }
             PointerEvent::Leave if self.sheet.is_some() => {
                 let sheet = self.sheet.as_mut().expect("checked by the guard");
                 let l = sheet.layout(&layout.content);
                 if sheet.hover(&l, None) {
-                    self.client.request_redraw(self.window)?;
+                    self.window.presenter.request_redraw();
                 }
             }
             PointerEvent::Scroll { dy, position, .. } if self.sheet.is_some() => {
@@ -813,7 +986,7 @@ impl App {
                     y: position.y,
                 };
                 if sheet.scroll(&l, p, dy) {
-                    self.client.request_redraw(self.window)?;
+                    self.window.presenter.request_redraw();
                 }
             }
             PointerEvent::Motion(position) if self.search.field().is_dragging() => {
@@ -823,7 +996,7 @@ impl App {
                     position.x - area.x + self.search.field().scroll(),
                 );
                 self.search.edit(|f| f.drag_to(index));
-                self.client.request_redraw(self.window)?;
+                self.window.presenter.request_redraw();
             }
             PointerEvent::Button {
                 button: Button::Left,
@@ -842,7 +1015,7 @@ impl App {
                 if let Some(v) = write {
                     self.level_write(section, row, v)?;
                 }
-                self.client.request_redraw(self.window)?;
+                self.window.presenter.request_redraw();
             }
             PointerEvent::Button {
                 button: Button::Left,
@@ -862,7 +1035,7 @@ impl App {
                     };
                     d.shown = controls::drag(stops, &frame, position.x);
                     self.drag = Some(d);
-                    self.client.request_redraw(self.window)?;
+                    self.window.presenter.request_redraw();
                 }
             }
             PointerEvent::Scroll { dy, position, .. }
@@ -873,7 +1046,7 @@ impl App {
             {
                 self.scroll =
                     (self.scroll + dy).clamp(0.0, (self.form_height - layout.content.h).max(0.0));
-                self.client.request_redraw(self.window)?;
+                self.window.presenter.request_redraw();
             }
             PointerEvent::Button {
                 button: Button::Left,
@@ -917,9 +1090,10 @@ impl App {
             .is_some_and(|last| now.duration_since(last).as_secs_f64() <= 0.5);
         self.last_titlebar_press = (!double).then_some(now);
         if double {
-            self.client.toplevel_toggle_maximized(self.window)?;
+            self.conn
+                .set_maximized(self.window.toplevel, !self.window.maximized)?;
         } else {
-            self.client.toplevel_move(self.window)?;
+            self.conn.start_move(self.window.toplevel)?;
         }
         Ok(())
     }
@@ -934,7 +1108,7 @@ impl App {
                 self.search.edit(TextField::select_all);
             }
             self.focus = focus;
-            self.client.request_redraw(self.window)?;
+            self.window.presenter.request_redraw();
         }
         Ok(())
     }
@@ -1018,11 +1192,11 @@ impl App {
                     Response::Ignored => return Ok(()),
                     Response::Moved | Response::Edited => {}
                     Response::Copy(text) | Response::Cut(text) => {
-                        if let Err(e) = self.client.set_clipboard_text(text) {
+                        if let Err(e) = self.clipboard.set_text(&mut self.conn, text) {
                             eprintln!("cupertino-settings: copy: {e}");
                         }
                     }
-                    Response::Paste => match self.client.clipboard_text() {
+                    Response::Paste => match self.clipboard.text(&mut self.conn) {
                         Ok(Some(text)) => self.search.edit(|f| f.paste(&text)),
                         Ok(None) => {}
                         Err(e) => eprintln!("cupertino-settings: paste: {e}"),
@@ -1039,7 +1213,7 @@ impl App {
             }
         }
         self.sync_results()?;
-        self.client.request_redraw(self.window)?;
+        self.window.presenter.request_redraw();
         Ok(())
     }
 
@@ -1059,20 +1233,24 @@ impl App {
         // pinned under the search field, left edges aligned (approximate, §5)
         let rect = PopupRect::new(layout.search.x, layout.search.bottom(), size.0, size.1);
         match &mut self.results {
-            Some(r) if r.size == size => self.client.request_redraw(r.surface)?,
+            Some(r) if r.size == size => r.presenter.request_redraw(),
             Some(r) => {
                 r.size = size;
-                self.client.reposition_popup(r.surface, &rect)?;
+                self.conn
+                    .reposition_popup(r.popup, &placement(&rect, true)?)?;
                 r.backdrop
                     .set_shape(&PopupRect::new(0.0, 0.0, size.0, size.1), popup::RADIUS)?;
             }
             None => {
-                let surface = self.client.popup(self.window, &rect)?;
-                let backdrop = self.client.backdrop(surface)?;
+                let popup = self
+                    .conn
+                    .popup(self.window.toplevel.surface(), &placement(&rect, true)?)?;
+                let backdrop = self.effects.backdrop(&self.conn, popup.surface())?;
                 backdrop.set_material(POPUP_MATERIAL);
                 backdrop.set_shape(&PopupRect::new(0.0, 0.0, size.0, size.1), popup::RADIUS)?;
                 self.results = Some(Results {
-                    surface,
+                    popup,
+                    presenter: ShmPresenter::new(popup.surface()),
                     backdrop,
                     size,
                     hovered: None,
@@ -1085,7 +1263,7 @@ impl App {
     fn close_results(&mut self) -> Result<()> {
         if let Some(r) = self.results.take() {
             drop(r.backdrop);
-            self.client.destroy_surface(r.surface)?;
+            self.conn.destroy(r.popup.surface())?;
         }
         Ok(())
     }
@@ -1100,12 +1278,12 @@ impl App {
                 let hovered = popup_hit(&rows, self.search.results(), p.x, p.y);
                 if hovered != r.hovered {
                     r.hovered = hovered;
-                    self.client.request_redraw(r.surface)?;
+                    r.presenter.request_redraw();
                 }
             }
             PointerEvent::Leave => {
                 r.hovered = None;
-                self.client.request_redraw(r.surface)?;
+                r.presenter.request_redraw();
             }
             PointerEvent::Button {
                 button: Button::Left,
@@ -1134,7 +1312,7 @@ impl App {
             &self.settings,
             Session {
                 dark: self.dark,
-                display: self.client.display_options(),
+                display: self.display,
             },
             &self.live,
         );
@@ -1176,7 +1354,7 @@ impl App {
                         if let Some(v) = write {
                             self.level_write(si, ri, v)?;
                         }
-                        self.client.request_redraw(self.window)?;
+                        self.window.presenter.request_redraw();
                         return Ok(());
                     }
                     Some(Press::Commit(value)) => return self.commit(row.id, value),
@@ -1186,7 +1364,7 @@ impl App {
                             row: ri,
                             shown,
                         });
-                        self.client.request_redraw(self.window)?;
+                        self.window.presenter.request_redraw();
                         return Ok(());
                     }
                     Some(Press::OpenMenu) => {
@@ -1211,7 +1389,7 @@ impl App {
             eprintln!("cupertino-settings: the settings could not be read: {e}");
             self.errors
                 .push((id, "The settings could not be read.".to_string()));
-            self.client.request_redraw(self.window)?;
+            self.window.presenter.request_redraw();
             return Ok(());
         }
         self.sync_accessibility();
@@ -1273,7 +1451,7 @@ impl App {
                 break;
             }
         }
-        self.client.request_redraw(self.window)?;
+        self.window.presenter.request_redraw();
         Ok(())
     }
 
@@ -1348,7 +1526,7 @@ impl App {
                 },
             },
         }
-        self.client.request_redraw(self.window)?;
+        self.window.presenter.request_redraw();
         Ok(())
     }
 
@@ -1485,13 +1663,13 @@ impl App {
                 // a new question replaces an open one: its pairing is over (the daemon pairs one device at a time)
                 self.sheet = Some(Sheet::pairing(id, &device, prompt));
                 self.agent_answer = answer.map(|a| (id, a));
-                self.client.request_redraw(self.window)?;
+                self.window.presenter.request_redraw();
             }
             Background::Agent(AgentEvent::Cancel(id)) => {
                 if self.sheet.as_ref().and_then(Sheet::pairing_id) == Some(id) {
                     self.sheet = None;
                     self.agent_answer = None;
-                    self.client.request_redraw(self.window)?;
+                    self.window.presenter.request_redraw();
                 }
             }
             Background::Pictures { key, files } => {
@@ -1518,7 +1696,7 @@ impl App {
                         n => pictures.folders[n - 1].1 = files,
                     }
                     self.ask_thumbnails(images);
-                    self.client.request_redraw(self.window)?;
+                    self.window.presenter.request_redraw();
                 }
             }
             Background::Listing(listing) => {
@@ -1529,12 +1707,12 @@ impl App {
                 }
                 if let Some(sheet) = self.sheet.as_mut() {
                     sheet.apply_listing(listing);
-                    self.client.request_redraw(self.window)?;
+                    self.window.presenter.request_redraw();
                 }
             }
             Background::Thumbnail { image, thumbnail } => {
                 if self.painter.set_thumbnail(&image, &thumbnail) {
-                    self.client.request_redraw(self.window)?;
+                    self.window.presenter.request_redraw();
                 }
             }
             Background::Files(WatchEvent::Changed(_)) => {
@@ -1542,7 +1720,7 @@ impl App {
                     eprintln!("cupertino-settings: the settings could not be read again: {e}");
                 }
                 self.sync_accessibility();
-                self.client.request_redraw(self.window)?;
+                self.window.presenter.request_redraw();
             }
             Background::Files(WatchEvent::Error(e)) => {
                 eprintln!("cupertino-settings: watching the settings files: {e}")
@@ -1555,7 +1733,7 @@ impl App {
                 }
                 let now = self.now();
                 self.refresh(now)?;
-                self.client.request_redraw(self.window)?;
+                self.window.presenter.request_redraw();
             }
         }
         Ok(())
@@ -1661,12 +1839,15 @@ impl App {
         self.close_menu()?;
         let (_, size) = menu_rows(choices.len());
         let rect = PopupRect::new(frame.x, frame.bottom() + 2.0, size.0, size.1);
-        let surface = self.client.popup(self.window, &rect)?;
-        let backdrop = self.client.backdrop(surface)?;
+        let popup = self
+            .conn
+            .popup(self.window.toplevel.surface(), &placement(&rect, true)?)?;
+        let backdrop = self.effects.backdrop(&self.conn, popup.surface())?;
         backdrop.set_material(POPUP_MATERIAL);
         backdrop.set_shape(&PopupRect::new(0.0, 0.0, size.0, size.1), 6.0)?;
         self.menu = Some(ChoiceMenu {
-            surface,
+            popup,
+            presenter: ShmPresenter::new(popup.surface()),
             backdrop,
             id,
             choices,
@@ -1680,29 +1861,36 @@ impl App {
     fn close_menu(&mut self) -> Result<()> {
         if let Some(m) = self.menu.take() {
             drop(m.backdrop);
-            self.client.destroy_surface(m.surface)?;
+            self.conn.destroy(m.popup.surface())?;
         }
         Ok(())
     }
 
     fn draw_menu(&mut self) -> Result<()> {
         let App {
-            client,
+            conn,
             painter,
             palette,
             menu,
             ..
         } = self;
-        let Some(m) = menu.as_ref() else {
+        let Some(ChoiceMenu {
+            presenter,
+            choices,
+            selected,
+            hovered,
+            ..
+        }) = menu.as_mut()
+        else {
             return Ok(());
         };
-        client.draw(m.surface, |pm, scale| {
+        presenter.draw(conn, None, |pm, scale| {
             painter.paint_menu(
                 pm,
-                scale.factor(),
-                &m.choices,
-                m.selected,
-                m.hovered,
+                scale.factor() as f32,
+                choices,
+                *selected,
+                *hovered,
                 palette,
             )
         })?;
@@ -1733,7 +1921,7 @@ impl App {
         ) {
             menu::Outcome::Highlight(i) => {
                 m.hovered = Some(i);
-                self.client.request_redraw(m.surface)?;
+                m.presenter.request_redraw();
             }
             menu::Outcome::Choose(i) => {
                 let id = m.id;
@@ -1757,12 +1945,12 @@ impl App {
                 let hovered = at(p.x, p.y);
                 if hovered != m.hovered {
                     m.hovered = hovered;
-                    self.client.request_redraw(m.surface)?;
+                    m.presenter.request_redraw();
                 }
             }
             PointerEvent::Leave => {
                 m.hovered = None;
-                self.client.request_redraw(m.surface)?;
+                m.presenter.request_redraw();
             }
             PointerEvent::Button {
                 button: Button::Left,
@@ -1790,4 +1978,17 @@ fn caret_x(field: &TextField, offsets: &[f64]) -> f64 {
         .and_then(|i| offsets.get(i))
         .copied()
         .unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_zero_or_missing_extent_in_a_configure_keeps_the_current_size() {
+        assert_eq!(configured_size(None, (920, 436)), (920, 436));
+        assert_eq!(configured_size(Some((0, 0)), (920, 436)), (920, 436));
+        assert_eq!(configured_size(Some((1200, 0)), (920, 436)), (1200, 436));
+        assert_eq!(configured_size(Some((640, 480)), (920, 436)), (640, 480));
+    }
 }

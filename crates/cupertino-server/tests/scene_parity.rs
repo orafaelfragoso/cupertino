@@ -283,3 +283,54 @@ fn two_outputs_match_with_the_second_off_the_device_pixel_grid() {
         compare_on(&mut d, &format!("second output at {ms} ms"), 1);
     }
 }
+
+#[test]
+fn the_power_dim_matches_while_it_ramps_and_when_asleep() {
+    use cupertino_defaults::power::{PowerSettings, SourceTimers, Timer};
+    use cupertino_server::display_power::RAMP_S;
+    const SLEEP_S: f64 = 30.0;
+    let timers = SourceTimers {
+        display_sleep: Timer::After(std::time::Duration::from_secs(SLEEP_S as u64)),
+        system_sleep: Timer::Never,
+    };
+    let config = cupertino_server::config::Config {
+        power: PowerSettings {
+            ac: timers,
+            battery: timers,
+            require_password_after: Timer::Never,
+            ..PowerSettings::default()
+        },
+        ..cupertino_server::config::Config::default()
+    };
+    let display = headless::HeadlessDisplay {
+        name: "headless-1".into(),
+        size: (1000, 700),
+        physical_mm: (0, 0),
+    };
+    for scale in [1.0, 1.5] {
+        let mut d = Desktop::configured(config.clone(), std::slice::from_ref(&display), scale);
+        d.window();
+        d.state.fixed_time = Some(1000.0);
+        d.state.power.set_on_battery(false);
+        d.state.input_activity();
+        // the dim starts 15 s before the display sleeps and ramps for RAMP_S
+        let dim = 1000.0 + SLEEP_S - 15.0;
+        for t in [
+            1001.0,
+            dim + RAMP_S / 2.0,
+            dim + RAMP_S + 0.1,
+            1000.0 + SLEEP_S + 1.0,
+        ] {
+            d.state.fixed_time = Some(t);
+            for _ in 0..3 {
+                d.pump();
+            }
+            assert_eq!(
+                d.state.power_overlay_alpha().is_some(),
+                t > dim + RAMP_S,
+                "the dim overlay at {t} s"
+            );
+            compare(&mut d, &format!("power at {t} s, {scale}x"));
+        }
+    }
+}

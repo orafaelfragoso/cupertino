@@ -1178,6 +1178,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-scene"
+version = "0.1.0"
+dependencies = [
+ "cupertino-effects",
+ "cupertino-geometry",
+]
+
+[[package]]
 name = "cupertino-screenshot"
 version = "0.1.0"
 dependencies = [
@@ -1239,6 +1247,7 @@ dependencies = [
  "cupertino-overview",
  "cupertino-peer",
  "cupertino-protocols",
+ "cupertino-scene",
  "cupertino-seat",
  "cupertino-stage",
  "cupertino-test-bus",

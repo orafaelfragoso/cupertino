@@ -11,7 +11,7 @@ use crate::extras::{ExtraKind, Extras, SystemRow};
 use crate::fallback::{self, Chords, FallbackAction, WindowRow};
 use crate::item::{ItemId, MenuItem, Shortcut, ShortcutModifier};
 use crate::layout::{BarContent, StatusEntry};
-use crate::merge::{Export, Exporter};
+use crate::merge::{self, Export, Exporter};
 use crate::raster::{PRIVACY_DOT_PT, STATUS_ICON_PT};
 use crate::recent::RecentItems;
 use crate::source::{GtkMenuProps, KdeAppMenu, MenuSource, MenuSourceMap, WindowKey};
@@ -305,6 +305,7 @@ impl BarFeed {
             tree,
             exporter,
             names: [&app.name, id_name],
+            class: merge::client_class(&self.app_id),
         })
     }
 

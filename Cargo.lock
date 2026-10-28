@@ -1021,6 +1021,7 @@ dependencies = [
  "cupertino-defaults",
  "cupertino-geometry",
  "cupertino-icons",
+ "cupertino-keyboard",
  "cupertino-menu-model",
  "cupertino-modifiers",
  "cupertino-peer",

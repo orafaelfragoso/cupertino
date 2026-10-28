@@ -117,9 +117,16 @@ newer), `zxdg_output_manager_v1`, `cupertino_shell_v1` (backdrops and the menu-b
     the exporter's keep theirs, so a layout update leaves an open menu in place. An activated id at most -1000 is the
     bar's (rebound About, Settings… and Quit activate the exporter's item); any other goes to the exporter. The bar's
     Window and Help menus send the exporter no `AboutToShow`, so items an exporter fills in lazily there do not show.
-  - Accelerators: a GMenuModel item's `accel` is shown through `cupertino_menu_model::Chord::from_accel` with the
-    modifier map of the server's profile (the primary modifier of the shortcut group). An accelerator names physical
-    keys, so `<Primary>q` shows as Ctrl+Q and `<Super>q` as Super+Q under either profile.
+  - Accelerators: a GMenuModel item's `accel` names the physical keys the application receives; it is read with
+    `cupertino_menu_model::Chord::from_accel` and the modifier map of the server's profile (the primary modifier of the
+    shortcut group). The bar shows the keys the person presses. For a third-party application (an id that does not
+    start with `cupertino-`, the server's rule) the server makes Ctrl chords of Super chords, so the bar shows the
+    chord `cupertino_keyboard::rewrite::pressed_for` gives: under `cupertino`, `<Primary>q` shows as Super+Q (the
+    command glyph), `<Primary>F5` as Ctrl+F5 (function keys, Escape, Tab, Space, Delete and the arrows are not
+    rewritten); under `classic-pc` and for `cupertino-*` applications the accelerator shows as it is (`<Primary>q` is
+    Ctrl+Q, `<Super>q` Super+Q). Accepted gaps: the bar does not know `rewrite_off`, so an application opted out of the
+    rewrite shows Super+Q where only Ctrl+Q works; and it does not know `rewrite_terminals`, so a terminal is shown as
+    an ordinary application.
 - **Session.** The labels follow the appearance the server announces over `cupertino_session_v1`, read at start and redrawn on
   every change. The material follows it in the server. On `locked` the bars close every open menu and title focus.
 - **System menu.** The first slot draws the system mark (`cupertino_icons::system_mark`, tinted with the label colour) and

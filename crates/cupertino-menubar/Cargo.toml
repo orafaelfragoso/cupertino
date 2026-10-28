@@ -35,6 +35,7 @@ cupertino-decorations = { path = "../cupertino-decorations", optional = true }
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-menu-model = { path = "../cupertino-menu-model" }
 cupertino-modifiers = { path = "../cupertino-modifiers" }
+cupertino-keyboard = { path = "../cupertino-keyboard" }
 cupertino-geometry = { path = "../cupertino-geometry", optional = true }
 cupertino-peer = { path = "../cupertino-peer", optional = true }
 cupertino-icons = { path = "../cupertino-icons", optional = true }

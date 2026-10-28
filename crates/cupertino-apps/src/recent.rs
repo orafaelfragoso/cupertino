@@ -81,7 +81,14 @@ fn parse_time(text: &str) -> Option<f64> {
     let (hms, fraction) = clock.split_once('.').unwrap_or((clock, ""));
     let mut parts = hms.splitn(3, ':').map(|v| v.parse::<i64>().ok());
     let (h, min, s) = (parts.next()??, parts.next()??, parts.next()??);
-    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || h > 23 || min > 59 || s > 60 {
+    // the bounds keep the arithmetic below in range for any input
+    if !(1..=9999).contains(&y)
+        || !(1..=12).contains(&m)
+        || !(1..=31).contains(&d)
+        || !(0..=23).contains(&h)
+        || !(0..=59).contains(&min)
+        || !(0..=60).contains(&s)
+    {
         return None;
     }
     let fraction = match fraction {
@@ -94,7 +101,11 @@ fn parse_time(text: &str) -> Option<f64> {
         _ => {
             let sign = if zone.starts_with('-') { -1 } else { 1 };
             let (oh, om) = zone[1..].split_once(':')?;
-            sign * (oh.parse::<i64>().ok()? * 3600 + om.parse::<i64>().ok()? * 60)
+            let (oh, om) = (oh.parse::<i64>().ok()?, om.parse::<i64>().ok()?);
+            if !(0..=14).contains(&oh) || !(0..=59).contains(&om) {
+                return None;
+            }
+            sign * (oh * 3600 + om * 60)
         }
     };
     let secs = days_from_civil(y, m, d) * 86400 + h * 3600 + min * 60 + s - offset;
@@ -223,6 +234,30 @@ mod tests {
         );
         assert_eq!(parse_time("1970-01-01T00:00:00Z"), Some(0.0));
         assert_eq!(parse_time("2026-13-01T00:00:00Z"), None);
+    }
+
+    #[test]
+    fn a_time_out_of_range_keeps_its_file_without_a_time() {
+        let text = r#"<xbel>
+  <bookmark href="file:///tmp/a" added="999999999999999-01-01T00:00:00Z"/>
+  <bookmark href="file:///tmp/b" added="2026-10-01T09:00:00+999999999999999:00"/>
+  <bookmark href="file:///tmp/c" added="2026-10-01T99999999999999:00:00Z"/>
+</xbel>"#;
+        assert_eq!(
+            parse_xbel(text),
+            [
+                Path::new("/tmp/a"),
+                Path::new("/tmp/b"),
+                Path::new("/tmp/c")
+            ]
+        );
+        assert!(parse_recent_files(text).iter().all(|f| f.used.is_none()));
+        assert_eq!(
+            parse_time("9999-12-31T23:59:60-14:00").map(|t| t > 0.0),
+            Some(true)
+        );
+        assert_eq!(parse_time("10000-01-01T00:00:00Z"), None);
+        assert_eq!(parse_time("2026-10-01T09:00:00+15:00"), None);
     }
 
     #[test]

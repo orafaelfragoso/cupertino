@@ -1370,6 +1370,50 @@ fn under_classic_pc_the_super_key_alone_runs_its_tap_and_a_chord_or_a_click_does
     assert!(minimized(&h));
 }
 
+/// A key of the pointer keypad, a gesture, and a click are all things the Super key held at the time is a modifier of;
+/// the capture command's scripted modifiers go the way of a device's keys and make a tap.
+#[test]
+fn a_keypad_key_a_gesture_or_a_click_cancels_the_super_tap_and_scripted_modifiers_make_one() {
+    use cupertino_input::{Action, ShortcutMap};
+    let Some(mut h) = Harness::new() else { return };
+    let (_apps, [three, _two, _one]) = h.three_apps();
+    h.state.apply_keyboard_change(
+        &cupertino_defaults::keyboard::KeyboardSettings::default(),
+        &cupertino_defaults::keyboard::KeyboardSettings {
+            modifier_profile: Some(cupertino_defaults::keyboard::ModifierProfile::ClassicPc),
+            mouse_keys: Some(true),
+            ..Default::default()
+        },
+    );
+    let mut map = ShortcutMap::classic_pc_defaults();
+    map.bind_tap(Action::MinimizeWindow);
+    h.state.key_router.bindings =
+        cupertino_server::input::KeyBindings::from_shortcuts(&map, "classic-pc");
+    let minimized = |h: &Harness| {
+        matches!(
+            h.state.wm.window(three).map(|w| w.state()),
+            Some(LifecycleState::Minimized | LifecycleState::Minimizing)
+        )
+    };
+    // Super and a key of the pointer keypad (the 8 moves the pointer, which no button or scroll shows)
+    h.device_key(KEY_SUPER, true);
+    h.device_tap(72 + 8);
+    h.device_key(KEY_SUPER, false);
+    h.advance(1.0);
+    assert!(!minimized(&h), "a keypad key");
+    // Super and a touchpad gesture
+    h.device_key(KEY_SUPER, true);
+    h.state.gesture_begun();
+    h.device_key(KEY_SUPER, false);
+    h.advance(1.0);
+    assert!(!minimized(&h), "a gesture");
+    // a scripted Super press and release, as the capture command sends them, is a tap
+    h.state.scripted_modifier("super", true).unwrap();
+    h.state.scripted_modifier("super", false).unwrap();
+    h.advance(1.0);
+    assert!(minimized(&h), "scripted modifiers");
+}
+
 /// The shortcut match comes after sticky keys: a latched modifier counts as held for the system chords, under either
 /// profile. The latch is freed with the release of the key that used it, so the switcher the chord opened commits at
 /// once: a latched Alt and Tab switch to the previous application.

@@ -35,7 +35,7 @@ Without a backend flag the server runs nested when `WAYLAND_DISPLAY` or `DISPLAY
 | `--spawn-delay S` | `0.5` | seconds before the first `--spawn` command |
 | `--pointer S:X,Y`, `--click S:X,Y`, `--right-click S:X,Y` (repeat) | | scripted pointer motion, left click or right click at time S (logical coordinates) |
 | `--press S:X,Y`, `--release S:X,Y` (repeat) | | scripted left press and release at time S, to script a drag with `--pointer` |
-| `--modifier-down S:MOD`, `--modifier-up S:MOD` (repeat) | | hold or let go of `shift`, `ctrl`, `alt` or `super` as a real key event to the focused client (menus that show alternates while a modifier is held) |
+| `--modifier-down S:MOD`, `--modifier-up S:MOD` (repeat) | | hold or let go of `shift`, `ctrl`, `alt` or `super` as a device would: through the key filters and the shortcuts, so a held Super opens no launcher but a Super pressed and let go alone does, and the focused client gets a real key event (menus that show alternates while a modifier is held) |
 | `--time-scale F` | 1 | run model time (animations) at F times the wall clock, for example `0.2` to catch mid-animation frames |
 | `--dbus` | off | start the session bus worker also on the headless backend (it always starts on the nested and TTY backends) |
 | `--action S:NAME` (repeat) | | run a named action at time S (`overview`, `minimize`, `workspace-right`, `launcher`, `input-source-next`, `notification-center`, ...) |

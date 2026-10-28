@@ -497,6 +497,8 @@ impl Cupertino {
                 self.mouse_keys_action(action, time);
             }
             if out.consumed {
+                // a key of the pointer keypad: the Super key held now is a modifier of it, not a tap
+                self.key_filters.super_tap.disturb();
                 return;
             }
         }

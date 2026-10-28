@@ -36,6 +36,13 @@ impl Gles {
         scene: &SceneFrame,
         resources: &mut GlesResources<'_>,
     ) -> Result<Vec<CupertinoElement>, RenderError> {
+        if resources
+            .frame
+            .as_ref()
+            .is_some_and(|frame| frame.frame != scene.id)
+        {
+            return Err(RenderError::Resources("resources belong to another frame"));
+        }
         let frame = resources.frame.take().ok_or(RenderError::Resources(
             "the frame's resources were used by an earlier render",
         ))?;

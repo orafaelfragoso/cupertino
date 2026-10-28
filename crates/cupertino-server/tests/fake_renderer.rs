@@ -1,5 +1,5 @@
 //! A renderer that touches no GPU consumes the scenes the compositor composes: every typed handle an item holds
-//! resolves in the frame's resources, and the frame has the items the scene calls for. It is the proof that the seam
+//! resolves in the frame's resources (retained Snapshot sources are outside this fake's checks), and the frame has the items the scene calls for. It is the proof that the seam
 //! (`cupertino-render-api`) and the scene frame are usable by an implementation that is not GLES.
 
 mod common;
@@ -104,6 +104,9 @@ impl Renderer for Fake {
                         resources.snapshots.len(),
                         "snapshot",
                     )?;
+                    if resources.snapshots[snapshot.0.slot as usize].is_none() {
+                        return Err(Unresolved("the frame snapshot is absent".into()));
+                    }
                     seen.snapshots += 1;
                 }
                 Source::Snapshot { .. }

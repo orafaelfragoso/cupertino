@@ -397,6 +397,7 @@ impl Action {
             | Action::Launcher
             | Action::FocusMenuBar
             | Action::ToggleDockAutoHide
+            | Action::HelpSearch
             | Action::NotificationCenter
             | Action::ControlPanel
             | Action::ToggleAppearance

@@ -97,7 +97,7 @@ impl FontIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FontStyle, FontWeight};
+    use crate::{FontStyle, FontVariation, FontWeight};
     use std::sync::Arc;
 
     const INTER: &[u8] = include_bytes!("../../cupertino-assets/fonts/InterVariable-subset.ttf");
@@ -234,6 +234,28 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_ne!(ones(&[]), ones(&tabular));
+    }
+
+    #[test]
+    fn variation_values_within_a_quarter_unit_share_an_instance() {
+        let (mut index, face) = inter();
+        let at = |value: f32| {
+            [FontVariation {
+                tag: *b"wght",
+                value,
+            }]
+        };
+        let a = index
+            .instance(face, FontWeight::REGULAR, &at(650.0))
+            .unwrap();
+        let b = index
+            .instance(face, FontWeight::REGULAR, &at(650.05))
+            .unwrap();
+        let c = index
+            .instance(face, FontWeight::REGULAR, &at(700.0))
+            .unwrap();
+        assert_eq!(a, b);
+        assert_ne!(a, c);
     }
 
     #[test]

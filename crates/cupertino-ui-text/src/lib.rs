@@ -312,6 +312,8 @@ pub enum TextError {
     /// Font data that is not a font, or has no face at the requested index; names the family.
     InvalidFont(Box<str>),
     ShapeFailed,
+    /// A size or spacing that is not a finite number, or a size that is not positive.
+    InvalidValue,
     NotACharBoundary(usize),
     /// Text with control characters where a password field takes none.
     InvalidText,

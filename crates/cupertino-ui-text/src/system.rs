@@ -9,12 +9,17 @@ use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-/// Paragraphs kept for reuse; the cache is cleared when it grows past this.
+/// Paragraphs shaped before the cache starts a new generation.
 const CACHE_LIMIT: usize = 512;
+
+type CacheEntry = (AttributedText, ParagraphStyle, Paragraph);
 
 struct State {
     fonts: FontIndex,
-    cache: HashMap<u64, (AttributedText, ParagraphStyle, Paragraph)>,
+    /// Two generations: a full `current` becomes `previous` and the old `previous` is dropped, so a hit in either
+    /// keeps the paragraph and a view of more than the limit still reuses its recent ones.
+    current: HashMap<u64, CacheEntry>,
+    previous: HashMap<u64, CacheEntry>,
 }
 
 /// The fonts and the paragraph cache of one app. Methods take `&self`, so one `Arc<TextSystem>` serves measuring and
@@ -32,7 +37,8 @@ impl TextSystem {
             theme_family: theme_family.into(),
             state: Mutex::new(State {
                 fonts,
-                cache: HashMap::new(),
+                current: HashMap::new(),
+                previous: HashMap::new(),
             }),
         }
     }
@@ -49,20 +55,20 @@ impl TextSystem {
         text: &AttributedText,
         style: &ParagraphStyle,
     ) -> Result<Paragraph, TextError> {
+        check_values(text)?;
         let key = cache_key(text, style);
         let mut state = self.state();
-        if let Some((cached_text, cached_style, paragraph)) = state.cache.get(&key) {
-            if cached_text == text && cached_style == style {
-                return Ok(paragraph.clone());
-            }
+        if let Some(paragraph) = lookup(&state.current, key, text, style) {
+            return Ok(paragraph);
+        }
+        if let Some(paragraph) = lookup(&state.previous, key, text, style) {
+            state
+                .current
+                .insert(key, (text.clone(), *style, paragraph.clone()));
+            return Ok(paragraph);
         }
         let paragraph = shape_paragraph(&mut state.fonts, &self.theme_family, text, style)?;
-        if state.cache.len() >= CACHE_LIMIT {
-            state.cache.clear();
-        }
-        state
-            .cache
-            .insert(key, (text.clone(), *style, paragraph.clone()));
+        insert(&mut state, key, text, style, paragraph.clone());
         Ok(paragraph)
     }
 
@@ -80,6 +86,48 @@ impl TextSystem {
         let mut state = self.state();
         let font = resolve(&mut state.fonts, &self.theme_family, style)?;
         state.fonts.metrics(font)
+    }
+}
+
+fn lookup(
+    generation: &HashMap<u64, CacheEntry>,
+    key: u64,
+    text: &AttributedText,
+    style: &ParagraphStyle,
+) -> Option<Paragraph> {
+    generation
+        .get(&key)
+        .filter(|(cached_text, cached_style, _)| cached_text == text && cached_style == style)
+        .map(|(_, _, paragraph)| paragraph.clone())
+}
+
+fn insert(
+    state: &mut State,
+    key: u64,
+    text: &AttributedText,
+    style: &ParagraphStyle,
+    paragraph: Paragraph,
+) {
+    if state.current.len() >= CACHE_LIMIT {
+        state.previous = std::mem::take(&mut state.current);
+    }
+    state.current.insert(key, (text.clone(), *style, paragraph));
+}
+
+fn check_values(text: &AttributedText) -> Result<(), TextError> {
+    let valid = text.runs.iter().all(|(_, style)| {
+        style.size.is_finite()
+            && style.size > 0.0
+            && style.letter_spacing.is_finite()
+            && style
+                .variations
+                .iter()
+                .all(|variation| variation.value.is_finite())
+    });
+    if valid {
+        Ok(())
+    } else {
+        Err(TextError::InvalidValue)
     }
 }
 

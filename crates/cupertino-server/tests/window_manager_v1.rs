@@ -103,7 +103,8 @@ impl Harness {
 
     /// Move the model clock forward and settle the animations.
     fn advance(&mut self, dt: f64) {
-        self.state.fixed_time = Some(self.state.now() + dt);
+        let time = self.state.now() + dt;
+        common::set_time(&mut self.state, &mut self.event_loop, time);
         self.state.tick();
         for _ in 0..3 {
             self.step();

@@ -105,7 +105,8 @@ impl Harness {
             s.wm.windows().count() == count
         });
         let t = self.state.now() + 5.0;
-        self.state.fixed_time = Some(t);
+        let time = t;
+        common::set_time(&mut self.state, &mut self.event_loop, time);
         self.state.tick();
         self.settle();
     }
@@ -113,7 +114,8 @@ impl Harness {
     /// Move model time on by `seconds` and let the animations settle.
     fn advance(&mut self, seconds: f64) {
         let t = self.state.now() + seconds;
-        self.state.fixed_time = Some(t);
+        let time = t;
+        common::set_time(&mut self.state, &mut self.event_loop, time);
         self.state.tick();
         self.settle();
     }

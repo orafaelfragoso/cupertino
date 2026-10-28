@@ -227,7 +227,12 @@ fn mapped_app_named(
         s.wm.key_window()
             .is_some_and(|w| s.entry(w).is_some_and(|e| e.mapped))
     });
-    h.state.fixed_time = Some(h.state.now() + 5.0);
+    let time = h.state.now() + 5.0;
+    common::set_time_with(&mut h.state, time, |state| {
+        app.pump();
+        headless::step(state, &mut h.event_loop, Duration::from_millis(2)).unwrap();
+        app.pump();
+    });
     h.state.tick();
     let id = h.state.wm.key_window().unwrap();
     let frame = h.state.wm.window(id).unwrap().geometry();

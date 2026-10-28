@@ -4,6 +4,8 @@
 //! kind's open transform and, on close, its close transform. Tests skip (pass) when no EGL device is
 //! available.
 
+mod common;
+
 use std::io::Write;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
@@ -81,7 +83,8 @@ impl Harness {
 
     /// Stop the clock at `t` and run the model there.
     fn at(&mut self, t: f64) {
-        self.state.fixed_time = Some(t);
+        let time = t;
+        common::set_time(&mut self.state, &mut self.event_loop, time);
         self.state.tick();
     }
 
@@ -312,7 +315,8 @@ fn parent_window(h: &mut Harness) -> (Client, WindowId, Rect) {
 /// Map the child and stop the clock at the moment it maps (before its open transform advances).
 fn map_child(h: &mut Harness, client: &Client, modal: bool) -> WindowId {
     let t = h.state.now();
-    h.state.fixed_time = Some(t);
+    let time = t;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     client.run(move |o, qh| o.child = Some(o.toplevel(CHILD, true, modal, qh)));
     h.wait_until("the child to be mapped", |s| s.wm.windows().count() == 2);
     h.state

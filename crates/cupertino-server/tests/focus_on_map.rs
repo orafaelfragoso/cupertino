@@ -113,7 +113,9 @@ impl Harness {
 
 /// Move the frozen model clock on.
 fn advance(h: &mut Harness, seconds: f64) {
-    h.state.fixed_time = h.state.fixed_time.map(|t| t + seconds);
+    if let Some(time) = h.state.fixed_time {
+        common::set_time(&mut h.state, &mut h.event_loop, time + seconds);
+    }
 }
 
 /// An application `a` that is mapped and has the focus; the harness has stepped until it settled.
@@ -127,7 +129,8 @@ fn with_front_window(h: &mut Harness) -> (Client, WindowId) {
     h.wait_until("the first window to map", |s| {
         s.windows.iter().any(|e| e.mapped)
     });
-    h.state.fixed_time = Some(h.state.now() + 5.0);
+    let time = h.state.now() + 5.0;
+    common::set_time(&mut h.state, &mut h.event_loop, time);
     h.state.tick();
     let id = h.newest(&[]).expect("a mapped window");
     assert_eq!(h.state.wm.key_window(), Some(id));

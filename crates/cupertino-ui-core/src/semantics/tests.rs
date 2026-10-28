@@ -52,7 +52,7 @@ impl Widget<M> for Secret {
     }
 }
 
-fn pass(view: Element<M>) -> (Tree<M>, SemanticsPass) {
+fn pass(view: Element<M>) -> (Tree<M>, NodeId, SemanticsPass) {
     let mut tree = Tree::new(20);
     let root = tree.reconcile(None, view).unwrap();
     let geometry: Geometry = tree
@@ -70,12 +70,12 @@ fn pass(view: Element<M>) -> (Tree<M>, SemanticsPass) {
         })
         .collect();
     let pass = build(&tree, root, &geometry, None);
-    (tree, pass)
+    (tree, root, pass)
 }
 
 #[test]
 fn a_protected_value_reaches_the_tree_as_protected_with_no_text_or_caret() {
-    let (_, pass) = pass(Element::new(group(vec![Element::new(Secret)])));
+    let (_, _, pass) = pass(Element::new(group(vec![Element::new(Secret)])));
     let field = pass
         .nodes
         .values()
@@ -88,11 +88,10 @@ fn a_protected_value_reaches_the_tree_as_protected_with_no_text_or_caret() {
 
 #[test]
 fn children_of_a_node_without_a_role_belong_to_its_nearest_ancestor_with_one() {
-    let (tree, pass) = pass(Element::new(group(vec![Element::new(group(vec![
+    let (tree, root, pass) = pass(Element::new(group(vec![Element::new(group(vec![
         Element::new(leaf("a")),
         Element::new(leaf("b")),
     ]))])));
-    let root = pass.root;
     let middle = tree.get(root).unwrap().children[0];
     let leaves = tree.get(middle).unwrap().children.clone();
 
@@ -104,11 +103,10 @@ fn children_of_a_node_without_a_role_belong_to_its_nearest_ancestor_with_one() {
 
 #[test]
 fn a_diff_carries_changed_and_new_nodes_and_names_the_removed_ones() {
-    let (tree, before) = pass(Element::new(group(vec![
+    let (tree, root, before) = pass(Element::new(group(vec![
         Element::new(leaf("a")).key(1u64),
         Element::new(leaf("b")).key(2u64),
     ])));
-    let root = before.root;
     let [a, b] = tree.get(root).unwrap().children[..] else {
         unreachable!()
     };

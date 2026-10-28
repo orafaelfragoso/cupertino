@@ -12,7 +12,6 @@ use cupertino_geometry::Rect;
 use std::collections::BTreeMap;
 
 pub(crate) struct SemanticsPass {
-    pub(crate) root: NodeId,
     pub(crate) nodes: BTreeMap<NodeId, AccessibilityNode>,
     /// Tab stops, in reading order.
     pub(crate) focusable: Vec<NodeId>,
@@ -27,7 +26,6 @@ pub(crate) fn build<M: 'static>(
     focus: Option<NodeId>,
 ) -> SemanticsPass {
     let mut pass = SemanticsPass {
-        root,
         nodes: BTreeMap::new(),
         focusable: Vec::new(),
         scopes: Vec::new(),

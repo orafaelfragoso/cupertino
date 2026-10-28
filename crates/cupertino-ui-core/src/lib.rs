@@ -6,11 +6,13 @@ mod accessibility;
 mod clock;
 mod command;
 mod cx;
+mod damage;
 mod focus;
 mod layout_view;
 mod paint;
 mod pointer;
 mod route;
+mod runtime;
 mod semantics;
 mod task;
 #[cfg(test)]
@@ -25,13 +27,14 @@ pub use accessibility::{
 pub use clock::MonotonicClock;
 pub use command::CommandRegistry;
 pub use cx::{EventCx, MeasureCx, PaintCx, SemanticsCx};
+pub use runtime::{RendererFactory, Runtime, RuntimeOptions};
 pub use widget::{Change, Element, Propagation, Widget};
 
 use cupertino_geometry::Rect;
 use cupertino_ui_layout::{LayoutDirection, LayoutError};
 use cupertino_ui_platform::{
     KeyEvent, Keysym, Mods, PlatformError, PointerEvent, Timestamp, TouchEvent, WindowId,
-    WindowRequest, WindowSpec, WindowSystem,
+    WindowRequest, WindowSpec,
 };
 use cupertino_ui_render::{DisplayList, RenderError};
 use cupertino_ui_text::ImeEvent;
@@ -39,7 +42,6 @@ use cupertino_ui_theme::ThemeTokens;
 use std::borrow::Cow;
 use std::fmt;
 use std::future::Future;
-use std::marker::PhantomData;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -86,6 +88,8 @@ pub struct Window<M> {
     pub key: WindowKey,
     pub spec: WindowSpec,
     pub shortcuts: CommandRegistry<M>,
+    /// Sent when the user asks to close the window; without it the request ends the application.
+    pub on_close: Option<M>,
     pub content: Element<M>,
 }
 
@@ -243,11 +247,6 @@ pub struct FrameSnapshot {
     pub accessibility: Vec<(NodeId, AccessibilityNode)>,
     pub display_list: DisplayList,
     pub pending: Pending,
-}
-
-/// Runs an application on a window system.
-pub struct Runtime<A: Application, W: WindowSystem> {
-    _private: PhantomData<(A, W)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

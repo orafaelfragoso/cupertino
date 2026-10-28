@@ -4,6 +4,7 @@ use crate::{Environment, NodeId, Phase};
 use cupertino_geometry::Size;
 use cupertino_ui_platform::{CursorShape, Timestamp};
 use cupertino_ui_render::PaintOp;
+use cupertino_ui_text::TextInputState;
 use std::collections::BTreeSet;
 
 pub struct MeasureCx<'a> {
@@ -35,6 +36,7 @@ pub(crate) struct Effects<M> {
     pub(crate) changes: Vec<(NodeId, Change)>,
     pub(crate) cursor: Option<Option<CursorShape>>,
     pub(crate) animate: BTreeSet<NodeId>,
+    pub(crate) text_input: Option<(NodeId, Option<TextInputState>)>,
 }
 
 impl<M> Default for Effects<M> {
@@ -46,6 +48,7 @@ impl<M> Default for Effects<M> {
             changes: Vec::new(),
             cursor: None,
             animate: BTreeSet::new(),
+            text_input: None,
         }
     }
 }
@@ -138,6 +141,12 @@ impl<M> EventCx<'_, M> {
     /// `None` hides the pointer.
     pub fn set_cursor(&mut self, cursor: Option<CursorShape>) {
         self.effects.cursor = Some(cursor);
+    }
+
+    /// Turns the input method on for this node with `state`, or off with `None`. The runtime turns it off when the
+    /// node loses the focus.
+    pub fn set_text_input(&mut self, state: Option<TextInputState>) {
+        self.effects.text_input = Some((self.node, state));
     }
 
     /// Delivers [`Event::AnimationFrame`](crate::Event::AnimationFrame) to this node on the next frame.

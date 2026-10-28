@@ -8,19 +8,31 @@
 mod common;
 
 use common::desktop::Desktop;
-use cupertino_server::backend::Backend;
+use cupertino_server::backend::{headless, Backend};
+use cupertino_server::render::legacy_scene;
+use cupertino_server::render::screenshot::render_to_image;
 use smithay::backend::input::KeyState;
 
-/// Every frame is compared inside the compositor while the `scene-oracle` feature is on, so these scenarios only
-/// have to produce the frames; `compare` builds one and returns how many elements it has.
-fn compare(d: &mut Desktop, _what: &str) -> usize {
+/// Every frame's elements are compared inside the compositor while the `scene-oracle` feature is on. `compare`
+/// also draws the frame by both builders and requires identical pixels; it returns how many elements there are.
+fn compare(d: &mut Desktop, what: &str) -> usize {
     let mut backend = d.state.backend.take().unwrap();
     let Backend::Headless(ref mut h) = backend else {
         panic!("headless backend required")
     };
-    let elements = d.state.build_output_elements(&mut h.renderer, 0);
+    let migrated = d.state.build_output_elements(&mut h.renderer, 0);
+    let legacy = legacy_scene::take_recorded();
+    let size = d.state.outputs[0].output.current_mode().unwrap().size;
+    let draw = |renderer: &mut _, elements: &[_]| {
+        render_to_image(renderer, elements, size, d.scale, headless::CLEAR).unwrap()
+    };
+    let (old, new) = (
+        draw(&mut h.renderer, &legacy),
+        draw(&mut h.renderer, &migrated),
+    );
     d.state.backend = Some(backend);
-    elements.len()
+    assert!(old == new, "{what}: the frames differ in pixels");
+    migrated.len()
 }
 
 #[test]

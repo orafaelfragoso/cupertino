@@ -1140,6 +1140,20 @@ pub fn build_scene(renderer: &mut GlesRenderer, mut p: SceneParams<'_>) -> Vec<C
     elements
 }
 
+thread_local! {
+    static LAST: std::cell::RefCell<Vec<CupertinoElement>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Keep the old builder's list of the frame just compared, for [`take_recorded`].
+pub fn record(elements: Vec<CupertinoElement>) {
+    LAST.with(|last| *last.borrow_mut() = elements);
+}
+
+/// The old builder's list of the last frame compared on this thread.
+pub fn take_recorded() -> Vec<CupertinoElement> {
+    LAST.with(|last| std::mem::take(&mut *last.borrow_mut()))
+}
+
 #[derive(Debug, PartialEq)]
 struct Shape {
     variant: std::mem::Discriminant<CupertinoElement>,

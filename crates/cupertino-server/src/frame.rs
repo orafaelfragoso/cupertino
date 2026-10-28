@@ -200,6 +200,7 @@ impl Cupertino {
             let (elements, legacy) = (elements?, legacy?);
             let out = &mut self.outputs[idx];
             legacy_scene::assert_parity(&mut out.cache, &legacy, &elements, out.scale);
+            legacy_scene::record(legacy);
             elements
         };
         Some(elements)

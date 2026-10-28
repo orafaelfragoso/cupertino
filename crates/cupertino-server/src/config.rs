@@ -434,6 +434,9 @@ pub fn shortcut_map(profile: &str) -> cupertino_input::ShortcutMap {
             }
         }
     }
+    if let Some(chord) = map.keep_release_chord() {
+        tracing::warn!(%chord, "no usable chord releases the shortcuts an application holds: the default is bound again");
+    }
     map
 }
 
@@ -831,6 +834,26 @@ mod tests {
     #[test]
     fn corner_radius_is_twelve() {
         assert_eq!(WindowStyle::default().corner_radius, 12.0);
+    }
+
+    #[test]
+    fn compositor_json_cannot_take_the_release_chord_away() {
+        for json in [
+            r#"{"keybindings":{"Super+Escape":"lock"}}"#,
+            r#"{"keybindings":{"Escape":"release-shortcuts"}}"#,
+            r#"{"keybindings":{"Shift+F5":"release-shortcuts","Super+Escape":"lock"}}"#,
+        ] {
+            let mut c = Config::default();
+            let problems = apply(&mut c, json);
+            let release = crate::input::parse_chord("Super+Escape").unwrap();
+            let held = |c: &Config| c.keybindings.lookup(release.sym, release.mods);
+            assert!(!problems.is_empty(), "{json}");
+            let still = held(&c);
+            assert!(
+                still == Some(Action::ReleaseShortcuts),
+                "{json}: Super+Escape is {still:?}"
+            );
+        }
     }
 
     #[test]

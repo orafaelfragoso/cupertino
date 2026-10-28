@@ -369,6 +369,7 @@ Precedence of shortcut sources, highest first: `compositor.json` `keybindings` â
 | `Super+Space` (`Super+Alt+Space`) | show / hide the launcher panel (a `Toggle` call to the launcher process) |
 | `F11`, `F4` | show desktop, application grid (the dock process draws the grid; see *Shell processes*) |
 | `Super+Alt+Escape` | Force Quit dialog (the dock process draws it) |
+| `Super+Escape` (`release-shortcuts`) | gives the keys and the pointer back to the system while an application holds them; the application's own key otherwise. It is bound in both profiles: a shortcuts file that unbinds it, binds its chord to another action or gives it a chord without Ctrl, Alt or Super gets the default back (one log line), and a `keybindings` entry of `compositor.json` that would do the same is refused and reported as a problem (`KeyBindings::bind` keeps the last release chord). Reserved actions (`Action::is_reserved`: VT switching, `lock`, `power-key`, `power-dialog`, `quit-compositor`, `release-shortcuts`) are the ones an application can never take away |
 | `Ctrl+Space` / `Ctrl+Alt+Space` | input-source switcher: previously used source / next source in menu order (HUD while `Ctrl` is held; needs two or more `input_sources`) |
 | `Super+Shift+F` | fullscreen (alias of `Super+Ctrl+F`, from the design table) |
 | `notification-center` action | notification centre list (a click on the menu bar clock does the same from the menu bar process; `Escape` or a click elsewhere closes it) |

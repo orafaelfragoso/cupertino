@@ -5,6 +5,7 @@
 
 pub const TAB: u32 = 0xff09;
 pub const ISO_LEFT_TAB: u32 = 0xfe20;
+pub const ESCAPE: u32 = 0xff1b;
 
 const NAMED: &[(&str, u32)] = &[
     ("BackSpace", 0xff08),
@@ -13,7 +14,7 @@ const NAMED: &[(&str, u32)] = &[
     ("Return", 0xff0d),
     ("Pause", 0xff13),
     ("Scroll_Lock", 0xff14),
-    ("Escape", 0xff1b),
+    ("Escape", ESCAPE),
     ("Delete", 0xffff),
     ("Home", 0xff50),
     ("Left", 0xff51),

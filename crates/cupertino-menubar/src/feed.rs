@@ -7,7 +7,7 @@
 
 use crate::dbus::sni::{self, StatusItem};
 use crate::desktop::AppName;
-use crate::extras::{ExtraKind, Extras};
+use crate::extras::{ExtraKind, Extras, SystemRow};
 use crate::fallback::{self, Chords, FallbackAction, WindowRow};
 use crate::item::{MenuItem, Shortcut, ShortcutModifier};
 use crate::layout::{BarContent, StatusEntry};
@@ -20,6 +20,7 @@ use cupertino_shell_client::{
     WindowState,
 };
 use std::collections::HashMap;
+use std::hash::Hash;
 use tiny_skia::{IntSize, Pixmap};
 
 /// The status slot of the screen capture indicator.
@@ -265,7 +266,7 @@ impl BarFeed {
             }),
         });
         let status = indicator.into_iter().chain(extras).chain(items).collect();
-        let system_menu = shared.extras.session_menu().rows;
+        let system_menu = shared.extras.system_menu(&shared.chords).rows;
         BarContent {
             app_name,
             system_menu,
@@ -296,35 +297,56 @@ impl BarFeed {
     }
 }
 
-/// The chords of the synthetic menus: the server's binding of each system item, and its primary modifier.
+/// The chords of the synthetic menus and the system menu: the server's binding of each system item, and its primary
+/// modifier.
 fn chords(shortcuts: &Shortcuts) -> Chords {
-    let bound = shortcuts
-        .chords
-        .iter()
-        .filter_map(|(action, chord)| {
-            let action = match action {
-                BoundAction::CloseWindow => FallbackAction::CloseWindow,
-                BoundAction::Minimize => FallbackAction::Minimize,
-                BoundAction::Zoom => FallbackAction::Zoom,
-                BoundAction::ToggleFullscreen => FallbackAction::ToggleFullscreen,
-                BoundAction::HideApp => FallbackAction::Hide,
-                BoundAction::HideOthers => FallbackAction::HideOthers,
-                BoundAction::QuitApp => FallbackAction::Quit,
-                BoundAction::TileLeft => FallbackAction::TileLeft,
-                BoundAction::TileRight => FallbackAction::TileRight,
-                BoundAction::TileFill => FallbackAction::TileFill,
-                BoundAction::ForceQuit | BoundAction::Lock | BoundAction::LogOut => return None,
-            };
-            Some((action, Shortcut::from_chord(chord)?))
-        })
-        .collect();
     Chords {
-        bound,
+        bound: parsed(shortcuts, fallback_action),
+        system: parsed(shortcuts, system_row),
         primary: match shortcuts.primary {
             PrimaryModifier::Super => ShortcutModifier::Primary,
             PrimaryModifier::Ctrl => ShortcutModifier::Ctrl,
         },
     }
+}
+
+/// The chord of each bound action `item` maps to an item of a menu.
+fn parsed<K: Eq + Hash>(
+    shortcuts: &Shortcuts,
+    item: fn(BoundAction) -> Option<K>,
+) -> HashMap<K, Shortcut> {
+    shortcuts
+        .chords
+        .iter()
+        .filter_map(|(action, chord)| Some((item(*action)?, Shortcut::from_chord(chord)?)))
+        .collect()
+}
+
+/// The item of the synthetic menus that stands for a server action.
+fn fallback_action(action: BoundAction) -> Option<FallbackAction> {
+    Some(match action {
+        BoundAction::CloseWindow => FallbackAction::CloseWindow,
+        BoundAction::Minimize => FallbackAction::Minimize,
+        BoundAction::Zoom => FallbackAction::Zoom,
+        BoundAction::ToggleFullscreen => FallbackAction::ToggleFullscreen,
+        BoundAction::HideApp => FallbackAction::Hide,
+        BoundAction::HideOthers => FallbackAction::HideOthers,
+        BoundAction::QuitApp => FallbackAction::Quit,
+        BoundAction::TileLeft => FallbackAction::TileLeft,
+        BoundAction::TileRight => FallbackAction::TileRight,
+        BoundAction::TileFill => FallbackAction::TileFill,
+        BoundAction::ForceQuit | BoundAction::Lock | BoundAction::LogOut => return None,
+    })
+}
+
+/// The row of the system menu that stands for a server action.
+fn system_row(action: BoundAction) -> Option<SystemRow> {
+    Some(match action {
+        BoundAction::ForceQuit => SystemRow::ForceQuit,
+        BoundAction::Lock => SystemRow::Lock,
+        BoundAction::LogOut => SystemRow::LogOut,
+        _ => return None,
+    })
 }
 
 fn gtk_props(gtk: &GtkMenu) -> GtkMenuProps {
@@ -693,6 +715,9 @@ mod tests {
         let content = feed.content(&shared);
         assert_eq!(quit(&content).as_deref(), Some("Super+q"));
         assert_eq!(settings(&content).as_deref(), Some("Super+,"));
+        let system = |label: &str| chord(content.system_menu.iter().find(|i| i.label == label));
+        assert_eq!(system("Lock Screen").as_deref(), Some("Ctrl+Super+q"));
+        assert_eq!(system("Force Quit\u{2026}"), None, "unbound");
         let minimize = window_menu(&feed, &shared);
         assert_eq!(
             chord(minimize.children.iter().find(|i| i.label == "Minimize")).as_deref(),

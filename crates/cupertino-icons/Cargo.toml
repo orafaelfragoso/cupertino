@@ -6,7 +6,7 @@ license = "MPL-2.0"
 description = "System icons by semantic name from the asset directory (rasters, tinted template symbols, file icons by type), and applications' own icons from an absolute path or the hicolor theme; PNG/SVG loading into premultiplied pixels, shared by the server and the shell processes"
 
 [package.metadata.cupertino]
-layer = "render"
+layer = "foundation"
 
 [dependencies]
 cupertino-apps = { path = "../cupertino-apps" }

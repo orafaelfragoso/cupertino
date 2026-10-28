@@ -35,13 +35,11 @@ pub struct ProcessHandle {
 impl ProcessHandle {
     /// Hold the process `pid`; fails when it is gone.
     pub fn open(pid: u32) -> std::io::Result<Self> {
-        // Safety: pidfd_open takes a pid and flags and returns a new file descriptor or -1.
-        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0) };
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // Safety: the descriptor was just returned by the kernel and nothing else owns it.
-        let fd = unsafe { OwnedFd::from_raw_fd(fd as i32) };
+        let raw = i32::try_from(pid)
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        let fd = rustix::process::pidfd_open(raw, rustix::process::PidfdFlags::empty())?;
         Ok(Self { pid, fd })
     }
 
@@ -101,31 +99,21 @@ impl ProcessHandle {
 
     /// Whether the process has exited: its pidfd is readable then.
     pub fn has_exited(&self) -> bool {
-        let mut poll = libc::pollfd {
-            fd: self.fd.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
+        use rustix::event::{poll, PollFd, PollFlags, Timespec};
+        let mut fds = [PollFd::new(&self.fd, PollFlags::IN)];
+        let now = Timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
         };
-        // Safety: poll on one valid pollfd with a zero timeout.
-        let ready = unsafe { libc::poll(&mut poll, 1, 0) };
-        ready > 0 && poll.revents & libc::POLLIN != 0
+        matches!(poll(&mut fds, Some(&now)), Ok(ready) if ready > 0)
+            && fds[0].revents().contains(PollFlags::IN)
     }
 
     /// Send `signal` to the process; fails when it has exited.
     pub fn send(&self, signal: i32) -> std::io::Result<()> {
-        // Safety: pidfd_send_signal on a descriptor this value owns, with no siginfo and no flags.
-        let result = unsafe {
-            libc::syscall(
-                libc::SYS_pidfd_send_signal,
-                self.fd.as_raw_fd(),
-                signal,
-                std::ptr::null::<libc::siginfo_t>(),
-                0,
-            )
-        };
-        if result < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
+        let signal = rustix::process::Signal::from_named_raw(signal)
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        rustix::process::pidfd_send_signal(&self.fd, signal)?;
         Ok(())
     }
 }

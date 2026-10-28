@@ -2,8 +2,9 @@
 //! application whose client does not answer its pings is killed at once; any other is asked to close (`xdg_toplevel.close`
 //! for each window) and sent SIGTERM, and SIGKILL follows [`KILL_GRACE`] seconds later for what is still connected then.
 //!
-//! The process comes from the socket credentials of the client that owns the application's windows, and is held as a
-//! pidfd from the moment it is chosen, so a process id that is reused meanwhile is never signalled. Only a client that is
+//! The process is the one the kernel named as the client connected (`SO_PEERPIDFD`), else the one the socket credentials
+//! of the client that owns the application's windows name, and is held as a pidfd from the moment it is chosen, so a
+//! process id that is reused meanwhile is never signalled. Only a client that is
 //! an application of its own is signalled: not the server, init, a shell process, or a client that serves windows of more
 //! than one application (a proxy).
 
@@ -29,6 +30,31 @@ pub fn signal_process(process: &ProcessHandle, signal: i32) {
     if let Err(e) = process.send(signal) {
         tracing::warn!(pid = process.pid, signal, error = %e, "force quit: the signal was not delivered");
     }
+}
+
+/// The process behind an application's client, held by a pidfd. The one the kernel named when the client connected
+/// (`SO_PEERPIDFD`, kept in [`ClientState::peer`]) is it: no process id is looked up, so none can have been reused. Where
+/// the kernel gave none, the process id of the socket credentials is opened and the credentials are read again: the
+/// client still being connected after the pidfd was taken means the pid is the one it connected from.
+fn client_process(
+    state: &ClientState,
+    credentials: impl Fn() -> Option<u32>,
+) -> std::io::Result<ProcessHandle> {
+    let gone = |what: &str| std::io::Error::other(what.to_string());
+    if let Some(peer) = &state.peer {
+        let process = peer.try_clone()?;
+        return if process.has_exited() {
+            Err(gone("the process that connected has exited"))
+        } else {
+            Ok(process)
+        };
+    }
+    let pid = credentials().ok_or_else(|| gone("the client has no known process"))?;
+    let process = ProcessHandle::open(pid)?;
+    if credentials() != Some(pid) {
+        return Err(gone("the process id changed hands while it was opened"));
+    }
+    Ok(process)
 }
 
 /// Whether a process may be signalled: never init, the pids `kill(2)` gives a meaning to, or the server itself.
@@ -104,34 +130,29 @@ impl Cupertino {
                 );
                 continue;
             }
-            let pid = match client.get_credentials(&self.display_handle) {
-                Ok(credentials) => credentials.pid as u32,
+            let Some(state) = client.get_data::<ClientState>() else {
+                continue;
+            };
+            let credentials = || {
+                client
+                    .get_credentials(&self.display_handle)
+                    .ok()
+                    .map(|c| c.pid as u32)
+            };
+            let process = match client_process(state, credentials) {
+                Ok(process) => process,
                 Err(e) => {
-                    tracing::warn!(app = identity, error = %e, "force quit: a window of the application has no known process");
+                    tracing::warn!(app = identity, error = %e, "force quit: the application has no process to signal");
                     continue;
                 }
             };
+            let pid = process.pid;
             if !signalable(pid, self.force_quits.own_pid) || shell_pids.contains(&pid) {
                 tracing::warn!(
                     app = identity,
                     pid,
                     "force quit: refusing to signal this process"
                 );
-                continue;
-            }
-            let process = match ProcessHandle::open(pid) {
-                Ok(process) => process,
-                Err(e) => {
-                    tracing::warn!(app = identity, pid, error = %e, "force quit: the process is gone");
-                    continue;
-                }
-            };
-            // the client still being connected after the pidfd was taken means the pid is the one it connected from
-            if client
-                .get_credentials(&self.display_handle)
-                .map(|c| c.pid as u32)
-                != Ok(pid)
-            {
                 continue;
             }
             found.push((client, process));
@@ -235,5 +256,42 @@ mod tests {
             held.send(SIGKILL).is_err(),
             "the process has been reaped: the pidfd names nothing now, whoever takes the pid"
         );
+    }
+
+    fn state_with_peer(peer: Option<ProcessHandle>) -> ClientState {
+        ClientState {
+            peer,
+            ..ClientState::default()
+        }
+    }
+
+    #[test]
+    fn the_process_the_kernel_named_at_connect_is_held_without_a_pid_lookup() {
+        let mut child = Command::new("sleep").arg("60").spawn().unwrap();
+        let peer = ProcessHandle::open(child.id()).unwrap();
+        let state = state_with_peer(Some(peer));
+        let process = client_process(&state, || panic!("the credentials are not read")).unwrap();
+        assert_eq!(process.pid, child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+        let error = client_process(&state, || panic!("the credentials are not read")).unwrap_err();
+        assert!(error.to_string().contains("exited"), "{error}");
+    }
+
+    #[test]
+    fn without_a_peer_process_the_pid_must_stay_the_same_while_it_is_opened() {
+        let mut child = Command::new("sleep").arg("60").spawn().unwrap();
+        let pid = child.id();
+        let state = state_with_peer(None);
+        assert_eq!(client_process(&state, || Some(pid)).unwrap().pid, pid);
+        let reads = std::cell::Cell::new(0);
+        let moving = || {
+            reads.set(reads.get() + 1);
+            Some(if reads.get() == 1 { pid } else { pid + 1 })
+        };
+        assert!(client_process(&state, moving).is_err());
+        assert!(client_process(&state, || None).is_err());
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }

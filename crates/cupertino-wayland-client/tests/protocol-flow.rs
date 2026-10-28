@@ -5,7 +5,8 @@ use cupertino_geometry::Rect;
 use cupertino_wayland_client::{
     Anchor, BufferFormat, Button, Capability, Connection, ConstraintAdjustment, Decorations, Error,
     Event, Extension, Gravity, KeyboardEvent, OutputGeometry, OutputTransform, PixelRect,
-    PointerEvent, PopupPlacement, Scale, SurfaceId, Toplevel, ToplevelConfig, WindowConfigure,
+    PointerEvent, PopupPlacement, Preedit, Scale, SurfaceId, SurroundingText, TextInputDone,
+    TextInputEvent, TextInputState, Toplevel, ToplevelConfig, WindowConfigure,
 };
 use std::collections::VecDeque;
 use std::io::Write;
@@ -18,6 +19,10 @@ use wayland_protocols::wp::fractional_scale::v1::server::wp_fractional_scale_man
     self, WpFractionalScaleManagerV1,
 };
 use wayland_protocols::wp::fractional_scale::v1::server::wp_fractional_scale_v1::WpFractionalScaleV1;
+use wayland_protocols::wp::text_input::zv3::server::zwp_text_input_manager_v3::{
+    self, ZwpTextInputManagerV3,
+};
+use wayland_protocols::wp::text_input::zv3::server::zwp_text_input_v3::{self, ZwpTextInputV3};
 use wayland_protocols::wp::viewporter::server::wp_viewport::{self, WpViewport};
 use wayland_protocols::wp::viewporter::server::wp_viewporter::{self, WpViewporter};
 use wayland_protocols::xdg::activation::v1::server::xdg_activation_token_v1::{
@@ -85,6 +90,7 @@ struct Globals {
     activation: bool,
     /// `zxdg_output_manager_v1`, placing the output at (1920, 0) with a 1280 × 720 logical size.
     output_layout: bool,
+    text_input: bool,
 }
 
 impl Globals {
@@ -120,6 +126,33 @@ enum Control {
         dx: f64,
         dy: f64,
     },
+    /// Give the toplevel the text-input focus.
+    TextInputEnter,
+    TextInputLeave,
+    /// A preedit the input method never finishes with a `done`.
+    PreeditOnly(&'static str),
+    /// One input method batch, done with `serial` or else the number of commits so far.
+    Compose {
+        preedit: Option<(&'static str, i32, i32)>,
+        commit: Option<&'static str>,
+        delete: (u32, u32),
+        serial: Option<u32>,
+    },
+}
+
+/// A request on the text input.
+#[derive(Debug, PartialEq)]
+enum TextInputRequest {
+    Enable,
+    Disable,
+    Surrounding(String, i32, i32),
+    Cause(zwp_text_input_v3::ChangeCause),
+    Content(
+        zwp_text_input_v3::ContentHint,
+        zwp_text_input_v3::ContentPurpose,
+    ),
+    CursorRect([i32; 4]),
+    Commit,
 }
 
 /// What the compositor saw.
@@ -153,6 +186,7 @@ enum Seen {
         token: String,
         surface: u32,
     },
+    TextInput(TextInputRequest),
 }
 
 #[derive(Default)]
@@ -198,6 +232,8 @@ struct Mock {
     frames: Vec<WlCallback>,
     /// The layer surface with the size it asked for, and whether it was configured.
     layer: Option<(WlSurface, ZwlrLayerSurfaceV1, (u32, u32), bool)>,
+    /// The text input with the number of commits on it.
+    text_input: Option<(ZwpTextInputV3, u32)>,
 }
 
 impl Mock {
@@ -238,7 +274,8 @@ plain_global!(
     WlDataDeviceManager,
     ZwlrLayerShellV1,
     XdgActivationV1,
-    ZxdgOutputManagerV1
+    ZxdgOutputManagerV1,
+    ZwpTextInputManagerV3
 );
 
 /// Requests the compositor ignores.
@@ -887,6 +924,65 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for Mock {
     }
 }
 
+impl Dispatch<ZwpTextInputManagerV3, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &ZwpTextInputManagerV3,
+        request: zwp_text_input_manager_v3::Request,
+        _: &(),
+        _: &DisplayHandle,
+        init: &mut DataInit<'_, Self>,
+    ) {
+        if let zwp_text_input_manager_v3::Request::GetTextInput { id, .. } = request {
+            state.text_input = Some((init.init(id, ()), 0));
+        }
+    }
+}
+
+impl Dispatch<ZwpTextInputV3, ()> for Mock {
+    fn request(
+        state: &mut Self,
+        _: &ServerClient,
+        _: &ZwpTextInputV3,
+        request: zwp_text_input_v3::Request,
+        _: &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        let seen = match request {
+            zwp_text_input_v3::Request::Enable => TextInputRequest::Enable,
+            zwp_text_input_v3::Request::Disable => TextInputRequest::Disable,
+            zwp_text_input_v3::Request::SetSurroundingText {
+                text,
+                cursor,
+                anchor,
+            } => TextInputRequest::Surrounding(text, cursor, anchor),
+            zwp_text_input_v3::Request::SetTextChangeCause {
+                cause: wayland_server::WEnum::Value(cause),
+            } => TextInputRequest::Cause(cause),
+            zwp_text_input_v3::Request::SetContentType {
+                hint: wayland_server::WEnum::Value(hint),
+                purpose: wayland_server::WEnum::Value(purpose),
+            } => TextInputRequest::Content(hint, purpose),
+            zwp_text_input_v3::Request::SetCursorRectangle {
+                x,
+                y,
+                width,
+                height,
+            } => TextInputRequest::CursorRect([x, y, width, height]),
+            zwp_text_input_v3::Request::Commit => {
+                if let Some((_, commits)) = state.text_input.as_mut() {
+                    *commits += 1;
+                }
+                TextInputRequest::Commit
+            }
+            _ => return,
+        };
+        state.seen.send(Seen::TextInput(seen)).unwrap();
+    }
+}
+
 /// Run a compositor with `globals` on its own thread for the client at the other end of `stream`.
 fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, Receiver<Seen>) {
     let (control_tx, control_rx) = channel::<Control>();
@@ -924,6 +1020,9 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
         if globals.output_layout {
             dh.create_global::<Mock, ZxdgOutputManagerV1, _>(3, ());
         }
+        if globals.text_input {
+            dh.create_global::<Mock, ZwpTextInputManagerV3, _>(1, ());
+        }
         let mut mock = Mock {
             globals,
             seen: seen_tx,
@@ -940,6 +1039,7 @@ fn spawn_compositor(stream: UnixStream, globals: Globals) -> (Sender<Control>, R
             shown: None,
             frames: Vec::new(),
             layer: None,
+            text_input: None,
         };
         let mut handle = display.handle();
         handle.insert_client(stream, Arc::new(Data)).unwrap();
@@ -1025,6 +1125,34 @@ fn apply(mock: &mut Mock, handle: &DisplayHandle, control: Control) {
             pointer.axis(0, wl_pointer::Axis::HorizontalScroll, dx);
             pointer.axis(0, wl_pointer::Axis::VerticalScroll, dy);
             pointer.frame();
+        }
+        Control::TextInputEnter => {
+            let surface = mock.surface().clone();
+            mock.text_input.as_ref().unwrap().0.enter(&surface);
+        }
+        Control::TextInputLeave => {
+            let surface = mock.surface().clone();
+            mock.text_input.as_ref().unwrap().0.leave(&surface);
+        }
+        Control::PreeditOnly(text) => {
+            let input = &mock.text_input.as_ref().unwrap().0;
+            input.preedit_string(Some(text.into()), 0, 0);
+        }
+        Control::Compose {
+            preedit,
+            commit,
+            delete,
+            serial,
+        } => {
+            let (input, commits) = mock.text_input.as_ref().unwrap();
+            if let Some((text, begin, end)) = preedit {
+                input.preedit_string(Some(text.into()), begin, end);
+            }
+            if let Some(text) = commit {
+                input.commit_string(Some(text.into()));
+            }
+            input.delete_surrounding_text(delete.0, delete.1);
+            input.done(serial.unwrap_or(*commits));
         }
     }
 }
@@ -2003,4 +2131,247 @@ fn the_axes_of_one_pointer_frame_arrive_as_one_scroll() {
         _ => None,
     });
     assert_eq!(scroll, (4.0, -5.0));
+}
+
+fn text_input_window() -> (
+    Connection,
+    Sender<Control>,
+    Receiver<Seen>,
+    SurfaceId,
+    Stash,
+) {
+    let (mut conn, control, seen) = connect(Globals {
+        seat: true,
+        text_input: true,
+        ..Globals::core()
+    });
+    assert!(conn.capabilities().contains(Capability::TextInput));
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    (conn, control, seen, w.surface(), stash)
+}
+
+fn text_input_event(conn: &mut Connection, stash: &mut Stash) -> TextInputEvent {
+    wait_for(conn, stash, |e| match e {
+        Event::TextInput { event, .. } => Some(event.clone()),
+        _ => None,
+    })
+}
+
+fn next_text_input(seen: &Receiver<Seen>) -> TextInputRequest {
+    loop {
+        if let Seen::TextInput(request) = next_seen(seen) {
+            return request;
+        }
+    }
+}
+
+fn field(text: &str, cursor: usize) -> TextInputState {
+    TextInputState {
+        surrounding: SurroundingText::new(text, cursor, cursor),
+        cursor_rect: Some(Rect::new(10.2, 20.0, 1.0, 16.5)),
+        ..TextInputState::default()
+    }
+}
+
+#[test]
+fn the_focused_field_is_sent_on_text_input_enter_and_each_change_once() {
+    use zwp_text_input_v3::{ChangeCause, ContentHint, ContentPurpose};
+    use TextInputRequest::*;
+    let (mut conn, control, seen, surface, mut stash) = text_input_window();
+    conn.set_text_input(surface, Some(&field("hi", 2))).unwrap();
+    control.send(Control::TextInputEnter).unwrap();
+    assert_eq!(
+        text_input_event(&mut conn, &mut stash),
+        TextInputEvent::Enter
+    );
+    conn.flush().unwrap();
+    let full = |text: &str, cursor| {
+        vec![
+            Surrounding(text.into(), cursor, cursor),
+            Cause(ChangeCause::Other),
+            Content(ContentHint::None, ContentPurpose::Normal),
+            CursorRect([10, 20, 2, 17]),
+            Commit,
+        ]
+    };
+    let mut expected = vec![Enable];
+    expected.extend(full("hi", 2));
+    assert_eq!(
+        (0..6).map(|_| next_text_input(&seen)).collect::<Vec<_>>(),
+        expected
+    );
+
+    conn.set_text_input(surface, Some(&field("hi", 2))).unwrap();
+    conn.set_text_input(surface, Some(&field("hi!", 3)))
+        .unwrap();
+    conn.flush().unwrap();
+    assert_eq!(
+        (0..5).map(|_| next_text_input(&seen)).collect::<Vec<_>>(),
+        full("hi!", 3)
+    );
+
+    // withdrawing the surrounding text needs a fresh enable
+    let unknown = TextInputState {
+        surrounding: None,
+        ..field("", 0)
+    };
+    conn.set_text_input(surface, Some(&unknown)).unwrap();
+    conn.flush().unwrap();
+    assert_eq!(next_text_input(&seen), Enable);
+    assert_eq!(next_text_input(&seen), Cause(ChangeCause::Other));
+
+    conn.set_text_input(surface, None).unwrap();
+    conn.flush().unwrap();
+    while next_text_input(&seen) != Commit {}
+    assert_eq!(
+        (next_text_input(&seen), next_text_input(&seen)),
+        (Disable, Commit)
+    );
+}
+
+#[test]
+fn a_password_field_never_shows_its_text_to_the_input_method() {
+    use zwp_text_input_v3::{ChangeCause, ContentHint, ContentPurpose};
+    use TextInputRequest::*;
+    let (mut conn, control, seen, surface, mut stash) = text_input_window();
+    control.send(Control::TextInputEnter).unwrap();
+    text_input_event(&mut conn, &mut stash);
+    let secret = TextInputState {
+        purpose: cupertino_wayland_client::ContentPurpose::Password,
+        ..field("hunter2", 7)
+    };
+    conn.set_text_input(surface, Some(&secret)).unwrap();
+    conn.flush().unwrap();
+    assert_eq!(
+        (0..5).map(|_| next_text_input(&seen)).collect::<Vec<_>>(),
+        [
+            Enable,
+            Cause(ChangeCause::Other),
+            Content(ContentHint::SensitiveData, ContentPurpose::Password),
+            CursorRect([10, 20, 2, 17]),
+            Commit
+        ]
+    );
+}
+
+#[test]
+fn an_input_method_batch_arrives_at_done_and_is_current_only_for_the_latest_commit() {
+    let (mut conn, control, seen, surface, mut stash) = text_input_window();
+    conn.set_text_input(surface, Some(&field("ab", 2))).unwrap();
+    control.send(Control::TextInputEnter).unwrap();
+    text_input_event(&mut conn, &mut stash);
+    conn.flush().unwrap();
+    while next_text_input(&seen) != TextInputRequest::Commit {}
+    control
+        .send(Control::Compose {
+            preedit: Some(("añ", 1, 3)),
+            commit: Some("x"),
+            delete: (1, 0),
+            serial: None,
+        })
+        .unwrap();
+    assert_eq!(
+        text_input_event(&mut conn, &mut stash),
+        TextInputEvent::Done(TextInputDone {
+            preedit: Some(Preedit {
+                text: "añ".into(),
+                cursor: Some((1, 3)),
+            }),
+            commit: Some("x".into()),
+            delete: (1, 0),
+            current: true,
+        })
+    );
+    control
+        .send(Control::Compose {
+            preedit: None,
+            commit: Some("y"),
+            delete: (0, 0),
+            serial: Some(0),
+        })
+        .unwrap();
+    assert_eq!(
+        text_input_event(&mut conn, &mut stash),
+        TextInputEvent::Done(TextInputDone {
+            commit: Some("y".into()),
+            ..TextInputDone::default()
+        })
+    );
+    // a batch cut short by a focus change is dropped, not carried into the next one
+    control.send(Control::PreeditOnly("lost")).unwrap();
+    control.send(Control::TextInputLeave).unwrap();
+    assert_eq!(
+        text_input_event(&mut conn, &mut stash),
+        TextInputEvent::Leave
+    );
+    control.send(Control::TextInputEnter).unwrap();
+    text_input_event(&mut conn, &mut stash);
+    conn.flush().unwrap();
+    while next_text_input(&seen) != TextInputRequest::Commit {}
+    control
+        .send(Control::Compose {
+            preedit: None,
+            commit: Some("z"),
+            delete: (0, 0),
+            serial: None,
+        })
+        .unwrap();
+    assert_eq!(
+        text_input_event(&mut conn, &mut stash),
+        TextInputEvent::Done(TextInputDone {
+            commit: Some("z".into()),
+            current: true,
+            ..TextInputDone::default()
+        })
+    );
+}
+
+#[test]
+fn a_text_field_needs_a_compositor_with_text_input() {
+    let (mut conn, _control, _seen) = connect(Globals {
+        seat: true,
+        ..Globals::core()
+    });
+    let mut stash = Stash::new();
+    let w = window(&mut conn, Decorations::Client);
+    configured(&mut conn, &mut stash, w);
+    assert!(matches!(
+        conn.set_text_input(w.surface(), Some(&field("a", 1))),
+        Err(Error::Unsupported(Capability::TextInput))
+    ));
+    assert!(conn.set_text_input(w.surface(), None).is_ok());
+}
+
+#[test]
+fn a_field_is_sent_again_after_each_enter_and_disabled_when_its_window_goes() {
+    use TextInputRequest::*;
+    let (mut conn, control, seen, surface, mut stash) = text_input_window();
+    conn.set_text_input(surface, Some(&field("ab", 2))).unwrap();
+    for _ in 0..2 {
+        control.send(Control::TextInputEnter).unwrap();
+        assert_eq!(
+            text_input_event(&mut conn, &mut stash),
+            TextInputEvent::Enter
+        );
+        conn.flush().unwrap();
+        assert_eq!(next_text_input(&seen), Enable);
+        while next_text_input(&seen) != Commit {}
+        control.send(Control::TextInputLeave).unwrap();
+        assert_eq!(
+            text_input_event(&mut conn, &mut stash),
+            TextInputEvent::Leave
+        );
+    }
+    control.send(Control::TextInputEnter).unwrap();
+    text_input_event(&mut conn, &mut stash);
+    conn.flush().unwrap();
+    while next_text_input(&seen) != Commit {}
+    conn.destroy(surface).unwrap();
+    conn.flush().unwrap();
+    assert_eq!(
+        (next_text_input(&seen), next_text_input(&seen)),
+        (Disable, Commit)
+    );
 }

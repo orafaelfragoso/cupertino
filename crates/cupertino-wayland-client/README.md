@@ -10,7 +10,7 @@ workspace's pure-Rust `cupertino-xkbcommon`); `cupertino-layers` fails the build
 | Item | Contents |
 |---|---|
 | `Connection::{connect, from_stream, from_wayland}`, `Waker` | the connection (`WAYLAND_DISPLAY` / `WAYLAND_SOCKET`, a given socket, or an established `wayland_client::Connection` the process also runs event queues of its own on); `Connection::wait` returns the next `Event`s, a `Waker` wakes it from another thread |
-| `Capability`, `CapabilitySet` | the optional protocols the compositor offers: seat, clipboard, fractional scale, server-side decorations, activation, cursor shape, output layout. `Connection::capabilities` lists them, with the extension protocols bound so far (`Extension`, `CapabilitySet::extension`); a call that needs a missing one fails with `Error::Unsupported` |
+| `Capability`, `CapabilitySet` | the optional protocols the compositor offers: seat, clipboard, fractional scale, server-side decorations, activation, cursor shape, output layout, text input. `Connection::capabilities` lists them, with the extension protocols bound so far (`Extension`, `CapabilitySet::extension`); a call that needs a missing one fails with `Error::Unsupported` |
 | `Connection::toplevel`, `ToplevelConfig`, `Toplevel` | an xdg toplevel: app id, title, size limits, the decorations asked for. `set_title`, `set_size_limits`, `set_maximized`, `set_fullscreen`, `minimize`, `start_move`, `start_resize`, `activate`, `destroy` |
 | `WindowConfigure`, `WindowStates`, `Decorations` | a configure: serial, size (or none: the client picks), bounds, states, and the decorations granted. A compositor without `zxdg_decoration_manager_v1`, or one that answers client-side, gives `Decorations::Client` |
 | `Connection::popup`, `PopupPlacement`, `PopupConfigure`, `Popup`, `Anchor`, `Gravity`, `ConstraintAdjustment` | xdg popups of a toplevel or popup, with an optional grab; `Connection::reposition_popup` moves one (`xdg_wm_base` version 3); `Event::PopupDone` when the compositor dismisses one |
@@ -20,6 +20,7 @@ workspace's pure-Rust `cupertino-xkbcommon`); `cupertino-layers` fails the build
 | `Connection::request_activation_token`, `TokenRequest`, `Event::ActivationToken` | a token to hand to an application this one launches (`xdg_activation_v1`) |
 | `PointerEvent`, `KeyboardEvent`, `Button`, `Modifiers`, `key`, `CursorShape`, `ResizeEdge` | pointer and key input (`key` names the evdev codes of common keys); the axes of one `wl_pointer.frame` arrive as one scroll; keys carry keysym and text from the compositor's keymap, key repeat runs in the client; `wl_pointer.axis_source`, `axis_stop` and `axis_discrete` are dropped for now. `Connection::{modifiers, input_serial}` read the held modifiers and the serial of the latest input event; `Connection::set_cursor` sets a named cursor (`wp_cursor_shape_v1`), `Connection::hide_cursor` hides it |
 | `Connection::{set_selection, receive}`, `ClipboardOffer`, `Event::Selection` | the clipboard: offer contents in several MIME types, list and read another client's |
+| `Connection::set_text_input`, `TextInputState`, `SurroundingText`, `ContentHint`, `ContentPurpose`, `ChangeCause`, `Event::TextInput`, `TextInputEvent`, `TextInputDone`, `Preedit` | input methods (`zwp_text_input_v3`): the focused text field's state goes out, the input method's preedit, commit and delete come back as one batch per `done` |
 | `Error`, `Disconnect` | typed errors: a missing required protocol with its minimum version, the disconnect cause, a configure serial that did not increase, an unsupported format or MIME type, a denied or cancelled transfer, no free buffer |
 | `State`, `ExternalRole`, `Event::Extension`, `ExtensionEvent`, `Connection::{bind_extension, queue_handle, external_surface, wl_surface, wl_output, seat, pointer, surface_outputs, roundtrip}`, `OutputId::{registry_name, from_registry_name}` | the extension hook: another crate adds protocols of its own on the same queue (below) |
 
@@ -32,6 +33,14 @@ A `BufferLease` borrows the connection, so no configure arrives between drawing 
 answers the latest configure, which is acked once, with the first buffer presented for it. The scale is the fractional
 scale when `wp_fractional_scale_v1` and `wp_viewporter` are offered, else `wl_surface.preferred_buffer_scale`, else the
 largest scale of the outputs the surface entered; without the viewporter it is rounded up to a whole number.
+
+An input method gets the focused field's state only while its surface has the text-input focus: it is sent again
+after each enter, only when it changed, and a value once sent (surrounding text, cursor rectangle) is withdrawn by
+enabling afresh. Surrounding text is cut to the protocol's 4000 bytes around the selection, or around the cursor when
+the selection alone is longer, at character boundaries. A password or PIN purpose never sends its text and always adds
+the `sensitive_data` hint, whatever the caller set. A preedit cursor that is off a character boundary is hidden, and a
+batch cut short by a focus change is dropped. Applying the batch to the field (clamping deletes to characters, the
+order in `TextInputDone`) is the caller's.
 
 Copying serves each paste on a short-lived thread (at most 8 at once, 1 s each); pasting reads at most 16 MiB within
 1 s, and returns the client's own contents directly.
@@ -87,7 +96,7 @@ cargo nextest run -p cupertino-wayland-client --run-ignored only   # optional We
 ```
 
 `tests/protocol-flow.rs` runs a minimal protocol server in-process: required globals, configure and ack, resize, buffer
-reuse, scale, decorations, popups, input, clipboard and disconnect. Its `layer` module is an extension written against
+reuse, scale, decorations, popups, input, text input, clipboard and disconnect. Its `layer` module is an extension written against
 the public API (layer shell, a protocol the transport does not know): it is listed in the capabilities once bound and
 not when absent, a layer surface draws through the lease, acks through its own protocol, takes a popup, fills a 0
 dimension from the preferred size, and a burst of 100 of its configures arrives in at most three waits. `tests/mutter.rs` runs

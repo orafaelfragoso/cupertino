@@ -551,7 +551,7 @@ impl App {
                 }
             }
             // the scale is read when polling the presenters; the window has no output-bound geometry
-            Event::ScaleChanged { .. } | Event::OutputsChanged => {}
+            Event::ScaleChanged { .. } | Event::OutputsChanged | Event::TextInput { .. } => {}
         }
         Ok(true)
     }

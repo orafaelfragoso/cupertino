@@ -948,6 +948,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupertino-kit"
+version = "0.1.0"
+dependencies = [
+ "cupertino-ui-controls",
+ "cupertino-ui-core",
+ "cupertino-ui-layout",
+ "cupertino-ui-platform",
+ "cupertino-ui-render",
+ "cupertino-ui-text",
+ "cupertino-ui-theme",
+]
+
+[[package]]
 name = "cupertino-launcher"
 version = "0.1.0"
 dependencies = [
@@ -1411,6 +1424,34 @@ name = "cupertino-typeahead"
 version = "0.1.0"
 
 [[package]]
+name = "cupertino-ui-controls"
+version = "0.1.0"
+dependencies = [
+ "cupertino-ui-core",
+ "cupertino-ui-layout",
+ "cupertino-ui-text",
+]
+
+[[package]]
+name = "cupertino-ui-core"
+version = "0.1.0"
+dependencies = [
+ "cupertino-geometry",
+ "cupertino-ui-layout",
+ "cupertino-ui-platform",
+ "cupertino-ui-render",
+ "cupertino-ui-text",
+ "cupertino-ui-theme",
+]
+
+[[package]]
+name = "cupertino-ui-layout"
+version = "0.1.0"
+dependencies = [
+ "cupertino-geometry",
+]
+
+[[package]]
 name = "cupertino-ui-menus"
 version = "0.1.0"
 dependencies = [
@@ -1422,6 +1463,49 @@ dependencies = [
  "libc",
  "tracing",
  "zbus",
+]
+
+[[package]]
+name = "cupertino-ui-platform"
+version = "0.1.0"
+dependencies = [
+ "cupertino-geometry",
+ "cupertino-modifiers",
+ "cupertino-ui-render",
+ "cupertino-ui-text",
+]
+
+[[package]]
+name = "cupertino-ui-render"
+version = "0.1.0"
+dependencies = [
+ "cupertino-geometry",
+ "cupertino-theme",
+ "cupertino-ui-text",
+]
+
+[[package]]
+name = "cupertino-ui-test"
+version = "0.1.0"
+dependencies = [
+ "cupertino-ui-core",
+ "cupertino-ui-platform",
+ "cupertino-ui-render",
+]
+
+[[package]]
+name = "cupertino-ui-text"
+version = "0.1.0"
+dependencies = [
+ "cupertino-geometry",
+]
+
+[[package]]
+name = "cupertino-ui-theme"
+version = "0.1.0"
+dependencies = [
+ "cupertino-geometry",
+ "cupertino-theme",
 ]
 
 [[package]]

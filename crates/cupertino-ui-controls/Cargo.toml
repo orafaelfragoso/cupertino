@@ -1,0 +1,14 @@
+[package]
+name = "cupertino-ui-controls"
+version = "0.1.0"
+edition.workspace = true
+license = "MPL-2.0"
+description = "CupertinoKit controls: text, icons, buttons, toggles, text and secure fields, stacks and the rest of the standard set, each with its state matrix, keyboard map and accessibility semantics"
+
+[package.metadata.cupertino]
+layer = "render"
+
+[dependencies]
+cupertino-ui-core = { path = "../cupertino-ui-core" }
+cupertino-ui-layout = { path = "../cupertino-ui-layout" }
+cupertino-ui-text = { path = "../cupertino-ui-text" }

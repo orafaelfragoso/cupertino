@@ -6,10 +6,10 @@ license = "MPL-2.0"
 description = "Single-line text field model of the Cupertino apps: caret, selection, word and line moves, the standard editing chords, clipboard commands, undo, click counting, caret blink and a composition range"
 
 [package.metadata.cupertino]
-layer = "models"
+layer = "render"
 
 [dependencies]
 cupertino-defaults = { path = "../cupertino-defaults" }
 cupertino-keyboard = { path = "../cupertino-keyboard" }
 cupertino-modifiers = { path = "../cupertino-modifiers" }
-unicode-segmentation = "1.13"
+cupertino-ui-text = { path = "../cupertino-ui-text" }

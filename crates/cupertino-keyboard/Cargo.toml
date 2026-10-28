@@ -6,7 +6,7 @@ license = "MPL-2.0"
 description = "Keyboard model for the Cupertino compositor: key repeat, modifier profiles, text-editing bindings, desktop shortcuts, accent picker, input-source switcher and an XKB keymap generator"
 
 [package.metadata.cupertino]
-layer = "models"
+layer = "foundation"
 
 [dependencies]
 cupertino-defaults = { path = "../cupertino-defaults" }

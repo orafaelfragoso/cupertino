@@ -52,21 +52,22 @@ without the `cupertino-` prefix):
 
 | Layer | May depend on | Crates |
 |---|---|---|
-| `foundation` | `foundation` | animation, apps, assets, defaults, filepicker, geometry, icons, text-field, theme, thumbnails, typeahead, xkbcommon |
-| `models` | `foundation`, `models` | displays, effects, input, keyboard, overview, stage, wm |
+| `foundation` | `foundation` | animation, apps, assets, defaults, filepicker, geometry, icons, keyboard, theme, thumbnails, typeahead, xkbcommon |
+| `models` | `foundation`, `models` | displays, effects, input, overview, stage, wm |
 | `platform` | `foundation`, `platform` | alsa, bluetooth, devices, evdev, netlink, peer, seat |
 | `protocol` | `foundation`, `protocol` | login-ipc, protocols |
 | `transport` | `foundation`, `platform`, `protocol`, `transport` | client, wayland-client |
 | `render` | `foundation`, `platform`, `render` | cursor, decorations, glass |
-| `ui` | `foundation`, `protocol`, `transport`, `ui` | kit, ui-controls, ui-core, ui-layout, ui-menus, ui-platform, ui-render, ui-test, ui-text, ui-theme, ui-wayland |
+| `ui` | `foundation`, `protocol`, `transport`, `ui` | kit, text-field, ui-controls, ui-core, ui-layout, ui-menus, ui-platform, ui-render, ui-test, ui-text, ui-theme, ui-wayland |
 | `core` | `foundation`, `models`, `platform`, `protocol`, `render` | server |
 | `shell` | `foundation`, `models`, `platform`, `protocol`, `transport`, `render`, `ui` | controlcenter, dock, launcher, login, menubar, notifications, osd, screenshot, windowmanager |
 | `services` | `foundation`, `models`, `platform`, `protocol`, `services` | btd, netd, powerd, sessiond |
 | `apps` | `foundation`, `models`, `protocol`, `transport`, `ui` | files, settings |
 | `tools` | all but `core`, `shell`, `services`, `apps` | layers, testclient |
 
-Pure toolkit-facing models (filepicker, text-field, typeahead) and the icon loader are `foundation`, so the toolkit can use them.
-`keyboard` stays in `models`: it is compositor keyboard policy.
+Pure toolkit-facing models (filepicker, typeahead, keyboard bindings) and the icon loader are `foundation`, so the toolkit can use them.
+`text-field` is the apps' key adapter over the toolkit's text buffer (`ui`); no toolkit crate may depend on it, and it is deleted
+when the apps move to Kit controls (Phase 4, row 177).
 
 `DENIED_PATHS` forbids any chain of dependencies from `ui` to `core`, `shell` or `services`; a denied path fails the
 check even when exceptions excuse its edges. `licence_problems` checks the licence split: a crate whose `license` starts with `MPL-2.0` may not have a normal dependency on a workspace crate under a GPL or AGPL licence (build and dev dependencies do not count), and needs a `LICENSE` file with the MPL-2.0 text next to its manifest. Both fail the check.
@@ -83,7 +84,7 @@ and a `tracking`:
 - `Permanent`: a reviewed edge that stays, such as a dev-only edge for tests or an approved render primitive. Today:
   server → client (dev).
 - `Issue(n)`: migration debt the issue removes. Today: #46 files and settings → decorations, #21 settings →
-  alsa, #47 text-field → keyboard.
+  alsa.
 
 An entry that no longer matches an edge of its kind is an error, so both lists only shrink. A crate missing from
 `TARGET`, or a `TARGET` entry that names no crate, is an error too.

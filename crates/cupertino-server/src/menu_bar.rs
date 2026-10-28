@@ -1332,6 +1332,33 @@ impl Cupertino {
         }
     }
 
+    /// `force_quit_app` of the bar: force quit the active application as the dock's Force Quit dialog does, only when
+    /// `app_id` names it now. Anything else, and every request while the session is locked or a lock is pending, is
+    /// ignored, so a focus change between the bar's label and the request ends nothing.
+    fn menu_bar_force_quit_app(&mut self, app_id: &str) {
+        if self.session_lock.is_active() {
+            tracing::info!("menu bar force quit: ignored while the session is locked");
+            return;
+        }
+        if app_id.len() > MAX_APPLICATION_ID_BYTES {
+            tracing::warn!(
+                len = app_id.len(),
+                "menu bar force quit: the application id is too long, ignored"
+            );
+            return;
+        }
+        let active = self.key_app_id();
+        if active.is_empty() || active != app_id {
+            tracing::info!(
+                app = app_id,
+                active,
+                "menu bar force quit: not the active application, ignored"
+            );
+            return;
+        }
+        self.force_quit_app(app_id);
+    }
+
     /// The key window when an edit may go to it: the xdg toplevel of a client of the public socket, while no lock
     /// (active or pending), overview, application switcher or move or resize is under way. The server runs no
     /// Xwayland: every window it manages is an xdg toplevel (`WindowEntry`), so no X11 window is ever returned, nor a
@@ -1481,6 +1508,10 @@ impl Dispatch<CupertinoMenuBarV1, MenuBarData> for Cupertino {
                     format!("{action:?} is not an edit action"),
                 ),
             },
+            // a bar below version 13 cannot send it: the wire rejects a request newer than the object
+            cupertino_menu_bar_v1::Request::ForceQuitApp { app_id } => {
+                state.menu_bar_force_quit_app(&app_id)
+            }
             cupertino_menu_bar_v1::Request::SessionAction { action } => {
                 let request = match action {
                     WEnum::Value(SessionAction::Sleep) => Some(DbusRequest::Sleep),

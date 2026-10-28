@@ -1518,6 +1518,41 @@ fn a_malformed_menu_address_is_a_protocol_error() {
 }
 
 #[test]
+fn the_longest_menu_address_reaches_the_bar_and_a_longer_one_is_refused() {
+    let Some(mut h) = Harness::new() else { return };
+    let bar = BarClient::spawn(h.shell_stream(), true);
+    h.wait_for_groups(&bar, 1);
+    let bus: &'static str = format!(":1.{}", "2".repeat(252)).leak();
+    let path: &'static str = format!("/{}", "a".repeat(511)).leak();
+    let app = KitAppClient::spawn(h.socket_path(), "org.example.Notes");
+    h.mapped_window(1);
+    app.send(Cmd::AnnounceMenu([bus, path, path, path, path]));
+    let expected = BarEvent::MenuGtk([bus, "", path, path, path, path].map(String::from));
+    h.wait_until("the bar to get the address", |_| {
+        bar.groups().iter().any(|g| g.contains(&expected))
+    });
+
+    // four paths that fill a 4096-byte request: the menu_gtk event would not fit one
+    let near_limit: &'static str = format!("/{}", "b".repeat(950)).leak();
+    let other = KitAppClient::spawn(h.socket_path(), "org.example.Other");
+    h.mapped_window(2);
+    other.send(Cmd::AnnounceMenu([
+        bus, near_limit, near_limit, near_limit, near_limit,
+    ]));
+    let end = Instant::now() + Duration::from_secs(10);
+    while other.error().is_none() && Instant::now() < end {
+        h.step();
+    }
+    assert_eq!(
+        other.error(),
+        Some((CupertinoAppMenuV1::interface().name.to_string(), 0))
+    );
+    h.settle_requests(&bar);
+    assert_eq!(bar.error(), None);
+    assert!(h.state.menu_bars.has_bar(h.state.outputs[0].id));
+}
+
+#[test]
 fn move_to_workspace_moves_the_active_window_and_updates_the_state() {
     let Some(mut h) = Harness::new() else { return };
     let bar = BarClient::spawn(h.shell_stream(), true);

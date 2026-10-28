@@ -912,13 +912,45 @@ fn render_notice(
     Some((pm, [0; 4]))
 }
 
+/// The narrowest output (in points) the notice is made for: the chord and its padding fit in it. A narrower output shows
+/// the chord cut at the right.
+pub const NOTICE_MIN_OUTPUT_WIDTH: f64 = 160.0;
+/// The least room, in points, the text of the notice gets, whatever the output: a narrower output cuts the notice at its edge.
+const NOTICE_MIN_TEXT_ROOM: f64 = 40.0;
+/// Distance of the notice from each side of the output, in points.
+const NOTICE_SIDE_MARGIN: f64 = 12.0;
+
+/// What the notice says on an output `output_width` points wide at `scale`: the whole text when it fits between the
+/// margins, else the release chord alone, cut at the right when even that does not fit. The chord is the start of both.
+fn notice_text(
+    notice: &crate::overlays::ShortcutNotice,
+    output_width: f64,
+    scale: f64,
+    text: &mut crate::overlays::OverlayText,
+) -> String {
+    let px = FONT_PT * scale as f32;
+    let room = (output_width - 2.0 * NOTICE_SIDE_MARGIN - 2.0 * NOTICE_PADDING.0)
+        .max(NOTICE_MIN_TEXT_ROOM);
+    for candidate in [&notice.text, &notice.short] {
+        if f64::from(text.width(candidate, px, 400)) / scale <= room {
+            return candidate.clone();
+        }
+    }
+    text.fit(&notice.short, px, 400, (room * scale) as f32)
+}
+
 /// The size and the position of the notice (in points) for a text of `text_width` on an output `output_width` wide: as wide
 /// as the text needs, never wider than the output less a margin on each side, centred. The text starts at the left
-/// padding, so what does not fit is cut at the right and the start of the line (the chord) is always visible.
+/// padding.
 fn notice_layout(text_width: f64, output_width: f64) -> ((f64, f64), (f64, f64)) {
-    let width = (text_width + 2.0 * NOTICE_PADDING.0)
-        .min(output_width - 2.0 * NOTICE_TOP)
-        .max(1.0);
+    let wanted = text_width + 2.0 * NOTICE_PADDING.0;
+    // an output narrower than the supported minimum is cut by its own edge: the pill keeps its size and its left edge
+    let width = if output_width >= NOTICE_MIN_OUTPUT_WIDTH {
+        wanted.min(output_width - 2.0 * NOTICE_SIDE_MARGIN)
+    } else {
+        wanted
+    }
+    .max(1.0);
     let size = (width, f64::from(FONT_PT) + 2.0 * NOTICE_PADDING.1);
     let x = ((output_width - width) / 2.0).round().max(0.0);
     (size, (x, NOTICE_TOP))
@@ -938,16 +970,17 @@ pub fn shortcut_notice(p: &mut SceneParams<'_>) -> Vec<Piece> {
     let overlays = &mut *p.overlays;
     let text = &mut overlays.text;
     text.set_scale(scale as f32);
-    let text_width = f64::from(text.width(&notice.text, px, 400)) / scale;
+    let shown = notice_text(&notice, p.rect.w, scale, text);
+    let text_width = f64::from(text.width(&shown, px, 400)) / scale;
     let (size, (x, y)) = notice_layout(text_width, p.rect.w);
     let sig = debug_sig(&(
-        &notice.text,
+        &shown,
         (size.0.to_bits(), size.1.to_bits()),
         scale.to_bits(),
         dark,
     ));
     let cut = overlays.images.get(("shortcut-notice", 0), sig, || {
-        render_notice(&notice.text, size, scale, dark, text)
+        render_notice(&shown, size, scale, dark, text)
     });
     cut.map(|(buf, px, _)| {
         vec![image_piece(
@@ -1402,21 +1435,75 @@ mod tests {
         assert_eq!(source_code("us"), "US");
     }
 
+    fn notice_for(chord: &str, app: &str) -> crate::overlays::ShortcutNotice {
+        crate::overlays::ShortcutNotice {
+            text: format!("Press {chord} to get your shortcuts back. {app} is receiving them."),
+            short: chord.to_owned(),
+            output: cupertino_wm::OutputId(1),
+            owner: None,
+            until: f64::MAX,
+        }
+    }
+
+    /// The chord is in the text the notice draws, and that text, measured with the real font at the output's scale,
+    /// fits inside the pill, on every output from the narrowest supported one up, at integer and fractional scales.
     #[test]
-    fn the_notice_fits_any_output_and_starts_at_its_left_padding() {
-        for output_width in [1920.0, 1000.5, 400.0, 250.0, 100.0, 60.0] {
-            let ((w, h), (x, y)) = notice_layout(5000.0, output_width);
-            assert!(w >= 1.0 && h > 0.0, "{output_width}: {w}x{h}");
-            assert!(x >= 0.0, "{output_width}: x {x}");
-            assert!(y >= 0.0);
+    fn the_notice_shows_the_chord_whole_inside_its_pill_on_every_supported_output() {
+        let assets = cupertino_assets::Assets::builtin();
+        let mut renderer =
+            crate::overlays::OverlayText::new(&cupertino_theme::Typography::default(), &assets)
+                .expect("the built-in font");
+        let long_name = "x".repeat(48);
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            renderer.set_scale(scale as f32);
+            let px = FONT_PT * scale as f32;
+            for output_width in [1920.0, 1000.5, 400.0, 250.0, NOTICE_MIN_OUTPUT_WIDTH] {
+                for app in ["org.example.vm", long_name.as_str()] {
+                    let notice = notice_for("Super+Escape", app);
+                    let shown = notice_text(&notice, output_width, scale, &mut renderer);
+                    assert!(
+                        shown.contains("Super+Escape"),
+                        "{output_width} at {scale}: {shown:?}"
+                    );
+                    let text_width = f64::from(renderer.width(&shown, px, 400)) / scale;
+                    let ((w, h), (x, y)) = notice_layout(text_width, output_width);
+                    assert!(
+                        text_width + 2.0 * NOTICE_PADDING.0 <= w + 1e-9,
+                        "{output_width} at {scale}: the text ({text_width}) overflows its pill ({w})"
+                    );
+                    assert!(w <= output_width - 2.0 * NOTICE_SIDE_MARGIN + 1e-9);
+                    assert!(
+                        x >= NOTICE_SIDE_MARGIN - 1.0 && x + w <= output_width,
+                        "{x} {w}"
+                    );
+                    assert!(h > 0.0 && y >= 0.0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn below_the_narrowest_supported_output_the_chord_is_cut_at_the_right_not_hidden() {
+        let assets = cupertino_assets::Assets::builtin();
+        let mut renderer =
+            crate::overlays::OverlayText::new(&cupertino_theme::Typography::default(), &assets)
+                .expect("the built-in font");
+        renderer.set_scale(1.0);
+        let notice = notice_for("Super+Escape", "org.example.vm");
+        for output_width in [100.0, 60.0, 20.0] {
+            let shown = notice_text(&notice, output_width, 1.0, &mut renderer);
             assert!(
-                w <= (output_width - 2.0 * NOTICE_TOP).max(1.0),
-                "{output_width}: {w} is wider than the output less its margins"
+                !shown.is_empty() && "Super+Escape".starts_with(shown.trim_end_matches('…')),
+                "{output_width}: {shown:?} is the start of the chord"
+            );
+            let ((w, _), (x, _)) = notice_layout(
+                f64::from(renderer.width(&shown, FONT_PT, 400)),
+                output_width,
+            );
+            assert!(
+                w >= 1.0 && x >= 0.0 && (x == 0.0 || x + w <= output_width),
+                "{output_width}: inside the output, or cut by it from its left edge"
             );
         }
-        // a short text takes only the room it needs, centred
-        let ((w, _), (x, _)) = notice_layout(200.0, 1000.0);
-        assert_eq!(w, 200.0 + 2.0 * NOTICE_PADDING.0);
-        assert_eq!(x, ((1000.0 - w) / 2.0).round());
     }
 }

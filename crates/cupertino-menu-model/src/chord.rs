@@ -45,7 +45,14 @@ impl Key {
             "comma" => ",",
             "period" => ".",
             "slash" => "/",
+            "backslash" => "\\",
             "semicolon" => ";",
+            "apostrophe" => "'",
+            "grave" => "`",
+            "minus" => "-",
+            "equal" => "=",
+            "bracketleft" => "[",
+            "bracketright" => "]",
             "Escape" => "Esc",
             name if name.chars().count() == 1 => return name.to_uppercase(),
             name => name,
@@ -110,6 +117,22 @@ impl Chord {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn punctuation_keys_show_their_character() {
+        for (name, shown) in [
+            ("bracketleft", "["),
+            ("bracketright", "]"),
+            ("backslash", "\\"),
+            ("slash", "/"),
+            ("minus", "-"),
+            ("equal", "="),
+            ("q", "Q"),
+            ("Up", "Up"),
+        ] {
+            assert_eq!(Key::new(name).unwrap().label(), shown, "{name}");
+        }
+    }
     use cupertino_modifiers::Profile;
     use Modifier::*;
 

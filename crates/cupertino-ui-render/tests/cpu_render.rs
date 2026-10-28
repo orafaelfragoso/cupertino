@@ -66,7 +66,6 @@ fn node(id: u64, bounds: Rect, ops: Vec<PaintOp>) -> PaintNode {
         clip: None,
         group: None,
         bounds,
-        subtree_bounds: bounds,
         hit: bounds,
         ops,
     }
@@ -646,5 +645,47 @@ fn a_parent_that_is_not_an_earlier_node_is_refused() {
             &DamageRegion::Full
         ),
         Err(RenderError::UnknownParent(PaintNodeId(2)))
+    );
+}
+
+#[test]
+fn a_nodes_clip_cuts_its_descendants_but_not_its_own_operations() {
+    let area = rect(0.0, 0.0, 40.0, 40.0);
+    let wide = fill(Shape::Rect(area), solid(0.0, 0.0, 1.0, 1.0));
+    let list = DisplayList {
+        nodes: vec![
+            PaintNode {
+                clip: Some(Shape::Rect(rect(0.0, 0.0, 10.0, 10.0))),
+                ..node(1, area, vec![wide.clone()])
+            },
+            child(
+                2,
+                1,
+                area,
+                vec![fill(
+                    Shape::Rect(rect(0.0, 0.0, 40.0, 40.0)),
+                    solid(1.0, 0.0, 0.0, 1.0),
+                )],
+            ),
+        ],
+    };
+    let px = render(
+        &mut renderer(),
+        &list,
+        &PaintResources::default(),
+        1.0,
+        &DamageRegion::Full,
+    )
+    .unwrap();
+    let at = |x: usize, y: usize| px[(y * 96 + x) * 4..][..4].to_vec();
+    assert_eq!(
+        at(5, 5),
+        [255, 0, 0, 255],
+        "the child shows inside the clip"
+    );
+    assert_eq!(
+        at(30, 30),
+        [0, 0, 255, 255],
+        "the node's own fill is not clipped, the child's is"
     );
 }

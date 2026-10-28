@@ -15,7 +15,7 @@ use wayland_protocols_plasma::appmenu::server::org_kde_kwin_appmenu_manager::{
     self, OrgKdeKwinAppmenuManager,
 };
 
-use crate::menu_bar::{GtkMenuProps, MenuAddress};
+use crate::menu_bar::{GtkMenuProps, MenuAddress, MenuKind};
 use crate::owner_check::{OwnerCheck, OwnerKey, OwnerRefusal};
 use crate::state::Cupertino;
 
@@ -131,7 +131,9 @@ impl Dispatch<OrgKdeKwinAppmenu, SurfaceData> for Cupertino {
                     },
                 );
             }
-            org_kde_kwin_appmenu::Request::Release => state.withdraw_menu_address(&data.surface),
+            org_kde_kwin_appmenu::Request::Release => {
+                state.withdraw_menu_address(&data.surface, MenuKind::DbusMenu)
+            }
             _ => {}
         }
     }
@@ -210,10 +212,10 @@ impl Dispatch<GtkSurface1, SurfaceData> for Cupertino {
                     app_menu_object_path: app_menu_path,
                 };
                 *data.gtk.lock().expect("gtk props") = props.clone();
-                if props.has_menu_bar() && !props.bus_name.is_empty() {
+                if props.has_menus() && !props.bus_name.is_empty() {
                     state.announce_menu_address(&data.surface, MenuAddress::Gtk(props));
                 } else {
-                    state.withdraw_menu_address(&data.surface);
+                    state.withdraw_menu_address(&data.surface, MenuKind::Gtk);
                 }
             }
             gtk_surface1::Request::Present { .. } | gtk_surface1::Request::RequestFocus { .. } => {
@@ -221,7 +223,9 @@ impl Dispatch<GtkSurface1, SurfaceData> for Cupertino {
                     state.command(Command::FocusWindow { window: id });
                 }
             }
-            gtk_surface1::Request::Release => state.withdraw_menu_address(&data.surface),
+            gtk_surface1::Request::Release => {
+                state.withdraw_menu_address(&data.surface, MenuKind::Gtk)
+            }
             _ => {}
         }
     }
@@ -247,49 +251,57 @@ impl Cupertino {
         }
     }
 
-    /// A client announced where `surface` exports its menus. The surface has none until the owner of the bus name is
-    /// checked to be the client or its sandbox instance (`crate::owner_check`).
+    /// A client announced where `surface` exports its menus. The surface has no menus of the address's kind until the
+    /// owner of the bus name is checked to be the client or its sandbox instance (`crate::owner_check`); an address of
+    /// the other kind stays meanwhile.
     pub fn announce_menu_address(&mut self, surface: &WlSurface, address: MenuAddress) {
-        self.set_menu_address(surface, None);
+        let kind = address.kind();
+        self.set_menu_address(surface, kind, None);
         let Some(client) = surface.client() else {
             return;
         };
         let name = address.bus_name().to_owned();
         self.menu_bars.announce(surface, address);
         self.check_owner(OwnerCheck {
-            key: OwnerKey::MenuAddress(surface.id()),
+            key: OwnerKey::MenuAddress(surface.id(), kind),
             name,
             client,
         });
     }
 
-    /// The client withdrew the menu export of `surface`.
-    pub fn withdraw_menu_address(&mut self, surface: &WlSurface) {
-        self.menu_surface_destroyed(surface);
-        self.set_menu_address(surface, None);
+    /// The client withdrew the menu export of kind `kind` of `surface`.
+    pub fn withdraw_menu_address(&mut self, surface: &WlSurface, kind: MenuKind) {
+        self.cancel_menu_check(surface, kind);
+        self.set_menu_address(surface, kind, None);
     }
 
-    /// `surface` is gone: the check of its announcement is cancelled.
+    /// `surface` is gone: the checks of its announcements are cancelled.
     pub fn menu_surface_destroyed(&mut self, surface: &WlSurface) {
-        self.menu_bars.take_announced(&surface.id());
-        self.cancel_owner_check(&OwnerKey::MenuAddress(surface.id()));
+        self.cancel_menu_check(surface, MenuKind::Gtk);
+        self.cancel_menu_check(surface, MenuKind::DbusMenu);
     }
 
-    /// The check of the latest announcement of `surface` returned: on a match the address is read from the owner's
-    /// unique name; else the surface has no menus.
+    fn cancel_menu_check(&mut self, surface: &WlSurface, kind: MenuKind) {
+        self.menu_bars.take_announced(&surface.id(), kind);
+        self.cancel_owner_check(&OwnerKey::MenuAddress(surface.id(), kind));
+    }
+
+    /// The check of the latest announcement of kind `kind` of `surface` returned: on a match the address is read from
+    /// the owner's unique name; else the surface has no menus of that kind.
     pub(crate) fn menu_owner_checked(
         &mut self,
         surface: ObjectId,
+        kind: MenuKind,
         verdict: Result<String, OwnerRefusal>,
     ) {
-        let Some((surface, address)) = self.menu_bars.take_announced(&surface) else {
+        let Some((surface, address)) = self.menu_bars.take_announced(&surface, kind) else {
             return;
         };
         if !surface.is_alive() {
             return;
         }
         match verdict {
-            Ok(owner) => self.set_menu_address(&surface, Some(address.with_bus_name(owner))),
+            Ok(owner) => self.set_menu_address(&surface, kind, Some(address.with_bus_name(owner))),
             Err(refusal) => tracing::warn!(
                 name = ?address.bus_name(),
                 ?refusal,
@@ -298,14 +310,19 @@ impl Cupertino {
         }
     }
 
-    /// Set (or withdraw) the menu address of `surface`; only a checked address is set.
-    pub fn set_menu_address(&mut self, surface: &WlSurface, address: Option<MenuAddress>) {
+    /// Set (or withdraw) the menu address of kind `kind` of `surface`; only a checked address is set.
+    pub fn set_menu_address(
+        &mut self,
+        surface: &WlSurface,
+        kind: MenuKind,
+        address: Option<MenuAddress>,
+    ) {
         let root = self
             .root_window_surface(surface)
             .unwrap_or_else(|| surface.clone());
         match self.entry_for_surface(&root).map(|e| e.id.0) {
-            Some(key) => self.menu_bars.set_address(key, address),
-            None => self.menu_bars.set_pending(surface, address),
+            Some(key) => self.menu_bars.set_address(key, kind, address),
+            None => self.menu_bars.set_pending(surface, kind, address),
         }
         self.refresh_menu_bars();
     }
@@ -313,7 +330,8 @@ impl Cupertino {
     /// Apply menu addresses announced before the window mapped.
     pub fn apply_pending_menu_addresses(&mut self, window: u64, root: &WlSurface) {
         for address in self.menu_bars.take_pending(root) {
-            self.menu_bars.set_address(window, Some(address));
+            self.menu_bars
+                .set_address(window, address.kind(), Some(address));
         }
     }
 }

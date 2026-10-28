@@ -126,9 +126,16 @@ impl Shortcut {
         }
         let key = match self.key.to_ascii_lowercase().as_str() {
             "return" | "enter" => "\u{21a9}".to_string(),
+            "kp_enter" => "\u{2324}".to_string(),
             "backspace" => "\u{232b}".to_string(),
             "delete" => "\u{2326}".to_string(),
             "tab" => "\u{21e5}".to_string(),
+            "escape" => "\u{238b}".to_string(),
+            "space" => "Space".to_string(),
+            "page_up" | "prior" => "\u{21de}".to_string(),
+            "page_down" | "next" => "\u{21df}".to_string(),
+            "home" => "\u{2196}".to_string(),
+            "end" => "\u{2198}".to_string(),
             "up" => "\u{2191}".to_string(),
             "down" => "\u{2193}".to_string(),
             "left" => "\u{2190}".to_string(),
@@ -166,7 +173,7 @@ impl Shortcut {
             "backslash" => "\\".to_string(),
             "grave" => "`".to_string(),
             "minus" => "-".to_string(),
-            "plus" => "+".to_string(),
+            "plus" => "Plus".to_string(),
             "equal" => "=".to_string(),
             "semicolon" => ";".to_string(),
             "apostrophe" => "'".to_string(),
@@ -541,6 +548,11 @@ mod tests {
             pair("Shift+Super+", "/")
         );
         assert_eq!(names(&["Control", "Escape"]), pair("Ctrl+", "Esc"));
+        assert_eq!(
+            names(&["Control", "plus"]),
+            pair("Ctrl+", "Plus"),
+            "not Ctrl++"
+        );
         // the glyph style is unchanged
         assert_eq!(
             Shortcut::from_tokens(&["Alt", "F4"])
@@ -578,5 +590,21 @@ mod tests {
             "a key without a symbol keeps its name"
         );
         assert_eq!(glyphs(&["Ctrl", "n"]).modifiers, "\u{2303}");
+        for (key, glyph) in [
+            ("comma", ","),
+            ("slash", "/"),
+            ("grave", "`"),
+            ("Escape", "\u{238b}"),
+            ("space", "Space"),
+            ("Page_Up", "\u{21de}"),
+            ("Prior", "\u{21de}"),
+            ("Page_Down", "\u{21df}"),
+            ("Next", "\u{21df}"),
+            ("Home", "\u{2196}"),
+            ("End", "\u{2198}"),
+            ("KP_Enter", "\u{2324}"),
+        ] {
+            assert_eq!(glyphs(&["Super", key]).key, glyph, "{key}");
+        }
     }
 }

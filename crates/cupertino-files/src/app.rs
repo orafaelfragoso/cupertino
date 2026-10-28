@@ -18,10 +18,7 @@
 
 use cupertino_apps::{Locale, MimeApps, MimeDatabase, Visibility, XdgDirs};
 use cupertino_assets::Assets;
-use cupertino_client::{
-    key, ActivationRequest, Backdrop, Button, Client, Event, Modifiers as KeyModifiers,
-    PointerEvent, SurfaceId, TitlebarStyle, ToplevelConfig,
-};
+use cupertino_defaults::accessibility::DisplayOptions;
 use cupertino_files::browser::{Activation, Browser};
 use cupertino_files::context_menu::{
     common_apps, AppChoice, Command as MenuCommand, Key as MenuKey, Menu, MenuItem,
@@ -48,8 +45,15 @@ use cupertino_files::window::{
 use cupertino_files::{Entry, Kind, Point, Size, SortSpec};
 use cupertino_geometry::Rect as PopupRect;
 use cupertino_icons::document::FileIcons;
+use cupertino_protocol_app::{AppEffects, AppEvent, Appearance as AppearanceObserver, Backdrop};
 use cupertino_text_field::{KeyInput, Keymap, Response, TextField};
 use cupertino_theme::{Appearance, Theme, WindowCornerSize};
+use cupertino_ui_wayland::clipboard::Clipboard;
+use cupertino_ui_wayland::{popup, Ready, ShmPresenter};
+use cupertino_wayland_client::{
+    key, Button, Connection, Decorations, Event, KeyboardEvent, Modifiers as KeyModifiers,
+    PointerEvent, Popup, SurfaceId, TokenRequest, Toplevel, ToplevelConfig, WindowConfigure,
+};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
@@ -78,8 +82,14 @@ const DOUBLE_CLICK: Duration =
     Duration::from_millis((timing::DOUBLE_CLICK_INTERVAL * 1000.0) as u64);
 
 struct App {
-    client: Client,
-    window: SurfaceId,
+    conn: Connection,
+    effects: AppEffects,
+    /// Reports the session's appearance and display options while it lives.
+    _appearance: AppearanceObserver,
+    /// The session's display options, as last reported.
+    display: DisplayOptions,
+    clipboard: Clipboard,
+    window: Window,
     /// The sidebar's material, below the window's surface.
     sidebar: Backdrop,
     theme: Theme,
@@ -109,7 +119,7 @@ struct App {
     /// When the toolbar strip was last pressed, for the double click that zooms the window.
     last_titlebar_press: Option<Instant>,
     /// Files waiting for the activation token being fetched for them.
-    pending: HashMap<ActivationRequest, Launch>,
+    pending: HashMap<TokenRequest, Launch>,
     start: Instant,
     /// The argv prefix for applications that run in a terminal (`--terminal`).
     terminal: Option<Vec<String>>,
@@ -141,7 +151,102 @@ struct Launch {
 /// An open context menu with a popup surface (and its backdrop) per level.
 struct OpenMenu {
     menu: Menu,
-    levels: Vec<(SurfaceId, Backdrop)>,
+    levels: Vec<MenuLevel>,
+}
+
+/// The popup of one open level of a menu.
+struct MenuLevel {
+    popup: Popup,
+    presenter: ShmPresenter,
+    backdrop: Backdrop,
+}
+
+/// The application window: its role, its frames and the states of its last configure.
+struct Window {
+    toplevel: Toplevel,
+    presenter: ShmPresenter,
+    /// The size asked for, kept until a configure sets one.
+    requested: (u32, u32),
+    activated: bool,
+    maximized: bool,
+}
+
+impl Window {
+    /// Open a window with the server's title bar in the unified style; `size` and `min_size` in points.
+    fn open(
+        conn: &mut Connection,
+        effects: &AppEffects,
+        title: String,
+        size: (u32, u32),
+        min_size: (u32, u32),
+    ) -> Result<Window> {
+        let toplevel = conn.toplevel(&ToplevelConfig {
+            app_id: APP_ID.into(),
+            title,
+            min_size: Some(min_size),
+            max_size: None,
+            decorations: Decorations::Server,
+        })?;
+        effects.unify_titlebar(conn, toplevel.surface())?;
+        Ok(Window {
+            toplevel,
+            presenter: ShmPresenter::new(toplevel.surface()),
+            requested: size,
+            activated: false,
+            maximized: false,
+        })
+    }
+
+    /// Take a configure: its states, and its size where it sets one.
+    fn configure(&mut self, configure: &WindowConfigure) -> Result<()> {
+        // the toolkit draws no title bar of its own: an undecorated window could not be moved or closed
+        if configure.decorations != Decorations::Server {
+            return Err("the server refused server-side decorations".into());
+        }
+        self.activated = configure.states.activated;
+        self.maximized = configure.states.maximized;
+        let current = self.presenter.size().unwrap_or(self.requested);
+        self.presenter
+            .configured(configured_size(configure.size, current));
+        Ok(())
+    }
+
+    /// The logical size of the last configure.
+    fn size(&self) -> Result<(u32, u32)> {
+        Ok(self
+            .presenter
+            .size()
+            .ok_or("the window has no size before its first configure")?)
+    }
+}
+
+/// The size a window takes from its configure: a zero or missing extent leaves it to the client, which keeps the
+/// `current` one.
+fn configured_size(asked: Option<(u32, u32)>, current: (u32, u32)) -> (u32, u32) {
+    let (width, height) = asked.unwrap_or((0, 0));
+    (
+        if width == 0 { current.0 } else { width },
+        if height == 0 { current.1 } else { height },
+    )
+}
+
+/// The presenters of the window and of the open menu's popups.
+fn presenters<'a>(
+    window: &'a mut Window,
+    menu: &'a mut Option<OpenMenu>,
+) -> impl Iterator<Item = &'a mut ShmPresenter> {
+    std::iter::once(&mut window.presenter).chain(
+        menu.iter_mut()
+            .flat_map(|open| open.levels.iter_mut().map(|level| &mut level.presenter)),
+    )
+}
+
+/// The value an extension event of the public protocols carries.
+fn app_event(event: &Event) -> Option<AppEvent> {
+    match event {
+        Event::Extension(event) => event.downcast_ref::<AppEvent>().copied(),
+        _ => None,
+    }
 }
 
 /// A press on an item that becomes a drag once the pointer moves far enough.
@@ -211,7 +316,28 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
     let assets = Assets::discover();
     let theme = Theme::load()?;
     let dirs = XdgDirs::from_env()?;
-    let mut client = Client::connect()?;
+    let mut conn =
+        Connection::connect().map_err(|e| format!("cannot connect to the display server: {e}"))?;
+    let effects = AppEffects::bind(&mut conn).ok_or("the server lacks cupertino_app_effects_v1")?;
+    // the session's appearance at connect is read before the window draws
+    let appearance = effects.appearance(&conn);
+    conn.roundtrip()?;
+    let (mut dark, mut display) = (false, DisplayOptions::default());
+    let early: Vec<Event> = conn
+        .wait(Some(Duration::ZERO))?
+        .into_iter()
+        .filter(|event| match app_event(event) {
+            Some(AppEvent::Appearance { dark: d }) => {
+                dark = d;
+                false
+            }
+            Some(AppEvent::DisplayOptions(options)) => {
+                display = options;
+                false
+            }
+            _ => true,
+        })
+        .collect();
     let home = PathBuf::from(std::env::var_os("HOME").ok_or("HOME is not set")?);
     let SessionPlaces {
         places,
@@ -221,7 +347,7 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
     // one database for the icons and for the Kind column, so both name the same type
     let types = Arc::new(MimeDatabase::load(&dirs.all_data_dirs())?);
     let icons = FileIcons::new(&assets, (*types).clone(), folders);
-    let waker = client.waker();
+    let waker = conn.waker();
     let browser = Browser::open(
         folder.clone(),
         SortSpec::default(),
@@ -231,21 +357,25 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
     )
     .map_err(|e| format!("cannot open {}: {e}", folder.display()))?;
     let (width, height) = window_metrics::DEFAULT_SIZE;
-    let window = client.toplevel(&ToplevelConfig {
-        app_id: APP_ID.into(),
-        title: title(&folder, &places),
-        size: (width as u32, height as u32),
-        min_size: (
+    let window = Window::open(
+        &mut conn,
+        &effects,
+        title(&folder, &places),
+        (width as u32, height as u32),
+        (
             metrics::WINDOW_MIN.0.ceil() as u32,
             metrics::WINDOW_MIN.1.ceil() as u32,
         ),
-        titlebar: TitlebarStyle::Unified,
-    })?;
-    let sidebar = client.backdrop(window)?;
+    )?;
+    let sidebar = effects.backdrop(&conn, window.toplevel.surface())?;
     sidebar.set_material(SIDEBAR_MATERIAL);
     let mut app = App {
-        palette: palette(&theme, client.is_dark()),
-        client,
+        palette: palette(&theme, dark),
+        conn,
+        effects,
+        _appearance: appearance,
+        display,
+        clipboard: Clipboard::default(),
         window,
         sidebar,
         theme,
@@ -276,8 +406,9 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
         marquee: None,
     };
     app.update_available();
+    let mut events = early;
     loop {
-        for event in app.client.wait(app.timeout())? {
+        for event in events {
             if !app.handle(event)? {
                 return Ok(());
             }
@@ -285,6 +416,8 @@ pub fn run(folder: PathBuf, terminal: Option<Vec<String>>) -> Result<()> {
         app.sync_menu_mods()?;
         app.tick()?;
         app.refresh()?;
+        app.present()?;
+        events = app.conn.wait(app.timeout())?;
     }
 }
 
@@ -321,50 +454,87 @@ impl App {
     /// React to one event; `false` once the window is to close.
     fn handle(&mut self, event: Event) -> Result<bool> {
         match event {
-            // a draw follows every configure and scale change
-            Event::Configured { .. } | Event::ScaleChanged { .. } => {}
-            Event::Draw(surface) => match self.menu_level(surface) {
-                Some(level) => self.draw_menu(level)?,
-                None => self.draw()?,
-            },
-            Event::Closed(_) => return Ok(false),
+            Event::Configure { configure, .. } => self.window.configure(&configure)?,
+            Event::PopupConfigure { popup, configure } => {
+                if let Some(level) = self.menu_level(popup.surface()) {
+                    let open = self.menu.as_mut().expect("a level is of the open menu");
+                    open.levels[level]
+                        .presenter
+                        .configured((configure.width, configure.height));
+                }
+            }
+            Event::Frame(frame) => {
+                if let Some(presenter) = presenters(&mut self.window, &mut self.menu)
+                    .find(|p| p.surface() == frame.surface)
+                {
+                    presenter.frame_done();
+                }
+            }
+            Event::Close(_) => return Ok(false),
             Event::Pointer { surface, event } => match self.menu_level(surface) {
                 Some(level) => self.menu_pointer(level, event)?,
                 None => self.pointer(event)?,
             },
-            Event::Key {
-                key,
-                pressed: true,
-                mods,
-                character,
+            Event::Keyboard {
+                event:
+                    KeyboardEvent::Key {
+                        code,
+                        pressed: true,
+                        mods,
+                        character,
+                        ..
+                    },
                 ..
-            } => self.key(key, mods, character)?,
-            Event::Key { .. } | Event::KeyboardLeave(_) => {}
+            } => self.key(code, mods, character)?,
+            Event::Keyboard { .. } => {}
+            Event::Selection(offer) => self.clipboard.selection_changed(offer),
             Event::ActivationToken { request, token } => self.launch(request, &token)?,
-            Event::Appearance { dark } => {
-                self.palette = palette(&self.theme, dark);
-                self.client.request_redraw(self.window)?;
-            }
-            // the window has no output-bound geometry, and the server hides it while the session is locked; the display
-            // options reach its title bar and materials through the server
-            Event::OutputsChanged
-            | Event::SessionLock { .. }
-            | Event::LockRequested { .. }
-            | Event::LogOutRequested
-            | Event::DisplayOptions(_) => {}
+            Event::Extension(_) => match app_event(&event) {
+                Some(AppEvent::Appearance { dark }) => {
+                    self.palette = palette(&self.theme, dark);
+                    self.window.presenter.request_redraw();
+                }
+                // the display options reach the title bar and materials through the server
+                Some(AppEvent::DisplayOptions(options)) => self.display = options,
+                Some(AppEvent::ScrollCount { .. }) | None => {}
+            },
             // the server dismissed the menu (a click outside it); popups this process destroyed itself end no menu
-            Event::PopupDone(surface) => {
-                if self.menu_level(surface).is_some() {
+            Event::PopupDone(popup) => {
+                if self.menu_level(popup.surface()).is_some() {
                     self.close_menu()?;
                 }
             }
-            Event::MenuBar { .. } | Event::Dock { .. } => {
-                return Err(
-                    "an event for a menu bar or dock arrived, and this process has none".into(),
-                )
-            }
+            // the scale is read when polling the presenters; the window has no output-bound geometry
+            Event::ScaleChanged { .. } | Event::OutputsChanged => {}
         }
         Ok(true)
+    }
+
+    /// Draw every surface that can take a frame, until none can.
+    fn present(&mut self) -> Result<()> {
+        loop {
+            let mut ready = Vec::new();
+            for presenter in presenters(&mut self.window, &mut self.menu) {
+                loop {
+                    match presenter.poll(&self.conn)? {
+                        // a draw follows every scale change
+                        Ready::ScaleChanged(_) => {}
+                        Ready::Draw => break ready.push(presenter.surface()),
+                        Ready::Idle => break,
+                    }
+                }
+            }
+            if ready.is_empty() {
+                return Ok(());
+            }
+            for surface in ready {
+                if surface == self.window.toplevel.surface() {
+                    self.draw()?;
+                } else if let Some(level) = self.menu_level(surface) {
+                    self.draw_menu(level)?;
+                }
+            }
+        }
     }
 
     /// Take what the folder's model queued; draw again when the listing changed.
@@ -379,7 +549,7 @@ impl App {
         } else if polled.changed {
             self.update_available();
             self.follow_edit();
-            self.client.request_redraw(self.window)?;
+            self.window.presenter.request_redraw();
         }
         Ok(())
     }
@@ -435,7 +605,7 @@ impl App {
     /// Run the timers that are due.
     fn tick(&mut self) -> Result<()> {
         if self.caret_shown() != self.caret_drawn || self.search_width.animating(self.now()) {
-            self.client.request_redraw(self.window)?;
+            self.window.presenter.request_redraw();
         }
         let now = self.now();
         if self.menu.as_mut().is_some_and(|open| open.menu.poll(now)) {
@@ -444,19 +614,19 @@ impl App {
         self.marquee_autoscroll(now)?;
         if let Some(RenameEvent::Begin(index)) = self.rename.poll(now) {
             self.begin_edit(index);
-            self.client.request_redraw(self.window)?;
+            self.window.presenter.request_redraw();
         }
         Ok(())
     }
 
     fn draw(&mut self) -> Result<()> {
         let dy = std::mem::take(&mut self.pending_scroll);
-        let (width, height) = self.client.size(self.window)?;
-        let active = self.client.toplevel_activated(self.window)?;
+        let (width, height) = self.window.size()?;
+        let active = self.window.activated;
         let edit_caret = active && self.edit_caret();
         let search_caret = active && self.search_caret();
         let now = self.now();
-        let animate = !self.client.display_options().reduce_motion;
+        let animate = !self.display.reduce_motion;
         self.search_width
             .set_open(self.search_focused || !self.search.is_empty(), now, animate);
         let search_width = self.search_width.width(now);
@@ -471,7 +641,7 @@ impl App {
             h: f64::from(height),
         };
         let App {
-            client,
+            conn,
             window,
             sidebar,
             painter,
@@ -513,7 +683,7 @@ impl App {
         };
         let mut drawn = None;
         let mut shaped = Ok(());
-        client.draw(*window, |pm, scale| {
+        window.presenter.draw(conn, None, |pm, scale| {
             let mut frame = painter.frame(
                 size,
                 state.places,
@@ -523,7 +693,7 @@ impl App {
                 state.mode,
                 state.browser.outline(),
                 *scroll + dy,
-                scale.factor(),
+                scale.factor() as f32,
             );
             if let Some(index) = reveal {
                 frame.reveal(index);
@@ -541,7 +711,7 @@ impl App {
                 )),
                 radius,
             );
-            painter.paint(pm, scale.factor(), &frame, &state, palette);
+            painter.paint(pm, scale.factor() as f32, &frame, &state, palette);
             drawn = Some(frame);
         })?;
         shaped?;
@@ -551,7 +721,7 @@ impl App {
         self.painter.follow_search_caret(&mut self.search);
         // a scroll or a resize moves the content under a band that the pointer is not moving
         if self.marquee_apply() {
-            self.client.request_redraw(self.window)?;
+            self.window.presenter.request_redraw();
         }
         Ok(())
     }
@@ -563,7 +733,7 @@ impl App {
                 button: Button::Left,
                 pressed: true,
                 position,
-            } if self.client.modifiers().ctrl => self.context(Point {
+            } if self.conn.modifiers().ctrl => self.context(Point {
                 x: position.x,
                 y: position.y,
             }),
@@ -596,7 +766,7 @@ impl App {
             PointerEvent::Scroll { dy, .. } => {
                 self.rename.cancel();
                 self.pending_scroll += dy;
-                self.client.request_redraw(self.window)?;
+                self.window.presenter.request_redraw();
                 Ok(())
             }
             PointerEvent::Enter(_) | PointerEvent::Leave | PointerEvent::Button { .. } => Ok(()),
@@ -616,7 +786,7 @@ impl App {
         let Some(frame) = &self.frame else {
             return Ok(());
         };
-        let held = self.client.modifiers();
+        let held = self.conn.modifiers();
         let mods = Modifiers {
             shift: held.shift,
             primary: held.logo,
@@ -632,7 +802,7 @@ impl App {
         if self.search_focused {
             self.search_focused = false;
             self.search.blur();
-            self.client.request_redraw(self.window)?;
+            self.window.presenter.request_redraw();
         }
         match hit {
             Hit::Back => {
@@ -670,14 +840,16 @@ impl App {
                     .find(|c| c.id == id)
                     .ok_or("a header of a column that is not shown")?;
                 self.browser.sort_by(id.sort_key(), column.ascending);
-                Ok(self.client.request_redraw(self.window)?)
+                self.window.presenter.request_redraw();
+                Ok(())
             }
             Hit::Disclosure(index) => {
                 match self.browser.toggle_expanded(index) {
                     Ok(_) => {}
                     Err(e) => eprintln!("cupertino-files: cannot list the folder: {e}"),
                 }
-                Ok(self.client.request_redraw(self.window)?)
+                self.window.presenter.request_redraw();
+                Ok(())
             }
             Hit::Item(index) => {
                 let sole =
@@ -700,7 +872,7 @@ impl App {
                     target: None,
                 });
                 if self.browser.press(index, mods) {
-                    self.client.request_redraw(self.window)?;
+                    self.window.presenter.request_redraw();
                 }
                 Ok(())
             }
@@ -712,7 +884,8 @@ impl App {
                         + marquee_metrics::AUTOSCROLL_INTERVAL,
                 });
                 self.browser.rubber_band_begin(mods);
-                Ok(self.client.request_redraw(self.window)?)
+                self.window.presenter.request_redraw();
+                Ok(())
             }
             Hit::Titlebar => self.press_titlebar(),
             Hit::Chrome => Ok(()),
@@ -727,9 +900,10 @@ impl App {
             .is_some_and(|last| now.duration_since(last) <= DOUBLE_CLICK);
         self.last_titlebar_press = (!double).then_some(now);
         if double {
-            self.client.toplevel_toggle_maximized(self.window)?;
+            self.conn
+                .set_maximized(self.window.toplevel, !self.window.maximized)?;
         } else {
-            self.client.toplevel_move(self.window)?;
+            self.conn.start_move(self.window.toplevel)?;
         }
         Ok(())
     }
@@ -747,7 +921,8 @@ impl App {
         }
         if code == key::ESCAPE && self.drag.as_ref().is_some_and(|d| d.started) {
             self.drag = None;
-            return Ok(self.client.request_redraw(self.window)?);
+            self.window.presenter.request_redraw();
+            return Ok(());
         }
         let changed = if mods.logo && !mods.ctrl && !mods.alt {
             match (code, character) {
@@ -809,7 +984,7 @@ impl App {
             }
         };
         if changed {
-            self.client.request_redraw(self.window)?;
+            self.window.presenter.request_redraw();
         }
         Ok(())
     }
@@ -839,7 +1014,7 @@ impl App {
             if mode != ViewMode::List {
                 self.browser.collapse_all();
             }
-            self.client.request_redraw(self.window)?;
+            self.window.presenter.request_redraw();
         }
         Ok(())
     }
@@ -872,13 +1047,16 @@ impl App {
         self.drag = None;
         self.marquee = None;
         self.close_menu()?;
-        self.client
-            .set_title(self.window, &title(self.browser.dir(), &self.places))?;
+        self.conn.set_title(
+            self.window.toplevel,
+            &title(self.browser.dir(), &self.places),
+        )?;
         // another folder ends the search (the browser shows it whole)
         self.search.set_text("");
         self.search_focused = false;
         self.update_available();
-        Ok(self.client.request_redraw(self.window)?)
+        self.window.presenter.request_redraw();
+        Ok(())
     }
 
     /// Read the space left for the status bar; a failure is reported and the bar shows the item count only.
@@ -902,7 +1080,8 @@ impl App {
         } else {
             self.bars.status = !self.bars.status;
         }
-        Ok(self.client.request_redraw(self.window)?)
+        self.window.presenter.request_redraw();
+        Ok(())
     }
 
     /// Open the selection: files with their default applications, each once its activation token arrives, and
@@ -916,12 +1095,11 @@ impl App {
             Some(applications()?)
         };
         for path in files {
-            let request = match apps
+            let id = apps
                 .as_ref()
-                .and_then(|apps| default_app_id(apps, &path, false))
-            {
-                Some(id) => self.client.request_launch_token(self.window, &id)?,
-                None => self.client.request_activation_token(self.window)?,
+                .and_then(|apps| default_app_id(apps, &path, false));
+            let Some(request) = self.request_token(id.as_deref(), &path) else {
+                continue;
             };
             self.pending.insert(
                 request,
@@ -945,7 +1123,9 @@ impl App {
             .map(|e| (e.path.clone(), e.is_dir))
             .collect();
         for (path, is_dir) in items {
-            let request = self.client.request_launch_token(self.window, id)?;
+            let Some(request) = self.request_token(Some(id), &path) else {
+                continue;
+            };
             self.pending.insert(
                 request,
                 Launch {
@@ -958,7 +1138,22 @@ impl App {
         Ok(())
     }
 
-    fn launch(&mut self, request: ActivationRequest, token: &str) -> Result<()> {
+    /// Ask for the activation token that opens `path`, naming the application `app_id` when known; a token that cannot
+    /// be asked for is reported and that item is not opened.
+    fn request_token(&mut self, app_id: Option<&str>, path: &Path) -> Option<TokenRequest> {
+        match self
+            .conn
+            .request_activation_token(self.window.toplevel.surface(), app_id)
+        {
+            Ok(request) => Some(request),
+            Err(e) => {
+                eprintln!("cupertino-files: cannot open {}: {e}", path.display());
+                None
+            }
+        }
+    }
+
+    fn launch(&mut self, request: TokenRequest, token: &str) -> Result<()> {
         let Launch { path, is_dir, with } = self
             .pending
             .remove(&request)
@@ -1046,7 +1241,7 @@ impl App {
             }
             _ => return Ok(()),
         };
-        self.client.request_redraw(self.window)?;
+        self.window.presenter.request_redraw();
         self.open_menu(items, at)
     }
 
@@ -1107,11 +1302,11 @@ impl App {
                     Response::Ignored => return Ok(()),
                     Response::Moved | Response::Edited => {}
                     Response::Copy(text) | Response::Cut(text) => {
-                        if let Err(e) = self.client.set_clipboard_text(text) {
+                        if let Err(e) = self.clipboard.set_text(&mut self.conn, text) {
                             eprintln!("cupertino-files: copy: {e}");
                         }
                     }
-                    Response::Paste => match self.client.clipboard_text() {
+                    Response::Paste => match self.clipboard.text(&mut self.conn) {
                         Ok(Some(text)) => self.search.paste(&text),
                         Ok(None) => {}
                         Err(e) => eprintln!("cupertino-files: paste: {e}"),
@@ -1124,7 +1319,8 @@ impl App {
             self.scroll = 0.0;
             self.update_available();
         }
-        Ok(self.client.request_redraw(self.window)?)
+        self.window.presenter.request_redraw();
+        Ok(())
     }
 
     /// A press on the search field gives it the keyboard and places the caret there (Shift extends; a double press
@@ -1132,10 +1328,11 @@ impl App {
     fn search_press(&mut self, at: Point) -> Result<()> {
         self.search_focused = true;
         if let Some(index) = self.painter.search_index(&self.search, at) {
-            let extend = self.client.modifiers().shift;
+            let extend = self.conn.modifiers().shift;
             self.search.press(index, extend, Instant::now());
         }
-        Ok(self.client.request_redraw(self.window)?)
+        self.window.presenter.request_redraw();
+        Ok(())
     }
 
     /// What the menu of the selection depends on.
@@ -1161,7 +1358,7 @@ impl App {
 
     /// The modifiers held decide which alternate rows of an open menu show.
     fn sync_menu_mods(&mut self) -> Result<()> {
-        let held = self.client.modifiers();
+        let held = self.conn.modifiers();
         let mods = MenuMods {
             shift: held.shift,
             ctrl: held.ctrl,
@@ -1179,7 +1376,7 @@ impl App {
 
     fn open_menu(&mut self, items: Vec<MenuItem>, at: Point) -> Result<()> {
         self.close_menu()?;
-        let (width, height) = self.client.size(self.window)?;
+        let (width, height) = self.window.size()?;
         let bounds = cupertino_files::Rect::new(0.0, 0.0, f64::from(width), f64::from(height));
         // the menu is laid out in points; the popups draw it at the output scale with the same optical size
         self.painter.renderer.text.set_scale(1.0);
@@ -1205,41 +1402,51 @@ impl App {
         };
         let wanted = open.menu.levels();
         while open.levels.len() > wanted {
-            let (surface, backdrop) = open
+            let MenuLevel {
+                popup, backdrop, ..
+            } = open
                 .levels
                 .pop()
                 .expect("the loop runs while a level is open");
             drop(backdrop);
-            self.client.destroy_surface(surface)?;
+            self.conn.destroy(popup.surface())?;
         }
         while open.levels.len() < wanted {
             let level = open.levels.len();
             let parent = level
                 .checked_sub(1)
-                .map_or(self.window, |below| open.levels[below].0);
-            let surface = self
-                .client
-                .popup(parent, &popup_rect(&open.menu.rect_in_parent(level)))?;
-            let backdrop = self.client.backdrop(surface)?;
+                .map_or(self.window.toplevel.surface(), |below| {
+                    open.levels[below].popup.surface()
+                });
+            let placement = popup::placement(&popup_rect(&open.menu.rect_in_parent(level)), true)?;
+            let popup = self.conn.popup(parent, &placement)?;
+            let backdrop = self.effects.backdrop(&self.conn, popup.surface())?;
             backdrop.set_material(MENU_MATERIAL);
             let own = open.menu.layout(level).rect;
             backdrop.set_shape(
                 &PopupRect::new(0.0, 0.0, own.w, own.h),
                 menu_metrics::RADIUS,
             )?;
-            open.levels.push((surface, backdrop));
+            open.levels.push(MenuLevel {
+                popup,
+                presenter: ShmPresenter::new(popup.surface()),
+                backdrop,
+            });
         }
-        for (surface, _) in &open.levels {
-            self.client.request_redraw(*surface)?;
+        for level in &mut open.levels {
+            level.presenter.request_redraw();
         }
         Ok(())
     }
 
     fn close_menu(&mut self) -> Result<()> {
         if let Some(mut open) = self.menu.take() {
-            while let Some((surface, backdrop)) = open.levels.pop() {
+            while let Some(MenuLevel {
+                popup, backdrop, ..
+            }) = open.levels.pop()
+            {
                 drop(backdrop);
-                self.client.destroy_surface(surface)?;
+                self.conn.destroy(popup.surface())?;
             }
         }
         Ok(())
@@ -1251,22 +1458,22 @@ impl App {
             .as_ref()?
             .levels
             .iter()
-            .position(|(s, _)| *s == surface)
+            .position(|level| level.popup.surface() == surface)
     }
 
     fn draw_menu(&mut self, level: usize) -> Result<()> {
         let App {
-            client,
+            conn,
             painter,
             palette,
             menu,
             ..
         } = self;
-        let Some(open) = menu.as_ref() else {
+        let Some(OpenMenu { menu, levels }) = menu.as_mut() else {
             return Ok(());
         };
-        client.draw(open.levels[level].0, |pm, scale| {
-            painter.paint_menu(pm, scale.factor(), &open.menu, level, palette)
+        levels[level].presenter.draw(conn, None, |pm, scale| {
+            painter.paint_menu(pm, scale.factor() as f32, menu, level, palette)
         })?;
         Ok(())
     }
@@ -1368,7 +1575,7 @@ impl App {
                     .filter(|_| self.browser.selection().len() == 1);
                 if let Some(index) = only {
                     self.begin_edit(index);
-                    self.client.request_redraw(self.window)?;
+                    self.window.presenter.request_redraw();
                 }
                 Ok(())
             }
@@ -1415,11 +1622,13 @@ impl App {
             }
             MenuCommand::SortBy(key, ascending) => {
                 self.browser.set_sort(key, ascending);
-                Ok(self.client.request_redraw(self.window)?)
+                self.window.presenter.request_redraw();
+                Ok(())
             }
             MenuCommand::ToggleTag(color) => {
                 self.toggle_tag(color);
-                Ok(self.client.request_redraw(self.window)?)
+                self.window.presenter.request_redraw();
+                Ok(())
             }
             MenuCommand::SetView(mode) => self.set_mode(mode),
         }
@@ -1556,7 +1765,7 @@ impl App {
         let Some((edit, path)) = self.edit.take() else {
             return Ok(true);
         };
-        self.client.request_redraw(self.window)?;
+        self.window.presenter.request_redraw();
         match edit.commit() {
             Ok(None) => {}
             Ok(Some(name)) => match operations::rename_item(&path, &name) {
@@ -1595,11 +1804,11 @@ impl App {
                     Response::Ignored => return Ok(()),
                     Response::Moved | Response::Edited => {}
                     Response::Copy(text) | Response::Cut(text) => {
-                        if let Err(e) = self.client.set_clipboard_text(text) {
+                        if let Err(e) = self.clipboard.set_text(&mut self.conn, text) {
                             eprintln!("cupertino-files: copy: {e}");
                         }
                     }
-                    Response::Paste => match self.client.clipboard_text() {
+                    Response::Paste => match self.clipboard.text(&mut self.conn) {
                         Ok(Some(text)) => edit.field_mut().paste(&text),
                         Ok(None) => {}
                         Err(e) => eprintln!("cupertino-files: paste: {e}"),
@@ -1607,17 +1816,18 @@ impl App {
                 }
             }
         }
-        Ok(self.client.request_redraw(self.window)?)
+        self.window.presenter.request_redraw();
+        Ok(())
     }
 
     /// A press in the name editor places the caret there (Shift extends; a double press selects a word, a triple
     /// press the whole name).
     fn editor_press(&mut self, at: Point) -> Result<()> {
-        let extend = self.client.modifiers().shift;
+        let extend = self.conn.modifiers().shift;
         if let Some((edit, _)) = self.edit.as_mut() {
             if let Some(index) = self.painter.editor_index(edit.field(), at) {
                 edit.field_mut().press(index, extend, Instant::now());
-                self.client.request_redraw(self.window)?;
+                self.window.presenter.request_redraw();
             }
         }
         Ok(())
@@ -1647,21 +1857,22 @@ impl App {
         if self.search.is_dragging() {
             if let Some(index) = self.painter.search_index(&self.search, at) {
                 self.search.drag_to(index);
-                self.client.request_redraw(self.window)?;
+                self.window.presenter.request_redraw();
             }
             return Ok(());
         }
         if let Some((edit, _)) = self.edit.as_mut().filter(|(e, _)| e.field().is_dragging()) {
             if let Some(index) = self.painter.editor_index(edit.field(), at) {
                 edit.field_mut().drag_to(index);
-                self.client.request_redraw(self.window)?;
+                self.window.presenter.request_redraw();
             }
             return Ok(());
         }
         if let Some(marquee) = self.marquee.as_mut() {
             marquee.at = at;
             self.marquee_apply();
-            return Ok(self.client.request_redraw(self.window)?);
+            self.window.presenter.request_redraw();
+            return Ok(());
         }
         let Some(drag) = &self.drag else {
             return Ok(());
@@ -1683,7 +1894,7 @@ impl App {
             let moved = drag.target != target;
             (drag.started, drag.sources, drag.target) = (true, sources, target);
             if moved {
-                self.client.request_redraw(self.window)?;
+                self.window.presenter.request_redraw();
             }
         }
         Ok(())
@@ -1694,7 +1905,7 @@ impl App {
         let (Some(marquee), Some(frame)) = (&self.marquee, &self.frame) else {
             return false;
         };
-        let held = self.client.modifiers();
+        let held = self.conn.modifiers();
         let band =
             cupertino_files::Rect::from_corners(marquee.origin, frame.to_content(marquee.at));
         let hits = frame.hits_in(&band);
@@ -1735,7 +1946,7 @@ impl App {
                 || (step > 0.0 && frame.scroll < frame.max_scroll()))
         {
             self.pending_scroll += step;
-            self.client.request_redraw(self.window)?;
+            self.window.presenter.request_redraw();
         }
         Ok(())
     }
@@ -1764,17 +1975,18 @@ impl App {
         }
         if self.marquee.take().is_some() {
             self.browser.rubber_band_end();
-            return Ok(self.client.request_redraw(self.window)?);
+            self.window.presenter.request_redraw();
+            return Ok(());
         }
         match self.drag.take() {
             Some(drag) if drag.started => {
                 self.browser.end_drag();
-                self.client.request_redraw(self.window)?;
+                self.window.presenter.request_redraw();
                 self.drop_items(drag)
             }
             _ => {
                 if self.browser.release() {
-                    self.client.request_redraw(self.window)?;
+                    self.window.presenter.request_redraw();
                 }
                 Ok(())
             }
@@ -1806,7 +2018,7 @@ impl App {
                 return Ok(());
             }
         };
-        let held = self.client.modifiers();
+        let held = self.conn.modifiers();
         let action = operations::drop_action(same_volume, held.alt, held.logo);
         for (source, result) in
             drag.sources
@@ -1835,5 +2047,18 @@ fn trash_all(paths: &[PathBuf]) {
                 path.display()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_zero_or_missing_extent_in_a_configure_keeps_the_current_size() {
+        assert_eq!(configured_size(None, (920, 436)), (920, 436));
+        assert_eq!(configured_size(Some((0, 0)), (920, 436)), (920, 436));
+        assert_eq!(configured_size(Some((1200, 0)), (920, 436)), (1200, 436));
+        assert_eq!(configured_size(Some((640, 480)), (920, 436)), (640, 480));
     }
 }

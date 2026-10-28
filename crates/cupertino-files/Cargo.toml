@@ -10,7 +10,7 @@ layer = "apps"
 
 [features]
 # the `cupertino-files` process: a browser window as a client of the server
-app = ["dep:cupertino-client"]
+app = ["dep:cupertino-protocol-app", "dep:cupertino-ui-wayland", "dep:cupertino-wayland-client"]
 
 [dependencies]
 cupertino-assets = { path = "../cupertino-assets" }
@@ -23,7 +23,9 @@ cupertino-typeahead = { path = "../cupertino-typeahead" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-decorations = { path = "../cupertino-decorations" }
 cupertino-text-field = { path = "../cupertino-text-field" }
-cupertino-client = { path = "../cupertino-client", optional = true }
+cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
+cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
+cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 tiny-skia = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

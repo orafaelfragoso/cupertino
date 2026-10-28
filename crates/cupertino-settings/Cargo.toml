@@ -10,7 +10,14 @@ layer = "apps"
 
 [features]
 # the `cupertino-settings` process: the settings window as a client of the server
-app = ["dep:cupertino-client", "dep:zbus", "dep:cupertino-alsa", "dep:async-channel"]
+app = [
+    "dep:cupertino-protocol-app",
+    "dep:cupertino-ui-wayland",
+    "dep:cupertino-wayland-client",
+    "dep:zbus",
+    "dep:cupertino-alsa",
+    "dep:async-channel",
+]
 
 [dependencies]
 cupertino-assets = { path = "../cupertino-assets" }
@@ -23,7 +30,9 @@ cupertino-theme = { path = "../cupertino-theme" }
 cupertino-decorations = { path = "../cupertino-decorations" }
 cupertino-geometry = { path = "../cupertino-geometry" }
 cupertino-text-field = { path = "../cupertino-text-field" }
-cupertino-client = { path = "../cupertino-client", optional = true }
+cupertino-protocol-app = { path = "../cupertino-protocol-app", optional = true }
+cupertino-ui-wayland = { path = "../cupertino-ui-wayland", optional = true }
+cupertino-wayland-client = { path = "../cupertino-wayland-client", optional = true }
 cupertino-alsa = { path = "../cupertino-alsa", optional = true }
 tiny-skia = "0.11"
 zeroize = "1"

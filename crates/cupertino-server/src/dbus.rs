@@ -9,7 +9,7 @@
 //! never the name itself.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cupertino_peer::{same_instance, ProcessHandle};
 use zbus::fdo::ConnectionCredentials;
@@ -204,9 +204,8 @@ pub struct OwnerQuery {
     pub name: String,
     /// The Wayland client to match, held from its connection.
     pub client: ProcessHandle,
-    /// Set while the identification of the owner reads `/proc` (`crate::owner_check` strikes the client when it still
-    /// is at the deadline).
-    pub identifying: std::sync::Arc<AtomicBool>,
+    /// How many identification threads of the client are alive (`crate::state::ClientState::owner_identifying`).
+    pub client_identifying: Identifying,
     pub reply: Box<dyn FnOnce(Result<String, OwnerRefusal>) + Send>,
 }
 
@@ -233,8 +232,8 @@ pub enum OwnerRefusal {
     Busy,
     /// The check did not return in time (`crate::owner_check::DEADLINE`).
     TimedOut,
-    /// The identification of the client's checks stalled `crate::owner_check::STRIKE_LIMIT` times lately: its later
-    /// checks are refused at once.
+    /// As many identification threads of the client as [`CLIENT_IDENTIFY_LIMIT`] are alive: its checks are refused
+    /// until one ends.
     Stalled,
 }
 
@@ -325,7 +324,7 @@ async fn worker(
             Job::Owner(OwnerQuery {
                 name,
                 client,
-                identifying: reading,
+                client_identifying,
                 reply,
             }) => {
                 let identifying = identifying.clone();
@@ -333,7 +332,8 @@ async fn worker(
                     .clone()
                     .spawn(
                         async move {
-                            reply(owner_of(&conn, &name, client, &identifying, reading).await)
+                            let threads = (&identifying, &client_identifying);
+                            reply(owner_of(&conn, &name, client, threads).await)
                         },
                         "cupertino-owner-check",
                     )
@@ -397,19 +397,52 @@ async fn destination(
 
 const LOGIN_NAME: &str = "org.cupertino.Login1";
 
-/// How many identification threads are alive.
-type Identifying = std::sync::Arc<AtomicUsize>;
+/// How many identification threads are alive: of all clients, or of one.
+pub type Identifying = std::sync::Arc<AtomicUsize>;
 
 /// How many identification threads may be alive at once, counting those still reading after their check timed out.
 pub const IDENTIFY_LIMIT: usize = 16;
+/// How many identification threads of one client may be alive at once; a client whose identifications stall keeps
+/// that many at most.
+pub const CLIENT_IDENTIFY_LIMIT: usize = 3;
 
-/// One alive identification thread, counted while it lives, and the flag of its check set while it lives.
-struct Alive(Identifying, std::sync::Arc<AtomicBool>);
+/// One alive identification thread, counted in all threads and in its client's while it lives.
+struct Alive {
+    all: Identifying,
+    client: Identifying,
+}
+
+impl Alive {
+    /// Count a new identification thread of a client: refused as stalled at the client's limit and as busy at the
+    /// global one.
+    fn enter(all: &Identifying, client: &Identifying) -> Result<Alive, OwnerRefusal> {
+        let of_client = client.fetch_add(1, Ordering::SeqCst);
+        if of_client >= CLIENT_IDENTIFY_LIMIT {
+            client.fetch_sub(1, Ordering::SeqCst);
+            return Err(OwnerRefusal::Stalled);
+        }
+        if all.fetch_add(1, Ordering::SeqCst) >= IDENTIFY_LIMIT {
+            all.fetch_sub(1, Ordering::SeqCst);
+            client.fetch_sub(1, Ordering::SeqCst);
+            return Err(OwnerRefusal::Busy);
+        }
+        if of_client + 1 == CLIENT_IDENTIFY_LIMIT {
+            tracing::warn!(
+                threads = CLIENT_IDENTIFY_LIMIT,
+                "a client has as many owner identifications alive as it may: its bus names are refused until one ends"
+            );
+        }
+        Ok(Alive {
+            all: all.clone(),
+            client: client.clone(),
+        })
+    }
+}
 
 impl Drop for Alive {
     fn drop(&mut self) {
-        self.1.store(false, Ordering::SeqCst);
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        self.client.fetch_sub(1, Ordering::SeqCst);
+        self.all.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -418,21 +451,15 @@ type Identified = async_channel::Receiver<Result<(), OwnerRefusal>>;
 
 /// Identify the owner the daemon named in `credentials` against `client` on a thread of its own, reading `proc_root`.
 /// Reading `/proc` of a process the client chose can stall for good (a FUSE root), so each identification has a thread
-/// that may be left behind, never the worker that makes the shell calls; with [`IDENTIFY_LIMIT`] threads alive the
-/// check is refused as busy.
+/// that may be left behind, never the worker that makes the shell calls. `all` and `of_client` count the alive threads
+/// of all clients and of this one ([`Alive::enter`]).
 fn identify_owner(
-    identifying: &Identifying,
+    (all, of_client): (&Identifying, &Identifying),
     proc_root: PathBuf,
     credentials: ConnectionCredentials,
     client: ProcessHandle,
-    reading: std::sync::Arc<AtomicBool>,
 ) -> Result<Identified, OwnerRefusal> {
-    if identifying.fetch_add(1, Ordering::SeqCst) >= IDENTIFY_LIMIT {
-        identifying.fetch_sub(1, Ordering::SeqCst);
-        return Err(OwnerRefusal::Busy);
-    }
-    reading.store(true, Ordering::SeqCst);
-    let alive = Alive(identifying.clone(), reading);
+    let alive = Alive::enter(all, of_client)?;
     let (answer, answered) = async_channel::bounded(1);
     std::thread::Builder::new()
         .name("cupertino-identify".into())
@@ -470,8 +497,7 @@ async fn owner_of(
     conn: &zbus::Connection,
     name: &str,
     client: ProcessHandle,
-    identifying: &Identifying,
-    reading: std::sync::Arc<AtomicBool>,
+    threads: (&Identifying, &Identifying),
 ) -> Result<String, OwnerRefusal> {
     let name = BusName::try_from(name).map_err(|_| OwnerRefusal::NotABusName)?;
     let no_owner = |e: zbus::fdo::Error| OwnerRefusal::NoOwner(e.to_string());
@@ -486,16 +512,10 @@ async fn owner_of(
         .get_connection_credentials(BusName::from(unique.as_ref()))
         .await
         .map_err(no_owner)?;
-    identify_owner(
-        identifying,
-        PathBuf::from("/proc"),
-        credentials,
-        client,
-        reading,
-    )?
-    .recv()
-    .await
-    .map_err(|_| OwnerRefusal::Unidentified)??;
+    identify_owner(threads, PathBuf::from("/proc"), credentials, client)?
+        .recv()
+        .await
+        .map_err(|_| OwnerRefusal::Unidentified)??;
     Ok(unique.to_string())
 }
 
@@ -716,73 +736,130 @@ mod tests {
         ConnectionCredentials::default().set_process_fd(fd.into())
     }
 
-    fn identify_self(
-        identifying: &Identifying,
+    fn identify_as(
+        all: &Identifying,
+        client: &Identifying,
         proc_root: &Path,
-    ) -> Result<Identified, OwnerRefusal> {
-        identify_watched(identifying, proc_root, std::sync::Arc::default())
-    }
-
-    fn identify_watched(
-        identifying: &Identifying,
-        proc_root: &Path,
-        reading: std::sync::Arc<AtomicBool>,
     ) -> Result<Identified, OwnerRefusal> {
         identify_owner(
-            identifying,
+            (all, client),
             proc_root.to_path_buf(),
             own_credentials(),
             ProcessHandle::open(std::process::id()).unwrap(),
-            reading,
         )
+    }
+
+    fn wait_for(count: &Identifying, alive: usize) {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while count.load(Ordering::SeqCst) != alive {
+            assert!(std::time::Instant::now() < end, "{alive} threads alive");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 
     #[test]
     fn an_identification_that_stalls_leaves_another_to_be_answered() {
-        let identifying = Identifying::default();
+        let all = Identifying::default();
         let stalled = scratch_proc(true);
         let fine = scratch_proc(false);
         let (tx, rx) = std::sync::mpsc::channel();
-        let worker_identifying = identifying.clone();
+        let worker_all = all.clone();
         let (stalled_root, fine_root) = (stalled.path().to_path_buf(), fine.path().to_path_buf());
-        let (stuck_reading, fine_reading) = (
-            std::sync::Arc::new(AtomicBool::new(false)),
-            std::sync::Arc::new(AtomicBool::new(false)),
-        );
-        let (worker_stuck, worker_fine) = (stuck_reading.clone(), fine_reading.clone());
         std::thread::spawn(move || {
-            let stuck = identify_watched(&worker_identifying, &stalled_root, worker_stuck).unwrap();
-            let answered = identify_watched(&worker_identifying, &fine_root, worker_fine).unwrap();
+            let stuck = identify_as(&worker_all, &Identifying::default(), &stalled_root).unwrap();
+            let answered = identify_as(&worker_all, &Identifying::default(), &fine_root).unwrap();
             let _ = tx.send(answered.recv_blocking());
             drop(stuck);
         });
         let answer = rx.recv_timeout(std::time::Duration::from_secs(5));
-        // the stalled check is still reading: at its deadline that is a strike against its client
-        let stuck_was_reading = stuck_reading.load(Ordering::SeqCst);
-        release(stalled.path(), &identifying);
+        release(stalled.path(), &all);
         assert!(matches!(answer, Ok(Ok(Ok(())))), "{answer:?}");
-        assert!(stuck_was_reading);
-        assert!(
-            !stuck_reading.load(Ordering::SeqCst),
-            "the flag ends with the thread"
-        );
-        assert!(!fine_reading.load(Ordering::SeqCst));
     }
 
     #[test]
     fn the_identification_threads_alive_are_capped() {
-        let identifying = Identifying::default();
+        let all = Identifying::default();
         let stalled = scratch_proc(true);
         let fine = scratch_proc(false);
         let stuck: Vec<_> = (0..IDENTIFY_LIMIT)
-            .map(|_| identify_self(&identifying, stalled.path()).expect("under the limit"))
+            .map(|_| {
+                identify_as(&all, &Identifying::default(), stalled.path()).expect("under the limit")
+            })
             .collect();
-        let refused = identify_self(&identifying, fine.path());
-        release(stalled.path(), &identifying);
+        let client = Identifying::default();
+        let refused = identify_as(&all, &client, fine.path());
+        let client_after_refusal = client.load(Ordering::SeqCst);
+        release(stalled.path(), &all);
         assert!(matches!(refused, Err(OwnerRefusal::Busy)), "{refused:?}");
+        assert_eq!(client_after_refusal, 0, "a refused thread is not counted");
         assert!(stuck.iter().all(|s| s.recv_blocking().is_ok()));
-        let again = identify_self(&identifying, fine.path()).expect("the threads are gone");
+        let again = identify_as(&all, &client, fine.path()).expect("the threads are gone");
         assert!(matches!(again.recv_blocking(), Ok(Ok(()))));
+    }
+
+    #[test]
+    fn a_client_mixing_verified_and_stalled_identifications_holds_at_most_its_limit() {
+        let (all, client, other) = (
+            Identifying::default(),
+            Identifying::default(),
+            Identifying::default(),
+        );
+        let stalled = scratch_proc(true);
+        let fine = scratch_proc(false);
+        let mut stuck = Vec::new();
+        let mut most = 0;
+        for _ in 0..CLIENT_IDENTIFY_LIMIT {
+            let verified = identify_as(&all, &client, fine.path()).expect("under its limit");
+            assert!(matches!(verified.recv_blocking(), Ok(Ok(()))));
+            wait_for(&client, stuck.len());
+            stuck.push(identify_as(&all, &client, stalled.path()).expect("under its limit"));
+            most = most.max(client.load(Ordering::SeqCst));
+        }
+        let refused = [
+            identify_as(&all, &client, fine.path()),
+            identify_as(&all, &client, stalled.path()),
+        ];
+        let at_limit = client.load(Ordering::SeqCst);
+        let another = identify_as(&all, &other, fine.path()).map(|a| a.recv_blocking());
+
+        // the stalled threads end: the client is identified again
+        release(stalled.path(), &all);
+        let after = client.load(Ordering::SeqCst);
+        let again = identify_as(&all, &client, fine.path()).map(|a| a.recv_blocking());
+
+        assert!(
+            most <= CLIENT_IDENTIFY_LIMIT,
+            "{most} threads of one client"
+        );
+        assert_eq!(at_limit, CLIENT_IDENTIFY_LIMIT);
+        assert!(
+            refused
+                .iter()
+                .all(|r| matches!(r, Err(OwnerRefusal::Stalled))),
+            "{refused:?}"
+        );
+        assert!(matches!(another, Ok(Ok(Ok(())))), "{another:?}");
+        assert_eq!(after, 0);
+        assert!(matches!(again, Ok(Ok(Ok(())))), "{again:?}");
+    }
+
+    #[test]
+    fn a_thread_that_never_starts_is_counted_no_longer() {
+        let (all, client) = (Identifying::default(), Identifying::default());
+        let alive = Alive::enter(&all, &client).unwrap();
+        assert_eq!(
+            (all.load(Ordering::SeqCst), client.load(Ordering::SeqCst)),
+            (1, 1)
+        );
+        // a spawn that fails drops the closure that holds the count
+        let never_run = move || {
+            let _alive = alive;
+        };
+        drop(never_run);
+        assert_eq!(
+            (all.load(Ordering::SeqCst), client.load(Ordering::SeqCst)),
+            (0, 0)
+        );
     }
 
     #[test]

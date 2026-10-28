@@ -2410,11 +2410,11 @@ fn a_check_the_bus_never_answers_times_out_to_no_menus_and_the_next_one_goes_out
     );
 }
 
-/// Checks that time out because the bus does not answer (its daemon stopped) strike no client: once the bus answers
-/// again, the same window's next announcement gets its menus.
+/// Checks that time out because the bus does not answer (its daemon stopped) start no identification thread and cost
+/// the client nothing: once the bus answers again, the same window's next announcement gets its menus.
 #[test]
-fn checks_timed_out_by_a_slow_bus_strike_no_client() {
-    use cupertino_server::owner_check::STRIKE_LIMIT;
+fn checks_timed_out_by_a_slow_bus_cost_the_client_nothing() {
+    use cupertino_server::dbus::CLIENT_IDENTIFY_LIMIT;
     let Some(mut h) = Harness::new() else { return };
     let Some((bus, own)) = menu_bus(&mut h) else {
         return;
@@ -2423,7 +2423,7 @@ fn checks_timed_out_by_a_slow_bus_strike_no_client() {
     let (bar, app, title) = menu_app(&mut h);
 
     let stopped = Stopped::new(&bus);
-    for _ in 0..STRIKE_LIMIT {
+    for _ in 0..=CLIENT_IDENTIFY_LIMIT {
         h.announce(&app, &bar, Cmd::SetAddress(own.clone(), "/MenuBar/1"));
     }
     drop(stopped);

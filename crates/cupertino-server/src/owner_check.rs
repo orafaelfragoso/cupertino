@@ -14,20 +14,18 @@
 //!
 //! Each identification of an owner reads `/proc` on a thread of its own, which a process whose root stalls reading
 //! keeps for good; at most `crate::dbus::IDENTIFY_LIMIT` are alive, and with that many a check is refused
-//! [`OwnerRefusal::Busy`]. A check whose own identification was still reading at the deadline is a strike against
-//! its client, which chose the owner process; a check that timed out while the bus had not answered, or that was busy,
-//! strikes nobody, and a check that verified clears the client's strikes. Strikes are forgotten [`STRIKE_WINDOW`]
-//! after the latest one. A client with [`STRIKE_LIMIT`] strikes has its later checks refused at once
-//! ([`OwnerRefusal::Stalled`]), so one client leaves few threads behind. What is left: only an
+//! [`OwnerRefusal::Busy`]. At most `crate::dbus::CLIENT_IDENTIFY_LIMIT` of them belong to one client: while that many of
+//! a client's identifications are alive, its checks are refused at once ([`OwnerRefusal::Stalled`]) and it gets checks
+//! again exactly when one ends. The bound is on live threads, so a client that stalls its identifications holds that
+//! many at most, however it spaces them or mixes in checks that verify; a slow bus starts no thread and costs a client
+//! nothing. What is left: only an
 //! unsandboxed process of the same user can make a root that stalls (a Flatpak or Snap sandbox allows no user
 //! namespace), and by opening many clients it can still use up the threads and stop the menus for the session. A
 //! process with that access can end the menu bar process anyway, so it gains nothing new.
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use cupertino_peer::ProcessHandle;
 use smithay::reexports::calloop::channel::{self, Event, Sender};
@@ -36,8 +34,8 @@ use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 use smithay::reexports::wayland_server::backend::{ClientId, ObjectId};
 use smithay::reexports::wayland_server::Client;
 
-use crate::dbus::OwnerQuery;
 pub use crate::dbus::OwnerRefusal;
+use crate::dbus::{Identifying, OwnerQuery};
 use crate::state::{ClientState, Cupertino};
 
 /// How many checks run on the D-Bus worker at once.
@@ -46,59 +44,6 @@ pub const RUNNING_LIMIT: usize = 8;
 pub const CLIENT_RUNNING_LIMIT: usize = 2;
 /// How long a check may run before it is answered as timed out.
 pub const DEADLINE: Duration = Duration::from_secs(3);
-/// How many strikes a client may have before its checks are refused at once.
-pub const STRIKE_LIMIT: usize = 3;
-/// How long a client's strikes are kept after its latest one.
-pub const STRIKE_WINDOW: Duration = Duration::from_secs(60);
-
-/// The checks of a client whose identification of the owner was still reading at the deadline.
-#[derive(Debug, Default)]
-pub struct Strikes {
-    count: usize,
-    last: Option<Instant>,
-}
-
-/// The strikes of a client, shared by its connection ([`ClientState::owner_strikes`]) and its running checks.
-pub type ClientStrikes = Arc<Mutex<Strikes>>;
-
-impl Strikes {
-    fn current(&self, now: Instant) -> usize {
-        match self.last {
-            Some(last) if now.saturating_duration_since(last) < STRIKE_WINDOW => self.count,
-            _ => 0,
-        }
-    }
-
-    /// Whether the client has [`STRIKE_LIMIT`] strikes at `now`.
-    fn struck(&self, now: Instant) -> bool {
-        self.current(now) >= STRIKE_LIMIT
-    }
-
-    /// Count the answer `verdict` of a check at `now`; `identifying` says whether its identification was still reading.
-    /// True when this answer is the strike that reaches [`STRIKE_LIMIT`].
-    fn answered(
-        &mut self,
-        verdict: &Result<String, OwnerRefusal>,
-        identifying: bool,
-        now: Instant,
-    ) -> bool {
-        match verdict {
-            Ok(_) => {
-                *self = Strikes::default();
-                false
-            }
-            Err(OwnerRefusal::TimedOut) if identifying => {
-                self.count = self.current(now) + 1;
-                self.last = Some(now);
-                self.count == STRIKE_LIMIT
-            }
-            Err(_) => false,
-        }
-    }
-}
-
-/// The strikes of a running check's client, and whether its identification is reading.
-type Watch = (Option<ClientStrikes>, Arc<AtomicBool>);
 
 /// What a check is for; the latest check of a key wins.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -247,11 +192,11 @@ impl<K: Clone + Eq + Hash, C: Eq, R> Scheduler<K, C, R> {
     }
 }
 
-/// A request to send: the name, and the client's process and strikes from its connection.
+/// A request to send: the name, and from the client's connection its process and the count of its identifications.
 struct Request {
     name: String,
     client: Option<ProcessHandle>,
-    strikes: Option<ClientStrikes>,
+    identifying: Option<Identifying>,
 }
 
 /// The answer the worker sends back to the loop.
@@ -264,8 +209,8 @@ struct Reply {
 /// The checks of the server's clients.
 pub struct OwnerChecks {
     scheduler: Scheduler<OwnerKey, ClientId, Request>,
-    /// The deadline of each running check, and what decides its strike.
-    deadlines: HashMap<(OwnerKey, u64), (RegistrationToken, Watch)>,
+    /// The deadline of each running check.
+    deadlines: HashMap<(OwnerKey, u64), RegistrationToken>,
     replies: Sender<Reply>,
 }
 
@@ -306,7 +251,7 @@ impl Cupertino {
         let request = Request {
             name,
             client: data.and_then(|data| data.peer.as_ref()?.try_clone().ok()),
-            strikes: data.map(|data| data.owner_strikes.clone()),
+            identifying: data.map(|data| data.owner_identifying.clone()),
         };
         let starts = self
             .owner_checks
@@ -323,9 +268,8 @@ impl Cupertino {
     fn send_owner_checks(&mut self, starts: Vec<Start<OwnerKey, Request>>) {
         let mut refused = Vec::new();
         for (key, generation, request) in starts {
-            let strikes = request.strikes.clone();
             match self.send_owner_check(&key, generation, request) {
-                Ok(identifying) => self.arm_owner_deadline(key, generation, (strikes, identifying)),
+                Ok(()) => self.arm_owner_deadline(key, generation),
                 Err(refusal) => refused.push((key, generation, refusal)),
             }
         }
@@ -339,14 +283,9 @@ impl Cupertino {
         key: &OwnerKey,
         generation: u64,
         request: Request,
-    ) -> Result<Arc<AtomicBool>, OwnerRefusal> {
-        let now = Instant::now();
-        if let Some(strikes) = &request.strikes {
-            if strikes.lock().expect("strikes").struck(now) {
-                return Err(OwnerRefusal::Stalled);
-            }
-        }
+    ) -> Result<(), OwnerRefusal> {
         let client = request.client.ok_or(OwnerRefusal::NoClientProcess)?;
+        let client_identifying = request.identifying.ok_or(OwnerRefusal::NoClientProcess)?;
         let dbus = self.dbus.as_ref().ok_or(OwnerRefusal::NoBus)?;
         let replies = self.owner_checks.replies.clone();
         let reply_key = key.clone();
@@ -358,17 +297,16 @@ impl Cupertino {
                 verdict,
             });
         });
-        let identifying = Arc::new(AtomicBool::new(false));
         let queued = dbus.check_owner(OwnerQuery {
             name: request.name,
             client,
-            identifying: identifying.clone(),
+            client_identifying,
             reply,
         });
-        queued.then_some(identifying).ok_or(OwnerRefusal::NoBus)
+        queued.then_some(()).ok_or(OwnerRefusal::NoBus)
     }
 
-    fn arm_owner_deadline(&mut self, key: OwnerKey, generation: u64, watch: Watch) {
+    fn arm_owner_deadline(&mut self, key: OwnerKey, generation: u64) {
         let timer_key = key.clone();
         let armed =
             self.loop_handle
@@ -378,9 +316,7 @@ impl Cupertino {
                 });
         match armed {
             Ok(token) => {
-                self.owner_checks
-                    .deadlines
-                    .insert((key, generation), (token, watch));
+                self.owner_checks.deadlines.insert((key, generation), token);
             }
             Err(e) => tracing::warn!(error = %e, "cannot time an owner check"),
         }
@@ -394,25 +330,12 @@ impl Cupertino {
         generation: u64,
         verdict: Result<String, OwnerRefusal>,
     ) {
-        if let Some((token, (strikes, identifying))) = self
+        if let Some(token) = self
             .owner_checks
             .deadlines
             .remove(&(key.clone(), generation))
         {
             self.loop_handle.remove(token);
-            let identifying = identifying.load(Ordering::SeqCst);
-            let reached = strikes.is_some_and(|strikes| {
-                strikes
-                    .lock()
-                    .expect("strikes")
-                    .answered(&verdict, identifying, Instant::now())
-            });
-            if reached {
-                tracing::warn!(
-                    strikes = STRIKE_LIMIT,
-                    "the owner identification of a client's checks stalled too often: its later bus names are refused"
-                );
-            }
         }
         let (deliver, starts) = self.owner_checks.scheduler.finished(&key, generation);
         if deliver {
@@ -518,63 +441,6 @@ mod tests {
         checks.request(0, 1, ());
         assert_eq!(checks.finished(&0, first[0].1), (false, Vec::new()));
         assert_eq!(checks.pending(), 3);
-    }
-
-    const TIMED_OUT: Result<String, OwnerRefusal> = Err(OwnerRefusal::TimedOut);
-    const BUSY: Result<String, OwnerRefusal> = Err(OwnerRefusal::Busy);
-
-    #[test]
-    fn a_stalled_identification_strikes_its_client_until_the_limit() {
-        let (mut strikes, now) = (Strikes::default(), Instant::now());
-        let reached: Vec<bool> = (0..STRIKE_LIMIT + 2)
-            .map(|_| strikes.answered(&TIMED_OUT, true, now))
-            .collect();
-        assert_eq!(reached.iter().filter(|r| **r).count(), 1, "one warning");
-        assert!(reached[STRIKE_LIMIT - 1]);
-        assert!(strikes.struck(now));
-    }
-
-    #[test]
-    fn a_slow_bus_or_a_busy_refusal_strikes_nobody() {
-        let (mut strikes, now) = (Strikes::default(), Instant::now());
-        for _ in 0..STRIKE_LIMIT * 2 {
-            strikes.answered(&TIMED_OUT, false, now);
-            strikes.answered(&BUSY, false, now);
-            strikes.answered(&BUSY, true, now);
-        }
-        assert!(!strikes.struck(now));
-    }
-
-    #[test]
-    fn strikes_are_forgotten_after_the_window_and_cleared_by_a_verified_check() {
-        let (mut strikes, start) = (Strikes::default(), Instant::now());
-        for _ in 1..STRIKE_LIMIT {
-            strikes.answered(&TIMED_OUT, true, start);
-        }
-        let later = start + STRIKE_WINDOW;
-        strikes.answered(&TIMED_OUT, true, later);
-        assert!(!strikes.struck(later), "the older strikes are forgotten");
-
-        let mut strikes = Strikes::default();
-        for _ in 0..STRIKE_LIMIT {
-            strikes.answered(&TIMED_OUT, true, start);
-        }
-        assert!(strikes.struck(start));
-        assert!(
-            !strikes.struck(start + STRIKE_WINDOW),
-            "a struck client is forgiven"
-        );
-
-        let mut strikes = Strikes::default();
-        for _ in 1..STRIKE_LIMIT {
-            strikes.answered(&TIMED_OUT, true, start);
-        }
-        strikes.answered(&Ok(":1.5".into()), false, start);
-        strikes.answered(&TIMED_OUT, true, start);
-        assert!(
-            !strikes.struck(start),
-            "a verified check clears the strikes"
-        );
     }
 
     #[test]

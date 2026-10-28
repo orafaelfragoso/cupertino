@@ -233,8 +233,8 @@ fn outputs_changing_scale_repaint_to_the_full_picture() {
         }
         d.state.backend = Some(backend);
     }
-    for idx in 0..2 {
-        both_ways(&mut d, &mut buffers[idx], idx, "both outputs at 1x");
+    for (idx, buffer) in buffers.iter_mut().enumerate() {
+        both_ways(&mut d, buffer, idx, "both outputs at 1x");
     }
     // the second output changes scale; the buffer and the tracker follow as the compositor's own do
     let id = d.state.outputs[1].id;
@@ -252,21 +252,11 @@ fn outputs_changing_scale_repaint_to_the_full_picture() {
         d.state.backend = Some(backend);
     }
     d.at(3100);
-    for idx in 0..2 {
-        both_ways(
-            &mut d,
-            &mut buffers[idx],
-            idx,
-            "after the second output changed scale",
-        );
+    for (idx, buffer) in buffers.iter_mut().enumerate() {
+        both_ways(&mut d, buffer, idx, "after the second output changed scale");
     }
     d.at(3200);
-    for idx in 0..2 {
-        both_ways(
-            &mut d,
-            &mut buffers[idx],
-            idx,
-            "settled after the scale change",
-        );
+    for (idx, buffer) in buffers.iter_mut().enumerate() {
+        both_ways(&mut d, buffer, idx, "settled after the scale change");
     }
 }

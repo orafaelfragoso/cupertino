@@ -88,6 +88,12 @@ impl Shortcut {
         (!key.is_empty()).then_some(Shortcut { modifiers, key })
     }
 
+    /// Parse a chord in the shortcut file's syntax, such as `Ctrl+Super+Left`: physical Super is the primary
+    /// modifier, physical Ctrl stays Ctrl.
+    pub fn from_chord(chord: &str) -> Option<Shortcut> {
+        Self::from_tokens(&chord.split('+').collect::<Vec<_>>())
+    }
+
     /// The shortcut as a menu draws it: the modifier glyphs in the order control, option, shift, command (the primary
     /// modifier), and the key, with the names of the common keys as symbols (`Return` as the return arrow). A menu
     /// shows the modifiers right-aligned and the keys in a column of their own.
@@ -308,6 +314,19 @@ mod tests {
         assert!(Shortcut::from_tokens(&["Hyper", "x"]).is_none());
         assert!(Shortcut::from_tokens::<&str>(&[]).is_none());
         assert_eq!(Shortcut::from_tokens(&["F5"]).unwrap().modifiers, vec![]);
+    }
+
+    #[test]
+    fn a_chord_of_the_shortcut_file_names_physical_keys() {
+        let s = Shortcut::from_chord("Ctrl+Super+Left").unwrap();
+        assert_eq!(
+            s.modifiers,
+            vec![ShortcutModifier::Ctrl, ShortcutModifier::Primary]
+        );
+        assert_eq!(s.key, "Left");
+        assert_eq!(Shortcut::from_chord("Ctrl+q").unwrap().display(), "Ctrl+q");
+        assert!(Shortcut::from_chord("").is_none());
+        assert!(Shortcut::from_chord("Super+").is_none());
     }
 
     #[test]

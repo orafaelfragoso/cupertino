@@ -4,7 +4,8 @@
 //! its [`CapabilitySet`]. It owns application windows ([`Toplevel`]) and their popups ([`Popup`]), hands out shm
 //! buffers to draw a frame into ([`BufferLease`]) and presents them in answer to the latest [`WindowConfigure`], at the
 //! surface's scale (fractional with `wp_fractional_scale_v1` and `wp_viewporter`, else the preferred or output
-//! scale). A compositor without the decoration protocol, or one that asks for it, leaves the window frame to the client
+//! scale), and talks to input methods for the focused text field ([`Connection::set_text_input`]). A compositor without
+//! the decoration protocol, or one that asks for it, leaves the window frame to the client
 //! ([`Decorations::Client`]). The application runs one loop around [`Connection::wait`] and reacts to the returned
 //! [`Event`]s; other threads wake it with a [`Waker`].
 

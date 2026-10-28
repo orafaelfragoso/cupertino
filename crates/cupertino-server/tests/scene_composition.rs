@@ -4,7 +4,7 @@ mod common;
 
 use common::desktop::Desktop;
 use cupertino_scene::{SceneKind, SceneLayer};
-use cupertino_server::render::scene::compose_scene;
+use cupertino_server::render::scene::{compose_scene, LockView};
 
 fn composed(d: &mut Desktop) -> Vec<(SceneLayer, SceneKind)> {
     let mut backend = d.state.backend.take().unwrap();
@@ -80,4 +80,29 @@ fn a_locked_frame_has_no_desktop_sources_and_keeps_the_session_overlay() {
     assert!(!items
         .iter()
         .any(|(layer, _)| *layer == SceneLayer::CompositorOverlay));
+}
+
+#[test]
+fn a_locked_output_without_a_lock_surface_shows_only_black_and_the_pointer() {
+    let mut d = Desktop::new(1.0);
+    d.window();
+    d.at(3000);
+    let mut backend = d.state.backend.take().unwrap();
+    let items: Vec<_> = d
+        .state
+        .with_scene(backend.renderer(), 0, |r, mut p| {
+            p.lock = LockView::Locked { surface: None };
+            compose_scene(r, &mut p)
+                .frame
+                .items()
+                .iter()
+                .map(|(layer, item)| (*layer, item.id.kind))
+                .collect()
+        })
+        .expect("render resources");
+    d.state.backend = Some(backend);
+    assert!(items.contains(&(SceneLayer::Wallpaper, SceneKind::LockBackdrop)));
+    assert!(items
+        .iter()
+        .all(|(layer, _)| matches!(layer, SceneLayer::Wallpaper | SceneLayer::Cursor)));
 }

@@ -499,7 +499,7 @@ fn cost_follows_damage_and_content_not_target_area() {
     let small = best_of_three(512, 288, &list, &full);
     let large = best_of_three(3840, 2160, &list, &full);
     assert!(
-        large < small * 6 + std::time::Duration::from_millis(20),
+        large < small * 8,
         "full repaint {large:?} on 4K vs {small:?} on 512x288"
     );
     let corner = DamageRegion::Rects(vec![rect(0.0, 0.0, 16.0, 16.0)]);
@@ -687,5 +687,42 @@ fn a_nodes_clip_cuts_its_descendants_but_not_its_own_operations() {
         at(30, 30),
         [0, 0, 255, 255],
         "the node's own fill is not clipped, the child's is"
+    );
+}
+
+#[test]
+fn duplicate_ids_and_runaway_depth_are_refused() {
+    let leaf = |id: u64, parent: Option<u64>| PaintNode {
+        parent: parent.map(PaintNodeId),
+        ..node(id, rect(0.0, 0.0, 8.0, 8.0), vec![])
+    };
+    let none = PaintResources::default();
+    let twice = DisplayList {
+        nodes: vec![leaf(1, None), leaf(1, None)],
+    };
+    assert_eq!(
+        render(&mut renderer(), &twice, &none, 1.0, &DamageRegion::Full),
+        Err(RenderError::DuplicateNode(PaintNodeId(1)))
+    );
+    let chain = |levels: u64| DisplayList {
+        nodes: (0..levels).map(|i| leaf(i, i.checked_sub(1))).collect(),
+    };
+    assert!(render(
+        &mut renderer(),
+        &chain(257),
+        &none,
+        1.0,
+        &DamageRegion::Full
+    )
+    .is_ok());
+    assert_eq!(
+        render(
+            &mut renderer(),
+            &chain(258),
+            &none,
+            1.0,
+            &DamageRegion::Full
+        ),
+        Err(RenderError::TooDeep(PaintNodeId(257)))
     );
 }
